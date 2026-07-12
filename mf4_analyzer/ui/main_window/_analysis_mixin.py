@@ -9,12 +9,48 @@ call through ``self.``.  Method-resolution order makes those calls find this
 copy regardless of base-class order — there are no name collisions.
 """
 
+import math
+
 import numpy as np
 
 from PyQt5.QtWidgets import QColorDialog
 from PyQt5.QtCore import QTimer
 
+from ... import db_reference
 from ..compute_feedback import summarize_compute
+
+
+# dB-reference-defaults Task 5 (spec §8.2 source tokens). Presentation-only
+# mapping for the compound control's source line -- kept local to this UI
+# wiring layer rather than in the pure ``db_reference`` module (which owns
+# resolution/validation, not Chinese UI copy).
+_DB_REFERENCE_SOURCE_LABELS = {
+    'manual': '手动覆盖',
+    'metadata': '通道 metadata',
+    'user': '用户默认',
+    'system': '系统默认',
+    'generic': '通用默认',
+    'fallback': '解析失败回退',
+}
+
+
+def _format_db_reference_source_line(resolution):
+    """Spec §10.3 source-line text: ``自动 · <来源> · <quantity>/<unit>``.
+
+    ``generic``/``fallback`` show ``dB re 1 <unit>`` instead of quantity/unit
+    (generic is the neutral EPS-unit common case; fallback carries the
+    resolver's own warning in the tooltip)."""
+    token = _DB_REFERENCE_SOURCE_LABELS.get(resolution.source, resolution.source)
+    if resolution.source in ('generic', 'fallback'):
+        unit = resolution.unit or ''
+        detail = f"dB re 1 {unit}" if unit else "dB re 1"
+    else:
+        detail = f"{resolution.quantity} / {resolution.unit}".strip(' /')
+    text = f"自动 · {token} · {detail}" if detail else f"自动 · {token}"
+    tooltip = text
+    if resolution.warning:
+        tooltip = f"{text}\n{resolution.warning}"
+    return text, tooltip
 
 
 class AnalysisMixin:
@@ -299,6 +335,20 @@ class AnalysisMixin:
         )
 
     def _capture_analysis_sources(self, section, state, pane_idx=None):
+        if section == 'fft' and getattr(self, '_opening_project', False):
+            # A post-load auto-recompute (QTimer.singleShot(0, ...) queued by
+            # open_project) can be drained mid-restore by a LATER
+            # QApplication.processEvents() in the SAME open_project() call
+            # chain (entering 'time' mode -> _plot_time_on_canvas ->
+            # _begin_compute_progress(process_events=True)). By then the
+            # shared Time/FFT navigator already holds the Time view's own
+            # restored checked channels, not FFT's -- AnalysisViewState.
+            # panes[*].sources is the source of truth for a not-yet-focused
+            # section while a project is still opening, never the live
+            # navigator selection. See docs/lessons-learned/signal-
+            # processing/2026-07-12-processevents-drains-queued-recompute-
+            # during-restore.md.
+            return
         page = self._analysis_page(section)
         if pane_idx is None:
             pane_idx = page.focused_index()
@@ -570,7 +620,8 @@ class AnalysisMixin:
                     self._clear_analysis_canvas(canvas)
                     self._show_analysis_empty_hint(canvas)
                 else:
-                    self._render_cached_heatmap(section, canvas, result)
+                    self._render_cached_heatmap(
+                        section, canvas, result, source=(fid, ch))
         if any_missing:
             self.statusBar.showMessage("参数/源已就绪，点击计算")
 
@@ -588,3 +639,235 @@ class AnalysisMixin:
                 canvas.clear_empty_hint()
             except Exception:
                 pass
+
+    # -- dB reference defaults (Task 5): facts adapter + Auto propagation --
+    # Spec: docs/analyzer/specs/2026-07-12-db-reference-defaults-and-labeling-spec.md §8.
+    # Plan: docs/analyzer/plans/2026-07-12-db-reference-defaults-and-labeling-implementation.md
+    # Task 5. Full per-entry/mixed-source conversion + axis labels are Task 6/7 --
+    # this only keeps the ONE shared compound control (pre-Task-6 status quo) in
+    # sync with the focused pane's source + the shared catalog service.
+
+    def _channel_reference_facts(self, fid, ch):
+        """Build a :class:`~mf4_analyzer.db_reference.ChannelReferenceFacts`
+        for one ``(fid, ch)`` source, reading ONLY ``FileData`` metadata --
+        never a sample array (docs/lessons-learned/signal-processing/
+        2026-06-22-head-calibration-is-metadata-not-sample-gain.md). Missing/
+        unknown ``(fid, ch)`` and malformed metadata both degrade to empty/
+        unvalidated facts rather than raising -- the resolver (spec §7 R3)
+        is responsible for treating an invalid ``metadata_reference`` as
+        absent and falling through to the catalog."""
+        fd = self.files.get(fid) if fid is not None else None
+        if fd is None or ch is None:
+            return db_reference.ChannelReferenceFacts(quantity="", unit="")
+        ch_meta = (getattr(fd, "channel_metadata", None) or {}).get(ch) or {}
+        unit = (
+            ch_meta.get("unit")
+            or (getattr(fd, "channel_units", None) or {}).get(ch, "")
+            or ""
+        )
+        quantity = ch_meta.get("quantity") or ""
+        metadata_reference = ch_meta.get("db_reference")
+        is_audio_source_fn = getattr(fd, "is_audio_source", None)
+        try:
+            is_audio = bool(is_audio_source_fn()) if callable(is_audio_source_fn) else False
+        except Exception:
+            is_audio = False
+        return db_reference.ChannelReferenceFacts(
+            quantity=str(quantity),
+            unit=str(unit),
+            metadata_reference=metadata_reference,
+            is_audio_source=is_audio,
+        )
+
+    def _focused_source_for_section(self, section):
+        """The ``(fid, ch)`` the section's Inspector control should resolve
+        against right now. FFT's checked-channel overlay has no single
+        "focused source" pre-Task-6 (mixed per-entry reference is Task 6's
+        job) -- fall back to the first checked channel, then the legacy
+        single-signal combo. Order/FFT-vs-Time always have exactly one
+        live-selected source (``combo_sig``)."""
+        if section == 'fft':
+            checked = self.navigator.get_checked_channels()
+            if checked:
+                fid, ch, _color = checked[0]
+                return (fid, ch)
+            return self.inspector.fft_ctx.current_signal()
+        return self._analysis_ctx(section).current_signal()
+
+    def _resolve_db_reference_for_source(self, section, source):
+        """Resolve ``section``'s dB reference for ONE specific ``(fid, ch)``
+        source, honoring the section's CURRENT View mode (spec §15 C1 /
+        plan Task 6 Step 6.2) -- unlike :meth:`_resolve_and_apply_db_reference`
+        (which only ever targets the section's single "focused" source and
+        writes the result back onto the compound control), this is a PURE
+        resolution with no widget side effect, so FFT's checked-channel
+        overlay can call it once per (fid, ch) ENTRY -- including sources
+        other than the section's focused one -- to convert/label each curve
+        with its own reference rather than one global control value (Task 5's
+        deferred "Auto-resolve-on-selection-change is NOT yet wired" note).
+
+        Manual mode reuses the single View-level value for every source
+        (still resolved through :func:`db_reference.resolve_db_reference` so
+        an invalid manual value falls through to the same catalog chain);
+        Auto mode resolves fresh per source against the live catalog
+        snapshot. Both branches read the SAME snapshot/control so this and
+        :meth:`_resolve_and_apply_db_reference` can never silently drift
+        apart on the resolution rule itself."""
+        control = self._analysis_ctx(section).db_reference_control
+        mode = control.mode()
+        facts = (
+            self._channel_reference_facts(*source) if source
+            else db_reference.ChannelReferenceFacts(quantity="", unit="")
+        )
+        snapshot = self.db_reference_store.snapshot()
+        manual_value = control.editor.value() if mode == 'manual' else None
+        return db_reference.resolve_db_reference(
+            mode=mode,
+            manual_value=manual_value,
+            facts=facts,
+            user_catalog=snapshot.user_catalog,
+            system_catalog=snapshot.system_catalog,
+            prefer_channel_metadata=snapshot.prefer_channel_metadata,
+        )
+
+    def _stamp_db_reference_nudge_facts(self, section):
+        """Additive metadata stamp feeding the ``nudge.db_ref_manual_default``
+        footer nudge (spec 2026-07-12 S5 / A17).
+
+        Attaches ``section``'s CURRENT dB-reference View mode + compound-
+        control value, plus whether the section's focused source would
+        resolve (under Auto) to a real non-1.0 catalog/metadata reference,
+        as a plain ``dict`` attribute on the section's focused-pane canvas.
+        ``_ChartCard._nudge_signals`` (chart_stack/cards.py) reads this
+        attribute -- never written anywhere else -- to populate
+        ``hints.HintState.db_reference_*``. Pure fact carrier: it never
+        mutates the control, the cache, or any rendered pixel."""
+        ctx = self._analysis_ctx(section)
+        control = ctx.db_reference_control
+        mode = control.mode()
+        value = control.editor.value()
+        source = self._focused_source_for_section(section)
+        facts = (
+            self._channel_reference_facts(*source) if source
+            else db_reference.ChannelReferenceFacts(quantity="", unit="")
+        )
+        snapshot = self.db_reference_store.snapshot()
+        # Always probe the AUTO resolution regardless of the section's own
+        # current mode -- the nudge's whole point is "here is what Auto would
+        # give you", independent of whether the user is currently in Manual.
+        auto_resolution = db_reference.resolve_db_reference(
+            mode='auto',
+            facts=facts,
+            user_catalog=snapshot.user_catalog,
+            system_catalog=snapshot.system_catalog,
+            prefer_channel_metadata=snapshot.prefer_channel_metadata,
+        )
+        source_resolvable = bool(
+            auto_resolution.source in ('metadata', 'user', 'system')
+            and not math.isclose(
+                auto_resolution.value, 1.0, rel_tol=1e-9, abs_tol=1e-9,
+            )
+        )
+        page = self._analysis_page(section)
+        idx = page.focused_index()
+        canvas = page.pane_canvas(idx)
+        if canvas is None:
+            return
+        canvas.db_reference_nudge_facts = {
+            'mode': mode,
+            'value': float(value),
+            'source_resolvable': source_resolvable,
+        }
+        # Unlike the pre-existing situational nudges (colorbar_dead/
+        # amp_disparate/...), which refresh the visible footer via a
+        # canvas-emitted render signal the card already listens to
+        # (chart_rebuilt / levels_rebased), this fact is stamped from
+        # OUTSIDE any such signal -- force the same footer refresh here so
+        # it never lags a stamp that happens without an accompanying
+        # re-render (e.g. a plain View-mode toggle).
+        card = page._cards[idx] if 0 <= idx < len(page._cards) else None
+        refresh = getattr(card, 'refresh_nudge_state', None)
+        if callable(refresh):
+            refresh()
+
+    def _resolve_and_apply_db_reference(self, section, *, rerender=False):
+        """Auto-resolve ``section``'s dB reference from its currently
+        focused/live source + the shared catalog service snapshot, and
+        refresh the control's value + source line.
+
+        A Manual View ignores this entirely (spec §8.1 step 1 / §8.4: manual
+        is View-level and never re-derives from source/catalog). Never
+        dispatches a compute worker -- ``rerender`` only replays the
+        section's own existing cache-hit render path so a catalog save (or
+        an Auto commit from the shared dialog) can force an immediate
+        redraw for the CURRENTLY VISIBLE section without recomputing."""
+        ctx = self._analysis_ctx(section)
+        control = ctx.db_reference_control
+        if control.mode() != 'auto':
+            # Manual (or any non-auto) View still needs its nudge facts kept
+            # live -- e.g. a focused-source change while the section stays
+            # Manual can flip source_resolvable without touching the control.
+            self._stamp_db_reference_nudge_facts(section)
+            return
+        source = self._focused_source_for_section(section)
+        resolution = self._resolve_db_reference_for_source(section, source)
+        # Widget signals blocked: this is a PROGRAMMATIC Auto refresh, never
+        # a user commit, and must not trip the editor's own valueChanged ->
+        # cache-hit-rerender wiring (window._connect) nor any preset-changed
+        # handler (Task 4's existing blocking pattern, e.g. set_fs's
+        # spin_fs.blockSignals around a programmatic setValue).
+        control.editor.blockSignals(True)
+        try:
+            control.editor.setValue(resolution.value)
+        finally:
+            control.editor.blockSignals(False)
+        text, tooltip = _format_db_reference_source_line(resolution)
+        control.set_source_text(text, tooltip=tooltip)
+        # Nudge facts stamped AFTER the auto value settles so the carried
+        # ``value`` matches what is actually shown (the predicate only fires
+        # for mode == 'manual' so this is inert while Auto, but keeps the
+        # attribute honest for any future consumer).
+        self._stamp_db_reference_nudge_facts(section)
+        if rerender:
+            self._rerender_analysis_section_from_cache(section)
+
+    def _rerender_analysis_section_from_cache(self, section):
+        """Redraw ``section``'s active view from whatever the cache already
+        holds -- zero compute dispatch (spec §8.3). Reuses each section's
+        OWN existing cache-hit render entry point instead of a new one, so
+        no cache-consumer logic is duplicated (fft: the spectrum-preserving
+        mode-entry gate; fft_time/order: their own do_* entry points, which
+        already no-op the worker on a cache hit -- see the existing
+        db_reference-editor valueChanged wiring in window._connect)."""
+        if section == 'fft':
+            self._enter_fft_mode()
+        elif section == 'fft_time':
+            self.do_fft_time(force=False)
+        else:
+            self.do_order_time()
+
+    def _on_db_reference_catalog_saved(self, section=None):
+        """The shared ``DbReferenceDefaultsDialog`` committed a catalog save
+        (spec §8.3): every Auto section re-resolves against the new
+        snapshot, but only the CURRENTLY VISIBLE one redraws its canvas --
+        the other (hidden) Auto sections just get their control's value/
+        source line refreshed with zero canvas touch, so their render
+        signature naturally goes stale without a compute dispatch."""
+        visible = self.chart_stack.current_mode()
+        for sec in ('fft', 'fft_time', 'order'):
+            self._resolve_and_apply_db_reference(sec, rerender=(sec == visible))
+
+    def _on_db_reference_view_mode_committed(self, section, mode):
+        """The dialog's '当前 View' toggle targets ONLY the section/View that
+        was focused when its manage button opened the dialog (spec §11.1)."""
+        ctx = self._analysis_ctx(section)
+        ctx.db_reference_control.set_mode(mode)
+        if mode == 'auto':
+            self._resolve_and_apply_db_reference(
+                section, rerender=(self.chart_stack.current_mode() == section)
+            )
+        else:
+            # Auto's branch above stamps via _resolve_and_apply_db_reference;
+            # a commit BACK to Manual needs the same live nudge-fact refresh
+            # (spec S5's self-clear-on-Auto/edit-away needs the reverse too).
+            self._stamp_db_reference_nudge_facts(section)

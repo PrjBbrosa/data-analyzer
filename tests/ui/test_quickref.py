@@ -25,6 +25,7 @@ EXPECTED_TITLES = [
     "通道树（左侧）",
     "游标",
     "谱图（FFT-时间 / 阶次）",
+    "dB 参考（FFT / FFT-时间 / 阶次）",
     "标注",
     "预设",
     "导出 · 复制",
@@ -40,7 +41,7 @@ def _all_rows():
 
 def test_eleven_groups_exact_titles():
     titles = [g.title for g in quickref.QUICKREF]
-    assert len(titles) == 11, titles
+    assert len(titles) == len(EXPECTED_TITLES), titles
     assert titles == EXPECTED_TITLES
 
 
@@ -126,6 +127,29 @@ def test_no_soon_row_and_no_ship_later_coaxis():
     later_ids = {h.id for h in hints.all_hints() if h.ship == "later"}
     assert not any(hid.startswith("coaxis.") for hid in later_ids)
     assert [r.desc for _g, r in _all_rows() if r.soon] == []
+
+
+def test_quickref_covers_db_reference_badge_and_manage_button():
+    """Task 10A / spec A17: the three non-self-evident dB-reference
+    interactions (A/M badge meaning, manual-commit-on-manual-edit, the tune/
+    manage button) must each have a quickref row, and none is a staged
+    ``soon`` item (the feature has landed)."""
+    group = next(
+        g for g in quickref.QUICKREF
+        if "dB" in g.title and "参考" in g.title
+    )
+    haystack = " ".join(f"{r.desc} {r.sub}" for r in group.rows)
+    # A/M 徽标含义 (blue A = auto-follow, amber M = manual lock).
+    assert "A" in haystack and "M" in haystack
+    assert "自动" in haystack and "手动" in haystack
+    # 输入框手输提交即切 Manual.
+    assert any("手输" in f"{r.desc}{r.sub}" for r in group.rows)
+    # tune 按钮打开默认值管理弹窗.
+    assert any(
+        "管理" in f"{r.desc}{r.sub}" or "tune" in (r.gesture or "").lower()
+        for r in group.rows
+    )
+    assert all(not r.soon for r in group.rows)
 
 
 def test_dataclasses_are_frozen():

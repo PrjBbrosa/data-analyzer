@@ -207,7 +207,26 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("调谱图/切片高度", sub="双击重置", gesture="拖分隔条"),
         ),
     ),
-    # 8 — 标注
+    # 8 — dB 参考（FFT / FFT-时间 / 阶次）
+    QuickGroup(
+        title="dB 参考（FFT / FFT-时间 / 阶次）",
+        rows=(
+            QuickRow(
+                "A / M 徽标",
+                sub="蓝色 A = 随通道自动跟随 · 琥珀 M = 手动锁定",
+            ),
+            QuickRow(
+                "手输数值",
+                sub="回车 / 失焦提交 → 自动切换为手动",
+            ),
+            QuickRow(
+                "管理默认值",
+                sub="新增/编辑单位的系统与用户默认参考值",
+                gesture="tune 按钮",
+            ),
+        ),
+    ),
+    # 9 — 标注
     QuickGroup(
         title="标注",
         rows=(
@@ -215,7 +234,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("添加 / 删除最近", gesture="左键加 · 右键删"),
         ),
     ),
-    # 9 — 预设
+    # 10 — 预设
     QuickGroup(
         title="预设",
         rows=(
@@ -223,7 +242,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("重命名 / 重置", gesture="右键预设槽"),
         ),
     ),
-    # 10 — 导出 · 复制
+    # 11 — 导出 · 复制
     QuickGroup(
         title="导出 · 复制",
         rows=(
@@ -240,7 +259,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
         ),
     ),
-    # 11 — 右键菜单
+    # 12 — 右键菜单
     QuickGroup(
         title="右键菜单",
         rows=(

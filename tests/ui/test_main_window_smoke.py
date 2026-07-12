@@ -3227,12 +3227,23 @@ def test_fft_amplitude_to_db_uses_reference():
 
 
 def test_fft_entry_from_cache_uses_db_reference(monkeypatch, qapp):
+    """dB-reference-defaults Task 6: the reference converting an entry now
+    comes from the resolved ``db_reference_control`` (View mode + facts/
+    catalog snapshot) -- NOT a monkeypatched ``current_params()`` dict value
+    (that mechanism is what Task 6 replaces with per-entry resolution).
+    Uses a Manual value DISTINCT from ``current_params()``'s stale
+    ``db_reference`` key so a false pass (both happening to equal 1.0)
+    cannot mask whether the new wiring is actually live."""
     import numpy as np
+    import pytest
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
     freq = np.array([10.0, 20.0])
     amp = np.array([1.0, 10.0])
+
+    win.inspector.fft_ctx.db_reference_control.set_mode("manual")
+    win.inspector.fft_ctx.db_reference_control.editor.setValue(2.0)
 
     monkeypatch.setattr(
         win.inspector.fft_ctx,
@@ -3248,8 +3259,10 @@ def test_fft_entry_from_cache_uses_db_reference(monkeypatch, qapp):
 
     entry = win._fft_entry_from_cache((freq, amp, None), "f1", "sig", "#2563eb")
 
-    np.testing.assert_allclose(entry["amp"], np.array([0.0, 20.0]), atol=1e-6)
+    expected = 20 * np.log10(np.array([1.0, 10.0]) / 2.0)
+    np.testing.assert_allclose(entry["amp"], expected, atol=1e-6)
     np.testing.assert_allclose(entry["amp_for_xlim"], amp)
+    assert entry["db_reference_resolution"].value == pytest.approx(2.0)
 
 
 def test_fft_cache_key_excludes_db_reference_display_only():

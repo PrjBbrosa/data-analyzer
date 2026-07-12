@@ -91,6 +91,37 @@ def test_missing_schema_version_treated_as_v1(tmp_path):
     assert p.target_signals == ("sig",)
 
 
+def test_legacy_batch_preset_value_without_mode_migrates_to_manual(tmp_path):
+    """Spec §13 S4: a legacy preset JSON with ``db_reference`` but no
+    ``db_reference_mode`` migrates to Manual on load -- same rule as the
+    View/preset migration (S2/S3), applied uniformly to Batch presets."""
+    path = tmp_path / "legacy_ref.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "name": "legacy ref", "method": "fft",
+        "target_signals": ["sig"], "rpm_channel": "",
+        "params": {"window": "hanning", "nfft": 1024, "db_reference": 2e-5},
+        "outputs": {"export_data": True, "export_image": True, "data_format": "csv"},
+    }), encoding="utf-8")
+
+    preset = load_preset_from_json(path)
+
+    assert preset.params["db_reference"] == 2e-5
+    assert preset.params["db_reference_mode"] == "manual"
+
+
+def test_batch_preset_without_reference_key_stays_unmigrated(tmp_path):
+    """No ``db_reference`` key at all -> no mode is injected (S4 negative case)."""
+    p1 = _basic_preset()
+    path = tmp_path / "p.json"
+    save_preset_to_json(p1, path)
+
+    p2 = load_preset_from_json(path)
+
+    assert "db_reference" not in p2.params
+    assert "db_reference_mode" not in p2.params
+
+
 def test_unknown_schema_version_rejected(tmp_path):
     path = tmp_path / "p.json"
     path.write_text(json.dumps({

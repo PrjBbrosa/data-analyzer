@@ -605,18 +605,35 @@ class _ChartCard(QWidget):
     _NUDGE_SIGNAL_KEYS = frozenset({
         "channel_count", "same_unit", "has_axis_group",
         "amp_disparate", "colorbar_dead", "clipped",
+        "db_reference_mode", "db_reference_value",
+        "db_reference_source_resolvable",
     })
 
     def _nudge_signals(self):
         """Pull situational signals from the canvas (getattr-guarded), filtered
-        to the known HintState fields so an unexpected key can't break it."""
+        to the known HintState fields so an unexpected key can't break it.
+
+        Two independent producers feed this: an optional ``canvas.nudge_signals()``
+        callable (the pre-existing time/heatmap situational signals), and an
+        optional plain ``canvas.db_reference_nudge_facts`` dict attribute
+        (dB-reference-defaults nudge, spec 2026-07-12 S5 / A17) stamped by
+        ``AnalysisMixin._stamp_db_reference_nudge_facts`` at render time --
+        additive metadata, not a render/behavior signal."""
         getter = getattr(getattr(self, "canvas", None), "nudge_signals", None)
-        if not callable(getter):
-            return {}
-        try:
-            raw = getter() or {}
-        except Exception:
-            return {}
+        raw = {}
+        if callable(getter):
+            try:
+                raw = dict(getter() or {})
+            except Exception:
+                raw = {}
+        facts = getattr(getattr(self, "canvas", None), "db_reference_nudge_facts", None)
+        if isinstance(facts, dict):
+            if "mode" in facts:
+                raw["db_reference_mode"] = facts["mode"]
+            if "value" in facts:
+                raw["db_reference_value"] = facts["value"]
+            if "source_resolvable" in facts:
+                raw["db_reference_source_resolvable"] = facts["source_resolvable"]
         return {k: v for k, v in raw.items() if k in self._NUDGE_SIGNAL_KEYS}
 
     def _hint_state(self):
@@ -635,6 +652,22 @@ class _ChartCard(QWidget):
         anchors merged with context tips, weight-ordered, with use/discovery
         decay (hints.rotation_hints)."""
         return hints.rotation_hints(self._hint_state())
+
+    def refresh_nudge_state(self):
+        """Public hook: force an immediate footer refresh from the card's
+        current ``HintState``.
+
+        Existing situational nudges refresh live because their canvas fires
+        a signal the card already listens to (``chart_rebuilt`` /
+        ``levels_rebased``). The dB-reference-defaults nudge (spec S5 / A17)
+        is instead stamped as a plain attribute by ``AnalysisMixin.
+        _stamp_db_reference_nudge_facts`` from outside any canvas signal (a
+        signal-changed / mode-committed / value-committed handler), so it
+        calls this after every stamp to keep the visible footer from lagging
+        behind the just-updated facts -- same effect as
+        ``_refresh_bottom_hint``, just under a public name for cross-module
+        callers."""
+        self._refresh_bottom_hint()
 
     def _refresh_bottom_hint(self, *_):
         state = self._hint_state()

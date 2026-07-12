@@ -1593,6 +1593,41 @@ def test_format_readout_empty_when_no_entries(canvas):
     assert canvas.format_readout(120.0) == ""
 
 
+def test_plot_spectra_prefers_legend_label_over_base_label(canvas):
+    """dB-reference-defaults Task 6 (spec §15 C1): an entry carrying a
+    distinct 'legend_label' (base source label + a per-curve dB[A] re ...
+    disclosure for a mixed-reference FFT axis) is what pyqtgraph names the
+    curve AND what the hover readout discloses -- the base 'label' key
+    stays untouched (reused unchanged by the time-preview trace names)."""
+    e = _entry(label='f1 · vib')
+    e['legend_label'] = 'f1 · vib · dBA re 1×10⁻⁶ m/s²'
+    canvas.plot_spectra(
+        [e], xlim=(0.0, 500.0),
+        amp_label='Amplitude (dBA · per-curve reference)', title='FFT',
+    )
+
+    assert canvas._amp_curves[0].name() == 'f1 · vib · dBA re 1×10⁻⁶ m/s²'
+    rows = canvas.readout_at(120.0)
+    assert rows[0][0] == 'f1 · vib · dBA re 1×10⁻⁶ m/s²'
+    # the base 'label' entry key is untouched -- unaffected downstream
+    # consumers (e.g. time-preview naming) never see the disclosure suffix.
+    assert e['label'] == 'f1 · vib'
+
+
+def test_plot_spectra_falls_back_to_base_label_without_legend_label(canvas):
+    """An entry with no 'legend_label' (the common single/exact-reference
+    axis case, and every legacy direct-call test) names the curve and the
+    readout row from the plain base 'label' -- unchanged regression
+    coverage for the pre-Task-6 behavior."""
+    canvas.plot_spectra(
+        [_entry(label='f1 · vib')], xlim=(0.0, 500.0),
+        amp_label='Amplitude', title='FFT',
+    )
+    assert canvas._amp_curves[0].name() == 'f1 · vib'
+    rows = canvas.readout_at(120.0)
+    assert rows[0][0] == 'f1 · vib'
+
+
 def test_fft_time_preview_default_divisions_match_standard_y_density(canvas):
     # FFT time-preview uses 10 default Y divisions so its graticule matches
     # the FFT line canvas default framing before the user changes tick density.

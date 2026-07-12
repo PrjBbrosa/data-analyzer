@@ -18,8 +18,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ...db_reference import migrate_legacy_reference_params
+from ...db_reference import normalize_unit as _normalize_unit
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
+from ..widgets.db_reference import DbReferenceControl
 from .._axis_defaults import z_range_for
 
 
@@ -53,27 +56,16 @@ BUILTIN_PRESET_BLURB = {
 }
 
 
-def _normalize_unit(unit):
-    """Normalize a channel-unit string for exact alias matching.
-
-    Lower-cases, strips whitespace, and folds the Unicode superscript-two
-    (``²``) into ``2`` so ``m/s²`` / ``m/s^2`` / ``m/s2`` all compare equal.
-    The ``^`` and leftover whitespace inside the token are dropped too so the
-    canonical form for "metre per second squared" is ``m/s2``.
-    """
-    if unit is None:
-        return ''
-    s = str(unit).strip().lower()
-    # Fold superscripts to plain digits, then drop the ^ exponent marker so
-    # m/s², m/s^2 and m/s2 all collapse to the same canonical token.
-    s = (
-        s.replace('²', '2')  # ² superscript two
-         .replace('³', '3')  # ³ superscript three
-         .replace('^', '')
-    )
-    # Collapse any internal whitespace (e.g. "n m" -> "nm").
-    s = ''.join(s.split())
-    return s
+# ``_normalize_unit`` is a thin re-export of
+# ``mf4_analyzer.db_reference.normalize_unit`` (imported above as
+# ``_normalize_unit``) — 2026-07-12 dB-reference-defaults Task 1 moved the
+# implementation into the pure domain module so unit normalization has ONE
+# production implementation shared by preset recommendation (below) and the
+# dB-reference resolver, instead of forking the same trim/casefold/²→2/^-
+# strip logic twice. Call shape (`_normalize_unit(unit)`) and behaviour are
+# unchanged: lower-cases, strips whitespace, folds ``²``/``³`` to plain
+# digits, drops ``^`` and internal whitespace so ``m/s²`` / ``m/s^2`` /
+# ``m/s2`` all compare equal. Exact-match only (see module docstring there).
 
 
 # Exact-match alias sets (already normalized via _normalize_unit). Exact match
@@ -127,6 +119,11 @@ def make_db_reference_spinbox():
     Range 1e-9..1e9, 6 decimals, default 1.0.  The tooltip states that this
     is the linear amplitude that maps to 0 dB — it shifts the dB scale only,
     not the waveform.
+
+    Superseded by :func:`make_db_reference_control` (2026-07-12 dB-reference
+    -defaults Task 4) for the three analysis Contextuals — kept here
+    unused/importable for any external caller that still wants a bare
+    numeric spinbox instead of the compound Auto/Manual control.
     """
     spin = _no_buttons(CompactDoubleSpinBox())
     spin.setRange(1e-9, 1e9)
@@ -134,6 +131,91 @@ def make_db_reference_spinbox():
     spin.setValue(1.0)
     spin.setToolTip('0 dB 对应的线性幅值，仅平移 dB 刻度、不改波形。')
     return spin
+
+
+_DB_REFERENCE_TOOLTIP = (
+    'dB re：0 dB 对应的参考值；启用 A 计权时称 dBA。'
+    '自动：按通道 metadata / 目录解析，metadata 优先；手动：固定覆盖值。'
+)
+
+
+def make_db_reference_control(parent=None):
+    """Instantiate the shared compound dB-reference row (spec §10) for a
+    Contextual panel.
+
+    2026-07-12 dB-reference-defaults Task 4: replaces the bare
+    ``make_db_reference_spinbox()`` numeric row in FFTContextual /
+    FFTTimeContextual / OrderContextual. Returns the
+    :class:`~mf4_analyzer.ui.widgets.db_reference.DbReferenceControl`; the
+    caller keeps ``ctx.db_reference_control = control`` (the compound root,
+    for mounting + Task 5 service wiring) and ``ctx.spin_db_ref =
+    control.editor`` (the existing alias every call site/test already
+    expects) per the Task 4 contract in the implementation plan.
+
+    Sets the shared dB-reference tooltip (Task 10A: explains dB re / dBA /
+    Auto vs Manual / metadata priority -- existing tests assert
+    ``"dB" in ctx.spin_db_ref.toolTip()``) and caps the
+    editor's own ``maximumWidth`` to the same A1 field cap the compound
+    root gets from ``_fit_field`` at the call site — the cap must land on
+    BOTH because ``_fit_field`` is invoked on the compound (which owns the
+    manage button + badge layout), not on the inner editor, and existing
+    tests (e.g. ``test_fft_time_contextual_short_fields_capped``) read
+    ``ctx.spin_db_ref.maximumWidth()`` directly.
+    """
+    control = DbReferenceControl(parent)
+    control.editor.setToolTip(_DB_REFERENCE_TOOLTIP)
+    _fit_field(control.editor, max_width=_SHORT_FIELD_MAX_WIDTH, align_right=False)
+    return control
+
+
+def db_reference_params(control):
+    """``{'db_reference_mode', 'db_reference'}`` for ``get_params()`` /
+    ``current_params()`` / ``_collect_preset()`` (spec §5.3, S2).
+
+    Manual mode: ``db_reference`` is the authoritative manual value. Auto
+    mode: ``db_reference`` is the control's last-resolved compatible
+    snapshot — resolving a FRESH Auto value against catalog/metadata is the
+    Task 5 service's job, not this section-level accessor; this function
+    only reads whatever the live control currently holds.
+    """
+    return {
+        'db_reference_mode': control.mode(),
+        'db_reference': control.editor.value(),
+    }
+
+
+def apply_db_reference_partial(control, d):
+    """Partial-apply guard for ``apply_params`` (spec S1).
+
+    Only the keys PRESENT in ``d`` change state: ``db_reference`` alone
+    sets the value WITHOUT forcing Manual mode; ``db_reference_mode``
+    alone switches mode without touching the value; both missing leaves
+    the control's current mode/value untouched. Never mutates ``d``.
+    """
+    if 'db_reference' in d:
+        try:
+            control.editor.setValue(float(d['db_reference']))
+        except (TypeError, ValueError):
+            pass
+    if 'db_reference_mode' in d:
+        control.set_mode(d['db_reference_mode'])
+
+
+def apply_db_reference_preset(control, d):
+    """Full legacy-preset-blob path for ``_apply_preset_values`` (spec S2).
+
+    A saved ``db_reference`` WITHOUT a ``db_reference_mode`` is the old,
+    pre-Auto/Manual authoritative display reference -> migrate to Manual
+    via the shared domain rule
+    (:func:`mf4_analyzer.db_reference.migrate_legacy_reference_params`,
+    Task 1) instead of forking the rule here, then partial-apply the
+    (possibly migrated) dict. A preset that already carries
+    ``db_reference_mode`` (new-shape save) round-trips both keys
+    untouched; a preset missing ``db_reference`` entirely leaves the
+    control's current mode/value alone (``migrate_legacy_reference_params``
+    only injects a mode when ``db_reference`` is present).
+    """
+    apply_db_reference_partial(control, migrate_legacy_reference_params(d))
 
 
 def _no_buttons(spin):

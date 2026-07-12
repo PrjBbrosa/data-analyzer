@@ -1236,6 +1236,140 @@ Inspector QDoubleSpinBox[compact="true"]::down-arrow {
     height: 0;
 }
 
+/* ============ dB reference compound control (2026-07-12 db-reference) ====
+ * Scoped strictly to objectName — no generic QToolButton/QLineEdit/
+ * QDoubleSpinBox rule is touched (Task 3 constraint). Root + source line
+ * stay transparent so the surrounding fftParamsCard/fftTimeParamsCard/
+ * orderParamsCard white surface reads through continuously (spec §17.2). */
+#dbReferenceControl {
+    background-color: transparent;
+    border: none;
+}
+#dbReferenceEditor[error="true"] {
+    border: 1px solid #dc2626;
+    background-color: #fdf2f2;
+}
+#dbReferenceManageButton {
+    border: 1px solid #dfe5ee;
+    border-radius: 8px;
+    background-color: #fafbfc;
+    color: #374151;
+}
+#dbReferenceManageButton:hover {
+    border-color: #b7c4d3;
+    background-color: #eef4fb;
+}
+#dbReferenceManageButton:pressed {
+    background-color: #dbe9fb;
+}
+/* Auto (blue) / Manual (amber) badge — a small 16px circle anchored to the
+ * manage button's corner; only ONE extra visual accent (spec §17.2: no
+ * second primary-color block besides the existing control blue). Amber
+ * reuses the project's existing warning token (#d97706, see toastIcon). */
+#dbReferenceModeBadge {
+    border: 2px solid #ffffff;
+    border-radius: 8px;
+    background-color: #1769e0;
+    color: #ffffff;
+    font-size: 9px;
+    font-weight: 800;
+}
+#dbReferenceModeBadge[mode="manual"] {
+    background-color: #d97706;
+}
+#dbReferenceSourceLabel {
+    color: #64748b;
+    font-size: 11px;
+    background-color: transparent;
+}
+
+/* ============ dB reference defaults manager dialog =======================
+ * Reuses ChartOptionsDialog/SheetSurface visual language — no frameless web
+ * window (spec §17.2). */
+QDialog#DbReferenceDefaultsDialog {
+    border: 1px solid #dfe5ee;
+    border-radius: 12px;
+    background-color: #f5f7fb;
+}
+QDialog#DbReferenceDefaultsDialog QLabel#dbReferenceDialogTitle {
+    color: #111827;
+    font-size: 15px;
+    font-weight: 700;
+    background-color: transparent;
+}
+QDialog#DbReferenceDefaultsDialog QLabel#dbReferenceDialogSubtitle {
+    color: #64748b;
+    font-size: 12px;
+    background-color: transparent;
+}
+QDialog#DbReferenceDefaultsDialog QToolButton#dbReferenceDialogClose {
+    border: none;
+    border-radius: 7px;
+    background-color: transparent;
+}
+QDialog#DbReferenceDefaultsDialog QToolButton#dbReferenceDialogClose:hover {
+    background-color: #e8edf3;
+}
+QDialog#DbReferenceDefaultsDialog QWidget#dbReferenceDialogToggleRow {
+    border: 1px solid #dfe5ee;
+    border-radius: 8px;
+    background-color: #ffffff;
+    padding: 8px 10px;
+}
+QDialog#DbReferenceDefaultsDialog QLabel#dbReferenceDialogToggleTitle {
+    color: #111827;
+    font-weight: 700;
+    background-color: transparent;
+}
+QDialog#DbReferenceDefaultsDialog QLabel#dbReferenceDialogToggleDesc {
+    color: #64748b;
+    font-size: 11px;
+    background-color: transparent;
+}
+QDialog#DbReferenceDefaultsDialog QLabel#dbReferenceDialogEffective {
+    color: #315c98;
+    font-size: 11px;
+    background-color: transparent;
+    padding-left: 2px;
+}
+QDialog#DbReferenceDefaultsDialog QTableWidget#dbReferenceDialogTable {
+    border: 1px solid #dfe5ee;
+    border-radius: 8px;
+    background-color: #ffffff;
+    gridline-color: #eef2f7;
+}
+QDialog#DbReferenceDefaultsDialog QTableWidget#dbReferenceDialogTable QHeaderView::section {
+    border: none;
+    border-bottom: 1px solid #dfe5ee;
+    background-color: #fafbfc;
+    color: #64748b;
+    font-weight: 600;
+    padding: 4px 6px;
+}
+QDialog#DbReferenceDefaultsDialog QLabel#dbReferenceDialogError {
+    color: #b42318;
+    font-size: 11px;
+    background-color: #fdf2f2;
+    border: 1px solid #f1c9c4;
+    border-radius: 6px;
+    padding: 6px 8px;
+}
+/* Per-row 删除 buttons reuse the ChannelEditorDialog danger tokens
+ * (#b42318 text / #f1c9c4 border / #fdf4f3 fill) so destructive row actions
+ * read consistently across the app's dialogs. */
+QDialog#DbReferenceDefaultsDialog QTableWidget#dbReferenceDialogTable QPushButton[role="danger"] {
+    color: #b42318;
+    border: 1px solid #f1c9c4;
+    border-radius: 6px;
+    background-color: #fdf4f3;
+    padding: 2px 8px;
+    font-size: 11px;
+}
+QDialog#DbReferenceDefaultsDialog QTableWidget#dbReferenceDialogTable QPushButton[role="danger"]:hover {
+    border-color: #e3a8a1;
+    background-color: #fbe9e7;
+}
+
 /* Preset slot buttons inside FFT/Order contextual */
 QPushButton[role="preset-load"] {
     min-height: 26px;

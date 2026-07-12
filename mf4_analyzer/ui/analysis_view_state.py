@@ -14,8 +14,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..db_reference import migrate_legacy_reference_params
+
 ChannelKey = tuple[str, str]
 MAX_PANES = 2  # spec §2: v1 caps split at 2; the model is list-shaped for later N
+# dB reference defaults (Task 8, spec §13 S3): nested AnalysisViewState schema
+# 1 -> 2. The bump is purely declarative -- from_dict() below keys the
+# migration off "params has db_reference and no db_reference_mode", NOT this
+# number, so an OLDER build reading a schema-2 project still applies the
+# saved snapshot value manual-style instead of erroring or dropping it.
+_SCHEMA = 2
 
 
 def _coerce_key(value: Any) -> ChannelKey:
@@ -65,7 +73,7 @@ class AnalysisViewState:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema": 1,
+            "schema": _SCHEMA,
             "name": self.name,
             "tab_color": self.tab_color,
             "panes": [p.to_dict() for p in self.panes],
@@ -80,11 +88,19 @@ class AnalysisViewState:
             panes = [PaneState()]
         compare = {"x_linked": True, "levels_locked": True}
         compare.update(data.get("compare", {}))
+        # dB reference defaults (Task 8, spec §13 S3/S5): a legacy blob with
+        # db_reference but no db_reference_mode migrates to Manual -- the
+        # bare number WAS the old authoritative display reference. Keyed off
+        # field presence (migrate_legacy_reference_params), never off the
+        # "schema" field itself (see _SCHEMA note above); a view with no
+        # db_reference at all keeps the key absent so the live control's
+        # current Auto/Manual state drives it instead of an injected default.
+        params = migrate_legacy_reference_params(dict(data.get("params", {})))
         return cls(
             name=data["name"],
             tab_color=data["tab_color"],
             panes=panes[:MAX_PANES],
-            params=dict(data.get("params", {})),
+            params=params,
             compare=compare,
         )
 

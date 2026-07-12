@@ -32,6 +32,7 @@ from ...signal import (
     resolve_order_nfft,
 )
 from ... import app_meta
+from ... import db_reference
 from ..compute_progress import ComputeProgressWidget
 from ..plot_risk import PlotRisk, PlotRiskLevel, estimate_time_overlay_risk
 
@@ -119,9 +120,35 @@ class MainWindow(
         self._order_progress_completed_jobs = 0
         self._last_batch_preset = None
         self._acquisition_cockpit_window = None
+        # dB-reference-defaults Task 5: MainWindow owns the ONE shared
+        # settings/service instance injected into all three Contextual
+        # controls (spec §11.1 "MainWindow/Inspector 共享一个 service/store").
+        from ..db_reference_settings import DbReferenceSettingsStore
+        self.db_reference_store = DbReferenceSettingsStore(
+            self._db_reference_settings()
+        )
         self._init_ui()
         self._init_drop_import()
         self._connect()
+
+    def _db_reference_settings(self):
+        """``QSettings`` for the shared dB-reference catalog store.
+
+        Reuses the SAME isolatable factory the Inspector preset bars already
+        call (``_preset_settings()``) instead of constructing
+        ``QSettings("MF4Analyzer", "DataAnalyzer")`` directly. Tests
+        monkeypatch that one factory to an isolated ini file under
+        ``tmp_path`` (``tests/ui/conftest.py::_isolate_qsettings``); a fresh
+        direct ``QSettings(org, app)`` call here uses the NativeFormat
+        2-arg convenience constructor regardless of ``QSettings.
+        setDefaultFormat``/``setPath`` (verified: it still resolves to the
+        real macOS plist / Windows registry), so it would silently read/
+        write the REAL native preferences store on every MainWindow-
+        constructing test -- exactly the pollution class that fixture
+        exists to prevent (mirrors the existing
+        ``_project_io_mixin._blf_dbc_settings`` fallback pattern)."""
+        from ..inspector_sections._helpers import _preset_settings
+        return _preset_settings()
 
     def _init_ui(self):
         from PyQt5.QtWidgets import QSplitter, QVBoxLayout, QWidget
@@ -575,22 +602,49 @@ class MainWindow(
         # immediately re-render without recompute. Re-evaluate _fft_render_signature
         # (which now includes db_reference) so the stale-check in _enter_fft_mode
         # detects the change and re-draws from cache.
-        from PyQt5.QtCore import QTimer as _QTimer
         self.inspector.fft_ctx.spin_db_ref.valueChanged.connect(
-            lambda _: _QTimer.singleShot(0, self._enter_fft_mode)
+            lambda _: self._on_db_reference_value_edited(
+                'fft', self._enter_fft_mode,
+            )
         )
         # Order dB reference is display-only: changing it re-renders from cache
         # (do_order_time hits cache, calls _render_order_on, no worker dispatch).
         self.inspector.order_ctx.spin_db_ref.valueChanged.connect(
-            lambda _: _QTimer.singleShot(0, self.do_order_time)
+            lambda _: self._on_db_reference_value_edited(
+                'order', self.do_order_time,
+            )
         )
         # FFT-vs-Time dB reference is also display-only.  Changing it should
         # take the normal cache-hit render path (force=False) so the current
         # SpectrogramResult is redrawn with the new render-time reference
         # without scheduling a needless recompute.
         self.inspector.fft_time_ctx.spin_db_ref.valueChanged.connect(
-            lambda _: _QTimer.singleShot(0, lambda: self.do_fft_time(force=False))
+            lambda _: self._on_db_reference_value_edited(
+                'fft_time', lambda: self.do_fft_time(force=False),
+            )
         )
+        # dB-reference-defaults Task 5: every section's manage button opens
+        # the ONE shared DbReferenceDefaultsDialog editing the ONE global
+        # catalog service (spec §11.1); each lambda only carries which
+        # section/View was focused when its own button was clicked.
+        for _drc_section in ('fft', 'fft_time', 'order'):
+            self._analysis_ctx(_drc_section).db_reference_control.manage_requested.connect(
+                lambda s=_drc_section: self._open_db_reference_dialog(s)
+            )
+        # dB-reference-defaults nudge feed (spec S5 / A17), ordering fix: a
+        # genuine user commit on an Auto-mode editor auto-promotes to Manual
+        # INSIDE DbReferenceControl._on_editor_value_committed, which fires
+        # the editor's base ``valueChanged`` (wired above, driving the
+        # existing re-render) BEFORE it flips the mode -- so a stamp read off
+        # ``valueChanged`` alone can observe the STALE pre-flip mode for that
+        # one keystroke. ``control.value_committed`` is re-emitted from that
+        # SAME handler strictly AFTER any mode flip, so re-stamping there
+        # (additive, no render effect) always lands on the correct final
+        # mode/value.
+        for _drc_section in ('fft', 'fft_time', 'order'):
+            self._analysis_ctx(_drc_section).db_reference_control.value_committed.connect(
+                lambda _v, s=_drc_section: self._stamp_db_reference_nudge_facts(s)
+            )
         self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
@@ -848,6 +902,17 @@ class MainWindow(
         # with the same inputs can skip the rebuild.
         self._fft_last_render_sig = self._fft_render_signature()
 
+    def _fft_reference_identity_for_source(self, fid, ch):
+        """A per-source ``(value, unit, quantity)`` identity tuple (spec §15
+        C1 / §16) -- the render-signature counterpart of the per-entry
+        resolution :meth:`_fft_entry_from_cache` converts with. Changing
+        EITHER quantity would change the rendered curve (value drives the
+        dB conversion + axis reference text, quantity drives the axis word
+        for a non-mixed label), so both belong in the identity even though
+        only ``(value, unit)`` decides the exact-vs-mixed axis split."""
+        resolution = self._resolve_db_reference_for_source('fft', (fid, ch))
+        return (resolution.value, resolution.unit, resolution.quantity)
+
     def _fft_render_signature(self):
         """Identity of everything the fft-canvas render depends on that can
         change while another section is showing. Two fft-mode entries with the
@@ -856,14 +921,23 @@ class MainWindow(
 
         Only fft *inputs* go in here: the navigator selection (shared across
         sections), the compute params (cache-key inputs), the time-range
-        filter (drives the preview), and the dB/linear display toggle. The
-        remaining fft knobs live in the fft-only inspector that is hidden in
-        other sections, so they cannot drift while away."""
-        sources = tuple(
-            (str(row[0]), str(row[1]))
+        filter (drives the preview), the dB/linear display toggle, and
+        (Task 6 Step 6.5) the dB-reference View mode + EACH checked source's
+        OWN resolved reference identity + the catalog service revision (Auto
+        View only -- a Manual View's identity already reflects the single
+        control value, so the revision counter is irrelevant to it and would
+        force spurious re-renders on every unrelated catalog edit). Tracking
+        per-source identity (not a single global control value bound only to
+        the first checked channel) is what lets a catalog/metadata change on
+        ANY checked source -- not just the first -- invalidate this signature.
+        The remaining fft knobs live in the fft-only inspector that is hidden
+        in other sections, so they cannot drift while away."""
+        checked = [
+            (row[0], row[1])
             for row in self.navigator.get_checked_channels()
             if len(row) >= 2
-        )
+        ]
+        sources = tuple((str(fid), str(ch)) for fid, ch in checked)
         params = self._analysis_compute_params('fft')
         range_sig = None
         if self.inspector.top.range_enabled():
@@ -874,8 +948,19 @@ class MainWindow(
                 range_sig = None
         fft_display_params = self.inspector.fft_ctx.current_params()
         amp_y = fft_display_params.get('amp_y', 'Linear')
-        db_reference = float(fft_display_params.get('db_reference', 1.0))
-        return (sources, tuple(sorted(params.items())), range_sig, amp_y, db_reference)
+        db_reference_mode = fft_display_params.get('db_reference_mode', 'auto')
+        per_source_identity = tuple(
+            self._fft_reference_identity_for_source(fid, ch)
+            for fid, ch in checked
+        )
+        revision = (
+            self.db_reference_store.revision
+            if db_reference_mode == 'auto' else None
+        )
+        return (
+            sources, tuple(sorted(params.items())), range_sig, amp_y,
+            db_reference_mode, per_source_identity, revision,
+        )
 
     def _fft_any_source_cached(self, state):
         cache = self.analysis_caches['fft']
@@ -927,12 +1012,21 @@ class MainWindow(
         ``result`` is the raw compute tuple ``(freq, amp, psd)`` (linear). The
         dB/linear display transform is applied here from the CURRENT inspector
         axis toggle, so toggling dB re-renders without recompute (display-only
-        knobs are excluded from the cache key)."""
+        knobs are excluded from the cache key). Task 6 (spec §15 C1): the
+        reference used to convert THIS entry is resolved from ITS OWN
+        ``(fid, ch)`` source via the section's current View mode + the shared
+        catalog service snapshot -- NOT a single control value shared by
+        every overlay curve -- so a mixed-reference overlay converts each
+        curve with its own reference. The resolution is attached as stable
+        entry metadata (``db_reference_resolution``) regardless of the
+        Linear/dB toggle (Linear labelling still wants the source's unit/
+        quantity); ``amp_for_xlim`` always stays the raw LINEAR amplitude."""
         freq, amp, _psd = result
         p = self.inspector.fft_ctx.current_params()
         amp_y = p.get('amp_y', 'Linear')
+        resolution = self._resolve_db_reference_for_source('fft', (fid, ch))
         if amp_y == 'dB':
-            amp_disp = self._amplitude_to_db(amp, p.get('db_reference', 1.0))
+            amp_disp = self._amplitude_to_db(amp, resolution.value)
         else:
             amp_disp = amp
         label = f"{self._file_display_name(fid)} · {ch}"
@@ -945,7 +1039,59 @@ class MainWindow(
             'amp_for_xlim': amp,
             'time': [] if t is None else t,
             'signal': [] if sig is None else sig,
+            'db_reference_resolution': resolution,
         }
+
+    def _fft_apply_amplitude_display(self, entries, amp_y, weighting):
+        """Compute the FFT amplitude axis label and attach a per-curve
+        ``legend_label`` to each entry (spec §14 / §15 C1, plan Task 6 Step
+        6.3), from each entry's own ``db_reference_resolution`` (Step 6.2).
+
+        Every entry sharing ONE ``(value, unit)`` identity -> the EXACT
+        canonical axis label (:func:`db_reference.format_amplitude_label`);
+        every curve's ``legend_label`` is just its base ``label`` (the axis
+        alone already discloses the single shared reference unambiguously).
+        Two or more distinct identities -> the axis collapses to
+        ``'Amplitude (dB[A] · per-curve reference)'`` and EVERY curve's
+        ``legend_label`` gets its own compact ``dB[A] re ...`` disclosure
+        appended (:func:`db_reference.format_reference_note`) -- never let
+        one source's reference become the global axis (spec stop-gate).
+        ``label`` itself is NEVER rewritten: the lower time-preview row
+        reuses these same entry dicts and must show NO reference suffix
+        (spec: "time preview 的线性 trace 不附 dB reference").
+
+        Entries built outside :meth:`_fft_entry_from_cache` (legacy hand-
+        built dicts in a few direct-call tests) simply lack
+        ``db_reference_resolution`` -- treated as an unresolved/generic
+        source rather than crashing, so those call sites keep working."""
+        output_scale = 'db' if amp_y == 'dB' else 'linear'
+        resolutions = [e.get('db_reference_resolution') for e in entries]
+        known = [r for r in resolutions if r is not None]
+        identities = {(r.value, r.unit) for r in known}
+        mixed = len(identities) > 1
+        if mixed:
+            single = None
+        elif known:
+            single = known[0]
+        elif output_scale == 'db':
+            # No resolution metadata at all (legacy direct-call entries) --
+            # degrade to the same neutral "dB re 1" a genuinely-unresolved
+            # generic source would get, rather than crashing.
+            single = db_reference.DbReferenceResolution(
+                value=1.0, unit='', quantity='', source='generic')
+        else:
+            single = None
+        amp_label = db_reference.format_amplitude_label(
+            single, weighting=weighting, output_scale=output_scale, mixed=mixed,
+        )
+        for e, resolution in zip(entries, resolutions):
+            if mixed and resolution is not None and output_scale == 'db':
+                note = db_reference.format_reference_note(
+                    resolution, weighting=weighting)
+                e['legend_label'] = f"{e['label']} · {note}"
+            else:
+                e['legend_label'] = e['label']
+        return amp_label
 
     def _plot_fft_entries(self, entries, canvas=None):
         """Render a pane's FFT overlay entries with axis labels/limits pulled
@@ -956,6 +1102,8 @@ class MainWindow(
             return
         p = self.inspector.fft_ctx.current_params()
         amp_y = p.get('amp_y', 'Linear')
+        weighting = p.get('weighting', 'None')
+        amp_label = self._fft_apply_amplitude_display(entries, amp_y, weighting)
         x_auto = bool(p.get('x_auto', p.get('autoscale', True)))
         x_min = float(p.get('x_min', 0.0))
         x_max = float(p.get('x_max', 0.0))
@@ -974,7 +1122,7 @@ class MainWindow(
         canvas.plot_spectra(
             entries,
             xlim=xlim,
-            amp_label='Amplitude (dB)' if amp_y == 'dB' else 'Amplitude',
+            amp_label=amp_label,
             title=f'FFT · {len(entries)} 条曲线',
             y_auto=bool(p.get('y_auto', True)),
             y_min=float(p.get('y_min', 0.0)),
@@ -983,14 +1131,19 @@ class MainWindow(
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
 
-    def _render_cached_heatmap(self, section, canvas, result):
+    def _render_cached_heatmap(self, section, canvas, result, source=None):
         """Render a cached heatmap result on ``canvas`` using the current
-        section inspector's display options."""
+        section inspector's display options. ``source`` is the ``(fid, ch)``
+        this specific pane's cached ``result`` came from -- threaded through
+        to ``_render_fft_time_on``/``_render_order_on`` for a per-pane-accurate
+        dB-reference resolution (spec §15 C2/C3); without it the view-switch /
+        project-open cache-restore render path falls back to the generic
+        resolution instead of the pane's own saved source."""
         if section == 'fft_time':
             p = self.inspector.fft_time_ctx.get_params()
-            self._render_fft_time_on(canvas, result, p)
+            self._render_fft_time_on(canvas, result, p, source=source)
         else:
-            self._render_order_on(canvas, result)
+            self._render_order_on(canvas, result, source=source)
 
     # _on_view_new / _on_view_delete / _on_view_duplicate / _on_view_color /
     # _restore_view_axis_opts / _applied_xaxis_opts / _capture_range_change_into_view /
@@ -1066,6 +1219,11 @@ class MainWindow(
         self.chart_stack.set_mode(mode)
         self.inspector.set_mode(mode)
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
+        if mode in self.analysis_managers:
+            # dB-reference-defaults nudge feed (spec S5 / A17): a section
+            # entered without any signal/value/mode change since its last
+            # visit still needs a fresh stamp -- additive, no render effect.
+            self._stamp_db_reference_nudge_facts(mode)
         # §6.2 auto re-plot on entering time mode with checked channels.
         # Defer by one tick: QStackedWidget has not yet laid out the newly
         # visible canvas, and drawing now paints onto a backing store that is
@@ -1498,6 +1656,13 @@ class MainWindow(
             self.inspector.fft_ctx.set_recommended_for_unit(unit)
             self.inspector.order_ctx.set_recommended_for_unit(unit)
         self._apply_audio_weighting_default(data)
+        # dB-reference-defaults Task 5: an Auto View re-resolves against the
+        # (possibly just-changed) focused source; a Manual View no-ops
+        # inside the helper (spec §8.1/§8.4). Also covers a pane FOCUS
+        # switch, since _apply_analysis_sources echoes the newly-focused
+        # pane's saved source through this same combo -> signal_changed path.
+        if mode in ('fft', 'order'):
+            self._resolve_and_apply_db_reference(mode)
         if not data:
             return
         fid, _ch = data
@@ -1524,6 +1689,9 @@ class MainWindow(
         unit = self._unit_for_signal(data)
         self.inspector.fft_time_ctx.set_recommended_for_unit(unit)
         self._apply_audio_weighting_default(data)
+        # dB-reference-defaults Task 5: see the matching comment in
+        # _on_inspector_signal_changed.
+        self._resolve_and_apply_db_reference('fft_time')
         if not data:
             return
         fid, _ch = data
@@ -1531,6 +1699,38 @@ class MainWindow(
             return
         fd = self.files[fid]
         self.inspector.fft_time_ctx.set_fs(fd.fs)
+
+    def _on_db_reference_value_edited(self, section, rerender_fn):
+        """A manual dB-reference value commit changes the nudge-eligible fact
+        set (mode/value) immediately, ahead of the existing display-only
+        re-render this ``valueChanged`` wiring already schedules -- additive
+        stamping (spec 2026-07-12 S5 / A17), no render/resolve-logic change.
+        ``rerender_fn`` is the SAME callable each ``_connect`` call site
+        already deferred via ``QTimer.singleShot(0, ...)``."""
+        self._stamp_db_reference_nudge_facts(section)
+        QTimer.singleShot(0, rerender_fn)
+
+    def _open_db_reference_dialog(self, section):
+        """Manage-button entry point (dB-reference-defaults Task 5): every
+        section's manage button opens the SAME shared dialog editing the
+        ONE global catalog service; only the '当前 View' toggle default
+        targets the section that was focused when its button was clicked
+        (spec §11.1)."""
+        from ..db_reference_dialog import DbReferenceDefaultsDialog
+        ctx = self._analysis_ctx(section)
+        control = ctx.db_reference_control
+        dlg = DbReferenceDefaultsDialog(
+            self, self.db_reference_store,
+            current_mode=control.mode(),
+            current_effective_summary=control.full_source_text(),
+        )
+        dlg.catalog_saved.connect(
+            lambda s=section: self._on_db_reference_catalog_saved(s)
+        )
+        dlg.view_mode_committed.connect(
+            lambda mode, s=section: self._on_db_reference_view_mode_committed(s, mode)
+        )
+        dlg.exec_()
 
     def set_active_file(self, fid):
         """Public entrypoint matching §12.1 contract."""
@@ -2403,7 +2603,17 @@ class MainWindow(
         try:
             self.statusBar.showMessage("批处理运行中...")
             QApplication.processEvents()
-            result = BatchRunner(self.files).run(preset, output_dir)
+            # dB-reference-defaults Task 9 Step 9.2: pass the CURRENT
+            # catalog snapshot + preference (already-built values owned by
+            # the shared service, Task 5) into the runner so Batch Auto
+            # resolution matches the interactive canvas -- a mechanical
+            # pass-through, no new widget/layout.
+            snapshot = self.db_reference_store.snapshot()
+            result = BatchRunner(
+                self.files,
+                db_reference_catalog=snapshot,
+                prefer_channel_metadata=snapshot.prefer_channel_metadata,
+            ).run(preset, output_dir)
         except Exception as e:
             QMessageBox.critical(self, "批处理错误", str(e))
             return

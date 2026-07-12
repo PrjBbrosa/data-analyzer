@@ -1090,6 +1090,166 @@ def test_plot_result_db_reference_defaults_to_one(qapp):
     c.deleteLater()
 
 
+
+# ----------------------------------------------------------------------
+# dB-reference-defaults Task 7 (spec §15 C2/C3, §8.3.1): explicit label
+# context + manual-color-level reference-change shift.
+# ----------------------------------------------------------------------
+def test_plot_result_amplitude_label_overrides_default_and_drives_slice_axis(qapp):
+    """Explicit ``amplitude_label``/``colorbar_label`` (spec §15 C2 label
+    context) drive BOTH the colorbar and the slice's left axis with the
+    SAME text -- not two independently hard-coded strings."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(320, 240)
+    r = _make_spec('ref', np.ones((16, 4), dtype=np.float32))
+    label = "Amplitude (dBA re 1×10⁻⁶ m/s²)"
+    c.plot_result(
+        r, amplitude_mode='amplitude_db', cmap='turbo',
+        z_auto=False, z_floor=-80.0, z_ceiling=0.0,
+        amplitude_label=label, colorbar_label=label,
+    )
+    assert c._cbar.getAxis('left').labelText == label
+    assert c._slice_plot.getAxis('left').labelText == label
+    c.deleteLater()
+
+
+def test_plot_result_z_unit_suffix_drives_remark_and_readout_unit(qapp):
+    """Explicit ``z_unit_suffix`` (spec §15 C2) is what ``_readout_unit`` /
+    ``_z_unit`` return -- the same reference-aware phrase the colorbar/slice
+    show, instead of the bare historical ``'dB'`` literal."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(320, 240)
+    r = _make_spec('ref', np.ones((16, 4), dtype=np.float32))
+    suffix = "dBA re 1×10⁻⁶ m/s²"
+    c.plot_result(
+        r, amplitude_mode='amplitude_db', cmap='turbo',
+        z_auto=False, z_floor=-80.0, z_ceiling=0.0,
+        z_unit_suffix=suffix,
+    )
+    assert c._readout_unit() == suffix
+    assert c._z_unit() == suffix
+    c.deleteLater()
+
+
+def test_heatmap_remark_z_unit_includes_db_or_dba_reference_context(qapp):
+    """A point remark's Z= value must carry the SAME reference-aware suffix
+    as the colorbar/slice, not the bare 'dB' literal (spec §15 C2/C3)."""
+    from mf4_analyzer.ui.pg_canvas.remarks import format_remark_label
+
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()
+    suffix = "dBA re 1×10⁻⁶ m/s²"
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True,
+                  z_unit_suffix=suffix)
+    point = c._remark_point_at(1.0, 250.0)
+    assert point is not None
+    msg = format_remark_label(point)
+    assert suffix in msg, f"remark Z= must carry the reference suffix, got {msg!r}"
+    c.hide()
+    c.deleteLater()
+
+
+def test_heatmap_linear_a_weighted_label_never_says_dba(qapp):
+    """A-weighted LINEAR output must say 'A-weighted amplitude (unit)',
+    never 'dBA' -- dBA is reserved for weighting=='A' AND a logarithmic (dB)
+    output scale (spec §14.2)."""
+    from mf4_analyzer import db_reference as dbref
+
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(320, 240)
+    r = _make_spec('ref', np.ones((16, 4), dtype=np.float32))
+    resolution = dbref.DbReferenceResolution(
+        value=1e-6, unit='m/s²', quantity='acceleration', source='system')
+    label = dbref.format_amplitude_label(
+        resolution, weighting='A', output_scale='linear')
+    assert 'dBA' not in label
+    c.plot_result(
+        r, amplitude_mode='amplitude', cmap='turbo', z_auto=True,
+        amplitude_label=label, colorbar_label=label,
+    )
+    assert 'dBA' not in c._cbar.getAxis('left').labelText
+    assert 'dBA' not in c._slice_plot.getAxis('left').labelText
+    c.deleteLater()
+
+
+def test_heatmap_manual_levels_shift_with_reference_delta(qapp):
+    """Spec §8.3.1: when the effective reference changes between two renders
+    while a MANUAL z-window (``z_auto=False``) is active, ``plot_result``
+    shifts the applied levels by ``delta = 20*log10(ref_old/ref_new)`` -- the
+    SAME delta the (unclipped) dB matrix itself shifts by."""
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(320, 240)
+    r = _make_spec('ref', np.ones((16, 4), dtype=np.float32))
+
+    c.plot_result(r, amplitude_mode='amplitude_db', z_auto=False,
+                  z_floor=-40.0, z_ceiling=0.0, db_reference=1.0)
+    levels_before = c._img.getLevels()
+    assert tuple(levels_before) == pytest.approx((-40.0, 0.0))
+    assert c._last_manual_levels_shifted is None, (
+        "no prior render on this canvas -> nothing to shift yet")
+
+    # Reference shrinks 1.0 -> 1e-6: delta = 20*log10(1.0/1e-6) = 120 dB.
+    c.plot_result(r, amplitude_mode='amplitude_db', z_auto=False,
+                  z_floor=-40.0, z_ceiling=0.0, db_reference=1e-6)
+    delta = 20.0 * np.log10(1.0 / 1e-6)
+    levels_after = c._img.getLevels()
+    assert tuple(levels_after) == pytest.approx((-40.0 + delta, 0.0 + delta))
+    assert c._last_manual_levels_shifted == pytest.approx(tuple(levels_after))
+    c.deleteLater()
+
+
+def test_heatmap_auto_levels_rederive_after_reference_change(qapp):
+    """Spec §8.3.1: AUTO z-levels simply re-derive from the new matrix on a
+    reference change -- no extra delta shift on top of what
+    ``_auto_db_window`` already computes from the (naturally-shifted)
+    matrix, and the manual-shift bookkeeping stays untouched."""
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _auto_db_window
+
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(320, 240)
+    r = _make_spec('ref', np.ones((16, 4), dtype=np.float32))
+
+    c.plot_result(r, amplitude_mode='amplitude_db', z_auto=True, db_reference=1.0)
+    levels_before = c._img.getLevels()
+    assert tuple(levels_before) == pytest.approx(_auto_db_window(c._matrix_disp))
+
+    c.plot_result(r, amplitude_mode='amplitude_db', z_auto=True, db_reference=1e-6)
+    levels_after = c._img.getLevels()
+    assert tuple(levels_after) == pytest.approx(_auto_db_window(c._matrix_disp))
+    assert c._last_manual_levels_shifted is None
+    c.deleteLater()
+
+
+def test_heatmap_level_shift_never_clips_matrix(qapp):
+    """Spec §8.3.1 red line (2026-06-21 colour-scale incident): the
+    reference-change shift touches ONLY the display levels, never the
+    stored matrix -- the matrix must still span its true (unclipped) range
+    after a manual-window shift."""
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(320, 240)
+    amp = np.array([[0.001, 1.0], [0.01, 10.0]], dtype=np.float32)
+    r = _make_spec('ref', amp)
+
+    c.plot_result(r, amplitude_mode='amplitude_db', z_auto=False,
+                  z_floor=-5.0, z_ceiling=5.0, db_reference=1.0)
+    expected_first = 20.0 * np.log10(amp.astype(float) / 1.0)
+    np.testing.assert_allclose(c._matrix_disp, expected_first, atol=1e-3)
+
+    c.plot_result(r, amplitude_mode='amplitude_db', z_auto=False,
+                  z_floor=-5.0, z_ceiling=5.0, db_reference=1e-6)
+    expected_second = 20.0 * np.log10(amp.astype(float) / 1e-6)
+    np.testing.assert_allclose(c._matrix_disp, expected_second, atol=1e-3)
+    # The matrix must NOT be clamped to the (shifted) [vmin, vmax] window --
+    # cells both below the floor and above the ceiling must survive intact.
+    vmin, vmax = c._img.getLevels()
+    assert c._matrix_disp.min() < vmin
+    assert c._matrix_disp.max() > vmax
+    c.deleteLater()
+
+
 def test_db_memo_keys_on_epoch_token_not_id(qapp):
     """Regression for V7 commit 6d539d1c: the dB memo keys on a stamped
     monotonic epoch token, NOT ``id(result)``.

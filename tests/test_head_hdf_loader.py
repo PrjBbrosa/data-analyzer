@@ -28,6 +28,25 @@ def test_filedata_backcompat_no_metadata(tmp_path):
     assert fd.channel_metadata == {}
 
 
+def test_channel_metadata_db_reference_defaults_to_empty_when_absent(tmp_path):
+    """A channel with no 'dB reference' header line loads with
+    ``channel_metadata[ch]['db_reference'] == ''`` rather than a missing key
+    or a crash -- the Task 5 ``ChannelReferenceFacts`` adapter (signal-
+    processing db-reference-defaults spec §8) treats this as 'no metadata',
+    not an error, and falls through to catalog resolution safely."""
+    n = 4
+    p = write_head_hdf(
+        tmp_path / "nodbref.hdf", n_scans=n, delta=1.0, start_of_data=2048,
+        channels=[
+            {"name": "ACC", "factor": 1, "quantity": "acceleration",
+             "unit": "m/s^2", "calibration": 1.0,
+             "samples": np.arange(n, dtype=float)},
+        ])
+    groups = DataLoader.load_hdf(str(p))
+    g = groups[0]
+    assert g["channel_metadata"]["ACC"]["db_reference"] == ""
+
+
 def test_load_hdf_groups_by_factor_and_drops_nan(tmp_path):
     n = 4
     acc = np.arange(n * 2, dtype=float)            # factor 2 -> 24x 模拟组

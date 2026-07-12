@@ -1298,6 +1298,184 @@ def test_analysis_views_survive_project_save_reopen(two_file_win, tmp_path, qtbo
         expected_active_params["fft_time"], _SECTION_PARAM_KEYS["fft_time"])
 
 
+# ----------------------------------------------------------------------
+# dB reference defaults Task 8: nested AnalysisViewState schema 1 -> 2
+# migration (spec §13 S3/S5). Each section/View's own db_reference_mode +
+# value, and each pane's saved (fid, ch) sources, survive a project
+# save/reopen round-trip independently of one another.
+# ----------------------------------------------------------------------
+def test_project_reopen_preserves_auto_manual_per_section_and_pane_sources(
+    two_file_win, tmp_path, qtbot
+):
+    win = two_file_win
+    fids = list(win.files.keys())
+
+    fft_v0 = AnalysisViewState(
+        name="FFT-Auto", tab_color="#1f77b4",
+        panes=[PaneState(sources=[(fids[0], "speed")])],
+        params={"window": "hanning", "nfft": 1024,
+                "db_reference_mode": "auto", "db_reference": 1.0},
+    )
+    fft_v1 = AnalysisViewState(
+        name="FFT-Manual", tab_color="#ff7f0e",
+        panes=[PaneState(sources=[(fids[1], "speed")])],
+        params={"window": "hamming", "nfft": 2048,
+                "db_reference_mode": "manual", "db_reference": 3.3e-6},
+    )
+    order_v0 = AnalysisViewState(
+        name="ORD-Manual", tab_color="#2ca02c",
+        panes=[PaneState(sources=[(fids[0], "torque")],
+                         rpm_source=(fids[0], "speed"))],
+        params={"max_order": 20, "nfft": 512, "order_res": 0.1,
+                "time_res": 0.05,
+                "db_reference_mode": "manual", "db_reference": 5e-6},
+    )
+    order_v1 = AnalysisViewState(
+        name="ORD-Auto", tab_color="#d62728",
+        panes=[PaneState(sources=[(fids[1], "torque")],
+                         rpm_source=(fids[1], "speed"))],
+        params={"max_order": 32, "nfft": 1024, "order_res": 0.2,
+                "time_res": 0.1,
+                "db_reference_mode": "auto", "db_reference": 1.0},
+    )
+
+    win.toolbar._set_mode("fft")
+    # Manual is the ACTIVE view here -- its params get RE-CAPTURED from the
+    # live inspector at save time, but Manual never auto-resolves off the
+    # source, so the round-trip stays exact/deterministic.
+    _install_views(win, "fft", [fft_v0, fft_v1], active=1)
+    win.toolbar._set_mode("order")
+    _install_views(win, "order", [order_v0, order_v1], active=0)
+
+    proj = tmp_path / "db_ref_reopen.tlproj"
+    win.save_project(proj)
+
+    win2 = MainWindow()
+    qtbot.addWidget(win2)
+    win2.open_project(proj)
+
+    fids2 = list(win2.files.keys())
+    fid_remap = {fids[i]: fids2[i] for i in range(2)}
+
+    mgr_fft = win2.analysis_managers["fft"]
+    assert mgr_fft.active == 1
+    # v0 (Auto) is INACTIVE -> its params round-trip verbatim.
+    assert mgr_fft.views[0].params["db_reference_mode"] == "auto"
+    assert mgr_fft.views[0].params["db_reference"] == pytest.approx(1.0)
+    assert [tuple(s) for s in mgr_fft.views[0].panes[0].sources] == [
+        (fid_remap[fids[0]], "speed")
+    ]
+    # v1 (Manual) is ACTIVE -> re-captured, still exact.
+    assert mgr_fft.views[1].params["db_reference_mode"] == "manual"
+    assert mgr_fft.views[1].params["db_reference"] == pytest.approx(3.3e-6)
+    assert [tuple(s) for s in mgr_fft.views[1].panes[0].sources] == [
+        (fid_remap[fids[1]], "speed")
+    ]
+
+    mgr_order = win2.analysis_managers["order"]
+    assert mgr_order.active == 0
+    # v0 (Manual) is ACTIVE -> re-captured, still exact.
+    assert mgr_order.views[0].params["db_reference_mode"] == "manual"
+    assert mgr_order.views[0].params["db_reference"] == pytest.approx(5e-6)
+    assert [tuple(s) for s in mgr_order.views[0].panes[0].sources] == [
+        (fid_remap[fids[0]], "torque")
+    ]
+    # v1 (Auto) is INACTIVE -> verbatim.
+    assert mgr_order.views[1].params["db_reference_mode"] == "auto"
+    assert mgr_order.views[1].params["db_reference"] == pytest.approx(1.0)
+    assert [tuple(s) for s in mgr_order.views[1].panes[0].sources] == [
+        (fid_remap[fids[1]], "torque")
+    ]
+
+
+def test_project_save_in_time_mode_does_not_replace_inactive_analysis_sources(
+    two_file_win, tmp_path
+):
+    """Switching to Time-domain mode changes the SAME navigator FFT's
+    analysis view reads its focused source from; saving from Time mode must
+    not let that later navigator selection clobber the inactive FFT view's
+    already-captured (fid, ch) sources OR its db_reference_mode/value -- the
+    Task 8 nested-schema migration must not disturb this pre-existing
+    fid-remap + inactive-source-capture contract (spec §13 S3). Mirrors
+    ``test_project_save_preserves_all_analysis_sections_after_time_selection``
+    (the pre-existing source-only regression) with the db_reference key
+    added, and stays at the SAVE boundary (raw JSON) rather than a full
+    reopen (see
+    ``test_project_reopen_in_time_mode_does_not_replace_inactive_analysis_sources``
+    below for the RESTORE-side companion, fixed in
+    ``_capture_analysis_sources`` / ``open_project``)."""
+    import json
+
+    win = two_file_win
+    fids = list(win.files.keys())
+
+    win.toolbar._set_mode("fft")
+    win.navigator.set_checked_channels([(fids[0], "speed")])
+    win.inspector.fft_ctx.db_reference_control.set_mode("manual")
+    win.inspector.fft_ctx.spin_db_ref.setValue(2.2e-6)
+    # Switching away captures FFT's source + reference into its own state.
+    win.toolbar._set_mode("time")
+    # A Time-domain selection on the SAME navigator must not overwrite the
+    # inactive FFT view's saved source.
+    win.navigator.set_checked_channels([(fids[1], "torque")])
+
+    proj = tmp_path / "session_time_mode_db_ref.tlproj"
+    win.save_project(proj)
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+
+    fft_view = raw["analysis_views"]["fft"]["views"][0]
+    assert fft_view["panes"][0]["sources"] == [[fids[0], "speed"]]
+    assert fft_view["params"]["db_reference_mode"] == "manual"
+    assert fft_view["params"]["db_reference"] == pytest.approx(2.2e-6)
+
+
+def test_project_reopen_in_time_mode_does_not_replace_inactive_analysis_sources(
+    two_file_win, tmp_path, qtbot
+):
+    """Full save -> reopen round-trip companion to
+    ``test_project_save_in_time_mode_does_not_replace_inactive_analysis_sources``:
+    the SAVE-time invariant proven above does not by itself prove
+    ``open_project()`` preserves it on the receiving end. ``open_project()``
+    queues a post-load auto-recompute for the FFT section's restored (but
+    uncached) view via ``QTimer.singleShot(0, ...)``, then -- because the
+    saved ``current_mode`` is 'time' -- synchronously applies the Time view
+    via ``_apply_active_view`` -> ``_plot_time_on_canvas`` ->
+    ``_begin_compute_progress(process_events=True)``. That
+    ``QApplication.processEvents()`` call drains the still-pending singleShot
+    EARLY, still inside ``open_project()``: ``do_fft()``'s "capture current
+    live selection into the active view" step must not read the shared
+    Time/FFT navigator at that point, since it has already been overwritten
+    with the Time view's own restored checked channels -- it must leave the
+    already-correct restored FFT source alone
+    (docs/lessons-learned/signal-processing/2026-07-12-processevents-drains-
+    queued-recompute-during-restore.md)."""
+    win = two_file_win
+    fids = list(win.files.keys())
+
+    win.toolbar._set_mode("fft")
+    win.navigator.set_checked_channels([(fids[0], "speed")])
+    # Switching away captures FFT's source into its own view state first.
+    win.toolbar._set_mode("time")
+    # A Time-domain selection on the SAME navigator, still displayed when the
+    # project is saved (current_mode == 'time').
+    win.navigator.set_checked_channels([(fids[1], "torque")])
+
+    proj = tmp_path / "session_time_mode_reopen.tlproj"
+    win.save_project(proj)
+
+    win2 = MainWindow()
+    qtbot.addWidget(win2)
+    win2.open_project(proj)
+
+    fids2 = list(win2.files.keys())
+    fid_remap = {fids[i]: fids2[i] for i in range(2)}
+
+    mgr_fft = win2.analysis_managers["fft"]
+    assert [tuple(s) for s in mgr_fft.views[0].panes[0].sources] == [
+        (fid_remap[fids[0]], "speed")
+    ], "FFT's restored source must survive open_project(), not be replaced by Time's navigator selection"
+
+
 def test_project_save_preserves_all_analysis_sections_after_time_selection(
     two_file_win, tmp_path
 ):
@@ -1377,3 +1555,685 @@ def test_old_project_without_analysis_views_loads_with_defaults(
         mgr = win2.analysis_managers[sec]
         assert len(mgr.views) == 1, f"{sec}: legacy load keeps the default view"
         assert mgr.active == 0
+
+
+# ----------------------------------------------------------------------
+# dB reference defaults Task 5: MainWindow-owned service, ChannelReferenceFacts
+# adapter, and Auto/Manual resolution propagation.
+# Spec: docs/analyzer/specs/2026-07-12-db-reference-defaults-and-labeling-spec.md §8.
+# Plan: docs/analyzer/plans/2026-07-12-db-reference-defaults-and-labeling-implementation.md
+# Task 5, Step 5.1.
+# ----------------------------------------------------------------------
+
+def test_channel_reference_facts_reads_head_quantity_unit_and_db_reference(
+    two_file_win, tmp_path,
+):
+    """The facts adapter reads ONLY FileData metadata (channel_metadata's
+    quantity/unit/raw db_reference string, is_audio_source()) -- never a
+    sample array (docs/lessons-learned/signal-processing/
+    2026-06-22-head-calibration-is-metadata-not-sample-gain.md). Missing
+    (fid, ch) -> empty facts, never a crash."""
+    import numpy as np
+    from mf4_analyzer.io.loader import DataLoader
+    from mf4_analyzer.io.file_data import FileData
+    from mf4_analyzer import db_reference
+    from tests._helpers.head_hdf_factory import write_head_hdf
+
+    win = two_file_win
+    n = 4
+    p = write_head_hdf(
+        tmp_path / "facts.hdf", n_scans=n, delta=1.0, start_of_data=2048,
+        channels=[
+            {"name": "ACC", "factor": 1, "quantity": "acceleration",
+             "unit": "m/s^2", "calibration": 1.0, "db_reference": "2e-006",
+             "samples": np.arange(n, dtype=float)},
+        ])
+    groups = DataLoader.load_hdf(str(p))
+    g = groups[0]
+    fd = FileData(
+        str(p), g["data"], g["channels"], g["units"], 99,
+        source_metadata=g["source_metadata"],
+        channel_metadata=g["channel_metadata"],
+        label_suffix=g["label_suffix"],
+    )
+    fid = "head-facts"
+    win.files[fid] = fd
+
+    facts = win._channel_reference_facts(fid, "ACC")
+    assert isinstance(facts, db_reference.ChannelReferenceFacts)
+    assert facts.quantity == "acceleration"
+    assert facts.unit == "m/s^2"
+    assert facts.metadata_reference == "2e-006"
+    assert facts.is_audio_source is False
+
+    # Missing channel / missing file -> empty facts, no crash.
+    empty = win._channel_reference_facts(fid, "does-not-exist")
+    assert empty.quantity == "" and empty.unit == ""
+    empty2 = win._channel_reference_facts("no-such-file", "ACC")
+    assert empty2.quantity == "" and empty2.unit == ""
+
+
+def test_selected_head_channel_auto_applies_metadata_reference(two_file_win, qapp):
+    """Selecting a channel with legal metadata in an Auto View resolves and
+    displays the metadata reference (spec 8.1 step 2)."""
+    win = two_file_win
+    fid = list(win.files.keys())[0]
+    win.files[fid].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²",
+                  "db_reference": "2e-6"},
+    }
+    win.toolbar._set_mode("order")
+    qapp.processEvents()
+    ctx = win.inspector.order_ctx
+    assert ctx.db_reference_control.mode() == "auto"
+
+    win._echo_combo_signal(ctx.combo_sig, (fid, "speed"))
+    qapp.processEvents()
+
+    assert ctx.db_reference_control.mode() == "auto"
+    assert ctx.db_reference_control.editor.value() == pytest.approx(2e-6)
+    assert "通道 metadata" in ctx.db_reference_control.full_source_text()
+
+
+def test_metadata_preference_off_uses_user_or_system_catalog(two_file_win, qapp):
+    """``prefer_channel_metadata=False`` skips step 2 (metadata) and falls to
+    the unhidden system builtin (spec 8.1 step 4)."""
+    win = two_file_win
+    fid = list(win.files.keys())[0]
+    win.files[fid].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²",
+                  "db_reference": "2e-6"},
+    }
+    result = win.db_reference_store.save(
+        overrides=[], custom=[], hidden_builtin_ids=[],
+        prefer_channel_metadata=False,
+    )
+    assert result.ok
+
+    win.toolbar._set_mode("order")
+    qapp.processEvents()
+    ctx = win.inspector.order_ctx
+    win._echo_combo_signal(ctx.combo_sig, (fid, "speed"))
+    qapp.processEvents()
+
+    assert ctx.db_reference_control.editor.value() == pytest.approx(1e-6)
+    assert "系统默认" in ctx.db_reference_control.full_source_text()
+
+
+def test_invalid_metadata_falls_through_to_catalog(two_file_win, qapp):
+    """A non-numeric/invalid metadata db_reference is skipped (never crashes)
+    and falls through to the catalog match (spec §7 R3)."""
+    win = two_file_win
+    fid = list(win.files.keys())[0]
+    win.files[fid].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²",
+                  "db_reference": "not-a-number"},
+    }
+    win.toolbar._set_mode("order")
+    qapp.processEvents()
+    ctx = win.inspector.order_ctx
+    win._echo_combo_signal(ctx.combo_sig, (fid, "speed"))
+    qapp.processEvents()
+
+    assert ctx.db_reference_control.editor.value() == pytest.approx(1e-6)
+    assert "系统默认" in ctx.db_reference_control.full_source_text()
+
+
+def test_manual_view_ignores_source_and_catalog_changes(two_file_win, qapp):
+    """A Manual View's value/mode survive both a source change and a catalog
+    save untouched (spec 8.1 step 1 / 8.3)."""
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.toolbar._set_mode("order")
+    qapp.processEvents()
+    ctx = win.inspector.order_ctx
+    win._echo_combo_signal(ctx.combo_sig, (fids[0], "speed"))
+    qapp.processEvents()
+
+    # Simulate a prior manual commit (Task 4 owns the exact keypress path;
+    # here we drive the same public control API a real commit would leave
+    # behind: an explicit value + Manual mode).
+    ctx.db_reference_control.editor.setValue(9.5)
+    ctx.db_reference_control.set_mode("manual")
+
+    win.files[fids[0]].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²", "db_reference": "3e-7"},
+    }
+    win._echo_combo_signal(ctx.combo_sig, (fids[1], "torque"))
+    qapp.processEvents()
+    assert ctx.db_reference_control.mode() == "manual"
+    assert ctx.db_reference_control.editor.value() == pytest.approx(9.5)
+
+    result = win.db_reference_store.save(
+        overrides=[], custom=[], hidden_builtin_ids=[], prefer_channel_metadata=True,
+    )
+    assert result.ok
+    win._on_db_reference_catalog_saved("order")
+
+    assert ctx.db_reference_control.mode() == "manual"
+    assert ctx.db_reference_control.editor.value() == pytest.approx(9.5)
+
+
+def test_catalog_save_rerenders_visible_auto_view_without_compute(two_file_win, qtbot):
+    """Saving the catalog while the Order section is visible re-renders it
+    from the existing cache -- zero compute-worker dispatch (spec 8.3)."""
+    win = two_file_win
+    win.toolbar._set_mode("order")
+    fids = list(win.files.keys())
+    ctx = win.inspector.order_ctx
+    win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))
+    win._echo_combo_signal(ctx.combo_rpm, (fids[0], "speed"))
+
+    win.do_order_time()
+    _drain_order_queue(win, qtbot)
+    assert win.chart_stack.page_order.pane_canvas(0).has_result()
+
+    # Give the focused source real metadata so the resolve below is
+    # observable (system-catalog force reference) rather than the
+    # empty-unit generic default.
+    win.files[fids[0]].channel_metadata = {"torque": {"quantity": "force", "unit": "N"}}
+
+    result = win.db_reference_store.save(
+        overrides=[], custom=[], hidden_builtin_ids=[], prefer_channel_metadata=True,
+    )
+    assert result.ok
+
+    win._on_db_reference_catalog_saved("order")
+
+    assert ctx.db_reference_control.editor.value() == pytest.approx(1e-6)
+    assert win._order_thread is None, "a catalog save must never dispatch a compute worker"
+    assert not win._order_queue
+    assert win.chart_stack.page_order.pane_canvas(0).has_result()
+
+
+def test_focused_pane_controls_do_not_overwrite_inactive_pane_resolution(
+    two_file_win, qapp,
+):
+    """Auto resolves per PANE (spec 8.4): switching focus updates the
+    control to the newly-focused pane's own resolution, and switching back
+    restores the FIRST pane's resolution -- neither switch mutates the
+    other pane's saved ``sources``."""
+    win = two_file_win
+    fids = list(win.files.keys())
+    # Metadata must be in place BEFORE the split helper's own initial combo
+    # echo below, since re-selecting the SAME already-current index later
+    # would not re-fire signal_changed (Qt only emits on an actual change).
+    win.files[fids[0]].channel_metadata = {
+        "torque": {"quantity": "force", "unit": "N", "db_reference": "5e-6"},
+    }
+    win.files[fids[1]].channel_metadata = {
+        "torque": {"quantity": "force", "unit": "N", "db_reference": "8e-6"},
+    }
+    fids, page, state = _split_order_two_sources(win)
+    ctx = win.inspector.order_ctx
+    qapp.processEvents()
+    assert ctx.db_reference_control.editor.value() == pytest.approx(5e-6)
+
+    page.set_focused_index(1)
+    qapp.processEvents()
+    assert ctx.db_reference_control.editor.value() == pytest.approx(8e-6)
+    assert state.panes[0].sources == [(fids[0], "torque")]
+
+    page.set_focused_index(0)
+    qapp.processEvents()
+    assert ctx.db_reference_control.editor.value() == pytest.approx(5e-6)
+    assert state.panes[1].sources == [(fids[1], "torque")]
+
+
+# ----------------------------------------------------------------------
+# dB reference defaults Task 6: FFT per-source conversion, mixed labels,
+# legend/readout disclosure, and render-signature identity.
+# Spec: docs/analyzer/specs/2026-07-12-db-reference-defaults-and-labeling-spec.md
+# §14 (label formatter), §15 C1 (FFT render consumer), §16 (cache boundaries).
+# Plan: docs/analyzer/plans/2026-07-12-db-reference-defaults-and-labeling-implementation.md
+# Task 6, Step 6.1.
+# ----------------------------------------------------------------------
+
+def test_fft_auto_overlay_converts_each_entry_with_its_source_reference(two_file_win):
+    """Each overlay entry converts its own CACHED LINEAR amplitude with its
+    OWN source's resolved reference -- not a single global control value
+    bound to only the first checked channel (spec §15 C1 / plan Step 6.2)."""
+    from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
+
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.files[fids[0]].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²", "db_reference": "2e-6"},
+    }
+    win.files[fids[1]].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²", "db_reference": "5e-6"},
+    }
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.inspector.fft_ctx.combo_amp_y.setCurrentText("dB")
+
+    win.do_fft()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._entries) == 2
+    e0, e1 = canvas._entries
+    r0 = e0["db_reference_resolution"]
+    r1 = e1["db_reference_resolution"]
+    assert r0.value == pytest.approx(2e-6)
+    assert r1.value == pytest.approx(5e-6)
+    np.testing.assert_allclose(
+        e0["amp"],
+        SpectrogramAnalyzer.amplitude_to_db(e0["amp_for_xlim"], reference=r0.value),
+    )
+    np.testing.assert_allclose(
+        e1["amp"],
+        SpectrogramAnalyzer.amplitude_to_db(e1["amp_for_xlim"], reference=r1.value),
+    )
+
+
+def test_fft_same_reference_uses_exact_axis_label(two_file_win):
+    """Every checked source resolving to the SAME (value, unit) identity ->
+    the axis shows the exact canonical label, not the mixed fallback (spec
+    §15 C1 / Step 6.3)."""
+    from mf4_analyzer import db_reference
+
+    win = two_file_win
+    fids = list(win.files.keys())
+    for fid in fids:
+        win.files[fid].channel_metadata = {
+            "speed": {"quantity": "acceleration", "unit": "m/s²"},
+        }
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.inspector.fft_ctx.combo_amp_y.setCurrentText("dB")
+
+    win.do_fft()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    e0, e1 = canvas._entries
+    r0, r1 = e0["db_reference_resolution"], e1["db_reference_resolution"]
+    assert (r0.value, r0.unit) == (r1.value, r1.unit)
+    expected = db_reference.format_amplitude_label(
+        r0, weighting="None", output_scale="db")
+    assert expected == "Amplitude (dB re 1×10⁻⁶ m/s²)"
+    assert canvas._plot_amp.getAxis("left").labelText == expected
+    # legend/readout stays the plain base label -- one shared reference
+    # needs no per-curve disclosure.
+    assert e0["legend_label"] == e0["label"]
+    assert e1["legend_label"] == e1["label"]
+
+
+def test_fft_mixed_reference_uses_per_curve_axis_and_entry_labels(two_file_win):
+    """Two DISTINCT (value, unit) identities collapse the axis to the mixed
+    label and every curve discloses its own reference (spec §15 C1 / Step
+    6.3) -- never let one source's reference become the global axis."""
+    from mf4_analyzer import db_reference
+
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.files[fids[0]].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²", "db_reference": "2e-6"},
+    }
+    win.files[fids[1]].channel_metadata = {
+        "speed": {"quantity": "force", "unit": "N", "db_reference": "5e-6"},
+    }
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.inspector.fft_ctx.combo_amp_y.setCurrentText("dB")
+
+    win.do_fft()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert canvas._plot_amp.getAxis("left").labelText == (
+        "Amplitude (dB · per-curve reference)"
+    )
+
+    e0, e1 = canvas._entries
+    r0, r1 = e0["db_reference_resolution"], e1["db_reference_resolution"]
+    note0 = db_reference.format_reference_note(r0, weighting="None")
+    note1 = db_reference.format_reference_note(r1, weighting="None")
+    assert e0["legend_label"] == f"{e0['label']} · {note0}"
+    assert e1["legend_label"] == f"{e1['label']} · {note1}"
+    assert e0["legend_label"] != e1["legend_label"]
+    # base source label is untouched -- the lower time-preview row (which
+    # reuses these same entries) must never carry a reference suffix.
+    assert e0["label"] == f"{win._file_display_name(fids[0])} · speed"
+    assert e1["label"] == f"{win._file_display_name(fids[1])} · speed"
+
+
+def test_fft_mixed_a_weighting_uses_dba_per_curve_label(two_file_win):
+    """A-weighted + dB + mixed references -> the axis/per-curve tokens use
+    'dBA', never 'dB' (spec §14.2)."""
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.files[fids[0]].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²", "db_reference": "2e-6"},
+    }
+    win.files[fids[1]].channel_metadata = {
+        "speed": {"quantity": "force", "unit": "N", "db_reference": "5e-6"},
+    }
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.inspector.fft_ctx.combo_amp_y.setCurrentText("dB")
+    win.inspector.fft_ctx.combo_weighting.setCurrentText("A")
+
+    win.do_fft()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert canvas._plot_amp.getAxis("left").labelText == (
+        "Amplitude (dBA · per-curve reference)"
+    )
+    e0, e1 = canvas._entries
+    assert "dBA re" in e0["legend_label"]
+    assert "dBA re" in e1["legend_label"]
+    assert "dBA" not in e0["label"]  # base label never carries the token
+
+
+def test_fft_cached_reentry_reformats_after_catalog_change_without_compute(
+    two_file_win,
+):
+    """A catalog save while FFT is visible re-resolves + reformats from the
+    existing cache -- zero recompute (spec §8.3 / §16)."""
+    win = two_file_win
+    fids = list(win.files.keys())
+    for fid in fids:
+        win.files[fid].channel_metadata = {
+            "speed": {"quantity": "acceleration", "unit": "m/s²"},
+        }
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.inspector.fft_ctx.combo_amp_y.setCurrentText("dB")
+    win.do_fft()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    before = canvas._entries[0]["db_reference_resolution"].value
+    assert before == pytest.approx(1e-6)
+
+    compute_calls = {"n": 0}
+    real_compute = win._fft_compute_arrays
+
+    def spy(*a, **kw):
+        compute_calls["n"] += 1
+        return real_compute(*a, **kw)
+
+    win._fft_compute_arrays = spy
+
+    result = win.db_reference_store.save(
+        overrides=[{
+            "builtin_id": "acceleration.si",
+            "label": "振动加速度",
+            "unit": "m/s²",
+            "aliases": ["m/s²", "m/s^2", "m/s2"],
+            "reference": 3e-6,
+        }],
+        custom=[], hidden_builtin_ids=[], prefer_channel_metadata=True,
+    )
+    assert result.ok
+
+    win._on_db_reference_catalog_saved("fft")
+
+    after = canvas._entries[0]["db_reference_resolution"].value
+    assert after == pytest.approx(3e-6)
+    assert compute_calls["n"] == 0
+
+
+def test_fft_render_signature_tracks_per_source_resolution_not_global_first_source(
+    two_file_win,
+):
+    """The render signature changes when ANY checked source's resolved
+    reference changes -- including the SECOND (non-first) checked source, not
+    just the one a legacy single global control value would have tracked
+    (spec §15 C1 / plan Step 6.5)."""
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.files[fids[0]].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²", "db_reference": "2e-6"},
+    }
+    win.files[fids[1]].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²", "db_reference": "5e-6"},
+    }
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+
+    sig_before = win._fft_render_signature()
+
+    win.files[fids[1]].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²", "db_reference": "9e-6"},
+    }
+    sig_after = win._fft_render_signature()
+
+    assert sig_before != sig_after
+
+
+def test_fft_hover_readout_discloses_each_curve_reference(two_file_win):
+    """The hover readout row label for each curve is the SAME
+    'legend_label' the curve is plotted under -- a mixed-reference overlay
+    discloses each curve's own dB[A] re ... in the readout too (spec §15
+    C1)."""
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.files[fids[0]].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²", "db_reference": "2e-6"},
+    }
+    win.files[fids[1]].channel_metadata = {
+        "speed": {"quantity": "force", "unit": "N", "db_reference": "5e-6"},
+    }
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.inspector.fft_ctx.combo_amp_y.setCurrentText("dB")
+    win.do_fft()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    e0, e1 = canvas._entries
+    rows = canvas.readout_at(0.0)
+    labels = {label for label, _f, _amp in rows}
+    assert e0["legend_label"] in labels
+    assert e1["legend_label"] in labels
+    assert e0["legend_label"] != e0["label"]  # mixed -> disclosure appended
+
+
+# ----------------------------------------------------------------------
+# dB reference defaults Task 7: FFT-vs-Time / Order colorbar, slice and
+# readout/remark share ONE per-pane-resolved label context (spec §15 C2/C3),
+# and a heatmap section's manual colour window shifts with a reference
+# change (spec §8.3.1).
+# ----------------------------------------------------------------------
+def test_fft_time_dba_colorbar_slice_and_readout_share_reference(two_file_win, qtbot):
+    """FFT-vs-Time's colorbar, slice amplitude axis and readout/remark Z
+    unit all show the SAME dBA-with-reference text, resolved from the
+    pane's OWN source (spec §15 C2)."""
+    from mf4_analyzer import db_reference
+
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.files[fids[0]].channel_metadata = {
+        "speed": {"quantity": "acceleration", "unit": "m/s²", "db_reference": "1e-6"},
+    }
+    win.toolbar._set_mode("fft_time")
+    ctx = win.inspector.fft_time_ctx
+    win._echo_combo_signal(ctx.combo_sig, (fids[0], "speed"))
+    ctx.combo_weighting.setCurrentText("A")
+    i = ctx.combo_nfft.findText("512")
+    if i >= 0:
+        ctx.combo_nfft.setCurrentIndex(i)
+
+    win.do_fft_time()
+    qtbot.waitUntil(
+        lambda: win._fft_time_thread is None and not win._fft_time_queue,
+        timeout=15000,
+    )
+
+    canvas = win.chart_stack.page_fft_time.pane_canvas(0)
+    assert canvas.has_result()
+    resolution = win._resolve_db_reference_for_source(
+        "fft_time", (fids[0], "speed"))
+    expected_label = db_reference.format_amplitude_label(
+        resolution, weighting="A", output_scale="db")
+    expected_note = db_reference.format_reference_note(
+        resolution, weighting="A")
+    assert "dBA re" in expected_label
+    assert canvas._cbar.getAxis("left").labelText == expected_label
+    assert canvas._slice_plot.getAxis("left").labelText == expected_label
+    assert canvas._readout_unit() == expected_note
+    assert canvas._z_unit() == expected_note
+
+
+def test_order_db_colorbar_slice_and_readout_share_reference(two_file_win, qtbot):
+    """Order's colorbar, slice amplitude axis and readout/remark Z unit all
+    show the SAME reference-aware text (spec §15 C3), resolved from the
+    pane's OWN source rather than a bare 'Amplitude (dB re <n>)' literal."""
+    from mf4_analyzer import db_reference
+
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.files[fids[0]].channel_metadata = {
+        "torque": {"quantity": "force", "unit": "N", "db_reference": "5e-6"},
+    }
+    win.toolbar._set_mode("order")
+    ctx = win.inspector.order_ctx
+    win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))
+    win._echo_combo_signal(ctx.combo_rpm, (fids[0], "speed"))
+
+    win.do_order_time()
+    qtbot.waitUntil(
+        lambda: win._order_thread is None and not win._order_queue,
+        timeout=20000,
+    )
+
+    canvas = win.chart_stack.page_order.pane_canvas(0)
+    assert canvas.has_result()
+    resolution = win._resolve_db_reference_for_source("order", (fids[0], "torque"))
+    expected_label = db_reference.format_amplitude_label(
+        resolution, weighting="None", output_scale="db")
+    expected_note = db_reference.format_reference_note(
+        resolution, weighting="None")
+    assert "dB re 5" in expected_label
+    assert canvas._cbar.getAxis("left").labelText == expected_label
+    assert canvas._current_amplitude_axis_label() == expected_label
+    assert canvas._readout_unit() == expected_note
+    assert canvas._z_unit() == expected_note
+
+
+def test_heatmap_two_panes_resolve_distinct_saved_sources(two_file_win, qtbot):
+    """Each Order pane's colorbar must resolve reference from its OWN saved
+    source (spec §8.4), not the FOCUSED pane's control value -- the two
+    files' 'torque' channel carries DIFFERENT metadata references here."""
+    from mf4_analyzer import db_reference
+
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.files[fids[0]].channel_metadata = {
+        "torque": {"quantity": "force", "unit": "N", "db_reference": "5e-6"},
+    }
+    win.files[fids[1]].channel_metadata = {
+        "torque": {"quantity": "force", "unit": "N", "db_reference": "8e-6"},
+    }
+    fids, page, _state = _split_order_two_sources(win)
+
+    win.do_order_time()
+    _drain_order_queue(win, qtbot)
+
+    c0 = page.pane_canvas(0)
+    c1 = page.pane_canvas(1)
+    assert c0.has_result() and c1.has_result()
+    r0 = win._resolve_db_reference_for_source("order", (fids[0], "torque"))
+    r1 = win._resolve_db_reference_for_source("order", (fids[1], "torque"))
+    assert r0.value != r1.value
+    label0 = db_reference.format_amplitude_label(
+        r0, weighting="None", output_scale="db")
+    label1 = db_reference.format_amplitude_label(
+        r1, weighting="None", output_scale="db")
+    assert label0 != label1
+    assert c0._cbar.getAxis("left").labelText == label0
+    assert c1._cbar.getAxis("left").labelText == label1
+
+
+def test_view_switch_restore_renders_pane_own_reference_label(two_file_win, qtbot):
+    """The view-switch cache-restore path (ViewManager.active_changed ->
+    _on_analysis_view_switched -> _render_analysis_view_from_cache ->
+    _render_cached_heatmap) must thread the RESTORED pane's own saved
+    ``(fid, ch)`` source into the heatmap renderer -- not fall back to the
+    generic resolution -- exactly like the live-compute render path already
+    does (flagged gap from Task 7; spec §15 C3, §8.4)."""
+    from mf4_analyzer import db_reference
+
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.files[fids[0]].channel_metadata = {
+        "torque": {"quantity": "force", "unit": "N", "db_reference": "5e-6"},
+    }
+    win.files[fids[1]].channel_metadata = {
+        "torque": {"quantity": "force", "unit": "N", "db_reference": "8e-6"},
+    }
+    win.toolbar._set_mode("order")
+    mgr = win.analysis_managers["order"]
+    ctx = win.inspector.order_ctx
+    page = win.chart_stack.page_order
+
+    # View 1 (already active): source A.
+    win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))
+    win._echo_combo_signal(ctx.combo_rpm, (fids[0], "speed"))
+    win.do_order_time()
+    _drain_order_queue(win, qtbot)
+
+    # View 2: source B -- a DIFFERENT file/reference metadata.
+    assert mgr.new_view() == 1
+    win._echo_combo_signal(ctx.combo_sig, (fids[1], "torque"))
+    win._echo_combo_signal(ctx.combo_rpm, (fids[1], "speed"))
+    win.do_order_time()
+    _drain_order_queue(win, qtbot)
+
+    # Switch BACK to View 1: this must never recompute (spec §4) -- it
+    # renders pane 0's OWN saved source (fids[0], "torque") from cache via
+    # the view-switch restore path.
+    mgr.set_active(0)
+
+    canvas = page.pane_canvas(0)
+    resolution_a = win._resolve_db_reference_for_source(
+        "order", (fids[0], "torque"))
+    expected_label_a = db_reference.format_amplitude_label(
+        resolution_a, weighting="None", output_scale="db")
+    assert "dB re 5" in expected_label_a
+    assert canvas._cbar.getAxis("left").labelText == expected_label_a
+
+    # Switch to View 2: same restore path, must resolve source B distinctly
+    # rather than reusing View 1's (or a generic) resolution.
+    mgr.set_active(1)
+    resolution_b = win._resolve_db_reference_for_source(
+        "order", (fids[1], "torque"))
+    expected_label_b = db_reference.format_amplitude_label(
+        resolution_b, weighting="None", output_scale="db")
+    assert "dB re 8" in expected_label_b
+    assert expected_label_a != expected_label_b
+    assert canvas._cbar.getAxis("left").labelText == expected_label_b
+
+
+def test_heatmap_reference_change_rerenders_cached_result_without_worker(
+    two_file_win, qtbot,
+):
+    """A catalog save that changes the focused source's Auto reference
+    re-renders the VISIBLE Order colorbar from cache -- with the NEW
+    reference-aware label -- and dispatches zero compute workers (spec
+    §8.3)."""
+    win = two_file_win
+    win.toolbar._set_mode("order")
+    fids = list(win.files.keys())
+    ctx = win.inspector.order_ctx
+    win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))
+    win._echo_combo_signal(ctx.combo_rpm, (fids[0], "speed"))
+
+    win.do_order_time()
+    _drain_order_queue(win, qtbot)
+    canvas = win.chart_stack.page_order.pane_canvas(0)
+    assert canvas.has_result()
+    label_before = canvas._cbar.getAxis("left").labelText
+
+    win.files[fids[0]].channel_metadata = {
+        "torque": {"quantity": "force", "unit": "N"},
+    }
+    result = win.db_reference_store.save(
+        overrides=[], custom=[], hidden_builtin_ids=[], prefer_channel_metadata=True,
+    )
+    assert result.ok
+    win._on_db_reference_catalog_saved("order")
+
+    label_after = canvas._cbar.getAxis("left").labelText
+    assert label_after != label_before
+    assert win._order_thread is None, "a catalog save must never dispatch a compute worker"
+    assert not win._order_queue
+    assert canvas.has_result()

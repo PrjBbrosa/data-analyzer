@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from . import db_reference
 from .batch import AnalysisPreset, BatchOutput, BatchRunner
 
 
@@ -106,6 +107,11 @@ def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
     outputs_raw = raw.get("outputs") or {}
     params_dict = dict(raw.get("params") or {})
     _migrate_axis_keys(params_dict)
+    # dB-reference-defaults spec §13 S4: a legacy preset's bare
+    # ``db_reference`` value (no ``db_reference_mode``) IS the old
+    # authoritative display reference -> migrate to Manual, same rule as
+    # the View/preset migration (S2/S3). No-op when the key is absent.
+    params_dict = db_reference.migrate_legacy_reference_params(params_dict)
     return AnalysisPreset.free_config(
         name=raw.get("name", ""),
         method=method,

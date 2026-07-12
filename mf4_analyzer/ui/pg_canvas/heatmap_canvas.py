@@ -922,6 +922,27 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # into the inspector spins (blockSignals) — eliminating the jump
         # when the user switches from auto to manual mode.
         self._last_auto_levels: tuple[float, float] | None = None
+        # dB-reference-defaults Task 7 (spec §8.3.1): the dB reference the
+        # last db-mode render on THIS canvas actually used (None until the
+        # first db-mode render). reference_delta_since_last_render() diffs
+        # a NEW reference against this so a caller can shift an
+        # already-tuned MANUAL colour window by the same delta as the
+        # (unclipped) shifted matrix instead of leaving it black/blank.
+        self._last_db_reference: float | None = None
+        # The (vmin, vmax) plot_result actually applied AFTER shifting a
+        # manual window for a reference change this render, or None when no
+        # shift happened. _render_fft_time_on reads this to write the
+        # shifted numbers back into the inspector spins -- parity with the
+        # existing _last_auto_levels write-back for the auto branch.
+        self._last_manual_levels_shifted: tuple[float, float] | None = None
+        # Latest explicit label context (spec §15 C2/C3): set by
+        # plot_result / plot_or_update_heatmap from the caller-supplied
+        # amplitude_label / z_unit_suffix kwargs. None means "no override" --
+        # the slice axis / readout / remark consumers fall back to the
+        # historical 'Amplitude (dB)' / 'dB' literal so legacy callers that
+        # never pass the new kwargs see unchanged output.
+        self._amplitude_axis_label: str | None = None
+        self._z_unit_suffix: str | None = None
         # Panel-driven axis ranges for the FFT-vs-Time slice (display-only).
         # Set by plot_result from the inspector knobs; the slice consults them
         # instead of the live viewbox range so a manual panel min/max governs
@@ -1198,6 +1219,36 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             pass
         self._empty_hint_item = None
 
+    def reference_delta_since_last_render(self, new_reference: float) -> float | None:
+        """Spec §8.3.1: dB-reference-change × manual colour levels.
+
+        Returns ``20*log10(old/new)`` if this canvas's dB reference changed
+        since ITS OWN last db-mode render, else ``None`` (no prior render on
+        this canvas, or the reference did not actually change). Always
+        stamps ``new_reference`` as the new tracked value, so a second call
+        in the same render (or the next render with the same source) reports
+        no further change.
+
+        Callers use the returned delta to shift an already-tuned MANUAL
+        z-window (``[floor, ceiling] -> [floor+delta, ceiling+delta]``) so it
+        keeps tracking the shifted dB matrix instead of appearing to go
+        black/blank; this method itself never touches any matrix or widget --
+        it is a pure delta calculator (2026-06-21 clip red line: colour-scale
+        state must stay display-only).
+        """
+        try:
+            new_reference = float(new_reference)
+        except (TypeError, ValueError):
+            return None
+        old_reference = self._last_db_reference
+        self._last_db_reference = new_reference
+        if old_reference is None or old_reference <= 0 or new_reference <= 0:
+            return None
+        if old_reference == new_reference:
+            return None
+        delta = 20.0 * math.log10(old_reference / new_reference)
+        return delta if np.isfinite(delta) and delta != 0.0 else None
+
     # ------------------------------------------------------------------
     # main API (signature mirrors canvases.PlotCanvas.plot_or_update_heatmap)
     # ------------------------------------------------------------------
@@ -1210,6 +1261,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         y_auto=True, y_min=0.0, y_max=0.0,
         vmin=None, vmax=None,
         x_coords=None, y_coords=None,
+        amplitude_label=None, z_unit_suffix=None,
     ):
         self.clear_empty_hint()
         # Reset any panel-driven slice ranges. plot_result re-sets them AFTER
@@ -1219,6 +1271,15 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._panel_time_range = None
         self._panel_freq_range = None
         self._panel_amp_range = None
+        # dB-reference-defaults Task 7 (spec §15 C2/C3): explicit label
+        # context from the caller (FFT-time / Order mixins), stored so the
+        # slice axis (_apply_slice / _apply_default_axis_labels) and the
+        # readout/remark consumers (_readout_unit / _z_unit) can share the
+        # SAME formatted string as the colorbar (cbar_label above). None
+        # preserves the historical 'Amplitude (dB)' / 'dB' literal for
+        # legacy direct callers that never pass these kwargs.
+        self._amplitude_axis_label = amplitude_label
+        self._z_unit_suffix = z_unit_suffix
         # Remember the axis labels + coordinate arrays so the slice can read
         # them (the slice plots amplitude against the OTHER axis). When coords
         # are not supplied they are derived from the extents + matrix shape in
@@ -1338,6 +1399,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # cache so a stale slice never outlives its data.
         self._result = None
         self._db_cache = None
+        self._last_db_reference = None
+        self._last_manual_levels_shifted = None
+        self._amplitude_axis_label = None
+        self._z_unit_suffix = None
         self._x_coords = None
         self._y_coords = None
         if self._slice_curve is not None:
@@ -1373,6 +1438,16 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._x_label = self._default_x_label
             self._y_label = self._default_y_label
 
+    def _current_amplitude_axis_label(self) -> str:
+        """The slice's amplitude (left) axis text: the caller-supplied
+        ``amplitude_label`` (spec §15 C2/C3 label context) when set, else the
+        historical 'Amplitude (dB)' / 'Amplitude' literal so legacy callers
+        that never pass the new kwarg see unchanged output."""
+        if self._amplitude_axis_label is not None:
+            return self._amplitude_axis_label
+        return ('Amplitude (dB)' if self._amplitude_mode == 'amplitude_db'
+                else 'Amplitude')
+
     def _apply_default_axis_labels(self) -> None:
         self._x_label = self._default_x_label
         self._y_label = self._default_y_label
@@ -1381,11 +1456,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         if self._slice_plot is not None:
             bottom = (self._default_x_label if self._slice_dir == 'y'
                       else self._default_y_label)
-            amp_label = ('Amplitude (dB)'
-                         if self._amplitude_mode == 'amplitude_db'
-                         else 'Amplitude')
             self._slice_plot.setLabel('bottom', bottom)
-            self._slice_plot.setLabel('left', amp_label)
+            self._slice_plot.setLabel('left', self._current_amplitude_axis_label())
 
     def register_mouse_mode_controller(self, controller) -> None:
         self._mouse_mode_controller = controller
@@ -1581,6 +1653,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         x_auto=True, x_min=0.0, x_max=0.0,
         y_auto=True, y_min=0.0, y_max=0.0,
         interp='bilinear', db_reference=1.0,
+        amplitude_label=None, colorbar_label=None, z_unit_suffix=None,
     ):
         """Render a ``SpectrogramResult`` as a 2D heatmap + frequency slice.
 
@@ -1605,6 +1678,19 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         levels. The explicit ``vmin``/``vmax`` survive because the linear
         branch of ``plot_or_update_heatmap`` only fills them from
         nanmin/nanmax when they are ``None``.
+
+        ``amplitude_label`` / ``colorbar_label`` / ``z_unit_suffix`` are the
+        explicit label context (spec §15 C2, Task 7): when the caller (the
+        FFT-vs-Time mixin) supplies them, the colorbar, slice amplitude axis
+        and readout/remark ALL show the same formatted ``dB[A] re ...``
+        text. Omitting them (``None``) reproduces the historical inline
+        ``f"Amplitude{unit} (dB re {db_ref:g})"`` colorbar text and the bare
+        ``'Amplitude (dB)'`` slice label, so existing direct callers/tests
+        that never pass the new kwargs see unchanged output. A MANUAL
+        (``z_auto=False``) z-window is shifted by ``delta =
+        20*log10(old_ref/new_ref)`` whenever this canvas's dB reference
+        changes between renders (spec §8.3.1) — the shift only ever moves
+        the display LEVELS, never the stored matrix.
         """
         self._result = result
         # Pin the amplitude mode so annotation/slice labels read the value as
@@ -1635,6 +1721,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # could not recover any detail (the user's all-black → all-red →
             # must-recompute report). Slice and annotation read _matrix_disp too,
             # so an unclipped matrix also makes them show the true dB values.
+            #
+            # Spec §8.3.1: diff THIS render's reference against the last one
+            # this canvas actually used, so a manual window can be shifted by
+            # the same delta as the (unclipped) matrix below.
+            reference_delta = self.reference_delta_since_last_render(db_ref)
             if z_auto:
                 # Use a fixed SPAN anchored at a robust high-percentile
                 # ceiling so the auto window is expressed in *absolute* dB —
@@ -1649,23 +1740,38 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 # informative field below the floor (an all-dark image the
                 # user had to drag down ~38 dB to read).  _AUTO_SPAN_DB and
                 # the percentile are intentionally NOT read from the spin
-                # widgets, to prevent a feedback loop.
+                # widgets, to prevent a feedback loop. Auto levels simply
+                # re-derive from the new matrix — no reference-delta shift
+                # needed (spec §8.3.1: "自动色阶不需处理").
                 vmin, vmax = _auto_db_window(m)
                 # Store the computed absolute window so the caller can
                 # write it back to the inspector spins (blockSignals),
                 # making auto→manual a seamless no-jump transition.
                 self._last_auto_levels = (vmin, vmax)
+                self._last_manual_levels_shifted = None
             else:
                 vmin, vmax = float(z_floor), float(z_ceiling)
+                if reference_delta is not None:
+                    # An already-tuned MANUAL window must track the SAME
+                    # shift as the (unclipped) matrix, else the map goes
+                    # black/blank when the effective reference changes.
+                    vmin, vmax = vmin + reference_delta, vmax + reference_delta
+                    self._last_manual_levels_shifted = (vmin, vmax)
+                else:
+                    self._last_manual_levels_shifted = None
                 self._last_auto_levels = None
-            cbar = f"Amplitude{unit} (dB re {db_ref:g})"
+            cbar = (
+                colorbar_label if colorbar_label is not None
+                else f"Amplitude{unit} (dB re {db_ref:g})"
+            )
         else:
             m = result.amplitude
             if not z_auto:
                 vmin, vmax = float(z_floor), float(z_ceiling)
             else:
                 vmin, vmax = _finite_data_bounds(m)
-            cbar = f"Amplitude{unit}"
+            self._last_manual_levels_shifted = None
+            cbar = colorbar_label if colorbar_label is not None else f"Amplitude{unit}"
 
         y_lo = float(result.frequencies[0])
         y_hi = float(result.frequencies[-1])
@@ -1700,6 +1806,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             x_auto=x_auto, x_min=x_min, x_max=x_max,
             y_auto=y_auto, y_min=y_min, y_max=y_max,
             x_coords=result.times, y_coords=result.frequencies,
+            amplitude_label=amplitude_label, z_unit_suffix=z_unit_suffix,
         )
         # plot_or_update_heatmap stores the matrix it was handed (the
         # display matrix) in self._matrix_disp; re-pin it explicitly so
@@ -1911,8 +2018,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         if xc is None:
             return
         nrows, ncols = m.shape[0], m.shape[1]
-        amp_label = ('Amplitude (dB)'
-                     if self._amplitude_mode == 'amplitude_db' else 'Amplitude')
+        amp_label = self._current_amplitude_axis_label()
         if self._slice_dir == 'y':
             # Fix a Y position (frequency / order) → curve = amplitude vs time.
             # Horizontal axis is TIME → panel x_* range (when manual).
@@ -2432,9 +2538,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def _readout_unit(self) -> str:
         """Unit token for annotation values (slice mode).
 
-        dB mode labels the value 'dB' (the matrix is already in dB), every
-        other mode uses the channel unit.
+        dB mode labels the value with the caller-supplied ``z_unit_suffix``
+        (spec §15 C2/C3: a reference-aware ``dB[A] re ...`` phrase) when set,
+        else the historical bare ``'dB'`` literal (the matrix is already in
+        dB); every other mode uses the channel unit.
         """
+        if self._z_unit_suffix:
+            return self._z_unit_suffix
         if self._amplitude_mode == 'amplitude_db':
             return 'dB'
         return self._result.unit or ''
@@ -2456,6 +2566,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return ""
 
     def _z_unit(self) -> str:
+        """Same reference-aware unit token as :meth:`_readout_unit`, used by
+        the shared remark point (spec §15 C2/C3: colorbar/slice/readout/
+        remark share ONE label context)."""
+        if self._z_unit_suffix:
+            return self._z_unit_suffix
         if self._amplitude_mode == 'amplitude_db':
             return 'dB'
         result = self._result

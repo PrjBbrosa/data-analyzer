@@ -4,6 +4,7 @@ import numpy as np
 
 from PyQt5.QtCore import QThread
 
+from ... import db_reference
 from ...signal import resolve_nfft
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
@@ -339,7 +340,8 @@ class FFTTimeMixin:
                         cache.put(analysis_key, cached)
             if cached is not None:
                 self._render_fft_time_on(
-                    page.pane_canvas(pane_idx), cached, render_p)
+                    page.pane_canvas(pane_idx), cached, render_p,
+                    source=(fid, ch))
                 outcome.cached += 1
             else:
                 queue.append((pane_idx, fid, ch))
@@ -421,7 +423,7 @@ class FFTTimeMixin:
         if cached is not None:
             # Cache hit stays on the main thread — no worker needed.
             self.analysis_caches['fft_time'].put(analysis_key, cached)
-            self._render_fft_time(cached, p)
+            self._render_fft_time(cached, p, source=(fid, ch))
             self.statusBar.showMessage(
                 "使用缓存结果 · "
                 f"{cached.metadata.get('frames', 0)} frames · "
@@ -444,6 +446,7 @@ class FFTTimeMixin:
             'render_params': p,
             'analysis_key': analysis_key,
             'pane_idx': pane_idx,
+            'source': (fid, ch),
         }
 
         def job(worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit):
@@ -579,6 +582,7 @@ class FFTTimeMixin:
             'render_params': p,
             'analysis_key': analysis_key,
             'pane_idx': pane_idx,
+            'source': (fid, ch),
         }
 
         def job(worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit):
@@ -638,17 +642,38 @@ class FFTTimeMixin:
             self.statusBar.showMessage("正在计算…")
         thread.start()
 
-    def _render_fft_time(self, result, p):
+    def _render_fft_time(self, result, p, source=None):
         """Apply display-only options and draw on the primary canvas.
 
         Display fields are NOT part of the cache key; this is the sole
         place they are read.
         """
-        self._render_fft_time_on(self.canvas_fft_time, result, p)
+        self._render_fft_time_on(self.canvas_fft_time, result, p, source=source)
 
-    def _render_fft_time_on(self, canvas, result, p):
+    def _fft_time_label_resolution(self, source, p):
+        """Resolve this render's dB reference (spec §15 C2, Task 7): each
+        pane's SINGLE source resolves independently -- honoring the section's
+        current Auto/Manual View mode -- rather than reusing the FOCUSED
+        pane's control value for a non-focused pane's render.
+
+        ``source`` is ``None`` only for direct-call test doubles that never
+        wire a real ``(fid, ch)`` (e.g. bare-canvas smoke tests); those keep
+        the historical ``p['db_reference']`` numeric default degraded through
+        the shared validator so existing callers are unaffected.
+        """
+        if source is not None:
+            return self._resolve_db_reference_for_source('fft_time', source)
+        value = float(p.get('db_reference', 1.0))
+        if not db_reference.validate_reference(value):
+            value = 1.0
+        return db_reference.DbReferenceResolution(
+            value=value, unit='', quantity='', source='generic')
+
+    def _render_fft_time_on(self, canvas, result, p, source=None):
         """Multi-pane variant: render ``result`` on an arbitrary FFT-vs-Time
-        heatmap canvas with display options from ``p``."""
+        heatmap canvas with display options from ``p``. ``source`` is the
+        ``(fid, ch)`` this specific pane/result came from -- required for a
+        per-pane-accurate dB-reference resolution (spec §15 C2)."""
         if bool(p.get('freq_auto', p.get('y_auto', True))):
             freq_range = self._fft_time_auto_freq_range(result)
         else:
@@ -660,9 +685,27 @@ class FFTTimeMixin:
         # the canvas's lowercase token ('amplitude_db' / 'amplitude') in
         # FFTTimeContextual.get_params, so no translation needed.
         z_auto = bool(p.get('z_auto', False))
+        amp_mode = p['amplitude_mode']
+        # weighting: prefer the COMPUTED result's own SpectrogramParams (the
+        # authoritative value actually used to build this matrix) over the
+        # current inspector combo, which may have drifted since compute.
+        result_params = getattr(result, 'params', None)
+        weighting = str(getattr(result_params, 'weighting', None)
+                        or p.get('weighting', 'None'))
+        output_scale = 'db' if amp_mode == 'amplitude_db' else 'linear'
+        resolution = self._fft_time_label_resolution(source, p)
+        amplitude_label = db_reference.format_amplitude_label(
+            resolution, weighting=weighting, output_scale=output_scale)
+        # Reference-aware readout/remark suffix (spec §15 C2): only in dB
+        # mode -- Linear has no reference concept, so leave it None and let
+        # the canvas fall back to the channel unit (historical behaviour).
+        z_unit_suffix = (
+            db_reference.format_reference_note(resolution, weighting=weighting)
+            if output_scale == 'db' else None
+        )
         canvas.plot_result(
             result,
-            amplitude_mode=p['amplitude_mode'],
+            amplitude_mode=amp_mode,
             cmap=p['cmap'],
             z_auto=z_auto,
             z_floor=float(p.get('z_floor', -80.0)),
@@ -675,23 +718,44 @@ class FFTTimeMixin:
             y_auto=bool(p.get('y_auto', True)),
             y_min=float(p.get('y_min', 0.0)),
             y_max=float(p.get('y_max', 0.0)),
-            # db_reference is display-only: source it from the current inspector
-            # params at RENDER time so changing it re-renders from cache without
-            # a recompute (it is absent from SpectrogramParams + the cache key).
-            db_reference=float(p.get('db_reference', 1.0)),
+            # db_reference is display-only: source it from the resolved
+            # reference at RENDER time so changing it re-renders from cache
+            # without a recompute (it is absent from SpectrogramParams + the
+            # cache key). resolve_db_reference always returns a validated,
+            # positive value -- no separate max(..., 1e-12) coercion needed.
+            db_reference=resolution.value,
+            amplitude_label=amplitude_label,
+            colorbar_label=amplitude_label,
+            z_unit_suffix=z_unit_suffix,
         )
         # Write the auto-computed absolute levels back into the inspector
         # spins (blockSignals so we don't trigger a recompute).  This makes
         # the current display window the single source of truth: when the
         # user later un-ticks "自动", the spins already hold the exact same
         # values that are on screen, so switching auto→manual is jump-free.
-        if z_auto and p.get('amplitude_mode', 'amplitude_db') == 'amplitude_db':
+        if z_auto and amp_mode == 'amplitude_db':
             auto_lvls = getattr(canvas, '_last_auto_levels', None)
             if auto_lvls is not None:
                 ctx = self.inspector.fft_time_ctx
                 for spin, val in (
                     (ctx.spin_z_floor, auto_lvls[0]),
                     (ctx.spin_z_ceiling, auto_lvls[1]),
+                ):
+                    spin.blockSignals(True)
+                    spin.setValue(val)
+                    spin.blockSignals(False)
+        elif not z_auto and amp_mode == 'amplitude_db':
+            # Spec §8.3.1: the reference changed since this canvas's last
+            # render and a MANUAL window was in effect -- plot_result already
+            # shifted vmin/vmax by the matching delta; persist the shifted
+            # numbers into the spins so they don't silently drift back to
+            # the pre-shift values on the next unrelated re-render.
+            shifted = getattr(canvas, '_last_manual_levels_shifted', None)
+            if shifted is not None:
+                ctx = self.inspector.fft_time_ctx
+                for spin, val in (
+                    (ctx.spin_z_floor, shifted[0]),
+                    (ctx.spin_z_ceiling, shifted[1]),
                 ):
                     spin.blockSignals(True)
                     spin.setValue(val)
@@ -712,6 +776,7 @@ class FFTTimeMixin:
         p = pending.get('render_params')
         analysis_key = pending.get('analysis_key')
         pane_idx = pending.get('pane_idx')
+        source = pending.get('source')
         if key is not None:
             self._fft_time_cache_put(key, result)
         if analysis_key is not None:
@@ -725,9 +790,10 @@ class FFTTimeMixin:
             # primary canvas only when the queue never set it (legacy path).
             page = self._analysis_page('fft_time')
             if pane_idx is not None and pane_idx < page.pane_count():
-                self._render_fft_time_on(page.pane_canvas(pane_idx), result, p)
+                self._render_fft_time_on(
+                    page.pane_canvas(pane_idx), result, p, source=source)
             else:
-                self._render_fft_time(result, p)
+                self._render_fft_time(result, p, source=source)
         nfft = getattr(getattr(result, 'params', None), 'nfft', None)
         suffix = f" · NFFT {int(nfft)}" if nfft is not None else ""
         self.statusBar.showMessage(

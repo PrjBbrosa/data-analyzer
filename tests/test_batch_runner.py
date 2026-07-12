@@ -389,7 +389,12 @@ def test_batch_fft_export_scene_renders_db_display_only():
     )
 
     np.testing.assert_allclose(info["line_y"], np.array([0.0, 20.0]), atol=1e-6)
-    assert info["y_label"] == "Amplitude (dB)"
+    # dB-reference-defaults (Task 9 Step 9.4): the batch label now always
+    # states the resolved reference via the shared formatter -- a bare
+    # ``db_reference`` value with no mode migrates to Manual (spec S2/S4),
+    # so the reference text uses the pretty-print form of THIS value
+    # (unit unknown for a direct-call bypass with no file context).
+    assert info["y_label"] == "Amplitude (dB re 1×10⁰)"
 
 
 def test_write_image_exports_nonempty_png_with_fixed_size(tmp_path):
@@ -1201,3 +1206,216 @@ def test_target_signals_none_match_loaded_files_blocks(tmp_path):
     result = runner.run(preset, tmp_path)
     assert result.status == 'blocked'
     assert result.blocked == ['no matching batch tasks']
+
+
+# ---------------------------------------------------------------------------
+# dB-reference-defaults Task 9 (spec §13 S4 / §15 C4, plan Step 9.1):
+# Batch Auto resolution + image label parity with the interactive canvas.
+# ---------------------------------------------------------------------------
+
+def _make_multi_unit_file(tmp_path, fs=1024.0):
+    """One file, two channels: 'acc' resolves via CHANNEL METADATA
+    (quantity+unit), 'velo' resolves via the plain ``channel_units`` map
+    alone (no metadata entry) -- exercising BOTH Auto-resolution inputs."""
+    n = 512
+    t = np.arange(n, dtype=float) / fs
+    df = pd.DataFrame({
+        "Time": t,
+        "acc": np.sin(2 * np.pi * 50 * t),
+        "velo": np.sin(2 * np.pi * 80 * t),
+    })
+    path = tmp_path / "multi_unit.csv"
+    df.to_csv(path, index=False)
+    units = {"velo": "m/s"}
+    channel_metadata = {"acc": {"quantity": "acceleration", "unit": "m/s²"}}
+    return FileData(path, df, list(df.columns), units, idx=0,
+                    channel_metadata=channel_metadata)
+
+
+def test_batch_runner_auto_resolves_each_target_channel_metadata_or_unit(tmp_path):
+    fd = _make_multi_unit_file(tmp_path)
+    preset = AnalysisPreset.free_config(
+        name="auto ref", method="fft",
+        target_signals=("acc", "velo"),
+        params={"window": "hanning", "nfft": 64, "amp_y": "dB"},
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+    preset = replace(preset, file_ids=(0,))
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    by_signal = {item.signal: item for item in result.items}
+    # 'acc' resolves via channel_metadata (quantity+unit) -> acceleration.si
+    assert by_signal["acc"].db_reference_value == pytest.approx(1e-6)
+    assert by_signal["acc"].db_reference_source == "system"
+    # 'velo' resolves via channel_units alone (no metadata entry) -> velocity.si
+    assert by_signal["velo"].db_reference_value == pytest.approx(1e-9)
+    assert by_signal["velo"].db_reference_source == "system"
+
+
+def test_batch_runner_accepts_immutable_catalog_snapshot_without_qsettings(tmp_path):
+    """Batch/worker code must never import/read global QSettings directly --
+    the catalog snapshot injected via ``db_reference_catalog=`` is plain,
+    duck-typed data (spec Global Constraints / plan Step 9.2). Batch DOES
+    legitimately use PyQt5/pyqtgraph for PNG image rendering (pre-existing,
+    unrelated to this constraint) -- only ``QSettings`` (the settings-
+    persistence layer the catalog store is built on) is forbidden.
+
+    Checked via the AST import graph (not a raw substring search) so a
+    docstring/comment that merely NAMES the forbidden type (to explain why
+    it is absent) cannot false-positive this guard -- only an actual
+    ``import``/``from ... import`` statement counts.
+    """
+    import ast
+    import inspect
+    from types import SimpleNamespace
+
+    from mf4_analyzer import batch as batch_mod
+    from mf4_analyzer.db_reference import DbReferenceEntry
+
+    tree = ast.parse(inspect.getsource(batch_mod))
+    forbidden_modules = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            forbidden_modules.extend(
+                alias.name for alias in node.names if alias.name == "QSettings"
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            forbidden_modules.extend(
+                alias.name for alias in node.names if alias.name == "QSettings"
+            )
+    assert not forbidden_modules, (
+        f"batch.py must never import QSettings directly -- the catalog "
+        f"snapshot must be plain data injected from outside; found: "
+        f"{forbidden_modules}"
+    )
+
+    fd = _make_file(tmp_path)
+    fd.channel_metadata["sig"] = {"quantity": "torque", "unit": "Nm"}
+    custom_entry = DbReferenceEntry(
+        id="user.custom_torque", quantity="torque", label="Custom torque",
+        unit="Nm", aliases=("Nm",), reference=3.0, builtin_id=None,
+    )
+    snapshot = SimpleNamespace(
+        system_catalog=(),
+        user_catalog=(custom_entry,),
+        prefer_channel_metadata=True,
+        revision=1,
+    )
+    preset = AnalysisPreset.from_current_single(
+        name="snapshot", method="fft", signal=(1, "sig"),
+        params={"fs": 1024.0, "window": "hanning", "nfft": 64, "amp_y": "dB"},
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+
+    runner = BatchRunner({1: fd}, db_reference_catalog=snapshot)
+    result = runner.run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert result.items[0].db_reference_value == pytest.approx(3.0)
+    assert result.items[0].db_reference_source == "user"
+
+
+def test_batch_legacy_value_without_mode_is_manual(tmp_path):
+    """Spec S4: a preset with a bare ``db_reference`` value and NO
+    ``db_reference_mode`` key migrates to Manual (the old value WAS the
+    authoritative display reference), overriding any metadata/catalog
+    match for that target."""
+    fd = _make_file(tmp_path)
+    fd.channel_metadata["sig"] = {"quantity": "acceleration", "unit": "m/s²"}
+    preset = AnalysisPreset.from_current_single(
+        name="legacy manual", method="fft", signal=(1, "sig"),
+        params={"fs": 1024.0, "window": "hanning", "nfft": 64,
+                "amp_y": "dB", "db_reference": 5.0},
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+
+    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert result.items[0].db_reference_source == "manual"
+    assert result.items[0].db_reference_value == pytest.approx(5.0)
+
+
+def test_batch_fft_image_label_contains_exact_db_reference(tmp_path):
+    fd = _make_file(tmp_path)
+    fd.channel_metadata["sig"] = {"quantity": "acceleration", "unit": "m/s²"}
+    preset = AnalysisPreset.from_current_single(
+        name="fft label", method="fft", signal=(1, "sig"),
+        params={"fs": 1024.0, "window": "hanning", "nfft": 64, "amp_y": "dB"},
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+
+    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert result.items[0].colorbar_label == "Amplitude (dB re 1×10⁻⁶ m/s²)"
+
+
+def test_batch_a_weighted_image_uses_dba_reference(tmp_path):
+    fd = _make_file(tmp_path)
+    fd.channel_metadata["sig"] = {"quantity": "acceleration", "unit": "m/s²"}
+    preset = AnalysisPreset.from_current_single(
+        name="dba label", method="fft", signal=(1, "sig"),
+        params={"fs": 1024.0, "window": "hanning", "nfft": 64,
+                "amp_y": "dB", "weighting": "A"},
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+
+    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert result.items[0].colorbar_label == "Amplitude (dBA re 1×10⁻⁶ m/s²)"
+
+
+def test_batch_heatmap_image_colorbar_uses_shared_label_formatter(tmp_path):
+    fd = _make_file(tmp_path, fs=1024.0)
+    fd.channel_metadata["sig"] = {"quantity": "sound pressure", "unit": "Pa"}
+    fd.source_metadata["source_kind"] = "audio"
+    preset = AnalysisPreset.free_config(
+        name="heatmap label", method="fft_time",
+        target_signals=("sig",),
+        params={"fs": 1024.0, "nfft": 64, "overlap": 0.5, "remove_mean": True},
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+    preset = replace(preset, file_ids=(1,))
+
+    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    # Same shared formatter the interactive FFT-vs-Time canvas uses (spec
+    # §14.1's canonical Pa/audio example) -- not a batch-local hard-code.
+    assert result.items[0].colorbar_label == "Sound pressure (dB re 20 µPa)"
+
+
+def test_batch_csv_values_are_identical_across_reference_changes(tmp_path):
+    """Spec §15 C4: CSV/DataFrame export stays linear regardless of the
+    resolved dB reference -- only the IMAGE label/levels are affected."""
+    fd = _make_file(tmp_path)
+    fd.channel_metadata["sig"] = {"quantity": "acceleration", "unit": "m/s²"}
+    base_params = {"fs": 1024.0, "window": "hanning", "nfft": 64, "amp_y": "dB"}
+
+    preset_a = AnalysisPreset.from_current_single(
+        name="ref A", method="fft", signal=(1, "sig"),
+        params=dict(base_params, db_reference=1.0),
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+    preset_b = AnalysisPreset.from_current_single(
+        name="ref B", method="fft", signal=(1, "sig"),
+        params=dict(base_params, db_reference=1e6),
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+
+    result_a = BatchRunner({1: fd}).run(preset_a, tmp_path / "out_a")
+    result_b = BatchRunner({1: fd}).run(preset_b, tmp_path / "out_b")
+
+    assert result_a.status == "done" and result_b.status == "done"
+    # The resolved reference (and its label) legitimately differ...
+    assert (result_a.items[0].db_reference_value
+            != result_b.items[0].db_reference_value)
+    assert result_a.items[0].colorbar_label != result_b.items[0].colorbar_label
+    # ...but the exported linear CSV values must be BYTE identical.
+    df_a = pd.read_csv(result_a.items[0].data_path)
+    df_b = pd.read_csv(result_b.items[0].data_path)
+    pd.testing.assert_frame_equal(df_a, df_b)

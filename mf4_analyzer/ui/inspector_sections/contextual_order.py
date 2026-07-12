@@ -31,7 +31,10 @@ from ._helpers import (
     _make_group_header,
     _make_params_card,
     _no_buttons,
-    make_db_reference_spinbox,
+    apply_db_reference_partial,
+    apply_db_reference_preset,
+    db_reference_params,
+    make_db_reference_control,
     recommend_preset_for_unit,
 )
 from .collapsible import _CollapsibleParamSection
@@ -175,10 +178,11 @@ class OrderContextual(QWidget):
             "频率加权:",
             _fit_field(self.combo_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
-        self.spin_db_ref = make_db_reference_spinbox()
+        self.db_reference_control = make_db_reference_control(self)
+        self.spin_db_ref = self.db_reference_control.editor
         fl.addRow(
             "dB 参考:",
-            _fit_field(self.spin_db_ref, max_width=_SHORT_FIELD_MAX_WIDTH),
+            _fit_field(self.db_reference_control, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
 
         # COT is now the only tracking algorithm (Wave 2 of the
@@ -475,7 +479,7 @@ class OrderContextual(QWidget):
                 else 'Amplitude'
             ),
             weighting=self.combo_weighting.currentText(),
-            db_reference=self.spin_db_ref.value(),
+            **db_reference_params(self.db_reference_control),
             samples_per_rev=int(self.spin_samples_per_rev.value()),
             x_auto=bool(self.chk_x_auto.isChecked()),
             x_min=float(self.spin_x_min.value()),
@@ -530,11 +534,7 @@ class OrderContextual(QWidget):
                 self.spin_samples_per_rev.setValue(int(d['samples_per_rev']))
             except (TypeError, ValueError):
                 pass
-        if 'db_reference' in d:
-            try:
-                self.spin_db_ref.setValue(float(d['db_reference']))
-            except (TypeError, ValueError):
-                pass
+        apply_db_reference_preset(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])
         # ---- Wave 3 (2026-04-28 plan): legacy + new axis-key compat ----
@@ -692,6 +692,7 @@ class OrderContextual(QWidget):
             manual_rpm=self.manual_rpm(),
             fs=self.spin_fs.value(),
             weighting=self.combo_weighting.currentText(),
+            **db_reference_params(self.db_reference_control),
         )
 
     # --- Wave 3 (2026-04-28 plan): test-friendly param accessors ---
@@ -713,8 +714,10 @@ class OrderContextual(QWidget):
         # COT is the only tracking algorithm. ``samples_per_rev`` stays
         # in the param payload because COT consumes it.
         p['samples_per_rev'] = int(self.spin_samples_per_rev.value())
-        # Display-only parameter: dB reference value.
-        p['db_reference'] = self.spin_db_ref.value()
+        # Display-only parameters (db_reference/db_reference_mode) already
+        # come from get_params() above (2026-07-12 dB-reference-defaults
+        # Task 4 promoted them onto get_params() for parity with FFT/
+        # FFT-vs-Time — spec §5.3 requires BOTH accessors to emit them).
         # Axis controls (Wave 3): explicit X/Y/Z range + auto flags.
         p['x_auto'] = bool(self.chk_x_auto.isChecked())
         p['x_min'] = float(self.spin_x_min.value())
@@ -818,11 +821,7 @@ class OrderContextual(QWidget):
                 self.spin_samples_per_rev.setValue(int(d['samples_per_rev']))
             except (TypeError, ValueError):
                 pass
-        if 'db_reference' in d:
-            try:
-                self.spin_db_ref.setValue(float(d['db_reference']))
-            except (TypeError, ValueError):
-                pass
+        apply_db_reference_partial(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])
 

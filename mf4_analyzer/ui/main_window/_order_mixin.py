@@ -5,6 +5,7 @@ import numpy as np
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QThread
 
+from ... import db_reference
 from ...signal import assess_speed_for_order, resolve_order_nfft
 from ...signal.spectrogram import SpectrogramAnalyzer
 from ..compute_feedback import ComputeOutcome
@@ -349,7 +350,8 @@ class OrderMixin:
             cached = cache.get(analysis_key)
             if cached is not None:
                 cache.put(analysis_key, cached)
-                self._render_order_on(page.pane_canvas(pane_idx), cached)
+                self._render_order_on(
+                    page.pane_canvas(pane_idx), cached, source=(fid, ch))
                 outcome.cached += 1
             else:
                 queue.append((pane_idx, fid, ch, rpm_source))
@@ -502,6 +504,7 @@ class OrderMixin:
             time_range=time_range,
         )
         self._order_render_pane = pane_idx
+        self._order_render_source = (fid, ch)
 
         from ..analysis_worker import AnalysisComputeWorker
         import sys as _sys
@@ -542,11 +545,32 @@ class OrderMixin:
         thread.start()
         return True
 
-    def _render_order_on(self, canvas, result):
+    def _order_label_resolution(self, source, order_params):
+        """Resolve this render's dB reference (spec §15 C3, Task 7): each
+        pane's SINGLE source resolves independently -- honoring the
+        section's current Auto/Manual View mode -- rather than reusing the
+        FOCUSED pane's control value for a non-focused pane's render.
+
+        ``source`` is ``None`` only for direct-call test doubles that never
+        wire a real ``(fid, ch)``; those keep the historical
+        ``order_params['db_reference']`` numeric default degraded through
+        the shared validator so existing callers are unaffected.
+        """
+        if source is not None:
+            return self._resolve_db_reference_for_source('order', source)
+        value = float(order_params.get('db_reference', 1.0))
+        if not db_reference.validate_reference(value):
+            value = 1.0
+        return db_reference.DbReferenceResolution(
+            value=value, unit='', quantity='', source='generic')
+
+    def _render_order_on(self, canvas, result, source=None):
         """Multi-pane variant: draw an Order COT ``result`` on an arbitrary
         order heatmap canvas using the current OrderContextual display knobs.
         Pure canvas draw — no preset/status side-effects (those stay in
-        ``_render_order_time``)."""
+        ``_render_order_time``). ``source`` is the ``(fid, ch)`` this
+        specific pane/result came from -- required for a per-pane-accurate
+        dB-reference resolution (spec §15 C3)."""
         from ..pg_canvas.heatmap_canvas import time_axis_display_extent
 
         title = (
@@ -560,17 +584,43 @@ class OrderMixin:
             if order_params.get('amplitude_mode', 'Amplitude dB') == 'Amplitude dB'
             else 'amplitude'
         )
+        # weighting: prefer the COMPUTED result's own COTParams (the
+        # authoritative value actually used to build this matrix) over the
+        # current inspector combo, which may have drifted since compute.
+        result_params = getattr(result, 'params', None)
+        weighting = str(getattr(result_params, 'weighting', None)
+                        or order_params.get('weighting', 'None'))
+        output_scale = 'db' if amp_mode_token == 'amplitude_db' else 'linear'
+        resolution = self._order_label_resolution(source, order_params)
+        amplitude_label = db_reference.format_amplitude_label(
+            resolution, weighting=weighting, output_scale=output_scale)
+        # Reference-aware readout/remark suffix (spec §15 C3): only in dB
+        # mode -- Linear has no reference concept, so leave it None and let
+        # the canvas fall back to the channel unit (historical behaviour).
+        z_unit_suffix = (
+            db_reference.format_reference_note(resolution, weighting=weighting)
+            if output_scale == 'db' else None
+        )
+
         # Pre-convert dB outside the canvas so the canvas does not re-normalise
         # to its own peak (which would make the colorbar unpredictable and break
         # z_floor/z_ceiling color mapping). In Linear mode pass the raw matrix.
         matrix = result.amplitude.T
         plot_amp_mode = amp_mode_token
-        cbar_label = 'Amplitude'
+        cbar_label = amplitude_label
+        # Spec §8.3.1: diff THIS render's reference against the last one
+        # THIS canvas actually used, so a manual window can be shifted by
+        # the same delta as the (unclipped) matrix -- getattr-guarded so a
+        # bare test double canvas without the method keeps the pre-Task-7
+        # behaviour (no shift, no crash).
+        reference_delta = None
         if amp_mode_token == 'amplitude_db':
-            db_ref = max(float(order_params.get('db_reference', 1.0)), 1e-12)
+            db_ref = resolution.value
             matrix = SpectrogramAnalyzer.amplitude_to_db(matrix, reference=db_ref)
             plot_amp_mode = 'amplitude'
-            cbar_label = f'Amplitude (dB re {db_ref:g})'
+            delta_fn = getattr(canvas, 'reference_delta_since_last_render', None)
+            if callable(delta_fn):
+                reference_delta = delta_fn(db_ref)
 
         z_auto = bool(order_params.get('z_auto', False))
         z_floor = float(order_params.get('z_floor', -30.0))
@@ -587,9 +637,18 @@ class OrderMixin:
         # plot_result's _robust_db_ceiling.
         vmin_override = None
         vmax_override = None
-        if z_auto and amp_mode_token == 'amplitude_db':
-            from ..pg_canvas.heatmap_canvas import _auto_db_window
-            vmin_override, vmax_override = _auto_db_window(matrix)
+        shifted_manual_levels = None
+        if amp_mode_token == 'amplitude_db':
+            if z_auto:
+                from ..pg_canvas.heatmap_canvas import _auto_db_window
+                vmin_override, vmax_override = _auto_db_window(matrix)
+            elif reference_delta is not None:
+                # An already-tuned MANUAL window must track the SAME shift
+                # as the (unclipped) matrix above, else the map goes
+                # black/blank when the effective reference changes.
+                z_floor += reference_delta
+                z_ceiling += reference_delta
+                shifted_manual_levels = (z_floor, z_ceiling)
 
         # Pin the amplitude mode so the slice's amplitude-axis label reads
         # 'Amplitude (dB)' vs 'Amplitude' correctly (Order renders through
@@ -611,6 +670,8 @@ class OrderMixin:
             interp='bilinear',
             cbar_label=cbar_label,
             amplitude_mode=plot_amp_mode,
+            amplitude_label=amplitude_label,
+            z_unit_suffix=z_unit_suffix,
             z_auto=z_auto,
             z_floor=z_floor,
             z_ceiling=z_ceiling,
@@ -635,6 +696,17 @@ class OrderMixin:
                 spin.blockSignals(True)
                 spin.setValue(val)
                 spin.blockSignals(False)
+        elif shifted_manual_levels is not None:
+            # Spec §8.3.1: persist the shifted manual window so it doesn't
+            # silently drift back to the pre-shift numbers on the next
+            # unrelated re-render.
+            for spin, val in (
+                (ctx.spin_z_floor, shifted_manual_levels[0]),
+                (ctx.spin_z_ceiling, shifted_manual_levels[1]),
+            ):
+                spin.blockSignals(True)
+                spin.setValue(val)
+                spin.blockSignals(False)
         # Seed the order slice (default 按阶次 / Y is most useful, but keep the
         # current direction if the user already switched it).
         if getattr(canvas, '_slice_curve', None) is not None:
@@ -642,7 +714,7 @@ class OrderMixin:
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
 
-    def _render_order_time(self, result, *, emit_feedback=True):
+    def _render_order_time(self, result, *, emit_feedback=True, source=None):
         # Wave 3 / Task 3.2: pull HEAD-parity display knobs from the
         # OrderContextual. Inspector exposes amplitude_mode ∈
         # {'Amplitude dB', 'Amplitude'} and dynamic ∈
@@ -650,7 +722,7 @@ class OrderMixin:
         # internal token 'amplitude_db' / 'amplitude' for the first.
         # `result.amplitude` is (frames, orders) → transpose so imshow
         # gets (rows=Y_orders, cols=X_times); x_extent=times, y_extent=orders.
-        self._render_order_on(self.canvas_order, result)
+        self._render_order_on(self.canvas_order, result, source=source)
         self._remember_batch_preset(
             "当前时间-阶次", "order_time",
             self.inspector.order_ctx.current_signal(),
@@ -685,12 +757,16 @@ class OrderMixin:
         # only for the primary pane (0); compare panes get a pure canvas draw.
         page = self._analysis_page('order')
         pane_idx = getattr(self, '_order_render_pane', 0)
+        source = getattr(self, '_order_render_source', None)
         if pane_idx == 0:
-            self._render_order_time(result, emit_feedback=outcome is None)
+            self._render_order_time(
+                result, emit_feedback=outcome is None, source=source)
         elif pane_idx < page.pane_count():
-            self._render_order_on(page.pane_canvas(pane_idx), result)
+            self._render_order_on(
+                page.pane_canvas(pane_idx), result, source=source)
         else:
-            self._render_order_time(result, emit_feedback=outcome is None)
+            self._render_order_time(
+                result, emit_feedback=outcome is None, source=source)
         # Clear the in-progress label only when no more jobs are queued; the
         # thread-done pump re-sets it for the next job otherwise.
         if not self._order_queue:

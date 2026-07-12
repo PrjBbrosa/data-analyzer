@@ -32,7 +32,10 @@ from ._helpers import (
     _make_group_header,
     _make_params_card,
     _no_buttons,
-    make_db_reference_spinbox,
+    apply_db_reference_partial,
+    apply_db_reference_preset,
+    db_reference_params,
+    make_db_reference_control,
     recommend_preset_for_unit,
 )
 from .collapsible import _CollapsibleParamSection
@@ -76,6 +79,9 @@ class FFTTimeContextual(QWidget):
     ``dynamic``, ``cmap``. Wave 4 also adds the explicit axis keys
     ``x_auto``/``x_min``/``x_max``, ``y_auto``/``y_min``/``y_max``,
     ``z_auto``/``z_floor``/``z_ceiling`` alongside the legacy keys.
+    2026-07-12 dB-reference-defaults Task 4 adds ``db_reference_mode``
+    (``'auto'``/``'manual'``) alongside ``db_reference`` — both are
+    display-only (spec §5.3) and stay OUT of ``_fft_time_cache_key``.
 
     Built-in presets: ``torque``, ``vibration``, ``transient``. Legacy keys
     (``diagnostic``, ``amplitude_accuracy``, ``high_frequency``) remain aliases
@@ -188,10 +194,11 @@ class FFTTimeContextual(QWidget):
             "频率加权:",
             _fit_field(self.combo_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
-        self.spin_db_ref = make_db_reference_spinbox()
+        self.db_reference_control = make_db_reference_control(self)
+        self.spin_db_ref = self.db_reference_control.editor
         fl.addRow(
             "dB 参考:",
-            _fit_field(self.spin_db_ref, max_width=_SHORT_FIELD_MAX_WIDTH),
+            _fit_field(self.db_reference_control, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
         g.setTitle("")
         # The section header already shows the title; drop the title band and
@@ -520,7 +527,7 @@ class FFTTimeContextual(QWidget):
             weighting=self.combo_weighting.currentText(),
             remove_mean=self.chk_remove_mean.isChecked(),
             amplitude_mode=amp_mode,
-            db_reference=self.spin_db_ref.value(),
+            **db_reference_params(self.db_reference_control),
             # Legacy freq_* keys are aliases of the Y-frequency axis.
             freq_auto=bool(self.chk_y_auto.isChecked()),
             freq_min=float(self.spin_y_min.value()),
@@ -601,11 +608,7 @@ class FFTTimeContextual(QWidget):
                 pass
         if 'remove_mean' in d:
             self.chk_remove_mean.setChecked(bool(d['remove_mean']))
-        if 'db_reference' in d:
-            try:
-                self.spin_db_ref.setValue(float(d['db_reference']))
-            except (TypeError, ValueError):
-                pass
+        apply_db_reference_partial(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])
         # cmap 固定 turbo：无控件可应用，预设/视图状态里的 cmap 键被忽略。
@@ -813,7 +816,7 @@ class FFTTimeContextual(QWidget):
             weighting=self.combo_weighting.currentText(),
             amplitude_mode=amp_mode,
             remove_mean=self.chk_remove_mean.isChecked(),
-            db_reference=self.spin_db_ref.value(),
+            **db_reference_params(self.db_reference_control),
             freq_auto=bool(self.chk_y_auto.isChecked()),
             freq_min=float(self.spin_y_min.value()),
             freq_max=float(self.spin_y_max.value()),
@@ -870,11 +873,7 @@ class FFTTimeContextual(QWidget):
                 pass
         if 'remove_mean' in d:
             self.chk_remove_mean.setChecked(bool(d['remove_mean']))
-        if 'db_reference' in d:
-            try:
-                self.spin_db_ref.setValue(float(d['db_reference']))
-            except (TypeError, ValueError):
-                pass
+        apply_db_reference_preset(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])
         # cmap 固定 turbo：无控件可应用，预设/视图状态里的 cmap 键被忽略。

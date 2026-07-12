@@ -729,8 +729,14 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             pen.setJoinStyle(Qt.RoundJoin)
             pen.setCapStyle(Qt.RoundCap)
             freq, amp = self._spectrum_plot_arrays(e['freq'], e['amp'])
+            # dB-reference-defaults Task 6 (spec §15 C1): a mixed-reference
+            # FFT overlay attaches a per-curve 'legend_label' (base label +
+            # a compact 'dB[A] re ...' disclosure) distinct from the base
+            # 'label' -- fall back to 'label' for entries that never went
+            # through the per-entry resolver (single/exact-reference axis,
+            # or a legacy hand-built entry).
             curve = self._plot_amp.plot(
-                freq, amp, pen=pen, name=e['label'],
+                freq, amp, pen=pen, name=e.get('legend_label', e['label']),
                 antialias=True)
             curve.setOpacity(1.0)
             self._amp_curves.append(curve)
@@ -1668,7 +1674,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             if freq_arr.size == 0 or amp_arr.size == 0:
                 continue
             idx = int(np.argmin(np.abs(freq_arr - freq)))
-            rows.append((e['label'], float(freq_arr[idx]), float(amp_arr[idx])))
+            # Same 'legend_label'-over-'label' preference as the curve name
+            # in plot_spectra (Task 6): a mixed-reference axis discloses each
+            # curve's own dB[A] re ... in the hover readout too.
+            rows.append((
+                e.get('legend_label', e['label']),
+                float(freq_arr[idx]), float(amp_arr[idx]),
+            ))
         return rows
 
     def format_readout(self, freq: float) -> str:

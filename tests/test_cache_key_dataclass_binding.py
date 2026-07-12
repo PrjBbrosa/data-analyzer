@@ -33,6 +33,7 @@ import re
 
 from mf4_analyzer.signal.spectrogram import SpectrogramParams
 from mf4_analyzer.signal.order_cot import COTParams
+from mf4_analyzer.ui.main_window._fft_mixin import FFTMixin
 from mf4_analyzer.ui.main_window._fft_time_mixin import FFTTimeMixin
 from mf4_analyzer.ui.main_window._order_mixin import OrderMixin
 
@@ -256,3 +257,33 @@ def test_cot_consumed_fields_are_actually_read_by_compute():
             f"_COT_CONSUMED_BY_COMPUTE claims {name} is read by compute, but "
             f"'params.{name}' does not appear in its source."
         )
+
+
+# ---------------------------------------------------------------------------
+# FFT : dB-reference-defaults Task 6 (spec §16) — db_reference /
+# db_reference_mode / catalog revision are display-only and must never leak
+# into _fft_compute_cache_params's OUTPUT, even when the upstream fft_params
+# dict (current_params()) carries them (it always does). This is a black-box
+# behavioral guard rather than the source-introspection _registered_keys
+# helper above: _fft_compute_cache_params reads its argument via the local
+# name ``fft_params`` (not ``params``/``p``), so the regex would silently
+# match nothing and the guard would be vacuously true either way.
+# ---------------------------------------------------------------------------
+
+def test_db_reference_mode_and_catalog_revision_stay_out_of_compute_cache_key():
+    fft_params = {
+        'window': 'hann', 'nfft': 4096, 'nfft_effective': 4096, 'fs': 1000.0,
+        'avg_mode': '单帧', 'avg_overlap': 50, 'weighting': 'A',
+        'db_reference': 5e-6, 'db_reference_mode': 'auto',
+        'db_reference_revision': 3, 'catalog_revision': 3,
+    }
+    out = FFTMixin._fft_compute_cache_params(fft_params)
+    leaked = {
+        'db_reference', 'db_reference_mode',
+        'db_reference_revision', 'catalog_revision',
+    } & out.keys()
+    assert not leaked, (
+        f"FFT compute cache-key params leaked display-only field(s) {sorted(leaked)} "
+        "— db_reference/db_reference_mode/catalog revision belong in the render "
+        "signature (_fft_render_signature), never the compute cache key."
+    )

@@ -2595,6 +2595,52 @@ def test_fft_render_honors_amplitude_axis_toggle(qtbot):
     assert 'dB' in amp_ylabel()
 
 
+def test_fft_single_signal_fallback_amp_label_uses_a_weighted_token(qtbot):
+    """``_do_fft_single`` (the legacy no-navigator-checked-sources fallback,
+    plan Task 11 Step 11.2 classification) must route its amp axis label
+    through :func:`db_reference.format_amplitude_label` like the per-source
+    overlay path (:meth:`MainWindow._fft_apply_amplitude_display`) — a bare
+    ``'Amplitude (dB)'`` hard-code loses the A-weighting disclosure required
+    by spec A9 ("dBA appears... Linear never says dBA") even on this
+    back-compat single-signal path.
+    """
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    fs = 1000.0
+    n = 4096
+    t = np.arange(n) / fs
+    sig = np.sin(2 * np.pi * 10 * t)
+    win._get_sig = lambda: (t, sig, fs)
+    win._check_uniform_or_prompt = lambda fd, mode: True
+    win.files = {}
+    win.inspector.fft_ctx.set_signal_candidates([("dummy", (None, "ch"))])
+    win.inspector.fft_ctx.spin_fs.setValue(fs)
+    win.inspector.fft_ctx.combo_avg_mode.setCurrentText('单帧')
+    win.inspector.fft_ctx.combo_amp_y.setCurrentText('dB')
+
+    canvas = win.canvas_fft
+
+    def amp_ylabel():
+        return canvas._plot_amp.getAxis('left').labelText
+
+    # None weighting: dB, never dBA.
+    win.inspector.fft_ctx.combo_weighting.setCurrentText('None')
+    win.do_fft()
+    assert canvas.has_result()
+    assert 'dB' in amp_ylabel()
+    assert 'dBA' not in amp_ylabel()
+
+    # A weighting: must surface the 'dBA' token, matching the checked-source
+    # overlay path's format_amplitude_label output (spec A9 stop-gate).
+    win.inspector.fft_ctx.combo_weighting.setCurrentText('A')
+    win.do_fft()
+    assert 'dBA' in amp_ylabel()
+
+
 def test_fft_render_honors_manual_xy_axis_ranges(qtbot):
     import pytest
     import numpy as np
@@ -4883,3 +4929,258 @@ def test_fft_time_no_standalone_amplitude_group(qtbot):
     qtbot.addWidget(ctx)
     titles = [g.title() for g in ctx.findChildren(QGroupBox)]
     assert "幅值" not in titles
+
+
+# ---- 2026-07-12 dB-reference-defaults Task 4: shared compound control ----
+#
+# Spec: docs/analyzer/specs/2026-07-12-db-reference-defaults-and-labeling-spec.md
+# §5.3, §10, §13 (S1/S2). Plan Step 4.1's literal 8 test names.
+
+def _analysis_context_classes():
+    from mf4_analyzer.ui.inspector_sections import (
+        FFTContextual,
+        FFTTimeContextual,
+        OrderContextual,
+    )
+
+    return (FFTContextual, FFTTimeContextual, OrderContextual)
+
+
+def test_all_analysis_contexts_use_shared_db_reference_compound_control(qtbot):
+    from mf4_analyzer.ui.widgets.db_reference import (
+        DbReferenceControl,
+        ScientificReferenceSpinBox,
+    )
+
+    for cls in _analysis_context_classes():
+        ctx = cls()
+        qtbot.addWidget(ctx)
+
+        assert isinstance(ctx.db_reference_control, DbReferenceControl), (
+            f"{cls.__name__}.db_reference_control is not a DbReferenceControl"
+        )
+        assert isinstance(ctx.spin_db_ref, ScientificReferenceSpinBox)
+        # Task 4 alias contract: ctx.spin_db_ref MUST be the compound's own
+        # editor, not a second stand-alone widget.
+        assert ctx.spin_db_ref is ctx.db_reference_control.editor
+
+        control = ctx.db_reference_control
+        assert control.objectName() == "dbReferenceControl"
+        assert control.editor.objectName() == "dbReferenceEditor"
+        assert control.manage_button.objectName() == "dbReferenceManageButton"
+        assert control.badge.objectName() == "dbReferenceModeBadge"
+        assert control.source_label.objectName() == "dbReferenceSourceLabel"
+
+
+def test_db_reference_compound_row_stays_below_weighting_and_within_320px(qtbot):
+    from mf4_analyzer.ui.inspector_sections._helpers import _SHORT_FIELD_MAX_WIDTH
+
+    # Every constructed ctx is kept alive (in ``_keep_alive``) for the whole
+    # test: qtbot.addWidget only stores a WEAKREF for end-of-test cleanup, so
+    # reassigning the loop-local ``ctx`` name would let Python GC the
+    # previous widget (and its PresetBar's per-button installEventFilter
+    # hover machinery) mid-test, racing in-flight Enter/Leave/Resize events
+    # against teardown and crashing the Qt event loop with an unrelated
+    # AttributeError on PresetBar._load_btns.
+    _keep_alive = []
+    for cls in _analysis_context_classes():
+        for pane_width in (288, 320):
+            ctx = cls()
+            _keep_alive.append(ctx)
+            qtbot.addWidget(ctx)
+            ctx.resize(pane_width, 900)
+            ctx.show()
+            qtbot.waitExposed(ctx)
+            qtbot.wait(20)
+
+            # Row order unchanged: dB 参考 immediately below 频率加权.
+            _assert_db_reference_below_weighting(ctx)
+
+            control = ctx.db_reference_control
+            assert control.maximumWidth() <= _SHORT_FIELD_MAX_WIDTH, (
+                f"{cls.__name__} db_reference_control maximumWidth="
+                f"{control.maximumWidth()}px at pane={pane_width}px "
+                "should stay within the A1 field cap (no Inspector widening)."
+            )
+            top_left = control.mapTo(ctx, control.rect().topLeft())
+            right_edge = top_left.x() + control.width()
+            assert right_edge <= pane_width, (
+                f"{cls.__name__} db_reference_control right edge "
+                f"{right_edge}px overflows the {pane_width}px pane"
+            )
+
+            control.refresh_geometry()
+            btn = control.manage_button
+            assert btn.width() == btn.height() > 0, (
+                f"{cls.__name__} manage button not square at pane={pane_width}px "
+                "(a wrap/overflow would starve it of its editor-matched height)."
+            )
+            assert control.rect().contains(control.badge.geometry()), (
+                f"{cls.__name__} badge clipped at pane={pane_width}px"
+            )
+            ctx.hide()
+
+
+def test_all_context_params_emit_mode_and_effective_value(qtbot):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+
+    for cls in _analysis_context_classes():
+        ctx = cls()
+        qtbot.addWidget(ctx)
+
+        for getter_name in ("get_params", "current_params"):
+            params = getattr(ctx, getter_name)()
+            assert params["db_reference_mode"] == "auto", (
+                f"{cls.__name__}.{getter_name}() default db_reference_mode"
+            )
+            assert params["db_reference"] == pytest.approx(1.0)
+
+        # A genuine user commit (Enter) flips Auto -> Manual; both accessors
+        # must reflect the new mode AND the committed value.
+        editor = ctx.db_reference_control.editor
+        editor.lineEdit().selectAll()
+        QTest.keyClicks(editor.lineEdit(), "2.5e-6")
+        QTest.keyClick(editor, Qt.Key_Return)
+
+        assert ctx.db_reference_control.mode() == "manual"
+        for getter_name in ("get_params", "current_params"):
+            params = getattr(ctx, getter_name)()
+            assert params["db_reference_mode"] == "manual", (
+                f"{cls.__name__}.{getter_name}() did not pick up the manual commit"
+            )
+            assert params["db_reference"] == pytest.approx(2.5e-6, rel=1e-6)
+
+
+def test_apply_params_missing_reference_keys_preserves_mode_value_and_weighting(qtbot):
+    for cls in _analysis_context_classes():
+        ctx = cls()
+        qtbot.addWidget(ctx)
+        ctx.db_reference_control.set_mode("manual")
+        ctx.spin_db_ref.setValue(3.3e-5)
+        ctx._apply_weighting_value("A")
+
+        before = ctx.get_params()
+        assert before["weighting"] == "A"
+        assert before["db_reference_mode"] == "manual"
+        assert before["db_reference"] == pytest.approx(3.3e-5)
+
+        # A partial dict that carries none of weighting/db_reference/
+        # db_reference_mode must leave all three untouched.
+        ctx.apply_params({})
+
+        after = ctx.get_params()
+        assert after["weighting"] == "A"
+        assert after["db_reference_mode"] == "manual"
+        assert after["db_reference"] == pytest.approx(3.3e-5)
+
+
+def test_partial_db_reference_value_does_not_force_mode(qtbot):
+    for cls in _analysis_context_classes():
+        ctx = cls()
+        qtbot.addWidget(ctx)
+        assert ctx.db_reference_control.mode() == "auto"
+
+        # db_reference alone (no mode key) sets ONLY the value (spec S1).
+        ctx.apply_params({"db_reference": 4.2e-7})
+        assert ctx.db_reference_control.mode() == "auto", (
+            f"{cls.__name__}.apply_params forced Manual off a bare db_reference key"
+        )
+        assert ctx.spin_db_ref.value() == pytest.approx(4.2e-7)
+
+        # db_reference_mode alone switches mode without touching the value.
+        ctx.apply_params({"db_reference_mode": "manual"})
+        assert ctx.db_reference_control.mode() == "manual"
+        assert ctx.spin_db_ref.value() == pytest.approx(4.2e-7)
+
+
+def test_new_preset_round_trip_preserves_mode_and_value(qtbot):
+    for cls in _analysis_context_classes():
+        ctx = cls()
+        qtbot.addWidget(ctx)
+        ctx.db_reference_control.set_mode("manual")
+        ctx.spin_db_ref.setValue(9.9e-8)
+
+        preset = ctx._collect_preset()
+        assert preset["db_reference_mode"] == "manual"
+        assert preset["db_reference"] == pytest.approx(9.9e-8)
+
+        # Perturb, then restore via the real preset-load path (PresetBar's
+        # own call shape: _apply_preset wraps _apply_preset_values).
+        ctx.db_reference_control.set_mode("auto")
+        ctx.spin_db_ref.setValue(1.0)
+
+        ctx._apply_preset(preset)
+
+        assert ctx.db_reference_control.mode() == "manual"
+        assert ctx.spin_db_ref.value() == pytest.approx(9.9e-8)
+
+
+def test_legacy_preset_value_without_mode_migrates_to_manual(qtbot):
+    for cls in _analysis_context_classes():
+        ctx = cls()
+        qtbot.addWidget(ctx)
+        ctx.db_reference_control.set_mode("auto")
+
+        legacy_preset = dict(ctx._collect_preset())
+        legacy_preset.pop("db_reference_mode", None)
+        legacy_preset["db_reference"] = 7.0
+
+        ctx._apply_preset(legacy_preset)
+
+        assert ctx.db_reference_control.mode() == "manual", (
+            f"{cls.__name__} legacy value-without-mode preset did not migrate "
+            "to Manual"
+        )
+        assert ctx.spin_db_ref.value() == pytest.approx(7.0)
+
+
+def test_legacy_preset_without_reference_leaves_current_state_unchanged(qtbot):
+    for cls in _analysis_context_classes():
+        ctx = cls()
+        qtbot.addWidget(ctx)
+        ctx.db_reference_control.set_mode("manual")
+        ctx.spin_db_ref.setValue(6.5e-6)
+
+        legacy_preset = dict(ctx._collect_preset())
+        legacy_preset.pop("db_reference_mode", None)
+        legacy_preset.pop("db_reference", None)
+
+        ctx._apply_preset(legacy_preset)
+
+        assert ctx.db_reference_control.mode() == "manual", (
+            f"{cls.__name__} preset missing db_reference entirely changed mode"
+        )
+        assert ctx.spin_db_ref.value() == pytest.approx(6.5e-6)
+
+
+# ----------------------------------------------------------------------
+# Task 8 Step 8.1 (6th literal test name): a preset predating BOTH the
+# weighting combo AND the dB-reference compound control (a truly ancient
+# preset, not just missing the new mode key) must leave both pieces of
+# LIVE state untouched -- neither guard should force the other to reset
+# just because it fired first (spec §13 S1/S2).
+# ----------------------------------------------------------------------
+def test_old_preset_missing_weighting_and_reference_keys_preserves_live_state(qtbot):
+    for cls in _analysis_context_classes():
+        ctx = cls()
+        qtbot.addWidget(ctx)
+        ctx._apply_weighting_value("A")
+        ctx.db_reference_control.set_mode("manual")
+        ctx.spin_db_ref.setValue(4.4e-6)
+
+        ancient_preset = dict(ctx._collect_preset())
+        ancient_preset.pop("weighting", None)
+        ancient_preset.pop("db_reference_mode", None)
+        ancient_preset.pop("db_reference", None)
+
+        ctx._apply_preset(ancient_preset)
+
+        params = ctx.get_params()
+        assert params["weighting"] == "A", (
+            f"{cls.__name__} preset missing 'weighting' reset it"
+        )
+        assert params["db_reference_mode"] == "manual", (
+            f"{cls.__name__} preset missing reference keys changed mode"
+        )
+        assert params["db_reference"] == pytest.approx(4.4e-6)

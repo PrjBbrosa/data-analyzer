@@ -19,6 +19,7 @@ import threading
 import numpy as np
 import pandas as pd
 
+from . import db_reference
 from .signal import resolve_nfft
 from .signal.fft import FFTAnalyzer
 
@@ -108,6 +109,11 @@ class BatchItemResult:
     data_path: str | None = None
     image_path: str | None = None
     message: str = ''
+    # dB-reference-defaults Task 9 (spec §15 C4): output metadata kept for
+    # tests -- never exported into the linear CSV/DataFrame columns.
+    colorbar_label: str | None = None
+    db_reference_value: float | None = None
+    db_reference_source: str | None = None
 
 
 @dataclass
@@ -168,10 +174,34 @@ def _default_loader(path):
 class BatchRunner:
     SUPPORTED_METHODS = {'time', 'fft', 'order_time', 'fft_time'}
 
-    def __init__(self, files, loader: Callable | None = None):
+    def __init__(self, files, loader: Callable | None = None, *,
+                 db_reference_catalog=None, prefer_channel_metadata=True):
         self.files = files
         self._loader = loader or _default_loader
         self._disk_cache: dict[str, object] = {}
+        # dB-reference-defaults Task 9 (spec §13 S4 / plan Step 9.2):
+        # ``db_reference_catalog`` is an immutable, DUCK-TYPED snapshot
+        # exposing ``system_catalog``/``user_catalog`` (see
+        # ``mf4_analyzer.ui.db_reference_settings.DbReferenceCatalogSnapshot``)
+        # -- this module never imports that (PyQt/QSettings-backed) type, it
+        # only reads plain attributes off whatever object the caller passes,
+        # so Batch/worker code stays free of any PyQt/QSettings import.
+        # ``None`` (every pre-Task-9 direct caller/test) resolves against the
+        # immutable factory catalog with no user overrides -- unchanged
+        # legacy behaviour. ``prefer_channel_metadata`` is a SEPARATE
+        # argument (not read off the snapshot) so a caller can pass the
+        # service's current preference explicitly alongside its catalog.
+        if db_reference_catalog is not None:
+            self._db_reference_system_catalog = tuple(
+                getattr(db_reference_catalog, 'system_catalog', ()) or ()
+            )
+            self._db_reference_user_catalog = tuple(
+                getattr(db_reference_catalog, 'user_catalog', ()) or ()
+            )
+        else:
+            self._db_reference_system_catalog = db_reference.FACTORY_CATALOG_V1
+            self._db_reference_user_catalog = ()
+        self._prefer_channel_metadata = bool(prefer_channel_metadata)
 
     def run(self, preset, output_dir,
             progress_callback: Callable[[int, int], None] | None = None,
@@ -490,6 +520,9 @@ class BatchRunner:
         if preset.outputs.export_data:
             # Build long-table dataframe only when the caller needs it (export_data=True).
             # Image-only export skips this allocation entirely (lesson 2026-04-26).
+            # Dataframe/CSV generation stays LINEAR regardless of the dB
+            # reference (spec §15 C4) -- it is built from ``preset.params``
+            # directly, never the resolved ``image_params`` below.
             if time_df is not None:
                 export_df = time_df
             elif fft_df is not None:
@@ -498,11 +531,41 @@ class BatchRunner:
                 export_df = spectro.to_long_dataframe()
             data_path = self._write_dataframe(
                 export_df, output_dir / f"{stem}.{preset.outputs.data_format}")
+
+        resolution = None
+        colorbar_label = None
         if preset.outputs.export_image:
+            # dB-reference-defaults Task 9 Step 9.3: migrate a legacy
+            # value-without-mode request to Manual, build this task's
+            # target-specific facts, and resolve Auto (or preserve Manual)
+            # against the injected catalog snapshot -- never the interactive
+            # UI's global control (this module has no such thing; each
+            # batch task is its own "source").
+            migrated_params = db_reference.migrate_legacy_reference_params(preset.params)
+            facts = self._channel_reference_facts(fd, signal_name)
+            resolution = db_reference.resolve_db_reference(
+                mode=migrated_params.get('db_reference_mode', 'auto'),
+                manual_value=migrated_params.get('db_reference'),
+                facts=facts,
+                user_catalog=self._db_reference_user_catalog,
+                system_catalog=self._db_reference_system_catalog,
+                prefer_channel_metadata=self._prefer_channel_metadata,
+            )
+            # Output-param copy for the image builder: same knobs the
+            # interactive canvas would use, but with the EFFECTIVE resolved
+            # reference substituted for whatever request value was present.
+            image_params = dict(migrated_params)
+            image_params['db_reference'] = resolution.value
+            image_params['db_reference_resolution'] = resolution
+            render_db, output_scale = self._batch_output_scale(method, image_params)
+            weighting = str(image_params.get('weighting', 'None'))
+            colorbar_label = db_reference.format_amplitude_label(
+                resolution, weighting=weighting, output_scale=output_scale,
+            )
             image_path = self._write_image(
                 image_payload,
                 output_dir / f"{stem}.png",
-                params=preset.params,
+                params=image_params,
             )
 
         return BatchItemResult(
@@ -513,6 +576,82 @@ class BatchRunner:
             status='done',
             data_path=str(data_path) if data_path else None,
             image_path=str(image_path) if image_path else None,
+            colorbar_label=colorbar_label,
+            db_reference_value=(resolution.value if resolution is not None else None),
+            db_reference_source=(resolution.source if resolution is not None else None),
+        )
+
+    @staticmethod
+    def _channel_reference_facts(fd, ch):
+        """Build a :class:`db_reference.ChannelReferenceFacts` for one batch
+        task's ``(FileData, signal_name)`` target (plan Task 9 Step 9.3),
+        reading ONLY ``FileData`` metadata -- never a sample array (mirrors
+        ``MainWindow._channel_reference_facts``; duplicated here rather than
+        imported because ``batch.py`` must never import ``mf4_analyzer.ui.*``).
+        """
+        if fd is None or ch is None:
+            return db_reference.ChannelReferenceFacts(quantity='', unit='')
+        ch_meta = (getattr(fd, 'channel_metadata', None) or {}).get(ch) or {}
+        unit = (
+            ch_meta.get('unit')
+            or (getattr(fd, 'channel_units', None) or {}).get(ch, '')
+            or ''
+        )
+        quantity = ch_meta.get('quantity') or ''
+        metadata_reference = ch_meta.get('db_reference')
+        is_audio_source_fn = getattr(fd, 'is_audio_source', None)
+        try:
+            is_audio = bool(is_audio_source_fn()) if callable(is_audio_source_fn) else False
+        except Exception:
+            is_audio = False
+        return db_reference.ChannelReferenceFacts(
+            quantity=str(quantity),
+            unit=str(unit),
+            metadata_reference=metadata_reference,
+            is_audio_source=is_audio,
+        )
+
+    @staticmethod
+    def _batch_output_scale(kind, params):
+        """Return ``(render_db, output_scale)`` -- the amp-mode resolution
+        shared by ``_run_one`` (records ``colorbar_label`` on
+        ``BatchItemResult``) and ``_build_export_scene`` (actually draws the
+        image), so the two can never drift on which scale a preset's
+        ``amplitude_mode``/``amp_y`` selects."""
+        default_amp_mode = 'amplitude_db' if kind == 'fft_time' else 'amplitude'
+        amp_mode = str(params.get('amplitude_mode', default_amp_mode)).lower()
+        amp_y = str(params.get('amp_y', '')).lower()
+        render_db = 'db' in amp_mode or amp_y == 'db'
+        return render_db, ('db' if render_db else 'linear')
+
+    @staticmethod
+    def _image_reference_resolution(params):
+        """The effective dB-reference resolution for a batch image render.
+
+        ``_run_one`` (Task 9 Step 9.3) always pre-attaches an already-
+        resolved ``db_reference_resolution`` -- built from the task's real
+        ``(FileData, signal_name)`` facts and the injected catalog snapshot
+        -- onto its OUTPUT param copy before calling ``_write_image``; this
+        just returns that unchanged. Direct calls to ``_build_export_scene``/
+        ``_write_image`` that bypass ``_run_one`` (existing unit tests call
+        these ``@staticmethod``s directly with a bare params dict, no file
+        context -- 2026-06-20 static-image-writer-test-api-wider-than-plan)
+        resolve against EMPTY facts and the immutable factory catalog
+        instead, through the exact same ``db_reference.resolve_db_reference``
+        priority chain, so both paths share ONE formatting/validation rule
+        and neither ever silently coerces an invalid reference via
+        ``max(ref, 1e-12)`` (spec §7 R3 / plan Task 9 Step 9.4)."""
+        existing = params.get('db_reference_resolution')
+        if isinstance(existing, db_reference.DbReferenceResolution):
+            return existing
+        migrated = db_reference.migrate_legacy_reference_params(params)
+        return db_reference.resolve_db_reference(
+            mode=migrated.get('db_reference_mode', 'auto'),
+            manual_value=migrated.get('db_reference'),
+            facts=db_reference.ChannelReferenceFacts(quantity='', unit=''),
+            user_catalog=(),
+            system_catalog=db_reference.FACTORY_CATALOG_V1,
+            prefer_channel_metadata=True,
         )
 
     @staticmethod
@@ -884,13 +1023,9 @@ class BatchRunner:
         z_auto = bool(params.get('z_auto', True))
         z_floor = float(params.get('z_floor', -80.0))
         z_ceiling = float(params.get('z_ceiling', 0.0))
-        default_amp_mode = 'amplitude_db' if kind == 'fft_time' else 'amplitude'
-        amp_mode = str(params.get('amplitude_mode', default_amp_mode)).lower()
-        amp_y = str(params.get('amp_y', '')).lower()
-        render_db = 'db' in amp_mode or amp_y == 'db'
-        db_reference = float(params.get('db_reference', 1.0) or 1.0)
-        if db_reference <= 0:
-            db_reference = 1.0
+        render_db, _output_scale = BatchRunner._batch_output_scale(kind, params)
+        weighting = str(params.get('weighting', 'None'))
+        reference_resolution = BatchRunner._image_reference_resolution(params)
 
         BatchRunner._ensure_qapp()
         import pyqtgraph as pg
@@ -940,10 +1075,12 @@ class BatchRunner:
             if render_db:
                 from .signal.spectrogram import SpectrogramAnalyzer as _SA
 
-                y = _SA.amplitude_to_db(y, reference=max(db_reference, 1e-12))
-                y_label = 'Amplitude (dB)'
+                y = _SA.amplitude_to_db(y, reference=reference_resolution.value)
+                y_label = db_reference.format_amplitude_label(
+                    reference_resolution, weighting=weighting, output_scale='db')
             else:
-                y_label = 'Amplitude'
+                y_label = db_reference.format_amplitude_label(
+                    reference_resolution, weighting=weighting, output_scale='linear')
             plot.plot(x, y, pen='w')
             plot.setLabel('bottom', 'Frequency (Hz)')
             plot.setLabel('left', y_label)
@@ -962,10 +1099,12 @@ class BatchRunner:
             # Display-only dB choice; exported data stays linear.
             from .signal.spectrogram import SpectrogramAnalyzer as _SA
 
-            matrix = _SA.amplitude_to_db(matrix, reference=max(db_reference, 1e-12))
-            cbar_label = 'Amplitude (dB)'
+            matrix = _SA.amplitude_to_db(matrix, reference=reference_resolution.value)
+            cbar_label = db_reference.format_amplitude_label(
+                reference_resolution, weighting=weighting, output_scale='db')
         else:
-            cbar_label = 'Amplitude'
+            cbar_label = db_reference.format_amplitude_label(
+                reference_resolution, weighting=weighting, output_scale='linear')
 
         display_levels = _finite_matrix_bounds(matrix)
         levels = None

@@ -599,7 +599,27 @@ class BatchSheet(QDialog):
         # Build runner. We pass the parent's loader contract (BatchRunner
         # default loader walks DataLoader.load_mf4) — main_window owns the
         # file map; here we only have the dict already supplied to __init__.
-        runner = BatchRunner(self._files)
+        #
+        # dB-reference-defaults Task 10 Part A: this Sheet's Run button is
+        # the ONLY live Batch Run path (``MainWindow.open_batch``'s own
+        # BatchRunner call is dead code -- ``dlg.exec_()`` never returns
+        # Accepted, see the mechanical-passthrough-entry-point-reachability
+        # lesson). Mirror the same snapshot pass-through Task 9 already
+        # wired there, following the existing
+        # ``_weighting_options_from_parent`` precedent: read the catalog
+        # store off ``self.parent()`` defensively (direct-construction
+        # tests pass ``parent=None``, and any parent lacking the attribute
+        # falls back to BatchRunner's no-kwargs factory-catalog default).
+        store = getattr(self.parent(), 'db_reference_store', None)
+        if store is not None:
+            snapshot = store.snapshot()
+            runner = BatchRunner(
+                self._files,
+                db_reference_catalog=snapshot,
+                prefer_channel_metadata=snapshot.prefer_channel_metadata,
+            )
+        else:
+            runner = BatchRunner(self._files)
         preset = self.get_preset()
         output_dir = self.output_dir()
 

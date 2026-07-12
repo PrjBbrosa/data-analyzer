@@ -704,30 +704,46 @@ class ProjectIOMixin:
         # Calling chart_stack.set_mode alone leaves the toolbar segment and
         # the inspector panel stuck on the previous mode (desync on reopen of
         # a project saved in FFT / Order / FFT-vs-Time).
+        #
+        # _opening_project stays True through _apply_active_view() below, not
+        # just this mode-set call: when the saved mode is 'time',
+        # _apply_active_view -> _plot_time_on_canvas synchronously calls
+        # _begin_compute_progress(process_events=True), whose
+        # QApplication.processEvents() can drain a still-pending post-load
+        # analysis auto-recompute (QTimer.singleShot(0, ...), queued above)
+        # BEFORE open_project() returns. That drained recompute's "capture
+        # current live selection" step (_capture_analysis_sources) must know
+        # a restore is still in progress so it does not mistake the shared
+        # Time/FFT navigator's state -- already overwritten by this same
+        # restore's own Time-view apply -- for fresh user intent. See
+        # docs/lessons-learned/signal-processing/2026-07-12-processevents-
+        # drains-queued-recompute-during-restore.md.
         self._opening_project = True
         try:
             self.toolbar._set_mode(doc.current_mode)
+
+            if missing:
+                QMessageBox.warning(
+                    self, "部分文件缺失",
+                    "以下文件找不到，已跳过：\n" + "\n".join(missing),
+                )
+
+            # The project's files/views are loaded by this point, so the
+            # document is "open" regardless of whether the final view render
+            # succeeds — record the path BEFORE the render guard so a render
+            # hiccup doesn't leave 保存项目 prompting Save-As for an
+            # already-open project.
+            self._project_path = path
+
+            try:
+                self._apply_active_view(self.view_manager.active)
+            except Exception:
+                self.statusBar.showMessage(
+                    f"已打开项目: {path.name}（渲染恢复失败）")
+                self.toast("恢复渲染失败，请手动点计算", "warning")
+                return
         finally:
             self._opening_project = False
-
-        if missing:
-            QMessageBox.warning(
-                self, "部分文件缺失",
-                "以下文件找不到，已跳过：\n" + "\n".join(missing),
-            )
-
-        # The project's files/views are loaded by this point, so the document
-        # is "open" regardless of whether the final view render succeeds —
-        # record the path BEFORE the render guard so a render hiccup doesn't
-        # leave 保存项目 prompting Save-As for an already-open project.
-        self._project_path = path
-
-        try:
-            self._apply_active_view(self.view_manager.active)
-        except Exception:
-            self.statusBar.showMessage(f"已打开项目: {path.name}（渲染恢复失败）")
-            self.toast("恢复渲染失败，请手动点计算", "warning")
-            return
 
         self.statusBar.showMessage(f"已打开项目: {path.name}")
 

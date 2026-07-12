@@ -6,6 +6,7 @@ import numpy as np
 
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
+from ... import db_reference
 from ...signal import FFTAnalyzer, resolve_nfft, energy_band_fmax
 from ...signal.spectrogram import SpectrogramAnalyzer
 from ..compute_feedback import ComputeOutcome
@@ -30,13 +31,21 @@ class FFTMixin:
 
         Delegates to ``SpectrogramAnalyzer.amplitude_to_db`` — the single
         authority for the ``20 * log10(max(amp, tiny) / ref)`` formula.
-        The caller guard ``max(reference, 1e-12)`` ensures the helper never
-        receives a non-positive reference even when the inspector supplies an
-        out-of-range value.  Display-only transform — ``amp_for_xlim`` (auto
-        x-limit) is computed from the linear amplitude before calling this.
+        Callers MUST pass an already-validated positive ``reference`` (spec
+        §7 R3 / plan Task 6 Step 6.4) — e.g. a
+        ``db_reference.DbReferenceResolution.value`` from
+        ``resolve_db_reference``, whose priority chain guarantees a finite
+        positive float at every branch (manual/metadata are gated by
+        ``validate_reference``; catalog/generic/fallback are fixed positive
+        constants). The old ``max(reference, 1e-12)`` denominator coercion
+        is gone — spec §7 R3 forbids silently substituting an invalid
+        reference; ``SpectrogramAnalyzer.amplitude_to_db`` itself raises on
+        a non-positive reference instead. Display-only transform —
+        ``amp_for_xlim`` (auto x-limit) is computed from the linear
+        amplitude before calling this; numerator (amp) zero-protection
+        stays inside that helper (``np.maximum(amp, tiny)``).
         """
-        ref = max(float(reference), 1e-12)
-        return SpectrogramAnalyzer.amplitude_to_db(amp, reference=ref)
+        return SpectrogramAnalyzer.amplitude_to_db(amp, reference=float(reference))
 
     @staticmethod
     def _resolve_fft_effective_params(fft_params, n_samples, fs):
@@ -349,12 +358,26 @@ class FFTMixin:
 
             # Wave 2 / SP2 / Task 2.3: per-subplot Linear/dB toggle.
             amp_y = fft_params.get('amp_y', 'Linear')
+            weighting = fft_params.get('weighting', 'None')
+            # dB-reference-defaults Task 11 (spec A9/A17 classification):
+            # resolve THIS source's own reference through the same pure
+            # resolver the checked-source overlay path uses
+            # (_fft_entry_from_cache / _resolve_db_reference_for_source),
+            # and format the axis label with the shared canonical formatter
+            # (db_reference.format_amplitude_label) instead of a bare
+            # 'Amplitude (dB)'/'Amplitude' hard-code -- otherwise this
+            # back-compat single-signal fallback silently drops the dBA
+            # disclosure an A-weighted render requires (spec stop-gate).
+            resolution = self._resolve_db_reference_for_source(
+                'fft', sig_data)
             if amp_y == 'dB':
-                amp_disp = self._amplitude_to_db(
-                    amp, fft_params.get('db_reference', 1.0)
-                )
+                amp_disp = self._amplitude_to_db(amp, resolution.value)
             else:
                 amp_disp = amp
+            amp_label = db_reference.format_amplitude_label(
+                resolution, weighting=weighting,
+                output_scale='db' if amp_y == 'dB' else 'linear',
+            )
 
             sig_label = self.inspector.fft_ctx.combo_sig.currentText()
             entry = {
@@ -369,7 +392,7 @@ class FFTMixin:
             self.canvas_fft.plot_spectra(
                 [entry],
                 xlim=xlim,
-                amp_label='Amplitude (dB)' if amp_y == 'dB' else 'Amplitude',
+                amp_label=amp_label,
                 title=f'FFT - {sig_label} (窗:{win}, NFFT:{nfft or "auto"})',
                 y_auto=y_auto, y_min=y_min, y_max=y_max,
             )

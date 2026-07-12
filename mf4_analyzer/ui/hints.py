@@ -3,6 +3,7 @@
 The chart bar consumes this module instead of parsing design docs or keeping
 free-floating hint strings in widget code.
 """
+import math
 import unicodedata
 from dataclasses import dataclass, field
 
@@ -108,6 +109,16 @@ class HintState:
     amp_disparate: bool = False  # one curve dwarfed by another (range ratio big)
     colorbar_dead: bool = False  # heatmap colour window collapsed to ~one colour
     clipped: bool = False        # a plotted signal looks saturated / clipped
+    # dB-reference-defaults migration nudge (spec 2026-07-12 S5): the section's
+    # CURRENT analysis View mode/value ("manual"/"auto" + the compound
+    # control's numeric value) plus whether the focused source's Auto
+    # resolution would actually differ from the legacy 1.0 default. All three
+    # are read off the live Inspector/resolver state at signal-feed time, not
+    # derived here -- this dataclass only carries the raw facts so the
+    # predicate stays a pure, testable function of them.
+    db_reference_mode: str = ""
+    db_reference_value: float = 1.0
+    db_reference_source_resolvable: bool = False
 
 
 NAV_SHORTCUTS = {
@@ -414,6 +425,20 @@ _HINTS = (
         modes=frozenset({"time"}),
         priority=40,
     ),
+    # dB-reference-defaults Task 10A (spec S5): every pre-existing View/preset/
+    # project migrates to a manual View pinned at the old 1.0 default (spec
+    # §13 S5 -- intentional, not a bug). Without this nudge those users would
+    # never discover the new Auto (随通道自动) mode. Self-clears the moment the
+    # user switches to Auto or edits the manual value away from 1.0 (no
+    # retire_when_discovered needed -- unlike coaxis/colorbar_dead, the
+    # underlying config fact itself flips, same as amp_disparate/clipped).
+    Hint(
+        id="nudge.db_ref_manual_default",
+        text="手动dB参考1.0，可切自动",
+        surface="nudge",
+        modes=frozenset({"fft", "fft_time", "order"}),
+        priority=50,
+    ),
 )
 
 
@@ -427,6 +452,11 @@ _NUDGE_PREDICATES = {
     "nudge.amp_disparate": lambda s: s.amp_disparate and not s.has_axis_group,
     "nudge.too_many": lambda s: s.channel_count >= 8,
     "nudge.clipped": lambda s: s.clipped,
+    "nudge.db_ref_manual_default": lambda s: (
+        s.db_reference_mode == "manual"
+        and math.isclose(s.db_reference_value, 1.0, rel_tol=1e-9, abs_tol=1e-9)
+        and s.db_reference_source_resolvable
+    ),
 }
 
 

@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>TraceLab dB Reference 默认值系统 · HTML Draft</title>
+  <style>
+    :root {
+      --porcelain: #f2f4f7;
+      --paper: #ffffff;
+      --ink: #17243a;
+      --muted: #65738a;
+      --line: #d7e0eb;
+      --line-strong: #b9c8da;
+      --navy: #13253d;
+      --blue: #2563eb;
+      --blue-2: #0e79c7;
+      --blue-soft: #eaf2ff;
+      --cyan: #087f96;
+      --cyan-soft: #e8f7fa;
+      --green: #087a55;
+      --green-soft: #eaf8f2;
+      --amber: #a55c08;
+      --amber-soft: #fff5e6;
+      --red: #b33b45;
+      --red-soft: #fff0f1;
+      --shadow: 0 18px 50px rgba(25, 48, 82, .09);
+      --display: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --body: "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: "SFMono-Regular", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(43, 76, 120, .045) 1px, transparent 1px) 0 0 / 42px 42px,
+        linear-gradient(rgba(43, 76, 120, .045) 1px, transparent 1px) 0 0 / 42px 42px,
+        var(--porcelain);
+      font: 14px/1.62 var(--body);
+    }
+
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    a { color: inherit; }
+    code {
+      padding: 2px 6px;
+      border: 1px solid #dce6f4;
+      border-radius: 5px;
+      color: #234b85;
+      background: #f4f8ff;
+      font-family: var(--mono);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .wrap { width: min(1240px, calc(100% - 36px)); margin: 0 auto; padding: 24px 0 72px; }
+    .topline {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 40px;
+      padding: 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      color: #50617a;
+      background: rgba(255, 255, 255, .82);
+      backdrop-filter: blur(12px);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .topline .draft {
+      padding: 3px 8px;
+      border-radius: 99px;
+      color: #875208;
+      background: var(--amber-soft);
+      border: 1px solid #efd09a;
+      letter-spacing: .06em;
+    }
+    .topline .right { margin-left: auto; color: #79879b; font-family: var(--mono); }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr);
+      gap: 18px;
+      margin-top: 16px;
+    }
+    .hero-main, .hero-rule {
+      min-height: 270px;
+      padding: 28px 30px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+    .hero-main { position: relative; overflow: hidden; }
+    .hero-main::after {
+      content: "re";
+      position: absolute;
+      right: -22px;
+      bottom: -70px;
+      color: rgba(37, 99, 235, .055);
+      font: 800 220px/.8 var(--display);
+      letter-spacing: -.12em;
+      pointer-events: none;
+    }
+    .eyebrow {
+      color: var(--blue);
+      font: 800 11px/1 var(--mono);
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 {
+      max-width: 760px;
+      margin-top: 16px;
+      font: 750 36px/1.16 var(--display);
+      letter-spacing: -.045em;
+    }
+    h2 { font: 720 21px/1.28 var(--display); letter-spacing: -.02em; }
+    h3 { font: 720 15px/1.35 var(--display); }
+    .lede { max-width: 770px; margin-top: 16px; color: #4c5e77; font-size: 15px; }
+    .hero-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 22px; }
+    .tag, .status-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 25px;
+      padding: 2px 9px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      color: #566880;
+      background: #fff;
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .tag.blue { color: #174fae; border-color: #c5d8fa; background: var(--blue-soft); }
+    .tag.green { color: var(--green); border-color: #bfe4d4; background: var(--green-soft); }
+    .tag.amber { color: var(--amber); border-color: #edd19f; background: var(--amber-soft); }
+    .hero-rule { display: flex; flex-direction: column; justify-content: space-between; background: var(--navy); color: #eef5ff; }
+    .hero-rule .rule-label { color: #89b5ef; font: 800 11px/1 var(--mono); letter-spacing: .11em; }
+    .hero-rule blockquote { margin: 18px 0; font: 650 22px/1.38 var(--display); letter-spacing: -.025em; }
+    .hero-rule p { color: #adc0d9; font-size: 13px; }
+    .hero-rule .formula {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding-top: 15px;
+      border-top: 1px solid rgba(190, 213, 240, .2);
+      color: #dbe8f8;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .toc {
+      display: flex;
+      gap: 6px;
+      margin: 16px 0;
+      padding: 7px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, .82);
+      scrollbar-width: thin;
+    }
+    .toc a { padding: 7px 10px; border-radius: 7px; color: #52657e; text-decoration: none; white-space: nowrap; font-size: 12px; font-weight: 750; }
+    .toc a:hover { color: #174fae; background: var(--blue-soft); }
+
+    .section {
+      margin-top: 16px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: var(--paper);
+      box-shadow: 0 5px 20px rgba(27, 52, 87, .045);
+    }
+    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+    .section-head p { max-width: 700px; color: var(--muted); font-size: 13px; }
+    .section-kicker { margin-bottom: 6px; color: var(--blue-2); font: 800 11px/1 var(--mono); letter-spacing: .09em; }
+
+    .prototype {
+      overflow: hidden;
+      border: 1px solid #bdcadb;
+      border-radius: 12px;
+      background: #e9eef4;
+      box-shadow: inset 0 1px #fff;
+    }
+    .appbar {
+      display: flex;
+      align-items: center;
+      min-height: 43px;
+      padding: 0 14px;
+      color: #dce9f8;
+      background: var(--navy);
+      font-size: 12px;
+    }
+    .appbar strong { color: #fff; }
+    .appbar .appbar-meta { margin-left: auto; color: #9fb7d2; font-family: var(--mono); }
+    .workspace { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 8px; min-height: 425px; padding: 8px; }
+    .inspector, .chart-card { border: 1px solid #d2dce8; border-radius: 8px; background: #fff; }
+    .inspector { padding: 18px; }
+    .inspector-title { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid #e8edf3; }
+    .inspector-title b { font-size: 14px; }
+    .inspector-title span { color: #708097; font-size: 11px; }
+    .form-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 15px; }
+    .form-row > label { color: #1d2a3c; font-size: 13px; }
+    .fake-select, .ref-input {
+      width: 100%;
+      height: 40px;
+      border: 1px solid #aebfd3;
+      border-radius: 7px;
+      color: #172033;
+      background: #fff;
+      box-shadow: inset 0 1px 1px rgba(24, 45, 73, .03);
+    }
+    .fake-select { padding: 0 12px; appearance: none; background-image: linear-gradient(45deg, transparent 50%, #6e7d91 50%), linear-gradient(135deg, #6e7d91 50%, transparent 50%); background-position: calc(100% - 16px) 17px, calc(100% - 11px) 17px; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
+    .compound { display: grid; grid-template-columns: minmax(0, 1fr) 42px; gap: 7px; }
+    .ref-input { padding: 0 13px; font: 650 14px/1 var(--mono); outline: none; }
+    .ref-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37, 99, 235, .13); }
+    .reference-button {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 40px;
+      padding: 0;
+      border: 1px solid #aebfd3;
+      border-radius: 7px;
+      color: #315c98;
+      background: #f8fbff;
+    }
+    .reference-button:hover { border-color: #7198ca; background: #edf5ff; }
+    .reference-button:focus-visible { outline: 3px solid rgba(37, 99, 235, .2); outline-offset: 2px; }
+    .reference-button svg { width: 19px; height: 19px; }
+    .mode-badge {
+      position: absolute;
+      right: -4px;
+      bottom: -5px;
+      display: grid;
+      place-items: center;
+      width: 17px;
+      height: 17px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--blue);
+      font: 800 9px/1 var(--mono);
+    }
+    .mode-badge.manual { background: #c27313; }
+    .field-note { grid-column: 2; display: flex; align-items: center; gap: 7px; margin-top: -7px; color: #687891; font-size: 11px; }
+    .source-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); }
+    .mini-summary { margin-top: 20px; padding: 12px; border: 1px solid #d9e6f6; border-radius: 7px; background: #f5f9ff; color: #52677f; font-size: 12px; }
+
+    .chart-card { position: relative; min-width: 0; padding: 16px 18px 20px 52px; overflow: hidden; }
+    .chart-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+    .chart-head b { font-size: 13px; }
+    .chart-head span { color: #6a7b90; font-family: var(--mono); font-size: 11px; }
+    .axis-label {
+      position: absolute;
+      left: 4px;
+      top: 54px;
+      bottom: 36px;
+      width: 40px;
+      display: grid;
+      place-items: center;
+      color: #3a4d67;
+      font: 650 11px/1.25 var(--body);
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      text-align: center;
+    }
+    .plot {
+      position: relative;
+      height: 280px;
+      margin-top: 12px;
+      border-left: 1px solid #9fb0c5;
+      border-bottom: 1px solid #9fb0c5;
+      background:
+        repeating-linear-gradient(to right, transparent 0, transparent 74px, #edf1f5 75px),
+        repeating-linear-gradient(to bottom, transparent 0, transparent 54px, #edf1f5 55px),
+        #fff;
+      overflow: hidden;
+    }
+    .plot svg { position: absolute; inset: 12px 7px 8px 8px; width: calc(100% - 15px); height: calc(100% - 20px); }
+    .plot .legend-box {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      padding: 7px 9px;
+      border: 1px solid #d4dfec;
+      border-radius: 6px;
+      color: #4d627c;
+      background: rgba(255,255,255,.9);
+      font-size: 10px;
+    }
+    .x-label { margin-top: 6px; color: #3a4d67; text-align: center; font-size: 11px; }
+
+    .lab-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 9px;
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px dashed #bfd0e3;
+      border-radius: 9px;
+      background: #f8fbff;
+    }
+    .lab-control label { display: block; margin-bottom: 5px; color: #5c6e85; font-size: 10px; font-weight: 750; }
+    .lab-control select { width: 100%; height: 34px; padding: 0 8px; border: 1px solid #c3d0df; border-radius: 6px; color: #253851; background: #fff; }
+    .switch-row { display: flex; align-items: center; gap: 8px; min-height: 34px; color: #334862; font-size: 12px; }
+    .switch-row input { accent-color: var(--blue); }
+
+    .resolver {
+      display: grid;
+      grid-template-columns: minmax(150px, 1fr) 26px minmax(160px, 1fr) 26px minmax(150px, 1fr) 26px minmax(220px, 1.25fr);
+      align-items: stretch;
+      margin-top: 14px;
+    }
+    .resolver-node { padding: 13px; border: 1px solid var(--line); background: #fff; }
+    .resolver-node:first-child { border-radius: 9px 0 0 9px; }
+    .resolver-node:last-child { border-radius: 0 9px 9px 0; }
+    .resolver-node b { display: block; margin-bottom: 4px; font-size: 12px; }
+    .resolver-node span { display: block; color: #687a91; font-family: var(--mono); font-size: 10px; overflow-wrap: anywhere; }
+    .resolver-node.active { border-color: #9dbcf0; background: var(--blue-soft); }
+    .resolver-arrow { display: grid; place-items: center; color: #91a5bd; font-size: 17px; }
+
+    .decision-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; }
+    .decision { padding: 15px; border: 1px solid var(--line); border-top: 4px solid #a9bdd5; border-radius: 8px; background: #fbfcfe; }
+    .decision:nth-child(1) { border-top-color: var(--blue); }
+    .decision:nth-child(2) { border-top-color: var(--cyan); }
+    .decision:nth-child(3) { border-top-color: #c27313; }
+    .decision p { margin-top: 7px; color: #5a6d85; font-size: 12px; }
+
+    .manager-preview { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 14px; }
+    .manager-side { padding: 17px; border: 1px solid var(--line); border-radius: 9px; background: #f8fafc; }
+    .manager-side p { margin-top: 7px; color: #66778c; font-size: 12px; }
+    .manager-side .call {
+      width: 100%;
+      margin-top: 16px;
+      padding: 10px 12px;
+      border: 1px solid #1e57bd;
+      border-radius: 7px;
+      color: #fff;
+      background: var(--blue);
+      font-weight: 750;
+    }
+    .manager-side .call:hover { background: #174fc5; }
+    .precedence-list { display: grid; gap: 7px; margin-top: 16px; }
+    .precedence-list div { display: flex; align-items: center; gap: 9px; padding: 8px; border: 1px solid #dfe6ef; border-radius: 6px; background: #fff; color: #53667e; font-size: 11px; }
+    .precedence-list b { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: #fff; background: var(--navy); font: 800 10px/1 var(--mono); }
+    .catalog { overflow-x: auto; border: 1px solid var(--line); border-radius: 9px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { padding: 9px 10px; color: #5a6c84; background: #f3f6fa; text-align: left; font-size: 10px; letter-spacing: .04em; }
+    td { padding: 10px; border-top: 1px solid #e7ecf2; vertical-align: top; font-size: 12px; }
+    td.mono { font-family: var(--mono); color: #294a77; }
+    tr:hover td { background: #fbfdff; }
+    .origin { display: inline-flex; padding: 2px 6px; border-radius: 99px; color: #315f9e; background: #eaf2ff; font-size: 10px; font-weight: 750; }
+    .origin.user { color: #7b520a; background: #fff2d9; }
+
+    .label-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .label-case { padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfe; }
+    .label-case .case-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .label-case small { color: #718198; }
+    .axis-token { margin-top: 12px; padding: 10px 12px; border-left: 4px solid var(--blue); color: #203c63; background: var(--blue-soft); font: 650 12px/1.4 var(--mono); }
+    .axis-token.a { border-left-color: var(--cyan); color: #116170; background: var(--cyan-soft); }
+    .axis-token.warn { border-left-color: #c27313; color: #795015; background: var(--amber-soft); }
+
+    .sync-table td:first-child { width: 145px; font-weight: 750; }
+    .sync-table td:nth-child(2) { width: 115px; }
+    .pill { display: inline-flex; padding: 2px 7px; border-radius: 99px; font-size: 10px; font-weight: 800; }
+    .pill.p0 { color: #9b2631; background: var(--red-soft); }
+    .pill.p1 { color: #81500d; background: var(--amber-soft); }
+    .pill.keep { color: #126444; background: var(--green-soft); }
+
+    .task-columns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .task-card { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+    .task-card header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: #f4f7fb; }
+    .task-card ul { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+    .task-card li { display: grid; grid-template-columns: 17px 1fr; gap: 8px; margin: 0; padding: 10px 13px; border-top: 1px solid #e7ecf2; color: #53657c; font-size: 12px; }
+    .box { width: 14px; height: 14px; margin-top: 2px; border: 1.5px solid #9eb0c6; border-radius: 3px; background: #fff; }
+
+    .acceptance { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+    .acceptance div { position: relative; padding: 12px 12px 12px 38px; border: 1px solid var(--line); border-radius: 7px; color: #4e627b; background: #fbfcfe; font-size: 12px; }
+    .acceptance div::before { content: "✓"; position: absolute; left: 12px; top: 11px; color: var(--green); font-weight: 900; }
+
+    .callout { margin-top: 14px; padding: 14px 16px; border: 1px solid #efd19d; border-left: 4px solid #c27313; border-radius: 7px; color: #674a20; background: var(--amber-soft); font-size: 12px; }
+    .callout strong { color: #70460c; }
+
+    footer { margin-top: 18px; padding: 14px 4px; color: #718096; font-size: 11px; }
+
+    dialog {
+      width: min(880px, calc(100% - 28px));
+      max-height: calc(100vh - 40px);
+      padding: 0;
+      border: 1px solid #b7c6d8;
+      border-radius: 12px;
+      color: var(--ink);
+      background: #fff;
+      box-shadow: 0 28px 90px rgba(13, 31, 57, .28);
+    }
+    dialog::backdrop { background: rgba(18, 34, 56, .42); backdrop-filter: blur(2px); }
+    .dialog-head { display: flex; align-items: start; gap: 16px; padding: 19px 20px; border-bottom: 1px solid var(--line); }
+    .dialog-head p { margin-top: 5px; color: #6a7b91; font-size: 12px; }
+    .dialog-head button { margin-left: auto; width: 30px; height: 30px; border: 0; border-radius: 6px; color: #61738b; background: #f1f4f8; }
+    .dialog-body { padding: 17px 20px; overflow: auto; }
+    .dialog-option { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 11px 12px; border: 1px solid #dbe4ef; border-radius: 7px; background: #f8fafc; }
+    .dialog-option b { display: block; font-size: 12px; }
+    .dialog-option span { color: #718198; font-size: 10px; }
+    .dialog-table { margin-top: 13px; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+    .dialog-table input { width: 100%; min-width: 92px; height: 32px; padding: 0 7px; border: 1px solid #c8d4e2; border-radius: 5px; font-family: var(--mono); }
+    .dialog-table .text-input { font-family: var(--body); }
+    .row-delete { border: 1px solid #e3b9bd; border-radius: 5px; color: #9b3540; background: #fff4f5; }
+    .dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--line); background: #f8fafc; }
+    .dialog-actions button { min-height: 34px; padding: 6px 11px; border: 1px solid #bdcad9; border-radius: 6px; color: #40536b; background: #fff; font-weight: 700; }
+    .dialog-actions .spacer { flex: 1; }
+    .dialog-actions .primary { color: #fff; border-color: var(--blue); background: var(--blue); }
+
+    @media (max-width: 900px) {
+      .wrap { width: min(100% - 20px, 720px); padding-top: 10px; }
+      .hero, .workspace, .manager-preview, .decision-grid, .task-columns { grid-template-columns: 1fr; }
+      .hero-main, .hero-rule, .section { padding: 20px; }
+      h1 { font-size: 29px; }
+      .workspace { min-height: 0; }
+      .chart-card { min-height: 360px; }
+      .lab-strip, .label-grid, .acceptance { grid-template-columns: 1fr 1fr; }
+      .resolver { grid-template-columns: 1fr; gap: 0; }
+      .resolver-node { border-radius: 7px !important; }
+      .resolver-arrow { min-height: 24px; transform: rotate(90deg); }
+    }
+    @media (max-width: 520px) {
+      .topline .right { display: none; }
+      .hero-main, .hero-rule, .section { padding: 17px; }
+      h1 { font-size: 26px; }
+      .section-head { align-items: start; flex-direction: column; }
+      .lab-strip, .label-grid, .acceptance { grid-template-columns: 1fr; }
+      .form-row { grid-template-columns: 78px minmax(0, 1fr); gap: 9px; }
+      .workspace { padding: 5px; }
+      .inspector { padding: 14px; }
+      .chart-card { padding-left: 42px; }
+      .axis-label { width: 32px; font-size: 10px; }
+    }
+    @media print {
+      body { background: #fff; }
+      .wrap { width: 100%; padding: 0; }
+      .toc, .manager-side .call { display: none; }
+      .hero-main, .hero-rule, .section { box-shadow: none; break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="topline">
+      <span class="draft">HTML DRAFT</span>
+      <span>TraceLab · dB reference default system</span>
+      <span class="right">2026-07-12 / design-only / no product source changed</span>
+    </div>
+
+    <section class="hero">
+      <article class="hero-main">
+        <p class="eyebrow">Reference resolver · design contract</p>
+        <h1>让每个 dB 数值都能回答：<br>“相对于什么？”</h1>
+        <p class="lede">在现有 dB reference 输入框右侧增加一个默认值管理按钮。用户可以维护单位映射、恢复系统默认；自动模式按通道元数据和单位解析 reference，手动模式保留当前输入。所有图轴、色标与批处理图片必须同时显示 reference，A 计权则明确显示为 <strong>dBA</strong>。</p>
+        <div class="hero-tags">
+          <span class="tag blue">右侧按钮 · A / M 状态</span>
+          <span class="tag green">单位自动匹配</span>
+          <span class="tag amber">可编辑 · 可新增 · 可恢复</span>
+        </div>
+      </article>
+      <aside class="hero-rule">
+        <div>
+          <p class="rule-label">ONE RULE</p>
+          <blockquote>reference 改变显示坐标，不改变 FFT、阶次或时频计算本身。</blockquote>
+          <p>reference 继续是 display-only；A 计权继续是 compute-relevant。两者必须在状态和缓存契约上保持分离。</p>
+        </div>
+        <div class="formula"><span>L = 20 log₁₀(A / A₀)</span><span>A₀ = active reference</span></div>
+      </aside>
+    </section>
+
+    <nav class="toc" aria-label="报告目录">
+      <a href="#effect">最终效果</a>
+      <a href="#manager">默认值管理</a>
+      <a href="#labels">标签规则</a>
+      <a href="#sync">同步更新面</a>
+      <a href="#tasks">实施待办</a>
+      <a href="#acceptance">验收标准</a>
+    </nav>
+
+    <section class="section" id="effect">
+      <div class="section-head">
+        <div>
+          <p class="section-kicker">TARGET UI</p>
+          <h2>最终效果：原输入框保留，右侧增加一个紧凑的 reference 管理按钮</h2>
+        </div>
+        <p>下面是可交互草图。切换通道单位、A 计权、自动/手动或 HDF 元数据，输入框、来源说明和纵坐标会同时更新。</p>
+      </div>
+
+      <div class="prototype">
+        <div class="appbar"><strong>TraceLab · FFT</strong><span class="appbar-meta" id="appbarMeta">MOTOR Y · m/s² · Auto</span></div>
+        <div class="workspace">
+          <aside class="inspector">
+            <div class="inspector-title"><b>谱参数</b><span>当前通道：<strong id="channelName">MOTOR Y</strong></span></div>
+            <div class="form-row">
+              <label for="mockWeighting">频率加权:</label>
+              <select id="mockWeighting" class="fake-select">
+                <option value="None">None</option>
+                <option value="A">A</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="refInput">dB 参考:</label>
+              <div class="compound">
+                <input id="refInput" class="ref-input" value="1e-6" inputmode="decimal" aria-describedby="refSource">
+                <button id="openManager" class="reference-button" type="button" title="管理 dB reference 默认值" aria-label="管理 dB reference 默认值">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9M10 4v6M8 14v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="15" cy="7" r="2" fill="#fff" stroke="currentColor" stroke-width="1.7"/><circle cx="9" cy="17" r="2" fill="#fff" stroke="currentColor" stroke-width="1.7"/></svg>
+                  <span id="modeBadge" class="mode-badge">A</span>
+                </button>
+              </div>
+              <div class="field-note" id="refSource"><i class="source-dot"></i><span>自动 · 用户默认 · acceleration / m/s²</span></div>
+            </div>
+            <div class="form-row">
+              <label>幅值轴:</label>
+              <select class="fake-select" aria-label="幅值轴"><option>dB</option><option>Linear</option></select>
+            </div>
+            <div class="mini-summary" id="summaryText">0 dB = 1×10⁻⁶ m/s² · reference 仅平移 dB 坐标，不触发重新计算。</div>
+          </aside>
+
+          <section class="chart-card" aria-label="结果纵坐标标识示意">
+            <div class="chart-head"><b>FFT · MOTOR Y</b><span id="chartState">Hanning · 4096 · None</span></div>
+            <div class="axis-label" id="axisLabel">Amplitude (dB re 1×10⁻⁶ m/s²)</div>
+            <div class="plot">
+              <svg viewBox="0 0 760 250" preserveAspectRatio="none" aria-hidden="true">
+                <path d="M0 224 C40 219,63 215,94 207 S142 201,171 188 S219 192,246 169 S286 148,314 177 S363 187,389 144 S432 23,464 151 S519 177,548 130 S588 86,616 150 S670 185,700 133 S735 110,760 151" fill="none" stroke="#2563eb" stroke-width="2.2"/>
+                <path d="M0 234 C70 225,118 231,177 216 S277 221,332 204 S430 211,484 196 S576 205,630 190 S708 199,760 180" fill="none" stroke="#63a5eb" stroke-width="1.2" opacity=".75"/>
+              </svg>
+              <div class="legend-box"><b id="legendLabel">MOTOR Y</b><br><span id="legendRef">dB re 1×10⁻⁶ m/s²</span></div>
+            </div>
+            <div class="x-label">Frequency (Hz)</div>
+          </section>
+        </div>
+      </div>
+
+      <div class="lab-strip" aria-label="交互草图控制">
+        <div class="lab-control"><label for="unitSelect">模拟通道单位</label><select id="unitSelect"></select></div>
+        <div class="lab-control"><label for="demoWeighting">模拟计权</label><select id="demoWeighting"><option value="None">None</option><option value="A">A</option></select></div>
+        <div class="lab-control"><label>reference 模式</label><div class="switch-row"><input id="autoMode" type="checkbox" checked><label for="autoMode">随通道自动选择</label></div></div>
+        <div class="lab-control"><label>文件通道元数据</label><div class="switch-row"><input id="hdfMeta" type="checkbox"><label for="hdfMeta">模拟 HDF 显式 reference</label></div></div>
+      </div>
+
+      <div class="resolver" aria-label="reference 解析链">
+        <div class="resolver-node"><b>通道事实</b><span id="resolverChannel">acceleration · m/s²</span></div>
+        <div class="resolver-arrow">→</div>
+        <div class="resolver-node"><b>优先级</b><span>manual &gt; metadata &gt; user &gt; system</span></div>
+        <div class="resolver-arrow">→</div>
+        <div class="resolver-node active"><b>解析结果</b><span id="resolverValue">1e-3 · HDF metadata</span></div>
+        <div class="resolver-arrow">→</div>
+        <div class="resolver-node"><b>显示标签</b><span id="resolverLabel">dB re 1×10⁻³ m/s²</span></div>
+      </div>
+
+      <div class="decision-grid" style="margin-top:14px">
+        <article class="decision"><h3>自动模式 A</h3><p>切换通道时重新解析。按钮右下角显示蓝色 <code>A</code>；输入框可编辑，但一旦手输即进入手动模式。</p></article>
+        <article class="decision"><h3>手动模式 M</h3><p>手动值属于当前分析 View，不被通道切换或全局默认修改覆盖。按钮显示琥珀色 <code>M</code>，菜单中可“重新跟随默认”。</p></article>
+        <article class="decision"><h3>混合单位</h3><p>FFT 多曲线解析出不同 reference 时不得静默用第一条；轴显示“per-curve reference”，每条曲线在图例/提示中标出自己的值。</p></article>
+      </div>
+    </section>
+
+    <section class="section" id="manager">
+      <div class="section-head">
+        <div><p class="section-kicker">DEFAULT MANAGER</p><h2>默认值管理：可改、可新增、可恢复，但来源始终可追溯</h2></div>
+        <p>默认表保存在用户设置中；项目只保存当前 View 的自动/手动模式与手动覆盖值。点击按钮打开完整交互草图。</p>
+      </div>
+      <div class="manager-preview">
+        <aside class="manager-side">
+          <h3>解析优先级</h3>
+          <p>自动模式下，通道自己的合法 metadata 最可信；没有 metadata 才进入用户默认和系统默认。</p>
+          <div class="precedence-list">
+            <div><b>1</b><span>当前 View 的手动覆盖</span></div>
+            <div><b>2</b><span>通道 metadata（可关闭优先）</span></div>
+            <div><b>3</b><span>用户修改/新增的单位默认</span></div>
+            <div><b>4</b><span>内置 ISO/HEAD 兼容默认</span></div>
+            <div><b>5</b><span>未识别单位回退 1.0 + 警告</span></div>
+          </div>
+          <button class="call" id="openManager2" type="button">打开默认值管理草图</button>
+        </aside>
+        <div class="catalog">
+          <table aria-label="内置 reference 目录">
+            <thead><tr><th>物理量</th><th>单位</th><th>0 dB reference</th><th>来源</th></tr></thead>
+            <tbody id="catalogPreview"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="callout"><strong>科学计数法是 P0。</strong>现有六位小数输入只能可靠表达到 <code>1e-6</code>；<code>1e-9</code> 和 <code>1e-12</code> 会变成零。最终输入必须接受并显示 <code>1e-12</code>、<code>5e-8</code> 等有效正数。</div>
+    </section>
+
+    <section class="section" id="labels">
+      <div class="section-head">
+        <div><p class="section-kicker">LABEL CONTRACT</p><h2>结果标识：dB / dBA、reference 和单位必须出现在同一个标签里</h2></div>
+        <p>同一格式化 helper 同时服务 FFT 纵轴、FFT-vs-Time/Order 色标与切片轴、批处理图片，避免每条路径各写一套字符串。</p>
+      </div>
+      <div class="label-grid">
+        <article class="label-case"><div class="case-head"><h3>加速度 · 无计权</h3><small>m/s² · 1e-6</small></div><div class="axis-token">Amplitude (dB re 1×10⁻⁶ m/s²)</div></article>
+        <article class="label-case"><div class="case-head"><h3>加速度 · A 计权</h3><small>m/s² · 1e-6</small></div><div class="axis-token a">Amplitude (dBA re 1×10⁻⁶ m/s²)</div></article>
+        <article class="label-case"><div class="case-head"><h3>空气声压 · A 计权</h3><small>Pa · 20 µPa</small></div><div class="axis-token a">Sound pressure (dBA re 20 µPa)</div></article>
+        <article class="label-case"><div class="case-head"><h3>FFT 混合 reference</h3><small>多曲线</small></div><div class="axis-token warn">Amplitude (dB · per-curve reference)</div></article>
+        <article class="label-case"><div class="case-head"><h3>线性幅值 · A 计权</h3><small>不是 dBA</small></div><div class="axis-token">A-weighted amplitude (m/s²)</div></article>
+        <article class="label-case"><div class="case-head"><h3>未知单位回退</h3><small>fallback 1.0</small></div><div class="axis-token warn">Amplitude (dB re 1 unit) ⚠</div></article>
+      </div>
+      <div class="callout"><strong>语义边界：</strong><code>dBA</code> 只在“幅值轴为 dB 且 weighting=A”时出现。线性幅值仍应说明 A-weighted，但不能写成 dBA；声功率/声强等 <code>10·log10</code> 量不纳入本轮幅值 reference 系统。</div>
+    </section>
+
+    <section class="section" id="sync">
+      <div class="section-head">
+        <div><p class="section-kicker">SYNC SURFACES</p><h2>还有哪些必须同步更新？</h2></div>
+        <p>答案是“有，而且不止坐标轴”。下表区分必须同时落地的 P0、兼容与验证工作。</p>
+      </div>
+      <div class="catalog sync-table">
+        <table>
+          <thead><tr><th>同步面</th><th>级别</th><th>最终契约</th><th>当前差距</th></tr></thead>
+          <tbody>
+            <tr><td>三个 Inspector</td><td><span class="pill p0">P0 UI</span></td><td>FFT、FFT-vs-Time、Order 共用 compound reference 控件与管理按钮。</td><td>当前只有数值框，统一初始值 1.0。</td></tr>
+            <tr><td>通道解析</td><td><span class="pill p0">P0 LOGIC</span></td><td>读取 quantity、unit 和 HEAD HDF channel metadata；精确单位别名匹配。</td><td>目前换通道只拿 unit 做预设推荐，未应用 HDF reference。</td></tr>
+            <tr><td>FFT 纵轴</td><td><span class="pill p0">P0 LABEL</span></td><td>直接计算、缓存恢复、多曲线和分屏使用同一 dB/dBA/re 标签。</td><td>当前全部只写 Amplitude (dB)。</td></tr>
+            <tr><td>时频 / 阶次</td><td><span class="pill p0">P0 LABEL</span></td><td>色标和下方切片轴完全一致，均显示 reference 与 dBA。</td><td>色标已有 dB re；切片轴仍只有 Amplitude (dB)。</td></tr>
+            <tr><td>混合单位 / 分屏</td><td><span class="pill p0">P0 SAFETY</span></td><td>每个 pane/source 独立解析；混合 reference 显式提示，不取第一条冒充全局值。</td><td>params 当前是 View 级，需明确自动解析与手动覆盖边界。</td></tr>
+            <tr><td>预设 / View / 项目</td><td><span class="pill p1">P1 STATE</span></td><td>保存 auto/manual + 手动值；旧预设缺键时保留当前状态。</td><td>db_reference 已往返，但没有 mode；旧键保护规则必须保留。</td></tr>
+            <tr><td>用户默认目录</td><td><span class="pill p0">P0 SETTINGS</span></td><td>QSettings 版本化 JSON；支持编辑、新增、删除用户项和恢复系统默认。</td><td>当前没有 reference catalog。</td></tr>
+            <tr><td>批处理 / 图片</td><td><span class="pill p1">P1 OUTPUT</span></td><td>继承 preset reference；Y 轴/色标显示 dB re 或 dBA re。</td><td>计算尊重 reference，但标签仍是通用 Amplitude (dB)。</td></tr>
+            <tr><td>复制 / 导出</td><td><span class="pill p1">P1 OUTPUT</span></td><td>复制图片自然带可见标签；线性 CSV 不因显示 reference 被改写。</td><td>需验证所有导出走同一 label formatter。</td></tr>
+            <tr><td>缓存</td><td><span class="pill keep">保持边界</span></td><td>db_reference 只进 render signature；weighting 继续进 compute key。</td><td>现有方向正确，新增 mode/catalog 不得污染 compute key。</td></tr>
+            <tr><td>帮助与提示</td><td><span class="pill p1">P1 DOC</span></td><td>解释 dB re、dBA、Auto/Manual、metadata 优先和恢复默认。</td><td>当前 tooltip 只说明“平移 dB 刻度”。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="tasks">
+      <div class="section-head">
+        <div><p class="section-kicker">IMPLEMENTATION BACKLOG</p><h2>待办项：按依赖顺序拆成三批</h2></div>
+        <p>这是 draft 待办，不表示已经实现。正式执行前可再转成 SPEC + PLAN，并为每项补精确测试名和文件锚点。</p>
+      </div>
+      <div class="task-columns">
+        <article class="task-card">
+          <header><h3>Batch A · 基础契约</h3><span class="pill p0">P0</span></header>
+          <ul>
+            <li><i class="box"></i><span>建立 built-in reference catalog、单位归一化与 resolver。</span></li>
+            <li><i class="box"></i><span>定义 metadata / user / system / fallback 优先级和非法值处理。</span></li>
+            <li><i class="box"></i><span>实现科学计数法输入，强制有限且 &gt; 0。</span></li>
+            <li><i class="box"></i><span>设计 QSettings v1 schema、迁移与恢复默认。</span></li>
+            <li><i class="box"></i><span>集中实现 dB/dBA/reference/unit label formatter。</span></li>
+          </ul>
+        </article>
+        <article class="task-card">
+          <header><h3>Batch B · UI 与状态</h3><span class="pill p0">P0/P1</span></header>
+          <ul>
+            <li><i class="box"></i><span>复用 compound field 到三个 Inspector。</span></li>
+            <li><i class="box"></i><span>实现默认值管理弹窗：编辑、新增、删除、恢复。</span></li>
+            <li><i class="box"></i><span>接入通道 metadata 与单位变更，手输切换 Manual。</span></li>
+            <li><i class="box"></i><span>扩展 get/apply params、AnalysisViewState、项目与预设。</span></li>
+            <li><i class="box"></i><span>定义 split pane 和 mixed FFT overlay 的展示状态。</span></li>
+          </ul>
+        </article>
+        <article class="task-card">
+          <header><h3>Batch C · 消费端与证明</h3><span class="pill p1">P1</span></header>
+          <ul>
+            <li><i class="box"></i><span>更新 FFT 直接/缓存/多曲线路径标签。</span></li>
+            <li><i class="box"></i><span>更新时频与阶次色标、切片轴和 readout。</span></li>
+            <li><i class="box"></i><span>更新 batch 图片标签；确认 CSV 保持线性。</span></li>
+            <li><i class="box"></i><span>补单元、状态、legacy preset、cache 与 batch 测试。</span></li>
+            <li><i class="box"></i><span>真机截图核对三个面板、弹窗、窄宽和 dBA 标签。</span></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="acceptance">
+      <div class="section-head">
+        <div><p class="section-kicker">DONE MEANS</p><h2>验收标准：不是“按钮出现了”，而是 reference 从输入到输出闭环</h2></div>
+        <p>以下条件全部满足，才能把功能标为完成。</p>
+      </div>
+      <div class="acceptance">
+        <div>三类分析的 dB reference 行右侧都有同尺寸按钮，窄 Inspector 不换行、不挤压输入值。</div>
+        <div><code>1e-12</code>、<code>1e-9</code>、<code>1e-6</code> 均可输入、保存、恢复和重新显示，不被舍入为零。</div>
+        <div>自动模式切换 Pa / m/s² / m/s / m / N 时，reference、来源说明和结果标签同步变化。</div>
+        <div>合法 HDF metadata 默认优先；关闭“优先通道元数据”后改走用户/系统目录。</div>
+        <div>用户编辑默认值后，Auto View 重新渲染；Manual View 完全不变且不触发重新计算。</div>
+        <div>A 计权 + dB 在 FFT、色标、切片轴、批处理图片中全部显示 dBA；线性模式不冒充 dBA。</div>
+        <div>旧 preset/project 缺少新 mode 字段时不把 weighting 或 reference 重置成硬编码值。</div>
+        <div>不同 reference 的 FFT overlay 明确显示 per-curve reference，不产生看似同量纲的假比较。</div>
+        <div>db_reference/catalog 修改不改变 compute cache key；weighting 修改仍会得到新的计算缓存。</div>
+        <div>目标测试、项目往返、batch 图片、离屏几何检查与 macOS 实屏截图均通过。</div>
+      </div>
+      <div class="callout"><strong>建议的正式落地顺序：</strong>先把这份 draft 评审定稿，再写 SPEC + PLAN；实现时按 Batch A → B → C，避免 UI 先落地而标签、持久化或 batch 仍使用旧语义。</div>
+    </section>
+
+    <footer>本文件是设计评审草图，不代表产品已实现。解析/匹配行为以 spec R1–R3 为准（本草图的 unit-only 兜底匹配比 spec 宽松，仅为演示）。报告路径：docs/analyzer/reviews/reports/2026-07-12-db-reference-defaults-draft.html</footer>
+  </main>
+
+  <dialog id="managerDialog" aria-labelledby="dialogTitle">
+    <div class="dialog-head">
+      <div><h2 id="dialogTitle">dB reference 默认值</h2><p>自动模式按精确单位别名匹配。此 HTML 草图中的修改只影响当前页面，刷新后重置。</p></div>
+      <button id="closeDialogX" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="dialog-body">
+      <div class="dialog-option">
+        <div><b>优先使用通道 metadata</b><span>HEAD HDF 等文件显式携带合法 dB reference 时，优先于单位默认。</span></div>
+        <label class="switch-row"><input id="preferMetadata" type="checkbox" checked> 开启</label>
+      </div>
+      <div class="dialog-table">
+        <table>
+          <thead><tr><th>物理量</th><th>单位 / 别名</th><th>0 dB reference</th><th>来源</th><th></th></tr></thead>
+          <tbody id="editableCatalog"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="dialog-actions">
+      <button id="addCatalogRow" type="button">＋ 添加默认值</button>
+      <button id="restoreCatalog" type="button">恢复系统默认</button>
+      <span class="spacer"></span>
+      <button id="cancelDialog" type="button">取消</button>
+      <button id="saveCatalog" class="primary" type="button">保存草图设定</button>
+    </div>
+  </dialog>
+
+  <script>
+    const SYSTEM_CATALOG = [
+      { quantity: 'sound pressure', label: '空气声压', unit: 'Pa', aliases: 'Pa', reference: 2e-5, source: 'system' },
+      { quantity: 'acceleration', label: '振动加速度', unit: 'm/s²', aliases: 'm/s² · m/s^2 · m/s2', reference: 1e-6, source: 'system' },
+      { quantity: 'velocity', label: '振动速度', unit: 'm/s', aliases: 'm/s', reference: 1e-9, source: 'system' },
+      { quantity: 'displacement', label: '振动位移', unit: 'm', aliases: 'm', reference: 1e-12, source: 'system' },
+      { quantity: 'force', label: '振动力', unit: 'N', aliases: 'N', reference: 1e-6, source: 'system' },
+      { quantity: 'acceleration', label: '振动加速度', unit: 'g', aliases: 'g', reference: 1e-6 / 9.80665, source: 'system' }
+    ];
+
+    const CHANNELS = [
+      { id: 'acc', name: 'MOTOR Y', quantity: 'acceleration', unit: 'm/s²', hdf: 1e-3 },
+      { id: 'pressure', name: 'Left Mic', quantity: 'sound pressure', unit: 'Pa', hdf: 2e-5 },
+      { id: 'velocity', name: 'Bearing velocity', quantity: 'velocity', unit: 'm/s', hdf: null },
+      { id: 'disp', name: 'Shaft displacement', quantity: 'displacement', unit: 'm', hdf: null },
+      { id: 'force', name: 'Mount force', quantity: 'force', unit: 'N', hdf: null },
+      { id: 'g', name: 'Seat rail accel', quantity: 'acceleration', unit: 'g', hdf: null },
+      { id: 'unknown', name: 'Custom signal', quantity: 'custom', unit: 'unit', hdf: null }
+    ];
+
+    let catalog = SYSTEM_CATALOG.map(item => ({ ...item }));
+    let manualValue = 1;
+    let preferMetadata = true;
+
+    const unitSelect = document.getElementById('unitSelect');
+    CHANNELS.forEach(ch => {
+      const option = document.createElement('option');
+      option.value = ch.id;
+      option.textContent = `${ch.name} · ${ch.unit}`;
+      unitSelect.appendChild(option);
+    });
+
+    function normalizeUnit(value) {
+      return String(value || '').trim().toLowerCase().replaceAll('²', '2').replaceAll('³', '3').replaceAll('^', '').replaceAll(' ', '');
+    }
+
+    function scientific(value) {
+      if (!Number.isFinite(value)) return '—';
+      if (value === 0) return '0';
+      const abs = Math.abs(value);
+      if (abs >= 0.001 && abs < 1000) return Number(value.toPrecision(7)).toString();
+      return value.toExponential(5).replace(/\.0+(?=e)/, '').replace(/(\.\d*?)0+(?=e)/, '$1').replace('e+', 'e');
+    }
+
+    const superDigits = { '-': '⁻', '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' };
+    function prettyRef(value) {
+      if (!Number.isFinite(value) || value <= 0) return 'invalid';
+      if (Math.abs(value - 2e-5) < 1e-15) return '20 µPa';
+      const exponent = Math.floor(Math.log10(value));
+      const coefficient = value / Math.pow(10, exponent);
+      if (Math.abs(exponent) <= 2) return Number(value.toPrecision(6)).toString();
+      const coeff = Math.abs(coefficient - 1) < 1e-10 ? '1' : Number(coefficient.toPrecision(5)).toString();
+      return `${coeff}×10${String(exponent).split('').map(ch => superDigits[ch] || ch).join('')}`;
+    }
+
+    function findCatalog(channel) {
+      const unit = normalizeUnit(channel.unit);
+      return catalog.find(item => item.quantity === channel.quantity && String(item.aliases).split('·').some(alias => normalizeUnit(alias) === unit))
+        || catalog.find(item => normalizeUnit(item.unit) === unit);
+    }
+
+    function resolveReference() {
+      const channel = CHANNELS.find(item => item.id === unitSelect.value) || CHANNELS[0];
+      const auto = document.getElementById('autoMode').checked;
+      const metadataEnabled = document.getElementById('hdfMeta').checked && preferMetadata;
+      if (!auto) return { channel, value: manualValue, source: '手动覆盖', key: 'manual' };
+      if (metadataEnabled && channel.hdf && channel.hdf > 0) return { channel, value: channel.hdf, source: '通道 metadata', key: 'metadata' };
+      const matched = findCatalog(channel);
+      if (matched) return { channel, value: Number(matched.reference), source: matched.source === 'system' ? '系统默认' : '用户默认', key: matched.source };
+      return { channel, value: 1, source: '未知单位回退', key: 'fallback' };
+    }
+
+    function formatAxis(result, weighting) {
+      const token = weighting === 'A' ? 'dBA' : 'dB';
+      const quantity = result.channel.quantity === 'sound pressure' ? 'Sound pressure' : 'Amplitude';
+      const ref = result.channel.quantity === 'sound pressure' && Math.abs(result.value - 2e-5) < 1e-15
+        ? '20 µPa'
+        : `${prettyRef(result.value)} ${result.channel.unit}`;
+      return `${quantity} (${token} re ${ref})`;
+    }
+
+    function updateDemo() {
+      const result = resolveReference();
+      const weighting = document.getElementById('demoWeighting').value;
+      const auto = document.getElementById('autoMode').checked;
+      const input = document.getElementById('refInput');
+      if (auto) input.value = scientific(result.value);
+      document.getElementById('mockWeighting').value = weighting;
+      document.getElementById('modeBadge').textContent = auto ? 'A' : 'M';
+      document.getElementById('modeBadge').classList.toggle('manual', !auto);
+      document.getElementById('channelName').textContent = result.channel.name;
+      document.getElementById('appbarMeta').textContent = `${result.channel.name} · ${result.channel.unit} · ${auto ? 'Auto' : 'Manual'}`;
+      document.getElementById('chartState').textContent = `Hanning · 4096 · ${weighting}`;
+      const axis = formatAxis(result, weighting);
+      document.getElementById('axisLabel').textContent = axis;
+      document.getElementById('legendLabel').textContent = result.channel.name;
+      document.getElementById('legendRef').textContent = axis.replace(/^.*\(/, '').replace(/\)$/, '');
+      document.getElementById('refSource').innerHTML = `<i class="source-dot"></i><span>${auto ? '自动' : '手动'} · ${result.source} · ${result.channel.quantity} / ${result.channel.unit}</span>`;
+      document.getElementById('summaryText').textContent = `0 dB = ${prettyRef(result.value)} ${result.channel.unit} · reference 仅平移 dB 坐标，不触发重新计算。`;
+      document.getElementById('resolverChannel').textContent = `${result.channel.quantity} · ${result.channel.unit}`;
+      document.getElementById('resolverValue').textContent = `${scientific(result.value)} · ${result.source}`;
+      document.getElementById('resolverLabel').textContent = axis.replace(/^.*\(/, '').replace(/\)$/, '');
+    }
+
+    function renderPreviewCatalog() {
+      document.getElementById('catalogPreview').innerHTML = catalog.map(item => `
+        <tr><td>${item.label || item.quantity}</td><td class="mono">${item.unit}</td><td class="mono">${scientific(Number(item.reference))}</td><td><span class="origin ${item.source === 'system' ? '' : 'user'}">${item.source === 'system' ? '系统' : '用户'}</span></td></tr>
+      `).join('');
+    }
+
+    function renderEditableCatalog() {
+      document.getElementById('editableCatalog').innerHTML = catalog.map((item, index) => `
+        <tr data-index="${index}">
+          <td><input class="text-input catalog-label" value="${item.label || item.quantity}" aria-label="物理量"></td>
+          <td><input class="text-input catalog-aliases" value="${item.aliases}" aria-label="单位或别名"></td>
+          <td><input class="catalog-reference" value="${scientific(Number(item.reference))}" aria-label="reference"></td>
+          <td><span class="origin ${item.source === 'system' ? '' : 'user'}">${item.source === 'system' ? '系统，可修改' : '用户'}</span></td>
+          <td><button class="row-delete" type="button" data-delete="${index}" aria-label="删除该项">删除</button></td>
+        </tr>
+      `).join('');
+      document.querySelectorAll('[data-delete]').forEach(button => button.addEventListener('click', () => {
+        catalog.splice(Number(button.dataset.delete), 1);
+        renderEditableCatalog();
+      }));
+    }
+
+    function openDialog() {
+      renderEditableCatalog();
+      document.getElementById('preferMetadata').checked = preferMetadata;
+      document.getElementById('managerDialog').showModal();
+    }
+
+    function closeDialog() { document.getElementById('managerDialog').close(); }
+
+    function collectDialogCatalog() {
+      const rows = [...document.querySelectorAll('#editableCatalog tr')];
+      const next = [];
+      rows.forEach((row, index) => {
+        const label = row.querySelector('.catalog-label').value.trim() || '自定义';
+        const aliases = row.querySelector('.catalog-aliases').value.trim();
+        const value = Number(row.querySelector('.catalog-reference').value);
+        if (!aliases || !Number.isFinite(value) || value <= 0) return;
+        const previous = catalog[index] || {};
+        const unit = aliases.split('·')[0].trim();
+        const systemItem = SYSTEM_CATALOG.find(item => item.quantity === previous.quantity && normalizeUnit(item.unit) === normalizeUnit(unit));
+        const stillSystem = systemItem
+          && systemItem.label === label
+          && systemItem.aliases === aliases
+          && Math.abs(Number(systemItem.reference) - value) <= Math.max(Number(systemItem.reference), value) * 1e-12;
+        next.push({ quantity: previous.quantity || label, label, unit, aliases, reference: value, source: stillSystem ? 'system' : 'user' });
+      });
+      catalog = next;
+    }
+
+    document.getElementById('refInput').addEventListener('change', event => {
+      const value = Number(event.target.value);
+      if (!Number.isFinite(value) || value <= 0) {
+        event.target.value = scientific(resolveReference().value);
+        return;
+      }
+      manualValue = value;
+      document.getElementById('autoMode').checked = false;
+      updateDemo();
+    });
+    document.getElementById('mockWeighting').addEventListener('change', event => { document.getElementById('demoWeighting').value = event.target.value; updateDemo(); });
+    document.getElementById('demoWeighting').addEventListener('change', updateDemo);
+    document.getElementById('unitSelect').addEventListener('change', updateDemo);
+    document.getElementById('autoMode').addEventListener('change', updateDemo);
+    document.getElementById('hdfMeta').addEventListener('change', updateDemo);
+    document.getElementById('openManager').addEventListener('click', openDialog);
+    document.getElementById('openManager2').addEventListener('click', openDialog);
+    document.getElementById('closeDialogX').addEventListener('click', closeDialog);
+    document.getElementById('cancelDialog').addEventListener('click', closeDialog);
+    document.getElementById('addCatalogRow').addEventListener('click', () => {
+      catalog.push({ quantity: 'custom', label: '自定义量', unit: 'unit', aliases: 'unit', reference: 1, source: 'user' });
+      renderEditableCatalog();
+    });
+    document.getElementById('restoreCatalog').addEventListener('click', () => {
+      catalog = SYSTEM_CATALOG.map(item => ({ ...item }));
+      renderEditableCatalog();
+    });
+    document.getElementById('saveCatalog').addEventListener('click', () => {
+      collectDialogCatalog();
+      preferMetadata = document.getElementById('preferMetadata').checked;
+      renderPreviewCatalog();
+      updateDemo();
+      closeDialog();
+    });
+
+    unitSelect.value = 'acc';
+    renderPreviewCatalog();
+    updateDemo();
+  </script>
+</body>
+</html>
