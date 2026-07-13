@@ -72,8 +72,8 @@ class FFTTimeContextual(QWidget):
       ``spin_y_max``. ``spin_freq_max == 0.0`` still means "use Nyquist".
     - ``btn_compute`` — primary action; disabled iff no candidate.
 
-    ``get_params()`` returns a dict whose keys match exactly what
-    ``MainWindow._fft_time_cache_key`` expects: ``signal``, ``fs``,
+    ``get_params()`` returns a dict whose compute fields match
+    ``MainWindow._fft_time_analysis_cache_key``: ``signal``, ``fs``,
     ``nfft``, ``window``, ``overlap``, ``remove_mean``, ``amplitude_mode``,
     ``db_reference``, ``freq_auto``, ``freq_min``, ``freq_max``,
     ``dynamic``, ``cmap``. Wave 4 also adds the explicit axis keys
@@ -81,7 +81,7 @@ class FFTTimeContextual(QWidget):
     ``z_auto``/``z_floor``/``z_ceiling`` alongside the legacy keys.
     2026-07-12 dB-reference-defaults Task 4 adds ``db_reference_mode``
     (``'auto'``/``'manual'``) alongside ``db_reference`` — both are
-    display-only (spec §5.3) and stay OUT of ``_fft_time_cache_key``.
+    display-only (spec §5.3) and stay OUT of the primary analysis-cache key.
 
     Built-in presets: ``torque``, ``vibration``, ``transient``. Legacy keys
     (``diagnostic``, ``amplitude_accuracy``, ``high_frequency``) remain aliases

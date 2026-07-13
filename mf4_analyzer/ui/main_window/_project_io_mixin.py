@@ -791,8 +791,6 @@ class ProjectIOMixin:
         # Cache invalidation site 2 (close-all variant): wipe everything.
         self.canvas_time.invalidate_envelope_cache("all files closed")
         self.canvas_time.invalidate_monotonicity_cache()
-        # FFT vs Time cache: every entry is keyed against a now-dead fid.
-        self._fft_time_cache.clear()
         # Per-section analysis caches: every entry is now stale (close-all
         # variant of the per-fid invalidate in ``_close``).
         for cache in self.analysis_caches.values():

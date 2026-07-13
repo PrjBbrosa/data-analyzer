@@ -203,7 +203,9 @@ def test_full_flow_accept_dispatches_one_worker_and_caches(qtbot, monkeypatch):
 
     # First click -> worker dispatch -> finished -> cache put.
     win.do_fft_time(force=False)
-    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=10000)
+    qtbot.waitUntil(
+        lambda: not win._analysis_jobs.is_running('fft_time'), timeout=10000
+    )
 
     # No error toast (warnings about 重建时间轴 are expected from the
     # pre-flight; errors are not).
@@ -211,7 +213,7 @@ def test_full_flow_accept_dispatches_one_worker_and_caches(qtbot, monkeypatch):
     assert not error_toasts, f'unexpected error toasts: {error_toasts}'
 
     # Cache populated: exactly one entry under the user's fid.
-    cache_keys = list(win._fft_time_cache.keys())
+    cache_keys = list(win.analysis_caches['fft_time']._store)
     assert len(cache_keys) == 1, (
         f'expected exactly one cache entry after Accept; got {cache_keys}'
     )
@@ -226,9 +228,9 @@ def test_full_flow_accept_dispatches_one_worker_and_caches(qtbot, monkeypatch):
     # pre-flight passes without re-prompting.
     assert fake_fd.is_time_axis_uniform() is True
     win.do_fft_time(force=False)
-    # Cache hit: no new thread, no new cache entry.
-    assert win._fft_time_thread is None
-    assert len(win._fft_time_cache) == 1
+    # Cache hit: no new service job, no new cache entry.
+    assert not win._analysis_jobs.is_running('fft_time')
+    assert len(win.analysis_caches['fft_time']._store) == 1
     assert '使用缓存结果' in win.statusBar.currentMessage()
 
 
@@ -260,10 +262,12 @@ def test_full_flow_auto_rebuild_does_not_open_popover(qtbot, monkeypatch):
     )
 
     win.do_fft_time(force=False)
-    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=10000)
+    qtbot.waitUntil(
+        lambda: not win._analysis_jobs.is_running('fft_time'), timeout=10000
+    )
 
     assert fake_fd.is_time_axis_uniform() is True
-    assert len(win._fft_time_cache) == 1
+    assert len(win.analysis_caches['fft_time']._store) == 1
     # No error toast (the pre-flight emitted a warning, not an error).
     assert not any(level == 'error' for _msg, level in toasts)
 
@@ -312,14 +316,16 @@ def test_full_flow_no_dispatch_when_signal_already_uniform(qtbot, monkeypatch):
     monkeypatch.setattr(win, 'toast', lambda *a, **kw: None)
 
     win.do_fft_time(force=True)
-    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=10000)
+    qtbot.waitUntil(
+        lambda: not win._analysis_jobs.is_running('fft_time'), timeout=10000
+    )
 
     # Popover never built.
     assert constructed == [], (
         f'popover constructed for an already-uniform axis: {constructed}'
     )
     # And the worker actually ran (cache populated).
-    assert len(win._fft_time_cache) == 1
+    assert len(win.analysis_caches['fft_time']._store) == 1
 
 
 # --- T3 regression: real popover geometry under realistic anchor ----
@@ -474,7 +480,9 @@ def test_auto_rebuild_uses_suggested_fs(qtbot, monkeypatch):
     monkeypatch.setattr(win, 'toast', lambda *a, **kw: None)
 
     win.do_fft_time(force=True)
-    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=10000)
+    qtbot.waitUntil(
+        lambda: not win._analysis_jobs.is_running('fft_time'), timeout=10000
+    )
 
     assert fake_fd.fs == 250.0
     assert seen['fs'] == 250.0

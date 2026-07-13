@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QStatusBar,
 )
-from PyQt5.QtCore import QTimer, QThread, Qt
+from PyQt5.QtCore import QTimer, Qt
 
 from ...io import DataLoader, FileData, HAS_ASAMMDF
 from ...signal import (
@@ -79,45 +79,12 @@ class MainWindow(
             self._blf_dbc_history = self._load_recent_blf_dbc_history()
         except Exception:
             self._blf_dbc_history = []
-        # FFT vs Time LRU cache (Plan Task 6). Keys are produced by
-        # ``_fft_time_cache_key`` from compute-relevant fields ONLY —
-        # display options (amplitude_mode, cmap, dynamic, freq_*) do
-        # not participate, so toggling them re-renders without
-        # recomputing. Capacity 12 = enough to hold a typical
-        # diagnostic / amplitude / high-frequency preset sweep.
-        # Invalidation lives in T7 (file-load / close / channel-edit /
-        # custom-x / rebuild paths); no clear() calls in this task.
-        self._fft_time_cache = OrderedDict()
-        self._fft_time_cache_capacity = 12
-        # FFT vs Time worker thread (Plan Task 7). Both refs are set
-        # in ``do_fft_time`` when a compute is enqueued and cleared in
-        # ``_on_fft_time_thread_done`` when the QThread reports
-        # ``finished``. Re-entry guard in ``do_fft_time`` consults
-        # ``_fft_time_thread.isRunning()``.
-        self._fft_time_thread = None
-        self._fft_time_worker = None
-        # V7b: split-heatmap sequential compute queue. ``do_fft_time``
-        # builds a list of cache-miss ``(pane_idx, fid, ch)`` jobs (focused
-        # pane first); each job runs on the SAME single worker/thread above,
-        # one at a time, so a 2-pane compare computes both panes without
-        # spawning concurrent threads. ``_fft_time_pending`` carries the
-        # current job's render target; the queue drives the next dispatch
-        # from ``_on_fft_time_thread_done``.
-        self._fft_time_queue = []
-        self._fft_time_progress_token = None
-        self._fft_time_progress_total_jobs = 0
-        self._fft_time_progress_completed_jobs = 0
-        # Order (COT) worker thread (M5). Same QObject + QThread pattern
-        # as the FFT-vs-Time pair above; refs set in ``do_order_time``,
-        # cleared in ``_on_order_thread_done``.
-        self._order_thread = None
-        self._order_worker = None
-        # V7b: Order split-heatmap sequential compute queue (mirrors the
-        # FFT-vs-Time queue above). Jobs are ``(pane_idx, fid, ch, rpm_source)``.
-        self._order_queue = []
-        self._order_progress_token = None
-        self._order_progress_total_jobs = 0
-        self._order_progress_completed_jobs = 0
+        from ..analysis_jobs import AnalysisJobService
+        self._analysis_jobs = AnalysisJobService(self)
+        # UI-only tokens remain owned by the window. Queueing, worker lifetime,
+        # total/completed accounting, and cancellation all belong to the shared
+        # service.
+        self._analysis_progress_tokens = {}
         self._last_batch_preset = None
         self._acquisition_cockpit_window = None
         # dB-reference-defaults Task 5: MainWindow owns the ONE shared
@@ -128,6 +95,17 @@ class MainWindow(
             self._db_reference_settings()
         )
         self._init_ui()
+        from functools import partial
+        from .fft_time_coordinator import (
+            FftTimeCoordinator,
+            make_fft_time_analysis_key,
+        )
+        fft_time_cache = self.analysis_caches['fft_time']
+        self._fft_time_coordinator = FftTimeCoordinator(
+            fft_time_cache,
+            self._analysis_jobs,
+            partial(make_fft_time_analysis_key, fft_time_cache.make_key),
+        )
         self._init_drop_import()
         self._connect()
 
@@ -550,8 +528,32 @@ class MainWindow(
             self._panel_ctrl_left.reposition()
             self._panel_ctrl_right.reposition()
 
+    def _on_analysis_job_finished(self, section, ctx, result):
+        if section == 'order':
+            self._on_order_job_finished(ctx, result)
+
+    def _on_analysis_job_failed(self, section, ctx, error):
+        if section == 'order':
+            self._on_order_job_failed(ctx, error)
+
+    def _on_analysis_job_progress(self, section, done, total):
+        if section == 'fft_time':
+            self._on_fft_time_job_progress(done, total)
+        elif section == 'order':
+            self._on_order_job_progress(done, total)
+
     def _connect(self):
         # --- New-module wiring ---
+        self._analysis_jobs.finished.connect(self._on_analysis_job_finished)
+        self._analysis_jobs.failed.connect(self._on_analysis_job_failed)
+        self._analysis_jobs.progress.connect(self._on_analysis_job_progress)
+        self._fft_time_coordinator.render_requested.connect(
+            self._on_fft_time_render_requested
+        )
+        self._fft_time_coordinator.failed.connect(self._on_fft_time_failed)
+        self._fft_time_coordinator.batch_started.connect(
+            self._on_fft_time_batch_started
+        )
         self.toolbar.open_requested.connect(self.open_files_or_project)
         self.toolbar.save_project_requested.connect(self.save_project_via_dialog)
         self.toolbar.save_project_as_requested.connect(self.save_project_as_via_dialog)
@@ -1768,11 +1770,6 @@ class MainWindow(
 
     def _on_close_all_requested(self):
         # Navigator already confirmed; skip the second confirm here.
-        # FFT vs Time cache wipe is also performed inside ``close_all``;
-        # mirroring it here keeps the invariant local to the dispatcher
-        # so future refactors that bypass ``close_all`` (e.g. a partial
-        # close-all flow) still tear the cache down.
-        self._fft_time_cache.clear()
         self.close_all()
 
     def _on_xaxis_mode_changed(self, mode):
@@ -1861,10 +1858,11 @@ class MainWindow(
         invalidate_mono = getattr(canvas, 'invalidate_monotonicity_cache', None)
         if callable(invalidate_mono):
             invalidate_mono()
-        # FFT vs Time cache: keep the existing conservative invalidation
-        # when the shared top controls change plot semantics. Time range
-        # itself remains tied to FileData.time_array.
-        self._fft_time_cache.clear()
+        # Custom X can affect every plotted file, so keep this as a whole
+        # FFT-vs-Time-section invalidation rather than a per-fid eviction.
+        # FFT and Order do not consume this display control, so their caches
+        # remain valid and must not be needlessly evicted.
+        self.analysis_caches['fft_time'].clear()
         if idx is not None and 0 <= idx < len(self.view_manager.views):
             self._view_bridge.capture_controls_into(
                 self.view_manager.get(idx), self, canvas
@@ -2879,80 +2877,15 @@ class MainWindow(
     # FFT compute methods (do_fft, _do_fft_single, _fft_compute_arrays, etc.)
     # live in _fft_mixin.FFTMixin — composed into MainWindow via its base list.
 
-    # Order analysis methods (do_order_time, _dispatch_order_job, _on_order_*, etc.)
+    # Order analysis methods (compute, service submission, callbacks, render, etc.)
     # live in _order_mixin.OrderMixin — composed into MainWindow via its base list.
 
     def closeEvent(self, event):
-        """Stop the FFT-vs-Time worker before the window is destroyed.
-
-        ``_fft_time_thread + _fft_time_worker`` is a ``QObject + QThread``
-        pair (an :class:`AnalysisComputeWorker` running the spectrogram
-        job; see :meth:`do_fft_time`). The worker has ``cancel()`` (flips
-        the flag its ``cancelled()`` token returns, which the analyzer
-        polls per frame); the thread is what owns ``isRunning()``. The
-        wired ``thread.finished -> deleteLater`` chain handles cleanup —
-        we just need to give it time to run via ``quit() + wait()``.
-        """
-        # V7b: drop any pending split-queue jobs FIRST so the cooperative
-        # ``quit()+wait()`` drain below — which fires ``_on_*_thread_done``
-        # via the wired ``thread.finished`` — does not pump a NEW worker job
-        # onto a window that is being destroyed.
-        self._fft_time_queue = []
-        self._order_queue = []
-        fft_thread = getattr(self, '_fft_time_thread', None)
-        fft_worker = getattr(self, '_fft_time_worker', None)
-        if fft_thread is not None and fft_thread.isRunning():
-            if fft_worker is not None and hasattr(fft_worker, 'cancel'):
-                fft_worker.cancel()
-            # cancel is cooperative; the analyzer returns at the next
-            # poll, then the wired ``finished/failed -> thread.quit``
-            # connection drains the worker thread's event loop. We
-            # quit() defensively in case the worker is between polls.
-            fft_thread.quit()
-            if not fft_thread.wait(2000):
-                fft_thread.terminate()
-                fft_thread.wait(500)
-
-        # Order (COT) worker: same drain. The COT job now polls
-        # ``cancelled()`` per frame (``do_order_time`` passes
-        # ``cancel_token=worker.cancelled`` into ``COTOrderAnalyzer.compute``),
-        # so cancel() takes effect within a frame and the cooperative
-        # ``quit() + wait(2000)`` is the normal exit path. The terminate()
-        # fallback is only a GIL-thread / Windows backstop: on macOS
-        # ``terminate()`` never lands on a GIL-held numpy worker (see
-        # pyqt-ui/2026-06-11-qthread-terminate-noop-on-gil-bound-macos),
-        # but it still guards a Qt5 qFatal crash if a non-cooperative
-        # compute ever outlives wait(2000) at destruction.
-        order_thread = getattr(self, '_order_thread', None)
-        order_worker = getattr(self, '_order_worker', None)
-        if order_thread is not None and order_thread.isRunning():
-            if order_worker is not None:
-                order_worker.cancel()
-            order_thread.quit()
-            if not order_thread.wait(2000):
-                order_thread.terminate()
-                order_thread.wait(500)
-
+        """Drain all analysis jobs before the window is destroyed."""
+        self._analysis_jobs.shutdown()
         super().closeEvent(event)
 
-    # ------------------------------------------------------------------
-    # FFT vs Time (synchronous compute path, Plan Task 6)
-    # ------------------------------------------------------------------
-    # The cache lives on this MainWindow instance (per session).
-    # Invalidation hooks belong to T7 (file load/close/edit + custom-x +
-    # rebuild); this task adds get/put helpers and the consumer side.
-    # Per ``signal-processing/2026-04-25-cache-consumer-must-be-grepped-not-just-surface``
-    # the cache is read on the per-button-click hot path inside
-    # ``do_fft_time`` — that is the SOLE consumer; no other code path
-    # bypasses ``_fft_time_cache_get``.
-    # Per ``pyqt-ui/2026-04-25-cache-invalidation-event-conditional`` we
-    # do NOT need a last-state diff at the entry of ``do_fft_time`` —
-    # this method is button-triggered (Inspector emits
-    # ``fft_time_requested``), not handler-replayed via
-    # ``QTimer.singleShot`` re-entry.
-
-    # FFT-vs-Time methods (do_fft_time, _dispatch_fft_time_job,
-    # _fft_time_cache_*, _on_fft_time_*, _render_fft_time*, etc.) live in
+    # FFT-vs-Time methods (compute, dispatch, callbacks, render) live in
     # _fft_time_mixin.FFTTimeMixin — composed into MainWindow via its base list.
 
     # ---- FFT vs Time export (Plan Task 9) ----

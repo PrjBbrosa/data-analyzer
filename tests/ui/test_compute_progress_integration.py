@@ -364,7 +364,7 @@ def test_fft_multi_source_progress_wraps_cache_misses_only(
     assert token_by_label == []
 
 
-def test_fft_time_progress_maps_half_single_job_to_half_total(
+def test_fft_time_service_progress_maps_half_single_job_to_half_total(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
@@ -372,9 +372,10 @@ def test_fft_time_progress_maps_half_single_job_to_half_total(
     qapp.processEvents()
     token = object()
     calls = []
-    win._fft_time_progress_token = token
-    win._fft_time_progress_total_jobs = 1
-    win._fft_time_progress_completed_jobs = 0
+    win._analysis_progress_tokens["fft_time"] = token
+    monkeypatch.setattr(
+        win._analysis_jobs, "progress_counts", lambda _section: (0, 1)
+    )
 
     monkeypatch.setattr(
         win,
@@ -384,12 +385,12 @@ def test_fft_time_progress_maps_half_single_job_to_half_total(
         ),
     )
 
-    win._on_fft_time_progress(50, 100)
+    win._on_fft_time_job_progress(500, 1000)
 
     assert calls == [(500, 1000, "FFT-时间 1/1", token)]
 
 
-def test_fft_time_progress_aggregates_second_job_halfway(
+def test_fft_time_service_progress_uses_second_job_batch_counts(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
@@ -397,9 +398,10 @@ def test_fft_time_progress_aggregates_second_job_halfway(
     qapp.processEvents()
     token = object()
     calls = []
-    win._fft_time_progress_token = token
-    win._fft_time_progress_total_jobs = 2
-    win._fft_time_progress_completed_jobs = 1
+    win._analysis_progress_tokens["fft_time"] = token
+    monkeypatch.setattr(
+        win._analysis_jobs, "progress_counts", lambda _section: (1, 2)
+    )
 
     monkeypatch.setattr(
         win,
@@ -409,23 +411,21 @@ def test_fft_time_progress_aggregates_second_job_halfway(
         ),
     )
 
-    win._on_fft_time_progress(50, 100)
+    win._on_fft_time_job_progress(750, 1000)
 
     assert calls == [(750, 1000, "FFT-时间 2/2", token)]
 
 
-def test_fft_time_progress_ignores_stale_worker_token(
+def test_fft_time_service_progress_noops_without_ui_token(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
     qtbot.addWidget(win)
     qapp.processEvents()
-    active_token = object()
-    stale_token = object()
     calls = []
-    win._fft_time_progress_token = active_token
-    win._fft_time_progress_total_jobs = 1
-    win._fft_time_progress_completed_jobs = 0
+    monkeypatch.setattr(
+        win._analysis_jobs, "progress_counts", lambda _section: (0, 1)
+    )
 
     monkeypatch.setattr(
         win,
@@ -435,79 +435,62 @@ def test_fft_time_progress_ignores_stale_worker_token(
         ),
     )
 
-    win._on_fft_time_progress(50, 100, token=stale_token)
-    win._on_fft_time_progress(50, 100, token=active_token)
+    win._on_fft_time_job_progress(500, 1000)
 
-    assert calls == [(500, 1000, "FFT-时间 1/1", active_token)]
+    assert calls == []
 
 
-def test_fft_time_thread_done_keeps_progress_for_remaining_job(
+def test_fft_time_service_progress_keeps_ui_active_before_final_job(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
     qtbot.addWidget(win)
     qapp.processEvents()
     token = object()
-    started = []
     finished = []
-    win._fft_time_queue = [("pane1", "f2", "speed")]
-    win._fft_time_progress_token = token
-    win._fft_time_progress_total_jobs = 2
-    win._fft_time_progress_completed_jobs = 0
-
+    win._analysis_progress_tokens["fft_time"] = token
     monkeypatch.setattr(
-        win,
-        "_start_next_fft_time_job",
-        lambda: started.append("next"),
+        win._analysis_jobs, "progress_counts", lambda _section: (1, 2)
     )
+    monkeypatch.setattr(win._analysis_jobs, "is_running", lambda _section: True)
     monkeypatch.setattr(
         win,
         "_finish_compute_progress",
         lambda *args, **kwargs: finished.append((args, kwargs)),
     )
 
-    win._on_fft_time_thread_done()
+    win._on_fft_time_job_progress(500, 1000)
 
-    assert win._fft_time_progress_completed_jobs == 1
-    assert win._fft_time_progress_token is token
+    assert win._analysis_progress_tokens["fft_time"] is token
     assert finished == []
-    assert started == ["next"]
 
 
-def test_fft_time_thread_done_never_finishes_while_queue_remains(
+def test_fft_time_service_progress_keeps_ui_active_while_section_running(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
     qtbot.addWidget(win)
     qapp.processEvents()
     token = object()
-    started = []
     finished = []
-    win._fft_time_queue = [("pane1", "f2", "speed")]
-    win._fft_time_progress_token = token
-    win._fft_time_progress_total_jobs = 1
-    win._fft_time_progress_completed_jobs = 0
-
+    win._analysis_progress_tokens["fft_time"] = token
     monkeypatch.setattr(
-        win,
-        "_start_next_fft_time_job",
-        lambda: started.append("next"),
+        win._analysis_jobs, "progress_counts", lambda _section: (1, 2)
     )
+    monkeypatch.setattr(win._analysis_jobs, "is_running", lambda _section: True)
     monkeypatch.setattr(
         win,
         "_finish_compute_progress",
         lambda *args, **kwargs: finished.append((args, kwargs)),
     )
 
-    win._on_fft_time_thread_done()
+    win._on_fft_time_job_progress(500, 1000)
 
-    assert win._fft_time_progress_completed_jobs == 1
-    assert win._fft_time_progress_token is token
+    assert win._analysis_progress_tokens["fft_time"] is token
     assert finished == []
-    assert started == ["next"]
 
 
-def test_fft_time_thread_done_finishes_progress_on_final_job(
+def test_fft_time_service_final_progress_finishes_ui_outcome(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
@@ -515,10 +498,11 @@ def test_fft_time_thread_done_finishes_progress_on_final_job(
     qapp.processEvents()
     token = object()
     finished = []
-    win._fft_time_queue = []
-    win._fft_time_progress_token = token
-    win._fft_time_progress_total_jobs = 2
-    win._fft_time_progress_completed_jobs = 1
+    win._analysis_progress_tokens["fft_time"] = token
+    monkeypatch.setattr(
+        win._analysis_jobs, "progress_counts", lambda _section: (2, 2)
+    )
+    monkeypatch.setattr(win._analysis_jobs, "is_running", lambda _section: False)
 
     monkeypatch.setattr(
         win,
@@ -526,14 +510,13 @@ def test_fft_time_thread_done_finishes_progress_on_final_job(
         lambda *args, **kwargs: finished.append((args, kwargs)),
     )
 
-    win._on_fft_time_thread_done()
+    win._on_fft_time_job_progress(1000, 1000)
 
-    assert win._fft_time_progress_completed_jobs == 2
     assert finished == [((), {"token": token})]
-    assert win._fft_time_progress_token is None
+    assert "fft_time" not in win._analysis_progress_tokens
 
 
-def test_fft_time_skipped_queue_items_advance_and_finish_progress(
+def test_fft_time_service_skips_advance_and_finish_ui_progress(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
@@ -541,28 +524,22 @@ def test_fft_time_skipped_queue_items_advance_and_finish_progress(
     qapp.processEvents()
     token = object()
     finished = []
-    win._fft_time_queue = [(0, "f1", "missing"), (1, "f2", "short")]
-    win._fft_time_progress_token = token
-    win._fft_time_progress_total_jobs = 2
-    win._fft_time_progress_completed_jobs = 0
-
-    monkeypatch.setattr(win, "_pane_time_range_for", lambda *_args: None)
-    monkeypatch.setattr(win, "_dispatch_fft_time_job", lambda *_args, **_kwargs: False)
+    win._analysis_progress_tokens["fft_time"] = token
     monkeypatch.setattr(
         win,
         "_finish_compute_progress",
         lambda *args, **kwargs: finished.append((args, kwargs)),
     )
 
-    win._start_next_fft_time_job()
+    win._analysis_jobs.submit_batch(
+        "fft_time", [(None, {"skip": "missing"}), (None, {"skip": "short"})]
+    )
 
-    assert win._fft_time_progress_completed_jobs == 2
     assert finished == [((), {"token": token})]
-    assert win._fft_time_progress_token is None
-    assert win._fft_time_queue == []
+    assert "fft_time" not in win._analysis_progress_tokens
 
 
-def _fft_time_progress_params():
+def _fft_time_service_params():
     return {
         "fs": 16.0,
         "window": "hann",
@@ -584,7 +561,7 @@ def _make_fft_time_dispatch_window(qapp, qtbot, monkeypatch):
     )
     state.panes[0].sources = [("f1", "speed")]
     win.files["f1"] = SimpleNamespace()
-    params = _fft_time_progress_params()
+    params = _fft_time_service_params()
 
     monkeypatch.setattr(win, "_capture_active_analysis_view", lambda _section: None)
     monkeypatch.setattr(win.inspector.fft_time_ctx, "get_params", lambda: params)
@@ -599,16 +576,24 @@ def _make_fft_time_dispatch_window(qapp, qtbot, monkeypatch):
         "_fft_time_analysis_cache_key",
         lambda fid, ch, p, pane_idx: ("analysis", fid, ch, pane_idx),
     )
-    monkeypatch.setattr(
-        win,
-        "_fft_time_cache_key",
-        lambda key_params: ("lru", key_params["fid"], key_params["channel"]),
-    )
     monkeypatch.setattr(win, "_render_fft_time_on", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         win,
         "_emit_compute_feedback",
         lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        win,
+        "_build_fft_time_job",
+        lambda pane_idx, fid, ch, raw_params, **_kwargs: (
+            (lambda _worker: object()),
+            {
+                "render_params": dict(raw_params),
+                "analysis_key": ("analysis", fid, ch, pane_idx),
+                "pane_idx": pane_idx,
+                "source": (fid, ch),
+            },
+        ),
     )
     return win
 
@@ -619,7 +604,7 @@ def test_fft_time_do_begins_progress_for_cache_miss_only(
     win = _make_fft_time_dispatch_window(qapp, qtbot, monkeypatch)
     progress_token = object()
     begin_calls = []
-    started = []
+    submitted = []
 
     monkeypatch.setattr(
         win,
@@ -629,39 +614,40 @@ def test_fft_time_do_begins_progress_for_cache_miss_only(
         or progress_token,
     )
     monkeypatch.setattr(
-        win,
-        "_fft_time_cache_get",
+        win.analysis_caches["fft_time"],
+        "get",
         lambda _key: None,
     )
     monkeypatch.setattr(
-        win,
-        "_start_next_fft_time_job",
-        lambda: started.append(list(win._fft_time_queue)),
+        win._analysis_jobs,
+        "submit_batch",
+        lambda section, jobs, **_kwargs: submitted.append((section, list(jobs))),
     )
 
     win.do_fft_time()
 
     assert begin_calls == [("FFT-时间 1/1", 1000, False)]
-    assert win._fft_time_progress_token is progress_token
-    assert win._fft_time_progress_total_jobs == 1
-    assert win._fft_time_progress_completed_jobs == 0
-    assert started == [[(0, "f1", "speed")]]
+    assert win._analysis_progress_tokens["fft_time"] is progress_token
+    assert submitted[0][0] == "fft_time"
+    assert submitted[0][1][0][1]["source"] == ("f1", "speed")
 
+    # The submit spy intentionally does not run the service completion path.
+    win._analysis_progress_tokens.pop("fft_time")
     begin_calls.clear()
-    started.clear()
+    submitted.clear()
     cached = SimpleNamespace(metadata={"frames": 1})
-    monkeypatch.setattr(win, "_fft_time_cache_get", lambda _key: cached)
+    monkeypatch.setattr(
+        win.analysis_caches["fft_time"], "get", lambda _key: cached
+    )
 
     win.do_fft_time()
 
     assert begin_calls == []
-    assert started == []
-    assert win._fft_time_progress_token is None
-    assert win._fft_time_progress_total_jobs == 0
-    assert win._fft_time_queue == []
+    assert submitted == []
+    assert "fft_time" not in win._analysis_progress_tokens
 
 
-def test_order_progress_maps_quarter_single_job_to_quarter_total(
+def test_order_service_progress_maps_quarter_single_job_to_quarter_total(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
@@ -669,9 +655,10 @@ def test_order_progress_maps_quarter_single_job_to_quarter_total(
     qapp.processEvents()
     token = object()
     calls = []
-    win._order_progress_token = token
-    win._order_progress_total_jobs = 1
-    win._order_progress_completed_jobs = 0
+    win._analysis_progress_tokens["order"] = token
+    monkeypatch.setattr(
+        win._analysis_jobs, "progress_counts", lambda _section: (0, 1)
+    )
 
     monkeypatch.setattr(
         win,
@@ -681,7 +668,7 @@ def test_order_progress_maps_quarter_single_job_to_quarter_total(
         ),
     )
 
-    win._on_order_progress(25, 100)
+    win._on_order_job_progress(250, 1000)
 
     assert calls == [(250, 1000, "阶次 1/1", token)]
 
@@ -727,7 +714,7 @@ def test_order_cache_params_include_manual_rpm_mode_and_value(qapp, qtbot):
     assert active_params["manual_rpm"] == 1234.0
 
 
-def test_order_progress_aggregates_second_job_halfway(
+def test_order_service_progress_uses_second_job_batch_counts(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
@@ -735,9 +722,10 @@ def test_order_progress_aggregates_second_job_halfway(
     qapp.processEvents()
     token = object()
     calls = []
-    win._order_progress_token = token
-    win._order_progress_total_jobs = 2
-    win._order_progress_completed_jobs = 1
+    win._analysis_progress_tokens["order"] = token
+    monkeypatch.setattr(
+        win._analysis_jobs, "progress_counts", lambda _section: (1, 2)
+    )
 
     monkeypatch.setattr(
         win,
@@ -747,23 +735,21 @@ def test_order_progress_aggregates_second_job_halfway(
         ),
     )
 
-    win._on_order_progress(50, 100)
+    win._on_order_job_progress(750, 1000)
 
     assert calls == [(750, 1000, "阶次 2/2", token)]
 
 
-def test_order_progress_ignores_stale_worker_token(
+def test_order_service_progress_noops_without_ui_token(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
     qtbot.addWidget(win)
     qapp.processEvents()
-    active_token = object()
-    stale_token = object()
     calls = []
-    win._order_progress_token = active_token
-    win._order_progress_total_jobs = 1
-    win._order_progress_completed_jobs = 0
+    monkeypatch.setattr(
+        win._analysis_jobs, "progress_counts", lambda _section: (0, 1)
+    )
 
     monkeypatch.setattr(
         win,
@@ -773,20 +759,19 @@ def test_order_progress_ignores_stale_worker_token(
         ),
     )
 
-    win._on_order_progress(25, 100, token=stale_token)
-    win._on_order_progress(25, 100, token=active_token)
+    win._on_order_job_progress(250, 1000)
 
-    assert calls == [(250, 1000, "阶次 1/1", active_token)]
+    assert calls == []
 
 
-def test_order_progress_noops_after_token_clear(qapp, qtbot, monkeypatch):
+def test_order_service_progress_noops_after_token_clear(qapp, qtbot, monkeypatch):
     win = MainWindow()
     qtbot.addWidget(win)
     qapp.processEvents()
     calls = []
-    win._order_progress_token = None
-    win._order_progress_total_jobs = 1
-    win._order_progress_completed_jobs = 0
+    monkeypatch.setattr(
+        win._analysis_jobs, "progress_counts", lambda _section: (0, 1)
+    )
 
     monkeypatch.setattr(
         win,
@@ -794,45 +779,37 @@ def test_order_progress_noops_after_token_clear(qapp, qtbot, monkeypatch):
         lambda *args, **kwargs: calls.append((args, kwargs)),
     )
 
-    win._on_order_progress(50, 100)
+    win._on_order_job_progress(500, 1000)
 
     assert calls == []
 
 
-def test_order_thread_done_keeps_progress_for_remaining_job(
+def test_order_service_progress_keeps_ui_active_before_final_job(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
     qtbot.addWidget(win)
     qapp.processEvents()
     token = object()
-    started = []
     finished = []
-    win._order_queue = [(1, "f2", "torque", ("f2", "rpm"))]
-    win._order_progress_token = token
-    win._order_progress_total_jobs = 2
-    win._order_progress_completed_jobs = 0
-
+    win._analysis_progress_tokens["order"] = token
     monkeypatch.setattr(
-        win,
-        "_start_next_order_job",
-        lambda: started.append("next"),
+        win._analysis_jobs, "progress_counts", lambda _section: (1, 2)
     )
+    monkeypatch.setattr(win._analysis_jobs, "is_running", lambda _section: True)
     monkeypatch.setattr(
         win,
         "_finish_compute_progress",
         lambda *args, **kwargs: finished.append((args, kwargs)),
     )
 
-    win._on_order_thread_done()
+    win._on_order_job_progress(500, 1000)
 
-    assert win._order_progress_completed_jobs == 1
-    assert win._order_progress_token is token
+    assert win._analysis_progress_tokens["order"] is token
     assert finished == []
-    assert started == ["next"]
 
 
-def test_order_thread_done_finishes_progress_on_final_job(
+def test_order_service_final_progress_finishes_ui_outcome(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
@@ -840,10 +817,11 @@ def test_order_thread_done_finishes_progress_on_final_job(
     qapp.processEvents()
     token = object()
     finished = []
-    win._order_queue = []
-    win._order_progress_token = token
-    win._order_progress_total_jobs = 2
-    win._order_progress_completed_jobs = 1
+    win._analysis_progress_tokens["order"] = token
+    monkeypatch.setattr(
+        win._analysis_jobs, "progress_counts", lambda _section: (2, 2)
+    )
+    monkeypatch.setattr(win._analysis_jobs, "is_running", lambda _section: False)
 
     monkeypatch.setattr(
         win,
@@ -851,14 +829,13 @@ def test_order_thread_done_finishes_progress_on_final_job(
         lambda *args, **kwargs: finished.append((args, kwargs)),
     )
 
-    win._on_order_thread_done()
+    win._on_order_job_progress(1000, 1000)
 
-    assert win._order_progress_completed_jobs == 2
     assert finished == [((), {"token": token})]
-    assert win._order_progress_token is None
+    assert "order" not in win._analysis_progress_tokens
 
 
-def test_order_skipped_queue_items_advance_and_finish_progress(
+def test_order_service_skips_advance_and_finish_ui_progress(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
@@ -866,27 +843,19 @@ def test_order_skipped_queue_items_advance_and_finish_progress(
     qapp.processEvents()
     token = object()
     finished = []
-    win._order_queue = [
-        (0, "f1", "missing", ("f1", "rpm")),
-        (1, "f2", "short", ("f2", "rpm")),
-    ]
-    win._order_progress_token = token
-    win._order_progress_total_jobs = 2
-    win._order_progress_completed_jobs = 0
-
-    monkeypatch.setattr(win, "_dispatch_order_job", lambda *_args: False)
+    win._analysis_progress_tokens["order"] = token
     monkeypatch.setattr(
         win,
         "_finish_compute_progress",
         lambda *args, **kwargs: finished.append((args, kwargs)),
     )
 
-    win._start_next_order_job()
+    win._analysis_jobs.submit_batch(
+        "order", [(None, {"skip": "missing"}), (None, {"skip": "short"})]
+    )
 
-    assert win._order_progress_completed_jobs == 2
     assert finished == [((), {"token": token})]
-    assert win._order_progress_token is None
-    assert win._order_queue == []
+    assert "order" not in win._analysis_progress_tokens
 
 
 def _make_order_dispatch_window(qapp, qtbot, monkeypatch):
@@ -918,6 +887,18 @@ def _make_order_dispatch_window(qapp, qtbot, monkeypatch):
         "_emit_compute_feedback",
         lambda *_args, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        win,
+        "_build_order_job",
+        lambda pane_idx, fid, ch, rpm_source: (
+            (lambda _worker: object()),
+            {
+                "analysis_key": ("order", fid, ch, rpm_source, pane_idx),
+                "pane_idx": pane_idx,
+                "source": (fid, ch),
+            },
+        ),
+    )
     return win
 
 
@@ -927,7 +908,7 @@ def test_order_do_begins_progress_for_cache_miss_only(
     win = _make_order_dispatch_window(qapp, qtbot, monkeypatch)
     progress_token = object()
     begin_calls = []
-    started = []
+    submitted = []
 
     monkeypatch.setattr(
         win,
@@ -938,22 +919,21 @@ def test_order_do_begins_progress_for_cache_miss_only(
     )
     monkeypatch.setattr(win.analysis_caches["order"], "get", lambda _key: None)
     monkeypatch.setattr(
-        win,
-        "_start_next_order_job",
-        lambda: started.append(list(win._order_queue)),
+        win._analysis_jobs,
+        "submit_batch",
+        lambda section, jobs, **_kwargs: submitted.append((section, list(jobs))),
     )
 
     win.do_order_time()
 
     assert begin_calls == [("阶次 1/1", 1000, False)]
-    assert win._order_progress_token is progress_token
-    assert win._order_progress_total_jobs == 1
-    assert win._order_progress_completed_jobs == 0
-    assert started == [[(0, "f1", "torque", ("f1", "rpm"))]]
+    assert win._analysis_progress_tokens["order"] is progress_token
+    assert submitted[0][0] == "order"
+    assert submitted[0][1][0][1]["source"] == ("f1", "torque")
 
     cached_win = _make_order_dispatch_window(qapp, qtbot, monkeypatch)
     cached_begin_calls = []
-    cached_started = []
+    cached_submitted = []
     cached = SimpleNamespace(metadata={"frames": 1})
     monkeypatch.setattr(
         cached_win,
@@ -968,18 +948,16 @@ def test_order_do_begins_progress_for_cache_miss_only(
         lambda _key: cached,
     )
     monkeypatch.setattr(
-        cached_win,
-        "_start_next_order_job",
-        lambda: cached_started.append(list(cached_win._order_queue)),
+        cached_win._analysis_jobs,
+        "submit_batch",
+        lambda section, jobs, **_kwargs: cached_submitted.append((section, list(jobs))),
     )
 
     cached_win.do_order_time()
 
     assert cached_begin_calls == []
-    assert cached_started == []
-    assert cached_win._order_progress_token is None
-    assert cached_win._order_progress_total_jobs == 0
-    assert cached_win._order_queue == []
+    assert cached_submitted == []
+    assert "order" not in cached_win._analysis_progress_tokens
 
 
 class _FakeSignal:
@@ -1061,7 +1039,7 @@ class _FakeFrame:
         return SimpleNamespace(values=self._columns[name])
 
 
-def test_order_dispatch_passes_progress_callback_and_connects_worker_progress(
+def test_order_job_closure_passes_progress_callback_and_cancel_token(
     qapp, qtbot, monkeypatch
 ):
     win = MainWindow()
@@ -1077,12 +1055,7 @@ def test_order_dispatch_passes_progress_callback_and_connects_worker_progress(
         ),
     )
     progress_calls = []
-    finished = []
-    active_token = object()
     fake_result = SimpleNamespace(metadata={"frames": 1})
-    _FakeOrderWorker.instances = []
-    _FakeOrderThread.instances = []
-    win._order_progress_token = active_token
 
     monkeypatch.setattr(win, "_pane_time_range_for", lambda *_args: None)
     monkeypatch.setattr(win, "_warn_if_order_speed_unsuitable", lambda _rpm: True)
@@ -1122,26 +1095,7 @@ def test_order_dispatch_passes_progress_callback_and_connects_worker_progress(
         "_order_analysis_cache_key",
         lambda *_args, **_kwargs: ("order", "f1", "torque"),
     )
-    monkeypatch.setattr(
-        win,
-        "_on_order_progress",
-        lambda *args, **kwargs: progress_calls.append((args, kwargs)),
-    )
-    monkeypatch.setattr(
-        win,
-        "_on_order_finished",
-        lambda result: finished.append(result),
-    )
-    monkeypatch.setattr(win, "_on_order_failed", lambda message: None)
-    monkeypatch.setattr(win, "_on_order_thread_done", lambda: None)
-    monkeypatch.setattr(order_mod, "QThread", _FakeOrderThread)
-
-    import mf4_analyzer.ui.analysis_worker as worker_mod
-    import mf4_analyzer.ui.main_window as main_window_pkg
     from mf4_analyzer.signal.order_cot import COTOrderAnalyzer
-
-    monkeypatch.setattr(main_window_pkg, "QThread", _FakeOrderThread)
-    monkeypatch.setattr(worker_mod, "AnalysisComputeWorker", _FakeOrderWorker)
 
     def fake_compute(*_args, progress_callback=None, cancel_token=None, **_kwargs):
         assert progress_callback is not None
@@ -1151,12 +1105,19 @@ def test_order_dispatch_passes_progress_callback_and_connects_worker_progress(
 
     monkeypatch.setattr(COTOrderAnalyzer, "compute", fake_compute)
 
-    assert win._dispatch_order_job(0, "f1", "torque", ("f1", "rpm"))
+    job, ctx = win._build_order_job(0, "f1", "torque", ("f1", "rpm"))
 
-    worker = _FakeOrderWorker.instances[-1]
-    assert worker.progress.slots
+    class Worker:
+        progress = SimpleNamespace(emit=lambda *args: progress_calls.append(args))
 
-    worker.run()
+        @staticmethod
+        def cancelled():
+            return False
 
-    assert progress_calls == [((1, 2), {"token": active_token})]
-    assert finished == [fake_result]
+    assert job(Worker()) is fake_result
+    assert ctx == {
+        "analysis_key": ("order", "f1", "torque"),
+        "pane_idx": 0,
+        "source": ("f1", "torque"),
+    }
+    assert progress_calls == [(1, 2)]

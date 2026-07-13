@@ -67,6 +67,8 @@ lesson by default.
 | [Claude Native Wrapper Stub Recovery](claude-native-wrapper-stub-recovery.md) | `claude` resolves to the global npm install but prints `claude native binary not installed` on Apple Silicon. | See lesson |
 | [Shared Wheel Dispatch Needs Event-Route Coverage](shared-wheel-dispatch-needs-event-route-coverage.md) | Changing the shared pyqtgraph ``_ModifierWheelViewBox`` wheel-dispatch payload or any canvas ``_handle_wheel_dispatch`` callback signature. | See lesson |
 | [Relocated Inspector Fields Keep Their Trailing Alignment](inspector-relocated-field-keeps-trailing-alignment.md) | Moving a capped Inspector control from a `QFormLayout` into a | See lesson |
+| [FFT-vs-Time Custom-X Cache Invalidation](codex-fft-time-custom-xaxis-cache-invalidation.md) | Change a display control whose semantics are absent from the | See lesson |
+| [Qt Worker Callbacks Retain Run Context](codex-qt-worker-callback-context.md) | Changing worker completion/progress callbacks or QThread cleanup in | See lesson |
 
 ## Selection Rules
 

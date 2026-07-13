@@ -3,7 +3,6 @@
 import numpy as np
 
 from PyQt5.QtWidgets import QMessageBox
-from PyQt5.QtCore import QThread
 
 from ... import db_reference
 from ...signal import assess_speed_for_order, resolve_order_nfft
@@ -13,11 +12,10 @@ from ._sentinel import _INSPECTOR_TIME_RANGE
 
 
 class OrderMixin:
-    """Domain mixin: COT Order spectrum calculation, queue dispatch, and render.
+    """Domain adapter for COT Order input collection and rendering.
 
-    ``QThread`` lookups use the ``sys.modules`` pattern so
-    ``monkeypatch.setattr(mw_mod, 'QThread', ...)`` in the test suite
-    reaches the call site even though the import is in this sub-file.
+    ``AnalysisJobService`` owns worker lifecycle, FIFO queueing and progress;
+    every job carries its own cache/render context back to this mixin.
     """
 
     def _order_sig_for(self, source, time_range=_INSPECTOR_TIME_RANGE):
@@ -302,10 +300,8 @@ class OrderMixin:
         Each pane carries one signal source ``(fid, ch)`` plus its own
         ``rpm_source``. For every pane we build the analysis cache key and
         either render a cache HIT onto that pane's canvas immediately, or
-        enqueue a ``(pane_idx, fid, ch, rpm_source)`` job. The focused pane
-        is enqueued first. Miss jobs run sequentially on ONE shared worker
-        QThread; :meth:`_on_order_thread_done` pumps the next. A single
-        (non-split) pane yields one job, identical to the V7 path.
+        submit a context-carrying service job. The focused pane is submitted
+        first; a single (non-split) pane yields one job.
 
         Re-entry while a worker is running drops the whole new request with
         ``正在计算…``. A pane whose source/rpm is unfetchable is skipped
@@ -314,8 +310,9 @@ class OrderMixin:
         # V7 Step 5: capture the active Order view (params + per-pane sources +
         # rpm_source) so a later view switch renders from analysis_caches.
         self._capture_active_analysis_view('order')
-        # Re-entry guard: a previous compute / queue is still running.
-        if getattr(self, '_order_thread', None) is not None and self._order_thread.isRunning():
+        # Preserve the established UI policy: a second click reports busy and
+        # drops rather than implicitly replacing the active batch.
+        if self._analysis_jobs.is_running('order'):
             self._emit_compute_feedback(
                 ComputeOutcome(),
                 busy=True,
@@ -333,9 +330,10 @@ class OrderMixin:
             range(min(page.pane_count(), len(state.panes))),
             key=lambda i: (i != focus, i),
         )
-        queue = []
+        jobs = []
         any_source = False
         outcome = ComputeOutcome()
+        self._order_outcome = outcome
         for pane_idx in pane_order:
             sources = state.panes[pane_idx].sources
             if not sources:
@@ -354,36 +352,21 @@ class OrderMixin:
                     page.pane_canvas(pane_idx), cached, source=(fid, ch))
                 outcome.cached += 1
             else:
-                queue.append((pane_idx, fid, ch, rpm_source))
+                built = self._build_order_job(pane_idx, fid, ch, rpm_source)
+                jobs.append(built if built is not None else (None, {'pane_idx': pane_idx}))
 
-        if not queue:
-            self._order_queue = []
-            self._order_progress_token = None
-            self._order_progress_total_jobs = 0
-            self._order_progress_completed_jobs = 0
+        if not jobs:
             if not any_source:
+                self._order_outcome = None
                 # No captured pane source → legacy inspector-selection path so
                 # the standalone-signal UX + existing tests are unchanged.
                 self._do_order_time_single()
                 return
             self._emit_compute_feedback(outcome, section_label="时间-阶次")
+            self._order_outcome = None
             return
 
-        self._order_queue = queue
-        self._order_outcome = outcome
-        n_jobs = len(self._order_queue)
-        self._order_progress_token = None
-        self._order_progress_total_jobs = n_jobs
-        self._order_progress_completed_jobs = 0
-        if n_jobs > 0:
-            self._order_progress_token = self._begin_compute_progress(
-                "阶次 1/%d" % n_jobs,
-                total=1000,
-                process_events=False,
-            )
-        self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
-        self.inspector.order_ctx.set_progress("计算中...")
-        self._start_next_order_job()
+        self._start_order_batch(jobs)
 
     def _do_order_time_single(self):
         """Legacy single-source Order path: compute the inspector's selected
@@ -395,57 +378,36 @@ class OrderMixin:
             self.toast("请选择有效信号", "warning")
             return
         page = self._analysis_page('order')
-        self._order_queue = []
+        built = self._build_order_job(
+            page.focused_index(), sig_data[0], sig_data[1],
+            tuple(rpm_data) if rpm_data else None,
+        )
+        if built is None:
+            self.inspector.order_ctx.set_progress("")
+            return
+        self._order_outcome = None
+        self._start_order_batch([built])
+
+    def _start_order_batch(self, jobs):
+        total = len(jobs)
+        self._analysis_progress_tokens['order'] = self._begin_compute_progress(
+            "阶次 1/%d" % total,
+            total=1000,
+            process_events=False,
+        )
         self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
         self.inspector.order_ctx.set_progress("计算中...")
-        if not self._dispatch_order_job(
-                page.focused_index(), sig_data[0], sig_data[1],
-                tuple(rpm_data) if rpm_data else None):
-            self.inspector.order_ctx.set_progress("")
-
-    def _start_next_order_job(self):
-        """Dispatch the head Order job, skipping unfetchable sources."""
-        while self._order_queue:
-            pane_idx, fid, ch, rpm_source = self._order_queue.pop(0)
-            if self._dispatch_order_job(pane_idx, fid, ch, rpm_source):
-                return
-            self._advance_order_progress_job()
-        # Queue drained.
-        self.inspector.order_ctx.set_progress("")
-        self._finish_order_outcome_feedback()
+        self._analysis_jobs.submit_batch('order', jobs)
 
     def _finish_order_outcome_feedback(self):
-        self._finish_order_progress_if_active()
         outcome = getattr(self, '_order_outcome', None)
         if outcome is None:
             return
         self._emit_compute_feedback(outcome, section_label="时间-阶次")
         self._order_outcome = None
 
-    def _finish_order_progress_if_active(self):
-        token = getattr(self, '_order_progress_token', None)
-        if token is None:
-            return
-        self._finish_compute_progress(token=token)
-        self._order_progress_token = None
-
-    def _advance_order_progress_job(self):
-        token = getattr(self, '_order_progress_token', None)
-        if token is None:
-            return
-        total_jobs = getattr(self, '_order_progress_total_jobs', 0)
-        if total_jobs <= 0:
-            return
-        completed = getattr(self, '_order_progress_completed_jobs', 0)
-        self._order_progress_completed_jobs = min(
-            completed + 1,
-            total_jobs,
-        )
-
-    def _dispatch_order_job(self, pane_idx, fid, ch, rpm_source):
-        """Fetch the ``(fid, ch)`` signal + ``rpm_source`` rpm, then start the
-        shared COT worker, rendering onto ``page.pane_canvas(pane_idx)``.
-        Returns True if a worker started, False if the source was skipped."""
+    def _build_order_job(self, pane_idx, fid, ch, rpm_source):
+        """Prepare one COT job and its immutable render/cache context."""
         from ...signal.order_cot import COTOrderAnalyzer, COTParams
         time_range = self._pane_time_range_for('order', pane_idx)
         t, sig = self._order_sig_for((fid, ch), time_range=time_range)
@@ -453,19 +415,19 @@ class OrderMixin:
             outcome = getattr(self, '_order_outcome', None)
             if outcome is not None:
                 outcome.skipped.append("源通道缺失")
-            return False
+            return None
         if len(sig) < 100:
             outcome = getattr(self, '_order_outcome', None)
             if outcome is not None:
                 outcome.skipped.append("信号过短")
-            return False
+            return None
         rpm = self._order_rpm_for(
             rpm_source, len(sig), time_range=time_range, t_sig=t)
         if rpm is None:
             outcome = getattr(self, '_order_outcome', None)
             if outcome is not None:
                 outcome.skipped.append("缺转速")
-            return False
+            return None
         self._warn_if_order_speed_unsuitable(rpm)
         fs = self.inspector.order_ctx.fs()
         order_params = self.inspector.order_ctx.current_params()
@@ -494,22 +456,19 @@ class OrderMixin:
                 outcome.failed += 1
             else:
                 QMessageBox.critical(self, "错误", str(e))
-            return False
-        # Stash the analysis cache key + render target for this job.
-        self._order_analysis_key = self._order_analysis_cache_key(
+            return None
+        analysis_key = self._order_analysis_cache_key(
             fid,
             ch,
             op,
             rpm_source=tuple(rpm_source) if rpm_source else None,
             time_range=time_range,
         )
-        self._order_render_pane = pane_idx
-        self._order_render_source = (fid, ch)
-
-        from ..analysis_worker import AnalysisComputeWorker
-        import sys as _sys
-        _pkg = _sys.modules.get('mf4_analyzer.ui.main_window')
-        _QThread = getattr(_pkg, 'QThread', QThread) if _pkg is not None else QThread
+        ctx = {
+            'analysis_key': analysis_key,
+            'pane_idx': pane_idx,
+            'source': (fid, ch),
+        }
 
         def job(worker, _sig=sig, _rpm=rpm, _t=t_arr, _p=p):
             return COTOrderAnalyzer.compute(
@@ -521,29 +480,7 @@ class OrderMixin:
                 cancel_token=worker.cancelled,
             )
 
-        worker = AnalysisComputeWorker(job)
-        thread = _QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(thread.quit)
-        worker.failed.connect(thread.quit)
-        worker.finished.connect(self._on_order_finished)
-        worker.failed.connect(self._on_order_failed)
-        progress_token = getattr(self, '_order_progress_token', None)
-        worker_progress_token = (
-            progress_token if progress_token is not None else object()
-        )
-        worker.progress.connect(
-            lambda current, total, token=worker_progress_token:
-                self._on_order_progress(current, total, token=token)
-        )
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_order_thread_done)
-        self._order_thread = thread
-        self._order_worker = worker
-        thread.start()
-        return True
+        return job, ctx
 
     def _order_label_resolution(self, source, order_params):
         """Resolve this render's dB reference (spec §15 C3, Task 7): each
@@ -745,8 +682,8 @@ class OrderMixin:
                 "success",
             )
 
-    def _on_order_finished(self, result):
-        analysis_key = getattr(self, '_order_analysis_key', None)
+    def _on_order_job_finished(self, ctx, result):
+        analysis_key = ctx.get('analysis_key')
         if analysis_key is not None:
             self.analysis_caches['order'].put(analysis_key, result)
         outcome = getattr(self, '_order_outcome', None)
@@ -756,8 +693,8 @@ class OrderMixin:
         # ``_render_order_time`` (preset + status + toast side-effects) runs
         # only for the primary pane (0); compare panes get a pure canvas draw.
         page = self._analysis_page('order')
-        pane_idx = getattr(self, '_order_render_pane', 0)
-        source = getattr(self, '_order_render_source', None)
+        pane_idx = ctx.get('pane_idx', 0)
+        source = ctx.get('source')
         if pane_idx == 0:
             self._render_order_time(
                 result, emit_feedback=outcome is None, source=source)
@@ -767,15 +704,8 @@ class OrderMixin:
         else:
             self._render_order_time(
                 result, emit_feedback=outcome is None, source=source)
-        # Clear the in-progress label only when no more jobs are queued; the
-        # thread-done pump re-sets it for the next job otherwise.
-        if not self._order_queue:
-            self.inspector.order_ctx.set_progress("")
-
-    def _on_order_failed(self, message):
-        # A single pane's failure must not abort the queue; the wired
-        # ``failed -> thread.quit -> _on_order_thread_done`` pump advances to
-        # the next job. Surface the error but keep going.
+    def _on_order_job_failed(self, _ctx, message):
+        # A single pane's failure must not abort the service FIFO batch.
         #
         # V8 minor: use the non-modal ``toast`` (symmetric with
         # ``_on_fft_time_failed``) instead of ``QMessageBox.critical``. A
@@ -789,34 +719,21 @@ class OrderMixin:
         else:
             self.toast(msg, "error")
         self.statusBar.showMessage(f"阶次分析错误: {msg}")
-        if not self._order_queue:
-            self.inspector.order_ctx.set_progress("")
 
-    def _on_order_progress(self, current, total, *, token=None):
-        """Map per-worker progress onto the whole queued Order batch."""
-        active_token = getattr(self, '_order_progress_token', None)
-        if active_token is None:
+    def _on_order_job_progress(self, done, total):
+        """Project service-owned batch progress onto the existing UI bar."""
+        token = self._analysis_progress_tokens.get('order')
+        if token is None:
             return
-        if token is not None and token is not active_token:
-            return
-        total_jobs = max(1, getattr(self, '_order_progress_total_jobs', 0))
-        job_fraction = 0.0
-        if total > 0:
-            job_fraction = max(0.0, min(1.0, current / total))
-        completed = getattr(self, '_order_progress_completed_jobs', 0)
-        overall = (completed + job_fraction) / total_jobs
-        value = int(round(overall * 1000))
+        completed, total_jobs = self._analysis_jobs.progress_counts('order')
+        total_jobs = max(1, total_jobs)
         job_index = min(completed + 1, total_jobs)
         label = f"阶次 {job_index}/{total_jobs}"
         self._update_compute_progress(
-            value, 1000, label=label, token=active_token,
+            done, total, label=label, token=token,
         )
-
-    def _on_order_thread_done(self):
-        self._order_thread = None
-        self._order_worker = None
-        self._advance_order_progress_job()
-        if self._order_queue:
-            self._start_next_order_job()
-        else:
+        if done == total and not self._analysis_jobs.is_running('order'):
+            self._finish_compute_progress(token=token)
+            self._analysis_progress_tokens.pop('order', None)
+            self.inspector.order_ctx.set_progress("")
             self._finish_order_outcome_feedback()
