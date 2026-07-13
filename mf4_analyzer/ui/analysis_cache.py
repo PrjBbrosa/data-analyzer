@@ -1,8 +1,8 @@
 """Per-section LRU result cache (spec §6.4).
 
-Generalizes main_window's _fft_time_cache (capacity 12). Keys hash only
-compute-relevant params — callers must pass the filtered dict (the
-existing _fft_time_cache_key convention: display-only knobs excluded).
+The primary FFT-vs-Time result store has capacity 12. Keys hash only
+compute-relevant params — callers must pass the filtered dict used by
+``_fft_time_analysis_cache_key`` (display-only knobs excluded).
 """
 from __future__ import annotations
 

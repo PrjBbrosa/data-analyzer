@@ -65,6 +65,7 @@ lesson by default.
 | [Pinned Protocol Adapters Own Vendor ABI](codex-pinned-protocol-adapters-own-vendor-abi.md) | Implementing or reviewing Seed&Key, native DLL calls, multi-part XCP | See lesson |
 | [Frozen Probes Do Not Require Console Streams](codex-frozen-probes-do-not-require-console-streams.md) | Adding a hidden child command, import probe, parser subprocess, or | See lesson |
 | [Claude Native Wrapper Stub Recovery](claude-native-wrapper-stub-recovery.md) | `claude` resolves to the global npm install but prints `claude native binary not installed` on Apple Silicon. | See lesson |
+| [FFT-vs-Time Custom-X Cache Invalidation](codex-fft-time-custom-xaxis-cache-invalidation.md) | Change a display control whose semantics are absent from the | See lesson |
 
 ## Selection Rules
 

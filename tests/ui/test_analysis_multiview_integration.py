@@ -240,7 +240,7 @@ def test_fft_cache_hit_render_clears_cache_miss_empty_hint(two_file_win):
     assert canvas._empty_hint_item is None
 
 
-def test_fft_time_cache_miss_shows_visible_empty_hint(two_file_win):
+def test_fft_time_analysis_cache_miss_shows_visible_empty_hint(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft_time")
     fids = list(win.files.keys())
@@ -471,20 +471,20 @@ def test_fft_time_dispatch_uses_explicit_time_range(two_file_win, monkeypatch):
 
     class DummyWorker:
         progress = DummyProgress()
-        cancelled = False
+        @staticmethod
+        def cancelled():
+            return False
 
     monkeypatch.setattr(
         spectrogram_mod.SpectrogramAnalyzer,
         "compute",
         staticmethod(fake_compute),
     )
-    monkeypatch.setattr(
-        win, "_start_fft_time_worker", lambda job: job(DummyWorker())
+    job, _ctx = win._build_fft_time_job(
+        1, fids[0], "speed", win.inspector.fft_time_ctx.get_params(),
+        time_range=(0.75, 1.0),
     )
-
-    assert win._dispatch_fft_time_job(
-        1, fids[0], "speed", time_range=(0.75, 1.0)
-    )
+    assert job(DummyWorker()) is not None
 
     t, sig = _time_range_slice(win.files[fids[0]], "speed", (0.75, 1.0))
     assert seen == pytest.approx([(len(sig), float(t[0]), float(t[-1]))])
@@ -520,19 +520,24 @@ def test_fft_time_dispatch_omitted_time_range_uses_inspector_fallback(
 
     class DummyWorker:
         progress = DummyProgress()
-        cancelled = False
+        @staticmethod
+        def cancelled():
+            return False
 
     monkeypatch.setattr(
         spectrogram_mod.SpectrogramAnalyzer,
         "compute",
         staticmethod(fake_compute),
     )
-    monkeypatch.setattr(
-        win, "_start_fft_time_worker", lambda job: job(DummyWorker())
+    job, _ctx = win._build_fft_time_job(
+        1, fids[0], "speed", win.inspector.fft_time_ctx.get_params(),
     )
-
-    assert win._dispatch_fft_time_job(1, fids[0], "speed")
-    assert win._dispatch_fft_time_job(1, fids[0], "speed", time_range=None)
+    assert job(DummyWorker()) is not None
+    job, _ctx = win._build_fft_time_job(
+        1, fids[0], "speed", win.inspector.fft_time_ctx.get_params(),
+        time_range=None,
+    )
+    assert job(DummyWorker()) is not None
 
     inspector_t, inspector_sig = _time_range_slice(
         win.files[fids[0]], "speed", (0.20, 0.30)
@@ -796,9 +801,9 @@ def _split_fft_time_two_sources(win):
     return fids, page
 
 
-def _drain_fft_time_queue(win, qtbot):
+def _drain_fft_time_jobs(win, qtbot):
     qtbot.waitUntil(
-        lambda: win._fft_time_thread is None and not win._fft_time_queue,
+        lambda: not win._analysis_jobs.is_running("fft_time"),
         timeout=15000,
     )
 
@@ -808,7 +813,7 @@ def test_fft_time_split_two_panes_render_distinct_sources(two_file_win, qtbot):
     fids, page = _split_fft_time_two_sources(win)
 
     win.do_fft_time()
-    _drain_fft_time_queue(win, qtbot)
+    _drain_fft_time_jobs(win, qtbot)
 
     c0 = page.pane_canvas(0)
     c1 = page.pane_canvas(1)
@@ -840,7 +845,7 @@ def test_fft_time_split_cache_hit_renders_both_panes_without_recompute(
 
     # First compute populates the cache for both panes.
     win.do_fft_time()
-    _drain_fft_time_queue(win, qtbot)
+    _drain_fft_time_jobs(win, qtbot)
     r0_first = page.pane_canvas(0)._result
     r1_first = page.pane_canvas(1)._result
     assert r0_first is not None and r1_first is not None
@@ -867,7 +872,7 @@ def test_fft_time_split_cache_hit_renders_both_panes_without_recompute(
 
     win.do_fft_time()
     # No worker should have been dispatched (pure cache-hit synchronous path).
-    assert win._fft_time_thread is None
+    assert not win._analysis_jobs.is_running("fft_time")
     assert calls["n"] == 0, "split cache hit must not recompute either pane"
     # Both panes re-rendered from the cache onto their OWN canvas.
     assert page.pane_canvas(0).has_result()
@@ -879,12 +884,37 @@ def test_fft_time_split_cache_hit_renders_both_panes_without_recompute(
     assert page.pane_canvas(1)._result is cache.get(k1)
 
 
+def test_fft_time_restore_recompute_uses_cache_without_service_submission(
+    two_file_win, qtbot, monkeypatch
+):
+    """Project restore re-enters via ``do_fft_time`` and may be cache-only."""
+    win = two_file_win
+    _fids, page = _split_fft_time_two_sources(win)
+
+    win.do_fft_time()
+    _drain_fft_time_jobs(win, qtbot)
+    page.pane_canvas(0).full_reset()
+    page.pane_canvas(1).full_reset()
+    submitted = []
+    monkeypatch.setattr(
+        win._analysis_jobs,
+        "submit_batch",
+        lambda *args, **kwargs: submitted.append((args, kwargs)),
+    )
+
+    win._recompute_analysis_section("fft_time")
+
+    assert submitted == []
+    assert page.pane_canvas(0).has_result()
+    assert page.pane_canvas(1).has_result()
+
+
 def test_fft_time_all_cached_emits_info_toast(two_file_win, qtbot, monkeypatch):
     win = two_file_win
     _fids, page = _split_fft_time_two_sources(win)
 
     win.do_fft_time()
-    _drain_fft_time_queue(win, qtbot)
+    _drain_fft_time_jobs(win, qtbot)
     assert page.pane_canvas(0).has_result()
     assert page.pane_canvas(1).has_result()
 
@@ -895,7 +925,7 @@ def test_fft_time_all_cached_emits_info_toast(two_file_win, qtbot, monkeypatch):
 
     win.do_fft_time()
 
-    assert win._fft_time_thread is None
+    assert not win._analysis_jobs.is_running("fft_time")
     assert calls == [("info", "已用缓存结果（参数未变）· 2 图")]
     assert page.pane_canvas(0).has_result()
     assert page.pane_canvas(1).has_result()
@@ -914,7 +944,7 @@ def test_fft_time_skip_missing_source_warns_without_short_signal_reason(
     monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
 
     win.do_fft_time()
-    _drain_fft_time_queue(win, qtbot)
+    _drain_fft_time_jobs(win, qtbot)
 
     assert calls
     level, msg = calls[-1]
@@ -926,18 +956,7 @@ def test_fft_time_skip_missing_source_warns_without_short_signal_reason(
 def test_fft_time_reentry_busy_toast(two_file_win, monkeypatch):
     win = two_file_win
     win.toolbar._set_mode("fft_time")
-
-    class RunningThread:
-        def isRunning(self):
-            return True
-
-        def quit(self):
-            pass
-
-        def wait(self, _timeout=None):
-            return True
-
-    win._fft_time_thread = RunningThread()
+    monkeypatch.setattr(win._analysis_jobs, "is_running", lambda _section: True)
     calls = []
     monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
 
@@ -963,7 +982,7 @@ def test_fft_time_single_pane_unchanged_by_queue(two_file_win, qtbot):
         ctx.combo_nfft.setCurrentIndex(i)
 
     win.do_fft_time()
-    _drain_fft_time_queue(win, qtbot)
+    _drain_fft_time_jobs(win, qtbot)
 
     assert page.pane_canvas(0).has_result()
     cache = win.analysis_caches["fft_time"]
@@ -977,9 +996,9 @@ def test_fft_time_single_pane_unchanged_by_queue(two_file_win, qtbot):
 # carries a rpm_source per pane and never sets canvas._result (Order mode),
 # so distinctness is pinned on the analysis cache + display matrices.
 # ----------------------------------------------------------------------
-def _drain_order_queue(win, qtbot):
+def _drain_order_jobs(win, qtbot):
     qtbot.waitUntil(
-        lambda: win._order_thread is None and not win._order_queue,
+        lambda: not win._analysis_jobs.is_running("order"),
         timeout=20000,
     )
 
@@ -1007,7 +1026,7 @@ def test_order_split_two_panes_render_distinct_sources(two_file_win, qtbot):
     fids, page, _state = _split_order_two_sources(win)
 
     win.do_order_time()
-    _drain_order_queue(win, qtbot)
+    _drain_order_jobs(win, qtbot)
 
     c0 = page.pane_canvas(0)
     c1 = page.pane_canvas(1)
@@ -1043,7 +1062,7 @@ def test_order_all_cached_emits_info_toast(two_file_win, qtbot, monkeypatch):
     _fids, page, _state = _split_order_two_sources(win)
 
     win.do_order_time()
-    _drain_order_queue(win, qtbot)
+    _drain_order_jobs(win, qtbot)
     assert page.pane_canvas(0).has_result()
     assert page.pane_canvas(1).has_result()
 
@@ -1054,7 +1073,7 @@ def test_order_all_cached_emits_info_toast(two_file_win, qtbot, monkeypatch):
 
     win.do_order_time()
 
-    assert win._order_thread is None
+    assert not win._analysis_jobs.is_running("order")
     assert calls == [("info", "已用缓存结果（参数未变）· 2 图")]
     assert page.pane_canvas(0).has_result()
     assert page.pane_canvas(1).has_result()
@@ -1073,7 +1092,7 @@ def test_order_skip_short_signal_warns(two_file_win, qtbot, monkeypatch):
     monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
 
     win.do_order_time()
-    _drain_order_queue(win, qtbot)
+    _drain_order_jobs(win, qtbot)
 
     assert calls == [("warning", "无可计算的图：1 个信号过短")]
 
@@ -1089,7 +1108,7 @@ def test_order_missing_source_warns_without_short_signal_reason(
     monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
 
     win.do_order_time()
-    _drain_order_queue(win, qtbot)
+    _drain_order_jobs(win, qtbot)
 
     assert calls
     level, msg = calls[-1]
@@ -1101,18 +1120,7 @@ def test_order_missing_source_warns_without_short_signal_reason(
 def test_order_reentry_emits_busy_toast(two_file_win, monkeypatch):
     win = two_file_win
     win.toolbar._set_mode("order")
-
-    class RunningThread:
-        def isRunning(self):
-            return True
-
-        def quit(self):
-            pass
-
-        def wait(self, _timeout=None):
-            return True
-
-    win._order_thread = RunningThread()
+    monkeypatch.setattr(win._analysis_jobs, "is_running", lambda _section: True)
     calls = []
     monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
 
@@ -1725,7 +1733,7 @@ def test_catalog_save_rerenders_visible_auto_view_without_compute(two_file_win, 
     win._echo_combo_signal(ctx.combo_rpm, (fids[0], "speed"))
 
     win.do_order_time()
-    _drain_order_queue(win, qtbot)
+    _drain_order_jobs(win, qtbot)
     assert win.chart_stack.page_order.pane_canvas(0).has_result()
 
     # Give the focused source real metadata so the resolve below is
@@ -1741,8 +1749,7 @@ def test_catalog_save_rerenders_visible_auto_view_without_compute(two_file_win, 
     win._on_db_reference_catalog_saved("order")
 
     assert ctx.db_reference_control.editor.value() == pytest.approx(1e-6)
-    assert win._order_thread is None, "a catalog save must never dispatch a compute worker"
-    assert not win._order_queue
+    assert not win._analysis_jobs.is_running("order"), "a catalog save must never dispatch a compute worker"
     assert win.chart_stack.page_order.pane_canvas(0).has_result()
 
 
@@ -2054,7 +2061,7 @@ def test_fft_time_dba_colorbar_slice_and_readout_share_reference(two_file_win, q
 
     win.do_fft_time()
     qtbot.waitUntil(
-        lambda: win._fft_time_thread is None and not win._fft_time_queue,
+        lambda: not win._analysis_jobs.is_running("fft_time"),
         timeout=15000,
     )
 
@@ -2091,7 +2098,7 @@ def test_order_db_colorbar_slice_and_readout_share_reference(two_file_win, qtbot
 
     win.do_order_time()
     qtbot.waitUntil(
-        lambda: win._order_thread is None and not win._order_queue,
+        lambda: not win._analysis_jobs.is_running("order"),
         timeout=20000,
     )
 
@@ -2126,7 +2133,7 @@ def test_heatmap_two_panes_resolve_distinct_saved_sources(two_file_win, qtbot):
     fids, page, _state = _split_order_two_sources(win)
 
     win.do_order_time()
-    _drain_order_queue(win, qtbot)
+    _drain_order_jobs(win, qtbot)
 
     c0 = page.pane_canvas(0)
     c1 = page.pane_canvas(1)
@@ -2169,14 +2176,14 @@ def test_view_switch_restore_renders_pane_own_reference_label(two_file_win, qtbo
     win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))
     win._echo_combo_signal(ctx.combo_rpm, (fids[0], "speed"))
     win.do_order_time()
-    _drain_order_queue(win, qtbot)
+    _drain_order_jobs(win, qtbot)
 
     # View 2: source B -- a DIFFERENT file/reference metadata.
     assert mgr.new_view() == 1
     win._echo_combo_signal(ctx.combo_sig, (fids[1], "torque"))
     win._echo_combo_signal(ctx.combo_rpm, (fids[1], "speed"))
     win.do_order_time()
-    _drain_order_queue(win, qtbot)
+    _drain_order_jobs(win, qtbot)
 
     # Switch BACK to View 1: this must never recompute (spec §4) -- it
     # renders pane 0's OWN saved source (fids[0], "torque") from cache via
@@ -2218,7 +2225,7 @@ def test_heatmap_reference_change_rerenders_cached_result_without_worker(
     win._echo_combo_signal(ctx.combo_rpm, (fids[0], "speed"))
 
     win.do_order_time()
-    _drain_order_queue(win, qtbot)
+    _drain_order_jobs(win, qtbot)
     canvas = win.chart_stack.page_order.pane_canvas(0)
     assert canvas.has_result()
     label_before = canvas._cbar.getAxis("left").labelText
@@ -2234,6 +2241,5 @@ def test_heatmap_reference_change_rerenders_cached_result_without_worker(
 
     label_after = canvas._cbar.getAxis("left").labelText
     assert label_after != label_before
-    assert win._order_thread is None, "a catalog save must never dispatch a compute worker"
-    assert not win._order_queue
+    assert not win._analysis_jobs.is_running("order"), "a catalog save must never dispatch a compute worker"
     assert canvas.has_result()

@@ -10,6 +10,8 @@ def test_main_window_constructs(qapp):
 
 
 def test_fft_time_effective_auto_nfft_resolves_before_cache_key(qapp, qtbot):
+    import json
+
     w = MainWindow()
     qtbot.addWidget(w)
 
@@ -31,9 +33,9 @@ def test_fft_time_effective_auto_nfft_resolves_before_cache_key(qapp, qtbot):
     assert effective["nfft"] == 256
     assert effective["nfft_effective"] == 256
     assert effective["nfft_mode"] == "auto"
-    key = w._fft_time_cache_key(effective)
-    assert isinstance(key[4], int)
-    assert key[4] == 256
+    key = w._fft_time_analysis_cache_key("f1", "speed", effective, 0)
+    assert isinstance(json.loads(key[2])["nfft"], int)
+    assert json.loads(key[2])["nfft"] == 256
 
     fixed = w._resolve_fft_time_effective_params(
         dict(p, nfft=1024, nfft_mode="fixed"), 5002
@@ -84,6 +86,7 @@ def test_fft_time_analysis_cache_key_auto_uses_effective_nfft(
 
 
 def test_fft_time_dispatch_uses_effective_auto_nfft(qapp, qtbot, monkeypatch):
+    import json
     import numpy as np
     import pandas as pd
     from types import SimpleNamespace
@@ -129,8 +132,8 @@ def test_fft_time_dispatch_uses_effective_auto_nfft(qapp, qtbot, monkeypatch):
         cancel_token=None,
     ):
         seen["nfft"] = params.nfft
-        seen["pending_nfft"] = w._fft_time_pending["render_params"]["nfft"]
-        seen["cache_key_nfft"] = w._fft_time_pending["cache_key"][4]
+        seen["ctx_nfft"] = ctx["render_params"]["nfft"]
+        seen["factory_params_nfft"] = ctx["params"]["nfft"]
         return object()
 
     class DummyProgress:
@@ -139,22 +142,23 @@ def test_fft_time_dispatch_uses_effective_auto_nfft(qapp, qtbot, monkeypatch):
 
     class DummyWorker:
         progress = DummyProgress()
-        cancelled = False
+        @staticmethod
+        def cancelled():
+            return False
 
     monkeypatch.setattr(
         spectrogram_mod.SpectrogramAnalyzer,
         "compute",
         staticmethod(fake_compute),
     )
-    monkeypatch.setattr(
-        w, "_start_fft_time_worker", lambda job: job(DummyWorker())
+    job, ctx = w._build_fft_time_job(
+        0, "f1", "speed", w.inspector.fft_time_ctx.get_params(), time_range=None,
     )
-
-    assert w._dispatch_fft_time_job(0, "f1", "speed", time_range=None)
+    assert job(DummyWorker()) is not None
     assert seen == {
         "nfft": 256,
-        "pending_nfft": 256,
-        "cache_key_nfft": 256,
+        "ctx_nfft": 256,
+        "factory_params_nfft": 256,
     }
 
 
@@ -524,10 +528,7 @@ def test_order_dispatch_uses_effective_auto_nfft(qtbot, monkeypatch):
     import pandas as pd
     from types import SimpleNamespace
 
-    from PyQt5.QtCore import QThread
-
     from mf4_analyzer.signal import order_cot
-    from mf4_analyzer.ui import main_window as mw_mod
 
     win = MainWindow()
     qtbot.addWidget(win)
@@ -567,24 +568,11 @@ def test_order_dispatch_uses_effective_auto_nfft(qtbot, monkeypatch):
 
     monkeypatch.setattr(order_cot, "COTParams", recording_cot_params)
 
-    started_threads = []
-    QThreadBase = QThread
-
-    class RecordingThread(QThreadBase):
-        def __init__(self, parent=None):
-            super().__init__(parent)
-            self.started_called = False
-            started_threads.append(self)
-
-        def start(self, priority=QThreadBase.InheritPriority):
-            self.started_called = True
-
-    monkeypatch.setattr(mw_mod, "QThread", RecordingThread)
-
-    assert win._dispatch_order_job(0, "f1", "sig", ("f1", "rpm")) is True
+    job, ctx = win._build_order_job(0, "f1", "sig", ("f1", "rpm"))
     expected = win._resolve_order_effective_params(current, rpm, t)["nfft_effective"]
     assert seen["nfft"] == expected
-    assert started_threads and started_threads[0].started_called is True
+    assert callable(job)
+    assert ctx["source"] == ("f1", "sig")
 
 
 def test_main_window_moves_time_hints_to_status_line(qapp, qtbot):
@@ -1158,8 +1146,6 @@ def test_order_dispatch_unsuitable_rpm_warns_but_starts_worker(
     import numpy as np
     import pandas as pd
     from types import SimpleNamespace
-    from PyQt5.QtCore import QThread
-    from mf4_analyzer.ui import main_window as mw_mod
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
@@ -1201,22 +1187,9 @@ def test_order_dispatch_unsuitable_rpm_warns_but_starts_worker(
         lambda msg, level='info': captured.append((msg, level)),
     )
 
-    started_threads = []
-    QThreadBase = QThread
-
-    class RecordingThread(QThreadBase):
-        def __init__(self, parent=None):
-            super().__init__(parent)
-            self.started_called = False
-            started_threads.append(self)
-
-        def start(self, priority=QThreadBase.InheritPriority):
-            self.started_called = True
-
-    monkeypatch.setattr(mw_mod, 'QThread', RecordingThread)
-
-    assert win._dispatch_order_job(0, 'f1', 'sig', ('f1', 'rpm')) is True
-    assert started_threads and started_threads[0].started_called is True
+    job, ctx = win._build_order_job(0, 'f1', 'sig', ('f1', 'rpm'))
+    assert callable(job)
+    assert ctx['source'] == ('f1', 'sig')
     assert any(level == 'warning' and "转速" in msg for msg, level in captured)
     assert "转速" in win.statusBar.currentMessage()
     btn_ot = getattr(win.inspector.order_ctx, 'btn_ot', None)
@@ -1804,7 +1777,7 @@ def _fft_time_base_params():
     )
 
 
-def test_fft_time_cache_key_ignores_display_only_options(qtbot):
+def test_fft_time_analysis_cache_key_ignores_display_only_options(qtbot):
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
@@ -1821,7 +1794,9 @@ def test_fft_time_cache_key_ignores_display_only_options(qtbot):
         freq_max=2000.0,
     )
 
-    assert win._fft_time_cache_key(base) == win._fft_time_cache_key(changed)
+    assert win._fft_time_analysis_cache_key(
+        "f1", "ch", base, 0
+    ) == win._fft_time_analysis_cache_key("f1", "ch", changed, 0)
 
 
 def test_render_fft_time_on_requests_smooth_heatmap_interpolation(qtbot):
@@ -1965,7 +1940,7 @@ def test_render_fft_time_on_manual_freq_range_is_preserved(qtbot):
     assert canvas.kwargs["freq_range"] == (3.0, 17.0)
 
 
-def test_fft_time_cache_hit_status(qtbot, monkeypatch):
+def test_fft_time_analysis_cache_hit_status(qtbot, monkeypatch):
     import numpy as np
     from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
     from mf4_analyzer.ui.main_window import MainWindow
@@ -1988,8 +1963,8 @@ def test_fft_time_cache_hit_status(qtbot, monkeypatch):
         freq_auto=True, freq_min=0.0, freq_max=0.0,
         time_range=(0.0, 0.1),
     )
-    key = win._fft_time_cache_key(p)
-    win._fft_time_cache_put(key, fake)
+    key = win._fft_time_analysis_cache_key('f1', 'ch', p, 0)
+    win.analysis_caches['fft_time'].put(key, fake)
 
     # Stub _get_fft_time_signal and inspector.get_params so do_fft_time
     # hits the cache branch.
@@ -2007,6 +1982,71 @@ def test_fft_time_cache_hit_status(qtbot, monkeypatch):
     # ``statusBar()`` which is incorrect here; the codebase convention
     # (verified in T5 report) is attribute access.
     assert "使用缓存结果" in win.statusBar.currentMessage()
+
+
+def test_fft_time_primary_hit_skips_nonuniform_preflight_and_service(
+    qtbot, monkeypatch
+):
+    """A reusable result must not rebuild a non-uniform axis on its way out."""
+    import numpy as np
+    from types import SimpleNamespace
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    p = {
+        "fs": 100.0,
+        "nfft": 8,
+        "window": "hanning",
+        "overlap": 0.5,
+        "remove_mean": True,
+        "weighting": "None",
+        "amplitude_mode": "amplitude",
+        "cmap": "turbo",
+    }
+    result = SimpleNamespace(
+        metadata={"frames": 2}, params=SimpleNamespace(nfft=8),
+    )
+    key = win._fft_time_analysis_cache_key("f1", "ch", p, 0)
+    win.analysis_caches["fft_time"].put(key, result)
+    rendered = []
+    submitted = []
+    nonuniform_fd = SimpleNamespace(
+        is_time_axis_uniform=lambda: False,
+        rebuild_time_axis=lambda _fs: (_ for _ in ()).throw(
+            AssertionError("cache hit must not rebuild")
+        ),
+    )
+
+    monkeypatch.setattr(
+        win,
+        "_get_fft_time_signal",
+        lambda: ("f1", "ch", np.array([0.0, 0.01]), np.ones(2), nonuniform_fd),
+    )
+    monkeypatch.setattr(win.inspector.fft_time_ctx, "get_params", lambda: p)
+    monkeypatch.setattr(win.inspector.top, "range_enabled", lambda: False)
+    monkeypatch.setattr(
+        win,
+        "_check_uniform_or_prompt",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("cache hit must not preflight")
+        ),
+    )
+    monkeypatch.setattr(
+        win,
+        "_render_fft_time_on",
+        lambda _canvas, got, _params, source=None: rendered.append((got, source)),
+    )
+    monkeypatch.setattr(
+        win._analysis_jobs,
+        "submit_batch",
+        lambda *args, **kwargs: submitted.append((args, kwargs)),
+    )
+
+    win.do_fft_time()
+
+    assert rendered == [(result, ("f1", "ch"))]
+    assert submitted == []
 
 
 def test_fft_time_force_bypasses_cache(qtbot, monkeypatch):
@@ -2040,8 +2080,8 @@ def test_fft_time_force_bypasses_cache(qtbot, monkeypatch):
         freq_auto=True, freq_min=0.0, freq_max=0.0,
         time_range=(0.0, 0.1),
     )
-    key = win._fft_time_cache_key(p)
-    win._fft_time_cache_put(key, cached)
+    key = win._fft_time_analysis_cache_key('f1', 'ch', p, 0)
+    win.analysis_caches['fft_time'].put(key, cached)
 
     fresh = SpectrogramResult(
         times=np.array([0.0, 0.1]),
@@ -2066,9 +2106,10 @@ def test_fft_time_force_bypasses_cache(qtbot, monkeypatch):
     monkeypatch.setattr(win.inspector.top, 'range_enabled', lambda: False)
 
     win.do_fft_time(force=True)
-    # Worker dispatched — wait for the finished slot to drain on the
-    # main thread (clears _fft_time_thread to None).
-    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=5000)
+    # Wait until the shared section service has drained the worker.
+    qtbot.waitUntil(
+        lambda: not win._analysis_jobs.is_running('fft_time'), timeout=5000
+    )
     assert calls['n'] == 1
     # Status bar should NOT mention cache when force-recomputing.
     assert "使用缓存结果" not in win.statusBar.currentMessage()
@@ -2126,9 +2167,10 @@ def test_fft_time_failed_compute_keeps_old_chart(qtbot, monkeypatch):
     monkeypatch.setattr(win, 'toast', lambda msg, level='info': captured.append((msg, level)))
 
     win.do_fft_time(force=True)
-    # Worker dispatched — wait for the failed slot to drain on the
-    # main thread (clears _fft_time_thread to None).
-    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=5000)
+    # Wait until the shared section service has drained the worker.
+    qtbot.waitUntil(
+        lambda: not win._analysis_jobs.is_running('fft_time'), timeout=5000
+    )
 
     # The old chart is still on the canvas (no clear() on failure).
     assert win.canvas_fft_time.has_result()
@@ -2181,7 +2223,7 @@ def test_fft_time_normalize_freq_range_clamps_inverted_pair(qtbot):
     ) is None
 
 
-def test_fft_time_cache_lru_eviction(qtbot):
+def test_fft_time_analysis_cache_lru_eviction(qtbot):
     """Capacity is 12 — older entries should evict in insertion order."""
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -2189,18 +2231,22 @@ def test_fft_time_cache_lru_eviction(qtbot):
     qtbot.addWidget(win)
 
     base = _fft_time_base_params()
+    cache = win.analysis_caches['fft_time']
     # Insert 13 distinct entries (vary nfft to make distinct keys).
     for i in range(13):
         p = dict(base, nfft=512 * (i + 1))
-        win._fft_time_cache_put(win._fft_time_cache_key(p), object())
+        key = win._fft_time_analysis_cache_key('f1', 'ch', p, 0)
+        cache.put(key, object())
 
-    assert len(win._fft_time_cache) == 12
+    assert len(cache._store) == 12
     # The first inserted (nfft=512) should have evicted.
     first = dict(base, nfft=512)
-    assert win._fft_time_cache_get(win._fft_time_cache_key(first)) is None
+    first_key = win._fft_time_analysis_cache_key('f1', 'ch', first, 0)
+    assert cache.get(first_key) is None
     # The second (nfft=1024) should still be present.
     second = dict(base, nfft=1024)
-    assert win._fft_time_cache_get(win._fft_time_cache_key(second)) is not None
+    second_key = win._fft_time_analysis_cache_key('f1', 'ch', second, 0)
+    assert cache.get(second_key) is not None
 
 
 def test_fft_time_inspector_relays_signal_changed_and_rebuild(qtbot):
@@ -2228,16 +2274,18 @@ def test_fft_time_inspector_relays_signal_changed_and_rebuild(qtbot):
 # ---------------------------------------------------------------------------
 
 
-def test_fft_time_cache_clears_on_close_all(qtbot):
+def test_fft_time_analysis_cache_clears_on_close_all(qtbot):
     """``close_all`` is the wholesale cache-wipe site (T5 flag site #2,
     close-all variant)."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
     qtbot.addWidget(win)
-    win._fft_time_cache[
-        ('f1', 'ch', (0, 1), 1000.0, 8, 'hanning', 0.5, True, 1.0)
-    ] = object()
+    cache = win.analysis_caches['fft_time']
+    key = win._fft_time_analysis_cache_key(
+        'f1', 'ch', dict(_fft_time_base_params(), nfft=8), 0
+    )
+    cache.put(key, object())
     # close_all early-returns when self.files is empty, so prime a
     # placeholder file entry so the body actually runs and exercises
     # the new cache-clear line.
@@ -2245,25 +2293,25 @@ def test_fft_time_cache_clears_on_close_all(qtbot):
     win.navigator.add_file = lambda *a, **kw: None  # silence side effects
     win.navigator.remove_file = lambda *a, **kw: None
     win.close_all()
-    assert len(win._fft_time_cache) == 0
+    assert len(cache._store) == 0
 
 
-def test_fft_time_cache_clears_for_fid_on_rebuild(qtbot):
+def test_fft_time_analysis_cache_clears_for_fid_on_rebuild(qtbot):
     """Per-fid targeted clear: rebuild_time_axis on file f1 must drop
     only f1's entries, leaving f2's entries intact."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
     qtbot.addWidget(win)
-    win._fft_time_cache[
-        ('f1', 'ch', (0, 1), 1000.0, 8, 'hanning', 0.5, True, 1.0)
-    ] = object()
-    win._fft_time_cache[
-        ('f2', 'ch', (0, 1), 1000.0, 8, 'hanning', 0.5, True, 1.0)
-    ] = object()
-    win._fft_time_cache_clear_for_fid('f1')
-    assert all(k[0] != 'f1' for k in win._fft_time_cache)
-    assert any(k[0] == 'f2' for k in win._fft_time_cache)
+    cache = win.analysis_caches['fft_time']
+    params = dict(_fft_time_base_params(), nfft=8)
+    f1_key = win._fft_time_analysis_cache_key('f1', 'ch', params, 0)
+    f2_key = win._fft_time_analysis_cache_key('f2', 'ch', params, 0)
+    cache.put(f1_key, object())
+    cache.put(f2_key, object())
+    win._invalidate_all_analysis_caches_for_fid('f1')
+    assert cache.get(f1_key) is None
+    assert cache.get(f2_key) is not None
 
 
 def test_fft_time_rebuild_popover_resolves_signal_via_fft_time_ctx(
@@ -2362,7 +2410,7 @@ def _fft_time_spectrogram_job(sig, t, params, ch='ch', unit='V'):
     return job
 
 
-def test_fft_time_worker_emits_finished(qtbot):
+def test_fft_time_compute_job_emits_finished(qtbot):
     """Happy-path smoke: the M9 FFT-vs-Time spectrogram job, run on an
     ``AnalysisComputeWorker`` + QThread, must emit ``finished`` with a
     SpectrogramResult payload.
@@ -2402,7 +2450,7 @@ def test_fft_time_worker_emits_finished(qtbot):
     assert results[0].amplitude.shape[1] > 0
 
 
-def test_fft_time_worker_cancels(qtbot):
+def test_fft_time_compute_job_cancels(qtbot):
     """``worker.cancel()`` flips the cancel token the spectrogram job
     polls via ``worker.cancelled``; the analyzer raises
     ``RuntimeError('spectrogram computation cancelled')`` mid-loop and
@@ -2816,12 +2864,14 @@ def test_fft_time_non_uniform_auto_rebuilds_without_popover(qtbot, monkeypatch):
     )
 
     win.do_fft_time(force=True)
-    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=10000)
+    qtbot.waitUntil(
+        lambda: not win._analysis_jobs.is_running('fft_time'), timeout=10000
+    )
 
     assert fake_fd.rebuilt_with == 100.0
     assert fake_fd.is_time_axis_uniform() is True
     assert compute_calls['n'] == 1
-    assert len(win._fft_time_cache) == 1
+    assert len(win.analysis_caches['fft_time']._store) == 1
     assert not any(level == 'warning' and '请重建' in msg for msg, level in captured)
     assert 'FFT vs Time 错误' not in win.statusBar.currentMessage()
 
@@ -2874,7 +2924,9 @@ def test_fft_time_non_uniform_auto_dispatches_worker_once(qtbot, monkeypatch):
     monkeypatch.setattr(win, 'do_fft_time', counted_do)
 
     win.do_fft_time(force=False)
-    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=10000)
+    qtbot.waitUntil(
+        lambda: not win._analysis_jobs.is_running('fft_time'), timeout=10000
+    )
 
     # Exactly one invocation (no retry in the T2 model).
     assert invocations['count'] == 1, \
@@ -2882,7 +2934,7 @@ def test_fft_time_non_uniform_auto_dispatches_worker_once(qtbot, monkeypatch):
     # Analyzer ran exactly once on the now-uniform axis.
     assert call_state['compute_calls'] == 1
     # Successful compute pushed exactly one result into the LRU.
-    assert len(win._fft_time_cache) == 1
+    assert len(win.analysis_caches['fft_time']._store) == 1
     assert fake_fd.rebuilt_with == 100.0
 
 
@@ -2928,7 +2980,9 @@ def test_fft_time_non_uniform_auto_rebuilds_with_suggested_fs(qtbot, monkeypatch
     monkeypatch.setattr(win, 'toast', lambda *a, **kw: None)
 
     win.do_fft_time(force=True)
-    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=10000)
+    qtbot.waitUntil(
+        lambda: not win._analysis_jobs.is_running('fft_time'), timeout=10000
+    )
 
     assert fake_fd.rebuilt_with == 250.0
     assert seen['fs'] == 250.0
@@ -3458,13 +3512,11 @@ def test_fft_time_db_reference_change_triggers_cached_rerender(qapp, qtbot, monk
     assert calls == [False]
 
 
-def test_fft_time_low_cache_key_excludes_db_reference_display_only():
-    """db_reference is display-only and must NOT affect the FFT-vs-Time LRU key.
+def test_fft_time_analysis_cache_key_excludes_db_reference_display_only(qapp, qtbot):
+    """db_reference is display-only and must not affect the primary cache key."""
 
-    ``_fft_time_cache_key`` reads only its ``params`` argument (no ``self``
-    state), so we bind the unbound method against a bare object stub.
-    """
-    from mf4_analyzer.ui.main_window._fft_time_mixin import FFTTimeMixin
+    win = MainWindow()
+    qtbot.addWidget(win)
 
     base = {
         "fid": "f1",
@@ -3477,9 +3529,12 @@ def test_fft_time_low_cache_key_excludes_db_reference_display_only():
         "remove_mean": True,
         "weighting": "A",
     }
-    stub = object.__new__(type("S", (FFTTimeMixin,), {}))
-    k1 = FFTTimeMixin._fft_time_cache_key(stub, dict(base, db_reference=1.0))
-    k2 = FFTTimeMixin._fft_time_cache_key(stub, dict(base, db_reference=2.0))
+    k1 = win._fft_time_analysis_cache_key(
+        "f1", "sig", dict(base, db_reference=1.0), 0
+    )
+    k2 = win._fft_time_analysis_cache_key(
+        "f1", "sig", dict(base, db_reference=2.0), 0
+    )
     assert k1 == k2
 
 

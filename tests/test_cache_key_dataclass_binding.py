@@ -59,9 +59,9 @@ def _dataclass_fields(dc):
 
 
 # ---------------------------------------------------------------------------
-# FFT-vs-Time : SpectrogramParams  <->  _fft_time_cache_key
+# FFT-vs-Time : SpectrogramParams  <->  _fft_time_analysis_cache_key
 # ---------------------------------------------------------------------------
-# The LRU key tuple also carries three EXTERNAL dimensions that are not (and
+# The analysis-cache key tuple also carries three EXTERNAL dimensions that are not (and
 # must not be) SpectrogramParams fields — they identify the source signal /
 # slice, not the spectrogram math:
 _FFT_TIME_EXTERNAL = {
@@ -72,23 +72,6 @@ _FFT_TIME_EXTERNAL = {
     # key's nfft value and maps onto the dataclass 'nfft' field.
     'nfft_effective',
 }
-
-
-def test_fft_time_key_field_set_equals_spectrogram_params():
-    dc = _dataclass_fields(SpectrogramParams)
-    registered = _registered_keys(FFTTimeMixin._fft_time_cache_key)
-    compute_fields = registered - _FFT_TIME_EXTERNAL
-    # 'nfft' is registered via nfft_effective fallback; ensure it is present so
-    # the dataclass 'nfft' field has a counterpart.
-    compute_fields.add('nfft')
-    compute_fields -= {'nfft_effective'}
-    assert compute_fields == dc, (
-        "FFT-vs-Time cache key drifted from SpectrogramParams.\n"
-        f"  dataclass only: {sorted(dc - compute_fields)}\n"
-        f"  key only:       {sorted(compute_fields - dc)}\n"
-        "Add the field to _fft_time_cache_key, or (if it is a display-only "
-        "param) it does NOT belong on SpectrogramParams."
-    )
 
 
 def test_fft_time_analysis_key_field_set_equals_spectrogram_params():

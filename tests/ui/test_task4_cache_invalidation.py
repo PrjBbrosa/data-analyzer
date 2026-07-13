@@ -3,10 +3,8 @@ fft_time fallback key alignment (问题④).
 
 RED tests written first; they exercise behaviour that does NOT yet exist.
 
-问题①: After rebuild_time_axis changes fd.fs, both `analysis_caches['fft']`
-and `analysis_caches['order']` must drop any previously-stored entry for
-that fid.  Only `_fft_time_cache_clear_for_fid` was called before; the
-`analysis_caches` for 'fft' and 'order' were NOT invalidated.
+问题①: After rebuild_time_axis changes fd.fs, every analysis result cache must
+drop any previously-stored entry for that fid.
 
 问题④: The fallback branch in `_analysis_cache_key` (reached when
 `_fft_time_effective_params_for_source` returns None because the signal has
@@ -17,35 +15,17 @@ including the `weighting` field.
 from __future__ import annotations
 
 import types
-from collections import OrderedDict
 
 import pytest
 
 from mf4_analyzer.ui.analysis_cache import AnalysisResultCache
 from mf4_analyzer.ui.main_window._fft_time_mixin import FFTTimeMixin
+from mf4_analyzer.ui.main_window.window import MainWindow
 
 
 # ---------------------------------------------------------------------------
 # Helpers — minimal MainWindow stub
 # ---------------------------------------------------------------------------
-
-class _LRUStore:
-    """Mimics the _fft_time_cache dict interface used by _fft_time_cache_clear_for_fid."""
-    def __init__(self):
-        self._d = OrderedDict()
-
-    def __contains__(self, k):
-        return k in self._d
-
-    def __iter__(self):
-        return iter(self._d)
-
-    def pop(self, k, *args):
-        return self._d.pop(k, *args)
-
-    def __len__(self):
-        return len(self._d)
-
 
 def _make_mw():
     """Build a minimal MainWindow-like object with the mixins we need."""
@@ -55,7 +35,6 @@ def _make_mw():
 
     class _StubMW(FFTTimeMixin):
         def __init__(self):
-            self._fft_time_cache = _LRUStore()
             self.analysis_caches = {
                 'fft': AnalysisResultCache(32),
                 'fft_time': AnalysisResultCache(12),
@@ -64,6 +43,69 @@ def _make_mw():
 
     mw = _StubMW()
     return mw
+
+
+def test_apply_custom_xaxis_invalidates_fft_time_analysis_cache(qtbot):
+    """Custom X changes display semantics outside the FFT-vs-Time key.
+
+    The existing FFT-vs-Time entry must therefore be evicted before the next
+    ``do_fft_time`` lookup; otherwise it would be a stale cache hit.
+    """
+    del qtbot  # This path is exercised against a narrow MainWindow protocol.
+
+    class _Data:
+        columns = {"custom_x"}
+
+        def __len__(self):
+            return 3
+
+    class _Canvas:
+        def invalidate_envelope_cache(self, _reason):
+            pass
+
+        def invalidate_monotonicity_cache(self):
+            pass
+
+    class _Top:
+        def xaxis_mode(self):
+            return "channel"
+
+        def xaxis_channel_data(self):
+            return ("f1", "custom_x")
+
+        def xaxis_label(self):
+            return "Custom X"
+
+    canvas = _Canvas()
+    cache = AnalysisResultCache(12)
+    key = cache.make_key(
+        "f1", "signal", {"fs": 1000.0, "nfft": 512, "time_range": (0.0, 1.0)}
+    )
+    cache.put(key, "existing-fft-time-result")
+
+    mw = types.SimpleNamespace(
+        chart_stack=types.SimpleNamespace(
+            focused_canvas=lambda: canvas,
+            current_mode=lambda: "fft",
+        ),
+        inspector=types.SimpleNamespace(top=_Top()),
+        navigator=types.SimpleNamespace(get_checked_channels=lambda: []),
+        files={"f1": types.SimpleNamespace(data=_Data())},
+        analysis_caches={"fft_time": cache},
+        _view_index_for_canvas=lambda _canvas: None,
+        plot_time=lambda: None,
+        statusBar=types.SimpleNamespace(showMessage=lambda *_args: None),
+        _hint_focused_pane=lambda _action: True,
+        toast=lambda *_args: None,
+    )
+
+    MainWindow._apply_xaxis(mw)
+
+    assert (mw._custom_xaxis_fid, mw._custom_xaxis_ch) == ("f1", "custom_x")
+    assert cache.get(key) is None, (
+        "custom X axis left an FFT-vs-Time analysis-cache entry reachable; "
+        "the next do_fft_time lookup would use stale data"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -118,19 +160,6 @@ class TestUnifiedInvalidationEntry:
         mw._invalidate_all_analysis_caches_for_fid('f1')
         assert cache.get(k) is None, (
             "analysis_caches['fft_time'] still holds stale entry for f1 after invalidation"
-        )
-
-    def test_clears_lru_fft_time_cache(self):
-        """The legacy _fft_time_cache LRU must also be cleared by the new entry point."""
-        mw = _make_mw()
-        # Manually insert a sentinel keyed under fid='f1'
-        stale_key = ('f1', 'ch1', (0.0, 10.0), 1000.0, 512, 'hann', 0.5, False, 'None')
-        mw._fft_time_cache._d[stale_key] = 'stale-lru-value'
-        assert stale_key in mw._fft_time_cache
-
-        mw._invalidate_all_analysis_caches_for_fid('f1')
-        assert stale_key not in mw._fft_time_cache, (
-            "_fft_time_cache LRU still holds stale LRU entry after invalidation"
         )
 
     def test_preserves_other_fid_entries(self):
@@ -250,6 +279,240 @@ class TestFallbackKeyAlignsPrimaryKey:
             f"  fallback: {fallback}\n"
             "The fallback must delegate to _fft_time_analysis_cache_key (问题④)."
         )
+
+    def _make_key_routing_probe(self):
+        """Return a narrow FFT-vs-Time protocol with two pane-local ranges."""
+        import numpy as np
+
+        class _RecordingCache(AnalysisResultCache):
+            def __init__(self):
+                super().__init__(12)
+                self.lookup_keys = []
+
+            def get(self, key):
+                self.lookup_keys.append(key)
+                return super().get(key)
+
+        class _Page:
+            def focused_index(self_):
+                return 1
+
+            def pane_count(self_):
+                return 2
+
+        class _Ctx:
+            def get_params(self_):
+                return {
+                    'fs': 10.0,
+                    'nfft': 4,
+                    'nfft_effective': 4,
+                    'window': 'hann',
+                    'overlap': 0.5,
+                    'remove_mean': True,
+                    'weighting': 'None',
+                }
+
+        class _Top:
+            def range_enabled(self_):
+                return True
+
+            def range_values(self_):
+                # Matches focused pane 1, as real focus routing does.
+                return (4.0, 7.0)
+
+        class _Jobs:
+            def __init__(self_):
+                self_.submitted = []
+
+            @staticmethod
+            def is_running(_section):
+                return False
+
+            def submit_batch(self_, section, jobs, **_kwargs):
+                self_.submitted.append((section, list(jobs)))
+
+            @staticmethod
+            def progress_counts(_section):
+                return (0, 1)
+
+        class _Status:
+            @staticmethod
+            def showMessage(_message):
+                pass
+
+        class _Probe(FFTTimeMixin):
+            def __init__(self_):
+                cache = _RecordingCache()
+                self_.analysis_caches = {'fft_time': cache}
+                self_.inspector = types.SimpleNamespace(
+                    fft_time_ctx=_Ctx(), top=_Top(),
+                )
+                self_.analysis_managers = {
+                    'fft_time': types.SimpleNamespace(
+                        active=0,
+                        get=lambda _active: types.SimpleNamespace(
+                            panes=[
+                                types.SimpleNamespace(sources=[('f0', 'sig0')]),
+                                types.SimpleNamespace(sources=[('f1', 'sig1')]),
+                            ]
+                        ),
+                    )
+                }
+                self_._analysis_jobs = _Jobs()
+                self_._analysis_progress_tokens = {}
+                self_.statusBar = _Status()
+                self_.builder_calls = []
+                self_.pane_ranges = {0: (0.0, 2.0), 1: (4.0, 7.0)}
+                self_.sample_time = np.arange(10, dtype=float)
+                self_._fft_time_coordinator = types.SimpleNamespace(
+                    request_batch=self_._request_fft_time_candidates,
+                )
+
+            def _request_fft_time_candidates(self_, candidates, replace=False):
+                """Minimal coordinator fake for key-routing assertions.
+
+                It deliberately mirrors only the coordinator boundary under
+                test: lookup key before factory, factory only after a miss,
+                then dispatch key rebuilt from the factory's final params.
+                """
+                del replace
+                queued = []
+                for candidate in candidates:
+                    job = candidate.get('job', object())
+                    ctx = {
+                        key: value for key, value in candidate.items()
+                        if key not in {'job', 'job_factory'}
+                    }
+                    if job is None:
+                        queued.append((None, ctx))
+                        continue
+                    lookup_key = self_._fft_time_analysis_cache_key(
+                        ctx['fid'], ctx['channel'], ctx['params'],
+                        ctx['time_range'],
+                    )
+                    if self_.analysis_caches['fft_time'].get(lookup_key) is not None:
+                        continue
+                    built = candidate['job_factory']()
+                    if built is None:
+                        queued.append((None, ctx))
+                        continue
+                    job, updates = built
+                    ctx.update(updates)
+                    ctx['analysis_key'] = self_._fft_time_analysis_cache_key(
+                        ctx['fid'], ctx['channel'], ctx['params'],
+                        ctx['time_range'],
+                    )
+                    queued.append((job, ctx))
+                if queued:
+                    self_._analysis_jobs.submit_batch('fft_time', queued)
+                return len(queued)
+
+            def _analysis_page(self_, section):
+                assert section == 'fft_time'
+                return _Page()
+
+            def _capture_active_analysis_view(self_, section):
+                assert section == 'fft_time'
+
+            def _pane_time_range_for(self_, section, pane_idx=None):
+                assert section == 'fft_time'
+                return self_.pane_ranges[int(pane_idx)]
+
+            @staticmethod
+            def _normalize_analysis_time_range(value):
+                return value
+
+            def _mask_time_range(self_, t, *arrays, time_range=None):
+                lo, hi = time_range
+                mask = (t >= lo) & (t <= hi)
+                return (t[mask], *(array[mask] for array in arrays))
+
+            def _fft_time_signal_for(self_, source):
+                fid, ch = source
+                sig = np.arange(len(self_.sample_time), dtype=float)
+                fd = types.SimpleNamespace(channel_units={ch: ''})
+                return fid, ch, self_.sample_time, sig, fd
+
+            def _get_fft_time_signal(self_):
+                return self_._fft_time_signal_for(('f1', 'sig1'))
+
+            def _check_uniform_or_prompt(self_, _fd, _section):
+                return True
+
+            def _fft_time_analysis_cache_key(self_, fid, ch, p, time_range):
+                self_.builder_calls.append((fid, ch, dict(p), time_range))
+                return FFTTimeMixin._fft_time_analysis_cache_key(
+                    self_, fid, ch, p, time_range
+                )
+
+            def _begin_compute_progress(self_, *_args, **_kwargs):
+                return object()
+
+            def _record_fft_time_skip(self_, _reason):
+                pass
+
+            def toast(self_, *_args):
+                raise AssertionError('valid probe inputs must not toast')
+
+        probe = _Probe()
+        return probe, probe.analysis_caches['fft_time']
+
+    def test_fft_time_dispatch_key_equals_lookup_key_for_each_pane(self, qtbot):
+        """Lookup and dispatch use the builder with each pane's own range."""
+        del qtbot
+        mw, cache = self._make_key_routing_probe()
+
+        mw.do_fft_time()
+        first_lookup = list(cache.lookup_keys)
+        mw.do_fft_time()
+        second_lookup = cache.lookup_keys[len(first_lookup):]
+
+        assert len(first_lookup) == 2
+        assert first_lookup == second_lookup
+        assert first_lookup[0] != first_lookup[1]
+        lookup_by_source = {(key[0], key[1]): key for key in first_lookup}
+
+        submitted = mw._analysis_jobs.submitted
+        assert len(submitted) == 2
+        dispatched = [
+            ctx['analysis_key']
+            for _section, jobs in submitted
+            for job, ctx in jobs
+            if job is not None
+        ]
+
+        assert dispatched == [
+            lookup_by_source[('f1', 'sig1')],
+            lookup_by_source[('f0', 'sig0')],
+            lookup_by_source[('f1', 'sig1')],
+            lookup_by_source[('f0', 'sig0')],
+        ]
+        assert [call[:2] + (call[3],) for call in mw.builder_calls] == [
+            ('f1', 'sig1', (4.0, 7.0)), ('f1', 'sig1', (4.0, 7.0)),
+            ('f0', 'sig0', (0.0, 2.0)), ('f0', 'sig0', (0.0, 2.0)),
+            ('f1', 'sig1', (4.0, 7.0)), ('f1', 'sig1', (4.0, 7.0)),
+            ('f0', 'sig0', (0.0, 2.0)), ('f0', 'sig0', (0.0, 2.0)),
+        ]
+
+    def test_fft_time_single_path_uses_same_key_builder_as_main_path(self, qtbot):
+        """The fallback single-source pending key matches the main-path lookup."""
+        del qtbot
+        mw, cache = self._make_key_routing_probe()
+
+        mw.do_fft_time()
+        main_lookup_for_focused_pane = next(
+            key for key in cache.lookup_keys if key[:2] == ('f1', 'sig1')
+        )
+        mw.builder_calls.clear()
+
+        mw._do_fft_time_single()
+
+        _section, jobs = mw._analysis_jobs.submitted[-1]
+        assert jobs[0][1]['analysis_key'] == main_lookup_for_focused_pane
+        assert [call[:2] + (call[3],) for call in mw.builder_calls] == [
+            ('f1', 'sig1', (4.0, 7.0)),
+            ('f1', 'sig1', (4.0, 7.0)),
+        ]
 
     def test_weighting_a_differentiates_from_none(self):
         """weighting='A' must produce a different key than weighting='None',
