@@ -1,7 +1,8 @@
 """PgLineCanvas: dual-row spectrum canvas tests (offscreen)."""
 import numpy as np
 import pytest
-from PyQt5.QtCore import QCoreApplication, QPointF, Qt
+from PyQt5.QtCore import QCoreApplication, QPoint, QPointF, Qt
+from PyQt5.QtGui import QWheelEvent
 from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack import PgNavigationToolbar
@@ -522,6 +523,36 @@ def test_ctrl_wheel_zooms_fft_line_canvas_x_only(canvas, qapp):
     assert consumed is True
     assert (x_after[1] - x_after[0]) < (x_before[1] - x_before[0])
     assert y_after == pytest.approx(y_before)
+
+
+def test_viewport_ctrl_wheel_zooms_fft_line_canvas_x_only(canvas, qapp):
+    """The actual GraphicsLayout viewport event must reach the shared
+    ViewBox dispatch, not merely its callable implementation."""
+    canvas.show()
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0),
+        amp_label='Amplitude', title='FFT - vib',
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    vb = canvas._plot_amp.vb
+    vb.setXRange(0.0, 500.0, padding=0)
+    vb.setYRange(-1.0, 1.0, padding=0)
+    qapp.processEvents()
+    before_x, before_y = vb.viewRange()
+    scene_pos = vb.mapViewToScene(QPointF(250.0, 0.0))
+    pos = QPointF(canvas._glw.mapFromScene(scene_pos))
+    global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
+    event = QWheelEvent(
+        pos, global_pos, QPoint(), QPoint(0, 120), Qt.NoButton,
+        Qt.ControlModifier, Qt.ScrollUpdate, False,
+    )
+
+    assert QApplication.sendEvent(canvas._glw.viewport(), event)
+    qapp.processEvents()
+    after_x, after_y = vb.viewRange()
+
+    assert (after_x[1] - after_x[0]) < (before_x[1] - before_x[0])
+    assert after_y == pytest.approx(before_y)
 
 
 def test_shift_wheel_zooms_fft_line_canvas_current_plot_y_only(canvas, qapp):

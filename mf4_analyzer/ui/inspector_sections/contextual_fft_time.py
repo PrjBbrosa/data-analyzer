@@ -196,10 +196,6 @@ class FFTTimeContextual(QWidget):
         )
         self.db_reference_control = make_db_reference_control(self)
         self.spin_db_ref = self.db_reference_control.editor
-        fl.addRow(
-            "dB 参考:",
-            _fit_field(self.db_reference_control, max_width=_SHORT_FIELD_MAX_WIDTH),
-        )
         g.setTitle("")
         # The section header already shows the title; drop the title band and
         # let the body carry a hairline top divider (see style.qss
@@ -233,6 +229,7 @@ class FFTTimeContextual(QWidget):
             x_auto_summary="全时段",
             y_auto_summary="0 → Nyquist",
             z_auto_summary="自动色阶",
+            pre_header_rows=(("dB 参考:", self.db_reference_control),),
         )
         params_lay.addWidget(axis_g)
         # Tooltips for widgets created inside _make_axis_settings_group.
@@ -768,7 +765,6 @@ class FFTTimeContextual(QWidget):
             'overlap': cfg.get('overlap', 75),
             'amplitude_mode': cfg.get('amplitude_mode', 'Amplitude dB'),
             'remove_mean': True,
-            'db_reference': 1.0,
             'weighting': getattr(self, '_source_weighting_default', 'None'),
             'freq_auto': cfg.get('freq_auto', True),
             'freq_min': 0.0,

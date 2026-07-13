@@ -3458,6 +3458,32 @@ def test_fft_time_db_reference_change_triggers_cached_rerender(qapp, qtbot, monk
     assert calls == [False]
 
 
+def test_fft_time_builtin_preset_does_not_schedule_dB_reference_rerender(
+    qapp, qtbot, monkeypatch,
+):
+    """Preset application changes analysis controls but not the View-level
+    dB reference, so it must not schedule the editor's display rerender path.
+    """
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    calls = []
+    monkeypatch.setattr(
+        win, "do_fft_time", lambda force=False: calls.append(force),
+    )
+    ctx = win.inspector.fft_time_ctx
+    ctx.db_reference_control.set_mode("manual")
+    ctx.spin_db_ref.setValue(2.5e-6)
+    qapp.processEvents()
+    calls.clear()
+
+    ctx.apply_builtin_preset("transient")
+    qtbot.wait(50)
+
+    assert calls == []
+
+
 def test_fft_time_low_cache_key_excludes_db_reference_display_only():
     """db_reference is display-only and must NOT affect the FFT-vs-Time LRU key.
 

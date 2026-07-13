@@ -219,10 +219,6 @@ class FFTContextual(QWidget):
         )
         self.db_reference_control = make_db_reference_control(self)
         self.spin_db_ref = self.db_reference_control.editor
-        fl.addRow(
-            "dB 参考:",
-            _fit_field(self.db_reference_control, max_width=_SHORT_FIELD_MAX_WIDTH),
-        )
         g.setTitle("")
         # The section header already shows the title; drop the title band and
         # let the body carry a hairline top divider (see style.qss
@@ -247,6 +243,7 @@ class FFTContextual(QWidget):
             x_auto_summary="自适应频率",
             y_auto_summary="自动范围",
             include_z=False,
+            pre_header_rows=(("dB 参考:", self.db_reference_control),),
         )
         for spin in (self.spin_y_min, self.spin_y_max):
             spin.setRange(-1e12, 1e12)

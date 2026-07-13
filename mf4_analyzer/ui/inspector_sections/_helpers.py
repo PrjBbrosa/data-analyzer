@@ -155,16 +155,15 @@ def make_db_reference_control(parent=None):
     Sets the shared dB-reference tooltip (Task 10A: explains dB re / dBA /
     Auto vs Manual / metadata priority -- existing tests assert
     ``"dB" in ctx.spin_db_ref.toolTip()``) and caps the
-    editor's own ``maximumWidth`` to the same A1 field cap the compound
-    root gets from ``_fit_field`` at the call site — the cap must land on
-    BOTH because ``_fit_field`` is invoked on the compound (which owns the
-    manage button + badge layout), not on the inner editor, and existing
-    tests (e.g. ``test_fft_time_contextual_short_fields_capped``) read
-    ``ctx.spin_db_ref.maximumWidth()`` directly.
+    editor and compound root to the same A1 field cap. The root cap belongs
+    here rather than at a particular layout call site because the control can
+    live in either a form row or the axis-settings pre-header row; existing
+    tests also read ``ctx.spin_db_ref.maximumWidth()`` directly.
     """
     control = DbReferenceControl(parent)
     control.editor.setToolTip(_DB_REFERENCE_TOOLTIP)
     _fit_field(control.editor, max_width=_SHORT_FIELD_MAX_WIDTH, align_right=False)
+    _fit_field(control, max_width=_SHORT_FIELD_MAX_WIDTH, align_right=False)
     return control
 
 
@@ -595,10 +594,48 @@ class _AxisRangeHost(QWidget):
 # once) instead of three repeated "自动" texts — that frees ~24px which the
 # fluid min→max editors absorb.
 _AXIS_LABEL_W = 56
+# Auxiliary display controls use the regular Inspector form-field datum so
+# their compound input starts with the fields above, rather than at the
+# narrower X/Y/Z axis-label column. The extra 4px over the axis label width
+# accounts for the row gap already present in the compact form convention.
+_AXIS_AUX_LABEL_W = 60
 _AXIS_CHK_W = 30
 _AXIS_ROW_GAP = 4
 _AXIS_ARROW_W = 12
 _AXIS_MANUAL_GAP = 3
+
+
+def _build_axis_aux_row(label, field):
+    """Build a single control row above the shared axis range header.
+
+    The label text retains the X/Y/Z row styling, while the field starts at
+    the regular Inspector form datum and fills the remaining width. This
+    hosts display controls that govern an axis without being a min/max range
+    themselves (currently the dB reference compound control).
+    """
+    row = QWidget()
+    row.setObjectName("dbReferenceAxisRow")
+    row.setAttribute(Qt.WA_StyledBackground, True)
+    row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(_AXIS_ROW_GAP)
+    # DbReferenceControl is taller than its editor because it also carries a
+    # source/provenance line. Keep the label centered on the *editor* row,
+    # rather than vertically centering it against the whole compound control.
+    label_host = QWidget(row)
+    label_host.setObjectName("axisAuxLabelHost")
+    label_host.setFixedWidth(_AXIS_AUX_LABEL_W)
+    editor = getattr(field, "editor", field)
+    label_host.setFixedHeight(editor.sizeHint().height())
+    label_lay = QVBoxLayout(label_host)
+    label_lay.setContentsMargins(0, 0, 0, 0)
+    label_lay.setSpacing(0)
+    label_widget = QLabel(label, label_host)
+    label_lay.addWidget(label_widget, 0, Qt.AlignVCenter)
+    lay.addWidget(label_host, 0, Qt.AlignTop)
+    lay.addWidget(field, 1)
+    return row
 
 
 def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
@@ -797,6 +834,7 @@ def _make_axis_settings_group(
     y_auto_summary="自动范围",
     z_auto_summary="自动色阶",
     include_z=True,
+    pre_header_rows=(),
 ):
     """Build the "坐标轴设置" QGroupBox and attach widgets to ``owner``.
 
@@ -834,6 +872,9 @@ def _make_axis_settings_group(
     lay.setContentsMargins(8, 8, 0, 8)
     lay.setSpacing(4)
     owner._axis_row_parts = {}
+
+    for label, field in pre_header_rows:
+        lay.addWidget(_build_axis_aux_row(label, field))
 
     # ---- column header: 自动 / 最小 / 最大 (labels the checkbox + editors
     # once instead of repeating "自动" on all three rows) ----

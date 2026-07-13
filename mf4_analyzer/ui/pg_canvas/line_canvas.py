@@ -607,7 +607,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         )
 
     def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,
-                               view_box=None):
+                               view_box=None, scene_pos=None, axis=None):
         step = 1 if delta > 0 else -1 if delta < 0 else 0
         if step == 0 or view_box is None:
             return False

@@ -1488,7 +1488,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         )
 
     def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,
-                               view_box=None):
+                               view_box=None, scene_pos=None, axis=None):
         """Lock the wheel to one axis on the spectrogram, matching the line
         canvases and the footer hint (``Ctrl + 滚轮`` → X, ``Shift + 滚轮`` → Y).
 

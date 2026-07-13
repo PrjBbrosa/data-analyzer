@@ -180,10 +180,6 @@ class OrderContextual(QWidget):
         )
         self.db_reference_control = make_db_reference_control(self)
         self.spin_db_ref = self.db_reference_control.editor
-        fl.addRow(
-            "dB 参考:",
-            _fit_field(self.db_reference_control, max_width=_SHORT_FIELD_MAX_WIDTH),
-        )
 
         # COT is now the only tracking algorithm (Wave 2 of the
         # 2026-04-28 axis-settings + COT migration plan removed the
@@ -235,6 +231,7 @@ class OrderContextual(QWidget):
             x_auto_summary="全时段",
             y_auto_summary="0 → 最大阶次",
             z_auto_summary="自动色阶",
+            pre_header_rows=(("dB 参考:", self.db_reference_control),),
         )
         # Order-specific clamp: spin_y_max upper bound tracks spin_mo. The
         # helper uses a generic 1e9 ceiling; tighten it here so the user

@@ -65,6 +65,8 @@ lesson by default.
 | [Pinned Protocol Adapters Own Vendor ABI](codex-pinned-protocol-adapters-own-vendor-abi.md) | Implementing or reviewing Seed&Key, native DLL calls, multi-part XCP | See lesson |
 | [Frozen Probes Do Not Require Console Streams](codex-frozen-probes-do-not-require-console-streams.md) | Adding a hidden child command, import probe, parser subprocess, or | See lesson |
 | [Claude Native Wrapper Stub Recovery](claude-native-wrapper-stub-recovery.md) | `claude` resolves to the global npm install but prints `claude native binary not installed` on Apple Silicon. | See lesson |
+| [Shared Wheel Dispatch Needs Event-Route Coverage](shared-wheel-dispatch-needs-event-route-coverage.md) | Changing the shared pyqtgraph ``_ModifierWheelViewBox`` wheel-dispatch payload or any canvas ``_handle_wheel_dispatch`` callback signature. | See lesson |
+| [Relocated Inspector Fields Keep Their Trailing Alignment](inspector-relocated-field-keeps-trailing-alignment.md) | Moving a capped Inspector control from a `QFormLayout` into a | See lesson |
 
 ## Selection Rules
 

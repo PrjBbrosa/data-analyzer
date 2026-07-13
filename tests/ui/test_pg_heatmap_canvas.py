@@ -2,7 +2,9 @@
 import numpy as np
 import pyqtgraph as pg
 import pytest
-from PyQt5.QtCore import QPointF, Qt
+from PyQt5.QtCore import QPoint, QPointF, Qt
+from PyQt5.QtGui import QWheelEvent
+from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack import PgNavigationToolbar
 from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
@@ -308,6 +310,34 @@ def test_wheel_dispatch_locks_axis_with_modifier(canvas):
         delta=120, modifiers=Qt.NoModifier,
         x_pos=50.0, y_pos=25.0, view_box=vb,
     ) is False
+
+
+def test_viewport_shift_wheel_zooms_heatmap_y_only(canvas, qapp):
+    """A real wheel event reaches the heatmap ViewBox and keeps X fixed."""
+    canvas.show()
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 100.0), y_extent=(0.0, 50.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    vb = canvas._plot.vb
+    vb.setXRange(0.0, 100.0, padding=0)
+    vb.setYRange(0.0, 50.0, padding=0)
+    qapp.processEvents()
+    before_x, before_y = vb.viewRange()
+    scene_pos = vb.mapViewToScene(QPointF(50.0, 25.0))
+    pos = QPointF(canvas._glw.mapFromScene(scene_pos))
+    global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
+    event = QWheelEvent(
+        pos, global_pos, QPoint(), QPoint(0, 120), Qt.NoButton,
+        Qt.ShiftModifier, Qt.ScrollUpdate, False,
+    )
+
+    assert QApplication.sendEvent(canvas._glw.viewport(), event)
+    qapp.processEvents()
+    after_x, after_y = vb.viewRange()
+
+    assert after_x == pytest.approx(before_x)
+    assert (after_y[1] - after_y[0]) < (before_y[1] - before_y[0])
 
 
 def test_has_result_lifecycle(canvas):

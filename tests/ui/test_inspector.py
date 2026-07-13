@@ -4896,17 +4896,21 @@ def _form_label_sequences(widget):
     return sequences
 
 
-def _assert_db_reference_below_weighting(widget):
-    for labels in _form_label_sequences(widget):
-        if "频率加权:" in labels:
-            idx = labels.index("频率加权:")
-            assert idx + 1 < len(labels), labels
-            assert labels[idx + 1] == "dB 参考:", labels
-            return
-    raise AssertionError("no form row labelled 频率加权:")
+def _assert_db_reference_precedes_axis_header(widget):
+    from PyQt5.QtWidgets import QGroupBox, QWidget
+
+    axis_group = widget.findChild(QGroupBox, "axisSettingsGroup")
+    assert axis_group is not None
+    reference_row = axis_group.findChild(QWidget, "dbReferenceAxisRow")
+    header = axis_group.findChild(QWidget, "axisHeaderRow")
+    assert reference_row is not None
+    assert header is not None
+    layout = axis_group.layout()
+    assert layout.indexOf(reference_row) == 0
+    assert layout.indexOf(header) == 1
 
 
-def test_db_reference_sits_below_weighting_in_all_analysis_contexts(qtbot):
+def test_db_reference_precedes_axis_header_in_all_analysis_contexts(qtbot):
     from mf4_analyzer.ui.inspector_sections import (
         FFTContextual,
         FFTTimeContextual,
@@ -4916,7 +4920,7 @@ def test_db_reference_sits_below_weighting_in_all_analysis_contexts(qtbot):
     for cls in (FFTContextual, FFTTimeContextual, OrderContextual):
         ctx = cls()
         qtbot.addWidget(ctx)
-        _assert_db_reference_below_weighting(ctx)
+        _assert_db_reference_precedes_axis_header(ctx)
         assert hasattr(ctx, "spin_db_ref")
         assert "dB" in ctx.spin_db_ref.toolTip()
 
@@ -4972,7 +4976,8 @@ def test_all_analysis_contexts_use_shared_db_reference_compound_control(qtbot):
         assert control.source_label.objectName() == "dbReferenceSourceLabel"
 
 
-def test_db_reference_compound_row_stays_below_weighting_and_within_320px(qtbot):
+def test_db_reference_compound_row_precedes_axis_header_and_fits_within_320px(qtbot):
+    from PyQt5.QtWidgets import QLabel, QWidget
     from mf4_analyzer.ui.inspector_sections._helpers import _SHORT_FIELD_MAX_WIDTH
 
     # Every constructed ctx is kept alive (in ``_keep_alive``) for the whole
@@ -4988,13 +4993,22 @@ def test_db_reference_compound_row_stays_below_weighting_and_within_320px(qtbot)
             ctx = cls()
             _keep_alive.append(ctx)
             qtbot.addWidget(ctx)
+            params_section = next(
+                (
+                    getattr(ctx, attr)
+                    for attr in ("_fft_section", "_tf_section", "_order_section")
+                    if hasattr(ctx, attr)
+                ),
+                None,
+            )
+            assert params_section is not None
+            params_section.set_expanded(True)
             ctx.resize(pane_width, 900)
             ctx.show()
             qtbot.waitExposed(ctx)
             qtbot.wait(20)
 
-            # Row order unchanged: dB 参考 immediately below 频率加权.
-            _assert_db_reference_below_weighting(ctx)
+            _assert_db_reference_precedes_axis_header(ctx)
 
             control = ctx.db_reference_control
             assert control.maximumWidth() <= _SHORT_FIELD_MAX_WIDTH, (
@@ -5007,6 +5021,52 @@ def test_db_reference_compound_row_stays_below_weighting_and_within_320px(qtbot)
             assert right_edge <= pane_width, (
                 f"{cls.__name__} db_reference_control right edge "
                 f"{right_edge}px overflows the {pane_width}px pane"
+            )
+
+            # The dB reference is now part of the axis group, but it must
+            # retain the standard Inspector field convention: its compound
+            # control uses the same trailing datum as the field above, rather
+            # than starting immediately after the shorter axis label column.
+            axis_row = ctx.findChild(QWidget, "dbReferenceAxisRow")
+            assert axis_row is not None
+            control_right = control.mapTo(ctx, control.rect().topRight()).x()
+            row_right = axis_row.mapTo(ctx, axis_row.rect().topRight()).x()
+            assert abs(control_right - row_right) <= 1, (
+                f"{cls.__name__} dB reference right edge {control_right}px "
+                f"does not align with its axis row right edge {row_right}px "
+                f"at pane={pane_width}px"
+            )
+            weighting_right = ctx.combo_weighting.mapTo(
+                ctx, ctx.combo_weighting.rect().topRight(),
+            ).x()
+            # The two QGroupBox bodies have a 2px frame-boundary difference;
+            # control/weighting edges within that tolerance are visually one
+            # right-aligned datum.
+            assert abs(control_right - weighting_right) <= 2, (
+                f"{cls.__name__} dB reference right edge {control_right}px "
+                f"does not align with the weighting field right edge "
+                f"{weighting_right}px at pane={pane_width}px"
+            )
+            assert control.editor.width() > control.editor.minimumSizeHint().width(), (
+                f"{cls.__name__} dB reference editor did not expand to fill "
+                f"its axis-row field at pane={pane_width}px"
+            )
+
+            axis_label = next(
+                label
+                for label in axis_row.findChildren(QLabel)
+                if label.text() == "dB 参考:"
+            )
+            label_center = axis_label.mapTo(
+                ctx, axis_label.rect().center(),
+            ).y()
+            editor_center = control.editor.mapTo(
+                ctx, control.editor.rect().center(),
+            ).y()
+            assert abs(label_center - editor_center) <= 1, (
+                f"{cls.__name__} dB reference label center {label_center}px "
+                f"does not align with editor center {editor_center}px "
+                f"at pane={pane_width}px"
             )
 
             control.refresh_geometry()
@@ -5184,3 +5244,24 @@ def test_old_preset_missing_weighting_and_reference_keys_preserves_live_state(qt
             f"{cls.__name__} preset missing reference keys changed mode"
         )
         assert params["db_reference"] == pytest.approx(4.4e-6)
+
+
+@pytest.mark.parametrize("preset", ("torque", "vibration", "transient"))
+@pytest.mark.parametrize("mode,value", (("auto", 1.0), ("manual", 2.5e-6)))
+def test_fft_time_builtin_preset_preserves_db_reference_state(
+    qtbot, preset, mode, value,
+):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    ctx.db_reference_control.set_mode(mode)
+    ctx.spin_db_ref.setValue(value)
+    changes = []
+    ctx.spin_db_ref.valueChanged.connect(changes.append)
+
+    ctx.apply_builtin_preset(preset)
+
+    assert ctx.db_reference_control.mode() == mode
+    assert ctx.spin_db_ref.value() == pytest.approx(value)
+    assert changes == []
