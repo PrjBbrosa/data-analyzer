@@ -7,7 +7,11 @@ from PyQt5.QtCore import QSettings
 from PyQt5.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from ...io import DataLoader, FileData, HAS_ASAMMDF
-from ...io.loader import AUDIO_VIDEO_EXTS, CSV_LIKE_EXTS
+from ...io.loader import (
+    AUDIO_VIDEO_EXTS,
+    CSV_LIKE_EXTS,
+    format_dropped_channels_notice,
+)
 
 
 AUDIO_VIDEO_GLOB = "*.mp4 *.mov *.mkv *.m4v *.mp3 *.m4a *.aac *.wav *.flac"
@@ -240,6 +244,13 @@ class ProjectIOMixin:
                 self.statusBar.showMessage(
                     f"✅ 已加载: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
+                # dropped_channels（非 FLOAT32 / 全 NaN）之前只存在 metadata、
+                # 用户无从知晓；加载后显式提示一次，别静默少通道。
+                dropped = (groups[0]["source_metadata"].get("dropped_channels")
+                           if groups else None)
+                notice = format_dropped_channels_notice(dropped)
+                if notice:
+                    self.toast(notice, "warning")
                 return
             else:
                 data, chs, units = DataLoader.load_csv(fp)
@@ -791,12 +802,17 @@ class ProjectIOMixin:
         # Cache invalidation site 2 (close-all variant): wipe everything.
         self.canvas_time.invalidate_envelope_cache("all files closed")
         self.canvas_time.invalidate_monotonicity_cache()
-        # FFT vs Time cache: every entry is keyed against a now-dead fid.
-        self._fft_time_cache.clear()
         # Per-section analysis caches: every entry is now stale (close-all
         # variant of the per-fid invalidate in ``_close``).
         for cache in self.analysis_caches.values():
             cache.clear()
+        # FftTimeCoordinator holds in-flight pending contexts that cache.clear()
+        # above does NOT touch — drop them too so a fft_time job still running
+        # when all files close cannot resurrect a dead-fid result into the
+        # just-cleared cache (N1; mirrors _close's per-fid coordinator.invalidate).
+        coordinator = getattr(self, "_fft_time_coordinator", None)
+        if coordinator is not None:
+            coordinator.invalidate_all()
         for fid in list(self.files.keys()):
             del self.files[fid]
             self.navigator.remove_file(fid)

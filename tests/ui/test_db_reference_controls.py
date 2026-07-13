@@ -332,6 +332,46 @@ def test_dialog_restore_uses_factory_working_copy_until_save(qtbot, tmp_path):
     assert after.user_catalog == ()
 
 
+def test_dialog_layout_insets_toggle_content_and_bounds_compact_columns(
+    qtbot, tmp_path,
+):
+    """The visual layout keeps cards and compact table fields off their edges."""
+    from PyQt5.QtWidgets import QHeaderView, QPushButton, QWidget
+    from mf4_analyzer.ui import db_reference_dialog as dialog_mod
+
+    store = DbReferenceSettingsStore(settings=_settings(tmp_path))
+    dlg = DbReferenceDefaultsDialog(None, store, current_effective_summary="")
+    qtbot.addWidget(dlg)
+    dlg.show()
+    qtbot.wait(30)
+
+    toggle_rows = dlg.findChildren(QWidget, "dbReferenceDialogToggleRow")
+    assert len(toggle_rows) == 2
+    for row in toggle_rows:
+        margins = row.layout().contentsMargins()
+        assert (margins.left(), margins.top(), margins.right(), margins.bottom()) == (
+            12, 5, 12, 5,
+        )
+    assert not dlg._effective_label.isVisible()
+
+    header = dlg.table.horizontalHeader()
+    assert header.sectionResizeMode(dialog_mod._COL_QUANTITY) == QHeaderView.Stretch
+    assert header.sectionResizeMode(dialog_mod._COL_UNIT) == QHeaderView.Interactive
+    assert dlg.table.columnWidth(dialog_mod._COL_UNIT) == dialog_mod._TABLE_UNIT_WIDTH
+    assert dlg.table.columnWidth(dialog_mod._COL_QUANTITY) > dlg.table.columnWidth(
+        dialog_mod._COL_UNIT
+    )
+    assert isinstance(dlg.table.itemDelegate(), dialog_mod._CatalogItemDelegate)
+
+    delete_cell = dlg.table.cellWidget(0, dialog_mod._COL_DELETE)
+    delete_button = delete_cell.findChild(QPushButton)
+    assert dlg.table.rowHeight(0) == dialog_mod._TABLE_ROW_HEIGHT
+    assert delete_button.geometry().left() >= 6
+    assert delete_button.geometry().right() <= delete_cell.width() - 7
+    assert delete_button.geometry().top() >= 4
+    assert delete_button.geometry().bottom() <= delete_cell.height() - 5
+
+
 def test_dialog_rejects_invalid_and_duplicate_rows_inline(qtbot, tmp_path):
     store = DbReferenceSettingsStore(settings=_settings(tmp_path))
     dlg = DbReferenceDefaultsDialog(None, store)

@@ -85,6 +85,74 @@ def test_load_hdf_groups_by_factor_and_drops_nan(tmp_path):
     assert fast["channel_metadata"]["MOTOR X"]["quantity"] == "acceleration"
 
 
+def test_duplicate_truncated_channel_names_are_disambiguated_not_overwritten(tmp_path):
+    """HEAD 的 ``name str`` 被截断到 16 字符会让物理上不同的通道塌成同名。
+
+    回归（v1-latent，真实文件 260417-ripple 实测）：``load_hdf`` 过去用
+    ``data[c.name] = s`` 当 DataFrame 键，同名后者静默覆盖前者——4 个
+    ``Com_Motor_Torque`` 里唯一有真数据的那个被一条全 0 通道盖掉，用户在
+    慢轨看到的扭矩是全 0。去重后：同组内每个物理通道保留一个唯一列名，
+    units / channel_metadata 同步跟到新键，真实数据不再丢失。
+    """
+    n = 6
+    zeros = np.zeros(n)
+    real = np.array([-4.22, 3.1, -2.0, 4.62, 0.5, -1.0])   # 唯一有真数据
+    dup = lambda s: {"name": "Com_Motor_Torque", "factor": 1,
+                     "quantity": "torque", "unit": "Nm",
+                     "calibration": 1.0, "samples": s}
+    p = write_head_hdf(
+        tmp_path / "dup.hdf", n_scans=n, delta=1.0, start_of_data=4096,
+        channels=[dup(zeros.copy()), dup(real), dup(zeros.copy())])
+    groups = DataLoader.load_hdf(str(p))
+    g = next(g for g in groups if "1x" in g["label_suffix"])
+    signal_cols = [c for c in g["channels"] if c != "Time"]
+    # 3 个物理通道 → 3 个不同列名，无覆盖
+    assert len(signal_cols) == 3
+    assert len(set(signal_cols)) == 3
+    # 真实扭矩数据没被全 0 覆盖：某列能还原 real
+    df = g["data"]
+    assert any(np.allclose(df[c].to_numpy(), real) for c in signal_cols)
+    # 去重列的 units / channel_metadata 同步存在（不留悬空键）
+    for c in signal_cols:
+        assert c in g["units"]
+        assert c in g["channel_metadata"]
+        assert g["channel_metadata"][c]["quantity"] == "torque"
+
+
+def test_unique_channel_names_keep_their_exact_name(tmp_path):
+    """无碰撞时通道列名保持原样（去重只对真正重复的名字生效）。"""
+    n = 4
+    p = write_head_hdf(
+        tmp_path / "uniq.hdf", n_scans=n, delta=1.0, start_of_data=2048,
+        channels=[
+            {"name": "Com_Motor_Torque", "factor": 1, "quantity": "torque",
+             "unit": "Nm", "calibration": 1.0, "samples": np.arange(n, dtype=float)},
+            {"name": "Com_TAS_Angle (C", "factor": 1, "quantity": "angle",
+             "unit": "deg", "calibration": 1.0, "samples": np.arange(n, dtype=float)},
+        ])
+    groups = DataLoader.load_hdf(str(p))
+    g = next(g for g in groups if "1x" in g["label_suffix"])
+    assert "Com_Motor_Torque" in g["channels"]
+    assert "Com_TAS_Angle (C" in g["channels"]
+
+
+def test_format_dropped_channels_notice():
+    """被丢通道（非 FLOAT32 / 全 NaN）汇总成给用户看的提示；空列表→空串，
+    UI 据此决定是否弹提示。之前 dropped_channels 只存在 metadata、UI 零暴露。"""
+    from mf4_analyzer.io.loader import format_dropped_channels_notice
+    assert format_dropped_channels_notice([]) == ""
+    assert format_dropped_channels_notice(None) == ""
+    one = format_dropped_channels_notice(
+        [{"name": "CAN 1@SQuadriga", "reason": "non-FLOAT32: UINT32"}])
+    assert "CAN 1@SQuadriga" in one
+    assert "1" in one
+    many = format_dropped_channels_notice([
+        {"name": "A", "reason": "non-FLOAT32: UINT32"},
+        {"name": "B", "reason": "all-NaN"},
+    ])
+    assert "2" in many
+
+
 def test_calibration_not_applied_as_gain(tmp_path):
     """calibration≠1 的通道加载后幅值=原始幅值（不被 calibration 放大）。"""
     n = 8

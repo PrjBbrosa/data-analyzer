@@ -674,7 +674,8 @@ def test_fft_time_context_returns_params(qtbot):
     assert params['dynamic'] == '80 dB'
     # Keys the FFT-vs-Time inspector get_params() must expose. Note
     # db_reference is here as a DISPLAY value (passed to plot_result), even
-    # though it is NOT part of the compute cache key (_fft_time_cache_key).
+    # though it is NOT part of the compute cache key
+    # (_fft_time_analysis_cache_key).
     for key in (
         'signal', 'fs', 'nfft', 'window', 'overlap', 'remove_mean',
         'amplitude_mode', 'db_reference', 'freq_auto', 'freq_min',

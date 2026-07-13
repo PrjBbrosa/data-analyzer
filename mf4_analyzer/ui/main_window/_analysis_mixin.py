@@ -665,6 +665,12 @@ class AnalysisMixin:
             or (getattr(fd, "channel_units", None) or {}).get(ch, "")
             or ""
         )
+        # Reverse toolchain identifier-safe unit encoding (U_ prefix, Y for /)
+        # at the facts boundary so both catalog matching and the displayed unit
+        # get the clean form -- e.g. U_Nm -> Nm, U_degYsec -> deg/sec, and a
+        # same-encoded vibration unit mYs2 -> m/s2 re-hits the ISO catalog
+        # instead of silently falling to generic. normalize_unit is untouched.
+        unit = db_reference.canonicalize_source_unit(unit)
         quantity = ch_meta.get("quantity") or ""
         metadata_reference = ch_meta.get("db_reference")
         is_audio_source_fn = getattr(fd, "is_audio_source", None)

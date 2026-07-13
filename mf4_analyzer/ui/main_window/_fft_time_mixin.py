@@ -2,27 +2,20 @@
 
 import numpy as np
 
-from PyQt5.QtCore import QThread
-
 from ... import db_reference
 from ...signal import resolve_nfft
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
+from .fft_time_coordinator import make_fft_time_analysis_key
 
 
 class FFTTimeMixin:
-    """Domain mixin: FFT-vs-Time spectrogram compute, LRU cache, worker
-    dispatch, and render.
+    """Domain adapter for FFT-vs-Time input collection and rendering.
 
-    The per-session LRU cache (``self._fft_time_cache`` +
-    ``self._fft_time_cache_capacity``) and the worker/queue fields
-    (``self._fft_time_thread`` etc.) are created in ``MainWindow.__init__``.
-
-    ``QThread`` is resolved via ``sys.modules`` at call time so
-    ``monkeypatch.setattr(mw_mod, 'QThread', ...)`` reaches this sub-file.
-    The shared static helpers ``_fft_time_auto_freq_range`` /
-    ``_fft_auto_xlim`` remain on MainWindow (window.py) and resolve through
-    the MRO via ``self.``.
+    Shared worker lifecycle, FIFO queueing and per-section progress accounting
+    belong to ``AnalysisJobService``.  Each submitted job carries its own
+    opaque context so completion never reads a mutable window-wide pending
+    record.
     """
 
     @staticmethod
@@ -52,12 +45,15 @@ class FFTTimeMixin:
             out['nfft_mode'] = 'fixed'
         return out
 
-    def _fft_time_analysis_cache_key(self, fid, ch, p, pane_idx):
-        cache = self.analysis_caches['fft_time']
-        # db_reference is display-only (dB normalisation reference) — it is NOT
-        # a compute input (SpectrogramAnalyzer.compute never reads it), so it is
-        # deliberately absent from the cache key. Changing it re-renders from
-        # cache via the plot_result db_reference kwarg, never a recompute.
+    def _fft_time_analysis_cache_key(self, fid, ch, p, time_range=None):
+        """Build the shared FFT-vs-Time compute key.
+
+        New coordinator callers always pass ``time_range`` explicitly.  The
+        integer compatibility branch keeps older cache-restoration callers on
+        the same pane-local contract while they still pass a pane index.
+        """
+        if isinstance(time_range, int):
+            time_range = self._pane_time_range_for('fft_time', time_range)
         params = {
             'fs': p.get('fs'),
             'nfft': int(p.get('nfft_effective', p.get('nfft'))),
@@ -65,9 +61,14 @@ class FFTTimeMixin:
             'overlap': p.get('overlap'),
             'remove_mean': p.get('remove_mean'),
             'weighting': str(p.get('weighting', 'None')),
-            'time_range': self._pane_time_range_for('fft_time', pane_idx),
         }
-        return cache.make_key(fid, ch, params)
+        return make_fft_time_analysis_key(
+            self.analysis_caches['fft_time'].make_key,
+            fid,
+            ch,
+            params,
+            time_range,
+        )
 
     def _fft_time_effective_params_for_source(self, p, fid, ch, time_range):
         """Resolve params for cache lookup without starting a worker."""
@@ -79,91 +80,28 @@ class FFTTimeMixin:
             _t, sig = self._mask_time_range(t, sig, time_range=rng)
             if len(sig) < 2:
                 return None
-            effective_time_range = rng
+            compute_time_range = rng
         else:
-            effective_time_range = (float(t[0]), float(t[-1]))
+            compute_time_range = (float(t[0]), float(t[-1]))
         return (
             self._resolve_fft_time_effective_params(p, len(sig)),
-            effective_time_range,
+            compute_time_range,
         )
-
-    def _fft_time_cache_key(self, params):
-        """Build the LRU cache key from compute-relevant fields ONLY.
-
-        Display options (``amplitude_mode``, ``cmap``, ``dynamic``,
-        ``freq_auto``, ``freq_min``, ``freq_max``, ``db_reference``) are
-        deliberately absent so toggling them re-renders without recomputing.
-        ``db_reference`` in particular is a dB normalisation reference that
-        ``SpectrogramAnalyzer.compute`` never reads (it lives render-side as
-        the ``plot_result`` kwarg), so keying on it would force a recompute
-        producing a byte-identical amplitude matrix.
-        """
-        nfft = params.get('nfft_effective', params.get('nfft'))
-        if nfft is None or str(nfft) == '自动':
-            raise ValueError('FFT-vs-Time cache key requires effective nfft')
-        return (
-            params.get('fid'),
-            params.get('channel'),
-            tuple(params.get('time_range') or (None, None)),
-            float(params.get('fs')),
-            int(nfft),
-            str(params.get('window')),
-            float(params.get('overlap')),
-            bool(params.get('remove_mean')),
-            str(params.get('weighting', 'None')),
-        )
-
-    def _fft_time_cache_get(self, key):
-        if key not in self._fft_time_cache:
-            return None
-        # LRU: pop and reinsert so the most-recently-used entry is at
-        # the OrderedDict tail.
-        value = self._fft_time_cache.pop(key)
-        self._fft_time_cache[key] = value
-        return value
-
-    def _fft_time_cache_put(self, key, result):
-        if key in self._fft_time_cache:
-            self._fft_time_cache.pop(key)
-        self._fft_time_cache[key] = result
-        while len(self._fft_time_cache) > self._fft_time_cache_capacity:
-            # popitem(last=False) is the LRU eviction (oldest first).
-            self._fft_time_cache.popitem(last=False)
-
-    def _fft_time_cache_clear_for_fid(self, fid):
-        """Drop every cache entry keyed under ``fid``.
-
-        Used by per-file invalidation hooks (file load, single-file
-        close, time-axis rebuild, custom-x change) so a freshly
-        modified file does not see stale results from a prior open.
-        Cache key shape (per ``_fft_time_cache_key``):
-        ``(fid, channel, time_range_tuple, fs, nfft, window, overlap,
-        remove_mean, weighting)`` — ``key[0]`` is the fid.
-        """
-        keys = [k for k in self._fft_time_cache if k[0] == fid]
-        for k in keys:
-            self._fft_time_cache.pop(k, None)
 
     def _invalidate_all_analysis_caches_for_fid(self, fid):
         """Single entry point: drop ALL per-fid cache entries whenever a
         compute input changes for that file (e.g. time-axis rebuild, channel
         edit, file close).
 
-        Clears:
-        - ``self._fft_time_cache`` (legacy LRU, keyed by fid at position 0).
-        - Every ``AnalysisResultCache`` in ``self.analysis_caches`` ('fft',
-          'fft_time', 'order') via ``invalidate_fid``.
-
-        **All call sites that previously called ``_fft_time_cache_clear_for_fid``
-        only must be routed here instead** so that the 'fft' and 'order'
-        ``AnalysisResultCache`` caches are also cleared.  The legacy helper is
-        kept for backward-compat (batch/test code that calls it directly) but
-        callers inside main_window must use this method.
+        Every ``AnalysisResultCache`` in ``self.analysis_caches`` ('fft',
+        'fft_time', 'order') is invalidated via ``invalidate_fid``.
         """
-        # 1. Legacy LRU (_fft_time_cache, an OrderedDict-like store)
-        self._fft_time_cache_clear_for_fid(fid)
-        # 2. All AnalysisResultCache instances (fft, fft_time, order, …)
-        for cache in self.analysis_caches.values():
+        for section, cache in self.analysis_caches.items():
+            if section == 'fft_time':
+                coordinator = getattr(self, '_fft_time_coordinator', None)
+                if coordinator is not None:
+                    coordinator.invalidate_fid(fid)
+                    continue
             cache.invalidate_fid(fid)
 
     def _get_fft_time_signal(self):
@@ -256,37 +194,13 @@ class FFTTimeMixin:
     def do_fft_time(self, force=False):
         """Compute and render the FFT-vs-Time spectrogram(s) for the active view.
 
-        V7b: computes the WHOLE active view — every pane, not just the
-        focused one. Each pane carries one heatmap source ``(fid, ch)``.
-        For every pane we build the analysis cache key and either:
-          * cache HIT  → render that result on the pane's own canvas
-            immediately (synchronous, no thread); or
-          * cache MISS → enqueue a ``(pane_idx, fid, ch)`` job.
-        The focused pane is enqueued first so the user's primary chart
-        appears first. The miss jobs run sequentially on ONE shared worker
-        QThread (no concurrent threads): :meth:`_start_next_fft_time_job`
-        dispatches the head job, :meth:`_on_fft_time_finished` caches +
-        renders onto ``page.pane_canvas(job_pane_idx)``, then
-        :meth:`_on_fft_time_thread_done` drives the next job. A single
-        pane (non-split) view yields exactly one job, so behaviour is
-        identical to the V7 focused-single-pane path.
-
-        ``force=True`` bypasses the LRU cache. Re-entry while a worker is
-        still running is dropped with a ``正在计算…`` status message
-        (the whole new request is discarded; we do not interleave a new
-        view's jobs into a running queue). On compute failure the OLD
-        chart for that pane stays visible — the failed handler does NOT
-        clear the canvas — and the next queued job still runs.
+        The mixin collects pane-local plain candidate dictionaries only.  The
+        coordinator owns cache probing, service submission, pending state, and
+        result caching; ``job_factory`` defers non-uniform-axis preflight until
+        a true cache miss so a cache hit has no compute-side effects.
         """
-        # V7 Step 5: capture the active view's params + per-pane sources so a
-        # later view switch renders from analysis_caches.
         self._capture_active_analysis_view('fft_time')
-        # Re-entry guard: a previous compute / queue is still on the thread.
-        # We drop the whole new request rather than interleaving jobs.
-        if (
-            self._fft_time_thread is not None
-            and self._fft_time_thread.isRunning()
-        ):
+        if self._analysis_jobs.is_running('fft_time'):
             self._emit_compute_feedback(
                 ComputeOutcome(),
                 busy=True,
@@ -298,80 +212,68 @@ class FFTTimeMixin:
         state = mgr.get(mgr.active)
         page = self._analysis_page('fft_time')
         p = self.inspector.fft_time_ctx.get_params()
-        cache = self.analysis_caches['fft_time']
 
-        # Build the job list: focused pane first so its chart appears first.
         focus = page.focused_index()
         pane_order = sorted(
             range(min(page.pane_count(), len(state.panes))),
             key=lambda i: (i != focus, i),
         )
-        queue = []
+        candidates = []
         any_source = False
         outcome = ComputeOutcome()
+        self._fft_time_outcome = outcome
         for pane_idx in pane_order:
             sources = state.panes[pane_idx].sources
             if not sources:
                 continue
             any_source = True
             fid, ch = sources[0]
-            cached = None
-            analysis_key = None
             render_p = p
             time_range = self._pane_time_range_for('fft_time', pane_idx)
             prepared = self._fft_time_effective_params_for_source(
                 p, fid, ch, time_range)
-            if prepared is not None:
-                render_p, effective_time_range = prepared
-                analysis_key = self._fft_time_analysis_cache_key(
-                    fid, ch, render_p, pane_idx)
-                if not force:
-                    cached = cache.get(analysis_key)
-                    if cached is None:
-                        key_params = dict(
-                            render_p,
-                            fid=fid,
-                            channel=ch,
-                            time_range=effective_time_range,
-                        )
-                        cached = self._fft_time_cache_get(
-                            self._fft_time_cache_key(key_params))
-                    if cached is not None and analysis_key is not None:
-                        cache.put(analysis_key, cached)
-            if cached is not None:
-                self._render_fft_time_on(
-                    page.pane_canvas(pane_idx), cached, render_p,
-                    source=(fid, ch))
-                outcome.cached += 1
-            else:
-                queue.append((pane_idx, fid, ch))
+            if prepared is None:
+                outcome.skipped.append('源通道缺失或样本不足')
+                candidates.append({
+                    'fid': fid,
+                    'channel': ch,
+                    'params': dict(p),
+                    'pane_idx': pane_idx,
+                    'time_range': time_range,
+                    'job': None,
+                    'render_params': dict(p),
+                    'source': (fid, ch),
+                    'force': force,
+                })
+                continue
+            render_p, _compute_time_range = prepared
+            candidates.append({
+                'fid': fid,
+                'channel': ch,
+                'params': dict(render_p),
+                'pane_idx': pane_idx,
+                'time_range': time_range,
+                'render_params': dict(render_p),
+                'source': (fid, ch),
+                'force': force,
+                'job_factory': lambda pane_idx=pane_idx, fid=fid, ch=ch,
+                raw_params=dict(p), time_range=time_range: self._build_fft_time_job(
+                    pane_idx, fid, ch, raw_params, time_range=time_range,
+                ),
+            })
 
-        if not queue:
-            self._fft_time_queue = []
-            self._fft_time_progress_token = None
-            self._fft_time_progress_total_jobs = 0
-            self._fft_time_progress_completed_jobs = 0
+        if not candidates:
             if not any_source:
-                # No pane has a source selected → legacy single-source path
-                # so the standalone-signal UX + existing tests are unchanged.
+                self._fft_time_outcome = None
                 self._do_fft_time_single(force=force)
                 return
             self._emit_compute_feedback(outcome, section_label="FFT-vs-Time")
+            self._fft_time_outcome = None
             return
 
-        self._fft_time_queue = queue
-        self._fft_time_outcome = outcome
-        n_jobs = len(self._fft_time_queue)
-        self._fft_time_progress_token = None
-        self._fft_time_progress_total_jobs = n_jobs
-        self._fft_time_progress_completed_jobs = 0
-        if n_jobs > 0:
-            self._fft_time_progress_token = self._begin_compute_progress(
-                "FFT-时间 1/%d" % n_jobs,
-                total=1000,
-                process_events=False,
-            )
-        self._start_next_fft_time_job()
+        queued = self._fft_time_coordinator.request_batch(candidates)
+        if queued == 0:
+            self._finish_fft_time_outcome_feedback()
 
     def _do_fft_time_single(self, force=False):
         """Legacy single-source FFT-vs-Time path: compute the inspector's
@@ -384,160 +286,98 @@ class FFTTimeMixin:
         getter, which standalone-signal tests monkeypatch) rather than the
         per-pane ``_fft_time_signal_for`` used by the split queue.
         """
-        from ...signal import SpectrogramParams
-        self._fft_time_queue = []
         page = self._analysis_page('fft_time')
         pane_idx = page.focused_index()
         fid, ch, t, sig, fd = self._get_fft_time_signal()
         if sig is None or len(sig) < 2:
             self.toast("请选择有效信号", "warning")
             return
-        # Pre-flight uniformity gate (T2, 2026-04-26): rebuild a non-uniform
-        # time axis BEFORE dispatching the worker.
-        if not self._check_uniform_or_prompt(fd, 'fft_time'):
-            return
-        # The rebuild may have rewritten ``fd.time_array``; re-fetch.
-        fid, ch, t, sig, fd = self._get_fft_time_signal()
-        if sig is None or len(sig) < 2:
-            self.toast("请选择有效信号", "warning")
-            return
         p = self.inspector.fft_time_ctx.get_params()
-        if self.inspector.top.range_enabled():
-            lo, hi = self.inspector.top.range_values()
-            m = (t >= lo) & (t <= hi)
-            t = t[m]; sig = sig[m]
-            if len(sig) < 2:
-                self.toast("当前范围内样本不足", "warning")
-                return
-            time_range = (float(lo), float(hi))
-        else:
-            time_range = (float(t[0]), float(t[-1]))
-        p = self._resolve_fft_time_effective_params(p, len(sig))
-        key_params = dict(p, fid=fid, channel=ch, time_range=time_range)
-        key = self._fft_time_cache_key(key_params)
-        analysis_key = self._fft_time_analysis_cache_key(
-            fid, ch, p, pane_idx)
-        cached = None if force else self._fft_time_cache_get(key)
-        if cached is None and not force:
-            cached = self.analysis_caches['fft_time'].get(analysis_key)
-        if cached is not None:
-            # Cache hit stays on the main thread — no worker needed.
-            self.analysis_caches['fft_time'].put(analysis_key, cached)
-            self._render_fft_time(cached, p, source=(fid, ch))
-            self.statusBar.showMessage(
-                "使用缓存结果 · "
-                f"{cached.metadata.get('frames', 0)} frames · "
-                f"NFFT {p['nfft_effective']}"
-            )
-            return
-        params = SpectrogramParams(
-            fs=float(p['fs']),
-            nfft=int(p['nfft_effective']),
-            window=str(p['window']),
-            overlap=float(p['overlap']),
-            remove_mean=bool(p['remove_mean']),
-            weighting=str(p.get('weighting', 'None')),
+        compute_time_range = (
+            self.inspector.top.range_values()
+            if self.inspector.top.range_enabled() else None
         )
-        unit = ''
-        if fd is not None and hasattr(fd, 'channel_units'):
-            unit = fd.channel_units.get(ch, '') or ''
-        self._fft_time_pending = {
-            'cache_key': key,
-            'render_params': p,
-            'analysis_key': analysis_key,
+        rng = self._normalize_analysis_time_range(compute_time_range)
+        if rng is not None:
+            t, sig = self._mask_time_range(t, sig, time_range=rng)
+        if sig is None or len(sig) < 2:
+            self.toast("当前范围内样本不足", "warning")
+            return
+        render_p = self._resolve_fft_time_effective_params(p, len(sig))
+        self._fft_time_outcome = None
+        self._fft_time_coordinator.request_batch([{
+            'fid': fid,
+            'channel': ch,
+            'params': dict(render_p),
             'pane_idx': pane_idx,
+            'time_range': self._pane_time_range_for('fft_time', pane_idx),
+            'render_params': dict(render_p),
             'source': (fid, ch),
-        }
+            'force': force,
+            'job_factory': lambda: self._build_fft_time_job(
+                pane_idx, fid, ch, dict(p), time_range=compute_time_range,
+                signal_getter=self._get_fft_time_signal,
+            ),
+        }])
 
-        def job(worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit):
-            from ...signal import SpectrogramAnalyzer
-            return SpectrogramAnalyzer.compute(
-                _sig, _t, _params, channel_name=_ch, unit=_unit,
-                progress_callback=worker.progress.emit,
-                cancel_token=worker.cancelled,
-            )
-
-        self._start_fft_time_worker(job)
-
-    def _start_next_fft_time_job(self):
-        """Dispatch the head job of the FFT-vs-Time queue, skipping jobs whose
-        source has become unfetchable. Stops (queue empty) when none remain."""
-        page = self._analysis_page('fft_time')
-        while self._fft_time_queue:
-            pane_idx, fid, ch = self._fft_time_queue.pop(0)
-            time_range = self._pane_time_range_for('fft_time', pane_idx)
-            if self._dispatch_fft_time_job(
-                pane_idx, fid, ch, time_range=time_range
-            ):
-                return
-            self._advance_fft_time_progress_job()
-        # Queue drained.
-        self._finish_fft_time_outcome_feedback()
+    def _on_fft_time_batch_started(self, total, first_ctx):
+        """Create the UI token before service submission can finish skips."""
+        self._analysis_progress_tokens['fft_time'] = self._begin_compute_progress(
+            "FFT-时间 1/%d" % total,
+            total=1000,
+            process_events=False,
+        )
+        p = first_ctx.get('render_params') or {}
+        nfft = p.get('nfft_effective', p.get('nfft'))
+        self.statusBar.showMessage(
+            f"正在计算… · NFFT {nfft}" if nfft is not None else "正在计算…"
+        )
 
     def _finish_fft_time_outcome_feedback(self):
-        self._finish_fft_time_progress_if_active()
         outcome = getattr(self, '_fft_time_outcome', None)
         if outcome is None:
             return
         self._emit_compute_feedback(outcome, section_label="FFT-vs-Time")
         self._fft_time_outcome = None
 
-    def _finish_fft_time_progress_if_active(self):
-        token = getattr(self, '_fft_time_progress_token', None)
-        if token is None:
-            return
-        self._finish_compute_progress(token=token)
-        self._fft_time_progress_token = None
-
-    def _advance_fft_time_progress_job(self):
-        token = getattr(self, '_fft_time_progress_token', None)
-        if token is None:
-            return
-        total_jobs = getattr(self, '_fft_time_progress_total_jobs', 0)
-        if total_jobs <= 0:
-            return
-        completed = getattr(self, '_fft_time_progress_completed_jobs', 0)
-        self._fft_time_progress_completed_jobs = min(
-            completed + 1,
-            total_jobs,
-        )
-
     def _record_fft_time_skip(self, reason):
         outcome = getattr(self, '_fft_time_outcome', None)
         if outcome is not None:
             outcome.skipped.append(reason)
 
-    def _dispatch_fft_time_job(
-        self, pane_idx, fid, ch, force=False,
-        time_range=_INSPECTOR_TIME_RANGE,
+    def _build_fft_time_job(
+        self, pane_idx, fid, ch, raw_params, *, time_range=_INSPECTOR_TIME_RANGE,
+        signal_getter=None,
     ):
-        """Fetch + range-gate the ``(fid, ch)`` source, then start the shared
-        worker for it, rendering onto ``page.pane_canvas(pane_idx)`` when done.
-        Returns True if a worker was started, False if the source was skipped
-        (caller advances to the next queued job)."""
+        """Prepare one job and its immutable completion context, or skip it."""
         from ...signal import SpectrogramParams
-        fid, ch, t, sig, fd = self._fft_time_signal_for((fid, ch))
+        if signal_getter is None:
+            signal_getter = lambda: self._fft_time_signal_for((fid, ch))
+        fid, ch, t, sig, fd = signal_getter()
         if sig is None:
             self._record_fft_time_skip("源通道缺失")
-            return False
+            return None
         if len(sig) < 2:
             self._record_fft_time_skip("信号过短")
-            return False
+            return None
+        preflight_fs = getattr(fd, 'fs', None)
         # Pre-flight uniformity gate (T2, 2026-04-26): rebuild a non-uniform
         # time axis BEFORE dispatching the worker. Best-effort per pane —
         # a failed rebuild skips this job, not the whole queue.
         if not self._check_uniform_or_prompt(fd, 'fft_time'):
             self._record_fft_time_skip("时间轴非均匀")
-            return False
+            return None
         # The rebuild may have rewritten ``fd.time_array``; re-fetch.
-        fid, ch, t, sig, fd = self._fft_time_signal_for((fid, ch))
+        fid, ch, t, sig, fd = signal_getter()
         if sig is None:
             self._record_fft_time_skip("源通道缺失")
-            return False
+            return None
         if len(sig) < 2:
             self._record_fft_time_skip("信号过短")
-            return False
-        p = self.inspector.fft_time_ctx.get_params()
+            return None
+        rebuilt_fs = getattr(fd, 'fs', None)
+        if rebuilt_fs is not None and rebuilt_fs != preflight_fs:
+            raw_params = dict(raw_params, fs=float(rebuilt_fs))
         if (
             time_range is _INSPECTOR_TIME_RANGE
             and self.inspector.top.range_enabled()
@@ -550,16 +390,8 @@ class FFTTimeMixin:
             t, sig = self._mask_time_range(t, sig, time_range=rng)
             if len(sig) < 2:
                 self._record_fft_time_skip("样本不足")
-                return False
-            effective_time_range = rng
-        else:
-            effective_time_range = (float(t[0]), float(t[-1]))
-        p = self._resolve_fft_time_effective_params(p, len(sig))
-        key_params = dict(
-            p, fid=fid, channel=ch, time_range=effective_time_range)
-        key = self._fft_time_cache_key(key_params)
-        analysis_key = self._fft_time_analysis_cache_key(
-            fid, ch, p, pane_idx)
+                return None
+        p = self._resolve_fft_time_effective_params(raw_params, len(sig))
         # SpectrogramParams is the cache key on the analyzer side; build
         # it from compute-relevant fields only (db_reference is display-only
         # and lives render-side, so it is intentionally not passed here).
@@ -574,17 +406,6 @@ class FFTTimeMixin:
         unit = ''
         if fd is not None and hasattr(fd, 'channel_units'):
             unit = fd.channel_units.get(ch, '') or ''
-        # Stash everything the finished handler needs to cache + render the
-        # RIGHT pane. ``pane_idx`` is the load-bearing field: the finished
-        # handler renders onto ``page.pane_canvas(pane_idx)``, never pane 0.
-        self._fft_time_pending = {
-            'cache_key': key,
-            'render_params': p,
-            'analysis_key': analysis_key,
-            'pane_idx': pane_idx,
-            'source': (fid, ch),
-        }
-
         def job(worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit):
             from ...signal import SpectrogramAnalyzer
             return SpectrogramAnalyzer.compute(
@@ -593,54 +414,13 @@ class FFTTimeMixin:
                 cancel_token=worker.cancelled,
             )
 
-        self._start_fft_time_worker(job)
-        return True
-
-    def _start_fft_time_worker(self, job):
-        """Wire + start the shared FFT-vs-Time worker/QThread for ``job``.
-        The caller has already populated ``self._fft_time_pending`` (incl. the
-        render ``pane_idx``)."""
-        from ..analysis_worker import AnalysisComputeWorker
-        import sys as _sys
-        _pkg = _sys.modules.get('mf4_analyzer.ui.main_window')
-        _QThread = getattr(_pkg, 'QThread', QThread) if _pkg is not None else QThread
-        worker = AnalysisComputeWorker(job)
-        thread = _QThread(self)
-        worker.moveToThread(thread)
-        # Standard QThread cleanup chain. The order matters:
-        #   started -> run        : entry point lives on the worker thread
-        #   finished/failed -> quit: stops the event loop on the worker thread
-        #   finished -> handler   : runs on the MAIN thread (AutoConnection
-        #                           across threads = QueuedConnection)
-        #   thread.finished -> deleteLater (worker, thread)
-        #   thread.finished -> _on_fft_time_thread_done : clears refs + pumps
-        #                       the next queued job
-        thread.started.connect(worker.run)
-        worker.finished.connect(thread.quit)
-        worker.failed.connect(thread.quit)
-        worker.finished.connect(self._on_fft_time_finished)
-        worker.failed.connect(self._on_fft_time_failed)
-        progress_token = getattr(self, '_fft_time_progress_token', None)
-        worker_progress_token = (
-            progress_token if progress_token is not None else object()
-        )
-        worker.progress.connect(
-            lambda current, total, token=worker_progress_token:
-                self._on_fft_time_progress(current, total, token=token)
-        )
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_fft_time_thread_done)
-        self._fft_time_thread = thread
-        self._fft_time_worker = worker
-        pending = getattr(self, '_fft_time_pending', None) or {}
-        p = pending.get('render_params') or {}
-        nfft = p.get('nfft_effective', p.get('nfft'))
-        if nfft is not None:
-            self.statusBar.showMessage(f"正在计算… · NFFT {nfft}")
-        else:
-            self.statusBar.showMessage("正在计算…")
-        thread.start()
+        return job, {
+            'fid': fid,
+            'channel': ch,
+            'params': p,
+            'render_params': p,
+            'source': (fid, ch),
+        }
 
     def _render_fft_time(self, result, p, source=None):
         """Apply display-only options and draw on the primary canvas.
@@ -763,31 +543,19 @@ class FFTTimeMixin:
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
 
-    # ---- FFT vs Time worker callbacks (Plan Task 7) ----
-    def _on_fft_time_finished(self, result):
-        """Worker reported success — cache + render on the main thread.
-
-        Runs on the main thread (Qt cross-thread signals default to
-        ``QueuedConnection``), so it is safe to touch the LRU cache and
-        the pyqtgraph canvas here.
-        """
-        pending = getattr(self, '_fft_time_pending', None) or {}
-        key = pending.get('cache_key')
-        p = pending.get('render_params')
-        analysis_key = pending.get('analysis_key')
-        pane_idx = pending.get('pane_idx')
-        source = pending.get('source')
-        if key is not None:
-            self._fft_time_cache_put(key, result)
-        if analysis_key is not None:
-            self.analysis_caches['fft_time'].put(analysis_key, result)
+    # ---- FFT vs Time coordinator events --------------------------------
+    def _on_fft_time_render_requested(self, ctx, result, cache_hit):
+        """Render a cache hit or freshly computed result for its own pane."""
+        p = ctx.get('render_params') or {}
+        pane_idx = ctx.get('pane_idx')
+        source = ctx.get('source')
         outcome = getattr(self, '_fft_time_outcome', None)
         if outcome is not None:
-            outcome.computed += 1
+            if cache_hit:
+                outcome.cached += 1
+            else:
+                outcome.computed += 1
         if p is not None:
-            # V7b: render onto the SPECIFIC pane this job was computed for,
-            # never the focused pane / pane 0. ``pane_idx`` falls back to the
-            # primary canvas only when the queue never set it (legacy path).
             page = self._analysis_page('fft_time')
             if pane_idx is not None and pane_idx < page.pane_count():
                 self._render_fft_time_on(
@@ -796,13 +564,19 @@ class FFTTimeMixin:
                 self._render_fft_time(result, p, source=source)
         nfft = getattr(getattr(result, 'params', None), 'nfft', None)
         suffix = f" · NFFT {int(nfft)}" if nfft is not None else ""
-        self.statusBar.showMessage(
-            f"FFT vs Time 完成 · {result.metadata.get('frames', 0)} frames"
-            f"{suffix}"
-        )
+        if cache_hit:
+            self.statusBar.showMessage(
+                "使用缓存结果 · "
+                f"{result.metadata.get('frames', 0)} frames{suffix}"
+            )
+        else:
+            self.statusBar.showMessage(
+                f"FFT vs Time 完成 · {result.metadata.get('frames', 0)} frames"
+                f"{suffix}"
+            )
 
-    def _on_fft_time_failed(self, message):
-        """Worker reported failure — keep the previous chart on screen.
+    def _on_fft_time_failed(self, _ctx, message):
+        """Coordinator failure — keep the previous chart on screen.
 
         Mirrors the synchronous T5 error pattern: ``toast(error)`` plus
         a status-bar message; the canvas is NEVER cleared so the user
@@ -835,43 +609,19 @@ class FFTTimeMixin:
             self.toast(msg, "error")
         self.statusBar.showMessage(f"FFT vs Time 错误: {message}")
 
-    def _on_fft_time_progress(self, current, total, *, token=None):
-        """Map per-worker progress onto the whole queued FFT-vs-Time batch."""
-        active_token = getattr(self, '_fft_time_progress_token', None)
-        if active_token is None:
+    def _on_fft_time_job_progress(self, done, total):
+        """Project service-owned batch progress onto the existing UI bar."""
+        token = self._analysis_progress_tokens.get('fft_time')
+        if token is None:
             return
-        if token is not None and token is not active_token:
-            return
-        total_jobs = max(1, getattr(self, '_fft_time_progress_total_jobs', 0))
-        job_fraction = 0.0
-        if total > 0:
-            job_fraction = max(0.0, min(1.0, current / total))
-        completed = getattr(self, '_fft_time_progress_completed_jobs', 0)
-        overall = (completed + job_fraction) / total_jobs
-        value = int(round(overall * 1000))
+        completed, total_jobs = self._analysis_jobs.progress_counts('fft_time')
+        total_jobs = max(1, total_jobs)
         job_index = min(completed + 1, total_jobs)
         label = f"FFT-时间 {job_index}/{total_jobs}"
         self._update_compute_progress(
-            value, 1000, label=label, token=active_token,
+            done, total, label=label, token=token,
         )
-
-    def _on_fft_time_thread_done(self):
-        """Worker thread emitted ``finished`` — clear refs, then pump the
-        next queued job.
-
-        Both ``worker`` and ``thread`` are scheduled for deleteLater
-        before this slot fires (per the connect order in
-        :meth:`_dispatch_fft_time_job`); we drop the local references so the
-        re-entry guard in :meth:`do_fft_time` lets the next compute through,
-        then dispatch the next job in the split queue (V7b). The refs MUST be
-        cleared before :meth:`_start_next_fft_time_job` so the new job's
-        ``thread.isRunning()`` re-entry guard does not see the just-finished
-        thread.
-        """
-        self._fft_time_thread = None
-        self._fft_time_worker = None
-        self._advance_fft_time_progress_job()
-        if self._fft_time_queue:
-            self._start_next_fft_time_job()
-        else:
+        if done == total and not self._analysis_jobs.is_running('fft_time'):
+            self._finish_compute_progress(token=token)
+            self._analysis_progress_tokens.pop('fft_time', None)
             self._finish_fft_time_outcome_feedback()

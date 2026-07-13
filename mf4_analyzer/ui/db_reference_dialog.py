@@ -36,6 +36,8 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
+    QStyleOptionViewItem,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -50,6 +52,12 @@ from .widgets.pill_switch import PillSwitch, PillSwitchLabel
 
 _COL_QUANTITY, _COL_UNIT, _COL_REFERENCE, _COL_SOURCE, _COL_DELETE = range(5)
 _HEADERS = ("物理量", "单位 / 别名", "0 dB reference", "来源", "")
+
+_TABLE_UNIT_WIDTH = 150
+_TABLE_REFERENCE_WIDTH = 150
+_TABLE_SOURCE_WIDTH = 60
+_TABLE_DELETE_WIDTH = 78
+_TABLE_ROW_HEIGHT = 40
 
 _CLOSE_ICON_COLOR = "#5b6472"
 _ERROR_CELL_BG = QColor("#fdf2f2")
@@ -87,6 +95,26 @@ class _Row:
     aliases: list
     reference: float
     origin: str  # 'system' | 'user' — display-only provenance for 来源
+
+
+class _CatalogItemDelegate(QStyledItemDelegate):
+    """Give text cells a real horizontal gutter across Qt styles."""
+
+    _HORIZONTAL_INSET = 8
+
+    @classmethod
+    def _inset_option(cls, option):
+        inset = QStyleOptionViewItem(option)
+        inset.rect = inset.rect.adjusted(
+            cls._HORIZONTAL_INSET, 0, -cls._HORIZONTAL_INSET, 0,
+        )
+        return inset
+
+    def paint(self, painter, option, index):
+        super().paint(painter, self._inset_option(option), index)
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(self._inset_option(option).rect)
 
 
 def _rows_from_store(store):
@@ -214,7 +242,13 @@ class DbReferenceDefaultsDialog(QDialog):
         self._effective_label = QLabel(current_effective_summary, self)
         self._effective_label.setObjectName("dbReferenceDialogEffective")
         self._effective_label.setWordWrap(True)
-        root.addWidget(self._effective_label)
+        # An empty QLabel still contributes its height and the surrounding
+        # layout spacing.  Do not leave a blank visual canyon between the two
+        # related toggle rows when the current View has no source summary yet.
+        if current_effective_summary:
+            root.addWidget(self._effective_label)
+        else:
+            self._effective_label.hide()
 
         # -- "优先使用通道 metadata" row (item 3) -----------------------------
         self._prefer_switch = PillSwitch(
@@ -231,9 +265,17 @@ class DbReferenceDefaultsDialog(QDialog):
         # -- catalog table (item 4) -----------------------------------------
         self.table = QTableWidget(self)
         self.table.setObjectName("dbReferenceDialogTable")
+        self.table.setItemDelegate(_CatalogItemDelegate(self.table))
         self.table.setColumnCount(len(_HEADERS))
         self.table.setHorizontalHeaderLabels(_HEADERS)
-        self.table.verticalHeader().setVisible(False)
+        vertical_header = self.table.verticalHeader()
+        vertical_header.setVisible(False)
+        # The delete-cell host contains a real button plus vertical gutters;
+        # the platform default table row is too short and clips it across row
+        # boundaries.  Keep every catalog row comfortably taller than that
+        # control instead of relying on style-dependent size hints.
+        vertical_header.setDefaultSectionSize(_TABLE_ROW_HEIGHT)
+        vertical_header.setMinimumSectionSize(_TABLE_ROW_HEIGHT)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(
             QAbstractItemView.DoubleClicked
@@ -241,13 +283,12 @@ class DbReferenceDefaultsDialog(QDialog):
             | QAbstractItemView.AnyKeyPressed
         )
         header_view = self.table.horizontalHeader()
-        # 物理量 labels can be long ("Acceleration g (SI-equivalent
-        # compatibility value)") — Interactive + an explicit cap keeps that
-        # column from squeezing 单位/别名 down to near-nothing the way
-        # ResizeToContents did.
-        header_view.setSectionResizeMode(_COL_QUANTITY, QHeaderView.Interactive)
-        header_view.resizeSection(_COL_QUANTITY, 220)
-        header_view.setSectionResizeMode(_COL_UNIT, QHeaderView.Stretch)
+        # Keep the compact unit/alias input bounded.  The quantity label is
+        # the only field that benefits from the remaining width, so let it
+        # stretch instead of letting 单位 / 别名 swallow the table.
+        header_view.setSectionResizeMode(_COL_QUANTITY, QHeaderView.Stretch)
+        header_view.setSectionResizeMode(_COL_UNIT, QHeaderView.Interactive)
+        header_view.resizeSection(_COL_UNIT, _TABLE_UNIT_WIDTH)
         # 2026-07-12 Task 10 visual-tour finding: ``ResizeToContents`` sizes
         # this column from the CELL WIDGET's generic ``sizeHint()`` (a
         # ``ScientificReferenceSpinBox`` reports ~56px regardless of its
@@ -257,12 +298,15 @@ class DbReferenceDefaultsDialog(QDialog):
         # widget's own ``setDecimals(30)`` docstring cites as its reason for
         # existing) measured ~120px, 4px WIDER than the resulting 116px
         # line-edit content area, silently clipping the last character.
-        # Same fix already applied to 物理量 above: Interactive + an
-        # explicit cap sized to comfortably fit the longest built-in value.
+        # Keep this fixed-width editor independent from the stretching
+        # quantity-label column above.
         header_view.setSectionResizeMode(_COL_REFERENCE, QHeaderView.Interactive)
-        header_view.resizeSection(_COL_REFERENCE, 150)
-        header_view.setSectionResizeMode(_COL_SOURCE, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(_COL_DELETE, QHeaderView.ResizeToContents)
+        header_view.resizeSection(_COL_REFERENCE, _TABLE_REFERENCE_WIDTH)
+        header_view.setSectionResizeMode(_COL_SOURCE, QHeaderView.Interactive)
+        header_view.resizeSection(_COL_SOURCE, _TABLE_SOURCE_WIDTH)
+        header_view.setSectionResizeMode(_COL_DELETE, QHeaderView.Interactive)
+        header_view.resizeSection(_COL_DELETE, _TABLE_DELETE_WIDTH)
+        header_view.setStretchLastSection(False)
         self.table.setMinimumHeight(220)
         root.addWidget(self.table, 1)
 
@@ -341,7 +385,9 @@ class DbReferenceDefaultsDialog(QDialog):
         row = QWidget(self)
         row.setObjectName("dbReferenceDialogToggleRow")
         lay = QHBoxLayout(row)
-        lay.setContentsMargins(0, 0, 0, 0)
+        # QSS padding paints the card but does not inset a child QLayout.
+        # Keep the text and switch clear of the border through real margins.
+        lay.setContentsMargins(12, 5, 12, 5)
         lay.setSpacing(10)
         text_box = QVBoxLayout()
         text_box.setSpacing(1)
@@ -369,6 +415,7 @@ class DbReferenceDefaultsDialog(QDialog):
     def _append_table_row(self, row):
         i = self.table.rowCount()
         self.table.insertRow(i)
+        self.table.setRowHeight(i, _TABLE_ROW_HEIGHT)
 
         quantity_item = QTableWidgetItem(row.label)
         # The column is Interactive-width-capped (see table setup above) so
@@ -391,12 +438,17 @@ class DbReferenceDefaultsDialog(QDialog):
         source_item.setFlags(source_item.flags() & ~Qt.ItemIsEditable)
         self.table.setItem(i, _COL_SOURCE, source_item)
 
-        delete_btn = QPushButton("删除", self.table)
+        delete_cell = QWidget(self.table)
+        delete_layout = QHBoxLayout(delete_cell)
+        delete_layout.setContentsMargins(6, 4, 6, 4)
+        delete_layout.setSpacing(0)
+        delete_btn = QPushButton("删除", delete_cell)
         delete_btn.setProperty("role", "danger")
         delete_btn.setAccessibleName(f"删除 {row.label or row.quantity} / {row.unit} 默认值")
         delete_btn.setAutoDefault(False)
         delete_btn.clicked.connect(lambda _checked=False, r=row: self._delete_row(r))
-        self.table.setCellWidget(i, _COL_DELETE, delete_btn)
+        delete_layout.addWidget(delete_btn)
+        self.table.setCellWidget(i, _COL_DELETE, delete_cell)
 
     def _add_custom_row(self):
         new_id = f"user.custom_{next(_custom_id_seq)}"

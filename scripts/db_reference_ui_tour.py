@@ -369,7 +369,7 @@ def main() -> int:
     pump(30)
     window.do_fft_time()
     wait_until(
-        lambda: window._fft_time_thread is None and not window._fft_time_queue,
+        lambda: not window._analysis_jobs.is_running("fft_time"),
         label="fft_time compute",
     )
     canvas_ft = window.chart_stack.page_fft_time.pane_canvas(0)
@@ -400,7 +400,7 @@ def main() -> int:
     pump(30)
     window.do_order_time()
     wait_until(
-        lambda: window._order_thread is None and not window._order_queue,
+        lambda: not window._analysis_jobs.is_running("order"),
         timeout_s=20.0, label="order compute",
     )
     canvas_order = window.chart_stack.page_order.pane_canvas(0)

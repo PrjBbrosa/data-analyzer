@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import re
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +177,37 @@ def normalize_quantity(quantity):
     if quantity is None:
         return ''
     return str(quantity).strip().lower()
+
+
+_U_PREFIX_RE = re.compile(r'^[uU]_')
+# A capital ``Y`` flanked by letters is the toolchain's ``/`` stand-in
+# (``degYsec`` -> ``deg/sec``, ``mYs`` -> ``m/s``). An isolated / leading Y
+# (Yotta prefix ``YHz``) is left alone; lowercase ``y`` (``Gy`` gray) too.
+_SLASH_Y_RE = re.compile(r'(?<=[A-Za-z])Y(?=[A-Za-z])')
+
+
+def canonicalize_source_unit(unit):
+    """Reverse a toolchain's identifier-safe unit encoding BEFORE the string
+    becomes a :class:`ChannelReferenceFacts` unit: strip a leading ``U_``
+    prefix and restore an alpha-flanked capital ``Y`` to ``/``
+    (``U_Nm`` -> ``Nm``, ``U_degYsec`` -> ``deg/sec``, ``mYs2`` -> ``m/s2``).
+
+    Only the *encoding* is reversed — this does NOT normalize unit synonyms
+    (that is :func:`normalize_unit`'s exact-match job) and never touches
+    :func:`normalize_unit` itself, so the catalog's "exact alias, no substring"
+    contract stays intact. Applied at the facts boundary so BOTH catalog
+    matching and the displayed unit get the clean form (unit is display-only,
+    never part of a compute cache key). A real unit never legitimately starts
+    with ``U_`` nor carries an inter-letter capital ``Y``, so the reversal is
+    safe for well-formed units, which pass through unchanged."""
+    if unit is None:
+        return ''
+    s = str(unit).strip()
+    if not s:
+        return ''
+    s = _U_PREFIX_RE.sub('', s, count=1)
+    s = _SLASH_Y_RE.sub('/', s)
+    return s
 
 
 # ---------------------------------------------------------------------------
