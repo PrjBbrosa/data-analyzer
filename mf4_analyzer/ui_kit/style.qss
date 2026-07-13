@@ -1314,7 +1314,9 @@ QDialog#DbReferenceDefaultsDialog QWidget#dbReferenceDialogToggleRow {
     border: 1px solid #dfe5ee;
     border-radius: 8px;
     background-color: #ffffff;
-    padding: 8px 10px;
+    /* The widget layout owns the real content inset; stylesheet padding alone
+       does not move QLayout children away from this card's border. */
+    padding: 0;
 }
 QDialog#DbReferenceDefaultsDialog QLabel#dbReferenceDialogToggleTitle {
     color: #111827;
