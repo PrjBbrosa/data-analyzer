@@ -114,3 +114,18 @@ def test_batch_fft_time_passes_weighting_to_spectrogram_params(monkeypatch):
     )
 
     assert captured["weighting"] == "A"
+
+
+def test_batch_channel_reference_facts_canonicalizes_toolchain_unit():
+    """Batch 侧 facts 适配器与 UI 侧一致：还原工具链改写单位 U_Nm / U_degYsec
+    （否则批量导出的 dB 标签同样印乱码、振动量同样错失 ISO 参考）。"""
+    from types import SimpleNamespace
+    from mf4_analyzer.batch import BatchRunner
+
+    fd = SimpleNamespace(
+        channel_metadata={},
+        channel_units={"TQ": "U_Nm", "VIB": "mYs2"},
+        is_audio_source=lambda: False,
+    )
+    assert BatchRunner._channel_reference_facts(fd, "TQ").unit == "Nm"
+    assert BatchRunner._channel_reference_facts(fd, "VIB").unit == "m/s2"

@@ -992,6 +992,10 @@ class MainWindow(
         # navigator selection into the active view so the cache lookup and the
         # signature reflect what is actually selected right now.
         self._capture_active_analysis_view('fft')
+        # 进入 FFT 时按当前勾选的焦点源刷新 Auto 的 dB reference（从别的模式勾好
+        # 通道再切进来时，控件必须立即反映该通道，而非等下一次勾选变化）。
+        # rerender=False：只刷识别不重算；Manual View 在 helper 内 no-op。
+        self._resolve_and_apply_db_reference('fft')
         signature = self._fft_render_signature()
         if signature == self._fft_last_render_sig:
             return
@@ -2018,6 +2022,11 @@ class MainWindow(
             invalidate("selection changed")
         if self.chart_stack.current_mode() == 'fft':
             self._sync_fft_source_summary()
+            # FFT 的「焦点源」是 navigator 勾选的首条通道，勾选变化必须驱动 Auto
+            # 的 dB reference 重解析（否则控件值/来源行停在旧通道，等于「没有自动
+            # 识别」）。rerender=False：只刷识别，不重算频谱——与下方「不自动重算」
+            # 语义一致。Manual View 在该 helper 内 no-op。
+            self._resolve_and_apply_db_reference('fft')
             # Channel-checkbox selection changed: keep the already-computed
             # spectrum on screen but mark it stale (dim + "结果已过期" marker).
             # Do NOT auto-recompute — the user re-clicks 计算 to refresh.

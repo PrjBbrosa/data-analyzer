@@ -410,3 +410,39 @@ def test_db_reference_module_has_zero_pyqt_import():
             imported_roots.add(node.module.split(".")[0])
     assert "PyQt5" not in imported_roots
     assert not hasattr(db_reference, "QSettings")
+
+
+def test_canonicalize_source_unit_reverses_toolchain_encoding():
+    """某些工具链把单位标识符安全化：加 ``U_`` 前缀、用大写 ``Y`` 代替 ``/``
+    （如 ``U_Nm`` / ``U_degYsec`` / 振动量 ``mYs2``）。还原层用于匹配 + 显示，
+    只反转确定性编码，不做单位同义词归一，也不改 ``normalize_unit`` 的精确
+    匹配内核。"""
+    f = db_reference.canonicalize_source_unit
+    # U_ 前缀剥离（真实单位不以 U_ 开头）
+    assert f("U_Nm") == "Nm"
+    assert f("U_degYsec") == "deg/sec"
+    # 被同样改写的振动量还原后能重新命中 ISO 目录
+    assert f("mYs2") == "m/s2"
+    assert f("mYs") == "m/s"
+    # 正常单位原样返回（无前缀、无字母间大写 Y）
+    assert f("Nm") == "Nm"
+    assert f("m/s²") == "m/s²"
+    assert f("m/s^2") == "m/s^2"
+    assert f("rpm") == "rpm"
+    assert f("") == ""
+    assert f(None) == ""
+    # 大写 Y 仅在两侧都是字母时才当 /（避免误伤 Yotta 前缀等孤立 Y）
+    assert f("Y") == "Y"
+    assert f("YHz") == "YHz"
+    # 小写 y 不受影响（Gy = gray）
+    assert f("Gy") == "Gy"
+
+
+def test_canonicalized_vibration_unit_resolves_to_catalog_reference():
+    """还原后的 ``mYs2`` 应能像 ``m/s2`` 一样命中工厂目录 acceleration（1e-6），
+    而非落 generic——证明还原层修的是真正的参考误配、不只是标签。"""
+    canon = db_reference.canonicalize_source_unit("mYs2")
+    facts = db_reference.ChannelReferenceFacts(quantity="", unit=canon)
+    result = db_reference.resolve_db_reference(mode="auto", facts=facts)
+    assert result.source == "system"
+    assert result.value == pytest.approx(1e-6)

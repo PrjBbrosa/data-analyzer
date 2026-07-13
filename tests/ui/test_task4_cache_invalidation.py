@@ -629,3 +629,29 @@ class TestAutoNfftFallbackNoTypeError:
             "nfft_preview=512 and nfft_preview=1024 must produce different keys "
             "in auto-nfft fallback mode."
         )
+
+
+def test_close_all_clears_fft_time_coordinator_pending(qapp, qtbot):
+    """回归（N1）：close_all 只清缓存、不清 FftTimeCoordinator 的 in-flight
+    pending，与单文件关闭（_close→_invalidate_all_analysis_caches_for_fid→
+    coordinator.invalidate_fid）不对称。关全部文件时若有 fft_time 作业在飞，
+    其完成回调会把死 fid 结果写回刚清空的缓存并渲染过期热图。close_all 后
+    coordinator 的 pending 必须为空。"""
+    import numpy as np
+    import pandas as pd
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    t = np.linspace(0, 1.0, 64)
+    df = pd.DataFrame({"Time": t, "ACC": np.sin(t)})
+    w._register_file_data("x.mf4", df, ["Time", "ACC"], {"ACC": "m/s^2"})
+    fid = next(iter(w.files))
+
+    # 模拟一条在飞的 fft_time 作业上下文
+    w._fft_time_coordinator._pending[999] = {"fid": fid, "ch": "ACC"}
+    assert w._fft_time_coordinator._pending  # 前置：确有 pending
+
+    w.close_all()
+
+    assert w._fft_time_coordinator._pending == {}

@@ -3686,3 +3686,85 @@ def test_fft_nfft_preview_wired_to_loaded_data(qapp, qtbot):
     # 单帧 auto = whole-signal FFT → effective length is the data length.
     assert fx._fft_nfft_preview() == 3552
     assert f"{fx._AUTO_NFFT_LABEL}(3552)" in fx._fft_summary_text()
+
+
+def test_fft_checked_channel_change_refreshes_auto_db_reference(qapp, qtbot):
+    """回归：FFT 焦点源来自 navigator 勾选，但勾选走 ``_ch_changed``，其 FFT
+    分支过去不触发 dB reference auto 重解析（代码自注 'Auto-resolve-on-
+    selection-change is NOT yet wired'）。勾选一个 m/s² 通道后，Auto 模式的
+    db_reference 控件应解析为 acceleration 1e-6，而不是停在勾选前被人为设定的
+    哨兵值——证明勾选变化确实驱动了自动识别。"""
+    import numpy as np
+    import pandas as pd
+    import pytest
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    t = np.linspace(0, 1.0, 256)
+    df = pd.DataFrame({"Time": t, "ACC": np.sin(2 * np.pi * 10 * t)})
+    w._register_file_data("acc.mf4", df, ["Time", "ACC"], {"ACC": "m/s^2"})
+    fid = next(iter(w.files))
+
+    w.toolbar.btn_mode_fft.click()
+    ctx = w._analysis_ctx("fft")
+    ctx.db_reference_control.set_mode("auto")
+    # 哨兵：假装控件停在一个「旧」值，勾选若真触发 auto 会覆盖它
+    editor = ctx.db_reference_control.editor
+    editor.blockSignals(True)
+    editor.setValue(0.5)
+    editor.blockSignals(False)
+
+    w.navigator.check_first_channel(fid)
+
+    assert ctx.db_reference_control.mode() == "auto"
+    assert editor.value() == pytest.approx(1e-6)
+
+
+def test_entering_fft_mode_resolves_auto_db_reference_for_checked_channel(qapp, qtbot):
+    """从 time 模式勾选通道后切入 FFT，Auto 的 dB reference 应在进入 FFT 时就
+    按已勾选通道解析（acceleration 1e-6），而不是等到下一次勾选变化才刷新。"""
+    import numpy as np
+    import pandas as pd
+    import pytest
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    t = np.linspace(0, 1.0, 256)
+    df = pd.DataFrame({"Time": t, "ACC": np.sin(2 * np.pi * 10 * t)})
+    w._register_file_data("acc.mf4", df, ["Time", "ACC"], {"ACC": "m/s^2"})
+    fid = next(iter(w.files))
+
+    # 在 time 模式勾选（不经 FFT 分支），再设哨兵，最后切入 FFT
+    w.navigator.check_first_channel(fid)
+    ctx = w._analysis_ctx("fft")
+    ctx.db_reference_control.set_mode("auto")
+    editor = ctx.db_reference_control.editor
+    editor.blockSignals(True)
+    editor.setValue(0.5)
+    editor.blockSignals(False)
+
+    w.toolbar.btn_mode_fft.click()
+    qtbot.wait(20)  # _enter_fft_mode 经 QTimer.singleShot(0) 延后一个事件循环
+
+    assert ctx.db_reference_control.mode() == "auto"
+    assert editor.value() == pytest.approx(1e-6)
+
+
+def test_channel_reference_facts_canonicalizes_toolchain_unit(qapp, qtbot):
+    """回归：工具链改写单位 U_Nm / U_degYsec 直接进 facts 会落 generic 且标签
+    印乱码。facts 边界应还原为干净单位（Nm / deg/sec）用于匹配与显示。"""
+    import numpy as np
+    import pandas as pd
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    t = np.linspace(0, 1.0, 32)
+    df = pd.DataFrame({"Time": t, "TQ": np.sin(t), "SPD": np.cos(t)})
+    w._register_file_data(
+        "x.mf4", df, ["Time", "TQ", "SPD"], {"TQ": "U_Nm", "SPD": "U_degYsec"})
+    fid = next(iter(w.files))
+    assert w._channel_reference_facts(fid, "TQ").unit == "Nm"
+    assert w._channel_reference_facts(fid, "SPD").unit == "deg/sec"

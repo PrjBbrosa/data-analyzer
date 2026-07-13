@@ -140,6 +140,16 @@ class FftTimeCoordinator(QObject):
             if str(ctx["fid"]) != fid
         }
 
+    def invalidate_all(self) -> None:
+        """Forget every cached result AND drop every in-flight pending context.
+
+        The close-all counterpart to :meth:`invalidate_fid`: without clearing
+        ``_pending`` a fft_time job still running when all files close would,
+        on completion, resurrect a now-dead fid's result back into the just-
+        cleared cache and render an over-stale heatmap onto a reset pane."""
+        self._cache.clear()
+        self._pending.clear()
+
     def _build_context(self, candidate: Mapping, *, include_key: bool = True) -> dict:
         required = (
             "fid",

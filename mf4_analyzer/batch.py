@@ -597,6 +597,10 @@ class BatchRunner:
             or (getattr(fd, 'channel_units', None) or {}).get(ch, '')
             or ''
         )
+        # Mirror MainWindow._channel_reference_facts: reverse toolchain unit
+        # encoding (U_ prefix, Y for /) at the facts boundary so batch export's
+        # dB labels/refs match the interactive path (U_Nm -> Nm, mYs2 -> m/s2).
+        unit = db_reference.canonicalize_source_unit(unit)
         quantity = ch_meta.get('quantity') or ''
         metadata_reference = ch_meta.get('db_reference')
         is_audio_source_fn = getattr(fd, 'is_audio_source', None)

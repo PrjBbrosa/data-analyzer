@@ -93,6 +93,20 @@ def unique_mdf_channel_locations(mdf):
     return channel_locations
 
 
+def format_dropped_channels_notice(dropped):
+    """Human-facing notice for channels dropped during load (non-FLOAT32 /
+    all-NaN, recorded in ``source_metadata['dropped_channels']``).
+
+    Returns ``""`` when nothing was dropped so the caller can gate the toast;
+    otherwise a ``"N 个通道未导入：a、b"`` summary. Keeps the drop visible to
+    the user instead of only living in metadata."""
+    dropped = dropped or []
+    if not dropped:
+        return ""
+    names = "、".join(str(d.get("name", "?")) for d in dropped)
+    return f"{len(dropped)} 个通道未导入：{names}"
+
+
 def _resolve_channel_unit(mdf, sig, group_idx, ch_idx):
     """Return a channel unit, falling back to the MDF conversion block."""
     unit = str(getattr(sig, 'unit', '') or '')
@@ -677,10 +691,12 @@ class DataLoader:
         # ~9 s / 129.5 kHz）。绝对尺度已对标真实文件确认，勿改回 max_factor。
         per_scan = sum(f for _, f in hf.ch_order)
 
-        # 标定 + 丢全 NaN；收集被丢通道名+原因（不静默丢弃）
+        # 标定 + 丢全 NaN；收集被丢通道名+原因（不静默丢弃）。带 1-based 文件内
+        # 序号 idx：HEAD 的 name str 截断到 16 字符会让物理不同的通道塌成同名，
+        # 用序号消歧（moniker / physical_channel_nbr 实测常为同值，无法消歧）。
         live = []
         dropped = []
-        for c in hf.channels:
+        for idx, c in enumerate(hf.channels, 1):
             if c.samples is None:
                 # samples=None means non-FLOAT32 impl_type (skipped in demux)
                 reason = (f"non-FLOAT32: {c.impl_type}"
@@ -696,13 +712,13 @@ class DataLoader:
             if np.isnan(s).all():
                 dropped.append({"name": c.name, "reason": "all-NaN"})
                 continue
-            live.append((c, s))
+            live.append((idx, c, s))
 
         # RPM 源（speed of rotation 且非全 0）
-        rpm = next((s for c, s in live
+        rpm = next((s for _i, c, s in live
                     if "speed of rotation" in c.quantity.lower()
                     and np.any(s != 0)), None)
-        rpm_factor = next((c.factor for c, s in live
+        rpm_factor = next((c.factor for _i, c, s in live
                            if "speed of rotation" in c.quantity.lower()
                            and np.any(s != 0)), None)
 
@@ -712,19 +728,27 @@ class DataLoader:
 
         groups = []
         by_factor = {}
-        for c, s in live:
-            by_factor.setdefault(c.factor, []).append((c, s))
+        for idx, c, s in live:
+            by_factor.setdefault(c.factor, []).append((idx, c, s))
 
         for factor, items in sorted(by_factor.items(), reverse=True):
-            length = items[0][1].size
+            length = items[0][2].size
             t = axis(factor, length)
             data = {"Time": t}
             units = {}
             cmeta = {}
-            for c, s in items:
-                data[c.name] = s
-                units[c.name] = c.unit
-                cmeta[c.name] = {
+            for idx, c, s in items:
+                # 组内去重：截断同名（如 4 个 Com_Motor_Torque）不能用同一 dict
+                # 键——否则后者覆盖前者、真实数据被全 0 通道盖掉。首次出现保留原名，
+                # 碰撞时追加文件内序号 [idx]（罕见二次碰撞再补下划线兜底）。
+                name = c.name
+                if name in data:
+                    name = f"{c.name} [{idx}]"
+                    while name in data:
+                        name = f"{name}_"
+                data[name] = s
+                units[name] = c.unit
+                cmeta[name] = {
                     "quantity": c.quantity, "unit": c.unit,
                     "calibration": c.calibration,
                     "db_reference": c.db_reference, "moniker": c.moniker,
@@ -733,7 +757,7 @@ class DataLoader:
                     "equalization": c.equalization, "emphasis": c.emphasis,
                 }
             # 转速注入：仅注入到含 acceleration 的组、且本组不是转速所在组
-            has_acc = any("acceleration" in c.quantity.lower() for c, _ in items)
+            has_acc = any("acceleration" in c.quantity.lower() for _i, c, _s in items)
             if rpm is not None and has_acc and factor != rpm_factor:
                 rpm_t = axis(rpm_factor, rpm.size)
                 inj = np.interp(t, rpm_t, rpm)
