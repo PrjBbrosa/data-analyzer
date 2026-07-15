@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import mf4_analyzer.ui.main_window as mw
 from mf4_analyzer.ui.main_window import MainWindow
 from PyQt5.QtCore import QMimeData, QPoint, Qt, QUrl
@@ -96,6 +98,18 @@ def test_drag_enter_accepts_fdc(qapp, qtbot, tmp_path):
     assert ev.isAccepted()
 
 
+def test_drag_enter_accepts_asc(qapp, qtbot, tmp_path):
+    w = MainWindow()
+    qtbot.addWidget(w)
+    f = tmp_path / "a.asc"
+    f.write_text("Time\tSig\n0\t1\n")
+    ev = _enter(_mime([f]))
+
+    w.dragEnterEvent(ev)
+
+    assert ev.isAccepted()
+
+
 def test_drag_enter_ignores_unsupported(qapp, qtbot, tmp_path):
     w = MainWindow()
     qtbot.addWidget(w)
@@ -120,7 +134,7 @@ def test_drop_supported_calls_open_paths(qapp, qtbot, tmp_path, monkeypatch):
 
     w.dropEvent(_drop(_mime([csv, mf4])))
 
-    assert captured == [[str(csv), str(mf4)]]
+    assert [[Path(path) for path in paths] for paths in captured] == [[csv, mf4]]
 
 
 def test_drop_filters_unsupported_and_toasts(qapp, qtbot, tmp_path, monkeypatch):
@@ -138,7 +152,7 @@ def test_drop_filters_unsupported_and_toasts(qapp, qtbot, tmp_path, monkeypatch)
 
     w.dropEvent(_drop(_mime([csv, txt])))
 
-    assert captured == [[str(csv)]]
+    assert [[Path(path) for path in paths] for paths in captured] == [[csv]]
     assert len(toasts) == 1 and "1" in toasts[0][0]
 
 
@@ -165,7 +179,7 @@ def test_drop_tlproj_passes_through(qapp, qtbot, tmp_path, monkeypatch):
 
     w.dropEvent(_drop(_mime([proj])))
 
-    assert captured == [[str(proj)]]
+    assert [[Path(path) for path in paths] for paths in captured] == [[proj]]
 
 
 def test_overlay_shows_on_enter_hides_on_leave(qapp, qtbot, tmp_path):

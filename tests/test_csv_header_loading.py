@@ -80,6 +80,20 @@ def test_plain_csv_behavior_unchanged(tmp_path):
     assert list(df["sig"]) == [1, 2, 3]
 
 
+def test_tab_separated_asc_loads_as_csv(tmp_path):
+    p = _write(
+        tmp_path,
+        "capture.asc",
+        "Time\tSpeed\n0.0\t10\n0.1\t11\n",
+    )
+
+    df, channels, units = DataLoader.load_csv(p)
+
+    assert channels == ["Time", "Speed"]
+    assert list(df["Speed"]) == [10, 11]
+    assert units == {}
+
+
 def test_garbage_still_raises_valueerror(tmp_path):
     p = tmp_path / "garbage.csv"
     p.write_bytes(bytes(range(256)) * 4)

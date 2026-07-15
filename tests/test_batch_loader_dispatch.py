@@ -62,3 +62,24 @@ def test_default_loader_dispatches_fdc_as_csv(monkeypatch, tmp_path):
     assert called["path"] == str(path)
     assert fd.is_audio_source() is False
     assert list(fd.data.columns) == ["Time", "sig"]
+
+
+def test_default_loader_dispatches_asc_as_csv(monkeypatch, tmp_path):
+    path = tmp_path / "data.asc"
+    path.write_text("Time,sig\n0,1\n0.1,2\n", encoding="utf-8")
+    called = {}
+
+    def fake_load_csv(fp):
+        called["path"] = fp
+        return pd.DataFrame({"Time": [0.0, 0.1], "sig": [1.0, 2.0]}), ["Time", "sig"], {}
+
+    def fail_load_mf4(fp):
+        raise AssertionError(f".asc should be loaded as CSV, not MF4: {fp}")
+
+    monkeypatch.setattr(DataLoader, "load_csv", staticmethod(fake_load_csv))
+    monkeypatch.setattr(DataLoader, "load_mf4", staticmethod(fail_load_mf4))
+
+    fd = _default_loader(str(path))
+
+    assert called["path"] == str(path)
+    assert list(fd.data.columns) == ["Time", "sig"]

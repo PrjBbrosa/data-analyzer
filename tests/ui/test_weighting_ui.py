@@ -342,3 +342,6 @@ def test_project_io_dialog_filters_include_audio_video_extensions():
     assert "*.fdc" in DATA_FILE_GLOB
     assert "*.fdc" in PROJECT_OR_DATA_FILTER
     assert "*.fdc" in OPEN_FILES_FILTER
+    assert "*.asc" in DATA_FILE_GLOB
+    assert "*.asc" in PROJECT_OR_DATA_FILTER
+    assert "*.asc" in OPEN_FILES_FILTER

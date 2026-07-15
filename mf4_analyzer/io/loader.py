@@ -132,7 +132,7 @@ AUDIO_VIDEO_EXTS = {
     '.mp3', '.m4a', '.aac', '.wav', '.flac',
 }
 
-CSV_LIKE_EXTS = {'.csv', '.fdc'}
+CSV_LIKE_EXTS = {'.asc', '.csv', '.fdc'}
 
 
 @dataclass(frozen=True)
