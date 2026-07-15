@@ -87,3 +87,24 @@ def test_default_loader_dispatches_asc_as_csv(monkeypatch, tmp_path):
 
     assert called["path"] == str(path)
     assert list(fd.data.columns) == ["Time", "sig"]
+
+
+def test_default_loader_dispatches_tdms(monkeypatch, tmp_path):
+    path = tmp_path / "data.tdms"
+    path.write_bytes(b"handled by mocked loader")
+    called = {}
+
+    def fake_load_tdms(fp):
+        called["path"] = fp
+        return pd.DataFrame({"Time": [0.0, 0.1], "sig": [1.0, 2.0]}), ["Time", "sig"], {"sig": "V"}
+
+    def fail_load_mf4(fp):
+        raise AssertionError(f".tdms should not be loaded as MF4: {fp}")
+
+    monkeypatch.setattr(DataLoader, "load_tdms", staticmethod(fake_load_tdms), raising=False)
+    monkeypatch.setattr(DataLoader, "load_mf4", staticmethod(fail_load_mf4))
+
+    fd = _default_loader(str(path))
+
+    assert called["path"] == str(path)
+    assert list(fd.data.columns) == ["Time", "sig"]

@@ -1,5 +1,7 @@
 numpy
 pandas
+# Base NI TDMS reader; optional HDF/pandas extras are intentionally excluded.
+nptdms==1.11.0
 PyQt5
 asammdf
 av

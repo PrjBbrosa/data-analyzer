@@ -393,6 +393,95 @@ def _raw_blf_channels(frames, t0):
 
 class DataLoader:
     @staticmethod
+    def load_tdms(fp):
+        """Load waveform-based NI TDMS data into the shared time-axis contract.
+
+        TDMS permits each channel to carry its own waveform timing properties.
+        This loader requires those properties instead of guessing a sample rate;
+        the longest timed numeric signal becomes the reference axis and other
+        timed signals are linearly resampled just as ``load_mf4`` does.
+        """
+        try:
+            from nptdms import TdmsFile
+        except ImportError as exc:
+            raise ImportError(
+                "nptdms is not installed; install the application's TDMS dependency"
+            ) from exc
+
+        def waveform_time(properties, sample_count):
+            try:
+                increment = float(properties["wf_increment"])
+            except (KeyError, TypeError, ValueError):
+                return None
+            if not np.isfinite(increment) or increment <= 0:
+                return None
+            try:
+                offset = float(properties.get("wf_start_offset", 0.0))
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(offset):
+                return None
+            return offset + increment * np.arange(sample_count, dtype=np.float64)
+
+        tdms = TdmsFile.read(str(fp))
+        raw_channels = []
+        name_counts = defaultdict(int)
+        for group in tdms.groups():
+            for channel in group.channels():
+                values = np.asarray(channel[:])
+                if (
+                    values.ndim != 1
+                    or values.size == 0
+                    or not np.issubdtype(values.dtype, np.number)
+                ):
+                    continue
+                base_name = str(channel.name or "Channel")
+                name_counts[base_name] += 1
+                raw_channels.append({
+                    "group": str(group.name or "Group"),
+                    "base_name": base_name,
+                    "values": values.astype(np.float64, copy=False),
+                    "time": waveform_time(channel.properties, values.size),
+                    "unit": str(channel.properties.get("unit_string", "") or ""),
+                })
+
+        if not raw_channels:
+            raise ValueError("TDMS file has no non-empty numeric channels")
+
+        untimed = [entry["base_name"] for entry in raw_channels if entry["time"] is None]
+        if untimed:
+            raise ValueError(
+                "TDMS numeric channels have no waveform timing metadata: "
+                + ", ".join(untimed)
+            )
+
+        reference = max(raw_channels, key=lambda entry: entry["values"].size)
+        reference_time = reference["time"]
+        data = {"Time": reference_time}
+        units = {}
+        used_names = {"Time"}
+        for index, entry in enumerate(raw_channels, 1):
+            base_name = entry["base_name"]
+            display_name = (
+                base_name
+                if name_counts[base_name] == 1
+                else f"{entry['group']}.{base_name}"
+            )
+            if display_name in used_names:
+                display_name = f"{display_name} [{index}]"
+            used_names.add(display_name)
+
+            channel_time = entry["time"]
+            values = entry["values"]
+            if np.array_equal(channel_time, reference_time):
+                data[display_name] = values
+            else:
+                data[display_name] = np.interp(reference_time, channel_time, values)
+            units[display_name] = entry["unit"]
+
+        return pd.DataFrame(data), list(data.keys()), units
+
+    @staticmethod
     def load_mf4(fp):
         if not HAS_ASAMMDF: raise ImportError("asammdf not installed")
         mdf = MDF(fp)

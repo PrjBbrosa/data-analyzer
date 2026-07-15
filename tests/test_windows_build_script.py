@@ -25,6 +25,13 @@ def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():
         assert token in text
 
 
+def test_windows_folder_build_script_includes_lazy_tdms_reader():
+    script = ROOT / "tools" / "build_windows_folder.ps1"
+    text = script.read_text(encoding="utf-8")
+
+    assert '"nptdms"' in text
+
+
 def test_windows_folder_build_script_bundles_help_docs_inside_app():
     """Help docs (panel guides + software manual) are integrated into the app
     and opened from inside the bundle, so they ship INSIDE the package via

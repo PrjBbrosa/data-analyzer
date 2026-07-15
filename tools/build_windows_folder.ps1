@@ -167,6 +167,8 @@ $HiddenImports = @(
     "logging.config",
     "logging.handlers",
     "timeit",
+    # DataLoader imports npTDMS lazily, so add it explicitly for frozen builds.
+    "nptdms",
     "mf4_analyzer.ui_kit",
     "mf4_analyzer.ui_kit.fonts",
     "mf4_analyzer.ui_kit.icons",

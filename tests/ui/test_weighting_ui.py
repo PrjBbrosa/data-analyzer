@@ -345,3 +345,7 @@ def test_project_io_dialog_filters_include_audio_video_extensions():
     assert "*.asc" in DATA_FILE_GLOB
     assert "*.asc" in PROJECT_OR_DATA_FILTER
     assert "*.asc" in OPEN_FILES_FILTER
+    assert "*.tdms" in DATA_FILE_GLOB
+    assert "*.tdms" in PROJECT_OR_DATA_FILTER
+    assert "*.tdms" in OPEN_FILES_FILTER
+    assert "*.tdms_index" not in DATA_FILE_GLOB

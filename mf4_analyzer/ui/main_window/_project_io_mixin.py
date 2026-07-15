@@ -16,7 +16,7 @@ from ...io.loader import (
 
 AUDIO_VIDEO_GLOB = "*.mp4 *.mov *.mkv *.m4v *.mp3 *.m4a *.aac *.wav *.flac"
 CSV_LIKE_GLOB = " ".join(f"*{ext}" for ext in sorted(CSV_LIKE_EXTS))
-DATA_FILE_GLOB = f"*.mf4 *.mdf *.blf {CSV_LIKE_GLOB} *.xlsx *.xls *.hdf {AUDIO_VIDEO_GLOB}"
+DATA_FILE_GLOB = f"*.mf4 *.mdf *.blf *.tdms {CSV_LIKE_GLOB} *.xlsx *.xls *.hdf {AUDIO_VIDEO_GLOB}"
 PROJECT_OR_DATA_FILTER = (
     f"所有支持的文件 ({DATA_FILE_GLOB} *.tlproj);;"
     f"项目 (*.tlproj);;数据文件 ({DATA_FILE_GLOB});;"
@@ -231,6 +231,15 @@ class ProjectIOMixin:
                 self.statusBar.showMessage(
                     f"✅ 已加载 BLF: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件")
                 self.toast(f"已加载 {p.name} · {mode}", "success")
+                return
+            elif ext == '.tdms':
+                data, chs, units = DataLoader.load_tdms(fp)
+                self._register_file_data(
+                    fp, data, chs, units, source_metadata={"source_kind": "tdms"})
+                self._update_info()
+                self.statusBar.showMessage(
+                    f"✅ 已加载 TDMS: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件")
+                self.toast(f"已加载 TDMS {p.name} · {len(data)} 行", "success")
                 return
             elif ext == '.hdf':
                 groups = DataLoader.load_hdf(fp)
