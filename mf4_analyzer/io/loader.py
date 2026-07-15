@@ -619,6 +619,52 @@ class DataLoader:
         return df, list(df.columns), {}
 
     @staticmethod
+    def load_ascii(fp):
+        """Load a tabular ASCII file, retaining detector evidence."""
+        from mf4_analyzer.io.ascii_format import has_time_column, sniff_fixed_width_ascii
+
+        layout = sniff_fixed_width_ascii(fp)
+        if layout is None:
+            try:
+                data, channels, units = DataLoader.load_csv(fp)
+            except ValueError as exc:
+                raise ValueError("Cannot detect a supported ASCII table layout") from exc
+            if not has_time_column(channels):
+                raise ValueError("ASCII file has no time column or verified sampling rate")
+            return data, channels, units, None, {
+                "source_kind": "ascii", "ascii_kind": "delimited", "ascii_confidence": "high",
+            }
+
+        header_line = Path(fp).read_text(encoding=layout.encoding, errors="replace").splitlines()
+        raw_headers = [header_line[layout.header_row][a:b].strip() for a, b in layout.colspecs]
+        channels, seen = [], set()
+        for index, raw in enumerate(raw_headers, 1):
+            base = raw or f"Column{index}"
+            name, suffix = base, 2
+            while name in seen:
+                name = f"{base}_{suffix}"; suffix += 1
+            seen.add(name); channels.append(name)
+        units = {}
+        if layout.units_row is not None:
+            for name, (a, b) in zip(channels, layout.colspecs):
+                unit = header_line[layout.units_row][a:b].strip()
+                if unit:
+                    units[name] = unit
+        data = pd.read_fwf(fp, colspecs=list(layout.colspecs), skiprows=layout.data_row,
+                           header=None, names=channels, encoding=layout.encoding)
+        for channel in channels:
+            data[channel] = pd.to_numeric(data[channel], errors="coerce")
+        if data.empty or data.notna().all(axis=1).sum() == 0:
+            raise ValueError("Cannot parse fixed-width ASCII data")
+        fs = 1.0 / layout.sample_interval if layout.sample_interval else None
+        if fs is None and not has_time_column(channels):
+            raise ValueError("ASCII file has no time column or verified sampling rate")
+        return data, channels, units, fs, {
+            "source_kind": "ascii", "ascii_kind": "fixed_width",
+            "ascii_confidence": layout.confidence, "ascii_data_row": layout.data_row,
+        }
+
+    @staticmethod
     def _load_csv_with_layout(fp, layout):
         import csv as _csv
         import io as _io

@@ -162,6 +162,10 @@ def _default_loader(path):
         data, chs, units, fs, smeta = DataLoader.load_audio_video(path)
         return FileData(path, data, chs, units, idx=-1, fs=fs,
                         source_metadata=smeta)
+    if ext == '.asc':
+        data, chs, units, fs, smeta = DataLoader.load_ascii(path)
+        return FileData(path, data, chs, units, idx=-1, fs=fs,
+                        source_metadata=smeta)
     if ext in CSV_LIKE_EXTS:
         data, chs, units = DataLoader.load_csv(path)
     elif ext in ('.xls', '.xlsx'):

@@ -69,14 +69,18 @@ def test_default_loader_dispatches_asc_as_csv(monkeypatch, tmp_path):
     path.write_text("Time,sig\n0,1\n0.1,2\n", encoding="utf-8")
     called = {}
 
-    def fake_load_csv(fp):
+    def fake_load_ascii(fp):
         called["path"] = fp
-        return pd.DataFrame({"Time": [0.0, 0.1], "sig": [1.0, 2.0]}), ["Time", "sig"], {}
+        return (
+            pd.DataFrame({"Time": [0.0, 0.1], "sig": [1.0, 2.0]}),
+            ["Time", "sig"], {}, None,
+            {"source_kind": "ascii", "ascii_kind": "delimited"},
+        )
 
     def fail_load_mf4(fp):
         raise AssertionError(f".asc should be loaded as CSV, not MF4: {fp}")
 
-    monkeypatch.setattr(DataLoader, "load_csv", staticmethod(fake_load_csv))
+    monkeypatch.setattr(DataLoader, "load_ascii", staticmethod(fake_load_ascii))
     monkeypatch.setattr(DataLoader, "load_mf4", staticmethod(fail_load_mf4))
 
     fd = _default_loader(str(path))

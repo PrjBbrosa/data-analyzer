@@ -252,6 +252,15 @@ class ProjectIOMixin:
                 if notice:
                     self.toast(notice, "warning")
                 return
+            elif ext == '.asc':
+                data, chs, units, fs, smeta = DataLoader.load_ascii(fp)
+                self._register_file_data(
+                    fp, data, chs, units, fs=fs, source_metadata=smeta)
+                self._update_info()
+                self.statusBar.showMessage(
+                    f"✅ 已加载 ASCII: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件")
+                self.toast(f"已加载 ASCII {p.name} · {len(data)} 行", "success")
+                return
             else:
                 data, chs, units = DataLoader.load_csv(fp)
             fd = self._register_file_data(fp, data, chs, units)
