@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "7.5",
+    [string]$Version = "7.6",
     [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
@@ -55,7 +55,7 @@ $VendorPya2lDir = Join-Path $WorkDir "_vendor_pya2l"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
 $EvidenceDir = Join-Path $RepoRoot "docs\analyzer\acquisition\evidence\vector-xcp"
-# Default output: dist\TraceLab7.5\TraceLab7.5.exe (override with -Version or -AppName)
+# Default output: dist\TraceLab7.6\TraceLab7.6.exe (override with -Version or -AppName)
 
 foreach ($RequiredPath in @($EntryScript, $Requirements, $AcquisitionRequirements, $RuntimeVerifier, $StyleQss, $RuntimeHookPyxcp)) {
     if (-not (Test-Path $RequiredPath)) {

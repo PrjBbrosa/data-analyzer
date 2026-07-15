@@ -20,7 +20,7 @@ def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():
         "qtawesome",
         "asammdf",
         "MF4 Data Analyzer V1.py",
-        "TraceLab7.5",
+        "TraceLab7.6",
     ):
         assert token in text
 
@@ -129,7 +129,7 @@ def test_vector_runbook_uses_default_build_name_and_separate_evidence_files():
         ROOT / "docs/analyzer/acquisition/runbooks/stage-8-pr4-bench.md"
     ).read_text(encoding="utf-8")
 
-    assert r".\dist\TraceLab7.5\TraceLab7.5.exe" in runbook
+    assert r".\dist\TraceLab7.6\TraceLab7.6.exe" in runbook
     assert "build-api-contract.json" in runbook
     assert "packaged-runtime-smoke.json" in runbook
     assert "MF4DataAnalyzer" not in runbook
