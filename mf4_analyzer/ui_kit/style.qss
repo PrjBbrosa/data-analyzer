@@ -2121,6 +2121,11 @@ QWidget#viewTabBar QTabBar#viewTabs {
     background-color: transparent;
 }
 
+/* Roomy density (default). NOTE these numbers do NOT decide when the bar
+ * degrades: min-width 58px is a floor the real content clears anyway (a
+ * "View 10" tab measures ~91px with its dot, padding and margins), so the
+ * roomy/compact/overflow choice is made in ViewTabBar._sync_tabbar_width from
+ * a measured sizeHint() against a measured row budget. */
 QWidget#viewTabBar QTabBar#viewTabs::tab {
     min-width: 58px;
     height: 20px;
@@ -2132,6 +2137,16 @@ QWidget#viewTabBar QTabBar#viewTabs::tab {
     color: #475569;
     font-size: 12px;
     font-weight: 600;
+}
+
+/* Compact density — ViewTabBar._set_density sets density="compact" once the
+ * roomy strip no longer fits the row. The label drops to the View's ordinal and
+ * its full name moves into the tab tooltip, so this rule only trims the box.
+ * Past 10 Views the dot colour is a secondary cue at best; the tooltip is the
+ * only reliable way back to the name, which is why it is not optional. */
+QWidget#viewTabBar QTabBar#viewTabs[density="compact"]::tab {
+    min-width: 30px;
+    padding: 0 5px;
 }
 
 QWidget#viewTabBar QTabBar#viewTabs::tab:hover {
@@ -2186,13 +2201,41 @@ QWidget#viewTabBar QPushButton#viewTabPlus:hover {
     color: #173262;
 }
 
-/* Disabled = View count hit MAX_VIEWS (6). _update_plus_state already calls
- * setEnabled(False); this rule makes that visually obvious (greyed fill, edge
- * and glyph) so the user sees the cap rather than a still-bright button. */
+/* Disabled = View count hit that manager's cap (ViewManager.max_views — 12 for
+ * time domain, view_state.MAX_VIEWS for the analysis sections; do NOT hard-code
+ * a number here). _update_plus_state already calls setEnabled(False); this rule
+ * makes that visually obvious (greyed fill, edge and glyph) so the user sees the
+ * cap rather than a still-bright button. */
 QWidget#viewTabBar QPushButton#viewTabPlus:disabled {
     background-color: #f1f5f9;
     border-color: #e2e8f0;
     color: #b8c2d0;
+}
+
+/* Overflow chevron "»N" — only on the row once the compact strip still cannot
+ * fit, where N is how many tail Views were retired into its menu. Those tabs are
+ * hidden with setTabVisible, never removeTab: the QTabBar index IS the
+ * ViewManager index for switch/reorder/rename/context-menu, so removing tabs
+ * would renumber all of them silently. Sized from its own label (no fixed width)
+ * because _tabs_budget reserves the measured hint; it belongs to the fixed right
+ * group with + and never compresses. */
+QWidget#viewTabBar QPushButton#viewTabOverflow {
+    min-height: 22px;
+    max-height: 22px;
+    margin: 3px 0 1px 2px;
+    padding: 0 5px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background-color: #ffffff;
+    color: #1e293b;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QWidget#viewTabBar QPushButton#viewTabOverflow:hover {
+    background-color: #e8f0ff;
+    border-color: #a7bfea;
+    color: #173262;
 }
 
 /* Cancel-merge button (right side of the View tab bar).

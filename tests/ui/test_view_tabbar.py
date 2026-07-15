@@ -1,9 +1,15 @@
 from pathlib import Path
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QLineEdit, QMessageBox, QPushButton
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
+from PyQt5.QtWidgets import (
+    QApplication,
+    QLineEdit,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+)
 
-from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager
+from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager, ViewState
 from mf4_analyzer.ui.view_tabbar import ViewTabBar
 
 
@@ -86,12 +92,15 @@ def test_view_tabbar_chrome_is_shared_outside_time_domain_dock():
         "QWidget#viewTabBar {",
         "QWidget#viewTabBar QTabBar#viewTabs {",
         "QWidget#viewTabBar QTabBar#viewTabs::tab {",
+        'QWidget#viewTabBar QTabBar#viewTabs[density="compact"]::tab {',
         "QWidget#viewTabBar QTabBar#viewTabs::tab:hover {",
         "QWidget#viewTabBar QTabBar#viewTabs::tab:selected {",
         "QWidget#viewTabBar QLineEdit#viewTabRenameEditor {",
         "QWidget#viewTabBar QPushButton#viewTabPlus {",
         "QWidget#viewTabBar QPushButton#viewTabPlus:hover {",
         "QWidget#viewTabBar QPushButton#viewTabPlus:disabled {",
+        "QWidget#viewTabBar QPushButton#viewTabOverflow {",
+        "QWidget#viewTabBar QPushButton#viewTabOverflow:hover {",
         "QWidget#viewTabBar QPushButton#viewSplitClear {",
     ]
 
@@ -262,6 +271,56 @@ def test_plus_button_disabled_at_view_cap(qtbot):
     plus = bar.findChild(QPushButton, "viewTabPlus")
 
     assert plus is not None
+    assert not plus.isEnabled()
+
+
+def test_plus_button_follows_the_managers_own_cap_not_the_module_constant(qtbot):
+    manager = ViewManager(max_views=12)
+    for _ in range(MAX_VIEWS - 1):
+        manager.new_view()
+    bar = ViewTabBar(manager)
+    qtbot.addWidget(bar)
+    plus = bar.findChild(QPushButton, "viewTabPlus")
+
+    assert len(manager.views) == MAX_VIEWS
+    assert plus.isEnabled()
+
+    while manager.new_view() != -1:
+        pass
+
+    assert len(manager.views) == 12
+    assert not plus.isEnabled()
+
+
+class _ManagerWithoutMaxViews(QObject):
+    """A manager predating the per-instance cap: no ``max_views`` attribute."""
+
+    views_changed = pyqtSignal()
+    active_changed = pyqtSignal(int)
+    split_changed = pyqtSignal(object)
+
+    def __init__(self):
+        super().__init__()
+        self.views = [ViewState(name="View 1", tab_color="#2d7ff9")]
+        self.active = 0
+
+    def add(self):
+        idx = len(self.views)
+        self.views.append(ViewState(name=f"View {idx + 1}", tab_color="#2d7ff9"))
+        self.views_changed.emit()
+
+
+def test_plus_button_falls_back_to_module_cap_when_manager_has_no_max_views(qtbot):
+    manager = _ManagerWithoutMaxViews()
+    bar = ViewTabBar(manager)
+    qtbot.addWidget(bar)
+    plus = bar.findChild(QPushButton, "viewTabPlus")
+
+    assert plus.isEnabled()
+
+    while len(manager.views) < MAX_VIEWS:
+        manager.add()
+
     assert not plus.isEnabled()
 
 
@@ -466,3 +525,302 @@ def test_context_menu_delete_disabled_for_single_view(qtbot, monkeypatch):
     bar._on_context_menu(_tab_point(bar, 0))
 
     assert deleted == []
+
+
+# --------------------------------------------------------------------------
+# T3/T4 — width budget, compact density, overflow menu.
+#
+# Every width below is MEASURED off the live bar, never a literal px. A literal
+# budget is how a degrade branch turns into a false green: the plan modelled a
+# tab at the QSS `min-width: 58px` but a real roomy tab measures ~91px, so any
+# threshold copied from the plan would sit on the wrong side of reality. See
+# docs/lessons-learned/pyqt-ui/
+# 2026-07-10-facts-degrade-budget-from-measured-not-literal-px.md
+# Each test also asserts its own reachability premise (compact < roomy), so a
+# style/font change that collapses the regimes fails loudly instead of passing
+# while exercising nothing.
+# --------------------------------------------------------------------------
+
+def _wide_bar(qtbot, count):
+    manager = ViewManager(max_views=64)
+    while len(manager.views) < count:
+        manager.new_view()
+    manager.set_active(0)
+    bar = ViewTabBar(manager)
+    qtbot.addWidget(bar)
+    bar.resize(4000, 28)
+    bar.show()
+    QApplication.processEvents()
+    return manager, bar
+
+
+def _measure(bar):
+    """Return (roomy_px, compact_px, row_overhead_px), all measured live.
+
+    row_overhead = the width the row spends on things that are NOT the tab
+    strip (margins + the fixed + button and friends), so a caller can size the
+    bar to hand the strip an exact budget.
+    """
+    tabs = bar.tabBar()
+    bar._set_density(compact=False)
+    roomy = tabs.sizeHint().width()
+    overhead = bar.width() - bar._tabs_budget(include_overflow=False)
+    bar._set_density(compact=True)
+    compact = tabs.sizeHint().width()
+    bar._set_density(compact=False)
+    return roomy, compact, overhead
+
+
+def _resize_to_budget(bar, budget):
+    _roomy, _compact, overhead = _measure(bar)
+    bar.resize(int(budget) + overhead, 28)
+    QApplication.processEvents()
+
+
+def test_tab_strip_is_max_clamped_not_fixed_width(qtbot):
+    """setFixedWidth told Qt the strip could never overflow, which is what kept
+    the setUsesScrollButtons(True) configured in __init__ permanently inert."""
+    _manager, bar = _wide_bar(qtbot, count=3)
+    tabs = bar.tabBar()
+
+    assert tabs.minimumWidth() == 0
+    assert tabs.maximumWidth() == tabs.sizeHint().width()
+    assert tabs.usesScrollButtons()
+
+
+def test_roomy_row_shows_every_tab_with_full_names(qtbot):
+    manager, bar = _wide_bar(qtbot, count=6)
+    tabs = bar.tabBar()
+
+    assert not bar.is_compact()
+    assert bar.overflow_indices() == []
+    assert all(tabs.isTabVisible(i) for i in range(tabs.count()))
+    assert tabs.tabText(3) == manager.views[3].name
+
+
+def test_ten_views_stay_flat_visible_with_zero_clicks(qtbot):
+    """Spec acceptance: 10 Views must all be reachable in one click."""
+    _manager, bar = _wide_bar(qtbot, count=10)
+    tabs = bar.tabBar()
+
+    assert bar.overflow_indices() == []
+    assert not bar._overflow.isVisible()
+    assert sum(tabs.isTabVisible(i) for i in range(tabs.count())) == 10
+
+
+def test_narrow_row_compacts_labels_to_ordinals_and_moves_name_to_tooltip(qtbot):
+    manager, bar = _wide_bar(qtbot, count=10)
+    roomy, compact, _overhead = _measure(bar)
+    # Reachability premise: there must BE a band where compact fits and roomy
+    # does not, otherwise this test proves nothing.
+    assert compact < roomy
+
+    _resize_to_budget(bar, (roomy + compact) // 2)
+
+    tabs = bar.tabBar()
+    assert bar.is_compact()
+    assert bar.overflow_indices() == []  # compact alone was enough
+    assert tabs.tabText(6) == "7"  # dot + ordinal only
+    # The full name must come from the manager: the widget only holds the
+    # ordinal now, so a read-back would put "7" in the tooltip.
+    assert tabs.tabToolTip(6) == manager.views[6].name
+
+
+def test_widening_the_row_restores_roomy_names_and_clears_tooltips(qtbot):
+    manager, bar = _wide_bar(qtbot, count=10)
+    roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, (roomy + compact) // 2)
+    assert bar.is_compact()
+
+    bar.resize(4000, 28)
+    QApplication.processEvents()
+
+    tabs = bar.tabBar()
+    assert not bar.is_compact()
+    assert tabs.tabText(6) == manager.views[6].name
+    assert tabs.tabToolTip(6) == ""
+
+
+def test_overflow_hides_tail_tabs_with_settabvisible_never_removetab(qtbot):
+    """§5.5 hard constraint: six call sites treat QTabBar index == View index."""
+    manager, bar = _wide_bar(qtbot, count=14)
+    _roomy, compact, _overhead = _measure(bar)
+    tabs = bar.tabBar()
+
+    removed = []
+    real_remove = tabs.removeTab
+    tabs.removeTab = lambda i: (removed.append(i), real_remove(i))[1]
+    _resize_to_budget(bar, compact // 2)
+
+    assert removed == []
+    # Index identity intact: every View still owns the tab at its own index.
+    assert tabs.count() == len(manager.views)
+    assert bar.overflow_indices()
+    for idx in range(tabs.count()):
+        assert tabs.tabData(idx) == manager.views[idx].tab_color
+    # The retired tabs are hidden, not gone.
+    for idx in bar.overflow_indices():
+        assert not tabs.isTabVisible(idx)
+
+
+def test_overflow_count_matches_the_hidden_tabs(qtbot):
+    _manager, bar = _wide_bar(qtbot, count=14)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+
+    tabs = bar.tabBar()
+    hidden = [i for i in range(tabs.count()) if not tabs.isTabVisible(i)]
+    assert bar.overflow_indices() == hidden
+    assert bar._overflow.isVisible()
+    assert bar._overflow.text() == f"»{len(hidden)}"
+
+
+def test_narrowing_never_hides_the_current_tab_nor_switches_views(qtbot):
+    """Qt moves the selection (and emits currentChanged) when the CURRENT tab is
+    hidden — so retiring it would silently switch the user's View on resize."""
+    manager, bar = _wide_bar(qtbot, count=14)
+    manager.set_active(13)  # last View: squarely in the tail that gets retired
+    QApplication.processEvents()
+    switches = []
+    bar.switch_requested.connect(switches.append)
+    _roomy, compact, _overhead = _measure(bar)
+
+    _resize_to_budget(bar, compact // 2)
+
+    tabs = bar.tabBar()
+    assert bar.overflow_indices()  # premise: we really are in the overflow regime
+    assert tabs.isTabVisible(13)
+    assert 13 not in bar.overflow_indices()
+    assert tabs.currentIndex() == 13
+    assert switches == []
+
+
+def test_plus_and_split_clear_stay_inside_the_bar_when_tabs_overflow(qtbot):
+    """+ and the right-hand action never compress; the tab strip yields first."""
+    manager, bar = _wide_bar(qtbot, count=14)
+    manager.set_split(1)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+
+    assert bar._split_clear.isVisible()
+    assert bar.rect().contains(bar._plus.geometry())
+    assert bar.rect().contains(bar._split_clear.geometry())
+    assert bar.rect().contains(bar._overflow.geometry())
+
+
+def test_showing_the_split_action_steals_budget_from_the_tabs_not_the_actions(qtbot):
+    manager, bar = _wide_bar(qtbot, count=14)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+    before = len(bar.overflow_indices())
+
+    manager.set_split(1)  # the ✕ 取消合并 button joins the row
+    QApplication.processEvents()
+
+    assert bar._split_clear.isVisible()
+    assert len(bar.overflow_indices()) > before
+    assert bar.rect().contains(bar._split_clear.geometry())
+
+
+def test_overflow_menu_pick_emits_switch_requested_with_the_view_index(
+    qtbot, monkeypatch
+):
+    manager, bar = _wide_bar(qtbot, count=14)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+    target = bar.overflow_indices()[-1]
+    target_name = manager.views[target].name
+    seen = []
+    bar.switch_requested.connect(seen.append)
+
+    def fake_exec(menu, *_args):
+        return next(a for a in menu.actions() if a.text() == target_name)
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    bar._on_overflow_clicked()
+
+    # The emitted index must address the VIEW, proving setTabVisible left the
+    # tab<->view index identity intact.
+    assert seen == [target]
+
+
+def test_overflow_menu_lists_every_view_and_checks_the_current_one(
+    qtbot, monkeypatch
+):
+    manager, bar = _wide_bar(qtbot, count=14)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+    captured = {}
+
+    def fake_exec(menu, *_args):
+        captured["menu"] = menu
+        return None
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    bar._on_overflow_clicked()
+
+    actions = captured["menu"].actions()
+    # Full names from the manager, not the ordinal the compact tab carries.
+    assert [a.text() for a in actions] == [v.name for v in manager.views]
+    assert [a.isChecked() for a in actions].count(True) == 1
+    assert actions[bar.tabBar().currentIndex()].isChecked()
+
+
+def test_switching_to_an_overflowed_view_pulls_it_back_onto_the_strip(qtbot):
+    manager, bar = _wide_bar(qtbot, count=14)
+    bar.switch_requested.connect(manager.set_active)  # real MainWindow wiring
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+    target = bar.overflow_indices()[-1]
+
+    bar.switch_requested.emit(target)
+    QApplication.processEvents()
+
+    assert bar.tabBar().isTabVisible(target)
+    assert target not in bar.overflow_indices()
+    assert bar.tabBar().currentIndex() == target
+
+
+def test_compact_rename_editor_prefills_the_view_name_not_the_ordinal(qtbot):
+    """The tab label is the ordinal under compact density, so seeding the editor
+    from tabText() would rename the View to "7"."""
+    manager, bar = _wide_bar(qtbot, count=10)
+    roomy, compact, _overhead = _measure(bar)
+    manager.rename(6, "Road load")
+    _resize_to_budget(bar, (roomy + compact) // 2)
+    assert bar.is_compact()
+    assert bar.tabBar().tabText(6) == "7"  # premise: the widget holds the ordinal
+
+    bar._on_double_clicked(6)
+    editor = bar.findChild(QLineEdit, "viewTabRenameEditor")
+
+    assert editor.text() == "Road load"
+
+
+def test_reorder_relabels_compact_ordinals_after_the_drag_releases(qtbot):
+    """The §5.1 guard bans refresh() mid-drag, so Qt's moveTab carries the tab
+    text along and the compact ordinals stop matching their positions. The
+    re-label must land on the drag's mouse release, never inside it."""
+    manager, bar = _wide_bar(qtbot, count=10)
+    bar.reorder_requested.connect(manager.reorder)
+    roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, (roomy + compact) // 2)
+    assert bar.is_compact()
+    tabs = bar.tabBar()
+
+    tabs.moveTab(0, 4)
+    QApplication.processEvents()
+    # Mid-drag the ordinals travel with the tab: this is the state the guard
+    # leaves behind, and exactly what the release must repair.
+    assert tabs.tabText(0) == "2"
+
+    qtbot.mouseRelease(tabs, Qt.LeftButton)
+    qtbot.waitUntil(lambda: tabs.tabText(0) == "1", timeout=1000)
+
+    assert [tabs.tabText(i) for i in range(tabs.count())] == [
+        str(i + 1) for i in range(tabs.count())
+    ]
+    assert [v.name for v in manager.views][4] == "View 1"
+    assert all(
+        tabs.tabToolTip(i) == manager.views[i].name for i in range(tabs.count())
+    )

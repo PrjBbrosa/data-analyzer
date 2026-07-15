@@ -12,8 +12,20 @@ from typing import Any
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
+# Default per-manager View cap. The real cap is per ViewManager instance
+# (``max_views``); this stays the module-level default so the analysis sections
+# (fft / fft_time / order) and every existing caller keep the historical 6.
 MAX_VIEWS = 6
-_PALETTE = ["#2d7ff9", "#e8590c", "#2f9e44", "#9c36b5", "#e03131", "#1098ad"]
+
+# Open Color hues, 12 entries so a 12-View section gets pairwise-distinct tab
+# dots via ``_PALETTE[idx % len(_PALETTE)]``. The FIRST SIX MUST NOT CHANGE in
+# value or order: archived projects store the resolved color in
+# ViewState.tab_color, so re-ordering them would make View 1-6 of an old file
+# disagree with a freshly created one.
+_PALETTE = [
+    "#2d7ff9", "#e8590c", "#2f9e44", "#9c36b5", "#e03131", "#1098ad",
+    "#f08c00", "#c2255c", "#5c940d", "#5f3dc4", "#0ca678", "#495057",
+]
 
 
 ChannelKey = tuple[str, str]
@@ -98,8 +110,17 @@ class ViewManager(QObject):
     active_changed = pyqtSignal(int)
     split_changed = pyqtSignal(object)
 
-    def __init__(self, parent: QObject | None = None, state_factory=None):
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        state_factory=None,
+        *,
+        max_views: int = MAX_VIEWS,
+    ):
         super().__init__(parent)
+        # Keyword-only: existing call sites pass `parent` (and `state_factory`)
+        # positionally, so the cap must never take a positional slot.
+        self.max_views = int(max_views)
         self._state_factory = state_factory or ViewState
         self.views: list = [self._make(0)]
         self.active = 0
@@ -118,7 +139,7 @@ class ViewManager(QObject):
         return self.views[idx]
 
     def new_view(self) -> int:
-        if len(self.views) >= MAX_VIEWS:
+        if len(self.views) >= self.max_views:
             return -1
         idx = len(self.views)
         self.views.append(self._make(idx))
@@ -149,7 +170,7 @@ class ViewManager(QObject):
             self.active_changed.emit(self.active)
 
     def duplicate(self, idx: int) -> int:
-        if len(self.views) >= MAX_VIEWS or not self._is_valid_index(idx):
+        if len(self.views) >= self.max_views or not self._is_valid_index(idx):
             return -1
 
         pairs = self._snapshot_pairs_by_object()

@@ -1,6 +1,11 @@
 import pytest
+from PyQt5.QtCore import QObject
 
 from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager
+
+# The six colors shipped before the palette grew to 12. Archived projects store
+# these in ViewState.tab_color, so View 1-6 must keep resolving to them.
+_LEGACY_PALETTE = ["#2d7ff9", "#e8590c", "#2f9e44", "#9c36b5", "#e03131", "#1098ad"]
 
 
 def make():
@@ -363,3 +368,74 @@ def test_get_rejects_negative_and_out_of_range_indexes():
     with pytest.raises(IndexError) as out_of_range:
         m.get(1)
     assert out_of_range.value.args == (1,)
+
+
+# --- per-instance View cap -------------------------------------------------
+# The cap is per manager: the time-domain section runs at 12 while the FFT /
+# fft_time / order managers keep the module default.
+
+
+def test_new_view_honors_raised_instance_cap():
+    m = ViewManager(max_views=12)
+
+    for expected_idx in range(1, 12):
+        assert m.new_view() == expected_idx
+
+    assert len(m.views) == 12
+    assert m.new_view() == -1
+    assert len(m.views) == 12
+
+
+def test_new_view_honors_lowered_instance_cap_over_module_constant():
+    m = ViewManager(max_views=2)
+
+    assert m.new_view() == 1
+    assert m.new_view() == -1
+    assert len(m.views) == 2
+
+
+def test_default_manager_keeps_module_constant_cap():
+    m = ViewManager()
+
+    while m.new_view() != -1:
+        pass
+
+    assert len(m.views) == MAX_VIEWS
+
+
+def test_duplicate_honors_instance_cap():
+    m = ViewManager(max_views=2)
+
+    assert m.duplicate(0) == 1
+    assert m.duplicate(0) == -1
+    assert len(m.views) == 2
+
+
+def test_max_views_does_not_displace_the_positional_parent_argument():
+    parent = QObject()
+
+    m = ViewManager(parent, max_views=12)
+
+    assert m.parent() is parent
+    assert m.max_views == 12
+
+
+# --- tab-color palette -----------------------------------------------------
+
+
+def test_first_six_views_keep_the_legacy_palette_colors():
+    m = ViewManager(max_views=12)
+    for _ in range(5):
+        m.new_view()
+
+    assert [v.tab_color for v in m.views] == _LEGACY_PALETTE
+
+
+def test_twelve_views_get_pairwise_distinct_tab_colors():
+    m = ViewManager(max_views=12)
+    for _ in range(11):
+        m.new_view()
+
+    colors = [v.tab_color for v in m.views]
+    assert len(colors) == 12
+    assert len(set(colors)) == 12

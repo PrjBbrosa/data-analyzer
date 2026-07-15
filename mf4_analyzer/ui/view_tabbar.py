@@ -9,6 +9,7 @@ from __future__ import annotations
 from PyQt5.QtCore import QEvent, QRectF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -66,6 +67,15 @@ class ViewTabBar(QWidget):
         # views_changed → refresh() it triggers skips the destructive rebuild
         # (which crashes mid-drag). See _on_tab_moved / refresh.
         self._reordering = False
+        # Fit state, recomputed by _sync_tabbar_width from MEASURED widths.
+        # _density_compact: labels are the ordinal only, full name in tooltip.
+        # _overflow_indices: View indices retired into the » menu (tabs still
+        # exist, they are only setTabVisible(False) — see _retire_tail_tabs).
+        self._density_compact = False
+        self._overflow_indices: list[int] = []
+        # Set by _on_tab_moved, consumed on the drag's mouse release: a drag
+        # scrambles the compact ordinals and refresh() is banned mid-drag.
+        self._pending_reorder_resync = False
         self.setFixedHeight(28)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -84,11 +94,27 @@ class ViewTabBar(QWidget):
         self._tabs.setFixedHeight(26)
         self._tabs.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self._tabs.setContextMenuPolicy(Qt.CustomContextMenu)
+        # Seeded so the QSS density rule has an explicit state from the start
+        # (_set_density flips it); the roomy box lives in the unqualified
+        # ::tab rule, so "roomy" simply matches nothing extra.
+        self._tabs.setProperty("density", "roomy")
         self._tabs.currentChanged.connect(self._on_current_changed)
         self._tabs.tabBarDoubleClicked.connect(self._on_double_clicked)
         self._tabs.tabMoved.connect(self._on_tab_moved)
         self._tabs.customContextMenuRequested.connect(self._on_context_menu)
+        # Watched for the mouse release that ends a drag-reorder; see eventFilter.
+        self._tabs.installEventFilter(self)
         layout.addWidget(self._tabs, 0)
+
+        # Part of the fixed right-hand group: like _plus it never compresses,
+        # it is only shown when tabs had to be retired. Hidden widgets are
+        # skipped by QHBoxLayout, so it costs nothing while everything fits.
+        self._overflow = QPushButton("»", self)
+        self._overflow.setObjectName("viewTabOverflow")
+        self._overflow.setCursor(Qt.PointingHandCursor)
+        self._overflow.setVisible(False)
+        self._overflow.clicked.connect(self._on_overflow_clicked)
+        layout.addWidget(self._overflow, 0)
 
         self._plus = QPushButton("+", self)
         self._plus.setObjectName("viewTabPlus")
@@ -119,6 +145,9 @@ class ViewTabBar(QWidget):
         # (host gains a half partner-color swatch; cancel restores solid).
         self._update_split_chip()
         self._refresh_tab_swatches()
+        # The cancel-merge button just appeared/vanished, which moves the tab
+        # strip's measured budget by its whole width.
+        self._sync_tabbar_width()
 
     def _partner_color_for(self, idx: int):
         """Return the partner View's tab color when ``idx`` is a merge host,
@@ -158,6 +187,7 @@ class ViewTabBar(QWidget):
 
     def refresh_split_controls(self) -> None:
         self._update_split_chip()
+        self._sync_tabbar_width()
 
     def refresh(self) -> None:
         if self._reordering:
@@ -182,29 +212,252 @@ class ViewTabBar(QWidget):
             self._set_current_index(self._manager.active)
         finally:
             self._suppress = False
-        self._sync_tabbar_width()
         self._update_plus_state()
+        # Before the fit, not after: _update_split_chip decides whether the
+        # cancel-merge button is on the row, and _sync_tabbar_width reserves its
+        # measured width out of the tab budget.
         self._update_split_chip()
+        self._sync_tabbar_width()
 
     def _sync_tabbar_width(self) -> None:
-        if self._tabs.count() <= 0:
-            self._tabs.setFixedWidth(0)
+        """Fit the tab strip to the row, degrading only when MEASURED too wide.
+
+        Three passes, each decided by comparing a real ``sizeHint()`` against a
+        real budget — there is deliberately no px threshold in this file. A
+        literal budget is how a degrade branch becomes a false green (see
+        docs/lessons-learned/pyqt-ui/
+        2026-07-10-facts-degrade-budget-from-measured-not-literal-px.md); the
+        spec's own 58px/49px models are both wrong on this machine, where a
+        roomy tab really measures 91px.
+
+          1. roomy   — every tab visible, full names.
+          2. compact — dot + ordinal, full name moves to the tooltip.
+          3. overflow — tail tabs retired into the » menu.
+        """
+        if self._reordering:
+            # Same use-after-free as refresh(): re-styling / re-laying out the
+            # strip from inside a live tabMoved drag touches the tab the drag
+            # still holds. Nothing visible needs it mid-drag.
             return
-        # Pin to the NATURAL total tab width so the + button hugs the tabs
-        # without clipping any label. sizeHint() sums the per-tab style hints
-        # (incl. the QSS min-width/padding) and is independent of the current
-        # width clamp. tabRect() must NOT be used here: once the bar is
-        # fixed-width, tabRect reports the *compressed* layout, so re-measuring
-        # would lock the squeeze in. (The bug: an early, pre-style measurement
-        # pinned 263px while the styled tabs need 294px → "View 1" clipped to
-        # "1" with scroll arrows.)
+        if self._tabs.count() <= 0:
+            self._set_overflow(())
+            self._clamp_tabs_width(0)
+            return
         self._tabs.ensurePolished()
-        self._tabs.setFixedWidth(max(1, self._tabs.sizeHint().width()))
+
+        budget = self._tabs_budget(include_overflow=False)
+
+        # Pass 1 — roomy.
+        self._show_all_tabs()
+        self._set_density(compact=False)
+        natural = self._natural_tabs_width()
+        if budget is None or natural <= budget:
+            self._set_overflow(())
+            self._clamp_tabs_width(natural)
+            return
+
+        # Pass 2 — compact.
+        self._set_density(compact=True)
+        natural = self._natural_tabs_width()
+        if natural <= budget:
+            self._set_overflow(())
+            self._clamp_tabs_width(natural)
+            return
+
+        # Pass 3 — compact still overflows: retire the tail into the » menu.
+        # Reserving the button costs width, so the budget shrinks again here.
+        budget = self._tabs_budget(include_overflow=True)
+        hidden = self._retire_tail_tabs(budget)
+        self._set_overflow(hidden)
+        self._clamp_tabs_width(min(self._natural_tabs_width(), max(1, budget)))
+
+    def _natural_tabs_width(self) -> int:
+        # sizeHint() sums the per-tab style hints of the VISIBLE tabs (incl. the
+        # QSS min-width/padding) and is independent of the current width clamp.
+        # tabRect() must NOT be used here: once the bar is width-clamped,
+        # tabRect reports the *compressed* layout, so re-measuring would lock
+        # the squeeze in. (The bug: an early, pre-style measurement pinned 263px
+        # while the styled tabs need 294px → "View 1" clipped to "1" with
+        # scroll arrows.)
+        return max(1, self._tabs.sizeHint().width())
+
+    def _clamp_tabs_width(self, width: int) -> None:
+        # setMaximumWidth, NOT setFixedWidth. A fixed width tells Qt the strip
+        # can never overflow, which is exactly what kept the setUsesScrollButtons
+        # (see __init__) permanently inert. The strip's Maximum size policy makes
+        # the layout hand it min(sizeHint, maximumWidth), so pinning the natural
+        # width as the *maximum* still hugs _plus against the last tab, while a
+        # narrow row now genuinely compresses the strip and nothing else.
+        # setMinimumWidth(0) undoes any earlier fixed width.
+        self._tabs.setMinimumWidth(0)
+        self._tabs.setMaximumWidth(max(0, int(width)))
+
+    def _tabs_budget(self, *, include_overflow: bool) -> int | None:
+        """Width the tab strip may occupy, measured off the live row.
+
+        Everything right of the strip (», +, and the split action) is fixed and
+        must never compress, so the budget is this bar's own width minus those
+        siblings' real hints plus the layout's margins/spacing. Returns None
+        while the bar has no realised geometry — measuring an unshown widget
+        yields a phantom width and would compact a strip that has plenty of room.
+        """
+        if not self.isVisible():
+            return None
+        layout = self.layout()
+        if layout is None:
+            return None
+        margins = layout.contentsMargins()
+        avail = self.width() - margins.left() - margins.right()
+        if avail <= 0:
+            return None
+        spacing = max(0, layout.spacing())
+        siblings = [self._plus]
+        if include_overflow:
+            # Measure at the widest label this bar could ever show ("»" + every
+            # View retired) so the reserve cannot jitter as the count changes.
+            self._overflow.setText(f"»{self._tabs.count()}")
+            siblings.append(self._overflow)
+        if not self._split_chip.isHidden():
+            siblings.append(self._split_chip)
+        if not self._split_clear.isHidden():
+            siblings.append(self._split_clear)
+        reserved = 0
+        for widget in siblings:
+            hint = max(
+                widget.sizeHint().width(), widget.minimumSizeHint().width()
+            )
+            reserved += hint + spacing
+        return avail - reserved
+
+    def _show_all_tabs(self) -> None:
+        for idx in range(self._tabs.count()):
+            if not self._tabs.isTabVisible(idx):
+                self._tabs.setTabVisible(idx, True)
+
+    def _set_density(self, *, compact: bool) -> None:
+        changed = bool(compact) != self._density_compact
+        self._density_compact = bool(compact)
+        if changed:
+            self._tabs.setProperty("density", "compact" if compact else "roomy")
+            style = self._tabs.style()
+            style.unpolish(self._tabs)
+            style.polish(self._tabs)
+            # unpolish/polish updates tabSizeHint() but leaves QTabBar's CACHED
+            # layout — and therefore sizeHint() — stale. Measured on Qt 5.15.2:
+            # tabSizeHint went 91→77 while sizeHint stayed at the roomy 1110, so
+            # the fit decision above would read the OLD width and never degrade.
+            # StyleChange is what runs QTabBarPrivate::refresh(). It is safe
+            # here: changeEvent only re-derives usesScrollButtons/elideMode when
+            # they were not set by the user, and __init__ sets the former.
+            QApplication.sendEvent(self._tabs, QEvent(QEvent.StyleChange))
+        self._apply_tab_labels()
+
+    def _apply_tab_labels(self) -> None:
+        count = min(self._tabs.count(), len(self._manager.views))
+        for idx in range(count):
+            # The full name MUST come from the manager, never read back off the
+            # widget: in compact mode the tab only ever holds the ordinal, so
+            # tabText() would put "7" in the tooltip instead of the View name
+            # (same trap as QLabel.text() returning the elided string — see
+            # 2026-06-15-eliding-label-stable-anchor-and-text-returns-elided).
+            name = self._manager.views[idx].name
+            if self._density_compact:
+                self._tabs.setTabText(idx, str(idx + 1))
+                self._tabs.setTabToolTip(idx, name)
+            else:
+                self._tabs.setTabText(idx, name)
+                self._tabs.setTabToolTip(idx, "")
+
+    def _retire_tail_tabs(self, budget: int) -> list[int]:
+        """Hide tail tabs until the strip fits ``budget``; return their indices.
+
+        setTabVisible, NEVER removeTab: six places in this class treat "QTabBar
+        tab i" and "manager.views[i]" as one index (_on_current_changed,
+        _on_tab_moved, _refresh_tab_swatches, _set_current_index,
+        _begin_inline_rename, _on_context_menu). removeTab would renumber all of
+        them silently — wrong View switched, wrong View renamed. setTabVisible
+        keeps count(), tabData and every index intact.
+        """
+        current = self._tabs.currentIndex()
+        hidden: list[int] = []
+        for idx in range(self._tabs.count() - 1, -1, -1):
+            if self._natural_tabs_width() <= budget:
+                break
+            if idx == current:
+                # Hiding the CURRENT tab makes Qt move the selection to a
+                # neighbour and emit currentChanged (measured on Qt 5.15.2),
+                # which here means resizing the window would silently switch the
+                # user's active View. The active tab always stays on the strip.
+                continue
+            self._tabs.setTabVisible(idx, False)
+            hidden.append(idx)
+        hidden.sort()
+        return hidden
+
+    def _set_overflow(self, hidden) -> None:
+        self._overflow_indices = list(hidden)
+        count = len(self._overflow_indices)
+        if count <= 0:
+            self._overflow.setText("»")
+            self._overflow.setToolTip("")
+            self._overflow.setVisible(False)
+            return
+        self._overflow.setText(f"»{count}")
+        self._overflow.setToolTip(f"另有 {count} 个 View 放不下，点击选择")
+        self._overflow.setVisible(True)
+
+    def overflow_indices(self) -> list[int]:
+        """View indices currently retired into the » menu (test/diagnostic)."""
+        return list(self._overflow_indices)
+
+    def is_compact(self) -> bool:
+        """True when tabs are rendered as dot + ordinal (test/diagnostic)."""
+        return self._density_compact
+
+    def _on_overflow_clicked(self) -> None:
+        if not self._overflow_indices:
+            return
+        menu = apply_rounded_menu_chrome(QMenu(self))
+        current = self._tabs.currentIndex()
+        # Every View, not just the retired ones: the button only exists while
+        # something overflowed, and the current View is never among the hidden
+        # (see _retire_tail_tabs), so a hidden-only menu could never render the
+        # selected state the design calls for. Listing all of them keeps the
+        # checkmark live and gives one complete View list.
+        targets = {}
+        for idx, view in enumerate(self._manager.views):
+            action = menu.addAction(
+                _tab_color_icon(view.tab_color, self._partner_color_for(idx)),
+                view.name,
+            )
+            action.setCheckable(True)
+            action.setChecked(idx == current)
+            targets[action] = idx
+        chosen = menu.exec_(
+            self._overflow.mapToGlobal(self._overflow.rect().bottomLeft())
+        )
+        if chosen is None:
+            return
+        idx = targets.get(chosen)
+        if idx is None or idx == current:
+            return
+        # Intent only, like every other signal here. The host switches the
+        # manager, whose active_changed lands in _sync_active → _sync_tabbar_width,
+        # which pulls the newly active tab back onto the strip.
+        self.switch_requested.emit(idx)
 
     def showEvent(self, event):
         super().showEvent(event)
         # Re-measure once shown/polished so the initial pre-style width (taken
-        # during __init__'s refresh) is corrected to the natural styled width.
+        # during __init__'s refresh, where the row has no geometry yet) is
+        # corrected against the real styled widths.
+        self._sync_tabbar_width()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # The budget is a function of the row width, so every resize re-runs the
+        # fit: narrowing compacts the tabs and then retires them, while the +
+        # button and the split action keep their measured reserve throughout.
         self._sync_tabbar_width()
 
     def _sync_active(self, idx: int) -> None:
@@ -215,17 +468,27 @@ class ViewTabBar(QWidget):
         finally:
             self._suppress = False
         self._update_split_chip()
+        # The View just made active may be retired into the » menu (e.g. it was
+        # picked FROM that menu). Re-fitting pulls it back onto the strip, since
+        # _retire_tail_tabs never hides the current tab, and pushes some other
+        # tail tab into the menu in its place.
+        self._sync_tabbar_width()
 
     def set_split_focus(self, secondary_focused: bool) -> None:
         self._secondary_focused = bool(secondary_focused)
         self._update_split_chip()
+        self._sync_tabbar_width()
 
     def _set_current_index(self, idx: int) -> None:
         if 0 <= idx < self._tabs.count():
             self._tabs.setCurrentIndex(idx)
 
     def _update_plus_state(self) -> None:
-        can_add = len(self._manager.views) < MAX_VIEWS
+        # The cap is per manager (time domain runs at 12, the analysis sections
+        # keep the default), so read it off the instance; getattr keeps any
+        # manager predating the instance attribute on the module default.
+        cap = getattr(self._manager, "max_views", MAX_VIEWS)
+        can_add = len(self._manager.views) < cap
         self._plus.setEnabled(can_add)
         self._plus.setToolTip("新建 View" if can_add else "View 数量已达上限")
 
@@ -294,7 +557,10 @@ class ViewTabBar(QWidget):
         self._rename_index = idx
         editor = QLineEdit(self._tabs)
         editor.setObjectName("viewTabRenameEditor")
-        editor.setText(self._tabs.tabText(idx))
+        # Seed from the manager, never from tabText(): in compact density the
+        # tab only holds the ordinal, so tabText() would prefill the editor with
+        # "7" and renaming would silently overwrite the View's real name.
+        editor.setText(self._view_name(idx))
         editor.selectAll()
         # Overlay the editor on (almost) the whole tab so its QSS chrome
         # (tinted fill + soft blue border, see ui_kit/style.qss
@@ -333,7 +599,24 @@ class ViewTabBar(QWidget):
             if event.type() == QEvent.FocusOut:
                 self._finish_inline_rename(accepted=True)
                 return False
+        if (
+            watched is self._tabs
+            and event.type() == QEvent.MouseButtonRelease
+            and self._pending_reorder_resync
+        ):
+            # This release ENDS the drag-reorder whose refresh() we had to skip
+            # (see refresh / _on_tab_moved). A filter runs before the widget's
+            # own handler, so the drag is not finished yet — defer one tick so
+            # QTabBar::mouseReleaseEvent completes first and the rebuild lands
+            # on tabs nobody is holding.
+            self._pending_reorder_resync = False
+            QTimer.singleShot(0, self._resync_after_reorder)
         return super().eventFilter(watched, event)
+
+    def _resync_after_reorder(self) -> None:
+        if self._reordering:
+            return
+        self.refresh()
 
     def _split_context_partner(self, idx: int) -> int | None:
         partner_for = getattr(self._manager, "partner_for", None)
@@ -434,6 +717,12 @@ class ViewTabBar(QWidget):
                 self._emit_reorder(from_idx, to_idx)
             finally:
                 self._reordering = False
+            # Qt moved the tab WITH its text, so under compact density the
+            # ordinals now travel with the drag and stop matching their
+            # positions (measured: dragging tab 0 to slot 4 left the strip
+            # reading 2,3,4,5,1). refresh() would fix it but is a hard crash
+            # from inside this live tabMoved — re-label on the release instead.
+            self._pending_reorder_resync = True
 
     def _emit_reorder(self, from_idx: int, to_idx: int) -> None:
         if from_idx == to_idx:
@@ -445,6 +734,13 @@ class ViewTabBar(QWidget):
 
     def _is_valid_tab(self, idx: int) -> bool:
         return 0 <= idx < self._tabs.count()
+
+    def _view_name(self, idx: int) -> str:
+        """The View's real name. The single read-back-safe source: the tab label
+        is the ordinal under compact density."""
+        if 0 <= idx < len(self._manager.views):
+            return self._manager.views[idx].name
+        return self._tabs.tabText(idx)
 
 
 def _tab_color_pixmap(hex_color: str, ratio=None, partner_color=None) -> QPixmap:

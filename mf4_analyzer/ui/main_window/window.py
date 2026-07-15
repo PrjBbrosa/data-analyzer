@@ -226,7 +226,9 @@ class MainWindow(
         self.canvas_order = self.chart_stack.canvas_order
         self.canvas_fft_time = self.chart_stack.canvas_fft_time
         self.channel_list = self.navigator.channel_list
-        self.view_manager = ViewManager(self)
+        # Time domain runs a wider View cap than the analysis sections (which
+        # keep view_state.MAX_VIEWS by not passing max_views).
+        self.view_manager = ViewManager(self, max_views=12)
         self._view_bridge = view_bridge
         self.view_tabbar = self.chart_stack.attach_view_tabbar(self.view_manager)
         self._primary_view_idx = self.view_manager.active
