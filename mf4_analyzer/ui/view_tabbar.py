@@ -6,7 +6,7 @@ the integration layer.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QRectF, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QRectF, QSettings, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from . import hints
 from ..ui_kit.icons import icon_device_pixel_ratio
 from ..ui_kit.menus import apply_rounded_menu_chrome
 from .view_state import MAX_VIEWS
@@ -76,6 +77,9 @@ class ViewTabBar(QWidget):
         # Set by _on_tab_moved, consumed on the drag's mouse release: a drag
         # scrambles the compact ordinals and refresh() is banned mid-drag.
         self._pending_reorder_resync = False
+        # One QSettings write per session for the view.compact_tabs footer hint
+        # — see _mark_compact_tabs_discovered.
+        self._compact_tabs_discovered = False
         self.setFixedHeight(28)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -414,9 +418,30 @@ class ViewTabBar(QWidget):
         """True when tabs are rendered as dot + ordinal (test/diagnostic)."""
         return self._density_compact
 
+    def _mark_compact_tabs_discovered(self) -> None:
+        """Retire the ``view.compact_tabs`` footer hint ("窄窗口 View 标签只剩
+        编号，悬停可看全名"): the user has just been shown a full View name by
+        the very affordance the hint points at.
+
+        ``mark_discovered`` takes the HINT ID, not the ``retire_on`` descriptor
+        (which is documentation only — ``hints.discovery_hint`` retires on
+        ``hint.id not in state.discovered``). It also syncs QSettings to disk on
+        every call while the tooltip path fires on every hover, so the session
+        flag keeps that to one write. Default QSettings: the same discovered set
+        the chart-card footer reads (same pattern as ``widgets/__init__.py``'s
+        ``coaxis.merge``).
+        """
+        if self._compact_tabs_discovered:
+            return
+        self._compact_tabs_discovered = True
+        hints.mark_discovered(QSettings(), "view.compact_tabs")
+
     def _on_overflow_clicked(self) -> None:
         if not self._overflow_indices:
             return
+        # The » menu below lists every View by its FULL name, so opening it is
+        # one of the two ways the user learns where the names went.
+        self._mark_compact_tabs_discovered()
         menu = apply_rounded_menu_chrome(QMenu(self))
         current = self._tabs.currentIndex()
         # Every View, not just the retired ones: the button only exists while
@@ -611,6 +636,19 @@ class ViewTabBar(QWidget):
             # on tabs nobody is holding.
             self._pending_reorder_resync = False
             QTimer.singleShot(0, self._resync_after_reorder)
+        if (
+            watched is self._tabs
+            and event.type() == QEvent.ToolTip
+            and self._density_compact
+            and self._tabs.tabAt(event.pos()) >= 0
+        ):
+            # Compact density is the ONLY state where a tab carries a tooltip
+            # (_apply_tab_labels clears it when roomy), and that tooltip IS the
+            # answer the view.compact_tabs hint promises. This is also the only
+            # retire path for a row that compacts WITHOUT overflowing — there is
+            # no » button to click there. Deliberately not consumed: fall
+            # through so QTabBar still shows the tip.
+            self._mark_compact_tabs_discovered()
         return super().eventFilter(watched, event)
 
     def _resync_after_reorder(self) -> None:

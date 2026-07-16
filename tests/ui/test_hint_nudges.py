@@ -292,3 +292,201 @@ def test_nudge_entries_are_within_length_budget():
         if hint.surface != "nudge":
             continue
         assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH, hint.id
+
+
+# ---- E组: 时域 View 紧凑标签 (12-View 扩容 4abd5f4) ------------------------
+# The View tab bar degrades to dot + ordinal when the row narrows
+# (view_tabbar._set_density), so the View NAMES vanish and survive only in the
+# tooltip. Users read the first narrow drag as "我的 View 名字哪去了", not "这是
+# 紧凑模式" -- the same class of confusion the sibling ``view.history`` footer
+# entry answers.
+#
+# Why ``discovery`` and not ``nudge``, despite the situational feel: a nudge
+# gates on a ``HintState`` DATA signal fed by ``_ChartCard._nudge_signals()``,
+# and the tab bar is a SIBLING widget of the chart card that feeds nothing into
+# that state -- a ``view_tabs_compact`` predicate would need new plumbing
+# through cards.py. Discovery carries the same footer slot with no new feed.
+#
+# Why ``ship="now"``: the 12-View bar is live in HEAD, so the confusion exists
+# today; ``_is_shipped`` filters ``ship="later"`` out of EVERY surface, which
+# would register the hint and show it nowhere.
+
+
+def _discovery_walk(**state_kwargs):
+    """Ordered discovery-queue ids for a state (walk until exhausted)."""
+    seen, walked = [], HintState(**state_kwargs)
+    while (h := hints.discovery_hint(walked)) is not None and h.id not in seen:
+        seen.append(h.id)
+        walked = HintState(discovered=frozenset(seen), **state_kwargs)
+    return seen
+
+
+def test_view_compact_tabs_is_a_shipped_time_scoped_discovery_hint():
+    hint = next(h for h in hints.all_hints() if h.id == "view.compact_tabs")
+    assert hint.surface == "discovery"
+    assert hint.scope == "chart"
+    assert hint.ship == "now"  # the 12-View bar is live; staging hides it
+    # The tab bar exists in the analysis sections too, but the 12-View cap (and
+    # the confusion) is the time domain's -- matching the quickref 时域 View row.
+    assert hint.modes == frozenset({"time"})
+    assert hint.plot_modes == frozenset()  # subplot AND overlay have the bar
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+    # It must answer BOTH halves of the confusion: names gone, and how back.
+    assert "全名" in hint.text
+    assert "悬停" in hint.text
+
+
+def test_view_compact_tabs_ranks_between_coaxis_and_custom_action():
+    # Exact-match queue order: a discovery hint's priority IS its rotation
+    # position, so pin it. (view.history is ship="later" -> absent.)
+    assert _discovery_walk(mode="time", plot_mode="overlay") == [
+        "toolbar.shortcuts_exist",
+        "chart.copy_image",
+        "chart.right_click_menu",
+        "channel.right_click",
+        "coaxis.merge",
+        "view.compact_tabs",
+        "chart.custom_action_slot",
+    ]
+
+
+def test_view_compact_tabs_absent_outside_the_time_domain():
+    for mode in ("fft", "fft_time", "order"):
+        assert "view.compact_tabs" not in _discovery_walk(mode=mode), mode
+
+
+def test_view_compact_tabs_retires_once_discovered():
+    after = HintState(
+        mode="time",
+        plot_mode="overlay",
+        discovered=frozenset({"view.compact_tabs"}),
+    )
+    walked = _discovery_walk(mode="time", plot_mode="overlay")
+    assert "view.compact_tabs" in walked  # premise: it does surface
+    for _ in range(len(walked)):
+        h = hints.discovery_hint(after)
+        if h is None:
+            break
+        assert h.id != "view.compact_tabs"
+        after = HintState(
+            mode="time",
+            plot_mode="overlay",
+            discovered=after.discovered | {h.id},
+        )
+
+
+# ---- E组 live wiring: the retire_on event actually fires -------------------
+# The registry entry alone is inert: `discovery_hint` retires on
+# `hint.id not in state.discovered`, so SOMETHING must call
+# mark_discovered("view.compact_tabs") or the hint rotates forever (exactly the
+# gap 2026-06-27-hint-ship-flip-test-blast-radius found in coaxis.merge). Note
+# mark_discovered takes the HINT ID, never the `retire_on` descriptor string.
+
+
+def _fit_bar(qtbot, count, budget_fn):
+    """A live ViewTabBar sized so ``budget_fn(roomy, compact)`` is the strip's
+    budget. Every width is MEASURED off the live row -- a literal px budget is
+    how a degrade branch becomes a false green (2026-07-10-facts-degrade-budget
+    -from-measured-not-literal-px)."""
+    from PyQt5.QtWidgets import QApplication
+    from mf4_analyzer.ui.view_state import ViewManager
+    from mf4_analyzer.ui.view_tabbar import ViewTabBar
+
+    manager = ViewManager(max_views=64)
+    while len(manager.views) < count:
+        manager.new_view()
+    manager.set_active(0)
+    bar = ViewTabBar(manager)
+    qtbot.addWidget(bar)
+    bar.resize(4000, 28)
+    bar.show()
+    QApplication.processEvents()
+
+    tabs = bar.tabBar()
+    bar._set_density(compact=False)
+    roomy = tabs.sizeHint().width()
+    overhead = bar.width() - bar._tabs_budget(include_overflow=False)
+    bar._set_density(compact=True)
+    compact = tabs.sizeHint().width()
+    bar._set_density(compact=False)
+    assert compact < roomy  # reachability premise for every caller below
+    bar.resize(int(budget_fn(roomy, compact)) + overhead, 28)
+    QApplication.processEvents()
+    return manager, bar
+
+
+def _spy_mark_discovered(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.view_tabbar.hints.mark_discovered",
+        lambda _settings, hint_id: recorded.append(hint_id),
+    )
+    return recorded
+
+
+def test_compact_tab_tooltip_retires_the_view_compact_tabs_discovery(
+    qapp, qtbot, monkeypatch,
+):
+    """Hovering a compact tab shows the tooltip the hint promises ("悬停可看全
+    名") -- the user has found the answer, so the hint must retire. This is the
+    ONLY retire path for a row that compacts without ever overflowing (no »
+    button exists there), so without it those users are nagged forever."""
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QHelpEvent
+    from PyQt5.QtWidgets import QApplication
+
+    recorded = _spy_mark_discovered(monkeypatch)
+    _manager, bar = _fit_bar(qtbot, 10, lambda roomy, compact: (roomy + compact) // 2)
+    tabs = bar.tabBar()
+    assert bar.is_compact()  # premise
+    assert bar.overflow_indices() == []  # compact alone fit: no » to click
+
+    pos = tabs.tabRect(3).center()
+    QApplication.sendEvent(
+        tabs, QHelpEvent(QEvent.ToolTip, pos, tabs.mapToGlobal(pos))
+    )
+    assert recorded == ["view.compact_tabs"]
+
+    # mark_discovered syncs QSettings to disk on every call and tooltips fire on
+    # every hover -- the session guard must keep that to one write.
+    QApplication.sendEvent(
+        tabs, QHelpEvent(QEvent.ToolTip, pos, tabs.mapToGlobal(pos))
+    )
+    assert recorded == ["view.compact_tabs"]
+
+
+def test_roomy_tab_tooltip_does_not_retire_the_hint_early(qapp, qtbot, monkeypatch):
+    """A roomy row shows full names and carries NO tab tooltip, so a ToolTip
+    event there is not a discovery -- retiring on it would kill the hint before
+    the user ever met compact mode."""
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QHelpEvent
+    from PyQt5.QtWidgets import QApplication
+
+    recorded = _spy_mark_discovered(monkeypatch)
+    _manager, bar = _fit_bar(qtbot, 10, lambda roomy, _compact: roomy * 4)
+    tabs = bar.tabBar()
+    assert not bar.is_compact()  # premise
+
+    pos = tabs.tabRect(3).center()
+    QApplication.sendEvent(
+        tabs, QHelpEvent(QEvent.ToolTip, pos, tabs.mapToGlobal(pos))
+    )
+    assert recorded == []
+
+
+def test_overflow_menu_open_retires_the_view_compact_tabs_discovery(
+    qapp, qtbot, monkeypatch,
+):
+    """The » menu renders every View's FULL name -- opening it is the other way
+    the user finds where the names went."""
+    recorded = _spy_mark_discovered(monkeypatch)
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.view_tabbar.QMenu.exec_", lambda *_a, **_k: None
+    )
+    _manager, bar = _fit_bar(qtbot, 14, lambda _roomy, compact: compact // 2)
+    assert bar.overflow_indices()  # premise: we really are in the overflow regime
+
+    bar._on_overflow_clicked()
+
+    assert recorded == ["view.compact_tabs"]

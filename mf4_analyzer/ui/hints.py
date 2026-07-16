@@ -198,6 +198,28 @@ _HINTS = (
         priority=60,
         ship="later",
     ),
+    # ---- 时域 View 标签栏紧凑态 (12-View 扩容 4abd5f4, shipped 2026-07-16) ----
+    # Narrowing the window flips the tab bar to dot + ordinal labels
+    # (view_tabbar._set_density), so the View NAMES disappear and live only in
+    # the tooltip. The first narrow drag reads as "我的 View 名字哪去了", not
+    # "这是紧凑模式" — the confusion this answers, exactly like the sibling
+    # view.history entry above. Deliberately NOT a nudge: a nudge gates on a
+    # HintState data signal fed by _ChartCard._nudge_signals(), and the tab bar
+    # is a sibling widget that feeds nothing into that state.
+    # Priority 65 seats it below coaxis.merge (70) and above the
+    # custom-action slot (50). Retired by view_tabbar._mark_compact_tabs_
+    # discovered() from BOTH the compact tab's tooltip and the » menu — the
+    # overflow menu alone would never fire for a row that compacts without
+    # overflowing. The 12 cap and the » menu itself live in the quickref panel
+    # (时域 View row); repeating them here would just be footer noise.
+    Hint(
+        id="view.compact_tabs",
+        text="窄窗口 View 标签只剩编号，悬停可看全名",
+        surface="discovery",
+        modes=frozenset({"time"}),
+        retire_on="view_tab_compact_seen",
+        priority=65,
+    ),
     Hint(
         id="markup.capabilities",
         text="箭头移动标注 · 双击编辑文本 · 单键切换工具",
