@@ -12,10 +12,20 @@ FFT, order analysis (time-based and rpm-based), windowing, filtering,
 sampling / resampling, Welch averaging, tacho / rpm processing,
 amplitude / PSD scaling, zero-padding correctness.
 
-Also in-domain: data loaders (`DataLoader`, `FileData` — MDF/CSV/HDF5
+Also in-domain: data loaders (`DataLoader`, `FileData` — MDF/CSV/HDF5/ASCII/TDMS
 parsing and channel extraction) and pure-numeric utility modules
 (`ChannelMath` — derivative/integral/scale/offset/moving-avg). These
 are NOT UI and have no other owner.
+
+### Loader accuracy baseline (TraceLab 7.6)
+
+- ASCII `.asc` / `.fdc` may be delimited or fixed-width, but a load is valid
+  only with a recognizable time column or verified sampling metadata; never
+  substitute an arbitrary default sample rate.
+- TDMS `.tdms` imports only non-empty numeric waveform channels with valid
+  timing metadata. Preserve units and duplicate-safe names; `.tdms_index` is a
+  sidecar, not a data source.
+- GUI and batch import paths must retain equivalent loader semantics.
 
 ## Hard boundaries (MUST NOT cross)
 

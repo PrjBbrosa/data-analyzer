@@ -16,6 +16,15 @@ Published guide entry points:
 
 - Analyzer guide: `docs/analyzer/user-guide/user-guide.html`
 - Acquisition Cockpit guide: `docs/analyzer/user-guide/acquisition-cockpit-guide.html`
+- TraceLab 7.6 release notes: `docs/analyzer/user-guide/tracelab-v7.6-release-notes.md`
+
+## Current Product Baseline
+
+The current baseline is TraceLab 7.6. Its user-facing changes include generic
+ASCII (`.asc`) import, waveform-based NI TDMS (`.tdms`) import, and up to 12
+time-domain Views with responsive compact/overflow tab handling. Update the
+published guides when these behaviours change; do not treat `.tdms_index` as a
+data file or describe ASCII/TDMS timing as guessed.
 
 ## Acquisition Rule
 

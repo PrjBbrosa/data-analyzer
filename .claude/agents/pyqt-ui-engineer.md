@@ -63,6 +63,10 @@ Implementation guidance:
 - For right Inspector overflow, preserve compact `QFormLayout` rows and
   use a pane-level `QScrollArea` unless the user explicitly requests a
   different field layout.
+- The main time-domain View manager supports up to 12 Views. When changing the
+  tab bar, preserve its measured-width fallback: full labels → ordinal compact
+  labels with tooltips → `»` overflow menu, while keeping the active View
+  visible and all View actions/reordering index-safe.
 - For narrow-pane, overlap, clipping, splitter, or multi-file navigator
   feedback, consult
   `docs/lessons-learned/pyqt-ui/2026-04-24-responsive-pane-containers.md`

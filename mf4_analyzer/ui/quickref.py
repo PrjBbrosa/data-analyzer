@@ -93,7 +93,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("打开数据 / 项目", gesture="工具栏「打开」"),
             QuickRow(
                 "支持格式",
-                sub="MF4 · MDF · BLF · CSV · Excel · HDF · 音视频",
+                sub="MF4 · MDF · BLF · ASCII · TDMS · CSV · Excel · HDF · 音视频",
             ),
             QuickRow("BLF 报文解码", sub="需配 DBC 文件"),
             QuickRow("保存会话", gesture=".tlproj 项目"),
@@ -151,6 +151,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow("复位视图", keys=(_sc("home"),), gesture="双击"),
             QuickRow("后退 / 前进视图", keys=(_sc("back"),)),
+            QuickRow("时域 View", sub="最多 12 个；窄窗口点「»」切换收纳的 View"),
         ),
     ),
     # 4 — 快捷键

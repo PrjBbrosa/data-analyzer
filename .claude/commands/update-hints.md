@@ -32,6 +32,12 @@ description: 核对最近 UI 改动，维护两个发现性面——滚动提示
   rows, note, wide}`、`QuickRow{desc, sub, keys, gesture, soon, accent}`）；测试
   `tests/ui/test_quickref.py`（+ 控件 `quickref_panel.py` 测试 `test_quickref_panel.py`）。
 
+## 7.6 必查基线
+
+- 文件入口、速查和帮助页应同时列出 ASCII（`.asc` / `.fdc`）与 TDMS（`.tdms`）；`.tdms_index` 只能说明为配套索引，不能列为可打开格式。
+- 涉及导入的文案必须保留准确性边界：ASCII 需要时间列或已验证采样间隔，TDMS 需要有效波形时基；不要写成软件会猜测采样率。
+- 涉及时域 View 的文案必须说明最多 12 个；窄窗口先显示紧凑编号，再用 `»` 菜单切换收纳的 View，完整名称留在悬浮提示。
+
 ## 流程
 
 1. **定范围**：`git log --oneline -30`，并扫 `docs/superpowers/specs/` 与
