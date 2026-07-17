@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "TraceLab"
-APP_VERSION = "v7.6"
+APP_VERSION = "v7.7"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION}"
 
 # Feishu release/download page opened by the status-bar update icon.
