@@ -8,6 +8,8 @@ import pandas as pd
 
 from .head_hdf import parse_head_hdf
 from .wwt_format import load_wwt_groups
+from .zfd_format import load_zfd_groups
+from .mat_format import load_mat_groups
 
 try:
     from asammdf import MDF
@@ -819,6 +821,16 @@ class DataLoader:
     def load_wwt(fp):
         """WinWert .wwt：返回与 load_hdf 同形状的 groups 列表。"""
         return load_wwt_groups(fp)
+
+    @staticmethod
+    def load_zfd(fp):
+        """ZFGE2 .zfd（ZwickRoell/TestRunPRO）：返回与 load_hdf 同形状的 groups。"""
+        return load_zfd_groups(fp)
+
+    @staticmethod
+    def load_mat(fp):
+        """MATLAB .mat：返回与 load_hdf 同形状的 groups 列表。"""
+        return load_mat_groups(fp)
 
     @staticmethod
     def load_hdf(fp):

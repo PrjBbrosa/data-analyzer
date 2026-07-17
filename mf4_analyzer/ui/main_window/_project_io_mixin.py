@@ -16,7 +16,7 @@ from ...io.loader import (
 
 AUDIO_VIDEO_GLOB = "*.mp4 *.mov *.mkv *.m4v *.mp3 *.m4a *.aac *.wav *.flac"
 CSV_LIKE_GLOB = " ".join(f"*{ext}" for ext in sorted(CSV_LIKE_EXTS))
-DATA_FILE_GLOB = f"*.mf4 *.mdf *.blf *.tdms {CSV_LIKE_GLOB} *.xlsx *.xls *.hdf *.wwt {AUDIO_VIDEO_GLOB}"
+DATA_FILE_GLOB = f"*.mf4 *.mdf *.blf *.tdms {CSV_LIKE_GLOB} *.xlsx *.xls *.hdf *.wwt *.zfd *.mat {AUDIO_VIDEO_GLOB}"
 PROJECT_OR_DATA_FILTER = (
     f"所有支持的文件 ({DATA_FILE_GLOB} *.tlproj);;"
     f"项目 (*.tlproj);;数据文件 ({DATA_FILE_GLOB});;"
@@ -281,6 +281,32 @@ class ProjectIOMixin:
                 self._update_info()
                 self.statusBar.showMessage(
                     f"✅ 已加载 WWT: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
+                self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
+                return
+            elif ext == '.zfd':
+                groups = DataLoader.load_zfd(fp)
+                for g in groups:
+                    self._register_file_data(
+                        fp, g["data"], g["channels"], g["units"],
+                        source_metadata=g["source_metadata"],
+                        channel_metadata=g["channel_metadata"],
+                        label_suffix=g["label_suffix"])
+                self._update_info()
+                self.statusBar.showMessage(
+                    f"✅ 已加载 ZFD: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
+                self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
+                return
+            elif ext == '.mat':
+                groups = DataLoader.load_mat(fp)
+                for g in groups:
+                    self._register_file_data(
+                        fp, g["data"], g["channels"], g["units"],
+                        source_metadata=g["source_metadata"],
+                        channel_metadata=g["channel_metadata"],
+                        label_suffix=g["label_suffix"])
+                self._update_info()
+                self.statusBar.showMessage(
+                    f"✅ 已加载 MAT: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
                 return
             else:

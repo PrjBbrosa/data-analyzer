@@ -244,7 +244,7 @@ def test_all_v2_samples_load():
     if not SAMPLE_DIR_V2.exists():
         pytest.skip(f"sample dir not found: {SAMPLE_DIR_V2}")
     samples = sorted(SAMPLE_DIR_V2.glob("*.wwt"))
-    assert len(samples) == 4
+    assert len(samples) >= 4          # ≥ 逆向时的 4 个（目录可能新增样本）
     for p in samples:
         groups = DataLoader.load_wwt(str(p))
         assert groups
