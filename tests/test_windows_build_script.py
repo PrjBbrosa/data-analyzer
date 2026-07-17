@@ -266,6 +266,47 @@ def test_lite_build_script_excludes_unused_qt_modules_but_keeps_render_deps():
         )
 
 
+def test_full_build_script_excludes_unused_qt_but_keeps_acquisition_and_render_deps():
+    """The full (acquisition-inclusive) build also trims unused Qt modules for
+    size — verified safe because grep shows the whole repo (acquisition_ui
+    included) only uses QtWidgets/QtCore/QtGui. It must NOT break acquisition
+    packaging, must keep the render/export Qt deps, and must keep QtNetwork
+    (the one module pyqtgraph might import indirectly)."""
+    script = ROOT / "tools" / "build_windows_folder.ps1"
+    text = script.read_text(encoding="utf-8")
+
+    # Unused Qt modules trimmed (mirror of the lite build).
+    for module in (
+        "PyQt5.QtWebEngine",
+        "PyQt5.QtQml",
+        "PyQt5.QtQuick",
+        "PyQt5.QtMultimedia",
+        "PyQt5.Qt3DRender",
+    ):
+        assert f'"{module}"' in text, f"full build should exclude {module}"
+
+    # Render/export Qt deps must stay (pyqtgraph uses them indirectly).
+    for keep in ("PyQt5.QtOpenGL", "PyQt5.QtSvg", "PyQt5.QtPrintSupport"):
+        assert keep not in text, f"{keep} must NOT be excluded in the full build"
+
+    # Conservative: QtNetwork kept in BOTH builds.
+    assert "PyQt5.QtNetwork" not in text
+
+    # Trimming Qt must not have disturbed acquisition packaging.
+    assert "acquisition_capture.controller" in text
+    assert "_vendor_pyxcp" in text
+    assert '"--exclude-module", "pyxcp"' in text
+
+
+def test_lite_build_keeps_qtnetwork_conservatively():
+    """QtNetwork is intentionally NOT excluded in the lite build either — it is
+    the only module pyqtgraph might import indirectly, and it is tiny."""
+    script = ROOT / "tools" / "build_windows_folder_lite.ps1"
+    text = script.read_text(encoding="utf-8")
+
+    assert "PyQt5.QtNetwork" not in text
+
+
 def test_windows_run_built_exe_wrapper_pauses_after_exit():
     wrapper = ROOT / "tools" / "run_windows_exe.bat"
 

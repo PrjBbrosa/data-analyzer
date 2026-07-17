@@ -197,6 +197,46 @@ $HiddenImports = @(
     "mf4_analyzer.acquisition_ui.history_tab",
     "mf4_analyzer.acquisition_ui.replay_tab"
 )
+# Both the Analyzer AND the acquisition packages only import QtWidgets/QtCore/
+# QtGui — verified by grep across every .py (acquisition_ui widgets included).
+# --collect-submodules pyqtgraph otherwise drags in pyqtgraph's alternate-Qt-
+# backend submodules, which import a pile of Qt modules nothing here uses
+# (biggest win: dropping QtQml/QtQuick removes the ~20 MB qml tree). KEEP
+# QtOpenGL (pyqtgraph GL render), QtSvg (icons) and QtPrintSupport (pyqtgraph
+# export) — pyqtgraph imports them INDIRECTLY, so they never appear in an
+# app-code grep; excluding them would break rendering. QtNetwork is
+# deliberately NOT excluded (pyqtgraph remote view may import it; ~1-2 MB, not
+# worth the risk). Re-verify chart curves + icons render in the packaged exe.
+$UnusedQtModules = @(
+    "PyQt5.QtWebEngine",
+    "PyQt5.QtWebEngineCore",
+    "PyQt5.QtWebEngineWidgets",
+    "PyQt5.QtQml",
+    "PyQt5.QtQuick",
+    "PyQt5.QtQuickWidgets",
+    "PyQt5.QtMultimedia",
+    "PyQt5.QtMultimediaWidgets",
+    "PyQt5.QtSql",
+    "PyQt5.QtBluetooth",
+    "PyQt5.QtNfc",
+    "PyQt5.QtPositioning",
+    "PyQt5.QtSensors",
+    "PyQt5.QtSerialPort",
+    "PyQt5.QtWebSockets",
+    "PyQt5.QtWebChannel",
+    "PyQt5.QtCharts",
+    "PyQt5.QtDataVisualization",
+    "PyQt5.QtDesigner",
+    "PyQt5.QtHelp",
+    "PyQt5.QtTest",
+    "PyQt5.QtXmlPatterns",
+    "PyQt5.Qt3DCore",
+    "PyQt5.Qt3DRender",
+    "PyQt5.Qt3DInput",
+    "PyQt5.Qt3DLogic",
+    "PyQt5.Qt3DAnimation",
+    "PyQt5.Qt3DExtras"
+)
 $PyInstallerArgs = @(
     "-m", "PyInstaller",
     "--noconfirm",
@@ -247,6 +287,9 @@ $PyInstallerArgs += @(
 )
 foreach ($HiddenImport in $HiddenImports) {
     $PyInstallerArgs += @("--hidden-import", $HiddenImport)
+}
+foreach ($QtModule in $UnusedQtModules) {
+    $PyInstallerArgs += @("--exclude-module", $QtModule)
 }
 $PyInstallerArgs += $EntryScript
 

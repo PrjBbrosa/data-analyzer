@@ -120,14 +120,16 @@ $HiddenImports = @(
     # logging.config / logging.handlers / timeit hidden imports are gone: they
     # existed only to satisfy pyxcp's rich / pya2l's SQLAlchemy closures.
 )
-# The app only imports QtWidgets / QtCore / QtGui (verified by grep). But
-# --collect-submodules pyqtgraph (below) drags in pyqtgraph's alternate-Qt-
-# backend submodules, which import a pile of Qt modules the app never uses —
-# QtWebEngine alone ships an entire Chromium (hundreds of MB). Exclude the
-# unused ones. KEEP QtOpenGL (pyqtgraph GL render), QtSvg (icons) and
-# QtPrintSupport (pyqtgraph export) — do NOT add them here. If the packaged
-# app misbehaves after this, the single most likely module to restore first
-# is QtNetwork; re-verify chart curves + icons render after any change.
+# The whole repo (Analyzer + acquisition) only imports QtWidgets/QtCore/QtGui —
+# verified by grep across every .py. But --collect-submodules pyqtgraph (below)
+# drags in pyqtgraph's alternate-Qt-backend submodules, which import a pile of
+# Qt modules nothing here uses (biggest win: dropping QtQml/QtQuick removes the
+# ~20 MB qml tree). KEEP QtOpenGL (pyqtgraph GL render), QtSvg (icons) and
+# QtPrintSupport (pyqtgraph export) — pyqtgraph imports them INDIRECTLY, so they
+# never show up in an app-code grep; excluding them would break rendering.
+# QtNetwork is deliberately NOT excluded: pyqtgraph's remote view could import
+# it, and it costs only ~1-2 MB — not worth the risk. Re-verify chart curves +
+# icons render in the packaged exe after any change here.
 $UnusedQtModules = @(
     "PyQt5.QtWebEngine",
     "PyQt5.QtWebEngineCore",
@@ -137,7 +139,6 @@ $UnusedQtModules = @(
     "PyQt5.QtQuickWidgets",
     "PyQt5.QtMultimedia",
     "PyQt5.QtMultimediaWidgets",
-    "PyQt5.QtNetwork",
     "PyQt5.QtSql",
     "PyQt5.QtBluetooth",
     "PyQt5.QtNfc",
