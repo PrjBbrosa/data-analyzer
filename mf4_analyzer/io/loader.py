@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .head_hdf import parse_head_hdf
+from .wwt_format import load_wwt_groups
 
 try:
     from asammdf import MDF
@@ -813,6 +814,11 @@ class DataLoader:
         for col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
         df = df.dropna(how='all').interpolate().ffill().bfill().reset_index(drop=True)
         return df, list(df.columns), {}
+
+    @staticmethod
+    def load_wwt(fp):
+        """WinWert .wwt：返回与 load_hdf 同形状的 groups 列表。"""
+        return load_wwt_groups(fp)
 
     @staticmethod
     def load_hdf(fp):
