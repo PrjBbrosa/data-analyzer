@@ -69,6 +69,7 @@ lesson by default.
 | [Relocated Inspector Fields Keep Their Trailing Alignment](inspector-relocated-field-keeps-trailing-alignment.md) | Moving a capped Inspector control from a `QFormLayout` into a | See lesson |
 | [FFT-vs-Time Custom-X Cache Invalidation](codex-fft-time-custom-xaxis-cache-invalidation.md) | Change a display control whose semantics are absent from the | See lesson |
 | [Qt Worker Callbacks Retain Run Context](codex-qt-worker-callback-context.md) | Changing worker completion/progress callbacks or QThread cleanup in | See lesson |
+| [Release Version Labels Stay Synchronized](codex-release-version-labels-stay-synchronized.md) | Bumping the TraceLab application release version, especially when its | See lesson |
 
 ## Selection Rules
 
