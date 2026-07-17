@@ -64,7 +64,7 @@ the prompt. If absent, default to `plan`.
 
 | Keyword match | Dispatch to |
 |---|---|
-| FFT, order, Welch, window, amplitude, filter, resample, tacho, loader, MDF, CSV, HDF5, ASCII, ASC, TDMS, channel-math, derivative, integral, moving-avg, DataLoader, FileData, ChannelMath | `signal-processing-expert` |
+| FFT, order, Welch, window, amplitude, filter, resample, tacho, loader, MDF, CSV, HDF5, ASCII, ASC, TDMS, WWT, ZFD, MAT, channel-math, derivative, integral, moving-avg, DataLoader, FileData, ChannelMath | `signal-processing-expert` |
 | PyQt, widget, dialog, canvas, toolbar, layout, signal/slot, axis-edit, font, label, text, color, tick, tick-label, QFrame, StatisticsPanel, stats-panel | `pyqt-ui-engineer` |
 | refactor, module, package, import, performance, relocation | `refactor-architect` |
 

@@ -1,65 +1,44 @@
 # Analyzer UI Hints
 
-This document tracks user-facing hint text for the Analyzer chart area. It is a
-planning and product reference only for now. Runtime hint strings currently
-live in `mf4_analyzer/ui/chart_stack.py`; a later implementation should move
-them into a dedicated UI hint registry module.
+This document tracks the user-facing discovery system for the Analyzer chart
+area. The runtime source of truth is `mf4_analyzer/ui/hints.py`; this file is a
+maintainer-facing map of its surfaces, shortcut contracts, and review rules.
 
 ## Goals
 
 - Keep hidden chart interactions discoverable without adding modal tutorials.
 - Keep the bottom hint bar useful as features grow.
 - Make shortcut discovery explicit, especially for toolbar buttons.
-- Avoid scattering hint copy across widget code without an inventory.
-- Preserve a clear path for later randomized/context-aware hints.
+- Keep hint copy centralized and testable.
+- Let frequently used gestures retire so the footer becomes quieter over time.
 
 ## Current State
 
-Runtime hints are not a standalone module yet.
+The standalone registry, context-aware rotation, discovery retirement, and
+situational nudges are implemented. `chart_stack` consumes the registry through
+compatibility helpers; the UI never parses this Markdown.
 
 | Area | Current source | Notes |
 | --- | --- | --- |
-| Top toolbar mode hint | `chart_stack.py` `_TOOL_HINTS` | Changes with pan/zoom/idle mode. |
-| Bottom persistent hint | `chart_stack.py` `_BOTTOM_HINT_PERSISTENT` | Shows fixed shortcuts like `Ctrl + wheel`, `Shift + wheel`, double-click chart options. |
-| Bottom context hint | `chart_stack.py` `_BOTTOM_HINT_CONTEXT` | Changes for pan, zoom, cursor, spectrogram states. |
-| Navigation shortcuts | `chart_stack.py` `_NAV_SHORTCUTS` | `Alt+R`, `Alt+Z`, `Alt+Shift+Z`, `Alt+G`, `Alt+B`. |
-| Time chart shortcuts | `chart_stack.py` `_TIME_CARD_SHORTCUTS` | `Alt+1` through `Alt+5` for split/overlay/cursor controls. |
+| Registry and state matching | `hints.py` `Hint`, `HintState`, `_HINTS` | Persistent, context, anchor, discovery, rotation, and nudge surfaces. |
+| Navigation shortcuts | `hints.py` `NAV_SHORTCUTS` | `Ctrl+R`, `Ctrl+Z`, `Ctrl+Shift+Z`, `Ctrl+G`, `Ctrl+B`. |
+| Time chart shortcuts | `hints.py` `TIME_CARD_SHORTCUTS` | `Ctrl+1` through `Ctrl+5` for split/overlay/cursor controls. |
+| One-shot feedback | `hints.py` `_FLASH_TIPS` | Immediate copy for gestures and explicit actions. |
+| Discovery persistence | `hints.py` `load_discovered`, `mark_discovered` | Stores retired discoveries in `chartHints/discovered`. |
 | Channel-tree context action | `widgets/__init__.py` `MultiFileChannelWidget._on_context_menu` | Right-click channel -> `设为左轴`. |
 | Pyqtgraph right-click chart menu | `pg_canvases.py` context menu reshape helpers | Keeps `查看全部`, `X 轴范围`, `Y 轴范围`, `鼠标操作`, `网格`. |
 | Markup editor capability card | `markup/editor.py` `_maybe_show_capability_hint` | One-shot `markup.capabilities` toast on first open (scope="markup"); retires via shared `chartHints/discovered`. |
 
-## Proposed Runtime Shape
+## Runtime API
 
-Do this later as a separate module, not in the current cleanup.
+Maintainers should use these public helpers instead of duplicating strings:
 
-Target module:
-
-```text
-mf4_analyzer/ui/hints.py
-```
-
-Recommended data model:
-
-```python
-Hint(
-    id="time.overlay.select_drag_y",
-    surface="bottom_context",
-    modes={"time"},
-    plot_modes={"overlay"},
-    priority=90,
-    text="叠加模式：点击曲线后拖动，可单独移动该通道 Y 轴",
-)
-```
-
-Keep a lightweight API:
-
+- `all_hints() -> tuple[Hint, ...]`
 - `persistent_hints() -> tuple[str, ...]`
-- `context_hints(state) -> tuple[Hint, ...]`
-- `shortcut_hints() -> tuple[Hint, ...]`
-- `random_hint(state, seed=None) -> Hint | None`
-
-The UI should not parse this Markdown at runtime. This file documents product
-intent; `ui/hints.py` should be the runtime source of truth.
+- `shortcut_tooltip(action_key) -> str`
+- `context_hints(state)`, `rotation_hints(state)`
+- `discovery_hint(state)`, `nudge_hint(state)`
+- `load_discovered(settings)`, `mark_discovered(settings, hint_id)`
 
 ## Hint Surfaces
 
@@ -92,22 +71,21 @@ Priority legend:
 
 | ID | Priority | Text | Trigger / Surface |
 | --- | --- | --- | --- |
-| `shortcut.home` | P0 | `Alt+R：还原视图` | Rotating / shortcut group |
-| `shortcut.back_forward` | P0 | `Alt+Z / Alt+Shift+Z：图表视图后退 / 前进` | Rotating / shortcut group |
-| `shortcut.pan` | P0 | `Alt+G：平移模式` | Rotating / shortcut group |
-| `shortcut.zoom` | P0 | `Alt+B：框选缩放` | Rotating / shortcut group |
-| `shortcut.time.layout` | P0 | `Alt+1 / Alt+2：分屏 / 叠加` | Time mode rotating |
-| `shortcut.cursor` | P0 | `Alt+3 / Alt+4 / Alt+5：关闭游标 / 单游标 / 双游标` | Time mode rotating |
+| `shortcut.home` | P0 | `Ctrl+R：还原视图` | Rotating / shortcut group |
+| `shortcut.back_forward` | P0 | `Ctrl+Z / Ctrl+Shift+Z：图表视图后退 / 前进` | Rotating / shortcut group |
+| `shortcut.pan` | P0 | `Ctrl+G：平移模式` | Rotating / shortcut group |
+| `shortcut.zoom` | P0 | `Ctrl+B：框选缩放` | Rotating / shortcut group |
+| `shortcut.time.layout` | P0 | `Ctrl+1 / Ctrl+2：分屏 / 叠加` | Time mode rotating |
+| `shortcut.cursor` | P0 | `Ctrl+3 / Ctrl+4 / Ctrl+5：关闭游标 / 单游标 / 双游标` | Time mode rotating |
 
 ### Time Overlay Mode
 
 | ID | Priority | Text | Trigger / Surface |
 | --- | --- | --- | --- |
-| `time.overlay.select_drag_y` | P0 | `叠加模式：点击曲线后拖动，可单独移动该通道 Y 轴` | Time + overlay |
-| `time.overlay.blank_deselect` | P0 | `叠加模式：点击空白区域可取消当前曲线选择` | Time + overlay |
+| `overlay.drag_y` | P0 | `双击曲线或其 Y 轴 → 改颜色/范围` | Time + overlay |
+| `wheel.zoom_y` | P0 | `Shift + 滚轮：缩放当前通道 Y 轴` | Time + overlay/subplot |
 | `time.overlay.left_axis` | P0 | `左侧通道树右键通道，可设为叠加图左轴` | Time + overlay |
-| `time.overlay.primary_focus` | P1 | `多通道叠加时，先把主关注信号设为左轴更容易对比` | Time + overlay |
-| `time.overlay.zoom_guard` | P1 | `框选缩放开启时，拖框优先于曲线选择` | Time + overlay + zoom |
+| `coaxis.merge` | P1 | `多选通道右键可合并为共轴比幅值` | Time + overlay/subplot |
 
 ### Time Subplot Mode
 
@@ -146,50 +124,20 @@ Priority legend:
 | `spectrogram.slice` | P0 | `FFT vs Time：点击谱图某一时刻可查看该帧频率切片` | FFT vs Time |
 | `order.context` | P2 | `阶次图同样支持图表选项、复制图片和标注` | Order |
 
-## Initial Implementation Plan
+## Maintenance Checklist
 
-### Phase 1 - Documented Inventory Only
-
-Status: this document.
-
-- Keep current runtime behavior unchanged.
-- Use this file as the first product inventory.
-- Do not introduce a runtime module yet.
-
-### Phase 2 - Runtime Hint Registry
-
-- Add `mf4_analyzer/ui/hints.py`.
-- Move `_TOOL_HINTS`, `_BOTTOM_HINT_PERSISTENT`, `_BOTTOM_HINT_CONTEXT`,
-  `_NAV_SHORTCUTS`, and `_TIME_CARD_SHORTCUTS` into structured definitions or
-  expose them through compatibility functions.
-- Keep `chart_stack.py` behavior identical except for importing from the new
-  registry.
-- Add tests that prove existing hint text and shortcuts still appear.
-
-### Phase 3 - Context-Aware Rotation
-
-- Keep the left side of the bottom bar persistent.
-- Use the right side for rotating hints selected by current state:
-  `mode`, `plot_mode`, `cursor_mode`, toolbar mouse mode, selected overlay
-  channel, and active chart card.
-- Rotate slowly, for example every 8-12 seconds.
-- Reset/refresh immediately after explicit user actions such as switching to
-  overlay, enabling a cursor, or entering FFT vs Time.
-- Avoid random hints during active drag, pan, zoom, or cursor movement.
-
-### Phase 4 - Shortcut Discoverability
-
-- Add a rotating hint for toolbar shortcuts: `顶部按钮支持快捷键，悬停可查看`.
-- Ensure every toolbar button tooltip includes its shortcut where one exists.
-- Consider a future `?` or command-palette style overlay only if the hint bar
-  proves insufficient.
-
-### Phase 5 - Documentation Sync Check
-
-- Add a small check that extracts hint IDs from this document and validates
-  they exist in `ui/hints.py`, or invert the direction and generate this table
-  from the runtime registry.
-- Prefer generated documentation once the registry stabilizes.
+1. Review recent UI commits for new gestures, right-click actions, shortcuts,
+   staged capabilities, and removed interactions.
+2. Put only non-obvious interactions in the rotating footer; keep every
+   operation, including file formats and ordinary buttons, in `quickref.py`.
+3. Reuse `shortcut_tooltip()` for keyboard chips. Never repeat literal shortcut
+   strings in the quick-reference catalog.
+4. Keep every hint within `HINT_MAX_WIDTH`; gate it by mode/state and add a
+   discovery or retirement signal when the gesture can be observed.
+5. For staged work, pair `Hint(ship="later")` with `QuickRow(soon=True)` and
+   release both flags together.
+6. Run `tests/ui/test_hints.py`, `tests/ui/test_quickref.py`, and rendered panel
+   checks after changing user-facing copy.
 
 ## Open Decisions
 
@@ -200,7 +148,7 @@ Status: this document.
 - Whether channel-tree hints should appear in the status bar, bottom chart bar,
   or as a one-time inline affordance.
 
-## Non-Goals For The First Module Pass
+## Non-Goals
 
 - No onboarding wizard.
 - No modal tutorial.

@@ -24,3 +24,28 @@ def test_staging_dir_is_under_output_not_assets():
     from tools.gen_help_screenshots import STAGING_DIR, ASSETS_DIR
     assert STAGING_DIR.parts[-2:] == ("output", "help-shots")
     assert ASSETS_DIR.parts[-3:] == ("mf4_analyzer", "help", "assets")
+
+
+def test_import_screenshot_uses_real_checked_in_samples():
+    from tools.gen_help_screenshots import EXTRA_FILES, IMPORT_SAMPLES
+
+    assert EXTRA_FILES == {"imports": "imports-panel.png"}
+    assert [path.suffix for path in IMPORT_SAMPLES] == [".wwt", ".zfd", ".mat"]
+    assert all(path.exists() for path in IMPORT_SAMPLES)
+
+
+def test_analysis_wait_uses_job_service_not_retired_window_callbacks():
+    source = (Path(__file__).resolve().parents[1] / "tools" /
+              "gen_help_screenshots.py").read_text(encoding="utf-8")
+
+    assert "_analysis_jobs.is_running(section)" in source
+    assert "_on_fft_time_finished" not in source
+    assert "_on_order_finished" not in source
+
+
+def test_screenshot_generator_isolates_persistent_settings():
+    source = (Path(__file__).resolve().parents[1] / "tools" /
+              "gen_help_screenshots.py").read_text(encoding="utf-8")
+
+    assert "_install_isolated_qsettings" in source
+    assert "QSettings.IniFormat" in source

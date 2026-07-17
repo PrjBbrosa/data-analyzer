@@ -4,6 +4,10 @@ from pathlib import Path
 
 HELP = Path(__file__).resolve().parents[1] / "mf4_analyzer" / "help"
 MANUAL = HELP / "TraceLab-使用说明.html"
+PUBLISHED_GUIDE = (
+    Path(__file__).resolve().parents[1]
+    / "docs" / "analyzer" / "user-guide" / "user-guide.html"
+)
 
 
 def _deck_data() -> dict:
@@ -19,9 +23,10 @@ def _deck_data() -> dict:
 
 def test_deck_data_valid_and_version_bumped():
     d = _deck_data()
-    assert d["meta"]["updated"] == "2026-06-25"
-    assert d["meta"]["docVersion"] == "2.1"
-    assert "v2.2" in [c["v"] for c in d["changelog"]]
+    assert d["meta"]["version"] == "v7.7"
+    assert d["meta"]["updated"] == "2026-07-17"
+    assert d["meta"]["docVersion"] == "2.3"
+    assert "v7.7" in [c["v"] for c in d["changelog"]]
 
 
 def test_manual_has_filter_slide():
@@ -32,8 +37,25 @@ def test_manual_has_filter_slide():
 def test_manual_covers_new_features():
     html = MANUAL.read_text(encoding="utf-8")
     for kw in ["滤波", "低通", "高通", "带通", "带阻", ".blf", "DBC",
-               "GPU", "框选", "A 计权", "采样率"]:
+               "GPU", "框选", "A 计权", "采样率", ".wwt", ".zfd", ".mat",
+               "TraceLabAnalyzer7.7"]:
         assert kw in html, f"manual missing: {kw}"
+
+
+def test_manual_uses_current_real_ui_assets():
+    html = MANUAL.read_text(encoding="utf-8")
+    for name in ("time-panel.png", "imports-panel.png"):
+        asset = HELP / "assets" / name
+        assert asset.exists() and asset.stat().st_size > 100_000
+        assert f"assets/{name}" in html
+
+
+def test_published_guide_tracks_v77_and_real_ui_assets():
+    html = PUBLISHED_GUIDE.read_text(encoding="utf-8")
+    assert "TraceLab v7.7" in html
+    for name in ("WWT", "ZFD", "MAT", "time-panel.png", "imports-panel.png"):
+        assert name in html
+    assert "matplotlib" not in html
 
 
 def test_help_has_no_developer_jargon():
@@ -53,5 +75,6 @@ def test_panel_guides_cover_new_topics():
     }
     for fname, kws in checks.items():
         text = (HELP / fname).read_text(encoding="utf-8")
+        assert "TraceLab v7.7" in text
         for kw in kws:
             assert kw in text, f"{fname} missing: {kw}"

@@ -1,11 +1,11 @@
-description = "PyQt5 widgets, dialogs, matplotlib canvases, signal/slot wiring, Chinese font setup for the MF4 Data Analyzer. Cannot touch numeric algorithms."
+description = "PyQt5 widgets, dialogs, pyqtgraph chart surfaces, signal/slot wiring, Chinese font setup for the MF4 Data Analyzer. Cannot touch numeric algorithms."
 developer_instructions = """
 You are the PyQt UI specialist for the MF4-data-analyzer squad.\r
 \r
 ## Domain\r
 \r
-PyQt5 widgets, dialogs, layouts, signal/slot wiring, matplotlib\r
-`FigureCanvas` subclasses, navigation toolbar, interaction (zoom, pan,\r
+PyQt5 widgets, dialogs, layouts, signal/slot wiring, pyqtgraph\r
+`PlotWidget` / `ViewBox` / `AxisItem` surfaces, chart toolbar, interaction (zoom, pan,\r
 span select, axis edit, annotations), Chinese font configuration,\r
 keyboard shortcuts, visual polish.\r
 \r
@@ -49,7 +49,7 @@ Implementation guidance:\r
 - For the left navigator, file-list capacity should be handled with a\r
   resizable vertical splitter/file region rather than a small fixed\r
   maximum height that only shows one loaded file.\r
-- For channels, keep color swatches synchronized with matplotlib line\r
+- For channels, keep color swatches synchronized with the live chart-series\r
   colors.\r
 - For ChartStack, make the chart workspace feel like the primary work\r
   surface: quiet outer background, white chart surface, slim toolbar,\r
@@ -79,9 +79,9 @@ Implementation guidance:\r
   `for: refactor-architect`.\r
 - **Pre-Write/Edit self-check (MANDATORY):** before every `Write`/`Edit`,\r
   confirm the target is UI code (a class extending `QWidget`/`QDialog`/\r
-  `QMainWindow`/`QFrame`/`FigureCanvas`, a `NavigationToolbar2QT`\r
-  subclass, a layout/signal-slot method, or matplotlib `rcParams` font/\r
-  rendering setup such as `setup_chinese_font`, `axes.unicode_minus`).\r
+  `QMainWindow`/`QFrame`, a pyqtgraph canvas / `ViewBox` / `AxisItem`, a chart\r
+  toolbar, a layout/signal-slot method, or font/rendering setup such as\r
+  `setup_chinese_font`).\r
   `StatisticsPanel(QFrame)` is UI, in-domain. If the target is an\r
   FFT/order/filter/window algorithm, `DataLoader`, `FileData`, or\r
   `ChannelMath`, REFUSE: return `status: blocked` with a `flagged[]`\r

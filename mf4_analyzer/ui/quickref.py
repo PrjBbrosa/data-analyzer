@@ -93,7 +93,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("打开数据 / 项目", gesture="工具栏「打开」"),
             QuickRow(
                 "支持格式",
-                sub="MF4 · MDF · BLF · ASCII · TDMS · CSV · Excel · HDF · 音视频",
+                sub="MF4 · MDF · BLF · ASCII · TDMS · WWT · ZFD · MAT · 表格 · HDF · 音视频",
             ),
             QuickRow("BLF 报文解码", sub="需配 DBC 文件"),
             QuickRow("保存会话", gesture=".tlproj 项目"),
