@@ -12,12 +12,12 @@ FFT, order analysis (time-based and rpm-based), windowing, filtering,
 sampling / resampling, Welch averaging, tacho / rpm processing,
 amplitude / PSD scaling, zero-padding correctness.
 
-Also in-domain: data loaders (`DataLoader`, `FileData` — MDF/CSV/HDF5/ASCII/TDMS
+Also in-domain: data loaders (`DataLoader`, `FileData` — MDF/CSV/HDF5/ASCII/TDMS/WWT/ZFD/MAT
 parsing and channel extraction) and pure-numeric utility modules
 (`ChannelMath` — derivative/integral/scale/offset/moving-avg). These
 are NOT UI and have no other owner.
 
-### Loader accuracy baseline (TraceLab 7.6)
+### Loader accuracy baseline (TraceLab 7.7)
 
 - ASCII `.asc` / `.fdc` may be delimited or fixed-width, but a load is valid
   only with a recognizable time column or verified sampling metadata; never
@@ -25,11 +25,17 @@ are NOT UI and have no other owner.
 - TDMS `.tdms` imports only non-empty numeric waveform channels with valid
   timing metadata. Preserve units and duplicate-safe names; `.tdms_index` is a
   sidecar, not a data source.
+- WWT `.wwt` uses the native `Zeit` time axis, preserves unit/scale/offset, and
+  skips parameter and tolerance/evaluation curves.
+- ZFD `.zfd` reads ZFGE2/TestRunPRO float32 channel blocks. If timing metadata
+  is invalid, the 1 kHz fallback must remain explicitly marked as estimated.
+- MAT `.mat` supports v4-v7 and v7.3/HDF5; only recognized explicit time
+  variables establish an axis, and unknown engineering units remain empty.
 - GUI and batch import paths must retain equivalent loader semantics.
 
 ## Hard boundaries (MUST NOT cross)
 
-- Do NOT modify PyQt widgets, dialogs, layouts, or matplotlib canvas
+- Do NOT modify PyQt widgets, dialogs, layouts, or pyqtgraph chart surfaces
   classes. If a UI defect is in your way, return it via `flagged[]` with
   `for: pyqt-ui-engineer`.
 - Do NOT move files across modules or restructure packages. Return via
@@ -40,10 +46,9 @@ are NOT UI and have no other owner.
   confirm the target is signal-processing code: FFT/order/window/filter/
   tacho/resample analyzers, data loaders (`DataLoader`/`FileData`),
   channel-math utilities (`ChannelMath`), or their tests. If the target
-  is a class inheriting `QWidget`/`QDialog`/`QMainWindow`/`QFrame`/
-  `FigureCanvas`, a `NavigationToolbar2QT` subclass, a layout/signal-slot
-  method, or matplotlib `rcParams` font/rendering setup (e.g.,
-  `setup_chinese_font`, `axes.unicode_minus`, `font.sans-serif`), REFUSE:
+  is a class inheriting `QWidget`/`QDialog`/`QMainWindow`/`QFrame`, a
+  pyqtgraph canvas / `ViewBox` / `AxisItem`, a chart toolbar, a layout/signal-slot
+  method, or font/rendering setup (e.g., `setup_chinese_font`), REFUSE:
   return `status: blocked` with a `flagged[]` entry for
   `pyqt-ui-engineer`. Same for cross-module moves → refuse, flag
   `refactor-architect`.

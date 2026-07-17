@@ -16,15 +16,17 @@ Published guide entry points:
 
 - Analyzer guide: `docs/analyzer/user-guide/user-guide.html`
 - Acquisition Cockpit guide: `docs/analyzer/user-guide/acquisition-cockpit-guide.html`
-- TraceLab 7.6 release notes: `docs/analyzer/user-guide/tracelab-v7.6-release-notes.md`
+- TraceLab 7.7 release notes: `docs/analyzer/user-guide/tracelab-v7.7-release-notes.md`
+- TraceLab 7.6 release notes (archive): `docs/analyzer/user-guide/tracelab-v7.6-release-notes.md`
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 7.6. Its user-facing changes include generic
-ASCII (`.asc`) import, waveform-based NI TDMS (`.tdms`) import, and up to 12
-time-domain Views with responsive compact/overflow tab handling. Update the
-published guides when these behaviours change; do not treat `.tdms_index` as a
-data file or describe ASCII/TDMS timing as guessed.
+The current baseline is TraceLab 7.7. In addition to the 7.6 ASCII (`.asc`),
+NI TDMS (`.tdms`), and 12-View changes, 7.7 adds native WinWert (`.wwt`),
+ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports plus separate full and
+Analyzer-only Windows packages. Update the published guides when these
+behaviours change; preserve each loader's timing and unit boundaries instead
+of describing inferred metadata as measured truth.
 
 ## Acquisition Rule
 

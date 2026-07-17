@@ -7,6 +7,11 @@ then re-run with --promote to copy them over mf4_analyzer/help/assets/. The
 guides' numbered pins are tied to UI element positions, so after promoting
 NEW screenshots you must re-check the pin left/top% in each *-guide.html.
 
+The ``imports`` shot loads checked-in real WWT, ZFD and MAT samples.  It is
+used by the software manual as visual evidence that the current build opens
+those formats; unlike the four analysis panels, it is not a synthetic-data
+demonstration.
+
 Renders against a REAL Qt platform (cocoa on macOS) by default so the panels
 look exactly as the user sees them. --platform offscreen is a headless
 fallback for layout/draft ONLY (offscreen != real render; do not treat an
@@ -22,6 +27,7 @@ promoting; only nudge pins if a control actually relocated.
 Usage:
     .venv/bin/python tools/gen_help_screenshots.py                 # all 4 -> staging
     .venv/bin/python tools/gen_help_screenshots.py --only time
+    .venv/bin/python tools/gen_help_screenshots.py --only imports
     .venv/bin/python tools/gen_help_screenshots.py --platform offscreen
     .venv/bin/python tools/gen_help_screenshots.py --promote       # copy staging -> assets
 """
@@ -46,6 +52,8 @@ PANEL_FILES = {
     "fft_time": "ffttime-panel.png",
     "order": "order-panel.png",
 }
+EXTRA_SHOTS = ("imports",)
+EXTRA_FILES = {"imports": "imports-panel.png"}
 STAGING_DIR = REPO_ROOT / "output" / "help-shots"
 ASSETS_DIR = REPO_ROOT / "mf4_analyzer" / "help" / "assets"
 # Match the shipped assets exactly (1640x1010): scale grab to logical size so
@@ -58,6 +66,41 @@ GRAB_SCALE = 1
 CH_RPM = "电机转速"
 CH_SIGNAL = "方向盘扭矩"
 CH_TORQUE = "电机扭矩"
+
+IMPORT_SAMPLES = (
+    REPO_ROOT / "testdoc" / "wwt" / "NLTNP_000089.wwt",
+    REPO_ROOT / "testdoc" / "wwt" / "end of travel_1.zfd",
+    REPO_ROOT / "testdoc" / "175rpm_-45deg-270tighten.mat",
+)
+
+
+def _install_isolated_qsettings(settings_dir: Path) -> None:
+    """Divert screenshot-only UI persistence away from the user's settings.
+
+    The live Inspector imports ``_preset_settings`` into several modules, so
+    changing ``QSettings.setPath`` alone is insufficient for the explicit
+    ``QSettings(org, app)`` store.  Keep this list aligned with the UI test
+    fixture in ``tests/ui/conftest.py``.
+    """
+    from PyQt5.QtCore import QSettings
+    import mf4_analyzer.ui.inspector_sections as package
+    import mf4_analyzer.ui.inspector_sections._helpers as helpers
+    import mf4_analyzer.ui.inspector_sections.collapsible as collapsible
+    import mf4_analyzer.ui.inspector_sections.presets as presets
+    import mf4_analyzer.ui.inspector_sections.persistent_top as persistent_top
+
+    ini = str(settings_dir / "qsettings.ini")
+
+    def temp_settings(*_args, **_kwargs):
+        return QSettings(ini, QSettings.IniFormat)
+
+    for module in (package, helpers, collapsible, presets, persistent_top):
+        if hasattr(module, "_preset_settings"):
+            setattr(module, "_preset_settings", temp_settings)
+
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(settings_dir))
+    QSettings.setPath(QSettings.IniFormat, QSettings.SystemScope, str(settings_dir))
 
 
 def build_synthetic_csv() -> Path:
@@ -105,35 +148,58 @@ def _check_channels(win, names) -> None:
                 leaf.setCheckState(0, Qt.Checked)
 
 
-def _wait(trigger, finished_attr, failed_attr, win, timeout_ms=60_000) -> bool:
-    """Drive a worker-backed compute and block until finished/failed/timeout."""
+def _wait_for_analysis(trigger, section: str, win, timeout_ms=60_000) -> bool:
+    """Run one section and wait for current ``AnalysisJobService`` cleanup."""
     from PyQt5.QtCore import QEventLoop, QTimer
     loop = QEventLoop()
-    done = {"ok": False}
-    orig_fin = getattr(win, finished_attr)
-    orig_fail = getattr(win, failed_attr)
+    state = {"failed": "", "timed_out": False}
 
-    def on_fin(result, _o=orig_fin):
-        _o(result)
-        done["ok"] = True
-        loop.quit()
+    def on_failed(failed_section, _ctx, message):
+        if failed_section == section:
+            state["failed"] = str(message)
 
-    def on_fail(msg, _o=orig_fail):
-        _o(msg)
-        loop.quit()
+    def poll():
+        if not win._analysis_jobs.is_running(section):
+            loop.quit()
 
-    setattr(win, finished_attr, on_fin)
-    setattr(win, failed_attr, on_fail)
+    win._analysis_jobs.failed.connect(on_failed)
+    poller = QTimer()
+    poller.timeout.connect(poll)
+    poller.start(20)
     wd = QTimer()
     wd.setSingleShot(True)
-    wd.timeout.connect(loop.quit)
+    wd.timeout.connect(lambda: (state.__setitem__("timed_out", True), loop.quit()))
     wd.start(timeout_ms)
     trigger()
-    loop.exec_()
+    poll()
+    if win._analysis_jobs.is_running(section):
+        loop.exec_()
+    poller.stop()
     wd.stop()
-    setattr(win, finished_attr, orig_fin)
-    setattr(win, failed_attr, orig_fail)
-    return done["ok"]
+    win._analysis_jobs.failed.disconnect(on_failed)
+    if state["failed"]:
+        print(f"FAIL: {section} analysis: {state['failed']}", file=sys.stderr)
+    return not state["timed_out"] and not state["failed"]
+
+
+def _drive_imports(win, app) -> None:
+    """Load three real v7.7 measurement formats and show one WWT curve."""
+    from PyQt5.QtCore import QEventLoop, QTimer
+
+    missing = [str(path) for path in IMPORT_SAMPLES if not path.exists()]
+    if missing:
+        raise FileNotFoundError(f"missing import screenshot samples: {missing}")
+    for path in IMPORT_SAMPLES:
+        win.load_file(str(path))
+        app.processEvents()
+        # Let the real proxy/source models finish one file before the next
+        # source-model reset.  This keeps the captured navigator stable and
+        # avoids masking a mid-update model behind a successful grab.
+        loop = QEventLoop()
+        QTimer.singleShot(100, loop.quit)
+        loop.exec_()
+    _check_channels(win, {"Steering torque"})
+    app.processEvents()
 
 
 def _drive_mode(win, app, mode: str) -> None:
@@ -153,10 +219,13 @@ def _drive_mode(win, app, mode: str) -> None:
     if mode == "fft_time":
         _select_combo_by_channel(win.inspector.fft_time_ctx.combo_sig, CH_SIGNAL)
         app.processEvents()
-        _wait(lambda: win.do_fft_time(force=True),
-              "_on_fft_time_finished", "_on_fft_time_failed", win)
+        if not _wait_for_analysis(
+                lambda: win.do_fft_time(force=True), "fft_time", win):
+            raise RuntimeError("FFT-vs-Time render did not complete")
         for _ in range(5):
             app.processEvents()
+        if not win.chart_stack.page_fft_time.pane_canvas(0).has_result():
+            raise RuntimeError("FFT-vs-Time completed without a rendered result")
         return
     if mode == "order":
         ctx = win.inspector.order_ctx
@@ -167,17 +236,19 @@ def _drive_mode(win, app, mode: str) -> None:
                           "nfft": 4096, "amplitude_mode": "Amplitude",
                           "x_auto": True, "y_auto": True, "z_auto": True})
         app.processEvents()
-        _wait(win.do_order_time,
-              "_on_order_finished", "_on_order_failed", win)
+        if not _wait_for_analysis(win.do_order_time, "order", win):
+            raise RuntimeError("Order render did not complete")
         for _ in range(5):
             app.processEvents()
+        if not win.chart_stack.page_order.pane_canvas(0).has_result():
+            raise RuntimeError("Order completed without a rendered result")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--platform", default=None,
                         help="QT_QPA_PLATFORM override (e.g. offscreen)")
-    parser.add_argument("--only", choices=PANEL_MODES, default=None)
+    parser.add_argument("--only", choices=PANEL_MODES + EXTRA_SHOTS, default=None)
     parser.add_argument("--promote", action="store_true",
                         help="copy staging PNGs over help/assets after review")
     args = parser.parse_args()
@@ -197,22 +268,30 @@ def main() -> int:
     load_stylesheet(app)
     install_glass_tooltips(app)
 
+    settings_tmp = tempfile.TemporaryDirectory(prefix="tracelab-help-qsettings-")
+    _install_isolated_qsettings(Path(settings_tmp.name))
+
     win = MainWindow()
     win.resize(WIN_W, WIN_H)
     win.show()
     app.processEvents()
-    win.load_file(str(build_synthetic_csv()))
-    app.processEvents()
 
-    modes = (args.only,) if args.only else PANEL_MODES
+    if args.only == "imports":
+        _drive_imports(win, app)
+        modes = EXTRA_SHOTS
+    else:
+        win.load_file(str(build_synthetic_csv()))
+        app.processEvents()
+        modes = (args.only,) if args.only else PANEL_MODES
     STAGING_DIR.mkdir(parents=True, exist_ok=True)
     saved = []
     for mode in modes:
-        _drive_mode(win, app, mode)
+        if mode in PANEL_MODES:
+            _drive_mode(win, app, mode)
         pix = win.grab()
         if GRAB_SCALE != 1:
             pix = pix.scaled(WIN_W * GRAB_SCALE, WIN_H * GRAB_SCALE)
-        out = STAGING_DIR / PANEL_FILES[mode]
+        out = STAGING_DIR / (PANEL_FILES | EXTRA_FILES)[mode]
         if pix.isNull() or pix.width() < 10:
             print(f"FAIL: degenerate pixmap for {mode}", file=sys.stderr)
             return 2
@@ -226,6 +305,10 @@ def main() -> int:
             dst = ASSETS_DIR / src.name
             shutil.copy2(src, dst)
             print(f"promoted: {dst}")
+
+    win.close()
+    app.processEvents()
+    settings_tmp.cleanup()
 
     return 0
 

@@ -32,11 +32,12 @@ description: 核对最近 UI 改动，维护两个发现性面——滚动提示
   rows, note, wide}`、`QuickRow{desc, sub, keys, gesture, soon, accent}`）；测试
   `tests/ui/test_quickref.py`（+ 控件 `quickref_panel.py` 测试 `test_quickref_panel.py`）。
 
-## 7.6 必查基线
+## 7.7 必查基线
 
-- 文件入口、速查和帮助页应同时列出 ASCII（`.asc` / `.fdc`）与 TDMS（`.tdms`）；`.tdms_index` 只能说明为配套索引，不能列为可打开格式。
-- 涉及导入的文案必须保留准确性边界：ASCII 需要时间列或已验证采样间隔，TDMS 需要有效波形时基；不要写成软件会猜测采样率。
+- 文件入口、速查和帮助页应同时列出 ASCII（`.asc` / `.fdc`）、TDMS（`.tdms`）、WWT（`.wwt`）、ZFD（`.zfd`）与 MAT（`.mat`）；`.tdms_index` 只能说明为配套索引，不能列为可打开格式。
+- 涉及导入的文案必须保留准确性边界：ASCII 需要时间列或已验证采样间隔；TDMS 需要有效波形时基；WWT 使用 `Zeit` 时基并保留单位/缩放；ZFD 的 1 kHz 回退必须标为估算；MAT 只认显式时间变量、单位未知时留空。
 - 涉及时域 View 的文案必须说明最多 12 个；窄窗口先显示紧凑编号，再用 `»` 菜单切换收纳的 View，完整名称留在悬浮提示。
+- 帮助页配图必须由 `tools/gen_help_screenshots.py` 启动当前真实 MainWindow 生成；macOS 发布图使用 Cocoa 真机渲染，`offscreen` 只能作为排版草稿，不能写成视觉验收通过。
 
 ## 流程
 
@@ -59,7 +60,7 @@ description: 核对最近 UI 改动，维护两个发现性面——滚动提示
      取值（别硬编码），鼠标手势走 `gesture=`（蓝胶囊）；在途 `soon=True`（「即将」徽标）；
      模式行带一句 `sub` 用途。
    - **通用**：用户分析 **EPS（电动助力转向）**，阶次 base = 电机转速，示例信号用 EPS 名
-     （方向盘扭矩/电机转速/电机扭矩），别用 engine；Mac/Win 修饰键并列写 `Option/Alt`。
+     （方向盘扭矩/电机转速/电机扭矩），别用 engine；修饰键以 `hints.py` 当前注册表和真实事件处理为准，不沿用历史 `Option/Alt` 文案。
 6. **报候选给用户**：按面分列 `[面 A/B][分类] 标识 · 门控/分组 · 文案 · 理由`，等确认 / 改文案。
 7. **写回**：`hints.py`（+ 不变量动了同步 `test_hints.py`）；`quickref.py`（+ 同步
    `test_quickref.py`）。优先**改现有条目**而非加重复。

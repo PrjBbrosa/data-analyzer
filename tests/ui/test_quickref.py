@@ -53,6 +53,13 @@ def test_no_empty_groups():
             assert row.desc, f"row in {group.title!r} has empty desc"
 
 
+def test_supported_formats_include_v77_imports():
+    start = next(g for g in quickref.QUICKREF if g.title == "开始 · 文件")
+    formats = next(r for r in start.rows if r.desc == "支持格式")
+    for name in ("ASCII", "TDMS", "WWT", "ZFD", "MAT"):
+        assert name in formats.sub
+
+
 def test_every_keyboard_chip_resolves():
     """No keyboard chip may be None / empty.
 

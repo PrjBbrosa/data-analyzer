@@ -3,13 +3,17 @@
 **Project:** MF4 Data Analyzer — PyQt5 桌面 GUI，分析 MF4 / HEAD-HDF 等测量数据
 （FFT、阶次分析、滤波、加窗），含 CAN 采集。
 
-## TraceLab 7.6 product baseline
+## TraceLab 7.7 product baseline
 
 - Import supports MF4/MDF, CSV/Excel/HDF, BLF+DBC, audio/video, generic ASCII
-  (`.asc`/`.fdc`), and waveform-based NI TDMS (`.tdms`).
+  (`.asc`/`.fdc`), waveform-based NI TDMS (`.tdms`), native WinWert (`.wwt`),
+  ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`, including v7.3 via HDF5).
 - ASCII needs either a recognizable time column or verified fixed-width sampling
   metadata. TDMS needs valid waveform timing; never invent a fallback rate.
 - `.tdms_index` is a TDMS sidecar, never an importable data file.
+- WWT uses the file's `Zeit` axis and preserves units/scale/offset. ZFD may use
+  an explicitly marked 1 kHz estimated fallback when its timing is invalid.
+  MAT uses recognizable time variables only and never guesses engineering units.
 - The main time-domain workspace supports up to 12 Views. At narrow widths tabs
   compact to ordinal labels, then overflow into `»`; preserve active View
   visibility, tooltip names, reordering, and context actions.

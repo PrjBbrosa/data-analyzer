@@ -3,8 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TraceLab v7.6 · 使用说明</title>
-
+<title>TraceLab v7.7 · 使用说明</title>
 <!-- ===== FONTS ===== -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -155,6 +154,8 @@ img,video,canvas,svg{max-width:100%;max-height:100%;}
 .mock .mini{height:170px;border:1px solid var(--panel-bd);border-radius:6px;background:#fff;margin-bottom:14px;position:relative;overflow:hidden;}
 .mock .mini svg{position:absolute;inset:0;width:100%;height:100%;}
 .mock .pbar{height:30px;background:#fff;border:1px solid var(--panel-bd);border-radius:4px;margin-bottom:10px;}
+.realshot{display:block;width:100%;height:auto;max-height:690px;object-fit:contain;border:1.5px solid var(--panel-bd);border-radius:10px;background:#fff;box-shadow:0 22px 54px rgba(40,30,25,.18);}
+.shotcap{margin-top:14px;font-family:var(--font-mono);font-size:18px;color:var(--mut);text-align:center;letter-spacing:.03em;}
 
 /* 入场动画 */
 .reveal{opacity:0;transform:translateY(28px);transition:opacity .6s var(--ease),transform .6s var(--ease);}
@@ -232,11 +233,11 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 {
   "meta": {
     "title": "TraceLab",
-    "version": "v7.6",
-    "versionLabel": "使用说明 · V7.6",
+    "version": "v7.7",
+    "versionLabel": "使用说明 · V7.7",
     "subtitle": "打开数据、看图分析、导出结果 —— 一份照着做就会的使用说明",
-    "docVersion": "2.1",
-    "updated": "2026-06-25"
+    "docVersion": "2.3",
+    "updated": "2026-07-17"
   },
   "slides": [
     { "type": "cover" },
@@ -248,7 +249,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       "blocks": [
         { "type": "lead", "html": "TraceLab 把「打开测量数据 → 看图分析 → 导出结果」连成一条龙；还能直接连设备，边录边看。下面六件事，是你最常用到的。" },
         { "type": "cards", "cols": 3, "items": [
-          { "no": "01", "h": "打开各种数据", "p": "直接打开 MF4、MDF、CSV、Excel、HEAD .hdf、BLF、ASCII .asc、NI TDMS .tdms 和音视频等；拖进来就能用。" },
+          { "no": "01", "h": "打开各种数据", "p": "直接打开 MF4、MDF、WWT、ZFD、MAT、ASCII、TDMS、表格、BLF、HEAD .hdf 和音视频等；拖进来就能用。" },
           { "no": "02", "h": "看波形随时间变化", "p": "多条通道的时域曲线一起看；最多新建 12 个 View，随手拖动、放大查看细节。" },
           { "no": "03", "h": "看信号里的频率", "p": "一键 FFT，找出振动或噪声里主要是哪些频率。" },
           { "no": "04", "h": "看转速相关的振动", "p": "阶次分析，专为发动机、电机这类会转的设备准备。", "accent": "teal" },
@@ -258,7 +259,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       ] },
 
     { "id": "interface", "sec": "界面导览", "kicker": "THE WINDOW", "title": "界面分三块，<c>各管一件事</c>", "foot": "顶部工具栏：左边管文件与项目，中间切视图，右上是品牌与更新",
-      "blocks": [ { "type": "raw", "html": "<div class='apptb reveal'><span class='btn'>打开</span><span class='btn'>保存项目</span><span class='btn'>编辑通道</span><span class='btn'>批处理</span><span class='btn teal'>Cockpit 采集</span><span class='sp'></span><span class='btn on'>时域</span><span class='btn'>FFT</span><span class='btn'>FFT vs Time</span><span class='btn'>阶次</span><span class='sp'></span><span class='btn'>☁ 更新</span></div><div class='mock reveal' style='position:absolute;left:0;right:0;top:392px;bottom:0;'><div class='col nav'><div class='label'>① 左侧 · 文件与通道</div><div class='desc'>在这里加文件、勾选要看的通道。</div><div class='ch'><span class='dot' style='background:#ff5a36'></span>Engine_Speed</div><div class='ch'><span class='dot' style='background:#1f7f96'></span>Vibration_X</div><div class='ch'><span class='dot' style='background:#e0a92e'></span>Oil_Temp</div><div class='ch'><span class='dot' style='background:#7a9e3a'></span>Torque</div></div><div class='col center'><div class='label'>② 中间 · 图表区</div><div class='desc'>你的波形和分析结果都显示在这里。</div><div class='mini'><svg viewBox='0 0 600 170' preserveAspectRatio='none'><path d='M0,120 C60,40 120,40 180,110 S300,160 360,90 480,30 540,100 600,120 600,120' fill='none' stroke='#ff5a36' stroke-width='3'/><path d='M0,140 C80,120 120,60 200,95 280,130 320,70 400,110 480,150 520,90 600,130' fill='none' stroke='#1f7f96' stroke-width='2.5'/></svg></div><div class='pbar'></div></div><div class='col insp'><div class='label'>③ 右侧 · 参数面板</div><div class='desc'>切到 FFT / 阶次时，在这里调参数；顶部还能裁时间范围。</div><div class='pbar'></div><div class='ch' style='justify-content:space-between'>窗函数<span style='color:#ff5a36'>Hanning</span></div><div class='ch' style='justify-content:space-between'>分辨率<span style='color:#ff5a36'>中</span></div></div></div>" } ] },
+      "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.png' alt='TraceLab v7.7 时域主界面的真实截图'><div class='shotcap reveal'>真实 v7.7 主窗口：左侧文件与通道、中间图表工作区、右侧参数面板。</div>" } ] },
 
     { "id": "load", "sec": "第一步", "kicker": "STEP 1 · LOAD", "title": "第一步 · 打开你的<c>数据</c>", "foot": "TraceLab",
       "blocks": [
@@ -269,9 +270,14 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             "软件自动读出里面的<b>所有通道</b>，列在左侧；同时显示文件的行数、采样率、时长。"
           ] } ],
           "right": [ { "type": "card", "accent": "teal", "no": "支持的文件", "h": "能打开哪些格式",
-            "pills": [".mf4", ".mdf", ".asc", ".tdms", ".csv", ".fdc", ".xlsx", ".xls", ".hdf", ".mp4", ".mp3", ".wav", ".blf"],
-            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>ASCII（.asc / .fdc）</b>支持带时间列的分隔表，也支持带已验证采样间隔的固定宽度表；没有时间依据时，软件不会猜测采样率。", "<b>NI TDMS（.tdms）</b>会保留数值波形通道和单位，并按文件里的波形时基建立时间轴；<b>.tdms_index</b>只是配套索引文件，不要单独打开。", "<b>HEAD 声学（.hdf）</b>也能打开：软件会自动按采样率分组、把各通道列出来，照常做时域、FFT 等分析。", "<b>音视频文件（.mp4 / .mov / .mp3 / .wav 等）</b>也能拖进来：软件会取出里面的<b>声音轨道</b>当成信号通道，照常看波形、做 FFT；做声音的 FFT 时还能开 <b>A 计权</b>（见「看频率」页）。", "<b>CAN 总线录制（.blf）</b>也能打开：首次选个 <b>DBC 数据库</b>翻译信号，之后同总线的 .blf 会自动推荐、随工程记住。" ] } ] },
+            "pills": [".mf4", ".mdf", ".wwt", ".zfd", ".mat", ".asc", ".tdms", ".csv", ".fdc", ".xlsx", ".xls", ".hdf", ".mp4", ".mp3", ".wav", ".blf"],
+            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>WinWert（.wwt）</b>会使用文件里的 Zeit 时基，并保留通道单位、比例和偏置。", "<b>ZFGE2 / TestRunPRO（.zfd）</b>优先使用文件时基；时基无效时会明确标记采样率为估算值，做频域分析前请核对。", "<b>MATLAB（.mat）</b>支持 v4-v7 和 v7.3；只使用明确的时间变量建轴，文件没给可靠工程单位时保持为空。", "<b>ASCII（.asc / .fdc）</b>支持带时间列的分隔表，也支持带已验证采样间隔的固定宽度表；没有时间依据时，软件不会猜测采样率。", "<b>NI TDMS（.tdms）</b>会保留数值波形通道和单位，并按文件里的波形时基建立时间轴；<b>.tdms_index</b>只是配套索引文件，不要单独打开。", "<b>HEAD 声学（.hdf）</b>也能打开：软件会自动按采样率分组、把各通道列出来，照常做时域、FFT 等分析。", "<b>音视频文件（.mp4 / .mov / .mp3 / .wav 等）</b>也能拖进来：软件会取出里面的<b>声音轨道</b>当成信号通道，照常看波形、做 FFT；做声音的 FFT 时还能开 <b>A 计权</b>（见「看频率」页）。", "<b>CAN 总线录制（.blf）</b>也能打开：首次选个 <b>DBC 数据库</b>翻译信号，之后同总线的 .blf 会自动推荐、随工程记住。" ] } ] },
         { "type": "tip", "label": "提示", "html": "打开多个文件后，可以同时勾选<b>不同文件</b>里的通道放在一起对比——很适合「这批和上批有什么不一样」。" }
+      ] },
+
+    { "id": "imports", "sec": "真实导入", "kicker": "V7.7 · REAL FILES", "title": "三种新格式，已经用<c>真文件验证</c>", "foot": "真实 Cocoa 界面 · WWT / ZFD / MAT",
+      "blocks": [
+        { "type": "raw", "html": "<img class='realshot reveal' src='assets/imports-panel.png' alt='TraceLab v7.7 同时载入 WWT、ZFD 和 MAT 的真实界面'><div class='shotcap reveal'>图中三个文件卡片来自仓库内真实 WWT、ZFD、MAT 样本；中间为 WWT 的 Steering torque 实际曲线。</div>" }
       ] },
 
     { "id": "project", "sec": "存工程", "kicker": "PROJECT · .tlproj", "title": "把整个分析存成<c>工程</c>", "foot": "保存项目 → 下次一键还原",
@@ -334,7 +340,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             ] } ] }
       ] },
 
-    { "id": "multiview", "sec": "并排比", "kicker": "MULTI-VIEW · SPLIT", "title": "多个视图<c>并排对比</c>", "foot": "拖动分屏 · 缩放联动 · Alt+1..6 切视图",
+    { "id": "multiview", "sec": "并排比", "kicker": "MULTI-VIEW · SPLIT", "title": "多个视图<c>并排对比</c>", "foot": "拖动分屏 · 缩放联动 · Ctrl+1..5 控制布局与游标",
       "blocks": [
         { "type": "when", "html": "想把同一份数据的不同看法、或不同文件的同一分析<b>放在一起比</b>时用它。" },
         { "type": "cards", "cols": 3, "items": [
@@ -343,7 +349,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           { "no": "聚焦", "h": "点谁操作谁", "p": "点一下某一栏，它会高亮；接下来的操作只作用在它身上。", "accent": "teal" },
           { "no": "对比", "h": "叠加比较", "p": "FFT / 阶次 / 时频开「对比」，把多条结果叠在一起，差异一眼看出。", "accent": "teal" },
           { "no": "锁色阶", "h": "热图同标尺", "p": "时频图并排时锁定同一颜色范围，深浅才真正可比。", "accent": "teal" },
-          { "no": "切视图", "h": "Alt+1..6", "p": "在当前区域用快捷键在时域 / FFT / 阶次等之间快速切换。" }
+          { "no": "布局与游标", "h": "Ctrl+1..5", "p": "Ctrl+1 / 2 切分屏与叠加；Ctrl+3 / 4 / 5 关闭、开启单游标或双游标。" }
         ] },
         { "type": "tip", "label": "提示", "html": "分屏布局会跟着<b>工程一起保存</b>；导出图片时也能把并排的几栏<b>拼成一张</b>。" }
       ] },
@@ -353,8 +359,8 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         { "type": "when", "html": "把多条通道<b>叠在一张图</b>看时，这几招让你快速聚焦、各看各的纵向。" },
         { "type": "cards", "cols": 2, "items": [
           { "no": "框选放大", "h": "框啥放大啥", "p": "在叠加图上框一块，<b>所有通道</b>的纵向一起按这块放大——不用先选某条。" },
-          { "no": "Shift + 滚轮", "h": "缩时间轴", "p": "横向缩放时间轴；裸滚轮则是整图上下平移。", "accent": "teal" },
-          { "no": "Alt / Option + 滚轮", "h": "缩单条", "p": "只缩<b>当前这条</b>通道的纵向刻度，逐条调。" },
+          { "no": "Ctrl + 滚轮", "h": "缩时间轴", "p": "横向缩放时间轴；裸滚轮则是当前 Y 轴上下平移。", "accent": "teal" },
+          { "no": "Shift + 滚轮", "h": "缩 Y 轴", "p": "鼠标停在目标通道的 Y 轴区域，可缩放<b>当前这条</b>通道的纵向刻度。" },
           { "no": "GPU 加速", "h": "卡顿再开", "p": "右侧面板右下角的 <b>GPU 加速（时域图）</b>，多通道 / 高分屏卡顿时再开，导出不受影响。", "accent": "teal" }
         ] }
       ] },
@@ -467,7 +473,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             { "k": "按住拖动", "v": "左右平移时间" },
             { "k": "鼠标滚轮", "v": "放大 / 缩小" },
             { "k": "移动光标", "v": "读当前时刻各通道的值" },
-            { "k": "Alt + 1..6", "v": "在时域 / FFT / 阶次等视图间快速切换" },
+            { "k": "Ctrl + 1..5", "v": "分屏 / 叠加，以及关闭 / 单 / 双游标" },
             { "k": "FFT 预览拖选", "v": "在时间预览上左键拖动，圈定分析时间段" },
             { "k": "右键通道", "v": "设为左轴（叠加显示时固定到左侧刻度）" },
             { "k": "双击图上文字", "v": "添加 / 编辑标注" },
@@ -480,18 +486,23 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ] }
       ] },
 
-    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v7.6 · 使用说明",
+    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v7.7 · 使用说明",
       "blocks": [
         { "type": "flow", "height": 640, "cols": [
           { "title": "场景一", "key": "快速看一个文件", "items": [ "添加文件", "勾选要看的通道", "时域看波形、拖动放大", "需要就切 FFT / 阶次", "导出 Excel 或图片" ] },
           { "title": "场景二", "key": "批量分析一批文件", "accent": "teal", "items": [ "先分析好一个代表文件", "存成预设", "选中一批文件", "跑批处理", "自动出图、出表" ] },
           { "title": "场景三", "key": "边录边看", "items": [ "打开 Cockpit", "配置要采集的信号", "开始采集、看实时卡片", "停止，自动存档", "用 Replay 回放分析" ] }
         ] },
-        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v7.6" }
+        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v7.7" }
       ] }
   ],
 
   "changelog": [
+    { "v": "v7.7", "date": "2026-07-17", "items": [
+      "新增原生 <b>WinWert（.wwt）</b>、<b>ZFGE2 / TestRunPRO（.zfd）</b>和 <b>MATLAB（.mat）</b>导入，并保留各格式的时基准确性边界。",
+      "Windows 增加仅分析功能的轻量包 <b>TraceLabAnalyzer7.7</b>；完整包继续提供采集能力。",
+      "使用说明和四个分析指南全部换为当前 v7.7 真机渲染图，并同步快捷键与提示文案。"
+    ] },
     { "v": "v7.6", "date": "2026-07-16", "items": [
       "新增 <b>ASCII（.asc）</b>导入：支持分隔表和带已验证采样间隔的固定宽度表；时间信息不明确时会提示，而不会猜采样率。",
       "新增 <b>NI TDMS（.tdms）</b>导入：读取数值波形通道、单位和文件时基；<b>.tdms_index</b>不作为数据文件打开。",
@@ -500,7 +511,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
     { "v": "v2.2", "date": "2026-06-25", "items": [
       "时域新增<b>滤波</b>（低通 / 高通 / 带通 / 带阻 + 陡峭度），可与原曲线做前后对比（虚线叠加）。",
       "新增支持 <b>CAN 总线录制（.blf）</b>：首次选 DBC 翻译信号，之后同总线自动推荐、随工程记住。",
-      "叠加视图新增<b>框选放大同步所有通道</b>、Shift / Alt 滚轮分缩时间轴 / 单通道，及<b>时域图 GPU 加速</b>开关；阶次支持转速与信号不同采样率。"
+      "叠加视图新增<b>框选放大同步所有通道</b>、Ctrl / Shift 滚轮分缩 X / Y 轴，及<b>时域图 GPU 加速</b>开关；阶次支持转速与信号不同采样率。"
     ] },
     { "v": "v2.1", "date": "2026-06-20", "items": [
       "「打开数据」新增支持<b>音视频文件</b>（.mp4 / .mov / .mp3 / .wav 等）：自动取出里面的声音轨道作为通道，照常做时域、FFT 分析。",
