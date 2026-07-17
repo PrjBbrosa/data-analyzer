@@ -186,6 +186,86 @@ def test_windows_build_bat_wraps_powershell_with_execution_policy_bypass():
     assert "build_windows_folder.ps1" in text
 
 
+def test_lite_build_script_uses_onedir_pyinstaller_contract():
+    """The analyzer-only ("lite") build shares the frozen contract that matters
+    for the Analyzer half: onedir/windowed, style.qss + help bundled inside,
+    qtawesome/asammdf collected, lazy nptdms hidden import."""
+    script = ROOT / "tools" / "build_windows_folder_lite.ps1"
+
+    assert script.exists()
+    text = script.read_text(encoding="utf-8")
+
+    for token in (
+        "PyInstaller",
+        "--onedir",
+        "--windowed",
+        "--add-data",
+        "style.qss",
+        "mf4_analyzer\\help",
+        "--collect-all",
+        "qtawesome",
+        "asammdf",
+        '"nptdms"',
+        "MF4 Data Analyzer V1.py",
+    ):
+        assert token in text, f"lite build script must contain {token!r}"
+
+
+def test_lite_build_script_omits_acquisition_and_native_deps():
+    """The whole point of the lite build: acquisition packaging is gone.
+
+    No pyxcp/pya2l vendoring, no runtime hook, no acquisition requirements/smoke,
+    and none of the acquisition_ui / acquisition_capture hidden imports — while
+    pyxcp/pya2l are additionally --exclude-module'd as belt-and-suspenders."""
+    script = ROOT / "tools" / "build_windows_folder_lite.ps1"
+    text = script.read_text(encoding="utf-8")
+
+    # Acquisition-only packaging machinery must NOT appear.
+    for absent in (
+        "_vendor_pyxcp",
+        "_vendor_pya2l",
+        "--runtime-hook",
+        "pyinstaller_rthook_pyxcp_vendor.py",
+        "requirements-windows-acquisition.txt",
+        "--acquisition-runtime-smoke",
+        # Submodules that only ever appear in the full build's hidden-import list.
+        "acquisition_capture.controller",
+        "acquisition_ui.review_modal",
+    ):
+        assert absent not in text, f"lite build script must NOT contain {absent!r}"
+
+    # But it must still hard-exclude the native acquisition deps as a safety net.
+    for module in ("pyxcp", "pya2l"):
+        assert f'"--exclude-module", "{module}"' in text
+
+
+def test_lite_build_script_excludes_unused_qt_modules_but_keeps_render_deps():
+    """The app only imports QtWidgets/QtCore/QtGui, but --collect-submodules
+    pyqtgraph drags in unused Qt backends (QtWebEngine ships Chromium). The lite
+    build excludes those, while KEEPING the Qt modules the render/export/icon
+    paths actually need."""
+    script = ROOT / "tools" / "build_windows_folder_lite.ps1"
+    text = script.read_text(encoding="utf-8")
+
+    # Heavy unused Qt modules must be excluded.
+    for module in (
+        "PyQt5.QtWebEngine",
+        "PyQt5.QtWebEngineWidgets",
+        "PyQt5.QtQml",
+        "PyQt5.QtQuick",
+        "PyQt5.QtMultimedia",
+        "PyQt5.Qt3DRender",
+    ):
+        assert f'"{module}"' in text, f"lite build should exclude {module}"
+
+    # Render/export/icon Qt deps must NOT be excluded (they are used).
+    for keep in ("PyQt5.QtOpenGL", "PyQt5.QtSvg", "PyQt5.QtPrintSupport"):
+        assert keep not in text, (
+            f"{keep} must NOT be excluded — pyqtgraph GL render / icons / export "
+            f"depend on it"
+        )
+
+
 def test_windows_run_built_exe_wrapper_pauses_after_exit():
     wrapper = ROOT / "tools" / "run_windows_exe.bat"
 

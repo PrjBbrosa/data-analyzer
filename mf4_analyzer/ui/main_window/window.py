@@ -1907,9 +1907,23 @@ class MainWindow(
     # live in _project_io_mixin.ProjectIOMixin (composed via the base list).
     # open_acquisition_cockpit stays here (patches main_window.importlib).
     def open_acquisition_cockpit(self) -> None:
-        cockpit_module = importlib.import_module(
-            "mf4_analyzer.acquisition_ui.main_window"
-        )
+        try:
+            cockpit_module = importlib.import_module(
+                "mf4_analyzer.acquisition_ui.main_window"
+            )
+        except ModuleNotFoundError:
+            # Analyzer-only ("lite") builds ship without the acquisition_ui /
+            # acquisition_capture packages (tools/build_windows_folder_lite.ps1
+            # omits them from PyInstaller's hiddenimports). The cockpit entry
+            # point stays wired but degrades gracefully instead of surfacing an
+            # ImportError traceback.
+            QMessageBox.information(
+                self,
+                "采集功能不可用",
+                "此为分析版，不包含数据采集（驾驶舱）功能。\n"
+                "如需采集，请使用完整版。",
+            )
+            return
         CockpitMainWindow = cockpit_module.CockpitMainWindow
 
         for window in QApplication.topLevelWidgets():
