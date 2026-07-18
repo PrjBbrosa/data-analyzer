@@ -1823,6 +1823,10 @@ class MainWindow(
         """应用横坐标设置"""
         canvas = self.chart_stack.focused_canvas()
         idx = self._view_index_for_canvas(canvas)
+        previous_x_source = (
+            self._custom_xaxis_fid,
+            self._custom_xaxis_ch,
+        )
         mode = self.inspector.top.xaxis_mode()
         if mode == 'time':
             self._custom_xlabel = self.inspector.top.xaxis_label() or None
@@ -1853,6 +1857,11 @@ class MainWindow(
             _raw = self.inspector.top.xaxis_label()
             self._custom_xlabel = (_raw if _raw and _raw != 'Time (s)' else None) or ch
 
+        x_source_changed = previous_x_source != (
+            self._custom_xaxis_fid,
+            self._custom_xaxis_ch,
+        )
+
         # Cache invalidation site 5: the t-array bound to every plotted
         # channel just changed (time-axis ↔ custom-channel x-axis), so
         # every (data_id, channel, xlim, pixel_width) entry is now stale.
@@ -1870,11 +1879,20 @@ class MainWindow(
         # remain valid and must not be needlessly evicted.
         self.analysis_caches['fft_time'].clear()
         if idx is not None and 0 <= idx < len(self.view_manager.views):
-            self._view_bridge.capture_controls_into(
-                self.view_manager.get(idx), self, canvas
-            )
+            state = self.view_manager.get(idx)
+            self._view_bridge.capture_controls_into(state, self, canvas)
+            if x_source_changed:
+                # A different X source changes coordinate semantics, so a
+                # saved time/custom-channel window is not meaningful. Keep
+                # Y limits and every other View option, but let the new X
+                # data extent establish the viewport.
+                state.xlim = None
         if self.files and self.chart_stack.current_mode() == 'time':
-            self._replot_canvas_for_view(idx, canvas)
+            self._replot_canvas_for_view(
+                idx,
+                canvas,
+                preserve_xlim=not x_source_changed,
+            )
         else:
             self.plot_time()
         self.statusBar.showMessage(f"横坐标已更新")
