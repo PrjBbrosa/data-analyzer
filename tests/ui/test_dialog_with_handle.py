@@ -229,6 +229,7 @@ EXPECTED_SNAPSHOT = {
         "chartOptionsTitle", "chartOptionsSubtitle",
         "chartOptionsGroup", "chartOptionsGroup", "chartOptionsGroup",
         "chartOptionsGroup", "chartOptionsGroup", "chartOptionsGroup",
+        "chartOptionsScroll", "chartOptionsScroll", "chartOptionsScroll",
         "chartOptionsGroupTitle", "chartOptionsGroupTitle",
         "chartOptionsGroupTitle", "chartOptionsGroupTitle",
         "chartOptionsGroupTitle", "chartOptionsGroupTitle",

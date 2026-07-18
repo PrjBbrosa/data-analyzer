@@ -65,6 +65,7 @@ lesson by default.
 | [Pinned Protocol Adapters Own Vendor ABI](codex-pinned-protocol-adapters-own-vendor-abi.md) | Implementing or reviewing Seed&Key, native DLL calls, multi-part XCP | See lesson |
 | [Frozen Probes Do Not Require Console Streams](codex-frozen-probes-do-not-require-console-streams.md) | Adding a hidden child command, import probe, parser subprocess, or | See lesson |
 | [Claude Native Wrapper Stub Recovery](claude-native-wrapper-stub-recovery.md) | `claude` resolves to the global npm install but prints `claude native binary not installed` on Apple Silicon. | See lesson |
+| [PyQt Dialog Scroll Keeps Actions Visible](pyqt-dialog-scroll-keeps-actions-visible.md) | Touching PyQt dialogs with header/body/footer layouts, especially chart options or settings dialogs with enough fields to exceed short laptop screens. | See lesson |
 | [Shared Wheel Dispatch Needs Event-Route Coverage](shared-wheel-dispatch-needs-event-route-coverage.md) | Changing the shared pyqtgraph ``_ModifierWheelViewBox`` wheel-dispatch payload or any canvas ``_handle_wheel_dispatch`` callback signature. | See lesson |
 | [Relocated Inspector Fields Keep Their Trailing Alignment](inspector-relocated-field-keeps-trailing-alignment.md) | Moving a capped Inspector control from a `QFormLayout` into a | See lesson |
 | [FFT-vs-Time Custom-X Cache Invalidation](codex-fft-time-custom-xaxis-cache-invalidation.md) | Change a display control whose semantics are absent from the | See lesson |
@@ -72,6 +73,7 @@ lesson by default.
 | [Release Version Labels Stay Synchronized](codex-release-version-labels-stay-synchronized.md) | Bumping the TraceLab application release version, especially when its | See lesson |
 | [Help Screenshot Generator Must Follow The Current Analysis Service](codex-help-screenshot-generator-follows-analysis-service.md) | Regenerating application-help screenshots after analysis orchestration, | See lesson |
 | [Custom X Axis Title Includes Source Unit](custom-x-axis-title-includes-source-unit.md) | Changing the TimeDomain label used for a channel-backed custom X axis. | See lesson |
+| [PowerShell Foreach Output Must Be Collected Before Piping](codex-powershell-foreach-pipeline-grouping.md) | Building Windows PowerShell commands that send the output of a | See lesson |
 
 ## Selection Rules
 

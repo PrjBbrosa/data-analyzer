@@ -1,0 +1,59 @@
+{
+  "a2l_parse_probe": {
+    "command": [
+      "D:\\Coding project\\data analyzer\\dist\\TraceLab7.6\\TraceLab7.6.exe",
+      "--a2l-probe-child",
+      "--a2l-path",
+      "C:\\Users\\hang\\AppData\\Local\\Temp\\tracelab_a2l_smoke_85xty091\\minimal.a2l",
+      "--a2l-limit",
+      "1"
+    ],
+    "error": null,
+    "measurement": {
+      "address": 4096,
+      "datatype": "UWORD",
+      "name": "RuntimeSmokeSignal"
+    },
+    "ok": true,
+    "returncode": 0,
+    "stderr": "[WARNING (pya2l.AMLParser)] Empty AML section - no tokens to parse.",
+    "stdout_size": 486
+  },
+  "checked_surfaces": [
+    "Master.getStatus('self',)",
+    "Master.getSeed('self', 'first', 'resource')",
+    "Master.unlock('self', 'length', 'key')",
+    "Master.cond_unlock('self', 'resources')",
+    "Master.allocDaq('self', 'daq_count')",
+    "Master.startStopDaqList('self', 'mode', 'daq_list_number')",
+    "FrameAcquisitionPolicy.feed/NoOpPolicy",
+    "pyxcp config + DAQ policies constructed (no Master/Vector)",
+    "pya2l.DB/model.Measurement (not invoked)"
+  ],
+  "error": null,
+  "frozen": true,
+  "import_probe": {
+    "command": [
+      "D:\\Coding project\\data analyzer\\dist\\TraceLab7.6\\TraceLab7.6.exe",
+      "--pyxcp-import-probe-child"
+    ],
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "{\"ok\": true, \"probe\": \"PyQt5.QtWidgets->pyxcp.master\"}\n"
+  },
+  "ok": true,
+  "pya2l_import_probe": {
+    "command": [
+      "D:\\Coding project\\data analyzer\\dist\\TraceLab7.6\\TraceLab7.6.exe",
+      "--pya2l-import-probe-child"
+    ],
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "{\"ok\": true, \"probe\": \"PyQt5.QtWidgets->pya2l\"}\n"
+  },
+  "versions": {
+    "pya2ldb": "1.0.332",
+    "python-can": "4.6.1",
+    "pyxcp": "0.29.14"
+  }
+}

@@ -3,6 +3,7 @@ import numpy as np
 
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -518,10 +519,11 @@ class ChartOptionsDialog(QDialog):
 
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName("chartOptionsTabs")
-        self.tabs.addTab(self._axes_tab(), "坐标轴")
-        self.tabs.addTab(self._appearance_tab(), "图形")
-        self.tabs.addTab(self._legend_tab(), "图例")
-        root.addWidget(self.tabs)
+        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.tabs.addTab(self._scrollable_tab(self._axes_tab()), "坐标轴")
+        self.tabs.addTab(self._scrollable_tab(self._appearance_tab()), "图形")
+        self.tabs.addTab(self._scrollable_tab(self._legend_tab()), "图例")
+        root.addWidget(self.tabs, 1)
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 2, 0, 0)
@@ -546,6 +548,64 @@ class ChartOptionsDialog(QDialog):
         self.combo_curve.currentIndexChanged.connect(self._sync_curve_color)
         self.btn_curve_color.clicked.connect(self._choose_curve_color)
         self.reset_fields()
+        self._fit_to_available_height()
+
+    def showEvent(self, event):  # noqa: N802
+        super().showEvent(event)
+        self._fit_to_available_height()
+        self._clamp_to_available_geometry()
+
+    def _scrollable_tab(self, page):
+        scroll = QScrollArea(self)
+        scroll.setObjectName("chartOptionsScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        scroll.setWidget(page)
+        return scroll
+
+    def _available_geometry(self):
+        screen = None
+        screen_getter = getattr(self, "screen", None)
+        if callable(screen_getter):
+            screen = screen_getter()
+        if screen is None and self.parentWidget() is not None:
+            parent_window = self.parentWidget().window()
+            screen_at = getattr(QApplication, "screenAt", None)
+            if callable(screen_at):
+                screen = screen_at(parent_window.frameGeometry().center())
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        return screen.availableGeometry() if screen is not None else None
+
+    def _fit_to_available_height(self):
+        available = self._available_geometry()
+        if available is None:
+            return
+        frame_extra = 0
+        if self.isVisible():
+            frame_extra = max(0, self.frameGeometry().height() - self.height())
+        max_height = max(240, available.height() - frame_extra - 24)
+        max_height = min(max_height, available.height())
+        max_width = max(self.minimumWidth(), available.width() - 24)
+        target_width = min(max(self.sizeHint().width(), self.minimumWidth()), max_width)
+        target_height = min(self.sizeHint().height(), max_height)
+        self.setMaximumHeight(max_height)
+        self.resize(target_width, target_height)
+
+    def _clamp_to_available_geometry(self):
+        available = self._available_geometry()
+        if available is None:
+            return
+        frame = self.frameGeometry()
+        max_x = available.right() - frame.width() + 1
+        max_y = available.bottom() - frame.height() + 1
+        x = available.left() if frame.width() >= available.width() else min(max(frame.x(), available.left()), max_x)
+        y = available.top() if frame.height() >= available.height() else min(max(frame.y(), available.top()), max_y)
+        if x != frame.x() or y != frame.y():
+            self.move(int(x), int(y))
 
     def _target_summary(self):
         # ``get_label`` is intentionally outside the AxisHandle protocol.

@@ -1,0 +1,43 @@
+{
+  "checked_surfaces": [
+    "Master.getStatus('self',)",
+    "Master.getSeed('self', 'first', 'resource')",
+    "Master.unlock('self', 'length', 'key')",
+    "Master.cond_unlock('self', 'resources')",
+    "Master.allocDaq('self', 'daq_count')",
+    "Master.allocOdt('self', 'daq_list_number', 'odt_count')",
+    "Master.allocOdtEntry('self', 'daq_list_number', 'odt_number', 'odt_entries_count')",
+    "Master.writeDaq('self', 'bit_offset', 'entry_size', 'address_ext', 'address')",
+    "Master.setDaqListMode('self', 'mode', 'daq_list_number', 'event_channel_number', 'prescaler', 'priority')",
+    "Master.startStopDaqList('self', 'mode', 'daq_list_number')",
+    "Master.startStopSynch('self', 'mode')",
+    "FrameAcquisitionPolicy.feed",
+    "Can/Vector trait paths"
+  ],
+  "error": null,
+  "expected_versions": {
+    "pya2ldb": "1.0.332",
+    "python-can": "4.6.1",
+    "pyxcp": "0.29.14"
+  },
+  "import_probe": {
+    "command": [
+      "D:\\Coding project\\data analyzer\\.venv-build-win\\Scripts\\python.exe",
+      "-c",
+      "__import__('PyQt5.QtWidgets', fromlist=['QApplication'])\n__import__('pyxcp.master', fromlist=['Master'])\n"
+    ],
+    "returncode": 0,
+    "stderr": "",
+    "stdout": ""
+  },
+  "installed_versions": {
+    "pya2ldb": "1.0.332",
+    "python-can": "4.6.1",
+    "pyxcp": "0.29.14"
+  },
+  "machine": "AMD64",
+  "ok": true,
+  "platform": "win32",
+  "python": "3.12.10",
+  "python_bitness": 64
+}

@@ -76,6 +76,24 @@ def test_chart_options_dialog_uses_chinese_labels_and_reads_handle(qapp):
     assert dlg.combo_y_scale.currentText() == "对数"
 
 
+def test_chart_options_dialog_fits_available_height_and_keeps_actions_visible(qapp):
+    from PyQt5.QtWidgets import QApplication, QScrollArea
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.show()
+    qapp.processEvents()
+
+    available = QApplication.primaryScreen().availableGeometry()
+    assert dlg.height() <= available.height()
+    assert len(dlg.findChildren(QScrollArea, "chartOptionsScroll")) == 3
+
+    for button in (dlg.btn_reset, dlg.btn_cancel, dlg.btn_apply, dlg.btn_ok):
+        assert dlg.rect().contains(button.mapTo(dlg, button.rect().topLeft()))
+        assert dlg.rect().contains(button.mapTo(dlg, button.rect().bottomRight()))
+
+
 def test_chart_options_dialog_applies_axis_values_and_legend(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
