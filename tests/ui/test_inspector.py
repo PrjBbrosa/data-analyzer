@@ -2157,7 +2157,7 @@ def test_fft_time_defaults_match_requested_screenshot(qtbot):
     assert params['z_auto'] is False
     assert params['z_floor'] == -70.0
     assert params['z_ceiling'] == -20.0
-    assert params['cmap'] == 'turbo'
+    assert params['cmap'] == 'gnuplot2'
     assert ctx.spin_overlap.value() == 80, (
         f"FFTTimeContextual.spin_overlap default = "
         f"{ctx.spin_overlap.value()}; expected 80."

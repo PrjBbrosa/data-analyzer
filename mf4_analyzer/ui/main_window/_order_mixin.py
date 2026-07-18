@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QMessageBox
 from ... import db_reference
 from ...signal import assess_speed_for_order, resolve_order_nfft
 from ...signal.spectrogram import SpectrogramAnalyzer
+from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 
@@ -603,7 +604,7 @@ class OrderMixin:
             x_label='Time (s)',
             y_label='Order',
             title=title,
-            cmap='turbo',
+            cmap=getattr(canvas, '_cmap_name', DEFAULT_HEATMAP_CMAP),
             interp='bilinear',
             cbar_label=cbar_label,
             amplitude_mode=plot_amp_mode,

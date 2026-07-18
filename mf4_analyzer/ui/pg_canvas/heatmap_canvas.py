@@ -107,20 +107,60 @@ class _SliceDirToggle(QWidget):
         self._btn_y.setChecked(self._dir == 'y')
 
 
-def _resolve_colormap(name: str) -> pg.ColorMap:
-    """Resolve heatmap colormap names without matplotlib.
+DEFAULT_HEATMAP_CMAP = "gnuplot2"
+SUPPORTED_HEATMAP_COLORMAPS = (
+    DEFAULT_HEATMAP_CMAP,
+    "turbo",
+    "viridis",
+    "plasma",
+    "inferno",
+    "magma",
+    "cividis",
+)
 
-    Runtime uses turbo, with viridis as the legacy/fallback map. Their 256-step
-    LUTs are pinned by tests/ui/test_colormap_parity.py.
+
+def _gnuplot2_lut() -> np.ndarray:
+    """Return Matplotlib gnuplot2's documented 256-entry RGBA LUT.
+
+    The channel transfer functions are ported locally so the desktop runtime
+    remains independent of Matplotlib.  Values are clipped after evaluating
+    the original piecewise functions, then quantised exactly as a byte LUT.
     """
-    requested = str(name or "turbo")
+    x = np.linspace(0.0, 1.0, 256)
+    red = np.clip(x / 0.32 - 0.78125, 0.0, 1.0)
+    green = np.clip(2.0 * x - 0.84, 0.0, 1.0)
+    blue = np.where(
+        x < 0.25,
+        4.0 * x,
+        np.where(x < 0.92, -2.0 * x + 1.84, x / 0.08 - 11.5),
+    )
+    blue = np.clip(blue, 0.0, 1.0)
+    rgba = np.column_stack((red, green, blue, np.ones_like(x)))
+    return np.rint(rgba * 255.0).astype(np.ubyte)
+
+
+_GNUPLOT2_COLORMAP = pg.ColorMap(
+    np.linspace(0.0, 1.0, 256), _gnuplot2_lut(), name=DEFAULT_HEATMAP_CMAP,
+)
+
+
+def _normalise_colormap_name(name: str | None) -> str:
+    requested = str(name or DEFAULT_HEATMAP_CMAP)
+    return requested if requested in SUPPORTED_HEATMAP_COLORMAPS else DEFAULT_HEATMAP_CMAP
+
+
+def _resolve_colormap(name: str) -> pg.ColorMap:
+    """Resolve a supported heatmap map without a Matplotlib dependency."""
+    requested = _normalise_colormap_name(name)
+    if requested == DEFAULT_HEATMAP_CMAP:
+        return _GNUPLOT2_COLORMAP
     try:
         cm = pg.colormap.get(requested)
         if cm is not None:
             return cm
     except Exception:
         pass
-    return pg.colormap.get("viridis")
+    return _GNUPLOT2_COLORMAP
 
 
 class _AxisShim:
@@ -148,7 +188,7 @@ class _NamedColorMap:
     __slots__ = ("name",)
 
     def __init__(self, name: str):
-        self.name = str(name or "turbo")
+        self.name = _normalise_colormap_name(name)
 
 
 class _HeatmapMappable:
@@ -158,10 +198,11 @@ class _HeatmapMappable:
         self._canvas = canvas
 
     def get_cmap(self):
-        return _NamedColorMap(getattr(self._canvas, "_cmap_name", "turbo"))
+        return _NamedColorMap(
+            getattr(self._canvas, "_cmap_name", DEFAULT_HEATMAP_CMAP))
 
     def set_cmap(self, name):
-        name = str(name or "turbo")
+        name = _normalise_colormap_name(name)
         cm = _resolve_colormap(name)
         canvas = self._canvas
         canvas._cmap_name = name
@@ -902,7 +943,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # primary control; _position_slice_panel clamps it on a narrow column.
         self._slice_toggle_w = 86
         self._result = None     # SpectrogramResult-like payload
-        self._cmap_name = "turbo"
+        self._cmap_name = DEFAULT_HEATMAP_CMAP
         # Amplitude mode of the last plot_result render (slice mode only).
         # Parity with SpectrogramCanvas._amplitude_mode (canvases.py:1622):
         # annotation/slice labels values 'dB' in dB mode and the
@@ -1058,7 +1099,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._collapsed_rail.expand_requested.connect(
                 lambda: self._set_bottom_collapsed(False))
             self._plot.vb.sigResized.connect(self._position_collapse_ctrl)
-            self._ensure_colorbar(_resolve_colormap('turbo'), 'Amplitude (dB)')
+            self._ensure_colorbar(
+                _resolve_colormap(self._cmap_name), 'Amplitude (dB)')
         else:
             self._collapsed_rail = None
             self._split_divider = None
@@ -1254,7 +1296,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     # ------------------------------------------------------------------
     def plot_or_update_heatmap(
         self, matrix, x_extent, y_extent, *,
-        x_label='', y_label='', title='', cmap='turbo', interp=None,
+        x_label='', y_label='', title='', cmap=DEFAULT_HEATMAP_CMAP, interp=None,
         cbar_label='Amplitude', amplitude_mode='amplitude',
         z_auto=True, z_floor=-30.0, z_ceiling=0.0,
         x_auto=True, x_min=0.0, x_max=0.0,
@@ -1311,8 +1353,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         x0, x1 = float(x_extent[0]), float(x_extent[1])
         y0, y1 = float(y_extent[0]), float(y_extent[1])
 
-        cm = _resolve_colormap(cmap)
-        self._cmap_name = str(cmap or 'turbo')
+        self._cmap_name = _normalise_colormap_name(cmap)
+        cm = _resolve_colormap(self._cmap_name)
         self._img.setImage(m, autoLevels=False)
         self._img.setRect(QRectF(x0, y0, x1 - x0, y1 - y0))
         self._img.setColorMap(cm)
@@ -1412,7 +1454,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             if self._slice_panel is not None:
                 self._slice_panel.show()
         if self._with_slice:
-            self._ensure_colorbar(_resolve_colormap('turbo'), 'Amplitude (dB)')
+            self._ensure_colorbar(
+                _resolve_colormap(self._cmap_name), 'Amplitude (dB)')
         if self.isVisible():
             self._apply_default_axis_labels()
         else:
@@ -1648,7 +1691,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return ('epoch', token)
 
     def plot_result(
-        self, result, *, amplitude_mode='amplitude_db', cmap='turbo',
+        self, result, *, amplitude_mode='amplitude_db', cmap=DEFAULT_HEATMAP_CMAP,
         z_auto=False, z_floor=-80.0, z_ceiling=0.0, freq_range=None,
         x_auto=True, x_min=0.0, x_max=0.0,
         y_auto=True, y_min=0.0, y_max=0.0,

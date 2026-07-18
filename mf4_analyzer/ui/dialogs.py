@@ -33,6 +33,7 @@ from ..ui_kit.widgets.searchable_combo import SearchableComboBox
 from ._axis_handle import make_handle
 from ._color_utils import is_color_like as _is_color_like
 from ._color_utils import to_hex as _to_hex
+from .pg_canvas.heatmap_canvas import SUPPORTED_HEATMAP_COLORMAPS
 from .widgets.compact_spinbox import CompactDoubleSpinBox
 
 
@@ -700,9 +701,12 @@ class ChartOptionsDialog(QDialog):
         form.setSpacing(8)
 
         self.chk_color_auto = QCheckBox("自动色阶范围", group)
+        self.combo_cmap = QComboBox(group)
+        self.combo_cmap.addItems(SUPPORTED_HEATMAP_COLORMAPS)
         self.spin_color_min = self._spin(group)
         self.spin_color_max = self._spin(group)
 
+        form.addRow("色图", self.combo_cmap)
         form.addRow("最小值", self.spin_color_min)
         form.addRow("最大值", self.spin_color_max)
         box.addLayout(form)
@@ -710,6 +714,7 @@ class ChartOptionsDialog(QDialog):
 
         if not self._mappables:
             self.chk_color_auto.setEnabled(False)
+            self.combo_cmap.setEnabled(False)
             self.spin_color_min.setEnabled(False)
             self.spin_color_max.setEnabled(False)
         return group
@@ -762,8 +767,10 @@ class ChartOptionsDialog(QDialog):
         mappable = self._current_mappable()
         if mappable is not None:
             cmin, cmax = mappable.get_clim()
+            cmap = mappable.get_cmap().name
         else:
             cmin, cmax = 0.0, 1.0
+            cmap = SUPPORTED_HEATMAP_COLORMAPS[0]
         return {
             "title": self.handle.get_title(),
             "x_min": float(xlo),
@@ -783,6 +790,7 @@ class ChartOptionsDialog(QDialog):
             "color_min": float(cmin),
             "color_max": float(cmax),
             "color_auto": False,
+            "cmap": cmap,
         }
 
     def reset_fields(self):
@@ -802,6 +810,7 @@ class ChartOptionsDialog(QDialog):
         self.chk_legend.setChecked(d["legend"])
         self.combo_curve.setCurrentIndex(d["curve_index"] if self._lines else 0)
         self.edit_curve_color.setText(d["curve_color"])
+        self.combo_cmap.setCurrentText(d["cmap"])
         self.spin_color_min.setValue(d["color_min"])
         self.spin_color_max.setValue(d["color_max"])
         self.chk_color_auto.setChecked(d["color_auto"])
@@ -950,6 +959,7 @@ class ChartOptionsDialog(QDialog):
         mappable = self._current_mappable()
         if mappable is None:
             return
+        mappable.set_cmap(self.combo_cmap.currentText())
         if self.chk_color_auto.isChecked():
             arr = mappable.get_array()
             if arr is not None:

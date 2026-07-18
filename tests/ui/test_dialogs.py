@@ -451,14 +451,18 @@ def test_pg_chart_options_overlay_aux_axis_yscale_updates_own_curve(qapp):
     assert aux_line.opts["logMode"][1] is True
 
 
-def test_chart_options_dialog_applies_heatmap_range_without_cmap_control(qapp):
+def test_chart_options_dialog_applies_heatmap_map_and_range(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _resolve_colormap
 
-    _canvas, handle = _pg_heatmap_handle(qapp)
+    canvas, handle = _pg_heatmap_handle(qapp)
     mappable = handle.get_mappables()[0]
     dlg = ChartOptionsDialog(None, handle)
+    levels_before = mappable.get_clim()
 
-    assert not hasattr(dlg, "combo_cmap")
+    assert dlg.combo_cmap.currentText() == "viridis"
+    assert dlg.combo_cmap.findText("gnuplot2") >= 0
+    dlg.combo_cmap.setCurrentText("gnuplot2")
     dlg.chk_color_auto.setChecked(False)
     dlg.spin_color_min.setValue(1.0)
     dlg.spin_color_max.setValue(5.0)
@@ -467,8 +471,19 @@ def test_chart_options_dialog_applies_heatmap_range_without_cmap_control(qapp):
 
     dlg.apply_changes()
 
-    assert mappable.get_cmap().name == "viridis"
+    assert mappable.get_cmap().name == "gnuplot2"
     assert mappable.get_clim() == pytest.approx((1.0, 5.0))
+    expected_lut = _resolve_colormap("gnuplot2").getLookupTable(
+        0.0, 1.0, 256, alpha=True)
+    np.testing.assert_array_equal(
+        canvas._img.getColorMap().getLookupTable(0.0, 1.0, 256, alpha=True),
+        expected_lut,
+    )
+    np.testing.assert_array_equal(
+        canvas._cbar.colorMap().getLookupTable(0.0, 1.0, 256, alpha=True),
+        expected_lut,
+    )
+    assert levels_before == pytest.approx((0.0, 8.0))
 
     dlg.chk_color_auto.setChecked(True)
     assert not dlg.spin_color_min.isEnabled()

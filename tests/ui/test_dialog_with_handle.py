@@ -169,13 +169,14 @@ def test_grid_apply_runs_when_checkbox_changed(qapp):
     assert calls == [not dlg._initial["grid"]]
 
 
-def test_dialog_has_no_cmap_combo(qapp):
+def test_dialog_disables_cmap_combo_without_heatmap(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
     _canvas, handle = _pg_handle_with_curve(qapp)
     dlg = ChartOptionsDialog(None, handle)
 
-    assert not hasattr(dlg, "combo_cmap")
+    assert hasattr(dlg, "combo_cmap")
+    assert not dlg.combo_cmap.isEnabled()
     assert hasattr(dlg, "spin_color_min")
     assert hasattr(dlg, "spin_color_max")
     assert hasattr(dlg, "chk_color_auto")
@@ -218,7 +219,7 @@ EXPECTED_SNAPSHOT = {
         "最小值", "最大值", "标签", "刻度",
         "最小值", "最大值", "标签", "刻度",
         "对象", "颜色",
-        "最小值", "最大值",
+        "色图", "最小值", "最大值",
     ]),
     "buttons": sorted([
         "重置", "取消", "应用", "确定", "选择",

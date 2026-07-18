@@ -1823,6 +1823,10 @@ def test_render_fft_time_on_requests_smooth_heatmap_interpolation(qtbot):
     win._render_fft_time_on(canvas, result=object(), p=_fft_time_base_params())
 
     assert canvas.kwargs["interp"] == "bilinear"
+    assert canvas.kwargs["cmap"] == "gnuplot2"
+    canvas._cmap_name = "plasma"
+    win._render_fft_time_on(canvas, result=object(), p=_fft_time_base_params())
+    assert canvas.kwargs["cmap"] == "plasma"
 
 
 def test_render_order_on_uses_time_coverage_extent(qtbot):
@@ -1858,6 +1862,10 @@ def test_render_order_on_uses_time_coverage_extent(qtbot):
     win._render_order_on(canvas, result)
 
     assert canvas.kwargs["x_extent"] == (0.0, 12.0)
+    assert canvas.kwargs["cmap"] == "gnuplot2"
+    canvas._cmap_name = "plasma"
+    win._render_order_on(canvas, result)
+    assert canvas.kwargs["cmap"] == "plasma"
 
 
 def test_render_fft_time_on_auto_freq_range_uses_energy_band(qtbot):
