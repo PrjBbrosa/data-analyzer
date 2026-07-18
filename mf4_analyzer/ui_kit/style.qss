@@ -1374,8 +1374,9 @@ QDialog#DbReferenceDefaultsDialog QTableWidget#dbReferenceDialogTable QPushButto
 
 /* Preset slot buttons inside FFT/Order contextual */
 QPushButton[role="preset-load"] {
+    min-width: 46px;
     min-height: 26px;
-    padding: 3px 6px;
+    padding: 3px 4px;
     font-weight: 600;
 }
 QPushButton[role="preset-load"][filled="true"] {

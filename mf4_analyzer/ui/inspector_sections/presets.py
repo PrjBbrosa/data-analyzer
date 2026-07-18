@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -299,7 +300,7 @@ class _PresetHoverCard(QFrame):
 
 
 class PresetBar(QWidget):
-    """Three-slot preset bar: single row of slot buttons (R3 #8).
+    """Preset bar with built-in slots and optional user-owned custom slots.
 
     Storage format (JSON per slot)::
 
@@ -324,8 +325,8 @@ class PresetBar(QWidget):
     parameters that the bar treats as the slot's "default":
 
     - The slot button shows ``builtin_defaults[slot]['display_name']`` when
-      no user override exists (for signal-type presets this reads as 频率优先 /
-      均衡 / 时间优先 out of the box).
+      no user override exists (for signal-type presets this reads as 频率 /
+      均衡 / 时间 out of the box).
     - Left-click loads either the user override (if any) or the builtin.
     - The right-click menu adds a "重置为默认" entry that removes the
       override and restores the builtin.
@@ -341,7 +342,7 @@ class PresetBar(QWidget):
 
     def __init__(
         self, kind, collect_fn, apply_fn, parent=None, builtin_defaults=None,
-        default_params=None,
+        default_params=None, custom_slots=None,
     ):
         """Construct a preset bar.
 
@@ -362,6 +363,10 @@ class PresetBar(QWidget):
             Baseline params to restore when the currently loaded builtin slot is
             clicked again. This is distinct from reset-to-default, which edits
             the slot override stored in QSettings.
+        custom_slots : dict[int, str] | None
+            Additional user-owned slots. An empty custom slot saves the current
+            parameters on left-click; unlike a builtin slot it never receives a
+            unit recommendation and its right-click menu offers ``清空``.
         """
         super().__init__(parent)
         self.setObjectName("inspectorPresetBar")
@@ -369,6 +374,12 @@ class PresetBar(QWidget):
         self._collect = collect_fn
         self._apply = apply_fn
         self._builtins = builtin_defaults  # None => legacy mode
+        self._custom_slots = {
+            int(slot): str(name)
+            for slot, name in (custom_slots or {}).items()
+            if int(slot) not in self.SLOTS
+        }
+        self._slots = self.SLOTS + tuple(self._custom_slots)
         self._default_params = (
             dict(default_params) if isinstance(default_params, dict) else None
         )
@@ -386,10 +397,15 @@ class PresetBar(QWidget):
         row.setSpacing(6)
         self._load_btns = {}
         self._recommend_badges = {}
-        for n in self.SLOTS:
+        for n in self._slots:
             ld = QPushButton(self._default_name(n), self)
             ld.setProperty("role", "preset-load")
             ld.setProperty("filled", "false")
+            # Four equal-width slots must not raise the Inspector's minimum
+            # width above a narrow pane. The layout still gives each slot its
+            # equal stretch at normal widths; this only allows compaction.
+            ld.setMinimumWidth(0)
+            ld.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             ld.setContextMenuPolicy(Qt.CustomContextMenu)
             ld.installEventFilter(self)
             ld.clicked.connect(lambda _=False, slot=n: self._on_left_click(slot))
@@ -409,6 +425,8 @@ class PresetBar(QWidget):
 
     # ---- naming helpers ----
     def _default_name(self, slot):
+        if slot in self._custom_slots:
+            return self._custom_slots[slot]
         if self._builtins and slot in self._builtins:
             entry = self._builtins[slot]
             if isinstance(entry, dict) and entry.get('display_name'):
@@ -417,9 +435,14 @@ class PresetBar(QWidget):
 
     # ---- persistence helpers ----
     def _key(self, slot):
-        if self._builtins is not None:
+        if self._is_builtin_slot(slot):
             return f"{self._kind}/preset_override/{slot}"
+        if self._builtins is not None and slot in self._custom_slots:
+            return f"{self._kind}/preset_custom/{slot}"
         return f"{self._kind}/preset/{slot}"
+
+    def _is_builtin_slot(self, slot):
+        return self._builtins is not None and self._builtin_params(slot) is not None
 
     def _read(self, slot):
         """Return ``(name, params)`` or ``None`` for an empty slot.
@@ -458,7 +481,7 @@ class PresetBar(QWidget):
         return None
 
     def _refresh_states(self):
-        for n in self.SLOTS:
+        for n in self._slots:
             entry = self._read(n)
             btn = self._load_btns[n]
             btn.setToolTip("")
@@ -467,7 +490,11 @@ class PresetBar(QWidget):
                 # builtin, so it is enabled and shows the builtin display
                 # name. In legacy mode the slot is enabled but reads as
                 # "＋ 配置 N" — left-click will save current params.
-                if self._builtins is not None:
+                if self._is_builtin_slot(n):
+                    btn.setText(self._default_name(n))
+                    btn.setEnabled(True)
+                    btn.setProperty("filled", "false")
+                elif n in self._custom_slots:
                     btn.setText(self._default_name(n))
                     btn.setEnabled(True)
                     btn.setProperty("filled", "false")
@@ -506,12 +533,14 @@ class PresetBar(QWidget):
     def set_recommended(self, slot):
         """Mark ``slot`` as the unit-推荐 preset (corner badge only).
 
-        ``slot`` is 1-based (1/2/3) to match :data:`PresetBar.SLOTS`, or
+        ``slot`` is 1-based to match the visible preset slots, or
         ``None`` to clear every highlight. Manual interaction is unaffected —
         this is a visual hint only. The recommendation badge is separate from
         the ``applied`` property that marks a preset the user actually loaded.
         """
-        if slot is not None and slot not in self.SLOTS:
+        if slot is not None and slot not in self._slots:
+            slot = None
+        if self._builtins is not None and slot is not None and not self._is_builtin_slot(slot):
             slot = None
         if slot != self._selected_slot:
             self._selected_slot = None
@@ -668,12 +697,12 @@ class PresetBar(QWidget):
         mode) or load builtin (builtin mode). Clicking the already-applied
         builtin slot again restores the contextual's default params.
         """
-        if self._builtins is not None and self._selected_slot == slot:
+        if self._is_builtin_slot(slot) and self._selected_slot == slot:
             self._restore_default_params(slot)
             return
         entry = self._read(slot)
-        if entry is None and self._builtins is None:
-            # Legacy mode + empty slot → primary action is "save current".
+        if entry is None and not self._is_builtin_slot(slot):
+            # Empty legacy/custom slot → primary action is "save current".
             self._save(slot)
             return
         # Filled slot OR builtin fallback → load.
@@ -780,7 +809,7 @@ class PresetBar(QWidget):
         """Builtin-aware reset: drop the user override, builtin restores
         as the slot's effective preset on the next load.
         """
-        if self._builtins is None:
+        if not self._is_builtin_slot(slot):
             return
         self._delete(slot)
         self._refresh_states()
@@ -805,7 +834,7 @@ class PresetBar(QWidget):
         menu = apply_rounded_menu_chrome(_QMenu(self))
         act_save = menu.addAction("保存当前到本槽位")
         act_rename = menu.addAction("重命名…")
-        if self._builtins is not None:
+        if self._is_builtin_slot(slot):
             act_reset = menu.addAction("重置为默认")
             act_clear = None
         else:

@@ -1005,6 +1005,73 @@ def test_custom_xaxis_source_change_autoscales_new_x_extent(qapp, qtbot, tmp_pat
     assert w.canvas_time.get_visible_xlim() == pytest.approx((-2.0, 2.0))
 
 
+def test_custom_xaxis_axis_title_includes_source_unit(qapp, qtbot, tmp_path):
+    """A channel-backed X axis must carry that channel's unit in its title."""
+    import numpy as np
+    import pandas as pd
+    from PyQt5.QtCore import Qt
+    from unittest.mock import patch
+
+    p = tmp_path / "custom_x_unit.csv"
+    pd.DataFrame({
+        "time": np.arange(10, dtype=float),
+        "angle": np.linspace(-5.0, 5.0, 10),
+        "force": np.arange(10, 20, dtype=float),
+    }).to_csv(p, index=False)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([str(p)], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    # CSV has no native unit column; mirror the metadata that an MF4/WWT load
+    # already supplies for the selected channel.
+    w.files[fid].channel_units["angle"] = "deg"
+    file_item = w.channel_list._file_items[fid]
+    force_item = next(
+        file_item.child(i) for i in range(file_item.childCount())
+        if file_item.child(i).data(0, Qt.UserRole) == ('channel', fid, 'force')
+    )
+    w.channel_list._updating = True
+    force_item.setCheckState(0, Qt.Checked)
+    w.channel_list._updating = False
+    w.channel_list.channels_changed.emit()
+    qapp.processEvents()
+
+    w.inspector.top.set_xaxis_mode('channel')
+    w._on_xaxis_mode_changed('channel')
+    combo = w.inspector.top._combo_xaxis_ch
+    combo.setCurrentIndex(next(
+        i for i in range(combo.count()) if combo.itemData(i) == (fid, 'angle')
+    ))
+    w._apply_xaxis()
+    qapp.processEvents()
+
+    axis_titles = [
+        handle.x_axis_item().labelText
+        for handle in w.canvas_time.axes_list
+        if handle.x_axis_item() is not None
+    ]
+    assert "angle (deg)" in axis_titles
+
+    # A user-entered label that already names the unit remains literal; do not
+    # add a duplicate suffix on the next apply/replot.
+    w.inspector.top.edit_xlabel.setText("Rotor angle (deg)")
+    w._apply_xaxis()
+    qapp.processEvents()
+    axis_titles = [
+        handle.x_axis_item().labelText
+        for handle in w.canvas_time.axes_list
+        if handle.x_axis_item() is not None
+    ]
+    assert "Rotor angle (deg)" in axis_titles
+
+
 def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
     """If user selects a custom X channel whose length != data, surface a
     non-blocking warning toast and abort."""

@@ -749,7 +749,7 @@ def test_fft_time_context_builtin_presets(qtbot):
     assert p_vib['z_auto'] is True
     assert p_vib['z_floor'] == -40.0
 
-    # 启停类(时间优先): hanning / auto 0.6 s / 75% / dB / auto color,
+    # 启停类(时间): hanning / auto 0.6 s / 75% / dB / auto color,
     # with a tighter 30 dB manual fallback.
     ctx.apply_builtin_preset('transient')
     p_tr = ctx.get_params()
@@ -1408,7 +1408,7 @@ def test_fft_time_presets_use_preset_bar(qtbot):
 
 def test_fft_time_preset_bar_default_button_names_match_builtins(qtbot):
     """Default button labels for the FFTTime preset bar must read as the
-    shared signal-type display names: 频率优先 / 均衡 / 时间优先."""
+    shared signal-type display names: 频率 / 均衡 / 时间, plus 自定义."""
     from PyQt5.QtWidgets import QPushButton
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     # Use a fresh QSettings org/app per test by wiping any prior overrides
@@ -1416,13 +1416,29 @@ def test_fft_time_preset_bar_default_button_names_match_builtins(qtbot):
     s = QSettings("MF4Analyzer", "DataAnalyzer")
     for slot in (1, 2, 3):
         s.remove(f"fft_time/preset_override/{slot}")
+    s.remove("fft_time/preset_custom/4")
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
     btns = ctx.preset_bar.findChildren(QPushButton)
     texts = [b.text() for b in btns]
-    assert "频率优先" in texts
+    assert "频率" in texts
     assert "均衡" in texts
-    assert "时间优先" in texts
+    assert "时间" in texts
+    assert "自定义" in texts
+
+
+def test_all_analysis_preset_bars_share_short_builtin_labels_and_custom_slot(qapp):
+    """FFT, FFT-vs-Time and Order must expose the same four preset slots."""
+    from mf4_analyzer.ui.inspector_sections import (
+        FFTContextual,
+        FFTTimeContextual,
+        OrderContextual,
+    )
+
+    contexts = [FFTContextual(), FFTTimeContextual(), OrderContextual()]
+    for ctx in contexts:
+        texts = [ctx.preset_bar._load_btns[slot].text() for slot in (1, 2, 3, 4)]
+        assert texts == ['频率', '均衡', '时间', '自定义']
 
 
 def test_fft_time_preset_bar_menu_includes_reset_to_default(qtbot, monkeypatch):
@@ -1447,6 +1463,13 @@ def test_fft_time_preset_bar_menu_includes_reset_to_default(qtbot, monkeypatch):
     actions = captured.get("actions", [])
     assert any("重置" in a for a in actions), \
         f"reset-to-default missing from FFTTime preset menu: {actions}"
+    captured.clear()
+    ctx.preset_bar._show_menu(4, ctx.preset_bar._load_btns[4].rect().center())
+    custom_actions = captured.get("actions", [])
+    assert any("清空" in a for a in custom_actions), \
+        f"clear missing from custom-slot menu: {custom_actions}"
+    assert not any("重置" in a for a in custom_actions), \
+        f"custom slot must not expose builtin reset: {custom_actions}"
     # FFT bar (no builtin) must NOT show reset.
     captured.clear()
     plain_bar = PresetBar('fft_no_builtin', lambda: {}, lambda d: None)
@@ -2090,34 +2113,35 @@ def test_btn_rebuild_outer_size_compact(qapp):
         )
 
 
-# ---- Signal-type builtin preset display names → 频率优先/均衡/时间优先 ----
+# ---- Signal-type builtin preset labels → 频率/均衡/时间, plus 自定义 ----
 #
 # PresetBar exposes per-slot text via the internal ``_load_btns[n].text()``
 # accessor (no public ``slot_text`` getter), and writes overrides through
-# ``_write(slot, name, params)`` (no public ``set_slot_override``). Both
-# tests below honor the plan's intent — default labels read 频率优先/均衡/时间优先 and
-# reset-to-default still surfaces those names — while using the real API.
+# ``_write(slot, name, params)`` (no public ``set_slot_override``). The tests
+# below protect the builtin labels and the separate custom-slot contract.
 
 def test_fft_time_preset_bar_default_names(qtbot):
     """Default slot labels for the FFTTime preset bar must be the shared
-    signal-type display names: 频率优先 / 均衡 / 时间优先."""
+    signal-type display names: 频率 / 均衡 / 时间, plus 自定义."""
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     s = QSettings("MF4Analyzer", "DataAnalyzer")
     for slot in (1, 2, 3):
         s.remove(f"fft_time/preset_override/{slot}")
+    s.remove("fft_time/preset_custom/4")
     w = FFTTimeContextual()
     qtbot.addWidget(w)
     bar = w.preset_bar
     # PresetBar exposes per-slot text via ``_load_btns[n].text()``.
-    assert bar._load_btns[1].text() == '频率优先'
+    assert bar._load_btns[1].text() == '频率'
     assert bar._load_btns[2].text() == '均衡'
-    assert bar._load_btns[3].text() == '时间优先'
+    assert bar._load_btns[3].text() == '时间'
+    assert bar._load_btns[4].text() == '自定义'
 
 
 def test_fft_time_preset_bar_reset_to_default_keeps_new_names(qtbot):
     """After resetting an overridden slot, the slot text must restore to
-    the signal-type builtin name (频率优先) — not the legacy 诊断模式.
+    the signal-type builtin name (频率) — not the legacy 诊断模式.
     """
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
@@ -2133,7 +2157,38 @@ def test_fft_time_preset_bar_reset_to_default_keeps_new_names(qtbot):
     bar._refresh_states()
     assert bar._load_btns[1].text() == 'Custom A'
     bar._reset_to_default(1)
-    assert bar._load_btns[1].text() == '频率优先'
+    assert bar._load_btns[1].text() == '频率'
+
+
+def test_builtin_preset_bar_custom_slot_saves_and_loads_without_builtin_toggle(qapp):
+    """Custom slot 4 is a user snapshot, not an override of builtin slots."""
+    from mf4_analyzer.ui.inspector_sections import PresetBar
+
+    applied = []
+    bar = PresetBar(
+        'test_kind_builtin_custom',
+        lambda: {'mode': 'current'},
+        lambda params: applied.append(dict(params)),
+        builtin_defaults={
+            1: {'display_name': '频率', 'params': {'mode': 'frequency'}},
+            2: {'display_name': '均衡', 'params': {'mode': 'balanced'}},
+            3: {'display_name': '时间', 'params': {'mode': 'time'}},
+        },
+        default_params={'mode': 'default'},
+        custom_slots={4: '自定义'},
+    )
+
+    assert bar._load_btns[4].text() == '自定义'
+    assert bar._key(4) == 'test_kind_builtin_custom/preset_custom/4'
+    bar._on_left_click(4)
+    assert bar._read(4) == ('自定义', {'mode': 'current'})
+    assert applied == []
+    bar._on_left_click(4)
+    assert applied[-1] == {'mode': 'current'}
+    bar._on_left_click(4)
+    assert applied[-1] == {'mode': 'current'}
+    bar.set_recommended(4)
+    assert bar._load_btns[4].property('recommended') == 'false'
 
 
 # ---- Requested first-open defaults for FFT-vs-Time spectrogram ----
@@ -4475,7 +4530,7 @@ def test_builtin_preset_second_left_click_restores_default_params(qapp):
         lambda: {'mode': 'current'},
         lambda d: applied.append(dict(d)),
         builtin_defaults={
-            1: {'display_name': '频率优先', 'params': {'mode': 'frequency'}},
+            1: {'display_name': '频率', 'params': {'mode': 'frequency'}},
         },
         default_params={'mode': 'default'},
     )
@@ -4500,7 +4555,7 @@ def test_recommended_only_builtin_click_still_loads_preset(qapp):
         lambda: {'mode': 'current'},
         lambda d: applied.append(dict(d)),
         builtin_defaults={
-            1: {'display_name': '频率优先', 'params': {'mode': 'frequency'}},
+            1: {'display_name': '频率', 'params': {'mode': 'frequency'}},
         },
         default_params={'mode': 'default'},
     )
@@ -4522,7 +4577,7 @@ def test_recommendation_change_clears_builtin_toggle_selection(qapp):
         lambda: {'mode': 'current'},
         lambda d: applied.append(dict(d)),
         builtin_defaults={
-            1: {'display_name': '频率优先', 'params': {'mode': 'frequency'}},
+            1: {'display_name': '频率', 'params': {'mode': 'frequency'}},
             2: {'display_name': '均衡', 'params': {'mode': 'balanced'}},
         },
         default_params={'mode': 'default'},
@@ -4793,7 +4848,7 @@ def test_preset_hover_card_builtin_blurb(qtbot):
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
     bar = ctx.preset_bar
-    # Trigger hover for slot 1 (频率优先/torque builtin)
+    # Trigger hover for slot 1 (频率/torque builtin)
     bar._show_hover(1)
     sub_labels = bar._hover_card.findChildren(QLabel)
     sub_texts = [l.text() for l in sub_labels]

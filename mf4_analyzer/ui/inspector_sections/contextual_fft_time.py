@@ -21,6 +21,7 @@ from .._axis_defaults import z_range_for
 from ._helpers import (
     BUILTIN_PRESET_DISPLAY,
     BUILTIN_PRESET_KEYS,
+    CUSTOM_PRESET_SLOTS,
     _LONG_FIELD_MAX_WIDTH,
     _PRESET_KEY_TO_SLOT,
     _SHORT_FIELD_MAX_WIDTH,
@@ -252,10 +253,10 @@ class FFTTimeContextual(QWidget):
 
         # ---- 预设 (R3 C: builtin-aware PresetBar) ----
         # The preset_bar is single-row, builtin-aware: each slot starts with
-        # its signal-type display name (频率优先 / 均衡 / 时间优先), left-click
-        # loads (override-or-builtin), right-click menu integrates 保存当前 /
-        # 重命名 / 重置为默认. Slot order is the shared BUILTIN_PRESET_KEYS
-        # contract so unit-推荐 highlighting lines up across all three views.
+        # its signal-type display name (频率 / 均衡 / 时间), plus a distinct
+        # 自定义 snapshot slot. Builtins left-click loads (override-or-builtin),
+        # while the empty custom slot saves current parameters. Slot order is the
+        # shared BUILTIN_PRESET_KEYS contract so unit recommendations line up.
         builtin_defaults = {
             _PRESET_KEY_TO_SLOT[key]: {
                 'display_name': self._BUILTIN_PRESET_DISPLAY[key],
@@ -270,6 +271,7 @@ class FFTTimeContextual(QWidget):
             parent=self,
             builtin_defaults=builtin_defaults,
             default_params=self._collect_preset(),
+            custom_slots=CUSTOM_PRESET_SLOTS,
         )
         self._tf_section.add_persistent(self.preset_bar)
 
@@ -731,7 +733,7 @@ class FFTTimeContextual(QWidget):
     }
 
     # User-facing display names for the three builtin slots — shared signal-type
-    # labels (频率优先 / 均衡 / 时间优先).
+    # labels (频率 / 均衡 / 时间).
     _BUILTIN_PRESET_DISPLAY = dict(BUILTIN_PRESET_DISPLAY)
 
     def _resolve_builtin_preset_key(self, name):
