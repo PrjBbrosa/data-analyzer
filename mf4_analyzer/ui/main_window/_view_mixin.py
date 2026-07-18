@@ -447,10 +447,10 @@ class ViewMixin:
             self._view_bridge.capture_controls_into(state, self, canvas)
         self._replot_canvas_for_view(idx, canvas)
 
-    def _replot_canvas_for_view(self, idx, canvas):
+    def _replot_canvas_for_view(self, idx, canvas, *, preserve_xlim=True):
         if idx is None or canvas is None:
             return
-        cur_xlim = self._safe_capture_xlim_for(canvas)
+        cur_xlim = self._safe_capture_xlim_for(canvas) if preserve_xlim else None
         try:
             self._render_view_to_canvas(
                 idx,
