@@ -21,6 +21,7 @@ from .._axis_defaults import z_range_for
 from ._helpers import (
     BUILTIN_PRESET_DISPLAY,
     BUILTIN_PRESET_KEYS,
+    CUSTOM_PRESET_SLOTS,
     _LONG_FIELD_MAX_WIDTH,
     _PRESET_KEY_TO_SLOT,
     _SHORT_FIELD_MAX_WIDTH,
@@ -92,9 +93,8 @@ class FFTTimeContextual(QWidget):
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
     _AUTO_NFFT_LABEL = "自动"
-    # 2026-06-19: 时频图色图固定为 turbo（用户要求移除可切换的色图控件）。
-    # get_params()/_collect_preset() 以此常量发出 cmap 键，保持下游契约不变。
-    _FIXED_CMAP = "turbo"
+    # 色图由图表选项管理；此值只为新建画布和旧参数消费者保留默认契约。
+    _FIXED_CMAP = "gnuplot2"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -151,7 +151,7 @@ class FFTTimeContextual(QWidget):
         root.addWidget(sig_card)
 
         # 2026-06-13 split: lower full-width tinted panel hosts 时频参数 +
-        # 幅值 + 坐标轴设置 + 预设 + 计算时频图（色图固定 turbo，无色标控件）.
+        # 幅值 + 坐标轴设置 + 预设 + 计算时频图（色图在图表选项中配置）.
         params_card, params_lay = _make_params_card(self, "fftTimeParamsCard")
 
         # ---- 时频参数 ----
@@ -248,17 +248,15 @@ class FFTTimeContextual(QWidget):
         # digits + Hz suffix; no change needed here).
 
         # ---- 色标 ----
-        # 2026-06-19：用户要求移除可切换的色图控件，时频图色图固定为 turbo。
-        # 原 combo_cmap + 「色标」分组已删除；色图由 _FIXED_CMAP 常量经
-        # get_params()/_collect_preset() 下发，main_window._render_fft_time
-        # 与预设保存的字段契约保持不变。
+        # Inspector 不重复提供色图控件；图表选项负责实时配置。这里仍由
+        # _FIXED_CMAP 保留 ``cmap`` 键，兼容既有下游参数消费者。
 
         # ---- 预设 (R3 C: builtin-aware PresetBar) ----
         # The preset_bar is single-row, builtin-aware: each slot starts with
-        # its signal-type display name (频率优先 / 均衡 / 时间优先), left-click
-        # loads (override-or-builtin), right-click menu integrates 保存当前 /
-        # 重命名 / 重置为默认. Slot order is the shared BUILTIN_PRESET_KEYS
-        # contract so unit-推荐 highlighting lines up across all three views.
+        # its signal-type display name (频率 / 均衡 / 时间), plus a distinct
+        # 自定义 snapshot slot. Builtins left-click loads (override-or-builtin),
+        # while the empty custom slot saves current parameters. Slot order is the
+        # shared BUILTIN_PRESET_KEYS contract so unit recommendations line up.
         builtin_defaults = {
             _PRESET_KEY_TO_SLOT[key]: {
                 'display_name': self._BUILTIN_PRESET_DISPLAY[key],
@@ -273,6 +271,7 @@ class FFTTimeContextual(QWidget):
             parent=self,
             builtin_defaults=builtin_defaults,
             default_params=self._collect_preset(),
+            custom_slots=CUSTOM_PRESET_SLOTS,
         )
         self._tf_section.add_persistent(self.preset_bar)
 
@@ -608,7 +607,7 @@ class FFTTimeContextual(QWidget):
         apply_db_reference_partial(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])
-        # cmap 固定 turbo：无控件可应用，预设/视图状态里的 cmap 键被忽略。
+        # Inspector 不应用预设里的 cmap；实时选择属于图表选项。
 
         # amplitude_mode token → combo_amp_unit. Reverse-map on a
         # case-insensitive 'db' substring so the lowercase 'amplitude_db'
@@ -734,7 +733,7 @@ class FFTTimeContextual(QWidget):
     }
 
     # User-facing display names for the three builtin slots — shared signal-type
-    # labels (频率优先 / 均衡 / 时间优先).
+    # labels (频率 / 均衡 / 时间).
     _BUILTIN_PRESET_DISPLAY = dict(BUILTIN_PRESET_DISPLAY)
 
     def _resolve_builtin_preset_key(self, name):
@@ -770,7 +769,7 @@ class FFTTimeContextual(QWidget):
             'freq_min': 0.0,
             'freq_max': 0.0,
             'dynamic': dynamic,
-            'cmap': cfg.get('cmap', 'turbo'),
+            'cmap': cfg.get('cmap', self._FIXED_CMAP),
             'x_auto': True,
             'x_min': 0.0,
             'x_max': 0.0,
@@ -872,7 +871,7 @@ class FFTTimeContextual(QWidget):
         apply_db_reference_preset(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])
-        # cmap 固定 turbo：无控件可应用，预设/视图状态里的 cmap 键被忽略。
+        # Inspector 不应用预设里的 cmap；实时选择属于图表选项。
 
         # ---- Wave 4 axis-key migration (legacy + new) ----
         # Legacy ``dynamic`` translates to z_floor / z_ceiling / z_auto.

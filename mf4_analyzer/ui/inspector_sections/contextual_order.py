@@ -21,6 +21,7 @@ from .._axis_defaults import z_range_for
 from ._helpers import (
     BUILTIN_PRESET_DISPLAY,
     BUILTIN_PRESET_KEYS,
+    CUSTOM_PRESET_SLOTS,
     _LONG_FIELD_MAX_WIDTH,
     _PRESET_KEY_TO_SLOT,
     _SHORT_FIELD_MAX_WIDTH,
@@ -247,11 +248,13 @@ class OrderContextual(QWidget):
         # constructor default until the user actually toggles a checkbox).
         self._sync_axis_enabled()
 
-        # Signal-type built-in presets (频率优先 / 均衡 / 时间优先).
+        # Signal-type built-in presets (频率 / 均衡 / 时间) plus a separate
+        # user-owned 自定义 snapshot slot.
         self.preset_bar = PresetBar(
             'order', self._collect_preset, self._apply_preset, parent=self,
             builtin_defaults=self._builtin_preset_defaults(),
             default_params=self._collect_preset(),
+            custom_slots=CUSTOM_PRESET_SLOTS,
         )
         self._order_section.add_persistent(self.preset_bar)
 

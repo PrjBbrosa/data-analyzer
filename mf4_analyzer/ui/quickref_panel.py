@@ -116,6 +116,25 @@ def _qss():
         background-color: {_ACCENT_WASH};
         border-color: {_ACCENT};
     }}
+    QToolButton#quickrefBottomHintsToggle {{
+        min-height: 28px;
+        padding: 0 9px;
+        border: 1px solid {_CHIP_BORDER};
+        border-radius: 7px;
+        background-color: #ffffff;
+        color: {_INK3};
+        font-size: 11px;
+        font-weight: 600;
+    }}
+    QToolButton#quickrefBottomHintsToggle:hover {{
+        background-color: {_HAIRLINE};
+        border-color: #b9c9e5;
+    }}
+    QToolButton#quickrefBottomHintsToggle:checked {{
+        background-color: {_ACCENT_WASH};
+        border-color: {_ACCENT};
+        color: {_ACCENT};
+    }}
     QFrame#quickrefHeaderSep {{
         background-color: {_HAIRLINE};
         max-height: 1px; min-height: 1px; border: none;
@@ -373,7 +392,14 @@ class QuickRefPanel(QWidget):
     ``#quickrefCard`` so its QSS background survives (CLAUDE.md gotcha).
     """
 
-    def __init__(self, parent=None, open_guide=None):
+    def __init__(
+        self,
+        parent=None,
+        open_guide=None,
+        *,
+        bottom_hints_visible=True,
+        set_bottom_hints_visible=None,
+    ):
         # Qt.Tool keeps the window off the taskbar and tied to the app without
         # being modal; FramelessWindowHint lets us draw our own header + shape.
         super().__init__(
@@ -384,6 +410,8 @@ class QuickRefPanel(QWidget):
         self._pinned = False
         self._drag_offset = None
         self._group_cards = []
+        self._set_bottom_hints_visible = set_bottom_hints_visible
+        self._bottom_hints_visible = bool(bottom_hints_visible)
 
         # Translucency on the OUTER window only — the inner card carries QSS.
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -453,6 +481,15 @@ class QuickRefPanel(QWidget):
         self._search.textChanged.connect(self._on_search)
         self._search.installEventFilter(self)
         lay.addWidget(self._search, 0, Qt.AlignVCenter)
+
+        self._bottom_hints_toggle = QToolButton()
+        self._bottom_hints_toggle.setObjectName("quickrefBottomHintsToggle")
+        self._bottom_hints_toggle.setText("底部提示")
+        self._bottom_hints_toggle.setCheckable(True)
+        self._bottom_hints_toggle.setCursor(Qt.PointingHandCursor)
+        self._bottom_hints_toggle.toggled.connect(self._on_bottom_hints_toggled)
+        self.set_bottom_hints_visible(self._bottom_hints_visible)
+        lay.addWidget(self._bottom_hints_toggle, 0, Qt.AlignVCenter)
 
         self._pin_btn = QToolButton()
         self._pin_btn.setObjectName("quickrefPin")
@@ -572,6 +609,32 @@ class QuickRefPanel(QWidget):
     def _on_pin_clicked(self):
         self.set_pinned(self._pin_btn.isChecked())
 
+    def _on_bottom_hints_toggled(self, visible):
+        self._bottom_hints_visible = bool(visible)
+        self._refresh_bottom_hints_toggle()
+        if callable(self._set_bottom_hints_visible):
+            try:
+                self._set_bottom_hints_visible(self._bottom_hints_visible)
+            except Exception:
+                pass
+
+    def set_bottom_hints_visible(self, visible):
+        """Synchronize the header toggle without re-notifying its host."""
+        self._bottom_hints_visible = bool(visible)
+        old = self._bottom_hints_toggle.blockSignals(True)
+        try:
+            self._bottom_hints_toggle.setChecked(self._bottom_hints_visible)
+        finally:
+            self._bottom_hints_toggle.blockSignals(old)
+        self._refresh_bottom_hints_toggle()
+
+    def _refresh_bottom_hints_toggle(self):
+        self._bottom_hints_toggle.setToolTip(
+            "隐藏窗口底部的操作提示"
+            if self._bottom_hints_visible
+            else "显示窗口底部的操作提示"
+        )
+
     def set_pinned(self, pinned: bool):
         pinned = bool(pinned)
         if pinned == self._pinned and self._pin_btn.isChecked() == pinned:
@@ -660,7 +723,12 @@ class QuickRefPanel(QWidget):
         top_left = self._header.mapTo(self, QPoint(0, 0))
         rect = self._header.rect().translated(top_left)
         # Exclude interactive header controls from the drag area.
-        for ctrl in (self._search, self._pin_btn, self._close_btn):
+        for ctrl in (
+            self._search,
+            self._bottom_hints_toggle,
+            self._pin_btn,
+            self._close_btn,
+        ):
             tl = ctrl.mapTo(self, QPoint(0, 0))
             if ctrl.rect().translated(tl).contains(pos):
                 return False

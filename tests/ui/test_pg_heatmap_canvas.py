@@ -184,6 +184,15 @@ def test_linear_mode_levels_auto(canvas):
     assert lo == pytest.approx(1.0) and hi == pytest.approx(100.0)
 
 
+def test_fresh_heatmap_canvas_defaults_to_gnuplot2(canvas):
+    assert canvas._cmap_name == "gnuplot2"
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    assert canvas._cmap_name == "gnuplot2"
+
+
 def test_linear_mode_manual_levels_drive_image_and_colorbar(canvas):
     matrix = np.linspace(0.1, 1.6, 20, dtype=float).reshape(4, 5)
     canvas.plot_or_update_heatmap(

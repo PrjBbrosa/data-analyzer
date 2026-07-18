@@ -17,6 +17,7 @@ from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from ._helpers import (
     BUILTIN_PRESET_DISPLAY,
     BUILTIN_PRESET_KEYS,
+    CUSTOM_PRESET_SLOTS,
     _LONG_FIELD_MAX_WIDTH,
     _PRESET_KEY_TO_SLOT,
     _SHORT_FIELD_MAX_WIDTH,
@@ -256,12 +257,14 @@ class FFTContextual(QWidget):
         self.chk_remark = QCheckBox("点击标注", self)
         self.chk_remark.setVisible(False)
 
-        # Signal-type built-in presets (频率优先 / 均衡 / 时间优先). Slot order
-        # is the shared contract from BUILTIN_PRESET_KEYS.
+        # Signal-type built-in presets (频率 / 均衡 / 时间) plus one separate
+        # user snapshot slot. Builtin order remains the shared recommendation
+        # contract from BUILTIN_PRESET_KEYS.
         self.preset_bar = PresetBar(
             'fft', self._collect_preset, self._apply_preset, parent=self,
             builtin_defaults=self._builtin_preset_defaults(),
             default_params=self._collect_preset(),
+            custom_slots=CUSTOM_PRESET_SLOTS,
         )
         self._fft_section.add_persistent(self.preset_bar)
 

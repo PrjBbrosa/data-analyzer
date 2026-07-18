@@ -46,6 +46,9 @@ from ._project_io_mixin import ProjectIOMixin
 from ._view_mixin import ViewMixin
 
 
+_STATUS_HINTS_VISIBLE_SETTINGS_KEY = "quickref/status_hints_visible"
+
+
 class SurfaceStatusBar(QStatusBar):
     """QStatusBar API, displayed as the bottom rounded surface inside the tray."""
 
@@ -262,6 +265,7 @@ class MainWindow(
         # alive across section round-trips and skips the preview rebuild cost).
         self._fft_last_render_sig = None
 
+        self._status_hints_visible = self._load_status_hints_visible()
         self.statusBar = SurfaceStatusBar(self)
         root.addWidget(self.statusBar)
         self._status_hint_bar = None
@@ -298,7 +302,12 @@ class MainWindow(
         if self._quickref_panel is None:
             from ..quickref_panel import QuickRefPanel
             from ...help import open_guide
-            self._quickref_panel = QuickRefPanel(self, open_guide=open_guide)
+            self._quickref_panel = QuickRefPanel(
+                self,
+                open_guide=open_guide,
+                bottom_hints_visible=self.status_hints_visible(),
+                set_bottom_hints_visible=self.set_status_hints_visible,
+            )
         self._quickref_panel.toggle(anchor_widget=self)
 
     def _install_update_indicator(self):
@@ -453,12 +462,16 @@ class MainWindow(
         QDesktopServices.openUrl(QUrl(app_meta.RELEASE_URL))
 
     def _install_status_hint_bar(self, mode=None):
-        """Keep exactly one mode hint bar in the global status line."""
+        """Keep exactly one mode hint bar in the global status line.
+
+        The QuickRef ``?`` is part of that bar and remains available even when
+        the optional hint text is disabled.
+        """
         mode = mode or self.chart_stack.current_mode()
         target = self.chart_stack.hint_bar_for_mode(mode)
         current = getattr(self, "_status_hint_bar", None)
         if current is target and target.parentWidget() is self.statusBar:
-            target.show()
+            self._set_status_hint_text_visible(target, self.status_hints_visible())
             return
         if current is not None:
             self.statusBar.removeWidget(current)
@@ -466,7 +479,62 @@ class MainWindow(
             current.setParent(None)
         self._status_hint_bar = self.chart_stack.take_hint_bar(mode, self.statusBar)
         self.statusBar.insertPermanentWidget(0, self._status_hint_bar, 1)
-        self._status_hint_bar.show()
+        self._set_status_hint_text_visible(
+            self._status_hint_bar, self.status_hints_visible()
+        )
+
+    @staticmethod
+    def _set_status_hint_text_visible(bar, visible):
+        """Toggle hint copy while retaining the existing QuickRef ``?`` entry."""
+        if bar is None:
+            return
+        bar.setVisible(True)
+        for name in ("chartHintContext", "chartHintDiscovery"):
+            label = bar.findChild(QLabel, name, Qt.FindDirectChildrenOnly)
+            if label is not None:
+                # Keeping the labels in the layout preserves the original
+                # left-anchored geometry of the ``?`` button. Hiding them
+                # outright makes QHBoxLayout center the lone visible button.
+                label.setVisible(True)
+                label.setStyleSheet("" if visible else "color: transparent;")
+
+    def _status_hint_settings(self):
+        """Use the app's isolatable settings factory for the QuickRef toggle."""
+        from ..inspector_sections._helpers import _preset_settings
+        return _preset_settings()
+
+    def _load_status_hints_visible(self):
+        try:
+            return bool(self._status_hint_settings().value(
+                _STATUS_HINTS_VISIBLE_SETTINGS_KEY,
+                True,
+                type=bool,
+            ))
+        except Exception:
+            return True
+
+    def status_hints_visible(self):
+        return bool(getattr(self, "_status_hints_visible", True))
+
+    def set_status_hints_visible(self, visible):
+        """Show/hide bottom hint text and persist the preference.
+
+        The existing ``?`` QuickRef entry stays visible as the only recovery
+        route when the text is disabled.
+        """
+        visible = bool(visible)
+        self._status_hints_visible = visible
+        try:
+            settings = self._status_hint_settings()
+            settings.setValue(_STATUS_HINTS_VISIBLE_SETTINGS_KEY, visible)
+            settings.sync()
+        except Exception:
+            pass
+        bar = getattr(self, "_status_hint_bar", None)
+        self._set_status_hint_text_visible(bar, visible)
+        panel = getattr(self, "_quickref_panel", None)
+        if panel is not None:
+            panel.set_bottom_hints_visible(visible)
 
     # ---- public toast helper ----
     def toast(self, msg, level='info'):
@@ -1823,6 +1891,10 @@ class MainWindow(
         """应用横坐标设置"""
         canvas = self.chart_stack.focused_canvas()
         idx = self._view_index_for_canvas(canvas)
+        previous_x_source = (
+            self._custom_xaxis_fid,
+            self._custom_xaxis_ch,
+        )
         mode = self.inspector.top.xaxis_mode()
         if mode == 'time':
             self._custom_xlabel = self.inspector.top.xaxis_label() or None
@@ -1853,6 +1925,11 @@ class MainWindow(
             _raw = self.inspector.top.xaxis_label()
             self._custom_xlabel = (_raw if _raw and _raw != 'Time (s)' else None) or ch
 
+        x_source_changed = previous_x_source != (
+            self._custom_xaxis_fid,
+            self._custom_xaxis_ch,
+        )
+
         # Cache invalidation site 5: the t-array bound to every plotted
         # channel just changed (time-axis ↔ custom-channel x-axis), so
         # every (data_id, channel, xlim, pixel_width) entry is now stale.
@@ -1870,11 +1947,20 @@ class MainWindow(
         # remain valid and must not be needlessly evicted.
         self.analysis_caches['fft_time'].clear()
         if idx is not None and 0 <= idx < len(self.view_manager.views):
-            self._view_bridge.capture_controls_into(
-                self.view_manager.get(idx), self, canvas
-            )
+            state = self.view_manager.get(idx)
+            self._view_bridge.capture_controls_into(state, self, canvas)
+            if x_source_changed:
+                # A different X source changes coordinate semantics, so a
+                # saved time/custom-channel window is not meaningful. Keep
+                # Y limits and every other View option, but let the new X
+                # data extent establish the viewport.
+                state.xlim = None
         if self.files and self.chart_stack.current_mode() == 'time':
-            self._replot_canvas_for_view(idx, canvas)
+            self._replot_canvas_for_view(
+                idx,
+                canvas,
+                preserve_xlim=not x_source_changed,
+            )
         else:
             self.plot_time()
         self.statusBar.showMessage(f"横坐标已更新")
@@ -2067,6 +2153,37 @@ class MainWindow(
             update_primary_ui=(focused is self.canvas_time),
             user_initiated=user_initiated,
         )
+
+    def _time_axis_label(self):
+        """Return the visible time-domain X-axis title.
+
+        A custom X source has its own physical unit. Keep the Inspector's
+        editable label as entered, but append the source unit only for the
+        rendered title so View state and label editing remain compatible.
+        """
+        label = self._custom_xlabel or self.inspector.top.xaxis_label()
+        custom_fid = self._custom_xaxis_fid
+        custom_ch = self._custom_xaxis_ch
+        if custom_fid is None or custom_ch is None:
+            return label or 'Time (s)'
+
+        label = label or str(custom_ch)
+        fd = self.files.get(custom_fid)
+        if fd is None:
+            return label
+        channel_meta = (getattr(fd, 'channel_metadata', None) or {}).get(
+            custom_ch, {}
+        ) or {}
+        unit = (
+            channel_meta.get('unit', '')
+            or (getattr(fd, 'channel_units', None) or {}).get(custom_ch, '')
+            or ''
+        )
+        unit = str(unit).strip()
+        unit_token = f'({unit})'
+        if unit and unit_token not in label:
+            return f'{label} {unit_token}'
+        return label
 
     def _time_canvases(self):
         """Time-domain canvases to live-toggle. Includes the focused canvas
@@ -2340,7 +2457,7 @@ class MainWindow(
                     )
                 return
 
-            xlabel = self._custom_xlabel or self.inspector.top.xaxis_label() or 'Time (s)'
+            xlabel = self._time_axis_label()
             with _pp.timed("plot_channels(建轴+bind+首次setData) 耗时"):
                 canvas.plot_channels(
                     data,

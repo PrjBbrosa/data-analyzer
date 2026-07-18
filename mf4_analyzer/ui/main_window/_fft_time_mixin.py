@@ -4,6 +4,7 @@ import numpy as np
 
 from ... import db_reference
 from ...signal import resolve_nfft
+from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from .fft_time_coordinator import make_fft_time_analysis_key
@@ -486,7 +487,7 @@ class FFTTimeMixin:
         canvas.plot_result(
             result,
             amplitude_mode=amp_mode,
-            cmap=p['cmap'],
+            cmap=getattr(canvas, '_cmap_name', DEFAULT_HEATMAP_CMAP),
             z_auto=z_auto,
             z_floor=float(p.get('z_floor', -80.0)),
             z_ceiling=float(p.get('z_ceiling', 0.0)),
