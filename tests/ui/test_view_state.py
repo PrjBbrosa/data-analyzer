@@ -1,6 +1,7 @@
 import json
 
 from mf4_analyzer.ui.view_state import ViewState
+from mf4_analyzer.ui.project_io import remap_view_fids
 
 
 def test_viewstate_roundtrips_through_dict():
@@ -58,6 +59,7 @@ def test_viewstate_color_keys_roundtrip_when_values_contain_separator():
 def test_viewstate_defaults_are_empty():
     st = ViewState(name="View 1", tab_color="#2d7ff9")
 
+    assert st.attached_file_ids == []
     assert st.checked == []
     assert st.hidden_channels == []
     assert st.colors == {}
@@ -78,3 +80,31 @@ def test_viewstate_legacy_payload_defaults_all_checked_channels_visible():
 
     assert st.checked == [("f1", "rpm")]
     assert st.hidden_channels == []
+
+
+def test_viewstate_attached_file_ids_roundtrip_in_order():
+    st = ViewState(
+        name="View 1",
+        tab_color="#2d7ff9",
+        attached_file_ids=["f2", "f1"],
+    )
+
+    again = ViewState.from_dict(json.loads(json.dumps(st.to_dict())))
+
+    assert again.attached_file_ids == ["f2", "f1"]
+
+
+def test_remap_view_fids_migrates_legacy_missing_attachments():
+    views = [{"name": "legacy", "checked": [], "hidden_channels": []}]
+
+    got = remap_view_fids(views, {"old-a": "f0", "old-b": "f1"})
+
+    assert got[0]["attached_file_ids"] == ["f0", "f1"]
+
+
+def test_remap_view_fids_preserves_explicit_empty_attachments():
+    views = [{"name": "empty", "attached_file_ids": [], "checked": []}]
+
+    got = remap_view_fids(views, {"old-a": "f0"})
+
+    assert got[0]["attached_file_ids"] == []

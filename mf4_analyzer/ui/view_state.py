@@ -35,6 +35,7 @@ ChannelKey = tuple[str, str]
 class ViewState:
     name: str
     tab_color: str
+    attached_file_ids: list[str] = field(default_factory=list)
     checked: list[ChannelKey] = field(default_factory=list)
     hidden_channels: list[ChannelKey] = field(default_factory=list)
     colors: dict[ChannelKey, str] = field(default_factory=dict)
@@ -47,6 +48,7 @@ class ViewState:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        data["attached_file_ids"] = [str(fid) for fid in self.attached_file_ids]
         data["checked"] = [list(key) for key in self.checked]
         data["hidden_channels"] = [list(key) for key in self.hidden_channels]
         data["colors"] = {
@@ -64,6 +66,9 @@ class ViewState:
         return cls(
             name=data["name"],
             tab_color=data["tab_color"],
+            attached_file_ids=[
+                str(fid) for fid in data.get("attached_file_ids", [])
+            ],
             checked=[_coerce_channel_key(key) for key in data.get("checked", [])],
             hidden_channels=[
                 _coerce_channel_key(key)

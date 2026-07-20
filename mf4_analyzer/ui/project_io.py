@@ -192,6 +192,15 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
     for view in views:
         v = dict(view)
 
+        if "attached_file_ids" in view:
+            v["attached_file_ids"] = [
+                fid_map[fid]
+                for fid in view.get("attached_file_ids", [])
+                if fid in fid_map
+            ]
+        else:
+            v["attached_file_ids"] = list(fid_map.values())
+
         v["checked"] = [
             [fid_map[fid], ch]
             for fid, ch in (tuple(x) for x in view.get("checked", []))
