@@ -165,6 +165,8 @@ class FileNavigator(QWidget):
     channel_context_menu_requested = pyqtSignal()
     # Bubbled from the channel pane's 编辑通道 button.
     channel_editor_requested = pyqtSignal()
+    files_attach_requested = pyqtSignal(object)
+    files_detach_requested = pyqtSignal(object, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -260,6 +262,12 @@ class FileNavigator(QWidget):
         self.channel_list.channel_editor_requested.connect(
             self.channel_editor_requested
         )
+        self.channel_list.files_attach_requested.connect(
+            self.files_attach_requested
+        )
+        self.channel_list.files_detach_requested.connect(
+            self.files_detach_requested
+        )
         self.channel_list.setMinimumHeight(260)
         splitter.addWidget(self.channel_list)
         splitter.setChildrenCollapsible(False)
@@ -335,6 +343,12 @@ class FileNavigator(QWidget):
 
     def set_checked_channels(self, checked):
         self.channel_list.set_checked_channels(checked)
+
+    def get_attached_file_ids(self):
+        return self.channel_list.get_attached_file_ids()
+
+    def set_attached_file_ids(self, fids):
+        self.channel_list.set_attached_file_ids(fids)
 
     def get_hidden_channels(self):
         return self.channel_list.get_hidden_channels()

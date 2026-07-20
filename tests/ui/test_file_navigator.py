@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from mf4_analyzer.ui.file_navigator import FileNavigator
 
 
@@ -16,9 +18,11 @@ def test_file_navigator_signals_exist(qapp):
 
 
 class FakeFd:
-    def __init__(self, filename="sample.csv", short_name="sample", rows=100, fs=1000.0, duration=5.0):
+    def __init__(self, filename="sample.csv", short_name="sample", rows=100, fs=1000.0, duration=5.0, filepath=None, label_suffix=""):
         self.filename = filename
         self.short_name = short_name
+        self.filepath = Path(filepath) if filepath is not None else None
+        self.label_suffix = label_suffix
         self.fs = fs
         self._rows = rows
         self._dur = duration
@@ -38,6 +42,11 @@ class FakeFd:
     def channel_units(self): return {}
 
 
+def _add_attached(nav, fid, fd):
+    nav.add_file(fid, fd)
+    nav.set_attached_file_ids([*nav.get_attached_file_ids(), fid])
+
+
 def test_file_row_added(qapp):
     nav = FileNavigator()
     nav.add_file("f0", FakeFd())
@@ -47,7 +56,7 @@ def test_file_row_added(qapp):
 def test_channel_visibility_delegates_and_signal_bubbles(qapp, qtbot):
     nav = FileNavigator()
     qtbot.addWidget(nav)
-    nav.add_file("f0", FakeFd())
+    _add_attached(nav, "f0", FakeFd())
     nav.set_checked_channels([("f0", "speed")])
 
     nav.set_hidden_channels([("f0", "speed")])
@@ -106,7 +115,7 @@ from PyQt5.QtCore import Qt
 def test_channel_search_filters(qapp, qtbot):
     nav = FileNavigator()
     qtbot.addWidget(nav)
-    nav.add_file("f0", FakeFd())
+    _add_attached(nav, "f0", FakeFd())
     # "speed" matches channel named "speed"; "xyz" matches nothing
     nav.channel_list.search.setText("xyz")
     fi = nav.channel_list._file_items["f0"]
@@ -120,7 +129,7 @@ def test_channel_search_filters(qapp, qtbot):
 def test_channel_all_button_checks(qapp, qtbot):
     nav = FileNavigator()
     qtbot.addWidget(nav)
-    nav.add_file("f0", FakeFd())
+    _add_attached(nav, "f0", FakeFd())
     nav.channel_list._all()
     fi = nav.channel_list._file_items["f0"]
     for i in range(fi.childCount()):
@@ -130,7 +139,7 @@ def test_channel_all_button_checks(qapp, qtbot):
 def test_channel_none_button_clears(qapp, qtbot):
     nav = FileNavigator()
     qtbot.addWidget(nav)
-    nav.add_file("f0", FakeFd())
+    _add_attached(nav, "f0", FakeFd())
     nav.channel_list._all()
     nav.channel_list._none()
     fi = nav.channel_list._file_items["f0"]
@@ -141,7 +150,7 @@ def test_channel_none_button_clears(qapp, qtbot):
 def test_channel_selected_button_filters_to_checked(qapp, qtbot):
     nav = FileNavigator()
     qtbot.addWidget(nav)
-    nav.add_file("f0", FakeFd())
+    _add_attached(nav, "f0", FakeFd())
     fi = nav.channel_list._file_items["f0"]
     fi.child(0).setCheckState(0, Qt.Checked)
     nav.channel_list.btn_selected_only.click()
@@ -181,8 +190,100 @@ def test_channel_over_threshold_warns(qapp, qtbot, monkeypatch):
             return ["#000"] * 20
     nav = FileNavigator()
     qtbot.addWidget(nav)
-    nav.add_file("f0", WideFd())
+    _add_attached(nav, "f0", WideFd())
     with patch('mf4_analyzer.ui.widgets.QMessageBox.question',
                return_value=False) as q:
         nav.channel_list._all()
     assert q.called
+
+
+def test_channel_tree_projects_only_attached_files(qapp):
+    nav = FileNavigator()
+    nav.add_file("f0", FakeFd(short_name="one"))
+    nav.add_file("f1", FakeFd(short_name="two"))
+
+    nav.set_attached_file_ids(["f1"])
+
+    assert nav.get_attached_file_ids() == ["f1"]
+    assert nav.channel_list._file_items["f0"].isHidden()
+    assert not nav.channel_list._file_items["f1"].isHidden()
+
+
+def test_explicit_empty_attachment_shows_real_empty_state(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", FakeFd())
+    nav.show()
+
+    nav.set_attached_file_ids([])
+
+    assert nav.channel_list.empty_state.isVisible()
+    assert not nav.channel_list.search.isEnabled()
+    assert not nav.channel_list.btn_selected_only.isEnabled()
+    assert not nav.channel_list.config_bar.btn_apply.isEnabled()
+
+
+def test_attachment_projection_does_not_emit_channel_change(qapp, qtbot):
+    nav = FileNavigator()
+    nav.add_file("f0", FakeFd())
+
+    with qtbot.assertNotEmitted(nav.channels_changed):
+        nav.set_attached_file_ids(["f0"])
+
+
+def test_group_projection_hides_source_when_no_raster_is_attached(qapp):
+    nav = FileNavigator()
+    source = "C:/data/grouped.hdf"
+    nav.add_file(
+        "f0",
+        FakeFd(filepath=source, label_suffix="1 kHz", fs=1000.0),
+    )
+    nav.add_file(
+        "f1",
+        FakeFd(filepath=source, label_suffix="2 kHz", fs=2000.0),
+    )
+
+    nav.set_attached_file_ids(["f1"])
+
+    parent = nav.channel_list._source_items[str(Path(source))]
+    assert not parent.isHidden()
+    assert nav.channel_list._raster_items["f0"].isHidden()
+    assert not nav.channel_list._raster_items["f1"].isHidden()
+    nav.set_attached_file_ids([])
+    assert parent.isHidden()
+
+
+def test_detach_parent_bubbles_all_attached_group_fids_once(qapp, qtbot):
+    nav = FileNavigator()
+    source = "C:/data/grouped.hdf"
+    nav.add_file("f0", FakeFd(filepath=source, label_suffix="1 kHz"))
+    nav.add_file("f1", FakeFd(filepath=source, label_suffix="2 kHz"))
+    nav.set_attached_file_ids(["f0", "f1"])
+    parent = nav.channel_list._source_items[str(Path(source))]
+
+    with qtbot.waitSignal(nav.files_detach_requested, timeout=200) as emitted:
+        nav.channel_list._on_item_clicked(parent, 2)
+
+    assert emitted.args == [("f0", "f1"), parent.text(0)]
+
+
+def test_group_parent_checkbox_changes_only_attached_rasters(qapp):
+    nav = FileNavigator()
+    source = "C:/data/grouped.hdf"
+    nav.add_file("f0", FakeFd(filepath=source, label_suffix="1 kHz"))
+    nav.add_file("f1", FakeFd(filepath=source, label_suffix="2 kHz"))
+    nav.set_attached_file_ids(["f1"])
+    parent = nav.channel_list._source_items[str(Path(source))]
+
+    parent.setCheckState(0, Qt.Checked)
+
+    assert all(
+        nav.channel_list._raster_items["f0"].child(idx).checkState(0)
+        == Qt.Unchecked
+        for idx in range(nav.channel_list._raster_items["f0"].childCount())
+    )
+    assert all(
+        nav.channel_list._raster_items["f1"].child(idx).checkState(0)
+        == Qt.Checked
+        for idx in range(nav.channel_list._raster_items["f1"].childCount())
+    )
