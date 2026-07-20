@@ -831,7 +831,7 @@ class MultiFileChannelWidget(QWidget):
         elif act_split is not None and chosen is act_split:
             self.split_axis_group(sel_keys)
 
-    def remove_file(self, fid):
+    def remove_file(self, fid, *, emit=True):
         # Clean up colors and files dict
         for k in [k for k in self._colors if k[0] == fid]:
             del self._colors[k]
@@ -874,7 +874,8 @@ class MultiFileChannelWidget(QWidget):
         self._update_edit_enabled()
         self._apply_filters()
         self._sync_empty_state()
-        self.channels_changed.emit()
+        if emit:
+            self.channels_changed.emit()
 
     def get_checked_channels(self):
         result = []

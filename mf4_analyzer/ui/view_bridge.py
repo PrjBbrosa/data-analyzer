@@ -57,6 +57,7 @@ def capture_view(window) -> ViewState:
     return ViewState(
         name="",
         tab_color="",
+        attached_file_ids=list(navigator.get_attached_file_ids()),
         checked=checked,
         hidden_channels=hidden_channels,
         colors=colors,
@@ -72,6 +73,7 @@ def capture_view(window) -> ViewState:
 def capture_controls_into(state: ViewState, window, canvas=None) -> None:
     """Capture widget/control state into ``state`` for the given time pane."""
     fresh = capture_view(window)
+    state.attached_file_ids = fresh.attached_file_ids
     state.checked = fresh.checked
     state.hidden_channels = fresh.hidden_channels
     state.colors = fresh.colors
@@ -123,6 +125,7 @@ def apply_controls_from_state(state: ViewState, window, canvas=None) -> None:
     target = canvas if canvas is not None else chart_stack.canvas_time
 
     with _signals_blocked(navigator), _signals_blocked(chart_stack):
+        navigator.set_attached_file_ids(state.attached_file_ids)
         navigator.set_channel_colors(state.colors)
         navigator.set_checked_channels(state.checked)
         navigator.set_hidden_channels(state.hidden_channels)

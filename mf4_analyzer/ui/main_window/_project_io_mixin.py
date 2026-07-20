@@ -126,8 +126,8 @@ class ProjectIOMixin:
         - Thin wrapper around the existing private ``_load_one(fp)`` flow.
         - Cockpit MUST NOT call ``_load_one`` directly.
 
-        This is the only Analyzer-side modification authorized by the
-        plan; ``_load_one``'s body stays unchanged.
+        The delegated ``_load_one`` transaction also performs the shared
+        post-load attachment step used by every supported source format.
         """
         self._load_one(str(path))
 
@@ -189,6 +189,14 @@ class ProjectIOMixin:
         return fd
 
     def _load_one(self, fp, *, blf_dbc_paths=None):
+        before_fids = set(self.files)
+        try:
+            return self._load_one_impl(fp, blf_dbc_paths=blf_dbc_paths)
+        finally:
+            new_fids = [fid for fid in self.files if fid not in before_fids]
+            self._on_source_load_finished(new_fids)
+
+    def _load_one_impl(self, fp, *, blf_dbc_paths=None):
         try:
             self.statusBar.showMessage(f"加载: {fp}");
             QApplication.processEvents()
@@ -614,8 +622,12 @@ class ProjectIOMixin:
         # single entry point so the 'fft' and 'order' caches are also cleared
         # (previously two separate calls; now one, semantically equivalent).
         self._invalidate_all_analysis_caches_for_fid(fid)
+        self._remove_file_from_all_time_views(fid)
         del self.files[fid]
-        self.navigator.remove_file(fid)
+        self.navigator.remove_file(fid, emit=False)
+        resolved = self._focused_time_view_state()
+        if resolved is not None:
+            self._project_view_controls(resolved[0])
         self._active = self.navigator._active_fid  # navigator picks fallback
         self._update_info()
         self._reset_plot_state(scope='file')
@@ -682,24 +694,10 @@ class ProjectIOMixin:
         self.statusBar.showMessage(f"已保存项目: {path.name}")
         self.toast("已保存项目", "success")
 
-    def open_project(self, path):
-        """Restore a session from a ``.tlproj`` file: re-read referenced source
-        files (skipping missing ones), reinstall saved Views with fids remapped
-        to freshly minted ids, and select the saved active file / mode."""
-        from pathlib import Path
-        from PyQt5.QtWidgets import QMessageBox
-        from .. import project_io as pio
-        from ..view_state import ViewState
-        path = Path(path)
-
-        doc = pio.load_project_from_json(path)
-        self.close_all()
-        # Fresh restore: clear any stale auto-recompute queue from a prior open.
-        self._analysis_restore_pending = set()
-
+    def _restore_project_file_refs(self, doc, path, pio):
         fid_map = {}
         missing = []
-        pending_by_path = {}  # resolved path -> new fids from one _load_one, unconsumed
+        pending_by_path = {}
         for ref in doc.files:
             resolved = pio.resolve_file_path(ref, path)
             if resolved is None:
@@ -721,6 +719,29 @@ class ProjectIOMixin:
             fd.fs = float(ref.fs)
             if ref.time_source in ("generated", "manual"):
                 fd.rebuild_time_axis(float(ref.fs))
+        return fid_map, missing
+
+    def open_project(self, path):
+        """Restore a session from a ``.tlproj`` file: re-read referenced source
+        files (skipping missing ones), reinstall saved Views with fids remapped
+        to freshly minted ids, and select the saved active file / mode."""
+        from pathlib import Path
+        from PyQt5.QtWidgets import QMessageBox
+        from .. import project_io as pio
+        from ..view_state import ViewState
+        path = Path(path)
+
+        doc = pio.load_project_from_json(path)
+        self.close_all()
+        # Fresh restore: clear any stale auto-recompute queue from a prior open.
+        self._analysis_restore_pending = set()
+
+        old_restoring = getattr(self, "_restoring_project", False)
+        self._restoring_project = True
+        try:
+            fid_map, missing = self._restore_project_file_refs(doc, path, pio)
+        finally:
+            self._restoring_project = old_restoring
 
         self._restore_project_filter(doc.filter)
 
@@ -871,8 +892,9 @@ class ProjectIOMixin:
         if coordinator is not None:
             coordinator.invalidate_all()
         for fid in list(self.files.keys()):
+            self._remove_file_from_all_time_views(fid)
             del self.files[fid]
-            self.navigator.remove_file(fid)
+            self.navigator.remove_file(fid, emit=False)
         self._active = None
         self._update_info()
         self._reset_plot_state(scope='all')

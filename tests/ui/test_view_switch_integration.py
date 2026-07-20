@@ -111,6 +111,7 @@ def test_switch_view_preserves_per_view_channels(qtbot, qapp, loaded_csv):
 
     w._on_view_new()
     qapp.processEvents()
+    w._attach_files_to_focused_view([fid])
 
     _set_checked(w, "torque")
     w.plot_time()
@@ -147,6 +148,7 @@ def test_switch_view_restores_screen_snapshot_state(qtbot, qapp, loaded_csv):
 
     w._on_view_new()
     qapp.processEvents()
+    w._attach_files_to_focused_view([fid])
 
     _set_checked(w, "torque")
     w.chart_stack.set_plot_mode("subplot")
@@ -245,6 +247,7 @@ def test_duplicate_inactive_before_active_captures_current_view(qtbot, qapp, loa
 
     w._on_view_new()
     qapp.processEvents()
+    w._attach_files_to_focused_view([fid])
     _set_checked(w, "speed")
     w.plot_time()
     qapp.processEvents()
@@ -269,6 +272,7 @@ def test_delete_inactive_before_active_captures_current_view(qtbot, qapp, loaded
 
     w._on_view_new()
     qapp.processEvents()
+    w._attach_files_to_focused_view([fid])
     _set_checked(w, "speed")
     w.plot_time()
     qapp.processEvents()

@@ -7,6 +7,8 @@ class _Nav:
         self._checked = [("f1", "rpm", "#111111")]
         self._hidden = [("f1", "rpm")]
         self._colors = {("f1", "rpm"): "#111111", ("f1", "spd"): "#222222"}
+        self._attached = ["f1"]
+        self.set_attached = None
         self.set_checked = None
         self.set_hidden = None
         self.set_colors = None
@@ -20,6 +22,9 @@ class _Nav:
     def get_checked_channels(self):
         return list(self._checked)
 
+    def get_attached_file_ids(self):
+        return list(self._attached)
+
     def get_channel_colors(self):
         return dict(self._colors)
 
@@ -28,6 +33,9 @@ class _Nav:
 
     def set_checked_channels(self, checked):
         self.set_checked = list(checked)
+
+    def set_attached_file_ids(self, fids):
+        self.set_attached = list(fids)
 
     def set_hidden_channels(self, hidden):
         self.set_hidden = list(hidden)
@@ -141,6 +149,7 @@ def test_capture_view_reads_full_screen_state():
     state = view_bridge.capture_view(win)
 
     assert state.checked == [("f1", "rpm")]
+    assert state.attached_file_ids == ["f1"]
     assert state.hidden_channels == [("f1", "rpm")]
     assert state.colors == {("f1", "rpm"): "#111111"}
     assert state.plot_mode == "overlay"
@@ -227,6 +236,7 @@ def test_capture_into_preserves_tab_metadata_and_updates_screen_state():
 
     assert state.name == "My View"
     assert state.tab_color == "#abcdef"
+    assert state.attached_file_ids == ["f1"]
     assert state.checked == [("f2", "torque")]
     assert state.hidden_channels == [("f2", "torque")]
     assert state.colors == {("f2", "torque"): "#333333"}
@@ -252,6 +262,7 @@ def test_apply_view_writes_widgets_and_restore_axis_hook_without_replot():
     state = ViewState(
         name="v",
         tab_color="#000000",
+        attached_file_ids=["f1"],
         checked=[("f1", "rpm")],
         hidden_channels=[("f1", "rpm")],
         colors={("f1", "rpm"): "#abcdef"},
@@ -264,6 +275,7 @@ def test_apply_view_writes_widgets_and_restore_axis_hook_without_replot():
     view_bridge.apply_view(state, win)
 
     assert win.navigator.set_colors == {("f1", "rpm"): "#abcdef"}
+    assert win.navigator.set_attached == ["f1"]
     assert win.navigator.set_checked == [("f1", "rpm")]
     assert win.navigator.set_hidden == [("f1", "rpm")]
     assert win.chart_stack._plot_mode == "subplot"

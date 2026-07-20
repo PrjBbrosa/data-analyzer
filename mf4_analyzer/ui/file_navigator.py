@@ -354,7 +354,7 @@ class FileNavigator(QWidget):
         self._refresh_header()
         self._activate(fid)
 
-    def remove_file(self, fid):
+    def remove_file(self, fid, *, emit=True):
         rows_key = self._fid_to_key.pop(fid, None)
         if rows_key is not None:
             row = self._rows.get(rows_key)
@@ -364,7 +364,7 @@ class FileNavigator(QWidget):
                     self._rows.pop(rows_key)
                     row.setParent(None)
                     row.deleteLater()
-        self.channel_list.remove_file(fid)
+        self.channel_list.remove_file(fid, emit=emit)
         if self._active_fid == fid:
             remaining = list(self._fid_to_key.keys())
             new_active = remaining[0] if remaining else None

@@ -42,6 +42,7 @@ from ._drop_import_mixin import DropImportMixin
 from ._fft_mixin import FFTMixin
 from ._order_mixin import OrderMixin
 from ._fft_time_mixin import FFTTimeMixin
+from ._channel_scope_mixin import ChannelScopeMixin
 from ._project_io_mixin import ProjectIOMixin
 from ._view_mixin import ViewMixin
 
@@ -65,8 +66,8 @@ class SurfaceStatusBar(QStatusBar):
 
 
 class MainWindow(
-    DropImportMixin, AnalysisMixin, FFTMixin, OrderMixin, FFTTimeMixin, ProjectIOMixin,
-    ViewMixin, QMainWindow,
+    DropImportMixin, AnalysisMixin, FFTMixin, OrderMixin, FFTTimeMixin,
+    ChannelScopeMixin, ProjectIOMixin, ViewMixin, QMainWindow,
 ):
     def __init__(self):
         super().__init__()
@@ -98,6 +99,7 @@ class MainWindow(
             self._db_reference_settings()
         )
         self._init_ui()
+        self._init_channel_scope()
         from functools import partial
         from .fft_time_coordinator import (
             FftTimeCoordinator,
@@ -646,6 +648,15 @@ class MainWindow(
         self.navigator.file_activated.connect(self._on_file_activated)
         self.navigator.file_close_requested.connect(self._on_file_close_requested)
         self.navigator.close_all_requested.connect(self._on_close_all_requested)
+        self.navigator.files_attach_requested.connect(
+            self._attach_files_to_focused_view
+        )
+        self.navigator.files_detach_requested.connect(
+            self._detach_files_from_focused_view
+        )
+        self.navigator.auto_attach_changed.connect(
+            self._on_auto_attach_changed
+        )
         self.navigator.primary_channel_requested.connect(
             self._on_primary_channel_requested
         )
