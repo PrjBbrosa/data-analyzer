@@ -1,4 +1,5 @@
 """Reusable widgets: StatisticsPanel, MultiFileChannelWidget, Toast."""
+import json
 from collections import Counter
 
 from PyQt5.QtWidgets import (
@@ -35,6 +36,9 @@ from ...ui_kit.icons import Icons, icon_device_pixel_ratio
 from .. import hints
 from ..axis_group_palette import axis_group_color
 from .channel_config_bar import ChannelConfigBar
+
+
+INTERNAL_FILE_FIDS_MIME = "application/x-tracelab-file-fids"
 
 
 def _fmt_rate(fs):
@@ -75,6 +79,7 @@ def _swatch_icon(color, size=11):
 class StatisticsPanel(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setAcceptDrops(True)
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken);
         self.setMaximumHeight(110)
         layout = QVBoxLayout(self);
@@ -486,6 +491,47 @@ class MultiFileChannelWidget(QWidget):
         self._clear_detach_hover()
         self._apply_filters()
         self._sync_empty_state()
+
+    def _file_fids_from_mime(self, mime):
+        if mime is None or not mime.hasFormat(INTERNAL_FILE_FIDS_MIME):
+            return ()
+        try:
+            payload = json.loads(
+                bytes(mime.data(INTERNAL_FILE_FIDS_MIME)).decode("utf-8")
+            )
+        except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            return ()
+        if not isinstance(payload, list):
+            return ()
+        known = self._files
+        return tuple(
+            fid
+            for fid in dict.fromkeys(
+                value for value in payload if isinstance(value, str)
+            )
+            if fid in known
+        )
+
+    def dragEnterEvent(self, event):
+        if self._file_fids_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self._file_fids_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event):
+        fids = self._file_fids_from_mime(event.mimeData())
+        if not fids:
+            event.ignore()
+            return
+        self.files_attach_requested.emit(fids)
+        event.setDropAction(Qt.CopyAction)
+        event.accept()
 
     def _sync_empty_state(self):
         has_attached = bool(self._attached_file_ids)

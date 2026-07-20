@@ -1,6 +1,10 @@
+import json
 from pathlib import Path
 
-from mf4_analyzer.ui.file_navigator import FileNavigator
+from PyQt5.QtCore import QMimeData, QPointF
+from PyQt5.QtGui import QDropEvent
+
+from mf4_analyzer.ui.file_navigator import FileNavigator, _FileRow
 
 
 def test_file_navigator_constructs(qapp):
@@ -287,3 +291,59 @@ def test_group_parent_checkbox_changes_only_attached_rasters(qapp):
         == Qt.Checked
         for idx in range(nav.channel_list._raster_items["f1"].childCount())
     )
+
+
+def test_file_row_drag_payload_contains_every_group_fid(qapp):
+    row = _FileRow("f0", FakeFd())
+    row.add_fid("f1", FakeFd())
+
+    mime = row._build_drag_mime()
+
+    assert json.loads(bytes(mime.data(row.MIME_TYPE))) == ["f0", "f1"]
+
+
+def test_auto_attach_toggle_is_compact_and_emits(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+
+    assert nav.btn_auto_attach.maximumWidth() <= 24
+    assert nav.auto_attach_enabled() is True
+    with qtbot.waitSignal(nav.auto_attach_changed, timeout=200) as emitted:
+        nav.btn_auto_attach.click()
+
+    assert emitted.args == [False]
+    assert nav.auto_attach_enabled() is False
+
+
+def test_internal_file_drop_emits_known_fids_once(qapp, qtbot):
+    nav = FileNavigator()
+    nav.add_file("f0", FakeFd())
+    nav.add_file("f1", FakeFd())
+    mime = QMimeData()
+    mime.setData(
+        _FileRow.MIME_TYPE,
+        json.dumps(["f0", "f1", "f0", "missing"]).encode("utf-8"),
+    )
+    event = QDropEvent(
+        QPointF(4, 4), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier
+    )
+
+    with qtbot.waitSignal(nav.files_attach_requested, timeout=200) as emitted:
+        nav.channel_list.dropEvent(event)
+
+    assert emitted.args == [("f0", "f1")]
+    assert event.isAccepted()
+
+
+def test_malformed_internal_file_drop_is_ignored(qapp, qtbot):
+    nav = FileNavigator()
+    mime = QMimeData()
+    mime.setData(_FileRow.MIME_TYPE, b"not-json")
+    event = QDropEvent(
+        QPointF(4, 4), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier
+    )
+
+    with qtbot.assertNotEmitted(nav.files_attach_requested):
+        nav.channel_list.dropEvent(event)
+
+    assert not event.isAccepted()

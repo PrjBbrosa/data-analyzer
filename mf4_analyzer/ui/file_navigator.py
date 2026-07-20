@@ -1,13 +1,16 @@
 """Left pane: file list (replacing QTabWidget) + channel tree."""
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
+import json
+
+from PyQt5.QtCore import QMimeData, QPoint, QSignalBlocker, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QDrag
 from PyQt5.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox,
+    QApplication, QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox,
     QScrollArea, QSizePolicy, QSplitter, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..ui_kit.icons import Icons
 from ..ui_kit.menus import apply_rounded_menu_chrome
-from .widgets import MultiFileChannelWidget
+from .widgets import INTERNAL_FILE_FIDS_MIME, MultiFileChannelWidget
 
 
 class _ElidedLabel(QLabel):
@@ -50,6 +53,7 @@ class _ElidedLabel(QLabel):
 class _FileRow(QFrame):
     activated = pyqtSignal(str)       # emits primary fid
     close_requested = pyqtSignal(str)  # emits rows_key (filepath_str or fid)
+    MIME_TYPE = INTERNAL_FILE_FIDS_MIME
 
     def __init__(self, fid, fd, parent=None):
         super().__init__(parent)
@@ -60,6 +64,7 @@ class _FileRow(QFrame):
         self._rows_key = fid  # default key; caller may override via _set_rows_key
         self.setObjectName("fileRow")
         self._active = False
+        self._drag_start = None
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -144,8 +149,34 @@ class _FileRow(QFrame):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            self._drag_start = QPoint(event.pos())
             self.activated.emit(self.fid)
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (
+            not (event.buttons() & Qt.LeftButton)
+            or self._drag_start is None
+            or (event.pos() - self._drag_start).manhattanLength()
+            < QApplication.startDragDistance()
+        ):
+            return super().mouseMoveEvent(event)
+        self._drag_start = None
+        drag = QDrag(self)
+        drag.setMimeData(self._build_drag_mime())
+        drag.exec_(Qt.CopyAction)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start = None
+        super().mouseReleaseEvent(event)
+
+    def _build_drag_mime(self):
+        mime = QMimeData()
+        mime.setData(
+            self.MIME_TYPE,
+            json.dumps([str(fid) for fid in self._fids]).encode("utf-8"),
+        )
+        return mime
 
     def set_active(self, active):
         self._active = active
@@ -167,6 +198,7 @@ class FileNavigator(QWidget):
     channel_editor_requested = pyqtSignal()
     files_attach_requested = pyqtSignal(object)
     files_detach_requested = pyqtSignal(object, str)
+    auto_attach_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -212,6 +244,18 @@ class FileNavigator(QWidget):
         self._lbl_count = QLabel("0")
         self._lbl_count.setObjectName("paneCount")
         head.addWidget(self._lbl_count)
+        self.btn_auto_attach = QToolButton()
+        self.btn_auto_attach.setObjectName("autoAttachFiles")
+        self.btn_auto_attach.setIcon(Icons.cloud_download())
+        self.btn_auto_attach.setIconSize(QSize(16, 16))
+        self.btn_auto_attach.setFixedSize(QSize(24, 24))
+        self.btn_auto_attach.setProperty("role", "tool")
+        self.btn_auto_attach.setAutoRaise(True)
+        self.btn_auto_attach.setCheckable(True)
+        self.btn_auto_attach.setChecked(True)
+        self.btn_auto_attach.toggled.connect(self._on_auto_attach_toggled)
+        self._sync_auto_attach_button()
+        head.addWidget(self.btn_auto_attach)
         # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24) — same as
         # _btn_close above; kebab is admin-only and shouldn't dwarf the
         # "文件" header label.
@@ -350,6 +394,15 @@ class FileNavigator(QWidget):
     def set_attached_file_ids(self, fids):
         self.channel_list.set_attached_file_ids(fids)
 
+    def auto_attach_enabled(self):
+        return self.btn_auto_attach.isChecked()
+
+    def set_auto_attach_enabled(self, enabled):
+        blocker = QSignalBlocker(self.btn_auto_attach)
+        self.btn_auto_attach.setChecked(bool(enabled))
+        del blocker
+        self._sync_auto_attach_button()
+
     def get_hidden_channels(self):
         return self.channel_list.get_hidden_channels()
 
@@ -395,6 +448,19 @@ class FileNavigator(QWidget):
         if new_key is not None and new_key in self._rows:
             self._rows[new_key].set_active(True)
         self.file_activated.emit(fid)
+
+    def _on_auto_attach_toggled(self, enabled):
+        self._sync_auto_attach_button()
+        self.auto_attach_changed.emit(bool(enabled))
+
+    def _sync_auto_attach_button(self):
+        enabled = self.btn_auto_attach.isChecked()
+        self.btn_auto_attach.setToolTip(
+            "自动加入当前 View：开" if enabled else "自动加入当前 View：关"
+        )
+        self.btn_auto_attach.setProperty("active", enabled)
+        self.btn_auto_attach.style().unpolish(self.btn_auto_attach)
+        self.btn_auto_attach.style().polish(self.btn_auto_attach)
 
     def _request_close_group(self, rows_key):
         """Emit close_requested for ALL fids belonging to this rows_key."""
