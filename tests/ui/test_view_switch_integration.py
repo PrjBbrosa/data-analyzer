@@ -262,9 +262,12 @@ def test_duplicate_inactive_before_active_captures_current_view(qtbot, qapp, loa
     assert _checked_pairs(w) == [(fid, "torque")]
 
 
-def test_delete_inactive_before_active_captures_current_view(qtbot, qapp, loaded_csv):
+def test_delete_inactive_before_active_captures_current_view(
+    qtbot, qapp, loaded_csv, monkeypatch
+):
     w = _make_loaded_window(qtbot, qapp, loaded_csv)
     fid = _fid(w)
+    monkeypatch.setattr(w, "_confirm_view_delete", lambda *_a: True)
 
     _set_checked(w, "torque")
     w.plot_time()
@@ -284,3 +287,49 @@ def test_delete_inactive_before_active_captures_current_view(qtbot, qapp, loaded
     assert w.view_manager.active == 0
     assert w.view_manager.get(0).checked == [(fid, "speed")]
     assert _checked_pairs(w) == [(fid, "speed")]
+
+
+def test_delete_view_cancel_keeps_view(qtbot, qapp, loaded_csv, monkeypatch):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    prompts = []
+    monkeypatch.setattr(
+        w, "_confirm_view_delete", lambda name: prompts.append(name) or False
+    )
+
+    w._on_view_new()
+    qapp.processEvents()
+    assert len(w.view_manager.views) == 2
+    target_name = w.view_manager.get(0).name
+
+    w._on_view_delete(0)
+    qapp.processEvents()
+
+    # Cancelling the confirm keeps every view intact.
+    assert prompts == [target_name]
+    assert len(w.view_manager.views) == 2
+
+
+def test_delete_view_confirm_copy_defaults_to_cancel(qtbot, qapp, loaded_csv):
+    from PyQt5.QtWidgets import QMessageBox
+
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    w._on_view_new()
+    qapp.processEvents()
+
+    boxes = []
+    orig_exec = QMessageBox.exec_
+    try:
+        QMessageBox.exec_ = lambda box: boxes.append(box) or 0
+        assert w._confirm_view_delete("视图 1") is False
+    finally:
+        QMessageBox.exec_ = orig_exec
+
+    assert len(boxes) == 1
+    box = boxes[0]
+    # windowTitle() is intentionally not asserted: macOS renders QMessageBox as
+    # a native alert and reads the title back as "" (same quirk the batch-cancel
+    # test hits). Body text + buttons are reliable across platforms.
+    assert "视图 1" in box.text()
+    assert box.defaultButton().text() == "取消"
+    labels = {b.text() for b in box.buttons()}
+    assert {"删除", "取消"} <= labels

@@ -1763,6 +1763,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def clear_remarks(self) -> None:
         self._remark_artist.clear(self._remarks)
 
+    def remark_count(self) -> int:
+        return len(self._remarks)
+
     def _append_remark(
         self, *, vb, x: float, y: float, color: str, unit_x: str,
         unit_y: str = "", plot=None,

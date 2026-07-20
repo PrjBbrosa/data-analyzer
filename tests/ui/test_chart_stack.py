@@ -723,6 +723,45 @@ def test_time_clear_annotation_button_calls_canvas_clear_remarks(qapp, qtbot):
     assert calls == ["clear"]
 
 
+def test_clear_annotation_skips_confirm_when_no_remarks(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    card = cs._time_card
+
+    calls = []
+    card.canvas.clear_remarks = lambda: calls.append("clear")
+    card.canvas.remark_count = lambda: 0
+    confirmed = []
+    card._confirm_clear_annotations = lambda count: confirmed.append(count) or True
+
+    card._clear_annotation_btn.click()
+
+    # Empty chart clears silently — no dialog on a high-frequency no-op click.
+    assert confirmed == []
+    assert calls == ["clear"]
+
+
+def test_clear_annotation_confirms_when_remarks_present(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    card = cs._time_card
+
+    calls = []
+    card.canvas.clear_remarks = lambda: calls.append("clear")
+    card.canvas.remark_count = lambda: 2
+
+    prompts = []
+    card._confirm_clear_annotations = lambda count: prompts.append(count) or False
+    card._clear_annotation_btn.click()
+    assert prompts == [2]
+    assert calls == []  # cancelled → nothing cleared
+
+    card._confirm_clear_annotations = lambda count: prompts.append(count) or True
+    card._clear_annotation_btn.click()
+    assert prompts == [2, 2]
+    assert calls == ["clear"]  # accepted → cleared
+
+
 def test_analysis_annotation_controls_follow_zoom_on_left(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)

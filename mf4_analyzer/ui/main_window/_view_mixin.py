@@ -1,6 +1,6 @@
 """ViewMixin: time-domain split-view switch / capture / render pipeline."""
 
-from PyQt5.QtWidgets import QColorDialog
+from PyQt5.QtWidgets import QColorDialog, QMessageBox
 
 
 class ViewMixin:
@@ -306,8 +306,28 @@ class ViewMixin:
         self.view_manager.new_view()
 
     def _on_view_delete(self, idx):
+        # 删除 View 会一并丢弃它的通道范围、分屏配对与已加入文件，且无法撤销。
+        # 删除是低频、破坏性操作，故每次都确认——不属于会被弹窗打扰的高频动作。
+        if not (0 <= idx < len(self.view_manager.views)):
+            return
+        if len(self.view_manager.views) <= 1:
+            return
+        if not self._confirm_view_delete(self.view_manager.get(idx).name):
+            return
         self._capture_current_view()
         self.view_manager.delete_view(idx)
+
+    def _confirm_view_delete(self, name):
+        box = QMessageBox(self)
+        box.setWindowTitle("删除 View")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(f"删除 View「{name}」？")
+        box.setInformativeText("该视图的通道范围、分屏与已加入文件将一并移除，且无法撤销。")
+        delete = box.addButton("删除", QMessageBox.DestructiveRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec_()
+        return box.clickedButton() is delete
 
     def _on_view_duplicate(self, idx):
         self._capture_current_view()

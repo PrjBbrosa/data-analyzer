@@ -2637,6 +2637,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def clear_remarks(self) -> None:
         self._remark_artist.clear(self._remarks)
 
+    def remark_count(self) -> int:
+        return len(self._remarks)
+
     def _remark_point_at(self, x: float, y: float):
         if not self._has_result or self._matrix_disp is None:
             return None

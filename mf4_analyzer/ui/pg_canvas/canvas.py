@@ -2031,6 +2031,9 @@ class TimeDomainCanvasPG(QWidget):
     def clear_remarks(self):
         return self._annotations.clear_remarks()
 
+    def remark_count(self):
+        return len(self._annotations.remarks)
+
     def _handle_overlay_mouse_press(self, event):
         return OverlayAxisManager._handle_overlay_mouse_press(
             self._overlay_axes,

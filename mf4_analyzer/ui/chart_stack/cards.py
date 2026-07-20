@@ -2,7 +2,7 @@
 from PyQt5.QtCore import QEvent, QSettings, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence
 from PyQt5.QtWidgets import (
-    QAction, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+    QAction, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSizePolicy,
     QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -542,8 +542,36 @@ class _ChartCard(QWidget):
         self._refresh_bottom_hint()
 
     def clear_annotations(self):
-        if hasattr(self.canvas, 'clear_remarks'):
-            self.canvas.clear_remarks()
+        canvas = self.canvas
+        if not hasattr(canvas, 'clear_remarks'):
+            return
+        # 一键清空全部标注不可撤销；仅当图表里确有标注时才拦一道，
+        # 空图直接静默清空，避免高频误触时的无谓弹窗。
+        count = self._current_remark_count(canvas)
+        if count > 0 and not self._confirm_clear_annotations(count):
+            return
+        canvas.clear_remarks()
+
+    def _current_remark_count(self, canvas):
+        counter = getattr(canvas, 'remark_count', None)
+        if not callable(counter):
+            return 0
+        try:
+            return int(counter())
+        except Exception:
+            return 0
+
+    def _confirm_clear_annotations(self, count):
+        box = QMessageBox(self)
+        box.setWindowTitle('清除标注')
+        box.setIcon(QMessageBox.Question)
+        box.setText(f'确定清除当前图表的 {count} 个标注？')
+        box.setInformativeText('清除后无法撤销。')
+        clear = box.addButton('清除标注', QMessageBox.DestructiveRole)
+        cancel = box.addButton('取消', QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec_()
+        return box.clickedButton() is clear
 
     def open_chart_options(self):
         # In split mode the primary card's options button is the shared
