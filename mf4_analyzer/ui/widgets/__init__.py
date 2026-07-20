@@ -255,6 +255,7 @@ class _CheckTolerantTree(QTreeWidget):
 
 class MultiFileChannelWidget(QWidget):
     channels_changed = pyqtSignal()
+    visibility_changed = pyqtSignal(str, str, bool)
     # Emitted when the user picks 设为左轴 in a channel's right-click menu.
     # (fid, channel) — MainWindow makes that channel the overlay left axis.
     primary_channel_requested = pyqtSignal(str, str)
@@ -306,18 +307,22 @@ class MultiFileChannelWidget(QWidget):
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree._owner = self  # _CheckTolerantTree.drawBranches reads group state
         self.tree.setIndentation(16)  # 收窄默认~20；并复用为共轴徽标槽（Task 3）
-        self.tree.setHeaderLabels(['Channel', 'Pts']);
+        self.tree.setHeaderLabels(['Channel', 'Pts', '显示']);
         header = self.tree.header()
         # Channel column owns all spare width so long names aren't elided when
         # the dock is widened. Pts column auto-fits its 5-7 digit numbers.
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        header.resizeSection(2, 42)
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(40)
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.tree.headerItem().setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+        self.tree.headerItem().setTextAlignment(2, Qt.AlignCenter)
         self.tree.setAlternatingRowColors(True)
         self.tree.itemChanged.connect(self._on_item_changed)
+        self.tree.itemClicked.connect(self._on_item_clicked)
         # Right-click a channel row → 设为左轴 (overlay primary axis).
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
@@ -331,6 +336,9 @@ class MultiFileChannelWidget(QWidget):
         self._raster_items = {}  # fid -> QTreeWidgetItem (raster subgroup node)
         self._axis_groups = {}      # (fid, ch) -> group_id:int
         self._axis_group_seq = 0
+        # Per-TimeDomain-View projection. The persisted owner is ViewState;
+        # this set is the live channel-tree copy for the currently focused View.
+        self._hidden_channels = set()
         self.axis_groups_changed.connect(self.tree.viewport().update)
 
     def add_file(self, fid, fd):
@@ -383,6 +391,7 @@ class MultiFileChannelWidget(QWidget):
                 self._colors[(fid, ch)] = color
                 ci = QTreeWidgetItem([ch, str(n_rows)])
                 ci.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+                ci.setTextAlignment(2, Qt.AlignCenter)
                 ci.setFlags(ci.flags() | Qt.ItemIsUserCheckable)
                 ci.setCheckState(0, Qt.Unchecked)
                 ci.setData(0, Qt.UserRole, ('channel', fid, ch))
@@ -421,6 +430,7 @@ class MultiFileChannelWidget(QWidget):
                 self._colors[(fid, ch)] = color
                 ci = QTreeWidgetItem([ch, str(len(fd.data))])
                 ci.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+                ci.setTextAlignment(2, Qt.AlignCenter)
                 ci.setFlags(ci.flags() | Qt.ItemIsUserCheckable)
                 ci.setCheckState(0, Qt.Unchecked)
                 ci.setData(0, Qt.UserRole, ('channel', fid, ch))
@@ -432,16 +442,130 @@ class MultiFileChannelWidget(QWidget):
             self._file_items[fid] = fi
 
         self._apply_filters()
+        self._refresh_visibility_icons()
         self._update_edit_enabled()
 
     def _update_edit_enabled(self):
         """编辑通道 is only meaningful with at least one file loaded."""
         self.btn_edit.setEnabled(bool(self._files))
 
+    def _iter_channel_items(self):
+        def _walk(item):
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'channel':
+                yield item
+            for idx in range(item.childCount()):
+                yield from _walk(item.child(idx))
+
+        for idx in range(self.tree.topLevelItemCount()):
+            yield from _walk(self.tree.topLevelItem(idx))
+
+    def _channel_item_for(self, fid, channel):
+        for item in self._iter_channel_items():
+            data = item.data(0, Qt.UserRole)
+            if data[1] == fid and data[2] == channel:
+                return item
+        return None
+
+    def _sync_visibility_icon(self, item):
+        data = item.data(0, Qt.UserRole)
+        if not (data and data[0] == 'channel'):
+            return
+        key = (data[1], data[2])
+        checked = item.checkState(0) == Qt.Checked
+        previous = self._updating
+        self._updating = True
+        try:
+            if not checked:
+                item.setIcon(2, QIcon())
+                item.setToolTip(2, '')
+            elif key in self._hidden_channels:
+                item.setIcon(2, Icons.eye_closed())
+                item.setToolTip(2, '点击显示此通道（仅影响时域图）')
+            else:
+                item.setIcon(2, Icons.eye_open())
+                item.setToolTip(2, '点击隐藏此通道（仅影响时域图）')
+        finally:
+            self._updating = previous
+
+    def _refresh_visibility_icons(self):
+        for item in self._iter_channel_items():
+            self._sync_visibility_icon(item)
+
+    def get_hidden_channels(self):
+        return [
+            (fid, channel)
+            for fid, channel, _color in self.get_checked_channels()
+            if (fid, channel) in self._hidden_channels
+        ]
+
+    def set_hidden_channels(self, hidden):
+        checked = {
+            (fid, channel)
+            for fid, channel, _color in self.get_checked_channels()
+        }
+        wanted = set()
+        for entry in hidden or []:
+            try:
+                fid, channel = entry[:2]
+            except (TypeError, ValueError):
+                continue
+            key = (fid, channel)
+            if key in checked:
+                wanted.add(key)
+        self._hidden_channels = wanted
+        self._refresh_visibility_icons()
+
+    def get_visible_checked_channels(self):
+        return [
+            row for row in self.get_checked_channels()
+            if (row[0], row[1]) not in self._hidden_channels
+        ]
+
+    def set_channel_visible(self, fid, channel, visible, *, emit=True):
+        item = self._channel_item_for(fid, channel)
+        if item is None or item.checkState(0) != Qt.Checked:
+            return False
+        key = (fid, channel)
+        flag = bool(visible)
+        was_visible = key not in self._hidden_channels
+        if flag:
+            self._hidden_channels.discard(key)
+        else:
+            self._hidden_channels.add(key)
+        self._sync_visibility_icon(item)
+        changed = was_visible != flag
+        if changed and emit:
+            self.visibility_changed.emit(str(fid), str(channel), flag)
+        return changed
+
+    def set_time_visibility_available(self, available):
+        self.tree.setColumnHidden(2, not bool(available))
+
+    def _on_item_clicked(self, item, column):
+        if column != 2:
+            return
+        data = item.data(0, Qt.UserRole)
+        if not (data and data[0] == 'channel'):
+            return
+        if item.checkState(0) != Qt.Checked:
+            return
+        key = (data[1], data[2])
+        self.set_channel_visible(
+            data[1], data[2], key in self._hidden_channels,
+        )
+
     def _on_item_changed(self, item, col):
         if self._updating:
             return
         data = item.data(0, Qt.UserRole)
+
+        def _discard_hidden_descendants(node):
+            node_data = node.data(0, Qt.UserRole)
+            if node_data and node_data[0] == 'channel':
+                self._hidden_channels.discard((node_data[1], node_data[2]))
+            for child_idx in range(node.childCount()):
+                _discard_hidden_descendants(node.child(child_idx))
 
         if data and data[0] in ('file', 'source', 'raster'):
             checked = item.checkState(0) == Qt.Checked
@@ -483,7 +607,14 @@ class MultiFileChannelWidget(QWidget):
             self._updating = True
             _set_all(item, state)
             self._updating = False
+            _discard_hidden_descendants(item)
+        elif data and data[0] == 'channel':
+            # Checkbox membership changes always reset the display state: a
+            # newly checked channel opens its eye; an unchecked channel cannot
+            # retain an unreachable hidden marker.
+            self._hidden_channels.discard((data[1], data[2]))
 
+        self._refresh_visibility_icons()
         self._apply_filters()
         self.channels_changed.emit()
 
@@ -543,6 +674,9 @@ class MultiFileChannelWidget(QWidget):
             del self._files[fid]
         for k in [k for k in self._axis_groups if k[0] == fid]:
             del self._axis_groups[k]
+        self._hidden_channels = {
+            key for key in self._hidden_channels if key[0] != fid
+        }
         self._prune_axis_groups()
 
         # Check if nested (raster) or flat
@@ -690,8 +824,11 @@ class MultiFileChannelWidget(QWidget):
         try:
             for item in items:
                 item.setCheckState(0, state)
+                data = item.data(0, Qt.UserRole)
+                self._hidden_channels.discard((data[1], data[2]))
         finally:
             self._updating = False
+        self._refresh_visibility_icons()
         self._apply_filters()
         self.channels_changed.emit()
         return True
@@ -705,6 +842,11 @@ class MultiFileChannelWidget(QWidget):
             except (TypeError, ValueError):
                 continue
             wanted.add((fid, ch))
+
+        # Preserve hidden state only for channels that remain checked. Newly
+        # checked rows therefore default to visible; removed rows cannot leave
+        # stale hidden references behind.
+        self._hidden_channels.intersection_update(wanted)
 
         self._updating = True
         try:
@@ -742,6 +884,7 @@ class MultiFileChannelWidget(QWidget):
                 _set_in_subtree(self.tree.topLevelItem(i))
         finally:
             self._updating = False
+        self._refresh_visibility_icons()
         self._apply_filters()
 
     def get_channel_colors(self):
@@ -804,6 +947,9 @@ class MultiFileChannelWidget(QWidget):
                 self._updating = True
                 ri.child(0).setCheckState(0, Qt.Checked)
                 self._updating = False
+                data = ri.child(0).data(0, Qt.UserRole)
+                self._hidden_channels.discard((data[1], data[2]))
+                self._refresh_visibility_icons()
                 self._apply_filters()
                 self.channels_changed.emit()
         elif fid in self._file_items:
@@ -812,6 +958,9 @@ class MultiFileChannelWidget(QWidget):
                 self._updating = True
                 fi.child(0).setCheckState(0, Qt.Checked)
                 self._updating = False
+                data = fi.child(0).data(0, Qt.UserRole)
+                self._hidden_channels.discard((data[1], data[2]))
+                self._refresh_visibility_icons()
                 self._apply_filters()
                 self.channels_changed.emit()
 
@@ -878,6 +1027,8 @@ class MultiFileChannelWidget(QWidget):
             if data and data[0] == 'channel':
                 if not item.isHidden():
                     item.setCheckState(0, Qt.Checked)
+                    data = item.data(0, Qt.UserRole)
+                    self._hidden_channels.discard((data[1], data[2]))
             else:
                 for i in range(item.childCount()):
                     _check_visible(item.child(i))
@@ -885,11 +1036,13 @@ class MultiFileChannelWidget(QWidget):
         for i in range(self.tree.topLevelItemCount()):
             _check_visible(self.tree.topLevelItem(i))
         self._updating = False
+        self._refresh_visibility_icons()
         self._apply_filters()
         self.channels_changed.emit()
 
     def _none(self):
         self._updating = True
+        self._hidden_channels.clear()
 
         def _uncheck_all(item):
             item.setCheckState(0, Qt.Unchecked)
@@ -899,6 +1052,7 @@ class MultiFileChannelWidget(QWidget):
         for i in range(self.tree.topLevelItemCount()):
             _uncheck_all(self.tree.topLevelItem(i))
         self._updating = False
+        self._refresh_visibility_icons()
         self._apply_filters()
         self.channels_changed.emit()
 

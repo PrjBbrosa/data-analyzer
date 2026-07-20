@@ -46,6 +46,46 @@ def test_set_checked_channels_is_silent(qtbot):
     assert fired == []
 
 
+def test_set_hidden_channels_keeps_only_checked_known_channels(qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.add_file("f1", _FakeFileData())
+    widget.set_checked_channels([("f1", "rpm")])
+
+    widget.set_hidden_channels([
+        ("f1", "rpm"),
+        ("f1", "spd"),
+        ("missing", "rpm"),
+    ])
+
+    assert widget.get_hidden_channels() == [("f1", "rpm")]
+    assert widget.get_visible_checked_channels() == []
+
+
+def test_unchecking_channel_clears_hidden_state(qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.add_file("f1", _FakeFileData())
+    item = widget._file_items["f1"].child(0)
+    widget.set_checked_channels([("f1", "rpm")])
+    widget.set_hidden_channels([("f1", "rpm")])
+
+    item.setCheckState(0, Qt.Unchecked)
+
+    assert widget.get_hidden_channels() == []
+    assert item.icon(2).isNull()
+
+
+def test_set_channel_visible_rejects_unchecked_or_unknown_rows(qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.add_file("f1", _FakeFileData())
+
+    assert widget.set_channel_visible("f1", "rpm", False) is False
+    assert widget.set_channel_visible("missing", "rpm", False) is False
+    assert widget.get_hidden_channels() == []
+
+
 def test_color_roundtrip_refreshes_swatch_icon(qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)

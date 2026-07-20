@@ -3,6 +3,7 @@ from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QPushButton
 
+from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui.widgets import MultiFileChannelWidget
 
 
@@ -76,6 +77,85 @@ def test_channel_action_buttons_use_two_char_chinese(qapp, qtbot):
     assert "反选" not in labels
     # 编辑通道 moved down from the top toolbar onto the channel-action row.
     assert "编辑通道" in labels
+
+
+def test_channel_tree_has_compact_time_visibility_column(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+
+    assert widget.tree.columnCount() == 3
+    assert widget.tree.headerItem().text(2) == "显示"
+    assert widget.tree.header().sectionSize(2) == 42
+
+
+def test_time_visibility_icons_are_distinct(qapp):
+    opened = Icons.eye_open()
+    closed = Icons.eye_closed()
+
+    assert not opened.isNull()
+    assert not closed.isNull()
+    assert opened.cacheKey() != closed.cacheKey()
+
+
+def test_checked_channel_eye_toggles_without_unchecking(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.add_file("file-a", _MultiChannelFileData())
+    item = widget._file_items["file-a"].child(0)
+
+    assert item.icon(2).isNull()
+    item.setCheckState(0, Qt.Checked)
+    assert not item.icon(2).isNull()
+    assert item.toolTip(2) == "点击隐藏此通道（仅影响时域图）"
+
+    fired = []
+    widget.visibility_changed.connect(lambda *args: fired.append(args))
+    widget._on_item_clicked(item, 2)
+
+    assert item.checkState(0) == Qt.Checked
+    assert widget.get_hidden_channels() == [("file-a", "speed")]
+    assert widget.get_visible_checked_channels() == []
+    assert item.toolTip(2) == "点击显示此通道（仅影响时域图）"
+    assert fired == [("file-a", "speed", False)]
+
+    widget._on_item_clicked(item, 2)
+
+    assert widget.get_hidden_channels() == []
+    assert [row[:2] for row in widget.get_visible_checked_channels()] == [
+        ("file-a", "speed")
+    ]
+    assert fired[-1] == ("file-a", "speed", True)
+
+
+def test_eye_click_never_propagates_to_other_selected_rows(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.add_file("file-a", _MultiChannelFileData())
+    file_item = widget._file_items["file-a"]
+    first = file_item.child(0)
+    second = file_item.child(1)
+    widget.set_checked_channels([
+        ("file-a", "speed"),
+        ("file-a", "Rte_TAS_mTorsionBarTorque_xds16"),
+    ])
+    first.setSelected(True)
+    second.setSelected(True)
+
+    widget._on_item_clicked(first, 2)
+
+    assert widget.get_hidden_channels() == [("file-a", "speed")]
+    assert not second.icon(2).isNull()
+
+
+def test_time_visibility_column_hides_outside_time_mode(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+
+    widget.set_time_visibility_available(False)
+    assert widget.tree.isColumnHidden(2)
+
+    widget.set_time_visibility_available(True)
+    assert not widget.tree.isColumnHidden(2)
 
 
 def test_channel_search_expands_parent_to_show_matches(qapp, qtbot):

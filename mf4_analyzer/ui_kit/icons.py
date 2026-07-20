@@ -136,6 +136,33 @@ class Icons:
         return _line_icon(draw, GRAY)
 
     @classmethod
+    def eye_open(cls):
+        """Visible-channel glyph for the TimeDomain channel tree."""
+        with _painting() as (pix, p):
+            p.setPen(_pen(BLUE, 1.45))
+            p.setBrush(Qt.NoBrush)
+            eye = QPainterPath()
+            eye.moveTo(3, 10)
+            eye.cubicTo(6, 5, 14, 5, 17, 10)
+            eye.cubicTo(14, 15, 6, 15, 3, 10)
+            eye.closeSubpath()
+            p.drawPath(eye)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(BLUE))
+            p.drawEllipse(QRectF(8, 8, 4, 4))
+        return QIcon(pix)
+
+    @classmethod
+    def eye_closed(cls):
+        """Hidden-channel glyph: quiet eye contour with an explicit slash."""
+        with _painting() as (pix, p):
+            p.setPen(_pen(MUTED, 1.45))
+            p.setBrush(Qt.NoBrush)
+            p.drawArc(QRectF(4, 5, 12, 10), 200 * 16, 140 * 16)
+            p.drawLine(QPointF(4, 4), QPointF(16, 16))
+        return QIcon(pix)
+
+    @classmethod
     def export(cls):
         def draw(p):
             p.drawLine(QPointF(10, 3), QPointF(10, 12))
