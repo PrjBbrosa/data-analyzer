@@ -39,6 +39,7 @@ package-lock.json
 # Local Claude / superpowers state
 .claude/
 .superpowers/
+.worktrees/
 
 # Local Codex state
 .state/
