@@ -229,6 +229,7 @@ class MainWindow(
         self.canvas_order = self.chart_stack.canvas_order
         self.canvas_fft_time = self.chart_stack.canvas_fft_time
         self.channel_list = self.navigator.channel_list
+        self.navigator.set_time_visibility_available(True)
         # Time domain runs a wider View cap than the analysis sections (which
         # keep view_state.MAX_VIEWS by not passing max_views).
         self.view_manager = ViewManager(self, max_views=12)
@@ -638,6 +639,9 @@ class MainWindow(
         )
 
         self.navigator.channels_changed.connect(self._ch_changed)
+        self.navigator.visibility_changed.connect(
+            self._on_time_channel_visibility_changed
+        )
         self.navigator.channel_editor_requested.connect(self.open_editor)
         self.navigator.file_activated.connect(self._on_file_activated)
         self.navigator.file_close_requested.connect(self._on_file_close_requested)
@@ -1293,6 +1297,7 @@ class MainWindow(
             elif old_mode in self.analysis_managers:
                 self._capture_active_analysis_view(old_mode)
         self.chart_stack.set_mode(mode)
+        self.navigator.set_time_visibility_available(mode == 'time')
         self.inspector.set_mode(mode)
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
         if mode in self.analysis_managers:
@@ -2136,6 +2141,35 @@ class MainWindow(
         if self.files and self.chart_stack.current_mode() == 'time':
             self._replot_canvas_for_view(idx, focused)
 
+    def _on_time_channel_visibility_changed(self, fid, channel, visible):
+        """Persist and redraw an eye toggle on the focused TimeDomain View."""
+        focused = self.chart_stack.focused_canvas()
+        idx = self._view_index_for_canvas(focused)
+        if idx is None or not (0 <= idx < len(self.view_manager.views)):
+            return
+
+        state = self.view_manager.get(idx)
+        # Capture ranges before rebuilding so a hidden subplot keeps its Y
+        # window and can restore it when the eye is opened again.
+        self._view_bridge.capture_canvas_ranges_into(state, focused)
+        self._view_bridge.capture_controls_into(state, self, focused)
+        invalidate = getattr(focused, 'invalidate_envelope_cache', None)
+        if callable(invalidate):
+            invalidate("channel visibility changed")
+
+        if self.chart_stack.current_mode() != 'time':
+            return
+        rendered = self._replot_canvas_for_view(idx, focused)
+        if rendered is False and visible:
+            # Re-opening an eye can cross the existing overlay risk threshold.
+            # A cancelled warning means the UI must return to the prior hidden
+            # state instead of showing an eye whose curve was not rendered.
+            self.navigator.set_channel_visible(
+                fid, channel, False, emit=False
+            )
+            self._view_bridge.capture_controls_into(state, self, focused)
+            self._replot_canvas_for_view(idx, focused)
+
     def _restore_checked_channels(self, checked):
         self.channel_list.set_checked_channels(checked)
 
@@ -2303,8 +2337,8 @@ class MainWindow(
             if user_initiated:
                 self._warn_action_blocked("请先打开数据文件")
             return
-        checked = self.channel_list.get_checked_channels()
-        if not checked:
+        all_checked = self.channel_list.get_checked_channels()
+        if not all_checked:
             canvas.clear()
             canvas.draw()
             if update_primary_ui:
@@ -2312,6 +2346,7 @@ class MainWindow(
             if user_initiated:
                 self._warn_action_blocked("请在左侧勾选至少一个通道")
             return
+        checked = self.channel_list.get_visible_checked_channels()
 
         # Per-pane plot mode (P2 Task 9 1b): read the layout (subplot/overlay)
         # from the card that owns the TARGET canvas, not always the primary.
@@ -2330,15 +2365,20 @@ class MainWindow(
         # channel owns its own axis), but we keep it stored for a later toggle.
         if self._overlay_primary is not None:
             pfid, pch = self._overlay_primary
-            primary_idx = next(
-                (i for i, (cfid, cch, _color) in enumerate(checked)
-                 if cfid == pfid and cch == pch),
-                None,
+            primary_is_checked = any(
+                cfid == pfid and cch == pch
+                for cfid, cch, _color in all_checked
             )
-            if primary_idx is None:
+            if not primary_is_checked:
                 self._overlay_primary = None
-            elif mode == 'overlay' and primary_idx != 0:
-                checked.insert(0, checked.pop(primary_idx))
+            elif mode == 'overlay':
+                primary_idx = next(
+                    (i for i, (cfid, cch, _color) in enumerate(checked)
+                     if cfid == pfid and cch == pch),
+                    None,
+                )
+                if primary_idx is not None and primary_idx != 0:
+                    checked.insert(0, checked.pop(primary_idx))
         # Cache invalidation site 7: structural plot-mode change (overlay
         # ↔ subplot) reuses the same (data_id, channel) keys but the line
         # ownership switches between an axes-stack and a single ax with
@@ -2363,7 +2403,7 @@ class MainWindow(
         ):
             self._restore_previous_time_plot_mode(prev_mode, canvas)
             self.statusBar.showMessage("已取消高风险叠加绘制", 3000)
-            return
+            return False
 
         # 获取自定义横坐标数据。
         # Phase 1 item 3: avoid `.values.copy()` — `to_numpy(copy=False)`
@@ -2411,6 +2451,25 @@ class MainWindow(
 
         from ..chart_stack import _STATS_STRIP_ENABLED
         collect_stats = update_primary_ui and _STATS_STRIP_ENABLED
+        st = (
+            self._build_time_statistics(
+                all_checked, range_enabled, range_lo, range_hi,
+            )
+            if collect_stats
+            else {}
+        )
+
+        if not checked:
+            count = len(all_checked)
+            canvas.show_empty_hint(f"已选择 {count} 个通道，当前均已隐藏")
+            canvas.draw()
+            if update_primary_ui:
+                if collect_stats:
+                    self.chart_stack.stats_strip.update_stats(st)
+                self.statusBar.showMessage(
+                    f"已选择 {count} 个通道，当前均已隐藏"
+                )
+            return True
 
         # [perf-probe] 诊断探针，定位后移除。整段绘图计时 + 子计时。
         from ..pg_canvas import _perf_probe as _pp
@@ -2432,30 +2491,16 @@ class MainWindow(
                 data = self._build_time_plot_data(
                     checked, custom_x, range_enabled, range_lo, range_hi,
                 )
-            st = {}
-            if collect_stats:
-                # Statistics are computed from the ORIGINAL (post-range-filter)
-                # samples only — filtered overlay traces are excluded so the
-                # stats strip mirrors the acquired data, never display-layer math.
-                for row in data:
-                    name, _vis, _x, sig, _color, unit = row[:6]
-                    if name in self._time_filtered_names:
-                        continue
-                    st[name] = {
-                        'min': np.min(sig), 'max': np.max(sig),
-                        'mean': np.mean(sig), 'rms': np.sqrt(np.mean(sig ** 2)),
-                        'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit,
-                    }
             if not data:
                 canvas.clear()
                 canvas.draw()
                 if update_primary_ui:
-                    self.chart_stack.stats_strip.update_stats({})
+                    self.chart_stack.stats_strip.update_stats(st)
                 if user_initiated:
                     self._warn_action_blocked(
                         "当前时间范围内无可绘制数据，请调整时间范围或点最大"
                     )
-                return
+                return True
 
             xlabel = self._time_axis_label()
             with _pp.timed("plot_channels(建轴+bind+首次setData) 耗时"):
@@ -2495,7 +2540,41 @@ class MainWindow(
         if update_primary_ui:
             if collect_stats:
                 self.chart_stack.stats_strip.update_stats(st);
-            self.statusBar.showMessage(f"绘制: {len(checked)} 通道, {len(set(fid for fid, _, _ in checked))} 文件")
+            self.statusBar.showMessage(
+                f"绘制: {len(checked)}/{len(all_checked)} 通道，"
+                f"{len(set(fid for fid, _, _ in checked))} 文件"
+            )
+        return True
+
+    def _build_time_statistics(
+        self, checked, range_enabled, range_lo, range_hi,
+    ):
+        """Compute acquired-channel stats from every checked channel.
+
+        Eye visibility is a TimeDomain rendering preference, so hidden checked
+        channels intentionally remain in this statistics source set.
+        """
+        stats = {}
+        for fid, channel, _color in checked:
+            fd = self.channel_list.get_file_data(fid)
+            if fd is None or channel not in fd.data.columns:
+                continue
+            signal = fd.data[channel].to_numpy(copy=False)
+            if range_enabled:
+                time_axis = fd.time_array
+                mask = (time_axis >= range_lo) & (time_axis <= range_hi)
+                signal = signal[mask]
+            if len(signal) == 0:
+                continue
+            name = fd.get_prefixed_channel(channel)
+            unit = fd.channel_units.get(channel, '')
+            stats[name] = {
+                'min': np.min(signal), 'max': np.max(signal),
+                'mean': np.mean(signal),
+                'rms': np.sqrt(np.mean(signal ** 2)),
+                'std': np.std(signal), 'p2p': np.ptp(signal), 'unit': unit,
+            }
+        return stats
 
     def _filter_suffix(self, spec):
         """Short trace-name tag for a filtered overlay, e.g. ``LP 50Hz`` /

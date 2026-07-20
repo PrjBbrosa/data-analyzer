@@ -1542,6 +1542,20 @@ class TestTimeDomainCanvasPGContract:
         canvas.clear()
         canvas.draw_idle()
 
+    def test_empty_hint_is_replaced_by_next_plot(self, qapp):
+        canvas = _pg_canvas(qapp)
+
+        canvas.show_empty_hint("已选择 2 个通道，当前均已隐藏")
+
+        assert canvas._empty_hint_item is not None
+        assert canvas._empty_hint_text == "已选择 2 个通道，当前均已隐藏"
+        t = np.linspace(0.0, 1.0, 100, dtype=np.float64)
+        canvas.plot_channels([
+            ("speed", True, t, np.sin(t), "#1769e0", "rpm", "fid-1")
+        ])
+        assert canvas._empty_hint_item is None
+        assert canvas._empty_hint_text == ""
+
 
 class TestTimeDomainCanvasPGCurveCache:
     """Custom curve-layer cache (design §5.2) is the core perf delivery

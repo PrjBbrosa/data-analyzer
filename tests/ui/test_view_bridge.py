@@ -315,3 +315,24 @@ def test_restore_axes_passes_none_xlim_through_canvas_contract():
 
     assert win.chart_stack.canvas_time.applied_x is None
     assert win.chart_stack.canvas_time.applied_y == {}
+
+
+def test_capture_ranges_preserves_hidden_channel_ylim():
+    canvas = _Canvas()
+    canvas._ylims = {'["f1","[sample] torque"]': (-2.0, 2.0)}
+    state = ViewState(
+        name="v",
+        tab_color="#000000",
+        hidden_channels=[("f1", "rpm")],
+        ylims={
+            '["f1","[sample] rpm"]': (-1.0, 1.0),
+            '["f1","[sample] torque"]': (-9.0, 9.0),
+        },
+    )
+
+    view_bridge.capture_canvas_ranges_into(state, canvas)
+
+    assert state.ylims == {
+        '["f1","[sample] rpm"]': (-1.0, 1.0),
+        '["f1","[sample] torque"]': (-2.0, 2.0),
+    }

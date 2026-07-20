@@ -280,7 +280,7 @@ class ViewMixin:
             self._view_bridge.apply_controls_from_state(state, self, canvas)
             if update_primary_ui and state.cursor_mode == 'off':
                 self.chart_stack.clear_cursor_pill()
-            self._plot_time_on_canvas(
+            rendered = self._plot_time_on_canvas(
                 canvas,
                 update_primary_ui=update_primary_ui,
                 defer_first_frame=(state.xlim is not None),
@@ -298,6 +298,7 @@ class ViewMixin:
                 self._project_view_controls(restore_idx)
             if cursor_pill_snapshot is not None:
                 self.chart_stack.restore_cursor_pill_snapshot(cursor_pill_snapshot)
+        return rendered
 
     # -- view tab-bar intent handlers (time section) --------------------
     def _on_view_new(self):
@@ -451,8 +452,9 @@ class ViewMixin:
         if idx is None or canvas is None:
             return
         cur_xlim = self._safe_capture_xlim_for(canvas) if preserve_xlim else None
+        rendered = None
         try:
-            self._render_view_to_canvas(
+            rendered = self._render_view_to_canvas(
                 idx,
                 canvas,
                 update_primary_ui=(canvas is self.canvas_time),
@@ -461,3 +463,4 @@ class ViewMixin:
             if cur_xlim is not None:
                 self._safe_restore_xlim_for(canvas, cur_xlim)
             self._capture_canvas_ranges_for_bound_view(canvas)
+        return rendered

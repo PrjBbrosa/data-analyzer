@@ -274,6 +274,8 @@ class TimeDomainCanvasPG(QWidget):
         # We keep it as a child rather than subclassing so this widget
         # itself can carry pyqtSignals without metaclass conflicts.
         self._glw = pg.GraphicsLayoutWidget(self)
+        self._empty_hint_item = None
+        self._empty_hint_text = ""
         # Quiet background to match the matplotlib CHART_FACE; the actual
         # chart surface stays white.
         self._glw.setBackground("#ffffff")
@@ -1873,6 +1875,8 @@ class TimeDomainCanvasPG(QWidget):
             self._glw.clear()
         except Exception:
             pass
+        self._empty_hint_item = None
+        self._empty_hint_text = ""
 
         self.axes_list = []
         self._channel_lines = _ChannelKeyDict()
@@ -1904,6 +1908,32 @@ class TimeDomainCanvasPG(QWidget):
         self._cursor.clear_items()
         # Cursor placement is NOT cleared here — full_reset / reset_cursor_state
         # do that. Mirror TimeDomainCanvas.clear's behavior.
+
+    def show_empty_hint(self, text):
+        """Replace the chart with a centered, non-interactive empty-state hint."""
+        self.clear()
+        self._empty_hint_text = str(text or "")
+        if not self._empty_hint_text:
+            return
+        hint = pg.LabelItem(justify="center")
+        hint.setText(
+            self._empty_hint_text,
+            color="#64748b",
+            size="12pt",
+        )
+        self._glw.addItem(hint, row=0, col=0)
+        self._empty_hint_item = hint
+
+    def clear_empty_hint(self):
+        if self._empty_hint_item is None:
+            self._empty_hint_text = ""
+            return
+        try:
+            self._glw.removeItem(self._empty_hint_item)
+        except Exception:
+            pass
+        self._empty_hint_item = None
+        self._empty_hint_text = ""
 
     def full_reset(self):
         """Clear chart AND cursor state. Use on file close."""

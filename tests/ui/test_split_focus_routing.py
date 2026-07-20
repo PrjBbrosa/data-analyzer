@@ -194,6 +194,24 @@ def test_channel_check_routes_to_primary_when_primary_focused(
     assert not _has_channel(cs.secondary_canvas(), "speed")
 
 
+def test_channel_eye_routes_only_to_focused_view(qtbot, qapp, loaded_csv):
+    w, fid, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+
+    assert cs.focused_canvas() is cs.canvas_time
+    assert _has_channel(cs.canvas_time, "speed")
+    assert _has_channel(cs.secondary_canvas(), "torque")
+
+    assert w.navigator.set_channel_visible(fid, "speed", False)
+    qapp.processEvents()
+
+    assert not _has_channel(cs.canvas_time, "speed")
+    assert _has_channel(cs.secondary_canvas(), "torque")
+    assert w.view_manager.get(0).hidden_channels == [(fid, "speed")]
+    assert w.view_manager.get(1).hidden_channels == []
+
+
 def test_secondary_range_changes_write_back_to_original_view_state(
     qtbot, qapp, loaded_csv
 ):

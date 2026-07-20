@@ -7,6 +7,7 @@ Inspector, and the time-domain canvas. Replotting is left to MainWindow.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import json
 from typing import Any, Iterable
 
 from .view_state import ChannelKey, ViewState
@@ -98,7 +99,14 @@ def capture_canvas_ranges_into(state: ViewState, canvas) -> None:
     if callable(get_xlim):
         state.xlim = get_xlim()
     if callable(get_ylims):
-        state.ylims = get_ylims()
+        current_ylims = get_ylims()
+        retained_hidden = {
+            key: ylim
+            for key, ylim in (state.ylims or {}).items()
+            if _ylim_key_belongs_to_hidden(key, state.hidden_channels)
+        }
+        retained_hidden.update(current_ylims)
+        state.ylims = retained_hidden
 
 
 def capture_into(state: ViewState, window) -> None:
@@ -168,6 +176,32 @@ def _capture_colors(navigator, checked_rows: Iterable[Any]) -> dict[ChannelKey, 
 def _channel_key(value: Any) -> ChannelKey:
     fid, channel = value[:2]
     return (str(fid), str(channel))
+
+
+def _ylim_key_belongs_to_hidden(key: Any, hidden: Iterable[ChannelKey]) -> bool:
+    """Match a canvas ViewState Y key to a hidden raw channel key."""
+    data_id = None
+    display_name = None
+    try:
+        decoded = json.loads(str(key))
+        if isinstance(decoded, list) and len(decoded) >= 2:
+            data_id, display_name = decoded[:2]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        text = str(key)
+        if "::" in text:
+            data_id, display_name = text.split("::", 1)
+    if data_id is None or display_name is None:
+        return False
+
+    data_id = str(data_id)
+    display_name = str(display_name)
+    for fid, channel in hidden:
+        channel = str(channel)
+        if data_id != str(fid):
+            continue
+        if display_name == channel or display_name.endswith(f"] {channel}"):
+            return True
+    return False
 
 
 def _apply_cursor_to_canvas(canvas, mode: str) -> None:

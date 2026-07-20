@@ -1551,6 +1551,130 @@ def _load_time_window_with_checked(qapp, qtbot, loaded_csv, checked_names=("spee
     return w, fid
 
 
+def test_channel_eye_column_is_only_available_in_time_mode(qapp, qtbot):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    assert not w.channel_list.tree.isColumnHidden(2)
+    w._on_mode_changed("fft")
+    assert w.channel_list.tree.isColumnHidden(2)
+    w._on_mode_changed("time")
+    assert not w.channel_list.tree.isColumnHidden(2)
+
+
+def test_hiding_checked_channel_collapses_subplot_and_restores_y_range(
+    qapp, qtbot, loaded_csv,
+):
+    import pytest
+
+    w, fid = _load_time_window_with_checked(
+        qapp, qtbot, loaded_csv, ("speed", "torque")
+    )
+    w.chart_stack.set_plot_mode("subplot")
+    w.plot_time()
+    qapp.processEvents()
+    speed_key = next(
+        key for key in w.canvas_time.get_visible_ylims() if "speed" in key
+    )
+    saved_ylim = (-12.5, 17.5)
+    w.canvas_time.restore_visible_ylims({speed_key: saved_ylim})
+    w._capture_canvas_ranges_for_bound_view(w.canvas_time)
+
+    assert w.navigator.set_channel_visible(fid, "speed", False)
+    qapp.processEvents()
+
+    assert {(f, ch) for f, ch, _ in w.navigator.get_checked_channels()} == {
+        (fid, "speed"), (fid, "torque")
+    }
+    assert w.navigator.get_hidden_channels() == [(fid, "speed")]
+    assert len(w.canvas_time.axes_list) == 1
+    assert not any("speed" in name for name in w.canvas_time._channel_lines)
+    state = w.view_manager.get(w._focused_view_idx)
+    assert state.hidden_channels == [(fid, "speed")]
+    assert state.ylims[speed_key] == pytest.approx(saved_ylim)
+
+    assert w.navigator.set_channel_visible(fid, "speed", True)
+    qapp.processEvents()
+
+    assert len(w.canvas_time.axes_list) == 2
+    assert any("speed" in name for name in w.canvas_time._channel_lines)
+    assert w.canvas_time.get_visible_ylims()[speed_key] == pytest.approx(saved_ylim)
+
+
+def test_all_checked_channels_hidden_shows_hint_but_keeps_statistics(
+    qapp, qtbot, loaded_csv, monkeypatch,
+):
+    import mf4_analyzer.ui.chart_stack as chart_stack_module
+
+    w, fid = _load_time_window_with_checked(
+        qapp, qtbot, loaded_csv, ("speed", "torque")
+    )
+    monkeypatch.setattr(chart_stack_module, "_STATS_STRIP_ENABLED", True)
+    captured = []
+    monkeypatch.setattr(
+        w.chart_stack.stats_strip,
+        "update_stats",
+        lambda stats: captured.append(dict(stats)),
+    )
+
+    w.navigator.set_channel_visible(fid, "speed", False)
+    w.navigator.set_channel_visible(fid, "torque", False)
+    qapp.processEvents()
+
+    assert len(w.navigator.get_checked_channels()) == 2
+    assert set(w.navigator.get_hidden_channels()) == {
+        (fid, "speed"), (fid, "torque")
+    }
+    assert w.canvas_time.axes_list == []
+    assert w.canvas_time._empty_hint_text == "已选择 2 个通道，当前均已隐藏"
+    assert "当前均已隐藏" in w.statusBar.currentMessage()
+    assert captured
+    assert any("speed" in name for name in captured[-1])
+    assert any("torque" in name for name in captured[-1])
+
+
+def test_hiding_overlay_primary_uses_visible_fallback_without_forgetting_choice(
+    qapp, qtbot, loaded_csv,
+):
+    w, fid = _load_time_window_with_checked(
+        qapp, qtbot, loaded_csv, ("speed", "torque")
+    )
+    w.chart_stack.set_plot_mode("overlay")
+    w._overlay_primary = (fid, "speed")
+    w.plot_time()
+    qapp.processEvents()
+
+    w.navigator.set_channel_visible(fid, "speed", False)
+    qapp.processEvents()
+
+    assert w._overlay_primary == (fid, "speed")
+    assert _left_axis_channel_name(w.canvas_time).endswith("torque")
+
+
+def test_reopening_eye_rolls_back_when_overlay_risk_is_cancelled(
+    qapp, qtbot, loaded_csv, monkeypatch,
+):
+    w, fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    w.navigator.set_channel_visible(fid, "speed", False)
+    qapp.processEvents()
+    calls = []
+    monkeypatch.setattr(
+        w,
+        "_replot_canvas_for_view",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or False,
+    )
+
+    assert w.navigator.set_channel_visible(fid, "speed", True)
+
+    assert w.navigator.get_hidden_channels() == [(fid, "speed")]
+    assert w.view_manager.get(w._focused_view_idx).hidden_channels == [
+        (fid, "speed")
+    ]
+    assert len(calls) == 2
+
+
 def test_plot_mode_toggle_preserves_xlim_overlay_to_subplot(qapp, qtbot, loaded_csv):
     """User-request 2026-05-20 (fix 2): toggling 分↔叠 must keep the
     user's current x-zoom window. Toolbar Back/Forward history need
