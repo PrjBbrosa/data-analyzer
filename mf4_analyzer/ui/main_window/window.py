@@ -657,6 +657,18 @@ class MainWindow(
         self.navigator.auto_attach_changed.connect(
             self._on_auto_attach_changed
         )
+        self.navigator.channel_config_save_requested.connect(
+            self._save_current_channel_config
+        )
+        self.navigator.channel_config_apply_requested.connect(
+            self._apply_selected_channel_config
+        )
+        self.navigator.channel_config_manage_requested.connect(
+            self._manage_channel_config
+        )
+        self.navigator.channel_config_selection_changed.connect(
+            self._on_channel_config_selection_changed
+        )
         self.navigator.primary_channel_requested.connect(
             self._on_primary_channel_requested
         )
@@ -2151,6 +2163,7 @@ class MainWindow(
             self._refresh_fft_time_preview(clear_spectrum=False)
         if self.files and self.chart_stack.current_mode() == 'time':
             self._replot_canvas_for_view(idx, focused)
+        self._refresh_channel_config_context()
 
     def _on_time_channel_visibility_changed(self, fid, channel, visible):
         """Persist and redraw an eye toggle on the focused TimeDomain View."""

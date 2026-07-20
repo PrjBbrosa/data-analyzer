@@ -199,6 +199,10 @@ class FileNavigator(QWidget):
     files_attach_requested = pyqtSignal(object)
     files_detach_requested = pyqtSignal(object, str)
     auto_attach_changed = pyqtSignal(bool)
+    channel_config_save_requested = pyqtSignal()
+    channel_config_apply_requested = pyqtSignal(str)
+    channel_config_manage_requested = pyqtSignal(object)
+    channel_config_selection_changed = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -311,6 +315,13 @@ class FileNavigator(QWidget):
         )
         self.channel_list.files_detach_requested.connect(
             self.files_detach_requested
+        )
+        config_bar = self.channel_list.config_bar
+        config_bar.save_requested.connect(self.channel_config_save_requested)
+        config_bar.apply_requested.connect(self.channel_config_apply_requested)
+        config_bar.manage_requested.connect(self.channel_config_manage_requested)
+        config_bar.selection_changed.connect(
+            self.channel_config_selection_changed
         )
         self.channel_list.setMinimumHeight(260)
         splitter.addWidget(self.channel_list)
