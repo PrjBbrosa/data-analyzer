@@ -78,3 +78,17 @@ def test_combo_is_editable_for_name_search(qtbot):
 
     assert bar.combo.isEditable()
     assert not bar.combo.insertPolicy()
+
+
+def test_typed_nonexistent_name_cannot_apply_stale_selection(qtbot):
+    bar = ChannelConfigBar()
+    qtbot.addWidget(bar)
+    bar.set_configs([fake_config("a", "动力分析", 4)], selected_id="a")
+    bar.set_context(has_checked=True, has_attached=True)
+
+    bar.combo.setEditText("不存在的配置")
+
+    assert bar.selected_config_id() is None
+    assert not bar.btn_apply.isEnabled()
+    with qtbot.assertNotEmitted(bar.apply_requested):
+        bar.btn_apply.click()

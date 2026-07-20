@@ -467,7 +467,9 @@ class FileNavigator(QWidget):
     def _sync_auto_attach_button(self):
         enabled = self.btn_auto_attach.isChecked()
         self.btn_auto_attach.setToolTip(
-            "自动加入当前 View：开" if enabled else "自动加入当前 View：关"
+            "新加载文件自动加入当前 View"
+            if enabled
+            else "新加载文件仅打开，不加入当前 View"
         )
         self.btn_auto_attach.setProperty("active", enabled)
         self.btn_auto_attach.style().unpolish(self.btn_auto_attach)

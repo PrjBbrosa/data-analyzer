@@ -62,6 +62,7 @@ class ChannelConfigBar(QWidget):
         self.btn_save.clicked.connect(self.save_requested)
         self.btn_apply.clicked.connect(self._emit_apply)
         self.combo.currentIndexChanged.connect(self._on_index_changed)
+        self.combo.editTextChanged.connect(self._sync_enabled)
 
         self.set_configs([])
         self.set_context(has_checked=False, has_attached=False)
@@ -102,6 +103,9 @@ class ChannelConfigBar(QWidget):
         self._sync_enabled()
 
     def selected_config_id(self) -> str | None:
+        index = self.combo.currentIndex()
+        if index < 0 or self.combo.currentText() != self.combo.itemText(index):
+            return None
         value = self.combo.currentData()
         if value in (None, self.MANAGE_SENTINEL):
             return None

@@ -649,7 +649,7 @@ class MainWindow(
         self.navigator.file_close_requested.connect(self._on_file_close_requested)
         self.navigator.close_all_requested.connect(self._on_close_all_requested)
         self.navigator.files_attach_requested.connect(
-            self._attach_files_to_focused_view
+            self._attach_files_from_drop
         )
         self.navigator.files_detach_requested.connect(
             self._detach_files_from_focused_view

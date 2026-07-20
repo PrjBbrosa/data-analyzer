@@ -277,6 +277,12 @@ QToolButton[role="primary"]:hover {
     background-color: #135abd;
     border-color: #135abd;
 }
+QPushButton[role="primary"]:disabled,
+QToolButton[role="primary"]:disabled {
+    color: #94a3b8;
+    background-color: #f5f7fb;
+    border-color: #eef2f7;
+}
 
 QPushButton[role="destructive"] {
     color: #dc2626;
@@ -939,6 +945,10 @@ QWidget#channelCard {
     background-color: #ffffff;
     border: 1px solid #dbe2eb;
     border-radius: 6px;
+}
+QWidget#channelCard[dropActive="true"] {
+    background-color: #f5f8ff;
+    border: 2px solid #1769e0;
 }
 QScrollArea#fileScroll {
     background-color: transparent;

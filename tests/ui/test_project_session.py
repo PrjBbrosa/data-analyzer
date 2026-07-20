@@ -17,6 +17,7 @@ def test_window_title_uses_app_meta(qapp):
 
 
 import csv
+import json
 
 
 def _write_csv(path, n=40):
@@ -61,6 +62,85 @@ def test_open_project_roundtrip(qapp, tmp_path):
     assert [fd.filename for fd in mw2.files.values()] == ["a.csv", "b.csv"]
     assert mw2.view_manager.views[0].name == "主视图"
     assert mw2.chart_stack.current_mode() == "time"
+
+
+def test_project_roundtrip_restores_timedomain_attached_file_subset(
+    qapp, tmp_path
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    csv_b = tmp_path / "b.csv"; _write_csv(csv_b)
+    project = tmp_path / "subset.tlproj"
+    window = MainWindow()
+    window._load_one(str(csv_a))
+    window._load_one(str(csv_b))
+    _fid_a, fid_b = list(window.files)
+    window.view_manager.get(0).attached_file_ids = [fid_b]
+    window._project_view_controls(0)
+
+    window.save_project(project)
+    restored = MainWindow()
+    restored.open_project(project)
+    qapp.processEvents()
+
+    restored_b = next(
+        fid for fid, fd in restored.files.items() if fd.filename == "b.csv"
+    )
+    restored_a = next(
+        fid for fid, fd in restored.files.items() if fd.filename == "a.csv"
+    )
+    assert restored.view_manager.get(0).attached_file_ids == [restored_b]
+    assert restored.navigator.get_attached_file_ids() == [restored_b]
+    assert restored.channel_list._file_items[restored_a].isHidden()
+    assert not restored.channel_list._file_items[restored_b].isHidden()
+
+
+def test_project_roundtrip_preserves_explicit_empty_view(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    project = tmp_path / "empty.tlproj"
+    window = MainWindow()
+    window._load_one(str(csv_a))
+    window.view_manager.get(0).attached_file_ids = []
+    window._project_view_controls(0)
+    window.save_project(project)
+
+    restored = MainWindow()
+    restored.open_project(project)
+    restored.show()
+    qapp.processEvents()
+
+    assert restored.view_manager.get(0).attached_file_ids == []
+    assert restored.navigator.get_attached_file_ids() == []
+    assert restored.channel_list.empty_state.isVisible()
+
+
+def test_legacy_project_without_attachment_field_attaches_restored_files(
+    qapp, tmp_path
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    csv_b = tmp_path / "b.csv"; _write_csv(csv_b)
+    project = tmp_path / "legacy.tlproj"
+    window = MainWindow()
+    window._load_one(str(csv_a))
+    window._load_one(str(csv_b))
+    window.save_project(project)
+    payload = json.loads(project.read_text(encoding="utf-8"))
+    for view in payload["views"]:
+        view.pop("attached_file_ids", None)
+    project.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    restored = MainWindow()
+    restored.open_project(project)
+
+    assert restored.view_manager.get(0).attached_file_ids == list(restored.files)
+    assert restored.navigator.get_attached_file_ids() == list(restored.files)
 
 
 def test_project_roundtrip_restores_timedomain_hidden_channels(qapp, tmp_path):
@@ -213,6 +293,7 @@ def test_open_project_multi_group_hdf_no_duplication(qapp, tmp_path):
     mw = MainWindow()
     mw._load_one(str(hdf))
     assert len(mw.files) == 2, "sanity: _load_one of a 2-group .hdf must yield 2 FileData"
+    assert mw.view_manager.get(0).attached_file_ids == list(mw.files)
 
     proj = tmp_path / "multi.tlproj"
     mw.save_project(proj)
@@ -227,6 +308,7 @@ def test_open_project_multi_group_hdf_no_duplication(qapp, tmp_path):
     )
     suffixes = {fd.label_suffix for fd in mw2.files.values()}
     assert suffixes == {"2x", "1x"}, f"wrong label_suffixes after roundtrip: {suffixes}"
+    assert mw2.view_manager.get(0).attached_file_ids == list(mw2.files)
     for fid, fd in mw2.files.items():
         assert fd.fs > 0, f"fid {fid} has non-positive fs={fd.fs}"
 

@@ -75,6 +75,7 @@ lesson by default.
 | [Custom X Axis Title Includes Source Unit](custom-x-axis-title-includes-source-unit.md) | Changing the TimeDomain label used for a channel-backed custom X axis. | See lesson |
 | [PowerShell Foreach Output Must Be Collected Before Piping](codex-powershell-foreach-pipeline-grouping.md) | Building Windows PowerShell commands that send the output of a | See lesson |
 | [Keep Headless PyQt Test Fixtures And Modals Deterministic](codex-pytest-ui-suite-fixtures-and-modals.md) | Running explicit PyQt test-file lists, especially after adding a | See lesson |
+| [Guard QTreeWidget Checkbox Handlers By Column](codex-qt-tree-itemchanged-column-guard.md) | Editing icons, tooltips, colors, or other item data in a | See lesson |
 
 ## Selection Rules
 

@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from PyQt5.QtCore import QMimeData, QPointF
-from PyQt5.QtGui import QDropEvent
+from PyQt5.QtCore import QMimeData, QPoint, QPointF, Qt
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent
 
 from mf4_analyzer.ui.file_navigator import FileNavigator, _FileRow
 
@@ -293,6 +293,22 @@ def test_group_parent_checkbox_changes_only_attached_rasters(qapp):
     )
 
 
+def test_parent_detach_hover_does_not_clear_checked_channels(qapp, qtbot):
+    nav = FileNavigator()
+    source = "C:/data/grouped.hdf"
+    nav.add_file("f0", FakeFd(filepath=source, label_suffix="1 kHz"))
+    nav.set_attached_file_ids(["f0"])
+    nav.set_checked_channels([("f0", "speed")])
+    parent = nav.channel_list._source_items[str(Path(source))]
+
+    with qtbot.assertNotEmitted(nav.channels_changed):
+        nav.channel_list._on_item_entered(parent, 2)
+
+    assert [(fid, channel) for fid, channel, _color in nav.get_checked_channels()] == [
+        ("f0", "speed")
+    ]
+
+
 def test_file_row_drag_payload_contains_every_group_fid(qapp):
     row = _FileRow("f0", FakeFd())
     row.add_fid("f1", FakeFd())
@@ -319,11 +335,21 @@ def test_internal_file_drop_emits_known_fids_once(qapp, qtbot):
     nav = FileNavigator()
     nav.add_file("f0", FakeFd())
     nav.add_file("f1", FakeFd())
+    assert nav.channel_list.acceptDrops()
+
     mime = QMimeData()
     mime.setData(
         _FileRow.MIME_TYPE,
         json.dumps(["f0", "f1", "f0", "missing"]).encode("utf-8"),
     )
+    drag_event = QDragEnterEvent(
+        QPoint(4, 4), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier
+    )
+    nav.channel_list.dragEnterEvent(drag_event)
+
+    assert drag_event.isAccepted()
+    assert nav.channel_list.property("dropActive") is True
+
     event = QDropEvent(
         QPointF(4, 4), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier
     )
@@ -333,6 +359,7 @@ def test_internal_file_drop_emits_known_fids_once(qapp, qtbot):
 
     assert emitted.args == [("f0", "f1")]
     assert event.isAccepted()
+    assert nav.channel_list.property("dropActive") is False
 
 
 def test_malformed_internal_file_drop_is_ignored(qapp, qtbot):

@@ -66,6 +66,23 @@ class ChannelScopeMixin:
         self._refresh_channel_config_context()
         return tuple(added)
 
+    def _attach_files_from_drop(self, fids):
+        resolved = self._focused_time_view_state()
+        if resolved is None:
+            self.toast("当前没有可接收文件的 TimeDomain View", "warning")
+            return ()
+        idx, state = resolved
+        added = self._attach_files_to_focused_view(fids)
+        if not added:
+            self.toast(f"文件已在当前 View 中 · {state.name}", "info")
+            return ()
+        role = "副栏" if idx == getattr(self, "_secondary_view_idx", None) else "主栏"
+        self.toast(
+            f"已加入{role} · {state.name} · {len(added)} 个文件",
+            "success",
+        )
+        return added
+
     def _on_source_load_finished(self, new_fids):
         if (
             not new_fids

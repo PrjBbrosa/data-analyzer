@@ -80,6 +80,27 @@ def test_manual_attach_targets_new_focused_view_only(qtbot, qapp, loaded_csv):
     assert window.navigator.get_attached_file_ids() == [fid]
 
 
+def test_drop_attach_reports_added_and_already_attached(
+    qtbot, qapp, loaded_csv, monkeypatch
+):
+    window = _loaded_window(qtbot, qapp, loaded_csv)
+    fid = _fid(window)
+    window._on_view_new()
+    messages = []
+    monkeypatch.setattr(
+        window,
+        "toast",
+        lambda message, level="info": messages.append((message, level)),
+    )
+
+    assert window._attach_files_from_drop([fid]) == (fid,)
+    assert "已加入主栏" in messages[-1][0]
+    assert window.view_manager.get(1).name in messages[-1][0]
+
+    assert window._attach_files_from_drop([fid]) == ()
+    assert "文件已在当前 View 中" in messages[-1][0]
+
+
 def test_duplicate_view_preserves_attached_files(qtbot, qapp, loaded_csv):
     window = _loaded_window(qtbot, qapp, loaded_csv)
     fid = _fid(window)

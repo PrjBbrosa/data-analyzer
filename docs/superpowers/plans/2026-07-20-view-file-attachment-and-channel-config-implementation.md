@@ -1,6 +1,6 @@
 # View File Attachment and Channel Config Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make the left channel tree View-scoped, support file drag/auto-attachment, and provide reusable named channel configurations whose exact-name matches completely replace the focused TimeDomain View selection.
 
@@ -62,7 +62,7 @@
 - Produces: `remap_view_fids()` output with explicit attachment remap and missing-field legacy migration.
 - Consumes later: `view_bridge`, `ChannelScopeMixin`, and navigator projection.
 
-- [ ] **Step 1: Add failing ViewState serialization/default tests**
+- [x] **Step 1: Add failing ViewState serialization/default tests**
 
 ```python
 def test_viewstate_new_view_has_no_attached_files():
@@ -78,7 +78,7 @@ def test_viewstate_attached_file_ids_roundtrip_in_order():
     assert ViewState.from_dict(state.to_dict()).attached_file_ids == ["f2", "f1"]
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -90,7 +90,7 @@ $env:PYTHONPATH='.'
 
 Expected: FAIL because `ViewState` does not accept or expose `attached_file_ids`.
 
-- [ ] **Step 3: Add the field and JSON round-trip**
+- [x] **Step 3: Add the field and JSON round-trip**
 
 Add `attached_file_ids: list[str] = field(default_factory=list)` immediately before
 `checked`. In `to_dict()`, add an ordered string list under
@@ -100,7 +100,7 @@ Add `attached_file_ids: list[str] = field(default_factory=list)` immediately bef
 `attached_file_ids=[str(fid) for fid in data.get("attached_file_ids", [])]` and
 continue passing every currently supported constructor field unchanged.
 
-- [ ] **Step 4: Add remap tests that distinguish legacy missing from explicit empty**
+- [x] **Step 4: Add remap tests that distinguish legacy missing from explicit empty**
 
 ```python
 def test_remap_view_fids_migrates_legacy_missing_attachments():
@@ -115,7 +115,7 @@ def test_remap_view_fids_preserves_explicit_empty_attachments():
     assert got[0]["attached_file_ids"] == []
 ```
 
-- [ ] **Step 5: Implement attachment remap before channel-key remap**
+- [x] **Step 5: Implement attachment remap before channel-key remap**
 
 ```python
 if "attached_file_ids" in view:
@@ -129,7 +129,7 @@ else:
     v["attached_file_ids"] = list(fid_map.values())
 ```
 
-- [ ] **Step 6: Run focused tests and commit**
+- [x] **Step 6: Run focused tests and commit**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_view_state.py tests\ui\test_project_session.py -q
@@ -153,7 +153,7 @@ Expected: all focused tests PASS; explicit empty and legacy migration are both c
 - Produces: `ConfigNameConflict` carrying the conflicting config.
 - Produces: `resolve_channel_config(config, attached_file_ids, files) -> ChannelConfigResolution`.
 
-- [ ] **Step 1: Write failing validation, overwrite, corruption, and resolver tests**
+- [x] **Step 1: Write failing validation, overwrite, corruption, and resolver tests**
 
 ```python
 def test_store_creates_multiple_configs_and_casefold_detects_conflict(settings):
@@ -182,7 +182,7 @@ def test_resolver_matches_every_attached_file_by_exact_raw_name():
     assert result.target_file_count == 2
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_channel_config.py -q
@@ -190,7 +190,7 @@ def test_resolver_matches_every_attached_file_by_exact_raw_name():
 
 Expected: collection FAIL because `mf4_analyzer.ui.channel_config` does not exist.
 
-- [ ] **Step 3: Implement immutable records and ordered-name normalization**
+- [x] **Step 3: Implement immutable records and ordered-name normalization**
 
 ```python
 SCHEMA_VERSION = 1
@@ -223,7 +223,7 @@ class ChannelConfigResolution:
     target_file_count: int
 ```
 
-- [ ] **Step 4: Implement the versioned QSettings store with injected clocks/IDs**
+- [x] **Step 4: Implement the versioned QSettings store with injected clocks/IDs**
 
 Create `ChannelSelectionConfigStore.SETTINGS_KEY =
 "channel_selection/configs_v1"`. Its constructor accepts `settings` plus optional
@@ -248,7 +248,7 @@ read-only `had_corruption` flag when any entry or root payload is invalid, and
 preserve every valid record. Missing records in `overwrite`, `rename`, or
 `delete` raise `KeyError`. Flush with `settings.sync()` after each mutation.
 
-- [ ] **Step 5: Implement exact resolution and zero-match data without UI side effects**
+- [x] **Step 5: Implement exact resolution and zero-match data without UI side effects**
 
 ```python
 def resolve_channel_config(config, attached_file_ids, files):
@@ -272,7 +272,7 @@ def resolve_channel_config(config, attached_file_ids, files):
     )
 ```
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_channel_config.py -q
@@ -297,7 +297,7 @@ Expected: PASS for create/list, casefold collision, explicit overwrite, rename/d
 - Produces: `ChannelConfigBar.manage_requested(str | None)`.
 - Produces: `set_configs(configs, selected_id=None)`, `set_context(has_checked, has_attached)`, `selected_config_id()`.
 
-- [ ] **Step 1: Write failing compact-layout and no-side-effect selection tests**
+- [x] **Step 1: Write failing compact-layout and no-side-effect selection tests**
 
 ```python
 def test_config_bar_has_save_combo_apply_order(qtbot):
@@ -316,7 +316,7 @@ def test_selecting_config_does_not_emit_apply(qtbot):
     assert bar.selected_config_id() == "a"
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_channel_config_bar.py -q
@@ -324,7 +324,7 @@ def test_selecting_config_does_not_emit_apply(qtbot):
 
 Expected: import FAIL because `ChannelConfigBar` does not exist.
 
-- [ ] **Step 3: Implement the bar and Manage sentinel**
+- [x] **Step 3: Implement the bar and Manage sentinel**
 
 ```python
 class ChannelConfigBar(QWidget):
@@ -352,7 +352,7 @@ class ChannelConfigBar(QWidget):
 
 Populate index 0 with `选择配置…`, append configs with `config_id` data, append `管理配置…` with the sentinel, and restore the prior index when Manage is chosen.
 
-- [ ] **Step 4: Mount the bar below the channel tree without changing its domain behavior**
+- [x] **Step 4: Mount the bar below the channel tree without changing its domain behavior**
 
 ```python
 self.config_bar = ChannelConfigBar(self)
@@ -361,7 +361,7 @@ layout.addWidget(self.config_bar)
 
 Do not wire persistence inside `MultiFileChannelWidget`; bubble the bar signals later through `FileNavigator`.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_channel_config_bar.py tests\ui\test_file_navigator.py -q
@@ -385,7 +385,7 @@ Expected: PASS; combo selection emits no apply, Apply emits the selected ID, and
 - Produces: `set_attached_file_ids(fids: Iterable[str]) -> None` with no `channels_changed` emission.
 - Produces: `files_attach_requested(tuple[str, ...])` and `files_detach_requested(tuple[str, ...], str)`.
 
-- [ ] **Step 1: Add failing flat/grouped projection and empty-state tests**
+- [x] **Step 1: Add failing flat/grouped projection and empty-state tests**
 
 ```python
 def test_channel_tree_projects_only_attached_files(qapp):
@@ -407,7 +407,7 @@ def test_explicit_empty_attachment_shows_empty_state_and_disables_bulk_actions(q
     assert not nav.channel_list.btn_selected_only.isEnabled()
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_file_navigator.py -q
@@ -415,7 +415,7 @@ def test_explicit_empty_attachment_shows_empty_state_and_disables_bulk_actions(q
 
 Expected: FAIL because attachment APIs and empty state do not exist.
 
-- [ ] **Step 3: Add attachment projection helpers**
+- [x] **Step 3: Add attachment projection helpers**
 
 ```python
 def set_attached_file_ids(self, fids):
@@ -436,7 +436,7 @@ def set_attached_file_ids(self, fids):
 
 Update `_apply_filters`, `_all`, `_none`, `get_checked_channels`, and parent aggregation so detached branches cannot reappear or contribute.
 
-- [ ] **Step 4: Add a real empty widget rather than a fake tree node**
+- [x] **Step 4: Add a real empty widget rather than a fake tree node**
 
 Wrap `tree` and a centered `QLabel` in a `QStackedLayout`. Use:
 
@@ -447,7 +447,7 @@ Wrap `tree` and a centered `QLabel` in a `QStackedLayout`. Use:
 
 No placeholder `QTreeWidgetItem` is allowed.
 
-- [ ] **Step 5: Add parent detach hit routing and signal bubbling**
+- [x] **Step 5: Add parent detach hit routing and signal bubbling**
 
 Use the existing third column: channel leaves keep eye icons; file/source parents show a close icon on hover. Resolve descendant fids with one helper and emit exactly once:
 
@@ -466,7 +466,7 @@ def _fids_for_node(self, item):
     return ()
 ```
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_file_navigator.py tests\ui\test_view_bridge.py -q
@@ -490,7 +490,7 @@ Expected: PASS for flat/grouped projection, detached search exclusion, empty sta
 - Produces: `FileNavigator.auto_attach_changed(bool)` and `set_auto_attach_enabled(bool)`.
 - Produces: `FileNavigator.files_attach_requested(tuple[str, ...])`.
 
-- [ ] **Step 1: Write failing MIME, grouped-row, toggle, and drop tests**
+- [x] **Step 1: Write failing MIME, grouped-row, toggle, and drop tests**
 
 ```python
 def test_file_row_drag_payload_contains_every_group_fid(qapp):
@@ -508,7 +508,7 @@ def test_auto_attach_toggle_is_compact_and_emits(qtbot):
     assert signal.args == [nav.btn_auto_attach.isChecked()]
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_file_navigator.py -q
@@ -516,7 +516,7 @@ def test_auto_attach_toggle_is_compact_and_emits(qtbot):
 
 Expected: FAIL for missing drag/toggle APIs.
 
-- [ ] **Step 3: Implement drag threshold and JSON MIME without affecting click activation**
+- [x] **Step 3: Implement drag threshold and JSON MIME without affecting click activation**
 
 ```python
 def mousePressEvent(self, event):
@@ -535,15 +535,15 @@ def mouseMoveEvent(self, event):
     drag.exec_(Qt.CopyAction)
 ```
 
-- [ ] **Step 4: Add the compact header toggle next to count/kebab**
+- [x] **Step 4: Add the compact header toggle next to count/kebab**
 
 Use `Icons.cloud_download()` until/unless a dedicated existing icon is semantically clearer. Set `checkable=True`, `24x24`, and update tooltip/property for on/off state.
 
-- [ ] **Step 5: Accept only the internal MIME in the lower channel card**
+- [x] **Step 5: Accept only the internal MIME in the lower channel card**
 
 Parse/validate the payload on drop, ignore malformed/empty payloads, emit one `files_attach_requested(tuple(fids))`, and leave existing external URL drop handling to `DropImportMixin`.
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_file_navigator.py -q
@@ -571,7 +571,7 @@ Expected: PASS; clicks still activate, group drags include all fids, malformed p
 - Produces: `_detach_files_from_focused_view(fids, label) -> bool`.
 - Produces: `_on_source_load_finished(new_fids)` and `_restoring_project` guard.
 
-- [ ] **Step 1: Write failing focused/new/split attachment tests**
+- [x] **Step 1: Write failing focused/new/split attachment tests**
 
 ```python
 def test_normal_load_auto_attaches_only_current_view(window_with_csv):
@@ -590,7 +590,7 @@ def test_attach_targets_secondary_focused_view(split_window):
     assert w.view_manager.get(w._primary_view_idx).attached_file_ids == []
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_view_channel_scope.py -q
@@ -598,7 +598,7 @@ def test_attach_targets_secondary_focused_view(split_window):
 
 Expected: FAIL for missing mixin/attachment APIs.
 
-- [ ] **Step 3: Capture/project attachments before checked and hidden state**
+- [x] **Step 3: Capture/project attachments before checked and hidden state**
 
 ```python
 def capture_view(window) -> ViewState:
@@ -621,7 +621,7 @@ def apply_controls_from_state(state, window, canvas=None):
         # existing control restoration unchanged
 ```
 
-- [ ] **Step 4: Implement focused attachment/detachment as atomic state mutations**
+- [x] **Step 4: Implement focused attachment/detachment as atomic state mutations**
 
 ```python
 class ChannelScopeMixin:
@@ -640,7 +640,7 @@ class ChannelScopeMixin:
 
 Detachment snapshots checked count, prompts only when nonzero, filters attached/checked/hidden/colors, clears `overlay_primary` if needed, projects once, and replots once only when selected curves changed.
 
-- [ ] **Step 5: Add auto-attach load transaction and restore suppression**
+- [x] **Step 5: Add auto-attach load transaction and restore suppression**
 
 At `_load_one()` entry, snapshot `before_fids`. In `finally`, compute ordered new fids and call `_on_source_load_finished(new_fids)`. The helper attaches only when:
 
@@ -650,11 +650,11 @@ not self._restoring_project and self.navigator.auto_attach_enabled()
 
 Wrap the project file-loading loop in `self._restoring_project = True` / `finally: False`.
 
-- [ ] **Step 6: Clean attachments from every View on global file close**
+- [x] **Step 6: Clean attachments from every View on global file close**
 
 Before deleting `self.files[fid]`, filter the fid from every `view_manager.views` attachment/checked/hidden/color/primary field. Then remove the global navigator row and reproject the focused View.
 
-- [ ] **Step 7: Update existing View-switch tests for the new empty-View contract**
+- [x] **Step 7: Update existing View-switch tests for the new empty-View contract**
 
 After every `_on_view_new()` that subsequently selects channels, explicitly attach the test fid first:
 
@@ -666,7 +666,7 @@ _set_checked(w, "torque")
 
 Do not weaken assertions about independent checked/hidden/range state.
 
-- [ ] **Step 8: Run tests and commit**
+- [x] **Step 8: Run tests and commit**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_view_channel_scope.py tests\ui\test_view_switch_integration.py tests\ui\test_view_bridge.py -q
@@ -691,7 +691,7 @@ Expected: PASS for auto-on/off, new View empty, split focus, idempotent attach, 
 - Consumes: store/resolver from Task 2 and UI bar from Task 3.
 - Produces: `_save_current_channel_config()`, `_manage_channel_config(config_id)`, `_apply_selected_channel_config(config_id)`.
 
-- [ ] **Step 1: Write failing save/overwrite/no-side-effect/replace/zero-match tests**
+- [x] **Step 1: Write failing save/overwrite/no-side-effect/replace/zero-match tests**
 
 ```python
 def test_config_combo_selection_does_not_change_checked_or_replot(window, monkeypatch):
@@ -717,7 +717,7 @@ def test_zero_match_preserves_state_and_emits_nothing(window, qtbot):
     assert _checked_pairs(window) == before
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_view_channel_scope.py -q
@@ -725,7 +725,7 @@ def test_zero_match_preserves_state_and_emits_nothing(window, qtbot):
 
 Expected: FAIL for missing config handlers.
 
-- [ ] **Step 3: Initialize one shared isolated store and populate the bar**
+- [x] **Step 3: Initialize one shared isolated store and populate the bar**
 
 Use the existing `_preset_settings()` factory so `tests/ui/conftest.py` isolates settings. In `MainWindow.__init__` after `_init_ui()`:
 
@@ -734,7 +734,7 @@ self.channel_config_store = ChannelSelectionConfigStore(self._channel_scope_sett
 self._reload_channel_config_bar()
 ```
 
-- [ ] **Step 4: Implement Save and explicit overwrite confirmation**
+- [x] **Step 4: Implement Save and explicit overwrite confirmation**
 
 Freeze current checked raw names before opening dialogs. On conflict, show exactly:
 
@@ -746,11 +746,11 @@ Freeze current checked raw names before opening dialogs. On conflict, show exact
 
 Create `覆盖配置` and `取消` buttons, set Cancel as default, and call `store.overwrite(existing.config_id, frozen_names)` only after confirmation. Overwrite must not call Apply or replot.
 
-- [ ] **Step 5: Implement manage rename/delete with Cancel defaults**
+- [x] **Step 5: Implement manage rename/delete with Cancel defaults**
 
 The combo Manage sentinel opens actions for the selected config. Rename uses the same trim/casefold validation. Delete asks confirmation, removes the config, clears the combo selection if it was selected, and disables Apply.
 
-- [ ] **Step 6: Implement complete replacement with preflight and hidden intersection**
+- [x] **Step 6: Implement complete replacement with preflight and hidden intersection**
 
 ```python
 resolution = resolve_channel_config(config, state.attached_file_ids, self.files)
@@ -771,11 +771,11 @@ self.navigator.channels_changed.emit()
 
 Before mutation, build color-bearing rows and reuse `_estimate_current_time_overlay_risk()` / `_confirm_overlay_risk()` for a dangerous overlay. Cancellation leaves state unchanged.
 
-- [ ] **Step 7: Add success/partial feedback and dirty marker**
+- [x] **Step 7: Add success/partial feedback and dirty marker**
 
 Use bounded counts in toast/status text. Do not join unbounded missing names. Re-resolve the selected config after manual checkbox changes; set the bar dirty when `set(current_checked) != set(resolution.matched)`.
 
-- [ ] **Step 8: Run tests and commit**
+- [x] **Step 8: Run tests and commit**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_channel_config.py tests\ui\test_channel_config_bar.py tests\ui\test_view_channel_scope.py -q
@@ -798,7 +798,7 @@ Expected: PASS for create, overwrite confirm/cancel, combo no-op, rename/delete,
 **Interfaces:**
 - Verifies all tasks together; produces no new production API.
 
-- [ ] **Step 1: Add project round-trip tests for explicit subsets and explicit empty Views**
+- [x] **Step 1: Add project round-trip tests for explicit subsets and explicit empty Views**
 
 Add `test_project_roundtrip_restores_timedomain_attached_file_subset`: load two
 CSV fixtures through the normal window path, replace the first View's attachment
@@ -812,15 +812,15 @@ window, and assert both `attached_file_ids == []` and the real lower-card empty
 state is visible. These tests must use the existing project save/open helpers and
 must assert by restored source path rather than assuming generated IDs are stable.
 
-- [ ] **Step 2: Add a legacy fixture with no attachment field**
+- [x] **Step 2: Add a legacy fixture with no attachment field**
 
 Write/save a normal project, remove `attached_file_ids` from each View JSON payload, reopen, and assert all successfully restored fids are attached. This test must coexist with the explicit-empty test.
 
-- [ ] **Step 3: Extend the existing multi-group HDF test**
+- [x] **Step 3: Extend the existing multi-group HDF test**
 
 With automatic attachment enabled, loading one two-group HDF must append both generated fids in one transaction and preserve them after project restore without duplication.
 
-- [ ] **Step 4: Run the complete focused suite**
+- [x] **Step 4: Run the complete focused suite**
 
 ```powershell
 $env:QT_QPA_PLATFORM='offscreen'
@@ -830,7 +830,7 @@ $env:PYTHONPATH='.'
 
 Expected: all tests PASS.
 
-- [ ] **Step 5: Run TimeDomain visibility and canvas regressions**
+- [x] **Step 5: Run TimeDomain visibility and canvas regressions**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\ui\test_pg_timedomain_canvas.py tests\ui\test_overlay_grid_ticks.py tests\ui\test_time_filter_overlay.py -q
@@ -838,7 +838,7 @@ Expected: all tests PASS.
 
 Expected: all tests PASS; the prior eye/hidden/range behavior remains intact.
 
-- [ ] **Step 6: Run repository integrity checks**
+- [x] **Step 6: Run repository integrity checks**
 
 ```powershell
 git diff --check
@@ -847,7 +847,7 @@ rg -n -S "TODO|TBD|implement later|选择即应用|追加匹配" mf4_analyzer te
 
 Expected: `git diff --check` returns no output; grep returns no new placeholder/stale behavior in changed files.
 
-- [ ] **Step 7: Render the real navigator at minimum width**
+- [x] **Step 7: Render the real navigator at minimum width**
 
 Use an isolated `QSettings` path and `QT_QPA_PLATFORM=offscreen`; capture a screenshot showing:
 
@@ -859,7 +859,7 @@ Use an isolated `QSettings` path and `QT_QPA_PLATFORM=offscreen`; capture a scre
 
 Compare geometry against the approved V3 prototype; no production file is changed by the probe.
 
-- [ ] **Step 8: Commit the integration coverage**
+- [x] **Step 8: Commit the integration coverage**
 
 ```powershell
 git add tests/ui/test_project_session.py tests/ui/test_view_switch_integration.py tests/ui/test_file_navigator.py docs/superpowers/plans/2026-07-20-view-file-attachment-and-channel-config-implementation.md
@@ -872,13 +872,13 @@ Expected: clean working tree and all focused/integration suites green.
 
 ## Final Verification Checklist
 
-- [ ] Every View attachment write targets `_focused_view_idx`; no loop populates other Views.
-- [ ] New View creation is empty under both auto-attach states.
-- [ ] Combo selection changes only pending `config_id` and emits no selection/replot signal.
-- [ ] Existing-name Save shows old/new counts and defaults to Cancel.
-- [ ] Apply fully replaces `checked`, preserves only intersecting hidden keys, and does not append.
-- [ ] Zero matches leave `checked`, hidden state, colors, primary axis, canvas, and signal count untouched.
-- [ ] Global file close cleans every TimeDomain View; View detach cleans only the focused View.
-- [ ] Legacy missing field and explicit empty field have separate tests and opposite expected outcomes.
-- [ ] Grouped source drag/auto-load carries every generated fid exactly once.
-- [ ] Existing eye, batch-confirmation, Y-fit, X-range, overlay risk, and project restore tests pass.
+- [x] Every View attachment write targets `_focused_view_idx`; no loop populates other Views.
+- [x] New View creation is empty under both auto-attach states.
+- [x] Combo selection changes only pending `config_id` and emits no selection/replot signal.
+- [x] Existing-name Save shows old/new counts and defaults to Cancel.
+- [x] Apply fully replaces `checked`, preserves only intersecting hidden keys, and does not append.
+- [x] Zero matches leave `checked`, hidden state, colors, primary axis, canvas, and signal count untouched.
+- [x] Global file close cleans every TimeDomain View; View detach cleans only the focused View.
+- [x] Legacy missing field and explicit empty field have separate tests and opposite expected outcomes.
+- [x] Grouped source drag/auto-load carries every generated fid exactly once.
+- [x] Existing eye, batch-confirmation, Y-fit, X-range, overlay risk, and project restore tests pass.

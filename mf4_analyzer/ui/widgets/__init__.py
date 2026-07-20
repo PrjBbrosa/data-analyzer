@@ -79,7 +79,6 @@ def _swatch_icon(color, size=11):
 class StatisticsPanel(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAcceptDrops(True)
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken);
         self.setMaximumHeight(110)
         layout = QVBoxLayout(self);
@@ -277,6 +276,7 @@ class MultiFileChannelWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setAcceptDrops(True)
         self.setObjectName("channelCard")
         self.setAttribute(Qt.WA_StyledBackground, True)
         layout = QVBoxLayout(self);
@@ -363,6 +363,7 @@ class MultiFileChannelWidget(QWidget):
         self._attached_file_ids = []
         self._updating = False
         self._hover_detach_item = None
+        self.setProperty("dropActive", False)
         # NEW: for nested (HEAD .hdf) mode
         self._source_items = {}  # filepath_str -> QTreeWidgetItem (top-level file node)
         self._raster_items = {}  # fid -> QTreeWidgetItem (raster subgroup node)
@@ -514,17 +515,26 @@ class MultiFileChannelWidget(QWidget):
 
     def dragEnterEvent(self, event):
         if self._file_fids_from_mime(event.mimeData()):
+            self._set_drop_active(True)
             event.acceptProposedAction()
             return
+        self._set_drop_active(False)
         event.ignore()
 
     def dragMoveEvent(self, event):
         if self._file_fids_from_mime(event.mimeData()):
+            self._set_drop_active(True)
             event.acceptProposedAction()
             return
+        self._set_drop_active(False)
         event.ignore()
 
+    def dragLeaveEvent(self, event):
+        self._set_drop_active(False)
+        event.accept()
+
     def dropEvent(self, event):
+        self._set_drop_active(False)
         fids = self._file_fids_from_mime(event.mimeData())
         if not fids:
             event.ignore()
@@ -532,6 +542,11 @@ class MultiFileChannelWidget(QWidget):
         self.files_attach_requested.emit(fids)
         event.setDropAction(Qt.CopyAction)
         event.accept()
+
+    def _set_drop_active(self, active):
+        self.setProperty("dropActive", bool(active))
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     def _sync_empty_state(self):
         has_attached = bool(self._attached_file_ids)
@@ -604,7 +619,7 @@ class MultiFileChannelWidget(QWidget):
             item.setToolTip(2, "")
 
     def _update_edit_enabled(self):
-        """编辑通道 is only meaningful with at least one file loaded."""
+        """编辑通道 is only meaningful with an attached file."""
         self.btn_edit.setEnabled(bool(self._attached_file_ids))
 
     def _iter_channel_items(self):
@@ -718,7 +733,10 @@ class MultiFileChannelWidget(QWidget):
         )
 
     def _on_item_changed(self, item, col):
-        if self._updating:
+        # Column 2 also changes when the parent detach hover icon is painted.
+        # Only column 0 owns checkbox membership; treating icon writes as
+        # checkbox edits would recursively clear a whole grouped source.
+        if self._updating or col != 0:
             return
         data = item.data(0, Qt.UserRole)
 
