@@ -48,12 +48,16 @@ def capture_view(window) -> ViewState:
 
     checked_rows = list(navigator.get_checked_channels())
     checked = [_channel_key(row) for row in checked_rows]
+    hidden_channels = [
+        _channel_key(row) for row in navigator.get_hidden_channels()
+    ]
     colors = _capture_colors(navigator, checked_rows)
 
     return ViewState(
         name="",
         tab_color="",
         checked=checked,
+        hidden_channels=hidden_channels,
         colors=colors,
         plot_mode=chart_stack.plot_mode(),
         cursor_mode=chart_stack.cursor_mode(),
@@ -68,6 +72,7 @@ def capture_controls_into(state: ViewState, window, canvas=None) -> None:
     """Capture widget/control state into ``state`` for the given time pane."""
     fresh = capture_view(window)
     state.checked = fresh.checked
+    state.hidden_channels = fresh.hidden_channels
     state.colors = fresh.colors
     state.overlay_primary = fresh.overlay_primary
     state.axis_opts = fresh.axis_opts
@@ -112,6 +117,7 @@ def apply_controls_from_state(state: ViewState, window, canvas=None) -> None:
     with _signals_blocked(navigator), _signals_blocked(chart_stack):
         navigator.set_channel_colors(state.colors)
         navigator.set_checked_channels(state.checked)
+        navigator.set_hidden_channels(state.hidden_channels)
         plot_setter = getattr(chart_stack, "set_plot_mode_for_canvas", None)
         cursor_setter = getattr(chart_stack, "set_cursor_mode_for_canvas", None)
         if callable(plot_setter):

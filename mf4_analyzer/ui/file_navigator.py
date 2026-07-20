@@ -159,6 +159,7 @@ class FileNavigator(QWidget):
     file_close_requested = pyqtSignal(str)
     close_all_requested = pyqtSignal()
     channels_changed = pyqtSignal()
+    visibility_changed = pyqtSignal(str, str, bool)
     # Bubbled from the channel tree's 设为左轴 menu: (fid, channel).
     primary_channel_requested = pyqtSignal(str, str)
     channel_context_menu_requested = pyqtSignal()
@@ -249,6 +250,7 @@ class FileNavigator(QWidget):
         # Channel tree
         self.channel_list = MultiFileChannelWidget(self)
         self.channel_list.channels_changed.connect(self.channels_changed)
+        self.channel_list.visibility_changed.connect(self.visibility_changed)
         self.channel_list.primary_channel_requested.connect(
             self.primary_channel_requested
         )
@@ -333,6 +335,23 @@ class FileNavigator(QWidget):
 
     def set_checked_channels(self, checked):
         self.channel_list.set_checked_channels(checked)
+
+    def get_hidden_channels(self):
+        return self.channel_list.get_hidden_channels()
+
+    def set_hidden_channels(self, hidden):
+        self.channel_list.set_hidden_channels(hidden)
+
+    def get_visible_checked_channels(self):
+        return self.channel_list.get_visible_checked_channels()
+
+    def set_channel_visible(self, fid, channel, visible, *, emit=True):
+        return self.channel_list.set_channel_visible(
+            fid, channel, visible, emit=emit
+        )
+
+    def set_time_visibility_available(self, available):
+        self.channel_list.set_time_visibility_available(available)
 
     def get_channel_colors(self):
         return self.channel_list.get_channel_colors()

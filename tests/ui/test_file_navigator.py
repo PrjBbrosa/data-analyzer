@@ -12,6 +12,7 @@ def test_file_navigator_signals_exist(qapp):
     assert hasattr(nav, 'file_close_requested')
     assert hasattr(nav, 'close_all_requested')
     assert hasattr(nav, 'channels_changed')
+    assert hasattr(nav, 'visibility_changed')
 
 
 class FakeFd:
@@ -41,6 +42,31 @@ def test_file_row_added(qapp):
     nav = FileNavigator()
     nav.add_file("f0", FakeFd())
     assert nav.file_list_count() == 1
+
+
+def test_channel_visibility_delegates_and_signal_bubbles(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", FakeFd())
+    nav.set_checked_channels([("f0", "speed")])
+
+    nav.set_hidden_channels([("f0", "speed")])
+
+    assert nav.get_hidden_channels() == [("f0", "speed")]
+    assert nav.get_visible_checked_channels() == []
+    with qtbot.waitSignal(nav.visibility_changed, timeout=200) as blocker:
+        assert nav.set_channel_visible("f0", "speed", True)
+    assert blocker.args == ["f0", "speed", True]
+
+
+def test_time_visibility_column_availability_delegates(qapp):
+    nav = FileNavigator()
+
+    nav.set_time_visibility_available(False)
+    assert nav.channel_list.tree.isColumnHidden(2)
+
+    nav.set_time_visibility_available(True)
+    assert not nav.channel_list.tree.isColumnHidden(2)
 
 
 def test_channel_tree_file_parent_uses_full_filename_stem(qapp):

@@ -5,8 +5,10 @@ from mf4_analyzer.ui.view_state import ViewState
 class _Nav:
     def __init__(self):
         self._checked = [("f1", "rpm", "#111111")]
+        self._hidden = [("f1", "rpm")]
         self._colors = {("f1", "rpm"): "#111111", ("f1", "spd"): "#222222"}
         self.set_checked = None
+        self.set_hidden = None
         self.set_colors = None
         self.blocked = []
 
@@ -21,8 +23,14 @@ class _Nav:
     def get_channel_colors(self):
         return dict(self._colors)
 
+    def get_hidden_channels(self):
+        return list(self._hidden)
+
     def set_checked_channels(self, checked):
         self.set_checked = list(checked)
+
+    def set_hidden_channels(self, hidden):
+        self.set_hidden = list(hidden)
 
     def set_channel_colors(self, colors):
         self.set_colors = dict(colors)
@@ -133,6 +141,7 @@ def test_capture_view_reads_full_screen_state():
     state = view_bridge.capture_view(win)
 
     assert state.checked == [("f1", "rpm")]
+    assert state.hidden_channels == [("f1", "rpm")]
     assert state.colors == {("f1", "rpm"): "#111111"}
     assert state.plot_mode == "overlay"
     assert state.cursor_mode == "single"
@@ -188,6 +197,7 @@ def test_capture_view_uses_channel_name_for_blank_custom_xaxis_label():
 def test_capture_into_preserves_tab_metadata_and_updates_screen_state():
     win = _Window()
     win.navigator._checked = [("f2", "torque", "#333333")]
+    win.navigator._hidden = [("f2", "torque")]
     win.navigator._colors = {("f2", "torque"): "#333333"}
     win.chart_stack._plot_mode = "subplot"
     win.chart_stack._cursor_mode = "dual"
@@ -218,6 +228,7 @@ def test_capture_into_preserves_tab_metadata_and_updates_screen_state():
     assert state.name == "My View"
     assert state.tab_color == "#abcdef"
     assert state.checked == [("f2", "torque")]
+    assert state.hidden_channels == [("f2", "torque")]
     assert state.colors == {("f2", "torque"): "#333333"}
     assert state.plot_mode == "subplot"
     assert state.cursor_mode == "dual"
@@ -242,6 +253,7 @@ def test_apply_view_writes_widgets_and_restore_axis_hook_without_replot():
         name="v",
         tab_color="#000000",
         checked=[("f1", "rpm")],
+        hidden_channels=[("f1", "rpm")],
         colors={("f1", "rpm"): "#abcdef"},
         plot_mode="subplot",
         cursor_mode="off",
@@ -253,6 +265,7 @@ def test_apply_view_writes_widgets_and_restore_axis_hook_without_replot():
 
     assert win.navigator.set_colors == {("f1", "rpm"): "#abcdef"}
     assert win.navigator.set_checked == [("f1", "rpm")]
+    assert win.navigator.set_hidden == [("f1", "rpm")]
     assert win.chart_stack._plot_mode == "subplot"
     assert win.chart_stack._cursor_mode == "off"
     assert win._overlay_primary is None
