@@ -33,6 +33,7 @@ from PyQt5.QtGui import QColor, QBrush, QIcon, QPainter, QPen, QPixmap
 from ...ui_kit.icons import Icons, icon_device_pixel_ratio
 from .. import hints
 from ..axis_group_palette import axis_group_color
+from .channel_config_bar import ChannelConfigBar
 
 
 def _fmt_rate(fs):
@@ -327,6 +328,8 @@ class MultiFileChannelWidget(QWidget):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         layout.addWidget(self.tree)
+        self.config_bar = ChannelConfigBar(self)
+        layout.addWidget(self.config_bar)
         self._file_items = {}   # fid -> QTreeWidgetItem (flat mode: top-level; nested mode: raster node)
         self._colors = {}
         self._files = {}
