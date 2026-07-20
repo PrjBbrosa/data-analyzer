@@ -799,6 +799,26 @@ class MultiFileChannelWidget(QWidget):
         can_split = any(k in self._axis_groups for k in sel)
         return can_merge, can_split
 
+    def _confirm_selected_channel_checks(self, count, state):
+        checking = state == Qt.Checked
+        box = QMessageBox(self.tree)
+        box.setWindowTitle('批量操作确认')
+        box.setIcon(QMessageBox.Question)
+        if checking:
+            box.setText(f'当前选中了 {count} 个通道，是否将它们全部勾选并显示？')
+            confirm_text = '全部勾选并显示'
+        else:
+            box.setText(
+                f'当前选中了 {count} 个通道，'
+                '是否将它们全部取消勾选并从当前视图移除？'
+            )
+            confirm_text = '全部取消勾选'
+        confirm = box.addButton(confirm_text, QMessageBox.AcceptRole)
+        cancel = box.addButton('取消操作', QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec_()
+        return box.clickedButton() is confirm
+
     def _set_selected_channel_checks(self, clicked_item, state):
         """Batch-toggle selected channel rows when their checkbox is clicked."""
         data = clicked_item.data(0, Qt.UserRole)
@@ -819,6 +839,11 @@ class MultiFileChannelWidget(QWidget):
             items.append(clicked_item)
         if len(items) < 2:
             return False
+        if not self._confirm_selected_channel_checks(len(items), state):
+            # The custom checkbox hit path must still consume the click. False
+            # here would fall through to Qt's native toggle and mutate the
+            # clicked row after the user explicitly cancelled the batch.
+            return True
 
         self._updating = True
         try:

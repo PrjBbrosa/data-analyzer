@@ -1,7 +1,7 @@
 from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, Qt
 from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QPushButton
+from PyQt5.QtWidgets import QMessageBox, QPushButton
 
 from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui.widgets import MultiFileChannelWidget
@@ -342,7 +342,9 @@ def test_selected_channel_checkbox_center_click_toggles_once(qapp, qtbot):
     assert channel_item.checkState(0) == Qt.Checked
 
 
-def test_checkbox_click_batches_selected_channel_rows(qapp, qtbot):
+def test_checkbox_click_batches_selected_channel_rows_after_confirmation(
+    qapp, qtbot, monkeypatch
+):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
     widget.resize(360, 280)
@@ -363,6 +365,9 @@ def test_checkbox_click_batches_selected_channel_rows(qapp, qtbot):
 
     fired = []
     widget.channels_changed.connect(lambda: fired.append(1))
+    monkeypatch.setattr(
+        widget, "_confirm_selected_channel_checks", lambda *_args: True
+    )
     hit = tree._check_hit_rect(first, tree.indexFromItem(first, 0))
     assert hit is not None
 
@@ -373,6 +378,104 @@ def test_checkbox_click_batches_selected_channel_rows(qapp, qtbot):
     assert second.checkState(0) == Qt.Checked
     assert file_item.child(2).checkState(0) == Qt.Unchecked
     assert fired == [1]
+
+
+def test_checkbox_batch_cancel_keeps_states_and_emits_nothing(
+    qapp, qtbot, monkeypatch
+):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _MultiChannelFileData())
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    tree = widget.tree
+    file_item = widget._file_items["file-a"]
+    first = file_item.child(0)
+    second = file_item.child(1)
+    tree.clearSelection()
+    first.setSelected(True)
+    second.setSelected(True)
+    monkeypatch.setattr(
+        widget, "_confirm_selected_channel_checks", lambda *_args: False
+    )
+    fired = []
+    widget.channels_changed.connect(lambda: fired.append(1))
+
+    hit = tree._check_hit_rect(first, tree.indexFromItem(first, 0))
+    QTest.mouseClick(tree.viewport(), Qt.LeftButton, Qt.NoModifier, hit.center())
+    QCoreApplication.processEvents()
+
+    assert first.checkState(0) == Qt.Unchecked
+    assert second.checkState(0) == Qt.Unchecked
+    assert fired == []
+
+
+def test_checkbox_batch_check_confirmation_reopens_hidden_members(
+    qapp, qtbot, monkeypatch
+):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _MultiChannelFileData())
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    tree = widget.tree
+    file_item = widget._file_items["file-a"]
+    first = file_item.child(0)
+    second = file_item.child(1)
+    second.setCheckState(0, Qt.Checked)
+    widget.set_channel_visible(
+        "file-a", "Rte_TAS_mTorsionBarTorque_xds16", False, emit=False
+    )
+    tree.clearSelection()
+    first.setSelected(True)
+    second.setSelected(True)
+    monkeypatch.setattr(
+        widget, "_confirm_selected_channel_checks", lambda *_args: True
+    )
+
+    hit = tree._check_hit_rect(first, tree.indexFromItem(first, 0))
+    QTest.mouseClick(tree.viewport(), Qt.LeftButton, Qt.NoModifier, hit.center())
+    QCoreApplication.processEvents()
+
+    assert first.checkState(0) == Qt.Checked
+    assert second.checkState(0) == Qt.Checked
+    assert widget.get_hidden_channels() == []
+
+
+def test_batch_confirmation_copy_and_default_cancel(qapp, qtbot, monkeypatch):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    boxes = []
+    monkeypatch.setattr(
+        QMessageBox, "exec_", lambda box: boxes.append(box) or 0
+    )
+
+    assert widget._confirm_selected_channel_checks(5, Qt.Checked) is False
+    check_box = boxes[-1]
+    assert check_box.windowTitle() == "批量操作确认"
+    assert check_box.text() == "当前选中了 5 个通道，是否将它们全部勾选并显示？"
+    assert {button.text() for button in check_box.buttons()} == {
+        "全部勾选并显示", "取消操作"
+    }
+    assert check_box.defaultButton().text() == "取消操作"
+
+    assert widget._confirm_selected_channel_checks(5, Qt.Unchecked) is False
+    uncheck_box = boxes[-1]
+    assert uncheck_box.text() == (
+        "当前选中了 5 个通道，是否将它们全部取消勾选并从当前视图移除？"
+    )
+    assert {button.text() for button in uncheck_box.buttons()} == {
+        "全部取消勾选", "取消操作"
+    }
+    assert uncheck_box.defaultButton().text() == "取消操作"
 
 
 def test_edit_channels_button_enables_with_file_and_emits(qapp, qtbot):
