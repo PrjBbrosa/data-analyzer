@@ -63,6 +63,36 @@ def test_open_project_roundtrip(qapp, tmp_path):
     assert mw2.chart_stack.current_mode() == "time"
 
 
+def test_project_roundtrip_restores_timedomain_hidden_channels(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a)
+    proj = tmp_path / "visibility.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    mw.navigator.set_checked_channels([(fid, "rpm")])
+    mw.navigator.set_hidden_channels([(fid, "rpm")])
+    mw._capture_current_view()
+    mw.save_project(proj)
+
+    restored = MainWindow()
+    restored.open_project(proj)
+    qapp.processEvents()
+
+    restored_fid = next(iter(restored.files))
+    assert restored.view_manager.get(0).hidden_channels == [
+        (restored_fid, "rpm")
+    ]
+    assert restored.navigator.get_hidden_channels() == [(restored_fid, "rpm")]
+    assert restored.canvas_time.axes_list == []
+    assert restored.canvas_time._empty_hint_text == (
+        "已选择 1 个通道，当前均已隐藏"
+    )
+
+
 def test_project_roundtrip_restores_time_filter_state(qapp, tmp_path):
     from mf4_analyzer.signal.filters import FilterSpec
     from mf4_analyzer.ui.main_window import MainWindow

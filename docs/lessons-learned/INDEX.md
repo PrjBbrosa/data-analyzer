@@ -74,6 +74,7 @@ lesson by default.
 | [Help Screenshot Generator Must Follow The Current Analysis Service](codex-help-screenshot-generator-follows-analysis-service.md) | Regenerating application-help screenshots after analysis orchestration, | See lesson |
 | [Custom X Axis Title Includes Source Unit](custom-x-axis-title-includes-source-unit.md) | Changing the TimeDomain label used for a channel-backed custom X axis. | See lesson |
 | [PowerShell Foreach Output Must Be Collected Before Piping](codex-powershell-foreach-pipeline-grouping.md) | Building Windows PowerShell commands that send the output of a | See lesson |
+| [Keep Headless PyQt Test Fixtures And Modals Deterministic](codex-pytest-ui-suite-fixtures-and-modals.md) | Running explicit PyQt test-file lists, especially after adding a | See lesson |
 
 ## Selection Rules
 

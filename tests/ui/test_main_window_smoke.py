@@ -1777,12 +1777,18 @@ def test_multi_selected_channel_checkbox_plots_all_selected(qapp, qtbot, loaded_
     )
     assert hit is not None
     assert w.channel_list.tree.itemAt(hit.center()) is speed
-    QTest.mouseClick(
-        w.channel_list.tree.viewport(),
-        Qt.LeftButton,
-        Qt.NoModifier,
-        hit.center(),
-    )
+    with patch.object(
+        w.channel_list,
+        "_confirm_selected_channel_checks",
+        return_value=True,
+    ) as confirm:
+        QTest.mouseClick(
+            w.channel_list.tree.viewport(),
+            Qt.LeftButton,
+            Qt.NoModifier,
+            hit.center(),
+        )
+    confirm.assert_called_once_with(2, Qt.Checked)
     qapp.processEvents()
 
     checked = {
