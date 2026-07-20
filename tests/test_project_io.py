@@ -113,6 +113,7 @@ def test_remap_rewrites_and_drops():
     view = {
         "name": "V", "tab_color": "#fff",
         "checked": [["f0", "rpm"], ["f1", "spd"]],
+        "hidden_channels": [["f0", "rpm"], ["f1", "spd"]],
         "colors": {'["f0","rpm"]': "#ff0000", '["f1","spd"]': "#00ff00"},
         "overlay_primary": ["f1", "spd"],
         "ylims": {"[a] rpm": [0.0, 10.0]},
@@ -122,6 +123,7 @@ def test_remap_rewrites_and_drops():
     # f0 -> f3 kept; f1 missing (absent from map) -> dropped
     out = pio.remap_view_fids([view], {"f0": "f3"})[0]
     assert out["checked"] == [["f3", "rpm"]]
+    assert out["hidden_channels"] == [["f3", "rpm"]]
     assert out["colors"] == {'["f3","rpm"]': "#ff0000"}
     assert out["overlay_primary"] is None
     assert out["ylims"] == {"[a] rpm": [0.0, 10.0]}          # untouched
@@ -131,6 +133,9 @@ def test_remap_rewrites_and_drops():
 
 def test_remap_identity_when_map_matches():
     view = {"name": "V", "tab_color": "#fff",
-            "checked": [["f0", "rpm"]], "colors": {}, "overlay_primary": None}
+            "checked": [["f0", "rpm"]],
+            "hidden_channels": [["f0", "rpm"]],
+            "colors": {}, "overlay_primary": None}
     out = pio.remap_view_fids([view], {"f0": "f0"})[0]
     assert out["checked"] == [["f0", "rpm"]]
+    assert out["hidden_channels"] == [["f0", "rpm"]]

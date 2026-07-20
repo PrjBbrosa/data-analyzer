@@ -197,6 +197,11 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
             for fid, ch in (tuple(x) for x in view.get("checked", []))
             if fid in fid_map
         ]
+        v["hidden_channels"] = [
+            [fid_map[fid], ch]
+            for fid, ch in (tuple(x) for x in view.get("hidden_channels", []))
+            if fid in fid_map
+        ]
 
         new_colors = {}
         for key, color in (view.get("colors") or {}).items():
