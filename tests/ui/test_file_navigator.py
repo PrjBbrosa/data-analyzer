@@ -324,11 +324,13 @@ def test_auto_attach_toggle_is_compact_and_emits(qapp, qtbot):
 
     assert nav.btn_auto_attach.maximumWidth() <= 24
     assert nav.auto_attach_enabled() is True
+    enabled_icon_key = nav.btn_auto_attach.icon().cacheKey()
     with qtbot.waitSignal(nav.auto_attach_changed, timeout=200) as emitted:
         nav.btn_auto_attach.click()
 
     assert emitted.args == [False]
     assert nav.auto_attach_enabled() is False
+    assert nav.btn_auto_attach.icon().cacheKey() != enabled_icon_key
 
 
 def test_internal_file_drop_emits_known_fids_once(qapp, qtbot):

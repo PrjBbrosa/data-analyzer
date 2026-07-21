@@ -154,8 +154,23 @@ img,video,canvas,svg{max-width:100%;max-height:100%;}
 .mock .mini{height:170px;border:1px solid var(--panel-bd);border-radius:6px;background:#fff;margin-bottom:14px;position:relative;overflow:hidden;}
 .mock .mini svg{position:absolute;inset:0;width:100%;height:100%;}
 .mock .pbar{height:30px;background:#fff;border:1px solid var(--panel-bd);border-radius:4px;margin-bottom:10px;}
-.realshot{display:block;width:100%;height:auto;max-height:690px;object-fit:contain;border:1.5px solid var(--panel-bd);border-radius:10px;background:#fff;box-shadow:0 22px 54px rgba(40,30,25,.18);}
+.realshot{display:block;width:100%;height:auto;max-height:630px;object-fit:contain;border:1.5px solid var(--panel-bd);border-radius:10px;background:#fff;box-shadow:0 22px 54px rgba(40,30,25,.18);}
 .shotcap{margin-top:14px;font-family:var(--font-mono);font-size:18px;color:var(--mut);text-align:center;letter-spacing:.03em;}
+
+/* 信息密集页：收紧版心，不改变其余讲解页的阅读节奏。 */
+.slide.compact .h2{font-size:66px;}
+.slide.compact .blk{margin-top:24px;}
+.slide.compact .card{padding:24px 26px;}
+.slide.compact .card h3{font-size:29px;margin-bottom:9px;}
+.slide.compact .card p{font-size:22px;line-height:1.43;}
+.slide.compact .kv .row{padding:11px 0;}
+.slide.compact .kv .k{font-size:22px;}
+.slide.compact .kv .v{font-size:23px;line-height:1.35;}
+.slide.compact .tip{padding:18px 24px;}
+.slide.compact .tip p{font-size:23px;line-height:1.38;}
+.slide.compact .flow .fcol{padding:22px 22px;}
+.slide.compact .flow .fcol ol{gap:10px;}
+.slide.compact .flow .fcol li{font-size:21px;line-height:1.32;}
 
 /* 入场动画 */
 .reveal{opacity:0;transform:translateY(28px);transition:opacity .6s var(--ease),transform .6s var(--ease);}
@@ -236,14 +251,17 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
     "version": "v7.7",
     "versionLabel": "使用说明 · V7.7",
     "subtitle": "打开数据、看图分析、导出结果 —— 一份照着做就会的使用说明",
-    "docVersion": "2.3",
-    "updated": "2026-07-17"
+    "docVersion": "2.4",
+    "updated": "2026-07-22"
   },
   "slides": [
     { "type": "cover" },
 
-    { "id": "changelog", "sec": "更新", "kicker": "CHANGELOG", "title": "更新<c>日志</c>", "foot": "本说明会随软件持续更新",
-      "blocks": [ { "type": "changelog" } ] },
+    { "id": "changelog", "sec": "更新", "kicker": "CHANGELOG · RECENT", "title": "最近<c>更新</c>", "foot": "本说明会随软件持续更新", "density": "compact",
+      "blocks": [ { "type": "changelog", "start": 0, "end": 2 } ] },
+
+    { "id": "changelog-history", "sec": "更新", "kicker": "CHANGELOG · HISTORY", "title": "更早的<c>更新</c>", "foot": "完整变更记录", "density": "compact",
+      "blocks": [ { "type": "changelog", "start": 2 } ] },
 
     { "id": "overview", "sec": "开始之前", "kicker": "OVERVIEW", "title": "它能帮你做<c>什么</c>", "foot": "TraceLab",
       "blocks": [
@@ -261,7 +279,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
     { "id": "interface", "sec": "界面导览", "kicker": "THE WINDOW", "title": "界面分三块，<c>各管一件事</c>", "foot": "顶部工具栏：左边管文件与项目，中间切视图，右上是品牌与更新",
       "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.png' alt='TraceLab v7.7 时域主界面的真实截图'><div class='shotcap reveal'>真实 v7.7 主窗口：左侧文件与通道、中间图表工作区、右侧参数面板。</div>" } ] },
 
-    { "id": "load", "sec": "第一步", "kicker": "STEP 1 · LOAD", "title": "第一步 · 打开你的<c>数据</c>", "foot": "TraceLab",
+    { "id": "load", "sec": "第一步", "kicker": "STEP 1 · LOAD", "title": "第一步 · 打开你的<c>数据</c>", "foot": "TraceLab", "density": "compact",
       "blocks": [
         { "type": "cols", "ratio": "1.25fr 1fr", "align": "start",
           "left": [ { "type": "steps", "items": [
@@ -269,9 +287,17 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             "选一个或<b>多个</b>文件（按住可多选）。",
             "软件自动读出里面的<b>所有通道</b>，列在左侧；同时显示文件的行数、采样率、时长。"
           ] } ],
-          "right": [ { "type": "card", "accent": "teal", "no": "支持的文件", "h": "能打开哪些格式",
-            "pills": [".mf4", ".mdf", ".wwt", ".zfd", ".mat", ".asc", ".tdms", ".csv", ".fdc", ".xlsx", ".xls", ".hdf", ".mp4", ".mp3", ".wav", ".blf"],
-            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>WinWert（.wwt）</b>会使用文件里的 Zeit 时基，并保留通道单位、比例和偏置。", "<b>ZFGE2 / TestRunPRO（.zfd）</b>优先使用文件时基；时基无效时会明确标记采样率为估算值，做频域分析前请核对。", "<b>MATLAB（.mat）</b>支持 v4-v7 和 v7.3；只使用明确的时间变量建轴，文件没给可靠工程单位时保持为空。", "<b>ASCII（.asc / .fdc）</b>支持带时间列的分隔表，也支持带已验证采样间隔的固定宽度表；没有时间依据时，软件不会猜测采样率。", "<b>NI TDMS（.tdms）</b>会保留数值波形通道和单位，并按文件里的波形时基建立时间轴；<b>.tdms_index</b>只是配套索引文件，不要单独打开。", "<b>HEAD 声学（.hdf）</b>也能打开：软件会自动按采样率分组、把各通道列出来，照常做时域、FFT 等分析。", "<b>音视频文件（.mp4 / .mov / .mp3 / .wav 等）</b>也能拖进来：软件会取出里面的<b>声音轨道</b>当成信号通道，照常看波形、做 FFT；做声音的 FFT 时还能开 <b>A 计权</b>（见「看频率」页）。", "<b>CAN 总线录制（.blf）</b>也能打开：首次选个 <b>DBC 数据库</b>翻译信号，之后同总线的 .blf 会自动推荐、随工程记住。" ] } ] },
+          "right": [ { "type": "card", "accent": "teal", "no": "支持的文件", "h": "先认准常用格式",
+            "pills": [".mf4", ".mdf", ".wwt", ".zfd", ".mat", ".csv", ".xlsx", ".xls"],
+            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>WinWert（.wwt）</b>会使用文件里的 Zeit 时基，并保留通道单位、比例和偏置。", "<b>ZFGE2 / TestRunPRO（.zfd）</b>优先使用文件时基；时基无效时会明确标记采样率为估算值，做频域分析前请核对。", "<b>MATLAB（.mat）</b>支持 v4-v7 和 v7.3；只使用明确的时间变量建轴，文件没给可靠工程单位时保持为空。" ] } ] }
+      ] },
+
+    { "id": "load-more-formats", "sec": "第一步", "kicker": "STEP 1 · MORE FILES", "title": "更多格式，按<c>可靠时基</c>读取", "foot": "支持的文件（续）", "density": "compact",
+      "blocks": [
+        { "type": "lead", "html": "格式再多，原则不变：有可靠时间依据才建时间轴；没有依据就明确提示，不替你猜。" },
+        { "type": "cols", "align": "start",
+          "left": [ { "type": "card", "no": "测量 / 声学", "h": "表格、TDMS 与 HEAD", "pills": [".asc", ".fdc", ".tdms", ".hdf"], "paras": [ "<b>ASCII（.asc / .fdc）</b>支持带时间列的分隔表，也支持带已验证采样间隔的固定宽度表；没有时间依据时，软件不会猜测采样率。", "<b>NI TDMS（.tdms）</b>会保留数值波形通道和单位，并按文件里的波形时基建立时间轴；<b>.tdms_index</b>只是配套索引文件，不要单独打开。", "<b>HEAD 声学（.hdf）</b>会按采样率分组并列出通道，照常做时域、FFT 等分析。" ] } ],
+          "right": [ { "type": "card", "accent": "teal", "no": "媒体 / CAN", "h": "音视频与总线录制", "pills": [".mp4", ".mov", ".mp3", ".wav", ".blf"], "paras": [ "<b>音视频文件</b>会取出声音轨道作为信号通道，照常看波形、做 FFT；声音 FFT 还能开 <b>A 计权</b>。", "<b>CAN 总线录制（.blf）</b>首次选择 DBC 翻译信号，之后同总线文件会自动推荐，并随工程记住。" ] } ] },
         { "type": "tip", "label": "提示", "html": "打开多个文件后，可以同时勾选<b>不同文件</b>里的通道放在一起对比——很适合「这批和上批有什么不一样」。" }
       ] },
 
@@ -340,7 +366,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             ] } ] }
       ] },
 
-    { "id": "multiview", "sec": "并排比", "kicker": "MULTI-VIEW · SPLIT", "title": "多个视图<c>并排对比</c>", "foot": "拖动分屏 · 缩放联动 · Ctrl+1..5 控制布局与游标",
+    { "id": "multiview", "sec": "并排比", "kicker": "MULTI-VIEW · SPLIT", "title": "多个视图<c>并排对比</c>", "foot": "拖动分屏 · 缩放联动 · Ctrl+1..5 控制布局与游标", "density": "compact",
       "blocks": [
         { "type": "when", "html": "想把同一份数据的不同看法、或不同文件的同一分析<b>放在一起比</b>时用它。" },
         { "type": "cards", "cols": 3, "items": [
@@ -466,7 +492,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         { "type": "tip", "label": "技巧", "html": "想只导出某一段？先在<b>右侧设好时间范围</b>，再勾「仅导出范围」即可。" }
       ] },
 
-    { "id": "cheat", "sec": "速查", "kicker": "CHEAT SHEET", "title": "常用操作<c>速查</c>", "foot": "记不住没关系，回来翻这页",
+    { "id": "cheat", "sec": "速查", "kicker": "CHEAT SHEET", "title": "常用操作<c>速查</c>", "foot": "记不住没关系，回来翻这页", "density": "compact",
       "blocks": [
         { "type": "cols", "align": "start",
           "left": [ { "type": "kv", "items": [
@@ -486,9 +512,9 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ] }
       ] },
 
-    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v7.7 · 使用说明",
+    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v7.7 · 使用说明", "density": "compact",
       "blocks": [
-        { "type": "flow", "height": 640, "cols": [
+        { "type": "flow", "height": 550, "cols": [
           { "title": "场景一", "key": "快速看一个文件", "items": [ "添加文件", "勾选要看的通道", "时域看波形、拖动放大", "需要就切 FFT / 阶次", "导出 Excel 或图片" ] },
           { "title": "场景二", "key": "批量分析一批文件", "accent": "teal", "items": [ "先分析好一个代表文件", "存成预设", "选中一批文件", "跑批处理", "自动出图、出表" ] },
           { "title": "场景三", "key": "边录边看", "items": [ "打开 Cockpit", "配置要采集的信号", "开始采集、看实时卡片", "停止，自动存档", "用 Replay 回放分析" ] }
@@ -501,7 +527,8 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
     { "v": "v7.7", "date": "2026-07-17", "items": [
       "新增原生 <b>WinWert（.wwt）</b>、<b>ZFGE2 / TestRunPRO（.zfd）</b>和 <b>MATLAB（.mat）</b>导入，并保留各格式的时基准确性边界。",
       "Windows 增加仅分析功能的轻量包 <b>TraceLabAnalyzer7.7</b>；完整包继续提供采集能力。",
-      "使用说明和四个分析指南全部换为当前 v7.7 真机渲染图，并同步快捷键与提示文案。"
+      "使用说明和四个分析指南全部换为当前 v7.7 真机渲染图，并同步快捷键与提示文案。",
+      "文件区「新加载文件自动加入当前 View」改用<b>链接 / 断链接</b>图标，开关状态更易辨认。"
     ] },
     { "v": "v7.6", "date": "2026-07-16", "items": [
       "新增 <b>ASCII（.asc）</b>导入：支持分隔表和带已验证采样间隔的固定宽度表；时间信息不明确时会提示，而不会猜采样率。",
@@ -617,7 +644,8 @@ function renderBlock(b, p, nested){
       return `<div class="flow reveal${blk}" style="${b.height?`height:${b.height}px;`:''}">${cols}</div>`;
     }
     case 'changelog': {
-      const es=DECK.changelog.map(e=>`<div class="e"><div class="ver">${e.v}<small>${e.date}</small></div><ul>${e.items.map(x=>`<li>${x}</li>`).join('')}</ul></div>`).join('');
+      const entries=DECK.changelog.slice(b.start||0,b.end);
+      const es=entries.map(e=>`<div class="e"><div class="ver">${e.v}<small>${e.date}</small></div><ul>${e.items.map(x=>`<li>${x}</li>`).join('')}</ul></div>`).join('');
       return `<div class="cl reveal${blk}">${es}</div>`;
     }
     case 'raw': return b.html;
@@ -650,7 +678,7 @@ function renderCover(m){
 function renderContentSlide(s, idx, total, m){
   const verLabel = `${m.title} ${m.version} 使用说明`;
   const blocks = (s.blocks||[]).map((b,bi)=>renderBlock(b,['slides',idx,'blocks',bi],false)).join('');
-  return `<section class="slide">
+  return `<section class="slide${s.density ? ` ${s.density}` : ''}">
     <div class="grat"></div><div class="toprule"></div>
     <div class="chrome"><span class="sec"><b></b>${s.sec||''}</span><span>${verLabel}</span></div>
     <div class="body">

@@ -1,6 +1,7 @@
 """Left pane: file list (replacing QTabWidget) + channel tree."""
 import json
 
+import qtawesome as qta
 from PyQt5.QtCore import QMimeData, QPoint, QSignalBlocker, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QDrag
 from PyQt5.QtWidgets import (
@@ -250,7 +251,6 @@ class FileNavigator(QWidget):
         head.addWidget(self._lbl_count)
         self.btn_auto_attach = QToolButton()
         self.btn_auto_attach.setObjectName("autoAttachFiles")
-        self.btn_auto_attach.setIcon(Icons.cloud_download())
         self.btn_auto_attach.setIconSize(QSize(16, 16))
         self.btn_auto_attach.setFixedSize(QSize(24, 24))
         self.btn_auto_attach.setProperty("role", "tool")
@@ -466,6 +466,10 @@ class FileNavigator(QWidget):
 
     def _sync_auto_attach_button(self):
         enabled = self.btn_auto_attach.isChecked()
+        self.btn_auto_attach.setIcon(qta.icon(
+            "mdi.link-variant" if enabled else "mdi.link-variant-off",
+            color="#4b6078" if enabled else "#8b98aa",
+        ))
         self.btn_auto_attach.setToolTip(
             "新加载文件自动加入当前 View"
             if enabled
