@@ -380,30 +380,51 @@ def test_apply_risk_cancel_preserves_state_and_emits_nothing(
 def test_manage_rename_and_delete_keep_stable_id_and_clear_selection(
     qtbot, qapp, monkeypatch
 ):
+    from mf4_analyzer.ui.widgets.channel_config_manager import ChannelConfigManagerDialog
+
     window = _window(qtbot, qapp)
     config = window.channel_config_store.create("动力", ["speed"])
     window._reload_channel_config_bar(config.config_id)
-    monkeypatch.setattr(
-        window, "_prompt_channel_config_manage_action", lambda *_args: "rename"
+    dialog = ChannelConfigManagerDialog(
+        window.channel_config_store.list(), selected_id=config.config_id, parent=window
     )
-    monkeypatch.setattr(
-        window,
-        "_prompt_channel_config_rename",
-        lambda *_args: ("动力分析", True),
-    )
+    qtbot.addWidget(dialog)
 
-    assert window._manage_channel_config(config.config_id) is True
+    assert window._rename_channel_config_from_manager(
+        dialog, config.config_id, "动力分析"
+    ) is True
     renamed = window.channel_config_store.get(config.config_id)
     assert renamed.name == "动力分析"
 
     monkeypatch.setattr(
-        window, "_prompt_channel_config_manage_action", lambda *_args: "delete"
+        window, "_confirm_channel_config_delete_many", lambda *_args: True
     )
-    monkeypatch.setattr(
-        window, "_confirm_channel_config_delete", lambda *_args: True
-    )
-    assert window._manage_channel_config(config.config_id) is True
+    assert window._delete_channel_configs_from_manager(
+        dialog, (config.config_id,)
+    ) is True
     assert window.channel_config_store.get(config.config_id) is None
     bar = window.navigator.channel_list.config_bar
     assert bar.selected_config_id() is None
     assert not bar.btn_apply.isEnabled()
+
+
+def test_manager_copy_uses_a_unique_name_and_keeps_saved_channels(qtbot, qapp):
+    from mf4_analyzer.ui.widgets.channel_config_manager import ChannelConfigManagerDialog
+
+    window = _window(qtbot, qapp)
+    original = window.channel_config_store.create("动力", ["speed", "torque"])
+    window.channel_config_store.create("动力 副本", ["speed"])
+    dialog = ChannelConfigManagerDialog(
+        window.channel_config_store.list(), selected_id=original.config_id, parent=window
+    )
+    qtbot.addWidget(dialog)
+
+    assert window._copy_channel_config_from_manager(dialog, original.config_id) is True
+
+    copies = [
+        config
+        for config in window.channel_config_store.list()
+        if config.name == "动力 副本 2"
+    ]
+    assert len(copies) == 1
+    assert copies[0].channel_names == ("speed", "torque")

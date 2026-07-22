@@ -10,6 +10,7 @@ from ..channel_config import (
     resolve_channel_config,
 )
 from ..plot_risk import PlotRiskLevel
+from ..widgets.channel_config_manager import ChannelConfigManagerDialog
 
 
 AUTO_ATTACH_SETTINGS_KEY = "channel_selection/auto_attach_current_view"
@@ -217,77 +218,87 @@ class ChannelScopeMixin:
         return box.clickedButton() is overwrite
 
     def _manage_channel_config(self, config_id=None):
+        dialog = ChannelConfigManagerDialog(
+            self.channel_config_store.list(), selected_id=config_id, parent=self
+        )
+        dialog.create_requested.connect(
+            lambda: self._create_channel_config_from_manager(dialog)
+        )
+        dialog.rename_requested.connect(
+            lambda config_id, name: self._rename_channel_config_from_manager(
+                dialog, config_id, name
+            )
+        )
+        dialog.copy_requested.connect(
+            lambda config_id: self._copy_channel_config_from_manager(dialog, config_id)
+        )
+        dialog.delete_requested.connect(
+            lambda config_ids: self._delete_channel_configs_from_manager(
+                dialog, config_ids
+            )
+        )
+        dialog.exec_()
+
+    def _refresh_channel_config_manager(self, dialog, selected_ids=()):
+        self._reload_channel_config_bar()
+        dialog.set_configs(self.channel_config_store.list(), selected_ids=selected_ids)
+
+    def _create_channel_config_from_manager(self, dialog):
+        if self._save_current_channel_config():
+            selected = self.navigator.channel_list.config_bar.selected_config_id()
+            self._refresh_channel_config_manager(dialog, (selected,))
+
+    def _rename_channel_config_from_manager(self, dialog, config_id, name):
+        try:
+            renamed = self.channel_config_store.rename(config_id, name)
+        except (ConfigNameConflict, ValueError) as exc:
+            self.toast(str(exc), "warning")
+            return False
+        self._refresh_channel_config_manager(dialog, (renamed.config_id,))
+        self.toast(f"已重命名为“{renamed.name}”", "success")
+        return True
+
+    def _copy_channel_config_from_manager(self, dialog, config_id):
         config = self.channel_config_store.get(config_id)
         if config is None:
-            config = self._choose_channel_config_for_manage()
-        if config is None:
             return False
-        action = self._prompt_channel_config_manage_action(config)
-        if action == "rename":
-            name, accepted = self._prompt_channel_config_rename(config.name)
-            if not accepted:
-                return False
-            try:
-                renamed = self.channel_config_store.rename(config.config_id, name)
-            except (ConfigNameConflict, ValueError) as exc:
-                self.toast(str(exc), "warning")
-                return False
-            self._reload_channel_config_bar(renamed.config_id)
-            self.toast(f"已重命名为“{renamed.name}”", "success")
-            return True
-        if action == "delete":
-            if not self._confirm_channel_config_delete(config):
-                return False
+        existing = {item.name.casefold() for item in self.channel_config_store.list()}
+        stem = f"{config.name} 副本"
+        name = stem
+        sequence = 2
+        while name.casefold() in existing:
+            name = f"{stem} {sequence}"
+            sequence += 1
+        copy = self.channel_config_store.create(name, config.channel_names)
+        self._refresh_channel_config_manager(dialog, (copy.config_id,))
+        self.toast(f"已复制“{config.name}”", "success")
+        return True
+
+    def _delete_channel_configs_from_manager(self, dialog, config_ids):
+        configs = [
+            config
+            for config_id in config_ids
+            if (config := self.channel_config_store.get(config_id)) is not None
+        ]
+        if not configs or not self._confirm_channel_config_delete_many(configs):
+            return False
+        for config in configs:
             self.channel_config_store.delete(config.config_id)
-            self._reload_channel_config_bar()
-            self.toast(f"已删除配置“{config.name}”", "info")
-            return True
-        return False
+        self._refresh_channel_config_manager(dialog)
+        self.toast(f"已删除 {len(configs)} 个通道配置", "info")
+        return True
 
-    def _choose_channel_config_for_manage(self):
-        configs = self.channel_config_store.list()
-        if not configs:
-            self.toast("尚未保存通道配置", "info")
-            return None
-        labels = [config.name for config in configs]
-        name, accepted = QInputDialog.getItem(
-            self, "管理通道配置", "选择配置：", labels, 0, False
-        )
-        if not accepted:
-            return None
-        return next((config for config in configs if config.name == name), None)
-
-    def _prompt_channel_config_manage_action(self, config):
-        box = QMessageBox(self)
-        box.setWindowTitle("管理通道配置")
-        box.setText(f"配置“{config.name}” · {len(config.channel_names)} 个通道")
-        rename = box.addButton("重命名", QMessageBox.ActionRole)
-        delete = box.addButton("删除", QMessageBox.DestructiveRole)
-        cancel = box.addButton("取消", QMessageBox.RejectRole)
-        box.setDefaultButton(cancel)
-        box.exec_()
-        if box.clickedButton() is rename:
-            return "rename"
-        if box.clickedButton() is delete:
-            return "delete"
-        return "cancel"
-
-    def _prompt_channel_config_rename(self, current_name):
-        return QInputDialog.getText(
-            self,
-            "重命名通道配置",
-            "配置名称：",
-            QLineEdit.Normal,
-            current_name,
-        )
-
-    def _confirm_channel_config_delete(self, config):
+    def _confirm_channel_config_delete_many(self, configs):
         box = QMessageBox(self)
         box.setWindowTitle("删除通道配置")
         box.setIcon(QMessageBox.Warning)
-        box.setText(f"删除配置“{config.name}”？")
-        box.setInformativeText("删除后无法从应用内撤销")
-        delete = box.addButton("删除配置", QMessageBox.DestructiveRole)
+        shown_names = "、".join(f"“{config.name}”" for config in configs[:3])
+        suffix = "等" if len(configs) > 3 else ""
+        box.setText(f"删除 {len(configs)} 个通道配置？")
+        box.setInformativeText(
+            f"将删除 {shown_names}{suffix}\n删除后无法从应用内撤销"
+        )
+        delete = box.addButton("删除所选配置", QMessageBox.DestructiveRole)
         cancel = box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(cancel)
         box.exec_()

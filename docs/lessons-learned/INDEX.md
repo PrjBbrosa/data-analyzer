@@ -76,6 +76,7 @@ lesson by default.
 | [PowerShell Foreach Output Must Be Collected Before Piping](codex-powershell-foreach-pipeline-grouping.md) | Building Windows PowerShell commands that send the output of a | See lesson |
 | [Keep Headless PyQt Test Fixtures And Modals Deterministic](codex-pytest-ui-suite-fixtures-and-modals.md) | Running explicit PyQt test-file lists, especially after adding a | See lesson |
 | [Guard QTreeWidget Checkbox Handlers By Column](codex-qt-tree-itemchanged-column-guard.md) | Editing icons, tooltips, colors, or other item data in a | See lesson |
+| [Channel Config Picker Uses Structured Rows](codex-channel-config-picker-structured-rows.md) | Changing the TimeDomain saved-channel configuration picker or its | See lesson |
 
 ## Selection Rules
 

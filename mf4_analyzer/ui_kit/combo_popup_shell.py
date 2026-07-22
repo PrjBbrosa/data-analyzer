@@ -42,6 +42,33 @@ QAbstractItemView::item:selected {
 }
 """
 
+_CHANNEL_CONFIG_POPUP_VIEW_QSS = """
+QAbstractItemView {
+    padding: 6px;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background-color: #ffffff;
+    outline: none;
+    selection-background-color: transparent;
+    selection-color: #111827;
+}
+QAbstractItemView::item {
+    min-height: 30px;
+    padding: 5px 10px;
+    border: none;
+    border-radius: 7px;
+    background-color: #ffffff;
+    color: #111827;
+}
+QAbstractItemView::item:hover,
+QAbstractItemView::item:selected {
+    border: none;
+    border-radius: 7px;
+    background-color: #e8f1ff;
+    color: #0f3f8f;
+}
+"""
+
 
 def _apply_shell(window):
     """Apply a transparent, frameless shell to a popup window once."""
@@ -65,15 +92,15 @@ def _int_property(widget, name):
     return value if value > 0 else None
 
 
-def _apply_view_chrome(view):
+def _apply_view_chrome(view, *, popup_qss=_POPUP_VIEW_QSS):
     if view is None:
         return
     view.setFrameShape(QFrame.NoFrame)
     view.setLineWidth(0)
     view.setMidLineWidth(0)
     view.setAttribute(Qt.WA_StyledBackground, True)
-    if view.styleSheet() != _POPUP_VIEW_QSS:
-        view.setStyleSheet(_POPUP_VIEW_QSS)
+    if view.styleSheet() != popup_qss:
+        view.setStyleSheet(popup_qss)
 
     viewport = view.viewport()
     if viewport is not None:
@@ -133,8 +160,13 @@ def prepare_combo_popup(combo):
     """
     if not isinstance(combo, QComboBox):
         return combo
+    popup_qss = (
+        _CHANNEL_CONFIG_POPUP_VIEW_QSS
+        if combo.property("popupStyle") == "channel-config"
+        else _POPUP_VIEW_QSS
+    )
     for view in _popup_views(combo):
-        _apply_view_chrome(view)
+        _apply_view_chrome(view, popup_qss=popup_qss)
         _apply_shell(view.window())
         _sync_popup_width(combo, view)
     return combo

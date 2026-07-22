@@ -78,6 +78,51 @@ def test_combo_is_editable_for_name_search(qtbot):
 
     assert bar.combo.isEditable()
     assert not bar.combo.insertPolicy()
+    assert bar.combo.maxVisibleItems() == 6
+    assert bar.combo.property("popupStyle") == "channel-config"
+
+
+def test_config_popup_items_keep_names_and_counts_in_separate_roles(qtbot):
+    from mf4_analyzer.ui.widgets.channel_config_bar import (
+        CHANNEL_COUNT_ROLE,
+        CONFIG_NAME_ROLE,
+        ITEM_KIND_ROLE,
+    )
+
+    bar = ChannelConfigBar()
+    qtbot.addWidget(bar)
+    bar.set_configs([fake_config("a", "动力分析", 4)])
+
+    assert bar.combo.itemText(1) == "动力分析 · 4 个"
+    assert bar.combo.itemData(1, CONFIG_NAME_ROLE) == "动力分析"
+    assert bar.combo.itemData(1, CHANNEL_COUNT_ROLE) == 4
+    assert bar.combo.itemData(1, ITEM_KIND_ROLE) == "config"
+    assert bar.combo.itemText(bar.combo.count() - 1) == "管理通道配置…"
+
+
+def test_config_combo_opens_above_its_bottom_bar_anchor(qtbot):
+    from PyQt5.QtCore import QCoreApplication
+
+    bar = ChannelConfigBar()
+    qtbot.addWidget(bar)
+    bar.set_configs([
+        fake_config("a", "动力分析", 4),
+        fake_config("b", "转向回正", 3),
+        fake_config("c", "温度核查", 5),
+    ])
+    bar.resize(280, 38)
+    bar.show()
+    QCoreApplication.processEvents()
+
+    bar.combo.showPopup()
+    QCoreApplication.processEvents()
+    QCoreApplication.processEvents()
+
+    popup = bar.combo.view().window()
+    anchor_y = bar.combo.mapToGlobal(bar.combo.rect().topLeft()).y()
+    # Native popup borders may occupy the final 1–2 logical pixels.
+    assert popup.y() + popup.height() <= anchor_y + 3
+    bar.combo.hidePopup()
 
 
 def test_typed_nonexistent_name_cannot_apply_stale_selection(qtbot):

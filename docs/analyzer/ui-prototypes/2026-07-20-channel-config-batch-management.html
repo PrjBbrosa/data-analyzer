@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TraceLab — 批量管理通道配置</title>
+<style>
+  :root{
+    --ink:#111827; --muted:#64748b; --quiet:#94a3b8; --line:#dfe5ee;
+    --soft-line:#eef2f7; --canvas:#e8edf4; --panel:#fff; --subtle:#f8fafc;
+    --blue:#1769e0; --blue-ink:#0f3f8f; --blue-wash:#e8f1ff;
+    --red:#b42318; --red-line:#f1c9c4; --red-wash:#fdf4f3;
+    --radius:10px; --shadow:0 24px 70px rgba(15,23,42,.20);
+  }
+  *{box-sizing:border-box} body{margin:0;min-width:960px;background:var(--canvas);color:var(--ink);font-family:"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif}
+  button,input{font:inherit} button{cursor:pointer}
+  .app{height:100vh;min-height:720px;padding:34px 48px;background:radial-gradient(circle at 15% 8%,#f8fbff 0,transparent 31%),var(--canvas)}
+  .context{height:100%;border:1px solid #d4dce8;border-radius:15px;background:#f6f8fb;overflow:hidden;box-shadow:0 12px 36px rgba(15,23,42,.08)}
+  .appbar{height:48px;display:flex;align-items:center;padding:0 18px;background:#fff;border-bottom:1px solid var(--line);gap:10px;color:#475569;font-size:13px;font-weight:650}
+  .traffic{display:flex;gap:6px;margin-right:8px}.traffic i{width:10px;height:10px;border-radius:99px;background:#cbd5e1}.traffic i:first-child{background:#fb7185}.brand{font-weight:760;color:#1f2937}.crumb{color:#94a3b8;font-weight:500}.underlay{display:grid;grid-template-columns:270px 1fr 290px;height:calc(100% - 48px);filter:blur(.2px);opacity:.72}
+  .rail,.fake-chart,.inspector{padding:18px;border-right:1px solid #e2e8f0}.rail h3,.inspector h3{font-size:13px;margin:2px 0 14px}.file{height:58px;border:1px solid #d9e2ef;border-radius:9px;background:#fff;padding:10px;margin-bottom:8px;font-size:13px;font-weight:650}.file small{display:block;margin-top:5px;color:#72839a;font-weight:500}.fake-chart{padding:32px;background:repeating-linear-gradient(0deg,transparent,transparent 79px,#e4eaf2 80px),repeating-linear-gradient(90deg,transparent,transparent 123px,#e4eaf2 124px)}.wave{height:240px;margin-top:126px;background:linear-gradient(164deg,transparent 46%,#2b7bd8 46.3%,#2b7bd8 47.3%,transparent 47.6%),linear-gradient(188deg,transparent 52%,#50a2e8 52.3%,#50a2e8 53.3%,transparent 53.6%)}.inspector{border-right:0;background:#fbfcfe}.inspector .card{height:122px;border:1px solid var(--line);border-radius:9px;background:#fff;margin-bottom:10px}
+  .scrim{position:fixed;inset:0;background:rgba(34,53,78,.17);display:grid;place-items:center;padding:28px}
+  .dialog{width:min(940px,calc(100vw - 80px));background:var(--panel);border:1px solid #cbd5e1;border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+  .dialog-head{height:72px;display:flex;align-items:center;padding:0 24px;border-bottom:1px solid var(--soft-line);gap:14px}.head-copy{min-width:0}.title{font-size:17px;font-weight:760;letter-spacing:.01em}.sub{margin-top:4px;font-size:12px;color:var(--muted)}.close{margin-left:auto;width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:#64748b;font-size:20px;line-height:1}.close:hover{background:#f1f5f9;color:#334155}
+  .toolbar{height:58px;padding:0 20px;display:flex;align-items:center;gap:9px;border-bottom:1px solid var(--soft-line);background:#fcfdff}.search{height:30px;width:278px;border:1px solid #cfd9e6;border-radius:7px;background:#fff;padding:0 10px;color:#334155;outline:none}.search:focus{border-color:var(--blue);box-shadow:0 0 0 2px #e8f1ff}.spacer{flex:1}.btn{height:30px;padding:0 11px;border:1px solid #d7e0eb;border-radius:7px;background:#fff;color:#334155;font-size:12.5px;font-weight:650;white-space:nowrap}.btn:hover{border-color:#aebfd3;background:#f8fbff}.btn.primary{border-color:var(--blue);background:var(--blue);color:#fff}.btn.primary:hover{background:#135abd}.btn.danger{color:var(--red);border-color:var(--red-line);background:var(--red-wash)}.btn.danger:hover{background:#fbe9e7;border-color:#e3a8a1}.btn:disabled{cursor:default;color:#a0acbc;border-color:#e5ebf2;background:#f8fafc}
+  .content{display:grid;grid-template-columns:minmax(0,1fr) 276px;min-height:408px}.list-area{min-width:0;border-right:1px solid var(--soft-line)}.list-head{height:39px;display:grid;grid-template-columns:42px minmax(0,1fr) 88px 128px 42px;align-items:center;padding:0 12px;color:#718096;border-bottom:1px solid var(--soft-line);font-size:11.5px;font-weight:700;letter-spacing:.025em}.check{appearance:none;width:16px;height:16px;border:1.5px solid #b9c6d6;border-radius:4px;background:#fff;vertical-align:middle;display:inline-grid;place-items:center;cursor:pointer}.check:checked{border-color:var(--blue);background:var(--blue)}.check:checked::after{content:"✓";color:#fff;font-size:12px;font-weight:800;line-height:1}
+  .rows{padding:7px 8px}.row{display:grid;grid-template-columns:42px minmax(0,1fr) 88px 128px 42px;align-items:center;min-height:58px;padding:0 4px;border:1px solid transparent;border-radius:9px}.row:hover{background:#f8fbff}.row.selected{background:var(--blue-wash);border-color:#c7dbfb}.name{display:flex;align-items:center;min-width:0;gap:9px;font-size:13px;font-weight:700}.tag{display:inline-flex;align-items:center;height:19px;padding:0 6px;border-radius:5px;background:#eff4fb;color:#58708f;font-size:10.5px;font-weight:700}.selected .tag{background:#d5e6ff;color:#1761bd}.meta{font-size:12px;color:#64748b}.more{width:28px;height:28px;border:0;border-radius:6px;background:transparent;color:#64748b;font-size:17px}.more:hover{background:#fff;color:#334155}.empty{padding:15px 18px 9px;color:#94a3b8;font-size:12px}
+  .detail{padding:18px;background:#fcfdff}.eyebrow{font-size:11px;color:#718096;font-weight:750;letter-spacing:.05em}.selection-title{margin:7px 0 5px;font-size:15px;font-weight:760;line-height:1.35}.selection-desc{font-size:12px;line-height:1.55;color:#64748b;margin-bottom:17px}.label{display:block;margin-bottom:6px;font-size:11.5px;font-weight:700;color:#475569}.field{width:100%;height:31px;border:1px solid #cfd9e6;border-radius:7px;background:#fff;padding:0 9px;color:#1f2937;outline:0;font-size:12.5px}.field:focus{border-color:var(--blue);box-shadow:0 0 0 2px #e8f1ff}.detail-actions{display:flex;gap:8px;margin-top:9px}.detail-note{margin-top:17px;padding:10px;border-radius:8px;background:#f1f5f9;color:#64748b;font-size:11.5px;line-height:1.55}.detail-note b{color:#475569}
+  .batchbar{height:56px;padding:0 20px;display:flex;align-items:center;gap:9px;border-top:1px solid var(--soft-line);background:#fbfdff}.count{font-size:12.5px;color:#475569;font-weight:650}.count b{color:var(--blue)}.batchbar .spacer{flex:1}.tip{font-size:11.5px;color:#94a3b8;margin-right:2px}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(18px);opacity:0;pointer-events:none;padding:9px 13px;border-radius:8px;background:#1f2937;color:#fff;font-size:12px;box-shadow:0 9px 22px rgba(15,23,42,.24);transition:.2s}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  @media(max-width:980px){body{min-width:0}.app{padding:16px}.content{grid-template-columns:1fr}.detail{display:none}.dialog{width:100%}.scrim{padding:16px}.list-head,.row{grid-template-columns:38px minmax(0,1fr) 72px 38px}.list-head>*:nth-child(4),.row>*:nth-child(4){display:none}.toolbar .btn:not(.primary){display:none}}
+</style>
+</head>
+<body>
+<main class="app" aria-label="TraceLab 原型背景">
+  <section class="context"><div class="appbar"><span class="traffic"><i></i><i></i><i></i></span><span class="brand">TraceLab v7.7</span><span class="crumb">时域 / View 1</span></div><div class="underlay"><aside class="rail"><h3>文件</h3><div class="file">tiaonorth<small>20854 行 · 100.0 Hz</small></div><div class="file">tiaofri<small>34949 行 · 100.0 Hz</small></div></aside><div class="fake-chart"><div class="wave"></div></div><aside class="inspector"><h3>图表设置</h3><div class="card"></div><div class="card"></div></aside></div></section>
+</main>
+
+<section class="scrim" aria-label="管理通道配置">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="title">
+    <header class="dialog-head"><div class="head-copy"><div id="title" class="title">管理通道配置</div><div class="sub">配置保存的是通道名称；应用到当前 View 时自动匹配已加入的文件。</div></div><button class="close" aria-label="关闭">×</button></header>
+    <div class="toolbar"><input id="search" class="search" type="search" placeholder="搜索配置名称或通道…"><button id="selectAll" class="btn">全选</button><button id="clear" class="btn">清除选择</button><span class="spacer"></span><button id="newConfig" class="btn primary">＋ 从当前勾选新建</button></div>
+    <div class="content">
+      <section class="list-area" aria-label="已保存配置列表">
+        <div class="list-head"><span><input id="masterCheck" class="check" type="checkbox" aria-label="全选配置"></span><span>配置</span><span>通道数</span><span>最后更新</span><span></span></div>
+        <div id="rows" class="rows"></div><div id="empty" class="empty" hidden>没有符合条件的配置。</div>
+      </section>
+      <aside class="detail">
+        <div class="eyebrow">单项编辑</div><div id="detailTitle" class="selection-title">已选择 2 项</div><div id="detailDesc" class="selection-desc">可批量删除；请只选择一项后重命名。</div>
+        <label class="label" for="nameInput">配置名称</label><input id="nameInput" class="field" value="" disabled>
+        <div class="detail-actions"><button id="rename" class="btn" disabled>重命名</button><button id="duplicate" class="btn" disabled>复制一份</button></div>
+        <div class="detail-note"><b>批量规则</b><br>删除可同时处理多项；重命名只允许单项，避免名称规则和结果不清楚。</div>
+      </aside>
+    </div>
+    <footer class="batchbar"><div id="count" class="count">已选择 <b>2</b> 项</div><span class="tip">删除后无法从应用内撤销</span><span class="spacer"></span><button id="delete" class="btn danger">删除所选 2 项</button></footer>
+  </div>
+</section>
+<div id="toast" class="toast" role="status"></div>
+
+<script>
+const configs=[
+  {id:'drive',name:'动力分析',channels:4,updated:'今天 10:24',tags:['转向','扭矩']},
+  {id:'return',name:'回正核查',channels:3,updated:'昨天 16:08',tags:['回正']},
+  {id:'offset',name:'零偏排查',channels:7,updated:'7 月 18 日',tags:['诊断','速度']},
+  {id:'thermal',name:'热保护验证',channels:5,updated:'7 月 16 日',tags:['温度']},
+  {id:'road',name:'路试基线',channels:12,updated:'7 月 12 日',tags:['路试','基线']}
+];
+let selected=new Set(['drive','return']); let query='';
+const $=s=>document.querySelector(s), rows=$('#rows');
+function visible(){const q=query.trim().toLowerCase();return configs.filter(c=>!q||[c.name,...c.tags].join(' ').toLowerCase().includes(q));}
+function render(){const list=visible(); rows.innerHTML=list.map(c=>`<div class="row ${selected.has(c.id)?'selected':''}" data-id="${c.id}"><span><input class="check row-check" type="checkbox" ${selected.has(c.id)?'checked':''} aria-label="选择 ${c.name}"></span><span class="name">${c.name}<span class="tag">${c.tags[0]}</span></span><span class="meta">${c.channels} 个</span><span class="meta">${c.updated}</span><button class="more" title="更多操作">···</button></div>`).join('');$('#empty').hidden=!!list.length;$('#masterCheck').checked=list.length>0&&list.every(c=>selected.has(c.id));syncDetail();}
+function syncDetail(){const chosen=configs.filter(c=>selected.has(c.id)), n=chosen.length, one=chosen[0];$('#count').innerHTML=`已选择 <b>${n}</b> 项`;$('#delete').textContent=n?`删除所选 ${n} 项`:'删除所选';$('#delete').disabled=!n;$('#clear').disabled=!n;$('#rename').disabled=n!==1;$('#duplicate').disabled=n!==1;$('#nameInput').disabled=n!==1;$('#nameInput').value=n===1?one.name:'';$('#detailTitle').textContent=n===1?one.name:n?`已选择 ${n} 项`:'未选择配置';$('#detailDesc').textContent=n===1?`${one.channels} 个通道 · 最后更新 ${one.updated}`:n?'可批量删除；请只选择一项后重命名。':'从左侧选择一个或多个配置。';}
+function flash(text){const t=$('#toast');t.textContent=text;t.classList.add('show');clearTimeout(flash.timer);flash.timer=setTimeout(()=>t.classList.remove('show'),1800)}
+rows.addEventListener('click',e=>{const row=e.target.closest('.row');if(!row)return;const id=row.dataset.id;if(e.target.closest('.more')){flash('原型：这里打开该配置的更多操作');return}if(e.target.closest('.row-check')){e.target.checked?selected.add(id):selected.delete(id)}else{selected.has(id)?selected.delete(id):selected.add(id)}render()});
+$('#search').addEventListener('input',e=>{query=e.target.value;render()});$('#selectAll').onclick=()=>{visible().forEach(c=>selected.add(c.id));render()};$('#clear').onclick=()=>{selected.clear();render()};$('#masterCheck').onchange=e=>{visible().forEach(c=>e.target.checked?selected.add(c.id):selected.delete(c.id));render()};
+$('#rename').onclick=()=>{const item=configs.find(c=>selected.has(c.id));if(item&&$('#nameInput').value.trim()){item.name=$('#nameInput').value.trim();item.updated='刚刚';flash('已重命名（原型）');render()}};
+$('#duplicate').onclick=()=>{const item=configs.find(c=>selected.has(c.id));if(item){const copy={...item,id:Date.now()+'',name:item.name+' 副本',updated:'刚刚'};configs.unshift(copy);selected=new Set([copy.id]);flash('已复制一份（原型）');render()}};
+$('#delete').onclick=()=>{const n=selected.size;if(!n)return;configs.splice(0,configs.length,...configs.filter(c=>!selected.has(c.id)));selected.clear();flash(`已删除 ${n} 项（原型）`);render()};$('#newConfig').onclick=()=>flash('原型：回到当前勾选后保存为新配置');render();
+</script>
+</body>
+</html>
