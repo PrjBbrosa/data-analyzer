@@ -87,18 +87,26 @@ class _ModifierWheelViewBox(pg.ViewBox):
     def mouseDragEvent(self, ev, axis=None):
         owner = self._owner_canvas
         try:
-            is_rect_left_2d = (
+            is_left_2d = (
                 owner is not None
                 and ev.button() == Qt.LeftButton
-                and self.state.get("mouseMode") == pg.ViewBox.RectMode
                 and axis is None
             )
+            is_rect_left_2d = (
+                is_left_2d
+                and self.state.get("mouseMode") == pg.ViewBox.RectMode
+            )
         except Exception:
+            is_left_2d = False
             is_rect_left_2d = False
-        if is_rect_left_2d:
+        if is_left_2d:
             try:
                 if ev.isStart():
-                    owner.disable_interactive_quality()
+                    begin = getattr(owner, "_begin_view_interaction", None)
+                    if callable(begin):
+                        begin()
+                    elif is_rect_left_2d:
+                        owner.disable_interactive_quality()
             except Exception:
                 pass
         super().mouseDragEvent(ev, axis=axis)
@@ -111,6 +119,14 @@ class _ModifierWheelViewBox(pg.ViewBox):
                 )
                 if is_xmaster and ev.isFinish():
                     owner._apply_overlay_box_zoom_y()
+            except Exception:
+                pass
+        if is_left_2d:
+            try:
+                if ev.isFinish():
+                    end = getattr(owner, "_end_view_interaction", None)
+                    if callable(end):
+                        end()
             except Exception:
                 pass
 

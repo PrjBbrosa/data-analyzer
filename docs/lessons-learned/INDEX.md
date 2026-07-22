@@ -76,7 +76,12 @@ lesson by default.
 | [PowerShell Foreach Output Must Be Collected Before Piping](codex-powershell-foreach-pipeline-grouping.md) | Building Windows PowerShell commands that send the output of a | See lesson |
 | [Keep Headless PyQt Test Fixtures And Modals Deterministic](codex-pytest-ui-suite-fixtures-and-modals.md) | Running explicit PyQt test-file lists, especially after adding a | See lesson |
 | [Guard QTreeWidget Checkbox Handlers By Column](codex-qt-tree-itemchanged-column-guard.md) | Editing icons, tooltips, colors, or other item data in a | See lesson |
+| [Co-axis Dual Cursor Must Retain Every Member Extremum](codex-coaxis-dual-cursor-extrema.md) | Changing dual-cursor min/max markers, co-axis groups, or TimeDomain | See lesson |
 | [Channel Config Picker Uses Structured Rows](codex-channel-config-picker-structured-rows.md) | Changing the TimeDomain saved-channel configuration picker or its | See lesson |
+| [Channel Config UI Needs Host-Width Render Proof](codex-channel-config-host-geometry-render.md) | Changing the channel configuration rail, its combo popup, or the | See lesson |
+| [CRC-like curves need raw profiling, an AA gate, and a cached smooth layer](crc-like-high-variation-envelope-rendering.md) | A modest-size CRC, rolling counter, byte-valued, or dense discrete time-domain channel is slow to select, pan, or zoom, especially when the UI reports that antialiasing is active. | See lesson |
+| [Channel Tree Leaf Delegate Geometry](codex-channel-tree-leaf-delegate-geometry.md) | Changing selected-state presentation or icons in the channel tree. | See lesson |
+| [QMessageBox QSS Content Width](codex-qmessagebox-qss-content-width.md) | Adding or changing text buttons in a styled QMessageBox, especially | See lesson |
 
 ## Selection Rules
 

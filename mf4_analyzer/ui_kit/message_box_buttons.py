@@ -97,6 +97,28 @@ def prepare_message_box_buttons(box):
     return box
 
 
+def fit_message_box_buttons_to_text(box, *, content_slack: int = 8):
+    """Reserve each message-box button's text area before Qt lays it out.
+
+    The shared QSS applies horizontal padding after its ``min-width``.  A
+    native QMessageBox button row can otherwise allocate the QSS minimum as
+    the *outer* width, leaving less room than the label itself.  Set a
+    per-button content minimum from the active font so the same dialog stays
+    correct with the platform's Chinese fallback font.
+    """
+    if not isinstance(box, QMessageBox):
+        return box
+    for button in box.buttons():
+        if not isinstance(button, QPushButton):
+            continue
+        content_width = max(
+            52,
+            button.fontMetrics().horizontalAdvance(button.text()) + content_slack,
+        )
+        button.setStyleSheet(f"min-width: {content_width}px;")
+    return box
+
+
 class _MessageBoxButtonRoleFilter(QObject):
     def eventFilter(self, obj, event):  # noqa: N802
         if event.type() in (QEvent.Polish, QEvent.Show, QEvent.ChildAdded):

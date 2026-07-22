@@ -387,6 +387,8 @@ class MainWindow(
         total: int,
         label: str | None = None,
         token: object | None = None,
+        *,
+        process_events: bool = False,
     ) -> None:
         if self._active_compute_progress_token is None:
             return
@@ -396,6 +398,12 @@ class MainWindow(
         ):
             return
         self._compute_progress.set_progress(current, total, label)
+        if process_events:
+            # Render only the tiny status-bar widget.  Draining the entire Qt
+            # queue here can paint the *previous* chart midway through a chart
+            # rebuild, which makes a progress update itself look like a plot
+            # stall.  ``repaint`` is synchronous and scoped to this widget.
+            self._compute_progress.repaint()
 
     def _finish_compute_progress(
         self,
@@ -2136,20 +2144,15 @@ class MainWindow(
         self.statusBar.showMessage(f"聚焦{which}视图：通道勾选将作用于此栏", 2000)
 
     def _ch_changed(self):
-        # Cache invalidation site 4: the visible channel set changed, so
-        # the Line2D map plot_channels rebuilds will not match the cache
-        # entries from the prior selection. Drop the focused canvas's cache;
-        # the next plot_time() will re-prime as needed. (Outside split the
-        # focused canvas IS self.canvas_time, so this is unchanged.)
+        # Capture state before the selection-delta attempt. Cache invalidation
+        # is deferred until `_plot_time_on_canvas` reports an explicit full-
+        # rebuild reason; visibility-only deltas retain unchanged envelopes.
         focused = self.chart_stack.focused_canvas()
         idx = self._view_index_for_canvas(focused)
         if idx is not None and 0 <= idx < len(self.view_manager.views):
             self._view_bridge.capture_controls_into(
                 self.view_manager.get(idx), self, focused
             )
-        invalidate = getattr(focused, 'invalidate_envelope_cache', None)
-        if callable(invalidate):
-            invalidate("selection changed")
         if self.chart_stack.current_mode() == 'fft':
             self._sync_fft_source_summary()
             # FFT 的「焦点源」是 navigator 勾选的首条通道，勾选变化必须驱动 Auto
@@ -2177,10 +2180,6 @@ class MainWindow(
         # window and can restore it when the eye is opened again.
         self._view_bridge.capture_canvas_ranges_into(state, focused)
         self._view_bridge.capture_controls_into(state, self, focused)
-        invalidate = getattr(focused, 'invalidate_envelope_cache', None)
-        if callable(invalidate):
-            invalidate("channel visibility changed")
-
         if self.chart_stack.current_mode() != 'time':
             return
         rendered = self._replot_canvas_for_view(idx, focused)
@@ -2363,10 +2362,21 @@ class MainWindow(
             return
         all_checked = self.channel_list.get_checked_channels()
         if not all_checked:
-            canvas.clear()
-            canvas.draw()
+            mode = self.chart_stack.plot_mode_for_canvas(canvas)
+            delta = getattr(canvas, "try_apply_selection_delta", None)
+            delta_result = (
+                delta([], mode=mode, render_context_key=None)
+                if callable(delta)
+                else {"applied": False, "reason": "delta-api-unavailable"}
+            )
+            if not delta_result.get("applied"):
+                canvas.clear()
+                canvas.draw()
+            else:
+                canvas.draw_idle()
             if update_primary_ui:
                 self.chart_stack.stats_strip.update_stats({})
+                self.statusBar.showMessage("未选择时间域通道")
             if user_initiated:
                 self._warn_action_blocked("请在左侧勾选至少一个通道")
             return
@@ -2377,10 +2387,6 @@ class MainWindow(
         # Outside split this resolves to the primary card's mode, so the
         # non-split path is byte-identical.
         mode = self.chart_stack.plot_mode_for_canvas(canvas)
-        if not update_primary_ui:
-            invalidate = getattr(canvas, 'invalidate_envelope_cache', None)
-            if callable(invalidate):
-                invalidate("compare view changed")
         # Overlay primary-axis pick (设为左轴): when the chosen (fid, ch) is
         # still checked AND we're in overlay mode, move it to index 0 so the
         # canvas binds it to the LEFT axis (vis[0] → left). If it is no longer
@@ -2473,6 +2479,16 @@ class MainWindow(
                 canvas.invalidate_envelope_cache("filter state changed")
             self._last_filter_state_by_canvas[canvas_key] = cur_filter_state
 
+        render_context_key = (
+            (
+                self._custom_xaxis_fid,
+                self._custom_xaxis_ch,
+            ),
+            cur_range_state,
+            cur_filter_state,
+            self._time_axis_label(),
+        )
+
         from ..chart_stack import _STATS_STRIP_ENABLED
         collect_stats = update_primary_ui and _STATS_STRIP_ENABLED
         st = (
@@ -2485,8 +2501,23 @@ class MainWindow(
 
         if not checked:
             count = len(all_checked)
-            canvas.show_empty_hint(f"已选择 {count} 个通道，当前均已隐藏")
-            canvas.draw()
+            delta = getattr(canvas, "try_apply_selection_delta", None)
+            delta_result = (
+                delta(
+                    [],
+                    mode=mode,
+                    render_context_key=render_context_key,
+                )
+                if callable(delta)
+                else {"applied": False, "reason": "delta-api-unavailable"}
+            )
+            if delta_result.get("applied"):
+                canvas.draw_idle()
+            else:
+                canvas.show_empty_hint(
+                    f"已选择 {count} 个通道，当前均已隐藏"
+                )
+                canvas.draw()
             if update_primary_ui:
                 if collect_stats:
                     self.chart_stack.stats_strip.update_stats(st)
@@ -2509,13 +2540,38 @@ class MainWindow(
 
         progress_token = None
         if update_primary_ui or user_initiated:
-            progress_token = self._begin_compute_progress("时间域绘制中")
+            progress_token = self._begin_compute_progress(
+                "时间域绘制中",
+                total=1000,
+            )
+
+        def phase_progress(start, stop, label):
+            if progress_token is None:
+                return None
+
+            def advance(current, total):
+                fraction = max(0.0, min(1.0, current / max(1, total)))
+                self._update_compute_progress(
+                    int(round(start + (stop - start) * fraction)),
+                    1000,
+                    label=label,
+                    token=progress_token,
+                    process_events=True,
+                )
+
+            return advance
+
         try:
+            prepare_progress = phase_progress(30, 520, "绘图 · 准备")
             with _pp.timed("_build_time_plot_data 总耗时"):
                 data = self._build_time_plot_data(
                     checked, custom_x, range_enabled, range_lo, range_hi,
+                    progress_callback=prepare_progress,
                 )
             if not data:
+                done_progress = phase_progress(1000, 1000, "绘图 · 无数据")
+                if done_progress is not None:
+                    done_progress(1, 1)
                 canvas.clear()
                 canvas.draw()
                 if update_primary_ui:
@@ -2527,13 +2583,39 @@ class MainWindow(
                 return True
 
             xlabel = self._time_axis_label()
-            with _pp.timed("plot_channels(建轴+bind+首次setData) 耗时"):
-                canvas.plot_channels(
+            canvas_progress = phase_progress(520, 960, "绘图 · 构建")
+            delta = getattr(canvas, "try_apply_selection_delta", None)
+            delta_result = (
+                delta(
                     data,
-                    mode,
-                    xlabel=xlabel,
-                    defer_first_frame=defer_first_frame,
+                    mode=mode,
+                    render_context_key=render_context_key,
                 )
+                if callable(delta)
+                else {"applied": False, "reason": "delta-api-unavailable"}
+            )
+            if not delta_result.get("applied"):
+                rebuild_reason = str(
+                    delta_result.get("reason") or "selection-delta-incompatible"
+                )
+                invalidate = getattr(canvas, "invalidate_envelope_cache", None)
+                if callable(invalidate):
+                    invalidate(rebuild_reason)
+                with _pp.timed("plot_channels(建轴+bind+首次setData) 耗时"):
+                    canvas.plot_channels(
+                        data,
+                        mode,
+                        xlabel=xlabel,
+                        defer_first_frame=defer_first_frame,
+                        progress_callback=canvas_progress,
+                        render_context_key=render_context_key,
+                        full_rebuild_reason=rebuild_reason,
+                    )
+            elif canvas_progress is not None:
+                canvas_progress(1, 1)
+            finalize_progress = phase_progress(960, 1000, "绘图 · 应用")
+            if finalize_progress is not None:
+                finalize_progress(1, 1)
             if update_primary_ui:
                 self._sync_time_range_inputs_from_visible_xlim()
             xt, yt = self.inspector.top.tick_density()
@@ -2610,7 +2692,8 @@ class MainWindow(
         return f"{tag} {spec.cutoff:g}Hz"
 
     def _build_time_plot_data(self, checked=None, custom_x=None,
-                              range_enabled=None, range_lo=0.0, range_hi=0.0):
+                              range_enabled=None, range_lo=0.0, range_hi=0.0,
+                              progress_callback=None):
         """Assemble the time-domain plot list
         ``data = [(name, visible, x, sig, color, unit, fid), ...]``.
 
@@ -2623,7 +2706,9 @@ class MainWindow(
 
         Args default to live UI state so the helper is callable with no args
         for unit tests; ``_plot_time_on_canvas`` passes its already-resolved
-        values to avoid recomputing them.
+        values to avoid recomputing them. ``progress_callback`` receives
+        ``(completed_sample_work, total_sample_work)`` after each channel so a
+        large selected source contributes proportionally more than a tiny one.
         """
         from ...signal import filters as _filters
         # [perf-probe] 诊断探针，定位后移除。reset 滤波 apply 累计器。
@@ -2657,10 +2742,28 @@ class MainWindow(
 
         eff_groups = self.channel_list.checked_axis_groups()
         data = []
+        channel_work = {}
+        for fid, ch, _color in checked:
+            fd = self.channel_list.get_file_data(fid)
+            if fd is None or ch not in fd.data.columns:
+                continue
+            # Range masking and filtering both scale with source samples. A
+            # filtered trace has a second full-array pass, hence two units.
+            source_samples = max(1, len(fd.data))
+            channel_work[(fid, ch)] = source_samples * (2 if filt_enabled else 1)
+        total_work = max(1, sum(channel_work.values()))
+        completed_work = 0
+
+        def report_progress():
+            if callable(progress_callback):
+                progress_callback(completed_work, total_work)
+
+        report_progress()
         for fid, ch, color in checked:
             fd = self.channel_list.get_file_data(fid)
             if fd is None or ch not in fd.data.columns:
                 continue
+            source_work = max(1, len(fd.data))
             time_axis = fd.time_array
             # Custom X axis (by reference; the canvas treats arrays as
             # read-only).
@@ -2685,12 +2788,17 @@ class MainWindow(
             else:
                 data.append((name, show_orig, x_axis, sig, color, unit, fid))
 
+            completed_work += source_work
+            report_progress()
+
             if filt_enabled:
                 fs = float(getattr(fd, "fs", 0.0)) or self._estimate_fs(time_axis)
                 try:
                     gspec, _msg = _filters.nyquist_guard(spec, fs)
                 except ValueError:
                     # band/bandstop with lo >= hi → draw original only.
+                    completed_work += source_work
+                    report_progress()
                     continue
                 with _pp.filter_apply():  # [perf-probe] 累计单次滤波耗时
                     filtered = _filters.apply(sig, gspec, fs)
@@ -2704,6 +2812,10 @@ class MainWindow(
                 data.append(
                     (fname, show_filt, x_axis, filtered, color, unit, fid, meta)
                 )
+                completed_work += source_work
+                report_progress()
+        completed_work = total_work
+        report_progress()
         return data
 
     def _estimate_fs(self, t):

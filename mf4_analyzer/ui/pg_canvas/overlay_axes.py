@@ -25,6 +25,11 @@ from mf4_analyzer.ui.plot_helpers import _middle_ellipsis
 from ._shared import _subplot_ylabel_text, _view_state_channel_key
 from .context_menu import _localize_pg_context_menu
 from .fonts import _apply_pg_axis_font, _pg_chart_font
+from .render_profile import (
+    bucket_width_for,
+    classify_render_profile,
+    source_revision_for,
+)
 from .ticks_math import _adjacent_nice_step, _fmt_tick, _frame_to_nice
 from .viewbox import _ModifierWheelViewBox
 
@@ -298,6 +303,21 @@ class OverlayAxisManager(_CanvasBackref):
         pi = axis_handle.plot_item
         if pi is None:
             return
+        t_arr = np.asarray(t)
+        sig_arr = np.asarray(sig)
+        is_monotonic = self._cached_is_monotonic(data_id, name, t_arr)
+        ck = _view_state_channel_key(data_id, name)
+        profiles = getattr(self, "_channel_render_profiles", None)
+        if profiles is None:
+            profiles = {}
+            self._channel_render_profiles = profiles
+        source_revision = source_revision_for(t_arr, sig_arr)
+        profile = profiles.get(ck)
+        if profile is None or profile.source_revision != source_revision:
+            profile = classify_render_profile(
+                t_arr, sig_arr, source_revision=source_revision,
+            )
+            profiles[ck] = profile
         if skip_envelope:
             bind_t = bind_s = np.empty(0, dtype=np.float64)
         else:
@@ -306,15 +326,21 @@ class OverlayAxisManager(_CanvasBackref):
                 envelope_builder = legacy_pg_canvases.build_envelope
             except Exception:
                 from mf4_analyzer.signal.envelope import build_envelope as envelope_builder
-            sig_arr_for_len = np.asarray(sig)
+            initial_width = self._initial_bind_pixel_width(
+                axis_handle, source_len=len(sig_arr)
+            )
+            initial_width = bucket_width_for(
+                profile,
+                mode="overlay" if self._overlay_mode else "subplot",
+                pixel_width=initial_width,
+                interactive=False,
+            )
             bind_t, bind_s = envelope_builder(
-                np.asarray(t),
-                sig_arr_for_len,
+                t_arr,
+                sig_arr,
                 xlim=None,
-                pixel_width=self._initial_bind_pixel_width(
-                    axis_handle, source_len=len(sig_arr_for_len)
-                ),
-                is_monotonic=None,
+                pixel_width=initial_width,
+                is_monotonic=is_monotonic,
             )
         pen = pg.mkPen(color=color, width=self._overlay_default_lw)
         primary_vb = pi.getViewBox() if hasattr(pi, "getViewBox") else None
@@ -330,9 +356,6 @@ class OverlayAxisManager(_CanvasBackref):
                 add_line_item(pdi)
         else:
             pdi = pi.plot(bind_t, bind_s, pen=pen, name=name)
-        t_arr = np.asarray(t)
-        sig_arr = np.asarray(sig)
-        ck = _view_state_channel_key(data_id, name)
         # IDENTITY is the composite (data_id, name) key so two same-named
         # channels from differently-truncated files never overwrite each other
         # (multi-file same-name root fix); the display ``name`` is recorded for
@@ -343,7 +366,7 @@ class OverlayAxisManager(_CanvasBackref):
         self._channel_lines.set_with_label(ck, name, (axis_handle, line_handle))
         self._channel_view_state_lines[ck] = (axis_handle, line_handle)
         self._channel_is_monotonic.set_with_label(
-            ck, name, self._cached_is_monotonic(data_id, name, t_arr)
+            ck, name, is_monotonic
         )
 
         if update_axis_style:
@@ -389,6 +412,21 @@ class OverlayAxisManager(_CanvasBackref):
         pi = source_handle.plot_item
         if pi is None:
             return
+        t_arr = np.asarray(t)
+        sig_arr = np.asarray(sig)
+        is_monotonic = self._cached_is_monotonic(data_id, name, t_arr)
+        ck = _view_state_channel_key(data_id, name)
+        profiles = getattr(self, "_channel_render_profiles", None)
+        if profiles is None:
+            profiles = {}
+            self._channel_render_profiles = profiles
+        source_revision = source_revision_for(t_arr, sig_arr)
+        profile = profiles.get(ck)
+        if profile is None or profile.source_revision != source_revision:
+            profile = classify_render_profile(
+                t_arr, sig_arr, source_revision=source_revision,
+            )
+            profiles[ck] = profile
         if skip_envelope:
             bind_t = bind_s = np.empty(0, dtype=np.float64)
         else:
@@ -397,15 +435,21 @@ class OverlayAxisManager(_CanvasBackref):
                 envelope_builder = legacy_pg_canvases.build_envelope
             except Exception:
                 from mf4_analyzer.signal.envelope import build_envelope as envelope_builder
-            sig_arr_for_len = np.asarray(sig)
+            initial_width = self._initial_bind_pixel_width(
+                source_handle, source_len=len(sig_arr)
+            )
+            initial_width = bucket_width_for(
+                profile,
+                mode="overlay" if self._overlay_mode else "subplot",
+                pixel_width=initial_width,
+                interactive=False,
+            )
             bind_t, bind_s = envelope_builder(
-                np.asarray(t),
-                sig_arr_for_len,
+                t_arr,
+                sig_arr,
                 xlim=None,
-                pixel_width=self._initial_bind_pixel_width(
-                    source_handle, source_len=len(sig_arr_for_len)
-                ),
-                is_monotonic=None,
+                pixel_width=initial_width,
+                is_monotonic=is_monotonic,
             )
         style = Qt.DashLine if dash else Qt.SolidLine
         pen = pg.mkPen(
@@ -428,16 +472,13 @@ class OverlayAxisManager(_CanvasBackref):
             pdi.setVisible(bool(visible))
         except Exception:
             pass
-        t_arr = np.asarray(t)
-        sig_arr = np.asarray(sig)
-        ck = _view_state_channel_key(data_id, name)
         self.channel_data.set_with_label(ck, name, (t_arr, sig_arr, color, unit))
         self._channel_data_id.set_with_label(ck, name, data_id)
         line_handle = _PgLineHandle(pdi, label_fallback=name)
         self._channel_lines.set_with_label(ck, name, (source_handle, line_handle))
         self._channel_view_state_lines[ck] = (source_handle, line_handle)
         self._channel_is_monotonic.set_with_label(
-            ck, name, self._cached_is_monotonic(data_id, name, t_arr)
+            ck, name, is_monotonic
         )
         # Track companions by COMPOSITE key so a same-named companion from a
         # different file is distinguished (matches the channel_data identity).

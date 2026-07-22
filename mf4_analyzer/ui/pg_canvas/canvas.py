@@ -56,6 +56,7 @@ import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 from collections import OrderedDict
+from time import monotonic
 from typing import Tuple
 
 import numpy as np
@@ -65,6 +66,7 @@ from PyQt5.QtCore import (
     QTimer,
     Qt,
     pyqtSignal,
+    pyqtSlot,
 )
 from PyQt5.QtGui import (
     QPainterPath,
@@ -105,6 +107,7 @@ from mf4_analyzer.ui.pg_canvas import renderer as _renderer
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
 from mf4_analyzer.ui.axis_group_palette import axis_group_color
 from mf4_analyzer.ui.pg_canvas.quality import QualityManager
+from mf4_analyzer.ui.pg_canvas.dense_raster import DenseDiscreteRasterLayer
 from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
     Renderer,
     _HIDPI_COPY_SCALE,
@@ -265,6 +268,13 @@ class TimeDomainCanvasPG(QWidget):
 
     # Mirror TimeDomainCanvas constants so callers see the same surface.
     MAX_PTS = 8000
+    # Range events restart this timer. 100 ms is the spec's quiet-window
+    # default: mouse/wheel/box interaction transforms the already-bound PDI
+    # geometry, then only the latest viewport rebuilds its envelope.
+    _INTERACTION_SETTLE_MS = 100
+    _COARSE_REFRESH_MS = 100  # hard ceiling: at most 10 coarse setData/s
+    _X_BUFFER_MARGIN_RATIO = 0.25
+    _TIMER_GENERATION_PROPERTY = "tracelabInteractionGeneration"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -337,17 +347,39 @@ class TimeDomainCanvasPG(QWidget):
         # The "primary" axis facade — its sigXRangeChanged drives the
         # viewport-aware envelope refresh. Set after plot_channels.
         self._primary_xaxis_ax = None
+        # Selection-delta model. Bound curves may become dormant (unchecked /
+        # eye-hidden) without destroying their PDI/ViewBox, then reappear in
+        # place when the same source/context is selected again.
+        self._selection_bound_keys = set()
+        self._selection_active_keys = set()
+        self._selection_row_signatures = {}
+        self._selection_mode = None
+        self._selection_context_key = None
+        self._last_selection_delta = None
+        self._last_full_rebuild_reason = None
 
         # --- viewport refresh state ------------------------------------
         self._refresh = True
 
         # --- viewport refresh wiring ------------------------------------
-        # 40 ms ≈ 25 FPS coalesce window, matching TimeDomainCanvas.
-        self._refresh_timer = QTimer(self)
-        self._refresh_timer.setSingleShot(True)
-        self._refresh_timer.setInterval(40)
-        self._refresh_timer.timeout.connect(self._refresh_visible_data)
+        # Interaction settle timer. Unlike the former 40 ms periodic refresh,
+        # every new range event RESTARTS this timer, so a continuous gesture
+        # cannot invalidate PlotDataItem geometry event-by-event.
         self._refresh_pending = False
+        self._interaction_generation = 0
+        self._interaction_depth = 0
+        self._interaction_state = "idle"
+        self._latest_target_xlim = None
+        self._display_x_coverage = None
+        self._display_x_coverage_by_channel = {}
+        self._pending_coarse_xlim = None
+        self._last_coarse_refresh_at = 0.0
+        self._refresh_timer = self._new_refresh_timer(
+            self._interaction_generation
+        )
+        self._coarse_timer = self._new_coarse_timer(
+            self._interaction_generation
+        )
         # Density budget for idle AA (Fix C, 2026-05-31; RECALIBRATED against
         # the end-to-end grab() repaint-frame harness). Two budgets, branched
         # on _overlay_mode in _idle_aa_density_ok:
@@ -503,6 +535,7 @@ class TimeDomainCanvasPG(QWidget):
         self._annotations = AnnotationManager(self)
         self._tick_density_controller = TickDensityController(self)
         self._overlay_axes = OverlayAxisManager(self)
+        self._dense_raster = DenseDiscreteRasterLayer(self)
         self._quality = QualityManager(self)
         self._renderer = Renderer(self)
 
@@ -531,7 +564,14 @@ class TimeDomainCanvasPG(QWidget):
         return slots
 
     def plot_channels(
-        self, ch_list, mode="overlay", xlabel="Time (s)", defer_first_frame=False
+        self,
+        ch_list,
+        mode="overlay",
+        xlabel="Time (s)",
+        defer_first_frame=False,
+        progress_callback=None,
+        render_context_key=None,
+        full_rebuild_reason=None,
     ):
         """Build the chart for ``ch_list``.
 
@@ -548,6 +588,21 @@ class TimeDomainCanvasPG(QWidget):
         rebuild; plain plot_channels needs the bind envelope as its first
         frame because data-union x seeding blocks range signals.
         """
+        def report_progress(current, total=1000):
+            if not callable(progress_callback):
+                return
+            try:
+                progress_callback(int(current), max(1, int(total)))
+            except Exception:
+                pass
+
+        def trace_work(values):
+            try:
+                return max(1, len(values))
+            except TypeError:
+                return 1
+
+        report_progress(0)
         self.disable_interactive_quality()
         self.clear()
 
@@ -594,6 +649,7 @@ class TimeDomainCanvasPG(QWidget):
             primaries.append(
                 (name, bool(visible), t, sig, color, unit, data_id, axis_group)
             )
+        report_progress(100)
 
         # ``vis`` = primaries that own an axis this rebuild = original visible
         # OR has a visible companion. Carry the original's own visibility as a
@@ -614,7 +670,22 @@ class TimeDomainCanvasPG(QWidget):
             # No channel owns an axis (every original hidden AND no visible
             # companion) → nothing to draw and nothing to anchor companions to.
             self.chart_rebuilt.emit()
+            report_progress(1000)
             return
+
+        binding_total = max(
+            1,
+            sum(trace_work(row[1]) for row in vis)
+            + sum(trace_work(row[2]) for row in companions),
+        )
+        binding_done = 0
+
+        def record_bound_trace(values):
+            nonlocal binding_done
+            binding_done += trace_work(values)
+            report_progress(150 + 750 * binding_done // binding_total)
+
+        report_progress(150)
 
         overlay_mode = (mode == "overlay" and len(vis) >= 2)
         subplot_mode = (mode == "subplot" and len(vis) > 1)
@@ -665,6 +736,7 @@ class TimeDomainCanvasPG(QWidget):
                         xlabel=xlabel if is_bottom else None,
                         skip_envelope=defer_first_frame,
                     )
+                    record_bound_trace(sig)
                     self._set_primary_line_visible(name, p_visible)
                     self._subplot_label_specs.append((handle, name, color, unit))
                 else:
@@ -688,6 +760,7 @@ class TimeDomainCanvasPG(QWidget):
                             axis_color=group_color if j == 0 else None,
                             update_axis_style=(j == 0),
                         )
+                        record_bound_trace(sig)
                         self._set_primary_line_visible(name, p_visible)
                     self._subplot_label_specs.append(
                         (handle, group_label, group_color, group_unit)
@@ -746,6 +819,7 @@ class TimeDomainCanvasPG(QWidget):
                         handle, name, t, sig, color, unit, data_id,
                         xlabel=xlabel, skip_envelope=defer_first_frame,
                     )
+                    record_bound_trace(sig)
                     self._set_primary_line_visible(name, p_visible)
                 else:
                     units = {m[4] for m in members}
@@ -760,6 +834,7 @@ class TimeDomainCanvasPG(QWidget):
                             axis_color=group_color if j == 0 else None,
                             update_axis_style=(j == 0),
                         )
+                        record_bound_trace(sig)
                         self._set_primary_line_visible(name, p_visible)
             # Apply default emphasis state (no selection).
             self._overlay_axes._apply_overlay_emphasis()
@@ -793,6 +868,7 @@ class TimeDomainCanvasPG(QWidget):
                 xlabel=xlabel,
                 skip_envelope=defer_first_frame,
             )
+            record_bound_trace(sig)
             self._set_primary_line_visible(name, p_visible)
 
         # Bind display companions (e.g. filter overlays) onto their source
@@ -830,6 +906,7 @@ class TimeDomainCanvasPG(QWidget):
                 dash=dash,
                 skip_envelope=defer_first_frame,
             )
+            record_bound_trace(csig)
             # Record companion -> source identity so _sync_companion_dash_styles
             # can decide solid (no visible original to distinguish from) vs
             # dashed (original visible) on every live visibility toggle. Only
@@ -918,7 +995,7 @@ class TimeDomainCanvasPG(QWidget):
         self.schedule_idle_quality()
         if defer_first_frame:
             self._refresh_pending = True
-            self._refresh_timer.start()
+            self._arm_interaction_settle()
 
         # Restore cursor visual items when A/B positions survived clear().
         if self._cursor.visible and self._cursor.dual:
@@ -934,10 +1011,146 @@ class TimeDomainCanvasPG(QWidget):
                 self._set_cursor_items_pos(b_items, self._cursor.bx)
 
         self.chart_rebuilt.emit()
+        self._display_x_coverage = (
+            None if defer_first_frame else self._current_display_x_coverage()
+        )
+        self._record_selection_model(
+            ch_list,
+            mode=mode,
+            render_context_key=render_context_key,
+        )
+        self._dense_raster.schedule_rebuild("plot-built", delay_ms=0)
+        self._last_full_rebuild_reason = full_rebuild_reason
+        report_progress(1000)
 
     def nudge_signals(self) -> dict:
         """Situational signals for the footer nudge surface (see hints.py)."""
         return dict(getattr(self, "_nudge_signals", {}) or {})
+
+    @staticmethod
+    def _selection_array_fingerprint(values):
+        try:
+            arr = np.asarray(values)
+            ptr = int(arr.__array_interface__["data"][0]) if arr.size else 0
+            return (ptr, arr.shape, arr.strides, str(arr.dtype))
+        except Exception:
+            return (id(values),)
+
+    def _selection_rows(self, rows):
+        parsed = {}
+        for row in rows or []:
+            if len(row) >= 8 and isinstance(row[7], dict):
+                name, visible, t, sig, _color, _unit, data_id, meta = row[:8]
+            elif len(row) >= 7:
+                name, visible, t, sig, _color, _unit, data_id = row[:7]
+                meta = None
+            else:
+                name, visible, t, sig, _color, _unit = row[:6]
+                data_id = None
+                meta = None
+            meta = dict(meta or {})
+            key = _view_state_channel_key(data_id, name)
+            topology = (
+                meta.get("axis_group"),
+                meta.get("companion_of"),
+                bool(meta.get("dash", False)),
+            )
+            parsed[key] = {
+                "visible": bool(visible),
+                "signature": (
+                    data_id,
+                    str(name),
+                    self._selection_array_fingerprint(t),
+                    self._selection_array_fingerprint(sig),
+                    topology,
+                ),
+            }
+        return parsed
+
+    def _record_selection_model(self, rows, *, mode, render_context_key):
+        parsed = self._selection_rows(rows)
+        bound_keys = {
+            ck for ck, _name, _pair in self._channel_lines.composite_items()
+        }
+        self._selection_bound_keys = bound_keys
+        self._selection_active_keys = bound_keys & set(parsed)
+        self._selection_row_signatures = {
+            key: parsed[key]["signature"]
+            for key in bound_keys if key in parsed
+        }
+        self._selection_mode = str(mode)
+        self._selection_context_key = render_context_key
+        self._last_selection_delta = None
+
+    def try_apply_selection_delta(
+        self, rows, *, mode, render_context_key=None,
+    ):
+        """Hide/re-show already-bound curves without rebuilding chart objects.
+
+        This intentionally does not add axes. A genuinely new channel or a
+        multi-row subplot membership change reports an explicit fallback reason
+        so the owner can perform the existing full rebuild safely.
+        """
+        if not self._selection_bound_keys:
+            return {"applied": False, "reason": "no-render-model"}
+        if str(mode) != self._selection_mode:
+            return {"applied": False, "reason": "plot-mode-changed"}
+        if (
+            render_context_key is not None
+            and self._selection_context_key is not None
+            and render_context_key != self._selection_context_key
+        ):
+            return {"applied": False, "reason": "render-context-changed"}
+
+        parsed = self._selection_rows(rows)
+        requested = set(parsed)
+        if not requested.issubset(self._selection_bound_keys):
+            return {"applied": False, "reason": "new-channel"}
+        if (
+            len(self._selection_bound_keys) > 1
+            and requested != self._selection_active_keys
+            and self._selection_mode in {"overlay", "subplot"}
+        ):
+            return {
+                "applied": False,
+                "reason": f"{self._selection_mode}-topology-change",
+            }
+        for key in requested:
+            if parsed[key]["signature"] != self._selection_row_signatures.get(key):
+                return {"applied": False, "reason": "source-revision-changed"}
+
+        reshown = []
+        for ck, _name, (_handle, line) in self._channel_lines.composite_items():
+            pdi = getattr(line, "plot_data_item", None)
+            if pdi is None:
+                continue
+            should_show = bool(
+                ck in requested and parsed.get(ck, {}).get("visible", False)
+            )
+            try:
+                was_visible = bool(pdi.isVisible())
+                pdi.setVisible(should_show)
+            except Exception:
+                continue
+            if was_visible and not should_show:
+                self._clear_hidden_line_cache(pdi)
+            elif should_show and not was_visible:
+                reshown.append(ck)
+
+        self._selection_active_keys = requested
+        self._last_selection_delta = {
+            "applied": True,
+            "reason": "visibility-only",
+        }
+        self._sync_companion_dash_styles()
+        self._reframe_companion_axes_after_visibility_change()
+        if reshown:
+            for key in reshown:
+                self._last_range_key.pop(key, None)
+            self._settle_visible_data(self._interaction_generation)
+        self._dense_raster.sync_visibility()
+        self.draw_idle()
+        return dict(self._last_selection_delta)
 
     def _set_primary_line_visible(self, name, visible):
         """Hide/show a primary (original) curve in place without rebuilding.
@@ -1033,6 +1246,7 @@ class TimeDomainCanvasPG(QWidget):
             self._reframe_companion_axes_after_visibility_change()
             if reshown:
                 self._refresh_visible_data()
+            self._dense_raster.sync_visibility()
             self.draw()
         return n
 
@@ -1087,6 +1301,7 @@ class TimeDomainCanvasPG(QWidget):
             self._reframe_companion_axes_after_visibility_change()
             if reshown:
                 self._refresh_visible_data()
+            self._dense_raster.sync_visibility()
             self.draw()
         return n
 
@@ -1258,12 +1473,19 @@ class TimeDomainCanvasPG(QWidget):
                 pen = pdi.opts.get("pen")
             except Exception:
                 pen = None
+            manager = getattr(self, "_dense_raster", None)
+            if pen is None and manager is not None:
+                pen = manager.native_pen_for(ck, pdi)
             if not isinstance(pen, QPen):
                 continue
             want_dash = self._source_original_visible(ck)
             want_style = Qt.DashLine if want_dash else Qt.SolidLine
             try:
                 if pen.style() == want_style:
+                    continue
+                if manager is not None and manager.set_native_pen_style(
+                    ck, pdi, want_style,
+                ):
                     continue
                 new_pen = QPen(pen)
                 new_pen.setStyle(want_style)
@@ -1566,6 +1788,9 @@ class TimeDomainCanvasPG(QWidget):
                 ):
                     changed = True
         if changed:
+            self._dense_raster.schedule_rebuild(
+                "y-range-restored", delay_ms=self._INTERACTION_SETTLE_MS,
+            )
             self.visible_range_changed.emit()
 
     def _fit_channel_y_to_visible_x(self, name, handle, n_y, *, frame_to_nice):
@@ -1665,6 +1890,8 @@ class TimeDomainCanvasPG(QWidget):
             channel_name,
             color,
         )
+        self._dense_raster.capture_pen_update(channel_name)
+        self._dense_raster.sync_visibility(schedule_missing=False)
         # Propagate the recolor to the navigator (swatch + color source-of-
         # truth for replot/FFT). ``channel_name`` is the composite key, so
         # recover the ORIGINAL fid + display name from the identity dicts —
@@ -1676,7 +1903,25 @@ class TimeDomainCanvasPG(QWidget):
             self.channel_color_changed.emit(data_id, display_name, str(color))
         except Exception:
             pass
+        self._dense_raster.invalidate_all("color-changed", schedule=True)
         return result
+
+    def _on_pg_axis_scale_changed(self):
+        """Synchronously replace an incompatible linear dense raster path."""
+        if not self._dense_raster.has_dense_candidates():
+            return
+        self._dense_raster.invalidate_all("axis-scale-changed")
+        self._dense_raster.flush_pending(self._interaction_generation)
+        self.draw_idle()
+
+    def _on_pg_axis_ylim_changed(self):
+        """Debounce direct AxisHandle.set_ylim mutations into a fresh raster."""
+        if not self._dense_raster.has_dense_candidates():
+            return
+        self._dense_raster.schedule_resuppress()
+        self._dense_raster.schedule_rebuild(
+            "programmatic-y-range", delay_ms=self._INTERACTION_SETTLE_MS,
+        )
 
     def set_xlim(self, lo, hi):
         """Apply a new xlim to the primary axis. Compatibility-only:
@@ -1686,6 +1931,10 @@ class TimeDomainCanvasPG(QWidget):
         if primary is None:
             return
         primary.set_xlim(float(lo), float(hi))
+        # Public programmatic range changes (project restore, automation and
+        # callers outside ViewBox gestures) are deterministic: mutation first,
+        # then one synchronous settled refresh.
+        self._flush_pending_refresh()
 
     def reset_view_to_data_extents(self):
         """Toolbar Home helper: restore global X (raw union) AND global Y
@@ -1851,6 +2100,40 @@ class TimeDomainCanvasPG(QWidget):
 
     def clear(self):
         """Tear down the chart. Mirrors TimeDomainCanvas.clear."""
+        # Invalidate callbacks captured by the previous curve generation
+        # before stopping timers or destroying PlotDataItems.
+        self._interaction_generation += 1
+        # Raster items live in channel ViewBoxes, so remove them before those
+        # ViewBoxes are torn down by the overlay/layout cleanup below.
+        self._dense_raster.clear()
+        self._interaction_depth = 0
+        self._interaction_state = "idle"
+        self._latest_target_xlim = None
+        self._display_x_coverage = None
+        self._display_x_coverage_by_channel = {}
+        self._pending_coarse_xlim = None
+        self._last_coarse_refresh_at = 0.0
+        # Replace the QObject, not just its interval/property. A timeout already
+        # queued by Qt keeps the OLD lambda's captured generation and therefore
+        # cannot mutate the new PlotDataItems after clear()/rebuild.
+        old_refresh_timer = self._refresh_timer
+        try:
+            old_refresh_timer.stop()
+            old_refresh_timer.deleteLater()
+        except Exception:
+            pass
+        self._refresh_timer = self._new_refresh_timer(
+            self._interaction_generation
+        )
+        old_coarse_timer = self._coarse_timer
+        try:
+            old_coarse_timer.stop()
+            old_coarse_timer.deleteLater()
+        except Exception:
+            pass
+        self._coarse_timer = self._new_coarse_timer(
+            self._interaction_generation
+        )
         # Drop xrange listener before we wipe the axes it points at.
         self._disconnect_xrange_listener()
         self._disconnect_overlay_view_sync()
@@ -1887,6 +2170,12 @@ class TimeDomainCanvasPG(QWidget):
         self._companion_source = {}
         self._channel_is_monotonic = _ChannelKeyDict()
         self._primary_xaxis_ax = None
+        self._selection_bound_keys = set()
+        self._selection_active_keys = set()
+        self._selection_row_signatures = {}
+        self._selection_mode = None
+        self._selection_context_key = None
+        self._last_selection_delta = None
         self._curve_path_cache.clear()
         self._last_range_key.clear()
         self._line_wall_state.clear()
@@ -2460,10 +2749,259 @@ class TimeDomainCanvasPG(QWidget):
         # plus sibling-x propagation so subplot rows move together. Tick
         # recompute and range signals are flushed from _refresh_visible_data.
         self._propagate_xlim_to_siblings(source=source_handle)
-        if self._refresh_pending:
-            return
+        try:
+            self._latest_target_xlim = tuple(
+                float(v) for v in source_handle.get_xlim()
+            )
+        except Exception:
+            self._latest_target_xlim = None
         self._refresh_pending = True
-        self._refresh_timer.start()
+        self._interaction_state = (
+            "interactive" if self._interaction_depth else "settling"
+        )
+        self._schedule_coarse_refresh_if_needed(self._latest_target_xlim)
+        # PlotDataItem.viewRangeChanged may re-apply its stored pen while it
+        # recomputes clipping/downsampling. Keep bounds/business visibility,
+        # but immediately re-suppress the native stroke behind a ready raster.
+        self._dense_raster.schedule_resuppress()
+        # Critical difference from the old contract: restart on EVERY event.
+        # This makes the interval a quiet window rather than a periodic 25 FPS
+        # setData clock during a long drag.
+        self._arm_interaction_settle()
+
+    def _begin_view_interaction(self):
+        """Enter the transform-only path for a mouse drag gesture."""
+        self._interaction_depth += 1
+        self._interaction_state = "interactive"
+        try:
+            self._refresh_timer.stop()
+        except Exception:
+            pass
+        self.disable_interactive_quality()
+
+    def _end_view_interaction(self):
+        """End a drag and start the quiet window for its latest range."""
+        self._interaction_depth = max(0, self._interaction_depth - 1)
+        if self._interaction_depth:
+            return
+        # Release commits through the settled frame. Cancel any coarse frame
+        # queued for the held gesture so it cannot race immediately before the
+        # one required final setData.
+        try:
+            self._coarse_timer.stop()
+        except Exception:
+            pass
+        self._pending_coarse_xlim = None
+        if self._refresh_pending:
+            self._interaction_state = "settling"
+            self._arm_interaction_settle()
+        else:
+            self._interaction_state = "idle"
+        self._dense_raster.schedule_resuppress()
+        # A vertical-only pan may not emit sigXRangeChanged. Rebuild the cached
+        # bitmap after the same 100 ms quiet window so Y transforms settle too.
+        self._dense_raster.schedule_rebuild(
+            "view-interaction", delay_ms=self._INTERACTION_SETTLE_MS,
+        )
+
+    def _arm_interaction_settle(self):
+        try:
+            self._refresh_timer.start(self._INTERACTION_SETTLE_MS)
+        except TypeError:
+            self._refresh_timer.start()
+
+    def _new_refresh_timer(self, generation):
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setInterval(self._INTERACTION_SETTLE_MS)
+        timer.setProperty(self._TIMER_GENERATION_PROPERTY, int(generation))
+        timer.timeout.connect(self._on_refresh_timer_timeout)
+        return timer
+
+    def _new_coarse_timer(self, generation):
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setProperty(self._TIMER_GENERATION_PROPERTY, int(generation))
+        timer.timeout.connect(self._on_coarse_timer_timeout)
+        return timer
+
+    def _sender_timer_generation(self):
+        timer = self.sender()
+        if not isinstance(timer, QTimer):
+            return None, None
+        try:
+            generation = int(timer.property(self._TIMER_GENERATION_PROPERTY))
+        except (TypeError, ValueError):
+            return timer, None
+        return timer, generation
+
+    @pyqtSlot()
+    def _on_refresh_timer_timeout(self):
+        """Bound timeout slot; generation lives on the QObject, not a closure."""
+        timer, generation = self._sender_timer_generation()
+        if (
+            timer is not self._refresh_timer
+            or generation is None
+            or not self._refresh_pending
+        ):
+            return
+        self._settle_visible_data(generation)
+
+    @pyqtSlot()
+    def _on_coarse_timer_timeout(self):
+        """Bound coarse slot with QObject-owned generation metadata."""
+        timer, generation = self._sender_timer_generation()
+        if timer is not self._coarse_timer or generation is None:
+            return
+        self._run_coarse_refresh(generation)
+
+    @staticmethod
+    def _coverage_contains(coverage, viewport):
+        if coverage is None or viewport is None:
+            return False
+        try:
+            clo, chi = (float(v) for v in coverage)
+            vlo, vhi = (float(v) for v in viewport)
+        except Exception:
+            return False
+        eps = max(abs(vhi - vlo), 1.0) * 1e-9
+        return clo <= vlo + eps and chi >= vhi - eps
+
+    def _current_display_x_coverage(self):
+        """Return the finite-X intersection actually present on visible PDIs."""
+        per_channel = {}
+        for ck, _name, (_axis, line) in self._channel_lines.composite_items():
+            pdi = getattr(line, "plot_data_item", None)
+            if pdi is None or not pdi.isVisible():
+                continue
+            try:
+                x_data, _y_data = pdi.getData()
+                finite = np.asarray(x_data, dtype=float)
+                finite = finite[np.isfinite(finite)]
+            except Exception:
+                continue
+            if finite.size:
+                per_channel[ck] = (float(finite.min()), float(finite.max()))
+        self._display_x_coverage_by_channel = per_channel
+        if not per_channel:
+            return None
+        return (
+            max(lo for lo, _hi in per_channel.values()),
+            min(hi for _lo, hi in per_channel.values()),
+        )
+
+    def _buffered_xlim(self, viewport):
+        if viewport is None:
+            return None
+        try:
+            lo, hi = (float(v) for v in viewport)
+        except Exception:
+            return None
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return None
+        margin = (hi - lo) * self._X_BUFFER_MARGIN_RATIO
+        buffered = [lo - margin, hi + margin]
+        data_union = self._data_x_union()
+        if data_union is not None:
+            buffered[0] = max(buffered[0], float(data_union[0]))
+            buffered[1] = min(buffered[1], float(data_union[1]))
+        if buffered[1] <= buffered[0]:
+            return (lo, hi)
+        return tuple(buffered)
+
+    def _schedule_coarse_refresh_if_needed(self, viewport):
+        if viewport is None or self._coverage_contains(
+            self._display_x_coverage, viewport
+        ):
+            return
+        self._pending_coarse_xlim = tuple(viewport)
+        if self._coarse_timer.isActive():
+            return
+        if self._last_coarse_refresh_at <= 0.0:
+            # The first coarse frame also observes the 100 ms gate. This makes
+            # the contract unambiguous: a one-second gesture can schedule at
+            # most ten coarse frames, not t=0 plus ten interval boundaries.
+            delay_ms = self._COARSE_REFRESH_MS
+        else:
+            elapsed_ms = (monotonic() - self._last_coarse_refresh_at) * 1000.0
+            delay_ms = max(0, int(round(self._COARSE_REFRESH_MS - elapsed_ms)))
+        self._coarse_timer.start(delay_ms)
+
+    def _run_coarse_refresh(self, generation):
+        if int(generation) != self._interaction_generation:
+            return False
+        # A one-shot wheel/box event has its final settled timer due at the
+        # same boundary; let that higher-quality frame win instead of doing a
+        # coarse setData immediately followed by a settled setData. During a
+        # continuing gesture the settle timer has been pushed farther out.
+        try:
+            settle_due_ms = self._refresh_timer.remainingTime()
+        except Exception:
+            settle_due_ms = -1
+        if (
+            self._interaction_depth == 0
+            and self._refresh_timer.isActive()
+            and 0 <= settle_due_ms <= 5
+        ):
+            self._pending_coarse_xlim = None
+            return False
+        viewport = self._pending_coarse_xlim
+        self._pending_coarse_xlim = None
+        if viewport is None or self._coverage_contains(
+            self._display_x_coverage, viewport
+        ):
+            return False
+        coverage = self._buffered_xlim(viewport)
+        if coverage is None:
+            return False
+        actual_coverage = self._refresh_visible_data(
+            xlim_override=coverage,
+            interactive=True,
+        )
+        if actual_coverage is not None:
+            self._display_x_coverage = actual_coverage
+        self._last_coarse_refresh_at = monotonic()
+        # Renderer clears _refresh_pending at entry; a coarse frame is not the
+        # final frame, so preserve the pending settled refresh for release/
+        # quiet-window completion.
+        self._refresh_pending = True
+        latest = self._latest_target_xlim
+        if not self._coverage_contains(self._display_x_coverage, latest):
+            self._schedule_coarse_refresh_if_needed(latest)
+        return True
+
+    def _settle_visible_data(self, generation):
+        """Refresh once for the newest range if it still owns this canvas."""
+        if int(generation) != self._interaction_generation:
+            return False
+        # A held mouse drag remains transform-only even if the pointer pauses
+        # longer than the wheel/box quiet window. mouse release re-arms us.
+        if self._interaction_depth:
+            self._interaction_state = "interactive"
+            return False
+        if not self._channel_lines or self._primary_xaxis_ax is None:
+            self._refresh_pending = False
+            self._interaction_state = "idle"
+            return False
+        try:
+            viewport = tuple(
+                float(v) for v in self._primary_xaxis_ax.get_xlim()
+            )
+        except Exception:
+            viewport = self._latest_target_xlim
+        coverage = self._buffered_xlim(viewport)
+        try:
+            actual_coverage = self._refresh_visible_data(
+                xlim_override=coverage,
+                interactive=False,
+            )
+            if actual_coverage is not None:
+                self._display_x_coverage = actual_coverage
+        finally:
+            self._refresh_pending = False
+            self._interaction_state = "idle"
+            self._quality._emit_quality_status_changed()
+        return True
 
     def _emit_xrange_changed(self, source_handle=None):
         if source_handle is None:
@@ -2556,12 +3094,30 @@ class TimeDomainCanvasPG(QWidget):
         if not self._channel_lines or self._primary_xaxis_ax is None:
             self._refresh_pending = False
             return
-        # Run the update synchronously so the last frame of a pan ends
-        # on the high-detail envelope.
+        # Run the generation-gated settled path synchronously. This remains a
+        # public/programmatic seam; ViewBox gestures never call it per tick.
+        self._settle_visible_data(self._interaction_generation)
+
+    def _flush_pending_export_refresh(self):
+        """Commit the latest quiet-window frame before copy/save grabs it.
+
+        Unlike ``_flush_pending_refresh`` this is event-conditional: an idle
+        export must not regenerate PlotDataItem geometry.  The current canvas
+        generation is passed through the same settled path used by the timer,
+        so a stale timer from a cleared plot cannot mutate the export frame.
+        """
+        if not self._refresh_pending:
+            return False
         try:
-            self._refresh_visible_data()
-        finally:
-            self._refresh_pending = False
+            self._refresh_timer.stop()
+        except Exception:
+            pass
+        try:
+            self._coarse_timer.stop()
+        except Exception:
+            pass
+        self._pending_coarse_xlim = None
+        return bool(self._settle_visible_data(self._interaction_generation))
 
     def _current_pixel_width(self) -> int:
         return self._renderer._current_pixel_width()
@@ -2572,8 +3128,11 @@ class TimeDomainCanvasPG(QWidget):
             pixel_width, source_len=source_len, dense_count=dense_count,
         )
 
-    def _refresh_visible_data(self):
-        return self._renderer._refresh_visible_data()
+    def _refresh_visible_data(self, *, xlim_override=None, interactive=False):
+        return self._renderer._refresh_visible_data(
+            xlim_override=xlim_override,
+            interactive=interactive,
+        )
 
     def _build_painter_path(self, t, s) -> QPainterPath:
         return self._renderer._build_painter_path(t, s)
@@ -2625,16 +3184,50 @@ class TimeDomainCanvasPG(QWidget):
 
     def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,
                                view_box=None, scene_pos=None, axis=None):
-        return OverlayAxisManager._handle_wheel_dispatch(
-            self._overlay_axes,
-            delta=delta,
-            modifiers=modifiers,
-            x_pos=x_pos,
-            y_pos=y_pos,
-            view_box=view_box,
-            scene_pos=scene_pos,
-            axis=axis,
-        )
+        # Plain/Shift wheel is Y-only. Preserve its immediate Y/tick/visible
+        # feedback; no X envelope geometry is invalidated on that path.
+        if not bool(modifiers & Qt.ControlModifier):
+            consumed = OverlayAxisManager._handle_wheel_dispatch(
+                self._overlay_axes,
+                delta=delta,
+                modifiers=modifiers,
+                x_pos=x_pos,
+                y_pos=y_pos,
+                view_box=view_box,
+                scene_pos=scene_pos,
+                axis=axis,
+            )
+            if consumed:
+                self._dense_raster.schedule_resuppress()
+                self._dense_raster.schedule_rebuild(
+                    "y-wheel", delay_ms=self._INTERACTION_SETTLE_MS,
+                )
+            return consumed
+        # OverlayAxisManager historically emitted visible_range_changed on
+        # every Ctrl+wheel notch. Suppress that duplicate immediate broadcast
+        # and route X-wheel mutations through the same settled tail as drag/
+        # box zoom; ViewBox sigXRangeChanged remains live because it is a
+        # signal on the ViewBox, not on this canvas.
+        was_blocked = self.signalsBlocked()
+        self.blockSignals(True)
+        try:
+            consumed = OverlayAxisManager._handle_wheel_dispatch(
+                self._overlay_axes,
+                delta=delta,
+                modifiers=modifiers,
+                x_pos=x_pos,
+                y_pos=y_pos,
+                view_box=view_box,
+                scene_pos=scene_pos,
+                axis=axis,
+            )
+        finally:
+            self.blockSignals(was_blocked)
+        if consumed:
+            self._refresh_pending = True
+            self._interaction_state = "settling"
+            self._arm_interaction_settle()
+        return consumed
 
     # ------------------------------------------------------------------
     # T6 — Cursor HTML emission (byte-for-byte parity with
@@ -2985,7 +3578,7 @@ class TimeDomainCanvasPG(QWidget):
         try:
             if not self._refresh_pending:
                 self._refresh_pending = True
-                self._refresh_timer.start()
+                self._arm_interaction_settle()
         except Exception:
             pass
         self.schedule_idle_quality()
@@ -3007,6 +3600,8 @@ class TimeDomainCanvasPG(QWidget):
         return self._quality.quality_status()
 
     def grab_pixmap(self, scale: float = 1.0) -> QPixmap:
+        self._flush_pending_export_refresh()
+        self._dense_raster.flush_pending(self._interaction_generation)
         return self._renderer.grab_pixmap(scale=scale)
 
     @staticmethod

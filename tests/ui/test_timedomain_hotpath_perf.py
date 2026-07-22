@@ -9,6 +9,7 @@ test_pg_timedomain_canvas.py suite).
 """
 import numpy as np
 import pandas as pd
+import pytest
 
 from mf4_analyzer.io.file_data import FileData
 from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
@@ -130,6 +131,41 @@ def test_repeated_flush_with_same_xlim_skips_tail_work(qtbot, qapp, monkeypatch)
     assert reticks == []
 
 
+def test_range_burst_defers_ticks_and_range_signals_until_one_settle(
+    qtbot, qapp, monkeypatch
+):
+    from mf4_analyzer.ui.pg_canvas.tick_density import TickDensityController
+
+    canvas = _make_canvas(qtbot, _rows(1), "overlay")
+    vb = canvas._primary_xaxis_ax.view_box
+    reticks = []
+    xrange_emits = []
+    visible_emits = []
+    monkeypatch.setattr(
+        TickDensityController,
+        "_apply_target_x_ticks_to_all_axes",
+        lambda self: reticks.append(1),
+    )
+    canvas.xrange_changed.connect(lambda lo, hi: xrange_emits.append((lo, hi)))
+    canvas.visible_range_changed.connect(lambda: visible_emits.append(1))
+
+    canvas._begin_view_interaction()
+    latest = None
+    for i in range(5):
+        latest = (0.05 * i, 0.55 + 0.05 * i)
+        vb.setXRange(*latest, padding=0)
+        qtbot.wait(50)
+        assert reticks == []
+        assert xrange_emits == []
+        assert visible_emits == []
+    canvas._end_view_interaction()
+    qtbot.wait(canvas._INTERACTION_SETTLE_MS + 40)
+
+    assert reticks == [1]
+    assert xrange_emits == [latest]
+    assert visible_emits == [1]
+
+
 def test_propagate_equal_ranges_skips_axis_item_sync(qtbot, qapp):
     canvas = _make_canvas(qtbot, _rows(3), "subplot")
     canvas._propagate_xlim_to_siblings()  # converge every sibling first
@@ -186,11 +222,21 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
     stats_updates = []
 
     class FakeCanvas:
-        def plot_channels(self, data, mode, xlabel, defer_first_frame=False):
+        def plot_channels(
+            self, data, mode, xlabel, defer_first_frame=False,
+            progress_callback=None, render_context_key=None,
+            full_rebuild_reason=None,
+        ):
             self.data = data
             self.mode = mode
             self.xlabel = xlabel
             self.defer_first_frame = defer_first_frame
+            self.render_context_key = render_context_key
+            self.full_rebuild_reason = full_rebuild_reason
+
+        def try_apply_selection_delta(self, data, *, mode, render_context_key=None):
+            self.delta_attempt = (data, mode, render_context_key)
+            return {"applied": False, "reason": "no-render-model"}
 
         def set_tick_density(self, x, y):
             self.tick_density = (x, y)
@@ -202,6 +248,7 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
     fake.files = {"fid": fd}
     fake.channel_list = types.SimpleNamespace(
         get_checked_channels=lambda: [("fid", "speed", "#1769e0")],
+        get_visible_checked_channels=lambda: [("fid", "speed", "#1769e0")],
         get_file_data=lambda fid: fake.files.get(fid),
         checked_axis_groups=lambda: {},
     )
@@ -245,6 +292,7 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
     fake._custom_xaxis_fid = None
     fake._custom_xaxis_ch = None
     fake._custom_xlabel = None
+    fake._time_axis_label = lambda: "Time (s)"
     fake._sync_time_range_inputs_from_visible_xlim = lambda: None
     fake.statusBar = types.SimpleNamespace(showMessage=lambda *_args, **_kwargs: None)
 
@@ -252,6 +300,8 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
     mw.MainWindow._plot_time_on_canvas(fake, canvas, update_primary_ui=True)
 
     assert len(canvas.data) == 1
+    assert canvas.delta_attempt[1] == "subplot"
+    assert canvas.full_rebuild_reason == "no-render-model"
     assert stats_updates == []
 
 
@@ -296,3 +346,68 @@ def test_overlay_uses_single_cursor_line_item(qtbot, qapp):
     canvas.plot_channels(_rows(3), mode="subplot")
     items = canvas._cursor._ensure_cursor_items("_cursor_line_items", color="#1769e0")
     assert len(items) == 3  # subplot keeps one per row (rows do not overlap)
+
+
+def test_mainwindow_crc_uncheck_recheck_and_eye_toggle_use_selection_delta(
+    qtbot, qapp, tmp_path,
+):
+    from unittest.mock import patch
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    path = tmp_path / "crc-selection.csv"
+    n = 5727
+    pd.DataFrame({
+        "Time": np.arange(n, dtype=np.float64) / 100.0,
+        "EPS_CRC1": (np.arange(n) % 256).astype(np.float64),
+    }).to_csv(path, index=False)
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.resize(1400, 800)
+    window.show()
+    with patch(
+        "mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames",
+        return_value=([str(path)], ""),
+    ):
+        window.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(window.files))
+    file_item = window.channel_list._file_items[fid]
+    crc_item = next(
+        file_item.child(i)
+        for i in range(file_item.childCount())
+        if file_item.child(i).data(0, Qt.UserRole)[2] == "EPS_CRC1"
+    )
+    crc_item.setCheckState(0, Qt.Checked)
+    qapp.processEvents()
+
+    canvas = window.canvas_time
+    display_name = window.files[fid].get_prefixed_channel("EPS_CRC1")
+    pair = canvas._channel_lines[display_name]
+    pdi = pair[1].plot_data_item
+    view_box = pair[0].view_box
+    canvas.set_xlim(10.0, 20.0)
+    xlim = canvas.get_visible_xlim()
+    generation = canvas._interaction_generation
+
+    crc_item.setCheckState(0, Qt.Unchecked)
+    qapp.processEvents()
+    assert pdi.isVisible() is False
+    assert canvas._interaction_generation == generation
+
+    crc_item.setCheckState(0, Qt.Checked)
+    qapp.processEvents()
+    assert canvas._channel_lines[display_name][1].plot_data_item is pdi
+    assert canvas._channel_lines[display_name][0].view_box is view_box
+    assert canvas.get_visible_xlim() == pytest.approx(xlim)
+
+    window.channel_list._on_item_clicked(crc_item, 2)
+    qapp.processEvents()
+    assert pdi.isVisible() is False
+    window.channel_list._on_item_clicked(crc_item, 2)
+    qapp.processEvents()
+    assert canvas._channel_lines[display_name][1].plot_data_item is pdi
+    assert canvas._channel_lines[display_name][0].view_box is view_box
+    assert canvas.get_visible_xlim() == pytest.approx(xlim)

@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStyle,
+    QStyledItemDelegate,
     QStyleOptionViewItem,
     QStackedLayout,
     QTreeWidget,
@@ -30,7 +31,7 @@ from PyQt5.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt5.QtGui import QColor, QBrush, QIcon, QPainter, QPen, QPixmap
+from PyQt5.QtGui import QColor, QBrush, QFontMetrics, QIcon, QPainter, QPen, QPixmap
 
 from ...ui_kit.icons import Icons, icon_device_pixel_ratio
 from .. import hints
@@ -107,6 +108,150 @@ class StatisticsPanel(QFrame):
                  f"{s['std']:.3g}", f"{s['p2p']:.3g}"]))
 
 
+class _ChannelLeafDelegate(QStyledItemDelegate):
+    """Paint channel leaves with one invariant three-column geometry.
+
+    ``QTreeWidgetItem`` delegates checkbox and icon layout to the platform
+    style.  On macOS a selected row can therefore shift the native checkbox
+    while its decoration icon and column-2 eye keep a different anchor.  A
+    channel row is compact enough to own these three visual primitives, so
+    paint them once here and leave parent/source rows on the native delegate.
+    """
+
+    CHECK_SIZE = 18
+    SWATCH_BOX = 16
+    EYE_BOX = 18
+    LEFT_INSET = 6
+    CHECK_TO_SWATCH_GAP = 6
+    SWATCH_TO_TEXT_GAP = 4
+    CELL_RIGHT_INSET = 7
+    SELECTED_BG = QColor("#e8efff")
+    TEXT = QColor("#111827")
+    MUTED = QColor("#64748b")
+    CHECK_BORDER = QColor("#b8c1ce")
+
+    @staticmethod
+    def _channel_data(index):
+        """Read the identity stored on column zero for any sibling cell."""
+        return index.sibling(index.row(), 0).data(Qt.UserRole)
+
+    @classmethod
+    def _is_channel(cls, index):
+        data = cls._channel_data(index)
+        return bool(data and data[0] == "channel")
+
+    def channel_geometry(self, row_rect):
+        """Return stable checkbox, swatch and text rects for column 0."""
+        check = QRect(
+            row_rect.left() + self.LEFT_INSET,
+            row_rect.top() + (row_rect.height() - self.CHECK_SIZE) // 2,
+            self.CHECK_SIZE,
+            self.CHECK_SIZE,
+        )
+        swatch = QRect(
+            check.right() + 1 + self.CHECK_TO_SWATCH_GAP,
+            row_rect.top() + (row_rect.height() - self.SWATCH_BOX) // 2,
+            self.SWATCH_BOX,
+            self.SWATCH_BOX,
+        )
+        text = QRect(
+            swatch.right() + 1 + self.SWATCH_TO_TEXT_GAP,
+            row_rect.top(),
+            max(0, row_rect.right() - self.CELL_RIGHT_INSET - swatch.right()
+                - self.SWATCH_TO_TEXT_GAP),
+            row_rect.height(),
+        )
+        return check, swatch, text
+
+    def eye_geometry(self, row_rect):
+        return QRect(
+            row_rect.left() + (row_rect.width() - self.EYE_BOX) // 2,
+            row_rect.top() + (row_rect.height() - self.EYE_BOX) // 2,
+            self.EYE_BOX,
+            self.EYE_BOX,
+        )
+
+    @staticmethod
+    def _is_selected(option):
+        return bool(option.state & QStyle.State_Selected)
+
+    def _paint_checkbox(self, painter, rect, checked):
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QPen(self.CHECK_BORDER, 1.0))
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRoundedRect(rect.adjusted(0, 0, -1, -1), 1.5, 1.5)
+        if checked:
+            painter.setPen(QPen(self.TEXT, 2.05, Qt.SolidLine, Qt.RoundCap,
+                                Qt.RoundJoin))
+            painter.drawLine(
+                rect.left() + 4, rect.center().y(),
+                rect.left() + 8, rect.bottom() - 4,
+            )
+            painter.drawLine(
+                rect.left() + 8, rect.bottom() - 4,
+                rect.right() - 4, rect.top() + 4,
+            )
+        painter.restore()
+
+    def _paint_text(self, painter, rect, text, color, alignment, option):
+        painter.save()
+        painter.setFont(option.font)
+        painter.setPen(color)
+        metrics = QFontMetrics(option.font)
+        painter.drawText(
+            rect,
+            alignment,
+            metrics.elidedText(str(text or ""), Qt.ElideRight, rect.width()),
+        )
+        painter.restore()
+
+    def paint(self, painter, option, index):
+        if not self._is_channel(index):
+            super().paint(painter, option, index)
+            return
+
+        column = index.column()
+        selected = self._is_selected(option)
+        if selected:
+            painter.fillRect(option.rect, self.SELECTED_BG)
+
+        if column == 0:
+            check, swatch, text = self.channel_geometry(option.rect)
+            self._paint_checkbox(
+                painter,
+                check,
+                index.data(Qt.CheckStateRole) == Qt.Checked,
+            )
+            icon = index.data(Qt.DecorationRole)
+            if isinstance(icon, QIcon) and not icon.isNull():
+                icon.paint(painter, swatch, Qt.AlignCenter)
+            self._paint_text(
+                painter, text, index.data(Qt.DisplayRole), self.TEXT,
+                Qt.AlignLeft | Qt.AlignVCenter, option,
+            )
+            return
+
+        if column == 1:
+            self._paint_text(
+                painter,
+                option.rect.adjusted(0, 0, -self.CELL_RIGHT_INSET, 0),
+                index.data(Qt.DisplayRole),
+                self.TEXT if selected else self.MUTED,
+                Qt.AlignRight | Qt.AlignVCenter,
+                option,
+            )
+            return
+
+        if column == 2:
+            icon = index.data(Qt.DecorationRole)
+            if isinstance(icon, QIcon) and not icon.isNull():
+                icon.paint(painter, self.eye_geometry(option.rect), Qt.AlignCenter)
+            return
+
+        super().paint(painter, option, index)
+
+
 class _CheckTolerantTree(QTreeWidget):
     """QTreeWidget that widens the *clickable* hit area of the column-0
     checkbox (the indicator stays the same visual size).
@@ -125,12 +270,22 @@ class _CheckTolerantTree(QTreeWidget):
         super().__init__(*args, **kwargs)
         self._consume_check_release = False
         self._owner = None  # set by MultiFileChannelWidget; drawBranches reads it
+        self._channel_delegate = _ChannelLeafDelegate(self)
+        self.setItemDelegate(self._channel_delegate)
 
     def _check_hit_rect(self, item, index):
         """Return the enlarged clickable rect for ``item``'s checkbox, or
         None if the row has no user-checkable column-0 box."""
         if not (item.flags() & Qt.ItemIsUserCheckable):
             return None
+        data = item.data(0, Qt.UserRole)
+        row = self.visualRect(index)
+        if data and data[0] == "channel":
+            indicator = self._channel_delegate.channel_geometry(row)[0]
+            hit = indicator.adjusted(-self.HIT_PAD, 0, self.HIT_PAD, 0)
+            hit.setTop(row.top())
+            hit.setBottom(row.bottom())
+            return hit
         opt = QStyleOptionViewItem()
         opt.initFrom(self)
         opt.rect = self.visualRect(index)
@@ -230,6 +385,16 @@ class _CheckTolerantTree(QTreeWidget):
         super().drawBranches(painter, rect, index)
         if not (data and data[0] == 'channel'):
             return
+        # On macOS the native tree style leaves an independently painted grey
+        # branch/indent gutter beside a selected leaf.  Its checkbox and text
+        # do not actually move, but the split background makes the row look as
+        # if it has shifted right.  Channel leaves have no expand/collapse
+        # glyph, so repaint that gutter with the same selection colour used by
+        # the item body before drawing an optional axis-group badge.
+        if item.isSelected():
+            painter.save()
+            painter.fillRect(rect, QColor('#e8efff'))
+            painter.restore()
         owner = self._owner
         if owner is None:
             return

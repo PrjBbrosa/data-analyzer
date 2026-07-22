@@ -97,6 +97,8 @@ class _PgLineHandle:
 
     def get_color(self) -> str:
         pen = self._pdi.opts.get("pen") if hasattr(self._pdi, "opts") else None
+        if pen is None:
+            pen = getattr(self._pdi, "_tracelab_dense_native_pen", None)
         # Pens can be QPen, color string, tuple, or pyqtgraph format.
         try:
             from PyQt5.QtGui import QColor, QPen
@@ -123,19 +125,26 @@ class _PgLineHandle:
     def set_color(self, color: str) -> None:
         # Use the existing pen's width if possible so we only swap color.
         width = 1.0
+        style = None
         if hasattr(self._pdi, "opts"):
             pen = self._pdi.opts.get("pen")
+            if pen is None:
+                pen = getattr(self._pdi, "_tracelab_dense_native_pen", None)
             try:
                 from PyQt5.QtGui import QPen
 
                 if isinstance(pen, QPen):
                     width = max(0.5, float(pen.widthF() or 1.0))
+                    style = pen.style()
             except Exception:
                 pass
         try:
             import pyqtgraph as pg
 
-            self._pdi.setPen(pg.mkPen(color=color, width=width))
+            kwargs = {"color": color, "width": width}
+            if style is not None:
+                kwargs["style"] = style
+            self._pdi.setPen(pg.mkPen(**kwargs))
         except Exception:
             # Last-resort: rely on setPen accepting a raw color string.
             try:
@@ -278,7 +287,11 @@ class PgAxisHandle:
         vb = self._view_box
         if vb is None or not hasattr(vb, "setYRange"):
             return
+        before = self.get_ylim()
         vb.setYRange(float(lo), float(hi), padding=0)
+        after = self.get_ylim()
+        if before != after:
+            self._notify_dense_raster_y_changed()
 
     def autoscale(self, axis: str = "both") -> None:
         vb = self._view_box
@@ -293,8 +306,10 @@ class PgAxisHandle:
             vb.enableAutoRange(axis="x")
         elif axis == "y":
             vb.enableAutoRange(axis="y")
+            self._notify_dense_raster_y_changed()
         else:
             vb.enableAutoRange()
+            self._notify_dense_raster_y_changed()
 
     # Scales ----------------------------------------------------------------
     def _is_primary_plot_view(self) -> bool:
@@ -335,6 +350,7 @@ class PgAxisHandle:
 
     def set_xscale(self, scale: str) -> None:
         normalized = "log" if scale == "log" else "linear"
+        changed = normalized != self._xscale
         self._xscale = normalized
         pi = self._plot_item
         if pi is not None and hasattr(pi, "setLogMode") and self._is_primary_plot_view():
@@ -346,9 +362,12 @@ class PgAxisHandle:
             except Exception:
                 pass
         self._apply_data_log_mode()
+        if changed:
+            self._notify_dense_raster_scale_changed()
 
     def set_yscale(self, scale: str) -> None:
         normalized = "log" if scale == "log" else "linear"
+        changed = normalized != self._yscale
         self._yscale = normalized
         pi = self._plot_item
         if pi is not None and hasattr(pi, "setLogMode") and self._is_primary_plot_view():
@@ -360,6 +379,20 @@ class PgAxisHandle:
             except Exception:
                 pass
         self._apply_data_log_mode()
+        if changed:
+            self._notify_dense_raster_scale_changed()
+
+    def _notify_dense_raster_scale_changed(self) -> None:
+        owner = getattr(self, "_owner_canvas", None)
+        callback = getattr(owner, "_on_pg_axis_scale_changed", None)
+        if callable(callback):
+            callback()
+
+    def _notify_dense_raster_y_changed(self) -> None:
+        owner = getattr(self, "_owner_canvas", None)
+        callback = getattr(owner, "_on_pg_axis_ylim_changed", None)
+        if callable(callback):
+            callback()
 
     def get_xscale(self) -> str:
         # Prefer the cached write-through state. If a caller toggled the

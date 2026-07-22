@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ..channel_config import ChannelSelectionConfig
+from ...ui_kit.combo_popup_shell import prepare_combo_popup
 
 
 CONFIG_NAME_ROLE = Qt.UserRole + 1
@@ -83,8 +84,27 @@ class _ChannelConfigComboBox(QComboBox):
     """A bottom-bar selector whose menu expands into the available space."""
 
     def showPopup(self):  # noqa: N802
+        self._sync_popup_geometry()
+        prepare_combo_popup(self)
         super().showPopup()
         QTimer.singleShot(0, self._move_popup_above_anchor)
+
+    def _sync_popup_geometry(self):
+        """Keep the shared popup shell wide enough without creating a scroll trap."""
+        view = self.view()
+        visible_rows = min(self.count(), self.maxVisibleItems())
+        row_heights = [
+            max(1, view.sizeHintForRow(index))
+            for index in range(visible_rows)
+        ]
+        # The shared shell gives the viewport a 6px inset on both edges plus
+        # a 1px border. A fixed visible-row height prevents Qt's native combo
+        # container from stretching rows to fill a tall available area (and
+        # then clipping the
+        # management action below a scrollbar).
+        height = 14 + sum(row_heights)
+        view.setMinimumHeight(height)
+        view.setMaximumHeight(height)
 
     def _move_popup_above_anchor(self):
         popup = self.view().window()
@@ -103,6 +123,8 @@ class ChannelConfigBar(QWidget):
     selection_changed = pyqtSignal(object)
 
     MANAGE_SENTINEL = "__manage_configs__"
+    ACTION_WIDTH = 64
+    CONTROL_HEIGHT = 32
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -112,16 +134,22 @@ class ChannelConfigBar(QWidget):
 
         self.btn_save = QPushButton("保存", self)
         self.btn_save.setObjectName("channelConfigSave")
-        self.btn_save.setProperty("role", "tool")
-        self.btn_save.setMaximumWidth(52)
+        # Save is a peer action to Apply here, not icon-sized toolbar chrome.
+        self.btn_save.setProperty("role", "primary")
+        self.btn_save.setFixedWidth(self.ACTION_WIDTH)
+        self.btn_save.setFixedHeight(self.CONTROL_HEIGHT)
+        self.btn_save.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         self.combo = _ChannelConfigComboBox(self)
         self.combo.setObjectName("channelConfigCombo")
         self.combo.setEditable(True)
         self.combo.setInsertPolicy(QComboBox.NoInsert)
         self.combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.combo.setMaxVisibleItems(6)
+        self.combo.setMinimumWidth(132)
+        self.combo.setFixedHeight(self.CONTROL_HEIGHT)
+        self.combo.setMaxVisibleItems(8)
         self.combo.setProperty("popupStyle", "channel-config")
+        self.combo.setProperty("popupMinWidth", 320)
         self.combo.setItemDelegate(_ChannelConfigItemDelegate(self.combo))
         self.combo.completer().setCaseSensitivity(Qt.CaseInsensitive)
         self.combo.completer().setCompletionMode(QCompleter.PopupCompletion)
@@ -130,11 +158,13 @@ class ChannelConfigBar(QWidget):
         self.btn_apply = QPushButton("应用", self)
         self.btn_apply.setObjectName("channelConfigApply")
         self.btn_apply.setProperty("role", "primary")
-        self.btn_apply.setMaximumWidth(52)
+        self.btn_apply.setFixedWidth(self.ACTION_WIDTH)
+        self.btn_apply.setFixedHeight(self.CONTROL_HEIGHT)
+        self.btn_apply.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
-        layout.addWidget(self.btn_save)
-        layout.addWidget(self.combo)
-        layout.addWidget(self.btn_apply)
+        layout.addWidget(self.btn_save, 0)
+        layout.addWidget(self.combo, 1)
+        layout.addWidget(self.btn_apply, 0)
 
         self._has_checked = False
         self._has_attached = False
@@ -157,11 +187,13 @@ class ChannelConfigBar(QWidget):
         selected = selected_id if selected_id is not None else self.selected_config_id()
         blocker = QSignalBlocker(self.combo)
         self.combo.clear()
-        self.combo.addItem("选择已保存配置…", None)
+        self.combo.addItem("选配置…", None)
         self.combo.setItemData(0, "placeholder", ITEM_KIND_ROLE)
         for config in configs:
             count = len(config.channel_names)
-            self.combo.addItem(f"{config.name} · {count} 个", config.config_id)
+            # The selected state needs only the name.  The popup delegate
+            # still renders the channel count in a dedicated right column.
+            self.combo.addItem(config.name, config.config_id)
             idx = self.combo.count() - 1
             self.combo.setItemData(idx, config.name, CONFIG_NAME_ROLE)
             self.combo.setItemData(idx, count, CHANNEL_COUNT_ROLE)

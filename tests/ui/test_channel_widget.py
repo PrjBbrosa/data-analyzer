@@ -27,6 +27,12 @@ class _MultiChannelFileData:
         return ["#1769e0", "#8b5cf6", "#f43f5e"]
 
 
+def _add_attached_file(widget, fid, file_data):
+    """Mirror the production View contract for channel-widget tests."""
+    widget.add_file(fid, file_data)
+    widget.set_attached_file_ids([*widget.get_attached_file_ids(), fid])
+
+
 def test_channel_context_menu_uses_translucent_rounded_shell(qapp, qtbot, monkeypatch):
     captured = []
 
@@ -41,7 +47,7 @@ def test_channel_context_menu_uses_translucent_rounded_shell(qapp, qtbot, monkey
     widget.resize(320, 240)
     widget.show()
     qtbot.waitExposed(widget)
-    widget.add_file("file-a", _FakeFileData())
+    _add_attached_file(widget, "file-a", _FakeFileData())
     widget.tree.expandAll()
     QCoreApplication.processEvents()
 
@@ -100,7 +106,7 @@ def test_time_visibility_icons_are_distinct(qapp):
 def test_checked_channel_eye_toggles_without_unchecking(qapp, qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
-    widget.add_file("file-a", _MultiChannelFileData())
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
     item = widget._file_items["file-a"].child(0)
 
     assert item.icon(2).isNull()
@@ -130,7 +136,7 @@ def test_checked_channel_eye_toggles_without_unchecking(qapp, qtbot):
 def test_eye_click_never_propagates_to_other_selected_rows(qapp, qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
-    widget.add_file("file-a", _MultiChannelFileData())
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
     file_item = widget._file_items["file-a"]
     first = file_item.child(0)
     second = file_item.child(1)
@@ -164,7 +170,7 @@ def test_channel_search_expands_parent_to_show_matches(qapp, qtbot):
     widget.resize(360, 280)
     widget.show()
     qtbot.waitExposed(widget)
-    widget.add_file("file-a", _MultiChannelFileData())
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
     QCoreApplication.processEvents()
 
     file_item = widget._file_items["file-a"]
@@ -191,7 +197,7 @@ def test_selected_filter_button_only_shows_checked_channels(qapp, qtbot):
     widget.resize(360, 280)
     widget.show()
     qtbot.waitExposed(widget)
-    widget.add_file("file-a", _MultiChannelFileData())
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
     QCoreApplication.processEvents()
 
     file_item = widget._file_items["file-a"]
@@ -238,7 +244,7 @@ def test_checkbox_hit_tolerance_band_toggles_but_name_does_not(qapp, qtbot):
     widget.resize(360, 280)
     widget.show()
     qtbot.waitExposed(widget)
-    widget.add_file("file-a", _FakeFileData())
+    _add_attached_file(widget, "file-a", _FakeFileData())
     widget.tree.expandAll()
     QCoreApplication.processEvents()
 
@@ -280,7 +286,7 @@ def test_checkbox_double_click_event_is_consumed_after_row_selection(qapp, qtbot
     widget.resize(360, 280)
     widget.show()
     qtbot.waitExposed(widget)
-    widget.add_file("file-a", _FakeFileData())
+    _add_attached_file(widget, "file-a", _FakeFileData())
     widget.tree.expandAll()
     QCoreApplication.processEvents()
 
@@ -318,7 +324,7 @@ def test_selected_channel_checkbox_center_click_toggles_once(qapp, qtbot):
     widget.resize(360, 280)
     widget.show()
     qtbot.waitExposed(widget)
-    widget.add_file("file-a", _FakeFileData())
+    _add_attached_file(widget, "file-a", _FakeFileData())
     widget.tree.expandAll()
     QCoreApplication.processEvents()
 
@@ -350,7 +356,7 @@ def test_checkbox_click_batches_selected_channel_rows_after_confirmation(
     widget.resize(360, 280)
     widget.show()
     qtbot.waitExposed(widget)
-    widget.add_file("file-a", _MultiChannelFileData())
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
     widget.tree.expandAll()
     QCoreApplication.processEvents()
 
@@ -388,7 +394,7 @@ def test_checkbox_batch_cancel_keeps_states_and_emits_nothing(
     widget.resize(360, 280)
     widget.show()
     qtbot.waitExposed(widget)
-    widget.add_file("file-a", _MultiChannelFileData())
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
     widget.tree.expandAll()
     QCoreApplication.processEvents()
 
@@ -422,7 +428,7 @@ def test_checkbox_batch_check_confirmation_reopens_hidden_members(
     widget.resize(360, 280)
     widget.show()
     qtbot.waitExposed(widget)
-    widget.add_file("file-a", _MultiChannelFileData())
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
     widget.tree.expandAll()
     QCoreApplication.processEvents()
 
@@ -454,13 +460,21 @@ def test_batch_confirmation_copy_and_default_cancel(qapp, qtbot, monkeypatch):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
     boxes = []
+    titles = []
+    original_set_window_title = QMessageBox.setWindowTitle
+
+    def capture_window_title(box, title):
+        titles.append(title)
+        original_set_window_title(box, title)
+
+    monkeypatch.setattr(QMessageBox, "setWindowTitle", capture_window_title)
     monkeypatch.setattr(
         QMessageBox, "exec_", lambda box: boxes.append(box) or 0
     )
 
     assert widget._confirm_selected_channel_checks(5, Qt.Checked) is False
     check_box = boxes[-1]
-    assert check_box.windowTitle() == "批量操作确认"
+    assert titles[-1] == "批量操作确认"
     assert check_box.text() == "当前选中了 5 个通道，是否将它们全部勾选并显示？"
     assert {button.text() for button in check_box.buttons()} == {
         "全部勾选并显示", "取消操作"
@@ -484,7 +498,7 @@ def test_edit_channels_button_enables_with_file_and_emits(qapp, qtbot):
     # Disabled until a file is loaded — editing channels needs a file.
     assert not widget.btn_edit.isEnabled()
 
-    widget.add_file("file-a", _FakeFileData())
+    _add_attached_file(widget, "file-a", _FakeFileData())
     assert widget.btn_edit.isEnabled()
 
     with qtbot.waitSignal(widget.channel_editor_requested, timeout=200):

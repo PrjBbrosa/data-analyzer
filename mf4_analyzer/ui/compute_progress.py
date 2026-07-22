@@ -9,6 +9,7 @@ class ComputeProgressWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("computeProgressWidget")
+        self._label_prefix = ""
 
         self.label = QLabel(self)
         self.label.setObjectName("computeProgressLabel")
@@ -30,7 +31,8 @@ class ComputeProgressWidget(QWidget):
         self.setVisible(False)
 
     def begin(self, label: str, total: int | None = None) -> None:
-        self.label.setText(label)
+        self._label_prefix = str(label)
+        self.label.setText(self._label_prefix)
         if total is None or total <= 0:
             self.bar.setRange(0, 0)
         else:
@@ -45,9 +47,10 @@ class ComputeProgressWidget(QWidget):
         label: str | None = None,
     ) -> None:
         if label is not None:
-            self.label.setText(label)
+            self._label_prefix = str(label)
         if total <= 0:
             self.bar.setRange(0, 0)
+            self.label.setText(self._label_prefix)
             self.setVisible(True)
             return
 
@@ -55,6 +58,8 @@ class ComputeProgressWidget(QWidget):
         current_value = max(0, min(int(current), total_value))
         self.bar.setRange(0, total_value)
         self.bar.setValue(current_value)
+        percentage = int(round(100 * current_value / total_value))
+        self.label.setText(f"{self._label_prefix} · {percentage}%")
         self.setVisible(True)
 
     def finish(self, label: str | None = None) -> None:

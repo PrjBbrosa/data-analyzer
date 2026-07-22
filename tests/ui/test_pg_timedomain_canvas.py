@@ -32,6 +32,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QCheckBox, QRadioButton, QWidget
 
 from mf4_analyzer.signal import _envelope_cutils as ec
@@ -1701,8 +1702,13 @@ class TestTimeDomainCanvasPGCurveCache:
 
         view_x, view_y = pdi.getData()
         assert view_x is not None and view_y is not None
-        assert float(np.nanmin(view_x)) >= 2.0 - 1e-9
-        assert float(np.nanmax(view_x)) <= 5.0 + 1e-9
+        # Settled geometry contains the requested viewport plus 25% headroom
+        # on each side, so the next in-buffer interaction can transform it
+        # without another setData.
+        assert float(np.nanmin(view_x)) <= 2.0
+        assert float(np.nanmax(view_x)) >= 5.0
+        assert float(np.nanmin(view_x)) >= 1.25 - 1e-3
+        assert float(np.nanmax(view_x)) <= 5.75 + 1e-3
         assert not (
             len(bind_x) == len(view_x)
             and np.array_equal(np.asarray(bind_x), np.asarray(view_x))
@@ -3108,15 +3114,19 @@ class _FakeDragEvent:
     own (pre-``super()``) branch matter: ``button()`` and ``isStart()``.
     """
 
-    def __init__(self, button, *, start):
+    def __init__(self, button, *, start=False, finish=False):
         self._button = button
         self._start = start
+        self._finish = finish
 
     def button(self):
         return self._button
 
     def isStart(self):
         return self._start
+
+    def isFinish(self):
+        return self._finish
 
 
 class TestViewBoxDragAaHook:
@@ -3135,9 +3145,18 @@ class TestViewBoxDragAaHook:
         class _OwnerSpy:
             def __init__(self):
                 self.disabled = 0
+                self.begun = 0
+                self.ended = 0
 
             def disable_interactive_quality(self):
                 self.disabled += 1
+
+            def _begin_view_interaction(self):
+                self.begun += 1
+                self.disable_interactive_quality()
+
+            def _end_view_interaction(self):
+                self.ended += 1
 
         owner = _OwnerSpy()
         vb = _ModifierWheelViewBox(owner_canvas=owner)
@@ -3183,7 +3202,7 @@ class TestViewBoxDragAaHook:
         assert owner.disabled == 0, "only isStart drops AA (idle gate covers held drag)"
         assert super_calls["n"] == 1
 
-    def test_panmode_left_does_not_drop_aa_but_calls_super(self, qapp, monkeypatch):
+    def test_panmode_left_brackets_interaction_and_calls_super(self, qapp, monkeypatch):
         import pyqtgraph as pg
         from PyQt5.QtCore import Qt
 
@@ -3199,8 +3218,14 @@ class TestViewBoxDragAaHook:
         ev = _FakeDragEvent(Qt.LeftButton, start=True)
         vb.mouseDragEvent(ev, axis=None)
 
-        assert owner.disabled == 0, "PanMode must not use the RectMode hook"
+        assert owner.begun == 1
+        assert owner.disabled == 1, "PanMode drag start must enter interactive quality"
         assert super_calls["n"] == 1
+
+        vb.mouseDragEvent(
+            _FakeDragEvent(Qt.LeftButton, finish=True), axis=None
+        )
+        assert owner.ended == 1, "PanMode drag finish must arm the settled path"
 
     def test_rectmode_single_axis_drag_does_not_drop_aa_but_calls_super(
         self, qapp, monkeypatch,
@@ -3243,6 +3268,35 @@ class TestViewBoxDragAaHook:
 
         assert owner.disabled == 0, "right-button (zoom-out) drag is untouched"
         assert super_calls["n"] == 1
+
+    def test_overlay_rect_finish_relocks_master_y_and_maps_all_aux_ranges(
+        self, qapp, monkeypatch,
+    ):
+        import pyqtgraph as pg
+        from PyQt5.QtCore import Qt
+        from mf4_analyzer.ui.pg_canvas.ticks_math import _frame_to_nice
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
+        vb = canvas._x_master_handle.view_box
+        vb.setMouseMode(pg.ViewBox.RectMode)
+        before = [handle.get_ylim() for handle in canvas.axes_list]
+
+        def _finish_box(base_vb, ev, axis=None):
+            if base_vb is vb and ev.isFinish():
+                base_vb.setYRange(0.25, 0.75, padding=0)
+
+        monkeypatch.setattr(pg.ViewBox, "mouseDragEvent", _finish_box)
+        vb.mouseDragEvent(_FakeDragEvent(Qt.LeftButton, start=True), axis=None)
+        vb.mouseDragEvent(_FakeDragEvent(Qt.LeftButton, finish=True), axis=None)
+
+        assert vb.viewRange()[1] == pytest.approx((0.0, 1.0))
+        n = canvas._overlay_axes._current_overlay_divisions()
+        for handle, (lo, hi) in zip(canvas.axes_list, before):
+            expected = _frame_to_nice(
+                lo + 0.25 * (hi - lo), lo + 0.75 * (hi - lo), n
+            )[:2]
+            assert handle.get_ylim() == pytest.approx(expected)
 
 
 class TestTimeDomainCanvasPGCursorParity:
@@ -3389,6 +3443,37 @@ class TestTimeDomainCanvasPGCursorInteraction:
         xs, ys = markers[0].getData()
         assert list(xs) == pytest.approx([0.25, 0.75])
         assert list(ys) == pytest.approx([-3.0, 5.0])
+        assert markers[0].isVisible()
+
+    def test_dual_cursor_marks_every_channel_in_a_shared_coaxis_group(self, qapp):
+        """A co-axis slot must retain extrema for every member channel."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        t = np.array([0.0, 0.25, 0.50, 0.75, 1.0], dtype=np.float64)
+        group = {"axis_group": 1}
+        canvas.plot_channels([
+            ("torque", True, t, np.array([1.0, -3.0, 2.0, 5.0, 0.0]),
+             "#ef4444", "Nm", "fid-1", group),
+            ("angle", True, t, np.array([4.0, 7.0, -2.0, 1.0, 0.0]),
+             "#06b6d4", "deg", "fid-1", group),
+            ("current", True, t, np.array([2.0, 0.0, 8.0, -4.0, 1.0]),
+             "#8b5cf6", "A", "fid-1", group),
+        ], mode="overlay")
+        QCoreApplication.processEvents()
+        assert len(canvas.axes_list) == 1
+
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+        canvas._cursor.ax = 0.20
+        canvas._cursor.bx = 0.80
+        canvas._emit_dual_cursor_html()
+
+        markers = canvas._cursor.extreme_markers
+        assert len(markers) == 1
+        xs, ys = markers[0].getData()
+        assert list(xs) == pytest.approx([0.25, 0.75, 0.50, 0.25, 0.75, 0.50])
+        assert list(ys) == pytest.approx([-3.0, 5.0, -2.0, 7.0, -4.0, 8.0])
         assert markers[0].isVisible()
 
     def test_dual_cursor_hover_move_does_not_recompute_stats(self, qapp, monkeypatch):
@@ -4476,6 +4561,43 @@ class TestTimeDomainCanvasPGHiDpiGrab:
         assert canvas._quality.density_allowed == "SENTINEL_A"
         assert canvas._quality.density_seeded == "SENTINEL_S"
 
+    def test_grab_flushes_latest_pending_settle_once_before_export(
+        self, qapp, monkeypatch,
+    ):
+        """An immediate copy/save must not capture stale pre-zoom PDI data."""
+        from PyQt5.QtCore import QCoreApplication
+        from unittest.mock import patch
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(800, 400)
+        t = np.linspace(0.0, 20.0, 20_000, dtype=np.float64)
+        canvas.plot_channels([
+            ("speed", True, t, np.sin(t), "#1769e0", "rpm", "f"),
+        ])
+        QCoreApplication.processEvents()
+        pdi = canvas._channel_lines["speed"][1].plot_data_item
+        canvas._INTERACTION_SETTLE_MS = 10_000
+
+        with patch.object(pdi, "setData", wraps=pdi.setData) as setdata:
+            canvas._primary_xaxis_ax.view_box.setXRange(8.0, 10.0, padding=0)
+            assert canvas._refresh_pending is True
+            assert canvas._refresh_timer.isActive() is True
+
+            pix = canvas.grab_pixmap(scale=1.0)
+
+            assert not pix.isNull()
+            assert setdata.call_count == 1
+            assert canvas._refresh_pending is False
+            assert canvas._refresh_timer.isActive() is False
+            displayed_x, _displayed_y = pdi.getData()
+            assert float(np.min(displayed_x)) <= 8.0
+            assert float(np.max(displayed_x)) >= 10.0
+
+            canvas.grab_pixmap(scale=1.0)
+            assert setdata.call_count == 1, (
+                "an idle second export must not repeat settled setData"
+            )
+
     def test_grab_pixmap_skips_forced_aa_when_not_affordable(self, qapp, monkeypatch):
         from PyQt5.QtCore import QCoreApplication
         from contextlib import contextmanager
@@ -4598,117 +4720,394 @@ class TestTimeDomainCanvasPGHiDpiGrab:
 
 
 class TestTimeDomainCanvasPGSetDataHotPathContract:
-    """Lock the repaired visible-rendering contract: the viewport envelope
-    computed during pan/zoom must reach the real ``PlotDataItem``.
+    """Interaction transforms existing geometry; only the latest range settles."""
 
-    The previous cache-only contract made `_curve_path_cache` grow while
-    leaving the on-screen curve stuck on its full-range bind envelope. These
-    tests intentionally prove that range changes now update the visible item.
-    """
-
-    def test_pdi_setdata_called_once_per_distinct_pan_window(
-        self, qapp,
-    ):
-        """Bind once, pan five times: each distinct visible window must update
-        the real PlotDataItem with that window's envelope.
-        """
-        from PyQt5.QtCore import QCoreApplication
-        from unittest.mock import patch
-
+    @staticmethod
+    def _canvas_and_pdi(qapp):
         canvas = _pg_canvas(qapp)
-        n = 50_000
-        t = np.linspace(0.0, 10.0, n, dtype=np.float64)
+        t = np.linspace(0.0, 10.0, 50_000, dtype=np.float64)
         sig = (np.sin(2 * np.pi * 1.3 * t)
                + 0.5 * np.cos(2 * np.pi * 6.1 * t)).astype(np.float64)
-
-        # Bind happens inside plot_channels via PlotItem.plot(...). We
-        # let that go through unsupervised; the spy starts ticking
-        # AFTER bind so we can isolate pan-path mutation.
         canvas.plot_channels([("a", True, t, sig, "#1769e0", "u", "fid-1")])
-        QCoreApplication.processEvents()
+        qapp.processEvents()
+        return canvas, canvas._channel_lines["a"][1].plot_data_item
 
-        # Grab the PlotDataItem out of the channel-lines map. This is
-        # the real bound artist, not a fake.
-        axis_handle, line_handle = canvas._channel_lines["a"]
-        pdi = line_handle.plot_data_item
-        assert pdi is not None, (
-            "channel 'a' has no PlotDataItem — bind path is broken"
-        )
-
-        # Spy on the instance method via patch.object so the call count
-        # observes the real bound call. We use side_effect=None to make
-        # the call a no-op here; the adjacent visible-data test checks the
-        # actual data mutation.
-        with patch.object(pdi, "setData") as spy:
-            # Five panning iterations (different windows each time).
-            windows = [
-                (1.0, 4.0),
-                (2.0, 5.0),
-                (3.0, 6.0),
-                (4.0, 7.0),
-                (5.0, 8.0),
-            ]
-            for lo, hi in windows:
-                canvas.set_xlim(lo, hi)
-                canvas._flush_pending_refresh()
-                QCoreApplication.processEvents()
-            n_calls = spy.call_count
-
-        assert n_calls == len(windows), (
-            f"PlotDataItem.setData was called {n_calls} time(s) during "
-            f"{len(windows)} distinct pan iterations; every viewport envelope "
-            f"must reach the visible curve."
-        )
-
-    def test_pdi_setdata_bind_then_one_visible_refresh_call(self, qapp):
-        """Bind calls remain small, and one additional range-refresh call is
-        expected when the user changes xlim.
-        """
-        from PyQt5.QtCore import QCoreApplication
+    def test_drag_range_burst_reuses_geometry_then_settles_latest_once(
+        self, qtbot, qapp,
+    ):
         from unittest.mock import patch
 
-        canvas = _pg_canvas(qapp)
-        n = 1_000
-        t = np.linspace(0.0, 1.0, n, dtype=np.float64)
-        sig = np.sin(2 * np.pi * 5 * t).astype(np.float64)
+        canvas, pdi = self._canvas_and_pdi(qapp)
+        vb = canvas._primary_xaxis_ax.view_box
+        windows = [(0.5 + i * 0.2, 3.5 + i * 0.2) for i in range(5)]
 
-        # We cannot easily spy on PlotDataItem.setData before bind
-        # because the instance doesn't exist yet. Patch the CLASS
-        # method, which catches the bound call from PlotItem.plot()
-        # because pg.PlotDataItem internally calls self.setData(...)
-        # during construction.
-        import pyqtgraph as pg
+        with patch.object(pdi, "setData", wraps=pdi.setData) as spy:
+            canvas._begin_view_interaction()
+            for lo, hi in windows:
+                vb.setXRange(lo, hi, padding=0)
+                qtbot.wait(50)  # exceeds the legacy 40 ms periodic refresh
+                assert spy.call_count == 0
+            canvas._end_view_interaction()
+            qtbot.wait(canvas._INTERACTION_SETTLE_MS + 40)
 
-        original_setdata = pg.PlotDataItem.setData
-        call_count = {"n": 0}
+        assert spy.call_count == 1
+        assert canvas._primary_xaxis_ax.get_xlim() == pytest.approx(windows[-1])
+        assert canvas._last_range_key["a"][1:3] != (0, 0)
 
-        def _spy(self, *args, **kwargs):
-            call_count["n"] += 1
-            return original_setdata(self, *args, **kwargs)
+    def test_settled_refresh_binds_twenty_five_percent_x_buffer(self, qapp):
+        canvas, pdi = self._canvas_and_pdi(qapp)
+        canvas.set_xlim(3.0, 5.0)
 
-        with patch.object(pg.PlotDataItem, "setData", _spy):
-            canvas.plot_channels(
-                [("a", True, t, sig, "#1769e0", "u", "fid-1")]
-            )
-            QCoreApplication.processEvents()
-            bind_calls = call_count["n"]
-
-            # Now drive the pan path with the spy STILL active. The repaired
-            # contract expects one additional visible-data update.
-            canvas.set_xlim(0.2, 0.5)
-            canvas._flush_pending_refresh()
-            QCoreApplication.processEvents()
-            after_pan_calls = call_count["n"]
-
-        # bind_calls must be small (at most a couple — pyqtgraph may
-        # internally call setData once in the constructor and once for
-        # the supplied data). The first pan refresh must add exactly one
-        # visible update.
-        assert after_pan_calls == bind_calls + 1, (
-            f"PlotDataItem.setData added {after_pan_calls - bind_calls} "
-            f"call(s) during one pan after {bind_calls} bind-time call(s); "
-            "expected exactly one visible envelope update."
+        displayed_x, _displayed_y = pdi.getData()
+        assert float(np.min(displayed_x)) < 2.55
+        assert float(np.max(displayed_x)) > 5.45
+        assert canvas._display_x_coverage == pytest.approx(
+            (2.5, 5.5), abs=2e-4
         )
+
+    def test_drag_leaving_buffer_gets_rate_limited_coarse_coverage(
+        self, qtbot, qapp,
+    ):
+        from unittest.mock import patch
+
+        canvas, pdi = self._canvas_and_pdi(qapp)
+        canvas.set_xlim(2.0, 4.0)  # settled coverage should be [1.5, 4.5]
+
+        with patch.object(pdi, "setData", wraps=pdi.setData) as spy:
+            canvas._begin_view_interaction()
+            canvas._primary_xaxis_ax.view_box.setXRange(6.0, 8.0, padding=0)
+            qtbot.wait(canvas._COARSE_REFRESH_MS + 40)
+
+            displayed_x, _displayed_y = pdi.getData()
+            assert float(np.min(displayed_x)) <= 6.0
+            assert float(np.max(displayed_x)) >= 8.0
+            assert spy.call_count == 1
+
+            # Keep crossing the moving coverage boundary for ~0.4 s. Coarse
+            # geometry may update, but never faster than the 10 Hz contract.
+            for i in range(20):
+                lo = 0.2 if i % 2 == 0 else 8.0
+                canvas._primary_xaxis_ax.view_box.setXRange(lo, lo + 1.0, padding=0)
+                qtbot.wait(20)
+            coarse_calls = spy.call_count
+            # The first coarse frame also waits for the 100 ms gate. Across
+            # ~0.54 s this is at most 5, which scales to <=10 in one second.
+            assert coarse_calls <= 5
+
+            canvas._end_view_interaction()
+            qtbot.wait(canvas._INTERACTION_SETTLE_MS + 40)
+
+        assert spy.call_count == coarse_calls + 1
+
+    def test_wheel_xzoom_uses_same_quiet_settle_path(self, qtbot, qapp):
+        from PyQt5.QtCore import Qt
+        from unittest.mock import patch
+
+        canvas, pdi = self._canvas_and_pdi(qapp)
+        vb = canvas._primary_xaxis_ax.view_box
+        visible_emits = []
+        canvas.visible_range_changed.connect(lambda: visible_emits.append(1))
+        with patch.object(pdi, "setData", wraps=pdi.setData) as spy:
+            for _ in range(4):
+                assert canvas._handle_wheel_dispatch(
+                    delta=120.0,
+                    modifiers=Qt.ControlModifier,
+                    x_pos=5.0,
+                    y_pos=0.0,
+                    view_box=vb,
+                    scene_pos=None,
+                    axis=None,
+                )
+                qtbot.wait(50)
+                assert spy.call_count == 0
+                assert visible_emits == []
+            qtbot.wait(canvas._INTERACTION_SETTLE_MS + 40)
+        assert spy.call_count == 1
+        assert visible_emits == [1]
+
+    def test_real_viewport_ctrl_wheel_event_zooms_x_then_settles_once(
+        self, qtbot, qapp,
+    ):
+        from PyQt5.QtCore import QPoint, QPointF, Qt
+        from PyQt5.QtGui import QWheelEvent
+        from PyQt5.QtWidgets import QApplication
+        from unittest.mock import patch
+
+        canvas, pdi = self._canvas_and_pdi(qapp)
+        vb = canvas._primary_xaxis_ax.view_box
+        before_x = tuple(vb.viewRange()[0])
+        scene_pos = vb.mapViewToScene(QPointF(5.0, 0.0))
+        pos = QPointF(canvas._glw.mapFromScene(scene_pos))
+        global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
+
+        with patch.object(pdi, "setData", wraps=pdi.setData) as spy:
+            for _ in range(4):
+                event = QWheelEvent(
+                    pos, global_pos, QPoint(), QPoint(0, 120), Qt.NoButton,
+                    Qt.ControlModifier, Qt.ScrollUpdate, False,
+                )
+                assert QApplication.sendEvent(canvas._glw.viewport(), event)
+                qapp.processEvents()
+                qtbot.wait(50)
+                assert spy.call_count == 0
+            after_x = tuple(vb.viewRange()[0])
+            assert (after_x[1] - after_x[0]) < (before_x[1] - before_x[0])
+            qtbot.wait(canvas._INTERACTION_SETTLE_MS + 40)
+
+        assert spy.call_count == 1
+
+    @pytest.mark.parametrize("modifiers", [Qt.NoModifier, Qt.ShiftModifier])
+    def test_y_only_wheel_keeps_immediate_visible_feedback(
+        self, qapp, modifiers,
+    ):
+        canvas, _pdi = self._canvas_and_pdi(qapp)
+        vb = canvas._primary_xaxis_ax.view_box
+        visible_emits = []
+        canvas.visible_range_changed.connect(lambda: visible_emits.append(1))
+
+        assert canvas._handle_wheel_dispatch(
+            delta=120.0,
+            modifiers=modifiers,
+            x_pos=5.0,
+            y_pos=0.0,
+            view_box=vb,
+            scene_pos=None,
+            axis=None,
+        )
+        assert visible_emits == [1]
+        assert canvas._refresh_pending is False
+
+    def test_box_zoom_waits_for_release_then_settles_once(
+        self, qtbot, qapp, monkeypatch,
+    ):
+        import pyqtgraph as pg
+        from PyQt5.QtCore import Qt
+        from unittest.mock import patch
+
+        canvas, pdi = self._canvas_and_pdi(qapp)
+        vb = canvas._primary_xaxis_ax.view_box
+        vb.setMouseMode(pg.ViewBox.RectMode)
+        monkeypatch.setattr(pg.ViewBox, "mouseDragEvent", lambda *_a, **_k: None)
+
+        with patch.object(pdi, "setData", wraps=pdi.setData) as spy:
+            vb.mouseDragEvent(
+                _FakeDragEvent(Qt.LeftButton, start=True), axis=None
+            )
+            vb.setXRange(2.0, 4.0, padding=0)
+            qtbot.wait(canvas._INTERACTION_SETTLE_MS + 30)
+            assert spy.call_count == 0, "held rubber band must stay transform-only"
+            vb.mouseDragEvent(
+                _FakeDragEvent(Qt.LeftButton, finish=True), axis=None
+            )
+            qtbot.wait(canvas._INTERACTION_SETTLE_MS + 40)
+        assert spy.call_count == 1
+
+    def test_programmatic_set_xlim_refreshes_deterministically(self, qapp):
+        from unittest.mock import patch
+
+        canvas, pdi = self._canvas_and_pdi(qapp)
+        with patch.object(pdi, "setData", wraps=pdi.setData) as spy:
+            canvas.set_xlim(2.0, 5.0)
+            assert spy.call_count == 1
+            assert canvas._refresh_timer.isActive() is False
+            assert canvas._refresh_pending is False
+
+    def test_home_and_restore_paths_each_force_one_settled_refresh(self, qapp):
+        from unittest.mock import patch
+
+        canvas, pdi = self._canvas_and_pdi(qapp)
+        canvas.set_xlim(2.0, 5.0)
+        with patch.object(pdi, "setData", wraps=pdi.setData) as spy:
+            canvas.reset_view_to_data_extents()
+            assert spy.call_count == 1
+            canvas.restore_visible_xlim((1.0, 3.0))
+            assert spy.call_count == 2
+            assert canvas._refresh_timer.isActive() is False
+
+    def test_stale_settle_generation_cannot_mutate_new_plot(self, qapp):
+        from unittest.mock import patch
+
+        canvas, _pdi = self._canvas_and_pdi(qapp)
+        stale_generation = canvas._interaction_generation
+        canvas.clear()
+        t = np.linspace(0.0, 1.0, 100, dtype=np.float64)
+        canvas.plot_channels([
+            ("new", True, t, np.sin(t), "#ef4444", "u", "fid-2")
+        ])
+        new_pdi = canvas._channel_lines["new"][1].plot_data_item
+        with patch.object(new_pdi, "setData", wraps=new_pdi.setData) as spy:
+            canvas._settle_visible_data(stale_generation)
+        assert spy.call_count == 0
+
+    def test_generation_timers_use_properties_and_bound_slots_not_lambdas(
+        self, qapp,
+    ):
+        """Qt owns timer properties safely across combined-suite teardown."""
+        import inspect
+
+        canvas, _pdi = self._canvas_and_pdi(qapp)
+        refresh_source = inspect.getsource(canvas._new_refresh_timer)
+        coarse_source = inspect.getsource(canvas._new_coarse_timer)
+
+        assert "lambda" not in refresh_source
+        assert "lambda" not in coarse_source
+        assert canvas._refresh_timer.property(
+            canvas._TIMER_GENERATION_PROPERTY
+        ) == canvas._interaction_generation
+        assert canvas._coarse_timer.property(
+            canvas._TIMER_GENERATION_PROPERTY
+        ) == canvas._interaction_generation
+
+    def test_split_canvases_keep_timer_and_generation_independent(
+        self, qtbot, qapp,
+    ):
+        from unittest.mock import patch
+
+        left, left_pdi = self._canvas_and_pdi(qapp)
+        right, right_pdi = self._canvas_and_pdi(qapp)
+        assert left._refresh_timer is not right._refresh_timer
+        right_generation = right._interaction_generation
+
+        with (
+            patch.object(left_pdi, "setData", wraps=left_pdi.setData) as left_spy,
+            patch.object(right_pdi, "setData", wraps=right_pdi.setData) as right_spy,
+        ):
+            left._begin_view_interaction()
+            left._primary_xaxis_ax.view_box.setXRange(2.0, 4.0, padding=0)
+            left._end_view_interaction()
+            qtbot.wait(left._INTERACTION_SETTLE_MS + 40)
+        assert left_spy.call_count == 1
+        assert right_spy.call_count == 0
+
+        left.clear()
+        assert right._interaction_generation == right_generation
+        assert right._refresh_timer.isActive() is False
+
+
+class TestTimeDomainCanvasPGSelectionDelta:
+    @staticmethod
+    def _row(name, t, values, data_id="fid-1"):
+        return (name, True, t, values, "#1769e0", "u", data_id)
+
+    def test_single_crc_uncheck_recheck_preserves_render_identity_and_state(
+        self, qapp,
+    ):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 5727, dtype=np.float64)
+        values = (np.arange(t.size) % 256).astype(np.float64)
+        row = self._row("EPS_CRC1", t, values)
+        context = ("time", False, None, (False,))
+        canvas.plot_channels(
+            [row], mode="overlay", render_context_key=context
+        )
+        canvas.set_xlim(2.0, 5.0)
+        canvas._cursor.ax = 3.0
+        canvas._cursor.bx = 4.0
+        pdi = canvas._channel_lines["EPS_CRC1"][1].plot_data_item
+        view_box = canvas.axes_list[0].view_box
+        range_key = canvas._last_range_key["EPS_CRC1"]
+        xlim = canvas.get_visible_xlim()
+
+        removed = canvas.try_apply_selection_delta(
+            [], mode="overlay", render_context_key=context
+        )
+        assert removed == {"applied": True, "reason": "visibility-only"}
+        assert pdi.isVisible() is False
+        assert canvas._channel_lines["EPS_CRC1"][1].plot_data_item is pdi
+        assert canvas.axes_list[0].view_box is view_box
+        assert canvas.get_visible_xlim() == pytest.approx(xlim)
+        assert canvas._last_range_key["EPS_CRC1"] == range_key
+        assert (canvas._cursor.ax, canvas._cursor.bx) == (3.0, 4.0)
+
+        restored = canvas.try_apply_selection_delta(
+            [row], mode="overlay", render_context_key=context
+        )
+        assert restored == {"applied": True, "reason": "visibility-only"}
+        assert pdi.isVisible() is True
+        assert canvas._channel_lines["EPS_CRC1"][1].plot_data_item is pdi
+        assert canvas.axes_list[0].view_box is view_box
+        assert canvas.get_visible_xlim() == pytest.approx(xlim)
+        assert (canvas._cursor.ax, canvas._cursor.bx) == (3.0, 4.0)
+
+    def test_overlay_membership_change_reports_topology_fallback_without_mutation(
+        self, qapp,
+    ):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+        a = self._row("a", t, np.sin(t))
+        b = self._row("b", t, np.cos(t))
+        context = ("time", False, None, (False,))
+        canvas.plot_channels(
+            [a, b], mode="overlay", render_context_key=context
+        )
+        a_pair = canvas._channel_lines["a"]
+        b_pair = canvas._channel_lines["b"]
+        x_master = canvas._x_master_handle.view_box
+
+        result = canvas.try_apply_selection_delta(
+            [a], mode="overlay", render_context_key=context
+        )
+        assert result == {
+            "applied": False,
+            "reason": "overlay-topology-change",
+        }
+        assert canvas._channel_lines["a"] == a_pair
+        assert canvas._channel_lines["b"] == b_pair
+        assert canvas._x_master_handle.view_box is x_master
+        assert a_pair[1].plot_data_item.isVisible() is True
+        assert b_pair[1].plot_data_item.isVisible() is True
+
+    def test_subplot_membership_change_reports_topology_fallback_without_mutation(
+        self, qapp,
+    ):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+        a = self._row("a", t, np.sin(t))
+        b = self._row("b", t, np.cos(t))
+        context = ("time", False, None, (False,))
+        canvas.plot_channels(
+            [a, b], mode="subplot", render_context_key=context
+        )
+        a_pdi = canvas._channel_lines["a"][1].plot_data_item
+        b_pdi = canvas._channel_lines["b"][1].plot_data_item
+
+        result = canvas.try_apply_selection_delta(
+            [a], mode="subplot", render_context_key=context
+        )
+
+        assert result == {
+            "applied": False,
+            "reason": "subplot-topology-change",
+        }
+        assert a_pdi.isVisible() is True
+        assert b_pdi.isVisible() is True
+
+    @pytest.mark.parametrize(
+        "rows,mode,context,reason",
+        [
+            ("new-channel", "overlay", ("time", False), "new-channel"),
+            ("same", "subplot", ("time", False), "plot-mode-changed"),
+            ("same", "overlay", ("time", True), "render-context-changed"),
+        ],
+    )
+    def test_incompatible_selection_delta_reports_explicit_fallback_reason(
+        self, qapp, rows, mode, context, reason,
+    ):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 100, dtype=np.float64)
+        a = self._row("a", t, np.sin(t))
+        initial_context = ("time", False)
+        canvas.plot_channels(
+            [a], mode="overlay", render_context_key=initial_context
+        )
+        candidate = [a]
+        if rows == "new-channel":
+            candidate.append(self._row("b", t, np.cos(t)))
+
+        result = canvas.try_apply_selection_delta(
+            candidate, mode=mode, render_context_key=context
+        )
+        assert result == {"applied": False, "reason": reason}
 
 
 class TestTimeDomainCanvasPGVisualStyleDefaults:
@@ -5693,6 +6092,73 @@ class TestAutoIdleAA:
         assert status["budget"] == canvas._AA_OVERLAY_SEGMENT_OFF
         assert "叠加密度" in status["tooltip"]
         assert "15000" in status["tooltip"]
+
+    def test_dense_discrete_idle_aa_is_blocked_below_display_budget(
+        self, qapp, monkeypatch,
+    ):
+        """CRC-like curves stay expensive after the 350-bucket display cap.
+
+        The displayed point count is therefore not a safe AA-cost proxy: the
+        real EPS_CRC1 profile has 5,727 samples over a 256-value integer
+        domain, yet only about 700 envelope points reach PlotDataItem.
+        """
+        from PyQt5.QtCore import QCoreApplication, Qt
+        from PyQt5.QtWidgets import QApplication
+
+        n = 5_727
+        t = np.arange(n, dtype=np.float64) / 100.0
+        values = (np.arange(n) % 256).astype(np.float64)
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels([
+            ("EPS_CRC1", True, t, values, "#16a34a", "", "real-blf"),
+        ], mode="subplot")
+        QCoreApplication.processEvents()
+        density = canvas._quality._density_status()
+        assert density["metric"] < density["off_budget"], (
+            "precondition: the capped displayed count must look affordable"
+        )
+        assert next(iter(canvas._channel_render_profiles.values())).strategy == (
+            "dense_discrete"
+        )
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+
+        canvas.try_enable_idle_quality()
+
+        assert canvas._quality.aa_on is False
+        assert not any(c.opts.get("antialias") for c in self._curves(canvas))
+        status = canvas.quality_status()
+        assert status["state"] == "green"
+        assert status["render_path"] == "dense-raster"
+        assert status["tooltip"] == "平滑曲线已完成（高分辨率缓存）"
+        assert "block_reason" not in status
+
+    def test_dense_discrete_export_does_not_force_temporary_aa(self, qapp):
+        """Export owns a separate affordability decision from idle hysteresis."""
+        from PyQt5.QtCore import QCoreApplication
+
+        n = 5_727
+        t = np.arange(n, dtype=np.float64) / 100.0
+        values = (np.arange(n) % 256).astype(np.float64)
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels([
+            ("EPS_CRC1", True, t, values, "#16a34a", "", "real-blf"),
+        ], mode="subplot")
+        QCoreApplication.processEvents()
+        density = canvas._quality._density_status()
+        assert density["metric"] < density["off_budget"]
+
+        assert canvas._quality._export_aa_affordable() is False
+        canvas._primary_xaxis_ax.view_box.setXRange(8.0, 10.0, padding=0)
+        assert canvas._refresh_pending is True
+
+        pix = canvas.grab_pixmap(scale=2.0)
+
+        assert not pix.isNull()
+        assert canvas._refresh_pending is False
+        assert canvas._quality.aa_on is False
+        assert not any(c.opts.get("antialias") for c in self._curves(canvas))
 
     def test_idle_slot_enables_aa_when_mouse_up(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -7212,7 +7678,11 @@ class TestHiddenCurveCursorAndRefresh(TestFilterCompanionOverlay):
         # the VISIBLE companion did track the new window.
         comp = self._companion_pdi(canvas, "ch0")
         cx, _ = comp.getData()
-        assert float(np.nanmax(cx)) <= lo + span * 0.6 + 1e-6
+        new_lo, new_hi = lo + span * 0.4, lo + span * 0.6
+        margin = (new_hi - new_lo) * canvas._X_BUFFER_MARGIN_RATIO
+        assert float(np.nanmin(cx)) <= new_lo
+        assert float(np.nanmax(cx)) >= new_hi
+        assert float(np.nanmax(cx)) <= new_hi + margin + 1e-6
 
     def test_reshow_after_pan_refreshes_to_current_window(self, qapp):
         """Re-checking 显示原始 after panning while hidden must repopulate the

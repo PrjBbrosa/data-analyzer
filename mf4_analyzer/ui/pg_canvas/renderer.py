@@ -11,6 +11,12 @@ from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 
 from . import _binding  # noqa: F401
 from ._backref import _CanvasBackref
+from .render_profile import (
+    DENSE_DISCRETE_BUCKET_BUDGET,
+    bucket_width_for,
+    classify_render_profile,
+    source_revision_for,
+)
 
 import pyqtgraph as pg
 
@@ -127,6 +133,29 @@ _WALL_OVERFLOW_RATIO_K = 4.0
 _WALL_BUCKET_BUDGET = 1800
 
 
+# ---------------------------------------------------------------------------
+# High-variation envelope cap (CRC / rolling-counter style channels).
+#
+# Keep the previous private constant/helper surface for tests and local probes,
+# but classify raw samples through RenderProfile. Production paths bind one
+# profile per raw channel and choose the width BEFORE envelope generation.
+# ---------------------------------------------------------------------------
+_HIGH_VARIATION_BUCKET_BUDGET = DENSE_DISCRETE_BUCKET_BUDGET
+
+
+def high_variation_bucket_width(values, pixel_width: int) -> int:
+    """Compatibility wrapper for callers that already hold raw values."""
+    arr = np.asarray(values).reshape(-1)
+    profile = classify_render_profile(
+        np.arange(arr.size, dtype=np.float64),
+        arr,
+        source_revision=None,
+    )
+    return bucket_width_for(
+        profile, mode="subplot", pixel_width=pixel_width, interactive=False,
+    )
+
+
 def _capped_hidpi_scale(base_width, requested=_HIDPI_COPY_SCALE):
     """Return the effective magnification for a hi-DPI render.
 
@@ -171,6 +200,18 @@ def _quantize_y_span_key(y_span: float) -> int:
     # ~30 buckets per octave: fine enough to catch any meaningful Y zoom,
     # coarse enough to absorb sub-percent autorange jitter on a static window.
     return int(round(np.log2(ys) * 30.0))
+
+
+def _finite_x_coverage(values):
+    """Return the actual finite X extent bound into a PlotDataItem."""
+    try:
+        arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    except (TypeError, ValueError):
+        return None
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return None
+    return (float(np.min(finite)), float(np.max(finite)))
 
 
 def _legacy_positions_envelope():
@@ -379,15 +420,35 @@ class Renderer(_CanvasBackref):
             return 1
         return min(ew, _WALL_BUCKET_BUDGET)
 
-    def _refresh_visible_data(self):
-        """Recompute and display the viewport envelope for every channel."""
+    def _refresh_visible_data(self, *, xlim_override=None, interactive=False):
+        """Bind one envelope window without mutating the owning ViewBox.
+
+        ``xlim_override`` is a display-buffer window used only by envelope
+        generation, range keys, and the refresh signature.  ``interactive``
+        selects the RenderProfile's coarse budget and skips settled tail work.
+        The returned tuple (also stored as ``_display_x_coverage`` on the
+        canvas) is the conservative intersection of actual finite X extents
+        successfully bound into all visible PlotDataItems.
+        """
         self._refresh_pending = False
         if not self._channel_lines or self._primary_xaxis_ax is None:
-            return
+            return getattr(self, "_display_x_coverage", None)
         try:
-            xlim = self._primary_xaxis_ax.get_xlim()
+            view_xlim = self._primary_xaxis_ax.get_xlim()
         except Exception:
-            return
+            return getattr(self, "_display_x_coverage", None)
+        if xlim_override is None:
+            xlim = (float(view_xlim[0]), float(view_xlim[1]))
+        else:
+            try:
+                x0, x1 = xlim_override
+                x0, x1 = float(x0), float(x1)
+                if not np.isfinite(x0) or not np.isfinite(x1):
+                    raise ValueError("non-finite xlim override")
+            except (TypeError, ValueError):
+                _log.warning("invalid display-buffer xlim %r", xlim_override)
+                return getattr(self, "_display_x_coverage", None)
+            xlim = (x1, x0) if x1 < x0 else (x0, x1)
         pixel_width = self._current_pixel_width()
         # Overlay mode caps the bucket count by channel count so the dense
         # narrow-Y vertical-stroke wall stays within the raster-fill budget
@@ -413,6 +474,14 @@ class Renderer(_CanvasBackref):
         # subplot resolves per channel inside the loop.
         overlay_effective_width = self._effective_pixel_width(pixel_width)
         positions_envelope = _legacy_positions_envelope()
+        coverage_by_channel = getattr(
+            self, "_display_x_coverage_by_channel", None,
+        )
+        if coverage_by_channel is None:
+            coverage_by_channel = {}
+            self._display_x_coverage_by_channel = coverage_by_channel
+        active_coverages = []
+        active_channel_count = 0
 
         updated_any = False
         last_effective_width = overlay_effective_width
@@ -446,6 +515,7 @@ class Renderer(_CanvasBackref):
                     continue
             except Exception:
                 pass
+            active_channel_count += 1
             t, sig, color, _unit = entry
 
             if overlay:
@@ -454,6 +524,47 @@ class Renderer(_CanvasBackref):
                 effective_width = self._effective_pixel_width(
                     pixel_width, source_len=len(sig), dense_count=dense_count,
                 )
+            profiles = getattr(self, "_channel_render_profiles", None)
+            if profiles is None:
+                profiles = {}
+                self._channel_render_profiles = profiles
+            profile = profiles.get(ck)
+            source_revision = source_revision_for(t, sig)
+            if profile is None or profile.source_revision != source_revision:
+                profile = classify_render_profile(
+                    t, sig,
+                    source_revision=source_revision,
+                )
+                profiles[ck] = profile
+            effective_width = bucket_width_for(
+                profile,
+                mode="overlay" if overlay else "subplot",
+                pixel_width=effective_width,
+                interactive=bool(interactive),
+            )
+
+            # Once the dense raster is ready, pan/zoom ticks are transform
+            # only. The cached QGraphicsPixmapItem follows the ViewBox; the
+            # authoritative PDI is rebound exactly once by the settled pass.
+            dense_entry = self._dense_raster.entry_for(ck)
+            cached_coverage = coverage_by_channel.get(ck)
+            raster_coverage = (
+                (dense_entry.data_rect[0], dense_entry.data_rect[1])
+                if dense_entry is not None else None
+            )
+            if (
+                interactive
+                and profile.strategy == "dense_discrete"
+                and dense_entry is not None
+                and self._coverage_contains(cached_coverage, xlim)
+                and self._coverage_contains(raster_coverage, xlim)
+            ):
+                if cached_coverage is not None:
+                    active_coverages.append(cached_coverage)
+                if self._line_wall_state.get(ck):
+                    frame_wall = True
+                last_effective_width = effective_width
+                continue
 
             # Current Y view span for THIS line. Folded (quantized) into the
             # range key so a pure-Y narrow (box-zoom Y / scroll Y / stale narrow
@@ -473,14 +584,21 @@ class Renderer(_CanvasBackref):
             # _flush_pending_refresh() calls with the same xlim/ylim a no-op.
             # y_key is APPENDED to the x-key tuple (not nested) so range_key[0]
             # stays the channel name for existing key-shape consumers.
-            range_key = _quantize_range_key(name, xlim, effective_width) + (y_key,)
-            if self._last_range_key.get(ck) == range_key:
+            range_key = _quantize_range_key(name, xlim, effective_width) + (
+                source_revision, y_key, bool(interactive),
+            )
+            cached_coverage = coverage_by_channel.get(ck)
+            if (
+                self._last_range_key.get(ck) == range_key
+                and cached_coverage is not None
+            ):
                 # Cache hit: preserve the wall state recorded for this line at
                 # the last (un-skipped) flush so a no-op refresh does not clear
                 # a still-active wall (AA must stay off until the user widens Y).
                 if self._line_wall_state.get(ck):
                     frame_wall = True
                 last_effective_width = effective_width
+                active_coverages.append(cached_coverage)
                 continue
 
             is_monotonic = self._channel_is_monotonic.get(ck)
@@ -536,29 +654,69 @@ class Renderer(_CanvasBackref):
                 line_wall = True
                 frame_wall = True
 
-            self._line_wall_state[ck] = line_wall
             last_effective_width = effective_width
-            self._last_range_key[ck] = range_key
-            updated_any = True
 
             try:
                 line_facade.plot_data_item.setData(env_t, env_s)
             except Exception as exc:
                 _log.warning("PlotDataItem.setData failed for %r: %s", name, exc)
+                if profile.strategy == "dense_discrete":
+                    self._dense_raster.deactivate_channel(ck)
+                previous_coverage = coverage_by_channel.get(ck)
+                if previous_coverage is not None:
+                    active_coverages.append(previous_coverage)
+            else:
+                if profile.strategy == "dense_discrete" and not overlay:
+                    self._dense_raster.update_channel(
+                        ck,
+                        axis_facade,
+                        line_facade.plot_data_item,
+                        env_t,
+                        env_s,
+                        color=color,
+                        source_revision=source_revision,
+                        generation=self._interaction_generation,
+                        data_rect=(float(xlim[0]), float(xlim[1])),
+                    )
+                else:
+                    self._dense_raster.deactivate_channel(ck)
+                self._line_wall_state[ck] = line_wall
+                self._last_range_key[ck] = range_key
+                updated_any = True
+                actual_coverage = _finite_x_coverage(env_t)
+                if actual_coverage is None:
+                    coverage_by_channel.pop(ck, None)
+                else:
+                    coverage_by_channel[ck] = actual_coverage
+                    active_coverages.append(actual_coverage)
+
+        display_coverage = None
+        if active_channel_count and len(active_coverages) == active_channel_count:
+            coverage_lo = max(item[0] for item in active_coverages)
+            coverage_hi = min(item[1] for item in active_coverages)
+            if coverage_lo <= coverage_hi:
+                display_coverage = (float(coverage_lo), float(coverage_hi))
+        self._display_x_coverage = display_coverage
 
         # Publish the frame's wall state for the idle-AA gate (quality.py).
         self._y_overflow_wall_active = bool(frame_wall)
 
         # Debounced tail work: retick axes and notify listeners only once after
         # rapid drag ticks settle, instead of blocking every mouse-move event.
-        signature = (float(xlim[0]), float(xlim[1]), int(last_effective_width))
+        signature = (
+            float(xlim[0]), float(xlim[1]), int(last_effective_width),
+            bool(interactive),
+        )
         if not updated_any and signature == self._last_refresh_signature:
-            return
+            return display_coverage
         self._last_refresh_signature = signature
+        if interactive:
+            return display_coverage
         self._tick_density_controller._apply_target_x_ticks_to_all_axes()
         self._emit_xrange_changed()
         self._refresh = True
         self.schedule_idle_quality()
+        return display_coverage
 
     def _build_painter_path(self, t, s) -> QPainterPath:
         """Build a ``QPainterPath`` from envelope output. We work in data

@@ -176,7 +176,21 @@ class BlfDbcProbe:
         return "weak"
 
 
-def _read_blf_frames(fp):
+def _emit_progress(progress_callback, current, total):
+    """Best-effort progress reporting for long-running loaders.
+
+    Loader callbacks are informational only: a delayed or failed status-bar
+    repaint must never make a valid data import fail.
+    """
+    if not callable(progress_callback):
+        return
+    try:
+        progress_callback(int(current), max(1, int(total)))
+    except Exception:
+        pass
+
+
+def _read_blf_frames(fp, progress_callback=None):
     """Read a Vector BLF into a list of ``(timestamp, arbitration_id, data)``.
 
     Uses python-can's ``BLFReader`` — pure file parsing, no Vector hardware or
@@ -190,8 +204,38 @@ def _read_blf_frames(fp):
         ) from exc
     frames = []
     reader = BLFReader(str(fp))
+    report_progress = callable(progress_callback)
+    total_bytes = 1
+    if report_progress:
+        try:
+            total_bytes = int(
+                getattr(reader, "file_size", 0) or Path(fp).stat().st_size
+            )
+        except (OSError, TypeError, ValueError):
+            total_bytes = 1
+        total_bytes = max(1, total_bytes)
+    last_reported = 0
+    if report_progress:
+        _emit_progress(progress_callback, 0, total_bytes)
     try:
-        for msg in reader:
+        for frame_index, msg in enumerate(reader, 1):
+            # ``tell()`` can be surprisingly expensive on compressed BLF
+            # streams.  Sample by frame count first; never poll the reader when
+            # no caller consumes progress.
+            if report_progress and (
+                frame_index == 1 or frame_index % 512 == 0
+            ):
+                try:
+                    byte_pos = int(reader.file.tell())
+                except (AttributeError, OSError, ValueError):
+                    byte_pos = last_reported
+                if byte_pos > last_reported:
+                    _emit_progress(
+                        progress_callback,
+                        min(byte_pos, total_bytes),
+                        total_bytes,
+                    )
+                    last_reported = byte_pos
             if msg.is_error_frame or msg.is_remote_frame:
                 continue
             frames.append(
@@ -204,6 +248,8 @@ def _read_blf_frames(fp):
                 stop()
             except Exception:
                 pass
+    if report_progress:
+        _emit_progress(progress_callback, total_bytes, total_bytes)
     return frames
 
 
@@ -225,7 +271,7 @@ def _zoh_resample(ref_t, t, v):
     return v[idx]
 
 
-def _assemble_blf_channels(series, units, t0):
+def _assemble_blf_channels(series, units, t0, progress_callback=None):
     """Fold per-signal ``{name: (abs_t, v)}`` into the shared-time-axis frame.
 
     Mirrors ``load_mf4``: the longest series (most samples) defines the common
@@ -235,10 +281,15 @@ def _assemble_blf_channels(series, units, t0):
     ref_name = max(series, key=lambda k: series[k][0].size)
     ref_t = np.sort(series[ref_name][0] - t0, kind="stable")
     data = {"Time": ref_t}
-    for name, (t, v) in series.items():
+    total_series = max(1, len(series))
+    report_step = max(1, total_series // 80)
+    _emit_progress(progress_callback, 0, total_series)
+    for index, (name, (t, v)) in enumerate(series.items(), 1):
         rel_t = t - t0
         order = np.argsort(rel_t, kind="stable")
         data[name] = _zoh_resample(ref_t, rel_t[order], v[order])
+        if index % report_step == 0 or index == total_series:
+            _emit_progress(progress_callback, index, total_series)
     return pd.DataFrame(data), list(data.keys()), units
 
 
@@ -279,7 +330,7 @@ def _numeric_decoded_values(decoded):
     return values
 
 
-def _probe_blf_dbc_frames(frames, dbc_paths):
+def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None):
     db = _load_dbc_database(dbc_paths)
     frame_ids = {aid for _t, aid, _payload in frames}
     matched_frame_ids = set()
@@ -288,22 +339,33 @@ def _probe_blf_dbc_frames(frames, dbc_paths):
     decoded_signal_count = 0
     signal_names = set()
 
-    for _t, aid, payload in frames:
+    total_frames = max(1, len(frames))
+    step = max(1, total_frames // 80)
+    _emit_progress(progress_callback, 0, total_frames)
+    for index, (_t, aid, payload) in enumerate(frames, 1):
         try:
             msg = db.get_message_by_frame_id(aid)
         except KeyError:
+            if index % step == 0 or index == total_frames:
+                _emit_progress(progress_callback, index, total_frames)
             continue
         matched_frame_count += 1
         matched_frame_ids.add(aid)
         decoded = _decode_can_payload(msg, payload)
         if not decoded:
+            if index % step == 0 or index == total_frames:
+                _emit_progress(progress_callback, index, total_frames)
             continue
         numeric_values = _numeric_decoded_values(decoded)
         if not numeric_values:
+            if index % step == 0 or index == total_frames:
+                _emit_progress(progress_callback, index, total_frames)
             continue
         decoded_frame_count += 1
         decoded_signal_count += len(numeric_values)
         signal_names.update(sig_name for sig_name, _value in numeric_values)
+        if index % step == 0 or index == total_frames:
+            _emit_progress(progress_callback, index, total_frames)
 
     return BlfDbcProbe(
         dbc_paths=tuple(str(p) for p in dbc_paths),
@@ -317,7 +379,7 @@ def _probe_blf_dbc_frames(frames, dbc_paths):
     )
 
 
-def _decode_blf_with_dbc(frames, dbc_paths, t0):
+def _decode_blf_with_dbc(frames, dbc_paths, t0, progress_callback=None):
     """Decode raw CAN frames into named physical signals using one or more DBCs."""
     db = _load_dbc_database(dbc_paths)
 
@@ -331,13 +393,20 @@ def _decode_blf_with_dbc(frames, dbc_paths, t0):
     t_lists = defaultdict(list)
     v_lists = defaultdict(list)
     units = {}
-    for t, aid, payload in frames:
+    total_frames = max(1, len(frames))
+    step = max(1, total_frames // 80)
+    _emit_progress(progress_callback, 0, 1000)
+    for index, (t, aid, payload) in enumerate(frames, 1):
         try:
             msg = db.get_message_by_frame_id(aid)
         except KeyError:
+            if index % step == 0 or index == total_frames:
+                _emit_progress(progress_callback, index * 850 // total_frames, 1000)
             continue  # frame id not in this DBC
         decoded = _decode_can_payload(msg, payload)
         if not decoded:
+            if index % step == 0 or index == total_frames:
+                _emit_progress(progress_callback, index * 850 // total_frames, 1000)
             continue  # CRC/length/multiplex mismatch on this frame
         for sig_name, fval in _numeric_decoded_values(decoded):
             disp = (
@@ -349,6 +418,8 @@ def _decode_blf_with_dbc(frames, dbc_paths, t0):
             if disp not in units:
                 sig_obj = next((s for s in msg.signals if s.name == sig_name), None)
                 units[disp] = str(getattr(sig_obj, "unit", "") or "")
+        if index % step == 0 or index == total_frames:
+            _emit_progress(progress_callback, index * 850 // total_frames, 1000)
 
     if not t_lists:
         raise ValueError(
@@ -362,22 +433,42 @@ def _decode_blf_with_dbc(frames, dbc_paths, t0):
         )
         for name in t_lists
     }
-    return _assemble_blf_channels(series, units, t0)
+    return _assemble_blf_channels(
+        series,
+        units,
+        t0,
+        progress_callback=lambda current, total: _emit_progress(
+            progress_callback,
+            850 + (150 * current) // max(1, total),
+            1000,
+        ),
+    )
 
 
-def _raw_blf_channels(frames, t0):
+def _raw_blf_channels(frames, t0, progress_callback=None):
     """Database-free fallback: expose each CAN id's payload bytes as channels
     (``0x1F3.byte0`` …). Values are raw bytes (0–255), not engineering units —
     enough to eyeball traffic when no DBC is supplied."""
     by_id_t = defaultdict(list)
     by_id_d = defaultdict(list)
-    for t, aid, payload in frames:
+    total_frames = max(1, len(frames))
+    frame_step = max(1, total_frames // 80)
+    _emit_progress(progress_callback, 0, 1000)
+    for index, (t, aid, payload) in enumerate(frames, 1):
         by_id_t[aid].append(t)
         by_id_d[aid].append(payload)
+        if index % frame_step == 0 or index == total_frames:
+            _emit_progress(
+                progress_callback,
+                (500 * index) // total_frames,
+                1000,
+            )
 
     series = {}
     units = {}
-    for aid, payloads in by_id_d.items():
+    total_ids = max(1, len(by_id_d))
+    id_step = max(1, total_ids // 80)
+    for index, (aid, payloads) in enumerate(by_id_d.items(), 1):
         ts = np.asarray(by_id_t[aid], dtype=np.float64)
         width = max((len(d) for d in payloads), default=0)
         prefix = f"0x{aid:X}"
@@ -389,12 +480,83 @@ def _raw_blf_channels(frames, t0):
             )
             series[name] = (ts, vals)
             units[name] = ""
+        if index % id_step == 0 or index == total_ids:
+            _emit_progress(
+                progress_callback,
+                500 + (250 * index) // total_ids,
+                1000,
+            )
     if not series:
         raise ValueError("BLF 帧不含可解析的数据字节")
-    return _assemble_blf_channels(series, units, t0)
+
+    def map_assembly(current, total):
+        if current > 0:
+            _emit_progress(
+                progress_callback,
+                750 + (200 * current) // max(1, total),
+                1000,
+            )
+
+    result = _assemble_blf_channels(
+        series,
+        units,
+        t0,
+        progress_callback=map_assembly,
+    )
+    _emit_progress(progress_callback, 1000, 1000)
+    return result
 
 
 class DataLoader:
+    @staticmethod
+    def read_blf_frames(fp, progress_callback=None):
+        """Read one BLF into reusable raw CAN frames.
+
+        Import coordinators that need to validate a DBC before decoding can
+        keep these frames only for the current file, avoiding a second full
+        ``BLFReader`` pass.  Callers must treat the returned tuples as
+        immutable.
+        """
+        frames = _read_blf_frames(fp, progress_callback=progress_callback)
+        if not frames:
+            raise ValueError("BLF 文件没有可读的 CAN 数据帧")
+        return frames
+
+    @staticmethod
+    def probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None):
+        """Probe a DBC set against already-read BLF frames."""
+        if not frames:
+            raise ValueError("BLF 文件没有可读的 CAN 数据帧")
+        return _probe_blf_dbc_frames(
+            frames,
+            list(dbc_paths or []),
+            progress_callback=progress_callback,
+        )
+
+    @staticmethod
+    def load_blf_frames(frames, dbc_paths=None, progress_callback=None):
+        """Decode or expose a previously-read BLF frame sequence.
+
+        This is deliberately the same semantic path as :meth:`load_blf`; the
+        only difference is that a batch importer supplies its one-file frame
+        list rather than making this method read the BLF again.
+        """
+        if not frames:
+            raise ValueError("BLF 文件没有可读的 CAN 数据帧")
+        t0 = min(frame[0] for frame in frames)
+        if dbc_paths:
+            return _decode_blf_with_dbc(
+                frames,
+                list(dbc_paths),
+                t0,
+                progress_callback=progress_callback,
+            )
+        return _raw_blf_channels(
+            frames,
+            t0,
+            progress_callback=progress_callback,
+        )
+
     @staticmethod
     def load_tdms(fp):
         """Load waveform-based NI TDMS data into the shared time-axis contract.
@@ -538,7 +700,7 @@ class DataLoader:
         return pd.DataFrame(data), list(data.keys()), units
 
     @staticmethod
-    def load_blf(fp, dbc_paths=None):
+    def load_blf(fp, dbc_paths=None, progress_callback=None):
         """Load a Vector BLF (raw CAN log) as ``(DataFrame, channels, units)``.
 
         With ``dbc_paths`` (one or more ``.dbc``), frames are decoded into named
@@ -550,21 +712,50 @@ class DataLoader:
         A2L is deliberately not involved: plain CAN signals decode from a DBC,
         which is a separate, lighter database than the XCP-measurement A2L.
         """
-        frames = _read_blf_frames(fp)
-        if not frames:
-            raise ValueError("BLF 文件没有可读的 CAN 数据帧")
-        t0 = min(f[0] for f in frames)
-        if dbc_paths:
-            return _decode_blf_with_dbc(frames, list(dbc_paths), t0)
-        return _raw_blf_channels(frames, t0)
+        def map_read(current, total):
+            _emit_progress(
+                progress_callback,
+                (400 * current) // max(1, total),
+                1000,
+            )
+
+        def map_decode(current, total):
+            _emit_progress(
+                progress_callback,
+                400 + (600 * current) // max(1, total),
+                1000,
+            )
+
+        frames = DataLoader.read_blf_frames(fp, progress_callback=map_read)
+        return DataLoader.load_blf_frames(
+            frames,
+            dbc_paths=dbc_paths,
+            progress_callback=map_decode,
+        )
 
     @staticmethod
-    def probe_blf_dbc(fp, dbc_paths):
+    def probe_blf_dbc(fp, dbc_paths, progress_callback=None):
         """Return a lightweight compatibility probe for a BLF and DBC path list."""
-        frames = _read_blf_frames(fp)
-        if not frames:
-            raise ValueError("BLF 文件没有可读的 CAN 数据帧")
-        return _probe_blf_dbc_frames(frames, list(dbc_paths or []))
+        def map_read(current, total):
+            _emit_progress(
+                progress_callback,
+                (500 * current) // max(1, total),
+                1000,
+            )
+
+        def map_probe(current, total):
+            _emit_progress(
+                progress_callback,
+                500 + (500 * current) // max(1, total),
+                1000,
+            )
+
+        frames = DataLoader.read_blf_frames(fp, progress_callback=map_read)
+        return DataLoader.probe_blf_dbc_frames(
+            frames,
+            dbc_paths,
+            progress_callback=map_probe,
+        )
 
     @staticmethod
     def load_audio_video(fp):

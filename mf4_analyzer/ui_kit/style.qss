@@ -458,6 +458,22 @@ QToolButton[role="tool"] {
     border: 1px solid #dfe5ee;
 }
 
+/* Saved-channel config controls live in the navigator rail.  They are action
+ * peers, not compact toolbar glyphs: keep both at the same readable size. */
+QPushButton#channelConfigSave,
+QPushButton#channelConfigApply {
+    /* Qt stylesheet widths exclude padding and borders.  46 + 16 + 2 gives
+     * an actual 64px action button: readable, but leaves the rail width to
+     * the selector. */
+    min-width: 46px;
+    max-width: 46px;
+    /* 22px content + 4px vertical padding × 2 + 1px border × 2 = 32px,
+     * exactly matching #channelConfigCombo's fixed outer height. */
+    min-height: 22px;
+    max-height: 22px;
+    padding: 4px 8px;
+}
+
 /* Toolbar */
 Toolbar#surfaceTopBar,
 QWidget#surfaceTopBar {
@@ -1119,8 +1135,13 @@ QTreeWidget#channelTree::item {
     padding: 2px 4px;
 }
 QTreeWidget#channelTree::item:selected {
+    min-height: 24px;
+    padding: 2px 4px;
     background-color: #e8efff;
     color: #111827;
+}
+QTreeWidget#channelTree::branch:selected {
+    background-color: #e8efff;
 }
 
 QHeaderView::section {

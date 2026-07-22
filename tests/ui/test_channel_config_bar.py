@@ -78,8 +78,9 @@ def test_combo_is_editable_for_name_search(qtbot):
 
     assert bar.combo.isEditable()
     assert not bar.combo.insertPolicy()
-    assert bar.combo.maxVisibleItems() == 6
+    assert bar.combo.maxVisibleItems() == 8
     assert bar.combo.property("popupStyle") == "channel-config"
+    assert bar.combo.property("popupMinWidth") == 320
 
 
 def test_config_popup_items_keep_names_and_counts_in_separate_roles(qtbot):
@@ -93,7 +94,7 @@ def test_config_popup_items_keep_names_and_counts_in_separate_roles(qtbot):
     qtbot.addWidget(bar)
     bar.set_configs([fake_config("a", "动力分析", 4)])
 
-    assert bar.combo.itemText(1) == "动力分析 · 4 个"
+    assert bar.combo.itemText(1) == "动力分析"
     assert bar.combo.itemData(1, CONFIG_NAME_ROLE) == "动力分析"
     assert bar.combo.itemData(1, CHANNEL_COUNT_ROLE) == 4
     assert bar.combo.itemData(1, ITEM_KIND_ROLE) == "config"
@@ -122,6 +123,44 @@ def test_config_combo_opens_above_its_bottom_bar_anchor(qtbot):
     anchor_y = bar.combo.mapToGlobal(bar.combo.rect().topLeft()).y()
     # Native popup borders may occupy the final 1–2 logical pixels.
     assert popup.y() + popup.height() <= anchor_y + 3
+    assert popup.width() >= 320
+    bar.combo.hidePopup()
+
+
+def test_config_actions_match_the_selector_geometry(qtbot):
+    bar = ChannelConfigBar()
+    qtbot.addWidget(bar)
+    bar.resize(360, 46)
+    bar.show()
+
+    assert bar.btn_save.minimumWidth() == bar.btn_apply.minimumWidth() == 64
+    assert bar.btn_save.maximumWidth() == bar.btn_apply.maximumWidth() == 64
+    assert bar.combo.minimumWidth() == 132
+    assert bar.btn_save.width() == 64
+    assert bar.btn_apply.width() == 64
+    assert bar.combo.width() == 220
+    assert bar.btn_save.height() == bar.combo.height() == bar.btn_apply.height() == 32
+    assert bar.btn_save.y() == bar.combo.y() == bar.btn_apply.y()
+
+
+def test_popup_shows_all_four_configs_without_a_scrollbar(qtbot):
+    bar = ChannelConfigBar()
+    qtbot.addWidget(bar)
+    bar.resize(640, 46)
+    bar.set_configs([
+        fake_config("a", "1", 3),
+        fake_config("b", "test", 2),
+        fake_config("c", "2", 4),
+        fake_config("d", "33", 3),
+    ])
+    bar.show()
+
+    bar.combo.showPopup()
+    qtbot.wait(10)
+
+    view = bar.combo.view()
+    assert not view.verticalScrollBar().isVisible()
+    assert view.height() >= sum(view.sizeHintForRow(i) for i in range(7))
     bar.combo.hidePopup()
 
 

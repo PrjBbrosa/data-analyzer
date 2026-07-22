@@ -296,32 +296,30 @@ class CursorController(_CanvasBackref):
 
     def _update_dual_cursor_extreme_markers(self, points_by_channel):
         markers = self._ensure_dual_cursor_extreme_markers()
-        point_map = {
-            name: (min_x, min_y, max_x, max_y)
-            for name, min_x, min_y, max_x, max_y in points_by_channel
-        }
+        points_by_handle = {}
+        for channel_key, min_x, min_y, max_x, max_y in points_by_channel:
+            pair = self._channel_lines.get(channel_key)
+            if pair is None:
+                continue
+            handle = pair[0]
+            points_by_handle.setdefault(handle, []).extend((
+                (min_x, min_y, "#16a34a"),
+                (max_x, max_y, "#dc2626"),
+            ))
         for marker, handle in zip(markers, self.axes_list):
-            name = self._channel_name_for_handle(handle)
-            points = point_map.get(name)
+            points = points_by_handle.get(handle, [])
             try:
-                if points is None:
+                if not points:
                     marker.setData([], [])
                     marker.setVisible(False)
                     continue
-                min_x, min_y, max_x, max_y = points
                 marker.setData(
-                    [min_x, max_x],
-                    [min_y, max_y],
+                    [point[0] for point in points],
+                    [point[1] for point in points],
                     symbol="o",
                     size=10,
-                    pen=[
-                        pg.mkPen("#ffffff", width=1.2),
-                        pg.mkPen("#ffffff", width=1.2),
-                    ],
-                    brush=[
-                        pg.mkBrush("#16a34a"),
-                        pg.mkBrush("#dc2626"),
-                    ],
+                    pen=[pg.mkPen("#ffffff", width=1.2) for _ in points],
+                    brush=[pg.mkBrush(point[2]) for point in points],
                 )
                 marker.setVisible(True)
             except Exception:
@@ -541,7 +539,14 @@ class CursorController(_CanvasBackref):
                 info.append(f"1/ΔT={1 / abs(dx):.2f}Hz")
             xlo, xhi = min(self._ax, self._bx), max(self._ax, self._bx)
             hidden = self._hidden_channel_names()
-            for ch, (tf, sf, color, u) in self.channel_data.items():
+            if hasattr(self.channel_data, "composite_items"):
+                channel_items = self.channel_data.composite_items()
+            else:
+                channel_items = (
+                    (ch, ch, values)
+                    for ch, values in self.channel_data.items()
+                )
+            for channel_key, ch, (tf, sf, color, u) in channel_items:
                 if ch in hidden:
                     continue
                 if not len(tf):
@@ -558,7 +563,7 @@ class CursorController(_CanvasBackref):
                     min_idx = int(finite_indices[int(np.argmin(finite_segment))])
                     max_idx = int(finite_indices[int(np.argmax(finite_segment))])
                     extreme_points.append((
-                        ch,
+                        channel_key,
                         float(tf[min_idx]),
                         float(sf[min_idx]),
                         float(tf[max_idx]),

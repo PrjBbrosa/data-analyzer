@@ -53,6 +53,26 @@ def test_load_one_cancelled_dbc_selection_leaves_blf_unopened(qapp, tmp_path, mo
     assert len(mw.files) == 0
 
 
+def test_dbc_picker_title_says_cancel_does_not_open_file(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    import mf4_analyzer.ui.main_window as main_window_package
+
+    captured = {}
+
+    class FakeFileDialog:
+        @staticmethod
+        def getOpenFileNames(_parent, title, _start, _filter):
+            captured["title"] = title
+            return [], ""
+
+    monkeypatch.setattr(main_window_package, "QFileDialog", FakeFileDialog)
+    window = MainWindow()
+
+    assert window._prompt_blf_dbc(tmp_path / "sample.blf") == []
+    assert "取消则不打开" in captured["title"]
+    assert "原始字节" not in captured["title"]
+
+
 def test_load_one_reuses_matching_session_dbc_after_confirmation(qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 

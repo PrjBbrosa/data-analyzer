@@ -36,6 +36,7 @@ def test_update_determinate_sets_value_and_total(qapp, qtbot):
     assert widget.bar.minimum() == 0
     assert widget.bar.maximum() == 100
     assert widget.bar.value() == 25
+    assert widget.label.text() == "FFT-时间 · 25%"
 
 
 def test_finish_hides_widget(qapp, qtbot):

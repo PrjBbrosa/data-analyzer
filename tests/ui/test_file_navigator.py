@@ -163,6 +163,58 @@ def test_channel_selected_button_filters_to_checked(qapp, qtbot):
     assert fi.child(1).isHidden()
 
 
+def test_selected_channel_keeps_the_same_checkbox_origin(qapp, qtbot):
+    """Channel-leaf controls keep one anchor in selected and normal rows."""
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    _add_attached(nav, "f0", FakeFd())
+    nav.resize(520, 420)
+    nav.show()
+    qapp.processEvents()
+
+    tree = nav.channel_list.tree
+    parent = nav.channel_list._file_items["f0"]
+    selected = parent.child(0)
+    normal = parent.child(1)
+    tree.setCurrentItem(selected)
+    selected.setSelected(True)
+    qapp.processEvents()
+
+    selected_index = tree.indexFromItem(selected, 0)
+    normal_index = tree.indexFromItem(normal, 0)
+    delegate = tree.itemDelegate()
+    selected_check, selected_swatch, selected_text = delegate.channel_geometry(
+        tree.visualRect(selected_index)
+    )
+    normal_check, normal_swatch, normal_text = delegate.channel_geometry(
+        tree.visualRect(normal_index)
+    )
+
+    # These anchors used to be delegated to the macOS native tree style,
+    # which shifted only the selected checkbox.  Keep all three column-0
+    # primitives explicitly invariant now.
+    assert selected_check.x() == normal_check.x()
+    assert selected_swatch.x() == normal_swatch.x()
+    assert selected_text.x() == normal_text.x()
+    assert tree._check_hit_rect(selected, selected_index).left() == (
+        selected_check.left() - tree.HIT_PAD
+    )
+
+    selected_eye_index = tree.indexFromItem(selected, 2)
+    normal_eye_index = tree.indexFromItem(normal, 2)
+    assert delegate._is_channel(selected_eye_index)
+    selected_eye = delegate.eye_geometry(tree.visualRect(selected_eye_index))
+    normal_eye = delegate.eye_geometry(tree.visualRect(normal_eye_index))
+    assert selected_eye.center().x() == tree.visualRect(selected_eye_index).center().x()
+    assert normal_eye.center().x() == tree.visualRect(normal_eye_index).center().x()
+
+    # The visual anchor and click anchor must be the same rect; a delegate
+    # fix must not make the manually painted checkbox decorative only.
+    qtbot.mouseClick(tree.viewport(), Qt.LeftButton, pos=selected_check.center())
+    qapp.processEvents()
+    assert selected.checkState(0) == Qt.Checked
+
+
 def test_navigator_tool_buttons_outer_size_compact(qapp):
     """fix-4 — file-navigator close + kebab buttons must shrink their
     outer chrome to <=24px on both axes (icon size kept at 16px)."""

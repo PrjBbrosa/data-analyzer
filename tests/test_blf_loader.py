@@ -5,6 +5,7 @@ bytes surface per CAN id. A2L is never involved (plain CAN → DBC).
 """
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
 can = pytest.importorskip("can", reason="python-can not installed (win32-gated)")
 cantools = pytest.importorskip("cantools", reason="cantools not installed")
@@ -16,6 +17,65 @@ from tests._helpers.blf_factory import (  # noqa: E402
     write_sample_blf,
     write_two_message_dbc,
 )
+
+
+def _fake_blf_reader(monkeypatch, *, frame_count=4097):
+    tell_calls = []
+
+    class FakeFile:
+        def tell(self):
+            tell_calls.append(None)
+            return len(tell_calls) * 128
+
+    class FakeReader:
+        file_size = frame_count * 128
+
+        def __init__(self, _path):
+            self.file = FakeFile()
+
+        def __iter__(self):
+            for index in range(frame_count):
+                yield SimpleNamespace(
+                    is_error_frame=False,
+                    is_remote_frame=False,
+                    timestamp=float(index),
+                    arbitration_id=0x123,
+                    data=b"\x00",
+                )
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(can.io, "BLFReader", FakeReader)
+    return tell_calls
+
+
+def test_read_blf_frames_without_progress_never_polls_reader_position(
+    tmp_path, monkeypatch,
+):
+    tell_calls = _fake_blf_reader(monkeypatch)
+
+    frames = DataLoader.read_blf_frames(tmp_path / "fake.blf")
+
+    assert len(frames) == 4097
+    assert tell_calls == []
+
+
+def test_read_blf_frames_samples_position_before_tell_when_reporting_progress(
+    tmp_path, monkeypatch,
+):
+    tell_calls = _fake_blf_reader(monkeypatch)
+    progress = []
+
+    frames = DataLoader.read_blf_frames(
+        tmp_path / "fake.blf",
+        progress_callback=lambda current, total: progress.append((current, total)),
+    )
+
+    assert len(frames) == 4097
+    assert 0 < len(tell_calls) < len(frames)
+    assert progress[0][0] == 0
+    assert progress[-1][0] == progress[-1][1]
 
 
 def test_load_blf_with_dbc_decodes_named_signals(tmp_path):
@@ -104,6 +164,50 @@ def test_load_blf_without_dbc_exposes_raw_bytes(tmp_path):
     # 0x1F3 byte0 transmitted 0x01 then 0x04
     b0 = data["0x1F3.byte0"].to_numpy()
     assert set(np.unique(b0[~np.isnan(b0)])).issubset({1.0, 4.0})
+
+
+def test_load_raw_blf_frames_reports_frame_id_and_channel_assembly_progress(tmp_path):
+    blf = write_raw_blf(tmp_path / "raw.blf")
+    frames = DataLoader.read_blf_frames(str(blf))
+    progress = []
+
+    DataLoader.load_blf_frames(
+        frames,
+        dbc_paths=None,
+        progress_callback=lambda current, total: progress.append((current, total)),
+    )
+
+    assert progress[0] == (0, 1000)
+    assert progress[-1] == (1000, 1000)
+    assert all(total == 1000 for _current, total in progress)
+    assert all(
+        earlier <= later
+        for (earlier, _), (later, _) in zip(progress, progress[1:])
+    )
+
+    # The raw fixture has three frames, two arbitration IDs and five byte
+    # channels. Each real work unit must advance its corresponding phase.
+    values = [current for current, _total in progress]
+    assert len([value for value in values if 0 < value <= 500]) == len(frames)
+    assert len([value for value in values if 500 < value <= 750]) == 2
+    assert len([value for value in values if 750 < value <= 950]) == 5
+    assert values.count(1000) == 1
+
+
+def test_load_raw_blf_progress_continues_after_read_phase(tmp_path):
+    blf = write_raw_blf(tmp_path / "raw.blf")
+    progress = []
+
+    DataLoader.load_blf(
+        str(blf),
+        dbc_paths=None,
+        progress_callback=lambda current, total: progress.append((current, total)),
+    )
+
+    values = [current for current, total in progress if total == 1000]
+    assert values == sorted(values)
+    assert values[-1] == 1000
+    assert any(400 < value < 1000 for value in values)
 
 
 def test_load_blf_dbc_mismatch_raises(tmp_path):

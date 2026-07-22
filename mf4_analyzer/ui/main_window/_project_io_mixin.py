@@ -1,17 +1,31 @@
 """ProjectIOMixin: file load/close and .tlproj save/open for MainWindow."""
 
 import json
+import os
 from pathlib import Path
+from time import monotonic
 
 from PyQt5.QtCore import QSettings
 from PyQt5.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
+from ...blf_dbc_candidates import (
+    AUTO_PROBE_LIMIT,
+    candidate_status,
+    dbc_candidate_identity,
+    deduplicate_dbc_sets,
+    frame_id_histogram,
+    load_dbc_frame_ids,
+    normalize_dbc_paths,
+    prefilter_candidates,
+    rank_candidates,
+)
 from ...io import DataLoader, FileData, HAS_ASAMMDF
 from ...io.loader import (
     AUDIO_VIDEO_EXTS,
     CSV_LIKE_EXTS,
     format_dropped_channels_notice,
 )
+from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
 
 AUDIO_VIDEO_GLOB = "*.mp4 *.mov *.mkv *.m4v *.mp3 *.m4a *.aac *.wav *.flac"
@@ -79,12 +93,118 @@ class ProjectIOMixin:
                 if resp != QMessageBox.Yes:
                     return
             self.open_project(projects[0])
-            for fp in data_files:
-                self._load_one(fp)
+            self._open_data_paths(data_files)
             return
 
-        for fp in data_files:
-            self._load_one(fp)
+        self._open_data_paths(data_files)
+
+    def _open_data_paths(self, data_files):
+        """Load one user-selected batch with a weighted, truthful status bar.
+
+        A file's byte size is the only universally available work estimate
+        across CSV/MDF/BLF/etc.  BLF refines its own fraction from real reader
+        bytes and decoded frames; formats whose libraries expose no safe
+        incremental callback advance only when that file is actually complete.
+        """
+        data_files = list(data_files or ())
+        if not data_files:
+            return
+
+        unique_files = []
+        seen_paths = set()
+        duplicate_count = 0
+        for path in data_files:
+            identity = os.path.normcase(
+                os.path.realpath(os.path.abspath(os.fspath(path)))
+            )
+            if identity in seen_paths:
+                duplicate_count += 1
+                continue
+            seen_paths.add(identity)
+            unique_files.append(path)
+        data_files = unique_files
+        if duplicate_count:
+            self.toast(f"已跳过 {duplicate_count} 个重复文件", "info")
+
+        weights = []
+        for path in data_files:
+            try:
+                weights.append(max(1, int(Path(path).stat().st_size)))
+            except (OSError, TypeError, ValueError):
+                weights.append(1)
+        total_weight = max(1, sum(weights))
+        fractions = [0.0] * len(data_files)
+        last_paint_at = 0.0
+        token = self._begin_compute_progress(
+            f"加载文件 0/{len(data_files)}",
+            total=1000,
+        )
+
+        def report(index, fraction, phase=""):
+            """Advance one file monotonically and repaint at most 25 FPS."""
+            nonlocal last_paint_at
+            if not (0 <= index < len(fractions)):
+                return
+            fraction = max(0.0, min(1.0, float(fraction)))
+            if fraction > fractions[index]:
+                fractions[index] = fraction
+            now = monotonic()
+            if (
+                fraction < 1.0
+                and now - last_paint_at < 0.04
+            ):
+                return
+            last_paint_at = now
+            done = int(round(
+                1000 * sum(
+                    weight * progress
+                    for weight, progress in zip(weights, fractions)
+                ) / total_weight
+            ))
+            # The status bar has deliberately limited width.  Keep its live
+            # label scannable; the active filename remains in the normal
+            # status message set by _load_one.
+            label = f"加载 {index + 1}/{len(data_files)}"
+            if phase:
+                label += f" · {phase}"
+            self._update_compute_progress(
+                done,
+                1000,
+                label=label,
+                token=token,
+                process_events=True,
+            )
+
+        try:
+            blf_paths = [
+                path for path in data_files
+                if Path(path).suffix.lower() == ".blf"
+            ]
+            if len(blf_paths) >= 2:
+                self._load_blf_batch(
+                    blf_paths,
+                    ordered_paths=data_files,
+                    progress_callback=lambda input_index, _path, fraction, phase: report(
+                        input_index, fraction, phase,
+                    ),
+                )
+                return
+
+            for index, fp in enumerate(data_files):
+                before_fids = set(self.files)
+                self._load_one(
+                    fp,
+                    progress_callback=lambda fraction, phase, i=index: report(
+                        i, fraction, phase,
+                    ),
+                )
+                report(
+                    index,
+                    1.0,
+                    "已加载" if set(self.files) != before_fids else "已跳过",
+                )
+        finally:
+            self._finish_compute_progress(token=token)
 
     def save_project_via_dialog(self):
         """「保存」handler: overwrite the current .tlproj if one is open,
@@ -112,7 +232,7 @@ class ProjectIOMixin:
         _QFileDialog = getattr(_pkg, 'QFileDialog', QFileDialog) if _pkg is not None else QFileDialog
         fps, _ = _QFileDialog.getOpenFileNames(
             self, "选择文件", "", OPEN_FILES_FILTER)
-        for fp in fps: self._load_one(fp)
+        self._open_data_paths(fps)
 
     def load_file(self, path) -> None:
         """Public Analyzer handoff for single-file loads.
@@ -126,10 +246,11 @@ class ProjectIOMixin:
         - Thin wrapper around the existing private ``_load_one(fp)`` flow.
         - Cockpit MUST NOT call ``_load_one`` directly.
 
-        The delegated ``_load_one`` transaction also performs the shared
-        post-load attachment step used by every supported source format.
+        The delegated transaction also performs the shared post-load attachment
+        step used by every supported source format and surfaces the same
+        bottom progress indicator as file-picker and drag-drop imports.
         """
-        self._load_one(str(path))
+        self._open_data_paths([str(path)])
 
     def _register_file_data(self, fp, data, chs, units, *,
                             fs=None,
@@ -188,20 +309,48 @@ class ProjectIOMixin:
                 self.inspector.top.spin_end.setValue(fd.time_array[-1])
         return fd
 
-    def _load_one(self, fp, *, blf_dbc_paths=None):
+    def _load_one(
+        self,
+        fp,
+        *,
+        blf_dbc_paths=None,
+        blf_frames=None,
+        blf_dbc_validated=False,
+        progress_callback=None,
+    ):
         before_fids = set(self.files)
         try:
-            return self._load_one_impl(fp, blf_dbc_paths=blf_dbc_paths)
+            return self._load_one_impl(
+                fp,
+                blf_dbc_paths=blf_dbc_paths,
+                blf_frames=blf_frames,
+                blf_dbc_validated=blf_dbc_validated,
+                progress_callback=progress_callback,
+            )
         finally:
             new_fids = [fid for fid in self.files if fid not in before_fids]
             self._on_source_load_finished(new_fids)
 
-    def _load_one_impl(self, fp, *, blf_dbc_paths=None):
+    def _load_one_impl(
+        self,
+        fp,
+        *,
+        blf_dbc_paths=None,
+        blf_frames=None,
+        blf_dbc_validated=False,
+        progress_callback=None,
+    ):
+        def report(fraction, phase):
+            if callable(progress_callback):
+                progress_callback(float(fraction), str(phase))
+
         try:
             self.statusBar.showMessage(f"加载: {fp}");
             QApplication.processEvents()
             p = Path(fp);
             ext = p.suffix.lower()
+            report(0.0, "准备")
+            report(0.05, "读取数据")
             if ext in ('.mf4', '.mdf'):
                 if not HAS_ASAMMDF: QMessageBox.critical(self, "错误", "asammdf 未安装"); return
                 data, chs, units = DataLoader.load_mf4(fp)
@@ -217,15 +366,55 @@ class ProjectIOMixin:
                 self.toast(f"已加载音轨 {p.name}", "success")
                 return
             elif ext == '.blf':
+                frames = blf_frames
+                if frames is None:
+                    frames = DataLoader.read_blf_frames(
+                        fp,
+                        progress_callback=lambda current, total: report(
+                            0.05 + 0.40 * current / max(1, total),
+                            "读取 CAN 帧",
+                        ),
+                    )
+                else:
+                    report(0.05, "复用已读取 CAN 帧")
                 dbc_paths = None
                 if blf_dbc_paths:
-                    dbc_paths = self._validated_blf_dbc_paths(p, blf_dbc_paths)
+                    dbc_paths = list(self._canonical_blf_dbc_paths(blf_dbc_paths))
+                    if not blf_dbc_validated:
+                        dbc_paths = self._validated_blf_dbc_paths(
+                            p,
+                            dbc_paths,
+                            frames=frames,
+                            progress_callback=lambda current, total: report(
+                                0.45 + 0.10 * current / max(1, total),
+                                "校验 DBC",
+                            ),
+                        )
                 if not dbc_paths:
-                    dbc_paths = self._resolve_blf_dbc_paths(p)
+                    if blf_frames is not None:
+                        raise ValueError("BLF 批量导入缺少已验证的 DBC")
+                    dbc_paths = self._resolve_blf_dbc_paths(
+                        p,
+                        frames=frames,
+                        progress_callback=lambda current, total: report(
+                            0.45 + 0.10 * current / max(1, total),
+                            "匹配 DBC",
+                        ),
+                    )
                 if not dbc_paths:
                     self.statusBar.showMessage(f"已取消 BLF: {p.name}")
                     return
-                data, chs, units = DataLoader.load_blf(fp, dbc_paths=dbc_paths)
+                decode_start = 0.05 if blf_frames is not None else 0.55
+                decode_span = 0.90 if blf_frames is not None else 0.40
+                data, chs, units = DataLoader.load_blf_frames(
+                    frames,
+                    dbc_paths=dbc_paths,
+                    progress_callback=lambda current, total: report(
+                        decode_start + decode_span * current / max(1, total),
+                        "解码信号",
+                    ),
+                )
+                report(0.96, "登记通道")
                 self._register_file_data(
                     fp, data, chs, units,
                     source_metadata={
@@ -239,6 +428,7 @@ class ProjectIOMixin:
                 self.statusBar.showMessage(
                     f"✅ 已加载 BLF: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件")
                 self.toast(f"已加载 {p.name} · {mode}", "success")
+                report(1.0, "已加载")
                 return
             elif ext == '.tdms':
                 data, chs, units = DataLoader.load_tdms(fp)
@@ -328,11 +518,12 @@ class ProjectIOMixin:
             self._update_info()
             self.statusBar.showMessage(f"✅ 已加载: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件")
             self.toast(f"已加载 {p.name} · {len(data)} 行", "success")
+            report(1.0, "已加载")
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
 
     def _canonical_blf_dbc_paths(self, dbc_paths):
-        return tuple(str(Path(p).resolve()) for p in (dbc_paths or []) if p)
+        return normalize_dbc_paths(dbc_paths)
 
     def _blf_dbc_settings(self):
         try:
@@ -344,14 +535,16 @@ class ProjectIOMixin:
     def _clean_blf_dbc_history(self, history):
         cleaned = []
         seen = set()
-        for paths in history or []:
+        for paths in reversed(history or []):
             key = self._canonical_blf_dbc_paths(paths)
-            if not key or key in seen:
+            identity = dbc_candidate_identity(key)
+            if not identity or identity in seen:
                 continue
             if not all(Path(p).exists() for p in key):
                 continue
-            seen.add(key)
+            seen.add(identity)
             cleaned.append(list(key))
+        cleaned.reverse()
         return cleaned[-BLF_DBC_RECENT_MAX:]
 
     def _load_recent_blf_dbc_history(self):
@@ -387,8 +580,12 @@ class ProjectIOMixin:
         key = self._canonical_blf_dbc_paths(dbc_paths)
         if not key:
             return
+        identity = dbc_candidate_identity(key)
         history = list(getattr(self, "_blf_dbc_history", []))
-        history = [paths for paths in history if tuple(paths) != key]
+        history = [
+            paths for paths in history
+            if dbc_candidate_identity(paths) != identity
+        ]
         history.append(list(key))
         self._blf_dbc_history = self._save_recent_blf_dbc_history(history)
 
@@ -398,26 +595,79 @@ class ProjectIOMixin:
 
         def add(paths):
             key = self._canonical_blf_dbc_paths(paths)
-            if not key or key in seen:
+            identity = dbc_candidate_identity(key)
+            if not identity or identity in seen:
                 return
-            seen.add(key)
+            seen.add(identity)
             candidates.append(list(key))
 
         for paths in reversed(getattr(self, "_blf_dbc_history", [])):
             add(paths)
 
         nearby = set()
-        for pattern in ("*.dbc", "*.DBC"):
-            nearby.update(Path(path).parent.glob(pattern))
+        # A log batch is commonly arranged as ``<run>/<case>/<file>.blf``
+        # with shared DBCs at ``<run>``.  Search only the immediate small
+        # ancestor scope; do not turn an import into an expensive home-folder
+        # crawl.
+        for folder in list(Path(path).parents)[:4]:
+            for pattern in ("*.dbc", "*.DBC"):
+                nearby.update(folder.glob(pattern))
         for dbc in sorted(nearby, key=lambda p: p.name.lower()):
             add([dbc])
         return candidates
 
-    def _probe_blf_dbc_candidates(self, path):
+    def _probe_blf_dbc_candidates(
+        self, path, *, frames=None, progress_callback=None,
+    ):
+        dbc_sets = deduplicate_dbc_sets(self._candidate_blf_dbc_paths(path))
+        blf_id_counts = frame_id_histogram(frames) if frames is not None else {}
         candidates = []
-        for dbc_paths in self._candidate_blf_dbc_paths(path):
+        dbc_frame_id_cache = {}
+        for index, dbc_paths in enumerate(dbc_sets):
             try:
-                probe = DataLoader.probe_blf_dbc(str(path), dbc_paths)
+                dbc_frame_ids = set()
+                for dbc_path in dbc_paths:
+                    if dbc_path not in dbc_frame_id_cache:
+                        dbc_frame_id_cache[dbc_path] = load_dbc_frame_ids([dbc_path])
+                    dbc_frame_ids.update(dbc_frame_id_cache[dbc_path])
+                dbc_frame_ids = frozenset(dbc_frame_ids)
+            except ImportError:
+                raise
+            except Exception:
+                dbc_frame_ids = frozenset()
+            candidates.append({
+                "paths": list(dbc_paths),
+                "identity": dbc_candidate_identity(dbc_paths),
+                "recent_rank": len(dbc_sets) - index,
+                "dbc_frame_ids": dbc_frame_ids,
+                "probe": None,
+                "probe_attempted": False,
+            })
+        candidates = prefilter_candidates(candidates, blf_id_counts)
+
+        probe_budget = min(AUTO_PROBE_LIMIT, len(candidates))
+        progress_total = max(1, probe_budget * 1000)
+        for probe_index, candidate in enumerate(candidates[:probe_budget]):
+            candidate["probe_attempted"] = True
+
+            def report_candidate(current, total, *, index=probe_index):
+                if callable(progress_callback):
+                    progress_callback(
+                        index * 1000 + 1000 * current // max(1, total),
+                        progress_total,
+                    )
+
+            try:
+                if frames is None:
+                    probe = DataLoader.probe_blf_dbc(
+                        str(path), candidate["paths"],
+                        progress_callback=report_candidate,
+                    )
+                else:
+                    probe = DataLoader.probe_blf_dbc_frames(
+                        frames, candidate["paths"],
+                        progress_callback=report_candidate,
+                    )
             except ImportError:
                 raise
             except ValueError as exc:
@@ -426,9 +676,19 @@ class ProjectIOMixin:
                 continue
             except Exception:
                 continue
-            if probe.is_match:
-                candidates.append({"paths": list(dbc_paths), "probe": probe})
-        return candidates
+            candidate["probe"] = probe
+            if callable(progress_callback):
+                progress_callback((probe_index + 1) * 1000, progress_total)
+            if probe.strength == "strong":
+                break
+
+        if callable(progress_callback) and candidates:
+            progress_callback(progress_total, progress_total)
+        selectable = [
+            candidate for candidate in candidates
+            if candidate_status(candidate) != "mismatch"
+        ]
+        return rank_candidates(selectable)
 
     def _format_blf_dbc_paths(self, dbc_paths):
         names = [Path(p).name for p in dbc_paths]
@@ -440,16 +700,55 @@ class ProjectIOMixin:
 
     def _format_blf_dbc_candidate(self, candidate):
         probe = candidate["probe"]
+        status = candidate_status(candidate)
+        if status == "unverified":
+            score = candidate.get("structural_score")
+            overlap = (
+                f" · CAN ID 预筛 {score.matched_id_count} 个"
+                if score is not None else ""
+            )
+            return (
+                f"{self._format_blf_dbc_paths(candidate['paths'])} "
+                f"· 未校验{overlap}"
+            )
+        status_text = {"strong": "强匹配", "weak": "弱匹配"}.get(
+            status, "不匹配",
+        )
         return (
             f"{self._format_blf_dbc_paths(candidate['paths'])} "
-            f"· {probe.strength} · "
+            f"· {status_text} · "
             f"CAN ID {probe.matched_frame_id_count}/{probe.total_frame_id_count} · "
             f"帧 {probe.decoded_frame_count}/{probe.total_frame_count} · "
             f"信号 {len(probe.signal_names)}"
         )
 
-    def _resolve_blf_dbc_paths(self, path):
-        candidates = self._probe_blf_dbc_candidates(path)
+    def _accept_blf_dbc_candidate(
+        self, path, candidate, *, frames=None, progress_callback=None,
+    ):
+        """Validate a deferred candidate only after explicit user selection."""
+        if candidate.get("probe") is not None:
+            return list(candidate["paths"])
+        validated = self._validated_blf_dbc_paths(
+            path,
+            candidate["paths"],
+            frames=frames,
+            progress_callback=progress_callback,
+        )
+        if validated:
+            return validated
+        action = self._ask_blf_dbc_mismatch_action(path, candidate["paths"])
+        if action == "retry":
+            return self._choose_blf_dbc_with_retry(
+                path, frames=frames, progress_callback=progress_callback,
+            )
+        return None
+
+    def _resolve_blf_dbc_paths(self, path, *, frames=None, progress_callback=None):
+        candidates = self._probe_blf_dbc_candidates(
+            path,
+            frames=frames,
+            progress_callback=progress_callback,
+        )
         if not candidates:
             message = (
                 f"未找到可自动匹配 {path.name} 的 DBC。\n"
@@ -457,40 +756,300 @@ class ProjectIOMixin:
             )
             if not self._ask_open_blf_dbc_dialog(path, message):
                 return None
-            return self._choose_blf_dbc_with_retry(path)
+            return self._choose_blf_dbc_with_retry(
+                path, frames=frames, progress_callback=progress_callback,
+            )
 
         if len(candidates) == 1:
             action = self._ask_blf_dbc_candidate_action(path, candidates[0])
             if action == "use":
-                return list(candidates[0]["paths"])
+                return self._accept_blf_dbc_candidate(
+                    path,
+                    candidates[0],
+                    frames=frames,
+                    progress_callback=progress_callback,
+                )
             if action == "choose":
-                return self._choose_blf_dbc_with_retry(path)
+                return self._choose_blf_dbc_with_retry(
+                    path, frames=frames, progress_callback=progress_callback,
+                )
             return None
 
         selected = self._ask_multiple_blf_dbc_candidates(path, candidates)
         if selected == "choose":
-            return self._choose_blf_dbc_with_retry(path)
+            return self._choose_blf_dbc_with_retry(
+                path, frames=frames, progress_callback=progress_callback,
+            )
         if selected:
+            selected_identity = dbc_candidate_identity(selected)
+            candidate = next(
+                (
+                    item for item in candidates
+                    if item["identity"] == selected_identity
+                ),
+                None,
+            )
+            if candidate is not None:
+                return self._accept_blf_dbc_candidate(
+                    path,
+                    candidate,
+                    frames=frames,
+                    progress_callback=progress_callback,
+                )
             return list(selected)
         return None
 
-    def _validated_blf_dbc_paths(self, path, dbc_paths):
+    def _validated_blf_dbc_paths(
+        self, path, dbc_paths, *, frames=None, progress_callback=None,
+    ):
         key = list(self._canonical_blf_dbc_paths(dbc_paths))
         if not key:
             return None
         try:
-            probe = DataLoader.probe_blf_dbc(str(path), key)
+            if frames is None:
+                probe = DataLoader.probe_blf_dbc(
+                    str(path), key, progress_callback=progress_callback,
+                )
+            else:
+                probe = DataLoader.probe_blf_dbc_frames(
+                    frames, key, progress_callback=progress_callback,
+                )
         except Exception:
             return None
         return key if probe.is_match else None
 
-    def _choose_blf_dbc_with_retry(self, path):
+    def _load_blf_batch(
+        self, paths, progress_callback=None, *, ordered_paths=None,
+    ):
+        """Import one multi-BLF user action with a DBC choice scoped to it.
+
+        We deliberately hold raw frames for only one file at a time.  Each
+        file is parsed once, its shared batch DBC is checked against those
+        in-memory frames, and the same frames are decoded if compatible.
+        Later drops call this method again and can never inherit ``dbc_paths``.
+        """
+        paths = [Path(path) for path in paths]
+        ordered_paths = [
+            Path(path) for path in (
+                ordered_paths if ordered_paths is not None else paths
+            )
+        ]
+
+        def report(index, path, fraction, phase):
+            if callable(progress_callback):
+                progress_callback(index, path, fraction, phase)
+
+        if len(paths) < 2:
+            for index, path in enumerate(ordered_paths):
+                self._load_one(
+                    str(path),
+                    progress_callback=lambda fraction, phase, i=index, p=path: report(
+                        i, p, fraction, phase,
+                    ),
+                )
+                report(index, path, 1.0, "已处理")
+            return
+
+        action = self._ask_blf_batch_dbc_action(paths)
+        if action == "individual":
+            for index, path in enumerate(ordered_paths):
+                self._load_one(
+                    str(path),
+                    progress_callback=lambda fraction, phase, i=index, p=path: report(
+                        i, p, fraction, phase,
+                    ),
+                )
+                report(index, path, 1.0, "已处理")
+            return
+        if action != "batch":
+            self.statusBar.showMessage("已取消 BLF 批量导入")
+            return
+
+        dbc_paths = self._prompt_blf_dbc(paths[0])
+        if not dbc_paths:
+            self.statusBar.showMessage("已取消 BLF 批量导入")
+            return
+
+        loaded = 0
+        skipped = 0
+        blf_index = -1
+        for index, path in enumerate(ordered_paths):
+            if path.suffix.lower() != ".blf":
+                before_fids = set(self.files)
+                self._load_one(
+                    str(path),
+                    progress_callback=lambda fraction, phase, i=index, p=path: report(
+                        i, p, fraction, phase,
+                    ),
+                )
+                report(
+                    index,
+                    path,
+                    1.0,
+                    "已加载" if set(self.files) != before_fids else "已跳过",
+                )
+                continue
+            blf_index += 1
+            try:
+                frames = DataLoader.read_blf_frames(
+                    str(path),
+                    progress_callback=lambda current, total, i=index, p=path: report(
+                        i,
+                        p,
+                        0.05 + 0.40 * current / max(1, total),
+                        "读取 CAN 帧",
+                    ),
+                )
+            except Exception as exc:
+                QMessageBox.critical(self, "无法读取 BLF", f"{path.name}\n{exc}")
+                skipped += 1
+                report(index, path, 1.0, "读取失败")
+                continue
+
+            while True:
+                try:
+                    probe = DataLoader.probe_blf_dbc_frames(
+                        frames,
+                        dbc_paths,
+                        progress_callback=lambda current, total, i=index, p=path: report(
+                            i,
+                            p,
+                            0.45 + 0.10 * current / max(1, total),
+                            "校验 DBC",
+                        ),
+                    )
+                except Exception as exc:
+                    probe = None
+                    detail = str(exc)
+                else:
+                    detail = ""
+                if probe is not None and probe.is_match:
+                    before_fids = set(self.files)
+                    self._load_one(
+                        str(path),
+                        blf_dbc_paths=dbc_paths,
+                        blf_frames=frames,
+                        blf_dbc_validated=True,
+                        progress_callback=lambda fraction, phase, i=index, p=path: report(
+                            i,
+                            p,
+                            0.55 + 0.45 * fraction,
+                            phase,
+                        ),
+                    )
+                    if any(fid not in before_fids for fid in self.files):
+                        loaded += 1
+                        phase = "已加载"
+                    else:
+                        # `_load_one_impl` presents a decode failure itself;
+                        # keep the batch completion summary truthful instead
+                        # of counting a failed registration as imported.
+                        skipped += 1
+                        phase = "已跳过"
+                    report(index, path, 1.0, phase)
+                    break
+
+                action = self._ask_blf_batch_mismatch_action(
+                    path,
+                    dbc_paths,
+                    len(paths) - blf_index - 1,
+                    detail=detail,
+                )
+                if action == "choose":
+                    replacement = self._prompt_blf_dbc(path)
+                    if replacement:
+                        # From this unmatched file onward use the replacement.
+                        # Files already decoded remain explicitly associated
+                        # with their original DBC in source metadata.
+                        dbc_paths = replacement
+                        continue
+                    action = "cancel"
+                if action == "skip":
+                    skipped += 1
+                    report(index, path, 1.0, "已跳过")
+                    break
+                self.statusBar.showMessage(
+                    f"已停止 BLF 批量导入：已加载 {loaded} 个，跳过 {skipped} 个"
+                )
+                return
+
+        self.statusBar.showMessage(
+            f"✅ BLF 批量导入完成：{loaded} 个，跳过 {skipped} 个"
+        )
+
+    def _ask_blf_batch_dbc_action(self, paths):
+        """Ask how one multi-file user action should resolve DBCs."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("批量导入 BLF")
+        box.setText(f"本次添加了 {len(paths)} 个 BLF 文件。")
+        box.setInformativeText(
+            "统一选择的 DBC 会应用到本次全部文件；下次导入仍会重新确认。"
+        )
+        batch = box.addButton("统一选择 DBC", QMessageBox.AcceptRole)
+        individual = box.addButton("逐个选择", QMessageBox.ActionRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        fit_message_box_buttons_to_text(box)
+        box.setDefaultButton(batch)
+        box.exec_()
+        if box.clickedButton() is batch:
+            return "batch"
+        if box.clickedButton() is individual:
+            return "individual"
+        return "cancel"
+
+    def _ask_blf_batch_mismatch_action(
+        self, path, dbc_paths, remaining_count, *, detail="",
+    ):
+        """Handle a per-file exception without silently decoding with a wrong DBC."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("批量 DBC 不匹配")
+        box.setText(
+            f"{self._format_blf_dbc_paths(dbc_paths)} 无法解码 {path.name}。"
+        )
+        if remaining_count > 0:
+            informative = (
+                "可为当前文件重选 DBC，并应用到后续 "
+                f"{remaining_count} 个 BLF；已加载文件不会被悄悄替换。"
+            )
+            choose_text = "重选当前及后续 DBC"
+        else:
+            informative = "可为当前文件重选 DBC；已加载文件不会被悄悄替换。"
+            choose_text = "重选当前 DBC"
+        box.setInformativeText(informative + (f"\n{detail}" if detail else ""))
+        choose = box.addButton(choose_text, QMessageBox.AcceptRole)
+        skip = box.addButton("跳过此文件", QMessageBox.ActionRole)
+        box.addButton("停止剩余导入", QMessageBox.RejectRole)
+        fit_message_box_buttons_to_text(box)
+        box.setDefaultButton(choose)
+        box.exec_()
+        if box.clickedButton() is choose:
+            return "choose"
+        if box.clickedButton() is skip:
+            return "skip"
+        return "cancel"
+
+    def _choose_blf_dbc_with_retry(
+        self, path, *, frames=None, progress_callback=None,
+    ):
         while True:
             dbc_paths = self._prompt_blf_dbc(path)
             if not dbc_paths:
                 return None
             try:
-                probe = DataLoader.probe_blf_dbc(str(path), dbc_paths)
+                if frames is None:
+                    probe = DataLoader.probe_blf_dbc(
+                        str(path),
+                        dbc_paths,
+                        progress_callback=progress_callback,
+                    )
+                else:
+                    probe = DataLoader.probe_blf_dbc_frames(
+                        frames,
+                        dbc_paths,
+                        progress_callback=progress_callback,
+                    )
             except Exception as exc:
                 action = self._ask_blf_dbc_mismatch_action(
                     path, dbc_paths, detail=str(exc)
@@ -519,11 +1078,22 @@ class ProjectIOMixin:
 
     def _ask_blf_dbc_candidate_action(self, path, candidate):
         probe = candidate["probe"]
-        is_weak = probe.strength == "weak"
+        status = candidate_status(candidate)
+        is_weak = status == "weak"
         box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning if is_weak else QMessageBox.Information)
+        box.setIcon(
+            QMessageBox.Warning
+            if is_weak or status == "unverified"
+            else QMessageBox.Information
+        )
         box.setWindowTitle("确认 DBC")
-        if is_weak:
+        if status == "unverified":
+            box.setText(
+                f"{self._format_blf_dbc_paths(candidate['paths'])} 尚未完整校验 "
+                f"{path.name}。\n是否现在校验并使用？"
+            )
+            use_text = "校验并使用"
+        elif is_weak:
             box.setText(
                 f"{self._format_blf_dbc_paths(candidate['paths'])} 只能部分匹配 "
                 f"{path.name}。\n是否仍使用该 DBC 解码？"
@@ -601,7 +1171,7 @@ class ProjectIOMixin:
         _pkg = _sys.modules.get('mf4_analyzer.ui.main_window')
         _QFileDialog = getattr(_pkg, 'QFileDialog', QFileDialog) if _pkg is not None else QFileDialog
         dbcs, _ = _QFileDialog.getOpenFileNames(
-            self, f"为 {path.name} 选择 DBC（取消则按原始字节打开）", "",
+            self, f"为 {path.name} 选择 DBC（取消则不打开）", "",
             "CAN 数据库 (*.dbc);;所有文件 (*)",
         )
         return list(dbcs)
