@@ -101,7 +101,7 @@ Write-Step "Verifying frozen import dependency contract"
 if ($LASTEXITCODE -ne 0) {
     throw "Frozen import dependency contract failed"
 }
-$RuntimeDependencyArgsJson = & $VenvPython $RuntimeDependencyTool --pyinstaller-args-json
+$RuntimeDependencyArgsJson = & $VenvPython $RuntimeDependencyTool --pyinstaller-args-json --flavor lite
 if ($LASTEXITCODE -ne 0) {
     throw "Could not resolve frozen import dependency arguments"
 }

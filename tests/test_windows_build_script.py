@@ -156,6 +156,19 @@ def test_windows_build_scripts_share_frozen_import_dependency_contract():
     assert '"--exclude-module", "matplotlib"' in full_build
 
 
+def test_windows_build_scripts_request_their_collection_flavors():
+    full = (ROOT / "tools" / "build_windows_folder.ps1").read_text(
+        encoding="utf-8"
+    )
+    lite = (ROOT / "tools" / "build_windows_folder_lite.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--pyinstaller-args-json --flavor full" in full
+    assert "--pyinstaller-args-json --flavor lite" in lite
+    assert '"--collect-all", "scipy"' not in lite
+
+
 def test_windows_folder_build_script_can_make_console_diagnostic_build():
     script = ROOT / "tools" / "build_windows_folder.ps1"
 
