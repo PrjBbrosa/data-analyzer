@@ -96,10 +96,20 @@ def dependencies_for_extension(extension: str) -> tuple[FrozenImportDependency, 
     )
 
 
-def pyinstaller_collection_args() -> tuple[str, ...]:
-    """Return PyInstaller arguments required by every Windows flavor."""
+def pyinstaller_collection_args(flavor: str = "full") -> tuple[str, ...]:
+    """Return PyInstaller arguments for a supported Windows build flavor."""
+    if flavor not in {"full", "lite"}:
+        raise ValueError(f"unknown frozen-build flavor: {flavor}")
+
     args: list[str] = []
     for dependency in FROZEN_IMPORT_DEPENDENCIES:
+        if flavor == "lite" and dependency.package == "scipy":
+            # Let PyInstaller trace the loadmat import graph instead of adding
+            # unrelated SciPy toolkits. Its standard SciPy hook still includes
+            # the native dependency closure required by the discovered modules.
+            args.extend(("--hidden-import", "scipy.io"))
+            args.extend(("--hidden-import", "scipy.io.matlab"))
+            continue
         args.extend(("--collect-all", dependency.package))
     return tuple(args)
 

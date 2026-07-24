@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from mf4_analyzer.io.runtime_dependencies import (
     dependencies_for_extension,
     lazy_import_dependency_roots,
@@ -25,6 +27,27 @@ def test_mat_import_dependencies_are_frozen_as_a_complete_closure():
         "--collect-all", "scipy",
         "--collect-all", "h5py",
     )
+
+
+def test_lite_collection_keeps_importer_support_without_whole_scipy():
+    args = pyinstaller_collection_args("lite")
+
+    assert args == (
+        "--collect-all", "asammdf",
+        "--collect-all", "openpyxl",
+        "--collect-all", "can",
+        "--collect-all", "cantools",
+        "--collect-all", "nptdms",
+        "--collect-all", "av",
+        "--hidden-import", "scipy.io",
+        "--hidden-import", "scipy.io.matlab",
+        "--collect-all", "h5py",
+    )
+
+
+def test_collection_rejects_unknown_flavor():
+    with pytest.raises(ValueError, match="unknown frozen-build flavor"):
+        pyinstaller_collection_args("portable")
 
 
 def test_current_windows_build_scripts_satisfy_frozen_import_contract():

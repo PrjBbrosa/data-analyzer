@@ -28,10 +28,11 @@ def main(argv=None) -> int:
     parser.add_argument("--requirements", type=Path)
     parser.add_argument("--build-script", type=Path, action="append", default=[])
     parser.add_argument("--require-installed", action="store_true")
+    parser.add_argument("--flavor", choices=("full", "lite"), default="full")
     args = parser.parse_args(argv)
 
     if args.pyinstaller_args_json:
-        print(json.dumps(pyinstaller_collection_args(), ensure_ascii=False))
+        print(json.dumps(pyinstaller_collection_args(args.flavor), ensure_ascii=False))
 
     if args.verify:
         if args.requirements is None or not args.build_script:
