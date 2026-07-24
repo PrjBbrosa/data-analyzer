@@ -194,6 +194,43 @@ def test_global_file_close_cleans_every_time_view(qtbot, qapp, loaded_csv):
         assert state.overlay_primary is None
 
 
+def test_channel_editor_removal_cleans_deleted_channel_from_every_view(
+    qtbot, qapp, loaded_csv,
+):
+    window = _loaded_window(qtbot, qapp, loaded_csv)
+    fid = _fid(window)
+    window.navigator.set_checked_channels([(fid, "speed"), (fid, "torque")])
+    window.navigator.set_hidden_channels([(fid, "torque")])
+    window.navigator.set_channel_colors({(fid, "torque"): "#123456"})
+    window._overlay_primary = (fid, "torque")
+    window._capture_focused_view()
+
+    window._on_view_new()
+    window._attach_files_to_focused_view([fid])
+    window.navigator.set_checked_channels([(fid, "speed"), (fid, "torque")])
+    window.navigator.set_hidden_channels([(fid, "torque")])
+    window.navigator.set_channel_colors({(fid, "torque"): "#123456"})
+    window._overlay_primary = (fid, "torque")
+    window._capture_focused_view()
+
+    primary = window.view_manager.get(0)
+    primary.axis_opts = {
+        "x_axis": {"mode": "channel", "fid": fid, "channel": "torque"}
+    }
+
+    window._apply_channel_edits(fid, {}, {"torque"})
+    qapp.processEvents()
+
+    for state in window.view_manager.views:
+        assert (fid, "torque") not in state.checked
+        assert (fid, "torque") not in state.hidden_channels
+        assert (fid, "torque") not in state.colors
+        assert state.overlay_primary is None
+    assert primary.axis_opts["x_axis"] == {
+        "mode": "time", "fid": None, "channel": None,
+    }
+
+
 def test_config_combo_selection_does_not_change_checked_or_replot(
     qtbot, qapp, loaded_csv, monkeypatch
 ):
@@ -236,6 +273,19 @@ def test_save_creates_multiple_named_configs_without_applying(
     assert [config.name for config in configs] == ["动力", "振动"]
     assert all(config.channel_names == ("speed",) for config in configs)
     assert _checked_pairs(window) == [(fid, "speed")]
+
+
+def test_save_current_config_captures_display_only_channel_unit_hint(
+    qtbot, qapp, loaded_csv, monkeypatch
+):
+    window = _loaded_window(qtbot, qapp, loaded_csv)
+    fid = _fid(window)
+    window.files[fid].channel_units["speed"] = "km/h"
+    window.navigator.set_checked_channels([(fid, "speed")])
+    monkeypatch.setattr(window, "_prompt_channel_config_name", lambda *_args: ("速度", True))
+
+    assert window._save_current_channel_config() is True
+    assert window.channel_config_store.list()[0].unit_hint("speed") == "km/h"
 
 
 def test_save_existing_name_requires_confirmation_before_overwrite(
@@ -377,7 +427,7 @@ def test_apply_risk_cancel_preserves_state_and_emits_nothing(
     assert window.view_manager.get(0).to_dict() == before
 
 
-def test_manage_rename_and_delete_keep_stable_id_and_clear_selection(
+def test_manager_drafts_do_not_mutate_store_until_one_save(
     qtbot, qapp, monkeypatch
 ):
     from mf4_analyzer.ui.widgets.channel_config_manager import ChannelConfigManagerDialog
@@ -388,43 +438,21 @@ def test_manage_rename_and_delete_keep_stable_id_and_clear_selection(
     dialog = ChannelConfigManagerDialog(
         window.channel_config_store.list(), selected_id=config.config_id, parent=window
     )
-    qtbot.addWidget(dialog)
+    # The dialog is owned by ``window``. Registering both with qtbot makes
+    # teardown delete the child twice after the parent closes.
 
-    assert window._rename_channel_config_from_manager(
-        dialog, config.config_id, "动力分析"
-    ) is True
-    renamed = window.channel_config_store.get(config.config_id)
-    assert renamed.name == "动力分析"
+    assert dialog._rename_active_to("动力分析") is True
+    dialog._remove_channels(("speed",))
 
-    monkeypatch.setattr(
-        window, "_confirm_channel_config_delete_many", lambda *_args: True
-    )
-    assert window._delete_channel_configs_from_manager(
-        dialog, (config.config_id,)
-    ) is True
-    assert window.channel_config_store.get(config.config_id) is None
-    bar = window.navigator.channel_list.config_bar
-    assert bar.selected_config_id() is None
-    assert not bar.btn_apply.isEnabled()
+    assert window.channel_config_store.get(config.config_id).name == "动力"
+    assert window.channel_config_store.get(config.config_id).channel_names == ("speed",)
 
+    replots = []
+    monkeypatch.setattr(window, "_replot_canvas_for_view", lambda *args: replots.append(args))
+    assert window._save_channel_config_drafts(dialog, dialog.drafts) is False
+    assert replots == []
 
-def test_manager_copy_uses_a_unique_name_and_keeps_saved_channels(qtbot, qapp):
-    from mf4_analyzer.ui.widgets.channel_config_manager import ChannelConfigManagerDialog
-
-    window = _window(qtbot, qapp)
-    original = window.channel_config_store.create("动力", ["speed", "torque"])
-    window.channel_config_store.create("动力 副本", ["speed"])
-    dialog = ChannelConfigManagerDialog(
-        window.channel_config_store.list(), selected_id=original.config_id, parent=window
-    )
-    qtbot.addWidget(dialog)
-
-    assert window._copy_channel_config_from_manager(dialog, original.config_id) is True
-
-    copies = [
-        config
-        for config in window.channel_config_store.list()
-        if config.name == "动力 副本 2"
-    ]
-    assert len(copies) == 1
-    assert copies[0].channel_names == ("speed", "torque")
+    dialog._run_undo()
+    assert window._save_channel_config_drafts(dialog, dialog.drafts) is True
+    assert window.channel_config_store.get(config.config_id).name == "动力分析"
+    assert replots == []

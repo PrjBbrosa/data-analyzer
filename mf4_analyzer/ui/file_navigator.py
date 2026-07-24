@@ -365,6 +365,10 @@ class FileNavigator(QWidget):
         self._refresh_header()
         self._activate(fid)
 
+    def refresh_file(self, fid, fd):
+        """Refresh channel rows for an existing file without changing cards."""
+        self.channel_list.refresh_file(fid, fd)
+
     def remove_file(self, fid, *, emit=True):
         rows_key = self._fid_to_key.pop(fid, None)
         if rows_key is not None:

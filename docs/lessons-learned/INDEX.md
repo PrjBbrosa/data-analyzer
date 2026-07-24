@@ -82,6 +82,10 @@ lesson by default.
 | [CRC-like curves need raw profiling, an AA gate, and a cached smooth layer](crc-like-high-variation-envelope-rendering.md) | A modest-size CRC, rolling counter, byte-valued, or dense discrete time-domain channel is slow to select, pan, or zoom, especially when the UI reports that antialiasing is active. | See lesson |
 | [Channel Tree Leaf Delegate Geometry](codex-channel-tree-leaf-delegate-geometry.md) | Changing selected-state presentation or icons in the channel tree. | See lesson |
 | [QMessageBox QSS Content Width](codex-qmessagebox-qss-content-width.md) | Adding or changing text buttons in a styled QMessageBox, especially | See lesson |
+| [Approved HTML Requires Operation Parity](codex-approved-html-operation-parity.md) | A user supplies or approves an HTML prototype as the implementation | See lesson |
+| [Release Notes Cover Implemented Features](codex-release-notes-cover-implemented-features.md) | Preparing or correcting a TraceLab release entry while the checkout contains implemented user-facing feature work. | See lesson |
+| [Frozen Import Dependencies Need One Contract](codex-frozen-import-dependency-contract.md) | Adding, removing, or packaging a supported data-file importer whose | See lesson |
+| [Channel Tree Refresh Must Not Detach A View File](codex-channel-tree-refresh-preserves-view-state.md) | Refreshing channel rows after a channel-editor add/remove operation, | See lesson |
 
 ## Selection Rules
 

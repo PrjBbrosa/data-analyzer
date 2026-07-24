@@ -1,5 +1,9 @@
 numpy
 pandas
+# MATLAB .mat import. Both are declared explicitly because the frozen Windows
+# builds collect them from mf4_analyzer.io.runtime_dependencies.
+scipy
+h5py
 # Base NI TDMS reader; optional HDF/pandas extras are intentionally excluded.
 nptdms==1.11.0
 PyQt5

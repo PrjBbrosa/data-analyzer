@@ -103,6 +103,43 @@ def test_channel_tree_nested_structure(qapp, tmp_path):
     assert cd0 and cd0[0] == 'channel', f"channel leaf role should be 'channel', got {cd0}"
 
 
+def test_refresh_hdf_raster_keeps_other_rasters_and_view_state(qapp, tmp_path):
+    """Editing one HDF raster must not detach or rebuild its sibling raster."""
+    from mf4_analyzer.ui.widgets import MultiFileChannelWidget
+
+    fp = tmp_path / "synth.hdf"
+    fp.touch()
+    w = MultiFileChannelWidget()
+    fd0 = _make_fd(fp, label_suffix="2x", channels=["A", "B"])
+    fd1 = _make_fd(fp, label_suffix="1x", channels=["C"])
+    w.add_file("f0", fd0)
+    w.add_file("f1", fd1)
+    w.set_attached_file_ids(["f0", "f1"])
+    w.set_checked_channels([("f0", "A"), ("f1", "C")])
+    w.set_hidden_channels([("f0", "A")])
+    w.set_channel_colors({("f0", "A"): "#abcdef"})
+
+    w.refresh_file(
+        "f0", _make_fd(fp, label_suffix="2x", channels=["A", "d_dt_A"])
+    )
+
+    assert w.get_attached_file_ids() == ["f0", "f1"]
+    assert [row[:2] for row in w.get_checked_channels()] == [
+        ("f0", "A"), ("f1", "C"),
+    ]
+    assert w.get_hidden_channels() == [("f0", "A")]
+    assert w.get_channel_colors()[("f0", "A")] == "#abcdef"
+    source = w.tree.topLevelItem(0)
+    assert source.childCount() == 2
+    assert [source.child(i).data(0, Qt.UserRole)[1] for i in range(2)] == [
+        "f0", "f1",
+    ]
+    refreshed = w._raster_items["f0"]
+    assert [refreshed.child(i).text(0) for i in range(refreshed.childCount())] == [
+        "A", "d_dt_A",
+    ]
+
+
 def test_channel_tree_check_raster_selects_all_channels(qapp, tmp_path):
     """Checking a raster node selects all its channel leaves."""
     from mf4_analyzer.ui.widgets import MultiFileChannelWidget

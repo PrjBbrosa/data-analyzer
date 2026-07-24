@@ -4,9 +4,11 @@ import pytest
 from PyQt5.QtCore import QSettings
 
 from mf4_analyzer.ui.channel_config import (
+    ChannelConfigPreview,
     ChannelSelectionConfig,
     ChannelSelectionConfigStore,
     ConfigNameConflict,
+    build_channel_config_preview,
     resolve_channel_config,
 )
 
@@ -158,3 +160,73 @@ def test_resolver_reports_missing_names_and_skips_missing_or_unattached_files():
     assert result.matched == (("f0", "Speed"),)
     assert result.missing_names == ("Missing",)
     assert result.target_file_count == 1
+
+
+def test_store_reads_v1_without_rewriting_and_upgrades_units_on_commit(settings):
+    v1 = {
+        "schema_version": 1,
+        "config_id": "old",
+        "name": "旧配置",
+        "channel_names": ["Speed"],
+        "created_at": "created",
+        "updated_at": "updated",
+    }
+    raw = json.dumps([v1], ensure_ascii=False)
+    settings.setValue(ChannelSelectionConfigStore.SETTINGS_KEY, raw)
+
+    store = ChannelSelectionConfigStore(settings, now=lambda: "new")
+    loaded = store.get("old")
+
+    assert loaded.channel_unit_hints == ()
+    assert settings.value(ChannelSelectionConfigStore.SETTINGS_KEY) == raw
+
+    persisted = store.commit_snapshot([
+        ChannelSelectionConfig.create(
+            "old", "旧配置", ["Speed"], now="created", channel_unit_hints={"Speed": "km/h"}
+        )._with_updated_at("updated")
+    ])
+    assert persisted[0].unit_hint("Speed") == "km/h"
+    assert json.loads(settings.value(ChannelSelectionConfigStore.SETTINGS_KEY))[0]["schema_version"] == 2
+
+
+def test_commit_snapshot_is_atomic_and_updates_only_changed_items(settings):
+    times = iter(("created-a", "created-b", "commit"))
+    store = ChannelSelectionConfigStore(
+        settings, id_factory=iter(("a", "b", "new")).__next__, now=times.__next__
+    )
+    first = store.create("动力", ["Speed"])
+    second = store.create("温度", ["Temp"])
+    raw_before = settings.value(ChannelSelectionConfigStore.SETTINGS_KEY)
+
+    changed = ChannelSelectionConfig.create("a", "动力", ["Torque"], now="draft")
+    with pytest.raises(ConfigNameConflict):
+        store.commit_snapshot([changed, ChannelSelectionConfig.create("b", "动力", ["Temp"], now="draft")])
+    assert settings.value(ChannelSelectionConfigStore.SETTINGS_KEY) == raw_before
+    assert store.list() == [first, second]
+
+    saved = store.commit_snapshot([changed, second])
+    assert saved[0].config_id == "a"
+    assert saved[0].created_at == "created-a"
+    assert saved[0].updated_at == "commit"
+    assert saved[1] == second
+
+
+def test_preview_uses_first_nonempty_unit_and_flags_inconsistent_units():
+    class UnitFd(FakeFd):
+        def __init__(self, channels, units):
+            super().__init__(channels)
+            self.channel_units = units
+
+    preview = build_channel_config_preview(
+        ["first", "second"],
+        {
+            "first": UnitFd(["Speed", "Torque"], {"Speed": "km/h", "Torque": "Nm"}),
+            "second": UnitFd(["Speed", "Voltage"], {"Speed": "m/s", "Voltage": "V"}),
+        },
+    )
+
+    assert preview.target_file_count == 2
+    assert preview.matches("Speed")
+    assert not preview.matches("Missing")
+    assert preview.unit_for("Speed") == "km/h"
+    assert preview.inconsistent_unit_names == frozenset({"Speed"})

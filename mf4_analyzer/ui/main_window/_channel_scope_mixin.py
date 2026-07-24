@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import QInputDialog, QLineEdit, QMessageBox
 from ..channel_config import (
     ChannelSelectionConfigStore,
     ConfigNameConflict,
+    build_channel_config_preview,
     normalize_channel_names,
     resolve_channel_config,
 )
@@ -160,6 +161,7 @@ class ChannelScopeMixin:
     def _save_current_channel_config(self):
         checked = list(self.navigator.get_checked_channels())
         frozen_names = normalize_channel_names(row[1] for row in checked)
+        unit_hints = self._current_checked_channel_hints()
         if not frozen_names:
             return False
         bar = self.navigator.channel_list.config_bar
@@ -171,7 +173,9 @@ class ChannelScopeMixin:
         if not accepted:
             return False
         try:
-            config = self.channel_config_store.create(name, frozen_names)
+            config = self.channel_config_store.create(
+                name, frozen_names, channel_unit_hints=unit_hints
+            )
             action = "已保存"
         except ConfigNameConflict as conflict:
             existing = conflict.existing
@@ -180,7 +184,7 @@ class ChannelScopeMixin:
             ):
                 return False
             config = self.channel_config_store.overwrite(
-                existing.config_id, frozen_names
+                existing.config_id, frozen_names, channel_unit_hints=unit_hints
             )
             action = "已更新"
         except ValueError as exc:
@@ -218,91 +222,51 @@ class ChannelScopeMixin:
         return box.clickedButton() is overwrite
 
     def _manage_channel_config(self, config_id=None):
+        resolved = self._focused_time_view_state()
+        attached = () if resolved is None else resolved[1].attached_file_ids
+        preview = build_channel_config_preview(attached, self.files)
+        checked_hints = self._current_checked_channel_hints()
         dialog = ChannelConfigManagerDialog(
-            self.channel_config_store.list(), selected_id=config_id, parent=self
+            self.channel_config_store.list(),
+            selected_id=config_id,
+            preview=preview,
+            checked_channel_hints=checked_hints,
+            id_factory=self.channel_config_store.new_draft_id,
+            parent=self,
         )
-        dialog.create_requested.connect(
-            lambda: self._create_channel_config_from_manager(dialog)
-        )
-        dialog.rename_requested.connect(
-            lambda config_id, name: self._rename_channel_config_from_manager(
-                dialog, config_id, name
-            )
-        )
-        dialog.copy_requested.connect(
-            lambda config_id: self._copy_channel_config_from_manager(dialog, config_id)
-        )
-        dialog.delete_requested.connect(
-            lambda config_ids: self._delete_channel_configs_from_manager(
-                dialog, config_ids
-            )
+        dialog.save_requested.connect(
+            lambda drafts: self._save_channel_config_drafts(dialog, drafts)
         )
         dialog.exec_()
 
-    def _refresh_channel_config_manager(self, dialog, selected_ids=()):
-        self._reload_channel_config_bar()
-        dialog.set_configs(self.channel_config_store.list(), selected_ids=selected_ids)
+    def _current_checked_channel_hints(self):
+        """Freeze the manager's New-config input without changing View state."""
+        hints = {}
+        for fid, channel, _color in self.navigator.get_checked_channels():
+            name = str(channel)
+            if name in hints:
+                continue
+            fd = self.files.get(str(fid))
+            hints[name] = str(
+                (getattr(fd, "channel_units", None) or {}).get(name, "")
+                if fd is not None
+                else ""
+            )
+        return hints
 
-    def _create_channel_config_from_manager(self, dialog):
-        if self._save_current_channel_config():
-            selected = self.navigator.channel_list.config_bar.selected_config_id()
-            self._refresh_channel_config_manager(dialog, (selected,))
-
-    def _rename_channel_config_from_manager(self, dialog, config_id, name):
+    def _save_channel_config_drafts(self, dialog, drafts):
+        """Commit one complete manager snapshot; management never applies a View."""
         try:
-            renamed = self.channel_config_store.rename(config_id, name)
-        except (ConfigNameConflict, ValueError) as exc:
-            self.toast(str(exc), "warning")
+            persisted = self.channel_config_store.commit_snapshot(drafts)
+        except (ConfigNameConflict, ValueError, OSError) as exc:
+            dialog._set_feedback(f"保存失败：{exc}", "warning")
+            self.toast(f"通道配置未保存：{exc}", "warning")
             return False
-        self._refresh_channel_config_manager(dialog, (renamed.config_id,))
-        self.toast(f"已重命名为“{renamed.name}”", "success")
+        selected = dialog.active_config_id
+        self._reload_channel_config_bar(selected)
+        dialog.mark_saved(persisted, active_id=selected)
+        self.toast(f"已保存 {len(persisted)} 个通道配置", "success")
         return True
-
-    def _copy_channel_config_from_manager(self, dialog, config_id):
-        config = self.channel_config_store.get(config_id)
-        if config is None:
-            return False
-        existing = {item.name.casefold() for item in self.channel_config_store.list()}
-        stem = f"{config.name} 副本"
-        name = stem
-        sequence = 2
-        while name.casefold() in existing:
-            name = f"{stem} {sequence}"
-            sequence += 1
-        copy = self.channel_config_store.create(name, config.channel_names)
-        self._refresh_channel_config_manager(dialog, (copy.config_id,))
-        self.toast(f"已复制“{config.name}”", "success")
-        return True
-
-    def _delete_channel_configs_from_manager(self, dialog, config_ids):
-        configs = [
-            config
-            for config_id in config_ids
-            if (config := self.channel_config_store.get(config_id)) is not None
-        ]
-        if not configs or not self._confirm_channel_config_delete_many(configs):
-            return False
-        for config in configs:
-            self.channel_config_store.delete(config.config_id)
-        self._refresh_channel_config_manager(dialog)
-        self.toast(f"已删除 {len(configs)} 个通道配置", "info")
-        return True
-
-    def _confirm_channel_config_delete_many(self, configs):
-        box = QMessageBox(self)
-        box.setWindowTitle("删除通道配置")
-        box.setIcon(QMessageBox.Warning)
-        shown_names = "、".join(f"“{config.name}”" for config in configs[:3])
-        suffix = "等" if len(configs) > 3 else ""
-        box.setText(f"删除 {len(configs)} 个通道配置？")
-        box.setInformativeText(
-            f"将删除 {shown_names}{suffix}\n删除后无法从应用内撤销"
-        )
-        delete = box.addButton("删除所选配置", QMessageBox.DestructiveRole)
-        cancel = box.addButton("取消", QMessageBox.RejectRole)
-        box.setDefaultButton(cancel)
-        box.exec_()
-        return box.clickedButton() is delete
 
     def _apply_selected_channel_config(self, config_id):
         config = self.channel_config_store.get(config_id)
@@ -380,6 +344,14 @@ class ChannelScopeMixin:
         for state in self.view_manager.views:
             self._filter_time_view_state_for_removed_fids(state, removed)
 
+    def _remove_channels_from_all_time_views(self, fid, channels):
+        """Drop deleted channel references from every persisted TimeDomain View."""
+        removed = {(str(fid), str(channel)) for channel in channels or ()}
+        if not removed:
+            return
+        for state in self.view_manager.views:
+            self._filter_time_view_state_for_removed_channels(state, removed)
+
     @staticmethod
     def _filter_time_view_state_for_removed_fids(state, removed):
         removed = {str(fid) for fid in removed}
@@ -400,6 +372,33 @@ class ChannelScopeMixin:
         axis_opts = dict(state.axis_opts or {})
         x_axis = dict(axis_opts.get("x_axis") or {})
         if x_axis.get("fid") is not None and str(x_axis["fid"]) in removed:
+            x_axis.update({"mode": "time", "fid": None, "channel": None})
+            axis_opts["x_axis"] = x_axis
+            state.axis_opts = axis_opts
+
+    @staticmethod
+    def _filter_time_view_state_for_removed_channels(state, removed):
+        removed = {(str(fid), str(channel)) for fid, channel in removed}
+        state.checked = [
+            key for key in state.checked
+            if (str(key[0]), str(key[1])) not in removed
+        ]
+        state.hidden_channels = [
+            key for key in state.hidden_channels
+            if (str(key[0]), str(key[1])) not in removed
+        ]
+        state.colors = {
+            key: color
+            for key, color in state.colors.items()
+            if (str(key[0]), str(key[1])) not in removed
+        }
+        if state.overlay_primary and (
+            str(state.overlay_primary[0]), str(state.overlay_primary[1])
+        ) in removed:
+            state.overlay_primary = None
+        axis_opts = dict(state.axis_opts or {})
+        x_axis = dict(axis_opts.get("x_axis") or {})
+        if (str(x_axis.get("fid")), str(x_axis.get("channel"))) in removed:
             x_axis.update({"mode": "time", "fid": None, "channel": None})
             axis_opts["x_axis"] = x_axis
             state.axis_opts = axis_opts

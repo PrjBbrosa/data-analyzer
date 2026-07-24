@@ -176,3 +176,43 @@ Actual Windows W1/W2 JSON remains absent and therefore BLOCKED.
 - Current `LiveCardGrid` already has a vertical scroll area, `focus_channel`, a focus shell, and cached cards. The next spec must refine those mechanisms rather than introduce a separate TimeDomain view.
 - Current governing `2026-07-10-cockpit-live-preview-first-principles-spec.md` explicitly leaves zoom/cursor/manual-axis Focus mechanics out of scope. This follow-up must preserve that boundary while defining the compact in-place expansion.
 - `liveFocusShell` cannot be globally removed: it remains required for the default isolated Focus used by Replay. Cockpit `inplace` hides it without layout height instead.
+
+---
+
+## 2026-07-24 Channel Configuration Manager V2 Planning Findings
+
+- Approved prototype: `docs/analyzer/ui-prototypes/2026-07-23-channel-config-manager-v2.html`.
+- The target separates single-config editing from explicit batch-config mode;
+  the right pane exposes every saved channel with single and batch removal.
+- Current-View match/missing state is a preview and must be recomputed, not
+  persisted or transferred.
+- Transfer files use a versioned JSON envelope and carry only portable facts:
+  configuration name, channel name, and optional unit.
+- Import remains a draft until the user confirms the manager's primary Save
+  action; same-name policy is explicit: keep both, replace, or skip.
+- Relevant durable checks: structured configuration rows, host-width rendered
+  geometry, and screenshot proof beyond QSS/object-name assertions.
+- Existing publish memory identifies the focused configuration suite and the
+  need to isolate config work from unrelated dirty checkout changes.
+- Current `ChannelConfigManagerDialog` emits immediate create/rename/copy/delete
+  requests, and `_channel_scope_mixin.py` commits each request directly to the
+  QSettings-backed store. A truthful Save/Discard UI therefore requires a
+  draft snapshot and atomic commit before the visual rebuild.
+- The existing persisted record is schema v1 and stores names only. The plan
+  keeps `channel_names` authoritative, retains the current settings key, reads
+  v1/v2, and uses optional persisted unit hints only for display/transfer.
+- The implementation plan is
+  `docs/analyzer/plans/2026-07-24-channel-config-manager-v2-implementation.md`.
+- Implementation now uses `commit_snapshot()` as the manager-only write
+  boundary. The old manager-specific immediate mutation helpers were removed;
+  the existing bottom-bar save/apply flow remains a separate compatibility path.
+- During offscreen review, `QTableWidgetItem` check-state rendering read like a
+  destructive red cross under the live stylesheet. Both batch/config and
+  channel selection cells now use real `QCheckBox` widgets, and the rendered
+  batch screenshot confirms the two independent selected states are legible.
+- Offscreen evidence is stored under
+  `docs/analyzer/verify/2026-07-24-channel-config-manager-v2/`; the final
+  HTML-parity images prove 36px control geometry, the fixed 310px sidebar,
+  selected-channel fill, batch-card cleanup, visible `×` actions, import
+  preview, and the 940×680 footer/channel-width contract. It is not a
+  substitute for a foreground TraceLab session.

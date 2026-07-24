@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "7.7",
+    [string]$Version = "7.8",
     [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
@@ -57,6 +57,7 @@ $Requirements = Join-Path $RepoRoot "requirements.txt"
 $StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
 $IconsDir = Join-Path $RepoRoot "assets\icons"
 $AppIcon = Join-Path $IconsDir "tracelab.ico"
+$RuntimeDependencyTool = Join-Path $PSScriptRoot "windows_runtime_dependencies.py"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $RepoRoot "dist"
@@ -64,10 +65,10 @@ $WorkDir = Join-Path $RepoRoot "build\pyinstaller-lite"
 $SpecDir = Join-Path $RepoRoot "build\spec-lite"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
-# Default output: dist\TraceLabAnalyzer7.7\TraceLabAnalyzer7.7.exe
+# Default output: dist\TraceLabAnalyzer7.8\TraceLabAnalyzer7.8.exe
 # (override with -Version or -AppName)
 
-foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss)) {
+foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -95,6 +96,21 @@ if (-not $KeepPrevious) {
 
 New-Item -ItemType Directory -Force -Path $DistDir, $WorkDir, $SpecDir | Out-Null
 
+Write-Step "Verifying frozen import dependency contract"
+& $VenvPython $RuntimeDependencyTool --verify --require-installed --requirements $Requirements --build-script $PSCommandPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Frozen import dependency contract failed"
+}
+$RuntimeDependencyArgsJson = & $VenvPython $RuntimeDependencyTool --pyinstaller-args-json
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not resolve frozen import dependency arguments"
+}
+try {
+    $RuntimeDependencyArgs = @($RuntimeDependencyArgsJson | ConvertFrom-Json)
+} catch {
+    throw "Frozen import dependency arguments were not valid JSON: $_"
+}
+
 Write-Step "Building analyzer-only folder-style exe with PyInstaller"
 $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
 $AddDataIcons = "$IconsDir;assets\icons"
@@ -105,8 +121,6 @@ $AddDataBranding = "$BrandingDir;assets\branding"
 $HelpDir = Join-Path $RepoRoot "mf4_analyzer\help"
 $AddDataHelp = "$HelpDir;mf4_analyzer\help"
 $HiddenImports = @(
-    # DataLoader imports npTDMS lazily, so add it explicitly for frozen builds.
-    "nptdms",
     "mf4_analyzer.ui_kit",
     "mf4_analyzer.ui_kit.fonts",
     "mf4_analyzer.ui_kit.icons",
@@ -185,11 +199,10 @@ $PyInstallerArgs += @(
     "--add-data", $AddDataIcons,
     "--add-data", $AddDataBranding,
     "--add-data", $AddDataHelp,
-    # matplotlib + scipy were dropped from the app (matplotlib->pyqtgraph,
-    # scipy->numpy windows); --collect-submodules pyqtgraph would otherwise drag
-    # them back in via pyqtgraph's Matplotlib* submodules.
+    # --collect-submodules pyqtgraph pulls in optional Matplotlib backends.
+    # TraceLab no longer uses matplotlib; .mat dependencies are appended from
+    # the shared frozen-import contract after this static argument list.
     "--exclude-module", "matplotlib",
-    "--exclude-module", "scipy",
     # Belt-and-suspenders: keep the acquisition packages and their native-only
     # deps out even if some indirect reference appears. The Analyzer never needs
     # them at runtime (cockpit is lazy-imported and guarded).
@@ -199,9 +212,9 @@ $PyInstallerArgs += @(
     "--exclude-module", "pyxcp",
     "--exclude-module", "pya2l",
     "--collect-submodules", "pyqtgraph",
-    "--collect-all", "qtawesome",
-    "--collect-all", "asammdf"
+    "--collect-all", "qtawesome"
 )
+$PyInstallerArgs += $RuntimeDependencyArgs
 foreach ($HiddenImport in $HiddenImports) {
     $PyInstallerArgs += @("--hidden-import", $HiddenImport)
 }

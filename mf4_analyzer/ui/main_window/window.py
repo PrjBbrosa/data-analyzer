@@ -2841,10 +2841,7 @@ class MainWindow(
 
     def _apply_channel_edits(self, fid, new_channels, removed_channels):
         fd = self.files[fid]
-        checked_before = {
-            (cfid, ch)
-            for cfid, ch, _color in self.channel_list.get_checked_channels()
-        }
+        self._capture_focused_view()
         # Cache invalidation site 3: each touched channel's underlying
         # ndarray identity may have changed (added) or vanished (removed).
         # `fd.get_prefixed_channel(...)` is what plot_channels stashes
@@ -2873,15 +2870,14 @@ class MainWindow(
             if name in fd.channels:
                 fd.channels.remove(name)
             fd.channel_units.pop(name, None)
+        self._remove_channels_from_all_time_views(fid, removed_channels)
         nav_blocked = self.navigator.blockSignals(True)
         list_blocked = self.channel_list.blockSignals(True)
         try:
-            self.navigator.remove_file(fid)
-            self.navigator.add_file(fid, fd)
+            self.navigator.refresh_file(fid, fd)
         finally:
             self.channel_list.blockSignals(list_blocked)
             self.navigator.blockSignals(nav_blocked)
-        self._restore_checked_channels(checked_before)
         self._refresh_channel_dependent_controls()
         self.statusBar.showMessage(
             f"编辑: +{len(new_channels)} -{len(removed_channels)}"

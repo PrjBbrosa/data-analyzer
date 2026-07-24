@@ -163,13 +163,17 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
         )
         return check, swatch, text
 
-    def eye_geometry(self, row_rect):
+    def column_action_geometry(self, row_rect):
+        """Center a row action inside the fixed display column."""
         return QRect(
             row_rect.left() + (row_rect.width() - self.EYE_BOX) // 2,
             row_rect.top() + (row_rect.height() - self.EYE_BOX) // 2,
             self.EYE_BOX,
             self.EYE_BOX,
         )
+
+    def eye_geometry(self, row_rect):
+        return self.column_action_geometry(row_rect)
 
     @staticmethod
     def _is_selected(option):
@@ -208,6 +212,31 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         if not self._is_channel(index):
+            icon = index.data(Qt.DecorationRole)
+            if (index.column() == 2 and isinstance(icon, QIcon)
+                    and not icon.isNull()):
+                # File/raster detach actions used to follow the native macOS
+                # decoration inset, placing the red x left of the eye-icon
+                # centerline. Let the style draw the cell background, but
+                # suppress its decoration and paint that action on the same
+                # explicit geometry used by channel eyes.
+                base_option = QStyleOptionViewItem(option)
+                self.initStyleOption(base_option, index)
+                base_option.icon = QIcon()
+                base_option.features &= ~QStyleOptionViewItem.HasDecoration
+                widget = base_option.widget or self.parent()
+                widget.style().drawControl(
+                    QStyle.CE_ItemViewItem,
+                    base_option,
+                    painter,
+                    widget,
+                )
+                icon.paint(
+                    painter,
+                    self.column_action_geometry(option.rect),
+                    Qt.AlignCenter,
+                )
+                return
             super().paint(painter, option, index)
             return
 
@@ -644,6 +673,160 @@ class MultiFileChannelWidget(QWidget):
         self._refresh_visibility_icons()
         self._update_edit_enabled()
 
+    def refresh_file(self, fid, fd):
+        """Rebuild one file's channel rows without detaching it from a View.
+
+        ``remove_file`` has intentionally destructive lifecycle semantics: it
+        removes a source from the current View and discards its display state.
+        Channel editing changes the universe of rows for an existing source,
+        so it must use this narrower path instead.
+        """
+        fid = str(fid)
+        if fid not in self._files:
+            self.add_file(fid, fd)
+            return
+
+        checked = list(self.get_checked_channels())
+        hidden = list(self.get_hidden_channels())
+        colors = dict(self._colors)
+        axis_groups = dict(self._axis_groups)
+        tree_state = self._file_tree_state(fid)
+
+        self._clear_detach_hover()
+        self._remove_file_tree_item(fid)
+        self.add_file(fid, fd)
+
+        # ``add_file`` supplies defaults for new rows.  Restore only the
+        # surviving rows' user choices, leaving new channels visible/default.
+        self.set_channel_colors(colors)
+        self.set_checked_channels(checked)
+        self.set_hidden_channels(hidden)
+        self._restore_axis_groups(axis_groups)
+        self._restore_file_tree_state(tree_state)
+
+    def _file_tree_state(self, fid):
+        """Capture selection/expansion for the visual subtree of one file."""
+        root = self._file_items.get(fid)
+        if root is None:
+            return (), (), None, None
+        items = [root]
+        parent = root.parent()
+        if parent is not None:
+            items.append(parent)
+
+        def _walk(item):
+            for idx in range(item.childCount()):
+                child = item.child(idx)
+                items.append(child)
+                _walk(child)
+
+        _walk(root)
+        selected = tuple(
+            tuple(item.data(0, Qt.UserRole))
+            for item in self.tree.selectedItems()
+            if item in items and item.data(0, Qt.UserRole)
+        )
+        expanded = tuple(
+            (tuple(item.data(0, Qt.UserRole)), item.isExpanded())
+            for item in items
+            if item.data(0, Qt.UserRole)
+        )
+        current = self.tree.currentItem()
+        current_data = (
+            tuple(current.data(0, Qt.UserRole))
+            if current in items and current is not None
+            and current.data(0, Qt.UserRole)
+            else None
+        )
+        placement = None
+        if parent is not None and parent.data(0, Qt.UserRole):
+            placement = (
+                tuple(root.data(0, Qt.UserRole)),
+                tuple(parent.data(0, Qt.UserRole)),
+                parent.indexOfChild(root),
+            )
+        return selected, expanded, current_data, placement
+
+    def _restore_file_tree_state(self, tree_state):
+        selected, expanded, current_data, placement = tree_state
+        if placement is not None:
+            root_data, parent_data, previous_index = placement
+            root = self._tree_item_for_data(root_data)
+            parent = self._tree_item_for_data(parent_data)
+            if root is not None and parent is not None and root.parent() is parent:
+                current_index = parent.indexOfChild(root)
+                target_index = min(max(0, previous_index), parent.childCount() - 1)
+                if current_index != target_index:
+                    parent.takeChild(current_index)
+                    parent.insertChild(target_index, root)
+        for data in selected:
+            item = self._tree_item_for_data(data)
+            if item is not None:
+                item.setSelected(True)
+        if current_data is not None:
+            item = self._tree_item_for_data(current_data)
+            if item is not None:
+                self.tree.setCurrentItem(item)
+        # Selecting a child may make Qt expand its ancestors.  Apply the saved
+        # expansion state last so a collapsed file remains collapsed.
+        for data, is_expanded in expanded:
+            item = self._tree_item_for_data(data)
+            if item is not None:
+                item.setExpanded(is_expanded)
+
+    def _tree_item_for_data(self, wanted):
+        def _find(item):
+            data = item.data(0, Qt.UserRole)
+            if data and tuple(data) == tuple(wanted):
+                return item
+            for idx in range(item.childCount()):
+                found = _find(item.child(idx))
+                if found is not None:
+                    return found
+            return None
+
+        for idx in range(self.tree.topLevelItemCount()):
+            found = _find(self.tree.topLevelItem(idx))
+            if found is not None:
+                return found
+        return None
+
+    def _restore_axis_groups(self, previous):
+        valid_keys = {
+            (data[1], data[2])
+            for item in self._iter_channel_items()
+            for data in (item.data(0, Qt.UserRole),)
+        }
+        self._axis_groups = {
+            key: group for key, group in previous.items() if key in valid_keys
+        }
+        self._prune_axis_groups()
+        if self._axis_groups != previous:
+            self.axis_groups_changed.emit()
+
+    def _remove_file_tree_item(self, fid):
+        """Remove only the QTreeWidget nodes; keep all logical View state."""
+        if fid in self._raster_items:
+            raster_item = self._raster_items.pop(fid)
+            parent = raster_item.parent()
+            if parent is not None:
+                parent.removeChild(raster_item)
+                # If the source node has no more raster children, remove it
+                if parent.childCount() == 0:
+                    pdata = parent.data(0, Qt.UserRole)
+                    if pdata and pdata[0] == 'source':
+                        fp_str = pdata[1]
+                        self._source_items.pop(fp_str, None)
+                        idx = self.tree.indexOfTopLevelItem(parent)
+                        if idx >= 0:
+                            self.tree.takeTopLevelItem(idx)
+            self._file_items.pop(fid, None)
+        elif fid in self._file_items:
+            fi = self._file_items.pop(fid)
+            idx = self.tree.indexOfTopLevelItem(fi)
+            if idx >= 0:
+                self.tree.takeTopLevelItem(idx)
+
     def get_attached_file_ids(self):
         return list(self._attached_file_ids)
 
@@ -1030,29 +1213,7 @@ class MultiFileChannelWidget(QWidget):
         ]
         self._prune_axis_groups()
 
-        # Check if nested (raster) or flat
-        if fid in self._raster_items:
-            raster_item = self._raster_items.pop(fid)
-            parent = raster_item.parent()
-            if parent is not None:
-                parent.removeChild(raster_item)
-                # If the source node has no more raster children, remove it
-                if parent.childCount() == 0:
-                    pdata = parent.data(0, Qt.UserRole)
-                    if pdata and pdata[0] == 'source':
-                        fp_str = pdata[1]
-                        self._source_items.pop(fp_str, None)
-                        idx = self.tree.indexOfTopLevelItem(parent)
-                        if idx >= 0:
-                            self.tree.takeTopLevelItem(idx)
-            # Also clean up _file_items (which pointed to raster_item)
-            self._file_items.pop(fid, None)
-        elif fid in self._file_items:
-            # Flat mode
-            fi = self._file_items.pop(fid)
-            idx = self.tree.indexOfTopLevelItem(fi)
-            if idx >= 0:
-                self.tree.takeTopLevelItem(idx)
+        self._remove_file_tree_item(fid)
 
         self._update_edit_enabled()
         self._apply_filters()

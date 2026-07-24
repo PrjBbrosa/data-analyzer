@@ -73,3 +73,41 @@ cards retained as weak context.
 - Documentation and the existing HTML prototype only; do not modify product source in this planning task.
 - Preserve the two-column acquisition page and the existing recording/capture contracts.
 - Offscreen tests prove structure; on-screen macOS screenshots prove the final visual geometry.
+
+---
+
+## Addendum — 2026-07-24 Channel Configuration Manager V2
+
+### Goal
+
+Write an implementation-ready plan that maps the approved interactive HTML
+prototype onto the existing PyQt saved-channel-configuration model, including
+channel inspection/removal, uniform controls, current-View match preview, and
+portable JSON import/export.
+
+### Phases
+
+- [x] Recover the prior saved-config implementation, focused tests, lessons, and prototype evidence.
+- [x] Trace current model, manager, persistence, apply, and test ownership end to end.
+- [x] Decide the portable schema, conflict semantics, draft/save boundary, and UI state model.
+- [x] Write the formal ordered implementation plan with red-first tests and rendered acceptance gates.
+- [x] Cross-check file/symbol/test references, dirty-worktree scope, and documentation-only boundary.
+
+### Guardrails
+
+- Planning/docs only; do not modify Qt source or tests in this task.
+- Preserve the existing saved configuration storage and apply behavior unless
+  the formal plan explicitly introduces a migration-compatible extension.
+- Treat the approved HTML as the visual/interaction target, but use current
+  PyQt/data-model truth for implementation ownership.
+- Require both focused offscreen tests and a real Qt rendered screenshot at
+  representative dialog sizes before implementation can be called complete.
+
+### Implementation Outcome
+
+- [x] Implement draft-first store commit, v1/v2 compatibility, View preview, and portable transfer helpers.
+- [x] Rebuild the manager as the approved master-detail UI with separate config/channel selection state.
+- [x] Wire one Save boundary into MainWindow without applying/replotting channels.
+- [x] Add model, transfer, manager, scope, geometry, and unit-hint regressions.
+- [x] Render and inspect the HTML-parity states at 1180×790 and minimum 940×680: default, channel selected, dirty/batch, and import preview.
+- [ ] Perform the remaining interactive macOS TraceLab/high-DPI validation when a foreground session is requested.

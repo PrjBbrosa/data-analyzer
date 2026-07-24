@@ -282,6 +282,39 @@
 - Regenerated final screenshots for all four modes under `docs/surface-redesign-after/`.
 - Surface radius alignment pass completed: compact radii `8/7/6/5`, transparent version affordance, shell/child backing fixes, focused UI tests passed, and screenshots regenerated.
 
+---
+
+## 2026-07-24 Channel Configuration Manager V2 Plan
+
+- Started a documentation-only implementation-planning pass from the approved
+  interactive HTML prototype.
+- Loaded the file-based planning workflow, channel-config lessons, prior
+  focused-suite/publish evidence, and current dirty-worktree state.
+- Preserved the three existing uncommitted channel-tree alignment files and
+  the untracked approved HTML prototype; no Qt source edits are authorized in
+  this planning pass.
+- Traced the QSettings store, current immediate manager signals, MainWindow
+  mutation handlers, exact-name apply resolver, QSS ownership, and focused UI
+  tests.
+- Wrote the V2 implementation plan with a draft/atomic-save foundation,
+  migration-compatible unit hints, portable JSON transfer, explicit batch
+  state, red-first tests, and offscreen plus live Qt acceptance gates.
+- Cross-checked every existing source/test path, marked planned new modules
+  explicitly, passed `git diff --check`, and confirmed the lessons gate does
+  not require a new lesson for this documentation-only pass.
+- Executed the V2 plan: added the draft/atomic Store contract and transfer
+  module, rebuilt the manager UI, wired MainWindow Save, and retained the
+  legacy bottom-bar apply behavior.
+- Added focused regression coverage and ran the configuration plus navigator
+  suite: `96 passed in 3.17s`.
+- Superseded during the final HTML-parity pass: the earlier generic-table
+  manager did not faithfully reproduce the approved sidebar/detail operation
+  model. The final isolated offscreen set is default, channel-selected,
+  dirty/batch, and import-preview at 1180×790 / 940×680; it confirms the
+  310 px sidebar, 36 px controls, 49 px rows, full selected-row fill, visible
+  `×` actions, and no stacked cards in batch mode. Focused result: `72 passed
+  in 2.81s`.
+
 ## 2026-07-10 Cockpit In-Place Focus
 
 - Began a documentation-only spec/plan task from the user-approved interactive HTML model.

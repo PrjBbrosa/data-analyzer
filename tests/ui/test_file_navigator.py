@@ -215,6 +215,35 @@ def test_selected_channel_keeps_the_same_checkbox_origin(qapp, qtbot):
     assert selected.checkState(0) == Qt.Checked
 
 
+def test_file_detach_icon_is_centered_in_display_column(qapp, qtbot):
+    """The file-row close icon shares the display-column center with eyes."""
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    _add_attached(nav, "f0", FakeFd())
+    nav.resize(520, 420)
+    nav.show()
+    qapp.processEvents()
+
+    channel_list = nav.channel_list
+    tree = channel_list.tree
+    parent = channel_list._file_items["f0"]
+    channel_list._on_item_entered(parent, 2)
+    qapp.processEvents()
+
+    cell = tree.visualRect(tree.indexFromItem(parent, 2))
+    image = tree.viewport().grab().toImage()
+    red_x = []
+    for y in range(cell.top(), cell.bottom() + 1):
+        for x in range(cell.left(), cell.right() + 1):
+            pixel = image.pixelColor(x, y)
+            if pixel.red() >= 180 and pixel.green() <= 120 and pixel.blue() <= 120:
+                red_x.append(x)
+
+    assert red_x, "file detach icon did not render"
+    painted_center_x = (min(red_x) + max(red_x)) / 2.0
+    assert abs(painted_center_x - cell.center().x()) <= 1.0
+
+
 def test_navigator_tool_buttons_outer_size_compact(qapp):
     """fix-4 — file-navigator close + kebab buttons must shrink their
     outer chrome to <=24px on both axes (icon size kept at 16px)."""

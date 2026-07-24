@@ -1,343 +1,1276 @@
-"""A focused manager for saved TimeDomain channel configurations."""
+"""HTML-parity, draft-first manager for saved TimeDomain channel configs."""
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import replace
 from datetime import datetime
+from pathlib import Path
 
-from PyQt5.QtCore import QSignalBlocker, Qt, pyqtSignal
+from PyQt5.QtCore import QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
+    QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from ..channel_config import ChannelSelectionConfig
+from ..channel_config import ChannelConfigPreview, ChannelSelectionConfig
+from ..channel_config_transfer import (
+    TRANSFER_SUFFIX,
+    ImportMergeResult,
+    merge_import,
+    parse_transfer,
+    serialize_transfer,
+)
 
 
 def _display_updated(value: str) -> str:
-    """Keep the timestamp scannable without changing its persisted value."""
     try:
         return datetime.fromisoformat(str(value)).strftime("%Y-%m-%d %H:%M")
     except ValueError:
         return str(value)
 
 
-class ChannelConfigManagerDialog(QDialog):
-    """List, find, rename, copy, and batch-delete saved configurations."""
+class _ConfigRow(QFrame):
+    """A 64px sidebar configuration card matching the approved HTML list."""
 
-    create_requested = pyqtSignal()
-    rename_requested = pyqtSignal(str, str)
-    copy_requested = pyqtSignal(str)
-    delete_requested = pyqtSignal(object)
+    clicked = pyqtSignal(str)
+    batch_toggled = pyqtSignal(str, bool)
+
+    def __init__(
+        self,
+        config: ChannelSelectionConfig,
+        *,
+        active: bool,
+        batch_mode: bool,
+        checked: bool,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.config_id = config.config_id
+        self.setObjectName("channelConfigHtmlConfigRow")
+        self.setProperty("active", bool(active))
+        self.setProperty("batch", bool(batch_mode))
+        self.setMinimumHeight(64)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(10)
+        self.checkbox = None
+        if batch_mode:
+            self.checkbox = QCheckBox(self)
+            self.checkbox.setObjectName("channelConfigHtmlCheck")
+            self.checkbox.setAccessibleName(f"批量选择 {config.name}")
+            self.checkbox.setFixedSize(20, 20)
+            self.checkbox.setFocusPolicy(Qt.NoFocus)
+            self.checkbox.setChecked(checked)
+            self.checkbox.toggled.connect(
+                lambda selected, config_id=config.config_id: self.batch_toggled.emit(
+                    config_id, selected
+                )
+            )
+            layout.addWidget(self.checkbox, 0, Qt.AlignVCenter)
+        copy = QWidget(self)
+        copy.setObjectName("channelConfigHtmlConfigCopy")
+        copy_layout = QVBoxLayout(copy)
+        copy_layout.setContentsMargins(0, 0, 0, 0)
+        copy_layout.setSpacing(4)
+        self.name_label = QLabel(config.name, copy)
+        self.name_label.setObjectName("channelConfigHtmlConfigName")
+        self.name_label.setToolTip(config.name)
+        self.name_label.setWordWrap(False)
+        self.meta_label = QLabel(f"更新于 {_display_updated(config.updated_at)}", copy)
+        self.meta_label.setObjectName("channelConfigHtmlConfigMeta")
+        copy_layout.addWidget(self.name_label)
+        copy_layout.addWidget(self.meta_label)
+        layout.addWidget(copy, 1)
+        self.count_label = QLabel(f"{len(config.channel_names)} CH", self)
+        self.count_label.setObjectName("channelConfigHtmlConfigCount")
+        layout.addWidget(self.count_label, 0, Qt.AlignVCenter)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.config_id)
+        super().mouseReleaseEvent(event)
+
+
+class ChannelConfigManagerDialog(QDialog):
+    """Mirror the approved HTML operations; persist only on Save changes."""
+
+    save_requested = pyqtSignal(object)
+
+    CONTROL_HEIGHT = 36
+    ICON_SIZE = 36
 
     def __init__(
         self,
         configs: Iterable[ChannelSelectionConfig],
         *,
         selected_id: str | None = None,
+        preview: ChannelConfigPreview | None = None,
+        checked_channel_hints: Mapping[str, str] | None = None,
+        id_factory: Callable[[], str] | None = None,
+        open_file: Callable[[], str] | None = None,
+        save_file: Callable[[str], str] | None = None,
         parent=None,
     ):
         super().__init__(parent)
-        self.setObjectName("channelConfigManager")
+        self.setObjectName("channelConfigManagerHtml")
         self.setWindowTitle("管理通道配置")
         self.setModal(True)
-        self.resize(880, 540)
-        self.setMinimumSize(720, 440)
+        self.resize(1180, 790)
+        self.setMinimumSize(940, 680)
 
-        self._configs: list[ChannelSelectionConfig] = []
-        self._selected_ids: set[str] = set()
+        self._baseline = list(configs)
+        self._drafts = list(configs)
+        self._preview = preview or ChannelConfigPreview(0, frozenset(), (), frozenset())
+        self._checked_channel_hints = {
+            str(name): str(unit or "")
+            for name, unit in (checked_channel_hints or {}).items()
+        }
+        self._id_factory = id_factory or self._fallback_id
+        self._open_file = open_file or self._open_import_file
+        self._save_file = save_file or self._save_export_file
+        self._active_id = self._initial_active_id(selected_id)
+        self._batch_mode = False
+        self._batch_config_ids: set[str] = set()
+        self._chosen_channels: set[str] = set()
+        self._undo_callback: Callable[[], None] | None = None
+        self._closing = False
+        self._config_rows: dict[str, _ConfigRow] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         root.addWidget(self._build_header())
-        root.addWidget(self._build_toolbar())
-        root.addWidget(self._build_content(), 1)
-        root.addWidget(self._build_footer())
+        root.addWidget(self._build_workspace(), 1)
+        self._build_toast()
+        self._rebuild_all()
 
-        self.set_configs(configs, selected_ids=(() if selected_id is None else (selected_id,)))
+    @staticmethod
+    def _fallback_id() -> str:
+        import uuid
 
-    def _build_header(self):
+        return uuid.uuid4().hex
+
+    def _initial_active_id(self, selected_id: str | None) -> str | None:
+        valid = {config.config_id for config in self._drafts}
+        if selected_id in valid:
+            return str(selected_id)
+        return self._drafts[0].config_id if self._drafts else None
+
+    def _build_header(self) -> QWidget:
         frame = QFrame(self)
-        frame.setObjectName("channelConfigManagerHeader")
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(22, 16, 22, 14)
-        layout.setSpacing(3)
-        title = QLabel("管理通道配置", frame)
-        title.setObjectName("channelConfigManagerTitle")
-        subtitle = QLabel(
-            "配置保存的是通道名称；应用到当前 View 时会自动匹配已加入的文件。",
-            frame,
-        )
-        subtitle.setObjectName("channelConfigManagerSubtitle")
-        subtitle.setWordWrap(True)
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        return frame
-
-    def _build_toolbar(self):
-        frame = QFrame(self)
-        frame.setObjectName("channelConfigManagerToolbar")
+        frame.setObjectName("channelConfigHtmlHeader")
+        frame.setFixedHeight(88)
         layout = QHBoxLayout(frame)
-        layout.setContentsMargins(18, 10, 18, 10)
-        layout.setSpacing(8)
-        self.search_edit = QLineEdit(frame)
-        self.search_edit.setObjectName("channelConfigManagerSearch")
-        self.search_edit.setPlaceholderText("搜索配置名称或通道…")
-        self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.setMaximumWidth(300)
-        self.search_edit.textChanged.connect(self._rebuild_rows)
-        layout.addWidget(self.search_edit)
-
-        self.btn_select_all = QPushButton("全选筛选结果", frame)
-        self.btn_select_all.setProperty("role", "tool")
-        self.btn_select_all.clicked.connect(self._select_all_visible)
-        layout.addWidget(self.btn_select_all)
-        self.btn_clear = QPushButton("清除选择", frame)
-        self.btn_clear.setProperty("role", "tool")
-        self.btn_clear.clicked.connect(self._clear_selection)
-        layout.addWidget(self.btn_clear)
-        layout.addStretch(1)
-        self.btn_create = QPushButton("从当前勾选保存", frame)
-        self.btn_create.setObjectName("channelConfigManagerCreate")
-        self.btn_create.setProperty("role", "primary")
-        self.btn_create.clicked.connect(self.create_requested)
-        layout.addWidget(self.btn_create)
+        layout.setContentsMargins(24, 0, 24, 0)
+        layout.setSpacing(18)
+        copy = QWidget(frame)
+        copy_layout = QVBoxLayout(copy)
+        copy_layout.setContentsMargins(0, 0, 0, 0)
+        copy_layout.setSpacing(5)
+        title = QLabel("通道配置", copy)
+        title.setObjectName("channelConfigHtmlTitle")
+        subtitle = QLabel(
+            "选择一个配置查看并调整通道；保存后，应用时按通道名称匹配当前 View 内的文件。",
+            copy,
+        )
+        subtitle.setObjectName("channelConfigHtmlSubtitle")
+        copy_layout.addWidget(title)
+        copy_layout.addWidget(subtitle)
+        layout.addWidget(copy, 1)
+        self.config_summary = QLabel(frame)
+        self.config_summary.setObjectName("channelConfigHtmlSummaryToken")
+        self.config_summary.setFixedHeight(28)
+        self.config_summary.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        layout.addWidget(self.config_summary, 0, Qt.AlignVCenter)
+        self.view_summary = QLabel(frame)
+        self.view_summary.setObjectName("channelConfigHtmlSummaryToken")
+        self.view_summary.setFixedHeight(28)
+        self.view_summary.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        layout.addWidget(self.view_summary, 0, Qt.AlignVCenter)
         return frame
 
-    def _build_content(self):
-        content = QWidget(self)
-        content.setObjectName("channelConfigManagerContent")
-        layout = QGridLayout(content)
+    def _build_workspace(self) -> QWidget:
+        workspace = QWidget(self)
+        workspace.setObjectName("channelConfigHtmlWorkspace")
+        layout = QHBoxLayout(workspace)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.sidebar = self._build_sidebar()
+        layout.addWidget(self.sidebar, 0)
+        layout.addWidget(self._build_detail(), 1)
+        return workspace
+
+    def _build_sidebar(self) -> QWidget:
+        panel = QFrame(self)
+        panel.setObjectName("channelConfigHtmlSidebar")
+        panel.setFixedWidth(310)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        tools = QFrame(panel)
+        tools.setObjectName("channelConfigHtmlSideTools")
+        tools_layout = QVBoxLayout(tools)
+        tools_layout.setContentsMargins(16, 16, 16, 12)
+        tools_layout.setSpacing(11)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(7)
+        side_title = QLabel("已保存配置", tools)
+        side_title.setObjectName("channelConfigHtmlSideTitle")
+        title_row.addWidget(side_title)
+        self.config_count = QLabel(tools)
+        self.config_count.setObjectName("channelConfigHtmlCountPill")
+        title_row.addWidget(self.config_count)
+        title_row.addStretch(1)
+        self.btn_import = QPushButton("导入", tools)
+        self._control(self.btn_import)
+        self.btn_import.clicked.connect(self._import_from_file)
+        title_row.addWidget(self.btn_import)
+        self.btn_new = QPushButton("＋ 新建", tools)
+        self._control(self.btn_new)
+        self.btn_new.clicked.connect(self._create_from_checked)
+        title_row.addWidget(self.btn_new)
+        tools_layout.addLayout(title_row)
+        self.config_search = QLineEdit(tools)
+        self.config_search.setObjectName("channelConfigHtmlConfigSearch")
+        self.config_search.setPlaceholderText("搜索配置或通道")
+        self.config_search.setClearButtonEnabled(True)
+        self.config_search.setFixedHeight(self.CONTROL_HEIGHT)
+        self.config_search.textChanged.connect(self._rebuild_config_rows)
+        tools_layout.addWidget(self.config_search)
+        layout.addWidget(tools)
+
+        self.config_scroll = QScrollArea(panel)
+        self.config_scroll.setObjectName("channelConfigHtmlConfigScroll")
+        self.config_scroll.setWidgetResizable(True)
+        self.config_scroll.setFrameShape(QFrame.NoFrame)
+        self.config_list = QWidget(self.config_scroll)
+        self.config_list.setObjectName("channelConfigHtmlConfigList")
+        self.config_list_layout = QVBoxLayout(self.config_list)
+        self.config_list_layout.setContentsMargins(8, 8, 8, 8)
+        self.config_list_layout.setSpacing(4)
+        self.config_list_layout.addStretch(1)
+        self.config_scroll.setWidget(self.config_list)
+        layout.addWidget(self.config_scroll, 1)
+
+        footer = QFrame(panel)
+        footer.setObjectName("channelConfigHtmlSideFooter")
+        footer.setFixedHeight(60)
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(16, 11, 16, 11)
+        footer_layout.setSpacing(8)
+        self.btn_batch = QPushButton("批量管理配置", footer)
+        self._control(self.btn_batch)
+        self.btn_batch.setProperty("role", "tool")
+        self.btn_batch.clicked.connect(self._enter_batch_mode)
+        footer_layout.addWidget(self.btn_batch)
+        self.batch_actions = QWidget(footer)
+        batch_layout = QHBoxLayout(self.batch_actions)
+        batch_layout.setContentsMargins(0, 0, 0, 0)
+        batch_layout.setSpacing(8)
+        self.btn_exit_batch = QPushButton("退出批量", self.batch_actions)
+        self._control(self.btn_exit_batch)
+        self.btn_exit_batch.clicked.connect(self._exit_batch_mode)
+        batch_layout.addWidget(self.btn_exit_batch)
+        self.btn_delete_configs = QPushButton("删除所选", self.batch_actions)
+        self.btn_delete_configs.setObjectName("channelConfigHtmlDeleteConfigs")
+        self.btn_delete_configs.setProperty("role", "destructive")
+        self._control(self.btn_delete_configs)
+        self.btn_delete_configs.clicked.connect(self._delete_batch_configs)
+        batch_layout.addWidget(self.btn_delete_configs)
+        footer_layout.addWidget(self.batch_actions, 1)
+        layout.addWidget(footer)
+        return panel
+
+    def _build_detail(self) -> QWidget:
+        panel = QFrame(self)
+        panel.setObjectName("channelConfigHtmlDetail")
+        layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.table = QTableWidget(0, 4, content)
-        self.table.setObjectName("channelConfigManagerTable")
-        self.table.setHorizontalHeaderLabels(("", "配置", "通道数", "最后更新"))
-        self.table.setShowGrid(False)
-        self.table.setAlternatingRowColors(False)
-        self.table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setFocusPolicy(Qt.NoFocus)
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(46)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Fixed)
-        header.resizeSection(0, 36)
+        head = QFrame(panel)
+        head.setObjectName("channelConfigHtmlDetailHead")
+        head.setMinimumHeight(80)
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(20, 15, 20, 15)
+        head_layout.setSpacing(12)
+        copy = QWidget(head)
+        copy_layout = QVBoxLayout(copy)
+        copy_layout.setContentsMargins(0, 0, 0, 0)
+        copy_layout.setSpacing(4)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        self.detail_title = QLabel(copy)
+        self.detail_title.setObjectName("channelConfigHtmlDetailTitle")
+        title_row.addWidget(self.detail_title)
+        self.dirty_dot = QLabel(copy)
+        self.dirty_dot.setObjectName("channelConfigHtmlDirtyDot")
+        self.dirty_dot.setFixedSize(7, 7)
+        title_row.addWidget(self.dirty_dot)
+        title_row.addStretch(1)
+        copy_layout.addLayout(title_row)
+        self.detail_meta = QLabel(copy)
+        self.detail_meta.setObjectName("channelConfigHtmlDetailMeta")
+        copy_layout.addWidget(self.detail_meta)
+        head_layout.addWidget(copy, 1)
+        self.btn_export = QToolButton(head)
+        self.btn_export.setObjectName("channelConfigHtmlExport")
+        self.btn_export.setText("导出 ▾")
+        self.btn_export.setPopupMode(QToolButton.InstantPopup)
+        self._control(self.btn_export)
+        self.btn_export.setMenu(self._build_export_menu())
+        head_layout.addWidget(self.btn_export)
+        self.btn_rename = QPushButton("重命名", head)
+        self._control(self.btn_rename)
+        self.btn_rename.clicked.connect(self._open_rename_dialog)
+        head_layout.addWidget(self.btn_rename)
+        self.btn_copy = QPushButton("复制", head)
+        self._control(self.btn_copy)
+        self.btn_copy.clicked.connect(self._copy_active)
+        head_layout.addWidget(self.btn_copy)
+        self.btn_delete_config = QPushButton("删除配置", head)
+        self.btn_delete_config.setObjectName("channelConfigHtmlDeleteConfig")
+        self.btn_delete_config.setProperty("role", "destructive")
+        self._control(self.btn_delete_config)
+        self.btn_delete_config.clicked.connect(self._delete_active_config)
+        head_layout.addWidget(self.btn_delete_config)
+        layout.addWidget(head)
+
+        preview = QFrame(panel)
+        preview.setObjectName("channelConfigHtmlPreview")
+        preview.setFixedHeight(58)
+        preview_layout = QHBoxLayout(preview)
+        preview_layout.setContentsMargins(20, 10, 20, 10)
+        preview_layout.setSpacing(9)
+        label = QLabel("应用到当前 View", preview)
+        label.setObjectName("channelConfigHtmlPreviewLabel")
+        preview_layout.addWidget(label)
+        self.match_chip = QLabel(preview)
+        self.match_chip.setObjectName("channelConfigHtmlMatchChip")
+        self.match_chip.setFixedHeight(28)
+        preview_layout.addWidget(self.match_chip)
+        self.missing_chip = QLabel(preview)
+        self.missing_chip.setObjectName("channelConfigHtmlMissingChip")
+        self.missing_chip.setFixedHeight(28)
+        preview_layout.addWidget(self.missing_chip)
+        preview_layout.addStretch(1)
+        note = QLabel("缺失通道会跳过，不影响其他通道", preview)
+        note.setObjectName("channelConfigHtmlPreviewNote")
+        preview_layout.addWidget(note)
+        layout.addWidget(preview)
+
+        tools = QFrame(panel)
+        tools.setObjectName("channelConfigHtmlChannelTools")
+        tools.setFixedHeight(61)
+        tools_layout = QHBoxLayout(tools)
+        tools_layout.setContentsMargins(20, 12, 20, 12)
+        tools_layout.setSpacing(8)
+        self.channel_search = QLineEdit(tools)
+        self.channel_search.setObjectName("channelConfigHtmlChannelSearch")
+        self.channel_search.setPlaceholderText("搜索此配置中的通道")
+        self.channel_search.setClearButtonEnabled(True)
+        self.channel_search.setFixedHeight(self.CONTROL_HEIGHT)
+        self.channel_search.setMaximumWidth(280)
+        self.channel_search.textChanged.connect(self._rebuild_channel_rows)
+        tools_layout.addWidget(self.channel_search)
+        self.btn_select_channels = QPushButton("全选", tools)
+        self._control(self.btn_select_channels)
+        self.btn_select_channels.clicked.connect(self._select_visible_channels)
+        tools_layout.addWidget(self.btn_select_channels)
+        self.btn_clear_channels = QPushButton("清除选择", tools)
+        self._control(self.btn_clear_channels)
+        self.btn_clear_channels.clicked.connect(self._clear_channel_selection)
+        tools_layout.addWidget(self.btn_clear_channels)
+        self.btn_remove_channels = QPushButton("移除所选", tools)
+        self.btn_remove_channels.setObjectName("channelConfigHtmlRemoveChannels")
+        self.btn_remove_channels.setProperty("role", "destructive")
+        self._control(self.btn_remove_channels)
+        self.btn_remove_channels.clicked.connect(self._remove_selected_channels)
+        tools_layout.addWidget(self.btn_remove_channels)
+        tools_layout.addStretch(1)
+        self.btn_add_current = QPushButton("＋ 添加当前勾选", tools)
+        self._control(self.btn_add_current)
+        self.btn_add_current.clicked.connect(self._add_current_checked)
+        tools_layout.addWidget(self.btn_add_current)
+        layout.addWidget(tools)
+
+        channel_area = QFrame(panel)
+        channel_area.setObjectName("channelConfigHtmlChannelArea")
+        channel_layout = QVBoxLayout(channel_area)
+        channel_layout.setContentsMargins(0, 0, 0, 0)
+        channel_layout.setSpacing(0)
+        channel_head = QFrame(channel_area)
+        channel_head.setObjectName("channelConfigHtmlChannelHead")
+        channel_head.setFixedHeight(38)
+        channel_head_layout = QHBoxLayout(channel_head)
+        channel_head_layout.setContentsMargins(14, 0, 14, 0)
+        channel_head_layout.setSpacing(0)
+        self.master_channel = QCheckBox(channel_head)
+        self.master_channel.setObjectName("channelConfigHtmlCheck")
+        self.master_channel.setAccessibleName("全选当前筛选通道")
+        self.master_channel.setFixedSize(42, 20)
+        self.master_channel.setFocusPolicy(Qt.NoFocus)
+        self.master_channel.toggled.connect(self._toggle_visible_channels)
+        channel_head_layout.addWidget(self.master_channel, 0, Qt.AlignVCenter)
+        header_name = QLabel("通道名称", channel_head)
+        header_name.setObjectName("channelConfigHtmlColumnHead")
+        channel_head_layout.addWidget(header_name, 1)
+        for text, width in (("单位", 92), ("当前 View", 132), ("", 48)):
+            header = QLabel(text, channel_head)
+            header.setObjectName("channelConfigHtmlColumnHead")
+            header.setFixedWidth(width)
+            header.setAlignment(Qt.AlignCenter if text else Qt.AlignRight | Qt.AlignVCenter)
+            channel_head_layout.addWidget(header)
+        channel_layout.addWidget(channel_head)
+        self.channel_table = QTableWidget(0, 5, channel_area)
+        self.channel_table.setObjectName("channelConfigHtmlChannelTable")
+        self.channel_table.setShowGrid(False)
+        self.channel_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.channel_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.channel_table.setFocusPolicy(Qt.NoFocus)
+        self.channel_table.horizontalHeader().setVisible(False)
+        self.channel_table.verticalHeader().setVisible(False)
+        self.channel_table.verticalHeader().setDefaultSectionSize(49)
+        header = self.channel_table.horizontalHeader()
+        for column, width in ((0, 42), (2, 92), (3, 132), (4, 48)):
+            header.setSectionResizeMode(column, QHeaderView.Fixed)
+            header.resizeSection(column, width)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.Fixed)
-        header.resizeSection(2, 76)
-        header.setSectionResizeMode(3, QHeaderView.Fixed)
-        header.resizeSection(3, 136)
-        self.table.itemChanged.connect(self._on_item_changed)
-        layout.addWidget(self.table, 0, 0)
+        channel_layout.addWidget(self.channel_table, 1)
+        self.empty_channels = QLabel("此配置中没有符合条件的通道。", channel_area)
+        self.empty_channels.setObjectName("channelConfigHtmlEmpty")
+        self.empty_channels.setAlignment(Qt.AlignCenter)
+        channel_layout.addWidget(self.empty_channels)
+        layout.addWidget(channel_area, 1)
 
-        detail = QFrame(content)
-        detail.setObjectName("channelConfigManagerDetail")
-        detail.setMinimumWidth(240)
-        detail.setMaximumWidth(280)
-        detail_layout = QVBoxLayout(detail)
-        detail_layout.setContentsMargins(18, 18, 18, 18)
-        detail_layout.setSpacing(7)
-        eyebrow = QLabel("单项编辑", detail)
-        eyebrow.setObjectName("channelConfigManagerEyebrow")
-        detail_layout.addWidget(eyebrow)
-        self.detail_title = QLabel("未选择配置", detail)
-        self.detail_title.setObjectName("channelConfigManagerDetailTitle")
-        self.detail_title.setWordWrap(True)
-        detail_layout.addWidget(self.detail_title)
-        self.detail_description = QLabel("从左侧选择一个或多个配置。", detail)
-        self.detail_description.setObjectName("channelConfigManagerDetailDescription")
-        self.detail_description.setWordWrap(True)
-        detail_layout.addWidget(self.detail_description)
-        detail_layout.addSpacing(8)
-        name_label = QLabel("配置名称", detail)
-        name_label.setObjectName("channelConfigManagerFieldLabel")
-        detail_layout.addWidget(name_label)
-        self.name_edit = QLineEdit(detail)
-        self.name_edit.setObjectName("channelConfigManagerName")
-        self.name_edit.setClearButtonEnabled(True)
-        self.name_edit.returnPressed.connect(self._emit_rename)
-        detail_layout.addWidget(self.name_edit)
-        actions = QHBoxLayout()
-        actions.setSpacing(7)
-        self.btn_rename = QPushButton("重命名", detail)
-        self.btn_rename.setProperty("role", "tool")
-        self.btn_rename.clicked.connect(self._emit_rename)
-        actions.addWidget(self.btn_rename)
-        self.btn_copy = QPushButton("复制一份", detail)
-        self.btn_copy.setProperty("role", "tool")
-        self.btn_copy.clicked.connect(self._emit_copy)
-        actions.addWidget(self.btn_copy)
-        detail_layout.addLayout(actions)
-        detail_layout.addStretch(1)
-        note = QLabel(
-            "删除可同时处理多项；重命名和复制只允许单项，避免误操作。",
-            detail,
-        )
-        note.setObjectName("channelConfigManagerNote")
-        note.setWordWrap(True)
-        detail_layout.addWidget(note)
-        layout.addWidget(detail, 0, 1)
-        return content
+        footer = QFrame(panel)
+        footer.setObjectName("channelConfigHtmlDetailFooter")
+        footer.setFixedHeight(64)
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(20, 12, 20, 12)
+        footer_layout.setSpacing(8)
+        self.save_state = QLabel(footer)
+        self.save_state.setObjectName("channelConfigHtmlSaveState")
+        footer_layout.addWidget(self.save_state)
+        footer_layout.addStretch(1)
+        self.btn_close = QPushButton("关闭", footer)
+        self._control(self.btn_close)
+        self.btn_close.clicked.connect(self.reject)
+        footer_layout.addWidget(self.btn_close)
+        self.btn_save = QPushButton("保存更改", footer)
+        self.btn_save.setObjectName("channelConfigHtmlSave")
+        self.btn_save.setProperty("role", "primary")
+        self._control(self.btn_save)
+        self.btn_save.clicked.connect(self._emit_save)
+        footer_layout.addWidget(self.btn_save)
+        layout.addWidget(footer)
+        return panel
 
-    def _build_footer(self):
-        frame = QFrame(self)
-        frame.setObjectName("channelConfigManagerFooter")
-        layout = QHBoxLayout(frame)
-        layout.setContentsMargins(18, 10, 18, 10)
-        layout.setSpacing(8)
-        self.count_label = QLabel(frame)
-        self.count_label.setObjectName("channelConfigManagerCount")
-        layout.addWidget(self.count_label)
-        hint = QLabel("删除后无法从应用内撤销", frame)
-        hint.setObjectName("channelConfigManagerHint")
-        layout.addWidget(hint)
-        layout.addStretch(1)
-        self.btn_delete = QPushButton(frame)
-        self.btn_delete.setObjectName("channelConfigManagerDelete")
-        self.btn_delete.setProperty("role", "destructive")
-        self.btn_delete.clicked.connect(self._emit_delete)
-        layout.addWidget(self.btn_delete)
-        close = QPushButton("关闭", frame)
-        close.setProperty("role", "tool")
-        close.clicked.connect(self.reject)
-        layout.addWidget(close)
-        return frame
+    def _build_toast(self) -> None:
+        self.toast = QFrame(self)
+        self.toast.setObjectName("channelConfigHtmlToast")
+        toast_layout = QHBoxLayout(self.toast)
+        toast_layout.setContentsMargins(14, 6, 9, 6)
+        toast_layout.setSpacing(14)
+        self.toast_text = QLabel(self.toast)
+        toast_layout.addWidget(self.toast_text)
+        self.toast_action = QPushButton("撤销", self.toast)
+        self.toast_action.setObjectName("channelConfigHtmlToastAction")
+        self.toast_action.setFixedHeight(30)
+        self.toast_action.clicked.connect(self._run_undo)
+        toast_layout.addWidget(self.toast_action)
+        self.toast.hide()
+        self._toast_timer = QTimer(self)
+        self._toast_timer.setSingleShot(True)
+        self._toast_timer.timeout.connect(self.toast.hide)
 
-    def set_configs(
-        self,
-        configs: Iterable[ChannelSelectionConfig],
-        *,
-        selected_ids: Iterable[str] = (),
+    def _build_export_menu(self) -> QMenu:
+        menu = QMenu(self)
+        current = menu.addAction("导出当前配置")
+        current.triggered.connect(lambda: self._export_to_file(current_only=True))
+        all_configs = menu.addAction("导出全部配置")
+        all_configs.triggered.connect(lambda: self._export_to_file(current_only=False))
+        return menu
+
+    def _control(self, control) -> None:
+        control.setFixedHeight(self.CONTROL_HEIGHT)
+        control.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+
+    @property
+    def drafts(self) -> tuple[ChannelSelectionConfig, ...]:
+        return tuple(self._drafts)
+
+    @property
+    def active_config_id(self) -> str | None:
+        return self._active_id
+
+    def config_row_widget(self, config_id: str) -> _ConfigRow | None:
+        return self._config_rows.get(str(config_id))
+
+    def is_dirty(self) -> bool:
+        return self._drafts != self._baseline
+
+    def mark_saved(
+        self, persisted: Iterable[ChannelSelectionConfig], *, active_id: str | None = None
     ) -> None:
-        self._configs = list(configs)
-        valid = {config.config_id for config in self._configs}
-        requested = {str(config_id) for config_id in selected_ids}
-        self._selected_ids = (requested or self._selected_ids) & valid
-        self._rebuild_rows()
+        self._baseline = list(persisted)
+        self._drafts = list(persisted)
+        self._active_id = self._initial_active_id(active_id or self._active_id)
+        self._chosen_channels.clear()
+        self._batch_config_ids.clear()
+        self._undo_callback = None
+        self._flash("通道配置已保存", None)
+        self._rebuild_all()
 
-    def selected_ids(self) -> tuple[str, ...]:
-        return tuple(
-            config.config_id
-            for config in self._configs
-            if config.config_id in self._selected_ids
+    def set_preview(self, preview: ChannelConfigPreview) -> None:
+        self._preview = preview
+        self._rebuild_all()
+
+    def export_payload(self, *, current_only: bool) -> bytes:
+        configs = [self._active_config()] if current_only else list(self._drafts)
+        return serialize_transfer(config for config in configs if config is not None)
+
+    def import_payload(self, payload: bytes | str, *, conflict_mode: str = "keep") -> ImportMergeResult:
+        parsed = parse_transfer(payload)
+        result = merge_import(
+            self._drafts,
+            parsed.configs,
+            conflict_mode=conflict_mode,
+            id_factory=self._id_factory,
         )
+        self._drafts = list(result.drafts)
+        if self._drafts:
+            self._active_id = self._drafts[0].config_id
+        self._chosen_channels.clear()
+        self._flash(
+            f"已导入 {result.imported_count} 个配置"
+            + (f"，替换 {result.replaced_count} 个" if result.replaced_count else "")
+            + (f"，跳过 {result.skipped_count} 个" if result.skipped_count else "")
+            + "；保存后生效",
+            None,
+        )
+        self._rebuild_all()
+        return result
+
+    def _active_config(self) -> ChannelSelectionConfig | None:
+        return next((item for item in self._drafts if item.config_id == self._active_id), None)
 
     def _visible_configs(self) -> list[ChannelSelectionConfig]:
-        query = self.search_edit.text().strip().casefold()
+        query = self.config_search.text().strip().casefold()
         if not query:
-            return list(self._configs)
+            return list(self._drafts)
         return [
             config
-            for config in self._configs
+            for config in self._drafts
             if query in config.name.casefold()
             or any(query in channel.casefold() for channel in config.channel_names)
         ]
 
-    def _rebuild_rows(self):
-        visible = self._visible_configs()
-        blocker = QSignalBlocker(self.table)
-        self.table.setRowCount(len(visible))
-        for row, config in enumerate(visible):
-            check = QTableWidgetItem()
-            check.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
-            check.setData(Qt.UserRole, config.config_id)
-            check.setCheckState(
-                Qt.Checked if config.config_id in self._selected_ids else Qt.Unchecked
-            )
-            self.table.setItem(row, 0, check)
-            name = QTableWidgetItem(config.name)
-            name.setData(Qt.UserRole, config.config_id)
-            name.setToolTip("\n".join(config.channel_names))
-            self.table.setItem(row, 1, name)
-            count = QTableWidgetItem(f"{len(config.channel_names)} 个")
-            count.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.table.setItem(row, 2, count)
-            updated = QTableWidgetItem(_display_updated(config.updated_at))
-            updated.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.table.setItem(row, 3, updated)
-        del blocker
-        self._sync_detail()
-
-    def _on_item_changed(self, item):
-        if item.column() != 0:
-            return
-        config_id = str(item.data(Qt.UserRole) or "")
-        if not config_id:
-            return
-        if item.checkState() == Qt.Checked:
-            self._selected_ids.add(config_id)
-        else:
-            self._selected_ids.discard(config_id)
-        self._sync_detail()
-
-    def _select_all_visible(self):
-        self._selected_ids.update(config.config_id for config in self._visible_configs())
-        self._rebuild_rows()
-
-    def _clear_selection(self):
-        self._selected_ids.clear()
-        self._rebuild_rows()
-
-    def _selected_configs(self) -> list[ChannelSelectionConfig]:
+    def _visible_channels(self, config: ChannelSelectionConfig) -> list[str]:
+        query = self.channel_search.text().strip().casefold()
         return [
-            config for config in self._configs if config.config_id in self._selected_ids
+            name for name in config.channel_names if not query or query in name.casefold()
         ]
 
-    def _sync_detail(self):
-        selected = self._selected_configs()
-        count = len(selected)
-        one = selected[0] if count == 1 else None
-        self.count_label.setText(f"已选择 {count} 项")
-        self.btn_delete.setText(f"删除所选 {count} 项" if count else "删除所选")
-        self.btn_delete.setEnabled(bool(count))
-        self.btn_clear.setEnabled(bool(count))
-        self.name_edit.setEnabled(one is not None)
-        self.btn_rename.setEnabled(one is not None)
-        self.btn_copy.setEnabled(one is not None)
-        if one is not None:
-            self.detail_title.setText(one.name)
-            self.detail_description.setText(
-                f"{len(one.channel_names)} 个通道 · 最后更新 {_display_updated(one.updated_at)}"
+    def _rebuild_all(self) -> None:
+        self._rebuild_config_rows()
+        self._rebuild_detail()
+        self._sync_chrome()
+
+    def _clear_config_list(self) -> None:
+        while self.config_list_layout.count():
+            item = self.config_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                # ``deleteLater`` alone keeps an old card painted until the
+                # next deferred-delete sweep, so a batch-mode rebuild can
+                # briefly stack its text under the replacement card.
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def _rebuild_config_rows(self) -> None:
+        self._clear_config_list()
+        self._config_rows = {}
+        visible = self._visible_configs()
+        for config in visible:
+            row = _ConfigRow(
+                config,
+                active=config.config_id == self._active_id,
+                batch_mode=self._batch_mode,
+                checked=config.config_id in self._batch_config_ids,
+                parent=self.config_list,
             )
-            blocker = QSignalBlocker(self.name_edit)
-            self.name_edit.setText(one.name)
-            del blocker
-        elif count:
-            self.detail_title.setText(f"已选择 {count} 项")
-            self.detail_description.setText("可批量删除；请只选择一项后重命名或复制。")
-            self.name_edit.clear()
-        else:
-            self.detail_title.setText("未选择配置")
-            self.detail_description.setText("从左侧选择一个或多个配置。")
-            self.name_edit.clear()
+            row.clicked.connect(self._on_config_row_clicked)
+            row.batch_toggled.connect(self._set_batch_config_checked)
+            self._config_rows[config.config_id] = row
+            self.config_list_layout.addWidget(row)
+        if not visible:
+            empty = QLabel("没有符合条件的配置。", self.config_list)
+            empty.setObjectName("channelConfigHtmlEmpty")
+            empty.setAlignment(Qt.AlignCenter)
+            self.config_list_layout.addWidget(empty)
+        self.config_list_layout.addStretch(1)
 
-    def _emit_rename(self):
-        selected = self._selected_configs()
-        if len(selected) != 1:
+    def _rebuild_detail(self) -> None:
+        config = self._active_config()
+        enabled = config is not None
+        for control in (
+            self.btn_export,
+            self.btn_rename,
+            self.btn_copy,
+            self.btn_delete_config,
+            self.channel_search,
+            self.btn_select_channels,
+            self.btn_clear_channels,
+            self.btn_remove_channels,
+            self.btn_add_current,
+        ):
+            control.setEnabled(enabled)
+        if config is None:
+            self.detail_title.setText("—")
+            self.detail_meta.setText("没有可编辑的配置")
+            self.match_chip.hide()
+            self.missing_chip.hide()
+            self.channel_table.setRowCount(0)
+            self.empty_channels.show()
             return
-        name = self.name_edit.text().strip()
-        if name and name != selected[0].name:
-            self.rename_requested.emit(selected[0].config_id, name)
+        matched = sum(1 for name in config.channel_names if self._preview.matches(name))
+        missing = len(config.channel_names) - matched
+        self.detail_title.setText(config.name)
+        self.detail_title.setToolTip(config.name)
+        self.detail_meta.setText(
+            f"{len(config.channel_names)} 个通道 · 更新于 {_display_updated(config.updated_at)}"
+        )
+        self.match_chip.setText(f"●  {matched} 个已匹配")
+        self.match_chip.show()
+        self.missing_chip.setText(f"●  {missing} 个缺失")
+        self.missing_chip.setVisible(bool(missing))
+        self._rebuild_channel_rows()
 
-    def _emit_copy(self):
-        selected = self._selected_configs()
-        if len(selected) == 1:
-            self.copy_requested.emit(selected[0].config_id)
+    def _check_cell(self, checked: bool, callback, accessible_name: str) -> QWidget:
+        cell = QWidget(self.channel_table)
+        cell.setObjectName("channelConfigHtmlCheckCell")
+        cell.setProperty("chosen", bool(checked))
+        layout = QHBoxLayout(cell)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignCenter)
+        check = QCheckBox(cell)
+        check.setObjectName("channelConfigHtmlCheck")
+        check.setAccessibleName(accessible_name)
+        check.setFixedSize(20, 20)
+        check.setFocusPolicy(Qt.NoFocus)
+        check.setChecked(checked)
+        check.toggled.connect(callback)
+        layout.addWidget(check)
+        return cell
 
-    def _emit_delete(self):
-        selected = self.selected_ids()
-        if selected:
-            self.delete_requested.emit(selected)
+    def _rebuild_channel_rows(self) -> None:
+        config = self._active_config()
+        if config is None:
+            self.channel_table.setRowCount(0)
+            return
+        visible = self._visible_channels(config)
+        self._chosen_channels.intersection_update(config.channel_names)
+        self.channel_table.setRowCount(len(visible))
+        for row, channel in enumerate(visible):
+            self.channel_table.setCellWidget(
+                row,
+                0,
+                self._check_cell(
+                    channel in self._chosen_channels,
+                    lambda checked, name=channel: self._set_channel_chosen(name, checked),
+                    f"选择 {channel}",
+                ),
+            )
+            name = QTableWidgetItem(channel)
+            name.setToolTip(channel)
+            self.channel_table.setItem(row, 1, name)
+            hint = config.unit_hint(channel) or self._preview.unit_for(channel)
+            unit = QTableWidgetItem(hint or "—")
+            unit.setTextAlignment(Qt.AlignCenter)
+            if channel in self._preview.inconsistent_unit_names:
+                unit.setToolTip("当前 View 中该通道单位不一致，显示第一个非空单位")
+            self.channel_table.setItem(row, 2, unit)
+            if self._preview.target_file_count == 0:
+                status, color = "无可用 View", "#64748b"
+            elif self._preview.matches(channel):
+                status, color = "●  已匹配", "#527065"
+            else:
+                status, color = "●  缺失", "#956012"
+            match = QTableWidgetItem(status)
+            match.setForeground(QColor(color))
+            match.setTextAlignment(Qt.AlignCenter)
+            self.channel_table.setItem(row, 3, match)
+            remove_cell = QWidget(self.channel_table)
+            remove_cell.setObjectName("channelConfigHtmlRemoveCell")
+            remove_cell.setProperty("chosen", channel in self._chosen_channels)
+            remove_layout = QHBoxLayout(remove_cell)
+            remove_layout.setContentsMargins(6, 6, 6, 6)
+            remove_layout.setAlignment(Qt.AlignCenter)
+            remove = QPushButton("×", remove_cell)
+            remove.setObjectName("channelConfigHtmlRemoveOne")
+            remove.setAccessibleName(f"从配置移除 {channel}")
+            remove.setFixedSize(self.ICON_SIZE, self.ICON_SIZE)
+            remove.clicked.connect(
+                lambda _checked=False, name=channel: self._remove_channels((name,))
+            )
+            remove_layout.addWidget(remove)
+            self.channel_table.setCellWidget(row, 4, remove_cell)
+            if channel in self._chosen_channels:
+                for column in range(1, 4):
+                    self.channel_table.item(row, column).setBackground(QColor("#edf5ff"))
+        self.empty_channels.setVisible(not visible)
+        self.channel_table.setVisible(bool(visible))
+        selected_visible = sum(1 for name in visible if name in self._chosen_channels)
+        previous = self.master_channel.blockSignals(True)
+        self.master_channel.setChecked(bool(visible) and selected_visible == len(visible))
+        self.master_channel.blockSignals(previous)
+
+    def _sync_chrome(self) -> None:
+        dirty = self.is_dirty()
+        self.dirty_dot.setVisible(dirty)
+        self.btn_save.setEnabled(dirty)
+        self.config_count.setText(str(len(self._drafts)))
+        self.config_summary.setText(f"{len(self._drafts)} 个配置")
+        self.view_summary.setText(
+            f"当前 View · {self._preview.target_file_count} 个文件"
+            if self._preview.target_file_count
+            else "当前 View · 无已加入文件"
+        )
+        self.btn_batch.setVisible(not self._batch_mode)
+        self.batch_actions.setVisible(self._batch_mode)
+        self.btn_delete_configs.setEnabled(bool(self._batch_config_ids))
+        self.btn_delete_configs.setText(
+            f"删除 {len(self._batch_config_ids)} 个配置"
+            if self._batch_config_ids
+            else "删除所选"
+        )
+        self.btn_clear_channels.setEnabled(bool(self._chosen_channels))
+        self.btn_remove_channels.setEnabled(bool(self._chosen_channels))
+        self.btn_remove_channels.setText(
+            f"移除所选 {len(self._chosen_channels)}"
+            if self._chosen_channels
+            else "移除所选"
+        )
+        config = self._active_config()
+        if config is None:
+            self.save_state.setText("没有配置")
+        else:
+            state = "修改尚未保存" if dirty else "已保存"
+            self.save_state.setText(f"{len(config.channel_names)} 个通道 · {state}")
+
+    def _on_config_row_clicked(self, config_id: str) -> None:
+        if self._batch_mode:
+            self._set_batch_config_checked(
+                config_id, config_id not in self._batch_config_ids
+            )
+            self._rebuild_config_rows()
+            return
+        if config_id != self._active_id:
+            self._active_id = config_id
+            self._chosen_channels.clear()
+            self.channel_search.clear()
+            self._rebuild_all()
+
+    def _set_batch_config_checked(self, config_id: str, checked: bool) -> None:
+        if checked:
+            self._batch_config_ids.add(config_id)
+        else:
+            self._batch_config_ids.discard(config_id)
+        self._sync_chrome()
+
+    def _enter_batch_mode(self) -> None:
+        self._batch_mode = True
+        self._batch_config_ids.clear()
+        self._rebuild_all()
+
+    def _exit_batch_mode(self) -> None:
+        self._batch_mode = False
+        self._batch_config_ids.clear()
+        self._rebuild_all()
+
+    def _delete_batch_configs(self) -> None:
+        wanted = set(self._batch_config_ids)
+        if not wanted:
+            return
+        if len(wanted) >= len(self._drafts):
+            self._flash("不能删除全部配置", None)
+            return
+        removed = [item for item in self._drafts if item.config_id in wanted]
+        self._drafts = [item for item in self._drafts if item.config_id not in wanted]
+        if self._active_id in wanted:
+            self._active_id = self._drafts[0].config_id
+        self._batch_mode = False
+        self._batch_config_ids.clear()
+        self._chosen_channels.clear()
+        self._flash(f"已将 {len(removed)} 个配置标记为删除，保存后生效", None)
+        self._rebuild_all()
+
+    def _set_channel_chosen(self, channel: str, checked: bool) -> None:
+        if checked:
+            self._chosen_channels.add(channel)
+        else:
+            self._chosen_channels.discard(channel)
+        self._rebuild_channel_rows()
+        self._sync_chrome()
+
+    def _select_visible_channels(self) -> None:
+        config = self._active_config()
+        if config is None:
+            return
+        self._chosen_channels.update(self._visible_channels(config))
+        self._rebuild_channel_rows()
+        self._sync_chrome()
+
+    def _clear_channel_selection(self) -> None:
+        self._chosen_channels.clear()
+        self._rebuild_channel_rows()
+        self._sync_chrome()
+
+    def _toggle_visible_channels(self, checked: bool) -> None:
+        config = self._active_config()
+        if config is None:
+            return
+        visible = self._visible_channels(config)
+        if checked:
+            self._chosen_channels.update(visible)
+        else:
+            self._chosen_channels.difference_update(visible)
+        self._rebuild_channel_rows()
+        self._sync_chrome()
+
+    def _remove_selected_channels(self) -> None:
+        self._remove_channels(tuple(self._chosen_channels))
+
+    def _remove_channels(self, channel_names: Iterable[str]) -> None:
+        config = self._active_config()
+        wanted = set(channel_names)
+        if config is None or not wanted:
+            return
+        old_channels = config.channel_names
+        old_hints = config.channel_unit_hints
+        remaining = tuple(name for name in old_channels if name not in wanted)
+        removed = len(old_channels) - len(remaining)
+        if not removed:
+            return
+        hint_map = dict(old_hints)
+        self._replace_active(
+            replace(
+                config,
+                channel_names=remaining,
+                channel_unit_hints=tuple(
+                    (name, hint_map[name]) for name in remaining if hint_map.get(name)
+                ),
+            )
+        )
+        self._chosen_channels.clear()
+
+        def undo() -> None:
+            current = self._active_config()
+            if current is None or current.config_id != config.config_id:
+                return
+            self._replace_active(
+                replace(
+                    current,
+                    channel_names=old_channels,
+                    channel_unit_hints=old_hints,
+                )
+            )
+            self._flash("已撤销通道移除", None)
+
+        self._flash(f"已从“{config.name}”移除 {removed} 个通道", undo)
+        self._rebuild_all()
+
+    def _add_current_checked(self) -> None:
+        config = self._active_config()
+        if config is None:
+            return
+        existing = set(config.channel_names)
+        additions = [name for name in self._checked_channel_hints if name not in existing]
+        if not additions:
+            self._flash("当前勾选通道已全部包含在此配置中", None)
+            return
+        hint_map = dict(config.channel_unit_hints)
+        hint_map.update({name: self._checked_channel_hints[name] for name in additions})
+        names = (*config.channel_names, *additions)
+        self._replace_active(
+            replace(
+                config,
+                channel_names=names,
+                channel_unit_hints=tuple(
+                    (name, hint_map[name]) for name in names if hint_map.get(name)
+                ),
+            )
+        )
+        self._flash(f"已添加当前勾选中的 {len(additions)} 个新通道", None)
+        self._rebuild_all()
+
+    def _create_from_checked(self) -> None:
+        if not self._checked_channel_hints:
+            self._flash("当前没有已勾选通道，无法新建配置", None)
+            return
+        base, sequence = "未命名配置", 2
+        name = base
+        taken = {config.name.casefold() for config in self._drafts}
+        while name.casefold() in taken:
+            name = f"{base} {sequence}"
+            sequence += 1
+        new = ChannelSelectionConfig.create(
+            str(self._id_factory()),
+            name,
+            tuple(self._checked_channel_hints),
+            now="draft",
+            channel_unit_hints=self._checked_channel_hints,
+        )
+        self._drafts.insert(0, new)
+        self._active_id = new.config_id
+        self._chosen_channels.clear()
+        self._rebuild_all()
+        self._open_rename_dialog()
+
+    def _rename_active_to(self, name: str) -> bool:
+        config = self._active_config()
+        name = str(name).strip()
+        if config is None or not name:
+            return False
+        conflict = next(
+            (
+                item
+                for item in self._drafts
+                if item.config_id != config.config_id and item.name.casefold() == name.casefold()
+            ),
+            None,
+        )
+        if conflict is not None:
+            self._flash(f"配置名称已存在：{conflict.name}", None)
+            return False
+        self._replace_active(replace(config, name=name))
+        self._rebuild_all()
+        return True
+
+    def _open_rename_dialog(self) -> None:
+        config = self._active_config()
+        if config is None:
+            return
+        dialog = QDialog(self)
+        dialog.setObjectName("channelConfigHtmlRenameDialog")
+        dialog.setWindowTitle("重命名配置")
+        dialog.setModal(True)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
+        title = QLabel("重命名配置", dialog)
+        title.setObjectName("channelConfigHtmlPopoverTitle")
+        copy = QLabel("名称用于配置列表显示，不会修改通道名称。", dialog)
+        copy.setObjectName("channelConfigHtmlPopoverCopy")
+        layout.addWidget(title)
+        layout.addWidget(copy)
+        edit = QLineEdit(config.name, dialog)
+        edit.setMaxLength(80)
+        edit.setFixedHeight(self.CONTROL_HEIGHT)
+        layout.addWidget(edit)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        cancel = QPushButton("取消", dialog)
+        confirm = QPushButton("保存名称", dialog)
+        confirm.setProperty("role", "primary")
+        self._control(cancel)
+        self._control(confirm)
+        actions.addWidget(cancel)
+        actions.addWidget(confirm)
+        layout.addLayout(actions)
+        cancel.clicked.connect(dialog.reject)
+        confirm.clicked.connect(dialog.accept)
+        edit.returnPressed.connect(dialog.accept)
+        edit.selectAll()
+        if dialog.exec_() == QDialog.Accepted:
+            self._rename_active_to(edit.text())
+
+    def _copy_active(self) -> None:
+        config = self._active_config()
+        if config is None:
+            return
+        stem, sequence = f"{config.name} 副本", 2
+        name = stem
+        taken = {item.name.casefold() for item in self._drafts}
+        while name.casefold() in taken:
+            name = f"{stem} {sequence}"
+            sequence += 1
+        copy = ChannelSelectionConfig.create(
+            str(self._id_factory()),
+            name,
+            config.channel_names,
+            now="draft",
+            channel_unit_hints=config.channel_unit_hints,
+        )
+        self._drafts.insert(0, copy)
+        self._active_id = copy.config_id
+        self._chosen_channels.clear()
+        self._flash("已复制配置，保存后生效", None)
+        self._rebuild_all()
+
+    def _delete_active_config(self) -> None:
+        config = self._active_config()
+        if config is None:
+            return
+        if len(self._drafts) <= 1:
+            self._flash("至少需要保留一个配置", None)
+            return
+        self._drafts = [item for item in self._drafts if item.config_id != config.config_id]
+        self._active_id = self._drafts[0].config_id
+        self._chosen_channels.clear()
+        self._flash(f"已将“{config.name}”标记为删除，保存后生效", None)
+        self._rebuild_all()
+
+    def _replace_active(self, replacement: ChannelSelectionConfig) -> None:
+        self._drafts = [
+            replacement if item.config_id == replacement.config_id else item
+            for item in self._drafts
+        ]
+
+    def _emit_save(self) -> None:
+        if not self.is_dirty():
+            return
+        empty = next((item for item in self._drafts if not item.channel_names), None)
+        if empty is not None:
+            self._active_id = empty.config_id
+            self._flash(f"“{empty.name}”没有通道；请补充通道或删除该配置", None)
+            self._rebuild_all()
+            return
+        self.save_requested.emit(tuple(self._drafts))
+
+    def _import_from_file(self) -> None:
+        path = self._open_file()
+        if not path:
+            return
+        try:
+            payload = Path(path).read_bytes()
+            parsed = parse_transfer(payload)
+        except (OSError, ValueError) as exc:
+            self._flash(f"导入失败：{exc}", None)
+            return
+        mode = self._show_import_preview(path, parsed)
+        if mode is None:
+            return
+        try:
+            self.import_payload(payload, conflict_mode=mode)
+        except ValueError as exc:
+            self._flash(f"导入失败：{exc}", None)
+
+    def _show_import_preview(self, path: str, parsed) -> str | None:
+        dialog, combo = self._build_import_preview_dialog(path, parsed)
+        return str(combo.currentData()) if dialog.exec_() == QDialog.Accepted else None
+
+    def _build_import_preview_dialog(self, path: str, parsed) -> tuple[QDialog, QComboBox]:
+        """Build the approved import-review popover without committing a draft."""
+        dialog = QDialog(self)
+        dialog.setObjectName("channelConfigHtmlImportDialog")
+        dialog.setWindowTitle("确认导入通道配置")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(460)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
+        title = QLabel("确认导入通道配置", dialog)
+        title.setObjectName("channelConfigHtmlPopoverTitle")
+        copy = QLabel("导入前先核对内容；确认后仍需点击主窗口的“保存更改”。", dialog)
+        copy.setObjectName("channelConfigHtmlPopoverCopy")
+        copy.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(copy)
+        conflict_count = sum(
+            1
+            for item in parsed.configs
+            if any(existing.name.casefold() == item.name.casefold() for existing in self._drafts)
+        )
+        conflict_copy = (
+            f"{conflict_count} 个同名配置"
+            if conflict_count
+            else "无同名冲突"
+        )
+        file_meta = QLabel(
+            f"JSON  ·  {Path(path).name}\nTraceLab v1 · {conflict_copy}", dialog
+        )
+        file_meta.setObjectName("channelConfigHtmlImportFile")
+        file_meta.setWordWrap(True)
+        layout.addWidget(file_meta)
+        stats = QWidget(dialog)
+        stats.setObjectName("channelConfigHtmlImportStats")
+        stats_layout = QHBoxLayout(stats)
+        stats_layout.setContentsMargins(0, 0, 0, 0)
+        stats_layout.setSpacing(8)
+        for value, label_text in (
+            (str(len(parsed.configs)), "个配置"),
+            (str(sum(len(item.channel_names) for item in parsed.configs)), "个通道名称"),
+        ):
+            stat = QFrame(stats)
+            stat.setObjectName("channelConfigHtmlImportStat")
+            stat_layout = QVBoxLayout(stat)
+            stat_layout.setContentsMargins(11, 9, 11, 9)
+            stat_layout.setSpacing(4)
+            value_label = QLabel(value, stat)
+            value_label.setObjectName("channelConfigHtmlImportStatValue")
+            label = QLabel(label_text, stat)
+            label.setObjectName("channelConfigHtmlImportStatLabel")
+            stat_layout.addWidget(value_label)
+            stat_layout.addWidget(label)
+            stats_layout.addWidget(stat, 1)
+        layout.addWidget(stats)
+        label = QLabel("遇到同名配置", dialog)
+        label.setObjectName("channelConfigHtmlImportLabel")
+        layout.addWidget(label)
+        combo = QComboBox(dialog)
+        combo.setFixedHeight(self.CONTROL_HEIGHT)
+        combo.addItem("保留两份，并给导入项追加“（导入）”", "keep")
+        combo.addItem("用导入内容替换现有配置", "replace")
+        combo.addItem("跳过同名配置", "skip")
+        layout.addWidget(combo)
+        note = QLabel(
+            "传递文件只保存配置名称、通道名称和单位；当前 View 的匹配状态会在导入后重新计算。",
+            dialog,
+        )
+        note.setObjectName("channelConfigHtmlPopoverCopy")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        cancel = QPushButton("取消", dialog)
+        confirm = QPushButton("导入配置", dialog)
+        confirm.setProperty("role", "primary")
+        self._control(cancel)
+        self._control(confirm)
+        actions.addWidget(cancel)
+        actions.addWidget(confirm)
+        layout.addLayout(actions)
+        cancel.clicked.connect(dialog.reject)
+        confirm.clicked.connect(dialog.accept)
+        return dialog, combo
+
+    def _export_to_file(self, *, current_only: bool) -> None:
+        try:
+            payload = self.export_payload(current_only=current_only)
+        except ValueError as exc:
+            self._flash(f"导出失败：{exc}", None)
+            return
+        active = self._active_config()
+        stem = active.name if current_only and active else f"TraceLab-{len(self._drafts)}-channel-configs"
+        path = self._save_file(f"{stem}{TRANSFER_SUFFIX}")
+        if not path:
+            return
+        try:
+            Path(path).write_bytes(payload)
+        except OSError as exc:
+            self._flash(f"导出失败：{exc}", None)
+            return
+        suffix = "，包含当前未保存修改" if self.is_dirty() else ""
+        self._flash(f"已导出 {1 if current_only else len(self._drafts)} 个配置{suffix}", None)
+
+    def _open_import_file(self) -> str:
+        path, _selected = QFileDialog.getOpenFileName(
+            self, "导入通道配置", "", "TraceLab 配置 (*.tracelab-config.json *.json)"
+        )
+        return path
+
+    def _save_export_file(self, filename: str) -> str:
+        path, _selected = QFileDialog.getSaveFileName(
+            self,
+            "导出通道配置",
+            filename,
+            "TraceLab 配置 (*.tracelab-config.json);;JSON (*.json)",
+        )
+        return path
+
+    def _flash(self, text: str, undo: Callable[[], None] | None) -> None:
+        self._undo_callback = undo
+        self.toast_text.setText(text)
+        self.toast_action.setVisible(undo is not None)
+        self.toast.adjustSize()
+        self.toast.show()
+        self._position_toast()
+        self._toast_timer.start(7000)
+
+    def _set_feedback(self, text: str, _level: str = "warning") -> None:
+        """Compatibility seam for the host's failed-save notification path."""
+        # A persistence error must not silently discard the most recent
+        # in-dialog channel-removal undo action.
+        self._flash(str(text), self._undo_callback)
+
+    def _run_undo(self) -> None:
+        callback = self._undo_callback
+        self._undo_callback = None
+        self.toast.hide()
+        if callback is not None:
+            callback()
+
+    def _position_toast(self) -> None:
+        self.toast.adjustSize()
+        self.toast.move(
+            max(12, (self.width() - self.toast.width()) // 2),
+            max(12, self.height() - self.toast.height() - 24),
+        )
+
+    def _confirm_discard_changes(self) -> bool:
+        dialog = QDialog(self)
+        dialog.setObjectName("channelConfigHtmlDiscardDialog")
+        dialog.setWindowTitle("放弃未保存修改？")
+        dialog.setModal(True)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
+        title = QLabel("放弃未保存修改？", dialog)
+        title.setObjectName("channelConfigHtmlPopoverTitle")
+        copy = QLabel("新建、删除、导入和通道编辑都不会写入本机配置。", dialog)
+        copy.setObjectName("channelConfigHtmlPopoverCopy")
+        copy.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(copy)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        keep = QPushButton("继续编辑", dialog)
+        discard = QPushButton("放弃修改", dialog)
+        discard.setProperty("role", "destructive")
+        self._control(keep)
+        self._control(discard)
+        actions.addWidget(keep)
+        actions.addWidget(discard)
+        layout.addLayout(actions)
+        keep.clicked.connect(dialog.reject)
+        discard.clicked.connect(dialog.accept)
+        return dialog.exec_() == QDialog.Accepted
+
+    def reject(self) -> None:
+        if self.is_dirty() and not self._confirm_discard_changes():
+            return
+        self._closing = True
+        super().reject()
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "toast") and self.toast.isVisible():
+            self._position_toast()
+
+    def closeEvent(self, event):  # noqa: N802
+        if self._closing or not self.is_dirty() or self._confirm_discard_changes():
+            event.accept()
+        else:
+            event.ignore()

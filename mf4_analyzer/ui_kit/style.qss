@@ -2529,3 +2529,320 @@ QWidget#centralTray { background-color: #f2f4f7; }
 #reviewPreflight {
     color: #6b7280;
 }
+
+/* Saved-channel configuration manager: the approved HTML prototype is the
+ * geometry and interaction reference. Keep this at the end so shared compact
+ * defaults cannot inflate its 36px controls. */
+QDialog#channelConfigManagerHtml {
+    background-color: #ffffff;
+    border: 1px solid #c8d4e3;
+    border-radius: 12px;
+}
+QFrame#channelConfigHtmlHeader {
+    background-color: #ffffff;
+    border: none;
+    border-bottom: 1px solid #dde5f0;
+}
+QLabel#channelConfigHtmlTitle { color: #172033; font-size: 21px; font-weight: 700; }
+QLabel#channelConfigHtmlSubtitle { color: #697991; font-size: 12px; }
+QLabel#channelConfigHtmlSummaryToken {
+    padding: 5px 9px;
+    border: 1px solid #d9e4f0;
+    border-radius: 9px;
+    background-color: #f8fbff;
+    color: #536a87;
+    font-size: 11px;
+    font-weight: 600;
+}
+QWidget#channelConfigHtmlWorkspace { background-color: #ffffff; }
+QFrame#channelConfigHtmlSidebar {
+    background-color: #fbfcfe;
+    border: none;
+    border-right: 1px solid #dde5f0;
+}
+QFrame#channelConfigHtmlSideTools {
+    background-color: #fbfcfe;
+    border: none;
+    border-bottom: 1px solid #dde5f0;
+}
+QLabel#channelConfigHtmlSideTitle { color: #172033; font-size: 13px; font-weight: 700; }
+QLabel#channelConfigHtmlCountPill {
+    min-width: 17px;
+    padding: 2px 5px;
+    border-radius: 8px;
+    background-color: #e9f1fc;
+    color: #38669e;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 11px;
+    font-weight: 700;
+}
+QLineEdit#channelConfigHtmlConfigSearch,
+QLineEdit#channelConfigHtmlChannelSearch,
+QDialog#channelConfigHtmlRenameDialog QLineEdit,
+QDialog#channelConfigHtmlImportDialog QComboBox {
+    min-height: 34px;
+    max-height: 34px;
+    padding: 0 10px;
+    border: 1px solid #c8d4e3;
+    border-radius: 8px;
+    background-color: #ffffff;
+    color: #172033;
+    font-size: 12px;
+}
+QLineEdit#channelConfigHtmlConfigSearch:focus,
+QLineEdit#channelConfigHtmlChannelSearch:focus,
+QDialog#channelConfigHtmlRenameDialog QLineEdit:focus,
+QDialog#channelConfigHtmlImportDialog QComboBox:focus { border-color: #0a6de7; }
+QScrollArea#channelConfigHtmlConfigScroll { border: none; background-color: #fbfcfe; }
+QWidget#channelConfigHtmlConfigList { background-color: #fbfcfe; }
+QWidget#channelConfigHtmlConfigCopy { background-color: transparent; }
+QFrame#channelConfigHtmlConfigRow {
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background-color: transparent;
+}
+QFrame#channelConfigHtmlConfigRow:hover { background-color: #f2f6fb; }
+QFrame#channelConfigHtmlConfigRow[active="true"] {
+    border-color: #bfd7f7;
+    border-left: 3px solid #0a6de7;
+    background-color: #eaf3ff;
+}
+QLabel#channelConfigHtmlConfigName { color: #172033; font-size: 12px; font-weight: 700; }
+QLabel#channelConfigHtmlConfigMeta { color: #697991; font-size: 10px; }
+QLabel#channelConfigHtmlConfigCount {
+    color: #60738b;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 10px;
+    font-weight: 700;
+}
+QFrame#channelConfigHtmlSideFooter {
+    border: none;
+    border-top: 1px solid #dde5f0;
+    background-color: #fbfcfe;
+}
+
+QFrame#channelConfigHtmlDetail { background-color: #ffffff; border: none; }
+QFrame#channelConfigHtmlDetailHead {
+    border: none;
+    border-bottom: 1px solid #dde5f0;
+    background-color: #ffffff;
+}
+QLabel#channelConfigHtmlDetailTitle { color: #172033; font-size: 18px; font-weight: 700; }
+QLabel#channelConfigHtmlDetailMeta { color: #697991; font-size: 11px; }
+QLabel#channelConfigHtmlDirtyDot { border: none; border-radius: 3px; background-color: #0a6de7; }
+QFrame#channelConfigHtmlPreview {
+    border: none;
+    border-bottom: 1px solid #dde5f0;
+    background-color: #fbfcff;
+}
+QLabel#channelConfigHtmlPreviewLabel { color: #43556c; font-size: 11px; font-weight: 700; }
+QLabel#channelConfigHtmlMatchChip,
+QLabel#channelConfigHtmlMissingChip {
+    padding: 0 9px;
+    border: 1px solid #c7e8d6;
+    border-radius: 14px;
+    background-color: #f2fbf6;
+    color: #356650;
+    font-size: 10px;
+    font-weight: 700;
+}
+QLabel#channelConfigHtmlMissingChip {
+    border-color: #f0d7aa;
+    background-color: #fff7e7;
+    color: #8a5609;
+}
+QLabel#channelConfigHtmlPreviewNote { color: #8291a5; font-size: 10px; }
+QFrame#channelConfigHtmlChannelTools {
+    border: none;
+    border-bottom: 1px solid #dde5f0;
+    background-color: #ffffff;
+}
+QFrame#channelConfigHtmlChannelArea { background-color: #ffffff; border: none; }
+QFrame#channelConfigHtmlChannelHead {
+    border: none;
+    border-bottom: 1px solid #dde5f0;
+    background-color: #f8fafc;
+}
+QLabel#channelConfigHtmlColumnHead { color: #697991; font-size: 10px; font-weight: 700; }
+QTableWidget#channelConfigHtmlChannelTable {
+    border: none;
+    outline: none;
+    background-color: #ffffff;
+    color: #172033;
+}
+QTableWidget#channelConfigHtmlChannelTable::item {
+    padding: 0 8px;
+    border: none;
+    border-bottom: 1px solid #edf1f6;
+    background-color: #ffffff;
+}
+QTableWidget#channelConfigHtmlChannelTable::item:hover { background-color: #f8fbff; }
+QWidget#channelConfigHtmlCheckCell[chosen="true"] { background-color: #edf5ff; }
+QWidget#channelConfigHtmlRemoveCell[chosen="true"] { background-color: #edf5ff; }
+QPushButton#channelConfigHtmlRemoveOne {
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    border-color: transparent;
+    border-radius: 8px;
+    background-color: transparent;
+    color: #d82c3b;
+    font-size: 17px;
+    font-weight: 500;
+}
+QPushButton#channelConfigHtmlRemoveOne:hover {
+    border-color: #f1b8be;
+    background-color: #fff2f3;
+}
+QLabel#channelConfigHtmlEmpty { padding: 18px; color: #8291a5; font-size: 12px; }
+QFrame#channelConfigHtmlDetailFooter {
+    border: none;
+    border-top: 1px solid #dde5f0;
+    background-color: #ffffff;
+}
+QLabel#channelConfigHtmlSaveState { color: #697991; font-size: 11px; }
+
+QDialog#channelConfigManagerHtml QPushButton,
+QDialog#channelConfigManagerHtml QToolButton {
+    min-width: 0;
+    /* Qt's CSS content height excludes the 1px top/bottom borders. */
+    min-height: 34px;
+    max-height: 34px;
+    padding: 0 10px;
+    border: 1px solid #c8d4e3;
+    border-radius: 8px;
+    background-color: #ffffff;
+    color: #172033;
+    font-size: 12px;
+    font-weight: 700;
+}
+QDialog#channelConfigManagerHtml QPushButton:hover,
+QDialog#channelConfigManagerHtml QToolButton:hover {
+    border-color: #aebed1;
+    background-color: #f8fbff;
+}
+QDialog#channelConfigManagerHtml QPushButton:disabled,
+QDialog#channelConfigManagerHtml QToolButton:disabled {
+    border-color: #e5eaf1;
+    background-color: #f6f8fb;
+    color: #a8b3c2;
+}
+QDialog#channelConfigManagerHtml QPushButton[role="primary"],
+QDialog#channelConfigManagerHtml QToolButton[role="primary"] {
+    border-color: #0a6de7;
+    background-color: #0a6de7;
+    color: #ffffff;
+}
+QDialog#channelConfigManagerHtml QPushButton[role="primary"]:hover,
+QDialog#channelConfigManagerHtml QToolButton[role="primary"]:hover {
+    border-color: #085abf;
+    background-color: #085abf;
+}
+QPushButton#channelConfigHtmlDeleteConfig,
+QPushButton#channelConfigHtmlDeleteConfigs,
+QPushButton#channelConfigHtmlRemoveChannels {
+    border-color: #f1b8be;
+    background-color: #ffffff;
+    color: #d82c3b;
+}
+QPushButton#channelConfigHtmlDeleteConfig:hover,
+QPushButton#channelConfigHtmlDeleteConfigs:hover,
+QPushButton#channelConfigHtmlRemoveChannels:hover { background-color: #fff2f3; }
+QCheckBox#channelConfigHtmlCheck { spacing: 0; }
+QCheckBox#channelConfigHtmlCheck::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #aebdce;
+    border-radius: 3px;
+    background-color: #ffffff;
+}
+QCheckBox#channelConfigHtmlCheck::indicator:checked {
+    border-color: #0a6de7;
+    background-color: #0a6de7;
+    image: url("{{ICON_CHECKBOX_CHECKED}}");
+}
+QFrame#channelConfigHtmlToast {
+    border: 1px solid #2a3f5b;
+    border-radius: 9px;
+    background-color: #1f2e44;
+    color: #ffffff;
+}
+QFrame#channelConfigHtmlToast QLabel { color: #ffffff; font-size: 11px; }
+QPushButton#channelConfigHtmlToastAction {
+    min-width: 0;
+    min-height: 0;
+    padding: 0 6px;
+    border: none;
+    background-color: transparent;
+    color: #bcd8ff;
+    font-size: 11px;
+}
+QDialog#channelConfigHtmlRenameDialog,
+QDialog#channelConfigHtmlImportDialog,
+QDialog#channelConfigHtmlDiscardDialog {
+    border: 1px solid #c8d4e3;
+    border-radius: 12px;
+    background-color: #ffffff;
+}
+QDialog#channelConfigHtmlRenameDialog QPushButton,
+QDialog#channelConfigHtmlImportDialog QPushButton,
+QDialog#channelConfigHtmlDiscardDialog QPushButton {
+    min-height: 34px;
+    max-height: 34px;
+    padding: 0 10px;
+    border: 1px solid #c8d4e3;
+    border-radius: 8px;
+    background-color: #ffffff;
+    color: #172033;
+    font-size: 12px;
+    font-weight: 700;
+}
+QDialog#channelConfigHtmlRenameDialog QPushButton[role="primary"],
+QDialog#channelConfigHtmlImportDialog QPushButton[role="primary"],
+QDialog#channelConfigHtmlDiscardDialog QPushButton[role="primary"] {
+    border-color: #0a6de7;
+    background-color: #0a6de7;
+    color: #ffffff;
+}
+QLabel#channelConfigHtmlPopoverTitle { color: #172033; font-size: 15px; font-weight: 700; }
+QLabel#channelConfigHtmlPopoverCopy,
+QLabel#channelConfigHtmlImportLabel { color: #697991; font-size: 11px; }
+QLabel#channelConfigHtmlImportFile {
+    padding: 10px;
+    border: 1px solid #dde5f0;
+    border-radius: 9px;
+    background-color: #f7f9fc;
+    color: #43556c;
+    font-size: 11px;
+}
+QWidget#channelConfigHtmlImportStats { background-color: transparent; }
+QFrame#channelConfigHtmlImportStat {
+    border: 1px solid #dde5f0;
+    border-radius: 8px;
+    background-color: #ffffff;
+}
+QLabel#channelConfigHtmlImportStatValue {
+    color: #172033;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 17px;
+    font-weight: 700;
+}
+QLabel#channelConfigHtmlImportStatLabel { color: #697991; font-size: 10px; }
+/* Must follow the generic dialog button rule above: the per-row removal
+ * affordance is an icon-sized action, not a regular outlined button. */
+QDialog#channelConfigManagerHtml QPushButton#channelConfigHtmlRemoveOne {
+    min-width: 0;
+    min-height: 0;
+    max-height: 34px;
+    padding: 0;
+    border-color: transparent;
+    border-radius: 8px;
+    background-color: transparent;
+    color: #d82c3b;
+    font-size: 17px;
+    font-weight: 500;
+}
+QDialog#channelConfigManagerHtml QPushButton#channelConfigHtmlRemoveOne:hover {
+    border-color: #f1b8be;
+    background-color: #fff2f3;
+}

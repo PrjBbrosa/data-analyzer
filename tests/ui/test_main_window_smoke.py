@@ -1988,6 +1988,48 @@ def test_channel_editor_apply_preserves_checked_xlim(qapp, qtbot, loaded_csv):
     assert nhi == pytest.approx(t1, abs=1e-6)
 
 
+def test_channel_editor_apply_keeps_attached_tree_display_state(
+    qapp, qtbot, loaded_csv,
+):
+    import numpy as np
+    from PyQt5.QtCore import Qt
+
+    w, fid = _load_time_window_with_checked(
+        qapp, qtbot, loaded_csv, ("speed", "torque")
+    )
+    w.navigator.set_hidden_channels([(fid, "speed")])
+    w.navigator.set_channel_colors({(fid, "speed"): "#abcdef"})
+    w.channel_list.merge_axis_group([(fid, "speed"), (fid, "torque")])
+    old_file_item = w.channel_list._file_items[fid]
+    speed = old_file_item.child(0)
+    speed.setSelected(True)
+    w.channel_list.tree.setCurrentItem(speed)
+    old_file_item.setExpanded(False)
+
+    arr = np.arange(len(w.files[fid].data), dtype=float)
+    w._apply_channel_edits(fid, {"d_dt_speed": (arr, "unit/s")}, set())
+    qapp.processEvents()
+
+    assert w.view_manager.get(0).attached_file_ids == [fid]
+    assert w.navigator.get_attached_file_ids() == [fid]
+    assert {channel for _fid, channel, _color in w.navigator.get_checked_channels()} == {
+        "speed", "torque",
+    }
+    assert w.navigator.get_hidden_channels() == [(fid, "speed")]
+    assert w.navigator.get_channel_colors()[(fid, "speed")] == "#abcdef"
+    assert w.channel_list.axis_group_for(fid, "speed") == 1
+    assert w.channel_list.axis_group_for(fid, "torque") == 1
+    refreshed = w.channel_list._file_items[fid]
+    assert not refreshed.isExpanded()
+    assert w.channel_list.tree.currentItem().data(0, Qt.UserRole) == (
+        "channel", fid, "speed"
+    )
+    assert any(
+        refreshed.child(index).text(0) == "d_dt_speed"
+        for index in range(refreshed.childCount())
+    )
+
+
 def test_returning_to_time_mode_preserves_xlim(qapp, qtbot, loaded_csv):
     import pytest
 

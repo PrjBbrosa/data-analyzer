@@ -27,6 +27,19 @@ class _MultiChannelFileData:
         return ["#1769e0", "#8b5cf6", "#f43f5e"]
 
 
+class _ReplaceableFileData:
+    data = [1, 2, 3]
+
+    def __init__(self, channels):
+        self._channels = list(channels)
+
+    def get_signal_channels(self):
+        return list(self._channels)
+
+    def get_color_palette(self):
+        return ["#1769e0", "#8b5cf6", "#f43f5e", "#f59e0b"]
+
+
 def _add_attached_file(widget, fid, file_data):
     """Mirror the production View contract for channel-widget tests."""
     widget.add_file(fid, file_data)
@@ -506,3 +519,42 @@ def test_edit_channels_button_enables_with_file_and_emits(qapp, qtbot):
 
     widget.remove_file("file-a")
     assert not widget.btn_edit.isEnabled()
+
+
+def test_refresh_file_preserves_view_attachment_and_tree_interactions(qapp, qtbot):
+    """Refreshing an edited source is not equivalent to detaching it."""
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    _add_attached_file(widget, "file-a", _ReplaceableFileData(["speed", "torque"]))
+    widget.set_checked_channels([("file-a", "speed"), ("file-a", "torque")])
+    widget.set_hidden_channels([("file-a", "speed")])
+    widget.set_channel_colors({("file-a", "speed"): "#abcdef"})
+    widget.merge_axis_group([("file-a", "speed"), ("file-a", "torque")])
+
+    old_file_item = widget._file_items["file-a"]
+    speed = old_file_item.child(0)
+    speed.setSelected(True)
+    widget.tree.setCurrentItem(speed)
+    old_file_item.setExpanded(False)
+
+    widget.refresh_file(
+        "file-a", _ReplaceableFileData(["speed", "torque", "d_dt_speed"])
+    )
+
+    assert widget.get_attached_file_ids() == ["file-a"]
+    assert [row[:2] for row in widget.get_checked_channels()] == [
+        ("file-a", "speed"), ("file-a", "torque"),
+    ]
+    assert widget.get_hidden_channels() == [("file-a", "speed")]
+    assert widget.get_channel_colors()[("file-a", "speed")] == "#abcdef"
+    assert widget.axis_group_for("file-a", "speed") == 1
+    assert widget.axis_group_for("file-a", "torque") == 1
+
+    refreshed = widget._file_items["file-a"]
+    assert not refreshed.isExpanded()
+    assert widget.tree.currentItem().data(0, Qt.UserRole) == (
+        "channel", "file-a", "speed"
+    )
+    assert [refreshed.child(i).text(0) for i in range(refreshed.childCount())] == [
+        "speed", "torque", "d_dt_speed",
+    ]

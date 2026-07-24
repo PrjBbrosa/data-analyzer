@@ -1,0 +1,1111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><rect width=%2216%22 height=%2216%22 rx=%224%22 fill=%22%230a6de7%22/></svg>">
+<title>TraceLab — 通道配置管理 V2</title>
+<style>
+  :root {
+    --ink: #172033;
+    --muted: #697991;
+    --quiet: #98a5b7;
+    --line: #dde5f0;
+    --line-strong: #c8d4e3;
+    --panel: #ffffff;
+    --canvas: #edf2f7;
+    --soft: #f7f9fc;
+    --blue: #0a6de7;
+    --blue-dark: #0758bd;
+    --blue-soft: #eaf3ff;
+    --danger: #d82c3b;
+    --danger-soft: #fff0f2;
+    --amber: #b76a00;
+    --amber-soft: #fff7e8;
+    --control-h: 36px;
+    --radius: 10px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    min-width: 940px;
+    overflow: hidden;
+    color: var(--ink);
+    background: var(--canvas);
+    font-family: "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  button, input { font: inherit; }
+  button { cursor: pointer; }
+  button:focus-visible, input:focus-visible {
+    outline: 2px solid rgba(10, 109, 231, .32);
+    outline-offset: 2px;
+  }
+
+  .stage {
+    min-height: 100%;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+  }
+  .window {
+    width: min(1180px, calc(100vw - 48px));
+    height: min(790px, calc(100vh - 48px));
+    min-height: 680px;
+    overflow: hidden;
+    border: 1px solid #c9d3df;
+    border-radius: 16px;
+    background: var(--panel);
+    box-shadow: 0 26px 70px rgba(28, 45, 69, .22);
+  }
+  .titlebar {
+    height: 50px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 0 16px;
+    border-bottom: 1px solid #e9eef5;
+    background: #fbfcfe;
+  }
+  .traffic { width: 13px; height: 13px; border-radius: 50%; background: #d5d9df; }
+  .traffic.red { background: #ff5f57; }
+  .traffic.amber { background: #febc2e; }
+  .traffic.green { background: #28c840; }
+  .window-name { margin-left: 9px; color: #526176; font-size: 13px; font-weight: 700; }
+  .draft-badge {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 9px;
+    border-radius: 6px;
+    color: var(--blue-dark);
+    background: var(--blue-soft);
+    font-size: 11px;
+    font-weight: 750;
+    opacity: 0;
+    transform: translateY(-2px);
+    transition: .16s ease;
+  }
+  .draft-badge.show { opacity: 1; transform: translateY(0); }
+
+  .header {
+    height: 88px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--line);
+  }
+  .header-copy { min-width: 0; }
+  .header h1 { margin: 0; font-size: 21px; line-height: 1.2; letter-spacing: -.02em; }
+  .header p { margin: 7px 0 0; color: var(--muted); font-size: 12.5px; }
+  .header-summary {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .summary-token {
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: #53647a;
+    background: var(--soft);
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+
+  .workspace {
+    height: calc(100% - 138px);
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 310px minmax(0, 1fr);
+  }
+
+  .sidebar {
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    border-right: 1px solid var(--line);
+    background: #fbfcfe;
+  }
+  .side-tools { padding: 16px 16px 12px; border-bottom: 1px solid var(--line); }
+  .side-title-row { display: flex; align-items: center; margin-bottom: 11px; }
+  .side-title { font-size: 13px; font-weight: 800; }
+  .count-pill {
+    margin-left: 7px;
+    min-width: 22px;
+    height: 22px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0 7px;
+    border-radius: 11px;
+    color: #5a6b80;
+    background: #e9eef5;
+    font: 700 11px/1 "SF Mono", "Menlo", monospace;
+  }
+  .side-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .side-actions .button { padding: 0 10px; }
+  .search-wrap { position: relative; }
+  .search-icon {
+    position: absolute;
+    left: 11px;
+    top: 50%;
+    width: 13px;
+    height: 13px;
+    transform: translateY(-50%);
+    color: #8796aa;
+    pointer-events: none;
+  }
+  .field {
+    width: 100%;
+    height: var(--control-h);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    padding: 0 11px;
+    color: var(--ink);
+    background: #fff;
+    outline: 0;
+    font-size: 12.5px;
+  }
+  .field.search { padding-left: 33px; }
+  .field:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(10, 109, 231, .10); }
+
+  .button {
+    height: var(--control-h);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    padding: 0 13px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    color: #34445a;
+    background: #fff;
+    font-size: 12px;
+    font-weight: 750;
+    white-space: nowrap;
+  }
+  .button:hover { border-color: #aebed1; background: #f8fbff; }
+  .button.primary { border-color: var(--blue); color: #fff; background: var(--blue); }
+  .button.primary:hover { border-color: var(--blue-dark); background: var(--blue-dark); }
+  .button.danger { border-color: #f1b8be; color: var(--danger); background: #fff; }
+  .button.danger:hover { background: var(--danger-soft); }
+  .button.ghost { border-color: transparent; color: #52647b; background: transparent; }
+  .button.ghost:hover { border-color: var(--line); background: #fff; }
+  .button.square { width: var(--control-h); padding: 0; font-size: 17px; }
+  .button:disabled { cursor: default; border-color: #e5eaf1; color: #a8b3c2; background: #f6f8fb; }
+
+  .config-list { overflow: auto; padding: 8px; }
+  .config-row {
+    position: relative;
+    width: 100%;
+    min-height: 64px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+    padding: 9px 10px 9px 13px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    text-align: left;
+    color: inherit;
+    background: transparent;
+  }
+  .config-row:hover { background: #f2f6fb; }
+  .config-row.active { border-color: #bfd7f7; background: var(--blue-soft); }
+  .config-row.active::before {
+    content: "";
+    position: absolute;
+    left: -1px;
+    top: 11px;
+    bottom: 11px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--blue);
+  }
+  .config-copy { min-width: 0; }
+  .config-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 780; }
+  .config-meta { margin-top: 6px; color: var(--muted); font-size: 11px; }
+  .config-count { color: #60738b; font: 700 11px/1 "SF Mono", "Menlo", monospace; }
+  .batch-check { display: none; }
+  .sidebar.batch .config-row { grid-template-columns: 24px 1fr auto; }
+  .sidebar.batch .batch-check { display: inline-grid; }
+  .side-footer { min-height: 60px; display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-top: 1px solid var(--line); }
+  .side-footer .batch-actions { display: none; width: 100%; gap: 8px; }
+  .sidebar.batch .side-footer > #batchMode { display: none; }
+  .sidebar.batch .batch-actions { display: flex; }
+  .batch-actions .button:last-child { margin-left: auto; }
+
+  .detail {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    background: #fff;
+  }
+  .detail-head {
+    min-height: 80px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 15px 20px;
+    border-bottom: 1px solid var(--line);
+  }
+  .detail-copy { min-width: 0; }
+  .detail-title-row { display: flex; align-items: center; gap: 8px; }
+  .detail-title { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; letter-spacing: -.015em; }
+  .dirty-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); opacity: 0; }
+  .dirty-dot.show { opacity: 1; }
+  .detail-sub { margin-top: 6px; color: var(--muted); font-size: 11.5px; }
+  .detail-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .export-wrap { position: relative; }
+  .export-menu {
+    position: absolute;
+    z-index: 12;
+    top: calc(100% + 6px);
+    right: 0;
+    width: 188px;
+    padding: 6px;
+    border: 1px solid var(--line-strong);
+    border-radius: 9px;
+    background: #fff;
+    box-shadow: 0 14px 34px rgba(24, 39, 60, .18);
+  }
+  .export-menu[hidden] { display: none; }
+  .export-item {
+    width: 100%;
+    height: var(--control-h);
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 6px;
+    color: #34445a;
+    background: transparent;
+    font-size: 12px;
+    font-weight: 700;
+    text-align: left;
+  }
+  .export-item:hover { color: var(--blue-dark); background: var(--blue-soft); }
+  .export-item + .export-item { margin-top: 2px; }
+
+  .apply-preview {
+    min-height: 58px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--line);
+    background: #fbfcff;
+  }
+  .preview-label { margin-right: 3px; color: #43556c; font-size: 11.5px; font-weight: 800; }
+  .status-chip {
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 9px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: #52647a;
+    background: #fff;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .status-chip i { width: 7px; height: 7px; border-radius: 50%; background: #21a56c; }
+  .status-chip.warn { border-color: #f0d7aa; color: #8a5609; background: var(--amber-soft); }
+  .status-chip.warn i { background: #e29a25; }
+  .preview-note { margin-left: auto; color: var(--quiet); font-size: 11px; }
+
+  .channel-tools {
+    min-height: 61px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--line);
+  }
+  .channel-tools .search-wrap { width: min(280px, 34%); }
+  .channel-tools .spacer { flex: 1; }
+
+  .channel-area { min-height: 0; overflow: auto; }
+  .channel-head, .channel-row {
+    display: grid;
+    grid-template-columns: 42px minmax(240px, 1fr) 92px 132px 48px;
+    align-items: center;
+  }
+  .channel-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    height: 38px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--line);
+    color: #718097;
+    background: #f9fbfd;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .04em;
+  }
+  .channel-row {
+    min-height: 49px;
+    padding: 0 14px;
+    border-bottom: 1px solid #edf1f6;
+    transition: background .12s ease;
+  }
+  .channel-row:hover { background: #f8fbff; }
+  .channel-row.chosen { background: #edf5ff; }
+  .channel-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #1d2b3f;
+    font: 650 12px/1.3 "SF Mono", "Menlo", "Consolas", monospace;
+  }
+  .unit { color: #72829a; font: 650 11px/1 "SF Mono", "Menlo", monospace; }
+  .match { display: inline-flex; align-items: center; gap: 7px; color: #527065; font-size: 11px; font-weight: 700; }
+  .match::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #25a46f; }
+  .match.missing { color: #956012; }
+  .match.missing::before { background: #dfa03a; }
+  .empty {
+    height: 150px;
+    display: grid;
+    place-items: center;
+    color: var(--quiet);
+    font-size: 12px;
+  }
+
+  .check {
+    appearance: none;
+    width: 17px;
+    height: 17px;
+    display: inline-grid;
+    place-items: center;
+    margin: 0;
+    border: 1.5px solid #b4c0d0;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+  }
+  .check:checked { border-color: var(--blue); background: var(--blue); }
+  .check:checked::after { content: "✓"; color: #fff; font-size: 12px; font-weight: 900; line-height: 1; }
+  .sidebar:not(.batch) .batch-check { display: none; }
+
+  .detail-footer {
+    min-height: 64px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--line);
+    background: #fbfcfe;
+  }
+  .save-state { color: var(--muted); font-size: 11.5px; }
+  .save-state strong { color: var(--ink); }
+  .detail-footer .spacer { flex: 1; }
+
+  .rename-popover {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: none;
+    place-items: center;
+    padding: 24px;
+    background: rgba(31, 46, 68, .22);
+  }
+  .rename-popover.show { display: grid; }
+  .popover-card { width: 390px; padding: 18px; border: 1px solid var(--line-strong); border-radius: 12px; background: #fff; box-shadow: 0 24px 70px rgba(22, 35, 53, .24); }
+  .popover-title { font-size: 15px; font-weight: 800; }
+  .popover-copy { margin: 6px 0 14px; color: var(--muted); font-size: 11.5px; }
+  .popover-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  .import-card { width: 460px; }
+  .import-file {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--soft);
+  }
+  .import-file-icon {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    border-radius: 7px;
+    color: var(--blue-dark);
+    background: var(--blue-soft);
+    font: 800 11px/1 "SF Mono", "Menlo", monospace;
+  }
+  .import-file-copy { min-width: 0; }
+  .import-file-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 780; }
+  .import-file-meta { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+  .import-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 14px; }
+  .import-stat { padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .import-stat strong { display: block; font: 800 17px/1 "SF Mono", "Menlo", monospace; }
+  .import-stat span { display: block; margin-top: 5px; color: var(--muted); font-size: 10.5px; }
+  .import-label { display: block; margin-bottom: 6px; color: #4f6076; font-size: 11.5px; font-weight: 750; }
+  .select {
+    width: 100%;
+    height: var(--control-h);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    padding: 0 10px;
+    color: var(--ink);
+    background: #fff;
+    font-size: 12px;
+  }
+  .import-note { margin-top: 8px; color: var(--quiet); font-size: 10.5px; line-height: 1.45; }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    z-index: 30;
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 9px 0 14px;
+    border-radius: 9px;
+    color: #fff;
+    background: #202b3d;
+    box-shadow: 0 12px 32px rgba(16, 27, 43, .26);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 14px);
+    transition: .18s ease;
+    font-size: 12px;
+  }
+  .toast.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+  .toast button { height: 30px; border: 0; border-radius: 6px; color: #bcd8ff; background: transparent; font-size: 12px; font-weight: 800; }
+  .toast button:hover { background: rgba(255,255,255,.09); }
+
+  @media (max-width: 1020px) {
+    .stage { padding: 12px; }
+    .window { width: calc(100vw - 24px); height: calc(100vh - 24px); }
+    .workspace { grid-template-columns: 275px minmax(0, 1fr); }
+    .channel-head, .channel-row { grid-template-columns: 38px minmax(190px, 1fr) 78px 112px 44px; }
+    .preview-note { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<main class="stage">
+  <section class="window" aria-label="通道配置管理原型">
+    <div class="titlebar">
+      <i class="traffic red"></i><i class="traffic amber"></i><i class="traffic green"></i>
+      <span class="window-name">TraceLab · 管理通道配置</span>
+      <span id="draftBadge" class="draft-badge" aria-hidden="true">有未保存修改</span>
+    </div>
+
+    <header class="header">
+      <div class="header-copy">
+        <h1>通道配置</h1>
+        <p>选择一个配置查看并调整通道；保存后，应用时按通道名称匹配当前 View 内的文件。</p>
+      </div>
+      <div class="header-summary">
+        <span id="configSummary" class="summary-token">5 个配置</span>
+        <span class="summary-token">当前 View · 3 个文件</span>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside id="sidebar" class="sidebar">
+        <div class="side-tools">
+          <div class="side-title-row">
+            <span class="side-title">已保存配置</span>
+            <span id="configCount" class="count-pill">5</span>
+            <span class="side-actions">
+              <button id="importConfig" class="button">导入</button>
+              <button id="createConfig" class="button">＋ 新建</button>
+            </span>
+            <input id="importFile" type="file" accept=".json,application/json" hidden>
+          </div>
+          <div class="search-wrap">
+            <svg class="search-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.7" stroke="currentColor" stroke-width="1.5"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <input id="configSearch" class="field search" type="search" placeholder="搜索配置或通道">
+          </div>
+        </div>
+
+        <div id="configList" class="config-list" aria-label="配置列表"></div>
+
+        <div class="side-footer">
+          <button id="batchMode" class="button ghost">批量管理配置</button>
+          <div class="batch-actions">
+            <button id="exitBatch" class="button">退出批量</button>
+            <button id="deleteConfigs" class="button danger" disabled>删除所选</button>
+          </div>
+        </div>
+      </aside>
+
+      <section class="detail" aria-label="配置通道明细">
+        <header class="detail-head">
+          <div class="detail-copy">
+            <div class="detail-title-row">
+              <h2 id="detailTitle" class="detail-title">—</h2>
+              <i id="dirtyDot" class="dirty-dot" title="有未保存修改" aria-hidden="true"></i>
+            </div>
+            <div id="detailMeta" class="detail-sub"></div>
+          </div>
+          <div class="detail-actions">
+            <div class="export-wrap">
+              <button id="exportConfig" class="button" aria-expanded="false" aria-haspopup="menu">导出 ▾</button>
+              <div id="exportMenu" class="export-menu" role="menu" hidden>
+                <button id="exportCurrent" class="export-item" role="menuitem">导出当前配置</button>
+                <button id="exportAll" class="export-item" role="menuitem">导出全部配置</button>
+              </div>
+            </div>
+            <button id="renameConfig" class="button">重命名</button>
+            <button id="duplicateConfig" class="button">复制</button>
+            <button id="deleteConfig" class="button danger">删除配置</button>
+          </div>
+        </header>
+
+        <div class="apply-preview">
+          <span class="preview-label">应用到当前 View</span>
+          <span id="matchChip" class="status-chip"><i></i><span></span></span>
+          <span id="missingChip" class="status-chip warn"><i></i><span></span></span>
+          <span class="preview-note">缺失通道会跳过，不影响其他通道</span>
+        </div>
+
+        <div class="channel-tools">
+          <div class="search-wrap">
+            <svg class="search-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.7" stroke="currentColor" stroke-width="1.5"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <input id="channelSearch" class="field search" type="search" placeholder="搜索此配置中的通道">
+          </div>
+          <button id="selectChannels" class="button">全选</button>
+          <button id="clearChannels" class="button">清除选择</button>
+          <button id="removeSelected" class="button danger" disabled>移除所选</button>
+          <span class="spacer"></span>
+          <button id="addCurrent" class="button">＋ 添加当前勾选</button>
+        </div>
+
+        <div class="channel-area">
+          <div class="channel-head">
+            <span><input id="masterChannel" class="check" type="checkbox" aria-label="全选当前筛选通道"></span>
+            <span>通道名称</span><span>单位</span><span>当前 View</span><span></span>
+          </div>
+          <div id="channelRows"></div>
+          <div id="channelEmpty" class="empty" hidden>此配置中没有符合条件的通道。</div>
+        </div>
+
+        <footer class="detail-footer">
+          <span id="saveState" class="save-state"></span>
+          <span class="spacer"></span>
+          <button id="closeDialog" class="button">关闭</button>
+          <button id="saveChanges" class="button primary" disabled>保存更改</button>
+        </footer>
+      </section>
+    </div>
+  </section>
+</main>
+
+<div id="renamePopover" class="rename-popover" role="dialog" aria-modal="true" aria-labelledby="renameTitle">
+  <div class="popover-card">
+    <div id="renameTitle" class="popover-title">重命名配置</div>
+    <div class="popover-copy">名称用于配置列表显示，不会修改通道名称。</div>
+    <input id="renameInput" class="field" maxlength="40">
+    <div class="popover-actions"><button id="cancelRename" class="button">取消</button><button id="confirmRename" class="button primary">保存名称</button></div>
+  </div>
+</div>
+
+<div id="importPopover" class="rename-popover" role="dialog" aria-modal="true" aria-labelledby="importTitle">
+  <div class="popover-card import-card">
+    <div id="importTitle" class="popover-title">确认导入通道配置</div>
+    <div class="popover-copy">导入前先核对内容；确认后仍需点击主窗口的“保存更改”。</div>
+    <div class="import-file">
+      <span class="import-file-icon">JSON</span>
+      <span class="import-file-copy"><span id="importFileName" class="import-file-name"></span><span id="importFileMeta" class="import-file-meta"></span></span>
+    </div>
+    <div class="import-stats">
+      <div class="import-stat"><strong id="importConfigCount">0</strong><span>个配置</span></div>
+      <div class="import-stat"><strong id="importChannelCount">0</strong><span>个通道名称</span></div>
+    </div>
+    <label class="import-label" for="conflictMode">遇到同名配置</label>
+    <select id="conflictMode" class="select">
+      <option value="keep">保留两份，并给导入项追加“（导入）”</option>
+      <option value="replace">用导入内容替换现有配置</option>
+      <option value="skip">跳过同名配置</option>
+    </select>
+    <div class="import-note">传递文件只保存配置名称、通道名称和单位；当前 View 的匹配状态会在导入后重新计算。</div>
+    <div class="popover-actions"><button id="cancelImport" class="button">取消</button><button id="confirmImport" class="button primary">导入配置</button></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status"><span id="toastText"></span><button id="toastAction" hidden>撤销</button></div>
+
+<script>
+const initialConfigs = [
+  { id: 'steer', name: '转向基础信号', updated: '今天 14:26', channels: [
+    ['EPS_1_CRC', '—', true], ['EPS_1_Resd', '—', true], ['EPS_1_RollgCntr', '—', true],
+    ['EPSSts', '—', true], ['EPS_EOTLearningSts', '—', true], ['EPS_SteeringWheelAngle', 'deg', true],
+    ['EPS_DrvrSteerTq', 'Nm', true], ['VehicleSpeed', 'km/h', false]
+  ]},
+  { id: 'return', name: '回正性能', updated: '昨天 16:08', channels: [
+    ['EPS_SteeringWheelAngle', 'deg', true], ['EPS_DrvrSteerTq', 'Nm', true], ['VehicleSpeed', 'km/h', false],
+    ['YawRate', 'deg/s', true], ['LateralAcceleration', 'm/s²', true]
+  ]},
+  { id: 'noise', name: '异响排查', updated: '7 月 21 日', channels: [
+    ['EPS_MotorCurrent', 'A', true], ['EPS_RackPosition', 'mm', true], ['VehicleSpeed', 'km/h', false], ['RoadSurfaceFlag', '—', false]
+  ]},
+  { id: 'thermal', name: '热保护验证', updated: '7 月 18 日', channels: [
+    ['EPS_EcuTemperature', '°C', true], ['EPS_MotorTemperature', '°C', true], ['EPS_MotorCurrent', 'A', true],
+    ['EPS_AssistLimit', '%', true], ['VehicleSpeed', 'km/h', false], ['BatteryVoltage', 'V', true]
+  ]},
+  { id: 'baseline', name: '路试基线', updated: '7 月 12 日', channels: [
+    ['EPS_DrvrSteerTq', 'Nm', true], ['EPS_SteeringWheelAngle', 'deg', true], ['VehicleSpeed', 'km/h', false],
+    ['YawRate', 'deg/s', true], ['LateralAcceleration', 'm/s²', true], ['EPS_MotorCurrent', 'A', true]
+  ]}
+];
+
+const TRANSFER_FORMAT = 'tracelab.channel-configs';
+const TRANSFER_VERSION = 1;
+const currentViewChannelNames = new Set(initialConfigs.flatMap(config =>
+  config.channels.filter(channel => channel[2]).map(channel => channel[0])
+));
+
+let configs = structuredClone(initialConfigs);
+let activeId = 'steer';
+let configQuery = '';
+let channelQuery = '';
+let chosenChannels = new Set(['EPS_1_CRC', 'EPS_1_Resd']);
+let batchChosen = new Set();
+let dirty = false;
+let undo = null;
+let pendingImport = null;
+
+const $ = selector => document.querySelector(selector);
+const configList = $('#configList');
+const channelRows = $('#channelRows');
+const activeConfig = () => configs.find(config => config.id === activeId) || configs[0];
+const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+})[character]);
+
+function portableConfig(config) {
+  return {
+    name: config.name,
+    channels: config.channels.map(channel => ({
+      name: channel[0],
+      unit: channel[1] === '—' ? '' : channel[1]
+    }))
+  };
+}
+
+function transferPayload(selectedConfigs) {
+  return {
+    format: TRANSFER_FORMAT,
+    version: TRANSFER_VERSION,
+    exported_at: new Date().toISOString(),
+    configs: selectedConfigs.map(portableConfig)
+  };
+}
+
+function safeFileStem(value) {
+  return String(value).trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '-').slice(0, 48) || 'channel-config';
+}
+
+function downloadTransfer(selectedConfigs, fileStem) {
+  const payload = transferPayload(selectedConfigs);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${safeFileStem(fileStem)}.tracelab-config.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  window.__lastTransferPayload = payload;
+  const suffix = dirty ? '，包含当前未保存修改' : '';
+  flash(`已导出 ${selectedConfigs.length} 个配置${suffix}`);
+}
+
+function normalizeImportPayload(raw) {
+  if (!raw || raw.format !== TRANSFER_FORMAT || raw.version !== TRANSFER_VERSION || !Array.isArray(raw.configs)) {
+    throw new Error('不是受支持的 TraceLab 通道配置文件');
+  }
+  if (!raw.configs.length) throw new Error('文件中没有可导入的配置');
+  if (raw.configs.length > 100) throw new Error('单次最多导入 100 个配置');
+  return raw.configs.map((config, configIndex) => {
+    const name = String(config && config.name || '').trim();
+    if (!name || name.length > 80) throw new Error(`第 ${configIndex + 1} 个配置名称无效`);
+    if (!Array.isArray(config.channels) || !config.channels.length) throw new Error(`“${name}”没有通道`);
+    if (config.channels.length > 2000) throw new Error(`“${name}”超过 2000 个通道`);
+    const seen = new Set();
+    const channels = config.channels.map((channel, channelIndex) => {
+      const channelName = String(typeof channel === 'string' ? channel : channel && channel.name || '').trim();
+      const unit = String(typeof channel === 'object' && channel && channel.unit || '').trim();
+      if (!channelName || channelName.length > 180) throw new Error(`“${name}”的第 ${channelIndex + 1} 个通道名称无效`);
+      return [channelName, unit || '—', currentViewChannelNames.has(channelName)];
+    }).filter(channel => {
+      if (seen.has(channel[0])) return false;
+      seen.add(channel[0]);
+      return true;
+    });
+    return { name, channels };
+  });
+}
+
+function visibleConfigs() {
+  const query = configQuery.trim().toLocaleLowerCase();
+  if (!query) return configs;
+  return configs.filter(config =>
+    config.name.toLocaleLowerCase().includes(query) ||
+    config.channels.some(channel => channel[0].toLocaleLowerCase().includes(query))
+  );
+}
+
+function visibleChannels() {
+  const config = activeConfig();
+  if (!config) return [];
+  const query = channelQuery.trim().toLocaleLowerCase();
+  return config.channels.filter(channel => !query || channel[0].toLocaleLowerCase().includes(query));
+}
+
+function setDirty(value = true) {
+  dirty = value;
+  $('#dirtyDot').classList.toggle('show', dirty);
+  $('#draftBadge').classList.toggle('show', dirty);
+  $('#dirtyDot').setAttribute('aria-hidden', String(!dirty));
+  $('#draftBadge').setAttribute('aria-hidden', String(!dirty));
+  $('#saveChanges').disabled = !dirty;
+}
+
+function renderConfigs() {
+  const visible = visibleConfigs();
+  configList.innerHTML = visible.map(config => `
+    <button class="config-row ${config.id === activeId ? 'active' : ''}" data-id="${config.id}">
+      <input class="check batch-check" type="checkbox" ${batchChosen.has(config.id) ? 'checked' : ''} aria-label="批量选择 ${escapeHtml(config.name)}">
+      <span class="config-copy"><span class="config-name">${escapeHtml(config.name)}</span><span class="config-meta">更新于 ${escapeHtml(config.updated)}</span></span>
+      <span class="config-count">${config.channels.length} CH</span>
+    </button>`).join('');
+  if (!visible.length) configList.innerHTML = '<div class="empty">没有符合条件的配置。</div>';
+  $('#configCount').textContent = configs.length;
+  $('#configSummary').textContent = `${configs.length} 个配置`;
+  $('#deleteConfigs').textContent = batchChosen.size ? `删除 ${batchChosen.size} 个配置` : '删除所选';
+  $('#deleteConfigs').disabled = !batchChosen.size;
+}
+
+function renderDetail() {
+  const config = activeConfig();
+  if (!config) return;
+  $('#detailTitle').textContent = config.name;
+  $('#detailMeta').textContent = `${config.channels.length} 个通道 · 更新于 ${config.updated}`;
+  const matched = config.channels.filter(channel => channel[2]).length;
+  const missing = config.channels.length - matched;
+  $('#matchChip span').textContent = `${matched} 个已匹配`;
+  $('#missingChip span').textContent = `${missing} 个缺失`;
+  $('#missingChip').hidden = missing === 0;
+  $('#saveState').innerHTML = dirty
+    ? `<strong>${config.channels.length} 个通道</strong> · 修改尚未保存`
+    : `<strong>${config.channels.length} 个通道</strong> · 已保存`;
+  renderChannels();
+}
+
+function renderChannels() {
+  const visible = visibleChannels();
+  channelRows.innerHTML = visible.map(channel => `
+    <div class="channel-row ${chosenChannels.has(channel[0]) ? 'chosen' : ''}" data-name="${escapeHtml(channel[0])}">
+      <span><input class="check channel-check" type="checkbox" ${chosenChannels.has(channel[0]) ? 'checked' : ''} aria-label="选择 ${escapeHtml(channel[0])}"></span>
+      <span class="channel-name" title="${escapeHtml(channel[0])}">${escapeHtml(channel[0])}</span>
+      <span class="unit">${escapeHtml(channel[1])}</span>
+      <span class="match ${channel[2] ? '' : 'missing'}">${channel[2] ? '已匹配' : '缺失'}</span>
+      <button class="button square remove-one" title="从配置移除 ${escapeHtml(channel[0])}" aria-label="从配置移除 ${escapeHtml(channel[0])}">×</button>
+    </div>`).join('');
+  $('#channelEmpty').hidden = visible.length > 0;
+  const selectedVisible = visible.filter(channel => chosenChannels.has(channel[0])).length;
+  $('#masterChannel').checked = visible.length > 0 && selectedVisible === visible.length;
+  $('#removeSelected').textContent = chosenChannels.size ? `移除所选 ${chosenChannels.size}` : '移除所选';
+  $('#removeSelected').disabled = chosenChannels.size === 0;
+  $('#clearChannels').disabled = chosenChannels.size === 0;
+}
+
+function renderAll() {
+  renderConfigs();
+  renderDetail();
+}
+
+function flash(text, action) {
+  clearTimeout(flash.timer);
+  undo = action || null;
+  $('#toastText').textContent = text;
+  $('#toastAction').hidden = !undo;
+  $('#toast').classList.add('show');
+  flash.timer = setTimeout(() => $('#toast').classList.remove('show'), 7000);
+}
+
+function removeChannels(names) {
+  const config = activeConfig();
+  const removed = config.channels.filter(channel => names.has(channel[0]));
+  if (!removed.length) return;
+  const wasDirty = dirty;
+  const oldChannels = [...config.channels];
+  config.channels = config.channels.filter(channel => !names.has(channel[0]));
+  chosenChannels.clear();
+  setDirty();
+  renderDetail();
+  flash(`已从“${config.name}”移除 ${removed.length} 个通道`, () => {
+    config.channels = oldChannels;
+    setDirty(wasDirty);
+    renderDetail();
+  });
+}
+
+configList.addEventListener('click', event => {
+  const row = event.target.closest('.config-row');
+  if (!row) return;
+  const id = row.dataset.id;
+  if ($('#sidebar').classList.contains('batch')) {
+    event.preventDefault();
+    batchChosen.has(id) ? batchChosen.delete(id) : batchChosen.add(id);
+    renderConfigs();
+    return;
+  }
+  activeId = id;
+  channelQuery = '';
+  $('#channelSearch').value = '';
+  chosenChannels.clear();
+  renderAll();
+});
+
+channelRows.addEventListener('click', event => {
+  const row = event.target.closest('.channel-row');
+  if (!row) return;
+  const name = row.dataset.name;
+  if (event.target.closest('.remove-one')) {
+    removeChannels(new Set([name]));
+    return;
+  }
+  if (chosenChannels.has(name)) chosenChannels.delete(name); else chosenChannels.add(name);
+  renderChannels();
+});
+
+$('#configSearch').addEventListener('input', event => { configQuery = event.target.value; renderConfigs(); });
+$('#channelSearch').addEventListener('input', event => { channelQuery = event.target.value; renderChannels(); });
+$('#selectChannels').onclick = () => { visibleChannels().forEach(channel => chosenChannels.add(channel[0])); renderChannels(); };
+$('#clearChannels').onclick = () => { chosenChannels.clear(); renderChannels(); };
+$('#masterChannel').onchange = event => {
+  visibleChannels().forEach(channel => event.target.checked ? chosenChannels.add(channel[0]) : chosenChannels.delete(channel[0]));
+  renderChannels();
+};
+$('#removeSelected').onclick = () => removeChannels(new Set(chosenChannels));
+
+$('#addCurrent').onclick = () => {
+  const config = activeConfig();
+  const additions = [['SteerWhlAgSpd', 'deg/s', true], ['EPS_AssistTq', 'Nm', true]];
+  const existing = new Set(config.channels.map(channel => channel[0]));
+  const added = additions.filter(channel => !existing.has(channel[0]));
+  config.channels.push(...added);
+  if (added.length) {
+    setDirty();
+    renderDetail();
+    flash(`已添加当前勾选中的 ${added.length} 个新通道`);
+  } else flash('当前勾选通道已全部包含在此配置中');
+};
+
+function setExportMenu(open) {
+  $('#exportMenu').hidden = !open;
+  $('#exportConfig').setAttribute('aria-expanded', String(open));
+}
+
+$('#exportConfig').onclick = () => setExportMenu($('#exportMenu').hidden);
+$('#exportCurrent').onclick = () => {
+  const config = activeConfig();
+  setExportMenu(false);
+  downloadTransfer([config], config.name);
+};
+$('#exportAll').onclick = () => {
+  setExportMenu(false);
+  downloadTransfer(configs, `TraceLab-${configs.length}-channel-configs`);
+};
+document.addEventListener('click', event => {
+  if (!event.target.closest('.export-wrap')) setExportMenu(false);
+});
+
+$('#importConfig').onclick = () => {
+  $('#importFile').value = '';
+  $('#importFile').click();
+};
+
+$('#importFile').addEventListener('change', async event => {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) {
+    flash('导入失败：文件不能超过 2 MB');
+    return;
+  }
+  try {
+    const incoming = normalizeImportPayload(JSON.parse(await file.text()));
+    const existingNames = new Set(configs.map(config => config.name));
+    const conflicts = incoming.filter(config => existingNames.has(config.name)).length;
+    pendingImport = { fileName: file.name, configs: incoming };
+    $('#importFileName').textContent = file.name;
+    $('#importFileMeta').textContent = `TraceLab v${TRANSFER_VERSION}${conflicts ? ` · ${conflicts} 个同名配置` : ' · 无同名冲突'}`;
+    $('#importConfigCount').textContent = incoming.length;
+    $('#importChannelCount').textContent = incoming.reduce((total, config) => total + config.channels.length, 0);
+    $('#conflictMode').value = 'keep';
+    $('#importPopover').classList.add('show');
+  } catch (error) {
+    pendingImport = null;
+    flash(`导入失败：${error.message || '文件内容无法读取'}`);
+  }
+});
+
+function uniqueImportedName(baseName, takenNames) {
+  let candidate = `${baseName}（导入）`;
+  let sequence = 2;
+  while (takenNames.has(candidate)) candidate = `${baseName}（导入 ${sequence++}）`;
+  return candidate;
+}
+
+$('#cancelImport').onclick = () => {
+  pendingImport = null;
+  $('#importPopover').classList.remove('show');
+};
+
+$('#confirmImport').onclick = () => {
+  if (!pendingImport) return;
+  const mode = $('#conflictMode').value;
+  const takenNames = new Set(configs.map(config => config.name));
+  const importedIds = [];
+  let skipped = 0;
+
+  pendingImport.configs.forEach((incoming, index) => {
+    const existing = configs.find(config => config.name === incoming.name);
+    if (existing && mode === 'skip') {
+      skipped += 1;
+      return;
+    }
+    if (existing && mode === 'replace') {
+      existing.channels = structuredClone(incoming.channels);
+      existing.updated = '刚刚';
+      importedIds.push(existing.id);
+      return;
+    }
+    const name = existing ? uniqueImportedName(incoming.name, takenNames) : incoming.name;
+    takenNames.add(name);
+    const imported = {
+      id: `import-${Date.now()}-${index}`,
+      name,
+      updated: '刚刚',
+      channels: structuredClone(incoming.channels)
+    };
+    configs.unshift(imported);
+    importedIds.push(imported.id);
+  });
+
+  const importedCount = importedIds.length;
+  pendingImport = null;
+  $('#importPopover').classList.remove('show');
+  if (!importedCount) {
+    flash(`没有导入配置${skipped ? `，已跳过 ${skipped} 个同名项` : ''}`);
+    return;
+  }
+  activeId = importedIds[0];
+  chosenChannels.clear();
+  setDirty();
+  renderAll();
+  flash(`已导入 ${importedCount} 个配置${skipped ? `，跳过 ${skipped} 个` : ''}；保存后生效`);
+};
+
+$('#renameConfig').onclick = () => {
+  $('#renameInput').value = activeConfig().name;
+  $('#renamePopover').classList.add('show');
+  setTimeout(() => $('#renameInput').select(), 0);
+};
+$('#cancelRename').onclick = () => $('#renamePopover').classList.remove('show');
+$('#confirmRename').onclick = () => {
+  const name = $('#renameInput').value.trim();
+  if (!name) return;
+  activeConfig().name = name;
+  setDirty();
+  $('#renamePopover').classList.remove('show');
+  renderAll();
+};
+$('#renameInput').addEventListener('keydown', event => { if (event.key === 'Enter') $('#confirmRename').click(); });
+
+$('#duplicateConfig').onclick = () => {
+  const source = activeConfig();
+  const copy = structuredClone(source);
+  copy.id = `copy-${Date.now()}`;
+  copy.name = `${source.name} 副本`;
+  copy.updated = '刚刚';
+  configs.unshift(copy);
+  activeId = copy.id;
+  setDirty();
+  renderAll();
+  flash('已复制配置，保存后生效');
+};
+
+$('#deleteConfig').onclick = () => {
+  if (configs.length === 1) { flash('至少需要保留一个配置'); return; }
+  const config = activeConfig();
+  configs = configs.filter(item => item.id !== config.id);
+  activeId = configs[0].id;
+  chosenChannels.clear();
+  setDirty();
+  renderAll();
+  flash(`已将“${config.name}”标记为删除，保存后生效`);
+};
+
+$('#createConfig').onclick = () => {
+  const config = { id: `new-${Date.now()}`, name: '未命名配置', updated: '刚刚', channels: [
+    ['EPS_1_CRC', '—', true], ['EPS_DrvrSteerTq', 'Nm', true], ['VehicleSpeed', 'km/h', false]
+  ]};
+  configs.unshift(config);
+  activeId = config.id;
+  setDirty();
+  renderAll();
+  $('#renameConfig').click();
+};
+
+$('#batchMode').onclick = () => { batchChosen.clear(); $('#sidebar').classList.add('batch'); renderConfigs(); };
+$('#exitBatch').onclick = () => { batchChosen.clear(); $('#sidebar').classList.remove('batch'); renderConfigs(); };
+$('#deleteConfigs').onclick = () => {
+  if (batchChosen.size >= configs.length) { flash('不能删除全部配置'); return; }
+  const count = batchChosen.size;
+  configs = configs.filter(config => !batchChosen.has(config.id));
+  if (!configs.some(config => config.id === activeId)) activeId = configs[0].id;
+  batchChosen.clear();
+  $('#sidebar').classList.remove('batch');
+  setDirty();
+  renderAll();
+  flash(`已标记删除 ${count} 个配置，保存后生效`);
+};
+
+$('#saveChanges').onclick = () => {
+  configs.forEach(config => { if (config.id === activeId) config.updated = '刚刚'; });
+  setDirty(false);
+  renderAll();
+  flash('通道配置已保存（原型）');
+};
+$('#closeDialog').onclick = () => flash(dirty ? '仍有未保存修改' : '原型：关闭窗口');
+$('#toastAction').onclick = () => {
+  if (undo) undo();
+  undo = null;
+  $('#toast').classList.remove('show');
+};
+
+renderAll();
+</script>
+</body>
+</html>
