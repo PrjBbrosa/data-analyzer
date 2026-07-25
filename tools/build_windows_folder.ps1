@@ -191,6 +191,7 @@ $HiddenImports = @(
     "mf4_analyzer.ui",
     "mf4_analyzer.ui.main_window",
     "mf4_analyzer.ui.pg_canvases",
+    "mf4_analyzer.io.importer_runtime_smoke",
     "mf4_analyzer.acquisition_capture",
     "mf4_analyzer.acquisition_capture.thresholds",
     "mf4_analyzer.acquisition_capture.health",

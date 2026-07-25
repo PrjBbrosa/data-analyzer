@@ -169,6 +169,19 @@ def test_windows_build_scripts_request_their_collection_flavors():
     assert '"--collect-all", "scipy"' not in lite
 
 
+def test_lite_build_prunes_only_the_resolved_scipy_openblas_dll():
+    """The optional native SciPy prune must fail closed on future layouts."""
+    lite = (ROOT / "tools" / "build_windows_folder_lite.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "_internal\\scipy.libs" in lite
+    assert '"libscipy_openblas*.dll"' in lite
+    assert "$SciPyOpenBlas.Count -ne 1" in lite
+    assert "Expected exactly one SciPy OpenBLAS DLL" in lite
+    assert "Expected scipy.libs to be empty after OpenBLAS removal" in lite
+
+
 def test_windows_folder_build_script_can_make_console_diagnostic_build():
     script = ROOT / "tools" / "build_windows_folder.ps1"
 

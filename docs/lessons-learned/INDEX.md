@@ -86,6 +86,8 @@ lesson by default.
 | [Release Notes Cover Implemented Features](codex-release-notes-cover-implemented-features.md) | Preparing or correcting a TraceLab release entry while the checkout contains implemented user-facing feature work. | See lesson |
 | [Frozen Import Dependencies Need One Contract](codex-frozen-import-dependency-contract.md) | Adding, removing, or packaging a supported data-file importer whose | See lesson |
 | [Channel Tree Refresh Must Not Detach A View File](codex-channel-tree-refresh-preserves-view-state.md) | Refreshing channel rows after a channel-editor add/remove operation, | See lesson |
+| [Lite SciPy Pruning Needs Frozen Import Smoke](codex-lite-scipy-pruning-smoke.md) | Reducing SciPy collection or native DLLs in the Windows analyzer-only | See lesson |
+| [Channel Configuration Manager Must Open Above the Taskbar](codex-channel-config-manager-taskbar-height.md) | Changing the default geometry or fixed-height regions of the Channel | See lesson |
 
 ## Selection Rules
 

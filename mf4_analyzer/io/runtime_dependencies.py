@@ -83,6 +83,19 @@ FROZEN_IMPORT_DEPENDENCIES = (
     ),
 )
 
+LITE_SCIPY_EXCLUDED_MODULES = (
+    "scipy.optimize",
+    "scipy.special",
+    "scipy.linalg",
+    "scipy.spatial",
+    "scipy.interpolate",
+    "scipy.stats",
+    "scipy.signal",
+    "scipy.fft",
+    "scipy.integrate",
+    "scipy.ndimage",
+)
+
 
 def dependencies_for_extension(extension: str) -> tuple[FrozenImportDependency, ...]:
     """Return the frozen runtime dependencies for a supported suffix."""
@@ -111,6 +124,9 @@ def pyinstaller_collection_args(flavor: str = "full") -> tuple[str, ...]:
             args.extend(("--hidden-import", "scipy.io.matlab"))
             continue
         args.extend(("--collect-all", dependency.package))
+    if flavor == "lite":
+        for module in LITE_SCIPY_EXCLUDED_MODULES:
+            args.extend(("--exclude-module", module))
     return tuple(args)
 
 

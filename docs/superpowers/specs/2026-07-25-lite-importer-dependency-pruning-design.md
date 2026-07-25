@@ -29,7 +29,7 @@ Keep `FROZEN_IMPORT_DEPENDENCIES` as the single declaration of lazy importers an
 - `full` retains `--collect-all <package>` for every declared dependency.
 - `lite` retains `--collect-all` for `h5py` and the existing non-SciPy importers, but replaces `--collect-all scipy` with explicit hidden imports for `scipy.io` and `scipy.io.matlab`.
 
-The standard PyInstaller SciPy hook remains active. It includes the SciPy DLL bundle and required utility extensions, but does not recursively collect all SciPy subpackages. This conservative change lets PyInstaller discover `loadmat` and sparse-matrix imports while removing unused toolkit trees. The 19.3 MB OpenBLAS DLL stays unless a frozen smoke test proves otherwise; this work does not add an untested custom replacement for PyInstaller's SciPy hook.
+Lite retains the standard SciPy hook because PyInstaller's automatic binary analysis copies `scipy.libs` even when the hook does not. After PyInstaller has created the lite artifact, the builder resolves its sole `libscipy_openblas*.dll` file within `_internal/scipy.libs` and removes it. Lite additionally excludes the runtime-proven-unused modules `scipy.optimize`, `scipy.special`, `scipy.linalg`, `scipy.spatial`, `scipy.interpolate`, `scipy.stats`, `scipy.signal`, `scipy.fft`, `scipy.integrate`, and `scipy.ndimage`. A source-process import blocker verified that `loadmat`, asammdf, nptdms, PyAV, h5py, CAN, Excel, and the application entry all import without that set. The post-build DLL-prune result is accepted only if the frozen four-fixture smoke passes; otherwise the pruning block is removed and the standard artifact is rebuilt.
 
 ### Lite build invocation
 
@@ -37,9 +37,9 @@ The standard PyInstaller SciPy hook remains active. It includes the SciPy DLL bu
 
 ### Verification
 
-Unit tests cover both argument sets, builder flavors, and absence of `--collect-all scipy` from lite. Existing MATLAB and audio loader tests remain source-level checks. Add a non-GUI `--importer-runtime-smoke` child mode to the frozen entry script; it accepts repeated `--import-path` arguments, loads each path through `DataLoader`, and writes a JSON record with its channel count. `tools/verify_lite_importer_runtime.py` creates a numeric HDF5 `.mat` and PCM WAV, invokes that child mode for those files plus the legacy MAT sample, and fails on a nonzero child exit or zero-channel result. Focused FFT, FFT-vs-Time, and Order tests confirm analysis isolation.
+Unit tests cover both argument sets, builder flavors, and absence of `--collect-all scipy` from lite. Existing MATLAB and audio loader tests remain source-level checks. Add a non-GUI `--importer-runtime-smoke` child mode to the frozen entry script; it accepts repeated `--import-path` arguments, loads each path through `DataLoader`, and writes a JSON record with its channel count. `tools/verify_lite_importer_runtime.py` generates legacy MATLAB, numeric HDF5/MATLAB v7.3, PCM WAV, and AAC-audio-in-MP4 fixtures, invokes that child mode for all four, and fails on a nonzero child exit or zero-channel result. Focused FFT, FFT-vs-Time, and Order tests confirm analysis isolation.
 
-The 383.1 MB uncompressed baseline is expected to fall by about 75--80 MB after removing unused SciPy package trees. The conservative design keeps OpenBLAS until proven otherwise, so the target range is about 303--308 MB. A compressed-release size is measured after the build and is not predicted from a fixed compression ratio.
+The completed fresh build measured 278.8 MB, down from the 383.1 MB uncompressed baseline: **104.3 MB (27.2%) saved**. The retained `scipy` tree is 8.9 MB (`io`, `sparse`, `_lib`) and `scipy.libs` is absent. PyAV remains 65.3 MB (`av` + `av.libs`), and h5py remains 7.6 MB. A compressed-release size is measured after the build and is not predicted from a fixed compression ratio.
 
 ## Non-goals
 

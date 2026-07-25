@@ -13,6 +13,8 @@
 - Lite supports legacy `.mat`, v7.3/HDF5 `.mat`, and `.mp4`, `.mov`, `.mkv`, `.m4v`, `.mp3`, `.m4a`, `.aac`, `.wav`, and `.flac` inputs.
 - The full `build_windows_folder.ps1` builder retains `--collect-all scipy`.
 - Lite must not pass `--collect-all scipy`; it passes hidden imports for `scipy.io` and `scipy.io.matlab`.
+- Lite excludes only the import-blocker-proven-unused SciPy modules: `optimize`, `special`, `linalg`, `spatial`, `interpolate`, `stats`, `signal`, `fft`, `integrate`, and `ndimage`.
+- Lite removes only its single `libscipy_openblas*.dll` after PyInstaller collection and only after resolving exactly one matching DLL under the current artifact's `_internal/scipy.libs` directory.
 - Retain `h5py` collection and PyAV's FFmpeg DLL closure.
 - Do not touch FFT, FFT-vs-Time, Order, batch, or analysis UI/canvas production modules.
 - Run the frozen-import verifier, focused importer tests, focused analysis tests, and a fresh Windows lite build.
@@ -67,10 +69,13 @@ def pyinstaller_collection_args(flavor: str = "full") -> tuple[str, ...]:
             args.extend(("--hidden-import", "scipy.io.matlab"))
         else:
             args.extend(("--collect-all", dependency.package))
+    if flavor == "lite":
+        for module in LITE_SCIPY_EXCLUDED_MODULES:
+            args.extend(("--exclude-module", module))
     return tuple(args)
 ```
 
-Add an argparse choice `--flavor`, defaulting to `full`, and pass it to the generator when `--pyinstaller-args-json` is selected.
+Declare `LITE_SCIPY_EXCLUDED_MODULES` as the exact ten-module tuple from the global constraint. Add an argparse choice `--flavor`, defaulting to `full`, and pass it to the generator when `--pyinstaller-args-json` is selected.
 
 - [ ] **Step 4: Run the dependency tests and verifier to verify GREEN**
 
@@ -151,14 +156,17 @@ git commit -m "build: use compact scipy collection in lite"
 
 **Files:**
 - Modify: `MF4 Data Analyzer V1.py:7-42`
+- Modify: `tools/build_windows_folder.ps1:183-214`
+- Modify: `tools/build_windows_folder_lite.ps1:121-235`
 - Create: `mf4_analyzer/io/importer_runtime_smoke.py`
 - Create: `tools/verify_lite_importer_runtime.py`
 - Test: `tests/test_importer_runtime_smoke.py`
 - Test: `tests/test_mat_format.py`
 - Test: `tests/test_audio_loader.py`
-- Test: `tests/test_fft.py`
+- Test: `tests/test_fft_amplitude_normalization.py`
 - Test: `tests/test_order_analysis.py`
 - Test: `tests/ui/test_fft_audio_compute_safety.py`
+- Test: `tests/ui/test_fft_time_coordinator.py`
 - Generated: `dist/TraceLabAnalyzer7.8/`
 
 **Interfaces:**
@@ -205,13 +213,13 @@ Add `--importer-runtime-smoke` and repeatable `--import-path` to the existing ea
 
 - [ ] **Step 4: Add the Windows frozen-smoke launcher and verify GREEN**
 
-`tools/verify_lite_importer_runtime.py` must use `tempfile.TemporaryDirectory`, `h5py.File` to write numeric `time` and `signal` datasets to `sample-v73.mat`, and `wave.open` to write a 48 kHz mono `sample.wav`. It must invoke:
+`tools/verify_lite_importer_runtime.py` must use `tempfile.TemporaryDirectory`, `scipy.io.savemat` to write `legacy.mat`, `h5py.File` plus a MATLAB v7.3 userblock header to write numeric `time` and `signal` datasets to `sample-v73.mat`, `wave.open` to write a 48 kHz mono `sample.wav`, and PyAV to write an AAC-audio `sample.mp4`. It must invoke:
 
 ```text
-<exe> --importer-runtime-smoke --import-path testdoc/175rpm_-45deg-270tighten.mat --import-path <temp>/sample-v73.mat --import-path <temp>/sample.wav --json <temp>/result.json
+<exe> --importer-runtime-smoke --import-path <temp>/legacy.mat --import-path <temp>/sample-v73.mat --import-path <temp>/sample.wav --import-path <temp>/sample.mp4 --json <temp>/result.json
 ```
 
-The launcher must parse `result.json`, require exactly three records, and require every `channels` value to be greater than zero.
+The launcher must parse `result.json`, require exactly four records, and require every `channels` value to be greater than zero.
 
 Run: `.\\.venv\\Scripts\\python.exe -m pytest tests/test_importer_runtime_smoke.py tests/test_mat_format.py tests/test_audio_loader.py -q`
 
@@ -219,7 +227,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Run source-level analysis regressions before rebuilding**
 
-Run: `.\\.venv\\Scripts\\python.exe -m pytest tests/test_mat_format.py tests/test_audio_loader.py tests/test_fft.py tests/test_order_analysis.py tests/ui/test_fft_audio_compute_safety.py -q`
+Run: `.\\.venv\\Scripts\\python.exe -m pytest tests/test_mat_format.py tests/test_audio_loader.py tests/test_fft_amplitude_normalization.py tests/test_order_analysis.py tests/ui/test_fft_audio_compute_safety.py tests/ui/test_fft_time_coordinator.py -q`
 
 Expected: PASS; no production FFT or Order code imports SciPy.
 
@@ -229,11 +237,17 @@ Run: `powershell -ExecutionPolicy Bypass -File tools\\build_windows_folder_lite.
 
 Expected: an onedir folder at `dist\\TraceLabAnalyzer7.8` and a printed size smaller than the 383.1 MB baseline.
 
+After PyInstaller succeeds, the lite builder resolves
+`$OutputDir\\_internal\\scipy.libs`, finds exactly one
+`libscipy_openblas*.dll` item, and removes that exact resolved file. The
+four-fixture frozen importer smoke is mandatory evidence that this prune is
+safe; if it fails, remove the prune block and rebuild before completion.
+
 - [ ] **Step 7: Run the frozen import smoke launcher**
 
-Run: `.\\.venv-build-win\\Scripts\\python.exe tools\\verify_lite_importer_runtime.py --exe dist\\TraceLabAnalyzer7.8\\TraceLabAnalyzer7.8.exe --legacy-mat testdoc\\175rpm_-45deg-270tighten.mat`
+Run: `.\\.venv-build-win\\Scripts\\python.exe tools\\verify_lite_importer_runtime.py --exe dist\\TraceLabAnalyzer7.8\\TraceLabAnalyzer7.8.exe`
 
-Expected: JSON result has three nonzero channel counts and the command returns zero. Do not remove `scipy.libs` unless a separately rebuilt artifact without it passes this command.
+Expected: JSON result has four nonzero channel counts and the command returns zero. Do not remove `scipy.libs` unless a separately rebuilt artifact without it passes this command.
 
 - [ ] **Step 8: Record before/after component sizes**
 

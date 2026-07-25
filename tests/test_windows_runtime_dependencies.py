@@ -42,6 +42,16 @@ def test_lite_collection_keeps_importer_support_without_whole_scipy():
         "--hidden-import", "scipy.io",
         "--hidden-import", "scipy.io.matlab",
         "--collect-all", "h5py",
+        "--exclude-module", "scipy.optimize",
+        "--exclude-module", "scipy.special",
+        "--exclude-module", "scipy.linalg",
+        "--exclude-module", "scipy.spatial",
+        "--exclude-module", "scipy.interpolate",
+        "--exclude-module", "scipy.stats",
+        "--exclude-module", "scipy.signal",
+        "--exclude-module", "scipy.fft",
+        "--exclude-module", "scipy.integrate",
+        "--exclude-module", "scipy.ndimage",
     )
 
 

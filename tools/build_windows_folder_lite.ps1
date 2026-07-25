@@ -128,7 +128,8 @@ $HiddenImports = @(
     "mf4_analyzer.ui_kit.widgets.searchable_combo",
     "mf4_analyzer.ui",
     "mf4_analyzer.ui.main_window",
-    "mf4_analyzer.ui.pg_canvases"
+    "mf4_analyzer.ui.pg_canvases",
+    "mf4_analyzer.io.importer_runtime_smoke"
     # NOTE: no mf4_analyzer.acquisition_capture.* / acquisition_ui.* here — that
     # omission is what makes this the lite build. Likewise the full build's
     # logging.config / logging.handlers / timeit hidden imports are gone: they
@@ -227,6 +228,25 @@ $PyInstallerArgs += $EntryScript
 
 if (-not (Test-Path $ExePath)) {
     throw "Build finished but exe was not found: $ExePath"
+}
+
+# ``scipy.io.loadmat`` itself is pure Python for the supported non-v7.3 MAT
+# files.  PyInstaller nevertheless carries SciPy's one OpenBLAS payload after
+# static analysis.  Remove only that known, resolved file, and fail closed if a
+# later SciPy layout carries any other native file in this directory.
+$SciPyLibsDir = Join-Path $OutputDir "_internal\scipy.libs"
+if (Test-Path -LiteralPath $SciPyLibsDir) {
+    $SciPyOpenBlas = @(Get-ChildItem -LiteralPath $SciPyLibsDir -File -Filter "libscipy_openblas*.dll")
+    if ($SciPyOpenBlas.Count -ne 1) {
+        throw "Expected exactly one SciPy OpenBLAS DLL in $SciPyLibsDir; found $($SciPyOpenBlas.Count)"
+    }
+    Remove-Item -LiteralPath $SciPyOpenBlas[0].FullName -Force
+
+    $RemainingSciPyLibs = @(Get-ChildItem -LiteralPath $SciPyLibsDir -Force)
+    if ($RemainingSciPyLibs.Count -ne 0) {
+        throw "Expected scipy.libs to be empty after OpenBLAS removal: $SciPyLibsDir"
+    }
+    Remove-Item -LiteralPath $SciPyLibsDir -Force
 }
 
 Write-Step "Build output"
