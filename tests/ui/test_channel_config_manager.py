@@ -208,6 +208,11 @@ def test_manager_geometry_preserves_html_controls_at_minimum_size(qtbot):
         [_config("drive", "动力分析", ("EPS_CRC", "Torque", "Long_Channel_Name"))],
         "drive",
     )
+    assert dialog.size().width() == 1180
+    assert dialog.size().height() == 680
+    assert dialog.minimumSize().width() == 940
+    assert dialog.minimumSize().height() == 680
+
     dialog.resize(940, 680)
     qtbot.wait(20)
 

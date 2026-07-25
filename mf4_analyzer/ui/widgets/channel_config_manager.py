@@ -134,7 +134,7 @@ class ChannelConfigManagerDialog(QDialog):
         self.setObjectName("channelConfigManagerHtml")
         self.setWindowTitle("管理通道配置")
         self.setModal(True)
-        self.resize(1180, 790)
+        self.resize(1180, 680)
         self.setMinimumSize(940, 680)
 
         self._baseline = list(configs)
