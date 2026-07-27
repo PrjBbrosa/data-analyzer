@@ -82,6 +82,94 @@ def test_resize_defers_label_rework_to_settle(qtbot, qapp):
     assert calls == [1]
 
 
+def test_raw_x_bounds_scan_shared_axis_once_per_plot_generation(
+    qtbot, qapp, monkeypatch,
+):
+    """Million-point shared HDF time axes must not be rescanned per row/event."""
+    canvas = TimeDomainCanvasPG()
+    qtbot.addWidget(canvas)
+    canvas.resize(600, 360)
+    canvas.show()
+    rows = _rows(3)
+
+    scans = []
+    original = canvas._scan_finite_x_bounds
+    monkeypatch.setattr(
+        canvas,
+        "_scan_finite_x_bounds",
+        lambda values: scans.append(id(values)) or original(values),
+    )
+
+    canvas.plot_channels(rows, mode="subplot")
+    assert len(scans) == 1
+
+    for offset in np.linspace(0.0, 0.4, 8):
+        canvas._buffered_xlim((offset, offset + 0.4))
+    assert len(scans) == 1, "pan/settle must consume cached raw-X bounds"
+
+    canvas.plot_channels(rows, mode="subplot")
+    assert len(scans) == 2, "a new plot generation performs one fresh scan"
+
+
+def test_raw_x_bounds_cache_preserves_finite_union_semantics(qtbot, qapp):
+    canvas = TimeDomainCanvasPG()
+    qtbot.addWidget(canvas)
+    shared = np.array([np.nan, -2.0, 1.0, np.nan], dtype=np.float64)
+    later = np.array([5.0, np.nan, 8.0], dtype=np.float64)
+    all_nan = np.array([np.nan, np.nan], dtype=np.float64)
+    rows = [
+        ("a", True, shared, np.arange(4.0), "#1769e0", "u", "fid"),
+        ("b", True, shared, np.arange(4.0), "#ef4444", "u", "fid"),
+        ("c", True, later, np.arange(3.0), "#00b894", "u", "fid"),
+        ("d", True, all_nan, np.arange(2.0), "#fbbf24", "u", "fid"),
+    ]
+
+    canvas.plot_channels(rows, mode="subplot")
+
+    assert canvas._data_x_union() == pytest.approx((-2.0, 8.0))
+
+
+def test_resize_burst_cancels_data_refresh_until_one_final_settle(
+    qtbot, qapp, monkeypatch,
+):
+    canvas = _make_canvas(qtbot, _rows(3), "subplot")
+    canvas._refresh_timer.start(1000)
+    canvas._coarse_timer.start(1000)
+    canvas._pending_coarse_xlim = (0.2, 0.8)
+
+    canvas.resize(640, 390)
+    qapp.processEvents()
+
+    assert not canvas._refresh_timer.isActive()
+    assert not canvas._coarse_timer.isActive()
+    assert canvas._pending_coarse_xlim is None
+    assert canvas._resize_settle_timer.isActive()
+
+    settled = []
+    monkeypatch.setattr(
+        canvas,
+        "_settle_visible_data",
+        lambda generation: settled.append(generation) or True,
+    )
+    canvas._on_resize_settled()
+
+    assert settled == [canvas._interaction_generation]
+    assert not canvas._refresh_timer.isActive(), (
+        "resize quiet-window completion must not arm a second data timer"
+    )
+
+
+def test_view_gesture_cancels_unfinished_resize_quiet_window(qtbot, qapp):
+    """Resize settling must not race an immediately following pan gesture."""
+    canvas = _make_canvas(qtbot, _rows(3), "subplot")
+    canvas._resize_settle_timer.start(canvas._RESIZE_SETTLE_MS)
+
+    canvas._begin_view_interaction()
+
+    assert not canvas._resize_settle_timer.isActive()
+    canvas._end_view_interaction()
+
+
 def test_x_tick_computation_memoized_across_rows_and_ticks(qtbot, qapp, monkeypatch):
     from mf4_analyzer.ui.pg_canvas.tick_density import TickDensityController
 

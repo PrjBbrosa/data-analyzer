@@ -274,6 +274,7 @@ class TimeDomainCanvasPG(QWidget):
     _INTERACTION_SETTLE_MS = 100
     _COARSE_REFRESH_MS = 100  # hard ceiling: at most 10 coarse setData/s
     _X_BUFFER_MARGIN_RATIO = 0.25
+    _RESIZE_SETTLE_MS = 150
     _TIMER_GENERATION_PROPERTY = "tracelabInteractionGeneration"
 
     def __init__(self, parent=None):
@@ -324,6 +325,14 @@ class TimeDomainCanvasPG(QWidget):
         # composite (fid, name) identity as _channel_lines so the two iterate
         # in lock-step and never collide across same-named files.
         self.channel_data = _ChannelKeyDict()
+        # Raw X extents are immutable for one render generation.  The HDF
+        # loader deliberately shares one time ndarray across every channel in
+        # a raster, so key the finite-bounds scan by the array fingerprint and
+        # cache the union consumed by Home/buffered pan/resize.  Range events
+        # must never turn this O(samples * channels) again.
+        self._raw_x_bounds_by_fingerprint = {}
+        self._raw_x_union_cache = None
+        self._raw_x_union_cache_valid = False
         # Parallel data_id dict (kept separate per design §4.2).
         self._channel_data_id = _ChannelKeyDict()
         # Composite keys of display-companion curves (e.g. filter overlays)
@@ -355,8 +364,16 @@ class TimeDomainCanvasPG(QWidget):
         self._selection_row_signatures = {}
         self._selection_mode = None
         self._selection_context_key = None
+        self._selection_xlabel = "Time (s)"
         self._last_selection_delta = None
         self._last_full_rebuild_reason = None
+        # Subplot rows may be collapsed and restored without destroying their
+        # PlotItem/ViewBox.  The retained order is append-only within one
+        # compatible selection generation; requests that need a middle insert
+        # fall back to the existing structural rebuild.
+        self._subplot_retained_order = []
+        self._subplot_retained_handles = {}
+        self._subplot_row_constraints = {}
 
         # --- viewport refresh state ------------------------------------
         self._refresh = True
@@ -407,12 +424,13 @@ class TimeDomainCanvasPG(QWidget):
         # threshold instead of inheriting the pessimistic initial False, so
         # a single wide curve no longer sticks AA-off forever.
         # --- resize re-arm debounce (Fix C) -----------------------------
-        # A 40 ms single-shot (mirrors _refresh_timer's coalesce window)
-        # so dragging the window border does not recompute the envelope on
-        # every intermediate size; it fires once the resize settles.
+        # A true resize quiet window.  It is intentionally longer than the
+        # interaction-settle timer: on Cocoa a six-row paint can itself exceed
+        # 100 ms, so the old 40 ms timer could expire while border dragging was
+        # still active and re-enter the data/tick/layout refresh path.
         self._resize_settle_timer = QTimer(self)
         self._resize_settle_timer.setSingleShot(True)
-        self._resize_settle_timer.setInterval(40)
+        self._resize_settle_timer.setInterval(self._RESIZE_SETTLE_MS)
         self._resize_settle_timer.timeout.connect(self._on_resize_settled)
         # The sigXRangeChanged connections so we can drop them on
         # rebuild (pyqtgraph analogue of the matplotlib callbacks
@@ -1019,6 +1037,7 @@ class TimeDomainCanvasPG(QWidget):
             mode=mode,
             render_context_key=render_context_key,
         )
+        self._selection_xlabel = str(xlabel)
         self._dense_raster.schedule_rebuild("plot-built", delay_ms=0)
         self._last_full_rebuild_reason = full_rebuild_reason
         report_progress(1000)
@@ -1056,7 +1075,10 @@ class TimeDomainCanvasPG(QWidget):
                 bool(meta.get("dash", False)),
             )
             parsed[key] = {
+                "name": str(name),
                 "visible": bool(visible),
+                "row": row,
+                "topology": topology,
                 "signature": (
                     data_id,
                     str(name),
@@ -1081,15 +1103,38 @@ class TimeDomainCanvasPG(QWidget):
         self._selection_mode = str(mode)
         self._selection_context_key = render_context_key
         self._last_selection_delta = None
+        if str(mode) == "subplot" and all(
+            parsed.get(key, {}).get("topology") == (None, None, False)
+            for key in bound_keys
+        ):
+            order = [key for key in parsed if key in bound_keys]
+            self._subplot_retained_order = order
+            self._subplot_retained_handles = {
+                key: self._channel_lines[key][0] for key in order
+            }
+            self._subplot_row_constraints = {}
+            for key, handle in self._subplot_retained_handles.items():
+                pi = getattr(handle, "plot_item", None)
+                if pi is None:
+                    continue
+                self._subplot_row_constraints[key] = (
+                    float(pi.minimumHeight()),
+                    float(pi.maximumHeight()),
+                )
+        else:
+            self._subplot_retained_order = []
+            self._subplot_retained_handles = {}
+            self._subplot_row_constraints = {}
 
     def try_apply_selection_delta(
         self, rows, *, mode, render_context_key=None,
     ):
         """Hide/re-show already-bound curves without rebuilding chart objects.
 
-        This intentionally does not add axes. A genuinely new channel or a
-        multi-row subplot membership change reports an explicit fallback reason
-        so the owner can perform the existing full rebuild safely.
+        Ordinary retained subplots may hide, restore, or append a row without
+        rebuilding their existing axes. New rows that require insertion, and
+        every unsupported topology, return an explicit fallback reason so the
+        owner can use the audited full rebuild safely.
         """
         if not self._selection_bound_keys:
             return {"applied": False, "reason": "no-render-model"}
@@ -1104,6 +1149,12 @@ class TimeDomainCanvasPG(QWidget):
 
         parsed = self._selection_rows(rows)
         requested = set(parsed)
+        if str(mode) == "subplot":
+            subplot_result = self._try_apply_subplot_selection_delta(
+                parsed,
+            )
+            if subplot_result is not None:
+                return subplot_result
         if not requested.issubset(self._selection_bound_keys):
             return {"applied": False, "reason": "new-channel"}
         if (
@@ -1151,6 +1202,193 @@ class TimeDomainCanvasPG(QWidget):
         self._dense_raster.sync_visibility()
         self.draw_idle()
         return dict(self._last_selection_delta)
+
+    def _try_apply_subplot_selection_delta(self, parsed):
+        """Retain ordinary subplot rows; return None for the legacy path."""
+        requested_order = list(parsed)
+        requested = set(requested_order)
+        previous_active = set(self._selection_active_keys)
+        if not self._subplot_retained_order and self._selection_bound_keys:
+            return None
+        if any(
+            info.get("topology") != (None, None, False)
+            or not info.get("visible", False)
+            for info in parsed.values()
+        ):
+            return {
+                "applied": False,
+                "reason": "subplot-complex-topology-change",
+            }
+
+        bound = set(self._selection_bound_keys)
+        for key in requested & bound:
+            if parsed[key]["signature"] != self._selection_row_signatures.get(key):
+                return {"applied": False, "reason": "source-revision-changed"}
+
+        # Existing retained rows keep their relative order.  New rows may be
+        # appended only; inserting one between already-bound rows would require
+        # manipulating QGraphicsLayout's private row/item maps, so use the
+        # audited full rebuild for that structural case.
+        requested_existing = [key for key in requested_order if key in bound]
+        retained_existing = [
+            key for key in self._subplot_retained_order if key in requested
+        ]
+        seen_new = False
+        for key in requested_order:
+            if key not in bound:
+                seen_new = True
+            elif seen_new:
+                return {
+                    "applied": False,
+                    "reason": "subplot-insertion-order-change",
+                }
+        if requested_existing != retained_existing:
+            return {
+                "applied": False,
+                "reason": "subplot-order-change",
+            }
+
+        xlim = self._capture_primary_xlim()
+        added = []
+        for key in requested_order:
+            if key in bound:
+                continue
+            row = parsed[key]["row"]
+            if len(row) >= 7:
+                name, visible, t, sig, color, unit, data_id = row[:7]
+            else:
+                name, visible, t, sig, color, unit = row[:6]
+                data_id = None
+            handle = PgAxisHandle(
+                plot_item=self._add_plot_item(
+                    row=len(self._subplot_retained_order), col=0,
+                ),
+                owner_canvas=self,
+            )
+            self._overlay_axes._bind_channel(
+                handle,
+                name,
+                t,
+                sig,
+                color,
+                unit,
+                data_id,
+                xlabel=None,
+                skip_envelope=False,
+            )
+            self._attach_axis_handle_callbacks(handle)
+            self._subplot_retained_order.append(key)
+            self._subplot_retained_handles[key] = handle
+            pi = handle.plot_item
+            self._subplot_row_constraints[key] = (
+                float(pi.minimumHeight()), float(pi.maximumHeight()),
+            )
+            self._selection_bound_keys.add(key)
+            self._selection_row_signatures[key] = parsed[key]["signature"]
+            added.append(key)
+            bound.add(key)
+
+        active_handles = []
+        active_specs = []
+        for key in self._subplot_retained_order:
+            handle = self._subplot_retained_handles.get(key)
+            pi = getattr(handle, "plot_item", None)
+            if handle is None or pi is None:
+                continue
+            active = key in requested
+            pair = self._channel_lines.get(key)
+            pdi = (
+                getattr(pair[1], "plot_data_item", None)
+                if pair is not None else None
+            )
+            if active:
+                minimum, maximum = self._subplot_row_constraints.get(
+                    key, (0.0, 16777215.0),
+                )
+                pi.setMaximumHeight(maximum)
+                pi.setMinimumHeight(minimum)
+                pi.show()
+                if pdi is not None:
+                    pdi.setVisible(True)
+                active_handles.append(handle)
+                row = self.channel_data.get(key)
+                if row is not None:
+                    _t, _sig, color, unit = row
+                    active_specs.append(
+                        (handle, parsed.get(key, {}).get("name") or
+                         self.channel_data.display_label(key, key), color, unit)
+                    )
+            else:
+                if pdi is not None:
+                    pdi.setVisible(False)
+                    self._clear_hidden_line_cache(pdi)
+                pi.hide()
+                pi.setMinimumHeight(0.0)
+                pi.setMaximumHeight(0.0)
+
+        self._disconnect_xrange_listener()
+        self.axes_list = active_handles
+        self._primary_xaxis_ax = active_handles[0] if active_handles else None
+        for handle in active_handles:
+            if xlim is not None:
+                vb = handle.view_box
+                try:
+                    vb.blockSignals(True)
+                    handle.set_xlim(*xlim)
+                finally:
+                    try:
+                        vb.blockSignals(False)
+                    except Exception:
+                        pass
+            self._connect_xrange_listener(handle)
+
+        for idx, handle in enumerate(active_handles):
+            is_bottom = idx == len(active_handles) - 1
+            self._overlay_axes._configure_subplot_bottom_axis(
+                handle, is_bottom=is_bottom,
+            )
+            if is_bottom:
+                try:
+                    handle.set_xlabel(self._selection_xlabel)
+                except Exception:
+                    pass
+
+        self._teardown_inside_labels()
+        self._subplot_label_specs = active_specs
+        if active_specs:
+            self._recheck_subplot_label_placement()
+            self._unify_subplot_left_axis_widths()
+            self._unify_subplot_bottom_axis_heights()
+
+        probe_w = self._overlay_axes._initial_bind_pixel_width()
+        self._subplot_dense_count = 0
+        if probe_w and probe_w > 0:
+            for key in requested_order:
+                row = self.channel_data.get(key)
+                if row is not None and len(row[1]) / probe_w >= _renderer._SUBPLOT_DENSE_DECIMATION:
+                    self._subplot_dense_count += 1
+
+        self._selection_active_keys = requested
+        self._raw_x_union_cache = None
+        self._raw_x_union_cache_valid = False
+        self._last_selection_delta = {
+            "applied": True,
+            "reason": "subplot-object-reuse",
+            "added": len(added),
+            "removed": len(previous_active - requested),
+        }
+        # The public result stays compact/stable; detailed counts remain on the
+        # canvas for diagnostics.
+        self._dense_raster.sync_visibility()
+        if added:
+            self._dense_raster.schedule_rebuild("selection-row-added", delay_ms=0)
+            self._run_replot_callbacks()
+        self._tick_density_controller._apply_tick_density_to_all_axes()
+        self.disable_interactive_quality()
+        self.schedule_idle_quality()
+        self.chart_rebuilt.emit()
+        self.draw_idle()
+        return {"applied": True, "reason": "subplot-object-reuse"}
 
     def _set_primary_line_visible(self, name, visible):
         """Hide/show a primary (original) curve in place without rebuilding.
@@ -2038,18 +2276,59 @@ class TimeDomainCanvasPG(QWidget):
             self.schedule_idle_quality()
 
     def _data_x_union(self):
+        if self._raw_x_union_cache_valid:
+            return self._raw_x_union_cache
         bounds = []
-        for t, _sig, _color, _unit in self.channel_data.values():
-            try:
-                arr = np.asarray(t, dtype=float)
-                finite = arr[np.isfinite(arr)]
-            except Exception:
-                finite = np.asarray([])
-            if finite.size:
-                bounds.append((float(finite.min()), float(finite.max())))
-        if not bounds:
+        retained = set(self._subplot_retained_order)
+        active = set(self._selection_active_keys)
+        for key, _name, row in self.channel_data.composite_items():
+            if retained and key not in active:
+                continue
+            t, _sig, _color, _unit = row
+            fingerprint = self._selection_array_fingerprint(t)
+            if fingerprint not in self._raw_x_bounds_by_fingerprint:
+                self._raw_x_bounds_by_fingerprint[fingerprint] = (
+                    self._scan_finite_x_bounds(t)
+                )
+            bound = self._raw_x_bounds_by_fingerprint[fingerprint]
+            if bound is not None:
+                bounds.append(bound)
+        union = None
+        if bounds:
+            union = (
+                min(lo for lo, _hi in bounds),
+                max(hi for _lo, hi in bounds),
+            )
+        self._raw_x_union_cache = union
+        self._raw_x_union_cache_valid = True
+        return union
+
+    @staticmethod
+    def _scan_finite_x_bounds(values):
+        """Return finite min/max for one raw X array (the counted scan seam)."""
+        try:
+            arr = np.asarray(values, dtype=float)
+            finite_mask = np.isfinite(arr)
+        except Exception:
             return None
-        return (min(lo for lo, _hi in bounds), max(hi for _lo, hi in bounds))
+        if arr.size == 0 or not finite_mask.any():
+            return None
+        if finite_mask.all():
+            finite = arr
+        else:
+            finite = arr[finite_mask]
+        return (float(finite.min()), float(finite.max()))
+
+    def _invalidate_raw_x_bounds(self, values=None):
+        """Invalidate only when raw channel membership/data actually changes."""
+        self._raw_x_union_cache = None
+        self._raw_x_union_cache_valid = False
+        if values is None:
+            self._raw_x_bounds_by_fingerprint.clear()
+            return
+        self._raw_x_bounds_by_fingerprint.pop(
+            self._selection_array_fingerprint(values), None,
+        )
 
     def _set_xrange_to_data_union(self):
         x_union = self._data_x_union()
@@ -2165,6 +2444,7 @@ class TimeDomainCanvasPG(QWidget):
         self._channel_lines = _ChannelKeyDict()
         self._channel_view_state_lines = {}
         self.channel_data = _ChannelKeyDict()
+        self._invalidate_raw_x_bounds()
         self._channel_data_id = _ChannelKeyDict()
         self._companion_names = set()
         self._companion_source = {}
@@ -2175,7 +2455,11 @@ class TimeDomainCanvasPG(QWidget):
         self._selection_row_signatures = {}
         self._selection_mode = None
         self._selection_context_key = None
+        self._selection_xlabel = "Time (s)"
         self._last_selection_delta = None
+        self._subplot_retained_order = []
+        self._subplot_retained_handles = {}
+        self._subplot_row_constraints = {}
         self._curve_path_cache.clear()
         self._last_range_key.clear()
         self._line_wall_state.clear()
@@ -2775,6 +3059,14 @@ class TimeDomainCanvasPG(QWidget):
         self._interaction_state = "interactive"
         try:
             self._refresh_timer.stop()
+        except Exception:
+            pass
+        # A user gesture supersedes an unfinished resize quiet window.  Leaving
+        # it armed would let resize-driven setData race the coarse 10 Hz path
+        # (notably just after an initial show/resize), defeating the
+        # transform-only interaction contract.
+        try:
+            self._resize_settle_timer.stop()
         except Exception:
             pass
         self.disable_interactive_quality()
@@ -3527,7 +3819,20 @@ class TimeDomainCanvasPG(QWidget):
             pass
 
     def resizeEvent(self, event):
-        """Defer resize-driven recompute to the 40 ms settle pass."""
+        """Keep border dragging transform/paint-only until one quiet settle."""
+        try:
+            self.disable_interactive_quality()
+        except Exception:
+            pass
+        try:
+            self._refresh_timer.stop()
+            self._coarse_timer.stop()
+            self._pending_coarse_xlim = None
+            if self._channel_lines:
+                self._refresh_pending = True
+                self._interaction_state = "interactive"
+        except Exception:
+            pass
         try:
             super().resizeEvent(event)
         finally:
@@ -3540,14 +3845,11 @@ class TimeDomainCanvasPG(QWidget):
                 pass
 
     def _on_resize_settled(self):
-        """Resize-debounce slot (Fix C): recompute the viewport envelope at
-        the new width and re-arm the idle-AA timer so AA recovers.
-
-        Reuses the existing debounced envelope-refresh path (set
-        ``_refresh_pending`` + start ``_refresh_timer``) rather than adding
-        a new rendering primitive; the resize → data-settle → idle-AA
-        sequencing is the two-stage settle the design accepts (R4).
-        """
+        """Run label/tick/layout/data work once after the final resize event."""
+        try:
+            self._resize_settle_timer.stop()
+        except Exception:
+            pass
         try:
             self.disable_interactive_quality()
         except Exception:
@@ -3573,14 +3875,17 @@ class TimeDomainCanvasPG(QWidget):
                 self._sync_overlay_aux_viewboxes()
         except Exception:
             pass
-        # Recompute the envelope for the new plot-area width, matching the
-        # _on_xrange_changed scheduling pattern (no new rendering path).
         try:
-            if not self._refresh_pending:
+            if self._channel_lines:
                 self._refresh_pending = True
-                self._arm_interaction_settle()
+                self._interaction_state = "settling"
+                self._settle_visible_data(self._interaction_generation)
+            else:
+                self._refresh_pending = False
+                self._interaction_state = "idle"
         except Exception:
-            pass
+            self._refresh_pending = False
+            self._interaction_state = "idle"
         self.schedule_idle_quality()
 
     # ------------------------------------------------------------------

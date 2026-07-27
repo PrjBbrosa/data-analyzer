@@ -322,3 +322,66 @@
 - Recorded the final interaction constraints: single expanded trace, no top slot strip or left management pane in this view, vertical scroll retention, adjacent-card context, and a hard laptop-viewport budget.
 - Wrote `docs/analyzer/acquisition/specs/2026-07-10-cockpit-live-card-inplace-focus-spec.md` and its paired implementation plan. Both retain Replay isolation, prescribe a 78% focus target / 80% hard cap, and replace the duplicate-curve / isolated-card behavior with a single-Sparkline in-place Focus contract.
 - Cross-checked headings, artifact links, document routing, Focus presentation boundaries, and `git diff --check`. Corrected the plan so Replay retains the existing hidden-by-default `liveFocusShell` rather than losing its isolated Focus UI.
+
+---
+
+## 2026-07-26 HDF Time-Domain Interaction Performance
+
+### Phase 1: Regression report and architecture plan
+
+- **Status:** in_progress
+- **Started:** 2026-07-26
+- Actions taken:
+  - Loaded the project lessons and file-based planning workflow.
+  - Preserved the completed prior planning records and added a scoped current-task addendum.
+  - Reused the live same-HDF historical probes only after verifying isolated module paths.
+  - Confirmed the two main historical facts: resize was partially optimized in June, while raw X-union scanning entered pan/resize only in `5a565fcf`.
+- Files modified:
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
+## Current Test Baseline
+
+| Test | Expected | Actual | Status |
+|---|---|---|---|
+| Same-HDF historical Cocoa probe | Resolve each historical module from its isolated export | Verified module paths under `/private/tmp/tracelab-version-probe.*` | PASS |
+| Eight settled pan windows | Historical union scans 0; current exposes regression | v7.5/v7.6/v7.7/pre-5a `0`; current `8`, about `280 ms` | RED baseline captured |
+
+- Loaded the focused performance/cache/dense-raster/channel-state lessons.
+- Converted their requirements into consumer call-count, generation invalidation, first-paint, and real Cocoa acceptance gates.
+- Corrected the first stale BLF/CRC artifact path lookup before reading the governing spec/plan.
+- Read the July 23 selection-delta plan against the current implementation and
+  confirmed a contract gap: common multi-subplot checkbox changes still take
+  the explicit full-rebuild fallback.
+- Audited the existing dense-raster backend. It is structurally reusable for
+  dense continuous HDF rows, but only behind a narrow candidate policy and
+  only if the cache/quiet-window fixes leave Cocoa paint above budget.
+- Added red-first raw-X and resize quiet-window tests, observed the intended
+  two failures, implemented the generation cache and one-stage resize settle,
+  then passed the focused compatibility set: `8 passed`.
+- First ad-hoc real-HDF benchmark assumed a lowercase `time` column and failed
+  with `KeyError: 'time'`; inspected the live group schema and reran with the
+  real `Time` column and `units` mapping.
+- Post-fix Cocoa result: one raw-X scan total, pan p50/p95 `123.6/132.1 ms`,
+  resize p50/p95 `207.0/240.8 ms`. This is a large recovery but still above a
+  fluid interaction budget, so the plan's conditional continuous-raster stage
+  is now authorized by measurement.
+
+### Phase 2–6: Implemented and Verified
+
+- **Status:** complete for source/macOS Cocoa; Windows packaged EXE pending.
+- Implemented raw-X finite-bound generation caching, a 150 ms resize quiet
+  window with one synchronous final settle, and retained ordinary subplot rows
+  for hide/restore/append selection deltas.
+- Tested and rejected the direct dense-discrete pixmap reuse for continuous
+  HDF: six DPR2 images made pan/resize slower, so no such production change
+  remains and a negative test prevents accidental reintroduction.
+- Added the standards document and `benchmark_timedomain_interaction.py`;
+  it splits callback, forced paint, held frames and final settle and emits a
+  machine-readable JSON record with deterministic counts.
+- Final real-HDF Cocoa gate passed: initial `981.5 ms`, pan p95 `84.5 ms`,
+  resize p95 `128.5 ms`, callback p95 `13.1 ms`, paint p95 `101.0 ms`,
+  raw-X scans `1`, held-pan setData `0`.
+- Verification passed: hotpath `16 passed in 7.61s`, dense-raster `23 passed
+  in 8.74s`, pg-canvas `362 passed, 1 deselected in 90.65s`.

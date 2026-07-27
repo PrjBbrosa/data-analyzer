@@ -216,3 +216,95 @@ Actual Windows W1/W2 JSON remains absent and therefore BLOCKED.
   selected-channel fill, batch-card cleanup, visible `×` actions, import
   preview, and the 940×680 footer/channel-width contract. It is not a
   substitute for a foreground TraceLab session.
+
+---
+
+## 2026-07-26 HDF Time-Domain Performance Findings
+
+- Reproduction file: `/Users/donghang/Downloads/260417-ripple-PK2C-电机加热-1.hdf`, 24 kHz raster, 1,188,000 samples per selected channel, six subplot rows.
+- Isolated historical Cocoa comparison with the same file showed current v7.8 pan p50/p95 `213/222 ms` versus v7.5 `184/195 ms` and v7.6 `178/195 ms`; resize p50/p95 was current `271/296 ms` versus v7.5 `214/251 ms` and v7.6 `224/277 ms`.
+- Pure HDF parse stayed near `0.26 s`; the loader is not the recent regression.
+- Before `5a565fcf`, `_data_x_union()` was used for build/Home only. The new buffered settle path calls it for every settled/coarse refresh.
+- Eight settled pan windows called `_data_x_union()` zero times in v7.5/v7.6/v7.7/pre-`5a565fcf`, but eight times in current v7.8, costing about `280 ms` total in the isolated probe.
+- The six HDF rows share one 1,188,000-point time array, yet current `_data_x_union()` repeats `isfinite` plus finite-copy/min/max for every channel.
+- Resize optimization already exists: `816c2083` moved label/axis rework to a 40 ms settle pass. It is incomplete, because a slow paint lets the timer expire during a live resize and current settle then enters `_buffered_xlim()` and the raw union scan.
+- Current continuous HDF channels classify as `general`, so they pay the new coverage/settle management but do not receive the dense-discrete cached-raster benefit.
+- Existing tests prove synthetic setData/call-count contracts but do not bound raw-union scans, six-row million-sample resize behavior, or Cocoa end-to-end latency.
+
+### Current Technical Direction
+
+| Decision | Rationale |
+|---|---|
+| Cache raw X bounds at the canvas data-generation boundary and deduplicate identical time-array identities | Bounds are immutable for one plot generation; pan/resize must be O(1), and shared HDF axes must not be scanned six times. |
+| Make resize a real quiet window that cancels pending coarse/settled refresh work on every resize event | The existing 40 ms label debounce is defeated when a frame itself exceeds 40 ms. |
+| Keep the dense-discrete raster path unchanged in the first implementation pass | The confirmed regression can be removed with lower risk; a continuous raster backend is a separate fidelity/performance decision. |
+| Add deterministic default regressions plus an opt-in Cocoa threshold benchmark | Call counts are stable in CI; Cocoa paint latency is the user-visible truth. |
+
+### Existing July 23 Contract Gap
+
+- The July 23 spec and implementation plan require add/remove/show/hide channel
+  deltas while preserving unchanged `PlotDataItem`/`ViewBox` identities.
+- Current `try_apply_selection_delta()` deliberately rejects a changed active
+  set in multi-row `subplot` or `overlay` mode with a topology-change reason.
+  The MainWindow then falls back to `plot_channels()`, whose `clear()` destroys
+  the whole chart. The prior plan is therefore not proof that checkbox latency
+  was implemented.
+- The existing dense-raster layer already provides the correct raw/display
+  separation and transform-only interaction model, but only accepts
+  `dense_discrete` profiles. The 1,188,000-point HDF waveforms are `general`,
+  so their interactive-quality transition clears native curve caches and
+  makes six vector envelopes repaint on each frame.
+- Extending the raster candidate policy to every `general` channel would be
+  too broad. Any reuse must be restricted by raw density, subplot mode,
+  finiteness/linear-axis compatibility, memory caps, and a native fallback;
+  low-density smooth curves must retain their current native-AA behavior.
+- The best-risk sequence is now explicit: (1) O(1) raw-X bounds, (2) a true
+  resize quiet window, (3) measure, (4) only if paint remains above budget,
+  admit dense continuous subplot rows to the already-tested raster backend,
+  and (5) separately replace full chart rebuilds with object-preserving
+  topology relayout.
+
+### Post Stage 1-2 Cocoa Measurement
+
+- Same real HDF, six rows, 1900×1100 Cocoa: raw-X scan count is now `1` for
+  the full plot generation and stays `1` across ten pan windows plus eight
+  resizes.
+- Settled pan after warmup improved to p50/p95 `123.6/132.1 ms` from the
+  pre-fix current baseline `213/222 ms`.
+- Resize improved to p50/p95 `207.0/240.8 ms` from `271/296 ms`.
+- This restores or beats the historical v7.5/v7.6 relative level, but a
+  124 ms settled pan still visibly stalls. The remaining cost is therefore
+  sufficient evidence to execute the conditional dense-continuous raster
+  stage rather than stop at the union-cache micro-optimization.
+
+### Loaded Lesson Constraints
+
+- The raw-X cache must be proven at the consumer: tests must count the uncached finite-bound scan across multiple pan/resize refreshes, not merely assert that a cache field exists.
+- End-to-end `set_xlim/resize → settle → viewport.repaint()` numbers remain authoritative; an isolated union-scan speedup cannot claim the plot SLA by itself.
+- Cache invalidation is generation/state conditional: clear cached bounds when channel data is rebuilt or mutated, never on every handler replay.
+- Keep `dense_discrete` raster DPR, one-device-pixel stroke, AA-blocking, and Cocoa `<16 ms` transform / `<25 ms` settle contracts intact.
+- Dense subplot first-paint cost must still be measured with `viewport.repaint()`; a cached `grab()` is not evidence.
+- Channel-tree performance edits must not detach the file from its View or lose colors, hidden state, axis groups, selection, or expansion state.
+- The July 23 BLF/CRC governing artifacts live under `docs/analyzer/specs`, `docs/analyzer/plans`, and `docs/analyzer/reviews`, not `docs/superpowers`.
+
+### Executed Architecture Decision and Final Evidence
+
+- The conditional continuous-raster experiment was executed, then rejected:
+  six DPR2 pixmaps produced held-pan p50/p95 `176.6/179.9 ms` and resize
+  p50/p95 `271.4/359.8 ms`, worse than native-vector probes. No experiment
+  production code remains; a negative test keeps ordinary `general` continuous
+  rows out of that backend.
+- The accepted third layer is ordinary-subplot retained-row delta. Compatible
+  hide/re-show keeps the original PlotItem/ViewBox and collapses the hidden
+  layout row; a compatible append builds one new row. Complex topology and
+  insertion-order changes deliberately return an auditable full-rebuild reason.
+- Final real HDF Cocoa benchmark (1900×1100, six selected channels) passed:
+  initial plot `981.5 ms`; held-pan p50/p95 `74.8/84.5 ms`; pan settle
+  `119.2 ms`; resize p50/p95 `125.5/128.5 ms`; resize settle `120.7 ms`;
+  checkbox callback p95 `13.1 ms`; checkbox paint p95 `101.0 ms`; raw-X
+  scans `1`; held-pan setData `0`.
+- Regression evidence: `16 passed in 7.61s` hotpath, `23 passed in 8.74s`
+  dense-raster, and `362 passed, 1 deselected in 90.65s` full pg-canvas.
+- This is source plus real Cocoa-canvas evidence, not packaged Windows proof.
+  Windows EXE remains pending under the same scenario and relative-baseline
+  rules in the performance standards.

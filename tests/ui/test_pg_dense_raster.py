@@ -42,6 +42,23 @@ def _smooth_row():
     )
 
 
+def _dense_continuous_rows(count=3, *, samples=120_000):
+    t = np.linspace(0.0, 50.0, samples, dtype=np.float64)
+    colors = ("#1769e0", "#00a67d", "#ff5a0a", "#8747ff")
+    return [
+        (
+            f"physical-{idx}",
+            True,
+            t,
+            np.sin((idx + 1) * t) + 0.02 * np.cos(31.0 * t),
+            colors[idx % len(colors)],
+            "g",
+            "dense-continuous",
+        )
+        for idx in range(count)
+    ]
+
+
 def _shown_canvas(qapp, rows, *, mode="subplot"):
     canvas = TimeDomainCanvasPG()
     canvas.resize(1200, 700)
@@ -129,6 +146,20 @@ def test_dense_raster_is_transform_only_until_100ms_settle(qtbot, qapp):
     assert settled.data_rect[0] <= 8.0
     assert settled.data_rect[1] >= 10.0
     assert canvas.quality_status()["state"] == "green"
+
+
+@pytest.mark.parametrize(
+    "mode,count", [("subplot", 1), ("subplot", 3), ("overlay", 3)],
+)
+def test_dense_continuous_does_not_enter_crc_pixmap_backend(qapp, mode, count):
+    """Six DPR2 pixmaps regress Cocoa composition; keep physical rows native."""
+    rows = _dense_continuous_rows(count)
+    canvas = _shown_canvas(qapp, rows, mode=mode)
+    canvas._dense_raster.flush_pending(canvas._interaction_generation)
+
+    assert all(
+        canvas._dense_raster.entry_for(row[0]) is None for row in rows
+    )
 
 
 def test_y_only_interaction_rebuilds_after_quiet_window(qtbot, qapp):

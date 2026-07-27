@@ -111,3 +111,50 @@ portable JSON import/export.
 - [x] Add model, transfer, manager, scope, geometry, and unit-hint regressions.
 - [x] Render and inspect the HTML-parity states at 1180×790 and minimum 940×680: default, channel selected, dirty/batch, and import preview.
 - [ ] Perform the remaining interactive macOS TraceLab/high-DPI validation when a foreground session is requested.
+
+---
+
+## Addendum — 2026-07-26 HDF Time-Domain Interaction Performance
+
+### Goal
+
+Restore the v7.5/v7.6-class responsiveness of dense continuous HDF plots while
+retaining the v7.8 BLF/CRC improvements, document the regression and chosen
+architecture, and leave deterministic plus Cocoa performance gates that catch
+future channel-selection, pan, and resize regressions.
+
+### Phases
+
+- [x] Phase 1 — write the evidence-backed regression report and freeze current/historical baselines.
+- [x] Phase 2 — write the implementation plan with explicit behavioral and timing acceptance gates.
+- [x] Phase 3 — add red-first hot-path tests for cached raw X bounds and a true resize quiet window.
+- [x] Phase 4 — implement shared-time-axis X-bound caching and resize refresh quiescence without weakening BLF/CRC behavior.
+- [x] Phase 5 — add the reproducible plot benchmark/standards surface and run focused offscreen plus Cocoa verification.
+- [x] Phase 6 — review the complete diff, promote the required lesson, and close the report with measured results.
+
+### Guardrails
+
+- Preserve the existing dense-discrete/CRC raster strategy and its tests.
+- Do not change HDF numeric data, time scale, units, selection semantics, chart ordering, or saved View behavior.
+- Default tests use call-count/state contracts; machine-dependent Cocoa timing runs are opt-in but thresholded and emit JSON.
+- Preserve unrelated `.playwright-cli` artifacts and do not commit or push unless requested.
+- Prefer removing confirmed hot-path work over adding a second rendering architecture unless measured results prove it necessary.
+
+### Errors Encountered
+
+| Error | Attempt | Resolution |
+|---|---:|---|
+| First historical benchmark accidentally imported the current checkout because the process cwd preceded `PYTHONPATH` | Diagnosis | Re-ran every version from its isolated exported directory and recorded the resolved module path in each result. |
+| Direct shell cleanup was rejected and the transient tool store had expired | Diagnosis | Validated the exact `/private/tmp/tracelab-version-probe.*` path and removed only that generated directory with a guarded Python cleanup. |
+| First combined planning-file patch used a wrapped progress line that did not match exactly | Planning | Split the append-only updates and anchored each patch to the exact final lines. |
+| Initial BLF/CRC artifact lookup assumed `docs/superpowers/*` ownership | Planning | Located the actual artifacts under `docs/analyzer/{specs,plans,reviews}` and switched to those authoritative paths. |
+| General continuous curves were briefly routed into the dense-discrete pixmap backend | Stage 4 experiment | Real six-row Cocoa timing was worse due to DPR2 pixmap composition; reverted the production experiment and retained a negative regression guard. |
+
+### Completion Outcome
+
+- The accepted architecture is raw-X generation caching, a 150 ms resize quiet
+  window, and retained-row deltas for compatible ordinary subplots.
+- Real HDF/Cocoa benchmark passed all hard gates; Windows packaged EXE remains
+  an explicit follow-up gate, not an inferred PASS.
+- Reports, implementation plan, standards and the reusable benchmark script are
+  linked from the final handoff; no commit or push was performed.

@@ -88,6 +88,7 @@ lesson by default.
 | [Channel Tree Refresh Must Not Detach A View File](codex-channel-tree-refresh-preserves-view-state.md) | Refreshing channel rows after a channel-editor add/remove operation, | See lesson |
 | [Lite SciPy Pruning Needs Frozen Import Smoke](codex-lite-scipy-pruning-smoke.md) | Reducing SciPy collection or native DLLs in the Windows analyzer-only | See lesson |
 | [Channel Configuration Manager Must Open Above the Taskbar](codex-channel-config-manager-taskbar-height.md) | Changing the default geometry or fixed-height regions of the Channel | See lesson |
+| [Pyqtgraph TimeDomain Shared-X Consumer Budget](pg-timedomain-shared-x-consumer-budget.md) | Change TimeDomain buffered pan/zoom, resize settling, selection delta, | See lesson |
 
 ## Selection Rules
 

@@ -361,6 +361,7 @@ class OverlayAxisManager(_CanvasBackref):
         # (multi-file same-name root fix); the display ``name`` is recorded for
         # iteration / bare-name lookups.
         self.channel_data.set_with_label(ck, name, (t_arr, sig_arr, color, unit))
+        self._invalidate_raw_x_bounds(t_arr)
         self._channel_data_id.set_with_label(ck, name, data_id)
         line_handle = _PgLineHandle(pdi, label_fallback=name)
         self._channel_lines.set_with_label(ck, name, (axis_handle, line_handle))
@@ -473,6 +474,7 @@ class OverlayAxisManager(_CanvasBackref):
         except Exception:
             pass
         self.channel_data.set_with_label(ck, name, (t_arr, sig_arr, color, unit))
+        self._invalidate_raw_x_bounds(t_arr)
         self._channel_data_id.set_with_label(ck, name, data_id)
         line_handle = _PgLineHandle(pdi, label_fallback=name)
         self._channel_lines.set_with_label(ck, name, (source_handle, line_handle))

@@ -5057,30 +5057,93 @@ class TestTimeDomainCanvasPGSelectionDelta:
         assert a_pair[1].plot_data_item.isVisible() is True
         assert b_pair[1].plot_data_item.isVisible() is True
 
-    def test_subplot_membership_change_reports_topology_fallback_without_mutation(
+    def test_subplot_remove_restore_reuses_plot_items_and_viewboxes(
         self, qapp,
     ):
         canvas = _pg_canvas(qapp)
         t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
         a = self._row("a", t, np.sin(t))
-        b = self._row("b", t, np.cos(t))
+        t_long = np.linspace(0.0, 20.0, 4000, dtype=np.float64)
+        b = self._row("b", t_long, np.cos(t_long))
         context = ("time", False, None, (False,))
         canvas.plot_channels(
             [a, b], mode="subplot", render_context_key=context
         )
         a_pdi = canvas._channel_lines["a"][1].plot_data_item
         b_pdi = canvas._channel_lines["b"][1].plot_data_item
+        a_vb = canvas._channel_lines["a"][0].view_box
+        b_vb = canvas._channel_lines["b"][0].view_box
+        b_pi = canvas._channel_lines["b"][0].plot_item
+        canvas.set_xlim(2.0, 5.0)
+        canvas._cursor.ax = 3.0
+        assert canvas._data_x_union() == pytest.approx((0.0, 20.0))
 
         result = canvas.try_apply_selection_delta(
             [a], mode="subplot", render_context_key=context
         )
 
         assert result == {
-            "applied": False,
-            "reason": "subplot-topology-change",
+            "applied": True,
+            "reason": "subplot-object-reuse",
         }
+        assert canvas._channel_lines["a"][1].plot_data_item is a_pdi
+        assert canvas._channel_lines["b"][1].plot_data_item is b_pdi
+        assert canvas._channel_lines["a"][0].view_box is a_vb
+        assert canvas._channel_lines["b"][0].view_box is b_vb
         assert a_pdi.isVisible() is True
-        assert b_pdi.isVisible() is True
+        assert b_pdi.isVisible() is False
+        assert b_pi.isVisible() is False
+        assert b_pi.maximumHeight() == 0.0
+        assert canvas.axes_list == [canvas._channel_lines["a"][0]]
+        assert canvas.get_visible_xlim() == pytest.approx((2.0, 5.0))
+        assert canvas._cursor.ax == 3.0
+        assert canvas._data_x_union() == pytest.approx((0.0, 10.0))
+
+        restored = canvas.try_apply_selection_delta(
+            [a, b], mode="subplot", render_context_key=context
+        )
+        assert restored == {
+            "applied": True,
+            "reason": "subplot-object-reuse",
+        }
+        assert b_pi.isVisible() is True
+        assert b_pi.maximumHeight() > 0.0
+        assert canvas._channel_lines["b"][1].plot_data_item is b_pdi
+        assert canvas._channel_lines["b"][0].view_box is b_vb
+        assert len(canvas.axes_list) == 2
+
+    def test_subplot_append_adds_one_row_without_rebuilding_existing_rows(
+        self, qapp, monkeypatch,
+    ):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+        a = self._row("a", t, np.sin(t))
+        b = self._row("b", t, np.cos(t))
+        context = ("time", False, None, (False,))
+        canvas.plot_channels([a], mode="subplot", render_context_key=context)
+        a_pdi = canvas._channel_lines["a"][1].plot_data_item
+        a_vb = canvas._channel_lines["a"][0].view_box
+        created = []
+        original = canvas._add_plot_item
+        monkeypatch.setattr(
+            canvas,
+            "_add_plot_item",
+            lambda **kwargs: created.append(kwargs) or original(**kwargs),
+        )
+
+        result = canvas.try_apply_selection_delta(
+            [a, b], mode="subplot", render_context_key=context
+        )
+
+        assert result == {
+            "applied": True,
+            "reason": "subplot-object-reuse",
+        }
+        assert len(created) == 1
+        assert canvas._channel_lines["a"][1].plot_data_item is a_pdi
+        assert canvas._channel_lines["a"][0].view_box is a_vb
+        assert canvas._channel_lines["b"][1].plot_data_item is not None
+        assert len(canvas.axes_list) == 2
 
     @pytest.mark.parametrize(
         "rows,mode,context,reason",
