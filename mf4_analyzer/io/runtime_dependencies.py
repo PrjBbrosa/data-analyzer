@@ -39,8 +39,14 @@ FROZEN_IMPORT_DEPENDENCIES = (
     FrozenImportDependency(
         package="openpyxl",
         requirement_name="openpyxl",
-        extensions=(".xlsx", ".xls"),
-        purpose="Excel reader",
+        extensions=(".xlsx",),
+        purpose="Office Open XML workbook reader",
+    ),
+    FrozenImportDependency(
+        package="xlrd",
+        requirement_name="xlrd",
+        extensions=(".xls",),
+        purpose="legacy binary Excel workbook reader",
     ),
     FrozenImportDependency(
         package="can",

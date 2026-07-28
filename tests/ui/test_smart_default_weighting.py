@@ -82,6 +82,8 @@ def test_audio_source_builtin_presets_keep_a_weighting_across_all_sections(
         for slot in ctx.preset_bar.SLOTS:
             ctx.preset_bar._load(slot)
             assert ctx.get_params()["weighting"] == "A"
+            if slot in (1, 2, 3):
+                assert "weighting" not in ctx.preset_bar._builtins[slot]["params"]
 
 
 def test_non_audio_signal_selection_leaves_weighting_untouched(qapp, qtbot):

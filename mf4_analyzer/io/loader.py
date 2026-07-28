@@ -25,6 +25,13 @@ try:
 except ImportError:
     HAS_OPENPYXL = False
 
+try:
+    import xlrd
+
+    HAS_XLRD = True
+except ImportError:
+    HAS_XLRD = False
+
 
 def _valid_mdf_channel_name(name):
     name = str(name)
@@ -1002,8 +1009,18 @@ class DataLoader:
 
     @staticmethod
     def load_excel(fp):
-        kw = {'engine': 'openpyxl'} if HAS_OPENPYXL else {}
-        df = pd.read_excel(fp, **kw)
+        extension = Path(fp).suffix.lower()
+        if extension == '.xlsx':
+            if not HAS_OPENPYXL:
+                raise ImportError("openpyxl is required to read .xlsx files")
+            engine = 'openpyxl'
+        elif extension == '.xls':
+            if not HAS_XLRD:
+                raise ImportError("xlrd is required to read legacy .xls files")
+            engine = 'xlrd'
+        else:
+            raise ValueError(f"unsupported Excel extension: {extension or '<none>'}")
+        df = pd.read_excel(fp, engine=engine)
         for col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
         df = df.dropna(how='all').interpolate().ffill().bfill().reset_index(drop=True)
         return df, list(df.columns), {}

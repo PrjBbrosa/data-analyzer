@@ -2,6 +2,15 @@
 import json
 from html import escape
 
+from ...analysis_presets import (
+    BUILTIN_PRESET_BLURB,
+    BUILTIN_PRESET_DISPLAY,
+    BUILTIN_PRESET_KEYS,
+    PRESET_KEY_TO_SLOT,
+    _TORQUE_UNITS,
+    _VIBRATION_UNITS,
+    recommend_builtin_preset,
+)
 from PyQt5.QtCore import QSettings, QSize, Qt
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
@@ -34,29 +43,9 @@ def _preset_settings():
     return QSettings(_PRESET_ORG, _PRESET_APP)
 
 
-# ---- Signal-type built-in presets (shared by FFT-1D / FFT-time / Order) ----
-#
-# The three analysis views share ONE set of three built-in presets, displayed
-# as 频率 / 均衡 / 时间 on PresetBar slots 1/2/3. Slot order is a contract
-# consumed by ``recommend_preset_for_unit`` (torque=1, vibration=2,
-# transient=3) and the per-view ``set_recommended_for_unit`` wiring. Slot 4
-# is deliberately separate: it is a user-owned snapshot, never an automatic
-# recommendation or a built-in override.
-BUILTIN_PRESET_KEYS = ('torque', 'vibration', 'transient')
-BUILTIN_PRESET_DISPLAY = {
-    'torque': '频率',
-    'vibration': '均衡',
-    'transient': '时间',
-}
 # preset key -> PresetBar slot index (slots are 1-based: 1/2/3).
-_PRESET_KEY_TO_SLOT = {'torque': 1, 'vibration': 2, 'transient': 3}
+_PRESET_KEY_TO_SLOT = dict(PRESET_KEY_TO_SLOT)
 CUSTOM_PRESET_SLOTS = {4: '自定义'}
-# Blurb text for builtin hover cards (view-agnostic).
-BUILTIN_PRESET_BLURB = {
-    'torque': '频率 / 幅值最准，时间偏粗 · 适合扭矩、压力等稳态量',
-    'vibration': '时间-频率折中，宽动态 · 适合振动等通用诊断',
-    'transient': '时间最细，频率偏粗 · 适合启停、冲击等瞬态',
-}
 
 
 # ``_normalize_unit`` is a thin re-export of
@@ -69,19 +58,6 @@ BUILTIN_PRESET_BLURB = {
 # unchanged: lower-cases, strips whitespace, folds ``²``/``³`` to plain
 # digits, drops ``^`` and internal whitespace so ``m/s²`` / ``m/s^2`` /
 # ``m/s2`` all compare equal. Exact-match only (see module docstring there).
-
-
-# Exact-match alias sets (already normalized via _normalize_unit). Exact match
-# is intentional — substring matching would mis-route 'g' onto 'kg'/'deg' and
-# 'pa' onto 'kpa'.
-_TORQUE_UNITS = frozenset({
-    'nm', 'n·m', 'n.m', 'n*m', 'mnm', 'knm', 'cnm',
-    'bar', 'mbar', 'kpa', 'mpa', 'hpa', 'pa', 'psi',
-    '°', 'deg', 'mm', 'µm', 'um', '%',
-})
-_VIBRATION_UNITS = frozenset({
-    'g', 'mg', 'm/s2', 'mm/s', 'mm/s2', 'µm/s', 'um/s', 'in/s',
-})
 
 
 def _dynamic_to_floor(dynamic):
@@ -108,12 +84,7 @@ def recommend_preset_for_unit(unit):
     Matching is on the normalized form (see :func:`_normalize_unit`) with an
     EXACT alias lookup so 'kg' is not mistaken for 'g' nor 'kpa' for 'pa'.
     """
-    norm = _normalize_unit(unit)
-    if norm in _TORQUE_UNITS:
-        return 'torque'
-    if norm in _VIBRATION_UNITS:
-        return 'vibration'
-    return 'vibration'
+    return recommend_builtin_preset(unit)
 
 
 def make_db_reference_spinbox():

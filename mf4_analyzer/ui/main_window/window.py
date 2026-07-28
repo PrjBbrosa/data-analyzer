@@ -2930,9 +2930,11 @@ class MainWindow(
 
     def open_batch(self):
         from ..drawers.batch import BatchSheet
-        from ...batch import BatchRunner
 
-        current_preset = self._last_batch_preset or self._build_current_batch_preset()
+        # The live Inspector/pane state is the sole authority.  Historical
+        # render callbacks may still refresh _last_batch_preset for backward
+        # compatibility, but that cache must never overwrite current intent.
+        current_preset = self._build_current_batch_preset()
         # T6: a ``current_single`` preset captured before files were
         # closed/swapped will still hold a (fid, channel) tuple whose
         # fid no longer exists in ``self.files`` — forwarding it to the
@@ -2946,43 +2948,10 @@ class MainWindow(
                 self.toast("当前单次预设已失效，请改用自由配置", "warning")
                 current_preset = None
         dlg = BatchSheet(self, self.files, current_preset=current_preset)
-        if dlg.exec_() != QDialog.Accepted:
-            return
-        preset = dlg.get_preset()
-        output_dir = dlg.output_dir()
-        if not output_dir:
-            self.toast("请选择输出目录", "warning")
-            return
-        try:
-            self.statusBar.showMessage("批处理运行中...")
-            QApplication.processEvents()
-            # dB-reference-defaults Task 9 Step 9.2: pass the CURRENT
-            # catalog snapshot + preference (already-built values owned by
-            # the shared service, Task 5) into the runner so Batch Auto
-            # resolution matches the interactive canvas -- a mechanical
-            # pass-through, no new widget/layout.
-            snapshot = self.db_reference_store.snapshot()
-            result = BatchRunner(
-                self.files,
-                db_reference_catalog=snapshot,
-                prefer_channel_metadata=snapshot.prefer_channel_metadata,
-            ).run(preset, output_dir)
-        except Exception as e:
-            QMessageBox.critical(self, "批处理错误", str(e))
-            return
-        done = sum(1 for item in result.items if item.status == 'done')
-        if result.status == 'done':
-            msg = f"批处理完成 · {done} 项"
-            self.toast(msg, "success")
-        elif result.status == 'partial':
-            msg = f"批处理部分完成 · {done}/{len(result.items)} 项"
-            self.toast(msg, "warning")
-        else:
-            msg = "批处理未执行"
-            self.toast(msg, "warning")
-        self.statusBar.showMessage(f"{msg} · {output_dir}")
-        if result.blocked:
-            QMessageBox.warning(self, "批处理提示", "\n".join(result.blocked[:8]))
+        # BatchSheet._on_run_clicked is the only live execution path.  exec_()
+        # ends only when the sheet closes; do not launch a duplicate runner
+        # after it returns Accepted.
+        dlg.exec_()
 
     def _build_current_batch_preset(self):
         from ...batch import AnalysisPreset
@@ -3013,7 +2982,10 @@ class MainWindow(
                 target_signals=target_signals,
                 params=params,
             )
-            return dataclasses.replace(preset, file_ids=file_ids)
+            target_pairs = tuple((fid, ch) for fid, ch, _color in checked)
+            return dataclasses.replace(
+                preset, file_ids=file_ids, target_pairs=target_pairs,
+            )
         if mode == 'fft':
             signal = self.inspector.fft_ctx.current_signal()
             if signal is None:
@@ -3037,7 +3009,12 @@ class MainWindow(
             signal = self.inspector.fft_time_ctx.current_signal()
             if signal is None:
                 return None
-            params = self.inspector.fft_time_ctx.get_params()
+            params_getter = getattr(
+                self.inspector.fft_time_ctx,
+                'current_params',
+                self.inspector.fft_time_ctx.get_params,
+            )
+            params = params_getter()
             params['fs'] = self.inspector.fft_time_ctx.fs()
             if self.inspector.top.range_enabled():
                 params['time_range'] = self.inspector.top.range_values()
@@ -3052,7 +3029,12 @@ class MainWindow(
             rpm_signal = self.inspector.order_ctx.current_rpm()
             if signal is None:
                 return None
-            params = self.inspector.order_ctx.get_params()
+            params_getter = getattr(
+                self.inspector.order_ctx,
+                'current_params',
+                self.inspector.order_ctx.get_params,
+            )
+            params = params_getter()
             params['fs'] = self.inspector.order_ctx.fs()
             params['rpm_factor'] = self.inspector.order_ctx.rpm_factor()
             if self.inspector.top.range_enabled():

@@ -89,6 +89,13 @@ lesson by default.
 | [Lite SciPy Pruning Needs Frozen Import Smoke](codex-lite-scipy-pruning-smoke.md) | Reducing SciPy collection or native DLLs in the Windows analyzer-only | See lesson |
 | [Channel Configuration Manager Must Open Above the Taskbar](codex-channel-config-manager-taskbar-height.md) | Changing the default geometry or fixed-height regions of the Channel | See lesson |
 | [Pyqtgraph TimeDomain Shared-X Consumer Budget](pg-timedomain-shared-x-consumer-budget.md) | Change TimeDomain buffered pan/zoom, resize settling, selection delta, | See lesson |
+| [Batch Output Identity Must Survive Publish Races](signal-processing/2026-07-28-batch-output-identity.md) | Batch exports derive paths for multiple sources, groups, channels, or recipes, especially when names contain Unicode or an output directory is reused. | See lesson |
+| [Batch Dynamic Scroll Panes Need Minimum Content Policy](batch-dynamic-scroll-pane-size-policy.md) | Changing BatchSheet columns, dynamic method fields, or any | See lesson |
+| [Batch Output Validation Has One Pure Authority](batch-output-validation-single-authority.md) | Adding or changing batch output fields, formats, sizes, conflict policies, resume settings, or UI preflight behavior. | See lesson |
+| [Batch Render Facts Must Use Producer-Shaped Tests](batch-render-facts-use-producer-contract.md) | Adding or renaming effective analysis facts shown in batch titles, subtitles, labels, or manifests. | See lesson |
+| [Batch Operations Keep Runtime State Out Of Presets](batch-operations-runtime-state.md) | Changing BatchSheet run lifecycle, manifest resume, retry-failed, worker arguments, or consecutive-run result handling. | See lesson |
+| [Batch Render Proof Includes CJK Glyph Coverage](batch-render-cjk-glyph-coverage.md) | Changing batch figure typography, titles, axis labels, legends, colorbars, SVG/PDF output, or cross-platform font fallback. | See lesson |
+| [Batch Task List Height Follows Its Information](batch-task-list-information-weighted-height.md) | Changing BatchSheet task preview rows, task statuses, disclosure behavior, or the bottom task-list layout. | See lesson |
 
 ## Selection Rules
 

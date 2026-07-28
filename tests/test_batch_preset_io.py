@@ -31,6 +31,67 @@ def test_round_trip_preserves_recipe(tmp_path):
     assert p2.outputs.data_format == p1.outputs.data_format
 
 
+def test_phase3_batch_output_defaults_are_backward_compatible_and_safe():
+    outputs = BatchOutput()
+
+    assert outputs.image_format == "png"
+    assert outputs.image_size == "1920x1080"
+    assert outputs.image_width == 1920
+    assert outputs.image_height == 1080
+    assert outputs.image_dpi == 144
+    assert outputs.conflict_policy == "auto_number"
+    assert outputs.write_manifest is True
+    assert outputs.resume_policy == "none"
+
+
+def test_phase3_output_settings_round_trip_through_preset_json(tmp_path):
+    preset = AnalysisPreset.free_config(
+        name="phase3 outputs",
+        method="fft",
+        target_signals=("sig",),
+        params={"window": "hanning", "nfft": 1024},
+        outputs=BatchOutput(
+            export_data=False,
+            export_image=True,
+            data_format="xlsx",
+            image_format="svg",
+            image_size="custom",
+            image_width=2304,
+            image_height=1296,
+            image_dpi=192,
+            conflict_policy="overwrite",
+            write_manifest=False,
+            resume_policy="manifest",
+        ),
+    )
+    path = tmp_path / "phase3.json"
+
+    save_preset_to_json(preset, path)
+    loaded = load_preset_from_json(path)
+
+    assert loaded.outputs == preset.outputs
+
+
+def test_legacy_output_json_without_phase3_fields_migrates_to_defaults(tmp_path):
+    path = tmp_path / "legacy-output.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "name": "legacy",
+        "method": "fft",
+        "target_signals": ["sig"],
+        "params": {"window": "hanning", "nfft": 1024},
+        "outputs": {
+            "export_data": True,
+            "export_image": True,
+            "data_format": "csv",
+        },
+    }), encoding="utf-8")
+
+    loaded = load_preset_from_json(path)
+
+    assert loaded.outputs == BatchOutput()
+
+
 @pytest.mark.parametrize("method", ("fft", "fft_time", "order_time"))
 def test_round_trip_preserves_weighting_for_supported_methods(tmp_path, method):
     preset = AnalysisPreset.free_config(
@@ -50,6 +111,21 @@ def test_round_trip_preserves_weighting_for_supported_methods(tmp_path, method):
     assert loaded.params["weighting"] == "A"
 
 
+def test_fft_amplitude_definition_round_trips_through_preset_json(tmp_path):
+    preset = AnalysisPreset.free_config(
+        name="FFT RMS",
+        method="fft",
+        target_signals=("sig",),
+        params={"amplitude_definition": "rms"},
+    )
+    path = tmp_path / "fft-rms.json"
+
+    save_preset_to_json(preset, path)
+    loaded = load_preset_from_json(path)
+
+    assert loaded.params["amplitude_definition"] == "rms"
+
+
 def test_serialization_whitelist(tmp_path):
     """Even if runtime/sentinel fields are injected, JSON must not contain them."""
     from dataclasses import replace
@@ -59,16 +135,40 @@ def test_serialization_whitelist(tmp_path):
         file_paths=("/tmp/a.mf4",),
         signal=(0, "x"),  # forced, illegal for free_config but tolerated by dataclass
         rpm_signal=(0, "rpm"),
+        target_pairs=((0, "x"),),
+        source_ids=("source-a",),
+        source_paths=("/tmp/a.mf4",),
         signal_pattern="vib.*",
     )
     path = tmp_path / "p.json"
     save_preset_to_json(p, path)
     raw = json.loads(path.read_text())
-    for forbidden in ("file_ids", "file_paths", "signal", "rpm_signal",
-                      "signal_pattern"):
+    for forbidden in (
+        "file_ids", "file_paths", "source_ids", "source_paths", "signal",
+        "rpm_signal", "target_pairs", "signal_pattern",
+    ):
         assert forbidden not in raw, f"{forbidden} leaked into JSON"
     # output dir never present (BatchOutput has no directory field; just verify)
     assert "directory" not in raw["outputs"]
+
+
+def test_target_policy_round_trips_but_runtime_source_scope_does_not(tmp_path):
+    from dataclasses import replace
+
+    preset = replace(
+        _basic_preset(),
+        target_policy="available_per_source",
+        source_ids=("source-a",),
+        source_paths=("/tmp/a.hdf",),
+    )
+    path = tmp_path / "policy.json"
+
+    save_preset_to_json(preset, path)
+    loaded = load_preset_from_json(path)
+
+    assert loaded.target_policy == "available_per_source"
+    assert loaded.source_ids == ()
+    assert loaded.source_paths == ()
 
 
 def test_schema_version_written_as_1(tmp_path):

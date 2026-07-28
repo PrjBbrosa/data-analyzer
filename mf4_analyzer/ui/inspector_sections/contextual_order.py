@@ -14,13 +14,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ...analysis_presets import list_builtin_presets
 from ...ui_kit.icons import Icons
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from .._axis_defaults import z_range_for
 from ._helpers import (
-    BUILTIN_PRESET_DISPLAY,
-    BUILTIN_PRESET_KEYS,
     CUSTOM_PRESET_SLOTS,
     _LONG_FIELD_MAX_WIDTH,
     _PRESET_KEY_TO_SLOT,
@@ -333,11 +332,6 @@ class OrderContextual(QWidget):
     def _sync_source_weighting_defaults(self):
         target = self._source_weighting_default
         bar = getattr(self, 'preset_bar', None)
-        builtins = getattr(bar, '_builtins', None)
-        if isinstance(builtins, dict):
-            for entry in builtins.values():
-                if isinstance(entry, dict) and isinstance(entry.get('params'), dict):
-                    entry['params']['weighting'] = target
         default_params = getattr(bar, '_default_params', None)
         if isinstance(default_params, dict):
             default_params['weighting'] = target
@@ -431,27 +425,17 @@ class OrderContextual(QWidget):
     # fixes the window); amplitude axis is the legacy ``amplitude_mode`` token
     # ('Amplitude' / 'Amplitude dB') reverse-mapped onto combo_amp_unit.
     _SIGNAL_BUILTIN_PRESETS = {
-        'torque': dict(
-            max_order=20, order_res=0.05, time_res=0.10, nfft=_AUTO_NFFT_LABEL,
-            samples_per_rev=256, amplitude_mode='Amplitude dB',
-        ),
-        'vibration': dict(
-            max_order=50, order_res=0.10, time_res=0.05, nfft=_AUTO_NFFT_LABEL,
-            samples_per_rev=512, amplitude_mode='Amplitude dB',
-        ),
-        'transient': dict(
-            max_order=30, order_res=0.25, time_res=0.02, nfft=_AUTO_NFFT_LABEL,
-            samples_per_rev=256, amplitude_mode='Amplitude dB',
-        ),
+        preset.key: preset.params_copy()
+        for preset in list_builtin_presets('order_time')
     }
 
     def _builtin_preset_defaults(self):
         return {
-            _PRESET_KEY_TO_SLOT[key]: {
-                'display_name': BUILTIN_PRESET_DISPLAY[key],
-                'params': dict(self._SIGNAL_BUILTIN_PRESETS[key]),
+            preset.slot: {
+                'display_name': preset.display_name,
+                'params': preset.params_copy(),
             }
-            for key in BUILTIN_PRESET_KEYS
+            for preset in list_builtin_presets('order_time')
         }
 
     def set_recommended_for_unit(self, unit):

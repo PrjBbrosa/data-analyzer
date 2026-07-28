@@ -11,12 +11,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ...analysis_presets import list_builtin_presets
 from ...ui_kit.icons import Icons
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from ._helpers import (
-    BUILTIN_PRESET_DISPLAY,
-    BUILTIN_PRESET_KEYS,
     CUSTOM_PRESET_SLOTS,
     _LONG_FIELD_MAX_WIDTH,
     _PRESET_KEY_TO_SLOT,
@@ -387,11 +386,6 @@ class FFTContextual(QWidget):
     def _sync_source_weighting_defaults(self):
         target = self._source_weighting_default
         bar = getattr(self, 'preset_bar', None)
-        builtins = getattr(bar, '_builtins', None)
-        if isinstance(builtins, dict):
-            for entry in builtins.values():
-                if isinstance(entry, dict) and isinstance(entry.get('params'), dict):
-                    entry['params']['weighting'] = target
         default_params = getattr(bar, '_default_params', None)
         if isinstance(default_params, dict):
             default_params['weighting'] = target
@@ -444,27 +438,17 @@ class FFTContextual(QWidget):
     # numeric values). FFT-1D has NO remove_mean field; amplitude axis is
     # ``amp_y`` ('Linear'/'dB'); 平均模式 text is 单帧/线性平均/峰值保持.
     _SIGNAL_BUILTIN_PRESETS = {
-        'torque': dict(
-            window='flattop', nfft='自动', t_win_s=2.5, overlap=75,
-            amp_y='dB', avg_mode='线性平均', avg_overlap=75,
-        ),
-        'vibration': dict(
-            window='hanning', nfft='自动', t_win_s=1.5, overlap=50,
-            amp_y='dB', avg_mode='线性平均', avg_overlap=50,
-        ),
-        'transient': dict(
-            window='hanning', nfft='自动', t_win_s=0.6, overlap=75,
-            amp_y='dB', avg_mode='峰值保持', avg_overlap=75,
-        ),
+        preset.key: preset.params_copy()
+        for preset in list_builtin_presets('fft')
     }
 
     def _builtin_preset_defaults(self):
         return {
-            _PRESET_KEY_TO_SLOT[key]: {
-                'display_name': BUILTIN_PRESET_DISPLAY[key],
-                'params': dict(self._SIGNAL_BUILTIN_PRESETS[key]),
+            preset.slot: {
+                'display_name': preset.display_name,
+                'params': preset.params_copy(),
             }
-            for key in BUILTIN_PRESET_KEYS
+            for preset in list_builtin_presets('fft')
         }
 
     def set_recommended_for_unit(self, unit):

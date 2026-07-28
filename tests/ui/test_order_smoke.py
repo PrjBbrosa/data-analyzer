@@ -1,13 +1,12 @@
-"""Order-mode smoke tests for Plan T6.
+"""Order-mode and batch-entry smoke tests.
 
-Two tests cover the user-visible behaviours added in Task 6:
+The tests cover these user-visible behaviours:
 
 1. ``OrderContextual`` no longer exposes the old cancel placeholder
    because order analysis is still synchronous and cannot be cancelled.
-2. ``MainWindow.open_batch`` actively downgrades a stale
-   ``_last_batch_preset`` (whose ``signal[0]`` references a fid no
-   longer in ``self.files``) to ``None`` BEFORE forwarding to
-   ``BatchSheet``, AND emits a toast informing the user.
+2. ``MainWindow.open_batch`` rebuilds from live Inspector state instead of
+   allowing ``_last_batch_preset`` to override it.
+3. ``BatchSheet`` remains the only live Run owner after its modal loop ends.
 
 The tests run under the ``offscreen`` Qt platform, set up by the
 shared ``tests/ui/conftest.py``.
@@ -27,15 +26,9 @@ def test_order_contextual_does_not_expose_cancel_placeholder(qtbot):
     assert not hasattr(w, 'btn_cancel')
 
 
-def test_open_batch_drops_stale_preset_signal(qtbot, monkeypatch):
-    """When ``_last_batch_preset.signal`` references a fid no longer in
-    ``self.files``, ``open_batch`` must replace ``current_preset`` with
-    ``None`` (so the Sheet starts fresh) AND toast the user.
-
-    Codex round-1 feedback D13/F19: the previous implementation forwarded
-    a stale preset to ``BatchSheet`` and silently let ``_expand_tasks``
-    return zero — the user got no signal that the preset was invalid.
-    """
+def test_open_batch_ignores_stale_last_preset_in_favor_of_live_state(
+    qtbot, monkeypatch,
+):
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.batch import AnalysisPreset
 
@@ -50,6 +43,11 @@ def test_open_batch_drops_stale_preset_signal(qtbot, monkeypatch):
         name="stale", method="fft", signal=(99999, "nope"),
         params={"fs": 1024.0, "nfft": 1024},
     )
+    live = AnalysisPreset.from_current_single(
+        name="live", method="fft", signal=(0, "sig"),
+        params={"fs": 2048.0, "nfft": None, "nfft_mode": "auto"},
+    )
+    monkeypatch.setattr(win, "_build_current_batch_preset", lambda: live)
 
     captured = {}
 
@@ -72,14 +70,30 @@ def test_open_batch_drops_stale_preset_signal(qtbot, monkeypatch):
 
     win.open_batch()
 
-    assert captured.get('current_preset') is None, (
-        f"stale preset must not be forwarded to BatchSheet; "
-        f"got {captured.get('current_preset')}"
-    )
-    assert any(
-        '失效' in msg or 'stale' in msg.lower()
-        for kind, msg in toast_msgs
-    ), f"expected stale-preset toast, got {toast_msgs}"
+    assert captured.get('current_preset') is live
+    assert not toast_msgs
+
+
+def test_open_batch_has_no_duplicate_run_after_sheet_exec(qtbot, monkeypatch):
+    from PyQt5.QtWidgets import QDialog
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    class FakeSheet:
+        def __init__(self, parent, files, current_preset=None):
+            pass
+
+        def exec_(self):
+            return QDialog.Accepted
+
+        def get_preset(self):
+            raise AssertionError("BatchSheet owns the only live run path")
+
+    monkeypatch.setattr('mf4_analyzer.ui.drawers.batch.BatchSheet', FakeSheet)
+
+    win.open_batch()
 
 
 def test_open_batch_allows_empty_file_map(qtbot, monkeypatch):

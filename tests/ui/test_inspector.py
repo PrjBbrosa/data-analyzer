@@ -78,6 +78,28 @@ def test_time_contextual_plot_button_emits(qapp, qtbot):
         tc.btn_plot.click()
 
 
+def test_time_contextual_uses_shared_time_preset_provider(qapp, qtbot):
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+    from mf4_analyzer.ui.inspector_sections import TimeContextual
+
+    ctx = TimeContextual()
+    qtbot.addWidget(ctx)
+
+    assert ctx.preset_bar._load_btns[1].isEnabled() is False
+    assert ctx.preset_bar._load_btns[2].isEnabled() is False
+    assert ctx.preset_bar._load_btns[3].isEnabled() is True
+
+    ctx.preset_bar._load_btns[3].click()
+    assert ctx.current_params() == get_builtin_preset(
+        "time", "transient",
+    ).params_copy()
+
+    ctx.preset_bar.set_recommended(3)
+    assert ctx.preset_bar._load_btns[1].isEnabled() is False
+    assert ctx.preset_bar._load_btns[2].isEnabled() is False
+    assert ctx.preset_bar._load_btns[3].isEnabled() is True
+
+
 def test_inspector_primary_buttons_share_section_width(qapp, qtbot):
     """Inspector primary buttons should share the same section button width."""
     from pathlib import Path
@@ -4598,23 +4620,14 @@ def _combo_text_hits(combo, value):
 
 
 def test_fft_builtin_presets_apply_through_combos(qapp):
+    from mf4_analyzer.analysis_presets import list_builtin_presets
     from mf4_analyzer.ui.inspector_sections import (
         FFTContextual, BUILTIN_PRESET_KEYS,
     )
     fc = FFTContextual()
     expected = {
-        'torque': dict(
-            window='flattop', nfft='自动', t_win_s=2.5, overlap=75,
-            amp_y='dB', avg_mode='线性平均', avg_overlap=75,
-        ),
-        'vibration': dict(
-            window='hanning', nfft='自动', t_win_s=1.5, overlap=50,
-            amp_y='dB', avg_mode='线性平均', avg_overlap=50,
-        ),
-        'transient': dict(
-            window='hanning', nfft='自动', t_win_s=0.6, overlap=75,
-            amp_y='dB', avg_mode='峰值保持', avg_overlap=75,
-        ),
+        preset.key: preset.params_copy()
+        for preset in list_builtin_presets('fft')
     }
     assert fc._SIGNAL_BUILTIN_PRESETS == expected
     for key in BUILTIN_PRESET_KEYS:
@@ -4659,24 +4672,15 @@ def test_fft_builtin_preset_second_click_restores_defaults(qapp):
 
 
 def test_order_builtin_presets_apply_through_combos(qapp):
+    from mf4_analyzer.analysis_presets import list_builtin_presets
     from mf4_analyzer.ui.inspector_sections import (
         OrderContextual, BUILTIN_PRESET_KEYS,
     )
     oc = OrderContextual()
     auto = oc._AUTO_NFFT_LABEL
     expected = {
-        'torque': dict(
-            max_order=20, order_res=0.05, time_res=0.10, nfft=auto,
-            samples_per_rev=256, amplitude_mode='Amplitude dB',
-        ),
-        'vibration': dict(
-            max_order=50, order_res=0.10, time_res=0.05, nfft=auto,
-            samples_per_rev=512, amplitude_mode='Amplitude dB',
-        ),
-        'transient': dict(
-            max_order=30, order_res=0.25, time_res=0.02, nfft=auto,
-            samples_per_rev=256, amplitude_mode='Amplitude dB',
-        ),
+        preset.key: preset.params_copy()
+        for preset in list_builtin_presets('order_time')
     }
     assert oc._SIGNAL_BUILTIN_PRESETS == expected
     for key in BUILTIN_PRESET_KEYS:
@@ -4717,27 +4721,22 @@ def test_order_builtin_preset_second_click_restores_defaults(qapp):
 
 
 def test_fft_time_builtin_presets_apply_through_combos(qtbot):
+    from mf4_analyzer.analysis_presets import list_builtin_presets
     from mf4_analyzer.ui.inspector_sections import (
         FFTTimeContextual, BUILTIN_PRESET_KEYS,
     )
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
+    compact_keys = (
+        'window', 't_win_s', 'overlap', 'amplitude_mode',
+        'freq_auto', 'dynamic', 'cmap',
+    )
     expected = {
-        'torque': dict(
-            window='flattop', t_win_s=2.5, overlap=75,
-            amplitude_mode='Amplitude dB', freq_auto=True,
-            dynamic='Auto', cmap='viridis',
-        ),
-        'vibration': dict(
-            window='hanning', t_win_s=1.5, overlap=50,
-            amplitude_mode='Amplitude dB', freq_auto=True,
-            dynamic='Auto', cmap='turbo',
-        ),
-        'transient': dict(
-            window='hanning', t_win_s=0.6, overlap=75,
-            amplitude_mode='Amplitude dB', freq_auto=True,
-            dynamic='Auto', cmap='turbo',
-        ),
+        preset.key: {
+            key: preset.params[key]
+            for key in compact_keys
+        }
+        for preset in list_builtin_presets('fft_time')
     }
     assert ctx._BUILTIN_PRESETS == expected
     for key in BUILTIN_PRESET_KEYS:
@@ -4760,6 +4759,35 @@ def test_fft_time_builtin_presets_apply_through_combos(qtbot):
     assert ctx._t_win_s == 2.5
     assert ctx.combo_amp_unit.currentText() == "dB"
     assert "自动(" in ctx._tf_summary_text()
+
+    # cmap remains catalog compatibility data; Inspector chart options still
+    # own the live colormap and preset apply must not expand old behaviour.
+    ctx.apply_builtin_preset('vibration')
+    assert ctx.get_params()['cmap'] == ctx._FIXED_CMAP
+
+
+@pytest.mark.parametrize(
+    "class_name,method,signal_name",
+    (
+        ("FFTContextual", "fft", "fft_requested"),
+        ("FFTTimeContextual", "fft_time", "fft_time_requested"),
+        ("OrderContextual", "order_time", "order_time_requested"),
+    ),
+)
+def test_shared_builtin_preset_apply_never_dispatches_compute(
+    qtbot, class_name, method, signal_name,
+):
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+    from mf4_analyzer.ui import inspector_sections
+
+    ctx = getattr(inspector_sections, class_name)()
+    qtbot.addWidget(ctx)
+    emitted = []
+    getattr(ctx, signal_name).connect(lambda: emitted.append(True))
+
+    ctx._apply_preset(get_builtin_preset(method, "transient").params_copy())
+
+    assert emitted == []
 
 
 def test_fft_time_builtin_preset_second_click_restores_defaults(qtbot):
