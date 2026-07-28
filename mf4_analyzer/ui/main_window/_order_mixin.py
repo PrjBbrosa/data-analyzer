@@ -661,17 +661,13 @@ class OrderMixin:
         # `result.amplitude` is (frames, orders) → transpose so imshow
         # gets (rows=Y_orders, cols=X_times); x_extent=times, y_extent=orders.
         self._render_order_on(self.canvas_order, result, source=source)
+        batch_params = dict(self.inspector.order_ctx.current_params())
+        batch_params['fs'] = result.params.fs
+        batch_params['rpm_factor'] = self.inspector.order_ctx.rpm_factor()
         self._remember_batch_preset(
             "当前时间-阶次", "order_time",
             self.inspector.order_ctx.current_signal(),
-            {
-                'fs': result.params.fs,
-                'nfft': result.params.nfft,
-                'max_order': result.params.max_order,
-                'order_res': result.params.order_res,
-                'time_res': result.params.time_res,
-                'rpm_factor': self.inspector.order_ctx.rpm_factor(),
-            },
+            batch_params,
             rpm_signal=self.inspector.order_ctx.current_rpm(),
         )
         if emit_feedback:

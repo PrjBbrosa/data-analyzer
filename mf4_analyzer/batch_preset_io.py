@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import db_reference
 from .batch import AnalysisPreset, BatchOutput, BatchRunner
+from .batch_recipe import normalize_batch_params
 
 
 SCHEMA_VERSION = 1
@@ -54,12 +55,21 @@ def save_preset_to_json(preset: AnalysisPreset, path: str | Path) -> None:
         "name": preset.name,
         "method": preset.method,
         "target_signals": list(preset.target_signals),
+        "target_policy": str(preset.target_policy or "common"),
         "rpm_channel": preset.rpm_channel,
-        "params": dict(preset.params),
+        "params": normalize_batch_params(preset.params, preset.method),
         "outputs": {
             "export_data": bool(preset.outputs.export_data),
             "export_image": bool(preset.outputs.export_image),
             "data_format": str(preset.outputs.data_format),
+            "image_format": str(preset.outputs.image_format),
+            "image_size": str(preset.outputs.image_size),
+            "image_width": int(preset.outputs.image_width),
+            "image_height": int(preset.outputs.image_height),
+            "image_dpi": int(preset.outputs.image_dpi),
+            "conflict_policy": str(preset.outputs.conflict_policy),
+            "write_manifest": bool(preset.outputs.write_manifest),
+            "resume_policy": str(preset.outputs.resume_policy),
         },
     }
     path.write_text(
@@ -111,16 +121,29 @@ def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
     # ``db_reference`` value (no ``db_reference_mode``) IS the old
     # authoritative display reference -> migrate to Manual, same rule as
     # the View/preset migration (S2/S3). No-op when the key is absent.
-    params_dict = db_reference.migrate_legacy_reference_params(params_dict)
+    params_dict = normalize_batch_params(
+        db_reference.migrate_legacy_reference_params(params_dict), method,
+    )
     return AnalysisPreset.free_config(
         name=raw.get("name", ""),
         method=method,
         rpm_channel=raw.get("rpm_channel", ""),
         target_signals=tuple(raw.get("target_signals") or ()),
+        target_policy=raw.get("target_policy", "common"),
         params=params_dict,
         outputs=BatchOutput(
             export_data=bool(outputs_raw.get("export_data", True)),
             export_image=bool(outputs_raw.get("export_image", True)),
             data_format=str(outputs_raw.get("data_format", "csv")),
+            image_format=str(outputs_raw.get("image_format", "png")),
+            image_size=str(outputs_raw.get("image_size", "1920x1080")),
+            image_width=int(outputs_raw.get("image_width", 1920)),
+            image_height=int(outputs_raw.get("image_height", 1080)),
+            image_dpi=int(outputs_raw.get("image_dpi", 144)),
+            conflict_policy=str(
+                outputs_raw.get("conflict_policy", "auto_number")
+            ),
+            write_manifest=bool(outputs_raw.get("write_manifest", True)),
+            resume_policy=str(outputs_raw.get("resume_policy", "none")),
         ),
     )

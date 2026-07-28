@@ -156,3 +156,136 @@ def test_sheet_run_passes_db_reference_catalog_snapshot_from_parent(qtbot, tmp_p
     item = result.items[0]
     assert item.db_reference_value == pytest.approx(3.0)
     assert item.db_reference_source == "user"
+
+
+def test_sheet_preview_and_result_share_channel_metadata_reference(qtbot, tmp_path):
+    import dataclasses
+
+    import numpy as np
+    import pandas as pd
+    import pytest
+
+    from mf4_analyzer.batch import BatchOutput, BatchRunner
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    n = 1024
+    t = np.arange(n) / 512.0
+    fd = FileData(
+        tmp_path / "metadata.csv",
+        pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 50 * t)}),
+        ["Time", "sig"], {"sig": "Nm"}, idx=0,
+        channel_metadata={
+            "sig": {
+                "quantity": "torque", "unit": "Nm", "db_reference": 4.5,
+            },
+        },
+    )
+    sheet = BatchSheet(None, files={0: fd})
+    qtbot.addWidget(sheet)
+    sheet.apply_files(file_ids=(0,), file_paths=())
+    sheet.apply_signals(("sig",))
+    sheet.apply_method("fft")
+    sheet.apply_params({"window": "hanning", "nfft": 512})
+    sheet.apply_outputs(BatchOutput(
+        export_data=False, export_image=True, data_format="csv",
+    ))
+
+    preview = sheet._output_panel.effective_preview_text()
+    assert "1×metadata" in preview
+    assert "4.5" in preview
+
+    # Keep the test focused on reference parity: the live FileData is already
+    # keyed by source_id, so no physical-path resolution is needed here.
+    preset = dataclasses.replace(sheet.get_preset(), source_paths=(), file_paths=())
+    result = BatchRunner({0: fd}).run(preset, str(tmp_path / "out"))
+
+    assert result.status == "done"
+    assert len(result.items) == 1
+    assert result.items[0].db_reference_source == "metadata"
+    assert result.items[0].db_reference_value == pytest.approx(4.5)
+
+
+def test_runner_thread_forwards_resume_and_retry_runtime_paths(tmp_path):
+    from mf4_analyzer.batch import BatchRunResult
+    from mf4_analyzer.ui.drawers.batch.runner_thread import BatchRunnerThread
+
+    calls = []
+
+    class Runner:
+        def run(self, preset, output_dir, **kwargs):
+            calls.append((preset, output_dir, kwargs))
+            return BatchRunResult(status="done")
+
+    for resume_path, retry_path in (
+        (tmp_path / "resume.json", None),
+        (None, tmp_path / "retry.json"),
+    ):
+        thread = BatchRunnerThread(
+            Runner(), "preset", tmp_path / "out",
+            resume_manifest=resume_path,
+            retry_failed_manifest=retry_path,
+        )
+        results = []
+        thread.finished_with_result.connect(results.append)
+
+        thread.run()
+
+        assert results[0].status == "done"
+
+    assert calls[0][2]["resume_manifest"] == tmp_path / "resume.json"
+    assert calls[0][2]["retry_failed_manifest"] is None
+    assert calls[1][2]["resume_manifest"] is None
+    assert calls[1][2]["retry_failed_manifest"] == tmp_path / "retry.json"
+
+
+def test_sheet_forwards_selected_runtime_manifest_to_runner(
+    qtbot, tmp_path, monkeypatch,
+):
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.batch import BatchOutput, BatchRunResult, BatchRunner
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    calls = []
+    prior_results = []
+
+    def fake_run(self, preset, output_dir, **kwargs):
+        prior_results.append(sheet._last_result)
+        calls.append(kwargs)
+        return BatchRunResult(status="done")
+
+    monkeypatch.setattr(BatchRunner, "run", fake_run)
+    t = np.arange(128, dtype=float) / 128.0
+    fd = FileData(
+        tmp_path / "source.csv",
+        pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 8 * t)}),
+        ["Time", "sig"], {}, idx=0, fs=128.0,
+    )
+    sheet = BatchSheet(None, files={0: fd})
+    qtbot.addWidget(sheet)
+    sheet.apply_files((0,), ())
+    sheet.apply_signals(("sig",))
+    sheet.apply_method("fft")
+    sheet.apply_params({"window": "hanning", "nfft": 128})
+    sheet.apply_outputs(BatchOutput(
+        export_data=True,
+        export_image=False,
+        resume_policy="manifest",
+    ))
+    sheet._output_panel.apply_directory(str(tmp_path / "out"))
+    sheet._resume_manifest_path = str(tmp_path / "resume.json")
+    sheet._last_result = BatchRunResult(status="blocked", blocked=["stale"])
+
+    sheet._on_run_clicked()
+    qtbot.waitUntil(lambda: sheet._running is False, timeout=3000)
+
+    sheet._on_run_clicked()
+    qtbot.waitUntil(lambda: len(calls) == 2 and not sheet._running, timeout=3000)
+
+    assert calls[0]["resume_manifest"] == str(tmp_path / "resume.json")
+    assert calls[0]["retry_failed_manifest"] is None
+    assert calls[1]["resume_manifest"] == str(tmp_path / "resume.json")
+    assert prior_results == [None, None]

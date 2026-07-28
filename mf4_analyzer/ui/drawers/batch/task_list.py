@@ -10,17 +10,18 @@ Driven by ``BatchProgressEvent`` instances forwarded from
 ``BatchRunnerThread.progress``. ETA computed as
 ``(now - run_start) / max(done, 1) * (total - done)``.
 
-The widget is deliberately read-only — it emits no signals.
+The widget emits an artifact-open request only after explicit row activation;
+it never opens an external application by itself.
 """
 from __future__ import annotations
 
 import time
 from typing import Sequence
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QProgressBar,
-    QPushButton, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from ....batch import BatchProgressEvent
@@ -32,10 +33,15 @@ _ICON_RUNNING = "⟳"
 _ICON_DONE = "✓"
 _ICON_FAILED = "✗"
 _ICON_CANCELLED = "—"
+_ICON_SKIPPED = "↷"
+_ICON_RESUMED = "↻"
+_BODY_MAX_HEIGHT = 120
 
 
 class TaskListWidget(QWidget):
     """Collapsible header + body of per-task rows."""
+
+    artifactOpenRequested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -45,6 +51,8 @@ class TaskListWidget(QWidget):
         self._icons: list[str] = []
         self._tooltips: list[str] = []
         self._items: list[QListWidgetItem] = []
+        self._artifact_paths: list[tuple[str, str]] = []
+        self._terminal_indices: set[int] = set()
         self._outputs_per_task: int = 0
         self._expanded: bool = True
 
@@ -100,12 +108,15 @@ class TaskListWidget(QWidget):
         # --- Body -----------------------------------------------------------
         self._body = QListWidget(self)
         self._body.setObjectName("BatchTaskListBody")
-        self._body.setMaximumHeight(180)
+        self._body.setMaximumHeight(_BODY_MAX_HEIGHT)
+        self._body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._body.itemDoubleClicked.connect(self._on_item_activated)
         outer.addWidget(self._body, 1)
 
         # Initialise mode (idle).
         self._set_running_mode(False)
         self._refresh_header_text()
+        self._sync_body_visibility()
 
     # ------------------------------------------------------------------
     # Public read-only accessors
@@ -118,6 +129,9 @@ class TaskListWidget(QWidget):
 
     def row_tooltip(self, idx: int) -> str:
         return self._tooltips[idx]
+
+    def row_artifact_paths(self, idx: int) -> tuple[str, str]:
+        return self._artifact_paths[idx]
 
     def header_text(self) -> str:
         if self._running:
@@ -148,6 +162,8 @@ class TaskListWidget(QWidget):
         self._tasks = [tuple(t) for t in tasks]
         self._icons = [_ICON_PENDING] * len(self._tasks)
         self._tooltips = [""] * len(self._tasks)
+        self._artifact_paths = [("", "")] * len(self._tasks)
+        self._terminal_indices = set()
         self._outputs_per_task = int(outputs_per_task)
 
         self._body.clear()
@@ -163,11 +179,13 @@ class TaskListWidget(QWidget):
         self._total = len(self._tasks)
         self._set_running_mode(False)
         self._refresh_header_text()
+        self._sync_body_visibility()
 
     def toggle_collapse(self) -> None:
+        if not self._tasks:
+            return
         self._expanded = not self._expanded
-        self._body.setVisible(self._expanded)
-        self._toggle_btn.setText("▾" if self._expanded else "▸")
+        self._sync_body_visibility()
 
     # ------------------------------------------------------------------
     # Run lifecycle
@@ -182,7 +200,20 @@ class TaskListWidget(QWidget):
         self._progress_bar.setValue(0)
         self._refresh_header_text()
 
-    def on_run_finished(self, result=None) -> None:  # noqa: ARG002 (UI hook)
+    def on_run_finished(self, result=None) -> None:
+        if result is not None and str(getattr(result, "status", "")) == "blocked":
+            blocked = tuple(getattr(result, "blocked", ()) or ())
+            message = str(blocked[0]) if blocked else "运行意外结束"
+            for idx, icon in enumerate(tuple(self._icons)):
+                if icon == _ICON_RUNNING:
+                    self._update_row(idx, _ICON_FAILED, tooltip=message)
+                    if idx not in self._terminal_indices:
+                        self._terminal_indices.add(idx)
+                        self._done_count += 1
+            total = self._total or len(self._tasks)
+            if total > 0:
+                pct = int(round(self._done_count * 100.0 / total))
+                self._progress_bar.setValue(max(0, min(100, pct)))
         self._running = False
         self._set_running_mode(False)
         self._refresh_header_text()
@@ -196,25 +227,53 @@ class TaskListWidget(QWidget):
                 self._update_row(idx, _ICON_RUNNING)
             self._update_progress(event, completed_inc=False)
         elif kind == "task_done":
-            if 0 <= idx < len(self._icons):
-                self._update_row(idx, _ICON_DONE)
-            self._done_count += 1
-            self._update_progress(event, completed_inc=True)
+            self._finish_task(idx, _ICON_DONE, event)
         elif kind == "task_failed":
-            if 0 <= idx < len(self._icons):
-                self._update_row(idx, _ICON_FAILED, tooltip=event.error or "")
-            # Failed tasks bump the visible progress (one task off the queue).
-            self._done_count += 1
-            self._update_progress(event, completed_inc=True)
+            self._finish_task(
+                idx, _ICON_FAILED, event,
+                tooltip=event.error or event.message or "",
+            )
         elif kind == "task_cancelled":
-            if 0 <= idx < len(self._icons):
-                self._update_row(idx, _ICON_CANCELLED, tooltip="已取消")
-            # Don't bump done count — cancelled tasks weren't run.
-            self._update_progress(event, completed_inc=False)
+            self._finish_task(
+                idx, _ICON_CANCELLED, event,
+                tooltip=event.message or "已取消",
+            )
+        elif kind == "task_skipped":
+            self._finish_task(
+                idx, _ICON_SKIPPED, event,
+                tooltip=event.message or "已跳过",
+            )
+        elif kind == "task_resumed":
+            self._finish_task(
+                idx, _ICON_RESUMED, event,
+                tooltip=event.message or "已恢复",
+            )
         elif kind == "run_finished":
             # Final ETA cleanup
             self._eta_label.setText("")
             self._refresh_header_text()
+
+    def _finish_task(self, idx, icon, event, *, tooltip="") -> None:
+        if not (0 <= idx < len(self._icons)):
+            self._update_progress(event, completed_inc=False)
+            return
+        self._update_row(idx, icon, tooltip=tooltip)
+        self._artifact_paths[idx] = (
+            str(event.data_path or ""), str(event.image_path or ""),
+        )
+        if idx not in self._terminal_indices:
+            self._terminal_indices.add(idx)
+            self._done_count += 1
+        self._update_progress(event, completed_inc=True)
+
+    def _on_item_activated(self, item: QListWidgetItem) -> None:
+        idx = self._body.row(item)
+        if not (0 <= idx < len(self._artifact_paths)):
+            return
+        data_path, image_path = self._artifact_paths[idx]
+        path = image_path or data_path
+        if path:
+            self.artifactOpenRequested.emit(path)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -224,6 +283,14 @@ class TaskListWidget(QWidget):
         self._progress_label.setVisible(running)
         self._progress_bar.setVisible(running)
         self._eta_label.setVisible(running)
+
+    def _sync_body_visibility(self) -> None:
+        has_tasks = bool(self._tasks)
+        body_visible = has_tasks and self._expanded
+        self._body.setVisible(body_visible)
+        self._toggle_btn.setEnabled(has_tasks)
+        self._toggle_btn.setText("▾" if body_visible else "▸")
+        self.updateGeometry()
 
     def _refresh_header_text(self) -> None:
         if self._running:

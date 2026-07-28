@@ -19,18 +19,24 @@ from ...blf_dbc_candidates import (
     prefilter_candidates,
     rank_candidates,
 )
-from ...io import DataLoader, FileData, HAS_ASAMMDF
+from ...io import (
+    DEFAULT_SOURCE_ADAPTER_REGISTRY, DataLoader, FileData, HAS_ASAMMDF,
+)
 from ...io.loader import (
     AUDIO_VIDEO_EXTS,
-    CSV_LIKE_EXTS,
     format_dropped_channels_notice,
 )
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
 
-AUDIO_VIDEO_GLOB = "*.mp4 *.mov *.mkv *.m4v *.mp3 *.m4a *.aac *.wav *.flac"
-CSV_LIKE_GLOB = " ".join(f"*{ext}" for ext in sorted(CSV_LIKE_EXTS))
-DATA_FILE_GLOB = f"*.mf4 *.mdf *.blf *.tdms {CSV_LIKE_GLOB} *.xlsx *.xls *.hdf *.wwt *.zfd *.mat {AUDIO_VIDEO_GLOB}"
+DATA_FILE_GLOB = DEFAULT_SOURCE_ADAPTER_REGISTRY.file_dialog_glob
+_MEDIA_ADAPTER = next(
+    adapter for adapter in DEFAULT_SOURCE_ADAPTER_REGISTRY.adapters
+    if adapter.key == "media"
+)
+AUDIO_VIDEO_GLOB = " ".join(
+    f"*{extension}" for extension in sorted(_MEDIA_ADAPTER.extensions)
+)
 PROJECT_OR_DATA_FILTER = (
     f"所有支持的文件 ({DATA_FILE_GLOB} *.tlproj);;"
     f"项目 (*.tlproj);;数据文件 ({DATA_FILE_GLOB});;"

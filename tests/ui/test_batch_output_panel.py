@@ -229,3 +229,189 @@ def test_batch_output_panel_apply_axis_params_does_not_trigger_reset(qtbot):
         f"apply; got calls={handler_calls!r} — combo_amp_unit."
         "setCurrentIndex likely missing blockSignals wrap."
     )
+
+
+def test_batch_output_panel_manual_y_range_accepts_negative_values(qtbot):
+    panel = _make_panel(qtbot)
+
+    panel.chk_y_auto.setChecked(False)
+    panel.spin_y_min.setValue(-120.0)
+    panel.spin_y_max.setValue(-20.0)
+
+    assert panel.spin_y_min.value() == -120.0
+    assert panel.spin_y_max.value() == -20.0
+    assert panel.axis_params()["y_min"] == -120.0
+
+
+def test_batch_output_db_reference_auto_manual_round_trip_and_legacy(qtbot):
+    panel = _make_panel(qtbot)
+
+    panel.apply_reference_params({
+        "db_reference_mode": "manual", "db_reference": 2e-5,
+    })
+    got = panel.reference_params()
+    assert got["db_reference_mode"] == "manual"
+    assert got["db_reference"] == pytest.approx(2e-5)
+
+    panel.apply_reference_params({"db_reference_mode": "auto"})
+    got = panel.reference_params()
+    assert got["db_reference_mode"] == "auto"
+    assert got["db_reference"] == pytest.approx(2e-5)
+
+    panel.apply_reference_params({"db_reference": 1e-6}, legacy=True)
+    got = panel.reference_params()
+    assert got["db_reference_mode"] == "manual"
+    assert got["db_reference"] == pytest.approx(1e-6)
+
+
+def test_batch_output_effective_preview_uses_shared_dba_formatter(qtbot):
+    from types import SimpleNamespace
+
+    panel = _make_panel(qtbot)
+    rows = (
+        SimpleNamespace(
+            state="loaded", source_id="s1", channels=frozenset({"acc"}),
+            units={"acc": "m/s2"}, metadata={},
+        ),
+        SimpleNamespace(
+            state="loaded", source_id="s2", channels=frozenset({"acc"}),
+            units={"acc": "m/s2"}, metadata={},
+        ),
+    )
+    panel.update_effective_preview(
+        rows, ("acc",), weighting="A", target_policy="common",
+    )
+
+    text = panel.effective_preview_text()
+    assert "2×system" in text
+    assert "dBA re" in text
+
+
+def test_batch_output_preview_waits_while_probe_is_pending(qtbot):
+    from types import SimpleNamespace
+
+    panel = _make_panel(qtbot)
+    panel.update_effective_preview(
+        (SimpleNamespace(state="probing"),), ("acc",), weighting="None",
+        target_policy="common",
+    )
+    assert panel.effective_preview_text() == "等待来源信息"
+
+
+def test_batch_output_exact_preview_excludes_missing_pair_targets(qtbot):
+    from types import SimpleNamespace
+
+    panel = _make_panel(qtbot)
+    rows = (
+        SimpleNamespace(
+            state="loaded", source_id="s1", channels=frozenset({"A"}),
+            units={"A": "Pa"}, metadata={},
+        ),
+        SimpleNamespace(
+            state="loaded", source_id="s2", channels=frozenset({"C"}),
+            units={"C": "Pa"}, metadata={},
+        ),
+    )
+
+    panel.update_effective_preview(
+        rows, ("A", "B"), target_policy="exact_pairs",
+        target_pairs=(("s1", "A"), ("s2", "B")),
+    )
+
+    assert panel.effective_preview_text().startswith("1 个目标：")
+
+
+def test_batch_output_full_schema_round_trip_has_one_authoritative_accessor(qtbot):
+    from mf4_analyzer.batch import BatchOutput
+
+    panel = _make_panel(qtbot)
+    outputs = BatchOutput(
+        export_data=False,
+        export_image=True,
+        data_format="xlsx",
+        image_format="svg",
+        image_size="custom",
+        image_width=3210,
+        image_height=1870,
+        image_dpi=288,
+        conflict_policy="overwrite",
+        write_manifest=False,
+        resume_policy="manifest",
+    )
+
+    panel.apply_outputs(outputs)
+
+    assert panel.get_outputs() == outputs
+    assert panel.export_data() is outputs.export_data
+    assert panel.export_image() is outputs.export_image
+    assert panel.data_format() == outputs.data_format
+
+
+def test_batch_output_image_controls_link_without_losing_custom_values(qtbot):
+    from mf4_analyzer.batch import BatchOutput
+
+    panel = _make_panel(qtbot)
+    panel.apply_outputs(BatchOutput(
+        image_format="png", image_size="custom",
+        image_width=3333, image_height=1777, image_dpi=240,
+    ))
+
+    assert panel._spin_image_width.isEnabled()
+    assert panel._spin_image_height.isEnabled()
+    assert panel._spin_image_dpi.isEnabled()
+
+    panel._combo_image_size.setCurrentIndex(
+        panel._combo_image_size.findData("3840x2160")
+    )
+    assert not panel._spin_image_width.isEnabled()
+    assert not panel._spin_image_height.isEnabled()
+    assert panel.get_outputs().image_width == 3333
+    assert panel.get_outputs().image_height == 1777
+
+    panel._combo_image_format.setCurrentIndex(
+        panel._combo_image_format.findData("svg")
+    )
+    assert not panel._spin_image_dpi.isEnabled()
+    assert panel.get_outputs().image_dpi == 240
+
+    panel._chk_image.setChecked(False)
+    assert not panel._combo_image_format.isEnabled()
+    assert not panel._combo_image_size.isEnabled()
+
+    panel._chk_image.setChecked(True)
+    panel._combo_image_format.setCurrentIndex(
+        panel._combo_image_format.findData("png")
+    )
+    panel._combo_image_size.setCurrentIndex(
+        panel._combo_image_size.findData("custom")
+    )
+    assert panel._spin_image_width.value() == 3333
+    assert panel._spin_image_height.value() == 1777
+    assert panel._spin_image_dpi.value() == 240
+
+
+def test_batch_output_operations_emit_only_on_explicit_button_click(qtbot):
+    panel = _make_panel(qtbot)
+    resumed = []
+    retried = []
+    panel.resumeRequested.connect(lambda: resumed.append(True))
+    panel.retryFailedRequested.connect(lambda: retried.append(True))
+
+    assert resumed == []
+    assert retried == []
+
+    panel._btn_resume.click()
+    panel._btn_retry_failed.click()
+
+    assert resumed == [True]
+    assert retried == [True]
+
+
+def test_batch_output_panel_fits_288px_column(qtbot):
+    panel = _make_panel(qtbot)
+    panel.resize(288, 900)
+    panel.show()
+    qtbot.wait(5)
+
+    assert panel.minimumSizeHint().width() <= 288
+    assert panel.width() <= 288

@@ -15,19 +15,26 @@ arrives via Qt and the dialog re-enables.
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
+from PyQt5.QtCore import Qt, QUrl
+from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
-    QDialog, QFileDialog, QHBoxLayout, QMessageBox, QPushButton, QVBoxLayout,
-    QWidget,
+    QDialog, QFileDialog, QFrame, QHBoxLayout, QMessageBox, QPushButton,
+    QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from ....batch import AnalysisPreset, BatchOutput, BatchRunner
 from ....batch_preset_io import (
     UnsupportedPresetVersion, load_preset_from_json, save_preset_to_json,
 )
+from ....batch_recipe import normalize_batch_params
+from ....batch_validation import (
+    ValidationIssue, validate_outputs, validate_recipe,
+)
+from ....io.source_adapters import DEFAULT_SOURCE_ADAPTER_REGISTRY
 from .analysis_panel import AnalysisPanel
 from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
-from .method_buttons import _METHOD_FIELDS
 from .output_panel import OutputPanel
 from .pipeline_strip import PipelineStrip
 from .runner_thread import BatchRunnerThread
@@ -41,18 +48,18 @@ _METHOD_LABELS: dict[str, str] = {
     "order_time": "阶次",
 }
 
-_PASSTHROUGH_PARAMS_BY_METHOD: dict[str, frozenset[str]] = {
-    "fft": frozenset({
-        "weighting", "db_reference", "avg_mode", "avg_overlap",
-    }),
-    "fft_time": frozenset({
-        "weighting", "db_reference",
-    }),
-    "order_time": frozenset({
-        "weighting", "db_reference",
-    }),
-}
-
+_OUTPUT_ISSUE_FIELDS = frozenset({
+    "outputs",
+    "data_format",
+    "image_format",
+    "image_size",
+    "image_width",
+    "image_height",
+    "image_pixels",
+    "image_dpi",
+    "conflict_policy",
+    "resume_policy",
+})
 
 class BatchSheet(QDialog):
     def __init__(self, parent, files, current_preset=None):
@@ -63,13 +70,35 @@ class BatchSheet(QDialog):
         self.resize(1080, 760)
         self._files = files or {}
         self._current_preset = current_preset
-        self._passthrough_params: dict = {}
+        self._base_name = "batch"
+        self._base_params: dict = {}
+        self._recipe_method = "fft"
+        self._applied_control_snapshot: dict = {}
+        self._applying_preset = False
+        self._scope_source = "free_config"
+        self._scope_signal = None
+        self._scope_rpm_signal = None
+        self._scope_target_pairs: tuple = ()
+        self._scope_file_ids: tuple = ()
+        self._scope_file_paths: tuple[str, ...] = ()
+        self._scope_source_ids: tuple = ()
+        self._scope_source_paths: tuple[str, ...] = ()
+        self._scope_target_policy = "common"
+        self._scope_signals: tuple[str, ...] = ()
+        self._scope_rpm_channel = ""
+        self._source_registry = DEFAULT_SOURCE_ADAPTER_REGISTRY
+        source_context = getattr(parent, "batch_source_context", {}) if parent else {}
+        self._source_context = (
+            dict(source_context) if isinstance(source_context, dict) else {}
+        )
 
         # Run-state bookkeeping (W6).
         self._running: bool = False
         self._runner_thread: BatchRunnerThread | None = None
         self._last_result = None
         self._close_pending: bool = False
+        self._resume_manifest_path: str | None = None
+        self._retry_failed_manifest_path: str | None = None
 
         # W7 toast bookkeeping — populated by ``_toast`` so headless tests
         # can assert deterministically without mocking the parent's toast
@@ -115,15 +144,48 @@ class BatchSheet(QDialog):
         detail_lay.setContentsMargins(0, 0, 0, 0)
         detail_lay.setSpacing(14)
 
-        self._input_panel = InputPanel(self, files=self._files)
+        self._input_panel = InputPanel(
+            self, files=self._files, source_registry=self._source_registry,
+            source_context=self._source_context,
+        )
         self._analysis_panel = AnalysisPanel(self)
         self._analysis_panel.set_weighting_options(
             self._weighting_options_from_parent()
         )
         self._output_panel = OutputPanel(self)
-        detail_lay.addWidget(self._input_panel, 1)
-        detail_lay.addWidget(self._analysis_panel, 1)
-        detail_lay.addWidget(self._output_panel, 1)
+        store = getattr(parent, "db_reference_store", None) if parent else None
+        if store is not None:
+            self._output_panel.set_reference_catalog(store.snapshot())
+
+        def scrolling_pane(panel: QWidget, name: str) -> QScrollArea:
+            panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+            scroll = QScrollArea(detail)
+            scroll.setObjectName(name)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setWidgetResizable(True)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setMinimumSize(0, 0)
+            scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+            scroll.setStyleSheet(
+                f"QScrollArea#{name} {{ border: none; background: transparent; }}"
+                f"QScrollArea#{name} > QWidget > QWidget {{ background: #ffffff; }}"
+            )
+            scroll.setWidget(panel)
+            return scroll
+
+        self._input_scroll = scrolling_pane(
+            self._input_panel, "BatchInputScroll"
+        )
+        self._analysis_scroll = scrolling_pane(
+            self._analysis_panel, "BatchAnalysisScroll"
+        )
+        self._output_scroll = scrolling_pane(
+            self._output_panel, "BatchOutputScroll"
+        )
+        detail_lay.addWidget(self._input_scroll, 1)
+        detail_lay.addWidget(self._analysis_scroll, 1)
+        detail_lay.addWidget(self._output_scroll, 1)
         root.addWidget(detail, 1)
 
         # W6: Task list (collapsible, below detail row, above footer).
@@ -179,9 +241,19 @@ class BatchSheet(QDialog):
         self._analysis_panel.methodChanged.connect(
             self._output_panel.apply_method_defaults
         )
-        self._analysis_panel.methodChanged.connect(self._filter_passthrough_for_method)
+        self._analysis_panel.methodChanged.connect(self._on_recipe_method_changed)
         self._analysis_panel.paramsChanged.connect(self._recompute_pipeline_status)
+        self._analysis_panel.presetApplied.connect(
+            self._on_builtin_analysis_preset
+        )
         self._output_panel.changed.connect(self._recompute_pipeline_status)
+        self._output_panel.resumeRequested.connect(self._on_resume_requested)
+        self._output_panel.retryFailedRequested.connect(
+            self._on_retry_failed_requested
+        )
+        self._task_list.artifactOpenRequested.connect(
+            self._open_artifact_location
+        )
 
         # Init-sync (per conditional-visibility-init-sync lesson): seed the
         # RPM row before show() so it doesn't flash visible.
@@ -198,17 +270,22 @@ class BatchSheet(QDialog):
         fl = self._input_panel._file_list
         loaded_paths = fl.all_loaded_paths()
         any_pending = fl.has_pending_probe()
-        any_failed = fl.has_probe_failed()
+        unavailable_reasons = fl.unavailable_reasons()
+        any_failed = fl.has_probe_failed() or bool(unavailable_reasons)
         selected = self._input_panel.selected_signals()
+        time_error = self._input_panel.time_range_error()
         if any_pending:
             input_status = "pending"
             input_summary = "正在解析…"
+        elif time_error:
+            input_status = "warn"
+            input_summary = time_error
         elif any_failed:
             # A row in probe_failed must surface as warn even when other
             # config is otherwise complete (ultrareview bug_005). The
             # runner skips failed rows so is_runnable still allows Run.
             input_status = "warn"
-            input_summary = (
+            input_summary = unavailable_reasons[0] if unavailable_reasons else (
                 f"{len(loaded_paths)}文件·{len(selected)}信号"
                 if (loaded_paths or selected) else "解析失败"
             )
@@ -226,7 +303,18 @@ class BatchSheet(QDialog):
         # ANALYSIS
         method = self._analysis_panel.current_method()
         params = self._analysis_panel.get_params()
-        if not method:
+        preflight_issues = self.preflight_issues()
+        analysis_issues = tuple(
+            issue for issue in preflight_issues
+            if issue.field != "time_range"
+            and issue.field not in _OUTPUT_ISSUE_FIELDS
+        )
+        if analysis_issues:
+            issue = analysis_issues[0]
+            self.strip.set_stage(
+                1, "warn", f"{issue.field}: {issue.message}",
+            )
+        elif not method:
             self.strip.set_stage(1, "warn", "未选择方法")
         else:
             label = _METHOD_LABELS.get(method, method)
@@ -236,18 +324,50 @@ class BatchSheet(QDialog):
 
         # OUTPUT
         directory = self._output_panel.directory()
-        export_data = self._output_panel.export_data()
-        export_image = self._output_panel.export_image()
-        if not directory or not (export_data or export_image):
+        outputs = self._output_panel.get_outputs()
+        export_data = outputs.export_data
+        export_image = outputs.export_image
+        output_issues = tuple(
+            issue for issue in preflight_issues
+            if issue.field in _OUTPUT_ISSUE_FIELDS
+        )
+        if output_issues:
+            issue = output_issues[0]
+            self.strip.set_stage(
+                2, "warn", f"{issue.field}: {issue.message}",
+            )
+            self._output_panel.set_output_preview(error=issue.message)
+        elif not directory or not (export_data or export_image):
             self.strip.set_stage(2, "warn", "目录/导出未配置")
+            self._output_panel.set_output_preview(None)
         else:
-            fmt = self._output_panel.data_format().upper()
             parts: list[str] = []
             if export_data:
-                parts.append(fmt)
+                parts.append(outputs.data_format.upper())
             if export_image:
-                parts.append("PNG")
+                parts.append(outputs.image_format.upper())
             self.strip.set_stage(2, "ok", "+".join(parts))
+            if loaded_paths and selected and method:
+                try:
+                    preview = self._make_runner().preview_outputs(
+                        self.get_preset(), directory,
+                    )
+                except (TypeError, ValueError, OSError) as exc:
+                    self._output_panel.set_output_preview(error=str(exc))
+                else:
+                    self._output_panel.set_output_preview(preview)
+            else:
+                self._output_panel.set_output_preview(None)
+
+        self._output_panel.update_effective_preview(
+            tuple(fl._rows.values()), selected,
+            weighting=str(params.get("weighting", "None")),
+            target_policy=self.target_policy(),
+            target_pairs=(
+                self._scope_target_pairs
+                if self._scope_target_policy == "exact_pairs" else ()
+            ),
+        )
 
         # Gate the Run button on is_runnable() so an empty/partial
         # config cannot reach BatchRunner's legacy fallback (ultrareview
@@ -290,6 +410,26 @@ class BatchSheet(QDialog):
     def file_paths(self) -> tuple[str, ...]:
         return self._input_panel.file_paths()
 
+    def source_ids(self) -> tuple:
+        return self._input_panel.source_ids()
+
+    def source_paths(self) -> tuple[str, ...]:
+        return self._input_panel.source_paths()
+
+    def target_policy(self) -> str:
+        exact_scope_unchanged = (
+            self.source_ids(), self.source_paths(), self.selected_signals()
+        ) == (
+            self._scope_source_ids, self._scope_source_paths, self._scope_signals
+        )
+        if (
+            self._scope_target_policy == "exact_pairs"
+            and self._scope_target_pairs
+            and exact_scope_unchanged
+        ):
+            return "exact_pairs"
+        return self._input_panel.target_policy()
+
     def params(self) -> dict:
         return self._analysis_panel.get_params()
 
@@ -306,9 +446,32 @@ class BatchSheet(QDialog):
         return self._output_panel.data_format()
 
     def signals_marked_unavailable(self) -> tuple[str, ...]:
-        intersection = self._input_panel._file_list.current_intersection()
+        file_list = self._input_panel._file_list
+        policy = self.target_policy()
+        if policy == "exact_pairs":
+            rows = file_list.loaded_rows()
+            unavailable: list[str] = []
+            for source_id, signal in self._scope_target_pairs:
+                row = next(
+                    (
+                        item for item in rows
+                        if item.source_id == source_id or item.fid == source_id
+                    ),
+                    None,
+                )
+                if row is None or signal not in row.channels:
+                    unavailable.append(str(signal))
+            return tuple(dict.fromkeys(unavailable))
+
+        if policy == "available_per_source":
+            available = frozenset().union(
+                *(row.channels for row in file_list.loaded_rows())
+            )
+        else:
+            available = file_list.current_intersection()
         return tuple(
-            s for s in self.selected_signals() if s not in intersection
+            signal for signal in self.selected_signals()
+            if signal not in available
         )
 
     # ------------------------------------------------------------------
@@ -335,6 +498,20 @@ class BatchSheet(QDialog):
     def apply_files(self, file_ids: tuple, file_paths: tuple[str, ...]) -> None:
         self._input_panel.apply_files(file_ids, file_paths)
 
+    def apply_sources(self, source_ids: tuple, source_paths: tuple[str, ...]) -> None:
+        self._input_panel.apply_sources(source_ids, source_paths)
+
+    def _on_builtin_analysis_preset(self, _key: str, patch: dict) -> None:
+        # AnalysisPanel already applied its owned fields.  OUTPUT owns display
+        # scale/axes; partial application deliberately excludes export choices,
+        # source scope and dB reference state.
+        display_patch = {
+            key: value for key, value in dict(patch or {}).items()
+            if key not in {"db_reference", "db_reference_mode"}
+        }
+        self._output_panel.apply_axis_params(display_patch)
+        self._recompute_pipeline_status()
+
     def apply_preset(self, preset: AnalysisPreset) -> None:
         """Fill the dialog from a preset (spec §6.4).
 
@@ -353,74 +530,126 @@ class BatchSheet(QDialog):
         """
         if preset is None:
             return
-        self._passthrough_params = self._collect_passthrough_params(
-            dict(preset.params), preset.method
+        method = str(preset.method)
+        params = normalize_batch_params(dict(preset.params), method)
+        target_pairs = tuple(tuple(pair) for pair in (preset.target_pairs or ()))
+        runtime_source_ids = tuple(
+            getattr(preset, "source_ids", ()) or preset.file_ids or ()
+        )
+        runtime_source_paths = tuple(
+            getattr(preset, "source_paths", ()) or preset.file_paths or ()
+        )
+        requested_policy = str(
+            getattr(preset, "target_policy", "common") or "common"
         )
 
-        if preset.source == "current_single":
-            # Narrow the file list to the captured fid first so the picker
-            # universe is rebuilt against only that file. Empty file_paths
-            # — current_single never carries a disk-only path.
-            if preset.signal is not None:
+        self._applying_preset = True
+        try:
+            self._base_name = str(preset.name or "batch")
+            self._base_params = dict(params)
+            self._recipe_method = method
+            self._scope_source = str(preset.source or "free_config")
+            self._scope_signal = (
+                tuple(preset.signal) if preset.signal is not None else None
+            )
+            self._scope_rpm_signal = (
+                tuple(preset.rpm_signal) if preset.rpm_signal is not None else None
+            )
+            self._scope_target_pairs = target_pairs
+            self._scope_target_policy = (
+                "exact_pairs" if target_pairs else requested_policy
+            )
+            self._input_panel.apply_target_policy(self._scope_target_policy)
+
+            if preset.source == "current_single" and preset.signal is not None:
                 signal_fid, signal_name = preset.signal
-                self.apply_files(file_ids=(signal_fid,), file_paths=())
+                source_path = runtime_source_paths
+                if not source_path:
+                    fd = self._files.get(signal_fid)
+                    filepath = getattr(fd, "filepath", None)
+                    source_path = (str(filepath) if filepath is not None else str(signal_fid),)
+                self.apply_sources(
+                    source_ids=runtime_source_ids or (signal_fid,),
+                    source_paths=source_path,
+                )
                 self.apply_signals((signal_name,))
-            self.apply_method(preset.method)
-            self.apply_params(dict(preset.params))
-            # Restore the InputPanel-owned rpm_factor field (Step 5.4).
-            if "rpm_factor" in preset.params:
-                self._input_panel.apply_rpm_factor(preset.params["rpm_factor"])
-            self._input_panel.apply_filter_params(preset.params.get("filter"))
-            self._output_panel.apply_axis_params(dict(preset.params))
-            self.apply_rpm_channel(preset.rpm_channel or "")
-        else:
-            # free_config: KEEP current files (the file selection is local
-            # to this dialog session per spec §6.4). Apply the recipe.
-            self.apply_signals(tuple(preset.target_signals))
-            self.apply_method(preset.method)
-            self.apply_params(dict(preset.params))
-            # Restore the InputPanel-owned rpm_factor field (Step 5.4).
-            if "rpm_factor" in preset.params:
-                self._input_panel.apply_rpm_factor(preset.params["rpm_factor"])
-            self._input_panel.apply_filter_params(preset.params.get("filter"))
-            self._output_panel.apply_axis_params(dict(preset.params))
-            self.apply_rpm_channel(preset.rpm_channel or "")
+            elif target_pairs:
+                pair_file_ids = tuple(dict.fromkeys(pair[0] for pair in target_pairs))
+                pair_signals = tuple(dict.fromkeys(str(pair[1]) for pair in target_pairs))
+                self.apply_sources(
+                    source_ids=runtime_source_ids or pair_file_ids,
+                    source_paths=runtime_source_paths,
+                )
+                self.apply_signals(tuple(preset.target_signals or pair_signals))
+            else:
+                # A reusable free-config preset carries a recipe, not a forced
+                # runtime file scope. Keep the dialog's current file selection.
+                if runtime_source_ids or runtime_source_paths:
+                    self.apply_sources(runtime_source_ids, runtime_source_paths)
+                self.apply_signals(tuple(preset.target_signals))
 
-        # Outputs apply in both paths.
-        self.apply_outputs(preset.outputs)
+            self.apply_method(method)
+            self.apply_params(params)
+            if "rpm_factor" in params:
+                self._input_panel.apply_rpm_factor(params["rpm_factor"])
+            self._input_panel.apply_filter_params(params.get("filter"))
+            self._output_panel.apply_axis_params(params)
+            self._output_panel.apply_reference_params(params)
+            rpm_channel = preset.rpm_channel or (
+                preset.rpm_signal[1] if preset.rpm_signal is not None else ""
+            )
+            self.apply_rpm_channel(rpm_channel)
+            self.apply_outputs(preset.outputs)
+            self.apply_time_range(params.get("time_range"))
+        finally:
+            self._applying_preset = False
 
-        # time_range round-trip — both sources carry it through params.
-        if "time_range" in preset.params:
-            self.apply_time_range(preset.params["time_range"])
+        self._applied_control_snapshot = self._control_params_snapshot(method)
+        self._scope_file_ids = self.file_ids()
+        self._scope_file_paths = self.file_paths()
+        self._scope_source_ids = self.source_ids()
+        self._scope_source_paths = self.source_paths()
+        self._scope_signals = self.selected_signals()
+        self._scope_rpm_channel = self.rpm_channel()
+        self._recompute_pipeline_status()
 
-    def _owned_param_keys(self, method: str | None = None) -> set[str]:
-        method_key = method or self.method()
-        return (
-            set(_METHOD_FIELDS.get(method_key, ()))
-            | set(self._output_panel.axis_params().keys())
-            | set(self._input_panel.rpm_params().keys())
-            | {"filter", "time_range"}
-        )
+    def _on_recipe_method_changed(self, method: str) -> None:
+        method = str(method)
+        if not self._applying_preset and method != self._recipe_method:
+            self._base_params = normalize_batch_params(self._base_params, method)
+        self._recipe_method = method
 
-    def _collect_passthrough_params(self, params: dict, method: str) -> dict:
-        allowed = _PASSTHROUGH_PARAMS_BY_METHOD.get(method, frozenset())
-        owned = self._owned_param_keys(method)
-        return {
-            key: value
-            for key, value in dict(params or {}).items()
-            if key in allowed and key not in owned
-        }
+    def _control_params_snapshot(self, method: str | None = None) -> dict:
+        method_key = str(method or self.method())
+        params = dict(self.params())
+        axis = self._output_panel.axis_params()
+        params.update(axis)
+        params.update(self._output_panel.reference_params())
+        if method_key == "fft":
+            params["amp_y"] = (
+                "dB" if axis.get("amplitude_mode") == "amplitude_db" else "Linear"
+            )
+        params.update(self._input_panel.rpm_params())
+        params["filter"] = self._input_panel.filter_params()
+        rng = self.time_range()
+        if rng is not None:
+            params["time_range"] = rng
+        return normalize_batch_params(params, method_key)
 
-    def _filter_passthrough_for_method(self, method: str) -> None:
-        if not self._passthrough_params:
-            return
-        allowed = _PASSTHROUGH_PARAMS_BY_METHOD.get(method, frozenset())
-        owned = self._owned_param_keys(method)
-        self._passthrough_params = {
-            key: value
-            for key, value in self._passthrough_params.items()
-            if key in allowed and key not in owned
-        }
+    def _merged_params(self) -> dict:
+        method = self.method()
+        merged = normalize_batch_params(self._base_params, method)
+        current = self._control_params_snapshot(method)
+        baseline = self._applied_control_snapshot
+        missing = object()
+        for key in set(baseline) | set(current):
+            if baseline.get(key, missing) == current.get(key, missing):
+                continue
+            if key in current:
+                merged[key] = current[key]
+            else:
+                merged.pop(key, None)
+        return normalize_batch_params(merged, method)
 
     # ------------------------------------------------------------------
     # W7: toolbar handlers (preset import / export / fill-from-current)
@@ -470,6 +699,40 @@ class BatchSheet(QDialog):
             return
         self._toast(f"已导出 preset 到：{path}", kind="success")
 
+    def _on_resume_requested(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择要恢复的运行清单", "", "JSON (*.json)"
+        )
+        if not path:
+            return
+        self._resume_manifest_path = str(path)
+        self._retry_failed_manifest_path = None
+        outputs = dataclasses.replace(
+            self._output_panel.get_outputs(), resume_policy="manifest",
+        )
+        self._output_panel.apply_outputs(outputs)
+        self._output_panel.set_operation_status(
+            f"恢复清单：{Path(path).name}"
+        )
+        self._recompute_pipeline_status()
+
+    def _on_retry_failed_requested(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择失败任务运行清单", "", "JSON (*.json)"
+        )
+        if not path:
+            return
+        self._retry_failed_manifest_path = str(path)
+        self._resume_manifest_path = None
+        outputs = dataclasses.replace(
+            self._output_panel.get_outputs(), resume_policy="none",
+        )
+        self._output_panel.apply_outputs(outputs)
+        self._output_panel.set_operation_status(
+            f"重试失败：{Path(path).name}"
+        )
+        self._recompute_pipeline_status()
+
     def _build_preset_for_export(self) -> AnalysisPreset:
         """Build the recipe-only preset to persist.
 
@@ -483,9 +746,12 @@ class BatchSheet(QDialog):
             preset,
             file_ids=(),
             file_paths=(),
+            source_ids=(),
+            source_paths=(),
             signal=None,
             rpm_signal=None,
             signal_pattern="",
+            target_pairs=(),
         )
 
     def _toast(self, text: str, kind: str = "info") -> None:
@@ -514,6 +780,8 @@ class BatchSheet(QDialog):
         for r in fl._rows.values():
             if r.state in (STATE_PATH_PENDING, STATE_PROBING):
                 return False
+        if fl.unavailable_reasons():
+            return False
         if not fl.all_loaded_paths():
             return False
         if not self.selected_signals():
@@ -522,7 +790,62 @@ class BatchSheet(QDialog):
             return False
         if not self.output_dir():
             return False
+        if self.preflight_issues():
+            return False
         return True
+
+    def preflight_issues(self) -> tuple[ValidationIssue, ...]:
+        issues: list[ValidationIssue] = []
+        time_error = self._input_panel.time_range_error()
+        if time_error:
+            issues.append(ValidationIssue(
+                "time_range", "invalid_text", time_error,
+            ))
+        for reason in self._input_panel._file_list.unavailable_reasons():
+            issues.append(ValidationIssue(
+                "source", "source_unavailable", str(reason),
+            ))
+        rows = self._input_panel._file_list.loaded_rows()
+        selected = self.selected_signals()
+        policy = self.target_policy()
+        if policy != "exact_pairs" and selected:
+            if policy == "common":
+                common = self._input_panel._file_list.current_intersection()
+                missing = tuple(signal for signal in selected if signal not in common)
+            else:
+                union = frozenset().union(*(row.channels for row in rows)) if rows else frozenset()
+                missing = tuple(signal for signal in selected if signal not in union)
+            if missing:
+                issues.append(ValidationIssue(
+                    "target_signals", "unavailable_target",
+                    "目标信号在所选来源中不可用: " + ", ".join(missing),
+                ))
+        params = self._merged_params()
+        effective_rpm_signal = (
+            self._scope_rpm_signal
+            if self.rpm_channel() == self._scope_rpm_channel
+            else None
+        )
+        issues.extend(validate_recipe(
+            self.method(),
+            params,
+            rpm_channel=self.rpm_channel(),
+            rpm_signal=effective_rpm_signal,
+        ))
+        rpm_mode = str(params.get("rpm_mode", "channel")).strip().lower()
+        if (
+            self.method() == "order_time"
+            and rpm_mode not in {"manual", "fixed", "手动"}
+            and not self.rpm_channel()
+            and effective_rpm_signal is None
+            and not any(issue.field == "rpm_channel" for issue in issues)
+        ):
+            issues.append(ValidationIssue(
+                "rpm_channel", "missing_rpm_channel",
+                "阶次分析的通道转速模式需要 RPM 通道",
+            ))
+        issues.extend(validate_outputs(self._output_panel.get_outputs()))
+        return tuple(issues)
 
     # ------------------------------------------------------------------
     # Preset assembly
@@ -541,37 +864,68 @@ class BatchSheet(QDialog):
         full-load disk files on the UI thread and freeze the dialog. Per
         spec §3.2 disk files use the cached probe set on the file row.
 
-        We append a row even when a signal is missing from a file. The
-        runner will emit ``task_failed`` with ``missing signal: …`` at run
-        time — UI does not pre-judge.
+        Policy filtering mirrors preflight: common only lists the true
+        intersection; available-per-source lists each valid source/signal
+        pair; exact-pair scope is preserved verbatim above.
         """
-        method = self.method() or ""
+        preset = self.get_preset()
+        method = preset.method or ""
         signals = self.selected_signals()
         rows: list[tuple[str, str, str]] = []
 
-        # Loaded files (file_ids → FileData via self._files)
-        for fid in self._input_panel.file_ids():
-            fd = self._files.get(fid)
-            label = getattr(fd, "filename", None) or str(fid)
-            for sig in signals:
+        if preset.target_pairs:
+            file_rows = tuple(self._input_panel._file_list._rows.values())
+            for source_id, sig in preset.target_pairs:
+                fd = self._files.get(source_id)
+                label = getattr(fd, "filename", None)
+                if not label:
+                    match = next(
+                        (
+                            row for row in file_rows
+                            if row.source_id == source_id or row.fid == source_id
+                        ),
+                        None,
+                    )
+                    label = getattr(match, "label", None) or str(source_id)
                 rows.append((str(label), str(sig), str(method)))
+            return rows
 
-        # Disk-only paths (cached probe set lives on the FileListWidget row).
         fl = self._input_panel._file_list
-        for path in self._input_panel.file_paths():
-            row = fl._rows.get(path)
-            label = getattr(row, "label", None) or path
-            # Strip any state badge ("  …" / "  ⚠") that _render_row appends.
-            for trailing in ("  …", "  ⚠"):
-                if label.endswith(trailing):
-                    label = label[: -len(trailing)]
+        policy = preset.target_policy or "common"
+        common = fl.current_intersection() if policy == "common" else frozenset()
+        for row in fl.loaded_rows():
+            fd = self._files.get(row.source_id)
+            label = getattr(fd, "filename", None) or row.label or str(row.source_id)
             for sig in signals:
+                if policy == "common" and sig not in common:
+                    continue
+                if policy == "available_per_source" and sig not in row.channels:
+                    continue
                 rows.append((str(label), str(sig), str(method)))
 
         return rows
 
     def _outputs_per_task(self) -> int:
-        return int(bool(self.export_data())) + int(bool(self.export_image()))
+        outputs = self._output_panel.get_outputs()
+        return int(bool(outputs.export_data)) + int(bool(outputs.export_image))
+
+    def _make_runner(self) -> BatchRunner:
+        """Build the GUI-free runner with the parent catalog snapshot."""
+        store = getattr(self.parent(), "db_reference_store", None)
+        if store is not None:
+            snapshot = store.snapshot()
+            return BatchRunner(
+                self._files,
+                source_registry=self._source_registry,
+                source_context=self._source_context,
+                db_reference_catalog=snapshot,
+                prefer_channel_metadata=snapshot.prefer_channel_metadata,
+            )
+        return BatchRunner(
+            self._files,
+            source_registry=self._source_registry,
+            source_context=self._source_context,
+        )
 
     def _on_run_clicked(self) -> None:
         """Idle-mode 运行 handler — synchronously locks the dialog and starts
@@ -585,6 +939,11 @@ class BatchSheet(QDialog):
             return
         if not self.is_runnable():
             return
+
+        # A previous run result must never survive into a new lifecycle. If
+        # the worker fails before emitting its result, QThread.finished still
+        # unlocks against None rather than presenting stale success/failure.
+        self._last_result = None
 
         # Build the dry-run preview from UI state (no disk loads).
         tasks = self._build_dry_run_preview()
@@ -610,20 +969,18 @@ class BatchSheet(QDialog):
         # store off ``self.parent()`` defensively (direct-construction
         # tests pass ``parent=None``, and any parent lacking the attribute
         # falls back to BatchRunner's no-kwargs factory-catalog default).
-        store = getattr(self.parent(), 'db_reference_store', None)
-        if store is not None:
-            snapshot = store.snapshot()
-            runner = BatchRunner(
-                self._files,
-                db_reference_catalog=snapshot,
-                prefer_channel_metadata=snapshot.prefer_channel_metadata,
-            )
-        else:
-            runner = BatchRunner(self._files)
+        runner = self._make_runner()
         preset = self.get_preset()
         output_dir = self.output_dir()
 
-        thread = BatchRunnerThread(runner, preset, output_dir, parent=self)
+        thread = BatchRunnerThread(
+            runner,
+            preset,
+            output_dir,
+            parent=self,
+            resume_manifest=self._resume_manifest_path,
+            retry_failed_manifest=self._retry_failed_manifest_path,
+        )
         self._runner_thread = thread
         # AutoConnection is correct in production (live event loop). Both
         # signals are object-tagged so qtbot can connect bare callables.
@@ -650,6 +1007,17 @@ class BatchSheet(QDialog):
         ``_on_thread_finished`` (bound to ``QThread.finished``) per spec
         §6.2 unlock contract."""
         self._last_result = result
+        if result is None:
+            return
+        status = str(getattr(result, "status", "") or "未知")
+        facts = [f"运行结果：{status}"]
+        run_id = getattr(result, "run_id", None)
+        manifest_path = getattr(result, "manifest_path", None)
+        if run_id:
+            facts.append(f"run_id {run_id}")
+        if manifest_path:
+            facts.append(f"清单 {Path(manifest_path).name}")
+        self._output_panel.set_operation_status(" · ".join(facts))
 
     def _on_thread_finished(self) -> None:
         """Bound to ``QThread.finished`` — guaranteed to fire by Qt even if
@@ -710,6 +1078,9 @@ class BatchSheet(QDialog):
         self._input_panel.setEnabled(False)
         self._analysis_panel.setEnabled(False)
         self._output_panel.setEnabled(False)
+        self._btn_fill_from_current.setEnabled(False)
+        self._btn_import_preset.setEnabled(False)
+        self._btn_export_preset.setEnabled(False)
         self._btn_cancel.setVisible(False)
         self._btn_run.setVisible(False)
         self._btn_abort.setEnabled(True)
@@ -726,11 +1097,24 @@ class BatchSheet(QDialog):
         self._input_panel.setEnabled(True)
         self._analysis_panel.setEnabled(True)
         self._output_panel.setEnabled(True)
+        self._btn_fill_from_current.setEnabled(self._current_preset is not None)
+        self._btn_import_preset.setEnabled(True)
+        self._btn_export_preset.setEnabled(True)
         self._btn_abort.setVisible(False)
         self._btn_cancel.setVisible(True)
         self._btn_run.setVisible(True)
         # Re-evaluate Run-button enabled state against current config.
         self._btn_run.setEnabled(self.is_runnable())
+
+    def _open_artifact_location(self, artifact_path: str) -> None:
+        """Open an artifact's containing folder after explicit activation."""
+        path = Path(str(artifact_path or "")).expanduser()
+        if not str(artifact_path or "").strip():
+            return
+        target = path if path.is_dir() else path.parent
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+        if not opened:
+            self._toast(f"无法打开输出位置：{target}", kind="warning")
 
     def closeEvent(self, event):  # noqa: N802 (Qt API)
         """If a run is in progress, prompt for confirmation and route to
@@ -753,33 +1137,73 @@ class BatchSheet(QDialog):
         super().closeEvent(event)
 
     def get_preset(self) -> AnalysisPreset:
-        # Merge the user-typed time_range field into params so
-        # BatchRunner._apply_time_range sees it (ultrareview bug_009).
-        # Empty field → no key, so BatchRunner runs the full signal.
-        params = dict(self._passthrough_params)
-        params.update(self.params())
-        params.update(self._output_panel.axis_params())
-        # InputPanel-owned rpm_factor (Wave 2 Task 5) — DynamicParamForm no
-        # longer carries it, so we merge from the InputPanel here.
-        params.update(self._input_panel.rpm_params())
-        params["filter"] = self._input_panel.filter_params()
-        rng = self.time_range()
-        if rng is not None:
-            params["time_range"] = rng
+        params = self._merged_params()
+        # Preserve the long-standing in-memory AnalysisPreset API while the
+        # canonical JSON/normalization layer uses one sequence shape (list).
+        if isinstance(params.get("time_range"), list):
+            params["time_range"] = tuple(params["time_range"])
+        outputs = self._output_panel.get_outputs()
+        current_scope = (
+            self.source_ids(),
+            self.source_paths(),
+            self.selected_signals(),
+        )
+        applied_scope = (
+            self._scope_source_ids,
+            self._scope_source_paths,
+            self._scope_signals,
+        )
+        scope_unchanged = current_scope == applied_scope
+
+        single_scope = (
+            len(self.source_ids()) == 1
+            and len(self.selected_signals()) == 1
+        )
+        if self._scope_source == "current_single" and single_scope:
+            exact_signal = (self.source_ids()[0], self.selected_signals()[0])
+            rpm_signal = self._scope_rpm_signal
+            current_rpm = self.rpm_channel()
+            if current_rpm != self._scope_rpm_channel:
+                rpm_signal = (
+                    (exact_signal[0], current_rpm) if current_rpm else None
+                )
+            current = AnalysisPreset.from_current_single(
+                name=self._base_name,
+                method=self.method(),
+                signal=exact_signal,
+                rpm_signal=rpm_signal,
+                rpm_channel=current_rpm,
+                params=params,
+                outputs=outputs,
+            )
+            return dataclasses.replace(
+                current,
+                source_ids=self.source_ids(),
+                source_paths=self.source_paths(),
+                file_ids=self.file_ids(),
+                file_paths=self.file_paths(),
+            )
+
+        exact_pairs = (
+            self._scope_target_pairs
+            if self._scope_target_pairs and scope_unchanged else ()
+        )
+        policy = "exact_pairs" if exact_pairs else self._input_panel.target_policy()
+
         base = AnalysisPreset.free_config(
-            name=self._preset_name(),
+            name=self._base_name or self._preset_name(),
             method=self.method(),
             target_signals=self.selected_signals(),
             rpm_channel=self.rpm_channel(),
             params=params,
-            outputs=BatchOutput(
-                export_data=self.export_data(),
-                export_image=self.export_image(),
-                data_format=self.data_format(),
-            ),
+            outputs=outputs,
+            target_policy=policy,
         )
         return dataclasses.replace(
             base,
+            source_ids=self.source_ids(),
+            source_paths=self.source_paths(),
             file_ids=self.file_ids(),
             file_paths=self.file_paths(),
+            target_pairs=exact_pairs,
         )

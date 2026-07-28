@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_method_buttons_emit_signal(qtbot):
     from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
     g = MethodButtonGroup()
@@ -62,7 +65,10 @@ def test_param_form_fft_time_fields(qtbot):
     qtbot.addWidget(form)
     form.set_method("fft_time")
     visible = form.visible_field_names()
-    assert {"window", "nfft", "overlap", "remove_mean", "weighting"} == visible
+    assert {
+        "window", "nfft_mode", "nfft", "t_win_s", "overlap",
+        "remove_mean", "weighting",
+    } == visible
 
 
 def test_param_form_weighting_visible_for_all_methods(qtbot):
@@ -149,7 +155,7 @@ def test_batch_method_buttons_include_time_and_user_labels(qtbot):
     assert group._buttons["order_time"].text() == "阶次"
 
 
-def test_batch_time_method_has_no_analysis_fields(qtbot):
+def test_batch_time_method_exposes_preprocess_fields(qtbot):
     from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
 
     form = DynamicParamForm()
@@ -157,4 +163,166 @@ def test_batch_time_method_has_no_analysis_fields(qtbot):
 
     form.set_method("time")
 
-    assert form.visible_field_names() == set()
+    assert form.visible_field_names() == {
+        "time_scale", "time_offset", "time_remove_mean", "sample_mode",
+        "target_fs", "decimation_factor",
+    }
+
+
+@pytest.mark.parametrize(
+    ("method", "params"),
+    (
+        ("fft", {
+            "window": "flattop", "nfft_mode": "auto", "nfft": None,
+            "t_win_s": 2.25, "overlap": 0.4, "avg_mode": "峰值保持",
+            "avg_overlap": 75, "amplitude_definition": "rms",
+            "weighting": "A",
+        }),
+        ("fft_time", {
+            "window": "blackman", "nfft_mode": "fixed", "nfft": 4096,
+            "t_win_s": 0.75, "overlap": 0.8, "remove_mean": False,
+            "weighting": "A",
+        }),
+        ("order_time", {
+            "window": "bartlett", "nfft_mode": "fixed", "nfft": 2048,
+            "max_order": 45.0, "order_res": 0.025, "time_res": 0.2,
+            "rpm_mode": "manual", "manual_rpm": 1800.0,
+            "samples_per_rev": 1024, "weighting": "A",
+        }),
+        ("time", {
+            "time_preprocess": {
+                "scale": 2.5, "offset": -1.25, "remove_mean": True,
+                "sample_mode": "target_fs", "target_fs": 200.0,
+                "decimation_factor": 3,
+            },
+        }),
+    ),
+)
+def test_phase2_all_method_controls_round_trip(qtbot, method, params):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method(method)
+    form.apply_params(params)
+
+    assert form.get_params() == params
+
+
+def test_batch_builtin_preset_bar_uses_shared_provider_and_partial_apply(qtbot):
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
+
+    panel = AnalysisPanel()
+    qtbot.addWidget(panel)
+    panel.set_method("order_time")
+    panel.apply_params({"window": "kaiser", "manual_rpm": 1234.0})
+    emitted = []
+    panel.presetApplied.connect(lambda key, patch: emitted.append((key, patch)))
+    panel._preset_buttons["torque"].click()
+    params = panel.get_params()
+
+    expected = get_builtin_preset("order_time", "torque").params_copy()
+    assert emitted == [("torque", expected)]
+    assert params["nfft_mode"] == "auto"
+    assert params["nfft"] is None
+    for key in ("max_order", "order_res", "time_res", "samples_per_rev"):
+        assert params[key] == expected[key]
+    assert params["window"] == "kaiser"
+
+
+def test_batch_time_preset_disables_frequency_and_balance(qtbot):
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
+
+    panel = AnalysisPanel()
+    qtbot.addWidget(panel)
+    panel.set_method("time")
+
+    assert panel._preset_buttons["torque"].isEnabled() is False
+    assert panel._preset_buttons["vibration"].isEnabled() is False
+    assert panel._preset_buttons["transient"].isEnabled() is True
+
+
+def test_batch_method_and_preset_selectors_use_distinct_control_types(qtbot):
+    from PyQt5.QtWidgets import QPushButton, QRadioButton
+
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
+
+    panel = AnalysisPanel()
+    qtbot.addWidget(panel)
+
+    assert panel._method_title.text() == "分析方法"
+    assert panel._preset_title.text() == "分析预设"
+    assert all(
+        isinstance(button, QPushButton)
+        for button in panel._method_group._buttons.values()
+    )
+    assert all(
+        isinstance(button, QRadioButton)
+        for button in panel._preset_buttons.values()
+    )
+    assert panel._preset_buttons["custom"].isChecked()
+
+
+def test_batch_window_options_match_canonical_analysis_factory(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+
+    assert {
+        form._w_window.itemText(i) for i in range(form._w_window.count())
+    } == {"hanning", "hamming", "blackman", "bartlett", "kaiser", "flattop"}
+    assert form._w_window.findText("rectangular") == -1
+
+
+def test_method_button_labels_fit_narrow_batch_column_with_production_qss(
+    qapp, qtbot,
+):
+    from pathlib import Path
+
+    from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
+
+    old_stylesheet = qapp.styleSheet()
+    try:
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        group = MethodButtonGroup()
+        qtbot.addWidget(group)
+        group.resize(288, group.sizeHint().height())
+        group.show()
+        qtbot.wait(20)
+
+        for button in group._buttons.values():
+            text_width = button.fontMetrics().horizontalAdvance(button.text())
+            assert button.width() >= text_width + 16
+    finally:
+        group.close()
+        qapp.setStyleSheet(old_stylesheet)
+
+
+def test_preset_radio_labels_fit_narrow_batch_column_with_production_qss(
+    qapp, qtbot,
+):
+    from pathlib import Path
+
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
+
+    old_stylesheet = qapp.styleSheet()
+    try:
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        panel = AnalysisPanel()
+        qtbot.addWidget(panel)
+        panel.resize(288, 650)
+        panel.show()
+        qtbot.wait(20)
+
+        for button in panel._preset_buttons.values():
+            text_width = button.fontMetrics().horizontalAdvance(button.text())
+            assert button.width() >= text_width + 22
+    finally:
+        panel.close()
+        qapp.setStyleSheet(old_stylesheet)

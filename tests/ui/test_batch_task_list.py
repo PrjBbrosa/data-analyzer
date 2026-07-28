@@ -72,3 +72,96 @@ def test_collapse_toggle(qtbot):
     assert w.is_expanded() is False
     # Body widget hidden when collapsed
     assert not w._body.isVisible()
+
+
+def test_empty_task_list_hides_body_and_populated_body_is_height_capped(qtbot):
+    from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget
+
+    w = TaskListWidget()
+    qtbot.addWidget(w)
+    w.show()
+
+    assert not w._body.isVisible()
+    assert not w._toggle_btn.isEnabled()
+
+    w.apply_dry_run(
+        [(f"{index}.mf4", "sig", "fft") for index in range(20)],
+        outputs_per_task=1,
+    )
+
+    assert w._body.isVisible()
+    assert w._toggle_btn.isEnabled()
+    assert w._body.maximumHeight() == 120
+
+
+def test_skipped_resumed_cancelled_are_terminal_progress_states(qtbot):
+    from mf4_analyzer.batch import BatchProgressEvent
+    from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget
+
+    w = TaskListWidget()
+    qtbot.addWidget(w)
+    w.apply_dry_run(
+        [(f"{i}.mf4", "sig", "fft") for i in range(3)],
+        outputs_per_task=1,
+    )
+    w.on_run_started()
+
+    w.on_event(BatchProgressEvent(
+        kind="task_skipped", task_index=1, total=3, message="existing",
+    ))
+    w.on_event(BatchProgressEvent(
+        kind="task_resumed", task_index=2, total=3, message="checksum ok",
+    ))
+    w.on_event(BatchProgressEvent(
+        kind="task_cancelled", task_index=3, total=3, message="cancelled",
+    ))
+
+    assert [w.row_icon(i) for i in range(3)] == ["↷", "↻", "—"]
+    assert w.progress_value() == 100
+    assert "3/3" in w.header_text()
+    assert "existing" in w.row_tooltip(0)
+    assert "checksum" in w.row_tooltip(1)
+
+
+def test_unexpected_finish_never_marks_running_row_done(qtbot):
+    from mf4_analyzer.batch import BatchProgressEvent, BatchRunResult
+    from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget
+
+    w = TaskListWidget()
+    qtbot.addWidget(w)
+    w.apply_dry_run([("a.mf4", "sig", "fft")], outputs_per_task=1)
+    w.on_run_started()
+    w.on_event(BatchProgressEvent(
+        kind="task_started", task_index=1, total=1,
+    ))
+
+    w.on_run_finished(BatchRunResult(
+        status="blocked", blocked=["runner crashed: boom"],
+    ))
+
+    assert w.row_icon(0) == "✗"
+    assert "boom" in w.row_tooltip(0)
+    assert w.row_icon(0) != "✓"
+    assert w.progress_value() == 100
+
+
+def test_artifact_open_request_requires_explicit_row_activation(qtbot):
+    from mf4_analyzer.batch import BatchProgressEvent
+    from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget
+
+    w = TaskListWidget()
+    qtbot.addWidget(w)
+    w.apply_dry_run([("a.mf4", "sig", "fft")], outputs_per_task=2)
+    requested = []
+    w.artifactOpenRequested.connect(requested.append)
+    w.on_event(BatchProgressEvent(
+        kind="task_done", task_index=1, total=1,
+        data_path="/tmp/out.csv", image_path="/tmp/out.png",
+    ))
+
+    assert requested == []
+    assert w.row_artifact_paths(0) == ("/tmp/out.csv", "/tmp/out.png")
+
+    w._body.itemDoubleClicked.emit(w._body.item(0))
+
+    assert requested == ["/tmp/out.png"]

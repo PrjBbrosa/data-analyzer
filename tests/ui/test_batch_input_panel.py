@@ -1,3 +1,77 @@
+import pytest
+
+
+class _Ready:
+    status = "ready"
+    reason = ""
+    is_ready = True
+
+
+class _Limited:
+    status = "limited"
+    reason = "需要 DBC 解码"
+    is_ready = False
+
+
+class _Adapter:
+    key = "hdf"
+    display_name = "HEAD HDF"
+    probe_cost = "full"
+
+
+class _Registry:
+    file_dialog_glob = "*.hdf *.csv"
+
+    def __init__(self, descriptors=(), availability=None):
+        self._descriptors = tuple(descriptors)
+        self._availability = availability or _Ready()
+
+    def adapter_for(self, _path):
+        return _Adapter()
+
+    def availability_for(self, _path, context=None):
+        return self._availability
+
+    def probe_sources(self, _path, *, context=None):
+        return self._descriptors
+
+
+def test_legacy_probe_helper_delegates_to_registry_and_unions_groups():
+    from mf4_analyzer.io.source_adapters import SourceDescriptor
+    from mf4_analyzer.ui.drawers.batch.input_panel import (
+        _default_probe_signals_for,
+    )
+
+    calls = []
+
+    class Registry(_Registry):
+        def probe_sources(self, path, *, context=None):
+            calls.append((path, context))
+            return self._descriptors
+
+    descriptors = (
+        SourceDescriptor(
+            source_id="g1", source_path="groups.hdf", group_id="g1",
+            display_name="groups.hdf · g1", channel_names=("A", "B"),
+            units={}, fs=None, metadata={},
+        ),
+        SourceDescriptor(
+            source_id="g2", source_path="groups.hdf", group_id="g2",
+            display_name="groups.hdf · g2", channel_names=("B", "C"),
+            units={}, fs=None, metadata={},
+        ),
+    )
+    context = {"dbc_path": "vehicle.dbc"}
+
+    channels = _default_probe_signals_for(
+        "groups.hdf", source_registry=Registry(descriptors),
+        source_context=context,
+    )
+
+    assert channels == frozenset({"A", "B", "C"})
+    assert calls == [("groups.hdf", context)]
+
+
 def test_disk_add_triggers_probe(qtbot, tmp_path):
     from mf4_analyzer.ui.drawers.batch.input_panel import FileListWidget
     w = FileListWidget()
@@ -8,6 +82,94 @@ def test_disk_add_triggers_probe(qtbot, tmp_path):
     qtbot.wait(50)
     state = w.row_state(str(tmp_path / "fake.mf4"))
     assert state in ("loaded", "probing")  # probing transient
+
+
+def test_disk_dialog_uses_shared_registry_filter_and_generic_title(
+    qtbot, monkeypatch,
+):
+    from mf4_analyzer.ui.drawers.batch import input_panel
+
+    seen = {}
+
+    def choose(_parent, title, _directory, file_filter):
+        seen.update(title=title, file_filter=file_filter)
+        return [], ""
+
+    monkeypatch.setattr(input_panel.QFileDialog, "getOpenFileNames", choose)
+    w = input_panel.FileListWidget(source_registry=_Registry())
+    qtbot.addWidget(w)
+    w._open_disk_dialog()
+
+    assert seen["title"] == "选择数据文件"
+    assert "*.hdf *.csv" in seen["file_filter"]
+    assert "MF4 files" not in seen["file_filter"]
+
+
+def test_registry_probe_expands_one_path_into_source_id_rows(qtbot, tmp_path):
+    from mf4_analyzer.io.source_adapters import SourceDescriptor
+    from mf4_analyzer.ui.drawers.batch.input_panel import FileListWidget
+
+    path = str(tmp_path / "groups.hdf")
+    descriptors = tuple(
+        SourceDescriptor(
+            source_id=f"source-{group}", source_path=path, group_id=group,
+            display_name=f"groups.hdf · {group}", channel_names=(signal,),
+            units={signal: "m/s2"}, fs=1000.0,
+            metadata={"probe_cost": "full"},
+        )
+        for group, signal in (("g1", "A"), ("g2", "B"))
+    )
+    w = FileListWidget(source_registry=_Registry(descriptors))
+    qtbot.addWidget(w)
+    w.add_disk_path(path)
+    qtbot.waitUntil(lambda: len(w.loaded_source_ids()) == 2, timeout=2000)
+
+    assert set(w._rows) == {"source-g1", "source-g2"}
+    assert w.source_paths() == (path, path)
+    assert w._rows["source-g1"].group_id == "g1"
+    assert "full probe" in w._rows["source-g1"].label
+    assert w._rows["source-g1"].availability == "ready"
+
+
+def test_limited_source_row_exposes_reason_and_never_runs_probe(qtbot, tmp_path):
+    from mf4_analyzer.ui.drawers.batch.input_panel import (
+        FileListWidget, STATE_UNAVAILABLE,
+    )
+
+    w = FileListWidget(
+        source_registry=_Registry(availability=_Limited()),
+    )
+    qtbot.addWidget(w)
+    called = []
+    w._probe_signals_for = lambda path: called.append(path)
+    path = str(tmp_path / "capture.blf")
+    w.add_disk_path(path)
+    qtbot.wait(30)
+
+    assert w.row_state(path) == STATE_UNAVAILABLE
+    row = next(iter(w._rows.values()))
+    assert "需要 DBC 解码" in row.label
+    assert "需要 DBC 解码" in row._item.toolTip()
+    assert called == []
+
+
+def test_target_policy_switches_common_intersection_to_selectable_union(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel()
+    qtbot.addWidget(panel)
+    panel._file_list.add_loaded_file("s1", "a.csv", frozenset({"A", "only_a"}))
+    panel._file_list.add_loaded_file("s2", "b.csv", frozenset({"A", "only_b"}))
+
+    assert panel.target_policy() == "common"
+    assert panel._signal_picker.is_disabled("only_a") is True
+
+    panel.apply_target_policy("available_per_source")
+    assert panel._signal_picker.is_disabled("only_a") is False
+    panel.apply_signals(("only_a", "only_b"))
+    assert panel.selected_signals() == ("only_a", "only_b")
+    assert panel.source_ids() == ("s1", "s2")
+    assert panel.source_paths() == ("a.csv", "b.csv")
 
 
 def test_probe_failure_sets_probe_failed(qtbot, tmp_path):
@@ -144,6 +306,91 @@ def test_get_preset_includes_time_range(qtbot, tmp_path):
     sheet.apply_time_range(None)
     p2 = sheet.get_preset()
     assert "time_range" not in p2.params
+
+
+@pytest.mark.parametrize(
+    ("text", "message_part"),
+    (
+        ("broken", "两个"),
+        ("2,1", "小于"),
+        ("1,1", "小于"),
+        ("nan,2", "有限"),
+        ("0,inf", "有限"),
+    ),
+)
+def test_invalid_time_range_text_blocks_run_with_field_error(
+    qtbot, tmp_path, text, message_part,
+):
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet._input_panel._file_list.add_loaded_file(
+        0, "a.mf4", frozenset({"sig"})
+    )
+    sheet._input_panel._signal_picker.set_selected(("sig",))
+    sheet._output_panel.apply_directory(str(tmp_path / "out"))
+    sheet._input_panel._time_edit.setText(text)
+
+    assert sheet.time_range() is None
+    assert sheet.is_runnable() is False
+    assert "时间范围" in sheet._input_panel.time_range_error()
+    assert message_part in sheet._input_panel.time_range_error()
+    assert sheet._input_panel._time_edit.toolTip() == sheet._input_panel.time_range_error()
+
+
+def test_empty_time_range_remains_valid_full_segment(qtbot, tmp_path):
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet._input_panel._file_list.add_loaded_file(
+        0, "a.mf4", frozenset({"sig"})
+    )
+    sheet._input_panel._signal_picker.set_selected(("sig",))
+    sheet._output_panel.apply_directory(str(tmp_path / "out"))
+    sheet._input_panel._time_edit.setText("")
+
+    assert sheet._input_panel.time_range_error() == ""
+    assert sheet.is_runnable() is True
+
+
+def test_no_selected_output_blocks_run(qtbot, tmp_path):
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet._input_panel._file_list.add_loaded_file(
+        0, "a.mf4", frozenset({"sig"})
+    )
+    sheet._input_panel._signal_picker.set_selected(("sig",))
+    sheet._output_panel.apply_directory(str(tmp_path / "out"))
+    sheet._output_panel._chk_data.setChecked(False)
+    sheet._output_panel._chk_image.setChecked(False)
+
+    assert sheet.is_runnable() is False
+    assert any(issue.field == "outputs" for issue in sheet.preflight_issues())
+
+
+def test_order_channel_mode_requires_rpm_selection_before_run(qtbot, tmp_path):
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet._input_panel._file_list.add_loaded_file(
+        0, "a.mf4", frozenset({"sig", "rpm"})
+    )
+    sheet._input_panel._signal_picker.set_selected(("sig",))
+    sheet.apply_method("order_time")
+    sheet._output_panel.apply_directory(str(tmp_path / "out"))
+
+    assert sheet.is_runnable() is False
+    assert any(issue.field == "rpm_channel" for issue in sheet.preflight_issues())
+    assert "rpm_channel" in sheet.strip.cards[1].summary_label.text()
+
+    sheet._input_panel.apply_rpm_channel("rpm")
+
+    assert sheet.is_runnable() is True
 
 
 def test_loaded_menu_uses_filename_not_fid(qtbot, tmp_path):

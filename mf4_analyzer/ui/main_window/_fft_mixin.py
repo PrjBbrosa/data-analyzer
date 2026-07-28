@@ -398,16 +398,13 @@ class FFTMixin:
             )
             xt, yt = self.inspector.top.tick_density()
             self.canvas_fft.set_tick_density(xt, yt)
+            batch_params = dict(self.inspector.fft_ctx.current_params())
+            batch_params['fs'] = fs
             self._remember_batch_preset(
                 "当前 FFT",
                 "fft",
                 self.inspector.fft_ctx.current_signal(),
-                {
-                    'fs': fs,
-                    'window': win,
-                    'nfft': nfft,
-                    'overlap': overlap,
-                },
+                batch_params,
             )
             pi = np.argmax(amp[1:]) + 1;
             self.statusBar.showMessage(f'FFT峰值: {freq[pi]:.2f} Hz ({amp[pi]:.4f})')

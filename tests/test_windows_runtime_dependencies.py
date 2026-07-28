@@ -20,6 +20,7 @@ def test_mat_import_dependencies_are_frozen_as_a_complete_closure():
     assert pyinstaller_collection_args() == (
         "--collect-all", "asammdf",
         "--collect-all", "openpyxl",
+        "--collect-all", "xlrd",
         "--collect-all", "can",
         "--collect-all", "cantools",
         "--collect-all", "nptdms",
@@ -35,6 +36,7 @@ def test_lite_collection_keeps_importer_support_without_whole_scipy():
     assert args == (
         "--collect-all", "asammdf",
         "--collect-all", "openpyxl",
+        "--collect-all", "xlrd",
         "--collect-all", "can",
         "--collect-all", "cantools",
         "--collect-all", "nptdms",
@@ -77,3 +79,15 @@ def test_every_lazy_io_import_is_declared_in_the_frozen_contract():
     roots = lazy_import_dependency_roots(ROOT / "mf4_analyzer" / "io")
 
     assert roots == {"av", "can", "cantools", "h5py", "nptdms", "scipy"}
+
+
+def test_legacy_xls_and_xlsx_have_distinct_frozen_reader_dependencies():
+    xls = dependencies_for_extension(".xls")
+    xlsx = dependencies_for_extension("xlsx")
+
+    assert [(item.package, item.requirement_name) for item in xls] == [
+        ("xlrd", "xlrd")
+    ]
+    assert [(item.package, item.requirement_name) for item in xlsx] == [
+        ("openpyxl", "openpyxl")
+    ]

@@ -14,19 +14,22 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ...analysis_presets import (
+    get_builtin_preset,
+    list_builtin_presets,
+    resolve_builtin_preset_alias,
+)
 from ...ui_kit.icons import Icons
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from .._axis_defaults import z_range_for
 from ._helpers import (
     BUILTIN_PRESET_DISPLAY,
-    BUILTIN_PRESET_KEYS,
     CUSTOM_PRESET_SLOTS,
     _LONG_FIELD_MAX_WIDTH,
     _PRESET_KEY_TO_SLOT,
     _SHORT_FIELD_MAX_WIDTH,
     _configure_form,
-    _dynamic_to_floor,
     _enforce_label_widths,
     _fit_field,
     _make_axis_settings_group,
@@ -258,11 +261,11 @@ class FFTTimeContextual(QWidget):
         # while the empty custom slot saves current parameters. Slot order is the
         # shared BUILTIN_PRESET_KEYS contract so unit recommendations line up.
         builtin_defaults = {
-            _PRESET_KEY_TO_SLOT[key]: {
-                'display_name': self._BUILTIN_PRESET_DISPLAY[key],
-                'params': self._builtin_preset_full_params(key),
+            preset.slot: {
+                'display_name': preset.display_name,
+                'params': preset.params_copy(),
             }
-            for key in BUILTIN_PRESET_KEYS
+            for preset in list_builtin_presets('fft_time')
         }
         self.preset_bar = PresetBar(
             'fft_time',
@@ -345,11 +348,6 @@ class FFTTimeContextual(QWidget):
     def _sync_source_weighting_defaults(self):
         target = self._source_weighting_default
         bar = getattr(self, 'preset_bar', None)
-        builtins = getattr(bar, '_builtins', None)
-        if isinstance(builtins, dict):
-            for entry in builtins.values():
-                if isinstance(entry, dict) and isinstance(entry.get('params'), dict):
-                    entry['params']['weighting'] = target
         default_params = getattr(bar, '_default_params', None)
         if isinstance(default_params, dict):
             default_params['weighting'] = target
@@ -693,43 +691,19 @@ class FFTTimeContextual(QWidget):
     # Builtins use auto color levels, with per-preset manual fallback spans for
     # when the user unticks 色阶 auto.
     _BUILTIN_PRESETS = {
-        'torque': dict(
-            window='flattop',
-            t_win_s=2.5,
-            overlap=75,
-            amplitude_mode='Amplitude dB',
-            freq_auto=True,
-            dynamic='Auto',
-            cmap='viridis',
-        ),
-        'vibration': dict(
-            window='hanning',
-            t_win_s=1.5,
-            overlap=50,
-            amplitude_mode='Amplitude dB',
-            freq_auto=True,
-            dynamic='Auto',
-            cmap='turbo',
-        ),
-        'transient': dict(
-            window='hanning',
-            t_win_s=0.6,
-            overlap=75,
-            amplitude_mode='Amplitude dB',
-            freq_auto=True,
-            dynamic='Auto',
-            cmap='turbo',
-        ),
-    }
-    _BUILTIN_Z_FALLBACK_FLOORS = {
-        'torque': -40.0,
-        'vibration': -40.0,
-        'transient': -30.0,
+        preset.key: {
+            key: preset.params[key]
+            for key in (
+                'window', 't_win_s', 'overlap', 'amplitude_mode',
+                'freq_auto', 'dynamic', 'cmap',
+            )
+        }
+        for preset in list_builtin_presets('fft_time')
     }
     _LEGACY_BUILTIN_PRESET_ALIASES = {
-        'diagnostic': 'vibration',
-        'amplitude_accuracy': 'torque',
-        'high_frequency': 'transient',
+        alias: preset.key
+        for preset in list_builtin_presets('fft_time')
+        for alias in preset.aliases
     }
 
     # User-facing display names for the three builtin slots — shared signal-type
@@ -737,7 +711,7 @@ class FFTTimeContextual(QWidget):
     _BUILTIN_PRESET_DISPLAY = dict(BUILTIN_PRESET_DISPLAY)
 
     def _resolve_builtin_preset_key(self, name):
-        return self._LEGACY_BUILTIN_PRESET_ALIASES.get(name, name)
+        return resolve_builtin_preset_alias('fft_time', name)
 
     def _builtin_preset_full_params(self, name):
         """Return a JSON-serializable param dict for a builtin preset.
@@ -746,40 +720,10 @@ class FFTTimeContextual(QWidget):
         builtin-aware PresetBar can save / reset / load the same shape
         round-trip.
         """
-        key = self._resolve_builtin_preset_key(name)
-        cfg = self._BUILTIN_PRESETS.get(key, {})
-        dynamic = cfg.get('dynamic', '80 dB')
-        z_floor = self._BUILTIN_Z_FALLBACK_FLOORS.get(
-            key, _dynamic_to_floor(dynamic),
-        )
-        # Spread the legacy compact dict to the full collect_preset shape
-        # — fields we don't override default to "the same value the
-        # widget has at construction time" so an unspecified field doesn't
-        # silently mutate.
-        return {
-            'window': cfg.get('window', 'hanning'),
-            'nfft': self._AUTO_NFFT_LABEL,
-            'nfft_mode': 'auto',
-            't_win_s': cfg.get('t_win_s', 1.5),
-            'overlap': cfg.get('overlap', 75),
-            'amplitude_mode': cfg.get('amplitude_mode', 'Amplitude dB'),
-            'remove_mean': True,
-            'weighting': getattr(self, '_source_weighting_default', 'None'),
-            'freq_auto': cfg.get('freq_auto', True),
-            'freq_min': 0.0,
-            'freq_max': 0.0,
-            'dynamic': dynamic,
-            'cmap': cfg.get('cmap', self._FIXED_CMAP),
-            'x_auto': True,
-            'x_min': 0.0,
-            'x_max': 0.0,
-            'y_auto': cfg.get('freq_auto', True),
-            'y_min': 0.0,
-            'y_max': 0.0,
-            'z_auto': dynamic == 'Auto',
-            'z_floor': z_floor,
-            'z_ceiling': 0.0,
-        }
+        try:
+            return get_builtin_preset('fft_time', name).params_copy()
+        except KeyError:
+            return {}
 
     def _collect_preset(self):
         """Snapshot the current time-frequency params for PresetBar save.

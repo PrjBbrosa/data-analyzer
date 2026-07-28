@@ -334,7 +334,13 @@ def test_project_io_dialog_filters_include_audio_video_extensions():
         PROJECT_OR_DATA_FILTER,
     )
 
-    expected = "*.mp4 *.mov *.mkv *.m4v *.mp3 *.m4a *.aac *.wav *.flac"
+    from mf4_analyzer.io.source_adapters import DEFAULT_SOURCE_ADAPTER_REGISTRY
+
+    media = next(
+        adapter for adapter in DEFAULT_SOURCE_ADAPTER_REGISTRY.adapters
+        if adapter.key == "media"
+    )
+    expected = " ".join(f"*{extension}" for extension in sorted(media.extensions))
 
     assert expected in PROJECT_OR_DATA_FILTER
     assert expected in OPEN_FILES_FILTER
@@ -349,3 +355,4 @@ def test_project_io_dialog_filters_include_audio_video_extensions():
     assert "*.tdms" in PROJECT_OR_DATA_FILTER
     assert "*.tdms" in OPEN_FILES_FILTER
     assert "*.tdms_index" not in DATA_FILE_GLOB
+    assert DATA_FILE_GLOB == DEFAULT_SOURCE_ADAPTER_REGISTRY.file_dialog_glob

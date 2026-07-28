@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -314,13 +316,15 @@ def test_batch_order_time_csv_shape(tmp_path):
 
 
 def test_batch_time_export_scene_renders_line_series():
+    from mf4_analyzer.batch_render import _build_batch_figure
+
     df = pd.DataFrame({
         "time_s": [0.0, 0.1, 0.0, 0.1],
         "series": ["original", "original", "filtered", "filtered"],
         "value": [0.0, 1.0, 0.0, 0.5],
     })
 
-    _widget, info = BatchRunner._build_export_scene(("time", df), {
+    figure = _build_batch_figure(("time", df), {
         "x_auto": False,
         "x_min": 0.0,
         "x_max": 0.1,
@@ -329,20 +333,22 @@ def test_batch_time_export_scene_renders_line_series():
         "y_max": 1.0,
     })
 
-    assert info["line_count"] == 2
-    assert info["x_range"] == (0.0, 0.1)
-    assert info["y_range"] == (-1.0, 1.0)
+    axis = figure.axes[0]
+    assert len(axis.lines) == 2
+    assert axis.get_xlim() == pytest.approx((0.0, 0.1))
+    assert axis.get_ylim() == pytest.approx((-1.0, 1.0))
 
 
 def test_batch_heatmap_image_applies_xyz_axis_params(tmp_path):
     """Batch PNG rendering must consume output X/Y/Z axis settings."""
+    from mf4_analyzer.batch_render import _build_batch_figure
 
     df = pd.DataFrame({
         "time_s": [0.0, 1.0, 0.0, 1.0],
         "order": [1.0, 1.0, 2.0, 2.0],
         "amplitude": [0.1, 0.2, 0.3, 0.4],
     })
-    _widget, info = BatchRunner._build_export_scene(
+    figure = _build_batch_figure(
         ("order_time", df),
         {
             "cmap": "viridis",
@@ -352,66 +358,71 @@ def test_batch_heatmap_image_applies_xyz_axis_params(tmp_path):
         },
     )
 
-    assert info["x_range"] == (0.25, 0.75)
-    assert info["y_range"] == (1.25, 1.75)
-    assert info["levels"] == (-40.0, -5.0)
-    assert info["colormap_name"] == "turbo"
+    axis = figure.axes[0]
+    image = axis.images[0]
+    assert axis.get_xlim() == pytest.approx((0.25, 0.75))
+    assert axis.get_ylim() == pytest.approx((1.25, 1.75))
+    assert image.get_clim() == pytest.approx((-40.0, -5.0))
+    assert image.get_cmap().name == "turbo"
 
 
 def test_batch_heatmap_image_can_render_linear_z_scale(tmp_path):
     """Batch OUTPUT Z unit should choose between dB and Linear rendering."""
+    from mf4_analyzer.batch_render import _build_batch_figure
 
     df = pd.DataFrame({
         "time_s": [0.0, 1.0, 0.0, 1.0],
         "frequency_hz": [10.0, 10.0, 20.0, 20.0],
         "amplitude": [0.25, 0.5, 1.0, 2.0],
     })
-    _widget, info = BatchRunner._build_export_scene(
+    figure = _build_batch_figure(
         ("fft_time", df),
         {"amplitude_mode": "amplitude", "z_auto": True},
     )
 
-    assert float(np.asarray(info["matrix"]).max()) == pytest.approx(2.0)
-    assert info["colorbar_label"] == "Amplitude"
+    assert float(np.asarray(figure.axes[0].images[0].get_array()).max()) == pytest.approx(2.0)
+    assert figure.axes[1].get_ylabel() == "Amplitude"
 
 
 def test_batch_fft_export_scene_renders_db_display_only():
     """FFT batch image should honor the same display-only dB reference as UI."""
+    from mf4_analyzer.batch_render import _build_batch_figure
 
     df = pd.DataFrame({
         "frequency_hz": [10.0, 20.0],
         "amplitude": [1.0, 10.0],
     })
 
-    _widget, info = BatchRunner._build_export_scene(
+    figure = _build_batch_figure(
         ("fft", df),
         {"amp_y": "dB", "db_reference": 1.0},
     )
 
-    np.testing.assert_allclose(info["line_y"], np.array([0.0, 20.0]), atol=1e-6)
+    axis = figure.axes[0]
+    np.testing.assert_allclose(axis.lines[0].get_ydata(), np.array([0.0, 20.0]), atol=1e-6)
     # dB-reference-defaults (Task 9 Step 9.4): the batch label now always
     # states the resolved reference via the shared formatter -- a bare
     # ``db_reference`` value with no mode migrates to Manual (spec S2/S4),
     # so the reference text uses the pretty-print form of THIS value
     # (unit unknown for a direct-call bypass with no file context).
-    assert info["y_label"] == "Amplitude (dB re 1×10⁰)"
+    assert axis.get_ylabel() == "Amplitude (dB re 1×10⁰)"
 
 
 def test_write_image_exports_nonempty_png_with_fixed_size(tmp_path):
-    from PyQt5.QtGui import QImage
+    from matplotlib import image as mpl_image
 
     df = pd.DataFrame({"frequency_hz": [0.0, 1.0], "amplitude": [0.0, 1.0]})
     out = BatchRunner._write_image(("fft", df), tmp_path / "fft.png")
-    image = QImage(str(out))
+    image = mpl_image.imread(out)
 
     assert out.exists()
     assert out.stat().st_size > 0
-    assert not image.isNull()
-    assert (image.width(), image.height()) == (1120, 630)
+    assert image.size > 0
+    assert image.shape[:2] == (1080, 1920)
 
 
 def test_write_heatmap_image_exports_nonempty_png_with_fixed_size(tmp_path):
-    from PyQt5.QtGui import QImage
+    from matplotlib import image as mpl_image
 
     df = pd.DataFrame({
         "time_s": [0.0, 1.0, 0.0, 1.0],
@@ -419,12 +430,12 @@ def test_write_heatmap_image_exports_nonempty_png_with_fixed_size(tmp_path):
         "amplitude": [0.25, 0.5, 1.0, 2.0],
     })
     out = BatchRunner._write_image(("fft_time", df), tmp_path / "heatmap.png")
-    image = QImage(str(out))
+    image = mpl_image.imread(out)
 
     assert out.exists()
     assert out.stat().st_size > 0
-    assert not image.isNull()
-    assert (image.width(), image.height()) == (1120, 630)
+    assert image.size > 0
+    assert image.shape[:2] == (1080, 1920)
 
 
 # ---------------------------------------------------------------------------
@@ -562,11 +573,12 @@ def test_target_signals_all_missing_returns_blocked(tmp_path):
     assert result.blocked == ["no matching batch tasks"]
 
 
-def test_target_signals_partial_missing_yields_failed_rows(tmp_path):
+def test_available_per_source_skips_missing_combinations(tmp_path):
     fd_a = _make_fd(tmp_path, "a", channels=("sig",), idx=0)
     fd_b = _make_fd(tmp_path, "b", channels=("other",), idx=1)
     preset = AnalysisPreset.free_config(
         name="pm", method="fft", target_signals=("sig",),
+        target_policy="available_per_source",
         params={"fs": 1024.0, "window": "hanning", "nfft": 1024},
     )
     preset = replace(preset, file_ids=(0, 1))
@@ -577,9 +589,8 @@ def test_target_signals_partial_missing_yields_failed_rows(tmp_path):
     done = [e for e in events if e.kind == "task_done"]
     failed = [e for e in events if e.kind == "task_failed"]
     assert len(done) == 1
-    assert len(failed) == 1
-    assert "missing signal" in (failed[0].error or "").lower()
-    assert result.status == "partial"
+    assert failed == []
+    assert result.status == "done"
 
 
 def test_legacy_progress_callback_still_works(tmp_path):
@@ -603,9 +614,14 @@ def test_progress_callback_count_excludes_failed_tasks(tmp_path):
     fd_bad = _make_fd(tmp_path, "bad", channels=("other",), idx=1)
     preset = AnalysisPreset.free_config(
         name="pf", method="fft", target_signals=("sig",),
+        target_policy="exact_pairs",
         params={"fs": 1024.0, "window": "hanning", "nfft": 1024},
     )
-    preset = replace(preset, file_ids=(0, 1))
+    preset = replace(
+        preset,
+        file_ids=(0, 1),
+        target_pairs=((0, "sig"), (1, "sig")),
+    )
     calls = []
     result = BatchRunner({0: fd_ok, 1: fd_bad}).run(
         preset, tmp_path / "out",
@@ -674,7 +690,7 @@ def test_cancel_no_half_written_files(tmp_path):
     out = tmp_path / "out"
     csvs = list(out.glob("*.csv"))
     # The first task's file must exist and be complete (parseable)
-    assert any("a_sig_fft" in p.name for p in csvs)
+    assert any(p.name.startswith("a__default__sig__fft__") for p in csvs)
     for p in csvs:
         # No partial writes — file is complete CSV
         text = p.read_text()
@@ -1049,6 +1065,127 @@ def test_batch_fft_dataframe_uses_peak_hold_mode(monkeypatch):
     np.testing.assert_allclose(df["amplitude"].to_numpy(), np.array([5.0, 6.0]))
 
 
+@pytest.mark.parametrize(
+    ("avg_mode", "native_definition"),
+    (
+        ("单帧", "peak"),
+        ("线性平均", "rms"),
+        ("峰值保持", "peak"),
+    ),
+)
+@pytest.mark.parametrize("requested_definition", ("native", "peak", "rms"))
+def test_batch_fft_amplitude_definition_converts_from_mode_native_semantics(
+    monkeypatch, avg_mode, native_definition, requested_definition,
+):
+    from mf4_analyzer.signal.fft import FFTAnalyzer
+
+    native_amplitude = np.array([2.0, 4.0])
+    frequencies = np.array([0.0, 1.0])
+    monkeypatch.setattr(
+        FFTAnalyzer,
+        "compute_fft",
+        staticmethod(lambda *args, **kwargs: (frequencies, native_amplitude.copy())),
+    )
+    monkeypatch.setattr(
+        FFTAnalyzer,
+        "compute_averaged_fft",
+        staticmethod(lambda *args, **kwargs: (
+            frequencies,
+            native_amplitude.copy(),
+            native_amplitude ** 2,
+        )),
+    )
+    monkeypatch.setattr(
+        FFTAnalyzer,
+        "compute_peak_hold_fft",
+        staticmethod(lambda *args, **kwargs: (frequencies, native_amplitude.copy())),
+    )
+
+    frame = BatchRunner._compute_fft_dataframe(
+        np.ones(16),
+        16.0,
+        {
+            "nfft": 8,
+            "avg_mode": avg_mode,
+            "amplitude_definition": requested_definition,
+        },
+    )
+
+    expected = native_amplitude.copy()
+    if requested_definition != "native" and requested_definition != native_definition:
+        expected = (
+            expected * np.sqrt(2.0)
+            if native_definition == "rms"
+            else expected / np.sqrt(2.0)
+        )
+    np.testing.assert_allclose(frame["amplitude"].to_numpy(), expected)
+
+
+@pytest.mark.parametrize("avg_mode", ("单帧", "线性平均", "峰值保持"))
+def test_batch_fft_missing_amplitude_definition_is_native(monkeypatch, avg_mode):
+    from mf4_analyzer.signal.fft import FFTAnalyzer
+
+    frequencies = np.array([0.0])
+    amplitude = np.array([3.0])
+    monkeypatch.setattr(
+        FFTAnalyzer,
+        "compute_fft",
+        staticmethod(lambda *args, **kwargs: (frequencies, amplitude.copy())),
+    )
+    monkeypatch.setattr(
+        FFTAnalyzer,
+        "compute_averaged_fft",
+        staticmethod(lambda *args, **kwargs: (
+            frequencies, amplitude.copy(), amplitude ** 2,
+        )),
+    )
+    monkeypatch.setattr(
+        FFTAnalyzer,
+        "compute_peak_hold_fft",
+        staticmethod(lambda *args, **kwargs: (frequencies, amplitude.copy())),
+    )
+
+    implicit = BatchRunner._compute_fft_dataframe(
+        np.ones(16), 16.0, {"nfft": 8, "avg_mode": avg_mode},
+    )
+    explicit = BatchRunner._compute_fft_dataframe(
+        np.ones(16),
+        16.0,
+        {
+            "nfft": 8,
+            "avg_mode": avg_mode,
+            "amplitude_definition": "native",
+        },
+    )
+
+    pd.testing.assert_frame_equal(implicit, explicit)
+
+
+def test_batch_fft_amplitude_definition_stays_linear_when_display_is_db(monkeypatch):
+    from mf4_analyzer.signal.fft import FFTAnalyzer
+
+    monkeypatch.setattr(
+        FFTAnalyzer,
+        "compute_fft",
+        staticmethod(lambda *args, **kwargs: (
+            np.array([10.0]), np.array([2.0]),
+        )),
+    )
+
+    frame = BatchRunner._compute_fft_dataframe(
+        np.ones(16),
+        16.0,
+        {
+            "nfft": 8,
+            "avg_mode": "单帧",
+            "amplitude_definition": "rms",
+            "amp_y": "dB",
+        },
+    )
+
+    np.testing.assert_allclose(frame["amplitude"], [2.0 / np.sqrt(2.0)])
+
+
 def test_batch_fft_dataframe_resolves_auto_nfft_for_average_mode(monkeypatch):
     from mf4_analyzer.signal.fft import FFTAnalyzer
 
@@ -1109,15 +1246,18 @@ def test_write_image_heatmap_uses_transposed_matrix(tmp_path):
     y = np.array([1.0, 2.0])                 # order
     matrix = np.array([[1., 2.], [3., 4.], [5., 6.]])  # (len(x), len(y))
     spectro = _Spectro2D(x, y, matrix, 'time_s', 'order')
-    _widget, info = BatchRunner._build_export_scene(
+    from mf4_analyzer.batch_render import _build_batch_figure
+    figure = _build_batch_figure(
         ('order_time', spectro), {'z_auto': True}
     )
     # Rendering matrix must be matrix.T (rows=y, cols=x), equal to old pivot
     df = spectro.to_long_dataframe()
     pivot = df.pivot(index='order', columns='time_s', values='amplitude')
     np.testing.assert_allclose(pivot.to_numpy(), matrix.T)
-    np.testing.assert_allclose(info["matrix"], pivot.to_numpy())
-    assert info["image_item"].axisOrder == "row-major"
+    np.testing.assert_allclose(
+        np.asarray(figure.axes[0].images[0].get_array()),
+        pivot.to_numpy(),
+    )
 
 
 def test_image_only_export_skips_long_dataframe(tmp_path, monkeypatch):
@@ -1137,6 +1277,65 @@ def test_image_only_export_skips_long_dataframe(tmp_path, monkeypatch):
     BatchRunner._write_image(('order_time', sp), tmp_path / 'i.png',
                              params={'z_auto': True})
     assert calls['n'] == 0  # image render must not trigger long-table construction
+
+
+def test_heatmap_long_dataframe_is_released_before_image_render(
+    tmp_path, monkeypatch,
+):
+    import gc
+    import weakref
+    from mf4_analyzer.batch import _Spectro2D
+
+    fd = _make_file(tmp_path)
+    references = {}
+
+    class TrackedSpectro(_Spectro2D):
+        def to_long_dataframe(self):
+            frame = super().to_long_dataframe()
+            references["long"] = weakref.ref(frame)
+            return frame
+
+    spectro = TrackedSpectro(
+        x=np.array([0.0, 1.0]),
+        y=np.array([10.0, 20.0]),
+        matrix=np.array([[1.0, 2.0], [3.0, 4.0]]),
+        x_name="time_s",
+        y_name="frequency_hz",
+    )
+
+    def fake_compute(*args, **kwargs):
+        return spectro
+
+    def write_data(frame, path):
+        Path(path).write_text("data", encoding="utf-8")
+
+    def render_after_data_release(payload, path, params=None, *, options=None,
+                                  context=None):
+        gc.collect()
+        assert references["long"]() is None
+        Path(path).write_bytes(b"image")
+        return Path(path)
+
+    monkeypatch.setattr(
+        BatchRunner, "_compute_fft_time_spectro", staticmethod(fake_compute),
+    )
+    monkeypatch.setattr(
+        BatchRunner, "_write_dataframe", staticmethod(write_data),
+    )
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(render_after_data_release),
+    )
+    preset = AnalysisPreset.from_current_single(
+        name="bounded heatmap intermediates",
+        method="fft_time",
+        signal=(1, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+
+    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
 
 
 # ---------------------------------------------------------------------------
@@ -1419,3 +1618,1012 @@ def test_batch_csv_values_are_identical_across_reference_changes(tmp_path):
     df_a = pd.read_csv(result_a.items[0].data_path)
     df_b = pd.read_csv(result_b.items[0].data_path)
     pd.testing.assert_frame_equal(df_a, df_b)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 correctness / reproducibility integration
+# ---------------------------------------------------------------------------
+
+
+def test_target_pairs_take_precedence_over_legacy_cartesian_expansion(tmp_path):
+    fd_a = _make_fd(tmp_path, "pair_a", channels=("left", "right"), idx=0)
+    fd_b = _make_fd(tmp_path, "pair_b", channels=("left", "right"), idx=1)
+    preset = AnalysisPreset.free_config(
+        name="pairs",
+        method="fft",
+        target_signals=("left", "right"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=False, export_image=False),
+    )
+    preset = replace(
+        preset,
+        file_ids=(0, 1),
+        target_pairs=((0, "left"), (1, "right")),
+    )
+
+    tasks = list(BatchRunner({0: fd_a, 1: fd_b})._expand_tasks(preset))
+
+    assert tasks == [(0, "left"), (1, "right")]
+
+
+def test_runner_records_stable_identity_and_separates_same_basename_sources(tmp_path):
+    n = 128
+    t = np.arange(n, dtype=float) / 128.0
+    frame = pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 5 * t)})
+    first = FileData(
+        tmp_path / "first" / "同名.csv", frame.copy(), list(frame.columns), {},
+        idx=0, fs=128.0,
+    )
+    second = FileData(
+        tmp_path / "second" / "同名.csv", frame.copy(), list(frame.columns), {},
+        idx=1, fs=128.0,
+    )
+    preset = AnalysisPreset.free_config(
+        name="identity",
+        method="fft",
+        target_signals=("sig",),
+        params={"fs": 128.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    preset = replace(
+        preset,
+        file_ids=(0, 1),
+        target_pairs=((0, "sig"), (1, "sig")),
+    )
+
+    result = BatchRunner({0: first, 1: second}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert len({item.task_id for item in result.items}) == 2
+    assert len({item.data_path for item in result.items}) == 2
+    assert all(item.group_identity == "default" for item in result.items)
+    assert all(item.source_identity and item.effective_params["fs"] == 128.0
+               for item in result.items)
+    assert all(Path(item.data_path).exists() for item in result.items)
+
+
+def test_runner_default_collision_policy_auto_numbers_instead_of_overwriting(tmp_path):
+    fd = _make_fd(tmp_path, "collision", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="collision",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    runner = BatchRunner({0: fd})
+
+    first = runner.run(preset, tmp_path / "out")
+    second = runner.run(preset, tmp_path / "out")
+
+    assert first.status == second.status == "done"
+    assert first.items[0].data_path != second.items[0].data_path
+    assert Path(first.items[0].data_path).exists()
+    assert Path(second.items[0].data_path).exists()
+
+
+def test_runner_retries_once_when_output_appears_after_path_selection(
+    tmp_path, monkeypatch,
+):
+    fd = _make_fd(tmp_path, "race", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="race",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    import mf4_analyzer.batch as batch_module
+    from mf4_analyzer.batch_output import OutputPublishRace
+
+    original = batch_module.atomic_write_set
+    calls = {"count": 0}
+
+    def collide_once(reservation, writers):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            reservation.paths["csv"].write_text("racer", encoding="utf-8")
+            raise OutputPublishRace("simulated output race")
+        return original(reservation, writers)
+
+    monkeypatch.setattr(batch_module, "atomic_write_set", collide_once)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert Path(result.items[0].data_path).name.endswith("__2.csv")
+    assert (tmp_path / "out" / Path(result.items[0].data_path).name).exists()
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_run_status", "expected_task_status", "event_kind"),
+    (
+        ("error", "blocked", "failed", "task_failed"),
+        ("skip", "partial", "skipped", "task_skipped"),
+    ),
+)
+def test_runner_error_and_skip_conflicts_stop_before_compute(
+    tmp_path, monkeypatch, policy, expected_run_status, expected_task_status,
+    event_kind,
+):
+    fd = _make_fd(tmp_path, f"conflict_{policy}", idx=0)
+    base_outputs = BatchOutput(
+        export_data=True, export_image=False, write_manifest=False,
+    )
+    preset = AnalysisPreset.from_current_single(
+        name="conflict",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=base_outputs,
+    )
+    first = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+    old_bytes = Path(first.items[0].data_path).read_bytes()
+    conflicted = replace(
+        preset,
+        outputs=replace(base_outputs, conflict_policy=policy),
+    )
+
+    def fail_if_computed(*args, **kwargs):
+        pytest.fail("conflict policy must resolve before compute")
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+    events = []
+
+    result = BatchRunner({0: fd}).run(
+        conflicted, tmp_path / "out", on_event=events.append,
+    )
+
+    assert result.status == expected_run_status
+    assert result.items[0].status == expected_task_status
+    assert event_kind in [event.kind for event in events]
+    assert Path(first.items[0].data_path).read_bytes() == old_bytes
+    if policy == "skip":
+        assert "manifest" in result.items[0].warnings[0]
+        assert result.blocked
+
+
+def test_skip_partial_artifact_conflict_is_explicit_and_never_writes_sibling(
+    tmp_path, monkeypatch,
+):
+    fd = _make_fd(tmp_path, "skip_partial", idx=0)
+    data_only = AnalysisPreset.from_current_single(
+        name="skip partial",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(
+            export_data=True, export_image=False, write_manifest=False,
+        ),
+    )
+    first = BatchRunner({0: fd}).run(data_only, tmp_path / "out")
+    request_set = replace(
+        data_only,
+        outputs=replace(
+            data_only.outputs,
+            export_image=True,
+            conflict_policy="skip",
+        ),
+    )
+
+    def fail_if_computed(*args, **kwargs):
+        pytest.fail("partial skip conflict must stop before compute")
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+
+    result = BatchRunner({0: fd}).run(request_set, tmp_path / "out")
+
+    assert result.status == "partial"
+    assert result.items[0].status == "skipped"
+    assert result.items[0].data_path == first.items[0].data_path
+    assert result.items[0].image_path is None
+    assert result.summary["skipped"] == 1
+    assert result.blocked and "missing=png" in result.blocked[0]
+    assert not list((tmp_path / "out").glob("*.png"))
+
+
+def test_runner_overwrite_writer_failure_preserves_old_artifact_set(
+    tmp_path, monkeypatch,
+):
+    fd = _make_fd(tmp_path, "overwrite_set", idx=0)
+
+    def render_ok(payload, path, params=None, *, options=None, context=None):
+        Path(path).write_bytes(b"old-image")
+        return Path(path)
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(render_ok))
+    outputs = BatchOutput(
+        export_data=True,
+        export_image=True,
+        conflict_policy="overwrite",
+        write_manifest=False,
+    )
+    preset = AnalysisPreset.from_current_single(
+        name="overwrite",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=outputs,
+    )
+    first = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+    data_path = Path(first.items[0].data_path)
+    image_path = Path(first.items[0].image_path)
+    old_data = data_path.read_bytes()
+    old_image = image_path.read_bytes()
+
+    def render_fail(payload, path, params=None, *, options=None, context=None):
+        Path(path).write_bytes(b"partial-new-image")
+        raise RuntimeError("render failed")
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(render_fail))
+    second = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert second.status == "blocked"
+    assert second.items[0].status == "failed"
+    assert data_path.read_bytes() == old_data
+    assert image_path.read_bytes() == old_image
+
+
+def test_runner_maps_phase3_image_output_to_renderer_options_and_context(
+    tmp_path, monkeypatch,
+):
+    fd = _make_fd(tmp_path, "vector", idx=0)
+    captured = {}
+
+    def capture_render(payload, path, params=None, *, options=None, context=None):
+        captured["path"] = Path(path)
+        captured["options"] = options
+        captured["context"] = context
+        Path(path).write_text("svg", encoding="utf-8")
+        return Path(path)
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(capture_render))
+    preset = AnalysisPreset.from_current_single(
+        name="vector",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(
+            export_data=False,
+            export_image=True,
+            image_format="svg",
+            image_size="custom",
+            image_width=2304,
+            image_height=1296,
+            image_dpi=192,
+            write_manifest=False,
+        ),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert Path(result.items[0].image_path).suffix == ".svg"
+    image_facts = result.items[0].artifact_facts["image"]
+    assert image_facts["format"] == "svg"
+    assert (image_facts["width"], image_facts["height"], image_facts["dpi"]) == (
+        2304, 1296, 192,
+    )
+    options = captured["options"]
+    assert (options.width_px, options.height_px, options.dpi, options.format) == (
+        2304, 1296, 192, "svg",
+    )
+    context = captured["context"]
+    assert context.channel == "sig"
+    assert context.method == "fft"
+    assert context.task_id == result.items[0].task_id
+    assert context.effective_facts["nfft_effective"] == 64
+
+
+def test_runner_manifest_records_artifact_checksum_and_effective_facts(tmp_path):
+    import hashlib
+    import json
+
+    fd = _make_fd(tmp_path, "manifest", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="manifest run",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "window": "hanning", "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert result.manifest_path is not None
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    assert manifest["summary"]["done"] == 1
+    assert result.summary == manifest["summary"]
+    entry = manifest["entries"][0]
+    assert entry["task_id"] == result.items[0].task_id
+    assert entry["source"]["identity"] == result.items[0].source_identity
+    assert entry["channel"] == "sig"
+    assert entry["requested_params"]["nfft"] == 64
+    assert entry["effective_facts"]["nfft_effective"] == 64
+    artifact = entry["artifacts"]["data"]
+    data_path = Path(result.items[0].data_path)
+    assert artifact["size"] == data_path.stat().st_size
+    assert artifact["sha256"] == hashlib.sha256(data_path.read_bytes()).hexdigest()
+
+
+def test_runner_manifest_proven_resume_skips_load_compute_and_render(
+    tmp_path, monkeypatch,
+):
+    fd = _make_fd(tmp_path, "resume", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="resume",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    first = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+    stale_token = (
+        Path(first.items[0].data_path).parent
+        / f".{Path(first.items[0].data_path).stem}.batch-reserve"
+    )
+    stale_token.write_text("simulated crashed writer", encoding="utf-8")
+    resume_preset = replace(
+        preset,
+        outputs=replace(preset.outputs, resume_policy="manifest"),
+    )
+
+    def fail_if_computed(*args, **kwargs):
+        pytest.fail("manifest-proven task must not compute")
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+    events = []
+    resumed = BatchRunner({0: fd}).run(
+        resume_preset,
+        tmp_path / "out",
+        resume_manifest=first.manifest_path,
+        on_event=events.append,
+    )
+
+    assert resumed.status == "done"
+    assert resumed.items[0].status == "resumed"
+    assert resumed.items[0].data_path == first.items[0].data_path
+    assert resumed.summary["resumed"] == 1
+    assert "task_resumed" in [event.kind for event in events]
+    assert "task_started" not in [event.kind for event in events]
+
+
+def test_runner_writer_exception_still_finalizes_terminal_manifest(
+    tmp_path, monkeypatch,
+):
+    import json
+
+    fd = _make_fd(tmp_path, "writer_exception", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="writer exception",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    def fail_writer(frame, path):
+        raise RuntimeError("simulated writer exception")
+
+    monkeypatch.setattr(
+        BatchRunner, "_write_dataframe", staticmethod(fail_writer),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert result.items[0].status == "failed"
+    assert result.manifest_path is not None
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    assert manifest["run_status"] == "blocked"
+    assert manifest["summary"]["failed"] == 1
+    assert not list((tmp_path / "out").glob("*.partial.json"))
+    assert not list((tmp_path / "out").glob(".*.batch-stage.*"))
+
+
+def test_cancel_after_last_writer_finishes_never_publishes_final_artifact(
+    tmp_path, monkeypatch,
+):
+    import json
+
+    fd = _make_fd(tmp_path, "writer_cancel", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="writer cancel",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    token = threading.Event()
+    original_write = BatchRunner._write_dataframe
+
+    def write_then_cancel(frame, path):
+        result = original_write(frame, path)
+        token.set()
+        return result
+
+    monkeypatch.setattr(
+        BatchRunner, "_write_dataframe", staticmethod(write_then_cancel),
+    )
+
+    result = BatchRunner({0: fd}).run(
+        preset, tmp_path / "out", cancel_token=token,
+    )
+
+    assert result.status == "cancelled"
+    assert result.items[0].status == "cancelled"
+    assert not list((tmp_path / "out").glob("*.csv"))
+    assert not list((tmp_path / "out").glob(".*.batch-stage.*"))
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    assert manifest["run_status"] == "cancelled"
+    assert manifest["summary"]["cancelled"] == 1
+
+
+def test_cancel_during_artifact_checksum_cannot_leave_item_done(
+    tmp_path, monkeypatch,
+):
+    import json
+    import mf4_analyzer.batch as batch_module
+
+    fd = _make_fd(tmp_path, "checksum_cancel", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="checksum cancel",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    token = threading.Event()
+    original_facts = batch_module.artifact_facts
+
+    def cancel_then_checksum(*args, **kwargs):
+        token.set()
+        return original_facts(*args, **kwargs)
+
+    monkeypatch.setattr(batch_module, "artifact_facts", cancel_then_checksum)
+
+    result = BatchRunner({0: fd}).run(
+        preset, tmp_path / "out", cancel_token=token,
+    )
+
+    assert result.status == "cancelled"
+    assert result.items[0].status == "cancelled"
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    artifact = manifest["entries"][0]["artifacts"]["data"]
+    assert artifact["checksum_status"] == "cancelled"
+    assert artifact["sha256"] is None
+    assert manifest["summary"]["done"] == 0
+    assert manifest["summary"]["cancelled"] == 1
+
+
+def test_cancel_during_resume_checksum_stops_before_load_or_compute(
+    tmp_path, monkeypatch,
+):
+    import mf4_analyzer.batch_manifest as manifest_module
+
+    fd = _make_fd(tmp_path, "resume_checksum_cancel", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="resume checksum cancel",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    first = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+    resume_preset = replace(
+        preset,
+        outputs=replace(preset.outputs, resume_policy="manifest"),
+    )
+    token = threading.Event()
+    original_sha256 = manifest_module.sha256_file
+    seen_tokens = []
+
+    def cancel_resume_checksum(path, *, cancel_token=None, chunk_size=1024 * 1024):
+        seen_tokens.append(cancel_token)
+        if cancel_token is token:
+            token.set()
+            return None
+        return original_sha256(
+            path, cancel_token=cancel_token, chunk_size=chunk_size,
+        )
+
+    def fail_if_computed(*args, **kwargs):
+        pytest.fail("cancelled resume checksum must not compute")
+
+    monkeypatch.setattr(manifest_module, "sha256_file", cancel_resume_checksum)
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+
+    result = BatchRunner({0: fd}).run(
+        resume_preset,
+        tmp_path / "out",
+        resume_manifest=first.manifest_path,
+        cancel_token=token,
+    )
+
+    assert seen_tokens and seen_tokens[0] is token
+    assert result.status == "cancelled"
+    assert result.items[0].status == "cancelled"
+
+
+def test_runner_corrupt_resume_artifact_is_recomputed(tmp_path, monkeypatch):
+    fd = _make_fd(tmp_path, "resume_corrupt", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="resume corrupt",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    first = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+    Path(first.items[0].data_path).write_text("corrupt", encoding="utf-8")
+    resume_preset = replace(
+        preset,
+        outputs=replace(preset.outputs, resume_policy="manifest"),
+    )
+    calls = {"compute": 0}
+    original = BatchRunner._compute_fft_dataframe
+
+    def count_compute(*args, **kwargs):
+        calls["compute"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        BatchRunner, "_compute_fft_dataframe", staticmethod(count_compute),
+    )
+
+    result = BatchRunner({0: fd}).run(
+        resume_preset, tmp_path / "out", resume_manifest=first.manifest_path,
+    )
+
+    assert result.status == "done"
+    assert result.items[0].status == "done"
+    assert calls["compute"] == 1
+    assert result.items[0].data_path != first.items[0].data_path
+
+
+def test_runner_retry_failed_manifest_scopes_only_failed_and_cancelled_tasks(tmp_path):
+    fd_done = _make_fd(tmp_path, "retry_done", channels=("sig",), idx=0)
+    fd_failed = _make_fd(tmp_path, "retry_failed", channels=("other",), idx=1)
+    preset = AnalysisPreset.free_config(
+        name="retry failed",
+        method="fft",
+        target_signals=("sig",),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    preset = replace(
+        preset,
+        file_ids=(0, 1),
+        target_pairs=((0, "sig"), (1, "sig")),
+    )
+    first = BatchRunner({0: fd_done, 1: fd_failed}).run(
+        preset, tmp_path / "out",
+    )
+    events = []
+
+    retried = BatchRunner({0: fd_done, 1: fd_failed}).run(
+        preset,
+        tmp_path / "out",
+        retry_failed_manifest=first.manifest_path,
+        on_event=events.append,
+    )
+
+    assert retried.status == "blocked"
+    assert [(item.file_id, item.status) for item in retried.items] == [
+        (1, "failed"),
+    ]
+    started = [event for event in events if event.kind == "task_started"]
+    assert [(event.file_name, event.signal) for event in started] == [
+        (str(fd_failed.filename), "sig"),
+    ]
+
+
+def test_runner_retry_manifest_recipe_change_is_blocked_before_compute(
+    tmp_path, monkeypatch,
+):
+    fd = _make_fd(tmp_path, "retry_recipe", channels=("other",), idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="retry recipe",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    first = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+    changed = replace(preset, params={"fs": 1024.0, "nfft": 128})
+
+    def fail_if_computed(*args, **kwargs):
+        pytest.fail("recipe mismatch must block before compute")
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+    result = BatchRunner({0: fd}).run(
+        changed,
+        tmp_path / "out",
+        retry_failed_manifest=first.manifest_path,
+    )
+
+    assert result.status == "blocked"
+    assert "recipe fingerprint" in result.blocked[0]
+    assert result.items == []
+
+
+def test_public_output_preview_reports_counts_without_loading_sources(tmp_path):
+    fd = _make_fd(tmp_path, "preview", channels=("sig",), idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="preview",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+    runner = BatchRunner({0: fd})
+
+    preview = runner.preview_outputs(preset, tmp_path / "out")
+
+    assert preview.task_count == 1
+    assert preview.artifact_count == 2
+    assert preview.conflict_count == 0
+    assert preview.image_format == "png"
+    assert preview.image_width == 1920
+    assert preview.image_height == 1080
+    assert preview.image_dpi == 144
+    assert preview.conflict_policy == "auto_number"
+
+
+@pytest.mark.parametrize(
+    "time_range",
+    ((1.0, 0.0), (float("nan"), 1.0)),
+)
+def test_runner_validation_blocks_invalid_time_range_with_field(tmp_path, time_range):
+    fd = _make_fd(tmp_path, "invalid_range", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="invalid range",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64, "time_range": time_range},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert "time_range" in result.blocked[0]
+    assert not list((tmp_path / "out").glob("*.csv"))
+
+
+def test_runner_preflight_blocks_when_no_output_is_selected(tmp_path, monkeypatch):
+    fd = _make_fd(tmp_path, "no_outputs", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="no outputs",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=False, export_image=False),
+    )
+
+    def fail_if_computed(*args, **kwargs):
+        pytest.fail("compute must not start after preflight failure")
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert "outputs" in result.blocked[0]
+    assert result.manifest_path is not None
+    assert list((tmp_path / "out").iterdir()) == [Path(result.manifest_path)]
+
+
+def test_runner_preflight_blocks_unsupported_data_format(tmp_path, monkeypatch):
+    fd = _make_fd(tmp_path, "bad_data_format", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="bad data format",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(
+            export_data=True,
+            export_image=False,
+            data_format="parquet",
+        ),
+    )
+
+    def fail_if_computed(*args, **kwargs):
+        pytest.fail("compute must not start after preflight failure")
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert "data_format" in result.blocked[0]
+    assert result.manifest_path is not None
+    assert list((tmp_path / "out").iterdir()) == [Path(result.manifest_path)]
+
+
+def test_runner_preflight_blocks_unknown_window(tmp_path, monkeypatch):
+    fd = _make_fd(tmp_path, "bad_window", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="bad window",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64, "window": "rectangular"},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    def fail_if_computed(*args, **kwargs):
+        pytest.fail("compute must not start after preflight failure")
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert "window" in result.blocked[0]
+    assert result.manifest_path is not None
+    assert list((tmp_path / "out").iterdir()) == [Path(result.manifest_path)]
+
+
+def test_runner_preflight_blocks_invalid_amplitude_definition(
+    tmp_path, monkeypatch,
+):
+    fd = _make_fd(tmp_path, "bad_amplitude_definition", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="bad amplitude definition",
+        method="fft",
+        signal=(0, "sig"),
+        params={
+            "fs": 1024.0,
+            "nfft": 64,
+            "amplitude_definition": "peak-to-peak",
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    def fail_if_computed(*args, **kwargs):
+        pytest.fail("compute must not start after preflight failure")
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert "amplitude_definition" in result.blocked[0]
+    assert result.manifest_path is not None
+    assert list((tmp_path / "out").iterdir()) == [Path(result.manifest_path)]
+
+
+def test_runner_records_effective_filter_clamp_warning(tmp_path):
+    fd = _make_fd(tmp_path, "filter_warning", idx=0, fs=1000.0)
+    preset = AnalysisPreset.from_current_single(
+        name="filter warning",
+        method="fft",
+        signal=(0, "sig"),
+        params={
+            "fs": 1000.0,
+            "nfft": 64,
+            "filter": {
+                "enabled": True,
+                "spec": {"kind": "low", "order": 4, "cutoff": 900.0},
+            },
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    item = result.items[0]
+    assert item.warnings and "钳制" in item.warnings[0]
+    assert item.effective_params["filter"]["spec"]["cutoff"] < 500.0
+
+
+def test_order_manual_rpm_mode_runs_without_rpm_channel(tmp_path):
+    fd = _make_fd(tmp_path, "manual_rpm", channels=("sig",), idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="manual rpm",
+        method="order_time",
+        signal=(0, "sig"),
+        params={
+            "fs": 1024.0,
+            "nfft": 64,
+            "samples_per_rev": 64,
+            "max_order": 5.0,
+            "order_res": 0.5,
+            "time_res": 0.1,
+            "rpm_mode": "manual",
+            "manual_rpm": 3000.0,
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert result.items[0].effective_params["manual_rpm"] == 3000.0
+    assert result.items[0].effective_params["rpm_source"] == {
+        "mode": "manual",
+        "value": 3000.0,
+    }
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_runner_resolves_auto_nfft_only_at_execution(tmp_path, method):
+    channels = ("sig",) if method == "fft_time" else ("sig", "rpm")
+    fd = _make_fd(tmp_path, f"auto_{method}", channels=channels, idx=0)
+    params = {
+        "fs": 1024.0,
+        "nfft": None,
+        "nfft_mode": "auto",
+        "t_win_s": 0.25,
+        "overlap": 0.5,
+    }
+    if method == "order_time":
+        params.update({
+            "samples_per_rev": 64,
+            "max_order": 5.0,
+            "order_res": 0.5,
+            "time_res": 0.1,
+        })
+    preset = AnalysisPreset.from_current_single(
+        name=f"auto {method}",
+        method=method,
+        signal=(0, "sig"),
+        rpm_channel="rpm" if method == "order_time" else "",
+        params=params,
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert params["nfft"] is None
+    assert result.items[0].effective_params["nfft_effective"] >= 2
+
+
+def test_runner_uses_preprocessed_signal_fs_and_disables_compute_filter(
+    tmp_path, monkeypatch,
+):
+    fs = 200.0
+    t = np.arange(400, dtype=float) / fs
+    frame = pd.DataFrame({
+        "Time": t,
+        "sig": 3.0 + np.sin(2 * np.pi * 10.0 * t),
+    })
+    fd = FileData(tmp_path / "preprocess.csv", frame, list(frame.columns), {})
+    captured = {}
+
+    def capture_fft(signal, effective_fs, params):
+        captured["signal"] = np.asarray(signal).copy()
+        captured["fs"] = effective_fs
+        captured["params"] = params
+        return pd.DataFrame({"frequency_hz": [0.0], "amplitude": [1.0]})
+
+    monkeypatch.setattr(
+        BatchRunner,
+        "_compute_fft_dataframe",
+        staticmethod(capture_fft),
+    )
+    preset = AnalysisPreset.from_current_single(
+        name="preprocess integration",
+        method="fft",
+        signal=(0, "sig"),
+        params={
+            "nfft": 64,
+            "time_preprocess": {
+                "scale": 2.0,
+                "offset": 5.0,
+                "remove_mean": True,
+                "sample_mode": "decimate",
+                "decimation_factor": 2,
+            },
+            "filter": {
+                "enabled": True,
+                "spec": {"kind": "low", "order": 4, "cutoff": 9999.0},
+            },
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert captured["fs"] == pytest.approx(100.0)
+    assert captured["params"]["filter"]["enabled"] is False
+    assert abs(float(np.mean(captured["signal"]))) < 1e-2
+    effective = result.items[0].effective_params
+    assert effective["fs"] == pytest.approx(100.0)
+    assert effective["preprocess"]["sampling"]["decimation_factor"] == 2
+    assert any("钳制" in warning for warning in result.items[0].warnings)
+
+
+def test_time_export_uses_pre_filter_and_filtered_preprocess_series(tmp_path):
+    from mf4_analyzer.batch_preprocess import preprocess_batch_signal
+
+    fs = 200.0
+    t = np.arange(400, dtype=float) / fs
+    signal = 3.0 + np.sin(2 * np.pi * 10.0 * t) + 0.3 * np.sin(
+        2 * np.pi * 60.0 * t
+    )
+    frame = pd.DataFrame({"Time": t, "sig": signal})
+    fd = FileData(tmp_path / "time_preprocess.csv", frame, list(frame.columns), {})
+    params = {
+        "time_preprocess": {
+            "scale": 2.0,
+            "offset": 5.0,
+            "remove_mean": True,
+            "sample_mode": "decimate",
+            "decimation_factor": 2,
+        },
+        "filter": {
+            "enabled": True,
+            "spec": {"kind": "low", "order": 4, "cutoff": 20.0},
+            "show_original": True,
+            "show_filtered": True,
+        },
+    }
+    expected = preprocess_batch_signal(signal, t, fs, params)
+    preset = AnalysisPreset.from_current_single(
+        name="time preprocess",
+        method="time",
+        signal=(0, "sig"),
+        params=params,
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    exported = pd.read_csv(result.items[0].data_path)
+    original = exported[exported["series"] == "original"]["value"].to_numpy()
+    filtered = exported[exported["series"] == "filtered"]["value"].to_numpy()
+    np.testing.assert_allclose(original, expected.pre_filter_signal, atol=1e-12)
+    np.testing.assert_allclose(filtered, expected.signal, atol=1e-12)
+
+
+def test_cancel_after_compute_emits_one_terminal_and_writes_nothing(
+    tmp_path, monkeypatch,
+):
+    fd = _make_fd(tmp_path, "cancel_compute", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="cancel compute",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+    token = threading.Event()
+    original = BatchRunner._compute_fft_dataframe
+
+    def compute_then_cancel(sig, fs, params):
+        result = original(sig, fs, params)
+        token.set()
+        return result
+
+    monkeypatch.setattr(
+        BatchRunner, "_compute_fft_dataframe", staticmethod(compute_then_cancel),
+    )
+    events = []
+
+    result = BatchRunner({0: fd}).run(
+        preset, tmp_path / "out", on_event=events.append, cancel_token=token,
+    )
+
+    terminals = [event.kind for event in events if event.kind in {
+        "task_done", "task_failed", "task_cancelled",
+    }]
+    assert result.status == "cancelled"
+    assert terminals == ["task_cancelled"]
+    assert [event.kind for event in events].count("task_started") == 1
+    assert [event.kind for event in events].count("run_finished") == 1
+    assert result.manifest_path is not None
+    assert list((tmp_path / "out").glob("*")) == [Path(result.manifest_path)]
+    assert result.summary["cancelled"] == 1
+
+
+def test_batch_runner_module_has_no_gui_render_dependencies():
+    import inspect
+    import mf4_analyzer.batch as batch_module
+
+    source = inspect.getsource(batch_module)
+    for forbidden in ("PyQt", "pyqtgraph", "QApplication"):
+        assert forbidden not in source

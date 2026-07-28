@@ -306,6 +306,45 @@ QRadioButton {
     background-color: transparent;
 }
 
+QLabel#BatchAnalysisChoiceLabel {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+}
+QRadioButton#BatchAnalysisPresetOption {
+    min-height: 26px;
+    spacing: 5px;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 600;
+}
+QRadioButton#BatchAnalysisPresetOption:checked {
+    color: #0f3f8f;
+    font-weight: 700;
+}
+QRadioButton#BatchAnalysisPresetOption:disabled {
+    color: #a0aec0;
+}
+QRadioButton#BatchAnalysisPresetOption::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #94a3b8;
+    border-radius: 7px;
+    background-color: #ffffff;
+}
+QRadioButton#BatchAnalysisPresetOption::indicator:hover {
+    border-color: #1769e0;
+}
+QRadioButton#BatchAnalysisPresetOption::indicator:checked {
+    border: 1px solid #1769e0;
+    border-radius: 7px;
+    background-color: #1769e0;
+}
+QRadioButton#BatchAnalysisPresetOption::indicator:disabled {
+    border-color: #cbd5e1;
+    background-color: #f5f7fb;
+}
+
 QCheckBox::indicator {
     width: 16px;
     height: 16px;

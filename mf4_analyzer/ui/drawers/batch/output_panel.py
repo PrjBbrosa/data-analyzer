@@ -5,23 +5,28 @@ Mirrors the pre-W4 ``batch_sheet.py`` output group (recovered from commit
 ``QFileDialog.getExistingDirectory``, ``chk_data`` / ``chk_image`` checkboxes,
 and a ``csv``/``xlsx`` format ``QComboBox``.
 
-Note: ``BatchOutput`` in ``mf4_analyzer.batch`` does NOT carry a ``directory``
-field — the directory is owned by this panel and threaded into
-``BatchRunner.run`` separately. ``apply_outputs`` therefore only consumes the
-three persisted fields (``export_data``, ``export_image``, ``data_format``).
+``BatchOutput`` owns every portable output option; the directory and selected
+resume/retry manifest remain runtime-only UI state outside the dataclass.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSignalBlocker, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QLineEdit, QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from ....batch import BatchOutput
-from ...inspector_sections._helpers import _make_axis_settings_group
+from .... import db_reference
+from ...inspector_sections._helpers import (
+    _make_axis_settings_group,
+    apply_db_reference_partial,
+    apply_db_reference_preset,
+    db_reference_params,
+    make_db_reference_control,
+)
 from ..._axis_defaults import z_range_for
 
 
@@ -68,6 +73,8 @@ _AXIS_CONTEXTS = {
 
 class OutputPanel(QWidget):
     changed = pyqtSignal()
+    resumeRequested = pyqtSignal()
+    retryFailedRequested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -117,7 +124,100 @@ QWidget#BatchOutputPanel {
         self._combo_format = QComboBox(self)
         self._combo_format.addItems(["csv", "xlsx"])
         form.addRow("数据格式", self._combo_format)
+
+        self._combo_image_format = QComboBox(self)
+        for label, value in (("PNG", "png"), ("SVG", "svg"), ("PDF", "pdf")):
+            self._combo_image_format.addItem(label, value)
+        self._compact_field(self._combo_image_format)
+        form.addRow("图片格式", self._combo_image_format)
+
+        self._combo_image_size = QComboBox(self)
+        for label, value in (
+            ("1080p · 1920×1080", "1920x1080"),
+            ("2K · 2560×1440", "2560x1440"),
+            ("4K · 3840×2160", "3840x2160"),
+            ("自定义", "custom"),
+        ):
+            self._combo_image_size.addItem(label, value)
+        self._compact_field(self._combo_image_size)
+        form.addRow("图片尺寸", self._combo_image_size)
+
+        self._spin_image_width = QSpinBox(self)
+        self._spin_image_width.setRange(320, 16384)
+        self._spin_image_width.setValue(1920)
+        self._spin_image_width.setSuffix(" px")
+        self._compact_field(self._spin_image_width)
+        form.addRow("自定义宽", self._spin_image_width)
+
+        self._spin_image_height = QSpinBox(self)
+        self._spin_image_height.setRange(320, 16384)
+        self._spin_image_height.setValue(1080)
+        self._spin_image_height.setSuffix(" px")
+        self._compact_field(self._spin_image_height)
+        form.addRow("自定义高", self._spin_image_height)
+
+        self._spin_image_dpi = QSpinBox(self)
+        self._spin_image_dpi.setRange(36, 1200)
+        self._spin_image_dpi.setValue(144)
+        self._spin_image_dpi.setSuffix(" DPI")
+        self._compact_field(self._spin_image_dpi)
+        form.addRow("PNG DPI", self._spin_image_dpi)
+
+        self._combo_conflict = QComboBox(self)
+        for label, value in (
+            ("自动编号", "auto_number"),
+            ("报错", "error"),
+            ("跳过", "skip"),
+            ("覆盖", "overwrite"),
+        ):
+            self._combo_conflict.addItem(label, value)
+        self._compact_field(self._combo_conflict)
+        form.addRow("文件冲突", self._combo_conflict)
+
+        self._chk_manifest = QCheckBox("写入运行清单", self)
+        self._chk_manifest.setChecked(True)
+        form.addRow("运行清单", self._chk_manifest)
+
+        self._combo_resume_policy = QComboBox(self)
+        self._combo_resume_policy.addItem("不恢复", "none")
+        self._combo_resume_policy.addItem("Manifest 校验恢复", "manifest")
+        self._compact_field(self._combo_resume_policy)
+        form.addRow("恢复策略", self._combo_resume_policy)
+
+        self._btn_resume = QPushButton("恢复上次运行…", self)
+        self._btn_retry_failed = QPushButton("仅重试失败", self)
+        self._btn_resume.setMinimumWidth(0)
+        self._btn_retry_failed.setMinimumWidth(0)
+        self._btn_resume.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._btn_retry_failed.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        operation_row = QHBoxLayout()
+        operation_row.setContentsMargins(0, 0, 0, 0)
+        operation_row.setSpacing(6)
+        operation_row.addWidget(self._btn_resume, 1)
+        operation_row.addWidget(self._btn_retry_failed, 1)
+        form.addRow("运行操作", operation_row)
         outer.addLayout(form)
+
+        self._operation_status = QLabel("未选择运行清单", self)
+        self._operation_status.setObjectName("batchOperationStatus")
+        self._operation_status.setWordWrap(True)
+        self._operation_status.setStyleSheet("color:#64748b;font-size:11px;")
+        outer.addWidget(self._operation_status)
+
+        self._output_preview = QLabel("运行预览：等待完整配置", self)
+        self._output_preview.setObjectName("batchOutputPreview")
+        self._output_preview.setWordWrap(True)
+        self._output_preview.setStyleSheet(
+            "color:#475569;font-size:11px;padding:4px 0;"
+        )
+        outer.addWidget(self._output_preview)
+
+        self.db_reference_control = make_db_reference_control(self)
+        self.spin_db_ref = self.db_reference_control.editor
+        self.db_reference_control.set_source_text("等待来源信息")
+        self._reference_system_catalog = db_reference.FACTORY_CATALOG_V1
+        self._reference_user_catalog = ()
+        self._prefer_channel_metadata = True
 
         axis_group = _make_axis_settings_group(
             self,
@@ -133,20 +233,60 @@ QWidget#BatchOutputPanel {
             x_auto_summary="全时段",
             y_auto_summary="自动范围",
             z_auto_summary="自动色阶",
+            pre_header_rows=(("dB 参考:", self.db_reference_control),),
         )
+        # Batch line plots may legitimately use negative engineering values
+        # and dB amplitudes.  The shared helper's non-negative Y range is for
+        # frequency/order axes, not a universal batch-output constraint.
+        for spin in (self.spin_y_min, self.spin_y_max):
+            spin.setRange(-1e12, 1e12)
         self._widen_axis_label_column(axis_group)
         self._flatten_axis_group_chrome(axis_group)
         self._z_axis_row = (
             self._axis_row_parts["z"]["label"].parentWidget().parentWidget()
         )
         outer.addWidget(axis_group)
+        self._effective_preview = QLabel("等待来源信息", self)
+        self._effective_preview.setObjectName("batchDbReferencePreview")
+        self._effective_preview.setWordWrap(True)
+        self._effective_preview.setStyleSheet(
+            "color:#64748b;font-size:11px;padding:4px 0;"
+        )
+        outer.addWidget(self._effective_preview)
         outer.addStretch(1)
 
         # Wiring
         self._dir_edit.textChanged.connect(lambda *_: self.changed.emit())
         self._chk_data.toggled.connect(lambda *_: self.changed.emit())
-        self._chk_image.toggled.connect(lambda *_: self.changed.emit())
+        self._chk_data.toggled.connect(lambda *_: self._sync_output_controls())
+        self._chk_image.toggled.connect(self._on_image_option_changed)
         self._combo_format.currentTextChanged.connect(lambda *_: self.changed.emit())
+        self._combo_image_format.currentIndexChanged.connect(
+            self._on_image_option_changed
+        )
+        self._combo_image_size.currentIndexChanged.connect(
+            self._on_image_option_changed
+        )
+        for spin in (
+            self._spin_image_width, self._spin_image_height,
+            self._spin_image_dpi,
+        ):
+            spin.valueChanged.connect(lambda *_: self.changed.emit())
+        self._combo_conflict.currentIndexChanged.connect(
+            lambda *_: self.changed.emit()
+        )
+        self._chk_manifest.toggled.connect(lambda *_: self.changed.emit())
+        self._combo_resume_policy.currentIndexChanged.connect(
+            lambda *_: self.changed.emit()
+        )
+        self._btn_resume.clicked.connect(self.resumeRequested)
+        self._btn_retry_failed.clicked.connect(self.retryFailedRequested)
+        self.db_reference_control.editor.valueChanged.connect(
+            lambda *_: self.changed.emit()
+        )
+        self.db_reference_control.mode_committed.connect(
+            lambda *_: self.changed.emit()
+        )
         # User-driven dB↔Linear toggle: per spec §1.4 reset z_auto/z_range
         # to the new unit's defaults. Programmatic ``apply_axis_params``
         # path wraps its own ``setCurrentIndex`` in ``blockSignals`` so
@@ -163,6 +303,28 @@ QWidget#BatchOutputPanel {
             spin.valueChanged.connect(lambda *_: self.changed.emit())
         self._apply_method_axis_context("fft")
         self._sync_axis_enabled()
+        self._sync_output_controls()
+
+    @staticmethod
+    def _compact_field(widget: QWidget) -> None:
+        widget.setMinimumWidth(0)
+        widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+
+    def _on_image_option_changed(self, _value=None) -> None:
+        self._sync_output_controls()
+        self.changed.emit()
+
+    def _sync_output_controls(self) -> None:
+        data_enabled = bool(self._chk_data.isChecked())
+        image_enabled = bool(self._chk_image.isChecked())
+        image_format = str(self._combo_image_format.currentData() or "png")
+        custom = str(self._combo_image_size.currentData() or "") == "custom"
+        self._combo_format.setEnabled(data_enabled)
+        self._combo_image_format.setEnabled(image_enabled)
+        self._combo_image_size.setEnabled(image_enabled)
+        self._spin_image_width.setEnabled(image_enabled and custom)
+        self._spin_image_height.setEnabled(image_enabled and custom)
+        self._spin_image_dpi.setEnabled(image_enabled and image_format == "png")
 
     def _on_amp_unit_changed(self, text: str) -> None:
         """User toggled dB↔Linear on ``combo_amp_unit``.
@@ -337,14 +499,186 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
     def directory(self) -> str:
         return self._dir_edit.text().strip()
 
+    def get_outputs(self) -> BatchOutput:
+        """Return the sole authoritative portable output configuration."""
+        return BatchOutput(
+            export_data=bool(self._chk_data.isChecked()),
+            export_image=bool(self._chk_image.isChecked()),
+            data_format=str(self._combo_format.currentText()),
+            image_format=str(self._combo_image_format.currentData() or "png"),
+            image_size=str(self._combo_image_size.currentData() or "1920x1080"),
+            image_width=int(self._spin_image_width.value()),
+            image_height=int(self._spin_image_height.value()),
+            image_dpi=int(self._spin_image_dpi.value()),
+            conflict_policy=str(
+                self._combo_conflict.currentData() or "auto_number"
+            ),
+            write_manifest=bool(self._chk_manifest.isChecked()),
+            resume_policy=str(
+                self._combo_resume_policy.currentData() or "none"
+            ),
+        )
+
     def export_data(self) -> bool:
-        return bool(self._chk_data.isChecked())
+        return self.get_outputs().export_data
 
     def export_image(self) -> bool:
-        return bool(self._chk_image.isChecked())
+        return self.get_outputs().export_image
 
     def data_format(self) -> str:
-        return self._combo_format.currentText()
+        return self.get_outputs().data_format
+
+    def reference_params(self) -> dict:
+        return db_reference_params(self.db_reference_control)
+
+    def apply_reference_params(self, params: dict, *, legacy: bool = False) -> None:
+        if not params:
+            return
+        if legacy:
+            apply_db_reference_preset(self.db_reference_control, params)
+        else:
+            apply_db_reference_partial(self.db_reference_control, params)
+
+    def set_reference_catalog(self, snapshot=None) -> None:
+        if snapshot is None:
+            self._reference_system_catalog = db_reference.FACTORY_CATALOG_V1
+            self._reference_user_catalog = ()
+            self._prefer_channel_metadata = True
+            return
+        self._reference_system_catalog = tuple(
+            getattr(snapshot, "system_catalog", ()) or ()
+        )
+        self._reference_user_catalog = tuple(
+            getattr(snapshot, "user_catalog", ()) or ()
+        )
+        self._prefer_channel_metadata = bool(
+            getattr(snapshot, "prefer_channel_metadata", True)
+        )
+
+    def effective_preview_text(self) -> str:
+        return self._effective_preview.text()
+
+    def output_preview_text(self) -> str:
+        return self._output_preview.text()
+
+    def set_output_preview(self, preview=None, *, error: str = "") -> None:
+        if error:
+            self._output_preview.setText(f"运行预览不可用：{error}")
+            return
+        if preview is None:
+            self._output_preview.setText("运行预览：等待完整配置")
+            return
+        estimate = "预估" if bool(getattr(preview, "estimated", False)) else "预览"
+        fmt = str(getattr(preview, "image_format", "")).upper()
+        size = (
+            f"{int(getattr(preview, 'image_width', 0))}×"
+            f"{int(getattr(preview, 'image_height', 0))}"
+        )
+        dpi = int(getattr(preview, "image_dpi", 0))
+        self._output_preview.setText(
+            f"{estimate}：{int(getattr(preview, 'task_count', 0))} 任务 · "
+            f"{int(getattr(preview, 'artifact_count', 0))} 文件；"
+            f"{fmt} {size} @ {dpi} DPI；"
+            f"冲突策略 {getattr(preview, 'conflict_policy', '')} · "
+            f"已有冲突 {int(getattr(preview, 'conflict_count', 0))}"
+        )
+
+    def set_operation_status(self, text: str) -> None:
+        self._operation_status.setText(str(text or "未选择运行清单"))
+
+    def update_effective_preview(
+        self,
+        rows,
+        signals,
+        *,
+        weighting: str = "None",
+        target_policy: str = "common",
+        target_pairs=(),
+    ) -> None:
+        """Resolve the recipe-owned reference from cached probe facts only."""
+        rows = tuple(rows or ())
+        if any(
+            getattr(row, "state", "") in {"path_pending", "probing"}
+            for row in rows
+        ):
+            self._set_effective_preview("等待来源信息")
+            return
+        loaded = tuple(
+            row for row in rows if getattr(row, "state", "") == "loaded"
+        )
+        signals = tuple(str(signal) for signal in (signals or ()))
+        if not loaded or (not signals and not target_pairs):
+            self._set_effective_preview("等待来源信息")
+            return
+
+        exact = {
+            (pair[0], str(pair[1]))
+            for pair in (target_pairs or ())
+            if isinstance(pair, (tuple, list)) and len(pair) == 2
+        }
+        groups: dict[tuple, int] = {}
+        for row in loaded:
+            source_id = getattr(row, "source_id", None)
+            available = frozenset(getattr(row, "channels", ()) or ())
+            candidates = signals
+            if exact:
+                candidates = tuple(
+                    signal for sid, signal in exact if sid == source_id
+                )
+            for signal in candidates:
+                if signal not in available:
+                    # Missing common/available/exact targets are not
+                    # resolvable and therefore never enter the reference
+                    # preview count. Preflight surfaces the scope error.
+                    continue
+                resolution = self._resolve_preview_reference(row, signal)
+                note = db_reference.format_reference_note(
+                    resolution, weighting=str(weighting or "None"),
+                )
+                source = str(resolution.source)
+                quantity = str(resolution.quantity or "")
+                source_label = source
+                if source == "system" and quantity:
+                    source_label = f"system {quantity}"
+                key = (source_label, note, resolution.warning or "")
+                groups[key] = groups.get(key, 0) + 1
+        if not groups:
+            self._set_effective_preview("没有可解析的目标")
+            return
+        total = sum(groups.values())
+        parts = [
+            f"{count}×{source_label} · {note}"
+            + (" ⚠" if warning else "")
+            for (source_label, note, warning), count in groups.items()
+        ]
+        self._set_effective_preview(f"{total} 个目标：" + "；".join(parts))
+
+    def _resolve_preview_reference(self, row, signal: str):
+        metadata = dict(getattr(row, "metadata", {}) or {})
+        channel_metadata = metadata.get("channel_metadata") or {}
+        facts = dict(channel_metadata.get(signal) or {})
+        unit = facts.get("unit") or dict(
+            getattr(row, "units", {}) or {}
+        ).get(signal, "")
+        channel_facts = db_reference.ChannelReferenceFacts(
+            quantity=str(facts.get("quantity") or ""),
+            unit=db_reference.canonicalize_source_unit(unit),
+            metadata_reference=facts.get("db_reference"),
+            is_audio_source=metadata.get("adapter_key") == "media",
+        )
+        params = self.reference_params()
+        return db_reference.resolve_db_reference(
+            mode=params["db_reference_mode"],
+            manual_value=params["db_reference"],
+            facts=channel_facts,
+            user_catalog=self._reference_user_catalog,
+            system_catalog=self._reference_system_catalog,
+            prefer_channel_metadata=self._prefer_channel_metadata,
+        )
+
+    def _set_effective_preview(self, text: str) -> None:
+        self._effective_preview.setText(str(text))
+        self.db_reference_control.set_source_text(str(text))
 
     # ------------------------------------------------------------------
     def apply_directory(self, path: str) -> None:
@@ -353,11 +687,49 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
     def apply_outputs(self, out: BatchOutput) -> None:
         if out is None:
             return
-        self._chk_data.setChecked(bool(out.export_data))
-        self._chk_image.setChecked(bool(out.export_image))
-        idx = self._combo_format.findText(str(out.data_format))
-        if idx >= 0:
-            self._combo_format.setCurrentIndex(idx)
+        widgets = (
+            self._chk_data, self._chk_image, self._combo_format,
+            self._combo_image_format, self._combo_image_size,
+            self._spin_image_width, self._spin_image_height,
+            self._spin_image_dpi, self._combo_conflict,
+            self._chk_manifest, self._combo_resume_policy,
+        )
+        blockers = [QSignalBlocker(widget) for widget in widgets]
+        try:
+            self._chk_data.setChecked(bool(out.export_data))
+            self._chk_image.setChecked(bool(out.export_image))
+            self._set_combo_text(self._combo_format, str(out.data_format))
+            self._set_combo_data(
+                self._combo_image_format, str(out.image_format).lower()
+            )
+            self._set_combo_data(
+                self._combo_image_size, str(out.image_size).lower()
+            )
+            self._spin_image_width.setValue(int(out.image_width))
+            self._spin_image_height.setValue(int(out.image_height))
+            self._spin_image_dpi.setValue(int(out.image_dpi))
+            self._set_combo_data(
+                self._combo_conflict, str(out.conflict_policy).lower()
+            )
+            self._chk_manifest.setChecked(bool(out.write_manifest))
+            self._set_combo_data(
+                self._combo_resume_policy, str(out.resume_policy).lower()
+            )
+        finally:
+            del blockers
+        self._sync_output_controls()
+
+    @staticmethod
+    def _set_combo_data(combo: QComboBox, value: str) -> None:
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    @staticmethod
+    def _set_combo_text(combo: QComboBox, value: str) -> None:
+        index = combo.findText(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
 
     def axis_params(self) -> dict:
         return {
@@ -386,8 +758,9 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
         # must round-trip the user's persisted z_floor/z_ceiling/z_auto
         # intact). Apply checkboxes + spins AFTERWARD so the preset's
         # numbers win irrespective of any handler that did slip through.
-        if "amplitude_mode" in params:
-            raw = str(params.get("amplitude_mode", ""))
+        amplitude_value = params.get("amplitude_mode", params.get("amp_y"))
+        if amplitude_value is not None:
+            raw = str(amplitude_value)
             target = "dB" if "db" in raw.lower() else "Linear"
             idx = self.combo_amp_unit.findText(target)
             if idx >= 0:

@@ -18,11 +18,22 @@ class BatchRunnerThread(QThread):
     progress = pyqtSignal(object)              # BatchProgressEvent
     finished_with_result = pyqtSignal(object)  # BatchRunResult
 
-    def __init__(self, runner, preset, output_dir, parent=None):
+    def __init__(
+        self,
+        runner,
+        preset,
+        output_dir,
+        parent=None,
+        *,
+        resume_manifest=None,
+        retry_failed_manifest=None,
+    ):
         super().__init__(parent)
         self._runner = runner
         self._preset = preset
         self._output_dir = output_dir
+        self._resume_manifest = resume_manifest
+        self._retry_failed_manifest = retry_failed_manifest
         self._cancel_token = threading.Event()
 
     def request_cancel(self) -> None:
@@ -35,6 +46,8 @@ class BatchRunnerThread(QThread):
                 self._output_dir,
                 on_event=self.progress.emit,
                 cancel_token=self._cancel_token,
+                resume_manifest=self._resume_manifest,
+                retry_failed_manifest=self._retry_failed_manifest,
             )
         except Exception as exc:  # noqa: BLE001
             # Convert unexpected exception to a blocked result so the UI

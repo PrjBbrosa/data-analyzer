@@ -1,8 +1,10 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from mf4_analyzer.batch import _default_loader
 from mf4_analyzer.io.loader import DataLoader
+from mf4_analyzer.io.source_adapters import UnsupportedSourceFormatError
 
 
 def test_default_loader_dispatches_audio_video(monkeypatch, tmp_path):
@@ -108,3 +110,11 @@ def test_default_loader_dispatches_tdms(monkeypatch, tmp_path):
 
     assert called["path"] == str(path)
     assert list(fd.data.columns) == ["Time", "sig"]
+
+
+def test_default_loader_rejects_unknown_extension_without_mdf_fallback(tmp_path):
+    path = tmp_path / "data.unknown"
+    path.write_bytes(b"not an MDF")
+
+    with pytest.raises(UnsupportedSourceFormatError, match=r"\.unknown"):
+        _default_loader(str(path))

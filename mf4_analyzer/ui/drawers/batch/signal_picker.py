@@ -97,6 +97,7 @@ class SignalPickerPopup(QWidget):
         self._single_select = bool(single_select)
         self._available: list[str] = list(available_signals)
         self._partial: dict[str, str] = dict(partially_available or {})
+        self._partial_selectable = False
         # Normalize initial selection if single_select.
         sel = tuple(initial_selection)
         if self._single_select and len(sel) > 1:
@@ -253,9 +254,13 @@ class SignalPickerPopup(QWidget):
         self._refresh_display()
 
     def set_partially_available(
-        self, partially_available: Mapping[str, str] | None
+        self,
+        partially_available: Mapping[str, str] | None,
+        *,
+        selectable: bool = False,
     ) -> None:
         self._partial = dict(partially_available or {})
+        self._partial_selectable = bool(selectable)
         # Reconcile against the now-coherent (available, partial) pair:
         # keep names present in either set; drop only names that vanished
         # from BOTH. Emit selectionChanged iff the tuple actually changed
@@ -346,7 +351,7 @@ class SignalPickerPopup(QWidget):
                 hint = self._partial[name]
                 label = f"{name} {hint}".strip()
             cb = QCheckBox(label, self._list)
-            if name in self._partial:
+            if name in self._partial and not self._partial_selectable:
                 cb.setEnabled(False)
                 # Clear the item-level flag so is_disabled() reads False -> True.
                 item.setFlags(item.flags() & ~Qt.ItemIsEnabled)

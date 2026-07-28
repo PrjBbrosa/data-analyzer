@@ -104,7 +104,14 @@ def test_build_current_batch_preset_supports_fft_time(qtbot, monkeypatch):
     monkeypatch.setattr(
         win.inspector.fft_time_ctx, "current_signal", lambda: ("f1", "sig")
     )
-    monkeypatch.setattr(win.inspector.fft_time_ctx, "get_params", lambda: dict(params))
+    monkeypatch.setattr(
+        win.inspector.fft_time_ctx,
+        "get_params",
+        lambda: (_ for _ in ()).throw(AssertionError("use current_params")),
+    )
+    monkeypatch.setattr(
+        win.inspector.fft_time_ctx, "current_params", lambda: dict(params)
+    )
     monkeypatch.setattr(win.inspector.fft_time_ctx, "fs", lambda: 512.0)
     monkeypatch.setattr(win.inspector.top, "range_enabled", lambda: True)
     monkeypatch.setattr(win.inspector.top, "range_values", lambda: (1.0, 2.5))
@@ -174,7 +181,7 @@ def test_build_current_batch_preset_supports_time_domain(qtbot, monkeypatch):
     monkeypatch.setattr(
         win.channel_list,
         "get_checked_channels",
-        lambda: [("f1", "sig_a", "#ff0000"), ("f1", "sig_b", "#00ff00")],
+        lambda: [("f1", "sig_a", "#ff0000"), ("f2", "sig_b", "#00ff00")],
     )
     monkeypatch.setattr(win.inspector.top, "range_enabled", lambda: True)
     monkeypatch.setattr(win.inspector.top, "range_values", lambda: (1.0, 2.0))
@@ -191,7 +198,8 @@ def test_build_current_batch_preset_supports_time_domain(qtbot, monkeypatch):
     assert preset.source == "free_config"
     assert preset.method == "time"
     assert preset.target_signals == ("sig_a", "sig_b")
-    assert preset.file_ids == ("f1",)
+    assert preset.file_ids == ("f1", "f2")
+    assert preset.target_pairs == (("f1", "sig_a"), ("f2", "sig_b"))
     assert preset.params["time_range"] == (1.0, 2.0)
     assert preset.params["filter"]["enabled"] is True
     assert preset.params["filter"]["spec"]["kind"] == "low"
@@ -241,6 +249,56 @@ def test_export_strips_runtime_fields(qtbot, tmp_path):
                       return_value=(str(out), "")):
         sheet._on_export_preset()
     raw = json.loads(out.read_text(encoding="utf-8"))
-    for forbidden in ("file_ids", "file_paths", "signal", "rpm_signal"):
+    for forbidden in (
+        "file_ids", "file_paths", "signal", "rpm_signal", "target_pairs",
+    ):
         assert forbidden not in raw
     assert raw["schema_version"] == 1
+
+
+def test_build_current_batch_preset_order_uses_complete_current_params(
+    qtbot, monkeypatch,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    monkeypatch.setattr(win.toolbar, "current_mode", lambda: "order")
+    monkeypatch.setattr(
+        win.inspector.order_ctx, "current_signal", lambda: ("f1", "sig")
+    )
+    monkeypatch.setattr(
+        win.inspector.order_ctx, "current_rpm", lambda: ("f2", "rpm")
+    )
+    monkeypatch.setattr(
+        win.inspector.order_ctx,
+        "get_params",
+        lambda: (_ for _ in ()).throw(AssertionError("use current_params")),
+    )
+    monkeypatch.setattr(
+        win.inspector.order_ctx,
+        "current_params",
+        lambda: {
+            "nfft": None,
+            "nfft_mode": "auto",
+            "samples_per_rev": 2048,
+            "rpm_mode": "manual",
+            "manual_rpm": 1800.0,
+            "db_reference_mode": "auto",
+            "db_reference": 1.0,
+        },
+    )
+    monkeypatch.setattr(win.inspector.order_ctx, "fs", lambda: 4096.0)
+    monkeypatch.setattr(win.inspector.order_ctx, "rpm_factor", lambda: 2.0)
+    monkeypatch.setattr(win.inspector.top, "range_enabled", lambda: False)
+
+    preset = win._build_current_batch_preset()
+
+    assert preset.rpm_signal == ("f2", "rpm")
+    assert preset.params["nfft"] is None
+    assert preset.params["nfft_mode"] == "auto"
+    assert preset.params["samples_per_rev"] == 2048
+    assert preset.params["manual_rpm"] == 1800.0
+    assert preset.params["db_reference_mode"] == "auto"
+    assert preset.params["fs"] == 4096.0
+    assert preset.params["rpm_factor"] == 2.0
