@@ -1341,10 +1341,12 @@ class OverlayAxisManager(_CanvasBackref):
                 if not (math.isfinite(span) and span > 0):
                     continue
                 if shift:
-                    # Step the per-division to the ADJACENT nice value (not a
-                    # raw factor) so _frame_to_nice can't snap the result back
-                    # to the original span — a guaranteed visible zoom step,
-                    # applied identically to every channel.
+                    # Step the per-division to the ADJACENT nice value and keep
+                    # that exact step. Feeding an (n - 1)-division candidate
+                    # back through _frame_to_nice lets sparse densities (n <=
+                    # 6) re-derive the previous step, turning zoom-out into a
+                    # no-op. Build exactly n divisions from next_per_div so
+                    # every wheel step is strictly monotonic.
                     current_per_div = span / n
                     next_per_div = _adjacent_nice_step(
                         current_per_div, -1 if step > 0 else 1
@@ -1352,10 +1354,11 @@ class OverlayAxisManager(_CanvasBackref):
                     if next_per_div is None:
                         next_per_div = current_per_div * factor
                     anchor = lo + frac * span
-                    framed_span = max(next_per_div, (n - 1) * next_per_div)
+                    framed_span = n * next_per_div
                     new_lo = anchor - frac * framed_span
-                    new_hi = anchor + (1.0 - frac) * framed_span
-                    bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
+                    bottom = math.floor(new_lo / next_per_div) * next_per_div
+                    top = bottom + framed_span
+                    ticks = [bottom + k * next_per_div for k in range(n + 1)]
                 else:
                     # Plain-wheel vertical pan. Sign is NEGATED vs ``step`` so
                     # wheel-up moves the view toward LOWER Y (content scrolls

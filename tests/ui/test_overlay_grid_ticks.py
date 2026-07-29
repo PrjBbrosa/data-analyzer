@@ -272,6 +272,89 @@ class TestOverlayWheel:
         assert (ax1.get_ylim()[1] - ax1.get_ylim()[0]) < span1_before
         assert canvas._x_master_handle.get_xlim() == pytest.approx(x_before)
 
+    @pytest.mark.parametrize("divisions", range(3, 21))
+    def test_shift_wheel_zoom_out_strictly_expands_at_every_density(
+        self, qapp, divisions,
+    ):
+        """A negative Shift-wheel step must never be snapped back to the
+        current overlay range, including the sparse Y densities 3 through 6.
+        """
+        canvas = self._overlay(qapp)
+        canvas.set_tick_density(10, divisions)
+        for handle in canvas.axes_list:
+            handle.set_ylim(0.0, float(divisions))
+
+        for step_index in range(8):
+            before = [hi - lo for lo, hi in (
+                handle.get_ylim() for handle in canvas.axes_list
+            )]
+            expected_spans = [
+                divisions * pgc._adjacent_nice_step(span / divisions, 1)
+                for span in before
+            ]
+
+            assert canvas._handle_wheel_dispatch(
+                delta=-120.0,
+                modifiers=Qt.ShiftModifier,
+                x_pos=0.5,
+                y_pos=0.5,
+            ) is True
+
+            after = [hi - lo for lo, hi in (
+                handle.get_ylim() for handle in canvas.axes_list
+            )]
+            for channel_index, (old_span, new_span, expected_span) in enumerate(
+                zip(before, after, expected_spans)
+            ):
+                assert new_span > old_span, (
+                    f"n={divisions}, step={step_index}, channel={channel_index}: "
+                    f"zoom-out must expand {old_span}, got {new_span}"
+                )
+                assert new_span == pytest.approx(expected_span), (
+                    f"n={divisions}, step={step_index}, channel={channel_index}: "
+                    "zoom-out must keep the selected adjacent nice step"
+                )
+
+    @pytest.mark.parametrize("divisions", range(3, 21))
+    def test_shift_wheel_zoom_in_strictly_contracts_at_every_density(
+        self, qapp, divisions,
+    ):
+        canvas = self._overlay(qapp)
+        canvas.set_tick_density(10, divisions)
+        for handle in canvas.axes_list:
+            handle.set_ylim(0.0, float(divisions))
+
+        for step_index in range(8):
+            before = [hi - lo for lo, hi in (
+                handle.get_ylim() for handle in canvas.axes_list
+            )]
+            expected_spans = [
+                divisions * pgc._adjacent_nice_step(span / divisions, -1)
+                for span in before
+            ]
+
+            assert canvas._handle_wheel_dispatch(
+                delta=120.0,
+                modifiers=Qt.ShiftModifier,
+                x_pos=0.5,
+                y_pos=0.5,
+            ) is True
+
+            after = [hi - lo for lo, hi in (
+                handle.get_ylim() for handle in canvas.axes_list
+            )]
+            for channel_index, (old_span, new_span, expected_span) in enumerate(
+                zip(before, after, expected_spans)
+            ):
+                assert new_span < old_span, (
+                    f"n={divisions}, step={step_index}, channel={channel_index}: "
+                    f"zoom-in must contract {old_span}, got {new_span}"
+                )
+                assert new_span == pytest.approx(expected_span), (
+                    f"n={divisions}, step={step_index}, channel={channel_index}: "
+                    "zoom-in must keep the selected adjacent nice step"
+                )
+
     def test_axis_gutter_shift_wheel_zooms_only_that_channel(self, qapp):
         # Wheel over ONE channel's own Y-axis gutter (pyqtgraph forwards it as
         # axis=1) → scroll/zoom ONLY that channel; the others are untouched.
