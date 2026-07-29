@@ -1,10 +1,52 @@
+from pathlib import Path
+
 from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, Qt
-from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtGui import QColor, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QMessageBox, QPushButton
 
 from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui.widgets import MultiFileChannelWidget
+
+
+def test_channel_tree_selected_rows_render_approved_windows_highlight(qapp, qtbot):
+    old_sheet = qapp.styleSheet()
+    old_style = qapp.style().objectName()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        widget = MultiFileChannelWidget()
+        qtbot.addWidget(widget)
+        widget.resize(520, 360)
+        _add_attached_file(widget, "file-a", _MultiChannelFileData())
+        widget.show()
+        qtbot.waitExposed(widget)
+
+        item = widget._file_items["file-a"].child(0)
+        widget.tree.setCurrentItem(item)
+        item.setSelected(True)
+        qapp.processEvents()
+
+        row = widget.tree.visualItemRect(item)
+        image = widget.tree.viewport().grab().toImage()
+        expected = QColor("#b7d3f2")
+        body_x = widget.tree.columnViewportPosition(2) + 4
+
+        body_color = image.pixelColor(body_x, row.center().y())
+        branch_color = image.pixelColor(2, row.center().y())
+
+        assert body_color == expected, (
+            f"selected row body rendered {body_color.name()}, expected {expected.name()}"
+        )
+        assert branch_color == expected, (
+            "selected row branch gutter rendered "
+            f"{branch_color.name()}, expected {expected.name()}"
+        )
+    finally:
+        qapp.setStyleSheet(old_sheet)
+        qapp.setStyle(old_style)
 
 
 class _FakeFileData:

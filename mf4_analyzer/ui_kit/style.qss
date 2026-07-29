@@ -1176,11 +1176,11 @@ QTreeWidget#channelTree::item {
 QTreeWidget#channelTree::item:selected {
     min-height: 24px;
     padding: 2px 4px;
-    background-color: #e8efff;
+    background-color: #b7d3f2;
     color: #111827;
 }
 QTreeWidget#channelTree::branch:selected {
-    background-color: #e8efff;
+    background-color: #b7d3f2;
 }
 
 QHeaderView::section {

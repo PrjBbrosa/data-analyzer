@@ -125,7 +125,7 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
     CHECK_TO_SWATCH_GAP = 6
     SWATCH_TO_TEXT_GAP = 4
     CELL_RIGHT_INSET = 7
-    SELECTED_BG = QColor("#e8efff")
+    SELECTED_BG = QColor("#b7d3f2")
     TEXT = QColor("#111827")
     MUTED = QColor("#64748b")
     CHECK_BORDER = QColor("#b8c1ce")
@@ -422,7 +422,7 @@ class _CheckTolerantTree(QTreeWidget):
         # the item body before drawing an optional axis-group badge.
         if item.isSelected():
             painter.save()
-            painter.fillRect(rect, QColor('#e8efff'))
+            painter.fillRect(rect, _ChannelLeafDelegate.SELECTED_BG)
             painter.restore()
         owner = self._owner
         if owner is None:
