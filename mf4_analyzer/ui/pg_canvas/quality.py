@@ -12,6 +12,8 @@ from ._backref import _CanvasBackref
 
 import pyqtgraph as pg
 
+from .renderer import _SUBPLOT_DENSE_DECIMATION
+
 
 class QualityManager(_CanvasBackref):
     """Curve antialiasing and idle-quality policy.
@@ -248,6 +250,9 @@ class QualityManager(_CanvasBackref):
         if getattr(self, "_y_overflow_wall_active", False):
             self.density_allowed = False
             return False
+        if self._overlay_density_pressure_status()["blocked"]:
+            self.density_allowed = False
+            return False
         status = self._density_status()
         if status["error"]:
             self.density_allowed = False
@@ -271,6 +276,8 @@ class QualityManager(_CanvasBackref):
         # the idle hysteresis state opt a dense-discrete curve back into the
         # temporary forced-AA context used by grab_pixmap().
         if self._high_raster_cost_status()["blocked"]:
+            return False
+        if self._overlay_density_pressure_status()["blocked"]:
             return False
         dense_status = self._dense_raster.quality_status()
         if dense_status.get("has_dense") and not self._native_aa_curve_items():
@@ -314,6 +321,41 @@ class QualityManager(_CanvasBackref):
                 labels.append(str(display_name))
         return {
             "blocked": bool(labels),
+            "count": len(labels),
+            "labels": tuple(labels),
+        }
+
+    def _overlay_density_pressure_status(self):
+        """Describe visible overlay curves whose raw density makes AA costly."""
+        if not bool(getattr(self, "_overlay_mode", False)):
+            return {"blocked": False, "count": 0, "labels": ()}
+        try:
+            pixel_width = self._current_pixel_width()
+            if pixel_width is None or float(pixel_width) <= 0:
+                return {"blocked": False, "count": 0, "labels": ()}
+            pixel_width = float(pixel_width)
+        except Exception:
+            return {"blocked": False, "count": 0, "labels": ()}
+
+        try:
+            entries = list(self._channel_lines.composite_items())
+        except Exception:
+            return {"blocked": False, "count": 0, "labels": ()}
+
+        labels = []
+        for composite_key, display_name, pair in entries:
+            try:
+                pdi = pair[1].plot_data_item
+                if pdi is None or not pdi.isVisible():
+                    continue
+                row = self.channel_data.get(composite_key)
+                sample_count = len(row[1])
+                if sample_count / pixel_width >= _SUBPLOT_DENSE_DECIMATION:
+                    labels.append(str(display_name))
+            except Exception:
+                continue
+        return {
+            "blocked": len(labels) >= 2,
             "count": len(labels),
             "labels": tuple(labels),
         }
@@ -366,6 +408,7 @@ class QualityManager(_CanvasBackref):
         density = self._density_status()
         raster_cost = self._high_raster_cost_status()
         dense_raster = self._dense_raster.quality_status()
+        pressure = self._overlay_density_pressure_status()
         base = {
             "metric": density["metric"],
             "budget": density["off_budget"],
@@ -415,6 +458,15 @@ class QualityManager(_CanvasBackref):
                     f"抗锯齿未激活：高光栅成本曲线 {preview}"
                     "（密集离散跳变）"
                 ),
+            }
+        if pressure["blocked"]:
+            return {
+                **base,
+                "state": "red",
+                "render_path": "native-non-aa",
+                "block_reason": "overlay-density-pressure",
+                "overlay_dense_curve_count": pressure["count"],
+                "tooltip": "抗锯齿未激活：叠加高密度曲线达到性能门禁",
             }
         label = "叠加密度" if density["overlay"] else "曲线密度"
         if density["metric"] > density["off_budget"]:
