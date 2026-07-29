@@ -183,7 +183,7 @@ def _wait_for_analysis(trigger, section: str, win, timeout_ms=60_000) -> bool:
 
 
 def _drive_imports(win, app) -> None:
-    """Load three real v7.8 measurement formats and show one WWT curve."""
+    """Load three real measurement formats and show one WWT curve."""
     from PyQt5.QtCore import QEventLoop, QTimer
 
     missing = [str(path) for path in IMPORT_SAMPLES if not path.exists()]

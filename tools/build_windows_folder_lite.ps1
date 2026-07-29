@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "7.8",
+    [string]$Version = "7.9",
     [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
@@ -65,7 +65,7 @@ $WorkDir = Join-Path $RepoRoot "build\pyinstaller-lite"
 $SpecDir = Join-Path $RepoRoot "build\spec-lite"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
-# Default output: dist\TraceLabAnalyzer7.8\TraceLabAnalyzer7.8.exe
+# Default output: dist\TraceLabAnalyzer7.9\TraceLabAnalyzer7.9.exe
 # (override with -Version or -AppName)
 
 foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool)) {
