@@ -351,6 +351,12 @@ class TestOverlayWheel:
             qapp.processEvents()
             current_ranges = [handle.get_ylim() for handle in canvas.axes_list]
             for old_limits, new_limits in zip(previous_ranges, current_ranges):
+                old_span = old_limits[1] - old_limits[0]
+                new_span = new_limits[1] - new_limits[0]
+                if delta > 0:
+                    assert new_span < old_span
+                else:
+                    assert new_span > old_span
                 _assert_cursor_anchor_preserved(
                     old_limits, new_limits, delivered_frac
                 )
