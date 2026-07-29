@@ -600,7 +600,10 @@ def test_pixel_only_modifier_wheel_zooms_each_fft_viewbox(
     before_span = before[axis_index][1] - before[axis_index][0]
     after_span = after[axis_index][1] - after[axis_index][0]
     assert after[other_index] == pytest.approx(before[other_index])
-    assert (after_span < before_span) is expect_zoom_in
+    if expect_zoom_in:
+        assert after_span < before_span
+    else:
+        assert after_span > before_span
 
 
 def test_viewport_wheel_delta_state_does_not_leak_between_events(canvas, qapp):
