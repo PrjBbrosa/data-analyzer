@@ -1346,7 +1346,9 @@ class OverlayAxisManager(_CanvasBackref):
                     # back through _frame_to_nice lets sparse densities (n <=
                     # 6) re-derive the previous step, turning zoom-out into a
                     # no-op. Build exactly n divisions from next_per_div so
-                    # every wheel step is strictly monotonic.
+                    # every wheel step is strictly monotonic. ``next_per_div``
+                    # controls zoom level and tick spacing, while the cursor
+                    # anchor controls range phase.
                     current_per_div = span / n
                     next_per_div = _adjacent_nice_step(
                         current_per_div, -1 if step > 0 else 1
@@ -1355,8 +1357,7 @@ class OverlayAxisManager(_CanvasBackref):
                         next_per_div = current_per_div * factor
                     anchor = lo + frac * span
                     framed_span = n * next_per_div
-                    new_lo = anchor - frac * framed_span
-                    bottom = math.floor(new_lo / next_per_div) * next_per_div
+                    bottom = anchor - frac * framed_span
                     top = bottom + framed_span
                     ticks = [bottom + k * next_per_div for k in range(n + 1)]
                 else:

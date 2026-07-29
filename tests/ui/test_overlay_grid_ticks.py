@@ -8,7 +8,7 @@ import math
 
 import numpy as np
 import pytest
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QPointF, Qt
 
 from mf4_analyzer.ui import pg_canvases as pgc
 from mf4_analyzer.ui.pg_canvases import _fmt_tick, _frame_to_nice, _nice_per_div
@@ -208,6 +208,21 @@ class TestRepinTicks:
                 assert abs(ratio - round(ratio)) < 1e-6
 
 
+def _overlay_scene_pos_at_fraction(canvas, frac):
+    view_box = canvas._x_master_handle.view_box
+    rect = view_box.sceneBoundingRect()
+    return QPointF(
+        float(rect.center().x()),
+        float(rect.bottom()) - float(frac) * float(rect.height()),
+    )
+
+
+def _assert_cursor_anchor_preserved(before, after, frac):
+    before_anchor = before[0] + frac * (before[1] - before[0])
+    after_anchor = after[0] + frac * (after[1] - after[0])
+    assert after_anchor == pytest.approx(before_anchor, rel=1e-10, abs=1e-10)
+
+
 class TestOverlayWheel:
     def _overlay(self, qapp):
         from tests.ui.test_pg_timedomain_canvas import _pg_canvas
@@ -220,6 +235,130 @@ class TestOverlayWheel:
         ]
         canvas.plot_channels(rows, mode="overlay")
         return canvas
+
+    @pytest.mark.parametrize("divisions", [3, 10, 20])
+    @pytest.mark.parametrize("frac", [0.15, 0.50, 0.85])
+    def test_shift_wheel_preserves_cursor_anchor(
+        self, qapp, divisions, frac,
+    ):
+        canvas = self._overlay(qapp)
+        canvas.set_tick_density(10, divisions)
+        initial_ranges = [(-2.5, 2.5), (-120.0, 280.0)]
+        for handle, limits in zip(canvas.axes_list, initial_ranges):
+            handle.set_ylim(*limits)
+        scene_pos = _overlay_scene_pos_at_fraction(canvas, frac)
+        before = [handle.get_ylim() for handle in canvas.axes_list]
+
+        assert canvas._handle_wheel_dispatch(
+            delta=120.0,
+            modifiers=Qt.ShiftModifier,
+            x_pos=0.5,
+            y_pos=0.0,
+            view_box=canvas._x_master_handle.view_box,
+            scene_pos=scene_pos,
+            axis=None,
+        ) is True
+
+        after = [handle.get_ylim() for handle in canvas.axes_list]
+        for old_limits, new_limits in zip(before, after):
+            _assert_cursor_anchor_preserved(old_limits, new_limits, frac)
+
+    @pytest.mark.parametrize("divisions", [3, 10, 20])
+    @pytest.mark.parametrize("frac", [0.15, 0.50, 0.85])
+    def test_shift_wheel_round_trip_restores_ranges_and_projects_ticks(
+        self, qapp, divisions, frac,
+    ):
+        canvas = self._overlay(qapp)
+        canvas.set_tick_density(10, divisions)
+        # Per-division values are exactly 1 and 40, both members of the nice-step
+        # sequence. This isolates reversibility of adjacent nice levels from the
+        # separate first-notch normalization of an arbitrary external range.
+        initial_ranges = [
+            (-0.5 * divisions, 0.5 * divisions),
+            (-20.0 * divisions, 20.0 * divisions),
+        ]
+        for handle, limits in zip(canvas.axes_list, initial_ranges):
+            handle.set_ylim(*limits)
+        initial_x = canvas._x_master_handle.get_xlim()
+        scene_pos = _overlay_scene_pos_at_fraction(canvas, frac)
+        previous_ranges = [handle.get_ylim() for handle in canvas.axes_list]
+
+        for delta in [120.0] * 4 + [-120.0] * 4:
+            assert canvas._handle_wheel_dispatch(
+                delta=delta,
+                modifiers=Qt.ShiftModifier,
+                x_pos=0.5,
+                y_pos=0.0,
+                view_box=canvas._x_master_handle.view_box,
+                scene_pos=scene_pos,
+                axis=None,
+            ) is True
+            for old_limits, handle in zip(previous_ranges, canvas.axes_list):
+                new_limits = handle.get_ylim()
+                _assert_cursor_anchor_preserved(old_limits, new_limits, frac)
+                major = handle.y_axis_item()._tickLevels[0]
+                tick_values = [value for value, _label in major]
+                assert len(tick_values) == divisions + 1
+                assert tick_values[0] == pytest.approx(new_limits[0])
+                assert tick_values[-1] == pytest.approx(new_limits[1])
+                tick_step = (new_limits[1] - new_limits[0]) / divisions
+                assert np.diff(tick_values) == pytest.approx(
+                    [tick_step] * divisions
+                )
+            previous_ranges = [handle.get_ylim() for handle in canvas.axes_list]
+
+        for handle, initial_limits in zip(canvas.axes_list, initial_ranges):
+            assert handle.get_ylim() == pytest.approx(initial_limits)
+        assert canvas._x_master_handle.get_xlim() == pytest.approx(initial_x)
+
+    def test_real_viewport_shift_wheel_round_trip_does_not_drift(self, qapp):
+        from PyQt5.QtCore import QPoint
+        from PyQt5.QtGui import QWheelEvent
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._overlay(qapp)
+        canvas.resize(900, 500)
+        canvas.show()
+        qapp.processEvents()
+        frac = 0.85
+        initial_ranges = [(-2.5, 2.5), (-120.0, 280.0)]
+        for handle, limits in zip(canvas.axes_list, initial_ranges):
+            handle.set_ylim(*limits)
+        initial_x = canvas._x_master_handle.get_xlim()
+        scene_pos = _overlay_scene_pos_at_fraction(canvas, frac)
+        pos = QPointF(canvas._glw.mapFromScene(scene_pos))
+        global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
+        delivered_scene_pos = canvas._glw.mapToScene(pos.toPoint())
+        delivered_frac = canvas._overlay_axes._overlay_cursor_y_fraction(
+            delivered_scene_pos,
+            canvas._x_master_handle.view_box,
+        )
+        previous_ranges = [handle.get_ylim() for handle in canvas.axes_list]
+
+        for delta in [120, 120, -120, -120]:
+            event = QWheelEvent(
+                pos,
+                global_pos,
+                QPoint(),
+                QPoint(0, delta),
+                Qt.NoButton,
+                Qt.ShiftModifier,
+                Qt.ScrollUpdate,
+                False,
+            )
+            assert QApplication.sendEvent(canvas._glw.viewport(), event)
+            assert event.isAccepted()
+            qapp.processEvents()
+            current_ranges = [handle.get_ylim() for handle in canvas.axes_list]
+            for old_limits, new_limits in zip(previous_ranges, current_ranges):
+                _assert_cursor_anchor_preserved(
+                    old_limits, new_limits, delivered_frac
+                )
+            previous_ranges = current_ranges
+
+        for handle, initial_limits in zip(canvas.axes_list, initial_ranges):
+            assert handle.get_ylim() == pytest.approx(initial_limits)
+        assert canvas._x_master_handle.get_xlim() == pytest.approx(initial_x)
 
     def test_no_selection_shift_wheel_zooms_all_keeps_xmaster_locked(self, qapp):
         # New design (user request): overlay Y zooms ALL channels together like
