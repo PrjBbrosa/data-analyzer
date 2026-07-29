@@ -10,6 +10,33 @@ from PyQt5.QtCore import Qt
 from .context_menu import _localize_pg_context_menu
 
 
+class _WheelDeltaGraphicsLayoutWidget(pg.GraphicsLayoutWidget):
+    """Preserve raw pixel-wheel direction for scene-level ViewBox events."""
+
+    def __init__(self, *args, owner_canvas=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._owner_canvas = owner_canvas
+
+    def wheelEvent(self, ev):
+        owner = self._owner_canvas
+        delta = 0.0
+        try:
+            angle = ev.angleDelta()
+            delta = float(angle.x() or angle.y())
+            if delta == 0.0:
+                pixel = ev.pixelDelta()
+                delta = float(pixel.x() or pixel.y())
+        except Exception:
+            pass
+        if owner is not None:
+            owner._raw_wheel_delta = delta
+        try:
+            super().wheelEvent(ev)
+        finally:
+            if owner is not None:
+                owner._raw_wheel_delta = None
+
+
 class _ModifierWheelViewBox(pg.ViewBox):
     """ViewBox that consults Qt keyboard modifiers on wheel events."""
 
@@ -67,6 +94,8 @@ class _ModifierWheelViewBox(pg.ViewBox):
             return
         try:
             delta = float(ev.delta())
+            if delta == 0.0:
+                delta = float(getattr(owner, "_raw_wheel_delta", 0.0) or 0.0)
             modifiers = ev.modifiers()
             scene_pos = ev.scenePos()
             data_pos = self.mapSceneToView(scene_pos)
@@ -131,4 +160,4 @@ class _ModifierWheelViewBox(pg.ViewBox):
                 pass
 
 
-__all__ = ["_ModifierWheelViewBox"]
+__all__ = ["_ModifierWheelViewBox", "_WheelDeltaGraphicsLayoutWidget"]

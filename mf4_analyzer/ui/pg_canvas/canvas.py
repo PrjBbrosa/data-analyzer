@@ -102,7 +102,10 @@ from mf4_analyzer.ui.pg_canvas.annotations import AnnotationManager
 from mf4_analyzer.ui.pg_canvas.cursor import CursorController
 from mf4_analyzer.ui.pg_canvas.ticks_math import _quantize_range_key, _frame_to_nice
 from mf4_analyzer.ui.pg_canvas.tick_density import TickDensityController
-from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox  # noqa: F401
+from mf4_analyzer.ui.pg_canvas.viewbox import (
+    _ModifierWheelViewBox,  # noqa: F401
+    _WheelDeltaGraphicsLayoutWidget,
+)
 from mf4_analyzer.ui.pg_canvas import renderer as _renderer
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
 from mf4_analyzer.ui.axis_group_palette import axis_group_color
@@ -284,7 +287,9 @@ class TimeDomainCanvasPG(QWidget):
         # GraphicsLayoutWidget is the host for one or more PlotItem rows.
         # We keep it as a child rather than subclassing so this widget
         # itself can carry pyqtSignals without metaclass conflicts.
-        self._glw = pg.GraphicsLayoutWidget(self)
+        self._glw = _WheelDeltaGraphicsLayoutWidget(
+            self, owner_canvas=self,
+        )
         self._empty_hint_item = None
         self._empty_hint_text = ""
         # Quiet background to match the matplotlib CHART_FACE; the actual

@@ -4856,6 +4856,47 @@ class TestTimeDomainCanvasPGSetDataHotPathContract:
 
         assert spy.call_count == 1
 
+    @pytest.mark.parametrize(
+        ("pixel_delta", "expect_zoom_in"),
+        [(15, True), (-15, False)],
+        ids=["zoom-in", "zoom-out"],
+    )
+    def test_real_viewport_shift_pixel_wheel_zooms_overlay_y(
+        self, qtbot, qapp, pixel_delta, expect_zoom_in,
+    ):
+        """Precision-touchpad pixel deltas retain both Y-zoom directions."""
+        from PyQt5.QtCore import QPoint, QPointF, Qt
+        from PyQt5.QtGui import QWheelEvent
+        from PyQt5.QtWidgets import QApplication
+
+        canvas, _pdi = self._canvas_and_pdi(qapp)
+        vb = canvas._primary_xaxis_ax.view_box
+        before_y = tuple(vb.viewRange()[1])
+        scene_pos = vb.mapViewToScene(QPointF(5.0, 0.0))
+        pos = QPointF(canvas._glw.mapFromScene(scene_pos))
+        global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
+        event = QWheelEvent(
+            pos,
+            global_pos,
+            QPoint(0, pixel_delta),
+            QPoint(),
+            Qt.NoButton,
+            Qt.ShiftModifier,
+            Qt.ScrollUpdate,
+            False,
+        )
+
+        assert QApplication.sendEvent(canvas._glw.viewport(), event)
+        qapp.processEvents()
+
+        after_y = tuple(vb.viewRange()[1])
+        before_span = before_y[1] - before_y[0]
+        after_span = after_y[1] - after_y[0]
+        if expect_zoom_in:
+            assert after_span < before_span
+        else:
+            assert after_span > before_span
+
     @pytest.mark.parametrize("modifiers", [Qt.NoModifier, Qt.ShiftModifier])
     def test_y_only_wheel_keeps_immediate_visible_feedback(
         self, qapp, modifiers,

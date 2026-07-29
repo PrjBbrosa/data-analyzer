@@ -96,6 +96,8 @@ lesson by default.
 | [Batch Operations Keep Runtime State Out Of Presets](batch-operations-runtime-state.md) | Changing BatchSheet run lifecycle, manifest resume, retry-failed, worker arguments, or consecutive-run result handling. | See lesson |
 | [Batch Render Proof Includes CJK Glyph Coverage](batch-render-cjk-glyph-coverage.md) | Changing batch figure typography, titles, axis labels, legends, colorbars, SVG/PDF output, or cross-platform font fallback. | See lesson |
 | [Batch Task List Height Follows Its Information](batch-task-list-information-weighted-height.md) | Changing BatchSheet task preview rows, task statuses, disclosure behavior, or the bottom task-list layout. | See lesson |
+| [Raw Wheel Pixel Delta Survives Scene Routing](raw-wheel-pixel-delta-survives-scene-routing.md) | Changing pyqtgraph wheel routing, modifier zoom behavior, the | See lesson |
+| [Qt Timer Rate Limits Need A Timeout-Time Guard](qt-timer-rate-limit-recheck-at-timeout.md) | Implementing or reviewing a hard interaction refresh-rate ceiling with | See lesson |
 
 ## Selection Rules
 
