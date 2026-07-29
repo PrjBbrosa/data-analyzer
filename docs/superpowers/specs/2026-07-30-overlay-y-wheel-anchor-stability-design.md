@@ -85,9 +85,14 @@ If scene geometry or the event position is unavailable, the existing fallback
 - Positive Shift-wheel delta selects the immediately smaller nice step.
 - Negative Shift-wheel delta selects the immediately larger nice step.
 - Supported Y tick densities remain integers from `3` through `20`.
-- At a fixed cursor position, an equal number of zoom-in and zoom-out notches
-  returns every affected channel to its original Y range within numerical
-  tolerance.
+- When the starting per-division value is already a member of the nice-step
+  sequence (the normal framed overlay state), an equal number of zoom-in and
+  zoom-out notches at a fixed cursor position returns every affected channel
+  to its original Y range within numerical tolerance.
+- An externally imposed range whose per-division value is not a nice step is
+  allowed to normalize to the adjacent nice zoom level on the first notch.
+  Exact restoration of that arbitrary raw span would require hidden zoom
+  history and is outside this change.
 - No one-sided drift may accumulate near the top, middle, or bottom of the
   plot.
 
@@ -157,9 +162,13 @@ assertion.
 
 - Cursor fractions: `0.15`, `0.50`, `0.85`.
 - Tick densities: representative sparse/default/dense values `3`, `10`, `20`.
-- Two overlay channels with deliberately different initial Y ranges.
+- Two overlay channels with deliberately different initial Y ranges. Direct
+  anchor tests retain arbitrary ranges; round-trip tests use spans equal to
+  `n` times hand-checked nice steps.
 - At least four zoom-in steps followed by four zoom-out steps.
-- One real viewport `QWheelEvent` at an off-center vertical position.
+- One real viewport `QWheelEvent` at an off-center vertical position. Its
+  expected anchor fraction is derived from the integer viewport position that
+  Qt actually delivers, not from the pre-mapping ideal fraction.
 - X-master range unchanged throughout.
 - Existing `n=3..20` strict monotonic tests remain green.
 
@@ -175,8 +184,9 @@ wheel tests, and the complete TimeDomain canvas test module. Finish with
    `floor()`-induced mismatch and passes after the implementation change.
 2. At fractions `0.15`, `0.50`, and `0.85`, every affected channel preserves
    the cursor data anchor for every tested notch.
-3. Four zoom-in notches followed by four zoom-out notches restore the original
-   ranges for tick densities `3`, `10`, and `20`.
+3. From a nice-step framed range, four zoom-in notches followed by four
+   zoom-out notches restore the original ranges for tick densities `3`, `10`,
+   and `20`.
 4. A real off-center `QWheelEvent` round trip restores the original ranges and
    leaves X unchanged.
 5. Existing strict monotonicity tests for all densities `3..20` pass.
@@ -201,4 +211,3 @@ wheel tests, and the complete TimeDomain canvas test module. Finish with
   accepted-event route.
 - **Scope creep in fragile plot code:** production ownership is restricted to
   one method in one file; no shared tick helper is modified.
-

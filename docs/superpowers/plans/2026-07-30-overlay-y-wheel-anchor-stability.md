@@ -15,6 +15,7 @@
 - Set `QT_QPA_PLATFORM=offscreen` for automated UI tests.
 - Use a unique writable `--basetemp D:\tmp\...` for every pytest command.
 - Preserve `_adjacent_nice_step()` and strict Shift-wheel span monotonicity for every supported Y tick density from `3` through `20`.
+- Require exact equal-notch round trips only when the starting span is `n` times a nice per-division step; arbitrary external spans may normalize on the first notch and must not introduce stateful zoom history.
 - Preserve plot-area all-channel scope, `axis == 1` single-channel gutter scope, Ctrl+wheel X-only zoom, plain-wheel Y pan, zero-delta fallback, and the locked overlay X-master Y range.
 - Preserve the existing raw angle/pixel wheel bridge and accepted-event routing.
 - Shift-wheel range construction must not call `_frame_to_nice()` and must not use `floor()`, `ceil()`, or `round()` on `bottom` or `top`.
@@ -112,7 +113,13 @@ def test_shift_wheel_round_trip_restores_ranges_and_projects_ticks(
 ):
     canvas = self._overlay(qapp)
     canvas.set_tick_density(10, divisions)
-    initial_ranges = [(-2.5, 2.5), (-120.0, 280.0)]
+    # Per-division values are exactly 1 and 40, both members of the nice-step
+    # sequence. This isolates reversibility of adjacent nice levels from the
+    # separate first-notch normalization of an arbitrary external range.
+    initial_ranges = [
+        (-0.5 * divisions, 0.5 * divisions),
+        (-20.0 * divisions, 20.0 * divisions),
+    ]
     for handle, limits in zip(canvas.axes_list, initial_ranges):
         handle.set_ylim(*limits)
     initial_x = canvas._x_master_handle.get_xlim()
@@ -170,6 +177,11 @@ def test_real_viewport_shift_wheel_round_trip_does_not_drift(self, qapp):
     scene_pos = _overlay_scene_pos_at_fraction(canvas, frac)
     pos = QPointF(canvas._glw.mapFromScene(scene_pos))
     global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
+    delivered_scene_pos = canvas._glw.mapToScene(pos.toPoint())
+    delivered_frac = canvas._overlay_cursor_y_fraction(
+        delivered_scene_pos,
+        canvas._x_master_handle.view_box,
+    )
     previous_ranges = [handle.get_ylim() for handle in canvas.axes_list]
 
     for delta in [120, 120, -120, -120]:
@@ -188,7 +200,9 @@ def test_real_viewport_shift_wheel_round_trip_does_not_drift(self, qapp):
         qapp.processEvents()
         current_ranges = [handle.get_ylim() for handle in canvas.axes_list]
         for old_limits, new_limits in zip(previous_ranges, current_ranges):
-            _assert_cursor_anchor_preserved(old_limits, new_limits, frac)
+            _assert_cursor_anchor_preserved(
+                old_limits, new_limits, delivered_frac
+            )
         previous_ranges = current_ranges
 
     for handle, initial_limits in zip(canvas.axes_list, initial_ranges):
@@ -210,7 +224,8 @@ $env:QT_QPA_PLATFORM='offscreen'
 Expected: FAIL on an anchor/range equality assertion for off-center fractions;
 the existing `math.floor(new_lo / next_per_div)` shifts `bottom` downward.
 The test must not fail because of import, widget construction, or event-delivery
-errors.
+errors. A non-nice arbitrary range is not used for the round-trip assertion;
+that would test first-notch normalization rather than inverse adjacent steps.
 
 - [ ] **Step 6: Implement the minimal cursor-anchored range transform**
 
@@ -310,5 +325,5 @@ After task review is clean, the controller must:
 - **Placeholder scan:** every implementation and verification step contains
   literal code, commands, and expected behavior; no deferred step remains.
 - **Type/name consistency:** every task uses `scene_pos: QPointF`, normalized
-  `frac: float`, range tuples from `get_ylim()`, and the existing boolean
-  dispatch result.
+  `frac: float` (or `delivered_frac` for real integer-pixel delivery), range
+  tuples from `get_ylim()`, and the existing boolean dispatch result.
