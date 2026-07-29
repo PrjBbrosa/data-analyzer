@@ -4732,6 +4732,29 @@ class TestTimeDomainCanvasPGSetDataHotPathContract:
         qapp.processEvents()
         return canvas, canvas._channel_lines["a"][1].plot_data_item
 
+    def test_coarse_refresh_remaining_delay_rounds_up(self, qapp, monkeypatch):
+        canvas, _pdi = self._canvas_and_pdi(qapp)
+        canvas._last_coarse_refresh_at = 10.0
+        monkeypatch.setattr("mf4_analyzer.ui.pg_canvas.canvas.monotonic", lambda: 10.0991)
+        assert canvas._remaining_coarse_refresh_ms() == 1
+
+    def test_early_coarse_timeout_reschedules_without_setdata(
+        self, qapp, monkeypatch,
+    ):
+        from unittest.mock import patch
+
+        canvas, pdi = self._canvas_and_pdi(qapp)
+        canvas._begin_view_interaction()
+        canvas._pending_coarse_xlim = (6.0, 8.0)
+        canvas._last_coarse_refresh_at = 10.0
+        monkeypatch.setattr("mf4_analyzer.ui.pg_canvas.canvas.monotonic", lambda: 10.050)
+        with patch.object(pdi, "setData", wraps=pdi.setData) as spy:
+            assert canvas._run_coarse_refresh(canvas._interaction_generation) is False
+            assert spy.call_count == 0
+        assert canvas._pending_coarse_xlim == pytest.approx((6.0, 8.0))
+        assert canvas._coarse_timer.isActive()
+        assert canvas._coarse_timer.remainingTime() > 0
+
     def test_drag_range_burst_reuses_geometry_then_settles_latest_once(
         self, qtbot, qapp,
     ):
@@ -4768,12 +4791,19 @@ class TestTimeDomainCanvasPGSetDataHotPathContract:
     def test_drag_leaving_buffer_gets_rate_limited_coarse_coverage(
         self, qtbot, qapp,
     ):
+        from time import monotonic
         from unittest.mock import patch
 
         canvas, pdi = self._canvas_and_pdi(qapp)
         canvas.set_xlim(2.0, 4.0)  # settled coverage should be [1.5, 4.5]
+        set_data_timestamps = []
+        original_set_data = pdi.setData
 
-        with patch.object(pdi, "setData", wraps=pdi.setData) as spy:
+        def record_set_data(*args, **kwargs):
+            set_data_timestamps.append(monotonic())
+            return original_set_data(*args, **kwargs)
+
+        with patch.object(pdi, "setData", side_effect=record_set_data) as spy:
             canvas._begin_view_interaction()
             canvas._primary_xaxis_ax.view_box.setXRange(6.0, 8.0, padding=0)
             qtbot.wait(canvas._COARSE_REFRESH_MS + 40)
@@ -4790,9 +4820,15 @@ class TestTimeDomainCanvasPGSetDataHotPathContract:
                 canvas._primary_xaxis_ax.view_box.setXRange(lo, lo + 1.0, padding=0)
                 qtbot.wait(20)
             coarse_calls = spy.call_count
-            # The first coarse frame also waits for the 100 ms gate. Across
-            # ~0.54 s this is at most 5, which scales to <=10 in one second.
-            assert coarse_calls <= 5
+            coarse_timestamps = list(set_data_timestamps)
+            # Enforce the actual rate contract directly. The final settled
+            # release frame is recorded only after this coarse-only snapshot.
+            for previous, current in zip(
+                coarse_timestamps, coarse_timestamps[1:]
+            ):
+                assert current - previous >= (
+                    canvas._COARSE_REFRESH_MS - 2
+                ) / 1000.0
 
             canvas._end_view_interaction()
             qtbot.wait(canvas._INTERACTION_SETTLE_MS + 40)

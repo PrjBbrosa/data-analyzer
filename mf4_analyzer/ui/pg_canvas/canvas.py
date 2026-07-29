@@ -56,6 +56,7 @@ import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 from collections import OrderedDict
+from math import ceil
 from time import monotonic
 from typing import Tuple
 
@@ -3206,6 +3207,14 @@ class TimeDomainCanvasPG(QWidget):
             return (lo, hi)
         return tuple(buffered)
 
+    def _remaining_coarse_refresh_ms(self, now=None):
+        if self._last_coarse_refresh_at <= 0.0:
+            return int(self._COARSE_REFRESH_MS)
+        current = monotonic() if now is None else float(now)
+        elapsed_ms = (current - self._last_coarse_refresh_at) * 1000.0
+        remaining_ms = float(self._COARSE_REFRESH_MS) - elapsed_ms
+        return 0 if remaining_ms <= 0.0 else max(1, int(ceil(remaining_ms)))
+
     def _schedule_coarse_refresh_if_needed(self, viewport):
         if viewport is None or self._coverage_contains(
             self._display_x_coverage, viewport
@@ -3220,13 +3229,17 @@ class TimeDomainCanvasPG(QWidget):
             # most ten coarse frames, not t=0 plus ten interval boundaries.
             delay_ms = self._COARSE_REFRESH_MS
         else:
-            elapsed_ms = (monotonic() - self._last_coarse_refresh_at) * 1000.0
-            delay_ms = max(0, int(round(self._COARSE_REFRESH_MS - elapsed_ms)))
+            delay_ms = self._remaining_coarse_refresh_ms()
         self._coarse_timer.start(delay_ms)
 
     def _run_coarse_refresh(self, generation):
         if int(generation) != self._interaction_generation:
             return False
+        if self._last_coarse_refresh_at > 0.0:
+            remaining_ms = self._remaining_coarse_refresh_ms()
+            if remaining_ms > 0:
+                self._coarse_timer.start(remaining_ms)
+                return False
         # A one-shot wheel/box event has its final settled timer due at the
         # same boundary; let that higher-quality frame win instead of doing a
         # coarse setData immediately followed by a settled setData. During a
