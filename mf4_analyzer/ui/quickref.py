@@ -182,8 +182,8 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("设为叠加图左轴", gesture="右键通道"),
             QuickRow(
                 "合并为共轴比幅值",
-                keys=("Ctrl/Shift",),
-                gesture="多选右键",
+                sub="Ctrl+单击不连续多选；Shift+单击连续范围",
+                gesture="多选后右键",
             ),
         ),
     ),

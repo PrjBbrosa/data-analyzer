@@ -384,6 +384,13 @@ class _CheckTolerantTree(QTreeWidget):
             return
         super().mouseReleaseEvent(event)
 
+    def mouseMoveEvent(self, event):
+        """Keep a left-button row drag from extending the tree selection."""
+        if event.buttons() & Qt.LeftButton:
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
             pos = event.pos()

@@ -290,6 +290,69 @@ def _left_click(tree, pos):
     tree.mousePressEvent(ev)
 
 
+def _left_drag(tree, start, end):
+    """Drag across tree rows with the left button held."""
+    viewport = tree.viewport()
+    QTest.mousePress(viewport, Qt.LeftButton, Qt.NoModifier, start)
+    QCoreApplication.sendEvent(
+        viewport,
+        QMouseEvent(
+            QEvent.MouseMove, end, Qt.NoButton, Qt.LeftButton, Qt.NoModifier
+        ),
+    )
+    QTest.mouseRelease(viewport, Qt.LeftButton, Qt.NoModifier, end)
+
+
+def test_channel_tree_left_drag_does_not_extend_selection(qapp, qtbot):
+    """A row drag must not accidentally turn single selection into a range."""
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    tree = widget.tree
+    file_item = widget._file_items["file-a"]
+    first = file_item.child(0)
+    second = file_item.child(1)
+    third = file_item.child(2)
+    tree.scrollToItem(third)
+    QCoreApplication.processEvents()
+
+    _left_drag(
+        tree,
+        tree.visualItemRect(first).center(),
+        tree.visualItemRect(third).center(),
+    )
+    QCoreApplication.processEvents()
+
+    assert tree.selectedItems() == [first]
+
+    QTest.mouseClick(
+        tree.viewport(), Qt.LeftButton, Qt.NoModifier,
+        tree.visualItemRect(first).center(),
+    )
+    QTest.mouseClick(
+        tree.viewport(), Qt.LeftButton, Qt.ControlModifier,
+        tree.visualItemRect(third).center(),
+    )
+    assert tree.selectedItems() == [first, third]
+
+    tree.clearSelection()
+    QTest.mouseClick(
+        tree.viewport(), Qt.LeftButton, Qt.NoModifier,
+        tree.visualItemRect(first).center(),
+    )
+    QTest.mouseClick(
+        tree.viewport(), Qt.LeftButton, Qt.ShiftModifier,
+        tree.visualItemRect(third).center(),
+    )
+    assert tree.selectedItems() == [first, second, third]
+
+
 def test_checkbox_hit_tolerance_band_toggles_but_name_does_not(qapp, qtbot):
     """Clicking just LEFT of the checkbox (inside the ~6px tolerance band)
     must toggle the channel's check state; clicking on the channel-name
