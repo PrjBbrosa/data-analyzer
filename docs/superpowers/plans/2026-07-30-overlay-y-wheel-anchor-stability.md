@@ -178,7 +178,7 @@ def test_real_viewport_shift_wheel_round_trip_does_not_drift(self, qapp):
     pos = QPointF(canvas._glw.mapFromScene(scene_pos))
     global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
     delivered_scene_pos = canvas._glw.mapToScene(pos.toPoint())
-    delivered_frac = canvas._overlay_cursor_y_fraction(
+    delivered_frac = canvas._overlay_axes._overlay_cursor_y_fraction(
         delivered_scene_pos,
         canvas._x_master_handle.view_box,
     )
@@ -200,6 +200,12 @@ def test_real_viewport_shift_wheel_round_trip_does_not_drift(self, qapp):
         qapp.processEvents()
         current_ranges = [handle.get_ylim() for handle in canvas.axes_list]
         for old_limits, new_limits in zip(previous_ranges, current_ranges):
+            old_span = old_limits[1] - old_limits[0]
+            new_span = new_limits[1] - new_limits[0]
+            if delta > 0:
+                assert new_span < old_span
+            else:
+                assert new_span > old_span
             _assert_cursor_anchor_preserved(
                 old_limits, new_limits, delivered_frac
             )
