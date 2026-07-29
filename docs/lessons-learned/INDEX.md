@@ -101,6 +101,7 @@ lesson by default.
 | [Overlay Wheel Zoom Covers All Tick Densities](codex-overlay-wheel-zoom-covers-all-tick-densities.md) | Changing overlay Y-axis Shift-wheel zoom, nice-step selection, range | See lesson |
 | [Channel Tree Selection Color Has Multiple Painters](codex-channel-tree-selection-color-has-multiple-painters.md) | Changing the selected-row color or painting behavior of the Analyzer | See lesson |
 | [Channel Tree Drag Selection Guard](codex-channel-tree-drag-selection-guard.md) | Changing channel-tree selection modes or mouse press, move, release, | See lesson |
+| [Codex Overlay Wheel Anchor Invariants](codex-overlay-wheel-anchor-invariants.md) | Load when changing overlay wheel zoom, nice-step selection, tick | See lesson |
 
 ## Selection Rules
 
