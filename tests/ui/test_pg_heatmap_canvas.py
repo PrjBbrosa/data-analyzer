@@ -83,6 +83,24 @@ def _mouse_release(point, button):
     )
 
 
+def _send_viewport_wheel(canvas, view_box, *, pixel_y=0, angle_y=0,
+                         modifiers=Qt.NoModifier):
+    scene_pos = view_box.mapViewToScene(QPointF(1.0, 1.0))
+    pos = QPointF(canvas._glw.mapFromScene(scene_pos))
+    global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
+    event = QWheelEvent(
+        pos,
+        global_pos,
+        QPoint(0, pixel_y),
+        QPoint(0, angle_y),
+        Qt.NoButton,
+        modifiers,
+        Qt.ScrollUpdate,
+        False,
+    )
+    return QApplication.sendEvent(canvas._glw.viewport(), event)
+
+
 def _open_context_menu(view_box, monkeypatch):
     from PyQt5.QtWidgets import QMenu
 
@@ -347,6 +365,41 @@ def test_viewport_shift_wheel_zooms_heatmap_y_only(canvas, qapp):
 
     assert after_x == pytest.approx(before_x)
     assert (after_y[1] - after_y[0]) < (before_y[1] - before_y[0])
+
+
+@pytest.mark.parametrize("plot_name", ["_plot", "_slice_plot"])
+@pytest.mark.parametrize(
+    "modifier", [Qt.ControlModifier, Qt.ShiftModifier],
+)
+@pytest.mark.parametrize(
+    ("pixel_delta", "expect_zoom_in"), [(15, True), (-15, False)],
+)
+def test_pixel_only_modifier_wheel_zooms_each_heatmap_viewbox(
+        qapp, plot_name, modifier, pixel_delta, expect_zoom_in):
+    canvas = PgHeatmapCanvas(with_slice=True)
+    try:
+        canvas.resize(640, 480)
+        canvas.show()
+        view_box = getattr(canvas, plot_name).vb
+        view_box.setXRange(0.0, 100.0, padding=0)
+        view_box.setYRange(0.0, 50.0, padding=0)
+        qapp.processEvents()
+        before = view_box.viewRange()
+
+        assert _send_viewport_wheel(
+            canvas, view_box, pixel_y=pixel_delta, modifiers=modifier,
+        )
+        qapp.processEvents()
+        after = view_box.viewRange()
+
+        axis_index = 0 if modifier == Qt.ControlModifier else 1
+        other_index = 1 - axis_index
+        before_span = before[axis_index][1] - before[axis_index][0]
+        after_span = after[axis_index][1] - after[axis_index][0]
+        assert after[other_index] == pytest.approx(before[other_index])
+        assert (after_span < before_span) is expect_zoom_in
+    finally:
+        canvas.deleteLater()
 
 
 def test_has_result_lifecycle(canvas):

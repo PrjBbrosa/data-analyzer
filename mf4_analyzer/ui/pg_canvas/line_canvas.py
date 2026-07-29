@@ -53,7 +53,7 @@ from ._split_mixin import (
     _StackedSplitMixin,
 )
 from .ticks_math import _frame_to_nice, _fmt_tick
-from .viewbox import _ModifierWheelViewBox
+from .viewbox import _ModifierWheelViewBox, _WheelDeltaGraphicsLayoutWidget
 
 
 logger = logging.getLogger(__name__)
@@ -161,7 +161,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._glw = pg.GraphicsLayoutWidget(self)
+        self._glw = _WheelDeltaGraphicsLayoutWidget(self, owner_canvas=self)
         self._glw.setBackground("#ffffff")
         self._glw.ci.setContentsMargins(2, 2, 2, 2)
         self._glw.ci.setSpacing(2)

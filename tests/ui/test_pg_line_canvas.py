@@ -76,6 +76,24 @@ def _mouse_release(point, button):
     )
 
 
+def _send_viewport_wheel(canvas, view_box, *, pixel_y=0, angle_y=0,
+                         modifiers=Qt.NoModifier):
+    scene_pos = view_box.mapViewToScene(QPointF(1.0, 1.0))
+    pos = QPointF(canvas._glw.mapFromScene(scene_pos))
+    global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
+    event = QWheelEvent(
+        pos,
+        global_pos,
+        QPoint(0, pixel_y),
+        QPoint(0, angle_y),
+        Qt.NoButton,
+        modifiers,
+        Qt.ScrollUpdate,
+        False,
+    )
+    return QApplication.sendEvent(canvas._glw.viewport(), event)
+
+
 def _open_context_menu(view_box, monkeypatch):
     from PyQt5.QtWidgets import QMenu
 
@@ -553,6 +571,68 @@ def test_viewport_ctrl_wheel_zooms_fft_line_canvas_x_only(canvas, qapp):
 
     assert (after_x[1] - after_x[0]) < (before_x[1] - before_x[0])
     assert after_y == pytest.approx(before_y)
+
+
+@pytest.mark.parametrize("plot_name", ["_plot_amp", "_plot_time"])
+@pytest.mark.parametrize(
+    "modifier", [Qt.ControlModifier, Qt.ShiftModifier],
+)
+@pytest.mark.parametrize(
+    ("pixel_delta", "expect_zoom_in"), [(15, True), (-15, False)],
+)
+def test_pixel_only_modifier_wheel_zooms_each_fft_viewbox(
+        canvas, qapp, plot_name, modifier, pixel_delta, expect_zoom_in):
+    canvas.show()
+    view_box = getattr(canvas, plot_name).vb
+    view_box.setXRange(0.0, 100.0, padding=0)
+    view_box.setYRange(0.0, 50.0, padding=0)
+    qapp.processEvents()
+    before = view_box.viewRange()
+
+    assert _send_viewport_wheel(
+        canvas, view_box, pixel_y=pixel_delta, modifiers=modifier,
+    )
+    qapp.processEvents()
+    after = view_box.viewRange()
+
+    axis_index = 0 if modifier == Qt.ControlModifier else 1
+    other_index = 1 - axis_index
+    before_span = before[axis_index][1] - before[axis_index][0]
+    after_span = after[axis_index][1] - after[axis_index][0]
+    assert after[other_index] == pytest.approx(before[other_index])
+    assert (after_span < before_span) is expect_zoom_in
+
+
+def test_viewport_wheel_delta_state_does_not_leak_between_events(canvas, qapp):
+    canvas.show()
+    view_box = canvas._plot_amp.vb
+    view_box.setXRange(0.0, 100.0, padding=0)
+    view_box.setYRange(0.0, 50.0, padding=0)
+    qapp.processEvents()
+
+    assert _send_viewport_wheel(
+        canvas,
+        view_box,
+        pixel_y=15,
+        modifiers=Qt.ControlModifier,
+    )
+    qapp.processEvents()
+    after_pixel = view_box.viewRange()
+    assert getattr(canvas, "_raw_wheel_delta", None) is None
+
+    assert _send_viewport_wheel(
+        canvas,
+        view_box,
+        angle_y=-120,
+        modifiers=Qt.ControlModifier,
+    )
+    qapp.processEvents()
+    after_angle = view_box.viewRange()
+
+    pixel_span = after_pixel[0][1] - after_pixel[0][0]
+    angle_span = after_angle[0][1] - after_angle[0][0]
+    assert angle_span > pixel_span
+    assert after_angle[1] == pytest.approx(after_pixel[1])
 
 
 def test_shift_wheel_zooms_fft_line_canvas_current_plot_y_only(canvas, qapp):

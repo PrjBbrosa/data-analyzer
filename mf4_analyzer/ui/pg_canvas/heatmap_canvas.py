@@ -55,7 +55,10 @@ from mf4_analyzer.ui.pg_canvas.remarks import (
     RemarkInteraction,
     RemarkPoint,
 )
-from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox
+from mf4_analyzer.ui.pg_canvas.viewbox import (
+    _ModifierWheelViewBox,
+    _WheelDeltaGraphicsLayoutWidget,
+)
 
 
 class _SliceDirToggle(QWidget):
@@ -813,7 +816,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def __init__(self, parent=None, with_slice: bool = False):
         super().__init__(parent)
         self._with_slice = bool(with_slice)
-        self._glw = pg.GraphicsLayoutWidget(self)
+        self._glw = _WheelDeltaGraphicsLayoutWidget(self, owner_canvas=self)
         # White chart surface to match the package baseline
         # (TimeDomainCanvasPG, canvas.py:198) and the matplotlib
         # CHART_FACE; full style parity is arbitrated in the P1 visual
