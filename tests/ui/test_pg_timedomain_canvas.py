@@ -334,11 +334,11 @@ class TestOverlayBucketCap:
     > 7000). See renderer._effective_pixel_width docstring.
     """
 
-    def _make_canvas(self, qapp, rows, *, mode, width=1920):
+    def _make_canvas(self, qapp, rows, *, mode):
         from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
-        canvas.resize(width, 600)
+        canvas.resize(1920, 600)
         canvas.show()
         QCoreApplication.processEvents()
         canvas.plot_channels(rows, mode=mode)
@@ -346,7 +346,7 @@ class TestOverlayBucketCap:
         return canvas
 
     def _make_overlay(
-        self, qapp, n_curves, *, n_points=500_000, mode="overlay", width=1920,
+        self, qapp, n_curves, *, n_points=500_000, mode="overlay",
     ):
         t = np.linspace(0.0, 10.0, n_points, dtype=np.float64)
         rows = [
@@ -354,7 +354,7 @@ class TestOverlayBucketCap:
              "#1769e0", "u", f"fid-{i}")
             for i in range(n_curves)
         ]
-        return self._make_canvas(qapp, rows, mode=mode, width=width)
+        return self._make_canvas(qapp, rows, mode=mode)
 
     def test_overlay_caps_bucket_count_by_channel_count(self, qapp):
         from mf4_analyzer.ui.pg_canvas.renderer import (
@@ -414,7 +414,11 @@ class TestOverlayBucketCap:
     def test_dense_two_curve_overlay_blocks_native_aa_below_display_budget(
         self, qapp,
     ):
-        canvas = self._make_overlay(qapp, 2, width=1600)
+        canvas = self._make_overlay(qapp, 2)
+        assert (canvas.width(), canvas.height()) == (1920, 600)
+        for handle in canvas.axes_list:
+            handle.y_axis_item().setWidth(120)
+        qapp.processEvents()
         canvas._flush_pending_refresh()
         density = canvas._quality._density_status()
         pressure = canvas._quality._overlay_density_pressure_status()
@@ -4808,15 +4812,31 @@ class TestTimeDomainCanvasPGSetDataHotPathContract:
 
         canvas, pdi = self._canvas_and_pdi(qapp)
         canvas._begin_view_interaction()
+        canvas._display_x_coverage = (0.0, 4.0)
         canvas._pending_coarse_xlim = (6.0, 8.0)
-        canvas._last_coarse_refresh_at = 10.0
-        monkeypatch.setattr("mf4_analyzer.ui.pg_canvas.canvas.monotonic", lambda: 10.050)
+        canvas._latest_target_xlim = (6.0, 8.0)
+        canvas._last_coarse_refresh_at = 1.0
+        clock = {"now": 1.050}
+        monkeypatch.setattr(
+            "mf4_analyzer.ui.pg_canvas.canvas.monotonic",
+            lambda: clock["now"],
+        )
         with patch.object(pdi, "setData", wraps=pdi.setData) as spy:
             assert canvas._run_coarse_refresh(canvas._interaction_generation) is False
             assert spy.call_count == 0
-        assert canvas._pending_coarse_xlim == pytest.approx((6.0, 8.0))
-        assert canvas._coarse_timer.isActive()
-        assert canvas._coarse_timer.remainingTime() > 0
+            assert canvas._pending_coarse_xlim == pytest.approx((6.0, 8.0))
+            assert canvas._coarse_timer.isActive()
+            assert canvas._coarse_timer.remainingTime() > 0
+
+            clock["now"] = 1.100
+            # A real single-shot timeout is inactive before its slot runs.
+            canvas._coarse_timer.stop()
+            assert canvas._run_coarse_refresh(canvas._interaction_generation) is True
+            assert spy.call_count == 1
+
+        assert canvas._pending_coarse_xlim is None
+        assert canvas._coverage_contains(canvas._display_x_coverage, (6.0, 8.0))
+        assert canvas._coarse_timer.isActive() is False
 
     def test_drag_range_burst_reuses_geometry_then_settles_latest_once(
         self, qtbot, qapp,
