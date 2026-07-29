@@ -334,25 +334,27 @@ class TestOverlayBucketCap:
     > 7000). See renderer._effective_pixel_width docstring.
     """
 
-    def _make_canvas(self, qapp, rows, *, mode):
+    def _make_canvas(self, qapp, rows, *, mode, width=1920):
         from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
-        canvas.resize(1920, 600)
+        canvas.resize(width, 600)
         canvas.show()
         QCoreApplication.processEvents()
         canvas.plot_channels(rows, mode=mode)
         QCoreApplication.processEvents()
         return canvas
 
-    def _make_overlay(self, qapp, n_curves, *, n_points=500_000, mode="overlay"):
+    def _make_overlay(
+        self, qapp, n_curves, *, n_points=500_000, mode="overlay", width=1920,
+    ):
         t = np.linspace(0.0, 10.0, n_points, dtype=np.float64)
         rows = [
             (f"ch{i}", True, t, np.sin(t * (i + 1)),
              "#1769e0", "u", f"fid-{i}")
             for i in range(n_curves)
         ]
-        return self._make_canvas(qapp, rows, mode=mode)
+        return self._make_canvas(qapp, rows, mode=mode, width=width)
 
     def test_overlay_caps_bucket_count_by_channel_count(self, qapp):
         from mf4_analyzer.ui.pg_canvas.renderer import (
@@ -412,7 +414,7 @@ class TestOverlayBucketCap:
     def test_dense_two_curve_overlay_blocks_native_aa_below_display_budget(
         self, qapp,
     ):
-        canvas = self._make_overlay(qapp, 2)
+        canvas = self._make_overlay(qapp, 2, width=1600)
         canvas._flush_pending_refresh()
         density = canvas._quality._density_status()
         pressure = canvas._quality._overlay_density_pressure_status()
@@ -425,6 +427,7 @@ class TestOverlayBucketCap:
         assert canvas._quality._idle_aa_density_ok() is False
         assert canvas._quality._export_aa_affordable() is False
         status = canvas.quality_status()
+        assert status["metric"] == density["metric"]
         assert status["block_reason"] == "overlay-density-pressure"
 
     def test_overlay_density_pressure_ignores_hidden_curve(self, qapp):
