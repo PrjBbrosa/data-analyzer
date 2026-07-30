@@ -35,7 +35,9 @@ At a canonical-empty boundary, capture semantic ranges before the owner
 replot and never record fallback ranges from a canvas with no live primary X
 owner. For non-empty warm deltas, reconcile cursor graphics by exact ordered
 ViewBox identity—not count—and remove stale items through their recorded
-ViewBox owner.
+ViewBox owner. Treat a `RuntimeError` from Qt geometry getters as failed
+realized geometry and clear/rebuild; scope that catch to geometry evaluation
+so mutation and settle errors remain visible.
 
 Verification: Reproduce populated subplot -> zero active rows -> restore rows
 through both `try_apply_selection_delta()` and a MainWindow View switch. Assert
@@ -43,4 +45,6 @@ each active `view_box.sceneBoundingRect()` has meaningful width and height
 relative to the canvas before accepting the change; also verify a one-pixel
 window resize is not required to recover the plot. Assert X/Y/cursor state
 after the owner rebuild, and cover an equal-count `[a, b] -> [b, c]` delta so
-old cursor items are detached from both their ViewBox and scene.
+old cursor items are detached from both their ViewBox and scene. Inject a
+stale-wrapper `RuntimeError` from `sceneBoundingRect()` and require canonical
+clear, the exact failure reason, and no success notification.

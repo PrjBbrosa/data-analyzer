@@ -191,6 +191,11 @@ These relative gates are intentionally permissive. They accept normal axis gutte
 
 Finiteness is checked with `isfinite` on the four rectangle scalars, extending the module's existing `from math import ceil`. This runs per active row on every warm delta, so it must not allocate a NumPy array per row in the path whose entire purpose is interaction latency.
 
+A `RuntimeError` raised while evaluating observability or realized geometry is
+also an invalid realized projection: a deleted/stale Qt wrapper cannot prove
+that reuse is safe. The catch is scoped to those geometry helper calls so
+mutation and layout-settle programming errors still surface normally.
+
 If the postcondition is observable and fails after a non-empty delta:
 
 1. create `{"applied": False, "reason": "subplot-realized-geometry-invalid"}`;

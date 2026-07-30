@@ -46,6 +46,7 @@ one-row zero-active boundary.
 - Production code must not resize a canvas, viewport, parent, or window to recover geometry.
 - Production code must not add delayed resize work, event-pump loops, dependency pins, pyqtgraph version checks, or repaint retries.
 - Geometry acceptance must use realized `ViewBox.sceneBoundingRect()` values relative to the current viewport, not only visibility flags or `PlotItem` height constraints.
+- A `RuntimeError` from Qt observability/geometry getters must be treated as observable-invalid and routed through the same canonical clear/rebuild reason; the catch must not hide mutation or settle errors.
 - Tests must use shown widgets and must assert restored geometry before any explicit resize.
 - Every existing test that asserts a successful subplot delta must have a realized layout before the delta, so a failure means collapsed geometry and never an un-pumped Qt event queue.
 - `MainWindow` reaches canonical empty through two different branches: `canvas.clear()` when nothing is checked, `canvas.show_empty_hint(...)` when everything checked is hidden. Assert `_empty_hint_item`/`_empty_hint_text` only for the all-hidden trigger.
