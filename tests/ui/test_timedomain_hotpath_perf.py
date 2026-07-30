@@ -461,6 +461,7 @@ def test_mainwindow_crc_uncheck_recheck_and_eye_toggle_use_selection_delta(
         window.load_files()
     qapp.processEvents()
 
+    window.chart_stack.set_plot_mode_for_canvas(window.canvas_time, "overlay")
     fid = next(iter(window.files))
     file_item = window.channel_list._file_items[fid]
     crc_item = next(
@@ -472,6 +473,7 @@ def test_mainwindow_crc_uncheck_recheck_and_eye_toggle_use_selection_delta(
     qapp.processEvents()
 
     canvas = window.canvas_time
+    assert canvas._selection_mode == "overlay"
     display_name = window.files[fid].get_prefixed_channel("EPS_CRC1")
     pair = canvas._channel_lines[display_name]
     pdi = pair[1].plot_data_item
