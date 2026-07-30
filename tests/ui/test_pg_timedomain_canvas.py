@@ -5408,8 +5408,6 @@ class TestTimeDomainCanvasPGSelectionDelta:
     def test_subplot_equal_count_delta_reconciles_dual_cursor_owners(
         self, qapp,
     ):
-        import pyqtgraph as pg
-
         canvas = _pg_canvas(qapp)
         t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
         a = self._row("a", t, np.sin(t))
@@ -5422,7 +5420,10 @@ class TestTimeDomainCanvasPGSelectionDelta:
         canvas._cursor.ax = 3.0
         canvas._cursor.bx = 4.0
         canvas._restore_dual_cursor_items()
-        old_a_view_box = canvas._channel_lines["a"][0].view_box
+        old_cursor_items = (
+            list(canvas._cursor._cursor_a_items)
+            + list(canvas._cursor._cursor_b_items)
+        )
 
         result = canvas.try_apply_selection_delta(
             [b, c], mode="subplot", render_context_key=context
@@ -5447,13 +5448,8 @@ class TestTimeDomainCanvasPGSelectionDelta:
             assert [item.value() for item in items] == pytest.approx(
                 [expected_x] * len(expected_view_boxes)
             )
-        # The removed row no longer owns any scene cursor lines; inspect the
-        # ViewBox scene contents as well as the controller's tracked lists.
-        old_owner_lines = [
-            item for item in old_a_view_box.addedItems
-            if isinstance(item, pg.InfiniteLine) and item.zValue() == 1000
-        ]
-        assert old_owner_lines == []
+        assert all(item.scene() is None for item in old_cursor_items)
+        assert all(item.getViewBox() is None for item in old_cursor_items)
 
     def test_subplot_invalid_realized_geometry_clears_and_requests_rebuild(
         self, qapp, monkeypatch,
