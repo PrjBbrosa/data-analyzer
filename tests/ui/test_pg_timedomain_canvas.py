@@ -5306,6 +5306,22 @@ class TestTimeDomainCanvasPGSelectionDelta:
         canvas.plot_channels(
             [a, b], mode="subplot", render_context_key=context
         )
+        qapp.processEvents()
+
+        def assert_geometry_is_material():
+            viewport = canvas._glw.viewport().rect()
+            sizes = _active_subplot_scene_sizes(canvas)
+            assert sizes
+            assert all(
+                width >= max(1.0, viewport.width() * 0.25)
+                for width, _height in sizes
+            )
+            assert all(
+                height >= max(1.0, viewport.height() * 0.10 / len(sizes))
+                for _width, height in sizes
+            )
+
+        assert_geometry_is_material()
         a_pdi = canvas._channel_lines["a"][1].plot_data_item
         b_pdi = canvas._channel_lines["b"][1].plot_data_item
         a_vb = canvas._channel_lines["a"][0].view_box
@@ -5335,6 +5351,9 @@ class TestTimeDomainCanvasPGSelectionDelta:
         assert canvas.get_visible_xlim() == pytest.approx((2.0, 5.0))
         assert canvas._cursor.ax == 3.0
         assert canvas._data_x_union() == pytest.approx((0.0, 10.0))
+        assert_geometry_is_material()
+        qapp.processEvents()
+        assert_geometry_is_material()
 
         restored = canvas.try_apply_selection_delta(
             [a, b], mode="subplot", render_context_key=context
@@ -5348,6 +5367,9 @@ class TestTimeDomainCanvasPGSelectionDelta:
         assert canvas._channel_lines["b"][1].plot_data_item is b_pdi
         assert canvas._channel_lines["b"][0].view_box is b_vb
         assert len(canvas.axes_list) == 2
+        assert_geometry_is_material()
+        qapp.processEvents()
+        assert_geometry_is_material()
 
     def test_subplot_append_adds_one_row_without_rebuilding_existing_rows(
         self, qapp, monkeypatch,
@@ -5358,6 +5380,7 @@ class TestTimeDomainCanvasPGSelectionDelta:
         b = self._row("b", t, np.cos(t))
         context = ("time", False, None, (False,))
         canvas.plot_channels([a], mode="subplot", render_context_key=context)
+        qapp.processEvents()
         a_pdi = canvas._channel_lines["a"][1].plot_data_item
         a_vb = canvas._channel_lines["a"][0].view_box
         created = []
@@ -5381,6 +5404,64 @@ class TestTimeDomainCanvasPGSelectionDelta:
         assert canvas._channel_lines["a"][0].view_box is a_vb
         assert canvas._channel_lines["b"][1].plot_data_item is not None
         assert len(canvas.axes_list) == 2
+
+    def test_subplot_invalid_realized_geometry_clears_and_requests_rebuild(
+        self, qapp, monkeypatch,
+    ):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+        a = self._row("a", t, np.sin(t))
+        b = self._row("b", t, np.cos(t))
+        context = ("time", False, None, (False,))
+        canvas.plot_channels([a, b], mode="subplot", render_context_key=context)
+        rebuilt = []
+        canvas.chart_rebuilt.connect(lambda: rebuilt.append(True))
+        monkeypatch.setattr(
+            canvas, "_subplot_realized_geometry_is_usable", lambda: False
+        )
+
+        result = canvas.try_apply_selection_delta(
+            [a], mode="subplot", render_context_key=context
+        )
+
+        assert result == {
+            "applied": False,
+            "reason": "subplot-realized-geometry-invalid",
+        }
+        assert canvas._last_selection_delta == result
+        assert canvas.axes_list == []
+        assert canvas._selection_bound_keys == set()
+        assert canvas._selection_active_keys == set()
+        assert canvas._subplot_retained_order == []
+        assert canvas._subplot_retained_handles == {}
+        assert canvas._primary_xaxis_ax is None
+        assert rebuilt == []
+
+    def test_subplot_hidden_canvas_keeps_warm_path_without_geometry_check(
+        self, qapp, monkeypatch,
+    ):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+        a = self._row("a", t, np.sin(t))
+        b = self._row("b", t, np.cos(t))
+        context = ("time", False, None, (False,))
+        canvas.plot_channels([a, b], mode="subplot", render_context_key=context)
+        qapp.processEvents()
+        a_vb = canvas._channel_lines["a"][0].view_box
+        canvas.hide()
+        qapp.processEvents()
+        assert canvas._subplot_geometry_is_observable() is False
+        monkeypatch.setattr(
+            canvas, "_subplot_realized_geometry_is_usable", lambda: False
+        )
+
+        result = canvas.try_apply_selection_delta(
+            [a], mode="subplot", render_context_key=context
+        )
+
+        assert result == {"applied": True, "reason": "subplot-object-reuse"}
+        assert canvas._channel_lines["a"][0].view_box is a_vb
+        assert canvas._selection_active_keys == {_view_state_key("fid-1", "a")}
 
     @pytest.mark.parametrize(
         "rows,mode,context,reason",

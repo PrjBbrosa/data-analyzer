@@ -56,7 +56,7 @@ import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 from collections import OrderedDict
-from math import ceil
+from math import ceil, isfinite
 from time import monotonic
 from typing import Tuple
 
@@ -998,14 +998,12 @@ class TimeDomainCanvasPG(QWidget):
                 self._overlay_axes._connect_overlay_view_sync()
 
         self._refresh = True
-        self._tick_density_controller._apply_tick_density_to_all_axes()
-        if self._overlay_mode:
-            self._repin_overlay_channel_ticks()
-        self._unify_subplot_bottom_axis_heights()
-        # Tick density and data-union X seeding can change AxisItem geometry
-        # after the early subplot label pass. Re-pin once at the end of build
-        # so the first rendered frame already has one shared X grid.
-        self._unify_subplot_left_axis_widths()
+        if self._subplot_label_specs:
+            self._settle_subplot_layout()
+        else:
+            self._tick_density_controller._apply_tick_density_to_all_axes()
+            if self._overlay_mode:
+                self._repin_overlay_channel_ticks()
 
         if self._overlay_mode:
             self._settle_layout()
@@ -1367,10 +1365,18 @@ class TimeDomainCanvasPG(QWidget):
 
         self._teardown_inside_labels()
         self._subplot_label_specs = active_specs
-        if active_specs:
-            self._recheck_subplot_label_placement()
-            self._unify_subplot_left_axis_widths()
-            self._unify_subplot_bottom_axis_heights()
+        self._settle_subplot_layout()
+        if (
+            self._subplot_geometry_is_observable()
+            and not self._subplot_realized_geometry_is_usable()
+        ):
+            failure = {
+                "applied": False,
+                "reason": "subplot-realized-geometry-invalid",
+            }
+            self.clear()
+            self._last_selection_delta = dict(failure)
+            return failure
 
         probe_w = self._overlay_axes._initial_bind_pixel_width()
         self._subplot_dense_count = 0
@@ -1395,7 +1401,6 @@ class TimeDomainCanvasPG(QWidget):
         if added:
             self._dense_raster.schedule_rebuild("selection-row-added", delay_ms=0)
             self._run_replot_callbacks()
-        self._tick_density_controller._apply_tick_density_to_all_axes()
         self.disable_interactive_quality()
         self.schedule_idle_quality()
         self.chart_rebuilt.emit()
@@ -3733,6 +3738,83 @@ class TimeDomainCanvasPG(QWidget):
                         _apply_pg_axis_font(ax_item)
                     except Exception:
                         pass
+
+    def _settle_subplot_layout(self):
+        """Finalize active subplot axes before geometry is observed or painted.
+
+        Single end-of-projection seam for subplot full builds AND in-place
+        selection deltas. Ordered so each step measures the previous step's
+        geometry: the left unifier reads tick-label text width, whose tick set
+        depends on the row heights the bottom unifier just assigned, so left
+        runs last. Always ends in a layout activation so the realized-geometry
+        postcondition never depends on an inner unifier's early return
+        (``_unify_subplot_left_axis_widths`` returns early below two axes).
+        """
+        if not self.axes_list:
+            return
+        if self._subplot_label_specs:
+            self._recheck_subplot_label_placement()
+        self._tick_density_controller._apply_tick_density_to_all_axes()
+        self._unify_subplot_bottom_axis_heights()
+        self._unify_subplot_left_axis_widths()
+        self._settle_layout()
+
+    def _subplot_geometry_is_observable(self):
+        """Return whether realized subplot geometry can be measured at all.
+
+        A hidden canvas or zero-size viewport has no Qt-realized layout, so it
+        can neither prove nor disprove the postcondition. Callers SKIP the
+        check in that case rather than failing closed: the fallback would be a
+        full rebuild that is equally unrealized, permanently downgrading every
+        later delta on an off-screen pane. A hide->show transition delivers a
+        resize event, and the existing resize settle path re-measures then.
+        """
+        if not self.axes_list or not self.isVisible() or not self._glw.isVisible():
+            return False
+        viewport = self._glw.viewport().rect()
+        return viewport.width() > 0 and viewport.height() > 0
+
+    def _subplot_realized_geometry_is_usable(self):
+        """Return whether active subplot ViewBoxes materially occupy the viewport.
+
+        Only meaningful when ``_subplot_geometry_is_observable()`` is True.
+        """
+        if not self.axes_list:
+            return False
+        viewport = self._glw.viewport().rect()
+        viewport_width = float(viewport.width())
+        viewport_height = float(viewport.height())
+        if viewport_width <= 0.0 or viewport_height <= 0.0:
+            return False
+
+        active_count = len(self.axes_list)
+        min_width = max(1.0, viewport_width * 0.25)
+        min_row_height = max(
+            1.0, viewport_height * 0.10 / max(1, active_count)
+        )
+        tops = []
+        bottoms = []
+        for handle in self.axes_list:
+            plot_item = getattr(handle, "plot_item", None)
+            view_box = getattr(handle, "view_box", None)
+            if plot_item is None or view_box is None or not plot_item.isVisible():
+                return False
+            rect = view_box.sceneBoundingRect()
+            width = float(rect.width())
+            height = float(rect.height())
+            top = float(rect.top())
+            bottom = float(rect.bottom())
+            if not all(
+                isfinite(value) for value in (width, height, top, bottom)
+            ):
+                return False
+            if width < min_width or height < min_row_height:
+                return False
+            tops.append(top)
+            bottoms.append(bottom)
+
+        combined_height = max(bottoms) - min(tops)
+        return combined_height >= max(1.0, viewport_height * 0.25)
 
     def _unify_subplot_left_axis_widths(self):
         """Align every subplot's plot-area left edge to a common x.
