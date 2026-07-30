@@ -1113,6 +1113,16 @@ def _pg_canvas(qapp):
     return canvas
 
 
+def _active_subplot_scene_sizes(canvas):
+    return [
+        (
+            float(handle.view_box.sceneBoundingRect().width()),
+            float(handle.view_box.sceneBoundingRect().height()),
+        )
+        for handle in canvas.axes_list
+    ]
+
+
 def _viewport_point_for_data(canvas, handle, x, y=None):
     """Map a data-space point in ``handle`` to a viewport QPoint."""
     from PyQt5.QtCore import QPointF
@@ -5176,6 +5186,45 @@ class TestTimeDomainCanvasPGSelectionDelta:
     @staticmethod
     def _row(name, t, values, data_id="fid-1"):
         return (name, True, t, values, "#1769e0", "u", data_id)
+
+    @pytest.mark.parametrize("row_count", [1, 2])
+    def test_subplot_zero_active_requires_structural_reset_without_mutation(
+        self, qapp, row_count,
+    ):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+        rows = [
+            self._row("a", t, np.sin(t)),
+            self._row("b", t, np.cos(t)),
+        ][:row_count]
+        context = ("time", False, None, (False,))
+        canvas.plot_channels(rows, mode="subplot", render_context_key=context)
+        qapp.processEvents()
+
+        active_before = set(canvas._selection_active_keys)
+        plot_items = [handle.plot_item for handle in canvas.axes_list]
+        constraints_before = [
+            (float(item.minimumHeight()), float(item.maximumHeight()))
+            for item in plot_items
+        ]
+        geometry_before = _active_subplot_scene_sizes(canvas)
+
+        result = canvas.try_apply_selection_delta(
+            [], mode="subplot", render_context_key=context
+        )
+
+        assert result == {
+            "applied": False,
+            "reason": "subplot-empty-selection-reset",
+        }
+        assert canvas._selection_active_keys == active_before
+        assert canvas.axes_list
+        assert all(item.isVisible() for item in plot_items)
+        assert [
+            (float(item.minimumHeight()), float(item.maximumHeight()))
+            for item in plot_items
+        ] == constraints_before
+        assert _active_subplot_scene_sizes(canvas) == pytest.approx(geometry_before)
 
     def test_single_crc_uncheck_recheck_preserves_render_identity_and_state(
         self, qapp,

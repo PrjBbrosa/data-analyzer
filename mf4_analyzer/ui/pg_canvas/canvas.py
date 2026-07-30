@@ -1216,6 +1216,12 @@ class TimeDomainCanvasPG(QWidget):
         previous_active = set(self._selection_active_keys)
         if not self._subplot_retained_order and self._selection_bound_keys:
             return None
+        if not requested:
+            self._last_selection_delta = {
+                "applied": False,
+                "reason": "subplot-empty-selection-reset",
+            }
+            return dict(self._last_selection_delta)
         if any(
             info.get("topology") != (None, None, False)
             or not info.get("visible", False)
