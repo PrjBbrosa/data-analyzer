@@ -62,6 +62,17 @@ class TestFmtTick:
             "100003.9",
         ]
 
+    @pytest.mark.parametrize("value, per_div, expected", [
+        (100, 100, "100"),
+        (800, 80, "800"),
+        (2000, 500, "2000"),
+        (101330, 2, "101330"),
+    ])
+    def test_step_aware_integer_labels_keep_significant_zeros(
+        self, value, per_div, expected,
+    ):
+        assert _fmt_tick(value, per_div) == expected
+
     def test_wheel_pan_zero_division_label_is_zero(self):
         # Reproduce the real trigger end-to-end: snap to a clean grid, then do
         # one plain-wheel vertical pan (overlay_axes.py:1357). The zero-crossing
@@ -219,6 +230,30 @@ class TestRepinTicks:
             for value in vals:
                 ratio = value / per_div
                 assert abs(ratio - round(ratio)) < 1e-6
+
+    def test_plain_engineering_overlay_labels_match_tick_values(self, qapp):
+        from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 256)
+        rows = [
+            ("rpm", True, t, np.linspace(0.0, 1000.0, t.size),
+             "#1769e0", "rpm", "fid-rpm"),
+            ("temp", True, t, np.linspace(80.0, 100.0, t.size),
+             "#e07b17", "°C", "fid-temp"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        canvas.set_tick_density(10, 10)
+        for handle, limits in zip(
+            canvas.axes_list, [(0.0, 1000.0), (80.0, 100.0)]
+        ):
+            handle.set_ylim(*limits)
+        canvas._repin_overlay_channel_ticks()
+
+        for handle in canvas.axes_list:
+            major = handle.y_axis_item()._tickLevels[0]
+            for value, label in major:
+                assert float(label) == pytest.approx(value, abs=1e-9)
 
     def test_repin_keeps_free_phase_range_with_nice_step(self, qapp):
         canvas = self._overlay(qapp)

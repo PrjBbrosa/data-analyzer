@@ -75,7 +75,9 @@ def _fmt_tick(value, per_div=None):
             if abs(value) < step * 1e-6:
                 return "0"
             decimals = max(0, math.ceil(-math.log10(step)))
-            label = f"{value:.{decimals}f}".rstrip("0").rstrip(".")
+            label = f"{value:.{decimals}f}"
+            if "." in label:
+                label = label.rstrip("0").rstrip(".")
             return "0" if label == "-0" else label
     # Wheel-pan ticks accumulate as ``lo - step*per_div + k*per_div`` (see
     # overlay_axes._handle_wheel_dispatch); the zero-crossing division lands on
