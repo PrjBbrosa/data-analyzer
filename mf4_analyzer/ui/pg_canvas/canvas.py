@@ -1355,10 +1355,17 @@ class TimeDomainCanvasPG(QWidget):
         self._teardown_inside_labels()
         self._subplot_label_specs = active_specs
         self._settle_subplot_layout()
-        if (
-            self._subplot_geometry_is_observable()
-            and not self._subplot_realized_geometry_is_usable()
-        ):
+        invalid_realized_geometry = False
+        try:
+            if self._subplot_geometry_is_observable():
+                invalid_realized_geometry = (
+                    not self._subplot_realized_geometry_is_usable()
+                )
+        except RuntimeError:
+            # A stale/deleted Qt graphics object is indistinguishable from
+            # unusable realized geometry; retain no partially-mutated rows.
+            invalid_realized_geometry = True
+        if invalid_realized_geometry:
             failure = {
                 "applied": False,
                 "reason": "subplot-realized-geometry-invalid",

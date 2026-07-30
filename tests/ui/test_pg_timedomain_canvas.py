@@ -5483,6 +5483,45 @@ class TestTimeDomainCanvasPGSelectionDelta:
         assert canvas._primary_xaxis_ax is None
         assert rebuilt == []
 
+    def test_subplot_geometry_getter_error_fails_closed_and_clears(
+        self, qapp, monkeypatch,
+    ):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+        a = self._row("a", t, np.sin(t))
+        b = self._row("b", t, np.cos(t))
+        context = ("time", False, None, (False,))
+        canvas.plot_channels([a, b], mode="subplot", render_context_key=context)
+        qapp.processEvents()
+        assert canvas._subplot_geometry_is_observable() is True
+        rebuilt = []
+        canvas.chart_rebuilt.connect(lambda: rebuilt.append(True))
+
+        def _raise_stale_qt_geometry(_self):
+            raise RuntimeError("wrapped C/C++ object has been deleted")
+
+        active_view_box = canvas.axes_list[0].view_box
+        monkeypatch.setattr(
+            type(active_view_box), "sceneBoundingRect", _raise_stale_qt_geometry,
+        )
+
+        result = canvas.try_apply_selection_delta(
+            [a], mode="subplot", render_context_key=context
+        )
+
+        assert result == {
+            "applied": False,
+            "reason": "subplot-realized-geometry-invalid",
+        }
+        assert canvas._last_selection_delta == result
+        assert canvas.axes_list == []
+        assert canvas._selection_bound_keys == set()
+        assert canvas._selection_active_keys == set()
+        assert canvas._subplot_retained_order == []
+        assert canvas._subplot_retained_handles == {}
+        assert canvas._primary_xaxis_ax is None
+        assert rebuilt == []
+
     def test_subplot_hidden_canvas_keeps_warm_path_without_geometry_check(
         self, qapp, monkeypatch,
     ):
