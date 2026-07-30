@@ -102,6 +102,8 @@ Stop gate：首次显示、程序化 resize 或导出后最终图形不完整即
 5. 空选择优先 delta-hide，避免 `MainWindow` 直接 `clear()` 丢失 warm model；
 6. mode/context/source/axis-group/companion 不兼容时保留明确 reason。
 
+> **2026-07-30 zero-active 加固修订：** 上述 retained-row 规则仅适用于变更前后至少一行 active 的非空→非空 transition。第 5 条“空选择优先 delta-hide”已被 `docs/superpowers/specs/2026-07-30-pg-subplot-zero-active-hardening-design.md` 取代：zero-active 必须 canonical clear，恢复 non-empty 时 full rebuild；不得继续要求跨 zero-active 保留 PlotItem/ViewBox identity。
+
 Stop gate：行顺序、底部 X 轴、saved View 或 cursor 任一错误时不扩展到 overlay。
 
 ## Stage 4 — 条件化 dense-continuous 显示后端

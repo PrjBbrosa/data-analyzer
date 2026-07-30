@@ -42,11 +42,13 @@
 1. 同一 plot generation 内，每个唯一 raw X array 最多 finite-bound scan 一次；
 2. buffer 内 held pan 的中间 `PlotDataItem.setData()` 为 0；
 3. resize burst 的 data/layout settle 只发生在最后事件后且只发生一次；
-4. 普通 subplot warm hide/restore 不创建或销毁 PlotItem/ViewBox；
+4. 普通 subplot 的非空→非空 warm hide/restore（变更前后至少一行 active）不创建或销毁未变化的 PlotItem/ViewBox；
 5. append 一个兼容通道只新增一个 PlotItem/ViewBox；
-6. hidden row 高度为 0，re-show 复用原 PDI、ViewBox、颜色和 X/cursor state；
-7. dense-discrete/CRC raw/display、DPR、AA hard gate 和内存 fallback 全部保留；
-8. complex topology 必须显式 fallback reason，禁止静默半增量。
+6. 非空→非空时，hidden row 高度为 0，re-show 复用原 PDI、ViewBox、颜色和 X/cursor state；
+7. 普通 subplot 进入 zero-active 时必须转为 canonical empty render model；下一次 non-empty 必须 full rebuild，并在不改变外层窗口尺寸的前提下通过 shown-canvas sceneBoundingRect 几何门禁（`test_subplot_empty_view_round_trip_rebuilds_full_canvas_geometry`、`test_all_subplot_eyes_hidden_then_reopened_rebuilds_full_geometry`、`test_all_subplots_unchecked_then_rechecked_rebuilds_full_geometry`）；
+8. 几何不可观测（canvas 未 shown 或 viewport 尺寸非正）时跳过该门禁并保留 warm path，不得降级为永久 full rebuild（`test_subplot_hidden_canvas_keeps_warm_path_without_geometry_check`）；
+9. dense-discrete/CRC raw/display、DPR、AA hard gate 和内存 fallback 全部保留；
+10. complex topology 必须显式 fallback reason，禁止静默半增量。
 
 任一失败即阻断，不允许用时间数值更快来豁免正确性。
 

@@ -135,6 +135,8 @@ rebuild fallback，不用不完整的增量逻辑冒充通用支持。
    恢复时复用同一 PlotItem/ViewBox；末尾新增只新建一行。中间插入、overlay、
    axis group、companion 等复杂拓扑仍返回明确 fallback reason。
 
+> **2026-07-30 后续边界：** retained rows 只覆盖 active count 始终大于 0 的普通 subplot transition。zero-active 是结构重置边界，恢复时重建并验证 realized scene geometry；详见 `docs/superpowers/specs/2026-07-30-pg-subplot-zero-active-hardening-design.md`。
+
 ### 7.2 被否决的候选
 
 曾把六条 `general` 连续曲线接入 dense-discrete raster 的 DPR-aware pixmap 路径。
