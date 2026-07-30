@@ -68,17 +68,39 @@ def _fmt_tick(value, per_div=None):
         return ""
     if per_div is not None:
         try:
-            step = abs(float(per_div))
+            step = float(per_div)
         except Exception:
             step = 0.0
         if math.isfinite(step) and step > 0:
-            if abs(value) < step * 1e-6:
+            if value == 0.0 or abs(value) < step * 1e-6:
                 return "0"
-            decimals = max(0, math.ceil(-math.log10(step)))
-            label = f"{value:.{decimals}f}"
-            if "." in label:
-                label = label.rstrip("0").rstrip(".")
-            return "0" if label == "-0" else label
+            decimals = max(0, math.ceil(-math.log10(step)) + 1)
+            fixed = f"{value:.{decimals}f}"
+            if "." in fixed:
+                fixed = fixed.rstrip("0").rstrip(".")
+            if fixed == "-0":
+                fixed = "0"
+
+            # Resolve one hundredth of a division without forming value/step,
+            # whose intermediate result can overflow or underflow.
+            sig = max(
+                2,
+                math.ceil(
+                    math.log10(abs(value)) - math.log10(step) + 2.0
+                ) + 1,
+            )
+            scientific = f"{value:.{sig - 1}e}"
+            error_limit = 0.01 * step
+            numeric_epsilon = 4.0 * math.ulp(error_limit)
+            candidates = []
+            for preference, label in enumerate((fixed, scientific)):
+                if abs(float(label) - value) <= error_limit + numeric_epsilon:
+                    candidates.append((len(label), preference, label))
+            if candidates:
+                return min(candidates)[2]
+            # Defensive fallback for the edge of IEEE-754 precision. The
+            # adaptive candidate is designed to satisfy the bound above.
+            return scientific
     # Wheel-pan ticks accumulate as ``lo - step*per_div + k*per_div`` (see
     # overlay_axes._handle_wheel_dispatch); the zero-crossing division lands on
     # a tiny float residue (~1e-15) instead of exact 0.0. Snap it so the axis

@@ -617,6 +617,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             return False
 
         factor = 0.85 if step > 0 else 1.0 / 0.85
+        time_vbs = [self._plot_time.vb, *self._time_overlay_vbs]
         try:
             x_range, y_range = view_box.viewRange()
             if ctrl:
@@ -627,7 +628,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                     center + (hi - center) * factor,
                     padding=0,
                 )
-            elif shift and view_box is self._plot_time.vb and self._time_curves:
+            elif shift and view_box in time_vbs and self._time_curves:
                 lo, hi = y_range
                 span = hi - lo
                 if not (np.isfinite(span) and span > 0):
@@ -643,29 +644,33 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                     *zip(self._time_overlay_vbs, self._time_overlay_axes),
                 ]
                 for target_vb, target_axis in pairs:
-                    target_lo, target_hi = target_vb.viewRange()[1]
-                    target_span = target_hi - target_lo
-                    if not (np.isfinite(target_span) and target_span > 0):
+                    try:
+                        target_lo, target_hi = target_vb.viewRange()[1]
+                        target_span = target_hi - target_lo
+                        if not (np.isfinite(target_span) and target_span > 0):
+                            continue
+                        current_per_div = target_span / n
+                        next_per_div = _adjacent_nice_step(
+                            current_per_div, -1 if step > 0 else 1
+                        )
+                        if next_per_div is None:
+                            next_per_div = current_per_div * factor
+                        anchor = target_lo + cursor_fraction * target_span
+                        next_span = n * next_per_div
+                        raw_bottom = anchor - cursor_fraction * next_span
+                        bottom = round(raw_bottom / next_per_div) * next_per_div
+                        top = bottom + next_span
+                        ticks = [bottom + k * next_per_div for k in range(n + 1)]
+                        target_vb.enableAutoRange(axis='y', enable=False)
+                        target_vb.setYRange(bottom, top, padding=0)
+                        target_axis.setStyle(maxTickLevel=0)
+                        target_axis.setTickDensity(1.0)
+                        target_axis.setTicks([[
+                            (value, _fmt_tick(value, next_per_div))
+                            for value in ticks
+                        ], []])
+                    except Exception:
                         continue
-                    current_per_div = target_span / n
-                    next_per_div = _adjacent_nice_step(
-                        current_per_div, -1 if step > 0 else 1
-                    )
-                    if next_per_div is None:
-                        next_per_div = current_per_div * factor
-                    anchor = target_lo + cursor_fraction * target_span
-                    next_span = n * next_per_div
-                    bottom = anchor - cursor_fraction * next_span
-                    top = bottom + next_span
-                    ticks = [bottom + k * next_per_div for k in range(n + 1)]
-                    target_vb.enableAutoRange(axis='y', enable=False)
-                    target_vb.setYRange(bottom, top, padding=0)
-                    target_axis.setStyle(maxTickLevel=0)
-                    target_axis.setTickDensity(1.0)
-                    target_axis.setTicks([[
-                        (value, _fmt_tick(value, next_per_div))
-                        for value in ticks
-                    ], []])
             elif shift:
                 lo, hi = y_range
                 center = float(y_pos) if np.isfinite(y_pos) else (lo + hi) / 2.0
@@ -680,7 +685,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # so drop AA for the interactive raster and re-arm the idle restore here.
         self.disable_interactive_quality()
         self.schedule_idle_quality()
-        if view_box is self._plot_time.vb:
+        if view_box in time_vbs:
             self._emit_time_preview_range()
         elif view_box is self._plot_amp.vb:
             self.manual_zoom_changed.emit(True)
@@ -1123,7 +1128,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def _add_time_overlay_axis(self, color, position):
         """Create one aux ViewBox + colour-coded right axis for an overlay
         curve. ``position`` is the 1-based overlay slot (2nd curve → 1, …)."""
-        aux_vb = pg.ViewBox()
+        # AxisItem forwards gutter wheel events to its linked ViewBox. Use the
+        # modifier-aware subclass so aux gutters share the main preview's
+        # synchronized Shift-wheel behavior instead of native single-axis zoom.
+        aux_vb = _ModifierWheelViewBox(owner_canvas=self)
         axis = pg.AxisItem('right')
         # Keep auto SI prefix OFF so a large-range right axis never renders
         # '1k'/'1m', which would clash with the left axis's _fmt_tick style

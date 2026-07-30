@@ -16,22 +16,27 @@ tests:
   - tests/ui/test_pg_timedomain_canvas.py
 ---
 
-# Overlay Free-Phase Changes Need A Consumer Audit
+# Overlay Phase Policy Changes Need A Consumer Audit
 
-Trigger: Changing an overlay or analysis Y-wheel transform from globally aligned
-bounds to cursor-anchored free-phase bounds, or changing shared wheel-delta routing.
+Trigger: Changing aligned/free-phase policy for an overlay or analysis Y-wheel
+transform, or changing shared wheel-delta routing.
 
-Past failure: Exact anchor and round-trip tests passed while free-phase float tails
-made each auto-sized Y gutter wider, collapsing the plot area. Repin later reframed
-the valid span, and a shared delta bridge interpreted a horizontal trackpad swipe as
-vertical zoom.
+Past failure: Exact anchor and round-trip tests passed while free-phase float
+tails made each auto-sized Y gutter wider and made the graticule unreadable.
+Repin later reframed the valid span, and a shared delta bridge interpreted a
+horizontal trackpad swipe as vertical zoom.
 
-Rule: Keep viewport bounds, tick values, and tick text as separate concerns. Derive
-compact labels from `per_div`, measure the resulting gutter/plot geometry, keep repin
-idempotent for an already-nice step, synchronize every canvas that pins ticks, and
-dispatch only vertical wheel components into Y behavior. Do not quantize the viewport
-phase merely to make labels look round.
+Rule: Keep viewport bounds, tick values, and tick text as separate concerns.
+The current phase table is: Shift-wheel selects an adjacent nice step and rounds
+the lower bound to its nearest multiple; cursor anchoring is bounded by half a
+division; plain-wheel pan moves one aligned division; repin is a no-op for an
+aligned nice range; initial/box/density framing may use `_frame_to_nice()`; and
+`PgLineCanvas` applies one delivered cursor fraction to every time-preview axis.
+Derive truthful labels from `per_div`, measure gutter/plot geometry, and dispatch
+only vertical wheel components into Y behavior. Any future phase-policy change
+must audit every consumer rather than changing only the range transform.
 
-Verification: Run the overlay real-wheel compact-label and repin tests, the
-PgLineCanvas time-preview tick/aux synchronization test, the real horizontal pixel
-wheel test, the three complete UI test modules listed above, and `git diff --check`.
+Verification: Run the overlay real-wheel label/alignment/repin tests, the
+PgLineCanvas main/aux-gutter synchronization and exception-consumption tests,
+the real horizontal pixel-wheel test, the three complete UI test modules listed
+above, and `git diff --check`.

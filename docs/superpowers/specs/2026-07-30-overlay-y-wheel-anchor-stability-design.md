@@ -2,226 +2,204 @@
 
 **Date:** 2026-07-30
 
-**Status:** Approved by the user for implementation
+**Status:** Approved; revised by the tick-alignment follow-up
 
-**Follow-up:** Projection-consumer corrections discovered after the anchor fix are
-governed by
+**Superseding follow-up:**
+`docs/superpowers/plans/2026-07-30-overlay-y-tick-alignment-followup.md`
+supersedes the original exact-anchor/free-phase decision in this document and the
+projection-only strategy in
 `docs/superpowers/plans/2026-07-30-overlay-y-wheel-label-and-repin-fixes.md`.
-The original range construction below remains unchanged.
 
 ## 1. Context
 
-Overlay-mode `Shift+wheel` already routes to Y-only zoom and uses the mouse's
-fractional viewport Y position as its intended anchor. Commit `607c630` fixed a
-separate monotonicity defect by selecting the adjacent nice per-division step,
-but its final range construction snaps the lower bound downward:
+Overlay `Shift+wheel` uses a discrete adjacent nice step for each notch and the
+mouse's normalized Y position as the intended zoom anchor. The first implementation
+floored the new lower bound. That made every phase error one-sided, so equal in/out
+notches could translate a channel vertically even when its span returned.
 
-```python
-new_lo = anchor - frac * framed_span
-bottom = math.floor(new_lo / next_per_div) * next_per_div
-```
+A later free-phase implementation removed that drift and preserved the cursor value
+exactly, but it exposed a different product defect: tick values such as `0.0283967`
+were technically evenly spaced while no longer being readable nice-number values.
+Trying to hide that phase in label formatting then caused significant-digit loss
+(`100` displayed as `1`) and could widen every overlay gutter.
 
-That `floor()` changes the anchor after every notch. The error is one-sided,
-so zooming in and back out near the top or bottom of the canvas accumulates a
-vertical translation. The Y span can return to its original size while the
-range itself has moved, which makes channels appear to pan during zoom and can
-eventually move them outside the useful canvas region.
-
-This is not a duplicate wheel-event problem: the handled scene event is
-accepted. It is a viewport-range quantization problem inside
-`OverlayAxisManager._handle_wheel_dispatch()`.
+The final contract therefore treats span selection, range phase, label truthfulness,
+and event routing as separate invariants. This is a range/tick projection issue, not a
+duplicate wheel-event issue, and the nice-step ladder itself is not changed.
 
 ## 2. Decision
 
-Keep cursor-anchored Y zoom. It is the established interaction in pyqtgraph and
-in scientific/image viewers, and it lets the user target a feature without a
-separate pan gesture.
-
-Keep `_adjacent_nice_step()` as the discrete zoom-level selector so every
-notch remains strictly monotonic and the shared overlay graticule keeps exactly
-`n` equal divisions.
-
-Remove phase snapping from the Shift-wheel viewport transform. The final range
-is calculated directly from the old cursor anchor and the new span:
+Keep cursor-targeted Y zoom and `_adjacent_nice_step()` for the per-division zoom
+level. Quantize the resulting lower bound to the nearest multiple of that step:
 
 ```python
 anchor = lo + frac * span
 framed_span = n * next_per_div
-bottom = anchor - frac * framed_span
+raw_bottom = anchor - frac * framed_span
+bottom = round(raw_bottom / next_per_div) * next_per_div
 top = bottom + framed_span
 ticks = [bottom + k * next_per_div for k in range(n + 1)]
 ```
 
-The nice value controls the interval between ticks, not an absolute global
-origin. Tick generation is a projection of the final viewport and must never
-round, floor, ceil, or otherwise rewrite `bottom` or `top`.
+Nearest rounding is deliberately used instead of `floor()`. It makes the phase error
+unbiased and bounds movement of the data value under the cursor to half of the new
+division. Exact cursor anchoring and globally aligned tick values cannot both hold for
+an arbitrary cursor fraction; aligned, readable tick values are the product priority.
+
+The formatter receives `per_div` and chooses the shortest truthful representation from
+fixed and adaptive scientific candidates. It never changes the tick value or range.
 
 ## 3. Behavioral Contract
 
-### R1. Gesture routing remains unchanged
+### R1. Gesture routing
 
 - `Ctrl+wheel` changes X only.
 - `Shift+wheel` changes Y only.
 - Plain wheel pans Y by one displayed division.
 - Zero delta is not consumed.
-- The plot-area Shift gesture acts on every overlay channel.
-- A Shift gesture over one Y-axis gutter (`axis == 1`) acts only on that
-  gutter's channel.
-- The curveless X-master remains locked to its overlay Y range.
+- In TimeDomain overlay mode, plot-area Shift zoom affects every channel; a channel
+  gutter gesture retains its existing single-channel scope.
+- In `PgLineCanvas` time preview, Shift zoom from the main plot, left axis, or any aux
+  gutter updates every time-preview ViewBox using the same normalized cursor fraction.
+  Each ViewBox still selects its own adjacent nice step, so span ratios may differ.
+- The curveless TimeDomain X-master remains locked to its overlay Y range.
 
-### R2. Cursor anchoring is exact within floating-point tolerance
+### R2. Cursor anchoring is bounded, not exact
 
-For each affected channel and every valid `frac` in `[0.0, 1.0]`:
+For each affected channel:
 
 ```text
 anchor_before = old_lo + frac * old_span
 anchor_after  = new_lo + frac * new_span
-anchor_after ~= anchor_before
+abs(anchor_after - anchor_before) <= 0.5 * next_per_div + numeric_epsilon
 ```
 
-The same normalized cursor fraction is applied independently to every overlay
-channel, including channels with different units and Y ranges.
+The same delivered fraction is applied independently to channels with different units
+and ranges. If event geometry is unavailable, `frac = 0.5` remains the fallback.
 
-If scene geometry or the event position is unavailable, the existing fallback
-`frac = 0.5` remains in force.
+Tests must not assert exact per-notch anchoring. They must keep exact round-trip checks
+from a globally aligned nice-step frame, where equal in/out transitions remain
+reversible within floating-point tolerance.
 
-### R3. Zoom is monotonic and reversible
+### R3. Zoom is monotonic and reversible from aligned frames
 
-- Positive Shift-wheel delta selects the immediately smaller nice step.
-- Negative Shift-wheel delta selects the immediately larger nice step.
-- Supported Y tick densities remain integers from `3` through `20`.
-- When the starting per-division value is already a member of the nice-step
-  sequence (the normal framed overlay state), an equal number of zoom-in and
-  zoom-out notches at a fixed cursor position returns every affected channel
-  to its original Y range within numerical tolerance.
-- An externally imposed range whose per-division value is not a nice step is
-  allowed to normalize to the adjacent nice zoom level on the first notch.
-  Exact restoration of that arbitrary raw span would require hidden zoom
-  history and is outside this change.
-- No one-sided drift may accumulate near the top, middle, or bottom of the
-  plot.
+- Positive Shift delta selects the immediately smaller nice step.
+- Negative Shift delta selects the immediately larger nice step.
+- Supported Y tick densities remain integers from 3 through 20.
+- Every notch strictly changes the span in the requested direction.
+- Four in and four out notches at a fixed position restore ranges that started on an
+  aligned nice-step frame, for representative densities 3, 10, and 20.
+- An arbitrary external range may normalize both step and phase on its first notch.
+  Restoring that raw range would require hidden zoom-origin state and is out of scope.
+- No one-sided drift may accumulate. Nearest rounding may cause bounded interleaved
+  phase movement, but never the old `floor()` bias.
 
-### R4. Ticks do not own the viewport
+### R4. Tick values and labels are both part of the contract
 
-- Every affected channel receives exactly `n + 1` major ticks.
-- Tick 0 equals the final lower bound and tick `n` equals the final upper
-  bound.
-- Adjacent ticks differ by `next_per_div` within numerical tolerance.
-- Shift-wheel code must not pass its range through `_frame_to_nice()` and must
-  not apply `floor()`, `ceil()`, or `round()` to the range phase.
-- The original anchor patch kept `_repin_overlay_channel_ticks()`, tick-density
-  changes, initial framing, box zoom, and drag-release snapping outside its scope.
-- Follow-up projection code must format labels from the active `per_div` using only
-  the decimal precision needed to distinguish adjacent ticks. Free-phase float tails
-  must not expand every Y-axis gutter and collapse the plot area.
-- `_repin_overlay_channel_ticks()` must be idempotent when the current span already
-  contains `n` equal nice divisions: retain the exact free-phase `lo`/`hi` and only
-  re-pin ticks. Arbitrary external ranges and incompatible density changes still use
+- Every affected axis receives exactly `n + 1` major ticks.
+- Tick 0 equals the final lower bound and tick `n` equals the upper bound.
+- Adjacent tick values differ by `next_per_div` within numerical tolerance.
+- Every tick value is an integer multiple of `next_per_div` within relative tolerance.
+- `_nice_per_div`, `_adjacent_nice_step`, and `_NICE_STEP_MANTISSAS` remain unchanged.
+- `_repin_overlay_channel_ticks()` is a no-op for an already aligned nice-step range;
+  arbitrary external ranges and incompatible density changes may still use
   `_frame_to_nice()`.
-- Tests for this invariant must inspect label text, axis/plot geometry, and repin
-  behavior in addition to span, anchor, and tick positions.
 
-### R5. Event and rendering side effects remain unchanged
+For a positive finite `per_div`, label formatting has a flat contract:
 
-- A consumed Shift-wheel event is accepted once and must not fall through to
-  native pyqtgraph pan/zoom.
-- `visible_range_changed`, redraw scheduling, idle-quality scheduling, and
-  dense-raster resuppression/rebuild retain their current routing.
-- No channel data, visibility, selection, X envelope, or render-profile state
-  is mutated by the range calculation.
+1. `float(label)` differs from the tick by at most 1% of a division plus numerical
+   epsilon.
+2. Labels on one axis are distinct.
+3. Parsed adjacent-label gaps differ from `per_div` by at most 2% of a division.
+4. A six-character cap applies only to the named ordinary fixtures: the four-channel
+   `±2.5` overlay and the `0..1000` / `80..100` engineering overlay.
+
+Label length is otherwise unbounded until axis-offset notation exists. A value/step
+interval cannot carry a truthful global character cap: `12345.1` at step `0.1` needs
+seven characters and `99999.0001` at step `1e-4` needs ten.
+
+Fixed notation uses one guard decimal beyond the step-derived minimum. Scientific
+precision derives from the value-to-step resolution:
+
+```python
+sig = max(2, ceil(log10(abs(value)) - log10(0.01 * per_div)) + 1)
+```
+
+Fixed and adaptive-scientific candidates that violate the 1% bound are discarded; the
+shortest remaining candidate wins, with fixed notation winning ties. Invalid/non-finite
+inputs, zero, near-zero residues, and the single-argument formatter retain their prior
+handling.
+
+### R5. Events are consumed even after a per-axis refresh failure
+
+- A handled modifier-wheel event is accepted once and never falls through to native
+  pyqtgraph zoom.
+- `PgLineCanvas` isolates each time-preview axis update with its own exception boundary.
+  One failure does not abort later axes, and the handler still returns `True`.
+- This is not atomic. Earlier ranges, and the failing axis's range if its label refresh
+  fails afterward, may already have changed. Snapshot-and-restore is a separate design.
+- Existing visible-range, redraw, idle-quality, and layout notification routing remains.
 
 ## 4. Scope
 
-### Production file
+Production:
 
-- `mf4_analyzer/ui/pg_canvas/overlay_axes.py`
-  - Change only the Shift-wheel range construction in
-    `OverlayAxisManager._handle_wheel_dispatch()`.
+- `mf4_analyzer/ui/pg_canvas/overlay_axes.py`: aligned Shift-wheel phase.
+- `mf4_analyzer/ui_kit/ticks_math.py`: truthful shortest-candidate labels.
+- `mf4_analyzer/ui/pg_canvas/line_canvas.py`: aligned time-preview phase, aux-gutter
+  dispatch, and per-axis failure isolation.
 
-### Test file
+Tests:
 
 - `tests/ui/test_overlay_grid_ticks.py`
-  - Add direct dispatch invariants for cursor anchoring and round trips.
-  - Add one real `QWheelEvent` round-trip regression away from plot center.
-  - Retain the current monotonicity, axis-gutter, X-lock, and plain-pan tests.
+- `tests/ui/test_pg_line_canvas.py`
+
+The shared `_frame_to_nice()` implementation is explicitly outside this follow-up.
 
 ## 5. Non-goals
 
-- Do not change modifier meanings, delta polarity, zoom factor policy, or raw
-  pixel-wheel routing.
-- Do not switch to center-fixed zoom.
-- Do not replace adjacent nice steps with continuous `0.85` scaling.
-- Do not redesign `_frame_to_nice()` or shared `ui_kit` tick helpers.
-- Do not change initial autoscale, box zoom, drag-release snapping, tick-density
-  controls, subplot behavior, or non-TimeDomain canvases.
-- Do not add a user preference for zoom anchoring.
-- Do not refactor `OverlayAxisManager` beyond the lines needed for this fix.
+- No change to modifier meanings, delta polarity, raw pixel-wheel routing, or the
+  nice-step ladder/selectors.
+- No stored per-channel zoom origin to combine exact anchors with aligned ticks.
+- No axis-offset notation for arbitrary high-offset channels.
+- No all-or-nothing rollback in the `PgLineCanvas` multi-axis loop.
+- No drive-by `_frame_to_nice()` floor-tolerance change.
+- No retired overlay drag/snap restoration and no heatmap Y-zoom change.
 
 ## 6. Test Strategy
 
-### 6.1 RED evidence
-
-Before production edits, tests must demonstrate both current failures:
-
-1. With the cursor near the top or bottom, one Shift-wheel step changes the
-   data value held under the cursor.
-2. With a fixed off-center cursor, repeated zoom-in notches followed by the
-   same number of zoom-out notches leave the Y span restored but the Y range
-   translated.
-
-The failure must be behavioral (`get_ylim()`/anchor mismatch), not a source-text
-assertion.
-
-### 6.2 Focused coverage
-
-- Cursor fractions: `0.15`, `0.50`, `0.85`.
-- Tick densities: representative sparse/default/dense values `3`, `10`, `20`.
-- Two overlay channels with deliberately different initial Y ranges. Direct
-  anchor tests retain arbitrary ranges; round-trip tests use spans equal to
-  `n` times hand-checked nice steps.
-- At least four zoom-in steps followed by four zoom-out steps.
-- One real viewport `QWheelEvent` at an off-center vertical position. Its
-  expected anchor fraction is derived from the integer viewport position that
-  Qt actually delivers, not from the pre-mapping ideal fraction.
-- X-master range unchanged throughout.
-- Existing `n=3..20` strict monotonic tests remain green.
-
-### 6.3 Regression coverage
-
-Run the complete overlay grid/tick test file, the TimeDomain real viewport
-wheel tests, and the complete TimeDomain canvas test module. Finish with
-`git diff --check`.
+- RED evidence includes the off-grid `0.0283967` phase, significant-zero labels, fixed
+  scientific collisions, aux-gutter delivery, and an axis refresh exception.
+- Cursor fractions: 0.15, 0.50, and 0.85; densities: 3, 10, and 20 for round trips and
+  every integer 3 through 20 for strict monotonicity.
+- The label sweep covers the full nice ladder `1e-4..1e2`, seven phase offsets, ordinary,
+  engineering, `1e5`, and `1e6` magnitudes. It asserts value error, uniqueness, and
+  parsed gaps rather than length alone.
+- Real viewport events verify accepted delivery and prevent native fallback.
+- Repin idempotence, plot/gutter width, X lock, and existing pan/zoom routes remain in
+  regression coverage.
 
 ## 7. Acceptance Criteria
 
-1. The new anchor test fails against `784392f`/`607c630` for the expected
-   `floor()`-induced mismatch and passes after the implementation change.
-2. At fractions `0.15`, `0.50`, and `0.85`, every affected channel preserves
-   the cursor data anchor for every tested notch.
-3. From a nice-step framed range, four zoom-in notches followed by four
-   zoom-out notches restore the original ranges for tick densities `3`, `10`,
-   and `20`.
-4. A real off-center `QWheelEvent` round trip restores the original ranges and
-   leaves X unchanged.
-5. Existing strict monotonicity tests for all densities `3..20` pass.
-6. Existing plain-wheel pan, Ctrl-wheel X zoom, plot-area all-channel scope,
-   and axis-gutter single-channel scope pass unchanged.
-7. `tests/ui/test_overlay_grid_ticks.py` and
-   `tests/ui/test_pg_timedomain_canvas.py` pass in the repository virtual
-   environment with `QT_QPA_PLATFORM=offscreen` and a unique writable
-   `--basetemp`.
-8. `git diff --check` reports no whitespace errors.
+1. Significant integer zeros survive (`100`, `800`, `2000`, `101330`).
+2. Every Shift-wheel Y tick is aligned to its division step.
+3. Per-notch cursor movement is no greater than half of the new division.
+4. Nice-frame 4-in/4-out ranges restore and spans remain strictly monotonic.
+5. Universal labels satisfy 1% truthfulness, uniqueness, and 2% parsed-gap bounds.
+6. Only the named ordinary fixtures carry the six-character cap.
+7. Main/left/aux time-preview wheel routes synchronize all ViewBoxes.
+8. A per-axis exception is consumed without native zoom and later axes still update.
+9. Nice-step selectors are byte-identical and `_frame_to_nice()` is unchanged.
+10. Focused UI modules pass and `git diff --check` is clean.
 
 ## 8. Regression Risks And Guards
 
-- **Monotonicity regression:** guarded by the existing exhaustive `3..20`
-  tests; `_adjacent_nice_step()` is not changed.
-- **Loss of cursor targeting:** guarded at three vertical fractions and with a
-  real Qt event.
-- **Tick/grid desynchronization:** guarded by first/last tick and equal-step
-  assertions against the final range.
-- **Cross-axis mutation:** guarded by unchanged X and axis-gutter scope tests.
-- **Event double handling:** guarded by real viewport delivery and the existing
-  accepted-event route.
-- **Scope creep in fragile plot code:** production ownership is restricted to
-  one method in one file; no shared tick helper is modified.
+- **Anchor regression:** bounded at several fractions and verified through a real event.
+- **Step/phase regression:** integer-multiple tick assertions and exact aligned-frame
+  round trips.
+- **Truth hidden by compact labels:** universal parsed-value and parsed-gap assertions.
+- **Gutter route bypass:** a real aux-axis viewport event must enter the shared handler.
+- **Double zoom after partial failure:** expected receiving range is asserted exactly
+  after a synthetic `setTicks()` exception.
+- **Shared-helper scope creep:** byte comparison/inspection of nice-step selectors and an
+  explicit no-change check for `_frame_to_nice()`.

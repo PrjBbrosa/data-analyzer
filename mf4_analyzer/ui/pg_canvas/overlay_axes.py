@@ -1389,7 +1389,8 @@ class OverlayAxisManager(_CanvasBackref):
                         next_per_div = current_per_div * factor
                     anchor = lo + frac * span
                     framed_span = n * next_per_div
-                    bottom = anchor - frac * framed_span
+                    raw_bottom = anchor - frac * framed_span
+                    bottom = round(raw_bottom / next_per_div) * next_per_div
                     top = bottom + framed_span
                     ticks = [bottom + k * next_per_div for k in range(n + 1)]
                     tick_per_div = next_per_div

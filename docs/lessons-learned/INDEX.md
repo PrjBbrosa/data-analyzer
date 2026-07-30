@@ -104,6 +104,9 @@ lesson by default.
 | [Codex Overlay Wheel Anchor Invariants](codex-overlay-wheel-anchor-invariants.md) | Load when changing overlay wheel zoom, nice-step selection, tick | See lesson |
 | [Overlay Free-Phase Changes Need A Consumer Audit](codex-overlay-free-phase-consumer-audit.md) | Changing an overlay or analysis Y-wheel transform from globally aligned | See lesson |
 | [Nice-Step Tolerance Must Check Neighboring Candidates](codex-nice-step-tolerance-checks-neighbors.md) | Adding an approximate nice-step guard around a helper that deliberately | See lesson |
+| [Tick Label Truthfulness Comes Before Compactness](codex-tick-label-truthfulness-before-compactness.md) | Changing tick formatting, explicit `AxisItem.setTicks()` labels, axis | See lesson |
+| [Superseded Plans Use New Dated Files](codex-superseded-plans-use-new-dated-files.md) | Revising an approved or committed implementation plan after its core | See lesson |
+| [Numeric Hazard Rates Need The Real Caller Path](codex-numeric-hazard-rate-needs-caller-path.md) | Using a numerical sweep or extracted-expression probe to justify a | See lesson |
 
 ## Selection Rules
 

@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack import PgNavigationToolbar
 from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
+from mf4_analyzer.ui.pg_canvas.ticks_math import _adjacent_nice_step
 
 
 class _FakeSceneClick:
@@ -2114,7 +2115,10 @@ def test_time_preview_axes_share_grid_divisions(canvas):
         assert fractions(axis, vb) == pytest.approx(base, abs=1e-6)
 
 
-def test_time_preview_shift_wheel_repins_every_axis_around_cursor(canvas, qapp):
+@pytest.mark.parametrize("receiver_index", [0, 1, 2])
+def test_time_preview_shift_wheel_repins_every_axis_around_cursor(
+    canvas, qapp, receiver_index,
+):
     canvas.plot_spectra(
         _overlay_entries(),
         xlim=(0.0, 50.0),
@@ -2130,15 +2134,16 @@ def test_time_preview_shift_wheel_repins_every_axis_around_cursor(canvas, qapp):
     before_anchors = [
         lo + cursor_fraction * (hi - lo) for lo, hi in before_ranges
     ]
-    main_lo, main_hi = before_ranges[0]
-    y_pos = main_lo + cursor_fraction * (main_hi - main_lo)
+    receiving_vb = pairs[receiver_index][0]
+    receiving_lo, receiving_hi = before_ranges[receiver_index]
+    y_pos = receiving_lo + cursor_fraction * (receiving_hi - receiving_lo)
 
     consumed = canvas._handle_wheel_dispatch(
         delta=120.0,
         modifiers=Qt.ShiftModifier,
         x_pos=0.5,
         y_pos=y_pos,
-        view_box=canvas._plot_time.vb,
+        view_box=receiving_vb,
     )
     qapp.processEvents()
 
@@ -2152,7 +2157,11 @@ def test_time_preview_shift_wheel_repins_every_axis_around_cursor(canvas, qapp):
             f"time axis {index} did not zoom"
         )
         after_anchor = lo + cursor_fraction * (hi - lo)
-        assert after_anchor == pytest.approx(before_anchor, abs=1e-10)
+        per_div = (hi - lo) / n
+        anchor_tolerance = 0.5 * per_div + 4.0 * max(
+            np.spacing(abs(after_anchor)), np.spacing(per_div)
+        )
+        assert abs(after_anchor - before_anchor) <= anchor_tolerance
         major = axis._tickLevels[0]
         tick_values = [value for value, _label in major]
         labels = [label for _value, label in major]
@@ -2160,7 +2169,126 @@ def test_time_preview_shift_wheel_repins_every_axis_around_cursor(canvas, qapp):
         assert tick_values[0] == pytest.approx(lo)
         assert tick_values[-1] == pytest.approx(hi)
         assert all(lo <= value <= hi for value in tick_values)
+        for value in tick_values:
+            ratio = value / per_div
+            assert ratio == pytest.approx(round(ratio), rel=1e-9, abs=1e-9)
         assert len(labels) == len(set(labels))
+        assert max(map(len, labels)) <= 6
+
+
+def test_time_preview_aux_gutter_consumes_shift_wheel_after_axis_failure(
+    canvas, qapp, monkeypatch,
+):
+    canvas.show()
+    canvas.plot_spectra(
+        _overlay_entries(), xlim=(0.0, 50.0),
+        amp_label='Amplitude', title='t',
+    )
+    qapp.processEvents()
+    pairs = [
+        (canvas._plot_time.vb, canvas._plot_time.getAxis('left')),
+        *zip(canvas._time_overlay_vbs, canvas._time_overlay_axes),
+    ]
+    receiving_vb, failing_axis = pairs[1]
+    untouched_if_aborted_vb = pairs[2][0]
+    before_ranges = [tuple(vb.viewRange()[1]) for vb, _axis in pairs]
+
+    def fail_set_ticks(_ticks):
+        raise RuntimeError("synthetic axis refresh failure")
+
+    monkeypatch.setattr(failing_axis, "setTicks", fail_set_ticks)
+    original_dispatch = canvas._handle_wheel_dispatch
+    dispatch_calls = []
+
+    def recording_dispatch(**kwargs):
+        result = original_dispatch(**kwargs)
+        dispatch_calls.append((kwargs, result))
+        return result
+
+    monkeypatch.setattr(canvas, "_handle_wheel_dispatch", recording_dispatch)
+    scene_pos = failing_axis.sceneBoundingRect().center()
+    pos = QPointF(canvas._glw.mapFromScene(scene_pos))
+    global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
+    event = QWheelEvent(
+        pos, global_pos, QPoint(), QPoint(0, 120), Qt.NoButton,
+        Qt.ShiftModifier, Qt.ScrollUpdate, False,
+    )
+
+    assert QApplication.sendEvent(canvas._glw.viewport(), event)
+    qapp.processEvents()
+
+    assert event.isAccepted()
+    assert len(dispatch_calls) == 1
+    kwargs, consumed = dispatch_calls[0]
+    assert consumed is True
+    assert kwargs["view_box"] is receiving_vb
+    n = canvas._time_divisions
+    before_lo, before_hi = before_ranges[1]
+    before_span = before_hi - before_lo
+    fraction = (kwargs["y_pos"] - before_lo) / before_span
+    next_per_div = _adjacent_nice_step(before_span / n, -1)
+    anchor = before_lo + fraction * before_span
+    next_span = n * next_per_div
+    expected_bottom = round(
+        (anchor - fraction * next_span) / next_per_div
+    ) * next_per_div
+    assert receiving_vb.viewRange()[1] == pytest.approx(
+        (expected_bottom, expected_bottom + next_span)
+    )
+    # The later axis still updates, proving the per-axis failure did not abort
+    # the loop. The exact receiving range proves native zoom was not layered on.
+    after_last = untouched_if_aborted_vb.viewRange()[1]
+    assert (after_last[1] - after_last[0]) < (
+        before_ranges[2][1] - before_ranges[2][0]
+    )
+
+
+@pytest.mark.parametrize(
+    ("initial_per_div", "expected_per_div", "before_bottom", "compact"),
+    [
+        (0.6, 0.5, -3.0, True),       # small ±2.5 fixture
+        (1.2, 1.0, -6.0, True),       # exact unit division
+        (120.0, 100.0, -100.0, True), # 0..1000 engineering fixture
+        (100.0, 80.0, 999900.0, False),
+    ],
+)
+def test_time_preview_shift_wheel_labels_cover_step_and_magnitude_bands(
+    canvas, qapp, initial_per_div, expected_per_div, before_bottom, compact,
+):
+    canvas.plot_spectra(
+        [_overlay_entries()[0]], xlim=(0.0, 50.0),
+        amp_label='Amplitude', title='t',
+    )
+    n = canvas._time_divisions
+    vb = canvas._plot_time.vb
+    before_top = before_bottom + n * initial_per_div
+    vb.setYRange(before_bottom, before_top, padding=0)
+    y_pos = before_bottom + 0.5 * (before_top - before_bottom)
+
+    assert canvas._handle_wheel_dispatch(
+        delta=120.0,
+        modifiers=Qt.ShiftModifier,
+        x_pos=0.5,
+        y_pos=y_pos,
+        view_box=vb,
+    ) is True
+    qapp.processEvents()
+
+    lo, hi = vb.viewRange()[1]
+    per_div = (hi - lo) / n
+    assert per_div == pytest.approx(expected_per_div)
+    major = canvas._plot_time.getAxis('left')._tickLevels[0]
+    values = [value for value, _label in major]
+    labels = [label for _value, label in major]
+    parsed = [float(label) for label in labels]
+    assert len(labels) == len(set(labels))
+    for value, shown in zip(values, parsed):
+        error_limit = 0.01 * per_div
+        tolerance = error_limit + 4.0 * np.spacing(error_limit)
+        assert shown == pytest.approx(value, abs=tolerance)
+    for gap in np.diff(parsed):
+        assert gap == pytest.approx(per_div, abs=0.02 * per_div)
+    if compact:
         assert max(map(len, labels)) <= 6
 
 

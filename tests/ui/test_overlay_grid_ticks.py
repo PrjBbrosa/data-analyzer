@@ -44,6 +44,9 @@ class TestFmtTick:
         assert _fmt_tick(-1.2) == "-1.2"
         assert _fmt_tick(1.2) == "1.2"
 
+    def test_exact_zero_does_not_log_subnormal_step(self):
+        assert _fmt_tick(0.0, per_div=math.ulp(0.0)) == "0"
+
     def test_genuine_small_and_large_values_keep_sci_notation(self):
         # A real tick >= 1e-9 must NOT be flattened to 0; big values still sci.
         assert _fmt_tick(5e-5) == "5.00e-05"
@@ -55,12 +58,75 @@ class TestFmtTick:
         labels = [_fmt_tick(value, per_div=0.8) for value in values]
 
         assert labels == [
-            "100000.7",
-            "100001.5",
-            "100002.3",
-            "100003.1",
-            "100003.9",
+            "100000.74",
+            "100001.54",
+            "100002.34",
+            "100003.14",
+            "100003.94",
         ]
+
+    def test_step_aware_labels_are_truthful_and_distinct_across_nice_ladder(self):
+        steps = sorted({
+            mantissa * (10.0 ** exponent)
+            for exponent in range(-4, 3)
+            for mantissa in _NICE
+            if 1e-4 <= mantissa * (10.0 ** exponent) <= 1e2
+        })
+        phases = (0.0, 0.13, 0.25, 0.5, 0.62, 0.87, 0.99)
+        origins = (-2.5, 0.0, 500.0, 1e5, 1e6)
+
+        for step in steps:
+            for phase in phases:
+                for origin in origins:
+                    values = [origin + (phase + k) * step for k in range(6)]
+                    labels = [_fmt_tick(value, per_div=step) for value in values]
+                    parsed = [float(label) for label in labels]
+                    for value, shown in zip(values, parsed):
+                        error_limit = 0.01 * step
+                        tolerance = error_limit + 4.0 * math.ulp(error_limit)
+                        assert shown == pytest.approx(
+                            value, abs=tolerance
+                        ), (step, phase, origin, value, labels)
+                    assert len(labels) == len(set(labels)), (
+                        step, phase, origin, labels
+                    )
+                    gap_tolerance = 0.02 * step + 8.0 * max(
+                        math.ulp(value) for value in values
+                    )
+                    for gap in np.diff(parsed):
+                        assert gap == pytest.approx(
+                            step, abs=gap_tolerance
+                        ), (step, phase, origin, labels)
+                    # There is intentionally no global character cap here. High
+                    # offsets require more digits until offset notation exists.
+
+    @pytest.mark.parametrize("value, per_div", [
+        (77.5, 2.5),
+        (1.23456e-5, 1e-6),
+        (1.23456e-5, 1e-7),
+        (9.87654e-6, 1e-7),
+        (1e6 + 0.74, 80.0),
+        (1e5 + 1e-4, 1e-4),
+        (1000000000000002.5, 10.0),
+    ])
+    def test_step_aware_precision_never_exceeds_one_percent_division(
+        self, value, per_div,
+    ):
+        label = _fmt_tick(value, per_div)
+
+        error_limit = 0.01 * per_div
+        tolerance = error_limit + 4.0 * math.ulp(error_limit)
+        assert float(label) == pytest.approx(value, abs=tolerance)
+
+    @pytest.mark.parametrize("per_div", [
+        -0.8, 0.0, float("inf"), float("-inf"), float("nan"), "bad",
+    ])
+    def test_non_positive_or_invalid_step_uses_single_argument_fallback(
+        self, per_div,
+    ):
+        value = 100000.74
+
+        assert _fmt_tick(value, per_div) == _fmt_tick(value)
 
     @pytest.mark.parametrize("value, per_div, expected", [
         (100, 100, "100"),
@@ -252,8 +318,12 @@ class TestRepinTicks:
 
         for handle in canvas.axes_list:
             major = handle.y_axis_item()._tickLevels[0]
+            labels = [label for _value, label in major]
             for value, label in major:
                 assert float(label) == pytest.approx(value, abs=1e-9)
+            # Compactness is fixture-scoped: these ordinary engineering ranges
+            # do not need axis-offset notation to remain readable.
+            assert max(map(len, labels)) <= 6
 
     def test_repin_keeps_free_phase_range_with_nice_step(self, qapp):
         canvas = self._overlay(qapp)
@@ -335,10 +405,13 @@ def _overlay_scene_pos_at_fraction(canvas, frac):
     )
 
 
-def _assert_cursor_anchor_preserved(before, after, frac):
+def _assert_cursor_anchor_within_half_division(before, after, frac, divisions):
+    """Round-quantized zoom may move the anchor by at most half a new division."""
     before_anchor = before[0] + frac * (before[1] - before[0])
     after_anchor = after[0] + frac * (after[1] - after[0])
-    assert after_anchor == pytest.approx(before_anchor, rel=1e-10, abs=1e-10)
+    per_div = (after[1] - after[0]) / divisions
+    tolerance = 0.5 * per_div + max(abs(per_div) * 1e-10, 1e-12)
+    assert abs(after_anchor - before_anchor) <= tolerance
 
 
 def _send_real_overlay_shift_wheel(canvas, qapp, *, frac, delta=120):
@@ -430,7 +503,35 @@ class TestOverlayWheel:
 
         after = [handle.get_ylim() for handle in canvas.axes_list]
         for old_limits, new_limits in zip(before, after):
-            _assert_cursor_anchor_preserved(old_limits, new_limits, frac)
+            _assert_cursor_anchor_within_half_division(
+                old_limits, new_limits, frac, divisions
+            )
+
+    def test_shift_wheel_aligns_off_grid_ticks_to_step_multiples(self, qapp):
+        canvas = self._overlay(qapp)
+        divisions = 6
+        canvas.set_tick_density(10, divisions)
+        for handle in canvas.axes_list:
+            handle.set_ylim(0.0283967, 0.0763967)
+        scene_pos = _overlay_scene_pos_at_fraction(canvas, 0.62)
+
+        assert canvas._handle_wheel_dispatch(
+            delta=120.0,
+            modifiers=Qt.ShiftModifier,
+            x_pos=0.5,
+            y_pos=0.0,
+            view_box=canvas._x_master_handle.view_box,
+            scene_pos=scene_pos,
+            axis=None,
+        ) is True
+
+        for handle in canvas.axes_list:
+            major = handle.y_axis_item()._tickLevels[0]
+            values = [value for value, _label in major]
+            per_div = values[1] - values[0]
+            for value in values:
+                ratio = value / per_div
+                assert ratio == pytest.approx(round(ratio), rel=1e-9, abs=1e-9)
 
     @pytest.mark.parametrize("divisions", [3, 10, 20])
     @pytest.mark.parametrize("frac", [0.15, 0.50, 0.85])
@@ -443,8 +544,8 @@ class TestOverlayWheel:
         # sequence. This isolates reversibility of adjacent nice levels from the
         # separate first-notch normalization of an arbitrary external range.
         initial_ranges = [
-            (-0.5 * divisions, 0.5 * divisions),
-            (-20.0 * divisions, 20.0 * divisions),
+            (-1.0 * divisions, 0.0),
+            (-40.0 * divisions, 0.0),
         ]
         for handle, limits in zip(canvas.axes_list, initial_ranges):
             handle.set_ylim(*limits)
@@ -464,7 +565,9 @@ class TestOverlayWheel:
             ) is True
             for old_limits, handle in zip(previous_ranges, canvas.axes_list):
                 new_limits = handle.get_ylim()
-                _assert_cursor_anchor_preserved(old_limits, new_limits, frac)
+                _assert_cursor_anchor_within_half_division(
+                    old_limits, new_limits, frac, divisions
+                )
                 major = handle.y_axis_item()._tickLevels[0]
                 tick_values = [value for value, _label in major]
                 assert len(tick_values) == divisions + 1
@@ -526,8 +629,9 @@ class TestOverlayWheel:
                     assert new_span < old_span
                 else:
                     assert new_span > old_span
-                _assert_cursor_anchor_preserved(
-                    old_limits, new_limits, delivered_frac
+                _assert_cursor_anchor_within_half_division(
+                    old_limits, new_limits, delivered_frac,
+                    canvas._overlay_axes._current_overlay_divisions(),
                 )
             previous_ranges = current_ranges
 
@@ -543,6 +647,8 @@ class TestOverlayWheel:
         for handle in canvas.axes_list:
             labels = [label for _value, label in handle.y_axis_item()._tickLevels[0]]
             assert len(labels) == len(set(labels))
+            # The six-character contract applies to this named ±2.5 fixture,
+            # not to arbitrary high-offset values.
             assert max(map(len, labels)) <= 6
         canvas.hide()
 
