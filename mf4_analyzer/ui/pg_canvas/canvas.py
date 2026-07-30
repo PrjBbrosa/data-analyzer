@@ -1019,18 +1019,7 @@ class TimeDomainCanvasPG(QWidget):
             self._refresh_pending = True
             self._arm_interaction_settle()
 
-        # Restore cursor visual items when A/B positions survived clear().
-        if self._cursor.visible and self._cursor.dual:
-            if self._cursor.ax is not None:
-                a_items = self._ensure_cursor_items(
-                    "_cursor_a_items", color="#2563eb", width=1.1
-                )
-                self._set_cursor_items_pos(a_items, self._cursor.ax)
-            if self._cursor.bx is not None:
-                b_items = self._ensure_cursor_items(
-                    "_cursor_b_items", color="#dc2626", width=1.1
-                )
-                self._set_cursor_items_pos(b_items, self._cursor.bx)
+        self._restore_dual_cursor_items()
 
         self.chart_rebuilt.emit()
         self._display_x_coverage = (
@@ -1378,6 +1367,8 @@ class TimeDomainCanvasPG(QWidget):
             self._last_selection_delta = dict(failure)
             return failure
 
+        self._restore_dual_cursor_items()
+
         probe_w = self._overlay_axes._initial_bind_pixel_width()
         self._subplot_dense_count = 0
         if probe_w and probe_w > 0:
@@ -1406,6 +1397,21 @@ class TimeDomainCanvasPG(QWidget):
         self.chart_rebuilt.emit()
         self.draw_idle()
         return {"applied": True, "reason": "subplot-object-reuse"}
+
+    def _restore_dual_cursor_items(self):
+        """Reconcile dual cursor lines with the current active axis topology."""
+        if not (self._cursor.visible and self._cursor.dual):
+            return
+        if self._cursor.ax is not None:
+            a_items = self._ensure_cursor_items(
+                "_cursor_a_items", color="#2563eb", width=1.1
+            )
+            self._set_cursor_items_pos(a_items, self._cursor.ax)
+        if self._cursor.bx is not None:
+            b_items = self._ensure_cursor_items(
+                "_cursor_b_items", color="#dc2626", width=1.1
+            )
+            self._set_cursor_items_pos(b_items, self._cursor.bx)
 
     def _set_primary_line_visible(self, name, visible):
         """Hide/show a primary (original) curve in place without rebuilding.

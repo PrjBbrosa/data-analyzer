@@ -1,4 +1,24 @@
+import pytest
+
 from mf4_analyzer.ui.main_window import MainWindow
+
+
+def _assert_subplot_materially_fills_viewport(canvas, expected_rows):
+    assert len(canvas.axes_list) == expected_rows
+    viewport = canvas._glw.viewport().rect()
+    rects = [handle.view_box.sceneBoundingRect() for handle in canvas.axes_list]
+    assert all(
+        rect.width() >= max(1.0, viewport.width() * 0.25)
+        for rect in rects
+    )
+    assert all(
+        rect.height() >= max(1.0, viewport.height() * 0.10 / expected_rows)
+        for rect in rects
+    )
+    combined_height = max(rect.bottom() for rect in rects) - min(
+        rect.top() for rect in rects
+    )
+    assert combined_height >= max(1.0, viewport.height() * 0.25)
 
 
 def test_main_window_constructs(qapp):
@@ -1567,8 +1587,6 @@ def test_channel_eye_column_is_only_available_in_time_mode(qapp, qtbot):
 def test_hiding_checked_channel_collapses_subplot_and_restores_y_range(
     qapp, qtbot, loaded_csv,
 ):
-    import pytest
-
     w, fid = _load_time_window_with_checked(
         qapp, qtbot, loaded_csv, ("speed", "torque")
     )
@@ -1581,6 +1599,10 @@ def test_hiding_checked_channel_collapses_subplot_and_restores_y_range(
     saved_ylim = (-12.5, 17.5)
     w.canvas_time.restore_visible_ylims({speed_key: saved_ylim})
     w._capture_canvas_ranges_for_bound_view(w.canvas_time)
+    speed_name = next(
+        name for name in w.canvas_time._channel_lines if "speed" in name
+    )
+    speed_handle, speed_line = w.canvas_time._channel_lines[speed_name]
 
     assert w.navigator.set_channel_visible(fid, "speed", False)
     qapp.processEvents()
@@ -1590,7 +1612,12 @@ def test_hiding_checked_channel_collapses_subplot_and_restores_y_range(
     }
     assert w.navigator.get_hidden_channels() == [(fid, "speed")]
     assert len(w.canvas_time.axes_list) == 1
-    assert not any("speed" in name for name in w.canvas_time._channel_lines)
+    retained_handle, retained_line = w.canvas_time._channel_lines[speed_name]
+    assert retained_handle is speed_handle
+    assert retained_line is speed_line
+    assert retained_handle not in w.canvas_time.axes_list
+    assert not retained_handle.plot_item.isVisible()
+    assert not retained_line.plot_data_item.isVisible()
     state = w.view_manager.get(w._focused_view_idx)
     assert state.hidden_channels == [(fid, "speed")]
     assert state.ylims[speed_key] == pytest.approx(saved_ylim)
@@ -1601,6 +1628,115 @@ def test_hiding_checked_channel_collapses_subplot_and_restores_y_range(
     assert len(w.canvas_time.axes_list) == 2
     assert any("speed" in name for name in w.canvas_time._channel_lines)
     assert w.canvas_time.get_visible_ylims()[speed_key] == pytest.approx(saved_ylim)
+
+
+@pytest.mark.parametrize("checked_names", [("speed",), ("speed", "torque")])
+def test_all_subplot_eyes_hidden_then_reopened_rebuilds_full_geometry(
+    qapp, qtbot, loaded_csv, checked_names,
+):
+    w, fid = _load_time_window_with_checked(
+        qapp, qtbot, loaded_csv, checked_names
+    )
+    w.chart_stack.set_plot_mode("subplot")
+    w.plot_time()
+    qapp.processEvents()
+    w.canvas_time.set_xlim(0.20, 0.65)
+    saved_xlim = w.canvas_time.get_visible_xlim()
+    current_ylims = w.canvas_time.get_visible_ylims()
+    saved_ylims = {}
+    for key, (lo, hi) in current_ylims.items():
+        span = float(hi) - float(lo)
+        if span <= 0.0:
+            span = 1.0
+        saved_ylims[key] = (
+            float(lo) + span * 0.10,
+            float(hi) - span * 0.10,
+        )
+    w.canvas_time.restore_visible_ylims(saved_ylims)
+    w._capture_canvas_ranges_for_bound_view(w.canvas_time)
+    # Keep the mode in ViewState so every owner-driven render re-creates
+    # dual-cursor graphics rather than silently applying cursor_mode="off".
+    w.chart_stack.set_cursor_mode("dual")
+    w.canvas_time._cursor.ax = 0.40
+    w.canvas_time._cursor.bx = 0.55
+    old_view_boxes = [handle.view_box for handle in w.canvas_time.axes_list]
+    outer_size = w.size()
+
+    for channel in checked_names:
+        assert w.navigator.set_channel_visible(fid, channel, False)
+        qapp.processEvents()
+
+    assert w.canvas_time.axes_list == []
+    assert w.canvas_time._selection_bound_keys == set()
+    assert w.canvas_time._empty_hint_item is not None
+
+    for channel in checked_names:
+        assert w.navigator.set_channel_visible(fid, channel, True)
+        qapp.processEvents()
+
+    assert w.size() == outer_size
+    assert w.canvas_time._last_full_rebuild_reason == "no-render-model"
+    assert all(
+        all(handle.view_box is not old for old in old_view_boxes)
+        for handle in w.canvas_time.axes_list
+    )
+    assert w.canvas_time.get_visible_xlim() == pytest.approx(saved_xlim)
+    restored_ylims = w.canvas_time.get_visible_ylims()
+    assert set(restored_ylims) == set(saved_ylims)
+    for key, expected in saved_ylims.items():
+        assert restored_ylims[key] == pytest.approx(expected)
+    assert w.canvas_time._cursor.ax == pytest.approx(0.40)
+    assert w.canvas_time._cursor.bx == pytest.approx(0.55)
+    assert w.canvas_time._cursor._cursor_a_items
+    assert len(w.canvas_time._cursor._cursor_a_items) == len(checked_names)
+    _assert_subplot_materially_fills_viewport(
+        w.canvas_time, len(checked_names)
+    )
+
+
+def test_all_subplots_unchecked_then_rechecked_rebuilds_full_geometry(
+    qapp, qtbot, loaded_csv,
+):
+    from PyQt5.QtCore import Qt
+
+    w, fid = _load_time_window_with_checked(
+        qapp, qtbot, loaded_csv, ("speed", "torque")
+    )
+    w.chart_stack.set_plot_mode("subplot")
+    w.plot_time()
+    qapp.processEvents()
+    w.canvas_time.set_xlim(0.20, 0.65)
+    saved_xlim = w.canvas_time.get_visible_xlim()
+    outer_size = w.size()
+    file_item = w.channel_list._file_items[fid]
+    items = {}
+
+    def collect_channel_items(parent):
+        for index in range(parent.childCount()):
+            item = parent.child(index)
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == "channel":
+                items[data[2]] = item
+            collect_channel_items(item)
+
+    collect_channel_items(file_item)
+    assert {"speed", "torque"}.issubset(items)
+
+    for channel in ("speed", "torque"):
+        items[channel].setCheckState(0, Qt.Unchecked)
+        qapp.processEvents()
+
+    assert w.canvas_time.axes_list == []
+    assert w.canvas_time._selection_bound_keys == set()
+
+    for channel in ("speed", "torque"):
+        items[channel].setCheckState(0, Qt.Checked)
+        qapp.processEvents()
+
+    assert w.size() == outer_size
+    assert w.canvas_time._last_full_rebuild_reason == "no-render-model"
+    assert w.canvas_time.get_visible_xlim() == pytest.approx(saved_xlim)
+    _assert_subplot_materially_fills_viewport(w.canvas_time, 2)
 
 
 def test_all_checked_channels_hidden_shows_hint_but_keeps_statistics(

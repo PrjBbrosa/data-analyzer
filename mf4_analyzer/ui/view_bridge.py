@@ -95,7 +95,15 @@ def capture_controls_into(state: ViewState, window, canvas=None) -> None:
 
 
 def capture_canvas_ranges_into(state: ViewState, canvas) -> None:
-    """Capture visible X/Y ranges from a specific canvas into ``state``."""
+    """Capture live visible X/Y ranges from a specific canvas into ``state``.
+
+    A TimeDomain canvas that explicitly has no primary axis is in an owner
+    empty state, not a new ``(0, 1)`` viewport. Keep its prior semantic ranges
+    for the next non-empty render. Generic canvases without this attribute
+    retain the historical capture behavior.
+    """
+    if hasattr(canvas, "_primary_xaxis_ax") and canvas._primary_xaxis_ax is None:
+        return
     get_xlim = getattr(canvas, "get_visible_xlim", None)
     get_ylims = getattr(canvas, "get_visible_ylims", None)
     if callable(get_xlim):

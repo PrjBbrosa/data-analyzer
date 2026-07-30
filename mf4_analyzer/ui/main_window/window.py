@@ -2150,6 +2150,9 @@ class MainWindow(
         focused = self.chart_stack.focused_canvas()
         idx = self._view_index_for_canvas(focused)
         if idx is not None and 0 <= idx < len(self.view_manager.views):
+            self._view_bridge.capture_canvas_ranges_into(
+                self.view_manager.get(idx), focused
+            )
             self._view_bridge.capture_controls_into(
                 self.view_manager.get(idx), self, focused
             )

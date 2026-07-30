@@ -4,6 +4,24 @@ from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.view_tabbar import ViewTabBar
 
 
+def _assert_subplot_materially_fills_viewport(canvas, expected_rows):
+    assert len(canvas.axes_list) == expected_rows
+    viewport = canvas._glw.viewport().rect()
+    rects = [handle.view_box.sceneBoundingRect() for handle in canvas.axes_list]
+    assert all(
+        rect.width() >= max(1.0, viewport.width() * 0.25)
+        for rect in rects
+    )
+    assert all(
+        rect.height() >= max(1.0, viewport.height() * 0.10 / expected_rows)
+        for rect in rects
+    )
+    combined_height = max(rect.bottom() for rect in rects) - min(
+        rect.top() for rect in rects
+    )
+    assert combined_height >= max(1.0, viewport.height() * 0.25)
+
+
 def _make_loaded_window(qtbot, qapp, loaded_csv):
     w = MainWindow()
     qtbot.addWidget(w)
@@ -83,6 +101,41 @@ def _assert_ylims(w, expected):
     assert set(actual) == set(expected)
     for key, pair in expected.items():
         assert actual[key] == pytest.approx(pair)
+
+
+def test_subplot_empty_view_round_trip_rebuilds_full_canvas_geometry(
+    qtbot, qapp, loaded_csv,
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    w.chart_stack.set_plot_mode("subplot")
+    _set_checked(w, "speed", "torque")
+    w.plot_time()
+    qapp.processEvents()
+    _assert_subplot_materially_fills_viewport(w.canvas_time, 2)
+    old_view_boxes = [handle.view_box for handle in w.canvas_time.axes_list]
+    outer_size = w.size()
+    saved_xlim = _narrow_xlim(w, 0.20, 0.65)
+    w._capture_current_view()
+
+    w._on_view_new()
+    qapp.processEvents()
+
+    assert w.size() == outer_size
+    assert w.canvas_time.axes_list == []
+    assert w.canvas_time._selection_bound_keys == set()
+    assert w.canvas_time._subplot_retained_order == []
+
+    w._switch_view(0)
+    qapp.processEvents()
+
+    assert w.size() == outer_size
+    assert w.canvas_time._last_full_rebuild_reason == "no-render-model"
+    assert all(
+        all(handle.view_box is not old for old in old_view_boxes)
+        for handle in w.canvas_time.axes_list
+    )
+    assert w.canvas_time.get_visible_xlim() == pytest.approx(saved_xlim)
+    _assert_subplot_materially_fills_viewport(w.canvas_time, 2)
 
 
 def test_main_window_mounts_view_tabbar(qtbot):
