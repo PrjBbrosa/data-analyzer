@@ -107,6 +107,7 @@ lesson by default.
 | [Tick Label Truthfulness Comes Before Compactness](codex-tick-label-truthfulness-before-compactness.md) | Changing tick formatting, explicit `AxisItem.setTicks()` labels, axis | See lesson |
 | [Superseded Plans Use New Dated Files](codex-superseded-plans-use-new-dated-files.md) | Revising an approved or committed implementation plan after its core | See lesson |
 | [Numeric Hazard Rates Need The Real Caller Path](codex-numeric-hazard-rate-needs-caller-path.md) | Using a numerical sweep or extracted-expression probe to justify a | See lesson |
+| [Codex PG Subplot Reuse Needs Realized Geometry](codex-pg-subplot-reuse-needs-realized-geometry.md) | Changing or reviewing time-domain subplot selection-delta reuse, | See lesson |
 
 ## Selection Rules
 
