@@ -5016,6 +5016,34 @@ class TestTimeDomainCanvasPGSetDataHotPathContract:
         else:
             assert after_span > before_span
 
+    def test_real_horizontal_pixel_wheel_does_not_change_y(self, qapp):
+        from PyQt5.QtCore import QPoint, QPointF, Qt
+        from PyQt5.QtGui import QWheelEvent
+        from PyQt5.QtWidgets import QApplication
+
+        canvas, _pdi = self._canvas_and_pdi(qapp)
+        vb = canvas._primary_xaxis_ax.view_box
+        before = [handle.get_ylim() for handle in canvas.axes_list]
+        scene_pos = vb.mapViewToScene(QPointF(5.0, 0.0))
+        pos = QPointF(canvas._glw.mapFromScene(scene_pos))
+        global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
+        event = QWheelEvent(
+            pos,
+            global_pos,
+            QPoint(12, 0),
+            QPoint(),
+            Qt.NoButton,
+            Qt.ShiftModifier,
+            Qt.ScrollUpdate,
+            False,
+        )
+
+        assert QApplication.sendEvent(canvas._glw.viewport(), event)
+        qapp.processEvents()
+
+        after = [handle.get_ylim() for handle in canvas.axes_list]
+        assert after == pytest.approx(before, rel=1e-12, abs=1e-12)
+
     @pytest.mark.parametrize("modifiers", [Qt.NoModifier, Qt.ShiftModifier])
     def test_y_only_wheel_keeps_immediate_visible_feedback(
         self, qapp, modifiers,
@@ -6444,6 +6472,24 @@ class TestAutoIdleAA:
     def test_schedule_idle_quality_starts_timer(self, qapp):
         canvas = self._plot(qapp)
         canvas.schedule_idle_quality()
+        assert canvas._quality.timer.isActive()
+
+    def test_unhandled_wheel_keeps_idle_quality_rearmed(self, qapp):
+        canvas = _pg_canvas(qapp)
+        canvas.schedule_idle_quality()
+        assert canvas._quality.timer.isActive()
+
+        consumed = canvas._handle_wheel_dispatch(
+            delta=120.0,
+            modifiers=Qt.NoModifier,
+            x_pos=0.0,
+            y_pos=0.0,
+            view_box=None,
+            scene_pos=None,
+            axis=None,
+        )
+
+        assert consumed is False
         assert canvas._quality.timer.isActive()
 
     def test_initial_overlay_build_rearms_idle_timer(self, qapp):

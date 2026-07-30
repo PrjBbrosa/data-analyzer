@@ -2114,6 +2114,56 @@ def test_time_preview_axes_share_grid_divisions(canvas):
         assert fractions(axis, vb) == pytest.approx(base, abs=1e-6)
 
 
+def test_time_preview_shift_wheel_repins_every_axis_around_cursor(canvas, qapp):
+    canvas.plot_spectra(
+        _overlay_entries(),
+        xlim=(0.0, 50.0),
+        amp_label='Amplitude',
+        title='t',
+    )
+    pairs = [
+        (canvas._plot_time.vb, canvas._plot_time.getAxis('left')),
+        *zip(canvas._time_overlay_vbs, canvas._time_overlay_axes),
+    ]
+    cursor_fraction = 0.73
+    before_ranges = [tuple(vb.viewRange()[1]) for vb, _axis in pairs]
+    before_anchors = [
+        lo + cursor_fraction * (hi - lo) for lo, hi in before_ranges
+    ]
+    main_lo, main_hi = before_ranges[0]
+    y_pos = main_lo + cursor_fraction * (main_hi - main_lo)
+
+    consumed = canvas._handle_wheel_dispatch(
+        delta=120.0,
+        modifiers=Qt.ShiftModifier,
+        x_pos=0.5,
+        y_pos=y_pos,
+        view_box=canvas._plot_time.vb,
+    )
+    qapp.processEvents()
+
+    assert consumed is True
+    n = canvas._time_divisions
+    for index, ((vb, axis), before, before_anchor) in enumerate(
+        zip(pairs, before_ranges, before_anchors)
+    ):
+        lo, hi = vb.viewRange()[1]
+        assert (hi - lo) < (before[1] - before[0]), (
+            f"time axis {index} did not zoom"
+        )
+        after_anchor = lo + cursor_fraction * (hi - lo)
+        assert after_anchor == pytest.approx(before_anchor, abs=1e-10)
+        major = axis._tickLevels[0]
+        tick_values = [value for value, _label in major]
+        labels = [label for _value, label in major]
+        assert len(tick_values) == n + 1
+        assert tick_values[0] == pytest.approx(lo)
+        assert tick_values[-1] == pytest.approx(hi)
+        assert all(lo <= value <= hi for value in tick_values)
+        assert len(labels) == len(set(labels))
+        assert max(map(len, labels)) <= 6
+
+
 def test_tick_density_changes_right_axis_divisions(canvas):
     canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
                         amp_label='Amplitude', title='t')

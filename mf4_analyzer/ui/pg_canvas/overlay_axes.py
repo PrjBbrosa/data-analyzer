@@ -30,7 +30,12 @@ from .render_profile import (
     classify_render_profile,
     source_revision_for,
 )
-from .ticks_math import _adjacent_nice_step, _fmt_tick, _frame_to_nice
+from .ticks_math import (
+    _adjacent_nice_step,
+    _fmt_tick,
+    _frame_to_nice,
+    _nice_per_div,
+)
 from .viewbox import _ModifierWheelViewBox
 
 
@@ -777,7 +782,30 @@ class OverlayAxisManager(_CanvasBackref):
                 lo, hi = handle.get_ylim()
             except Exception:
                 continue
-            bottom, top, ticks = _frame_to_nice(lo, hi, n)
+            current_per_div = (hi - lo) / n
+            nice_per_div = _nice_per_div(current_per_div)
+            lower_nice_per_div = (
+                _adjacent_nice_step(nice_per_div, -1)
+                if nice_per_div is not None
+                else None
+            )
+            if (
+                any(
+                    candidate is not None
+                    and math.isclose(
+                        current_per_div,
+                        candidate,
+                        rel_tol=1e-9,
+                        abs_tol=0.0,
+                    )
+                    for candidate in (nice_per_div, lower_nice_per_div)
+                )
+            ):
+                bottom, top, per_div = lo, hi, current_per_div
+                ticks = [bottom + k * per_div for k in range(n + 1)]
+            else:
+                bottom, top, ticks = _frame_to_nice(lo, hi, n)
+                per_div = (top - bottom) / n
             try:
                 handle.set_ylim(bottom, top)
             except Exception:
@@ -790,7 +818,9 @@ class OverlayAxisManager(_CanvasBackref):
             except Exception:
                 pass
             try:
-                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
+                axis.setTicks([
+                    [(value, _fmt_tick(value, per_div)) for value in ticks], []
+                ])
             except Exception:
                 pass
 
@@ -951,6 +981,7 @@ class OverlayAxisManager(_CanvasBackref):
             new_lo = clo + f0 * cspan
             new_hi = clo + f1 * cspan
             bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
+            per_div = (top - bottom) / n
             try:
                 handle.set_ylim(bottom, top)
                 axis = (
@@ -958,7 +989,9 @@ class OverlayAxisManager(_CanvasBackref):
                 )
                 if axis is not None:
                     axis.setStyle(maxTickLevel=0)
-                    axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
+                    axis.setTicks([
+                        [(value, _fmt_tick(value, per_div)) for value in ticks], []
+                    ])
             except Exception:
                 continue
         self._refresh = True
@@ -1307,7 +1340,6 @@ class OverlayAxisManager(_CanvasBackref):
 
         ctrl = bool(modifiers & Qt.ControlModifier)
         shift = bool(modifiers & Qt.ShiftModifier)
-        self.disable_interactive_quality()
 
         if getattr(self, "_overlay_mode", False) and not ctrl:
             # Wheel over ONE channel's Y-axis gutter (axis == 1) → scroll/zoom
@@ -1327,8 +1359,8 @@ class OverlayAxisManager(_CanvasBackref):
             else:
                 handles = [h for h in (self.axes_list or []) if h is not None]
             if not handles:
-                self.schedule_idle_quality()
                 return True
+            self.disable_interactive_quality()
             n = self._current_overlay_divisions()
             frac = self._overlay_cursor_y_fraction(scene_pos, view_box)
             changed = False
@@ -1360,6 +1392,7 @@ class OverlayAxisManager(_CanvasBackref):
                     bottom = anchor - frac * framed_span
                     top = bottom + framed_span
                     ticks = [bottom + k * next_per_div for k in range(n + 1)]
+                    tick_per_div = next_per_div
                 else:
                     # Plain-wheel vertical pan. Sign is NEGATED vs ``step`` so
                     # wheel-up moves the view toward LOWER Y (content scrolls
@@ -1370,17 +1403,21 @@ class OverlayAxisManager(_CanvasBackref):
                     bottom = lo - step * per_div
                     top = hi - step * per_div
                     ticks = [bottom + k * per_div for k in range(n + 1)]
+                    tick_per_div = per_div
                 try:
                     target.set_ylim(bottom, top)
-                    axis = (
+                    target_axis = (
                         target.y_axis_item()
                         if hasattr(target, "y_axis_item")
                         else None
                     )
-                    if axis is not None:
-                        axis.setStyle(maxTickLevel=0)
-                        axis.setTicks(
-                            [[(value, _fmt_tick(value)) for value in ticks], []]
+                    if target_axis is not None:
+                        target_axis.setStyle(maxTickLevel=0)
+                        target_axis.setTicks(
+                            [[
+                                (value, _fmt_tick(value, tick_per_div))
+                                for value in ticks
+                            ], []]
                         )
                     changed = True
                 except Exception:
@@ -1396,6 +1433,7 @@ class OverlayAxisManager(_CanvasBackref):
         if target is None:
             return False
 
+        self.disable_interactive_quality()
         try:
             if ctrl:
                 lo, hi = target.get_xlim()
@@ -1416,6 +1454,7 @@ class OverlayAxisManager(_CanvasBackref):
                 d = (hi - lo) * 0.1 * step
                 target.set_ylim(lo - d, hi - d)
         except Exception:
+            self.schedule_idle_quality()
             return False
 
         self.visible_range_changed.emit()

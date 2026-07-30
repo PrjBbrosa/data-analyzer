@@ -52,7 +52,7 @@ from ._split_mixin import (
     _SplitDivider,
     _StackedSplitMixin,
 )
-from .ticks_math import _frame_to_nice, _fmt_tick
+from .ticks_math import _adjacent_nice_step, _frame_to_nice, _fmt_tick
 from .viewbox import _ModifierWheelViewBox, _WheelDeltaGraphicsLayoutWidget
 
 
@@ -627,6 +627,45 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                     center + (hi - center) * factor,
                     padding=0,
                 )
+            elif shift and view_box is self._plot_time.vb and self._time_curves:
+                lo, hi = y_range
+                span = hi - lo
+                if not (np.isfinite(span) and span > 0):
+                    return False
+                if np.isfinite(y_pos):
+                    cursor_fraction = (float(y_pos) - lo) / span
+                    cursor_fraction = max(0.0, min(1.0, cursor_fraction))
+                else:
+                    cursor_fraction = 0.5
+                n = max(3, min(20, int(self._time_divisions)))
+                pairs = [
+                    (self._plot_time.vb, self._plot_time.getAxis('left')),
+                    *zip(self._time_overlay_vbs, self._time_overlay_axes),
+                ]
+                for target_vb, target_axis in pairs:
+                    target_lo, target_hi = target_vb.viewRange()[1]
+                    target_span = target_hi - target_lo
+                    if not (np.isfinite(target_span) and target_span > 0):
+                        continue
+                    current_per_div = target_span / n
+                    next_per_div = _adjacent_nice_step(
+                        current_per_div, -1 if step > 0 else 1
+                    )
+                    if next_per_div is None:
+                        next_per_div = current_per_div * factor
+                    anchor = target_lo + cursor_fraction * target_span
+                    next_span = n * next_per_div
+                    bottom = anchor - cursor_fraction * next_span
+                    top = bottom + next_span
+                    ticks = [bottom + k * next_per_div for k in range(n + 1)]
+                    target_vb.enableAutoRange(axis='y', enable=False)
+                    target_vb.setYRange(bottom, top, padding=0)
+                    target_axis.setStyle(maxTickLevel=0)
+                    target_axis.setTickDensity(1.0)
+                    target_axis.setTicks([[
+                        (value, _fmt_tick(value, next_per_div))
+                        for value in ticks
+                    ], []])
             elif shift:
                 lo, hi = y_range
                 center = float(y_pos) if np.isfinite(y_pos) else (lo + hi) / 2.0
@@ -1203,6 +1242,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             except Exception:
                 continue
             bottom, top, ticks = _frame_to_nice(lo, hi, n)
+            per_div = (top - bottom) / n
             try:
                 vb.enableAutoRange(axis='y', enable=False)
                 vb.setYRange(bottom, top, padding=0)
@@ -1217,7 +1257,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                     pass
                 axis.setStyle(maxTickLevel=0)
                 axis.setTickDensity(1.0)
-                axis.setTicks([[(v, _fmt_tick(v)) for v in ticks], []])
+                axis.setTicks([[
+                    (value, _fmt_tick(value, per_div)) for value in ticks
+                ], []])
             except Exception:
                 pass
         # Shared horizontal graticule: build/refresh the n-1 grid lines AFTER

@@ -4,6 +4,11 @@
 
 **Status:** Approved by the user for implementation
 
+**Follow-up:** Projection-consumer corrections discovered after the anchor fix are
+governed by
+`docs/superpowers/plans/2026-07-30-overlay-y-wheel-label-and-repin-fixes.md`.
+The original range construction below remains unchanged.
+
 ## 1. Context
 
 Overlay-mode `Shift+wheel` already routes to Y-only zoom and uses the mouse's
@@ -104,8 +109,17 @@ If scene geometry or the event position is unavailable, the existing fallback
 - Adjacent ticks differ by `next_per_div` within numerical tolerance.
 - Shift-wheel code must not pass its range through `_frame_to_nice()` and must
   not apply `floor()`, `ceil()`, or `round()` to the range phase.
-- `_repin_overlay_channel_ticks()`, tick-density changes, initial framing, box
-  zoom, and drag-release snapping remain outside this change.
+- The original anchor patch kept `_repin_overlay_channel_ticks()`, tick-density
+  changes, initial framing, box zoom, and drag-release snapping outside its scope.
+- Follow-up projection code must format labels from the active `per_div` using only
+  the decimal precision needed to distinguish adjacent ticks. Free-phase float tails
+  must not expand every Y-axis gutter and collapse the plot area.
+- `_repin_overlay_channel_ticks()` must be idempotent when the current span already
+  contains `n` equal nice divisions: retain the exact free-phase `lo`/`hi` and only
+  re-pin ticks. Arbitrary external ranges and incompatible density changes still use
+  `_frame_to_nice()`.
+- Tests for this invariant must inspect label text, axis/plot geometry, and repin
+  behavior in addition to span, anchor, and tick positions.
 
 ### R5. Event and rendering side effects remain unchanged
 

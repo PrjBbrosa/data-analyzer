@@ -49,6 +49,19 @@ class TestFmtTick:
         assert _fmt_tick(5e-5) == "5.00e-05"
         assert _fmt_tick(1.5e7) == "1.50e+07"
 
+    def test_step_aware_labels_stay_distinct_at_high_offset(self):
+        values = [100000.74, 100001.54, 100002.34, 100003.14, 100003.94]
+
+        labels = [_fmt_tick(value, per_div=0.8) for value in values]
+
+        assert labels == [
+            "100000.7",
+            "100001.5",
+            "100002.3",
+            "100003.1",
+            "100003.9",
+        ]
+
     def test_wheel_pan_zero_division_label_is_zero(self):
         # Reproduce the real trigger end-to-end: snap to a clean grid, then do
         # one plain-wheel vertical pan (overlay_axes.py:1357). The zero-crossing
@@ -207,6 +220,76 @@ class TestRepinTicks:
                 ratio = value / per_div
                 assert abs(ratio - round(ratio)) < 1e-6
 
+    def test_repin_keeps_free_phase_range_with_nice_step(self, qapp):
+        canvas = self._overlay(qapp)
+        scene_pos = _overlay_scene_pos_at_fraction(canvas, 0.62)
+        assert canvas._handle_wheel_dispatch(
+            delta=120.0,
+            modifiers=Qt.ShiftModifier,
+            x_pos=0.5,
+            y_pos=0.0,
+            view_box=canvas._x_master_handle.view_box,
+            scene_pos=scene_pos,
+            axis=None,
+        ) is True
+        before = [handle.get_ylim() for handle in canvas.axes_list]
+
+        canvas._repin_overlay_channel_ticks()
+
+        after = [handle.get_ylim() for handle in canvas.axes_list]
+        assert after == pytest.approx(before, rel=1e-12, abs=1e-12)
+
+    def test_repin_keeps_nice_step_with_relative_float_noise(self, qapp):
+        canvas = self._overlay(qapp)
+        handle = canvas.axes_list[0]
+        n = canvas._overlay_axes.divisions
+        per_div = 8.000000005
+        lo = 0.317
+        handle.set_ylim(lo, lo + n * per_div)
+        before = handle.get_ylim()
+
+        canvas._repin_overlay_channel_ticks()
+
+        assert handle.get_ylim() == pytest.approx(before, rel=1e-12, abs=1e-12)
+
+    def test_repin_still_frames_arbitrary_external_range(self, qapp):
+        canvas = self._overlay(qapp)
+        canvas.set_tick_density(10, 8)
+        handle = canvas.axes_list[0]
+        handle.set_ylim(0.317, 8.42)
+
+        canvas._repin_overlay_channel_ticks()
+
+        assert handle.get_ylim() == pytest.approx((0.0, 9.6))
+
+    def test_visibility_repin_does_not_move_unchanged_wheel_ranges(self, qapp):
+        canvas = self._overlay(qapp)
+        scene_pos = _overlay_scene_pos_at_fraction(canvas, 0.62)
+        assert canvas._handle_wheel_dispatch(
+            delta=120.0,
+            modifiers=Qt.ShiftModifier,
+            x_pos=0.5,
+            y_pos=0.0,
+            view_box=canvas._x_master_handle.view_box,
+            scene_pos=scene_pos,
+            axis=None,
+        ) is True
+        before = [handle.get_ylim() for handle in canvas.axes_list]
+
+        canvas._reframe_companion_axes_after_visibility_change()
+
+        after = [handle.get_ylim() for handle in canvas.axes_list]
+        assert after == pytest.approx(before, rel=1e-12, abs=1e-12)
+
+    def test_density_change_reframes_when_new_step_is_not_nice(self, qapp):
+        canvas = self._overlay(qapp)
+        handle = canvas.axes_list[0]
+        handle.set_ylim(0.0, 10.0)
+
+        canvas.set_tick_density(10, 8)
+
+        assert handle.get_ylim() == pytest.approx((0.0, 12.0))
+
 
 def _overlay_scene_pos_at_fraction(canvas, frac):
     view_box = canvas._x_master_handle.view_box
@@ -221,6 +304,57 @@ def _assert_cursor_anchor_preserved(before, after, frac):
     before_anchor = before[0] + frac * (before[1] - before[0])
     after_anchor = after[0] + frac * (after[1] - after[0])
     assert after_anchor == pytest.approx(before_anchor, rel=1e-10, abs=1e-10)
+
+
+def _send_real_overlay_shift_wheel(canvas, qapp, *, frac, delta=120):
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtGui import QWheelEvent
+    from PyQt5.QtWidgets import QApplication
+
+    scene_pos = _overlay_scene_pos_at_fraction(canvas, frac)
+    pos = QPointF(canvas._glw.mapFromScene(scene_pos))
+    global_pos = QPointF(canvas._glw.viewport().mapToGlobal(pos.toPoint()))
+    event = QWheelEvent(
+        pos,
+        global_pos,
+        QPoint(),
+        QPoint(0, delta),
+        Qt.NoButton,
+        Qt.ShiftModifier,
+        Qt.ScrollUpdate,
+        False,
+    )
+    assert QApplication.sendEvent(canvas._glw.viewport(), event)
+    assert event.isAccepted()
+    qapp.processEvents()
+
+
+def _four_channel_overlay_for_wheel(qapp):
+    from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+    canvas = _pg_canvas(qapp)
+    canvas.resize(900, 500)
+    t = np.linspace(0.0, 1.0, 256)
+    rows = [
+        (
+            f"ch{i}",
+            True,
+            t,
+            (i + 1) * np.sin(2 * np.pi * (i + 1) * t),
+            "#1769e0",
+            "u",
+            f"fid-{i}",
+        )
+        for i in range(4)
+    ]
+    canvas.plot_channels(rows, mode="overlay")
+    for handle in canvas.axes_list:
+        handle.set_ylim(-2.5, 2.5)
+    canvas._repin_overlay_channel_ticks()
+    canvas.show()
+    qapp.processEvents()
+    qapp.processEvents()
+    return canvas
 
 
 class TestOverlayWheel:
@@ -365,6 +499,39 @@ class TestOverlayWheel:
         for handle, initial_limits in zip(canvas.axes_list, initial_ranges):
             assert handle.get_ylim() == pytest.approx(initial_limits)
         assert canvas._x_master_handle.get_xlim() == pytest.approx(initial_x)
+
+    def test_real_shift_wheel_labels_stay_compact_and_unique(self, qapp):
+        canvas = _four_channel_overlay_for_wheel(qapp)
+
+        _send_real_overlay_shift_wheel(canvas, qapp, frac=0.62)
+
+        for handle in canvas.axes_list:
+            labels = [label for _value, label in handle.y_axis_item()._tickLevels[0]]
+            assert len(labels) == len(set(labels))
+            assert max(map(len, labels)) <= 6
+        canvas.hide()
+
+    def test_two_real_shift_notches_do_not_collapse_overlay_plot_width(self, qapp):
+        canvas = _four_channel_overlay_for_wheel(qapp)
+        before_plot_width = float(
+            canvas._x_master_handle.view_box.sceneBoundingRect().width()
+        )
+        before_gutter_width = sum(
+            float(handle.y_axis_item().width()) for handle in canvas.axes_list
+        )
+
+        _send_real_overlay_shift_wheel(canvas, qapp, frac=0.62)
+        _send_real_overlay_shift_wheel(canvas, qapp, frac=0.62)
+
+        after_plot_width = float(
+            canvas._x_master_handle.view_box.sceneBoundingRect().width()
+        )
+        after_gutter_width = sum(
+            float(handle.y_axis_item().width()) for handle in canvas.axes_list
+        )
+        assert after_plot_width == pytest.approx(before_plot_width, rel=0.10)
+        assert after_gutter_width == pytest.approx(before_gutter_width, rel=0.10)
+        canvas.hide()
 
     def test_no_selection_shift_wheel_zooms_all_keeps_xmaster_locked(self, qapp):
         # New design (user request): overlay Y zooms ALL channels together like

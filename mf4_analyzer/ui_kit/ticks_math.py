@@ -58,7 +58,7 @@ def _adjacent_nice_step(step, direction):
     return higher[0] if higher else current * 10.0
 
 
-def _fmt_tick(value):
+def _fmt_tick(value, per_div=None):
     """Format a graticule tick compactly enough for narrow overlay axes."""
     try:
         value = float(value)
@@ -66,6 +66,17 @@ def _fmt_tick(value):
         return ""
     if not math.isfinite(value):
         return ""
+    if per_div is not None:
+        try:
+            step = abs(float(per_div))
+        except Exception:
+            step = 0.0
+        if math.isfinite(step) and step > 0:
+            if abs(value) < step * 1e-6:
+                return "0"
+            decimals = max(0, math.ceil(-math.log10(step)))
+            label = f"{value:.{decimals}f}".rstrip("0").rstrip(".")
+            return "0" if label == "-0" else label
     # Wheel-pan ticks accumulate as ``lo - step*per_div + k*per_div`` (see
     # overlay_axes._handle_wheel_dispatch); the zero-crossing division lands on
     # a tiny float residue (~1e-15) instead of exact 0.0. Snap it so the axis

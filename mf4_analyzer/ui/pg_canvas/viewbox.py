@@ -22,10 +22,10 @@ class _WheelDeltaGraphicsLayoutWidget(pg.GraphicsLayoutWidget):
         delta = 0.0
         try:
             angle = ev.angleDelta()
-            delta = float(angle.x() or angle.y())
+            delta = float(angle.y())
             if delta == 0.0:
                 pixel = ev.pixelDelta()
-                delta = float(pixel.x() or pixel.y())
+                delta = float(pixel.y())
         except Exception:
             pass
         if owner is not None:

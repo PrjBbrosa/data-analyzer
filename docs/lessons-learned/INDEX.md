@@ -102,6 +102,8 @@ lesson by default.
 | [Channel Tree Selection Color Has Multiple Painters](codex-channel-tree-selection-color-has-multiple-painters.md) | Changing the selected-row color or painting behavior of the Analyzer | See lesson |
 | [Channel Tree Drag Selection Guard](codex-channel-tree-drag-selection-guard.md) | Changing channel-tree selection modes or mouse press, move, release, | See lesson |
 | [Codex Overlay Wheel Anchor Invariants](codex-overlay-wheel-anchor-invariants.md) | Load when changing overlay wheel zoom, nice-step selection, tick | See lesson |
+| [Overlay Free-Phase Changes Need A Consumer Audit](codex-overlay-free-phase-consumer-audit.md) | Changing an overlay or analysis Y-wheel transform from globally aligned | See lesson |
+| [Nice-Step Tolerance Must Check Neighboring Candidates](codex-nice-step-tolerance-checks-neighbors.md) | Adding an approximate nice-step guard around a helper that deliberately | See lesson |
 
 ## Selection Rules
 
