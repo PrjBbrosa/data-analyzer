@@ -36,6 +36,7 @@ class CursorController(_CanvasBackref):
         "_cursor_line_items",
         "_cursor_a_items",
         "_cursor_b_items",
+        "_cursor_item_owners",
         "_dual_cursor_extreme_markers",
         "visible",
         "dual",
@@ -80,6 +81,7 @@ class CursorController(_CanvasBackref):
         self._cursor_line_items = []
         self._cursor_a_items = []
         self._cursor_b_items = []
+        self._cursor_item_owners = {}
         self._dual_cursor_extreme_markers = []
 
     @property
@@ -147,9 +149,10 @@ class CursorController(_CanvasBackref):
         return self._dual_cursor_extreme_markers
 
     def clear_items(self):
-        self._cursor_line_items = []
-        self._cursor_a_items = []
-        self._cursor_b_items = []
+        self._remove_cursor_items(self._cursor_line_items)
+        self._remove_cursor_items(self._cursor_a_items)
+        self._remove_cursor_items(self._cursor_b_items)
+        self._cursor_item_owners.clear()
         self._dual_cursor_extreme_markers = []
 
     def reset_all_state(self):
@@ -223,35 +226,66 @@ class CursorController(_CanvasBackref):
 
     def _ensure_cursor_items(self, attr_name, *, color, width=1.0, style=Qt.SolidLine):
         handles = self._cursor_line_handles()
+        owners = [handle.view_box for handle in handles if handle.view_box is not None]
         items = getattr(self, attr_name, [])
-        if len(items) == len(handles):
+        item_owners = [self._cursor_item_owner(item) for item in items]
+        if len(items) == len(owners) and all(
+            owner is expected for owner, expected in zip(item_owners, owners)
+        ):
             return items
         self._remove_cursor_items(items)
         pen = pg.mkPen(color=color, width=width, style=style)
         new_items = []
-        for handle in handles:
-            vb = handle.view_box
-            if vb is None:
-                continue
+        for vb in owners:
             line = pg.InfiniteLine(pos=0.0, angle=90, movable=False, pen=pen)
             line.setZValue(1000)
             line.setVisible(False)
             try:
                 vb.addItem(line, ignoreBounds=True)
                 new_items.append(line)
+                self._cursor_item_owners[id(line)] = vb
             except Exception:
                 pass
         setattr(self, attr_name, new_items)
         return new_items
 
+    def _cursor_item_owner(self, item):
+        owner = self._cursor_item_owners.get(id(item))
+        if owner is not None:
+            return owner
+        try:
+            owner = item.getViewBox()
+        except Exception:
+            owner = None
+        if owner is not None:
+            self._cursor_item_owners[id(item)] = owner
+        return owner
+
     def _remove_cursor_items(self, items):
         for item in items or []:
+            owner = self._cursor_item_owners.pop(id(item), None)
             try:
-                parent = item.parentItem()
-                if parent is not None and hasattr(parent, "removeItem"):
-                    parent.removeItem(item)
+                item.setVisible(False)
             except Exception:
                 pass
+            removed = False
+            try:
+                if owner is None:
+                    owner = item.getViewBox()
+                if owner is not None:
+                    owner.removeItem(item)
+                    removed = True
+            except Exception:
+                pass
+            if not removed:
+                try:
+                    scene = item.scene()
+                    if scene is not None:
+                        scene.removeItem(item)
+                except Exception:
+                    pass
+        if items:
+            items.clear()
 
     def _set_cursor_items_pos(self, items, x):
         for item in items or []:

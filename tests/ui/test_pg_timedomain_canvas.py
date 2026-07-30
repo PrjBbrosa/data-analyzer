@@ -5405,6 +5405,56 @@ class TestTimeDomainCanvasPGSelectionDelta:
         assert canvas._channel_lines["b"][1].plot_data_item is not None
         assert len(canvas.axes_list) == 2
 
+    def test_subplot_equal_count_delta_reconciles_dual_cursor_owners(
+        self, qapp,
+    ):
+        import pyqtgraph as pg
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 2000, dtype=np.float64)
+        a = self._row("a", t, np.sin(t))
+        b = self._row("b", t, np.cos(t))
+        c = self._row("c", t, np.tan(t))
+        context = ("time", False, None, (False,))
+        canvas.plot_channels([a, b], mode="subplot", render_context_key=context)
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+        canvas._cursor.ax = 3.0
+        canvas._cursor.bx = 4.0
+        canvas._restore_dual_cursor_items()
+        old_a_view_box = canvas._channel_lines["a"][0].view_box
+
+        result = canvas.try_apply_selection_delta(
+            [b, c], mode="subplot", render_context_key=context
+        )
+
+        assert result == {
+            "applied": True,
+            "reason": "subplot-object-reuse",
+        }
+        expected_view_boxes = [handle.view_box for handle in canvas.axes_list]
+        assert expected_view_boxes == [
+            canvas._channel_lines["b"][0].view_box,
+            canvas._channel_lines["c"][0].view_box,
+        ]
+        for items, expected_x in (
+            (canvas._cursor._cursor_a_items, 3.0),
+            (canvas._cursor._cursor_b_items, 4.0),
+        ):
+            assert len(items) == len(expected_view_boxes)
+            assert [item.getViewBox() for item in items] == expected_view_boxes
+            assert all(item.isVisible() for item in items)
+            assert [item.value() for item in items] == pytest.approx(
+                [expected_x] * len(expected_view_boxes)
+            )
+        # The removed row no longer owns any scene cursor lines; inspect the
+        # ViewBox scene contents as well as the controller's tracked lists.
+        old_owner_lines = [
+            item for item in old_a_view_box.addedItems
+            if isinstance(item, pg.InfiniteLine) and item.zValue() == 1000
+        ]
+        assert old_owner_lines == []
+
     def test_subplot_invalid_realized_geometry_clears_and_requests_rebuild(
         self, qapp, monkeypatch,
     ):

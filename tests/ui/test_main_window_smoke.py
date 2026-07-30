@@ -1689,6 +1689,10 @@ def test_all_subplot_eyes_hidden_then_reopened_rebuilds_full_geometry(
     assert w.canvas_time._cursor.bx == pytest.approx(0.55)
     assert w.canvas_time._cursor._cursor_a_items
     assert len(w.canvas_time._cursor._cursor_a_items) == len(checked_names)
+    assert w.canvas_time._cursor._cursor_b_items
+    assert len(w.canvas_time._cursor._cursor_b_items) == len(checked_names)
+    assert all(item.isVisible() for item in w.canvas_time._cursor._cursor_a_items)
+    assert all(item.isVisible() for item in w.canvas_time._cursor._cursor_b_items)
     _assert_subplot_materially_fills_viewport(
         w.canvas_time, len(checked_names)
     )
@@ -1721,6 +1725,8 @@ def test_all_subplots_unchecked_then_rechecked_rebuilds_full_geometry(
 
     collect_channel_items(file_item)
     assert {"speed", "torque"}.issubset(items)
+    old_view_boxes = [handle.view_box for handle in w.canvas_time.axes_list]
+    w.canvas_time._last_full_rebuild_reason = "owner-trigger-sentinel"
 
     for channel in ("speed", "torque"):
         items[channel].setCheckState(0, Qt.Unchecked)
@@ -1728,6 +1734,7 @@ def test_all_subplots_unchecked_then_rechecked_rebuilds_full_geometry(
 
     assert w.canvas_time.axes_list == []
     assert w.canvas_time._selection_bound_keys == set()
+    assert w.canvas_time._empty_hint_item is None
 
     for channel in ("speed", "torque"):
         items[channel].setCheckState(0, Qt.Checked)
@@ -1735,6 +1742,11 @@ def test_all_subplots_unchecked_then_rechecked_rebuilds_full_geometry(
 
     assert w.size() == outer_size
     assert w.canvas_time._last_full_rebuild_reason == "no-render-model"
+    assert w.canvas_time._last_full_rebuild_reason != "owner-trigger-sentinel"
+    assert all(
+        all(handle.view_box is not old for old in old_view_boxes)
+        for handle in w.canvas_time.axes_list
+    )
     assert w.canvas_time.get_visible_xlim() == pytest.approx(saved_xlim)
     _assert_subplot_materially_fills_viewport(w.canvas_time, 2)
 
