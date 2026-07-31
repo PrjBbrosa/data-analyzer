@@ -101,7 +101,25 @@ def _is_host_rgb(sample: dict) -> bool:
     return all(abs(actual - wanted) <= PIXEL_TOLERANCE for actual, wanted in zip(sample["rgb"], HOST_RGB))
 
 
-def _capture_surface(screen, widget, name: str):
+def _rgb_delta_from_host(sample: dict) -> int:
+    return max(abs(actual - wanted) for actual, wanted in zip(sample["rgb"], HOST_RGB))
+
+
+def _evaluate_surface(*, visible: bool, corners: dict, interior: dict) -> dict:
+    """Reject a transparent-corner false positive caused by a hidden surface."""
+    corners_match_host = all(_is_host_rgb(sample) for sample in corners.values())
+    interior_delta_from_host = _rgb_delta_from_host(interior)
+    interior_differs_from_host = interior_delta_from_host > PIXEL_TOLERANCE
+    return {
+        "visible": bool(visible),
+        "corners_match_host": corners_match_host,
+        "interior_delta_from_host": interior_delta_from_host,
+        "interior_differs_from_host": interior_differs_from_host,
+        "passed": bool(visible) and corners_match_host and interior_differs_from_host,
+    }
+
+
+def _capture_surface(screen, widget, name: str, interior_point: QPoint, interior_label: str):
     desktop = screen.grabWindow(0)
     image = desktop.toImage()
     rect = widget.frameGeometry()
@@ -116,6 +134,10 @@ def _capture_surface(screen, widget, name: str):
     desktop.save(str(EVIDENCE_DIR / f"{name}-desktop.png"))
     desktop.copy(crop).save(str(EVIDENCE_DIR / f"{name}-crop.png"))
     samples = _corner_samples(image, screen, widget)
+    interior = _pixel_at(image, screen, interior_point)
+    evaluation = _evaluate_surface(
+        visible=widget.isVisible(), corners=samples, interior=interior,
+    )
     return {
         "screen_geometry_logical": [
             screen_geometry.x(), screen_geometry.y(),
@@ -128,7 +150,9 @@ def _capture_surface(screen, widget, name: str):
             widget.mapToGlobal(QPoint(0, 0)).y(),
         ],
         "corners": samples,
-        "passed": all(_is_host_rgb(sample) for sample in samples.values()),
+        "interior_label": interior_label,
+        "interior": interior,
+        **evaluation,
     }
 
 
@@ -143,6 +167,7 @@ def main() -> int:
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
     app = QApplication.instance() or QApplication(sys.argv)
     host = QWidget()
+    host.setObjectName("PopupShellProbeHost")
     host.setWindowTitle("SignalPicker popup shell desktop probe")
     host.setWindowFlags(host.windowFlags() | Qt.WindowStaysOnTopHint)
     host.resize(760, 560)
@@ -150,7 +175,10 @@ def main() -> int:
     palette.setColor(QPalette.Window, Qt.GlobalColor.transparent)
     host.setPalette(palette)
     host.setAutoFillBackground(False)
-    host.setStyleSheet(f"background: rgb({HOST_RGB[0]}, {HOST_RGB[1]}, {HOST_RGB[2]});")
+    host.setStyleSheet(
+        "#PopupShellProbeHost "
+        f"{{ background: rgb({HOST_RGB[0]}, {HOST_RGB[1]}, {HOST_RGB[2]}); }}"
+    )
     picker = SignalPickerPopup(["Speed", "Torque", "BatteryVoltage"], parent=host)
     picker.setGeometry(120, 90, 360, 36)
     host.show()
@@ -167,7 +195,13 @@ def main() -> int:
     host_reference = _pixel_at(
         host_reference_image, screen, host.mapToGlobal(QPoint(16, host.height() - 16))
     )
-    signal_evidence = _capture_surface(screen, picker._popup, "signal-picker")
+    signal_evidence = _capture_surface(
+        screen,
+        picker._popup,
+        "signal-picker",
+        picker._search.mapToGlobal(picker._search.rect().center()),
+        "SignalPicker search QLineEdit center",
+    )
     signal_evidence["host_reference"] = host_reference
     signal_evidence["host_reference_matches_expected"] = _is_host_rgb(host_reference)
 
@@ -177,7 +211,13 @@ def main() -> int:
     tooltip_screen = QApplication.screenAt(tooltip.mapToGlobal(QPoint(0, 0)))
     if tooltip_screen is None:
         raise RuntimeError("could not identify the screen containing glass tooltip")
-    tooltip_evidence = _capture_surface(tooltip_screen, tooltip, "glass-tooltip")
+    tooltip_evidence = _capture_surface(
+        tooltip_screen,
+        tooltip,
+        "glass-tooltip",
+        tooltip.mapToGlobal(QPoint(tooltip.width() - 6, tooltip.height() // 2)),
+        "Glass tooltip painted surface at right-center",
+    )
 
     evidence = {
         "captured_at_utc": datetime.now(timezone.utc).isoformat(),
