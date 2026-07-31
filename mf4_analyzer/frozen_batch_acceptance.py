@@ -59,9 +59,14 @@ def _validate_evidence_path(
     result_json: Path,
     output_dir: Path,
     sources: tuple[Path, ...],
+    authoritative_paths: tuple[Path, ...],
 ) -> None:
     if any(_same_path(result_json, source) for source in sources):
         raise _UnsafeEvidencePath("acceptance JSON must not alias an input MF4")
+    if any(_same_path(result_json, path) for path in authoritative_paths):
+        raise _UnsafeEvidencePath(
+            "acceptance JSON must not alias frozen runtime evidence"
+        )
     if result_json == output_dir or result_json.is_relative_to(output_dir):
         raise _UnsafeEvidencePath(
             "acceptance JSON must be outside the batch output directory"
@@ -258,10 +263,24 @@ def run(
     sources = tuple(_canonical_path(path) for path in source_paths)
     output_dir = _canonical_path(output_dir)
     result_json = _canonical_path(result_json)
+    executable = _canonical_path(sys.executable)
+    smoke_json = (
+        _canonical_path(frozen_smoke_json)
+        if frozen_smoke_json not in (None, "")
+        else None
+    )
+    authoritative_paths = (
+        (executable,) if smoke_json is None else (executable, smoke_json)
+    )
     try:
-        _validate_evidence_path(result_json, output_dir, sources)
+        _validate_evidence_path(
+            result_json,
+            output_dir,
+            sources,
+            authoritative_paths,
+        )
         sources = _validated_sources(sources)
-        runtime_facts = _frozen_runtime_facts(frozen_smoke_json)
+        runtime_facts = _frozen_runtime_facts(smoke_json)
         if output_dir.exists() and any(output_dir.iterdir()):
             raise ValueError(f"acceptance output directory must be empty: {output_dir}")
         preset = AnalysisPreset.free_config(

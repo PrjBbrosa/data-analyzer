@@ -24,24 +24,27 @@ runtime smoke to a PyInstaller Windows executable that may use `--windowed`.
 Past failure: The acquisition import probes correctly loaded pyxcp and pya2l,
 then used `print()`. A windowed PyInstaller process may expose `sys.stdout` and
 `sys.stderr` as `None`, so console reporting could turn a successful probe or
-completed JSON smoke into a false nonzero result. A later frozen acceptance
-route could also overwrite an input when its JSON path aliased the source, add
-an eighth file inside an exact-seven output set, and label source execution as
-frozen because its JSON did not bind the running EXE to the frozen smoke.
+completed JSON smoke into a false nonzero result. Frozen acceptance later
+could overwrite a source, pollute an exact output set, and mislabel source
+execution as frozen; a follow-up also found that two hidden modes competed by
+source order, abbreviated hidden flags routed unexpectedly, and the result JSON
+could overwrite the authoritative smoke JSON or running executable.
 
 Rule: Carry probe truth through exit codes, explicit files, or binary pipes.
 Treat text console output as best-effort and safe when either standard stream
-is absent; do not make a windowed runtime gate depend on `print()`. Resolve
-evidence paths before work and reject any target that aliases an input or lives
-inside the artifact directory. Evidence claiming frozen success must require
-`sys.frozen`, record canonical `sys.executable` and its SHA-256, and match both
-against the same-package frozen smoke JSON. W2 must run the production-default
-windowed artifact. A console diagnostic build can help explain a failure but
-cannot substitute for production packaged evidence.
+is absent; do not make a windowed runtime gate depend on `print()`. Put every
+hidden execution mode in one non-abbreviating mutually-exclusive parser group.
+Resolve evidence paths before work and reject a result target that aliases an
+input, the artifact directory, the authoritative smoke JSON, or
+`sys.executable`. Evidence claiming frozen success must require `sys.frozen`,
+record canonical `sys.executable` and its SHA-256, and match both against the
+same-package frozen smoke JSON. W2 must run the production-default windowed
+artifact; a console diagnostic build cannot substitute for it.
 
-Verification: Simulate `sys.stdout = sys.stderr = None`, require hidden import
-children to retain the correct exit code, assert unsafe evidence aliases leave
-source/output bytes unchanged, reject source-mode success and smoke SHA
-mismatches, assert the bench runbook does not build W2 with `-Console`, run the
-runtime-smoke/build-script tests, and retain a real Windows packaged W2 run
-before claiming the frozen gate passes.
+Verification: Cover every pair of hidden modes and an abbreviated hidden flag;
+require exit `2`, no route call, and no output for conflicts. Simulate
+`sys.stdout = sys.stderr = None`, require hidden import children to retain the
+correct exit code, assert unsafe result aliases leave source/smoke/EXE/output
+bytes unchanged and never enter BatchRunner, reject source-mode success and
+smoke SHA mismatches, run runtime-smoke/build-script tests, and retain a real
+Windows packaged W2 run before claiming the frozen gate passes.

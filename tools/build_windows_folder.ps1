@@ -341,12 +341,6 @@ if ($LASTEXITCODE -ne 0) {
     throw "Matplotlib frozen-data pruning failed"
 }
 
-Write-Step "Verifying frozen batch rendering (4 kinds x 3 formats)"
-& $VenvPython $BatchRenderSmokeTool --exe $ExePath --evidence-json $BatchRenderSmokeEvidence
-if ($LASTEXITCODE -ne 0) {
-    throw "Frozen batch render smoke failed; see $BatchRenderSmokeEvidence"
-}
-
 # PyQt5 bundles an old MSVC runtime at Qt5\bin\MSVCP140.dll (~14.26.28720.3), and
 # PyInstaller's PyQt5 hook puts that dir on the process DLL search path for EVERY
 # invocation of the exe -- including the Qt-free A2L parser / pya2l probe children.
@@ -367,6 +361,12 @@ foreach ($dllName in @("MSVCP140.dll", "MSVCP140_1.dll")) {
             Write-Host "Replaced bundled $dllName ($qtVer) with system $sysVer to fix pya2l native crash"
         }
     }
+}
+
+Write-Step "Verifying frozen batch rendering (4 kinds x 3 formats)"
+& $VenvPython $BatchRenderSmokeTool --exe $ExePath --evidence-json $BatchRenderSmokeEvidence
+if ($LASTEXITCODE -ne 0) {
+    throw "Frozen batch render smoke failed; see $BatchRenderSmokeEvidence"
 }
 
 # Warm the freshly-built exe once: its first launch pays a Windows Defender scan

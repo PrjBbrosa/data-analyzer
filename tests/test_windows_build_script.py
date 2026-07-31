@@ -1,5 +1,8 @@
 from pathlib import Path
+import re
 import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -407,3 +410,36 @@ def test_windows_builds_reject_failed_pyinstaller_before_reusing_old_exe_or_evid
         )
         assert not stale_prune.exists()
         assert not stale_smoke.exists()
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ("build_windows_folder.ps1", "build_windows_folder_lite.ps1"),
+)
+def test_frozen_render_smoke_runs_after_every_packaged_tree_mutation(filename):
+    mutation_command = re.compile(
+        r"^\s*(Copy-Item|Move-Item|Rename-Item|Set-Content|Add-Content|"
+        r"Clear-Content|New-Item|Remove-Item)\b",
+        re.IGNORECASE,
+    )
+    text = (ROOT / "tools" / filename).read_text(encoding="utf-8")
+    smoke = text.index("& $VenvPython $BatchRenderSmokeTool")
+    assert text.index("--prune-internal") < smoke
+    if filename == "build_windows_folder.ps1":
+        assert (
+            text.index("Copy-Item -LiteralPath $sysDll -Destination $qtDll -Force")
+            < smoke
+        )
+    else:
+        assert (
+            text.index("Remove-Item -LiteralPath $SciPyOpenBlas[0].FullName -Force")
+            < smoke
+        )
+
+    for line in text[smoke:].splitlines()[1:]:
+        match = mutation_command.match(line)
+        if match and "$PackagedSmokeJson" not in line:
+            pytest.fail(
+                f"{filename} mutates the finalized package after render smoke: "
+                f"{line.strip()}"
+            )

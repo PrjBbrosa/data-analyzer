@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from itertools import combinations
 import json
 from pathlib import Path
 import runpy
@@ -15,6 +16,48 @@ from tests._helpers.mf4_factory import write_single_channel_mf4
 
 ROOT = Path(__file__).resolve().parents[1]
 CHANNEL = "EpsDrvrSteerTq"
+HIDDEN_MODES = (
+    "--acquisition-runtime-smoke",
+    "--pyxcp-import-probe-child",
+    "--pya2l-import-probe-child",
+    "--a2l-probe-child",
+    "--importer-runtime-smoke",
+    "--batch-render-runtime-smoke",
+    "--frozen-batch-acceptance",
+)
+
+
+def _install_hidden_route_traps(monkeypatch, calls: list[str]) -> None:
+    def trap(name):
+        def run(*_args, **_kwargs):
+            calls.append(name)
+            return 91
+
+        return run
+
+    acquisition = ModuleType("mf4_analyzer.acquisition_capture.runtime_smoke")
+    acquisition.run = trap("acquisition-runtime-smoke")
+    acquisition.run_import_probe_child = trap("pyxcp-import-probe-child")
+    acquisition.run_pya2l_import_probe_child = trap("pya2l-import-probe-child")
+    a2l = ModuleType("can_logger.p0._a2l_subprocess")
+    a2l.main = trap("a2l-probe-child")
+    importer = ModuleType("mf4_analyzer.io.importer_runtime_smoke")
+    importer.run = trap("importer-runtime-smoke")
+    renderer = ModuleType("mf4_analyzer.batch_render_smoke")
+    renderer.run = trap("batch-render-runtime-smoke")
+    acceptance = ModuleType("mf4_analyzer.frozen_batch_acceptance")
+    acceptance.run = trap("frozen-batch-acceptance")
+    app = ModuleType("mf4_analyzer.app")
+    app.main = trap("gui")
+    for name, module in (
+        ("mf4_analyzer.acquisition_capture.runtime_smoke", acquisition),
+        ("can_logger.p0._a2l_subprocess", a2l),
+        ("mf4_analyzer.io.importer_runtime_smoke", importer),
+        ("mf4_analyzer.batch_render_smoke", renderer),
+        ("mf4_analyzer.frozen_batch_acceptance", acceptance),
+        ("mf4_analyzer.app", app),
+    ):
+        monkeypatch.setitem(sys.modules, name, module)
 
 
 def _write_acceptance_sources(directory: Path) -> list[Path]:
@@ -179,6 +222,74 @@ def test_frozen_batch_acceptance_rejects_result_json_inside_output_without_mutat
 
     assert exit_code != 0
     assert {path.name: path.read_bytes() for path in output_dir.iterdir()} == before
+
+
+def test_frozen_batch_acceptance_rejects_result_json_alias_of_smoke_without_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    import mf4_analyzer.frozen_batch_acceptance as acceptance
+
+    _executable, smoke_json, _sha256 = _simulate_frozen_runtime(tmp_path, monkeypatch)
+    sources = _write_acceptance_sources(tmp_path)
+    output_dir = tmp_path / "outputs"
+    before = smoke_json.read_bytes()
+    before_sha256 = hashlib.sha256(before).hexdigest()
+    batch_entries: list[str] = []
+
+    class BatchRunnerMustNotStart:
+        def __init__(self, *_args, **_kwargs):
+            batch_entries.append("constructed")
+            raise AssertionError("unsafe evidence path entered BatchRunner")
+
+    monkeypatch.setattr(acceptance, "BatchRunner", BatchRunnerMustNotStart)
+
+    exit_code = acceptance.run(
+        sources,
+        output_dir,
+        smoke_json,
+        frozen_smoke_json=smoke_json,
+    )
+
+    assert exit_code == 2
+    assert batch_entries == []
+    assert smoke_json.read_bytes() == before
+    assert hashlib.sha256(smoke_json.read_bytes()).hexdigest() == before_sha256
+    assert not output_dir.exists()
+
+
+def test_frozen_batch_acceptance_rejects_result_json_alias_of_executable_without_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    import mf4_analyzer.frozen_batch_acceptance as acceptance
+
+    executable, smoke_json, _sha256 = _simulate_frozen_runtime(tmp_path, monkeypatch)
+    sources = _write_acceptance_sources(tmp_path)
+    output_dir = tmp_path / "outputs"
+    before = executable.read_bytes()
+    before_sha256 = hashlib.sha256(before).hexdigest()
+    batch_entries: list[str] = []
+
+    class BatchRunnerMustNotStart:
+        def __init__(self, *_args, **_kwargs):
+            batch_entries.append("constructed")
+            raise AssertionError("unsafe evidence path entered BatchRunner")
+
+    monkeypatch.setattr(acceptance, "BatchRunner", BatchRunnerMustNotStart)
+
+    exit_code = acceptance.run(
+        sources,
+        output_dir,
+        executable,
+        frozen_smoke_json=smoke_json,
+    )
+
+    assert exit_code == 2
+    assert batch_entries == []
+    assert executable.read_bytes() == before
+    assert hashlib.sha256(executable.read_bytes()).hexdigest() == before_sha256
+    assert not output_dir.exists()
 
 
 def test_frozen_batch_acceptance_rejects_manifest_source_not_in_requested_set(
@@ -395,3 +506,75 @@ def test_application_entry_rejects_non_contract_batch_channel_before_acceptance(
         runpy.run_path(str(ROOT / "MF4 Data Analyzer V1.py"), run_name="__main__")
 
     assert calls == []
+
+
+@pytest.mark.parametrize(("first_mode", "second_mode"), combinations(HIDDEN_MODES, 2))
+def test_application_entry_rejects_every_pair_of_hidden_modes_before_routing(
+    tmp_path,
+    monkeypatch,
+    first_mode,
+    second_mode,
+):
+    calls: list[str] = []
+    _install_hidden_route_traps(monkeypatch, calls)
+    output_dir = tmp_path / "outputs"
+    result_json = tmp_path / "result.json"
+    sources = [tmp_path / f"source-{index}.mf4" for index in range(3)]
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "TraceLab.exe",
+            first_mode,
+            second_mode,
+            "--a2l-path",
+            str(tmp_path / "contract.a2l"),
+            "--import-path",
+            str(tmp_path / "import.mat"),
+            *sum((["--batch-source", str(path)] for path in sources), []),
+            "--batch-channel",
+            CHANNEL,
+            "--output-dir",
+            str(output_dir),
+            "--json",
+            str(result_json),
+            "--frozen-smoke-json",
+            str(tmp_path / "smoke.json"),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as stopped:
+        runpy.run_path(str(ROOT / "MF4 Data Analyzer V1.py"), run_name="__main__")
+
+    assert stopped.value.code == 2
+    assert calls == []
+    assert not output_dir.exists()
+    assert not result_json.exists()
+
+
+def test_application_entry_does_not_abbreviate_hidden_mode_flags(
+    tmp_path,
+    monkeypatch,
+):
+    calls: list[str] = []
+    _install_hidden_route_traps(monkeypatch, calls)
+    output_dir = tmp_path / "outputs"
+    result_json = tmp_path / "result.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "TraceLab.exe",
+            "--batch-render-runtime-sm",
+            "--output-dir",
+            str(output_dir),
+            "--json",
+            str(result_json),
+        ],
+    )
+
+    runpy.run_path(str(ROOT / "MF4 Data Analyzer V1.py"), run_name="__main__")
+
+    assert calls == ["gui"]
+    assert not output_dir.exists()
+    assert not result_json.exists()
