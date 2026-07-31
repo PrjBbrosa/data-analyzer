@@ -17,6 +17,7 @@ if __name__ == "__main__":
     parser.add_argument("--frozen-batch-acceptance", action="store_true")
     parser.add_argument("--batch-source", type=Path, action="append", default=[])
     parser.add_argument("--batch-channel", default="EpsDrvrSteerTq")
+    parser.add_argument("--frozen-smoke-json", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--json", type=Path)
     args, _unknown = parser.parse_known_args()
@@ -64,10 +65,18 @@ if __name__ == "__main__":
 
         raise SystemExit(run(args.output_dir, args.json))
     if args.frozen_batch_acceptance:
-        if args.json is None or args.output_dir is None or not args.batch_source:
+        if args.batch_channel != "EpsDrvrSteerTq":
+            raise SystemExit(2)
+        if (
+            args.json is None
+            or args.output_dir is None
+            or not args.batch_source
+            or args.frozen_smoke_json is None
+        ):
             raise SystemExit(
                 "--frozen-batch-acceptance requires three --batch-source <path>, "
-                "--output-dir <path>, and --json <path>"
+                "--output-dir <path>, --json <path>, and "
+                "--frozen-smoke-json <path>"
             )
         from mf4_analyzer.frozen_batch_acceptance import run
 
@@ -76,7 +85,7 @@ if __name__ == "__main__":
                 args.batch_source,
                 args.output_dir,
                 args.json,
-                channel=args.batch_channel,
+                frozen_smoke_json=args.frozen_smoke_json,
             )
         )
     from mf4_analyzer.app import main

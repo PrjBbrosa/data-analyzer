@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 import uuid
 
 from .batch import AnalysisPreset, BatchOutput, BatchRunner
@@ -13,6 +14,10 @@ from .batch_manifest import load_batch_manifest
 
 
 DEFAULT_CHANNEL = "EpsDrvrSteerTq"
+
+
+class _UnsafeEvidencePath(ValueError):
+    """The evidence target could overwrite an input or batch output."""
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -29,8 +34,41 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _validated_sources(source_paths) -> tuple[Path, ...]:
-    sources = tuple(Path(path).expanduser().resolve(strict=False) for path in source_paths)
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _canonical_path(path) -> Path:
+    return Path(path).expanduser().resolve(strict=False)
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    if os.path.normcase(str(left)) == os.path.normcase(str(right)):
+        return True
+    try:
+        return left.exists() and right.exists() and os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def _validate_evidence_path(
+    result_json: Path,
+    output_dir: Path,
+    sources: tuple[Path, ...],
+) -> None:
+    if any(_same_path(result_json, source) for source in sources):
+        raise _UnsafeEvidencePath("acceptance JSON must not alias an input MF4")
+    if result_json == output_dir or result_json.is_relative_to(output_dir):
+        raise _UnsafeEvidencePath(
+            "acceptance JSON must be outside the batch output directory"
+        )
+
+
+def _validated_sources(sources: tuple[Path, ...]) -> tuple[Path, ...]:
     distinct = {os.path.normcase(str(path)) for path in sources}
     if len(sources) != 3 or len(distinct) != 3:
         raise ValueError("acceptance requires exactly three distinct MF4 sources")
@@ -40,6 +78,40 @@ def _validated_sources(source_paths) -> tuple[Path, ...]:
         if not source.is_file():
             raise FileNotFoundError(f"acceptance source not found: {source}")
     return sources
+
+
+def _frozen_runtime_facts(frozen_smoke_json) -> dict[str, str]:
+    if not bool(getattr(sys, "frozen", False)):
+        raise RuntimeError("frozen batch acceptance requires a frozen executable")
+    if frozen_smoke_json in (None, ""):
+        raise ValueError("frozen batch acceptance requires the 12-output smoke JSON")
+
+    executable = _canonical_path(sys.executable)
+    smoke_path = _canonical_path(frozen_smoke_json)
+    if not executable.is_file():
+        raise FileNotFoundError(f"frozen executable not found: {executable}")
+    smoke = json.loads(smoke_path.read_text(encoding="utf-8"))
+    if (
+        smoke.get("ok") is not True
+        or smoke.get("runtime") != "frozen-onedir-executable"
+        or smoke.get("artifact_count") != 12
+    ):
+        raise RuntimeError("12-output frozen smoke evidence is not a passing gate")
+    smoke_executable = _canonical_path(smoke.get("executable", ""))
+    if not _same_path(executable, smoke_executable):
+        raise RuntimeError("frozen smoke executable does not match sys.executable")
+
+    executable_sha256 = _sha256_file(executable)
+    smoke_sha256 = str(smoke.get("executable_sha256") or "")
+    if smoke_sha256 != executable_sha256:
+        raise RuntimeError("frozen smoke executable SHA-256 does not match runtime")
+    return {
+        "runtime": "frozen-onedir-executable",
+        "sys_executable": str(executable),
+        "executable_sha256": executable_sha256,
+        "frozen_smoke_json": str(smoke_path),
+        "frozen_smoke_executable_sha256": smoke_sha256,
+    }
 
 
 def _residual_paths(output_dir: Path) -> list[str]:
@@ -55,7 +127,13 @@ def _residual_paths(output_dir: Path) -> list[str]:
     )
 
 
-def _verify_result(result, output_dir: Path, sources: tuple[Path, ...], channel: str):
+def _verify_result(
+    result,
+    output_dir: Path,
+    sources: tuple[Path, ...],
+    channel: str,
+    runtime_facts: dict[str, str],
+):
     if result.status != "done" or result.blocked:
         raise RuntimeError(
             f"BatchRunner did not complete: status={result.status}; blocked={result.blocked}"
@@ -75,12 +153,23 @@ def _verify_result(result, output_dir: Path, sources: tuple[Path, ...], channel:
     if manifest.get("run_status") != "done" or len(entries) != 3:
         raise RuntimeError("terminal manifest does not contain three done entries")
 
-    source_identities = {
-        str((entry.get("source") or {}).get("identity") or "") for entry in entries
-    }
-    source_identities.discard("")
-    if len(source_identities) != 3:
-        raise RuntimeError("manifest does not contain three distinct source identities")
+    expected_source_keys = {os.path.normcase(str(path)) for path in sources}
+    manifest_source_keys: set[str] = set()
+    source_identities: set[str] = set()
+    for entry in entries:
+        source = entry.get("source") or {}
+        source_path = str(source.get("path") or "")
+        source_identity = str(source.get("identity") or "")
+        if not source_path or not source_identity:
+            raise RuntimeError("manifest source path/identity is missing")
+        path_key = os.path.normcase(str(_canonical_path(source_path)))
+        identity_key = os.path.normcase(str(_canonical_path(source_identity)))
+        if path_key != identity_key:
+            raise RuntimeError("manifest source path/identity do not correspond")
+        manifest_source_keys.add(path_key)
+        source_identities.add(source_identity)
+    if manifest_source_keys != expected_source_keys:
+        raise RuntimeError("manifest sources do not match the requested source set")
 
     artifacts: list[dict[str, object]] = []
     artifact_paths: set[Path] = set()
@@ -142,6 +231,7 @@ def _verify_result(result, output_dir: Path, sources: tuple[Path, ...], channel:
     return {
         "ok": True,
         "execution": "production-batch-runner",
+        **runtime_facts,
         "channel": channel,
         "source_count": len(sources),
         "source_identity_count": len(source_identities),
@@ -160,14 +250,18 @@ def run(
     output_dir,
     result_json,
     *,
-    channel: str = DEFAULT_CHANNEL,
+    frozen_smoke_json=None,
 ) -> int:
     """Run the production batch path and persist all acceptance truth to JSON."""
 
-    result_json = Path(result_json)
+    channel = DEFAULT_CHANNEL
+    sources = tuple(_canonical_path(path) for path in source_paths)
+    output_dir = _canonical_path(output_dir)
+    result_json = _canonical_path(result_json)
     try:
-        sources = _validated_sources(source_paths)
-        output_dir = Path(output_dir).expanduser().resolve(strict=False)
+        _validate_evidence_path(result_json, output_dir, sources)
+        sources = _validated_sources(sources)
+        runtime_facts = _frozen_runtime_facts(frozen_smoke_json)
         if output_dir.exists() and any(output_dir.iterdir()):
             raise ValueError(f"acceptance output directory must be empty: {output_dir}")
         preset = AnalysisPreset.free_config(
@@ -191,12 +285,25 @@ def run(
         )
         preset = replace(preset, source_paths=tuple(str(path) for path in sources))
         result = BatchRunner({}).run(preset, output_dir)
-        evidence = _verify_result(result, output_dir, sources, str(channel))
+        evidence = _verify_result(
+            result,
+            output_dir,
+            sources,
+            channel,
+            runtime_facts,
+        )
+    except _UnsafeEvidencePath:
+        return 2
     except Exception as exc:
         evidence = {
             "ok": False,
             "execution": "production-batch-runner",
-            "channel": str(channel),
+            "runtime": (
+                "frozen-onedir-executable"
+                if bool(getattr(sys, "frozen", False))
+                else "source-execution"
+            ),
+            "channel": channel,
             "error": f"{type(exc).__name__}: {exc}",
         }
         _write_json(result_json, evidence)
