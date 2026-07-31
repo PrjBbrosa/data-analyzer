@@ -286,10 +286,6 @@ $PyInstallerArgs += @(
     "--runtime-hook", $RuntimeHookPyxcp,
     "--exclude-module", "pyxcp",
     "--exclude-module", "pya2l",
-    # --collect-submodules pyqtgraph pulls in optional Matplotlib backends.
-    # TraceLab no longer uses matplotlib, but SciPy/HDF5 are product runtime
-    # dependencies for .mat files and are appended from the shared contract.
-    "--exclude-module", "matplotlib",
     "--collect-submodules", "mf4_analyzer.acquisition_ui.widgets",
     "--collect-submodules", "pyqtgraph",
     "--collect-all", "qtawesome"

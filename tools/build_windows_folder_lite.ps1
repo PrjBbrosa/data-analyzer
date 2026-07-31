@@ -200,10 +200,6 @@ $PyInstallerArgs += @(
     "--add-data", $AddDataIcons,
     "--add-data", $AddDataBranding,
     "--add-data", $AddDataHelp,
-    # --collect-submodules pyqtgraph pulls in optional Matplotlib backends.
-    # TraceLab no longer uses matplotlib; .mat dependencies are appended from
-    # the shared frozen-import contract after this static argument list.
-    "--exclude-module", "matplotlib",
     # Belt-and-suspenders: keep the acquisition packages and their native-only
     # deps out even if some indirect reference appears. The Analyzer never needs
     # them at runtime (cockpit is lazy-imported and guarded).

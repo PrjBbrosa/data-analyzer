@@ -146,14 +146,12 @@ def test_windows_build_scripts_share_frozen_import_dependency_contract():
         assert "$RuntimeDependencyArgs" in text
         assert '"--exclude-module", "scipy"' not in text
         assert '"--exclude-module", "h5py"' not in text
+        assert '"--exclude-module", "matplotlib"' not in text
 
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert "scipy" in requirements
     assert "h5py" in requirements
-    full_build = (ROOT / "tools" / "build_windows_folder.ps1").read_text(
-        encoding="utf-8"
-    )
-    assert '"--exclude-module", "matplotlib"' in full_build
+    assert "matplotlib" in requirements
 
 
 def test_windows_build_scripts_request_their_collection_flavors():

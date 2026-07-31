@@ -17,7 +17,7 @@ from typing import Iterable
 
 @dataclass(frozen=True)
 class FrozenImportDependency:
-    """A package required when importing one or more supported file types."""
+    """A package required by a frozen product runtime path."""
 
     package: str
     requirement_name: str
@@ -25,8 +25,11 @@ class FrozenImportDependency:
     purpose: str
 
 
+WINDOWS_BUILD_FLAVORS = frozenset({"full", "lite"})
+
+
 # Keep this list small and product-facing: a package belongs here only when a
-# documented file-import path needs it at runtime.  The Windows builders turn
+# documented import or export path needs it at runtime.  The Windows builders turn
 # it into ``--collect-all`` arguments, including compiled extensions and data
 # files which a lazy import might otherwise evade during PyInstaller analysis.
 FROZEN_IMPORT_DEPENDENCIES = (
@@ -76,6 +79,12 @@ FROZEN_IMPORT_DEPENDENCIES = (
         purpose="audio/video reader",
     ),
     FrozenImportDependency(
+        package="matplotlib",
+        requirement_name="matplotlib",
+        extensions=(),
+        purpose="batch image/PDF export",
+    ),
+    FrozenImportDependency(
         package="scipy",
         requirement_name="scipy",
         extensions=(".mat",),
@@ -103,6 +112,34 @@ LITE_SCIPY_EXCLUDED_MODULES = (
 )
 
 
+# These are deliberate build-flavor boundaries, not missing runtime packages.
+# Full builds vendor the native acquisition roots outside PyInstaller analysis;
+# lite builds omit the acquisition feature entirely.  Lite additionally prunes
+# only the SciPy submodules listed above after keeping ``scipy.io`` available.
+INTENTIONAL_EXCLUDED_ROOTS_BY_FLAVOR = {
+    "full": frozenset({"pyxcp", "pya2l"}),
+    "lite": frozenset(
+        {
+            "mf4_analyzer.acquisition",
+            "mf4_analyzer.acquisition_ui",
+            "mf4_analyzer.acquisition_capture",
+            "pyxcp",
+            "pya2l",
+        }
+    ),
+}
+INTENTIONAL_EXCLUDED_SUBMODULES_BY_FLAVOR = {
+    "full": frozenset(),
+    "lite": frozenset(LITE_SCIPY_EXCLUDED_MODULES),
+}
+REQUIRED_EXTERNAL_RUNTIME_ROOTS_BY_FLAVOR = {
+    flavor: frozenset(
+        dependency.package for dependency in FROZEN_IMPORT_DEPENDENCIES
+    )
+    for flavor in WINDOWS_BUILD_FLAVORS
+}
+
+
 def dependencies_for_extension(extension: str) -> tuple[FrozenImportDependency, ...]:
     """Return the frozen runtime dependencies for a supported suffix."""
     suffix = str(extension or "").lower()
@@ -117,7 +154,7 @@ def dependencies_for_extension(extension: str) -> tuple[FrozenImportDependency, 
 
 def pyinstaller_collection_args(flavor: str = "full") -> tuple[str, ...]:
     """Return PyInstaller arguments for a supported Windows build flavor."""
-    if flavor not in {"full", "lite"}:
+    if flavor not in WINDOWS_BUILD_FLAVORS:
         raise ValueError(f"unknown frozen-build flavor: {flavor}")
 
     args: list[str] = []
@@ -166,17 +203,22 @@ def validate_windows_packaging_contract(
         label = Path(script).name
         if "windows_runtime_dependencies.py" not in text:
             failures.append(f"{label} 未调用统一的运行依赖清单")
-        for dependency in FROZEN_IMPORT_DEPENDENCIES:
-            excluded = re.search(
-                rf'["\']--exclude-module["\']\s*,\s*["\']'
-                rf'{re.escape(dependency.package)}["\']',
-                text,
-                flags=re.IGNORECASE,
+        flavor = _build_script_flavor(text)
+        if flavor is None:
+            failures.append(f"{label} does not declare a frozen-build flavor")
+            continue
+        failures.extend(
+            _excluded_runtime_dependency_failures(
+                label, flavor, _script_excluded_modules(text)
             )
-            if excluded:
-                failures.append(
-                    f"{label} 排除了必需运行依赖 {dependency.package}"
-                )
+        )
+        failures.extend(
+            _excluded_runtime_dependency_failures(
+                "shared frozen runtime arguments",
+                flavor,
+                _pyinstaller_excluded_modules(pyinstaller_collection_args(flavor)),
+            )
+        )
 
     declared_modules = {
         dependency.package.split(".", 1)[0]
@@ -194,6 +236,60 @@ def validate_windows_packaging_contract(
     if not FROZEN_IMPORT_DEPENDENCIES:
         failures.append("冻结包运行依赖清单不能为空")
     return tuple(failures)
+
+
+def _build_script_flavor(text: str) -> str | None:
+    match = re.search(r"--pyinstaller-args-json\s+--flavor\s+(full|lite)\b", text)
+    return match.group(1) if match else None
+
+
+def _script_excluded_modules(text: str) -> tuple[str, ...]:
+    return tuple(
+        re.findall(
+            r'["\']--exclude-module["\']\s*,\s*["\']([^"\']+)["\']',
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _pyinstaller_excluded_modules(args: Iterable[str]) -> tuple[str, ...]:
+    arguments = tuple(args)
+    return tuple(
+        value
+        for argument, value in zip(arguments, arguments[1:])
+        if argument == "--exclude-module"
+    )
+
+
+def _excluded_runtime_dependency_failures(
+    label: str, flavor: str, exclusions: Iterable[str]
+) -> list[str]:
+    """Check only declared product dependencies for this build flavor.
+
+    The PowerShell scripts intentionally exclude vendored acquisition roots and
+    lite-only SciPy submodules.  Do not turn this into a source-wide import
+    scan: development-only ``tools/`` imports and unrelated PyInstaller
+    pruning are outside the frozen product runtime contract.
+    """
+    required_roots = REQUIRED_EXTERNAL_RUNTIME_ROOTS_BY_FLAVOR[flavor]
+    intentional_roots = INTENTIONAL_EXCLUDED_ROOTS_BY_FLAVOR[flavor]
+    intentional_submodules = INTENTIONAL_EXCLUDED_SUBMODULES_BY_FLAVOR[flavor]
+    failures: list[str] = []
+    for module in exclusions:
+        normalized = module.lower()
+        root = normalized.split(".", 1)[0]
+        if normalized in intentional_roots or normalized in intentional_submodules:
+            continue
+        if normalized in required_roots:
+            failures.append(
+                f"{label} excludes required runtime dependency {normalized} for {flavor}"
+            )
+        elif root in required_roots and "." in normalized:
+            failures.append(
+                f"{label} excludes required runtime dependency submodule {normalized} for {flavor}"
+            )
+    return failures
 
 
 def _requirements_packages(path: Path) -> set[str]:
