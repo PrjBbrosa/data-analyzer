@@ -316,14 +316,24 @@ foreach ($MatplotlibModule in $MatplotlibExcludedModules) {
 }
 $PyInstallerArgs += $EntryScript
 
+$MatplotlibPruneEvidence = Join-Path $BuildEvidenceDir "$AppName-matplotlib-prune.json"
+$BatchRenderSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-batch-render-smoke.json"
+foreach ($StaleEvidencePath in @($MatplotlibPruneEvidence, $BatchRenderSmokeEvidence)) {
+    if (Test-Path -LiteralPath $StaleEvidencePath) {
+        Remove-Item -LiteralPath $StaleEvidencePath -Force
+    }
+}
 & $VenvPython @PyInstallerArgs
+$PyInstallerExitCode = $LASTEXITCODE
+if ($PyInstallerExitCode -ne 0) {
+    throw "PyInstaller failed with exit code $PyInstallerExitCode"
+}
 
 if (-not (Test-Path $ExePath)) {
     throw "Build finished but exe was not found: $ExePath"
 }
 
 Write-Step "Pruning collected Matplotlib data"
-$MatplotlibPruneEvidence = Join-Path $BuildEvidenceDir "$AppName-matplotlib-prune.json"
 & $VenvPython $MatplotlibContractTool `
     --prune-internal (Join-Path $OutputDir "_internal") `
     --evidence-json $MatplotlibPruneEvidence
@@ -332,7 +342,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Step "Verifying frozen batch rendering (4 kinds x 3 formats)"
-$BatchRenderSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-batch-render-smoke.json"
 & $VenvPython $BatchRenderSmokeTool --exe $ExePath --evidence-json $BatchRenderSmokeEvidence
 if ($LASTEXITCODE -ne 0) {
     throw "Frozen batch render smoke failed; see $BatchRenderSmokeEvidence"

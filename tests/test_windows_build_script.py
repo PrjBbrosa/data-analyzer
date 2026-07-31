@@ -1,7 +1,12 @@
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _powershell_literal(path: Path) -> str:
+    return "'" + str(path).replace("'", "''") + "'"
 
 
 def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():
@@ -343,3 +348,62 @@ def test_windows_run_built_exe_wrapper_pauses_after_exit():
     assert "dist\\%appname%\\%appname%.exe" in text
     assert "exit code" in text
     assert "pause" in text
+
+
+def test_windows_builds_reject_failed_pyinstaller_before_reusing_old_exe_or_evidence(
+    tmp_path,
+):
+    """Exit 23 must stop both flavors even when -KeepPrevious left a stale EXE."""
+    fake_python = tmp_path / "failed-python.cmd"
+    fake_python.write_text("@echo off\r\nexit /b 23\r\n", encoding="utf-8")
+
+    for filename in ("build_windows_folder.ps1", "build_windows_folder_lite.ps1"):
+        text = (ROOT / "tools" / filename).read_text(encoding="utf-8")
+        invocation = text.index("& $VenvPython @PyInstallerArgs")
+        exit_capture = text.index("$PyInstallerExitCode = $LASTEXITCODE")
+        exe_check = text.index("if (-not (Test-Path $ExePath))", invocation)
+        prune_step = text.index('Write-Step "Pruning collected Matplotlib data"')
+        prune_evidence = text.index("$MatplotlibPruneEvidence =", 0, invocation)
+        smoke_evidence = text.index("$BatchRenderSmokeEvidence =", 0, invocation)
+        assert invocation < exit_capture < exe_check < prune_step
+        assert prune_evidence < invocation
+        assert smoke_evidence < invocation
+
+        flavor_directory = tmp_path / Path(filename).stem
+        evidence_directory = flavor_directory / "evidence"
+        old_exe = flavor_directory / "old" / "TraceLabProbe.exe"
+        old_exe.parent.mkdir(parents=True)
+        evidence_directory.mkdir(parents=True)
+        old_exe.write_bytes(b"stale executable")
+        stale_prune = evidence_directory / "TraceLabProbe-matplotlib-prune.json"
+        stale_smoke = evidence_directory / "TraceLabProbe-batch-render-smoke.json"
+        stale_prune.write_text('{"stale": true}', encoding="utf-8")
+        stale_smoke.write_text('{"stale": true}', encoding="utf-8")
+
+        gate = text[prune_evidence:prune_step]
+        probe = "\n".join(
+            (
+                '$ErrorActionPreference = "Stop"',
+                'Set-StrictMode -Version Latest',
+                '$AppName = "TraceLabProbe"',
+                f"$BuildEvidenceDir = {_powershell_literal(evidence_directory)}",
+                f"$VenvPython = {_powershell_literal(fake_python)}",
+                "$PyInstallerArgs = @()",
+                f"$ExePath = {_powershell_literal(old_exe)}",
+                gate,
+            )
+        )
+        completed = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", probe],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert completed.returncode != 0
+        assert "PyInstaller failed with exit code 23" in (
+            completed.stdout + completed.stderr
+        )
+        assert not stale_prune.exists()
+        assert not stale_smoke.exists()
