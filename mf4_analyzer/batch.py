@@ -1491,13 +1491,13 @@ class BatchRunner:
                 status='skipped',
                 data_path=(
                     str(reservation.paths[data_extension])
-                    if preset.outputs.export_data
+                    if 'data' in effective_outputs
                     and reservation.paths[data_extension].exists()
                     else None
                 ),
                 image_path=(
                     str(reservation.paths[image_extension])
-                    if preset.outputs.export_image
+                    if 'image' in effective_outputs
                     and reservation.paths[image_extension].exists()
                     else None
                 ),

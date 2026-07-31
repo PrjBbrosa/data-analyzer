@@ -1937,6 +1937,46 @@ def test_runner_degrades_data_and_pdf_before_reservation_when_backend_import_fai
     assert set(entry["artifacts"]) == {"data"}
 
 
+def test_runner_degraded_skip_conflict_reads_only_effective_output_paths(
+    tmp_path, monkeypatch,
+):
+    fd = _make_fd(tmp_path, "degraded_skip", idx=0)
+    data_only = AnalysisPreset.from_current_single(
+        name="degraded skip",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(
+            export_data=True,
+            export_image=False,
+            write_manifest=False,
+        ),
+    )
+    first = BatchRunner({0: fd}).run(data_only, tmp_path / "out")
+    requested = replace(
+        data_only,
+        outputs=replace(
+            data_only.outputs,
+            export_image=True,
+            image_format="pdf",
+            conflict_policy="skip",
+        ),
+    )
+    monkeypatch.setattr(builtins, "__import__", _raise_batch_render_import)
+
+    result = BatchRunner({0: fd}).run(requested, tmp_path / "out")
+
+    assert result.status == "partial"
+    assert result.degraded_count == 1
+    assert result.items[0].status == "skipped"
+    assert result.items[0].data_path == first.items[0].data_path
+    assert result.items[0].image_path is None
+    assert result.items[0].effective_outputs == {"data": "csv"}
+    assert "existing=csv; missing=none" in result.items[0].warnings
+    assert not any("'pdf'" in reason for reason in result.blocked)
+    assert not list((tmp_path / "out").glob("*.pdf"))
+
+
 def test_runner_image_only_fails_cleanly_when_backend_import_is_unavailable(
     tmp_path, monkeypatch,
 ):
