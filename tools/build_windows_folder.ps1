@@ -12,6 +12,7 @@ if (-not $AppName) {
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$env:MPLBACKEND = "Agg"
 
 function Write-Step {
     param([string]$Message)
@@ -46,6 +47,8 @@ $IconsDir = Join-Path $RepoRoot "assets\icons"
 $AppIcon = Join-Path $IconsDir "tracelab.ico"
 $RuntimeHookPyxcp = Join-Path $PSScriptRoot "pyinstaller_rthook_pyxcp_vendor.py"
 $RuntimeDependencyTool = Join-Path $PSScriptRoot "windows_runtime_dependencies.py"
+$MatplotlibContractTool = Join-Path $PSScriptRoot "matplotlib_frozen_contract.py"
+$BatchRenderSmokeTool = Join-Path $PSScriptRoot "verify_frozen_batch_render.py"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $RepoRoot "dist"
@@ -56,9 +59,10 @@ $VendorPya2lDir = Join-Path $WorkDir "_vendor_pya2l"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
 $EvidenceDir = Join-Path $RepoRoot "docs\analyzer\acquisition\evidence\vector-xcp"
+$BuildEvidenceDir = Join-Path $RepoRoot ".state\build-evidence"
 # Default output: dist\TraceLab7.9\TraceLab7.9.exe (override with -Version or -AppName)
 
-foreach ($RequiredPath in @($EntryScript, $Requirements, $AcquisitionRequirements, $RuntimeVerifier, $StyleQss, $RuntimeHookPyxcp, $RuntimeDependencyTool)) {
+foreach ($RequiredPath in @($EntryScript, $Requirements, $AcquisitionRequirements, $RuntimeVerifier, $StyleQss, $RuntimeHookPyxcp, $RuntimeDependencyTool, $MatplotlibContractTool, $BatchRenderSmokeTool)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -76,7 +80,7 @@ if (-not $SkipInstall) {
     & $VenvPython -m pip install --upgrade pyinstaller qtawesome
 }
 
-New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
+New-Item -ItemType Directory -Force -Path $EvidenceDir, $BuildEvidenceDir | Out-Null
 & $VenvPython $RuntimeVerifier --json (Join-Path $EvidenceDir "build-api-contract.json")
 if ($LASTEXITCODE -ne 0) { throw "Pinned Vector/XCP runtime contract failed before packaging" }
 
@@ -103,6 +107,16 @@ try {
     $RuntimeDependencyArgs = @($RuntimeDependencyArgsJson | ConvertFrom-Json)
 } catch {
     throw "Frozen import dependency arguments were not valid JSON: $_"
+}
+$MatplotlibContractJson = & $VenvPython $MatplotlibContractTool --pyinstaller-excludes-json
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not resolve Matplotlib frozen packaging contract"
+}
+try {
+    $MatplotlibContract = $MatplotlibContractJson | ConvertFrom-Json
+    $MatplotlibExcludedModules = @($MatplotlibContract.excluded_modules)
+} catch {
+    throw "Matplotlib frozen packaging contract was not valid JSON: $_"
 }
 
 # pyxcp and pya2l trigger 0xC0000005-class failures when PyInstaller's
@@ -286,10 +300,6 @@ $PyInstallerArgs += @(
     "--runtime-hook", $RuntimeHookPyxcp,
     "--exclude-module", "pyxcp",
     "--exclude-module", "pya2l",
-    # --collect-submodules pyqtgraph pulls in optional Matplotlib backends.
-    # TraceLab no longer uses matplotlib, but SciPy/HDF5 are product runtime
-    # dependencies for .mat files and are appended from the shared contract.
-    "--exclude-module", "matplotlib",
     "--collect-submodules", "mf4_analyzer.acquisition_ui.widgets",
     "--collect-submodules", "pyqtgraph",
     "--collect-all", "qtawesome"
@@ -301,12 +311,34 @@ foreach ($HiddenImport in $HiddenImports) {
 foreach ($QtModule in $UnusedQtModules) {
     $PyInstallerArgs += @("--exclude-module", $QtModule)
 }
+foreach ($MatplotlibModule in $MatplotlibExcludedModules) {
+    $PyInstallerArgs += @("--exclude-module", $MatplotlibModule)
+}
 $PyInstallerArgs += $EntryScript
 
+$MatplotlibPruneEvidence = Join-Path $BuildEvidenceDir "$AppName-matplotlib-prune.json"
+$BatchRenderSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-batch-render-smoke.json"
+foreach ($StaleEvidencePath in @($MatplotlibPruneEvidence, $BatchRenderSmokeEvidence)) {
+    if (Test-Path -LiteralPath $StaleEvidencePath) {
+        Remove-Item -LiteralPath $StaleEvidencePath -Force
+    }
+}
 & $VenvPython @PyInstallerArgs
+$PyInstallerExitCode = $LASTEXITCODE
+if ($PyInstallerExitCode -ne 0) {
+    throw "PyInstaller failed with exit code $PyInstallerExitCode"
+}
 
 if (-not (Test-Path $ExePath)) {
     throw "Build finished but exe was not found: $ExePath"
+}
+
+Write-Step "Pruning collected Matplotlib data"
+& $VenvPython $MatplotlibContractTool `
+    --prune-internal (Join-Path $OutputDir "_internal") `
+    --evidence-json $MatplotlibPruneEvidence
+if ($LASTEXITCODE -ne 0) {
+    throw "Matplotlib frozen-data pruning failed"
 }
 
 # PyQt5 bundles an old MSVC runtime at Qt5\bin\MSVCP140.dll (~14.26.28720.3), and
@@ -329,6 +361,12 @@ foreach ($dllName in @("MSVCP140.dll", "MSVCP140_1.dll")) {
             Write-Host "Replaced bundled $dllName ($qtVer) with system $sysVer to fix pya2l native crash"
         }
     }
+}
+
+Write-Step "Verifying frozen batch rendering (4 kinds x 3 formats)"
+& $VenvPython $BatchRenderSmokeTool --exe $ExePath --evidence-json $BatchRenderSmokeEvidence
+if ($LASTEXITCODE -ne 0) {
+    throw "Frozen batch render smoke failed; see $BatchRenderSmokeEvidence"
 }
 
 # Warm the freshly-built exe once: its first launch pays a Windows Defender scan

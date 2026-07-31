@@ -57,6 +57,14 @@ from .signal import resolve_nfft, resolve_order_nfft
 from .signal.fft import FFTAnalyzer
 
 
+_RENDER_BACKEND_DEGRADED_REASON = (
+    '图片/PDF 导出后端不可用，本次仅导出数据文件'
+)
+_RENDER_BACKEND_IMAGE_ONLY_ERROR = (
+    '图片/PDF 导出后端不可用，无法完成图片/PDF 导出'
+)
+
+
 @dataclass(frozen=True)
 class BatchOutput:
     export_data: bool = True
@@ -182,6 +190,9 @@ class BatchItemResult:
     group_identity: str = ''
     effective_params: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    requested_outputs: dict = field(default_factory=dict)
+    effective_outputs: dict = field(default_factory=dict)
+    degraded_reason: str = ''
     artifact_facts: dict = field(default_factory=dict)
     started_at: str | None = None
     finished_at: str | None = None
@@ -195,6 +206,8 @@ class BatchRunResult:
     manifest_path: str | None = None
     summary: dict = field(default_factory=dict)
     run_id: str | None = None
+    degraded_count: int = 0
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -239,6 +252,10 @@ class _ResolvedSource:
 
 class _BatchCancelled(RuntimeError):
     pass
+
+
+class _ImageBackendUnavailable(RuntimeError):
+    """The task cannot proceed because it requested only rendered output."""
 
 
 def _default_loader(path):
@@ -320,6 +337,14 @@ class BatchRunner:
                 getattr(outputs, 'image_format', 'png')
             ).lower().lstrip('.')
         return required
+
+    @staticmethod
+    def _probe_image_backend():
+        """Import the renderer types before reserving any output paths."""
+
+        from .batch_render import BatchRenderContext, BatchRenderOptions
+
+        return BatchRenderContext, BatchRenderOptions
 
     @staticmethod
     def _requested_output_settings(outputs) -> dict:
@@ -460,6 +485,16 @@ class BatchRunner:
             result_blocked = list(blocked or ())
             result_blocked.extend(manifest_errors)
             result_status = status
+            degraded_reasons = list(dict.fromkeys(
+                item.degraded_reason
+                for item in result_items
+                if item.degraded_reason
+            ))
+            degraded_count = sum(
+                bool(item.degraded_reason) for item in result_items
+            )
+            if degraded_count and result_status == 'done':
+                result_status = 'partial'
             if manifest_errors and result_status == 'done':
                 result_status = 'partial'
             summary = derive_summary(
@@ -489,6 +524,8 @@ class BatchRunner:
                 manifest_path=manifest_path,
                 summary=summary,
                 run_id=run_id,
+                degraded_count=degraded_count,
+                warnings=degraded_reasons,
             )
 
         def physical_path_for(source_key, fd=None):
@@ -579,6 +616,9 @@ class BatchRunner:
                 'status': item.status,
                 'message': item.message,
                 'warnings': list(item.warnings),
+                'requested_outputs': dict(item.requested_outputs),
+                'effective_outputs': dict(item.effective_outputs),
+                'degraded_reason': item.degraded_reason,
                 'started_at': item.started_at,
                 'finished_at': item.finished_at,
                 'artifacts': artifacts,
@@ -689,6 +729,7 @@ class BatchRunner:
         cancelled = False
         total = len(tasks)
         prev_physical_key = None
+        requested_artifacts = self._required_artifacts(preset.outputs)
 
         def task_file_name(source_key):
             fd = self._known_file_data(source_key)
@@ -726,6 +767,8 @@ class BatchRunner:
                 task_id=(identity.task_id if identity else ''),
                 source_identity=(identity.source_identity if identity else ''),
                 group_identity=(identity.group_identity if identity else ''),
+                requested_outputs=dict(requested_artifacts),
+                effective_outputs=dict(requested_artifacts),
                 started_at=None,
                 finished_at=utc_now(),
             )
@@ -896,6 +939,8 @@ class BatchRunner:
                     task_id=(identity.task_id if identity else ''),
                     source_identity=(identity.source_identity if identity else ''),
                     group_identity=(identity.group_identity if identity else ''),
+                    requested_outputs=dict(requested_artifacts),
+                    effective_outputs=dict(requested_artifacts),
                     started_at=started_at,
                     finished_at=utc_now(),
                 ))
@@ -938,6 +983,11 @@ class BatchRunner:
                     task_id=(identity.task_id if identity else ''),
                     source_identity=(identity.source_identity if identity else ''),
                     group_identity=(identity.group_identity if identity else ''),
+                    requested_outputs=dict(requested_artifacts),
+                    effective_outputs=(
+                        {} if isinstance(exc, _ImageBackendUnavailable)
+                        else dict(requested_artifacts)
+                    ),
                     started_at=started_at,
                     finished_at=utc_now(),
                 ))
@@ -1390,7 +1440,21 @@ class BatchRunner:
             method=method,
             params=requested_params,
         )
-        output_extensions = self._output_extensions(preset.outputs)
+        requested_outputs = self._required_artifacts(preset.outputs)
+        effective_outputs = dict(requested_outputs)
+        degraded_reason = ''
+        render_backend_types = None
+        if 'image' in requested_outputs:
+            try:
+                render_backend_types = self._probe_image_backend()
+            except (ImportError, ModuleNotFoundError) as exc:
+                if 'data' not in requested_outputs:
+                    raise _ImageBackendUnavailable(
+                        _RENDER_BACKEND_IMAGE_ONLY_ERROR
+                    ) from exc
+                effective_outputs.pop('image')
+                degraded_reason = _RENDER_BACKEND_DEGRADED_REASON
+        output_extensions = tuple(effective_outputs.values())
         conflict_policy = str(
             getattr(preset.outputs, 'conflict_policy', 'auto_number')
         ).strip().lower()
@@ -1427,13 +1491,13 @@ class BatchRunner:
                 status='skipped',
                 data_path=(
                     str(reservation.paths[data_extension])
-                    if preset.outputs.export_data
+                    if 'data' in effective_outputs
                     and reservation.paths[data_extension].exists()
                     else None
                 ),
                 image_path=(
                     str(reservation.paths[image_extension])
-                    if preset.outputs.export_image
+                    if 'image' in effective_outputs
                     and reservation.paths[image_extension].exists()
                     else None
                 ),
@@ -1445,6 +1509,9 @@ class BatchRunner:
                 source_identity=identity.source_identity,
                 group_identity=identity.group_identity,
                 warnings=[reservation.warning, conflict_facts],
+                requested_outputs=dict(requested_outputs),
+                effective_outputs=dict(effective_outputs),
+                degraded_reason=degraded_reason,
             )
 
         try:
@@ -1597,7 +1664,7 @@ class BatchRunner:
             image_params = None
             render_options = None
             render_context = None
-            if preset.outputs.export_image:
+            if 'image' in effective_outputs:
                 migrated_params = db_reference.migrate_legacy_reference_params(
                     effective_params
                 )
@@ -1627,7 +1694,7 @@ class BatchRunner:
                     'db_reference_mode', 'auto',
                 )
                 effective_params['db_reference_source'] = resolution.source
-                from .batch_render import BatchRenderContext, BatchRenderOptions
+                BatchRenderContext, BatchRenderOptions = render_backend_types
 
                 width, height = preset.outputs.resolved_image_dimensions()
                 render_options = BatchRenderOptions(
@@ -1710,11 +1777,11 @@ class BatchRunner:
 
             data_path = (
                 published.get(data_extension)
-                if preset.outputs.export_data else None
+                if 'data' in effective_outputs else None
             )
             image_path = (
                 published.get(image_extension)
-                if preset.outputs.export_image else None
+                if 'image' in effective_outputs else None
             )
             published_facts = {}
             if data_path is not None:
@@ -1756,7 +1823,13 @@ class BatchRunner:
                 source_identity=identity.source_identity,
                 group_identity=identity.group_identity,
                 effective_params=effective_params,
-                warnings=warnings,
+                warnings=(
+                    [*warnings, degraded_reason]
+                    if degraded_reason else warnings
+                ),
+                requested_outputs=dict(requested_outputs),
+                effective_outputs=dict(effective_outputs),
+                degraded_reason=degraded_reason,
                 artifact_facts=published_facts,
             )
         finally:
@@ -1910,6 +1983,15 @@ class BatchRunner:
                 group_identity=identity.group_identity,
                 effective_params=dict(matched.get('effective_facts') or {}),
                 warnings=list(matched.get('warnings') or []),
+                requested_outputs=dict(
+                    matched.get('requested_outputs')
+                    or self._required_artifacts(preset.outputs)
+                ),
+                effective_outputs=dict(
+                    matched.get('effective_outputs')
+                    or self._required_artifacts(preset.outputs)
+                ),
+                degraded_reason=str(matched.get('degraded_reason') or ''),
                 artifact_facts=artifacts,
             )
         return None

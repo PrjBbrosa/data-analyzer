@@ -1,6 +1,41 @@
 import pytest
 
 
+def test_batch_sheet_pure_degraded_partial_is_not_reported_as_failure(
+    qtbot, monkeypatch,
+):
+    from mf4_analyzer.batch import BatchRunResult
+    from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    widget = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(widget)
+    widget.show()
+    messages = []
+    monkeypatch.setattr(
+        sheet_module.QMessageBox,
+        "information",
+        lambda _parent, title, text: messages.append(("information", title, text)),
+    )
+    monkeypatch.setattr(
+        sheet_module.QMessageBox,
+        "warning",
+        lambda _parent, title, text: messages.append(("warning", title, text)),
+    )
+
+    widget._show_result_toast(BatchRunResult(
+        status="partial",
+        degraded_count=2,
+        warnings=["图片/PDF 导出后端不可用，本次仅导出数据文件"],
+    ))
+
+    assert messages == [(
+        "information",
+        "批处理降级完成",
+        "完成，共 2 个任务仅导出数据文件。",
+    )]
+
+
 def test_batch_sheet_can_be_imported_from_new_package():
     from mf4_analyzer.ui.drawers.batch import BatchSheet
     assert BatchSheet is not None

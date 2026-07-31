@@ -267,6 +267,39 @@ def test_resume_requires_recipe_task_source_stat_and_artifact_checksum(tmp_path)
     ) is None
 
 
+def test_resume_rejects_degraded_entry_even_if_artifacts_later_appear(tmp_path):
+    source_path = tmp_path / "source.csv"
+    source_path.write_text("source-v1", encoding="utf-8")
+    data_path = tmp_path / "result.csv"
+    data_path.write_text("result-v1", encoding="utf-8")
+    image_path = tmp_path / "result.pdf"
+    image_path.write_bytes(b"%PDF-1.4 fake")
+    entry = _done_entry(source_path, data_path)
+    entry.update({
+        "requested_outputs": {"data": "csv", "image": "pdf"},
+        "effective_outputs": {"data": "csv"},
+        "degraded_reason": "图片/PDF 导出后端不可用，本次仅导出数据文件",
+    })
+    entry["artifacts"]["image"] = artifact_facts(
+        image_path, kind="image", artifact_format="pdf",
+    )
+    manifest = _manifest([entry])
+
+    matched = find_resumable_entry(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        task_id="task-1",
+        source_id="source-1",
+        source_identity=str(source_path.resolve()),
+        source_stat=source_file_facts(
+            source_path, source_identity=str(source_path.resolve()),
+        ),
+        required_artifacts={"data": "csv", "image": "pdf"},
+    )
+
+    assert matched is None
+
+
 def test_resume_rejects_missing_checksum_even_when_same_named_file_exists(tmp_path):
     source_path = tmp_path / "source.csv"
     source_path.write_text("source", encoding="utf-8")

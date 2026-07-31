@@ -4,15 +4,22 @@ import argparse
 from pathlib import Path
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--acquisition-runtime-smoke", action="store_true")
-    parser.add_argument("--pyxcp-import-probe-child", action="store_true")
-    parser.add_argument("--pya2l-import-probe-child", action="store_true")
-    parser.add_argument("--a2l-probe-child", action="store_true")
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    hidden_mode = parser.add_mutually_exclusive_group()
+    hidden_mode.add_argument("--acquisition-runtime-smoke", action="store_true")
+    hidden_mode.add_argument("--pyxcp-import-probe-child", action="store_true")
+    hidden_mode.add_argument("--pya2l-import-probe-child", action="store_true")
+    hidden_mode.add_argument("--a2l-probe-child", action="store_true")
     parser.add_argument("--a2l-path", type=Path)
     parser.add_argument("--a2l-limit", type=int)
-    parser.add_argument("--importer-runtime-smoke", action="store_true")
+    hidden_mode.add_argument("--importer-runtime-smoke", action="store_true")
     parser.add_argument("--import-path", type=Path, action="append", default=[])
+    hidden_mode.add_argument("--batch-render-runtime-smoke", action="store_true")
+    hidden_mode.add_argument("--frozen-batch-acceptance", action="store_true")
+    parser.add_argument("--batch-source", type=Path, action="append", default=[])
+    parser.add_argument("--batch-channel", default="EpsDrvrSteerTq")
+    parser.add_argument("--frozen-smoke-json", type=Path)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--json", type=Path)
     args, _unknown = parser.parse_known_args()
     if args.pyxcp_import_probe_child:
@@ -50,6 +57,38 @@ if __name__ == "__main__":
         from mf4_analyzer.io.importer_runtime_smoke import run
 
         raise SystemExit(run(args.import_path, args.json))
+    if args.batch_render_runtime_smoke:
+        if args.json is None or args.output_dir is None:
+            raise SystemExit(
+                "--batch-render-runtime-smoke requires --output-dir <path> and --json <path>"
+            )
+        from mf4_analyzer.batch_render_smoke import run
+
+        raise SystemExit(run(args.output_dir, args.json))
+    if args.frozen_batch_acceptance:
+        if args.batch_channel != "EpsDrvrSteerTq":
+            raise SystemExit(2)
+        if (
+            args.json is None
+            or args.output_dir is None
+            or not args.batch_source
+            or args.frozen_smoke_json is None
+        ):
+            raise SystemExit(
+                "--frozen-batch-acceptance requires three --batch-source <path>, "
+                "--output-dir <path>, --json <path>, and "
+                "--frozen-smoke-json <path>"
+            )
+        from mf4_analyzer.frozen_batch_acceptance import run
+
+        raise SystemExit(
+            run(
+                args.batch_source,
+                args.output_dir,
+                args.json,
+                frozen_smoke_json=args.frozen_smoke_json,
+            )
+        )
     from mf4_analyzer.app import main
 
     main()

@@ -365,6 +365,17 @@ def load_batch_manifest(path_or_manifest) -> dict:
                 raise ManifestValidationError(
                     f"{prefix}.{field}", "must be an object",
                 )
+        for field in ("requested_outputs", "effective_outputs"):
+            if field in entry and not isinstance(entry[field], Mapping):
+                raise ManifestValidationError(
+                    f"{prefix}.{field}", "must be an object",
+                )
+        if "degraded_reason" in entry and not isinstance(
+            entry["degraded_reason"], str
+        ):
+            raise ManifestValidationError(
+                f"{prefix}.degraded_reason", "must be a string",
+            )
         if not isinstance(entry["task_id"], str) or not entry["task_id"]:
             raise ManifestValidationError(
                 f"{prefix}.task_id", "must be a non-empty string",
@@ -450,6 +461,8 @@ def find_resumable_entry(
         if cancel_token is not None and cancel_token.is_set():
             return None
         if entry.get("status") not in {"done", "resumed"}:
+            continue
+        if entry.get("degraded_reason"):
             continue
         if entry.get("task_id") != task_id:
             continue

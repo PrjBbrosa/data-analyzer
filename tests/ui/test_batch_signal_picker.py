@@ -209,6 +209,15 @@ def test_picker_popup_rounded_corners_have_no_square_frame(qtbot):
 
     p = SignalPickerPopup(available_signals=["a", "b"])
     qtbot.addWidget(p)
+    flags = p._popup.windowFlags()
+    assert bool(flags & Qt.Popup), "SignalPickerPopup must retain Qt.Popup click-away behavior"
+    assert bool(flags & Qt.FramelessWindowHint)
+    assert bool(flags & Qt.NoDropShadowWindowHint)
     assert p._popup.testAttribute(Qt.WA_TranslucentBackground), (
         "SignalPickerPopup 圆角需配 WA_TranslucentBackground,否则留方框"
     )
+    assert p._popup.testAttribute(Qt.WA_StyledBackground), (
+        "SignalPickerPopup must let its rounded QSS surface paint on the "
+        "translucent shell"
+    )
+    assert p._popup.frameShape() == p._popup.NoFrame

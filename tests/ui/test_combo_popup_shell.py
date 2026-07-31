@@ -18,6 +18,7 @@ from mf4_analyzer.ui_kit.combo_popup_shell import (
     prepare_combo_popup,
     _apply_shell,
 )
+from mf4_analyzer.ui_kit.popup_shell import apply_popup_shell
 from mf4_analyzer.ui_kit.widgets.searchable_combo import SearchableComboBox
 
 
@@ -116,4 +117,35 @@ def test_apply_shell_is_idempotent(qapp):
     assert _apply_shell(window) is True
     assert _apply_shell(window) is False, "second apply should be a no-op"
     _assert_shell(window)
+    combo.deleteLater()
+
+
+def test_shared_popup_shell_preserves_window_type_and_existing_hints(qapp):
+    """The shared shell must add chrome flags without replacing popup identity."""
+    combo = QComboBox()
+    window = combo.view().window()
+    window.setWindowFlags(Qt.Popup | Qt.WindowStaysOnTopHint)
+
+    assert apply_popup_shell(window) is True
+    assert apply_popup_shell(window) is False
+
+    flags = window.windowFlags()
+    assert bool(flags & Qt.Popup)
+    assert bool(flags & Qt.WindowStaysOnTopHint)
+    assert bool(flags & Qt.FramelessWindowHint)
+    assert bool(flags & Qt.NoDropShadowWindowHint)
+    assert window.testAttribute(Qt.WA_TranslucentBackground)
+    combo.deleteLater()
+
+
+def test_searchable_combo_completer_popup_gets_shared_shell(qapp):
+    """The completer is its own popup surface, independent of combo dropdowns."""
+    combo = SearchableComboBox()
+    combo.addItems(["Speed", "Torque"])
+    popup = combo.completer().popup().window()
+
+    flags = popup.windowFlags()
+    assert popup.testAttribute(Qt.WA_TranslucentBackground)
+    assert bool(flags & Qt.FramelessWindowHint)
+    assert bool(flags & Qt.NoDropShadowWindowHint)
     combo.deleteLater()

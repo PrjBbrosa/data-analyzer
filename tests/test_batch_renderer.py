@@ -186,6 +186,59 @@ def test_figure_context_writes_title_facts_footer_and_physical_unit():
     assert figure.axes[0].get_ylabel() == "Amplitude (dBA re 1×10⁰)"
 
 
+def test_dollar_title_and_unit_are_created_as_literal_text_and_remain_literal_in_svg(
+    tmp_path,
+):
+    """A later draw-only rc_context must not leave artists math-enabled."""
+    from mf4_analyzer.batch_render import (
+        BatchRenderContext,
+        BatchRenderOptions,
+        _build_batch_figure,
+        render_batch_image,
+    )
+
+    data = pd.DataFrame(
+        {"frequency_hz": [10.0, 20.0], "amplitude": [1.0, 2.0]}
+    )
+    context = BatchRenderContext(
+        source_display_name="run-$single$-frame.mf4",
+        channel="acceleration-$raw$",
+        unit="$m/s^2$",
+        method="FFT",
+    )
+    initial_parse_math = mpl.rcParams["text.parse_math"]
+    mpl.rcParams["text.parse_math"] = True
+    try:
+        figure = _build_batch_figure(("fft", data), context=context)
+        dollar_artists = [
+            artist
+            for artist in figure.findobj(match=mpl.text.Text)
+            if "$" in artist.get_text()
+        ]
+        target = tmp_path / "literal-dollar.svg"
+        render_batch_image(
+            ("fft", data),
+            target,
+            options=BatchRenderOptions(format="svg"),
+            context=context,
+        )
+    finally:
+        mpl.rcParams["text.parse_math"] = initial_parse_math
+
+    assert dollar_artists
+    assert all(not artist.get_parse_math() for artist in dollar_artists)
+    root = ElementTree.parse(target).getroot()
+    namespace = {"svg": "http://www.w3.org/2000/svg"}
+    svg_text = "\n".join(
+        "".join(node.itertext())
+        for node in root.findall(".//svg:text", namespace)
+    )
+    assert "run-$single$-frame.mf4" in svg_text
+    assert "acceleration-$raw$" in svg_text
+    assert "Amplitude ($m/s^2$)" in svg_text
+    assert mpl.rcParams["text.parse_math"] == initial_parse_math
+
+
 def test_runner_canonical_effective_nfft_overrides_requested_auto():
     from mf4_analyzer.batch_render import BatchRenderContext, _build_batch_figure
 

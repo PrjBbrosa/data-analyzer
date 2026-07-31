@@ -126,6 +126,24 @@ def _build_batch_figure(
 ) -> Figure:
     """Build a Figure for tests and for :func:`render_batch_image`."""
 
+    render_options = options or BatchRenderOptions()
+    with mpl.rc_context(_batch_font_rc_settings(render_options.format)):
+        return _build_batch_figure_in_context(
+            payload,
+            params=params,
+            options=render_options,
+            context=context,
+        )
+
+
+def _build_batch_figure_in_context(
+    payload,
+    params: Mapping[str, Any] | None = None,
+    options: BatchRenderOptions | None = None,
+    context: BatchRenderContext | None = None,
+) -> Figure:
+    """Create all Figure/Text artists inside the renderer rc context."""
+
     try:
         kind, data = payload
     except (TypeError, ValueError) as exc:
@@ -206,12 +224,15 @@ def _batch_font_rc_settings(image_format: str) -> dict[str, Any]:
     settings: dict[str, Any] = {
         "font.family": family_chain,
         "font.sans-serif": family_chain,
+        "text.parse_math": False,
         # ASCII hyphen is present in every selected family.  This keeps
         # negative ticks readable even when a CJK font lacks U+2212.
         "axes.unicode_minus": False,
     }
     if image_format == "svg":
         settings["svg.fonttype"] = "none"
+    if image_format == "pdf":
+        settings["pdf.fonttype"] = 42
     return settings
 
 

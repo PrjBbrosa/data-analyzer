@@ -21,6 +21,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from mf4_analyzer.ui_kit.popup_shell import apply_popup_shell
+
 
 class SignalChip(QWidget):
     """Single-row chip widget: signal label + remove button.
@@ -188,8 +190,9 @@ class SignalPickerPopup(QWidget):
         # Rounded 8px surface on a Qt.Popup window: a translucent background
         # keeps the corners outside the radius from painting an opaque square
         # frame. The inline #SignalPickerPopup QSS still paints the white fill.
-        self._popup.setAttribute(Qt.WA_TranslucentBackground, True)
-        self._popup.setFrameShape(QFrame.StyledPanel)
+        apply_popup_shell(self._popup)
+        self._popup.setFrameShape(QFrame.NoFrame)
+        self._popup.setAttribute(Qt.WA_StyledBackground, True)
         self._popup.setStyleSheet(
             "#SignalPickerPopup {background:#fff; border:1px solid #cbd5e1;"
             " border-radius:8px;}"
