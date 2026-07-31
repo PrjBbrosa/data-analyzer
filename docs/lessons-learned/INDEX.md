@@ -114,6 +114,7 @@ lesson by default.
 | [An actionable audit needs a fixed commit SHA](refactor/2026-07-30-audit-baseline-requires-commit-sha.md) | An audit reports source counts, line locations, probes, priorities, or estimates. | See lesson |
 | [Canvas backref write-through needs an explicit whitelist](pyqt-ui/2026-07-30-canvas-backref-write-through-needs-explicit-whitelist.md) | A collaborator delegates unknown attribute reads or writes to a shared canvas. | See lesson |
 | [Diagnostic throttles must account for every pending count](diagnostic-throttle-pending-count-lifecycle.md) | Changing a bounded diagnostic throttle, its rollover, eviction, or shutdown behavior. | See lesson |
+| [Windows Vendoring Network Failures Keep The Gate Red](codex-windows-vendoring-network-retry.md) | A Windows folder build fails while pip vendors the pinned Vector/XCP | See lesson |
 
 ## Selection Rules
 

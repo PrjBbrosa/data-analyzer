@@ -1,10 +1,10 @@
 {
   "a2l_parse_probe": {
     "command": [
-      "D:\\Coding project\\data analyzer\\dist\\TraceLab7.6\\TraceLab7.6.exe",
+      "D:\\Coding project\\data analyzer\\dist\\TraceLab7.9\\TraceLab7.9.exe",
       "--a2l-probe-child",
       "--a2l-path",
-      "C:\\Users\\hang\\AppData\\Local\\Temp\\tracelab_a2l_smoke_85xty091\\minimal.a2l",
+      "C:\\Users\\hang\\AppData\\Local\\Temp\\tracelab_a2l_smoke_uxusg2qy\\minimal.a2l",
       "--a2l-limit",
       "1"
     ],
@@ -34,7 +34,7 @@
   "frozen": true,
   "import_probe": {
     "command": [
-      "D:\\Coding project\\data analyzer\\dist\\TraceLab7.6\\TraceLab7.6.exe",
+      "D:\\Coding project\\data analyzer\\dist\\TraceLab7.9\\TraceLab7.9.exe",
       "--pyxcp-import-probe-child"
     ],
     "returncode": 0,
@@ -44,7 +44,7 @@
   "ok": true,
   "pya2l_import_probe": {
     "command": [
-      "D:\\Coding project\\data analyzer\\dist\\TraceLab7.6\\TraceLab7.6.exe",
+      "D:\\Coding project\\data analyzer\\dist\\TraceLab7.9\\TraceLab7.9.exe",
       "--pya2l-import-probe-child"
     ],
     "returncode": 0,
