@@ -524,10 +524,7 @@ class Renderer(_CanvasBackref):
                 effective_width = self._effective_pixel_width(
                     pixel_width, source_len=len(sig), dense_count=dense_count,
                 )
-            profiles = getattr(self, "_channel_render_profiles", None)
-            if profiles is None:
-                profiles = {}
-                self._channel_render_profiles = profiles
+            profiles = self._channel_render_profiles
             profile = profiles.get(ck)
             source_revision = source_revision_for(t, sig)
             if profile is None or profile.source_revision != source_revision:
@@ -714,7 +711,6 @@ class Renderer(_CanvasBackref):
             return display_coverage
         self._tick_density_controller._apply_target_x_ticks_to_all_axes()
         self._emit_xrange_changed()
-        self._refresh = True
         self.schedule_idle_quality()
         return display_coverage
 

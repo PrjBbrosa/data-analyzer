@@ -56,6 +56,7 @@ import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 from collections import OrderedDict
+import logging
 from math import ceil, isfinite
 from time import monotonic
 from typing import Tuple
@@ -90,6 +91,7 @@ from mf4_analyzer.ui._axis_handle import (
 )
 from mf4_analyzer.ui.plot_helpers import _split_prefixed_label  # noqa: F401
 from mf4_analyzer.signal.envelope import build_envelope  # noqa: F401
+from mf4_analyzer.diagnostics import throttled
 from mf4_analyzer.ui.pg_canvas.context_menu import (
     _localize_pg_context_actions,
     _localize_pg_context_menu,
@@ -125,6 +127,9 @@ from mf4_analyzer.ui.pg_canvas._shared import (  # noqa: F401
     _view_state_channel_key,
     show_major_grid_left_bottom_only,
 )
+
+
+_LOG = logging.getLogger(__name__)
 
 
 # Idle-AA density budget (Fix C, 2026-05-31 overlay-aa-interaction-fixes;
@@ -359,6 +364,10 @@ class TimeDomainCanvasPG(QWidget):
         # plot_channels build. Used in _refresh_visible_data so the hot
         # path skips np.diff(t).
         self._channel_is_monotonic = _ChannelKeyDict()
+        # Render strategy classification belongs to this canvas generation.
+        # Collaborators share and mutate this mapping in place; clear() drops
+        # stale source revisions before the next file/selection generation.
+        self._channel_render_profiles = {}
         # The "primary" axis facade — its sigXRangeChanged drives the
         # viewport-aware envelope refresh. Set after plot_channels.
         self._primary_xaxis_ax = None
@@ -380,9 +389,6 @@ class TimeDomainCanvasPG(QWidget):
         self._subplot_retained_order = []
         self._subplot_retained_handles = {}
         self._subplot_row_constraints = {}
-
-        # --- viewport refresh state ------------------------------------
-        self._refresh = True
 
         # --- viewport refresh wiring ------------------------------------
         # Interaction settle timer. Unlike the former 40 ms periodic refresh,
@@ -997,7 +1003,6 @@ class TimeDomainCanvasPG(QWidget):
             if self._overlay_mode:
                 self._overlay_axes._connect_overlay_view_sync()
 
-        self._refresh = True
         if self._subplot_label_specs:
             self._settle_subplot_layout()
         else:
@@ -2020,7 +2025,15 @@ class TimeDomainCanvasPG(QWidget):
         ).items():
             try:
                 out[key] = pair[0].get_ylim()
-            except Exception:
+            except Exception as exc:
+                throttled(
+                    _LOG,
+                    f"canvas:get_visible_ylims:get_ylim:{type(exc).__name__}",
+                    logging.WARNING,
+                    "Failed to capture Y range for channel_key=%r",
+                    key,
+                    exc_info=True,
+                )
                 continue
         return out
 
@@ -2039,17 +2052,23 @@ class TimeDomainCanvasPG(QWidget):
                 if name in view_state_lines:
                     restored_keys.add(name)
                 changed = True
-            except Exception:
+            except Exception as exc:
+                throttled(
+                    _LOG,
+                    f"canvas:restore_visible_ylims:set_ylim:{type(exc).__name__}",
+                    logging.WARNING,
+                    "Failed to restore Y range for channel_key=%r",
+                    name,
+                    exc_info=True,
+                )
                 continue
         if restored_keys and len(restored_keys) < len(view_state_lines):
             n_y = max(3, min(20, self._tick_density_controller.density[1]))
-            for key, (handle, line) in view_state_lines.items():
+            for key, (handle, _line) in view_state_lines.items():
                 if key in restored_keys:
                     continue
-                get_label = getattr(line, "get_label", None)
-                channel_name = get_label() if callable(get_label) else key
                 if self._fit_channel_y_to_visible_x(
-                    channel_name,
+                    key,
                     handle,
                     n_y,
                     frame_to_nice=self._overlay_mode,
@@ -2061,20 +2080,52 @@ class TimeDomainCanvasPG(QWidget):
             )
             self.visible_range_changed.emit()
 
-    def _fit_channel_y_to_visible_x(self, name, handle, n_y, *, frame_to_nice):
-        row = self.channel_data.get(name)
+    def _fit_channel_y_to_visible_x(
+        self,
+        channel_key,
+        handle,
+        n_y,
+        *,
+        frame_to_nice,
+    ):
+        """Fit ``handle`` from the composite channel key's visible samples."""
+        resolved_key = self.channel_data.resolve_unique(channel_key)
+        if resolved_key is None:
+            # ``get`` intentionally remains last-bound-wins for compatibility,
+            # but an identity-sensitive Y fit must fail closed when a legacy
+            # display-label fallback is ambiguous.
+            return False
+        # A legacy display-label key may fall back only after unique resolution;
+        # fetch once by the resulting exact composite identity.
+        row = self.channel_data.get(resolved_key)
         if row is None:
             return False
         try:
             x0, x1 = handle.get_xlim()
-        except Exception:
+        except Exception as exc:
+            throttled(
+                _LOG,
+                f"canvas:fit_visible_y:get_xlim:{type(exc).__name__}",
+                logging.WARNING,
+                "Failed to read visible X range for channel_key=%r",
+                channel_key,
+                exc_info=True,
+            )
             return False
         if x1 < x0:
             x0, x1 = x1, x0
         try:
             t = np.asarray(row[0], dtype=float)
             sig = np.asarray(row[1], dtype=float)
-        except Exception:
+        except Exception as exc:
+            throttled(
+                _LOG,
+                f"canvas:fit_visible_y:array_coercion:{type(exc).__name__}",
+                logging.WARNING,
+                "Failed to coerce visible-fit arrays for channel_key=%r",
+                channel_key,
+                exc_info=True,
+            )
             return False
         if t.size == 0 or sig.size == 0:
             return False
@@ -2098,24 +2149,61 @@ class TimeDomainCanvasPG(QWidget):
             lo, hi, _ticks = _frame_to_nice(lo, hi, n_y)
         try:
             handle.set_ylim(lo, hi)
-        except Exception:
+        except Exception as exc:
+            throttled(
+                _LOG,
+                f"canvas:fit_visible_y:set_ylim:{type(exc).__name__}",
+                logging.WARNING,
+                "Failed to apply fitted Y range for channel_key=%r",
+                channel_key,
+                exc_info=True,
+            )
             return False
         return True
 
     def _sync_x_axis_item_range(self, handle, lo, hi):
         try:
             axis = handle.x_axis_item()
-        except Exception:
+        except Exception as exc:
+            throttled(
+                _LOG,
+                f"canvas:sync_x_axis:x_axis_item:{type(exc).__name__}",
+                logging.WARNING,
+                "Failed to resolve X AxisItem for axis_handle=%s@0x%x",
+                type(handle).__name__,
+                id(handle),
+                exc_info=True,
+            )
             axis = None
         if axis is None:
             return
         try:
             axis.setRange(float(lo), float(hi))
-        except Exception:
+        except Exception as exc:
+            throttled(
+                _LOG,
+                f"canvas:sync_x_axis:set_range:{type(exc).__name__}",
+                logging.WARNING,
+                "Failed to sync X range for axis=%s@0x%x lo=%r hi=%r",
+                type(axis).__name__,
+                id(axis),
+                lo,
+                hi,
+                exc_info=True,
+            )
             return
         try:
             axis.update()
-        except Exception:
+        except Exception as exc:
+            throttled(
+                _LOG,
+                f"canvas:sync_x_axis:update:{type(exc).__name__}",
+                logging.WARNING,
+                "Failed to repaint synced X axis=%s@0x%x",
+                type(axis).__name__,
+                id(axis),
+                exc_info=True,
+            )
             pass
 
     def _refresh_overlay_axis_labels(self):
@@ -2244,7 +2332,6 @@ class TimeDomainCanvasPG(QWidget):
                 self._frame_handle_y(handle, extent, n_y, frame_to_nice=True)
             if self._overlay_mode:
                 self._repin_overlay_channel_ticks()
-            self._refresh = True
             self.draw_idle()
         finally:
             try:
@@ -2296,7 +2383,6 @@ class TimeDomainCanvasPG(QWidget):
                 )
             if self._overlay_mode:
                 self._repin_overlay_channel_ticks()
-            self._refresh = True
             self.draw_idle()
         finally:
             try:
@@ -2479,6 +2565,7 @@ class TimeDomainCanvasPG(QWidget):
         self._companion_names = set()
         self._companion_source = {}
         self._channel_is_monotonic = _ChannelKeyDict()
+        self._channel_render_profiles.clear()
         self._primary_xaxis_ax = None
         self._selection_bound_keys = set()
         self._selection_active_keys = set()
@@ -2496,7 +2583,6 @@ class TimeDomainCanvasPG(QWidget):
         self._y_overflow_wall_active = False
         self._last_refresh_signature = None
         self._overlay_mode = False
-        self._refresh = True
         # T6 — drop overlay selection + subplot label scaffolding so the
         # next plot_channels build starts from a clean slate. Inside-label
         # scene items were already removed by _teardown_inside_labels()

@@ -34,6 +34,7 @@ import pytest
 from PyQt5.QtCore import QCoreApplication
 
 from mf4_analyzer.io.file_data import FileData
+from mf4_analyzer.ui.pg_canvas._shared import _view_state_channel_key
 
 
 # -- fixtures / builders --------------------------------------------------
@@ -50,7 +51,13 @@ def _pg_canvas(qapp):
     return canvas
 
 
-def _make_file(stem: str, *, amp: float, idx: int) -> FileData:
+def _make_file(
+    stem: str,
+    *,
+    amp: float,
+    idx: int,
+    offset: float = 0.0,
+) -> FileData:
     """Build a minimal single-channel FileData with a known amplitude.
 
     The channel is named ``sig`` in every file so the prefixed display name
@@ -60,7 +67,7 @@ def _make_file(stem: str, *, amp: float, idx: int) -> FileData:
     """
     n = 2_000
     t = np.linspace(0.0, 1.0, n, dtype=np.float64)
-    sig = amp * np.sin(2 * np.pi * 5 * t)
+    sig = offset + amp * np.sin(2 * np.pi * 5 * t)
     df = pd.DataFrame({"time": t, "sig": sig})
     return FileData(f"{stem}.csv", df, ["time", "sig"], {"sig": "u"}, idx=idx)
 
@@ -146,6 +153,149 @@ def test_long_filenames_still_collide_on_display_label_premise():
     # Middle-ellipsis collapses the differing middle → same display label.
     assert "…" in fd_a.short_name, "fixture stem must be over-budget (elided)"
     assert fd_a.get_prefixed_channel("sig") == fd_b.get_prefixed_channel("sig")
+
+
+class TestSameNameYFitUsesCompositeIdentity:
+    """A newly-restored axis must fit from its exact file's samples."""
+
+    @staticmethod
+    def _plot_two(canvas, file_a, file_b, *, mode):
+        display_a = file_a.get_prefixed_channel("sig")
+        display_b = file_b.get_prefixed_channel("sig")
+        canvas.plot_channels(
+            [
+                _row_for(file_a, "sig", "fid-A", visible=True),
+                _row_for(file_b, "sig", "fid-B", visible=True),
+            ],
+            mode=mode,
+        )
+        QCoreApplication.processEvents()
+        key_a = _view_state_channel_key("fid-A", display_a)
+        key_b = _view_state_channel_key("fid-B", display_b)
+        return display_a, display_b, key_a, key_b
+
+    @pytest.mark.parametrize("mode", ["subplot", "overlay"])
+    def test_restore_only_file_b_does_not_fit_file_a_from_same_label(
+        self,
+        qapp,
+        mode,
+    ):
+        file_a = _make_file(_COLLIDE_STEM_A, amp=1.0, idx=0)
+        file_b = _make_file(
+            _COLLIDE_STEM_B,
+            amp=50.0,
+            idx=1,
+            offset=150.0,
+        )
+        canvas = _pg_canvas(qapp)
+        display_a, display_b, key_a, key_b = self._plot_two(
+            canvas,
+            file_a,
+            file_b,
+            mode=mode,
+        )
+        assert display_a == display_b, "fixture must exercise a display collision"
+
+        lines = canvas._channel_view_state_lines
+        lines[key_a][0].set_ylim(-1.0, 1.0)
+        lines[key_b][0].set_ylim(100.0, 200.0)
+        QCoreApplication.processEvents()
+        before = canvas.get_visible_ylims()
+
+        canvas.restore_visible_ylims({key_b: before[key_b]})
+        QCoreApplication.processEvents()
+        after = canvas.get_visible_ylims()
+
+        assert before[key_a] == pytest.approx((-1.0, 1.0))
+        assert before[key_b] == pytest.approx((100.0, 200.0))
+        assert after[key_b] == pytest.approx((100.0, 200.0))
+        # File A's raw range is [-1, 1]. Its fitted frame may add padding or
+        # nice ticks, but it must never land in file B's [100, 200] regime.
+        assert -5.0 < after[key_a][0] < -0.9
+        assert 0.9 < after[key_a][1] < 5.0
+        assert not (90.0 < after[key_a][0] < after[key_a][1] < 210.0)
+
+    def test_ambiguous_display_label_fallback_fails_closed(self, qapp):
+        file_a = _make_file(_COLLIDE_STEM_A, amp=1.0, idx=0)
+        file_b = _make_file(
+            _COLLIDE_STEM_B,
+            amp=50.0,
+            idx=1,
+            offset=150.0,
+        )
+        canvas = _pg_canvas(qapp)
+        display_a, display_b, key_a, _key_b = self._plot_two(
+            canvas,
+            file_a,
+            file_b,
+            mode="subplot",
+        )
+        assert display_a == display_b
+        handle_a = canvas._channel_view_state_lines[key_a][0]
+        handle_a.set_ylim(-7.0, 7.0)
+
+        changed = canvas._fit_channel_y_to_visible_x(
+            display_a,
+            handle_a,
+            8,
+            frame_to_nice=False,
+        )
+
+        assert changed is False
+        assert handle_a.get_ylim() == pytest.approx((-7.0, 7.0))
+
+    def test_distinct_file_labels_still_fit_the_unrestored_channel(self, qapp):
+        file_a = _make_file("distinct_alpha", amp=1.0, idx=0)
+        file_b = _make_file(
+            "distinct_beta",
+            amp=50.0,
+            idx=1,
+            offset=150.0,
+        )
+        canvas = _pg_canvas(qapp)
+        display_a, display_b, key_a, key_b = self._plot_two(
+            canvas,
+            file_a,
+            file_b,
+            mode="subplot",
+        )
+        assert display_a != display_b
+        lines = canvas._channel_view_state_lines
+        lines[key_a][0].set_ylim(-20.0, 20.0)
+        lines[key_b][0].set_ylim(100.0, 200.0)
+
+        canvas.restore_visible_ylims({key_b: (100.0, 200.0)})
+        QCoreApplication.processEvents()
+
+        fitted = canvas.get_visible_ylims()[key_a]
+        assert -5.0 < fitted[0] < -0.9
+        assert 0.9 < fitted[1] < 5.0
+
+    def test_single_file_layout_still_fits_the_unrestored_channel(self, qapp):
+        t = np.linspace(0.0, 1.0, 2_000, dtype=np.float64)
+        low = np.sin(2 * np.pi * 5 * t)
+        high = 150.0 + 50.0 * np.sin(2 * np.pi * 5 * t)
+        low_name = "[single] low"
+        high_name = "[single] high"
+        rows = [
+            (low_name, True, t, low, "#1769e0", "u", "fid-only"),
+            (high_name, True, t, high, "#ef4444", "u", "fid-only"),
+        ]
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        low_key = _view_state_channel_key("fid-only", low_name)
+        high_key = _view_state_channel_key("fid-only", high_name)
+        lines = canvas._channel_view_state_lines
+        lines[low_key][0].set_ylim(-20.0, 20.0)
+        lines[high_key][0].set_ylim(100.0, 200.0)
+
+        canvas.restore_visible_ylims({high_key: (100.0, 200.0)})
+        QCoreApplication.processEvents()
+
+        fitted = canvas.get_visible_ylims()[low_key]
+        assert -5.0 < fitted[0] < -0.9
+        assert 0.9 < fitted[1] < 5.0
 
 
 # -- Task 1: real-render disappearance regression -------------------------

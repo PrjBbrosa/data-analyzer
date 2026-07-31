@@ -137,6 +137,41 @@ class _ChannelKeyDict(dict):
             )
             self._register_label(composite_key, label)
 
+    def setdefault(self, key, default=None):
+        """Return the resolved value or insert ``default`` once when absent.
+
+        ``dict.setdefault`` bypasses this class's alias-aware
+        :meth:`__contains__` implementation.  On a colliding display name that
+        would insert a bare-name phantom entry which then masks both real
+        composite entries.
+        """
+        composite_key = self._resolve(key)
+        if composite_key is not None:
+            return dict.__getitem__(self, composite_key)
+        self[key] = default
+        return default
+
+    def copy(self):
+        """Return a same-type copy without collapsing colliding labels."""
+        clone = type(self)()
+        for composite_key, label, value in self.composite_items():
+            clone.set_with_label(composite_key, label, value)
+        return clone
+
+    def update(self, other=(), **kwargs):
+        """Update while preserving composite identity from a sibling mapping."""
+        if isinstance(other, _ChannelKeyDict):
+            for composite_key, label, value in other.composite_items():
+                self.set_with_label(composite_key, label, value)
+        elif hasattr(other, "keys"):
+            for key in other.keys():
+                self[key] = other[key]
+        else:
+            for key, value in other:
+                self[key] = value
+        for key, value in kwargs.items():
+            self[key] = value
+
     def __delitem__(self, key):
         composite_key = self._resolve(key)
         if composite_key is None:
@@ -185,6 +220,27 @@ class _ChannelKeyDict(dict):
     def composite_key_for(self, key):
         """Return the stored composite key for ``key`` (composite or bare)."""
         return self._resolve(key)
+
+    def resolve_unique(self, key):
+        """Return the stored key only when ``key`` identifies one entry.
+
+        Identity-sensitive callers use this instead of :meth:`get` so an
+        ambiguous display label fails closed rather than silently selecting
+        the last-bound composite entry.
+        """
+        if dict.__contains__(self, key):
+            return key
+        bucket = self._name_index.get(key)
+        if bucket and len(bucket) == 1:
+            return bucket[0]
+        return None
+
+    def as_composite_dict(self):
+        """Return a lossless plain dict keyed by stored composite identity."""
+        return {
+            composite_key: value
+            for composite_key, _label, value in self.composite_items()
+        }
 
     # -- iteration (display-name surface) --------------------------------
     def __iter__(self):

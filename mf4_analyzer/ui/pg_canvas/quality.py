@@ -85,7 +85,7 @@ class QualityManager(_CanvasBackref):
                 return set()
         except Exception:
             return set()
-        profiles = getattr(self, "_channel_render_profiles", {}) or {}
+        profiles = self._channel_render_profiles
         covered = set()
         try:
             entries = self._channel_lines.composite_items()
@@ -297,7 +297,7 @@ class QualityManager(_CanvasBackref):
         retained by the selection-delta path must not block AA for the curves
         that are actually painted.
         """
-        profiles = getattr(self, "_channel_render_profiles", {}) or {}
+        profiles = self._channel_render_profiles
         covered_curves = self._raster_covered_curve_items()
         lines = getattr(self, "_channel_lines", None)
         labels = []

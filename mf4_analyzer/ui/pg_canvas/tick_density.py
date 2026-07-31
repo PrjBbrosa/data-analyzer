@@ -55,13 +55,11 @@ class TickDensityController(_CanvasBackref):
             self._overlay_axes._build_overlay_y_grid()
             self._overlay_axes._repin_overlay_channel_ticks()
             self._apply_target_x_ticks_to_all_axes()
-            self._refresh = True
             self.draw_idle()
             return
         self._apply_tick_density_to_all_axes()
         self._unify_subplot_left_axis_widths()
         self._unify_subplot_bottom_axis_heights()
-        self._refresh = True
         self.draw_idle()
 
     def _apply_tick_density_to_all_axes(self):

@@ -312,10 +312,7 @@ class OverlayAxisManager(_CanvasBackref):
         sig_arr = np.asarray(sig)
         is_monotonic = self._cached_is_monotonic(data_id, name, t_arr)
         ck = _view_state_channel_key(data_id, name)
-        profiles = getattr(self, "_channel_render_profiles", None)
-        if profiles is None:
-            profiles = {}
-            self._channel_render_profiles = profiles
+        profiles = self._channel_render_profiles
         source_revision = source_revision_for(t_arr, sig_arr)
         profile = profiles.get(ck)
         if profile is None or profile.source_revision != source_revision:
@@ -422,10 +419,7 @@ class OverlayAxisManager(_CanvasBackref):
         sig_arr = np.asarray(sig)
         is_monotonic = self._cached_is_monotonic(data_id, name, t_arr)
         ck = _view_state_channel_key(data_id, name)
-        profiles = getattr(self, "_channel_render_profiles", None)
-        if profiles is None:
-            profiles = {}
-            self._channel_render_profiles = profiles
+        profiles = self._channel_render_profiles
         source_revision = source_revision_for(t_arr, sig_arr)
         profile = profiles.get(ck)
         if profile is None or profile.source_revision != source_revision:
@@ -915,13 +909,11 @@ class OverlayAxisManager(_CanvasBackref):
                 ax.set_ylim(cur_lo, cur_hi)
             except Exception:
                 return
-            self._refresh = True
             self.draw_idle()
 
         def _on_finished():
             self._snap_overlay_channel_to_grid(ax)
             self._snap_anim = None
-            self._refresh = True
             self.draw_idle()
 
         anim.valueChanged.connect(_on_value)
@@ -957,14 +949,12 @@ class OverlayAxisManager(_CanvasBackref):
                 pass
         if already_locked:
             # Box never pulled the graticule Y off [0, 1] → no Y span to map.
-            self._refresh = True
             self.draw_idle()
             return
         f0 = max(0.0, min(1.0, min(y0, y1)))
         f1 = max(0.0, min(1.0, max(y0, y1)))
         if f1 - f0 < 1e-6:
             # Box too short in Y → X-only zoom; leave every channel's Y as-is.
-            self._refresh = True
             self.draw_idle()
             return
         n = self._current_overlay_divisions()
@@ -994,7 +984,6 @@ class OverlayAxisManager(_CanvasBackref):
                     ])
             except Exception:
                 continue
-        self._refresh = True
         self.draw_idle()
 
     def _teardown_overlay_aux_viewboxes(self):
@@ -1291,7 +1280,6 @@ class OverlayAxisManager(_CanvasBackref):
         except Exception:
             return False
         self.visible_range_changed.emit()
-        self._refresh = True
         self.draw_idle()
         return True
 
@@ -1425,7 +1413,6 @@ class OverlayAxisManager(_CanvasBackref):
                     continue
             if changed:
                 self.visible_range_changed.emit()
-                self._refresh = True
                 self.draw_idle()
             self.schedule_idle_quality()
             return True
@@ -1459,7 +1446,6 @@ class OverlayAxisManager(_CanvasBackref):
             return False
 
         self.visible_range_changed.emit()
-        self._refresh = True
         self.draw_idle()
         self.schedule_idle_quality()
         return True

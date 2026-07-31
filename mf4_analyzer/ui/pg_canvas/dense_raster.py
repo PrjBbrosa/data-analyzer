@@ -238,7 +238,7 @@ class DenseDiscreteRasterLayer(QObject):
     def _dense_visible_keys(self):
         if bool(getattr(self.canvas, "_overlay_mode", False)):
             return []
-        profiles = getattr(self.canvas, "_channel_render_profiles", {}) or {}
+        profiles = self.canvas._channel_render_profiles
         keys = []
         for ck, _name, (_axis, line) in self.canvas._channel_lines.composite_items():
             if getattr(profiles.get(ck), "strategy", None) != "dense_discrete":
@@ -400,7 +400,7 @@ class DenseDiscreteRasterLayer(QObject):
         self._remove_entry(composite or key)
 
     def sync_visibility(self, *, schedule_missing=True):
-        profiles = getattr(self.canvas, "_channel_render_profiles", {}) or {}
+        profiles = self.canvas._channel_render_profiles
         for ck, _name, (_axis, line) in self.canvas._channel_lines.composite_items():
             pdi = getattr(line, "plot_data_item", None)
             curve = getattr(pdi, "curve", None)
@@ -432,7 +432,7 @@ class DenseDiscreteRasterLayer(QObject):
             for ck in list(self.entries):
                 self._remove_entry(ck)
             return False
-        profiles = getattr(self.canvas, "_channel_render_profiles", {}) or {}
+        profiles = self.canvas._channel_render_profiles
         active = set()
         rebuilt = False
         for ck, _name, (axis, line) in self.canvas._channel_lines.composite_items():

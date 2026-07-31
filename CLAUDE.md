@@ -29,7 +29,7 @@ pytest -m slow                          # 仅性能/长跑用例
 ## Architecture
 - `mf4_analyzer/` 主包：`app.py`(入口) · `io/` · `signal/`(数值算法) ·
   `ui/`+`ui_kit/`(PyQt 界面) · `acquisition*/`(采集) · `batch.py`。
-- `tests/`（164 个 pytest 用例，用 pytest-qt）· `scripts/`（冒烟/回归脚本）。
+- `tests/`（pytest / pytest-qt 自动化测试）· `scripts/`（冒烟/回归脚本）。
 - `AGENTS.md` 是 **Codex 专用**，与本文件并行，勿混用。
 
 ## Gotchas

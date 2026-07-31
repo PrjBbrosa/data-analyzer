@@ -13,6 +13,13 @@ else:
     package_name = __package__
 
 
+from mf4_analyzer.diagnostics import (  # noqa: E402 - direct-script path first
+    install_excepthooks,
+    install_qt_message_handler,
+    setup_logging,
+)
+
+
 def _import_symbol(module_name: str, symbol_name: str):
     module = importlib.import_module(f"{package_name}.{module_name}")
     return getattr(module, symbol_name)
@@ -62,6 +69,7 @@ def _configure_high_dpi():
 
 
 def main():
+    setup_logging()
     _configure_high_dpi()
 
     from PyQt5.QtWidgets import QApplication
@@ -73,6 +81,7 @@ def main():
 
     setup_chinese_font()
     app = QApplication(sys.argv)
+    install_qt_message_handler()
     from mf4_analyzer.ui.pg_canvas.fonts import apply_global_chart_font
     apply_global_chart_font(app)
     app.setStyle('Fusion')
@@ -82,6 +91,7 @@ def main():
     load_stylesheet(app)
     install_glass_tooltips(app)
     window = MainWindow()
+    install_excepthooks(on_error=lambda text: window.toast(text, "error"))
     window.show()
     sys.exit(app.exec_())
 

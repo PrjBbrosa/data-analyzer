@@ -24,6 +24,7 @@ class AnnotationManager(_CanvasBackref):
         "remarks",
         "press_pos",
         "press_dragged",
+        "_artist",
     })
 
     _delegate_names = frozenset({

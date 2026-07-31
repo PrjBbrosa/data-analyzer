@@ -1147,6 +1147,33 @@ def _pg_signal_signature(bound) -> str:
 class TestTimeDomainCanvasPGAnnotations:
     """Pin the remark tool behavior users exercise from the time toolbar."""
 
+    def test_annotation_artist_is_manager_owned_and_behaviour_is_unchanged(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPoint
+
+        canvas = _pg_canvas(qapp)
+        manager = canvas._annotations
+        assert "_artist" in vars(manager)
+        assert "_artist" not in vars(canvas)
+
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        monkeypatch.setattr(
+            manager,
+            "_nearest_data_point",
+            lambda _pos: ("speed", 1.25, 42.5, "#1769e0", "rpm"),
+        )
+        manager._add_remark(QPoint(120, 100))
+        assert len(manager.remarks) == 1
+
+        manager._remove_remark_by_index(0)
+        assert manager.remarks == []
+
+        manager._add_remark(QPoint(120, 100))
+        manager._add_remark(QPoint(120, 100))
+        manager.clear_remarks()
+        assert manager.remarks == []
+
     def test_remark_label_shows_coordinates_not_channel_name(self, qapp, monkeypatch):
         from PyQt5.QtCore import QPoint
 
@@ -1513,6 +1540,24 @@ class TestTimeDomainCanvasPGContract:
         assert callable(getattr(canvas._primary_xaxis_ax, "get_xlim", None))
         assert callable(getattr(canvas._primary_xaxis_ax, "set_xlim", None))
 
+    def test_render_profiles_are_canvas_owned_and_cleared(self, qapp):
+        canvas = _pg_canvas(qapp)
+        assert canvas._channel_render_profiles == {}
+
+        t = np.linspace(0.0, 1.0, 100, dtype=np.float64)
+        sig = np.sin(t).astype(np.float64)
+        canvas.plot_channels([
+            ("a", True, t, sig, "#1769e0", "u", "fid-1"),
+        ])
+        assert canvas._channel_render_profiles
+
+        canvas.clear()
+        assert canvas._channel_render_profiles == {}
+
+    def test_canvas_has_no_ownerless_refresh_attribute(self, qapp):
+        canvas = _pg_canvas(qapp)
+        assert "_refresh" not in vars(canvas)
+
     def test_cursor_state_methods_callable(self, qapp):
         """``set_cursor_visible``, ``set_dual_cursor_mode``,
         ``reset_cursor_state`` are part of the public surface MainWindow
@@ -1530,12 +1575,10 @@ class TestTimeDomainCanvasPGContract:
         canvas._cursor.ax = 0.25
         canvas._cursor.bx = 0.75
         canvas._cursor.placing = "B"
-        canvas._refresh = False
         canvas.reset_cursor_state()
         assert canvas._cursor.ax is None
         assert canvas._cursor.bx is None
         assert canvas._cursor.placing == "A"
-        assert canvas._refresh is True
 
     def test_get_statistics_reads_raw_channel_data_not_envelope_output(self, qapp):
         """Design §4.2: ``get_statistics`` MUST read raw arrays from

@@ -108,6 +108,12 @@ lesson by default.
 | [Superseded Plans Use New Dated Files](codex-superseded-plans-use-new-dated-files.md) | Revising an approved or committed implementation plan after its core | See lesson |
 | [Numeric Hazard Rates Need The Real Caller Path](codex-numeric-hazard-rate-needs-caller-path.md) | Using a numerical sweep or extracted-expression probe to justify a | See lesson |
 | [Codex PG Subplot Reuse Needs Realized Geometry](codex-pg-subplot-reuse-needs-realized-geometry.md) | Changing or reviewing time-domain subplot selection-delta reuse, | See lesson |
+| [Identity-sensitive Y-fit must not fall back to an ambiguous display label](pyqt-ui/2026-07-30-identity-sensitive-yfit-must-not-fallback-to-display-label.md) | Identity-sensitive canvas paths have both a composite channel key and a display label. | See lesson |
+| [`dict.setdefault` bypasses aliased-key resolution in a dict subclass](pyqt-ui/2026-07-30-dict-setdefault-bypasses-aliased-key-resolution.md) | A dict subclass aliases external labels to stored composite keys. | See lesson |
+| [`np.convolve(mode="same")` follows the longer operand's length](signal-processing/2026-07-30-convolve-same-output-length-follows-longer-operand.md) | A UI-controlled smoothing window may be longer than the selected signal. | See lesson |
+| [An actionable audit needs a fixed commit SHA](refactor/2026-07-30-audit-baseline-requires-commit-sha.md) | An audit reports source counts, line locations, probes, priorities, or estimates. | See lesson |
+| [Canvas backref write-through needs an explicit whitelist](pyqt-ui/2026-07-30-canvas-backref-write-through-needs-explicit-whitelist.md) | A collaborator delegates unknown attribute reads or writes to a shared canvas. | See lesson |
+| [Diagnostic throttles must account for every pending count](diagnostic-throttle-pending-count-lifecycle.md) | Changing a bounded diagnostic throttle, its rollover, eviction, or shutdown behavior. | See lesson |
 
 ## Selection Rules
 

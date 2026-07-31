@@ -2019,7 +2019,6 @@ class MainWindow(
         else:
             self.canvas_time._ax = self.canvas_time._bx = None
             self.canvas_time._placing = 'A'
-            self.canvas_time._refresh = True
             self.canvas_time.draw_idle()
         self.chart_stack.clear_cursor_pill()
         self.statusBar.showMessage("游标已重置")

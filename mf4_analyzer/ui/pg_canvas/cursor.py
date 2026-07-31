@@ -180,7 +180,6 @@ class CursorController(_CanvasBackref):
             self._ax = None
             self._bx = None
             self._placing = "A"
-            self._refresh = True
             self._hide_cursor_items(self._cursor_a_items)
             self._hide_cursor_items(self._cursor_b_items)
             self._hide_dual_cursor_extreme_markers()
@@ -192,7 +191,6 @@ class CursorController(_CanvasBackref):
         self._ax = None
         self._bx = None
         self._placing = "A"
-        self._refresh = True
         self._hide_cursor_items(self._cursor_line_items)
         self._hide_cursor_items(self._cursor_a_items)
         self._hide_cursor_items(self._cursor_b_items)
