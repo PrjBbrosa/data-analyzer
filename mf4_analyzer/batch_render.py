@@ -231,6 +231,8 @@ def _batch_font_rc_settings(image_format: str) -> dict[str, Any]:
     }
     if image_format == "svg":
         settings["svg.fonttype"] = "none"
+    if image_format == "pdf":
+        settings["pdf.fonttype"] = 42
     return settings
 
 
