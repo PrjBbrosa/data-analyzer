@@ -116,6 +116,7 @@ lesson by default.
 | [Diagnostic throttles must account for every pending count](diagnostic-throttle-pending-count-lifecycle.md) | Changing a bounded diagnostic throttle, its rollover, eviction, or shutdown behavior. | See lesson |
 | [Windows Vendoring Network Failures Keep The Gate Red](codex-windows-vendoring-network-retry.md) | A Windows folder build fails while pip vendors the pinned Vector/XCP | See lesson |
 | [Matplotlib Pruning Needs A Frozen Render Matrix](matplotlib-pruning-needs-frozen-render-matrix.md) | Changing PyInstaller Matplotlib collection/exclusions, `mpl-data` | See lesson |
+| [Batch Render Degradation Stops At The Probe](batch-render-degradation-stops-at-probe.md) | Changing batch image/PDF backend imports, effective output selection, | See lesson |
 
 ## Selection Rules
 

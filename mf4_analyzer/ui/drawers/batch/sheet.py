@@ -1062,10 +1062,20 @@ class BatchSheet(QDialog):
             QMessageBox.information(self, "批处理完成", "全部任务已完成。")
         elif status == "partial":
             blocked = getattr(result, "blocked", []) or []
-            QMessageBox.warning(
-                self, "批处理部分完成",
-                f"完成，共 {len(blocked)} 个失败任务。",
+            degraded_count = int(
+                getattr(result, "degraded_count", 0) or 0
             )
+            if degraded_count and not blocked:
+                QMessageBox.information(
+                    self,
+                    "批处理降级完成",
+                    f"完成，共 {degraded_count} 个任务仅导出数据文件。",
+                )
+            else:
+                QMessageBox.warning(
+                    self, "批处理部分完成",
+                    f"完成，共 {len(blocked)} 个失败任务。",
+                )
         elif status == "cancelled":
             QMessageBox.information(self, "批处理已取消", "运行已被用户取消。")
         elif status == "blocked":

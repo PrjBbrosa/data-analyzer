@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 from pathlib import Path
 
 import numpy as np
@@ -1862,6 +1863,153 @@ def test_runner_overwrite_writer_failure_preserves_old_artifact_set(
     assert second.items[0].status == "failed"
     assert data_path.read_bytes() == old_data
     assert image_path.read_bytes() == old_image
+
+
+def _raise_batch_render_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if str(name).endswith("batch_render"):
+        raise ModuleNotFoundError("simulated missing matplotlib backend")
+    return _REAL_IMPORT(name, globals, locals, fromlist, level)
+
+
+_REAL_IMPORT = builtins.__import__
+_DEGRADED_REASON = "图片/PDF 导出后端不可用，本次仅导出数据文件"
+
+
+def test_runner_degrades_data_and_pdf_before_reservation_when_backend_import_fails(
+    tmp_path, monkeypatch,
+):
+    import mf4_analyzer.batch as batch_module
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_fd(tmp_path, "backend_missing", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="degraded PDF",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(
+            export_data=True,
+            export_image=True,
+            image_format="pdf",
+        ),
+    )
+    reservations = []
+    original_reserve = batch_module.reserve_output_paths
+
+    def capture_reservation(directory, stem, extensions, *, conflict_policy):
+        reservations.append(tuple(extensions))
+        return original_reserve(
+            directory, stem, extensions, conflict_policy=conflict_policy,
+        )
+
+    monkeypatch.setattr(batch_module, "reserve_output_paths", capture_reservation)
+    monkeypatch.setattr(builtins, "__import__", _raise_batch_render_import)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "partial"
+    assert result.degraded_count == 1
+    assert result.warnings == [_DEGRADED_REASON]
+    assert result.blocked == []
+    item = result.items[0]
+    assert item.status == "done"
+    assert item.degraded_reason == _DEGRADED_REASON
+    assert item.warnings == [_DEGRADED_REASON]
+    assert item.requested_outputs == {"data": "csv", "image": "pdf"}
+    assert item.effective_outputs == {"data": "csv"}
+    assert reservations == [("csv",)]
+    assert Path(item.data_path).is_file()
+    assert item.image_path is None
+
+    output_dir = tmp_path / "out"
+    assert not list(output_dir.glob("*.pdf"))
+    assert not list(output_dir.glob("*.partial.json"))
+    assert not list(output_dir.glob(".*.batch-reserve"))
+    assert not list(output_dir.glob(".*.batch-stage.*"))
+
+    manifest = load_batch_manifest(result.manifest_path)
+    assert manifest["run_status"] == "partial"
+    entry = manifest["entries"][0]
+    assert entry["status"] == "done"
+    assert entry["requested_outputs"] == {"data": "csv", "image": "pdf"}
+    assert entry["effective_outputs"] == {"data": "csv"}
+    assert entry["degraded_reason"] == _DEGRADED_REASON
+    assert set(entry["artifacts"]) == {"data"}
+
+
+def test_runner_image_only_fails_cleanly_when_backend_import_is_unavailable(
+    tmp_path, monkeypatch,
+):
+    fd = _make_fd(tmp_path, "image_only_backend_missing", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="image only",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+    monkeypatch.setattr(builtins, "__import__", _raise_batch_render_import)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert result.degraded_count == 0
+    assert result.items[0].status == "failed"
+    assert "图片/PDF 导出后端不可用" in result.items[0].message
+    assert result.items[0].requested_outputs == {"image": "png"}
+    assert result.items[0].effective_outputs == {}
+    assert not list((tmp_path / "out").glob("*.png"))
+    assert not list((tmp_path / "out").glob(".*.batch-reserve"))
+
+
+def test_runner_data_only_never_imports_batch_render(tmp_path, monkeypatch):
+    fd = _make_fd(tmp_path, "data_only_no_probe", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="data only",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    monkeypatch.setattr(builtins, "__import__", _raise_batch_render_import)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert Path(result.items[0].data_path).is_file()
+
+
+def test_runner_writer_import_error_rolls_back_data_and_image_set(
+    tmp_path, monkeypatch,
+):
+    fd = _make_fd(tmp_path, "writer_import_error", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="writer import error",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(
+            export_data=True,
+            export_image=True,
+            image_format="pdf",
+            write_manifest=False,
+        ),
+    )
+
+    def fail_writer(*_args, **_kwargs):
+        raise ModuleNotFoundError("writer-time import failure")
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(fail_writer))
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert result.items[0].status == "failed"
+    assert result.degraded_count == 0
+    assert not list((tmp_path / "out").glob("*.csv"))
+    assert not list((tmp_path / "out").glob("*.pdf"))
+    assert not list((tmp_path / "out").glob(".*.batch-stage.*"))
+    assert not list((tmp_path / "out").glob(".*.batch-reserve"))
 
 
 def test_runner_maps_phase3_image_output_to_renderer_options_and_context(
