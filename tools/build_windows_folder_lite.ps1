@@ -27,6 +27,7 @@ if (-not $AppName) {
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$env:MPLBACKEND = "Agg"
 
 function Write-Step {
     param([string]$Message)
@@ -58,6 +59,8 @@ $StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
 $IconsDir = Join-Path $RepoRoot "assets\icons"
 $AppIcon = Join-Path $IconsDir "tracelab.ico"
 $RuntimeDependencyTool = Join-Path $PSScriptRoot "windows_runtime_dependencies.py"
+$MatplotlibContractTool = Join-Path $PSScriptRoot "matplotlib_frozen_contract.py"
+$BatchRenderSmokeTool = Join-Path $PSScriptRoot "verify_frozen_batch_render.py"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $RepoRoot "dist"
@@ -65,10 +68,11 @@ $WorkDir = Join-Path $RepoRoot "build\pyinstaller-lite"
 $SpecDir = Join-Path $RepoRoot "build\spec-lite"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
+$BuildEvidenceDir = Join-Path $RepoRoot ".state\build-evidence"
 # Default output: dist\TraceLabAnalyzer7.9\TraceLabAnalyzer7.9.exe
 # (override with -Version or -AppName)
 
-foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool)) {
+foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $MatplotlibContractTool, $BatchRenderSmokeTool)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -94,7 +98,7 @@ if (-not $KeepPrevious) {
     }
 }
 
-New-Item -ItemType Directory -Force -Path $DistDir, $WorkDir, $SpecDir | Out-Null
+New-Item -ItemType Directory -Force -Path $DistDir, $WorkDir, $SpecDir, $BuildEvidenceDir | Out-Null
 
 Write-Step "Verifying frozen import dependency contract"
 & $VenvPython $RuntimeDependencyTool --verify --require-installed --requirements $Requirements --build-script $PSCommandPath
@@ -109,6 +113,16 @@ try {
     $RuntimeDependencyArgs = @($RuntimeDependencyArgsJson | ConvertFrom-Json)
 } catch {
     throw "Frozen import dependency arguments were not valid JSON: $_"
+}
+$MatplotlibContractJson = & $VenvPython $MatplotlibContractTool --pyinstaller-excludes-json
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not resolve Matplotlib frozen packaging contract"
+}
+try {
+    $MatplotlibContract = $MatplotlibContractJson | ConvertFrom-Json
+    $MatplotlibExcludedModules = @($MatplotlibContract.excluded_modules)
+} catch {
+    throw "Matplotlib frozen packaging contract was not valid JSON: $_"
 }
 
 Write-Step "Building analyzer-only folder-style exe with PyInstaller"
@@ -218,6 +232,9 @@ foreach ($HiddenImport in $HiddenImports) {
 foreach ($QtModule in $UnusedQtModules) {
     $PyInstallerArgs += @("--exclude-module", $QtModule)
 }
+foreach ($MatplotlibModule in $MatplotlibExcludedModules) {
+    $PyInstallerArgs += @("--exclude-module", $MatplotlibModule)
+}
 $PyInstallerArgs += $EntryScript
 
 & $VenvPython @PyInstallerArgs
@@ -243,6 +260,22 @@ if (Test-Path -LiteralPath $SciPyLibsDir) {
         throw "Expected scipy.libs to be empty after OpenBLAS removal: $SciPyLibsDir"
     }
     Remove-Item -LiteralPath $SciPyLibsDir -Force
+}
+
+Write-Step "Pruning collected Matplotlib data"
+$MatplotlibPruneEvidence = Join-Path $BuildEvidenceDir "$AppName-matplotlib-prune.json"
+& $VenvPython $MatplotlibContractTool `
+    --prune-internal (Join-Path $OutputDir "_internal") `
+    --evidence-json $MatplotlibPruneEvidence
+if ($LASTEXITCODE -ne 0) {
+    throw "Matplotlib frozen-data pruning failed"
+}
+
+Write-Step "Verifying frozen batch rendering (4 kinds x 3 formats)"
+$BatchRenderSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-batch-render-smoke.json"
+& $VenvPython $BatchRenderSmokeTool --exe $ExePath --evidence-json $BatchRenderSmokeEvidence
+if ($LASTEXITCODE -ne 0) {
+    throw "Frozen batch render smoke failed; see $BatchRenderSmokeEvidence"
 }
 
 Write-Step "Build output"

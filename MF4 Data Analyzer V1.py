@@ -13,6 +13,8 @@ if __name__ == "__main__":
     parser.add_argument("--a2l-limit", type=int)
     parser.add_argument("--importer-runtime-smoke", action="store_true")
     parser.add_argument("--import-path", type=Path, action="append", default=[])
+    parser.add_argument("--batch-render-runtime-smoke", action="store_true")
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--json", type=Path)
     args, _unknown = parser.parse_known_args()
     if args.pyxcp_import_probe_child:
@@ -50,6 +52,14 @@ if __name__ == "__main__":
         from mf4_analyzer.io.importer_runtime_smoke import run
 
         raise SystemExit(run(args.import_path, args.json))
+    if args.batch_render_runtime_smoke:
+        if args.json is None or args.output_dir is None:
+            raise SystemExit(
+                "--batch-render-runtime-smoke requires --output-dir <path> and --json <path>"
+            )
+        from mf4_analyzer.batch_render_smoke import run
+
+        raise SystemExit(run(args.output_dir, args.json))
     from mf4_analyzer.app import main
 
     main()
