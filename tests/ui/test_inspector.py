@@ -78,26 +78,16 @@ def test_time_contextual_plot_button_emits(qapp, qtbot):
         tc.btn_plot.click()
 
 
-def test_time_contextual_uses_shared_time_preset_provider(qapp, qtbot):
-    from mf4_analyzer.analysis_presets import get_builtin_preset
+def test_time_contextual_has_no_preset_bar(qapp, qtbot):
+    """时域没有分析参数，因此不提供预设槽（旧的预设条存的是无人读取的空快照）。"""
     from mf4_analyzer.ui.inspector_sections import TimeContextual
+    from mf4_analyzer.ui.inspector_sections.presets import PresetBar
 
     ctx = TimeContextual()
     qtbot.addWidget(ctx)
 
-    assert ctx.preset_bar._load_btns[1].isEnabled() is False
-    assert ctx.preset_bar._load_btns[2].isEnabled() is False
-    assert ctx.preset_bar._load_btns[3].isEnabled() is True
-
-    ctx.preset_bar._load_btns[3].click()
-    assert ctx.current_params() == get_builtin_preset(
-        "time", "transient",
-    ).params_copy()
-
-    ctx.preset_bar.set_recommended(3)
-    assert ctx.preset_bar._load_btns[1].isEnabled() is False
-    assert ctx.preset_bar._load_btns[2].isEnabled() is False
-    assert ctx.preset_bar._load_btns[3].isEnabled() is True
+    assert not hasattr(ctx, "preset_bar")
+    assert ctx.findChildren(PresetBar) == []
 
 
 def test_inspector_primary_buttons_share_section_width(qapp, qtbot):
