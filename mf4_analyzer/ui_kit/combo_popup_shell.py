@@ -11,8 +11,9 @@ from PyQt5.QtCore import QEvent, QObject, Qt
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import QComboBox, QFrame
 
+from .popup_shell import apply_popup_shell
 
-_SHELL_FLAGS = Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+
 _MAX_QWIDGET_SIZE = 16777215
 
 _POPUP_VIEW_QSS = """
@@ -72,15 +73,15 @@ QAbstractItemView::item:selected {
 
 def _apply_shell(window):
     """Apply a transparent, frameless shell to a popup window once."""
-    if window is None or window.testAttribute(Qt.WA_TranslucentBackground):
-        return False
-    window.setWindowFlags(window.windowFlags() | _SHELL_FLAGS)
-    window.setAttribute(Qt.WA_TranslucentBackground, True)
-    window.setStyleSheet(
-        "QComboBoxPrivateContainer, QFrame { "
-        "border: none; background: transparent; }"
-    )
-    return True
+    changed = apply_popup_shell(window)
+    if changed:
+        # QComboBoxPrivateContainer paints its own square frame.  This is
+        # deliberately combo-specific, not a generic popup-shell concern.
+        window.setStyleSheet(
+            "QComboBoxPrivateContainer, QFrame { "
+            "border: none; background: transparent; }"
+        )
+    return changed
 
 
 def _int_property(widget, name):
