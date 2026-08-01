@@ -2,27 +2,29 @@
 id: manifest-resume-requires-complete-source-facts
 status: active
 owners: [codex]
-keywords: [batch, manifest, resume, provenance, source-facts, fail-closed]
-paths: [mf4_analyzer/batch_manifest.py]
+keywords: [batch, manifest, resume, provenance, source-facts, checksum, fail-closed]
+paths: [mf4_analyzer/batch_manifest.py, mf4_analyzer/batch.py]
 checks: [git diff --check]
-tests: [tests/test_batch_manifest.py]
+tests: [tests/test_batch_manifest.py, tests/test_batch_runner.py]
 ---
 
 # Manifest Resume Requires Complete Source Facts
 
-Trigger: Changing manifest validation, resume lookup, source provenance facts,
-or artifact checksum recovery.
+Trigger: Changing manifest validation, grouped resume planning, source
+provenance facts, duplicate task handling, or artifact checksum recovery.
 
-Past failure: A render-group member missing `size` or `mtime_ns` could match a
-current source whose explicit value was `None`, because `.get()` made an absent
-key indistinguishable from a present null value. A valid image checksum could
-then turn malformed provenance into an unsafe resume hit.
+Past failure: Missing `size`/`mtime_ns` facts could match explicit nulls, and a
+consumer later accepted `bool` as `int`, allowing `True == 1` to reuse the
+wrong source. A duplicate task-ID scan also verified one entry's checksum but
+returned a different, invalid candidate artifact.
 
-Rule: Resume-critical source facts must contain every required key and each
-value must have a valid type before comparison. Recovery helpers must enforce
-this fail-closed rule themselves instead of relying only on manifest loading;
-never compare required provenance through `.get()` when key absence matters.
+Rule: Every resume consumer—not only the manifest loader—must require all
+source-fact keys, a nonempty string identity, and stats that are either
+non-boolean integers or explicit `None`. Never use `.get()` where key absence
+matters. Bind path/checksum proof to the exact entry returned; when duplicate
+IDs are tolerated, object/candidate identity must not drift across a rescan.
 
-Verification: Run the missing-key, wrong-type, changed-stat, bad-checksum, and
-post-checksum cancellation cases in `tests/test_batch_manifest.py`, then run
-`git diff --check`.
+Verification: Run missing-key, wrong-type (including bool), duplicate-ID,
+changed-stat, bad-path/checksum, post-checksum cancellation, and grouped lazy
+resume cases in `tests/test_batch_manifest.py` and `tests/test_batch_runner.py`;
+then run `git diff --check`.
