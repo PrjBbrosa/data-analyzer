@@ -690,6 +690,284 @@ def test_time_payload_preserves_series_and_manual_ranges():
     assert axis.get_ylim() == pytest.approx((-1.0, 2.0))
 
 
+def test_time_spec_overlay_has_no_phantom_axis():
+    from mf4_analyzer.batch_render import (
+        BatchSeries,
+        BatchTimeFigureSpec,
+        _build_batch_figure,
+    )
+
+    figure = _build_batch_figure(
+        (
+            "time",
+            BatchTimeFigureSpec(
+                series=(
+                    BatchSeries(np.array([0.0, 2.0]), np.array([1.0, 2.0]), "A", "V"),
+                    BatchSeries(np.array([1.0, 3.0]), np.array([3.0, 4.0]), "B", "V"),
+                )
+            ),
+        )
+    )
+
+    assert len(figure.axes) == 1
+    assert figure.axes[0].get_xlim() == pytest.approx((0.0, 2.0))
+
+
+def test_time_spec_channel_x_uses_requested_label_without_zeroing():
+    from mf4_analyzer.batch_render import (
+        BatchSeries,
+        BatchTimeFigureSpec,
+        _build_batch_figure,
+    )
+
+    figure = _build_batch_figure(
+        (
+            "time",
+            BatchTimeFigureSpec(
+                series=(
+                    BatchSeries(np.array([100.0, 120.0]), np.array([1.0, 2.0]), "speed", "m/s", "rpm"),
+                ),
+                x_source="channel",
+                x_origin="zero",
+                x_label="Engine speed (rpm)",
+            ),
+        )
+    )
+    axis = figure.axes[0]
+
+    assert axis.get_xlabel() == "Engine speed (rpm)"
+    assert axis.lines[0].get_xdata() == pytest.approx([100.0, 120.0])
+    assert axis.get_xlim() == pytest.approx((100.0, 120.0))
+
+
+def test_time_spec_normalizes_each_time_series_and_keeps_union():
+    from mf4_analyzer.batch_render import (
+        BatchSeries,
+        BatchTimeFigureSpec,
+        _build_batch_figure,
+    )
+
+    figure = _build_batch_figure(
+        (
+            "time",
+            BatchTimeFigureSpec(
+                series=(
+                    BatchSeries(np.array([10.0, 12.0]), np.array([1.0, 2.0]), "A", "V"),
+                    BatchSeries(np.array([20.0, 25.0]), np.array([3.0, 4.0]), "B", "V"),
+                )
+            ),
+        )
+    )
+    axis = figure.axes[0]
+
+    assert axis.lines[0].get_xdata() == pytest.approx([0.0, 2.0])
+    assert axis.lines[1].get_xdata() == pytest.approx([0.0, 5.0])
+    assert axis.get_xlim() == pytest.approx((0.0, 5.0))
+
+
+def test_time_spec_mixed_x_units_fail_closed():
+    from mf4_analyzer.batch_render import (
+        BatchSeries,
+        BatchTimeFigureSpec,
+        _build_batch_figure,
+    )
+
+    spec = BatchTimeFigureSpec(
+        series=(
+            BatchSeries(np.array([0.0, 1.0]), np.array([1.0, 2.0]), "A", "V", "s"),
+            BatchSeries(np.array([0.0, 1.0]), np.array([3.0, 4.0]), "B", "V", "rpm"),
+        )
+    )
+
+    with pytest.raises(ValueError, match="x units"):
+        _build_batch_figure(("time", spec))
+
+
+def test_time_spec_two_y_units_use_one_combined_legend():
+    from mf4_analyzer.batch_render import (
+        BatchSeries,
+        BatchTimeFigureSpec,
+        _build_batch_figure,
+    )
+
+    figure = _build_batch_figure(
+        (
+            "time",
+            BatchTimeFigureSpec(
+                series=(
+                    BatchSeries(np.array([0.0, 1.0]), np.array([1.0, 2.0]), "voltage", "V"),
+                    BatchSeries(np.array([0.0, 1.0]), np.array([3.0, 4.0]), "speed", "rpm"),
+                )
+            ),
+        )
+    )
+    left, right = figure.axes
+
+    assert len(figure.axes) == 2
+    assert left.get_ylabel() == "Amplitude (V)"
+    assert right.get_ylabel() == "Amplitude (rpm)"
+    assert [text.get_text() for text in left.get_legend().get_texts()] == [
+        "voltage",
+        "speed",
+    ]
+
+
+def test_time_spec_three_y_units_fail_closed():
+    from mf4_analyzer.batch_render import (
+        BatchSeries,
+        BatchTimeFigureSpec,
+        _build_batch_figure,
+    )
+
+    spec = BatchTimeFigureSpec(
+        series=tuple(
+            BatchSeries(np.array([0.0, 1.0]), np.array([1.0, 2.0]), unit, unit)
+            for unit in ("V", "rpm", "N")
+        )
+    )
+
+    with pytest.raises(ValueError, match="at most two y units"):
+        _build_batch_figure(("time", spec))
+
+
+def test_time_spec_dual_y_rejects_manual_y_limits():
+    from mf4_analyzer.batch_render import (
+        BatchSeries,
+        BatchTimeFigureSpec,
+        _build_batch_figure,
+    )
+
+    spec = BatchTimeFigureSpec(
+        series=(
+            BatchSeries(np.array([0.0, 1.0]), np.array([1.0, 2.0]), "A", "V"),
+            BatchSeries(np.array([0.0, 1.0]), np.array([3.0, 4.0]), "B", "rpm"),
+        )
+    )
+
+    with pytest.raises(ValueError, match="manual y limits"):
+        _build_batch_figure(
+            ("time", spec),
+            params={"y_auto": False, "y_min": 0.0, "y_max": 5.0},
+        )
+
+
+def test_time_spec_subplot_uses_only_active_panels_and_bottom_x_label():
+    from mf4_analyzer.batch_render import (
+        BatchSeries,
+        BatchTimeFigureSpec,
+        _build_batch_figure,
+    )
+
+    figure = _build_batch_figure(
+        (
+            "time",
+            BatchTimeFigureSpec(
+                series=(
+                    BatchSeries(np.array([0.0, 1.0]), np.array([1.0, 2.0]), "A", "V", panel=1),
+                    BatchSeries(np.array([10.0, 15.0]), np.array([3.0, 4.0]), "B", "V", panel=4),
+                ),
+                layout="subplot",
+                x_origin="absolute",
+                x_label="Elapsed time (s)",
+                panel_titles=("unused", "Voltage", "unused", "unused", "Speed"),
+            ),
+        )
+    )
+    top, bottom = figure.axes
+
+    assert len(figure.axes) == 2
+    assert top.get_title() == "Voltage"
+    assert bottom.get_title() == "Speed"
+    assert top.get_xlabel() == ""
+    assert [tick.get_text() for tick in top.get_xticklabels()] == []
+    assert bottom.get_xlabel() == "Elapsed time (s)"
+    assert bottom.get_xlim() == pytest.approx((0.0, 15.0))
+
+
+def test_time_spec_original_and_filtered_linestyles_are_distinct():
+    from mf4_analyzer.batch_render import (
+        BatchSeries,
+        BatchTimeFigureSpec,
+        _build_batch_figure,
+    )
+
+    figure = _build_batch_figure(
+        (
+            "time",
+            BatchTimeFigureSpec(
+                series=(
+                    BatchSeries(np.array([0.0, 1.0]), np.array([1.0, 2.0]), "original", "V", linestyle="-"),
+                    BatchSeries(np.array([0.0, 1.0]), np.array([0.5, 1.5]), "filtered", "V", linestyle="--"),
+                )
+            ),
+        )
+    )
+
+    assert [line.get_linestyle() for line in figure.axes[0].lines] == ["-", "--"]
+
+
+def test_time_spec_all_empty_renders_one_blank_labeled_axis():
+    from mf4_analyzer.batch_render import (
+        BatchSeries,
+        BatchTimeFigureSpec,
+        _build_batch_figure,
+    )
+
+    figure = _build_batch_figure(
+        (
+            "time",
+            BatchTimeFigureSpec(
+                series=(
+                    BatchSeries(np.array([]), np.array([]), "A", "V"),
+                    BatchSeries(np.array([]), np.array([]), "B", "rpm"),
+                ),
+                x_label="Elapsed time (s)",
+            ),
+        )
+    )
+    axis = figure.axes[0]
+
+    assert len(figure.axes) == 1
+    assert axis.get_xlabel() == "Elapsed time (s)"
+    assert axis.get_ylabel() == "Amplitude"
+    assert not axis.lines
+
+
+def test_time_spec_context_renders_group_member_coverage():
+    from mf4_analyzer.batch_render import (
+        BatchRenderContext,
+        BatchSeries,
+        BatchTimeFigureSpec,
+        _build_batch_figure,
+    )
+
+    figure = _build_batch_figure(
+        (
+            "time",
+            BatchTimeFigureSpec(
+                series=(BatchSeries(np.array([0.0, 1.0]), np.array([1.0, 2.0]), "A", "V"),)
+            ),
+        ),
+        context=BatchRenderContext(effective_facts={"members": "2/3"}),
+    )
+
+    assert "members=2/3" in "\n".join(text.get_text() for text in figure.texts)
+
+
+def test_invalid_cmap_falls_back_and_appends_warning():
+    from mf4_analyzer.batch_render import _build_batch_figure
+
+    warnings_out: list[str] = []
+    figure = _build_batch_figure(
+        ("fft_time", _spectro()),
+        params={"cmap": "not-a-colormap"},
+        warnings_out=warnings_out,
+    )
+
+    assert figure.axes[0].images[0].get_cmap().name == "turbo"
+    assert warnings_out == ["Invalid colormap 'not-a-colormap'; using 'turbo'."]
+
+
 def test_renderer_source_is_gui_framework_free():
     import mf4_analyzer.batch_render as renderer
 
