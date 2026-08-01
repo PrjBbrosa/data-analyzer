@@ -666,6 +666,135 @@ def test_group_resume_defends_against_missing_source_fact_after_validation(
 
 
 @pytest.mark.parametrize(
+    ("field", "stored_value", "current_value"),
+    (
+        ("identity", "", "source-a"),
+        ("identity", 42, "source-a"),
+        ("size", True, 1),
+        ("size", 1.0, 1),
+        ("size", "1", 1),
+        ("mtime_ns", True, 1),
+        ("mtime_ns", 1.0, 1),
+        ("mtime_ns", "1", 1),
+    ),
+)
+def test_direct_group_resume_rejects_invalid_stored_source_facts(
+    tmp_path,
+    monkeypatch,
+    field,
+    stored_value,
+    current_value,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    stored_source = {
+        "identity": "source-a",
+        "path": None,
+        "size": 1,
+        "mtime_ns": 1,
+    }
+    current_source = dict(stored_source)
+    stored_source[field] = stored_value
+    current_source[field] = current_value
+    group = _group_entry(image_path, [("task-a", stored_source)])
+    manifest = dict(_manifest([]), render_groups=[group])
+    monkeypatch.setattr(
+        manifest_module,
+        "load_batch_manifest",
+        lambda unused_manifest: manifest,
+    )
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", current_source)],
+        image_format="png",
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "current_value", "stored_value"),
+    (
+        ("identity", "", "source-a"),
+        ("identity", 42, "source-a"),
+        ("size", True, 1),
+        ("size", 1.0, 1),
+        ("size", "1", 1),
+        ("mtime_ns", True, 1),
+        ("mtime_ns", 1.0, 1),
+        ("mtime_ns", "1", 1),
+    ),
+)
+def test_direct_group_resume_rejects_invalid_current_source_facts(
+    tmp_path,
+    monkeypatch,
+    field,
+    current_value,
+    stored_value,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    stored_source = {
+        "identity": "source-a",
+        "path": None,
+        "size": 1,
+        "mtime_ns": 1,
+    }
+    current_source = dict(stored_source)
+    stored_source[field] = stored_value
+    current_source[field] = current_value
+    group = _group_entry(image_path, [("task-a", stored_source)])
+    manifest = dict(_manifest([]), render_groups=[group])
+    monkeypatch.setattr(
+        manifest_module,
+        "load_batch_manifest",
+        lambda unused_manifest: manifest,
+    )
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", current_source)],
+        image_format="png",
+    ) is None
+
+
+@pytest.mark.parametrize("missing_field", ("size", "mtime_ns"))
+def test_direct_group_resume_rejects_missing_current_source_fact(
+    tmp_path,
+    monkeypatch,
+    missing_field,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    stored_source = {
+        "identity": "source-a",
+        "path": None,
+        "size": None,
+        "mtime_ns": None,
+    }
+    current_source = dict(stored_source)
+    current_source.pop(missing_field)
+    group = _group_entry(image_path, [("task-a", stored_source)])
+    manifest = dict(_manifest([]), render_groups=[group])
+    monkeypatch.setattr(
+        manifest_module,
+        "load_batch_manifest",
+        lambda unused_manifest: manifest,
+    )
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", current_source)],
+        image_format="png",
+    ) is None
+
+
+@pytest.mark.parametrize(
     ("field", "bad_value"),
     (
         ("identity", None),

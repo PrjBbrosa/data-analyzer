@@ -174,6 +174,23 @@ def derive_summary(entries) -> dict[str, int]:
     return counts
 
 
+def _source_facts_shape_error(source) -> tuple[str | None, str] | None:
+    if not isinstance(source, Mapping):
+        return None, "must be an object"
+    for field in ("identity", "size", "mtime_ns"):
+        if field not in source:
+            return field, "required field is missing"
+    if not isinstance(source["identity"], str) or not source["identity"]:
+        return "identity", "must be a non-empty string"
+    for field in ("size", "mtime_ns"):
+        value = source[field]
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool)
+        ):
+            return field, "must be an integer or null"
+    return None
+
+
 def _write_json_atomic(path: Path, payload: Mapping, *, overwrite: bool) -> Path:
     encoded = json.dumps(
         _json_safe(payload),
@@ -549,31 +566,13 @@ def load_batch_manifest(path_or_manifest) -> dict:
                 raise ManifestValidationError(
                     f"{member_prefix}.task_id", "must be a non-empty string",
                 )
-            source = member.get("source")
-            if not isinstance(source, Mapping):
+            source_error = _source_facts_shape_error(member.get("source"))
+            if source_error is not None:
+                source_field, message = source_error
+                suffix = f".{source_field}" if source_field is not None else ""
                 raise ManifestValidationError(
-                    f"{member_prefix}.source", "must be an object",
+                    f"{member_prefix}.source{suffix}", message,
                 )
-            for source_field in ("identity", "size", "mtime_ns"):
-                if source_field not in source:
-                    raise ManifestValidationError(
-                        f"{member_prefix}.source.{source_field}",
-                        "required field is missing",
-                    )
-            if not isinstance(source["identity"], str) or not source["identity"]:
-                raise ManifestValidationError(
-                    f"{member_prefix}.source.identity",
-                    "must be a non-empty string",
-                )
-            for source_field in ("size", "mtime_ns"):
-                value = source[source_field]
-                if value is not None and (
-                    not isinstance(value, int) or isinstance(value, bool)
-                ):
-                    raise ManifestValidationError(
-                        f"{member_prefix}.source.{source_field}",
-                        "must be an integer or null",
-                    )
 
     expected_summary = derive_summary(entries)
     if dict(raw["summary"]) != expected_summary:
@@ -693,14 +692,13 @@ def find_resumable_group(
                 return None
             if recorded.get("task_id") != current.task_id:
                 return None
-            previous_source = recorded.get("source") or {}
-            if any(
-                key not in previous_source
-                for key in ("identity", "size", "mtime_ns")
-            ):
+            previous_source = recorded.get("source")
+            if _source_facts_shape_error(previous_source) is not None:
+                return None
+            if _source_facts_shape_error(current.source) is not None:
                 return None
             if any(
-                previous_source.get(key) != current.source.get(key)
+                previous_source[key] != current.source[key]
                 for key in ("identity", "size", "mtime_ns")
             ):
                 return None
