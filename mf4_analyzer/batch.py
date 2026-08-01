@@ -32,10 +32,13 @@ from .batch_output import (
 from .batch_grouping import RenderGroup, RenderTask, group_render_tasks
 from .batch_manifest import (
     BatchManifestRecorder,
+    GroupMemberResumeFact,
     ManifestRecipeMismatch,
+    RetryScope,
     artifact_facts,
     derive_summary,
     find_resumable_entry,
+    find_resumable_group,
     load_batch_manifest,
     retry_failed_scope,
     source_file_facts,
@@ -233,6 +236,14 @@ class RenderGroupResult:
     message: str = ''
     warnings: list[str] = field(default_factory=list)
     artifact: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class GroupRecoveryDecision:
+    data_write_task_ids: frozenset[str]
+    payload_task_ids: frozenset[str]
+    image_write_required: bool
+    reusable_group: Mapping[str, Any] | None
 
 
 @dataclass
@@ -789,10 +800,12 @@ class BatchRunner:
                 )
 
         retry_scope = None
+        retry_data = None
         if retry_failed_manifest is not None:
             try:
+                retry_data = load_batch_manifest(retry_failed_manifest)
                 retry_scope = retry_failed_scope(
-                    retry_failed_manifest,
+                    retry_data,
                     recipe_fingerprint=recipe_id,
                 )
             except ManifestRecipeMismatch as exc:
@@ -811,6 +824,39 @@ class BatchRunner:
             'render_group_by', 'none',
         ) or 'none').strip().lower()
         explicit_grouping = preset.method == 'time' and group_by != 'none'
+
+        def apply_retry_scope(tasks, render_tasks, render_groups):
+            if retry_scope is None:
+                return tasks, render_tasks, render_groups
+            if not explicit_grouping:
+                selected = [
+                    (source_key, channel)
+                    for source_key, channel in tasks
+                    if (source_key, channel, preset.method) in retry_scope
+                ]
+                return selected, render_tasks, render_groups
+            selected_groups = tuple(
+                group for group in render_groups
+                if group.identity.group_id in retry_scope.group_ids
+                or any(
+                    (member.source_key, member.channel, preset.method)
+                    in retry_scope
+                    for member in group.members
+                )
+            )
+            selected_pairs = {
+                (member.source_key, member.channel)
+                for group in selected_groups
+                for member in group.members
+            }
+            return (
+                [task for task in tasks if task in selected_pairs],
+                [
+                    task for task in render_tasks
+                    if (task.source_key, task.channel) in selected_pairs
+                ],
+                list(selected_groups),
+            )
         try:
             tasks = list(self._expand_tasks(
                 preset,
@@ -820,7 +866,7 @@ class BatchRunner:
             for physical_key in tuple(self._disk_cache):
                 self._evict_physical(physical_key)
             return finish_result('blocked', blocked=[str(exc)])
-        if retry_scope is not None:
+        if retry_scope is not None and not explicit_grouping:
             tasks = [
                 (source_key, channel)
                 for source_key, channel in tasks
@@ -831,6 +877,9 @@ class BatchRunner:
             preset=preset,
             requested_params=requested_params,
             explicit_grouping=explicit_grouping,
+        )
+        tasks, render_tasks, render_groups = apply_retry_scope(
+            tasks, render_tasks, render_groups,
         )
 
         try:
@@ -903,7 +952,7 @@ class BatchRunner:
                 return finish_result(
                     'blocked', blocked=['no matching batch tasks'],
                 )
-            if retry_scope is not None:
+            if retry_scope is not None and not explicit_grouping:
                 tasks = [
                     (source_key, channel)
                     for source_key, channel in tasks
@@ -920,6 +969,9 @@ class BatchRunner:
                 preset=preset,
                 requested_params=requested_params,
                 explicit_grouping=explicit_grouping,
+            )
+            tasks, render_tasks, render_groups = apply_retry_scope(
+                tasks, render_tasks, render_groups,
             )
 
         items: list[BatchItemResult] = []
@@ -995,6 +1047,76 @@ class BatchRunner:
                 for group in render_groups
                 for member in group.members
             }
+            member_for_task = {
+                member.identity.task_id: member
+                for group in render_groups
+                for member in group.members
+            }
+            recovery_manifest = retry_data
+            if (
+                recovery_manifest is None
+                and resume_data is not None
+                and resume_data.get('recipe_fingerprint') == recipe_id
+            ):
+                recovery_manifest = resume_data
+            group_recovery = {
+                group.identity.group_id: self._plan_group_recovery(
+                    group,
+                    resume_manifest=recovery_manifest,
+                    retry_scope=retry_scope,
+                    cancel_token=cancel_token,
+                )
+                for group in render_groups
+            }
+            reusable_data_entries = {
+                member.identity.task_id: entry
+                for member in member_for_task.values()
+                for entry in [self._resumable_group_data_entry(
+                    recovery_manifest, member, cancel_token=cancel_token,
+                )]
+                if entry is not None
+            }
+            prior_data_entries = {
+                str(entry.get('task_id')): entry
+                for entry in (recovery_manifest or {}).get('entries', ())
+                if entry.get('task_id')
+            }
+            prior_group_entries = {
+                str(entry.get('group_id')): entry
+                for entry in (recovery_manifest or {}).get('render_groups', ())
+                if entry.get('group_id')
+            }
+
+            def planned_group_item(member, *, status, message='', entry=None):
+                artifacts = dict((entry or {}).get('artifacts') or {})
+                data = artifacts.get('data') or {}
+                source = (entry or {}).get('source') or {}
+                return BatchItemResult(
+                    method='time',
+                    file_id=member.source_key,
+                    file_name=str(
+                        source.get('display_name')
+                        or task_file_name(member.source_key)
+                    ),
+                    signal=member.channel,
+                    status=status,
+                    data_path=(data.get('path') if status == 'resumed' else None),
+                    message=message,
+                    task_id=member.identity.task_id,
+                    source_identity=member.identity.source_identity,
+                    group_identity=member.identity.group_identity,
+                    effective_params=dict(
+                        (entry or {}).get('effective_facts') or {}
+                    ),
+                    warnings=list((entry or {}).get('warnings') or []),
+                    requested_outputs=dict(effective_plan.requested),
+                    effective_outputs=dict(effective_plan.effective),
+                    degraded_reason=effective_plan.degraded_reason,
+                    artifact_facts=(artifacts if status == 'resumed' else {}),
+                    started_at=utc_now(),
+                    finished_at=utc_now(),
+                )
+
             group_results: dict[str, list[TaskComputeResult]] = {
                 group.identity.group_id: [] for group in render_groups
             }
@@ -1002,12 +1124,19 @@ class BatchRunner:
             group_failed: dict[str, str] = {}
             spool_class = None
             spool_module = None
-            if 'image' in effective_plan.effective:
+            if (
+                'image' in effective_plan.effective
+                and any(
+                    decision.image_write_required
+                    for decision in group_recovery.values()
+                )
+            ):
                 from . import batch_series_spool as spool_module
 
                 spool_class = spool_module.BatchSeriesSpool
             for group in render_groups:
-                if spool_module is not None:
+                decision = group_recovery[group.identity.group_id]
+                if spool_module is not None and decision.image_write_required:
                     try:
                         spool_module.validate_group_shape(
                             member_count=len(group.members),
@@ -1020,16 +1149,29 @@ class BatchRunner:
                         group_blocked[group.identity.group_id] = str(exc)
                 if recorder is not None:
                     try:
+                        reusable = decision.reusable_group
                         recorder.upsert_render_group(
                             self._render_group_manifest_entry(
                                 group,
                                 effective_plan,
                                 status=(
-                                    'degraded'
-                                    if effective_plan.degraded_reason
-                                    else 'pending'
+                                    'done' if reusable is not None
+                                    else 'degraded'
+                                    if effective_plan.degraded_reason else 'pending'
                                 ),
-                                message=effective_plan.degraded_reason,
+                                message=(
+                                    'manifest-proven group resume'
+                                    if reusable is not None
+                                    else effective_plan.degraded_reason
+                                ),
+                                warnings=(
+                                    reusable.get('warnings', ())
+                                    if reusable is not None else ()
+                                ),
+                                artifact=(
+                                    reusable.get('artifact')
+                                    if reusable is not None else None
+                                ),
                             )
                         )
                     except Exception as exc:
@@ -1058,6 +1200,108 @@ class BatchRunner:
                         emit_cancelled_range(index)
                         break
 
+                    member = next(
+                        candidate for candidate in group.members
+                        if candidate.source_key == source_key
+                        and candidate.channel == signal_name
+                    )
+                    decision = group_recovery[group.identity.group_id]
+                    task_id = member.identity.task_id
+                    data_write_eligible = bool(
+                        'data' in effective_plan.effective
+                        and task_id in decision.data_write_task_ids
+                    )
+                    payload_required = bool(
+                        'image' in effective_plan.effective
+                        and task_id in decision.payload_task_ids
+                        and group.identity.group_id not in group_blocked
+                        and not run_spool_blocked
+                    )
+                    data_reservation = None
+                    data_conflict_status = ''
+                    data_conflict_message = ''
+                    if data_write_eligible:
+                        data_extension = str(
+                            effective_plan.effective.get('data', 'csv')
+                        ).lower().lstrip('.')
+                        conflict_policy = str(
+                            getattr(
+                                preset.outputs,
+                                'conflict_policy',
+                                'auto_number',
+                            )
+                        ).strip().lower()
+                        reservation_stem = member.identity.stem
+                        prior_data = (
+                            prior_data_entries.get(task_id) or {}
+                        ).get('artifacts', {}).get('data') or {}
+                        prior_data_path = prior_data.get('path')
+                        if prior_data_path:
+                            reservation_stem = Path(prior_data_path).stem
+                            conflict_policy = 'overwrite'
+                        try:
+                            data_reservation = reserve_output_paths(
+                                output_dir,
+                                reservation_stem,
+                                (data_extension,),
+                                conflict_policy=conflict_policy,
+                            )
+                            if data_reservation.status == 'skipped':
+                                data_conflict_status = 'skipped'
+                                data_conflict_message = (
+                                    'task data skipped without manifest provenance'
+                                )
+                        except FileExistsError as exc:
+                            data_conflict_status = 'failed'
+                            data_conflict_message = str(exc)
+                        if data_conflict_status:
+                            data_write_eligible = False
+
+                    if not data_write_eligible and not payload_required:
+                        entry = reusable_data_entries.get(task_id)
+                        if entry is not None:
+                            item = planned_group_item(
+                                member,
+                                status='resumed',
+                                message='manifest-proven data resume',
+                                entry=entry,
+                            )
+                        else:
+                            item = planned_group_item(
+                                member,
+                                status=data_conflict_status or 'done',
+                                message=data_conflict_message,
+                            )
+                            if data_reservation is not None:
+                                if data_reservation.warning:
+                                    item.warnings.append(data_reservation.warning)
+                                data_reservation.release()
+                        items.append(item)
+                        record_item(item, source_key, self._known_file_data(source_key))
+                        if data_conflict_status == 'failed':
+                            blocked.append(
+                                f'{item.file_name}:{signal_name}: '
+                                f'{data_conflict_message}'
+                            )
+                        if on_event:
+                            on_event(BatchProgressEvent(
+                                kind=(
+                                    'task_failed'
+                                    if item.status == 'failed'
+                                    else 'task_skipped'
+                                    if item.status == 'skipped'
+                                    else 'task_resumed'
+                                ),
+                                task_index=index,
+                                total=total,
+                                file_name=item.file_name,
+                                signal=signal_name,
+                                method='time',
+                                task_id=item.task_id,
+                                message=item.message,
+                            ))
+                        continue
+
                     fid, fd_or_fail = self._resolve_task_file(source_key)
                     physical_key = self._physical_for_source(source_key)
                     if physical_key is not None:
@@ -1082,12 +1326,6 @@ class BatchRunner:
                             raise IOError(fd_or_fail.error)
                         if signal_name not in fd_or_fail.data.columns:
                             raise ValueError(f'missing signal: {signal_name}')
-                        payload_required = bool(
-                            group is not None
-                            and 'image' in effective_plan.effective
-                            and group.identity.group_id not in group_blocked
-                            and not run_spool_blocked
-                        )
                         computed = self._compute_group_task(
                             preset,
                             source_key,
@@ -1096,12 +1334,38 @@ class BatchRunner:
                             output_dir,
                             spool,
                             group,
-                            data_write_eligible='data' in effective_plan.effective,
+                            data_write_eligible=data_write_eligible,
                             payload_required=payload_required,
+                            data_reservation=data_reservation,
                             effective=effective_plan,
                             cancel_token=cancel_token,
                         )
                         item = computed.item
+                        if not data_write_eligible:
+                            entry = reusable_data_entries.get(task_id)
+                            if data_conflict_status:
+                                item.status = data_conflict_status
+                                item.message = data_conflict_message
+                                item.data_path = None
+                                item.artifact_facts = {}
+                                if (
+                                    data_reservation is not None
+                                    and data_reservation.warning
+                                ):
+                                    item.warnings.append(data_reservation.warning)
+                                if data_conflict_status == 'failed':
+                                    blocked.append(
+                                        f'{fname}:{signal_name}: '
+                                        f'{data_conflict_message}'
+                                    )
+                            elif entry is not None:
+                                data = (entry.get('artifacts') or {}).get('data') or {}
+                                item.status = 'resumed'
+                                item.message = 'manifest-proven data resume'
+                                item.data_path = data.get('path')
+                                item.artifact_facts = dict(
+                                    entry.get('artifacts') or {}
+                                )
                         item.started_at = started_at
                         item.finished_at = utc_now()
                         items.append(item)
@@ -1133,8 +1397,9 @@ class BatchRunner:
                         if on_event:
                             on_event(BatchProgressEvent(
                                 kind=(
-                                    'task_skipped'
-                                    if item.status == 'skipped'
+                                    'task_failed' if item.status == 'failed'
+                                    else 'task_skipped' if item.status == 'skipped'
+                                    else 'task_resumed' if item.status == 'resumed'
                                     else 'task_done'
                                 ),
                                 task_index=index,
@@ -1145,10 +1410,13 @@ class BatchRunner:
                                 task_id=item.task_id,
                                 message=item.message,
                                 data_path=item.data_path,
+                                error=(item.message if item.status == 'failed' else None),
                             ))
                         if progress_callback and item.status == 'done':
                             progress_callback(index, total)
                     except _BatchCancelled as exc:
+                        if data_reservation is not None:
+                            data_reservation.release()
                         cancelled = True
                         identity = next(
                             task.identity for task in render_tasks
@@ -1192,6 +1460,8 @@ class BatchRunner:
                         emit_cancelled_range(index + 1)
                         break
                     except Exception as exc:
+                        if data_reservation is not None:
+                            data_reservation.release()
                         identity = next(
                             task.identity for task in render_tasks
                             if task.source_key == source_key
@@ -1244,11 +1514,22 @@ class BatchRunner:
                 for group in render_groups:
                     group_id = group.identity.group_id
                     results = group_results[group_id]
+                    decision = group_recovery[group_id]
                     if cancelled:
                         outcome = RenderGroupResult(
                             group_id=group_id,
                             status='cancelled',
                             message='batch cancelled before group image completed',
+                        )
+                    elif decision.reusable_group is not None:
+                        reusable = decision.reusable_group
+                        outcome = RenderGroupResult(
+                            group_id=group_id,
+                            status='done',
+                            image_path=(reusable.get('artifact') or {}).get('path'),
+                            message='manifest-proven group resume',
+                            warnings=list(reusable.get('warnings') or ()),
+                            artifact=dict(reusable.get('artifact') or {}),
                         )
                     elif effective_plan.degraded_reason:
                         outcome = RenderGroupResult(
@@ -1283,6 +1564,9 @@ class BatchRunner:
                                     f'cannot update batch manifest: {exc}'
                                 )
                         try:
+                            prior_group = prior_group_entries.get(group_id) or {}
+                            prior_artifact = prior_group.get('artifact') or {}
+                            prior_image_path = prior_artifact.get('path')
                             outcome = self._render_group(
                                 group,
                                 results,
@@ -1290,6 +1574,13 @@ class BatchRunner:
                                 output_dir,
                                 spool,
                                 effective=effective_plan,
+                                reservation_stem=(
+                                    Path(prior_image_path).stem
+                                    if prior_image_path else None
+                                ),
+                                conflict_policy_override=(
+                                    'overwrite' if prior_image_path else None
+                                ),
                                 recorder=recorder,
                                 cancel_token=cancel_token,
                             )
@@ -1399,6 +1690,66 @@ class BatchRunner:
                             data_path=resumed_item.data_path,
                             image_path=resumed_item.image_path,
                         ))
+                    continue
+
+            if (
+                explicit_grouping
+                and set(effective_plan.effective) == {'data'}
+                and str(
+                    getattr(preset.outputs, 'conflict_policy', 'auto_number')
+                ).strip().lower() in {'error', 'skip'}
+            ):
+                render_task = next(
+                    task for task in render_tasks
+                    if task.source_key == source_key
+                    and task.channel == signal_name
+                )
+                data_extension = str(
+                    effective_plan.effective['data']
+                ).lower().lstrip('.')
+                policy = str(preset.outputs.conflict_policy).strip().lower()
+                reservation = None
+                conflict_status = ''
+                conflict_message = ''
+                try:
+                    reservation = reserve_output_paths(
+                        output_dir,
+                        render_task.identity.stem,
+                        (data_extension,),
+                        conflict_policy=policy,
+                    )
+                    if reservation.status == 'skipped':
+                        conflict_status = 'skipped'
+                        conflict_message = (
+                            'task data skipped without manifest provenance'
+                        )
+                except FileExistsError as exc:
+                    conflict_status = 'failed'
+                    conflict_message = str(exc)
+                finally:
+                    if reservation is not None:
+                        reservation.release()
+                if conflict_status:
+                    item = BatchItemResult(
+                        method='time',
+                        file_id=source_key,
+                        file_name=task_file_name(source_key),
+                        signal=signal_name,
+                        status=conflict_status,
+                        message=conflict_message,
+                        task_id=render_task.identity.task_id,
+                        source_identity=render_task.identity.source_identity,
+                        group_identity=render_task.identity.group_identity,
+                        requested_outputs=dict(effective_plan.requested),
+                        effective_outputs=dict(effective_plan.effective),
+                        finished_at=utc_now(),
+                    )
+                    items.append(item)
+                    record_item(item, source_key, self._known_file_data(source_key))
+                    if conflict_status == 'failed':
+                        blocked.append(
+                            f'{item.file_name}:{signal_name}: {conflict_message}'
+                        )
                     continue
 
             # Resolve the file (lazy load if disk path, live lookup if registered fid)
@@ -1599,6 +1950,146 @@ class BatchRunner:
             else f'live:{source_key!r}'
         )
         return (physical,)
+
+    def _group_member_source_facts(self, member: RenderTask) -> dict[str, Any]:
+        source_key = member.source_key
+        fd = self._known_file_data(source_key)
+        path = getattr(fd, 'filepath', None) if fd is not None else None
+        if path in (None, ''):
+            physical_key = self._physical_for_source(source_key)
+            if physical_key is not None:
+                path = self._physical_paths.get(physical_key, physical_key)
+        return source_file_facts(
+            path,
+            source_identity=member.identity.source_identity,
+        )
+
+    def _resumable_group_data_entry(
+        self,
+        manifest: Mapping[str, Any] | None,
+        member: RenderTask,
+        *,
+        cancel_token=None,
+    ) -> Mapping[str, Any] | None:
+        """Return exact task-data provenance for one grouped member."""
+
+        if manifest is None:
+            return None
+        current_source = self._group_member_source_facts(member)
+        required_source_types = {
+            'identity': str,
+            'size': int,
+            'mtime_ns': int,
+        }
+        candidates = [
+            entry for entry in manifest.get('entries', ())
+            if entry.get('task_id') == member.identity.task_id
+            and entry.get('source_id') == member.source_key
+            and entry.get('status') in {'done', 'resumed'}
+            and not entry.get('degraded_reason')
+        ]
+        for candidate in candidates:
+            previous_source = candidate.get('source')
+            if not isinstance(previous_source, Mapping):
+                continue
+            if any(
+                key not in previous_source
+                or not isinstance(previous_source[key], expected_type)
+                or not isinstance(current_source.get(key), expected_type)
+                or previous_source[key] != current_source[key]
+                for key, expected_type in required_source_types.items()
+            ):
+                continue
+            data = (candidate.get('artifacts') or {}).get('data')
+            if not isinstance(data, Mapping):
+                continue
+            data_format = str(data.get('format', '')).strip().lower().lstrip('.')
+            if not data_format:
+                continue
+            matched = find_resumable_entry(
+                manifest,
+                recipe_fingerprint=str(manifest.get('recipe_fingerprint') or ''),
+                task_id=member.identity.task_id,
+                source_id=member.source_key,
+                source_identity=member.identity.source_identity,
+                source_stat=current_source,
+                required_artifacts={'data': data_format},
+                cancel_token=cancel_token,
+            )
+            if matched is not None:
+                return candidate
+        return None
+
+    def _plan_group_recovery(
+        self,
+        group: RenderGroup,
+        *,
+        resume_manifest=None,
+        retry_scope: RetryScope | None = None,
+        cancel_token=None,
+    ) -> GroupRecoveryDecision:
+        """Plan grouped data, payload, and image work before source loading."""
+
+        all_task_ids = frozenset(
+            member.identity.task_id for member in group.members
+        )
+        if resume_manifest is None:
+            return GroupRecoveryDecision(
+                data_write_task_ids=all_task_ids,
+                payload_task_ids=all_task_ids,
+                image_write_required=True,
+                reusable_group=None,
+            )
+
+        reusable_data_ids = frozenset(
+            member.identity.task_id
+            for member in group.members
+            if self._resumable_group_data_entry(
+                resume_manifest, member, cancel_token=cancel_token,
+            ) is not None
+        )
+        data_write_ids = all_task_ids - reusable_data_ids
+
+        reusable_group = None
+        if retry_scope is None:
+            prior_group = next((
+                candidate
+                for candidate in resume_manifest.get('render_groups', ())
+                if candidate.get('group_id') == group.identity.group_id
+            ), None)
+            image_format = ''
+            if isinstance(prior_group, Mapping):
+                image_format = str(
+                    (prior_group.get('requested_outputs') or {}).get('image')
+                    or (prior_group.get('effective_outputs') or {}).get('image')
+                    or ''
+                )
+            if image_format:
+                members = tuple(
+                    GroupMemberResumeFact(
+                        task_id=member.identity.task_id,
+                        source=self._group_member_source_facts(member),
+                    )
+                    for member in group.members
+                )
+                reusable_group = find_resumable_group(
+                    resume_manifest,
+                    recipe_fingerprint=str(
+                        resume_manifest.get('recipe_fingerprint') or ''
+                    ),
+                    group_id=group.identity.group_id,
+                    members=members,
+                    image_format=image_format,
+                    cancel_token=cancel_token,
+                )
+
+        image_write_required = reusable_group is None
+        return GroupRecoveryDecision(
+            data_write_task_ids=data_write_ids,
+            payload_task_ids=(all_task_ids if image_write_required else frozenset()),
+            image_write_required=image_write_required,
+            reusable_group=reusable_group,
+        )
 
     def _build_run_plan(
         self,
@@ -2082,6 +2573,7 @@ class BatchRunner:
         *,
         data_write_eligible: bool,
         payload_required: bool,
+        data_reservation=None,
         effective: EffectiveOutputPlan,
         cancel_token=None,
     ) -> TaskComputeResult:
@@ -2096,7 +2588,7 @@ class BatchRunner:
             params=params,
         )
         started_at = utc_now()
-        reservation = None
+        reservation = data_reservation
         data_path = None
         status = 'done'
         message = ''
@@ -2144,12 +2636,13 @@ class BatchRunner:
                 conflict_policy = str(
                     getattr(preset.outputs, 'conflict_policy', 'auto_number')
                 ).strip().lower()
-                reservation = reserve_output_paths(
-                    output_dir,
-                    identity.stem,
-                    (data_extension,),
-                    conflict_policy=conflict_policy,
-                )
+                if reservation is None:
+                    reservation = reserve_output_paths(
+                        output_dir,
+                        identity.stem,
+                        (data_extension,),
+                        conflict_policy=conflict_policy,
+                    )
                 reservation.before_publish = lambda: self._check_cancel(
                     cancel_token, 'artifact publish',
                 )
@@ -2267,6 +2760,8 @@ class BatchRunner:
         spool: BatchSeriesSpool,
         *,
         effective: EffectiveOutputPlan,
+        reservation_stem: str | None = None,
+        conflict_policy_override: str | None = None,
         recorder=None,
         cancel_token=None,
     ) -> RenderGroupResult:
@@ -2314,11 +2809,12 @@ class BatchRunner:
             )
             image_extension = str(effective.effective['image'])
             conflict_policy = str(
-                getattr(preset.outputs, 'conflict_policy', 'auto_number')
+                conflict_policy_override
+                or getattr(preset.outputs, 'conflict_policy', 'auto_number')
             ).strip().lower()
             reservation = reserve_output_paths(
                 output_dir,
-                group.identity.stem,
+                reservation_stem or group.identity.stem,
                 (image_extension,),
                 conflict_policy=conflict_policy,
             )
@@ -2378,7 +2874,7 @@ class BatchRunner:
                     reservation.release()
                     reservation = reserve_output_paths(
                         output_dir,
-                        group.identity.stem,
+                        reservation_stem or group.identity.stem,
                         (image_extension,),
                         conflict_policy='auto_number',
                     )

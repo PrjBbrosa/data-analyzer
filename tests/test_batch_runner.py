@@ -4029,6 +4029,404 @@ def test_successful_group_releases_mmaps_before_loading_next_group(
     assert all(array._mmap.closed for array in mappings)
 
 
+def _task7_artifact_snapshot(path):
+    path = Path(path)
+    return path.read_bytes(), path.stat().st_mtime_ns
+
+
+def _task7_touch_with_bytes(path, payload):
+    path = Path(path)
+    previous = path.stat().st_mtime_ns
+    path.write_bytes(payload)
+    target = max(path.stat().st_mtime_ns, previous + 1_000_000)
+    path.touch()
+    import os
+    os.utime(path, ns=(target, target))
+
+
+def _task7_resume_preset(*, group_by="source", signals=("sig", "aux")):
+    preset = AnalysisPreset.free_config(
+        name="task 7 grouped recovery",
+        method="time",
+        target_signals=signals,
+        params={"render_group_by": group_by, "render_layout": "overlay"},
+        outputs=BatchOutput(
+            export_data=True,
+            export_image=True,
+            conflict_policy="auto_number",
+            resume_policy="manifest",
+        ),
+    )
+    return preset
+
+
+def _task7_manifest(path):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    return load_batch_manifest(path)
+
+
+@pytest.mark.parametrize(
+    ("invalid_data_indexes", "image_valid"),
+    (((), True), ((0,), True), ((), False), ((0,), False)),
+    ids=(
+        "all-data-valid-image-valid",
+        "partial-data-invalid-image-valid",
+        "all-data-valid-image-invalid",
+        "partial-data-invalid-image-invalid",
+    ),
+)
+def test_grouped_resume_fixed_design_matrix_preserves_ineligible_artifacts(
+    tmp_path, monkeypatch, invalid_data_indexes, image_valid,
+):
+    """Catch payload demand accidentally granting permission to rewrite CSVs."""
+    fd = _make_fd(tmp_path, "resume_matrix", channels=("sig", "aux"), idx=0)
+    preset = replace(_task7_resume_preset(), file_ids=(0,))
+    render_calls = 0
+
+    def versioned_image(payload, path, **kwargs):
+        nonlocal render_calls
+        render_calls += 1
+        Path(path).write_bytes(f"group-image-{render_calls}".encode())
+        return Path(path)
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(versioned_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(preset, output_dir)
+    first_manifest = _task7_manifest(first.manifest_path)
+    data_paths = [Path(item.data_path) for item in first.items]
+    image_path = Path(first_manifest["render_groups"][0]["artifact"]["path"])
+
+    for index in invalid_data_indexes:
+        _task7_touch_with_bytes(data_paths[index], f"invalid-{index}".encode())
+    if not image_valid:
+        _task7_touch_with_bytes(image_path, b"invalid-image")
+    before_data = [_task7_artifact_snapshot(path) for path in data_paths]
+    before_image = _task7_artifact_snapshot(image_path)
+
+    second = BatchRunner({0: fd}).run(
+        preset, output_dir, resume_manifest=first.manifest_path,
+    )
+
+    after_data = [_task7_artifact_snapshot(path) for path in data_paths]
+    after_image = _task7_artifact_snapshot(image_path)
+    for index in range(len(data_paths)):
+        if index in invalid_data_indexes:
+            assert after_data[index] != before_data[index]
+        else:
+            assert after_data[index] == before_data[index]
+    assert (after_image == before_image) is image_valid
+    assert render_calls == (1 if image_valid else 2)
+    assert len(list(output_dir.glob("*.csv"))) == 2
+    assert len(list(output_dir.glob("*.png"))) == 1
+    assert [item.status for item in second.items] == [
+        "done" if index in invalid_data_indexes else "resumed"
+        for index in range(2)
+    ]
+
+
+def test_grouped_resume_missing_image_rerenders_group_without_touching_csvs(
+    tmp_path, monkeypatch,
+):
+    """Catch a missing group image causing healthy task data rewrites."""
+    fd = _make_fd(tmp_path, "missing_group_image", channels=("sig", "aux"), idx=0)
+    preset = replace(_task7_resume_preset(), file_ids=(0,))
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(preset, output_dir)
+    manifest = _task7_manifest(first.manifest_path)
+    data_paths = [Path(item.data_path) for item in first.items]
+    before_data = [_task7_artifact_snapshot(path) for path in data_paths]
+    image_path = Path(manifest["render_groups"][0]["artifact"]["path"])
+    image_path.unlink()
+
+    second = BatchRunner({0: fd}).run(
+        preset, output_dir, resume_manifest=first.manifest_path,
+    )
+
+    assert [_task7_artifact_snapshot(path) for path in data_paths] == before_data
+    assert image_path.read_bytes() == b"group-image"
+    assert [item.status for item in second.items] == ["resumed", "resumed"]
+
+
+def test_grouped_resume_one_changed_source_rewrites_only_its_data_and_group_image(
+    tmp_path, monkeypatch,
+):
+    """Catch member source invalidation leaking onto a healthy member's CSV."""
+    files = {
+        0: _make_fd(tmp_path, "changed_a", channels=("sig",), idx=0),
+        1: _make_fd(tmp_path, "changed_b", channels=("sig",), idx=1),
+    }
+    preset = replace(
+        _task7_resume_preset(group_by="channel", signals=("sig",)),
+        file_ids=(0, 1),
+    )
+    calls = 0
+
+    def image(payload, path, **kwargs):
+        nonlocal calls
+        calls += 1
+        Path(path).write_bytes(f"image-{calls}".encode())
+        return Path(path)
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner(files).run(preset, output_dir)
+    manifest = _task7_manifest(first.manifest_path)
+    data_paths = [Path(item.data_path) for item in first.items]
+    image_path = Path(manifest["render_groups"][0]["artifact"]["path"])
+    before_data = [_task7_artifact_snapshot(path) for path in data_paths]
+    before_image = _task7_artifact_snapshot(image_path)
+    source_path = Path(files[0].filepath)
+    _task7_touch_with_bytes(source_path, source_path.read_bytes() + b"\n")
+
+    second = BatchRunner(files).run(
+        preset, output_dir, resume_manifest=first.manifest_path,
+    )
+
+    after_data = [_task7_artifact_snapshot(path) for path in data_paths]
+    assert after_data[0] != before_data[0]
+    assert after_data[1] == before_data[1]
+    assert _task7_artifact_snapshot(image_path) != before_image
+    assert [item.status for item in second.items] == ["done", "resumed"]
+
+
+def _task7_rewrite_manifest(path, mutate):
+    import json
+    from mf4_analyzer.batch_manifest import derive_summary
+
+    payload = _task7_manifest(path)
+    mutate(payload)
+    payload["summary"] = derive_summary(payload["entries"])
+    rewritten = Path(path).with_name(f"retry-{Path(path).name}")
+    rewritten.write_text(json.dumps(payload), encoding="utf-8")
+    return rewritten
+
+
+def test_grouped_retry_failed_member_expands_payload_but_preserves_healthy_csv(
+    tmp_path, monkeypatch,
+):
+    """Catch retry group expansion rewriting a healthy member's task data."""
+    fd = _make_fd(tmp_path, "retry_member", channels=("sig", "aux"), idx=0)
+    preset = replace(_task7_resume_preset(), file_ids=(0,))
+    render_calls = 0
+
+    def image(payload, path, **kwargs):
+        nonlocal render_calls
+        render_calls += 1
+        Path(path).write_bytes(f"retry-image-{render_calls}".encode())
+        return Path(path)
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(preset, output_dir)
+    paths = [Path(item.data_path) for item in first.items]
+    before_healthy = _task7_artifact_snapshot(paths[1])
+    _task7_touch_with_bytes(paths[0], b"failed-data")
+
+    def mark_failed(payload):
+        payload["entries"][0]["status"] = "failed"
+        payload["render_groups"][0]["status"] = "partial"
+
+    retry_manifest = _task7_rewrite_manifest(first.manifest_path, mark_failed)
+    second = BatchRunner({0: fd}).run(
+        preset, output_dir, retry_failed_manifest=retry_manifest,
+    )
+
+    assert _task7_artifact_snapshot(paths[1]) == before_healthy
+    assert paths[0].read_bytes() != b"failed-data"
+    assert [item.status for item in second.items] == ["done", "resumed"]
+    assert render_calls == 2
+
+
+@pytest.mark.parametrize("group_status", ("failed", "partial", "blocked", "cancelled"))
+def test_grouped_retry_scope_includes_terminal_group_with_done_members(
+    tmp_path, monkeypatch, group_status,
+):
+    """Catch group-only retry scope being discarded as an empty task scope."""
+    fd = _make_fd(tmp_path, f"retry_group_{group_status}", channels=("sig",), idx=0)
+    preset = replace(
+        _task7_resume_preset(signals=("sig",)), file_ids=(0,),
+    )
+    calls = 0
+
+    def image(payload, path, **kwargs):
+        nonlocal calls
+        calls += 1
+        Path(path).write_bytes(f"group-status-{calls}".encode())
+        return Path(path)
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(preset, output_dir)
+    data_path = Path(first.items[0].data_path)
+    before_data = _task7_artifact_snapshot(data_path)
+
+    def mutate(payload):
+        payload["render_groups"][0]["status"] = group_status
+
+    retry_manifest = _task7_rewrite_manifest(first.manifest_path, mutate)
+    second = BatchRunner({0: fd}).run(
+        preset, output_dir, retry_failed_manifest=retry_manifest,
+    )
+
+    assert second.status == "done"
+    assert second.items[0].status == "resumed"
+    assert _task7_artifact_snapshot(data_path) == before_data
+    assert calls == 2
+
+
+@pytest.mark.parametrize(
+    ("group_status", "degraded_reason"),
+    (("partial", ""), ("degraded", "renderer missing")),
+)
+def test_partial_and_degraded_groups_are_never_complete_resume_hits(
+    tmp_path, monkeypatch, group_status, degraded_reason,
+):
+    """Catch non-complete group provenance suppressing required rerendering."""
+    fd = _make_fd(tmp_path, f"noncomplete_{group_status}", channels=("sig",), idx=0)
+    preset = replace(_task7_resume_preset(signals=("sig",)), file_ids=(0,))
+    calls = 0
+
+    def image(payload, path, **kwargs):
+        nonlocal calls
+        calls += 1
+        Path(path).write_bytes(f"noncomplete-{calls}".encode())
+        return Path(path)
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(preset, output_dir)
+    first_manifest = _task7_manifest(first.manifest_path)
+    data_path = Path(first.items[0].data_path)
+    image_path = Path(first_manifest["render_groups"][0]["artifact"]["path"])
+    before_data = _task7_artifact_snapshot(data_path)
+    before_image = _task7_artifact_snapshot(image_path)
+
+    def mutate(payload):
+        group = payload["render_groups"][0]
+        group["status"] = group_status
+        group["degraded_reason"] = degraded_reason
+
+    resume_manifest = _task7_rewrite_manifest(first.manifest_path, mutate)
+    second = BatchRunner({0: fd}).run(
+        preset, output_dir, resume_manifest=resume_manifest,
+    )
+
+    assert second.status == "done"
+    assert second.items[0].status == "resumed"
+    assert _task7_artifact_snapshot(data_path) == before_data
+    assert _task7_artifact_snapshot(image_path) != before_image
+    assert calls == 2
+
+
+@pytest.mark.parametrize(
+    ("policy", "task_status", "same_path"),
+    (("error", "failed", False), ("skip", "skipped", False),
+     ("overwrite", "done", True), ("auto_number", "done", False)),
+)
+def test_grouped_task_data_conflict_policy_is_independent_from_group_image(
+    tmp_path, monkeypatch, policy, task_status, same_path,
+):
+    """Catch data conflict status suppressing an otherwise complete payload."""
+    fd = _make_fd(tmp_path, f"data_conflict_{policy}", channels=("sig",), idx=0)
+    seed = replace(_task7_resume_preset(signals=("sig",)), file_ids=(0,))
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(seed, output_dir)
+    old_data = Path(first.items[0].data_path)
+    before_data = _task7_artifact_snapshot(old_data)
+    old_image = Path(_task7_manifest(first.manifest_path)["render_groups"][0]["artifact"]["path"])
+    old_image.unlink()
+    preset = replace(
+        seed,
+        outputs=replace(
+            seed.outputs, conflict_policy=policy, resume_policy="none",
+        ),
+    )
+
+    second = BatchRunner({0: fd}).run(preset, output_dir)
+    group = _task7_manifest(second.manifest_path)["render_groups"][0]
+
+    assert second.items[0].status == task_status
+    assert group["status"] == "done"
+    assert Path(group["artifact"]["path"]).is_file()
+    if task_status == "done":
+        assert (Path(second.items[0].data_path) == old_data) is same_path
+        if same_path:
+            assert _task7_artifact_snapshot(old_data) != before_data
+        else:
+            assert _task7_artifact_snapshot(old_data) == before_data
+    else:
+        assert second.items[0].data_path is None
+        assert second.items[0].artifact_facts == {}
+        assert _task7_artifact_snapshot(old_data) == before_data
+
+
+def test_grouped_data_only_error_conflict_stops_before_analysis(tmp_path, monkeypatch):
+    """Catch a data-only conflict loading and analyzing a source needlessly."""
+    fd = _make_fd(tmp_path, "data_only_error", channels=("sig",), idx=0)
+    seed = AnalysisPreset.from_current_single(
+        name="seed data conflict", method="time", signal=(0, "sig"),
+        params={"render_group_by": "source"},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(seed, output_dir)
+    preset = replace(seed, outputs=replace(seed.outputs, conflict_policy="error"))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("data-only error conflict must stop before analysis")
+
+    monkeypatch.setattr(BatchRunner, "_compute_preprocessed_time_dataframe", forbidden)
+    second = BatchRunner({0: fd}).run(preset, output_dir)
+
+    assert first.items[0].data_path
+    assert second.items[0].status == "failed"
+
+
+@pytest.mark.parametrize(
+    ("policy", "group_status", "same_path"),
+    (("error", "failed", False), ("skip", "skipped", False),
+     ("overwrite", "done", True), ("auto_number", "done", False)),
+)
+def test_grouped_image_conflict_policy_runs_after_task_data_transaction(
+    tmp_path, monkeypatch, policy, group_status, same_path,
+):
+    """Catch group-image conflicts rolling back or impersonating task data."""
+    fd = _make_fd(tmp_path, f"image_conflict_{policy}", channels=("sig",), idx=0)
+    seed = replace(_task7_resume_preset(signals=("sig",)), file_ids=(0,))
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(seed, output_dir)
+    first_manifest = _task7_manifest(first.manifest_path)
+    old_image = Path(first_manifest["render_groups"][0]["artifact"]["path"])
+    before_image = _task7_artifact_snapshot(old_image)
+    Path(first.items[0].data_path).unlink()
+    preset = replace(
+        seed,
+        outputs=replace(
+            seed.outputs, conflict_policy=policy, resume_policy="none",
+        ),
+    )
+
+    second = BatchRunner({0: fd}).run(preset, output_dir)
+    group = _task7_manifest(second.manifest_path)["render_groups"][0]
+
+    assert second.items[0].status == "done"
+    assert Path(second.items[0].data_path).is_file()
+    assert group["status"] == group_status
+    if group_status == "done":
+        assert (Path(group["artifact"]["path"]) == old_image) is same_path
+        if same_path:
+            assert _task7_artifact_snapshot(old_image) != before_image
+        else:
+            assert _task7_artifact_snapshot(old_image) == before_image
+    else:
+        assert group["artifact"] is None
+        assert _task7_artifact_snapshot(old_image) == before_image
+
+
 @pytest.mark.parametrize(
     (
         "limit_name", "limit_value", "member_count", "layout",
