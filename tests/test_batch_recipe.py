@@ -283,10 +283,12 @@ def test_normalize_analysis_preset_is_duck_typed_and_json_safe():
         "image_height": 1080,
         "image_dpi": 144,
         "image_background": "white",
-        "image_line_width": 1.0,
+        "image_line_width": 1.5,
         "conflict_policy": "auto_number",
         "write_manifest": True,
         "resume_policy": "none",
+        "requested_image_format": None,
+        "migration_warnings": [],
     }
     assert normalized["signal"] == [3, "acc"]
     assert normalized["target_signals"] == ["acc"]
@@ -382,7 +384,7 @@ def test_phase3_output_normalization_isomorphic_for_object_and_mapping():
     assert object_recipe["outputs"]["image_format"] == "png"
     assert object_recipe["outputs"]["image_width"] == 1920
     assert object_recipe["outputs"]["image_background"] == "white"
-    assert object_recipe["outputs"]["image_line_width"] == 1.0
+    assert object_recipe["outputs"]["image_line_width"] == 1.5
     assert object_recipe["outputs"]["write_manifest"] is True
 
 
@@ -397,7 +399,7 @@ def test_run_recipe_fingerprint_includes_artifact_output_facts_not_operations():
         "image_height": 1080,
         "image_dpi": 144,
         "image_background": "white",
-        "image_line_width": 1.0,
+        "image_line_width": 1.5,
         "conflict_policy": "auto_number",
         "write_manifest": True,
         "resume_policy": "none",
@@ -407,14 +409,16 @@ def test_run_recipe_fingerprint_includes_artifact_output_facts_not_operations():
     assert base != recipe_fingerprint(
         {"nfft": 64}, "fft", outputs={**defaults, "image_dpi": 192},
     )
-    assert base != recipe_fingerprint(
-        {"nfft": 64}, "fft", outputs={**defaults, "image_format": "svg"},
-    )
+    with pytest.raises(ValueError, match="image_format must be png"):
+        recipe_fingerprint(
+            {"nfft": 64}, "fft",
+            outputs={**defaults, "image_format": "svg"},
+        )
     assert base != recipe_fingerprint(
         {"nfft": 64}, "fft", outputs={**defaults, "image_background": "dark"},
     )
     assert base != recipe_fingerprint(
-        {"nfft": 64}, "fft", outputs={**defaults, "image_line_width": 1.5},
+        {"nfft": 64}, "fft", outputs={**defaults, "image_line_width": 2.0},
     )
     assert base == recipe_fingerprint(
         {"nfft": 64},
@@ -441,7 +445,7 @@ def test_legacy_output_fingerprint_equals_explicit_phase3_defaults():
         "image_height": 1080,
         "image_dpi": 144,
         "image_background": "white",
-        "image_line_width": 1.0,
+        "image_line_width": 1.5,
         "conflict_policy": "auto_number",
         "write_manifest": True,
         "resume_policy": "none",
@@ -451,6 +455,28 @@ def test_legacy_output_fingerprint_equals_explicit_phase3_defaults():
         {"nfft": 64}, "fft", outputs=legacy,
     ) == recipe_fingerprint(
         {"nfft": 64}, "fft", outputs=explicit,
+    )
+
+
+def test_migration_provenance_does_not_change_png_artifact_fingerprint():
+    native_png = {
+        "export_data": True,
+        "export_image": True,
+        "data_format": "csv",
+        "image_format": "png",
+    }
+    migrated_pdf = {
+        **native_png,
+        "requested_image_format": "pdf",
+        "migration_warnings": [
+            "旧预设图像格式 PDF 已迁移为 PNG；本次仅输出 PNG。"
+        ],
+    }
+
+    assert recipe_fingerprint(
+        {"nfft": 64}, "fft", outputs=native_png,
+    ) == recipe_fingerprint(
+        {"nfft": 64}, "fft", outputs=migrated_pdf,
     )
 
 

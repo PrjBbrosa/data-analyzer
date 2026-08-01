@@ -40,7 +40,7 @@ def test_phase3_batch_output_defaults_are_backward_compatible_and_safe():
     assert outputs.image_height == 1080
     assert outputs.image_dpi == 144
     assert outputs.image_background == "white"
-    assert outputs.image_line_width == pytest.approx(1.0)
+    assert outputs.image_line_width == pytest.approx(1.5)
     assert outputs.conflict_policy == "auto_number"
     assert outputs.write_manifest is True
     assert outputs.resume_policy == "none"
@@ -56,7 +56,7 @@ def test_phase3_output_settings_round_trip_through_preset_json(tmp_path):
             export_data=False,
             export_image=True,
             data_format="xlsx",
-            image_format="svg",
+            image_format="png",
             image_size="custom",
             image_width=2304,
             image_height=1296,
@@ -74,6 +74,61 @@ def test_phase3_output_settings_round_trip_through_preset_json(tmp_path):
     loaded = load_preset_from_json(path)
 
     assert loaded.outputs == preset.outputs
+
+
+@pytest.mark.parametrize("legacy_format", ("pdf", "svg"))
+def test_legacy_vector_preset_migrates_to_png_with_transient_audit(
+    tmp_path, legacy_format,
+):
+    path = tmp_path / f"legacy-{legacy_format}.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "name": "legacy vector",
+        "method": "fft",
+        "target_signals": ["sig"],
+        "params": {"window": "hanning", "nfft": 1024},
+        "outputs": {
+            "export_data": True,
+            "export_image": True,
+            "data_format": "csv",
+            "image_format": legacy_format,
+            "image_line_width": 1.0,
+        },
+    }), encoding="utf-8")
+
+    loaded = load_preset_from_json(path)
+
+    assert loaded.outputs.image_format == "png"
+    assert loaded.outputs.requested_image_format == legacy_format
+    assert loaded.outputs.image_line_width == pytest.approx(1.0)
+    assert loaded.outputs.migration_warnings == (
+        f"旧预设图像格式 {legacy_format.upper()} 已迁移为 PNG；本次仅输出 PNG。",
+    )
+
+    canonical = tmp_path / "canonical.json"
+    save_preset_to_json(loaded, canonical)
+    raw = json.loads(canonical.read_text(encoding="utf-8"))
+    assert raw["outputs"]["image_format"] == "png"
+    assert "requested_image_format" not in raw["outputs"]
+    assert "migration_warnings" not in raw["outputs"]
+    reloaded = load_preset_from_json(canonical)
+    assert reloaded.outputs.requested_image_format is None
+    assert reloaded.outputs.migration_warnings == ()
+
+
+@pytest.mark.parametrize("illegal_format", ("pdf", "svg"))
+def test_new_vector_preset_cannot_be_saved_as_if_it_were_legacy(
+    tmp_path, illegal_format,
+):
+    preset = AnalysisPreset.free_config(
+        name="new illegal",
+        method="fft",
+        target_signals=("sig",),
+        outputs=BatchOutput(image_format=illegal_format),
+    )
+
+    with pytest.raises(ValueError, match="unsupported batch image_format"):
+        save_preset_to_json(preset, tmp_path / "illegal.json")
 
 
 def test_legacy_output_json_without_phase3_fields_migrates_to_defaults(tmp_path):

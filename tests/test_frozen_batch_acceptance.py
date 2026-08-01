@@ -87,9 +87,18 @@ def _simulate_frozen_runtime(tmp_path: Path, monkeypatch) -> tuple[Path, Path, s
             {
                 "ok": True,
                 "runtime": "frozen-onedir-executable",
-                "artifact_count": 12,
+                "artifact_count": 4,
                 "executable": str(executable.resolve()),
                 "executable_sha256": executable_sha256,
+                "qt_qpa_platform": "offscreen",
+                "qt_platform_name": "offscreen",
+                "cjk_proof": {
+                    "font": "Acceptance CJK",
+                    "supports": True,
+                    "ink_pixels": 500,
+                    "empty_ink_pixels": 0,
+                    "pass": True,
+                },
             }
         ),
         encoding="utf-8",
@@ -99,7 +108,7 @@ def _simulate_frozen_runtime(tmp_path: Path, monkeypatch) -> tuple[Path, Path, s
     return executable, smoke_json, executable_sha256
 
 
-def test_frozen_batch_acceptance_uses_batch_runner_for_three_mf4_csv_pdf_sets(
+def test_frozen_batch_acceptance_uses_batch_runner_for_three_mf4_csv_png_sets(
     tmp_path, monkeypatch
 ):
     from mf4_analyzer.frozen_batch_acceptance import run
@@ -129,6 +138,9 @@ def test_frozen_batch_acceptance_uses_batch_runner_for_three_mf4_csv_pdf_sets(
     assert evidence["channel"] == CHANNEL
     assert evidence["artifact_count"] == 6
     assert evidence["residual_paths"] == []
+    assert evidence["qt_qpa_platform"] == "offscreen"
+    assert evidence["qt_platform_name"] == "offscreen"
+    assert evidence["frozen_smoke_cjk_proof"]["pass"] is True
 
     manifest_path = Path(evidence["manifest_path"])
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -149,10 +161,10 @@ def test_frozen_batch_acceptance_uses_batch_runner_for_three_mf4_csv_pdf_sets(
     for entry in manifest["entries"]:
         assert entry["status"] == "done"
         assert entry["degraded_reason"] == ""
-        assert entry["requested_outputs"] == {"data": "csv", "image": "pdf"}
-        assert entry["effective_outputs"] == {"data": "csv", "image": "pdf"}
+        assert entry["requested_outputs"] == {"data": "csv", "image": "png"}
+        assert entry["effective_outputs"] == {"data": "csv", "image": "png"}
         assert set(entry["artifacts"]) == {"data", "image"}
-        for kind, expected_format in (("data", "csv"), ("image", "pdf")):
+        for kind, expected_format in (("data", "csv"), ("image", "png")):
             artifact = entry["artifacts"][kind]
             path = Path(artifact["path"])
             content = path.read_bytes()
@@ -164,7 +176,7 @@ def test_frozen_batch_acceptance_uses_batch_runner_for_three_mf4_csv_pdf_sets(
 
     assert len(set(artifact_paths)) == 6
     assert len(list(output_dir.glob("*.csv"))) == 3
-    assert len(list(output_dir.glob("*.pdf"))) == 3
+    assert len(list(output_dir.glob("*.png"))) == 3
     assert not list(output_dir.glob("*.partial.json"))
     assert not list(output_dir.glob(".*.batch-stage.*"))
     assert not list(output_dir.glob(".*.batch-reserve"))
@@ -398,6 +410,31 @@ def test_frozen_batch_acceptance_rejects_frozen_smoke_executable_sha_mismatch(
     evidence = json.loads(evidence_json.read_text(encoding="utf-8"))
     assert evidence["ok"] is False
     assert "SHA-256" in evidence["error"]
+
+
+def test_frozen_batch_acceptance_rejects_smoke_without_cjk_double_proof(
+    tmp_path, monkeypatch
+):
+    from mf4_analyzer.frozen_batch_acceptance import run
+
+    _executable, smoke_json, _sha256 = _simulate_frozen_runtime(tmp_path, monkeypatch)
+    smoke = json.loads(smoke_json.read_text(encoding="utf-8"))
+    smoke["cjk_proof"]["pass"] = False
+    smoke_json.write_text(json.dumps(smoke), encoding="utf-8")
+    sources = _write_acceptance_sources(tmp_path)
+    evidence_json = tmp_path / "acceptance.json"
+
+    exit_code = run(
+        sources,
+        tmp_path / "outputs",
+        evidence_json,
+        frozen_smoke_json=smoke_json,
+    )
+
+    assert exit_code != 0
+    evidence = json.loads(evidence_json.read_text(encoding="utf-8"))
+    assert evidence["ok"] is False
+    assert "CJK" in evidence["error"]
 
 
 def test_application_entry_routes_frozen_batch_acceptance_without_starting_gui(

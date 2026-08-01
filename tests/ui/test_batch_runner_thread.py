@@ -6,15 +6,30 @@ stuck locked even if ``runner.run()`` raises before the result signal.
 """
 
 
-def test_runner_thread_emits_progress_and_result(qtbot, tmp_path):
-    """Smoke test that the QThread wrapper forwards events + final result."""
+def test_runner_thread_marshals_real_render_to_gui_and_returns_complete_result(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    """Real data+PNG execution must block-marshal render work to the GUI."""
     import numpy as np
     import pandas as pd
+    from PyQt5.QtCore import QThread
     from mf4_analyzer.batch import (
         AnalysisPreset, BatchRunner,
     )
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+    import mf4_analyzer.batch_render_qt as qt_renderer
     from mf4_analyzer.io import FileData
     from mf4_analyzer.ui.drawers.batch.runner_thread import BatchRunnerThread
+
+    render_threads = []
+    original_builder = qt_renderer.build_batch_scene
+
+    def build_with_warning(*args, warnings_out=None, **kwargs):
+        render_threads.append(QThread.currentThread())
+        warnings_out.append("gui-thread-render-warning")
+        return original_builder(*args, warnings_out=warnings_out, **kwargs)
+
+    monkeypatch.setattr(qt_renderer, "build_batch_scene", build_with_warning)
 
     n = 1024
     t = np.arange(n) / 512.0
@@ -30,9 +45,64 @@ def test_runner_thread_emits_progress_and_result(qtbot, tmp_path):
     th.progress.connect(events.append)
     th.finished_with_result.connect(results.append)
     th.start()
-    qtbot.waitUntil(lambda: len(results) == 1, timeout=5000)
+    qtbot.waitUntil(lambda: len(results) == 1, timeout=10_000)
     assert results[0].status == "done"
+    assert render_threads == [qapp.thread()]
+    item = results[0].items[0]
+    assert item.warnings == ["gui-thread-render-warning"]
+    assert set(item.artifact_facts) == {"data", "image"}
+    assert all(
+        facts["checksum_status"] == "complete" and facts["sha256"]
+        for facts in item.artifact_facts.values()
+    )
+    manifest = load_batch_manifest(results[0].manifest_path)
+    assert manifest["entries"][0]["warnings"] == [
+        "gui-thread-render-warning"
+    ]
+    assert set(manifest["entries"][0]["artifacts"]) == {"data", "image"}
     assert any(e.kind == "run_finished" for e in events)
+
+
+def test_runner_thread_propagates_gui_render_failure_and_rolls_back_set(
+    qtbot, tmp_path, monkeypatch,
+):
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.batch import AnalysisPreset, BatchRunner
+    import mf4_analyzer.batch_render_qt as qt_renderer
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.drawers.batch.runner_thread import BatchRunnerThread
+
+    def fail_on_gui(*_args, **_kwargs):
+        raise RuntimeError("gui-render-marker")
+
+    monkeypatch.setattr(qt_renderer, "build_batch_scene", fail_on_gui)
+    t = np.arange(1024) / 512.0
+    frame = pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 50 * t)})
+    fd = FileData(tmp_path / "failure.csv", frame, list(frame.columns), {}, idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="failure",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 512.0, "window": "hanning", "nfft": 512},
+    )
+    output_dir = tmp_path / "out"
+    thread = BatchRunnerThread(BatchRunner({0: fd}), preset, output_dir)
+    results = []
+    thread.finished_with_result.connect(results.append)
+
+    thread.start()
+    qtbot.waitUntil(lambda: len(results) == 1, timeout=10_000)
+
+    result = results[0]
+    assert result.status == "blocked"
+    assert result.items[0].status == "failed"
+    assert "gui-render-marker" in result.items[0].message
+    assert not list(output_dir.glob("*.csv"))
+    assert not list(output_dir.glob("*.png"))
+    assert not list(output_dir.glob(".*.batch-stage.*"))
+    assert not list(output_dir.glob(".*.batch-reserve"))
 
 
 def test_sheet_cancel_button_unlocks_editing(qtbot, tmp_path):

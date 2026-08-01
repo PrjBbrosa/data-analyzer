@@ -599,7 +599,8 @@ def _artifact_matches(
     *,
     cancel_token=None,
 ) -> bool:
-    if str(facts.get("format", "")).lower() != str(expected_format).lower():
+    normalized_format = str(expected_format).lower().lstrip(".")
+    if str(facts.get("format", "")).lower().lstrip(".") != normalized_format:
         return False
     if facts.get("checksum_status") != "complete":
         return False
@@ -609,6 +610,8 @@ def _artifact_matches(
     if not path_value or not checksum or expected_size is None:
         return False
     path = Path(path_value)
+    if path.suffix.lower().lstrip(".") != normalized_format:
+        return False
     try:
         if path.stat().st_size != int(expected_size):
             return False
@@ -677,6 +680,8 @@ def find_resumable_group(
     if raw.get("recipe_fingerprint") != recipe_fingerprint:
         return None
     expected_format = str(image_format).strip().lower().lstrip(".")
+    if expected_format != "png":
+        return None
     for group in raw.get("render_groups", []):
         if cancel_token is not None and cancel_token.is_set():
             return None
@@ -704,15 +709,18 @@ def find_resumable_group(
                 return None
         requested = group.get("requested_outputs") or {}
         effective = group.get("effective_outputs") or {}
-        if str(requested.get("image", "")).lower().lstrip(".") != expected_format:
+        requested_format = str(
+            requested.get("image", "")
+        ).lower().lstrip(".")
+        if requested_format not in {"png", "pdf", "svg"}:
             return None
-        if str(effective.get("image", "")).lower().lstrip(".") != expected_format:
+        if str(effective.get("image", "")).lower().lstrip(".") != "png":
             return None
         artifact = group.get("artifact")
         if not isinstance(artifact, Mapping) or artifact.get("kind") != "image":
             return None
         if not _artifact_matches(
-            artifact, expected_format, cancel_token=cancel_token,
+            artifact, "png", cancel_token=cancel_token,
         ):
             return None
         if cancel_token is not None and cancel_token.is_set():

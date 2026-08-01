@@ -513,6 +513,79 @@ def test_resumable_group_requires_done_status_and_complete_members(tmp_path):
     ) is None
 
 
+@pytest.mark.parametrize("prior_requested", ("png", "pdf", "svg"))
+def test_group_resume_accepts_legacy_requested_format_only_when_effective_is_png(
+    tmp_path, prior_requested,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete png artifact")
+    source = {
+        "identity": "source-a",
+        "path": str(tmp_path / "a.csv"),
+        "size": 10,
+        "mtime_ns": 100,
+    }
+    group = _group_entry(image_path, [("task-a", source)])
+    group["requested_outputs"]["image"] = prior_requested
+    manifest = dict(_manifest([]), render_groups=[group])
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", source)],
+        image_format="png",
+    ) is group
+
+
+@pytest.mark.parametrize("bad_effective", ("pdf", "svg", ""))
+def test_group_resume_rejects_non_png_effective_format(tmp_path, bad_effective):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete png artifact")
+    source = {
+        "identity": "source-a", "path": None, "size": 10, "mtime_ns": 100,
+    }
+    group = _group_entry(image_path, [("task-a", source)])
+    group["effective_outputs"]["image"] = bad_effective
+    manifest = dict(_manifest([]), render_groups=[group])
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", source)],
+        image_format="png",
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("artifact_suffix", "artifact_format"),
+    ((".pdf", "png"), (".svg", "png"), (".png", "pdf"), (".png", "svg")),
+)
+def test_group_resume_rejects_legacy_vector_artifact_as_png(
+    tmp_path, artifact_suffix, artifact_format,
+):
+    image_path = tmp_path / f"group{artifact_suffix}"
+    image_path.write_bytes(b"legacy vector artifact")
+    source = {
+        "identity": "source-a", "path": None, "size": 10, "mtime_ns": 100,
+    }
+    group = _group_entry(image_path, [("task-a", source)])
+    group["requested_outputs"]["image"] = "pdf"
+    group["artifact"] = artifact_facts(
+        image_path, kind="image", artifact_format=artifact_format,
+    )
+    manifest = dict(_manifest([]), render_groups=[group])
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", source)],
+        image_format="png",
+    ) is None
+
+
 def test_resumable_group_rejects_changed_member_source_stat(tmp_path):
     image_path = tmp_path / "group.png"
     image_path.write_bytes(b"complete group image")

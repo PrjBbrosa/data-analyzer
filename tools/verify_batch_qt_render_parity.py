@@ -1291,13 +1291,117 @@ def _heatmap_evidence_record(machine: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def generate(output_dir: Path, *, width: int, height: int) -> dict[str, Any]:
+def _scene_integration_assertions(scene, image: QImage) -> dict[str, bool]:
+    """Fail closed when a report scene exposes interactive/native UI chrome."""
+
+    joined_text = "\n".join(scene.texts())
+    crop = image.copy(scene.plot_rect_in_widget())
+    return {
+        "exact_pixels": (
+            image.width(), image.height()
+        ) == (scene.options.width_px, scene.options.height_px),
+        "dpi_metadata": (
+            image.dotsPerMeterX()
+            == round(scene.options.dpi / 0.0254)
+            == image.dotsPerMeterY()
+        ),
+        "text_metadata": bool(
+            image.text("Title")
+            and image.text("Creator") == "TraceLab batch renderer"
+        ),
+        "has_plot_ink": _non_background_pixels(
+            crop, scene.theme.background
+        ) > 500,
+        "no_text_overlap": scene.adjacent_text_overlaps() == [],
+        "no_native_chrome": (
+            all(
+                (
+                    getattr(plot, "autoBtn", None) is None
+                    or not plot.autoBtn.isVisible()
+                )
+                and plot.menuEnabled() is False
+                and plot.vb.state["mouseEnabled"] == [False, False]
+                for plot in scene.plots
+            )
+            and scene.widget.frameShape() == scene.widget.NoFrame
+            and scene.widget.horizontalScrollBarPolicy()
+            == Qt.ScrollBarAlwaysOff
+            and scene.widget.verticalScrollBarPolicy()
+            == Qt.ScrollBarAlwaysOff
+            and scene.widget.focusPolicy() == Qt.NoFocus
+            and _outer_corners_match(image, scene.theme.background)
+            and max(_plot_corner_ink_counts(scene, image), default=0) < 160
+        ),
+        "no_main_navigation": (
+            "时域" not in joined_text
+            and "阶次" not in joined_text
+            and joined_text.count("FFT vs Time") <= 1
+        ),
+    }
+
+
+def _full_offscreen_matrix(
+    app: QApplication,
+    cases: list[ParityCase],
+    *,
+    width: int,
+    height: int,
+) -> list[dict[str, Any]]:
+    """Exercise every parity case across three themes and 1080p/4K."""
+
+    records: list[dict[str, Any]] = []
+    resolutions = tuple(dict.fromkeys(((width, height), (3840, 2160))))
+    for case in cases:
+        for background in ("white", "transparent", "dark"):
+            for matrix_width, matrix_height in resolutions:
+                options = BatchRenderOptions(
+                    width_px=matrix_width,
+                    height_px=matrix_height,
+                    dpi=DPI,
+                    background=background,
+                )
+                warnings_out: list[str] = []
+                scene = build_batch_scene(
+                    case.payload,
+                    params=case.params,
+                    options=options,
+                    context=case.context,
+                    warnings_out=warnings_out,
+                )
+                try:
+                    image = render_scene_image(
+                        scene, metadata=render_metadata(case.context)
+                    )
+                    checks = _scene_integration_assertions(scene, image)
+                    records.append({
+                        "name": case.name,
+                        "module": case.module,
+                        "background": background,
+                        "pixels": [matrix_width, matrix_height],
+                        "warnings": warnings_out,
+                        "assertions": checks,
+                        "status": "PASS" if all(checks.values()) else "FAIL",
+                    })
+                finally:
+                    scene.close()
+                app.processEvents()
+    return records
+
+
+def generate(
+    output_dir: Path,
+    *,
+    width: int,
+    height: int,
+    full_matrix: bool = False,
+) -> dict[str, Any]:
     app = ensure_app()
     output_dir.mkdir(parents=True, exist_ok=True)
     options = BatchRenderOptions(width_px=width, height_px=height, dpi=DPI)
+    cases = _cases()
     case_records = []
-    rows = {"time": [], "fft": [], "heatmap": []}
-    for case in _cases():
+    rows = {"time": [], "fft": [], "fft_time": [], "order_time": []}
+    for case in cases:
         (
             batch_full,
             batch_crop,
@@ -1318,9 +1422,7 @@ def generate(output_dir: Path, *, width: int, height: int) -> dict[str, Any]:
         )
         checks = _evaluate(case, batch_machine, reference_machine)
         status = "PASS" if all(checks.values()) else "FAIL"
-        sheet_module = (
-            case.module if case.module in {"time", "fft"} else "heatmap"
-        )
+        sheet_module = case.module
         rows[sheet_module].append(
             _case_row(case.name, batch_full, batch_crop, reference_crop)
         )
@@ -1344,7 +1446,7 @@ def generate(output_dir: Path, *, width: int, height: int) -> dict[str, Any]:
             "curve_tokens": reference_machine.get("curve_tokens", []),
             "plot_ink_pixels": reference_machine["plot_ink_pixels"],
         }
-        if sheet_module == "heatmap":
+        if sheet_module in {"fft_time", "order_time"}:
             batch_record.update(_heatmap_evidence_record(batch_machine))
             reference_record.update(_heatmap_evidence_record(reference_machine))
         case_records.append(
@@ -1364,8 +1466,18 @@ def generate(output_dir: Path, *, width: int, height: int) -> dict[str, Any]:
         contact_records[module] = _save(
             sheet, output_dir / f"{module}-contact-sheet.png"
         )
+    integration_matrix = (
+        _full_offscreen_matrix(
+            app, cases, width=width, height=height,
+        )
+        if full_matrix else []
+    )
+    parity_pass = all(case["status"] == "PASS" for case in case_records)
+    matrix_pass = all(
+        record["status"] == "PASS" for record in integration_matrix
+    )
     evidence = {
-        "status": "PASS" if all(case["status"] == "PASS" for case in case_records) else "FAIL",
+        "status": "PASS" if parity_pass and matrix_pass else "FAIL",
         "commit_sha": _git_sha(),
         "source_state_sha256": _source_state_sha(),
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1377,6 +1489,7 @@ def generate(output_dir: Path, *, width: int, height: int) -> dict[str, Any]:
         "requested_pixels": [width, height],
         "dpi": DPI,
         "cases": case_records,
+        "integration_matrix": integration_matrix,
         "contact_sheets": contact_records,
     }
     (output_dir / "evidence.json").write_text(
@@ -1391,11 +1504,22 @@ def main(argv=None) -> int:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--height", type=int, default=1080)
+    parser.add_argument("--full-matrix", action="store_true")
     args = parser.parse_args(argv)
-    evidence = generate(args.output_dir, width=args.width, height=args.height)
+    evidence = generate(
+        args.output_dir,
+        width=args.width,
+        height=args.height,
+        full_matrix=args.full_matrix,
+    )
     failed = [
         case["name"] for case in evidence["cases"] if case["status"] != "PASS"
     ]
+    failed.extend(
+        f"{record['name']}:{record['background']}:{record['pixels']}"
+        for record in evidence["integration_matrix"]
+        if record["status"] != "PASS"
+    )
     print(
         json.dumps(
             {

@@ -1,4 +1,4 @@
-"""Fail-closed frozen acceptance route for MF4 batch CSV/PDF export."""
+"""Fail-closed frozen acceptance route for MF4 batch CSV/PNG export."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -85,11 +85,11 @@ def _validated_sources(sources: tuple[Path, ...]) -> tuple[Path, ...]:
     return sources
 
 
-def _frozen_runtime_facts(frozen_smoke_json) -> dict[str, str]:
+def _frozen_runtime_facts(frozen_smoke_json) -> dict[str, object]:
     if not bool(getattr(sys, "frozen", False)):
         raise RuntimeError("frozen batch acceptance requires a frozen executable")
     if frozen_smoke_json in (None, ""):
-        raise ValueError("frozen batch acceptance requires the 12-output smoke JSON")
+        raise ValueError("frozen batch acceptance requires the 4-output smoke JSON")
 
     executable = _canonical_path(sys.executable)
     smoke_path = _canonical_path(frozen_smoke_json)
@@ -99,9 +99,9 @@ def _frozen_runtime_facts(frozen_smoke_json) -> dict[str, str]:
     if (
         smoke.get("ok") is not True
         or smoke.get("runtime") != "frozen-onedir-executable"
-        or smoke.get("artifact_count") != 12
+        or smoke.get("artifact_count") != 4
     ):
-        raise RuntimeError("12-output frozen smoke evidence is not a passing gate")
+        raise RuntimeError("4-output frozen smoke evidence is not a passing gate")
     smoke_executable = _canonical_path(smoke.get("executable", ""))
     if not _same_path(executable, smoke_executable):
         raise RuntimeError("frozen smoke executable does not match sys.executable")
@@ -110,12 +110,30 @@ def _frozen_runtime_facts(frozen_smoke_json) -> dict[str, str]:
     smoke_sha256 = str(smoke.get("executable_sha256") or "")
     if smoke_sha256 != executable_sha256:
         raise RuntimeError("frozen smoke executable SHA-256 does not match runtime")
+    qt_qpa_platform = str(smoke.get("qt_qpa_platform") or "")
+    qt_platform_name = str(smoke.get("qt_platform_name") or "")
+    if not qt_qpa_platform or not qt_platform_name:
+        raise RuntimeError("frozen smoke lacks requested and actual Qt platform facts")
+    cjk_proof = smoke.get("cjk_proof") or {}
+    if not isinstance(cjk_proof, dict):
+        raise RuntimeError("frozen smoke CJK proof is malformed")
+    ink_pixels = int(cjk_proof.get("ink_pixels") or 0)
+    empty_ink_pixels = int(cjk_proof.get("empty_ink_pixels") or 0)
+    if (
+        cjk_proof.get("supports") is not True
+        or cjk_proof.get("pass") is not True
+        or ink_pixels <= empty_ink_pixels + 120
+    ):
+        raise RuntimeError("frozen smoke CJK double proof is not a passing gate")
     return {
         "runtime": "frozen-onedir-executable",
         "sys_executable": str(executable),
         "executable_sha256": executable_sha256,
         "frozen_smoke_json": str(smoke_path),
         "frozen_smoke_executable_sha256": smoke_sha256,
+        "qt_qpa_platform": qt_qpa_platform,
+        "qt_platform_name": qt_platform_name,
+        "frozen_smoke_cjk_proof": dict(cjk_proof),
     }
 
 
@@ -137,7 +155,7 @@ def _verify_result(
     output_dir: Path,
     sources: tuple[Path, ...],
     channel: str,
-    runtime_facts: dict[str, str],
+    runtime_facts: dict[str, object],
 ):
     if result.status != "done" or result.blocked:
         raise RuntimeError(
@@ -183,15 +201,15 @@ def _verify_result(
             raise RuntimeError("manifest entry status/channel mismatch")
         if entry.get("degraded_reason"):
             raise RuntimeError("manifest entry was degraded")
-        expected_outputs = {"data": "csv", "image": "pdf"}
+        expected_outputs = {"data": "csv", "image": "png"}
         if entry.get("requested_outputs") != expected_outputs:
-            raise RuntimeError("manifest requested outputs are not CSV+PDF")
+            raise RuntimeError("manifest requested outputs are not CSV+PNG")
         if entry.get("effective_outputs") != expected_outputs:
-            raise RuntimeError("manifest effective outputs are not CSV+PDF")
+            raise RuntimeError("manifest effective outputs are not CSV+PNG")
         entry_artifacts = entry.get("artifacts") or {}
         if set(entry_artifacts) != {"data", "image"}:
             raise RuntimeError("manifest entry lacks its data/image artifact pair")
-        for kind, expected_format in (("data", "csv"), ("image", "pdf")):
+        for kind, expected_format in (("data", "csv"), ("image", "png")):
             facts = entry_artifacts[kind]
             path = Path(facts.get("path", "")).resolve()
             content = path.read_bytes()
@@ -204,10 +222,17 @@ def _verify_result(
                 raise RuntimeError(f"artifact size mismatch for {path}")
             if facts.get("sha256") != digest or facts.get("checksum_status") != "complete":
                 raise RuntimeError(f"artifact checksum mismatch for {path}")
-            if kind == "image" and not (
-                content.startswith(b"%PDF-") and content.rstrip().endswith(b"%%EOF")
-            ):
-                raise RuntimeError(f"invalid PDF artifact: {path}")
+            if kind == "image":
+                from PyQt5.QtGui import QImage, QImageReader
+
+                image = QImage(str(path))
+                encoded_format = bytes(QImageReader.imageFormat(str(path))).lower()
+                if (
+                    image.isNull()
+                    or encoded_format != b"png"
+                    or (image.width(), image.height()) != (640, 360)
+                ):
+                    raise RuntimeError(f"invalid PNG artifact: {path}")
             artifact_paths.add(path)
             artifacts.append(
                 {
@@ -284,7 +309,7 @@ def run(
         if output_dir.exists() and any(output_dir.iterdir()):
             raise ValueError(f"acceptance output directory must be empty: {output_dir}")
         preset = AnalysisPreset.free_config(
-            name="frozen MF4 CSV+PDF acceptance",
+            name="frozen MF4 CSV+PNG acceptance",
             method="time",
             target_signals=(str(channel),),
             target_policy="common",
@@ -292,7 +317,7 @@ def run(
                 export_data=True,
                 export_image=True,
                 data_format="csv",
-                image_format="pdf",
+                image_format="png",
                 image_size="custom",
                 image_width=640,
                 image_height=360,

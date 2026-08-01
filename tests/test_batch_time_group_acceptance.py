@@ -177,8 +177,19 @@ def test_inspect_mode_rejects_groups_with_the_wrong_dimension(tmp_path, group_by
 def _source_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(ROOT)
-    environment["MPLBACKEND"] = "Agg"
+    environment.setdefault("QT_QPA_PLATFORM", "offscreen")
     return environment
+
+
+def test_group_acceptance_preset_exercises_subplot_with_channel_x():
+    preset = _preset("source")
+
+    assert preset.params == {
+        "render_group_by": "source",
+        "render_layout": "subplot",
+        "x_source": "channel",
+        "x_channel": "position",
+    }
 
 
 def test_group_acceptance_cli_proves_modes_linkage_and_deleted_image_resume(
@@ -210,6 +221,13 @@ def test_group_acceptance_cli_proves_modes_linkage_and_deleted_image_resume(
     assert evidence["source_count"] == 2
     assert {Path(path).suffix for path in evidence["source_paths"]} == {".csv"}
     assert all(Path(path).is_file() for path in evidence["source_paths"])
+    assert evidence["render_contract"] == {
+        "render_layout": "subplot",
+        "x_channel": "position",
+        "x_source": "channel",
+        "subplot_geometry_checked": True,
+        "subplot_text_overlaps": [],
+    }
     assert evidence["modes"] == {
         "none": {
             "data_count": 4,

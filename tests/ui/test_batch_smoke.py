@@ -752,7 +752,7 @@ def test_sheet_round_trips_full_outputs_without_runtime_manifest_paths(qtbot):
         export_data=True,
         export_image=True,
         data_format="xlsx",
-        image_format="svg",
+        image_format="png",
         image_size="custom",
         image_width=3210,
         image_height=1234,
@@ -796,7 +796,7 @@ def test_sheet_output_preview_uses_batch_runner_core_facts(qtbot, tmp_path):
     sheet.apply_outputs(BatchOutput(
         export_data=True,
         export_image=True,
-        image_format="svg",
+        image_format="png",
         image_size="2560x1440",
         conflict_policy="skip",
     ))
@@ -806,7 +806,7 @@ def test_sheet_output_preview_uses_batch_runner_core_facts(qtbot, tmp_path):
     preview = sheet._output_panel.output_preview_text()
     assert "1 任务" in preview
     assert "2 文件" in preview
-    assert "SVG 2560×1440" in preview
+    assert "PNG 2560×1440" in preview
     assert "skip" in preview
 
 

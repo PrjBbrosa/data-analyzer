@@ -10,7 +10,12 @@ import json
 from pathlib import Path
 
 from . import db_reference
-from .batch import AnalysisPreset, BatchOutput, BatchRunner
+from .batch import (
+    AnalysisPreset,
+    BatchOutput,
+    BatchRunner,
+    _legacy_image_format_warning,
+)
 from .batch_recipe import normalize_batch_params
 
 
@@ -50,6 +55,11 @@ def _migrate_axis_keys(params: dict) -> dict:
 def save_preset_to_json(preset: AnalysisPreset, path: str | Path) -> None:
     """Write preset to JSON using the §4.1 serialization whitelist."""
     path = Path(path)
+    image_format = str(preset.outputs.image_format or "").strip().lower().lstrip(".")
+    if image_format != "png":
+        raise ValueError(
+            f"unsupported batch image_format: {preset.outputs.image_format!r}"
+        )
     payload = {
         "schema_version": SCHEMA_VERSION,
         "name": preset.name,
@@ -62,7 +72,7 @@ def save_preset_to_json(preset: AnalysisPreset, path: str | Path) -> None:
             "export_data": bool(preset.outputs.export_data),
             "export_image": bool(preset.outputs.export_image),
             "data_format": str(preset.outputs.data_format),
-            "image_format": str(preset.outputs.image_format),
+            "image_format": "png",
             "image_size": str(preset.outputs.image_size),
             "image_width": int(preset.outputs.image_width),
             "image_height": int(preset.outputs.image_height),
@@ -117,6 +127,23 @@ def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
         return None
 
     outputs_raw = raw.get("outputs") or {}
+    requested_image_format = str(
+        outputs_raw.get("image_format", "png") or ""
+    ).strip().lower().lstrip(".")
+    if requested_image_format in {"pdf", "svg"}:
+        image_format = "png"
+        migration_warnings = (
+            _legacy_image_format_warning(requested_image_format),
+        )
+        migration_provenance = requested_image_format
+    elif requested_image_format == "png":
+        image_format = "png"
+        migration_warnings = ()
+        migration_provenance = None
+    else:
+        raise ValueError(
+            f"unsupported preset image_format: {requested_image_format!r}"
+        )
     params_dict = dict(raw.get("params") or {})
     _migrate_axis_keys(params_dict)
     # dB-reference-defaults spec §13 S4: a legacy preset's bare
@@ -137,7 +164,7 @@ def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
             export_data=bool(outputs_raw.get("export_data", True)),
             export_image=bool(outputs_raw.get("export_image", True)),
             data_format=str(outputs_raw.get("data_format", "csv")),
-            image_format=str(outputs_raw.get("image_format", "png")),
+            image_format=image_format,
             image_size=str(outputs_raw.get("image_size", "1920x1080")),
             image_width=int(outputs_raw.get("image_width", 1920)),
             image_height=int(outputs_raw.get("image_height", 1080)),
@@ -146,12 +173,14 @@ def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
                 outputs_raw.get("image_background", "white")
             ),
             image_line_width=float(
-                outputs_raw.get("image_line_width", 1.0)
+                outputs_raw.get("image_line_width", 1.5)
             ),
             conflict_policy=str(
                 outputs_raw.get("conflict_policy", "auto_number")
             ),
             write_manifest=bool(outputs_raw.get("write_manifest", True)),
             resume_policy=str(outputs_raw.get("resume_policy", "none")),
+            requested_image_format=migration_provenance,
+            migration_warnings=migration_warnings,
         ),
     )

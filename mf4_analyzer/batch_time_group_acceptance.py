@@ -41,6 +41,7 @@ def _make_sources(directory: Path) -> dict[int, FileData]:
         frame = pd.DataFrame(
             {
                 "time": time,
+                "position": 10.0 + (index + 1.0) * 5.0 * time,
                 "speed": 40.0 + index + 3.0 * np.sin(2.0 * np.pi * time),
                 "accel": (index + 1.0) * np.cos(4.0 * np.pi * time),
             }
@@ -52,14 +53,20 @@ def _make_sources(directory: Path) -> dict[int, FileData]:
             path,
             loaded,
             list(loaded.columns),
-            {"speed": "km/h", "accel": "m/s^2"},
+            {"position": "m", "speed": "km/h", "accel": "m/s^2"},
             idx=index,
         )
     return files
 
 
 def _preset(group_by: str, *, resume: bool = False) -> AnalysisPreset:
-    params = {} if group_by == "none" else {"render_group_by": group_by}
+    params = {
+        "render_layout": "subplot",
+        "x_source": "channel",
+        "x_channel": "position",
+    }
+    if group_by != "none":
+        params["render_group_by"] = group_by
     preset = AnalysisPreset.free_config(
         name=f"batch time group acceptance {group_by}",
         method="time",
@@ -80,6 +87,107 @@ def _preset(group_by: str, *, resume: bool = False) -> AnalysisPreset:
         ),
     )
     return replace(preset, file_ids=(0, 1))
+
+
+def _subplot_geometry_proof(files: dict[int, FileData]) -> dict[str, object]:
+    """Exercise the B2 scene-geometry assertion with the acceptance payloads."""
+
+    from .batch_render import (
+        BatchRenderContext,
+        BatchRenderOptions,
+        BatchSeries,
+        BatchTimeFigureSpec,
+    )
+    from .batch_render_qt._builder import build_batch_scene
+    from .batch_render_qt._dispatch import render_on_gui_thread
+    from .batch_render_qt._export import render_scene_image
+
+    def inspect() -> dict[str, object]:
+        overlap_records: list[tuple[int, int, str, str]] = []
+        sources = tuple(files.values())
+        scene_inputs = []
+        for fd in sources:
+            scene_inputs.append(
+                (
+                    "source",
+                    tuple(
+                        BatchSeries(
+                            x=fd.data["position"].to_numpy(dtype=float),
+                            y=fd.data[channel].to_numpy(dtype=float),
+                            label=channel,
+                            unit=str(fd.channel_units.get(channel, "")),
+                            x_unit="m",
+                            panel=index,
+                        )
+                        for index, channel in enumerate(_CHANNELS)
+                    ),
+                    _CHANNELS,
+                )
+            )
+        for channel in _CHANNELS:
+            scene_inputs.append(
+                (
+                    "channel",
+                    tuple(
+                        BatchSeries(
+                            x=fd.data["position"].to_numpy(dtype=float),
+                            y=fd.data[channel].to_numpy(dtype=float),
+                            label=Path(fd.filepath).name,
+                            unit=str(fd.channel_units.get(channel, "")),
+                            x_unit="m",
+                            panel=index,
+                        )
+                        for index, fd in enumerate(sources)
+                    ),
+                    tuple(Path(fd.filepath).name for fd in sources),
+                )
+            )
+        for group_by, series, titles in scene_inputs:
+            spec = BatchTimeFigureSpec(
+                series=series,
+                layout="subplot",
+                x_source="channel",
+                x_origin="absolute",
+                x_label="position (m)",
+                panel_titles=titles,
+            )
+            scene = build_batch_scene(
+                ("time", spec),
+                params={
+                    "render_group_by": group_by,
+                    "render_layout": "subplot",
+                    "x_source": "channel",
+                    "x_channel": "position",
+                },
+                options=BatchRenderOptions(width_px=640, height_px=360, dpi=96),
+                context=BatchRenderContext(
+                    source_display_name="time group acceptance",
+                    channel="grouped time",
+                    unit="",
+                    method="time",
+                    task_id=f"geometry-{group_by}",
+                ),
+            )
+            try:
+                image = render_scene_image(scene)
+                if image.isNull() or (image.width(), image.height()) != (640, 360):
+                    raise RuntimeError("subplot geometry probe did not render a valid image")
+                overlap_records.extend(scene.adjacent_text_overlaps())
+            finally:
+                scene.close()
+        if overlap_records:
+            raise RuntimeError(
+                f"subplot adjacent text geometry overlaps: {overlap_records}"
+            )
+        return {
+            "render_layout": "subplot",
+            "x_source": "channel",
+            "x_channel": "position",
+            "subplot_geometry_checked": True,
+            "subplot_text_overlaps": [],
+        }
+
+    return render_on_gui_thread(inspect)
 
 
 def _verified_artifact_path(facts: object, expected_format: str) -> Path:
@@ -283,6 +391,7 @@ def run(output_directory: Path, result_json: Path) -> int:
     run_root = output_directory / uuid.uuid4().hex
     try:
         files = _make_sources(run_root / "sources")
+        render_contract = _subplot_geometry_proof(files)
         expected_source_identities = {
             str(Path(fd.filepath).resolve()) for fd in files.values()
         }
@@ -450,6 +559,7 @@ def run(output_directory: Path, result_json: Path) -> int:
             "status": "success",
             "source_count": len(files),
             "source_paths": [str(Path(fd.filepath).resolve()) for fd in files.values()],
+            "render_contract": render_contract,
             "modes": modes,
             "resume": resume_facts,
             "manifests": manifests,

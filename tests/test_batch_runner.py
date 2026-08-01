@@ -317,99 +317,6 @@ def test_batch_order_time_csv_shape(tmp_path):
     assert len(df) > 0
 
 
-def test_batch_time_export_scene_renders_line_series():
-    from mf4_analyzer.batch_render import _build_batch_figure
-
-    df = pd.DataFrame({
-        "time_s": [0.0, 0.1, 0.0, 0.1],
-        "series": ["original", "original", "filtered", "filtered"],
-        "value": [0.0, 1.0, 0.0, 0.5],
-    })
-
-    figure = _build_batch_figure(("time", df), {
-        "x_auto": False,
-        "x_min": 0.0,
-        "x_max": 0.1,
-        "y_auto": False,
-        "y_min": -1.0,
-        "y_max": 1.0,
-    })
-
-    axis = figure.axes[0]
-    assert len(axis.lines) == 2
-    assert axis.get_xlim() == pytest.approx((0.0, 0.1))
-    assert axis.get_ylim() == pytest.approx((-1.0, 1.0))
-
-
-def test_batch_heatmap_image_applies_xyz_axis_params(tmp_path):
-    """Batch PNG rendering must consume output X/Y/Z axis settings."""
-    from mf4_analyzer.batch_render import _build_batch_figure
-
-    df = pd.DataFrame({
-        "time_s": [0.0, 1.0, 0.0, 1.0],
-        "order": [1.0, 1.0, 2.0, 2.0],
-        "amplitude": [0.1, 0.2, 0.3, 0.4],
-    })
-    figure = _build_batch_figure(
-        ("order_time", df),
-        {
-            "cmap": "viridis",
-            "x_auto": False, "x_min": 0.25, "x_max": 0.75,
-            "y_auto": False, "y_min": 1.25, "y_max": 1.75,
-            "z_auto": False, "z_floor": -40.0, "z_ceiling": -5.0,
-        },
-    )
-
-    axis = figure.axes[0]
-    image = axis.images[0]
-    assert axis.get_xlim() == pytest.approx((0.25, 0.75))
-    assert axis.get_ylim() == pytest.approx((1.25, 1.75))
-    assert image.get_clim() == pytest.approx((-40.0, -5.0))
-    assert image.get_cmap().name == "viridis"
-
-
-def test_batch_heatmap_image_can_render_linear_z_scale(tmp_path):
-    """Batch OUTPUT Z unit should choose between dB and Linear rendering."""
-    from mf4_analyzer.batch_render import _build_batch_figure
-
-    df = pd.DataFrame({
-        "time_s": [0.0, 1.0, 0.0, 1.0],
-        "frequency_hz": [10.0, 10.0, 20.0, 20.0],
-        "amplitude": [0.25, 0.5, 1.0, 2.0],
-    })
-    figure = _build_batch_figure(
-        ("fft_time", df),
-        {"amplitude_mode": "amplitude", "z_auto": True},
-    )
-
-    assert float(np.asarray(figure.axes[0].images[0].get_array()).max()) == pytest.approx(2.0)
-    assert figure.axes[1].get_ylabel() == "Amplitude"
-
-
-def test_batch_fft_export_scene_renders_db_display_only():
-    """FFT batch image should honor the same display-only dB reference as UI."""
-    from mf4_analyzer.batch_render import _build_batch_figure
-
-    df = pd.DataFrame({
-        "frequency_hz": [10.0, 20.0],
-        "amplitude": [1.0, 10.0],
-    })
-
-    figure = _build_batch_figure(
-        ("fft", df),
-        {"amp_y": "dB", "db_reference": 1.0},
-    )
-
-    axis = figure.axes[0]
-    np.testing.assert_allclose(axis.lines[0].get_ydata(), np.array([0.0, 20.0]), atol=1e-6)
-    # dB-reference-defaults (Task 9 Step 9.4): the batch label now always
-    # states the resolved reference via the shared formatter -- a bare
-    # ``db_reference`` value with no mode migrates to Manual (spec S2/S4),
-    # so the reference text uses the pretty-print form of THIS value
-    # (unit unknown for a direct-call bypass with no file context).
-    assert axis.get_ylabel() == "Amplitude (dB re 1×10⁰)"
-
-
 def test_write_image_exports_nonempty_png_with_fixed_size(tmp_path):
     from matplotlib import image as mpl_image
 
@@ -872,7 +779,9 @@ def test_fft_time_exports_image(tmp_path):
     assert result.items[0].image_path.endswith(".png")
 
 
-def test_non_time_heatmap_invalid_cmap_does_not_add_runner_warning(tmp_path):
+def test_non_time_heatmap_invalid_cmap_adds_runner_warning(tmp_path):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
     fd = _make_file(tmp_path, fs=1024.0)
     preset = AnalysisPreset.free_config(
         name="batch fft_time invalid cmap compatibility",
@@ -889,7 +798,7 @@ def test_non_time_heatmap_invalid_cmap_does_not_add_runner_warning(tmp_path):
         outputs=BatchOutput(
             export_data=False,
             export_image=True,
-            write_manifest=False,
+            write_manifest=True,
         ),
     )
     preset = replace(preset, file_ids=(1,))
@@ -898,9 +807,77 @@ def test_non_time_heatmap_invalid_cmap_does_not_add_runner_warning(tmp_path):
 
     assert result.status == "done"
     assert Path(result.items[0].image_path).is_file()
-    assert "Invalid colormap 'not-a-colormap'; using 'turbo'." not in (
+    assert "Invalid colormap 'not-a-colormap'; using 'turbo'." in (
         result.items[0].warnings
     )
+    entry = load_batch_manifest(result.manifest_path)["entries"][0]
+    assert "Invalid colormap 'not-a-colormap'; using 'turbo'." in (
+        entry["warnings"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "params"),
+    (
+        ("fft", {"fs": 1024.0, "nfft": 64}),
+        (
+            "fft_time",
+            {
+                "fs": 1024.0,
+                "window": "hanning",
+                "nfft": 256,
+                "overlap": 0.5,
+            },
+        ),
+        (
+            "order_time",
+            {
+                "fs": 1024.0,
+                "nfft": 256,
+                "max_order": 5.0,
+                "order_res": 0.5,
+                "time_res": 0.05,
+                "rpm_mode": "manual",
+                "manual_rpm": 3000.0,
+                "samples_per_rev": 64,
+            },
+        ),
+    ),
+)
+def test_non_time_renderer_warning_reaches_item_and_manifest(
+    tmp_path, monkeypatch, method, params,
+):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_file(tmp_path, fs=1024.0)
+    warning = f"{method}-renderer-warning"
+
+    def render_with_warning(
+        payload, path, params=None, *, options=None, context=None,
+        warnings_out=None,
+    ):
+        warnings_out.append(warning)
+        Path(path).write_bytes(b"image")
+        return Path(path)
+
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(render_with_warning),
+    )
+    preset = AnalysisPreset.free_config(
+        name=f"{method} warning",
+        method=method,
+        target_signals=("sig",),
+        params=params,
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+    preset = replace(preset, file_ids=(1,))
+
+    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert result.items[0].warnings == [warning]
+    entry = load_batch_manifest(result.manifest_path)["entries"][0]
+    assert entry["warnings"] == [warning]
 
 
 def test_fft_time_amplitude_ceiling_emits_failed_item(tmp_path, monkeypatch):
@@ -1272,25 +1249,18 @@ def test_order_time_spectro_matrix_matches_long_dataframe():
     pd.testing.assert_frame_equal(df_new, df_old)
 
 
-def test_write_image_heatmap_uses_transposed_matrix(tmp_path):
+def test_heatmap_producer_matrix_matches_legacy_long_pivot_orientation(tmp_path):
     import numpy as np
     from mf4_analyzer.batch import BatchRunner, _Spectro2D
     x = np.array([0.0, 1.0, 2.0])           # time
     y = np.array([1.0, 2.0])                 # order
     matrix = np.array([[1., 2.], [3., 4.], [5., 6.]])  # (len(x), len(y))
     spectro = _Spectro2D(x, y, matrix, 'time_s', 'order')
-    from mf4_analyzer.batch_render import _build_batch_figure
-    figure = _build_batch_figure(
-        ('order_time', spectro), {'z_auto': True}
-    )
-    # Rendering matrix must be matrix.T (rows=y, cols=x), equal to old pivot
+    # Qt ImageItem receives ``matrix.T`` (rows=y, cols=x); pin the producer
+    # orientation here while renderer corner mapping lives in Qt parity tests.
     df = spectro.to_long_dataframe()
     pivot = df.pivot(index='order', columns='time_s', values='amplitude')
     np.testing.assert_allclose(pivot.to_numpy(), matrix.T)
-    np.testing.assert_allclose(
-        np.asarray(figure.axes[0].images[0].get_array()),
-        pivot.to_numpy(),
-    )
 
 
 def test_image_only_export_skips_long_dataframe(tmp_path, monkeypatch):
@@ -1909,7 +1879,7 @@ _REAL_IMPORT = builtins.__import__
 _DEGRADED_REASON = "图片/PDF 导出后端不可用，本次仅导出数据文件"
 
 
-def test_runner_degrades_data_and_pdf_before_reservation_when_backend_import_fails(
+def test_runner_degrades_data_and_png_before_reservation_when_backend_import_fails(
     tmp_path, monkeypatch,
 ):
     import mf4_analyzer.batch as batch_module
@@ -1917,14 +1887,14 @@ def test_runner_degrades_data_and_pdf_before_reservation_when_backend_import_fai
 
     fd = _make_fd(tmp_path, "backend_missing", idx=0)
     preset = AnalysisPreset.from_current_single(
-        name="degraded PDF",
+        name="degraded PNG",
         method="fft",
         signal=(0, "sig"),
         params={"fs": 1024.0, "nfft": 64},
         outputs=BatchOutput(
             export_data=True,
             export_image=True,
-            image_format="pdf",
+            image_format="png",
         ),
     )
     reservations = []
@@ -1949,14 +1919,14 @@ def test_runner_degrades_data_and_pdf_before_reservation_when_backend_import_fai
     assert item.status == "done"
     assert item.degraded_reason == _DEGRADED_REASON
     assert item.warnings == [_DEGRADED_REASON]
-    assert item.requested_outputs == {"data": "csv", "image": "pdf"}
+    assert item.requested_outputs == {"data": "csv", "image": "png"}
     assert item.effective_outputs == {"data": "csv"}
     assert reservations == [("csv",)]
     assert Path(item.data_path).is_file()
     assert item.image_path is None
 
     output_dir = tmp_path / "out"
-    assert not list(output_dir.glob("*.pdf"))
+    assert not list(output_dir.glob("*.png"))
     assert not list(output_dir.glob("*.partial.json"))
     assert not list(output_dir.glob(".*.batch-reserve"))
     assert not list(output_dir.glob(".*.batch-stage.*"))
@@ -1965,7 +1935,7 @@ def test_runner_degrades_data_and_pdf_before_reservation_when_backend_import_fai
     assert manifest["run_status"] == "partial"
     entry = manifest["entries"][0]
     assert entry["status"] == "done"
-    assert entry["requested_outputs"] == {"data": "csv", "image": "pdf"}
+    assert entry["requested_outputs"] == {"data": "csv", "image": "png"}
     assert entry["effective_outputs"] == {"data": "csv"}
     assert entry["degraded_reason"] == _DEGRADED_REASON
     assert set(entry["artifacts"]) == {"data"}
@@ -1992,7 +1962,7 @@ def test_runner_degraded_skip_conflict_reads_only_effective_output_paths(
         outputs=replace(
             data_only.outputs,
             export_image=True,
-            image_format="pdf",
+            image_format="png",
             conflict_policy="skip",
         ),
     )
@@ -2007,8 +1977,8 @@ def test_runner_degraded_skip_conflict_reads_only_effective_output_paths(
     assert result.items[0].image_path is None
     assert result.items[0].effective_outputs == {"data": "csv"}
     assert "existing=csv; missing=none" in result.items[0].warnings
-    assert not any("'pdf'" in reason for reason in result.blocked)
-    assert not list((tmp_path / "out").glob("*.pdf"))
+    assert not any("'png'" in reason for reason in result.blocked)
+    assert not list((tmp_path / "out").glob("*.png"))
 
 
 def test_runner_image_only_fails_cleanly_when_backend_import_is_unavailable(
@@ -2065,7 +2035,7 @@ def test_runner_writer_import_error_rolls_back_data_and_image_set(
         outputs=BatchOutput(
             export_data=True,
             export_image=True,
-            image_format="pdf",
+            image_format="png",
             write_manifest=False,
         ),
     )
@@ -2081,7 +2051,7 @@ def test_runner_writer_import_error_rolls_back_data_and_image_set(
     assert result.items[0].status == "failed"
     assert result.degraded_count == 0
     assert not list((tmp_path / "out").glob("*.csv"))
-    assert not list((tmp_path / "out").glob("*.pdf"))
+    assert not list((tmp_path / "out").glob("*.png"))
     assert not list((tmp_path / "out").glob(".*.batch-stage.*"))
     assert not list((tmp_path / "out").glob(".*.batch-reserve"))
 
@@ -2089,7 +2059,7 @@ def test_runner_writer_import_error_rolls_back_data_and_image_set(
 def test_runner_maps_phase3_image_output_to_renderer_options_and_context(
     tmp_path, monkeypatch,
 ):
-    fd = _make_fd(tmp_path, "vector", idx=0)
+    fd = _make_fd(tmp_path, "png", idx=0)
     captured = {}
 
     def capture_render(payload, path, params=None, *, options=None, context=None,
@@ -2097,19 +2067,19 @@ def test_runner_maps_phase3_image_output_to_renderer_options_and_context(
         captured["path"] = Path(path)
         captured["options"] = options
         captured["context"] = context
-        Path(path).write_text("svg", encoding="utf-8")
+        Path(path).write_bytes(b"png")
         return Path(path)
 
     monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(capture_render))
     preset = AnalysisPreset.from_current_single(
-        name="vector",
+        name="png",
         method="fft",
         signal=(0, "sig"),
         params={"fs": 1024.0, "nfft": 64},
         outputs=BatchOutput(
             export_data=False,
             export_image=True,
-            image_format="svg",
+            image_format="png",
             image_size="custom",
             image_width=2304,
             image_height=1296,
@@ -2123,9 +2093,9 @@ def test_runner_maps_phase3_image_output_to_renderer_options_and_context(
     result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
 
     assert result.status == "done"
-    assert Path(result.items[0].image_path).suffix == ".svg"
+    assert Path(result.items[0].image_path).suffix == ".png"
     image_facts = result.items[0].artifact_facts["image"]
-    assert image_facts["format"] == "svg"
+    assert image_facts["format"] == "png"
     assert (image_facts["width"], image_facts["height"], image_facts["dpi"]) == (
         2304, 1296, 192,
     )
@@ -2138,13 +2108,34 @@ def test_runner_maps_phase3_image_output_to_renderer_options_and_context(
         options.background,
         options.line_width,
     ) == (
-        2304, 1296, 192, "svg", "transparent", 1.5,
+        2304, 1296, 192, "png", "transparent", 1.5,
     )
     context = captured["context"]
     assert context.channel == "sig"
     assert context.method == "fft"
     assert context.task_id == result.items[0].task_id
     assert context.effective_facts["nfft_effective"] == 64
+
+
+@pytest.mark.parametrize("illegal_format", ("pdf", "svg"))
+def test_runner_rejects_new_vector_image_request_before_task_execution(
+    tmp_path, illegal_format,
+):
+    fd = _make_fd(tmp_path, f"illegal_{illegal_format}", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="illegal vector",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(image_format=illegal_format),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert result.items == []
+    assert any("image_format must be png" in reason for reason in result.blocked)
+    assert not list((tmp_path / "out").glob(f"*.{illegal_format}"))
 
 
 def test_runner_manifest_records_artifact_checksum_and_effective_facts(tmp_path):
@@ -3255,6 +3246,154 @@ def _task6_fake_image(
     return Path(path)
 
 
+def _capture_group_qt_image(
+    captured, payload, path, params=None, *, options=None, context=None,
+    warnings_out=None,
+):
+    from mf4_analyzer.batch_render_qt._builder import build_batch_scene
+    from mf4_analyzer.batch_render_qt._export import render_scene_image, save_png
+    from mf4_analyzer.batch_render_qt._page import render_metadata
+
+    captured.update(
+        payload=payload, params=params, options=options, context=context,
+    )
+    scene = build_batch_scene(
+        payload, params=params, options=options, context=context,
+        warnings_out=warnings_out,
+    )
+    try:
+        captured["scene_text"] = "\n".join(scene.texts())
+        image = render_scene_image(
+            scene, metadata=render_metadata(context),
+        )
+        return save_png(image, path)
+    finally:
+        scene.close()
+
+
+def _assert_group_qt_text_and_metadata(
+    captured, target: Path, *, absent: tuple[str, ...], present: tuple[str, ...] = (),
+):
+    from PyQt5.QtGui import QImage
+
+    loaded = QImage(str(target))
+    assert not loaded.isNull()
+    scene_text = captured["scene_text"]
+    metadata_title = loaded.text("Title")
+    for token in absent:
+        assert token not in scene_text
+        assert token not in metadata_title
+    for token in present:
+        assert token in scene_text
+        assert token in metadata_title
+
+
+def test_source_group_producer_uses_safe_display_name_and_channel_panels(
+    qapp, tmp_path, monkeypatch,
+):
+    captured = {}
+    fd = _make_fd(
+        tmp_path, "source_group_display", channels=("sig", "aux"), idx=0,
+    )
+    preset = _task6_grouped_time_preset(
+        group_by="source", layout="subplot", export_data=False,
+    )
+
+    def capture(payload, path, params=None, *, options=None, context=None,
+                warnings_out=None):
+        return _capture_group_qt_image(
+            captured, payload, path, params=params, options=options,
+            context=context, warnings_out=warnings_out,
+        )
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(capture))
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    _kind, spec = captured["payload"]
+    context = captured["context"]
+    assert spec.panel_titles == ("aux", "sig")
+    assert context.source_display_name == Path(fd.filepath).name
+    assert context.group == ""
+    assert context.channel == ""
+    assert str(Path(fd.filepath).parent) not in context.source_display_name
+    assert not context.source_display_name.startswith("[")
+    from mf4_analyzer.batch_grouping import _source_group_key
+
+    item = result.items[0]
+    raw_group_key = _source_group_key(
+        item.source_identity, item.group_identity,
+    )
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    image_path = Path(
+        load_batch_manifest(result.manifest_path)["render_groups"][0]
+        ["artifact"]["path"]
+    )
+    _assert_group_qt_text_and_metadata(
+        captured,
+        image_path,
+        absent=(
+            raw_group_key,
+            str(Path(fd.filepath).resolve()),
+            str(Path(fd.filepath).parent.resolve()),
+        ),
+    )
+
+
+def test_channel_group_producer_preserves_channel_and_uses_file_panels(
+    qapp, tmp_path, monkeypatch,
+):
+    captured = {}
+    channel = 'acc[front]"raw'
+    first = _make_fd(tmp_path, "first_channel", channels=(channel,), idx=0)
+    second = _make_fd(tmp_path, "second_channel", channels=(channel,), idx=1)
+    preset = AnalysisPreset.free_config(
+        name="channel display",
+        method="time",
+        target_signals=(channel,),
+        params={"render_group_by": "channel", "render_layout": "subplot"},
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+    preset = replace(preset, file_ids=(0, 1))
+
+    def capture(payload, path, params=None, *, options=None, context=None,
+                warnings_out=None):
+        return _capture_group_qt_image(
+            captured, payload, path, params=params, options=options,
+            context=context, warnings_out=warnings_out,
+        )
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(capture))
+
+    result = BatchRunner({0: first, 1: second}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    _kind, spec = captured["payload"]
+    context = captured["context"]
+    assert spec.panel_titles == (first.filename, second.filename)
+    assert context.source_display_name == channel
+    assert context.group == ""
+    assert context.channel == ""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    image_path = Path(
+        load_batch_manifest(result.manifest_path)["render_groups"][0]
+        ["artifact"]["path"]
+    )
+    _assert_group_qt_text_and_metadata(
+        captured,
+        image_path,
+        absent=(
+            str(Path(first.filepath).resolve()),
+            str(Path(second.filepath).resolve()),
+            str(Path(first.filepath).parent.resolve()),
+        ),
+        present=(channel,),
+    )
+
+
 def test_lazy_logical_groups_use_descriptor_identity_for_preview_and_run(
     tmp_path, monkeypatch,
 ):
@@ -4138,6 +4277,129 @@ def test_group_render_warnings_are_deduplicated_and_mirrored_to_successes(
     assert successful.warnings.count("shared warning") == 1
     assert "shared warning" not in failed.warnings
     assert group["warnings"] == ["shared warning"]
+
+
+def test_migrated_pdf_request_runs_as_png_and_preserves_audit_warning(
+    tmp_path, monkeypatch,
+):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    warning = "旧预设图像格式 PDF 已迁移为 PNG；本次仅输出 PNG。"
+    fd = _make_fd(tmp_path, "migrated_pdf", channels=("sig",), idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="migrated PDF",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(
+            image_format="png",
+            requested_image_format="pdf",
+            migration_warnings=(warning,),
+        ),
+    )
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(_task6_fake_image),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert result.warnings == [warning]
+    assert result.items[0].requested_outputs["image"] == "pdf"
+    assert result.items[0].effective_outputs["image"] == "png"
+    assert result.items[0].warnings == [warning]
+    assert Path(result.items[0].image_path).suffix == ".png"
+    manifest = load_batch_manifest(result.manifest_path)
+    entry = manifest["entries"][0]
+    assert entry["requested_outputs"]["image"] == "pdf"
+    assert entry["effective_outputs"]["image"] == "png"
+    assert entry["warnings"] == [warning]
+    assert entry["degraded_reason"] == ""
+    assert manifest["requested_output_settings"]["image_format"] == "png"
+    assert manifest["requested_output_settings"]["requested_image_format"] == "pdf"
+
+
+def test_migration_warning_propagates_to_group_and_each_successful_member(
+    tmp_path, monkeypatch,
+):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    warning = "旧预设图像格式 SVG 已迁移为 PNG；本次仅输出 PNG。"
+    fd = _make_fd(
+        tmp_path, "migrated_group", channels=("sig", "aux"), idx=0,
+    )
+    preset = _task6_grouped_time_preset(export_data=False)
+    preset = replace(
+        preset,
+        outputs=replace(
+            preset.outputs,
+            requested_image_format="svg",
+            migration_warnings=(warning,),
+        ),
+    )
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(_task6_fake_image),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert result.warnings == [warning]
+    assert all(item.warnings == [warning] for item in result.items)
+    manifest = load_batch_manifest(result.manifest_path)
+    assert all(entry["warnings"] == [warning] for entry in manifest["entries"])
+    group = manifest["render_groups"][0]
+    assert group["requested_outputs"]["image"] == "svg"
+    assert group["effective_outputs"]["image"] == "png"
+    assert group["warnings"] == [warning]
+    assert group["degraded_reason"] == ""
+
+
+def test_group_resume_uses_current_png_when_prior_requested_format_was_pdf(
+    tmp_path, monkeypatch,
+):
+    import json
+
+    fd = _make_fd(tmp_path, "legacy_resume", channels=("sig", "aux"), idx=0)
+    preset = _task6_grouped_time_preset(
+        export_data=False, export_image=True,
+    )
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(_task6_fake_image),
+    )
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(preset, output_dir)
+    prior = Path(first.manifest_path)
+    payload = json.loads(prior.read_text(encoding="utf-8"))
+    payload["render_groups"][0]["requested_outputs"]["image"] = "pdf"
+    legacy_manifest = tmp_path / "legacy-requested-pdf.json"
+    legacy_manifest.write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8",
+    )
+
+    def unexpected_render(*_args, **_kwargs):
+        raise AssertionError("valid canonical PNG group should have resumed")
+
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(unexpected_render),
+    )
+    second = BatchRunner({0: fd}).run(
+        replace(
+            preset,
+            outputs=replace(preset.outputs, resume_policy="manifest"),
+        ),
+        output_dir,
+        resume_manifest=legacy_manifest,
+    )
+
+    assert second.status == "done"
+    assert {item.status for item in second.items} == {"done"}
+    second_manifest = json.loads(
+        Path(second.manifest_path).read_text(encoding="utf-8")
+    )
+    assert second_manifest["render_groups"][0]["message"] == (
+        "manifest-proven group resume"
+    )
 
 
 def test_explicit_group_data_only_writes_no_render_group_journal(tmp_path):

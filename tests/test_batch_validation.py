@@ -71,6 +71,8 @@ def _phase3_outputs(**overrides):
     ("overrides", "expected_fields"),
     (
         ({"image_format": "webp"}, {"image_format"}),
+        ({"image_format": "pdf"}, {"image_format"}),
+        ({"image_format": "svg"}, {"image_format"}),
         ({"image_size": "retina"}, {"image_size"}),
         (
             {"image_size": "custom", "image_width": 319},

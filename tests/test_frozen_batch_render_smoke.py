@@ -9,7 +9,7 @@ import sys
 from types import ModuleType
 
 import pytest
-from PIL import Image
+from PyQt5.QtGui import QImage
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,11 +19,11 @@ VERIFY_TOOL = ROOT / "tools" / "verify_frozen_batch_render.py"
 def _source_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(ROOT)
-    environment["MPLBACKEND"] = "Agg"
+    environment.setdefault("QT_QPA_PLATFORM", "offscreen")
     return environment
 
 
-def test_runtime_smoke_cli_generates_four_kinds_in_three_formats(tmp_path):
+def test_runtime_smoke_cli_generates_four_png_kinds(tmp_path):
     output_directory = tmp_path / "outputs"
     child_json = tmp_path / "child.json"
 
@@ -47,15 +47,20 @@ def test_runtime_smoke_cli_generates_four_kinds_in_three_formats(tmp_path):
     assert completed.returncode == 0, completed.stderr
     result = json.loads(child_json.read_text(encoding="utf-8"))
     expected = {
-        f"{kind}.{image_format}"
+        f"{kind}.png"
         for kind in ("time", "fft", "fft_time", "order_time")
-        for image_format in ("png", "pdf", "svg")
     }
     assert result["ok"] is True
     assert {Path(record["path"]).name for record in result["outputs"]} == expected
     assert all(record["bytes"] > 0 for record in result["outputs"])
-    assert result["glyph_warnings"] == []
     assert result["title"] == "单帧振动加速度"
+    assert result["qt_qpa_platform"] == "offscreen"
+    assert result["qt_platform_name"] == "offscreen"
+    assert result["cjk_proof"]["supports"] is True
+    assert result["cjk_proof"]["pass"] is True
+    assert result["cjk_proof"]["ink_pixels"] > (
+        result["cjk_proof"]["empty_ink_pixels"] + 120
+    )
 
 
 def test_runtime_smoke_renders_time_spec_through_public_renderer(
@@ -79,11 +84,12 @@ def test_runtime_smoke_renders_time_spec_through_public_renderer(
 
     time_image = output_directory / "time.png"
     assert time_image.stat().st_size > 0
-    with Image.open(time_image) as image:
-        assert image.size == (640, 360)
+    image = QImage(str(time_image))
+    assert not image.isNull()
+    assert (image.width(), image.height()) == (640, 360)
 
 
-def test_artifact_verifier_checks_cjk_pdf_visual_and_turbo_samples(tmp_path):
+def test_artifact_verifier_checks_qt_cjk_proof_and_turbo_samples(tmp_path):
     output_directory = tmp_path / "outputs"
     child_json = tmp_path / "child.json"
     evidence_json = tmp_path / "evidence.json"
@@ -126,15 +132,46 @@ def test_artifact_verifier_checks_cjk_pdf_visual_and_turbo_samples(tmp_path):
     assert completed.returncode == 0, completed.stderr
     evidence = json.loads(evidence_json.read_text(encoding="utf-8"))
     assert evidence["ok"] is True
-    assert evidence["artifact_count"] == 12
-    assert evidence["cjk_glyph_warnings"] == []
-    assert evidence["pdf_text_extractable"] is True
-    assert evidence["pdf_visual_nonempty"] is True
+    assert evidence["artifact_count"] == 4
+    assert evidence["qt_qpa_platform"] == "offscreen"
+    assert evidence["qt_platform_name"] == "offscreen"
+    assert evidence["cjk_proof"]["supports"] is True
+    assert evidence["cjk_proof"]["pass"] is True
+    assert evidence["cjk_proof"]["ink_pixels"] > (
+        evidence["cjk_proof"]["empty_ink_pixels"] + 120
+    )
     assert evidence["turbo_samples"] == {
         "low_rgb": [48, 18, 59],
         "high_rgb": [122, 4, 3],
     }
     assert evidence["title"] == "单帧振动加速度"
+
+
+def test_runtime_smoke_fails_closed_when_cjk_font_coverage_is_unavailable(
+    tmp_path, monkeypatch
+):
+    from mf4_analyzer import batch_render_smoke
+
+    monkeypatch.setattr(batch_render_smoke, "resolve_cjk_font", lambda: None)
+
+    result_json = tmp_path / "result.json"
+    exit_code = batch_render_smoke.run(tmp_path / "outputs", result_json)
+
+    assert exit_code == 1
+    evidence = json.loads(result_json.read_text(encoding="utf-8"))
+    assert evidence["ok"] is False
+    assert evidence["cjk_proof"]["pass"] is False
+    assert evidence["cjk_proof"]["supports"] is False
+    assert "CJK" in evidence["environment_gate"]
+
+
+def test_frozen_artifact_verifier_has_no_pillow_or_vector_format_dependency():
+    source = VERIFY_TOOL.read_text(encoding="utf-8")
+
+    assert "from PIL" not in source
+    assert "pdftotext" not in source
+    assert "pdftocairo" not in source
+    assert 'FORMATS = ("png",)' in source
 
 
 def test_windowed_runtime_smoke_does_not_require_console_streams(tmp_path, monkeypatch):

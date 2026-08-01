@@ -6,7 +6,7 @@ import math
 from numbers import Integral, Real
 
 
-SUPPORTED_IMAGE_FORMATS = frozenset({"png", "svg", "pdf"})
+SUPPORTED_IMAGE_FORMATS = frozenset({"png"})
 SUPPORTED_IMAGE_BACKGROUNDS = frozenset({"white", "transparent", "dark"})
 MIN_IMAGE_DIMENSION_PX = 320
 MAX_IMAGE_DIMENSION_PX = 16_384
@@ -21,9 +21,7 @@ MAX_IMAGE_LINE_WIDTH = 4.0
 class BatchRenderOptions:
     """Immutable image geometry and encoding options.
 
-    Pixel geometry and DPI are intentionally independent. Pixel geometry is
-    authoritative for raster output; DPI controls raster metadata and the
-    physical page size of vector output.
+    Pixel geometry is authoritative and DPI controls PNG metadata.
     """
 
     width_px: int = 1920

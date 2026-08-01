@@ -1,8 +1,8 @@
 {
   "status": "PASS",
-  "commit_sha": "9875eb3a75d8626acbf4262d6ff03b264cc825db",
-  "source_state_sha256": "5a89a0cfa5c08f9edb280959d3d16912a96ff100f2b0d09d44fcc7b31efcf0c4",
-  "generated_at": "2026-08-01T16:45:05.991678+00:00",
+  "commit_sha": "f6a0d10d8dd6e10e3d3ab1afdbf65432d4183490",
+  "source_state_sha256": "982940684662362296db88033e3708227e07b229f1985644be553ad7892e50d6",
+  "generated_at": "2026-08-01T17:46:53.079964+00:00",
   "qt_qpa_platform_env": "offscreen",
   "qt_platform": "offscreen",
   "qt_version": "5.15.14",
@@ -3099,6 +3099,1712 @@
       }
     }
   ],
+  "integration_matrix": [
+    {
+      "name": "time-single",
+      "module": "time",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-single",
+      "module": "time",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-single",
+      "module": "time",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-single",
+      "module": "time",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-single",
+      "module": "time",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-single",
+      "module": "time",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-raw-filtered",
+      "module": "time",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-raw-filtered",
+      "module": "time",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-raw-filtered",
+      "module": "time",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-raw-filtered",
+      "module": "time",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-raw-filtered",
+      "module": "time",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-raw-filtered",
+      "module": "time",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-dual-y",
+      "module": "time",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-dual-y",
+      "module": "time",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-dual-y",
+      "module": "time",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-dual-y",
+      "module": "time",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-dual-y",
+      "module": "time",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-dual-y",
+      "module": "time",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-subplot8",
+      "module": "time",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-subplot8",
+      "module": "time",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-subplot8",
+      "module": "time",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-subplot8",
+      "module": "time",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-subplot8",
+      "module": "time",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-subplot8",
+      "module": "time",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-custom-x",
+      "module": "time",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-custom-x",
+      "module": "time",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-custom-x",
+      "module": "time",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-custom-x",
+      "module": "time",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-custom-x",
+      "module": "time",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "time-custom-x",
+      "module": "time",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-linear",
+      "module": "fft",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-linear",
+      "module": "fft",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-linear",
+      "module": "fft",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-linear",
+      "module": "fft",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-linear",
+      "module": "fft",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-linear",
+      "module": "fft",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-db",
+      "module": "fft",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-db",
+      "module": "fft",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-db",
+      "module": "fft",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-db",
+      "module": "fft",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-db",
+      "module": "fft",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-db",
+      "module": "fft",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-manual-range",
+      "module": "fft",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-manual-range",
+      "module": "fft",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-manual-range",
+      "module": "fft",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-manual-range",
+      "module": "fft",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-manual-range",
+      "module": "fft",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-manual-range",
+      "module": "fft",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-linear-auto",
+      "module": "fft_time",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-linear-auto",
+      "module": "fft_time",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-linear-auto",
+      "module": "fft_time",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-linear-auto",
+      "module": "fft_time",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-linear-auto",
+      "module": "fft_time",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-linear-auto",
+      "module": "fft_time",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-db-manual",
+      "module": "fft_time",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-db-manual",
+      "module": "fft_time",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-db-manual",
+      "module": "fft_time",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-db-manual",
+      "module": "fft_time",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-db-manual",
+      "module": "fft_time",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-db-manual",
+      "module": "fft_time",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-invalid-cmap",
+      "module": "fft_time",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-invalid-cmap",
+      "module": "fft_time",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-invalid-cmap",
+      "module": "fft_time",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-invalid-cmap",
+      "module": "fft_time",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-invalid-cmap",
+      "module": "fft_time",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "fft-time-invalid-cmap",
+      "module": "fft_time",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-linear-manual",
+      "module": "order_time",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-linear-manual",
+      "module": "order_time",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-linear-manual",
+      "module": "order_time",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-linear-manual",
+      "module": "order_time",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-linear-manual",
+      "module": "order_time",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-linear-manual",
+      "module": "order_time",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-db-auto",
+      "module": "order_time",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-db-auto",
+      "module": "order_time",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-db-auto",
+      "module": "order_time",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-db-auto",
+      "module": "order_time",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-db-auto",
+      "module": "order_time",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-db-auto",
+      "module": "order_time",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-invalid-cmap",
+      "module": "order_time",
+      "background": "white",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-invalid-cmap",
+      "module": "order_time",
+      "background": "white",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-invalid-cmap",
+      "module": "order_time",
+      "background": "transparent",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-invalid-cmap",
+      "module": "order_time",
+      "background": "transparent",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-invalid-cmap",
+      "module": "order_time",
+      "background": "dark",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "order-time-invalid-cmap",
+      "module": "order_time",
+      "background": "dark",
+      "pixels": [
+        3840,
+        2160
+      ],
+      "warnings": [
+        "Invalid colormap 'not-a-real-map'; using 'turbo'."
+      ],
+      "assertions": {
+        "exact_pixels": true,
+        "dpi_metadata": true,
+        "text_metadata": true,
+        "has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "status": "PASS"
+    }
+  ],
   "contact_sheets": {
     "time": {
       "path": "docs/superpowers/verify/batch-qt-render/time-contact-sheet.png",
@@ -3114,12 +4820,19 @@
       "bytes": 92381,
       "sha256": "1579f6ad262456ad06d8c84ffb27c3a0f4659da08ab80b4bfec8b292ed396b11"
     },
-    "heatmap": {
-      "path": "docs/superpowers/verify/batch-qt-render/heatmap-contact-sheet.png",
+    "fft_time": {
+      "path": "docs/superpowers/verify/batch-qt-render/fft_time-contact-sheet.png",
       "width": 1352,
-      "height": 1922,
-      "bytes": 481485,
-      "sha256": "56a8a5a92d993d65647df25c0146062cdbe78c4ccbc152d5bba1950731237e47"
+      "height": 968,
+      "bytes": 236464,
+      "sha256": "ebb40b29aa71ecffd4dcc330f1c854f64327d8c10ef270ba8c9c9789fc0972e5"
+    },
+    "order_time": {
+      "path": "docs/superpowers/verify/batch-qt-render/order_time-contact-sheet.png",
+      "width": 1352,
+      "height": 968,
+      "bytes": 244750,
+      "sha256": "e685ec4dede88aa270924e4cb872d8fc373541ddac2b3fc38ea974ec71101a12"
     }
   }
 }

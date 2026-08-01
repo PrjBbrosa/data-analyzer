@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .batch_output import (
@@ -26,6 +27,7 @@ class RenderGroup:
     identity: GroupOutputIdentity
     group_by: str
     group_key: str
+    display_name: str
     layout: str
     members: tuple[RenderTask, ...]
 
@@ -57,6 +59,27 @@ def _source_group_key(source_identity: str, group_identity: str) -> str:
     )
 
 
+def _source_basename(source_identity: str) -> str:
+    """Return a display-safe basename for POSIX or Windows identities."""
+
+    value = str(source_identity or "").strip()
+    if not value:
+        return "source"
+    if "\\" in value:
+        name = PureWindowsPath(value).name
+    else:
+        name = PurePosixPath(value).name
+    return name or "source"
+
+
+def _source_display_name(source_identity: str, group_identity: str) -> str:
+    source_name = _source_basename(source_identity)
+    group_name = str(group_identity or "").strip()
+    if group_name and group_name != "default":
+        return f"{source_name} · {group_name}"
+    return source_name
+
+
 def group_render_tasks(
     tasks: Sequence[RenderTask], params: Mapping[str, Any],
 ) -> tuple[RenderGroup, ...]:
@@ -86,6 +109,10 @@ def group_render_tasks(
                 ),
                 group_by="none",
                 group_key=task.identity.task_id,
+                display_name=(
+                    f"{_source_display_name(task.identity.source_identity, task.identity.group_identity)}"
+                    f" · {task.channel}"
+                ),
                 layout=layout,
                 members=(task,),
             )
@@ -116,10 +143,16 @@ def group_render_tasks(
             if group_by == "source"
             else str(key)
         )
+        display_name = (
+            _source_display_name(*key)
+            if group_by == "source"
+            else str(key)
+        )
         groups.append(RenderGroup(
             identity=identity,
             group_by=group_by,
             group_key=group_key,
+            display_name=display_name,
             layout=layout,
             members=members,
         ))

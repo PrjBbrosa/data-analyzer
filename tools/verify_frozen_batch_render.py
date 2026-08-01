@@ -5,18 +5,17 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
-from xml.etree import ElementTree
 
-from PIL import Image
+import numpy as np
+from PyQt5.QtGui import QImage, QImageReader
 
 
 TITLE = "单帧振动加速度"
 KINDS = ("time", "fft", "fft_time", "order_time")
-FORMATS = ("png", "pdf", "svg")
+FORMATS = ("png",)
 EXPECTED_NAMES = {
     f"{kind}.{image_format}" for kind in KINDS for image_format in FORMATS
 }
@@ -24,45 +23,21 @@ TURBO_LOW_RGB = (48, 18, 59)
 TURBO_HIGH_RGB = (122, 4, 3)
 
 
-def _require_program(name: str) -> Path:
-    resolved = shutil.which(name)
-    if not resolved:
-        raise RuntimeError(f"required PDF verification program not found: {name}")
-    return Path(resolved)
-
-
-def _poppler_program(name: str) -> Path:
-    if name == "pdftocairo":
-        pdftotext = _require_program("pdftotext")
-        sibling = pdftotext.with_name("pdftocairo.exe")
-        if sibling.is_file():
-            return sibling
-    return _require_program(name)
-
-
-def _run_checked(command: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
+def _contains_rgb(
+    image: QImage, expected: tuple[int, int, int], tolerance: int = 1
+) -> int:
+    converted = image.convertToFormat(QImage.Format_RGB888)
+    ptr = converted.bits()
+    ptr.setsize(converted.byteCount())
+    rows = np.frombuffer(ptr, dtype=np.uint8).reshape(
+        converted.height(), converted.bytesPerLine()
     )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"command failed ({completed.returncode}): {command!r}\n"
-            f"{completed.stdout}\n{completed.stderr}"
-        )
-    return completed
-
-
-def _contains_rgb(pixels, expected: tuple[int, int, int], tolerance: int = 1) -> int:
-    return sum(
-        1
-        for pixel in pixels
-        if all(abs(int(actual) - wanted) <= tolerance for actual, wanted in zip(pixel, expected))
+    pixels = rows[:, : converted.width() * 3].reshape(
+        converted.height(), converted.width(), 3
     )
+    wanted = np.asarray(expected, dtype=np.int16)
+    delta = np.abs(pixels.astype(np.int16) - wanted)
+    return int(np.count_nonzero(np.all(delta <= tolerance, axis=2)))
 
 
 def verify_artifacts(artifacts: Path, child_json: Path) -> dict[str, object]:
@@ -72,13 +47,23 @@ def verify_artifacts(artifacts: Path, child_json: Path) -> dict[str, object]:
         raise RuntimeError(f"render child reported failure: {child}")
     if child.get("title") != TITLE:
         raise RuntimeError("render child did not use the required CJK title")
-    glyph_warnings = child.get("glyph_warnings")
-    if glyph_warnings != []:
-        raise RuntimeError(f"render child reported missing glyphs: {glyph_warnings}")
+    qt_qpa_platform = str(child.get("qt_qpa_platform") or "")
+    qt_platform_name = str(child.get("qt_platform_name") or "")
+    if not qt_qpa_platform or not qt_platform_name:
+        raise RuntimeError("render child did not report requested and actual Qt platforms")
+    cjk_proof = child.get("cjk_proof") or {}
+    ink_pixels = int(cjk_proof.get("ink_pixels") or 0)
+    empty_ink_pixels = int(cjk_proof.get("empty_ink_pixels") or 0)
+    if (
+        cjk_proof.get("supports") is not True
+        or cjk_proof.get("pass") is not True
+        or ink_pixels <= empty_ink_pixels + 120
+    ):
+        raise RuntimeError(f"render child CJK double proof failed: {cjk_proof}")
     actual_names = {path.name for path in artifacts.iterdir() if path.is_file()}
     if actual_names != EXPECTED_NAMES:
         raise RuntimeError(
-            f"expected exactly 12 render artifacts; missing={sorted(EXPECTED_NAMES - actual_names)}, "
+            f"expected exactly 4 render artifacts; missing={sorted(EXPECTED_NAMES - actual_names)}, "
             f"extra={sorted(actual_names - EXPECTED_NAMES)}"
         )
 
@@ -88,69 +73,29 @@ def verify_artifacts(artifacts: Path, child_json: Path) -> dict[str, object]:
         content = path.read_bytes()
         if not content:
             raise RuntimeError(f"empty render artifact: {path}")
-        suffix = path.suffix.lower()
-        if suffix == ".png":
-            with Image.open(path) as image:
-                image.load()
-                if image.format != "PNG" or image.size != (640, 360):
-                    raise RuntimeError(f"invalid PNG artifact: {path}")
-        elif suffix == ".svg":
-            root = ElementTree.parse(path).getroot()
-            namespace = {"svg": "http://www.w3.org/2000/svg"}
-            svg_text = "\n".join(
-                "".join(node.itertext())
-                for node in root.findall(".//svg:text", namespace)
-            )
-            if TITLE not in svg_text or "$raw$" not in svg_text:
-                raise RuntimeError(f"SVG lost selectable literal/CJK text: {path}")
-        else:
-            if not content.startswith(b"%PDF-") or not content.rstrip().endswith(b"%%EOF"):
-                raise RuntimeError(f"invalid PDF artifact: {path}")
+        image = QImage(str(path))
+        encoded_format = bytes(QImageReader.imageFormat(str(path))).lower()
+        if (
+            image.isNull()
+            or encoded_format != b"png"
+            or (image.width(), image.height()) != (640, 360)
+        ):
+            raise RuntimeError(f"invalid PNG artifact: {path}")
         artifact_records.append(
             {
                 "name": name,
                 "bytes": len(content),
                 "sha256": hashlib.sha256(content).hexdigest(),
+                "width": image.width(),
+                "height": image.height(),
             }
         )
 
-    pdftotext = _poppler_program("pdftotext")
-    pdftocairo = _poppler_program("pdftocairo")
-    extracted_pdf_text: dict[str, str] = {}
-    with TemporaryDirectory(prefix="tracelab-pdf-visual-") as raw_directory:
-        visual_directory = Path(raw_directory)
-        for kind in KINDS:
-            pdf = artifacts / f"{kind}.pdf"
-            extracted = _run_checked(
-                [str(pdftotext), "-enc", "UTF-8", str(pdf), "-"]
-            ).stdout
-            if TITLE not in extracted or "\ufffd" in extracted or "□" in extracted:
-                raise RuntimeError(f"PDF text is missing CJK or contains tofu: {pdf}")
-            extracted_pdf_text[kind] = extracted
-            output_prefix = visual_directory / kind
-            _run_checked(
-                [
-                    str(pdftocairo),
-                    "-png",
-                    "-r",
-                    "72",
-                    "-singlefile",
-                    str(pdf),
-                    str(output_prefix),
-                ]
-            )
-            with Image.open(output_prefix.with_suffix(".png")) as image:
-                grayscale = image.convert("L")
-                low, high = grayscale.getextrema()
-                if image.width < 320 or image.height < 320 or high - low < 20:
-                    raise RuntimeError(f"PDF rasterized to an empty/invalid image: {pdf}")
-
     for kind in ("fft_time", "order_time"):
-        with Image.open(artifacts / f"{kind}.png") as image:
-            pixels = list(image.convert("RGB").getdata())
-        if _contains_rgb(pixels, TURBO_LOW_RGB) < 1_000:
+        image = QImage(str(artifacts / f"{kind}.png"))
+        if _contains_rgb(image, TURBO_LOW_RGB) < 1_000:
             raise RuntimeError(f"Turbo low sample missing from {kind}.png")
-        if _contains_rgb(pixels, TURBO_HIGH_RGB) < 1_000:
+        if _contains_rgb(image, TURBO_HIGH_RGB) < 1_000:
             raise RuntimeError(f"Turbo high sample missing from {kind}.png")
 
     return {
@@ -158,11 +103,10 @@ def verify_artifacts(artifacts: Path, child_json: Path) -> dict[str, object]:
         "title": TITLE,
         "artifact_count": len(artifact_records),
         "artifacts": artifact_records,
-        "cjk_glyph_warnings": glyph_warnings,
+        "qt_qpa_platform": qt_qpa_platform,
+        "qt_platform_name": qt_platform_name,
+        "cjk_proof": cjk_proof,
         "cjk_font_families": child.get("cjk_font_families", []),
-        "pdf_text_extractable": True,
-        "pdf_visual_nonempty": True,
-        "pdf_text": extracted_pdf_text,
         "turbo_samples": {
             "low_rgb": list(TURBO_LOW_RGB),
             "high_rgb": list(TURBO_HIGH_RGB),

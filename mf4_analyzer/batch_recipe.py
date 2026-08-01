@@ -166,10 +166,12 @@ OUTPUT_DEFAULTS = {
     "image_height": 1080,
     "image_dpi": 144,
     "image_background": "white",
-    "image_line_width": 1.0,
+    "image_line_width": 1.5,
     "conflict_policy": "auto_number",
     "write_manifest": True,
     "resume_policy": "none",
+    "requested_image_format": None,
+    "migration_warnings": (),
 }
 _OUTPUT_FIELDS = tuple(OUTPUT_DEFAULTS)
 
@@ -315,12 +317,18 @@ def normalize_batch_params(params: Mapping[str, Any] | None, method: object) -> 
 def _duck_outputs(outputs: object) -> Any:
     if isinstance(outputs, Mapping):
         supplied = _json_safe(outputs)
-        return {**OUTPUT_DEFAULTS, **supplied}
-    result = {
-        field: getattr(outputs, field, default)
-        for field, default in OUTPUT_DEFAULTS.items()
-    }
-    return _json_safe(result)
+        result = _json_safe({**OUTPUT_DEFAULTS, **supplied})
+    else:
+        result = {
+            field: getattr(outputs, field, default)
+            for field, default in OUTPUT_DEFAULTS.items()
+        }
+        result = _json_safe(result)
+    image_format = str(result.get("image_format", "png") or "").strip().lower()
+    if image_format != "png":
+        raise ValueError("batch image_format must be png")
+    result["image_format"] = "png"
+    return result
 
 
 def normalize_analysis_preset(preset: Mapping[str, Any] | object) -> dict:

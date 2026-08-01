@@ -1,15 +1,16 @@
-# Batch 2 + 3 Qt Render Evidence
+# Batch 2–4 Qt Render Evidence
 
 ## Bound evidence
 
-- Result: **PASS (14/14 cases; 6/6 heatmap cases)**
-- Requested page size: 1920 × 1080 px at 144 DPI
+- Result: **PASS (14/14 parity cases; 84/84 integration combinations)**
+- Parity page size: 1920 × 1080 px at 144 DPI
+- Integration matrix: 14 cases × white/transparent/dark × 1920×1080/3840×2160
 - Qt platform: `offscreen` (Qt 5.15.14, pyqtgraph 0.14.0)
-- Commit base: `9875eb3a75d8626acbf4262d6ff03b264cc825db`
-- Source-state SHA-256: `5a89a0cfa5c08f9edb280959d3d16912a96ff100f2b0d09d44fcc7b31efcf0c4`
+- Commit base: `f6a0d10d8dd6e10e3d3ab1afdbf65432d4183490`
+- Source-state SHA-256: `982940684662362296db88033e3708227e07b229f1985644be553ad7892e50d6`
 - Machine-readable record: [evidence.json](evidence.json)
 
-The source-state digest binds the uncommitted Batch 3 producer contract,
+The source-state digest binds the uncommitted Batch 4 Qt facade, producer contract,
 four-kind renderer, tests, and parity tool in addition to the base commit. Each
 heatmap case records the full display matrix, exact LUT SHA-256 plus frozen
 samples, levels, QRectF, four matrix-corner values, live-geometry cell-centre
@@ -32,6 +33,10 @@ pixels, labels, warnings, full/crop hashes, viewport, and machine assertions.
 | Batch 3 parity RED | All six heatmap cases initially failed only the single-pixel corner comparison: bilinear subpixel blending mixed the cell-centre colour with white despite matrix/LUT/levels/extent parity. The probe now searches a bounded 13×13 device-pixel patch around each scene-mapped corner-cell centre for the expected LUT colour. |
 | Batch 3 focused GREEN | Producer + Qt renderer + parity + old-renderer/no-GUI-import regression set → **104 passed in 5.27s**. |
 | Batch 3 formal GREEN | `tools/verify_batch_qt_render_parity.py --width 1920 --height 1080` → **PASS, 14 cases, 0 failed**; source-state digest reproduced exactly. |
+| Batch 4 CLI GREEN | Source smoke generated four PNGs; artifact-only frozen verifier returned `ok=true`; grouped time-domain acceptance exited 0 with source/channel grouping, subplot, and custom-X coverage. |
+| Batch 4 focused GREEN | All touched batch/render/GUI tests → **605 passed, 1 warning**. Producer-shaped group tests render a real Qt scene while the spool is alive and validate final PNG metadata; menu/navigation mutation tests prove the chrome guards fail closed. |
+| Batch 4 integration GREEN | `tools/verify_batch_qt_render_parity.py --width 1920 --height 1080 --full-matrix` → **PASS, 14/14 parity cases and 84/84 theme/resolution combinations**. Every combination asserts exact pixels, DPI/text metadata, plot ink, no text overlap, no native chrome, and no main navigation. |
+| Batch 4 full-suite Gate | **62 failed, 4137 passed, 19 skipped, 3 deselected** in 768.52 s, no SIGSEGV. JUnit failed-nodeid set is exactly equal to the Batch 1 baseline: `new=[]`, `missing=[]`. |
 
 ## Worker visual sign-off
 
@@ -55,7 +60,7 @@ Contact sheets:
 - [Time parity contact sheet](time-contact-sheet.png)
 - [FFT parity contact sheet](fft-contact-sheet.png)
 
-## Batch 3 worker offscreen visual sign-off
+## Heatmap worker offscreen visual sign-off
 
 The final heatmap contact sheet and representative full `fft_time` / `order_time`
 batch PNGs were opened at original pixels after the formal 1920×1080 run.
@@ -74,13 +79,14 @@ heatmap, axes, grid, and read-only colorbar. No main-window navigation tabs,
 pyqtgraph auto-range button, context-menu affordance, scrollbar, focus frame,
 toolbar, or other native Qt chrome is visible.
 
-- [Heatmap parity contact sheet](heatmap-contact-sheet.png)
+- [FFT vs Time parity contact sheet](fft_time-contact-sheet.png)
+- [Order parity contact sheet](order_time-contact-sheet.png)
 
 ## Main-agent offscreen visual sign-off
 
-The coordinating agent independently reopened all three final contact sheets
-and the full `time-dual-y`, `time-subplot8`, `fft-linear`,
-`fft-time-db-manual`, and `order-time-linear-manual` batch PNGs at original
+The coordinating agent independently reopened all four final contact sheets
+and the full `time-subplot8`, `fft-db`, `fft-time-db-manual`, and
+`order-time-linear-manual` batch PNGs at original
 detail. Result: **PASS**. The batch pages contain only the approved report
 header/facts/footer/legend, plot area, and heatmap colorbar; no main navigation
 tabs, pyqtgraph auto-range button, color-map menu, context-menu affordance,
@@ -90,13 +96,18 @@ present without clipping, and both heatmap kinds preserve the single-file
 orientation, axis coverage, color levels, and complete colorbar labels. This
 is an offscreen render review, not a foreground macOS/Windows acceptance claim.
 
+The 640×360 frozen smoke pages were also inspected as coherent small report
+pages, but they are deliberately **not** used as visual parity proof. Formal
+visual parity is bound to the 1920×1080 cases above; 4K/theme coverage is an
+integration geometry/chrome gate.
+
 ## Residual gates
 
-- This Batch 2 proof is a real `QApplication` exercise on Qt's offscreen
-  platform. Native macOS/Windows foreground acceptance remains a later project
-  gate and is not claimed here.
-- The new renderer is intentionally not connected to `BatchRunner` in Batch 2.
-  Wiring, recipe/preset propagation, and legacy matplotlib removal belong to
-  later plan batches.
-- White-theme 1920×1080 parity is complete for all four kinds. Cross-theme and
-  4K proof remain part of the later integration gate.
+- The Qt facade is connected to `BatchRunner`; PNG-only preset normalization,
+  warning propagation, grouping display names, GUI-thread marshal, and atomic
+  rollback are covered by the focused suite.
+- This is a real `QApplication` exercise on Qt's offscreen platform. Native
+  macOS foreground acceptance is still blocked by the locked desktop and is
+  **not claimed** here; matplotlib dependency removal must wait for Gate 4.5.
+- Windows onedir offscreen/native-platform execution is a separate release
+  gate and remains **NO-GO / unverified** on this Mac.

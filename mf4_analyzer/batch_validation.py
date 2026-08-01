@@ -224,7 +224,7 @@ def validate_outputs(outputs: Any) -> tuple[ValidationIssue, ...]:
             ))
 
         image_line_width = _output_value(
-            outputs, "image_line_width", 1.0
+            outputs, "image_line_width", 1.5
         )
         try:
             BatchRenderOptions(

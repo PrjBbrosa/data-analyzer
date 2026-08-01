@@ -12,6 +12,7 @@ from mf4_analyzer.batch_render_qt._export import render_scene_image
 from tools.verify_batch_qt_render_parity import (
     _cases,
     _plot_corner_ink_counts,
+    _scene_integration_assertions,
 )
 
 
@@ -86,6 +87,51 @@ def test_plot_corner_pixel_guard_detects_native_auto_range_button(qapp):
         scene.close()
 
 
+def test_integration_guard_rejects_enabled_native_plot_menu(qapp):
+    case = _cases()[0]
+    scene = build_batch_scene(
+        case.payload,
+        params=case.params,
+        options=BatchRenderOptions(width_px=960, height_px=640),
+        context=case.context,
+    )
+    try:
+        clean = render_scene_image(scene)
+        assert _scene_integration_assertions(scene, clean)["no_native_chrome"]
+
+        scene.plots[0].setMenuEnabled(True)
+        mutated = render_scene_image(scene)
+        assert not _scene_integration_assertions(
+            scene, mutated,
+        )["no_native_chrome"]
+    finally:
+        scene.close()
+
+
+def test_integration_guard_rejects_main_navigation_label(qapp):
+    import pyqtgraph as pg
+
+    case = _cases()[0]
+    scene = build_batch_scene(
+        case.payload,
+        params=case.params,
+        options=BatchRenderOptions(width_px=960, height_px=640),
+        context=case.context,
+    )
+    try:
+        clean = render_scene_image(scene)
+        assert _scene_integration_assertions(scene, clean)["no_main_navigation"]
+
+        navigation = pg.LabelItem("时域 / FFT / FFT vs Time / 阶次")
+        scene.page_labels = (*scene.page_labels, navigation)
+        mutated = render_scene_image(scene)
+        assert not _scene_integration_assertions(
+            scene, mutated,
+        )["no_main_navigation"]
+    finally:
+        scene.close()
+
+
 def test_parity_tool_generates_current_machine_evidence(tmp_path):
     env = dict(os.environ)
     env.update(
@@ -125,7 +171,8 @@ def test_parity_tool_generates_current_machine_evidence(tmp_path):
     )
     assert (tmp_path / "time-contact-sheet.png").is_file()
     assert (tmp_path / "fft-contact-sheet.png").is_file()
-    assert (tmp_path / "heatmap-contact-sheet.png").is_file()
+    assert (tmp_path / "fft_time-contact-sheet.png").is_file()
+    assert (tmp_path / "order_time-contact-sheet.png").is_file()
     heatmap_cases = [
         case
         for case in evidence["cases"]

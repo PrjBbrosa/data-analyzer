@@ -73,6 +73,12 @@ _RENDER_BACKEND_DEGRADED_REASON = (
 _RENDER_BACKEND_IMAGE_ONLY_ERROR = (
     '图片/PDF 导出后端不可用，无法完成图片/PDF 导出'
 )
+_LEGACY_IMAGE_FORMATS = frozenset({'pdf', 'svg'})
+
+
+def _legacy_image_format_warning(requested_format: object) -> str:
+    requested = str(requested_format or '').strip().upper()
+    return f'旧预设图像格式 {requested} 已迁移为 PNG；本次仅输出 PNG。'
 
 
 @dataclass(frozen=True)
@@ -86,10 +92,12 @@ class BatchOutput:
     image_height: int = 1080
     image_dpi: int = 144
     image_background: str = 'white'
-    image_line_width: float = 1.0
+    image_line_width: float = 1.5
     conflict_policy: str = 'auto_number'
     write_manifest: bool = True
     resume_policy: str = 'none'
+    requested_image_format: str | None = None
+    migration_warnings: tuple[str, ...] = ()
 
     def resolved_image_dimensions(self) -> tuple[int, int]:
         return resolve_output_image_dimensions(self)
@@ -221,6 +229,7 @@ class EffectiveOutputPlan:
     effective: Mapping[str, str]
     render_backend_types: tuple[type, type] | None
     degraded_reason: str
+    migration_warnings: tuple[str, ...] = ()
 
 
 @dataclass
@@ -393,6 +402,15 @@ class BatchRunner:
             ).lower().lstrip('.')
         return required
 
+    @classmethod
+    def _requested_artifacts(cls, outputs) -> dict[str, str]:
+        requested = cls._required_artifacts(outputs)
+        if outputs.export_image:
+            provenance = getattr(outputs, 'requested_image_format', None)
+            if provenance not in (None, ''):
+                requested['image'] = str(provenance).lower().lstrip('.')
+        return requested
+
     @staticmethod
     def _probe_image_backend():
         """Import the renderer types before reserving any output paths."""
@@ -404,11 +422,26 @@ class BatchRunner:
     def _resolve_effective_outputs(self, outputs) -> EffectiveOutputPlan:
         """Resolve one immutable renderer decision for the complete run."""
 
-        requested = self._required_artifacts(outputs)
-        effective = dict(requested)
+        requested = self._requested_artifacts(outputs)
+        effective = self._required_artifacts(outputs)
         render_backend_types = None
         degraded_reason = ''
-        if 'image' in requested:
+        migration_warnings = list(
+            getattr(outputs, 'migration_warnings', ()) or ()
+        )
+        requested_image = requested.get('image')
+        effective_image = effective.get('image')
+        if (
+            requested_image in _LEGACY_IMAGE_FORMATS
+            and effective_image == 'png'
+        ):
+            migration_warnings.append(
+                _legacy_image_format_warning(requested_image)
+            )
+        migration_warnings = list(dict.fromkeys(
+            str(item) for item in migration_warnings if item
+        ))
+        if 'image' in effective:
             try:
                 render_backend_types = self._probe_image_backend()
             except (ImportError, ModuleNotFoundError) as exc:
@@ -423,6 +456,7 @@ class BatchRunner:
             effective=effective,
             render_backend_types=render_backend_types,
             degraded_reason=degraded_reason,
+            migration_warnings=tuple(migration_warnings),
         )
 
     @staticmethod
@@ -438,6 +472,7 @@ class BatchRunner:
                     'image_height', 'image_dpi', 'image_background',
                     'image_line_width', 'conflict_policy',
                     'write_manifest', 'resume_policy',
+                    'requested_image_format', 'migration_warnings',
                 )
                 if hasattr(outputs, field_name)
             }
@@ -595,6 +630,9 @@ class BatchRunner:
 
         recorder = None
         manifest_errors: list[str] = []
+        run_migration_warnings: tuple[str, ...] = tuple(
+            getattr(preset.outputs, 'migration_warnings', ()) or ()
+        )
         if bool(getattr(preset.outputs, 'write_manifest', True)):
             try:
                 normalized_recipe = {
@@ -668,7 +706,10 @@ class BatchRunner:
                 summary=summary,
                 run_id=run_id,
                 degraded_count=degraded_count,
-                warnings=degraded_reasons,
+                warnings=list(dict.fromkeys([
+                    *run_migration_warnings,
+                    *degraded_reasons,
+                ])),
             )
 
         def physical_path_for(source_key, fd=None):
@@ -943,13 +984,17 @@ class BatchRunner:
 
         try:
             effective_plan = self._resolve_effective_outputs(preset.outputs)
+            run_migration_warnings = effective_plan.migration_warnings
         except _ImageBackendUnavailable as exc:
-            requested = self._required_artifacts(preset.outputs)
+            requested = self._requested_artifacts(preset.outputs)
             failed_plan = EffectiveOutputPlan(
                 requested=requested,
                 effective={},
                 render_backend_types=None,
                 degraded_reason='',
+                migration_warnings=tuple(
+                    getattr(preset.outputs, 'migration_warnings', ()) or ()
+                ),
             )
             failed_items = []
             for source_key, signal_name in tasks:
@@ -972,6 +1017,7 @@ class BatchRunner:
                     group_identity=identity.group_identity,
                     requested_outputs=dict(requested),
                     effective_outputs={},
+                    warnings=list(failed_plan.migration_warnings),
                     finished_at=utc_now(),
                 )
                 failed_items.append(item)
@@ -1125,6 +1171,9 @@ class BatchRunner:
                     group,
                     resume_manifest=recovery_manifest,
                     retry_scope=retry_scope,
+                    image_format=str(
+                        effective_plan.effective.get('image', '')
+                    ),
                     cancel_token=cancel_token,
                 )
                 for group in render_groups
@@ -1169,7 +1218,10 @@ class BatchRunner:
                     effective_params=dict(
                         (entry or {}).get('effective_facts') or {}
                     ),
-                    warnings=list((entry or {}).get('warnings') or []),
+                    warnings=list(dict.fromkeys([
+                        *effective_plan.migration_warnings,
+                        *((entry or {}).get('warnings') or []),
+                    ])),
                     requested_outputs=dict(effective_plan.requested),
                     effective_outputs=dict(effective_plan.effective),
                     degraded_reason=effective_plan.degraded_reason,
@@ -2225,6 +2277,7 @@ class BatchRunner:
         *,
         resume_manifest=None,
         retry_scope: RetryScope | None = None,
+        image_format: str = 'png',
         cancel_token=None,
     ) -> GroupRecoveryDecision:
         """Plan grouped data, payload, and image work before source loading."""
@@ -2250,37 +2303,25 @@ class BatchRunner:
         data_write_ids = all_task_ids - reusable_data_ids
 
         reusable_group = None
-        if retry_scope is None:
-            prior_group = next((
-                candidate
-                for candidate in resume_manifest.get('render_groups', ())
-                if candidate.get('group_id') == group.identity.group_id
-            ), None)
-            image_format = ''
-            if isinstance(prior_group, Mapping):
-                image_format = str(
-                    (prior_group.get('requested_outputs') or {}).get('image')
-                    or (prior_group.get('effective_outputs') or {}).get('image')
-                    or ''
+        canonical_image_format = str(image_format).lower().lstrip('.')
+        if retry_scope is None and canonical_image_format:
+            members = tuple(
+                GroupMemberResumeFact(
+                    task_id=member.identity.task_id,
+                    source=self._group_member_source_facts(member),
                 )
-            if image_format:
-                members = tuple(
-                    GroupMemberResumeFact(
-                        task_id=member.identity.task_id,
-                        source=self._group_member_source_facts(member),
-                    )
-                    for member in group.members
-                )
-                reusable_group = find_resumable_group(
-                    resume_manifest,
-                    recipe_fingerprint=str(
-                        resume_manifest.get('recipe_fingerprint') or ''
-                    ),
-                    group_id=group.identity.group_id,
-                    members=members,
-                    image_format=image_format,
-                    cancel_token=cancel_token,
-                )
+                for member in group.members
+            )
+            reusable_group = find_resumable_group(
+                resume_manifest,
+                recipe_fingerprint=str(
+                    resume_manifest.get('recipe_fingerprint') or ''
+                ),
+                group_id=group.identity.group_id,
+                members=members,
+                image_format=canonical_image_format,
+                cancel_token=cancel_token,
+            )
 
         image_write_required = reusable_group is None
         return GroupRecoveryDecision(
@@ -2910,7 +2951,7 @@ class BatchRunner:
         data_path = None
         status = 'done'
         message = ''
-        warnings: list[str] = []
+        warnings: list[str] = list(effective.migration_warnings)
         try:
             self._check_cancel(cancel_token, 'preprocess')
             signal = fd.data[signal_name].to_numpy(dtype=float, copy=False)
@@ -3086,6 +3127,7 @@ class BatchRunner:
                 group_id=group.identity.group_id,
                 status='failed',
                 message='no successful render payloads',
+                warnings=list(effective.migration_warnings),
             )
         refs = tuple(
             ref for result in usable for ref in result.series_refs
@@ -3108,7 +3150,9 @@ class BatchRunner:
             }
             panel_titles = tuple(
                 (
-                    result_by_task[member.identity.task_id].item.file_name
+                    member.channel
+                    if group.group_by == 'source'
+                    else result_by_task[member.identity.task_id].item.file_name
                     if member.identity.task_id in result_by_task
                     else member.channel
                 )
@@ -3139,7 +3183,10 @@ class BatchRunner:
                     group_id=group.identity.group_id,
                     status='skipped',
                     message='group image skipped without manifest provenance',
-                    warnings=[reservation.warning] if reservation.warning else [],
+                    warnings=list(dict.fromkeys([
+                        *effective.migration_warnings,
+                        *([reservation.warning] if reservation.warning else []),
+                    ])),
                 )
             BatchRenderContext, BatchRenderOptions = effective.render_backend_types
             width, height = preset.outputs.resolved_image_dimensions()
@@ -3156,9 +3203,9 @@ class BatchRunner:
             if len(usable) != len(group.members):
                 facts['members'] = member_fact
             context = BatchRenderContext(
-                source_display_name=str(group.group_key),
-                group=group.group_key,
-                channel=(group.group_key if group.group_by == 'channel' else ''),
+                source_display_name=group.display_name,
+                group='',
+                channel='',
                 unit='',
                 method='time',
                 task_id=group.identity.group_id,
@@ -3181,7 +3228,10 @@ class BatchRunner:
                     published = atomic_write_set(
                         reservation, {image_extension: write_image},
                     )
-                    warnings = list(dict.fromkeys(attempt_warnings))
+                    warnings = list(dict.fromkeys([
+                        *effective.migration_warnings,
+                        *attempt_warnings,
+                    ]))
                     break
                 except OutputPublishRace:
                     if conflict_policy != 'auto_number':
@@ -3270,7 +3320,11 @@ class BatchRunner:
             'degraded_reason': effective.degraded_reason,
             'status': str(status),
             'message': str(message),
-            'warnings': list(dict.fromkeys(str(item) for item in warnings if item)),
+            'warnings': list(dict.fromkeys(
+                str(item)
+                for item in (*effective.migration_warnings, *warnings)
+                if item
+            )),
             'artifact': dict(artifact) if artifact is not None else None,
         }
 
@@ -3291,6 +3345,7 @@ class BatchRunner:
         requested_outputs = dict(effective.requested)
         effective_outputs = dict(effective.effective)
         degraded_reason = effective.degraded_reason
+        migration_warnings = list(effective.migration_warnings)
         render_backend_types = effective.render_backend_types
         output_extensions = tuple(effective_outputs.values())
         conflict_policy = str(
@@ -3346,7 +3401,11 @@ class BatchRunner:
                 task_id=identity.task_id,
                 source_identity=identity.source_identity,
                 group_identity=identity.group_identity,
-                warnings=[reservation.warning, conflict_facts],
+                warnings=list(dict.fromkeys([
+                    *migration_warnings,
+                    reservation.warning,
+                    conflict_facts,
+                ])),
                 requested_outputs=dict(requested_outputs),
                 effective_outputs=dict(effective_outputs),
                 degraded_reason=degraded_reason,
@@ -3427,7 +3486,10 @@ class BatchRunner:
                             preset.rpm_channel or _guess_rpm_channel(fd)
                         ),
                     }
-            warnings = list(preprocessed.warnings)
+            warnings = list(dict.fromkeys([
+                *migration_warnings,
+                *preprocessed.warnings,
+            ]))
 
             spectro = None
             fft_df = None
@@ -3611,10 +3673,6 @@ class BatchRunner:
 
             while True:
                 attempt_warnings = []
-                image_warning_kwargs = (
-                    {'warnings_out': attempt_warnings}
-                    if method == 'time' else {}
-                )
                 writers = {}
                 if export_frame_holder:
                     def write_data(path, holder=export_frame_holder):
@@ -3638,7 +3696,7 @@ class BatchRunner:
                             params=image_params,
                             options=render_options,
                             context=render_context,
-                            **image_warning_kwargs,
+                            warnings_out=attempt_warnings,
                         )
                         self._check_cancel(cancel_token, "image render/write")
                         return result
@@ -4552,28 +4610,6 @@ class BatchRunner:
                 df.to_csv(temp_path, index=False)
 
         return atomic_write(path, write)
-
-    @staticmethod
-    def _build_export_scene(payload, params=None):
-        """Headless compatibility wrapper for legacy direct-call tests."""
-        from .batch_render import _build_batch_figure
-
-        kind, _data = payload
-        render_params = dict(params or {})
-        resolution = BatchRunner._image_reference_resolution(render_params)
-        render_params['db_reference_resolution'] = resolution
-        render_db, output_scale = BatchRunner._batch_output_scale(kind, render_params)
-        label = db_reference.format_amplitude_label(
-            resolution,
-            weighting=str(render_params.get('weighting', 'None')),
-            output_scale=output_scale,
-        )
-        figure = _build_batch_figure(payload, params=render_params)
-        return figure, {
-            'figure': figure,
-            'colorbar_label': label,
-            'render_db': render_db,
-        }
 
     @staticmethod
     def _write_image(

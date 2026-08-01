@@ -198,8 +198,7 @@ QPushButton#batchOutputSettingsButton:checked {
         settings_form.addRow("数据格式", self._combo_format)
 
         self._combo_image_format = QComboBox(self)
-        for label, value in (("PNG", "png"), ("SVG", "svg"), ("PDF", "pdf")):
-            self._combo_image_format.addItem(label, value)
+        self._combo_image_format.addItem("PNG", "png")
         self._compact_field(self._combo_image_format)
         settings_form.addRow("图片格式", self._combo_image_format)
 
@@ -245,6 +244,7 @@ QPushButton#batchOutputSettingsButton:checked {
             ("粗 · 2.0 px", 2.0),
         ):
             self._combo_image_line_width.addItem(label, value)
+        self._combo_image_line_width.setCurrentIndex(1)
         self._compact_field(self._combo_image_line_width)
         settings_form.addRow("曲线线宽", self._combo_image_line_width)
 
@@ -458,7 +458,7 @@ QPushButton#batchOutputSettingsButton:checked {
                 "白底",
             )
             line_width = float(
-                self._combo_image_line_width.currentData() or 1.0
+                self._combo_image_line_width.currentData() or 1.5
             )
             parts.append(
                 f"{image_format} · {size} · {background} · "
@@ -469,7 +469,6 @@ QPushButton#batchOutputSettingsButton:checked {
     def _sync_output_controls(self) -> None:
         data_enabled = bool(self._chk_data.isChecked())
         image_enabled = bool(self._chk_image.isChecked())
-        image_format = str(self._combo_image_format.currentData() or "png")
         custom = str(self._combo_image_size.currentData() or "") == "custom"
         self._combo_format.setEnabled(data_enabled)
         self._combo_image_format.setEnabled(image_enabled)
@@ -478,7 +477,7 @@ QPushButton#batchOutputSettingsButton:checked {
         self._combo_image_line_width.setEnabled(image_enabled)
         self._spin_image_width.setEnabled(image_enabled and custom)
         self._spin_image_height.setEnabled(image_enabled and custom)
-        self._spin_image_dpi.setEnabled(image_enabled and image_format == "png")
+        self._spin_image_dpi.setEnabled(image_enabled)
 
     def _on_amp_unit_changed(self, text: str) -> None:
         """User toggled dB↔Linear on ``combo_amp_unit``.
@@ -680,7 +679,7 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
                 self._combo_image_background.currentData() or "white"
             ),
             image_line_width=float(
-                self._combo_image_line_width.currentData() or 1.0
+                self._combo_image_line_width.currentData() or 1.5
             ),
             conflict_policy=str(
                 self._combo_conflict.currentData() or "auto_number"
@@ -886,7 +885,7 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
                 str(getattr(out, "image_background", "white")).lower(),
             )
             image_line_width = float(
-                getattr(out, "image_line_width", 1.0)
+                getattr(out, "image_line_width", 1.5)
             )
             if self._combo_image_line_width.findData(image_line_width) < 0:
                 self._combo_image_line_width.addItem(

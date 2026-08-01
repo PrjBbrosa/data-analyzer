@@ -327,40 +327,8 @@ class OrderRenderReferenceCoercionRemovedTests(unittest.TestCase):
         self.assertIn('resolution.value', src)
 
 
-class BatchExportSceneReferenceCoercionRemovedTests(unittest.TestCase):
-    """dB-reference-defaults Task 9 (spec §15 C4 / plan Step 9.4):
-    ``BatchRunner._build_export_scene`` no longer coerces an invalid/
-    degenerate reference with ``max(db_reference, 1e-12)`` -- the shared
-    resolver (``db_reference.resolve_db_reference`` / ``validate_reference``)
-    is the single gate, and its result is guaranteed positive+finite by
-    construction, so the render path uses it directly (mirrors the Task 7
-    ``OrderRenderReferenceCoercionRemovedTests`` pattern above).
-    """
-
-    def test_build_export_scene_no_longer_coerces_with_1e12_floor(self):
-        import inspect
-        from mf4_analyzer.batch import BatchRunner
-
-        src = inspect.getsource(BatchRunner._build_export_scene)
-        self.assertNotIn(
-            '1e-12', src,
-            "_build_export_scene must not coerce a reference via "
-            "max(ref, 1e-12); the shared validator "
-            "(db_reference.validate_reference, invoked through the "
-            "resolver) is the single gate now",
-        )
-
-    def test_build_export_scene_uses_shared_label_formatter(self):
-        import inspect
-        from mf4_analyzer.batch import BatchRunner
-
-        src = inspect.getsource(BatchRunner._build_export_scene)
-        self.assertIn(
-            'format_amplitude_label', src,
-            "_build_export_scene must format FFT/heatmap labels through "
-            "db_reference.format_amplitude_label, not a batch-local "
-            "'Amplitude (dB)' hard-code",
-        )
+class BatchImageReferenceResolutionTests(unittest.TestCase):
+    """The producer owns reference resolution before the Qt render facade."""
 
     def test_image_reference_resolution_helper_uses_shared_resolver(self):
         import inspect
@@ -373,35 +341,6 @@ class BatchExportSceneReferenceCoercionRemovedTests(unittest.TestCase):
             "db_reference.resolve_db_reference, not hand-roll its own "
             "priority chain",
         )
-
-    def test_build_export_scene_fft_db_path_calls_resolve_db_reference(self):
-        """Spy-based wiring proof (2026-06-21 inline-db-floor-drift lesson):
-        RED on inline/dead code, GREEN only once the delegation is live."""
-        import pandas as pd
-        from unittest.mock import patch
-
-        from mf4_analyzer import db_reference
-        from mf4_analyzer.batch import BatchRunner
-
-        df = pd.DataFrame({'frequency_hz': [10.0, 20.0], 'amplitude': [1.0, 10.0]})
-        call_count = {'n': 0}
-        orig = db_reference.resolve_db_reference
-
-        def spy(**kwargs):
-            call_count['n'] += 1
-            return orig(**kwargs)
-
-        with patch.object(db_reference, 'resolve_db_reference', spy):
-            BatchRunner._build_export_scene(
-                ('fft', df), {'amp_y': 'dB', 'db_reference': 1.0})
-
-        self.assertGreater(
-            call_count['n'], 0,
-            "batch._build_export_scene's dB path did not call "
-            "db_reference.resolve_db_reference; still using an inline/"
-            "coerced reference",
-        )
-
 
 if __name__ == '__main__':
     unittest.main()

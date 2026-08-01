@@ -346,7 +346,7 @@ def test_batch_output_full_schema_round_trip_has_one_authoritative_accessor(qtbo
         export_data=False,
         export_image=True,
         data_format="xlsx",
-        image_format="svg",
+        image_format="png",
         image_size="custom",
         image_width=3210,
         image_height=1870,
@@ -376,7 +376,7 @@ def test_batch_output_settings_are_compact_and_collapsed_by_default(qtbot):
         panel._export_row_layout.indexOf(panel._chk_image)
     )
     assert "白底" in panel._output_summary.text()
-    assert "1.0 px" in panel._output_summary.text()
+    assert "1.5 px" in panel._output_summary.text()
 
     panel._btn_output_settings.click()
     assert not panel._output_settings.isHidden()
@@ -390,7 +390,7 @@ def test_batch_output_summary_tracks_image_background_and_line_width(qtbot):
     panel = _make_panel(qtbot)
     panel.apply_outputs(BatchOutput(
         data_format="xlsx",
-        image_format="svg",
+        image_format="png",
         image_size="2560x1440",
         image_background="dark",
         image_line_width=2.0,
@@ -398,7 +398,7 @@ def test_batch_output_summary_tracks_image_background_and_line_width(qtbot):
 
     summary = panel._output_summary.text()
     assert "XLSX" in summary
-    assert "SVG" in summary
+    assert "PNG" in summary
     assert "2560×1440" in summary
     assert "深色" in summary
     assert "2.0 px" in summary
@@ -435,10 +435,9 @@ def test_batch_output_image_controls_link_without_losing_custom_values(qtbot):
     assert panel.get_outputs().image_width == 3333
     assert panel.get_outputs().image_height == 1777
 
-    panel._combo_image_format.setCurrentIndex(
-        panel._combo_image_format.findData("svg")
-    )
-    assert not panel._spin_image_dpi.isEnabled()
+    assert panel._combo_image_format.count() == 1
+    assert panel._combo_image_format.itemData(0) == "png"
+    assert panel._spin_image_dpi.isEnabled()
     assert panel.get_outputs().image_dpi == 240
 
     panel._chk_image.setChecked(False)

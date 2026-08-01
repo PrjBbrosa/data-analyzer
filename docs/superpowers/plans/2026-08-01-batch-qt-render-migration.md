@@ -79,7 +79,7 @@ Batch 1 (P0)   ───┘        （Batch 0 与 Batch 1 可并行）
 **产出物：** `scratchpad/batch-qt-spike/`（脚本+图+数据）与
 Spec 附录（追加 `## 附录 A：Spike 结论`）。
 
-- [ ] **S0.1 离屏渲染原型**
+- [x] **S0.1 离屏渲染原型**
   - 脚本构建 `GraphicsLayoutWidget`：1920×1080，含两行图头 LabelItem、facts 行、
     1 个双 Y overlay 面板（各 1 条曲线）+ 8 面板 subplot 变体 + 1 个
     ImageItem+ColorBarItem heatmap 变体。
@@ -93,18 +93,18 @@ Spec 附录（追加 `## 附录 A：Spike 结论`）。
   - 用同一份 time/fft/heatmap payload 分别驱动原型和现有单文件 canvas，生成首版
     batch/reference/crop/contact sheet；执行 agent 必须打开图片确认没有空图、漏线、
     转置、裁切或明显 AA 退化，并把判断写进 Spike 结论。
-- [ ] **S0.2 线程 marshal 原型**
+- [x] **S0.2 线程 marshal 原型**
   - QThread worker 中调用渲染入口，经 BlockingQueuedConnection 到主线程执行；
     验证：结果回传、异常跨线程重抛、主线程开着模态 QDialog 时渲染仍可达、
     app 退出时 fail-fast。
-- [ ] **S0.3 性能与内存**
+- [x] **S0.3 性能与内存**
   - 计时：单图 1920×1080 × {overlay, 8 面板 subplot(每面板 1e5 点), heatmap}
     各 ≥20 次取 p50/p95；4K（3840×2160）单图一次并记录进程 RSS 峰值。
   - 同时在 GUI 线程挂 50 ms heartbeat，worker 连续请求 ≥20 张图，记录最大事件循环
     间隙和超 100 ms 次数。
   - 双预算：p95 ≤ 500 ms/图（1080p）且最大 event-loop gap ≤ 200 ms；500 ms
     只是技术 STOP 线，不等于“无感知冻结”。
-- [ ] **S0.4 写结论**
+- [x] **S0.4 写结论**
   - 全项通过 → 在 Spec 追加附录 A（数据+结论），Gate 放行。
   - 任一不过 → **停**，把失败项和候选替代方案（如渲染子进程）整理后交回用户
     决策；不得自行扩大方案。
@@ -116,7 +116,7 @@ Spec 附录（追加 `## 附录 A：Spike 结论`）。
 
 ## Batch 1：P0 前置修复（与 Batch 0 并行）
 
-- [ ] **T1.1 修 A1：路径驱动批处理整体 blocked**
+- [x] **T1.1 修 A1：路径驱动批处理整体 blocked**
   - Files: `mf4_analyzer/batch.py`、`tests/test_batch_source_integration.py`（新增红测）
   - 先写红测：显式 `target_signals` + 纯 `source_paths`（无 `source_ids`）+
     一个物理文件出多个逻辑源。
@@ -126,7 +126,7 @@ Spec 附录（追加 `## 附录 A：Spike 结论`）。
   - 验证：
     `pytest -p no:randomly tests/test_frozen_batch_acceptance.py tests/test_batch_source_integration.py -q`
     全绿，并实跑一次 `frozen_batch_acceptance` CLI（当前仍是 CSV+PDF，照旧）。
-- [ ] **T1.2 记录全量基线**
+- [x] **T1.2 记录全量基线**
   - 在 T1.1 的干净 commit 上跑
     `pytest -p no:randomly --ignore=tests/acquisition_ui -q`；不得沿用历史 `61/57/68`
     等数字。
@@ -146,7 +146,7 @@ Spec 附录（追加 `## 附录 A：Spike 结论`）。
 到 BatchRunner，`batch_render.py`（matplotlib）保持原样运行。测试新建
 `tests/test_batch_render_qt.py`（可按主题拆多文件）。
 
-- [ ] **T2.1 骨架：dispatch + export + theme + fonts**
+- [x] **T2.1 骨架：dispatch + export + theme + fonts**
   - Files: `batch_render_qt/{__init__,_dispatch,_export,_theme,_fonts}.py`、
     `mf4_analyzer/batch_image_options.py` + 测试
   - `_dispatch.ensure_app()` / `render_on_gui_thread()` 按 Spec §2.2 实现；
@@ -163,7 +163,7 @@ Spec 附录（追加 `## 附录 A：Spike 结论`）。
   - `_fonts`：CJK 解析 + `supportsCharacter` 覆盖检查 + 墨迹像素证明 helper；
     候选表与 `pg_canvas/fonts.py` 同源（直接复用或提取共享常量，二选一后
     加两侧一致性测试）。
-- [ ] **T2.2 time overlay + fft（吸收 B1）**
+- [x] **T2.2 time overlay + fft（吸收 B1）**
   - Files: `batch_render_qt/_builder.py`、`_page.py` + 测试
   - 红测先行：`(color, linestyle)` 两两不同（含双 Y 跨左右轴）；≤2 Y 单位
     fail-closed 文案与现实现一致；linestyle 映射；fft 固定色 `#1769e0`；
@@ -172,17 +172,17 @@ Spec 附录（追加 `## 附录 A：Spike 结论`）。
     页脚、合并图例框。
   - 红测先行：所有 PlotItem 的 auto-range button/context menu/鼠标交互关闭，导出图
     四角与 plot-area 不含 Qt/pyqtgraph 默认控件 chrome；不得复制主界面模块导航。
-- [ ] **T2.3 time subplot（吸收 B2、B3）**
+- [x] **T2.3 time subplot（吸收 B2、B3）**
   - 红测先行：8 面板相邻文本 sceneBoundingRect 不相交；仅底行 X 标签；
     X 范围传播一致；renderer 对显式安全 panel titles 只负责同图一致显示，不从
     `render_group_by` 或 raw group key 猜语义。B3 的 source→channel、channel→文件名
     producer 分派与 producer-shaped 红测在 T4.2 原子接线时完成。
   - 结构断言 + 像素特征断言双写（Spec §5 分层）。
-- [ ] **T2.4 B4 图面文本守卫（渲染端）**
+- [x] **T2.4 B4 图面文本守卫（渲染端）**
   - 红测：原始 `group_key` 和已知 source 绝对路径不出现在任何
     LabelItem/TextItem；同时用含 `[`/`"` 的合法通道名证明不会误杀用户文本。
     渲染端只接受 display 名，plumbing 在 Batch 4。
-- [ ] **T2.5 time/fft 离屏单文件 parity**
+- [x] **T2.5 time/fft 离屏单文件 parity**
   - Files: `tools/verify_batch_qt_render_parity.py`、
     `tests/test_batch_qt_render_parity.py`、`docs/superpowers/verify/batch-qt-render/`
   - 按 Spec §2.7 生成 time 单曲线、raw+filtered、双 Y、8-panel subplot、custom-X，
@@ -200,7 +200,7 @@ T4.2）；T2.5 所有 case 机器断言和目视检查均 PASS；
 
 ## Batch 3：heatmap kinds（fft_time / order_time）
 
-- [ ] **T3.1 ImageItem + ColorBarItem 渲染**
+- [x] **T3.1 ImageItem + ColorBarItem 渲染**
   - Files: `batch_render_qt/_builder.py`（heatmap 分支）+ 测试
   - 红测先行：turbo LUT 与 `heatmap_canvas._resolve_colormap("turbo")` 一致
     （黄金 LUT 已在 `tests/data/colormap_golden.npz`）；非法 cmap → turbo +
@@ -210,12 +210,12 @@ T4.2）；T2.5 所有 case 机器断言和目视检查均 PASS；
   - 用值各不相同的非对称 2×3 矩阵做四角颜色/坐标红测，必须能抓到转置、上下翻转、
     中心坐标误当 coverage 边界三类错误。
   - dB 转换调用点断言：仍走 `SpectrogramAnalyzer.amplitude_to_db`。
-- [ ] **T3.2 数值不变量 review（signal-processing-expert，只 review）**
+- [x] **T3.2 数值不变量 review（signal-processing-expert，只 review）**
   - 核对 producer 的线性 payload 与转向后的 linear display matrix 逐元素不变（同
     payload 双路径比数值，不比像素）。dB display matrix 则必须逐元素等于
     `SpectrogramAnalyzer.amplitude_to_db`/真实单文件路径；不得继承旧 mpl renderer
     私有的 peak-200 数据截断，视觉下限只由 levels 控制，并把该差异记录为迁移纠偏。
-- [ ] **T3.3 heatmap 离屏单文件 parity**
+- [x] **T3.3 heatmap 离屏单文件 parity**
   - 扩展 T2.5 工具，生成 fft_time/order_time 的 linear/dB、auto/manual levels、
     非对称矩阵 batch/reference/crop/contact sheet。
   - 机器断言 matrix/LUT/levels/extent 与 plot-area 四角；执行 agent 实际打开全部
@@ -228,7 +228,7 @@ T3.3 机器断言和目视检查均 PASS；全量失败 nodeid 集合没有超�
 
 ## Batch 4：接线 + PNG-only 收缩 + CLI/GUI 改造
 
-- [ ] **T4.1 PNG-only canonical contract（先做，旧 renderer 仍可输出 PNG）**
+- [x] **T4.1 PNG-only canonical contract（先做，旧 renderer 仍可输出 PNG）**
   - Files: `mf4_analyzer/batch_image_options.py`、`mf4_analyzer/batch_recipe.py`、
     `mf4_analyzer/batch_preset_io.py`、`mf4_analyzer/batch.py`、
     `mf4_analyzer/batch_manifest.py`、`mf4_analyzer/batch_validation.py`、
@@ -250,7 +250,7 @@ T3.3 机器断言和目视检查均 PASS；全量失败 nodeid 集合没有超�
   - GUI 格式下拉只留 PNG，PNG DPI 恒可用；三个 CLI 的请求/产物矩阵先收缩为 PNG，
     CJK/platform verifier 判据留到 T4.3 改。此 Task 后产品仍走 matplotlib PNG，所以
     可形成独立绿色 commit，T4.2 切换时不会再有 SVG/PDF 调用打向 PNG-only renderer。
-- [ ] **T4.2 facade + B4 plumbing 原子切换**
+- [x] **T4.2 facade + B4 plumbing 原子切换**
   - Files: `mf4_analyzer/batch_render.py`、`mf4_analyzer/batch_grouping.py`、
     `mf4_analyzer/batch.py`、`tests/test_batch_renderer.py`、
     `tests/test_batch_runner.py`、`tests/test_db_conversion_convergence.py`、
@@ -272,7 +272,7 @@ T3.3 机器断言和目视检查均 PASS；全量失败 nodeid 集合没有超�
     非法 heatmap cmap 的 warning 必须进入 item/manifest。
   - `test_renderer_source_is_gui_framework_free` 反转为“禁 matplotlib”守卫，并新增
     `batch.py` 顶层无 Qt import 守卫。
-- [ ] **T4.3 CLI/冻结验证器改写**
+- [x] **T4.3 CLI/冻结验证器改写**
   - Files: `mf4_analyzer/batch_render_smoke.py`、
     `mf4_analyzer/frozen_batch_acceptance.py`、
     `mf4_analyzer/batch_time_group_acceptance.py`、
@@ -283,7 +283,7 @@ T3.3 机器断言和目视检查均 PASS；全量失败 nodeid 集合没有超�
     接受或生成 PDF。
   - 时域分组验收：补 `render_layout=subplot` 与 `x_source=channel` 组合
     （review §3 指出的矩阵缺口），产出 PNG 走 B2 的不相交断言。
-- [ ] **T4.4 GUI 端到端**
+- [x] **T4.4 GUI 端到端**
   - Files: `tests/ui/test_batch_runner_thread.py`（新测试）
   - pytest-qt offscreen：用 signal/`qtbot.waitUntil` 泵事件循环，真实
     `BatchRunnerThread` 跑一单（data+image），验证 worker→主线程 blocking marshal、
@@ -291,7 +291,7 @@ T3.3 机器断言和目视检查均 PASS；全量失败 nodeid 集合没有超�
     不死锁。backend 不可用只允许在输出预留前降级 data-only；Qt build/marshal/save 的
     writer-time 失败必须由 `batch_output.atomic_write_set` 整组回滚。保留 `_write_image`
     现有内层 staging，不在本迁移顺手重构原子写层级。
-- [ ] **T4.5 完整离屏矩阵与双层目视签字**
+- [x] **T4.5 完整离屏矩阵与双层目视签字**
   - `QT_QPA_PLATFORM=offscreen` 实跑 Spec §2.7 全矩阵：4 kind、time 五场景、heatmap
     非对称矩阵、三主题、1080p/4K、CJK、custom-X。
   - 输出到 `docs/superpowers/verify/batch-qt-render/`：至少四张按模块 contact sheet +
@@ -307,6 +307,10 @@ Batch 1 基线。**此 Gate 后产品已完全跑在 Qt 渲染上；旧实现仅
 T4.2 恢复。此时仍不得拆除 matplotlib 依赖、打包契约和旧专属验收资产。**
 
 ### Gate 4.5：matplotlib 依赖拆除前的 macOS 前台 cutover 验收
+
+> **2026-08-01 执行状态：BLOCKED（环境门禁）**。Batch 4 离屏与全仓门禁均已
+> PASS，但 macOS 桌面当前锁屏，不能取得前台截图、交互观察和 heartbeat 证据。
+> 因而 Batch 5 尚未开始，matplotlib 依赖与旧冻结契约保持可回退状态。
 
 - 用真实 MF4/CSV 数据覆盖 overlay 双 Y、8-panel subplot、
   `render_group_by=channel|source`、`x_source=channel`、fft、fft_time、order_time、
