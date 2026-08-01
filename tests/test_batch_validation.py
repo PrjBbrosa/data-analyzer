@@ -191,6 +191,41 @@ def test_validate_recipe_accepts_windows_supported_by_canonical_factory(window):
     assert not any(issue.field == "window" for issue in issues)
 
 
+@pytest.mark.parametrize("x_channel", (None, "", "   "))
+def test_channel_x_requires_nonempty_channel(x_channel):
+    issues = validate_recipe(
+        "time",
+        {"x_source": "channel", "x_channel": x_channel},
+    )
+
+    assert any(
+        issue.field == "x_channel" and issue.code == "required"
+        for issue in issues
+    )
+    assert not any(
+        issue.field == "x_channel"
+        for issue in validate_recipe("time", {"x_source": "time"})
+    )
+
+
+@pytest.mark.parametrize(
+    ("params", "field"),
+    (
+        ({"render_group_by": "file"}, "render_group_by"),
+        (
+            {"render_group_by": "source", "render_layout": "grid"},
+            "render_layout",
+        ),
+        ({"x_source": "distance"}, "x_source"),
+        ({"x_source": "time", "x_origin": "middle"}, "x_origin"),
+    ),
+)
+def test_time_render_recipe_rejects_invalid_active_modes(params, field):
+    issues = validate_recipe("time", params)
+
+    assert any(issue.field == field for issue in issues)
+
+
 @pytest.mark.parametrize("method", ("fft", "fft_time", "order_time"))
 def test_validate_recipe_rejects_unknown_analysis_window(method):
     issues = validate_recipe(method, {"window": "rectangular"})

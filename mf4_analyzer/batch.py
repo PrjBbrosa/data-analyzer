@@ -28,6 +28,7 @@ from .batch_output import (
     build_task_output_identity,
     reserve_output_paths,
 )
+from .batch_grouping import RenderTask, group_render_tasks
 from .batch_manifest import (
     BatchManifestRecorder,
     ManifestRecipeMismatch,
@@ -94,6 +95,11 @@ class BatchOutputPreview:
     image_dpi: int
     conflict_policy: str
     estimated: bool = True
+    group_count: int = 0
+    data_artifact_count: int = 0
+    image_artifact_count: int = 0
+    data_conflict_count: int = 0
+    image_conflict_count: int = 0
 
 
 @dataclass
@@ -369,9 +375,8 @@ class BatchRunner:
         if output_issues:
             raise ValueError('; '.join(str(issue) for issue in output_issues))
         tasks = list(self._expand_tasks(preset, allow_source_load=False))
-        extensions = self._output_extensions(preset.outputs)
-        conflicts = 0
         requested_params = normalize_batch_params(preset.params, preset.method)
+        render_tasks = []
         for source_key, channel in tasks:
             fd = self._known_file_data(source_key)
             if fd is not None:
@@ -400,22 +405,67 @@ class BatchRunner:
                     method=preset.method,
                     params=requested_params,
                 )
-            paths = {
-                ext: Path(output_dir) / f'{identity.stem}.{ext}'
-                for ext in extensions
-            }
-            if any(path.exists() for path in paths.values()):
-                conflicts += 1
+            render_tasks.append(RenderTask(source_key, channel, identity))
+
+        required = self._required_artifacts(preset.outputs)
+        output_dir = Path(output_dir)
+        data_extension = required.get('data')
+        image_extension = required.get('image')
+        data_conflicting_tasks = set()
+        if data_extension is not None:
+            for task in render_tasks:
+                path = output_dir / f'{task.identity.stem}.{data_extension}'
+                if path.exists():
+                    data_conflicting_tasks.add(task.identity.task_id)
+
+        groups = (
+            group_render_tasks(render_tasks, requested_params)
+            if image_extension is not None else ()
+        )
+        image_conflicting_groups = set()
+        image_conflicting_tasks = set()
+        for group in groups:
+            path = output_dir / f'{group.identity.stem}.{image_extension}'
+            if not path.exists():
+                continue
+            image_conflicting_groups.add(group.identity.group_id)
+            if group.group_by == 'none':
+                image_conflicting_tasks.update(
+                    member.identity.task_id for member in group.members
+                )
+
+        group_by = str(requested_params.get(
+            'render_group_by', 'none',
+        ) or 'none').strip().lower()
+        data_conflict_count = len(data_conflicting_tasks)
+        image_conflict_count = len(image_conflicting_groups)
+        if group_by == 'none':
+            conflict_count = len(
+                data_conflicting_tasks | image_conflicting_tasks
+            )
+            group_count = 0
+        else:
+            conflict_count = data_conflict_count + image_conflict_count
+            group_count = len(groups)
+        data_artifact_count = (
+            len(render_tasks) if data_extension is not None else 0
+        )
+        image_artifact_count = len(groups)
         width, height = preset.outputs.resolved_image_dimensions()
         return BatchOutputPreview(
             task_count=len(tasks),
-            artifact_count=len(tasks) * len(extensions),
-            conflict_count=conflicts,
+            artifact_count=data_artifact_count + image_artifact_count,
+            conflict_count=conflict_count,
             image_format=str(preset.outputs.image_format).lower().lstrip('.'),
             image_width=width,
             image_height=height,
             image_dpi=int(preset.outputs.image_dpi),
             conflict_policy=str(preset.outputs.conflict_policy).lower(),
+            group_count=group_count,
+            data_artifact_count=data_artifact_count,
+            image_artifact_count=image_artifact_count,
+            data_conflict_count=data_conflict_count,
+            image_conflict_count=image_conflict_count,
         )
 
     def run(self, preset, output_dir,

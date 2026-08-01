@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from mf4_analyzer.batch import AnalysisPreset, BatchOutput, BatchRunner
+from mf4_analyzer.batch_recipe import normalize_batch_params
 from mf4_analyzer.io import FileData
 
 
@@ -2452,11 +2453,183 @@ def test_public_output_preview_reports_counts_without_loading_sources(tmp_path):
     assert preview.task_count == 1
     assert preview.artifact_count == 2
     assert preview.conflict_count == 0
+    assert preview.group_count == 0
+    assert preview.data_artifact_count == 1
+    assert preview.image_artifact_count == 1
+    assert preview.data_conflict_count == 0
+    assert preview.image_conflict_count == 0
     assert preview.image_format == "png"
     assert preview.image_width == 1920
     assert preview.image_height == 1080
     assert preview.image_dpi == 144
     assert preview.conflict_policy == "auto_number"
+
+
+def _two_source_two_channel_preview(
+    tmp_path, *, group_by="none", export_data=True, export_image=True,
+):
+    files = {
+        0: _make_fd(tmp_path, "preview_a", channels=("sig", "aux"), idx=0),
+        1: _make_fd(tmp_path, "preview_b", channels=("sig", "aux"), idx=1),
+    }
+    params = (
+        {} if group_by == "none"
+        else {"render_group_by": group_by, "render_layout": "subplot"}
+    )
+    preset = AnalysisPreset.free_config(
+        name="group preview",
+        method="time",
+        target_signals=("sig", "aux"),
+        params=params,
+        outputs=BatchOutput(
+            export_data=export_data,
+            export_image=export_image,
+        ),
+    )
+    preset = replace(preset, file_ids=(0, 1))
+    return BatchRunner(files), preset
+
+
+@pytest.mark.parametrize(
+    (
+        "group_by", "export_data", "export_image", "group_count",
+        "data_count", "image_count", "artifact_count",
+    ),
+    (
+        ("none", True, True, 0, 4, 4, 8),
+        ("source", True, True, 2, 4, 2, 6),
+        ("channel", True, True, 2, 4, 2, 6),
+        ("source", True, False, 0, 4, 0, 4),
+    ),
+)
+def test_group_aware_preview_reports_exact_artifact_counts(
+    tmp_path,
+    group_by,
+    export_data,
+    export_image,
+    group_count,
+    data_count,
+    image_count,
+    artifact_count,
+):
+    runner, preset = _two_source_two_channel_preview(
+        tmp_path,
+        group_by=group_by,
+        export_data=export_data,
+        export_image=export_image,
+    )
+
+    preview = runner.preview_outputs(preset, tmp_path / "out")
+
+    assert preview.task_count == 4
+    assert preview.group_count == group_count
+    assert preview.data_artifact_count == data_count
+    assert preview.image_artifact_count == image_count
+    assert preview.artifact_count == artifact_count
+    assert preview.data_conflict_count == 0
+    assert preview.image_conflict_count == 0
+    assert preview.conflict_count == 0
+
+
+def test_grouped_preview_uses_task_data_stems_and_group_image_stems(tmp_path):
+    from mf4_analyzer.batch_grouping import RenderTask, group_render_tasks
+
+    runner, preset = _two_source_two_channel_preview(
+        tmp_path, group_by="source",
+    )
+    params = normalize_batch_params(preset.params, preset.method)
+    tasks = tuple(
+        RenderTask(
+            source_key,
+            channel,
+            runner._build_task_identity(
+                runner._known_file_data(source_key),
+                file_id=source_key,
+                channel=channel,
+                method=preset.method,
+                params=params,
+            ),
+        )
+        for source_key, channel in runner._expand_tasks(
+            preset, allow_source_load=False,
+        )
+    )
+    groups = group_render_tasks(tasks, params)
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    task_stem = tasks[0].identity.stem
+    group_stem = groups[0].identity.stem
+    assert task_stem != group_stem
+
+    (output_dir / f"{group_stem}.csv").touch()
+    (output_dir / f"{task_stem}.png").touch()
+    wrong_stem_preview = runner.preview_outputs(preset, output_dir)
+
+    assert wrong_stem_preview.data_conflict_count == 0
+    assert wrong_stem_preview.image_conflict_count == 0
+    assert wrong_stem_preview.conflict_count == 0
+
+    (output_dir / f"{task_stem}.csv").touch()
+    (output_dir / f"{group_stem}.png").touch()
+    correct_stem_preview = runner.preview_outputs(preset, output_dir)
+
+    assert correct_stem_preview.data_conflict_count == 1
+    assert correct_stem_preview.image_conflict_count == 1
+    assert correct_stem_preview.conflict_count == 2
+
+
+def test_default_preview_conflicts_remain_task_set_compatible(tmp_path):
+    runner, preset = _two_source_two_channel_preview(tmp_path, group_by="none")
+    params = normalize_batch_params(preset.params, preset.method)
+    source_key, channel = next(
+        iter(runner._expand_tasks(preset, allow_source_load=False))
+    )
+    identity = runner._build_task_identity(
+        runner._known_file_data(source_key),
+        file_id=source_key,
+        channel=channel,
+        method=preset.method,
+        params=params,
+    )
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    (output_dir / f"{identity.stem}.csv").touch()
+    (output_dir / f"{identity.stem}.png").touch()
+
+    preview = runner.preview_outputs(preset, output_dir)
+
+    assert preview.data_conflict_count == 1
+    assert preview.image_conflict_count == 1
+    assert preview.conflict_count == 1
+
+
+def test_group_preview_never_loads_probes_or_reserves_unresolved_sources(
+    tmp_path, monkeypatch,
+):
+    import mf4_analyzer.batch as batch_module
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("preview must only use unresolved metadata")
+
+    paths = (tmp_path / "a.mf4", tmp_path / "b.mf4")
+    preset = AnalysisPreset.free_config(
+        name="unresolved preview",
+        method="time",
+        target_signals=("sig", "aux"),
+        params={"render_group_by": "source"},
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+    preset = replace(preset, source_paths=paths)
+    runner = BatchRunner({}, loader=forbidden)
+    monkeypatch.setattr(runner, "_probe_image_backend", forbidden)
+    monkeypatch.setattr(batch_module, "reserve_output_paths", forbidden)
+
+    preview = runner.preview_outputs(preset, tmp_path / "out")
+
+    assert preview.task_count == 4
+    assert preview.group_count == 2
+    assert preview.data_artifact_count == 4
+    assert preview.image_artifact_count == 2
 
 
 @pytest.mark.parametrize(
