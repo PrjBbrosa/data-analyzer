@@ -365,7 +365,7 @@ def test_batch_heatmap_image_applies_xyz_axis_params(tmp_path):
     assert axis.get_xlim() == pytest.approx((0.25, 0.75))
     assert axis.get_ylim() == pytest.approx((1.25, 1.75))
     assert image.get_clim() == pytest.approx((-40.0, -5.0))
-    assert image.get_cmap().name == "turbo"
+    assert image.get_cmap().name == "viridis"
 
 
 def test_batch_heatmap_image_can_render_linear_z_scale(tmp_path):
