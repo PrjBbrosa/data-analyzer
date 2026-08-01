@@ -3221,6 +3221,500 @@ def test_cancel_after_compute_emits_one_terminal_and_writes_nothing(
     assert result.summary["cancelled"] == 1
 
 
+def _task6_grouped_time_preset(
+    *, group_by="source", layout="overlay", export_data=True,
+    export_image=True, write_manifest=True,
+):
+    return AnalysisPreset.free_config(
+        name="task 6 grouped time",
+        method="time",
+        target_signals=("sig", "aux"),
+        params={"render_group_by": group_by, "render_layout": layout},
+        outputs=BatchOutput(
+            export_data=export_data,
+            export_image=export_image,
+            write_manifest=write_manifest,
+        ),
+    )
+
+
+def _task6_fake_image(
+    payload, path, params=None, *, options=None, context=None,
+    warnings_out=None,
+):
+    Path(path).write_bytes(b"group-image")
+    return Path(path)
+
+
+def test_grouped_runner_probes_once_before_any_output_reservation(
+    tmp_path, monkeypatch,
+):
+    """Catch per-task probes or any reservation that precedes the run probe."""
+    import mf4_analyzer.batch as batch_module
+
+    fd = _make_fd(tmp_path, "probe_order", channels=("sig", "aux"), idx=0)
+    preset = _task6_grouped_time_preset(write_manifest=False)
+    events = []
+    original_probe = BatchRunner._probe_image_backend
+    original_reserve = batch_module.reserve_output_paths
+
+    def capture_probe():
+        events.append("probe")
+        return original_probe()
+
+    def capture_reserve(*args, **kwargs):
+        events.append("reserve")
+        return original_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(BatchRunner, "_probe_image_backend", staticmethod(capture_probe))
+    monkeypatch.setattr(batch_module, "reserve_output_paths", capture_reserve)
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert events.count("probe") == 1
+    assert events[0] == "probe"
+
+
+def test_grouped_backend_missing_degrades_data_image_before_reservation(
+    tmp_path, monkeypatch,
+):
+    """Catch image reservations or absent degraded group journal state."""
+    import mf4_analyzer.batch as batch_module
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_fd(tmp_path, "group_degraded", channels=("sig", "aux"), idx=0)
+    preset = _task6_grouped_time_preset()
+    reservations = []
+    original_reserve = batch_module.reserve_output_paths
+
+    def capture_reserve(directory, stem, extensions, *, conflict_policy):
+        reservations.append(tuple(extensions))
+        return original_reserve(
+            directory, stem, extensions, conflict_policy=conflict_policy,
+        )
+
+    def missing_backend():
+        raise ModuleNotFoundError("renderer unavailable")
+
+    monkeypatch.setattr(BatchRunner, "_probe_image_backend", staticmethod(missing_backend))
+    monkeypatch.setattr(batch_module, "reserve_output_paths", capture_reserve)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "partial"
+    assert [item.status for item in result.items] == ["done", "done"]
+    assert all(item.degraded_reason == _DEGRADED_REASON for item in result.items)
+    assert reservations == [("csv",), ("csv",)]
+    assert len(list((tmp_path / "out").glob("*.csv"))) == 2
+    assert not list((tmp_path / "out").glob("*.png"))
+    groups = load_batch_manifest(result.manifest_path)["render_groups"]
+    assert len(groups) == 1
+    assert groups[0]["status"] == "degraded"
+    assert groups[0]["effective_outputs"] == {"data": "csv"}
+
+
+def test_grouped_image_only_missing_backend_fails_before_compute_or_reserve(
+    tmp_path, monkeypatch,
+):
+    """Catch image-only runs that load/compute or reserve after probe failure."""
+    import mf4_analyzer.batch as batch_module
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_fd(tmp_path, "group_image_only", channels=("sig", "aux"), idx=0)
+    preset = _task6_grouped_time_preset(export_data=False)
+
+    def missing_backend():
+        raise ImportError("renderer unavailable")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("image-only missing backend must fail before compute/reserve")
+
+    monkeypatch.setattr(BatchRunner, "_probe_image_backend", staticmethod(missing_backend))
+    monkeypatch.setattr(BatchRunner, "_compute_preprocessed_time_dataframe", forbidden)
+    monkeypatch.setattr(batch_module, "reserve_output_paths", forbidden)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert [item.status for item in result.items] == ["failed", "failed"]
+    assert all(item.effective_outputs == {} for item in result.items)
+    groups = load_batch_manifest(result.manifest_path)["render_groups"]
+    assert [group["status"] for group in groups] == ["failed"]
+
+
+def test_default_time_keeps_one_task_reservation_and_atomic_artifact_set(
+    tmp_path, monkeypatch,
+):
+    """Catch accidental splitting of the legacy none-mode data/image set."""
+    import mf4_analyzer.batch as batch_module
+
+    fd = _make_fd(tmp_path, "default_atomic", channels=("sig",), idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="default atomic",
+        method="time",
+        signal=(0, "sig"),
+        params={},
+        outputs=BatchOutput(export_data=True, export_image=True, write_manifest=False),
+    )
+    counts = {"reserve": 0, "atomic": 0}
+    original_reserve = batch_module.reserve_output_paths
+    original_atomic = batch_module.atomic_write_set
+
+    def capture_reserve(*args, **kwargs):
+        counts["reserve"] += 1
+        return original_reserve(*args, **kwargs)
+
+    def capture_atomic(*args, **kwargs):
+        counts["atomic"] += 1
+        return original_atomic(*args, **kwargs)
+
+    monkeypatch.setattr(batch_module, "reserve_output_paths", capture_reserve)
+    monkeypatch.setattr(batch_module, "atomic_write_set", capture_atomic)
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert counts == {"reserve": 1, "atomic": 1}
+    assert result.items[0].data_path and result.items[0].image_path
+
+
+def test_explicit_singleton_uses_task_data_stem_and_distinct_group_image_stem(
+    tmp_path, monkeypatch,
+):
+    """Catch singleton groups incorrectly reusing legacy cross-artifact stem."""
+    fd = _make_fd(tmp_path, "singleton_group", channels=("sig",), idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="singleton explicit",
+        method="time",
+        signal=(0, "sig"),
+        params={"render_group_by": "source"},
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    manifest = load_batch_manifest(result.manifest_path)
+    group = manifest["render_groups"][0]
+    assert result.status == "done"
+    assert Path(result.items[0].data_path).stem != Path(group["artifact"]["path"]).stem
+    assert result.items[0].image_path is None
+
+
+@pytest.mark.parametrize("failure_type", [RuntimeError, ModuleNotFoundError])
+def test_group_writer_failure_preserves_task_csv_and_never_degrades(
+    tmp_path, monkeypatch, failure_type,
+):
+    """Catch cross-transaction rollback or writer-time import degradation."""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_fd(tmp_path, "group_writer_fail", channels=("sig", "aux"), idx=0)
+    preset = _task6_grouped_time_preset()
+
+    def fail_image(*args, **kwargs):
+        raise failure_type("writer-time render failure")
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(fail_image))
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "partial"
+    assert [item.status for item in result.items] == ["done", "done"]
+    assert all(not item.degraded_reason for item in result.items)
+    assert len(list((tmp_path / "out").glob("*.csv"))) == 2
+    assert not list((tmp_path / "out").glob("*.png"))
+    manifest = load_batch_manifest(result.manifest_path)
+    assert [entry["status"] for entry in manifest["entries"]] == ["done", "done"]
+    assert manifest["render_groups"][0]["status"] == "failed"
+    assert manifest["render_groups"][0]["degraded_reason"] == ""
+
+
+@pytest.mark.parametrize(
+    ("group_by", "expected_images"), (("source", 2), ("channel", 2)),
+)
+def test_grouped_runner_publishes_task_data_and_exact_group_images(
+    tmp_path, group_by, expected_images,
+):
+    """Catch task-image publication or missing explicit group images."""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    files = {
+        0: _make_fd(tmp_path, "group_a", channels=("sig", "aux"), idx=0),
+        1: _make_fd(tmp_path, "group_b", channels=("sig", "aux"), idx=1),
+    }
+    preset = _task6_grouped_time_preset(group_by=group_by)
+    preset = replace(preset, file_ids=(0, 1))
+
+    result = BatchRunner(files).run(preset, tmp_path / "out")
+
+    manifest = load_batch_manifest(result.manifest_path)
+    assert result.status == "done"
+    assert len(result.items) == 4
+    assert all(item.status == "done" and item.image_path is None for item in result.items)
+    assert len(list((tmp_path / "out").glob("*.csv"))) == 4
+    assert len(list((tmp_path / "out").glob("*.png"))) == expected_images
+    assert len(manifest["render_groups"]) == expected_images
+    assert {group["status"] for group in manifest["render_groups"]} == {"done"}
+
+
+@pytest.mark.parametrize(
+    ("available", "expected_status", "expected_members", "image_count"),
+    (
+        (("sig",), "partial", "1/2", 1),
+        ((), "failed", None, 0),
+    ),
+)
+def test_grouped_runner_renders_only_successful_payloads_and_records_outcome(
+    tmp_path, monkeypatch, available, expected_status, expected_members,
+    image_count,
+):
+    """Catch failed members entering a partial image or empty-group render."""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_fd(tmp_path, "partial_group", channels=available, idx=0)
+    preset = _task6_grouped_time_preset()
+    preset = replace(
+        preset,
+        file_ids=(0,),
+        target_pairs=((0, "sig"), (0, "missing")),
+    )
+    captured = {}
+
+    def capture_image(
+        payload, path, params=None, *, options=None, context=None,
+        warnings_out=None,
+    ):
+        captured["series"] = len(payload[1].series)
+        captured["members"] = context.effective_facts.get("members")
+        return _task6_fake_image(
+            payload, path, params, options=options, context=context,
+            warnings_out=warnings_out,
+        )
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(capture_image))
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    group = load_batch_manifest(result.manifest_path)["render_groups"][0]
+    assert group["status"] == expected_status
+    assert len(list((tmp_path / "out").glob("*.png"))) == image_count
+    if image_count:
+        assert captured == {"series": 1, "members": expected_members}
+    else:
+        assert captured == {}
+
+
+@pytest.mark.parametrize(
+    ("member_count", "layout", "message_fragment"),
+    ((33, "overlay", "members"), (9, "subplot", "panels")),
+)
+def test_grouped_runner_blocks_member_and_panel_guards_but_keeps_data(
+    tmp_path, monkeypatch, member_count, layout, message_fragment,
+):
+    """Catch late guard enforcement that writes a prohibited group image."""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    channels = tuple(f"sig_{index}" for index in range(member_count))
+    fd = _make_fd(tmp_path, "guarded_group", channels=channels, idx=0)
+    preset = AnalysisPreset.free_config(
+        name="guarded group",
+        method="time",
+        target_signals=channels,
+        params={"render_group_by": "source", "render_layout": layout},
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("blocked group must never render")
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(forbidden))
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    group = load_batch_manifest(result.manifest_path)["render_groups"][0]
+    assert len(list((tmp_path / "out").glob("*.csv"))) == member_count
+    assert not list((tmp_path / "out").glob("*.png"))
+    assert group["status"] == "blocked"
+    assert message_fragment in group["message"]
+
+
+def test_group_payload_limit_is_checked_before_spool_write_and_data_continues(
+    tmp_path, monkeypatch,
+):
+    """Catch payload writes performed before the 128 MiB group guard."""
+    import mf4_analyzer.batch_series_spool as spool_module
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_fd(tmp_path, "group_bytes", channels=("sig", "aux"), idx=0)
+    preset = _task6_grouped_time_preset()
+    monkeypatch.setattr(spool_module, "_MAX_GROUP_PAYLOAD_BYTES", 1)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    group = load_batch_manifest(result.manifest_path)["render_groups"][0]
+    assert [item.status for item in result.items] == ["done", "done"]
+    assert len(list((tmp_path / "out").glob("*.csv"))) == 2
+    assert group["status"] == "blocked"
+    assert "group payload" in group["message"]
+
+
+def test_run_spool_limit_blocks_every_incomplete_group_and_data_continues(
+    tmp_path, monkeypatch,
+):
+    """Catch continued spooling after the 2 GiB all-run guard fires."""
+    import mf4_analyzer.batch_series_spool as spool_module
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    files = {
+        0: _make_fd(tmp_path, "spool_a", channels=("sig", "aux"), idx=0),
+        1: _make_fd(tmp_path, "spool_b", channels=("sig", "aux"), idx=1),
+    }
+    preset = _task6_grouped_time_preset(group_by="channel")
+    preset = replace(preset, file_ids=(0, 1))
+    one_payload_bytes = 2 * files[0].data.shape[0] * np.dtype(float).itemsize
+    monkeypatch.setattr(spool_module, "_MAX_SPOOL_BYTES", one_payload_bytes * 2)
+
+    result = BatchRunner(files).run(preset, tmp_path / "out")
+
+    groups = load_batch_manifest(result.manifest_path)["render_groups"]
+    assert len(list((tmp_path / "out").glob("*.csv"))) == 4
+    assert not list((tmp_path / "out").glob("*.png"))
+    assert {group["status"] for group in groups} == {"blocked"}
+    assert all("run spool" in group["message"] for group in groups)
+
+
+def test_grouped_cancellation_closes_and_removes_spool_directory(
+    tmp_path, monkeypatch,
+):
+    """Catch cancellation paths that bypass the spool context manager."""
+    import mf4_analyzer.batch_series_spool as spool_module
+
+    fd = _make_fd(tmp_path, "cancel_spool", channels=("sig", "aux"), idx=0)
+    preset = _task6_grouped_time_preset(write_manifest=False)
+    token = threading.Event()
+    spool_dirs = []
+    real_mkdtemp = spool_module.tempfile.mkdtemp
+    original_compute = BatchRunner._compute_preprocessed_time_dataframe
+
+    def tracked_mkdtemp(*args, **kwargs):
+        kwargs["dir"] = tmp_path
+        path = real_mkdtemp(*args, **kwargs)
+        spool_dirs.append(Path(path))
+        return path
+
+    def compute_then_cancel(*args, **kwargs):
+        frame = original_compute(*args, **kwargs)
+        token.set()
+        return frame
+
+    monkeypatch.setattr(spool_module.tempfile, "mkdtemp", tracked_mkdtemp)
+    monkeypatch.setattr(
+        BatchRunner,
+        "_compute_preprocessed_time_dataframe",
+        staticmethod(compute_then_cancel),
+    )
+
+    result = BatchRunner({0: fd}).run(
+        preset, tmp_path / "out", cancel_token=token,
+    )
+
+    assert result.status == "cancelled"
+    assert len(spool_dirs) == 1
+    assert not spool_dirs[0].exists()
+
+
+def test_group_render_warnings_are_deduplicated_and_mirrored_to_successes(
+    tmp_path, monkeypatch,
+):
+    """Catch warning loss, duplication, or mirroring onto failed members."""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_fd(tmp_path, "warning_group", channels=("sig",), idx=0)
+    preset = _task6_grouped_time_preset()
+    preset = replace(
+        preset,
+        file_ids=(0,),
+        target_pairs=((0, "sig"), (0, "missing")),
+    )
+
+    def warning_image(
+        payload, path, params=None, *, options=None, context=None,
+        warnings_out=None,
+    ):
+        warnings_out.extend(["shared warning", "shared warning"])
+        return _task6_fake_image(
+            payload, path, params, options=options, context=context,
+            warnings_out=warnings_out,
+        )
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(warning_image))
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    successful, failed = result.items
+    group = load_batch_manifest(result.manifest_path)["render_groups"][0]
+    assert successful.warnings.count("shared warning") == 1
+    assert "shared warning" not in failed.warnings
+    assert group["warnings"] == ["shared warning"]
+
+
+def test_explicit_group_data_only_writes_no_render_group_journal(tmp_path):
+    """Catch render_groups leaking into a data-only manifest."""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_fd(tmp_path, "data_only_group", channels=("sig", "aux"), idx=0)
+    preset = _task6_grouped_time_preset(export_image=False)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    manifest = load_batch_manifest(result.manifest_path)
+    assert result.status == "done"
+    assert "render_groups" not in manifest
+
+
+def test_grouped_channel_execution_loads_each_physical_source_once(
+    tmp_path, monkeypatch,
+):
+    """Catch task-major reloads at the real injected loader boundary."""
+    files_by_path = {}
+    for index in range(4):
+        fd = _make_fd(
+            tmp_path, f"physical_{index}", channels=("sig", "aux"), idx=index,
+        )
+        files_by_path[str(fd.filepath)] = fd
+    load_counts = {path: 0 for path in files_by_path}
+
+    def loader(path):
+        key = str(path)
+        load_counts[key] += 1
+        return files_by_path[key]
+
+    preset = _task6_grouped_time_preset(group_by="channel")
+    preset = replace(preset, source_paths=tuple(files_by_path))
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+
+    result = BatchRunner({}, loader=loader).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert load_counts == {path: 1 for path in files_by_path}
+    assert len(result.items) == 8
+    assert len(list((tmp_path / "out").glob("*.csv"))) == 8
+    assert len(list((tmp_path / "out").glob("*.png"))) == 2
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    manifest = load_batch_manifest(result.manifest_path)
+    task_ids = {entry["task_id"] for entry in manifest["entries"]}
+    member_task_ids = {
+        member["task_id"]
+        for group in manifest["render_groups"]
+        for member in group["members"]
+    }
+    assert member_task_ids == task_ids
+
+
 def test_batch_runner_module_has_no_gui_render_dependencies():
     import inspect
     import mf4_analyzer.batch as batch_module
