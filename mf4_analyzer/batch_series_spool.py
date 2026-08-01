@@ -18,6 +18,15 @@ _MAX_GROUP_PAYLOAD_BYTES = 128 * 1024 * 1024
 _MAX_SPOOL_BYTES = 2 * 1024 * 1024 * 1024
 
 
+def validate_group_shape(*, member_count: int, panel_count: int) -> None:
+    """Reject a complete group shape before its first payload write."""
+
+    if int(member_count) > _MAX_GROUP_MEMBERS:
+        raise ValueError(f"group members exceed limit {_MAX_GROUP_MEMBERS}")
+    if int(panel_count) > _MAX_SUBPLOT_PANELS:
+        raise ValueError(f"subplot panels exceed limit {_MAX_SUBPLOT_PANELS}")
+
+
 @dataclass(frozen=True)
 class SpooledSeriesRef:
     x_path: Path
@@ -45,6 +54,7 @@ class BatchSeriesSpool:
         self._spool_bytes = 0
         self._next_file_id = 0
         self._loaded_arrays: list[np.memmap] = []
+        self._series_mappings: dict[int, tuple[np.memmap, np.memmap]] = {}
         self._closed = False
 
     def __enter__(self) -> "BatchSeriesSpool":
@@ -69,20 +79,16 @@ class BatchSeriesSpool:
 
         current_members = self._group_members.get(group_key, set())
         member_count = len(current_members | {task_key})
-        if member_count > _MAX_GROUP_MEMBERS:
-            raise ValueError(
-                f"group members exceed limit {_MAX_GROUP_MEMBERS}"
-            )
         current_panels = self._group_panels.get(group_key, set())
         panels = current_panels | {
             item.panel
             for item in prepared
             if item.x.size > 0 and item.y.size > 0
         }
-        if len(panels) > _MAX_SUBPLOT_PANELS:
-            raise ValueError(
-                f"subplot panels exceed limit {_MAX_SUBPLOT_PANELS}"
-            )
+        validate_group_shape(
+            member_count=member_count,
+            panel_count=len(panels),
+        )
 
         payload_bytes = sum(
             int(item.x.nbytes) + int(item.y.nbytes) for item in prepared
@@ -136,36 +142,67 @@ class BatchSeriesSpool:
     ) -> tuple[BatchSeries, ...]:
         self._require_open()
         loaded = []
-        for ref in refs:
-            x = np.load(ref.x_path, mmap_mode="r", allow_pickle=False)
-            self._loaded_arrays.append(x)
-            y = np.load(ref.y_path, mmap_mode="r", allow_pickle=False)
-            self._loaded_arrays.append(y)
-            loaded.append(BatchSeries(
-                x=x,
-                y=y,
-                label=ref.label,
-                unit=ref.unit,
-                x_unit=ref.x_unit,
-                linestyle=ref.linestyle,
-                panel=ref.panel,
-            ))
+        opened: list[np.memmap] = []
+        try:
+            for ref in refs:
+                x = np.load(ref.x_path, mmap_mode="r", allow_pickle=False)
+                opened.append(x)
+                y = np.load(ref.y_path, mmap_mode="r", allow_pickle=False)
+                opened.append(y)
+                loaded.append(BatchSeries(
+                    x=x,
+                    y=y,
+                    label=ref.label,
+                    unit=ref.unit,
+                    x_unit=ref.x_unit,
+                    linestyle=ref.linestyle,
+                    panel=ref.panel,
+                ))
+        except Exception:
+            self._close_arrays(opened)
+            raise
+        self._loaded_arrays.extend(opened)
+        for index, item in enumerate(loaded):
+            offset = index * 2
+            self._series_mappings[id(item)] = (
+                opened[offset], opened[offset + 1],
+            )
         return tuple(loaded)
+
+    def release_loaded(self, series: Sequence[BatchSeries]) -> None:
+        """Release mappings owned by one completed or failed render group."""
+
+        released = [
+            array
+            for item in series
+            for array in self._series_mappings.pop(id(item), ())
+        ]
+        target_ids = {id(array) for array in released}
+        self._close_arrays(released)
+        self._loaded_arrays = [
+            array for array in self._loaded_arrays
+            if id(array) not in target_ids
+        ]
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        for array in reversed(self._loaded_arrays):
-            mapping = getattr(array, "_mmap", None)
-            if mapping is not None:
-                mapping.close()
+        self._close_arrays(self._loaded_arrays)
         self._loaded_arrays.clear()
+        self._series_mappings.clear()
         shutil.rmtree(self._directory)
+
+    @staticmethod
+    def _close_arrays(arrays: Sequence[np.ndarray]) -> None:
+        for array in reversed(tuple(arrays)):
+            mapping = getattr(array, "_mmap", None)
+            if mapping is not None and not mapping.closed:
+                mapping.close()
 
     def _require_open(self) -> None:
         if self._closed:
             raise RuntimeError("batch series spool is closed")
 
 
-__all__ = ["BatchSeriesSpool", "SpooledSeriesRef"]
+__all__ = ["BatchSeriesSpool", "SpooledSeriesRef", "validate_group_shape"]

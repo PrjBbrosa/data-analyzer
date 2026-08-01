@@ -222,6 +222,7 @@ class TaskComputeResult:
     item: BatchItemResult
     series_refs: tuple[SpooledSeriesRef, ...] = ()
     render_error: str = ''
+    render_status: str = ''
 
 
 @dataclass
@@ -813,11 +814,7 @@ class BatchRunner:
         try:
             tasks = list(self._expand_tasks(
                 preset,
-                allow_source_load=(
-                    not explicit_grouping
-                    and resume_data is None
-                    and retry_scope is None
-                ),
+                allow_source_load=False,
             ))
         except Exception as exc:
             for physical_key in tuple(self._disk_cache):
@@ -829,11 +826,6 @@ class BatchRunner:
                 for source_key, channel in tasks
                 if (source_key, channel, preset.method) in retry_scope
             ]
-        if not tasks:
-            for physical_key in tuple(self._disk_cache):
-                self._evict_physical(physical_key)
-            return finish_result('blocked', blocked=['no matching batch tasks'])
-
         render_tasks = []
         for source_key, channel in tasks:
             fd = self._known_file_data(source_key)
@@ -860,6 +852,19 @@ class BatchRunner:
                     params=requested_params,
                 )
             render_tasks.append(RenderTask(source_key, channel, identity))
+        if explicit_grouping:
+            tasks = sorted(
+                tasks,
+                key=lambda task: self._grouped_task_sort_key(task[0]),
+            )
+            render_task_by_key = {
+                (task.source_key, task.channel): task
+                for task in render_tasks
+            }
+            render_tasks = [
+                render_task_by_key[(source_key, channel)]
+                for source_key, channel in tasks
+            ]
         render_groups = (
             group_render_tasks(render_tasks, requested_params)
             if explicit_grouping and 'image' in self._required_artifacts(
@@ -920,6 +925,23 @@ class BatchRunner:
             return finish_result(
                 'blocked', items=failed_items, blocked=[str(exc)],
             )
+
+        if not tasks:
+            try:
+                tasks = list(self._expand_tasks(
+                    preset,
+                    allow_source_load=True,
+                ))
+            except Exception as exc:
+                for physical_key in tuple(self._disk_cache):
+                    self._evict_physical(physical_key)
+                return finish_result('blocked', blocked=[str(exc)])
+            if not tasks:
+                for physical_key in tuple(self._disk_cache):
+                    self._evict_physical(physical_key)
+                return finish_result(
+                    'blocked', blocked=['no matching batch tasks'],
+                )
 
         items: list[BatchItemResult] = []
         blocked: list[str] = []
@@ -998,15 +1020,25 @@ class BatchRunner:
                 group.identity.group_id: [] for group in render_groups
             }
             group_blocked: dict[str, str] = {}
+            group_failed: dict[str, str] = {}
+            spool_class = None
+            spool_module = None
+            if 'image' in effective_plan.effective:
+                from . import batch_series_spool as spool_module
+
+                spool_class = spool_module.BatchSeriesSpool
             for group in render_groups:
-                if len(group.members) > 32:
-                    group_blocked[group.identity.group_id] = (
-                        'group members exceed limit 32'
-                    )
-                elif group.layout == 'subplot' and len(group.members) > 8:
-                    group_blocked[group.identity.group_id] = (
-                        'subplot panels exceed limit 8'
-                    )
+                if spool_module is not None:
+                    try:
+                        spool_module.validate_group_shape(
+                            member_count=len(group.members),
+                            panel_count=(
+                                len(group.members)
+                                if group.layout == 'subplot' else 0
+                            ),
+                        )
+                    except ValueError as exc:
+                        group_blocked[group.identity.group_id] = str(exc)
                 if recorder is not None:
                     try:
                         recorder.upsert_render_group(
@@ -1028,10 +1060,8 @@ class BatchRunner:
 
             prev_physical_key = None
             run_spool_blocked = False
-            if 'image' in effective_plan.effective:
-                from .batch_series_spool import BatchSeriesSpool
-
-                spool_context = BatchSeriesSpool()
+            if spool_class is not None:
+                spool_context = spool_class()
             else:
                 spool_context = nullcontext(None)
             with spool_context as spool:
@@ -1099,7 +1129,11 @@ class BatchRunner:
                         if group is not None:
                             group_results[group.identity.group_id].append(computed)
                         if computed.render_error and group is not None:
-                            if 'run spool exceeds' in computed.render_error:
+                            if computed.render_status == 'failed':
+                                group_failed[
+                                    group.identity.group_id
+                                ] = computed.render_error
+                            elif 'run spool exceeds' in computed.render_error:
                                 run_spool_blocked = True
                                 for candidate in render_groups:
                                     successful = sum(
@@ -1228,7 +1262,6 @@ class BatchRunner:
                 for physical_key in tuple(self._disk_cache):
                     self._evict_physical(physical_key)
 
-                group_terminal_statuses = []
                 for group in render_groups:
                     group_id = group.identity.group_id
                     results = group_results[group_id]
@@ -1243,6 +1276,12 @@ class BatchRunner:
                             group_id=group_id,
                             status='degraded',
                             message=effective_plan.degraded_reason,
+                        )
+                    elif group_id in group_failed:
+                        outcome = RenderGroupResult(
+                            group_id=group_id,
+                            status='failed',
+                            message=group_failed[group_id],
                         )
                     elif group_id in group_blocked:
                         outcome = RenderGroupResult(
@@ -1288,7 +1327,6 @@ class BatchRunner:
                                 status='failed',
                                 message=str(exc),
                             )
-                    group_terminal_statuses.append(outcome.status)
                     if outcome.warnings:
                         for computed in results:
                             if computed.series_refs:
@@ -1567,6 +1605,21 @@ class BatchRunner:
         key = raw if self._loader is not None else canonical_source_path(raw)
         self._physical_paths.setdefault(key, raw)
         return key
+
+    def _grouped_task_sort_key(self, source_key) -> tuple[str]:
+        """Order grouped execution by canonical physical source and member."""
+
+        fd = self._known_file_data(source_key)
+        path = getattr(fd, 'filepath', None) if fd is not None else None
+        physical_key = self._physical_for_source(source_key)
+        if path in (None, '') and physical_key is not None:
+            path = self._physical_paths.get(physical_key, physical_key)
+        physical = (
+            canonical_source_path(path)
+            if path not in (None, '')
+            else f'live:{source_key!r}'
+        )
+        return (physical,)
 
     def _register_source_locator(self, source_id, path) -> None:
         physical_key = self._physical_cache_key(path)
@@ -1931,7 +1984,23 @@ class BatchRunner:
                     if available is None or channel in available:
                         yield source_key, channel
             return
-        # Pattern fallback (legacy / test path): eager load to enumerate channels.
+        # Pattern fallback (legacy / test path): the pre-probe planning pass may
+        # enumerate already-resident sources only.  Lazy sources are expanded
+        # by run() after the effective image decision succeeds.
+        if not allow_source_load:
+            pattern = preset.signal_pattern.strip()
+            for source_key in self._scope_source_keys(
+                preset, allow_source_load=False,
+            ):
+                fd = self._known_file_data(source_key)
+                if fd is None:
+                    continue
+                for ch in fd.get_signal_channels():
+                    if preset.method.startswith('order') and ch == preset.rpm_channel:
+                        continue
+                    if self._matches(ch, pattern):
+                        yield source_key, ch
+            return
         # UI never produces pattern mode (always uses target_signals via free_config).
         files_iter = list(self._resolve_files(preset))
         pattern = preset.signal_pattern.strip()
@@ -2093,6 +2162,7 @@ class BatchRunner:
             )
             refs: tuple[SpooledSeriesRef, ...] = ()
             render_error = ''
+            render_status = ''
             if payload_required:
                 series = self._build_time_series(
                     fd=fd,
@@ -2110,6 +2180,12 @@ class BatchRunner:
                     )
                 except ValueError as exc:
                     render_error = str(exc)
+                    render_status = 'blocked'
+                except _BatchCancelled:
+                    raise
+                except Exception as exc:
+                    render_error = str(exc)
+                    render_status = 'failed'
 
             facts = {}
             if data_path is not None:
@@ -2141,21 +2217,14 @@ class BatchRunner:
                 finished_at=utc_now(),
             )
             return TaskComputeResult(
-                item=item, series_refs=refs, render_error=render_error,
+                item=item,
+                series_refs=refs,
+                render_error=render_error,
+                render_status=render_status,
             )
         finally:
             if reservation is not None:
                 reservation.release()
-
-    @staticmethod
-    def _close_group_mappings(series) -> None:
-        seen = set()
-        for item in series:
-            for array in (item.x, item.y):
-                mapping = getattr(array, '_mmap', None)
-                if mapping is not None and id(mapping) not in seen:
-                    seen.add(id(mapping))
-                    mapping.close()
 
     def _render_group(
         self,
@@ -2181,9 +2250,10 @@ class BatchRunner:
         refs = tuple(
             ref for result in usable for ref in result.series_refs
         )
-        loaded = spool.load(refs)
+        loaded = ()
         reservation = None
         try:
+            loaded = spool.load(refs)
             self._check_cancel(cancel_token, 'group render')
             params = normalize_batch_params(preset.params, preset.method)
             x_source = str(params.get('x_source', 'time') or 'time').lower()
@@ -2305,7 +2375,7 @@ class BatchRunner:
         finally:
             if reservation is not None:
                 reservation.release()
-            self._close_group_mappings(loaded)
+            spool.release_loaded(loaded)
 
     def _render_group_manifest_entry(
         self,

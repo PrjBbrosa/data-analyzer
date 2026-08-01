@@ -3715,6 +3715,313 @@ def test_grouped_channel_execution_loads_each_physical_source_once(
     assert member_task_ids == task_ids
 
 
+def test_default_lazy_image_only_missing_backend_probes_before_source_load(
+    tmp_path, monkeypatch,
+):
+    """Catch default task enumeration loading a lazy source before probe."""
+    import mf4_analyzer.batch as batch_module
+
+    source = tmp_path / "lazy-default.csv"
+    events = []
+
+    def loader(_path):
+        events.append("load")
+        pytest.fail("missing image backend must stop before source load")
+
+    def missing_backend():
+        events.append("probe")
+        raise ModuleNotFoundError("renderer unavailable")
+
+    def forbidden_reserve(*_args, **_kwargs):
+        events.append("reserve")
+        pytest.fail("missing image backend must stop before reservation")
+
+    preset = AnalysisPreset.free_config(
+        name="lazy default image only",
+        method="time",
+        target_signals=("sig",),
+        params={},
+        outputs=BatchOutput(
+            export_data=False,
+            export_image=True,
+            write_manifest=False,
+        ),
+    )
+    preset = replace(preset, source_paths=(source,))
+    runner = BatchRunner({}, loader=loader)
+    monkeypatch.setattr(
+        runner, "_probe_image_backend", staticmethod(missing_backend),
+    )
+    monkeypatch.setattr(batch_module, "reserve_output_paths", forbidden_reserve)
+
+    result = runner.run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert len(result.items) == 1
+    assert result.items[0].status == "failed"
+    assert events == ["probe"]
+
+
+def test_grouped_interleaved_pairs_regroup_by_canonical_physical_source(
+    tmp_path, monkeypatch,
+):
+    """Catch A/B/A task order evicting and reloading physical source A."""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    source_a = _make_fd(
+        tmp_path, "interleaved_a", channels=("sig", "aux"), idx=0,
+    )
+    source_b = _make_fd(
+        tmp_path, "interleaved_b", channels=("sig", "aux"), idx=1,
+    )
+    files = {
+        str(source_a.filepath): source_a,
+        str(source_b.filepath): source_b,
+    }
+
+    def run_pairs(pairs, output_name):
+        calls = {path: 0 for path in files}
+
+        def loader(path):
+            key = str(path)
+            calls[key] += 1
+            return files[key]
+
+        preset = _task6_grouped_time_preset(group_by="channel")
+        preset = replace(
+            preset,
+            target_pairs=tuple(pairs),
+            source_paths=tuple(files),
+        )
+        result = BatchRunner({}, loader=loader).run(
+            preset, tmp_path / output_name,
+        )
+        manifest = load_batch_manifest(result.manifest_path)
+        groups = tuple(
+            (
+                group["group_id"],
+                tuple(member["task_id"] for member in group["members"]),
+            )
+            for group in manifest["render_groups"]
+        )
+        return result, calls, groups
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    interleaved = (
+        (str(source_a.filepath), "sig"),
+        (str(source_b.filepath), "sig"),
+        (str(source_a.filepath), "aux"),
+    )
+    canonical = (
+        (str(source_a.filepath), "sig"),
+        (str(source_a.filepath), "aux"),
+        (str(source_b.filepath), "sig"),
+    )
+
+    first, first_calls, first_groups = run_pairs(interleaved, "interleaved")
+    second, second_calls, second_groups = run_pairs(canonical, "canonical")
+
+    assert first.status == second.status == "done"
+    assert first_calls == second_calls == {path: 1 for path in files}
+    assert first_groups == second_groups
+
+
+@pytest.mark.parametrize("error_type", [OSError, RuntimeError])
+def test_group_spool_append_failure_after_csv_commit_keeps_task_done(
+    tmp_path, monkeypatch, error_type,
+):
+    """Catch a post-commit spool failure rewriting a healthy task as failed."""
+    import mf4_analyzer.batch_series_spool as spool_module
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_fd(tmp_path, "append_failure", channels=("sig",), idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="append failure after commit",
+        method="time",
+        signal=(0, "sig"),
+        params={"render_group_by": "source"},
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+
+    def fail_append(*_args, **_kwargs):
+        raise error_type("spool append failed after csv commit")
+
+    monkeypatch.setattr(spool_module.BatchSeriesSpool, "append", fail_append)
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    manifest = load_batch_manifest(result.manifest_path)
+    item = result.items[0]
+    entry = manifest["entries"][0]
+    group = manifest["render_groups"][0]
+    assert result.status == "partial"
+    assert item.status == entry["status"] == "done"
+    assert item.data_path and Path(item.data_path).is_file()
+    assert set(entry["artifacts"]) == {"data"}
+    assert group["status"] == "failed"
+    assert "spool append failed after csv commit" in group["message"]
+
+
+def test_group_load_failure_releases_partial_mmaps_before_next_group(
+    tmp_path, monkeypatch,
+):
+    """Catch one failed group retaining mmap handles into the next render."""
+    import mf4_analyzer.batch_series_spool as spool_module
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    files = {
+        0: _make_fd(tmp_path, "mmap_a", channels=("sig",), idx=0),
+        1: _make_fd(tmp_path, "mmap_b", channels=("sig",), idx=1),
+    }
+    preset = AnalysisPreset.free_config(
+        name="transactional mmap groups",
+        method="time",
+        target_signals=("sig",),
+        params={"render_group_by": "source"},
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+    preset = replace(preset, file_ids=(0, 1))
+    real_load = spool_module.np.load
+    mappings = []
+    load_calls = 0
+    render_calls = 0
+
+    def fail_second_load(*args, **kwargs):
+        nonlocal load_calls
+        load_calls += 1
+        if load_calls == 2:
+            raise OSError("first group y mmap failed")
+        array = real_load(*args, **kwargs)
+        mappings.append(array)
+        return array
+
+    def render_second_group(
+        payload, path, params=None, *, options=None, context=None,
+        warnings_out=None,
+    ):
+        nonlocal render_calls
+        render_calls += 1
+        assert mappings[0]._mmap.closed
+        return _task6_fake_image(
+            payload, path, params, options=options, context=context,
+            warnings_out=warnings_out,
+        )
+
+    monkeypatch.setattr(spool_module.np, "load", fail_second_load)
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(render_second_group))
+
+    result = BatchRunner(files).run(preset, tmp_path / "out")
+
+    groups = load_batch_manifest(result.manifest_path)["render_groups"]
+    assert result.status == "partial"
+    assert [group["status"] for group in groups] == ["failed", "done"]
+    assert render_calls == 1
+    assert mappings and all(array._mmap.closed for array in mappings)
+
+
+def test_successful_group_releases_mmaps_before_loading_next_group(
+    tmp_path, monkeypatch,
+):
+    """Catch successful group mappings accumulating until whole-run close."""
+    import mf4_analyzer.batch_series_spool as spool_module
+
+    files = {
+        0: _make_fd(tmp_path, "release_a", channels=("sig",), idx=0),
+        1: _make_fd(tmp_path, "release_b", channels=("sig",), idx=1),
+    }
+    preset = AnalysisPreset.free_config(
+        name="release mappings per group",
+        method="time",
+        target_signals=("sig",),
+        params={"render_group_by": "source"},
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+    preset = replace(preset, file_ids=(0, 1))
+    real_load = spool_module.np.load
+    mappings = []
+    render_calls = 0
+
+    def recording_load(*args, **kwargs):
+        array = real_load(*args, **kwargs)
+        mappings.append(array)
+        return array
+
+    def render_group(
+        payload, path, params=None, *, options=None, context=None,
+        warnings_out=None,
+    ):
+        nonlocal render_calls
+        render_calls += 1
+        if render_calls == 2:
+            assert all(array._mmap.closed for array in mappings[:2])
+        return _task6_fake_image(
+            payload, path, params, options=options, context=context,
+            warnings_out=warnings_out,
+        )
+
+    monkeypatch.setattr(spool_module.np, "load", recording_load)
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(render_group))
+
+    result = BatchRunner(files).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert render_calls == 2
+    assert all(array._mmap.closed for array in mappings)
+
+
+@pytest.mark.parametrize(
+    (
+        "limit_name", "limit_value", "member_count", "layout",
+        "expected_group_status", "expected_save_calls",
+    ),
+    (
+        ("_MAX_GROUP_MEMBERS", 1, 2, "overlay", "blocked", 0),
+        ("_MAX_SUBPLOT_PANELS", 1, 2, "subplot", "blocked", 0),
+        ("_MAX_GROUP_MEMBERS", 33, 33, "overlay", "done", 66),
+        ("_MAX_SUBPLOT_PANELS", 9, 9, "subplot", "done", 18),
+    ),
+)
+def test_runner_group_precheck_uses_spool_limit_authority_before_first_save(
+    tmp_path,
+    monkeypatch,
+    limit_name,
+    limit_value,
+    member_count,
+    layout,
+    expected_group_status,
+    expected_save_calls,
+):
+    """Catch duplicated runner literals diverging from patched spool limits."""
+    import mf4_analyzer.batch_series_spool as spool_module
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    channels = tuple(f"limit_sig_{index}" for index in range(member_count))
+    fd = _make_fd(tmp_path, "limit_authority", channels=channels, idx=0)
+    preset = AnalysisPreset.free_config(
+        name="spool limit authority",
+        method="time",
+        target_signals=channels,
+        params={"render_group_by": "source", "render_layout": layout},
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+    save_calls = []
+    real_save = spool_module.np.save
+
+    def recording_save(*args, **kwargs):
+        save_calls.append(Path(args[0]))
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(spool_module, limit_name, limit_value)
+    monkeypatch.setattr(spool_module.np, "save", recording_save)
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    group = load_batch_manifest(result.manifest_path)["render_groups"][0]
+    assert group["status"] == expected_group_status
+    assert len(save_calls) == expected_save_calls
+
+
 def test_batch_runner_module_has_no_gui_render_dependencies():
     import inspect
     import mf4_analyzer.batch as batch_module

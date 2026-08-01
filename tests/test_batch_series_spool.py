@@ -200,3 +200,34 @@ def test_spool_allows_exact_group_and_run_byte_limits(tmp_path, monkeypatch):
             spool.append("group-3", "task-4", (_series(size=1),))
 
     assert first[0].nbytes == second[0].nbytes == 16
+
+
+def test_spool_load_closes_partial_mappings_immediately_on_later_load_error(
+    tmp_path, monkeypatch,
+):
+    """Catch a failed load retaining earlier mmap handles until spool close."""
+    import mf4_analyzer.batch_series_spool as spool_module
+
+    real_load = spool_module.np.load
+    mappings = []
+    calls = 0
+
+    def fail_second_load(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("second mmap failed")
+        array = real_load(*args, **kwargs)
+        mappings.append(array)
+        return array
+
+    monkeypatch.setattr(spool_module.np, "load", fail_second_load)
+    with spool_module.BatchSeriesSpool(directory=tmp_path) as spool:
+        refs = spool.append("group", "task", (_series(),))
+
+        with pytest.raises(OSError, match="second mmap failed"):
+            spool.load(refs)
+
+        assert len(mappings) == 1
+        assert mappings[0]._mmap.closed
+        refs[0].x_path.unlink()
