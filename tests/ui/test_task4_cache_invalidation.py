@@ -21,6 +21,7 @@ import pytest
 from mf4_analyzer.ui.analysis_cache import AnalysisResultCache
 from mf4_analyzer.ui.main_window._fft_time_mixin import FFTTimeMixin
 from mf4_analyzer.ui.main_window.window import MainWindow
+from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +72,7 @@ def test_apply_custom_xaxis_invalidates_fft_time_analysis_cache(qtbot):
             return "channel"
 
         def xaxis_channel_data(self):
-            return ("f1", "custom_x")
+            return ("per_source_name", None, "custom_x")
 
         def xaxis_label(self):
             return "Custom X"
@@ -101,7 +102,14 @@ def test_apply_custom_xaxis_invalidates_fft_time_analysis_cache(qtbot):
 
     MainWindow._apply_xaxis(mw)
 
-    assert (mw._custom_xaxis_fid, mw._custom_xaxis_ch) == ("f1", "custom_x")
+    assert mw._custom_xaxis_spec == CustomXAxisSpec(
+        mode="channel",
+        resolver="per_source_name",
+        channel="custom_x",
+        source_fid=None,
+        label="Custom X",
+    )
+    assert (mw._custom_xaxis_fid, mw._custom_xaxis_ch) == (None, None)
     assert cache.get(key) is None, (
         "custom X axis left an FFT-vs-Time analysis-cache entry reachable; "
         "the next do_fft_time lookup would use stale data"

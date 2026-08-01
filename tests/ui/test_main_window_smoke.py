@@ -948,7 +948,7 @@ def test_custom_xaxis_time_range_filters_by_file_time_axis(qapp, qtbot, tmp_path
     combo = w.inspector.top._combo_xaxis_ch
     angle_idx = next(
         i for i in range(combo.count())
-        if combo.itemData(i) == (fid, 'angle')
+        if combo.itemData(i) == ('per_source_name', None, 'angle')
     )
     combo.setCurrentIndex(angle_idx)
     w.inspector.top.set_range_from_span(2.0, 4.0)
@@ -1006,7 +1006,8 @@ def test_custom_xaxis_source_change_autoscales_new_x_extent(qapp, qtbot, tmp_pat
     w._on_xaxis_mode_changed('channel')
     combo = w.inspector.top._combo_xaxis_ch
     combo.setCurrentIndex(next(
-        i for i in range(combo.count()) if combo.itemData(i) == (fid, 'angle')
+        i for i in range(combo.count())
+        if combo.itemData(i) == ('per_source_name', None, 'angle')
     ))
 
     w._apply_xaxis()
@@ -1067,7 +1068,8 @@ def test_custom_xaxis_axis_title_includes_source_unit(qapp, qtbot, tmp_path):
     w._on_xaxis_mode_changed('channel')
     combo = w.inspector.top._combo_xaxis_ch
     combo.setCurrentIndex(next(
-        i for i in range(combo.count()) if combo.itemData(i) == (fid, 'angle')
+        i for i in range(combo.count())
+        if combo.itemData(i) == ('per_source_name', None, 'angle')
     ))
     w._apply_xaxis()
     qapp.processEvents()
@@ -1092,43 +1094,416 @@ def test_custom_xaxis_axis_title_includes_source_unit(qapp, qtbot, tmp_path):
     assert "Rotor angle (deg)" in axis_titles
 
 
-def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
-    """If user selects a custom X channel whose length != data, surface a
-    non-blocking warning toast and abort."""
+def test_custom_xaxis_uses_each_sources_unequal_length_x(qapp, qtbot, tmp_path):
+    """Different source lengths are valid when each source owns its X/Y pair."""
     import pandas as pd
     import numpy as np
+    import pytest
     from unittest.mock import patch
     from mf4_analyzer.ui.main_window import MainWindow
-    # Second csv with different length
-    df = pd.DataFrame({"time": np.linspace(0, 1, 500), "pressure": np.random.randn(500)})
-    p2 = tmp_path / "shorter.csv"; df.to_csv(p2, index=False)
+
+    p1 = tmp_path / "long.csv"
+    p2 = tmp_path / "short.csv"
+    pd.DataFrame({
+        "time": np.arange(5, dtype=float),
+        "angle": np.array([-20.0, -10.0, 0.0, 10.0, 20.0]),
+        "force": np.arange(100.0, 105.0),
+    }).to_csv(p1, index=False)
+    pd.DataFrame({
+        "time": np.arange(3, dtype=float),
+        "angle": np.array([-30.0, 0.0, 30.0]),
+        "force": np.arange(200.0, 203.0),
+    }).to_csv(p2, index=False)
 
     w = MainWindow(); qtbot.addWidget(w)
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
-               return_value=([loaded_csv, str(p2)], "")):
+               return_value=([str(p1), str(p2)], "")):
         w.load_files()
-    # User-request 2026-05-20: file load no longer auto-checks channel[0].
-    # The validation path under test reads "every file whose channels are
-    # currently checked"; explicitly check file 1's first channel so the
-    # mismatch-vs-file-2 assertion has something to compare against.
-    fid_first = next(iter(w.files))
-    w.channel_list.check_first_channel(fid_first)
+    fids = list(w.files)
+    w.navigator.set_checked_channels([(fid, "force") for fid in fids])
     qapp.processEvents()
-    # Pick custom X from file 2's channel while file 1 checked
+
     w.inspector.top.set_xaxis_mode('channel')
     w._on_xaxis_mode_changed('channel')
-    w.inspector.top._combo_xaxis_ch.setCurrentIndex(
-        w.inspector.top._combo_xaxis_ch.count() - 1  # last candidate (from file 2)
+    combo = w.inspector.top._combo_xaxis_ch
+    idx = next(
+        i for i in range(combo.count())
+        if combo.itemData(i) == ('per_source_name', None, 'angle')
     )
+    combo.setCurrentIndex(idx)
     qapp.processEvents()
-    # Validation feedback now goes through MainWindow.toast (non-blocking)
-    # rather than QMessageBox.warning.
+
     with patch.object(MainWindow, 'toast') as toast:
         w._apply_xaxis()
-    assert toast.called
-    levels = [call.args[1] if len(call.args) > 1 else call.kwargs.get('level')
-              for call in toast.call_args_list]
-    assert 'warning' in levels
+    assert not any(
+        (call.args[1] if len(call.args) > 1 else call.kwargs.get('level'))
+        == 'warning'
+        for call in toast.call_args_list
+    )
+
+    result = w._build_time_plot_data()
+    assert result.attempted_channel_keys == {
+        (fids[0], "force"), (fids[1], "force"),
+    }
+    assert result.successful_channel_keys == result.attempted_channel_keys
+    assert result.issues == []
+    assert len(result.rows) == 2
+    x_by_fid = {row[6]: row[2] for row in result.rows}
+    np.testing.assert_allclose(x_by_fid[fids[0]], [-20, -10, 0, 10, 20])
+    np.testing.assert_allclose(x_by_fid[fids[1]], [-30, 0, 30])
+
+    w.chart_stack.set_plot_mode('subplot')
+    w.plot_time()
+    qapp.processEvents()
+    assert w.canvas_time._overlay_mode is False
+    assert len(w.canvas_time.axes_list) == 2
+    subplot_x_by_fid = {
+        fid: values[0]
+        for name, values in w.canvas_time.channel_data.items()
+        for fid in fids
+        if name == w.files[fid].get_prefixed_channel('force')
+    }
+    np.testing.assert_allclose(subplot_x_by_fid[fids[0]], [-20, -10, 0, 10, 20])
+    np.testing.assert_allclose(subplot_x_by_fid[fids[1]], [-30, 0, 30])
+
+    w.chart_stack.set_plot_mode('overlay')
+    w.plot_time()
+    qapp.processEvents()
+    canvas_x_by_fid = {
+        fid: values[0]
+        for name, values in w.canvas_time.channel_data.items()
+        for fid in fids
+        if name == w.files[fid].get_prefixed_channel('force')
+    }
+    np.testing.assert_allclose(canvas_x_by_fid[fids[0]], [-20, -10, 0, 10, 20])
+    np.testing.assert_allclose(canvas_x_by_fid[fids[1]], [-30, 0, 30])
+    assert w.canvas_time.get_visible_xlim() == pytest.approx((-30.0, 30.0))
+
+    angle_text = combo.itemText(idx)
+    assert "2/2" in angle_text
+
+
+def test_custom_xaxis_filters_each_source_by_its_acquisition_time(
+    qapp, qtbot, tmp_path
+):
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    paths = []
+    for name, offset in (("a", 100.0), ("b", 200.0)):
+        path = tmp_path / f"{name}.csv"
+        pd.DataFrame({
+            "time": np.arange(6, dtype=float),
+            "angle": offset + np.arange(6, dtype=float),
+            "force": (offset * 10) + np.arange(6, dtype=float),
+        }).to_csv(path, index=False)
+        paths.append(path)
+
+    w = MainWindow(); qtbot.addWidget(w)
+    for path in paths:
+        w._load_one(str(path))
+    fids = list(w.files)
+    w.navigator.set_checked_channels([(fid, "force") for fid in fids])
+    w._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel", resolver="per_source_name", channel="angle",
+        label="Angle",
+    )
+
+    result = w._build_time_plot_data(
+        range_enabled=True, range_lo=2.0, range_hi=4.0,
+    )
+
+    assert result.successful_channel_keys == {
+        (fids[0], "force"), (fids[1], "force"),
+    }
+    x_by_fid = {row[6]: row[2] for row in result.rows}
+    np.testing.assert_allclose(x_by_fid[fids[0]], [102, 103, 104])
+    np.testing.assert_allclose(x_by_fid[fids[1]], [202, 203, 204])
+
+
+def test_custom_xaxis_finite_mask_is_applied_after_time_filter_and_filtering(
+    qapp, qtbot, tmp_path
+):
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    path = tmp_path / "finite-x.csv"
+    pd.DataFrame({
+        "time": np.arange(6, dtype=float),
+        "angle": [0.0, np.nan, 2.0, np.inf, 4.0, 5.0],
+        "force": np.arange(10.0, 16.0),
+    }).to_csv(path, index=False)
+    w = MainWindow(); qtbot.addWidget(w); w._load_one(str(path))
+    fid = next(iter(w.files))
+    # CSV import interpolates NaNs by design; inject raw display-X edge values
+    # after load so this regression exercises the TimeDomain finite-X mask.
+    w.files[fid].data["angle"] = [0.0, np.nan, 2.0, np.inf, 4.0, 5.0]
+    w.navigator.set_checked_channels([(fid, "force")])
+    w._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel", resolver="per_source_name", channel="angle",
+    )
+
+    result = w._build_time_plot_data(
+        range_enabled=True, range_lo=1.0, range_hi=4.0,
+    )
+
+    assert result.issues == []
+    row = result.rows[0]
+    np.testing.assert_allclose(row[2], [2.0, 4.0])
+    np.testing.assert_allclose(row[3], [12.0, 14.0])
+
+
+def test_custom_xaxis_uses_largest_normalized_unit_cohort(qapp, qtbot, tmp_path):
+    import numpy as np
+    import pandas as pd
+    from PyQt5.QtWidgets import QToolButton
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    paths = []
+    for index in range(3):
+        path = tmp_path / f"unit-{index}.csv"
+        pd.DataFrame({
+            "time": np.arange(4, dtype=float),
+            "angle": np.arange(4, dtype=float) + index,
+            "force": np.arange(4, dtype=float),
+        }).to_csv(path, index=False)
+        paths.append(path)
+    w = MainWindow(); qtbot.addWidget(w)
+    for path in paths:
+        w._load_one(str(path))
+    fids = list(w.files)
+    for fid, unit in zip(fids, ("m/s²", "m/s^2", "g")):
+        w.files[fid].channel_units["angle"] = unit
+    w.navigator.set_checked_channels([(fid, "force") for fid in fids])
+    w._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel", resolver="per_source_name", channel="angle",
+    )
+
+    result = w._build_time_plot_data()
+
+    assert result.successful_channel_keys == {
+        (fids[0], "force"), (fids[1], "force"),
+    }
+    assert [issue.code for issue in result.issues] == ["x_unit_incompatible"]
+    assert result.issues[0].source_fid == fids[2]
+    assert result.x_unit == "m/s²"
+
+    w.plot_time()
+    qapp.processEvents()
+    delta_results = []
+    original_delta = w.canvas_time.try_apply_selection_delta
+
+    def record_delta(*args, **kwargs):
+        value = original_delta(*args, **kwargs)
+        delta_results.append(value)
+        return value
+
+    w.canvas_time.try_apply_selection_delta = record_delta
+    w.plot_time()
+    qapp.processEvents()
+
+    assert any(item.get("applied") for item in delta_results)
+    assert w.statusBar.currentMessage().startswith("绘制: 2/3 通道")
+    pill = w.chart_stack._time_card.findChild(
+        QToolButton, "timePlotDiagnosticsButton"
+    )
+    assert pill.text() == "⚠ 已绘制 2/3 · 1 条未绘制"
+
+
+def test_custom_xaxis_unit_cohort_uses_only_range_finite_sources(
+    qapp, qtbot, tmp_path
+):
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    paths = []
+    for index in range(3):
+        path = tmp_path / f"range-unit-{index}.csv"
+        pd.DataFrame({
+            "time": np.arange(4, dtype=float),
+            "angle": np.arange(4, dtype=float) + index,
+            "force": np.arange(10.0, 14.0) + index,
+        }).to_csv(path, index=False)
+        paths.append(path)
+    w = MainWindow(); qtbot.addWidget(w)
+    for path in paths:
+        w._load_one(str(path))
+    fids = list(w.files)
+    for fid, unit in zip(fids, ("rpm", "rpm", "deg")):
+        w.files[fid].channel_units["angle"] = unit
+    # The two rpm sources are finite outside the chosen acquisition-time
+    # window, but have no finite display X inside it. The deg source is the
+    # only actually drawable unit cohort.
+    for fid in fids[:2]:
+        w.files[fid].data["angle"] = [0.0, np.nan, np.inf, 3.0]
+    w.navigator.set_checked_channels([(fid, "force") for fid in fids])
+    w._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel", resolver="per_source_name", channel="angle",
+    )
+
+    result = w._build_time_plot_data(
+        range_enabled=True, range_lo=1.0, range_hi=2.0,
+    )
+
+    assert result.successful_channel_keys == {(fids[2], "force")}
+    assert [issue.code for issue in result.issues] == [
+        "non_finite_x", "non_finite_x",
+    ]
+    assert result.x_unit == "deg"
+    assert len(result.rows) == 1
+
+
+def test_custom_xaxis_empty_unit_cohort_does_not_fall_back_to_first_provider(
+    qapp, qtbot, tmp_path
+):
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    paths = []
+    for index in range(3):
+        path = tmp_path / f"empty-unit-{index}.csv"
+        pd.DataFrame({
+            "time": np.arange(4, dtype=float),
+            "angle": np.arange(4, dtype=float) + index,
+            "force": np.arange(20.0, 24.0) + index,
+        }).to_csv(path, index=False)
+        paths.append(path)
+    w = MainWindow(); qtbot.addWidget(w)
+    for path in paths:
+        w._load_one(str(path))
+    fids = list(w.files)
+    for fid, unit in zip(fids, ("rpm", "", "")):
+        w.files[fid].channel_units["angle"] = unit
+    w.navigator.set_checked_channels([(fid, "force") for fid in fids])
+    w._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel", resolver="per_source_name", channel="angle",
+    )
+
+    result = w._build_time_plot_data()
+    assert result.x_unit == ""
+    assert result.successful_channel_keys == {
+        (fids[1], "force"), (fids[2], "force"),
+    }
+
+    w.plot_time()
+    qapp.processEvents()
+    axis_titles = [
+        handle.x_axis_item().labelText
+        for handle in w.canvas_time.axes_list
+        if handle.x_axis_item() is not None
+    ]
+    assert "angle" in axis_titles
+    assert all("rpm" not in title for title in axis_titles)
+
+
+def test_exact_source_custom_x_never_substitutes_same_name_provider(
+    qapp, qtbot, tmp_path
+):
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    long_path = tmp_path / "legacy-source.csv"
+    short_path = tmp_path / "other-source.csv"
+    pd.DataFrame({
+        "time": np.arange(5, dtype=float),
+        "angle": np.arange(10.0, 15.0),
+        "force": np.arange(20.0, 25.0),
+    }).to_csv(long_path, index=False)
+    pd.DataFrame({
+        "time": np.arange(3, dtype=float),
+        "angle": np.arange(100.0, 103.0),
+        "force": np.arange(200.0, 203.0),
+    }).to_csv(short_path, index=False)
+    w = MainWindow(); qtbot.addWidget(w)
+    w._load_one(str(long_path)); w._load_one(str(short_path))
+    source_fid, other_fid = list(w.files)
+    w.navigator.set_checked_channels([
+        (source_fid, "force"), (other_fid, "force"),
+    ])
+    w._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel", resolver="exact_source", channel="angle",
+        source_fid=source_fid,
+    )
+
+    result = w._build_time_plot_data()
+
+    assert result.successful_channel_keys == {(source_fid, "force")}
+    assert [issue.code for issue in result.issues] == ["unaligned"]
+    assert result.issues[0].source_fid == other_fid
+
+
+def test_xaxis_candidates_do_not_inject_unlocatable_legacy_exact_source(
+    qapp, qtbot, loaded_csv
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    w = MainWindow(); qtbot.addWidget(w); w._load_one(loaded_csv)
+    w._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel",
+        resolver="exact_source",
+        channel="speed",
+        source_fid="missing-fid",
+    )
+
+    payloads = [payload for _text, payload in w._build_xaxis_candidates()]
+
+    assert ("exact_source", "missing-fid", "speed") not in payloads
+
+
+def test_all_custom_x_failures_use_empty_hint_and_card_diagnostic(
+    qapp, qtbot, tmp_path
+):
+    import numpy as np
+    import pandas as pd
+    from PyQt5.QtWidgets import QLabel, QToolButton
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    path = tmp_path / "missing-x.csv"
+    pd.DataFrame({
+        "time": np.arange(4, dtype=float),
+        "force": np.arange(10.0, 14.0),
+    }).to_csv(path, index=False)
+    w = MainWindow(); qtbot.addWidget(w); w._load_one(str(path))
+    fid = next(iter(w.files))
+    w._attach_files_to_focused_view([fid])
+    w.navigator.set_checked_channels([(fid, "force")])
+    w._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel", resolver="per_source_name", channel="angle",
+    )
+
+    w.plot_time(user_initiated=True)
+    qapp.processEvents()
+
+    assert w.canvas_time._empty_hint_text == "自定义横坐标无法绘制 · 0/1"
+    pill = w.chart_stack._time_card.findChild(
+        QToolButton, "timePlotDiagnosticsButton"
+    )
+    assert pill.isVisibleTo(w.chart_stack._time_card)
+    assert pill.text() == "⚠ 已绘制 0/1 · 1 条未绘制"
+    details = w.chart_stack._time_card.findChild(
+        QLabel, "timePlotDiagnosticsDetails"
+    )
+    assert "缺少横坐标通道 angle" in details.text()
 
 
 def test_channel_edit_refreshes_custom_xaxis_candidates(qapp, qtbot, loaded_csv):
@@ -1157,7 +1532,7 @@ def test_channel_edit_refreshes_custom_xaxis_candidates(qapp, qtbot, loaded_csv)
     qapp.processEvents()
 
     texts = _combo_texts(combo)
-    assert any(text.endswith('d_dt_speed') for text in texts)
+    assert any(text.startswith('d_dt_speed') for text in texts)
     assert combo.currentData() == before_data
 
 
@@ -1196,13 +1571,13 @@ def test_file_load_refreshes_custom_xaxis_candidates_when_channel_mode(
     qapp.processEvents()
 
     texts = _combo_texts(w.inspector.top._combo_xaxis_ch)
-    assert any(text.endswith('pressure') for text in texts)
+    assert any(text.startswith('pressure') for text in texts)
 
 
-def test_channel_edit_removing_custom_xaxis_source_resets_to_time(
+def test_channel_edit_removing_per_source_x_provider_keeps_logical_spec(
     qapp, qtbot, loaded_csv
 ):
-    """Removing the applied X source must not leave stale custom-X state."""
+    """A logical X selection survives a temporary zero-provider state."""
     from unittest.mock import patch
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -1219,17 +1594,25 @@ def test_channel_edit_removing_custom_xaxis_source_resets_to_time(
     w.inspector.top.set_xaxis_mode('channel')
     w._on_xaxis_mode_changed('channel')
     combo = w.inspector.top._combo_xaxis_ch
-    idx = next(i for i in range(combo.count()) if combo.itemData(i) == (fid, 'speed'))
+    idx = next(
+        i for i in range(combo.count())
+        if combo.itemData(i) == ('per_source_name', None, 'speed')
+    )
     combo.setCurrentIndex(idx)
     w._apply_xaxis()
-    assert w._custom_xaxis_ch == 'speed'
+    assert w._custom_xaxis_spec.channel == 'speed'
 
     w._apply_channel_edits(fid, {}, {'speed'})
     qapp.processEvents()
 
-    assert w._custom_xaxis_fid is None
-    assert w._custom_xaxis_ch is None
-    assert w.inspector.top.xaxis_mode() == 'time'
+    assert w._custom_xaxis_spec.resolver == 'per_source_name'
+    assert w._custom_xaxis_spec.channel == 'speed'
+    assert w.inspector.top.xaxis_mode() == 'channel'
+    assert any(
+        combo.itemData(i) == ('per_source_name', None, 'speed')
+        and '0/1' in combo.itemText(i)
+        for i in range(combo.count())
+    )
 
 
 def test_file_activation_updates_inspector_fs_and_range(qapp, qtbot, loaded_csv):
@@ -1479,18 +1862,27 @@ def test_explicit_time_plot_warns_when_no_channel_checked(
     assert seen == [("请在左侧勾选至少一个通道", "warning")]
 
 
-def test_time_plot_warns_when_checked_data_is_empty(
+def test_time_plot_uses_inline_diagnostic_when_checked_data_is_empty(
     qapp, qtbot, loaded_csv, monkeypatch
 ):
     w, _fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    from mf4_analyzer.ui.main_window.window import TimePlotBuildResult
+
     seen = []
     monkeypatch.setattr(w, "toast", lambda msg, level="info": seen.append((msg, level)))
-    monkeypatch.setattr(w, "_build_time_plot_data", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        w,
+        "_build_time_plot_data",
+        lambda *args, **kwargs: TimePlotBuildResult(
+            attempted_channel_keys={(_fid, "speed")},
+        ),
+    )
 
     w.plot_time(user_initiated=True)
     qapp.processEvents()
 
-    assert seen == [("当前时间范围内无可绘制数据，请调整时间范围或点最大", "warning")]
+    assert seen == []
+    assert "0/1" in w.statusBar.currentMessage()
 
 
 def test_automatic_time_replot_does_not_warn_for_empty_selection(
@@ -2094,12 +2486,12 @@ def test_time_range_toggle_preserves_unapplied_xaxis_channel_draft(
     combo = top._combo_xaxis_ch
     target = next(
         i for i in range(combo.count())
-        if combo.itemData(i) == (fid, "torque")
+        if combo.itemData(i) == ('per_source_name', None, "torque")
     )
     combo.setCurrentIndex(target)
 
     assert top.xaxis_mode() == "channel"
-    assert combo.currentData() == (fid, "torque")
+    assert combo.currentData() == ('per_source_name', None, "torque")
     assert w._custom_xaxis_fid is None
     assert w._custom_xaxis_ch is None
 
@@ -2107,7 +2499,7 @@ def test_time_range_toggle_preserves_unapplied_xaxis_channel_draft(
     qapp.processEvents()
 
     assert top.xaxis_mode() == "channel"
-    assert combo.currentData() == (fid, "torque")
+    assert combo.currentData() == ('per_source_name', None, "torque")
     assert w._custom_xaxis_fid is None
     assert w._custom_xaxis_ch is None
     assert w.view_manager.get(0).axis_opts["x_axis"]["mode"] == "time"

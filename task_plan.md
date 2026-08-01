@@ -1,5 +1,43 @@
 # Current Task Plan: Vector/XCP Readiness Review Remediation
 
+## Addendum — 2026-08-01 TimeDomain Per-Source Custom X-Axis Plan
+
+### Goal
+
+Write an implementation-ready, documentation-only plan so TimeDomain can use
+each checked source's own same-named custom X channel.  Unequal source lengths
+must remain drawable in both split and overlay modes; overlay means a shared
+physical X coordinate system, not index pairing or normalization.
+
+### Phases
+
+- [x] Recover current TimeDomain X-axis, view-state, canvas, batch-reference,
+  test, and lesson evidence.
+- [x] Freeze the per-source X, partial-success, unit, diagnostics, cache, and
+  legacy-state contracts in a formal implementation plan.
+- [x] Cross-check scope: UI/export items 1–3 are owned by another session;
+  this task changes no product source or tests.
+- [x] Independently review the Claude-updated plan against state/persistence
+  and rendering/diagnostics consumers; close all P1 ambiguities.
+- [x] Workstream A: implement the pure X resolver and Inspector candidate
+  payload contract with focused tests.
+- [x] Workstream B: implement View/project/channel-scope persistence and
+  legacy migration with focused tests.
+- [x] Workstream C: integrate per-source payload construction and chart-level
+  diagnostics with focused tests.
+- [x] Integrate all workstreams, run the complete directed suite, attempt the
+  full repository pytest, complete the lesson gate, and record the existing
+  Qt SIGSEGV plus the remaining live-UI acceptance limit without claiming a
+  false full-suite PASS.
+
+### Guardrails
+
+- Keep Inspector time range on `FileData.time_array`.
+- Preserve composite source/channel canvas identity and overlay grid/wheel
+  behavior.
+- Do not silently truncate X/Y, fall back to time, or normalize X values.
+- The user approved execution after review; implement only the reviewed scope.
+
 ## Goal
 
 Close the review findings on `codex/vector-xcp-readiness` so the exact source

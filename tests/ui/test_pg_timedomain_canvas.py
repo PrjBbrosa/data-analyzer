@@ -8684,3 +8684,68 @@ def test_copy_image_handler_injected_and_invoked(qapp, monkeypatch):
     main.click()
     assert fired["n"] == 1
     settings.clear()
+
+
+def test_time_card_diagnostics_pill_summarizes_and_expands(qapp, qtbot):
+    """Partial custom-X failures live in card chrome, not the plot scene."""
+    from PyQt5.QtWidgets import QLabel, QToolButton
+
+    from mf4_analyzer.ui.chart_stack.cards import TimeChartCard
+
+    canvas = _pg_canvas(qapp)
+    card = TimeChartCard(canvas)
+    qtbot.addWidget(card)
+    card.resize(720, 420)
+    card.show()
+    qapp.processEvents()
+
+    card.set_time_plot_diagnostics(
+        attempted=5,
+        successful=3,
+        details=(
+            "file-b / force：缺少横坐标 angle",
+            "file-c / force：横坐标与信号长度不一致",
+        ),
+    )
+    qapp.processEvents()
+
+    pill = card.findChild(QToolButton, "timePlotDiagnosticsButton")
+    detail = card.findChild(QLabel, "timePlotDiagnosticsDetails")
+    assert pill is not None and pill.isVisibleTo(card)
+    assert pill.text() == "⚠ 已绘制 3/5 · 2 条未绘制"
+    assert detail is not None and detail.isHidden()
+    assert pill.geometry().left() < card._quality_indicator.geometry().left()
+
+    pill.click()
+    qapp.processEvents()
+    assert detail.isVisibleTo(card)
+    assert "file-b / force" in detail.text()
+    assert "file-c / force" in detail.text()
+
+
+def test_time_card_diagnostics_pill_hides_after_full_success(qapp, qtbot):
+    from PyQt5.QtWidgets import QToolButton
+
+    from mf4_analyzer.ui.chart_stack.cards import TimeChartCard
+
+    canvas = _pg_canvas(qapp)
+    card = TimeChartCard(canvas)
+    qtbot.addWidget(card)
+    card.show()
+    card.set_time_plot_diagnostics(
+        attempted=2,
+        successful=1,
+        details=("file-b / force：缺少横坐标 angle",),
+    )
+    assert card.findChild(
+        QToolButton, "timePlotDiagnosticsButton"
+    ).isVisibleTo(card)
+
+    card.set_time_plot_diagnostics(
+        attempted=2,
+        successful=2,
+        details=(),
+    )
+    assert not card.findChild(
+        QToolButton, "timePlotDiagnosticsButton"
+    ).isVisibleTo(card)

@@ -215,7 +215,12 @@ def test_channel_editor_removal_cleans_deleted_channel_from_every_view(
 
     primary = window.view_manager.get(0)
     primary.axis_opts = {
-        "x_axis": {"mode": "channel", "fid": fid, "channel": "torque"}
+        "x_axis": {
+            "mode": "channel",
+            "resolver": "exact_source",
+            "fid": fid,
+            "channel": "torque",
+        }
     }
 
     window._apply_channel_edits(fid, {}, {"torque"})
@@ -227,7 +232,103 @@ def test_channel_editor_removal_cleans_deleted_channel_from_every_view(
         assert (fid, "torque") not in state.colors
         assert state.overlay_primary is None
     assert primary.axis_opts["x_axis"] == {
-        "mode": "time", "fid": None, "channel": None,
+        "mode": "time",
+        "resolver": None,
+        "fid": None,
+        "channel": None,
+        "label": "",
+    }
+
+
+def test_file_removal_preserves_per_source_name_axis_spec():
+    from mf4_analyzer.ui.view_state import ViewState
+
+    state = ViewState(
+        name="Logical",
+        tab_color="#2d7ff9",
+        attached_file_ids=["f1", "f2"],
+        checked=[("f1", "speed"), ("f2", "speed")],
+        axis_opts={
+            "x_axis": {
+                "mode": "channel",
+                "resolver": "per_source_name",
+                "fid": None,
+                "channel": "angle",
+                "label": "Angle",
+            }
+        },
+    )
+
+    MainWindow._filter_time_view_state_for_removed_fids(state, {"f1"})
+
+    assert state.attached_file_ids == ["f2"]
+    assert state.checked == [("f2", "speed")]
+    assert state.axis_opts["x_axis"] == {
+        "mode": "channel",
+        "resolver": "per_source_name",
+        "fid": None,
+        "channel": "angle",
+        "label": "Angle",
+    }
+
+
+def test_channel_removal_preserves_per_source_name_axis_spec():
+    from mf4_analyzer.ui.view_state import ViewState
+
+    state = ViewState(
+        name="Logical",
+        tab_color="#2d7ff9",
+        checked=[("f1", "speed"), ("f2", "speed")],
+        axis_opts={
+            "x_axis": {
+                "mode": "channel",
+                "resolver": "per_source_name",
+                "fid": None,
+                "channel": "angle",
+                "label": "Angle",
+            }
+        },
+    )
+
+    MainWindow._filter_time_view_state_for_removed_channels(
+        state, {("f1", "angle")}
+    )
+
+    assert state.axis_opts["x_axis"] == {
+        "mode": "channel",
+        "resolver": "per_source_name",
+        "fid": None,
+        "channel": "angle",
+        "label": "Angle",
+    }
+
+
+def test_legacy_exact_source_axis_is_cleared_when_its_channel_is_removed():
+    from mf4_analyzer.ui.view_state import ViewState
+
+    state = ViewState(
+        name="Legacy",
+        tab_color="#2d7ff9",
+        axis_opts={
+            "x_axis": {
+                "mode": "channel",
+                "fid": "f1",
+                "channel": "angle",
+                "label": "Angle",
+            }
+        },
+    )
+
+    MainWindow._filter_time_view_state_for_removed_channels(
+        state, {("f1", "angle")}
+    )
+
+    assert state.axis_opts["x_axis"] == {
+        "mode": "time",
+        "resolver": None,
+        "fid": None,
+        "channel": None,
+        "label": "Angle",
     }
 
 

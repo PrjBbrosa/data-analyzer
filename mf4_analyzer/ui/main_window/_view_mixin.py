@@ -1,6 +1,15 @@
 """ViewMixin: time-domain split-view switch / capture / render pipeline."""
 
+from dataclasses import replace
+
 from PyQt5.QtWidgets import QColorDialog, QMessageBox
+
+from ..time_xaxis import (
+    CHANNEL_MODE,
+    EXACT_SOURCE,
+    CustomXAxisSpec,
+    selection_payload,
+)
 
 
 class ViewMixin:
@@ -365,23 +374,30 @@ class ViewMixin:
         if callable(update_range_rows):
             update_range_rows()
 
-        x_opts = axis_opts.get('x_axis') or {}
-        requested_mode = x_opts.get('mode') or 'time'
-        label = x_opts.get('label') or ''
-        target_fid = x_opts.get('fid')
-        target_channel = x_opts.get('channel')
+        spec = CustomXAxisSpec.from_axis_opts(axis_opts.get('x_axis'))
+        requested_mode = spec.mode
+        label = spec.label
+        target_fid = spec.source_fid
+        target_channel = spec.channel
 
-        use_channel = (
-            requested_mode == 'channel'
-            and target_fid is not None
-            and target_channel is not None
-        )
+        use_channel = requested_mode == CHANNEL_MODE
         if use_channel:
+            # Candidate construction must see the restored applied spec so it
+            # can retain a logical 0/N item or re-inject a legacy exact-source
+            # item while the source still exists.
+            self._custom_xaxis_spec = spec
+            self._custom_xaxis_fid = (
+                target_fid if spec.resolver == EXACT_SOURCE else None
+            )
+            self._custom_xaxis_ch = (
+                target_channel if spec.resolver == EXACT_SOURCE else None
+            )
             self._refresh_xaxis_candidates()
             combo = top._combo_xaxis_ch
+            target_payload = selection_payload(spec)
             match_idx = -1
             for i in range(combo.count()):
-                if combo.itemData(i) == (target_fid, target_channel):
+                if combo.itemData(i) == target_payload:
                     match_idx = i
                     break
             use_channel = match_idx >= 0
@@ -393,14 +409,20 @@ class ViewMixin:
         _old_le = _le.blockSignals(True) if _le is not None else False
         try:
             if use_channel:
-                self._custom_xaxis_fid = target_fid
-                self._custom_xaxis_ch = target_channel
+                self._custom_xaxis_spec = spec
+                self._custom_xaxis_fid = (
+                    target_fid if spec.resolver == EXACT_SOURCE else None
+                )
+                self._custom_xaxis_ch = (
+                    target_channel if spec.resolver == EXACT_SOURCE else None
+                )
                 self._custom_xlabel = label or target_channel
                 top.set_xaxis_mode('channel')
                 top._combo_xaxis_ch.setEnabled(True)
                 top._combo_xaxis_ch.setCurrentIndex(match_idx)
                 top.edit_xlabel.setText(label or '')
             else:
+                self._custom_xaxis_spec = CustomXAxisSpec(label=label)
                 self._custom_xaxis_fid = None
                 self._custom_xaxis_ch = None
                 self._custom_xlabel = label or None
@@ -424,23 +446,25 @@ class ViewMixin:
         self._set_tick_density_controls_silent(xt, yt)
 
     def _applied_xaxis_opts(self):
-        custom_active = (
-            self._custom_xaxis_fid is not None
-            and self._custom_xaxis_ch is not None
-        )
-        if custom_active:
-            return {
-                "mode": "channel",
-                "fid": self._custom_xaxis_fid,
-                "channel": self._custom_xaxis_ch,
-                "label": self._custom_xlabel or self._custom_xaxis_ch,
-            }
-        return {
-            "mode": "time",
-            "fid": None,
-            "channel": None,
-            "label": self._custom_xlabel or "",
-        }
+        spec = getattr(self, '_custom_xaxis_spec', None)
+        if not isinstance(spec, CustomXAxisSpec):
+            fid = getattr(self, '_custom_xaxis_fid', None)
+            channel = getattr(self, '_custom_xaxis_ch', None)
+            if fid is not None and channel is not None:
+                spec = CustomXAxisSpec(
+                    mode=CHANNEL_MODE,
+                    resolver=EXACT_SOURCE,
+                    source_fid=str(fid),
+                    channel=str(channel),
+                )
+            else:
+                spec = CustomXAxisSpec()
+        label = getattr(self, '_custom_xlabel', None)
+        if label is None:
+            label = spec.label
+        if not label and spec.channel:
+            label = spec.channel
+        return replace(spec, label=str(label or '')).to_axis_opts()
 
     def _capture_range_change_into_view(self, state, canvas):
         prev_axis_opts = state.axis_opts or {}

@@ -129,6 +129,83 @@ def test_remap_rewrites_and_drops():
     assert out["ylims"] == {"[a] rpm": [0.0, 10.0]}          # untouched
     assert out["axis_opts"]["x_axis"]["fid"] is None
     assert out["axis_opts"]["x_axis"]["mode"] == "time"
+    assert out["axis_opts"]["x_axis"]["resolver"] is None
+
+
+def test_remap_migrates_legacy_channel_axis_to_exact_source():
+    view = {
+        "name": "Legacy",
+        "checked": [],
+        "axis_opts": {
+            "x_axis": {
+                "mode": "channel",
+                "fid": "old-fid",
+                "channel": "angle",
+                "label": "Angle",
+            }
+        },
+    }
+
+    out = pio.remap_view_fids([view], {"old-fid": "new-fid"})[0]
+
+    assert out["axis_opts"]["x_axis"] == {
+        "mode": "channel",
+        "resolver": "exact_source",
+        "fid": "new-fid",
+        "channel": "angle",
+        "label": "Angle",
+    }
+
+
+def test_remap_preserves_per_source_name_without_a_fid():
+    view = {
+        "name": "Logical",
+        "checked": [],
+        "axis_opts": {
+            "x_axis": {
+                "mode": "channel",
+                "resolver": "per_source_name",
+                "fid": None,
+                "channel": "angle",
+                "label": "Angle",
+            }
+        },
+    }
+
+    out = pio.remap_view_fids([view], {})[0]
+
+    assert out["axis_opts"]["x_axis"] == view["axis_opts"]["x_axis"]
+
+
+@pytest.mark.parametrize(
+    "x_axis",
+    [
+        {"mode": "channel", "resolver": "unknown", "channel": "angle"},
+        {"mode": "channel", "resolver": "per_source_name", "channel": None},
+        {
+            "mode": "channel",
+            "resolver": "exact_source",
+            "fid": None,
+            "channel": "angle",
+        },
+    ],
+)
+def test_remap_degrades_malformed_channel_axis_to_time(x_axis):
+    view = {
+        "name": "Malformed",
+        "checked": [],
+        "axis_opts": {"x_axis": x_axis},
+    }
+
+    out = pio.remap_view_fids([view], {})[0]
+
+    assert out["axis_opts"]["x_axis"] == {
+        "mode": "time",
+        "resolver": None,
+        "fid": None,
+        "channel": None,
+        "label": x_axis.get("label", ""),
+    }
 
 
 def test_remap_identity_when_map_matches():

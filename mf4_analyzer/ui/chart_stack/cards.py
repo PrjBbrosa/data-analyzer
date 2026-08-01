@@ -30,6 +30,71 @@ from .toolbar import PgNavigationToolbar, _TickDensityPopover
 from .cursor_pill import _QualityStatusIndicator
 
 
+class _TimePlotDiagnosticsPill(QFrame):
+    """Compact, card-owned summary for partially rendered TimeDomain plots.
+
+    The widget deliberately lives above the canvas widget instead of inside
+    the pyqtgraph scene: panning/zooming must never move the diagnostic.  Its
+    summary is always one line; details are disclosed only when requested.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("timePlotDiagnosticsPill")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "QFrame#timePlotDiagnosticsPill {"
+            "background:#fff7e6;border:1px solid #f0b44d;"
+            "border-radius:9px;}"
+            "QToolButton#timePlotDiagnosticsButton {"
+            "border:0;background:transparent;color:#7a4b00;"
+            "font-weight:600;padding:3px 7px;text-align:left;}"
+            "QLabel#timePlotDiagnosticsDetails {"
+            "color:#65420c;padding:0 8px 6px 8px;}"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self._button = QToolButton(self)
+        self._button.setObjectName("timePlotDiagnosticsButton")
+        self._button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._button.setCursor(Qt.PointingHandCursor)
+        self._button.clicked.connect(self._toggle_details)
+        self._details = QLabel("", self)
+        self._details.setObjectName("timePlotDiagnosticsDetails")
+        self._details.setTextFormat(Qt.PlainText)
+        self._details.setWordWrap(True)
+        self._details.hide()
+        layout.addWidget(self._button)
+        layout.addWidget(self._details)
+        self.hide()
+
+    def set_diagnostics(self, *, attempted, successful, details):
+        attempted = max(0, int(attempted))
+        successful = max(0, min(int(successful), attempted))
+        details = tuple(str(item) for item in details if str(item).strip())
+        failed = max(0, attempted - successful)
+        if failed == 0 or not details:
+            self._details.hide()
+            self.hide()
+            return
+        self._button.setText(
+            f"⚠ 已绘制 {successful}/{attempted} · {failed} 条未绘制"
+        )
+        self._details.setText("\n".join(f"• {item}" for item in details))
+        self._details.hide()
+        self.show()
+        self.adjustSize()
+
+    def _toggle_details(self):
+        self._details.setVisible(self._details.isHidden())
+        self.adjustSize()
+        parent = self.parentWidget()
+        reposition = getattr(parent, "_position_time_diagnostics", None)
+        if callable(reposition):
+            reposition()
+
+
 class _ChartCard(QWidget):
     """Canvas + its NavigationToolbar in a vertical layout."""
 
@@ -333,6 +398,11 @@ class _ChartCard(QWidget):
             quality_signal.connect(self._set_quality_status)
             self._set_quality_status(quality_status())
 
+        self._time_diagnostics = (
+            _TimePlotDiagnosticsPill(self) if chart_mode == 'time' else None
+        )
+        self._time_diagnostics_position_pending = False
+
     def _position_focus_bar(self):
         bar = getattr(self, "_focus_bar", None)
         if bar is not None:
@@ -349,6 +419,51 @@ class _ChartCard(QWidget):
         y = canvas_rect.bottom() - indicator.height() - margin + 1
         indicator.move(max(0, x), max(0, y))
         indicator.raise_()
+
+    def _position_time_diagnostics(self):
+        pill = getattr(self, "_time_diagnostics", None)
+        canvas = getattr(self, "canvas", None)
+        if pill is None or canvas is None or pill.isHidden():
+            return
+        canvas_rect = canvas.geometry()
+        margin = 6
+        max_width = max(160, canvas_rect.width() - (margin * 2))
+        pill.setMaximumWidth(min(520, max_width))
+        pill.adjustSize()
+        x = canvas_rect.left() + margin
+        y = canvas_rect.bottom() - pill.height() - margin + 1
+        pill.move(max(0, x), max(0, y))
+        pill.raise_()
+
+    def _schedule_time_diagnostics_position(self):
+        pill = getattr(self, "_time_diagnostics", None)
+        if pill is None or pill.isHidden():
+            return
+        if getattr(self, "_time_diagnostics_position_pending", False):
+            return
+        self._time_diagnostics_position_pending = True
+        QTimer.singleShot(0, self._flush_time_diagnostics_position)
+
+    def _flush_time_diagnostics_position(self):
+        self._time_diagnostics_position_pending = False
+        try:
+            self._position_time_diagnostics()
+        except RuntimeError:
+            # A queued reposition can outlive the card during application exit.
+            pass
+
+    def set_time_plot_diagnostics(self, *, attempted, successful, details):
+        """Show a partial-render summary, or clear it after full success."""
+        pill = getattr(self, "_time_diagnostics", None)
+        if pill is None:
+            return
+        pill.set_diagnostics(
+            attempted=attempted,
+            successful=successful,
+            details=details,
+        )
+        self._position_time_diagnostics()
+        self._schedule_time_diagnostics_position()
 
     def _schedule_quality_indicator_position(self):
         indicator = getattr(self, "_quality_indicator", None)
@@ -398,6 +513,8 @@ class _ChartCard(QWidget):
         self._position_focus_bar()
         self._position_quality_indicator()
         self._schedule_quality_indicator_position()
+        self._position_time_diagnostics()
+        self._schedule_time_diagnostics_position()
         bar = getattr(self, "_focus_bar", None)
         if bar is not None and bar.isVisible():
             bar.raise_()
@@ -407,6 +524,8 @@ class _ChartCard(QWidget):
         self._sync_responsive_toolbar()
         self._position_quality_indicator()
         self._schedule_quality_indicator_position()
+        self._position_time_diagnostics()
+        self._schedule_time_diagnostics_position()
         bar = getattr(self, "_focus_bar", None)
         if bar is not None and bar.isVisible():
             self._position_focus_bar()
@@ -424,10 +543,13 @@ class _ChartCard(QWidget):
         ):
             self._position_quality_indicator()
             self._schedule_quality_indicator_position()
+            self._position_time_diagnostics()
+            self._schedule_time_diagnostics_position()
         elif obj is getattr(self, "_canvas_viewport", None) and etype in (
             QEvent.Resize, QEvent.Show
         ):
             self._schedule_quality_indicator_position()
+            self._schedule_time_diagnostics_position()
         return super().eventFilter(obj, event)
 
     def detach_toolbar(self, parent):

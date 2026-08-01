@@ -1,6 +1,7 @@
 import pytest
 
 from mf4_analyzer.ui.main_window import MainWindow
+from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
 from mf4_analyzer.ui.view_tabbar import ViewTabBar
 
 
@@ -51,7 +52,10 @@ def _set_channel_xaxis(w, fid, channel, label):
     top.set_xaxis_mode("channel")
     w._on_xaxis_mode_changed("channel")
     combo = top._combo_xaxis_ch
-    idx = next(i for i in range(combo.count()) if combo.itemData(i) == (fid, channel))
+    idx = next(
+        i for i in range(combo.count())
+        if combo.itemData(i) == ("per_source_name", None, channel)
+    )
     combo.setCurrentIndex(idx)
     top.edit_xlabel.setText(label)
     w._apply_xaxis()
@@ -192,6 +196,7 @@ def test_switch_view_restores_screen_snapshot_state(qtbot, qapp, loaded_csv):
     w.inspector.top.edit_xlabel.setText("Elapsed")
     w._custom_xaxis_fid = None
     w._custom_xaxis_ch = None
+    w._custom_xaxis_spec = CustomXAxisSpec(label="Elapsed")
     w._custom_xlabel = "Elapsed"
     _set_ticks(w, 8, 5)
     view1_xlim = _narrow_xlim(w, 0.20, 0.62)
@@ -241,14 +246,70 @@ def test_switch_view_restores_screen_snapshot_state(qtbot, qapp, loaded_csv):
     assert w.inspector.top.range_enabled() is True
     assert w.inspector.top.range_values() == pytest.approx((0.20, 0.80))
     assert w.inspector.top.xaxis_mode() == "channel"
-    assert w._custom_xaxis_fid == fid
-    assert w._custom_xaxis_ch == "speed"
+    assert w._custom_xaxis_fid is None
+    assert w._custom_xaxis_ch is None
+    assert w._custom_xaxis_spec == CustomXAxisSpec(
+        mode="channel",
+        resolver="per_source_name",
+        source_fid=None,
+        channel="speed",
+        label="Speed Axis",
+    )
     assert w._custom_xlabel == "Speed Axis"
-    assert w.inspector.top._combo_xaxis_ch.currentData() == (fid, "speed")
+    assert w.inspector.top._combo_xaxis_ch.currentData() == (
+        "per_source_name", None, "speed"
+    )
     assert w.inspector.top.xaxis_label() == "Speed Axis"
     assert w.inspector.top.tick_density() == (13, 7)
     _assert_pair(w.canvas_time.get_visible_xlim(), view2_xlim)
     _assert_ylims(w, view2_ylims)
+
+
+def test_range_capture_preserves_applied_xaxis_when_combo_has_unapplied_draft(
+    qtbot, qapp, loaded_csv,
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    fid = _fid(w)
+    _set_checked(w, "torque")
+    _set_channel_xaxis(w, fid, "speed", "Speed Axis")
+    state = w.view_manager.get(0)
+    w._capture_current_view()
+    applied = dict(state.axis_opts["x_axis"])
+
+    combo = w.inspector.top._combo_xaxis_ch
+    draft_idx = next(
+        i for i in range(combo.count())
+        if combo.itemData(i) == ("per_source_name", None, "torque")
+    )
+    combo.setCurrentIndex(draft_idx)
+    assert w.inspector.top.xaxis_label() == "torque"
+
+    w._capture_range_change_into_view(state, w.canvas_time)
+
+    assert state.axis_opts["x_axis"] == applied
+    assert state.axis_opts["x_axis"]["channel"] == "speed"
+    assert w._custom_xaxis_spec.channel == "speed"
+
+
+def test_restore_unknown_xaxis_resolver_degrades_to_time(
+    qtbot, qapp, loaded_csv,
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    fid = _fid(w)
+
+    w._restore_view_axis_opts({
+        "x_axis": {
+            "mode": "channel",
+            "resolver": "future_resolver",
+            "fid": fid,
+            "channel": "speed",
+            "label": "Saved label",
+        }
+    })
+
+    assert w._custom_xaxis_spec == CustomXAxisSpec(label="Saved label")
+    assert w.inspector.top.xaxis_mode() == "time"
+    assert not w.inspector.top._combo_xaxis_ch.isEnabled()
 
 
 def test_bridge_can_capture_canvas_ranges_without_replacing_controls(

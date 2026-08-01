@@ -7,6 +7,7 @@ import importlib
 import sys
 
 import numpy as np
+from dataclasses import dataclass, field
 from pathlib import Path
 from collections import OrderedDict
 
@@ -35,6 +36,18 @@ from ... import app_meta
 from ... import db_reference
 from ..compute_progress import ComputeProgressWidget
 from ..plot_risk import PlotRisk, PlotRiskLevel, estimate_time_overlay_risk
+from ..time_xaxis import (
+    CHANNEL_MODE,
+    EXACT_SOURCE,
+    PER_SOURCE_NAME,
+    CustomXAxisSpec,
+    TimePlotIssue,
+    apply_unit_cohort,
+    channel_unit,
+    resolve_custom_xaxis,
+    selection_payload,
+    spec_from_selection,
+)
 
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from ._analysis_mixin import AnalysisMixin
@@ -48,6 +61,22 @@ from ._view_mixin import ViewMixin
 
 
 _STATUS_HINTS_VISIBLE_SETTINGS_KEY = "quickref/status_hints_visible"
+
+
+@dataclass
+class TimePlotBuildResult:
+    """One authoritative TimeDomain payload plus its render accounting."""
+
+    rows: list = field(default_factory=list)
+    issues: list[TimePlotIssue] = field(default_factory=list)
+    attempted_channel_keys: set[tuple[str, str]] = field(default_factory=set)
+    successful_channel_keys: set[tuple[str, str]] = field(default_factory=set)
+    # ``None`` = time mode / no drawable custom-X cohort resolved.
+    # ``""`` = a drawable custom-X cohort whose known unit is empty.
+    x_unit: str | None = None
+
+    def __bool__(self):
+        return bool(self.rows)
 
 
 class SurfaceStatusBar(QStatusBar):
@@ -871,10 +900,13 @@ class MainWindow(
             lambda i: self._on_xaxis_mode_changed('channel' if i == 1 else 'time')
         )
 
-        # Custom X axis state (unchanged)
+        # Applied custom-X state.  The immutable spec is authoritative; the
+        # legacy fid/channel fields are retained only as exact-source adapters
+        # for old callers while View persistence migrates.
         self._custom_xlabel = None
         self._custom_xaxis_fid = None
         self._custom_xaxis_ch = None
+        self._custom_xaxis_spec = CustomXAxisSpec()
         # Phase 1 item 4: track range-filter and plot-mode state across
         # plot_time() calls so we can fire the appropriate envelope-cache
         # invalidation when either changes (the cache is keyed on raw
@@ -884,6 +916,7 @@ class MainWindow(
         self._last_range_state = None   # (enabled, lo, hi) or None
         self._last_plot_mode = None     # 'overlay' / 'subplot' / None
         self._last_filter_state_by_canvas = {}  # id(canvas) -> filter state
+        self._last_time_render_context_by_canvas = {}
         # Overlay primary-axis pick: (fid, ch) chosen via the channel
         # right-click 设为左轴 menu. When set AND still checked AND in overlay
         # mode, plot_time reorders the checked list so this channel is index 0
@@ -1527,7 +1560,8 @@ class MainWindow(
         # Inspector range values are in acquisition time. If a custom channel
         # is the visible X axis, that viewport is in channel units and must not
         # overwrite the time-range controls.
-        if self._custom_xaxis_fid is not None and self._custom_xaxis_ch is not None:
+        spec = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
+        if spec.mode == CHANNEL_MODE:
             return False
         if xlim is None:
             xlim = self._safe_capture_primary_xlim()
@@ -1896,22 +1930,87 @@ class MainWindow(
             self._refresh_xaxis_candidates()
 
     def _build_xaxis_candidates(self):
+        checked_fids = []
+        for fid, _ch, _color in self.navigator.get_checked_channels():
+            if fid in self.files and fid not in checked_fids:
+                checked_fids.append(fid)
+        source_fids = checked_fids
+        if not source_fids:
+            try:
+                attached = self.view_manager.get(
+                    self.view_manager.active
+                ).attached_file_ids
+            except (AttributeError, IndexError):
+                attached = ()
+            source_fids = [
+                fid for fid in attached
+                if fid in self.files
+            ]
+        if not source_fids:
+            source_fids = list(self.files)
+
+        channel_order = []
+        seen = set()
+        # Keep every loaded channel discoverable even when the current View's
+        # coverage denominator is narrower. This preserves the useful
+        # "choose X before attaching/checking Y" workflow; out-of-scope names
+        # simply report 0/N until their source joins the scope.
+        for fid in self.files:
+            for channel in self.files[fid].channels:
+                if channel not in seen:
+                    seen.add(channel)
+                    channel_order.append(channel)
+
+        denominator = len(source_fids)
         cands = []
-        for fid, fd in self.files.items():
-            px = f"[{fd.short_name}] "
-            for ch in fd.channels:
-                cands.append((px + ch, (fid, ch)))
+        for channel in channel_order:
+            available = sum(
+                1 for fid in source_fids
+                if channel in self.files[fid].data.columns
+            )
+            cands.append((
+                f"{channel} · {available}/{denominator} 文件可用",
+                (PER_SOURCE_NAME, None, channel),
+            ))
+
+        applied = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
+        applied_payload = selection_payload(applied)
+        if applied.mode == CHANNEL_MODE and applied.channel:
+            if applied.resolver == PER_SOURCE_NAME:
+                if applied_payload not in {payload for _text, payload in cands}:
+                    cands.append((
+                        f"{applied.channel} · 0/{denominator} 文件可用",
+                        applied_payload,
+                    ))
+            elif applied.resolver == EXACT_SOURCE and applied_payload is not None:
+                source = self.files.get(applied.source_fid)
+                if (
+                    source is not None
+                    and applied.channel in source.data.columns
+                ):
+                    source_label = getattr(source, 'short_name', '')
+                    cands.append((
+                        f"[{source_label}] {applied.channel} · 历史精确来源",
+                        applied_payload,
+                    ))
         return cands
 
     def _refresh_xaxis_candidates(self):
         self.inspector.top.set_xaxis_candidates(self._build_xaxis_candidates())
 
     def _validate_custom_xaxis_source(self):
-        if self._custom_xaxis_fid is None or self._custom_xaxis_ch is None:
+        spec = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
+        if spec.mode != CHANNEL_MODE:
             return
-        fd = self.files.get(self._custom_xaxis_fid)
-        if fd is not None and self._custom_xaxis_ch in fd.data.columns:
+        # Logical per-source selections survive provider churn; a later file
+        # load can make the same channel available again.  Exact legacy state
+        # retains the historical fail-closed behaviour when its owner vanishes.
+        if spec.resolver == PER_SOURCE_NAME:
             return
+        fd = self.files.get(spec.source_fid)
+        if fd is not None and spec.channel in fd.data.columns:
+            return
+        self._custom_xaxis_spec = CustomXAxisSpec()
         self._custom_xaxis_fid = None
         self._custom_xaxis_ch = None
         self._custom_xlabel = None
@@ -1927,13 +2026,13 @@ class MainWindow(
         """应用横坐标设置"""
         canvas = self.chart_stack.focused_canvas()
         idx = self._view_index_for_canvas(canvas)
-        previous_x_source = (
-            self._custom_xaxis_fid,
-            self._custom_xaxis_ch,
-        )
+        previous_spec = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
         mode = self.inspector.top.xaxis_mode()
         if mode == 'time':
             self._custom_xlabel = self.inspector.top.xaxis_label() or None
+            self._custom_xaxis_spec = CustomXAxisSpec(
+                mode='time', label=self._custom_xlabel or '',
+            )
             self._custom_xaxis_fid = None
             self._custom_xaxis_ch = None
         else:
@@ -1941,29 +2040,39 @@ class MainWindow(
             if not data:
                 self.toast("请选择横坐标通道", "warning")
                 return
-            fid, ch = data
-            if fid not in self.files or ch not in self.files[fid].data.columns:
-                self.toast("横坐标通道不存在", "warning")
+            raw_label = self.inspector.top.xaxis_label()
+            selected = spec_from_selection(data, label=raw_label)
+            if selected.mode != CHANNEL_MODE or not selected.channel:
+                self.toast("横坐标选择无效", "warning")
                 return
-            # §6.1 validation: length must match every file whose channels are
-            # currently checked for plotting (not every loaded file).
-            xlen = len(self.files[fid].data)
-            checked = self.navigator.get_checked_channels()  # [(fid, ch, color), ...]
-            plotted_fids = {cfid for cfid, _, _ in checked}
-            if not plotted_fids:
-                plotted_fids = {fid}
-            for cfid in plotted_fids:
-                if cfid in self.files and len(self.files[cfid].data) != xlen:
-                    self.toast("横坐标通道长度与当前绘图通道不一致", "warning")
-                    return
-            self._custom_xaxis_fid = fid
-            self._custom_xaxis_ch = ch
-            _raw = self.inspector.top.xaxis_label()
-            self._custom_xlabel = (_raw if _raw and _raw != 'Time (s)' else None) or ch
+            self._custom_xlabel = (
+                raw_label if raw_label and raw_label != 'Time (s)' else None
+            ) or selected.channel
+            self._custom_xaxis_spec = CustomXAxisSpec(
+                mode=selected.mode,
+                resolver=selected.resolver,
+                channel=selected.channel,
+                source_fid=selected.source_fid,
+                label=self._custom_xlabel,
+            )
+            if selected.resolver == EXACT_SOURCE:
+                self._custom_xaxis_fid = selected.source_fid
+                self._custom_xaxis_ch = selected.channel
+            else:
+                self._custom_xaxis_fid = None
+                self._custom_xaxis_ch = None
 
-        x_source_changed = previous_x_source != (
-            self._custom_xaxis_fid,
-            self._custom_xaxis_ch,
+        current_spec = self._custom_xaxis_spec
+        x_source_changed = (
+            previous_spec.mode,
+            previous_spec.resolver,
+            previous_spec.source_fid,
+            previous_spec.channel,
+        ) != (
+            current_spec.mode,
+            current_spec.resolver,
+            current_spec.source_fid,
+            current_spec.channel,
         )
 
         # Cache invalidation site 5: the t-array bound to every plotted
@@ -1971,17 +2080,19 @@ class MainWindow(
         # every (data_id, channel, xlim, pixel_width) entry is now stale.
         # Monotonicity cache is also re-keyed by the new fid/ch pair, so
         # wipe it to be safe.
-        invalidate_envelope = getattr(canvas, 'invalidate_envelope_cache', None)
-        if callable(invalidate_envelope):
-            invalidate_envelope("custom-x changed")
-        invalidate_mono = getattr(canvas, 'invalidate_monotonicity_cache', None)
-        if callable(invalidate_mono):
-            invalidate_mono()
+        if x_source_changed:
+            invalidate_envelope = getattr(canvas, 'invalidate_envelope_cache', None)
+            if callable(invalidate_envelope):
+                invalidate_envelope("custom-x changed")
+            invalidate_mono = getattr(canvas, 'invalidate_monotonicity_cache', None)
+            if callable(invalidate_mono):
+                invalidate_mono()
         # Custom X can affect every plotted file, so keep this as a whole
         # FFT-vs-Time-section invalidation rather than a per-fid eviction.
         # FFT and Order do not consume this display control, so their caches
         # remain valid and must not be needlessly evicted.
-        self.analysis_caches['fft_time'].clear()
+        if x_source_changed:
+            self.analysis_caches['fft_time'].clear()
         if idx is not None and 0 <= idx < len(self.view_manager.views):
             state = self.view_manager.get(idx)
             self._view_bridge.capture_controls_into(state, self, canvas)
@@ -2213,31 +2324,52 @@ class MainWindow(
             user_initiated=user_initiated,
         )
 
-    def _time_axis_label(self):
+    @staticmethod
+    def _time_plot_issue_text(issue):
+        source = issue.source_label or issue.source_fid
+        target = issue.target_channel or "未知通道"
+        return f"{source} / {target}：{issue.detail}"
+
+    def _set_time_plot_diagnostics(self, canvas, result=None):
+        card_for_canvas = getattr(self.chart_stack, '_card_for_canvas', None)
+        card = card_for_canvas(canvas) if callable(card_for_canvas) else None
+        setter = getattr(card, 'set_time_plot_diagnostics', None)
+        if not callable(setter):
+            return
+        if result is None:
+            setter(attempted=0, successful=0, details=())
+            return
+        setter(
+            attempted=len(result.attempted_channel_keys),
+            successful=len(result.successful_channel_keys),
+            details=tuple(
+                self._time_plot_issue_text(issue) for issue in result.issues
+            ),
+        )
+
+    def _time_axis_label(self, unit=None):
         """Return the visible time-domain X-axis title.
 
         A custom X source has its own physical unit. Keep the Inspector's
         editable label as entered, but append the source unit only for the
         rendered title so View state and label editing remain compatible.
         """
-        label = self._custom_xlabel or self.inspector.top.xaxis_label()
-        custom_fid = self._custom_xaxis_fid
-        custom_ch = self._custom_xaxis_ch
-        if custom_fid is None or custom_ch is None:
+        applied = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
+        label = self._custom_xlabel or applied.label or self.inspector.top.xaxis_label()
+        if applied.mode != CHANNEL_MODE or not applied.channel:
             return label or 'Time (s)'
 
-        label = label or str(custom_ch)
-        fd = self.files.get(custom_fid)
-        if fd is None:
-            return label
-        channel_meta = (getattr(fd, 'channel_metadata', None) or {}).get(
-            custom_ch, {}
-        ) or {}
-        unit = (
-            channel_meta.get('unit', '')
-            or (getattr(fd, 'channel_units', None) or {}).get(custom_ch, '')
-            or ''
-        )
+        label = label or str(applied.channel)
+        if unit is None:
+            if applied.resolver == EXACT_SOURCE:
+                fd = self.files.get(applied.source_fid)
+                unit = channel_unit(fd, applied.channel) if fd is not None else ''
+            else:
+                unit = next((
+                    channel_unit(fd, applied.channel)
+                    for fd in self.files.values()
+                    if applied.channel in fd.data.columns
+                ), '')
         unit = str(unit).strip()
         unit_token = f'({unit})'
         if unit and unit_token not in label:
@@ -2355,6 +2487,7 @@ class MainWindow(
         user_initiated=False,
     ):
         if not self.files:
+            self._set_time_plot_diagnostics(canvas)
             canvas.clear()
             canvas.draw()
             if update_primary_ui:
@@ -2364,6 +2497,7 @@ class MainWindow(
             return
         all_checked = self.channel_list.get_checked_channels()
         if not all_checked:
+            self._set_time_plot_diagnostics(canvas)
             mode = self.chart_stack.plot_mode_for_canvas(canvas)
             delta = getattr(canvas, "try_apply_selection_delta", None)
             delta_result = (
@@ -2437,20 +2571,6 @@ class MainWindow(
             self.statusBar.showMessage("已取消高风险叠加绘制", 3000)
             return False
 
-        # 获取自定义横坐标数据。
-        # Phase 1 item 3: avoid `.values.copy()` — `to_numpy(copy=False)`
-        # returns the underlying buffer when pandas can; for object /
-        # extension dtypes it may still copy, which is acceptable.
-        # Consumers (TimeDomainCanvas, statistics) treat these arrays as
-        # read-only. The downstream range-filter mask makes a fresh
-        # array via fancy indexing, so no caller mutates `custom_x`.
-        custom_x = None
-        if self._custom_xaxis_fid and self._custom_xaxis_ch:
-            if self._custom_xaxis_fid in self.files:
-                xfd = self.files[self._custom_xaxis_fid]
-                if self._custom_xaxis_ch in xfd.data.columns:
-                    custom_x = xfd.data[self._custom_xaxis_ch].to_numpy(copy=False)
-
         range_enabled = self.inspector.top.range_enabled()
         range_lo, range_hi = self.inspector.top.range_values()
         # Cache invalidation site 6: the range-filter materializes fresh
@@ -2481,11 +2601,15 @@ class MainWindow(
                 canvas.invalidate_envelope_cache("filter state changed")
             self._last_filter_state_by_canvas[canvas_key] = cur_filter_state
 
+        applied_x = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
         render_context_key = (
             (
-                self._custom_xaxis_fid,
-                self._custom_xaxis_ch,
+                applied_x.mode,
+                applied_x.resolver,
+                applied_x.source_fid,
+                applied_x.channel,
             ),
+            self._overlay_primary,
             cur_range_state,
             cur_filter_state,
             self._time_axis_label(),
@@ -2502,7 +2626,11 @@ class MainWindow(
         )
 
         if not checked:
+            self._set_time_plot_diagnostics(canvas)
             count = len(all_checked)
+            render_context_key = getattr(
+                self, '_last_time_render_context_by_canvas', {}
+            ).get(id(canvas), render_context_key)
             delta = getattr(canvas, "try_apply_selection_delta", None)
             delta_result = (
                 delta(
@@ -2566,25 +2694,52 @@ class MainWindow(
         try:
             prepare_progress = phase_progress(30, 520, "绘图 · 准备")
             with _pp.timed("_build_time_plot_data 总耗时"):
-                data = self._build_time_plot_data(
-                    checked, custom_x, range_enabled, range_lo, range_hi,
+                result = self._build_time_plot_data(
+                    checked, None, range_enabled, range_lo, range_hi,
                     progress_callback=prepare_progress,
                 )
-            if not data:
+            self._set_time_plot_diagnostics(canvas, result)
+            if not result.rows:
                 done_progress = phase_progress(1000, 1000, "绘图 · 无数据")
                 if done_progress is not None:
                     done_progress(1, 1)
-                canvas.clear()
+                attempted = len(result.attempted_channel_keys)
+                canvas.show_empty_hint(
+                    f"自定义横坐标无法绘制 · 0/{attempted}"
+                    if applied_x.mode == CHANNEL_MODE
+                    else f"当前时间范围内无可绘制数据 · 0/{attempted}"
+                )
                 canvas.draw()
                 if update_primary_ui:
                     self.chart_stack.stats_strip.update_stats(st)
-                if user_initiated:
-                    self._warn_action_blocked(
-                        "当前时间范围内无可绘制数据，请调整时间范围或点最大"
+                    self.statusBar.showMessage(
+                        f"绘制: 0/{attempted} 通道"
                     )
                 return True
 
-            xlabel = self._time_axis_label()
+            data = result.rows
+            # Empty string is an explicit, known custom-X unit cohort. Do not
+            # collapse it to None, which means "derive from a provider" and
+            # could leak the first provider's unrelated unit into the title.
+            xlabel = self._time_axis_label(result.x_unit)
+            render_context_key = (
+                (
+                    applied_x.mode,
+                    applied_x.resolver,
+                    applied_x.source_fid,
+                    applied_x.channel,
+                ),
+                self._overlay_primary,
+                cur_range_state,
+                cur_filter_state,
+                xlabel,
+                result.x_unit,
+            )
+            contexts = getattr(
+                self, '_last_time_render_context_by_canvas', None
+            )
+            if contexts is not None:
+                contexts[id(canvas)] = render_context_key
             canvas_progress = phase_progress(520, 960, "绘图 · 构建")
             delta = getattr(canvas, "try_apply_selection_delta", None)
             delta_result = (
@@ -2648,9 +2803,13 @@ class MainWindow(
         if update_primary_ui:
             if collect_stats:
                 self.chart_stack.stats_strip.update_stats(st);
+            successful = len(result.successful_channel_keys)
+            attempted = len(result.attempted_channel_keys)
+            success_files = len({
+                fid for fid, _channel in result.successful_channel_keys
+            })
             self.statusBar.showMessage(
-                f"绘制: {len(checked)}/{len(all_checked)} 通道，"
-                f"{len(set(fid for fid, _, _ in checked))} 文件"
+                f"绘制: {successful}/{attempted} 通道，{success_files} 文件"
             )
         return True
 
@@ -2696,8 +2855,7 @@ class MainWindow(
     def _build_time_plot_data(self, checked=None, custom_x=None,
                               range_enabled=None, range_lo=0.0, range_hi=0.0,
                               progress_callback=None):
-        """Assemble the time-domain plot list
-        ``data = [(name, visible, x, sig, color, unit, fid), ...]``.
+        """Assemble per-curve TimeDomain rows and source-level diagnostics.
 
         Pure w.r.t. ``channel_data`` — it never mutates samples. Each checked
         channel yields its ORIGINAL trace (``visible = show_original``) and, when
@@ -2706,11 +2864,15 @@ class MainWindow(
         channel's own ``fs`` via the pure-numpy ``signal.filters`` backend. The
         filtered overlay is display-only; it is not written back anywhere.
 
-        Args default to live UI state so the helper is callable with no args
-        for unit tests; ``_plot_time_on_canvas`` passes its already-resolved
-        values to avoid recomputing them. ``progress_callback`` receives
+        Each logical target ``(fid, channel)`` is counted once regardless of a
+        filtered companion.  ``progress_callback`` receives
         ``(completed_sample_work, total_sample_work)`` after each channel so a
         large selected source contributes proportionally more than a tiny one.
+
+        ``custom_x`` remains in the call signature only for compatibility with
+        older narrow tests/callers. Applied behavior comes exclusively from
+        ``_custom_xaxis_spec`` so one source can never leak its X array into a
+        different source's payload.
         """
         from ...signal import filters as _filters
         # [perf-probe] 诊断探针，定位后移除。reset 滤波 apply 累计器。
@@ -2719,14 +2881,10 @@ class MainWindow(
 
         if checked is None:
             checked = self.channel_list.get_checked_channels()
-        if custom_x is None and self._custom_xaxis_fid and self._custom_xaxis_ch:
-            if self._custom_xaxis_fid in self.files:
-                xfd = self.files[self._custom_xaxis_fid]
-                if self._custom_xaxis_ch in xfd.data.columns:
-                    custom_x = xfd.data[self._custom_xaxis_ch].to_numpy(copy=False)
         if range_enabled is None:
             range_enabled = self.inspector.top.range_enabled()
             range_lo, range_hi = self.inspector.top.range_values()
+        applied_x = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
 
         fp = getattr(self.inspector, "filter_panel", None)
         spec = None
@@ -2743,9 +2901,10 @@ class MainWindow(
         self._time_filtered_names = set()
 
         eff_groups = self.channel_list.checked_axis_groups()
-        data = []
+        result = TimePlotBuildResult()
         channel_work = {}
         for fid, ch, _color in checked:
+            result.attempted_channel_keys.add((fid, ch))
             fd = self.channel_list.get_file_data(fid)
             if fd is None or ch not in fd.data.columns:
                 continue
@@ -2760,20 +2919,94 @@ class MainWindow(
             if callable(progress_callback):
                 progress_callback(completed_work, total_work)
 
+        # Unit compatibility is a source fact. Build one representative per
+        # source so a file with many selected Y channels cannot outvote other
+        # files when choosing the largest normalized-unit cohort.
+        incompatible_units = {}
+        if applied_x.mode == CHANNEL_MODE:
+            representatives = []
+            seen_fids = set()
+            for fid, ch, _color in checked:
+                if fid in seen_fids:
+                    continue
+                seen_fids.add(fid)
+                representatives.append(resolve_custom_xaxis(
+                    target_fid=fid,
+                    target_channel=ch,
+                    files=self.files,
+                    spec=applied_x,
+                ))
+            # Unit voting happens only after each source proves that its X is
+            # drawable in the active acquisition-time window. A numerically
+            # dominant unit outside the selected range must not suppress the
+            # only cohort that can actually render.
+            eligible_representatives = []
+            for resolved in representatives:
+                if not resolved.ready or resolved.x_values is None:
+                    continue
+                source = self.files.get(resolved.source_fid)
+                if source is None:
+                    continue
+                candidate_x = resolved.x_values
+                if range_enabled:
+                    time_axis = source.time_array
+                    mask = (
+                        (time_axis >= range_lo)
+                        & (time_axis <= range_hi)
+                    )
+                    candidate_x = candidate_x[mask]
+                if len(candidate_x) == 0:
+                    continue
+                if not np.isfinite(
+                    np.asarray(candidate_x, dtype=float)
+                ).any():
+                    continue
+                eligible_representatives.append(resolved)
+
+            cohorted = apply_unit_cohort(eligible_representatives)
+            for resolved in cohorted:
+                if resolved.issue_code == 'x_unit_incompatible':
+                    incompatible_units[resolved.source_fid] = resolved
+            result.x_unit = next((
+                resolved.unit for resolved in cohorted
+                if resolved.ready
+            ), None)
+
         report_progress()
         for fid, ch, color in checked:
             fd = self.channel_list.get_file_data(fid)
+            source_label = str(
+                getattr(fd, 'short_name', '') or fid
+            ) if fd is not None else str(fid)
             if fd is None or ch not in fd.data.columns:
+                result.issues.append(TimePlotIssue(
+                    code='missing_target_channel',
+                    source_fid=str(fid),
+                    source_label=source_label,
+                    target_channel=str(ch),
+                    x_channel=str(applied_x.channel or ''),
+                    detail='目标通道已不存在',
+                ))
                 continue
             source_work = max(1, len(fd.data))
             time_axis = fd.time_array
-            # Custom X axis (by reference; the canvas treats arrays as
-            # read-only).
-            if custom_x is not None and len(custom_x) == len(fd.data):
-                x_axis = custom_x
+            sig = fd.data[ch].to_numpy(copy=False)
+            if applied_x.mode == CHANNEL_MODE:
+                resolved = resolve_custom_xaxis(
+                    target_fid=fid,
+                    target_channel=ch,
+                    files=self.files,
+                    spec=applied_x,
+                )
+                if not resolved.ready:
+                    if resolved.issue is not None:
+                        result.issues.append(resolved.issue)
+                    completed_work += source_work * (2 if filt_enabled else 1)
+                    report_progress()
+                    continue
+                x_axis = resolved.x_values
             else:
                 x_axis = time_axis
-            sig = fd.data[ch].to_numpy(copy=False)
             unit = fd.channel_units.get(ch, '')
             name = fd.get_prefixed_channel(ch)
             # Range controls are always in acquisition time, even when the
@@ -2782,28 +3015,86 @@ class MainWindow(
                 m = (time_axis >= range_lo) & (time_axis <= range_hi)
                 x_axis, sig = x_axis[m], sig[m]
             if len(sig) == 0:
+                result.issues.append(TimePlotIssue(
+                    code='empty_after_time_range',
+                    source_fid=str(fid),
+                    source_label=source_label,
+                    target_channel=str(ch),
+                    x_channel=str(applied_x.channel or ''),
+                    detail='所选时间范围内没有数据',
+                ))
+                completed_work += source_work * (2 if filt_enabled else 1)
+                report_progress()
                 continue
-            gid = eff_groups.get((fid, ch))
-            if gid is not None:
-                data.append((name, show_orig, x_axis, sig, color, unit, fid,
-                             {"axis_group": gid}))
-            else:
-                data.append((name, show_orig, x_axis, sig, color, unit, fid))
 
-            completed_work += source_work
-            report_progress()
-
+            filtered = None
+            gspec = None
             if filt_enabled:
                 fs = float(getattr(fd, "fs", 0.0)) or self._estimate_fs(time_axis)
                 try:
                     gspec, _msg = _filters.nyquist_guard(spec, fs)
                 except ValueError:
                     # band/bandstop with lo >= hi → draw original only.
-                    completed_work += source_work
+                    gspec = None
+                if gspec is not None:
+                    with _pp.filter_apply():
+                        filtered = _filters.apply(sig, gspec, fs)
+
+            if applied_x.mode == CHANNEL_MODE:
+                finite_x = np.isfinite(np.asarray(x_axis, dtype=float))
+                if not finite_x.any():
+                    result.issues.append(TimePlotIssue(
+                        code='non_finite_x',
+                        source_fid=str(fid),
+                        source_label=source_label,
+                        target_channel=str(ch),
+                        x_channel=str(applied_x.channel or ''),
+                        detail='所选时间范围内横坐标没有有限数值',
+                    ))
+                    completed_work += source_work * (2 if filt_enabled else 1)
                     report_progress()
                     continue
-                with _pp.filter_apply():  # [perf-probe] 累计单次滤波耗时
-                    filtered = _filters.apply(sig, gspec, fs)
+                incompatible = incompatible_units.get(str(fid))
+                if incompatible is not None:
+                    result.issues.append(TimePlotIssue(
+                        code='x_unit_incompatible',
+                        source_fid=str(fid),
+                        source_label=source_label,
+                        target_channel=str(ch),
+                        x_channel=str(applied_x.channel or ''),
+                        detail=incompatible.detail,
+                    ))
+                    completed_work += source_work * (
+                        2 if filt_enabled else 1
+                    )
+                    report_progress()
+                    continue
+                # Preserve the original zero-copy buffers when every X point
+                # is finite. Besides avoiding an unnecessary allocation, this
+                # keeps selection-delta signatures stable across identical
+                # replots. Fancy-index only when there is actually work to do.
+                if not finite_x.all():
+                    x_axis = x_axis[finite_x]
+                    sig = sig[finite_x]
+                    if filtered is not None:
+                        filtered = filtered[finite_x]
+
+            gid = eff_groups.get((fid, ch))
+            if gid is not None:
+                result.rows.append((
+                    name, show_orig, x_axis, sig, color, unit, fid,
+                    {"axis_group": gid},
+                ))
+            else:
+                result.rows.append(
+                    (name, show_orig, x_axis, sig, color, unit, fid)
+                )
+            result.successful_channel_keys.add((fid, ch))
+
+            completed_work += source_work
+            report_progress()
+
+            if filtered is not None and gspec is not None:
                 fname = f"{name} ({self._filter_suffix(gspec)})"
                 self._time_filtered_names.add(fname)
                 # 8th field ``meta``: marks this as a display companion of the
@@ -2811,14 +3102,17 @@ class MainWindow(
                 # the SAME axis/row instead of allocating a fresh subplot row.
                 # Original 7-tuple rows are unchanged → backward compatible.
                 meta = {"companion_of": name, "dash": True}
-                data.append(
+                result.rows.append(
                     (fname, show_filt, x_axis, filtered, color, unit, fid, meta)
                 )
                 completed_work += source_work
                 report_progress()
+            elif filt_enabled:
+                completed_work += source_work
+                report_progress()
         completed_work = total_work
         report_progress()
-        return data
+        return result
 
     def _estimate_fs(self, t):
         t = np.asarray(t, dtype=float)

@@ -380,7 +380,8 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
     fake._custom_xaxis_fid = None
     fake._custom_xaxis_ch = None
     fake._custom_xlabel = None
-    fake._time_axis_label = lambda: "Time (s)"
+    fake._time_axis_label = lambda _unit=None: "Time (s)"
+    fake._set_time_plot_diagnostics = lambda *_args, **_kwargs: None
     fake._sync_time_range_inputs_from_visible_xlim = lambda: None
     fake.statusBar = types.SimpleNamespace(showMessage=lambda *_args, **_kwargs: None)
 
