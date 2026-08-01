@@ -53,8 +53,12 @@
 ## Agent Assignment 建议
 
 - **Batch 0、2、3、4（渲染与 UI 面）：** `pyqt-ui-engineer`
-- **Batch 1（runner 逻辑修复）、4 中 batch.py 接线、5（拆除/打包/搬迁）：**
-  `refactor-architect`（或通用 worker）
+- **Batch 1（runner 函数体逻辑修复）：** 通用 `worker`；禁止分给只允许模块搬迁、
+  import/re-export 调整的 `refactor-architect`。
+- **Batch 4 中 batch.py 接线：** 修改函数体/plumbing 时用通用 `worker`；纯模块搬迁才可
+  使用 `refactor-architect`。
+- **Batch 5（拆除/打包/搬迁）：** `refactor-architect` 或通用 `worker`，按实际是否需要
+  修改函数体拆分所有权。
 - **Batch 3 完成后：** `signal-processing-expert` 做一次 dB/数值不变量 review
   （只 review，不改码）
 - 每个 Batch 完成后先 spec-compliance review，再 code-quality review。
