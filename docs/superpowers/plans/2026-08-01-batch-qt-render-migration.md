@@ -174,8 +174,9 @@ Spec 附录（追加 `## 附录 A：Spike 结论`）。
     四角与 plot-area 不含 Qt/pyqtgraph 默认控件 chrome；不得复制主界面模块导航。
 - [ ] **T2.3 time subplot（吸收 B2、B3）**
   - 红测先行：8 面板相邻文本 sceneBoundingRect 不相交；仅底行 X 标签；
-    X 范围传播一致；B3 标题分派（source 分组→channel 名，channel 分组→文件名，
-    同图语义一致）。
+    X 范围传播一致；renderer 对显式安全 panel titles 只负责同图一致显示，不从
+    `render_group_by` 或 raw group key 猜语义。B3 的 source→channel、channel→文件名
+    producer 分派与 producer-shaped 红测在 T4.2 原子接线时完成。
   - 结构断言 + 像素特征断言双写（Spec §5 分层）。
 - [ ] **T2.4 B4 图面文本守卫（渲染端）**
   - 红测：原始 `group_key` 和已知 source 绝对路径不出现在任何
@@ -191,7 +192,8 @@ Spec 附录（追加 `## 附录 A：Spike 结论`）。
     PASS/FAIL + 备注。至少提交一张 time contact sheet 和一张 fft contact sheet。
 
 **Gate 2：** `pytest tests/test_batch_render_qt*.py -q` 全绿（offscreen）；
-B1/B2/B3 红测有 RED→GREEN 证据；T2.5 所有 case 机器断言和目视检查均 PASS；
+B1/B2 与 B3 renderer-consumer 红测有 RED→GREEN 证据（B3 producer Gate 明确留在
+T4.2）；T2.5 所有 case 机器断言和目视检查均 PASS；
 全量失败 nodeid 集合没有超出 Batch 1 基线。
 
 ---
@@ -231,9 +233,14 @@ T3.3 机器断言和目视检查均 PASS；全量失败 nodeid 集合没有超�
     `mf4_analyzer/batch_render_smoke.py`、`mf4_analyzer/frozen_batch_acceptance.py`、
     `mf4_analyzer/batch_time_group_acceptance.py` + 对应测试。
   - 按 Spec §3 增加 `requested_image_format` migration provenance：旧导入
-    svg/pdf→canonical png + 中文 warning；新的直接 PDF/SVG 请求仍 fail closed。
-  - fingerprint 只看 canonical PNG；requested/effective 分离；resume 只复用
-    effective PNG + checksum，旧 PDF/SVG artifact 不得冒充 PNG。
+    svg/pdf→canonical png + 冻结文案的中文 warning；兼容只在可信旧文件 importer，
+    `batch_recipe._duck_outputs` 等普通 canonicalizer 不得静默迁移新的非法请求。新增
+    `migration_warnings` 专用载体并补 duck-field 白名单；不得复用 degradation reason。
+    新的直接 PDF/SVG 请求仍 fail closed。
+  - fingerprint 只看 canonical PNG；requested/effective 分离；`_plan_group_recovery`
+    固定把当前 effective `png` 传给 resume，禁止优先采用 prior requested pdf/svg。
+    manifest 可接受 prior requested png/pdf/svg，但 effective/artifact/扩展名/checksum 必须
+    全是有效 PNG；旧 PDF/SVG artifact 不得冒充 PNG。补 grouped resume 正反矩阵。
   - 把真正的产品默认链补齐到 1.5：`BatchOutput`、`OUTPUT_DEFAULTS`、preset 导入
     缺省、validation fallback、GUI 默认选中项，并复核 T2 已改的
     `BatchRenderOptions`；旧 preset 显式保存的 1.0 继续尊重。
@@ -243,16 +250,21 @@ T3.3 机器断言和目视检查均 PASS；全量失败 nodeid 集合没有超�
 - [ ] **T4.2 facade + B4 plumbing 原子切换**
   - Files: `mf4_analyzer/batch_render.py`、`mf4_analyzer/batch_grouping.py`、
     `mf4_analyzer/batch.py`、`tests/test_batch_renderer.py`、
-    `tests/test_batch_runner.py`。
+    `tests/test_batch_runner.py`、`tests/test_db_conversion_convergence.py`、
+    `mf4_analyzer/batch_series_spool.py`、`tests/test_batch_series_spool.py`、
+    `tools/render_batch_input_output_polish.py`。
   - 先 `rg -n "_build_batch_figure|_build_export_scene|batch_render|RenderGroup" \
     tests/ mf4_analyzer/ tools/`，列出完整 blast radius。
   - `batch_render.py` 改为薄门面；公共签名保持
     `render_batch_image(..., warnings_out=None)`，不改 keyword 兼容性。
   - 删除或迁移 `BatchRunner._build_export_scene`，facade 不 re-export 已退役的
     `_build_batch_figure`。
-  - `RenderGroup.display_name` 在 `batch_grouping.py` 定义/构造；`batch.py` 只把人类
-    display 字段送入 context。精确断言原始 group_key/绝对路径不进图面，同时允许
-    合法通道名含 `[`/`"`。
+  - `RenderGroup.display_name` 在 `batch_grouping.py` 定义/构造；grouped context 使用
+    `source_display_name=display_name, group=""`，不得重复拼首行，也不得送 raw key。
+    `_render_group` 在 producer 端分派 B3：source 分组 panel title=channel，channel 分组
+    panel title=文件名。producer-shaped 测试从 `_render_group` 捕获实际 spec/context，
+    同时检查 Qt 文本与 PNG metadata；精确断言原始 group_key/绝对路径不进图面，同时
+    允许合法通道名含 `[`/`"`。
   - `BatchRunner` 对 4 种 kind 都传递 `warnings_out`，不得只在 time 路径保留 warning；
     非法 heatmap cmap 的 warning 必须进入 item/manifest。
   - `test_renderer_source_is_gui_framework_free` 反转为“禁 matplotlib”守卫，并新增
@@ -269,10 +281,13 @@ T3.3 机器断言和目视检查均 PASS；全量失败 nodeid 集合没有超�
   - 时域分组验收：补 `render_layout=subplot` 与 `x_source=channel` 组合
     （review §3 指出的矩阵缺口），产出 PNG 走 B2 的不相交断言。
 - [ ] **T4.4 GUI 端到端**
-  - Files: `tests/ui/`（新测试）
-  - pytest-qt offscreen：真实 `BatchRunnerThread` 跑一单（data+image），验证
-    worker→主线程 marshal 出图成功、manifest artifact_facts 完整、UI 不死锁；
-    再验 backend 不可用注入时 data-only 降级语义原样（复用现有降级测试改写）。
+  - Files: `tests/ui/test_batch_runner_thread.py`（新测试）
+  - pytest-qt offscreen：用 signal/`qtbot.waitUntil` 泵事件循环，真实
+    `BatchRunnerThread` 跑一单（data+image），验证 worker→主线程 blocking marshal、
+    返回后 warning 完整、GUI-thread 异常原样传播、manifest artifact_facts 完整、UI
+    不死锁。backend 不可用只允许在输出预留前降级 data-only；Qt build/marshal/save 的
+    writer-time 失败必须由 `batch_output.atomic_write_set` 整组回滚。保留 `_write_image`
+    现有内层 staging，不在本迁移顺手重构原子写层级。
 - [ ] **T4.5 完整离屏矩阵与双层目视签字**
   - `QT_QPA_PLATFORM=offscreen` 实跑 Spec §2.7 全矩阵：4 kind、time 五场景、heatmap
     非对称矩阵、三主题、1080p/4K、CJK、custom-X。
@@ -321,8 +336,11 @@ T4.2 恢复。此时仍不得拆除 matplotlib 依赖、打包契约和旧专属
     `tests/test_windows_runtime_dependencies.py`
   - 删 matplotlib 依赖声明与 `MPLBACKEND`/mpl-data 裁剪逻辑；PyInstaller
     excludes 加 `matplotlib`；评估 `contourpy/kiwisolver/cycler/fontTools/PIL`
-    是否失去唯一使用者，逐个决定去留并记录。
-  - 打包契约新增：platforms 插件含 `offscreen`；冻结烟测判据换新版。
+    是否失去唯一使用者，逐个决定去留并记录。`verify_frozen_batch_render.py` 的 PNG
+    检查改用 Qt `QImage`，不得把 Pillow 重新塞入产品依赖或依赖旧 venv 的传递安装。
+  - 打包契约新增：platforms 插件同时含 `qoffscreen`/`qwindows`；冻结烟测判据换新版。
+    在拆除前先保存 fresh full/lite EXE/build SHA 与 `_internal` bytes/files，作为可信
+    before baseline；after-build 不能反推 before。
   - `tools/` 下开发对比脚本（`fft_welch_compare.py` 等）保留，文件头注明需
     自装 matplotlib（不属产品运行时）。
   - 修 review D7：只给真正调用 `powershell.exe` 的 native-execution 用例加
@@ -350,8 +368,10 @@ T4.2 恢复。此时仍不得拆除 matplotlib 依赖、打包契约和旧专属
   - 新鲜构建 full/lite onedir，先显式 `QT_QPA_PLATFORM=offscreen` 跑 4-kind PNG +
     CJK + turbo smoke，再显式 `QT_QPA_PLATFORM=windows` 用
     `WA_DontShowOnScreen` 跑同矩阵。
-  - 两份 evidence JSON 必须记录不同 platform，绑定同一新 EXE SHA；旧 EXE 或旧
-    evidence 不得复用。记录迁移前后 `_internal` bytes/files。
+  - 每个 flavor 两份、共四份 evidence JSON：full-offscreen、full-windows、
+    lite-offscreen、lite-windows。每份记录 requested/actual platform；同一 flavor 的
+    两份绑定同一新 EXE SHA，full/lite 不要求 SHA 相同。旧 EXE 或旧 evidence 不得复用，
+    并与 T5.2 拆除前 baseline 同口径记录 `_internal` bytes/files。
 - [ ] **T6.3 验收报告**
   - 写 `docs/superpowers/reports/2026-08-XX-batch-qt-render-migration-review.md`：
     离屏四模块 contact sheet、实现 worker 与协调/主 agent 的逐 case 双签字、前台单文件

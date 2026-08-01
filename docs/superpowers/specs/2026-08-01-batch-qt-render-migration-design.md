@@ -112,6 +112,10 @@ mf4_analyzer/
 - 私有 `_build_batch_figure` **不属于**保留 API。facade 切换时必须先处理当前
   `BatchRunner._build_export_scene` 对它的兼容引用：删除该仅测试兼容 wrapper，或改成
   明确命名的 Qt scene 测试 helper；不得留下指向已删除 matplotlib 私有函数的入口。
+- 私有 API 的 blast radius 还包括 `tests/test_db_conversion_convergence.py` 中的
+  `_build_export_scene` 消费者；这些测试改到共享 dB-reference producer/formatter 契约，
+  不能因为删除 wrapper 一并丢掉。`batch_series_spool.py` 仍通过公共 facade 获取
+  `BatchSeries`，门面必须继续 re-export 该类型。
 - `RenderGroup` 实际定义在 `mf4_analyzer/batch_grouping.py`；B4 的 `display_name`
   字段与构造测试必须在该模块落地，`batch.py` 只消费结果。
 
@@ -143,6 +147,14 @@ mf4_analyzer/
    - `render_batch_image` 全程走此入口；每张图一次 marshal，图内不回跳线程。
 3. 崩溃/退出防护：app 正在退出（`aboutToQuit` 已发）时 fail-fast 返回渲染错误，
    走 BatchRunner 既有的"图片写入失败 → 整组回滚"路径。
+
+GUI e2e 必须通过真实 `ui/drawers/batch/runner_thread.py::BatchRunnerThread` 验证该边界：
+pytest-qt 泵主事件循环，worker 同步等待 marshal；主线程不得反向同步等待 worker。
+`warnings_out` 只由 GUI 线程写，caller 只在 blocking call 返回后读取，并验证 GUI-thread
+异常原样传播。发布事务权威仍是 `batch_output.atomic_write_set`；backend 只允许在预留
+输出路径之前的 import/probe 失败时降级为 data-only，Qt build/marshal/PNG save 等
+writer-time 失败必须整组回滚。现有 `_write_image` 的内层 staging 在本迁移中保持不动，
+不得借 renderer 切换顺手重构原子写层级。
 
 平台选择：调用方显式设置的 `QT_QPA_PLATFORM` 优先，`ensure_app()` 只用
 `setdefault`。源代码/pytest CLI 默认走 `offscreen`；Windows 冻结 verifier 若要验证
@@ -201,7 +213,9 @@ mf4_analyzer/
 - **B2 吸收**：8 面板（`_MAX_SUBPLOT_PANELS` 上限工况）必须可读。验收断言：
   相邻面板任何文本项的 sceneBoundingRect 互不相交。
 - **B3 吸收**：面板标题按 `group_by` 分派——`source` 分组用 channel 名，
-  `channel` 分组用文件名；同一张图内标题语义必须一致。
+  `channel` 分组用文件名；同一张图内标题语义必须一致。该分派必须在
+  `BatchRunner._render_group` 的 producer 端完成，renderer 只消费已决定的安全标题；
+  只给 `_builder` 人工构造标题的测试不算完成。
 - linestyle：`-`→SolidLine、`--`→DashLine（滤波伴随曲线沿用虚线约定）。
 
 **`fft`（DataFrame）**
@@ -222,12 +236,15 @@ mf4_analyzer/
 **报告页合成（`_page`，所有 kind 共用）**
 
 - 图头两行（LabelItem 行）：`source_display_name · group` / `channel · method`。
-  **B4 吸收**：图头输入必须是人类可读 display 名——`RenderGroup` 增加
-  `display_name` 字段（source 分组 = `Path(source_identity).name` +
-  group_identity；channel 分组 = 通道名），`group_key` 保持机器身份用途、
+  **B4 吸收**：`RenderGroup.display_name` 是完整、安全的首行 display 文本（source
+  分组 = 文件名 + 人类可读 group identity；channel 分组 = 通道名）；grouped render
+  传入 context 时令 `source_display_name=display_name`、`group=""`，禁止把完整 display
+  name 再和 group 重复拼接。`group_key`、group ID、source identity 保持机器身份用途、
   **禁止**进入任何图面文本。验收使用精确泄露守卫：断言原始 `group_key` 和已知
   `source_identity` 绝对路径不出现在任何 LabelItem/TextItem；不得用“禁止所有
-  `[`/`"` 字符”代替，因为合法通道名本身可能含这些字符。
+  `[`/`"` 字符”代替，因为合法通道名本身可能含这些字符。producer-shaped 测试必须从
+  `BatchRunner._render_group` 捕获实际 spec/context，并同时检查 Qt 文本项与 PNG metadata；
+  只测人工安全 context 不算 B4 验收。
 - facts 事实条：window/NFFT/weighting/averaging/overlap/Fs/dB 标签 +
   组图 `members=k/n`，字段与现实现一致（`effective_facts`）。
 - 页脚：`Task <id> · TraceLab batch export`。
@@ -311,23 +328,30 @@ coverage 边界的问题。
 
 - `batch_image_options.SUPPORTED_IMAGE_FORMATS` → `frozenset({"png"})`；
   `BatchRenderOptions` 校验随之收缩，报错文案更新。
-- **只在旧 preset/recipe 导入边界兼容**：`batch_preset_io.py` / recipe mapping importer
-  读到存量 `image_format in {"svg","pdf"}` 时，构造 canonical
+- **只在可信旧 preset/recipe 文件导入边界兼容**：`batch_preset_io.py`（以及带显式
+  legacy-import 标记的 recipe 文件 importer）读到存量
+  `image_format in {"svg","pdf"}` 时，构造 canonical
   `BatchOutput(image_format="png", requested_image_format=<原值>)`。新增
   `requested_image_format: str | None = None` 仅保存本次导入/运行的迁移来源；原生 PNG
   为 `None`。preset 再保存时只写 canonical `image_format="png"`，不持久化该 provenance；
   当前运行的 requested settings、item/group warning 和 manifest 已足够保留审计事实。
+  `batch_recipe._duck_outputs` 等普通 canonicalizer 不是旧文件边界，不得无条件迁移；
   新代码直接构造 `BatchOutput(image_format="pdf"|"svg")` 仍按 unsupported format
   拒绝，不能把新的非法请求静默伪装成旧预设。
 - runner 的 `requested_outputs["image"]` 使用
   `requested_image_format or image_format`，`effective_outputs["image"]` 固定为 `png`；
-  二者不同时生成确定的中文 warning，写入 item/group warning 与 manifest。
+  二者不同时生成一条冻结文案的中文 warning，写入专用
+  `migration_warnings: tuple[str, ...]`，再统一传播到 item/group warning 与 manifest。
+  文案模板固定为：`旧预设图像格式 {requested_upper} 已迁移为 PNG；本次仅输出 PNG。`
+  这不是 backend degradation，禁止复用 `degraded_reason`。所有 duck-field 白名单必须
+  显式包含 provenance/warning 所需字段，避免跨层静默丢失。
 - recipe fingerprint 使用 canonical effective `image_format="png"`，不纳入
   `requested_image_format`，让迁移 preset 与等价原生 PNG recipe 具有相同 artifact
   语义。`requested_output_settings` 仍保留原请求用于审计。
-- resume 只以 fingerprint + `effective_outputs.image == "png"` + PNG artifact
-  checksum 判定完成；允许已记录的 requested 为 png/pdf/svg。旧 manifest 若
-  effective 仍是 PDF/SVG，不得复用为 PNG。
+- resume caller 必须传当前 canonical effective `png`，不得优先采用 prior manifest 的
+  requested pdf/svg。判定只以 fingerprint + `effective_outputs.image == "png"` + PNG
+  artifact format/扩展名/checksum 完整为完成；manifest 可允许已记录的 requested 为
+  png/pdf/svg。旧 manifest 若 effective 或 artifact 仍是 PDF/SVG，不得复用为 PNG。
 - GUI `output_panel.py`：格式下拉只留 PNG（`("PNG","png")`），移除 SVG/PDF 两项；
   "PNG DPI" 行保留且恒可用（不再有非 png 分支禁用逻辑）。
 - CLI：`frozen_batch_acceptance.py` 请求 CSV+**PNG**；
@@ -409,19 +433,24 @@ matplotlib 版渲染器**不再接收任何修复**；迁移完成前它保持�
   DejaVu 字体白名单逻辑；PyInstaller excludes 增加 `matplotlib`
   （连带评估 `contourpy/kiwisolver/cycler/fontTools/PIL` 是否失去唯一使用者）。
 - `tools/matplotlib_frozen_contract.py`、`tools/verify_frozen_batch_render.py`
-  中 matplotlib 专属校验：删除/改写。
+  中 matplotlib 专属校验：删除/改写。冻结 PNG 检查改用 Qt `QImage`；不得依赖
+  Matplotlib 曾经传递安装的 Pillow，也不得用复用旧 venv 掩盖 fresh-build 缺包。
 - lessons：`matplotlib-pruning-needs-frozen-render-matrix` 标记 superseded；
   `batch-render-cjk-glyph-coverage` 改写为 Qt 版规则；新增"Qt 离屏批渲染
   线程边界"lesson。
 
 新增打包契约：
 
-- 冻结包 platforms 插件必须包含 `offscreen`（headless 场景）。冻结验证分两次：
+- 冻结包 platforms 插件必须同时包含 `qoffscreen` 与 `qwindows`。每个 onedir flavor
+  的冻结验证分两次：
   `QT_QPA_PLATFORM=offscreen` 跑 headless 4-kind 矩阵；Windows 真机再显式
   `QT_QPA_PLATFORM=windows` 用 `WA_DontShowOnScreen` 跑原生平台矩阵。证据 JSON
-  必须记录实际 platform，二者不可互相冒充。
+  必须记录实际 platform，二者不可互相冒充。因此 full/lite 共四份 evidence：
+  full-offscreen、full-windows、lite-offscreen、lite-windows；同一 flavor 的两份证据
+  绑定同一 EXE SHA，full 与 lite 不要求 SHA 相同。
 - 冻结烟测判据：4 kind × PNG 非空 + CJK 双保险（§2.6）+ turbo 取样正确。
-- 记录迁移前后冻结包 `_internal` 字节数/文件数（验证减包收益）。
+- 在拆除 Matplotlib **之前**先保存 fresh full/lite 的 EXE/build SHA 与 `_internal`
+  字节数/文件数；拆除后再生成同口径值。只有 after-build 值不能反推可信 before baseline。
 
 ---
 
