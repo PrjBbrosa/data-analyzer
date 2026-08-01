@@ -87,6 +87,51 @@ def test_apply_preset_current_single_round_trip(qtbot, tmp_path, qt_app_files):
     assert sheet.time_range() == (1.0, 5.0)
 
 
+def test_run_click_uses_core_preview_artifact_count_without_runtime_manifest(
+    qtbot, tmp_path, qt_app_files, monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from mf4_analyzer.ui.drawers.batch.runner_thread import BatchRunnerThread
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    source = qt_app_files[0]
+    source.data["sig2"] = source.data["sig"] * 2.0
+    source.channels.append("sig2")
+    files = {
+        key: source
+        for key in ("source-a", "source-b")
+    }
+    sheet = BatchSheet(None, files=files)
+    qtbot.addWidget(sheet)
+    sheet.apply_files(("source-a", "source-b"), ())
+    sheet.apply_signals(("sig", "sig2"))
+    sheet.apply_method("time")
+    sheet.apply_params({"render_group_by": "source"})
+    sheet._output_panel.apply_directory(str(tmp_path / "out"))
+    sheet._resume_manifest_path = str(tmp_path / "runtime-only.json")
+
+    seen = {}
+
+    class Runner:
+        def preview_outputs(self, preset, output_dir):
+            seen["preset"] = preset
+            seen["output_dir"] = output_dir
+            return SimpleNamespace(artifact_count=6)
+
+    monkeypatch.setattr(sheet, "_make_runner", lambda: Runner())
+    monkeypatch.setattr(BatchRunnerThread, "start", lambda _thread: None)
+
+    sheet._on_run_clicked()
+    try:
+        assert seen["output_dir"] == str(tmp_path / "out")
+        assert not hasattr(seen["preset"], "resume_manifest")
+        assert sheet._task_list.row_count() == 4
+        assert "6" in sheet._task_list._idle_label.text()
+    finally:
+        sheet._on_thread_finished()
+
+
 def test_build_current_batch_preset_supports_fft_time(qtbot, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 

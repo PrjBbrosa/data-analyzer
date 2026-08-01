@@ -91,6 +91,23 @@ def test_batch_output_panel_time_axis_labels(qtbot):
     assert panel._z_axis_row.isHidden() is True
 
 
+def test_batch_output_x_axis_context_is_presentation_only(qtbot):
+    """A synchronized X label must not dirty the portable output recipe."""
+    panel = _make_panel(qtbot)
+    panel.apply_method_defaults("time")
+    changed = []
+    panel.changed.connect(lambda: changed.append(True))
+
+    panel.set_x_axis_context(label="Time", unit="s")
+    assert panel._axis_row_parts["x"]["label"].text() == "Time (s)"
+
+    panel.set_x_axis_context(label="engine_speed", unit="rpm")
+    assert panel._axis_row_parts["x"]["label"].text() == "engine_speed (rpm)"
+    assert panel.spin_x_min.suffix() == " rpm"
+    assert panel.spin_x_max.suffix() == " rpm"
+    assert changed == []
+
+
 def test_batch_output_panel_unit_toggle_resets_z_range_db_to_linear(qtbot):
     """dB → Linear: floor/ceiling reset to (0, 1), z_auto re-enabled,
     spinboxes disabled, ``changed`` emitted exactly once.

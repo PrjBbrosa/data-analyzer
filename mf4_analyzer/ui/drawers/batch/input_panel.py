@@ -569,6 +569,7 @@ class InputPanel(QWidget):
     """Composes the INPUT column: file list + signal picker + RPM + time."""
 
     changed = pyqtSignal()
+    channelUniverseChanged = pyqtSignal(tuple, dict)
 
     def __init__(
         self,
@@ -831,6 +832,7 @@ class InputPanel(QWidget):
         # RPM picker shares the same universe.
         self._rpm_picker.set_available(available)
         self._rpm_picker.set_partially_available(partial)
+        self.channelUniverseChanged.emit(tuple(available), dict(partial))
 
     # ------------------------------------------------------------------
     # Accessors
