@@ -554,13 +554,26 @@ def load_batch_manifest(path_or_manifest) -> dict:
                 raise ManifestValidationError(
                     f"{member_prefix}.source", "must be an object",
                 )
-            if not isinstance(source.get("identity"), str) or not source.get(
-                "identity"
-            ):
+            for source_field in ("identity", "size", "mtime_ns"):
+                if source_field not in source:
+                    raise ManifestValidationError(
+                        f"{member_prefix}.source.{source_field}",
+                        "required field is missing",
+                    )
+            if not isinstance(source["identity"], str) or not source["identity"]:
                 raise ManifestValidationError(
                     f"{member_prefix}.source.identity",
                     "must be a non-empty string",
                 )
+            for source_field in ("size", "mtime_ns"):
+                value = source[source_field]
+                if value is not None and (
+                    not isinstance(value, int) or isinstance(value, bool)
+                ):
+                    raise ManifestValidationError(
+                        f"{member_prefix}.source.{source_field}",
+                        "must be an integer or null",
+                    )
 
     expected_summary = derive_summary(entries)
     if dict(raw["summary"]) != expected_summary:
@@ -682,6 +695,11 @@ def find_resumable_group(
                 return None
             previous_source = recorded.get("source") or {}
             if any(
+                key not in previous_source
+                for key in ("identity", "size", "mtime_ns")
+            ):
+                return None
+            if any(
                 previous_source.get(key) != current.source.get(key)
                 for key in ("identity", "size", "mtime_ns")
             ):
@@ -698,6 +716,8 @@ def find_resumable_group(
         if not _artifact_matches(
             artifact, expected_format, cancel_token=cancel_token,
         ):
+            return None
+        if cancel_token is not None and cancel_token.is_set():
             return None
         return group
     return None

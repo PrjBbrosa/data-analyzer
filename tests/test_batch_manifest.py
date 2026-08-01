@@ -6,10 +6,12 @@ import json
 
 import pytest
 
+import mf4_analyzer.batch_manifest as manifest_module
 from mf4_analyzer.batch_manifest import (
     BatchManifestRecorder,
     GroupMemberResumeFact,
     ManifestRecipeMismatch,
+    ManifestValidationError,
     RetryScope,
     artifact_facts,
     derive_summary,
@@ -53,7 +55,12 @@ def _task_entry(status, *, source_id="source-1", channel="sig", method="fft"):
     return {
         "task_id": f"task-{source_id}",
         "source_id": source_id,
-        "source": {"identity": f"identity-{source_id}"},
+        "source": {
+            "identity": f"identity-{source_id}",
+            "path": None,
+            "size": None,
+            "mtime_ns": None,
+        },
         "channel": channel,
         "channel_unit": "",
         "method": method,
@@ -600,6 +607,140 @@ def test_partial_and_degraded_groups_are_not_resumable(tmp_path):
             members=members,
             image_format="png",
         ) is None
+
+
+@pytest.mark.parametrize("missing_field", ("size", "mtime_ns"))
+def test_render_group_loader_rejects_missing_required_source_fact(
+    tmp_path,
+    missing_field,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    source = {
+        "identity": "source-a",
+        "path": None,
+        "size": None,
+        "mtime_ns": None,
+    }
+    group = _group_entry(image_path, [("task-a", source)])
+    group["members"][0]["source"].pop(missing_field)
+    manifest = dict(_manifest([]), render_groups=[group])
+
+    with pytest.raises(
+        ManifestValidationError,
+        match=rf"render_groups\.0\.members\.0\.source\.{missing_field}",
+    ):
+        load_batch_manifest(manifest)
+
+
+@pytest.mark.parametrize("missing_field", ("size", "mtime_ns"))
+def test_group_resume_defends_against_missing_source_fact_after_validation(
+    tmp_path,
+    monkeypatch,
+    missing_field,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    current_source = {
+        "identity": "source-a",
+        "path": None,
+        "size": None,
+        "mtime_ns": None,
+    }
+    group = _group_entry(image_path, [("task-a", current_source)])
+    group["members"][0]["source"].pop(missing_field)
+    manifest = dict(_manifest([]), render_groups=[group])
+    monkeypatch.setattr(
+        manifest_module,
+        "load_batch_manifest",
+        lambda unused_manifest: manifest,
+    )
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", current_source)],
+        image_format="png",
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    (
+        ("identity", None),
+        ("identity", 42),
+        ("size", "10"),
+        ("size", 10.0),
+        ("size", True),
+        ("mtime_ns", "100"),
+        ("mtime_ns", 100.0),
+        ("mtime_ns", False),
+    ),
+)
+def test_render_group_loader_rejects_wrong_source_fact_type(
+    tmp_path,
+    field,
+    bad_value,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    source = {
+        "identity": "source-a",
+        "path": None,
+        "size": 10,
+        "mtime_ns": 100,
+    }
+    source[field] = bad_value
+    manifest = dict(
+        _manifest([]),
+        render_groups=[_group_entry(image_path, [("task-a", source)])],
+    )
+
+    with pytest.raises(
+        ManifestValidationError,
+        match=rf"render_groups\.0\.members\.0\.source\.{field}",
+    ):
+        load_batch_manifest(manifest)
+
+
+def test_resumable_group_rechecks_cancel_after_successful_checksum(
+    tmp_path,
+    monkeypatch,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    source = {
+        "identity": "source-a",
+        "path": None,
+        "size": 10,
+        "mtime_ns": 100,
+    }
+    group = _group_entry(image_path, [("task-a", source)])
+    manifest = dict(_manifest([]), render_groups=[group])
+
+    class CancelAfterChecksum:
+        cancelled = False
+
+        def is_set(self):
+            return self.cancelled
+
+    cancel_token = CancelAfterChecksum()
+
+    def checksum_then_cancel(path, *, cancel_token=None, chunk_size=None):
+        cancel_token.cancelled = True
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    monkeypatch.setattr(manifest_module, "sha256_file", checksum_then_cancel)
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", source)],
+        image_format="png",
+        cancel_token=cancel_token,
+    ) is None
 
 
 def test_retry_failed_scope_only_returns_failed_and_cancelled_for_same_recipe():
