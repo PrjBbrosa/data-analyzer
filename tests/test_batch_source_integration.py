@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from mf4_analyzer.batch import AnalysisPreset, BatchOutput, BatchRunner
+from mf4_analyzer.batch_recipe import normalize_batch_params
 from mf4_analyzer.io import FileData
 from mf4_analyzer.io.source_adapters import LoadedSource, SourceDescriptor
 
@@ -138,6 +139,113 @@ def test_live_source_id_with_parallel_path_never_reloads_physical_file(tmp_path)
     assert [(item.file_id, item.signal) for item in result.items] == [
         (source_id, "sig"),
     ]
+
+
+def test_source_paths_expand_explicit_signals_across_all_logical_sources(tmp_path):
+    physical_path = tmp_path / "path-only-groups.hdf"
+    registry = _Registry({
+        physical_path: (
+            _loaded("hdf:path-a", physical_path, "raster:a", ("sig",)),
+            _loaded("hdf:path-b", physical_path, "raster:b", ("sig",)),
+        )
+    })
+    preset = replace(
+        _free_preset(signals=("sig",)),
+        source_paths=(str(physical_path),),
+    )
+
+    result = BatchRunner({}, source_registry=registry).run(
+        preset, tmp_path / "out",
+    )
+
+    assert result.status == "done"
+    assert registry.calls == [str(physical_path)]
+    assert [(item.file_id, item.signal) for item in result.items] == [
+        ("hdf:path-a", "sig"),
+        ("hdf:path-b", "sig"),
+    ]
+
+
+def test_source_paths_metadata_preview_and_fresh_run_share_logical_identity(
+    tmp_path,
+):
+    physical_path = tmp_path / "preview-path-groups.hdf"
+    sources = (
+        _loaded("hdf:preview-a", physical_path, "raster:a", ("sig",)),
+        _loaded("hdf:preview-b", physical_path, "raster:b", ("sig",)),
+    )
+    preset = replace(
+        _free_preset(signals=("sig",)),
+        source_paths=(str(physical_path),),
+    )
+    preview_registry = _Registry({physical_path: sources})
+    preview_runner = BatchRunner({}, source_registry=preview_registry)
+
+    preview = preview_runner.preview_outputs(preset, tmp_path / "preview")
+    preview_pairs = list(preview_runner._expand_tasks(
+        preset, allow_source_load=False,
+    ))
+    _, preview_render_tasks, _ = preview_runner._build_run_plan(
+        preview_pairs,
+        preset=preset,
+        requested_params=normalize_batch_params(preset.params, preset.method),
+        explicit_grouping=False,
+    )
+
+    assert preview.task_count == 2
+    assert preview_pairs == [
+        ("hdf:preview-a", "sig"),
+        ("hdf:preview-b", "sig"),
+    ]
+    assert preview_registry.probe_calls == [str(physical_path)]
+    assert preview_registry.calls == []
+
+    run_registry = _Registry({physical_path: sources})
+    result = BatchRunner({}, source_registry=run_registry).run(
+        preset, tmp_path / "run",
+    )
+
+    assert result.status == "done"
+    assert run_registry.probe_calls == [str(physical_path)]
+    assert run_registry.calls == [str(physical_path)]
+    assert [
+        (item.file_id, item.signal, item.task_id) for item in result.items
+    ] == [
+        (task.source_key, task.channel, task.identity.task_id)
+        for task in preview_render_tasks
+    ]
+
+
+@pytest.mark.parametrize("probe_cost", ("full", None))
+def test_source_paths_preview_never_uses_non_metadata_probe(
+    tmp_path, probe_cost,
+):
+    physical_path = tmp_path / "preview-full-cost.hdf"
+    registry = _Registry({
+        physical_path: (
+            _loaded("hdf:full-cost", physical_path, "raster:a", ("sig",)),
+        )
+    })
+    registry.probe_cost = probe_cost
+
+    def forbidden_probe(path, *, context=None):
+        pytest.fail("preview must not use a full/unknown-cost source probe")
+
+    def forbidden_load(path, *, context=None):
+        pytest.fail("preview must not load source samples")
+
+    registry.probe_sources = forbidden_probe
+    registry.load_sources = forbidden_load
+    preset = replace(
+        _free_preset(signals=("sig",)),
+        source_paths=(str(physical_path),),
+    )
+
+    preview = BatchRunner({}, source_registry=registry).preview_outputs(
+        preset, tmp_path / "preview",
+    )
+
+    assert preview.task_count == 1
 
 
 def test_legacy_file_paths_migrate_to_all_registry_logical_sources(tmp_path):

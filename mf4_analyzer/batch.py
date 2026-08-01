@@ -342,6 +342,7 @@ class BatchRunner:
         self._source_locators: dict[object, str] = {}
         self._source_group_identity_hints: dict[object, str] = {}
         self._descriptor_probe_cache: set[str] = set()
+        self._descriptor_source_ids: dict[str, tuple[object, ...]] = {}
         self._descriptor_probe_failures: dict[str, str] = {}
         self._physical_paths: dict[str, str] = {}
         # dB-reference-defaults Task 9 (spec §13 S4 / plan Step 9.2):
@@ -883,6 +884,18 @@ class BatchRunner:
                 ],
                 list(selected_groups),
             )
+        deferred_path_scope = bool(
+            tuple(getattr(preset, 'target_signals', ()) or ())
+            and not tuple(getattr(preset, 'target_pairs', ()) or ())
+            and not tuple(getattr(preset, 'source_ids', ()) or ())
+            and (
+                tuple(getattr(preset, 'source_paths', ()) or ())
+                or (
+                    tuple(getattr(preset, 'file_paths', ()) or ())
+                    and not tuple(getattr(preset, 'file_ids', ()) or ())
+                )
+            )
+        )
         try:
             tasks = list(self._expand_tasks(
                 preset,
@@ -908,6 +921,16 @@ class BatchRunner:
                 for source_key, channel in tasks
                 if (source_key, channel, preset.method) in retry_scope
             ]
+        deferred_paths = {
+            str(path)
+            for path in (
+                tuple(getattr(preset, 'source_paths', ()) or ())
+                or tuple(getattr(preset, 'file_paths', ()) or ())
+            )
+        }
+        deferred_path_scope = deferred_path_scope and any(
+            str(source_key) in deferred_paths for source_key, _channel in tasks
+        )
         tasks, render_tasks, render_groups = self._build_run_plan(
             tasks,
             preset=preset,
@@ -972,6 +995,8 @@ class BatchRunner:
                 'blocked', items=failed_items, blocked=[str(exc)],
             )
 
+        if deferred_path_scope:
+            tasks, render_tasks, render_groups = [], [], []
         if not tasks:
             try:
                 tasks = list(self._expand_tasks(
@@ -2330,6 +2355,24 @@ class BatchRunner:
             )
         self._source_locators[source_id] = physical_key
 
+    def _cache_source_descriptors(
+        self, physical_key: str, raw_path, descriptors,
+    ) -> tuple[object, ...]:
+        source_ids = []
+        for descriptor in descriptors:
+            source_id = descriptor.source_id
+            self._register_source_locator(source_id, raw_path)
+            self._source_channel_cache[source_id] = frozenset(
+                str(name) for name in descriptor.channel_names
+            )
+            self._source_group_identity_hints[source_id] = str(
+                descriptor.group_id or 'default'
+            )
+            source_ids.append(source_id)
+        source_ids = tuple(dict.fromkeys(source_ids))
+        self._descriptor_source_ids[physical_key] = source_ids
+        return source_ids
+
     def _bind_runtime_source_locators(self, preset) -> None:
         source_ids = tuple(getattr(preset, 'source_ids', ()) or ())
         source_paths = tuple(getattr(preset, 'source_paths', ()) or ())
@@ -2374,17 +2417,9 @@ class BatchRunner:
                 self._descriptor_probe_failures[physical_key] = str(exc)
                 self._descriptor_probe_cache.add(physical_key)
                 continue
-            found_ids = set()
-            for descriptor in descriptors:
-                source_id = descriptor.source_id
-                self._source_channel_cache[source_id] = frozenset(
-                    str(name) for name in descriptor.channel_names
-                )
-                self._source_group_identity_hints[source_id] = str(
-                    descriptor.group_id or 'default'
-                )
-                if source_id in unresolved_ids:
-                    found_ids.add(source_id)
+            found_ids = set(self._cache_source_descriptors(
+                physical_key, raw_path, descriptors,
+            )) & unresolved_ids
             missing_ids = unresolved_ids - found_ids
             if missing_ids:
                 missing = ', '.join(sorted(str(item) for item in missing_ids))
@@ -2392,6 +2427,36 @@ class BatchRunner:
                     f'batch source probe did not return source_id(s): {missing}'
                 )
             self._descriptor_probe_cache.add(physical_key)
+
+    def _path_source_keys_without_load(self, paths) -> list[object]:
+        scoped_keys = []
+        for path in dict.fromkeys(paths):
+            physical_key = self._physical_cache_key(path)
+            if physical_key not in self._descriptor_probe_cache:
+                raw_path = self._physical_paths.get(physical_key, physical_key)
+                probe = self._metadata_descriptor_probe(raw_path)
+                if probe is None:
+                    scoped_keys.append(path)
+                    continue
+                try:
+                    descriptors = tuple(probe(
+                        raw_path, context=self._source_context,
+                    ))
+                except (OSError, SourceUnavailableError) as exc:
+                    self._descriptor_probe_failures[physical_key] = str(exc)
+                    self._descriptor_probe_cache.add(physical_key)
+                    scoped_keys.append(path)
+                    continue
+                self._cache_source_descriptors(
+                    physical_key, raw_path, descriptors,
+                )
+                self._descriptor_probe_cache.add(physical_key)
+            source_ids = self._descriptor_source_ids.get(physical_key, ())
+            if source_ids:
+                scoped_keys.extend(source_ids)
+            else:
+                scoped_keys.append(path)
+        return list(dict.fromkeys(scoped_keys))
 
     def _metadata_descriptor_probe(self, path):
         """Return a probe only when its no-sample cost is explicit."""
@@ -2648,6 +2713,8 @@ class BatchRunner:
         source_paths = tuple(getattr(preset, 'source_paths', ()) or ())
         if source_paths:
             if not allow_source_load:
+                if self._loader is None:
+                    return self._path_source_keys_without_load(source_paths)
                 return list(dict.fromkeys(source_paths))
             discovered = []
             for path in dict.fromkeys(source_paths):
@@ -2658,6 +2725,13 @@ class BatchRunner:
 
         legacy = list(getattr(preset, 'file_ids', ()) or ())
         legacy_paths = tuple(getattr(preset, 'file_paths', ()) or ())
+        if (
+            legacy_paths
+            and not allow_source_load
+            and not legacy
+            and self._loader is None
+        ):
+            return self._path_source_keys_without_load(legacy_paths)
         if legacy_paths and allow_source_load and self._loader is None:
             for path in dict.fromkeys(legacy_paths):
                 physical_key = self._physical_cache_key(path)
