@@ -5,9 +5,9 @@ The stage order is part of the public batch recipe contract::
     time range -> finite cleanup -> scale/offset -> remove mean
     -> anti-aliased sampling -> user filter
 
-RPM values, when supplied, follow only the alignment stages (range, finite
-cleanup, and sampling).  Target-signal gain, de-meaning, and the user filter
-must never be applied to RPM.
+RPM and X-channel values, when supplied, follow only the alignment stages
+(range, finite cleanup, and sampling).  Target-signal gain, de-meaning, and
+the user filter must never be applied to either aligned companion.
 """
 from __future__ import annotations
 
@@ -33,14 +33,15 @@ class BatchPreprocessResult:
     ``pre_filter_signal`` is the signal immediately before the final user
     filter.  TimeDomain export uses it to retain the existing
     original/filtered two-series presentation without applying the filter to
-    RPM.  ``rpm`` is already aligned to ``time`` whenever sampling changed the
-    target axis.
+    RPM or X.  ``rpm`` and ``x_values`` are already aligned to ``time``
+    whenever sampling changed the target axis.
     """
 
     signal: np.ndarray
     time: np.ndarray
     effective_fs: float
     rpm: np.ndarray | None
+    x_values: np.ndarray | None
     pre_filter_signal: np.ndarray
     requested: dict[str, Any]
     effective: dict[str, Any]
@@ -128,6 +129,7 @@ def _regularize_for_antialias(
     time: np.ndarray,
     signal: np.ndarray,
     rpm: np.ndarray | None,
+    x_values: np.ndarray | None,
     fs: float,
 ):
     """Put aligned values on the declared source-Fs grid before filtering.
@@ -143,14 +145,19 @@ def _regularize_for_antialias(
     dt = np.diff(time)
     tolerance = max(1e-12, abs(expected_dt) * 1e-6)
     if len(dt) and np.all(np.abs(dt - expected_dt) <= tolerance):
-        return time, signal, rpm, False
+        return time, signal, rpm, x_values, False
 
     regular_time = _uniform_grid(time[0], time[-1], fs)
     regular_signal = np.interp(regular_time, time, signal)
     regular_rpm = (
         None if rpm is None else np.interp(regular_time, time, rpm)
     )
-    return regular_time, regular_signal, regular_rpm, True
+    regular_x_values = (
+        None
+        if x_values is None
+        else np.interp(regular_time, time, x_values)
+    )
+    return regular_time, regular_signal, regular_rpm, regular_x_values, True
 
 
 def _anti_aliased_downsample(
@@ -159,9 +166,10 @@ def _anti_aliased_downsample(
     fs: float,
     target_fs: float,
     rpm: np.ndarray | None,
+    x_values: np.ndarray | None,
 ):
-    source_time, source_signal, source_rpm, regularized = (
-        _regularize_for_antialias(time, signal, rpm, fs)
+    source_time, source_signal, source_rpm, source_x_values, regularized = (
+        _regularize_for_antialias(time, signal, rpm, x_values, fs)
     )
     new_time = _uniform_grid(time[0], time[-1], target_fs)
     cutoff = (
@@ -181,6 +189,15 @@ def _anti_aliased_downsample(
         filtered_rpm = apply_filter(source_rpm, anti_alias_spec, fs)
         sampled_rpm = np.interp(new_time, source_time, filtered_rpm)
 
+    sampled_x_values = None
+    if source_x_values is not None:
+        filtered_x_values = apply_filter(
+            source_x_values, anti_alias_spec, fs,
+        )
+        sampled_x_values = np.interp(
+            new_time, source_time, filtered_x_values,
+        )
+
     facts = {
         "enabled": True,
         "method": "fft_butterworth",
@@ -188,7 +205,14 @@ def _anti_aliased_downsample(
         "regularized_input": bool(regularized),
     }
     warnings = [message] if message else []
-    return sampled_signal, new_time, sampled_rpm, facts, warnings
+    return (
+        sampled_signal,
+        new_time,
+        sampled_rpm,
+        sampled_x_values,
+        facts,
+        warnings,
+    )
 
 
 def preprocess_batch_signal(
@@ -198,6 +222,7 @@ def preprocess_batch_signal(
     params: Mapping[str, Any] | None,
     *,
     rpm=None,
+    x_values=None,
 ) -> BatchPreprocessResult:
     """Apply the canonical batch preprocessing pipeline.
 
@@ -233,6 +258,15 @@ def preprocess_batch_signal(
                 "preprocessing"
             )
 
+    x_values_arr = None
+    if x_values is not None:
+        x_values_arr = _as_vector("x_values", x_values)
+        if len(x_values_arr) != len(signal_arr):
+            raise ValueError(
+                "x_values must have the same length as signal and time before "
+                "preprocessing"
+            )
+
     time_preprocess_raw = params.get("time_preprocess") or {}
     if not isinstance(time_preprocess_raw, Mapping):
         raise TypeError("time_preprocess must be a mapping")
@@ -256,18 +290,24 @@ def preprocess_batch_signal(
     time_arr = time_arr[range_mask]
     if rpm_arr is not None:
         rpm_arr = rpm_arr[range_mask]
+    if x_values_arr is not None:
+        x_values_arr = x_values_arr[range_mask]
     after_time_range_samples = len(signal_arr)
 
-    # 2. Finite cleanup.  Include RPM in the same mask so COT never receives
-    # arrays that refer to different physical rows.
+    # 2. Finite cleanup.  Include both aligned companions in the same mask so
+    # no downstream consumer receives arrays for different physical rows.
     finite_mask = np.isfinite(time_arr) & np.isfinite(signal_arr)
     if rpm_arr is not None:
         finite_mask &= np.isfinite(rpm_arr)
+    if x_values_arr is not None:
+        finite_mask &= np.isfinite(x_values_arr)
     finite_samples_dropped = int(len(signal_arr) - np.count_nonzero(finite_mask))
     signal_arr = signal_arr[finite_mask]
     time_arr = time_arr[finite_mask]
     if rpm_arr is not None:
         rpm_arr = rpm_arr[finite_mask]
+    if x_values_arr is not None:
+        x_values_arr = x_values_arr[finite_mask]
     if len(signal_arr) < 2:
         raise ValueError("fewer than 2 finite aligned samples remain")
     if finite_samples_dropped:
@@ -291,17 +331,27 @@ def preprocess_batch_signal(
     if remove_mean:
         signal_arr = signal_arr - float(np.mean(signal_arr))
 
-    # 5. Sampling, including an independent RPM anti-alias path.
+    # 5. Sampling, including independent RPM and X anti-alias paths.
     mode, target_fs, decimation_factor = _sampling_request(time_preprocess, fs)
     if target_fs < fs * (1.0 - 1e-12):
         if np.any(np.diff(time_arr) <= 0.0):
             raise ValueError(
                 "sampling requires a strictly increasing aligned time axis"
             )
-        signal_arr, time_arr, rpm_arr, anti_alias, sampling_warnings = (
-            _anti_aliased_downsample(
-                signal_arr, time_arr, fs, target_fs, rpm_arr,
-            )
+        (
+            signal_arr,
+            time_arr,
+            rpm_arr,
+            x_values_arr,
+            anti_alias,
+            sampling_warnings,
+        ) = _anti_aliased_downsample(
+            signal_arr,
+            time_arr,
+            fs,
+            target_fs,
+            rpm_arr,
+            x_values_arr,
         )
         warnings.extend(sampling_warnings)
     else:
@@ -353,12 +403,19 @@ def preprocess_batch_signal(
         "filter": filter_state,
         "effective_fs": float(target_fs),
     }
+    if x_values_arr is not None:
+        effective["x_channel_aligned"] = True
 
     return BatchPreprocessResult(
         signal=np.asarray(signal_arr, dtype=float),
         time=np.asarray(time_arr, dtype=float),
         effective_fs=float(target_fs),
         rpm=(None if rpm_arr is None else np.asarray(rpm_arr, dtype=float)),
+        x_values=(
+            None
+            if x_values_arr is None
+            else np.asarray(x_values_arr, dtype=float)
+        ),
         pre_filter_signal=pre_filter_signal,
         requested=requested,
         effective=effective,
