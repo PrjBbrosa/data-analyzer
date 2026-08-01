@@ -4391,6 +4391,7 @@ class BatchRunner:
             matrix=np.asarray(result.amplitude, dtype=float),
             x_name='time_s',
             y_name='order',
+            metadata=dict(getattr(result, 'metadata', {}) or {}),
         )
 
     @classmethod
@@ -4439,6 +4440,7 @@ class BatchRunner:
             matrix=np.asarray(result.amplitude.T, dtype=float),
             x_name='time_s',
             y_name='frequency_hz',
+            metadata=dict(getattr(result, 'metadata', {}) or {}),
         )
 
     @classmethod
@@ -4613,12 +4615,18 @@ def _guess_rpm_channel(fd):
 @dataclass(frozen=True)
 class _Spectro2D:
     """2-D analysis result kept matrix-first to avoid a long→wide pivot
-    round-trip on export. ``matrix`` is x-major: shape (len(x), len(y))."""
+    round-trip on export. ``matrix`` is x-major: shape (len(x), len(y)).
+
+    ``metadata`` preserves analyzer-owned display coverage such as
+    ``coverage_start`` / ``coverage_end``.  It is deliberately absent from
+    :meth:`to_long_dataframe` so CSV values and column order stay unchanged.
+    """
     x: np.ndarray
     y: np.ndarray
     matrix: np.ndarray
     x_name: str
     y_name: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def to_long_dataframe(self) -> pd.DataFrame:
         return _matrix_to_long_dataframe(

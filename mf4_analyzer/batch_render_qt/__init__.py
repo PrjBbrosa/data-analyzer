@@ -1,4 +1,4 @@
-"""Qt/pyqtgraph batch image renderer (Batch 2: time + FFT)."""
+"""Qt/pyqtgraph batch image renderer for all four analysis kinds."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,7 +21,7 @@ def render_batch_image(
     context: BatchRenderContext | None = None,
     warnings_out: list[str] | None = None,
 ) -> Path:
-    """Render one prepared time/FFT payload to an exact-pixel PNG."""
+    """Render one prepared batch payload to an exact-pixel PNG."""
 
     render_options = options or BatchRenderOptions()
     render_context = context or BatchRenderContext()

@@ -1,4 +1,4 @@
-"""Build offscreen pyqtgraph report scenes for time and FFT payloads."""
+"""Build offscreen pyqtgraph report scenes for all batch image payloads."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -26,7 +26,7 @@ from ._page import add_report_footer, add_report_header
 from ._theme import SERIES_COLORS, RenderTheme, render_theme
 
 
-_SUPPORTED_KINDS = frozenset({"time", "fft"})
+_SUPPORTED_KINDS = frozenset({"time", "fft", "fft_time", "order_time"})
 _EMPTY_DB_LEVEL = -200.0
 _AUTO_SPAN_DB = 30.0
 _AUTO_CEILING_PERCENTILE = 99.0
@@ -57,11 +57,13 @@ def _linear_amplitude_label(unit: str) -> str:
 
 
 def _render_in_db(kind: str, params: Mapping[str, Any]) -> bool:
-    amplitude_mode = str(params.get("amplitude_mode", "amplitude")).lower()
+    if kind not in {"fft", "fft_time", "order_time"}:
+        return False
+    default_mode = "amplitude_db" if kind == "fft_time" else "amplitude"
+    amplitude_mode = str(params.get("amplitude_mode", default_mode)).lower()
     amplitude_axis = str(params.get("amplitude_axis", "linear")).lower()
-    return kind == "fft" and (
-        "db" in amplitude_mode or amplitude_axis == "db"
-    )
+    legacy_axis = str(params.get("amp_y", "")).lower()
+    return "db" in amplitude_mode or amplitude_axis == "db" or legacy_axis == "db"
 
 
 def _reference_resolution(params: Mapping[str, Any]):
@@ -87,6 +89,155 @@ def _rendered_db_fact(kind: str, params: Mapping[str, Any]) -> str:
         weighting=str(params.get("weighting", "None")),
         output_scale="db",
     )
+
+
+def _auto_db_color_limits(values) -> tuple[float, float]:
+    finite = _finite_values(values)
+    if finite.size == 0:
+        return (_EMPTY_DB_LEVEL - _AUTO_SPAN_DB, _EMPTY_DB_LEVEL)
+    ceiling = float(np.percentile(finite, _AUTO_CEILING_PERCENTILE))
+    return (ceiling - _AUTO_SPAN_DB, ceiling)
+
+
+def _finite_limits(values) -> tuple[float, float]:
+    finite = _finite_values(values)
+    if finite.size == 0:
+        return (0.0, 1.0)
+    low = float(np.min(finite))
+    high = float(np.max(finite))
+    if not high > low:
+        pad = max(abs(low) * 0.05, 0.5)
+        low -= pad
+        high += pad
+    return (low, high)
+
+
+def _coverage_extent(values, *, start=None, end=None) -> tuple[float, float]:
+    centers = np.asarray(values, dtype=float).reshape(-1)
+    finite = centers[np.isfinite(centers)]
+    if finite.size == 0:
+        return (0.0, 1.0)
+    if _valid_pair(start, end):
+        return (float(start), float(end))
+    finite = np.sort(finite)
+    if finite.size == 1:
+        center = float(finite[0])
+        half_step = max(abs(center) * 0.01, 0.5)
+        return (center - half_step, center + half_step)
+    spacing = np.diff(finite)
+    positive = spacing[np.isfinite(spacing) & (spacing > 0.0)]
+    if positive.size == 0:
+        center = float(finite[0])
+        half_step = max(abs(center) * 0.01, 0.5)
+        return (center - half_step, center + half_step)
+    return (
+        float(finite[0]) - float(positive[0]) / 2.0,
+        float(finite[-1]) + float(positive[-1]) / 2.0,
+    )
+
+
+def _data_axis_extent(values) -> tuple[float, float]:
+    """Match the foreground frequency/order endpoint semantics."""
+
+    finite = np.asarray(values, dtype=float).reshape(-1)
+    finite = finite[np.isfinite(finite)]
+    if finite.size >= 2:
+        return float(np.min(finite)), float(np.max(finite))
+    # A one-row image still needs a non-degenerate QRectF to remain visible.
+    return _coverage_extent(finite)
+
+
+def _axis_label(name: str) -> str:
+    normalized = str(name or "").strip().lower()
+    labels = {
+        "time": "Time (s)",
+        "time_s": "Time (s)",
+        "frequency": "Frequency (Hz)",
+        "frequency_hz": "Frequency (Hz)",
+        "order": "Order",
+    }
+    return labels.get(normalized, str(name or ""))
+
+
+def _extract_heatmap(data):
+    if isinstance(data, pd.DataFrame):
+        if "amplitude" not in data.columns or len(data.columns) < 3:
+            raise ValueError("heatmap DataFrame must contain two axes and amplitude")
+        x_name = str(data.columns[0])
+        y_name = str(data.columns[1])
+        pivot = data.pivot(index=y_name, columns=x_name, values="amplitude")
+        return (
+            pivot.to_numpy(dtype=float),
+            pivot.columns.to_numpy(dtype=float),
+            pivot.index.to_numpy(dtype=float),
+            x_name,
+            y_name,
+            {},
+        )
+
+    required = ("x", "y", "matrix", "x_name", "y_name")
+    missing = [name for name in required if not hasattr(data, name)]
+    if missing:
+        raise TypeError(f"heatmap payload is missing attributes: {', '.join(missing)}")
+    x_values = np.asarray(data.x, dtype=float)
+    y_values = np.asarray(data.y, dtype=float)
+    x_major = np.asarray(data.matrix, dtype=float)
+    expected = (x_values.size, y_values.size)
+    if x_major.shape != expected:
+        raise ValueError(
+            f"heatmap matrix shape {x_major.shape} does not match x/y {expected}"
+        )
+    metadata = getattr(data, "metadata", {})
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    return (
+        x_major.T,
+        x_values,
+        y_values,
+        str(data.x_name),
+        str(data.y_name),
+        dict(metadata),
+    )
+
+
+def _resolve_heatmap_colormap(
+    params: Mapping[str, Any], warnings_out: list[str] | None
+) -> tuple[pg.ColorMap, np.ndarray]:
+    requested = params.get("cmap", "turbo")
+    try:
+        color_map = pg.colormap.get(str(requested))
+    except Exception:
+        color_map = None
+    if color_map is None:
+        if warnings_out is not None:
+            warnings_out.append(
+                f"Invalid colormap {requested!r}; using 'turbo'."
+            )
+        color_map = pg.colormap.get("turbo")
+    if color_map is None:  # pragma: no cover - bundled pg 0.14 has turbo
+        raise RuntimeError("pyqtgraph turbo colormap is unavailable")
+    lut = color_map.getLookupTable(0.0, 1.0, 256, alpha=True)
+    return color_map, np.asarray(lut, dtype=np.ubyte)
+
+
+class _SmoothImageItem(pg.ImageItem):
+    """Batch-local equivalent of the single-file bilinear ImageItem."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._smooth_transform = False
+
+    def set_smooth_transform(self, enabled: bool) -> None:
+        self._smooth_transform = bool(enabled)
+        self.update()
+
+    def paint(self, painter, *args):
+        previous = painter.testRenderHint(QPainter.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, self._smooth_transform)
+        try:
+            return super().paint(painter, *args)
+        finally:
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, previous)
 
 
 def _display_db_values(amplitude, reference: float) -> np.ndarray:
@@ -200,6 +351,12 @@ class BuiltBatchScene:
     legend: Any
     options: BatchRenderOptions
     theme: RenderTheme
+    image_item: Any = None
+    colorbar: Any = None
+    display_matrix: np.ndarray | None = None
+    heatmap_lut: np.ndarray | None = None
+    heatmap_levels: tuple[float, float] | None = None
+    heatmap_rect: QRectF | None = None
     _sync_callbacks: tuple[Any, ...] = field(default_factory=tuple)
     _closed: bool = False
 
@@ -343,6 +500,12 @@ class _SceneBuilder:
         self.panel_text_items: list[tuple[Any, ...]] = []
         self.sync_callbacks: list[Any] = []
         self.legend = None
+        self.image_item = None
+        self.colorbar = None
+        self.display_matrix = None
+        self.heatmap_lut = None
+        self.heatmap_levels = None
+        self.heatmap_rect = None
         self._color_index = 0
         self._series_colors: dict[str, str] = {}
 
@@ -797,6 +960,131 @@ class _SceneBuilder:
         )
         return 4
 
+    def build_heatmap(
+        self,
+        kind: str,
+        data,
+        warnings_out: list[str] | None,
+    ) -> int:
+        matrix, x_values, y_values, x_name, y_name, metadata = _extract_heatmap(
+            data
+        )
+        render_db = _render_in_db(kind, self.params)
+        if render_db:
+            resolution = _reference_resolution(self.params)
+            # Match the foreground canvas: the display matrix retains the analyzer's
+            # complete dB result; only ColorBarItem levels clamp colours.
+            display_matrix = np.asarray(
+                SpectrogramAnalyzer.amplitude_to_db(
+                    matrix, reference=resolution.value
+                ),
+                dtype=float,
+            )
+            colorbar_label = db_reference.format_amplitude_label(
+                resolution,
+                weighting=str(self.params.get("weighting", "None")),
+                output_scale="db",
+            )
+        else:
+            display_matrix = np.asarray(matrix, dtype=float)
+            colorbar_label = _linear_amplitude_label(self.context.unit)
+
+        x_extent = _coverage_extent(
+            x_values,
+            start=metadata.get("coverage_start"),
+            end=metadata.get("coverage_end"),
+        )
+        y_extent = _data_axis_extent(y_values)
+        rect = QRectF(
+            x_extent[0],
+            y_extent[0],
+            x_extent[1] - x_extent[0],
+            y_extent[1] - y_extent[0],
+        )
+        if not bool(self.params.get("z_auto", True)) and _valid_pair(
+            self.params.get("z_floor"), self.params.get("z_ceiling")
+        ):
+            levels = (
+                float(self.params["z_floor"]),
+                float(self.params["z_ceiling"]),
+            )
+        elif render_db:
+            levels = _auto_db_color_limits(display_matrix)
+        else:
+            levels = _finite_limits(display_matrix)
+
+        color_map, lut = _resolve_heatmap_colormap(self.params, warnings_out)
+        plot = self._new_plot(3, grid_alpha=0.25)
+        self._apply_analysis_frame(plot)
+        plot.setLabel("bottom", _axis_label(x_name))
+        plot.setLabel("left", _axis_label(y_name))
+
+        image_item = _SmoothImageItem(axisOrder="row-major")
+        interpolation = str(self.params.get("interp", "bilinear")).lower()
+        image_item.set_smooth_transform(
+            interpolation in {"bilinear", "bicubic", "hanning"}
+        )
+        image_item.setImage(display_matrix, autoLevels=False)
+        image_item.setRect(rect)
+        plot.addItem(image_item)
+
+        colorbar = pg.ColorBarItem(
+            values=levels,
+            colorMap=color_map,
+            label=colorbar_label,
+            interactive=False,
+            colorMapMenu=False,
+        )
+        colorbar.setImageItem(image_item, insert_in=plot)
+        colorbar.setAcceptedMouseButtons(Qt.NoButton)
+        colorbar.vb.setMouseEnabled(x=False, y=False)
+        colorbar.vb.setMenuEnabled(False)
+        for side in ("left", "right"):
+            axis = colorbar.getAxis(side)
+            axis.setPen(pg.mkPen(self.theme.axis, width=1.0))
+            axis.setTextPen(pg.mkPen(self.theme.muted))
+            axis.enableAutoSIPrefix(False)
+            axis.setStyle(maxTickLevel=0)
+            apply_axis_font(axis, self.theme.axis_font_pt)
+
+        if not bool(self.params.get("x_auto", True)) and _valid_pair(
+            self.params.get("x_min"), self.params.get("x_max")
+        ):
+            plot.setXRange(
+                float(self.params["x_min"]),
+                float(self.params["x_max"]),
+                padding=0,
+            )
+        else:
+            plot.setXRange(*x_extent, padding=0)
+        if not bool(self.params.get("y_auto", True)) and _valid_pair(
+            self.params.get("y_min"), self.params.get("y_max")
+        ):
+            plot.setYRange(
+                float(self.params["y_min"]),
+                float(self.params["y_max"]),
+                padding=0,
+            )
+        else:
+            plot.setYRange(*y_extent, padding=0)
+
+        self.widget.ci.layout.setRowStretchFactor(3, 1)
+        self.panel_titles.append("")
+        self.panel_text_items.append(
+            (
+                plot.getAxis("left").label,
+                plot.getAxis("bottom").label,
+                colorbar.getAxis("left").label,
+            )
+        )
+        self.image_item = image_item
+        self.colorbar = colorbar
+        self.display_matrix = display_matrix
+        self.heatmap_lut = lut
+        self.heatmap_levels = tuple(float(value) for value in levels)
+        self.heatmap_rect = QRectF(rect)
+        return 4
+
     def finish(self, *, kind: str, footer_row: int) -> BuiltBatchScene:
         footer = add_report_footer(
             self.widget,
@@ -816,6 +1104,12 @@ class _SceneBuilder:
             legend=self.legend,
             options=self.options,
             theme=self.theme,
+            image_item=self.image_item,
+            colorbar=self.colorbar,
+            display_matrix=self.display_matrix,
+            heatmap_lut=self.heatmap_lut,
+            heatmap_levels=self.heatmap_levels,
+            heatmap_rect=self.heatmap_rect,
             _sync_callbacks=tuple(self.sync_callbacks),
         )
 
@@ -827,9 +1121,7 @@ def build_batch_scene(
     context: BatchRenderContext | None = None,
     warnings_out: list[str] | None = None,
 ) -> BuiltBatchScene:
-    """Build a time/FFT batch report scene without writing a file."""
-
-    del warnings_out  # Reserved for Batch 3 heatmap fallback warnings.
+    """Build one four-kind batch report scene without writing a file."""
     try:
         kind, data = payload
     except (TypeError, ValueError) as exc:
@@ -858,11 +1150,12 @@ def build_batch_scene(
         )
     )
     try:
-        footer_row = (
-            builder.build_time(data)
-            if kind == "time"
-            else builder.build_fft(data)
-        )
+        if kind == "time":
+            footer_row = builder.build_time(data)
+        elif kind == "fft":
+            footer_row = builder.build_fft(data)
+        else:
+            footer_row = builder.build_heatmap(kind, data, warnings_out)
         return builder.finish(kind=kind, footer_row=footer_row)
     except BaseException:
         builder.widget.close()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Batch 2 time/FFT Qt-render parity evidence.
+"""Generate four-kind Qt-render parity evidence.
 
 The production renderer never imports concrete application canvases. This
 verification-only harness does: it drives the same prepared arrays into the
@@ -17,13 +17,14 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PyQt5 import QtCore
-from PyQt5.QtCore import QPoint, QRect, QRectF, Qt
+from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, Qt
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter
 from PyQt5.QtWidgets import QApplication, QWidget
 
@@ -40,6 +41,7 @@ from mf4_analyzer.batch_render_qt._export import render_scene_image
 from mf4_analyzer.batch_render_qt._page import render_metadata
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
 from mf4_analyzer.ui.pg_canvas.canvas import TimeDomainCanvasPG
+from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
 from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
 
 
@@ -66,6 +68,15 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _array_sha256(values) -> str:
+    array = np.ascontiguousarray(values)
+    digest = hashlib.sha256()
+    digest.update(str(array.dtype).encode("ascii"))
+    digest.update(repr(array.shape).encode("ascii"))
+    digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
 def _git_sha() -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
@@ -75,7 +86,10 @@ def _git_sha() -> str:
 def _source_state_sha() -> str:
     paths = [
         ROOT / "mf4_analyzer" / "batch_image_options.py",
+        ROOT / "mf4_analyzer" / "batch.py",
+        ROOT / "tests" / "test_batch_heatmap_producer_contract.py",
         ROOT / "tests" / "test_batch_render_qt.py",
+        ROOT / "tests" / "test_batch_render_qt_heatmap.py",
         ROOT / "tests" / "test_batch_qt_render_parity.py",
         Path(__file__).resolve(),
         *sorted((ROOT / "mf4_analyzer" / "batch_render_qt").glob("*.py")),
@@ -170,6 +184,53 @@ def _cases() -> list[ParityCase]:
     )
     preview_time = np.linspace(0.0, 1.0, 512)
     preview_signal = np.sin(2 * np.pi * 7.0 * preview_time)
+    heatmap_x = np.asarray([0.5, 1.5, 2.5])
+    heatmap_fft_y = np.asarray([100.0, 300.0])
+    heatmap_order_y = np.asarray([1.0, 4.0])
+    heatmap_x_major = np.asarray(
+        [[0.02, 0.04], [0.08, 0.16], [0.32, 0.64]]
+    )
+    heatmap_linear = heatmap_x_major.T
+    heatmap_db = SpectrogramAnalyzer.amplitude_to_db(
+        heatmap_linear, reference=1.0
+    )
+    heatmap_metadata = {"coverage_start": 0.0, "coverage_end": 3.0}
+
+    def heatmap_payload(y_values, y_name):
+        return SimpleNamespace(
+            x=heatmap_x,
+            y=y_values,
+            matrix=heatmap_x_major,
+            x_name="time_s",
+            y_name=y_name,
+            metadata=dict(heatmap_metadata),
+        )
+
+    def heatmap_reference(
+        *,
+        y_values,
+        y_label,
+        display_matrix,
+        levels,
+        colorbar_label,
+        warning="",
+    ):
+        return {
+            "display_matrix": np.asarray(display_matrix, dtype=float),
+            "x_extent": (0.0, 3.0),
+            "y_extent": (float(y_values[0]), float(y_values[-1])),
+            "x_label": "Time (s)",
+            "y_label": y_label,
+            "levels": tuple(float(value) for value in levels),
+            "colorbar_label": colorbar_label,
+            "warning": warning,
+        }
+
+    linear_levels = (float(np.min(heatmap_linear)), float(np.max(heatmap_linear)))
+    db_ceiling = float(np.percentile(heatmap_db, 99.0))
+    db_auto_levels = (db_ceiling - 30.0, db_ceiling)
+    db_label = "Amplitude (dB re 1×10⁰)"
+    invalid_warning = "Invalid colormap 'not-a-real-map'; using 'turbo'."
 
     return [
         ParityCase(
@@ -340,6 +401,120 @@ def _cases() -> list[ParityCase]:
                 "signal": preview_signal,
             },
         ),
+        ParityCase(
+            "fft-time-linear-auto",
+            "fft_time",
+            ("fft_time", heatmap_payload(heatmap_fft_y, "frequency_hz")),
+            {"amplitude_mode": "amplitude", "z_auto": True, "cmap": "turbo"},
+            _context("FFT vs Time"),
+            heatmap_reference(
+                y_values=heatmap_fft_y,
+                y_label="Frequency (Hz)",
+                display_matrix=heatmap_linear,
+                levels=linear_levels,
+                colorbar_label="Amplitude (g)",
+            ),
+        ),
+        ParityCase(
+            "fft-time-db-manual",
+            "fft_time",
+            ("fft_time", heatmap_payload(heatmap_fft_y, "frequency_hz")),
+            {
+                "amplitude_mode": "amplitude_db",
+                "db_reference_mode": "manual",
+                "db_reference": 1.0,
+                "z_auto": False,
+                "z_floor": -32.0,
+                "z_ceiling": -2.0,
+                "cmap": "turbo",
+            },
+            _context("FFT vs Time"),
+            heatmap_reference(
+                y_values=heatmap_fft_y,
+                y_label="Frequency (Hz)",
+                display_matrix=heatmap_db,
+                levels=(-32.0, -2.0),
+                colorbar_label=db_label,
+            ),
+        ),
+        ParityCase(
+            "fft-time-invalid-cmap",
+            "fft_time",
+            ("fft_time", heatmap_payload(heatmap_fft_y, "frequency_hz")),
+            {
+                "amplitude_mode": "amplitude",
+                "z_auto": True,
+                "cmap": "not-a-real-map",
+            },
+            _context("FFT vs Time"),
+            heatmap_reference(
+                y_values=heatmap_fft_y,
+                y_label="Frequency (Hz)",
+                display_matrix=heatmap_linear,
+                levels=linear_levels,
+                colorbar_label="Amplitude (g)",
+                warning=invalid_warning,
+            ),
+        ),
+        ParityCase(
+            "order-time-linear-manual",
+            "order_time",
+            ("order_time", heatmap_payload(heatmap_order_y, "order")),
+            {
+                "amplitude_mode": "amplitude",
+                "z_auto": False,
+                "z_floor": 0.03,
+                "z_ceiling": 0.50,
+                "cmap": "turbo",
+            },
+            _context("Order"),
+            heatmap_reference(
+                y_values=heatmap_order_y,
+                y_label="Order",
+                display_matrix=heatmap_linear,
+                levels=(0.03, 0.50),
+                colorbar_label="Amplitude (g)",
+            ),
+        ),
+        ParityCase(
+            "order-time-db-auto",
+            "order_time",
+            ("order_time", heatmap_payload(heatmap_order_y, "order")),
+            {
+                "amplitude_mode": "amplitude_db",
+                "db_reference_mode": "manual",
+                "db_reference": 1.0,
+                "z_auto": True,
+                "cmap": "turbo",
+            },
+            _context("Order"),
+            heatmap_reference(
+                y_values=heatmap_order_y,
+                y_label="Order",
+                display_matrix=heatmap_db,
+                levels=db_auto_levels,
+                colorbar_label=db_label,
+            ),
+        ),
+        ParityCase(
+            "order-time-invalid-cmap",
+            "order_time",
+            ("order_time", heatmap_payload(heatmap_order_y, "order")),
+            {
+                "amplitude_mode": "amplitude",
+                "z_auto": True,
+                "cmap": "not-a-real-map",
+            },
+            _context("Order"),
+            heatmap_reference(
+                y_values=heatmap_order_y,
+                y_label="Order",
+                display_matrix=heatmap_linear,
+                levels=linear_levels,
+                colorbar_label="Amplitude (g)",
+                warning=invalid_warning,
+            ),
+        ),
     ]
 
 
@@ -367,6 +542,82 @@ def _render_widget(widget: QWidget, width: int, height: int) -> QImage:
     widget.render(painter)
     painter.end()
     return image
+
+
+def _rect_record(rect: QRectF) -> list[float]:
+    return [
+        float(rect.x()),
+        float(rect.y()),
+        float(rect.width()),
+        float(rect.height()),
+    ]
+
+
+def _image_item_corner_pixels(
+    owner: QWidget,
+    glw,
+    image_item,
+    rendered: QImage,
+) -> list[list[int]]:
+    """Sample the four cell centres via live scene geometry.
+
+    Order is row-major BL, BR, TL, TR: row 0 maps to the bottom of the
+    row-major ImageItem, matching the single-file canvas contract.
+    """
+
+    matrix = np.asarray(image_item.image, dtype=float)
+    rows, columns = matrix.shape
+    local_points = (
+        QPointF(0.5, 0.5),
+        QPointF(columns - 0.5, 0.5),
+        QPointF(0.5, rows - 0.5),
+        QPointF(columns - 0.5, rows - 0.5),
+    )
+    corner_values = (
+        matrix[0, 0],
+        matrix[0, -1],
+        matrix[-1, 0],
+        matrix[-1, -1],
+    )
+    levels = image_item.getLevels()
+    color_map = image_item.getColorMap()
+    lut = color_map.getLookupTable(0.0, 1.0, 256, alpha=True)
+    viewport_origin = glw.viewport().mapTo(owner, QPoint(0, 0))
+    values: list[list[int]] = []
+    for local, matrix_value in zip(local_points, corner_values):
+        viewport_point = glw.mapFromScene(image_item.mapToScene(local))
+        center_x = min(
+            max(viewport_origin.x() + viewport_point.x(), 0), rendered.width() - 1
+        )
+        center_y = min(
+            max(viewport_origin.y() + viewport_point.y(), 0), rendered.height() - 1
+        )
+        normalized = (
+            (float(matrix_value) - float(levels[0]))
+            / (float(levels[1]) - float(levels[0]))
+        )
+        lut_index = int(np.clip(round(normalized * 255.0), 0, 255))
+        expected = np.asarray(lut[lut_index, :3], dtype=int)
+        best: tuple[float, int, int] | None = None
+        # Bilinear painting can put the exact cell-centre colour a few device
+        # pixels away from the rounded scene point. Search only a 13x13 patch
+        # around that live-geometry centre; this remains a corner-cell pixel
+        # proof while avoiding subpixel/white-edge false failures.
+        for y in range(max(0, center_y - 6), min(rendered.height(), center_y + 7)):
+            for x in range(
+                max(0, center_x - 6), min(rendered.width(), center_x + 7)
+            ):
+                sample = rendered.pixelColor(x, y)
+                rgb = np.asarray(
+                    [sample.red(), sample.green(), sample.blue()], dtype=int
+                )
+                distance = float(np.sum((rgb - expected) ** 2))
+                if best is None or distance < best[0]:
+                    best = (distance, x, y)
+        assert best is not None
+        color = rendered.pixelColor(best[1], best[2])
+        values.append([color.red(), color.green(), color.blue(), color.alpha()])
+    return values
 
 
 def _settle_reference(canvas, glw, plots, target_size: tuple[int, int]) -> QRect:
@@ -509,11 +760,13 @@ def _save(image: QImage, path: Path) -> dict[str, Any]:
 
 
 def _batch_side(case: ParityCase, options: BatchRenderOptions, output_dir: Path):
+    warnings_out: list[str] = []
     scene = build_batch_scene(
         case.payload,
         params=case.params,
         options=options,
         context=case.context,
+        warnings_out=warnings_out,
     )
     try:
         image = render_scene_image(scene, metadata=render_metadata(case.context))
@@ -573,7 +826,47 @@ def _batch_side(case: ParityCase, options: BatchRenderOptions, output_dir: Path)
                 ]
                 for plot in scene.plots
             ],
+            "warnings": warnings_out,
         }
+        if scene.image_item is not None:
+            matrix = np.asarray(scene.display_matrix, dtype=float)
+            machine["axis_font_points"].append(
+                float(
+                    scene.colorbar.getAxis("right").style["tickFont"].pointSizeF()
+                )
+            )
+            machine.update(
+                {
+                    "matrix": matrix,
+                    "matrix_corners": [
+                        float(matrix[0, 0]),
+                        float(matrix[0, -1]),
+                        float(matrix[-1, 0]),
+                        float(matrix[-1, -1]),
+                    ],
+                    "lut": np.asarray(scene.heatmap_lut),
+                    "levels": list(scene.heatmap_levels),
+                    "extent": _rect_record(scene.heatmap_rect),
+                    "axis_order": scene.image_item.axisOrder,
+                    "corner_pixels": _image_item_corner_pixels(
+                        scene.widget,
+                        scene.widget,
+                        scene.image_item,
+                        image,
+                    ),
+                    "axis_labels": [
+                        scene.plots[0].getAxis("bottom").labelText,
+                        scene.plots[0].getAxis("left").labelText,
+                    ],
+                    "colorbar_label": scene.colorbar.getAxis("left").labelText,
+                    "colorbar_menu_disabled": (
+                        scene.colorbar.colorMapMenu is False
+                    ),
+                    "colorbar_read_only": (
+                        getattr(scene.colorbar, "region", None) is None
+                    ),
+                }
+            )
         full_record = _save(image, output_dir / "batch" / f"{case.name}.png")
         crop_record = _save(crop, output_dir / "crops" / f"{case.name}-batch.png")
         return image, crop, machine, full_record, crop_record
@@ -691,14 +984,102 @@ def _reference_fft(case: ParityCase, target_size: tuple[int, int]):
     return canvas, image, crop, machine
 
 
+def _reference_heatmap(case: ParityCase, target_size: tuple[int, int]):
+    app = QApplication.instance()
+    # The acceptance crop is the single-file main PlotItem itself. Keep the
+    # optional FFT slice widget out of this plot-area proof so its overlay
+    # controls cannot contaminate corner samples.
+    canvas = PgHeatmapCanvas(with_slice=False)
+    canvas.resize(max(640, target_size[0]), max(480, target_size[1]))
+    canvas.setAttribute(Qt.WA_DontShowOnScreen, True)
+    canvas.show()
+    app.processEvents()
+    ref = case.reference
+    canvas._amplitude_mode = (
+        "amplitude_db"
+        if "db" in str(case.params.get("amplitude_mode", "amplitude"))
+        else "amplitude"
+    )
+    canvas.plot_or_update_heatmap(
+        matrix=ref["display_matrix"],
+        x_extent=ref["x_extent"],
+        y_extent=ref["y_extent"],
+        x_label=ref["x_label"],
+        y_label=ref["y_label"],
+        title="",
+        cmap="turbo",
+        interp="bilinear",
+        cbar_label=ref["colorbar_label"],
+        amplitude_mode="amplitude",
+        z_auto=True,
+        vmin=ref["levels"][0],
+        vmax=ref["levels"][1],
+        x_auto=bool(case.params.get("x_auto", True)),
+        x_min=float(case.params.get("x_min", 0.0)),
+        x_max=float(case.params.get("x_max", 0.0)),
+        y_auto=bool(case.params.get("y_auto", True)),
+        y_min=float(case.params.get("y_min", 0.0)),
+        y_max=float(case.params.get("y_max", 0.0)),
+    )
+    app.processEvents()
+    plots = [canvas._plot]
+    rect = _settle_reference(canvas, canvas._glw, plots, target_size)
+    image = _render_widget(canvas, canvas.width(), canvas.height())
+    crop = image.copy(rect)
+    matrix = np.asarray(canvas._matrix_disp, dtype=float)
+    image_rect = canvas._img.mapRectToParent(canvas._img.boundingRect())
+    color_map = canvas._img.getColorMap()
+    machine = {
+        "matrix": matrix,
+        "matrix_corners": [
+            float(matrix[0, 0]),
+            float(matrix[0, -1]),
+            float(matrix[-1, 0]),
+            float(matrix[-1, -1]),
+        ],
+        "lut": color_map.getLookupTable(0.0, 1.0, 256, alpha=True),
+        "levels": [float(value) for value in canvas._img.getLevels()],
+        "extent": _rect_record(image_rect),
+        "axis_order": canvas._img.axisOrder,
+        "corner_pixels": _image_item_corner_pixels(
+            canvas, canvas._glw, canvas._img, image
+        ),
+        "axis_labels": [
+            canvas._plot.getAxis("bottom").labelText,
+            canvas._plot.getAxis("left").labelText,
+        ],
+        "colorbar_label": canvas._cbar.getAxis("left").labelText,
+        "colorbar_menu_disabled": canvas._cbar.colorMapMenu is False,
+        "ranges": _ranges([canvas._plot.vb]),
+        "viewport": [rect.width(), rect.height()],
+        "plot_ink_pixels": _non_background_pixels(crop),
+        "axis_font_points": [
+            float(canvas._plot.getAxis("bottom").style["tickFont"].pointSizeF()),
+            float(canvas._cbar.getAxis("right").style["tickFont"].pointSizeF()),
+        ],
+        "axis_pen_colors": [canvas._plot.getAxis("left").pen().color().name()],
+        "grid_values": [
+            [
+                canvas._plot.getAxis("left").grid,
+                canvas._plot.getAxis("bottom").grid,
+                canvas._plot.getAxis("top").grid,
+                canvas._plot.getAxis("right").grid,
+            ]
+        ],
+        "warnings": [ref["warning"]] if ref.get("warning") else [],
+    }
+    return canvas, image, crop, machine
+
+
 def _reference_side(
     case: ParityCase, target_size: tuple[int, int], output_dir: Path
 ):
-    canvas, image, crop, machine = (
-        _reference_time(case, target_size)
-        if case.module == "time"
-        else _reference_fft(case, target_size)
-    )
+    if case.module == "time":
+        canvas, image, crop, machine = _reference_time(case, target_size)
+    elif case.module == "fft":
+        canvas, image, crop, machine = _reference_fft(case, target_size)
+    else:
+        canvas, image, crop, machine = _reference_heatmap(case, target_size)
     try:
         full_record = _save(image, output_dir / "reference" / f"{case.name}.png")
         crop_record = _save(crop, output_dir / "crops" / f"{case.name}-reference.png")
@@ -755,6 +1136,84 @@ def _module_sheet(rows: list[QImage]) -> QImage:
 
 
 def _evaluate(case: ParityCase, batch: dict, reference: dict) -> dict[str, bool]:
+    if case.module in {"fft_time", "order_time"}:
+        joined_text = "\n".join(batch["texts"])
+        corner_pixels_match = bool(
+            np.allclose(
+                np.asarray(batch["corner_pixels"], dtype=float),
+                np.asarray(reference["corner_pixels"], dtype=float),
+                rtol=0.0,
+                atol=12.0,
+            )
+        )
+        return {
+            "matrix_match": bool(
+                np.array_equal(batch["matrix"], reference["matrix"])
+            ),
+            "matrix_corners_match": bool(
+                np.array_equal(
+                    batch["matrix_corners"], reference["matrix_corners"]
+                )
+                and len(set(batch["matrix_corners"])) == 4
+            ),
+            "turbo_lut_match": bool(
+                np.array_equal(batch["lut"], reference["lut"])
+            ),
+            "levels_match": bool(
+                np.allclose(
+                    batch["levels"], reference["levels"], rtol=0.0, atol=1e-12
+                )
+            ),
+            "coverage_extent_match": bool(
+                np.allclose(
+                    batch["extent"], reference["extent"], rtol=0.0, atol=1e-12
+                )
+            ),
+            "row_major_axis_order": (
+                batch["axis_order"] == reference["axis_order"] == "row-major"
+            ),
+            "plot_corner_pixels_match": corner_pixels_match,
+            "axis_ranges_match": _range_close(
+                batch["ranges"], reference["ranges"]
+            ),
+            "semantic_labels_match": (
+                batch["axis_labels"] == reference["axis_labels"]
+                and batch["colorbar_label"] == reference["colorbar_label"]
+            ),
+            "warnings_match": batch["warnings"] == reference["warnings"],
+            "colorbar_read_only_no_menu": (
+                batch["colorbar_read_only"]
+                and batch["colorbar_menu_disabled"]
+                and reference["colorbar_menu_disabled"]
+            ),
+            "axis_font_9pt": all(
+                abs(value - 9.0) <= 0.01
+                for value in batch["axis_font_points"]
+                + reference["axis_font_points"]
+            ),
+            "axis_pen_match": (
+                batch["axis_pen_colors"] == reference["axis_pen_colors"]
+            ),
+            "grid_match": batch["grid_values"] == reference["grid_values"],
+            "viewport_match": all(
+                abs(left - right) <= 1
+                for left, right in zip(batch["viewport"], reference["viewport"])
+            ),
+            "batch_has_plot_ink": batch["plot_ink_pixels"] > 500,
+            "reference_has_plot_ink": reference["plot_ink_pixels"] > 500,
+            "no_text_overlap": batch["text_overlaps"] == [],
+            "no_native_chrome": (
+                all(all(record.values()) for record in batch["chrome"])
+                and all(batch["widget_chrome"].values())
+                and max(batch["plot_corner_ink_pixels"], default=0) < 160
+            ),
+            "no_main_navigation": (
+                "时域" not in joined_text
+                and "阶次" not in joined_text
+                and joined_text.count("FFT vs Time") <= 1
+            ),
+        }
+
     tokens_match = [
         _visual_pen_record(record) for record in batch["curve_tokens"]
     ] == [
@@ -812,12 +1271,32 @@ def _evaluate(case: ParityCase, batch: dict, reference: dict) -> dict[str, bool]
     return checks
 
 
+def _heatmap_evidence_record(machine: dict[str, Any]) -> dict[str, Any]:
+    lut = np.asarray(machine["lut"], dtype=np.ubyte)
+    return {
+        "matrix": np.asarray(machine["matrix"], dtype=float).tolist(),
+        "matrix_corners": machine["matrix_corners"],
+        "lut_sha256": _array_sha256(lut),
+        "lut_samples_0_1_64_128_192_255": lut[
+            [0, 1, 64, 128, 192, 255]
+        ].tolist(),
+        "levels": machine["levels"],
+        "extent": machine["extent"],
+        "axis_order": machine["axis_order"],
+        "corner_pixels": machine["corner_pixels"],
+        "axis_labels": machine["axis_labels"],
+        "colorbar_label": machine["colorbar_label"],
+        "colorbar_menu_disabled": machine["colorbar_menu_disabled"],
+        "warnings": machine["warnings"],
+    }
+
+
 def generate(output_dir: Path, *, width: int, height: int) -> dict[str, Any]:
     app = ensure_app()
     output_dir.mkdir(parents=True, exist_ok=True)
     options = BatchRenderOptions(width_px=width, height_px=height, dpi=DPI)
     case_records = []
-    rows = {"time": [], "fft": []}
+    rows = {"time": [], "fft": [], "heatmap": []}
     for case in _cases():
         (
             batch_full,
@@ -839,35 +1318,43 @@ def generate(output_dir: Path, *, width: int, height: int) -> dict[str, Any]:
         )
         checks = _evaluate(case, batch_machine, reference_machine)
         status = "PASS" if all(checks.values()) else "FAIL"
-        rows[case.module].append(
+        sheet_module = (
+            case.module if case.module in {"time", "fft"} else "heatmap"
+        )
+        rows[sheet_module].append(
             _case_row(case.name, batch_full, batch_crop, reference_crop)
         )
+        batch_record = {
+            "full": batch_full_record,
+            "crop": batch_crop_record,
+            "viewport": batch_machine["viewport"],
+            "ranges": batch_machine["ranges"],
+            "curve_tokens": batch_machine["curve_tokens"],
+            "plot_ink_pixels": batch_machine["plot_ink_pixels"],
+            "plot_corner_ink_pixels": batch_machine[
+                "plot_corner_ink_pixels"
+            ],
+            "widget_chrome": batch_machine["widget_chrome"],
+        }
+        reference_record = {
+            "full": reference_full_record,
+            "crop": reference_crop_record,
+            "viewport": reference_machine["viewport"],
+            "ranges": reference_machine["ranges"],
+            "curve_tokens": reference_machine.get("curve_tokens", []),
+            "plot_ink_pixels": reference_machine["plot_ink_pixels"],
+        }
+        if sheet_module == "heatmap":
+            batch_record.update(_heatmap_evidence_record(batch_machine))
+            reference_record.update(_heatmap_evidence_record(reference_machine))
         case_records.append(
             {
                 "name": case.name,
                 "module": case.module,
                 "status": status,
                 "assertions": checks,
-                "batch": {
-                    "full": batch_full_record,
-                    "crop": batch_crop_record,
-                    "viewport": batch_machine["viewport"],
-                    "ranges": batch_machine["ranges"],
-                    "curve_tokens": batch_machine["curve_tokens"],
-                    "plot_ink_pixels": batch_machine["plot_ink_pixels"],
-                    "plot_corner_ink_pixels": batch_machine[
-                        "plot_corner_ink_pixels"
-                    ],
-                    "widget_chrome": batch_machine["widget_chrome"],
-                },
-                "reference": {
-                    "full": reference_full_record,
-                    "crop": reference_crop_record,
-                    "viewport": reference_machine["viewport"],
-                    "ranges": reference_machine["ranges"],
-                    "curve_tokens": reference_machine["curve_tokens"],
-                    "plot_ink_pixels": reference_machine["plot_ink_pixels"],
-                },
+                "batch": batch_record,
+                "reference": reference_record,
             }
         )
         app.processEvents()

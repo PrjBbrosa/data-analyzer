@@ -1,8 +1,8 @@
 {
   "status": "PASS",
-  "commit_sha": "6afe3662beabe9ce9d762f5e3691a4d0cd886ed7",
-  "source_state_sha256": "0d455a650a89cf44f8166dac294ae4f6627ec1eb55838536d40ed1123631b0bf",
-  "generated_at": "2026-08-01T16:18:42.858380+00:00",
+  "commit_sha": "9875eb3a75d8626acbf4262d6ff03b264cc825db",
+  "source_state_sha256": "5a89a0cfa5c08f9edb280959d3d16912a96ff100f2b0d09d44fcc7b31efcf0c4",
+  "generated_at": "2026-08-01T16:45:05.991678+00:00",
   "qt_qpa_platform_env": "offscreen",
   "qt_platform": "offscreen",
   "qt_version": "5.15.14",
@@ -1229,6 +1229,1874 @@
         ],
         "plot_ink_pixels": 31561
       }
+    },
+    {
+      "name": "fft-time-linear-auto",
+      "module": "fft_time",
+      "status": "PASS",
+      "assertions": {
+        "matrix_match": true,
+        "matrix_corners_match": true,
+        "turbo_lut_match": true,
+        "levels_match": true,
+        "coverage_extent_match": true,
+        "row_major_axis_order": true,
+        "plot_corner_pixels_match": true,
+        "axis_ranges_match": true,
+        "semantic_labels_match": true,
+        "warnings_match": true,
+        "colorbar_read_only_no_menu": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-time-linear-auto.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 94859,
+          "sha256": "b863ac6b301de765577179e50c6ac4c063808f3b080b104d9b359ae74afe0cb6"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-linear-auto-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 74579,
+          "sha256": "f40a3a3928bdcc4a3788b7df58350d4daec85e6409f312e2b9173399b963ae5d"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              100.0,
+              300.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1584754,
+        "plot_corner_ink_pixels": [
+          0,
+          32,
+          0,
+          0
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        },
+        "matrix": [
+          [
+            0.02,
+            0.08,
+            0.32
+          ],
+          [
+            0.04,
+            0.16,
+            0.64
+          ]
+        ],
+        "matrix_corners": [
+          0.02,
+          0.32,
+          0.04,
+          0.64
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          0.02,
+          0.64
+        ],
+        "extent": [
+          0.0,
+          100.0,
+          3.0,
+          200.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            150,
+            254,
+            68,
+            255
+          ],
+          [
+            57,
+            42,
+            115,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Frequency (Hz)"
+        ],
+        "colorbar_label": "Amplitude (g)",
+        "colorbar_menu_disabled": true,
+        "warnings": []
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-time-linear-auto.png",
+          "width": 1884,
+          "height": 950,
+          "bytes": 75142,
+          "sha256": "223e0dae14832054125ea1541e86c0b581edcbc25d3e1b78ae0f64c8cef4f5c5"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-linear-auto-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 75054,
+          "sha256": "46946fbf2c8d5bae404707c6971ec2c40e0ecd680d7a764c7e868d21966214c0"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              100.0,
+              300.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1583992,
+        "matrix": [
+          [
+            0.02,
+            0.08,
+            0.32
+          ],
+          [
+            0.04,
+            0.16,
+            0.64
+          ]
+        ],
+        "matrix_corners": [
+          0.02,
+          0.32,
+          0.04,
+          0.64
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          0.02,
+          0.64
+        ],
+        "extent": [
+          0.0,
+          100.0,
+          3.0,
+          200.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            150,
+            254,
+            68,
+            255
+          ],
+          [
+            57,
+            42,
+            115,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Frequency (Hz)"
+        ],
+        "colorbar_label": "Amplitude (g)",
+        "colorbar_menu_disabled": true,
+        "warnings": []
+      }
+    },
+    {
+      "name": "fft-time-db-manual",
+      "module": "fft_time",
+      "status": "PASS",
+      "assertions": {
+        "matrix_match": true,
+        "matrix_corners_match": true,
+        "turbo_lut_match": true,
+        "levels_match": true,
+        "coverage_extent_match": true,
+        "row_major_axis_order": true,
+        "plot_corner_pixels_match": true,
+        "axis_ranges_match": true,
+        "semantic_labels_match": true,
+        "warnings_match": true,
+        "colorbar_read_only_no_menu": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-time-db-manual.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 123334,
+          "sha256": "ad5013964dc44bb90bcfafe8fdad28246e369ea57e5c3ceb29e884967be8c973"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-db-manual-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 100619,
+          "sha256": "0b2f636dba91229f21df849a2f9eedc05851e8003160e40702444f4ec2dedb15"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              100.0,
+              300.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1584710,
+        "plot_corner_ink_pixels": [
+          0,
+          32,
+          0,
+          0
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        },
+        "matrix": [
+          [
+            -33.979400086720375,
+            -21.93820026016113,
+            -9.89700043360188
+          ],
+          [
+            -27.95880017344075,
+            -15.917600346881503,
+            -3.8764005203222562
+          ]
+        ],
+        "matrix_corners": [
+          -33.979400086720375,
+          -9.89700043360188,
+          -27.95880017344075,
+          -3.8764005203222562
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          -32.0,
+          -2.0
+        ],
+        "extent": [
+          0.0,
+          100.0,
+          3.0,
+          200.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            253,
+            138,
+            38,
+            255
+          ],
+          [
+            71,
+            113,
+            233,
+            255
+          ],
+          [
+            172,
+            23,
+            1,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Frequency (Hz)"
+        ],
+        "colorbar_label": "Amplitude (dB re 1×10⁰)",
+        "colorbar_menu_disabled": true,
+        "warnings": []
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-time-db-manual.png",
+          "width": 1884,
+          "height": 950,
+          "bytes": 98576,
+          "sha256": "0bcf29e059dcfc1173e86ae75ae5d71664735d442538c985b290aaa4fc0a59e7"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-db-manual-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 98468,
+          "sha256": "afb67d2a0674ce857ed31ca247b60bacf4364f50c033ad033d92b71bda6015f8"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              100.0,
+              300.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1583199,
+        "matrix": [
+          [
+            -33.979400086720375,
+            -21.93820026016113,
+            -9.89700043360188
+          ],
+          [
+            -27.95880017344075,
+            -15.917600346881503,
+            -3.8764005203222562
+          ]
+        ],
+        "matrix_corners": [
+          -33.979400086720375,
+          -9.89700043360188,
+          -27.95880017344075,
+          -3.8764005203222562
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          -32.0,
+          -2.0
+        ],
+        "extent": [
+          0.0,
+          100.0,
+          3.0,
+          200.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            253,
+            138,
+            38,
+            255
+          ],
+          [
+            71,
+            113,
+            233,
+            255
+          ],
+          [
+            172,
+            23,
+            1,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Frequency (Hz)"
+        ],
+        "colorbar_label": "Amplitude (dB re 1×10⁰)",
+        "colorbar_menu_disabled": true,
+        "warnings": []
+      }
+    },
+    {
+      "name": "fft-time-invalid-cmap",
+      "module": "fft_time",
+      "status": "PASS",
+      "assertions": {
+        "matrix_match": true,
+        "matrix_corners_match": true,
+        "turbo_lut_match": true,
+        "levels_match": true,
+        "coverage_extent_match": true,
+        "row_major_axis_order": true,
+        "plot_corner_pixels_match": true,
+        "axis_ranges_match": true,
+        "semantic_labels_match": true,
+        "warnings_match": true,
+        "colorbar_read_only_no_menu": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-time-invalid-cmap.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 94859,
+          "sha256": "b863ac6b301de765577179e50c6ac4c063808f3b080b104d9b359ae74afe0cb6"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-invalid-cmap-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 74579,
+          "sha256": "f40a3a3928bdcc4a3788b7df58350d4daec85e6409f312e2b9173399b963ae5d"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              100.0,
+              300.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1584754,
+        "plot_corner_ink_pixels": [
+          0,
+          32,
+          0,
+          0
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        },
+        "matrix": [
+          [
+            0.02,
+            0.08,
+            0.32
+          ],
+          [
+            0.04,
+            0.16,
+            0.64
+          ]
+        ],
+        "matrix_corners": [
+          0.02,
+          0.32,
+          0.04,
+          0.64
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          0.02,
+          0.64
+        ],
+        "extent": [
+          0.0,
+          100.0,
+          3.0,
+          200.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            150,
+            254,
+            68,
+            255
+          ],
+          [
+            57,
+            42,
+            115,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Frequency (Hz)"
+        ],
+        "colorbar_label": "Amplitude (g)",
+        "colorbar_menu_disabled": true,
+        "warnings": [
+          "Invalid colormap 'not-a-real-map'; using 'turbo'."
+        ]
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-time-invalid-cmap.png",
+          "width": 1884,
+          "height": 950,
+          "bytes": 75142,
+          "sha256": "223e0dae14832054125ea1541e86c0b581edcbc25d3e1b78ae0f64c8cef4f5c5"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-invalid-cmap-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 75054,
+          "sha256": "46946fbf2c8d5bae404707c6971ec2c40e0ecd680d7a764c7e868d21966214c0"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              100.0,
+              300.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1583992,
+        "matrix": [
+          [
+            0.02,
+            0.08,
+            0.32
+          ],
+          [
+            0.04,
+            0.16,
+            0.64
+          ]
+        ],
+        "matrix_corners": [
+          0.02,
+          0.32,
+          0.04,
+          0.64
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          0.02,
+          0.64
+        ],
+        "extent": [
+          0.0,
+          100.0,
+          3.0,
+          200.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            150,
+            254,
+            68,
+            255
+          ],
+          [
+            57,
+            42,
+            115,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Frequency (Hz)"
+        ],
+        "colorbar_label": "Amplitude (g)",
+        "colorbar_menu_disabled": true,
+        "warnings": [
+          "Invalid colormap 'not-a-real-map'; using 'turbo'."
+        ]
+      }
+    },
+    {
+      "name": "order-time-linear-manual",
+      "module": "order_time",
+      "status": "PASS",
+      "assertions": {
+        "matrix_match": true,
+        "matrix_corners_match": true,
+        "turbo_lut_match": true,
+        "levels_match": true,
+        "coverage_extent_match": true,
+        "row_major_axis_order": true,
+        "plot_corner_pixels_match": true,
+        "axis_ranges_match": true,
+        "semantic_labels_match": true,
+        "warnings_match": true,
+        "colorbar_read_only_no_menu": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/order-time-linear-manual.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 97400,
+          "sha256": "287b0d3e4170594cf2d7710c8c89f867141e296d627598eebe15d0b64c2d0474"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-linear-manual-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 77827,
+          "sha256": "1d165402b307a9512f33756c9146865e3c7f7fe927714ed9a9f199cadd80dc75"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              1.0,
+              4.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1594398,
+        "plot_corner_ink_pixels": [
+          0,
+          41,
+          0,
+          0
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        },
+        "matrix": [
+          [
+            0.02,
+            0.08,
+            0.32
+          ],
+          [
+            0.04,
+            0.16,
+            0.64
+          ]
+        ],
+        "matrix_corners": [
+          0.02,
+          0.32,
+          0.04,
+          0.64
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          0.03,
+          0.5
+        ],
+        "extent": [
+          0.0,
+          1.0,
+          3.0,
+          3.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            233,
+            213,
+            57,
+            255
+          ],
+          [
+            54,
+            33,
+            95,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Order"
+        ],
+        "colorbar_label": "Amplitude (g)",
+        "colorbar_menu_disabled": true,
+        "warnings": []
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/order-time-linear-manual.png",
+          "width": 1884,
+          "height": 950,
+          "bytes": 77303,
+          "sha256": "943aa0b6d9fb6881fa72244626fbc1e2b5e7d23a30248ad58c68017fcb348383"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-linear-manual-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 77168,
+          "sha256": "682dca6970a863650dd6f44787516972057af419e77db1c01a94b5459d307540"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              1.0,
+              4.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1593393,
+        "matrix": [
+          [
+            0.02,
+            0.08,
+            0.32
+          ],
+          [
+            0.04,
+            0.16,
+            0.64
+          ]
+        ],
+        "matrix_corners": [
+          0.02,
+          0.32,
+          0.04,
+          0.64
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          0.03,
+          0.5
+        ],
+        "extent": [
+          0.0,
+          1.0,
+          3.0,
+          3.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            233,
+            213,
+            57,
+            255
+          ],
+          [
+            54,
+            33,
+            95,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Order"
+        ],
+        "colorbar_label": "Amplitude (g)",
+        "colorbar_menu_disabled": true,
+        "warnings": []
+      }
+    },
+    {
+      "name": "order-time-db-auto",
+      "module": "order_time",
+      "status": "PASS",
+      "assertions": {
+        "matrix_match": true,
+        "matrix_corners_match": true,
+        "turbo_lut_match": true,
+        "levels_match": true,
+        "coverage_extent_match": true,
+        "row_major_axis_order": true,
+        "plot_corner_pixels_match": true,
+        "axis_ranges_match": true,
+        "semantic_labels_match": true,
+        "warnings_match": true,
+        "colorbar_read_only_no_menu": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/order-time-db-auto.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 124221,
+          "sha256": "6f1d4ef91ab77c17900ca3108e4816334e0a79b29240d52382effd5a854ca544"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-db-auto-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 102711,
+          "sha256": "1705e26faf9651a976d22372bc357e7bd8614f438d414ad3e9a556e82097e9eb"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              1.0,
+              4.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1594836,
+        "plot_corner_ink_pixels": [
+          0,
+          32,
+          0,
+          0
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        },
+        "matrix": [
+          [
+            -33.979400086720375,
+            -21.93820026016113,
+            -9.89700043360188
+          ],
+          [
+            -27.95880017344075,
+            -15.917600346881503,
+            -3.8764005203222562
+          ]
+        ],
+        "matrix_corners": [
+          -33.979400086720375,
+          -9.89700043360188,
+          -27.95880017344075,
+          -3.8764005203222562
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          -34.17743051598624,
+          -4.177430515986236
+        ],
+        "extent": [
+          0.0,
+          1.0,
+          3.0,
+          3.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            50,
+            23,
+            69,
+            255
+          ],
+          [
+            236,
+            83,
+            15,
+            255
+          ],
+          [
+            59,
+            160,
+            253,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Order"
+        ],
+        "colorbar_label": "Amplitude (dB re 1×10⁰)",
+        "colorbar_menu_disabled": true,
+        "warnings": []
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/order-time-db-auto.png",
+          "width": 1884,
+          "height": 950,
+          "bytes": 98773,
+          "sha256": "b3e9f3789dd087d51812f3ea6272c98d00c83c21bcbca6cf2f13b9663c10ee54"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-db-auto-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 98701,
+          "sha256": "a7d67b73cb92cb142bf4e8a6aa5da778ff10cfb8178cf7849aaf38b357fcdf3a"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              1.0,
+              4.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1592932,
+        "matrix": [
+          [
+            -33.979400086720375,
+            -21.93820026016113,
+            -9.89700043360188
+          ],
+          [
+            -27.95880017344075,
+            -15.917600346881503,
+            -3.8764005203222562
+          ]
+        ],
+        "matrix_corners": [
+          -33.979400086720375,
+          -9.89700043360188,
+          -27.95880017344075,
+          -3.8764005203222562
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          -34.17743051598624,
+          -4.177430515986236
+        ],
+        "extent": [
+          0.0,
+          1.0,
+          3.0,
+          3.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            50,
+            23,
+            69,
+            255
+          ],
+          [
+            236,
+            83,
+            15,
+            255
+          ],
+          [
+            59,
+            160,
+            253,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Order"
+        ],
+        "colorbar_label": "Amplitude (dB re 1×10⁰)",
+        "colorbar_menu_disabled": true,
+        "warnings": []
+      }
+    },
+    {
+      "name": "order-time-invalid-cmap",
+      "module": "order_time",
+      "status": "PASS",
+      "assertions": {
+        "matrix_match": true,
+        "matrix_corners_match": true,
+        "turbo_lut_match": true,
+        "levels_match": true,
+        "coverage_extent_match": true,
+        "row_major_axis_order": true,
+        "plot_corner_pixels_match": true,
+        "axis_ranges_match": true,
+        "semantic_labels_match": true,
+        "warnings_match": true,
+        "colorbar_read_only_no_menu": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/order-time-invalid-cmap.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 95857,
+          "sha256": "42cdc8373b3b7e75f979b44d083d3e5aa9da1311571a35fd457d64ef84fba006"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-invalid-cmap-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 76559,
+          "sha256": "1ab2d75333a33b68ff0d3d89b02db8f3bf91ae5cada8b4fd58133fbabb310338"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              1.0,
+              4.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1594701,
+        "plot_corner_ink_pixels": [
+          0,
+          32,
+          0,
+          0
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        },
+        "matrix": [
+          [
+            0.02,
+            0.08,
+            0.32
+          ],
+          [
+            0.04,
+            0.16,
+            0.64
+          ]
+        ],
+        "matrix_corners": [
+          0.02,
+          0.32,
+          0.04,
+          0.64
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          0.02,
+          0.64
+        ],
+        "extent": [
+          0.0,
+          1.0,
+          3.0,
+          3.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            150,
+            254,
+            68,
+            255
+          ],
+          [
+            57,
+            42,
+            115,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Order"
+        ],
+        "colorbar_label": "Amplitude (g)",
+        "colorbar_menu_disabled": true,
+        "warnings": [
+          "Invalid colormap 'not-a-real-map'; using 'turbo'."
+        ]
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/order-time-invalid-cmap.png",
+          "width": 1884,
+          "height": 950,
+          "bytes": 76501,
+          "sha256": "11dccff372bafa747cf6f06a82264777b82269e36735a803abd78a7fecb5e97e"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-invalid-cmap-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 76427,
+          "sha256": "705a74248703ddcd37290d821a2be1cb95c13a5904ad3b2995dfd2a5a6b1daee"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              3.0
+            ],
+            "y": [
+              1.0,
+              4.0
+            ]
+          }
+        ],
+        "curve_tokens": [],
+        "plot_ink_pixels": 1593729,
+        "matrix": [
+          [
+            0.02,
+            0.08,
+            0.32
+          ],
+          [
+            0.04,
+            0.16,
+            0.64
+          ]
+        ],
+        "matrix_corners": [
+          0.02,
+          0.32,
+          0.04,
+          0.64
+        ],
+        "lut_sha256": "505042f783e36ed1754c4458720a175821e40ece9350ab1209fe043d0e5f8c52",
+        "lut_samples_0_1_64_128_192_255": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            50,
+            21,
+            67,
+            255
+          ],
+          [
+            40,
+            188,
+            235,
+            255
+          ],
+          [
+            164,
+            252,
+            60,
+            255
+          ],
+          [
+            251,
+            126,
+            33,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "levels": [
+          0.02,
+          0.64
+        ],
+        "extent": [
+          0.0,
+          1.0,
+          3.0,
+          3.0
+        ],
+        "axis_order": "row-major",
+        "corner_pixels": [
+          [
+            48,
+            18,
+            59,
+            255
+          ],
+          [
+            150,
+            254,
+            68,
+            255
+          ],
+          [
+            57,
+            42,
+            115,
+            255
+          ],
+          [
+            122,
+            4,
+            3,
+            255
+          ]
+        ],
+        "axis_labels": [
+          "Time (s)",
+          "Order"
+        ],
+        "colorbar_label": "Amplitude (g)",
+        "colorbar_menu_disabled": true,
+        "warnings": [
+          "Invalid colormap 'not-a-real-map'; using 'turbo'."
+        ]
+      }
     }
   ],
   "contact_sheets": {
@@ -1245,6 +3113,13 @@
       "height": 968,
       "bytes": 92381,
       "sha256": "1579f6ad262456ad06d8c84ffb27c3a0f4659da08ab80b4bfec8b292ed396b11"
+    },
+    "heatmap": {
+      "path": "docs/superpowers/verify/batch-qt-render/heatmap-contact-sheet.png",
+      "width": 1352,
+      "height": 1922,
+      "bytes": 481485,
+      "sha256": "56a8a5a92d993d65647df25c0146062cdbe78c4ccbc152d5bba1950731237e47"
     }
   }
 }

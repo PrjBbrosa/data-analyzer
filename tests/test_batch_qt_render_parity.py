@@ -50,6 +50,19 @@ def test_parity_tool_declares_complete_batch2_matrix():
         assert case in source
 
 
+def test_parity_tool_declares_complete_batch3_heatmap_matrix():
+    source = TOOL.read_text(encoding="utf-8")
+    for case in (
+        "fft-time-linear-auto",
+        "fft-time-db-manual",
+        "fft-time-invalid-cmap",
+        "order-time-linear-manual",
+        "order-time-db-auto",
+        "order-time-invalid-cmap",
+    ):
+        assert case in source
+
+
 def test_plot_corner_pixel_guard_detects_native_auto_range_button(qapp):
     case = _cases()[0]
     scene = build_batch_scene(
@@ -103,7 +116,7 @@ def test_parity_tool_generates_current_machine_evidence(tmp_path):
     assert evidence["status"] == "PASS"
     assert evidence["qt_platform"] == "offscreen"
     assert evidence["commit_sha"]
-    assert len(evidence["cases"]) == 8
+    assert len(evidence["cases"]) == 14
     assert all(case["status"] == "PASS" for case in evidence["cases"])
     assert all(
         all(case["batch"]["widget_chrome"].values())
@@ -112,3 +125,17 @@ def test_parity_tool_generates_current_machine_evidence(tmp_path):
     )
     assert (tmp_path / "time-contact-sheet.png").is_file()
     assert (tmp_path / "fft-contact-sheet.png").is_file()
+    assert (tmp_path / "heatmap-contact-sheet.png").is_file()
+    heatmap_cases = [
+        case
+        for case in evidence["cases"]
+        if case["module"] in {"fft_time", "order_time"}
+    ]
+    assert len(heatmap_cases) == 6
+    assert all(
+        case["batch"]["axis_order"] == "row-major"
+        and case["batch"]["colorbar_menu_disabled"] is True
+        and len(case["batch"]["matrix_corners"]) == 4
+        and len(case["batch"]["corner_pixels"]) == 4
+        for case in heatmap_cases
+    )
