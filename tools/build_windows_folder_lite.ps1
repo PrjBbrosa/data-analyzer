@@ -27,7 +27,6 @@ if (-not $AppName) {
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
-$env:MPLBACKEND = "Agg"
 
 function Write-Step {
     param([string]$Message)
@@ -59,7 +58,6 @@ $StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
 $IconsDir = Join-Path $RepoRoot "assets\icons"
 $AppIcon = Join-Path $IconsDir "tracelab.ico"
 $RuntimeDependencyTool = Join-Path $PSScriptRoot "windows_runtime_dependencies.py"
-$MatplotlibContractTool = Join-Path $PSScriptRoot "matplotlib_frozen_contract.py"
 $BatchRenderSmokeTool = Join-Path $PSScriptRoot "verify_frozen_batch_render.py"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
@@ -72,7 +70,7 @@ $BuildEvidenceDir = Join-Path $RepoRoot ".state\build-evidence"
 # Default output: dist\TraceLabAnalyzer7.9.1\TraceLabAnalyzer7.9.1.exe
 # (override with -Version or -AppName)
 
-foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $MatplotlibContractTool, $BatchRenderSmokeTool)) {
+foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $BatchRenderSmokeTool)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -114,17 +112,6 @@ try {
 } catch {
     throw "Frozen import dependency arguments were not valid JSON: $_"
 }
-$MatplotlibContractJson = & $VenvPython $MatplotlibContractTool --pyinstaller-excludes-json
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not resolve Matplotlib frozen packaging contract"
-}
-try {
-    $MatplotlibContract = $MatplotlibContractJson | ConvertFrom-Json
-    $MatplotlibExcludedModules = @($MatplotlibContract.excluded_modules)
-} catch {
-    throw "Matplotlib frozen packaging contract was not valid JSON: $_"
-}
-
 Write-Step "Building analyzer-only folder-style exe with PyInstaller"
 $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
 $AddDataIcons = "$IconsDir;assets\icons"
@@ -222,6 +209,9 @@ $PyInstallerArgs += @(
     "--exclude-module", "mf4_analyzer.acquisition_capture",
     "--exclude-module", "pyxcp",
     "--exclude-module", "pya2l",
+    # Product rendering is Qt/pyqtgraph-only.  Keep a stale build environment
+    # from reintroducing Matplotlib through PyInstaller's analysis graph.
+    "--exclude-module", "matplotlib",
     "--collect-submodules", "pyqtgraph",
     "--collect-all", "qtawesome"
 )
@@ -232,14 +222,11 @@ foreach ($HiddenImport in $HiddenImports) {
 foreach ($QtModule in $UnusedQtModules) {
     $PyInstallerArgs += @("--exclude-module", $QtModule)
 }
-foreach ($MatplotlibModule in $MatplotlibExcludedModules) {
-    $PyInstallerArgs += @("--exclude-module", $MatplotlibModule)
-}
 $PyInstallerArgs += $EntryScript
 
-$MatplotlibPruneEvidence = Join-Path $BuildEvidenceDir "$AppName-matplotlib-prune.json"
-$BatchRenderSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-batch-render-smoke.json"
-foreach ($StaleEvidencePath in @($MatplotlibPruneEvidence, $BatchRenderSmokeEvidence)) {
+$BatchRenderOffscreenSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-batch-render-offscreen-smoke.json"
+$BatchRenderWindowsSmokeEvidence = Join-Path $BuildEvidenceDir "$AppName-batch-render-windows-smoke.json"
+foreach ($StaleEvidencePath in @($BatchRenderOffscreenSmokeEvidence, $BatchRenderWindowsSmokeEvidence)) {
     if (Test-Path -LiteralPath $StaleEvidencePath) {
         Remove-Item -LiteralPath $StaleEvidencePath -Force
     }
@@ -252,6 +239,15 @@ if ($PyInstallerExitCode -ne 0) {
 
 if (-not (Test-Path $ExePath)) {
     throw "Build finished but exe was not found: $ExePath"
+}
+
+Write-Step "Verifying required Qt platform plugins"
+$QtPlatformsDir = Join-Path $OutputDir "_internal\PyQt5\Qt5\plugins\platforms"
+foreach ($QtPlatformPlugin in @("qoffscreen.dll", "qwindows.dll")) {
+    $QtPlatformPluginPath = Join-Path $QtPlatformsDir $QtPlatformPlugin
+    if (-not (Test-Path -LiteralPath $QtPlatformPluginPath)) {
+        throw "Required Qt platform plugin missing: $QtPlatformPluginPath"
+    }
 }
 
 # ``scipy.io.loadmat`` itself is pure Python for the supported non-v7.3 MAT
@@ -273,18 +269,14 @@ if (Test-Path -LiteralPath $SciPyLibsDir) {
     Remove-Item -LiteralPath $SciPyLibsDir -Force
 }
 
-Write-Step "Pruning collected Matplotlib data"
-& $VenvPython $MatplotlibContractTool `
-    --prune-internal (Join-Path $OutputDir "_internal") `
-    --evidence-json $MatplotlibPruneEvidence
+Write-Step "Verifying frozen batch rendering (offscreen + windows)"
+& $VenvPython $BatchRenderSmokeTool --exe $ExePath --platform offscreen --evidence-json $BatchRenderOffscreenSmokeEvidence
 if ($LASTEXITCODE -ne 0) {
-    throw "Matplotlib frozen-data pruning failed"
+    throw "Frozen offscreen batch render smoke failed; see $BatchRenderOffscreenSmokeEvidence"
 }
-
-Write-Step "Verifying frozen batch rendering (4 kinds x 3 formats)"
-& $VenvPython $BatchRenderSmokeTool --exe $ExePath --evidence-json $BatchRenderSmokeEvidence
+& $VenvPython $BatchRenderSmokeTool --exe $ExePath --platform windows --evidence-json $BatchRenderWindowsSmokeEvidence
 if ($LASTEXITCODE -ne 0) {
-    throw "Frozen batch render smoke failed; see $BatchRenderSmokeEvidence"
+    throw "Frozen Windows batch render smoke failed; see $BatchRenderWindowsSmokeEvidence"
 }
 
 Write-Step "Build output"

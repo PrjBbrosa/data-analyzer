@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -23,6 +24,18 @@ TURBO_LOW_RGB = (48, 18, 59)
 TURBO_HIGH_RGB = (122, 4, 3)
 
 
+def _tree_measurement(directory: Path) -> dict[str, object]:
+    directory = Path(directory).resolve()
+    if directory.name != "_internal" or not directory.is_dir():
+        raise ValueError(f"expected an existing _internal directory: {directory}")
+    files = tuple(path for path in directory.rglob("*") if path.is_file())
+    return {
+        "path": str(directory),
+        "bytes": sum(path.stat().st_size for path in files),
+        "files": len(files),
+    }
+
+
 def _contains_rgb(
     image: QImage, expected: tuple[int, int, int], tolerance: int = 1
 ) -> int:
@@ -40,7 +53,9 @@ def _contains_rgb(
     return int(np.count_nonzero(np.all(delta <= tolerance, axis=2)))
 
 
-def verify_artifacts(artifacts: Path, child_json: Path) -> dict[str, object]:
+def verify_artifacts(
+    artifacts: Path, child_json: Path, expected_platform: str
+) -> dict[str, object]:
     artifacts = Path(artifacts)
     child = json.loads(Path(child_json).read_text(encoding="utf-8"))
     if child.get("ok") is not True:
@@ -51,6 +66,14 @@ def verify_artifacts(artifacts: Path, child_json: Path) -> dict[str, object]:
     qt_platform_name = str(child.get("qt_platform_name") or "")
     if not qt_qpa_platform or not qt_platform_name:
         raise RuntimeError("render child did not report requested and actual Qt platforms")
+    if (
+        qt_qpa_platform.lower() != expected_platform.lower()
+        or qt_platform_name.lower() != expected_platform.lower()
+    ):
+        raise RuntimeError(
+            f"requested Qt platform {expected_platform!s}, but child reported "
+            f"QT_QPA_PLATFORM={qt_qpa_platform!r} and platformName={qt_platform_name!r}"
+        )
     cjk_proof = child.get("cjk_proof") or {}
     ink_pixels = int(cjk_proof.get("ink_pixels") or 0)
     empty_ink_pixels = int(cjk_proof.get("empty_ink_pixels") or 0)
@@ -103,6 +126,7 @@ def verify_artifacts(artifacts: Path, child_json: Path) -> dict[str, object]:
         "title": TITLE,
         "artifact_count": len(artifact_records),
         "artifacts": artifact_records,
+        "requested_qt_platform": expected_platform,
         "qt_qpa_platform": qt_qpa_platform,
         "qt_platform_name": qt_platform_name,
         "cjk_proof": cjk_proof,
@@ -114,7 +138,7 @@ def verify_artifacts(artifacts: Path, child_json: Path) -> dict[str, object]:
     }
 
 
-def verify_frozen(exe: Path) -> dict[str, object]:
+def verify_frozen(exe: Path, expected_platform: str) -> dict[str, object]:
     exe = Path(exe).resolve()
     if not exe.is_file():
         raise FileNotFoundError(f"frozen executable not found: {exe}")
@@ -130,17 +154,25 @@ def verify_frozen(exe: Path) -> dict[str, object]:
             "--json",
             str(child_json),
         ]
-        completed = subprocess.run(command, capture_output=True, timeout=240)
+        environment = os.environ.copy()
+        environment["QT_QPA_PLATFORM"] = expected_platform
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            timeout=240,
+            env=environment,
+        )
         if completed.returncode != 0:
             detail = child_json.read_text(encoding="utf-8") if child_json.is_file() else ""
             raise RuntimeError(
                 f"frozen render child failed ({completed.returncode}): {detail}"
             )
-        evidence = verify_artifacts(artifacts, child_json)
+        evidence = verify_artifacts(artifacts, child_json, expected_platform)
     evidence["runtime"] = "frozen-onedir-executable"
     evidence["executable"] = str(exe)
     evidence["executable_bytes"] = exe.stat().st_size
     evidence["executable_sha256"] = hashlib.sha256(exe.read_bytes()).hexdigest()
+    evidence["internal"] = _tree_measurement(exe.parent / "_internal")
     return evidence
 
 
@@ -150,15 +182,20 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--exe", type=Path)
     source.add_argument("--artifacts", type=Path)
     parser.add_argument("--child-json", type=Path)
+    parser.add_argument(
+        "--platform", choices=("offscreen", "windows"), required=True
+    )
     parser.add_argument("--evidence-json", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.exe is not None:
-            evidence = verify_frozen(args.exe)
+            evidence = verify_frozen(args.exe, args.platform)
         else:
             if args.child_json is None:
                 parser.error("--artifacts requires --child-json")
-            evidence = verify_artifacts(args.artifacts, args.child_json)
+            evidence = verify_artifacts(
+                args.artifacts, args.child_json, args.platform
+            )
             evidence["runtime"] = "artifact-validation-only"
     except Exception as exc:
         evidence = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}

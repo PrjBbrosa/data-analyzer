@@ -94,7 +94,8 @@ lesson by default.
 | [Batch Output Validation Has One Pure Authority](batch-output-validation-single-authority.md) | Adding or changing batch output fields, formats, sizes, conflict policies, resume settings, or UI preflight behavior. | See lesson |
 | [Batch Render Facts Must Use Producer-Shaped Tests](batch-render-facts-use-producer-contract.md) | Adding or renaming effective analysis facts shown in batch titles, subtitles, labels, or manifests. | See lesson |
 | [Batch Operations Keep Runtime State Out Of Presets](batch-operations-runtime-state.md) | Changing BatchSheet run lifecycle, manifest resume, retry-failed, worker arguments, or consecutive-run result handling. | See lesson |
-| [Batch Render Proof Includes CJK Glyph Coverage](batch-render-cjk-glyph-coverage.md) | Changing batch figure typography, titles, axis labels, legends, colorbars, SVG/PDF output, or cross-platform font fallback. | See lesson |
+| [Qt Batch Render Proof Includes CJK Glyph And Ink Coverage](batch-render-cjk-glyph-coverage.md) | Changing Qt batch text, PNG output, or cross-platform font fallback. | `tests/test_batch_render_qt.py::test_cjk_font_support_and_header_ink_proof` |
+| [Qt Offscreen Batch Rendering Owns GUI Thread And Application Lifecycle](signal-processing/2026-08-02-qt-batch-render-lifecycle.md) | Changing Qt batch dispatch, scene paint, PNG encode, DPI metadata, or render probes. | `tests/test_batch_render_qt.py`; native Cocoa heartbeat |
 | [Batch Task List Height Follows Its Information](batch-task-list-information-weighted-height.md) | Changing BatchSheet task preview rows, task statuses, disclosure behavior, or the bottom task-list layout. | See lesson |
 | [Raw Wheel Pixel Delta Survives Scene Routing](raw-wheel-pixel-delta-survives-scene-routing.md) | Changing pyqtgraph wheel routing, modifier zoom behavior, the | See lesson |
 | [Qt Timer Rate Limits Need A Timeout-Time Guard](qt-timer-rate-limit-recheck-at-timeout.md) | Implementing or reviewing a hard interaction refresh-rate ceiling with | See lesson |
@@ -115,7 +116,6 @@ lesson by default.
 | [Canvas backref write-through needs an explicit whitelist](pyqt-ui/2026-07-30-canvas-backref-write-through-needs-explicit-whitelist.md) | A collaborator delegates unknown attribute reads or writes to a shared canvas. | See lesson |
 | [Diagnostic throttles must account for every pending count](diagnostic-throttle-pending-count-lifecycle.md) | Changing a bounded diagnostic throttle, its rollover, eviction, or shutdown behavior. | See lesson |
 | [Windows Vendoring Network Failures Keep The Gate Red](codex-windows-vendoring-network-retry.md) | A Windows folder build fails while pip vendors the pinned Vector/XCP | See lesson |
-| [Matplotlib Pruning Needs A Frozen Render Matrix](matplotlib-pruning-needs-frozen-render-matrix.md) | Changing PyInstaller Matplotlib collection/exclusions, `mpl-data` | See lesson |
 | [Batch Render Degradation Stops At The Probe](batch-render-degradation-stops-at-probe.md) | Changing batch image/PDF backend imports, effective output selection, | See lesson |
 | [Windows Popup Pixel Probes Need Topmost Host And Frame Geometry](pyqt-ui/2026-07-31-windows-popup-pixel-probes-need-topmost-host-and-frame-geometry.md) | Verifying a translucent, rounded Qt popup or tooltip on a real Windows desktop with `QScreen.grabWindow(0)`. | See lesson |
 | [Close Batch Spool Mmaps Before Cleanup](batch-spool-mmap-close-before-cleanup.md) | Changing batch series spooling, memory-mapped array loading, grouped | See lesson |

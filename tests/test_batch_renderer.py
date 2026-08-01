@@ -6,6 +6,7 @@ product boundary that callers are allowed to import.
 """
 from __future__ import annotations
 
+import ast
 import inspect
 from pathlib import Path
 import subprocess
@@ -14,7 +15,7 @@ import sys
 import numpy as np
 import pandas as pd
 import pytest
-from PIL import Image
+from PyQt5.QtGui import QImage, QImageReader
 
 
 def test_facade_exports_only_supported_qt_renderer_contract():
@@ -52,6 +53,31 @@ def test_facade_source_has_no_matplotlib_runtime_dependency():
     source = inspect.getsource(facade)
     assert "matplotlib" not in source.lower()
     assert "batch_render_qt" in source
+
+
+def test_product_package_has_no_matplotlib_runtime_imports():
+    """Development comparison tools may use mpl; product modules may not."""
+    package = Path(__file__).resolve().parents[1] / "mf4_analyzer"
+    matches = []
+    for source_path in package.rglob("*.py"):
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"), filename=str(source_path)
+        )
+        for node in ast.walk(tree):
+            modules = ()
+            if isinstance(node, ast.Import):
+                modules = tuple(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                modules = (node.module,)
+            if any(
+                module == "matplotlib" or module.startswith("matplotlib.")
+                for module in modules
+            ):
+                matches.append(
+                    f"{source_path.relative_to(package)}:{node.lineno}"
+                )
+
+    assert matches == []
 
 
 def test_importing_batch_does_not_import_qt_runtime(tmp_path):
@@ -101,10 +127,16 @@ def test_facade_renders_exact_size_png_offscreen(tmp_path):
     )
 
     assert result == target
-    with Image.open(target) as image:
-        assert image.format == "PNG"
-        assert image.size == (640, 360)
-        assert np.asarray(image).std() > 0.0
+    image = QImage(str(target))
+    assert not image.isNull()
+    assert bytes(QImageReader.imageFormat(str(target))).lower() == b"png"
+    assert (image.width(), image.height()) == (640, 360)
+    sampled_colors = {
+        image.pixel(x, y)
+        for x in range(0, image.width(), 16)
+        for y in range(0, image.height(), 16)
+    }
+    assert len(sampled_colors) > 1
 
 
 @pytest.mark.parametrize("illegal_format", ("pdf", "svg"))

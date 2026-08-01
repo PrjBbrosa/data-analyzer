@@ -49,6 +49,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 
 - [batch-output-identity](signal-processing/2026-07-28-batch-output-identity.md) [batch][output-id][atomic] — Task hash + atomic race retry.
 - [convolve-same-output-length-follows-longer-operand](signal-processing/2026-07-30-convolve-same-output-length-follows-longer-operand.md) [numpy][convolve][moving-average][window][output-shape][ui-parameter] — `np.convolve(mode="same")` follows the longer operand, so a UI-sized window can make filtered data longer than its time axis; pin the public shape/dtype contract and handle oversized windows explicitly.
+- [qt-batch-render-lifecycle](signal-processing/2026-08-02-qt-batch-render-lifecycle.md) [batch][qt][thread] — GUI paints; caller encodes.
 
 ## pyqt-ui
 

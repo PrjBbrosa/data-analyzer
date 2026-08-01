@@ -1,6 +1,7 @@
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 import pytest
 
@@ -154,12 +155,30 @@ def test_windows_build_scripts_share_frozen_import_dependency_contract():
         assert "$RuntimeDependencyArgs" in text
         assert '"--exclude-module", "scipy"' not in text
         assert '"--exclude-module", "h5py"' not in text
-        assert '"--exclude-module", "matplotlib"' not in text
+        assert '"--exclude-module", "matplotlib"' in text
+        assert "$env:MPLBACKEND" not in text
+        assert "matplotlib_frozen_contract.py" not in text
+        assert "--prune-internal" not in text
 
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert "scipy" in requirements
     assert "h5py" in requirements
-    assert "matplotlib" in requirements
+    assert not any(
+        line.split("#", 1)[0].strip().lower().startswith("matplotlib")
+        for line in requirements.splitlines()
+    )
+
+
+def test_windows_build_scripts_require_both_qt_platform_plugins_and_smoke_them():
+    """Every flavor must prove both headless and native Windows Qt platforms."""
+    for filename in ("build_windows_folder.ps1", "build_windows_folder_lite.ps1"):
+        text = (ROOT / "tools" / filename).read_text(encoding="utf-8")
+        for plugin in ("qoffscreen.dll", "qwindows.dll"):
+            assert plugin in text
+        assert "--platform offscreen" in text
+        assert "--platform windows" in text
+        assert "batch-render-offscreen-smoke.json" in text
+        assert "batch-render-windows-smoke.json" in text
 
 
 def test_windows_build_scripts_request_their_collection_flavors():
@@ -353,6 +372,9 @@ def test_windows_run_built_exe_wrapper_pauses_after_exit():
     assert "pause" in text
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="executes powershell.exe against native .cmd"
+)
 def test_windows_builds_reject_failed_pyinstaller_before_reusing_old_exe_or_evidence(
     tmp_path,
 ):
@@ -365,12 +387,18 @@ def test_windows_builds_reject_failed_pyinstaller_before_reusing_old_exe_or_evid
         invocation = text.index("& $VenvPython @PyInstallerArgs")
         exit_capture = text.index("$PyInstallerExitCode = $LASTEXITCODE")
         exe_check = text.index("if (-not (Test-Path $ExePath))", invocation)
-        prune_step = text.index('Write-Step "Pruning collected Matplotlib data"')
-        prune_evidence = text.index("$MatplotlibPruneEvidence =", 0, invocation)
-        smoke_evidence = text.index("$BatchRenderSmokeEvidence =", 0, invocation)
-        assert invocation < exit_capture < exe_check < prune_step
-        assert prune_evidence < invocation
-        assert smoke_evidence < invocation
+        smoke_step = text.index(
+            'Write-Step "Verifying frozen batch rendering (offscreen + windows)"'
+        )
+        offscreen_evidence = text.index(
+            "$BatchRenderOffscreenSmokeEvidence =", 0, invocation
+        )
+        windows_evidence = text.index(
+            "$BatchRenderWindowsSmokeEvidence =", 0, invocation
+        )
+        assert invocation < exit_capture < exe_check < smoke_step
+        assert offscreen_evidence < invocation
+        assert windows_evidence < invocation
 
         flavor_directory = tmp_path / Path(filename).stem
         evidence_directory = flavor_directory / "evidence"
@@ -378,12 +406,16 @@ def test_windows_builds_reject_failed_pyinstaller_before_reusing_old_exe_or_evid
         old_exe.parent.mkdir(parents=True)
         evidence_directory.mkdir(parents=True)
         old_exe.write_bytes(b"stale executable")
-        stale_prune = evidence_directory / "TraceLabProbe-matplotlib-prune.json"
-        stale_smoke = evidence_directory / "TraceLabProbe-batch-render-smoke.json"
-        stale_prune.write_text('{"stale": true}', encoding="utf-8")
-        stale_smoke.write_text('{"stale": true}', encoding="utf-8")
+        stale_offscreen = (
+            evidence_directory / "TraceLabProbe-batch-render-offscreen-smoke.json"
+        )
+        stale_windows = (
+            evidence_directory / "TraceLabProbe-batch-render-windows-smoke.json"
+        )
+        stale_offscreen.write_text('{"stale": true}', encoding="utf-8")
+        stale_windows.write_text('{"stale": true}', encoding="utf-8")
 
-        gate = text[prune_evidence:prune_step]
+        gate = text[offscreen_evidence:smoke_step]
         probe = "\n".join(
             (
                 '$ErrorActionPreference = "Stop"',
@@ -408,8 +440,8 @@ def test_windows_builds_reject_failed_pyinstaller_before_reusing_old_exe_or_evid
         assert "PyInstaller failed with exit code 23" in (
             completed.stdout + completed.stderr
         )
-        assert not stale_prune.exists()
-        assert not stale_smoke.exists()
+        assert not stale_offscreen.exists()
+        assert not stale_windows.exists()
 
 
 @pytest.mark.parametrize(
@@ -424,7 +456,7 @@ def test_frozen_render_smoke_runs_after_every_packaged_tree_mutation(filename):
     )
     text = (ROOT / "tools" / filename).read_text(encoding="utf-8")
     smoke = text.index("& $VenvPython $BatchRenderSmokeTool")
-    assert text.index("--prune-internal") < smoke
+    assert "--prune-internal" not in text
     if filename == "build_windows_folder.ps1":
         assert (
             text.index("Copy-Item -LiteralPath $sysDll -Destination $qtDll -Force")

@@ -2,18 +2,30 @@
 id: batch-render-cjk-glyph-coverage
 status: active
 owners: [codex]
-keywords: [batch, renderer, matplotlib, cjk, fonts, glyphs]
-paths: [mf4_analyzer/batch_render.py]
-checks: [PNG warning capture, SVG text parse, Poppler PDF text/raster check, rendered screenshot]
-tests: [tests/test_batch_renderer.py, tests/test_frozen_batch_render_smoke.py]
+keywords: [batch, renderer, qt, pyqtgraph, cjk, fonts, glyphs, ink]
+paths: [mf4_analyzer/batch_render_qt/_fonts.py, mf4_analyzer/batch_render_qt/_builder.py]
+checks: [Qt glyph coverage, rendered header ink delta, PNG inspection]
+tests: [tests/test_batch_render_qt.py]
 ---
 
-# Batch Render Proof Includes CJK Glyph Coverage
+# Qt Batch Render Proof Includes CJK Glyph And Ink Coverage
 
-Trigger: Changing batch figure typography, titles, axis labels, legends, colorbars, SVG/PDF output, or cross-platform font fallback.
+Trigger: Changing Qt batch titles, axis labels, legends, colorbars, PNG output,
+or cross-platform chart-font fallback.
 
-Past failure: English-only renderer tests were green while real batch exports emitted Matplotlib missing-glyph warnings for Chinese labels such as `单帧`; DejaVu Sans alone could not satisfy the product's Chinese UI/export contract. A later PDF looked correct but Matplotlib's Type 3 embedding had no Unicode map, so Poppler extracted gibberish instead of selectable CJK text.
+Past failure: English-only exports passed while Chinese text was missing. Under
+Qt, checking only the selected family name is still a false green because font
+fallback can resolve to tofu or blank glyphs without a Matplotlib-style warning.
 
-Rule: Resolve a real installed CJK-capable font from an ordered macOS, Windows, and Linux fallback list, apply it consistently to every figure text surface within scoped Matplotlib state, and retain DejaVu only as the final Latin fallback. Tests must print Chinese PNG/SVG content and fail on missing-glyph warnings; PDF export must use scoped TrueType embedding (`pdf.fonttype=42`) and prove the CJK title is both Poppler-extractable and visually present after rasterization. If no CJK font exists, report an explicit skipped environment gate rather than fake success.
+Rule: Resolve the first installed family in the shared macOS/Windows/Linux Qt
+fallback order, then require both per-character coverage via
+`QRawFont.supportsCharacter` (or `QFontMetrics.inFontUcs4`) and a rendered-ink
+delta against an empty control image. Apply that font to every report text
+surface. If no font covers the full contract string, report an explicit skipped
+environment gate rather than accepting a family-name-only result.
 
-Verification: Run `tests/test_batch_renderer.py` and `tests/test_frozen_batch_render_smoke.py`, inspect the generated Chinese proof, parse SVG text, extract PDF text with Poppler, and inspect Poppler-rendered PDF PNGs. Separately record real Windows/frozen font discovery as unverified until exercised there.
+Verification: Run
+`tests/test_batch_render_qt.py::test_cjk_font_support_and_header_ink_proof`,
+require supported characters and an ink count above the blank control, inspect a
+real Chinese PNG, and keep Windows frozen font discovery unverified until it is
+exercised on that artifact.

@@ -7,9 +7,6 @@ h5py
 # Base NI TDMS reader; optional HDF/pandas extras are intentionally excluded.
 nptdms==1.11.0
 PyQt5
-# Batch image/PDF export. Both Windows frozen-build flavors collect it from the
-# explicit runtime-dependency contract.
-matplotlib
 asammdf
 av
 pyqtgraph>=0.13.3

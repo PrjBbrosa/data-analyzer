@@ -1,6 +1,8 @@
 """比较不同 nfft 下 order 2 ridge 的清晰度。
 
 每个 FFT 窗 = nfft / fs 秒。窗内 RPM 变化越大，order ridge 越被涂抹。
+
+开发对比工具：matplotlib 需手动安装，不属于 TraceLab 产品运行时或冻结打包依赖。
 """
 import os
 import sys

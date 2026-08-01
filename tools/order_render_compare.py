@@ -2,6 +2,8 @@
 
 用法: .venv/bin/python tools/order_render_compare.py
 输出: tools/_out/order_compare_*.png
+
+开发对比工具：matplotlib 需手动安装，不属于 TraceLab 产品运行时或冻结打包依赖。
 """
 import os
 import sys

@@ -1,4 +1,7 @@
-"""FFT 单帧 vs Welch 多帧平均 — 同一个 nfft，看效果差距。"""
+"""FFT 单帧 vs Welch 多帧平均 — 同一个 nfft，看效果差距。
+
+开发对比工具：matplotlib 需手动安装，不属于 TraceLab 产品运行时或冻结打包依赖。
+"""
 import os, sys
 import numpy as np
 import matplotlib

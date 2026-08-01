@@ -1,5 +1,4 @@
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -26,7 +25,6 @@ def test_mat_import_dependencies_are_frozen_as_a_complete_closure():
         "--collect-all", "cantools",
         "--collect-all", "nptdms",
         "--collect-all", "av",
-        "--collect-all", "matplotlib",
         "--collect-all", "scipy",
         "--collect-all", "h5py",
     )
@@ -43,7 +41,6 @@ def test_lite_collection_keeps_importer_support_without_whole_scipy():
         "--collect-all", "cantools",
         "--collect-all", "nptdms",
         "--collect-all", "av",
-        "--collect-all", "matplotlib",
         "--hidden-import", "scipy.io",
         "--hidden-import", "scipy.io.matlab",
         "--collect-all", "h5py",
@@ -77,35 +74,15 @@ def test_current_windows_build_scripts_satisfy_frozen_import_contract():
     assert failures == ()
 
 
-@pytest.mark.parametrize(
-    ("filename", "flavor"),
-    (("build_windows_folder.ps1", "full"), ("build_windows_folder_lite.ps1", "lite")),
-)
-def test_contract_rejects_matplotlib_root_exclusion_for_every_flavor(
-    filename, flavor
-):
-    """Batch image/PDF export needs Matplotlib in both frozen build flavors."""
-    source = ROOT / "tools" / filename
-    text = source.read_text(encoding="utf-8")
-    with TemporaryDirectory(dir=ROOT / ".state") as temporary_directory:
-        mutated = Path(temporary_directory) / filename
-        mutated.write_text(
-            text.replace(
-                '"--collect-all", "qtawesome"',
-                '"--collect-all", "qtawesome",\n'
-                '    "--exclude-module", "matplotlib"',
-                1,
-            ),
-            encoding="utf-8",
-        )
-        failures = validate_windows_packaging_contract(
-            ROOT / "requirements.txt", (mutated,)
-        )
+def test_matplotlib_is_not_a_frozen_product_runtime_dependency():
+    """Qt owns every product render path; Matplotlib is development-only."""
+    args = pyinstaller_collection_args()
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
 
-    assert any(
-        f"{filename} excludes required runtime dependency matplotlib for {flavor}"
-        in failure
-        for failure in failures
+    assert "matplotlib" not in args
+    assert not any(
+        line.split("#", 1)[0].strip().lower().startswith("matplotlib")
+        for line in requirements.splitlines()
     )
 
 

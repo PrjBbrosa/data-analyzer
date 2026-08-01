@@ -119,6 +119,8 @@ def test_artifact_verifier_checks_qt_cjk_proof_and_turbo_samples(tmp_path):
             str(output_directory),
             "--child-json",
             str(child_json),
+            "--platform",
+            "offscreen",
             "--evidence-json",
             str(evidence_json),
         ],
@@ -147,6 +149,54 @@ def test_artifact_verifier_checks_qt_cjk_proof_and_turbo_samples(tmp_path):
     assert evidence["title"] == "单帧振动加速度"
 
 
+def test_artifact_verifier_rejects_requested_actual_platform_mismatch(tmp_path):
+    artifacts = tmp_path / "outputs"
+    child_json = tmp_path / "child.json"
+    evidence_json = tmp_path / "evidence.json"
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mf4_analyzer.batch_render_smoke",
+            "--output-dir",
+            str(artifacts),
+            "--json",
+            str(child_json),
+        ],
+        cwd=ROOT,
+        env=_source_environment(),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert child.returncode == 0, child.stderr
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(VERIFY_TOOL),
+            "--artifacts",
+            str(artifacts),
+            "--child-json",
+            str(child_json),
+            "--platform",
+            "windows",
+            "--evidence-json",
+            str(evidence_json),
+        ],
+        cwd=ROOT,
+        env=_source_environment(),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert completed.returncode == 1
+    evidence = json.loads(evidence_json.read_text(encoding="utf-8"))
+    assert evidence["ok"] is False
+    assert "requested Qt platform windows" in evidence["error"]
+
+
 def test_runtime_smoke_fails_closed_when_cjk_font_coverage_is_unavailable(
     tmp_path, monkeypatch
 ):
@@ -168,10 +218,29 @@ def test_runtime_smoke_fails_closed_when_cjk_font_coverage_is_unavailable(
 def test_frozen_artifact_verifier_has_no_pillow_or_vector_format_dependency():
     source = VERIFY_TOOL.read_text(encoding="utf-8")
 
-    assert "from PIL" not in source
+    assert "PIL" not in source
+    assert "Pillow" not in source
     assert "pdftotext" not in source
     assert "pdftocairo" not in source
     assert 'FORMATS = ("png",)' in source
+
+
+def test_frozen_verifier_measures_final_internal_tree(tmp_path):
+    from tools import verify_frozen_batch_render
+
+    internal = tmp_path / "_internal"
+    (internal / "nested").mkdir(parents=True)
+    (internal / "one.bin").write_bytes(b"one")
+    (internal / "nested" / "two.bin").write_bytes(b"twice")
+
+    assert verify_frozen_batch_render._tree_measurement(internal) == {
+        "path": str(internal.resolve()),
+        "bytes": 8,
+        "files": 2,
+    }
+    assert 'evidence["internal"] = _tree_measurement(exe.parent / "_internal")' in (
+        VERIFY_TOOL.read_text(encoding="utf-8")
+    )
 
 
 def test_windowed_runtime_smoke_does_not_require_console_streams(tmp_path, monkeypatch):

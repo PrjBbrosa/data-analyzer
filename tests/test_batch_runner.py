@@ -318,20 +318,21 @@ def test_batch_order_time_csv_shape(tmp_path):
 
 
 def test_write_image_exports_nonempty_png_with_fixed_size(tmp_path):
-    from matplotlib import image as mpl_image
+    from PyQt5.QtGui import QImage, QImageReader
 
     df = pd.DataFrame({"frequency_hz": [0.0, 1.0], "amplitude": [0.0, 1.0]})
     out = BatchRunner._write_image(("fft", df), tmp_path / "fft.png")
-    image = mpl_image.imread(out)
+    image = QImage(str(out))
 
     assert out.exists()
     assert out.stat().st_size > 0
-    assert image.size > 0
-    assert image.shape[:2] == (1080, 1920)
+    assert not image.isNull()
+    assert bytes(QImageReader.imageFormat(str(out))).lower() == b"png"
+    assert (image.width(), image.height()) == (1920, 1080)
 
 
 def test_write_heatmap_image_exports_nonempty_png_with_fixed_size(tmp_path):
-    from matplotlib import image as mpl_image
+    from PyQt5.QtGui import QImage, QImageReader
 
     df = pd.DataFrame({
         "time_s": [0.0, 1.0, 0.0, 1.0],
@@ -339,12 +340,13 @@ def test_write_heatmap_image_exports_nonempty_png_with_fixed_size(tmp_path):
         "amplitude": [0.25, 0.5, 1.0, 2.0],
     })
     out = BatchRunner._write_image(("fft_time", df), tmp_path / "heatmap.png")
-    image = mpl_image.imread(out)
+    image = QImage(str(out))
 
     assert out.exists()
     assert out.stat().st_size > 0
-    assert image.size > 0
-    assert image.shape[:2] == (1080, 1920)
+    assert not image.isNull()
+    assert bytes(QImageReader.imageFormat(str(out))).lower() == b"png"
+    assert (image.width(), image.height()) == (1920, 1080)
 
 
 # ---------------------------------------------------------------------------
@@ -1871,7 +1873,7 @@ def test_runner_overwrite_writer_failure_preserves_old_artifact_set(
 
 def _raise_batch_render_import(name, globals=None, locals=None, fromlist=(), level=0):
     if str(name).endswith("batch_render"):
-        raise ModuleNotFoundError("simulated missing matplotlib backend")
+        raise ModuleNotFoundError("simulated missing Qt batch render backend")
     return _REAL_IMPORT(name, globals, locals, fromlist, level)
 
 

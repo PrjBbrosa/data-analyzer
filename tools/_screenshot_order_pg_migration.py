@@ -1,6 +1,9 @@
 """One-shot real-render screenshot of the Order (time-order) heatmap
 after the M5 renderer swap (PlotCanvas -> PgHeatmapCanvas).
 
+Developer-only comparison helper: install matplotlib manually when using this
+script. Matplotlib is not a TraceLab product runtime or frozen-build dependency.
+
 Boots the full ``MainWindow``, loads a synthetic CSV (rpm ramp +
 vibration with strong 1st/2nd order components), switches to Order mode,
 drives the COT compute on its worker QThread, waits for completion, and

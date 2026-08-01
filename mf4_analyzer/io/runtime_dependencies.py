@@ -79,12 +79,6 @@ FROZEN_IMPORT_DEPENDENCIES = (
         purpose="audio/video reader",
     ),
     FrozenImportDependency(
-        package="matplotlib",
-        requirement_name="matplotlib",
-        extensions=(),
-        purpose="batch image/PDF export",
-    ),
-    FrozenImportDependency(
         package="scipy",
         requirement_name="scipy",
         extensions=(".mat",),
