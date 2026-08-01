@@ -5,6 +5,7 @@ owners: [codex]
 keywords: [matplotlib, pyinstaller, frozen, pruning, fonts, pdf, svg, cjk]
 paths:
   - mf4_analyzer/batch_render.py
+  - tools/matplotlib_frozen_contract.py
   - tools/build_windows_folder.ps1
   - tools/build_windows_folder_lite.ps1
 checks:
@@ -27,14 +28,19 @@ also concealed the real `_internal` footprint and did not prove the pruned
 onedir executable could render CJK/vector output.  A failed native PyInstaller
 command could also fall through to a stale EXE under `-KeepPrevious`, allowing
 new prune/smoke JSON to misrepresent an older artifact as the current build.
+Matplotlib 3.11 then enabled its bundled Last Resort fallback by default, while
+the four-font pruning rule deleted `LastResortHE-Regular.ttf`; the frozen
+renderer failed even though PyInstaller itself completed successfully.
 
-Rule: Keep full/lite exclusions in one executable contract, retain exactly the
-approved four DejaVu Sans TTF files plus AFM/pdfcorefonts, and record `_internal`
-bytes/files immediately before and after pruning.  Delete prior prune/smoke
-evidence before invoking PyInstaller and check its native exit code immediately,
-before testing EXE existence or generating new evidence.  Never call a prune
-safe from source tests: the freshly built windowed executable must render all
-four batch kinds to PNG/PDF/SVG and pass CJK warnings,
+Rule: Keep full/lite exclusions in one executable contract. Always require the
+approved four DejaVu Sans faces; when the collected Matplotlib tree contains
+`LastResortHE-Regular.ttf`, preserve it too. Remove every other TTF while
+retaining AFM/pdfcorefonts, and record `_internal` bytes/files immediately
+before and after pruning. Delete prior prune/smoke evidence before invoking
+PyInstaller and check its native exit code immediately, before testing EXE
+existence or generating new evidence. Never call a prune safe from source
+tests: the freshly built windowed executable must render all four batch kinds
+to PNG/PDF/SVG and pass CJK warnings,
 extractable/rasterizable PDF, and literal Turbo sample checks.  Do not exclude
 `mpl_toolkits` without that same post-exclusion frozen evidence.
 
