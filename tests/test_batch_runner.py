@@ -1312,7 +1312,7 @@ def test_heatmap_long_dataframe_is_released_before_image_render(
         Path(path).write_text("data", encoding="utf-8")
 
     def render_after_data_release(payload, path, params=None, *, options=None,
-                                  context=None):
+                                  context=None, warnings_out=None):
         gc.collect()
         assert references["long"]() is None
         Path(path).write_bytes(b"image")
@@ -1829,7 +1829,8 @@ def test_runner_overwrite_writer_failure_preserves_old_artifact_set(
 ):
     fd = _make_fd(tmp_path, "overwrite_set", idx=0)
 
-    def render_ok(payload, path, params=None, *, options=None, context=None):
+    def render_ok(payload, path, params=None, *, options=None, context=None,
+                  warnings_out=None):
         Path(path).write_bytes(b"old-image")
         return Path(path)
 
@@ -1853,7 +1854,8 @@ def test_runner_overwrite_writer_failure_preserves_old_artifact_set(
     old_data = data_path.read_bytes()
     old_image = image_path.read_bytes()
 
-    def render_fail(payload, path, params=None, *, options=None, context=None):
+    def render_fail(payload, path, params=None, *, options=None, context=None,
+                    warnings_out=None):
         Path(path).write_bytes(b"partial-new-image")
         raise RuntimeError("render failed")
 
@@ -2059,7 +2061,8 @@ def test_runner_maps_phase3_image_output_to_renderer_options_and_context(
     fd = _make_fd(tmp_path, "vector", idx=0)
     captured = {}
 
-    def capture_render(payload, path, params=None, *, options=None, context=None):
+    def capture_render(payload, path, params=None, *, options=None, context=None,
+                       warnings_out=None):
         captured["path"] = Path(path)
         captured["options"] = options
         captured["context"] = context
@@ -2939,6 +2942,212 @@ def test_time_export_uses_pre_filter_and_filtered_preprocess_series(tmp_path):
     filtered = exported[exported["series"] == "filtered"]["value"].to_numpy()
     np.testing.assert_allclose(original, expected.pre_filter_signal, atol=1e-12)
     np.testing.assert_allclose(filtered, expected.signal, atol=1e-12)
+
+
+def test_time_series_adapter_marks_original_and_filtered_lines_distinctly(tmp_path):
+    from mf4_analyzer.batch_preprocess import preprocess_batch_signal
+
+    fs = 100.0
+    time = np.arange(100, dtype=float) / fs
+    signal = np.sin(2 * np.pi * 5.0 * time)
+    frame = pd.DataFrame({"Time": time, "sig": signal})
+    fd = FileData(
+        tmp_path / "source.csv",
+        frame,
+        list(frame.columns),
+        {"sig": "m/s2"},
+    )
+    params = {
+        "filter": {
+            "enabled": True,
+            "spec": {"kind": "low", "order": 4, "cutoff": 10.0},
+            "show_original": True,
+            "show_filtered": True,
+        }
+    }
+    preprocessed = preprocess_batch_signal(signal, time, fs, params)
+
+    series = BatchRunner({0: fd})._build_time_series(
+        fd=fd,
+        signal_name="sig",
+        preprocessed=preprocessed,
+        source_label="source.csv",
+        params=params,
+        panel=0,
+    )
+
+    assert [item.linestyle for item in series] == ["-", "--"]
+    assert [item.unit for item in series] == ["m/s2", "m/s2"]
+    assert all("source.csv" in item.label and "sig" in item.label for item in series)
+    assert "original" in series[0].label
+    assert "filtered" in series[1].label
+    np.testing.assert_allclose(series[0].y, preprocessed.pre_filter_signal)
+    np.testing.assert_allclose(series[1].y, preprocessed.signal)
+
+
+def test_time_channel_x_uses_aligned_values_label_unit_and_absolute_origin(
+    tmp_path, monkeypatch,
+):
+    captured = {}
+    fs = 20.0
+    time = np.arange(20, dtype=float) / fs
+    x_values = 30.0 + np.arange(20, dtype=float) * 0.25
+    frame = pd.DataFrame({"Time": time, "angle": x_values, "sig": time**2})
+    fd = FileData(
+        tmp_path / "channel-x.csv",
+        frame,
+        list(frame.columns),
+        {"angle": "deg", "sig": "V"},
+    )
+
+    def capture_image(
+        payload, path, params=None, *, options=None, context=None,
+        warnings_out=None,
+    ):
+        captured["payload"] = payload
+        Path(path).write_bytes(b"image")
+        return Path(path)
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(capture_image))
+    preset = AnalysisPreset.from_current_single(
+        name="channel x",
+        method="time",
+        signal=(0, "sig"),
+        params={"x_source": "channel", "x_channel": "angle"},
+        outputs=BatchOutput(
+            export_data=False,
+            export_image=True,
+            write_manifest=False,
+        ),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    from mf4_analyzer.batch_render import BatchTimeFigureSpec
+
+    assert result.status == "done"
+    kind, spec = captured["payload"]
+    assert kind == "time" and isinstance(spec, BatchTimeFigureSpec)
+    assert spec.x_source == "channel"
+    assert spec.x_origin == "absolute"
+    assert spec.x_label == "angle (deg)"
+    assert spec.series[0].x_unit == "deg"
+    np.testing.assert_allclose(spec.series[0].x, x_values)
+
+
+def test_time_channel_x_missing_from_source_fails_task_without_publication(tmp_path):
+    fd = _make_fd(tmp_path, "missing_x", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="missing x",
+        method="time",
+        signal=(0, "sig"),
+        params={"x_source": "channel", "x_channel": "absent"},
+        outputs=BatchOutput(
+            export_data=True,
+            export_image=True,
+            write_manifest=False,
+        ),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert result.items[0].status == "failed"
+    assert "missing X channel: absent" in result.items[0].message
+    assert not list((tmp_path / "out").glob("*"))
+
+
+def test_default_time_image_uses_single_task_figure_spec(tmp_path, monkeypatch):
+    captured = {}
+    fd = _make_fd(tmp_path, "default_spec", idx=0)
+    fd.channel_units["sig"] = "V"
+
+    def capture_image(
+        payload, path, params=None, *, options=None, context=None,
+        warnings_out=None,
+    ):
+        captured["payload"] = payload
+        Path(path).write_bytes(b"image")
+        return Path(path)
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(capture_image))
+    preset = AnalysisPreset.from_current_single(
+        name="default spec",
+        method="time",
+        signal=(0, "sig"),
+        params={},
+        outputs=BatchOutput(
+            export_data=True,
+            export_image=True,
+            write_manifest=False,
+        ),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    from mf4_analyzer.batch_render import BatchTimeFigureSpec
+
+    assert result.status == "done"
+    kind, spec = captured["payload"]
+    assert kind == "time" and isinstance(spec, BatchTimeFigureSpec)
+    assert spec.layout == "overlay"
+    assert spec.x_source == "time"
+    assert spec.x_origin == "zero"
+    assert spec.x_label == "Time (s)"
+    assert spec.panel_titles == (fd.filename,)
+    assert len(spec.series) == 1
+    assert spec.series[0].label.endswith("sig")
+    assert spec.series[0].unit == "V"
+    assert spec.series[0].linestyle == "-"
+
+
+def test_time_render_retry_discards_failed_attempt_warnings(tmp_path, monkeypatch):
+    import mf4_analyzer.batch as batch_module
+    from mf4_analyzer.batch_output import OutputPublishRace
+
+    fd = _make_fd(tmp_path, "warning_retry", idx=0)
+    attempts = {"render": 0, "publish": 0}
+    real_atomic_write_set = batch_module.atomic_write_set
+
+    def render_with_attempt_warning(
+        payload, path, params=None, *, options=None, context=None,
+        warnings_out=None,
+    ):
+        attempts["render"] += 1
+        warnings_out.append(f"render-attempt-{attempts['render']}")
+        Path(path).write_bytes(b"image")
+        return Path(path)
+
+    def collide_after_first_render(reservation, writers):
+        attempts["publish"] += 1
+        if attempts["publish"] == 1:
+            for extension, writer in writers.items():
+                writer(tmp_path / f"failed-attempt.{extension}")
+            raise OutputPublishRace("simulated race after render")
+        return real_atomic_write_set(reservation, writers)
+
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(render_with_attempt_warning),
+    )
+    monkeypatch.setattr(batch_module, "atomic_write_set", collide_after_first_render)
+    preset = AnalysisPreset.from_current_single(
+        name="retry warnings",
+        method="time",
+        signal=(0, "sig"),
+        params={},
+        outputs=BatchOutput(
+            export_data=False,
+            export_image=True,
+            write_manifest=False,
+        ),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert attempts == {"render": 2, "publish": 2}
+    assert "render-attempt-1" not in result.items[0].warnings
+    assert result.items[0].warnings.count("render-attempt-2") == 1
 
 
 def test_cancel_after_compute_emits_one_terminal_and_writes_nothing(

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence
 import re
 import threading
 from types import SimpleNamespace
@@ -40,7 +40,7 @@ from .batch_manifest import (
     source_file_facts,
     utc_now,
 )
-from .batch_preprocess import preprocess_batch_signal
+from .batch_preprocess import BatchPreprocessResult, preprocess_batch_signal
 from .batch_recipe import normalize_batch_params, recipe_fingerprint
 from .batch_validation import (
     raise_for_issues,
@@ -56,6 +56,9 @@ from .io.source_adapters import (
 )
 from .signal import resolve_nfft, resolve_order_nfft
 from .signal.fft import FFTAnalyzer
+
+if TYPE_CHECKING:
+    from .batch_render import BatchSeries, BatchTimeFigureSpec
 
 
 _RENDER_BACKEND_DEGRADED_REASON = (
@@ -1577,12 +1580,26 @@ class BatchRunner:
                     fd, preset, target_source_id=fid,
                 )
 
+            x_values = None
+            if method == 'time' and str(requested_params.get(
+                'x_source', 'time',
+            ) or 'time').strip().lower() == 'channel':
+                x_channel = str(
+                    requested_params.get('x_channel', '') or ''
+                ).strip()
+                if x_channel not in fd.data.columns:
+                    raise ValueError(f"missing X channel: {x_channel}")
+                x_values = fd.data[x_channel].to_numpy(
+                    dtype=float, copy=False,
+                )
+
             preprocessed = preprocess_batch_signal(
                 sig,
                 time,
                 fs,
                 requested_params,
                 rpm=rpm,
+                x_values=x_values,
             )
             sig = preprocessed.signal
             time = preprocessed.time
@@ -1640,6 +1657,34 @@ class BatchRunner:
                     effective_params,
                 )
                 image_payload = ('time', time_df)
+                if 'image' in effective_outputs:
+                    time_series = self._build_time_series(
+                        fd=fd,
+                        signal_name=signal_name,
+                        preprocessed=preprocessed,
+                        source_label=str(fd.filename),
+                        params=requested_params,
+                        panel=0,
+                    )
+                    x_source = str(requested_params.get(
+                        'x_source', 'time',
+                    ) or 'time').strip().lower()
+                    if x_source == 'channel':
+                        x_channel = str(requested_params.get(
+                            'x_channel', '',
+                        ) or '').strip()
+                        x_unit = time_series[0].x_unit if time_series else ''
+                        x_label = (
+                            f'{x_channel} ({x_unit})' if x_unit else x_channel
+                        )
+                    else:
+                        x_label = 'Time (s)'
+                    image_payload = ('time', self._build_time_figure_spec(
+                        time_series,
+                        params=requested_params,
+                        x_label=x_label,
+                        panel_titles=(str(fd.filename),),
+                    ))
             elif method == 'fft':
                 effective_nfft = self._resolve_effective_nfft(
                     method, len(sig), fs, effective_params,
@@ -1700,6 +1745,8 @@ class BatchRunner:
             if export_df is not None:
                 if spectro is not None:
                     export_frame_factory = spectro.to_long_dataframe
+                elif time_df is not None:
+                    export_frame_factory = lambda frame=time_df: frame
                 else:
                     export_frame_factory = lambda: image_payload[1]
             export_frame_holder = [export_df] if export_df is not None else []
@@ -1776,6 +1823,7 @@ class BatchRunner:
                 )
 
             while True:
+                attempt_warnings = []
                 writers = {}
                 if export_frame_holder:
                     def write_data(path, holder=export_frame_holder):
@@ -1799,6 +1847,7 @@ class BatchRunner:
                             params=image_params,
                             options=render_options,
                             context=render_context,
+                            warnings_out=attempt_warnings,
                         )
                         self._check_cancel(cancel_token, "image render/write")
                         return result
@@ -1806,6 +1855,7 @@ class BatchRunner:
                     writers[image_extension] = write_image
                 try:
                     published = atomic_write_set(reservation, writers)
+                    warnings.extend(attempt_warnings)
                     break
                 except OutputPublishRace:
                     if conflict_policy != 'auto_number':
@@ -1884,6 +1934,115 @@ class BatchRunner:
             )
         finally:
             reservation.release()
+
+    @staticmethod
+    def _channel_unit(fd, channel: str) -> str:
+        channel_meta = (
+            (getattr(fd, 'channel_metadata', None) or {}).get(channel, {}) or {}
+        )
+        return str(
+            channel_meta.get('unit')
+            or (getattr(fd, 'channel_units', None) or {}).get(channel, '')
+            or ''
+        )
+
+    def _build_time_series(
+        self,
+        *,
+        fd,
+        signal_name: str,
+        preprocessed: BatchPreprocessResult,
+        source_label: str,
+        params: Mapping[str, Any],
+        panel: int,
+    ) -> tuple[BatchSeries, ...]:
+        from .batch_render import BatchSeries
+
+        x_source = str(params.get('x_source', 'time') or 'time').strip().lower()
+        if x_source == 'channel':
+            x_channel = str(params.get('x_channel', '') or '').strip()
+            if x_channel not in fd.data.columns:
+                raise ValueError(f"missing X channel: {x_channel}")
+            if preprocessed.x_values is None:
+                raise ValueError(f"X channel was not aligned: {x_channel}")
+            x = preprocessed.x_values
+            x_unit = self._channel_unit(fd, x_channel)
+        else:
+            x = preprocessed.time
+            x_unit = 's'
+
+        unit = self._channel_unit(fd, signal_name)
+        source = str(source_label or '').strip()
+        base_label = f'{source} / {signal_name}' if source else signal_name
+        filter_state = params.get('filter') or {}
+        filter_enabled = bool(filter_state.get('enabled', False))
+        if not filter_enabled:
+            return (BatchSeries(
+                x=x,
+                y=preprocessed.signal,
+                label=base_label,
+                unit=unit,
+                x_unit=x_unit,
+                linestyle='-',
+                panel=panel,
+            ),)
+
+        show_original = bool(filter_state.get('show_original', True))
+        show_filtered = bool(filter_state.get('show_filtered', True))
+        if not show_original and not show_filtered:
+            raise ValueError(
+                "æ—¶åŸŸå¯¼å‡ºè‡³å°‘éœ€è¦åŽŸå§‹æˆ–æ»¤æ³¢åŽä¸€é¡¹"
+            )
+        show_both = show_original and show_filtered
+        series = []
+        if show_original:
+            series.append(BatchSeries(
+                x=x,
+                y=preprocessed.pre_filter_signal,
+                label=(f'{base_label} · original' if show_both else base_label),
+                unit=unit,
+                x_unit=x_unit,
+                linestyle='-',
+                panel=panel,
+            ))
+        if show_filtered:
+            series.append(BatchSeries(
+                x=x,
+                y=preprocessed.signal,
+                label=(f'{base_label} · filtered' if show_both else base_label),
+                unit=unit,
+                x_unit=x_unit,
+                linestyle='--',
+                panel=panel,
+            ))
+        return tuple(series)
+
+    @staticmethod
+    def _build_time_figure_spec(
+        series: Sequence[BatchSeries],
+        *,
+        params: Mapping[str, Any],
+        x_label: str,
+        panel_titles: Sequence[str] = (),
+    ) -> BatchTimeFigureSpec:
+        from .batch_render import BatchTimeFigureSpec
+
+        x_source = str(params.get('x_source', 'time') or 'time').strip().lower()
+        x_origin = (
+            'absolute'
+            if x_source == 'channel'
+            else str(params.get('x_origin', 'zero') or 'zero').strip().lower()
+        )
+        return BatchTimeFigureSpec(
+            series=tuple(series),
+            layout=str(
+                params.get('render_layout', 'overlay') or 'overlay'
+            ).strip().lower(),
+            x_source=x_source,
+            x_origin=x_origin,
+            x_label=str(x_label),
+            panel_titles=tuple(panel_titles),
+        )
 
     @staticmethod
     def _build_task_identity(fd, *, file_id, channel, method, params):
@@ -2627,6 +2786,7 @@ class BatchRunner:
         *,
         options=None,
         context=None,
+        warnings_out: list[str] | None = None,
     ):
         from .batch_render import BatchRenderOptions, render_batch_image
 
@@ -2642,6 +2802,7 @@ class BatchRunner:
                 params=params,
                 options=render_options,
                 context=context,
+                warnings_out=warnings_out,
             ),
         )
 
