@@ -170,6 +170,29 @@ def test_mdf_probe_is_metadata_only_and_matches_load_identity(tmp_path):
     assert descriptor.source_id == loaded.source_id
 
 
+def test_mdf_probe_translates_missing_file_domain_error(tmp_path):
+    adapter = SourceAdapterRegistry.default().adapter_for("missing.mf4")
+    missing = tmp_path / "moved-before-preview.mf4"
+
+    with pytest.raises(SourceUnavailableError, match="moved-before-preview"):
+        adapter.probe_sources(missing)
+
+
+def test_mdf_probe_does_not_translate_programming_value_error(
+    monkeypatch,
+):
+    def broken_mdf(_path):
+        raise ValueError("metadata implementation bug")
+
+    monkeypatch.setattr(
+        "mf4_analyzer.io.source_adapters._loader.MDF", broken_mdf,
+    )
+    adapter = SourceAdapterRegistry.default().adapter_for("broken.mf4")
+
+    with pytest.raises(ValueError, match="metadata implementation bug"):
+        adapter.probe_sources("broken.mf4")
+
+
 def test_registry_reports_current_mdf_and_tdms_capability_boundaries():
     registry = SourceAdapterRegistry.default()
     mdf = registry.adapter_for("signal.mf4")

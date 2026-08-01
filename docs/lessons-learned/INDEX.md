@@ -123,6 +123,9 @@ lesson by default.
 | [Register Lazy Locators Before Group Identity](batch-register-lazy-locators-before-group-identity.md) | Changing lazy batch `source_paths`, locator registration, task/group | See lesson |
 | [Acceptance Evidence Must Prove Physical Artifacts](acceptance-evidence-rejects-artifact-aliases.md) | An acceptance harness claims exact artifact counts, grouping semantics, | See lesson |
 | [Batch UI Separates Sparse Defaults From Missing Facts](batch-ui-sparse-defaults-preserve-missing-facts.md) | Applying full batch recipes, incremental parameter patches, or | See lesson |
+| [Batch Preview Never Escalates Full-Cost Probes](batch-preview-never-escalates-full-cost-probes.md) | Resolving lazy source descriptors or output identities during a batch | See lesson |
+| [Batch Deferred Terminals Preserve Task Order](batch-deferred-terminals-preserve-task-order.md) | Deferring batch task terminal events or progress callbacks until a | See lesson |
+| [Batch Preview Probe Failure Stays Planning-Local](batch-preview-probe-failure-stays-planning-local.md) | Adding metadata-only source probing to a no-load preview that runs | See lesson |
 
 ## Selection Rules
 

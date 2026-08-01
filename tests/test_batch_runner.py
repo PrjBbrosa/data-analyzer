@@ -3246,6 +3246,476 @@ def _task6_fake_image(
     return Path(path)
 
 
+def test_lazy_logical_groups_use_descriptor_identity_for_preview_and_run(
+    tmp_path, monkeypatch,
+):
+    """Catch unresolved planning diverging from loaded logical-group identity."""
+    from mf4_analyzer.batch_grouping import RenderTask, group_render_tasks
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+    from mf4_analyzer.io.source_adapters import LoadedSource, SourceDescriptor
+
+    physical_path = tmp_path / "logical-groups.hdf"
+    physical_path.write_bytes(b"logical container")
+    sources = []
+    for index, (source_id, group_id) in enumerate((
+        ("logical:left", "raster:left"),
+        ("logical:right", "raster:right"),
+    )):
+        time = np.arange(32, dtype=float) / 32.0
+        frame = pd.DataFrame({
+            "Time": time,
+            "sig": np.sin(2.0 * np.pi * (index + 1) * time),
+        })
+        file_data = FileData(
+            physical_path,
+            frame,
+            list(frame.columns),
+            {},
+            idx=index,
+            fs=32.0,
+            label_suffix="same-display-suffix",
+        )
+        file_data.source_metadata.update({
+            "source_id": source_id,
+            "group_id": group_id,
+        })
+        sources.append(LoadedSource(
+            source_id=source_id,
+            source_path=str(physical_path),
+            group_id=group_id,
+            display_name=f"logical-{index}",
+            file_data=file_data,
+            metadata={"group_id": group_id},
+        ))
+
+    class Registry:
+        probe_cost = "metadata"
+
+        def __init__(self):
+            self.probe_calls = []
+            self.load_calls = []
+
+        def probe_sources(self, path, *, context=None):
+            self.probe_calls.append(str(path))
+            return tuple(SourceDescriptor(
+                source_id=source.source_id,
+                source_path=str(path),
+                group_id=source.group_id,
+                display_name=source.display_name,
+                channel_names=("sig",),
+                units={},
+                fs=32.0,
+                metadata={"probe_cost": "metadata"},
+            ) for source in sources)
+
+        def load_sources(self, path, *, context=None):
+            self.load_calls.append(str(path))
+            return tuple(sources)
+
+    preset = AnalysisPreset.free_config(
+        name="logical descriptor groups",
+        method="time",
+        target_signals=("sig",),
+        params={"render_group_by": "source", "render_layout": "overlay"},
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+    preset = replace(
+        preset,
+        source_ids=tuple(source.source_id for source in sources),
+        source_paths=(str(physical_path), str(physical_path)),
+    )
+    preview_registry = Registry()
+    preview_runner = BatchRunner({}, source_registry=preview_registry)
+    params = normalize_batch_params(preset.params, preset.method)
+    expected_tasks = tuple(RenderTask(
+        source.source_id,
+        "sig",
+        preview_runner._build_task_identity(
+            source.file_data,
+            file_id=source.source_id,
+            channel="sig",
+            method="time",
+            params=params,
+        ),
+    ) for source in sources)
+    expected_groups = group_render_tasks(expected_tasks, params)
+    subset_registry = Registry()
+    subset_runner = BatchRunner({}, source_registry=subset_registry)
+    left_preset = replace(
+        preset,
+        source_ids=(sources[0].source_id,),
+        source_paths=(str(physical_path),),
+    )
+    subset_runner.preview_outputs(left_preset, tmp_path / "left-preview")
+    right_preview_dir = tmp_path / "right-preview"
+    right_preview_dir.mkdir()
+    (right_preview_dir / f"{expected_tasks[1].identity.stem}.csv").touch()
+    (right_preview_dir / f"{expected_groups[1].identity.stem}.png").touch()
+    right_preset = replace(
+        preset,
+        source_ids=(sources[1].source_id,),
+        source_paths=(str(physical_path),),
+    )
+
+    right_preview = subset_runner.preview_outputs(
+        right_preset, right_preview_dir,
+    )
+
+    assert subset_registry.load_calls == []
+    assert subset_registry.probe_calls == [str(physical_path)]
+    assert right_preview.data_conflict_count == 1
+    assert right_preview.image_conflict_count == 1
+    preview_dir = tmp_path / "preview"
+    preview_dir.mkdir()
+    for task in expected_tasks:
+        (preview_dir / f"{task.identity.stem}.csv").touch()
+    for group in expected_groups:
+        (preview_dir / f"{group.identity.stem}.png").touch()
+
+    preview = preview_runner.preview_outputs(preset, preview_dir)
+
+    assert preview_registry.load_calls == []
+    assert preview_registry.probe_calls == [str(physical_path)]
+    assert preview.data_conflict_count == 2
+    assert preview.image_conflict_count == 2
+    assert preview.conflict_count == 4
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(_task6_fake_image),
+    )
+
+    run_registry = Registry()
+    result = BatchRunner({}, source_registry=run_registry).run(
+        preset, tmp_path / "run",
+    )
+
+    manifest = load_batch_manifest(result.manifest_path)
+    expected_task_ids = {
+        task.source_key: task.identity.task_id for task in expected_tasks
+    }
+    entry_task_ids = {
+        entry["source_id"]: entry["task_id"] for entry in manifest["entries"]
+    }
+    member_task_ids = {
+        member["task_id"]
+        for group in manifest["render_groups"]
+        for member in group["members"]
+    }
+    assert result.status == "done"
+    assert run_registry.probe_calls == [str(physical_path)]
+    assert run_registry.load_calls == [str(physical_path)]
+    assert {item.group_identity for item in result.items} == {
+        "raster:left", "raster:right",
+    }
+    assert entry_task_ids == expected_task_ids
+    assert member_task_ids == set(entry_task_ids.values())
+    assert {
+        group["group_id"] for group in manifest["render_groups"]
+    } == {group.identity.group_id for group in expected_groups}
+
+
+def test_full_cost_hdf_preview_never_loads_and_run_keeps_unresolved_identity(
+    tmp_path, monkeypatch,
+):
+    """Catch UI preview decoding a full-cost production source."""
+    from types import SimpleNamespace
+
+    from mf4_analyzer.batch_grouping import RenderTask, group_render_tasks
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+    from mf4_analyzer.batch_output import build_task_output_identity
+    from mf4_analyzer.io.loader import DataLoader
+    from mf4_analyzer.io.source_adapters import SourceAdapterRegistry
+
+    physical_path = tmp_path / "full-cost-groups.hdf"
+    physical_path.write_bytes(b"full-cost container")
+    groups = []
+    for index, factor in enumerate((1, 2)):
+        time = np.arange(32, dtype=float) / 32.0 + index
+        frame = pd.DataFrame({
+            "Time": time,
+            "sig": np.sin(2.0 * np.pi * factor * time),
+        })
+        groups.append({
+            "data": frame,
+            "channels": ["Time", "sig"],
+            "units": {"sig": "V"},
+            "channel_metadata": {
+                "sig": {"unit": "V", "raster_factor": factor},
+            },
+            "source_metadata": {"source_kind": "hdf"},
+            "label_suffix": "same-display-suffix",
+        })
+    load_calls = []
+
+    def load_hdf(path):
+        load_calls.append(str(path))
+        return groups
+
+    monkeypatch.setattr(DataLoader, "load_hdf", staticmethod(load_hdf))
+    registry = SourceAdapterRegistry.default()
+    loaded = registry.load_sources(physical_path)
+    load_calls.clear()
+    preset = AnalysisPreset.free_config(
+        name="full-cost unresolved groups",
+        method="time",
+        target_signals=("sig",),
+        params={"render_group_by": "source", "render_layout": "overlay"},
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+    preset = replace(
+        preset,
+        source_ids=tuple(source.source_id for source in loaded),
+        source_paths=(str(physical_path), str(physical_path)),
+    )
+    params = normalize_batch_params(preset.params, preset.method)
+    expected_tasks = tuple(RenderTask(
+        source.source_id,
+        "sig",
+        build_task_output_identity(
+            SimpleNamespace(
+                filepath=physical_path,
+                label_suffix=f"unresolved-source:{source.source_id}",
+                source_metadata={},
+            ),
+            file_id=source.source_id,
+            channel="sig",
+            method="time",
+            params=params,
+        ),
+    ) for source in loaded)
+    expected_groups = group_render_tasks(expected_tasks, params)
+    preview_dir = tmp_path / "full-cost-preview"
+    preview_dir.mkdir()
+    for task in expected_tasks:
+        (preview_dir / f"{task.identity.stem}.csv").touch()
+    for group in expected_groups:
+        (preview_dir / f"{group.identity.stem}.png").touch()
+
+    preview = BatchRunner({}, source_registry=registry).preview_outputs(
+        preset, preview_dir,
+    )
+
+    assert load_calls == []
+    assert preview.data_conflict_count == 2
+    assert preview.image_conflict_count == 2
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(_task6_fake_image),
+    )
+
+    result = BatchRunner({}, source_registry=registry).run(
+        preset, tmp_path / "full-cost-run",
+    )
+
+    manifest = load_batch_manifest(result.manifest_path)
+    entry_ids = {entry["task_id"] for entry in manifest["entries"]}
+    member_ids = {
+        member["task_id"]
+        for group in manifest["render_groups"]
+        for member in group["members"]
+    }
+    assert result.status == "done"
+    assert load_calls == [str(physical_path)]
+    assert {item.group_identity for item in result.items} == {
+        f"unresolved-source:{source.source_id}" for source in loaded
+    }
+    assert {item.task_id for item in result.items} == {
+        task.identity.task_id for task in expected_tasks
+    }
+    assert member_ids == entry_ids
+
+
+def test_metadata_probe_unavailable_is_preview_only_fallback(
+    tmp_path,
+):
+    """A disappearing metadata source must not escape the Qt preview path."""
+    from mf4_analyzer.io.source_adapters import SourceUnavailableError
+
+    physical_path = tmp_path / "missing-after-ui-probe.mf4"
+    source_id = "mdf:missing:root"
+
+    class Registry:
+        probe_cost = "metadata"
+
+        def __init__(self):
+            self.probe_calls = []
+            self.load_calls = []
+
+        def probe_sources(self, path, *, context=None):
+            self.probe_calls.append(str(path))
+            raise SourceUnavailableError("metadata source disappeared")
+
+        def load_sources(self, path, *, context=None):
+            self.load_calls.append(str(path))
+            raise OSError("source disappeared before execution")
+
+    preset = AnalysisPreset.free_config(
+        name="missing metadata source",
+        method="time",
+        target_signals=("sig",),
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    preset = replace(
+        preset,
+        source_ids=(source_id,),
+        source_paths=(str(physical_path),),
+    )
+    registry = Registry()
+    runner = BatchRunner({}, source_registry=registry)
+    runner._register_source_locator(source_id, physical_path)
+    params = normalize_batch_params(preset.params, preset.method)
+    expected = runner._build_unresolved_task_identity(
+        source_id,
+        channel="sig",
+        method="time",
+        params=params,
+    )
+    preview_dir = tmp_path / "preview"
+    preview_dir.mkdir()
+    existing = preview_dir / f"{expected.stem}.csv"
+    existing.write_text("existing", encoding="utf-8")
+    before = {path.name: path.read_bytes() for path in preview_dir.iterdir()}
+
+    first = runner.preview_outputs(preset, preview_dir)
+    second = runner.preview_outputs(preset, preview_dir)
+
+    assert first == second
+    assert first.task_count == 1
+    assert first.data_conflict_count == 1
+    assert {path.name: path.read_bytes() for path in preview_dir.iterdir()} == before
+    assert registry.probe_calls == [str(physical_path)]
+    assert runner._source_group_identity_hints.get(source_id) is None
+
+    result = runner.run(preset, tmp_path / "run")
+
+    assert registry.load_calls == [str(physical_path)]
+    assert result.status == "blocked"
+    assert len(result.items) == 1
+    assert result.items[0].status == "failed"
+    assert result.items[0].task_id == expected.task_id
+    assert "source disappeared before execution" in result.items[0].message
+    assert not list((tmp_path / "run").glob("*.csv"))
+
+
+def test_metadata_probe_programming_error_is_not_hidden(tmp_path):
+    class Registry:
+        probe_cost = "metadata"
+
+        @staticmethod
+        def probe_sources(path, *, context=None):
+            raise RuntimeError("descriptor implementation bug")
+
+    preset = AnalysisPreset.free_config(
+        name="broken metadata adapter",
+        method="time",
+        target_signals=("sig",),
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    preset = replace(
+        preset,
+        source_ids=("broken:root",),
+        source_paths=(str(tmp_path / "broken.mf4"),),
+    )
+
+    with pytest.raises(RuntimeError, match="descriptor implementation bug"):
+        BatchRunner({}, source_registry=Registry()).preview_outputs(
+            preset, tmp_path / "preview",
+        )
+
+
+def test_group_checksum_cancellation_marks_run_and_manifest_cancelled(
+    tmp_path, monkeypatch,
+):
+    """Catch a cancelled group checksum being journaled as done."""
+    import mf4_analyzer.batch as batch_module
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_fd(
+        tmp_path, "group_checksum_cancel", channels=("sig", "aux"), idx=0,
+    )
+    preset = _task6_grouped_time_preset(export_data=False)
+    token = threading.Event()
+    events = []
+    original_facts = batch_module.artifact_facts
+
+    def cancel_then_checksum(*args, **kwargs):
+        token.set()
+        return original_facts(*args, **kwargs)
+
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(_task6_fake_image),
+    )
+    monkeypatch.setattr(batch_module, "artifact_facts", cancel_then_checksum)
+
+    result = BatchRunner({0: fd}).run(
+        preset, tmp_path / "out", cancel_token=token, on_event=events.append,
+    )
+
+    manifest = load_batch_manifest(result.manifest_path)
+    group = manifest["render_groups"][0]
+    assert result.status == "cancelled"
+    assert {item.status for item in result.items} == {"cancelled"}
+    assert manifest["run_status"] == "cancelled"
+    assert {entry["status"] for entry in manifest["entries"]} == {
+        "cancelled",
+    }
+    assert group["status"] == "cancelled"
+    assert group["artifact"]["checksum_status"] == "cancelled"
+    assert group["artifact"]["sha256"] is None
+    assert [
+        event.kind for event in events
+        if event.kind in {"task_done", "task_cancelled"}
+    ] == ["task_cancelled", "task_cancelled"]
+
+
+def test_channel_group_terminals_and_progress_flush_in_original_task_order(
+    tmp_path, monkeypatch,
+):
+    """Catch group-order completion making progress reach 100% then regress."""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    files = {
+        0: _make_fd(
+            tmp_path, "ordered_a", channels=("sig", "aux"), idx=0,
+        ),
+        1: _make_fd(
+            tmp_path, "ordered_b", channels=("sig", "aux"), idx=1,
+        ),
+    }
+    preset = replace(
+        _task6_grouped_time_preset(group_by="channel"),
+        file_ids=(0, 1),
+    )
+    events = []
+    progress = []
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(_task6_fake_image),
+    )
+
+    result = BatchRunner(files).run(
+        preset,
+        tmp_path / "out",
+        on_event=events.append,
+        progress_callback=lambda index, total: progress.append((index, total)),
+    )
+
+    manifest = load_batch_manifest(result.manifest_path)
+    image_by_task_id = {
+        member["task_id"]: group["artifact"]["path"]
+        for group in manifest["render_groups"]
+        for member in group["members"]
+    }
+    terminals = [
+        event for event in events
+        if event.kind in {"task_done", "task_resumed", "task_cancelled"}
+    ]
+    assert result.status == "done"
+    assert [event.kind for event in terminals] == ["task_done"] * 4
+    assert [event.task_index for event in terminals] == [1, 2, 3, 4]
+    assert progress == [(1, 4), (2, 4), (3, 4), (4, 4)]
+    assert [Path(event.image_path).resolve() for event in terminals] == [
+        Path(image_by_task_id[event.task_id]).resolve() for event in terminals
+    ]
+
+
 def test_grouped_runner_probes_once_before_any_output_reservation(
     tmp_path, monkeypatch,
 ):

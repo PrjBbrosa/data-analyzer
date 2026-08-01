@@ -29,7 +29,9 @@ effective outputs, and the degraded reason so resume cannot treat the item as
 complete. An artifact or group is not done until every required checksum is
 complete. If cancellation interrupts checksum collection, retain the artifact
 as incomplete and propagate `cancelled` through the item, group, run, and
-manifest.
+manifest. If task items were provisionally recorded before grouped rendering,
+rewrite their final in-memory and manifest status; a cancelled group must not
+leave any member published as `done`.
 
 Verification: Run the backend-unavailable, writer-import-error rollback,
 degraded-resume, and grouped checksum-cancellation tests in

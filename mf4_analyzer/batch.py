@@ -56,6 +56,7 @@ from .batch_validation import (
 from .io.source_adapters import (
     DEFAULT_SOURCE_ADAPTER_REGISTRY,
     LoadedSource,
+    SourceUnavailableError,
     canonical_source_path,
 )
 from .signal import resolve_nfft, resolve_order_nfft
@@ -338,6 +339,8 @@ class BatchRunner:
         self._source_channel_cache: dict[object, frozenset[str]] = {}
         self._source_locators: dict[object, str] = {}
         self._source_group_identity_hints: dict[object, str] = {}
+        self._descriptor_probe_cache: set[str] = set()
+        self._descriptor_probe_failures: dict[str, str] = {}
         self._physical_paths: dict[str, str] = {}
         # dB-reference-defaults Task 9 (spec §13 S4 / plan Step 9.2):
         # ``db_reference_catalog`` is an immutable, DUCK-TYPED snapshot
@@ -478,22 +481,14 @@ class BatchRunner:
                     params=requested_params,
                 )
             else:
-                physical_key = self._physical_for_source(source_key)
-                path = (
-                    self._physical_paths.get(physical_key, physical_key)
-                    if physical_key is not None else str(source_key)
-                )
-                source = SimpleNamespace(
-                    filepath=path,
-                    label_suffix=str(source_key),
-                    source_metadata={'group_identity': str(source_key)},
-                )
-                identity = build_task_output_identity(
-                    source,
-                    file_id=source_key,
+                identity = self._build_unresolved_task_identity(
+                    source_key,
                     channel=channel,
                     method=preset.method,
                     params=requested_params,
+                    group_identity=self._source_group_identity_hints.get(
+                        source_key,
+                    ),
                 )
             render_tasks.append(RenderTask(source_key, channel, identity))
 
@@ -1160,6 +1155,10 @@ class BatchRunner:
             }
             group_blocked: dict[str, str] = {}
             group_failed: dict[str, str] = {}
+            deferred_group_terminals: dict[str, tuple[int, str, str]] = {}
+            resolved_group_terminals: list[
+                tuple[int, str, str, BatchItemResult, str | None]
+            ] = []
             spool_class = None
             spool_module = None
             if (
@@ -1432,7 +1431,15 @@ class BatchRunner:
                                     group.identity.group_id
                                 ] = computed.render_error
                         record_item(item, source_key, fd_or_fail)
-                        if on_event:
+                        defer_terminal = bool(
+                            computed.series_refs
+                            and item.status in {'done', 'resumed'}
+                        )
+                        if defer_terminal:
+                            deferred_group_terminals[item.task_id] = (
+                                index, fname, signal_name,
+                            )
+                        elif on_event:
                             on_event(BatchProgressEvent(
                                 kind=(
                                     'task_failed' if item.status == 'failed'
@@ -1450,7 +1457,11 @@ class BatchRunner:
                                 data_path=item.data_path,
                                 error=(item.message if item.status == 'failed' else None),
                             ))
-                        if progress_callback and item.status == 'done':
+                        if (
+                            not defer_terminal
+                            and progress_callback
+                            and item.status == 'done'
+                        ):
                             progress_callback(index, total)
                     except _BatchCancelled as exc:
                         if data_reservation is not None:
@@ -1643,6 +1654,34 @@ class BatchRunner:
                                     *outcome.warnings,
                                 ]))
                                 record_item(computed.item, computed.item.file_id)
+                    if outcome.status == 'cancelled':
+                        cancelled = True
+                        for computed in results:
+                            item = computed.item
+                            if item.status not in {'done', 'resumed'}:
+                                continue
+                            item.status = 'cancelled'
+                            item.message = (
+                                outcome.message
+                                or 'batch cancelled before group image completed'
+                            )
+                            item.finished_at = utc_now()
+                            record_item(item, item.file_id)
+                    for computed in results:
+                        item = computed.item
+                        event_context = deferred_group_terminals.pop(
+                            item.task_id, None,
+                        )
+                        if event_context is None:
+                            continue
+                        task_index, file_name, signal_name = event_context
+                        resolved_group_terminals.append((
+                            task_index,
+                            file_name,
+                            signal_name,
+                            item,
+                            outcome.image_path,
+                        ))
                     if outcome.status not in {'done', 'degraded'}:
                         blocked.append(
                             f'{group.identity.stem}: {outcome.message or outcome.status}'
@@ -1663,6 +1702,35 @@ class BatchRunner:
                             manifest_errors.append(
                                 f'cannot update batch manifest: {exc}'
                             )
+
+                for (
+                    task_index,
+                    file_name,
+                    signal_name,
+                    item,
+                    image_path,
+                ) in sorted(resolved_group_terminals, key=lambda value: value[0]):
+                    if on_event:
+                        on_event(BatchProgressEvent(
+                            kind=(
+                                'task_cancelled'
+                                if item.status == 'cancelled'
+                                else 'task_resumed'
+                                if item.status == 'resumed'
+                                else 'task_done'
+                            ),
+                            task_index=task_index,
+                            total=total,
+                            file_name=file_name,
+                            signal=signal_name,
+                            method=preset.method,
+                            task_id=item.task_id,
+                            message=item.message,
+                            data_path=item.data_path,
+                            image_path=image_path,
+                        ))
+                    if progress_callback and item.status == 'done':
+                        progress_callback(task_index, total)
 
             if cancelled:
                 status = 'cancelled'
@@ -1692,6 +1760,11 @@ class BatchRunner:
                 cancelled = True
                 emit_cancelled_range(index)
                 break
+            render_task = next(
+                task for task in render_tasks
+                if task.source_key == source_key
+                and task.channel == signal_name
+            )
 
             if resume_data is not None:
                 resumed_item = self._resume_item(
@@ -1737,11 +1810,6 @@ class BatchRunner:
                     getattr(preset.outputs, 'conflict_policy', 'auto_number')
                 ).strip().lower() in {'error', 'skip'}
             ):
-                render_task = next(
-                    task for task in render_tasks
-                    if task.source_key == source_key
-                    and task.channel == signal_name
-                )
                 data_extension = str(
                     effective_plan.effective['data']
                 ).lower().lstrip('.')
@@ -1823,7 +1891,8 @@ class BatchRunner:
                 item = self._run_one(preset, fid, fd_or_fail,
                                      signal_name, output_dir,
                                      cancel_token=cancel_token,
-                                     effective=effective_plan)
+                                     effective=effective_plan,
+                                     identity=render_task.identity)
                 item.started_at = started_at
                 item.finished_at = utc_now()
                 items.append(item)
@@ -1860,21 +1929,7 @@ class BatchRunner:
                     break
             except _BatchCancelled as exc:
                 cancelled = True
-                if not isinstance(fd_or_fail, _LoadFailure):
-                    identity = self._build_task_identity(
-                        fd_or_fail,
-                        file_id=fid,
-                        channel=signal_name,
-                        method=preset.method,
-                        params=normalize_batch_params(preset.params, preset.method),
-                    )
-                else:
-                    identity = self._build_unresolved_task_identity(
-                        source_key,
-                        channel=signal_name,
-                        method=preset.method,
-                        params=requested_params,
-                    )
+                identity = render_task.identity
                 items.append(BatchItemResult(
                     method=preset.method,
                     file_id=fid,
@@ -1907,21 +1962,7 @@ class BatchRunner:
                 emit_cancelled_range(index + 1)
                 break
             except Exception as exc:
-                if not isinstance(fd_or_fail, _LoadFailure):
-                    identity = self._build_task_identity(
-                        fd_or_fail,
-                        file_id=fid,
-                        channel=signal_name,
-                        method=preset.method,
-                        params=normalize_batch_params(preset.params, preset.method),
-                    )
-                else:
-                    identity = self._build_unresolved_task_identity(
-                        source_key,
-                        channel=signal_name,
-                        method=preset.method,
-                        params=requested_params,
-                    )
+                identity = render_task.identity
                 items.append(BatchItemResult(
                     method=preset.method, file_id=fid,
                     file_name=fname, signal=signal_name,
@@ -2264,7 +2305,7 @@ class BatchRunner:
                     method=preset.method,
                     params=requested_params,
                     group_identity=self._source_group_identity_hints.get(
-                        source_key, 'default',
+                        source_key,
                     ),
                 )
             render_tasks.append(RenderTask(source_key, channel, identity))
@@ -2299,6 +2340,74 @@ class BatchRunner:
             )
         for source_id, path in zip(source_ids, source_paths):
             self._register_source_locator(source_id, path)
+        if self._loader is not None:
+            return
+        unresolved_by_physical: dict[str, set[object]] = {}
+        for source_id in source_ids:
+            if self._known_file_data(source_id) is not None:
+                continue
+            physical_key = self._source_locators[source_id]
+            unresolved_by_physical.setdefault(physical_key, set()).add(
+                source_id,
+            )
+        for physical_key, unresolved_ids in unresolved_by_physical.items():
+            if physical_key in self._descriptor_probe_cache:
+                continue
+            raw_path = self._physical_paths.get(physical_key, physical_key)
+            probe = self._metadata_descriptor_probe(raw_path)
+            if probe is None:
+                continue
+            try:
+                descriptors = tuple(probe(
+                    raw_path, context=self._source_context,
+                ))
+            except (OSError, SourceUnavailableError) as exc:
+                # Descriptor probing is a no-load planning enhancement.  A
+                # source can disappear after the UI discovered it, so retain
+                # the stable unresolved identity and let run() perform the
+                # authoritative load.  Deliberately do not catch ValueError or
+                # arbitrary RuntimeError: malformed descriptor implementations
+                # remain visible programming/configuration errors.
+                self._descriptor_probe_failures[physical_key] = str(exc)
+                self._descriptor_probe_cache.add(physical_key)
+                continue
+            found_ids = set()
+            for descriptor in descriptors:
+                source_id = descriptor.source_id
+                self._source_channel_cache[source_id] = frozenset(
+                    str(name) for name in descriptor.channel_names
+                )
+                self._source_group_identity_hints[source_id] = str(
+                    descriptor.group_id or 'default'
+                )
+                if source_id in unresolved_ids:
+                    found_ids.add(source_id)
+            missing_ids = unresolved_ids - found_ids
+            if missing_ids:
+                missing = ', '.join(sorted(str(item) for item in missing_ids))
+                raise ValueError(
+                    f'batch source probe did not return source_id(s): {missing}'
+                )
+            self._descriptor_probe_cache.add(physical_key)
+
+    def _metadata_descriptor_probe(self, path):
+        """Return a probe only when its no-sample cost is explicit."""
+
+        registry = self._source_registry
+        probe = getattr(registry, 'probe_sources', None)
+        if not callable(probe):
+            return None
+        adapter_for = getattr(registry, 'adapter_for', None)
+        if callable(adapter_for):
+            probe_cost = getattr(adapter_for(path), 'probe_cost', None)
+        else:
+            probe_cost_for = getattr(registry, 'probe_cost_for', None)
+            probe_cost = (
+                probe_cost_for(path)
+                if callable(probe_cost_for)
+                else getattr(registry, 'probe_cost', None)
+            )
+        return probe if str(probe_cost or '').lower() == 'metadata' else None
 
     @staticmethod
     def _loaded_file_data(value):
@@ -2713,13 +2822,12 @@ class BatchRunner:
         """Compute one explicit-group task and publish only its data unit."""
 
         params = normalize_batch_params(preset.params, preset.method)
-        identity = self._build_task_identity(
-            fd,
-            file_id=source_key,
-            channel=signal_name,
-            method=preset.method,
-            params=params,
+        group_member = next(
+            member for member in group.members
+            if member.source_key == source_key
+            and member.channel == signal_name
         )
+        identity = group_member.identity
         started_at = utc_now()
         reservation = data_reservation
         data_path = None
@@ -2809,11 +2917,6 @@ class BatchRunner:
                                 cancel_token, 'artifact publish',
                             )
 
-            group_member = next(
-                member for member in group.members
-                if member.source_key == source_key
-                and member.channel == signal_name
-            )
             panel = (
                 group.members.index(group_member)
                 if group.layout == 'subplot' else 0
@@ -3024,6 +3127,19 @@ class BatchRunner:
                 dpi=int(preset.outputs.image_dpi),
                 cancel_token=cancel_token,
             )
+            if (
+                artifact.get('checksum_status') != 'complete'
+                and cancel_token is not None
+                and cancel_token.is_set()
+            ):
+                return RenderGroupResult(
+                    group_id=group.identity.group_id,
+                    status='cancelled',
+                    image_path=str(image_path),
+                    message='cancelled during group artifact checksum',
+                    warnings=warnings,
+                    artifact=artifact,
+                )
             return RenderGroupResult(
                 group_id=group.identity.group_id,
                 status=(
@@ -3080,16 +3196,18 @@ class BatchRunner:
         }
 
     def _run_one(self, preset, fid, fd, signal_name, output_dir, *,
-                 cancel_token=None, effective: EffectiveOutputPlan | None = None):
+                 cancel_token=None, effective: EffectiveOutputPlan | None = None,
+                 identity=None):
         method = preset.method
         requested_params = normalize_batch_params(preset.params, method)
-        identity = self._build_task_identity(
-            fd,
-            file_id=fid,
-            channel=signal_name,
-            method=method,
-            params=requested_params,
-        )
+        if identity is None:
+            identity = self._build_task_identity(
+                fd,
+                file_id=fid,
+                channel=signal_name,
+                method=method,
+                params=requested_params,
+            )
         effective = effective or self._resolve_effective_outputs(preset.outputs)
         requested_outputs = dict(effective.requested)
         effective_outputs = dict(effective.effective)
@@ -3583,7 +3701,7 @@ class BatchRunner:
         show_filtered = bool(filter_state.get('show_filtered', True))
         if not show_original and not show_filtered:
             raise ValueError(
-                "æ—¶åŸŸå¯¼å‡ºè‡³å°‘éœ€è¦åŽŸå§‹æˆ–æ»¤æ³¢åŽä¸€é¡¹"
+                "时域导出至少需要原始或滤波后一项"
             )
         show_both = show_original and show_filtered
         series = []
@@ -3665,18 +3783,22 @@ class BatchRunner:
         channel,
         method,
         params,
-        group_identity='default',
+        group_identity=None,
     ):
         physical_key = self._physical_for_source(source_key)
         source_path = (
             self._physical_paths.get(physical_key, physical_key)
             if physical_key is not None else None
         )
+        if group_identity in (None, ''):
+            group_identity = self._source_group_identity_hints.get(source_key)
+        if group_identity in (None, ''):
+            group_identity = f'unresolved-source:{source_key}'
         source = SimpleNamespace(
             filepath=source_path,
-            label_suffix=str(group_identity or 'default'),
+            label_suffix=str(group_identity),
             source_metadata={
-                'group_identity': str(group_identity or 'default'),
+                'group_identity': str(group_identity),
             },
         )
         return build_task_output_identity(

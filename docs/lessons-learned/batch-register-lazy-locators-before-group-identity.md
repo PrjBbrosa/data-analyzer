@@ -24,11 +24,12 @@ descriptor IDs, producing different stems, group IDs, task IDs, and member
 links for the same request.
 
 Rule: Canonicalize known lazy locators and bind descriptor channel/group facts
-before identity planning. One physical probe must cache every logical
-descriptor it returns, not only the currently requested subset, so later
-subsets do not re-probe or fall back to incomplete identity. Preview and fresh
-execution must derive group, task, and exact member-entry IDs from the same
-descriptor facts. Treat task enumeration and every derivative—ordering, task
+before identity planning when the adapter explicitly supports a metadata-only
+probe. One such physical probe must cache every logical descriptor it returns,
+not only the currently requested subset, so later subsets do not re-probe or
+fall back to incomplete identity. Preview and fresh execution must derive group,
+task, and exact member-entry IDs from the same planned facts. Treat task
+enumeration and every derivative—ordering, task
 identities, render tasks, and render groups—as one atomic plan. Zero-load
 manifest task-universe recovery also requires a complete execution-scope proof:
 exact canonical source paths, exact pattern, full path coverage, and unchanged
