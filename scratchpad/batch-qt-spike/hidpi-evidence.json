@@ -1,0 +1,25 @@
+{
+  "mode": "hidpi",
+  "requested_platform": "offscreen",
+  "actual_platform": "offscreen",
+  "screen_dpr": 2.0,
+  "screen_logical_dpi": 100.0,
+  "pixel_size_exact": true,
+  "artifact": {
+    "path": "images/hidpi/time-dual-y.png",
+    "width": 1920,
+    "height": 1080,
+    "dots_per_meter_x": 5669,
+    "dots_per_meter_y": 5669,
+    "dpi_round_trip": 143.99259999999998,
+    "metadata": {
+      "Case": "time-dual-y",
+      "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+      "Theme": "white",
+      "Title": "TraceLab batch Qt spike"
+    },
+    "sha256": "45a2748e5f538abf1f5b6d47585a6e94a2cb74d886d7333c752f4104ec952170",
+    "bytes": 478419
+  },
+  "pass": true
+}

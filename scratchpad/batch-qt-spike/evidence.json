@@ -1,0 +1,1594 @@
+{
+  "generated_at": "2026-08-01T14:54:33.497934+00:00",
+  "commit_sha": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+  "command_environment": {
+    "QT_QPA_PLATFORM": "offscreen",
+    "TMPDIR": "/tmp",
+    "MPLCONFIGDIR": "/tmp",
+    "PYTHONPATH": "."
+  },
+  "qt_platform": "offscreen",
+  "python": "3.12.13 (main, Mar  3 2026, 12:39:30) [Clang 21.0.0 (clang-2100.0.123.102)]",
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "versions": {
+    "qt": "5.15.14",
+    "pyqt": "5.15.11",
+    "pyqtgraph": "0.14.0",
+    "numpy": "2.5.1"
+  },
+  "requested_batch_geometry": [
+    1920,
+    1080
+  ],
+  "cases": {
+    "time-dual-y": {
+      "themes": {
+        "white": {
+          "case": "time-dual-y",
+          "curve_antialias": [
+            true,
+            true
+          ],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "curve_points": [
+            3400,
+            3400
+          ],
+          "axis_range_semantics": "pyqtgraph auto-range padding, then existing overlay _frame_to_nice at 10 Y divisions",
+          "axis_auto_padded_ranges": [
+            {
+              "channel": "Acceleration",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                -0.9517711125418163,
+                0.9517711125418163
+              ]
+            },
+            {
+              "channel": "Speed",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                1323.5513710138882,
+                1676.4486290675377
+              ]
+            }
+          ],
+          "axis_ranges": [
+            {
+              "channel": "Acceleration",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                -1.0,
+                1.0
+              ]
+            },
+            {
+              "channel": "Speed",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                1320.0,
+                1720.0
+              ]
+            }
+          ],
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "background_corner_matches": true
+        },
+        "transparent": {
+          "case": "time-dual-y",
+          "curve_antialias": [
+            true,
+            true
+          ],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "curve_points": [
+            3400,
+            3400
+          ],
+          "axis_range_semantics": "pyqtgraph auto-range padding, then existing overlay _frame_to_nice at 10 Y divisions",
+          "axis_auto_padded_ranges": [
+            {
+              "channel": "Acceleration",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                -0.9517711125418163,
+                0.9517711125418163
+              ]
+            },
+            {
+              "channel": "Speed",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                1323.5513710138882,
+                1676.4486290675377
+              ]
+            }
+          ],
+          "axis_ranges": [
+            {
+              "channel": "Acceleration",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                -1.0,
+                1.0
+              ]
+            },
+            {
+              "channel": "Speed",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                1320.0,
+                1720.0
+              ]
+            }
+          ],
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "background_corner_matches": true
+        },
+        "dark": {
+          "case": "time-dual-y",
+          "curve_antialias": [
+            true,
+            true
+          ],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "curve_points": [
+            3400,
+            3400
+          ],
+          "axis_range_semantics": "pyqtgraph auto-range padding, then existing overlay _frame_to_nice at 10 Y divisions",
+          "axis_auto_padded_ranges": [
+            {
+              "channel": "Acceleration",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                -0.9517711125418163,
+                0.9517711125418163
+              ]
+            },
+            {
+              "channel": "Speed",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                1323.5513710138882,
+                1676.4486290675377
+              ]
+            }
+          ],
+          "axis_ranges": [
+            {
+              "channel": "Acceleration",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                -1.0,
+                1.0
+              ]
+            },
+            {
+              "channel": "Speed",
+              "x": [
+                0.0,
+                10.0
+              ],
+              "y": [
+                1320.0,
+                1720.0
+              ]
+            }
+          ],
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            16,
+            20,
+            24,
+            255
+          ],
+          "background_corner_matches": true
+        }
+      },
+      "reference": {
+        "full_size": [
+          1920,
+          958
+        ],
+        "crop_rect": [
+          12,
+          10,
+          1897,
+          939
+        ],
+        "target_viewport": [
+          1897,
+          939
+        ],
+        "viewport_matches": true,
+        "axis_range_semantics": "existing single-file overlay auto-range padding and nice-grid framing",
+        "axis_ranges": [
+          {
+            "channel": "Acceleration",
+            "x": [
+              0.0,
+              10.0
+            ],
+            "y": [
+              -1.0,
+              1.0
+            ]
+          },
+          {
+            "channel": "Speed",
+            "x": [
+              0.0,
+              10.0
+            ],
+            "y": [
+              1320.0,
+              1720.0
+            ]
+          }
+        ]
+      },
+      "axis_range_assertion": {
+        "batch": [
+          {
+            "channel": "Acceleration",
+            "x": [
+              0.0,
+              10.0
+            ],
+            "y": [
+              -1.0,
+              1.0
+            ]
+          },
+          {
+            "channel": "Speed",
+            "x": [
+              0.0,
+              10.0
+            ],
+            "y": [
+              1320.0,
+              1720.0
+            ]
+          }
+        ],
+        "reference": [
+          {
+            "channel": "Acceleration",
+            "x": [
+              0.0,
+              10.0
+            ],
+            "y": [
+              -1.0,
+              1.0
+            ]
+          },
+          {
+            "channel": "Speed",
+            "x": [
+              0.0,
+              10.0
+            ],
+            "y": [
+              1320.0,
+              1720.0
+            ]
+          }
+        ],
+        "absolute_tolerance": 1e-09,
+        "x_equal": true,
+        "y_equal": true,
+        "pass": true
+      },
+      "parity_machine_pass": true
+    },
+    "time-subplot8": {
+      "themes": {
+        "white": {
+          "case": "time-subplot8",
+          "curve_antialias": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "raw_points_per_panel": 100000,
+          "rendered_envelope_points_per_panel": 3400,
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "background_corner_matches": true
+        },
+        "transparent": {
+          "case": "time-subplot8",
+          "curve_antialias": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "raw_points_per_panel": 100000,
+          "rendered_envelope_points_per_panel": 3400,
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "background_corner_matches": true
+        },
+        "dark": {
+          "case": "time-subplot8",
+          "curve_antialias": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            },
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "raw_points_per_panel": 100000,
+          "rendered_envelope_points_per_panel": 3400,
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            16,
+            20,
+            24,
+            255
+          ],
+          "background_corner_matches": true
+        }
+      },
+      "reference": {
+        "full_size": [
+          1920,
+          958
+        ],
+        "crop_rect": [
+          12,
+          10,
+          1897,
+          939
+        ],
+        "target_viewport": [
+          1897,
+          939
+        ],
+        "viewport_matches": true
+      },
+      "parity_machine_pass": true
+    },
+    "fft": {
+      "themes": {
+        "white": {
+          "case": "fft",
+          "curve_antialias": [
+            true
+          ],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "background_corner_matches": true
+        },
+        "transparent": {
+          "case": "fft",
+          "curve_antialias": [
+            true
+          ],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "background_corner_matches": true
+        },
+        "dark": {
+          "case": "fft",
+          "curve_antialias": [
+            true
+          ],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            16,
+            20,
+            24,
+            255
+          ],
+          "background_corner_matches": true
+        }
+      },
+      "reference": {
+        "full_size": [
+          1920,
+          1132
+        ],
+        "crop_rect": [
+          12,
+          10,
+          1897,
+          939
+        ],
+        "target_viewport": [
+          1897,
+          939
+        ],
+        "viewport_matches": true
+      },
+      "parity_machine_pass": true
+    },
+    "heatmap": {
+      "themes": {
+        "white": {
+          "case": "heatmap",
+          "curve_antialias": [],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "matrix_matches": true,
+          "smooth_transform": true,
+          "matrix_shape": [
+            2,
+            3
+          ],
+          "levels": [
+            0.0,
+            1.0
+          ],
+          "extent": [
+            -0.5,
+            5.0,
+            3.0,
+            20.0
+          ],
+          "colorbar_interactive": false,
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "background_corner_matches": true
+        },
+        "transparent": {
+          "case": "heatmap",
+          "curve_antialias": [],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "matrix_matches": true,
+          "smooth_transform": true,
+          "matrix_shape": [
+            2,
+            3
+          ],
+          "levels": [
+            0.0,
+            1.0
+          ],
+          "extent": [
+            -0.5,
+            5.0,
+            3.0,
+            20.0
+          ],
+          "colorbar_interactive": false,
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "background_corner_matches": true
+        },
+        "dark": {
+          "case": "heatmap",
+          "curve_antialias": [],
+          "chrome": [
+            {
+              "auto_button_hidden": true,
+              "menu_disabled": true,
+              "mouse_x_disabled": true,
+              "mouse_y_disabled": true
+            }
+          ],
+          "matrix_matches": true,
+          "smooth_transform": true,
+          "matrix_shape": [
+            2,
+            3
+          ],
+          "levels": [
+            0.0,
+            1.0
+          ],
+          "extent": [
+            -0.5,
+            5.0,
+            3.0,
+            20.0
+          ],
+          "colorbar_interactive": false,
+          "crop_rect": [
+            12,
+            106,
+            1897,
+            939
+          ],
+          "pixel_size_exact": true,
+          "corner_rgba": [
+            16,
+            20,
+            24,
+            255
+          ],
+          "background_corner_matches": true
+        }
+      },
+      "reference": {
+        "full_size": [
+          1920,
+          958
+        ],
+        "crop_rect": [
+          12,
+          10,
+          1897,
+          939
+        ],
+        "target_viewport": [
+          1897,
+          939
+        ],
+        "viewport_matches": true,
+        "matrix_matches": true,
+        "levels": [
+          0.0,
+          1.0
+        ]
+      },
+      "parity_machine_pass": true
+    }
+  },
+  "cjk": {
+    "font": "PingFang SC",
+    "supports": {
+      "单": true,
+      "帧": true,
+      "振": true,
+      "动": true,
+      "加": true,
+      "速": true,
+      "度": true
+    },
+    "pass": true,
+    "ink_difference_pixels": 3313,
+    "ink_pass": true
+  },
+  "thread": {
+    "modal_dialog_reachable": true,
+    "gui_thread_execution": true,
+    "exception_round_trip": true,
+    "worker_error": null,
+    "app_exit_fail_fast": true,
+    "app_exit_error": "Qt application is exiting; render rejected"
+  },
+  "performance": {
+    "render_1080p": {
+      "time-dual-y": {
+        "runs": 20,
+        "scope": "build + show/processEvents + QImage render + cleanup + PNG encode",
+        "p50_ms": 389.7622500080615,
+        "p95_ms": 435.0798566418234,
+        "min_ms": 367.502374923788,
+        "max_ms": 471.9933329615742,
+        "render_component_p50_ms": 304.7788540716283,
+        "render_component_p95_ms": 340.7715669483878,
+        "png_encode_component_p50_ms": 85.06533299805596,
+        "png_encode_component_p95_ms": 99.00440420024098,
+        "budget_ms": 500.0,
+        "pass": true
+      },
+      "time-subplot8": {
+        "runs": 20,
+        "scope": "build + show/processEvents + QImage render + cleanup + PNG encode",
+        "p50_ms": 230.5411665001884,
+        "p95_ms": 240.60326904873364,
+        "min_ms": 215.4393329983577,
+        "max_ms": 256.84070808347315,
+        "render_component_p50_ms": 166.54689545975998,
+        "render_component_p95_ms": 175.8576589578297,
+        "png_encode_component_p50_ms": 63.40187549358234,
+        "png_encode_component_p95_ms": 68.75858961720951,
+        "budget_ms": 500.0,
+        "pass": true
+      },
+      "heatmap": {
+        "runs": 20,
+        "scope": "build + show/processEvents + QImage render + cleanup + PNG encode",
+        "p50_ms": 95.27539601549506,
+        "p95_ms": 105.2896106033586,
+        "min_ms": 90.76283406466246,
+        "max_ms": 105.83241598214954,
+        "render_component_p50_ms": 39.62239593965933,
+        "render_component_p95_ms": 47.339208266930655,
+        "png_encode_component_p50_ms": 55.039708502590656,
+        "png_encode_component_p95_ms": 57.95040233642794,
+        "budget_ms": 500.0,
+        "pass": true
+      }
+    },
+    "four_k": {
+      "time-dual-y": {
+        "elapsed_ms": 1267.9468750720844,
+        "encoded_png_bytes": 1174037,
+        "rss_after_bytes": 1701199872
+      },
+      "time-subplot8": {
+        "elapsed_ms": 646.147207939066,
+        "encoded_png_bytes": 1229198,
+        "rss_after_bytes": 1769144320
+      },
+      "heatmap": {
+        "elapsed_ms": 345.33574990928173,
+        "encoded_png_bytes": 203282,
+        "rss_after_bytes": 1835581440
+      }
+    },
+    "rss_before_bytes": 1566588928,
+    "rss_after_bytes": 1835581440,
+    "rss_delta_bytes": 268992512,
+    "heartbeat": {
+      "render_requests": 20,
+      "timer_interval_ms": 50,
+      "completed": true,
+      "worker_error": null,
+      "tick_count": 62,
+      "max_gap_ms": 110.76837498694658,
+      "over_100ms_count": 7,
+      "budget_ms": 200.0,
+      "pass": true,
+      "request_p50_ms": 232.140707958024,
+      "request_p95_ms": 252.8915479197167
+    }
+  },
+  "artifacts": [
+    {
+      "path": "images/offscreen/time-dual-y-white-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-dual-y",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "white",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "08dbb1127957a0547fda688e404a7f1745a5b77cedf24fc5658c3e1c483a4a88",
+      "bytes": 480276
+    },
+    {
+      "path": "images/offscreen/time-dual-y-white-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-dual-y",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "white",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "0916efd588a7442e1edbedc296dac26d2bcf53c1b95c2dc8412d1795b08cb2d8",
+      "bytes": 456101
+    },
+    {
+      "path": "images/offscreen/time-dual-y-transparent-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-dual-y",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "transparent",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "d197bf91091667b414499dfe0f3a335b2db24969dfcbdc77d4866261564d601d",
+      "bytes": 649843
+    },
+    {
+      "path": "images/offscreen/time-dual-y-transparent-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-dual-y",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "transparent",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "dc3f7d4ade62f5cec30a590c962346c40066a2764af2cd035c1b6a4ce9546218",
+      "bytes": 626561
+    },
+    {
+      "path": "images/offscreen/time-dual-y-dark-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-dual-y",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "dark",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "217bf971f6d41a27ee0682b7d6ab9a3274113e575818f8e35c5e044fe79a081c",
+      "bytes": 495091
+    },
+    {
+      "path": "images/offscreen/time-dual-y-dark-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-dual-y",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "dark",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "58a706ac216a2c036540e46802e6399cf76896eb7d6e1a53786495ed1223dcde",
+      "bytes": 470880
+    },
+    {
+      "path": "images/offscreen/time-dual-y-reference.png",
+      "width": 1920,
+      "height": 958,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-dual-y",
+        "Title": "TraceLab existing single-file canvas"
+      },
+      "sha256": "d6e40124eff31363f784c73b79a3c418238a2d9a6e605f2c2164903eb063e278",
+      "bytes": 59555
+    },
+    {
+      "path": "images/offscreen/time-dual-y-reference-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-dual-y",
+        "Title": "TraceLab existing single-file canvas"
+      },
+      "sha256": "e006d57894ef1ea7feb4c8c5103e37f18f6318d0202934353eb0b7bf20015049",
+      "bytes": 58395
+    },
+    {
+      "path": "contact-sheets/time-dual-y-parity.png",
+      "width": 3866,
+      "height": 1035,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {},
+      "sha256": "4da2a4e3a03cfa2af3674b82baac322ce919cf8c7d97dc5957937e9439e7acb4",
+      "bytes": 552303
+    },
+    {
+      "path": "images/offscreen/time-subplot8-white-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-subplot8",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "white",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "1c49301b7f235c2ee89269e6fce49c5a840acb8a59e6c3043ab0174339bbb862",
+      "bytes": 512260
+    },
+    {
+      "path": "images/offscreen/time-subplot8-white-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-subplot8",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "white",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "2273178f68d64d988b978e47e405fc66bd6c6faca4d1fccac439d2ec28e90701",
+      "bytes": 487526
+    },
+    {
+      "path": "images/offscreen/time-subplot8-transparent-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-subplot8",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "transparent",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "f8c898c4c4ace6c71f15815500b2cb4a3d3395b912a47e5aa4c1c45e19351eaa",
+      "bytes": 574394
+    },
+    {
+      "path": "images/offscreen/time-subplot8-transparent-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-subplot8",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "transparent",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "6aaa0a97188459c87eeef7880340a11346258447aaf6147db868de2965d75419",
+      "bytes": 551837
+    },
+    {
+      "path": "images/offscreen/time-subplot8-dark-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-subplot8",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "dark",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "6d995cd022f21b739daf3bb0223bf594a80e20ff0f730b556041fd98f95c71af",
+      "bytes": 501227
+    },
+    {
+      "path": "images/offscreen/time-subplot8-dark-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-subplot8",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "dark",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "d58b9f820662ac0a6f1324bd1e6dc4aa8653350cd69e369679effd1641a4b1dd",
+      "bytes": 478199
+    },
+    {
+      "path": "images/offscreen/time-subplot8-reference.png",
+      "width": 1920,
+      "height": 958,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-subplot8",
+        "Title": "TraceLab existing single-file canvas"
+      },
+      "sha256": "411a753a784a1ee631ba0cce795eaaeb90bb29f8a031f1d736700071eb23e5df",
+      "bytes": 115578
+    },
+    {
+      "path": "images/offscreen/time-subplot8-reference-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "time-subplot8",
+        "Title": "TraceLab existing single-file canvas"
+      },
+      "sha256": "37ed16ed313bffe2b526206ff001be6416cac5bbb42f864a0e14963db95403f1",
+      "bytes": 115087
+    },
+    {
+      "path": "contact-sheets/time-subplot8-parity.png",
+      "width": 3866,
+      "height": 1035,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {},
+      "sha256": "a92432bd5e046a1c09d47ae2b45dbe30e43a522f0c9e5f6a538678b2308a0619",
+      "bytes": 648227
+    },
+    {
+      "path": "images/offscreen/fft-white-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "fft",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "white",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "4a8ea434de5500193a1b202a3a9e942f4e614d7cc422fc649cb47d659cadf4af",
+      "bytes": 87749
+    },
+    {
+      "path": "images/offscreen/fft-white-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "fft",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "white",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "59ca04b2444e9e7635317f823810e608092cf44b00bed8a145362723e41076c6",
+      "bytes": 64227
+    },
+    {
+      "path": "images/offscreen/fft-transparent-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "fft",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "transparent",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "625801019d02d9ae6b96ed633338e53df1d1cdcb2dd0fee7fd8aa681590497fa",
+      "bytes": 88663
+    },
+    {
+      "path": "images/offscreen/fft-transparent-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "fft",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "transparent",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "2b4e0ab531e98206557e9b7c2197bb4b03b470960af14ef7685f10bda1bde4dd",
+      "bytes": 66095
+    },
+    {
+      "path": "images/offscreen/fft-dark-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "fft",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "dark",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "ea75eb5eb738c6250c66e66aa657e7b44049611f6e781ec395cd025cf3de1f23",
+      "bytes": 92794
+    },
+    {
+      "path": "images/offscreen/fft-dark-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "fft",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "dark",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "811c4e419f9e2b560def38552233a5cef1a93accda854bbae70f30268f321a31",
+      "bytes": 68506
+    },
+    {
+      "path": "images/offscreen/fft-reference.png",
+      "width": 1920,
+      "height": 1132,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "fft",
+        "Title": "TraceLab existing single-file canvas"
+      },
+      "sha256": "6bd1c8609be4d15049ea1d17b8ae98d747f433f2d068236097f04c292dcb4b4a",
+      "bytes": 175679
+    },
+    {
+      "path": "images/offscreen/fft-reference-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "fft",
+        "Title": "TraceLab existing single-file canvas"
+      },
+      "sha256": "1026a2ceb87330a5166e45f9ee9403c38321da8c95dc1e745c585f72712e6406",
+      "bytes": 63801
+    },
+    {
+      "path": "contact-sheets/fft-parity.png",
+      "width": 3866,
+      "height": 1035,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {},
+      "sha256": "3a56f1985a4c4e5e3af67247433bce99af5bc601b448052f09e50879e92d21a5",
+      "bytes": 136357
+    },
+    {
+      "path": "images/offscreen/heatmap-white-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "heatmap",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "white",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "e74d8076139a8da241e60445e2eceab940f0da8ac8daaa5047376eaf5df4888a",
+      "bytes": 126704
+    },
+    {
+      "path": "images/offscreen/heatmap-white-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "heatmap",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "white",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "fd7a604f342f67dea92793fda3f0adace681091e13d88cdd3625afc74e3d2081",
+      "bytes": 104045
+    },
+    {
+      "path": "images/offscreen/heatmap-transparent-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "heatmap",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "transparent",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "7e1d178920e7a114adc454d6a446b4ff1ebb3c15b8b52db58d5ff775f314630c",
+      "bytes": 125197
+    },
+    {
+      "path": "images/offscreen/heatmap-transparent-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "heatmap",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "transparent",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "3de332b0d2dff6510a4916855994229501c90db813e871a79baf26212aa599b7",
+      "bytes": 104142
+    },
+    {
+      "path": "images/offscreen/heatmap-dark-batch.png",
+      "width": 1920,
+      "height": 1080,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "heatmap",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "dark",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "bd37c5c40355abe83ea9482abe79ef759d454cd95bbeb65fb619c274316fb040",
+      "bytes": 127749
+    },
+    {
+      "path": "images/offscreen/heatmap-dark-batch-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "heatmap",
+        "Commit": "612bdd595bdfcecd41a7bedab1259f5c7f1d9383",
+        "Theme": "dark",
+        "Title": "TraceLab batch Qt spike"
+      },
+      "sha256": "1037c466c12cb270ec0673b6c44667ba56a0c1e8f4f254cf60544bec1ccf02fd",
+      "bytes": 104715
+    },
+    {
+      "path": "images/offscreen/heatmap-reference.png",
+      "width": 1920,
+      "height": 958,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "heatmap",
+        "Title": "TraceLab existing single-file canvas"
+      },
+      "sha256": "6d5646bccbc6ba126b1dea87224fdc093da20186a49aeb6788455212b849e226",
+      "bytes": 103612
+    },
+    {
+      "path": "images/offscreen/heatmap-reference-crop.png",
+      "width": 1897,
+      "height": 939,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {
+        "Case": "heatmap",
+        "Title": "TraceLab existing single-file canvas"
+      },
+      "sha256": "72476068511a5ba4afde26aadd0c50a18cd8a06423ea6cd45c3e9df387ccf065",
+      "bytes": 103120
+    },
+    {
+      "path": "contact-sheets/heatmap-parity.png",
+      "width": 3866,
+      "height": 1035,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {},
+      "sha256": "943a064439fd96d7238e30024a4f3b8540654bcadc628a2c03428f12464caeae",
+      "bytes": 199795
+    },
+    {
+      "path": "contact-sheets/all-cases-three-themes.png",
+      "width": 2232,
+      "height": 1846,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {},
+      "sha256": "4acc4db89485ee03ebe76f815c8687b70e2e0f7a934b07b1022cb5cad7edd866",
+      "bytes": 1054407
+    },
+    {
+      "path": "contact-sheets/cjk-ink-proof.png",
+      "width": 3912,
+      "height": 251,
+      "dots_per_meter_x": 5669,
+      "dots_per_meter_y": 5669,
+      "dpi_round_trip": 143.99259999999998,
+      "metadata": {},
+      "sha256": "a4b22933f1e247f664b885dc0a8306cd591e7155801ccfcce4b9e6df7e4ecd6b",
+      "bytes": 34107
+    }
+  ],
+  "contact_sheets": [
+    "contact-sheets/time-dual-y-parity.png",
+    "contact-sheets/time-subplot8-parity.png",
+    "contact-sheets/fft-parity.png",
+    "contact-sheets/heatmap-parity.png",
+    "contact-sheets/all-cases-three-themes.png",
+    "contact-sheets/cjk-ink-proof.png"
+  ],
+  "machine_gate": {
+    "pixel_and_metadata": true,
+    "themes": true,
+    "chrome": true,
+    "cjk": true,
+    "thread_marshal": true,
+    "viewport_parity": true,
+    "render_p95": true,
+    "heartbeat": true
+  },
+  "machine_gate_pass": true,
+  "gate0_pass": true,
+  "visual_review": {
+    "status": "PASS",
+    "reviewer": "/root/batch0_spike (pyqt-ui-engineer)",
+    "method": "view_image(detail=original) on every final regenerated contact sheet",
+    "signed_at": "2026-08-01T14:55:00+00:00",
+    "contact_sheets_reviewed": [
+      "contact-sheets/time-dual-y-parity.png",
+      "contact-sheets/time-subplot8-parity.png",
+      "contact-sheets/fft-parity.png",
+      "contact-sheets/heatmap-parity.png",
+      "contact-sheets/all-cases-three-themes.png",
+      "contact-sheets/cjk-ink-proof.png"
+    ],
+    "result": "No missing curves, axis mismatch, transpose/flip, clipping, overlap, tofu, forbidden Qt chrome, or material antialiasing regression observed. The centered subplot titles are the Spec-approved B3 batch-report presentation difference, not Qt chrome."
+  }
+}

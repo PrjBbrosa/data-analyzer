@@ -463,3 +463,87 @@ matplotlib 版渲染器**不再接收任何修复**；迁移完成前它保持�
 6. B1–B4 四条红测转绿并保持在套件内。
 7. Windows onedir 若尚未完成 offscreen + native-platform 双烟测，只能标记
    “源码实施完成 / Windows 发布 NO-GO”，不得把总验收写成完成。
+
+## 附录 A：Spike 结论
+
+**执行日期：** 2026-08-01
+
+**工作树 commit：** `612bdd595bdfcecd41a7bedab1259f5c7f1d9383`
+
+**证据目录：** `scratchpad/batch-qt-spike/`
+
+**Evidence generated_at：** `2026-08-01T14:54:33.497934+00:00`
+**Gate 0：** **PASS，放行 Batch 2**
+
+### A.1 渲染与视觉证据
+
+- 独立 `GraphicsLayoutWidget` 原型已覆盖 time 双 Y、time 8-panel subplot、FFT、
+  非对称 2×3 heatmap，以及 white/transparent/dark 三主题；完整 batch PNG 为
+  1920×1080，使用 `QImage + QPainter + QWidget.render`，曲线 item 显式 AA，禁用
+  OpenGL。
+- 同一 prepared payload 已分别送入原型与现有 `TimeDomainCanvasPG`、
+  `PgLineCanvas`、`PgHeatmapCanvas`；crop 来自真实 `PlotItem.sceneBoundingRect()`，
+  非固定坐标，也不是 whole-canvas grab。四张 parity contact sheet 及三主题/CJK 两张
+  contact sheet 已由执行 agent 用 `view_image(detail="original")` 全部逐张打开，最终
+  结果均 PASS；逐项签字在 `scratchpad/batch-qt-spike/visual-review.md`。
+- heatmap 与真实 single-file 默认调用保持相同 `_SmoothImageItem` bilinear transform、
+  `axisOrder="row-major"`、`QRectF(-0.5, 5.0, 3.0, 20.0)` coverage、turbo LUT 和
+  `[0, 1]` levels；非对称矩阵目视与结构检查均无转置/翻转，colorbar 未裁切。
+- FFT 两侧均保留 `Channel` legend；subplot 原型关闭 auto SI prefix，轴值/单位与
+  reference 一致。batch 居中 panel title 与 single-file 左上内嵌 label 的差异属于
+  Spec B3 已批准的报告层标题语义，不是导航或 Qt chrome。
+- time 双 Y batch 不再手写更宽范围，而是在最终几何下先取 pyqtgraph auto-range
+  padding，再复用现有 `_frame_to_nice` 10 分格语义。最终机器证据记录并断言
+  batch/reference 的 X 均为 `[0,10]`、Acceleration Y 均为 `[-1,1]`、Speed Y 均为
+  `[1320,1720]`；绝对容差 `1e-9` 下 X/Y 均相等。
+- 每个原型 PlotItem 均关闭 auto-range button、context menu 和鼠标交互；宿主关闭
+  frame、scrollbar、focus。三主题完整页未发现主界面导航、toolbar/status、默认按钮、
+  菜单、焦点框或其他违禁 chrome。
+
+### A.2 CJK、像素、DPI 与平台
+
+- 本机解析 `PingFang SC`，`QRawFont.supportsCharacter` 对契约文本
+  `单帧振动加速度` 七个字符全部为 true；标题/空标题对照区域差异为 3313 pixels，
+  目视无 tofu 或空字形。
+- offscreen 三主题完整 PNG 尺寸均精确为 1920×1080；144 DPI 回读为
+  143.9926 DPI（PNG pHYs 舍入），`Case`/`Commit`/`Theme`/`Title` text metadata
+  可回读。
+- `QT_SCALE_FACTOR=2 + offscreen` 与 native `QT_QPA_PLATFORM=cocoa` 均实际运行在
+  DPR 2，输出仍为精确 1920×1080、144 DPI。cocoa probe 使用
+  `WA_DontShowOnScreen`；该证据证明 native platform 构建/渲染路径，不替代后续
+  macOS 前台批处理验收。
+
+### A.3 线程合同
+
+- QThread worker 经 `BlockingQueuedConnection` 在 GUI thread 执行并回传结果：PASS。
+- `ValueError("spike sentinel")` 类型、文案和 traceback note 跨线程回传：PASS。
+- application-modal `QDialog` 打开时 worker render request 仍可达：PASS。
+- app exiting 标志置位后以 `Qt application is exiting; render rejected` fail-fast：PASS。
+
+### A.4 性能、heartbeat 与内存
+
+计时范围固定为：**build/layout + 一次 `show/processEvents` + QImage render +
+cleanup + lossless PNG encode**。初版原型重复调用一次 `processEvents()`，造成双 Y
+p95 虚高；删除该重复布局/paint drain 并缓存不变的 commit SHA 后复测，不改变数据、
+像素、分辨率、曲线 envelope 信息或 500 ms 预算。最终每类 20 次结果：
+
+| 1920×1080 case | p50 | p95 | render p95 | PNG encode p95 | 预算 | 结论 |
+|---|---:|---:|---:|---:|---:|---|
+| time 双 Y overlay | 389.76 ms | 435.08 ms | 340.77 ms | 99.00 ms | ≤500 ms | PASS |
+| time 8-panel（每 panel 100k raw points，经 min/max envelope） | 230.54 ms | 240.60 ms | 175.86 ms | 68.76 ms | ≤500 ms | PASS |
+| heatmap | 95.28 ms | 105.29 ms | 47.34 ms | 57.95 ms | ≤500 ms | PASS |
+
+worker 连续请求 20 张 8-panel 图时，50 ms heartbeat 最大间隙为 **110.77 ms**，
+超过 100 ms 次数为 **7**，低于 200 ms 预算。4K 单图含 PNG encode 的时间为：双 Y
+1267.95 ms、8-panel 646.15 ms、heatmap 345.34 ms；同一进程 peak RSS 从
+1,566,588,928 增至 1,835,581,440 bytes，观测峰值增量 **268,992,512 bytes**。
+
+### A.5 放行边界
+
+Gate 0 的机器断言与执行 agent 目视均通过，Batch 2 可按本 Spec 实施。该放行不覆盖：
+
+- 最终协调/主 agent 在待验收 commit 上对四模块完整矩阵的独立重跑与目视签字；
+- macOS 前台真实批处理操作中的主观卡顿验收；
+- Windows onedir 的 offscreen/native 双平台冻结烟测。
+
+这些项目继续由后续 Gate 4.5/6 控制，不得用本附录替代。
