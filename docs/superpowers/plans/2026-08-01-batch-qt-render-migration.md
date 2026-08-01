@@ -211,7 +211,10 @@ T4.2）；T2.5 所有 case 机器断言和目视检查均 PASS；
     中心坐标误当 coverage 边界三类错误。
   - dB 转换调用点断言：仍走 `SpectrogramAnalyzer.amplitude_to_db`。
 - [ ] **T3.2 数值不变量 review（signal-processing-expert，只 review）**
-  - 核对导出矩阵与 mpl 版逐元素一致（同 payload 双渲染对比数值，不比像素）。
+  - 核对 producer 的线性 payload 与转向后的 linear display matrix 逐元素不变（同
+    payload 双路径比数值，不比像素）。dB display matrix 则必须逐元素等于
+    `SpectrogramAnalyzer.amplitude_to_db`/真实单文件路径；不得继承旧 mpl renderer
+    私有的 peak-200 数据截断，视觉下限只由 levels 控制，并把该差异记录为迁移纠偏。
 - [ ] **T3.3 heatmap 离屏单文件 parity**
   - 扩展 T2.5 工具，生成 fft_time/order_time 的 linear/dB、auto/manual levels、
     非对称矩阵 batch/reference/crop/contact sheet。

@@ -224,14 +224,18 @@ writer-time 失败必须整组回滚。现有 `_write_image` 的内层 staging �
 
 **`fft_time` / `order_time`（x/y/matrix 对象或 DataFrame pivot）**
 
-- `pg.ImageItem(axisOrder="row-major")`；用
-  `QRectF(x0, y0, x1-x0, y1-y0)` 设置 coverage extent。色图**固定 turbo**（复用
-  `heatmap_canvas._resolve_colormap`，LUT 已有 `tests/ui/test_colormap_parity.py`
-  黄金锁定）；非法 cmap → turbo + warning 语义保留。
+- `pg.ImageItem(axisOrder="row-major")`；X/time 使用 analyzer 的 coverage 起止边界
+  （缺失时才按中心点回退），Y/frequency/order 保持真实单文件画布的首尾坐标，最终用
+  `QRectF(x0, y_first, x1-x0, y_last-y_first)` 设置 extent。默认色图与非法 cmap
+  fallback **固定为 turbo**；合法 cmap 继续按现有单文件/批处理语义生效，统一复用
+  `heatmap_canvas._resolve_colormap`。turbo LUT 已有
+  `tests/ui/test_colormap_parity.py` 黄金锁定；非法 cmap → turbo + warning 语义保留。
 - 手动 Z：`z_auto=False` 时 `setLevels((z_floor, z_ceiling))`。
 - colorbar：`pg.ColorBarItem`（只读、不可交互），标签沿用现有
   `colorbar_label`（dB/Amplitude）逻辑，dB 转换仍调
-  `SpectrogramAnalyzer.amplitude_to_db`，导出数据不因显示模式改变。
+  `SpectrogramAnalyzer.amplitude_to_db`，导出数据不因显示模式改变。Qt 的 dB
+  display matrix 必须与该 helper/真实单文件路径逐元素一致；旧 mpl renderer 私有的
+  peak-200 数据截断不是 parity 目标，视觉下限只通过 color levels 表达。
 
 **报告页合成（`_page`，所有 kind 共用）**
 
