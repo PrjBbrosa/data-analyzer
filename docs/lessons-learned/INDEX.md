@@ -119,6 +119,7 @@ lesson by default.
 | [Batch Render Degradation Stops At The Probe](batch-render-degradation-stops-at-probe.md) | Changing batch image/PDF backend imports, effective output selection, | See lesson |
 | [Windows Popup Pixel Probes Need Topmost Host And Frame Geometry](pyqt-ui/2026-07-31-windows-popup-pixel-probes-need-topmost-host-and-frame-geometry.md) | Verifying a translucent, rounded Qt popup or tooltip on a real Windows desktop with `QScreen.grabWindow(0)`. | See lesson |
 | [Close Batch Spool Mmaps Before Cleanup](batch-spool-mmap-close-before-cleanup.md) | Changing batch series spooling, memory-mapped array loading, grouped | See lesson |
+| [Manifest Resume Requires Complete Source Facts](manifest-resume-requires-complete-source-facts.md) | Changing manifest validation, resume lookup, source provenance facts, | See lesson |
 
 ## Selection Rules
 
