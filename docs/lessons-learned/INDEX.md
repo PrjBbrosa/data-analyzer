@@ -121,6 +121,7 @@ lesson by default.
 | [Close Batch Spool Mmaps Before Cleanup](batch-spool-mmap-close-before-cleanup.md) | Changing batch series spooling, memory-mapped array loading, grouped | See lesson |
 | [Manifest Resume Requires Complete Source Facts](manifest-resume-requires-complete-source-facts.md) | Changing manifest validation, resume lookup, source provenance facts, | See lesson |
 | [Register Lazy Locators Before Group Identity](batch-register-lazy-locators-before-group-identity.md) | Changing lazy batch `source_paths`, locator registration, task/group | See lesson |
+| [Acceptance Evidence Must Prove Physical Artifacts](acceptance-evidence-rejects-artifact-aliases.md) | An acceptance harness claims exact artifact counts, grouping semantics, | See lesson |
 
 ## Selection Rules
 
