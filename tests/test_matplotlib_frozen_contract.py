@@ -52,7 +52,7 @@ def test_pyinstaller_contract_reports_headless_backend_and_precise_exclusions():
     assert "mpl_toolkits" not in excluded
 
 
-def test_prune_keeps_only_four_dejavu_ttf_and_preserves_pdf_font_data(tmp_path):
+def test_prune_keeps_runtime_fallback_ttf_and_preserves_pdf_font_data(tmp_path):
     internal = tmp_path / "_internal"
     mpl_data = internal / "matplotlib" / "mpl-data"
     ttf = mpl_data / "fonts" / "ttf"
@@ -68,6 +68,7 @@ def test_prune_keeps_only_four_dejavu_ttf_and_preserves_pdf_font_data(tmp_path):
         "DejaVuSans-Bold.ttf": b"bb",
         "DejaVuSans-Oblique.ttf": b"ccc",
         "DejaVuSans-BoldOblique.ttf": b"dddd",
+        "LastResortHE-Regular.ttf": b"eeeee",
     }
     for name, content in {
         **keep,
@@ -90,13 +91,15 @@ def test_prune_keeps_only_four_dejavu_ttf_and_preserves_pdf_font_data(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     assert {path.name for path in ttf.iterdir()} == set(keep)
+    assert not (ttf / "DejaVuSansMono.ttf").exists()
+    assert not (ttf / "STIXGeneral.ttf").exists()
     assert not sample_data.exists()
     assert (afm / "keep.afm").read_bytes() == b"afm"
     assert (pdfcorefonts / "keep.afm").read_bytes() == b"pdfcore"
     assert (internal / "unrelated.bin").read_bytes() == b"unchanged"
     record = json.loads(evidence.read_text(encoding="utf-8"))
-    assert record["before"] == {"bytes": 55, "files": 10}
-    assert record["after"] == {"bytes": 29, "files": 7}
+    assert record["before"] == {"bytes": 60, "files": 11}
+    assert record["after"] == {"bytes": 34, "files": 8}
     assert record["removed"] == {"bytes": 26, "files": 3}
     assert record["kept_ttf"] == sorted(keep)
     assert record["sample_data_removed"] is True

@@ -13,6 +13,7 @@ KEPT_TTF_FILES = frozenset(
         "DejaVuSans-Bold.ttf",
         "DejaVuSans-Oblique.ttf",
         "DejaVuSans-BoldOblique.ttf",
+        "LastResortHE-Regular.ttf",
     }
 )
 
