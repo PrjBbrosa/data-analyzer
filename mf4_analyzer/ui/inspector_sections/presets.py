@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ...ui_kit.menus import apply_rounded_menu_chrome
+from ..analysis_preset_slots import notify_slot_changed
 from .. import hints
 from ._helpers import (
     BUILTIN_PRESET_BLURB,
@@ -468,9 +469,11 @@ class PresetBar(QWidget):
     def _write(self, slot, name, params):
         payload = {"name": name, "params": params}
         _preset_settings().setValue(self._key(slot), json.dumps(payload))
+        notify_slot_changed(self._kind, slot)
 
     def _delete(self, slot):
         _preset_settings().remove(self._key(slot))
+        notify_slot_changed(self._kind, slot)
 
     def _builtin_params(self, slot):
         if not self._builtins or slot not in self._builtins:

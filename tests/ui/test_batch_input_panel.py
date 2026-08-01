@@ -382,13 +382,13 @@ def test_invalid_time_range_text_blocks_run_with_field_error(
     )
     sheet._input_panel._signal_picker.set_selected(("sig",))
     sheet._output_panel.apply_directory(str(tmp_path / "out"))
-    sheet._input_panel._time_edit.setText(text)
+    sheet._analysis_panel._source_interval_mode.setCurrentIndex(1)
+    sheet._analysis_panel._source_interval_edit.setText(text)
 
     assert sheet.time_range() is None
     assert sheet.is_runnable() is False
-    assert "时间范围" in sheet._input_panel.time_range_error()
-    assert message_part in sheet._input_panel.time_range_error()
-    assert sheet._input_panel._time_edit.toolTip() == sheet._input_panel.time_range_error()
+    assert "源数据区间" in sheet._time_range_error()
+    assert message_part in sheet._time_range_error()
 
 
 def test_empty_time_range_remains_valid_full_segment(qtbot, tmp_path):
@@ -401,9 +401,9 @@ def test_empty_time_range_remains_valid_full_segment(qtbot, tmp_path):
     )
     sheet._input_panel._signal_picker.set_selected(("sig",))
     sheet._output_panel.apply_directory(str(tmp_path / "out"))
-    sheet._input_panel._time_edit.setText("")
+    assert sheet._analysis_panel._source_interval_mode.currentData() == "all"
 
-    assert sheet._input_panel.time_range_error() == ""
+    assert sheet._time_range_error() == ""
     assert sheet.is_runnable() is True
 
 
@@ -438,7 +438,8 @@ def test_order_channel_mode_requires_rpm_selection_before_run(qtbot, tmp_path):
 
     assert sheet.is_runnable() is False
     assert any(issue.field == "rpm_channel" for issue in sheet.preflight_issues())
-    assert "rpm_channel" in sheet.strip.cards[1].summary_label.text()
+    assert sheet.strip.cards[1].summary_label.text() == "阶次 · RPM 通道未配置"
+    assert sheet._footer_task_summary.text() == "请选择 RPM 通道"
 
     sheet._input_panel.apply_rpm_channel("rpm")
 
@@ -773,10 +774,12 @@ def test_batch_order_time_defaults_do_not_clobber_manual_z_range(qtbot):
 
     sheet = BatchSheet(parent=None, files={}, current_preset=None)
     qtbot.addWidget(sheet)
+    sheet.apply_method("order_time")
     sheet._output_panel.chk_z_auto.setChecked(False)
     sheet._output_panel.spin_z_floor.setValue(-40.0)
     sheet._output_panel.spin_z_ceiling.setValue(-5.0)
 
+    sheet.apply_method("fft_time")
     sheet.apply_method("order_time")
 
     assert sheet._output_panel.chk_z_auto.isChecked() is False
@@ -893,8 +896,7 @@ def test_batch_filter_row_uses_panel_style_switch(qtbot):
     qtbot.addWidget(panel)
 
     label = panel._form_ref.labelForField(panel._filter_panel)
-    assert label is not None
-    assert label.text() == "滤波"
+    assert label is None
 
     enabled_checks = [
         chk for chk in panel._filter_panel.findChildren(QCheckBox)
@@ -910,10 +912,14 @@ def test_batch_filter_row_uses_panel_style_switch(qtbot):
     switch_top = panel._filter_panel._enable_switch.mapTo(
         panel._filter_panel, panel._filter_panel._enable_switch.rect().topLeft()
     ).y()
-    settings_top = panel._filter_panel._settings.mapTo(
-        panel._filter_panel, panel._filter_panel._settings.rect().topLeft()
+    summary_top = panel._filter_panel._summary_row.mapTo(
+        panel._filter_panel, panel._filter_panel._summary_row.rect().topLeft()
     ).y()
-    assert abs(settings_top - switch_top) <= 4
+    assert abs(summary_top - switch_top) <= 8
+    assert panel._filter_panel._settings.isHidden() is True
+
+    panel._filter_panel._enable_switch.setChecked(True)
+    assert panel._filter_panel._settings.isVisibleTo(panel) is True
 
 
 def test_batch_filter_time_output_toggles_only_visible_for_time(qtbot):
@@ -926,4 +932,7 @@ def test_batch_filter_time_output_toggles_only_visible_for_time(qtbot):
     assert panel._filter_panel.time_output_options_visible() is False
 
     panel.set_method("time")
+    assert panel._filter_panel.time_output_options_visible() is False
+
+    panel._filter_panel._enable_switch.setChecked(True)
     assert panel._filter_panel.time_output_options_visible() is True

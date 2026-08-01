@@ -34,6 +34,7 @@ def test_batch_output_panel_axis_settings_uses_inspector_layout(qtbot):
     assert z_parts["stack"].currentWidget() is z_parts["summary_page"]
     assert z_parts["summary"].text() == "自动色阶"
 
+    panel.apply_method_defaults("fft_time")
     panel.chk_z_auto.setChecked(False)
 
     assert z_parts["stack"].currentWidget() is z_parts["manual_page"]
@@ -48,17 +49,20 @@ def test_batch_output_panel_axis_settings_uses_inspector_layout(qtbot):
     assert unit_top > range_top
 
 
-def test_batch_output_panel_axis_settings_has_no_native_gray_frame(qtbot):
+def test_batch_output_panel_axis_settings_uses_compact_bordered_card(qtbot):
     panel = _make_panel(qtbot)
 
     group = next(
         gb for gb in panel.findChildren(QGroupBox)
-        if gb.title() == "坐标轴设置"
+        if gb.property("batchAxisCard") is True
     )
 
     style = group.styleSheet()
-    assert "border: none" in style
+    assert "border: 1px solid #c8d4e3" in style
+    assert "border: none" not in style
     assert "background-color: #ffffff" in style
+    assert group.title() == "坐标范围"
+    assert group.property("batchAxisCard") is True
     assert panel.testAttribute(Qt.WA_StyledBackground) is True
     assert "QWidget#BatchOutputPanel" in panel.styleSheet()
     assert "background-color: #ffffff" in panel.styleSheet()
@@ -89,6 +93,29 @@ def test_batch_output_panel_time_axis_labels(qtbot):
     assert y_parts["label"].text() == "幅值 (Y):"
     assert y_parts["summary"].text() == "自动范围"
     assert panel._z_axis_row.isHidden() is True
+
+
+def test_axis_ranges_are_cached_per_method_without_cross_unit_bleed(qtbot):
+    panel = _make_panel(qtbot)
+
+    panel.chk_x_auto.setChecked(False)
+    panel.spin_x_min.setValue(5.0)
+    panel.spin_x_max.setValue(800.0)
+
+    panel.apply_method_defaults("time")
+    assert panel.chk_x_auto.isChecked() is True
+    panel.chk_x_auto.setChecked(False)
+    panel.spin_x_min.setValue(1.0)
+    panel.spin_x_max.setValue(2.0)
+
+    panel.apply_method_defaults("fft")
+    assert panel.chk_x_auto.isChecked() is False
+    assert panel.spin_x_min.value() == 5.0
+    assert panel.spin_x_max.value() == 800.0
+
+    panel.apply_method_defaults("time")
+    assert panel.spin_x_min.value() == 1.0
+    assert panel.spin_x_max.value() == 2.0
 
 
 def test_batch_output_x_axis_context_is_presentation_only(qtbot):
@@ -338,7 +365,7 @@ def test_batch_output_exact_preview_excludes_missing_pair_targets(qtbot):
     assert panel.effective_preview_text().startswith("1 个目标：")
 
 
-def test_batch_output_full_schema_round_trip_has_one_authoritative_accessor(qtbot):
+def test_batch_output_import_migrates_to_the_fixed_interactive_contract(qtbot):
     from mf4_analyzer.batch import BatchOutput
 
     panel = _make_panel(qtbot)
@@ -360,31 +387,35 @@ def test_batch_output_full_schema_round_trip_has_one_authoritative_accessor(qtbo
 
     panel.apply_outputs(outputs)
 
-    assert panel.get_outputs() == outputs
+    compact = panel.get_outputs()
+    assert compact.export_data is False
+    assert compact.export_image is True
+    assert compact.data_format == "xlsx"
+    assert compact.image_format == "png"
+    assert (compact.image_width, compact.image_height) == (1920, 1080)
+    assert compact.conflict_policy == "auto_number"
+    assert compact.write_manifest is True
+    assert compact.resume_policy == "none"
     assert panel.export_data() is outputs.export_data
     assert panel.export_image() is outputs.export_image
-    assert panel.data_format() == outputs.data_format
+    assert panel.data_format() == "xlsx"
 
 
-def test_batch_output_settings_are_compact_and_collapsed_by_default(qtbot):
+def test_batch_output_hides_advanced_and_recovery_controls(qtbot):
     panel = _make_panel(qtbot)
 
     assert panel._output_settings.isHidden()
-    assert panel._btn_output_settings.isCheckable()
-    assert not panel._btn_output_settings.icon().isNull()
-    assert panel._export_row_layout.indexOf(panel._btn_output_settings) > (
-        panel._export_row_layout.indexOf(panel._chk_image)
-    )
-    assert "白底" in panel._output_summary.text()
-    assert "1.5 px" in panel._output_summary.text()
+    assert not panel._btn_output_settings.isVisible()
+    assert not panel._btn_resume.isVisible()
+    assert not panel._btn_retry_failed.isVisible()
+    assert "PNG 1920×1080" in panel._output_summary.text()
+    assert "冲突自动编号" in panel._output_summary.text()
 
-    panel._btn_output_settings.click()
-    assert not panel._output_settings.isHidden()
     panel._btn_output_settings.click()
     assert panel._output_settings.isHidden()
 
 
-def test_batch_output_summary_tracks_image_background_and_line_width(qtbot):
+def test_batch_output_summary_stays_fixed_after_legacy_import(qtbot):
     from mf4_analyzer.batch import BatchOutput
 
     panel = _make_panel(qtbot)
@@ -398,62 +429,32 @@ def test_batch_output_summary_tracks_image_background_and_line_width(qtbot):
 
     summary = panel._output_summary.text()
     assert "XLSX" in summary
-    assert "PNG" in summary
-    assert "2560×1440" in summary
-    assert "深色" in summary
-    assert "2.0 px" in summary
+    assert "PNG 1920×1080" in summary
+    assert "SVG" not in summary
+    assert "2560×1440" not in summary
 
 
-def test_batch_output_round_trips_valid_custom_line_width(qtbot):
+def test_batch_output_uses_the_canonical_line_width(qtbot):
     from mf4_analyzer.batch import BatchOutput
 
     panel = _make_panel(qtbot)
     panel.apply_outputs(BatchOutput(image_line_width=3.25))
 
-    assert panel.get_outputs().image_line_width == pytest.approx(3.25)
-    assert "3.2 px" in panel._output_summary.text()
+    assert panel.get_outputs().image_line_width == pytest.approx(1.0)
+    assert panel._combo_image_line_width.isHidden()
 
 
-def test_batch_output_image_controls_link_without_losing_custom_values(qtbot):
+def test_batch_output_checkboxes_only_choose_fixed_artifacts(qtbot):
     from mf4_analyzer.batch import BatchOutput
 
     panel = _make_panel(qtbot)
-    panel.apply_outputs(BatchOutput(
-        image_format="png", image_size="custom",
-        image_width=3333, image_height=1777, image_dpi=240,
-    ))
-
-    assert panel._spin_image_width.isEnabled()
-    assert panel._spin_image_height.isEnabled()
-    assert panel._spin_image_dpi.isEnabled()
-
-    panel._combo_image_size.setCurrentIndex(
-        panel._combo_image_size.findData("3840x2160")
-    )
-    assert not panel._spin_image_width.isEnabled()
-    assert not panel._spin_image_height.isEnabled()
-    assert panel.get_outputs().image_width == 3333
-    assert panel.get_outputs().image_height == 1777
-
-    assert panel._combo_image_format.count() == 1
-    assert panel._combo_image_format.itemData(0) == "png"
-    assert panel._spin_image_dpi.isEnabled()
-    assert panel.get_outputs().image_dpi == 240
-
     panel._chk_image.setChecked(False)
-    assert not panel._combo_image_format.isEnabled()
-    assert not panel._combo_image_size.isEnabled()
-
-    panel._chk_image.setChecked(True)
-    panel._combo_image_format.setCurrentIndex(
-        panel._combo_image_format.findData("png")
-    )
-    panel._combo_image_size.setCurrentIndex(
-        panel._combo_image_size.findData("custom")
-    )
-    assert panel._spin_image_width.value() == 3333
-    assert panel._spin_image_height.value() == 1777
-    assert panel._spin_image_dpi.value() == 240
+    outputs = panel.get_outputs()
+    assert outputs.export_image is False
+    assert outputs.export_data is True
+    assert (outputs.image_width, outputs.image_height) == (1920, 1080)
+    assert panel._combo_image_format.isHidden()
+    assert panel._combo_image_size.isHidden()
 
 
 def test_batch_output_operations_emit_only_on_explicit_button_click(qtbot):
@@ -483,12 +484,11 @@ def test_batch_output_panel_fits_288px_column(qtbot):
     assert panel.width() <= 288
 
 
-def test_batch_output_expanded_settings_fit_288px_column(qtbot):
+def test_batch_output_fixed_contract_fits_288px_column(qtbot):
     panel = _make_panel(qtbot)
-    panel._btn_output_settings.click()
     panel.resize(288, 1200)
     panel.show()
     qtbot.wait(20)
 
     assert panel.minimumSizeHint().width() <= 288
-    assert panel._output_settings.width() <= panel.width()
+    assert panel._output_summary.width() <= panel.width()

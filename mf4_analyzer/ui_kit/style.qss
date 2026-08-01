@@ -311,6 +311,190 @@ QLabel#BatchAnalysisChoiceLabel {
     font-size: 11px;
     font-weight: 600;
 }
+QWidget#BatchParamCell { background-color: transparent; }
+QLabel#BatchParamLabel {
+    color: #556378;
+    font-size: 10px;
+    font-weight: 600;
+    background-color: transparent;
+}
+QPushButton#BatchAnalysisPresetCard {
+    min-height: 61px;
+    padding: 5px 7px;
+    border: 1px solid #d7e2f0;
+    border-radius: 8px;
+    background-color: #ffffff;
+    color: #334155;
+    font-size: 11px;
+    font-weight: 600;
+}
+QPushButton#BatchAnalysisPresetCard:hover {
+    border-color: #9fc1ee;
+    background-color: #f8fbff;
+}
+QPushButton#BatchAnalysisPresetCard:checked {
+    border-color: #1769e0;
+    background-color: #eaf2ff;
+    color: #0f4fa8;
+}
+QPushButton#BatchAnalysisPresetCard:disabled {
+    color: #a0aec0;
+    background-color: #f7f9fc;
+}
+QLabel#BatchPresetSyncBadge {
+    padding: 3px 7px;
+    border-radius: 9px;
+    color: #087f5b;
+    background-color: #e9fbf3;
+    font-size: 10px;
+    font-weight: 700;
+}
+QLabel#BatchPresetSourceNote,
+QLabel#BatchPresetState {
+    color: #64748b;
+    font-size: 10px;
+}
+QLabel#BatchPresetState[modified="true"] { color: #b45309; }
+QPushButton#BatchGroupingCard {
+    min-height: 132px;
+    padding: 0;
+    border: 1px solid #d7e2f0;
+    border-radius: 9px;
+    background-color: #ffffff;
+    color: #334155;
+    font-size: 10px;
+    font-weight: 700;
+    text-align: left;
+}
+QPushButton#BatchGroupingCard:hover {
+    border-color: #9fc1ee;
+    background-color: #f8fbff;
+}
+QPushButton#BatchGroupingCard:checked {
+    border: 2px solid #1769e0;
+    background-color: #eef5ff;
+    color: #0f4fa8;
+}
+QFrame#BatchFileSummary {
+    border: 1px solid #d7e2f0;
+    border-radius: 9px;
+    background-color: #ffffff;
+}
+QLabel#BatchSectionTitle { color: #26344a; font-size: 12px; font-weight: 700; }
+QLabel#BatchSectionNote { color: #94a3b8; font-size: 10px; }
+QLabel#BatchFileSummaryIcon {
+    color: #1769e0;
+    border: 1px solid #aac4ea;
+    border-radius: 5px;
+    background-color: #eaf2ff;
+    font-size: 9px;
+    font-weight: 800;
+}
+QLabel#BatchFileSummaryText { color: #334155; font-size: 10px; font-weight: 600; }
+QLabel#BatchFileReadyPill {
+    padding: 3px 7px;
+    border-radius: 9px;
+    color: #5e6e83;
+    background-color: #eef2f7;
+    font-size: 9px;
+    font-weight: 700;
+}
+QLabel#BatchFileReadyPill[status="ready"] {
+    color: #087453;
+    background-color: #e9f8f2;
+}
+QLabel#BatchFileReadyPill[status="error"] {
+    color: #b42335;
+    background-color: #fff0f2;
+}
+QPushButton#BatchManageFilesButton { min-height: 24px; padding: 3px 8px; }
+QDialog#BatchFileManagerDialog {
+    border: 1px solid #d7e2f0;
+    border-radius: 10px;
+    background-color: #ffffff;
+}
+QWidget#BatchFileManagerHeader {
+    border-bottom: 1px solid #dbe4ef;
+    background-color: #ffffff;
+}
+QLabel#BatchFileManagerTitle { color: #172033; font-size: 13px; font-weight: 700; }
+QLabel#BatchFileManagerFacts { color: #64748b; font-size: 10px; }
+QPushButton#BatchFileManagerClose,
+QPushButton#BatchFileRowRemove {
+    border: none;
+    border-radius: 6px;
+    color: #64748b;
+    background-color: #f2f5f9;
+    padding: 0;
+}
+QPushButton#BatchFileRowRemove { background-color: transparent; }
+QPushButton#BatchFileManagerClose:hover,
+QPushButton#BatchFileRowRemove:hover {
+    color: #dc3f52;
+    background-color: #fff0f2;
+}
+QListWidget#BatchFileList {
+    border: 1px solid #dbe4ef;
+    border-radius: 8px;
+    background-color: #ffffff;
+    outline: none;
+    padding: 4px;
+}
+QWidget#BatchStructuredFileRow {
+    border-bottom: 1px solid #edf1f6;
+    background-color: #ffffff;
+}
+QLabel#BatchFileStateDot { border-radius: 4px; background-color: #f0a100; }
+QLabel#BatchFileStateDot[ready="true"] { background-color: #0ea875; }
+QLabel#BatchFileStateDot[failed="true"] { background-color: #dc3f52; }
+QLabel#BatchFileRowName { color: #26344a; font-size: 10px; font-weight: 700; }
+QLabel#BatchFileRowPath { color: #64748b; font-size: 8px; }
+QLabel#BatchFileRowState { color: #9a6800; font-size: 9px; }
+QLabel#BatchFileRowState[ready="true"] { color: #087453; }
+QLabel#BatchFileRowState[failed="true"] { color: #b42335; }
+QWidget#BatchFilterSummary {
+    border: 1px solid #dbe4ef;
+    border-radius: 8px;
+    background-color: #fafbfd;
+}
+QLabel#BatchFilterSummaryTitle {
+    color: #26344a;
+    font-size: 11px;
+    font-weight: 700;
+}
+QLabel#BatchFilterSummaryNote { color: #64748b; font-size: 10px; }
+QWidget#BatchCompactFooter {
+    border-top: 1px solid #e2e8f0;
+    background-color: #fbfcfe;
+}
+QWidget#BatchCompactToolbar {
+    border-bottom: 1px solid #e8edf4;
+    background-color: #fbfcfe;
+}
+QLabel#BatchToolbarTitle { color: #4b596c; font-size: 13px; font-weight: 700; }
+QLabel#BatchToolbarMeta { color: #94a3b8; font-size: 11px; }
+QLabel#BatchFooterStateDot {
+    border-radius: 4px;
+    background-color: #0ea875;
+}
+QLabel#BatchFooterStateDot[state="blocked"] { background-color: #ef8c00; }
+QLabel#BatchFooterStateDot[state="running"] { background-color: #1769e0; }
+QLabel#BatchFooterStateDot[state="cancelling"] { background-color: #dc3f52; }
+QLabel#BatchFooterStateDot[state="partial"] { background-color: #ef8c00; }
+QLabel#BatchFooterStateDot[state="cancelled"] { background-color: #64748b; }
+QLabel#BatchFooterStatus { color: #334155; font-size: 11px; font-weight: 700; }
+QLabel#BatchFooterTaskSummary { color: #64748b; font-size: 11px; }
+QProgressBar#BatchFooterProgress {
+    min-height: 7px;
+    max-height: 7px;
+    border: none;
+    border-radius: 3px;
+    background-color: #e7edf5;
+}
+QProgressBar#BatchFooterProgress::chunk {
+    border-radius: 3px;
+    background-color: #1769e0;
+}
 QRadioButton#BatchAnalysisPresetOption {
     min-height: 26px;
     spacing: 5px;

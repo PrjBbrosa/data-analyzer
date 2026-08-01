@@ -86,15 +86,44 @@ class OutputPanel(QWidget):
 QWidget#BatchOutputPanel {
     background-color: #ffffff;
 }
+QLabel#BatchSectionTitle {
+    color: #26344a;
+    font-size: 12px;
+    font-weight: 700;
+}
+QLabel#BatchSectionNote {
+    color: #94a3b8;
+    font-size: 10px;
+}
+QWidget#BatchExportCard {
+    background-color: #ffffff;
+    border: 1px solid #c8d4e3;
+    border-radius: 9px;
+}
+QWidget#BatchExportCard QLabel#batchOutputSettingsSummary {
+    border-top: 1px solid #edf1f6;
+    padding-top: 5px;
+}
 """)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(10)
+        self._outer_layout = outer
+        outer.setContentsMargins(12, 14, 12, 18)
+        outer.setSpacing(12)
 
-        title = QLabel("OUTPUT")
-        title.setStyleSheet("color:#f59e0b;font-weight:600;font-size:13px;")
-        outer.addWidget(title)
+        section_head = QWidget(self)
+        section_head.setObjectName("BatchOutputSectionHead")
+        section_head_lay = QHBoxLayout(section_head)
+        section_head_lay.setContentsMargins(0, 0, 0, 0)
+        section_head_lay.setSpacing(6)
+        title = QLabel("导出", section_head)
+        title.setObjectName("BatchSectionTitle")
+        section_head_lay.addWidget(title)
+        section_head_lay.addStretch(1)
+        note = QLabel("仅保留可操作信息", section_head)
+        note.setObjectName("BatchSectionNote")
+        section_head_lay.addWidget(note)
+        outer.addWidget(section_head)
 
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
@@ -124,7 +153,7 @@ QWidget#BatchOutputPanel {
             qta.icon("mdi.tune-vertical", color="#1769e0")
         )
         self._btn_output_settings.setIconSize(QSize(15, 15))
-        self._btn_output_settings.setToolTip("展开输出设置")
+        self._btn_output_settings.setToolTip("固定导出规则")
         self._btn_output_settings.setStyleSheet("""
 QPushButton#batchOutputSettingsButton {
     border: 1px solid transparent;
@@ -142,10 +171,12 @@ QPushButton#batchOutputSettingsButton:checked {
 """)
 
         export_host = QWidget(self)
+        export_host.setObjectName("BatchExportCard")
+        export_host.setAttribute(Qt.WA_StyledBackground, True)
         export_host.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         export_lay = QVBoxLayout(export_host)
-        export_lay.setContentsMargins(0, 0, 0, 0)
-        export_lay.setSpacing(3)
+        export_lay.setContentsMargins(9, 8, 9, 8)
+        export_lay.setSpacing(5)
         self._export_row_layout = QHBoxLayout()
         self._export_row_layout.setContentsMargins(0, 0, 0, 0)
         self._export_row_layout.setSpacing(8)
@@ -194,6 +225,7 @@ QPushButton#batchOutputSettingsButton:checked {
         # Format
         self._combo_format = QComboBox(self)
         self._combo_format.addItems(["csv", "xlsx"])
+        self._combo_format.setCurrentText("xlsx")
         self._compact_field(self._combo_format)
         settings_form.addRow("数据格式", self._combo_format)
 
@@ -329,6 +361,8 @@ QPushButton#batchOutputSettingsButton:checked {
             z_auto_summary="自动色阶",
             pre_header_rows=(("dB 参考:", self.db_reference_control),),
         )
+        self._axis_group = axis_group
+        self._db_reference_row = self.db_reference_control.parentWidget()
         # Batch line plots may legitimately use negative engineering values
         # and dB amplitudes.  The shared helper's non-negative Y range is for
         # frequency/order axes, not a universal batch-output constraint.
@@ -348,6 +382,27 @@ QPushButton#batchOutputSettingsButton:checked {
         )
         outer.addWidget(self._effective_preview)
         outer.addStretch(1)
+
+        # The compact workflow has one fixed export contract.  Keep the
+        # legacy widgets alive only as compatibility holders for old preset
+        # readers; they are not an alternate visible configuration surface.
+        self._btn_output_settings.hide()
+        self._output_settings.hide()
+        self._operation_status.hide()
+        self._output_preview.hide()
+        self._btn_resume.hide()
+        self._btn_retry_failed.hide()
+        for widget in (
+            self._combo_format, self._combo_image_format,
+            self._combo_image_size, self._spin_image_width,
+            self._spin_image_height, self._combo_image_background,
+            self._combo_image_line_width, self._spin_image_dpi,
+            self._combo_conflict, self._chk_manifest,
+            self._combo_resume_policy,
+        ):
+            widget.hide()
+        self._method = "fft"
+        self._axis_state_by_method: dict[str, dict] = {}
 
         # Wiring
         self._dir_edit.textChanged.connect(lambda *_: self.changed.emit())
@@ -419,65 +474,34 @@ QPushButton#batchOutputSettingsButton:checked {
         widget.setMinimumWidth(0)
         widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
+    def set_compact_mode(self, compact: bool) -> None:
+        side = 12 if compact else 18
+        self._outer_layout.setContentsMargins(side, 14, side, 18)
+
     def _on_image_option_changed(self, _value=None) -> None:
         self._sync_output_controls()
         self._refresh_output_summary()
         self.changed.emit()
 
     def _on_output_settings_toggled(self, expanded: bool) -> None:
-        self._output_settings.setVisible(bool(expanded))
-        self._btn_output_settings.setToolTip(
-            "收起输出设置" if expanded else "展开输出设置"
-        )
-        self.updateGeometry()
+        # Retained for callers from an older dialog; the compact UI never
+        # exposes the advanced panel.
+        self._output_settings.hide()
+        self._btn_output_settings.setChecked(False)
 
     def _refresh_output_summary(self) -> None:
         parts: list[str] = []
         if self._chk_data.isChecked():
-            parts.append(str(self._combo_format.currentText()).upper())
+            parts.append("XLSX")
         if self._chk_image.isChecked():
-            image_format = str(
-                self._combo_image_format.currentData() or "png"
-            ).upper()
-            size_key = str(
-                self._combo_image_size.currentData() or "1920x1080"
-            )
-            if size_key == "custom":
-                size = (
-                    f"{self._spin_image_width.value()}×"
-                    f"{self._spin_image_height.value()}"
-                )
-            else:
-                size = size_key.replace("x", "×")
-            background = {
-                "white": "白底",
-                "transparent": "透明",
-                "dark": "深色",
-            }.get(
-                str(self._combo_image_background.currentData() or "white"),
-                "白底",
-            )
-            line_width = float(
-                self._combo_image_line_width.currentData() or 1.5
-            )
-            parts.append(
-                f"{image_format} · {size} · {background} · "
-                f"{line_width:.1f} px"
-            )
-        self._output_summary.setText("  |  ".join(parts) or "未选择导出内容")
+            parts.append("PNG 1920×1080")
+        suffix = " · 冲突自动编号" if parts else ""
+        self._output_summary.setText(" · ".join(parts) + suffix or "未选择导出内容")
 
     def _sync_output_controls(self) -> None:
-        data_enabled = bool(self._chk_data.isChecked())
-        image_enabled = bool(self._chk_image.isChecked())
-        custom = str(self._combo_image_size.currentData() or "") == "custom"
-        self._combo_format.setEnabled(data_enabled)
-        self._combo_image_format.setEnabled(image_enabled)
-        self._combo_image_size.setEnabled(image_enabled)
-        self._combo_image_background.setEnabled(image_enabled)
-        self._combo_image_line_width.setEnabled(image_enabled)
-        self._spin_image_width.setEnabled(image_enabled and custom)
-        self._spin_image_height.setEnabled(image_enabled and custom)
-        self._spin_image_dpi.setEnabled(image_enabled)
+        # Values are fixed by the compact contract; the two checkboxes alone
+        # select whether each fixed artifact is requested.
+        return
 
     def _on_amp_unit_changed(self, text: str) -> None:
         """User toggled dB↔Linear on ``combo_amp_unit``.
@@ -510,31 +534,53 @@ QPushButton#batchOutputSettingsButton:checked {
         self.changed.emit()
 
     def apply_method_defaults(self, method: str) -> None:
-        """Apply method-specific output defaults without clobbering edits."""
-        self._apply_method_axis_context(method)
-        if not self._is_method_default_z_state():
+        """Switch axis semantics without leaking ranges between methods.
+
+        X=5..800 means something different in FFT (Hz) and time (seconds).
+        Each method therefore owns a small presentation-state snapshot.  A
+        first visit gets canonical auto ranges; returning to a method restores
+        only that method's prior edits.
+        """
+        target = str(method)
+        previous = str(getattr(self, "_method", "") or "")
+        if target == previous:
+            self._apply_method_axis_context(target)
             return
-        if method == _ORDER_TIME_METHOD:
-            z_auto = False
-            z_floor, z_ceiling = _ORDER_TIME_DB_Z_RANGE
-        else:
-            z_auto = True
-            z_floor, z_ceiling = _GENERIC_DB_Z_RANGE
-        for w in (self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling):
-            w.blockSignals(True)
+
+        if previous:
+            self._axis_state_by_method[previous] = self.axis_params()
+
+        self._apply_method_axis_context(target)
+        state = self._axis_state_by_method.get(target)
+        if state is None:
+            order_heatmap = target == _ORDER_TIME_METHOD
+            state = {
+                "x_auto": True, "x_min": 0.0, "x_max": 0.0,
+                "y_auto": True, "y_min": 0.0, "y_max": 0.0,
+                "z_auto": not order_heatmap,
+                "z_floor": (
+                    _ORDER_TIME_DB_Z_RANGE[0]
+                    if order_heatmap else _GENERIC_DB_Z_RANGE[0]
+                ),
+                "z_ceiling": (
+                    _ORDER_TIME_DB_Z_RANGE[1]
+                    if order_heatmap else _GENERIC_DB_Z_RANGE[1]
+                ),
+                "amplitude_mode": "amplitude_db",
+            }
+
+        blocker = QSignalBlocker(self)
         try:
-            self.chk_z_auto.setChecked(z_auto)
-            self.spin_z_floor.setValue(z_floor)
-            self.spin_z_ceiling.setValue(z_ceiling)
+            self.apply_axis_params(state)
         finally:
-            for w in (self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling):
-                w.blockSignals(False)
+            del blocker
         self._sync_axis_enabled()
-        self.changed.emit()
 
     def _apply_method_axis_context(self, method: str) -> None:
+        self._method = str(method)
         context = _AXIS_CONTEXTS.get(str(method), _AXIS_CONTEXTS["fft"])
-        self._set_z_axis_visible(str(method) != "time")
+        self._set_z_axis_visible(str(method) in {"fft_time", "order_time"})
+        self._set_db_reference_visible(str(method) != "time")
         for axis, suffix_key in (("x", "x_unit"), ("y", "y_unit")):
             suffix = context[suffix_key]
             text = f" {suffix}" if suffix else ""
@@ -562,6 +608,14 @@ QPushButton#batchOutputSettingsButton:checked {
         if row is not None:
             row.setVisible(bool(visible))
 
+    def _set_db_reference_visible(self, visible: bool) -> None:
+        row = getattr(self, "_db_reference_row", None)
+        if row is not None:
+            row.setVisible(bool(visible))
+        preview = getattr(self, "_effective_preview", None)
+        if preview is not None:
+            preview.setVisible(bool(visible))
+
     def _widen_axis_label_column(self, axis_group: QWidget) -> None:
         for parts in self._axis_row_parts.values():
             parts["label"].setMinimumWidth(_BATCH_AXIS_LABEL_W)
@@ -580,25 +634,25 @@ QPushButton#batchOutputSettingsButton:checked {
             header_layout.invalidate()
 
     def _flatten_axis_group_chrome(self, axis_group: QWidget) -> None:
+        axis_group.setTitle("坐标范围")
+        axis_group.setProperty("batchAxisCard", True)
         axis_group.setStyleSheet("""
 QGroupBox#axisSettingsGroup {
-    margin-top: 6px;
-    padding: 18px 0 8px 0;
-    border: none;
-    border-radius: 0;
+    margin-top: 14px;
+    padding: 17px 9px 9px 9px;
+    border: 1px solid #c8d4e3;
+    border-radius: 9px;
     background-color: #ffffff;
 }
 QGroupBox#axisSettingsGroup::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 0;
-    right: 0;
-    padding: 2px 0 6px 0;
-    color: #111827;
+    left: 10px;
+    padding: 2px 6px;
+    color: #26344a;
     font-size: 12px;
-    font-weight: 600;
-    background-color: transparent;
-    border-bottom: 1px solid #dfe5ee;
+    font-weight: 700;
+    background-color: #ffffff;
 }
 QGroupBox#axisSettingsGroup QWidget#axisRow,
 QGroupBox#axisSettingsGroup QWidget#axisRowLine,
@@ -609,7 +663,7 @@ QGroupBox#axisSettingsGroup QWidget#axisManualRangePage,
 QGroupBox#axisSettingsGroup QWidget#axisUnitLine,
 QGroupBox#axisSettingsGroup QWidget#axisHeaderRow,
 QGroupBox#axisSettingsGroup QWidget#axisHeaderRange {
-    border: none;
+    border: 0;
     background-color: transparent;
 }
 QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
@@ -617,6 +671,9 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
     font-size: 11px;
     font-weight: 500;
     background-color: transparent;
+}
+QGroupBox#axisSettingsGroup QWidget#axisRow {
+    border-bottom: 1px solid #edf1f6;
 }
 """)
 
@@ -669,25 +726,17 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
         return BatchOutput(
             export_data=bool(self._chk_data.isChecked()),
             export_image=bool(self._chk_image.isChecked()),
-            data_format=str(self._combo_format.currentText()),
-            image_format=str(self._combo_image_format.currentData() or "png"),
-            image_size=str(self._combo_image_size.currentData() or "1920x1080"),
-            image_width=int(self._spin_image_width.value()),
-            image_height=int(self._spin_image_height.value()),
-            image_dpi=int(self._spin_image_dpi.value()),
-            image_background=str(
-                self._combo_image_background.currentData() or "white"
-            ),
-            image_line_width=float(
-                self._combo_image_line_width.currentData() or 1.5
-            ),
-            conflict_policy=str(
-                self._combo_conflict.currentData() or "auto_number"
-            ),
-            write_manifest=bool(self._chk_manifest.isChecked()),
-            resume_policy=str(
-                self._combo_resume_policy.currentData() or "none"
-            ),
+            data_format="xlsx",
+            image_format="png",
+            image_size="1920x1080",
+            image_width=1920,
+            image_height=1080,
+            image_dpi=144,
+            image_background="white",
+            image_line_width=1.0,
+            conflict_policy="auto_number",
+            write_manifest=True,
+            resume_policy="none",
         )
 
     def export_data(self) -> bool:
@@ -700,10 +749,12 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
         return self.get_outputs().data_format
 
     def reference_params(self) -> dict:
+        if getattr(self, "_method", "fft") == "time":
+            return {}
         return db_reference_params(self.db_reference_control)
 
     def apply_reference_params(self, params: dict, *, legacy: bool = False) -> None:
-        if not params:
+        if not params or getattr(self, "_method", "fft") == "time":
             return
         if legacy:
             apply_db_reference_preset(self.db_reference_control, params)
@@ -767,6 +818,11 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
         target_pairs=(),
     ) -> None:
         """Resolve the recipe-owned reference from cached probe facts only."""
+        if getattr(self, "_method", "fft") == "time":
+            # Time-domain exports use their source engineering unit.  There is
+            # no dB reference to resolve (and the corresponding row is hidden).
+            self._set_effective_preview("时域使用工程单位")
+            return
         rows = tuple(rows or ())
         if any(
             getattr(row, "state", "") in {"path_pending", "probing"}
@@ -858,49 +914,11 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
     def apply_outputs(self, out: BatchOutput) -> None:
         if out is None:
             return
-        widgets = (
-            self._chk_data, self._chk_image, self._combo_format,
-            self._combo_image_format, self._combo_image_size,
-            self._spin_image_width, self._spin_image_height,
-            self._spin_image_dpi, self._combo_image_background,
-            self._combo_image_line_width, self._combo_conflict,
-            self._chk_manifest, self._combo_resume_policy,
-        )
+        widgets = (self._chk_data, self._chk_image)
         blockers = [QSignalBlocker(widget) for widget in widgets]
         try:
             self._chk_data.setChecked(bool(out.export_data))
             self._chk_image.setChecked(bool(out.export_image))
-            self._set_combo_text(self._combo_format, str(out.data_format))
-            self._set_combo_data(
-                self._combo_image_format, str(out.image_format).lower()
-            )
-            self._set_combo_data(
-                self._combo_image_size, str(out.image_size).lower()
-            )
-            self._spin_image_width.setValue(int(out.image_width))
-            self._spin_image_height.setValue(int(out.image_height))
-            self._spin_image_dpi.setValue(int(out.image_dpi))
-            self._set_combo_data(
-                self._combo_image_background,
-                str(getattr(out, "image_background", "white")).lower(),
-            )
-            image_line_width = float(
-                getattr(out, "image_line_width", 1.5)
-            )
-            if self._combo_image_line_width.findData(image_line_width) < 0:
-                self._combo_image_line_width.addItem(
-                    f"自定义 · {image_line_width:g} px", image_line_width,
-                )
-            self._set_combo_data(
-                self._combo_image_line_width, image_line_width,
-            )
-            self._set_combo_data(
-                self._combo_conflict, str(out.conflict_policy).lower()
-            )
-            self._chk_manifest.setChecked(bool(out.write_manifest))
-            self._set_combo_data(
-                self._combo_resume_policy, str(out.resume_policy).lower()
-            )
         finally:
             del blockers
         self._sync_output_controls()
@@ -919,7 +937,7 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
             combo.setCurrentIndex(index)
 
     def axis_params(self) -> dict:
-        return {
+        params = {
             "x_auto": bool(self.chk_x_auto.isChecked()),
             "x_min": float(self.spin_x_min.value()),
             "x_max": float(self.spin_x_max.value()),
@@ -935,6 +953,12 @@ QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
                 else "amplitude"
             ),
         }
+        if getattr(self, "_method", "fft") == "time":
+            params.pop("z_auto", None)
+            params.pop("z_floor", None)
+            params.pop("z_ceiling", None)
+            params.pop("amplitude_mode", None)
+        return params
 
     def apply_axis_params(self, params: dict) -> None:
         if not params:

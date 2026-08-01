@@ -144,6 +144,31 @@ def test_batch_sheet_pipeline_summary_uses_friendly_fft_time_label(qtbot):
     assert "fft_time" not in summary  # raw key must NOT leak through
 
 
+def test_batch_sheet_pipeline_summary_localizes_order_rpm_issue(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet.apply_method("order_time")
+
+    summary = sheet.strip.cards[1].summary_label.text()
+    assert summary == "阶次 · RPM 通道未配置"
+    assert "rpm_channel" not in summary
+
+
+def test_batch_sheet_pipeline_summary_localizes_missing_outputs(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet._output_panel._chk_data.setChecked(False)
+    sheet._output_panel._chk_image.setChecked(False)
+
+    summary = sheet.strip.cards[2].summary_label.text()
+    assert summary == "未选择导出内容"
+    assert "outputs" not in summary
+
+
 def test_batch_method_buttons_include_time_and_user_labels(qtbot):
     from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
 
@@ -164,7 +189,7 @@ def test_batch_time_method_exposes_exact_sparse_render_fields(qtbot):
     form.set_method("time")
 
     expected = {
-        "render_group_by", "render_layout", "x_source", "x_channel",
+        "render_grouping_cards", "render_layout", "x_source", "x_channel",
         "x_origin",
     }
     assert form._form.rowCount() == 5
@@ -493,7 +518,7 @@ def test_batch_time_hides_complete_preset_host_and_fft_restores_it(qtbot):
 
 
 def test_batch_method_and_preset_selectors_use_distinct_control_types(qtbot):
-    from PyQt5.QtWidgets import QPushButton, QRadioButton
+    from PyQt5.QtWidgets import QPushButton
 
     from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
 
@@ -507,10 +532,10 @@ def test_batch_method_and_preset_selectors_use_distinct_control_types(qtbot):
         for button in panel._method_group._buttons.values()
     )
     assert all(
-        isinstance(button, QRadioButton)
+        isinstance(button, QPushButton)
         for button in panel._preset_buttons.values()
     )
-    assert panel._preset_buttons["custom"].isChecked()
+    assert not any(button.isChecked() for button in panel._preset_buttons.values())
 
 
 def test_batch_window_options_match_canonical_analysis_factory(qtbot):

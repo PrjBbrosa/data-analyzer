@@ -1,0 +1,850 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231769e0'/%3E%3Cpath d='M3 10c2-5 3 3 5-2s3 1 5-2' fill='none' stroke='white' stroke-width='1.4'/%3E%3C/svg%3E">
+<title>TraceLab — 批处理紧凑工作流</title>
+<style>
+  :root {
+    --ink: #172033;
+    --ink-2: #334155;
+    --muted: #64748b;
+    --quiet: #94a3b8;
+    --line: #dbe4ef;
+    --line-strong: #c8d4e3;
+    --surface: #ffffff;
+    --surface-2: #f7f9fc;
+    --blue: #1769e0;
+    --blue-2: #0f56bd;
+    --blue-soft: #eaf2ff;
+    --green: #0ea875;
+    --green-soft: #e9f8f2;
+    --amber: #ef8c00;
+    --amber-soft: #fff5df;
+    --danger: #dc3f52;
+    --control-h: 36px;
+    --radius: 9px;
+    --data-font: "SF Mono", "Menlo", "Cascadia Mono", monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    min-width: 1080px;
+    color: var(--ink);
+    background: #e9eef5;
+    font-family: "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  button, input, select { font: inherit; }
+  button { color: inherit; cursor: pointer; }
+  button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid rgba(23, 105, 224, .34);
+    outline-offset: 2px;
+  }
+  [hidden] { display: none !important; }
+
+  .stage {
+    min-height: 100%;
+    display: grid;
+    place-items: center;
+    padding: 12px;
+    background:
+      radial-gradient(circle at 15% 10%, rgba(255,255,255,.72), transparent 27%),
+      radial-gradient(circle at 90% 90%, rgba(190,205,223,.42), transparent 30%),
+      #e9eef5;
+  }
+  .window {
+    position: relative;
+    width: min(1440px, calc(100vw - 24px));
+    height: min(900px, calc(100vh - 24px));
+    min-height: 700px;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: 50px 62px minmax(0, 1fr) 54px;
+    border: 1px solid #c3cfdd;
+    border-radius: 16px;
+    background: var(--surface);
+    box-shadow: 0 24px 64px rgba(34, 50, 73, .22);
+  }
+
+  .titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px;
+    border-bottom: 1px solid #e8edf4;
+    background: #fbfcfe;
+  }
+  .traffic { width: 12px; height: 12px; border-radius: 50%; }
+  .traffic.red { background: #ff5f57; }
+  .traffic.yellow { background: #febc2e; }
+  .traffic.green { background: #28c840; }
+  .title-copy { margin-left: 8px; font-size: 13px; font-weight: 760; color: #4b596c; }
+  .title-meta { margin-left: 4px; color: var(--quiet); font-size: 11px; }
+  .toolbar { margin-left: auto; display: flex; align-items: center; gap: 7px; }
+  .toolbar-button, .button, .icon-button {
+    height: 32px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: #fff;
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .toolbar-button { padding: 0 11px; }
+  .toolbar-button:hover, .button:hover, .icon-button:hover { border-color: #9fb1c8; background: #f8fbff; }
+  .toolbar-button.sync { display: inline-flex; align-items: center; gap: 6px; color: var(--blue-2); border-color: #c8dbf7; background: #f3f7fe; }
+  .sync-mark { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 3px rgba(23,105,224,.11); }
+
+  .pipeline {
+    display: grid;
+    grid-template-columns: 29% 39% 32%;
+    border-bottom: 1px solid var(--line);
+    background: #fff;
+  }
+  .stage-summary {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    padding: 9px 18px;
+    border-right: 1px solid var(--line);
+  }
+  .stage-summary:last-child { border-right: 0; }
+  .stage-number {
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border-radius: 7px;
+    color: #fff;
+    background: var(--stage-color);
+    font: 800 10px/1 var(--data-font);
+  }
+  .stage-summary.input { --stage-color: var(--blue); }
+  .stage-summary.analysis { --stage-color: var(--green); }
+  .stage-summary.output { --stage-color: var(--amber); }
+  .stage-line { min-width: 0; display: flex; align-items: baseline; gap: 9px; }
+  .stage-title { color: var(--stage-color); font-size: 12px; font-weight: 820; letter-spacing: .02em; }
+  .stage-fact { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+
+  .workspace {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 29% 39% 32%;
+  }
+  .panel {
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 18px 20px;
+    border-right: 1px solid var(--line);
+    scrollbar-width: thin;
+    scrollbar-color: #cbd6e4 transparent;
+  }
+  .panel:last-child { border-right: 0; }
+  .panel.analysis-panel { background: #fcfefd; }
+  .panel.output-panel { background: #fffdfa; }
+  .block + .block { margin-top: 17px; padding-top: 16px; border-top: 1px solid #e8edf4; }
+  .block-head { display: flex; align-items: center; min-height: 27px; margin-bottom: 9px; }
+  .block-title { color: #26344a; font-size: 12px; font-weight: 790; }
+  .block-note { margin-left: auto; color: var(--quiet); font-size: 10px; }
+  .text-button {
+    margin-left: auto;
+    height: 27px;
+    padding: 0 8px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: var(--blue-2);
+    background: #fff;
+    font-size: 10.5px;
+    font-weight: 700;
+  }
+
+  .file-box {
+    padding: 10px;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    background: #fff;
+  }
+  .file-summary { display: flex; align-items: center; gap: 9px; }
+  .file-icon {
+    position: relative;
+    width: 31px;
+    height: 25px;
+    flex: 0 0 auto;
+    border: 1px solid #aac4ea;
+    border-radius: 5px;
+    background: var(--blue-soft);
+  }
+  .file-icon::before { content: ""; position: absolute; left: 4px; top: -5px; width: 13px; height: 6px; border: 1px solid #aac4ea; border-bottom: 0; border-radius: 4px 4px 0 0; background: var(--blue-soft); }
+  .file-count b { display: block; font-size: 12px; }
+  .file-count span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+  .ready-pill { margin-left: auto; padding: 4px 7px; border-radius: 10px; color: #087453; background: var(--green-soft); font-size: 9.5px; font-weight: 750; }
+  .file-chips {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+    margin-top: 9px;
+  }
+  .file-chip {
+    min-width: 0;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 7px;
+    border: 1px solid #d8e1ec;
+    border-radius: 6px;
+    color: #425067;
+    background: #f8fafc;
+    font-size: 9.7px;
+  }
+  .file-chip i { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--green); }
+  .file-chip span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .field { display: grid; grid-template-columns: 78px minmax(0,1fr); align-items: center; gap: 8px; }
+  .field + .field { margin-top: 9px; }
+  .field-label { color: #455267; font-size: 11px; font-weight: 680; }
+  .control, .path-input, .mini-control {
+    width: 100%;
+    height: var(--control-h);
+    min-width: 0;
+    padding: 0 10px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    color: var(--ink);
+    background: #fff;
+    font-size: 11px;
+  }
+  select.control, select.mini-control {
+    appearance: none;
+    padding-right: 28px;
+    background-image:
+      linear-gradient(45deg, transparent 50%, #718096 50%),
+      linear-gradient(135deg, #718096 50%, transparent 50%);
+    background-position: calc(100% - 15px) 15px, calc(100% - 11px) 15px;
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+  }
+  .signal-picker {
+    min-height: var(--control-h);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 31px 3px 4px;
+    border: 1px solid #9ab9e5;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 0 0 2px rgba(23,105,224,.06);
+  }
+  .signal-chip { min-width: 0; height: 27px; display: flex; align-items: center; padding: 0 8px; border: 1px solid #cee0f8; border-radius: 6px; color: #26537f; background: var(--blue-soft); font-size: 10px; }
+  .signal-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .picker-more { color: var(--blue); font-weight: 800; font-size: 10px; white-space: nowrap; }
+  .micro-note { margin: 5px 0 0 86px; color: var(--quiet); font-size: 9.7px; }
+  .filter-row { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 8px; background: #fafbfd; }
+  .filter-row b { font-size: 11px; }
+  .filter-row span { color: var(--muted); font-size: 10px; }
+  .switch { margin-left: auto; width: 31px; height: 18px; padding: 2px; border: 0; border-radius: 9px; background: #cbd5e1; }
+  .switch::before { content: ""; display: block; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(26,37,52,.25); }
+
+  .method-tabs { display: grid; grid-template-columns: 1fr .85fr 1.45fr .9fr; gap: 6px; }
+  .method-tab {
+    height: 36px;
+    padding: 0 6px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    color: #4a586d;
+    background: #fff;
+    font-size: 11px;
+    font-weight: 720;
+  }
+  .method-tab.active { color: #0e58bd; border-color: var(--blue); background: var(--blue-soft); box-shadow: inset 0 0 0 1px rgba(23,105,224,.06); }
+
+  .group-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .group-card {
+    min-width: 0;
+    min-height: 132px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    text-align: left;
+    background: #fff;
+  }
+  .group-card:hover { border-color: #a9bbd2; }
+  .group-card.active { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(23,105,224,.08); background: #fbfdff; }
+  .group-card-head { display: flex; align-items: center; gap: 5px; }
+  .radio-dot { width: 13px; height: 13px; display: grid; place-items: center; flex: 0 0 auto; border: 1px solid #9caec4; border-radius: 50%; background: #fff; }
+  .active .radio-dot { border-color: var(--blue); }
+  .active .radio-dot::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--blue); }
+  .group-card b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; }
+  .group-card .formula { display: block; margin-top: 7px; color: var(--blue-2); font: 750 9px/1.25 var(--data-font); }
+  .group-card .explain { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.35; }
+  .wave-preview { display: block; width: 100%; height: 52px; margin-top: 8px; }
+  .wave-preview .frame { fill: #fff; stroke: #c9d6e5; stroke-width: 1; }
+  .wave-preview .grid { fill: none; stroke: #e3e9f1; stroke-width: .7; }
+  .wave-preview .wave { fill: none; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
+  .wave-preview .blue { stroke: #1769e0; }
+  .wave-preview .teal { stroke: #08a1a8; }
+  .wave-preview .orange { stroke: #e07b2e; }
+  .wave-preview .violet { stroke: #7c64d7; }
+  .wave-preview .label { fill: #607087; font: 700 6.5px/1 var(--data-font); }
+  .wave-preview .tag { fill: #eaf2ff; stroke: #c8dbf7; stroke-width: .7; }
+  .wave-preview .tag-text { fill: #0f56bd; font: 800 6.5px/1 var(--data-font); }
+  .wave-preview .dash { stroke-dasharray: 3 2; }
+
+  .layout-row { display: grid; grid-template-columns: 78px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 10px; }
+  .segmented { display: grid; grid-template-columns: 1fr 1fr; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: #f4f7fb; }
+  .segment { height: 29px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font-size: 10.5px; }
+  .segment.active { color: var(--blue-2); background: #fff; box-shadow: 0 1px 4px rgba(36,53,77,.13); font-weight: 760; }
+  .segmented.disabled { opacity: .42; pointer-events: none; }
+  .handoff-note { display: flex; align-items: center; gap: 6px; margin-top: 9px; color: #5e6e83; font-size: 9.7px; }
+  .handoff-note::before { content: "↗"; color: var(--blue); font-weight: 850; }
+
+  .preset-head { display: flex; align-items: center; margin-bottom: 8px; }
+  .shared-badge { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border-radius: 10px; color: #087453; background: var(--green-soft); font-size: 9px; font-weight: 750; }
+  .shared-badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+  .preset-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .preset-card { min-width: 0; height: 61px; padding: 7px; border: 1px solid var(--line); border-radius: 8px; text-align: left; background: #fff; }
+  .preset-card b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+  .preset-card span { display: block; margin-top: 5px; color: var(--muted); font-size: 8.7px; line-height: 1.25; }
+  .preset-card.active { color: var(--blue-2); border-color: var(--blue); background: var(--blue-soft); }
+  .preset-card.active span { color: #506d93; }
+  .block-note.modified { color: #b86800; font-weight: 750; }
+  .preset-source-note { margin-top: 6px; color: var(--muted); font-size: 9.3px; }
+  .preset-source-note strong { color: var(--blue-2); }
+  .param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+  .param label { display: block; margin-bottom: 4px; color: #556378; font-size: 9.5px; font-weight: 680; }
+  .param.full { grid-column: 1 / -1; }
+  .interval-control { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px; }
+  .mini-control { height: 33px; font-size: 10.5px; }
+
+  .path-row { display: grid; grid-template-columns: minmax(0, 1fr) 60px; gap: 6px; }
+  .path-input { color: #506077; }
+  .button { padding: 0 10px; }
+  .export-card { padding: 10px; border: 1px solid var(--line-strong); border-radius: 9px; background: #fff; }
+  .export-top { display: flex; align-items: center; gap: 14px; }
+  .checkline { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 680; }
+  .checkline input { width: 16px; height: 16px; margin: 0; accent-color: var(--blue); }
+  .icon-button { width: 30px; padding: 0; display: grid; place-items: center; color: var(--blue); }
+  .export-summary { margin-top: 8px; padding-top: 7px; border-top: 1px solid #edf1f6; color: #536279; font: 650 9.5px/1.3 var(--data-font); }
+
+  .axis-card { overflow: hidden; border: 1px solid var(--line-strong); border-radius: 9px; background: #fff; }
+  .axis-head { display: flex; align-items: center; height: 35px; padding: 0 10px; border-bottom: 1px solid #e8edf4; background: #fafbfd; }
+  .axis-head b { font-size: 11px; }
+  .axis-head span { margin-left: auto; color: var(--muted); font-size: 9.5px; }
+  .axis-row { display: grid; grid-template-columns: 68px 67px minmax(0, 1fr); align-items: center; gap: 7px; min-height: 51px; padding: 7px 10px; border-bottom: 1px solid #edf1f6; }
+  .axis-row:last-child { border-bottom: 0; }
+  .axis-name b { display: block; font-size: 10.5px; }
+  .axis-name span { display: block; margin-top: 2px; color: var(--muted); font-size: 8.7px; }
+  .auto-check { display: inline-flex; align-items: center; gap: 4px; color: #506077; font-size: 9.5px; }
+  .auto-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--blue); }
+  .range-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .range-inputs input { width: 100%; height: 31px; min-width: 0; padding: 0 7px; border: 1px solid var(--line); border-radius: 7px; color: #4d5b70; background: #fff; font: 650 9.5px/1 var(--data-font); }
+  .range-inputs input:disabled { color: #9aa7b8; background: #f3f6fa; }
+  .db-row { padding: 9px 10px; }
+  .db-line { display: grid; grid-template-columns: 68px minmax(0, 1fr) 28px; align-items: center; gap: 7px; }
+  .db-line label { font-size: 10.5px; font-weight: 700; }
+  .db-line input { width: 100%; height: 32px; min-width: 0; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; font: 650 10px/1 var(--data-font); }
+  .db-source { margin: 5px 0 0 75px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 9px; }
+
+  .statusbar {
+    display: grid;
+    grid-template-columns: minmax(170px, .8fr) minmax(260px, 1.5fr) 180px auto;
+    align-items: center;
+    gap: 14px;
+    padding: 0 14px 0 18px;
+    border-top: 1px solid var(--line-strong);
+    background: #fbfcfe;
+  }
+  .run-state { min-width: 0; display: flex; align-items: center; gap: 7px; }
+  .state-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(14,168,117,.11); }
+  .state-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 750; }
+  .task-fact { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font: 650 9.5px/1.2 var(--data-font); }
+  .progress-track { height: 7px; overflow: hidden; border-radius: 4px; background: #dfe6ef; }
+  .progress-fill { width: 0%; height: 100%; border-radius: inherit; background: var(--blue); transition: width .18s ease; }
+  .footer-actions { display: flex; align-items: center; gap: 7px; }
+  .run-button { min-width: 74px; height: 34px; border: 1px solid var(--blue); border-radius: 8px; color: #fff; background: var(--blue); font-size: 11px; font-weight: 780; }
+  .run-button:hover { background: var(--blue-2); }
+  .cancel-button { min-width: 58px; height: 34px; border: 1px solid var(--line-strong); border-radius: 8px; color: #516076; background: #fff; font-size: 11px; font-weight: 700; }
+
+  .modal-backdrop { position: absolute; z-index: 50; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(30,42,60,.26); backdrop-filter: blur(2px); }
+  .modal { width: min(540px, 90%); overflow: hidden; border: 1px solid #bdcadb; border-radius: 12px; background: #fff; box-shadow: 0 22px 60px rgba(30,44,66,.26); }
+  .modal-head { height: 48px; display: flex; align-items: center; padding: 0 15px; border-bottom: 1px solid var(--line); }
+  .modal-head b { font-size: 13px; }
+  .modal-head span { margin-left: 8px; color: var(--muted); font-size: 10px; }
+  .modal-head button { margin-left: auto; width: 28px; height: 28px; border: 0; border-radius: 6px; background: #f2f5f9; }
+  .modal-actions { display: flex; gap: 7px; padding: 11px 14px; border-bottom: 1px solid #edf1f6; }
+  .file-list { padding: 6px 14px 12px; }
+  .file-item { display: grid; grid-template-columns: 18px minmax(0,1fr) auto 24px; align-items: center; gap: 8px; min-height: 44px; border-bottom: 1px solid #edf1f6; }
+  .file-item:last-child { border-bottom: 0; }
+  .file-item i { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+  .file-item b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; }
+  .file-item small { display: block; margin-top: 2px; color: var(--muted); font-size: 8.7px; }
+  .file-item em { color: #087453; font-size: 9px; font-style: normal; }
+  .file-item button { width: 24px; height: 24px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; }
+  .file-item button:hover { color: var(--danger); background: #fff0f2; }
+
+  @media (max-width: 1180px) {
+    .panel { padding-left: 12px; padding-right: 12px; }
+    .stage-summary { padding-left: 12px; padding-right: 12px; }
+    .field { grid-template-columns: 68px minmax(0,1fr); }
+    .micro-note { margin-left: 76px; }
+    .group-card { padding: 6px; }
+    .group-card .explain { display: none; }
+    .preset-card span { display: none; }
+    .preset-card { height: 38px; }
+    .statusbar { grid-template-columns: 150px minmax(210px, 1fr) 130px auto; gap: 8px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<main class="stage">
+  <section class="window" aria-label="TraceLab 批处理紧凑 UI 原型">
+    <header class="titlebar">
+      <i class="traffic red"></i><i class="traffic yellow"></i><i class="traffic green"></i>
+      <span class="title-copy">批处理分析</span>
+      <span class="title-meta">紧凑工作流原型</span>
+      <nav class="toolbar" aria-label="批处理预设工具">
+        <button class="toolbar-button sync" type="button"><i class="sync-mark"></i>从当前单次同步</button>
+        <button class="toolbar-button" type="button">导入方案…</button>
+        <button class="toolbar-button" type="button">导出方案…</button>
+      </nav>
+    </header>
+
+    <div class="pipeline" aria-label="批处理配置摘要">
+      <div class="stage-summary input">
+        <span class="stage-number">01</span>
+        <div class="stage-line"><span class="stage-title">输入</span><span class="stage-fact" id="inputFact">4 文件 · 1 信号</span></div>
+      </div>
+      <div class="stage-summary analysis">
+        <span class="stage-number">02</span>
+        <div class="stage-line"><span class="stage-title">分析</span><span class="stage-fact" id="analysisFact">时域 · 按数据源分组</span></div>
+      </div>
+      <div class="stage-summary output">
+        <span class="stage-number">03</span>
+        <div class="stage-line"><span class="stage-title">输出</span><span class="stage-fact" id="outputFact">XLSX + PNG · 8 个文件</span></div>
+      </div>
+    </div>
+
+    <div class="workspace">
+      <section class="panel input-panel" aria-label="输入设置">
+        <div class="block">
+          <div class="block-head">
+            <span class="block-title">数据文件</span>
+            <button class="text-button" id="manageFiles" type="button">管理文件</button>
+          </div>
+          <div class="file-box">
+            <div class="file-summary">
+              <i class="file-icon"></i>
+              <div class="file-count"><b>4 个文件</b><span>MF4 · 共同信号 126 个</span></div>
+              <span class="ready-pill">全部就绪</span>
+            </div>
+            <div class="file-chips" aria-label="已选择文件摘要">
+              <span class="file-chip"><i></i><span>diya luntai.MF4</span></span>
+              <span class="file-chip"><i></i><span>tiaodoffset.MF4</span></span>
+              <span class="file-chip"><i></i><span>taiyaok.MF4</span></span>
+              <span class="file-chip"><i></i><span>tiaodamping.MF4</span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="block">
+          <div class="block-head"><span class="block-title">目标</span><span class="block-note">文件间匹配</span></div>
+          <div class="field">
+            <label class="field-label" for="targetPolicy">选择范围</label>
+            <select class="control" id="targetPolicy"><option>所有文件共有的信号</option><option>各文件可用的信号</option></select>
+          </div>
+          <div class="field">
+            <span class="field-label">目标信号</span>
+            <div class="signal-picker" tabindex="0" role="combobox" aria-label="目标信号">
+              <span class="signal-chip"><span>Rte_ActRet_mActiveReturnMotorTorque</span></span>
+              <span class="picker-more">⌄</span>
+            </div>
+          </div>
+          <p class="micro-note">1 个目标 · 4/4 文件可用</p>
+        </div>
+
+        <div class="block">
+          <div class="filter-row">
+            <div><b>预处理</b><span>　滤波关闭 · 保留原始数据</span></div>
+            <button class="switch" type="button" aria-label="启用滤波"></button>
+          </div>
+          <p class="handoff-note" id="rangeRoutingNote">时域模式不再重复显示“时间范围”；统一在右侧坐标范围设置。</p>
+        </div>
+      </section>
+
+      <section class="panel analysis-panel" aria-label="分析设置">
+        <div class="block">
+          <div class="block-head"><span class="block-title">分析方法</span><span class="block-note">决定下面的参数</span></div>
+          <div class="method-tabs" role="tablist">
+            <button class="method-tab active" type="button" data-method="time">时域</button>
+            <button class="method-tab" type="button" data-method="fft">FFT</button>
+            <button class="method-tab" type="button" data-method="fft_time">FFT vs Time</button>
+            <button class="method-tab" type="button" data-method="order_time">阶次</button>
+          </div>
+        </div>
+
+        <div id="timeControls">
+          <div class="block">
+            <div class="block-head"><span class="block-title">图片如何合并</span><span class="block-note">以 4 文件 × 3 信号为例</span></div>
+            <div class="group-grid" role="radiogroup" aria-label="图片分组方式">
+              <button class="group-card" type="button" data-group="task">
+                <span class="group-card-head"><i class="radio-dot"></i><b>每项单独</b></span>
+                <svg class="wave-preview" viewBox="0 0 120 52" aria-hidden="true">
+                  <rect class="frame" x=".5" y=".5" width="57" height="23" rx="2"/><path class="grid" d="M4 12h50"/><path class="wave blue" d="M4 13c5-9 9 9 14-1s9 8 14-2 10 9 21-2"/>
+                  <rect class="frame" x="62.5" y=".5" width="57" height="23" rx="2"/><path class="grid" d="M66 12h50"/><path class="wave teal" d="M66 16c6 0 7-10 13-8s8 11 14 7 8-11 13-7 5 8 10 4"/>
+                  <rect class="frame" x=".5" y="28.5" width="57" height="23" rx="2"/><path class="grid" d="M4 40h50"/><path class="wave orange" d="M4 42c4-6 8 5 12-2s8-8 13-1 8 6 13-3 7-5 11 2"/>
+                  <rect class="frame" x="62.5" y="28.5" width="57" height="23" rx="2"/><path class="grid" d="M66 40h50"/><path class="wave violet" d="M66 43c5-12 9 9 14-4s9 8 14-3 8 7 13-2 6 3 9 2"/>
+                </svg>
+                <span class="formula">4 × 3 → 12 张</span>
+                <span class="explain">每张：1 个数据源 + 1 个信号</span>
+              </button>
+              <button class="group-card active" type="button" data-group="source">
+                <span class="group-card-head"><i class="radio-dot"></i><b>按数据源</b></span>
+                <svg class="wave-preview" viewBox="0 0 120 52" aria-hidden="true">
+                  <rect class="frame" x=".5" y=".5" width="119" height="51" rx="2"/>
+                  <rect class="tag" x="4" y="4" width="18" height="10" rx="2"/><text class="tag-text" x="13" y="11" text-anchor="middle">F1</text>
+                  <text class="label" x="4" y="23">S1</text><path class="grid" d="M16 21h99"/><path class="wave blue" d="M18 21c8-11 13 9 21-2s13 8 21-3 14 10 22-2 16 7 32-3"/>
+                  <text class="label" x="4" y="35">S2</text><path class="grid" d="M16 33h99"/><path class="wave teal" d="M18 35c9 0 10-11 19-7s11 10 20 4 11-10 20-3 12 6 20-4 10 5 17 2"/>
+                  <text class="label" x="4" y="47">S3</text><path class="grid" d="M16 45h99"/><path class="wave orange" d="M18 46c7-7 12 6 19-2s13-7 20 1 13 6 22-4 12-3 19 3 9-5 16-4"/>
+                </svg>
+                <span class="formula">4 个数据源 → 4 张</span>
+                <span class="explain">每张：固定数据源 F1，合并信号 S1 / S2 / S3</span>
+              </button>
+              <button class="group-card" type="button" data-group="signal">
+                <span class="group-card-head"><i class="radio-dot"></i><b>按信号</b></span>
+                <svg class="wave-preview" viewBox="0 0 120 52" aria-hidden="true">
+                  <rect class="frame" x=".5" y=".5" width="119" height="51" rx="2"/>
+                  <rect class="tag" x="4" y="4" width="18" height="10" rx="2"/><text class="tag-text" x="13" y="11" text-anchor="middle">S1</text>
+                  <circle cx="72" cy="9" r="2" fill="#1769e0"/><text class="label" x="76" y="11">F1</text><circle cx="91" cy="9" r="2" fill="#08a1a8"/><text class="label" x="95" y="11">F2</text><circle cx="110" cy="9" r="2" fill="#e07b2e"/>
+                  <path class="grid" d="M5 32h110"/>
+                  <path class="wave blue" d="M6 34c8-16 14 13 23-3s15 11 24-4 15 12 24-2 16 10 37-5"/>
+                  <path class="wave teal dash" d="M6 38c8-16 14 13 23-3s15 11 24-4 15 12 24-2 16 10 37-5"/>
+                  <path class="wave orange" opacity=".72" d="M6 30c8-16 14 13 23-3s15 11 24-4 15 12 24-2 16 10 37-5"/>
+                </svg>
+                <span class="formula">3 个信号 → 3 张</span>
+                <span class="explain">每张：固定信号 S1，对比数据源 F1 / F2 / F3 / F4</span>
+              </button>
+            </div>
+
+            <div class="layout-row">
+              <span class="field-label">图内布局</span>
+              <div class="segmented" id="layoutSegments">
+                <button class="segment active" type="button">分面子图</button>
+                <button class="segment" type="button">曲线叠加</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="block">
+            <div class="block-head"><span class="block-title">横坐标</span><span class="block-note">来源与原点</span></div>
+            <div class="field">
+              <label class="field-label" for="xSource">X 轴来源</label>
+              <select class="control" id="xSource"><option>时间</option><option>信号通道…</option></select>
+            </div>
+            <div class="field">
+              <label class="field-label" for="xOrigin">时间原点</label>
+              <select class="control" id="xOrigin"><option>从零开始</option><option>保留绝对时间</option></select>
+            </div>
+          </div>
+        </div>
+
+        <div id="spectralControls" hidden>
+          <div class="block">
+            <div class="preset-head"><span class="block-title">分析预设</span><span class="shared-badge">与单次分析同步</span></div>
+            <div class="preset-grid" role="radiogroup" aria-label="共享分析预设">
+              <button class="preset-card active" type="button" data-preset="accuracy"><b>测试</b><span>幅值优先<br>flattop · 2.5 s</span></button>
+              <button class="preset-card" type="button" data-preset="balanced"><b>均衡</b><span>通用诊断<br>hanning · 1.5 s</span></button>
+              <button class="preset-card" type="button" data-preset="transient"><b>时间</b><span>瞬态捕捉<br>hanning · 0.6 s</span></button>
+              <button class="preset-card" type="button" data-preset="custom"><b>自定义</b><span>当前参数<br>手动调整</span></button>
+            </div>
+            <p class="preset-source-note">“<strong>测试</strong>”来自单文件 FFT 预设槽 1 的当前名称；此处不再维护第二份名称。</p>
+          </div>
+
+          <div class="block">
+            <div class="block-head"><span class="block-title" id="parameterTitle">FFT 参数</span><span class="block-note" id="presetState">已应用：测试</span></div>
+            <div class="param-grid">
+              <div class="param"><label for="windowFn">窗函数</label><select class="mini-control" id="windowFn"><option>flattop</option><option>hanning</option><option>hamming</option></select></div>
+              <div class="param"><label for="nfftMode">NFFT</label><select class="mini-control" id="nfftMode"><option>自动</option><option>固定 1024</option><option>固定 2048</option></select></div>
+              <div class="param"><label for="windowLength">窗长</label><input class="mini-control" id="windowLength" value="2.5 s"></div>
+              <div class="param"><label for="overlap">重叠率</label><input class="mini-control" id="overlap" value="75 %"></div>
+              <div class="param"><label for="averageMode">平均模式</label><select class="mini-control" id="averageMode"><option>线性平均</option><option>单帧</option><option>峰值保持</option></select></div>
+              <div class="param"><label for="weighting">频率加权</label><select class="mini-control" id="weighting"><option>None</option><option>A</option></select></div>
+              <div class="param full" id="sourceIntervalParam">
+                <label for="sourceInterval">源数据区间</label>
+                <div class="interval-control"><select class="mini-control" id="sourceInterval"><option>全时段</option><option>指定区间</option></select><input class="mini-control" id="sourceIntervalValue" value="0.0 — 120.0 s" disabled></div>
+              </div>
+            </div>
+            <p class="handoff-note" id="sourceRangeHint">FFT 的源数据区间属于分析参数；右侧 X 轴范围是频率显示范围，两者不混用。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel output-panel" aria-label="输出设置">
+        <div class="block">
+          <div class="block-head"><span class="block-title">导出</span><span class="block-note">仅保留可操作信息</span></div>
+          <div class="field">
+            <span class="field-label">输出目录</span>
+            <div class="path-row"><input class="path-input" value="~/Desktop/mf4_batch_output" aria-label="输出目录"><button class="button" type="button">选择…</button></div>
+          </div>
+          <div class="field" style="align-items:start">
+            <span class="field-label" style="padding-top:11px">导出内容</span>
+            <div class="export-card">
+              <div class="export-top">
+                <label class="checkline"><input id="dataExport" type="checkbox" checked>数据</label>
+                <label class="checkline"><input id="imageExport" type="checkbox" checked>图片</label>
+              </div>
+              <div class="export-summary" id="exportSummary">XLSX · PNG 1920×1080 · 冲突自动编号</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="block">
+          <div class="axis-card">
+            <div class="axis-head"><b>坐标范围</b><span id="axisScope">同时用于分析截取与图片显示</span></div>
+            <div class="axis-row">
+              <div class="axis-name"><b id="xAxisName">横坐标 X</b><span id="xAxisUnit">Time (s)</span></div>
+              <label class="auto-check"><input class="axis-auto" data-target="xRange" type="checkbox" checked><span id="xAutoLabel">全时段</span></label>
+              <div class="range-inputs" id="xRange"><input value="0.0" disabled><input value="120.0" disabled></div>
+            </div>
+            <div class="axis-row">
+              <div class="axis-name"><b id="yAxisName">幅值 Y</b><span id="yAxisUnit">工程单位</span></div>
+              <label class="auto-check"><input class="axis-auto" data-target="yRange" type="checkbox" checked><span>自动</span></label>
+              <div class="range-inputs" id="yRange"><input value="-12.0" disabled><input value="12.0" disabled></div>
+            </div>
+            <div class="db-row" id="dbRow" hidden>
+              <div class="db-line"><label for="dbReference">dB 参考</label><input id="dbReference" value="1"><button class="icon-button" type="button" title="dB 参考设置">⌁</button></div>
+              <p class="db-source">自动 · 4 个目标使用同一参考：1×10⁻⁶ Nm</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer class="statusbar">
+      <div class="run-state"><i class="state-dot" id="stateDot"></i><span class="state-text" id="stateText">准备就绪</span></div>
+      <div class="task-fact" id="taskFact">4 文件 × 1 信号 = 4 任务 · 预计输出 8 个文件</div>
+      <div class="progress-track" aria-label="运行进度"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="footer-actions"><button class="cancel-button" type="button">取消</button><button class="run-button" id="runButton" type="button">运行</button></div>
+    </footer>
+
+    <div class="modal-backdrop" id="fileModal" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="fileModalTitle">
+        <div class="modal-head"><b id="fileModalTitle">管理数据文件</b><span>4 个文件 · 共同信号 126 个</span><button id="closeFiles" type="button" aria-label="关闭">×</button></div>
+        <div class="modal-actions"><button class="button" type="button">+ 已加载</button><button class="button" type="button">+ 从磁盘…</button></div>
+        <div class="file-list">
+          <div class="file-item"><i></i><div><b>diya luntai.MF4</b><small>/Users/donghang/Desktop/measurements</small></div><em>已解析</em><button type="button">×</button></div>
+          <div class="file-item"><i></i><div><b>tiaodoffset.MF4</b><small>/Users/donghang/Desktop/measurements</small></div><em>已解析</em><button type="button">×</button></div>
+          <div class="file-item"><i></i><div><b>taiyaok.MF4</b><small>/Users/donghang/Desktop/measurements</small></div><em>已解析</em><button type="button">×</button></div>
+          <div class="file-item"><i></i><div><b>tiaodamping.MF4</b><small>/Users/donghang/Desktop/measurements</small></div><em>已解析</em><button type="button">×</button></div>
+        </div>
+      </section>
+    </div>
+  </section>
+</main>
+
+<script>
+  const methodLabels = {
+    time: "时域",
+    fft: "FFT",
+    fft_time: "FFT vs Time",
+    order_time: "阶次"
+  };
+  const methodButtons = [...document.querySelectorAll(".method-tab")];
+  const timeControls = document.getElementById("timeControls");
+  const spectralControls = document.getElementById("spectralControls");
+  const analysisFact = document.getElementById("analysisFact");
+  const xAxisName = document.getElementById("xAxisName");
+  const xAxisUnit = document.getElementById("xAxisUnit");
+  const yAxisName = document.getElementById("yAxisName");
+  const yAxisUnit = document.getElementById("yAxisUnit");
+  const axisScope = document.getElementById("axisScope");
+  const parameterTitle = document.getElementById("parameterTitle");
+  const sourceRangeHint = document.getElementById("sourceRangeHint");
+  const rangeRoutingNote = document.getElementById("rangeRoutingNote");
+  const xAutoLabel = document.getElementById("xAutoLabel");
+  const sourceIntervalParam = document.getElementById("sourceIntervalParam");
+  const sourceInterval = document.getElementById("sourceInterval");
+  const sourceIntervalValue = document.getElementById("sourceIntervalValue");
+  const dbRow = document.getElementById("dbRow");
+
+  function setMethod(method) {
+    methodButtons.forEach(button => button.classList.toggle("active", button.dataset.method === method));
+    const isTime = method === "time";
+    timeControls.hidden = !isTime;
+    spectralControls.hidden = isTime;
+    sourceIntervalParam.hidden = method !== "fft";
+    dbRow.hidden = isTime;
+    if (isTime) {
+      const activeGroup = document.querySelector(".group-card.active")?.dataset.group || "source";
+      const groupLabel = activeGroup === "task" ? "每项单独" : activeGroup === "signal" ? "按信号分组" : "按数据源分组";
+      analysisFact.textContent = `时域 · ${groupLabel}`;
+    } else {
+      const activePreset = document.querySelector(".preset-card.active");
+      const presetLabel = activePreset ? presetValues[activePreset.dataset.preset].name : "已修改";
+      analysisFact.textContent = `${methodLabels[method]} · ${presetLabel}`;
+    }
+    parameterTitle.textContent = `${methodLabels[method]} 参数`;
+
+    if (method === "time") {
+      xAxisName.textContent = "横坐标 X";
+      xAxisUnit.textContent = "Time (s)";
+      yAxisName.textContent = "幅值 Y";
+      yAxisUnit.textContent = "工程单位";
+      axisScope.textContent = "同时用于分析截取与图片显示";
+      xAutoLabel.textContent = "全时段";
+      rangeRoutingNote.textContent = "时域模式不再重复显示“时间范围”；统一在右侧坐标范围设置。";
+    } else if (method === "fft") {
+      xAxisName.textContent = "频率 X";
+      xAxisUnit.textContent = "Frequency (Hz)";
+      yAxisName.textContent = "幅值 Y";
+      yAxisUnit.textContent = "Linear / dB";
+      axisScope.textContent = "图片显示范围";
+      xAutoLabel.textContent = "自动";
+      rangeRoutingNote.textContent = "FFT 的源数据区间在分析栏设置；右侧只控制频率显示范围。";
+      sourceRangeHint.textContent = "FFT 的源数据区间属于分析参数；右侧 X 轴范围是频率显示范围，两者不混用。";
+    } else if (method === "fft_time") {
+      xAxisName.textContent = "时间 X";
+      xAxisUnit.textContent = "Time (s)";
+      yAxisName.textContent = "频率 Y";
+      yAxisUnit.textContent = "Frequency (Hz)";
+      axisScope.textContent = "时频图显示范围";
+      xAutoLabel.textContent = "自动";
+      rangeRoutingNote.textContent = "FFT vs Time 按完整有效时域计算；右侧统一控制时频图显示范围。";
+      sourceRangeHint.textContent = "FFT vs Time 不再提供第二个源数据区间；计算覆盖完整有效时域。";
+    } else {
+      xAxisName.textContent = "时间 X";
+      xAxisUnit.textContent = "Time (s)";
+      yAxisName.textContent = "阶次 Y";
+      yAxisUnit.textContent = "Order";
+      axisScope.textContent = "阶次图显示范围";
+      xAutoLabel.textContent = "自动";
+      rangeRoutingNote.textContent = "阶次分析按完整有效时域计算；右侧统一控制时间轴与阶次显示范围。";
+      sourceRangeHint.textContent = "阶次分析不再提供第二个源数据区间；计算覆盖完整有效时域。";
+    }
+  }
+  methodButtons.forEach(button => button.addEventListener("click", () => setMethod(button.dataset.method)));
+
+  const groupCards = [...document.querySelectorAll(".group-card")];
+  const layoutSegments = document.getElementById("layoutSegments");
+  groupCards.forEach(card => card.addEventListener("click", () => {
+    groupCards.forEach(item => item.classList.toggle("active", item === card));
+    const group = card.dataset.group;
+    layoutSegments.classList.toggle("disabled", group === "task");
+    const label = group === "task" ? "每项单独" : group === "source" ? "按数据源分组" : "按信号分组";
+    analysisFact.textContent = `时域 · ${label}`;
+  }));
+  document.querySelectorAll(".segment").forEach(segment => segment.addEventListener("click", () => {
+    segment.parentElement.querySelectorAll(".segment").forEach(item => item.classList.toggle("active", item === segment));
+  }));
+
+  const presetValues = {
+    accuracy: { name: "测试", window: "flattop", length: "2.5 s", overlap: "75 %", avg: "线性平均" },
+    balanced: { name: "均衡", window: "hanning", length: "1.5 s", overlap: "50 %", avg: "线性平均" },
+    transient: { name: "时间", window: "hanning", length: "0.6 s", overlap: "75 %", avg: "峰值保持" },
+    custom: { name: "自定义", window: "hanning", length: "1.5 s", overlap: "50 %", avg: "单帧" }
+  };
+  const presetCards = [...document.querySelectorAll(".preset-card")];
+  const presetState = document.getElementById("presetState");
+  let applyingPreset = false;
+  presetCards.forEach(card => card.addEventListener("click", () => {
+    presetCards.forEach(item => item.classList.toggle("active", item === card));
+    const preset = presetValues[card.dataset.preset];
+    applyingPreset = true;
+    document.getElementById("windowFn").value = preset.window;
+    document.getElementById("windowLength").value = preset.length;
+    document.getElementById("overlap").value = preset.overlap;
+    document.getElementById("averageMode").value = preset.avg;
+    applyingPreset = false;
+    presetState.textContent = `已应用：${preset.name}`;
+    presetState.classList.remove("modified");
+    const method = methodButtons.find(button => button.classList.contains("active"))?.dataset.method || "fft";
+    analysisFact.textContent = `${methodLabels[method]} · ${preset.name}`;
+  }));
+
+  function clearPresetSelectionAfterEdit() {
+    if (applyingPreset) return;
+    presetCards.forEach(card => card.classList.remove("active"));
+    presetState.textContent = "已修改 · 未匹配预设";
+    presetState.classList.add("modified");
+    const method = methodButtons.find(button => button.classList.contains("active"))?.dataset.method || "fft";
+    analysisFact.textContent = `${methodLabels[method]} · 已修改`;
+  }
+  document.querySelectorAll("#spectralControls .mini-control").forEach(control => {
+    control.addEventListener("input", clearPresetSelectionAfterEdit);
+    control.addEventListener("change", clearPresetSelectionAfterEdit);
+  });
+  sourceInterval.addEventListener("change", () => {
+    sourceIntervalValue.disabled = sourceInterval.value !== "指定区间";
+  });
+
+  document.querySelectorAll(".axis-auto").forEach(check => check.addEventListener("change", () => {
+    document.querySelectorAll(`#${check.dataset.target} input`).forEach(input => input.disabled = check.checked);
+  }));
+
+  const dataExport = document.getElementById("dataExport");
+  const imageExport = document.getElementById("imageExport");
+  const exportSummary = document.getElementById("exportSummary");
+  const outputFact = document.getElementById("outputFact");
+  const taskFact = document.getElementById("taskFact");
+  function refreshExports() {
+    const parts = [];
+    let outputs = 0;
+    if (dataExport.checked) { parts.push("XLSX"); outputs += 4; }
+    if (imageExport.checked) { parts.push("PNG 1920×1080"); outputs += 4; }
+    if (parts.length) parts.push("冲突自动编号");
+    exportSummary.textContent = parts.length ? parts.join(" · ") : "未选择导出内容";
+    outputFact.textContent = outputs ? `${dataExport.checked ? "XLSX" : ""}${dataExport.checked && imageExport.checked ? " + " : ""}${imageExport.checked ? "PNG" : ""} · ${outputs} 个文件` : "未配置";
+    taskFact.textContent = `4 文件 × 1 信号 = 4 任务 · 预计输出 ${outputs} 个文件`;
+  }
+  dataExport.addEventListener("change", refreshExports);
+  imageExport.addEventListener("change", refreshExports);
+
+  const fileModal = document.getElementById("fileModal");
+  function showFiles(show) { fileModal.hidden = !show; }
+  document.getElementById("manageFiles").addEventListener("click", () => showFiles(true));
+  document.getElementById("closeFiles").addEventListener("click", () => showFiles(false));
+  fileModal.addEventListener("click", event => { if (event.target === fileModal) showFiles(false); });
+  document.addEventListener("keydown", event => { if (event.key === "Escape") showFiles(false); });
+
+  const runButton = document.getElementById("runButton");
+  const progressFill = document.getElementById("progressFill");
+  const stateText = document.getElementById("stateText");
+  const stateDot = document.getElementById("stateDot");
+  let timer = null;
+  runButton.addEventListener("click", () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+      runButton.textContent = "运行";
+      stateText.textContent = "已中断 · 可重新运行";
+      stateDot.style.background = "#ef8c00";
+      return;
+    }
+    let progress = 0;
+    runButton.textContent = "中断";
+    stateText.textContent = "正在处理 0 / 4";
+    stateDot.style.background = "#1769e0";
+    progressFill.style.width = "0%";
+    timer = setInterval(() => {
+      progress += 4;
+      progressFill.style.width = `${progress}%`;
+      stateText.textContent = `正在处理 ${Math.min(4, Math.ceil(progress / 25))} / 4`;
+      if (progress >= 100) {
+        clearInterval(timer);
+        timer = null;
+        runButton.textContent = "再次运行";
+        stateText.textContent = "完成 · 已输出 8 个文件";
+        stateDot.style.background = "#0ea875";
+      }
+    }, 80);
+  });
+</script>
+</body>
+</html>

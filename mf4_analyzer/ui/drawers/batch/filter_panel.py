@@ -43,14 +43,30 @@ class BatchFilterPanel(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(3)
+        root.setSpacing(6)
 
-        top_row = QWidget(self)
-        top_lay = QHBoxLayout(top_row)
-        top_lay.setContentsMargins(0, 0, 0, 0)
-        top_lay.setSpacing(8)
+        self._summary_row = QWidget(self)
+        self._summary_row.setObjectName("BatchFilterSummary")
+        self._summary_row.setAttribute(Qt.WA_StyledBackground, True)
+        top_lay = QHBoxLayout(self._summary_row)
+        top_lay.setContentsMargins(9, 7, 9, 7)
+        top_lay.setSpacing(7)
+        self._summary_title = QLabel("预处理", self._summary_row)
+        self._summary_title.setObjectName("BatchFilterSummaryTitle")
+        top_lay.addWidget(self._summary_title)
+        self._summary_note = QLabel("滤波关闭 · 保留原始数据", self._summary_row)
+        self._summary_note.setObjectName("BatchFilterSummaryNote")
+        top_lay.addWidget(self._summary_note, 1)
+        self._enable_switch = PillSwitch(
+            self._summary_row,
+            object_name="batchFilterEnableSwitch",
+            accessible_name="滤波",
+        )
+        self._enable_switch.setChecked(False)
+        top_lay.addWidget(self._enable_switch, 0, Qt.AlignVCenter | Qt.AlignRight)
+        root.addWidget(self._summary_row)
 
-        self._settings = QWidget(top_row)
+        self._settings = QWidget(self)
         form = QFormLayout(self._settings)
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(6)
@@ -96,13 +112,7 @@ class BatchFilterPanel(QWidget):
         self.combo_order.setCurrentText("4")
         form.addRow("阶数", _field(self.combo_order, 120))
 
-        self._enable_switch = PillSwitch(
-            top_row, object_name="batchFilterEnableSwitch", accessible_name="滤波"
-        )
-        self._enable_switch.setChecked(False)
-        top_lay.addWidget(self._settings, 1)
-        top_lay.addWidget(self._enable_switch, 0, Qt.AlignTop | Qt.AlignRight)
-        root.addWidget(top_row)
+        root.addWidget(self._settings)
 
         self._time_options = QWidget(self)
         time_lay = QHBoxLayout(self._time_options)
@@ -117,6 +127,7 @@ class BatchFilterPanel(QWidget):
         time_lay.addStretch(1)
         root.addWidget(self._time_options)
 
+        self._method = "fft"
         self._sync_enabled()
         self._sync_kind_rows()
         self.set_method("fft")
@@ -125,14 +136,19 @@ class BatchFilterPanel(QWidget):
         self._enable_switch.toggled.connect(lambda *_: self.changed.emit())
         self.combo_kind.currentTextChanged.connect(self._sync_kind_rows)
         self.combo_kind.currentTextChanged.connect(lambda *_: self.changed.emit())
+        self.combo_order.currentTextChanged.connect(self._refresh_summary)
         self.combo_order.currentTextChanged.connect(lambda *_: self.changed.emit())
         for spin in (self.spin_cutoff, self.spin_cutoff_lo, self.spin_cutoff_hi):
+            spin.valueChanged.connect(self._refresh_summary)
             spin.valueChanged.connect(lambda *_: self.changed.emit())
         for chk in (self.chk_show_original, self.chk_show_filtered):
             chk.toggled.connect(lambda *_: self.changed.emit())
 
     def _sync_enabled(self, *_args) -> None:
-        self._settings.setEnabled(self._enable_switch.isChecked())
+        enabled = self._enable_switch.isChecked()
+        self._settings.setVisible(enabled)
+        self._time_options.setVisible(enabled and self._method == "time")
+        self._refresh_summary()
 
     def _sync_kind_rows(self, *_args) -> None:
         is_band = self._kind_key() in {"band", "bandstop"}
@@ -143,12 +159,31 @@ class BatchFilterPanel(QWidget):
         self._band_row.setVisible(is_band)
         self.spin_cutoff_lo.setVisible(is_band)
         self.spin_cutoff_hi.setVisible(is_band)
+        self._refresh_summary()
+
+    def _refresh_summary(self, *_args) -> None:
+        if not self._enable_switch.isChecked():
+            self._summary_note.setText("滤波关闭 · 保留原始数据")
+            return
+        order = int(self.combo_order.currentText())
+        if self._kind_key() in {"band", "bandstop"}:
+            range_text = (
+                f"{self.spin_cutoff_lo.value():g}–{self.spin_cutoff_hi.value():g} Hz"
+            )
+        else:
+            range_text = f"{self.spin_cutoff.value():g} Hz"
+        self._summary_note.setText(
+            f"{self.combo_kind.currentText()} · {range_text} · {order} 阶"
+        )
 
     def _kind_key(self) -> str:
         return _KIND_LABEL_TO_KEY.get(self.combo_kind.currentText(), "low")
 
     def set_method(self, method: str) -> None:
-        self._time_options.setVisible(str(method) == "time")
+        self._method = str(method)
+        self._time_options.setVisible(
+            self._method == "time" and self._enable_switch.isChecked()
+        )
 
     def time_output_options_visible(self) -> bool:
         return not self._time_options.isHidden()

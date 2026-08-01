@@ -293,7 +293,18 @@ def normalize_batch_params(params: Mapping[str, Any] | None, method: object) -> 
         if field in KNOWN_PARAM_FIELDS and field not in compatible:
             continue
         normalized[field] = _normalize_known_value(field, value)
+    # A source-data window is an FFT-only analysis input.  FFT-vs-Time and
+    # order analysis deliberately consume the full valid time domain; keeping
+    # a legacy ``time_range`` merely because it is a common historical field
+    # would silently crop their matrices in ``batch_preprocess``.
+    if method_key in {"fft_time", "order_time"}:
+        normalized.pop("time_range", None)
     if method_key == "time":
+        # Time-domain output is linear engineering data.  dB reference is a
+        # spectral display concern and must neither occupy the compact UI nor
+        # leak through an imported legacy recipe.
+        normalized.pop("db_reference", None)
+        normalized.pop("db_reference_mode", None)
         group_by = normalized.get(
             "render_group_by", TIME_RENDER_DEFAULTS["render_group_by"],
         )

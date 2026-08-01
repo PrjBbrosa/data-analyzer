@@ -79,6 +79,7 @@ _LEGACY_IMAGE_FORMATS = frozenset({'pdf', 'svg'})
 def _legacy_image_format_warning(requested_format: object) -> str:
     requested = str(requested_format or '').strip().upper()
     return f'旧预设图像格式 {requested} 已迁移为 PNG；本次仅输出 PNG。'
+_XLSX_MAX_DATA_ROWS = 1_048_575
 
 
 @dataclass(frozen=True)
@@ -4605,7 +4606,19 @@ class BatchRunner:
 
         def write(temp_path):
             if path.suffix.lower() == '.xlsx':
-                df.to_excel(temp_path, index=False, engine='openpyxl')
+                # XLSX permits 1,048,576 rows including the column header.
+                # Split only at the physical format boundary so a large
+                # batch never silently truncates its final samples.
+                with pd.ExcelWriter(temp_path, engine='openpyxl') as writer:
+                    starts = range(0, len(df), _XLSX_MAX_DATA_ROWS) or (0,)
+                    for sheet_index, start in enumerate(
+                        starts, start=1,
+                    ):
+                        df.iloc[start:start + _XLSX_MAX_DATA_ROWS].to_excel(
+                            writer,
+                            sheet_name=f"数据{sheet_index}",
+                            index=False,
+                        )
             else:
                 df.to_csv(temp_path, index=False)
 

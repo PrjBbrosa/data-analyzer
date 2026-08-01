@@ -21,10 +21,10 @@ import os
 from typing import Iterable
 
 from PyQt5.QtCore import (
-    QObject, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal,
+    QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, pyqtSignal,
 )
 from PyQt5.QtWidgets import (
-    QAbstractSpinBox, QAction, QComboBox, QFileDialog, QFormLayout, QFrame,
+    QAbstractSpinBox, QAction, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
     QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
@@ -158,6 +158,62 @@ class _FileRow:
         self._item: QListWidgetItem | None = None
 
 
+class _StructuredFileRow(QWidget):
+    """Compact modal row that exposes source state without a text wall."""
+
+    _STATE_TEXT = {
+        STATE_LOADED: "已解析",
+        STATE_PATH_PENDING: "等待解析",
+        STATE_PROBING: "解析中",
+        STATE_PROBE_FAILED: "解析失败",
+        STATE_UNAVAILABLE: "不可用",
+    }
+
+    def __init__(self, owner: "FileListWidget", row: _FileRow) -> None:
+        super().__init__(owner._list)
+        self.setObjectName("BatchStructuredFileRow")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 4, 4, 4)
+        lay.setSpacing(8)
+
+        dot = QLabel(self)
+        dot.setObjectName("BatchFileStateDot")
+        dot.setFixedSize(8, 8)
+        dot.setProperty("ready", row.state == STATE_LOADED)
+        dot.setProperty(
+            "failed", row.state in {STATE_PROBE_FAILED, STATE_UNAVAILABLE},
+        )
+        lay.addWidget(dot)
+
+        copy_host = QWidget(self)
+        copy_lay = QVBoxLayout(copy_host)
+        copy_lay.setContentsMargins(0, 0, 0, 0)
+        copy_lay.setSpacing(1)
+        name = QLabel(row.display_name or os.path.basename(row.path) or row.path, copy_host)
+        name.setObjectName("BatchFileRowName")
+        path = QLabel(os.path.dirname(row.path) or row.path, copy_host)
+        path.setObjectName("BatchFileRowPath")
+        copy_lay.addWidget(name)
+        copy_lay.addWidget(path)
+        lay.addWidget(copy_host, 1)
+
+        state = QLabel(self._STATE_TEXT.get(row.state, row.state), self)
+        state.setObjectName("BatchFileRowState")
+        state.setProperty("ready", row.state == STATE_LOADED)
+        state.setProperty(
+            "failed", row.state in {STATE_PROBE_FAILED, STATE_UNAVAILABLE},
+        )
+        lay.addWidget(state)
+
+        remove = QPushButton("×", self)
+        remove.setObjectName("BatchFileRowRemove")
+        remove.setFixedSize(24, 24)
+        remove.setToolTip("移除数据源")
+        remove.clicked.connect(lambda _checked=False, path=row.path: owner.remove_path(path))
+        lay.addWidget(remove)
+
+
 class FileListWidget(QWidget):
     """List of files with explicit state machine + probe wiring."""
 
@@ -189,23 +245,28 @@ class FileListWidget(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(6)
+        outer.setSpacing(0)
 
-        # Header row: count + "+ 已加载" + "+ 磁盘…"
+        # Modal action row. Counts live in InputPanel's modal title bar so
+        # this strip contains actions only, matching the approved prototype.
         header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
+        header.setContentsMargins(0, 10, 0, 10)
+        header.setSpacing(7)
         self._count_label = QLabel("文件 (0)")
-        header.addWidget(self._count_label, 1)
+        self._count_label.hide()
         self._btn_loaded = QPushButton("+ 已加载")
         self._btn_loaded.clicked.connect(self._open_loaded_menu)
         header.addWidget(self._btn_loaded)
-        self._btn_disk = QPushButton("+ 磁盘…")
+        self._btn_disk = QPushButton("+ 从磁盘…")
         self._btn_disk.clicked.connect(self._open_disk_dialog)
         header.addWidget(self._btn_disk)
+        header.addStretch(1)
         outer.addLayout(header)
 
         self._list = QListWidget(self)
         self._list.setObjectName("BatchFileList")
+        self._list.setSpacing(0)
+        self.setProperty("structuredRows", True)
         outer.addWidget(self._list, 1)
 
     # ------------------------------------------------------------------
@@ -493,6 +554,7 @@ class FileListWidget(QWidget):
         if row._item is None:
             item = QListWidgetItem(text, self._list)
             item.setData(Qt.UserRole, row.source_id)
+            item.setSizeHint(QSize(0, 46))
             row._item = item
         else:
             row._item.setText(text)
@@ -506,6 +568,7 @@ class FileListWidget(QWidget):
         if row.error:
             tooltip.append(row.error)
         row._item.setToolTip("\n".join(tooltip))
+        self._list.setItemWidget(row._item, _StructuredFileRow(self, row))
 
     def _after_change(self) -> None:
         self._count_label.setText(f"文件 ({len(self._rows)})")
@@ -566,7 +629,7 @@ class FileListWidget(QWidget):
 # Input panel composition
 # ---------------------------------------------------------------------------
 class InputPanel(QWidget):
-    """Composes the INPUT column: file list + signal picker + RPM + time."""
+    """Compact INPUT column; full file rows live in its file-manager dialog."""
 
     changed = pyqtSignal()
     channelUniverseChanged = pyqtSignal(tuple, dict)
@@ -583,22 +646,99 @@ class InputPanel(QWidget):
         self.setObjectName("BatchInputPanel")
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(10)
+        self._outer_layout = outer
+        outer.setContentsMargins(12, 14, 12, 18)
+        outer.setSpacing(12)
 
-        title = QLabel("INPUT")
-        title.setStyleSheet("color:#3b82f6;font-weight:600;font-size:13px;")
-        outer.addWidget(title)
+        files_head = QWidget(self)
+        files_head_lay = QHBoxLayout(files_head)
+        files_head_lay.setContentsMargins(0, 0, 0, 0)
+        files_head_lay.setSpacing(6)
+        title = QLabel("数据文件", files_head)
+        title.setObjectName("BatchSectionTitle")
+        files_head_lay.addWidget(title)
+        files_head_lay.addStretch(1)
+        self._btn_manage_files = QPushButton("管理文件", files_head)
+        self._btn_manage_files.setObjectName("BatchManageFilesButton")
+        self._btn_manage_files.clicked.connect(self.open_file_manager)
+        files_head_lay.addWidget(self._btn_manage_files)
+        outer.addWidget(files_head)
 
-        # File list block
+        # The large list is still the one authoritative file model, but no
+        # longer consumes the main dialog's left column.  A persistent child
+        # dialog keeps probes and selected rows alive across open/close.
+        self._file_manager_dialog = QDialog(self)
+        self._file_manager_dialog.setObjectName("BatchFileManagerDialog")
+        self._file_manager_dialog.setWindowTitle("管理批处理文件")
+        self._file_manager_dialog.setModal(True)
+        self._file_manager_dialog.resize(540, 400)
+        self._file_manager_dialog.setMaximumWidth(560)
+        manager_lay = QVBoxLayout(self._file_manager_dialog)
+        manager_lay.setContentsMargins(14, 0, 14, 12)
+        manager_lay.setSpacing(0)
+
+        self._file_manager_header = QWidget(self._file_manager_dialog)
+        self._file_manager_header.setObjectName("BatchFileManagerHeader")
+        manager_head = QHBoxLayout(self._file_manager_header)
+        manager_head.setContentsMargins(0, 0, 0, 0)
+        manager_head.setSpacing(8)
+        manager_title = QLabel("管理数据文件", self._file_manager_header)
+        manager_title.setObjectName("BatchFileManagerTitle")
+        manager_head.addWidget(manager_title)
+        self._file_manager_facts = QLabel("0 个数据源", self._file_manager_header)
+        self._file_manager_facts.setObjectName("BatchFileManagerFacts")
+        manager_head.addWidget(self._file_manager_facts)
+        manager_head.addStretch(1)
+        manager_close = QPushButton("×", self._file_manager_header)
+        manager_close.setObjectName("BatchFileManagerClose")
+        manager_close.setFixedSize(28, 28)
+        manager_close.clicked.connect(self._file_manager_dialog.close)
+        manager_head.addWidget(manager_close)
+        self._file_manager_header.setFixedHeight(48)
+        manager_lay.addWidget(self._file_manager_header)
+
         self._file_list = FileListWidget(
-            self, files=files, source_registry=source_registry,
+            self._file_manager_dialog, files=files, source_registry=source_registry,
             source_context=source_context,
         )
-        outer.addWidget(self._file_list, 1)
+        manager_lay.addWidget(self._file_list, 1)
+
+        file_summary_host = QFrame(self)
+        file_summary_host.setObjectName("BatchFileSummary")
+        file_summary_host.setFixedHeight(54)
+        file_summary_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        file_summary = QHBoxLayout(file_summary_host)
+        file_summary.setContentsMargins(10, 6, 10, 6)
+        file_summary.setSpacing(9)
+        summary_icon = QLabel("F", file_summary_host)
+        summary_icon.setObjectName("BatchFileSummaryIcon")
+        summary_icon.setAlignment(Qt.AlignCenter)
+        summary_icon.setFixedSize(31, 25)
+        file_summary.addWidget(summary_icon)
+        self._file_summary = QLabel("0 个文件\n等待添加数据源", file_summary_host)
+        self._file_summary.setObjectName("BatchFileSummaryText")
+        file_summary.addWidget(self._file_summary, 1)
+        self._file_ready = QLabel("待配置", file_summary_host)
+        self._file_ready.setObjectName("BatchFileReadyPill")
+        file_summary.addWidget(self._file_ready)
+        outer.addWidget(file_summary_host)
 
         # Form block
+        target_head = QWidget(self)
+        target_head_lay = QHBoxLayout(target_head)
+        target_head_lay.setContentsMargins(0, 0, 0, 0)
+        target_head_lay.setSpacing(6)
+        target_title = QLabel("目标", target_head)
+        target_title.setObjectName("BatchSectionTitle")
+        target_head_lay.addWidget(target_title)
+        target_head_lay.addStretch(1)
+        target_note = QLabel("文件间匹配", target_head)
+        target_note.setObjectName("BatchSectionNote")
+        target_head_lay.addWidget(target_note)
+        outer.addWidget(target_head)
+
         form_host = QFrame(self)
+        form_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         form = QFormLayout(form_host)
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(4)
@@ -674,20 +814,24 @@ class InputPanel(QWidget):
         # Internal flag so unit→factor and factor→unit don't ping-pong.
         self._rpm_factor_sync_busy = False
 
-        self._time_edit = QLineEdit(form_host)
-        self._time_edit.setPlaceholderText('留空=全段；"a,b" 表示 [a,b]s')
-        form.addRow("时间范围", self._time_edit)
+        # Compatibility holder for legacy direct callers.  It is deliberately
+        # not inserted into the compact Input form: BatchSheet maps ranges to
+        # time-axis controls (time) or source interval (FFT) instead.
+        self._time_edit = QLineEdit(self)
+        self._time_edit.hide()
 
         self._filter_panel = BatchFilterPanel(form_host)
         self._filter_panel.setMinimumWidth(0)
         self._filter_panel.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Preferred
         )
-        form.addRow("滤波", self._filter_panel)
+        form.addRow(self._filter_panel)
         outer.addWidget(form_host)
+        outer.addStretch(1)
 
         # Wiring
         self._file_list.filesChanged.connect(self._on_files_changed)
+        self._file_list.filesChanged.connect(self._refresh_file_summary)
         self._signal_picker.selectionChanged.connect(lambda *_: self.changed.emit())
         self._target_policy_combo.currentIndexChanged.connect(
             self._on_target_policy_changed
@@ -700,6 +844,7 @@ class InputPanel(QWidget):
 
         # Seed picker / RPM with initial empty intersection.
         self._refresh_signal_universe()
+        self._refresh_file_summary()
 
     # ------------------------------------------------------------------
     # Internal change handlers
@@ -707,6 +852,45 @@ class InputPanel(QWidget):
     def _on_files_changed(self) -> None:
         self._refresh_signal_universe()
         self.changed.emit()
+
+    def _refresh_file_summary(self) -> None:
+        rows = tuple(self._file_list._rows.values())
+        loaded = sum(row.state == STATE_LOADED for row in rows)
+        failed = sum(
+            row.state in {STATE_PROBE_FAILED, STATE_UNAVAILABLE} for row in rows
+        )
+        common = len(self._file_list.current_intersection())
+        detail = (
+            f"{len(rows)} 个文件\n{loaded} 已就绪 · 共同信号 {common} 个"
+            if rows else "0 个文件\n等待添加数据源"
+        )
+        self._file_summary.setText(detail)
+        self._file_manager_facts.setText(
+            f"{len(rows)} 个数据源 · 共同信号 {common} 个"
+        )
+        if failed:
+            self._file_ready.setText(f"{failed} 异常")
+            self._file_ready.setProperty("status", "error")
+        elif rows and loaded == len(rows):
+            self._file_ready.setText("全部就绪")
+            self._file_ready.setProperty("status", "ready")
+        elif rows:
+            self._file_ready.setText("解析中")
+            self._file_ready.setProperty("status", "pending")
+        else:
+            self._file_ready.setText("待配置")
+            self._file_ready.setProperty("status", "pending")
+        self._file_ready.style().unpolish(self._file_ready)
+        self._file_ready.style().polish(self._file_ready)
+
+    def open_file_manager(self) -> None:
+        self._file_manager_dialog.show()
+        self._file_manager_dialog.raise_()
+        self._file_manager_dialog.activateWindow()
+
+    def set_compact_mode(self, compact: bool) -> None:
+        side = 12 if compact else 18
+        self._outer_layout.setContentsMargins(side, 14, side, 18)
 
     def _on_target_policy_changed(self, _index: int) -> None:
         self._refresh_signal_universe()

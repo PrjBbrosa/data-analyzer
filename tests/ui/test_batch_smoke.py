@@ -579,7 +579,8 @@ def test_preflight_rejects_invalid_recipe_fields(qtbot, tmp_path):
 
     assert sheet.is_runnable() is False
     assert any(issue.field == "fs" for issue in sheet.preflight_issues())
-    assert "fs" in sheet.strip.cards[1].summary_label.text()
+    assert sheet.strip.cards[1].summary_label.text() == "FFT · 采样率无效"
+    assert sheet._footer_task_summary.text() == "请检查采样率"
 
 
 def test_available_policy_dry_run_uses_source_ids_without_cartesian_missing_pairs(
@@ -727,24 +728,16 @@ def test_batch_sheet_respects_1080x760_with_production_qss(qapp, qtbot):
         assert sheet.height() <= 760
         picker = sheet._input_panel._signal_picker
         assert picker.height() >= picker.sizeHint().height()
-        task_list = sheet._task_list
-        assert not task_list._body.isVisible()
-        assert task_list.height() <= 42
-
-        task_list.apply_dry_run(
-            [(f"{index}.hdf", "A", "fft") for index in range(20)],
-            outputs_per_task=2,
-        )
-        qtbot.wait(10)
-        assert task_list._body.isVisible()
-        assert task_list._body.height() <= 120
-        assert task_list.height() <= 162
+        assert not sheet._task_list.isVisible()
+        assert sheet._footer_host.height() == 54
+        assert sheet._footer_progress.isVisible()
+        assert sheet._footer_status.isVisible()
     finally:
         sheet.close()
         qapp.setStyleSheet(old_stylesheet)
 
 
-def test_sheet_round_trips_full_outputs_without_runtime_manifest_paths(qtbot):
+def test_sheet_migrates_legacy_outputs_to_the_compact_contract(qtbot):
     from mf4_analyzer.batch import BatchOutput
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
 
@@ -766,9 +759,14 @@ def test_sheet_round_trips_full_outputs_without_runtime_manifest_paths(qtbot):
     sheet.apply_outputs(outputs)
     sheet._resume_manifest_path = "/runtime/resume.json"
 
-    assert sheet.get_preset().outputs == outputs
+    compact = sheet.get_preset().outputs
+    assert compact.data_format == "xlsx"
+    assert compact.image_format == "png"
+    assert (compact.image_width, compact.image_height) == (1920, 1080)
+    assert compact.conflict_policy == "auto_number"
+    assert compact.resume_policy == "none"
     exported = sheet._build_preset_for_export()
-    assert exported.outputs == outputs
+    assert exported.outputs == compact
     assert not hasattr(exported, "resume_manifest")
     assert not hasattr(exported, "retry_failed_manifest")
 
@@ -806,8 +804,8 @@ def test_sheet_output_preview_uses_batch_runner_core_facts(qtbot, tmp_path):
     preview = sheet._output_panel.output_preview_text()
     assert "1 任务" in preview
     assert "2 文件" in preview
-    assert "PNG 2560×1440" in preview
-    assert "skip" in preview
+    assert "PNG 1920×1080" in preview
+    assert "auto_number" in preview
 
 
 def test_sheet_resume_retry_manifest_selection_is_runtime_only(
@@ -829,7 +827,7 @@ def test_sheet_resume_retry_manifest_selection_is_runtime_only(
     sheet._output_panel._btn_resume.click()
     assert sheet._resume_manifest_path == str(resume_path)
     assert sheet._retry_failed_manifest_path is None
-    assert sheet.get_preset().outputs.resume_policy == "manifest"
+    assert sheet.get_preset().outputs.resume_policy == "none"
     assert resume_path.name in sheet._output_panel._operation_status.text()
 
     sheet._output_panel._btn_retry_failed.click()
@@ -837,6 +835,7 @@ def test_sheet_resume_retry_manifest_selection_is_runtime_only(
     assert sheet._retry_failed_manifest_path == str(retry_path)
     assert sheet.get_preset().outputs.resume_policy == "none"
     assert retry_path.name in sheet._output_panel._operation_status.text()
+    assert not sheet._output_panel._operation_status.isVisible()
     assert not hasattr(sheet.get_preset(), "retry_failed_manifest")
 
 
@@ -861,7 +860,8 @@ def test_sheet_routes_output_validation_issues_to_output_stage(
 
     assert field not in sheet.strip.cards[1].summary_label.text()
     assert sheet.strip.cards[2].stage_status == "warn"
-    assert field in sheet.strip.cards[2].summary_label.text()
+    assert field not in sheet.strip.cards[2].summary_label.text()
+    assert sheet.strip.cards[2].summary_label.text() == "导出设置待完善"
 
 
 def test_sheet_lock_includes_toolbar_and_output_operations(qtbot):
