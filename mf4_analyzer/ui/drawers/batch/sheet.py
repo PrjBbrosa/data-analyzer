@@ -28,7 +28,7 @@ from ....batch import AnalysisPreset, BatchOutput, BatchRunner
 from ....batch_preset_io import (
     UnsupportedPresetVersion, load_preset_from_json, save_preset_to_json,
 )
-from ....batch_recipe import normalize_batch_params
+from ....batch_recipe import TIME_RENDER_DEFAULTS, normalize_batch_params
 from ....batch_validation import (
     ValidationIssue, validate_outputs, validate_recipe,
 )
@@ -595,7 +595,16 @@ class BatchSheet(QDialog):
                 self.apply_signals(tuple(preset.target_signals))
 
             self.apply_method(method)
-            self.apply_params(params)
+            # ``apply_preset`` is a full-recipe boundary.  Canonical time
+            # recipes omit default-valued sparse fields, so materialize those
+            # defaults for the controls here.  ``apply_params`` itself remains
+            # incremental for built-in presets and other partial patches.
+            control_params = (
+                {**TIME_RENDER_DEFAULTS, **params}
+                if method == "time"
+                else params
+            )
+            self.apply_params(control_params)
             if "rpm_factor" in params:
                 self._input_panel.apply_rpm_factor(params["rpm_factor"])
             self._input_panel.apply_filter_params(params.get("filter"))
@@ -644,8 +653,10 @@ class BatchSheet(QDialog):
                 getattr(row, "units", {}) or {}
             ).get(channel, "")
             clean = str(unit or "").strip()
-            if clean:
-                units.add(clean)
+            # Missing/blank units are still source facts.  Dropping them would
+            # make ("", "rpm") look uniformly rpm and publish a false axis
+            # unit instead of rejecting the mixed-source recipe.
+            units.add(clean)
         return tuple(sorted(units))
 
     def _sync_x_axis_context(self, *_args) -> None:

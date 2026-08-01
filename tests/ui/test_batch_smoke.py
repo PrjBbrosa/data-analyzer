@@ -138,6 +138,47 @@ def test_batch_sheet_time_filter_preset_round_trip(qtbot, tmp_path):
     assert got.params["filter"]["show_filtered"] is True
 
 
+def test_full_time_preset_with_sparse_params_resets_all_time_render_state(qtbot):
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet.apply_method("time")
+    form = sheet._analysis_panel._param_form
+    form.set_x_channel_candidates(("speed",), {})
+    sheet.apply_params({
+        "render_group_by": "source",
+        "render_layout": "subplot",
+        "x_source": "channel",
+        "x_channel": "speed",
+        "x_origin": "absolute",
+    })
+    assert form._pending_x_channel == "speed"
+
+    # Exercise both bits of transient channel state before the full recipe
+    # boundary.  A normalized preset with no sparse deviations represents all
+    # five canonical defaults, not an incremental patch.
+    form.set_x_channel_candidates(("rpm",), {"speed": "(1/2)"})
+    assert "speed" in form.x_channel_validation_message()
+
+    sheet.apply_preset(AnalysisPreset.free_config(
+        name="defaults",
+        method="time",
+        target_signals=(),
+        params={},
+    ))
+
+    assert form._w_render_group_by.currentData() == "none"
+    assert form._w_render_layout.currentData() == "overlay"
+    assert form._w_x_source.currentData() == "time"
+    assert form._w_x_channel.currentData() == ""
+    assert form._w_x_origin.currentData() == "zero"
+    assert form._pending_x_channel == ""
+    assert form.x_channel_validation_message() == ""
+    assert form.get_params() == {}
+
+
 def _time_file_data(
     tmp_path, name, *, speed_unit="", speed_metadata_unit="",
     channels=("target", "speed"),
@@ -229,6 +270,34 @@ def test_sheet_time_x_preflight_uses_metadata_then_units_and_fails_mixed(
     )
     assert sheet._output_panel._axis_row_parts["x"]["label"].text() == "speed"
     assert "rpm" not in sheet._output_panel._axis_row_parts["x"]["label"].text()
+
+
+def test_sheet_time_x_empty_unit_is_a_real_cross_source_unit_fact(qtbot, tmp_path):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    first = _time_file_data(tmp_path, "one.csv")
+    second = _time_file_data(tmp_path, "two.csv", speed_unit="rpm")
+    sheet = BatchSheet(None, files={"s1": first, "s2": second})
+    qtbot.addWidget(sheet)
+    sheet.apply_files(("s1", "s2"), ())
+    sheet.apply_signals(("target",))
+    sheet.apply_method("time")
+    sheet.apply_params({"x_source": "channel", "x_channel": "speed"})
+
+    assert any(
+        issue.field == "x_channel" and issue.code == "mixed_x_units"
+        for issue in sheet.preflight_issues()
+    )
+    assert sheet._output_panel._axis_row_parts["x"]["label"].text() == "speed"
+
+    second_row = sheet._input_panel._file_list._rows["s2"]
+    second_row.units["speed"] = ""
+    sheet._input_panel._refresh_signal_universe()
+
+    assert not any(
+        issue.code == "mixed_x_units" for issue in sheet.preflight_issues()
+    )
+    assert sheet._output_panel._axis_row_parts["x"]["label"].text() == "speed"
 
 
 def test_sheet_channel_x_without_selection_has_field_issue(qtbot, tmp_path):

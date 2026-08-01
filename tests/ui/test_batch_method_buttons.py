@@ -247,6 +247,32 @@ def test_time_params_return_only_active_semantic_deviations_and_reset(qtbot):
     assert form.get_params() == {}
 
 
+def test_time_apply_params_empty_patch_remains_incremental(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.set_x_channel_candidates(("speed",), {})
+    form.apply_params({
+        "render_group_by": "source",
+        "render_layout": "subplot",
+        "x_source": "channel",
+        "x_channel": "speed",
+        "x_origin": "absolute",
+    })
+
+    form.apply_params({})
+
+    assert form._w_render_group_by.currentData() == "source"
+    assert form._w_render_layout.currentData() == "subplot"
+    assert form._w_x_source.currentData() == "channel"
+    assert form._w_x_channel.currentData() == "speed"
+    assert form._w_x_origin.currentData() == "absolute"
+    assert form._pending_x_channel == "speed"
+    assert form.x_channel_validation_message() == ""
+
+
 def test_time_params_omit_inactive_layout_channel_and_origin(qtbot):
     from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
 
