@@ -362,6 +362,55 @@ def test_time_current_x_channel_becoming_stale_emits_once(qtbot):
     assert "speed" in form.x_channel_validation_message()
 
 
+def test_time_user_clearing_x_channel_drops_pending_and_reports_missing(qtbot):
+    from PyQt5.QtTest import QSignalSpy
+
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.set_x_channel_candidates(("speed",), {})
+    form.apply_params({"x_source": "channel", "x_channel": "speed"})
+    assert form.get_params() == {
+        "x_source": "channel",
+        "x_channel": "speed",
+    }
+
+    spy = QSignalSpy(form.paramsChanged)
+    form._w_x_channel.setCurrentIndex(0)
+
+    assert len(spy) == 1
+    assert form.get_params() == {"x_source": "channel"}
+    assert form._pending_x_channel == ""
+    assert form.x_channel_validation_message() == "请选择 X 通道"
+
+
+@pytest.mark.parametrize("method", ("fft", "fft_time", "order_time"))
+def test_non_time_render_hides_both_x_dependency_rows_and_time_restores(
+    qtbot, method,
+):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.apply_params({"x_source": "channel"})
+    assert form._w_x_channel.isHidden() is False
+    assert form._w_x_origin.isHidden() is True
+
+    form.set_method(method)
+
+    assert form._form.indexOf(form._w_x_channel) == -1
+    assert form._form.indexOf(form._w_x_origin) == -1
+    assert form._w_x_channel.isHidden() is True
+    assert form._w_x_origin.isHidden() is True
+
+    form.set_method("time")
+    assert form._w_x_channel.isHidden() is False
+    assert form._w_x_origin.isHidden() is True
+
+
 def test_time_dependency_rows_resync_after_method_round_trip(qtbot):
     from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
 

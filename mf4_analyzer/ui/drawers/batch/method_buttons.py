@@ -387,6 +387,10 @@ class DynamicParamForm(QWidget):
         )
 
     def _sync_x_source(self, *_args) -> None:
+        if self._current != "time":
+            _set_form_row_visible(self._form, self._w_x_channel, False)
+            _set_form_row_visible(self._form, self._w_x_origin, False)
+            return
         use_channel = self._w_x_source.currentData() == "channel"
         _set_form_row_visible(self._form, self._w_x_channel, use_channel)
         _set_form_row_visible(self._form, self._w_x_origin, not use_channel)
@@ -396,6 +400,13 @@ class DynamicParamForm(QWidget):
         if selected:
             self._pending_x_channel = selected
             self._x_channel_validation = ""
+        else:
+            self._pending_x_channel = ""
+            if (
+                self._current == "time"
+                and self._w_x_source.currentData() == "channel"
+            ):
+                self._x_channel_validation = "请选择 X 通道"
         self.paramsChanged.emit()
 
     def x_channel_validation_message(self) -> str:
