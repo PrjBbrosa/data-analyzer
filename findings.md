@@ -357,3 +357,11 @@ Actual Windows W1/W2 JSON remains absent and therefore BLOCKED.
 - Partial success is best represented once in a card-owned diagnostic pill and
   status count sourced from the same build result. Individual toast errors and
   silent fallback to time both hide which source was actually drawn.
+- A structured producer return change must include monkeypatched test consumers:
+  compute-progress and overlay-risk tests still returned list fakes after
+  `_build_time_plot_data()` adopted `TimePlotBuildResult`, and were absent from
+  the original directed plan.
+- Real foreground acceptance is currently blocked before custom-X interaction:
+  loading the first MF4 caused a main-thread EXC_BAD_ACCESS in PyQt/Qt graphics
+  resize/layout code (`Python-2026-08-01-213130.ips`). This is a separate live
+  evidence class from the green offscreen custom-X tests.

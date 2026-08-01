@@ -1487,11 +1487,17 @@ def test_all_custom_x_failures_use_empty_hint_and_card_diagnostic(
     fid = next(iter(w.files))
     w._attach_files_to_focused_view([fid])
     w.navigator.set_checked_channels([(fid, "force")])
-    w._custom_xaxis_spec = CustomXAxisSpec(
-        mode="channel", resolver="per_source_name", channel="angle",
-    )
+    w.inspector.top.set_xaxis_mode("channel")
+    w.inspector.top.set_xaxis_candidates([
+        (
+            "angle · 0/1 个数据可用",
+            ("per_source_name", None, "angle"),
+        ),
+    ])
+    toast_calls = []
+    w.toast = lambda message, level="info": toast_calls.append((message, level))
 
-    w.plot_time(user_initiated=True)
+    w._apply_xaxis()
     qapp.processEvents()
 
     assert w.canvas_time._empty_hint_text == "自定义横坐标无法绘制 · 0/1"
@@ -1504,6 +1510,8 @@ def test_all_custom_x_failures_use_empty_hint_and_card_diagnostic(
         QLabel, "timePlotDiagnosticsDetails"
     )
     assert "缺少横坐标通道 angle" in details.text()
+    assert ("横坐标已更新", "success") not in toast_calls
+    assert w.statusBar.currentMessage() == "绘制: 0/1 通道"
 
 
 def test_channel_edit_refreshes_custom_xaxis_candidates(qapp, qtbot, loaded_csv):

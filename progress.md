@@ -426,6 +426,37 @@
 
 ## 2026-08-01 TimeDomain Per-Source Custom X-Axis Execution
 
+- Reconnected after the parallel Batch session completed. Live Git state shows
+  `26e422b` (Batch) followed by `4db876b` (custom-X) and local-main merge
+  `4d88457`; both commits are ancestors of HEAD and the workstreams do not
+  overlap Batch-owned source/test files.
+- Updated the formal plan's baseline and final verification commands: integrated
+  checks now run from local `main`, include the previously omitted pure resolver
+  test file, and add a dedicated `26e422b` Batch protection suite.
+- The first refreshed invocation reproduced an already-recorded command defect:
+  inserting root-level `tests/test_project_io.py` into the UI list prevented
+  later UI files from receiving their local fixtures (`819 passed`, `4 failed`,
+  `43 errors`). The formal plan now separates UI and project-I/O invocations;
+  this mixed-path result is diagnostic only and is not used as a product gate.
+- Two additional UI test owners were missing from the reviewed directed list:
+  compute-progress and overlay-risk tests still faked the retired list return
+  from `_build_time_plot_data()`. Their fakes now use the authoritative
+  `TimePlotBuildResult`, and both files are included in the formal gate.
+- Independent merge-boundary review returned P0/P1 PASS and found one P2:
+  all-failed custom-X Apply overwrote truthful `0/N` diagnostics with a success
+  toast. A RED-first regression now drives the render result back to the apply
+  handler; all-failed keeps the empty hint, pill, and `0/N` status without the
+  contradictory toast.
+- Integrated verification is green: custom-X resolver/render/state/project and
+  producer-consumer tests total `85 passed`; the Batch UI and core protection
+  suites total `457 passed`. `py_compile`, `git diff --check`, ancestry, and the
+  lesson gate passed.
+- Foreground macOS acceptance was attempted with real MF4 files. TraceLab v7.9
+  launched, but confirming the first file triggered SIGSEGV before custom-X
+  selection. `Python-2026-08-01-213130.ips` records EXC_BAD_ACCESS on the main
+  thread in `sipQGraphicsWidget::resizeEvent` / Qt graphics-layout geometry.
+  Foreground acceptance therefore remains UNVERIFIED; it is not replaced by
+  the offscreen suite.
 - Reviewed the Claude-updated plan with independent state/persistence and
   render/diagnostics passes, patched every P1 ambiguity, then dispatched three
   non-overlapping implementation workstreams.

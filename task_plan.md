@@ -4,10 +4,10 @@
 
 ### Goal
 
-Write an implementation-ready, documentation-only plan so TimeDomain can use
-each checked source's own same-named custom X channel.  Unequal source lengths
-must remain drawable in both split and overlay modes; overlay means a shared
-physical X coordinate system, not index pairing or normalization.
+Integrate and verify the reviewed TimeDomain per-source custom-X implementation
+on top of completed Batch commit `26e422b`. Unequal source lengths must remain
+drawable in both split and overlay modes; overlay means a shared physical X
+coordinate system, not index pairing or normalization.
 
 ### Phases
 
@@ -15,8 +15,8 @@ physical X coordinate system, not index pairing or normalization.
   test, and lesson evidence.
 - [x] Freeze the per-source X, partial-success, unit, diagnostics, cache, and
   legacy-state contracts in a formal implementation plan.
-- [x] Cross-check scope: UI/export items 1–3 are owned by another session;
-  this task changes no product source or tests.
+- [x] Cross-check scope: UI/export items 1–3 were completed by another session
+  in `26e422b`; custom-X changes no Batch product source or tests.
 - [x] Independently review the Claude-updated plan against state/persistence
   and rendering/diagnostics consumers; close all P1 ambiguities.
 - [x] Workstream A: implement the pure X resolver and Inspector candidate
@@ -29,6 +29,13 @@ physical X coordinate system, not index pairing or normalization.
   full repository pytest, complete the lesson gate, and record the existing
   Qt SIGSEGV plus the remaining live-UI acceptance limit without claiming a
   false full-suite PASS.
+- [x] Confirm local integration order and ancestry: `26e422b` -> `4db876b` ->
+  merge `4d88457` on local `main`.
+- [x] Re-run the custom-X directed/consumer suite and `26e422b` Batch protection
+  suite from integrated local `main`.
+- [ ] Complete real macOS foreground acceptance with unequal-length source files;
+  current attempt is blocked before custom-X selection by a main-thread
+  Qt/pyqtgraph geometry SIGSEGV while loading the first real MF4.
 
 ### Guardrails
 

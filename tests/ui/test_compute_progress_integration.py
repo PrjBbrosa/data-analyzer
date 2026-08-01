@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from mf4_analyzer.ui.main_window import MainWindow
+from mf4_analyzer.ui.main_window.window import TimePlotBuildResult
 from mf4_analyzer.ui.main_window import _order_mixin as order_mod
 from mf4_analyzer.ui.main_window import _fft_mixin as fft_mod
 from mf4_analyzer.ui.plot_risk import PlotRisk, PlotRiskLevel
@@ -30,6 +31,14 @@ def _time_row():
         "rpm",
         "f1",
     )
+
+
+def _time_result(*rows):
+    result = TimePlotBuildResult(rows=list(rows))
+    result.attempted_channel_keys.add(("f1", "speed"))
+    if rows:
+        result.successful_channel_keys.add(("f1", "speed"))
+    return result
 
 
 def _make_time_window(qapp, qtbot, monkeypatch):
@@ -78,7 +87,7 @@ def test_time_domain_progress_wraps_build_and_plot(qapp, qtbot, monkeypatch):
 
     def build(*_args, **_kwargs):
         order.append(("build", None))
-        return [_time_row()]
+        return _time_result(_time_row())
 
     def plot(*_args, **_kwargs):
         order.append(("plot", None))
@@ -103,7 +112,7 @@ def test_time_domain_progress_finishes_on_empty_data(qapp, qtbot, monkeypatch):
 
     def build(*_args, **_kwargs):
         order.append(("build", None))
-        return []
+        return _time_result()
 
     monkeypatch.setattr(win, "_build_time_plot_data", build)
     monkeypatch.setattr(
@@ -145,7 +154,9 @@ def test_time_domain_danger_cancel_does_not_begin_progress(
     monkeypatch.setattr(
         win,
         "_build_time_plot_data",
-        lambda *_args, **_kwargs: order.append(("build", None)) or [_time_row()],
+        lambda *_args, **_kwargs: (
+            order.append(("build", None)) or _time_result(_time_row())
+        ),
     )
     monkeypatch.setattr(
         win.canvas_time,

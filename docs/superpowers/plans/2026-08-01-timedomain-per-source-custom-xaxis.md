@@ -1,10 +1,14 @@
 # TimeDomain 每数据源自定义横坐标与部分绘制优化计划
 
-**状态：** 已经 Claude + Codex 双重审查并完成源码实施与 offscreen 定向验证；真实
+**状态：** 已经 Claude + Codex 双重审查并完成源码实施与 offscreen 定向验证；实现提交
+`4db876b` 已在批处理提交 `26e422b` 之上合入本地 `main`（merge `4d88457`）。真实
 macOS 前台验收仍待执行。全仓 pytest 已尝试，但被既有 Qt delegate 生命周期
 SIGSEGV 中止，不能标记为全量绿色。
 
-**范围：** 仅前台 TimeDomain 的自定义横坐标、分屏/叠加绘制、状态保存与图内诊断。用户已明确由另一 session 处理下拉搜索、导出白底、导出设置折叠（原需求 1–3），本计划不触碰它们；不改动 Batch 的任何代码。（注意：Batch 的现有策略并非“所有 source
+**范围：** 仅前台 TimeDomain 的自定义横坐标、分屏/叠加绘制、状态保存与图内诊断。另一
+session 负责的下拉搜索、导出白底、导出设置折叠（原需求 1–3）已经在 `26e422b`
+完成；本计划不重复实现、不改动 Batch 的任何代码，只把该提交作为集成与回归基线。
+（注意：Batch 的现有策略并非“所有 source
 共同具备 X 通道”——它已按名逐 source 解析，详见文末「风险与非目标」的修正条目。）
 
 ## 要解决的行为
@@ -234,9 +238,9 @@ owner（`set_xaxis_candidates` / `xaxis_channel_data` / `_sync_xlabel_from_chann
 - 先运行步骤 1 新增的定向 pytest，确认旧实现因全局长度检查或 time fallback 失败；再实现到 GREEN。
 - 运行：
 
-  **执行目录固定为本计划所在的 worktree**，避免测到 `~/Downloads/data analyzer` 中
-  另一 session 的并行修改。本 worktree 没有 `.venv`，只借用主 checkout 的解释器，
-  仍以 `PYTHONPATH=.` 加载当前 worktree 源码：
+  实施阶段曾固定在隔离 worktree 运行；在 `4d88457` 合入后，最终集成验证固定在主
+  checkout `/Users/donghang/Downloads/data analyzer` 运行，以同时覆盖 `26e422b` 与
+  `4db876b`。解释器使用主 checkout 的 `.venv`，以 `PYTHONPATH=.` 加载当前 `main`：
 
   原命令的 `-k 'custom_xaxis or time_range'` 只筛 smoke 一个文件，**跑不到**
   `test_inspector.py` / `test_view_switch_integration.py` /
@@ -245,6 +249,7 @@ owner（`set_xaxis_candidates` / `xaxis_channel_data` / `_sync_xlabel_from_chann
   ```bash
   TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. \
     '/Users/donghang/Downloads/data analyzer/.venv/bin/python' -m pytest \
+    tests/ui/test_time_xaxis.py \
     tests/ui/test_main_window_smoke.py \
     tests/ui/test_pg_timedomain_canvas.py \
     tests/ui/test_view_bridge.py \
@@ -252,7 +257,8 @@ owner（`set_xaxis_candidates` / `xaxis_channel_data` / `_sync_xlabel_from_chann
     tests/ui/test_view_switch_integration.py \
     tests/ui/test_task4_cache_invalidation.py \
     tests/ui/test_project_session.py \
-    tests/test_project_io.py \
+    tests/ui/test_compute_progress_integration.py \
+    tests/ui/test_main_window_overlay_risk.py \
     tests/ui/test_view_state.py \
     tests/ui/test_view_channel_scope.py \
     tests/ui/test_time_filter_overlay.py \
@@ -260,7 +266,40 @@ owner（`set_xaxis_candidates` / `xaxis_channel_data` / `_sync_xlabel_from_chann
     tests/ui/test_timedomain_hotpath_perf.py -q
   ```
 
-  合并前再跑一次全量 `pytest -q`，确认没有别的模块隐式依赖 `(fid, ch)` 形状。
+  `tests/test_project_io.py` 必须独立运行；不要把根目录测试插入上述 UI invocation，
+  否则后续 UI 文件不会获得其目录级 fixture，产生与产品行为无关的 collection/setup
+  errors：
+
+  ```bash
+  TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. \
+    '/Users/donghang/Downloads/data analyzer/.venv/bin/python' -m pytest \
+    tests/test_project_io.py -q
+  ```
+
+  另运行 `26e422b` 的 Batch 保护集，确认 custom-X 合并没有破坏搜索/输出面板、图片背景、
+  线宽、preset/recipe/validation/render/runner 合同：
+
+  ```bash
+  TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. \
+    '/Users/donghang/Downloads/data analyzer/.venv/bin/python' -m pytest \
+    tests/ui/test_batch_signal_picker.py \
+    tests/ui/test_batch_output_panel.py \
+    tests/ui/test_batch_smoke.py -q
+  ```
+
+  ```bash
+  TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. \
+    '/Users/donghang/Downloads/data analyzer/.venv/bin/python' -m pytest \
+    tests/test_batch_preset_io.py \
+    tests/test_batch_recipe.py \
+    tests/test_batch_validation.py \
+    tests/test_batch_renderer.py \
+    tests/test_batch_runner.py -q
+  ```
+
+  全量 `pytest -q` 作为诊断尝试，不作为唯一绿色门禁：本仓已知会在 Qt delegate
+  生命周期路径触发 SIGSEGV，必须把 directed/custom-X、Batch 保护集与前台验收结果
+  分开记录，不能以全量中止抹掉已完成的定向证据，也不能把中止写成 PASS。
 
 - 运行 `git diff --check`，并在同一 X spec 重复 Apply、切换分屏/叠加、切 View 后确认 cache 无陈旧曲线或跨文件同名串扰。
 - macOS 前台人工验收（不能由 offscreen pytest 替代）：加载两个同名 X 通道、500/300 样本的真实文件；先分屏再叠加，确认两条线在实际 `deg`/等价单位横坐标上重合/错开均合理、可平移缩放、Home 取并集；再移除一文件的 X 通道，确认另一条仍在且图卡说明原因；最后保存/重开 View 验证新旧 state 各自语义。
@@ -300,6 +339,9 @@ owner（`set_xaxis_candidates` / `xaxis_channel_data` / `_sync_xlabel_from_chann
 
 ## 实施结果（2026-08-01）
 
+- 集成基线已从计划时的 `07c73e5` 更新为已完成的 Batch 提交 `26e422b`；custom-X
+  实现提交为 `4db876b`，本地 `main` 合并提交为 `4d88457`。两条 ancestry 检查均通过，
+  且 custom-X 提交没有改动 Batch 源码或其测试文件。
 - 新增无 Qt 的 `time_xaxis.py`，统一 resolver、旧 View 迁移、单位 cohort 与逐 source
   失败事实；Inspector、View/project remap、文件/通道删除均使用同一序列化合同。
 - TimeDomain payload 已改为逐目标 source 解析自己的 X/Y；500/300 样本在 subplot
@@ -310,9 +352,23 @@ owner（`set_xaxis_candidates` / `xaxis_channel_data` / `_sync_xlabel_from_chann
   提示，不逐条 toast，也不退回 time。
 - 独立复审关闭了 2 个 P1 与 2 个测试缺口，复审结论 PASS、无新增 P0/P1；未修改
   Batch，也未触碰由另一 session 负责的需求 1–3。
+- 合并后复审再次确认 `26e422b` 与 `4db876b` 的文件交集为 0、无 P0/P1；其唯一 P2
+  是 all-failed Apply 后仍显示“横坐标已更新”成功 toast。该提示冲突已用 RED-first
+  回归修正；同时把仍返回旧 list fake 的 compute-progress / overlay-risk consumer
+  迁移到 `TimePlotBuildResult`，并补进 directed suite。
+- 合并后复验：custom-X resolver/绘图/state/project/consumer 共 `85 passed`；
+  `26e422b` Batch UI + preset/recipe/validation/renderer/runner 保护集共
+  `457 passed`。合计 `542 passed`，`py_compile`、`git diff --check`、ancestry 与 lesson
+  gate 均通过。
 - 验证：custom-X/state 定向 `39 passed`；project I/O `15 passed`；关键复审闭环
   `14 passed`；计划列出的 UI 整组 `831 passed, 1 deselected, 20 failed`，其中 2 个
   FFT dB-reference 与 18 个 split-focus 失败已在干净 HEAD 小范围复现，属于既有基线。
   全仓 pytest 到 54% 时在 `db_reference_dialog.py:117` 访问已删除的
   `ScientificReferenceSpinBox` 后 SIGSEGV（exit 139），因此全量结果保持
   **UNVERIFIED**。`py_compile`、`git diff --check` 与 lesson gate 均通过。
+- macOS 前台验收已启动但不能标记 PASS：TraceLab v7.9 正常启动，系统文件选择器确认
+  第一份真实 MF4 后主进程 SIGSEGV。Crash report：
+  `~/Library/Logs/DiagnosticReports/Python-2026-08-01-213130.ips`，faulting main-thread
+  栈位于 `sipQGraphicsWidget::resizeEvent` / `QGraphicsGridLayout::setGeometry` /
+  `QGraphicsView::resizeEvent`。崩溃发生在选择 custom-X 之前，因此当前只能说明前台
+  验收被既有 Qt/pyqtgraph 几何生命周期问题阻断，不能据此否定或确认屏幕交互合同。

@@ -4,6 +4,7 @@ import numpy as np
 
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.main_window import window as window_mod
+from mf4_analyzer.ui.main_window.window import TimePlotBuildResult
 from mf4_analyzer.ui.plot_risk import PlotRisk, PlotRiskLevel
 
 
@@ -24,7 +25,7 @@ def _checked(count):
 
 
 def _fake_time_data():
-    return [
+    result = TimePlotBuildResult(rows=[
         (
             "ch0",
             True,
@@ -34,7 +35,10 @@ def _fake_time_data():
             "V",
             "f1",
         )
-    ]
+    ])
+    result.attempted_channel_keys.add(("f1", "ch0"))
+    result.successful_channel_keys.add(("f1", "ch0"))
+    return result
 
 
 def _make_window(qapp, qtbot, monkeypatch, *, mode, checked):

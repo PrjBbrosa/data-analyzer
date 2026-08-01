@@ -2103,13 +2103,24 @@ class MainWindow(
                 # data extent establish the viewport.
                 state.xlim = None
         if self.files and self.chart_stack.current_mode() == 'time':
-            self._replot_canvas_for_view(
+            rendered = self._replot_canvas_for_view(
                 idx,
                 canvas,
                 preserve_xlim=not x_source_changed,
             )
         else:
-            self.plot_time()
+            rendered = self.plot_time()
+        all_custom_x_failed = (
+            current_spec.mode == CHANNEL_MODE
+            and isinstance(rendered, TimePlotBuildResult)
+            and bool(rendered.attempted_channel_keys)
+            and not rendered.successful_channel_keys
+        )
+        if all_custom_x_failed:
+            # The render path has already installed the empty hint, diagnostic
+            # pill, and truthful ``0/N`` status. Do not overwrite those facts
+            # with a contradictory success message or toast.
+            return
         self.statusBar.showMessage(f"横坐标已更新")
         if not self._hint_focused_pane("坐标设置"):
             self.toast("横坐标已更新", "success")
@@ -2318,7 +2329,7 @@ class MainWindow(
         # canvas IS the primary, so the stats strip / status bar / cache
         # bookkeeping only fire for the primary pane.
         focused = self.chart_stack.focused_canvas()
-        self._plot_time_on_canvas(
+        return self._plot_time_on_canvas(
             focused,
             update_primary_ui=(focused is self.canvas_time),
             user_initiated=user_initiated,
@@ -2715,7 +2726,7 @@ class MainWindow(
                     self.statusBar.showMessage(
                         f"绘制: 0/{attempted} 通道"
                     )
-                return True
+                return result
 
             data = result.rows
             # Empty string is an explicit, known custom-X unit cohort. Do not

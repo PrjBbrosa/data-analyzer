@@ -127,6 +127,7 @@ lesson by default.
 | [Batch Deferred Terminals Preserve Task Order](batch-deferred-terminals-preserve-task-order.md) | Deferring batch task terminal events or progress callbacks until a | See lesson |
 | [Batch Preview Probe Failure Stays Planning-Local](batch-preview-probe-failure-stays-planning-local.md) | Adding metadata-only source probing to a no-load preview that runs | See lesson |
 | [Custom X Unit Cohort Follows Drawable Eligibility](custom-x-unit-cohort-after-eligibility.md) | Changing multi-source TimeDomain custom-X range filtering, finite-X | See lesson |
+| [Producer Result Contracts Include Mock Consumers](producer-result-contract-mock-consumers.md) | Changing a shared producer from a primitive payload such as a list or | See lesson |
 
 ## Selection Rules
 
