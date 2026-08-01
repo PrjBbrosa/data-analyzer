@@ -94,6 +94,25 @@ def test_viewstate_attached_file_ids_roundtrip_in_order():
     assert again.attached_file_ids == ["f2", "f1"]
 
 
+def test_viewstate_roundtrip_preserves_per_source_name_axis_payload():
+    x_axis = {
+        "mode": "channel",
+        "resolver": "per_source_name",
+        "fid": None,
+        "channel": "angle",
+        "label": "Steering angle",
+    }
+    st = ViewState(
+        name="Logical X",
+        tab_color="#2d7ff9",
+        axis_opts={"x_axis": x_axis},
+    )
+
+    again = ViewState.from_dict(json.loads(json.dumps(st.to_dict())))
+
+    assert again.axis_opts["x_axis"] == x_axis
+
+
 def test_remap_view_fids_migrates_legacy_missing_attachments():
     views = [{"name": "legacy", "checked": [], "hidden_channels": []}]
 

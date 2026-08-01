@@ -1,4 +1,5 @@
 from mf4_analyzer.ui import view_bridge
+from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
 from mf4_analyzer.ui.view_state import ViewState
 
 
@@ -127,6 +128,7 @@ class _Window:
         self.navigator = _Nav()
         self.chart_stack = _Stack()
         self.inspector = _Inspector()
+        self._custom_xaxis_spec = CustomXAxisSpec()
         self._custom_xaxis_fid = None
         self._custom_xaxis_ch = None
         self._custom_xlabel = None
@@ -164,6 +166,7 @@ def test_capture_view_reads_full_screen_state():
     }
     assert state.axis_opts["x_axis"] == {
         "mode": "time",
+        "resolver": None,
         "fid": None,
         "channel": None,
         "label": "Time (s)",
@@ -173,14 +176,22 @@ def test_capture_view_reads_full_screen_state():
 
 def test_capture_view_reads_custom_xaxis_from_window_state():
     win = _Window()
+    win._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel",
+        resolver="exact_source",
+        source_fid="f1",
+        channel="angle",
+    )
     win._custom_xaxis_fid = "f1"
     win._custom_xaxis_ch = "angle"
+    win._custom_xlabel = "Angle"
     win.inspector.top._xaxis_label = "Angle"
 
     state = view_bridge.capture_view(win)
 
     assert state.axis_opts["x_axis"] == {
         "mode": "channel",
+        "resolver": "exact_source",
         "fid": "f1",
         "channel": "angle",
         "label": "Angle",
@@ -189,6 +200,12 @@ def test_capture_view_reads_custom_xaxis_from_window_state():
 
 def test_capture_view_uses_channel_name_for_blank_custom_xaxis_label():
     win = _Window()
+    win._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel",
+        resolver="exact_source",
+        source_fid="f1",
+        channel="angle",
+    )
     win._custom_xaxis_fid = "f1"
     win._custom_xaxis_ch = "angle"
     win.inspector.top._xaxis_label = ""
@@ -197,10 +214,61 @@ def test_capture_view_uses_channel_name_for_blank_custom_xaxis_label():
 
     assert state.axis_opts["x_axis"] == {
         "mode": "channel",
+        "resolver": "exact_source",
         "fid": "f1",
         "channel": "angle",
         "label": "angle",
     }
+
+
+def test_capture_view_writes_per_source_name_without_fid():
+    win = _Window()
+    win._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel",
+        resolver="per_source_name",
+        source_fid=None,
+        channel="angle",
+        label="Angle",
+    )
+    win._custom_xlabel = "Angle"
+
+    state = view_bridge.capture_view(win)
+
+    assert state.axis_opts["x_axis"] == {
+        "mode": "channel",
+        "resolver": "per_source_name",
+        "fid": None,
+        "channel": "angle",
+        "label": "Angle",
+    }
+
+
+def test_capture_view_legacy_fields_are_exact_source_adapter():
+    win = _Window()
+    del win._custom_xaxis_spec
+    win._custom_xaxis_fid = "f1"
+    win._custom_xaxis_ch = "angle"
+    win._custom_xlabel = "Angle"
+
+    state = view_bridge.capture_view(win)
+
+    assert state.axis_opts["x_axis"]["resolver"] == "exact_source"
+    assert state.axis_opts["x_axis"]["fid"] == "f1"
+
+
+def test_capture_view_does_not_commit_unapplied_channel_label_draft():
+    win = _Window()
+    win._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel",
+        resolver="per_source_name",
+        channel="angle",
+        label="",
+    )
+    win.inspector.top._xaxis_label = "Unapplied draft"
+
+    state = view_bridge.capture_view(win)
+
+    assert state.axis_opts["x_axis"]["label"] == "angle"
 
 
 def test_capture_into_preserves_tab_metadata_and_updates_screen_state():
@@ -214,6 +282,13 @@ def test_capture_into_preserves_tab_metadata_and_updates_screen_state():
     win.chart_stack.canvas_time._ylims = {"f2::torque": (-2.0, 2.0)}
     win._custom_xaxis_fid = "f2"
     win._custom_xaxis_ch = "angle"
+    win._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel",
+        resolver="exact_source",
+        source_fid="f2",
+        channel="angle",
+    )
+    win._custom_xlabel = "Angle"
     win._overlay_primary = ("f2", "torque")
     win.inspector.top._range_enabled = False
     win.inspector.top._range_values = (1.0, 8.0)
@@ -249,6 +324,7 @@ def test_capture_into_preserves_tab_metadata_and_updates_screen_state():
         "range_filter": {"enabled": False, "start": 1.0, "end": 8.0},
         "x_axis": {
             "mode": "channel",
+            "resolver": "exact_source",
             "fid": "f2",
             "channel": "angle",
             "label": "Angle",

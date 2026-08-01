@@ -1,5 +1,43 @@
 # Progress: Vector/XCP Readiness Review Remediation
 
+## 2026-08-01 TimeDomain Per-Source Custom X-Axis Planning
+
+- Completed a plan-only analysis at `07c73e5`; no application source or tests
+  were changed.
+- Wrote `docs/superpowers/plans/2026-08-01-timedomain-per-source-custom-xaxis.md`.
+- The plan explicitly covers the user clarification: unequal source lengths
+  can overlay correctly when every source supplies its own aligned X/Y pair in
+  the same physical X coordinate system; partial failures become chart-level
+  diagnostics rather than an all-or-nothing error.
+- The planning skill has `check-complete.sh` rather than the initially assumed
+  `.py` checker; no planning content was affected.
+- Reviewed Claude's updated plan with two independent read-only agents.  Both
+  found the core architecture sound and no P0, but identified P1 ambiguities;
+  the formal plan now closes them and is ready for three owned workstreams.
+- Dispatched three non-overlapping implementation agents: resolver/Inspector,
+  View/project migration, and runtime/diagnostics.  All are TDD-first, use the
+  current worktree with the main checkout interpreter, do not touch Batch, and
+  will not commit.
+- Workstream A completed: pure resolver/spec/issue/unit-cohort helpers and the
+  tagged Inspector payload are GREEN (`219 passed in 8.21s`); py_compile and
+  `git diff --check` passed.
+- Workstream B completed: resolver-aware View/project/channel-scope migration
+  is GREEN (`72 passed` UI state suite and `15 passed` project I/O); py_compile,
+  diff check, and its lessons gate passed.
+- Workstream C completed: custom-X focused `14 passed`, TimeDomain canvas
+  `384 passed, 1 deselected`, and filter/cache/hotpath `35 passed`.  Its full
+  smoke run was `119 passed, 2 failed`; both failures are pre-existing
+  dB-reference/attachment cases outside this feature.  Split-focus also still
+  exposes the pre-existing empty-attached-View test-helper baseline.
+- First combined directed invocation incorrectly mixed root and nested UI test
+  paths, so pytest skipped `tests/ui/conftest.py` for later UI files; reran the
+  UI suite separately and obtained `829 passed, 1 deselected, 20 known baseline
+  failures`, plus `15 passed` for project I/O.
+- Independent integration review then found two feature P1s: pre-filter unit
+  cohort selection and blank-unit fallback.  The first full-repository run was
+  intentionally terminated around 68% so those defects can be fixed before a
+  meaningful final regression run.
+
 ## 2026-07-11
 
 - Reviewed Terra branch `04591e57` against real pyxcp 0.29.10 package shapes,
@@ -385,3 +423,28 @@
   raw-X scans `1`, held-pan setData `0`.
 - Verification passed: hotpath `16 passed in 7.61s`, dense-raster `23 passed
   in 8.74s`, pg-canvas `362 passed, 1 deselected in 90.65s`.
+
+## 2026-08-01 TimeDomain Per-Source Custom X-Axis Execution
+
+- Reviewed the Claude-updated plan with independent state/persistence and
+  render/diagnostics passes, patched every P1 ambiguity, then dispatched three
+  non-overlapping implementation workstreams.
+- Implemented the pure resolver, tagged Inspector payload, View/project legacy
+  migration, per-source plot assembly, post-range finite eligibility, unit
+  cohort selection, and expandable chart-card diagnostics.
+- Follow-up review found two P1s (early unit voting and blank-unit fallback)
+  plus missing range/subplot regressions. They were repaired and the same
+  reviewer returned PASS with no new P0/P1.
+- Verification passed: focused custom-X/state `39 passed`; project I/O
+  `15 passed`; critical closure `14 passed`; compile and diff checks clean.
+- The complete directed UI set reached `831 passed, 1 deselected, 20 failed`.
+  A pristine `git archive HEAD` probe reproduced both FFT dB-reference failures
+  and the representative split-focus helper failure, establishing those groups
+  as pre-existing baseline failures rather than this feature's regressions.
+- Full-repository pytest was attempted and reached 54%, then exited 139 after
+  `db_reference_dialog.py:117` handled an already deleted
+  `ScientificReferenceSpinBox`. Full-suite status remains UNVERIFIED.
+- Promoted `custom-x-unit-cohort-after-eligibility`; the lesson gate now reports
+  `lesson_required: False`. No Batch or requirements 1–3 source was touched.
+- Remaining acceptance: foreground macOS TraceLab interaction and visual check
+  with real unequal-length files; offscreen Qt evidence is not a substitute.

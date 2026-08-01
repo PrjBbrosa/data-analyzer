@@ -7,9 +7,11 @@ Inspector, and the time-domain canvas. Replotting is left to MainWindow.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 import json
 from typing import Any, Iterable
 
+from .time_xaxis import CustomXAxisSpec, CHANNEL_MODE, EXACT_SOURCE
 from .view_state import ChannelKey, ViewState
 
 
@@ -18,12 +20,31 @@ def capture_axis_opts(window) -> dict[str, Any]:
     top = window.inspector.top
     range_start, range_end = top.range_values()
     tick_x, tick_y = top.tick_density()
-    custom_fid = getattr(window, "_custom_xaxis_fid", None)
-    custom_ch = getattr(window, "_custom_xaxis_ch", None)
-    custom_active = custom_fid is not None and custom_ch is not None
-    label = getattr(window, "_custom_xlabel", None) or top.xaxis_label()
-    if not label:
-        label = str(custom_ch) if custom_active else ""
+    xaxis_spec = getattr(window, "_custom_xaxis_spec", None)
+    if not isinstance(xaxis_spec, CustomXAxisSpec):
+        custom_fid = getattr(window, "_custom_xaxis_fid", None)
+        custom_ch = getattr(window, "_custom_xaxis_ch", None)
+        if custom_fid is not None and custom_ch is not None:
+            xaxis_spec = CustomXAxisSpec(
+                mode=CHANNEL_MODE,
+                resolver=EXACT_SOURCE,
+                source_fid=str(custom_fid),
+                channel=str(custom_ch),
+            )
+        else:
+            xaxis_spec = CustomXAxisSpec()
+
+    label = getattr(window, "_custom_xlabel", None)
+    if label is None:
+        if xaxis_spec.mode == CHANNEL_MODE:
+            # The combo/label widgets are drafts until Apply.  A channel spec
+            # is the applied truth, so never capture an un-applied edit here.
+            label = xaxis_spec.label
+        else:
+            label = xaxis_spec.label or top.xaxis_label()
+    if not label and xaxis_spec.channel:
+        label = str(xaxis_spec.channel)
+    xaxis_spec = replace(xaxis_spec, label=str(label or ""))
 
     return {
         "range_filter": {
@@ -31,12 +52,7 @@ def capture_axis_opts(window) -> dict[str, Any]:
             "start": float(range_start),
             "end": float(range_end),
         },
-        "x_axis": {
-            "mode": "channel" if custom_active else "time",
-            "fid": custom_fid,
-            "channel": custom_ch,
-            "label": label,
-        },
+        "x_axis": xaxis_spec.to_axis_opts(),
         "tick_density": {"x": int(tick_x), "y": int(tick_y)},
     }
 

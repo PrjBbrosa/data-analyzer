@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+
+from .time_xaxis import CustomXAxisSpec, EXACT_SOURCE, PER_SOURCE_NAME
 
 SCHEMA_VERSION = 2
 SUPPORTED_SCHEMA_VERSIONS = {1, 2}
@@ -226,15 +228,14 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
 
         axis = dict(view.get("axis_opts") or {})
         if "x_axis" in axis:
-            xaxis = dict(axis["x_axis"])
-            xfid = xaxis.get("fid")
-            if xfid is not None and xfid in fid_map:
-                xaxis["fid"] = fid_map[xfid]
-            elif xfid is not None:
-                xaxis["fid"] = None
-                xaxis["channel"] = None
-                xaxis["mode"] = "time"
-            axis["x_axis"] = xaxis
+            spec = CustomXAxisSpec.from_axis_opts(axis["x_axis"])
+            if spec.resolver == PER_SOURCE_NAME:
+                mapped_spec = spec
+            elif spec.resolver == EXACT_SOURCE and spec.source_fid in fid_map:
+                mapped_spec = replace(spec, source_fid=fid_map[spec.source_fid])
+            else:
+                mapped_spec = CustomXAxisSpec(label=spec.label)
+            axis["x_axis"] = mapped_spec.to_axis_opts()
             v["axis_opts"] = axis
 
         out.append(v)

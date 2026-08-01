@@ -126,6 +126,7 @@ lesson by default.
 | [Batch Preview Never Escalates Full-Cost Probes](batch-preview-never-escalates-full-cost-probes.md) | Resolving lazy source descriptors or output identities during a batch | See lesson |
 | [Batch Deferred Terminals Preserve Task Order](batch-deferred-terminals-preserve-task-order.md) | Deferring batch task terminal events or progress callbacks until a | See lesson |
 | [Batch Preview Probe Failure Stays Planning-Local](batch-preview-probe-failure-stays-planning-local.md) | Adding metadata-only source probing to a no-load preview that runs | See lesson |
+| [Custom X Unit Cohort Follows Drawable Eligibility](custom-x-unit-cohort-after-eligibility.md) | Changing multi-source TimeDomain custom-X range filtering, finite-X | See lesson |
 
 ## Selection Rules
 

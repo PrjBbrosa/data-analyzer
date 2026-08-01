@@ -35,8 +35,8 @@ def test_persistent_top_xaxis_channel_change_updates_auto_label(qapp):
 
     pt = PersistentTop()
     pt.set_xaxis_candidates([
-        ("file speed", ("fid", "speed")),
-        ("file angle", ("fid", "angle")),
+        ("speed · 1/1 个数据可用", ("per_source_name", None, "speed")),
+        ("angle · 1/1 个数据可用", ("per_source_name", None, "angle")),
     ])
     pt.set_xaxis_mode("channel")
 
@@ -50,8 +50,8 @@ def test_persistent_top_time_mode_clears_auto_channel_label(qapp):
 
     pt = PersistentTop()
     pt.set_xaxis_candidates([
-        ("file speed", ("fid", "speed")),
-        ("file angle", ("fid", "angle")),
+        ("speed · 1/1 个数据可用", ("per_source_name", None, "speed")),
+        ("angle · 1/1 个数据可用", ("per_source_name", None, "angle")),
     ])
     pt.set_xaxis_mode("channel")
     pt._combo_xaxis_ch.setCurrentIndex(1)
@@ -60,6 +60,17 @@ def test_persistent_top_time_mode_clears_auto_channel_label(qapp):
     pt.set_xaxis_mode("time")
 
     assert pt.xaxis_label() == ""
+
+
+def test_persistent_top_returns_tagged_xaxis_selection(qapp):
+    from mf4_analyzer.ui.inspector_sections import PersistentTop
+
+    pt = PersistentTop()
+    payload = ("per_source_name", None, "angle")
+    pt.set_xaxis_candidates([("angle · 2/3 个数据可用", payload)])
+    pt.set_xaxis_mode("channel")
+
+    assert pt.xaxis_channel_data() == payload
 
 
 def test_persistent_top_apply_emits(qapp, qtbot):

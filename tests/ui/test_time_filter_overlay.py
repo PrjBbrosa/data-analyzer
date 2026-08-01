@@ -43,7 +43,7 @@ def test_filter_off_by_default_no_overlay(
     is opt-in, so a routine plot keeps exactly one trace per checked channel."""
     w = time_window_with_two_high_low_channels
     assert w.inspector.filter_panel.is_enabled() is False
-    data = w._build_time_plot_data()
+    data = w._build_time_plot_data().rows
     assert len(data) == 1
     assert not any("Hz)" in d[0] for d in data)
 
@@ -56,7 +56,7 @@ def test_filtered_trace_appended_and_attenuated(
     w.inspector.filter_panel.set_kind("低通")
     w.inspector.filter_panel.set_cutoff(50.0)
     w.inspector.filter_panel.set_order(6)
-    data = w._build_time_plot_data()
+    data = w._build_time_plot_data().rows
     names = [d[0] for d in data]
     # one original + one filtered per channel
     assert any("(" in n and "Hz" in n for n in names)
@@ -76,7 +76,7 @@ def test_uncheck_show_filtered_hides_trace(
     w.inspector.filter_panel.set_kind("低通")
     w.inspector.filter_panel.set_cutoff(50.0)
     w.inspector.filter_panel.chk_filt.setChecked(False)
-    data = w._build_time_plot_data()
+    data = w._build_time_plot_data().rows
     # filtered traces present but visible=False (so cancel = just hide)
     filt = [d for d in data if "Hz)" in d[0]]
     assert filt and all(d[1] is False for d in filt)

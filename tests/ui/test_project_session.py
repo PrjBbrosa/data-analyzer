@@ -64,6 +64,86 @@ def test_open_project_roundtrip(qapp, tmp_path):
     assert mw2.chart_stack.current_mode() == "time"
 
 
+def test_project_roundtrip_preserves_per_source_name_xaxis(qapp, tmp_path):
+    from mf4_analyzer.ui import project_io as pio
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    project = tmp_path / "logical-x.tlproj"
+    window = MainWindow()
+    window._load_one(str(csv_a))
+    window._custom_xaxis_spec = CustomXAxisSpec(
+        mode="channel",
+        resolver="per_source_name",
+        source_fid=None,
+        channel="rpm",
+        label="Speed",
+    )
+    window._custom_xaxis_fid = None
+    window._custom_xaxis_ch = None
+    window._custom_xlabel = "Speed"
+    window._capture_current_view()
+
+    window.save_project(project)
+    saved = pio.load_project_from_json(project)
+
+    assert saved.views[0]["axis_opts"]["x_axis"] == {
+        "mode": "channel",
+        "resolver": "per_source_name",
+        "fid": None,
+        "channel": "rpm",
+        "label": "Speed",
+    }
+
+    restored = MainWindow()
+    restored.open_project(project)
+
+    assert restored._custom_xaxis_spec == CustomXAxisSpec(
+        mode="channel",
+        resolver="per_source_name",
+        source_fid=None,
+        channel="rpm",
+        label="Speed",
+    )
+
+
+def test_open_project_migrates_legacy_xaxis_to_remapped_exact_source(
+    qapp, tmp_path,
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec
+
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    project = tmp_path / "legacy-x.tlproj"
+    window = MainWindow()
+    window._load_one(str(csv_a))
+    old_fid = next(iter(window.files))
+    window.save_project(project)
+    payload = json.loads(project.read_text(encoding="utf-8"))
+    payload["views"][0].setdefault("axis_opts", {})["x_axis"] = {
+        "mode": "channel",
+        "fid": old_fid,
+        "channel": "rpm",
+        "label": "Legacy speed",
+    }
+    project.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    restored = MainWindow()
+    restored.open_project(project)
+    new_fid = next(iter(restored.files))
+
+    assert restored._custom_xaxis_spec == CustomXAxisSpec(
+        mode="channel",
+        resolver="exact_source",
+        source_fid=new_fid,
+        channel="rpm",
+        label="Legacy speed",
+    )
+
+
 def test_project_roundtrip_restores_timedomain_attached_file_subset(
     qapp, tmp_path
 ):

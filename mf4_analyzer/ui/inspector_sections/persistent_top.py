@@ -330,7 +330,10 @@ class PersistentTop(QWidget):
             return
         data = self._combo_xaxis_ch.itemData(idx)
         if data is not None:
-            _, ch = data
+            try:
+                _resolver, _fid, ch = data
+            except (TypeError, ValueError):
+                return
             self.edit_xlabel.setText(ch)
             self._xlabel_auto_from_channel = True
 
@@ -359,7 +362,7 @@ class PersistentTop(QWidget):
         self.combo_xaxis.setCurrentIndex(1 if mode == 'channel' else 0)
 
     def xaxis_channel_data(self):
-        """Return (fid, channel) tuple or None."""
+        """Return ``(resolver, fid, channel)`` tagged triple or ``None``."""
         if self.combo_xaxis.currentIndex() != 1:
             return None
         return self._combo_xaxis_ch.currentData()
@@ -368,7 +371,7 @@ class PersistentTop(QWidget):
         return self.edit_xlabel.text().strip()
 
     def set_xaxis_candidates(self, candidates):
-        """candidates: list of (display_text, (fid, ch)) tuples."""
+        """Set ``(display_text, (resolver, fid, channel))`` candidates."""
         prev = self._combo_xaxis_ch.currentData()
         self._combo_xaxis_ch.blockSignals(True)
         _le = self._combo_xaxis_ch.lineEdit()

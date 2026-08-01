@@ -1,5 +1,37 @@
 # Findings: Vector/XCP Readiness Review Remediation
 
+## 2026-08-01 TimeDomain Per-Source Custom X-Axis Planning Findings
+
+- Current `window.py::_apply_xaxis()` selects one `(fid, channel)` source and
+  aborts when any checked file has a different DataFrame length.  The later
+  data builder independently falls back to time for a mismatched row, so the
+  behavior is both over-strict and internally inconsistent.
+- The current pyqtgraph canvas/overlay binder already receives one X/Y pair per
+  curve and keys same-named multi-file rows by composite source/channel
+  identity.  It can correctly overlay unequal lengths when payload creation is
+  fixed.
+- The required behavior is physical-X overlay: `x_A/y_A` and `x_B/y_B` draw in
+  one X domain whose bounds are their union.  It is not 0–1 normalization and
+  not array-index alignment.
+- Existing lessons require time-range filtering to remain on acquisition time,
+  unit labels to come from X-source metadata, full actual FFT-time cache
+  invalidation, and overlay grid/wheel ownership preservation.
+- Current loaders generally create a common DataFrame time base.  A future raw
+  per-channel unequal-sample model needs explicit channel timestamps; UI-level
+  truncation is not a valid substitute.
+- Independent plan review found no P0 but caught execution-level P1 ambiguity:
+  exact-source migration semantics, no-checked candidate fallback, unit wording,
+  partial count ownership, channel-scope cleanup, test checkout, and directed
+  consumer coverage.  The formal plan now fixes each contract before coding.
+- Partial counts are per unique checked `(fid, target_channel)`, never per
+  payload row; filtered companion rows must not inflate success counts.
+- Unit compatibility chooses the largest normalized-unit cohort with a stable
+  checked-order tie break; this maximizes useful curves without unit conversion.
+- Independent integration review found the cohort must be chosen only after
+  time-range and finite-X eligibility are known; otherwise an ultimately empty
+  majority can suppress the only drawable minority.  It also found that a
+  known blank X unit must not be collapsed into a missing-unit fallback.
+
 ## Baseline
 
 - Branch: `codex/vector-xcp-readiness` at `04591e57`.
@@ -308,3 +340,20 @@ Actual Windows W1/W2 JSON remains absent and therefore BLOCKED.
 - This is source plus real Cocoa-canvas evidence, not packaged Windows proof.
   Windows EXE remains pending under the same scenario and relative-baseline
   rules in the performance standards.
+
+## 2026-08-01 Per-Source Custom-X Findings
+
+- The canvas already accepts an independent X array per row. Correct overlay
+  behavior required changing the TimeDomain payload builder, not normalizing or
+  resampling unrelated source arrays.
+- Unit compatibility must be decided only among sources that remain drawable
+  after each source's acquisition-time range mask and finite-X check. Voting
+  earlier can let a larger but non-drawable cohort suppress the only valid row.
+- A successful cohort with an empty unit is different from “no cohort resolved”.
+  Collapsing both to `None` leaks an arbitrary provider unit into the X title.
+- New per-source-name state must survive provider deletion and fid remapping;
+  legacy state without a resolver remains exact-source to avoid silently
+  changing historical plots.
+- Partial success is best represented once in a card-owned diagnostic pill and
+  status count sourced from the same build result. Individual toast errors and
+  silent fallback to time both hide which source was actually drawn.

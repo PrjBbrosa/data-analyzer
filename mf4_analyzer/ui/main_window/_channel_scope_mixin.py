@@ -11,6 +11,7 @@ from ..channel_config import (
     resolve_channel_config,
 )
 from ..plot_risk import PlotRiskLevel
+from ..time_xaxis import CustomXAxisSpec, EXACT_SOURCE
 from ..widgets.channel_config_manager import ChannelConfigManagerDialog
 
 
@@ -371,9 +372,13 @@ class ChannelScopeMixin:
             state.overlay_primary = None
         axis_opts = dict(state.axis_opts or {})
         x_axis = dict(axis_opts.get("x_axis") or {})
-        if x_axis.get("fid") is not None and str(x_axis["fid"]) in removed:
-            x_axis.update({"mode": "time", "fid": None, "channel": None})
-            axis_opts["x_axis"] = x_axis
+        spec = CustomXAxisSpec.from_axis_opts(x_axis)
+        if (
+            spec.resolver == EXACT_SOURCE
+            and spec.source_fid is not None
+            and str(spec.source_fid) in removed
+        ):
+            axis_opts["x_axis"] = CustomXAxisSpec(label=spec.label).to_axis_opts()
             state.axis_opts = axis_opts
 
     @staticmethod
@@ -398,7 +403,10 @@ class ChannelScopeMixin:
             state.overlay_primary = None
         axis_opts = dict(state.axis_opts or {})
         x_axis = dict(axis_opts.get("x_axis") or {})
-        if (str(x_axis.get("fid")), str(x_axis.get("channel"))) in removed:
-            x_axis.update({"mode": "time", "fid": None, "channel": None})
-            axis_opts["x_axis"] = x_axis
+        spec = CustomXAxisSpec.from_axis_opts(x_axis)
+        if (
+            spec.resolver == EXACT_SOURCE
+            and (str(spec.source_fid), str(spec.channel)) in removed
+        ):
+            axis_opts["x_axis"] = CustomXAxisSpec(label=spec.label).to_axis_opts()
             state.axis_opts = axis_opts
