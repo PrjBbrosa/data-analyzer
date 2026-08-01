@@ -9,6 +9,7 @@ import sys
 from types import ModuleType
 
 import pytest
+from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +56,31 @@ def test_runtime_smoke_cli_generates_four_kinds_in_three_formats(tmp_path):
     assert all(record["bytes"] > 0 for record in result["outputs"])
     assert result["glyph_warnings"] == []
     assert result["title"] == "单帧振动加速度"
+
+
+def test_runtime_smoke_renders_time_spec_through_public_renderer(
+    tmp_path, monkeypatch
+):
+    from mf4_analyzer import batch_render_smoke
+    from mf4_analyzer.batch_render import BatchTimeFigureSpec
+
+    rendered_payloads = []
+    public_renderer = batch_render_smoke.render_batch_image
+
+    def render_and_record(payload, *args, **kwargs):
+        rendered_payloads.append(payload)
+        return public_renderer(payload, *args, **kwargs)
+
+    monkeypatch.setattr(batch_render_smoke, "render_batch_image", render_and_record)
+    output_directory = tmp_path / "outputs"
+
+    assert batch_render_smoke.run(output_directory, tmp_path / "result.json") == 0
+    assert isinstance(rendered_payloads[0][1], BatchTimeFigureSpec)
+
+    time_image = output_directory / "time.png"
+    assert time_image.stat().st_size > 0
+    with Image.open(time_image) as image:
+        assert image.size == (640, 360)
 
 
 def test_artifact_verifier_checks_cjk_pdf_visual_and_turbo_samples(tmp_path):
