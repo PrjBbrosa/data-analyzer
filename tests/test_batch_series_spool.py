@@ -143,3 +143,60 @@ def test_group_member_and_subplot_panel_limits_are_enforced_before_write(
                 "task-3",
                 (_series(panel=0), _series(panel=1)),
             )
+
+
+def test_spool_ignores_all_empty_sparse_series_when_counting_active_panels(
+    tmp_path,
+):
+    from mf4_analyzer.batch_series_spool import BatchSeriesSpool
+
+    empty_series = tuple(
+        _series(panel=panel, size=0)
+        for panel in (1, 4, 8, 15, 16, 23, 42, 81, 100)
+    )
+
+    with BatchSeriesSpool(directory=tmp_path) as spool:
+        refs = spool.append("all-empty", "task", empty_series)
+
+    assert len(refs) == 9
+    assert all(ref.nbytes == 0 for ref in refs)
+
+
+def test_spool_allows_exact_member_and_active_panel_limits(tmp_path):
+    from mf4_analyzer.batch_series_spool import BatchSeriesSpool
+
+    with BatchSeriesSpool(directory=tmp_path) as spool:
+        for member in range(32):
+            spool.append("members", f"task-{member}", ())
+        with pytest.raises(ValueError, match="group members"):
+            spool.append("members", "task-32", ())
+
+        refs = spool.append(
+            "panels",
+            "task",
+            tuple(_series(panel=panel, size=1) for panel in range(8)),
+        )
+        with pytest.raises(ValueError, match="subplot panels"):
+            spool.append("panels", "task-2", (_series(panel=8, size=1),))
+
+    assert len(refs) == 8
+
+
+def test_spool_allows_exact_group_and_run_byte_limits(tmp_path, monkeypatch):
+    import mf4_analyzer.batch_series_spool as spool_module
+
+    # A one-sample float64 X/Y pair is exactly 16 payload bytes. Two distinct
+    # groups therefore exercise exact 16-byte group and 32-byte run limits
+    # without allocating or writing a large fixture.
+    monkeypatch.setattr(spool_module, "_MAX_GROUP_PAYLOAD_BYTES", 16)
+    monkeypatch.setattr(spool_module, "_MAX_SPOOL_BYTES", 32)
+
+    with spool_module.BatchSeriesSpool(directory=tmp_path) as spool:
+        first = spool.append("group-1", "task-1", (_series(size=1),))
+        second = spool.append("group-2", "task-2", (_series(size=1),))
+        with pytest.raises(ValueError, match="group payload"):
+            spool.append("group-1", "task-3", (_series(size=1),))
+        with pytest.raises(ValueError, match="run spool"):
+            spool.append("group-3", "task-4", (_series(size=1),))
+
+    assert first[0].nbytes == second[0].nbytes == 16

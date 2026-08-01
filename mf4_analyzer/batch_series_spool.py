@@ -74,7 +74,11 @@ class BatchSeriesSpool:
                 f"group members exceed limit {_MAX_GROUP_MEMBERS}"
             )
         current_panels = self._group_panels.get(group_key, set())
-        panels = current_panels | {item.panel for item in prepared}
+        panels = current_panels | {
+            item.panel
+            for item in prepared
+            if item.x.size > 0 and item.y.size > 0
+        }
         if len(panels) > _MAX_SUBPLOT_PANELS:
             raise ValueError(
                 f"subplot panels exceed limit {_MAX_SUBPLOT_PANELS}"

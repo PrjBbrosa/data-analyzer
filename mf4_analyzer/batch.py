@@ -1824,6 +1824,10 @@ class BatchRunner:
 
             while True:
                 attempt_warnings = []
+                image_warning_kwargs = (
+                    {'warnings_out': attempt_warnings}
+                    if method == 'time' else {}
+                )
                 writers = {}
                 if export_frame_holder:
                     def write_data(path, holder=export_frame_holder):
@@ -1847,7 +1851,7 @@ class BatchRunner:
                             params=image_params,
                             options=render_options,
                             context=render_context,
-                            warnings_out=attempt_warnings,
+                            **image_warning_kwargs,
                         )
                         self._check_cancel(cancel_token, "image render/write")
                         return result

@@ -872,6 +872,37 @@ def test_fft_time_exports_image(tmp_path):
     assert result.items[0].image_path.endswith(".png")
 
 
+def test_non_time_heatmap_invalid_cmap_does_not_add_runner_warning(tmp_path):
+    fd = _make_file(tmp_path, fs=1024.0)
+    preset = AnalysisPreset.free_config(
+        name="batch fft_time invalid cmap compatibility",
+        method="fft_time",
+        target_signals=("sig",),
+        params={
+            "fs": 1024.0,
+            "window": "hanning",
+            "nfft": 256,
+            "overlap": 0.5,
+            "remove_mean": True,
+            "cmap": "not-a-colormap",
+        },
+        outputs=BatchOutput(
+            export_data=False,
+            export_image=True,
+            write_manifest=False,
+        ),
+    )
+    preset = replace(preset, file_ids=(1,))
+
+    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert Path(result.items[0].image_path).is_file()
+    assert "Invalid colormap 'not-a-colormap'; using 'turbo'." not in (
+        result.items[0].warnings
+    )
+
+
 def test_fft_time_amplitude_ceiling_emits_failed_item(tmp_path, monkeypatch):
     """If the spectrogram analyzer rejects huge inputs (ValueError on
     >64 MB amplitude matrix), batch must surface that as a per-item
