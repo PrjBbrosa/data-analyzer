@@ -1,36 +1,28 @@
-"""Signal picker chip + popup widget for the batch dialog.
+"""Inline-search multi-select picker for the batch dialog.
 
-Provides ``SignalPickerPopup`` — a chips-display ``QPushButton`` that opens a
-floating ``QFrame`` popup containing a search ``QLineEdit`` plus a multi-select
-``QListWidget`` driven by ``QCheckBox`` row widgets. Items in
-``partially_available`` are added but disabled (``Qt.ItemIsEnabled`` cleared)
-and labelled with the supplied hint (e.g. ``"(2/3)"``).
-
-ESC inside the popup hides it; focus-out also hides it (``Qt.Popup`` window
-flag handles platform-level click-outside; the explicit ``clearFocus()`` test
-hook is wired via an event filter).
+``SignalPickerPopup`` keeps search in the original channel field.  The popup
+contains only the checkbox list, so opening it never introduces a second
+search box.  Selected signals use a single responsive row: one or two elided
+chips are shown and the remainder is summarized as ``+N``.  This keeps narrow
+BatchSheet columns bounded regardless of selection count.
 """
 from __future__ import annotations
 
 from typing import Iterable, Mapping
 
-from PyQt5.QtCore import QEvent, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QFontMetrics
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSizePolicy,
-    QVBoxLayout, QWidget,
+    QLayout, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QVBoxLayout,
+    QWidget,
 )
 
 from mf4_analyzer.ui_kit.popup_shell import apply_popup_shell
 
 
 class SignalChip(QWidget):
-    """Single-row chip widget: signal label + remove button.
-
-    Emits ``removeRequested(name)`` when the × button is clicked. The
-    label elides at ``max_label_chars`` with the full name as tooltip
-    so long DBC channel names don't push the chip frame wide.
-    """
+    """One bounded signal chip with a removable, pixel-elided label."""
 
     removeRequested = pyqtSignal(str)
 
@@ -41,38 +33,53 @@ class SignalChip(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._name = name
+        self._name = str(name)
+        self._max_label_chars = max(1, int(max_label_chars))
         self.setObjectName("SignalChip")
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(6, 2, 4, 2)
-        lay.setSpacing(4)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setFixedHeight(28)
 
-        display = name if len(name) <= max_label_chars else name[: max_label_chars] + "…"
-        self._label = QLabel(display, self)
-        self._label.setToolTip(name)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(7, 2, 3, 2)
+        lay.setSpacing(3)
+
+        self._label = QLabel(self)
+        self._label.setToolTip(self._name)
+        self._label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         lay.addWidget(self._label, 1)
 
         self._remove_btn = QPushButton("×", self)
         self._remove_btn.setObjectName("SignalChipRemove")
         self._remove_btn.setFixedSize(18, 18)
         self._remove_btn.setFlat(True)
-        self._remove_btn.clicked.connect(lambda: self.removeRequested.emit(self._name))
+        self._remove_btn.clicked.connect(
+            lambda: self.removeRequested.emit(self._name)
+        )
         lay.addWidget(self._remove_btn)
+        self.set_display_width(self.sizeHint().width())
 
     def name(self) -> str:
         return self._name
 
+    def set_display_width(self, width: int) -> None:
+        """Fit the chip to *width* and elide by rendered pixels."""
+
+        bounded = max(68, int(width))
+        self.setFixedWidth(bounded)
+        text_budget = max(18, bounded - 38)
+        source = (
+            self._name
+            if len(self._name) <= self._max_label_chars
+            else self._name[: self._max_label_chars] + "…"
+        )
+        self._label.setText(
+            QFontMetrics(self._label.font()).elidedText(
+                source, Qt.ElideRight, text_budget,
+            )
+        )
+
 
 class _ClickableFrame(QFrame):
-    """QFrame subclass that emits ``clicked`` on left mouse press.
-
-    Used as the chip-display container so a click anywhere inside the
-    frame area (including on the placeholder label or the scroll
-    viewport background) toggles the popup. Children that consume
-    presses themselves (the remove ``×`` button, chip label) shadow this
-    naturally — they get the event first per Qt event delivery rules.
-    """
-
     clicked = pyqtSignal()
 
     def mousePressEvent(self, event):  # noqa: N802 (Qt API)
@@ -82,9 +89,14 @@ class _ClickableFrame(QFrame):
 
 
 class SignalPickerPopup(QWidget):
-    """Chips display + popup multi-select picker for signal names."""
+    """Single-line inline search plus popup multi-select checkbox list."""
 
     selectionChanged = pyqtSignal(tuple)
+
+    _DISPLAY_HEIGHT = 38
+    _MAX_VISIBLE_CHIPS = 2
+    _NARROW_TWO_CHIP_THRESHOLD = 390
+    _MIN_SEARCH_WIDTH = 42
 
     def __init__(
         self,
@@ -96,100 +108,88 @@ class SignalPickerPopup(QWidget):
         single_select: bool = False,
     ) -> None:
         super().__init__(parent)
+        self.setFixedHeight(self._DISPLAY_HEIGHT)
         self._single_select = bool(single_select)
         self._available: list[str] = list(available_signals)
         self._partial: dict[str, str] = dict(partially_available or {})
         self._partial_selectable = False
-        # Normalize initial selection if single_select.
-        sel = tuple(initial_selection)
-        if self._single_select and len(sel) > 1:
-            sel = sel[:1]
-        self._selected: tuple[str, ...] = sel
+        selection = tuple(initial_selection)
+        if self._single_select and len(selection) > 1:
+            selection = selection[:1]
+        self._selected: tuple[str, ...] = selection
         self._suppress_signal = False
 
-        # ----- chip display frame (replaces single-line button) -----
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSizeConstraint(QLayout.SetNoConstraint)
 
         self._display_frame = _ClickableFrame(self)
         self._display_frame.setObjectName("SignalPickerDisplay")
         self._display_frame.setFrameShape(QFrame.NoFrame)
+        self._display_frame.setAttribute(Qt.WA_StyledBackground, True)
         self._display_frame.setStyleSheet(
-            "#SignalPickerDisplay {border:1px solid #cbd5e1; border-radius:6px;"
-            " background:#fff;}"
+            "#SignalPickerDisplay {border:1px solid #cbd5e1;"
+            " border-radius:7px; background:#fff;}"
+            "#SignalPickerDisplay:focus {border-color:#1769e0;}"
         )
-        self._display_frame.setMinimumHeight(28)
-        # Width is bounded by the parent column; height grows with chip count
-        # but is capped at MAX_VISIBLE_ROWS via the internal scroll container.
-        self._display_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        # Click anywhere on the frame (including children that don't consume
-        # the press) toggles the popup. The remove × button is a QPushButton
-        # so it consumes its own press without bubbling.
-        self._display_frame.clicked.connect(self._toggle_popup)
+        self._display_frame.setFixedHeight(self._DISPLAY_HEIGHT)
+        self._display_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._display_frame.clicked.connect(self._open_from_display)
 
-        frame_lay = QVBoxLayout(self._display_frame)
-        frame_lay.setContentsMargins(4, 4, 4, 4)
-        frame_lay.setSpacing(3)
+        self._display_layout = QHBoxLayout(self._display_frame)
+        self._display_layout.setContentsMargins(5, 4, 4, 4)
+        self._display_layout.setSpacing(4)
 
-        # Chip-row sizing constants. The display frame's sizeHint must
-        # GROW with chip count (issue-1 contract) up to MAX_VISIBLE_ROWS,
-        # then plateau (further chips scroll). A QScrollArea alone does
-        # NOT propagate inner content size to the parent's sizeHint, so
-        # we explicitly drive _chip_scroll's max/min height from the
-        # current chip count in _refresh_display below.
-        # Derive row height from the actual font: SignalChip's
-        # QHBoxLayout adds 2 px top + 2 px bottom margins around the
-        # label, plus chip-layout spacing of 2 px between rows — we
-        # budget +6 px on top of font height to cover that without
-        # clipping on Windows / high-DPI configs.
-        self._CHIP_ROW_HEIGHT = self.fontMetrics().height() + 6
-        self._CHIP_MAX_VISIBLE_ROWS = 3
-
-        # Scrollable inner area for chips (caps the visible height).
-        self._chip_scroll = QScrollArea(self._display_frame)
-        self._chip_scroll.setFrameShape(QFrame.NoFrame)
-        self._chip_scroll.setWidgetResizable(True)
-        self._chip_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._chip_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        # Hard ceiling on the scroll area's height; _refresh_display sets
-        # the soft height (= row_count * row_height) below this ceiling so
-        # _display_frame.sizeHint() honestly reflects chip count.
-        self._chip_scroll.setMaximumHeight(
-            self._CHIP_MAX_VISIBLE_ROWS * self._CHIP_ROW_HEIGHT
-        )
-
-        self._chip_host = QWidget(self._chip_scroll)
-        self._chip_layout = QVBoxLayout(self._chip_host)
+        self._chip_host = QWidget(self._display_frame)
+        self._chip_host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._chip_host.setFixedHeight(28)
+        self._chip_layout = QHBoxLayout(self._chip_host)
         self._chip_layout.setContentsMargins(0, 0, 0, 0)
-        self._chip_layout.setSpacing(2)
-        self._chip_layout.addStretch(1)
-        self._chip_scroll.setWidget(self._chip_host)
-        frame_lay.addWidget(self._chip_scroll, 1)
+        self._chip_layout.setSpacing(4)
+        self._display_layout.addWidget(self._chip_host)
 
-        self._placeholder_label = QLabel("(未选择信号)  ▾", self._display_frame)
-        self._placeholder_label.setStyleSheet("color:#94a3b8; padding:2px 4px;")
-        # Make the placeholder transparent to mouse events so a click on it
-        # bubbles through to _ClickableFrame.mousePressEvent and opens the
-        # popup. (QLabel by default does not consume left-button presses,
-        # but it stops propagation through child→parent in some Qt builds —
-        # WA_TransparentForMouseEvents is the explicit, portable fix.)
-        self._placeholder_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        frame_lay.addWidget(self._placeholder_label)
+        self._overflow_label = QLabel(self._display_frame)
+        self._overflow_label.setObjectName("SignalPickerOverflow")
+        self._overflow_label.setAlignment(Qt.AlignCenter)
+        self._overflow_label.setStyleSheet(
+            "#SignalPickerOverflow {color:#234d78; background:#eef4ff;"
+            " border:1px solid #d4e3f8; border-radius:6px; padding:0 6px;}"
+        )
+        self._overflow_label.setFixedHeight(28)
+        self._overflow_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._overflow_label.hide()
+        self._display_layout.addWidget(self._overflow_label)
 
-        # Likewise for the scroll viewport's empty area: chips themselves
-        # are children of _chip_host; clicks landing on host empty space
-        # should propagate up. QScrollArea.viewport() is a normal QWidget
-        # that does NOT consume left presses, so press events naturally
-        # bubble to _display_frame — no extra setup needed there.
+        self._search = QLineEdit(self._display_frame)
+        self._search.setObjectName("SignalPickerInlineSearch")
+        self._search.setPlaceholderText("搜索信号…")
+        self._search.setFrame(False)
+        self._search.setMinimumWidth(self._MIN_SEARCH_WIDTH)
+        self._search.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._search.setStyleSheet(
+            "#SignalPickerInlineSearch {border:none; background:transparent;"
+            " padding:0 2px; color:#172033;}"
+        )
+        self._search.textChanged.connect(self._on_search_text_changed)
+        self._search.installEventFilter(self)
+        self._display_layout.addWidget(self._search, 1)
 
+        self._arrow_button = QPushButton("⌄", self._display_frame)
+        self._arrow_button.setObjectName("SignalPickerArrow")
+        self._arrow_button.setFixedSize(26, 28)
+        self._arrow_button.setFlat(True)
+        self._arrow_button.setToolTip("展开信号列表")
+        self._arrow_button.setStyleSheet(
+            "#SignalPickerArrow {border:none; border-radius:5px; color:#1769e0;"
+            " background:#eef4ff; padding:0;}"
+            "#SignalPickerArrow:hover {background:#e2edff;}"
+        )
+        self._arrow_button.clicked.connect(self._toggle_popup)
+        self._display_layout.addWidget(self._arrow_button)
         outer.addWidget(self._display_frame, 1)
 
-        # ----- popup -----
         self._popup = QFrame(self, Qt.Popup)
         self._popup.setObjectName("SignalPickerPopup")
-        # Rounded 8px surface on a Qt.Popup window: a translucent background
-        # keeps the corners outside the radius from painting an opaque square
-        # frame. The inline #SignalPickerPopup QSS still paints the white fill.
         apply_popup_shell(self._popup)
         self._popup.setFrameShape(QFrame.NoFrame)
         self._popup.setAttribute(Qt.WA_StyledBackground, True)
@@ -198,24 +198,24 @@ class SignalPickerPopup(QWidget):
             " border-radius:8px;}"
         )
         self._popup.setMinimumWidth(280)
-        # Strong focus on the popup itself so clearFocus() emits a real
-        # FocusOut event (the test path simulates click-away that way).
         self._popup.setFocusPolicy(Qt.StrongFocus)
         pop_lay = QVBoxLayout(self._popup)
-        pop_lay.setContentsMargins(8, 8, 8, 8)
-        pop_lay.setSpacing(6)
+        pop_lay.setContentsMargins(6, 6, 6, 6)
+        pop_lay.setSpacing(5)
 
-        self._search = QLineEdit(self._popup)
-        self._search.setPlaceholderText("搜索信号…")
-        self._search.textChanged.connect(self._on_search_text_changed)
-        pop_lay.addWidget(self._search)
+        self._search_hint = QLabel("直接在上方原通道框输入", self._popup)
+        self._search_hint.setObjectName("SignalPickerSearchHint")
+        self._search_hint.setStyleSheet(
+            "#SignalPickerSearchHint {color:#718096; background:#fbfcfe;"
+            " padding:5px 7px; border-radius:5px;}"
+        )
+        pop_lay.addWidget(self._search_hint)
 
         self._list = QListWidget(self._popup)
         self._list.setSelectionMode(QListWidget.NoSelection)
         pop_lay.addWidget(self._list, 1)
 
         self._popup.installEventFilter(self)
-
         self._rebuild_list()
         self._refresh_display()
 
@@ -223,35 +223,27 @@ class SignalPickerPopup(QWidget):
     # Public API
     # ------------------------------------------------------------------
     def set_selected(self, signals: Iterable[str]) -> None:
-        new = tuple(s for s in signals)
+        new = tuple(signals)
         if self._single_select and len(new) > 1:
             new = new[:1]
         if new == self._selected:
             return
         self._selected = new
-        # Sync checkboxes (without re-emitting per click).
         self._suppress_signal = True
         try:
             for i in range(self._list.count()):
                 item = self._list.item(i)
-                name = item.data(Qt.UserRole)
-                cb = self._list.itemWidget(item)
-                if isinstance(cb, QCheckBox):
-                    want = name in self._selected
-                    if cb.isChecked() != want:
-                        cb.setChecked(want)
+                checkbox = self._list.itemWidget(item)
+                if isinstance(checkbox, QCheckBox):
+                    want = item.data(Qt.UserRole) in self._selected
+                    if checkbox.isChecked() != want:
+                        checkbox.setChecked(want)
         finally:
             self._suppress_signal = False
         self._refresh_display()
         self.selectionChanged.emit(self._selected)
 
     def set_available(self, available_signals: Iterable[str]) -> None:
-        # Preserve _selected intact across this mutator (ultrareview
-        # bug_002). The settling call is set_partially_available — that
-        # is where reconciliation happens against the COMBINED universe.
-        # Performing it here would drop names that are about to land in
-        # the partial dict during a paired (set_available; set_partial)
-        # universe swap, defeating BatchSheet.signals_marked_unavailable.
         self._available = list(available_signals)
         self._rebuild_list()
         self._refresh_display()
@@ -264,13 +256,9 @@ class SignalPickerPopup(QWidget):
     ) -> None:
         self._partial = dict(partially_available or {})
         self._partial_selectable = bool(selectable)
-        # Reconcile against the now-coherent (available, partial) pair:
-        # keep names present in either set; drop only names that vanished
-        # from BOTH. Emit selectionChanged iff the tuple actually changed
-        # (ultrareview bug_002).
         keep = tuple(
-            s for s in self._selected
-            if s in self._available or s in self._partial
+            signal for signal in self._selected
+            if signal in self._available or signal in self._partial
         )
         if keep != self._selected:
             self._selected = keep
@@ -282,57 +270,69 @@ class SignalPickerPopup(QWidget):
         return self._selected
 
     def show_popup(self) -> None:
-        # Position popup just under the display frame.
+        if self._popup.isVisible():
+            return
         global_pos = self._display_frame.mapToGlobal(
             self._display_frame.rect().bottomLeft()
         )
-        self._popup.move(global_pos)
+        popup_width = max(280, self._display_frame.width())
+        self._popup.setFixedWidth(popup_width)
         self._popup.adjustSize()
+        self._popup.move(global_pos)
         self._popup.show()
         self._popup.raise_()
-        # Focus the popup frame itself (StrongFocus) so a programmatic
-        # clearFocus() — used by tests to simulate click-away — actually
-        # produces a FocusOut event we can observe in eventFilter.
         self._popup.setFocus()
+        self._arrow_button.setText("⌃")
 
     def hide_popup(self) -> None:
         if self._popup.isVisible():
             self._popup.hide()
+        self._arrow_button.setText("⌄")
 
     def is_popup_visible(self) -> bool:
         return self._popup.isVisible()
 
     def visible_items(self) -> list[str]:
-        out: list[str] = []
-        for i in range(self._list.count()):
-            item = self._list.item(i)
-            if not item.isHidden():
-                out.append(item.data(Qt.UserRole))
-        return out
+        return [
+            self._list.item(index).data(Qt.UserRole)
+            for index in range(self._list.count())
+            if not self._list.item(index).isHidden()
+        ]
 
     def is_disabled(self, signal: str) -> bool:
-        for i in range(self._list.count()):
-            item = self._list.item(i)
+        for index in range(self._list.count()):
+            item = self._list.item(index)
             if item.data(Qt.UserRole) == signal:
                 return not bool(item.flags() & Qt.ItemIsEnabled)
         return False
 
     def label_for(self, signal: str) -> str:
-        for i in range(self._list.count()):
-            item = self._list.item(i)
-            if item.data(Qt.UserRole) == signal:
-                cb = self._list.itemWidget(item)
-                if isinstance(cb, QCheckBox):
-                    return cb.text()
-                return item.text()
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            if item.data(Qt.UserRole) != signal:
+                continue
+            checkbox = self._list.itemWidget(item)
+            return checkbox.text() if isinstance(checkbox, QCheckBox) else item.text()
         return ""
 
     def set_search_text(self, text: str) -> None:
         self._search.setText(text)
 
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt API)
+        """Return a selection-count-independent preferred size."""
+
+        return QSize(220, self._DISPLAY_HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 (Qt API)
+        return QSize(0, self._DISPLAY_HEIGHT)
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+    def _open_from_display(self) -> None:
+        self.show_popup()
+        self._search.setFocus()
+
     def _toggle_popup(self) -> None:
         if self.is_popup_visible():
             self.hide_popup()
@@ -341,140 +341,186 @@ class SignalPickerPopup(QWidget):
 
     def _rebuild_list(self) -> None:
         self._list.clear()
-        # Available signals are checkable; partially-available are disabled.
-        all_names = list(self._available)
-        for name in self._partial.keys():
-            if name not in all_names:
-                all_names.append(name)
-        for name in all_names:
+        names = list(self._available)
+        names.extend(name for name in self._partial if name not in names)
+        for name in names:
             item = QListWidgetItem(self._list)
             item.setData(Qt.UserRole, name)
             label = name
             if name in self._partial:
-                hint = self._partial[name]
-                label = f"{name} {hint}".strip()
-            cb = QCheckBox(label, self._list)
+                label = f"{name} {self._partial[name]}".strip()
+            checkbox = QCheckBox(label, self._list)
+            checkbox.setChecked(name in self._selected)
             if name in self._partial and not self._partial_selectable:
-                cb.setEnabled(False)
-                # Clear the item-level flag so is_disabled() reads False -> True.
+                checkbox.setEnabled(False)
                 item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
             else:
-                cb.setChecked(name in self._selected)
-                cb.toggled.connect(lambda checked, s=name: self._on_checkbox_toggled(s, checked))
-            self._list.setItemWidget(item, cb)
+                checkbox.toggled.connect(
+                    lambda checked, signal=name: self._on_checkbox_toggled(
+                        signal, checked,
+                    )
+                )
+            self._list.setItemWidget(item, checkbox)
+        self._on_search_text_changed(self._search.text())
 
     def _on_checkbox_toggled(self, signal: str, checked: bool) -> None:
         if self._suppress_signal:
             return
         if self._single_select:
             if checked:
-                # Uncheck siblings without re-emitting per click.
                 self._suppress_signal = True
                 try:
-                    for i in range(self._list.count()):
-                        item = self._list.item(i)
-                        cb = self._list.itemWidget(item)
-                        if not isinstance(cb, QCheckBox):
-                            continue
-                        other = item.data(Qt.UserRole)
-                        if other != signal and cb.isChecked():
-                            cb.setChecked(False)
+                    for index in range(self._list.count()):
+                        item = self._list.item(index)
+                        checkbox = self._list.itemWidget(item)
+                        if (
+                            isinstance(checkbox, QCheckBox)
+                            and item.data(Qt.UserRole) != signal
+                            and checkbox.isChecked()
+                        ):
+                            checkbox.setChecked(False)
                 finally:
                     self._suppress_signal = False
                 self._selected = (signal,)
             else:
                 self._selected = ()
-            self._refresh_display()
-            self.selectionChanged.emit(self._selected)
-            return
-        # multi-select original path:
-        sel = list(self._selected)
-        if checked and signal not in sel:
-            sel.append(signal)
-        elif not checked and signal in sel:
-            sel.remove(signal)
-        self._selected = tuple(sel)
+        else:
+            selected = list(self._selected)
+            if checked and signal not in selected:
+                selected.append(signal)
+            elif not checked and signal in selected:
+                selected.remove(signal)
+            self._selected = tuple(selected)
         self._refresh_display()
         self.selectionChanged.emit(self._selected)
 
     def _on_search_text_changed(self, text: str) -> None:
         needle = text.strip().lower()
-        for i in range(self._list.count()):
-            item = self._list.item(i)
-            name = (item.data(Qt.UserRole) or "").lower()
-            item.setHidden(bool(needle) and needle not in name)
+        visible_count = 0
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            name = str(item.data(Qt.UserRole) or "").lower()
+            hidden = bool(needle) and needle not in name
+            item.setHidden(hidden)
+            visible_count += int(not hidden)
+        self._search_hint.setText(
+            f"直接在上方原通道框输入    {visible_count} 条匹配"
+        )
+        self._refresh_display()
+
+    def _clear_chips(self) -> None:
+        while self._chip_layout.count():
+            item = self._chip_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
 
     def _refresh_display(self) -> None:
-        # Tear down existing chip rows (everything except the trailing stretch).
-        while self._chip_layout.count() > 1:
-            item = self._chip_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.setParent(None)
-                w.deleteLater()
+        self._clear_chips()
         if not self._selected:
-            self._placeholder_label.setVisible(True)
-            self._chip_scroll.setVisible(False)
-            # An invisible scroll area already drops out of the parent's
-            # sizeHint, so no explicit setFixedHeight reset is needed.
+            self._chip_host.hide()
+            self._chip_host.setFixedWidth(0)
+            self._overflow_label.hide()
+            self._overflow_label.clear()
+            self._search.setPlaceholderText("搜索信号…")
             self.updateGeometry()
             return
-        self._placeholder_label.setVisible(False)
-        self._chip_scroll.setVisible(True)
-        for name in self._selected:
+
+        self._search.setPlaceholderText("继续搜索…")
+        frame_width = max(self._display_frame.width(), self.width(), 280)
+        search_active = bool(self._search.text())
+        visible_count = min(len(self._selected), self._MAX_VISIBLE_CHIPS)
+        if search_active:
+            # While typing, the original field is the search surface. Hide
+            # the selection summary temporarily so the query itself is not
+            # reduced to a few trailing characters in narrow columns.
+            visible_count = 0
+        elif frame_width < self._NARROW_TWO_CHIP_THRESHOLD:
+            visible_count = min(visible_count, 1)
+
+        hidden_count = 0 if search_active else len(self._selected) - visible_count
+        overflow_width = 0
+        if hidden_count:
+            self._overflow_label.setText(f"+{hidden_count}")
+            self._overflow_label.setToolTip("\n".join(self._selected[visible_count:]))
+            self._overflow_label.adjustSize()
+            overflow_width = max(32, self._overflow_label.sizeHint().width())
+            self._overflow_label.setFixedWidth(overflow_width)
+            self._overflow_label.show()
+        else:
+            self._overflow_label.hide()
+            self._overflow_label.clear()
+            self._overflow_label.setToolTip("")
+
+        # Display margins + arrow + search + inter-item spacing are reserved
+        # before assigning chip widths.  Chips are fixed to the remaining
+        # budget, so no selection count can widen the host.
+        reserved = 9 + self._arrow_button.width() + self._MIN_SEARCH_WIDTH
+        reserved += overflow_width
+        reserved += 4 * (visible_count + int(bool(hidden_count)) + 1)
+        chip_budget = max(68 * visible_count, frame_width - reserved)
+        per_chip = min(180, max(68, chip_budget // max(visible_count, 1)))
+
+        for name in self._selected[:visible_count]:
             chip = SignalChip(name, parent=self._chip_host)
+            chip.set_display_width(per_chip)
             chip.removeRequested.connect(self._on_chip_remove_requested)
-            # Insert before the trailing stretch.
-            self._chip_layout.insertWidget(self._chip_layout.count() - 1, chip)
-        # Drive the scroll area's height from the chip count so
-        # _display_frame.sizeHint().height() actually grows with
-        # selection up to MAX_VISIBLE_ROWS, then plateaus (further
-        # chips scroll). Without this, the QScrollArea reports a
-        # fixed minimumSizeHint and the frame's overall sizeHint stays
-        # constant — defeating the issue-1 contract test.
-        visible_rows = min(len(self._selected), self._CHIP_MAX_VISIBLE_ROWS)
-        target_h = visible_rows * self._CHIP_ROW_HEIGHT
-        self._chip_scroll.setFixedHeight(target_h)
+            self._chip_layout.addWidget(chip)
+        host_width = visible_count * per_chip + max(0, visible_count - 1) * 4
+        self._chip_host.setFixedWidth(host_width)
+        self._chip_host.setVisible(bool(visible_count))
         self.updateGeometry()
 
     def _on_chip_remove_requested(self, name: str) -> None:
         if name not in self._selected:
             return
-        sel = tuple(s for s in self._selected if s != name)
-        self._selected = sel
-        # Mirror the checkbox state in the popup so re-opening shows the
-        # current truth.
+        self._selected = tuple(
+            signal for signal in self._selected if signal != name
+        )
         self._suppress_signal = True
         try:
-            for i in range(self._list.count()):
-                item = self._list.item(i)
-                if item.data(Qt.UserRole) == name:
-                    cb = self._list.itemWidget(item)
-                    if isinstance(cb, QCheckBox) and cb.isChecked():
-                        cb.setChecked(False)
+            for index in range(self._list.count()):
+                item = self._list.item(index)
+                if item.data(Qt.UserRole) != name:
+                    continue
+                checkbox = self._list.itemWidget(item)
+                if isinstance(checkbox, QCheckBox) and checkbox.isChecked():
+                    checkbox.setChecked(False)
         finally:
             self._suppress_signal = False
         self._refresh_display()
         self.selectionChanged.emit(self._selected)
 
-    # ------------------------------------------------------------------
-    # Event handling for the popup
-    # ------------------------------------------------------------------
-    def eventFilter(self, obj, event):  # noqa: N802 (Qt signature)
-        if obj is self._popup:
-            etype = event.type()
-            if etype == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+    def resizeEvent(self, event):  # noqa: N802 (Qt API)
+        super().resizeEvent(event)
+        if hasattr(self, "_chip_layout"):
+            self._refresh_display()
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt API)
+        event_type = event.type()
+        if obj is self._search:
+            if event_type in (QEvent.FocusIn, QEvent.MouseButtonPress):
+                self.show_popup()
+            elif event_type == QEvent.KeyPress and event.key() == Qt.Key_Escape:
                 self.hide_popup()
                 return True
-            if etype == QEvent.FocusOut:
-                # If focus moved to a descendant of the popup (e.g. the
-                # search QLineEdit), keep the popup open — otherwise the
-                # user can never click into the inner search field
-                # (ultrareview bug_015). Only hide when focus actually
-                # left the popup subtree.
+        elif obj is self._popup:
+            if event_type == QEvent.KeyPress:
+                if event.key() == Qt.Key_Escape:
+                    self.hide_popup()
+                    return True
+                if event.key() == Qt.Key_Backspace:
+                    self._search.backspace()
+                    return True
+                if event.text() and event.text().isprintable():
+                    self._search.insert(event.text())
+                    return True
+            if event_type == QEvent.FocusOut:
                 new_focus = QApplication.focusWidget()
+                if new_focus is self._search:
+                    return False
                 if new_focus is not None and self._popup.isAncestorOf(new_focus):
                     return False
                 self.hide_popup()
-                return False
         return super().eventFilter(obj, event)

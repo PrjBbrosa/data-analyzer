@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231769e0'/%3E%3Cpath d='M3 10c2-5 3 3 5-2s3 1 5-2' fill='none' stroke='white' stroke-width='1.4'/%3E%3C/svg%3E">
+<title>TraceLab — 批处理输入与导出目标稿</title>
+<style>
+  :root {
+    --ink: #172033;
+    --muted: #68778c;
+    --quiet: #94a1b3;
+    --blue: #1769e0;
+    --blue-deep: #0e56bd;
+    --blue-soft: #eaf2ff;
+    --line: #dce4ef;
+    --line-strong: #c6d2e1;
+    --surface: #ffffff;
+    --soft: #f6f8fb;
+    --canvas: #e9eef5;
+    --amber: #b86800;
+    --amber-soft: #fff5e5;
+    --green: #17865b;
+    --curve-width: 1.05;
+    --control-h: 38px;
+    --radius: 10px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    min-width: 1080px;
+    overflow: auto;
+    color: var(--ink);
+    background:
+      linear-gradient(rgba(255,255,255,.34) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.34) 1px, transparent 1px),
+      var(--canvas);
+    background-size: 28px 28px;
+    font-family: "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  button, input, select { font: inherit; }
+  button { cursor: pointer; }
+  button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid rgba(23, 105, 224, .32);
+    outline-offset: 2px;
+  }
+
+  .stage { min-height: 100%; display: grid; place-items: center; padding: 24px; }
+  .window {
+    width: min(1392px, calc(100vw - 48px));
+    min-height: 890px;
+    overflow: hidden;
+    border: 1px solid #c4cfdd;
+    border-radius: 16px;
+    background: var(--surface);
+    box-shadow: 0 28px 72px rgba(27, 42, 62, .21);
+  }
+  .titlebar {
+    height: 48px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 16px;
+    border-bottom: 1px solid #e9eef5;
+    background: #fbfcfe;
+  }
+  .traffic { width: 12px; height: 12px; border-radius: 50%; background: #d4d9e0; }
+  .traffic:nth-child(1) { background: #ff605c; }
+  .traffic:nth-child(2) { background: #ffbd44; }
+  .traffic:nth-child(3) { background: #00ca4e; }
+  .window-title { margin-left: 8px; color: #55657a; font-size: 12px; font-weight: 750; }
+  .target-badge {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid #cee0fa;
+    border-radius: 7px;
+    color: var(--blue-deep);
+    background: #f2f7ff;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .target-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--blue); }
+
+  .header {
+    height: 82px;
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--line);
+  }
+  .header h1 { margin: 0; font-size: 21px; letter-spacing: -.02em; }
+  .header p { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+  .scope {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .scope span {
+    height: 29px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: #56667b;
+    background: var(--soft);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .workspace {
+    min-height: 758px;
+    display: grid;
+    grid-template-columns: 468px minmax(0, 1fr);
+  }
+  .config {
+    min-width: 0;
+    padding: 22px 22px 24px;
+    border-right: 1px solid var(--line);
+    background: #fcfdff;
+  }
+  .section + .section { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--line); }
+  .section-title-row { display: flex; align-items: center; margin-bottom: 14px; }
+  .section-kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--blue);
+    font: 760 12px/1 "SF Mono", "Menlo", monospace;
+    letter-spacing: .08em;
+  }
+  .section-kicker::before { content: ""; width: 16px; height: 2px; border-radius: 1px; background: currentColor; }
+  .section-kicker.output { color: var(--amber); }
+  .section-note { margin-left: auto; color: var(--quiet); font-size: 11px; }
+  .field-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: start; gap: 10px; }
+  .field-row + .field-row { margin-top: 12px; }
+  .label { min-height: var(--control-h); display: flex; align-items: center; color: #263349; font-size: 13px; font-weight: 650; }
+
+  .combo-stack { position: relative; z-index: 8; }
+  .signal-combo {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 38px 4px 6px;
+    border: 1px solid var(--blue);
+    border-radius: 9px;
+    background: #fff;
+    box-shadow: 0 0 0 3px rgba(23,105,224,.09);
+  }
+  .combo-chip {
+    max-width: 184px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 7px 0 9px;
+    border: 1px solid #cfe0f8;
+    border-radius: 6px;
+    color: #20466f;
+    background: var(--blue-soft);
+    font-size: 11px;
+    font-weight: 680;
+  }
+  .combo-chip .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip-remove {
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 4px;
+    color: #67809e;
+    background: transparent;
+    padding: 0;
+  }
+  .chip-remove:hover { color: var(--blue-deep); background: rgba(23,105,224,.10); }
+  #signalSearch {
+    min-width: 72px;
+    height: 30px;
+    flex: 1;
+    border: 0;
+    outline: 0;
+    color: var(--ink);
+    background: transparent;
+    font-size: 12px;
+  }
+  #signalSearch::placeholder { color: #9aa7b8; }
+  .combo-arrow {
+    position: absolute;
+    right: 1px;
+    top: 1px;
+    width: 36px;
+    height: 42px;
+    display: grid;
+    place-items: center;
+    border-left: 1px solid #dfE7f1;
+    border-radius: 0 8px 8px 0;
+    color: var(--blue);
+    background: #edf4ff;
+    pointer-events: none;
+  }
+  .combo-arrow svg { transition: transform .16s ease; }
+  .combo-stack.closed .combo-arrow svg { transform: rotate(180deg); }
+
+  .signal-menu {
+    position: absolute;
+    z-index: 30;
+    top: 50px;
+    left: 0;
+    width: 100%;
+    overflow: hidden;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: 0 16px 36px rgba(32, 50, 75, .18);
+    transform-origin: top;
+  }
+  .combo-stack.closed .signal-menu { display: none; }
+  .menu-meta {
+    height: 34px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    border-bottom: 1px solid #edf1f6;
+    color: #718096;
+    background: #fbfcfe;
+    font-size: 10.5px;
+  }
+  .menu-meta strong { margin-left: auto; color: var(--blue); font-weight: 700; }
+  .signal-list { max-height: 248px; overflow: auto; padding: 5px; }
+  .signal-option {
+    min-height: 46px;
+    display: grid;
+    grid-template-columns: 21px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+  .signal-option:hover { background: #f3f7fd; }
+  .signal-option.selected { background: var(--blue-soft); }
+  .signal-option[hidden] { display: none; }
+  .check {
+    width: 17px;
+    height: 17px;
+    display: grid;
+    place-items: center;
+    border: 1px solid #9fb0c5;
+    border-radius: 5px;
+    background: #fff;
+  }
+  .selected .check { border-color: var(--blue); background: var(--blue); }
+  .check svg { opacity: 0; }
+  .selected .check svg { opacity: 1; }
+  .option-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1f2c40; font-size: 12px; font-weight: 680; }
+  .option-source { margin-top: 3px; color: #7b899c; font-size: 10px; }
+  mark { padding: 0; color: var(--blue); background: transparent; font-weight: 800; }
+  .selection-status { margin-top: 7px; color: #718096; font-size: 10.5px; }
+  .selection-status strong { color: var(--blue); }
+  .config.menu-closed #analysisRow { margin-top: 22px !important; }
+
+  .control, .browse {
+    height: var(--control-h);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    color: var(--ink);
+    background: #fff;
+    font-size: 12px;
+  }
+  .path-row { display: grid; grid-template-columns: minmax(0,1fr) 70px; gap: 7px; }
+  .path { min-width: 0; padding: 0 11px; color: #53647a; }
+  .browse { color: #44546a; font-weight: 650; }
+  .browse:hover { border-color: #aab8ca; background: #f9fbfd; }
+
+  .export-row {
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 0 8px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: #fff;
+  }
+  .mock-check { display: inline-flex; align-items: center; gap: 7px; color: #29364a; font-size: 12px; font-weight: 650; white-space: nowrap; }
+  .mock-check i {
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--blue);
+    border-radius: 5px;
+    color: #fff;
+    background: var(--blue);
+    font-style: normal;
+  }
+  .settings-button {
+    margin-left: -12px;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: #5d6c80;
+    background: transparent;
+  }
+  .settings-button:hover, .settings-button.active { border-color: #cfe0f8; color: var(--blue); background: var(--blue-soft); }
+  .export-summary {
+    margin-left: auto;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 9px;
+    border-radius: 6px;
+    color: #617187;
+    background: var(--soft);
+    font: 650 9px/1 "SF Mono", "Menlo", monospace;
+  }
+  .settings-wrap { position: relative; }
+  .image-settings {
+    position: absolute;
+    z-index: 20;
+    top: 48px;
+    right: 0;
+    width: 336px;
+    padding: 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: 11px;
+    background: #fff;
+    box-shadow: 0 16px 38px rgba(28, 46, 72, .18);
+  }
+  .image-settings[hidden] { display: none; }
+  .settings-head { display: flex; align-items: center; margin-bottom: 12px; }
+  .settings-head strong { font-size: 13px; }
+  .settings-head span { margin-left: auto; color: var(--green); font-size: 10px; font-weight: 700; }
+  .settings-grid { display: grid; grid-template-columns: 70px minmax(0,1fr); align-items: center; gap: 10px 9px; }
+  .settings-grid label { color: #56667a; font-size: 11px; font-weight: 650; }
+  .mini-select {
+    width: 100%;
+    height: 34px;
+    padding: 0 29px 0 9px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: #273449;
+    background: #fbfcfe;
+    font-size: 11px;
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, #718096 50%), linear-gradient(135deg, #718096 50%, transparent 50%);
+    background-position: calc(100% - 14px) 14px, calc(100% - 10px) 14px;
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+  }
+  .segmented { display: grid; grid-template-columns: repeat(3, 1fr); padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); }
+  .segment { height: 29px; border: 0; border-radius: 6px; color: #68778c; background: transparent; font-size: 10.5px; }
+  .segment.active { color: var(--blue-deep); background: #fff; box-shadow: 0 1px 4px rgba(38,54,78,.12); font-weight: 750; }
+  .settings-foot { margin: 12px -14px -14px; padding: 10px 14px; border-top: 1px solid #edf1f6; color: #7a8799; background: #fbfcfe; border-radius: 0 0 11px 11px; font-size: 10px; }
+
+  .analysis-card {
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .analysis-token { padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .analysis-token b { display: block; color: #334157; font-size: 11px; }
+  .analysis-token span { display: block; margin-top: 4px; color: #8a97a8; font-size: 10px; }
+
+  .preview {
+    min-width: 0;
+    padding: 22px 24px 24px;
+    background: #f5f7fa;
+  }
+  .preview-head { display: flex; align-items: center; margin-bottom: 12px; }
+  .preview-copy h2 { margin: 0; font-size: 15px; }
+  .preview-copy p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+  .preview-stats { margin-left: auto; display: flex; gap: 7px; }
+  .stat {
+    height: 29px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 9px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: #57677b;
+    background: #fff;
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .stat i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+  .stat.blue i { background: var(--blue); }
+
+  .figure {
+    overflow: hidden;
+    border: 1px solid #ccd6e3;
+    border-radius: 11px;
+    background: #fff;
+    box-shadow: 0 10px 28px rgba(28, 45, 69, .10);
+  }
+  .figure-toolbar {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    border-bottom: 1px solid #e7ecf3;
+    background: #fbfcfe;
+  }
+  .figure-title { color: #344258; font-size: 11px; font-weight: 750; }
+  .figure-meta { margin-left: auto; color: #7d8999; font: 650 9.5px/1 "SF Mono", "Menlo", monospace; }
+  #chart { display: block; width: 100%; height: 632px; background: #fff; }
+  .grid-line { stroke: #dce3eb; stroke-width: .72; vector-effect: non-scaling-stroke; }
+  .axis-line { stroke: #8b9aad; stroke-width: .9; vector-effect: non-scaling-stroke; }
+  .curve { fill: none; stroke-width: var(--curve-width); vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+  .curve-a { stroke: #1769e0; }
+  .curve-b { stroke: #08a1a8; }
+  .curve-c { stroke: #e37a23; }
+  .panel-label { fill: #344258; font-size: 10px; font-weight: 750; }
+  .axis-label { fill: #7d8999; font-size: 8.7px; }
+  .tick-label { fill: #8996a7; font-size: 8px; font-family: "SF Mono", "Menlo", monospace; }
+  .legend-box { fill: rgba(255,255,255,.92); stroke: #d9e1eb; stroke-width: .8; }
+  .legend-text { fill: #58677a; font-size: 7.8px; }
+  .footer-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 11px;
+    color: #68778c;
+    font-size: 10.5px;
+  }
+  .line-sample { width: 36px; height: 1px; background: var(--blue); }
+  .footer-note strong { color: #36445a; }
+
+  @media (max-width: 1180px) {
+    .window { width: calc(100vw - 28px); }
+    .stage { padding: 14px; }
+    .workspace { grid-template-columns: 420px minmax(0, 1fr); }
+    .scope { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<main class="stage">
+  <section class="window" aria-label="TraceLab 批处理目标界面">
+    <div class="titlebar">
+      <i class="traffic"></i><i class="traffic"></i><i class="traffic"></i>
+      <span class="window-title">TraceLab · 批量分析</span>
+      <span class="target-badge">交互目标稿</span>
+    </div>
+
+    <header class="header">
+      <div>
+        <h1>批量分析配置</h1>
+        <p>输入选择保持在原控件内；导出选项按需展开；图片使用白底细线。</p>
+      </div>
+      <div class="scope" aria-label="本次目标范围">
+        <span>01 原位搜索</span><span>02 白底出图</span><span>03 设置收纳</span><span>+ 细线</span>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="config" id="configPanel">
+        <section class="section">
+          <div class="section-title-row">
+            <span class="section-kicker">INPUT</span>
+            <span class="section-note">搜索与选择合并</span>
+          </div>
+
+          <div class="field-row">
+            <div class="label">目标信号</div>
+            <div>
+              <div class="combo-stack" id="comboStack">
+                <div class="signal-combo" id="signalCombo" role="combobox" aria-expanded="true" aria-controls="signalMenu" tabindex="0">
+                  <span class="combo-chip" data-name="Rte_TAS_mTorsionBarTorque_xds16">
+                    <span class="truncate">Rte_TAS_mTorsionBarTorque_xds16</span>
+                    <button class="chip-remove" type="button" aria-label="移除 Rte_TAS_mTorsionBarTorque_xds16">×</button>
+                  </span>
+                  <input id="signalSearch" value="Rte_" aria-label="在目标信号框内搜索" autocomplete="off" spellcheck="false">
+                </div>
+                <span class="combo-arrow" aria-hidden="true">
+                  <svg width="12" height="8" viewBox="0 0 12 8"><path d="M2 6 6 2l4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </span>
+                <div class="signal-menu" id="signalMenu" role="listbox" aria-multiselectable="true">
+                  <div class="menu-meta">直接在上方原通道框输入 <strong id="matchCount">6 条匹配</strong></div>
+                  <div class="signal-list" id="signalList">
+                    <div class="signal-option selected" role="option" aria-selected="true" data-name="Rte_TAS_mTorsionBarTorque_xds16">
+                      <span class="check"><svg width="11" height="9" viewBox="0 0 11 9"><path d="m1 4.5 2.6 2.6L10 1" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                      <div><div class="option-name">Rte_TAS_mTorsionBarTorque_xds16</div><div class="option-source">3/3 文件 · 完整可用</div></div>
+                    </div>
+                    <div class="signal-option" role="option" aria-selected="false" data-name="Rte_ActRetPlausi_mActiveReturnMotorTorq4Check_xds16">
+                      <span class="check"><svg width="11" height="9" viewBox="0 0 11 9"><path d="m1 4.5 2.6 2.6L10 1" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                      <div><div class="option-name">Rte_ActRetPlausi_mActiveReturnMotorTorq4Check_xds16</div><div class="option-source">3/3 文件 · 完整可用</div></div>
+                    </div>
+                    <div class="signal-option" role="option" aria-selected="false" data-name="Rte_DMS_yActualChar_xdu8">
+                      <span class="check"><svg width="11" height="9" viewBox="0 0 11 9"><path d="m1 4.5 2.6 2.6L10 1" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                      <div><div class="option-name">Rte_DMS_yActualChar_xdu8</div><div class="option-source">3/3 文件 · 完整可用</div></div>
+                    </div>
+                    <div class="signal-option" role="option" aria-selected="false" data-name="Rte_ESChkPlausi_mESMotorTorque_xds16">
+                      <span class="check"><svg width="11" height="9" viewBox="0 0 11 9"><path d="m1 4.5 2.6 2.6L10 1" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                      <div><div class="option-name">Rte_ESChkPlausi_mESMotorTorque_xds16</div><div class="option-source">3/3 文件 · 完整可用</div></div>
+                    </div>
+                    <div class="signal-option" role="option" aria-selected="false" data-name="Rte_FricComp_mFricCompMotorTorq_xds16">
+                      <span class="check"><svg width="11" height="9" viewBox="0 0 11 9"><path d="m1 4.5 2.6 2.6L10 1" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                      <div><div class="option-name">Rte_FricComp_mFricCompMotorTorq_xds16</div><div class="option-source">3/3 文件 · 完整可用</div></div>
+                    </div>
+                    <div class="signal-option" role="option" aria-selected="false" data-name="Rte_RackPosCorrPlausi_wSteeringAngle_xds16">
+                      <span class="check"><svg width="11" height="9" viewBox="0 0 11 9"><path d="m1 4.5 2.6 2.6L10 1" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                      <div><div class="option-name">Rte_RackPosCorrPlausi_wSteeringAngle_xds16</div><div class="option-source">3/3 文件 · 完整可用</div></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="selection-status">已选择 <strong id="selectedCount">1</strong> 个信号 · 可继续输入或勾选</div>
+            </div>
+          </div>
+
+          <div class="field-row" id="analysisRow" style="margin-top: 318px">
+            <div class="label">分析类型</div>
+            <select class="control" aria-label="分析类型"><option>时域分析</option></select>
+          </div>
+          <div class="analysis-card">
+            <div class="analysis-token"><b>3 个数据文件</b><span>tiaodamping · tiaodoffset · 01</span></div>
+            <div class="analysis-token"><b>按文件分面</b><span>每个文件独立子图</span></div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-title-row">
+            <span class="section-kicker output">OUTPUT</span>
+            <span class="section-note">常用项保持紧凑</span>
+          </div>
+          <div class="field-row">
+            <div class="label">输出目录</div>
+            <div class="path-row">
+              <input class="control path" value="~/Desktop/mf4_batch_output" aria-label="输出目录">
+              <button class="browse" type="button">选择…</button>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="label">导出内容</div>
+            <div class="settings-wrap">
+              <div class="export-row">
+                <span class="mock-check"><i>✓</i>数据文件</span>
+                <span class="mock-check"><i>✓</i>图片</span>
+                <button class="settings-button" id="settingsButton" type="button" aria-label="图片输出设置" aria-expanded="false" title="图片输出设置">
+                  <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Zm8.2 4.8v-2.8l-2.3-.6a7.5 7.5 0 0 0-.6-1.4l1.2-2-2-2-2 1.2a7.5 7.5 0 0 0-1.4-.6L12.6 3H9.8l-.6 2.3a7.5 7.5 0 0 0-1.4.6l-2-1.2-2 2 1.2 2a7.5 7.5 0 0 0-.6 1.4L2 10.6v2.8l2.3.6c.2.5.4 1 .7 1.4l-1.2 2 2 2 2-1.2c.4.3.9.5 1.4.6l.6 2.3h2.8l.6-2.3c.5-.2 1-.4 1.4-.6l2 1.2 2-2-1.2-2c.3-.4.5-.9.6-1.4l2.2-.6Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <span class="export-summary" id="exportSummary">PNG · 1920×1080 · 白底 · 1.0px</span>
+              </div>
+              <div class="image-settings" id="imageSettings" hidden>
+                <div class="settings-head"><strong>图片输出设置</strong><span>预览已同步</span></div>
+                <div class="settings-grid">
+                  <label for="imageFormat">格式</label>
+                  <select class="mini-select" id="imageFormat"><option>PNG</option><option>SVG</option><option>PDF</option></select>
+                  <label for="imageSize">尺寸</label>
+                  <select class="mini-select" id="imageSize"><option>1080p · 1920×1080</option><option>2K · 2560×1440</option><option>4K · 3840×2160</option></select>
+                  <label>图片背景</label>
+                  <div class="segmented" aria-label="图片背景"><button class="segment active" type="button">白色</button><button class="segment" type="button">透明</button><button class="segment" type="button">深色</button></div>
+                  <label>曲线线宽</label>
+                  <div class="segmented" id="widthSegments"><button class="segment active" type="button" data-width="1.05" data-label="1.0px">细 · 1.0</button><button class="segment" type="button" data-width="1.45" data-label="1.5px">中 · 1.5</button><button class="segment" type="button" data-width="2" data-label="2.0px">粗 · 2.0</button></div>
+                  <label for="imageDpi">PNG DPI</label>
+                  <select class="mini-select" id="imageDpi"><option>144 DPI</option><option>96 DPI</option><option>300 DPI</option></select>
+                </div>
+                <div class="settings-foot">仅在需要时展开；关闭后保留设置并显示摘要。</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <section class="preview">
+        <div class="preview-head">
+          <div class="preview-copy">
+            <h2>图片输出预览</h2>
+            <p>最终导出视觉：白底、低对比网格、细曲线，长轨迹仍可分辨。</p>
+          </div>
+          <div class="preview-stats">
+            <span class="stat"><i></i>白色背景</span>
+            <span class="stat blue"><i></i><b id="widthReadout">1.0 px</b> 曲线</span>
+          </div>
+        </div>
+
+        <div class="figure">
+          <div class="figure-toolbar">
+            <span class="figure-title">Rte_TAS_mTorsionBarTorque_xds16 · Time domain</span>
+            <span class="figure-meta">PNG · 1920×1080 · 144 DPI</span>
+          </div>
+          <svg id="chart" viewBox="0 0 820 632" role="img" aria-label="白底细线批处理图表预览">
+            <rect width="820" height="632" fill="#fff"/>
+            <text x="58" y="34" class="panel-label">Amplitude (Nm)</text>
+            <g id="panel1" transform="translate(58 54)"></g>
+            <g id="panel2" transform="translate(58 240)"></g>
+            <g id="panel3" transform="translate(58 426)"></g>
+            <text x="410" y="613" text-anchor="middle" class="axis-label" style="font-size:10px">Rte_RackPosCorrPlausi_wSteeringAngle_xds16 (deg)</text>
+          </svg>
+        </div>
+        <div class="footer-note"><span class="line-sample"></span><span><strong>目标线宽：1.0 px</strong> · 与当前粗线相比降低视觉堆叠，放大导出后仍保持清晰。</span></div>
+      </section>
+    </div>
+  </section>
+</main>
+
+<script>
+  const svgNS = "http://www.w3.org/2000/svg";
+  const panelData = [
+    { id: "panel1", title: "tiaodamping.MF4", phase: 0.1, gain: 1.00 },
+    { id: "panel2", title: "tiaodoffset.MF4", phase: 1.7, gain: 0.88 },
+    { id: "panel3", title: "tiaodoffset01.MF4", phase: 3.1, gain: 1.14 }
+  ];
+
+  function svgEl(tag, attrs = {}) {
+    const el = document.createElementNS(svgNS, tag);
+    Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, value));
+    return el;
+  }
+
+  function pathFor(seed, gain, variant) {
+    const points = [];
+    const width = 722;
+    for (let i = 0; i <= 320; i++) {
+      const t = i / 320;
+      const sweep = Math.sin(t * Math.PI * 2.08 + seed) * (44 - 10 * t);
+      const ripple = Math.sin(t * 72 + seed * 1.9 + variant) * (3.2 + 2.6 * t);
+      const envelope = Math.sin(t * 8.2 + seed) * 8 + Math.cos(t * 3.1 + variant) * 5;
+      const y = 73 - gain * (sweep * .34 + ripple + envelope) + (variant - 1) * 8;
+      points.push(`${(t * width).toFixed(2)},${Math.max(7, Math.min(139, y)).toFixed(2)}`);
+    }
+    return `M${points.join(" L")}`;
+  }
+
+  function buildPanel({ id, title, phase, gain }, index) {
+    const group = document.getElementById(id);
+    const plotW = 722, plotH = 148;
+    const titleText = svgEl("text", { x: plotW / 2, y: -9, "text-anchor": "middle", class: "panel-label" });
+    titleText.textContent = title;
+    group.appendChild(titleText);
+
+    for (let x = 0; x <= plotW; x += plotW / 6) group.appendChild(svgEl("line", { x1: x, y1: 0, x2: x, y2: plotH, class: "grid-line" }));
+    for (let y = 0; y <= plotH; y += plotH / 4) group.appendChild(svgEl("line", { x1: 0, y1: y, x2: plotW, y2: y, class: "grid-line" }));
+    group.appendChild(svgEl("line", { x1: 0, y1: plotH, x2: plotW, y2: plotH, class: "axis-line" }));
+    group.appendChild(svgEl("line", { x1: 0, y1: 0, x2: 0, y2: plotH, class: "axis-line" }));
+
+    [-100, 0, 100, 200, 300, 400, 500].forEach((tick, i) => {
+      if (index < 2) return;
+      const text = svgEl("text", { x: i * plotW / 6, y: plotH + 16, "text-anchor": "middle", class: "tick-label" });
+      text.textContent = tick;
+      group.appendChild(text);
+    });
+    [-2, 0, 2].forEach((tick, i) => {
+      const text = svgEl("text", { x: -12, y: 119 - i * 50, "text-anchor": "end", class: "tick-label" });
+      text.textContent = tick;
+      group.appendChild(text);
+    });
+
+    ["curve-a", "curve-b", "curve-c"].forEach((curveClass, variant) => {
+      group.appendChild(svgEl("path", { d: pathFor(phase + variant * .28, gain, variant), class: `curve ${curveClass}`, opacity: variant === 0 ? ".96" : ".72" }));
+    });
+
+    const legendY = index === 1 ? 112 : 9;
+    group.appendChild(svgEl("rect", { x: 10, y: legendY, width: 252, height: 25, rx: 5, class: "legend-box" }));
+    group.appendChild(svgEl("line", { x1: 20, y1: legendY + 12.5, x2: 43, y2: legendY + 12.5, class: "curve curve-a" }));
+    const legend = svgEl("text", { x: 50, y: legendY + 15.5, class: "legend-text" });
+    legend.textContent = `${title} / Rte_TAS_mTorsionBarTorque_xds16`;
+    group.appendChild(legend);
+  }
+  panelData.forEach(buildPanel);
+
+  const comboStack = document.getElementById("comboStack");
+  const combo = document.getElementById("signalCombo");
+  const search = document.getElementById("signalSearch");
+  const configPanel = document.getElementById("configPanel");
+  const options = [...document.querySelectorAll(".signal-option")];
+  const matchCount = document.getElementById("matchCount");
+  const selectedCount = document.getElementById("selectedCount");
+
+  function highlight(text, query) {
+    if (!query) return text;
+    const index = text.toLowerCase().indexOf(query.toLowerCase());
+    if (index < 0) return text;
+    return `${text.slice(0, index)}<mark>${text.slice(index, index + query.length)}</mark>${text.slice(index + query.length)}`;
+  }
+  function filterSignals() {
+    const query = search.value.trim();
+    let count = 0;
+    options.forEach(option => {
+      const name = option.dataset.name;
+      const visible = !query || name.toLowerCase().includes(query.toLowerCase());
+      option.hidden = !visible;
+      option.querySelector(".option-name").innerHTML = highlight(name, query);
+      if (visible) count += 1;
+    });
+    matchCount.textContent = `${count} 条匹配`;
+  }
+  function refreshSelection() {
+    const selected = options.filter(option => option.classList.contains("selected"));
+    selectedCount.textContent = selected.length;
+    document.querySelectorAll(".combo-chip").forEach(chip => chip.remove());
+    selected.slice(0, 2).forEach(option => {
+      const chip = document.createElement("span");
+      chip.className = "combo-chip";
+      chip.dataset.name = option.dataset.name;
+      chip.innerHTML = `<span class="truncate">${option.dataset.name}</span><button class="chip-remove" type="button" aria-label="移除 ${option.dataset.name}">×</button>`;
+      combo.insertBefore(chip, search);
+    });
+    if (selected.length > 2) {
+      const more = document.createElement("span");
+      more.className = "combo-chip";
+      more.style.maxWidth = "54px";
+      more.innerHTML = `<span>+${selected.length - 2}</span>`;
+      combo.insertBefore(more, search);
+    }
+  }
+  search.addEventListener("input", filterSignals);
+  search.addEventListener("focus", () => { comboStack.classList.remove("closed"); configPanel.classList.remove("menu-closed"); combo.setAttribute("aria-expanded", "true"); });
+  combo.addEventListener("click", event => {
+    if (event.target.closest(".chip-remove")) {
+      const name = event.target.closest(".combo-chip").dataset.name;
+      const target = options.find(option => option.dataset.name === name);
+      if (target) { target.classList.remove("selected"); target.setAttribute("aria-selected", "false"); refreshSelection(); }
+      event.stopPropagation();
+      return;
+    }
+    comboStack.classList.remove("closed");
+    configPanel.classList.remove("menu-closed");
+    combo.setAttribute("aria-expanded", "true");
+    search.focus();
+  });
+  options.forEach(option => option.addEventListener("click", () => {
+    option.classList.toggle("selected");
+    option.setAttribute("aria-selected", String(option.classList.contains("selected")));
+    refreshSelection();
+    search.focus();
+  }));
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") { comboStack.classList.add("closed"); configPanel.classList.add("menu-closed"); combo.setAttribute("aria-expanded", "false"); search.blur(); }
+  });
+
+  const settingsButton = document.getElementById("settingsButton");
+  const imageSettings = document.getElementById("imageSettings");
+  settingsButton.addEventListener("click", () => {
+    const open = imageSettings.hidden;
+    imageSettings.hidden = !open;
+    settingsButton.classList.toggle("active", open);
+    settingsButton.setAttribute("aria-expanded", String(open));
+    if (open) { comboStack.classList.add("closed"); configPanel.classList.add("menu-closed"); combo.setAttribute("aria-expanded", "false"); }
+  });
+  document.getElementById("widthSegments").addEventListener("click", event => {
+    const segment = event.target.closest(".segment[data-width]");
+    if (!segment) return;
+    document.querySelectorAll("#widthSegments .segment").forEach(button => button.classList.remove("active"));
+    segment.classList.add("active");
+    document.documentElement.style.setProperty("--curve-width", segment.dataset.width);
+    document.getElementById("widthReadout").textContent = segment.dataset.label.replace("px", " px");
+    document.getElementById("exportSummary").textContent = `PNG · 1920×1080 · 白底 · ${segment.dataset.label}`;
+  });
+  document.querySelectorAll(".segmented:not(#widthSegments)").forEach(group => group.addEventListener("click", event => {
+    const segment = event.target.closest(".segment");
+    if (!segment) return;
+    group.querySelectorAll(".segment").forEach(button => button.classList.remove("active"));
+    segment.classList.add("active");
+  }));
+  filterSignals();
+</script>
+</body>
+</html>

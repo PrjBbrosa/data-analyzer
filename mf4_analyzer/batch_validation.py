@@ -206,6 +206,38 @@ def validate_outputs(outputs: Any) -> tuple[ValidationIssue, ...]:
             issues.append(ValidationIssue(
                 "image_dpi", "invalid_dpi", str(exc),
             ))
+
+        image_background = _output_value(
+            outputs, "image_background", "white"
+        )
+        try:
+            BatchRenderOptions(
+                width_px=320,
+                height_px=320,
+                dpi=144,
+                format="png",
+                background=image_background,
+            )
+        except (TypeError, ValueError) as exc:
+            issues.append(ValidationIssue(
+                "image_background", "unsupported_background", str(exc),
+            ))
+
+        image_line_width = _output_value(
+            outputs, "image_line_width", 1.0
+        )
+        try:
+            BatchRenderOptions(
+                width_px=320,
+                height_px=320,
+                dpi=144,
+                format="png",
+                line_width=image_line_width,
+            )
+        except (TypeError, ValueError) as exc:
+            issues.append(ValidationIssue(
+                "image_line_width", "invalid_line_width", str(exc),
+            ))
     return tuple(issues)
 
 

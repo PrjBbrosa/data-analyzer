@@ -39,6 +39,8 @@ def test_phase3_batch_output_defaults_are_backward_compatible_and_safe():
     assert outputs.image_width == 1920
     assert outputs.image_height == 1080
     assert outputs.image_dpi == 144
+    assert outputs.image_background == "white"
+    assert outputs.image_line_width == pytest.approx(1.0)
     assert outputs.conflict_policy == "auto_number"
     assert outputs.write_manifest is True
     assert outputs.resume_policy == "none"
@@ -59,6 +61,8 @@ def test_phase3_output_settings_round_trip_through_preset_json(tmp_path):
             image_width=2304,
             image_height=1296,
             image_dpi=192,
+            image_background="transparent",
+            image_line_width=1.5,
             conflict_policy="overwrite",
             write_manifest=False,
             resume_policy="manifest",

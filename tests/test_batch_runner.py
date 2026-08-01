@@ -2114,6 +2114,8 @@ def test_runner_maps_phase3_image_output_to_renderer_options_and_context(
             image_width=2304,
             image_height=1296,
             image_dpi=192,
+            image_background="transparent",
+            image_line_width=1.5,
             write_manifest=False,
         ),
     )
@@ -2128,8 +2130,15 @@ def test_runner_maps_phase3_image_output_to_renderer_options_and_context(
         2304, 1296, 192,
     )
     options = captured["options"]
-    assert (options.width_px, options.height_px, options.dpi, options.format) == (
-        2304, 1296, 192, "svg",
+    assert (
+        options.width_px,
+        options.height_px,
+        options.dpi,
+        options.format,
+        options.background,
+        options.line_width,
+    ) == (
+        2304, 1296, 192, "svg", "transparent", 1.5,
     )
     context = captured["context"]
     assert context.channel == "sig"

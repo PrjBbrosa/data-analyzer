@@ -165,6 +165,8 @@ OUTPUT_DEFAULTS = {
     "image_width": 1920,
     "image_height": 1080,
     "image_dpi": 144,
+    "image_background": "white",
+    "image_line_width": 1.0,
     "conflict_policy": "auto_number",
     "write_manifest": True,
     "resume_policy": "none",
@@ -183,6 +185,8 @@ _FINGERPRINT_OUTPUT_FIELDS = (
     "image_width",
     "image_height",
     "image_dpi",
+    "image_background",
+    "image_line_width",
 )
 
 

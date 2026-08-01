@@ -85,6 +85,8 @@ class BatchOutput:
     image_width: int = 1920
     image_height: int = 1080
     image_dpi: int = 144
+    image_background: str = 'white'
+    image_line_width: float = 1.0
     conflict_policy: str = 'auto_number'
     write_manifest: bool = True
     resume_policy: str = 'none'
@@ -432,7 +434,8 @@ class BatchRunner:
                 for field_name in (
                     'export_data', 'export_image', 'data_format',
                     'image_format', 'image_size', 'image_width',
-                    'image_height', 'image_dpi', 'conflict_policy',
+                    'image_height', 'image_dpi', 'image_background',
+                    'image_line_width', 'conflict_policy',
                     'write_manifest', 'resume_policy',
                 )
                 if hasattr(outputs, field_name)
@@ -3071,6 +3074,8 @@ class BatchRunner:
                 height_px=height,
                 dpi=int(preset.outputs.image_dpi),
                 format=image_extension,
+                background=str(preset.outputs.image_background),
+                line_width=float(preset.outputs.image_line_width),
             )
             member_fact = f'{len(usable)}/{len(group.members)}'
             facts = dict(params)
@@ -3505,6 +3510,8 @@ class BatchRunner:
                     height_px=height,
                     dpi=int(preset.outputs.image_dpi),
                     format=image_extension,
+                    background=str(preset.outputs.image_background),
+                    line_width=float(preset.outputs.image_line_width),
                 )
                 channel_meta = (
                     (getattr(fd, 'channel_metadata', None) or {}).get(

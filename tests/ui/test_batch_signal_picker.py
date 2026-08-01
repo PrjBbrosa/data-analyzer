@@ -18,6 +18,18 @@ def test_picker_search_filters_list(qtbot):
     assert "temp" not in visible
 
 
+def test_picker_search_lives_in_original_field_not_popup(qtbot):
+    from PyQt5.QtWidgets import QLineEdit
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["vibration_x", "temp"])
+    qtbot.addWidget(p)
+
+    assert p._display_frame.isAncestorOf(p._search)
+    assert not p._popup.isAncestorOf(p._search)
+    assert p._popup.findChildren(QLineEdit) == []
+
+
 def test_picker_marks_partial_signals_grey(qtbot):
     from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
     p = SignalPickerPopup(
@@ -51,8 +63,8 @@ def test_picker_popup_collapses_on_focus_out(qtbot):
     assert p.is_popup_visible() is False
 
 
-def test_focus_to_search_keeps_popup_open(qtbot):
-    """点击 popup 内部搜索框时 popup 必须保持打开 (ultrareview bug_015)."""
+def test_focus_to_inline_search_keeps_popup_open(qtbot):
+    """原通道框内的搜索输入获得焦点时，候选 popup 必须保持打开。"""
     from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
     p = SignalPickerPopup(available_signals=["sig_a", "sig_b"])
     qtbot.addWidget(p)
@@ -110,30 +122,81 @@ def test_signal_chip_label_truncates_long_name(qtbot):
     assert chip._label.text().endswith("…")
 
 
-def test_picker_display_renders_one_chip_per_selected(qtbot):
+def test_picker_display_summarizes_selected_items_that_do_not_fit(qtbot):
     from mf4_analyzer.ui.drawers.batch.signal_picker import (
         SignalPickerPopup, SignalChip,
     )
-    p = SignalPickerPopup(available_signals=["a", "b", "c"])
+    names = tuple(f"Rte_very_long_signal_name_{index:02d}_xds16" for index in range(20))
+    p = SignalPickerPopup(available_signals=names)
     qtbot.addWidget(p)
-    p.set_selected(("a", "b", "c"))
+    p.resize(288, 60)
+    p.show()
+    p.set_selected(names)
+    qtbot.wait(20)
+
     chips = p._display_frame.findChildren(SignalChip)
-    assert sorted(c.name() for c in chips) == ["a", "b", "c"]
+    visible_chips = [chip for chip in chips if not chip.isHidden()]
+    assert 1 <= len(visible_chips) <= 2
+    assert p._overflow_label.isVisibleTo(p)
+    assert p._overflow_label.text() == f"+{len(names) - len(visible_chips)}"
+    assert names[-1] in p._overflow_label.toolTip()
 
 
-def test_picker_display_height_grows_with_selection_not_width(qtbot):
-    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
-    p = SignalPickerPopup(available_signals=["sig1", "sig2", "sig3"])
+def test_picker_display_stays_single_line_and_inside_narrow_host(qtbot):
+    from PyQt5.QtCore import QPoint
+    from mf4_analyzer.ui.drawers.batch.signal_picker import (
+        SignalChip, SignalPickerPopup,
+    )
+
+    names = tuple(f"Rte_channel_{index:02d}_with_a_long_name" for index in range(20))
+    p = SignalPickerPopup(available_signals=names)
     qtbot.addWidget(p)
-    p.resize(280, 600)
-    p.set_selected(("sig1",))
-    one_h = p._display_frame.sizeHint().height()
-    one_w = p._display_frame.sizeHint().width()
-    p.set_selected(("sig1", "sig2", "sig3"))
-    three_h = p._display_frame.sizeHint().height()
-    three_w = p._display_frame.sizeHint().width()
-    assert three_h > one_h
-    assert three_w == one_w  # width must NOT scale with chip count
+    p.resize(288, 60)
+    p.show()
+    p.set_selected(names)
+    qtbot.wait(20)
+
+    frame = p._display_frame
+    assert p.width() == 288
+    assert p.height() == 38
+    assert frame.width() <= p.width()
+    assert frame.sizeHint().height() <= 44
+    visible_children = [
+        *[chip for chip in frame.findChildren(SignalChip) if chip.isVisibleTo(p)],
+        p._overflow_label,
+        p._search,
+        p._arrow_button,
+    ]
+    for child in visible_children:
+        if not child.isVisibleTo(p):
+            continue
+        top_left = child.mapTo(frame, QPoint(0, 0))
+        assert top_left.x() >= 0
+        assert top_left.x() + child.width() <= frame.width()
+
+
+def test_picker_active_search_uses_original_field_width(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import (
+        SignalChip, SignalPickerPopup,
+    )
+
+    names = tuple(f"Rte_channel_{index:02d}_with_a_long_name" for index in range(20))
+    p = SignalPickerPopup(available_signals=names)
+    qtbot.addWidget(p)
+    p.set_selected(names)
+    p.resize(288, 38)
+    p.show()
+    p.set_search_text("channel_19")
+    qtbot.wait(20)
+
+    assert p.width() == 288
+    assert p._search.text() == "channel_19"
+    assert p._search.width() >= 200
+    assert not p._overflow_label.isVisibleTo(p)
+    assert not any(
+        chip.isVisibleTo(p)
+        for chip in p._display_frame.findChildren(SignalChip)
+    )
 
 
 def test_picker_display_chip_remove_unselects_signal(qtbot):

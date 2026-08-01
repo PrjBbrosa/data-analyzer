@@ -67,6 +67,8 @@ def save_preset_to_json(preset: AnalysisPreset, path: str | Path) -> None:
             "image_width": int(preset.outputs.image_width),
             "image_height": int(preset.outputs.image_height),
             "image_dpi": int(preset.outputs.image_dpi),
+            "image_background": str(preset.outputs.image_background),
+            "image_line_width": float(preset.outputs.image_line_width),
             "conflict_policy": str(preset.outputs.conflict_policy),
             "write_manifest": bool(preset.outputs.write_manifest),
             "resume_policy": str(preset.outputs.resume_policy),
@@ -140,6 +142,12 @@ def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
             image_width=int(outputs_raw.get("image_width", 1920)),
             image_height=int(outputs_raw.get("image_height", 1080)),
             image_dpi=int(outputs_raw.get("image_dpi", 144)),
+            image_background=str(
+                outputs_raw.get("image_background", "white")
+            ),
+            image_line_width=float(
+                outputs_raw.get("image_line_width", 1.0)
+            ),
             conflict_policy=str(
                 outputs_raw.get("conflict_policy", "auto_number")
             ),

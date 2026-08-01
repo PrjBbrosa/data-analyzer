@@ -56,6 +56,62 @@ _CJK_FONT_CANDIDATES = (
 
 
 @dataclass(frozen=True)
+class _RenderTheme:
+    figure_face: Any
+    axes_face: Any
+    text: str
+    muted: str
+    subtle: str
+    spine: str
+    grid: str
+    fft_line: str
+    legend_face: str
+
+
+_WHITE_THEME = _RenderTheme(
+    figure_face="#ffffff",
+    axes_face="#ffffff",
+    text="#273449",
+    muted="#64748b",
+    subtle="#8a97a8",
+    spine="#94a3b8",
+    grid="#d8e0ea",
+    fft_line="#1769e0",
+    legend_face="#ffffff",
+)
+_TRANSPARENT_THEME = _RenderTheme(
+    figure_face=(1.0, 1.0, 1.0, 0.0),
+    axes_face=(1.0, 1.0, 1.0, 0.0),
+    text="#273449",
+    muted="#64748b",
+    subtle="#8a97a8",
+    spine="#94a3b8",
+    grid="#d8e0ea",
+    fft_line="#1769e0",
+    legend_face="#ffffff",
+)
+_DARK_THEME = _RenderTheme(
+    figure_face="#101418",
+    axes_face="#101418",
+    text="#f2f5f7",
+    muted="#aeb9c5",
+    subtle="#8e9aa7",
+    spine="#6b7785",
+    grid="#708090",
+    fft_line="#f2f5f7",
+    legend_face="#e7ebef",
+)
+
+
+def _render_theme(background: str) -> _RenderTheme:
+    return {
+        "white": _WHITE_THEME,
+        "transparent": _TRANSPARENT_THEME,
+        "dark": _DARK_THEME,
+    }[str(background)]
+
+
+@dataclass(frozen=True)
 class BatchRenderContext:
     """Task identity and effective facts rendered inside a batch figure."""
 
@@ -215,23 +271,44 @@ def _build_batch_figure_in_context(
     render_options = options or BatchRenderOptions()
     render_params = dict(params or {})
     render_context = context or BatchRenderContext()
+    theme = _render_theme(render_options.background)
     figure = Figure(
         figsize=(
             render_options.width_px / render_options.dpi,
             render_options.height_px / render_options.dpi,
         ),
         dpi=render_options.dpi,
-        facecolor="#101418",
+        facecolor=theme.figure_face,
     )
     if kind == "time" and isinstance(data, BatchTimeFigureSpec):
-        axis = _render_time_spec(figure, data, render_params)
+        axis = _render_time_spec(
+            figure,
+            data,
+            render_params,
+            theme=theme,
+            line_width=render_options.line_width,
+        )
     else:
         axis = figure.add_subplot(111)
-        _style_axis(axis)
+        _style_axis(axis, theme)
         if kind == "time":
-            _render_time(axis, data, render_params, render_context)
+            _render_time(
+                axis,
+                data,
+                render_params,
+                render_context,
+                theme=theme,
+                line_width=render_options.line_width,
+            )
         elif kind == "fft":
-            _render_fft(axis, data, render_params, render_context)
+            _render_fft(
+                axis,
+                data,
+                render_params,
+                render_context,
+                theme=theme,
+                line_width=render_options.line_width,
+            )
         else:
             _render_heatmap(
                 figure,
@@ -241,9 +318,12 @@ def _build_batch_figure_in_context(
                 render_params,
                 render_context,
                 warnings_out,
+                theme=theme,
             )
 
-    _apply_figure_context(figure, axis, kind, render_params, render_context)
+    _apply_figure_context(
+        figure, axis, kind, render_params, render_context, theme=theme,
+    )
     figure.subplots_adjust(left=0.10, right=0.91, bottom=0.13, top=0.84)
     _apply_figure_font_fallback(figure)
     return figure
@@ -305,14 +385,25 @@ def _apply_figure_font_fallback(figure: Figure) -> None:
         text_artist.set_fontfamily(family_chain)
 
 
-def _style_axis(axis) -> None:
-    axis.set_facecolor("#101418")
-    axis.tick_params(colors="#d9e1e8")
-    axis.xaxis.label.set_color("#e6edf3")
-    axis.yaxis.label.set_color("#e6edf3")
+def _style_axis(axis, theme: _RenderTheme) -> None:
+    axis.set_facecolor(theme.axes_face)
+    axis.tick_params(colors=theme.muted)
+    axis.xaxis.label.set_color(theme.text)
+    axis.yaxis.label.set_color(theme.text)
     for spine in axis.spines.values():
-        spine.set_color("#6b7785")
-    axis.grid(True, color="#708090", alpha=0.25, linewidth=0.7)
+        spine.set_color(theme.spine)
+    axis.grid(True, color=theme.grid, alpha=0.62, linewidth=0.7)
+
+
+def _style_legend(legend, theme: _RenderTheme) -> None:
+    if legend is None:
+        return
+    frame = legend.get_frame()
+    frame.set_facecolor(theme.legend_face)
+    frame.set_edgecolor(theme.grid)
+    frame.set_alpha(0.88)
+    for text in legend.get_texts():
+        text.set_color("#273449" if theme is _DARK_THEME else theme.muted)
 
 
 def _render_time(
@@ -320,6 +411,9 @@ def _render_time(
     data,
     params: Mapping[str, Any],
     context: BatchRenderContext,
+    *,
+    theme: _RenderTheme,
+    line_width: float,
 ) -> None:
     frame = _require_dataframe(data, ("time_s", "series", "value"), "time")
     line_count = 0
@@ -331,7 +425,7 @@ def _render_time(
             x_values,
             y_values,
             linestyle=line_style,
-            linewidth=1.5,
+            linewidth=line_width,
             label=str(series),
         )
         line_count += 1
@@ -339,8 +433,7 @@ def _render_time(
     axis.set_ylabel(_linear_amplitude_label(context.unit))
     if line_count:
         legend = axis.legend(loc="best")
-        if legend is not None:
-            legend.get_frame().set_alpha(0.75)
+        _style_legend(legend, theme)
     _apply_axis_limits(axis, params)
 
 
@@ -348,17 +441,29 @@ def _render_time_spec(
     figure: Figure,
     spec: BatchTimeFigureSpec,
     params: Mapping[str, Any],
+    *,
+    theme: _RenderTheme,
+    line_width: float,
 ):
     """Render a grouped time specification and return its primary axis."""
 
     active = tuple(item for item in spec.series if item.x.size)
     _validate_time_spec_units(active)
     if spec.layout == "subplot":
-        return _render_time_spec_subplots(figure, spec, active, params)
+        return _render_time_spec_subplots(
+            figure,
+            spec,
+            active,
+            params,
+            theme=theme,
+            line_width=line_width,
+        )
 
     axis = figure.add_subplot(111)
-    _style_axis(axis)
-    _render_time_spec_panel(axis, active, spec, params)
+    _style_axis(axis, theme)
+    _render_time_spec_panel(
+        axis, active, spec, params, theme=theme, line_width=line_width,
+    )
     return axis
 
 
@@ -387,6 +492,9 @@ def _render_time_spec_subplots(
     spec: BatchTimeFigureSpec,
     active: tuple[BatchSeries, ...],
     params: Mapping[str, Any],
+    *,
+    theme: _RenderTheme,
+    line_width: float,
 ):
     panel_ids = tuple(dict.fromkeys(item.panel for item in active)) or (0,)
     panel_series = {
@@ -396,10 +504,19 @@ def _render_time_spec_subplots(
     axes = []
     for index, panel in enumerate(panel_ids, start=1):
         axis = figure.add_subplot(len(panel_ids), 1, index, sharex=axes[0] if axes else None)
-        _style_axis(axis)
+        _style_axis(axis, theme)
         if panel < len(spec.panel_titles):
-            axis.set_title(str(spec.panel_titles[panel]), color="#f2f5f7", fontsize=10)
-        _render_time_spec_panel(axis, panel_series[panel], spec, params)
+            axis.set_title(
+                str(spec.panel_titles[panel]), color=theme.text, fontsize=10,
+            )
+        _render_time_spec_panel(
+            axis,
+            panel_series[panel],
+            spec,
+            params,
+            theme=theme,
+            line_width=line_width,
+        )
         axes.append(axis)
 
     for axis in axes[:-1]:
@@ -415,6 +532,9 @@ def _render_time_spec_panel(
     series: tuple[BatchSeries, ...],
     spec: BatchTimeFigureSpec,
     params: Mapping[str, Any],
+    *,
+    theme: _RenderTheme,
+    line_width: float,
 ) -> None:
     units = _first_appearance_units(series, "unit")
     if len(units) > 2:
@@ -427,7 +547,7 @@ def _render_time_spec_panel(
     axes_by_unit = {units[0]: axis} if units else {}
     if len(units) == 2:
         right_axis = axis.twinx()
-        _style_axis(right_axis)
+        _style_axis(right_axis, theme)
         axes_by_unit[units[1]] = right_axis
 
     handles = []
@@ -440,7 +560,7 @@ def _render_time_spec_panel(
             x_values,
             item.y,
             linestyle=item.linestyle,
-            linewidth=1.5,
+            linewidth=line_width,
             label=item.label,
         )[0]
         handles.append(line)
@@ -455,8 +575,7 @@ def _render_time_spec_panel(
         axes_by_unit[units[1]].set_ylabel(_linear_amplitude_label(units[1]))
     if handles:
         legend = axis.legend(handles, labels, loc="best")
-        if legend is not None:
-            legend.get_frame().set_alpha(0.75)
+        _style_legend(legend, theme)
 
     if x_union:
         all_x = np.concatenate(x_union)
@@ -504,6 +623,9 @@ def _render_fft(
     data,
     params: Mapping[str, Any],
     context: BatchRenderContext,
+    *,
+    theme: _RenderTheme,
+    line_width: float,
 ) -> None:
     frame = _require_dataframe(data, ("frequency_hz", "amplitude"), "fft")
     x_values = frame["frequency_hz"].to_numpy(dtype=float)
@@ -521,7 +643,12 @@ def _render_fft(
     else:
         y_values = linear_values
         y_label = _linear_amplitude_label(context.unit)
-    axis.plot(x_values, y_values, color="#f2f5f7", linewidth=1.5)
+    axis.plot(
+        x_values,
+        y_values,
+        color=theme.fft_line,
+        linewidth=line_width,
+    )
     axis.set_xlabel("Frequency (Hz)")
     axis.set_ylabel(y_label)
     _apply_axis_limits(axis, params)
@@ -537,6 +664,8 @@ def _render_heatmap(
     params: Mapping[str, Any],
     context: BatchRenderContext,
     warnings_out: list[str] | None = None,
+    *,
+    theme: _RenderTheme,
 ) -> None:
     matrix, x_values, y_values, x_name, y_name, metadata = _extract_heatmap(data)
     resolution = _reference_resolution(params)
@@ -587,9 +716,9 @@ def _render_heatmap(
     if bool(params.get("y_auto", True)):
         axis.set_ylim(*y_extent)
     colorbar = figure.colorbar(image, ax=axis, pad=0.02)
-    colorbar.set_label(colorbar_label, color="#e6edf3")
-    colorbar.ax.tick_params(colors="#d9e1e8")
-    colorbar.outline.set_edgecolor("#6b7785")
+    colorbar.set_label(colorbar_label, color=theme.text)
+    colorbar.ax.tick_params(colors=theme.muted)
+    colorbar.outline.set_edgecolor(theme.spine)
 
 
 def _resolve_colormap(
@@ -779,6 +908,8 @@ def _apply_figure_context(
     kind: str,
     params: Mapping[str, Any],
     context: BatchRenderContext,
+    *,
+    theme: _RenderTheme,
 ) -> None:
     method = str(context.method).strip() or {
         "time": "Time",
@@ -802,7 +933,7 @@ def _apply_figure_context(
         y=0.985,
         ha="left",
         va="top",
-        color="#f2f5f7",
+        color=theme.text,
         fontsize=12,
         fontweight="normal",
         linespacing=1.15,
@@ -820,7 +951,7 @@ def _apply_figure_context(
             _elide(" · ".join(facts), 170),
             ha="left",
             va="bottom",
-            color="#aeb9c5",
+            color=theme.muted,
             fontsize=8.5,
         )
 
@@ -834,7 +965,7 @@ def _apply_figure_context(
         footer,
         ha="right",
         va="bottom",
-        color="#8e9aa7",
+        color=theme.subtle,
         fontsize=7.5,
     )
 

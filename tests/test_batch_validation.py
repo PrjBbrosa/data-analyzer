@@ -57,6 +57,8 @@ def _phase3_outputs(**overrides):
         "image_width": 1920,
         "image_height": 1080,
         "image_dpi": 144,
+        "image_background": "white",
+        "image_line_width": 1.0,
         "conflict_policy": "auto_number",
         "resume_policy": "none",
     }
@@ -87,6 +89,11 @@ def _phase3_outputs(**overrides):
             {"image_pixels"},
         ),
         ({"image_dpi": 35}, {"image_dpi"}),
+        ({"image_background": "paper"}, {"image_background"}),
+        ({"image_line_width": True}, {"image_line_width"}),
+        ({"image_line_width": float("inf")}, {"image_line_width"}),
+        ({"image_line_width": 0.49}, {"image_line_width"}),
+        ({"image_line_width": 4.01}, {"image_line_width"}),
         ({"conflict_policy": "rename"}, {"conflict_policy"}),
         ({"resume_policy": "filename"}, {"resume_policy"}),
     ),
@@ -112,6 +119,8 @@ def test_validate_outputs_ignores_disabled_image_fields_but_keeps_operations(
         image_width=-1,
         image_height=-1,
         image_dpi=0,
+        image_background="paper",
+        image_line_width=0.1,
         conflict_policy="rename",
         resume_policy="filename",
     )
@@ -122,6 +131,7 @@ def test_validate_outputs_ignores_disabled_image_fields_but_keeps_operations(
     assert fields.isdisjoint({
         "image_format", "image_size", "image_width", "image_height",
         "image_pixels", "image_dpi",
+        "image_background", "image_line_width",
     })
     assert {"conflict_policy", "resume_policy"} <= fields
 
@@ -133,10 +143,13 @@ def test_validate_outputs_collects_independent_phase3_image_issues():
         image_width=True,
         image_height="1080",
         image_dpi=144.5,
+        image_background="paper",
+        image_line_width=True,
     ))
 
     assert {
         "image_format", "image_width", "image_height", "image_dpi",
+        "image_background", "image_line_width",
     } <= {issue.field for issue in issues}
 
 

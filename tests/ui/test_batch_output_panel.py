@@ -351,6 +351,8 @@ def test_batch_output_full_schema_round_trip_has_one_authoritative_accessor(qtbo
         image_width=3210,
         image_height=1870,
         image_dpi=288,
+        image_background="transparent",
+        image_line_width=1.5,
         conflict_policy="overwrite",
         write_manifest=False,
         resume_policy="manifest",
@@ -362,6 +364,54 @@ def test_batch_output_full_schema_round_trip_has_one_authoritative_accessor(qtbo
     assert panel.export_data() is outputs.export_data
     assert panel.export_image() is outputs.export_image
     assert panel.data_format() == outputs.data_format
+
+
+def test_batch_output_settings_are_compact_and_collapsed_by_default(qtbot):
+    panel = _make_panel(qtbot)
+
+    assert panel._output_settings.isHidden()
+    assert panel._btn_output_settings.isCheckable()
+    assert not panel._btn_output_settings.icon().isNull()
+    assert panel._export_row_layout.indexOf(panel._btn_output_settings) > (
+        panel._export_row_layout.indexOf(panel._chk_image)
+    )
+    assert "白底" in panel._output_summary.text()
+    assert "1.0 px" in panel._output_summary.text()
+
+    panel._btn_output_settings.click()
+    assert not panel._output_settings.isHidden()
+    panel._btn_output_settings.click()
+    assert panel._output_settings.isHidden()
+
+
+def test_batch_output_summary_tracks_image_background_and_line_width(qtbot):
+    from mf4_analyzer.batch import BatchOutput
+
+    panel = _make_panel(qtbot)
+    panel.apply_outputs(BatchOutput(
+        data_format="xlsx",
+        image_format="svg",
+        image_size="2560x1440",
+        image_background="dark",
+        image_line_width=2.0,
+    ))
+
+    summary = panel._output_summary.text()
+    assert "XLSX" in summary
+    assert "SVG" in summary
+    assert "2560×1440" in summary
+    assert "深色" in summary
+    assert "2.0 px" in summary
+
+
+def test_batch_output_round_trips_valid_custom_line_width(qtbot):
+    from mf4_analyzer.batch import BatchOutput
+
+    panel = _make_panel(qtbot)
+    panel.apply_outputs(BatchOutput(image_line_width=3.25))
+
+    assert panel.get_outputs().image_line_width == pytest.approx(3.25)
+    assert "3.2 px" in panel._output_summary.text()
 
 
 def test_batch_output_image_controls_link_without_losing_custom_values(qtbot):
@@ -432,3 +482,14 @@ def test_batch_output_panel_fits_288px_column(qtbot):
 
     assert panel.minimumSizeHint().width() <= 288
     assert panel.width() <= 288
+
+
+def test_batch_output_expanded_settings_fit_288px_column(qtbot):
+    panel = _make_panel(qtbot)
+    panel._btn_output_settings.click()
+    panel.resize(288, 1200)
+    panel.show()
+    qtbot.wait(20)
+
+    assert panel.minimumSizeHint().width() <= 288
+    assert panel._output_settings.width() <= panel.width()

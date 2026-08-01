@@ -57,6 +57,8 @@ _OUTPUT_ISSUE_FIELDS = frozenset({
     "image_height",
     "image_pixels",
     "image_dpi",
+    "image_background",
+    "image_line_width",
     "conflict_policy",
     "resume_policy",
 })

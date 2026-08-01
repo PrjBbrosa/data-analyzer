@@ -282,6 +282,8 @@ def test_normalize_analysis_preset_is_duck_typed_and_json_safe():
         "image_width": 1920,
         "image_height": 1080,
         "image_dpi": 144,
+        "image_background": "white",
+        "image_line_width": 1.0,
         "conflict_policy": "auto_number",
         "write_manifest": True,
         "resume_policy": "none",
@@ -379,6 +381,8 @@ def test_phase3_output_normalization_isomorphic_for_object_and_mapping():
     assert object_recipe == mapping_recipe
     assert object_recipe["outputs"]["image_format"] == "png"
     assert object_recipe["outputs"]["image_width"] == 1920
+    assert object_recipe["outputs"]["image_background"] == "white"
+    assert object_recipe["outputs"]["image_line_width"] == 1.0
     assert object_recipe["outputs"]["write_manifest"] is True
 
 
@@ -392,6 +396,8 @@ def test_run_recipe_fingerprint_includes_artifact_output_facts_not_operations():
         "image_width": 1920,
         "image_height": 1080,
         "image_dpi": 144,
+        "image_background": "white",
+        "image_line_width": 1.0,
         "conflict_policy": "auto_number",
         "write_manifest": True,
         "resume_policy": "none",
@@ -403,6 +409,12 @@ def test_run_recipe_fingerprint_includes_artifact_output_facts_not_operations():
     )
     assert base != recipe_fingerprint(
         {"nfft": 64}, "fft", outputs={**defaults, "image_format": "svg"},
+    )
+    assert base != recipe_fingerprint(
+        {"nfft": 64}, "fft", outputs={**defaults, "image_background": "dark"},
+    )
+    assert base != recipe_fingerprint(
+        {"nfft": 64}, "fft", outputs={**defaults, "image_line_width": 1.5},
     )
     assert base == recipe_fingerprint(
         {"nfft": 64},
@@ -428,6 +440,8 @@ def test_legacy_output_fingerprint_equals_explicit_phase3_defaults():
         "image_width": 1920,
         "image_height": 1080,
         "image_dpi": 144,
+        "image_background": "white",
+        "image_line_width": 1.0,
         "conflict_policy": "auto_number",
         "write_manifest": True,
         "resume_policy": "none",

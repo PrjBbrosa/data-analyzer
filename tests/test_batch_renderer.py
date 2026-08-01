@@ -36,11 +36,20 @@ def test_render_options_defaults_are_immutable():
 
     options = BatchRenderOptions()
 
-    assert (options.width_px, options.height_px, options.dpi, options.format) == (
+    assert (
+        options.width_px,
+        options.height_px,
+        options.dpi,
+        options.format,
+        options.background,
+        options.line_width,
+    ) == (
         1920,
         1080,
         144,
         "png",
+        "white",
+        1.0,
     )
     with pytest.raises(FrozenInstanceError):
         options.width_px = 1920
@@ -116,6 +125,78 @@ def test_render_options_reject_bool_geometry(field):
 
     with pytest.raises(TypeError, match=field):
         BatchRenderOptions(**{field: True})
+
+
+@pytest.mark.parametrize(
+    "kwargs, error",
+    [
+        ({"background": "paper"}, "background"),
+        ({"line_width": True}, "line_width"),
+        ({"line_width": float("inf")}, "line_width"),
+        ({"line_width": 0.49}, "line_width"),
+        ({"line_width": 4.01}, "line_width"),
+    ],
+)
+def test_render_options_reject_invalid_theme_or_line_width(kwargs, error):
+    from mf4_analyzer.batch_render import BatchRenderOptions
+
+    with pytest.raises((TypeError, ValueError), match=error):
+        BatchRenderOptions(**kwargs)
+
+
+def test_default_batch_figure_uses_white_theme_and_thin_lines():
+    from mf4_analyzer.batch_render import _build_batch_figure
+
+    frame = pd.DataFrame({
+        "time_s": [0.0, 1.0],
+        "series": ["original", "original"],
+        "value": [0.0, 1.0],
+    })
+
+    figure = _build_batch_figure(("time", frame))
+    axis = figure.axes[0]
+
+    assert figure.get_facecolor()[:3] == pytest.approx((1.0, 1.0, 1.0))
+    assert axis.get_facecolor()[:3] == pytest.approx((1.0, 1.0, 1.0))
+    assert axis.lines[0].get_linewidth() == pytest.approx(1.0)
+    assert axis.xaxis.label.get_color() == "#273449"
+    assert figure._suptitle.get_color() == "#273449"
+
+
+def test_batch_figure_applies_selected_dark_theme_and_line_width():
+    from mf4_analyzer.batch_render import BatchRenderOptions, _build_batch_figure
+
+    frame = pd.DataFrame({
+        "frequency_hz": [0.0, 1.0],
+        "amplitude": [0.0, 1.0],
+    })
+
+    figure = _build_batch_figure(
+        ("fft", frame),
+        options=BatchRenderOptions(background="dark", line_width=2.0),
+    )
+
+    assert figure.get_facecolor()[:3] == pytest.approx(
+        mpl.colors.to_rgb("#101418")
+    )
+    assert figure.axes[0].lines[0].get_linewidth() == pytest.approx(2.0)
+
+
+def test_batch_figure_applies_transparent_background():
+    from mf4_analyzer.batch_render import BatchRenderOptions, _build_batch_figure
+
+    frame = pd.DataFrame({
+        "frequency_hz": [0.0, 1.0],
+        "amplitude": [0.0, 1.0],
+    })
+
+    figure = _build_batch_figure(
+        ("fft", frame),
+        options=BatchRenderOptions(background="transparent"),
+    )
+
+    assert figure.get_facecolor()[3] == pytest.approx(0.0)
+    assert figure.axes[0].get_facecolor()[3] == pytest.approx(0.0)
 
 
 def test_render_context_is_frozen_and_copies_effective_facts():

@@ -54,8 +54,9 @@ def test_pipeline_strip_set_stage_updates_summary(qtbot):
 def test_batch_smoke_fft_time_fixes_combined(qtbot, tmp_path):
     """Drives the dialog through: pick fft_time, RPM row hides; add a
     loaded file with multiple signals; pick first one then grow to four;
-    assert the picker's sizeHint width does not scale with chip count
-    (issue-1 contract) while height does grow (chips stack vertically).
+    assert the picker's sizeHint never scales with chip count. The approved
+    inline-search design is a fixed single row: hidden selections use ``+N``
+    instead of stacking vertically.
 
     NOTE: we measure ``_signal_picker.sizeHint()`` rather than
     ``sheet.width()`` because the dialog itself is fixed by
@@ -94,11 +95,10 @@ def test_batch_smoke_fft_time_fixes_combined(qtbot, tmp_path):
     four_w = sheet._input_panel._signal_picker.sizeHint().width()
     four_h = sheet._input_panel._signal_picker.sizeHint().height()
 
-    # Width must NOT scale with chip count (issue-1 contract).
+    # Neither dimension may scale with chip count: the field stays one line.
     assert four_w == one_w
-    # Height grows with chip count, capped by the chip-scroll's
-    # MAX_VISIBLE_ROWS height (Step 2.3 sets _chip_scroll.maxHeight=96).
-    assert four_h >= one_h
+    assert four_h == one_h
+    assert sheet._input_panel._signal_picker._overflow_label.text() == "+3"
 
 
 def test_batch_sheet_time_filter_preset_round_trip(qtbot, tmp_path):
@@ -840,8 +840,12 @@ def test_sheet_resume_retry_manifest_selection_is_runtime_only(
     assert not hasattr(sheet.get_preset(), "retry_failed_manifest")
 
 
+@pytest.mark.parametrize(
+    "field",
+    ("image_dpi", "image_background", "image_line_width"),
+)
 def test_sheet_routes_output_validation_issues_to_output_stage(
-    qtbot, monkeypatch,
+    qtbot, monkeypatch, field,
 ):
     from mf4_analyzer.batch_validation import ValidationIssue
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
@@ -849,15 +853,15 @@ def test_sheet_routes_output_validation_issues_to_output_stage(
     sheet = BatchSheet(None, files={})
     qtbot.addWidget(sheet)
     issue = ValidationIssue(
-        "image_dpi", "invalid_dpi", "image dpi is invalid",
+        field, "invalid_output_option", "image output option is invalid",
     )
     monkeypatch.setattr(sheet, "preflight_issues", lambda: (issue,))
 
     sheet._recompute_pipeline_status()
 
-    assert "image_dpi" not in sheet.strip.cards[1].summary_label.text()
+    assert field not in sheet.strip.cards[1].summary_label.text()
     assert sheet.strip.cards[2].stage_status == "warn"
-    assert "image_dpi" in sheet.strip.cards[2].summary_label.text()
+    assert field in sheet.strip.cards[2].summary_label.text()
 
 
 def test_sheet_lock_includes_toolbar_and_output_operations(qtbot):
