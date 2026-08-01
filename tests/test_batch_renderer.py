@@ -954,6 +954,70 @@ def test_time_spec_context_renders_group_member_coverage():
     assert "members=2/3" in "\n".join(text.get_text() for text in figure.texts)
 
 
+def test_effective_facts_keep_members_when_fact_limit_reached():
+    from mf4_analyzer.batch_render import _effective_fact_items
+
+    items = _effective_fact_items(
+        {
+            "window": "hann",
+            "nfft_effective": 1024,
+            "weighting": "A",
+            "averaging": "rms",
+            "overlap": 0.5,
+            "actual_fs": 2048,
+            "members": "2/3",
+        },
+        {},
+    )
+
+    assert items == [
+        "window=hann",
+        "NFFT=1024",
+        "weighting=A",
+        "averaging=rms",
+        "overlap=50%",
+        "members=2/3",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("x_values", "y_values", "kwargs", "message"),
+    [
+        (
+            np.array([[0.0, 1.0]]),
+            np.array([1.0, 2.0]),
+            {},
+            "one-dimensional",
+        ),
+        (
+            np.array([0.0, 1.0]),
+            np.array([1.0]),
+            {},
+            "equal lengths",
+        ),
+        (
+            np.array([0.0, 1.0]),
+            np.array([1.0, 2.0]),
+            {"panel": -1},
+            "non-negative int",
+        ),
+        (
+            np.array([0.0, 1.0]),
+            np.array([1.0, 2.0]),
+            {"linestyle": ":"},
+            "linestyle",
+        ),
+    ],
+)
+def test_batch_series_rejects_invalid_shape_or_metadata(
+    x_values, y_values, kwargs, message
+):
+    from mf4_analyzer.batch_render import BatchSeries
+
+    with pytest.raises(ValueError, match=message):
+        BatchSeries(x_values, y_values, "signal", **kwargs)
+
+
 def test_invalid_cmap_falls_back_and_appends_warning():
     from mf4_analyzer.batch_render import _build_batch_figure
 

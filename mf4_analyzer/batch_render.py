@@ -878,7 +878,10 @@ def _effective_fact_items(
         items.append(f"Fs={_format_fact_value(actual_fs)} Hz")
     members = _first_present(facts, "members")
     if members not in (None, ""):
-        items.append(f"members={_format_fact_value(members)}")
+        return [
+            *items[:5],
+            f"members={_format_fact_value(members)}",
+        ]
     return items[:6]
 
 
