@@ -1,0 +1,1250 @@
+{
+  "status": "PASS",
+  "commit_sha": "6afe3662beabe9ce9d762f5e3691a4d0cd886ed7",
+  "source_state_sha256": "0d455a650a89cf44f8166dac294ae4f6627ec1eb55838536d40ed1123631b0bf",
+  "generated_at": "2026-08-01T16:18:42.858380+00:00",
+  "qt_qpa_platform_env": "offscreen",
+  "qt_platform": "offscreen",
+  "qt_version": "5.15.14",
+  "pyqt_version": "5.15.11",
+  "pyqtgraph_version": "0.14.0",
+  "requested_pixels": [
+    1920,
+    1080
+  ],
+  "dpi": 144,
+  "cases": [
+    {
+      "name": "time-single",
+      "module": "time",
+      "status": "PASS",
+      "assertions": {
+        "curve_data_match": true,
+        "axis_ranges_match": true,
+        "curve_tokens_match": true,
+        "batch_export_antialias": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/time-single.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 181601,
+          "sha256": "89fce85e5f1596bc93a3759bc2bcffe1355f410f4320258ed2eca4d555965d56"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/time-single-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 161597,
+          "sha256": "016406ee5937a33a41ab8644ad927d24cbe08cef57804ceff374b3b5c9d33929"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.9999285621146307,
+              0.9999285621146302
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#2563eb",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          }
+        ],
+        "plot_ink_pixels": 85270,
+        "plot_corner_ink_pixels": [
+          0,
+          58,
+          0,
+          0
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        }
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/time-single.png",
+          "width": 1884,
+          "height": 950,
+          "bytes": 35413,
+          "sha256": "c13c15f2e2cca1b4c8f4ffc34bf76ad91b99f7a8628a08eeff0c7e7372569715"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/time-single-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 35367,
+          "sha256": "d717d3e02533aaa9321679f1f9e7c21adecafff2886c049c2c9de679d929d0c4"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.9999285621146307,
+              0.9999285621146302
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#2563eb",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          }
+        ],
+        "plot_ink_pixels": 70639
+      }
+    },
+    {
+      "name": "time-raw-filtered",
+      "module": "time",
+      "status": "PASS",
+      "assertions": {
+        "curve_data_match": true,
+        "axis_ranges_match": true,
+        "curve_tokens_match": true,
+        "batch_export_antialias": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/time-raw-filtered.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 271518,
+          "sha256": "7c4a804ee2a893fd4a53e59483dfead7da51810c8f60a3c3a2f45fd685b3ad50"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/time-raw-filtered-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 252148,
+          "sha256": "2aabf3c295613746ff3c0daa1db5b6501efcc92db794f34bef1437754cf1aba3"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -1.25,
+              1.25
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#2563eb",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          },
+          {
+            "color": "#2563eb",
+            "style": 2,
+            "width": 1.5,
+            "antialias": true
+          }
+        ],
+        "plot_ink_pixels": 113606,
+        "plot_corner_ink_pixels": [
+          0,
+          59,
+          0,
+          0
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        }
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/time-raw-filtered.png",
+          "width": 1884,
+          "height": 950,
+          "bytes": 52237,
+          "sha256": "cc7d0c3895137183cc5461755e8acb510ac623bf241e15f84116251db45a2433"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/time-raw-filtered-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 52182,
+          "sha256": "6a6af1e643afa1c6f44537d94073bbe570ab9be69a2e5afccfefaa7db5418756"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -1.25,
+              1.25
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#2563eb",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          },
+          {
+            "color": "#2563eb",
+            "style": 2,
+            "width": 1.5,
+            "antialias": false
+          }
+        ],
+        "plot_ink_pixels": 86983
+      }
+    },
+    {
+      "name": "time-dual-y",
+      "module": "time",
+      "status": "PASS",
+      "assertions": {
+        "curve_data_match": true,
+        "axis_ranges_match": true,
+        "curve_tokens_match": true,
+        "batch_export_antialias": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/time-dual-y.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 239284,
+          "sha256": "84847986d031d7928f2de723aa318939766afa86293345101e4c4e6479413ad4"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/time-dual-y-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 219529,
+          "sha256": "6e2571f7db9def2dfc20e821acd4aa1e887e0ef3ee6755bec346879bfedeff62"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -1.0,
+              1.0
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              1300.0,
+              1800.0
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#2563eb",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          },
+          {
+            "color": "#059669",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          }
+        ],
+        "plot_ink_pixels": 106775,
+        "plot_corner_ink_pixels": [
+          0,
+          36,
+          0,
+          0
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        }
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/time-dual-y.png",
+          "width": 1884,
+          "height": 950,
+          "bytes": 52629,
+          "sha256": "d9eb85ef0ffb7d5f092d2af27353c95a34b572b136bc9a6a56a89b44d697da33"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/time-dual-y-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 52398,
+          "sha256": "a3a331b51a9c766d59851846ae5fecf000d02ba861533b8d400ffb8501ea4a75"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -1.0,
+              1.0
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              1300.0,
+              1800.0
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#2563eb",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          },
+          {
+            "color": "#059669",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          }
+        ],
+        "plot_ink_pixels": 76625
+      }
+    },
+    {
+      "name": "time-subplot8",
+      "module": "time",
+      "status": "PASS",
+      "assertions": {
+        "curve_data_match": true,
+        "axis_ranges_match": true,
+        "curve_tokens_match": true,
+        "batch_export_antialias": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/time-subplot8.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 349912,
+          "sha256": "b0dd715b25e6a0e1b41f3e492059f21fe8fecf7ff55101f97309488408fe5d25"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/time-subplot8-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 330271,
+          "sha256": "0d7fee7b0da06537b920f1f69003cdfb28378e1940fb7097a9f0336d0b2e032b"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.6291640913167578,
+              0.6291640913167578
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.6774541994121577,
+              0.6775376461141125
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.7259539726867482,
+              0.7259119372245387
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.7743452499115016,
+              0.7743452499115016
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.82275221767367,
+              0.82275221767367
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.8677091561837268,
+              0.8703893007500773
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.9195454439054155,
+              0.9195454439054155
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.9879316129563726,
+              0.9879316129563726
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#2563eb",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          },
+          {
+            "color": "#059669",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          },
+          {
+            "color": "#dc2626",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          },
+          {
+            "color": "#ea580c",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          },
+          {
+            "color": "#0891b2",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          },
+          {
+            "color": "#7c3aed",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          },
+          {
+            "color": "#be123c",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          },
+          {
+            "color": "#64748b",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          }
+        ],
+        "plot_ink_pixels": 182600,
+        "plot_corner_ink_pixels": [
+          0,
+          58,
+          0,
+          55,
+          0,
+          45,
+          0,
+          70,
+          0,
+          58,
+          0,
+          65,
+          0,
+          83,
+          0,
+          70,
+          0,
+          58,
+          0,
+          58,
+          0,
+          59,
+          0,
+          70,
+          0,
+          72,
+          0,
+          55,
+          0,
+          59,
+          0,
+          0
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        }
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/time-subplot8.png",
+          "width": 1884,
+          "height": 950,
+          "bytes": 92276,
+          "sha256": "8c332a57bb17332b968cbc85bcb3620723ef3f9785dc4ad152c656d9683e78af"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/time-subplot8-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 92233,
+          "sha256": "8778938635e4c7dca3190a09e7bf09ce2f1d5793a35e14ea79208846868ba30e"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.6291640913167578,
+              0.6291640913167578
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.6774541994121577,
+              0.6775376461141125
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.7259539726867482,
+              0.7259119372245387
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.7743452499115016,
+              0.7743452499115016
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.82275221767367,
+              0.82275221767367
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.8677091561837268,
+              0.8703893007500773
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.9195454439054155,
+              0.9195454439054155
+            ]
+          },
+          {
+            "x": [
+              0.0,
+              2.0
+            ],
+            "y": [
+              -0.9879316129563726,
+              0.9879316129563726
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#2563eb",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          },
+          {
+            "color": "#059669",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          },
+          {
+            "color": "#dc2626",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          },
+          {
+            "color": "#ea580c",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          },
+          {
+            "color": "#0891b2",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          },
+          {
+            "color": "#7c3aed",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          },
+          {
+            "color": "#be123c",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          },
+          {
+            "color": "#64748b",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          }
+        ],
+        "plot_ink_pixels": 142726
+      }
+    },
+    {
+      "name": "time-custom-x",
+      "module": "time",
+      "status": "PASS",
+      "assertions": {
+        "curve_data_match": true,
+        "axis_ranges_match": true,
+        "curve_tokens_match": true,
+        "batch_export_antialias": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/time-custom-x.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 128749,
+          "sha256": "01bd43953a21a1fb47a212ac0fd825caf089632474237190a17fe7a59231e353"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/time-custom-x-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 109195,
+          "sha256": "f6b90d061f379b4667b743c6f863052bf9ac803d137d6d6d2d1e320b57b33b07"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              100.0,
+              820.0
+            ],
+            "y": [
+              -0.855221543499618,
+              0.855221543499618
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#2563eb",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          }
+        ],
+        "plot_ink_pixels": 58368,
+        "plot_corner_ink_pixels": [
+          0,
+          58,
+          0,
+          0
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        }
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/time-custom-x.png",
+          "width": 1884,
+          "height": 950,
+          "bytes": 34444,
+          "sha256": "71a35bbd762a71e72900ae6ff05e7600a7eec9059fb74585948a803b1475dbeb"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/time-custom-x-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 34418,
+          "sha256": "76b277a877c2ec6048fc3da4f6c3d2bcd891b3a7ea3359a1ddd61b6bff85469e"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              100.0,
+              820.0
+            ],
+            "y": [
+              -0.855221543499618,
+              0.855221543499618
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#2563eb",
+            "style": 1,
+            "width": 1.5,
+            "antialias": false
+          }
+        ],
+        "plot_ink_pixels": 49278
+      }
+    },
+    {
+      "name": "fft-linear",
+      "module": "fft",
+      "status": "PASS",
+      "assertions": {
+        "curve_data_match": true,
+        "axis_ranges_match": true,
+        "curve_tokens_match": true,
+        "batch_export_antialias": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-linear.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 70861,
+          "sha256": "e9eff6afa230ac3cd0708ca7d144ec686c49c9a09b1db94fd9391acdd0636da9"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-linear-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 52171,
+          "sha256": "d975e80ae8a54d5dece7408787ed0f2bd5ebea83ec90c9be756c7aad51b67b9a"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              1000.0
+            ],
+            "y": [
+              -0.03048486171095767,
+              0.9743677811522772
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#1769e0",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          }
+        ],
+        "plot_ink_pixels": 31184,
+        "plot_corner_ink_pixels": [
+          0,
+          31,
+          0,
+          16
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        }
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-linear.png",
+          "width": 1884,
+          "height": 1138,
+          "bytes": 94232,
+          "sha256": "f37e3aa3b560a76b1959ce3aee257906c91c7364ca90a2450efdae9a23f6fb52"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-linear-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 51001,
+          "sha256": "715b48b6ad59597f10f9629ed84f260ba313033a75e9222f8507ee313e47bfb7"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              1000.0
+            ],
+            "y": [
+              -0.030484861710957663,
+              0.9743677811522772
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#1769e0",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          }
+        ],
+        "plot_ink_pixels": 35569
+      }
+    },
+    {
+      "name": "fft-db",
+      "module": "fft",
+      "status": "PASS",
+      "assertions": {
+        "curve_data_match": true,
+        "axis_ranges_match": true,
+        "curve_tokens_match": true,
+        "batch_export_antialias": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-db.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 76657,
+          "sha256": "88f04d6a67f177ab3b9bbd1d528a177e03a0cd724b91cffb3969758a0902e5ff"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-db-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 55770,
+          "sha256": "edfcedf4881599126fd050276f4753d39180b132eb478584bb1e8fa11bf085e7"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              1000.0
+            ],
+            "y": [
+              -30.827390250038228,
+              -0.52006157473125
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#1769e0",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          }
+        ],
+        "plot_ink_pixels": 31844,
+        "plot_corner_ink_pixels": [
+          0,
+          31,
+          0,
+          16
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        }
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-db.png",
+          "width": 1884,
+          "height": 1138,
+          "bytes": 97788,
+          "sha256": "d50c56a17f877d66df694cfa511d11b8ed4d4013614b96597dbc4a48fd7bff62"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-db-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 54458,
+          "sha256": "1b73eecf0cc9859cc5246fce57e87633f1a61784a34bec91d92f7d45aff3bea1"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              0.0,
+              1000.0
+            ],
+            "y": [
+              -30.827390250038228,
+              -0.52006157473125
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#1769e0",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          }
+        ],
+        "plot_ink_pixels": 36292
+      }
+    },
+    {
+      "name": "fft-manual-range",
+      "module": "fft",
+      "status": "PASS",
+      "assertions": {
+        "curve_data_match": true,
+        "axis_ranges_match": true,
+        "curve_tokens_match": true,
+        "batch_export_antialias": true,
+        "axis_font_9pt": true,
+        "axis_pen_match": true,
+        "grid_match": true,
+        "viewport_match": true,
+        "batch_has_plot_ink": true,
+        "reference_has_plot_ink": true,
+        "no_text_overlap": true,
+        "no_native_chrome": true,
+        "no_main_navigation": true
+      },
+      "batch": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-manual-range.png",
+          "width": 1920,
+          "height": 1080,
+          "bytes": 72962,
+          "sha256": "931220b8f38a500ad9be44295ed777e74966ce87162e3cc2e45e11b6abb1d029"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-manual-range-batch.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 54432,
+          "sha256": "d12ebf4126653c5c7674d12f69f2f632cc22711939f120efbe278ab294eb1602"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              100.0,
+              800.0
+            ],
+            "y": [
+              0.0,
+              1.1
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#1769e0",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          }
+        ],
+        "plot_ink_pixels": 29944,
+        "plot_corner_ink_pixels": [
+          0,
+          31,
+          0,
+          16
+        ],
+        "widget_chrome": {
+          "frame_hidden": true,
+          "horizontal_scrollbar_hidden": true,
+          "vertical_scrollbar_hidden": true,
+          "focus_disabled": true,
+          "outer_corners_clean": true
+        }
+      },
+      "reference": {
+        "full": {
+          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-manual-range.png",
+          "width": 1884,
+          "height": 1138,
+          "bytes": 95632,
+          "sha256": "059b5ff31e766a22d5a1b39be29fa4b53eeac8f7fa5d0a7d5147ec29ffcec321"
+        },
+        "crop": {
+          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-manual-range-reference.png",
+          "width": 1881,
+          "height": 947,
+          "bytes": 52544,
+          "sha256": "5181ae7405b8a4b704a575288c593a4066e0371fc0852c8450c86ba133162011"
+        },
+        "viewport": [
+          1881,
+          947
+        ],
+        "ranges": [
+          {
+            "x": [
+              100.0,
+              800.0
+            ],
+            "y": [
+              0.0,
+              1.1
+            ]
+          }
+        ],
+        "curve_tokens": [
+          {
+            "color": "#1769e0",
+            "style": 1,
+            "width": 1.5,
+            "antialias": true
+          }
+        ],
+        "plot_ink_pixels": 31561
+      }
+    }
+  ],
+  "contact_sheets": {
+    "time": {
+      "path": "docs/superpowers/verify/batch-qt-render/time-contact-sheet.png",
+      "width": 1352,
+      "height": 1604,
+      "bytes": 496556,
+      "sha256": "c3b93403fe97149de242718b8fb78c7b56e2814d68d7e69f8e06462984906439"
+    },
+    "fft": {
+      "path": "docs/superpowers/verify/batch-qt-render/fft-contact-sheet.png",
+      "width": 1352,
+      "height": 968,
+      "bytes": 92381,
+      "sha256": "1579f6ad262456ad06d8c84ffb27c3a0f4659da08ab80b4bfec8b292ed396b11"
+    }
+  }
+}

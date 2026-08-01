@@ -49,7 +49,7 @@ def test_render_options_defaults_are_immutable():
         144,
         "png",
         "white",
-        1.0,
+        1.5,
     )
     with pytest.raises(FrozenInstanceError):
         options.width_px = 1920
@@ -158,7 +158,7 @@ def test_default_batch_figure_uses_white_theme_and_thin_lines():
 
     assert figure.get_facecolor()[:3] == pytest.approx((1.0, 1.0, 1.0))
     assert axis.get_facecolor()[:3] == pytest.approx((1.0, 1.0, 1.0))
-    assert axis.lines[0].get_linewidth() == pytest.approx(1.0)
+    assert axis.lines[0].get_linewidth() == pytest.approx(1.5)
     assert axis.xaxis.label.get_color() == "#273449"
     assert figure._suptitle.get_color() == "#273449"
 

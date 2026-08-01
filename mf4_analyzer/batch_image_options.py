@@ -31,7 +31,7 @@ class BatchRenderOptions:
     dpi: int = 144
     format: str = "png"
     background: str = "white"
-    line_width: float = 1.0
+    line_width: float = 1.5
 
     def __post_init__(self) -> None:
         for name in ("width_px", "height_px", "dpi"):
