@@ -87,47 +87,51 @@ def test_apply_preset_current_single_round_trip(qtbot, tmp_path, qt_app_files):
     assert sheet.time_range() == (1.0, 5.0)
 
 
-def test_run_click_uses_core_preview_artifact_count_without_runtime_manifest(
-    qtbot, tmp_path, qt_app_files, monkeypatch,
+@pytest.mark.parametrize(
+    ("group_by", "expected_artifacts"),
+    (("none", 8), ("source", 6), ("channel", 6)),
+)
+def test_run_click_uses_real_group_preview_artifact_count(
+    qtbot, tmp_path, monkeypatch, group_by, expected_artifacts,
 ):
-    from types import SimpleNamespace
+    import numpy as np
+    import pandas as pd
 
+    from mf4_analyzer.io import FileData
     from mf4_analyzer.ui.drawers.batch.runner_thread import BatchRunnerThread
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
 
-    source = qt_app_files[0]
-    source.data["sig2"] = source.data["sig"] * 2.0
-    source.channels.append("sig2")
+    t = np.arange(32, dtype=float) / 32.0
+    frame = pd.DataFrame({"Time": t, "sig": t * 2.0, "sig2": t * 3.0})
     files = {
-        key: source
-        for key in ("source-a", "source-b")
+        "source-a": FileData(
+            tmp_path / "a.csv", frame.copy(), list(frame), {}, idx=0,
+        ),
+        "source-b": FileData(
+            tmp_path / "b.csv", frame.copy(), list(frame), {}, idx=1,
+        ),
     }
     sheet = BatchSheet(None, files=files)
     qtbot.addWidget(sheet)
     sheet.apply_files(("source-a", "source-b"), ())
     sheet.apply_signals(("sig", "sig2"))
     sheet.apply_method("time")
-    sheet.apply_params({"render_group_by": "source"})
-    sheet._output_panel.apply_directory(str(tmp_path / "out"))
+    if group_by != "none":
+        sheet.apply_params({"render_group_by": group_by})
+    sheet._output_panel.apply_directory(str(tmp_path / f"out-{group_by}"))
     sheet._resume_manifest_path = str(tmp_path / "runtime-only.json")
 
-    seen = {}
-
-    class Runner:
-        def preview_outputs(self, preset, output_dir):
-            seen["preset"] = preset
-            seen["output_dir"] = output_dir
-            return SimpleNamespace(artifact_count=6)
-
-    monkeypatch.setattr(sheet, "_make_runner", lambda: Runner())
     monkeypatch.setattr(BatchRunnerThread, "start", lambda _thread: None)
 
     sheet._on_run_clicked()
     try:
-        assert seen["output_dir"] == str(tmp_path / "out")
-        assert not hasattr(seen["preset"], "resume_manifest")
+        assert sheet._runner_thread is not None
+        assert not hasattr(sheet._runner_thread._preset, "resume_manifest")
         assert sheet._task_list.row_count() == 4
-        assert "6" in sheet._task_list._idle_label.text()
+        assert sheet._task_list._idle_label.text() == (
+            f"4 \u4efb\u52a1\u5f85\u6267\u884c \u00b7 "
+            f"{expected_artifacts} \u8f93\u51fa"
+        )
     finally:
         sheet._on_thread_finished()
 

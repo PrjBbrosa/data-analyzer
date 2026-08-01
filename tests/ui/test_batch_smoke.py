@@ -270,6 +270,16 @@ def test_time_analysis_form_fits_288px_after_repeated_dependency_toggles(
         )
         panel.apply_method("time")
         form = panel._param_form
+        long_channel = "engine_speed_channel_name_that_is_deliberately_very_long"
+        form._w_render_group_by.setCurrentIndex(
+            form._w_render_group_by.findData("source")
+        )
+        form._w_x_source.setCurrentIndex(
+            form._w_x_source.findData("channel")
+        )
+        form._w_x_channel.setCurrentIndex(
+            form._w_x_channel.findData(long_channel)
+        )
         scroll = QScrollArea()
         qtbot.addWidget(scroll)
         scroll.setWidgetResizable(True)
@@ -277,29 +287,39 @@ def test_time_analysis_form_fits_288px_after_repeated_dependency_toggles(
         scroll.setWidget(panel)
         scroll.resize(288, 640)
         scroll.show()
+        qtbot.wait(20)
+
+        def assert_visible_channel_geometry():
+            assert form._w_x_channel.isVisibleTo(panel) is True
+            assert form._w_x_channel.currentData() == long_channel
+            assert scroll.horizontalScrollBar().maximum() == 0
+            assert panel.minimumSizeHint().width() <= scroll.viewport().width()
+            for widget in form._widgets.values():
+                if widget.isVisibleTo(panel) and form._form.indexOf(widget) >= 0:
+                    right = widget.mapTo(panel, widget.rect().topRight()).x()
+                    assert right < panel.width()
+
+        assert_visible_channel_geometry()
 
         for _ in range(2):
-            form._w_render_group_by.setCurrentIndex(
-                form._w_render_group_by.findData("source")
-            )
-            form._w_x_source.setCurrentIndex(
-                form._w_x_source.findData("channel")
-            )
-            form._w_x_channel.setCurrentIndex(1)
             form._w_render_group_by.setCurrentIndex(
                 form._w_render_group_by.findData("none")
             )
             form._w_x_source.setCurrentIndex(
                 form._w_x_source.findData("time")
             )
+            form._w_render_group_by.setCurrentIndex(
+                form._w_render_group_by.findData("source")
+            )
+            form._w_x_source.setCurrentIndex(
+                form._w_x_source.findData("channel")
+            )
+            form._w_x_channel.setCurrentIndex(
+                form._w_x_channel.findData(long_channel)
+            )
         qtbot.wait(20)
 
-        assert scroll.horizontalScrollBar().maximum() == 0
-        assert panel.minimumSizeHint().width() <= scroll.viewport().width()
-        for widget in form._widgets.values():
-            if widget.isVisibleTo(panel) and form._form.indexOf(widget) >= 0:
-                right = widget.mapTo(panel, widget.rect().topRight()).x()
-                assert right < panel.width()
+        assert_visible_channel_geometry()
     finally:
         if scroll is not None:
             scroll.close()
