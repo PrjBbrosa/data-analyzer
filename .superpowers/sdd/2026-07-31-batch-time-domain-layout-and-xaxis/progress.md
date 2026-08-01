@@ -19,3 +19,4 @@ Lessons: provenance extended as c82dcfb; lazy execution-scope proof extended as 
 Task 8: complete (commits 804378c..0b291dd with fix round 1, scoped re-review clean; 42 contract tests passed, one recorded pre-edit narrow-button baseline failure remains)
 Task 9: complete (commits de883f2..3d4604e with fix round 1, scoped re-review clean; 144 contract tests passed, six recorded pre-edit UI baseline failures remain)
 Task 10: complete (commits 6382ff3 and 358d371; frozen/acceptance TDD complete; focused gate has only six recorded baseline failures; non-UI, acquisition UI, and 128-file isolated UI partitions have zero differences from detached 3d4604e; Full/Lite exact package commands exit 0 with 12-output frozen smoke success)
+Task 10 review fix 1: complete (pre-3.11 font trees no longer require the 3.11-added LastResort file; 3.11 still preserves it; contract + frozen smoke gate 10 passed)

@@ -105,6 +105,38 @@ def test_prune_keeps_runtime_fallback_ttf_and_preserves_pdf_font_data(tmp_path):
     assert record["sample_data_removed"] is True
 
 
+def test_prune_supports_pre_311_tree_without_optional_last_resort(tmp_path):
+    internal = tmp_path / "_internal"
+    mpl_data = internal / "matplotlib" / "mpl-data"
+    ttf = mpl_data / "fonts" / "ttf"
+    (mpl_data / "fonts" / "afm").mkdir(parents=True)
+    (mpl_data / "fonts" / "pdfcorefonts").mkdir(parents=True)
+    ttf.mkdir(parents=True)
+    expected = {
+        "DejaVuSans.ttf",
+        "DejaVuSans-Bold.ttf",
+        "DejaVuSans-Oblique.ttf",
+        "DejaVuSans-BoldOblique.ttf",
+    }
+    for name in (*expected, "STIXGeneral.ttf"):
+        (ttf / name).write_bytes(name.encode("ascii"))
+    evidence = tmp_path / "pre-311-prune.json"
+
+    completed = _run_contract(
+        "--prune-internal",
+        internal,
+        "--evidence-json",
+        evidence,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert {path.name for path in ttf.iterdir()} == expected
+    assert not (ttf / "STIXGeneral.ttf").exists()
+    assert json.loads(evidence.read_text(encoding="utf-8"))["kept_ttf"] == sorted(
+        expected
+    )
+
+
 def test_both_windows_builders_use_the_same_matplotlib_contract_and_prune_gate():
     for filename in ("build_windows_folder.ps1", "build_windows_folder_lite.ps1"):
         text = (ROOT / "tools" / filename).read_text(encoding="utf-8")

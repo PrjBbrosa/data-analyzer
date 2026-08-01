@@ -213,3 +213,30 @@ from the product commits. The detached baseline registration was removed, but
 Windows could not delete its long-path evidence directory; the residual is
 under the worktree-local `.state/task10-baseline-3d4604e-20260801-a` only and
 is not committed.
+
+## Review Fix Round 1: Pre-3.11 Font-Tree Compatibility
+
+The first pruning fix treated `LastResortHE-Regular.ttf` as universally
+required. Review identified that this font was added by Matplotlib 3.11;
+Matplotlib 3.10.7 has no such file, while the unpinned build command uses
+`pip install -r` and may retain an already-satisfied older Matplotlib.
+
+The compatibility test constructs a real pre-3.11-shaped font tree with the
+four required DejaVu faces, no LastResort file, and an unrelated STIX font.
+
+- RED: `1 failed, 4 passed in 0.39s`; pruning raised
+  `FileNotFoundError: required Matplotlib TTF files missing:
+  LastResortHE-Regular.ttf`.
+- GREEN: contract plus frozen smoke completed as `10 passed in 52.45s`.
+
+The final contract has two explicit sets:
+
+- four DejaVu faces are always required;
+- `LastResortHE-Regular.ttf` is optional in the input tree, but when bundled
+  it is included in the exact kept set and cannot be pruned.
+
+Both new-tree and old-tree tests prove every other TTF is still removed. The
+successful Full/Lite builds used Matplotlib 3.11.1 and already retained the
+same five-font set required by the corrected contract. Therefore their exe and
+12-output frozen smoke evidence remain valid; no long package rebuild was
+needed for this compatibility-only expansion.

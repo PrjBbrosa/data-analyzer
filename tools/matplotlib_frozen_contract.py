@@ -7,15 +7,15 @@ from pathlib import Path
 import shutil
 
 
-KEPT_TTF_FILES = frozenset(
+REQUIRED_TTF_FILES = frozenset(
     {
         "DejaVuSans.ttf",
         "DejaVuSans-Bold.ttf",
         "DejaVuSans-Oblique.ttf",
         "DejaVuSans-BoldOblique.ttf",
-        "LastResortHE-Regular.ttf",
     }
 )
+OPTIONAL_TTF_FILES = frozenset({"LastResortHE-Regular.ttf"})
 
 EXCLUDED_MODULES = (
     "matplotlib.backends.backend_qt",
@@ -80,23 +80,24 @@ def prune_internal(internal: Path, evidence_json: Path) -> dict[str, object]:
             raise FileNotFoundError(f"required Matplotlib font data missing: {required}")
 
     existing_ttf = {path.name for path in ttf_directory.iterdir() if path.is_file()}
-    missing = KEPT_TTF_FILES - existing_ttf
+    missing = REQUIRED_TTF_FILES - existing_ttf
     if missing:
         raise FileNotFoundError(
             "required Matplotlib TTF files missing: " + ", ".join(sorted(missing))
         )
 
+    kept_contract = REQUIRED_TTF_FILES | (OPTIONAL_TTF_FILES & existing_ttf)
     before = _tree_measurement(internal)
     sample_data = mpl_data / "sample_data"
     sample_data_removed = sample_data.exists()
     if sample_data_removed:
         shutil.rmtree(sample_data)
     for path in ttf_directory.iterdir():
-        if path.is_file() and path.name not in KEPT_TTF_FILES:
+        if path.is_file() and path.name not in kept_contract:
             path.unlink()
 
     kept_ttf = sorted(path.name for path in ttf_directory.iterdir() if path.is_file())
-    if set(kept_ttf) != KEPT_TTF_FILES:
+    if set(kept_ttf) != kept_contract:
         raise RuntimeError(f"unexpected post-prune TTF set: {kept_ttf}")
     if not afm_directory.is_dir() or not pdfcorefonts_directory.is_dir():
         raise RuntimeError("AFM/pdfcorefonts must survive Matplotlib pruning")
