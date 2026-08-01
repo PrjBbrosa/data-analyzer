@@ -187,13 +187,16 @@ writer-time 失败必须整组回滚。现有 `_write_image` 的内层 staging �
   1. `QImage(width_px, height_px, Format_ARGB32_Premultiplied)`，按主题填充
      背景（transparent 主题填 `Qt.transparent`）；
   2. `QPainter` + `widget.render(painter)`，painter 显式开
-     `Antialiasing | TextAntialiasing`（导出恒 AA，对齐 timedomain 导出行为）；
-     同时所有曲线 `PlotDataItem`/`PlotCurveItem` 必须显式 `antialias=True`，因为
-     pyqtgraph item paint 会按自身选项重设 painter hint；只开 QPainter hint 不算完成；
-  3. `setDotsPerMeterX/Y(round(dpi / 0.0254))` 写 PNG pHYs（保留"像素几何
-     权威、dpi 只是元数据"的既有语义）；
+     `Antialiasing | TextAntialiasing`；time 曲线的 item AA 按下述显示成本策略决定，
+     不能用全量原始点 + 强制 AA 阻塞 GUI；
+  3. `painter.end()` 后再调用
+     `setDotsPerMeterX/Y(round(dpi / 0.0254))` 写 PNG pHYs（保留"像素几何
+     权威、dpi 只是元数据"的既有语义）。禁止在绘制前设置 DPM：AxisItem 的
+     QPicture 会按 paint-device DPI 重放，导致 tick/grid 跨面板缩放；
   4. `QImage.setText` 保留现有 `_render_metadata(context)` 的键值（tEXt chunk）；
-  5. 存盘仍经 `batch_output.atomic_write`，本层只写 temp 路径。
+  5. 存盘仍经 `batch_output.atomic_write`，本层只写 temp 路径；widget 构建、布局、
+     QImage paint 留在 GUI thread，lossless PNG encode/write 回到 BatchRunner worker，
+     避免压缩占用 GUI event loop。
 - 禁 OpenGL（历史 lesson：OpenGL 会导致全白导出）。
 
 ### 2.4 各 kind 的场景规格
@@ -202,6 +205,16 @@ writer-time 失败必须整组回滚。现有 `_write_image` 的内层 staging �
 
 **`time`（DataFrame 或 `BatchTimeFigureSpec`）**
 
+- 显示数组在真实 ViewBox geometry 就绪后，按该 ViewBox 的像素宽度走现有
+  `positions_envelope` min/max envelope；原 `BatchSeries`、分析数值和数据导出保持
+  不变。`show_and_settle` 只允许一次 `processEvents()` paint drain，其余几何收敛用
+  `layout.activate()` / range callback 完成。
+- 抗锯齿与单文件 canvas 的成本门语义对齐：平滑/低密度 general 曲线保持 AA；
+  `dense_discrete` 用现有 `bucket_width_for(..., interactive=False)`（当前上限 350）并
+  关闭 native AA；确实需要 envelope 且 `transition_fraction>=0.5`、normalized step
+  q90 `>=0.001` 的高栅格 general 曲线也关闭 native AA。该门同时要求
+  `source_length > 2*pixel_width`，避免把低密度曲线或平滑正弦误判。NaN 与非单调 X
+  继续服从现有 envelope fallback，不另造数值算法。
 - overlay：单 PlotItem；≤2 个 Y 单位（沿用 `_validate_time_spec_units` 上限
   与 fail-closed 文案），第二单位走右侧 aux ViewBox + AxisItem（对齐
   timedomain overlay 的多轴做法，替代 twinx）。
@@ -268,7 +281,7 @@ writer-time 失败必须整组回滚。现有 `_write_image` 的内层 staging �
 | 网格 | 主刻度、alpha≈0.28、仅左/下轴 | `show_major_grid_left_bottom_only` |
 | 字体 | Qt CJK 链（微软雅黑/PingFang SC/Noto Sans CJK SC…+ 西文回退） | `pg_canvas/fonts.py` 同源候选表 |
 | 字号 | plot axis/tick 9 pt；subplot panel title 10 pt；报告图头 12 pt、facts 8.5 pt、页脚 7.5 pt | timedomain font helper + 现 batch 报告层级 |
-| 抗锯齿 | 导出恒开 | timedomain 导出行为 |
+| 抗锯齿 | 文本/普通曲线开；dense/high-raster 曲线按 §2.4 time 成本门关闭 native AA，min/max envelope 保峰谷 | timedomain 显示成本与导出 affordability 语义 |
 | dark 主题 | 沿用现 batch dark 主题语义，token 化后由测试锁定 | batch 现状 |
 
 字体实现注意：若 `mf4_analyzer/ui/pg_canvas/fonts.py` 可被无副作用 import，
@@ -580,3 +593,45 @@ Gate 0 的机器断言与执行 agent 目视均通过，Batch 2 可按本 Spec �
 - Windows onedir 的 offscreen/native 双平台冻结烟测。
 
 这些项目继续由后续 Gate 4.5/6 控制，不得用本附录替代。
+
+### A.6 Gate 4.5 真实 Cocoa 纠偏与验收（2026-08-02）
+
+真实 `X04C_Ripple.mf4` 暴露了 Spike 合成波形未覆盖的高变化 general 曲线：25,509
+原始点强制 AA 时，三次多余 `processEvents()` 各阻塞约 1.6 s，最终 QImage paint 约
+0.8 s；PNG encode 与 GUI dispatch 不是主因。生产实现按 §2.4 收敛为真实 ViewBox
+宽度 envelope、一次 event drain、高栅格 AA 成本门，并把 PNG encode 移回 worker。
+
+- 20 张真实 Cocoa PNG：`max event-loop gap=66.64 ms`，20/20 PNG 签名有效；
+- 500 张前台交互：30.60 s，`max gap=75.12 ms`，`over 100 ms=0`；Computer Use
+  期间窗口移动事件 2 次、无按键 mouse-move 1 次、tooltip hover response 1 次，
+  批次进度持续刷新；
+- 1000 张压力运行：62.25 s，`max gap=88.35 ms`，`over 100 ms=0`；
+- 真实数据矩阵：7/7 cases、9 PNG，覆盖双 Y、8-panel 4K、source/channel 分组、
+  custom-X、FFT、FFT-Time、Order-Time 与三主题；协调 agent 逐张 original-detail
+  复核无主导航、auto button、toolbar、scrollbar、focus rect 或其他 Qt chrome；
+- 拆除前正式离屏矩阵复跑：14/14 parity cases、84/84 theme/resolution combinations；
+  四张 batch/single-file contact sheet 均由协调 agent 逐张复核通过。
+
+因此 macOS Gate 4.5 为 **PASS**，允许进入 Batch 5。该结论不覆盖 Windows onedir；
+无 fresh full/lite 的 offscreen/windows 四份证据时，Windows 发布仍为 **NO-GO**。
+
+### A.7 Batch 5/6 source 与 macOS 收口（2026-08-02）
+
+最终产品源码绑定提交 `40ed2128f5fd669f8f78b9eca4174a3157f60deb`。产品包、
+runtime dependency contract 与 requirements 均无 matplotlib；旧冻结裁剪工具/测试已
+删除，PNG 验证改用 Qt `QImage`。Windows full/lite builder 都显式 exclude matplotlib、
+硬检查 `qoffscreen.dll`/`qwindows.dll`，并要求同一 fresh EXE 分别生成 offscreen 与
+windows smoke evidence。
+
+- renderer/thread/packaging 聚焦回归：292 passed、1 skipped；
+- 拆除后离屏 parity：14/14 cases、84/84 combinations；
+- 最终全量：61 failed、4149 passed、20 skipped、3 deselected、无 SIGSEGV；相对
+  Batch 1 的 62-nodeid 集合 `new=[]`，只少了非 Windows 上正确 skip 的 native
+  `powershell.exe` 用例；
+- 拆除后 Cocoa 复验：真实 7-case/9-PNG 与 production 单文件两-case 对照均 PASS，
+  主 agent 已逐张 original-detail 复核。
+
+因此实现、macOS 原生验收与 source packaging contract 完成。由于 Mac 无法生成 fresh
+Windows full/lite，也没有四份 full/lite × offscreen/windows evidence JSON 或可信包体积
+before/after，最终状态严格为 **源码实施完成 / Windows 发布 NO-GO**，不得标总验收
+PASS。

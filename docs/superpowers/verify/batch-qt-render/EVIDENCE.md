@@ -1,4 +1,4 @@
-# Batch 2–4 Qt Render Evidence
+# Batch 2–6 Qt Render Evidence (macOS/source scope)
 
 ## Bound evidence
 
@@ -6,11 +6,11 @@
 - Parity page size: 1920 × 1080 px at 144 DPI
 - Integration matrix: 14 cases × white/transparent/dark × 1920×1080/3840×2160
 - Qt platform: `offscreen` (Qt 5.15.14, pyqtgraph 0.14.0)
-- Acceptance commit: `b0facae7d435fef3b9d1953e7f399096c3535b36`
-- Source-state SHA-256: `982940684662362296db88033e3708227e07b229f1985644be553ad7892e50d6`
+- Acceptance commit: `40ed2128f5fd669f8f78b9eca4174a3157f60deb`
+- Source-state SHA-256: `5277a2805b1f94a4550c601e72d425886cb4c89fd8a108373a6b2efa15e12a23`
 - Machine-readable record: [evidence.json](evidence.json)
 
-The source-state digest binds the committed Batch 4 Qt facade, producer contract,
+The source-state digest binds the accepted Qt facade, producer contract,
 four-kind renderer, tests, and parity tool. Each
 heatmap case records the full display matrix, exact LUT SHA-256 plus frozen
 samples, levels, QRectF, four matrix-corner values, live-geometry cell-centre
@@ -37,6 +37,10 @@ pixels, labels, warnings, full/crop hashes, viewport, and machine assertions.
 | Batch 4 focused GREEN | All touched batch/render/GUI tests → **605 passed, 1 warning**. Producer-shaped group tests render a real Qt scene while the spool is alive and validate final PNG metadata; menu/navigation mutation tests prove the chrome guards fail closed. |
 | Batch 4 integration GREEN | `tools/verify_batch_qt_render_parity.py --width 1920 --height 1080 --full-matrix` → **PASS, 14/14 parity cases and 84/84 theme/resolution combinations**. Every combination asserts exact pixels, DPI/text metadata, plot ink, no text overlap, no native chrome, and no main navigation. |
 | Batch 4 full-suite Gate | **62 failed, 4137 passed, 19 skipped, 3 deselected** in 768.52 s, no SIGSEGV. JUnit failed-nodeid set is exactly equal to the Batch 1 baseline: `new=[]`, `missing=[]`. |
+| Gate 4.5 real Cocoa | Real 7-case/9-PNG matrix PASS; production `TimeDomainCanvasPG` vs production BatchRunner two-case comparison PASS. Foreground heartbeat max gaps: 20 PNG 66.64 ms; interactive 500 PNG 75.12 ms; stress 1000 PNG 88.35 ms, with zero >100 ms gaps. |
+| Batch 5 focused GREEN | Packaging/runtime plus renderer/thread regression set: **292 passed, 1 skipped in 10.80 s**. Product AST guard reports zero matplotlib imports; Windows packaging contract source check PASS. |
+| Batch 5 post-prune parity | Final `40ed212` run: **14/14 parity cases and 84/84 combinations**, bound to the acceptance commit and source-state digest above. |
+| Batch 5 final full-suite Gate | **61 failed, 4149 passed, 20 skipped, 3 deselected** in 987.44 s, no SIGSEGV. JUnit set comparison against the 62-nodeid Batch 1 baseline: `new=[]`; the only missing failure is the native `powershell.exe` test now correctly skipped on non-Windows. |
 
 ## Worker visual sign-off
 
@@ -101,13 +105,42 @@ pages, but they are deliberately **not** used as visual parity proof. Formal
 visual parity is bound to the 1920×1080 cases above; 4K/theme coverage is an
 integration geometry/chrome gate.
 
+## Gate 4.5 / Batch 6 native Cocoa sign-off
+
+The coordinating agent ran the production paths on Qt platform `cocoa`, not the
+offscreen plugin, and opened the resulting images at original detail.
+
+- Real matrix: `.state/gate45/real-matrix-cocoa-final/run-20260801T190812Z-0b72be23/gate45-real-matrix.json`
+  binds commit `40ed212` and reports 7/7 cases, 9 PNGs, all four kinds,
+  source/channel grouping, custom-X, dual-Y, 8-panel 4K, and all three themes.
+  All nine images were opened; no navigation tabs, auto button, menu, toolbar,
+  scrollbar, focus rectangle, or other Qt chrome was visible.
+- Real single-file parity:
+  `.state/gate45/singlefile-cocoa-final/run-20260801T190747Z-45270f98/gate45-singlefile-parity.json`
+  identifies the reference as the production
+  `TimeDomainCanvasPG.plot_channels -> grab_pixmap` surface. The high-variation
+  channel retained the same 3,924-point envelope on both sides from 25,509 raw
+  points; the smooth case retained all 1,800 points and AA on both sides. Both
+  cases have identical X ranges and `#2563eb` curve colour. The contact sheet
+  was opened by the coordinating agent and the waveform geometry is equivalent.
+- Foreground heartbeat evidence is under `.state/gate45/`: 20 PNG max gap
+  66.64 ms; 500 PNG interaction proof 75.12 ms with two window-move events,
+  one no-button mouse-move and one tooltip-response call; 1000 PNG stress max
+  gap 88.35 ms. No run recorded a gap above 100 ms. The interaction counter
+  proves event delivery and the probe response; it is not claimed as an AX
+  capture of a native tooltip window.
+
+Result: macOS Gate 4.5 and post-prune T6.1 are **PASS**.
+
 ## Residual gates
 
 - The Qt facade is connected to `BatchRunner`; PNG-only preset normalization,
   warning propagation, grouping display names, GUI-thread marshal, and atomic
   rollback are covered by the focused suite.
-- This is a real `QApplication` exercise on Qt's offscreen platform. Native
-  macOS foreground acceptance is still blocked by the locked desktop and is
-  **not claimed** here; matplotlib dependency removal must wait for Gate 4.5.
-- Windows onedir offscreen/native-platform execution is a separate release
-  gate and remains **NO-GO / unverified** on this Mac.
+- Product source and Windows build contracts no longer declare or import
+  matplotlib. Qt PNG verification uses `QImage`; full/lite builders require
+  both qoffscreen and qwindows plugins and separate smoke evidence.
+- Fresh Windows full/lite onedir builds, pre/post package footprint, and the
+  four required full/lite × offscreen/windows evidence JSON files cannot be
+  produced on this Mac. Therefore the truthful final boundary remains:
+  **源码实施完成 / Windows 发布 NO-GO**.

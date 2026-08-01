@@ -18,13 +18,16 @@
 - 开工基线必须是包含本 Spec/Plan 的干净 commit/独立 worktree。当前 checkout 若有
   其他未提交改动，不得直接在其中执行本计划或按 Task commit。
 - 命令模板：
-  `TMPDIR=/tmp QT_QPA_PLATFORM=offscreen MPLCONFIGDIR=/tmp PYTHONPATH=. .venv/bin/python -m pytest <targets> -q`
+  `TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest <targets> -q`
 - `mf4_analyzer/batch.py` 顶层不得 import PyQt5/pyqtgraph（惰性导入点保持惰性）。
 - 不修改 `mf4_analyzer/signal/`；dB 转换必须继续调用
   `SpectrogramAnalyzer.amplitude_to_db`；导出数据不因显示模式改变。
 - 不修改 timedomain UI（`mf4_analyzer/ui/pg_canvas/`、`chart_stack/`）的任何
   行为、接口、外观；只允许**只读复用**或按 Spec §2.5 提取共享常量。
-- 禁 OpenGL；QPainter 与所有 curve item 都显式 AA。
+- 禁 OpenGL；QPainter/Text AA 显式开启。curve item 按 Spec §2.4 的显示成本门处理：
+  平滑/低密度曲线保持 AA；dense/high-raster 曲线先按真实 ViewBox 宽度做 min/max
+  envelope 并关闭 native AA。该策略只约束显示数组，不得改变分析数值、原始
+  `BatchSeries` 或数据导出。
 - 批量 PNG 只保留 Spec §0 D4 的报告元素和单文件 Plot 绘图区；主界面模块导航、Qt/
   pyqtgraph 默认按钮、菜单、frame、scrollbar、focus rect、toolbar/status chrome 一律
   不得进入产物。每个 PlotItem 显式 `hideButtons()`、关闭 menu/交互并加结构+像素守卫。
@@ -153,9 +156,10 @@ Spec 附录（追加 `## 附录 A：Spike 结论`）。
     线程契约测试：worker 线程 marshal 成功、异常重抛、无 app 非主线程报
     清晰 RuntimeError、已有 QCoreApplication 时 fail-fast、`warnings_out` 跨线程
     回传且公共签名与迁移前一致。
-  - `_export`：QImage 精确尺寸、三主题背景、dpi 元数据、`setText` 元数据、
-    恒 AA；所有 PlotDataItem 明确 `antialias=True` 并被测试内省；写 temp 路径
-    （不做原子写，原子写仍归 `batch_output`）。
+  - `_export`：QImage 精确尺寸、三主题背景、dpi 元数据、`setText` 元数据；
+    QPainter/Text AA 显式开启，PlotDataItem AA 按 Spec §2.4 成本门设置并被测试
+    内省；DPM 只能在 `painter.end()` 后写入，避免 AxisItem QPicture 按设备 DPI
+    错误重放；写 temp 路径（不做原子写，原子写仍归 `batch_output`）。
   - `_theme`：Spec §2.5 契约表 token 化，测试逐项锁定（含
     `FILE_PALETTES[0]` 引用同源断言）。
   - `BatchRenderOptions.line_width` 默认先改为 1.5 并加测试；旧产品 runner 此时仍会
@@ -308,9 +312,12 @@ T4.2 恢复。此时仍不得拆除 matplotlib 依赖、打包契约和旧专属
 
 ### Gate 4.5：matplotlib 依赖拆除前的 macOS 前台 cutover 验收
 
-> **2026-08-01 执行状态：BLOCKED（环境门禁）**。Batch 4 离屏与全仓门禁均已
-> PASS，但 macOS 桌面当前锁屏，不能取得前台截图、交互观察和 heartbeat 证据。
-> 因而 Batch 5 尚未开始，matplotlib 依赖与旧冻结契约保持可回退状态。
+> **2026-08-02 执行状态：PASS（macOS Cocoa）**。真实数据 7-case/9-PNG
+> 矩阵、production `TimeDomainCanvasPG` 单文件对照和前台 heartbeat 均已通过，
+> 主 agent 已在 original detail 逐张复核。20 张运行最大 gap 66.64 ms；带窗口移动和
+> mouse-move/tooltip-response 计数的 500 张运行最大 gap 75.12 ms；1000 张压力运行
+> 最大 gap 88.35 ms，三次均无 >100 ms gap。该 PASS 只授权进入 Batch 5，不覆盖
+> Windows onedir 发布门禁。
 
 - 用真实 MF4/CSV 数据覆盖 overlay 双 Y、8-panel subplot、
   `render_group_by=channel|source`、`x_source=channel`、fft、fft_time、order_time、
@@ -320,14 +327,14 @@ T4.2 恢复。此时仍不得拆除 matplotlib 依赖、打包契约和旧专属
 - 连续批量出图时拖动窗口/悬停 tooltip，记录 50 ms heartbeat；最大 gap ≤200 ms，
   且人工无连续冻结感。
 
-**Gate 4.5：** 前台截图、操作观察与 heartbeat 全 PASS 才允许进入 Batch 5；失败时仍可
-整体 revert facade 切换回 matplotlib。
+**Gate 4.5：PASS。** 前台真实矩阵、单文件对照、操作观察与 heartbeat 已完成；证据见
+`.state/gate45/` 与最终验收报告。拆除后的复验仍由 T6.1 单独控制。
 
 ---
 
 ## Batch 5：matplotlib 依赖/旧契约拆除 + 打包契约重建
 
-- [ ] **T5.1 清理旧专属测试与工具**
+- [x] **T5.1 清理旧专属测试与工具**
   - 复核 `batch_render.py` 在 T4.2 后只剩 Qt 薄门面，删除
     `tests/test_matplotlib_frozen_contract.py`、
     `tools/matplotlib_frozen_contract.py`。
@@ -336,7 +343,7 @@ T4.2 恢复。此时仍不得拆除 matplotlib 依赖、打包契约和旧专属
     逐条处置并在 commit message 列出。
   - 新守卫：`mf4_analyzer` 全包 `rg "^\s*(import|from) matplotlib"` 零命中的
     源码扫描测试。
-- [ ] **T5.2 依赖与打包**
+- [x] **T5.2 依赖与打包**
   - Files: `requirements.txt`、`mf4_analyzer/io/runtime_dependencies.py`、
     `tools/build_windows_folder.ps1`、`tools/build_windows_folder_lite.ps1`、
     `tools/verify_frozen_batch_render.py`、`tests/test_windows_build_script.py`、
@@ -353,7 +360,10 @@ T4.2 恢复。此时仍不得拆除 matplotlib 依赖、打包契约和旧专属
   - 修 review D7：只给真正调用 `powershell.exe` 的 native-execution 用例加
     `@pytest.mark.skipif(sys.platform != "win32")`；读取/断言脚本文本的跨平台契约测试
     继续在 macOS/Linux 运行，禁止整文件 skip。
-- [ ] **T5.3 lessons 维护**
+  - **Windows evidence deviation：** 当前 macOS 无 `powershell.exe`/Windows builder，
+    因而未生成 fresh 拆除前 full/lite baseline，也不得在拆除后反推。源码契约可完成，
+    但 T6.2 及包体积 before/after 保持 NO-GO。
+- [x] **T5.3 lessons 维护**
   - `docs/lessons-learned/matplotlib-pruning-needs-frozen-render-matrix.md`
     标 superseded（指向本迁移）；
     `batch-render-cjk-glyph-coverage.md` 改写为 Qt 版规则；
@@ -364,13 +374,21 @@ T4.2 恢复。此时仍不得拆除 matplotlib 依赖、打包契约和旧专属
 全量失败 nodeid 集合没有超出基线。无 Windows 机器可继续做源码收尾，但状态只能是
 “源码实施完成 / Windows 发布 NO-GO”，不得伪称总验收完成。
 
+> **2026-08-02 执行状态：PASS（source/macOS scope）**。聚焦回归 292 passed、
+> 1 skipped；拆除后 parity 14/14、完整矩阵 84/84；全量门禁 61 failed、4149
+> passed、20 skipped、3 deselected，`new=[]`，无 SIGSEGV。唯一从 62-nodeid 基线
+> 消失的失败是非 Windows 上现已正确 skip 的 native `powershell.exe` 用例。
+
 ---
 
 ## Batch 6：拆除后复验、Windows 冻结验收与报告
 
-- [ ] **T6.1 拆除后 macOS 真机复验**
+- [x] **T6.1 拆除后 macOS 真机复验**
   - `TMPDIR=/tmp QT_QPA_PLATFORM=cocoa PYTHONPATH=. .venv/bin/python "MF4 Data Analyzer V1.py"`
   - 重跑 Gate 4.5 的代表矩阵，确认拆依赖/打包代码没有改变 GUI 结果。
+  - 最终源码提交 `40ed212` 上实跑：真实 7-case/9-PNG 矩阵全部机器 PASS 并由主
+    agent 逐张 original-detail 复核；真实单文件/Batch 两-case contact sheet 机器与
+    目视 PASS，高变化 25,509→3,924 点、平滑 1,800→1,800 点，颜色和 X 范围一致。
 - [ ] **T6.2 Windows onedir 双平台冻结验收**
   - 新鲜构建 full/lite onedir，先显式 `QT_QPA_PLATFORM=offscreen` 跑 4-kind PNG +
     CJK + turbo smoke，再显式 `QT_QPA_PLATFORM=windows` 用
@@ -379,7 +397,7 @@ T4.2 恢复。此时仍不得拆除 matplotlib 依赖、打包契约和旧专属
     lite-offscreen、lite-windows。每份记录 requested/actual platform；同一 flavor 的
     两份绑定同一新 EXE SHA，full/lite 不要求 SHA 相同。旧 EXE 或旧 evidence 不得复用，
     并与 T5.2 拆除前 baseline 同口径记录 `_internal` bytes/files。
-- [ ] **T6.3 验收报告**
+- [x] **T6.3 验收报告**
   - 写 `docs/superpowers/reports/2026-08-XX-batch-qt-render-migration-review.md`：
     离屏四模块 contact sheet、实现 worker 与协调/主 agent 的逐 case 双签字、前台单文件
     plot 对照截图、性能/heartbeat、全量基线集合比较、Windows 双平台冻结证据与
@@ -387,6 +405,10 @@ T4.2 恢复。此时仍不得拆除 matplotlib 依赖、打包契约和旧专属
 
 **Gate 6（总验收）：** Spec §8 全部满足。若 Windows 双平台冻结证据缺失，报告可以
 完成，但结论必须是“源码实施完成 / Windows 发布 NO-GO”，不能把总验收标 PASS。
+
+> **2026-08-02 执行状态：PARTIAL / Windows NO-GO**。T6.1 与 T6.3 完成；T6.2
+> 缺 fresh Windows full/lite × offscreen/windows 四份证据及可信包体积 before/after，
+> 因此不标总 PASS。
 
 ---
 

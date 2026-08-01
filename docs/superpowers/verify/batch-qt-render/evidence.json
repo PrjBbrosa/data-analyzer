@@ -1,8 +1,8 @@
 {
   "status": "PASS",
-  "commit_sha": "b0facae7d435fef3b9d1953e7f399096c3535b36",
-  "source_state_sha256": "982940684662362296db88033e3708227e07b229f1985644be553ad7892e50d6",
-  "generated_at": "2026-08-01T17:48:26.469917+00:00",
+  "commit_sha": "40ed2128f5fd669f8f78b9eca4174a3157f60deb",
+  "source_state_sha256": "5277a2805b1f94a4550c601e72d425886cb4c89fd8a108373a6b2efa15e12a23",
+  "generated_at": "2026-08-01T19:09:28.102886+00:00",
   "qt_qpa_platform_env": "offscreen",
   "qt_platform": "offscreen",
   "qt_version": "5.15.14",
@@ -35,18 +35,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/time-single.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/time-single.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 181601,
-          "sha256": "89fce85e5f1596bc93a3759bc2bcffe1355f410f4320258ed2eca4d555965d56"
+          "bytes": 180729,
+          "sha256": "de330ff41f4da1cc1625bb8db83fad0c31b240f76f669b837559f1e4cb1614f5"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/time-single-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/time-single-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 161597,
-          "sha256": "016406ee5937a33a41ab8644ad927d24cbe08cef57804ceff374b3b5c9d33929"
+          "bytes": 161998,
+          "sha256": "0212124d2045e0dc8a44cbf0ef8f16fa777c6f028cd2e26706fe9e83468bb2e2"
         },
         "viewport": [
           1881,
@@ -72,7 +72,7 @@
             "antialias": true
           }
         ],
-        "plot_ink_pixels": 85270,
+        "plot_ink_pixels": 89542,
         "plot_corner_ink_pixels": [
           0,
           58,
@@ -89,14 +89,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/time-single.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/time-single.png",
           "width": 1884,
           "height": 950,
           "bytes": 35413,
           "sha256": "c13c15f2e2cca1b4c8f4ffc34bf76ad91b99f7a8628a08eeff0c7e7372569715"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/time-single-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/time-single-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 35367,
@@ -150,18 +150,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/time-raw-filtered.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/time-raw-filtered.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 271518,
-          "sha256": "7c4a804ee2a893fd4a53e59483dfead7da51810c8f60a3c3a2f45fd685b3ad50"
+          "bytes": 270713,
+          "sha256": "96c8721d76b030cbb3fa8af7e38b1a9064c1fc357e0eb13e10ea9f38124e8cea"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/time-raw-filtered-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/time-raw-filtered-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 252148,
-          "sha256": "2aabf3c295613746ff3c0daa1db5b6501efcc92db794f34bef1437754cf1aba3"
+          "bytes": 252074,
+          "sha256": "3401d851980cff0dc593425b30355cc2eb8a3fc5463c73cdd3796e908444c5a0"
         },
         "viewport": [
           1881,
@@ -193,10 +193,10 @@
             "antialias": true
           }
         ],
-        "plot_ink_pixels": 113606,
+        "plot_ink_pixels": 118512,
         "plot_corner_ink_pixels": [
           0,
-          59,
+          58,
           0,
           0
         ],
@@ -210,14 +210,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/time-raw-filtered.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/time-raw-filtered.png",
           "width": 1884,
           "height": 950,
           "bytes": 52237,
           "sha256": "cc7d0c3895137183cc5461755e8acb510ac623bf241e15f84116251db45a2433"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/time-raw-filtered-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/time-raw-filtered-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 52182,
@@ -277,18 +277,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/time-dual-y.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/time-dual-y.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 239284,
-          "sha256": "84847986d031d7928f2de723aa318939766afa86293345101e4c4e6479413ad4"
+          "bytes": 238601,
+          "sha256": "964ca3e08025f784de6d2c3bd5f6ea0f4ae6b6186de8cb0ccd8a46dda1d52c78"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/time-dual-y-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/time-dual-y-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 219529,
-          "sha256": "6e2571f7db9def2dfc20e821acd4aa1e887e0ef3ee6755bec346879bfedeff62"
+          "bytes": 219409,
+          "sha256": "18d0366614ad872f35acc73b5e7070584509d6a0863aede81de1b54866e30484"
         },
         "viewport": [
           1881,
@@ -330,10 +330,10 @@
             "antialias": true
           }
         ],
-        "plot_ink_pixels": 106775,
+        "plot_ink_pixels": 110710,
         "plot_corner_ink_pixels": [
           0,
-          36,
+          0,
           0,
           0
         ],
@@ -347,14 +347,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/time-dual-y.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/time-dual-y.png",
           "width": 1884,
           "height": 950,
           "bytes": 52629,
           "sha256": "d9eb85ef0ffb7d5f092d2af27353c95a34b572b136bc9a6a56a89b44d697da33"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/time-dual-y-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/time-dual-y-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 52398,
@@ -424,18 +424,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/time-subplot8.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/time-subplot8.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 349912,
-          "sha256": "b0dd715b25e6a0e1b41f3e492059f21fe8fecf7ff55101f97309488408fe5d25"
+          "bytes": 349518,
+          "sha256": "7cbbb0f3251389fe52f273c27bc2baf0b26b7178c6f18d2ab07ce8f6fbafc8b2"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/time-subplot8-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/time-subplot8-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 330271,
-          "sha256": "0d7fee7b0da06537b920f1f69003cdfb28378e1940fb7097a9f0336d0b2e032b"
+          "bytes": 330231,
+          "sha256": "2d1da9b6abf37522ab30c987d75b0bffac2e368cf13e063efa650d58cb7412ef"
         },
         "viewport": [
           1881,
@@ -573,14 +573,14 @@
             "antialias": true
           }
         ],
-        "plot_ink_pixels": 182600,
+        "plot_ink_pixels": 184329,
         "plot_corner_ink_pixels": [
           0,
+          71,
+          0,
+          68,
+          0,
           58,
-          0,
-          55,
-          0,
-          45,
           0,
           70,
           0,
@@ -596,15 +596,15 @@
           0,
           58,
           0,
-          59,
+          45,
           0,
           70,
           0,
-          72,
+          58,
           0,
           55,
           0,
-          59,
+          45,
           0,
           0
         ],
@@ -618,14 +618,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/time-subplot8.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/time-subplot8.png",
           "width": 1884,
           "height": 950,
           "bytes": 92276,
           "sha256": "8c332a57bb17332b968cbc85bcb3620723ef3f9785dc4ad152c656d9683e78af"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/time-subplot8-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/time-subplot8-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 92233,
@@ -791,18 +791,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/time-custom-x.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/time-custom-x.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 128749,
-          "sha256": "01bd43953a21a1fb47a212ac0fd825caf089632474237190a17fe7a59231e353"
+          "bytes": 127646,
+          "sha256": "6095fd3b19ba26bf95a7ae273160b2917c40690be606d41c8adf2b567b2923f2"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/time-custom-x-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/time-custom-x-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 109195,
-          "sha256": "f6b90d061f379b4667b743c6f863052bf9ac803d137d6d6d2d1e320b57b33b07"
+          "bytes": 109276,
+          "sha256": "2c23e79f59d59316886726b55d59f642f9e9e2ffbb788e2e8ce9bc110af27068"
         },
         "viewport": [
           1881,
@@ -828,7 +828,7 @@
             "antialias": true
           }
         ],
-        "plot_ink_pixels": 58368,
+        "plot_ink_pixels": 66292,
         "plot_corner_ink_pixels": [
           0,
           58,
@@ -845,14 +845,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/time-custom-x.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/time-custom-x.png",
           "width": 1884,
           "height": 950,
           "bytes": 34444,
           "sha256": "71a35bbd762a71e72900ae6ff05e7600a7eec9059fb74585948a803b1475dbeb"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/time-custom-x-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/time-custom-x-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 34418,
@@ -906,18 +906,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-linear.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/fft-linear.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 70861,
-          "sha256": "e9eff6afa230ac3cd0708ca7d144ec686c49c9a09b1db94fd9391acdd0636da9"
+          "bytes": 70027,
+          "sha256": "8d0b6dab21480c99a60fb661deaa86e8eb60dc35215a80dc56ca3b0bb181058c"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-linear-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-linear-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 52171,
-          "sha256": "d975e80ae8a54d5dece7408787ed0f2bd5ebea83ec90c9be756c7aad51b67b9a"
+          "bytes": 51803,
+          "sha256": "10c22b2299a0e93555df46cbaaa286940ab90d3b6bb7c04dbbd5534172530a20"
         },
         "viewport": [
           1881,
@@ -943,12 +943,12 @@
             "antialias": true
           }
         ],
-        "plot_ink_pixels": 31184,
+        "plot_ink_pixels": 37193,
         "plot_corner_ink_pixels": [
           0,
-          31,
+          29,
           0,
-          16
+          0
         ],
         "widget_chrome": {
           "frame_hidden": true,
@@ -960,14 +960,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-linear.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/fft-linear.png",
           "width": 1884,
           "height": 1138,
           "bytes": 94232,
           "sha256": "f37e3aa3b560a76b1959ce3aee257906c91c7364ca90a2450efdae9a23f6fb52"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-linear-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-linear-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 51001,
@@ -1021,18 +1021,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-db.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/fft-db.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 76657,
-          "sha256": "88f04d6a67f177ab3b9bbd1d528a177e03a0cd724b91cffb3969758a0902e5ff"
+          "bytes": 76232,
+          "sha256": "3b873f11556974af53d72ef9904c45cc50b8273af925f5accf46dccf00d67b40"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-db-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-db-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 55770,
-          "sha256": "edfcedf4881599126fd050276f4753d39180b132eb478584bb1e8fa11bf085e7"
+          "bytes": 56034,
+          "sha256": "3f308dd7c2e2a88744627f340f56468ab77e6092890666af48746d92a11d8d0d"
         },
         "viewport": [
           1881,
@@ -1058,12 +1058,12 @@
             "antialias": true
           }
         ],
-        "plot_ink_pixels": 31844,
+        "plot_ink_pixels": 38867,
         "plot_corner_ink_pixels": [
           0,
-          31,
+          42,
           0,
-          16
+          0
         ],
         "widget_chrome": {
           "frame_hidden": true,
@@ -1075,14 +1075,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-db.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/fft-db.png",
           "width": 1884,
           "height": 1138,
           "bytes": 97788,
           "sha256": "d50c56a17f877d66df694cfa511d11b8ed4d4013614b96597dbc4a48fd7bff62"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-db-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-db-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 54458,
@@ -1136,18 +1136,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-manual-range.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/fft-manual-range.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 72962,
-          "sha256": "931220b8f38a500ad9be44295ed777e74966ce87162e3cc2e45e11b6abb1d029"
+          "bytes": 71702,
+          "sha256": "a905ea73e1b45f3cf08499ec5c8b0534a718e6af9b6b408a70a45a0deea0c360"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-manual-range-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-manual-range-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 54432,
-          "sha256": "d12ebf4126653c5c7674d12f69f2f632cc22711939f120efbe278ab294eb1602"
+          "bytes": 53433,
+          "sha256": "4108b0c0d5fb28595ba43e54ed4c46901cc9ebb10dc7f34d5ee7a6acdbe9399d"
         },
         "viewport": [
           1881,
@@ -1173,12 +1173,12 @@
             "antialias": true
           }
         ],
-        "plot_ink_pixels": 29944,
+        "plot_ink_pixels": 35898,
         "plot_corner_ink_pixels": [
           0,
-          31,
+          43,
           0,
-          16
+          0
         ],
         "widget_chrome": {
           "frame_hidden": true,
@@ -1190,14 +1190,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-manual-range.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/fft-manual-range.png",
           "width": 1884,
           "height": 1138,
           "bytes": 95632,
           "sha256": "059b5ff31e766a22d5a1b39be29fa4b53eeac8f7fa5d0a7d5147ec29ffcec321"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-manual-range-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-manual-range-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 52544,
@@ -1258,18 +1258,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-time-linear-auto.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/fft-time-linear-auto.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 94859,
-          "sha256": "b863ac6b301de765577179e50c6ac4c063808f3b080b104d9b359ae74afe0cb6"
+          "bytes": 91737,
+          "sha256": "051122da4603cffc55de4adc1f36bc172d3697f99714817c28962900d45112e9"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-linear-auto-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-time-linear-auto-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 74579,
-          "sha256": "f40a3a3928bdcc4a3788b7df58350d4daec85e6409f312e2b9173399b963ae5d"
+          "bytes": 72429,
+          "sha256": "5b94db3fe474c306e5d8a2bc7f21a91ffa79dd22bc1dbd9913a220ba4417928e"
         },
         "viewport": [
           1881,
@@ -1288,10 +1288,10 @@
           }
         ],
         "curve_tokens": [],
-        "plot_ink_pixels": 1584754,
+        "plot_ink_pixels": 1585698,
         "plot_corner_ink_pixels": [
           0,
-          32,
+          0,
           0,
           0
         ],
@@ -1406,14 +1406,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-time-linear-auto.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/fft-time-linear-auto.png",
           "width": 1884,
           "height": 950,
           "bytes": 75142,
           "sha256": "223e0dae14832054125ea1541e86c0b581edcbc25d3e1b78ae0f64c8cef4f5c5"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-linear-auto-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-time-linear-auto-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 75054,
@@ -1568,18 +1568,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-time-db-manual.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/fft-time-db-manual.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 123334,
-          "sha256": "ad5013964dc44bb90bcfafe8fdad28246e369ea57e5c3ceb29e884967be8c973"
+          "bytes": 121690,
+          "sha256": "16642bdb8f88f31e5d1722d23c3718b472ab838812b1aa6f2feaee24bcbd8299"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-db-manual-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-time-db-manual-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 100619,
-          "sha256": "0b2f636dba91229f21df849a2f9eedc05851e8003160e40702444f4ec2dedb15"
+          "bytes": 100462,
+          "sha256": "160508406c43f326ca553c20420aa2aaa2542a037afe7d5b5a6fe430527206e3"
         },
         "viewport": [
           1881,
@@ -1598,10 +1598,10 @@
           }
         ],
         "curve_tokens": [],
-        "plot_ink_pixels": 1584710,
+        "plot_ink_pixels": 1585917,
         "plot_corner_ink_pixels": [
           0,
-          32,
+          0,
           0,
           0
         ],
@@ -1716,14 +1716,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-time-db-manual.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/fft-time-db-manual.png",
           "width": 1884,
           "height": 950,
           "bytes": 98576,
           "sha256": "0bcf29e059dcfc1173e86ae75ae5d71664735d442538c985b290aaa4fc0a59e7"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-db-manual-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-time-db-manual-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 98468,
@@ -1878,18 +1878,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/fft-time-invalid-cmap.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/fft-time-invalid-cmap.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 94859,
-          "sha256": "b863ac6b301de765577179e50c6ac4c063808f3b080b104d9b359ae74afe0cb6"
+          "bytes": 91737,
+          "sha256": "051122da4603cffc55de4adc1f36bc172d3697f99714817c28962900d45112e9"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-invalid-cmap-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-time-invalid-cmap-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 74579,
-          "sha256": "f40a3a3928bdcc4a3788b7df58350d4daec85e6409f312e2b9173399b963ae5d"
+          "bytes": 72429,
+          "sha256": "5b94db3fe474c306e5d8a2bc7f21a91ffa79dd22bc1dbd9913a220ba4417928e"
         },
         "viewport": [
           1881,
@@ -1908,10 +1908,10 @@
           }
         ],
         "curve_tokens": [],
-        "plot_ink_pixels": 1584754,
+        "plot_ink_pixels": 1585698,
         "plot_corner_ink_pixels": [
           0,
-          32,
+          0,
           0,
           0
         ],
@@ -2028,14 +2028,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/fft-time-invalid-cmap.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/fft-time-invalid-cmap.png",
           "width": 1884,
           "height": 950,
           "bytes": 75142,
           "sha256": "223e0dae14832054125ea1541e86c0b581edcbc25d3e1b78ae0f64c8cef4f5c5"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/fft-time-invalid-cmap-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/fft-time-invalid-cmap-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 75054,
@@ -2192,18 +2192,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/order-time-linear-manual.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/order-time-linear-manual.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 97400,
-          "sha256": "287b0d3e4170594cf2d7710c8c89f867141e296d627598eebe15d0b64c2d0474"
+          "bytes": 94279,
+          "sha256": "183dbb7e11a076df6e2519886027d28c2efbef3b6e59b185a157580c4c8b3bc1"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-linear-manual-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/order-time-linear-manual-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 77827,
-          "sha256": "1d165402b307a9512f33756c9146865e3c7f7fe927714ed9a9f199cadd80dc75"
+          "bytes": 74934,
+          "sha256": "8f208864ae5177188545f4d0bb002db99fd9b83e1ce44c99f6b7f10386f5e717"
         },
         "viewport": [
           1881,
@@ -2222,10 +2222,10 @@
           }
         ],
         "curve_tokens": [],
-        "plot_ink_pixels": 1594398,
+        "plot_ink_pixels": 1595283,
         "plot_corner_ink_pixels": [
           0,
-          41,
+          0,
           0,
           0
         ],
@@ -2340,14 +2340,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/order-time-linear-manual.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/order-time-linear-manual.png",
           "width": 1884,
           "height": 950,
           "bytes": 77303,
           "sha256": "943aa0b6d9fb6881fa72244626fbc1e2b5e7d23a30248ad58c68017fcb348383"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-linear-manual-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/order-time-linear-manual-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 77168,
@@ -2502,18 +2502,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/order-time-db-auto.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/order-time-db-auto.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 124221,
-          "sha256": "6f1d4ef91ab77c17900ca3108e4816334e0a79b29240d52382effd5a854ca544"
+          "bytes": 121568,
+          "sha256": "132122717a454cdba60737bcb40a9aaf534cf377c3630c420ebcb6e506b16fb0"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-db-auto-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/order-time-db-auto-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 102711,
-          "sha256": "1705e26faf9651a976d22372bc357e7bd8614f438d414ad3e9a556e82097e9eb"
+          "bytes": 100168,
+          "sha256": "b8c1697ec8bce58bb7ab7b31f27753cd16e9512c6f5cdab50c3bfda578fe1860"
         },
         "viewport": [
           1881,
@@ -2532,10 +2532,10 @@
           }
         ],
         "curve_tokens": [],
-        "plot_ink_pixels": 1594836,
+        "plot_ink_pixels": 1595661,
         "plot_corner_ink_pixels": [
           0,
-          32,
+          0,
           0,
           0
         ],
@@ -2650,14 +2650,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/order-time-db-auto.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/order-time-db-auto.png",
           "width": 1884,
           "height": 950,
           "bytes": 98773,
           "sha256": "b3e9f3789dd087d51812f3ea6272c98d00c83c21bcbca6cf2f13b9663c10ee54"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-db-auto-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/order-time-db-auto-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 98701,
@@ -2812,18 +2812,18 @@
       },
       "batch": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/batch/order-time-invalid-cmap.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/batch/order-time-invalid-cmap.png",
           "width": 1920,
           "height": 1080,
-          "bytes": 95857,
-          "sha256": "42cdc8373b3b7e75f979b44d083d3e5aa9da1311571a35fd457d64ef84fba006"
+          "bytes": 92680,
+          "sha256": "d240fb0f377a1414393349be81859ab0a888659ec737c3cbc361a7ebb2ef5fba"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-invalid-cmap-batch.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/order-time-invalid-cmap-batch.png",
           "width": 1881,
           "height": 947,
-          "bytes": 76559,
-          "sha256": "1ab2d75333a33b68ff0d3d89b02db8f3bf91ae5cada8b4fd58133fbabb310338"
+          "bytes": 73596,
+          "sha256": "1f017f118d8879e5f06a7a5ecc5a1dde4f2e22c6abf7f9ed13263b0d518ea03c"
         },
         "viewport": [
           1881,
@@ -2842,10 +2842,10 @@
           }
         ],
         "curve_tokens": [],
-        "plot_ink_pixels": 1594701,
+        "plot_ink_pixels": 1595442,
         "plot_corner_ink_pixels": [
           0,
-          32,
+          0,
           0,
           0
         ],
@@ -2962,14 +2962,14 @@
       },
       "reference": {
         "full": {
-          "path": "docs/superpowers/verify/batch-qt-render/reference/order-time-invalid-cmap.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/reference/order-time-invalid-cmap.png",
           "width": 1884,
           "height": 950,
           "bytes": 76501,
           "sha256": "11dccff372bafa747cf6f06a82264777b82269e36735a803abd78a7fecb5e97e"
         },
         "crop": {
-          "path": "docs/superpowers/verify/batch-qt-render/crops/order-time-invalid-cmap-reference.png",
+          "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/crops/order-time-invalid-cmap-reference.png",
           "width": 1881,
           "height": 947,
           "bytes": 76427,
@@ -4807,32 +4807,32 @@
   ],
   "contact_sheets": {
     "time": {
-      "path": "docs/superpowers/verify/batch-qt-render/time-contact-sheet.png",
+      "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/time-contact-sheet.png",
       "width": 1352,
       "height": 1604,
-      "bytes": 496556,
-      "sha256": "c3b93403fe97149de242718b8fb78c7b56e2814d68d7e69f8e06462984906439"
+      "bytes": 490843,
+      "sha256": "b53bdebc707208646203ecfc5eadec5e97548b11bb3f4ac5423b0958d131c82d"
     },
     "fft": {
-      "path": "docs/superpowers/verify/batch-qt-render/fft-contact-sheet.png",
+      "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/fft-contact-sheet.png",
       "width": 1352,
       "height": 968,
-      "bytes": 92381,
-      "sha256": "1579f6ad262456ad06d8c84ffb27c3a0f4659da08ab80b4bfec8b292ed396b11"
+      "bytes": 88846,
+      "sha256": "9f8b00881cf6c8dfe7bfab86a87464e865b9b96842781750a098444ee74cb02a"
     },
     "fft_time": {
-      "path": "docs/superpowers/verify/batch-qt-render/fft_time-contact-sheet.png",
+      "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/fft_time-contact-sheet.png",
       "width": 1352,
       "height": 968,
-      "bytes": 236464,
-      "sha256": "ebb40b29aa71ecffd4dcc330f1c854f64327d8c10ef270ba8c9c9789fc0972e5"
+      "bytes": 224118,
+      "sha256": "25e292b2fea81272c947222efc5017d6ebcf060cbfc0fa9f17264e298b215255"
     },
     "order_time": {
-      "path": "docs/superpowers/verify/batch-qt-render/order_time-contact-sheet.png",
+      "path": "/Users/donghang/Downloads/data-analyzer-batch-qt-render/docs/superpowers/verify/batch-qt-render/order_time-contact-sheet.png",
       "width": 1352,
       "height": 968,
-      "bytes": 244750,
-      "sha256": "e685ec4dede88aa270924e4cb872d8fc373541ddac2b3fc38ea974ec71101a12"
+      "bytes": 230898,
+      "sha256": "20da1988b7ec289902b9d32ec1641de17b9621a6d47a0e281c87be84f0392bdd"
     }
   }
 }
