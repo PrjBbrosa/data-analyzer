@@ -4034,14 +4034,17 @@ def _task7_artifact_snapshot(path):
     return path.read_bytes(), path.stat().st_mtime_ns
 
 
-def _task7_touch_with_bytes(path, payload):
+def _task7_touch_with_bytes(path, payload, *, mtime_ns=1_000_000_000):
     path = Path(path)
-    previous = path.stat().st_mtime_ns
     path.write_bytes(payload)
-    target = max(path.stat().st_mtime_ns, previous + 1_000_000)
-    path.touch()
     import os
-    os.utime(path, ns=(target, target))
+    os.utime(path, ns=(mtime_ns, mtime_ns))
+
+
+def _task7_set_mtime(path, mtime_ns):
+    import os
+
+    os.utime(path, ns=(mtime_ns, mtime_ns))
 
 
 def _task7_resume_preset(*, group_by="source", signals=("sig", "aux")):
@@ -4098,9 +4101,20 @@ def test_grouped_resume_fixed_design_matrix_preserves_ineligible_artifacts(
     image_path = Path(first_manifest["render_groups"][0]["artifact"]["path"])
 
     for index in invalid_data_indexes:
-        _task7_touch_with_bytes(data_paths[index], f"invalid-{index}".encode())
+        _task7_touch_with_bytes(
+            data_paths[index],
+            f"invalid-{index}".encode(),
+            mtime_ns=1_000_000_000 + index,
+        )
     if not image_valid:
-        _task7_touch_with_bytes(image_path, b"invalid-image")
+        _task7_touch_with_bytes(
+            image_path, b"invalid-image", mtime_ns=2_000_000_000,
+        )
+    for index, path in enumerate(data_paths):
+        if index not in invalid_data_indexes:
+            _task7_set_mtime(path, 3_000_000_000 + index)
+    if image_valid:
+        _task7_set_mtime(image_path, 4_000_000_000)
     before_data = [_task7_artifact_snapshot(path) for path in data_paths]
     before_image = _task7_artifact_snapshot(image_path)
 
@@ -4112,10 +4126,17 @@ def test_grouped_resume_fixed_design_matrix_preserves_ineligible_artifacts(
     after_image = _task7_artifact_snapshot(image_path)
     for index in range(len(data_paths)):
         if index in invalid_data_indexes:
-            assert after_data[index] != before_data[index]
+            assert after_data[index][0] != before_data[index][0]
+            assert after_data[index][1] != before_data[index][1]
         else:
-            assert after_data[index] == before_data[index]
-    assert (after_image == before_image) is image_valid
+            assert after_data[index][0] == before_data[index][0]
+            assert after_data[index][1] == before_data[index][1]
+    if image_valid:
+        assert after_image[0] == before_image[0]
+        assert after_image[1] == before_image[1]
+    else:
+        assert after_image[0] != before_image[0]
+        assert after_image[1] != before_image[1]
     assert render_calls == (1 if image_valid else 2)
     assert len(list(output_dir.glob("*.csv"))) == 2
     assert len(list(output_dir.glob("*.png"))) == 1
@@ -4123,6 +4144,253 @@ def test_grouped_resume_fixed_design_matrix_preserves_ineligible_artifacts(
         "done" if index in invalid_data_indexes else "resumed"
         for index in range(2)
     ]
+
+
+def _task7_lazy_pattern_preset(*, group_by="source"):
+    preset = AnalysisPreset.free_config(
+        name="task 7 lazy legacy recovery",
+        method="time",
+        signal_pattern=r"^(sig|aux)$",
+        params={"render_group_by": group_by, "render_layout": "overlay"},
+        outputs=BatchOutput(
+            export_data=True,
+            export_image=True,
+            conflict_policy="auto_number",
+            resume_policy="manifest",
+        ),
+    )
+    return preset
+
+
+def test_lazy_pattern_complete_group_resume_never_calls_real_loader(
+    tmp_path, monkeypatch,
+):
+    """Catch fallback task discovery loading a source before recovery planning."""
+    fd = _make_fd(tmp_path, "lazy_resume", channels=("sig", "aux"), idx=0)
+    source_path = str(fd.filepath)
+    calls = 0
+
+    def loader(path):
+        nonlocal calls
+        assert str(path) == source_path
+        calls += 1
+        return fd
+
+    preset = replace(
+        _task7_lazy_pattern_preset(), source_paths=(source_path,),
+    )
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({}, loader=loader).run(preset, output_dir)
+    first_manifest = _task7_manifest(first.manifest_path)
+    data_before = {
+        item.task_id: _task7_artifact_snapshot(item.data_path)
+        for item in first.items
+    }
+    image_path = first_manifest["render_groups"][0]["artifact"]["path"]
+    image_before = _task7_artifact_snapshot(image_path)
+    calls = 0
+
+    second = BatchRunner({}, loader=loader).run(
+        preset, output_dir, resume_manifest=first.manifest_path,
+    )
+
+    assert calls == 0
+    assert [item.status for item in second.items] == ["resumed", "resumed"]
+    assert {
+        item.task_id: _task7_artifact_snapshot(item.data_path)
+        for item in second.items
+    } == data_before
+    second_group = _task7_manifest(second.manifest_path)["render_groups"][0]
+    assert _task7_artifact_snapshot(image_path) == image_before
+    assert [
+        member["task_id"] for member in second_group["members"]
+    ] == [
+        member["task_id"]
+        for member in first_manifest["render_groups"][0]["members"]
+    ]
+
+
+def test_lazy_pattern_missing_group_image_loads_once_and_keeps_prior_group_plan(
+    tmp_path, monkeypatch,
+):
+    """Catch deleted-image recovery rediscovering or changing legacy scope."""
+    fd = _make_fd(tmp_path, "lazy_missing_image", channels=("sig", "aux"), idx=0)
+    source_path = str(fd.filepath)
+    calls = 0
+
+    def loader(path):
+        nonlocal calls
+        assert str(path) == source_path
+        calls += 1
+        return fd
+
+    preset = replace(
+        _task7_lazy_pattern_preset(), source_paths=(source_path,),
+    )
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({}, loader=loader).run(preset, output_dir)
+    first_manifest = _task7_manifest(first.manifest_path)
+    data_before = {
+        item.task_id: _task7_artifact_snapshot(item.data_path)
+        for item in first.items
+    }
+    image_path = Path(first_manifest["render_groups"][0]["artifact"]["path"])
+    image_path.unlink()
+    calls = 0
+
+    second = BatchRunner({}, loader=loader).run(
+        preset, output_dir, resume_manifest=first.manifest_path,
+    )
+
+    assert calls == 1
+    assert {
+        item.task_id: _task7_artifact_snapshot(item.data_path)
+        for item in second.items
+    } == data_before
+    second_group = _task7_manifest(second.manifest_path)["render_groups"][0]
+    assert [
+        member["task_id"] for member in second_group["members"]
+    ] == [
+        member["task_id"]
+        for member in first_manifest["render_groups"][0]["members"]
+    ]
+    assert image_path.read_bytes() == b"group-image"
+
+
+def test_lazy_pattern_changed_member_loads_group_and_preserves_healthy_data(
+    tmp_path, monkeypatch,
+):
+    """Catch changed-source recovery losing the prior channel-group scope."""
+    files = {
+        str(fd.filepath): fd
+        for fd in (
+            _make_fd(tmp_path, "lazy_changed_a", channels=("sig",), idx=0),
+            _make_fd(tmp_path, "lazy_changed_b", channels=("sig",), idx=1),
+        )
+    }
+    calls = {path: 0 for path in files}
+
+    def loader(path):
+        key = str(path)
+        calls[key] += 1
+        return files[key]
+
+    preset = replace(
+        _task7_lazy_pattern_preset(group_by="channel"),
+        source_paths=tuple(files),
+    )
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({}, loader=loader).run(preset, output_dir)
+    first_manifest = _task7_manifest(first.manifest_path)
+    data_paths = {item.file_id: Path(item.data_path) for item in first.items}
+    data_before = {
+        source_id: _task7_artifact_snapshot(path)
+        for source_id, path in data_paths.items()
+    }
+    changed_source = tuple(files)[0]
+    _task7_touch_with_bytes(
+        changed_source,
+        Path(changed_source).read_bytes() + b"\n",
+        mtime_ns=7_000_000_000,
+    )
+    calls = {path: 0 for path in files}
+
+    second = BatchRunner({}, loader=loader).run(
+        preset, output_dir, resume_manifest=first.manifest_path,
+    )
+
+    assert calls == {path: 1 for path in files}
+    data_after = {
+        item.file_id: _task7_artifact_snapshot(item.data_path)
+        for item in second.items
+    }
+    assert data_after[changed_source] != data_before[changed_source]
+    healthy_source = tuple(files)[1]
+    assert data_after[healthy_source] == data_before[healthy_source]
+    second_group = _task7_manifest(second.manifest_path)["render_groups"][0]
+    assert [
+        member["task_id"] for member in second_group["members"]
+    ] == [
+        member["task_id"]
+        for member in first_manifest["render_groups"][0]["members"]
+    ]
+
+
+@pytest.mark.parametrize("field", ("size", "mtime_ns"))
+@pytest.mark.parametrize("invalid_value", (True, 1.5, "1"))
+def test_grouped_data_resume_rejects_noncanonical_source_stat_types(
+    tmp_path, monkeypatch, field, invalid_value,
+):
+    """Catch bool or scalar coercion turning malformed source facts valid."""
+    fd = _make_fd(tmp_path, "malformed_source", channels=("sig",), idx=0)
+    if field == "size":
+        Path(fd.filepath).write_bytes(b"x")
+    else:
+        _task7_set_mtime(fd.filepath, 1)
+    preset = replace(_task7_resume_preset(signals=("sig",)), file_ids=(0,))
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(preset, output_dir)
+    data_path = Path(first.items[0].data_path)
+    _task7_set_mtime(data_path, 8_000_000_000)
+    before = _task7_artifact_snapshot(data_path)
+
+    def mutate(payload):
+        payload["entries"][0]["source"][field] = invalid_value
+
+    malformed = _task7_rewrite_manifest(first.manifest_path, mutate)
+    second = BatchRunner({0: fd}).run(
+        preset, output_dir, resume_manifest=malformed,
+    )
+
+    after = _task7_artifact_snapshot(data_path)
+    assert second.items[0].status == "done"
+    assert after[0] == before[0]
+    assert after[1] != before[1]
+
+
+@pytest.mark.parametrize("invalid_kind", ("bad_path", "bad_checksum"))
+@pytest.mark.parametrize("invalid_first", (True, False))
+def test_duplicate_task_id_resume_binds_the_checksum_matched_candidate(
+    tmp_path, monkeypatch, invalid_kind, invalid_first,
+):
+    """Catch a valid duplicate scan returning a different candidate's artifact."""
+    import copy
+
+    fd = _make_fd(tmp_path, "duplicate_candidate", channels=("sig",), idx=0)
+    preset = replace(_task7_resume_preset(signals=("sig",)), file_ids=(0,))
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(preset, output_dir)
+    valid_path = str(Path(first.items[0].data_path).resolve(strict=False))
+
+    def mutate(payload):
+        valid = payload["entries"][0]
+        invalid = copy.deepcopy(valid)
+        invalid_artifact = invalid["artifacts"]["data"]
+        if invalid_kind == "bad_path":
+            invalid_artifact["path"] = str(
+                (output_dir / "missing-duplicate.csv").resolve(strict=False)
+            )
+        else:
+            bad_copy = output_dir / "bad-checksum-duplicate.csv"
+            bad_copy.write_bytes(Path(valid_path).read_bytes())
+            invalid_artifact["path"] = str(bad_copy.resolve(strict=False))
+            invalid_artifact["sha256"] = "0" * 64
+        payload["entries"] = (
+            [invalid, valid] if invalid_first else [valid, invalid]
+        )
+
+    duplicate_manifest = _task7_rewrite_manifest(first.manifest_path, mutate)
+    second = BatchRunner({0: fd}).run(
+        preset, output_dir, resume_manifest=duplicate_manifest,
+    )
+
+    assert second.items[0].status == "resumed"
+    assert str(Path(second.items[0].data_path).resolve(strict=False)) == valid_path
 
 
 def test_grouped_resume_missing_image_rerenders_group_without_touching_csvs(

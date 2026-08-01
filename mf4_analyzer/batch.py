@@ -337,6 +337,7 @@ class BatchRunner:
         self._source_cache: dict[object, _ResolvedSource] = {}
         self._source_channel_cache: dict[object, frozenset[str]] = {}
         self._source_locators: dict[object, str] = {}
+        self._source_group_identity_hints: dict[object, str] = {}
         self._physical_paths: dict[str, str] = {}
         # dB-reference-defaults Task 9 (spec §13 S4 / plan Step 9.2):
         # ``db_reference_catalog`` is an immutable, DUCK-TYPED snapshot
@@ -866,6 +867,16 @@ class BatchRunner:
             for physical_key in tuple(self._disk_cache):
                 self._evict_physical(physical_key)
             return finish_result('blocked', blocked=[str(exc)])
+        recovery_scope_manifest = retry_data
+        if recovery_scope_manifest is None and resume_data is not None:
+            recovery_scope_manifest = resume_data
+        if not tasks and explicit_grouping:
+            tasks = self._recover_lazy_manifest_tasks(
+                preset,
+                recovery_scope_manifest,
+                recipe_id=recipe_id,
+                requested_params=requested_params,
+            )
         if retry_scope is not None and not explicit_grouping:
             tasks = [
                 (source_key, channel)
@@ -1964,6 +1975,101 @@ class BatchRunner:
             source_identity=member.identity.source_identity,
         )
 
+    @staticmethod
+    def _strict_source_facts_match(previous, current) -> bool:
+        if not isinstance(previous, Mapping) or not isinstance(current, Mapping):
+            return False
+        for source in (previous, current):
+            if any(key not in source for key in ('identity', 'size', 'mtime_ns')):
+                return False
+            identity = source['identity']
+            if not isinstance(identity, str) or not identity:
+                return False
+            for key in ('size', 'mtime_ns'):
+                value = source[key]
+                if value is not None and (
+                    not isinstance(value, int) or isinstance(value, bool)
+                ):
+                    return False
+        return all(
+            previous[key] == current[key]
+            for key in ('identity', 'size', 'mtime_ns')
+        )
+
+    def _recover_lazy_manifest_tasks(
+        self,
+        preset,
+        manifest: Mapping[str, Any] | None,
+        *,
+        recipe_id: str,
+        requested_params: Mapping[str, Any],
+    ) -> list[tuple[object, str]]:
+        """Recover a prior lazy pattern scope without opening a source."""
+
+        source_paths = tuple(getattr(preset, 'source_paths', ()) or ())
+        pattern = str(getattr(preset, 'signal_pattern', '') or '').strip()
+        if (
+            manifest is None
+            or manifest.get('recipe_fingerprint') != recipe_id
+            or not source_paths
+            or not pattern
+        ):
+            return []
+        allowed_paths = {
+            canonical_source_path(path): path for path in source_paths
+        }
+        recovered = []
+        seen = set()
+        for entry in manifest.get('entries', ()):
+            if entry.get('method') != preset.method:
+                continue
+            channel = entry.get('channel')
+            source_id = entry.get('source_id')
+            source = entry.get('source')
+            if not isinstance(channel, str) or not self._matches(channel, pattern):
+                continue
+            if not isinstance(source, Mapping):
+                return []
+            source_path = source.get('path')
+            if source_path in (None, ''):
+                return []
+            canonical_path = canonical_source_path(source_path)
+            if canonical_path not in allowed_paths:
+                return []
+            current_source = source_file_facts(
+                allowed_paths[canonical_path],
+                source_identity=str(source.get('identity') or ''),
+            )
+            if not self._strict_source_facts_match(source, current_source):
+                # A changed stat still belongs to the prior task scope.  Its
+                # recovery decision will require compute/write after planning.
+                if not (
+                    isinstance(source.get('identity'), str)
+                    and source.get('identity')
+                    and source.get('identity') == current_source.get('identity')
+                ):
+                    return []
+            self._register_source_locator(source_id, allowed_paths[canonical_path])
+            group_identity = str(source.get('group_identity') or 'default')
+            self._source_group_identity_hints[source_id] = group_identity
+            identity = self._build_unresolved_task_identity(
+                source_id,
+                channel=channel,
+                method=preset.method,
+                params=requested_params,
+                group_identity=group_identity,
+            )
+            if (
+                identity.task_id != entry.get('task_id')
+                or identity.source_identity != source.get('identity')
+            ):
+                return []
+            task = (source_id, channel)
+            if task not in seen:
+                seen.add(task)
+                recovered.append(task)
+        return recovered
+
     def _resumable_group_data_entry(
         self,
         manifest: Mapping[str, Any] | None,
@@ -1976,11 +2082,6 @@ class BatchRunner:
         if manifest is None:
             return None
         current_source = self._group_member_source_facts(member)
-        required_source_types = {
-            'identity': str,
-            'size': int,
-            'mtime_ns': int,
-        }
         candidates = [
             entry for entry in manifest.get('entries', ())
             if entry.get('task_id') == member.identity.task_id
@@ -1992,12 +2093,8 @@ class BatchRunner:
             previous_source = candidate.get('source')
             if not isinstance(previous_source, Mapping):
                 continue
-            if any(
-                key not in previous_source
-                or not isinstance(previous_source[key], expected_type)
-                or not isinstance(current_source.get(key), expected_type)
-                or previous_source[key] != current_source[key]
-                for key, expected_type in required_source_types.items()
+            if not self._strict_source_facts_match(
+                previous_source, current_source,
             ):
                 continue
             data = (candidate.get('artifacts') or {}).get('data')
@@ -2016,7 +2113,7 @@ class BatchRunner:
                 required_artifacts={'data': data_format},
                 cancel_token=cancel_token,
             )
-            if matched is not None:
+            if matched is candidate:
                 return candidate
         return None
 
@@ -2133,6 +2230,9 @@ class BatchRunner:
                     channel=channel,
                     method=preset.method,
                     params=requested_params,
+                    group_identity=self._source_group_identity_hints.get(
+                        source_key, 'default',
+                    ),
                 )
             render_tasks.append(RenderTask(source_key, channel, identity))
 
