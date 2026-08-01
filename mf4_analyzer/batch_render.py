@@ -80,12 +80,68 @@ class BatchRenderContext:
         )
 
 
+@dataclass(frozen=True)
+class BatchSeries:
+    """One prepared time-domain curve for a batch figure."""
+
+    x: np.ndarray
+    y: np.ndarray
+    label: str
+    unit: str = ""
+    x_unit: str = "s"
+    linestyle: str = "-"
+    panel: int = 0
+
+    def __post_init__(self) -> None:
+        x_values = np.asarray(self.x, dtype=float)
+        y_values = np.asarray(self.y, dtype=float)
+        if x_values.ndim != 1 or y_values.ndim != 1:
+            raise ValueError("BatchSeries x and y must be one-dimensional")
+        if x_values.size != y_values.size:
+            raise ValueError("BatchSeries x and y must have equal lengths")
+        if isinstance(self.panel, bool) or not isinstance(
+            self.panel, (int, np.integer)
+        ) or self.panel < 0:
+            raise ValueError("BatchSeries panel must be a non-negative int")
+        if self.linestyle not in {"-", "--"}:
+            raise ValueError("BatchSeries linestyle must be '-' or '--'")
+        object.__setattr__(self, "x", x_values)
+        object.__setattr__(self, "y", y_values)
+        object.__setattr__(self, "panel", int(self.panel))
+
+
+@dataclass(frozen=True)
+class BatchTimeFigureSpec:
+    """Pure data specification for a grouped time-domain figure."""
+
+    series: tuple[BatchSeries, ...]
+    layout: str = "overlay"
+    x_source: str = "time"
+    x_origin: str = "zero"
+    x_label: str = "Time (s)"
+    panel_titles: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        series = tuple(self.series)
+        if not all(isinstance(item, BatchSeries) for item in series):
+            raise TypeError("BatchTimeFigureSpec series must contain BatchSeries")
+        if self.layout not in {"overlay", "subplot"}:
+            raise ValueError("BatchTimeFigureSpec layout must be overlay or subplot")
+        if self.x_source not in {"time", "channel"}:
+            raise ValueError("BatchTimeFigureSpec x_source must be time or channel")
+        if self.x_origin not in {"zero", "absolute"}:
+            raise ValueError("BatchTimeFigureSpec x_origin must be zero or absolute")
+        object.__setattr__(self, "series", series)
+        object.__setattr__(self, "panel_titles", tuple(self.panel_titles))
+
+
 def render_batch_image(
     payload,
     path,
     params: Mapping[str, Any] | None = None,
     options: BatchRenderOptions | None = None,
     context: BatchRenderContext | None = None,
+    warnings_out: list[str] | None = None,
 ) -> Path:
     """Render one existing batch payload and return its output path."""
 
@@ -97,6 +153,7 @@ def render_batch_image(
         params=params,
         options=render_options,
         context=context,
+        warnings_out=warnings_out,
     )
     canvas = FigureCanvasAgg(figure)
     try:
@@ -123,6 +180,7 @@ def _build_batch_figure(
     params: Mapping[str, Any] | None = None,
     options: BatchRenderOptions | None = None,
     context: BatchRenderContext | None = None,
+    warnings_out: list[str] | None = None,
 ) -> Figure:
     """Build a Figure for tests and for :func:`render_batch_image`."""
 
@@ -133,6 +191,7 @@ def _build_batch_figure(
             params=params,
             options=render_options,
             context=context,
+            warnings_out=warnings_out,
         )
 
 
@@ -141,6 +200,7 @@ def _build_batch_figure_in_context(
     params: Mapping[str, Any] | None = None,
     options: BatchRenderOptions | None = None,
     context: BatchRenderContext | None = None,
+    warnings_out: list[str] | None = None,
 ) -> Figure:
     """Create all Figure/Text artists inside the renderer rc context."""
 
@@ -163,22 +223,25 @@ def _build_batch_figure_in_context(
         dpi=render_options.dpi,
         facecolor="#101418",
     )
-    axis = figure.add_subplot(111)
-    _style_axis(axis)
-
-    if kind == "time":
-        _render_time(axis, data, render_params, render_context)
-    elif kind == "fft":
-        _render_fft(axis, data, render_params, render_context)
+    if kind == "time" and isinstance(data, BatchTimeFigureSpec):
+        axis = _render_time_spec(figure, data, render_params)
     else:
-        _render_heatmap(
-            figure,
-            axis,
-            kind,
-            data,
-            render_params,
-            render_context,
-        )
+        axis = figure.add_subplot(111)
+        _style_axis(axis)
+        if kind == "time":
+            _render_time(axis, data, render_params, render_context)
+        elif kind == "fft":
+            _render_fft(axis, data, render_params, render_context)
+        else:
+            _render_heatmap(
+                figure,
+                axis,
+                kind,
+                data,
+                render_params,
+                render_context,
+                warnings_out,
+            )
 
     _apply_figure_context(figure, axis, kind, render_params, render_context)
     figure.subplots_adjust(left=0.10, right=0.91, bottom=0.13, top=0.84)
@@ -281,6 +344,161 @@ def _render_time(
     _apply_axis_limits(axis, params)
 
 
+def _render_time_spec(
+    figure: Figure,
+    spec: BatchTimeFigureSpec,
+    params: Mapping[str, Any],
+):
+    """Render a grouped time specification and return its primary axis."""
+
+    active = tuple(item for item in spec.series if item.x.size)
+    _validate_time_spec_units(active)
+    if spec.layout == "subplot":
+        return _render_time_spec_subplots(figure, spec, active, params)
+
+    axis = figure.add_subplot(111)
+    _style_axis(axis)
+    _render_time_spec_panel(axis, active, spec, params)
+    return axis
+
+
+def _validate_time_spec_units(series: tuple[BatchSeries, ...]) -> None:
+    x_units = _first_appearance_units(series, "x_unit")
+    if len(x_units) > 1:
+        raise ValueError("time figure spec has mixed x units")
+    y_units = _first_appearance_units(series, "unit")
+    if len(y_units) > 2:
+        raise ValueError("time figure spec supports at most two y units")
+
+
+def _first_appearance_units(
+    series: tuple[BatchSeries, ...], attribute: str
+) -> tuple[str, ...]:
+    values: list[str] = []
+    for item in series:
+        unit = str(getattr(item, attribute))
+        if unit not in values:
+            values.append(unit)
+    return tuple(values)
+
+
+def _render_time_spec_subplots(
+    figure: Figure,
+    spec: BatchTimeFigureSpec,
+    active: tuple[BatchSeries, ...],
+    params: Mapping[str, Any],
+):
+    panel_ids = tuple(dict.fromkeys(item.panel for item in active)) or (0,)
+    panel_series = {
+        panel: tuple(item for item in active if item.panel == panel)
+        for panel in panel_ids
+    }
+    axes = []
+    for index, panel in enumerate(panel_ids, start=1):
+        axis = figure.add_subplot(len(panel_ids), 1, index, sharex=axes[0] if axes else None)
+        _style_axis(axis)
+        if panel < len(spec.panel_titles):
+            axis.set_title(str(spec.panel_titles[panel]), color="#f2f5f7", fontsize=10)
+        _render_time_spec_panel(axis, panel_series[panel], spec, params)
+        axes.append(axis)
+
+    for axis in axes[:-1]:
+        axis.set_xlabel("")
+        axis.tick_params(labelbottom=False)
+    axes[-1].set_xlabel(spec.x_label)
+    _apply_time_spec_shared_x_limits(axes[-1], active, spec, params)
+    return axes[-1]
+
+
+def _render_time_spec_panel(
+    axis,
+    series: tuple[BatchSeries, ...],
+    spec: BatchTimeFigureSpec,
+    params: Mapping[str, Any],
+) -> None:
+    units = _first_appearance_units(series, "unit")
+    if len(units) > 2:
+        raise ValueError("time figure spec supports at most two y units")
+    if len(units) == 2 and not bool(params.get("y_auto", True)) and _valid_pair(
+        params.get("y_min"), params.get("y_max")
+    ):
+        raise ValueError("manual y limits are not supported with dual y units")
+
+    axes_by_unit = {units[0]: axis} if units else {}
+    if len(units) == 2:
+        right_axis = axis.twinx()
+        _style_axis(right_axis)
+        axes_by_unit[units[1]] = right_axis
+
+    handles = []
+    labels = []
+    x_union: list[np.ndarray] = []
+    for item in series:
+        x_values = _time_spec_x_values(item, spec)
+        target_axis = axes_by_unit[item.unit]
+        line = target_axis.plot(
+            x_values,
+            item.y,
+            linestyle=item.linestyle,
+            linewidth=1.5,
+            label=item.label,
+        )[0]
+        handles.append(line)
+        labels.append(item.label)
+        finite_x = x_values[np.isfinite(x_values)]
+        if finite_x.size:
+            x_union.append(finite_x)
+
+    axis.set_xlabel(spec.x_label)
+    axis.set_ylabel(_linear_amplitude_label(units[0] if units else ""))
+    if len(units) == 2:
+        axes_by_unit[units[1]].set_ylabel(_linear_amplitude_label(units[1]))
+    if handles:
+        legend = axis.legend(handles, labels, loc="best")
+        if legend is not None:
+            legend.get_frame().set_alpha(0.75)
+
+    if x_union:
+        all_x = np.concatenate(x_union)
+        axis.set_xlim(float(np.min(all_x)), float(np.max(all_x)))
+    if not bool(params.get("x_auto", True)) and _valid_pair(
+        params.get("x_min"), params.get("x_max")
+    ):
+        axis.set_xlim(float(params["x_min"]), float(params["x_max"]))
+    if len(units) < 2 and not bool(params.get("y_auto", True)) and _valid_pair(
+        params.get("y_min"), params.get("y_max")
+    ):
+        axis.set_ylim(float(params["y_min"]), float(params["y_max"]))
+
+
+def _time_spec_x_values(item: BatchSeries, spec: BatchTimeFigureSpec) -> np.ndarray:
+    x_values = np.asarray(item.x, dtype=float)
+    if spec.x_source != "time" or spec.x_origin != "zero" or not x_values.size:
+        return x_values
+    return x_values - x_values[0]
+
+
+def _apply_time_spec_shared_x_limits(
+    axis,
+    series: tuple[BatchSeries, ...],
+    spec: BatchTimeFigureSpec,
+    params: Mapping[str, Any],
+) -> None:
+    if not bool(params.get("x_auto", True)) and _valid_pair(
+        params.get("x_min"), params.get("x_max")
+    ):
+        axis.set_xlim(float(params["x_min"]), float(params["x_max"]))
+        return
+    finite_values = [
+        values[np.isfinite(values)]
+        for values in (_time_spec_x_values(item, spec) for item in series)
+        if np.any(np.isfinite(values))
+    ]
+    if finite_values:
+        x_values = np.concatenate(finite_values)
+        axis.set_xlim(float(np.min(x_values)), float(np.max(x_values)))
+
+
 def _render_fft(
     axis,
     data,
@@ -318,6 +536,7 @@ def _render_heatmap(
     data,
     params: Mapping[str, Any],
     context: BatchRenderContext,
+    warnings_out: list[str] | None = None,
 ) -> None:
     matrix, x_values, y_values, x_name, y_name, metadata = _extract_heatmap(data)
     resolution = _reference_resolution(params)
@@ -349,13 +568,14 @@ def _render_heatmap(
     else:
         color_limits = _finite_limits(display_matrix)
 
+    cmap = _resolve_colormap(params, warnings_out)
     image = axis.imshow(
         display_matrix,
         origin="lower",
         aspect="auto",
         interpolation="nearest",
         extent=(x_extent[0], x_extent[1], y_extent[0], y_extent[1]),
-        cmap="turbo",
+        cmap=cmap,
         vmin=color_limits[0],
         vmax=color_limits[1],
     )
@@ -370,6 +590,20 @@ def _render_heatmap(
     colorbar.set_label(colorbar_label, color="#e6edf3")
     colorbar.ax.tick_params(colors="#d9e1e8")
     colorbar.outline.set_edgecolor("#6b7785")
+
+
+def _resolve_colormap(
+    params: Mapping[str, Any], warnings_out: list[str] | None
+):
+    requested = params.get("cmap", "turbo")
+    try:
+        return mpl.colormaps.get_cmap(requested)
+    except (TypeError, ValueError):
+        if warnings_out is not None:
+            warnings_out.append(
+                f"Invalid colormap {requested!r}; using 'turbo'."
+            )
+        return mpl.colormaps["turbo"]
 
 
 def _require_dataframe(data, columns, kind: str) -> pd.DataFrame:
@@ -642,6 +876,12 @@ def _effective_fact_items(
     actual_fs = _first_present(facts, "actual_fs", "effective_fs", "fs")
     if actual_fs not in (None, ""):
         items.append(f"Fs={_format_fact_value(actual_fs)} Hz")
+    members = _first_present(facts, "members")
+    if members not in (None, ""):
+        return [
+            *items[:5],
+            f"members={_format_fact_value(members)}",
+        ]
     return items[:6]
 
 
@@ -721,4 +961,10 @@ def _axis_label(name: str) -> str:
     }.get(str(name), str(name))
 
 
-__all__ = ["BatchRenderContext", "BatchRenderOptions", "render_batch_image"]
+__all__ = [
+    "BatchRenderContext",
+    "BatchRenderOptions",
+    "BatchSeries",
+    "BatchTimeFigureSpec",
+    "render_batch_image",
+]

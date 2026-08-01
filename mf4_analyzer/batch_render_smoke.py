@@ -13,6 +13,8 @@ import pandas as pd
 from .batch_render import (
     BatchRenderContext,
     BatchRenderOptions,
+    BatchSeries,
+    BatchTimeFigureSpec,
     _available_cjk_font_families,
     render_batch_image,
 )
@@ -24,12 +26,20 @@ SMOKE_FORMATS = ("png", "pdf", "svg")
 
 
 def _payloads() -> dict[str, object]:
-    time = pd.DataFrame(
-        {
-            "time_s": [0.0, 1.0, 0.0, 1.0],
-            "series": ["raw", "raw", "filtered", "filtered"],
-            "value": [0.0, 1.0, 0.25, 0.75],
-        }
+    time = BatchTimeFigureSpec(
+        series=(
+            BatchSeries(
+                x=np.asarray([0.0, 1.0]),
+                y=np.asarray([0.0, 1.0]),
+                label="raw",
+            ),
+            BatchSeries(
+                x=np.asarray([0.0, 1.0]),
+                y=np.asarray([0.25, 0.75]),
+                label="filtered",
+                linestyle="--",
+            ),
+        ),
     )
     fft = pd.DataFrame(
         {"frequency_hz": [0.0, 100.0, 200.0], "amplitude": [0.0, 1.0, 0.25]}

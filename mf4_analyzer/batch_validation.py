@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from .batch_recipe import TIME_RENDER_DEFAULTS
 from .signal.fft import get_analysis_window
 
 
@@ -269,6 +270,49 @@ def validate_recipe(
                 "amplitude_definition", "unsupported_amplitude_definition",
                 "amplitude_definition must be native, peak, or rms",
             ))
+
+    if method == "time":
+        group_by = str(params.get(
+            "render_group_by", TIME_RENDER_DEFAULTS["render_group_by"],
+        ) or "").strip().lower()
+        if group_by not in {"none", "source", "channel"}:
+            issues.append(ValidationIssue(
+                "render_group_by", "unsupported_grouping",
+                "render_group_by must be none, source, or channel",
+            ))
+        elif group_by != "none":
+            layout = str(params.get(
+                "render_layout", TIME_RENDER_DEFAULTS["render_layout"],
+            ) or "").strip().lower()
+            if layout not in {"overlay", "subplot"}:
+                issues.append(ValidationIssue(
+                    "render_layout", "unsupported_layout",
+                    "render_layout must be overlay or subplot",
+                ))
+
+        x_source = str(params.get(
+            "x_source", TIME_RENDER_DEFAULTS["x_source"],
+        ) or "").strip().lower()
+        if x_source not in {"time", "channel"}:
+            issues.append(ValidationIssue(
+                "x_source", "unsupported_x_source",
+                "x_source must be time or channel",
+            ))
+        elif x_source == "channel":
+            if not str(params.get("x_channel") or "").strip():
+                issues.append(ValidationIssue(
+                    "x_channel", "required",
+                    "x_channel is required when x_source is channel",
+                ))
+        else:
+            x_origin = str(params.get(
+                "x_origin", TIME_RENDER_DEFAULTS["x_origin"],
+            ) or "").strip().lower()
+            if x_origin not in {"zero", "absolute"}:
+                issues.append(ValidationIssue(
+                    "x_origin", "unsupported_x_origin",
+                    "x_origin must be zero or absolute",
+                ))
 
     nfft_mode = str(params.get("nfft_mode", "")).strip().lower()
     nfft = params.get("nfft")

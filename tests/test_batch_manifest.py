@@ -6,12 +6,17 @@ import json
 
 import pytest
 
+import mf4_analyzer.batch_manifest as manifest_module
 from mf4_analyzer.batch_manifest import (
     BatchManifestRecorder,
+    GroupMemberResumeFact,
     ManifestRecipeMismatch,
+    ManifestValidationError,
+    RetryScope,
     artifact_facts,
     derive_summary,
     find_resumable_entry,
+    find_resumable_group,
     load_batch_manifest,
     retry_failed_scope,
     source_file_facts,
@@ -50,7 +55,12 @@ def _task_entry(status, *, source_id="source-1", channel="sig", method="fft"):
     return {
         "task_id": f"task-{source_id}",
         "source_id": source_id,
-        "source": {"identity": f"identity-{source_id}"},
+        "source": {
+            "identity": f"identity-{source_id}",
+            "path": None,
+            "size": None,
+            "mtime_ns": None,
+        },
         "channel": channel,
         "channel_unit": "",
         "method": method,
@@ -85,6 +95,40 @@ def _manifest(entries, *, recipe_fingerprint="recipe-1", run_status="done"):
     }
 
 
+def _group_entry(image_path, members, *, status="done", degraded_reason=""):
+    return {
+        "group_id": "group-1",
+        "stem": "time__source-a",
+        "group_by": "source",
+        "layout": "overlay",
+        "members": [
+            {"task_id": task_id, "source": dict(source)}
+            for task_id, source in members
+        ],
+        "requested_outputs": {"image": "png"},
+        "effective_outputs": {"image": "png"},
+        "degraded_reason": degraded_reason,
+        "status": status,
+        "message": "",
+        "warnings": [],
+        "artifact": artifact_facts(
+            image_path, kind="image", artifact_format="png",
+        ) if image_path is not None else None,
+    }
+
+
+def _recorder(tmp_path, *, run_id="run-groups"):
+    return BatchManifestRecorder(
+        tmp_path,
+        preset_name="time groups",
+        normalized_recipe={"method": "time", "params": {}},
+        recipe_fingerprint="recipe-1",
+        requested_outputs={"export_data": True, "export_image": True},
+        app_version="v-test",
+        run_id=run_id,
+    )
+
+
 def test_summary_is_derived_only_from_terminal_task_entries():
     entries = [
         {"status": "done"},
@@ -103,6 +147,90 @@ def test_summary_is_derived_only_from_terminal_task_entries():
         "resumed": 1,
         "total": 6,
     }
+
+
+def test_default_manifest_has_no_render_groups_and_unchanged_summary_shape(
+    tmp_path,
+):
+    recorder = _recorder(tmp_path, run_id="run-default-shape")
+
+    partial = json.loads(recorder.start().read_text(encoding="utf-8"))
+    final = load_batch_manifest(recorder.finish(run_status="done"))
+
+    expected_summary = {
+        "done": 0,
+        "failed": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "resumed": 0,
+        "total": 0,
+    }
+    assert partial["summary"] == expected_summary
+    assert final["summary"] == expected_summary
+    assert "render_groups" not in partial
+    assert "render_groups" not in final
+    assert "image_count" not in partial
+    assert "image_count" not in final
+
+
+def test_group_upsert_is_visible_in_partial_journal_immediately(tmp_path):
+    recorder = _recorder(tmp_path, run_id="run-group-journal")
+    source = {
+        "identity": "source-a",
+        "path": str(tmp_path / "source.csv"),
+        "size": 12,
+        "mtime_ns": 34,
+    }
+    group = _group_entry(None, [("task-a", source)], status="running")
+
+    written_path = recorder.upsert_render_group(group)
+
+    assert written_path == recorder.partial_path
+    partial = load_batch_manifest(recorder.partial_path)
+    assert partial["render_groups"] == [group]
+
+
+def test_group_upsert_replaces_instead_of_duplicating(tmp_path):
+    recorder = _recorder(tmp_path, run_id="run-group-upsert")
+    source = {
+        "identity": "source-a",
+        "path": None,
+        "size": 12,
+        "mtime_ns": 34,
+    }
+    running = _group_entry(None, [("task-a", source)], status="running")
+    failed = dict(running, status="failed", message="render failed")
+
+    recorder.upsert_render_group(running)
+    recorder.upsert_render_group(failed)
+
+    partial = json.loads(recorder.partial_path.read_text(encoding="utf-8"))
+    assert partial["render_groups"] == [failed]
+    final = load_batch_manifest(recorder.finish(run_status="partial"))
+    assert final["render_groups"] == [failed]
+
+
+def test_task_upsert_replaces_instead_of_duplicating_and_record_is_alias(
+    tmp_path,
+):
+    recorder = _recorder(tmp_path, run_id="run-task-upsert")
+    running = _task_entry("failed")
+    replacement = dict(running, message="latest failure")
+
+    recorder.record(running)
+    recorder.upsert_task(replacement)
+
+    partial = json.loads(recorder.partial_path.read_text(encoding="utf-8"))
+    assert partial["entries"] == [replacement]
+
+
+def test_old_manifest_without_render_groups_still_loads():
+    old_manifest = _manifest([_task_entry("done")])
+
+    loaded = load_batch_manifest(old_manifest)
+
+    assert loaded == old_manifest
+    assert "render_groups" not in loaded
 
 
 def test_manifest_recorder_writes_partial_then_terminal_v1_atomically(tmp_path):
@@ -322,6 +450,428 @@ def test_resume_rejects_missing_checksum_even_when_same_named_file_exists(tmp_pa
     ) is None
 
 
+def test_resumable_group_requires_done_status_and_complete_members(tmp_path):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    source_a = {
+        "identity": "source-a",
+        "path": str(tmp_path / "a.csv"),
+        "size": 10,
+        "mtime_ns": 100,
+    }
+    source_b = {
+        "identity": "source-b",
+        "path": str(tmp_path / "b.csv"),
+        "size": 20,
+        "mtime_ns": 200,
+    }
+    group = _group_entry(
+        image_path,
+        [("task-a", source_a), ("task-b", source_b)],
+    )
+    manifest = dict(
+        _manifest([_task_entry("done")]),
+        render_groups=[group],
+    )
+    members = (
+        GroupMemberResumeFact("task-a", source_a),
+        GroupMemberResumeFact("task-b", source_b),
+    )
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=members,
+        image_format="png",
+    ) is group
+
+    for changed_members in (
+        members[:1],
+        tuple(reversed(members)),
+        (
+            GroupMemberResumeFact("task-a", source_a),
+            GroupMemberResumeFact("task-c", source_b),
+        ),
+    ):
+        assert find_resumable_group(
+            manifest,
+            recipe_fingerprint="recipe-1",
+            group_id="group-1",
+            members=changed_members,
+            image_format="png",
+        ) is None
+
+    pending_manifest = deepcopy(manifest)
+    pending_manifest["render_groups"][0]["status"] = "pending"
+    assert find_resumable_group(
+        pending_manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=members,
+        image_format="png",
+    ) is None
+
+
+def test_resumable_group_rejects_changed_member_source_stat(tmp_path):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    source = {
+        "identity": "source-a",
+        "path": str(tmp_path / "a.csv"),
+        "size": 10,
+        "mtime_ns": 100,
+    }
+    group = _group_entry(image_path, [("task-a", source)])
+    manifest = dict(_manifest([]), render_groups=[group])
+
+    for changed_source in (
+        dict(source, identity="source-b"),
+        dict(source, size=11),
+        dict(source, mtime_ns=101),
+    ):
+        assert find_resumable_group(
+            manifest,
+            recipe_fingerprint="recipe-1",
+            group_id="group-1",
+            members=[GroupMemberResumeFact("task-a", changed_source)],
+            image_format="png",
+        ) is None
+
+
+def test_resumable_group_rejects_bad_image_checksum(tmp_path):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"original image")
+    source = {
+        "identity": "source-a",
+        "path": None,
+        "size": 10,
+        "mtime_ns": 100,
+    }
+    group = _group_entry(image_path, [("task-a", source)])
+    manifest = dict(_manifest([]), render_groups=[group])
+    members = [GroupMemberResumeFact("task-a", source)]
+
+    image_path.write_bytes(b"tampered image")
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=members,
+        image_format="png",
+    ) is None
+
+    incomplete = deepcopy(manifest)
+    incomplete["render_groups"][0]["artifact"]["checksum_status"] = "cancelled"
+    incomplete["render_groups"][0]["artifact"]["sha256"] = hashlib.sha256(
+        image_path.read_bytes()
+    ).hexdigest()
+    incomplete["render_groups"][0]["artifact"]["size"] = image_path.stat().st_size
+    assert find_resumable_group(
+        incomplete,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=members,
+        image_format="png",
+    ) is None
+
+
+def test_partial_and_degraded_groups_are_not_resumable(tmp_path):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"partial image")
+    source = {
+        "identity": "source-a",
+        "path": None,
+        "size": 10,
+        "mtime_ns": 100,
+    }
+    members = [GroupMemberResumeFact("task-a", source)]
+
+    for status, degraded_reason in (
+        ("partial", ""),
+        ("degraded", "backend unavailable"),
+        ("done", "backend unavailable"),
+    ):
+        group = _group_entry(
+            image_path,
+            [("task-a", source)],
+            status=status,
+            degraded_reason=degraded_reason,
+        )
+        manifest = dict(_manifest([]), render_groups=[group])
+        assert find_resumable_group(
+            manifest,
+            recipe_fingerprint="recipe-1",
+            group_id="group-1",
+            members=members,
+            image_format="png",
+        ) is None
+
+
+@pytest.mark.parametrize("missing_field", ("size", "mtime_ns"))
+def test_render_group_loader_rejects_missing_required_source_fact(
+    tmp_path,
+    missing_field,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    source = {
+        "identity": "source-a",
+        "path": None,
+        "size": None,
+        "mtime_ns": None,
+    }
+    group = _group_entry(image_path, [("task-a", source)])
+    group["members"][0]["source"].pop(missing_field)
+    manifest = dict(_manifest([]), render_groups=[group])
+
+    with pytest.raises(
+        ManifestValidationError,
+        match=rf"render_groups\.0\.members\.0\.source\.{missing_field}",
+    ):
+        load_batch_manifest(manifest)
+
+
+@pytest.mark.parametrize("missing_field", ("size", "mtime_ns"))
+def test_group_resume_defends_against_missing_source_fact_after_validation(
+    tmp_path,
+    monkeypatch,
+    missing_field,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    current_source = {
+        "identity": "source-a",
+        "path": None,
+        "size": None,
+        "mtime_ns": None,
+    }
+    group = _group_entry(image_path, [("task-a", current_source)])
+    group["members"][0]["source"].pop(missing_field)
+    manifest = dict(_manifest([]), render_groups=[group])
+    monkeypatch.setattr(
+        manifest_module,
+        "load_batch_manifest",
+        lambda unused_manifest: manifest,
+    )
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", current_source)],
+        image_format="png",
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "stored_value", "current_value"),
+    (
+        ("identity", "", "source-a"),
+        ("identity", 42, "source-a"),
+        ("size", True, 1),
+        ("size", 1.0, 1),
+        ("size", "1", 1),
+        ("mtime_ns", True, 1),
+        ("mtime_ns", 1.0, 1),
+        ("mtime_ns", "1", 1),
+    ),
+)
+def test_direct_group_resume_rejects_invalid_stored_source_facts(
+    tmp_path,
+    monkeypatch,
+    field,
+    stored_value,
+    current_value,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    stored_source = {
+        "identity": "source-a",
+        "path": None,
+        "size": 1,
+        "mtime_ns": 1,
+    }
+    current_source = dict(stored_source)
+    stored_source[field] = stored_value
+    current_source[field] = current_value
+    group = _group_entry(image_path, [("task-a", stored_source)])
+    manifest = dict(_manifest([]), render_groups=[group])
+    monkeypatch.setattr(
+        manifest_module,
+        "load_batch_manifest",
+        lambda unused_manifest: manifest,
+    )
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", current_source)],
+        image_format="png",
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "current_value", "stored_value"),
+    (
+        ("identity", "", "source-a"),
+        ("identity", 42, "source-a"),
+        ("size", True, 1),
+        ("size", 1.0, 1),
+        ("size", "1", 1),
+        ("mtime_ns", True, 1),
+        ("mtime_ns", 1.0, 1),
+        ("mtime_ns", "1", 1),
+    ),
+)
+def test_direct_group_resume_rejects_invalid_current_source_facts(
+    tmp_path,
+    monkeypatch,
+    field,
+    current_value,
+    stored_value,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    stored_source = {
+        "identity": "source-a",
+        "path": None,
+        "size": 1,
+        "mtime_ns": 1,
+    }
+    current_source = dict(stored_source)
+    stored_source[field] = stored_value
+    current_source[field] = current_value
+    group = _group_entry(image_path, [("task-a", stored_source)])
+    manifest = dict(_manifest([]), render_groups=[group])
+    monkeypatch.setattr(
+        manifest_module,
+        "load_batch_manifest",
+        lambda unused_manifest: manifest,
+    )
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", current_source)],
+        image_format="png",
+    ) is None
+
+
+@pytest.mark.parametrize("missing_field", ("size", "mtime_ns"))
+def test_direct_group_resume_rejects_missing_current_source_fact(
+    tmp_path,
+    monkeypatch,
+    missing_field,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    stored_source = {
+        "identity": "source-a",
+        "path": None,
+        "size": None,
+        "mtime_ns": None,
+    }
+    current_source = dict(stored_source)
+    current_source.pop(missing_field)
+    group = _group_entry(image_path, [("task-a", stored_source)])
+    manifest = dict(_manifest([]), render_groups=[group])
+    monkeypatch.setattr(
+        manifest_module,
+        "load_batch_manifest",
+        lambda unused_manifest: manifest,
+    )
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", current_source)],
+        image_format="png",
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    (
+        ("identity", None),
+        ("identity", 42),
+        ("size", "10"),
+        ("size", 10.0),
+        ("size", True),
+        ("mtime_ns", "100"),
+        ("mtime_ns", 100.0),
+        ("mtime_ns", False),
+    ),
+)
+def test_render_group_loader_rejects_wrong_source_fact_type(
+    tmp_path,
+    field,
+    bad_value,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    source = {
+        "identity": "source-a",
+        "path": None,
+        "size": 10,
+        "mtime_ns": 100,
+    }
+    source[field] = bad_value
+    manifest = dict(
+        _manifest([]),
+        render_groups=[_group_entry(image_path, [("task-a", source)])],
+    )
+
+    with pytest.raises(
+        ManifestValidationError,
+        match=rf"render_groups\.0\.members\.0\.source\.{field}",
+    ):
+        load_batch_manifest(manifest)
+
+
+def test_resumable_group_rechecks_cancel_after_successful_checksum(
+    tmp_path,
+    monkeypatch,
+):
+    image_path = tmp_path / "group.png"
+    image_path.write_bytes(b"complete group image")
+    source = {
+        "identity": "source-a",
+        "path": None,
+        "size": 10,
+        "mtime_ns": 100,
+    }
+    group = _group_entry(image_path, [("task-a", source)])
+    manifest = dict(_manifest([]), render_groups=[group])
+
+    class CancelAfterChecksum:
+        cancelled = False
+
+        def is_set(self):
+            return self.cancelled
+
+    cancel_token = CancelAfterChecksum()
+
+    def checksum_then_cancel(path, *, cancel_token=None, chunk_size=None):
+        cancel_token.cancelled = True
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    monkeypatch.setattr(manifest_module, "sha256_file", checksum_then_cancel)
+
+    assert find_resumable_group(
+        manifest,
+        recipe_fingerprint="recipe-1",
+        group_id="group-1",
+        members=[GroupMemberResumeFact("task-a", source)],
+        image_format="png",
+        cancel_token=cancel_token,
+    ) is None
+
+
 def test_retry_failed_scope_only_returns_failed_and_cancelled_for_same_recipe():
     manifest = _manifest([
         _task_entry("done", source_id="a"),
@@ -331,12 +881,87 @@ def test_retry_failed_scope_only_returns_failed_and_cancelled_for_same_recipe():
         _task_entry("resumed", source_id="e"),
     ])
 
-    assert retry_failed_scope(manifest, recipe_fingerprint="recipe-1") == {
+    scope = retry_failed_scope(manifest, recipe_fingerprint="recipe-1")
+
+    assert isinstance(scope, RetryScope)
+    assert scope.task_keys == frozenset({
         ("b", "sig", "fft"),
         ("c", "sig", "fft"),
-    }
+    })
+    assert scope.group_ids == frozenset()
     with pytest.raises(ManifestRecipeMismatch):
         retry_failed_scope(manifest, recipe_fingerprint="changed")
+
+
+def test_retry_scope_includes_failed_group_and_all_member_task_keys():
+    failed_b = _task_entry("failed", source_id="b", method="time")
+    cancelled_c = _task_entry("cancelled", source_id="c", method="time")
+    group = {
+        "group_id": "group-failed",
+        "stem": "time__source-a",
+        "group_by": "source",
+        "layout": "overlay",
+        "members": [
+            {"task_id": failed_b["task_id"], "source": failed_b["source"]},
+            {"task_id": cancelled_c["task_id"], "source": cancelled_c["source"]},
+        ],
+        "requested_outputs": {"image": "png"},
+        "effective_outputs": {},
+        "degraded_reason": "",
+        "status": "failed",
+        "message": "render failed",
+        "warnings": [],
+        "artifact": None,
+    }
+    manifest = dict(
+        _manifest([failed_b, cancelled_c]),
+        render_groups=[group],
+    )
+
+    scope = retry_failed_scope(manifest, recipe_fingerprint="recipe-1")
+
+    assert scope == RetryScope(
+        task_keys=frozenset({
+            ("b", "sig", "time"),
+            ("c", "sig", "time"),
+        }),
+        group_ids=frozenset({"group-failed"}),
+    )
+
+
+def test_retry_scope_group_expansion_does_not_mark_healthy_data_retryable(
+    tmp_path,
+):
+    failed = _task_entry("failed", source_id="failed", method="time")
+    healthy = _task_entry("done", source_id="healthy", method="time")
+    image_path = tmp_path / "complete-group.png"
+    image_path.write_bytes(b"complete group")
+    group = {
+        "group_id": "group-partial",
+        "stem": "time__source-a",
+        "group_by": "source",
+        "layout": "overlay",
+        "members": [
+            {"task_id": failed["task_id"], "source": failed["source"]},
+            {"task_id": healthy["task_id"], "source": healthy["source"]},
+        ],
+        "requested_outputs": {"image": "png"},
+        "effective_outputs": {"image": "png"},
+        "degraded_reason": "",
+        "status": "done",
+        "message": "",
+        "warnings": [],
+        "artifact": artifact_facts(
+            image_path, kind="image", artifact_format="png",
+        ),
+    }
+    manifest = dict(_manifest([failed, healthy]), render_groups=[group])
+
+    scope = retry_failed_scope(manifest, recipe_fingerprint="recipe-1")
+
+    assert scope.task_keys == frozenset({("failed", "sig", "time")})
+    assert scope.group_ids == frozenset({"group-partial"})
+    assert ("healthy", "sig", "time") not in scope.task_keys
 
 
 def test_load_batch_manifest_rejects_unknown_schema(tmp_path):

@@ -569,6 +569,7 @@ class InputPanel(QWidget):
     """Composes the INPUT column: file list + signal picker + RPM + time."""
 
     changed = pyqtSignal()
+    channelUniverseChanged = pyqtSignal(tuple, dict)
 
     def __init__(
         self,
@@ -687,7 +688,6 @@ class InputPanel(QWidget):
 
         # Wiring
         self._file_list.filesChanged.connect(self._on_files_changed)
-        self._file_list.intersectionChanged.connect(self._on_intersection_changed)
         self._signal_picker.selectionChanged.connect(lambda *_: self.changed.emit())
         self._target_policy_combo.currentIndexChanged.connect(
             self._on_target_policy_changed
@@ -707,10 +707,6 @@ class InputPanel(QWidget):
     def _on_files_changed(self) -> None:
         self._refresh_signal_universe()
         self.changed.emit()
-
-    def _on_intersection_changed(self, _intersection: frozenset) -> None:
-        self._refresh_signal_universe()
-        # changed signal already fired through filesChanged path
 
     def _on_target_policy_changed(self, _index: int) -> None:
         self._refresh_signal_universe()
@@ -831,6 +827,7 @@ class InputPanel(QWidget):
         # RPM picker shares the same universe.
         self._rpm_picker.set_available(available)
         self._rpm_picker.set_partially_available(partial)
+        self.channelUniverseChanged.emit(tuple(available), dict(partial))
 
     # ------------------------------------------------------------------
     # Accessors

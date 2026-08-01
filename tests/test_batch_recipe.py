@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import mf4_analyzer.batch_recipe as batch_recipe
 from mf4_analyzer.batch_recipe import (
     COMMON_PARAM_FIELDS,
     KNOWN_PARAM_FIELDS,
@@ -14,6 +15,76 @@ from mf4_analyzer.batch_recipe import (
     normalize_batch_params,
     recipe_fingerprint,
 )
+
+
+def test_time_render_defaults_are_removed_from_normalized_params():
+    defaults = {
+        "render_group_by": "none",
+        "render_layout": "overlay",
+        "x_source": "time",
+        "x_channel": "",
+        "x_origin": "zero",
+    }
+
+    assert batch_recipe.TIME_RENDER_DEFAULTS == defaults
+    assert normalize_batch_params(defaults, "time") == {}
+    assert recipe_fingerprint(defaults, "time") == recipe_fingerprint(
+        {}, "time",
+    )
+
+
+@pytest.mark.parametrize(
+    ("params", "baseline"),
+    (
+        ({"render_group_by": "source"}, {}),
+        (
+            {"render_group_by": "source", "render_layout": "subplot"},
+            {"render_group_by": "source"},
+        ),
+        ({"x_source": "channel", "x_channel": "rpm"}, {}),
+        ({"x_origin": "absolute"}, {}),
+    ),
+)
+def test_time_render_nondefaults_change_fingerprint(params, baseline):
+    assert set(params) <= METHOD_PARAM_FIELDS["time"]
+    assert recipe_fingerprint(params, "time") != recipe_fingerprint(
+        baseline, "time",
+    )
+
+
+@pytest.mark.parametrize("method", ("fft", "fft_time", "order_time"))
+def test_time_render_fields_are_removed_from_every_non_time_method(method):
+    render_fields = {
+        "render_group_by": "channel",
+        "render_layout": "subplot",
+        "x_source": "channel",
+        "x_channel": "rpm",
+        "x_origin": "absolute",
+    }
+
+    assert normalize_batch_params(render_fields, method) == {}
+    assert recipe_fingerprint(render_fields, method) == recipe_fingerprint(
+        {}, method,
+    )
+
+
+def test_time_render_inactive_fields_are_removed_before_fingerprinting():
+    assert normalize_batch_params(
+        {"render_group_by": "none", "render_layout": "subplot"},
+        "time",
+    ) == {}
+    assert normalize_batch_params(
+        {"x_source": "time", "x_channel": "rpm"},
+        "time",
+    ) == {}
+    assert normalize_batch_params(
+        {
+            "x_source": "channel",
+            "x_channel": "rpm",
+            "x_origin": "absolute",
+        },
+        "time",
+    ) == {"x_source": "channel", "x_channel": "rpm"}
 
 
 @pytest.mark.parametrize(

@@ -1,12 +1,14 @@
 """Versioned, atomic run manifests for GUI-free batch execution."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
 import math
 from pathlib import Path
+from typing import Any
 import uuid
 
 import numpy as np
@@ -18,6 +20,10 @@ from .batch_output import atomic_write
 SCHEMA_VERSION = 1
 TERMINAL_TASK_STATUSES = (
     "done", "failed", "cancelled", "skipped", "resumed",
+)
+RENDER_GROUP_STATUSES = (
+    "pending", "running", "done", "partial", "failed", "blocked",
+    "cancelled", "degraded", "skipped",
 )
 
 
@@ -31,6 +37,30 @@ class ManifestValidationError(ValueError):
     def __init__(self, field: str, message: str) -> None:
         self.field = str(field)
         super().__init__(f"manifest.{self.field}: {message}")
+
+
+@dataclass(frozen=True)
+class GroupMemberResumeFact:
+    task_id: str
+    source: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class RetryScope:
+    task_keys: frozenset[tuple[object, str, str]]
+    group_ids: frozenset[str]
+
+    def __bool__(self) -> bool:
+        return bool(self.task_keys or self.group_ids)
+
+    def __contains__(self, task_key) -> bool:
+        return task_key in self.task_keys
+
+    def __iter__(self):
+        return iter(self.task_keys)
+
+    def __len__(self) -> int:
+        return len(self.task_keys)
 
 
 def utc_now() -> str:
@@ -144,6 +174,23 @@ def derive_summary(entries) -> dict[str, int]:
     return counts
 
 
+def _source_facts_shape_error(source) -> tuple[str | None, str] | None:
+    if not isinstance(source, Mapping):
+        return None, "must be an object"
+    for field in ("identity", "size", "mtime_ns"):
+        if field not in source:
+            return field, "required field is missing"
+    if not isinstance(source["identity"], str) or not source["identity"]:
+        return "identity", "must be a non-empty string"
+    for field in ("size", "mtime_ns"):
+        value = source[field]
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool)
+        ):
+            return field, "must be an integer or null"
+    return None
+
+
 def _write_json_atomic(path: Path, payload: Mapping, *, overwrite: bool) -> Path:
     encoded = json.dumps(
         _json_safe(payload),
@@ -192,13 +239,18 @@ class BatchManifestRecorder:
         self._recipe_fingerprint = str(recipe_fingerprint)
         self._requested_outputs = _json_safe(requested_outputs)
         self._app_version = str(app_version)
-        self._entries: list[dict] = []
+        self._entries: dict[str, dict] = {}
+        self._render_groups: dict[str, dict] = {}
         self._started = False
         self._finished = False
 
     @property
     def entries(self) -> tuple[dict, ...]:
-        return tuple(self._entries)
+        return tuple(self._entries.values())
+
+    @property
+    def render_groups(self) -> tuple[dict, ...]:
+        return tuple(self._render_groups.values())
 
     def _payload(
         self,
@@ -207,7 +259,8 @@ class BatchManifestRecorder:
         blocked_reasons=(),
         finished_at: str | None = None,
     ) -> dict:
-        return {
+        entries = list(self._entries.values())
+        payload = {
             "schema_version": SCHEMA_VERSION,
             "run_id": self.run_id,
             "created_at": self._created_at,
@@ -217,11 +270,14 @@ class BatchManifestRecorder:
             "normalized_recipe": self._normalized_recipe,
             "recipe_fingerprint": self._recipe_fingerprint,
             "requested_output_settings": self._requested_outputs,
-            "summary": derive_summary(self._entries),
+            "summary": derive_summary(entries),
             "run_status": str(run_status),
             "blocked_reasons": [str(reason) for reason in blocked_reasons],
-            "entries": list(self._entries),
+            "entries": entries,
         }
+        if self._render_groups:
+            payload["render_groups"] = list(self._render_groups.values())
+        return payload
 
     def start(self) -> Path:
         if self._finished:
@@ -233,12 +289,34 @@ class BatchManifestRecorder:
             overwrite=self.partial_path.exists(),
         )
 
-    def record(self, entry: Mapping) -> Path:
+    def upsert_task(self, entry: Mapping) -> Path:
         if self._finished:
             raise RuntimeError("batch manifest is already terminal")
         if not self._started:
             self.start()
-        self._entries.append(_json_safe(entry))
+        safe_entry = _json_safe(entry)
+        task_id = safe_entry.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            raise ValueError("manifest task entry requires a non-empty task_id")
+        self._entries[task_id] = safe_entry
+        return _write_json_atomic(
+            self.partial_path,
+            self._payload(run_status="running"),
+            overwrite=True,
+        )
+
+    record = upsert_task
+
+    def upsert_render_group(self, group: Mapping) -> Path:
+        if self._finished:
+            raise RuntimeError("batch manifest is already terminal")
+        if not self._started:
+            self.start()
+        safe_group = _json_safe(group)
+        group_id = safe_group.get("group_id")
+        if not isinstance(group_id, str) or not group_id:
+            raise ValueError("manifest render group requires a non-empty group_id")
+        self._render_groups[group_id] = safe_group
         return _write_json_atomic(
             self.partial_path,
             self._payload(run_status="running"),
@@ -399,6 +477,103 @@ def load_batch_manifest(path_or_manifest) -> dict:
                 f"{prefix}.warnings", "must be an array of strings",
             )
 
+    render_groups = raw.get("render_groups", [])
+    if not isinstance(render_groups, list):
+        raise ManifestValidationError("render_groups", "must be an array")
+    seen_group_ids: set[str] = set()
+    required_group_fields = (
+        "group_id",
+        "stem",
+        "group_by",
+        "layout",
+        "members",
+        "requested_outputs",
+        "effective_outputs",
+        "degraded_reason",
+        "status",
+        "message",
+        "warnings",
+        "artifact",
+    )
+    for index, group in enumerate(render_groups):
+        prefix = f"render_groups.{index}"
+        if not isinstance(group, Mapping):
+            raise ManifestValidationError(prefix, "must be an object")
+        for field in required_group_fields:
+            if field not in group:
+                raise ManifestValidationError(
+                    f"{prefix}.{field}", "required field is missing",
+                )
+        group_id = group["group_id"]
+        if not isinstance(group_id, str) or not group_id:
+            raise ManifestValidationError(
+                f"{prefix}.group_id", "must be a non-empty string",
+            )
+        if group_id in seen_group_ids:
+            raise ManifestValidationError(
+                f"{prefix}.group_id", "must be unique",
+            )
+        seen_group_ids.add(group_id)
+        if not isinstance(group["stem"], str) or not group["stem"]:
+            raise ManifestValidationError(
+                f"{prefix}.stem", "must be a non-empty string",
+            )
+        if group["group_by"] not in {"source", "channel"}:
+            raise ManifestValidationError(
+                f"{prefix}.group_by", "must be source or channel",
+            )
+        if group["layout"] not in {"overlay", "subplot"}:
+            raise ManifestValidationError(
+                f"{prefix}.layout", "must be overlay or subplot",
+            )
+        if group["status"] not in RENDER_GROUP_STATUSES:
+            raise ManifestValidationError(
+                f"{prefix}.status", "is not a supported render group status",
+            )
+        for field in ("degraded_reason", "message"):
+            if not isinstance(group[field], str):
+                raise ManifestValidationError(
+                    f"{prefix}.{field}", "must be a string",
+                )
+        for field in ("requested_outputs", "effective_outputs"):
+            if not isinstance(group[field], Mapping):
+                raise ManifestValidationError(
+                    f"{prefix}.{field}", "must be an object",
+                )
+        if not isinstance(group["warnings"], list) or not all(
+            isinstance(warning, str) for warning in group["warnings"]
+        ):
+            raise ManifestValidationError(
+                f"{prefix}.warnings", "must be an array of strings",
+            )
+        if group["artifact"] is not None and not isinstance(
+            group["artifact"], Mapping
+        ):
+            raise ManifestValidationError(
+                f"{prefix}.artifact", "must be an object or null",
+            )
+        members = group["members"]
+        if not isinstance(members, list) or not members:
+            raise ManifestValidationError(
+                f"{prefix}.members", "must be a non-empty array",
+            )
+        for member_index, member in enumerate(members):
+            member_prefix = f"{prefix}.members.{member_index}"
+            if not isinstance(member, Mapping):
+                raise ManifestValidationError(member_prefix, "must be an object")
+            task_id = member.get("task_id")
+            if not isinstance(task_id, str) or not task_id:
+                raise ManifestValidationError(
+                    f"{member_prefix}.task_id", "must be a non-empty string",
+                )
+            source_error = _source_facts_shape_error(member.get("source"))
+            if source_error is not None:
+                source_field, message = source_error
+                suffix = f".{source_field}" if source_field is not None else ""
+                raise ManifestValidationError(
+                    f"{member_prefix}.source{suffix}", message,
+                )
+
     expected_summary = derive_summary(entries)
     if dict(raw["summary"]) != expected_summary:
         raise ManifestValidationError(
@@ -425,6 +600,8 @@ def _artifact_matches(
     cancel_token=None,
 ) -> bool:
     if str(facts.get("format", "")).lower() != str(expected_format).lower():
+        return False
+    if facts.get("checksum_status") != "complete":
         return False
     path_value = facts.get("path")
     checksum = facts.get("sha256")
@@ -485,28 +662,108 @@ def find_resumable_entry(
     return None
 
 
-def retry_failed_scope(manifest, *, recipe_fingerprint: str) -> set[tuple]:
+def find_resumable_group(
+    manifest: Mapping[str, Any],
+    *,
+    recipe_fingerprint: str,
+    group_id: str,
+    members: Sequence[GroupMemberResumeFact],
+    image_format: str,
+    cancel_token=None,
+) -> Mapping[str, Any] | None:
+    """Return a checksum-proven complete render group, otherwise ``None``."""
+
+    raw = load_batch_manifest(manifest)
+    if raw.get("recipe_fingerprint") != recipe_fingerprint:
+        return None
+    expected_format = str(image_format).strip().lower().lstrip(".")
+    for group in raw.get("render_groups", []):
+        if cancel_token is not None and cancel_token.is_set():
+            return None
+        if group.get("group_id") != group_id:
+            continue
+        if group.get("status") != "done" or group.get("degraded_reason"):
+            return None
+        recorded_members = group.get("members") or []
+        if len(recorded_members) != len(members):
+            return None
+        for recorded, current in zip(recorded_members, members):
+            if cancel_token is not None and cancel_token.is_set():
+                return None
+            if recorded.get("task_id") != current.task_id:
+                return None
+            previous_source = recorded.get("source")
+            if _source_facts_shape_error(previous_source) is not None:
+                return None
+            if _source_facts_shape_error(current.source) is not None:
+                return None
+            if any(
+                previous_source[key] != current.source[key]
+                for key in ("identity", "size", "mtime_ns")
+            ):
+                return None
+        requested = group.get("requested_outputs") or {}
+        effective = group.get("effective_outputs") or {}
+        if str(requested.get("image", "")).lower().lstrip(".") != expected_format:
+            return None
+        if str(effective.get("image", "")).lower().lstrip(".") != expected_format:
+            return None
+        artifact = group.get("artifact")
+        if not isinstance(artifact, Mapping) or artifact.get("kind") != "image":
+            return None
+        if not _artifact_matches(
+            artifact, expected_format, cancel_token=cancel_token,
+        ):
+            return None
+        if cancel_token is not None and cancel_token.is_set():
+            return None
+        return group
+    return None
+
+
+def retry_failed_scope(
+    manifest, *, recipe_fingerprint: str
+) -> RetryScope:
     raw = load_batch_manifest(manifest)
     if raw.get("recipe_fingerprint") != recipe_fingerprint:
         raise ManifestRecipeMismatch(
             "retry manifest recipe fingerprint does not match current recipe"
         )
-    return {
-        (entry.get("source_id"), entry.get("channel"), entry.get("method"))
-        for entry in raw.get("entries", [])
+    failed_entries = [
+        entry for entry in raw.get("entries", [])
         if entry.get("status") in {"failed", "cancelled"}
-    }
+    ]
+    task_keys = frozenset(
+        (entry.get("source_id"), entry.get("channel"), entry.get("method"))
+        for entry in failed_entries
+    )
+    failed_task_ids = {entry.get("task_id") for entry in failed_entries}
+    retry_group_statuses = {"failed", "partial", "blocked", "cancelled"}
+    group_ids = frozenset(
+        group["group_id"]
+        for group in raw.get("render_groups", [])
+        if group.get("status") in retry_group_statuses
+        or any(
+            member.get("task_id") in failed_task_ids
+            for member in group.get("members", [])
+        )
+    )
+    return RetryScope(task_keys=task_keys, group_ids=group_ids)
 
 
 __all__ = [
     "BatchManifestRecorder",
+    "GroupMemberResumeFact",
     "ManifestRecipeMismatch",
     "ManifestValidationError",
+    "RENDER_GROUP_STATUSES",
+    "RetryScope",
     "SCHEMA_VERSION",
     "TERMINAL_TASK_STATUSES",
     "artifact_facts",
     "derive_summary",
     "find_resumable_entry",
+    "find_resumable_group",
     "load_batch_manifest",
     "retry_failed_scope",
     "sha256_file",

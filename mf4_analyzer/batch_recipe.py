@@ -28,6 +28,14 @@ from . import db_reference
 
 SUPPORTED_RECIPE_METHODS = frozenset({"time", "fft", "fft_time", "order_time"})
 
+TIME_RENDER_DEFAULTS = {
+    "render_group_by": "none",
+    "render_layout": "overlay",
+    "x_source": "time",
+    "x_channel": "",
+    "x_origin": "zero",
+}
+
 COMMON_PARAM_FIELDS = frozenset({
     "fs",
     "time_range",
@@ -52,7 +60,7 @@ COMMON_PARAM_FIELDS = frozenset({
 })
 
 METHOD_PARAM_FIELDS = {
-    "time": frozenset(),
+    "time": frozenset(TIME_RENDER_DEFAULTS),
     "fft": frozenset({
         "window",
         "nfft",
@@ -122,6 +130,12 @@ _BOOL_PARAM_FIELDS = frozenset({
     "y_auto",
     "z_auto",
     "remove_mean",
+})
+_NORMALIZED_ENUM_PARAM_FIELDS = frozenset({
+    "render_group_by",
+    "render_layout",
+    "x_source",
+    "x_origin",
 })
 
 _PRESET_FIELDS = (
@@ -229,6 +243,8 @@ def _normalize_known_value(field: str, value: Any) -> Any:
     value = _json_safe(value)
     if field == "amplitude_definition" and isinstance(value, str):
         return value.strip().lower()
+    if field in _NORMALIZED_ENUM_PARAM_FIELDS and isinstance(value, str):
+        return value.strip().lower()
     if field == "time_range" and isinstance(value, list):
         if len(value) == 2 and all(
             isinstance(item, (int, float)) and not isinstance(item, bool)
@@ -271,6 +287,24 @@ def normalize_batch_params(params: Mapping[str, Any] | None, method: object) -> 
         if field in KNOWN_PARAM_FIELDS and field not in compatible:
             continue
         normalized[field] = _normalize_known_value(field, value)
+    if method_key == "time":
+        group_by = normalized.get(
+            "render_group_by", TIME_RENDER_DEFAULTS["render_group_by"],
+        )
+        if group_by == "none":
+            normalized.pop("render_layout", None)
+
+        x_source = normalized.get(
+            "x_source", TIME_RENDER_DEFAULTS["x_source"],
+        )
+        if x_source == "channel":
+            normalized.pop("x_origin", None)
+        else:
+            normalized.pop("x_channel", None)
+
+        for field, default in TIME_RENDER_DEFAULTS.items():
+            if normalized.get(field) == default:
+                normalized.pop(field, None)
     return normalized
 
 
@@ -394,6 +428,7 @@ __all__ = [
     "METHOD_PARAM_FIELDS",
     "OUTPUT_DEFAULTS",
     "SUPPORTED_RECIPE_METHODS",
+    "TIME_RENDER_DEFAULTS",
     "compatible_param_fields",
     "normalize_analysis_preset",
     "normalize_batch_params",

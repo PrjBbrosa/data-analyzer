@@ -392,6 +392,18 @@ QWidget#BatchOutputPanel {
         self._axis_row_parts["y"]["label"].setText(context["y_label"])
         self._axis_row_parts["y"]["summary"].setText(context["y_summary"])
 
+    def set_x_axis_context(self, *, label: str, unit: str = "") -> None:
+        """Update the presented X-axis identity without changing the recipe."""
+        clean_label = str(label or "X").strip() or "X"
+        clean_unit = str(unit or "").strip()
+        display = (
+            f"{clean_label} ({clean_unit})" if clean_unit else clean_label
+        )
+        self._axis_row_parts["x"]["label"].setText(display)
+        suffix = f" {clean_unit}" if clean_unit else ""
+        self.spin_x_min.setSuffix(suffix)
+        self.spin_x_max.setSuffix(suffix)
+
     def _set_z_axis_visible(self, visible: bool) -> None:
         row = getattr(self, "_z_axis_row", None)
         if row is not None:

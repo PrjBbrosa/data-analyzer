@@ -76,7 +76,7 @@ def test_provider_has_canonical_methods_and_stable_slot_order():
         list_builtin_presets,
     )
 
-    assert SUPPORTED_ANALYSIS_METHODS == ("fft", "fft_time", "order_time", "time")
+    assert SUPPORTED_ANALYSIS_METHODS == ("fft", "fft_time", "order_time")
     assert BUILTIN_PRESET_KEYS == ("torque", "vibration", "transient")
     for method in SUPPORTED_ANALYSIS_METHODS:
         assert tuple(p.key for p in list_builtin_presets(method)) == BUILTIN_PRESET_KEYS
@@ -124,45 +124,30 @@ def test_fft_time_values_match_existing_full_contextual_contract():
     assert presets["transient"]["z_floor"] == -30.0
 
 
-def test_time_contract_only_enables_time_and_only_declares_preprocess():
-    presets = {p.key: p for p in __import__(
-        "mf4_analyzer.analysis_presets", fromlist=["list_builtin_presets"]
-    ).list_builtin_presets("time")}
+def test_time_has_no_builtin_analysis_presets():
+    from mf4_analyzer.analysis_presets import get_builtin_preset, list_builtin_presets
 
-    assert presets["torque"].enabled is False
-    assert presets["vibration"].enabled is False
-    assert presets["transient"].enabled is True
-    assert presets["torque"].params_copy() == {}
-    assert presets["vibration"].params_copy() == {}
-    assert presets["transient"].params_copy() == {
-        "time_preprocess": {
-            "scale": 1.0,
-            "offset": 0.0,
-            "remove_mean": False,
-            "sample_mode": "original",
-            "target_fs": None,
-            "decimation_factor": 1,
-        }
-    }
+    with pytest.raises(ValueError, match="unsupported analysis method"):
+        list_builtin_presets("time")
+    with pytest.raises(ValueError, match="unsupported analysis method"):
+        get_builtin_preset("time", "transient")
 
 
 def test_records_and_nested_params_are_immutable_but_each_lookup_is_fresh():
     from mf4_analyzer.analysis_presets import get_builtin_preset
 
-    first = get_builtin_preset("time", "transient")
-    second = get_builtin_preset("time", "transient")
+    first = get_builtin_preset("fft", "transient")
+    second = get_builtin_preset("fft", "transient")
 
     assert first is not second
     assert first.params is not second.params
     with pytest.raises(FrozenInstanceError):
         first.key = "changed"
     with pytest.raises(TypeError):
-        first.params["time_preprocess"] = {}
-    with pytest.raises(TypeError):
-        first.params["time_preprocess"]["scale"] = 2.0
+        first.params["t_win_s"] = 2.0
     copy = first.params_copy()
-    copy["time_preprocess"]["scale"] = 2.0
-    assert second.params["time_preprocess"]["scale"] == 1.0
+    copy["t_win_s"] = 2.0
+    assert second.params["t_win_s"] == 0.6
 
 
 def test_alias_get_and_unit_recommendation_contract():

@@ -54,6 +54,7 @@ class TaskListWidget(QWidget):
         self._artifact_paths: list[tuple[str, str]] = []
         self._terminal_indices: set[int] = set()
         self._outputs_per_task: int = 0
+        self._artifact_count: int | None = None
         self._expanded: bool = True
 
         # Run-state bookkeeping
@@ -154,6 +155,8 @@ class TaskListWidget(QWidget):
         self,
         tasks: Sequence[tuple[str, str, str]],
         outputs_per_task: int,
+        *,
+        artifact_count: int | None = None,
     ) -> None:
         """Replace the body rows with the supplied ``(file, signal, method)``
         tuples. Resets all icons to ⏸ and clears tooltips. Idle header text
@@ -165,6 +168,9 @@ class TaskListWidget(QWidget):
         self._artifact_paths = [("", "")] * len(self._tasks)
         self._terminal_indices = set()
         self._outputs_per_task = int(outputs_per_task)
+        self._artifact_count = (
+            None if artifact_count is None else int(artifact_count)
+        )
 
         self._body.clear()
         self._items = []
@@ -306,7 +312,10 @@ class TaskListWidget(QWidget):
                 self._eta_label.setText("")
         else:
             n = len(self._tasks)
-            outputs = n * self._outputs_per_task
+            outputs = (
+                n * self._outputs_per_task
+                if self._artifact_count is None else self._artifact_count
+            )
             self._idle_label.setText(f"{n} 任务待执行 · {outputs} 输出")
 
     def _update_row(

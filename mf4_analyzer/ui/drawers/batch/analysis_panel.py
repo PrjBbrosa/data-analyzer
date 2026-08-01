@@ -39,9 +39,14 @@ class AnalysisPanel(QWidget):
         self._method_group = MethodButtonGroup(self)
         outer.addWidget(self._method_group)
 
-        self._preset_title = QLabel("分析预设", self)
+        self._preset_host = QWidget(self)
+        preset_host_layout = QVBoxLayout(self._preset_host)
+        preset_host_layout.setContentsMargins(0, 0, 0, 0)
+        preset_host_layout.setSpacing(10)
+
+        self._preset_title = QLabel("分析预设", self._preset_host)
         self._preset_title.setObjectName("BatchAnalysisChoiceLabel")
-        outer.addWidget(self._preset_title)
+        preset_host_layout.addWidget(self._preset_title)
 
         preset_row = QHBoxLayout()
         preset_row.setContentsMargins(0, 0, 0, 0)
@@ -53,7 +58,7 @@ class AnalysisPanel(QWidget):
             ("torque", "频率"), ("vibration", "均衡"),
             ("transient", "时间"), ("custom", "自定义"),
         ):
-            button = QRadioButton(label, self)
+            button = QRadioButton(label, self._preset_host)
             button.setObjectName("BatchAnalysisPresetOption")
             button.setMinimumWidth(0)
             button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
@@ -64,7 +69,8 @@ class AnalysisPanel(QWidget):
             preset_row.addWidget(button, 1)
             self._preset_buttons[key] = button
         self._preset_buttons["custom"].setChecked(True)
-        outer.addLayout(preset_row)
+        preset_host_layout.addLayout(preset_row)
+        outer.addWidget(self._preset_host)
 
         params_title = QLabel("参数（按方法动态显示）")
         params_title.setStyleSheet("color:#475569;font-size:12px;")
@@ -98,6 +104,10 @@ class AnalysisPanel(QWidget):
             button.setChecked(name == key)
 
     def _refresh_preset_applicability(self) -> None:
+        is_time = self.current_method() == "time"
+        self._preset_host.setVisible(not is_time)
+        if is_time:
+            return
         presets = {
             preset.key: preset
             for preset in list_builtin_presets(self.current_method())

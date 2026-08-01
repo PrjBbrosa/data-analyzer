@@ -29,9 +29,21 @@ from typing import Callable, Mapping
 import numpy as np
 import pandas as pd
 
+try:
+    from asammdf.blocks.utils import MdfException as _AsamMdfException
+except ImportError:  # pragma: no cover - optional dependency boundary
+    _AsamMdfException = None
+
 from .file_data import FileData, _TIME_NAMES
 from . import loader as _loader
 from .loader import AUDIO_VIDEO_EXTS, DataLoader, unique_mdf_channel_locations
+
+
+_MDF_PROBE_IO_ERRORS = (
+    (OSError, _AsamMdfException)
+    if _AsamMdfException is not None
+    else (OSError,)
+)
 
 
 class UnsupportedSourceFormatError(ValueError):
@@ -271,14 +283,20 @@ def _probe_mdf(path: str, adapter: "SourceAdapter") -> tuple[SourceDescriptor, .
         raise SourceUnavailableError("asammdf is required for MDF sources")
 
     canonical = canonical_source_path(path)
-    mdf = MDF(path)
+    mdf = None
     try:
+        mdf = MDF(path)
         channels, units, channel_metadata = _mdf_channel_facts(mdf)
+    except _MDF_PROBE_IO_ERRORS as exc:
+        raise SourceUnavailableError(
+            f'MDF metadata unavailable for "{path}": {exc}'
+        ) from exc
     finally:
-        try:
-            mdf.close()
-        except Exception:
-            pass
+        if mdf is not None:
+            try:
+                mdf.close()
+            except Exception:
+                pass
     if not channels:
         raise ValueError("MDF file has no numeric signal metadata")
     group_id = "root"

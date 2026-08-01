@@ -10,7 +10,7 @@ import re
 import shutil
 import socket
 import tempfile
-from typing import Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Sequence
 import uuid
 
 from .batch_recipe import recipe_fingerprint
@@ -35,6 +35,13 @@ class TaskOutputIdentity:
     group_identity: str
     channel_identity: str
     stem: str
+
+
+@dataclass(frozen=True)
+class GroupOutputIdentity:
+    group_id: str
+    stem: str
+    members: tuple[tuple[str, str, str], ...]
 
 
 class OutputPublishRace(FileExistsError):
@@ -148,6 +155,55 @@ def build_task_output_identity(
         group_identity=group_identity,
         channel_identity=channel_identity,
         stem=stem,
+    )
+
+
+def build_group_output_identity(
+    members: Sequence[tuple[str, str, str]],
+    *,
+    method: str,
+    params: Mapping[str, Any],
+    group_by: str,
+) -> GroupOutputIdentity:
+    """Build an order-independent identity for one rendered member set."""
+
+    normalized_members = tuple(sorted(
+        (str(source), str(group), str(channel))
+        for source, group, channel in members
+    ))
+    if not normalized_members:
+        raise ValueError("render group requires at least one member")
+    group_by = str(group_by or "").strip().lower()
+    if group_by not in {"none", "source", "channel"}:
+        raise ValueError(f"unsupported render grouping: {group_by!r}")
+    group_id = recipe_fingerprint(
+        params,
+        method,
+        group_identity={
+            "group_by": group_by,
+            "members": normalized_members,
+        },
+    )
+    if group_by == "source":
+        source_identity, group_identity, _channel = normalized_members[0]
+        readable = (
+            unicode_slug(Path(source_identity).stem, "source"),
+            unicode_slug(group_identity),
+        )
+    elif group_by == "channel":
+        readable = (unicode_slug(normalized_members[0][2], "channel"),)
+    else:
+        readable = ("group",)
+    stem = "__".join((
+        *readable,
+        unicode_slug(method, "method"),
+        unicode_slug(group_by, "group"),
+        group_id[:8],
+    ))
+    return GroupOutputIdentity(
+        group_id=group_id,
+        stem=stem,
+        members=normalized_members,
     )
 
 
@@ -586,10 +642,12 @@ __all__ = [
     "OutputRollbackIncomplete",
     "OutputReservation",
     "ReservationTokenInfo",
+    "GroupOutputIdentity",
     "TaskOutputIdentity",
     "atomic_write",
     "atomic_write_set",
     "build_task_output_identity",
+    "build_group_output_identity",
     "choose_output_paths",
     "inspect_output_reservation",
     "release_output_reservation",

@@ -197,6 +197,58 @@ def test_intersection_changes_emit_signal(qtbot):
     assert seen[-1] == frozenset({"sig"})
 
 
+def test_input_panel_emits_exact_common_and_partial_channel_universe(qtbot):
+    """Removing the public universe signal would leave Analysis stale."""
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel()
+    qtbot.addWidget(panel)
+    seen = []
+    panel.channelUniverseChanged.connect(
+        lambda common, partial: seen.append((common, partial))
+    )
+
+    panel._file_list.add_loaded_file(
+        "s1", "a.csv", frozenset({"shared", "only_a"}),
+    )
+    panel._file_list.add_loaded_file(
+        "s2", "b.csv", frozenset({"shared", "only_b"}),
+    )
+
+    assert seen[-1] == (
+        ("shared",),
+        {"only_a": "(1/2)", "only_b": "(1/2)"},
+    )
+
+
+def test_one_file_mutation_emits_one_channel_universe_change(qtbot):
+    """One FileList mutation must not refresh the same universe twice."""
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel()
+    qtbot.addWidget(panel)
+    seen = []
+    panel.channelUniverseChanged.connect(
+        lambda common, partial: seen.append((common, partial))
+    )
+
+    panel._file_list.add_loaded_file(
+        "s1", "a.csv", frozenset({"rpm", "shared"}),
+    )
+    assert seen == [(('rpm', 'shared'), {})]
+
+    panel._file_list.add_loaded_file(
+        "s2", "b.csv", frozenset({"shared", "temperature"}),
+    )
+    assert seen == [
+        (("rpm", "shared"), {}),
+        (
+            ("shared",),
+            {"rpm": "(1/2)", "temperature": "(1/2)"},
+        ),
+    ]
+
+
 def test_path_pending_to_loaded_transition(qtbot, tmp_path):
     """Disk-add: state should walk path_pending → probing → loaded
     once probe completes (spec §3.2 file state machine)."""

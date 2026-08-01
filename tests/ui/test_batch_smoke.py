@@ -138,6 +138,263 @@ def test_batch_sheet_time_filter_preset_round_trip(qtbot, tmp_path):
     assert got.params["filter"]["show_filtered"] is True
 
 
+def test_full_time_preset_with_sparse_params_resets_all_time_render_state(qtbot):
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet.apply_method("time")
+    form = sheet._analysis_panel._param_form
+    form.set_x_channel_candidates(("speed",), {})
+    sheet.apply_params({
+        "render_group_by": "source",
+        "render_layout": "subplot",
+        "x_source": "channel",
+        "x_channel": "speed",
+        "x_origin": "absolute",
+    })
+    assert form._pending_x_channel == "speed"
+
+    # Exercise both bits of transient channel state before the full recipe
+    # boundary.  A normalized preset with no sparse deviations represents all
+    # five canonical defaults, not an incremental patch.
+    form.set_x_channel_candidates(("rpm",), {"speed": "(1/2)"})
+    assert "speed" in form.x_channel_validation_message()
+
+    sheet.apply_preset(AnalysisPreset.free_config(
+        name="defaults",
+        method="time",
+        target_signals=(),
+        params={},
+    ))
+
+    assert form._w_render_group_by.currentData() == "none"
+    assert form._w_render_layout.currentData() == "overlay"
+    assert form._w_x_source.currentData() == "time"
+    assert form._w_x_channel.currentData() == ""
+    assert form._w_x_origin.currentData() == "zero"
+    assert form._pending_x_channel == ""
+    assert form.x_channel_validation_message() == ""
+    assert form.get_params() == {}
+
+
+def _time_file_data(
+    tmp_path, name, *, speed_unit="", speed_metadata_unit="",
+    channels=("target", "speed"),
+):
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.io import FileData
+
+    values = np.arange(8, dtype=float)
+    data = {"Time": values / 8.0}
+    for offset, channel in enumerate(channels, start=1):
+        data[channel] = values + offset
+    units = {"speed": speed_unit} if speed_unit else {}
+    metadata = (
+        {"speed": {"unit": speed_metadata_unit}}
+        if speed_metadata_unit else {}
+    )
+    return FileData(
+        tmp_path / name,
+        pd.DataFrame(data),
+        list(data),
+        units,
+        channel_metadata=metadata,
+    )
+
+
+def test_sheet_universe_wires_analysis_candidates_and_clears_stale_x(
+    qtbot, tmp_path,
+):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    first = _time_file_data(tmp_path, "one.csv", speed_unit="rpm")
+    second = _time_file_data(
+        tmp_path, "two.csv", channels=("target", "other"),
+    )
+    sheet = BatchSheet(None, files={"s1": first, "s2": second})
+    qtbot.addWidget(sheet)
+    sheet.apply_files(("s1",), ())
+    sheet.apply_method("time")
+    sheet.apply_params({"x_source": "channel", "x_channel": "speed"})
+
+    form = sheet._analysis_panel._param_form
+    assert form.get_params() == {
+        "x_source": "channel", "x_channel": "speed",
+    }
+
+    sheet.apply_files(("s1", "s2"), ())
+
+    partial_index = form._w_x_channel.findData("speed")
+    assert partial_index >= 0
+    assert form._w_x_channel.model().item(partial_index).isEnabled() is False
+    assert form.get_params() == {"x_source": "channel"}
+    assert "speed" in form.x_channel_validation_message()
+
+
+def test_sheet_time_x_preflight_uses_metadata_then_units_and_fails_mixed(
+    qtbot, tmp_path,
+):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    first = _time_file_data(
+        tmp_path, "one.csv", speed_unit="ignored", speed_metadata_unit="rpm",
+    )
+    second = _time_file_data(tmp_path, "two.csv", speed_unit="rpm")
+    sheet = BatchSheet(None, files={"s1": first, "s2": second})
+    qtbot.addWidget(sheet)
+    sheet.apply_files(("s1", "s2"), ())
+    sheet.apply_signals(("target",))
+    sheet.apply_method("time")
+    sheet.apply_params({"x_source": "channel", "x_channel": "speed"})
+
+    assert not any(
+        issue.code == "mixed_x_units" for issue in sheet.preflight_issues()
+    )
+    assert (
+        sheet._output_panel._axis_row_parts["x"]["label"].text()
+        == "speed (rpm)"
+    )
+
+    second_row = sheet._input_panel._file_list._rows["s2"]
+    second_row.units["speed"] = "deg"
+    sheet._input_panel._refresh_signal_universe()
+
+    issues = sheet.preflight_issues()
+    assert any(
+        issue.field == "x_channel" and issue.code == "mixed_x_units"
+        for issue in issues
+    )
+    assert sheet._output_panel._axis_row_parts["x"]["label"].text() == "speed"
+    assert "rpm" not in sheet._output_panel._axis_row_parts["x"]["label"].text()
+
+
+def test_sheet_time_x_empty_unit_is_a_real_cross_source_unit_fact(qtbot, tmp_path):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    first = _time_file_data(tmp_path, "one.csv")
+    second = _time_file_data(tmp_path, "two.csv", speed_unit="rpm")
+    sheet = BatchSheet(None, files={"s1": first, "s2": second})
+    qtbot.addWidget(sheet)
+    sheet.apply_files(("s1", "s2"), ())
+    sheet.apply_signals(("target",))
+    sheet.apply_method("time")
+    sheet.apply_params({"x_source": "channel", "x_channel": "speed"})
+
+    assert any(
+        issue.field == "x_channel" and issue.code == "mixed_x_units"
+        for issue in sheet.preflight_issues()
+    )
+    assert sheet._output_panel._axis_row_parts["x"]["label"].text() == "speed"
+
+    second_row = sheet._input_panel._file_list._rows["s2"]
+    second_row.units["speed"] = ""
+    sheet._input_panel._refresh_signal_universe()
+
+    assert not any(
+        issue.code == "mixed_x_units" for issue in sheet.preflight_issues()
+    )
+    assert sheet._output_panel._axis_row_parts["x"]["label"].text() == "speed"
+
+
+def test_sheet_channel_x_without_selection_has_field_issue(qtbot, tmp_path):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    source = _time_file_data(tmp_path, "one.csv", speed_unit="rpm")
+    sheet = BatchSheet(None, files={"s1": source})
+    qtbot.addWidget(sheet)
+    sheet.apply_files(("s1",), ())
+    sheet.apply_signals(("target",))
+    sheet.apply_method("time")
+    sheet.apply_params({"x_source": "channel"})
+
+    assert any(
+        issue.field == "x_channel" and issue.code == "required"
+        for issue in sheet.preflight_issues()
+    )
+
+
+def test_time_analysis_form_fits_288px_after_repeated_dependency_toggles(
+    qapp, qtbot,
+):
+    from pathlib import Path
+
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QScrollArea
+
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
+
+    old_stylesheet = qapp.styleSheet()
+    scroll = None
+    try:
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        panel = AnalysisPanel()
+        panel._param_form.set_x_channel_candidates(
+            ("engine_speed_channel_name_that_is_deliberately_very_long",), {}
+        )
+        panel.apply_method("time")
+        form = panel._param_form
+        long_channel = "engine_speed_channel_name_that_is_deliberately_very_long"
+        form._w_render_group_by.setCurrentIndex(
+            form._w_render_group_by.findData("source")
+        )
+        form._w_x_source.setCurrentIndex(
+            form._w_x_source.findData("channel")
+        )
+        form._w_x_channel.setCurrentIndex(
+            form._w_x_channel.findData(long_channel)
+        )
+        scroll = QScrollArea()
+        qtbot.addWidget(scroll)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(panel)
+        scroll.resize(288, 640)
+        scroll.show()
+        qtbot.wait(20)
+
+        def assert_visible_channel_geometry():
+            assert form._w_x_channel.isVisibleTo(panel) is True
+            assert form._w_x_channel.currentData() == long_channel
+            assert scroll.horizontalScrollBar().maximum() == 0
+            assert panel.minimumSizeHint().width() <= scroll.viewport().width()
+            for widget in form._widgets.values():
+                if widget.isVisibleTo(panel) and form._form.indexOf(widget) >= 0:
+                    right = widget.mapTo(panel, widget.rect().topRight()).x()
+                    assert right < panel.width()
+
+        assert_visible_channel_geometry()
+
+        for _ in range(2):
+            form._w_render_group_by.setCurrentIndex(
+                form._w_render_group_by.findData("none")
+            )
+            form._w_x_source.setCurrentIndex(
+                form._w_x_source.findData("time")
+            )
+            form._w_render_group_by.setCurrentIndex(
+                form._w_render_group_by.findData("source")
+            )
+            form._w_x_source.setCurrentIndex(
+                form._w_x_source.findData("channel")
+            )
+            form._w_x_channel.setCurrentIndex(
+                form._w_x_channel.findData(long_channel)
+            )
+        qtbot.wait(20)
+
+        assert_visible_channel_geometry()
+    finally:
+        if scroll is not None:
+            scroll.close()
+        qapp.setStyleSheet(old_stylesheet)
+
+
 @pytest.mark.parametrize(
     ("method", "params", "rpm_signal"),
     (

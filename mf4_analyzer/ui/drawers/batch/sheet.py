@@ -28,7 +28,7 @@ from ....batch import AnalysisPreset, BatchOutput, BatchRunner
 from ....batch_preset_io import (
     UnsupportedPresetVersion, load_preset_from_json, save_preset_to_json,
 )
-from ....batch_recipe import normalize_batch_params
+from ....batch_recipe import TIME_RENDER_DEFAULTS, normalize_batch_params
 from ....batch_validation import (
     ValidationIssue, validate_outputs, validate_recipe,
 )
@@ -242,6 +242,7 @@ class BatchSheet(QDialog):
             self._output_panel.apply_method_defaults
         )
         self._analysis_panel.methodChanged.connect(self._on_recipe_method_changed)
+        self._analysis_panel.paramsChanged.connect(self._sync_x_axis_context)
         self._analysis_panel.paramsChanged.connect(self._recompute_pipeline_status)
         self._analysis_panel.presetApplied.connect(
             self._on_builtin_analysis_preset
@@ -254,10 +255,15 @@ class BatchSheet(QDialog):
         self._task_list.artifactOpenRequested.connect(
             self._open_artifact_location
         )
+        self._input_panel.channelUniverseChanged.connect(
+            self._on_channel_universe_changed
+        )
 
         # Init-sync (per conditional-visibility-init-sync lesson): seed the
         # RPM row before show() so it doesn't flash visible.
         self._input_panel.set_method(self._analysis_panel.current_method())
+        self._input_panel._refresh_signal_universe()
+        self._sync_x_axis_context()
 
         # Init-sync — seed badges with the current default state.
         self._recompute_pipeline_status()
@@ -589,7 +595,16 @@ class BatchSheet(QDialog):
                 self.apply_signals(tuple(preset.target_signals))
 
             self.apply_method(method)
-            self.apply_params(params)
+            # ``apply_preset`` is a full-recipe boundary.  Canonical time
+            # recipes omit default-valued sparse fields, so materialize those
+            # defaults for the controls here.  ``apply_params`` itself remains
+            # incremental for built-in presets and other partial patches.
+            control_params = (
+                {**TIME_RENDER_DEFAULTS, **params}
+                if method == "time"
+                else params
+            )
+            self.apply_params(control_params)
             if "rpm_factor" in params:
                 self._input_panel.apply_rpm_factor(params["rpm_factor"])
             self._input_panel.apply_filter_params(params.get("filter"))
@@ -618,6 +633,45 @@ class BatchSheet(QDialog):
         if not self._applying_preset and method != self._recipe_method:
             self._base_params = normalize_batch_params(self._base_params, method)
         self._recipe_method = method
+        self._sync_x_axis_context()
+
+    def _on_channel_universe_changed(
+        self, common: tuple, partial: dict,
+    ) -> None:
+        self._analysis_panel._param_form.set_x_channel_candidates(
+            common, partial,
+        )
+        self._sync_x_axis_context()
+
+    def _x_channel_units(self, channel: str) -> tuple[str, ...]:
+        units: set[str] = set()
+        for row in self._input_panel._file_list.loaded_rows():
+            metadata = dict(getattr(row, "metadata", {}) or {})
+            channel_metadata = metadata.get("channel_metadata") or {}
+            facts = dict(channel_metadata.get(channel) or {})
+            unit = facts.get("unit") or dict(
+                getattr(row, "units", {}) or {}
+            ).get(channel, "")
+            clean = str(unit or "").strip()
+            # Missing/blank units are still source facts.  Dropping them would
+            # make ("", "rpm") look uniformly rpm and publish a false axis
+            # unit instead of rejecting the mixed-source recipe.
+            units.add(clean)
+        return tuple(sorted(units))
+
+    def _sync_x_axis_context(self, *_args) -> None:
+        if self.method() != "time":
+            return
+        params = self.params()
+        if str(params.get("x_source", "time")) != "channel":
+            self._output_panel.set_x_axis_context(label="Time", unit="s")
+            return
+        channel = str(params.get("x_channel") or "").strip()
+        units = self._x_channel_units(channel) if channel else ()
+        unit = units[0] if len(units) == 1 else ""
+        self._output_panel.set_x_axis_context(
+            label=channel or "X", unit=unit,
+        )
 
     def _control_params_snapshot(self, method: str | None = None) -> dict:
         method_key = str(method or self.method())
@@ -844,6 +898,17 @@ class BatchSheet(QDialog):
                 "rpm_channel", "missing_rpm_channel",
                 "阶次分析的通道转速模式需要 RPM 通道",
             ))
+        x_channel = str(params.get("x_channel") or "").strip()
+        if (
+            self.method() == "time"
+            and str(params.get("x_source", "time")) == "channel"
+            and x_channel
+            and len(self._x_channel_units(x_channel)) > 1
+        ):
+            issues.append(ValidationIssue(
+                "x_channel", "mixed_x_units",
+                "X channel units differ across loaded sources",
+            ))
         issues.extend(validate_outputs(self._output_panel.get_outputs()))
         return tuple(issues)
 
@@ -856,7 +921,9 @@ class BatchSheet(QDialog):
     # ------------------------------------------------------------------
     # W6: Run / cancel / lock-unlock
     # ------------------------------------------------------------------
-    def _build_dry_run_preview(self) -> list[tuple[str, str, str]]:
+    def _build_dry_run_preview(
+        self, preset: AnalysisPreset | None = None,
+    ) -> list[tuple[str, str, str]]:
         """Compute the dry-run task list from UI state ONLY.
 
         Spec §3.5 / W6 invariant: never call ``BatchRunner._expand_tasks``
@@ -868,7 +935,7 @@ class BatchSheet(QDialog):
         intersection; available-per-source lists each valid source/signal
         pair; exact-pair scope is preserved verbatim above.
         """
-        preset = self.get_preset()
+        preset = preset or self.get_preset()
         method = preset.method or ""
         signals = self.selected_signals()
         rows: list[tuple[str, str, str]] = []
@@ -945,9 +1012,19 @@ class BatchSheet(QDialog):
         # unlocks against None rather than presenting stale success/failure.
         self._last_result = None
 
-        # Build the dry-run preview from UI state (no disk loads).
-        tasks = self._build_dry_run_preview()
-        self._task_list.apply_dry_run(tasks, self._outputs_per_task())
+        runner = self._make_runner()
+        preset = self.get_preset()
+        output_dir = self.output_dir()
+        preview = runner.preview_outputs(preset, output_dir)
+
+        # Build rows from cached UI state; the visible output count comes
+        # from the runner's group-aware planner.
+        tasks = self._build_dry_run_preview(preset)
+        self._task_list.apply_dry_run(
+            tasks,
+            self._outputs_per_task(),
+            artifact_count=preview.artifact_count,
+        )
 
         # Synchronous lock: order matters.
         self._running = True
@@ -969,10 +1046,6 @@ class BatchSheet(QDialog):
         # store off ``self.parent()`` defensively (direct-construction
         # tests pass ``parent=None``, and any parent lacking the attribute
         # falls back to BatchRunner's no-kwargs factory-catalog default).
-        runner = self._make_runner()
-        preset = self.get_preset()
-        output_dir = self.output_dir()
-
         thread = BatchRunnerThread(
             runner,
             preset,

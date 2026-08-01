@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import importlib
 
 import pytest
 
+import mf4_analyzer.batch_output as batch_output
 from mf4_analyzer.batch_output import (
     OutputPublishRace,
     OutputRollbackIncomplete,
@@ -23,6 +25,146 @@ class _Source:
         self.filepath = filepath
         self.label_suffix = label_suffix
         self.source_metadata = {}
+
+
+def _group_members():
+    return (
+        ("/runs/a.mf4", "group-a", "speed"),
+        ("/runs/b.mf4", "group-b", "speed"),
+    )
+
+
+def test_group_identity_changes_when_one_member_source_changes():
+    first = batch_output.build_group_output_identity(
+        _group_members(), method="time",
+        params={"render_group_by": "channel"}, group_by="channel",
+    )
+    changed = batch_output.build_group_output_identity(
+        (
+            ("/archive/a.mf4", "group-a", "speed"),
+            ("/runs/b.mf4", "group-b", "speed"),
+        ),
+        method="time",
+        params={"render_group_by": "channel"},
+        group_by="channel",
+    )
+
+    assert first.group_id != changed.group_id
+    assert first.stem != changed.stem
+
+
+def test_group_identity_is_member_order_independent():
+    first = batch_output.build_group_output_identity(
+        _group_members(), method="time",
+        params={"render_group_by": "channel"}, group_by="channel",
+    )
+    reversed_members = batch_output.build_group_output_identity(
+        tuple(reversed(_group_members())), method="time",
+        params={"render_group_by": "channel"}, group_by="channel",
+    )
+
+    assert first == reversed_members
+    assert first.members == tuple(sorted(_group_members()))
+
+
+@pytest.mark.parametrize(
+    "changed_members",
+    (
+        (
+            ("/runs/a.mf4", "other-group", "speed"),
+            ("/runs/b.mf4", "group-b", "speed"),
+        ),
+        (
+            ("/runs/a.mf4", "group-a", "rpm"),
+            ("/runs/b.mf4", "group-b", "speed"),
+        ),
+    ),
+)
+def test_group_identity_uses_complete_member_identity(changed_members):
+    base = batch_output.build_group_output_identity(
+        _group_members(), method="time",
+        params={"render_group_by": "channel"}, group_by="channel",
+    )
+    changed = batch_output.build_group_output_identity(
+        changed_members, method="time",
+        params={"render_group_by": "channel"}, group_by="channel",
+    )
+
+    assert base.group_id != changed.group_id
+
+
+def test_group_render_tasks_orders_source_and_channel_groups_deterministically():
+    grouping = importlib.import_module("mf4_analyzer.batch_grouping")
+    tasks = (
+        grouping.RenderTask(
+            "source-b", "rpm",
+            batch_output.TaskOutputIdentity(
+                "b-rpm", "/runs/b.mf4", "group-b", "rpm", "b-rpm-stem",
+            ),
+        ),
+        grouping.RenderTask(
+            "source-a", "speed",
+            batch_output.TaskOutputIdentity(
+                "a-speed", "/runs/a.mf4", "group-a", "speed", "a-speed-stem",
+            ),
+        ),
+        grouping.RenderTask(
+            "source-b", "speed",
+            batch_output.TaskOutputIdentity(
+                "b-speed", "/runs/b.mf4", "group-b", "speed", "b-speed-stem",
+            ),
+        ),
+        grouping.RenderTask(
+            "source-a", "rpm",
+            batch_output.TaskOutputIdentity(
+                "a-rpm", "/runs/a.mf4", "group-a", "rpm", "a-rpm-stem",
+            ),
+        ),
+    )
+
+    source_groups = grouping.group_render_tasks(
+        tuple(reversed(tasks)),
+        {"render_group_by": "source", "render_layout": "subplot"},
+    )
+    channel_groups = grouping.group_render_tasks(
+        tasks, {"render_group_by": "channel"},
+    )
+    singleton_groups = grouping.group_render_tasks(tasks, {})
+
+    assert [
+        [member.identity.task_id for member in group.members]
+        for group in source_groups
+    ] == [["a-rpm", "a-speed"], ["b-rpm", "b-speed"]]
+    assert [group.layout for group in source_groups] == ["subplot", "subplot"]
+    assert [
+        [member.identity.task_id for member in group.members]
+        for group in channel_groups
+    ] == [["a-rpm", "b-rpm"], ["a-speed", "b-speed"]]
+    assert [group.identity.stem for group in singleton_groups] == [
+        "a-rpm-stem", "a-speed-stem", "b-rpm-stem", "b-speed-stem",
+    ]
+
+
+def test_default_time_render_params_preserve_task_identity(tmp_path):
+    source = _Source(tmp_path / "legacy.mf4", "default")
+    legacy = build_task_output_identity(
+        source, file_id=1, channel="speed", method="time", params={},
+    )
+    explicit_defaults = build_task_output_identity(
+        source,
+        file_id=1,
+        channel="speed",
+        method="time",
+        params={
+            "render_group_by": "none",
+            "render_layout": "overlay",
+            "x_source": "time",
+            "x_channel": "",
+            "x_origin": "zero",
+        },
+    )
+
+    assert explicit_defaults == legacy
 
 
 def test_unicode_slug_keeps_cjk_and_removes_only_path_unsafe_characters():

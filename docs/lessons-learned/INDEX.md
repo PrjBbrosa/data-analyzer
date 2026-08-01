@@ -118,6 +118,14 @@ lesson by default.
 | [Matplotlib Pruning Needs A Frozen Render Matrix](matplotlib-pruning-needs-frozen-render-matrix.md) | Changing PyInstaller Matplotlib collection/exclusions, `mpl-data` | See lesson |
 | [Batch Render Degradation Stops At The Probe](batch-render-degradation-stops-at-probe.md) | Changing batch image/PDF backend imports, effective output selection, | See lesson |
 | [Windows Popup Pixel Probes Need Topmost Host And Frame Geometry](pyqt-ui/2026-07-31-windows-popup-pixel-probes-need-topmost-host-and-frame-geometry.md) | Verifying a translucent, rounded Qt popup or tooltip on a real Windows desktop with `QScreen.grabWindow(0)`. | See lesson |
+| [Close Batch Spool Mmaps Before Cleanup](batch-spool-mmap-close-before-cleanup.md) | Changing batch series spooling, memory-mapped array loading, grouped | See lesson |
+| [Manifest Resume Requires Complete Source Facts](manifest-resume-requires-complete-source-facts.md) | Changing manifest validation, resume lookup, source provenance facts, | See lesson |
+| [Register Lazy Locators Before Group Identity](batch-register-lazy-locators-before-group-identity.md) | Changing lazy batch `source_paths`, locator registration, task/group | See lesson |
+| [Acceptance Evidence Must Prove Physical Artifacts](acceptance-evidence-rejects-artifact-aliases.md) | An acceptance harness claims exact artifact counts, grouping semantics, | See lesson |
+| [Batch UI Separates Sparse Defaults From Missing Facts](batch-ui-sparse-defaults-preserve-missing-facts.md) | Applying full batch recipes, incremental parameter patches, or | See lesson |
+| [Batch Preview Never Escalates Full-Cost Probes](batch-preview-never-escalates-full-cost-probes.md) | Resolving lazy source descriptors or output identities during a batch | See lesson |
+| [Batch Deferred Terminals Preserve Task Order](batch-deferred-terminals-preserve-task-order.md) | Deferring batch task terminal events or progress callbacks until a | See lesson |
+| [Batch Preview Probe Failure Stays Planning-Local](batch-preview-probe-failure-stays-planning-local.md) | Adding metadata-only source probing to a no-load preview that runs | See lesson |
 
 ## Selection Rules
 

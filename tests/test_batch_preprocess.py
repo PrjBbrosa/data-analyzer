@@ -219,3 +219,118 @@ def test_finite_cleanup_fails_when_fewer_than_two_aligned_samples_remain():
             {},
             rpm=[1000.0, np.nan, 1200.0],
         )
+
+
+def test_x_values_follow_time_range_and_joint_finite_mask():
+    result = preprocess_batch_signal(
+        [0.0, 10.0, 20.0, 30.0, np.nan, 50.0, 60.0],
+        [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        1.0,
+        {"time_range": [1.0, 5.0]},
+        x_values=[100.0, 101.0, np.nan, 103.0, 104.0, 105.0, 106.0],
+    )
+
+    np.testing.assert_allclose(result.time, [1.0, 3.0, 5.0])
+    np.testing.assert_allclose(result.signal, [10.0, 30.0, 50.0])
+    np.testing.assert_allclose(result.x_values, [101.0, 103.0, 105.0])
+    assert result.effective["after_time_range_samples"] == 5
+    assert result.effective["finite_samples_dropped"] == 2
+    assert result.effective["x_channel_aligned"] is True
+
+
+def test_x_values_follow_regularization_and_downsampling():
+    fs = 100.0
+    target_fs = 20.0
+    time = np.arange(400, dtype=float) / fs
+    signal = np.sin(2.0 * np.pi * 3.0 * time)
+    signal[201] = np.nan
+    x_values = (
+        100.0
+        + np.sin(2.0 * np.pi * 3.0 * time)
+        + np.sin(2.0 * np.pi * 35.0 * time)
+    )
+
+    result = preprocess_batch_signal(
+        signal,
+        time,
+        fs,
+        {
+            "time_preprocess": {
+                "sample_mode": "target_fs",
+                "target_fs": target_fs,
+            }
+        },
+        x_values=x_values,
+    )
+
+    # The comparison path is derived directly from the literal input and
+    # returned output coordinates.  It intentionally does not call either
+    # preprocessing helper under test.
+    kept = np.isfinite(signal)
+    naive_x = np.interp(result.time, time[kept], x_values[kept])
+    preserved = _tone_amplitude(result.x_values, target_fs, 3.0)
+    aliased = _tone_amplitude(result.x_values, target_fs, 5.0)
+    naive_alias = _tone_amplitude(naive_x, target_fs, 5.0)
+
+    np.testing.assert_allclose(
+        result.time,
+        np.arange(80, dtype=float) / target_fs,
+        atol=1e-12,
+    )
+    assert len(result.x_values) == len(result.time) == len(result.signal)
+    assert result.effective["sampling"]["anti_alias"]["regularized_input"] is True
+    assert preserved > 10.0 * aliased
+    assert aliased < 0.15 * naive_alias
+
+
+def test_x_values_do_not_receive_target_gain_mean_or_user_filter():
+    fs = 200.0
+    time = np.arange(400, dtype=float) / fs
+    signal = 3.0 + np.sin(2.0 * np.pi * 10.0 * time)
+    x_values = 50.0 + np.cos(2.0 * np.pi * 2.0 * time)
+
+    result = preprocess_batch_signal(
+        signal,
+        time,
+        fs,
+        {
+            "time_preprocess": {
+                "scale": 4.0,
+                "offset": 20.0,
+                "remove_mean": True,
+                "sample_mode": "original",
+            },
+            "filter": {
+                "enabled": True,
+                "spec": {"kind": "high", "order": 4, "cutoff": 20.0},
+            },
+        },
+        x_values=x_values,
+    )
+
+    np.testing.assert_allclose(result.x_values, x_values)
+    assert abs(float(np.mean(result.pre_filter_signal))) < 1e-12
+    assert not np.array_equal(result.signal, result.pre_filter_signal)
+
+
+def test_x_values_length_mismatch_fails_before_preprocessing():
+    with pytest.raises(ValueError, match="x_values.*same length"):
+        preprocess_batch_signal(
+            [1.0, 2.0, 3.0, 4.0],
+            [0.0, 0.1, 0.2, 0.3],
+            10.0,
+            {"time_range": [2.0, 1.0]},
+            x_values=[10.0, 20.0, 30.0],
+        )
+
+
+def test_default_preprocess_effective_facts_do_not_gain_x_key():
+    result = preprocess_batch_signal(
+        [1.0, 2.0, 3.0, 4.0],
+        [0.0, 0.1, 0.2, 0.3],
+        10.0,
+        {},
+    )
+
+    assert result.x_values is None
+    assert "x_channel_aligned" not in result.effective

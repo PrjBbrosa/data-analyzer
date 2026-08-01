@@ -5,6 +5,8 @@ The widget renders a collapsible header + body of per-task rows driven by
 view.
 """
 
+import pytest
+
 
 def test_apply_dry_run_renders_rows(qtbot):
     from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget
@@ -17,6 +19,29 @@ def test_apply_dry_run_renders_rows(qtbot):
     # Header (idle): "▾ 2 任务待执行 · 4 输出"
     assert "2 任务" in w.header_text()
     assert "4 输出" in w.header_text()
+
+
+@pytest.mark.parametrize("artifact_count", (8, 6))
+def test_apply_dry_run_uses_exact_optional_artifact_count(
+    qtbot, artifact_count,
+):
+    """Grouped previews change output count without collapsing task rows."""
+    from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget
+
+    w = TaskListWidget()
+    qtbot.addWidget(w)
+    tasks = [
+        (source, channel, "time")
+        for source in ("a.csv", "b.csv")
+        for channel in ("speed", "accel")
+    ]
+
+    w.apply_dry_run(
+        tasks, outputs_per_task=2, artifact_count=artifact_count,
+    )
+
+    assert w.row_count() == 4
+    assert str(artifact_count) in w.header_text()
 
 
 def test_on_event_updates_icons_and_progress(qtbot):

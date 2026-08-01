@@ -15,6 +15,8 @@ the initial state — required by
 """
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QFormLayout,
@@ -90,8 +92,8 @@ _WEIGHTINGS: tuple[str, ...] = ("None", "A")
 # removed ``order_rpm`` column.
 _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
     "time": (
-        "time_scale", "time_offset", "time_remove_mean", "sample_mode",
-        "target_fs", "decimation_factor",
+        "render_group_by", "render_layout", "x_source", "x_channel",
+        "x_origin",
     ),
     "fft": (
         "window", "nfft_mode", "nfft", "t_win_s", "overlap",
@@ -106,6 +108,16 @@ _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
         "rpm_mode", "manual_rpm", "samples_per_rev", "weighting",
     ),
 }
+
+
+def _set_form_row_visible(
+    form: QFormLayout, field_widget: QWidget, visible: bool,
+) -> None:
+    """Show or hide both halves of one Qt 5 form row."""
+    field_widget.setVisible(visible)
+    label = form.labelForField(field_widget)
+    if label is not None:
+        label.setVisible(visible)
 
 
 class DynamicParamForm(QWidget):
@@ -139,12 +151,11 @@ class DynamicParamForm(QWidget):
             "rpm_mode": "RPM 模式",
             "manual_rpm": "手动 RPM",
             "samples_per_rev": "每转样本",
-            "time_scale": "缩放",
-            "time_offset": "偏置",
-            "time_remove_mean": "去均值",
-            "sample_mode": "采样方式",
-            "target_fs": "目标 Fs",
-            "decimation_factor": "抽取倍数",
+            "render_group_by": "图片分组",
+            "render_layout": "图片布局",
+            "x_source": "X 轴来源",
+            "x_channel": "X 通道",
+            "x_origin": "时间原点",
         }
 
         self._widgets: dict[str, QWidget] = {}
@@ -278,49 +289,62 @@ class DynamicParamForm(QWidget):
         )
         self._widgets["samples_per_rev"] = self._w_samples_per_rev
 
-        self._w_time_scale = no_buttons(CompactDoubleSpinBox(self))
-        self._w_time_scale.setRange(-1e12, 1e12)
-        self._w_time_scale.setDecimals(6)
-        self._w_time_scale.setValue(1.0)
-        self._w_time_scale.valueChanged.connect(lambda *_: self.paramsChanged.emit())
-        self._widgets["time_scale"] = self._w_time_scale
-
-        self._w_time_offset = no_buttons(CompactDoubleSpinBox(self))
-        self._w_time_offset.setRange(-1e12, 1e12)
-        self._w_time_offset.setDecimals(6)
-        self._w_time_offset.setValue(0.0)
-        self._w_time_offset.valueChanged.connect(lambda *_: self.paramsChanged.emit())
-        self._widgets["time_offset"] = self._w_time_offset
-
-        self._w_time_remove_mean = QCheckBox(self)
-        self._w_time_remove_mean.toggled.connect(lambda *_: self.paramsChanged.emit())
-        self._widgets["time_remove_mean"] = self._w_time_remove_mean
-
-        self._w_sample_mode = QComboBox(self)
-        self._w_sample_mode.addItem("Original", "original")
-        self._w_sample_mode.addItem("Target Fs", "target_fs")
-        self._w_sample_mode.addItem("Decimate", "decimate")
-        self._w_sample_mode.currentIndexChanged.connect(self._sync_sample_mode)
-        self._w_sample_mode.currentIndexChanged.connect(
+        self._w_render_group_by = QComboBox(self)
+        self._w_render_group_by.addItem("每任务", "none")
+        self._w_render_group_by.addItem("按数据源", "source")
+        self._w_render_group_by.addItem("按通道", "channel")
+        self._w_render_group_by.currentIndexChanged.connect(
+            self._sync_render_group_by
+        )
+        self._w_render_group_by.currentIndexChanged.connect(
             lambda *_: self.paramsChanged.emit()
         )
-        self._widgets["sample_mode"] = self._w_sample_mode
+        self._widgets["render_group_by"] = self._w_render_group_by
 
-        self._w_target_fs = no_buttons(CompactDoubleSpinBox(self))
-        self._w_target_fs.setRange(0.001, 1e9)
-        self._w_target_fs.setDecimals(3)
-        self._w_target_fs.setValue(1000.0)
-        self._w_target_fs.setSuffix(" Hz")
-        self._w_target_fs.valueChanged.connect(lambda *_: self.paramsChanged.emit())
-        self._widgets["target_fs"] = self._w_target_fs
-
-        self._w_decimation_factor = no_buttons(QSpinBox(self))
-        self._w_decimation_factor.setRange(1, 1 << 20)
-        self._w_decimation_factor.setValue(1)
-        self._w_decimation_factor.valueChanged.connect(
+        self._w_render_layout = QComboBox(self)
+        self._w_render_layout.addItem("叠加", "overlay")
+        self._w_render_layout.addItem("子图", "subplot")
+        self._w_render_layout.currentIndexChanged.connect(
             lambda *_: self.paramsChanged.emit()
         )
-        self._widgets["decimation_factor"] = self._w_decimation_factor
+        self._widgets["render_layout"] = self._w_render_layout
+
+        self._w_x_source = QComboBox(self)
+        self._w_x_source.addItem("时间", "time")
+        self._w_x_source.addItem("通道", "channel")
+        self._w_x_source.currentIndexChanged.connect(self._sync_x_source)
+        self._w_x_source.currentIndexChanged.connect(
+            lambda *_: self.paramsChanged.emit()
+        )
+        self._widgets["x_source"] = self._w_x_source
+
+        self._w_x_channel = QComboBox(self)
+        self._w_x_channel.addItem("请选择", "")
+        self._w_x_channel.currentIndexChanged.connect(
+            self._on_x_channel_changed
+        )
+        self._widgets["x_channel"] = self._w_x_channel
+        self._x_channel_candidates_initialized = False
+        self._pending_x_channel = ""
+        self._x_channel_validation = ""
+
+        self._w_x_origin = QComboBox(self)
+        self._w_x_origin.addItem("从零开始", "zero")
+        self._w_x_origin.addItem("绝对时间", "absolute")
+        self._w_x_origin.currentIndexChanged.connect(
+            lambda *_: self.paramsChanged.emit()
+        )
+        self._widgets["x_origin"] = self._w_x_origin
+
+        for combo in (
+            self._w_render_group_by,
+            self._w_render_layout,
+            self._w_x_source,
+            self._w_x_channel,
+            self._w_x_origin,
+        ):
+            combo.setMinimumWidth(0)
+            combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
         # Track current method so set_method works idempotently.
         self._current = "fft"
@@ -328,7 +352,8 @@ class DynamicParamForm(QWidget):
         self._sync_nfft_mode()
         self._sync_avg_mode()
         self._sync_rpm_mode()
-        self._sync_sample_mode()
+        self._sync_render_group_by()
+        self._sync_x_source()
 
     # ------------------------------------------------------------------
     def set_method(self, method: str) -> None:
@@ -356,29 +381,108 @@ class DynamicParamForm(QWidget):
     def _sync_rpm_mode(self, *_args) -> None:
         self._w_manual_rpm.setEnabled(self._w_rpm_mode.currentData() == "manual")
 
-    def _sync_sample_mode(self, *_args) -> None:
-        mode = self._w_sample_mode.currentData()
-        self._w_target_fs.setEnabled(mode == "target_fs")
-        self._w_decimation_factor.setEnabled(mode == "decimate")
+    def _sync_render_group_by(self, *_args) -> None:
+        self._w_render_layout.setEnabled(
+            self._w_render_group_by.currentData() != "none"
+        )
+
+    def _sync_x_source(self, *_args) -> None:
+        if self._current != "time":
+            _set_form_row_visible(self._form, self._w_x_channel, False)
+            _set_form_row_visible(self._form, self._w_x_origin, False)
+            return
+        use_channel = self._w_x_source.currentData() == "channel"
+        _set_form_row_visible(self._form, self._w_x_channel, use_channel)
+        _set_form_row_visible(self._form, self._w_x_origin, not use_channel)
+
+    def _on_x_channel_changed(self, *_args) -> None:
+        selected = str(self._w_x_channel.currentData() or "")
+        if selected:
+            self._pending_x_channel = selected
+            self._x_channel_validation = ""
+        else:
+            self._pending_x_channel = ""
+            if (
+                self._current == "time"
+                and self._w_x_source.currentData() == "channel"
+            ):
+                self._x_channel_validation = "请选择 X 通道"
+        self.paramsChanged.emit()
+
+    def x_channel_validation_message(self) -> str:
+        return self._x_channel_validation
+
+    def set_x_channel_candidates(
+        self, common: Sequence[str], partial: Mapping[str, str],
+    ) -> None:
+        """Replace the X-channel universe without selecting partial rows."""
+        selected = str(
+            self._w_x_channel.currentData() or self._pending_x_channel or ""
+        )
+        common_names = tuple(dict.fromkeys(
+            str(name) for name in common if str(name)
+        ))
+        partial_items = tuple(
+            (str(name), str(suffix))
+            for name, suffix in partial.items()
+            if str(name) and str(name) not in common_names
+        )
+
+        previous = self._w_x_channel.blockSignals(True)
+        try:
+            self._w_x_channel.clear()
+            self._w_x_channel.addItem("请选择", "")
+            for name in common_names:
+                self._w_x_channel.addItem(name, name)
+            for name, suffix in partial_items:
+                self._w_x_channel.addItem(f"{name} {suffix}".strip(), name)
+                item = self._w_x_channel.model().item(
+                    self._w_x_channel.count() - 1
+                )
+                if item is not None:
+                    item.setEnabled(False)
+
+            index = self._w_x_channel.findData(selected)
+            valid = bool(selected) and selected in common_names
+            self._w_x_channel.setCurrentIndex(index if valid else 0)
+        finally:
+            self._w_x_channel.blockSignals(previous)
+
+        self._x_channel_candidates_initialized = True
+        if selected and not valid:
+            self._pending_x_channel = ""
+            self._x_channel_validation = (
+                f"X 通道 {selected} 不是所有已加载数据源的共同通道"
+            )
+            self.paramsChanged.emit()
+        elif valid:
+            self._pending_x_channel = selected
+            self._x_channel_validation = ""
 
     def get_params(self) -> dict:
         if self._current == "time":
-            return {
-                "time_preprocess": {
-                    "scale": float(self._w_time_scale.value()),
-                    "offset": float(self._w_time_offset.value()),
-                    "remove_mean": bool(self._w_time_remove_mean.isChecked()),
-                    "sample_mode": str(
-                        self._w_sample_mode.currentData() or "original"
-                    ),
-                    "target_fs": (
-                        float(self._w_target_fs.value())
-                        if self._w_sample_mode.currentData() == "target_fs"
-                        else None
-                    ),
-                    "decimation_factor": int(self._w_decimation_factor.value()),
-                },
-            }
+            params: dict = {}
+            group_by = str(self._w_render_group_by.currentData() or "none")
+            if group_by != "none":
+                params["render_group_by"] = group_by
+                layout = str(self._w_render_layout.currentData() or "overlay")
+                if layout != "overlay":
+                    params["render_layout"] = layout
+            x_source = str(self._w_x_source.currentData() or "time")
+            if x_source != "time":
+                params["x_source"] = x_source
+                channel = str(
+                    self._w_x_channel.currentData()
+                    or self._pending_x_channel
+                    or ""
+                )
+                if channel:
+                    params["x_channel"] = channel
+            else:
+                origin = str(self._w_x_origin.currentData() or "zero")
+                if origin != "zero":
+                    params["x_origin"] = origin
+            return params
         params: dict = {}
         if "window" in self.visible_field_names():
             params["window"] = self._w_window.currentText()
@@ -419,36 +523,31 @@ class DynamicParamForm(QWidget):
     def apply_params(self, params: dict) -> None:
         if not params:
             return
-        time_preprocess = params.get("time_preprocess")
-        if isinstance(time_preprocess, dict):
-            for key, widget in (
-                ("scale", self._w_time_scale),
-                ("offset", self._w_time_offset),
-                ("target_fs", self._w_target_fs),
-            ):
-                if key in time_preprocess and time_preprocess[key] is not None:
-                    try:
-                        widget.setValue(float(time_preprocess[key]))
-                    except (TypeError, ValueError):
-                        pass
-            if "remove_mean" in time_preprocess:
-                self._w_time_remove_mean.setChecked(
-                    bool(time_preprocess["remove_mean"])
-                )
-            if "sample_mode" in time_preprocess:
-                index = self._w_sample_mode.findData(
-                    str(time_preprocess["sample_mode"])
-                )
+        for key, combo in (
+            ("render_group_by", self._w_render_group_by),
+            ("render_layout", self._w_render_layout),
+            ("x_source", self._w_x_source),
+            ("x_origin", self._w_x_origin),
+        ):
+            if key in params:
+                index = combo.findData(str(params[key]))
                 if index >= 0:
-                    self._w_sample_mode.setCurrentIndex(index)
-            if "decimation_factor" in time_preprocess:
-                try:
-                    self._w_decimation_factor.setValue(
-                        int(time_preprocess["decimation_factor"])
-                    )
-                except (TypeError, ValueError):
-                    pass
-            self._sync_sample_mode()
+                    combo.setCurrentIndex(index)
+        if "x_channel" in params:
+            channel = str(params.get("x_channel") or "")
+            index = self._w_x_channel.findData(channel)
+            item = self._w_x_channel.model().item(index) if index >= 0 else None
+            if index >= 0 and item is not None and item.isEnabled():
+                self._w_x_channel.setCurrentIndex(index)
+                self._pending_x_channel = channel
+                self._x_channel_validation = ""
+            elif channel and not self._x_channel_candidates_initialized:
+                self._pending_x_channel = channel
+            elif channel:
+                self._pending_x_channel = ""
+                self._x_channel_validation = (
+                    f"X 通道 {channel} 不是所有已加载数据源的共同通道"
+                )
         # window (string)
         if "window" in params:
             txt = str(params["window"])
@@ -535,6 +634,8 @@ class DynamicParamForm(QWidget):
                 pass
         self._sync_avg_mode()
         self._sync_rpm_mode()
+        self._sync_render_group_by()
+        self._sync_x_source()
 
     def set_weighting_options(self, options) -> None:
         values = [str(item) for item in (options or ()) if str(item)]
@@ -587,4 +688,5 @@ class DynamicParamForm(QWidget):
         self._sync_nfft_mode()
         self._sync_avg_mode()
         self._sync_rpm_mode()
-        self._sync_sample_mode()
+        self._sync_render_group_by()
+        self._sync_x_source()

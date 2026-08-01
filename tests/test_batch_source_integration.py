@@ -48,6 +48,8 @@ def _loaded(source_id, path, group_id, channels, *, label_suffix=""):
 
 
 class _Registry:
+    probe_cost = "metadata"
+
     def __init__(self, sources_by_path):
         self.sources_by_path = {
             str(path): tuple(sources)
