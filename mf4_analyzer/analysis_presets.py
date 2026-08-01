@@ -14,7 +14,7 @@ from typing import Any
 from .db_reference import normalize_unit
 
 
-SUPPORTED_ANALYSIS_METHODS = ("fft", "fft_time", "order_time", "time")
+SUPPORTED_ANALYSIS_METHODS = ("fft", "fft_time", "order_time")
 BUILTIN_PRESET_KEYS = ("torque", "vibration", "transient")
 BUILTIN_PRESET_DISPLAY = MappingProxyType({
     "torque": "频率",
@@ -113,25 +113,9 @@ _PATCHES: dict[str, dict[str, dict[str, Any]]] = {
             "amplitude_mode": "Amplitude dB",
         },
     },
-    "time": {
-        "torque": {},
-        "vibration": {},
-        "transient": {
-            "time_preprocess": {
-                "scale": 1.0,
-                "offset": 0.0,
-                "remove_mean": False,
-                "sample_mode": "original",
-                "target_fs": None,
-                "decimation_factor": 1,
-            },
-        },
-    },
 }
 
-_ENABLED = {
-    "time": {"torque": False, "vibration": False, "transient": True},
-}
+_ENABLED: dict[str, dict[str, bool]] = {}
 _ALIASES = {
     "fft_time": {
         "diagnostic": "vibration",

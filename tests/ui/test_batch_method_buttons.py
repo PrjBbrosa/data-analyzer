@@ -155,7 +155,7 @@ def test_batch_method_buttons_include_time_and_user_labels(qtbot):
     assert group._buttons["order_time"].text() == "阶次"
 
 
-def test_batch_time_method_exposes_preprocess_fields(qtbot):
+def test_batch_time_method_exposes_exact_sparse_render_fields(qtbot):
     from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
 
     form = DynamicParamForm()
@@ -163,10 +163,19 @@ def test_batch_time_method_exposes_preprocess_fields(qtbot):
 
     form.set_method("time")
 
-    assert form.visible_field_names() == {
-        "time_scale", "time_offset", "time_remove_mean", "sample_mode",
-        "target_fs", "decimation_factor",
+    expected = {
+        "render_group_by", "render_layout", "x_source", "x_channel",
+        "x_origin",
     }
+    assert form._form.rowCount() == 5
+    assert {
+        name for name in expected if form._form.indexOf(form._widgets[name]) >= 0
+    } == expected
+    assert form.visible_field_names() == expected - {"x_channel"}
+    assert form._w_render_layout.isEnabled() is False
+    assert form._w_x_channel.isHidden() is True
+    assert form._w_x_origin.isHidden() is False
+    assert form.get_params() == {}
 
 
 @pytest.mark.parametrize(
@@ -190,11 +199,8 @@ def test_batch_time_method_exposes_preprocess_fields(qtbot):
             "samples_per_rev": 1024, "weighting": "A",
         }),
         ("time", {
-            "time_preprocess": {
-                "scale": 2.5, "offset": -1.25, "remove_mean": True,
-                "sample_mode": "target_fs", "target_fs": 200.0,
-                "decimation_factor": 3,
-            },
+            "render_group_by": "source", "render_layout": "subplot",
+            "x_source": "channel", "x_channel": "speed",
         }),
     ),
 )
@@ -204,9 +210,171 @@ def test_phase2_all_method_controls_round_trip(qtbot, method, params):
     form = DynamicParamForm()
     qtbot.addWidget(form)
     form.set_method(method)
+    if method == "time":
+        form.set_x_channel_candidates(("speed",), {})
     form.apply_params(params)
 
     assert form.get_params() == params
+
+
+def test_time_params_return_only_active_semantic_deviations_and_reset(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.set_x_channel_candidates(("speed",), {})
+
+    form.apply_params({
+        "render_group_by": "source",
+        "render_layout": "subplot",
+        "x_source": "channel",
+        "x_channel": "speed",
+        "x_origin": "absolute",
+    })
+    assert form.get_params() == {
+        "render_group_by": "source",
+        "render_layout": "subplot",
+        "x_source": "channel",
+        "x_channel": "speed",
+    }
+
+    form.apply_params({
+        "render_group_by": "none",
+        "x_source": "time",
+        "x_origin": "zero",
+    })
+    assert form.get_params() == {}
+
+
+def test_time_params_omit_inactive_layout_channel_and_origin(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.set_x_channel_candidates(("speed",), {})
+
+    form.apply_params({
+        "render_group_by": "none",
+        "render_layout": "subplot",
+        "x_source": "time",
+        "x_channel": "speed",
+        "x_origin": "absolute",
+    })
+    assert form.get_params() == {"x_origin": "absolute"}
+
+    form.apply_params({"x_source": "channel", "x_channel": "speed"})
+    assert form.get_params() == {
+        "x_source": "channel",
+        "x_channel": "speed",
+    }
+
+
+def test_time_form_accepts_and_ignores_legacy_preprocess(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+
+    form.apply_params({
+        "time_preprocess": {
+            "scale": 2.5,
+            "offset": -1.25,
+            "remove_mean": True,
+            "sample_mode": "target_fs",
+            "target_fs": 200.0,
+            "decimation_factor": 3,
+        },
+    })
+
+    assert form.get_params() == {}
+
+
+def test_time_x_channel_candidates_show_partial_disabled_and_keep_common(qtbot):
+    from PyQt5.QtCore import Qt
+
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.set_x_channel_candidates(("speed", "rpm"), {"temperature": "(1/2)"})
+
+    common_index = form._w_x_channel.findData("speed")
+    partial_index = form._w_x_channel.findData("temperature")
+    assert common_index >= 0
+    assert partial_index >= 0
+    assert form._w_x_channel.itemText(partial_index) == "temperature (1/2)"
+    assert form._w_x_channel.model().item(common_index).flags() & Qt.ItemIsEnabled
+    assert not (
+        form._w_x_channel.model().item(partial_index).flags() & Qt.ItemIsEnabled
+    )
+
+    form.apply_params({"x_source": "channel", "x_channel": "speed"})
+    form.set_x_channel_candidates(("rpm", "speed"), {"temperature": "(1/2)"})
+    assert form.get_params() == {
+        "x_source": "channel",
+        "x_channel": "speed",
+    }
+    assert form.x_channel_validation_message() == ""
+
+
+def test_time_pending_noncommon_x_channel_clears_with_one_change_signal(qtbot):
+    from PyQt5.QtTest import QSignalSpy
+
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.apply_params({"x_source": "channel", "x_channel": "stale_speed"})
+    assert form.get_params() == {
+        "x_source": "channel",
+        "x_channel": "stale_speed",
+    }
+
+    spy = QSignalSpy(form.paramsChanged)
+    form.set_x_channel_candidates(("rpm",), {"stale_speed": "(1/2)"})
+
+    assert len(spy) == 1
+    assert form.get_params() == {"x_source": "channel"}
+    assert "stale_speed" in form.x_channel_validation_message()
+
+
+def test_time_current_x_channel_becoming_stale_emits_once(qtbot):
+    from PyQt5.QtTest import QSignalSpy
+
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.set_x_channel_candidates(("speed", "rpm"), {})
+    form.apply_params({"x_source": "channel", "x_channel": "speed"})
+
+    spy = QSignalSpy(form.paramsChanged)
+    form.set_x_channel_candidates(("rpm",), {"speed": "(1/2)"})
+
+    assert len(spy) == 1
+    assert form.get_params() == {"x_source": "channel"}
+    assert "speed" in form.x_channel_validation_message()
+
+
+def test_time_dependency_rows_resync_after_method_round_trip(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.apply_params({"render_group_by": "source", "x_source": "channel"})
+    form.set_method("fft")
+    form.set_method("time")
+
+    assert form._w_render_layout.isEnabled() is True
+    assert form._w_x_channel.isHidden() is False
+    assert form._w_x_origin.isHidden() is True
 
 
 def test_batch_builtin_preset_bar_uses_shared_provider_and_partial_apply(qtbot):
@@ -231,16 +399,22 @@ def test_batch_builtin_preset_bar_uses_shared_provider_and_partial_apply(qtbot):
     assert params["window"] == "kaiser"
 
 
-def test_batch_time_preset_disables_frequency_and_balance(qtbot):
+def test_batch_time_hides_complete_preset_host_and_fft_restores_it(qtbot):
     from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
 
     panel = AnalysisPanel()
     qtbot.addWidget(panel)
     panel.set_method("time")
 
-    assert panel._preset_buttons["torque"].isEnabled() is False
-    assert panel._preset_buttons["vibration"].isEnabled() is False
-    assert panel._preset_buttons["transient"].isEnabled() is True
+    assert panel._preset_host.isHidden() is True
+    assert panel._preset_title.parentWidget() is panel._preset_host
+    assert all(
+        button.parentWidget() is panel._preset_host
+        for button in panel._preset_buttons.values()
+    )
+
+    panel.set_method("fft")
+    assert panel._preset_host.isHidden() is False
 
 
 def test_batch_method_and_preset_selectors_use_distinct_control_types(qtbot):
