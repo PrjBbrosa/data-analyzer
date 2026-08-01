@@ -3762,6 +3762,66 @@ def test_default_lazy_image_only_missing_backend_probes_before_source_load(
     assert events == ["probe"]
 
 
+@pytest.mark.parametrize(
+    ("group_by", "expected_group_count", "expected_image_count"),
+    [("source", 1, 1), ("channel", 2, 2)],
+)
+def test_lazy_legacy_pattern_rebuilds_group_plan_after_probe(
+    tmp_path, monkeypatch, group_by, expected_group_count,
+    expected_image_count,
+):
+    """Catch post-probe pattern expansion retaining the empty group plan."""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_fd(
+        tmp_path,
+        f"lazy_legacy_{group_by}",
+        channels=("sig", "aux", "ignored"),
+        idx=0,
+    )
+    source_path = str(fd.filepath)
+    loader_calls = 0
+
+    def loader(path):
+        nonlocal loader_calls
+        assert str(path) == source_path
+        loader_calls += 1
+        return fd
+
+    preset = AnalysisPreset.free_config(
+        name=f"lazy legacy pattern by {group_by}",
+        method="time",
+        signal_pattern=r"^(sig|aux)$",
+        params={"render_group_by": group_by, "render_layout": "overlay"},
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+    preset = replace(preset, source_paths=(source_path,))
+    monkeypatch.setattr(
+        BatchRunner, "_write_image", staticmethod(_task6_fake_image),
+    )
+
+    result = BatchRunner({}, loader=loader).run(preset, tmp_path / "out")
+
+    manifest = load_batch_manifest(result.manifest_path)
+    groups = manifest.get("render_groups", [])
+    task_ids = {entry["task_id"] for entry in manifest["entries"]}
+    member_task_ids = {
+        member["task_id"]
+        for group in groups
+        for member in group["members"]
+    }
+    assert result.status == "done"
+    assert len(task_ids) == 2
+    assert (
+        loader_calls,
+        len(result.items),
+        len(groups),
+        len(list((tmp_path / "out").glob("*.png"))),
+    ) == (1, 2, expected_group_count, expected_image_count)
+    assert {item.task_id for item in result.items} == task_ids
+    assert member_task_ids == task_ids
+
+
 def test_grouped_interleaved_pairs_regroup_by_canonical_physical_source(
     tmp_path, monkeypatch,
 ):

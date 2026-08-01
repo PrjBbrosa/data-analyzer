@@ -826,50 +826,11 @@ class BatchRunner:
                 for source_key, channel in tasks
                 if (source_key, channel, preset.method) in retry_scope
             ]
-        render_tasks = []
-        for source_key, channel in tasks:
-            fd = self._known_file_data(source_key)
-            if (
-                fd is None
-                and self._physical_for_source(source_key) is None
-                and isinstance(source_key, (str, Path))
-                and Path(str(source_key)).suffix
-            ):
-                self._register_source_locator(source_key, source_key)
-            if fd is not None:
-                identity = self._build_task_identity(
-                    fd,
-                    file_id=source_key,
-                    channel=channel,
-                    method=preset.method,
-                    params=requested_params,
-                )
-            else:
-                identity = self._build_unresolved_task_identity(
-                    source_key,
-                    channel=channel,
-                    method=preset.method,
-                    params=requested_params,
-                )
-            render_tasks.append(RenderTask(source_key, channel, identity))
-        if explicit_grouping:
-            tasks = sorted(
-                tasks,
-                key=lambda task: self._grouped_task_sort_key(task[0]),
-            )
-            render_task_by_key = {
-                (task.source_key, task.channel): task
-                for task in render_tasks
-            }
-            render_tasks = [
-                render_task_by_key[(source_key, channel)]
-                for source_key, channel in tasks
-            ]
-        render_groups = (
-            group_render_tasks(render_tasks, requested_params)
-            if explicit_grouping and 'image' in self._required_artifacts(
-                preset.outputs
-            ) else ()
+        tasks, render_tasks, render_groups = self._build_run_plan(
+            tasks,
+            preset=preset,
+            requested_params=requested_params,
+            explicit_grouping=explicit_grouping,
         )
 
         try:
@@ -942,6 +903,24 @@ class BatchRunner:
                 return finish_result(
                     'blocked', blocked=['no matching batch tasks'],
                 )
+            if retry_scope is not None:
+                tasks = [
+                    (source_key, channel)
+                    for source_key, channel in tasks
+                    if (source_key, channel, preset.method) in retry_scope
+                ]
+                if not tasks:
+                    for physical_key in tuple(self._disk_cache):
+                        self._evict_physical(physical_key)
+                    return finish_result(
+                        'blocked', blocked=['no matching batch tasks'],
+                    )
+            tasks, render_tasks, render_groups = self._build_run_plan(
+                tasks,
+                preset=preset,
+                requested_params=requested_params,
+                explicit_grouping=explicit_grouping,
+            )
 
         items: list[BatchItemResult] = []
         blocked: list[str] = []
@@ -1620,6 +1599,59 @@ class BatchRunner:
             else f'live:{source_key!r}'
         )
         return (physical,)
+
+    def _build_run_plan(
+        self,
+        tasks,
+        *,
+        preset,
+        requested_params,
+        explicit_grouping,
+    ):
+        """Build one complete canonical task and render-group plan."""
+
+        planned_tasks = list(tasks)
+        for source_key, _channel in planned_tasks:
+            fd = self._known_file_data(source_key)
+            if (
+                fd is None
+                and self._physical_for_source(source_key) is None
+                and isinstance(source_key, (str, Path))
+                and Path(str(source_key)).suffix
+            ):
+                self._register_source_locator(source_key, source_key)
+        if explicit_grouping:
+            planned_tasks.sort(
+                key=lambda task: self._grouped_task_sort_key(task[0]),
+            )
+
+        render_tasks = []
+        for source_key, channel in planned_tasks:
+            fd = self._known_file_data(source_key)
+            if fd is not None:
+                identity = self._build_task_identity(
+                    fd,
+                    file_id=source_key,
+                    channel=channel,
+                    method=preset.method,
+                    params=requested_params,
+                )
+            else:
+                identity = self._build_unresolved_task_identity(
+                    source_key,
+                    channel=channel,
+                    method=preset.method,
+                    params=requested_params,
+                )
+            render_tasks.append(RenderTask(source_key, channel, identity))
+
+        render_groups = (
+            group_render_tasks(render_tasks, requested_params)
+            if explicit_grouping and 'image' in self._required_artifacts(
+                preset.outputs
+            ) else ()
+        )
+        return planned_tasks, render_tasks, render_groups
 
     def _register_source_locator(self, source_id, path) -> None:
         physical_key = self._physical_cache_key(path)
