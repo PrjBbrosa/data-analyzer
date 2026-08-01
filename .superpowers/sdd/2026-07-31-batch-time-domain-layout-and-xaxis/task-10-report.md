@@ -240,3 +240,40 @@ successful Full/Lite builds used Matplotlib 3.11.1 and already retained the
 same five-font set required by the corrected contract. Therefore their exe and
 12-output frozen smoke evidence remain valid; no long package rebuild was
 needed for this compatibility-only expansion.
+
+## Review Fix Round 2: Acceptance Evidence Integrity
+
+Review found that the acceptance inspector counted artifact facts without
+proving that they named distinct in-mode files, and that member linkage alone
+did not prove the requested grouping dimension. Tests mutate manifests from
+real `BatchRunner` executions, preserving otherwise valid artifact facts and
+member/source linkage.
+
+- RED: `5 failed, 1 passed in 10.31s`. The old inspector accepted a duplicated
+  data path, a duplicated grouped-image path, an artifact outside the mode
+  directory, and source/channel groups rebuilt using the opposite dimension.
+- GREEN: the acceptance test file completed as `7 passed in 13.15s`.
+- Combined acceptance, Matplotlib contract, and frozen-smoke gate completed as
+  `17 passed in 94.73s`.
+- A standalone acceptance CLI run exited 0 with `status=success` and exactly 26
+  unique, complete paths matching every file below the generated run root.
+
+The inspector now resolves every artifact path, requires four distinct CSVs
+and the expected distinct PNG count in the manifest directory, checks the
+exact two-source by two-channel task matrix, and proves each two-member group
+has one source or one channel as requested while covering the exact dimension
+set.
+
+Resume evidence is now taken from the new manifest, not only the runner item
+list. The new manifest is fully re-inspected with four exact `resumed` entry
+statuses and two `done` render groups, including artifact checksums and member
+semantics. The four data artifact paths and fact dictionaries must equal their
+pre-resume values; CSV bytes and mtimes remain unchanged; the undeleted PNG
+retains bytes and mtime; the deleted PNG is recreated and checksum-verified;
+and the channel directory retains exactly its original four CSV and two PNG
+paths with no auto-numbered aliases.
+
+This source-runtime acceptance strengthening does not change packaged runtime
+code. The Full/Lite executables and their successful 12-output frozen smoke
+evidence therefore remain valid, and the corrected font contract continues to
+preserve the five-file Matplotlib 3.11 tree used by those builds.

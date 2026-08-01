@@ -100,25 +100,61 @@ def _verified_artifact_path(facts: object, expected_format: str) -> Path:
     return path
 
 
-def _inspect_mode(result, group_by: str) -> tuple[dict[str, object], list[Path]]:
+def _inspect_mode(
+    result,
+    group_by: str,
+    *,
+    expected_entry_status: str = "done",
+    expected_source_identities: set[str] | None = None,
+) -> tuple[dict[str, object], list[Path]]:
     if result.status != "done" or result.blocked or result.manifest_path is None:
         raise RuntimeError(
             f"{group_by} run failed: status={result.status}; blocked={result.blocked}"
         )
     manifest_path = Path(result.manifest_path).resolve()
+    manifest_directory = manifest_path.parent
     manifest = load_batch_manifest(manifest_path)
     entries = manifest["entries"]
     groups = manifest.get("render_groups", [])
-    if len(entries) != 4 or any(entry.get("status") != "done" for entry in entries):
-        raise RuntimeError(f"{group_by} did not publish four done tasks")
+    if len(entries) != 4 or any(
+        entry.get("status") != expected_entry_status for entry in entries
+    ):
+        raise RuntimeError(
+            f"{group_by} did not publish four {expected_entry_status} tasks"
+        )
 
     entry_by_id = {entry["task_id"]: entry for entry in entries}
     if len(entry_by_id) != 4:
         raise RuntimeError(f"{group_by} task identities are not unique")
+    actual_source_identities = {
+        str(entry["source"]["identity"]) for entry in entries
+    }
+    expected_sources = (
+        actual_source_identities
+        if expected_source_identities is None
+        else set(expected_source_identities)
+    )
+    expected_tasks = {
+        (source_identity, channel)
+        for source_identity in expected_sources
+        for channel in _CHANNELS
+    }
+    actual_tasks = {
+        (str(entry["source"]["identity"]), str(entry["channel"]))
+        for entry in entries
+    }
+    if actual_tasks != expected_tasks:
+        raise RuntimeError(f"{group_by} task source/channel coverage is not exact")
     data_paths = [
         _verified_artifact_path(entry["artifacts"].get("data"), "csv")
         for entry in entries
     ]
+    if len(set(data_paths)) != len(data_paths):
+        raise RuntimeError(f"{group_by} data artifact paths are not unique")
+    if any(path.parent != manifest_directory for path in data_paths):
+        raise RuntimeError(
+            f"{group_by} data artifact outside manifest directory"
+        )
     if group_by == "none":
         if groups or "render_groups" in manifest:
             raise RuntimeError("none mode unexpectedly wrote render groups")
@@ -133,23 +169,46 @@ def _inspect_mode(result, group_by: str) -> tuple[dict[str, object], list[Path]]
             for group in groups
         ]
         linked_ids = []
+        observed_group_keys: set[str] = set()
         linkage_ok = True
         for group in groups:
             if group.get("status") != "done" or group.get("group_by") != group_by:
                 linkage_ok = False
                 break
-            for member in group.get("members", []):
+            members = group.get("members", [])
+            if len(members) != 2:
+                raise RuntimeError(f"{group_by} render-group semantics are invalid")
+            grouped_entries = []
+            for member in members:
                 task_id = member.get("task_id")
                 linked_ids.append(task_id)
                 entry = entry_by_id.get(task_id)
+                grouped_entries.append(entry)
                 member_source = member.get("source") or {}
                 entry_source = (entry or {}).get("source") or {}
                 if entry is None or any(
                     member_source.get(field) != entry_source.get(field)
-                    for field in ("identity", "size", "mtime_ns")
+                    for field in ("identity", "path", "size", "mtime_ns")
                 ):
                     linkage_ok = False
+            if not linkage_ok:
+                break
+            if group_by == "source":
+                group_keys = {
+                    str(entry["source"]["identity"])
+                    for entry in grouped_entries
+                }
+            else:
+                group_keys = {str(entry["channel"]) for entry in grouped_entries}
+            if len(group_keys) != 1:
+                raise RuntimeError(f"{group_by} render-group semantics are invalid")
+            observed_group_keys.update(group_keys)
         linkage_ok = linkage_ok and sorted(linked_ids) == sorted(entry_by_id)
+        expected_group_keys = (
+            expected_sources if group_by == "source" else set(_CHANNELS)
+        )
+        if observed_group_keys != expected_group_keys:
+            raise RuntimeError(f"{group_by} render-group semantics are invalid")
     if not linkage_ok:
         raise RuntimeError(f"{group_by} manifest member linkage is incomplete")
 
@@ -159,6 +218,12 @@ def _inspect_mode(result, group_by: str) -> tuple[dict[str, object], list[Path]]
         raise RuntimeError(f"{group_by} artifact count mismatch")
     if len(groups) != expected_groups:
         raise RuntimeError(f"{group_by} render-group count mismatch")
+    if len(set(image_paths)) != len(image_paths):
+        raise RuntimeError(f"{group_by} image artifact paths are not unique")
+    if any(path.parent != manifest_directory for path in image_paths):
+        raise RuntimeError(
+            f"{group_by} image artifact outside manifest directory"
+        )
     summary = {
         "task_count": len(entries),
         "data_count": len(data_paths),
@@ -173,6 +238,30 @@ def _snapshot(paths: list[Path]) -> dict[Path, tuple[bytes, int]]:
     return {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in paths}
 
 
+def _validated_generated_paths(
+    paths: list[Path],
+    *,
+    expected_count: int,
+    expected_root: Path | None = None,
+) -> list[str]:
+    resolved = [str(path.resolve()) for path in paths]
+    if len(resolved) != len(set(resolved)):
+        raise RuntimeError("acceptance generated paths contain aliases")
+    if len(resolved) != expected_count:
+        raise RuntimeError(
+            f"acceptance generated path count mismatch: {len(resolved)}"
+        )
+    if expected_root is not None:
+        actual_files = {
+            str(path.resolve())
+            for path in expected_root.rglob("*")
+            if path.is_file()
+        }
+        if set(resolved) != actual_files:
+            raise RuntimeError("acceptance generated paths are not complete")
+    return sorted(resolved)
+
+
 def run(output_directory: Path, result_json: Path) -> int:
     """Run all grouping modes and persist machine-readable acceptance evidence."""
 
@@ -181,6 +270,9 @@ def run(output_directory: Path, result_json: Path) -> int:
     run_root = output_directory / uuid.uuid4().hex
     try:
         files = _make_sources(run_root / "sources")
+        expected_source_identities = {
+            str(Path(fd.filepath).resolve()) for fd in files.values()
+        }
         modes: dict[str, dict[str, object]] = {}
         generated: list[Path] = [Path(fd.filepath).resolve() for fd in files.values()]
         manifests: dict[str, str] = {}
@@ -191,7 +283,11 @@ def run(output_directory: Path, result_json: Path) -> int:
         for group_by in ("none", "source", "channel"):
             mode_directory = run_root / group_by
             result = BatchRunner(files).run(_preset(group_by), mode_directory)
-            summary, paths = _inspect_mode(result, group_by)
+            summary, paths = _inspect_mode(
+                result,
+                group_by,
+                expected_source_identities=expected_source_identities,
+            )
             modes[group_by] = summary
             generated.extend(paths)
             manifests[group_by] = str(Path(result.manifest_path).resolve())
@@ -211,6 +307,20 @@ def run(output_directory: Path, result_json: Path) -> int:
             raise RuntimeError("channel grouping did not produce a resumable image")
         csv_before = _snapshot(channel_data_paths)
         deleted_image = channel_image_paths[0]
+        healthy_image = channel_image_paths[1]
+        healthy_image_before = _snapshot([healthy_image])
+        channel_directory = deleted_image.parent
+        channel_csv_files_before = {
+            path.resolve() for path in channel_directory.glob("*.csv")
+        }
+        channel_png_files_before = {
+            path.resolve() for path in channel_directory.glob("*.png")
+        }
+        channel_manifest_before = load_batch_manifest(channel_result.manifest_path)
+        data_facts_before = {
+            entry["task_id"]: dict(entry["artifacts"]["data"])
+            for entry in channel_manifest_before["entries"]
+        }
         deleted_image.unlink()
         resumed = BatchRunner(files).run(
             _preset("channel", resume=True),
@@ -221,7 +331,28 @@ def run(output_directory: Path, result_json: Path) -> int:
             raise RuntimeError(
                 f"channel resume failed: status={resumed.status}; blocked={resumed.blocked}"
             )
+        resumed_summary, _ = _inspect_mode(
+            resumed,
+            "channel",
+            expected_entry_status="resumed",
+            expected_source_identities=expected_source_identities,
+        )
+        resumed_manifest_payload = load_batch_manifest(resumed.manifest_path)
+        resumed_data_facts = {
+            entry["task_id"]: dict(entry["artifacts"]["data"])
+            for entry in resumed_manifest_payload["entries"]
+        }
+        resumed_data_paths = {
+            Path(facts["path"]).resolve() for facts in resumed_data_facts.values()
+        }
         csv_after = _snapshot(channel_data_paths)
+        healthy_image_after = _snapshot([healthy_image])
+        channel_csv_files_after = {
+            path.resolve() for path in channel_directory.glob("*.csv")
+        }
+        channel_png_files_after = {
+            path.resolve() for path in channel_directory.glob("*.png")
+        }
         resume_facts = {
             "csv_bytes_unchanged": all(
                 csv_after[path][0] == before[0]
@@ -234,21 +365,54 @@ def run(output_directory: Path, result_json: Path) -> int:
             "deleted_image_recreated": (
                 deleted_image.is_file() and deleted_image.stat().st_size > 0
             ),
-            "resumed_task_count": sum(
-                item.status == "resumed" for item in resumed.items
+            "healthy_image_bytes_unchanged": (
+                healthy_image_after[healthy_image][0]
+                == healthy_image_before[healthy_image][0]
             ),
+            "healthy_image_mtime_unchanged": (
+                healthy_image_after[healthy_image][1]
+                == healthy_image_before[healthy_image][1]
+            ),
+            "data_artifact_facts_unchanged": resumed_data_facts == data_facts_before,
+            "data_artifact_paths_unchanged": (
+                resumed_data_paths == set(channel_data_paths)
+            ),
+            "channel_csv_set_unchanged": (
+                channel_csv_files_after == channel_csv_files_before
+            ),
+            "channel_png_set_unchanged": (
+                channel_png_files_after == channel_png_files_before
+            ),
+            "resumed_entry_statuses": {
+                "resumed": sum(
+                    entry.get("status") == "resumed"
+                    for entry in resumed_manifest_payload["entries"]
+                )
+            },
+            "resumed_manifest_inspected": resumed_summary == modes["channel"],
         }
         if resume_facts != {
             "csv_bytes_unchanged": True,
             "csv_mtimes_unchanged": True,
             "deleted_image_recreated": True,
-            "resumed_task_count": 4,
+            "healthy_image_bytes_unchanged": True,
+            "healthy_image_mtime_unchanged": True,
+            "data_artifact_facts_unchanged": True,
+            "data_artifact_paths_unchanged": True,
+            "channel_csv_set_unchanged": True,
+            "channel_png_set_unchanged": True,
+            "resumed_entry_statuses": {"resumed": 4},
+            "resumed_manifest_inspected": True,
         }:
             raise RuntimeError(f"channel resume evidence failed: {resume_facts}")
         resumed_manifest = Path(resumed.manifest_path).resolve()
-        generated.extend((deleted_image, resumed_manifest))
+        generated.append(resumed_manifest)
         manifests["channel_resume"] = str(resumed_manifest)
-        generated_paths = sorted({str(path.resolve()) for path in generated})
+        generated_paths = _validated_generated_paths(
+            generated,
+            expected_count=26,
+            expected_root=run_root,
+        )
         evidence: dict[str, object] = {
             "status": "success",
             "source_count": len(files),
