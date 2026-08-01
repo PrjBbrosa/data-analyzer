@@ -2,7 +2,7 @@
 id: batch-register-lazy-locators-before-group-identity
 status: active
 owners: [codex]
-keywords: [batch, lazy-loading, source-paths, locator, identity, manifest, grouping, planning]
+keywords: [batch, lazy-loading, source-paths, locator, identity, manifest, resume, grouping, planning]
 paths: [mf4_analyzer/batch.py, mf4_analyzer/batch_grouping.py]
 checks: [git diff --check]
 tests: [tests/test_batch_runner.py]
@@ -11,23 +11,25 @@ tests: [tests/test_batch_runner.py]
 # Register Lazy Locators Before Group Identity
 
 Trigger: Changing lazy batch `source_paths`, locator registration, pattern
-expansion, task/group planning, source-major loading, or manifest member
-linkage.
+expansion, task/group planning, manifest resume, source-major loading, or
+manifest member linkage.
 
-Past failure: Explicit groups were first planned before lazy physical locators
-were registered, so group and task IDs used different source identities. A
-later probe-order fix then re-enumerated lazy pattern tasks after the renderer
-probe but replaced only the task list; stale empty `render_groups` made an
-explicit grouped run silently fall back to per-task images.
+Past failure: Planning before locator registration split group and task IDs.
+Later, post-probe lazy expansion replaced only the task list and left stale
+empty groups. A zero-load resume shortcut then trusted any nonempty old task
+subset, silently omitting newly added paths or pattern-matching channels.
 
-Rule: Register and canonicalize every known lazy locator before identity
-planning. Treat task enumeration and every derived value—canonical ordering,
-task output identities, render tasks, and render groups—as one atomic planning
-operation. Whenever lazy pattern expansion replaces the task list, rebuild the
-entire plan; never patch one derived collection in place.
+Rule: Canonicalize known lazy locators before identity planning. Treat task
+enumeration and every derivative—ordering, task identities, render tasks, and
+render groups—as one atomic plan. Zero-load manifest task-universe recovery
+also requires a complete execution-scope proof: exact canonical source paths,
+exact pattern, full path coverage, and unchanged strict source facts. If any
+proof is missing, load and expand the complete current scope, then apply exact
+artifact recovery to the resulting tasks/groups; do not disable safe artifact
+reuse or trust the old subset.
 
-Verification: Run the real injected-loader source-major and lazy-pattern
-grouping tests in `tests/test_batch_runner.py`. Assert one load per physical
-source, exact manifest task/member linkage, and the expected source/channel
-group image and journal counts after post-probe expansion; then run
-`git diff --check`.
+Verification: Run real-loader source-major, lazy-pattern grouping, and lazy
+scope-proof resume tests in `tests/test_batch_runner.py`. Cover same-scope zero
+load, old manifest, path add/remove, pattern expansion, changed source stats
+with a new channel, exact member linkage, and preservation of independently
+verified healthy artifacts; then run `git diff --check`.
