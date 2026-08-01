@@ -4146,11 +4146,13 @@ def test_grouped_resume_fixed_design_matrix_preserves_ineligible_artifacts(
     ]
 
 
-def _task7_lazy_pattern_preset(*, group_by="source"):
+def _task7_lazy_pattern_preset(
+    *, group_by="source", pattern=r"^(sig|aux)$",
+):
     preset = AnalysisPreset.free_config(
         name="task 7 lazy legacy recovery",
         method="time",
-        signal_pattern=r"^(sig|aux)$",
+        signal_pattern=pattern,
         params={"render_group_by": group_by, "render_layout": "overlay"},
         outputs=BatchOutput(
             export_data=True,
@@ -4160,6 +4162,20 @@ def _task7_lazy_pattern_preset(*, group_by="source"):
         ),
     )
     return preset
+
+
+def _task7_assert_group_member_linkage(manifest):
+    task_ids = {entry["task_id"] for entry in manifest["entries"]}
+    member_ids = {
+        member["task_id"]
+        for group in manifest["render_groups"]
+        for member in group["members"]
+    }
+    assert member_ids == task_ids
+    assert len(manifest["render_groups"]) == len({
+        group["artifact"]["path"]
+        for group in manifest["render_groups"]
+    })
 
 
 def test_lazy_pattern_complete_group_resume_never_calls_real_loader(
@@ -4183,6 +4199,12 @@ def test_lazy_pattern_complete_group_resume_never_calls_real_loader(
     output_dir = tmp_path / "out"
     first = BatchRunner({}, loader=loader).run(preset, output_dir)
     first_manifest = _task7_manifest(first.manifest_path)
+    expected_path = str(Path(source_path).resolve(strict=False))
+    assert first_manifest["normalized_recipe"].get("execution_scope") == {
+        "mode": "lazy_pattern",
+        "source_paths": [expected_path],
+        "signal_pattern": r"^(sig|aux)$",
+    }
     data_before = {
         item.task_id: _task7_artifact_snapshot(item.data_path)
         for item in first.items
@@ -4209,6 +4231,274 @@ def test_lazy_pattern_complete_group_resume_never_calls_real_loader(
         member["task_id"]
         for member in first_manifest["render_groups"][0]["members"]
     ]
+
+
+def test_lazy_pattern_added_source_path_forces_complete_fresh_expansion(
+    tmp_path, monkeypatch,
+):
+    """Catch a prior one-path task subset impersonating a two-path scope."""
+    first_fd = _make_fd(tmp_path, "scope_path_a", channels=("sig",), idx=0)
+    second_fd = _make_fd(tmp_path, "scope_path_b", channels=("sig",), idx=1)
+    files = {
+        str(first_fd.filepath): first_fd,
+        str(second_fd.filepath): second_fd,
+    }
+    calls = {path: 0 for path in files}
+
+    def loader(path):
+        key = str(path)
+        calls[key] += 1
+        return files[key]
+
+    first_preset = replace(
+        _task7_lazy_pattern_preset(pattern=r"^sig$"),
+        source_paths=(str(first_fd.filepath),),
+    )
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({}, loader=loader).run(first_preset, output_dir)
+    first_manifest = _task7_manifest(first.manifest_path)
+    first_data_before = _task7_artifact_snapshot(first.items[0].data_path)
+    first_group_path = Path(
+        first_manifest["render_groups"][0]["artifact"]["path"]
+    )
+    first_group_before = _task7_artifact_snapshot(first_group_path)
+    calls = {path: 0 for path in files}
+    expanded_preset = replace(
+        first_preset, source_paths=tuple(files),
+    )
+
+    second = BatchRunner({}, loader=loader).run(
+        expanded_preset, output_dir, resume_manifest=first.manifest_path,
+    )
+    second_manifest = _task7_manifest(second.manifest_path)
+
+    assert calls == {path: 1 for path in files}
+    assert len(second.items) == 2
+    assert len(second_manifest["render_groups"]) == 2
+    assert len(list(output_dir.glob("*.png"))) == 2
+    retained = next(
+        item for item in second.items
+        if item.file_id == str(first_fd.filepath)
+    )
+    assert retained.status == "resumed"
+    assert _task7_artifact_snapshot(retained.data_path) == first_data_before
+    assert _task7_artifact_snapshot(first_group_path) == first_group_before
+    assert first_group_path in {
+        Path(group["artifact"]["path"])
+        for group in second_manifest["render_groups"]
+    }
+    _task7_assert_group_member_linkage(second_manifest)
+    assert (
+        second_manifest["recipe_fingerprint"]
+        == first_manifest["recipe_fingerprint"]
+    )
+
+
+def test_lazy_pattern_removed_source_path_forces_current_scope_expansion(
+    tmp_path, monkeypatch,
+):
+    """Catch removed paths surviving through prior manifest task entries."""
+    files = {}
+    for index, name in enumerate(("scope_remove_a", "scope_remove_b")):
+        fd = _make_fd(tmp_path, name, channels=("sig",), idx=index)
+        files[str(fd.filepath)] = fd
+    calls = {path: 0 for path in files}
+
+    def loader(path):
+        key = str(path)
+        calls[key] += 1
+        return files[key]
+
+    first_preset = replace(
+        _task7_lazy_pattern_preset(pattern=r"^sig$"),
+        source_paths=tuple(files),
+    )
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({}, loader=loader).run(first_preset, output_dir)
+    retained_path = tuple(files)[0]
+    calls = {path: 0 for path in files}
+    reduced_preset = replace(first_preset, source_paths=(retained_path,))
+
+    second = BatchRunner({}, loader=loader).run(
+        reduced_preset, output_dir, resume_manifest=first.manifest_path,
+    )
+    second_manifest = _task7_manifest(second.manifest_path)
+
+    assert calls == {
+        retained_path: 1,
+        tuple(files)[1]: 0,
+    }
+    assert len(second.items) == 1
+    assert len(second_manifest["render_groups"]) == 1
+    _task7_assert_group_member_linkage(second_manifest)
+
+
+def test_lazy_pattern_expansion_forces_load_and_discovers_new_channel(
+    tmp_path, monkeypatch,
+):
+    """Catch an old narrower pattern silently defining the current task scope."""
+    fd = _make_fd(tmp_path, "scope_pattern", channels=("sig", "aux"), idx=0)
+    source_path = str(fd.filepath)
+    calls = 0
+
+    def loader(path):
+        nonlocal calls
+        calls += 1
+        assert str(path) == source_path
+        return fd
+
+    first_preset = replace(
+        _task7_lazy_pattern_preset(pattern=r"^sig$"),
+        source_paths=(source_path,),
+    )
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({}, loader=loader).run(first_preset, output_dir)
+    first_manifest = _task7_manifest(first.manifest_path)
+    calls = 0
+    expanded_preset = replace(
+        first_preset, signal_pattern=r"^(sig|aux)$",
+    )
+
+    second = BatchRunner({}, loader=loader).run(
+        expanded_preset, output_dir, resume_manifest=first.manifest_path,
+    )
+    second_manifest = _task7_manifest(second.manifest_path)
+
+    assert calls == 1
+    assert {item.signal for item in second.items} == {"sig", "aux"}
+    assert len(second_manifest["render_groups"]) == 1
+    assert len(second_manifest["render_groups"][0]["members"]) == 2
+    _task7_assert_group_member_linkage(second_manifest)
+    assert (
+        second_manifest["recipe_fingerprint"]
+        == first_manifest["recipe_fingerprint"]
+    )
+
+
+def test_lazy_pattern_changed_stat_reloads_and_discovers_new_matching_channel(
+    tmp_path, monkeypatch,
+):
+    """Catch changed-source recovery retaining an obsolete prior task subset."""
+    initial = _make_fd(tmp_path, "scope_changed", channels=("sig",), idx=0)
+    source_path = str(initial.filepath)
+    current = initial
+    calls = 0
+
+    def loader(path):
+        nonlocal calls
+        calls += 1
+        assert str(path) == source_path
+        return current
+
+    preset = replace(
+        _task7_lazy_pattern_preset(pattern=r"^sig"),
+        source_paths=(source_path,),
+    )
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({}, loader=loader).run(preset, output_dir)
+    first_manifest = _task7_manifest(first.manifest_path)
+    old_data_path = Path(first.items[0].data_path)
+    old_data_before = _task7_artifact_snapshot(old_data_path)
+    current = _make_fd(
+        tmp_path, "scope_changed", channels=("sig", "sig_new"), idx=0,
+    )
+    _task7_set_mtime(current.filepath, 9_000_000_000)
+    calls = 0
+
+    second = BatchRunner({}, loader=loader).run(
+        preset, output_dir, resume_manifest=first.manifest_path,
+    )
+    second_manifest = _task7_manifest(second.manifest_path)
+
+    assert calls == 1
+    assert {item.signal for item in second.items} == {"sig", "sig_new"}
+    assert _task7_artifact_snapshot(old_data_path) != old_data_before
+    assert len(second_manifest["render_groups"]) == 1
+    assert len(second_manifest["render_groups"][0]["members"]) == 2
+    _task7_assert_group_member_linkage(second_manifest)
+
+
+def test_lazy_pattern_old_manifest_without_scope_proof_fails_closed_to_load(
+    tmp_path, monkeypatch,
+):
+    """Catch pre-proof manifests being trusted as a complete task universe."""
+    fd = _make_fd(tmp_path, "scope_old_manifest", channels=("sig",), idx=0)
+    source_path = str(fd.filepath)
+    calls = 0
+
+    def loader(path):
+        nonlocal calls
+        calls += 1
+        assert str(path) == source_path
+        return fd
+
+    preset = replace(
+        _task7_lazy_pattern_preset(pattern=r"^sig$"),
+        source_paths=(source_path,),
+    )
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({}, loader=loader).run(preset, output_dir)
+
+    def remove_scope(payload):
+        payload["normalized_recipe"].pop("execution_scope", None)
+
+    old_manifest = _task7_rewrite_manifest(first.manifest_path, remove_scope)
+    calls = 0
+    second = BatchRunner({}, loader=loader).run(
+        preset, output_dir, resume_manifest=old_manifest,
+    )
+
+    assert calls == 1
+    assert len(second.items) == 1
+    _task7_assert_group_member_linkage(_task7_manifest(second.manifest_path))
+
+
+def test_lazy_pattern_manifest_missing_current_path_tasks_falls_back_to_load(
+    tmp_path, monkeypatch,
+):
+    """Catch complete scope metadata masking omitted task/source facts."""
+    files = {}
+    for index, name in enumerate(("scope_omit_a", "scope_omit_b")):
+        fd = _make_fd(tmp_path, name, channels=("sig",), idx=index)
+        files[str(fd.filepath)] = fd
+    calls = {path: 0 for path in files}
+
+    def loader(path):
+        key = str(path)
+        calls[key] += 1
+        return files[key]
+
+    preset = replace(
+        _task7_lazy_pattern_preset(pattern=r"^sig$"),
+        source_paths=tuple(files),
+    )
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(_task6_fake_image))
+    output_dir = tmp_path / "out"
+    first = BatchRunner({}, loader=loader).run(preset, output_dir)
+
+    def omit_second_path(payload):
+        omitted_source_id = payload["entries"][1]["source_id"]
+        payload["entries"] = [
+            entry for entry in payload["entries"]
+            if entry["source_id"] != omitted_source_id
+        ]
+
+    incomplete = _task7_rewrite_manifest(first.manifest_path, omit_second_path)
+    calls = {path: 0 for path in files}
+    second = BatchRunner({}, loader=loader).run(
+        preset, output_dir, resume_manifest=incomplete,
+    )
+    second_manifest = _task7_manifest(second.manifest_path)
+
+    assert calls == {path: 1 for path in files}
+    assert len(second.items) == 2
+    assert len(second_manifest["render_groups"]) == 2
+    _task7_assert_group_member_linkage(second_manifest)
 
 
 def test_lazy_pattern_missing_group_image_loads_once_and_keeps_prior_group_plan(

@@ -435,6 +435,29 @@ class BatchRunner:
                 if hasattr(outputs, field_name)
             }
 
+    @staticmethod
+    def _lazy_pattern_execution_scope(preset) -> dict[str, Any] | None:
+        """Return the complete portable proof for a lazy pattern task scope."""
+
+        source_paths = tuple(getattr(preset, 'source_paths', ()) or ())
+        if (
+            getattr(preset, 'source', '') == 'current_single'
+            or not source_paths
+            or tuple(getattr(preset, 'target_pairs', ()) or ())
+            or tuple(getattr(preset, 'target_signals', ()) or ())
+        ):
+            return None
+        return {
+            'mode': 'lazy_pattern',
+            'source_paths': [
+                str(Path(path).expanduser().resolve(strict=False))
+                for path in source_paths
+            ],
+            'signal_pattern': str(
+                getattr(preset, 'signal_pattern', '') or ''
+            ).strip(),
+        }
+
     def preview_outputs(self, preset, output_dir) -> BatchOutputPreview:
         """Return UI-safe output counts without loading unresolved sources."""
 
@@ -575,16 +598,20 @@ class BatchRunner:
         manifest_errors: list[str] = []
         if bool(getattr(preset.outputs, 'write_manifest', True)):
             try:
+                normalized_recipe = {
+                    'method': preset.method,
+                    'params': requested_params,
+                    'rpm_channel': preset.rpm_channel,
+                    'rpm_signal': preset.rpm_signal,
+                    'outputs': output_settings,
+                }
+                execution_scope = self._lazy_pattern_execution_scope(preset)
+                if execution_scope is not None:
+                    normalized_recipe['execution_scope'] = execution_scope
                 recorder = BatchManifestRecorder(
                     output_dir,
                     preset_name=preset.name,
-                    normalized_recipe={
-                        'method': preset.method,
-                        'params': requested_params,
-                        'rpm_channel': preset.rpm_channel,
-                        'rpm_signal': preset.rpm_signal,
-                        'outputs': output_settings,
-                    },
+                    normalized_recipe=normalized_recipe,
                     recipe_fingerprint=recipe_id,
                     requested_outputs=output_settings,
                 )
@@ -2008,11 +2035,15 @@ class BatchRunner:
 
         source_paths = tuple(getattr(preset, 'source_paths', ()) or ())
         pattern = str(getattr(preset, 'signal_pattern', '') or '').strip()
+        current_scope = self._lazy_pattern_execution_scope(preset)
         if (
             manifest is None
             or manifest.get('recipe_fingerprint') != recipe_id
             or not source_paths
-            or not pattern
+            or current_scope is None
+            or (manifest.get('normalized_recipe') or {}).get(
+                'execution_scope'
+            ) != current_scope
         ):
             return []
         allowed_paths = {
@@ -2020,6 +2051,7 @@ class BatchRunner:
         }
         recovered = []
         seen = set()
+        covered_paths = set()
         for entry in manifest.get('entries', ()):
             if entry.get('method') != preset.method:
                 continue
@@ -2036,19 +2068,17 @@ class BatchRunner:
             canonical_path = canonical_source_path(source_path)
             if canonical_path not in allowed_paths:
                 return []
+            current_identity = str(
+                Path(allowed_paths[canonical_path]).expanduser().resolve(
+                    strict=False,
+                )
+            )
             current_source = source_file_facts(
                 allowed_paths[canonical_path],
-                source_identity=str(source.get('identity') or ''),
+                source_identity=current_identity,
             )
             if not self._strict_source_facts_match(source, current_source):
-                # A changed stat still belongs to the prior task scope.  Its
-                # recovery decision will require compute/write after planning.
-                if not (
-                    isinstance(source.get('identity'), str)
-                    and source.get('identity')
-                    and source.get('identity') == current_source.get('identity')
-                ):
-                    return []
+                return []
             self._register_source_locator(source_id, allowed_paths[canonical_path])
             group_identity = str(source.get('group_identity') or 'default')
             self._source_group_identity_hints[source_id] = group_identity
@@ -2068,6 +2098,9 @@ class BatchRunner:
             if task not in seen:
                 seen.add(task)
                 recovered.append(task)
+            covered_paths.add(canonical_path)
+        if covered_paths != set(allowed_paths):
+            return []
         return recovered
 
     def _resumable_group_data_entry(
