@@ -6,12 +6,12 @@
 - Parity page size: 1920 × 1080 px at 144 DPI
 - Integration matrix: 14 cases × white/transparent/dark × 1920×1080/3840×2160
 - Qt platform: `offscreen` (Qt 5.15.14, pyqtgraph 0.14.0)
-- Commit base: `f6a0d10d8dd6e10e3d3ab1afdbf65432d4183490`
+- Acceptance commit: `b0facae7d435fef3b9d1953e7f399096c3535b36`
 - Source-state SHA-256: `982940684662362296db88033e3708227e07b229f1985644be553ad7892e50d6`
 - Machine-readable record: [evidence.json](evidence.json)
 
-The source-state digest binds the uncommitted Batch 4 Qt facade, producer contract,
-four-kind renderer, tests, and parity tool in addition to the base commit. Each
+The source-state digest binds the committed Batch 4 Qt facade, producer contract,
+four-kind renderer, tests, and parity tool. Each
 heatmap case records the full display matrix, exact LUT SHA-256 plus frozen
 samples, levels, QRectF, four matrix-corner values, live-geometry cell-centre
 pixels, labels, warnings, full/crop hashes, viewport, and machine assertions.
