@@ -479,3 +479,96 @@
   `lesson_required: False`. No Batch or requirements 1–3 source was touched.
 - Remaining acceptance: foreground macOS TraceLab interaction and visual check
   with real unequal-length files; offscreen Qt evidence is not a substitute.
+
+## 2026-08-02 — Batch Compact UI Redesign
+
+- User authorized implementation on a new branch, following the approved
+  compact-UI Spec/Plan.
+- Loaded the HTML operation-parity, rendered-visual, dynamic-scroll,
+  output-validation, and runtime-state lessons.
+- Recovered current base `main` at `c1b3cef`; the worktree already contains
+  unrelated untracked Playwright artifacts and the user-provided HTML/render
+  migration documentation. No product code or tests have been changed yet.
+- Added compact-UI contract tests and ran them red: `4 failed` for legacy
+  heatmap `time_range`, hardcoded batch preset names, CSV output defaults, and
+  time-mode dB visibility. These are intended RED results, not a baseline pass.
+- Added the shared preset-slot reader/change bus, routed Inspector writes through
+  it, rebuilt batch spectral cards on the same persisted slots, and implemented
+  explicit dirty deselection. Added method-aware time-range normalization and
+  compact fixed output values/dB visibility. The first contract pass is now
+  green: `4 passed in 0.69s`.
+- The first implementation pass keeps runner/task-list state as an internal
+  compatibility model while removing it from the visible product layout. The
+  next pass projects only status and progress into the fixed footer, preserving
+  the existing QThread.finished unlock boundary.
+- Completed the visible compact layout: a 54 px data-source summary opens the
+  modal manager, time-domain grouping uses three annotated waveform cards,
+  output has fixed XLSX + PNG 1920×1080/auto-number choices, and the footer is
+  a 48 px aggregate status/progress bar. The internal `TaskListWidget` remains
+  event-only, so runner lifecycle and artifact facts are preserved without a
+  visible lower section.
+- Added XLSX worksheet splitting at the physical Excel data-row boundary and a
+  small-limit regression test; empty dataframes retain one header worksheet.
+- Final directed verification: `181 passed in 7.88s`, `git diff --check`, and
+  the lesson gate (`lesson_required: False`) pass. The full batch test cluster
+  is `723 passed, 1 failed`; the failure is confirmed against pristine HEAD,
+  not introduced by this branch.
+- Rendered and visually inspected actual-QSS offscreen proof states in
+  `/tmp/tracelab-batch-compact-ui-proof-output`: FFT 1080×760, time grouping
+  1080×760, FFT 1440×900, and the data-source manager. The proof asserts fixed
+  export values, hidden time dB/source interval, hidden task list, and footer
+  height; it remains offscreen evidence, not foreground macOS acceptance.
+- Inspector preset-bar regression coverage is also green: `211 passed in
+  9.90s`; a live shared-slot update now clears an affected batch-card
+  selection, preventing it from claiming an old parameter snapshot is current.
+- A user edit in the output/axis panel now also clears an applied analysis card
+  when its output snapshot changes; this extends the same no-misleading-state
+  rule beyond the analysis-form fields.
+
+### Visual-Parity Remediation Restart
+
+- Reopened the current 1080×760 and 1440×900 Qt renders against the approved
+  HTML source and the user's prototype screenshots. Marked the prior visual
+  completion claim invalid; no source was changed during that audit.
+- Loaded the exact HTML-operation, rendered-screenshot, dynamic-scroll,
+  QSettings-isolation, and superseded-plan lessons, plus the frontend design
+  and file-planning workflows.
+- Preserved the 2026-08-01 plan as historical evidence and created
+  `docs/superpowers/plans/2026-08-02-batch-compact-ui-visual-parity-remediation.md`.
+  The new plan protects the completed behavior wiring but reopens all visible
+  surfaces and the offscreen matrix.
+- Current phase: add RED-first geometry/content contracts for the HTML shell,
+  cards, modal, axis card, and footer before changing the Qt widgets.
+- Added the visual contracts and ran the focused RED gate: `8 passed, 8
+  failed`. Every failure is one intended HTML-parity gap (header/pipeline/footer
+  geometry, flat pipeline, grouping semantics, preset summaries, axis card,
+  modal shell); existing behavior contracts in the same file remained green.
+- Current phase: implement the shell/pipeline/continuous-pane geometry, then
+  render the first 1080×760 and 1440×900 screenshots before deeper panels.
+- Rebuilt `PipelineStrip` as flat 01/02/03 stage cells, added the 50 px toolbar
+  host, removed root/pane gutters, applied 29:39:32 continuous scroll panes,
+  and changed the footer to the approved 54 px order.
+- Focused shell verification passed: `4 passed in 0.82s`.
+- Generated and opened the Phase 1 1080×760 and 1440×900 images under
+  `/tmp/tracelab-batch-compact-ui-phase1`. Shell geometry is PASS; deeper
+  Input/Analysis/Output surfaces remain expected FAIL and are not called done.
+- Replaced the abstract grouping strokes with semantic F/S waveform painters,
+  dynamic real-count formulas, and applied/compact states. Replaced generic
+  preset buttons with 61 px two-level cards using the shared slot names and
+  parameter summaries. Focused result: `39 passed in 1.63s`.
+- Opened Phase 3A images under `/tmp/tracelab-batch-compact-ui-phase3a`.
+  Wave/preset cards are improved, but the old form label column overlaps them;
+  next step is the two-column parameter renderer, not more QSS padding.
+- Completed the HTML visual-parity remediation across the shell, Input,
+  Analysis, Output, modal, and footer while retaining the batch runner and
+  validation authorities. Compatibility-only controls remain hidden rather
+  than participating in layout.
+- Generated and directly inspected the final isolated-QSettings render matrix:
+  24 PNGs covering 22 sheet states and 2 modal states at 1080×760/1440×900 in
+  `/tmp/tracelab-batch-compact-ui-final-matrix`. The last pass found and fixed
+  raw `rpm_channel`/`outputs` validation text in the visible pipeline, then
+  regenerated and reopened the affected images.
+- Final offscreen regressions: complete Batch cluster `735 passed, 1 failed`
+  (the same legacy logical-source migration failure reproduced from pristine
+  HEAD); Inspector cluster `221 passed`; targeted presentation tests are part
+  of those totals. Foreground macOS acceptance remains not executed.

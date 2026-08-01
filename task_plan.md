@@ -203,3 +203,58 @@ future channel-selection, pan, and resize regressions.
   an explicit follow-up gate, not an inferred PASS.
 - Reports, implementation plan, standards and the reusable benchmark script are
   linked from the final handoff; no commit or push was performed.
+
+## Addendum — 2026-08-02 Batch Compact UI Visual-Parity Remediation
+
+### Goal
+
+Keep the completed compact batch behavior wiring, then rebuild the visible Qt
+surface until its information architecture, density, cards, modal, axis area,
+and footer actually match the approved 2026-08-01 HTML at 1080×760 and
+1440×900.  Structural tests and a renderable window are not visual-parity
+evidence.
+
+### Formal Plan
+
+- `docs/superpowers/plans/2026-08-02-batch-compact-ui-visual-parity-remediation.md`
+
+### Phases
+
+- [x] Recover the HTML, current branch/diff, prior behavioral implementation,
+  failed offscreen screenshots, and visual-parity lessons.
+- [x] Write a dated superseding remediation plan and record that the prior
+  visual completion claim was invalid.
+- [x] Add RED-first HTML geometry/content contracts while protecting existing
+  behavior tests (`8 passed, 8 expected visual failures`).
+- [x] Rebuild shell/pipeline/continuous panes and verify the first 1080/1440
+  shell screenshots.
+- [x] Rebuild Input summary/modal, grouping/preset/parameter cards, Output axis
+  card, and 54 px status footer.
+- [x] Expand the isolated-QSettings render matrix and iterate until every
+  required state passes direct visual inspection.
+- [x] Run directed and broader regressions, diff/lesson gates, and report
+  offscreen versus foreground evidence separately.
+
+### Guardrails
+
+- HTML remains the visible-operation baseline; only Qt font/chrome/accessibility
+  micro-adjustments are allowed and must be recorded in render evidence.
+- `BatchRunner` remains GUI-free; `validate_outputs()` and
+  `normalize_batch_params()` remain the respective single authorities.
+- Do not re-add a visible recovery section or task-list panel; recovery paths
+  remain runtime-only backend capability.
+- Do not treat green offscreen tests as macOS foreground acceptance.
+- Do not call this UI complete until the main executor has opened every final
+  matrix image and recorded a PASS/FAIL verdict.
+
+### Errors Encountered
+
+| Error | Attempt | Resolution |
+|---|---:|---|
+| Prior pass called the UI visually aligned after only structure/behavior checks and four sparse renders | Initial implementation | Reclassified the current screenshots as a failed baseline; created the dated visual-parity remediation plan above. |
+| In-app browser automation cannot claim the local `file://` prototype because of browser URL policy | Parity audit | Use the local HTML source plus user-provided prototype screenshots; do not bypass the browser policy. |
+| New visual contract run produced 8 failures | RED-first gate | Expected and retained: missing 50/62/54 rows, flat pipeline, waveform semantics, preset summaries, bordered axis card, and structured modal. |
+| Compatibility-only grouping combo remained visible outside the new grid | Final render loop | Explicitly hide the holder, add a visibility regression, and promote the method/layout-state isolation lesson. |
+| FFT manual X range reappeared as seconds after switching to time | Final render loop | Cache axis presentation state per method and add a cross-unit switch regression. |
+| Complete batch set has one source-routing failure | Regression gate | Reproduced the same nodeid from a clean `git archive HEAD`; final branch result is `735 passed, 1 baseline failed`, not a false all-green result. |
+| Final Order/output-blocked renders exposed raw validation field names | Final visual loop | Added compact Chinese pipeline/footer presentation helpers and regressions; regenerated and reopened the affected 1080/1440 screenshots. |

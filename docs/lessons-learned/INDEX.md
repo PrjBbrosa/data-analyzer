@@ -128,6 +128,7 @@ lesson by default.
 | [Batch Preview Probe Failure Stays Planning-Local](batch-preview-probe-failure-stays-planning-local.md) | Adding metadata-only source probing to a no-load preview that runs | See lesson |
 | [Custom X Unit Cohort Follows Drawable Eligibility](custom-x-unit-cohort-after-eligibility.md) | Changing multi-source TimeDomain custom-X range filtering, finite-X | See lesson |
 | [Producer Result Contracts Include Mock Consumers](producer-result-contract-mock-consumers.md) | Changing a shared producer from a primitive payload such as a list or | See lesson |
+| [Batch UI Layout Migrations Isolate Hidden And Method State](batch-ui-layout-migrations-isolate-hidden-and-method-state.md) | Replacing a Batch Qt form/layout while retaining compatibility widgets, | See lesson |
 
 ## Selection Rules
 

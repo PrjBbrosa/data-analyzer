@@ -365,3 +365,131 @@ Actual Windows W1/W2 JSON remains absent and therefore BLOCKED.
   loading the first MF4 caused a main-thread EXC_BAD_ACCESS in PyQt/Qt graphics
   resize/layout code (`Python-2026-08-01-213130.ips`). This is a separate live
   evidence class from the green offscreen custom-X tests.
+
+## 2026-08-02 Batch Compact UI Redesign Findings
+
+- The approved compact HTML is present but untracked; it is an input artifact,
+  not an implementation result. The new Spec and Plan are also untracked and
+  must stay in scope if this work is committed.
+- `BatchSheet` currently gives three content panes equal stretch, embeds the
+  large file list and Input time-range editor, owns a visible `TaskListWidget`,
+  and exposes output/recovery controls that the approved HTML removes.
+- `batch_preprocess.preprocess_batch_signal()` applies `params["time_range"]`
+  to every method. Hiding a control alone would still truncate FFT-vs-Time and
+  order analysis; method-aware recipe normalization is required.
+- Batch `AnalysisPanel` hardcodes three preset labels while the single-analysis
+  `PresetBar` stores overrides under `kind/preset_override/slot`; a shared
+  slot repository and dirty snapshot are required for real synchronization.
+- `BatchOutput`/`validate_outputs()` already support XLSX, PNG, 1920×1080 and
+  auto-number. The compact UI should construct those fixed values while keeping
+  CLI/back-end compatibility and one validation authority.
+- Existing TaskList and resume/retry GUI state are specific to the old lower
+  section. Progress/result truth must be projected from runner events into the
+  new footer without changing the worker lifecycle boundary.
+- A custom waveform-card `QPainter` must be explicitly ended on every paint
+  path. Leaving it open caused the offscreen repaint after selecting a card to
+  erase the sheet header; the render probe catches this concrete Qt-only risk.
+- At 1080×760, the long FFT parameter form deliberately uses its pane's
+  vertical scrollbar; at 1440×900 the FFT source interval is visibly in the
+  initial viewport. The source-manager modal, rather than a tall main-pane
+  list, carries the full file rows.
+- The complete batch test cluster produced `723 passed, 1 failed`; the sole
+  failure (`test_legacy_file_paths_migrate_to_all_registry_logical_sources`)
+  reproduces from a pristine `git archive HEAD` and is unrelated baseline
+  source-routing behavior. The compact branch's directed cluster is green.
+
+### 2026-08-02 Visual-Parity Reassessment
+
+- The earlier completion statement was wrong: the renders prove behavior and
+  basic geometry only, not HTML parity. The current Qt window is materially
+  different in every high-information surface.
+- `BatchSheet` keeps 18 px root margins, 10 px root spacing, and 14 px gaps
+  between panes. The HTML uses flush fixed rows and continuous columns divided
+  by 1 px rules; this explains the sparse white gutters in both Qt renders.
+- `_GroupingCard` is 94 px and paints only straight line fragments. The HTML
+  card is 132 px and carries frames, waves, F/S identity, a dynamic formula,
+  and an explanatory line. This is a semantic visualization defect, not just
+  styling.
+- `AnalysisPanel` uses four generic `QPushButton`s and a single-column dynamic
+  form. The HTML uses 61 px preset cards and a two-column parameter grid;
+  current 1440 whitespace and label/control collisions come from this layout
+  mismatch.
+- `OutputPanel._flatten_axis_group_chrome()` explicitly removes the border and
+  background from the shared axis group, while the HTML makes the axis range a
+  primary bordered card. The current implementation direction is opposite to
+  the target.
+- The file modal still exposes the legacy large list surface without the HTML
+  row hierarchy (path, probe state, remove action). Reusing the model does not
+  require reusing its visual container unchanged.
+- The governing behavioral Spec remains valid. A new dated remediation plan
+  supersedes only the old plan's visual/acceptance completion, preserving the
+  already-green preset/range/dB/output/runner behavior.
+- `PipelineStrip` itself still owns 14 px spacing and each `PipelineCard` owns
+  a 4 px top border, 10 px radius, vertical title/summary stack. The mismatch
+  cannot be fixed from `BatchSheet` margins alone; the strip widget must be
+  rebuilt as the HTML's flat one-line stage summaries.
+- The current Analysis parameter widgets already have stable keys, signal
+  wiring, getters and setters. The safer visual fix is to retain those widgets
+  and replace only their layout renderer with a two-column label-over-control
+  grid, rather than rewriting parameter semantics.
+- `FileListWidget` keeps the authoritative `_rows`, probe callbacks, add/remove
+  actions and source identity. The file modal can be visually rebuilt around
+  that model, but no second row/model cache should be introduced.
+- Existing tests encode the old visual mistake: one test explicitly requires
+  `border: none` on the Batch axis group, and the 1080 smoke test requires a
+  48 px footer. These assertions must be changed red-first to the approved
+  bordered axis card and 54 px footer before production styling is adjusted.
+- The current render probe isolates `XDG_CONFIG_HOME`, but covers only four
+  images and asserts the obsolete 48 px footer. It must become a state matrix
+  and record geometry facts, not just fixed output semantics.
+
+### Phase 1 Render Findings
+
+- The first rebuilt shell now renders 50/62/54 fixed rows, contiguous pane
+  dividers, 29:39:32 widths, and the analysis/output surface tints at both
+  supported sizes. The focused shell gate is `4 passed`.
+- The flat pipeline removes roughly one full card-row of wasted vertical
+  space and makes stage facts scannable in one line, matching the prototype's
+  information purpose.
+- The same images make the remaining failures sharper: Analysis still starts
+  with redundant English section titles, grouping cards contain only straight
+  strokes, the preset row is generic, the parameter form has label/control
+  collisions, and Output axis controls float without a card boundary.
+- Phase 1 screenshots are stored under
+  `/tmp/tracelab-batch-compact-ui-phase1`; they are an intermediate FAIL for
+  deeper panels, not final parity evidence.
+
+### Phase 3A Card Findings
+
+- The semantic card painter now renders four mini frames for per-item output,
+  `F1` plus separate `S1/S2/S3` waves for source grouping, and `S1` plus
+  `F1/F2/F3` overlaid waves for signal grouping. Real counts (`3×2`, `3`, `2`)
+  are injected from loaded logical sources and selected signals.
+- The shared preset slots now render as two-level cards while preserving
+  `button.text()` as the synchronized slot name. The focused grouping/preset
+  suite is `39 passed`.
+- Direct image inspection shows the card drawings and preset hierarchy are now
+  close to the HTML, but the old `QFormLayout` label column visibly collides
+  with the grouping cards and spectral fields. A layout-renderer replacement
+  is required before these images can pass.
+
+### Final Batch Compact Visual Findings
+
+- The final 24-image matrix under
+  `/tmp/tracelab-batch-compact-ui-final-matrix` was opened state by state at
+  1080×760 and 1440×900. The 50/62/54 shell, 29:39:32 panes, waveform grouping
+  cards, synchronized preset cards, two-column parameter forms, structured
+  file modal, fixed XLSX/PNG output card, bordered axis card, and compact footer
+  all match the approved HTML's information hierarchy.
+- The last visual pass caught raw validation identifiers in the Order and
+  output-blocked pipeline summaries. Pipeline/footer presentation now maps
+  validation issues to short Chinese user text; backend issue fields remain
+  available to validation and tests but no longer leak into the compact UI.
+- Method-specific state is visually isolated: time has no dB or source interval;
+  FFT alone has source interval and no color-scale row; FFT-vs-Time and Order
+  expose the color-scale row. Per-method axis caches prevent Hz values from
+  resurfacing as seconds after switching methods.
+- Final regression evidence is `735 passed, 1 baseline failed` for the complete
+  batch cluster and `221 passed` for the Inspector guard cluster. The lone
+  source-routing failure was reproduced from pristine HEAD. This is Qt
+  offscreen evidence only; foreground macOS acceptance was not executed.

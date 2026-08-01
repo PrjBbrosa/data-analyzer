@@ -73,6 +73,7 @@ _RENDER_BACKEND_DEGRADED_REASON = (
 _RENDER_BACKEND_IMAGE_ONLY_ERROR = (
     '图片/PDF 导出后端不可用，无法完成图片/PDF 导出'
 )
+_XLSX_MAX_DATA_ROWS = 1_048_575
 
 
 @dataclass(frozen=True)
@@ -4471,7 +4472,19 @@ class BatchRunner:
 
         def write(temp_path):
             if path.suffix.lower() == '.xlsx':
-                df.to_excel(temp_path, index=False, engine='openpyxl')
+                # XLSX permits 1,048,576 rows including the column header.
+                # Split only at the physical format boundary so a large
+                # batch never silently truncates its final samples.
+                with pd.ExcelWriter(temp_path, engine='openpyxl') as writer:
+                    starts = range(0, len(df), _XLSX_MAX_DATA_ROWS) or (0,)
+                    for sheet_index, start in enumerate(
+                        starts, start=1,
+                    ):
+                        df.iloc[start:start + _XLSX_MAX_DATA_ROWS].to_excel(
+                            writer,
+                            sheet_name=f"数据{sheet_index}",
+                            index=False,
+                        )
             else:
                 df.to_csv(temp_path, index=False)
 

@@ -34,6 +34,24 @@ def _group_members():
     )
 
 
+def test_xlsx_writer_splits_only_at_excel_row_limit(tmp_path, monkeypatch):
+    import pandas as pd
+    from openpyxl import load_workbook
+
+    import mf4_analyzer.batch as batch_module
+
+    monkeypatch.setattr(batch_module, "_XLSX_MAX_DATA_ROWS", 2)
+    target = tmp_path / "result.xlsx"
+    batch_module.BatchRunner._write_dataframe(
+        pd.DataFrame({"sample": [1, 2, 3]}), target,
+    )
+
+    book = load_workbook(target, read_only=True)
+    assert book.sheetnames == ["数据1", "数据2"]
+    assert list(book["数据1"].values) == [("sample",), (1,), (2,)]
+    assert list(book["数据2"].values) == [("sample",), (3,)]
+
+
 def test_group_identity_changes_when_one_member_source_changes():
     first = batch_output.build_group_output_identity(
         _group_members(), method="time",

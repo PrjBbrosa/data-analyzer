@@ -20,8 +20,9 @@ from pathlib import Path
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
-    QDialog, QFileDialog, QFrame, QHBoxLayout, QMessageBox, QPushButton,
-    QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout,
+    QWidget,
 )
 
 from ....batch import AnalysisPreset, BatchOutput, BatchRunner
@@ -63,6 +64,55 @@ _OUTPUT_ISSUE_FIELDS = frozenset({
     "resume_policy",
 })
 
+
+def _analysis_issue_summary(issue: ValidationIssue, method: str) -> str:
+    """Return a compact, user-facing stage summary for recipe issues."""
+
+    label = _METHOD_LABELS.get(method, method or "分析")
+    detail = {
+        "rpm_channel": "RPM 通道未配置",
+        "manual_rpm": "手动 RPM 无效",
+        "x_channel": "X 通道未配置",
+        "fs": "采样率无效",
+        "nfft": "NFFT 参数无效",
+        "x_range": "X 范围无效",
+        "y_range": "Y 范围无效",
+        "z_range": "色阶范围无效",
+    }.get(issue.field, "参数待完善")
+    return f"{label} · {detail}"
+
+
+def _output_issue_summary(issue: ValidationIssue) -> str:
+    """Keep backend output field names out of the compact pipeline strip."""
+
+    return {
+        "outputs": "未选择导出内容",
+        "data_format": "数据导出设置待完善",
+        "image_format": "图片导出设置待完善",
+        "image_size": "图片尺寸设置待完善",
+        "image_width": "图片尺寸设置待完善",
+        "image_height": "图片尺寸设置待完善",
+        "image_pixels": "图片尺寸设置待完善",
+    }.get(issue.field, "导出设置待完善")
+
+
+def _blocked_issue_reason(issue: ValidationIssue) -> str:
+    """Translate validation details for the single-line footer status."""
+
+    if issue.field in _OUTPUT_ISSUE_FIELDS:
+        return (
+            "请至少选择数据文件或图片"
+            if issue.field == "outputs" else "请检查导出设置"
+        )
+    return {
+        "rpm_channel": "请选择 RPM 通道",
+        "time_range": "请检查时间范围",
+        "x_channel": "请选择 X 通道",
+        "fs": "请检查采样率",
+        "nfft": "请检查 NFFT 参数",
+        "manual_rpm": "请检查手动 RPM",
+    }.get(issue.field, "请检查分析参数")
+
 class BatchSheet(QDialog):
     def __init__(self, parent, files, current_preset=None):
         super().__init__(parent)
@@ -77,6 +127,8 @@ class BatchSheet(QDialog):
         self._recipe_method = "fft"
         self._applied_control_snapshot: dict = {}
         self._applying_preset = False
+        self._applying_analysis_preset = False
+        self._analysis_preset_output_snapshot: dict | None = None
         self._scope_source = "free_config"
         self._scope_signal = None
         self._scope_rpm_signal = None
@@ -110,31 +162,44 @@ class BatchSheet(QDialog):
         self._last_toast_kind: str = ""
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
         # Toolbar — W7 wires three buttons:
         #   • 从当前单次填入: enabled iff a current_preset was passed in,
         #     fills the dialog from that preset (spec §6.4 current_single).
-        #   • 导入 preset…  : open JSON, load, apply (warns on
+        #   • 导入方案…  : open JSON, load, apply (warns on
         #     UnsupportedPresetVersion / corrupt JSON via toast).
-        #   • 导出 preset… : strip runtime fields via dataclasses.replace
+        #   • 导出方案… : strip runtime fields via dataclasses.replace
         #     and save to JSON (spec §6.3).
-        bar = QHBoxLayout()
+        self._toolbar_host = QWidget(self)
+        self._toolbar_host.setObjectName("BatchCompactToolbar")
+        self._toolbar_host.setFixedHeight(50)
+        bar = QHBoxLayout(self._toolbar_host)
+        bar.setContentsMargins(14, 8, 14, 8)
+        bar.setSpacing(7)
+        self._toolbar_title = QLabel("批处理分析", self._toolbar_host)
+        self._toolbar_title.setObjectName("BatchToolbarTitle")
+        bar.addWidget(self._toolbar_title)
+        self._toolbar_meta = QLabel("紧凑工作流", self._toolbar_host)
+        self._toolbar_meta.setObjectName("BatchToolbarMeta")
+        bar.addWidget(self._toolbar_meta)
         bar.addStretch(1)
 
-        self._btn_fill_from_current = QPushButton("从当前单次填入")
+        self._btn_fill_from_current = QPushButton("从当前单次同步")
         self._btn_fill_from_current.setEnabled(self._current_preset is not None)
         self._btn_fill_from_current.clicked.connect(self._on_fill_from_current)
         bar.addWidget(self._btn_fill_from_current)
 
-        self._btn_import_preset = QPushButton("导入 preset…")
+        self._btn_import_preset = QPushButton("导入方案…")
         self._btn_import_preset.clicked.connect(self._on_import_preset)
         bar.addWidget(self._btn_import_preset)
 
-        self._btn_export_preset = QPushButton("导出 preset…")
+        self._btn_export_preset = QPushButton("导出方案…")
         self._btn_export_preset.clicked.connect(self._on_export_preset)
         bar.addWidget(self._btn_export_preset)
 
-        root.addLayout(bar)
+        root.addWidget(self._toolbar_host)
 
         # Pipeline strip
         self.strip = PipelineStrip(self)
@@ -142,9 +207,12 @@ class BatchSheet(QDialog):
 
         # Detail row: input | analysis | output
         detail = QWidget(self)
+        detail.setObjectName("BatchCompactWorkspace")
         detail_lay = QHBoxLayout(detail)
         detail_lay.setContentsMargins(0, 0, 0, 0)
-        detail_lay.setSpacing(14)
+        detail_lay.setSpacing(0)
+        self._detail_host = detail
+        self._detail_lay = detail_lay
 
         self._input_panel = InputPanel(
             self, files=self._files, source_registry=self._source_registry,
@@ -159,7 +227,9 @@ class BatchSheet(QDialog):
         if store is not None:
             self._output_panel.set_reference_catalog(store.snapshot())
 
-        def scrolling_pane(panel: QWidget, name: str) -> QScrollArea:
+        def scrolling_pane(
+            panel: QWidget, name: str, background: str, *, last: bool = False,
+        ) -> QScrollArea:
             panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
             scroll = QScrollArea(detail)
             scroll.setObjectName(name)
@@ -169,45 +239,69 @@ class BatchSheet(QDialog):
             scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             scroll.setMinimumSize(0, 0)
             scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+            right_border = "0" if last else "1px solid #dbe4ef"
             scroll.setStyleSheet(
-                f"QScrollArea#{name} {{ border: none; background: transparent; }}"
-                f"QScrollArea#{name} > QWidget > QWidget {{ background: #ffffff; }}"
+                f"QScrollArea#{name} {{ border:0; border-right:{right_border};"
+                f" background:{background}; }}"
+                f"QScrollArea#{name} QWidget#qt_scrollarea_viewport {{"
+                f" background:{background}; }}"
+                f"QScrollArea#{name} > QWidget > QWidget {{"
+                f" background:{background}; }}"
             )
             scroll.setWidget(panel)
             return scroll
 
         self._input_scroll = scrolling_pane(
-            self._input_panel, "BatchInputScroll"
+            self._input_panel, "BatchInputScroll", "#ffffff",
         )
         self._analysis_scroll = scrolling_pane(
-            self._analysis_panel, "BatchAnalysisScroll"
+            self._analysis_panel, "BatchAnalysisScroll", "#fcfefd",
         )
         self._output_scroll = scrolling_pane(
-            self._output_panel, "BatchOutputScroll"
+            self._output_panel, "BatchOutputScroll", "#fffdfa", last=True,
         )
-        detail_lay.addWidget(self._input_scroll, 1)
-        detail_lay.addWidget(self._analysis_scroll, 1)
-        detail_lay.addWidget(self._output_scroll, 1)
+        detail_lay.addWidget(self._input_scroll, 29)
+        detail_lay.addWidget(self._analysis_scroll, 39)
+        detail_lay.addWidget(self._output_scroll, 32)
         root.addWidget(detail, 1)
 
-        # W6: Task list (collapsible, below detail row, above footer).
+        # Keep the task model for runner events and testable artifact facts,
+        # but remove the old lower task-list surface from the product layout.
+        # The compact footer below is its only visible projection.
         self._task_list = TaskListWidget(self)
-        root.addWidget(self._task_list)
+        self._task_list.hide()
 
-        # Footer (W6): hand-rolled button row so we can swap layouts between
-        # idle ([Cancel] [运行]) and running ([中断]) modes. The Ok button is
-        # gated on is_runnable() in idle mode (ultrareview bug_018) — without
-        # the gate, an empty config + Run would have fallen through to the
-        # legacy BatchRunner._resolve_files fallback and processed ALL loaded
-        # MainWindow files × every channel.
+        # Fixed status footer: one compact status/progress projection plus
+        # the required close/run/cancel actions.  The run gate remains the
+        # same: an incomplete sheet cannot reach BatchRunner's legacy file
+        # fallback and accidentally analyse every loaded file/channel.
         self._footer_host = QWidget(self)
+        self._footer_host.setObjectName("BatchCompactFooter")
+        self._footer_host.setFixedHeight(54)
         self._footer_lay = QHBoxLayout(self._footer_host)
-        self._footer_lay.setContentsMargins(0, 0, 0, 0)
+        self._footer_lay.setContentsMargins(18, 8, 14, 8)
         self._footer_lay.setSpacing(8)
-        self._footer_lay.addStretch(1)
+        self._footer_state_dot = QLabel(self._footer_host)
+        self._footer_state_dot.setObjectName("BatchFooterStateDot")
+        self._footer_state_dot.setFixedSize(8, 8)
+        self._footer_lay.addWidget(self._footer_state_dot)
+        self._footer_status = QLabel("待配置", self._footer_host)
+        self._footer_status.setObjectName("BatchFooterStatus")
+        self._footer_lay.addWidget(self._footer_status)
+        self._footer_task_summary = QLabel("等待运行", self._footer_host)
+        self._footer_task_summary.setObjectName("BatchFooterTaskSummary")
+        self._footer_lay.addWidget(self._footer_task_summary, 1)
+        self._footer_progress = QProgressBar(self._footer_host)
+        self._footer_progress.setObjectName("BatchFooterProgress")
+        self._footer_progress.setRange(0, 1)
+        self._footer_progress.setValue(0)
+        self._footer_progress.setTextVisible(False)
+        self._footer_progress.setMinimumWidth(130)
+        self._footer_progress.setMaximumWidth(180)
+        self._footer_lay.addWidget(self._footer_progress)
 
         # Idle-mode buttons
-        self._btn_cancel = QPushButton("Cancel", self._footer_host)
+        self._btn_cancel = QPushButton("关闭", self._footer_host)
         self._btn_cancel.clicked.connect(self.reject)
         self._footer_lay.addWidget(self._btn_cancel)
 
@@ -249,7 +343,7 @@ class BatchSheet(QDialog):
         self._analysis_panel.presetApplied.connect(
             self._on_builtin_analysis_preset
         )
-        self._output_panel.changed.connect(self._recompute_pipeline_status)
+        self._output_panel.changed.connect(self._on_output_controls_changed)
         self._output_panel.resumeRequested.connect(self._on_resume_requested)
         self._output_panel.retryFailedRequested.connect(
             self._on_retry_failed_requested
@@ -269,6 +363,58 @@ class BatchSheet(QDialog):
 
         # Init-sync — seed badges with the current default state.
         self._recompute_pipeline_status()
+        self._compact_mode: bool | None = None
+        self._apply_compact_mode(self.width() <= 1180)
+
+    def _apply_compact_mode(self, compact: bool) -> None:
+        compact = bool(compact)
+        if getattr(self, "_compact_mode", None) is compact:
+            return
+        self._compact_mode = compact
+        self._input_panel.set_compact_mode(compact)
+        self._analysis_panel.set_compact_mode(compact)
+        self._output_panel.set_compact_mode(compact)
+        side = 12 if compact else 18
+        self._footer_lay.setContentsMargins(side, 8, 14, 8)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        if hasattr(self, "_analysis_panel"):
+            self._apply_compact_mode(event.size().width() <= 1180)
+
+    def _present_footer(
+        self, state: str, *, done: int = 0, total: int = 1,
+        task_count: int | None = None, reason: str = "",
+    ) -> None:
+        """Project one runner/configuration state into the fixed footer."""
+        state = str(state or "blocked")
+        maximum = max(1, int(total or 1))
+        value = min(maximum, max(0, int(done or 0)))
+        count = maximum if task_count is None else max(0, int(task_count))
+        labels = {
+            "ready": "配置就绪",
+            "blocked": "待配置",
+            "running": "运行中",
+            "cancelling": "正在停止…",
+            "done": "已完成",
+            "partial": "部分完成",
+            "cancelled": "已取消",
+        }
+        if state == "ready":
+            task_text = "点击运行后生成任务"
+            value, maximum = 0, 1
+        elif state == "blocked":
+            task_text = reason or "请选择文件、信号和输出目录"
+            value, maximum = 0, 1
+        else:
+            task_text = f"{value}/{count} 任务"
+        self._footer_status.setText(labels.get(state, state))
+        self._footer_task_summary.setText(task_text)
+        self._footer_progress.setRange(0, maximum)
+        self._footer_progress.setValue(value)
+        self._footer_state_dot.setProperty("state", state)
+        self._footer_state_dot.style().unpolish(self._footer_state_dot)
+        self._footer_state_dot.style().polish(self._footer_state_dot)
 
     # ------------------------------------------------------------------
     # Pipeline status recompute
@@ -281,7 +427,10 @@ class BatchSheet(QDialog):
         unavailable_reasons = fl.unavailable_reasons()
         any_failed = fl.has_probe_failed() or bool(unavailable_reasons)
         selected = self._input_panel.selected_signals()
-        time_error = self._input_panel.time_range_error()
+        self._analysis_panel.set_grouping_counts(
+            source_count=len(fl.loaded_rows()), signal_count=len(selected),
+        )
+        time_error = self._time_range_error()
         if any_pending:
             input_status = "pending"
             input_summary = "正在解析…"
@@ -294,18 +443,18 @@ class BatchSheet(QDialog):
             # runner skips failed rows so is_runnable still allows Run.
             input_status = "warn"
             input_summary = unavailable_reasons[0] if unavailable_reasons else (
-                f"{len(loaded_paths)}文件·{len(selected)}信号"
+                f"{len(loaded_paths)} 文件 · {len(selected)} 信号"
                 if (loaded_paths or selected) else "解析失败"
             )
         elif not loaded_paths or not selected:
             input_status = "warn"
             input_summary = (
-                f"{len(loaded_paths)}文件·{len(selected)}信号"
+                f"{len(loaded_paths)} 文件 · {len(selected)} 信号"
                 if (loaded_paths or selected) else "未配置"
             )
         else:
             input_status = "ok"
-            input_summary = f"{len(loaded_paths)}文件·{len(selected)}信号"
+            input_summary = f"{len(loaded_paths)} 文件 · {len(selected)} 信号"
         self.strip.set_stage(0, input_status, input_summary)
 
         # ANALYSIS
@@ -320,14 +469,22 @@ class BatchSheet(QDialog):
         if analysis_issues:
             issue = analysis_issues[0]
             self.strip.set_stage(
-                1, "warn", f"{issue.field}: {issue.message}",
+                1, "warn", _analysis_issue_summary(issue, method),
             )
         elif not method:
             self.strip.set_stage(1, "warn", "未选择方法")
         else:
             label = _METHOD_LABELS.get(method, method)
             window = params.get("window", "")
-            summary = f"{label} · {window}" if window else label
+            if method == "time":
+                grouping = {
+                    "none": "每项单独",
+                    "source": "按数据源分组",
+                    "channel": "按信号分组",
+                }.get(str(params.get("render_group_by", "none")), "每项单独")
+                summary = f"{label} · {grouping}"
+            else:
+                summary = f"{label} · {window}" if window else label
             self.strip.set_stage(1, "ok", summary)
 
         # OUTPUT
@@ -342,7 +499,7 @@ class BatchSheet(QDialog):
         if output_issues:
             issue = output_issues[0]
             self.strip.set_stage(
-                2, "warn", f"{issue.field}: {issue.message}",
+                2, "warn", _output_issue_summary(issue),
             )
             self._output_panel.set_output_preview(error=issue.message)
         elif not directory or not (export_data or export_image):
@@ -354,7 +511,7 @@ class BatchSheet(QDialog):
                 parts.append(outputs.data_format.upper())
             if export_image:
                 parts.append(outputs.image_format.upper())
-            self.strip.set_stage(2, "ok", "+".join(parts))
+            output_summary = " + ".join(parts)
             if loaded_paths and selected and method:
                 try:
                     preview = self._make_runner().preview_outputs(
@@ -364,8 +521,10 @@ class BatchSheet(QDialog):
                     self._output_panel.set_output_preview(error=str(exc))
                 else:
                     self._output_panel.set_output_preview(preview)
+                    output_summary += f" · {preview.artifact_count} 个文件"
             else:
                 self._output_panel.set_output_preview(None)
+            self.strip.set_stage(2, "ok", output_summary)
 
         self._output_panel.update_effective_preview(
             tuple(fl._rows.values()), selected,
@@ -384,7 +543,14 @@ class BatchSheet(QDialog):
         # progress, the run button is hidden behind the 中断 swap, so we
         # only adjust enabled-state in idle mode.
         if not self._running:
-            self._btn_run.setEnabled(self.is_runnable())
+            runnable = self.is_runnable()
+            self._btn_run.setEnabled(runnable)
+            blocked_reason = "请选择文件、信号和输出目录"
+            if preflight_issues:
+                blocked_reason = _blocked_issue_reason(preflight_issues[0])
+            self._present_footer(
+                "ready" if runnable else "blocked", reason=blocked_reason,
+            )
 
     def _weighting_options_from_parent(self) -> tuple[str, ...]:
         parent = self.parent()
@@ -410,7 +576,26 @@ class BatchSheet(QDialog):
         return self._input_panel.rpm_channel()
 
     def time_range(self):
-        return self._input_panel.time_range()
+        method = self.method()
+        if method == "fft":
+            return self._analysis_panel.source_time_range()
+        if method == "time":
+            axis = self._output_panel.axis_params()
+            if axis.get("x_auto", True):
+                return None
+            return (axis["x_min"], axis["x_max"])
+        return None
+
+    def _time_range_error(self) -> str:
+        if self.method() == "fft":
+            return self._analysis_panel.source_time_range_error()
+        if self.method() == "time":
+            axis = self._output_panel.axis_params()
+            if axis.get("x_auto", True):
+                return ""
+            if float(axis["x_min"]) >= float(axis["x_max"]):
+                return "坐标 X：最小值必须小于最大值"
+        return ""
 
     def file_ids(self) -> tuple:
         return self._input_panel.file_ids()
@@ -495,7 +680,16 @@ class BatchSheet(QDialog):
         self._input_panel.apply_rpm_channel(ch)
 
     def apply_time_range(self, rng) -> None:
-        self._input_panel.apply_time_range(rng)
+        method = self.method()
+        if method == "fft":
+            self._analysis_panel.apply_source_time_range(rng)
+        elif method == "time":
+            if rng is None:
+                self._output_panel.apply_axis_params({"x_auto": True})
+            else:
+                self._output_panel.apply_axis_params({
+                    "x_auto": False, "x_min": rng[0], "x_max": rng[1],
+                })
 
     def apply_params(self, params: dict) -> None:
         self._analysis_panel.apply_params(params)
@@ -517,7 +711,31 @@ class BatchSheet(QDialog):
             key: value for key, value in dict(patch or {}).items()
             if key not in {"db_reference", "db_reference_mode"}
         }
-        self._output_panel.apply_axis_params(display_patch)
+        self._applying_analysis_preset = True
+        try:
+            self._output_panel.apply_axis_params(display_patch)
+        finally:
+            self._applying_analysis_preset = False
+        self._analysis_preset_output_snapshot = self._output_controls_snapshot()
+        self._recompute_pipeline_status()
+
+    def _output_controls_snapshot(self) -> dict:
+        return {
+            "axes": self._output_panel.axis_params(),
+            "reference": self._output_panel.reference_params(),
+            "outputs": dataclasses.asdict(self._output_panel.get_outputs()),
+        }
+
+    def _on_output_controls_changed(self) -> None:
+        if (
+            not self._applying_analysis_preset
+            and self._analysis_panel.has_applied_preset()
+            and self._analysis_preset_output_snapshot is not None
+            and self._output_controls_snapshot()
+            != self._analysis_preset_output_snapshot
+        ):
+            self._analysis_panel.clear_applied_preset()
+            self._analysis_preset_output_snapshot = None
         self._recompute_pipeline_status()
 
     def apply_preset(self, preset: AnalysisPreset) -> None:
@@ -717,7 +935,7 @@ class BatchSheet(QDialog):
 
     def _on_import_preset(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "导入 preset", "", "JSON (*.json)"
+            self, "导入方案", "", "JSON (*.json)"
         )
         if not path:
             return
@@ -744,7 +962,7 @@ class BatchSheet(QDialog):
     def _on_export_preset(self) -> None:
         preset = self._build_preset_for_export()
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出 preset", "", "JSON (*.json)"
+            self, "导出方案", "", "JSON (*.json)"
         )
         if not path:
             return
@@ -753,7 +971,7 @@ class BatchSheet(QDialog):
         except OSError as exc:
             self._toast(f"导出失败：{exc}", kind="error")
             return
-        self._toast(f"已导出 preset 到：{path}", kind="success")
+        self._toast(f"已导出方案到：{path}", kind="success")
 
     def _on_resume_requested(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -852,7 +1070,7 @@ class BatchSheet(QDialog):
 
     def preflight_issues(self) -> tuple[ValidationIssue, ...]:
         issues: list[ValidationIssue] = []
-        time_error = self._input_panel.time_range_error()
+        time_error = self._time_range_error()
         if time_error:
             issues.append(ValidationIssue(
                 "time_range", "invalid_text", time_error,
@@ -1033,6 +1251,10 @@ class BatchSheet(QDialog):
         self._btn_run.setEnabled(False)
         self.lock_editing()
         self._task_list.on_run_started()
+        total = max(1, len(tasks))
+        self._present_footer(
+            "running", done=0, total=total, task_count=len(tasks),
+        )
 
         # Build runner. We pass the parent's loader contract (BatchRunner
         # default loader walks DataLoader.load_mf4) — main_window owns the
@@ -1071,11 +1293,32 @@ class BatchSheet(QDialog):
             return
         self._btn_abort.setEnabled(False)
         self._btn_abort.setText("正在停止…")
+        self._present_footer(
+            "cancelling",
+            done=self._footer_progress.value(),
+            total=self._footer_progress.maximum(),
+            task_count=self._task_list.row_count(),
+        )
         self._runner_thread.request_cancel()
 
     def _on_runner_progress(self, event) -> None:
-        # Forward to the task list (updates icons + progress bar + ETA).
+        # Keep the legacy task model current for programmatic artifact facts;
+        # the visible compact footer deliberately exposes only aggregate state.
         self._task_list.on_event(event)
+        total = max(1, int(getattr(event, "total", 0) or 1))
+        task_index = max(0, int(getattr(event, "task_index", 0) or 0))
+        kind = str(getattr(event, "kind", "") or "")
+        completed = kind in {
+            "task_done", "task_failed", "task_cancelled", "task_skipped",
+            "task_resumed",
+        }
+        progress = task_index if completed else max(0, task_index - 1)
+        self._footer_progress.setRange(0, total)
+        self._footer_progress.setValue(max(self._footer_progress.value(), progress))
+        if kind != "run_finished":
+            self._footer_task_summary.setText(
+                f"{self._footer_progress.value()}/{total} 任务"
+            )
 
     def _on_runner_finished_with_result(self, result) -> None:
         """Stash the BatchRunResult; the actual unlock happens in
@@ -1102,6 +1345,21 @@ class BatchSheet(QDialog):
         result = self._last_result
         self._task_list.on_run_finished(result)
         self.unlock_editing()
+        status = str(getattr(result, "status", "") or "未知")
+        labels = {
+            "done": "已完成",
+            "partial": "部分完成",
+            "cancelled": "已取消",
+            "blocked": "未运行",
+        }
+        total = max(1, self._task_list.row_count())
+        done = min(total, max(0, self._task_list._done_count))
+        if status == "done":
+            done = total
+        self._present_footer(
+            status if status in labels else labels.get(status, status),
+            done=done, total=total, task_count=self._task_list.row_count(),
+        )
         self._show_result_toast(result)
 
         # Clean up thread reference.
