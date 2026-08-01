@@ -23,16 +23,23 @@ def _deck_data() -> dict:
 
 def test_deck_data_valid_and_version_bumped():
     d = _deck_data()
-    assert d["meta"]["version"] == "v7.9"
-    assert d["meta"]["updated"] == "2026-07-29"
-    assert d["meta"]["docVersion"] == "2.6"
-    assert [c["v"] for c in d["changelog"]][:2] == ["v7.9", "v7.8"]
+    assert d["meta"]["version"] == "v7.9.1"
+    assert d["meta"]["updated"] == "2026-08-01"
+    assert d["meta"]["docVersion"] == "2.7"
+    assert [c["v"] for c in d["changelog"]][:3] == ["v7.9.1", "v7.9", "v7.8"]
+
+
+def test_v791_changelog_covers_batch_custom_x_and_package_labels():
+    current = _deck_data()["changelog"][0]
+    assert current["v"] == "v7.9.1"
+    description = " ".join(current["items"])
+    for keyword in ("批处理", "自定义横轴", "TraceLab7.9.1", "TraceLabAnalyzer7.9.1"):
+        assert keyword in description
 
 
 def test_v79_changelog_covers_interaction_budget_fixes():
-    current = _deck_data()["changelog"][0]
-    assert current["v"] == "v7.9"
-    description = " ".join(current["items"])
+    v79 = next(entry for entry in _deck_data()["changelog"] if entry["v"] == "v7.9")
+    description = " ".join(v79["items"])
     for keyword in ("Ctrl / Shift", "100 ms", "TraceLab7.9", "TraceLabAnalyzer7.9"):
         assert keyword in description
 
@@ -53,7 +60,7 @@ def test_manual_covers_new_features():
     html = MANUAL.read_text(encoding="utf-8")
     for kw in ["滤波", "低通", "高通", "带通", "带阻", ".blf", "DBC",
                "GPU", "框选", "A 计权", "采样率", ".wwt", ".zfd", ".mat",
-               "TraceLabAnalyzer7.9"]:
+               "TraceLabAnalyzer7.9.1"]:
         assert kw in html, f"manual missing: {kw}"
 
 
@@ -65,9 +72,9 @@ def test_manual_uses_current_real_ui_assets():
         assert f"assets/{name}" in html
 
 
-def test_published_guide_tracks_v79_and_real_ui_assets():
+def test_published_guide_tracks_v791_and_real_ui_assets():
     html = PUBLISHED_GUIDE.read_text(encoding="utf-8")
-    assert "TraceLab v7.9" in html
+    assert "TraceLab v7.9.1" in html
     for name in ("WWT", "ZFD", "MAT", "time-panel.png", "imports-panel.png"):
         assert name in html
     assert "matplotlib" not in html
@@ -90,6 +97,6 @@ def test_panel_guides_cover_new_topics():
     }
     for fname, kws in checks.items():
         text = (HELP / fname).read_text(encoding="utf-8")
-        assert "TraceLab v7.9" in text
+        assert "TraceLab v7.9.1" in text
         for kw in kws:
             assert kw in text, f"{fname} missing: {kw}"
