@@ -277,3 +277,28 @@ This source-runtime acceptance strengthening does not change packaged runtime
 code. The Full/Lite executables and their successful 12-output frozen smoke
 evidence therefore remain valid, and the corrected font contract continues to
 preserve the five-file Matplotlib 3.11 tree used by those builds.
+
+## Review Fix Round 3: Manifest and Group Artifact Identity
+
+Review found two remaining ways for valid files to prove the wrong claim: a
+caller could inspect a manifest from a different output directory, and two
+channel groups could exchange otherwise valid PNG artifact fact dictionaries.
+
+- RED: the two focused regressions completed as `2 failed, 7 deselected in
+  2.56s`. The swapped artifacts were accepted, while the directory-binding
+  test exposed that `_inspect_mode` did not support an expected-directory
+  argument.
+- GREEN: the full acceptance test file completed as `9 passed in 8.21s`.
+- The standalone acceptance CLI exited 0 with `status=success`, 26 generated
+  paths, four resumed entries, resumed inspection true, and exact group links
+  unchanged.
+- The combined acceptance, Matplotlib contract, and frozen-smoke gate completed
+  as `19 passed in 42.87s`.
+
+`_inspect_mode` now requires `expected_directory` at every call site and
+requires the resolved manifest parent to equal it exactly. For grouped modes,
+each resolved image path stem must equal its owning manifest group's `stem`,
+so exchanging valid artifact facts between groups fails closed. Resume also
+compares the exact pre/post `group_id -> {stem, artifact}` mapping, preventing
+the deleted and healthy group links from being exchanged while retaining
+otherwise valid files and checksums.

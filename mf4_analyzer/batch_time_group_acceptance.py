@@ -104,6 +104,7 @@ def _inspect_mode(
     result,
     group_by: str,
     *,
+    expected_directory: Path,
     expected_entry_status: str = "done",
     expected_source_identities: set[str] | None = None,
 ) -> tuple[dict[str, object], list[Path]]:
@@ -113,6 +114,13 @@ def _inspect_mode(
         )
     manifest_path = Path(result.manifest_path).resolve()
     manifest_directory = manifest_path.parent
+    expected_directory = (
+        Path(expected_directory).expanduser().resolve(strict=False)
+    )
+    if manifest_directory != expected_directory:
+        raise RuntimeError(
+            f"{group_by} manifest directory mismatch: {manifest_directory}"
+        )
     manifest = load_batch_manifest(manifest_path)
     entries = manifest["entries"]
     groups = manifest.get("render_groups", [])
@@ -224,6 +232,11 @@ def _inspect_mode(
         raise RuntimeError(
             f"{group_by} image artifact outside manifest directory"
         )
+    if group_by != "none" and any(
+        path.stem != str(group.get("stem") or "")
+        for group, path in zip(groups, image_paths)
+    ):
+        raise RuntimeError(f"{group_by} group artifact identity mismatch")
     summary = {
         "task_count": len(entries),
         "data_count": len(data_paths),
@@ -286,6 +299,7 @@ def run(output_directory: Path, result_json: Path) -> int:
             summary, paths = _inspect_mode(
                 result,
                 group_by,
+                expected_directory=mode_directory,
                 expected_source_identities=expected_source_identities,
             )
             modes[group_by] = summary
@@ -321,6 +335,13 @@ def run(output_directory: Path, result_json: Path) -> int:
             entry["task_id"]: dict(entry["artifacts"]["data"])
             for entry in channel_manifest_before["entries"]
         }
+        group_artifact_links_before = {
+            group["group_id"]: {
+                "stem": group["stem"],
+                "artifact": dict(group["artifact"]),
+            }
+            for group in channel_manifest_before["render_groups"]
+        }
         deleted_image.unlink()
         resumed = BatchRunner(files).run(
             _preset("channel", resume=True),
@@ -334,6 +355,7 @@ def run(output_directory: Path, result_json: Path) -> int:
         resumed_summary, _ = _inspect_mode(
             resumed,
             "channel",
+            expected_directory=run_root / "channel",
             expected_entry_status="resumed",
             expected_source_identities=expected_source_identities,
         )
@@ -344,6 +366,13 @@ def run(output_directory: Path, result_json: Path) -> int:
         }
         resumed_data_paths = {
             Path(facts["path"]).resolve() for facts in resumed_data_facts.values()
+        }
+        resumed_group_artifact_links = {
+            group["group_id"]: {
+                "stem": group["stem"],
+                "artifact": dict(group["artifact"]),
+            }
+            for group in resumed_manifest_payload["render_groups"]
         }
         csv_after = _snapshot(channel_data_paths)
         healthy_image_after = _snapshot([healthy_image])
@@ -377,6 +406,9 @@ def run(output_directory: Path, result_json: Path) -> int:
             "data_artifact_paths_unchanged": (
                 resumed_data_paths == set(channel_data_paths)
             ),
+            "group_artifact_links_unchanged": (
+                resumed_group_artifact_links == group_artifact_links_before
+            ),
             "channel_csv_set_unchanged": (
                 channel_csv_files_after == channel_csv_files_before
             ),
@@ -399,6 +431,7 @@ def run(output_directory: Path, result_json: Path) -> int:
             "healthy_image_mtime_unchanged": True,
             "data_artifact_facts_unchanged": True,
             "data_artifact_paths_unchanged": True,
+            "group_artifact_links_unchanged": True,
             "channel_csv_set_unchanged": True,
             "channel_png_set_unchanged": True,
             "resumed_entry_statuses": {"resumed": 4},

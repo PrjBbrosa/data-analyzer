@@ -51,7 +51,11 @@ def test_inspect_mode_rejects_alias_data_artifact(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="data artifact paths are not unique"):
-        _inspect_mode(aliased, "channel")
+        _inspect_mode(
+            aliased,
+            "channel",
+            expected_directory=Path(aliased.manifest_path).parent,
+        )
 
 
 def test_inspect_mode_rejects_alias_group_image_artifact(tmp_path):
@@ -65,7 +69,42 @@ def test_inspect_mode_rejects_alias_group_image_artifact(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="image artifact paths are not unique"):
-        _inspect_mode(aliased, "source")
+        _inspect_mode(
+            aliased,
+            "source",
+            expected_directory=Path(aliased.manifest_path).parent,
+        )
+
+
+def test_inspect_mode_rejects_swapped_group_artifact_identities(tmp_path):
+    result = _grouped_result(tmp_path, "channel")
+
+    def swap_group_artifacts(manifest):
+        first, second = manifest["render_groups"]
+        first["artifact"], second["artifact"] = (
+            dict(second["artifact"]),
+            dict(first["artifact"]),
+        )
+
+    swapped = _mutated_result(result, swap_group_artifacts)
+
+    with pytest.raises(RuntimeError, match="group artifact identity mismatch"):
+        _inspect_mode(
+            swapped,
+            "channel",
+            expected_directory=Path(swapped.manifest_path).parent,
+        )
+
+
+def test_inspect_mode_rejects_manifest_outside_expected_mode_directory(tmp_path):
+    result = _grouped_result(tmp_path, "source")
+
+    with pytest.raises(RuntimeError, match="manifest directory mismatch"):
+        _inspect_mode(
+            result,
+            "source",
+            expected_directory=tmp_path / "wrong-mode-directory",
+        )
 
 
 def test_inspect_mode_rejects_artifact_outside_manifest_directory(tmp_path):
@@ -83,7 +122,11 @@ def test_inspect_mode_rejects_artifact_outside_manifest_directory(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="data artifact outside manifest directory"):
-        _inspect_mode(escaped, "none")
+        _inspect_mode(
+            escaped,
+            "none",
+            expected_directory=Path(escaped.manifest_path).parent,
+        )
 
 
 def test_generated_path_validation_rejects_aliases_before_sorting(tmp_path):
@@ -124,7 +167,11 @@ def test_inspect_mode_rejects_groups_with_the_wrong_dimension(tmp_path, group_by
     malformed = _mutated_result(result, regroup_by_opposite_dimension)
 
     with pytest.raises(RuntimeError, match=f"{group_by} render-group semantics"):
-        _inspect_mode(malformed, group_by)
+        _inspect_mode(
+            malformed,
+            group_by,
+            expected_directory=Path(malformed.manifest_path).parent,
+        )
 
 
 def _source_environment() -> dict[str, str]:
@@ -194,6 +241,7 @@ def test_group_acceptance_cli_proves_modes_linkage_and_deleted_image_resume(
         "data_artifact_facts_unchanged": True,
         "data_artifact_paths_unchanged": True,
         "deleted_image_recreated": True,
+        "group_artifact_links_unchanged": True,
         "healthy_image_bytes_unchanged": True,
         "healthy_image_mtime_unchanged": True,
         "resumed_entry_statuses": {"resumed": 4},

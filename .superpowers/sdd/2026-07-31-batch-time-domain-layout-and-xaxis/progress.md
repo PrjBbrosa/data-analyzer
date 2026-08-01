@@ -21,3 +21,4 @@ Task 9: complete (commits de883f2..3d4604e with fix round 1, scoped re-review cl
 Task 10: complete (commits 6382ff3 and 358d371; frozen/acceptance TDD complete; focused gate has only six recorded baseline failures; non-UI, acquisition UI, and 128-file isolated UI partitions have zero differences from detached 3d4604e; Full/Lite exact package commands exit 0 with 12-output frozen smoke success)
 Task 10 review fix 1: complete (pre-3.11 font trees no longer require the 3.11-added LastResort file; 3.11 still preserves it; contract + frozen smoke gate 10 passed)
 Task 10 review fix 2: complete (acceptance rejects artifact aliases/directory escapes and wrong grouping semantics; resumed manifest/artifacts and exact 26-file output set verified; combined gate 17 passed)
+Task 10 review fix 3: complete (inspector is bound to the exact expected mode directory; grouped PNG stem ownership and pre/post resume group-artifact mappings are exact; combined gate 19 passed)
