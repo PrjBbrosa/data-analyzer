@@ -28,7 +28,7 @@ def render_batch_image(
     if render_options.format != "png":
         raise ValueError("Qt batch renderer supports PNG output only")
 
-    def render() -> Path:
+    def render():
         scene = build_batch_scene(
             payload,
             params=params,
@@ -40,11 +40,17 @@ def render_batch_image(
             image = render_scene_image(
                 scene, metadata=render_metadata(render_context)
             )
-            return save_png(image, path)
+            return image
         finally:
             scene.close()
 
-    return render_on_gui_thread(render)
+    # QWidget construction/layout/painting must stay on QApplication's
+    # thread. QImage is an implicitly shared, reentrant value type, so the
+    # caller can perform the lossless PNG encode/write after the GUI work is
+    # complete. Batch workers therefore do not block the GUI during encoding;
+    # direct GUI-thread callers retain the same synchronous API.
+    image = render_on_gui_thread(render)
+    return save_png(image, path)
 
 
 __all__ = [

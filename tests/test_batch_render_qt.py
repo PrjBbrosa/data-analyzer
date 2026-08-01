@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QImage
+from PyQt5.QtGui import QColor, QImage, QPainter
 
 from mf4_analyzer._palette import FILE_PALETTES
 from mf4_analyzer.batch_image_options import BatchRenderOptions
@@ -325,6 +325,70 @@ def test_eight_subplot_text_geometry_and_shared_x_contract(qapp):
         scene.close()
 
 
+def test_subplot_export_draws_before_writing_dpi_metadata_and_contains_ticks(
+    qapp, tmp_path
+):
+    _, BatchSeries, BatchTimeFigureSpec, *_rest, build_batch_scene = _qt_api()
+    from mf4_analyzer.batch_render_qt._builder import _axis_tick_text_records
+    from mf4_analyzer.batch_render_qt._export import render_scene_image
+
+    x = np.linspace(7.0, 128.0, 401)
+    spec = BatchTimeFigureSpec(
+        (
+            BatchSeries(x, np.full(x.size, 0.25), "small", panel=0),
+            BatchSeries(x, np.full(x.size, 3276.95), "large", panel=1),
+        ),
+        layout="subplot",
+        panel_titles=("small", "large"),
+    )
+    scene = build_batch_scene(
+        ("time", spec),
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+        context=_context(channel="flat magnitudes", unit=""),
+    )
+    reference_scene = build_batch_scene(
+        ("time", spec),
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+        context=_context(channel="flat magnitudes", unit=""),
+    )
+    try:
+        image = render_scene_image(scene)
+        reference_scene.show_and_settle()
+        for plot in reference_scene.plots:
+            for side in ("left", "right", "bottom", "top"):
+                plot.getAxis(side).picture = None
+        reference = QImage(1920, 1080, QImage.Format_ARGB32_Premultiplied)
+        reference.fill(reference_scene.theme.background)
+        painter = QPainter(reference)
+        painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        reference_scene.widget.render(painter)
+        painter.end()
+
+        assert image == reference
+        expected_dpm = round(144 / 0.0254)
+        assert image.dotsPerMeterX() == expected_dpm
+        assert image.dotsPerMeterY() == expected_dpm
+        target = tmp_path / "flat-subplot-dpi-safe.png"
+        assert image.save(str(target), "PNG")
+        reloaded = QImage(str(target))
+        assert reloaded.dotsPerMeterX() == expected_dpm
+        assert reloaded.dotsPerMeterY() == expected_dpm
+
+        panel_tick_texts = []
+        for plot in scene.plots:
+            panel_rect = plot.sceneBoundingRect()
+            records = _axis_tick_text_records(plot.getAxis("left"))
+            assert records
+            assert all(panel_rect.contains(rect) for rect, _text in records)
+            panel_tick_texts.append([text for _rect, text in records])
+        assert all(abs(float(text)) < 10.0 for text in panel_tick_texts[0])
+        assert all(float(text) > 3000.0 for text in panel_tick_texts[1])
+        assert scene.adjacent_text_overlaps() == []
+    finally:
+        scene.close()
+        reference_scene.close()
+
+
 @pytest.mark.parametrize(
     ("group_by", "titles"),
     [
@@ -461,6 +525,137 @@ def test_worker_render_preserves_warnings_out_on_gui_thread(
     assert "exception" not in observed
     assert observed["path"].is_file()
     assert warnings == ["render warning"]
+
+
+def test_worker_render_paints_on_gui_thread_and_encodes_on_caller_thread(
+    qapp, monkeypatch, tmp_path
+):
+    import mf4_analyzer.batch_render_qt as qt_render
+
+    original_builder = qt_render.build_batch_scene
+    original_render = qt_render.render_scene_image
+    original_save = qt_render.save_png
+    observed = {}
+
+    def tracked_builder(*args, **kwargs):
+        observed["build_thread"] = threading.get_ident()
+        return original_builder(*args, **kwargs)
+
+    def tracked_render(*args, **kwargs):
+        observed["paint_thread"] = threading.get_ident()
+        return original_render(*args, **kwargs)
+
+    def tracked_save(image, path):
+        observed["save_thread"] = threading.get_ident()
+        observed["image_size"] = (image.width(), image.height())
+        return original_save(image, path)
+
+    monkeypatch.setattr(qt_render, "build_batch_scene", tracked_builder)
+    monkeypatch.setattr(qt_render, "render_scene_image", tracked_render)
+    monkeypatch.setattr(qt_render, "save_png", tracked_save)
+
+    def worker():
+        observed["caller_thread"] = threading.get_ident()
+        try:
+            observed["path"] = qt_render.render_batch_image(
+                ("time", _time_spec(count=1)),
+                tmp_path / "worker-thread-split.png",
+                options=BatchRenderOptions(width_px=640, height_px=360),
+                context=_context(),
+            )
+        except BaseException as exc:
+            observed["exception"] = exc
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    while thread.is_alive():
+        qapp.processEvents()
+        thread.join(0.01)
+
+    assert "exception" not in observed
+    assert observed["build_thread"] == threading.main_thread().ident
+    assert observed["paint_thread"] == threading.main_thread().ident
+    assert observed["save_thread"] == observed["caller_thread"]
+    assert observed["save_thread"] != threading.main_thread().ident
+    assert observed["image_size"] == (640, 360)
+    assert observed["path"].is_file()
+
+
+def test_gui_render_paints_and_encodes_on_gui_thread(qapp, monkeypatch, tmp_path):
+    import mf4_analyzer.batch_render_qt as qt_render
+
+    original_builder = qt_render.build_batch_scene
+    original_render = qt_render.render_scene_image
+    original_save = qt_render.save_png
+    observed = {}
+
+    def tracked_builder(*args, **kwargs):
+        observed["build_thread"] = threading.get_ident()
+        return original_builder(*args, **kwargs)
+
+    def tracked_render(*args, **kwargs):
+        observed["paint_thread"] = threading.get_ident()
+        return original_render(*args, **kwargs)
+
+    def tracked_save(image, path):
+        observed["save_thread"] = threading.get_ident()
+        return original_save(image, path)
+
+    monkeypatch.setattr(qt_render, "build_batch_scene", tracked_builder)
+    monkeypatch.setattr(qt_render, "render_scene_image", tracked_render)
+    monkeypatch.setattr(qt_render, "save_png", tracked_save)
+
+    target = qt_render.render_batch_image(
+        ("time", _time_spec(count=1)),
+        tmp_path / "gui-thread.png",
+        options=BatchRenderOptions(width_px=640, height_px=360),
+        context=_context(),
+    )
+
+    assert target.is_file()
+    assert observed == {
+        "build_thread": threading.main_thread().ident,
+        "paint_thread": threading.main_thread().ident,
+        "save_thread": threading.main_thread().ident,
+    }
+
+
+def test_worker_png_encode_failure_is_raised_unchanged_on_caller_thread(
+    qapp, monkeypatch, tmp_path
+):
+    import mf4_analyzer.batch_render_qt as qt_render
+
+    marker = RuntimeError("png-encode-marker")
+    observed = {}
+
+    def fail_save(_image, _path):
+        observed["save_thread"] = threading.get_ident()
+        raise marker
+
+    monkeypatch.setattr(qt_render, "save_png", fail_save)
+
+    def worker():
+        observed["caller_thread"] = threading.get_ident()
+        try:
+            qt_render.render_batch_image(
+                ("time", _time_spec(count=1)),
+                tmp_path / "encode-failure.png",
+                options=BatchRenderOptions(width_px=640, height_px=360),
+                context=_context(),
+            )
+        except BaseException as exc:
+            observed["exception"] = exc
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    while thread.is_alive():
+        qapp.processEvents()
+        thread.join(0.01)
+
+    assert observed["save_thread"] == observed["caller_thread"]
+    assert observed["exception"] is marker
+    assert not getattr(marker, "__notes__", [])
+    assert not (tmp_path / "encode-failure.png").exists()
 
 
 def test_non_main_thread_without_app_fails_clearly_in_subprocess(tmp_path):

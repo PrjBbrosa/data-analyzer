@@ -13,10 +13,17 @@ from PyQt5.QtWidgets import QApplication, QFrame, QWidget
 
 from mf4_analyzer import db_reference
 from mf4_analyzer.batch_image_options import BatchRenderOptions
+from mf4_analyzer.signal._envelope_cutils import positions_envelope
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
 from mf4_analyzer.ui.pg_canvas._shared import (
     _hide_native_auto_button,
     show_major_grid_left_bottom_only,
+)
+from mf4_analyzer.ui.pg_canvas.render_profile import (
+    RenderProfile,
+    bucket_width_for,
+    classify_render_profile,
+    source_revision_for,
 )
 from mf4_analyzer.ui.pg_canvas.ticks_math import _fmt_tick, _frame_to_nice
 
@@ -31,6 +38,8 @@ _EMPTY_DB_LEVEL = -200.0
 _AUTO_SPAN_DB = 30.0
 _AUTO_CEILING_PERCENTILE = 99.0
 _DISPLAY_DEAD_SPAN_DB = 200.0
+_HIGH_RASTER_TRANSITION_FRACTION = 0.5
+_HIGH_RASTER_NORMALIZED_Q90 = 0.001
 
 
 def _finite_values(values) -> np.ndarray:
@@ -299,6 +308,20 @@ def _time_x(item: BatchSeries, spec: BatchTimeFigureSpec) -> np.ndarray:
     return values
 
 
+def _native_time_antialias(profile: RenderProfile, pixel_width: int) -> bool:
+    """Preserve smooth-line AA while bounding high-raster export cost."""
+
+    if profile.strategy == "dense_discrete":
+        return False
+    if profile.source_length <= 2 * max(1, int(pixel_width)):
+        return True
+    q90 = float(profile.normalized_step_quantiles[2])
+    return not (
+        profile.transition_fraction >= _HIGH_RASTER_TRANSITION_FRACTION
+        and q90 >= _HIGH_RASTER_NORMALIZED_Q90
+    )
+
+
 def _text_of(item) -> str:
     target = getattr(item, "item", item)
     to_plain = getattr(target, "toPlainText", None)
@@ -340,6 +363,17 @@ def _axis_tick_text_records(axis) -> list[tuple[QRectF, str]]:
 
 
 @dataclass
+class _TimeCurveBinding:
+    curve: Any
+    plot: Any
+    x: np.ndarray
+    y: np.ndarray
+    profile: RenderProfile
+    mode: str
+    last_key: tuple[Any, ...] | None = None
+
+
+@dataclass
 class BuiltBatchScene:
     widget: pg.GraphicsLayoutWidget
     plots: tuple[Any, ...]
@@ -357,28 +391,86 @@ class BuiltBatchScene:
     heatmap_lut: np.ndarray | None = None
     heatmap_levels: tuple[float, float] | None = None
     heatmap_rect: QRectF | None = None
+    _layout_callbacks: tuple[Any, ...] = field(default_factory=tuple)
     _sync_callbacks: tuple[Any, ...] = field(default_factory=tuple)
+    _time_curve_bindings: tuple[_TimeCurveBinding, ...] = field(default_factory=tuple)
     _closed: bool = False
+
+    @staticmethod
+    def _view_pixel_width(plot) -> int:
+        """Return the realized output width that governs display buckets."""
+
+        try:
+            width = float(plot.vb.sceneBoundingRect().width())
+        except Exception:
+            width = 0.0
+        if not np.isfinite(width) or width < 1.0:
+            try:
+                width = float(plot.vb.width())
+            except Exception:
+                width = 0.0
+        return max(1, int(round(width)))
+
+    def _bind_time_display_envelopes(self) -> None:
+        """Bind display-only time envelopes after output geometry is realized."""
+
+        for binding in self._time_curve_bindings:
+            pixel_width = self._view_pixel_width(binding.plot)
+            x_range = tuple(float(value) for value in binding.plot.vb.viewRange()[0])
+            effective_width = bucket_width_for(
+                binding.profile,
+                mode=binding.mode,
+                pixel_width=pixel_width,
+                interactive=False,
+            )
+            key = (pixel_width, effective_width, x_range)
+            if binding.last_key == key:
+                continue
+            display_x, display_y = positions_envelope(
+                binding.x,
+                binding.y,
+                xlim=x_range,
+                pixel_width=effective_width,
+                is_monotonic=binding.profile.monotonic_time,
+            )
+            binding.curve.setData(
+                display_x,
+                display_y,
+                antialias=_native_time_antialias(
+                    binding.profile, effective_width
+                ),
+            )
+            binding.last_key = key
 
     def show_and_settle(self) -> None:
         if self._closed:
             raise RuntimeError("batch render scene is already closed")
         self.widget.resize(self.options.width_px, self.options.height_px)
         self.widget.show()
-        app = QApplication.instance()
-        if app is not None:
-            for _ in range(3):
-                app.processEvents()
+        layout = self.widget.ci.layout
+        layout.invalidate()
+        layout.activate()
+        for callback in self._layout_callbacks:
+            callback()
+        layout.invalidate()
+        layout.activate()
+        self._bind_time_display_envelopes()
         for callback in self._sync_callbacks:
             callback()
+        layout.invalidate()
+        layout.activate()
+        # Axis tick widths and dual-Y nice ranges can adjust the final ViewBox
+        # geometry. Rebind only curves whose realized pixel width actually
+        # changed; all of this still happens before the sole paint drain.
+        self._bind_time_display_envelopes()
+        app = QApplication.instance()
         for plot in self.plots:
             try:
                 plot.vb.updateAutoRange()
             except Exception:
                 pass
         if app is not None:
-            for _ in range(2):
-                app.processEvents()
+            app.processEvents()
 
     def texts(self) -> list[str]:
         values = [_text_of(item) for item in self.page_labels]
@@ -498,7 +590,9 @@ class _SceneBuilder:
         self.page_labels: list[Any] = []
         self.panel_titles: list[str] = []
         self.panel_text_items: list[tuple[Any, ...]] = []
+        self.layout_callbacks: list[Any] = []
         self.sync_callbacks: list[Any] = []
+        self.time_curve_bindings: list[_TimeCurveBinding] = []
         self.legend = None
         self.image_item = None
         self.colorbar = None
@@ -590,7 +684,13 @@ class _SceneBuilder:
         pen.setCapStyle(Qt.RoundCap)
         return pen
 
-    def _add_curve(self, owner, item: BatchSeries, spec: BatchTimeFigureSpec):
+    def _add_curve(
+        self,
+        owner,
+        plot,
+        item: BatchSeries,
+        spec: BatchTimeFigureSpec,
+    ):
         label = str(item.label)
         normalized = label.casefold()
         color_key = "__dataframe_source__" if normalized in {
@@ -600,15 +700,29 @@ class _SceneBuilder:
             if normalized.endswith(suffix):
                 color_key = label[: -len(suffix)]
                 break
-        curve = pg.PlotDataItem(
-            _time_x(item, spec),
+        x_values = _time_x(item, spec)
+        profile = classify_render_profile(
+            x_values,
             item.y,
+            source_revision_for(x_values, item.y),
+        )
+        curve = pg.PlotDataItem(
             pen=self._next_pen(item.linestyle, color_key=color_key),
-            antialias=True,
+            antialias=profile.strategy != "dense_discrete",
             name=str(item.label),
         )
         owner.addItem(curve)
         self.curves.append(curve)
+        self.time_curve_bindings.append(
+            _TimeCurveBinding(
+                curve=curve,
+                plot=plot,
+                x=x_values,
+                y=item.y,
+                profile=profile,
+                mode=spec.layout,
+            )
+        )
         return curve
 
     def _add_time_panel(
@@ -654,7 +768,7 @@ class _SceneBuilder:
                 _item.setPos(rect.left() + 4.0, rect.top() + 3.0)
 
             plot.vb.sigResized.connect(position_title)
-            self.sync_callbacks.append(position_title)
+            self.layout_callbacks.append(position_title)
         self.panel_titles.append(str(title))
         plot.setLabel("left", _linear_amplitude_label(units[0] if units else ""))
         if title:
@@ -663,7 +777,7 @@ class _SceneBuilder:
             def clear_outer_label(*_args, _axis=left_axis) -> None:
                 _axis.setLabel("")
 
-            self.sync_callbacks.append(clear_outer_label)
+            self.layout_callbacks.append(clear_outer_label)
         plot.setLabel("bottom", spec.x_label if bottom else "")
         if not bottom:
             bottom_axis = plot.getAxis("bottom")
@@ -691,11 +805,11 @@ class _SceneBuilder:
                 _view.linkedViewChanged(_plot.vb, _view.XAxis)
 
             plot.vb.sigResized.connect(sync_right)
-            self.sync_callbacks.append(sync_right)
+            self.layout_callbacks.append(sync_right)
 
         local_curves = []
         for item in panel_series:
-            curve = self._add_curve(owners[item.unit], item, spec)
+            curve = self._add_curve(owners[item.unit], plot, item, spec)
             local_curves.append(curve)
 
         if units and local_curves and not title:
@@ -881,7 +995,7 @@ class _SceneBuilder:
                 layout.invalidate()
                 layout.activate()
 
-            self.sync_callbacks.append(settle_subplot_layout)
+            self.layout_callbacks.append(settle_subplot_layout)
             footer_row = 3 + len(panel_ids)
         else:
             self._add_time_panel(
@@ -1110,7 +1224,9 @@ class _SceneBuilder:
             heatmap_lut=self.heatmap_lut,
             heatmap_levels=self.heatmap_levels,
             heatmap_rect=self.heatmap_rect,
+            _layout_callbacks=tuple(self.layout_callbacks),
             _sync_callbacks=tuple(self.sync_callbacks),
+            _time_curve_bindings=tuple(self.time_curve_bindings),
         )
 
 

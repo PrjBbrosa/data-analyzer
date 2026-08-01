@@ -21,15 +21,24 @@ def test_runner_thread_marshals_real_render_to_gui_and_returns_complete_result(
     from mf4_analyzer.io import FileData
     from mf4_analyzer.ui.drawers.batch.runner_thread import BatchRunnerThread
 
+    import threading
+
     render_threads = []
+    encode_thread_ids = []
     original_builder = qt_renderer.build_batch_scene
+    original_save = qt_renderer.save_png
 
     def build_with_warning(*args, warnings_out=None, **kwargs):
         render_threads.append(QThread.currentThread())
         warnings_out.append("gui-thread-render-warning")
         return original_builder(*args, warnings_out=warnings_out, **kwargs)
 
+    def save_on_caller_thread(image, path):
+        encode_thread_ids.append(threading.get_ident())
+        return original_save(image, path)
+
     monkeypatch.setattr(qt_renderer, "build_batch_scene", build_with_warning)
+    monkeypatch.setattr(qt_renderer, "save_png", save_on_caller_thread)
 
     n = 1024
     t = np.arange(n) / 512.0
@@ -48,6 +57,8 @@ def test_runner_thread_marshals_real_render_to_gui_and_returns_complete_result(
     qtbot.waitUntil(lambda: len(results) == 1, timeout=10_000)
     assert results[0].status == "done"
     assert render_threads == [qapp.thread()]
+    assert len(encode_thread_ids) == 1
+    assert encode_thread_ids[0] != threading.main_thread().ident
     item = results[0].items[0]
     assert item.warnings == ["gui-thread-render-warning"]
     assert set(item.artifact_facts) == {"data", "image"}

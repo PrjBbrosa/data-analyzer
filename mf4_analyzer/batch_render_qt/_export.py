@@ -20,14 +20,17 @@ def render_scene_image(
         QImage.Format_ARGB32_Premultiplied,
     )
     image.fill(scene.theme.background)
-    image.setDotsPerMeterX(round(scene.options.dpi / 0.0254))
-    image.setDotsPerMeterY(round(scene.options.dpi / 0.0254))
     for key, value in dict(metadata or {}).items():
         image.setText(str(key), str(value))
     painter = QPainter(image)
     painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
     scene.widget.render(painter)
     painter.end()
+    # AxisItem records its paint commands at the active paint-device DPI.
+    # Apply PNG resolution metadata only after drawing so the QPicture uses
+    # the same logical DPI as the on-screen single-file plot.
+    image.setDotsPerMeterX(round(scene.options.dpi / 0.0254))
+    image.setDotsPerMeterY(round(scene.options.dpi / 0.0254))
     return image
 
 
