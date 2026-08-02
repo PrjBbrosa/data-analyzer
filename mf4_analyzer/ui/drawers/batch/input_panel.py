@@ -813,7 +813,11 @@ class InputPanel(QWidget):
         form.addRow("目标策略", self._target_policy_combo)
 
         self._signal_picker = SignalPickerPopup(parent=form_host)
-        form.addRow("目标信号", self._signal_picker)
+        # Use an explicit label widget for both paired rows.  QFormLayout then
+        # owns one shared label column instead of allowing one string label to
+        # pick up a different effective margin on a later relayout.
+        self._target_signal_label = QLabel("目标信号", form_host)
+        form.addRow(self._target_signal_label, self._signal_picker)
 
         # ----- RPM row (single-select picker + unit + factor) -----
         rpm_host = QWidget(form_host)
@@ -830,9 +834,15 @@ class InputPanel(QWidget):
         for unit in _RPM_UNIT_FACTORS.keys():
             self._rpm_unit_combo.addItem(unit)
         self._rpm_unit_combo.addItem(_RPM_UNIT_CUSTOM)
-        self._rpm_unit_combo.setMinimumWidth(0)
-        self._rpm_unit_combo.setMaximumWidth(64)
-        self._rpm_unit_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        # These two controls are actionable configuration, not decorative
+        # suffixes.  With an Ignored policy and zero minimum Qt legitimately
+        # allocated them 0 px in the compact Batch pane, leaving RPM with no
+        # visible unit/factor choice.  Keep them fixed and let only the picker
+        # elide/absorb the remaining horizontal space.
+        self._rpm_unit_combo.setFixedWidth(64)
+        self._rpm_unit_combo.setToolTip(
+            "RPM 原始通道单位；选择后会更新右侧转换系数。"
+        )
         rpm_lay.addWidget(self._rpm_unit_combo)
 
         # NOTE: setDecimals(10) so unit-preset factors with infinite
@@ -845,14 +855,18 @@ class InputPanel(QWidget):
         self._rpm_factor_spin.setDecimals(10)
         self._rpm_factor_spin.setRange(0.0001, 10000.0)
         self._rpm_factor_spin.setValue(1.0)
-        self._rpm_factor_spin.setMinimumWidth(0)
-        self._rpm_factor_spin.setMaximumWidth(86)
-        self._rpm_factor_spin.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._rpm_factor_spin.setPrefix("× ")
+        self._rpm_factor_spin.setFixedWidth(86)
+        self._rpm_factor_spin.setAccessibleName("RPM 转换系数")
+        self._rpm_factor_spin.setToolTip(
+            "转换为 RPM 的系数：原始通道值 × 系数。可直接输入自定义系数。"
+        )
         rpm_lay.addWidget(self._rpm_factor_spin)
 
         # Form row label
         self._rpm_label_widget = QLabel("RPM 通道", form_host)
         form.addRow(self._rpm_label_widget, rpm_host)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._rpm_row_host = rpm_host  # referenced by set_method visibility
 
         # Form reference + row index, captured for set_method's takeRow /

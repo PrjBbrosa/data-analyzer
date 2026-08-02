@@ -604,6 +604,27 @@ def test_input_panel_rpm_unit_preset_sets_factor(qtbot):
     assert p._rpm_factor_spin.value() == 1.0
 
 
+def test_batch_rpm_coefficient_controls_stay_visible_and_align_with_target(qtbot):
+    """Order's picker, unit, and coefficient stay usable in the narrow pane."""
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet.resize(1080, 760)
+    sheet.show()
+    sheet.apply_method("order_time")
+    qtbot.wait(20)
+
+    panel = sheet._input_panel
+    assert panel._signal_picker.geometry().x() == panel._rpm_row_host.geometry().x()
+    assert panel._rpm_unit_combo.isVisibleTo(sheet)
+    assert panel._rpm_factor_spin.isVisibleTo(sheet)
+    assert panel._rpm_unit_combo.width() >= 56
+    assert panel._rpm_factor_spin.width() >= 76
+    assert panel._rpm_picker.geometry().right() < panel._rpm_unit_combo.geometry().x()
+    assert panel._rpm_unit_combo.geometry().right() < panel._rpm_factor_spin.geometry().x()
+
+
 def test_batch_double_spinboxes_display_compact_text_without_losing_precision(qtbot):
     """Default numeric text should not reserve width for fixed trailing zeroes."""
     from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
@@ -611,11 +632,11 @@ def test_batch_double_spinboxes_display_compact_text_without_losing_precision(qt
 
     p = InputPanel()
     qtbot.addWidget(p)
-    assert p._rpm_factor_spin.text() == "1.0"
+    assert p._rpm_factor_spin.text() == "× 1.0"
 
     p._rpm_factor_spin.setValue(1.23456789)
     assert abs(p._rpm_factor_spin.value() - 1.23456789) < 1e-9
-    assert p._rpm_factor_spin.text() == "1.23456789"
+    assert p._rpm_factor_spin.text() == "× 1.23456789"
 
     form = DynamicParamForm()
     qtbot.addWidget(form)

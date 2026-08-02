@@ -49,6 +49,12 @@ _METHOD_LABELS: dict[str, str] = {
     "order_time": "阶次",
 }
 
+_DB_REFERENCE_SECTION_BY_METHOD: dict[str, str] = {
+    "fft": "fft",
+    "fft_time": "fft_time",
+    "order_time": "order",
+}
+
 _OUTPUT_ISSUE_FIELDS = frozenset({
     "outputs",
     "data_format",
@@ -342,6 +348,9 @@ class BatchSheet(QDialog):
             self._on_builtin_analysis_preset
         )
         self._output_panel.changed.connect(self._on_output_controls_changed)
+        self._output_panel.db_reference_control.manage_requested.connect(
+            self._open_shared_db_reference_manager
+        )
         self._task_list.artifactOpenRequested.connect(
             self._open_artifact_location
         )
@@ -743,6 +752,42 @@ class BatchSheet(QDialog):
             self._analysis_panel.clear_applied_preset()
             self._analysis_preset_output_snapshot = None
         self._recompute_pipeline_status()
+
+    def _db_reference_host(self):
+        """Return the owning MainWindow without coupling BatchSheet to it."""
+        host = self.parentWidget()
+        while host is not None:
+            if callable(getattr(host, "_open_db_reference_dialog", None)):
+                return host
+            host = host.parentWidget()
+        return None
+
+    def _open_shared_db_reference_manager(self) -> None:
+        """Open the same global dB-reference manager as single-file views."""
+        host = self._db_reference_host()
+        if host is None:
+            return
+        section = _DB_REFERENCE_SECTION_BY_METHOD.get(self.method(), "fft")
+        host._open_db_reference_dialog(
+            section,
+            view_control=self._output_panel.db_reference_control,
+            on_catalog_saved=self._on_batch_db_reference_catalog_saved,
+            on_view_mode_committed=self._on_batch_db_reference_view_mode_committed,
+        )
+
+    def _on_batch_db_reference_catalog_saved(self) -> None:
+        """Refresh the Batch resolver after the shared catalog is saved."""
+        host = self._db_reference_host()
+        store = getattr(host, "db_reference_store", None) if host else None
+        snapshot = getattr(store, "snapshot", None)
+        if callable(snapshot):
+            self._output_panel.set_reference_catalog(snapshot())
+        self._recompute_pipeline_status()
+
+    def _on_batch_db_reference_view_mode_committed(self, mode: str) -> None:
+        """Apply the dialog's current-view mode to Batch, never Inspector."""
+        self._output_panel.db_reference_control.set_mode(mode)
+        self._on_output_controls_changed()
 
     def apply_preset(self, preset: AnalysisPreset) -> None:
         """Fill the dialog from a preset (spec §6.4).

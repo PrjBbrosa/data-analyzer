@@ -90,6 +90,53 @@ def test_method_button_mouse_click_refreshes_all_dependent_panels(qtbot):
     assert sheet._output_panel._amplitude_unit_row.isHidden() is True
 
 
+def test_batch_db_reference_manage_uses_mainwindow_shared_route(qtbot):
+    """Batch must reuse the singleton catalog dialog, not open a private store."""
+    from types import SimpleNamespace
+
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    class Store:
+        def snapshot(self):
+            return SimpleNamespace(
+                system_catalog=(), user_catalog=(),
+                prefer_channel_metadata=True,
+            )
+
+    class Host(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.db_reference_store = Store()
+            self.calls = []
+
+        def _open_db_reference_dialog(
+            self,
+            section,
+            *,
+            view_control,
+            on_catalog_saved,
+            on_view_mode_committed,
+        ):
+            self.calls.append((section, view_control))
+            on_view_mode_committed("manual")
+            on_catalog_saved()
+
+    host = Host()
+    qtbot.addWidget(host)
+    sheet = BatchSheet(parent=host, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet.show()
+
+    control = sheet._output_panel.db_reference_control
+    control.manage_button.click()
+
+    assert host.calls == [("fft", control)]
+    assert control.mode() == "manual"
+    assert sheet._output_panel._reference_system_catalog == ()
+
+
 def test_pipeline_strip_set_stage_updates_summary(qtbot):
     from mf4_analyzer.ui.drawers.batch.pipeline_strip import PipelineStrip
     strip = PipelineStrip()

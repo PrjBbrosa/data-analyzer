@@ -1858,7 +1858,14 @@ class MainWindow(
         self._stamp_db_reference_nudge_facts(section)
         QTimer.singleShot(0, rerender_fn)
 
-    def _open_db_reference_dialog(self, section):
+    def _open_db_reference_dialog(
+        self,
+        section,
+        *,
+        view_control=None,
+        on_catalog_saved=None,
+        on_view_mode_committed=None,
+    ):
         """Manage-button entry point (dB-reference-defaults Task 5): every
         section's manage button opens the SAME shared dialog editing the
         ONE global catalog service; only the '当前 View' toggle default
@@ -1866,7 +1873,7 @@ class MainWindow(
         (spec §11.1)."""
         from ..db_reference_dialog import DbReferenceDefaultsDialog
         ctx = self._analysis_ctx(section)
-        control = ctx.db_reference_control
+        control = view_control or ctx.db_reference_control
         dlg = DbReferenceDefaultsDialog(
             self, self.db_reference_store,
             current_mode=control.mode(),
@@ -1875,9 +1882,14 @@ class MainWindow(
         dlg.catalog_saved.connect(
             lambda s=section: self._on_db_reference_catalog_saved(s)
         )
-        dlg.view_mode_committed.connect(
-            lambda mode, s=section: self._on_db_reference_view_mode_committed(s, mode)
-        )
+        if callable(on_catalog_saved):
+            dlg.catalog_saved.connect(on_catalog_saved)
+        if view_control is None:
+            dlg.view_mode_committed.connect(
+                lambda mode, s=section: self._on_db_reference_view_mode_committed(s, mode)
+            )
+        elif callable(on_view_mode_committed):
+            dlg.view_mode_committed.connect(on_view_mode_committed)
         dlg.exec_()
 
     def set_active_file(self, fid):
