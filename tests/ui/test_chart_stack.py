@@ -2839,9 +2839,9 @@ def test_context_hint_rotation_advances_and_pause_holds(qapp):
     # full_text(): the rotating row elides for display, assert the logical value.
     assert card._hint_context.full_text() == "Ctrl / Shift + 滚轮 缩放 X / Y"
     card._advance_context_hint()
-    assert card._hint_context.full_text() == "滚轮作用于鼠标所在子图"
+    assert card._hint_context.full_text() == "滚轮作用于鼠标所在分屏图"
     card._advance_context_hint()
-    assert card._hint_context.full_text() == "Shift + 滚轮 缩放当前子图 Y"
+    assert card._hint_context.full_text() == "Shift + 滚轮：缩放鼠标所在分屏图 Y 轴"
 
     # Paused: an advance is a no-op (the footer freezes during interaction).
     card.set_hint_rotation_paused(True)

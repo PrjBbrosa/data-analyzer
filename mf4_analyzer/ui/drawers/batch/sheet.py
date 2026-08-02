@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
+import tempfile
 
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QDesktopServices
@@ -39,7 +40,8 @@ from .analysis_panel import AnalysisPanel
 from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
 from .output_panel import OutputPanel
 from .pipeline_strip import PipelineStrip
-from .runner_thread import BatchRunnerThread
+from .preview_dialog import BatchPreviewDialog
+from .runner_thread import BatchPreviewThread, BatchRunnerThread
 from .task_list import TaskListWidget
 
 
@@ -165,6 +167,12 @@ class BatchSheet(QDialog):
         self._running: bool = False
         self._runner_thread: BatchRunnerThread | None = None
         self._last_result = None
+        # Preview state is deliberately separate from run/preset state.
+        self._preview_thread: BatchPreviewThread | None = None
+        self._preview_result = None
+        self._preview_dialog: BatchPreviewDialog | None = None
+        self._preview_temp: tempfile.TemporaryDirectory | None = None
+        self._preview_close_pending: bool = False
         self._close_pending: bool = False
 
         # W7 toast bookkeeping — populated by ``_toast`` so headless tests
@@ -194,9 +202,6 @@ class BatchSheet(QDialog):
         self._toolbar_title = QLabel("批处理分析", self._toolbar_host)
         self._toolbar_title.setObjectName("BatchToolbarTitle")
         bar.addWidget(self._toolbar_title)
-        self._toolbar_meta = QLabel("紧凑工作流", self._toolbar_host)
-        self._toolbar_meta.setObjectName("BatchToolbarMeta")
-        bar.addWidget(self._toolbar_meta)
         bar.addStretch(1)
 
         self._btn_fill_from_current = QPushButton("从当前单次同步")
@@ -317,6 +322,11 @@ class BatchSheet(QDialog):
         self._btn_cancel = QPushButton("关闭", self._footer_host)
         self._btn_cancel.clicked.connect(self.reject)
         self._footer_lay.addWidget(self._btn_cancel)
+
+        self._btn_preview = QPushButton("预览", self._footer_host)
+        self._btn_preview.setToolTip("生成正式渲染链路的代表最终图")
+        self._btn_preview.clicked.connect(self._on_preview_clicked)
+        self._footer_lay.addWidget(self._btn_preview)
 
         self._btn_run = QPushButton("运行", self._footer_host)
         self._btn_run.setDefault(True)
@@ -566,6 +576,7 @@ class BatchSheet(QDialog):
         if not self._running:
             runnable = self.is_runnable()
             self._btn_run.setEnabled(runnable)
+            self._btn_preview.setEnabled(runnable)
             blocked_reason = "请选择文件、信号和输出目录"
             if preflight_issues:
                 blocked_reason = _blocked_issue_reason(preflight_issues[0])
@@ -1024,12 +1035,16 @@ class BatchSheet(QDialog):
         params = self.params()
         if str(params.get("x_source", "time")) != "channel":
             self._output_panel.set_x_axis_context(label="Time", unit="s")
+            self._analysis_panel.set_chart_statistics_x_context(x_source="time", unit="s")
             return
         channel = str(params.get("x_channel") or "").strip()
         units = self._x_channel_units(channel) if channel else ()
         unit = units[0] if len(units) == 1 else ""
         self._output_panel.set_x_axis_context(
             label=channel or "X", unit=unit,
+        )
+        self._analysis_panel.set_chart_statistics_x_context(
+            x_source="channel", x_channel=channel, unit=unit,
         )
 
     def _control_params_snapshot(self, method: str | None = None) -> dict:
@@ -1395,6 +1410,101 @@ class BatchSheet(QDialog):
         # the user just tuned for exactly this export.
         self._persist_panel_prefs()
 
+    def _on_preview_clicked(self) -> None:
+        """No-load-plan, then immediately render the first formal group."""
+        if self._running or self._preview_thread is not None or not self.is_runnable():
+            return
+        runner = self._make_runner()
+        preset = self.get_preset()
+        try:
+            plan = runner.preview_outputs(preset, self.output_dir())
+        except Exception as exc:  # noqa: BLE001
+            self._toast(f"预览不可用：{exc}", kind="warning")
+            return
+        group = plan.representative_group
+        if group is None:
+            self._toast("预览不可用：没有可生成的代表输出", kind="warning")
+            return
+        dialog = self._preview_dialog
+        if dialog is None:
+            dialog = BatchPreviewDialog(self)
+            dialog.regenerate_requested.connect(self._start_preview_render)
+            dialog.run_all_requested.connect(self._run_all_from_preview)
+            dialog.cancel_requested.connect(self._cancel_preview)
+            dialog.finished.connect(self._cleanup_preview_temp)
+            self._preview_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self._preview_plan = (runner, preset, group)
+        self._start_preview_render()
+
+    def _start_preview_render(self) -> None:
+        if self._preview_thread is not None:
+            return
+        runner, preset, group = getattr(self, "_preview_plan", (None, None, None))
+        if runner is None or group is None:
+            return
+        self._cleanup_preview_temp()
+        self._preview_temp = tempfile.TemporaryDirectory(prefix="tracelab-batch-preview-")
+        dialog = self._preview_dialog
+        if dialog is None:
+            return
+        dialog.set_loading(
+            f"{group.display_name} · 代表输出 {group.ordinal} / {group.total_groups} · "
+            f"将读取 {group.required_source_count} 个来源"
+        )
+        self._preview_result = None
+        self._btn_preview.setEnabled(False)
+        thread = BatchPreviewThread(
+            runner, preset, group.group_id, self._preview_temp.name, parent=self,
+        )
+        self._preview_thread = thread
+        thread.finished_with_result.connect(self._on_preview_finished_with_result)
+        # The only preview unlock/cleanup boundary is QThread.finished.
+        thread.finished.connect(self._on_preview_thread_finished)
+        thread.start()
+
+    def _cancel_preview(self) -> None:
+        if self._preview_thread is not None:
+            self._preview_thread.request_cancel()
+
+    def _on_preview_finished_with_result(self, result) -> None:
+        self._preview_result = result
+
+    def _on_preview_thread_finished(self) -> None:
+        thread = self._preview_thread
+        self._preview_thread = None
+        if thread is not None:
+            thread.deleteLater()
+        dialog = self._preview_dialog
+        if dialog is not None:
+            result = self._preview_result
+            if str(getattr(result, "status", "")) == "cancelled":
+                dialog.set_cancelled()
+            else:
+                dialog.set_result(result)
+        if not self._running:
+            self._btn_preview.setEnabled(self.is_runnable())
+        if self._preview_close_pending:
+            self._preview_close_pending = False
+            self.close()
+
+    def _cleanup_preview_temp(self, *_args) -> None:
+        if self._preview_thread is not None:
+            return
+        temp = self._preview_temp
+        self._preview_temp = None
+        if temp is not None:
+            temp.cleanup()
+
+    def _run_all_from_preview(self) -> None:
+        dialog = self._preview_dialog
+        if dialog is not None:
+            dialog.accept()
+        self._cleanup_preview_temp()
+        self._on_run_clicked()
+
     def _on_cancel_clicked(self) -> None:
         """Running-mode 中断 handler — sets the cancel token and disables
         the abort button so it cannot be clicked twice."""
@@ -1525,6 +1635,7 @@ class BatchSheet(QDialog):
         self._btn_import_preset.setEnabled(False)
         self._btn_export_preset.setEnabled(False)
         self._btn_cancel.setVisible(False)
+        self._btn_preview.setVisible(False)
         self._btn_run.setVisible(False)
         self._btn_abort.setEnabled(True)
         self._btn_abort.setText("中断")
@@ -1545,9 +1656,11 @@ class BatchSheet(QDialog):
         self._btn_export_preset.setEnabled(True)
         self._btn_abort.setVisible(False)
         self._btn_cancel.setVisible(True)
+        self._btn_preview.setVisible(True)
         self._btn_run.setVisible(True)
         # Re-evaluate Run-button enabled state against current config.
         self._btn_run.setEnabled(self.is_runnable())
+        self._btn_preview.setEnabled(self.is_runnable())
 
     def _open_artifact_location(self, artifact_path: str) -> None:
         """Open an artifact's containing folder after explicit activation."""
@@ -1564,6 +1677,11 @@ class BatchSheet(QDialog):
         the cancel path; the actual close happens once
         ``_on_thread_finished`` clears ``_running`` (W6 invariant 4).
         """
+        if self._preview_thread is not None:
+            self._preview_close_pending = True
+            self._cancel_preview()
+            event.ignore()
+            return
         if self._running:
             choice = QMessageBox.question(
                 self, "确认关闭",

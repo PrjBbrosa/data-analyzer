@@ -11,7 +11,7 @@ output modules, so a desktop worker can delegate work without GUI objects.
 from __future__ import annotations
 
 from contextlib import nullcontext
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence
 import re
@@ -121,6 +121,34 @@ class BatchOutputPreview:
     image_artifact_count: int = 0
     data_conflict_count: int = 0
     image_conflict_count: int = 0
+    representative_group: "BatchRepresentativeGroup | None" = None
+
+
+@dataclass(frozen=True)
+class BatchRepresentativeGroup:
+    """One deterministic, no-load render-group description for UI preview."""
+
+    group_id: str
+    display_name: str
+    group_by: str
+    member_count: int
+    required_source_count: int
+    planned_stem: str
+    ordinal: int
+    total_groups: int
+
+
+@dataclass(frozen=True)
+class BatchPreviewResult:
+    """The private, image-only result returned by :meth:`preview_group`."""
+
+    image_path: str | None
+    group_id: str
+    display_name: str
+    loaded_source_count: int
+    warnings: tuple[str, ...] = ()
+    status: str = "blocked"
+    message: str = ""
 
 
 @dataclass
@@ -250,6 +278,7 @@ class RenderGroupResult:
     message: str = ''
     warnings: list[str] = field(default_factory=list)
     artifact: dict[str, Any] | None = None
+    effective_facts: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -556,10 +585,21 @@ class BatchRunner:
                 if path.exists():
                     data_conflicting_tasks.add(task.identity.task_id)
 
+        group_by = str(requested_params.get(
+            'render_group_by', 'none',
+        ) or 'none').strip().lower()
         groups = (
             group_render_tasks(render_tasks, requested_params)
             if image_extension is not None else ()
         )
+        # Ungrouped formal runs execute ``_expand_tasks`` order.  The grouping
+        # helper intentionally sorts singleton groups for stable identities,
+        # so restore execution order here before selecting the representative.
+        if group_by == 'none' and groups:
+            groups_by_id = {group.identity.group_id: group for group in groups}
+            groups = tuple(
+                groups_by_id[task.identity.task_id] for task in render_tasks
+            )
         image_conflicting_groups = set()
         image_conflicting_tasks = set()
         for group in groups:
@@ -572,9 +612,6 @@ class BatchRunner:
                     member.identity.task_id for member in group.members
                 )
 
-        group_by = str(requested_params.get(
-            'render_group_by', 'none',
-        ) or 'none').strip().lower()
         data_conflict_count = len(data_conflicting_tasks)
         image_conflict_count = len(image_conflicting_groups)
         if group_by == 'none':
@@ -590,6 +627,21 @@ class BatchRunner:
         )
         image_artifact_count = len(groups)
         width, height = preset.outputs.resolved_image_dimensions()
+        representative = None
+        if groups:
+            group = groups[0]
+            representative = BatchRepresentativeGroup(
+                group_id=group.identity.group_id,
+                display_name=group.display_name,
+                group_by=group.group_by,
+                member_count=len(group.members),
+                required_source_count=len({
+                    member.source_key for member in group.members
+                }),
+                planned_stem=group.identity.stem,
+                ordinal=1,
+                total_groups=len(groups),
+            )
         return BatchOutputPreview(
             task_count=len(tasks),
             artifact_count=data_artifact_count + image_artifact_count,
@@ -604,6 +656,84 @@ class BatchRunner:
             image_artifact_count=image_artifact_count,
             data_conflict_count=data_conflict_count,
             image_conflict_count=image_conflict_count,
+            representative_group=representative,
+        )
+
+    def preview_group(
+        self,
+        preset,
+        group_id: str,
+        temp_dir,
+        *,
+        cancel_token: threading.Event | None = None,
+    ) -> BatchPreviewResult:
+        """Render exactly one planned group into a caller-owned temp directory.
+
+        Planning is deliberately no-load.  The selected group is then executed
+        through the normal ``run()`` path with an image-only, no-manifest
+        output contract, which keeps preprocessing, figure specification,
+        renderer, dimensions, and DPI identical to a formal run.
+        """
+        requested_params = normalize_batch_params(preset.params, preset.method)
+        tasks = list(self._expand_tasks(preset, allow_source_load=False))
+        render_tasks = []
+        for source_key, channel in tasks:
+            fd = self._known_file_data(source_key)
+            identity = (
+                self._build_task_identity(
+                    fd, file_id=source_key, channel=channel,
+                    method=preset.method, params=requested_params,
+                )
+                if fd is not None else self._build_unresolved_task_identity(
+                    source_key, channel=channel, method=preset.method,
+                    params=requested_params,
+                    group_identity=self._source_group_identity_hints.get(source_key),
+                )
+            )
+            render_tasks.append(RenderTask(source_key, channel, identity))
+        groups = group_render_tasks(render_tasks, requested_params)
+        group = next(
+            (candidate for candidate in groups
+             if candidate.identity.group_id == str(group_id)),
+            None,
+        )
+        if group is None:
+            return BatchPreviewResult(
+                image_path=None, group_id=str(group_id), display_name="",
+                loaded_source_count=0, message="代表输出组已失效",
+            )
+
+        # Target pairs are runtime-only and bound to the selected group.  They
+        # neither mutate the supplied preset nor enter a persisted preset.
+        preview_outputs = replace(
+            preset.outputs,
+            export_data=False,
+            export_image=True,
+            image_format="png",
+            write_manifest=False,
+        )
+        preview_preset = replace(
+            preset,
+            target_pairs=tuple(
+                (member.source_key, member.channel) for member in group.members
+            ),
+            outputs=preview_outputs,
+        )
+        result = self.run(
+            preview_preset, temp_dir, cancel_token=cancel_token,
+        )
+        images = [
+            item.image_path for item in result.items
+            if item.image_path and item.status in {"done", "resumed"}
+        ]
+        return BatchPreviewResult(
+            image_path=images[0] if images else None,
+            group_id=group.identity.group_id,
+            display_name=group.display_name,
+            loaded_source_count=len({member.source_key for member in group.members}),
+            warnings=tuple(result.warnings),
+            status=result.status,
+            message="; ".join(result.blocked),
         )
 
     def run(self, preset, output_dir,
@@ -659,8 +789,9 @@ class BatchRunner:
                 execution_scope = self._lazy_pattern_execution_scope(preset)
                 if execution_scope is not None:
                     normalized_recipe['execution_scope'] = execution_scope
+                manifest_dir = output_dir / '.tracelab' / 'runs'
                 recorder = BatchManifestRecorder(
-                    output_dir,
+                    manifest_dir,
                     preset_name=preset.name,
                     normalized_recipe=normalized_recipe,
                     recipe_fingerprint=recipe_id,
@@ -723,6 +854,7 @@ class BatchRunner:
                 warnings=list(dict.fromkeys([
                     *run_migration_warnings,
                     *degraded_reasons,
+                    *(warning for item in result_items for warning in item.warnings),
                 ])),
             )
 
@@ -861,11 +993,15 @@ class BatchRunner:
                 if resume_manifest is not None:
                     resume_data = load_batch_manifest(resume_manifest)
                 else:
+                    manifest_dirs = (
+                        output_dir / '.tracelab' / 'runs', output_dir,
+                    )
                     candidates = sorted(
                         (
-                            path for path in output_dir.glob(
-                                'batch-manifest__*.json'
-                            )
+                            path
+                            for directory in manifest_dirs
+                            if directory.is_dir()
+                            for path in directory.glob('batch-manifest__*.json')
                             if not path.name.endswith('.partial.json')
                         ),
                         key=lambda path: path.stat().st_mtime_ns,
@@ -1673,6 +1809,9 @@ class BatchRunner:
                             message='manifest-proven group resume',
                             warnings=list(reusable.get('warnings') or ()),
                             artifact=dict(reusable.get('artifact') or {}),
+                            effective_facts=dict(
+                                reusable.get('effective_facts') or {}
+                            ),
                         )
                     elif effective_plan.degraded_reason:
                         outcome = RenderGroupResult(
@@ -1790,6 +1929,7 @@ class BatchRunner:
                                     message=outcome.message,
                                     warnings=outcome.warnings,
                                     artifact=outcome.artifact,
+                                    effective_facts=outcome.effective_facts,
                                 )
                             )
                         except Exception as exc:
@@ -3064,6 +3204,7 @@ class BatchRunner:
                     source_label=str(fd.filename),
                     params=params,
                     panel=panel,
+                    family_key=group_member.identity.task_id,
                 )
                 try:
                     refs = spool.append(
@@ -3178,6 +3319,38 @@ class BatchRunner:
                 x_label=x_label,
                 panel_titles=panel_titles,
             )
+            statistics_facts: dict[str, Any] = {}
+            statistics_warnings: list[str] = []
+            statistics_config = params.get('chart_statistics') or {}
+            if bool(statistics_config.get('enabled', False)):
+                diagnostics = [
+                    {
+                        'code': item.code,
+                        'message': item.message,
+                        'panel': item.panel,
+                    }
+                    for item in spec.diagnostics
+                ]
+                statistics_facts = {
+                    'chart_statistics': {
+                        'config': dict(statistics_config),
+                        'row_count': len(spec.statistics),
+                        'rows': [
+                            {
+                                'series_key': item.series_key,
+                                'panel': item.panel,
+                                'branch': item.branch_label,
+                                'sample_count': item.sample_count,
+                                'minimum': item.minimum,
+                                'maximum': item.maximum,
+                                'mean': item.mean,
+                            }
+                            for item in spec.statistics
+                        ],
+                        'diagnostics': diagnostics,
+                    },
+                }
+                statistics_warnings = [item['code'] for item in diagnostics]
             image_extension = str(effective.effective['image'])
             conflict_policy = str(
                 conflict_policy_override
@@ -3214,6 +3387,7 @@ class BatchRunner:
             )
             member_fact = f'{len(usable)}/{len(group.members)}'
             facts = dict(params)
+            facts.update(statistics_facts)
             if len(usable) != len(group.members):
                 facts['members'] = member_fact
             context = BatchRenderContext(
@@ -3244,6 +3418,7 @@ class BatchRunner:
                     )
                     warnings = list(dict.fromkeys([
                         *effective.migration_warnings,
+                        *statistics_warnings,
                         *attempt_warnings,
                     ]))
                     break
@@ -3282,6 +3457,7 @@ class BatchRunner:
                     message='cancelled during group artifact checksum',
                     warnings=warnings,
                     artifact=artifact,
+                    effective_facts=statistics_facts,
                 )
             return RenderGroupResult(
                 group_id=group.identity.group_id,
@@ -3291,6 +3467,7 @@ class BatchRunner:
                 image_path=str(image_path),
                 warnings=warnings,
                 artifact=artifact,
+                effective_facts=statistics_facts,
             )
         finally:
             if reservation is not None:
@@ -3306,6 +3483,7 @@ class BatchRunner:
         message: str = '',
         warnings: Sequence[str] = (),
         artifact: Mapping[str, Any] | None = None,
+        effective_facts: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         members = []
         for member in group.members:
@@ -3340,6 +3518,7 @@ class BatchRunner:
                 if item
             )),
             'artifact': dict(artifact) if artifact is not None else None,
+            'effective_facts': dict(effective_facts or {}),
         }
 
     def _run_one(self, preset, fid, fd, signal_name, output_dir, *,
@@ -3526,6 +3705,7 @@ class BatchRunner:
                         source_label=str(fd.filename),
                         params=requested_params,
                         panel=0,
+                        family_key=identity.task_id,
                     )
                     x_source = str(requested_params.get(
                         'x_source', 'time',
@@ -3818,6 +3998,7 @@ class BatchRunner:
         source_label: str,
         params: Mapping[str, Any],
         panel: int,
+        family_key: str = '',
     ) -> tuple[BatchSeries, ...]:
         from .batch_render import BatchSeries
 
@@ -3848,6 +4029,9 @@ class BatchRunner:
                 x_unit=x_unit,
                 linestyle='-',
                 panel=panel,
+                family_key=family_key,
+                series_key=f'{family_key}:value',
+                variant='value',
             ),)
 
         show_original = bool(filter_state.get('show_original', True))
@@ -3867,6 +4051,9 @@ class BatchRunner:
                 x_unit=x_unit,
                 linestyle='-',
                 panel=panel,
+                family_key=family_key,
+                series_key=f'{family_key}:original',
+                variant='original',
             ))
         if show_filtered:
             series.append(BatchSeries(
@@ -3877,6 +4064,9 @@ class BatchRunner:
                 x_unit=x_unit,
                 linestyle='--',
                 panel=panel,
+                family_key=family_key,
+                series_key=f'{family_key}:filtered',
+                variant='filtered',
             ))
         return tuple(series)
 
@@ -3896,6 +4086,17 @@ class BatchRunner:
             if x_source == 'channel'
             else str(params.get('x_origin', 'zero') or 'zero').strip().lower()
         )
+        from .batch_statistics import StatisticSeriesInput, plan_chart_statistics
+        stats_plan = plan_chart_statistics(
+            tuple(StatisticSeriesInput(
+                x=item.x, y=item.y, series_key=item.series_key,
+                family_key=item.family_key, label=item.label,
+                variant=item.variant, panel=item.panel,
+            ) for item in series),
+            dict(params).get('chart_statistics') or {},
+            x_source=x_source,
+            x_origin=x_origin,
+        )
         return BatchTimeFigureSpec(
             series=tuple(series),
             layout=str(
@@ -3905,6 +4106,8 @@ class BatchRunner:
             x_origin=x_origin,
             x_label=str(x_label),
             panel_titles=tuple(panel_titles),
+            statistics=stats_plan.rows,
+            diagnostics=stats_plan.diagnostics,
         )
 
     @staticmethod

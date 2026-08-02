@@ -1,9 +1,11 @@
 # 批处理时域图内统计与滞回容错 Implementation Plan
 
-- **状态**：待执行（本文件仅为计划，未修改产品代码）
+- **状态**：已实施于当前工作区，尚未提交；前台 TraceLab 验收待做
 - **日期**：2026-08-02
 - **执行顺序**：等待 `2026-08-02-batch-workflow-preview-and-run-records-implementation.md` 的 preview/core 接口冻结后执行
 - **范围**：Batch 时域线图的区间最大值、最小值、样本平均值及图内标注
+
+> **正反程识别 follow-up**：现有 §4.3 的相邻 `dx` 方向实现已被真实 Rack Travel 量化抖动证伪。后续替换必须遵循 [`2026-08-03-batch-custom-x-major-path-recognition-implementation.md`](2026-08-03-batch-custom-x-major-path-recognition-implementation.md)；在该计划完成前，不得只调低/调高浮点 epsilon 来宣称修复。
 
 > 用户决定：自定义 X 出现同一 X 对应两个 Y 时，需要按滞回路径分别统计；若同一图/同一 pane 出现多个滞回曲线叠加，图仍正常生成并保留曲线，但统计区域显示一个 `ERROR` 并说明原因。该错误不得阻塞其他图片、数据导出或整个 Batch run。
 
@@ -73,9 +75,10 @@
 
 ```text
 图内统计                                      [启用]
+──────────────────────────────────────────────────
 
-统计区间       [全范围 ▼]
-               或 [X 起点] — [X 终点]
+统计区间       ☑ 自动    全时段
+               （取消“自动”后：最小 [X 起点] — 最大 [X 终点]）
 
 统计项目       ☑ 最大值   ☑ 最小值   ☑ 平均值
 
@@ -86,6 +89,27 @@
 - `x_source=time` 时单位显示秒；`x_source=channel` 时跟随选中 X 通道单位。
 - 默认关闭，避免现有导出图发生无提示视觉变化。
 - 分支拆分是固定正确性规则，不提供“把两条路径直接合并平均”的危险开关。
+
+#### Fixed panel visual contract
+
+控件位于现有 X 轴来源/通道选择之后、Batch 设置滚动区内；它是正常的设置分组，不保留用户截图中的红框。普通 `time + x_source=channel` 目标外观固定为：
+
+```text
+图内统计                                                     [启用 ●]
+────────────────────────────────────────────────────────────────────
+
+统计区间  ☐ 自动   最小 [-110.0] — 最大 [110.0]  deg
+统计项目  ☑ 最大值       ☑ 最小值       ☑ 样本平均
+
+ⓘ 同一 X 对应多个 Y 时，按采集路径分别统计
+   自定义 X：方向盘转角 (deg)
+```
+
+- `x_source=channel` 时，统计卡上方仍清楚显示 `X 轴来源：通道`、`X 通道：{channel}`；不要把 time 的“时间原点”控件留在此状态，避免用户误以为图按时间统计。
+- 标题下有一根细横线分隔设置区。统计区间只占一行：`自动` 勾选时保存 `range_mode=full` 并显示“全时段”/“全范围”事实；取消勾选后保存 `range_mode=custom` 并在同一行显示“最小 / 最大”输入与 X 单位。
+- 两个数值输入必须隐藏原生上下步进箭头；不能再用下拉“全范围 / 自定义 X”占用额外空间。
+- 开关关闭时，区间、指标和提示统一 disabled，但 recipe 中的最近有效值保持，重新启用后恢复；切到非 time method 时整体隐藏。
+- “同一 X 对应多个 Y …”是解释 branch 规则的固定提示，不承诺当前数据一定被拆分，也不把多个滞回的运行诊断提前伪装成 preflight error。
 
 ## 4. Numeric semantics
 
@@ -200,10 +224,44 @@ BatchChartDiagnostic(
 
 - 分屏：每个 pane 右上角独立统计卡；标题内不重复塞统计文本。
 - 叠加且无滞回歧义：一张按 series color 排列的表；行过多时使用固定可读上限并显示 `+N 条`，不得把绘图区挤为零。
-- Max/Min：可选中指标时在对应曲线上画同色极值 marker；marker 不是新 legend series。
+- Max/Min：可选中指标时在对应曲线上画有语义对比色的空心极值 marker（Max 橙色、Min 青绿色）；marker 不是新 legend series，不能依赖曲线本身的颜色才可见。
 - Mean：只在卡中显示，不默认画水平线。
 - diagnostic 卡在统计卡 z-order 之上，但不能遮住整张图；导出分辨率变化时保持边距。
 - 统计卡/diagnostic 纳入 builder 的 text-overlap、ink、CJK 和 SSAA 证据。
+
+### Fixed exported-PNG visual contract
+
+统计的主视觉事实位于**最终 PNG 内**，不是 preview dialog 或 BatchSheet 的附属文本。Preview dialog 只按比例显示这张 PNG；正式 run 写出的 PNG 与 preview 用同一 `figure spec` 时，统计卡、marker 和 diagnostic 的位置/文字必须一致。
+
+#### Normal single-hysteresis target
+
+对 `time + custom X` 的单一清晰滞回 family，导出图保留常规标题、坐标轴、网格、曲线与图例；右上角放一张紧凑的浅底统计卡，不画任何按钮或其他 Qt chrome：
+
+```text
+图内统计   -110.0 ~ 110.0 deg
+路径      最大值      最小值      样本平均
+X↑        12.6        -8.4        2.31     N=248
+X↓        10.8       -10.2        1.76     N=252
+```
+
+- 数值、单位、范围和样本数均来自实际 `BatchStatisticRow`，上例只定义排版，不固化数值；无反向时以 `全程`/实际单路径 label 代替 `X↑/X↓`。
+- 卡片锚定实际 pane 的右上安全区，使用 Cursor 读数同等级的圆角、近白半不透明底、细蓝灰边与轻阴影；不能靠透明文字压在曲线上。尺寸随导出分辨率等比变化，但必须为主曲线保留可读面积。
+- 标题、表头和数值字号必须由 renderer theme 的字体基准推导，因此会随全局“字体大小”导出设置同比变化；不得在卡中写死固定 `pt` 字号。
+- Max/Min 选中时在原曲线对应原始 X 位置分别画橙色 / 青绿色空心圆 marker；卡内对应表头使用相同语义色，marker 不进入 legend，Mean 只在卡内显示。路径方向由采集顺序定义，不借用曲线颜色或 Y 正负号。
+- 分屏时每个 pane 使用自己的卡和 marker；叠加且无滞回歧义时保留同一位置的一张颜色对应汇总表，超出可读上限显示 `+N 条`。
+
+#### Multiple-hysteresis diagnostic target
+
+一旦命中本计划第 5 节的 overlay/multi-reversal 条件，原统计卡**整体替换**为同一锚点的浅红诊断卡；曲线、坐标轴、标题、图例和导出仍正常：
+
+```text
+ERROR · 图内统计未生成
+当前图叠加了多个滞回曲线，无法可靠对应升程/回程统计。
+请改用“分屏”或“每项独立”后重新运行。
+```
+
+- multi-reversal 单 family 使用第 5.3 节既定的另一条原因/建议文案。
+- diagnostic 不得与任一旧统计数字并存；它是 chart-local 视觉诊断，不能在 BatchSheet 中变成阻塞弹窗或全局失败状态。
 
 ## 7. Execution tasks
 
@@ -306,6 +364,9 @@ BatchChartDiagnostic(
 - multi-hysteresis ERROR card
 - subplot pane-local decision
 - 1080p/144 DPI 与 SSAA 后文本仍清楚
+- normal custom-X target：确认 `X↑/X↓` 两行、范围/单位/样本数、橙色 Max / 青绿色 Min marker 和右上安全区布局均来自 producer spec，而非 builder 重新计算
+- UI target：确认标题分隔线、自动/手动单行切换、手动输入无步进箭头；renderer target：确认统计卡的圆角浅色层次、Max/Min 语义色与字体大小会随全局 font scale 增长
+- diagnostic target：确认红卡替换而不是叠加统计数字，且 PNG 无 Qt chrome
 
 ### Task 7 — Runner non-blocking integration
 
@@ -380,7 +441,7 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. \
 | S6 | chart ERROR 不加入 `blocked`，PNG/XLSX 正常生成，其他 group 继续，run 不因统计单独变 partial/blocked |
 | S7 | 分屏中每 pane 仅一个滞回 family 时仍分别统计，不因整图有多个 pane 误报 |
 | S8 | manifest/preview/run 对 diagnostic code 与图中文字一致，preview 不产生正式 artifact/manifest |
-| S9 | 统计卡、marker、ERROR 卡在 1920×1080 和 SSAA 输出中可读，不遮蔽主要曲线区域 |
+| S9 | 统计面板的 channel/custom-X 单位和禁用态清楚；最终 PNG 的统计卡、marker、ERROR 替换卡在 1920×1080 和 SSAA 输出中可读，不遮蔽主要曲线区域且无 Qt chrome |
 | S10 | pure numeric、renderer、runner、UI、真实前台/PNG 证据分别完成 |
 
 ## 10. Stop conditions
@@ -402,15 +463,11 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. \
 ## 12. Execution record（执行时填写）
 
 ```text
-baseline SHA:
-pure numeric result:
-renderer/core result:
-UI result:
-single-hysteresis positive/negative proof:
-single-hysteresis both-positive proof:
-single-hysteresis both-negative proof:
-multiple-hysteresis non-blocking proof:
-1080×760 foreground proof:
-1440×900 foreground proof:
-1920×1080 PNG proof:
+baseline SHA: 9449269
+focused Batch regression: 463 passed (offscreen, 2026-08-03)
+chart-statistics UI/renderer regression: 3 passed after final layout change
+1920×1080 PNG proof: /tmp/tracelab-statistics-polish-final.png (offscreen)
+single/multiple-hysteresis functional proof: covered by Batch numeric/renderer regression
+1080×760 foreground proof: pending
+1440×900 foreground proof: pending
 ```

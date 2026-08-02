@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PyQt5.QtCore import QPoint, QRect, QRectF, Qt
-from PyQt5.QtGui import QColor, QFontMetricsF, QImage, QPainter
-from PyQt5.QtWidgets import QApplication, QFrame, QWidget
+from PyQt5.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPen
+from PyQt5.QtWidgets import QApplication, QFrame, QGraphicsTextItem, QWidget
 
 from mf4_analyzer import db_reference
 from mf4_analyzer.batch_image_options import BatchRenderOptions
@@ -32,6 +32,7 @@ from ..ui_kit.ticks_math import (
     coarsen_nice_step,
     nice_ticks_within,
 )
+from ..batch_statistics import display_x
 
 from ._fonts import apply_axis_font, chart_font
 from ._models import BatchRenderContext, BatchSeries, BatchTimeFigureSpec
@@ -306,10 +307,7 @@ def _validate_time_spec_units(series: tuple[BatchSeries, ...]) -> None:
 
 
 def _time_x(item: BatchSeries, spec: BatchTimeFigureSpec) -> np.ndarray:
-    values = np.asarray(item.x, dtype=float)
-    if spec.x_source == "time" and spec.x_origin == "zero" and values.size:
-        return values - values[0]
-    return values
+    return display_x(item.x, x_source=spec.x_source, x_origin=spec.x_origin)
 
 
 def _text_of(item) -> str:
@@ -319,6 +317,61 @@ def _text_of(item) -> str:
         return str(to_plain())
     text = getattr(item, "text", "")
     return str(text)
+
+
+class _StatisticsCard(pg.GraphicsObject):
+    """Rounded report overlay with the same quiet hierarchy as CursorPill."""
+
+    def __init__(
+        self,
+        html: str,
+        *,
+        content_width: float,
+        body_font_pt: float,
+        background: QColor,
+        border: QColor,
+        text_color: QColor,
+    ) -> None:
+        super().__init__()
+        self.body_font_pt = float(body_font_pt)
+        self._background = QColor(background)
+        self._border = QColor(border)
+        self._padding = 9.0
+        self._radius = 9.0
+        self._text = QGraphicsTextItem(self)
+        self._text.setDefaultTextColor(QColor(text_color))
+        self._text.setFont(chart_font(self.body_font_pt))
+        self._text.document().setDocumentMargin(0.0)
+        self._text.setHtml(html)
+        self._text.document().setTextWidth(float(content_width))
+        self._text.setPos(self._padding, self._padding)
+        text_rect = self._text.boundingRect()
+        self._bounds = QRectF(
+            0.0, 0.0,
+            float(content_width) + 2.0 * self._padding,
+            float(text_rect.height()) + 2.0 * self._padding,
+        )
+
+    def boundingRect(self) -> QRectF:  # noqa: N802 (Qt API)
+        return QRectF(self._bounds)
+
+    def toPlainText(self) -> str:  # noqa: N802 (Qt API)
+        return self._text.toPlainText()
+
+    def paint(self, painter, _option, _widget=None) -> None:
+        painter.save()
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            shadow = self._bounds.adjusted(1.5, 2.0, 1.5, 2.0)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(15, 23, 42, 20))
+            painter.drawRoundedRect(shadow, self._radius, self._radius)
+            rect = self._bounds.adjusted(0.5, 0.5, -0.5, -0.5)
+            painter.setPen(QPen(self._border, 1.0))
+            painter.setBrush(self._background)
+            painter.drawRoundedRect(rect, self._radius, self._radius)
+        finally:
+            painter.restore()
 
 
 def _visible_text_rect(item) -> QRectF | None:
@@ -937,9 +990,11 @@ class _SceneBuilder:
             self.layout_callbacks.append(sync_right)
 
         local_curves = []
+        curves_by_key = {}
         for item in panel_series:
             curve = self._add_curve(owners[item.unit], plot, item, spec)
             local_curves.append(curve)
+            curves_by_key[item.series_key] = curve
 
         if units and local_curves and not title:
             left_color = local_curves[0].opts["pen"].color().name()
@@ -1034,6 +1089,10 @@ class _SceneBuilder:
                 legend.addItem(curve, str(item.label))
             self.legend = legend
 
+        statistic_items = self._add_time_statistics(
+            plot, spec, panel_series[0].panel if panel_series else 0, curves_by_key,
+        )
+
         group = [plot.getAxis("left").label]
         if title_item is not None:
             group.append(title_item)
@@ -1041,8 +1100,134 @@ class _SceneBuilder:
             group.append(right_axis.label)
         if bottom:
             group.append(plot.getAxis("bottom").label)
+        group.extend(statistic_items)
         self.panel_text_items.append(tuple(group))
         return plot
+
+    def _add_time_statistics(self, plot, spec, panel, curves_by_key):
+        """Paint precomputed statistic rows or one pane-local diagnostic card."""
+        diagnostic = next((item for item in spec.diagnostics if item.panel == panel), None)
+        rows = tuple(item for item in spec.statistics if item.panel == panel)
+        if diagnostic is None and not rows:
+            return ()
+        scale = float(self.theme.axis_font_pt) / 12.0
+        title_pt = self.theme.axis_font_pt * 1.04
+        body_pt = self.theme.axis_font_pt * 0.84
+        muted_pt = self.theme.axis_font_pt * 0.76
+        if diagnostic is not None:
+            text = (
+                f'<div style="font-size:{title_pt:.2f}pt; font-weight:600; color:#991b1b;">{diagnostic.title}</div>'
+                '<div style="height:4px;"></div>'
+                f'<div style="font-size:{body_pt:.2f}pt; color:#7f1d1d;">{diagnostic.message}</div>'
+                f'<div style="font-size:{muted_pt:.2f}pt; color:#b91c1c; padding-top:3px;">{diagnostic.suggestion}</div>'
+            )
+            card = _StatisticsCard(
+                text,
+                content_width=360.0 * scale,
+                body_font_pt=body_pt,
+                background=QColor(255, 247, 247, 242),
+                border=QColor("#fecaca"),
+                text_color=QColor("#7f1d1d"),
+            )
+        else:
+            metrics = tuple(
+                (self.params.get("chart_statistics") or {}).get("metrics")
+                or ("max", "min", "mean")
+            )
+            columns = tuple(
+                (key, title, attribute)
+                for key, title, attribute in (
+                    ("max", "最大值", "maximum"),
+                    ("min", "最小值", "minimum"),
+                    ("mean", "样本平均", "mean"),
+                )
+                if key in metrics
+            )
+            all_x = [
+                value for item in rows for value in (item.x_min, item.x_max)
+                if value is not None
+            ]
+            x_unit = next(
+                (item.x_unit for item in spec.series if item.x_unit), "s",
+            )
+            range_fact = (
+                f"　{min(all_x):.4g} ~ {max(all_x):.4g} {x_unit}"
+                if all_x else ""
+            )
+            header_cells = "".join(
+                f'<th style="padding:1px 5px; text-align:right; white-space:nowrap; '
+                f'color:{"#c2410c" if key == "max" else "#0f766e" if key == "min" else "#64748b"};">{title}</th>'
+                for key, title, _attr in columns
+            )
+            row_cells = []
+            for item in rows[:6]:
+                def fmt(value):
+                    return "—" if value is None else f"{value:.4g}"
+                values = "".join(
+                    '<td style="padding:2px 6px; text-align:right;">'
+                    f'{fmt(getattr(item, attribute))}</td>'
+                    for _key, _title, attribute in columns
+                )
+                row_cells.append(
+                    '<tr>'
+                    '<td style="padding:2px 5px; text-align:left; white-space:nowrap; font-weight:600; color:#334155;">'
+                    f'{item.direction or item.branch_label}</td>{values}'
+                    '<td style="padding:2px 1px 2px 5px; text-align:right; white-space:nowrap; color:#64748b;">'
+                    f'N={item.sample_count}</td></tr>'
+                )
+            if len(rows) > 6:
+                row_cells.append(
+                    '<tr><td colspan="5" style="padding:2px 6px;">'
+                    f'+{len(rows) - 6} 条</td></tr>'
+                )
+            text = (
+                f'<div style="font-size:{title_pt:.2f}pt; font-weight:600; color:#172033; padding-bottom:4px;">图内统计'
+                f'<span style="font-size:{muted_pt:.2f}pt; font-weight:400; color:#64748b;">{range_fact}</span></div>'
+                '<table cellspacing="0" cellpadding="0" '
+                f'style="font-size:{body_pt:.2f}pt; border-collapse:collapse; color:#172033;">'
+                '<tr><th style="padding:1px 5px; text-align:left; white-space:nowrap; color:#64748b;">路径</th>'
+                f'{header_cells}'
+                '<th style="padding:1px 1px 1px 5px; text-align:right; color:#64748b;">样本数</th></tr>'
+                f'{"".join(row_cells)}</table>'
+            )
+            card = _StatisticsCard(
+                text,
+                content_width=342.0 * scale,
+                body_font_pt=body_pt,
+                background=QColor(255, 255, 255, 238),
+                border=QColor("#d8e0eb"),
+                text_color=QColor("#172033"),
+            )
+            for item in rows:
+                curve = curves_by_key.get(item.series_key)
+                if curve is None:
+                    continue
+                marker_specs = []
+                if "max" in metrics and item.argmax_x is not None and item.maximum is not None:
+                    marker_specs.append(((item.argmax_x, item.maximum), "#f97316", "#fff7ed"))
+                if "min" in metrics and item.argmin_x is not None and item.minimum is not None:
+                    marker_specs.append(((item.argmin_x, item.minimum), "#0f766e", "#ecfdf5"))
+                for point, color, fill in marker_specs:
+                    marker = pg.ScatterPlotItem(
+                        symbol="o", size=18.0 * scale,
+                        pen=pg.mkPen(color, width=2.7 * scale), brush=pg.mkBrush(fill),
+                    )
+                    marker.addPoints([{"pos": point}])
+                    marker.setZValue(1200)
+                    curve.getViewBox().addItem(marker)
+        card.setZValue(2000)
+        plot.scene().addItem(card)
+
+        def position_card(*_args, _plot=plot, _card=card):
+            rect = _plot.vb.sceneBoundingRect()
+            _card.setPos(
+                rect.right() - 8.0 - _card.boundingRect().width(),
+                rect.top() + 8.0,
+            )
+
+        plot.vb.sigResized.connect(position_card)
+        self.layout_callbacks.append(position_card)
+        return (card,)
 
     def _apply_time_ranges(
         self, spec: BatchTimeFigureSpec, active: tuple[BatchSeries, ...]

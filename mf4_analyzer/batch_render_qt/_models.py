@@ -7,6 +7,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from ..batch_statistics import BatchChartDiagnostic, BatchStatisticRow
+
 
 def _freeze_fact_value(value: Any):
     if isinstance(value, Mapping):
@@ -56,6 +58,9 @@ class BatchSeries:
     x_unit: str = "s"
     linestyle: str = "-"
     panel: int = 0
+    family_key: str = ""
+    series_key: str = ""
+    variant: str = ""
 
     def __post_init__(self) -> None:
         x_values = np.asarray(self.x, dtype=float)
@@ -87,6 +92,8 @@ class BatchTimeFigureSpec:
     x_origin: str = "zero"
     x_label: str = "Time (s)"
     panel_titles: tuple[str, ...] = ()
+    statistics: tuple[BatchStatisticRow, ...] = ()
+    diagnostics: tuple[BatchChartDiagnostic, ...] = ()
 
     def __post_init__(self) -> None:
         series = tuple(self.series)
@@ -100,6 +107,15 @@ class BatchTimeFigureSpec:
             raise ValueError("BatchTimeFigureSpec x_origin must be zero or absolute")
         object.__setattr__(self, "series", series)
         object.__setattr__(self, "panel_titles", tuple(self.panel_titles))
+        if not all(isinstance(item, BatchStatisticRow) for item in self.statistics):
+            raise TypeError("BatchTimeFigureSpec statistics must contain BatchStatisticRow")
+        if not all(isinstance(item, BatchChartDiagnostic) for item in self.diagnostics):
+            raise TypeError("BatchTimeFigureSpec diagnostics must contain BatchChartDiagnostic")
+        object.__setattr__(self, "statistics", tuple(self.statistics))
+        object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
 
 
-__all__ = ["BatchRenderContext", "BatchSeries", "BatchTimeFigureSpec"]
+__all__ = [
+    "BatchChartDiagnostic", "BatchRenderContext", "BatchSeries",
+    "BatchStatisticRow", "BatchTimeFigureSpec",
+]

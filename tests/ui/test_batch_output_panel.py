@@ -664,7 +664,28 @@ def test_batch_output_preview_waits_while_probe_is_pending(qtbot):
         (SimpleNamespace(state="probing"),), ("acc",), weighting="None",
         target_policy="common",
     )
-    assert panel.effective_preview_text() == "等待来源信息"
+    assert panel.effective_preview_text() == "dB 参考：等待文件解析"
+
+
+def test_batch_db_reference_status_has_one_visible_owner(qtbot):
+    from types import SimpleNamespace
+
+    panel = _make_panel(qtbot)
+    assert not hasattr(panel, "_effective_preview")
+    panel.update_effective_preview((), (), target_policy="common")
+    assert panel.effective_preview_text() == "dB 参考：等待文件解析"
+
+    row = SimpleNamespace(
+        state="loaded", source_id="s1", channels=frozenset({"sig"}),
+        units={"sig": "Pa"}, metadata={},
+    )
+    panel.update_effective_preview((row,), (), target_policy="common")
+    assert panel.effective_preview_text() == "dB 参考：请选择目标信号"
+    panel.update_effective_preview((row,), ("missing",), target_policy="common")
+    assert panel.effective_preview_text() == "dB 参考：所选目标缺少可用单位/来源"
+
+    panel.apply_method_defaults("time")
+    assert panel._db_reference_row.isHidden() is True
 
 
 def test_batch_output_exact_preview_excludes_missing_pair_targets(qtbot):
@@ -687,7 +708,7 @@ def test_batch_output_exact_preview_excludes_missing_pair_targets(qtbot):
         target_pairs=(("s1", "A"), ("s2", "B")),
     )
 
-    assert panel.effective_preview_text().startswith("1 个目标：")
+    assert panel.effective_preview_text().startswith("dB 参考：1 个目标：")
 
 
 def test_batch_output_import_migrates_to_the_fixed_interactive_contract(qtbot):

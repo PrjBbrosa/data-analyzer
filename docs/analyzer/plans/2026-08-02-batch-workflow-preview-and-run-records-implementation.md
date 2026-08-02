@@ -5,7 +5,7 @@
 - **建议顺序**：先执行本计划，再执行 `2026-08-02-batch-in-chart-statistics-implementation.md`
 - **当前观察基线**：`feat/batch-settings-persistence@783d5d8`；执行前必须重新确认 HEAD、工作树与 `main/origin/main` 关系
 
-> 用户决定：删除“紧凑工作流”；用户可见术语统一为“分屏”；解释并收口“等待来源信息”；运行前提供真实单图预览；普通输出目录不再散落多份 manifest JSON。
+> 用户决定：删除“紧凑工作流”；用户可见术语统一为“分屏”；解释并收口“等待来源信息”；运行前直接查看真实代表最终图；普通输出目录不再散落多份 manifest JSON。
 >
 > 本计划不实现区间统计。统计属于第二份计划，避免 UI 工作流与数值/渲染模型同时改动。
 
@@ -17,7 +17,7 @@
 
 1. 产品界面删除开发性标签“紧凑工作流”，统一使用“分屏 / 叠加”。
 2. dB reference 的来源状态有明确对象和原因，不再出现孤立的“等待来源信息”。
-3. 底栏增加“预览”，先显示无加载的任务/文件预估，再由用户显式生成一个代表输出组的真实 PNG。
+3. 底栏增加“预览”；点击后直接生成正式渲染路径上的一个代表最终 PNG，作为预览窗口主体。无加载预估只提供辅助事实，不成为预览的主页面或额外确认步骤。
 4. 预览不发布正式文件、不写 XLSX、不写 manifest、不改变本次运行状态。
 5. manifest 保留恢复/重试/追溯能力，但移入 Batch 自己管理的运行记录目录；普通结果区主要只显示 PNG/XLSX。
 
@@ -74,14 +74,16 @@
 
 只保留一个可见来源说明：由 `DbReferenceControl` 自己显示。移除其下方重复的 `_effective_preview` 可见标签；如测试或兼容调用仍需要 `effective_preview_text()`，让 accessor 读取同一个 control 文本，不保留第二个视觉真相源。
 
-### 3.3 两级预览
+### 3.3 代表最终图预览
 
-预览分为两类，成本和语义必须分开：
+“预览”的目的就是在运行前检查**最终图片本身**，不是先查看一张任务预估表。点击底栏“预览”后的默认流程固定为：
 
-1. **自动计划预估（no-load）**：复用 `BatchRunner.preview_outputs()`，只显示任务数、PNG/XLSX 数、冲突数和代表输出组列表；不得完整加载 HDF/CSV/MDF 等 full-cost 来源，不得预留输出路径。
-2. **用户显式图片预览（selected-group load）**：用户点击“预览”并选择一个代表组后，允许加载该组所需来源并生成一张真实 PNG。它不是 no-load probe，UI 必须明确显示“将读取 N 个来源，只生成 1 张临时图片”。
+1. **轻量计划解析（no-load，内部/辅助）**：复用 `BatchRunner.preview_outputs()`，只确定正式运行顺序中的第一个代表输出组、总输出数、该组所需来源数和冲突事实；不得完整加载 HDF/CSV/MDF 等 full-cost 来源，不得预留输出路径。它可以在弹窗顶部显示一行辅助事实，但不得占据主区域、不得要求用户先选组或再点一次“生成”。
+2. **直接生成代表最终图（selected-group load）**：紧接着启动可取消 worker，读取该默认代表组所需来源，只生成 1 张临时 PNG。默认代表组就是正式 run 顺序的第一个 planned group；多张输出时本阶段只预览这一张，不循环生成其余图片。
 
-图片预览必须使用正式运行的预处理、分析和 Qt renderer；不得复制一套简化数值算法。
+临时 PNG 必须复用正式运行的预处理、分析、`figure spec`、输出分辨率/DPI 和 Qt renderer；不得复制一套简化数值算法或为预览另画一张“示意图”。预览窗口把该 PNG 原样按比例 fit-to-view 显示：标题、坐标轴、图例、曲线、图内统计/诊断（若已启用）均应与最终输出一致，窗口自身的标题和底部动作不得混入图片内容。
+
+目标视觉状态：顶部只显示紧凑事实，例如“每项单独 · Vehicle_A / 方向盘角度”“代表输出 1 / 12 · 已读取 2 个来源 · 临时图片”；主体约 80% 面积是最终 PNG；底部为“返回修改 / 重新生成 / 运行全部”。生成期间主体显示进度与取消动作，完成后直接替换为 PNG，不经过预估卡片或代表组选择页。
 
 ### 3.4 manifest 变为内部运行记录
 
@@ -168,7 +170,7 @@ manifest 仍是恢复、重试、冲突归属和问题追溯的权威，不直�
 
 ### Second tranche — 运行预览
 
-#### Task 3 — Preview plan contract（no-load）
+#### Task 3 — Representative preview plan contract（no-load）
 
 **Files**
 
@@ -178,7 +180,7 @@ manifest 仍是恢复、重试、冲突归属和问题追溯的权威，不直�
 
 **Contract**
 
-在现有 `BatchOutputPreview` 计数之外，提供稳定的代表输出组描述：
+在现有 `BatchOutputPreview` 计数之外，提供稳定的代表输出组描述，并确定正式 run 顺序中的默认代表组：
 
 - `group_id`
 - display name
@@ -187,7 +189,7 @@ manifest 仍是恢复、重试、冲突归属和问题追溯的权威，不直�
 - required source count
 - planned artifact stem
 
-要求 task/group/stem/identity 与正式运行一致。metadata-cost probe 可用时复用缓存；full/unknown-cost adapter 使用 deterministic unresolved identity，不能因预览而加载。
+要求 task/group/stem/identity 与正式运行一致。`default_group_id` 必须等于正式运行中第一个 planned group 的 identity；metadata-cost probe 可用时复用缓存；full/unknown-cost adapter 使用 deterministic unresolved identity，不能因预览而加载。该 contract 为直接启动图片 worker 服务，不构成一个单独的“选择代表组”产品页面。
 
 #### Task 4 — Explicit one-group image preview
 
@@ -201,19 +203,20 @@ manifest 仍是恢复、重试、冲突归属和问题追溯的权威，不直�
 
 **Core behavior**
 
-- 新增显式 `preview_group(...)` API，只执行所选 planned group。
+- 新增显式 `preview_group(...)` API，只执行传入的 planned group；Sheet 在点击预览后传入 no-load contract 的 `default_group_id`。
 - 复用正式 preprocessing/analyzer/render-group 路径；若需抽取共享函数，先用 producer-shaped tests 冻结正式 run 行为。
 - 输出到 `QTemporaryDir`/等价私有临时目录；固定 image-only、PNG、`write_manifest=False`。
 - 不调用正式 output reservation，不检查/占用最终图片名，不写 data artifact。
-- 返回 image path、group identity、warnings、loaded source count；关闭预览后清理临时目录。
+- 返回 image path、group identity、warnings、loaded source count；返回的 PNG 使用与对应正式输出相同的 `figure spec`、分辨率和 DPI。关闭预览后清理临时目录。
 - group-by-channel 预览可能需要读取该信号涉及的所有来源，不能冒充“只读一个文件”。
 
 **UI behavior**
 
 - 底栏：`关闭 | 预览 | 运行`，预览为 secondary，运行保持 primary/default。
 - 与 Run 使用同一 preflight；配置不完整时两者均不可用。
-- 打开 dialog 立即显示 no-load 计数与代表组；默认选择第一组。
-- 用户确认生成后启动可取消 worker；不阻塞 Qt 主线程。
+- 点击“预览”后立即用 no-load contract 选择正式顺序的第一个代表组，并启动可取消 worker；不显示预估表格、组选择页或第二次“生成”确认。
+- worker 运行时 dialog 主体显示“正在读取 N 个来源并生成代表图”，提供取消；不阻塞 Qt 主线程。完成后主体直接显示临时最终 PNG，按比例 fit-to-view。
+- PNG 上方仅保留 group display name、`代表输出 1 / N`、loaded source count 和临时性事实；不得用任务数卡片挤占图片区域。
 - dialog actions：`返回修改`、`重新生成`、`运行全部`。
 - “运行全部”仍进入现有 `_on_run_clicked()`，不得让 preview result 成为 `_last_result`，不得把 preview manifest/path 写入 preset。
 - preview worker 的 unlock/cleanup 由其 `QThread.finished` 唯一驱动。
@@ -271,18 +274,19 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. \
 
 ### Required behavior probes
 
-1. production full-cost HDF adapter：打开/重算 no-load 预估时 loader 调用次数为 0。
-2. explicit preview：只生成 1 张临时 PNG，不生成 XLSX/JSON，不创建正式输出目录 reservation。
-3. source/channel/none 三种 grouping：预览组选取与正式 run 的 group id/member/stem 一致。
-4. preview cancel：临时文件清理，controls 恢复，随后 Run 可正常启动。
-5. 正式 run：PNG/XLSX 在根目录，final/partial manifest 只在 `.tracelab/runs`。
-6. 旧根目录 manifest：仍可显式加载并通过严格 resume 检查。
+1. production full-cost HDF adapter：构建 no-load representative contract 时 loader 调用次数为 0。
+2. 点击“预览”后直接生成 1 张临时 PNG，不生成 XLSX/JSON，不创建正式输出目录 reservation；没有组选择或第二次生成确认。
+3. source/channel/none 三种 grouping：默认预览组选取与正式 run 的第一个 group id/member/stem 一致。
+4. 临时 PNG 与对应正式输出使用相同 preprocessing、`figure spec`、renderer、分辨率/DPI；modal 只缩放显示该 PNG，不把额外 UI 画入图片。
+5. preview cancel：临时文件清理，controls 恢复，随后 Run 可正常启动。
+6. 正式 run：PNG/XLSX 在根目录，final/partial manifest 只在 `.tracelab/runs`。
+7. 旧根目录 manifest：仍可显式加载并通过严格 resume 检查。
 
 ### Visual acceptance
 
 - 1080×760 和 1440×900 各生成 BatchSheet 前台截图。
 - 核对顶部没有多余 meta、分屏术语一致、dB 来源说明不孤立。
-- 预览 dialog 在两种窗口尺寸都能看到图片、计数、warning 和底部动作。
+- 预览 dialog 在两种窗口尺寸都以最终 PNG 为主体；只显示紧凑 group/来源事实、warning 和底部动作，图片内不混入 dialog chrome。
 - 使用真实 Cocoa/TraceLab 前台确认；offscreen 截图只作为结构证据。
 
 ## 6. Acceptance criteria
@@ -292,7 +296,7 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. \
 | W1 | 产品 UI 不再显示“紧凑工作流”，当前用户提示统一为“分屏” |
 | W2 | dB source 的 pending/no-target/missing/resolved/time 状态对象明确，且只有一个可见真相源 |
 | W3 | 自动预估对 full-cost adapter 零完整加载、零 reservation、零目录写入 |
-| W4 | 用户显式预览只执行一个选择组，使用正式算法/renderer，生成一张可取消的临时 PNG |
+| W4 | 点击预览直接执行正式顺序的一个代表组，使用正式算法/figure spec/renderer/分辨率，生成并展示一张可取消的临时最终 PNG |
 | W5 | preview 不改变 preset、task list runtime、`_last_result`、manifest 或正式输出文件 |
 | W6 | 正式 run 的用户输出目录不散落 manifest JSON；运行记录位于 `.tracelab/runs` |
 | W7 | 新旧 manifest 均可严格读取/恢复，不因目录迁移放宽 identity/fingerprint/checksum 校验 |

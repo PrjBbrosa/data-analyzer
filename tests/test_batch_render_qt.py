@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyqtgraph as pg
 import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QImage, QPainter
@@ -259,6 +260,78 @@ def test_time_overlay_duplicate_labels_still_get_distinct_visual_signatures(qapp
         assert len(signatures) == len(set(signatures)) == 2
     finally:
         scene.close()
+
+
+def test_time_statistics_card_and_diagnostic_are_part_of_the_export_scene(qapp):
+    from mf4_analyzer.batch_statistics import (
+        BatchChartDiagnostic,
+        BatchStatisticRow,
+    )
+    from mf4_analyzer.batch_render_qt._builder import _StatisticsCard
+
+    _, BatchSeries, BatchTimeFigureSpec, *_ = _qt_api()
+    x = np.array([0.0, 1.0, 2.0])
+    series = BatchSeries(
+        x, np.array([1.0, 3.0, 2.0]), "rack", unit="N", series_key="rack",
+    )
+    row = BatchStatisticRow(
+        series_key="rack", family_key="rack", label="rack", variant="value",
+        panel=0, branch_label="全程", direction="", sample_count=3,
+        x_min=0.0, x_max=2.0, minimum=1.0, maximum=3.0, mean=2.0,
+        argmin_x=0.0, argmax_x=1.0,
+    )
+    normal = _open_scene(
+        qapp, ("time", BatchTimeFigureSpec((series,), statistics=(row,))),
+        params={"chart_statistics": {"metrics": ["max", "min"]}},
+    )
+    diagnostic = _open_scene(
+        qapp,
+        ("time", BatchTimeFigureSpec(
+            (series,), diagnostics=(BatchChartDiagnostic(
+                code="chart_statistics.multiple_x_reversals",
+                message="too many reversals", suggestion="split data",
+            ),),
+        )),
+    )
+    try:
+        assert any("图内统计" in text for text in normal.texts())
+        assert any("N=3" in text for text in normal.texts())
+        markers = [
+            item for item in normal.plots[0].vb.addedItems
+            if isinstance(item, pg.ScatterPlotItem)
+        ]
+        assert len(markers) == 2
+        assert {marker.opts["symbol"] for marker in markers} == {"o"}
+        assert {marker.opts["pen"].color().name() for marker in markers} == {
+            "#f97316", "#0f766e",
+        }
+        assert all(marker.opts["size"] >= 16 for marker in markers)
+        cards = [
+            item for item in normal.panel_text_items[0]
+            if isinstance(item, _StatisticsCard)
+        ]
+        assert len(cards) == 1
+        assert cards[0].body_font_pt == pytest.approx(
+            normal.theme.axis_font_pt * 0.84
+        )
+        scaled = _open_scene(
+            qapp, ("time", BatchTimeFigureSpec((series,), statistics=(row,))),
+            params={"chart_statistics": {"metrics": ["max", "min"]}, "font_scale": 1.5},
+        )
+        try:
+            scaled_card = next(
+                item for item in scaled.panel_text_items[0]
+                if isinstance(item, _StatisticsCard)
+            )
+            assert scaled_card.body_font_pt > cards[0].body_font_pt
+        finally:
+            scaled.close()
+        assert len(normal.curves) == 1
+        assert any("ERROR" in text for text in diagnostic.texts())
+        assert not any("路径　最大值" in text for text in diagnostic.texts())
+    finally:
+        normal.close()
+        diagnostic.close()
 
 
 def test_time_overlay_rejects_more_than_two_y_units(qapp):

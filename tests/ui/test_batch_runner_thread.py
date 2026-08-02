@@ -5,6 +5,8 @@ NOT to ``finished_with_result``. This guarantees the dialog never gets
 stuck locked even if ``runner.run()`` raises before the result signal.
 """
 
+from pathlib import Path
+
 
 def test_runner_thread_marshals_real_render_to_gui_and_returns_complete_result(
     qtbot, qapp, tmp_path, monkeypatch,
@@ -152,6 +154,42 @@ def test_sheet_cancel_button_unlocks_editing(qtbot, tmp_path):
     assert sheet._input_panel.isEnabled()
     assert sheet._analysis_panel.isEnabled()
     assert sheet._output_panel.isEnabled()
+
+
+def test_sheet_preview_uses_private_thread_state_and_cleans_temp(qtbot, tmp_path):
+    """Preview may render a PNG, but must not become a completed Batch run."""
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.batch import BatchOutput
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    t = np.arange(1024) / 512.0
+    frame = pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 50 * t)})
+    fd = FileData(tmp_path / "preview.csv", frame, list(frame.columns), {}, idx=0)
+    output_dir = tmp_path / "formal-output"
+    sheet = BatchSheet(None, files={0: fd})
+    qtbot.addWidget(sheet)
+    sheet.apply_files(file_ids=(0,), file_paths=())
+    sheet.apply_signals(("sig",))
+    sheet.apply_method("fft")
+    sheet.apply_params({"window": "hanning", "nfft": 512})
+    sheet.apply_outputs(BatchOutput(export_data=True, export_image=True))
+    sheet._output_panel.apply_directory(str(output_dir))
+
+    sheet._on_preview_clicked()
+    qtbot.waitUntil(lambda: sheet._preview_thread is None, timeout=10_000)
+
+    result = sheet._preview_result
+    assert result.status == "done"
+    image_path = Path(result.image_path)
+    assert image_path.is_file()
+    assert sheet._last_result is None
+    assert not output_dir.exists()
+    assert sheet._preview_dialog is not None
+    sheet._preview_dialog.reject()
+    qtbot.waitUntil(lambda: not image_path.exists(), timeout=2_000)
 
 
 def test_sheet_run_passes_db_reference_catalog_snapshot_from_parent(qtbot, tmp_path):

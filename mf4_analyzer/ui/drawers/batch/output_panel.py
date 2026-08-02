@@ -383,7 +383,7 @@ QPushButton#batchOutputSettingsButton:checked {
 
         self.db_reference_control = make_db_reference_control(self)
         self.spin_db_ref = self.db_reference_control.editor
-        self.db_reference_control.set_source_text("等待来源信息")
+        self.db_reference_control.set_source_text("dB 参考：等待文件解析")
         self._reference_system_catalog = db_reference.FACTORY_CATALOG_V1
         self._reference_user_catalog = ()
         self._prefer_channel_metadata = True
@@ -419,13 +419,6 @@ QPushButton#batchOutputSettingsButton:checked {
         )
         outer.addWidget(axis_group)
         outer.addWidget(self._build_render_style_row())
-        self._effective_preview = QLabel("等待来源信息", self)
-        self._effective_preview.setObjectName("batchDbReferencePreview")
-        self._effective_preview.setWordWrap(True)
-        self._effective_preview.setStyleSheet(
-            "color:#64748b;font-size:11px;padding:4px 0;"
-        )
-        outer.addWidget(self._effective_preview)
         outer.addStretch(1)
 
         # The compact workflow has one fixed export contract.  Keep the
@@ -770,9 +763,6 @@ QPushButton#batchRenderStyleButton:checked {
         row = getattr(self, "_db_reference_row", None)
         if row is not None:
             row.setVisible(bool(visible))
-        preview = getattr(self, "_effective_preview", None)
-        if preview is not None:
-            preview.setVisible(bool(visible))
 
     def _widen_axis_label_column(self, axis_group: QWidget) -> None:
         for parts in self._axis_row_parts.values():
@@ -936,7 +926,7 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
         )
 
     def effective_preview_text(self) -> str:
-        return self._effective_preview.text()
+        return self.db_reference_control.full_source_text()
 
     def output_preview_text(self) -> str:
         return self._output_preview.text()
@@ -974,23 +964,24 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
     ) -> None:
         """Resolve the recipe-owned reference from cached probe facts only."""
         if getattr(self, "_method", "fft") == "time":
-            # Time-domain exports use their source engineering unit.  There is
-            # no dB reference to resolve (and the corresponding row is hidden).
-            self._set_effective_preview("时域使用工程单位")
+            # No visual dB state exists for time-domain output.
             return
         rows = tuple(rows or ())
         if any(
             getattr(row, "state", "") in {"path_pending", "probing"}
             for row in rows
         ):
-            self._set_effective_preview("等待来源信息")
+            self._set_effective_preview("dB 参考：等待文件解析")
             return
         loaded = tuple(
             row for row in rows if getattr(row, "state", "") == "loaded"
         )
         signals = tuple(str(signal) for signal in (signals or ()))
-        if not loaded or (not signals and not target_pairs):
-            self._set_effective_preview("等待来源信息")
+        if not loaded:
+            self._set_effective_preview("dB 参考：等待文件解析")
+            return
+        if not signals and not target_pairs:
+            self._set_effective_preview("dB 参考：请选择目标信号")
             return
 
         exact = {
@@ -1025,7 +1016,7 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
                 key = (source_label, note, resolution.warning or "")
                 groups[key] = groups.get(key, 0) + 1
         if not groups:
-            self._set_effective_preview("没有可解析的目标")
+            self._set_effective_preview("dB 参考：所选目标缺少可用单位/来源")
             return
         total = sum(groups.values())
         parts = [
@@ -1033,7 +1024,9 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
             + (" ⚠" if warning else "")
             for (source_label, note, warning), count in groups.items()
         ]
-        self._set_effective_preview(f"{total} 个目标：" + "；".join(parts))
+        self._set_effective_preview(
+            f"dB 参考：{total} 个目标：" + "；".join(parts)
+        )
 
     def _resolve_preview_reference(self, row, signal: str):
         metadata = dict(getattr(row, "metadata", {}) or {})
@@ -1059,7 +1052,6 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
         )
 
     def _set_effective_preview(self, text: str) -> None:
-        self._effective_preview.setText(str(text))
         self.db_reference_control.set_source_text(str(text))
 
     # ------------------------------------------------------------------

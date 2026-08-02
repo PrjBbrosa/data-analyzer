@@ -36,6 +36,9 @@ class SpooledSeriesRef:
     x_unit: str
     linestyle: str
     panel: int
+    family_key: str
+    series_key: str
+    variant: str
     nbytes: int
 
 
@@ -123,6 +126,9 @@ class BatchSeriesSpool:
                     x_unit=item.x_unit,
                     linestyle=item.linestyle,
                     panel=item.panel,
+                    family_key=item.family_key,
+                    series_key=item.series_key,
+                    variant=item.variant,
                     nbytes=int(item.x.nbytes) + int(item.y.nbytes),
                 ))
         except Exception:
@@ -157,6 +163,9 @@ class BatchSeriesSpool:
                     x_unit=ref.x_unit,
                     linestyle=ref.linestyle,
                     panel=ref.panel,
+                    family_key=ref.family_key,
+                    series_key=ref.series_key,
+                    variant=ref.variant,
                 ))
         except Exception:
             self._close_arrays(opened)

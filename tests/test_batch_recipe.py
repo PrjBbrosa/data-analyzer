@@ -33,6 +33,22 @@ def test_time_render_defaults_are_removed_from_normalized_params():
     )
 
 
+def test_chart_statistics_are_time_only_canonical_and_fingerprinted():
+    raw = {
+        "chart_statistics": {
+            "enabled": True, "range_mode": "custom", "x_min": np.int64(-2),
+            "x_max": np.float32(3), "metrics": ["mean", "max", "mean"],
+        }
+    }
+    normalized = normalize_batch_params(raw, "time")
+    assert normalized["chart_statistics"] == {
+        "enabled": True, "range_mode": "custom", "x_min": -2.0,
+        "x_max": 3.0, "metrics": ["max", "mean"],
+    }
+    assert recipe_fingerprint(raw, "time") != recipe_fingerprint({}, "time")
+    assert normalize_batch_params(raw, "fft") == {}
+
+
 @pytest.mark.parametrize(
     ("params", "baseline"),
     (

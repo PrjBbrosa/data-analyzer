@@ -679,7 +679,7 @@ class DynamicParamForm(QWidget):
 
         self._w_render_layout = QComboBox(self)
         self._w_render_layout.addItem("叠加", "overlay")
-        self._w_render_layout.addItem("子图", "subplot")
+        self._w_render_layout.addItem("分屏", "subplot")
         self._w_render_layout.currentIndexChanged.connect(
             lambda *_: self.paramsChanged.emit()
         )
