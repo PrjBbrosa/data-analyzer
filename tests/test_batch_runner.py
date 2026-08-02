@@ -2217,6 +2217,43 @@ def test_runner_manifest_proven_resume_skips_load_compute_and_render(
     assert "task_started" not in [event.kind for event in events]
 
 
+def test_runner_auto_resume_prefers_run_store_and_accepts_legacy_root(
+    tmp_path, monkeypatch,
+):
+    """The hidden run store is primary, but old root manifests remain usable."""
+    fd = _make_fd(tmp_path, "auto-resume", idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="auto resume",
+        method="fft",
+        signal=(0, "sig"),
+        params={"fs": 1024.0, "nfft": 64},
+        outputs=BatchOutput(
+            export_data=True, export_image=False, resume_policy="manifest",
+        ),
+    )
+    run_store_dir = tmp_path / "run-store"
+    first = BatchRunner({0: fd}).run(preset, run_store_dir)
+    assert Path(first.manifest_path).parent == run_store_dir / ".tracelab" / "runs"
+
+    def fail_if_computed(*_args, **_kwargs):
+        pytest.fail("auto-resume must use the run-store manifest")
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+    resumed = BatchRunner({0: fd}).run(preset, run_store_dir)
+    assert resumed.items[0].status == "resumed"
+
+    monkeypatch.undo()
+    legacy_dir = tmp_path / "legacy-root"
+    legacy_first = BatchRunner({0: fd}).run(preset, legacy_dir)
+    legacy_manifest = legacy_dir / Path(legacy_first.manifest_path).name
+    Path(legacy_first.manifest_path).rename(legacy_manifest)
+    assert legacy_manifest.is_file()
+
+    monkeypatch.setattr(BatchRunner, "_compute_fft_dataframe", fail_if_computed)
+    legacy_resumed = BatchRunner({0: fd}).run(preset, legacy_dir)
+    assert legacy_resumed.items[0].status == "resumed"
+
+
 def test_runner_writer_exception_still_finalizes_terminal_manifest(
     tmp_path, monkeypatch,
 ):
@@ -2712,7 +2749,8 @@ def test_runner_preflight_blocks_when_no_output_is_selected(tmp_path, monkeypatc
     assert result.status == "blocked"
     assert "outputs" in result.blocked[0]
     assert result.manifest_path is not None
-    assert list((tmp_path / "out").iterdir()) == [Path(result.manifest_path)]
+    assert Path(result.manifest_path).parent == tmp_path / "out" / ".tracelab" / "runs"
+    assert not list((tmp_path / "out").glob("batch-manifest__*.json"))
 
 
 def test_runner_preflight_blocks_unsupported_data_format(tmp_path, monkeypatch):
@@ -2739,7 +2777,8 @@ def test_runner_preflight_blocks_unsupported_data_format(tmp_path, monkeypatch):
     assert result.status == "blocked"
     assert "data_format" in result.blocked[0]
     assert result.manifest_path is not None
-    assert list((tmp_path / "out").iterdir()) == [Path(result.manifest_path)]
+    assert Path(result.manifest_path).parent == tmp_path / "out" / ".tracelab" / "runs"
+    assert not list((tmp_path / "out").glob("batch-manifest__*.json"))
 
 
 def test_runner_preflight_blocks_unknown_window(tmp_path, monkeypatch):
@@ -2762,7 +2801,8 @@ def test_runner_preflight_blocks_unknown_window(tmp_path, monkeypatch):
     assert result.status == "blocked"
     assert "window" in result.blocked[0]
     assert result.manifest_path is not None
-    assert list((tmp_path / "out").iterdir()) == [Path(result.manifest_path)]
+    assert Path(result.manifest_path).parent == tmp_path / "out" / ".tracelab" / "runs"
+    assert not list((tmp_path / "out").glob("batch-manifest__*.json"))
 
 
 def test_runner_preflight_blocks_invalid_amplitude_definition(
@@ -2791,7 +2831,8 @@ def test_runner_preflight_blocks_invalid_amplitude_definition(
     assert result.status == "blocked"
     assert "amplitude_definition" in result.blocked[0]
     assert result.manifest_path is not None
-    assert list((tmp_path / "out").iterdir()) == [Path(result.manifest_path)]
+    assert Path(result.manifest_path).parent == tmp_path / "out" / ".tracelab" / "runs"
+    assert not list((tmp_path / "out").glob("batch-manifest__*.json"))
 
 
 def test_runner_records_effective_filter_clamp_warning(tmp_path):
@@ -3071,6 +3112,177 @@ def test_time_channel_x_uses_aligned_values_label_unit_and_absolute_origin(
     np.testing.assert_allclose(spec.series[0].x, x_values)
 
 
+def test_time_statistics_diagnostic_is_a_nonblocking_group_warning(
+    tmp_path, monkeypatch,
+):
+    """An ambiguous path still exports the PNG and records its exact reason."""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    x_values = np.array([0, 1, 2, 3, 2, 1, 0, 1, 2, 3, 2, 1, 0], dtype=float)
+    frame = pd.DataFrame({
+        "Time": np.arange(x_values.size, dtype=float) / 10.0,
+        "angle": x_values,
+        "sig": np.linspace(-1.0, 1.0, x_values.size),
+    })
+    fd = FileData(
+        tmp_path / "statistics-diagnostic.csv", frame, list(frame.columns),
+        {"angle": "deg", "sig": "V"},
+    )
+    captured = {}
+
+    def write_image(payload, path, params=None, *, options=None, context=None,
+                    warnings_out=None):
+        captured["spec"] = payload[1]
+        Path(path).write_bytes(b"png")
+        return Path(path)
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(write_image))
+    preset = AnalysisPreset.from_current_single(
+        name="statistics diagnostic", method="time", signal=(0, "sig"),
+        params={
+            "render_group_by": "source", "x_source": "channel",
+            "x_channel": "angle",
+            "chart_statistics": {
+                "enabled": True, "range_mode": "full",
+                "x_min": None, "x_max": None, "metrics": ["max", "min"],
+            },
+        },
+        outputs=BatchOutput(export_data=True, export_image=True),
+    )
+
+    runner = BatchRunner({0: fd})
+    preview_plan = runner.preview_outputs(preset, tmp_path / "formal")
+    preview = runner.preview_group(
+        preset, preview_plan.representative_group.group_id, tmp_path / "preview",
+    )
+    result = runner.run(preset, tmp_path / "out")
+
+    manifest = load_batch_manifest(result.manifest_path)
+    group = manifest["render_groups"][0]
+    assert result.status == "done"
+    assert result.items[0].status == "done"
+    assert Path(result.items[0].data_path).is_file()
+    assert preview.status == "done"
+    assert preview.warnings == ("chart_statistics.multiple_x_reversals",)
+    assert not list((tmp_path / "preview").glob("batch-manifest__*.json"))
+    assert not (tmp_path / "preview" / ".tracelab").exists()
+    assert captured["spec"].diagnostics[0].code == (
+        "chart_statistics.multiple_x_reversals"
+    )
+    assert group["status"] == "done"
+    assert group["warnings"] == ["chart_statistics.multiple_x_reversals"]
+    assert group["effective_facts"]["chart_statistics"] == {
+        "config": {
+            "enabled": True, "range_mode": "full",
+            "x_min": None, "x_max": None, "metrics": ["max", "min"],
+        },
+        "row_count": 0,
+        "rows": [],
+        "diagnostics": [{
+            "code": "chart_statistics.multiple_x_reversals", "panel": 0,
+            "message": "当前曲线检测到多次 X 方向反转，无法确定唯一升程/回程。",
+        }],
+    }
+
+
+def test_time_statistics_manifest_summarizes_normal_rows(tmp_path, monkeypatch):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    x_values = np.arange(5, dtype=float)
+    frame = pd.DataFrame({
+        "Time": x_values / 10.0,
+        "angle": x_values,
+        "sig": np.array([2.0, -1.0, 4.0, 0.0, 1.0]),
+    })
+    fd = FileData(
+        tmp_path / "statistics-rows.csv", frame, list(frame.columns),
+        {"angle": "deg", "sig": "V"},
+    )
+    monkeypatch.setattr(
+        BatchRunner, "_write_image",
+        staticmethod(lambda _payload, path, **_kwargs: Path(path).write_bytes(b"png")),
+    )
+    preset = AnalysisPreset.from_current_single(
+        name="statistics rows", method="time", signal=(0, "sig"),
+        params={
+            "render_group_by": "source", "x_source": "channel",
+            "x_channel": "angle",
+            "chart_statistics": {
+                "enabled": True, "range_mode": "custom",
+                "x_min": 1.0, "x_max": 3.0, "metrics": ["mean", "max"],
+            },
+        },
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    facts = load_batch_manifest(result.manifest_path)["render_groups"][0][
+        "effective_facts"
+    ]["chart_statistics"]
+    assert result.status == "done"
+    assert facts["diagnostics"] == []
+    assert facts["config"]["metrics"] == ["max", "mean"]
+    assert facts["rows"] == [{
+        "series_key": result.items[0].task_id + ":value",
+        "panel": 0, "branch": "全程", "sample_count": 3,
+        "minimum": -1.0, "maximum": 4.0, "mean": 1.0,
+    }]
+
+
+def test_statistics_diagnostic_does_not_stop_the_next_render_group(
+    tmp_path, monkeypatch,
+):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    def make_file(name, angle):
+        frame = pd.DataFrame({
+            "Time": np.arange(len(angle), dtype=float) / 10.0,
+            "angle": angle,
+            "sig": np.linspace(-1.0, 1.0, len(angle)),
+        })
+        return FileData(
+            tmp_path / f"{name}.csv", frame, list(frame.columns),
+            {"angle": "deg", "sig": "V"},
+        )
+
+    ambiguous = make_file(
+        "ambiguous",
+        np.array([0, 1, 2, 3, 2, 1, 0, 1, 2, 3, 2, 1, 0], dtype=float),
+    )
+    monotonic = make_file("monotonic", np.arange(8, dtype=float))
+    monkeypatch.setattr(
+        BatchRunner, "_write_image",
+        staticmethod(lambda _payload, path, **_kwargs: Path(path).write_bytes(b"png")),
+    )
+    preset = AnalysisPreset.free_config(
+        name="statistics continue", method="time", target_signals=("sig",),
+        params={
+            "render_group_by": "source", "x_source": "channel",
+            "x_channel": "angle",
+            "chart_statistics": {
+                "enabled": True, "range_mode": "full",
+                "x_min": None, "x_max": None, "metrics": ["max", "min"],
+            },
+        },
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+    preset = replace(preset, file_ids=(0, 1))
+
+    result = BatchRunner({0: ambiguous, 1: monotonic}).run(
+        preset, tmp_path / "out",
+    )
+
+    groups = load_batch_manifest(result.manifest_path)["render_groups"]
+    diagnostic = next(group for group in groups if group["warnings"])
+    normal = next(group for group in groups if not group["warnings"])
+    assert result.status == "done"
+    assert len(list((tmp_path / "out").glob("*.png"))) == 2
+    assert diagnostic["status"] == normal["status"] == "done"
+    assert diagnostic["warnings"] == ["chart_statistics.multiple_x_reversals"]
+    assert normal["effective_facts"]["chart_statistics"]["row_count"] == 1
+
+
 def test_time_channel_x_missing_from_source_fails_task_without_publication(tmp_path):
     fd = _make_fd(tmp_path, "missing_x", idx=0)
     preset = AnalysisPreset.from_current_single(
@@ -3222,7 +3434,9 @@ def test_cancel_after_compute_emits_one_terminal_and_writes_nothing(
     assert [event.kind for event in events].count("task_started") == 1
     assert [event.kind for event in events].count("run_finished") == 1
     assert result.manifest_path is not None
-    assert list((tmp_path / "out").glob("*")) == [Path(result.manifest_path)]
+    assert Path(result.manifest_path).parent == tmp_path / "out" / ".tracelab" / "runs"
+    assert not list((tmp_path / "out").glob("*.png"))
+    assert not list((tmp_path / "out").glob("*.csv"))
     assert result.summary["cancelled"] == 1
 
 
@@ -3674,6 +3888,48 @@ def test_full_cost_hdf_preview_never_loads_and_run_keeps_unresolved_identity(
         task.identity.task_id for task in expected_tasks
     }
     assert member_ids == entry_ids
+
+
+def test_representative_preview_renders_only_first_group_to_private_png(
+    qapp, tmp_path,
+):
+    """Preview must use formal rendering without publishing run artifacts."""
+    fd = _make_fd(tmp_path, "representative", channels=("sig", "aux"), idx=0)
+    preset = AnalysisPreset.free_config(
+        name="representative preview",
+        method="time",
+        target_signals=("sig", "aux"),
+        params={"render_group_by": "none"},
+        outputs=BatchOutput(
+            export_data=True, export_image=True,
+            image_width=960, image_height=540, image_dpi=144,
+        ),
+    )
+    preset = replace(preset, file_ids=(0,))
+    runner = BatchRunner({0: fd})
+    formal_dir = tmp_path / "formal-output"
+    plan = runner.preview_outputs(preset, formal_dir)
+    group = plan.representative_group
+
+    assert group is not None
+    assert group.ordinal == 1
+    assert group.total_groups == 2
+    assert group.member_count == 1
+    assert group.required_source_count == 1
+    assert not formal_dir.exists()
+
+    private_dir = tmp_path / "private-preview"
+    result = runner.preview_group(preset, group.group_id, private_dir)
+
+    assert result.status == "done"
+    assert result.group_id == group.group_id
+    assert Path(result.image_path).name == f"{group.planned_stem}.png"
+    assert Path(result.image_path).is_file()
+    assert not list(private_dir.glob("*.csv"))
+    assert not list(private_dir.glob("*.xlsx"))
+    assert not list(private_dir.glob("batch-manifest__*.json"))
+    assert not (private_dir / ".tracelab").exists()
+    assert not formal_dir.exists()
 
 
 def test_metadata_probe_unavailable_is_preview_only_fallback(

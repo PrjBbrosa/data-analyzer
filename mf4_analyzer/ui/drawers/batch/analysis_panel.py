@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
 from ....analysis_presets import list_builtin_presets
 from ...analysis_preset_slots import preset_slot_bus, read_slot
 from .method_buttons import DynamicParamForm, MethodButtonGroup
+from .chart_statistics_panel import ChartStatisticsPanel
 
 
 _METHOD_TO_KIND = {
@@ -181,6 +182,8 @@ class AnalysisPanel(QWidget):
 
         self._param_form = DynamicParamForm(self)
         outer.addWidget(self._param_form)
+        self._chart_statistics = ChartStatisticsPanel(self)
+        outer.addWidget(self._chart_statistics)
 
         self._source_interval_host = QWidget(self)
         self._source_interval_host.setObjectName("BatchSourceInterval")
@@ -204,6 +207,7 @@ class AnalysisPanel(QWidget):
         self._applied_snapshot: dict = {}
         self._method_group.methodChanged.connect(self._on_method_changed)
         self._param_form.paramsChanged.connect(self._on_params_changed)
+        self._chart_statistics.changed.connect(self._on_params_changed)
         self._source_interval_mode.currentIndexChanged.connect(
             self._sync_source_interval_enabled
         )
@@ -251,6 +255,7 @@ class AnalysisPanel(QWidget):
         is_time = method == "time"
         self._preset_host.setVisible(not is_time)
         self._source_interval_host.setVisible(method == "fft")
+        self._chart_statistics.setVisible(is_time)
         self._params_title.setText(_PARAMETER_TITLES.get(method, "分析参数"))
         self._preset_state.setVisible(not is_time)
         if is_time:
@@ -386,13 +391,20 @@ class AnalysisPanel(QWidget):
         self._param_form.set_compact_mode(compact)
 
     def get_params(self) -> dict:
-        return self._param_form.get_params()
+        params = self._param_form.get_params()
+        if self.current_method() == "time":
+            params.update(self._chart_statistics.get_params())
+        return params
 
     def apply_method(self, method: str) -> None:
         self.set_method(method)
 
     def apply_params(self, params: dict) -> None:
         self._param_form.apply_params(params)
+        self._chart_statistics.apply_params(params)
+
+    def set_chart_statistics_x_context(self, *, x_source, x_channel="", unit="s") -> None:
+        self._chart_statistics.set_context(x_source=x_source, x_channel=x_channel, unit=unit)
 
     def set_weighting_options(self, options) -> None:
         self._param_form.set_weighting_options(options)

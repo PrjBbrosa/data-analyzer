@@ -208,6 +208,14 @@ def _verified_artifact_path(facts: object, expected_format: str) -> Path:
     return path
 
 
+def _artifact_directory_for_manifest(manifest_path: Path) -> Path:
+    """Return the export root for both current and legacy manifest layouts."""
+    directory = manifest_path.parent
+    if directory.name == "runs" and directory.parent.name == ".tracelab":
+        return directory.parent.parent
+    return directory
+
+
 def _inspect_mode(
     result,
     group_by: str,
@@ -222,12 +230,13 @@ def _inspect_mode(
         )
     manifest_path = Path(result.manifest_path).resolve()
     manifest_directory = manifest_path.parent
+    artifact_directory = _artifact_directory_for_manifest(manifest_path)
     expected_directory = (
         Path(expected_directory).expanduser().resolve(strict=False)
     )
-    if manifest_directory != expected_directory:
+    if artifact_directory != expected_directory:
         raise RuntimeError(
-            f"{group_by} manifest directory mismatch: {manifest_directory}"
+            f"{group_by} manifest directory mismatch: {artifact_directory}"
         )
     manifest = load_batch_manifest(manifest_path)
     entries = manifest["entries"]
@@ -267,7 +276,7 @@ def _inspect_mode(
     ]
     if len(set(data_paths)) != len(data_paths):
         raise RuntimeError(f"{group_by} data artifact paths are not unique")
-    if any(path.parent != manifest_directory for path in data_paths):
+    if any(path.parent != artifact_directory for path in data_paths):
         raise RuntimeError(
             f"{group_by} data artifact outside manifest directory"
         )
@@ -336,7 +345,7 @@ def _inspect_mode(
         raise RuntimeError(f"{group_by} render-group count mismatch")
     if len(set(image_paths)) != len(image_paths):
         raise RuntimeError(f"{group_by} image artifact paths are not unique")
-    if any(path.parent != manifest_directory for path in image_paths):
+    if any(path.parent != artifact_directory for path in image_paths):
         raise RuntimeError(
             f"{group_by} image artifact outside manifest directory"
         )

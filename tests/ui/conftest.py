@@ -29,6 +29,7 @@ def _isolate_qsettings(tmp_path, monkeypatch):
     any bare ``QSettings()`` (hint bars) away from the registry.
     """
     from PyQt5.QtCore import QSettings
+    import mf4_analyzer.ui.batch_settings as _batch_settings_mod
     import mf4_analyzer.ui.inspector_sections as _pkg
     import mf4_analyzer.ui.inspector_sections._helpers as _helpers_mod
     import mf4_analyzer.ui.inspector_sections.collapsible as _collapsible_mod
@@ -45,6 +46,13 @@ def _isolate_qsettings(tmp_path, monkeypatch):
         if hasattr(mod, "_preset_settings"):
             monkeypatch.setattr(mod, "_preset_settings", _temp_settings)
 
+    # ``BatchSheet`` restores remembered display preferences on open and
+    # writes them back on close, so every ``BatchSheet(...)`` in this suite
+    # would otherwise round-trip through the real MF4Analyzer/DataAnalyzer
+    # store. Tests that assert ON the persistence still inject their own
+    # ``BatchPanelPrefsStore``; this only covers the implicit default.
+    monkeypatch.setattr(_batch_settings_mod, "_default_settings", _temp_settings)
+
     QSettings.setDefaultFormat(QSettings.IniFormat)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
     QSettings.setPath(QSettings.IniFormat, QSettings.SystemScope, str(tmp_path))
@@ -56,6 +64,30 @@ def qapp():
     """Session-wide QApplication so each test reuses the instance."""
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_style(qapp):
+    """Undo any application-wide style/stylesheet a test installs.
+
+    ``qapp`` is session-scoped, so ``qapp.setStyleSheet(...)`` /
+    ``qapp.setStyle("Fusion")`` outlive the test that called them and silently
+    change widget metrics for everything that runs afterwards. That is how
+    ``test_alt_view_shortcut_switches_active_section`` and the two BLF dialog
+    tests broke ``test_dialog_layout_insets_...``: the app QSS grew the
+    dB-reference delete button from 30px to 32px, three files later.
+
+    Tests that legitimately need the real QSS keep doing so; this only
+    guarantees they cannot leak it. Restoring per test is cheap — Qt only
+    repolishes widgets that still exist.
+    """
+    style_name = qapp.style().objectName()
+    sheet = qapp.styleSheet()
+    yield
+    if qapp.styleSheet() != sheet:
+        qapp.setStyleSheet(sheet)
+    if qapp.style().objectName() != style_name:
+        qapp.setStyle(style_name)
 
 
 @pytest.fixture(autouse=True)

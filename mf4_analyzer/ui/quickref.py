@@ -260,7 +260,52 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
         ),
     ),
-    # 12 — 右键菜单
+    # 12 — 批处理
+    QuickGroup(
+        title="批处理",
+        rows=(
+            QuickRow("打开批处理", gesture="工具栏「批处理」"),
+            QuickRow(
+                "添加来源",
+                sub="从已打开的文件选，或直接从磁盘添加",
+                gesture="+ 已加载 / + 从磁盘…",
+            ),
+            QuickRow(
+                "选目标信号",
+                sub="点开后直接打字筛选；再点条目勾选 / 取消",
+                gesture="目标信号行",
+            ),
+            QuickRow(
+                "批量勾选",
+                sub="全选当前筛选结果 · 清空全部已选",
+                gesture="弹层底部",
+            ),
+            QuickRow(
+                "已选摘要",
+                sub="收起后只显示第一个信号名 +「+N」徽章，悬停看全部",
+            ),
+            QuickRow(
+                "RPM 通道",
+                sub="单选，只能选一个通道；系数把原始值换算成 RPM",
+            ),
+            QuickRow(
+                "刻度与字体",
+                sub="疏 / 标准 / 密 三档 + 字号缩放，只影响导出图片",
+                gesture="刻度与字体",
+            ),
+            QuickRow(
+                "记住导出偏好",
+                sub="输出目录、导出内容、刻度与字体自动带到下次；文件与信号不记",
+                gesture="恢复默认",
+            ),
+            QuickRow(
+                "存 / 读方案",
+                sub="整套批处理设置存成 JSON，与分析预设槽相互独立",
+                gesture="导入方案… / 导出方案…",
+            ),
+        ),
+    ),
+    # 13 — 右键菜单
     QuickGroup(
         title="右键菜单",
         rows=(

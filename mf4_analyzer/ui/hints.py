@@ -239,7 +239,7 @@ _HINTS = (
     ),
     Hint(
         id="subplot.wheel_target",
-        text="滚轮作用于鼠标所在子图",
+        text="滚轮作用于鼠标所在分屏图",
         surface="context",
         modes=frozenset({"time"}),
         plot_modes=frozenset({"subplot"}),
@@ -271,7 +271,7 @@ _HINTS = (
     ),
     Hint(
         id="subplot.shift_y",
-        text="Shift + 滚轮 缩放当前子图 Y",
+        text="Shift + 滚轮：缩放鼠标所在分屏图 Y 轴",
         surface="context",
         tier="A",
         modes=frozenset({"time"}),

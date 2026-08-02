@@ -21,10 +21,17 @@ def _checked_pairs(widget):
     return [(fid, channel) for fid, channel, _color in widget.get_checked_channels()]
 
 
+# Every test attaches "f1" after add_file: rows of an unattached file are inert
+# (get_checked_channels filters by _attached_file_ids, _is_item_attached gates
+# check propagation), mirroring a TimeDomain View that has not been given the
+# file yet. Without the attach these tests assert against an always-empty tree.
+
+
 def test_set_checked_channels_roundtrip(qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
     widget.add_file("f1", _FakeFileData())
+    widget.set_attached_file_ids(["f1"])
 
     widget.set_checked_channels([("f1", "spd")])
 
@@ -38,6 +45,7 @@ def test_set_checked_channels_is_silent(qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
     widget.add_file("f1", _FakeFileData())
+    widget.set_attached_file_ids(["f1"])
     fired = []
     widget.channels_changed.connect(lambda: fired.append(1))
 
@@ -50,6 +58,7 @@ def test_set_hidden_channels_keeps_only_checked_known_channels(qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
     widget.add_file("f1", _FakeFileData())
+    widget.set_attached_file_ids(["f1"])
     widget.set_checked_channels([("f1", "rpm")])
 
     widget.set_hidden_channels([
@@ -66,6 +75,7 @@ def test_unchecking_channel_clears_hidden_state(qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
     widget.add_file("f1", _FakeFileData())
+    widget.set_attached_file_ids(["f1"])
     item = widget._file_items["f1"].child(0)
     widget.set_checked_channels([("f1", "rpm")])
     widget.set_hidden_channels([("f1", "rpm")])
@@ -80,6 +90,7 @@ def test_set_channel_visible_rejects_unchecked_or_unknown_rows(qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
     widget.add_file("f1", _FakeFileData())
+    widget.set_attached_file_ids(["f1"])
 
     assert widget.set_channel_visible("f1", "rpm", False) is False
     assert widget.set_channel_visible("missing", "rpm", False) is False
@@ -90,6 +101,7 @@ def test_color_roundtrip_refreshes_swatch_icon(qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
     widget.add_file("f1", _FakeFileData())
+    widget.set_attached_file_ids(["f1"])
     channel_item = widget._file_items["f1"].child(0)
     before_key = channel_item.icon(0).cacheKey()
 
@@ -103,6 +115,7 @@ def test_set_channel_colors_skips_unknown_channels(qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
     widget.add_file("f1", _FakeFileData())
+    widget.set_attached_file_ids(["f1"])
 
     widget.set_channel_colors({
         ("f1", "rpm"): "#abcdef",
@@ -120,6 +133,7 @@ def test_file_navigator_delegates_channel_state(qtbot):
     navigator = FileNavigator()
     qtbot.addWidget(navigator)
     navigator.add_file("f1", _FakeFileData())
+    navigator.set_attached_file_ids(["f1"])
 
     navigator.set_checked_channels([("f1", "rpm")])
     navigator.set_channel_colors({("f1", "spd"): "#123456"})

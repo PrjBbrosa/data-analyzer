@@ -345,6 +345,36 @@ def validate_recipe(
                     "x_origin", "unsupported_x_origin",
                     "x_origin must be zero or absolute",
                 ))
+        statistics = params.get("chart_statistics")
+        if statistics is not None:
+            if not isinstance(statistics, Mapping):
+                issues.append(ValidationIssue(
+                    "chart_statistics", "invalid_statistics",
+                    "chart_statistics must be an object",
+                ))
+            elif bool(statistics.get("enabled", False)):
+                mode = str(statistics.get("range_mode", "full") or "").strip().lower()
+                if mode not in {"full", "custom"}:
+                    issues.append(ValidationIssue(
+                        "chart_statistics", "invalid_range_mode",
+                        "chart_statistics range_mode must be full or custom",
+                    ))
+                if mode == "custom":
+                    lo, hi = statistics.get("x_min"), statistics.get("x_max")
+                    if not (_finite_number(lo) and _finite_number(hi) and float(lo) < float(hi)):
+                        issues.append(ValidationIssue(
+                            "chart_statistics", "invalid_range",
+                            "chart_statistics custom range requires finite min < max",
+                        ))
+                metrics = statistics.get("metrics", ())
+                if not isinstance(metrics, (tuple, list)) or not metrics or any(
+                    str(metric).strip().lower() not in {"max", "min", "mean"}
+                    for metric in metrics
+                ):
+                    issues.append(ValidationIssue(
+                        "chart_statistics", "invalid_metrics",
+                        "chart_statistics requires max, min, or mean metrics",
+                    ))
 
     nfft_mode = str(params.get("nfft_mode", "")).strip().lower()
     nfft = params.get("nfft")

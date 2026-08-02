@@ -22,6 +22,23 @@ def _has_channel(canvas, channel):
     return any(channel in name for name in _line_names(canvas))
 
 
+def _shows_channel(canvas, channel):
+    """True when the channel's curve is actually drawn on the canvas.
+
+    ``_has_channel`` only asks whether a curve object is BOUND. Since the
+    selection-delta fast path (5a565fc) an eye toggle keeps the bound curve
+    and merely flips ``PlotDataItem.setVisible``, so membership alone no
+    longer answers "is it on screen".
+    """
+    for _ck, name, (_handle, line) in canvas._channel_lines.composite_items():
+        if channel not in name:
+            continue
+        pdi = getattr(line, "plot_data_item", None)
+        if pdi is not None and pdi.isVisible():
+            return True
+    return False
+
+
 def _assert_canvas_ylims(canvas, expected):
     actual = canvas.get_visible_ylims()
     assert set(actual) == set(expected)
@@ -50,6 +67,10 @@ def _make_speed_vs_torque_views(qtbot, qapp, loaded_csv):
 
     w._on_view_new()
     qapp.processEvents()
+    # A fresh View starts with an empty file scope (see
+    # test_view_channel_scope.test_normal_load_auto_attaches_only_current_view),
+    # so the file must be attached before any of its channels can be checked.
+    w._attach_files_to_focused_view([fid])
 
     _set_checked(w, "torque")
     w.chart_stack.set_plot_mode("subplot")

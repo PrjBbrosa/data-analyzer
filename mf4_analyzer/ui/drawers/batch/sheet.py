@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
+import tempfile
 
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QDesktopServices
@@ -34,11 +35,13 @@ from ....batch_validation import (
     ValidationIssue, validate_outputs, validate_recipe,
 )
 from ....io.source_adapters import DEFAULT_SOURCE_ADAPTER_REGISTRY
+from ...batch_settings import BatchPanelPrefs, BatchPanelPrefsStore
 from .analysis_panel import AnalysisPanel
 from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
 from .output_panel import OutputPanel
 from .pipeline_strip import PipelineStrip
-from .runner_thread import BatchRunnerThread
+from .preview_dialog import BatchPreviewDialog
+from .runner_thread import BatchPreviewThread, BatchRunnerThread
 from .task_list import TaskListWidget
 
 
@@ -120,7 +123,12 @@ def _blocked_issue_reason(issue: ValidationIssue) -> str:
     }.get(issue.field, "请检查分析参数")
 
 class BatchSheet(QDialog):
-    def __init__(self, parent, files, current_preset=None):
+    def __init__(self, parent, files, current_preset=None, prefs_store=None):
+        """``prefs_store`` is the injection seam for
+        :class:`~mf4_analyzer.ui.batch_settings.BatchPanelPrefsStore`; tests
+        MUST pass one backed by an isolated ``QSettings(IniFormat)`` so the
+        dialog's open/close cycle cannot read or write the real user config.
+        """
         super().__init__(parent)
         self.setObjectName("SheetSurface")
         self.setModal(True)
@@ -128,6 +136,9 @@ class BatchSheet(QDialog):
         self.resize(1080, 760)
         self._files = files or {}
         self._current_preset = current_preset
+        self._prefs_store = (
+            prefs_store if prefs_store is not None else BatchPanelPrefsStore()
+        )
         self._base_name = "batch"
         self._base_params: dict = {}
         self._recipe_method = "fft"
@@ -156,6 +167,12 @@ class BatchSheet(QDialog):
         self._running: bool = False
         self._runner_thread: BatchRunnerThread | None = None
         self._last_result = None
+        # Preview state is deliberately separate from run/preset state.
+        self._preview_thread: BatchPreviewThread | None = None
+        self._preview_result = None
+        self._preview_dialog: BatchPreviewDialog | None = None
+        self._preview_temp: tempfile.TemporaryDirectory | None = None
+        self._preview_close_pending: bool = False
         self._close_pending: bool = False
 
         # W7 toast bookkeeping — populated by ``_toast`` so headless tests
@@ -185,9 +202,6 @@ class BatchSheet(QDialog):
         self._toolbar_title = QLabel("批处理分析", self._toolbar_host)
         self._toolbar_title.setObjectName("BatchToolbarTitle")
         bar.addWidget(self._toolbar_title)
-        self._toolbar_meta = QLabel("紧凑工作流", self._toolbar_host)
-        self._toolbar_meta.setObjectName("BatchToolbarMeta")
-        bar.addWidget(self._toolbar_meta)
         bar.addStretch(1)
 
         self._btn_fill_from_current = QPushButton("从当前单次同步")
@@ -309,6 +323,11 @@ class BatchSheet(QDialog):
         self._btn_cancel.clicked.connect(self.reject)
         self._footer_lay.addWidget(self._btn_cancel)
 
+        self._btn_preview = QPushButton("预览", self._footer_host)
+        self._btn_preview.setToolTip("生成正式渲染链路的代表最终图")
+        self._btn_preview.clicked.connect(self._on_preview_clicked)
+        self._footer_lay.addWidget(self._btn_preview)
+
         self._btn_run = QPushButton("运行", self._footer_host)
         self._btn_run.setDefault(True)
         self._btn_run.clicked.connect(self._on_run_clicked)
@@ -348,6 +367,9 @@ class BatchSheet(QDialog):
             self._on_builtin_analysis_preset
         )
         self._output_panel.changed.connect(self._on_output_controls_changed)
+        self._output_panel.restore_defaults_requested.connect(
+            self._on_restore_output_defaults
+        )
         self._output_panel.db_reference_control.manage_requested.connect(
             self._open_shared_db_reference_manager
         )
@@ -363,6 +385,12 @@ class BatchSheet(QDialog):
         self._input_panel.set_method(self._analysis_panel.current_method())
         self._input_panel._refresh_signal_universe()
         self._sync_x_axis_context()
+
+        # Remembered display preferences land on top of the hard-coded
+        # defaults, and strictly BEFORE any ``apply_preset``: nothing applies
+        # a preset during __init__, so a preset the user actively pulls in
+        # later (从当前单次同步 / 导入方案…) always wins over this memory.
+        self._restore_panel_prefs()
 
         # Init-sync — seed badges with the current default state.
         self._recompute_pipeline_status()
@@ -548,6 +576,7 @@ class BatchSheet(QDialog):
         if not self._running:
             runnable = self.is_runnable()
             self._btn_run.setEnabled(runnable)
+            self._btn_preview.setEnabled(runnable)
             blocked_reason = "请选择文件、信号和输出目录"
             if preflight_issues:
                 blocked_reason = _blocked_issue_reason(preflight_issues[0])
@@ -740,6 +769,75 @@ class BatchSheet(QDialog):
             "render_style": self._output_panel.render_style_params(),
             "outputs": dataclasses.asdict(self._output_panel.get_outputs()),
         }
+
+    # ------------------------------------------------------------------
+    # Remembered display preferences (QSettings). Plan:
+    # docs/analyzer/plans/2026-08-02-batch-settings-persistence-plan.md
+    # ------------------------------------------------------------------
+    def _restore_panel_prefs(self) -> None:
+        """Apply the remembered display preferences to the output panel.
+
+        Only what the store persists is touched — directory, render style and
+        the export block. Files, target signals, RPM channel/factor, axes and
+        analysis parameters are never remembered, so a panel opened against a
+        new data source starts clean (plan 2.1).
+
+        ``apply_directory`` writes the line edit, whose ``textChanged``
+        re-emits ``OutputPanel.changed``; the ``_applying_analysis_preset``
+        flag keeps that from being read as a user edit and clearing a freshly
+        applied analysis card.
+        """
+        prefs = self._prefs_store.load()
+        self._applying_analysis_preset = True
+        try:
+            # An empty remembered directory means "never chosen" — leave the
+            # panel's own default in place rather than blanking the field.
+            if prefs.directory:
+                self._output_panel.apply_directory(prefs.directory)
+            self._output_panel.apply_render_style_params(prefs.render_style)
+            self._output_panel.apply_outputs(prefs.as_output())
+        finally:
+            self._applying_analysis_preset = False
+
+    def _panel_prefs(self) -> BatchPanelPrefs:
+        snapshot = self._output_controls_snapshot()
+        # ``snapshot["outputs"]`` is a full ``dataclasses.asdict`` including
+        # runtime fields; BatchPanelPrefs whitelists them back out.
+        return BatchPanelPrefs(
+            directory=self._output_panel.directory(),
+            render_style=snapshot["render_style"],
+            outputs=snapshot["outputs"],
+        )
+
+    def _persist_panel_prefs(self) -> None:
+        """Write the current display preferences.
+
+        Called from ``done`` (every close path) and right after a run starts —
+        never from ``_on_output_controls_changed``, which fires on every
+        keystroke and spin-box tick.
+        """
+        self._prefs_store.save(self._panel_prefs())
+
+    def _on_restore_output_defaults(self) -> None:
+        """恢复默认: forget the stored preferences and reset the panel.
+
+        Both halves are required — resetting the widgets alone would be undone
+        by the next ``_persist_panel_prefs``, and clearing the key alone would
+        not visibly change anything until the dialog is reopened.
+        """
+        self._prefs_store.clear()
+        self._applying_analysis_preset = True
+        try:
+            self._output_panel.restore_defaults()
+        finally:
+            self._applying_analysis_preset = False
+        if self._analysis_preset_output_snapshot is not None:
+            # Re-baseline instead of leaving a stale comparison behind: an
+            # applied analysis card owns axes, not display preferences, so it
+            # must survive this reset without going deaf to the next real edit.
+            self._analysis_preset_output_snapshot = self._output_controls_snapshot()
+        self._recompute_pipeline_status()
+        self._toast("已恢复导出默认设置", kind="success")
 
     def _on_output_controls_changed(self) -> None:
         if (
@@ -937,12 +1035,16 @@ class BatchSheet(QDialog):
         params = self.params()
         if str(params.get("x_source", "time")) != "channel":
             self._output_panel.set_x_axis_context(label="Time", unit="s")
+            self._analysis_panel.set_chart_statistics_x_context(x_source="time", unit="s")
             return
         channel = str(params.get("x_channel") or "").strip()
         units = self._x_channel_units(channel) if channel else ()
         unit = units[0] if len(units) == 1 else ""
         self._output_panel.set_x_axis_context(
             label=channel or "X", unit=unit,
+        )
+        self._analysis_panel.set_chart_statistics_x_context(
+            x_source="channel", x_channel=channel, unit=unit,
         )
 
     def _control_params_snapshot(self, method: str | None = None) -> dict:
@@ -1303,6 +1405,106 @@ class BatchSheet(QDialog):
         thread.finished.connect(self._on_thread_finished)
         thread.start()
 
+        # Persist here as well as on close: a long run that ends in a crash
+        # (or a force-quit while it works) would otherwise lose the settings
+        # the user just tuned for exactly this export.
+        self._persist_panel_prefs()
+
+    def _on_preview_clicked(self) -> None:
+        """No-load-plan, then immediately render the first formal group."""
+        if self._running or self._preview_thread is not None or not self.is_runnable():
+            return
+        runner = self._make_runner()
+        preset = self.get_preset()
+        try:
+            plan = runner.preview_outputs(preset, self.output_dir())
+        except Exception as exc:  # noqa: BLE001
+            self._toast(f"预览不可用：{exc}", kind="warning")
+            return
+        group = plan.representative_group
+        if group is None:
+            self._toast("预览不可用：没有可生成的代表输出", kind="warning")
+            return
+        dialog = self._preview_dialog
+        if dialog is None:
+            dialog = BatchPreviewDialog(self)
+            dialog.regenerate_requested.connect(self._start_preview_render)
+            dialog.run_all_requested.connect(self._run_all_from_preview)
+            dialog.cancel_requested.connect(self._cancel_preview)
+            dialog.finished.connect(self._cleanup_preview_temp)
+            self._preview_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self._preview_plan = (runner, preset, group)
+        self._start_preview_render()
+
+    def _start_preview_render(self) -> None:
+        if self._preview_thread is not None:
+            return
+        runner, preset, group = getattr(self, "_preview_plan", (None, None, None))
+        if runner is None or group is None:
+            return
+        self._cleanup_preview_temp()
+        self._preview_temp = tempfile.TemporaryDirectory(prefix="tracelab-batch-preview-")
+        dialog = self._preview_dialog
+        if dialog is None:
+            return
+        dialog.set_loading(
+            f"{group.display_name} · 代表输出 {group.ordinal} / {group.total_groups} · "
+            f"将读取 {group.required_source_count} 个来源"
+        )
+        self._preview_result = None
+        self._btn_preview.setEnabled(False)
+        thread = BatchPreviewThread(
+            runner, preset, group.group_id, self._preview_temp.name, parent=self,
+        )
+        self._preview_thread = thread
+        thread.finished_with_result.connect(self._on_preview_finished_with_result)
+        # The only preview unlock/cleanup boundary is QThread.finished.
+        thread.finished.connect(self._on_preview_thread_finished)
+        thread.start()
+
+    def _cancel_preview(self) -> None:
+        if self._preview_thread is not None:
+            self._preview_thread.request_cancel()
+
+    def _on_preview_finished_with_result(self, result) -> None:
+        self._preview_result = result
+
+    def _on_preview_thread_finished(self) -> None:
+        thread = self._preview_thread
+        self._preview_thread = None
+        if thread is not None:
+            thread.deleteLater()
+        dialog = self._preview_dialog
+        if dialog is not None:
+            result = self._preview_result
+            if str(getattr(result, "status", "")) == "cancelled":
+                dialog.set_cancelled()
+            else:
+                dialog.set_result(result)
+        if not self._running:
+            self._btn_preview.setEnabled(self.is_runnable())
+        if self._preview_close_pending:
+            self._preview_close_pending = False
+            self.close()
+
+    def _cleanup_preview_temp(self, *_args) -> None:
+        if self._preview_thread is not None:
+            return
+        temp = self._preview_temp
+        self._preview_temp = None
+        if temp is not None:
+            temp.cleanup()
+
+    def _run_all_from_preview(self) -> None:
+        dialog = self._preview_dialog
+        if dialog is not None:
+            dialog.accept()
+        self._cleanup_preview_temp()
+        self._on_run_clicked()
+
     def _on_cancel_clicked(self) -> None:
         """Running-mode 中断 handler — sets the cancel token and disables
         the abort button so it cannot be clicked twice."""
@@ -1433,6 +1635,7 @@ class BatchSheet(QDialog):
         self._btn_import_preset.setEnabled(False)
         self._btn_export_preset.setEnabled(False)
         self._btn_cancel.setVisible(False)
+        self._btn_preview.setVisible(False)
         self._btn_run.setVisible(False)
         self._btn_abort.setEnabled(True)
         self._btn_abort.setText("中断")
@@ -1453,9 +1656,11 @@ class BatchSheet(QDialog):
         self._btn_export_preset.setEnabled(True)
         self._btn_abort.setVisible(False)
         self._btn_cancel.setVisible(True)
+        self._btn_preview.setVisible(True)
         self._btn_run.setVisible(True)
         # Re-evaluate Run-button enabled state against current config.
         self._btn_run.setEnabled(self.is_runnable())
+        self._btn_preview.setEnabled(self.is_runnable())
 
     def _open_artifact_location(self, artifact_path: str) -> None:
         """Open an artifact's containing folder after explicit activation."""
@@ -1472,6 +1677,11 @@ class BatchSheet(QDialog):
         the cancel path; the actual close happens once
         ``_on_thread_finished`` clears ``_running`` (W6 invariant 4).
         """
+        if self._preview_thread is not None:
+            self._preview_close_pending = True
+            self._cancel_preview()
+            event.ignore()
+            return
         if self._running:
             choice = QMessageBox.question(
                 self, "确认关闭",
@@ -1485,7 +1695,27 @@ class BatchSheet(QDialog):
                     self._runner_thread.request_cancel()
             event.ignore()
             return
+        # Normal-close branch only; the run-in-progress branch above ignores
+        # the event and comes back through here once the runner has stopped.
+        self._persist_panel_prefs()
         super().closeEvent(event)
+
+    def done(self, result):  # noqa: N802 (Qt API)
+        """Persist the display preferences on the way out.
+
+        ``closeEvent`` alone would miss the dialog's PRIMARY exit: 关闭 is
+        wired straight to ``QDialog.reject`` and Esc does the same, and neither
+        raises a ``QCloseEvent`` at all. ``done`` is the funnel both of those
+        reach.
+
+        Both hooks are kept because neither covers the other. ``QDialog``
+        only re-routes a close event into ``reject()`` while the dialog is
+        *visible*, so closing a never-shown sheet stops at ``closeEvent``;
+        conversely a visible close runs both, writing the same snapshot twice,
+        which is harmless.
+        """
+        self._persist_panel_prefs()
+        super().done(result)
 
     def get_preset(self) -> AnalysisPreset:
         params = self._merged_params()

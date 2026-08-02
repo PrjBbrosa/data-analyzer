@@ -35,6 +35,13 @@ TIME_RENDER_DEFAULTS = {
     "x_channel": "",
     "x_origin": "zero",
 }
+CHART_STATISTICS_DEFAULTS = {
+    "enabled": False,
+    "range_mode": "full",
+    "x_min": None,
+    "x_max": None,
+    "metrics": ("max", "min", "mean"),
+}
 
 COMMON_PARAM_FIELDS = frozenset({
     "fs",
@@ -65,7 +72,7 @@ COMMON_PARAM_FIELDS = frozenset({
 })
 
 METHOD_PARAM_FIELDS = {
-    "time": frozenset(TIME_RENDER_DEFAULTS),
+    "time": frozenset((*TIME_RENDER_DEFAULTS, "chart_statistics")),
     "fft": frozenset({
         "window",
         "nfft",
@@ -269,6 +276,24 @@ def _normalize_known_value(field: str, value: Any) -> Any:
         ):
             return [float(value[0]), float(value[1])]
         return value
+    if field == "chart_statistics" and isinstance(value, Mapping):
+        raw = dict(value)
+        enabled = bool(raw.get("enabled", False))
+        mode = str(raw.get("range_mode", "full") or "full").strip().lower()
+        metrics = raw.get("metrics", ())
+        if not isinstance(metrics, (tuple, list)):
+            metrics = ()
+        canonical = tuple(
+            metric for metric in ("max", "min", "mean")
+            if metric in {str(item).strip().lower() for item in metrics}
+        )
+        return {
+            "enabled": enabled,
+            "range_mode": mode,
+            "x_min": _normalize_statistics_bound(raw.get("x_min")),
+            "x_max": _normalize_statistics_bound(raw.get("x_max")),
+            "metrics": list(canonical),
+        }
     if field in _FLOAT_PARAM_FIELDS:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return float(value)
@@ -277,6 +302,14 @@ def _normalize_known_value(field: str, value: Any) -> Any:
             return int(value)
     elif field in _BOOL_PARAM_FIELDS and isinstance(value, bool):
         return bool(value)
+    return value
+
+
+def _normalize_statistics_bound(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
     return value
 
 
@@ -333,6 +366,9 @@ def normalize_batch_params(params: Mapping[str, Any] | None, method: object) -> 
         for field, default in TIME_RENDER_DEFAULTS.items():
             if normalized.get(field) == default:
                 normalized.pop(field, None)
+        statistics = normalized.get("chart_statistics")
+        if isinstance(statistics, Mapping) and not statistics.get("enabled", False):
+            normalized.pop("chart_statistics", None)
     return normalized
 
 

@@ -18,16 +18,17 @@ def test_picker_search_filters_list(qtbot):
     assert "temp" not in visible
 
 
-def test_picker_search_lives_in_original_field_not_popup(qtbot):
+def test_picker_search_lives_in_popup_not_trigger(qtbot):
+    """方案 A：搜索职责搬进弹层，收起态触发器不再接受文本输入。"""
     from PyQt5.QtWidgets import QLineEdit
     from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
 
     p = SignalPickerPopup(available_signals=["vibration_x", "temp"])
     qtbot.addWidget(p)
 
-    assert p._display_frame.isAncestorOf(p._search)
-    assert not p._popup.isAncestorOf(p._search)
-    assert p._popup.findChildren(QLineEdit) == []
+    assert p._popup.isAncestorOf(p._search)
+    assert not p._trigger.isAncestorOf(p._search)
+    assert p._trigger.findChildren(QLineEdit) == []
 
 
 def test_picker_marks_partial_signals_grey(qtbot):
@@ -63,16 +64,18 @@ def test_picker_popup_collapses_on_focus_out(qtbot):
     assert p.is_popup_visible() is False
 
 
-def test_focus_to_inline_search_keeps_popup_open(qtbot):
-    """原通道框内的搜索输入获得焦点时，候选 popup 必须保持打开。"""
+def test_popup_search_takes_focus_on_open(qtbot):
+    """方案 A 的前提：打开弹层即聚焦搜索框，用户点开后可直接打字。"""
     from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
     p = SignalPickerPopup(available_signals=["sig_a", "sig_b"])
     qtbot.addWidget(p)
     p.show_popup()
+    qtbot.wait(20)
     assert p.is_popup_visible() is True
-    p._search.setFocus()
-    qtbot.wait(50)
-    assert p.is_popup_visible() is True   # popup stays open while search is focused
+    assert p._search.hasFocus() is True   # no second click needed to search
+    qtbot.keyClicks(p._search, "sig_b")
+    assert p.visible_items() == ["sig_b"]
+    assert p.is_popup_visible() is True   # typing must not close the popup
 
 
 def test_set_partially_available_keeps_selection_marked_unavailable(qtbot):
@@ -101,31 +104,9 @@ def test_set_partially_available_keeps_selection_marked_unavailable(qtbot):
     assert received and received[-1] == ()
 
 
-def test_signal_chip_emits_remove_signal(qtbot):
-    from PyQt5.QtCore import Qt
-    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalChip
-    chip = SignalChip("sig_a")
-    qtbot.addWidget(chip)
-    received = []
-    chip.removeRequested.connect(received.append)
-    qtbot.mouseClick(chip._remove_btn, Qt.LeftButton)
-    assert received == ["sig_a"]
-
-
-def test_signal_chip_label_truncates_long_name(qtbot):
-    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalChip
-    long_name = "A_side.Rte." + "x" * 200
-    chip = SignalChip(long_name, max_label_chars=40)
-    qtbot.addWidget(chip)
-    assert chip._label.toolTip() == long_name
-    assert len(chip._label.text()) <= 41  # 40 + ellipsis "…"
-    assert chip._label.text().endswith("…")
-
-
 def test_picker_display_summarizes_selected_items_that_do_not_fit(qtbot):
-    from mf4_analyzer.ui.drawers.batch.signal_picker import (
-        SignalPickerPopup, SignalChip,
-    )
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
     names = tuple(f"Rte_very_long_signal_name_{index:02d}_xds16" for index in range(20))
     p = SignalPickerPopup(available_signals=names)
     qtbot.addWidget(p)
@@ -134,19 +115,17 @@ def test_picker_display_summarizes_selected_items_that_do_not_fit(qtbot):
     p.set_selected(names)
     qtbot.wait(20)
 
-    chips = p._display_frame.findChildren(SignalChip)
-    visible_chips = [chip for chip in chips if not chip.isHidden()]
-    assert 1 <= len(visible_chips) <= 2
+    assert p._summary_label.text() != ""
     assert p._overflow_label.isVisibleTo(p)
-    assert p._overflow_label.text() == f"+{len(names) - len(visible_chips)}"
-    assert names[-1] in p._overflow_label.toolTip()
+    assert p._overflow_label.text() == f"+{len(names) - 1}"
+    tooltip = p._trigger.toolTip()
+    for name in names:
+        assert name in tooltip
 
 
 def test_picker_display_stays_single_line_and_inside_narrow_host(qtbot):
     from PyQt5.QtCore import QPoint
-    from mf4_analyzer.ui.drawers.batch.signal_picker import (
-        SignalChip, SignalPickerPopup,
-    )
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
 
     names = tuple(f"Rte_channel_{index:02d}_with_a_long_name" for index in range(20))
     p = SignalPickerPopup(available_signals=names)
@@ -156,18 +135,12 @@ def test_picker_display_stays_single_line_and_inside_narrow_host(qtbot):
     p.set_selected(names)
     qtbot.wait(20)
 
-    frame = p._display_frame
+    frame = p._trigger
     assert p.width() == 288
     assert p.height() == 38
     assert frame.width() <= p.width()
     assert frame.sizeHint().height() <= 44
-    visible_children = [
-        *[chip for chip in frame.findChildren(SignalChip) if chip.isVisibleTo(p)],
-        p._overflow_label,
-        p._search,
-        p._arrow_button,
-    ]
-    for child in visible_children:
+    for child in (p._summary_label, p._overflow_label, p._arrow_button):
         if not child.isVisibleTo(p):
             continue
         top_left = child.mapTo(frame, QPoint(0, 0))
@@ -175,42 +148,25 @@ def test_picker_display_stays_single_line_and_inside_narrow_host(qtbot):
         assert top_left.x() + child.width() <= frame.width()
 
 
-def test_picker_active_search_uses_original_field_width(qtbot):
-    from mf4_analyzer.ui.drawers.batch.signal_picker import (
-        SignalChip, SignalPickerPopup,
-    )
+def test_picker_unchecking_in_popup_unselects_signal(qtbot):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QCheckBox
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
 
-    names = tuple(f"Rte_channel_{index:02d}_with_a_long_name" for index in range(20))
-    p = SignalPickerPopup(available_signals=names)
-    qtbot.addWidget(p)
-    p.set_selected(names)
-    p.resize(288, 38)
-    p.show()
-    p.set_search_text("channel_19")
-    qtbot.wait(20)
-
-    assert p.width() == 288
-    assert p._search.text() == "channel_19"
-    assert p._search.width() >= 200
-    assert not p._overflow_label.isVisibleTo(p)
-    assert not any(
-        chip.isVisibleTo(p)
-        for chip in p._display_frame.findChildren(SignalChip)
-    )
-
-
-def test_picker_display_chip_remove_unselects_signal(qtbot):
-    from mf4_analyzer.ui.drawers.batch.signal_picker import (
-        SignalPickerPopup, SignalChip,
-    )
     p = SignalPickerPopup(available_signals=["a", "b"])
     qtbot.addWidget(p)
     p.set_selected(("a", "b"))
     received = []
     p.selectionChanged.connect(lambda tup: received.append(tup))
-    chip_a = next(c for c in p._display_frame.findChildren(SignalChip)
-                  if c.name() == "a")
-    chip_a._remove_btn.click()
+
+    box_a = next(
+        p._list.itemWidget(p._list.item(i))
+        for i in range(p._list.count())
+        if p._list.item(i).data(Qt.UserRole) == "a"
+    )
+    assert isinstance(box_a, QCheckBox)
+    box_a.setChecked(False)
+
     assert "a" not in p.selected()
     assert received[-1] == ("b",)
 
@@ -221,7 +177,25 @@ def test_picker_display_clicking_empty_area_opens_popup(qtbot):
     p = SignalPickerPopup(available_signals=["a"])
     qtbot.addWidget(p)
     p.show()
-    qtbot.mouseClick(p._display_frame, Qt.LeftButton, pos=QPoint(5, 5))
+    qtbot.mouseClick(p._trigger, Qt.LeftButton, pos=QPoint(5, 5))
+    assert p.is_popup_visible() is True
+
+
+def test_picker_trigger_opens_on_space_and_enter(qtbot):
+    """触发器是按钮语义，不是输入框：Space / Enter 展开，可打印字符不响应。"""
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(p)
+    p.show()
+    qtbot.wait(20)
+
+    qtbot.keyClick(p._trigger, Qt.Key_Space)
+    assert p.is_popup_visible() is True
+    p.hide_popup()
+
+    qtbot.keyClick(p._trigger, Qt.Key_Return)
     assert p.is_popup_visible() is True
 
 
@@ -284,3 +258,300 @@ def test_picker_popup_rounded_corners_have_no_square_frame(qtbot):
         "translucent shell"
     )
     assert p._popup.frameShape() == p._popup.NoFrame
+
+
+# ---------------------------------------------------------------------------
+# Option A regressions — one per confirmed symptom
+# ---------------------------------------------------------------------------
+def test_picker_arrow_uses_drawn_icon_not_text_glyph(qtbot):
+    """症状 01：箭头曾是 "⌄" 字符压在蓝色实底方块上，渲染粗糙。"""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a"])
+    qtbot.addWidget(p)
+
+    assert p._arrow_button.text() == ""
+    assert not p._arrow_button.icon().isNull()
+    collapsed = p._arrow_button.icon().cacheKey()
+
+    p.show_popup()
+    assert p._arrow_button.text() == ""
+    assert not p._arrow_button.icon().isNull()
+    assert p._arrow_button.icon().cacheKey() != collapsed   # flips on expand
+
+    p.hide_popup()
+    assert p._arrow_button.icon().cacheKey() == collapsed
+
+
+def test_picker_trigger_has_sunken_resting_background(qtbot):
+    """症状 02：#fff 底落在浅色面板上，静止态看不出可点。"""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a"])
+    qtbot.addWidget(p)
+
+    resting = p._trigger.styleSheet()
+    assert "#eef2f7" in resting          # sunken against the panel
+    assert "#e8edf4" in resting          # hover is a distinct third state
+    assert "#fff" not in resting
+
+    p.show_popup()
+    expanded = p._trigger.styleSheet()
+    assert "#fff" in expanded
+    assert "#1769e0" in expanded
+
+    p.hide_popup()
+    assert p._trigger.styleSheet() == resting
+
+
+def test_picker_trigger_geometry_is_stable_across_search(qtbot):
+    """症状 03 / 04：搜索曾把 chips 全部隐藏，收起态元素来回位移。"""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    names = tuple(f"Rte_channel_{index:02d}_with_a_long_name" for index in range(20))
+    p = SignalPickerPopup(available_signals=names)
+    qtbot.addWidget(p)
+    p.resize(288, 38)
+    p.show()
+    p.set_selected(names)
+    qtbot.wait(20)
+
+    watched = (p._summary_label, p._overflow_label, p._arrow_button)
+    before = [child.geometry() for child in watched]
+    summary_before = p._summary_label.text()
+
+    p.set_search_text("channel_19")
+    qtbot.wait(20)
+    assert p.visible_items() == [names[19]]      # the query really did filter
+
+    after = [child.geometry() for child in watched]
+    assert after == before
+    assert p._summary_label.text() == summary_before
+
+    p.set_search_text("")
+    qtbot.wait(20)
+    assert [child.geometry() for child in watched] == before
+
+
+def test_picker_popup_is_at_least_420_wide(qtbot):
+    """症状 05：弹层原来只有 max(280, 触发器宽)，长名在列表里同样被切。"""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(p)
+    p.resize(288, 38)
+    p.show()
+    p.show_popup()
+    qtbot.wait(20)
+
+    assert p._popup.width() >= 420
+    assert p._popup.width() > p._trigger.width()
+    # 「直接在上方原通道框输入」的提示语随搜索框进弹层一并消失
+    assert not hasattr(p, "_search_hint")
+
+
+def test_picker_summary_elides_in_middle(qtbot):
+    """摘要用 ElideMiddle，头尾片段同时可见（尾缀区分同名通道）。"""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    name = "Rte_ActRetPlausi_mActiveReturnMotorTorque_xds16"
+    p = SignalPickerPopup(available_signals=[name])
+    qtbot.addWidget(p)
+    p.resize(288, 38)
+    p.show()
+    p.set_selected((name,))
+    qtbot.wait(20)
+
+    text = p._summary_label.text()
+    assert text != name          # it really is elided at this width
+    assert "…" in text
+    assert text.startswith(name[:4])
+    assert text.endswith("_xds16")
+
+
+def test_picker_popup_select_all_adds_filtered_matches(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(
+        available_signals=["vib_x", "vib_y", "temp_a", "temp_b"],
+    )
+    qtbot.addWidget(p)
+    p.set_selected(("temp_a",))
+    p.set_search_text("vib")
+    assert p._select_all_button.text() == "全选 2 条"
+
+    p._select_all_button.click()
+
+    # union: the pre-existing pick survives, both matches join
+    assert set(p.selected()) == {"temp_a", "vib_x", "vib_y"}
+    assert "temp_b" not in p.selected()
+    assert p._foot_stats.text() == "已选 3 · 匹配 2"
+
+    p._clear_button.click()
+    assert p.selected() == ()
+    assert p._clear_button.isEnabled() is False
+
+
+def test_picker_popup_select_all_skips_disabled_partials(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(
+        available_signals=["vib_x"],
+        partially_available={"vib_y": "(1/2)"},
+    )
+    qtbot.addWidget(p)
+    assert p.is_disabled("vib_y") is True
+
+    p._select_all_button.click()
+
+    assert p.selected() == ("vib_x",)   # the greyed partial is not swept in
+
+
+def test_picker_single_select_hides_select_all(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    rpm = SignalPickerPopup(available_signals=["a", "b"], single_select=True)
+    qtbot.addWidget(rpm)
+    rpm.show_popup()
+    qtbot.wait(20)
+    assert rpm._select_all_button.isVisibleTo(rpm._popup) is False
+    assert rpm._clear_button.isVisibleTo(rpm._popup) is True
+
+    multi = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(multi)
+    multi.show_popup()
+    qtbot.wait(20)
+    assert multi._select_all_button.isVisibleTo(multi._popup) is True
+
+
+def test_picker_popup_shows_empty_state_when_nothing_matches(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["vib_x", "vib_y"])
+    qtbot.addWidget(p)
+    p.show_popup()
+    p.set_search_text("no_such_channel")
+    qtbot.wait(20)
+
+    assert p.visible_items() == []
+    assert p._empty_label.isVisibleTo(p._popup) is True
+    assert p._select_all_button.isEnabled() is False
+    assert p._foot_stats.text() == "已选 0 · 匹配 0"
+
+
+def test_picker_popup_clears_search_when_closed(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["vib_x", "temp"])
+    qtbot.addWidget(p)
+    p.show_popup()
+    p.set_search_text("vib")
+    assert p.visible_items() == ["vib_x"]
+
+    p.hide_popup()
+    qtbot.wait(20)
+
+    assert p._search.text() == ""
+    assert set(p.visible_items()) == {"vib_x", "temp"}
+
+
+def test_picker_popup_surface_carries_the_background(qtbot):
+    """The rounded shell sets WA_TranslucentBackground, which makes the
+    popup's own qss background a no-op — on a real screen the list area showed
+    the panel behind it while every offscreen test stayed green. An inner
+    surface must paint the fill and the radius instead (CLAUDE.md's
+    "WA_TranslucentBackground 会让本体 QSS 失效 → 需内部子 widget 兜底")."""
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(p)
+
+    assert p._surface.parent() is p._popup
+    assert "background:#fff" in p._surface.styleSheet()
+    assert p._surface.testAttribute(Qt.WA_StyledBackground)
+    # The shell must NOT claim to paint a fill it cannot actually draw.
+    assert "background:#fff" not in p._popup.styleSheet()
+    # Everything the user sees sits on the surface, not on the shell.
+    for child in (p._search, p._list, p._empty_label, p._foot):
+        assert p._surface.isAncestorOf(child)
+
+
+def test_picker_popup_caps_visible_rows(qtbot):
+    """A long channel list must scroll rather than grow the popup to fill the
+    screen (25 channels wanted ~554px of rows)."""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    names = [f"Rte_Module{i:02d}_mLongChannelName_xds16" for i in range(25)]
+    p = SignalPickerPopup(available_signals=names)
+    qtbot.addWidget(p)
+    p.show_popup()
+    qtbot.wait(20)
+
+    assert p._list.height() < p._list_content_height()
+    assert p._list.height() <= p._row_budget()
+    assert p._list.verticalScrollBar().maximum() > 0
+
+
+def test_picker_popup_geometry_is_stable_across_filtering(qtbot):
+    """Popup size/position are measured once per opening and then held.
+
+    A popup whose height tracked the filter also re-decided whether to open
+    upwards, so typing made the whole panel jump — reported from a real
+    macOS run after the option-A rewrite.
+    """
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    names = [f"Rte_Module{i:02d}_mLongChannelName_xds16" for i in range(25)]
+    p = SignalPickerPopup(available_signals=names)
+    qtbot.addWidget(p)
+    p.show_popup()
+    qtbot.wait(20)
+
+    seen = set()
+    for query in ("", "Module0", "zzz-no-match", "", "Module1", ""):
+        p.set_search_text(query)
+        qtbot.wait(10)
+        seen.add((p._popup.height(), p._popup.pos().x(), p._popup.pos().y()))
+
+    assert len(seen) == 1, seen
+
+
+def test_picker_popup_shows_whole_rows_and_elides_instead_of_scrolling(qtbot):
+    """No half-clipped last row, and no sideways scrolling.
+
+    The horizontal scrollbar that long EPS names used to trigger stole
+    viewport height, so row N+1 peeked out from under the footer and read as
+    a clipped entry. Rows are middle-elided to the popup width instead, which
+    also keeps both the module prefix and the ``_xds16`` suffix visible.
+    """
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    long_name = "Rte_RotationSpeedCalculation_vSteeringAngleSpeed_xds16"
+    names = [f"Rte_Module{i:02d}_mLongChannelName_xds16" for i in range(24)]
+    names.append(long_name)
+    p = SignalPickerPopup(available_signals=names)
+    qtbot.addWidget(p)
+    p.show_popup()
+    qtbot.wait(20)
+
+    listing = p._list
+    pitch = listing.sizeHintForRow(0)
+    assert pitch > 0
+    # Whole rows only — the viewport is an exact multiple of the row pitch.
+    assert listing.viewport().height() % pitch == 0
+    assert listing.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+    assert not listing.horizontalScrollBar().isVisible()
+
+    row = next(
+        listing.itemWidget(listing.item(i))
+        for i in range(listing.count())
+        if listing.item(i).data(Qt.UserRole) == long_name
+    )
+    assert row.text() != long_name and "…" in row.text()
+    assert row.text().startswith("Rte_Rotation")   # module prefix kept
+    assert row.text().endswith("_xds16")           # type suffix kept
+    assert row.toolTip() == long_name
+    # The public label API must still report the untruncated text.
+    assert p.label_for(long_name) == long_name

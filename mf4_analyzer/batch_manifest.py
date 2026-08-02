@@ -211,7 +211,7 @@ class BatchManifestRecorder:
 
     def __init__(
         self,
-        output_dir,
+        manifest_dir,
         *,
         preset_name: str,
         normalized_recipe: Mapping,
@@ -220,16 +220,18 @@ class BatchManifestRecorder:
         app_version: str = APP_VERSION,
         run_id: str | None = None,
     ) -> None:
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Keep run records separate from user-visible export artifacts.  The
+        # positional shape remains compatible; the argument is a run store.
+        self.manifest_dir = Path(manifest_dir)
+        self.manifest_dir.mkdir(parents=True, exist_ok=True)
         self.run_id = run_id or (
             datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             + "_"
             + uuid.uuid4().hex[:8]
         )
-        self.final_path = self.output_dir / f"batch-manifest__{self.run_id}.json"
+        self.final_path = self.manifest_dir / f"batch-manifest__{self.run_id}.json"
         self.partial_path = (
-            self.output_dir / f"batch-manifest__{self.run_id}.partial.json"
+            self.manifest_dir / f"batch-manifest__{self.run_id}.partial.json"
         )
         if self.final_path.exists() or self.partial_path.exists():
             raise FileExistsError(f"batch manifest run_id already exists: {self.run_id}")
@@ -540,6 +542,12 @@ def load_batch_manifest(path_or_manifest) -> dict:
                 raise ManifestValidationError(
                     f"{prefix}.{field}", "must be an object",
                 )
+        if "effective_facts" in group and not isinstance(
+            group["effective_facts"], Mapping,
+        ):
+            raise ManifestValidationError(
+                f"{prefix}.effective_facts", "must be an object",
+            )
         if not isinstance(group["warnings"], list) or not all(
             isinstance(warning, str) for warning in group["warnings"]
         ):

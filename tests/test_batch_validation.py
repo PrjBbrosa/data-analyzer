@@ -241,6 +241,19 @@ def test_time_render_recipe_rejects_invalid_active_modes(params, field):
     assert any(issue.field == field for issue in issues)
 
 
+@pytest.mark.parametrize(
+    "statistics",
+    (
+        {"enabled": True, "range_mode": "custom", "x_min": 2, "x_max": 1, "metrics": ["max"]},
+        {"enabled": True, "range_mode": "full", "metrics": []},
+        {"enabled": True, "range_mode": "future", "metrics": ["max"]},
+    ),
+)
+def test_time_chart_statistics_validation_is_preflight_only(statistics):
+    issues = validate_recipe("time", {"chart_statistics": statistics})
+    assert any(issue.field == "chart_statistics" for issue in issues)
+
+
 @pytest.mark.parametrize("method", ("fft", "fft_time", "order_time"))
 def test_validate_recipe_rejects_unknown_analysis_window(method):
     issues = validate_recipe(method, {"window": "rectangular"})

@@ -1038,3 +1038,324 @@ def test_sheet_opens_artifact_location_only_after_explicit_row_activation(
     sheet._task_list._on_item_activated(sheet._task_list._items[0])
     assert len(opened) == 1
     assert opened[0].toLocalFile() == str(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Remembered display preferences (QSettings). Plan:
+# docs/analyzer/plans/2026-08-02-batch-settings-persistence-plan.md step 5.
+#
+# CRITICAL: each of these injects its own throwaway
+# ``QSettings(path, QSettings.IniFormat)`` -- never the real
+# ``QSettings("MF4Analyzer", "DataAnalyzer")``.
+# ---------------------------------------------------------------------------
+
+def _prefs_store(tmp_path, name="batch-prefs.ini"):
+    from PyQt5.QtCore import QSettings
+
+    from mf4_analyzer.ui.batch_settings import BatchPanelPrefsStore
+
+    return BatchPanelPrefsStore(
+        settings=QSettings(str(tmp_path / name), QSettings.IniFormat)
+    )
+
+
+def test_sheet_restores_remembered_render_style(qtbot, tmp_path):
+    from mf4_analyzer.ui.batch_settings import BatchPanelPrefs
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    _prefs_store(tmp_path).save(BatchPanelPrefs(
+        directory=str(tmp_path / "remembered-exports"),
+        render_style={
+            "tick_density_x": 22, "tick_density_y": 7, "font_scale": 1.35,
+        },
+        outputs={"export_data": False, "export_image": True},
+    ))
+
+    sheet = BatchSheet(None, files={}, prefs_store=_prefs_store(tmp_path))
+    qtbot.addWidget(sheet)
+
+    assert sheet._output_panel.render_style_params() == {
+        "tick_density_x": 22, "tick_density_y": 7, "font_scale": 1.35,
+    }
+    assert sheet.output_dir() == str(tmp_path / "remembered-exports")
+    assert sheet.export_data() is False
+    assert sheet.export_image() is True
+    # The summary label is the only place the user sees the restored value.
+    assert "刻度 X 22 · Y 7 · 字号 135%" == (
+        sheet._output_panel._render_style_summary.text()
+    )
+
+
+def test_current_preset_wins_over_remembered_prefs(qtbot, tmp_path):
+    """Priority is 硬编码默认 → QSettings 记忆 → current_preset (plan 2.2).
+
+    Nothing applies ``current_preset`` during ``__init__``; the user pulls it
+    in with 从当前单次同步, and when they do it must overwrite the memory
+    rather than lose to it.
+    """
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.ui.batch_settings import BatchPanelPrefs
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    _prefs_store(tmp_path).save(BatchPanelPrefs(
+        render_style={
+            "tick_density_x": 22, "tick_density_y": 7, "font_scale": 1.35,
+        },
+    ))
+    preset = AnalysisPreset.free_config(
+        name="from-current", method="fft", target_signals=("sig",),
+        params={
+            "tick_density_x": 9, "tick_density_y": 5, "font_scale": 0.8,
+        },
+    )
+
+    sheet = BatchSheet(
+        None, files={}, current_preset=preset, prefs_store=_prefs_store(tmp_path),
+    )
+    qtbot.addWidget(sheet)
+    # The memory is what the panel opens with...
+    assert sheet._output_panel.render_style_params()["tick_density_x"] == 22
+
+    sheet._btn_fill_from_current.click()
+
+    # ...and the preset the user pulled in overwrites it.
+    assert sheet._output_panel.render_style_params() == {
+        "tick_density_x": 9, "tick_density_y": 5, "font_scale": 0.8,
+    }
+
+
+def test_sheet_does_not_restore_signals_or_files(qtbot, tmp_path):
+    """Negative guard for the plan's 2.1 boundary.
+
+    Data-bound state is never persisted, and a payload that smuggles some in
+    anyway (hand-edited config, a future schema, a downgrade) must not be able
+    to seed the file list, the target signals, the RPM channel or the axes.
+    """
+    import json
+
+    from PyQt5.QtCore import QSettings
+
+    from mf4_analyzer.ui.batch_settings import KEY_PANEL_PREFS_V1
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    settings = QSettings(str(tmp_path / "batch-prefs.ini"), QSettings.IniFormat)
+    settings.setValue(KEY_PANEL_PREFS_V1, json.dumps({
+        "schema": 1,
+        "directory": str(tmp_path / "remembered-exports"),
+        "render_style": {"tick_density_x": 22},
+        "outputs": {"export_image": True},
+        # None of the following is part of the schema; all of it is
+        # data-bound state that must stay out of an implicit memory.
+        "signals": ["motor_speed", "steering_torque"],
+        "target_signals": ["motor_speed"],
+        "files": [str(tmp_path / "ghost.mf4")],
+        "file_ids": [7],
+        "source_ids": [7],
+        "rpm_channel": "motor_speed",
+        "rpm_factor": 3.5,
+        "axes": {"x_auto": False, "x_min": 12.0, "x_max": 34.0},
+        "method": "order_time",
+    }))
+    settings.sync()
+
+    sheet = BatchSheet(None, files={}, prefs_store=_prefs_store(tmp_path))
+    qtbot.addWidget(sheet)
+
+    # The payload WAS read -- the whitelisted part came through.
+    assert sheet._output_panel.render_style_params()["tick_density_x"] == 22
+    assert sheet.output_dir() == str(tmp_path / "remembered-exports")
+    # ...and nothing outside the whitelist did.
+    assert sheet.selected_signals() == ()
+    assert sheet.file_ids() == ()
+    assert sheet.file_paths() == ()
+    assert sheet.source_ids() == ()
+    assert sheet.rpm_channel() == ""
+    assert sheet.method() == "fft"
+    assert sheet._output_panel.axis_params()["x_auto"] is True
+    assert "motor_speed" not in sheet._input_panel.selected_signals()
+
+
+def test_close_persists_panel_prefs_but_an_edit_alone_does_not(qtbot, tmp_path):
+    """Write points are the normal close and a started run -- not every edit
+    (plan 2.3: ``_on_output_controls_changed`` fires on each keystroke)."""
+    from mf4_analyzer.batch_render_style import RenderStyle
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    store = _prefs_store(tmp_path)
+    sheet = BatchSheet(None, files={}, prefs_store=store)
+    qtbot.addWidget(sheet)
+
+    sheet._output_panel.apply_render_style_params(
+        RenderStyle(tick_density_x=31, tick_density_y=9, font_scale=1.2).as_params()
+    )
+    sheet._output_panel.apply_directory(str(tmp_path / "picked"))
+
+    # Editing alone leaves the store untouched.
+    assert _prefs_store(tmp_path).load().render_style["tick_density_x"] == 14
+    assert _prefs_store(tmp_path).load().directory == ""
+
+    sheet.close()
+
+    reloaded = _prefs_store(tmp_path).load()
+    assert reloaded.render_style == {
+        "tick_density_x": 31, "tick_density_y": 9, "font_scale": 1.2,
+    }
+    assert reloaded.directory == str(tmp_path / "picked")
+
+
+def test_the_close_button_persists_panel_prefs(qtbot, tmp_path):
+    """关闭 wires straight to ``QDialog.reject``, which never raises a
+    ``QCloseEvent`` — so the write point has to sit on ``done``, not on
+    ``closeEvent``. Same for Esc. Drive the real button, not ``close()``."""
+    from mf4_analyzer.batch_render_style import RenderStyle
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={}, prefs_store=_prefs_store(tmp_path))
+    qtbot.addWidget(sheet)
+    sheet._output_panel.apply_render_style_params(
+        RenderStyle(tick_density_x=27, tick_density_y=8, font_scale=0.9).as_params()
+    )
+
+    sheet._btn_cancel.click()
+
+    assert _prefs_store(tmp_path).load().render_style == {
+        "tick_density_x": 27, "tick_density_y": 8, "font_scale": 0.9,
+    }
+
+
+def test_a_close_requested_mid_run_does_not_persist_until_the_run_stops(
+    qtbot, tmp_path, monkeypatch,
+):
+    """The run-in-progress branch ignores the close event, so nothing is
+    written until the deferred close actually goes through."""
+    from PyQt5.QtWidgets import QMessageBox
+
+    from mf4_analyzer.batch_render_style import RenderStyle
+    from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={}, prefs_store=_prefs_store(tmp_path))
+    qtbot.addWidget(sheet)
+    sheet._output_panel.apply_render_style_params(
+        RenderStyle(tick_density_x=33).as_params()
+    )
+    sheet._running = True
+    monkeypatch.setattr(
+        sheet_module.QMessageBox,
+        "question",
+        lambda *_a, **_k: QMessageBox.Yes,
+    )
+
+    sheet.close()
+
+    assert sheet._close_pending is True
+    assert _prefs_store(tmp_path).load().render_style["tick_density_x"] == 14
+
+    sheet._running = False
+    sheet.close()
+
+    assert _prefs_store(tmp_path).load().render_style["tick_density_x"] == 33
+
+
+def test_restore_defaults_clears_the_memory_and_resets_the_panel(qtbot, tmp_path):
+    from mf4_analyzer.ui.batch_settings import BatchPanelPrefs
+    from mf4_analyzer.ui.drawers.batch.output_panel import default_output_dir
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    _prefs_store(tmp_path).save(BatchPanelPrefs(
+        directory=str(tmp_path / "remembered-exports"),
+        render_style={"tick_density_x": 22, "tick_density_y": 7},
+        outputs={"export_data": False},
+    ))
+    sheet = BatchSheet(None, files={}, prefs_store=_prefs_store(tmp_path))
+    qtbot.addWidget(sheet)
+    assert sheet._output_panel.render_style_params()["tick_density_x"] == 22
+
+    sheet._output_panel._btn_restore_defaults.click()
+
+    assert sheet._output_panel.render_style_params() == {
+        "tick_density_x": 14, "tick_density_y": 10, "font_scale": 1.0,
+    }
+    assert sheet.output_dir() == default_output_dir()
+    assert sheet.export_data() is True
+    # The key is gone, so reopening starts from the hard-coded defaults again.
+    assert _prefs_store(tmp_path).load() == BatchPanelPrefs()
+
+
+def test_restore_defaults_keeps_an_applied_analysis_card(qtbot, tmp_path):
+    """恢复默认 resets display preferences; it is not an edit of the analysis
+    recipe, so the applied 分析预设 card must survive it (plan risk table)."""
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={}, prefs_store=_prefs_store(tmp_path))
+    qtbot.addWidget(sheet)
+    sheet._analysis_panel._preset_buttons["torque"].click()
+    assert sheet._analysis_panel._preset_buttons["torque"].isChecked()
+
+    sheet._output_panel._btn_restore_defaults.click()
+
+    assert sheet._analysis_panel._preset_buttons["torque"].isChecked()
+    # The re-baselined snapshot must still notice the NEXT real edit.
+    sheet._output_panel.spin_y_min.setValue(-2.0)
+    assert not any(
+        button.isChecked()
+        for button in sheet._analysis_panel._preset_buttons.values()
+    )
+
+
+def test_starting_a_run_persists_panel_prefs(qtbot, tmp_path, monkeypatch):
+    """The second write point (plan 2.3): a long run that later crashes must
+    not take the settings the user just tuned for it down with it.
+
+    ``QThread.start`` is stubbed out rather than letting a real
+    ``BatchRunnerThread`` run. The write happens synchronously at the end of
+    ``_on_run_clicked``, so a live worker adds nothing to the assertion — and
+    a second thread-spinning test in this suite is not free: leftover worker
+    objects accumulate and later segfault an unrelated test inside
+    ``QApplication.processEvents`` (the same hazard
+    ``_collect_mpl_cycles_between_tests`` in ``conftest.py`` documents).
+    """
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.batch import BatchOutput
+    from mf4_analyzer.batch_render_style import RenderStyle
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.drawers.batch.runner_thread import BatchRunnerThread
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    started = []
+    monkeypatch.setattr(
+        BatchRunnerThread, "start", lambda self, *a, **k: started.append(self),
+    )
+
+    n = 4096
+    t = np.arange(n) / 512.0
+    df = pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 50 * t)})
+    files = {0: FileData(tmp_path / "x.csv", df, list(df.columns), {}, idx=0)}
+
+    sheet = BatchSheet(None, files=files, prefs_store=_prefs_store(tmp_path))
+    qtbot.addWidget(sheet)
+    sheet.apply_files(file_ids=(0,), file_paths=())
+    sheet.apply_signals(("sig",))
+    sheet.apply_method("fft")
+    sheet.apply_params({"window": "hanning", "nfft": 512})
+    sheet.apply_outputs(BatchOutput(
+        export_data=True, export_image=False, data_format="csv"))
+    sheet._output_panel.apply_directory(str(tmp_path / "out"))
+    sheet._output_panel.apply_render_style_params(
+        RenderStyle(tick_density_x=19, tick_density_y=6, font_scale=1.1).as_params()
+    )
+    assert _prefs_store(tmp_path).load().render_style["tick_density_x"] == 14
+
+    sheet._on_run_clicked()
+
+    assert len(started) == 1, "the run must actually have been launched"
+    stored = _prefs_store(tmp_path).load()
+    assert stored.render_style == {
+        "tick_density_x": 19, "tick_density_y": 6, "font_scale": 1.1,
+    }
+    assert stored.directory == str(tmp_path / "out")
+
+    # Leave the sheet unlocked so teardown closes it through the normal path.
+    sheet._running = False

@@ -40,6 +40,13 @@ def _mutated_result(result, mutate):
     )
 
 
+def _artifact_directory(result) -> Path:
+    manifest_path = Path(result.manifest_path)
+    if manifest_path.parent.name == "runs" and manifest_path.parent.parent.name == ".tracelab":
+        return manifest_path.parent.parent.parent
+    return manifest_path.parent
+
+
 def test_inspect_mode_rejects_alias_data_artifact(tmp_path):
     result = _grouped_result(tmp_path, "channel")
 
@@ -54,7 +61,7 @@ def test_inspect_mode_rejects_alias_data_artifact(tmp_path):
         _inspect_mode(
             aliased,
             "channel",
-            expected_directory=Path(aliased.manifest_path).parent,
+            expected_directory=_artifact_directory(aliased),
         )
 
 
@@ -72,7 +79,7 @@ def test_inspect_mode_rejects_alias_group_image_artifact(tmp_path):
         _inspect_mode(
             aliased,
             "source",
-            expected_directory=Path(aliased.manifest_path).parent,
+            expected_directory=_artifact_directory(aliased),
         )
 
 
@@ -92,7 +99,7 @@ def test_inspect_mode_rejects_swapped_group_artifact_identities(tmp_path):
         _inspect_mode(
             swapped,
             "channel",
-            expected_directory=Path(swapped.manifest_path).parent,
+            expected_directory=_artifact_directory(swapped),
         )
 
 
@@ -125,7 +132,7 @@ def test_inspect_mode_rejects_artifact_outside_manifest_directory(tmp_path):
         _inspect_mode(
             escaped,
             "none",
-            expected_directory=Path(escaped.manifest_path).parent,
+            expected_directory=_artifact_directory(escaped),
         )
 
 
@@ -170,7 +177,7 @@ def test_inspect_mode_rejects_groups_with_the_wrong_dimension(tmp_path, group_by
         _inspect_mode(
             malformed,
             group_by,
-            expected_directory=Path(malformed.manifest_path).parent,
+            expected_directory=_artifact_directory(malformed),
         )
 
 

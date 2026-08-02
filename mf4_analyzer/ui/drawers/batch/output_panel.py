@@ -40,6 +40,17 @@ _ORDER_TIME_DB_Z_RANGE = (-50.0, -10.0)
 _ORDER_TIME_METHOD = "order_time"
 _BATCH_AXIS_LABEL_W = 72
 
+
+def default_output_dir() -> str:
+    """The hard-coded output directory, resolved fresh on every call.
+
+    ``Path.home()`` is read at call time rather than at import so the 恢复默认
+    escape hatch lands on the same string the panel is born with, even when a
+    test has redirected ``HOME``.
+    """
+    return str(Path.home() / "Desktop" / "mf4_batch_output")
+
+
 _AXIS_CONTEXTS = {
     "time": {
         "x_label": "时间 (X):",
@@ -78,6 +89,10 @@ _AXIS_CONTEXTS = {
 
 class OutputPanel(QWidget):
     changed = pyqtSignal()
+    #: The 恢复默认 escape hatch. Emitted, not handled here: this widget owns
+    #: the hard-coded defaults, ``BatchSheet`` owns the persisted memory that
+    #: also has to be forgotten.
+    restore_defaults_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -124,14 +139,56 @@ QWidget#BatchExportCard QLabel#batchOutputSettingsSummary {
         note = QLabel("仅保留可操作信息", section_head)
         note.setObjectName("BatchSectionNote")
         section_head_lay.addWidget(note)
+
+        # Escape hatch for the remembered preferences. It sits on the 导出
+        # section head because that is exactly the scope of what is
+        # remembered — output directory, export toggles, tick density and
+        # text size all live in this panel and nowhere else.
+        self._btn_restore_defaults = QPushButton("恢复默认", section_head)
+        self._btn_restore_defaults.setObjectName("batchOutputRestoreDefaults")
+        self._btn_restore_defaults.setToolTip(
+            "清除记住的导出偏好，恢复输出目录、导出内容与刻度字体的默认值"
+        )
+        self._btn_restore_defaults.setCursor(Qt.PointingHandCursor)
+        self._btn_restore_defaults.setSizePolicy(
+            QSizePolicy.Maximum, QSizePolicy.Fixed,
+        )
+        self._btn_restore_defaults.setStyleSheet("""
+QPushButton#batchOutputRestoreDefaults {
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 10px;
+    /* style.qss's global QPushButton rule sets font-weight: 600 and a
+       26px min-height; both have to be answered here or this reads as a
+       primary action instead of the section-note aside it sits next to. */
+    font-weight: 400;
+    min-height: 0;
+    padding: 1px 2px;
+}
+QPushButton#batchOutputRestoreDefaults:hover {
+    color: #1769e0;
+    text-decoration: underline;
+}
+""")
+        self._btn_restore_defaults.clicked.connect(
+            lambda: self.restore_defaults_requested.emit()
+        )
+        section_head_lay.addWidget(self._btn_restore_defaults)
         outer.addWidget(section_head)
 
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
+        # macOS defaults this to ``FieldsStayAtSizeHint``, which parks every
+        # field at its sizeHint instead of filling the column.  Only fields
+        # that actually ask to expand are affected, so the other rows keep
+        # their current widths.
+        form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        self._output_form = form
 
         # Directory
         self._dir_edit = QLineEdit(self)
-        self._dir_edit.setText(str(Path.home() / "Desktop" / "mf4_batch_output"))
+        self._dir_edit.setText(default_output_dir())
         self._btn_browse = QPushButton("选择…", self)
         self._btn_browse.clicked.connect(self._choose_dir)
         dir_row = QHBoxLayout()
@@ -174,13 +231,22 @@ QPushButton#batchOutputSettingsButton:checked {
         export_host = QWidget(self)
         export_host.setObjectName("BatchExportCard")
         export_host.setAttribute(Qt.WA_StyledBackground, True)
+        # ``Ignored`` is deliberate and load bearing: it keeps the panel's
+        # minimumSizeHint at zero so the whole column still fits 288px (see
+        # test_batch_output_panel_fits_288px_column).  It does not cause the
+        # collapse on its own — ``Ignored`` carries ExpandFlag, so the field
+        # grows as soon as the form's growth policy lets it.  The fix is on
+        # the QFormLayout above, not here.
         export_host.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         export_lay = QVBoxLayout(export_host)
         export_lay.setContentsMargins(9, 8, 9, 8)
         export_lay.setSpacing(5)
         self._export_row_layout = QHBoxLayout()
         self._export_row_layout.setContentsMargins(0, 0, 0, 0)
-        self._export_row_layout.setSpacing(8)
+        # 8px left the two CJK labels touching once the card actually had a
+        # width to lay out in — 数据文件's text ran straight into 图片's
+        # indicator.
+        self._export_row_layout.setSpacing(18)
         self._export_row_layout.addWidget(self._chk_data)
         self._export_row_layout.addWidget(self._chk_image)
         self._export_row_layout.addWidget(self._btn_output_settings)
@@ -317,7 +383,7 @@ QPushButton#batchOutputSettingsButton:checked {
 
         self.db_reference_control = make_db_reference_control(self)
         self.spin_db_ref = self.db_reference_control.editor
-        self.db_reference_control.set_source_text("等待来源信息")
+        self.db_reference_control.set_source_text("dB 参考：等待文件解析")
         self._reference_system_catalog = db_reference.FACTORY_CATALOG_V1
         self._reference_user_catalog = ()
         self._prefer_channel_metadata = True
@@ -353,13 +419,6 @@ QPushButton#batchOutputSettingsButton:checked {
         )
         outer.addWidget(axis_group)
         outer.addWidget(self._build_render_style_row())
-        self._effective_preview = QLabel("等待来源信息", self)
-        self._effective_preview.setObjectName("batchDbReferencePreview")
-        self._effective_preview.setWordWrap(True)
-        self._effective_preview.setStyleSheet(
-            "color:#64748b;font-size:11px;padding:4px 0;"
-        )
-        outer.addWidget(self._effective_preview)
         outer.addStretch(1)
 
         # The compact workflow has one fixed export contract.  Keep the
@@ -704,9 +763,6 @@ QPushButton#batchRenderStyleButton:checked {
         row = getattr(self, "_db_reference_row", None)
         if row is not None:
             row.setVisible(bool(visible))
-        preview = getattr(self, "_effective_preview", None)
-        if preview is not None:
-            preview.setVisible(bool(visible))
 
     def _widen_axis_label_column(self, axis_group: QWidget) -> None:
         for parts in self._axis_row_parts.values():
@@ -870,7 +926,7 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
         )
 
     def effective_preview_text(self) -> str:
-        return self._effective_preview.text()
+        return self.db_reference_control.full_source_text()
 
     def output_preview_text(self) -> str:
         return self._output_preview.text()
@@ -908,23 +964,24 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
     ) -> None:
         """Resolve the recipe-owned reference from cached probe facts only."""
         if getattr(self, "_method", "fft") == "time":
-            # Time-domain exports use their source engineering unit.  There is
-            # no dB reference to resolve (and the corresponding row is hidden).
-            self._set_effective_preview("时域使用工程单位")
+            # No visual dB state exists for time-domain output.
             return
         rows = tuple(rows or ())
         if any(
             getattr(row, "state", "") in {"path_pending", "probing"}
             for row in rows
         ):
-            self._set_effective_preview("等待来源信息")
+            self._set_effective_preview("dB 参考：等待文件解析")
             return
         loaded = tuple(
             row for row in rows if getattr(row, "state", "") == "loaded"
         )
         signals = tuple(str(signal) for signal in (signals or ()))
-        if not loaded or (not signals and not target_pairs):
-            self._set_effective_preview("等待来源信息")
+        if not loaded:
+            self._set_effective_preview("dB 参考：等待文件解析")
+            return
+        if not signals and not target_pairs:
+            self._set_effective_preview("dB 参考：请选择目标信号")
             return
 
         exact = {
@@ -959,7 +1016,7 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
                 key = (source_label, note, resolution.warning or "")
                 groups[key] = groups.get(key, 0) + 1
         if not groups:
-            self._set_effective_preview("没有可解析的目标")
+            self._set_effective_preview("dB 参考：所选目标缺少可用单位/来源")
             return
         total = sum(groups.values())
         parts = [
@@ -967,7 +1024,9 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
             + (" ⚠" if warning else "")
             for (source_label, note, warning), count in groups.items()
         ]
-        self._set_effective_preview(f"{total} 个目标：" + "；".join(parts))
+        self._set_effective_preview(
+            f"dB 参考：{total} 个目标：" + "；".join(parts)
+        )
 
     def _resolve_preview_reference(self, row, signal: str):
         metadata = dict(getattr(row, "metadata", {}) or {})
@@ -993,7 +1052,6 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
         )
 
     def _set_effective_preview(self, text: str) -> None:
-        self._effective_preview.setText(str(text))
         self.db_reference_control.set_source_text(str(text))
 
     # ------------------------------------------------------------------
@@ -1012,6 +1070,18 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
             del blockers
         self._sync_output_controls()
         self._refresh_output_summary()
+
+    def restore_defaults(self) -> None:
+        """Reset every persisted display preference to its hard-coded default.
+
+        Deliberately narrow: axes, dB reference, analysis parameters and the
+        source/signal scope are NOT preferences and are left exactly as the
+        user has them (they are also never persisted — see
+        ``mf4_analyzer.ui.batch_settings``).
+        """
+        self.apply_directory(default_output_dir())
+        self.apply_render_style_params(RenderStyle().as_params())
+        self.apply_outputs(BatchOutput())
 
     @staticmethod
     def _set_combo_data(combo: QComboBox, value) -> None:

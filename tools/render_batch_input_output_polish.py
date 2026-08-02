@@ -34,7 +34,7 @@ from mf4_analyzer.batch_render import (  # noqa: E402
 )
 from mf4_analyzer.ui.drawers.batch.output_panel import OutputPanel  # noqa: E402
 from mf4_analyzer.ui.drawers.batch.signal_picker import (  # noqa: E402
-    SignalChip, SignalPickerPopup,
+    SignalPickerPopup,
 )
 from mf4_analyzer.ui_kit.stylesheet import load_stylesheet  # noqa: E402
 
@@ -57,31 +57,47 @@ def _save_picker_proofs(app: QApplication) -> dict[str, object]:
     picker.resize(288, 38)
     picker.show()
     _process(app)
+    # A standalone top-level picker auto-focuses its trigger on activation,
+    # which is the white/blue skin.  Drop it after activation has settled so
+    # the collapsed proof captures the resting sunken skin.
+    picker._trigger.clearFocus()
+    _process(app)
 
     closed_path = PROOF_DIR / "signal-picker-20-selected.png"
     assert picker.grab().save(str(closed_path))
 
-    frame = picker._display_frame
+    # Option A collapsed row: summary · +N badge · chevron, nothing else.
+    trigger = picker._trigger
     bounded_children = (
-        picker._chip_host,
+        picker._summary_label,
         picker._overflow_label,
-        picker._search,
         picker._arrow_button,
     )
     for child in bounded_children:
         if child.isVisible():
-            right = child.mapTo(frame, child.rect().bottomRight()).x()
-            assert right <= frame.width(), (child.objectName(), right, frame.width())
+            right = child.mapTo(trigger, child.rect().bottomRight()).x()
+            assert right <= trigger.width(), (
+                child.objectName(), right, trigger.width(),
+            )
     assert picker.height() == 38
     assert picker._overflow_label.text() == "+19"
-    closed_visible_chip_count = len(
-        picker._chip_host.findChildren(SignalChip)
-    )
+    assert picker._arrow_button.text() == ""
+    assert not picker._arrow_button.icon().isNull()
+    closed_summary_text = picker._summary_label.text()
     closed_overflow_text = picker._overflow_label.text()
+    closed_geometry = [
+        list(child.geometry().getRect()) for child in bounded_children
+    ]
 
-    picker.set_search_text("variant_1")
     picker.show_popup()
+    picker.set_search_text("variant_1")
     _process(app)
+    # Symptom 04 guard: filtering must not move the collapsed row at all.
+    assert closed_geometry == [
+        list(child.geometry().getRect()) for child in bounded_children
+    ]
+    assert picker._summary_label.text() == closed_summary_text
+
     top = picker.grab()
     popup = picker._popup.grab()
     gap = 4
@@ -91,18 +107,24 @@ def _save_picker_proofs(app: QApplication) -> dict[str, object]:
     painter.drawPixmap(0, 0, top)
     painter.drawPixmap(0, top.height() + gap, popup)
     painter.end()
-    popup_path = PROOF_DIR / "signal-picker-inline-search.png"
+    popup_path = PROOF_DIR / "signal-picker-popup-search.png"
     assert composite.save(str(popup_path))
 
     metrics = {
         "picker_width": picker.width(),
         "picker_height": picker.height(),
-        "display_width": frame.width(),
-        "closed_visible_chip_count": closed_visible_chip_count,
+        "trigger_width": trigger.width(),
+        "closed_summary_text": closed_summary_text,
         "closed_overflow_text": closed_overflow_text,
-        "active_search_width": picker._search.width(),
+        "popup_width": picker._popup.width(),
+        "popup_min_width_honoured": picker._popup.width() >= 420,
+        "search_lives_in_popup": picker._popup.isAncestorOf(picker._search),
+        "trigger_has_line_edit": bool(
+            trigger.findChildren(type(picker._search))
+        ),
         "visible_search_matches": len(picker.visible_items()),
-        "popup_has_second_line_edit": bool(picker._popup.findChildren(type(picker._search))),
+        "foot_stats": picker._foot_stats.text(),
+        "select_all_label": picker._select_all_button.text(),
     }
     picker.hide_popup()
     picker.close()
@@ -119,20 +141,24 @@ def _save_output_proofs(app: QApplication) -> dict[str, object]:
     collapsed_path = PROOF_DIR / "output-settings-collapsed.png"
     assert collapsed.save(str(collapsed_path))
 
+    # The compact export contract has no advanced-settings surface. Both
+    # ``_btn_output_settings`` and ``_output_settings`` are hidden during
+    # ``OutputPanel.__init__`` and survive only as compatibility holders for
+    # old preset readers; ``_on_output_settings_toggled`` unconditionally
+    # re-hides the frame and unchecks the button. Clicking it is therefore a
+    # permanent no-op — that is the property worth proving, not a deferred
+    # expansion to wait out. (A previous revision of this script asserted the
+    # opposite and aborted here, so the batch-render proof and proof.json were
+    # never written.)
     panel._btn_output_settings.click()
-    panel.resize(360, max(1180, panel.sizeHint().height()))
     _process(app)
-    assert panel._output_settings.isVisible()
-    expanded = panel.grab().copy(0, 0, panel.width(), 900)
-    expanded_path = PROOF_DIR / "output-settings-expanded.png"
-    assert expanded.save(str(expanded_path))
+    assert not panel._output_settings.isVisible()
+    assert not panel._btn_output_settings.isChecked()
 
-    settings_right = panel._output_settings.geometry().right()
-    assert settings_right <= panel.width()
     metrics = {
         "panel_width": panel.width(),
         "default_settings_collapsed": True,
-        "expanded_settings_right": settings_right,
+        "advanced_settings_reachable": False,
         "default_background": panel.get_outputs().image_background,
         "default_line_width": panel.get_outputs().image_line_width,
         "summary": panel._output_summary.text(),
