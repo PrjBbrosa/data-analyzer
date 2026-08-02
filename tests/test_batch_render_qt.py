@@ -122,9 +122,102 @@ def test_theme_contract_uses_timedomain_palette_and_precision_tokens():
     assert THEMES["white"].background.name() == "#ffffff"
     assert THEMES["white"].axis == "#9ca3af"
     assert THEMES["white"].grid_alpha == pytest.approx(0.28)
-    assert THEMES["white"].axis_font_pt == pytest.approx(9.0)
-    assert THEMES["white"].panel_title_font_pt == pytest.approx(10.0)
-    assert THEMES["white"].header_font_pt == pytest.approx(12.0)
+    # Report pages are exported at 1920×1080 and up; the on-screen 9pt chart
+    # scale is unreadable there, so the batch baseline runs larger.
+    assert THEMES["white"].axis_font_pt == pytest.approx(12.0)
+    assert THEMES["white"].panel_title_font_pt == pytest.approx(13.0)
+    assert THEMES["white"].header_font_pt == pytest.approx(15.0)
+
+
+def test_render_style_defaults_beat_the_pyqtgraph_adaptive_x_density(qapp):
+    """The 1920px report page must not settle for a screen-width tick count."""
+    from mf4_analyzer.batch_render_qt._builder import _axis_tick_text_records
+    from mf4_analyzer.batch_render_style import RenderStyle
+
+    scene = _open_scene(
+        qapp,
+        ("time", _time_spec(count=2)),
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+    )
+    try:
+        assert scene.style == RenderStyle()
+        x_labels = _axis_tick_text_records(scene.plots[0].getAxis("bottom"))
+        assert len(x_labels) >= 11
+    finally:
+        scene.close()
+
+
+def test_recipe_tick_density_and_font_scale_reach_the_axes(qapp):
+    from mf4_analyzer.batch_render_qt._builder import _axis_tick_text_records
+
+    sparse = _open_scene(
+        qapp,
+        ("time", _time_spec(count=2)),
+        params={"tick_density_x": 4, "tick_density_y": 3, "font_scale": 0.8},
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+    )
+    dense = _open_scene(
+        qapp,
+        ("time", _time_spec(count=2)),
+        params={"tick_density_x": 24, "tick_density_y": 16, "font_scale": 1.5},
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+    )
+    try:
+        sparse_x = _axis_tick_text_records(sparse.plots[0].getAxis("bottom"))
+        dense_x = _axis_tick_text_records(dense.plots[0].getAxis("bottom"))
+        assert len(dense_x) > len(sparse_x)
+
+        sparse_y = _axis_tick_text_records(sparse.plots[0].getAxis("left"))
+        dense_y = _axis_tick_text_records(dense.plots[0].getAxis("left"))
+        assert len(dense_y) > len(sparse_y)
+
+        # font_scale multiplies every text size on the page, not just the ticks.
+        assert dense.theme.axis_font_pt == pytest.approx(
+            sparse.theme.axis_font_pt / 0.8 * 1.5
+        )
+        assert dense.theme.header_font_pt > sparse.theme.header_font_pt
+        dense_tick_font = dense.plots[0].getAxis("bottom").style["tickFont"]
+        sparse_tick_font = sparse.plots[0].getAxis("bottom").style["tickFont"]
+        assert dense_tick_font.pointSizeF() > sparse_tick_font.pointSizeF()
+
+        assert dense.adjacent_text_overlaps() == []
+    finally:
+        sparse.close()
+        dense.close()
+
+
+def test_manual_signed_x_range_is_kept_verbatim_with_ticks_inside(qapp):
+    """A channel X range (rack travel ±) must not be widened to nice bounds."""
+    from mf4_analyzer.batch_render_qt._builder import _axis_tick_text_records
+
+    _, BatchSeries, BatchTimeFigureSpec, *_rest = _qt_api()
+    x = np.linspace(-83.0, 83.0, 801)
+    spec = BatchTimeFigureSpec(
+        (BatchSeries(x, np.sin(x / 8.0), "rack", unit="N", x_unit="mm"),),
+        x_source="channel",
+        x_label="Weg (mm)",
+    )
+    scene = _open_scene(
+        qapp,
+        ("time", spec),
+        params={"x_auto": False, "x_min": -100.0, "x_max": 100.0},
+        options=BatchRenderOptions(width_px=1920, height_px=1080),
+    )
+    try:
+        lo, hi = scene.plots[0].vb.viewRange()[0]
+        assert (lo, hi) == pytest.approx((-100.0, 100.0))
+        values = [
+            float(text)
+            for _rect, text in _axis_tick_text_records(
+                scene.plots[0].getAxis("bottom")
+            )
+        ]
+        assert values
+        assert min(values) >= -100.0
+        assert max(values) <= 100.0
+        assert any(value < 0.0 for value in values)
+    finally:
+        scene.close()
 
 
 def test_time_overlay_uses_one_palette_across_dual_y_and_distinct_styles(qapp):

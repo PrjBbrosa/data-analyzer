@@ -57,6 +57,11 @@ COMMON_PARAM_FIELDS = frozenset({
     "db_reference",
     "db_reference_mode",
     "cmap",
+    # Report presentation: axis tick counts and the text-size multiplier.
+    # They change the exported bytes, so they belong in the fingerprint.
+    "tick_density_x",
+    "tick_density_y",
+    "font_scale",
 })
 
 METHOD_PARAM_FIELDS = {
@@ -123,8 +128,14 @@ _FLOAT_PARAM_FIELDS = frozenset({
     "time_res",
     "manual_rpm",
     "rpm_factor",
+    "font_scale",
 })
-_INT_PARAM_FIELDS = frozenset({"nfft", "samples_per_rev"})
+_INT_PARAM_FIELDS = frozenset({
+    "nfft",
+    "samples_per_rev",
+    "tick_density_x",
+    "tick_density_y",
+})
 _BOOL_PARAM_FIELDS = frozenset({
     "x_auto",
     "y_auto",

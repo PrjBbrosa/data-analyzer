@@ -235,6 +235,29 @@ def test_normalize_batch_params_does_not_fill_missing_ui_defaults():
     assert normalize_batch_params({}, "fft_time") == {}
 
 
+@pytest.mark.parametrize("method", sorted(batch_recipe.SUPPORTED_RECIPE_METHODS))
+def test_render_style_fields_are_common_typed_and_fingerprinted(method):
+    """Tick density and text scale belong to every method and to the fingerprint.
+
+    They change the exported image bytes, so two recipes differing only in
+    them are not interchangeable artifacts.
+    """
+    params = {"tick_density_x": 24, "tick_density_y": 16, "font_scale": 1.5}
+    for field in params:
+        assert field in compatible_param_fields(method)
+
+    normalized = normalize_batch_params(
+        {"tick_density_x": 24.0, "tick_density_y": 16, "font_scale": 1}, method,
+    )
+    assert normalized["tick_density_x"] == 24.0
+    assert isinstance(normalized["tick_density_y"], int)
+    assert isinstance(normalized["font_scale"], float)
+
+    assert recipe_fingerprint(
+        normalize_batch_params(params, method), method
+    ) != recipe_fingerprint(normalize_batch_params({}, method), method)
+
+
 def test_compatible_field_schema_is_method_aware_and_complete():
     assert COMMON_PARAM_FIELDS <= compatible_param_fields("time")
     assert METHOD_PARAM_FIELDS["fft"] <= compatible_param_fields("fft")

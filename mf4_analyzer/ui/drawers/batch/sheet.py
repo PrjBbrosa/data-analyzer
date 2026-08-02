@@ -569,11 +569,22 @@ class BatchSheet(QDialog):
     def rpm_channel(self) -> str:
         return self._input_panel.rpm_channel()
 
+    def _x_range_crops_time(self) -> bool:
+        """Whether the X range doubles as the time-domain data window.
+
+        ``time_range`` masks the TIME array in ``batch_preprocess``. That is
+        only what the X range means while X *is* time; once the user puts a
+        channel on X (rack travel in mm), the same numbers would crop the run
+        by seconds using millimetres and silently empty the task. In that mode
+        the X range stays a pure display window (``x_min``/``x_max``).
+        """
+        return str(self.params().get("x_source", "time")) != "channel"
+
     def time_range(self):
         method = self.method()
         if method == "fft":
             return self._analysis_panel.source_time_range()
-        if method == "time":
+        if method == "time" and self._x_range_crops_time():
             axis = self._output_panel.axis_params()
             if axis.get("x_auto", True):
                 return None
@@ -717,6 +728,7 @@ class BatchSheet(QDialog):
         return {
             "axes": self._output_panel.axis_params(),
             "reference": self._output_panel.reference_params(),
+            "render_style": self._output_panel.render_style_params(),
             "outputs": dataclasses.asdict(self._output_panel.get_outputs()),
         }
 
@@ -824,6 +836,7 @@ class BatchSheet(QDialog):
             self._input_panel.apply_filter_params(params.get("filter"))
             self._output_panel.apply_axis_params(params)
             self._output_panel.apply_reference_params(params)
+            self._output_panel.apply_render_style_params(params)
             rpm_channel = preset.rpm_channel or (
                 preset.rpm_signal[1] if preset.rpm_signal is not None else ""
             )
@@ -893,6 +906,7 @@ class BatchSheet(QDialog):
         axis = self._output_panel.axis_params()
         params.update(axis)
         params.update(self._output_panel.reference_params())
+        params.update(self._output_panel.render_style_params())
         if method_key == "fft":
             params["amp_y"] = (
                 "dB" if axis.get("amplitude_mode") == "amplitude_db" else "Linear"

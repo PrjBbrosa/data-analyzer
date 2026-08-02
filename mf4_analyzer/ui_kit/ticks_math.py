@@ -146,6 +146,53 @@ def _frame_to_nice(lo, hi, n):
     return bottom, top, ticks
 
 
+def nice_ticks_within(lo, hi, n):
+    """Return ``(per_div, ticks)`` for ~``n`` nice divisions inside ``[lo, hi]``.
+
+    Unlike :func:`_frame_to_nice`, the interval is never widened: a manually
+    entered axis range must survive verbatim, so the ticks are simply the nice
+    multiples that fall inside it. When the resulting labels do not fit, the
+    caller steps down with :func:`coarsen_nice_step`.
+    """
+    try:
+        lo = float(lo)
+        hi = float(hi)
+    except Exception:
+        return None, []
+    if hi < lo:
+        lo, hi = hi, lo
+    span = hi - lo
+    if not math.isfinite(span) or span <= 0:
+        return None, []
+    n = max(1, int(n))
+    per_div = _nice_per_div(span / n)
+    if per_div is None or per_div <= 0:
+        return None, []
+    return per_div, _ticks_for_step(lo, hi, per_div)
+
+
+def _ticks_for_step(lo, hi, per_div):
+    tol = max(abs(per_div) * 1e-9, 1e-12)
+    first = math.ceil((lo - tol) / per_div)
+    ticks = []
+    for index in range(512):
+        value = (first + index) * per_div
+        if value > hi + tol:
+            break
+        # Multiples straddling zero pick up float residue; snap so the axis
+        # reads "0" instead of "-1.78e-15".
+        ticks.append(0.0 if abs(value) < per_div * 1e-9 else value)
+    return ticks
+
+
+def coarsen_nice_step(per_div, lo, hi):
+    """Return the next coarser nice step and its ticks inside ``[lo, hi]``."""
+    step = _adjacent_nice_step(per_div, 1)
+    if step is None or step <= 0:
+        return None, []
+    return step, _ticks_for_step(float(lo), float(hi), step)
+
+
 __all__ = [
     "_NICE_STEP_MANTISSAS",
     "_snap_y_to_divisions",
@@ -153,4 +200,6 @@ __all__ = [
     "_adjacent_nice_step",
     "_fmt_tick",
     "_frame_to_nice",
+    "coarsen_nice_step",
+    "nice_ticks_within",
 ]

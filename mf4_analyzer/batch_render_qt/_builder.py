@@ -8,11 +8,12 @@ import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PyQt5.QtCore import QPoint, QRect, QRectF, Qt
-from PyQt5.QtGui import QColor, QImage, QPainter
+from PyQt5.QtGui import QColor, QFontMetricsF, QImage, QPainter
 from PyQt5.QtWidgets import QApplication, QFrame, QWidget
 
 from mf4_analyzer import db_reference
 from mf4_analyzer.batch_image_options import BatchRenderOptions
+from mf4_analyzer.batch_render_style import RenderStyle, render_style_from_params
 from mf4_analyzer.signal._envelope_cutils import positions_envelope
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
 from mf4_analyzer.qt_plot_helpers import (
@@ -25,12 +26,17 @@ from mf4_analyzer.render_profile import (
     classify_render_profile,
     source_revision_for,
 )
-from ..ui_kit.ticks_math import _fmt_tick, _frame_to_nice
+from ..ui_kit.ticks_math import (
+    _fmt_tick,
+    _frame_to_nice,
+    coarsen_nice_step,
+    nice_ticks_within,
+)
 
 from ._fonts import apply_axis_font, chart_font
 from ._models import BatchRenderContext, BatchSeries, BatchTimeFigureSpec
 from ._page import add_report_footer, add_report_header
-from ._theme import SERIES_COLORS, RenderTheme, render_theme
+from ._theme import SERIES_COLORS, RenderTheme, render_theme, scaled_fonts
 
 
 _SUPPORTED_KINDS = frozenset({"time", "fft", "fft_time", "order_time"})
@@ -385,6 +391,7 @@ class BuiltBatchScene:
     legend: Any
     options: BatchRenderOptions
     theme: RenderTheme
+    style: RenderStyle = field(default_factory=RenderStyle)
     image_item: Any = None
     colorbar: Any = None
     display_matrix: np.ndarray | None = None
@@ -459,18 +466,142 @@ class BuiltBatchScene:
             callback()
         layout.invalidate()
         layout.activate()
+        app = QApplication.instance()
+        self._fit_axis_labels()
+        layout.invalidate()
+        layout.activate()
         # Axis tick widths and dual-Y nice ranges can adjust the final ViewBox
         # geometry. Rebind only curves whose realized pixel width actually
         # changed; all of this still happens before the sole paint drain.
         self._bind_time_display_envelopes()
-        app = QApplication.instance()
         for plot in self.plots:
             try:
                 plot.vb.updateAutoRange()
             except Exception:
                 pass
+        # Only now are the view ranges final — an auto-ranged panel still reads
+        # 0..1 before this point, and ticks pinned from that would fall outside
+        # the finished plot.
+        self._apply_tick_density()
         if app is not None:
+            # An AxisItem only learns how much space its tick strings need
+            # while painting. Drain that paint here so the resulting text-space
+            # change is folded back into the layout; otherwise the caller's own
+            # render would be the first paint and would capture the
+            # pre-adjustment geometry.
             app.processEvents()
+            layout.invalidate()
+            layout.activate()
+            self._bind_time_display_envelopes()
+            app.processEvents()
+
+    def _fit_axis_labels(self) -> None:
+        """Shrink a Y-axis label that is longer than its own panel is tall.
+
+        The left/right axis labels are drawn rotated, so their text length eats
+        panel *height*. A tall page split into eight panels leaves ~115px each,
+        which the report text scale can outgrow — and two neighbouring labels
+        that each overflow their panel collide. Shrink only the offending
+        label; ticks, titles and the other panels keep the requested size.
+        """
+        for plot in self.plots:
+            try:
+                available = float(plot.vb.sceneBoundingRect().height())
+            except Exception:
+                continue
+            if available <= 1.0:
+                continue
+            for side in ("left", "right"):
+                axis = plot.getAxis(side)
+                if axis is None or not axis.isVisible():
+                    continue
+                label = getattr(axis, "label", None)
+                if label is None or not str(axis.labelText or "").strip():
+                    continue
+                self._shrink_label_to_fit(label, available - 2.0)
+
+    @staticmethod
+    def _shrink_label_to_fit(label, available: float) -> None:
+        point_size = float(label.font().pointSizeF())
+        for _attempt in range(12):
+            if float(label.boundingRect().width()) <= available or point_size <= 6.0:
+                return
+            point_size = max(6.0, point_size - 1.0)
+            label.setFont(chart_font(point_size))
+
+    def _apply_tick_density(self) -> None:
+        """Pin every value axis to the recipe's requested number of divisions.
+
+        pyqtgraph's adaptive tick chooser targets on-screen chart widths, which
+        leaves a 1920px report page with ~9 X labels no matter how much room
+        there is. Each axis is pinned from its own realized view range, so a
+        manually entered range keeps its exact bounds.
+        """
+        metrics = QFontMetricsF(chart_font(self.theme.axis_font_pt))
+        for plot in self.plots:
+            for side, divisions, index in (
+                ("bottom", self.style.tick_density_x, 0),
+                ("left", self.style.tick_density_y, 1),
+                ("right", self.style.tick_density_y, 1),
+            ):
+                axis = plot.getAxis(side)
+                if axis is None or not axis.isVisible():
+                    continue
+                if not axis.style.get("showValues", True):
+                    # Stacked subplots hide values on every axis but the
+                    # bottom one; the analysis frame does the same for its
+                    # decorative top/right edges.
+                    continue
+                view = axis.linkedView()
+                if view is None:
+                    continue
+                try:
+                    lo, hi = view.viewRange()[index]
+                except Exception:
+                    continue
+                ticks = self._fit_axis_ticks(
+                    axis, float(lo), float(hi), divisions, metrics, index == 0
+                )
+                if ticks is None:
+                    continue
+                axis.setStyle(maxTickLevel=0)
+                axis.setTicks([ticks, []])
+
+    @staticmethod
+    def _axis_extent_px(axis, horizontal: bool) -> float:
+        try:
+            rect = axis.boundingRect()
+        except Exception:
+            return 0.0
+        return float(rect.width() if horizontal else rect.height())
+
+    def _fit_axis_ticks(
+        self, axis, lo, hi, divisions, metrics, horizontal: bool
+    ):
+        """Return ``[(value, label), …]`` coarsened until the labels fit."""
+        per_div, values = nice_ticks_within(lo, hi, divisions)
+        if per_div is None or len(values) < 2:
+            return None
+        extent = self._axis_extent_px(axis, horizontal)
+        for _attempt in range(6):
+            labels = [_fmt_tick(value, per_div) for value in values]
+            if extent <= 1.0 or self._labels_fit(labels, metrics, extent, horizontal):
+                return list(zip((float(value) for value in values), labels))
+            coarser, values = coarsen_nice_step(per_div, lo, hi)
+            if coarser is None or len(values) < 2:
+                return None
+            per_div = coarser
+        return None
+
+    @staticmethod
+    def _labels_fit(labels, metrics, extent: float, horizontal: bool) -> bool:
+        if len(labels) < 2:
+            return True
+        if horizontal:
+            needed = max(metrics.width(text) for text in labels) + 12.0
+        else:
+            needed = metrics.height() + 4.0
+        return needed * len(labels) <= extent
 
     def texts(self) -> list[str]:
         values = [_text_of(item) for item in self.page_labels]
@@ -578,11 +709,13 @@ class _SceneBuilder:
         context: BatchRenderContext,
         params: Mapping[str, Any],
         theme: RenderTheme,
+        style: RenderStyle | None = None,
     ):
         self.options = options
         self.context = context
         self.params = dict(params)
         self.theme = theme
+        self.style = style or render_style_from_params(self.params)
         self.widget = self._new_widget()
         self.plots: list[Any] = []
         self.curves: list[Any] = []
@@ -649,6 +782,13 @@ class _SceneBuilder:
         plot.hideAxis("top")
         self.plots.append(plot)
         return plot
+
+    def _apply_legend_font(self, legend) -> None:
+        """Keep legend entries on the same text scale as the axes."""
+        try:
+            legend.setLabelTextSize(f"{self.theme.axis_font_pt:g}pt")
+        except Exception:
+            pass
 
     def _apply_analysis_frame(self, plot) -> None:
         """Match the existing full neutral-axis frame."""
@@ -848,11 +988,12 @@ class _SceneBuilder:
                         _view=plot.vb,
                         _axis=plot.getAxis("left"),
                         _values=finite_primary,
+                        _divisions=self.style.tick_density_y,
                     ) -> None:
                         bottom_y, top_y, ticks = _frame_to_nice(
-                            float(np.min(_values)), float(np.max(_values)), 10
+                            float(np.min(_values)), float(np.max(_values)), _divisions
                         )
-                        per_div = (top_y - bottom_y) / 10.0
+                        per_div = (top_y - bottom_y) / _divisions
                         _view.enableAutoRange(axis="y", enable=False)
                         _view.setYRange(bottom_y, top_y, padding=0)
                         _axis.setTicks(
@@ -862,7 +1003,11 @@ class _SceneBuilder:
                     self.sync_callbacks.append(settle_primary)
             for view, axis, values in nice_targets:
                 def settle_nice(
-                    *_args, _view=view, _axis=axis, _values=values
+                    *_args,
+                    _view=view,
+                    _axis=axis,
+                    _values=values,
+                    _divisions=self.style.tick_density_y,
                 ) -> None:
                     if _values is None or not _values.size:
                         _view.enableAutoRange(axis="y", enable=True)
@@ -873,8 +1018,8 @@ class _SceneBuilder:
                         hi = float(np.max(_values))
                         pad = (hi - lo) * 0.05 if hi > lo else abs(lo) * 0.05 or 1.0
                         lo, hi = lo - pad, hi + pad
-                    bottom_y, top_y, ticks = _frame_to_nice(lo, hi, 10)
-                    per_div = (top_y - bottom_y) / 10.0
+                    bottom_y, top_y, ticks = _frame_to_nice(lo, hi, _divisions)
+                    per_div = (top_y - bottom_y) / _divisions
                     _view.enableAutoRange(axis="y", enable=False)
                     _view.setYRange(bottom_y, top_y, padding=0)
                     _axis.setStyle(maxTickLevel=0)
@@ -888,6 +1033,7 @@ class _SceneBuilder:
             legend = plot.addLegend(offset=(10, 8))
             legend.setBrush(pg.mkBrush(self.theme.legend_background))
             legend.setPen(pg.mkPen(self.theme.grid, width=0.8))
+            self._apply_legend_font(legend)
             for curve, item in zip(local_curves, panel_series):
                 legend.addItem(curve, str(item.label))
             self.legend = legend
@@ -978,6 +1124,20 @@ class _SceneBuilder:
                     layout.setRowPreferredHeight(row, 100.0)
                 layout.invalidate()
                 layout.activate()
+                # Only the last row carries the shared X axis, so an equal row
+                # height leaves its plot area shorter than every panel above
+                # it. Pay for the axis out of the row's preferred height so all
+                # panels end up with the same drawing area — and so the rotated
+                # Y label of the bottom panel has as much room as the others.
+                last_plot = self.plots[-1]
+                bottom_axis = last_plot.getAxis("bottom")
+                axis_height = float(bottom_axis.height()) if bottom_axis else 0.0
+                if axis_height > 1.0:
+                    layout.setRowPreferredHeight(
+                        3 + len(panel_ids) - 1, 100.0 + axis_height
+                    )
+                    layout.invalidate()
+                    layout.activate()
                 left_axes = [plot.getAxis("left") for plot in self.plots]
                 for axis in left_axes:
                     axis.setWidth(None)
@@ -1036,6 +1196,7 @@ class _SceneBuilder:
         legend = plot.addLegend(offset=(8, 8))
         legend.setBrush(pg.mkBrush(self.theme.legend_background))
         legend.setPen(pg.mkPen(self.theme.grid, width=0.8))
+        self._apply_legend_font(legend)
         legend.addItem(curve, str(self.context.channel or "Channel"))
         self.legend = legend
         finite_x = _finite_values(x_values)
@@ -1211,6 +1372,7 @@ class _SceneBuilder:
             legend=self.legend,
             options=self.options,
             theme=self.theme,
+            style=self.style,
             image_item=self.image_item,
             colorbar=self.colorbar,
             display_matrix=self.display_matrix,
@@ -1241,12 +1403,16 @@ def build_batch_scene(
     render_options = options or BatchRenderOptions()
     render_context = context or BatchRenderContext()
     render_params = dict(params or {})
-    theme = render_theme(render_options.background)
+    style = render_style_from_params(render_params)
+    # Scale before the header/footer labels are added so page text and axis
+    # text stay on one ruler.
+    theme = scaled_fonts(render_theme(render_options.background), style.font_scale)
     builder = _SceneBuilder(
         options=render_options,
         context=render_context,
         params=render_params,
         theme=theme,
+        style=style,
     )
     builder.page_labels.extend(
         add_report_header(

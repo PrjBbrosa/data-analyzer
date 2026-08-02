@@ -857,14 +857,20 @@ def _make_axis_settings_group(
     lay.addWidget(_build_axis_header())
 
     # ---- X row ----
+    # The X axis is not always a non-negative quantity: a batch time-domain
+    # plot can put an arbitrary channel on X (rack travel runs ±80 mm). A
+    # QDoubleSpinBox whose minimum is 0 rejects "-" at validate() time, so the
+    # keystroke never lands and the field becomes un-typeable. Keep X signed
+    # everywhere; Y stays non-negative here because its callers are the
+    # frequency/order axes (batch widens its own Y separately).
     owner.chk_x_auto = QCheckBox()
     owner.spin_x_min = _no_buttons(CompactDoubleSpinBox())
-    owner.spin_x_min.setRange(0.0, 1e9)
+    owner.spin_x_min.setRange(-1e12, 1e12)
     owner.spin_x_min.setDecimals(2)
     if x_unit:
         owner.spin_x_min.setSuffix(f" {x_unit}")
     owner.spin_x_max = _no_buttons(CompactDoubleSpinBox())
-    owner.spin_x_max.setRange(0.0, 1e9)
+    owner.spin_x_max.setRange(-1e12, 1e12)
     owner.spin_x_max.setDecimals(2)
     if x_unit:
         owner.spin_x_max.setSuffix(f" {x_unit}")

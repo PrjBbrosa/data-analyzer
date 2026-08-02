@@ -1,7 +1,7 @@
 """Precision-Light-derived visual tokens for batch report rendering."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from PyQt5.QtGui import QColor
 
@@ -24,11 +24,14 @@ class RenderTheme:
     legend_background: str
     fft_line: str
     grid_alpha: float = 0.28
-    axis_font_pt: float = 9.0
-    panel_title_font_pt: float = 10.0
-    header_font_pt: float = 12.0
-    facts_font_pt: float = 8.5
-    footer_font_pt: float = 7.5
+    # Report pages are exported at 1920×1080 and up, where the 9pt screen-chart
+    # scale reads as a few pixels of ink. These are the 100% baseline; the
+    # recipe's ``font_scale`` multiplies them (see ``scaled_fonts``).
+    axis_font_pt: float = 12.0
+    panel_title_font_pt: float = 13.0
+    header_font_pt: float = 15.0
+    facts_font_pt: float = 11.0
+    footer_font_pt: float = 9.5
 
 
 THEMES = {
@@ -78,4 +81,25 @@ def render_theme(background: str) -> RenderTheme:
         raise ValueError(f"unsupported batch render background: {background}") from exc
 
 
-__all__ = ["RenderTheme", "SERIES_COLORS", "THEMES", "render_theme"]
+def scaled_fonts(theme: RenderTheme, scale: float) -> RenderTheme:
+    """Return *theme* with every text size multiplied by *scale*."""
+    factor = float(scale)
+    if factor == 1.0:
+        return theme
+    return replace(
+        theme,
+        axis_font_pt=theme.axis_font_pt * factor,
+        panel_title_font_pt=theme.panel_title_font_pt * factor,
+        header_font_pt=theme.header_font_pt * factor,
+        facts_font_pt=theme.facts_font_pt * factor,
+        footer_font_pt=theme.footer_font_pt * factor,
+    )
+
+
+__all__ = [
+    "RenderTheme",
+    "SERIES_COLORS",
+    "THEMES",
+    "render_theme",
+    "scaled_fonts",
+]

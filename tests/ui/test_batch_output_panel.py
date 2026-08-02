@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import pytest
 from PyQt5.QtCore import QPoint, Qt
-from PyQt5.QtWidgets import QGroupBox, QWidget
+from PyQt5.QtGui import QValidator
+from PyQt5.QtWidgets import QGroupBox, QPushButton, QWidget
 
 
 def _make_panel(qtbot):
@@ -307,6 +308,86 @@ def test_batch_output_panel_manual_y_range_accepts_negative_values(qtbot):
     assert panel.spin_y_min.value() == -120.0
     assert panel.spin_y_max.value() == -20.0
     assert panel.axis_params()["y_min"] == -120.0
+
+
+def test_batch_output_panel_manual_x_range_accepts_typed_negative_values(qtbot):
+    """A channel on X (rack travel) is signed, so "-" must be typeable.
+
+    A ``QDoubleSpinBox`` with ``minimum == 0`` rejects "-" in ``validate()``,
+    which silently swallows the keystroke instead of showing an error, so this
+    asserts the range rather than only the resulting value.
+    """
+    panel = _make_panel(qtbot)
+    panel.apply_method_defaults("time")
+    panel.set_x_axis_context(label="Weg", unit="mm")
+
+    assert panel.spin_x_min.minimum() < 0.0
+    assert panel.spin_x_max.minimum() < 0.0
+    assert panel.spin_x_min.validate("-100.0 mm", 0)[0] != QValidator.Invalid
+
+    panel.chk_x_auto.setChecked(False)
+    panel.spin_x_min.setValue(-100.0)
+    panel.spin_x_max.setValue(-10.0)
+
+    assert panel.axis_params()["x_min"] == -100.0
+    assert panel.axis_params()["x_max"] == -10.0
+
+
+def test_batch_output_render_style_round_trips_and_reports_changes(qtbot):
+    from mf4_analyzer.batch_render_style import MAX_FONT_SCALE, RenderStyle
+
+    panel = _make_panel(qtbot)
+    default = RenderStyle()
+
+    assert panel.render_style_params() == default.as_params()
+
+    with qtbot.waitSignal(panel.changed, timeout=500):
+        panel._on_render_style_changed(
+            RenderStyle(tick_density_x=24, tick_density_y=16, font_scale=1.5)
+        )
+    assert panel.render_style_params() == {
+        "tick_density_x": 24,
+        "tick_density_y": 16,
+        "font_scale": 1.5,
+    }
+    assert "24" in panel._render_style_summary.text()
+    assert "150%" in panel._render_style_summary.text()
+
+    # Partial apply: an absent key keeps its current value.
+    panel.apply_render_style_params({"tick_density_x": 9})
+    assert panel.render_style_params() == {
+        "tick_density_x": 9,
+        "tick_density_y": 16,
+        "font_scale": 1.5,
+    }
+    # A hand-edited recipe must never abort a run: out-of-range clamps,
+    # non-numeric falls back to the default.
+    panel.apply_render_style_params({"font_scale": 99.0})
+    assert panel.render_style_params()["font_scale"] == MAX_FONT_SCALE
+    panel.apply_render_style_params({"font_scale": "huge"})
+    assert panel.render_style_params()["font_scale"] == default.font_scale
+
+
+def test_batch_output_render_style_button_opens_a_popover(qtbot):
+    from mf4_analyzer.batch_render_style import RenderStyle
+
+    panel = _make_panel(qtbot)
+    button = panel.findChild(QPushButton, "batchRenderStyleButton")
+    assert button is not None
+    assert button.isVisibleTo(panel)
+
+    panel._on_render_style_clicked()
+    popover = panel._render_style_popover
+    assert popover is not None
+    assert popover.style() == RenderStyle()
+
+    with qtbot.waitSignal(panel.changed, timeout=500):
+        popover.set_style(RenderStyle(tick_density_x=8, tick_density_y=6), emit=True)
+    assert panel.render_style_params()["tick_density_x"] == 8
+
+    # Re-applying from a preset keeps the open popover in sync.
+    panel.apply_render_style_params({"tick_density_x": 24, "tick_density_y": 16})
+    assert popover.style().tick_density_x == 24
 
 
 def test_batch_output_db_reference_auto_manual_round_trip_and_legacy(qtbot):

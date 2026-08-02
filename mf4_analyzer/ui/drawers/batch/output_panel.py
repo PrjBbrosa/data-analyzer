@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....batch import BatchOutput
+from ....batch_render_style import RenderStyle, render_style_from_params
 from .... import db_reference
 from ...inspector_sections._helpers import (
     _make_axis_settings_group,
@@ -31,6 +32,7 @@ from ...inspector_sections._helpers import (
     make_db_reference_control,
 )
 from ..._axis_defaults import z_range_for
+from .render_style_popover import RenderStylePopover
 
 
 _GENERIC_DB_Z_RANGE = (-80.0, 0.0)
@@ -350,6 +352,7 @@ QPushButton#batchOutputSettingsButton:checked {
             self._axis_row_parts["z"]["label"].parentWidget().parentWidget()
         )
         outer.addWidget(axis_group)
+        outer.addWidget(self._build_render_style_row())
         self._effective_preview = QLabel("等待来源信息", self)
         self._effective_preview.setObjectName("batchDbReferencePreview")
         self._effective_preview.setWordWrap(True)
@@ -440,6 +443,126 @@ QPushButton#batchOutputSettingsButton:checked {
     def _compact_field(widget: QWidget) -> None:
         widget.setMinimumWidth(0)
         widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+
+    # ------------------------------------------------------------------
+    # Render style (tick density + text size)
+    # ------------------------------------------------------------------
+    def _build_render_style_row(self) -> QWidget:
+        """Entry point for the export's tick density and text size.
+
+        Sits directly under 坐标范围 because it answers the same question —
+        how the axes read — one level up from the numeric ranges.
+        """
+        self._render_style = RenderStyle()
+        self._render_style_popover = None
+
+        row = QWidget(self)
+        row.setObjectName("batchRenderStyleRow")
+        row.setAttribute(Qt.WA_StyledBackground, True)
+        row.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 2, 0, 0)
+        layout.setSpacing(6)
+
+        self._render_style_summary = QLabel(row)
+        self._render_style_summary.setObjectName("batchRenderStyleSummary")
+        self._render_style_summary.setMinimumWidth(0)
+        self._render_style_summary.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Preferred,
+        )
+        self._render_style_summary.setStyleSheet(
+            "color:#64748b;font-size:10px;padding:1px 0;"
+        )
+        layout.addWidget(self._render_style_summary, 1)
+
+        self._btn_render_style = QPushButton("刻度与字体", row)
+        self._btn_render_style.setObjectName("batchRenderStyleButton")
+        self._btn_render_style.setCheckable(True)
+        # Same glyph as the time-domain chart's 刻度密度 button so the two
+        # entries read as the same control in two places.
+        self._btn_render_style.setIcon(qta.icon("ri.ruler-2-line", color="#1769e0"))
+        self._btn_render_style.setIconSize(QSize(14, 14))
+        self._btn_render_style.setToolTip("设置导出图片的刻度密度与字体大小")
+        self._btn_render_style.setMinimumWidth(0)
+        self._btn_render_style.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self._btn_render_style.setStyleSheet("""
+QPushButton#batchRenderStyleButton {
+    border: 1px solid #cfe0f8;
+    border-radius: 6px;
+    color: #1769e0;
+    background-color: #ffffff;
+    font-size: 11px;
+    padding: 4px 9px;
+}
+QPushButton#batchRenderStyleButton:hover,
+QPushButton#batchRenderStyleButton:checked {
+    background-color: #eaf2ff;
+    border-color: #a9c9f4;
+}
+""")
+        self._btn_render_style.clicked.connect(self._on_render_style_clicked)
+        layout.addWidget(self._btn_render_style)
+
+        self._refresh_render_style_summary()
+        return row
+
+    def _on_render_style_clicked(self) -> None:
+        popover = self._render_style_popover
+        if popover is None:
+            popover = RenderStylePopover(self)
+            popover.style_changed.connect(self._on_render_style_changed)
+            popover.closed.connect(
+                lambda: self._btn_render_style.setChecked(False)
+            )
+            self._render_style_popover = popover
+        if popover.isVisible():
+            popover.hide()
+            self._btn_render_style.setChecked(False)
+            return
+        popover.set_style(self._render_style, emit=False)
+        anchor = self._btn_render_style
+        origin = anchor.mapToGlobal(anchor.rect().bottomRight())
+        popover.adjustSize()
+        popover.move(origin.x() - popover.width(), origin.y() + 4)
+        popover.show()
+        self._btn_render_style.setChecked(True)
+
+    def _on_render_style_changed(self, style: RenderStyle) -> None:
+        if style == self._render_style:
+            return
+        self._render_style = style
+        self._refresh_render_style_summary()
+        self.changed.emit()
+
+    def _refresh_render_style_summary(self) -> None:
+        style = self._render_style
+        self._render_style_summary.setText(
+            f"刻度 X {style.tick_density_x} · Y {style.tick_density_y}"
+            f" · 字号 {int(round(style.font_scale * 100))}%"
+        )
+
+    def render_style(self) -> RenderStyle:
+        return self._render_style
+
+    def render_style_params(self) -> dict:
+        return self._render_style.as_params()
+
+    def apply_render_style_params(self, params: dict) -> None:
+        """Partial-apply: keys absent from *params* keep their current value."""
+        if not params:
+            return
+        current = self._render_style.as_params()
+        current.update(
+            {key: value for key, value in dict(params).items() if key in current}
+        )
+        style = render_style_from_params(current)
+        if style == self._render_style:
+            return
+        self._render_style = style
+        popover = self._render_style_popover
+        if popover is not None:
+            popover.set_style(style, emit=False)
+        self._refresh_render_style_summary()
 
     def set_compact_mode(self, compact: bool) -> None:
         side = 12 if compact else 18

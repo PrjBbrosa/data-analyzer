@@ -27,7 +27,10 @@ CHART_FONT_FAMILIES = (
 )
 CJK_CONTRACT_TEXT = "单帧振动加速度"
 CJK_FONT_CANDIDATES = CHART_FONT_FAMILIES
-_CHART_FONT_CACHE: dict[int, QFont] = {}
+# Keyed by the exact requested size: the batch report's font scale produces
+# fractional point sizes, and truncating the key would hand 12.6pt callers a
+# cached 12.0pt font.
+_CHART_FONT_CACHE: dict[float, QFont] = {}
 
 
 def supports_contract_text(font: QFont, text: str = CJK_CONTRACT_TEXT) -> bool:
@@ -56,7 +59,7 @@ def resolve_cjk_font() -> QFont | None:
 
 def chart_font(point_size: float = 9.0) -> QFont:
     """Return the resolved explicit font for pyqtgraph text and axis items."""
-    cache_key = int(point_size)
+    cache_key = round(float(point_size), 2)
     cached = _CHART_FONT_CACHE.get(cache_key)
     if cached is not None:
         return QFont(cached)

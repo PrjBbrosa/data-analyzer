@@ -349,6 +349,38 @@ def test_sheet_time_x_empty_unit_is_a_real_cross_source_unit_fact(qtbot, tmp_pat
     assert sheet._output_panel._axis_row_parts["x"]["label"].text() == "speed"
 
 
+def test_sheet_channel_x_range_is_display_only_not_a_time_crop(qtbot, tmp_path):
+    """A channel X range must never reach ``time_range``.
+
+    ``time_range`` masks the TIME array in ``batch_preprocess``. Once the user
+    puts rack travel on X, a range of −100 → 100 mm reused as seconds would
+    crop the run to nothing; the same numbers must survive as the display
+    window (``x_min``/``x_max``) instead.
+    """
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    source = _time_file_data(tmp_path, "one.csv", speed_unit="rpm")
+    sheet = BatchSheet(None, files={"s1": source})
+    qtbot.addWidget(sheet)
+    sheet.apply_files(("s1",), ())
+    sheet.apply_signals(("target",))
+    sheet.apply_method("time")
+    sheet._output_panel.chk_x_auto.setChecked(False)
+    sheet._output_panel.spin_x_min.setValue(-100.0)
+    sheet._output_panel.spin_x_max.setValue(100.0)
+
+    # X is still time: the window doubles as the data crop.
+    assert sheet.time_range() == (-100.0, 100.0)
+
+    sheet.apply_params({"x_source": "channel", "x_channel": "speed"})
+
+    assert sheet.time_range() is None
+    params = sheet._control_params_snapshot("time")
+    assert "time_range" not in params
+    assert params["x_min"] == -100.0
+    assert params["x_max"] == 100.0
+
+
 def test_sheet_channel_x_without_selection_has_field_issue(qtbot, tmp_path):
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
 
