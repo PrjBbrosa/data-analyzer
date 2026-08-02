@@ -3,7 +3,7 @@
 The catalog (``mf4_analyzer.ui.quickref``) is pure data — frozen dataclasses
 the panel renders. These tests guard:
 
-* all 11 expected groups are present and none is empty;
+* all expected groups are present in order and none is empty;
 * every keyboard chip resolves through ``hints.shortcut_tooltip`` (the single
   source of truth for shortcut strings) — a missing key must surface, never
   silently blank;
@@ -29,6 +29,7 @@ EXPECTED_TITLES = [
     "标注",
     "预设",
     "导出 · 复制",
+    "批处理",
     "右键菜单",
 ]
 
@@ -39,7 +40,7 @@ def _all_rows():
             yield group, row
 
 
-def test_eleven_groups_exact_titles():
+def test_groups_exact_titles():
     titles = [g.title for g in quickref.QUICKREF]
     assert len(titles) == len(EXPECTED_TITLES), titles
     assert titles == EXPECTED_TITLES
@@ -156,6 +157,34 @@ def test_quickref_covers_db_reference_badge_and_manage_button():
         "管理" in f"{r.desc}{r.sub}" or "tune" in (r.gesture or "").lower()
         for r in group.rows
     )
+    assert all(not r.soon for r in group.rows)
+
+
+def test_quickref_covers_batch_drawer():
+    """The batch drawer had no quickref presence at all until the option-A
+    picker rewrite (plan 2026-08-02). Guard the entry point plus the three
+    interactions that are not self-evident from looking at the panel: the
+    collapsed row is a read-only summary you must click to search, selection
+    happens inside the popup, and RPM is single-select with a scale factor."""
+    group = next(g for g in quickref.QUICKREF if g.title == "批处理")
+    haystack = " ".join(f"{r.desc} {r.sub} {r.gesture}" for r in group.rows)
+    # Entry point — without it the group is unreachable.
+    assert "工具栏「批处理」" in haystack
+    # Picker: type-to-filter inside the popup, tick rows to select.
+    assert "筛选" in haystack and "勾选" in haystack
+    # Bulk actions on the popup footer.
+    assert "全选" in haystack and "清空" in haystack
+    # Collapsed state is a summary + "+N" badge, not an input.
+    assert "+N" in haystack
+    # RPM row is single-select and carries the RPM scale factor.
+    rpm = next(r for r in group.rows if "RPM" in r.desc)
+    assert "单选" in rpm.sub
+    # Every row here is mouse/gesture driven; a keyboard chip would have to go
+    # through ``_sc`` and belongs in the 快捷键 group instead.
+    assert all(not r.keys for r in group.rows), [
+        r.desc for r in group.rows if r.keys
+    ]
+    # The picker rewrite has landed — nothing here is a staged capability.
     assert all(not r.soon for r in group.rows)
 
 
