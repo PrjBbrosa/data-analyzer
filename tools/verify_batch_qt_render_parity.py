@@ -1242,8 +1242,10 @@ def _evaluate(case: ParityCase, batch: dict, reference: dict) -> dict[str, bool]
         "curve_data_match": data_match,
         "axis_ranges_match": _range_close(batch["ranges"], reference["ranges"]),
         "curve_tokens_match": tokens_match,
-        "batch_export_antialias": all(
-            record["antialias"] is True for record in batch["curve_tokens"]
+        # Curves are aliased by contract: the exporter supersamples the whole
+        # page instead of paying pyqtgraph's per-curve antialiasing.
+        "batch_export_curves_aliased": all(
+            record["antialias"] is False for record in batch["curve_tokens"]
         ),
         "axis_font_9pt": all(
             abs(value - 9.0) <= 0.01

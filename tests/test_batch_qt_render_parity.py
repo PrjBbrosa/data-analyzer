@@ -77,9 +77,13 @@ def test_plot_corner_pixel_guard_detects_native_auto_range_button(qapp):
         assert max(_plot_corner_ink_counts(scene, clean), default=0) < 160
 
         plot = scene.plots[0]
+        # Drive the button through pyqtgraph's own visibility rule rather than
+        # forcing autoBtn.show(): the export re-runs updateButtons(), so a
+        # hand-forced button would simply be hidden again and the guard would
+        # never see the pixels it is supposed to catch.
         plot.showButtons()
-        plot.autoBtn.show()
-        plot.autoBtn.setVisible(True)
+        plot.mouseHovering = True
+        plot.updateButtons()
         shown = render_scene_image(scene)
         assert plot.autoBtn.isVisible()
         assert max(_plot_corner_ink_counts(scene, shown), default=0) >= 160

@@ -44,8 +44,6 @@ _EMPTY_DB_LEVEL = -200.0
 _AUTO_SPAN_DB = 30.0
 _AUTO_CEILING_PERCENTILE = 99.0
 _DISPLAY_DEAD_SPAN_DB = 200.0
-_HIGH_RASTER_TRANSITION_FRACTION = 0.5
-_HIGH_RASTER_NORMALIZED_Q90 = 0.001
 
 
 def _finite_values(values) -> np.ndarray:
@@ -314,20 +312,6 @@ def _time_x(item: BatchSeries, spec: BatchTimeFigureSpec) -> np.ndarray:
     return values
 
 
-def _native_time_antialias(profile: RenderProfile, pixel_width: int) -> bool:
-    """Preserve smooth-line AA while bounding high-raster export cost."""
-
-    if profile.strategy == "dense_discrete":
-        return False
-    if profile.source_length <= 2 * max(1, int(pixel_width)):
-        return True
-    q90 = float(profile.normalized_step_quantiles[2])
-    return not (
-        profile.transition_fraction >= _HIGH_RASTER_TRANSITION_FRACTION
-        and q90 >= _HIGH_RASTER_NORMALIZED_Q90
-    )
-
-
 def _text_of(item) -> str:
     target = getattr(item, "item", item)
     to_plain = getattr(target, "toPlainText", None)
@@ -447,13 +431,7 @@ class BuiltBatchScene:
                 pixel_width=effective_width,
                 is_monotonic=binding.profile.monotonic_time,
             )
-            binding.curve.setData(
-                display_x,
-                display_y,
-                antialias=_native_time_antialias(
-                    binding.profile, effective_width
-                ),
-            )
+            binding.curve.setData(display_x, display_y)
             binding.last_key = key
 
     def show_and_settle(self) -> None:
@@ -859,9 +837,14 @@ class _SceneBuilder:
             item.y,
             source_revision_for(x_values, item.y),
         )
+        # Curves stay aliased here on purpose. Smoothing is the exporter's job
+        # (_export.py supersamples the whole page), and pyqtgraph's per-curve
+        # antialiasing costs whatever the samples happen to look like — it
+        # drops PlotCurveItem's drawLines fast path, which measured 15x slower
+        # than supersampling on a five-panel channel-vs-channel page.
         curve = pg.PlotDataItem(
             pen=self._next_pen(item.linestyle, color_key=color_key),
-            antialias=profile.strategy != "dense_discrete",
+            antialias=False,
             name=str(item.label),
         )
         owner.addItem(curve)
@@ -1197,11 +1180,13 @@ class _SceneBuilder:
         self._apply_analysis_frame(plot)
         plot.setLabel("bottom", "Frequency (Hz)")
         plot.setLabel("left", y_label)
+        # Aliased for the same reason as the time curves: the exporter
+        # supersamples the page.
         curve = pg.PlotDataItem(
             x_values,
             y_values,
             pen=self._next_pen("-", fft=True),
-            antialias=True,
+            antialias=False,
             name=str(self.context.channel or "Channel"),
         )
         plot.addItem(curve)

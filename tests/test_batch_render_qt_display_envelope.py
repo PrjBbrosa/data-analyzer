@@ -169,7 +169,14 @@ def test_time_display_envelope_preserves_nan_and_nonmonotonic_fallbacks(qapp):
         scene.close()
 
 
-def test_general_time_curve_keeps_single_file_antialias_quality(qapp):
+def test_smooth_general_time_curve_is_decimated_and_left_aliased(qapp):
+    """A quiet signal gets no special treatment: decimated, antialias off.
+
+    Curve-level antialiasing used to be granted per signal statistics, which
+    meant a clean synthetic sine like this one was smoothed while any real
+    noisy channel was not. Smoothing now belongs entirely to the exporter's
+    supersampling pass, so every curve leaves the builder aliased.
+    """
     x = np.linspace(0.0, 1.0, 60_000, dtype=np.float64)
     y = np.sin(2.0 * np.pi * 3.25 * x)
     spec = BatchTimeFigureSpec((BatchSeries(x, y, "smooth", unit="g"),))
@@ -181,13 +188,13 @@ def test_general_time_curve_keeps_single_file_antialias_quality(qapp):
     try:
         scene.show_and_settle()
         qapp.processEvents()
-        assert scene.curves[0].opts["antialias"] is True
+        assert scene.curves[0].opts["antialias"] is False
         assert len(scene.curves[0].getData()[0]) < x.size
     finally:
         scene.close()
 
 
-def test_high_raster_cost_general_profile_disables_native_antialias(qapp):
+def test_high_transition_general_profile_is_decimated_and_left_aliased(qapp):
     x = np.linspace(0.0, 1.0, 60_000, dtype=np.float64)
     y = ((np.arange(x.size, dtype=np.int64) * 997) % 1476) / 3.0
     spec = BatchTimeFigureSpec((BatchSeries(x, y, "dynamic", unit="deg/s"),))

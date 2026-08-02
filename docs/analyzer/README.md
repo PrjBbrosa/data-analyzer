@@ -11,6 +11,8 @@ documentation.
 | User guide | `docs/analyzer/user-guide/` | Published user-facing guide files and rendered QA artifacts. |
 | UI prototypes | `docs/analyzer/ui-prototypes/` | HTML mockups, visual references, screenshots, and interaction option demos. |
 | Reviews | `docs/analyzer/reviews/` | Analyzer code reviews, re-reviews, execution reports, and follow-up audit artifacts. |
+| Plans | `docs/analyzer/plans/` | Feature/execution plans for analyzer work (acquisition plans stay in their own area). |
+| Specs | `docs/analyzer/specs/` | Feature design specs and technical decision records. |
 | Diagnostics | `docs/analyzer/diagnostics.md` | Runtime log locations, retention, environment overrides, and support collection. |
 
 Published guide entry points:

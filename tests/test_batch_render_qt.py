@@ -373,14 +373,16 @@ def test_report_page_facts_footer_legend_and_no_raw_identity_leak(qapp):
         scene.close()
 
 
-def test_every_plot_has_no_native_chrome_and_curves_are_aa(qapp):
+def test_every_plot_has_no_native_chrome_and_curves_are_aliased(qapp):
     scene = _open_scene(
         qapp,
         ("time", _time_spec(count=8, layout="subplot", titles=range(8))),
     )
     try:
         assert len(scene.plots) == 8
-        assert all(curve.opts.get("antialias") is True for curve in scene.curves)
+        # Antialiasing belongs to the exporter's supersampling pass, not to
+        # the curves; see mf4_analyzer/batch_render_qt/_export.py.
+        assert all(curve.opts.get("antialias") is False for curve in scene.curves)
         for plot in scene.plots:
             auto_button = getattr(plot, "autoBtn", None)
             assert auto_button is None or not auto_button.isVisible()
@@ -419,11 +421,18 @@ def test_eight_subplot_text_geometry_and_shared_x_contract(qapp):
 
 
 def test_subplot_export_draws_before_writing_dpi_metadata_and_contains_ticks(
-    qapp, tmp_path
+    qapp, tmp_path, monkeypatch
 ):
     _, BatchSeries, BatchTimeFigureSpec, *_rest, build_batch_scene = _qt_api()
+    from mf4_analyzer.batch_render_qt import _export as qt_export
     from mf4_analyzer.batch_render_qt._builder import _axis_tick_text_records
     from mf4_analyzer.batch_render_qt._export import render_scene_image
+
+    # Render 1:1 so the widget.render() reference below stays a valid
+    # comparison. That pins two things at once: the exporter still draws
+    # before it stamps DPI, and QGraphicsScene.render() at 1:1 is
+    # byte-identical to the widget.render() primitive it replaced.
+    monkeypatch.setattr(qt_export, "supersample_factor", lambda width, height: 1)
 
     x = np.linspace(7.0, 128.0, 401)
     spec = BatchTimeFigureSpec(
