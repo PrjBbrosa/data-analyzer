@@ -117,6 +117,12 @@ class SignalPickerPopup(QWidget):
     _DISPLAY_HEIGHT = 38
     _POPUP_MIN_WIDTH = 420
     _LIST_MIN_HEIGHT = 96
+    # Rows shown before the list starts scrolling.  Without a cap the popup
+    # grows to whatever the screen allows — 25 channels ate most of the
+    # display — and, worse, its height then tracked the filter, so the
+    # flip-above decision changed as the user typed.  A fixed row budget
+    # keeps the popup one predictable size.
+    _LIST_MAX_ROWS = 9
     _SUMMARY_MIN_BUDGET = 60
     _SCREEN_MARGIN = 8
     _POPUP_GAP = 4
@@ -173,6 +179,7 @@ class SignalPickerPopup(QWidget):
         self._suppress_signal = False
         self._expanded = False
         self._match_count = 0
+        self._locked_list_height: int | None = None
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -239,18 +246,35 @@ class SignalPickerPopup(QWidget):
         apply_popup_shell(self._popup)
         self._popup.setFrameShape(QFrame.NoFrame)
         self._popup.setAttribute(Qt.WA_StyledBackground, True)
+        # WA_TranslucentBackground (installed by apply_popup_shell) makes the
+        # shell's OWN qss background a no-op, so filling #fff here leaves the
+        # list area see-through on a real screen — offscreen grabs composite
+        # onto black and hide it.  An inner surface carries the fill and the
+        # radius instead, mirroring RenderStylePopover's ``_surface``.
         self._popup.setStyleSheet(
-            "#SignalPickerPopup {background:#fff; border:1px solid #cbd5e1;"
-            " border-radius:9px;}"
+            "#SignalPickerPopup {background:transparent; border:none;}"
         )
         self._popup.setMinimumWidth(self._POPUP_MIN_WIDTH)
         self._popup.setFocusPolicy(Qt.StrongFocus)
-        pop_lay = QVBoxLayout(self._popup)
+        shell_lay = QVBoxLayout(self._popup)
+        shell_lay.setContentsMargins(0, 0, 0, 0)
+        shell_lay.setSpacing(0)
+
+        self._surface = QFrame(self._popup)
+        self._surface.setObjectName("SignalPickerSurface")
+        self._surface.setAttribute(Qt.WA_StyledBackground, True)
+        self._surface.setStyleSheet(
+            "#SignalPickerSurface {background:#fff; border:1px solid #cbd5e1;"
+            " border-radius:9px;}"
+        )
+        shell_lay.addWidget(self._surface)
+
+        pop_lay = QVBoxLayout(self._surface)
         pop_lay.setContentsMargins(6, 6, 6, 6)
         pop_lay.setSpacing(6)
         self._popup_layout = pop_lay
 
-        self._search = QLineEdit(self._popup)
+        self._search = QLineEdit(self._surface)
         self._search.setObjectName("SignalPickerSearch")
         self._search.setPlaceholderText("搜索信号…")
         self._search.setFrame(False)
@@ -269,7 +293,7 @@ class SignalPickerPopup(QWidget):
         # widget that actually holds it.
         self._popup.setFocusProxy(self._search)
 
-        self._list = QListWidget(self._popup)
+        self._list = QListWidget(self._surface)
         self._list.setObjectName("SignalPickerList")
         self._list.setSelectionMode(QListWidget.NoSelection)
         self._list.setFrameShape(QFrame.NoFrame)
@@ -283,13 +307,13 @@ class SignalPickerPopup(QWidget):
             "#SignalPickerList::item {border-radius:5px;}"
             "#SignalPickerList::item:hover {background:#f2f6fb;}"
             "#SignalPickerList QCheckBox {background:transparent;"
-            " color:#26313f; spacing:8px; padding:5px 7px;"
+            " color:#26313f; spacing:8px; padding:2px 7px;"
             " font-family:" + _MONO + "; font-size:" + _MONO_PX + ";}"
             "#SignalPickerList QCheckBox:disabled {color:#98a3b1;}"
         )
         pop_lay.addWidget(self._list, 1)
 
-        self._empty_label = QLabel("无匹配信号", self._popup)
+        self._empty_label = QLabel("无匹配信号", self._surface)
         self._empty_label.setObjectName("SignalPickerEmpty")
         self._empty_label.setAlignment(Qt.AlignCenter)
         self._empty_label.setStyleSheet(
@@ -299,7 +323,7 @@ class SignalPickerPopup(QWidget):
         self._empty_label.hide()
         pop_lay.addWidget(self._empty_label)
 
-        self._foot = QWidget(self._popup)
+        self._foot = QWidget(self._surface)
         self._foot.setObjectName("SignalPickerFoot")
         self._foot.setAttribute(Qt.WA_StyledBackground, True)
         self._foot.setStyleSheet(
@@ -391,6 +415,8 @@ class SignalPickerPopup(QWidget):
     def show_popup(self) -> None:
         if self._popup.isVisible():
             return
+        # Re-measure once per opening; the size then stays put while typing.
+        self._locked_list_height = None
         self._sync_popup_geometry()
         self._popup.show()
         self._popup.raise_()
@@ -489,6 +515,18 @@ class SignalPickerPopup(QWidget):
             screen = QApplication.primaryScreen()
         return screen.availableGeometry() if screen is not None else None
 
+    def _row_budget(self) -> int:
+        """Height of ``_LIST_MAX_ROWS`` rows — anything longer scrolls."""
+
+        row = 0
+        for index in range(self._list.count()):
+            row = self._list.sizeHintForRow(index)
+            if row > 0:
+                break
+        if row <= 0:
+            row = 26
+        return row * self._LIST_MAX_ROWS + 2 * self._list.frameWidth() + 4
+
     def _list_content_height(self) -> int:
         total = 0
         widest = 0
@@ -526,10 +564,24 @@ class SignalPickerPopup(QWidget):
             + self._POPUP_GAP
         )
         cap = max(self._LIST_MIN_HEIGHT, room - chrome)
-        if self._list.isVisibleTo(self._popup):
-            self._list.setFixedHeight(
-                max(32, min(self._list_content_height(), cap))
+        if self._locked_list_height is None:
+            # Measured once per opening, against the unfiltered list, then
+            # held: a popup that resizes while you type also re-decides
+            # whether to open upwards, which reads as the panel jumping.
+            self._locked_list_height = max(
+                32, min(self._list_content_height(), self._row_budget(), cap),
             )
+        height = min(self._locked_list_height, cap)
+        self._list.setFixedHeight(height)
+        # The empty state stands in for the list, so "no matches" does not
+        # collapse the popup to a different size (and a different position).
+        self._empty_label.setFixedHeight(height)
+        # ``adjustSize`` reads the layout, and a ``setVisible`` from this same
+        # turn has not reached it yet: on the empty->matches transition both
+        # the list and the empty label still counted, doubling the popup.
+        # Activating first makes the measurement see current visibility.
+        self._popup_layout.activate()
+        self._popup.layout().activate()
         self._popup.adjustSize()
 
         x = anchor.x()

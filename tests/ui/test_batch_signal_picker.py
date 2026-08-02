@@ -453,3 +453,65 @@ def test_picker_popup_clears_search_when_closed(qtbot):
 
     assert p._search.text() == ""
     assert set(p.visible_items()) == {"vib_x", "temp"}
+
+
+def test_picker_popup_surface_carries_the_background(qtbot):
+    """The rounded shell sets WA_TranslucentBackground, which makes the
+    popup's own qss background a no-op — on a real screen the list area showed
+    the panel behind it while every offscreen test stayed green. An inner
+    surface must paint the fill and the radius instead (CLAUDE.md's
+    "WA_TranslucentBackground 会让本体 QSS 失效 → 需内部子 widget 兜底")."""
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(p)
+
+    assert p._surface.parent() is p._popup
+    assert "background:#fff" in p._surface.styleSheet()
+    assert p._surface.testAttribute(Qt.WA_StyledBackground)
+    # The shell must NOT claim to paint a fill it cannot actually draw.
+    assert "background:#fff" not in p._popup.styleSheet()
+    # Everything the user sees sits on the surface, not on the shell.
+    for child in (p._search, p._list, p._empty_label, p._foot):
+        assert p._surface.isAncestorOf(child)
+
+
+def test_picker_popup_caps_visible_rows(qtbot):
+    """A long channel list must scroll rather than grow the popup to fill the
+    screen (25 channels wanted ~554px of rows)."""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    names = [f"Rte_Module{i:02d}_mLongChannelName_xds16" for i in range(25)]
+    p = SignalPickerPopup(available_signals=names)
+    qtbot.addWidget(p)
+    p.show_popup()
+    qtbot.wait(20)
+
+    assert p._list.height() < p._list_content_height()
+    assert p._list.height() <= p._row_budget()
+    assert p._list.verticalScrollBar().maximum() > 0
+
+
+def test_picker_popup_geometry_is_stable_across_filtering(qtbot):
+    """Popup size/position are measured once per opening and then held.
+
+    A popup whose height tracked the filter also re-decided whether to open
+    upwards, so typing made the whole panel jump — reported from a real
+    macOS run after the option-A rewrite.
+    """
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    names = [f"Rte_Module{i:02d}_mLongChannelName_xds16" for i in range(25)]
+    p = SignalPickerPopup(available_signals=names)
+    qtbot.addWidget(p)
+    p.show_popup()
+    qtbot.wait(20)
+
+    seen = set()
+    for query in ("", "Module0", "zzz-no-match", "", "Module1", ""):
+        p.set_search_text(query)
+        qtbot.wait(10)
+        seen.add((p._popup.height(), p._popup.pos().x(), p._popup.pos().y()))
+
+    assert len(seen) == 1, seen
