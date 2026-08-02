@@ -130,6 +130,7 @@ lesson by default.
 | [Producer Result Contracts Include Mock Consumers](producer-result-contract-mock-consumers.md) | Changing a shared producer from a primitive payload such as a list or | See lesson |
 | [Batch UI Layout Migrations Isolate Hidden And Method State](batch-ui-layout-migrations-isolate-hidden-and-method-state.md) | Replacing a Batch Qt form/layout while retaining compatibility widgets, | See lesson |
 | [Full Qt UI Gate Must Finish Before It Is Evidence](qt-full-ui-stylesheet-gate-must-finish.md) | A change requires the complete `tests/ui` stability gate, especially | See lesson |
+| [Paired Qt Editors Sync Before Aggregate State Reconstruction](paired-qt-editors-sync-before-aggregate-state.md) | A slider and spinbox edit the same value while one handler rebuilds an | See lesson |
 
 ## Selection Rules
 

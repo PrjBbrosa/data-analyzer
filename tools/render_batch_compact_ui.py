@@ -2,7 +2,7 @@
 
 The probe uses the shipped QSS, isolated QSettings, real widget state changes,
 and DPR=1.  It intentionally emits more than one happy-path image: visual
-acceptance needs method, preset, range, output, modal, and footer states at the
+acceptance needs method, preset, range, output, inline-file, and footer states at the
 two supported sizes.
 """
 from __future__ import annotations
@@ -78,6 +78,27 @@ def _sheet_facts(sheet: BatchSheet, name: str) -> dict:
         ],
         "pane_vertical_max": [pane.verticalScrollBar().maximum() for pane in panes],
         "method": sheet.method(),
+        "method_button_widths": {
+            key: button.width()
+            for key, button in sheet._analysis_panel._method_group._buttons.items()
+        },
+        "time_x_axis": {
+            "source": form._w_x_source.currentData(),
+            "channel_visible": _visible_to(form._field_hosts["x_channel"], sheet),
+            "origin_visible": _visible_to(form._field_hosts["x_origin"], sheet),
+            "channel_slot": [
+                form._field_hosts["x_channel"].x(),
+                form._field_hosts["x_channel"].y(),
+                form._field_hosts["x_channel"].width(),
+                form._field_hosts["x_channel"].height(),
+            ],
+            "origin_slot": [
+                form._field_hosts["x_origin"].x(),
+                form._field_hosts["x_origin"].y(),
+                form._field_hosts["x_origin"].width(),
+                form._field_hosts["x_origin"].height(),
+            ],
+        },
         "grouping": grouping.mode() if grouping is not None else "",
         "preset_state": sheet._analysis_panel.preset_state_text(),
         "source_interval_visible": _visible_to(
@@ -111,6 +132,18 @@ def _sheet_facts(sheet: BatchSheet, name: str) -> dict:
         "filter_time_options_visible": _visible_to(
             sheet._input_panel._filter_panel._time_options, sheet,
         ),
+        "inline_files": {
+            "facts": sheet._input_panel._file_facts.text(),
+            "status": sheet._input_panel._file_ready.text(),
+            "row_count": sheet._input_panel._file_list._list.count(),
+            "empty_visible": _visible_to(
+                sheet._input_panel._file_list._empty_label, sheet,
+            ),
+            "list_height": sheet._input_panel._file_list._list.height(),
+            "list_scroll_max": (
+                sheet._input_panel._file_list._list.verticalScrollBar().maximum()
+            ),
+        },
     }
 
 
@@ -206,6 +239,27 @@ def main() -> int:
         _save_sheet_state(
             app, sheet, out_dir, f"1080-time-group-{mode}", state_facts,
         )
+    form = sheet._analysis_panel._param_form
+    form.apply_params({"x_source": "time", "x_origin": "absolute"})
+    _process(app)
+    _save_sheet_state(app, sheet, out_dir, "1080-time-x-origin", state_facts)
+    origin_slot = form._field_hosts["x_origin"].geometry()
+    form.apply_params({"x_source": "channel", "x_channel": "Rte_Rpm"})
+    _process(app)
+    channel_slot = form._field_hosts["x_channel"].geometry()
+    if not form._field_hosts["x_channel"].isVisibleTo(sheet):
+        raise AssertionError("channel X source must reveal its dependent slot")
+    if form._field_hosts["x_origin"].isVisibleTo(sheet):
+        raise AssertionError("channel X source must hide the time-origin host")
+    if any(
+        abs(actual - expected) > 1
+        for actual, expected in zip(
+            (channel_slot.x(), channel_slot.y(), channel_slot.width(), channel_slot.height()),
+            (origin_slot.x(), origin_slot.y(), origin_slot.width(), origin_slot.height()),
+        )
+    ):
+        raise AssertionError("TimeDomain X dependent field moved out of its slot")
+    _save_sheet_state(app, sheet, out_dir, "1080-time-x-channel", state_facts)
     sheet._input_panel._filter_panel._enable_switch.setChecked(True)
     _save_sheet_state(
         app, sheet, out_dir, "1080-time-filter-expanded", state_facts,
@@ -216,41 +270,62 @@ def main() -> int:
     if sheet._analysis_panel.source_interval_widget().isVisibleTo(sheet):
         raise AssertionError("time mode must not expose FFT source interval")
 
-    sheet._input_panel.open_file_manager()
-    _process(app)
-    manager = sheet._input_panel._file_manager_dialog
-    _save(manager, out_dir / "1080-file-manager.png")
-    modal_facts = [{
-        "name": "1080-file-manager",
-        "size": [manager.width(), manager.height()],
-        "facts": sheet._input_panel._file_manager_facts.text(),
-        "structured_rows": sheet._input_panel._file_list.property("structuredRows"),
-        "row_count": sheet._input_panel._file_list._list.count(),
-    }]
-    manager.close()
+    _save_sheet_state(
+        app, sheet, out_dir, "1080-input-inline-ready", state_facts,
+    )
 
     sheet._input_panel._file_list._set_row_state(
         "drive_front.mf4", "probe_failed",
     )
+    sheet._input_panel._file_list._set_row_state(
+        "drive_rear.mf4", "probing",
+    )
     _save_sheet_state(
         app, sheet, out_dir, "1080-input-partial-failure", state_facts,
     )
-    sheet._input_panel.open_file_manager()
-    _process(app)
-    _save(manager, out_dir / "1080-file-manager-partial-failure.png")
-    modal_facts.append({
-        "name": "1080-file-manager-partial-failure",
-        "size": [manager.width(), manager.height()],
-        "facts": sheet._input_panel._file_manager_facts.text(),
-        "structured_rows": sheet._input_panel._file_list.property("structuredRows"),
-        "row_count": sheet._input_panel._file_list._list.count(),
-    })
-    manager.close()
     sheet._input_panel._file_list._set_row_state("drive_front.mf4", "loaded")
+    sheet._input_panel._file_list._set_row_state("drive_rear.mf4", "loaded")
+
+    extra_paths = []
+    for index in range(4, 9):
+        path = f"long_batch_source_{index}.mf4"
+        extra_paths.append(path)
+        sheet._input_panel._file_list.add_loaded_file(
+            f"source-{index}", path,
+            frozenset({"Rte_ActRet", "Rte_MotorTorque", "Rte_Rpm"}),
+        )
+    _save_sheet_state(
+        app, sheet, out_dir, "1080-input-inline-long-list", state_facts,
+    )
+    for path in extra_paths:
+        sheet._input_panel._file_list.remove_path(path)
 
     sheet.apply_method("fft")
     sheet._analysis_panel._preset_buttons["torque"].click()
     _save_sheet_state(app, sheet, out_dir, "1080-fft-applied", state_facts)
+    sheet._output_panel._on_render_style_clicked()
+    _process(app)
+    render_style_popover = sheet._output_panel._render_style_popover
+    _save(render_style_popover, out_dir / "1080-render-style-default.png")
+    render_style_popover._slider_x.setValue(20)
+    render_style_popover._slider_y.setValue(14)
+    render_style_popover._slider_font.setValue(125)
+    _process(app)
+    _save(render_style_popover, out_dir / "1080-render-style-custom.png")
+    render_style_facts = {
+        "slider": [
+            render_style_popover._slider_x.value(),
+            render_style_popover._slider_y.value(),
+            render_style_popover._slider_font.value(),
+        ],
+        "spin": [
+            render_style_popover._spin_x.value(),
+            render_style_popover._spin_y.value(),
+            render_style_popover._spin_font.value(),
+        ],
+        "recipe": sheet._output_panel.render_style_params(),
+    }
+    render_style_popover.hide()
     _save_sheet_state(app, sheet, out_dir, "gui-default-linewidth", state_facts)
     sheet._output_panel.combo_amp_unit.setCurrentText("Linear")
     _save_sheet_state(app, sheet, out_dir, "fft-linear", state_facts)
@@ -326,7 +401,7 @@ def main() -> int:
             ).strip()),
         },
         "states": state_facts,
-        "modals": modal_facts,
+        "render_style": render_style_facts,
         "fft_export_contract": {
             "data_format": "xlsx",
             "image_format": "png",

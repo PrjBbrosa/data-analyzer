@@ -8,10 +8,12 @@ old unit's numeric Z range must NOT bleed into the new unit. See spec
 from __future__ import annotations
 
 import pytest
-from PyQt5.QtCore import QPoint, Qt
-from PyQt5.QtGui import QValidator
+from PyQt5.QtCore import QPoint, QRect, Qt
+from PyQt5.QtGui import QGuiApplication, QValidator
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QGroupBox, QPushButton, QWidget
+from PyQt5.QtWidgets import (
+    QGroupBox, QPushButton, QScrollArea, QStyle, QStyleOptionSlider, QWidget,
+)
 
 
 def _make_panel(qtbot):
@@ -19,6 +21,21 @@ def _make_panel(qtbot):
     panel = OutputPanel()
     qtbot.addWidget(panel)
     return panel
+
+
+def _anchor_screen_geometry(anchor: QWidget) -> QRect:
+    center = anchor.mapToGlobal(anchor.rect().center())
+    screen = QGuiApplication.screenAt(center) or QGuiApplication.primaryScreen()
+    assert screen is not None
+    return screen.availableGeometry()
+
+
+def _assert_popup_inside_screen(popover, available: QRect) -> None:
+    frame = popover.frameGeometry()
+    assert frame.left() >= available.left() + 8
+    assert frame.right() <= available.right() - 8
+    assert frame.top() >= available.top() + 8
+    assert frame.bottom() <= available.bottom() - 8
 
 
 def test_batch_output_panel_axis_settings_uses_inspector_layout(qtbot):
@@ -404,6 +421,195 @@ def test_batch_output_render_style_button_opens_a_popover(qtbot):
     # Re-applying from a preset keeps the open popover in sync.
     panel.apply_render_style_params({"tick_density_x": 24, "tick_density_y": 16})
     assert popover.style().tick_density_x == 24
+
+
+def test_batch_render_style_popover_clamps_to_anchor_screen_edges_and_reopens(
+    qtbot,
+):
+    """Real Qt geometry: both screen corners stay in-bounds and stable."""
+    from mf4_analyzer.ui.drawers.batch.render_style_popover import (
+        RenderStylePopover,
+    )
+
+    host = QWidget()
+    host.resize(64, 44)
+    anchor = QPushButton("刻度", host)
+    anchor.resize(48, 28)
+    anchor.move(8, 8)
+    qtbot.addWidget(host)
+    popover = RenderStylePopover(host)
+    qtbot.addWidget(popover)
+
+    available = _anchor_screen_geometry(host)
+    host.move(available.left(), available.top())
+    host.show()
+    qtbot.wait(20)
+    popover.show_at(anchor)
+    qtbot.wait(20)
+    _assert_popup_inside_screen(popover, _anchor_screen_geometry(anchor))
+    assert popover.frameGeometry().top() >= anchor.mapToGlobal(
+        anchor.rect().bottomLeft()
+    ).y()
+    popover.hide()
+
+    host.move(
+        available.right() - host.width() + 1,
+        available.bottom() - host.height() + 1,
+    )
+    qtbot.wait(20)
+    popover.show_at(anchor)
+    qtbot.wait(20)
+    anchor_top = anchor.mapToGlobal(anchor.rect().topLeft()).y()
+    _assert_popup_inside_screen(popover, _anchor_screen_geometry(anchor))
+    assert popover.frameGeometry().bottom() + 4 < anchor_top
+
+    positions = []
+    for _unused in range(3):
+        popover.hide()
+        popover.show_at(anchor)
+        qtbot.wait(10)
+        positions.append(popover.pos())
+    assert positions == [positions[0]] * 3
+
+
+def test_batch_render_style_popover_clamps_negative_screen_when_neither_side_fits(
+    qtbot, monkeypatch,
+):
+    """The fallback geometry path is deterministic on a negative monitor."""
+    from mf4_analyzer.ui.drawers.batch.render_style_popover import (
+        RenderStylePopover,
+    )
+
+    host = QWidget()
+    host.resize(64, 44)
+    anchor = QPushButton("刻度", host)
+    anchor.resize(48, 28)
+    anchor.move(0, 8)
+    qtbot.addWidget(host)
+    popover = RenderStylePopover(host)
+    qtbot.addWidget(popover)
+    popover.adjustSize()
+    available = QRect(-1200, 40, 600, popover.height() + 32)
+    host.move(available.left() + 2, available.center().y() - host.height() // 2)
+    host.show()
+    qtbot.wait(20)
+    monkeypatch.setattr(
+        popover, "_available_geometry_for", lambda _anchor: available,
+    )
+
+    popover.show_at(anchor)
+    qtbot.wait(20)
+
+    _assert_popup_inside_screen(popover, available)
+    assert popover.frameGeometry().left() == available.left() + 8
+    assert popover.frameGeometry().top() == (
+        available.bottom() - 8 - popover.height() + 1
+    )
+
+
+def test_batch_output_render_style_popover_closes_when_host_moves_or_resizes(qtbot):
+    panel = _make_panel(qtbot)
+    panel.resize(430, 720)
+    panel.show()
+    qtbot.wait(20)
+
+    panel._on_render_style_clicked()
+    popover = panel._render_style_popover
+    assert popover.isVisible()
+    assert panel._btn_render_style.isChecked()
+
+    panel.move(panel.pos() + QPoint(30, 0))
+    qtbot.wait(20)
+    assert not popover.isVisible()
+    assert not panel._btn_render_style.isChecked()
+
+    panel._on_render_style_clicked()
+    assert popover.isVisible()
+    panel.resize(440, 720)
+    qtbot.wait(20)
+    assert not popover.isVisible()
+    assert not panel._btn_render_style.isChecked()
+
+
+def test_batch_output_render_style_popover_closes_when_output_pane_scrolls(qtbot):
+    from mf4_analyzer.ui.drawers.batch.output_panel import OutputPanel
+
+    scroll = QScrollArea()
+    content = QWidget()
+    content.resize(430, 1200)
+    panel = OutputPanel(content)
+    panel.setGeometry(0, 0, 420, 720)
+    scroll.setWidget(content)
+    scroll.resize(360, 300)
+    qtbot.addWidget(scroll)
+    scroll.show()
+    qtbot.wait(20)
+
+    anchor = panel._btn_render_style
+    scroll.ensureWidgetVisible(anchor)
+    qtbot.wait(20)
+    panel._on_render_style_clicked()
+    popover = panel._render_style_popover
+    assert popover.isVisible()
+
+    bar = scroll.verticalScrollBar()
+    target = min(bar.maximum(), bar.value() + 30)
+    assert target > bar.value()
+    bar.setValue(target)
+    qtbot.wait(20)
+
+    assert not popover.isVisible()
+    assert not panel._btn_render_style.isChecked()
+
+
+@pytest.mark.parametrize(
+    ("slider_name", "spin_name", "param_name"),
+    (
+        ("_slider_x", "_spin_x", "tick_density_x"),
+        ("_slider_y", "_spin_y", "tick_density_y"),
+        ("_slider_font", "_spin_font", "font_scale"),
+    ),
+)
+def test_batch_render_style_sliders_drag_and_sync_to_recipe(
+    qtbot, slider_name, spin_name, param_name,
+):
+    panel = _make_panel(qtbot)
+    panel.resize(430, 720)
+    panel.show()
+    panel._on_render_style_clicked()
+    popover = panel._render_style_popover
+    popover.show()
+    qtbot.wait(20)
+
+    slider = getattr(popover, slider_name)
+    spin = getattr(popover, spin_name)
+    start = slider.value()
+    emissions = []
+    panel.changed.connect(lambda: emissions.append(panel.render_style()))
+    option = QStyleOptionSlider()
+    slider.initStyleOption(option)
+    handle = slider.style().subControlRect(
+        QStyle.CC_Slider, option, QStyle.SC_SliderHandle, slider,
+    )
+    target = QPoint(slider.width() - 5, handle.center().y())
+
+    QTest.mousePress(slider, Qt.LeftButton, pos=handle.center())
+    QTest.mouseMove(slider, target, delay=10)
+    QTest.mouseRelease(slider, Qt.LeftButton, pos=target)
+    qtbot.wait(20)
+
+    assert slider.value() != start
+    assert spin.value() == slider.value()
+    assert len(emissions) == 1
+    expected = slider.value() / 100.0 if param_name == "font_scale" else slider.value()
+    assert panel.render_style_params()[param_name] == pytest.approx(expected)
+    assert str(slider.value()) in panel._render_style_summary.text()
+
+    popover.hide()
+    panel._on_render_style_clicked()
+    qtbot.wait(20)
+    assert getattr(popover, slider_name).value() == slider.value()
+    assert getattr(popover, spin_name).value() == slider.value()
 
 
 def test_batch_output_db_reference_auto_manual_round_trip_and_legacy(qtbot):

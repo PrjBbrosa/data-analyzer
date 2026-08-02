@@ -319,7 +319,9 @@ QLabel#BatchParamLabel {
     background-color: transparent;
 }
 QPushButton#BatchAnalysisPresetCard {
-    min-height: 61px;
+    /* 54px content + 5px top/bottom padding + 1px borders = 66px surface. */
+    min-height: 54px;
+    max-height: 54px;
     padding: 5px 7px;
     border: 1px solid #d7e2f0;
     border-radius: 8px;
@@ -327,6 +329,11 @@ QPushButton#BatchAnalysisPresetCard {
     color: #334155;
     font-size: 11px;
     font-weight: 600;
+}
+/* Compact cards retain a 40px outer surface under the shared card chrome. */
+QPushButton#BatchAnalysisPresetCard[compact="true"] {
+    min-height: 28px;
+    max-height: 28px;
 }
 QPushButton#BatchAnalysisPresetCard:hover {
     border-color: #9fc1ee;
@@ -375,22 +382,14 @@ QPushButton#BatchGroupingCard:checked {
     background-color: #eef5ff;
     color: #0f4fa8;
 }
-QFrame#BatchFileSummary {
+QFrame#BatchInlineFileManager {
     border: 1px solid #d7e2f0;
     border-radius: 9px;
     background-color: #ffffff;
 }
 QLabel#BatchSectionTitle { color: #26344a; font-size: 12px; font-weight: 700; }
 QLabel#BatchSectionNote { color: #94a3b8; font-size: 10px; }
-QLabel#BatchFileSummaryIcon {
-    color: #1769e0;
-    border: 1px solid #aac4ea;
-    border-radius: 5px;
-    background-color: #eaf2ff;
-    font-size: 9px;
-    font-weight: 800;
-}
-QLabel#BatchFileSummaryText { color: #334155; font-size: 10px; font-weight: 600; }
+QLabel#BatchFileFacts { color: #64748b; font-size: 9px; }
 QLabel#BatchFileReadyPill {
     padding: 3px 7px;
     border-radius: 9px;
@@ -407,19 +406,26 @@ QLabel#BatchFileReadyPill[status="error"] {
     color: #b42335;
     background-color: #fff0f2;
 }
-QPushButton#BatchManageFilesButton { min-height: 24px; padding: 3px 8px; }
-QDialog#BatchFileManagerDialog {
-    border: 1px solid #d7e2f0;
-    border-radius: 10px;
-    background-color: #ffffff;
+/* The outer frame exclusively paints this rounded surface.  Its touching
+ * children remain transparent so they cannot square off the parent's arc. */
+QWidget#BatchInlineFileManagerBody,
+QListWidget#BatchFileList,
+QListWidget#BatchFileList::viewport,
+QWidget#BatchStructuredFileRow,
+QWidget#BatchFileRowCopy,
+QLabel#BatchFileEmptyState {
+    background-color: transparent;
 }
-QWidget#BatchFileManagerHeader {
-    border-bottom: 1px solid #dbe4ef;
-    background-color: #ffffff;
+QPushButton#BatchFileAddLoaded,
+QPushButton#BatchFileAddDisk {
+    min-height: 24px;
+    padding: 3px 8px;
 }
-QLabel#BatchFileManagerTitle { color: #172033; font-size: 13px; font-weight: 700; }
-QLabel#BatchFileManagerFacts { color: #64748b; font-size: 10px; }
-QPushButton#BatchFileManagerClose,
+QPushButton#BatchFileAddLoaded {
+    color: #0f56bd;
+    border-color: #bdd2f0;
+    background-color: #f4f8fe;
+}
 QPushButton#BatchFileRowRemove {
     border: none;
     border-radius: 6px;
@@ -428,21 +434,24 @@ QPushButton#BatchFileRowRemove {
     padding: 0;
 }
 QPushButton#BatchFileRowRemove { background-color: transparent; }
-QPushButton#BatchFileManagerClose:hover,
 QPushButton#BatchFileRowRemove:hover {
     color: #dc3f52;
     background-color: #fff0f2;
 }
 QListWidget#BatchFileList {
-    border: 1px solid #dbe4ef;
-    border-radius: 8px;
-    background-color: #ffffff;
+    border: none;
+    border-top: 1px solid #edf1f6;
+    border-radius: 0;
     outline: none;
     padding: 4px;
 }
+QLabel#BatchFileEmptyState {
+    border-top: 1px solid #edf1f6;
+    color: #64748b;
+    font-size: 10px;
+}
 QWidget#BatchStructuredFileRow {
     border-bottom: 1px solid #edf1f6;
-    background-color: #ffffff;
 }
 QLabel#BatchFileStateDot { border-radius: 4px; background-color: #f0a100; }
 QLabel#BatchFileStateDot[ready="true"] { background-color: #0ea875; }

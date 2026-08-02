@@ -247,6 +247,59 @@ def _render_widget(widget):
     return img
 
 
+def _render_widget_at_dpr(widget, dpr: int):
+    """Render a real Qt widget at a logical DPR without token-only checks."""
+    img = QImage(
+        widget.width() * dpr, widget.height() * dpr,
+        QImage.Format_ARGB32_Premultiplied,
+    )
+    img.setDevicePixelRatio(float(dpr))
+    img.fill(0)
+    painter = QPainter(img)
+    widget.render(painter)
+    painter.end()
+    return img
+
+
+def _is_visible_border_ink(color: QColor) -> bool:
+    """Recognize the anti-aliased blue-grey border against the white fill."""
+    return color.alpha() > 200 and min(color.red(), color.green(), color.blue()) < 250
+
+
+def _assert_continuous_rounded_border_arc(img: QImage, dpr: int) -> None:
+    """Verify every corner contains a connected visible inner border profile.
+
+    Checking only the extreme corner alpha misses the real regression: a
+    rectangular child can leave that pixel alone while painting white over the
+    anti-aliased inner arc.  Six samples cross the arc from each straight edge.
+    """
+    extent = 9 * dpr
+    width = img.width()
+    height = img.height()
+
+    def has_ink(points) -> bool:
+        return any(_is_visible_border_ink(QColor(img.pixelColor(x, y))) for x, y in points)
+
+    for logical_offset in range(1, 7):
+        offset = logical_offset * dpr
+        assert has_ink((x, offset) for x in range(extent + 1))
+        assert has_ink(
+            (width - 1 - x, offset) for x in range(extent + 1)
+        )
+        assert has_ink(
+            (x, height - 1 - offset) for x in range(extent + 1)
+        )
+        assert has_ink(
+            (width - 1 - x, height - 1 - offset)
+            for x in range(extent + 1)
+        )
+
+    assert has_ink(((width // 2, 0),))
+    assert has_ink(((width // 2, height - 1),))
+    assert has_ink(((0, height // 2),))
+    assert has_ink(((width - 1, height // 2),))
+
+
 def _corner_alphas(widget):
     img = _render_widget(widget)
     w = img.width() - 1
@@ -280,6 +333,51 @@ def _has_opaque_white_body(widget):
         ):
             return True
     return False
+
+
+def test_batch_inline_file_manager_keeps_rounded_border_arcs_with_real_children(
+    qapp, qtbot,
+):
+    """The inline body/list viewport must never overpaint the parent arc."""
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    old = _apply_app_qss(qapp)
+    try:
+        panel = InputPanel()
+        qtbot.addWidget(panel)
+        panel.resize(360, 700)
+        panel.show()
+        qtbot.wait(20)
+
+        for row_count in (0, 4, 8):
+            while panel._file_list._list.count() < row_count:
+                index = panel._file_list._list.count()
+                panel._file_list.add_loaded_file(
+                    f"source-{index}", f"/tmp/source-{index}.mf4", frozenset({"A"}),
+                )
+            qapp.processEvents()
+            if row_count == 8:
+                assert (
+                    panel._file_list._list.verticalScrollBar().maximum()
+                    > panel._file_list._list.verticalScrollBar().minimum()
+                )
+                panel._file_list._list.verticalScrollBar().setValue(
+                    panel._file_list._list.verticalScrollBar().maximum()
+                )
+                qapp.processEvents()
+
+            host = panel._file_manager_host
+            assert host.height() == 250
+            for dpr in (1, 2):
+                image = _render_widget_at_dpr(host, dpr)
+                _assert_continuous_rounded_border_arc(image, dpr)
+                center = QColor(image.pixelColor(
+                    image.width() // 2, image.height() // 2,
+                ))
+                assert center.alpha() > 245
+                assert min(center.red(), center.green(), center.blue()) > 245
+    finally:
+        qapp.setStyleSheet(old)
 
 
 def test_surface_version_affordance_is_transparent_icon_text(qapp, qtbot):

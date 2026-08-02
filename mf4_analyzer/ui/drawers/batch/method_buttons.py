@@ -60,12 +60,23 @@ class MethodButtonGroup(QWidget):
             )
             self._group.addButton(btn)
             self._buttons[key] = btn
-            # Keep all four methods on one compact row while giving the only
-            # long label enough space at the supported 288 px pane width.
-            lay.addWidget(btn, 2 if key == "fft_time" else 1)
+            lay.addWidget(btn, 1)
         # Default to FFT.
         self._current = "fft"
         self._buttons["fft"].setChecked(True)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        # Equal visual cells are the product contract.  Only at the narrow
+        # 288 px pane boundary does the long label need a modestly condensed
+        # face; normal BatchSheet widths keep all four labels typographically
+        # consistent.
+        button = self._buttons["fft_time"]
+        font = button.font()
+        stretch = 80 if self.width() < 320 else 100
+        if font.stretch() != stretch:
+            font.setStretch(stretch)
+            button.setFont(font)
 
     def _on_button_clicked(self, method: str) -> None:
         """Apply a user selection only when it changes the active method."""
@@ -1084,6 +1095,14 @@ class DynamicParamForm(QWidget):
                 self._grid.addWidget(host, row, 0, 1, 2)
                 row += 1
                 column = 0
+                continue
+            if name in {"x_channel", "x_origin"}:
+                # The time-origin and custom-channel editors are two semantic
+                # variants of one dependent X-axis slot.  Keep both hosts in
+                # the same right-column grid cell; _sync_x_source() makes
+                # exactly one visible without moving the active editor left.
+                self._field_labels[name].show()
+                self._grid.addWidget(host, row, 1)
                 continue
             self._field_labels[name].show()
             self._grid.addWidget(host, row, column)

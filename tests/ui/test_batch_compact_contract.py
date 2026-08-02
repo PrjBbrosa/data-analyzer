@@ -119,16 +119,19 @@ def test_time_grouping_cards_explain_source_and_signal_semantics(qtbot):
     assert form.get_params()["render_group_by"] == "channel"
 
 
-def test_compact_input_uses_a_fixed_summary_and_modal_source_manager(qtbot):
+def test_compact_input_exposes_file_management_on_the_first_level(qtbot):
     from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
 
     panel = InputPanel()
-    qtbot.addWidget(panel)
+    _show_at(qtbot, panel, 360, 700)
 
-    assert panel._file_summary.parentWidget().height() == 54
-    assert not panel._file_manager_dialog.isVisible()
-    panel.open_file_manager()
-    assert panel._file_manager_dialog.isVisible()
+    assert not hasattr(panel, "_file_manager_dialog")
+    assert not hasattr(panel, "_btn_manage_files")
+    assert panel._file_list.isVisibleTo(panel)
+    assert panel._file_list._btn_loaded.isVisibleTo(panel)
+    assert panel._file_list._btn_disk.isVisibleTo(panel)
+    assert panel._file_list._empty_label.isVisibleTo(panel)
+    assert panel._file_list._list.isHidden()
 
 
 def test_runner_events_project_to_compact_footer_not_task_list(qtbot):
@@ -230,18 +233,46 @@ def test_grouping_cards_expose_html_wave_semantics_and_geometry(qtbot):
     assert form._w_render_group_by.isHidden() is True
 
 
-def test_spectral_presets_use_html_cards_with_parameter_summaries(qtbot):
+def test_spectral_presets_use_html_cards_with_parameter_summaries(qapp, qtbot):
+    from pathlib import Path
+
     from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
 
-    panel = AnalysisPanel()
-    qtbot.addWidget(panel)
-    panel.set_method("fft")
+    old = qapp.styleSheet()
+    try:
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        panel = AnalysisPanel()
+        qtbot.addWidget(panel)
+        panel.resize(500, 700)
+        panel.show()
+        panel.set_method("fft")
+        qapp.processEvents()
 
-    assert all(button.minimumHeight() >= 61 for button in panel._preset_buttons.values())
-    assert all(button.summary_text() for button in panel._preset_buttons.values())
-    panel.set_compact_mode(True)
-    assert all(button.minimumHeight() == 38 for button in panel._preset_buttons.values())
-    assert all(not button.summary_visible() for button in panel._preset_buttons.values())
+        assert all(button.height() == 66 for button in panel._preset_buttons.values())
+        assert all(button.summary_text() for button in panel._preset_buttons.values())
+        panel.set_compact_mode(True)
+        qapp.processEvents()
+        assert all(button.height() == 40 for button in panel._preset_buttons.values())
+        assert all(not button.summary_visible() for button in panel._preset_buttons.values())
+    finally:
+        qapp.setStyleSheet(old)
+
+
+def test_batch_preset_card_qss_matches_normal_and_compact_outer_heights():
+    from pathlib import Path
+
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+
+    normal = qss.split("QPushButton#BatchAnalysisPresetCard {")[1].split("}", 1)[0]
+    compact = qss.split(
+        'QPushButton#BatchAnalysisPresetCard[compact="true"] {'
+    )[1].split("}", 1)[0]
+    assert "min-height: 54px;" in normal
+    assert "max-height: 54px;" in normal
+    assert "min-height: 28px;" in compact
+    assert "max-height: 28px;" in compact
 
 
 def test_output_uses_bordered_axis_card_instead_of_flat_inspector_group(qtbot):
@@ -256,16 +287,32 @@ def test_output_uses_bordered_axis_card_instead_of_flat_inspector_group(qtbot):
     assert "border: none" not in panel._axis_group.styleSheet()
 
 
-def test_file_manager_uses_compact_structured_modal_shell(qtbot):
+def test_file_manager_uses_compact_structured_inline_shell(qtbot):
     from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
 
     panel = InputPanel()
-    qtbot.addWidget(panel)
+    _show_at(qtbot, panel, 360, 700)
     panel._file_list.add_loaded_file("s1", "/tmp/drive_front.mf4", frozenset({"A"}))
-    panel.open_file_manager()
     qtbot.wait(20)
 
-    assert panel._file_manager_dialog.width() <= 560
-    assert panel._file_manager_header.isVisibleTo(panel._file_manager_dialog)
-    assert panel._file_manager_facts.text().startswith("1 个数据源")
+    assert panel._file_manager_host.isVisibleTo(panel)
+    assert panel._file_facts.text().startswith("1 个数据源")
     assert panel._file_list.property("structuredRows") is True
+    assert panel._file_list._list.isVisibleTo(panel)
+    assert panel._file_list._empty_label.isHidden()
+    assert panel._file_list._list.height() <= 208
+
+    item = panel._file_list._list.item(0)
+    assert item.text() == ""
+    assert item.data(Qt.AccessibleTextRole).startswith("drive_front.mf4")
+    row = panel._file_list._list.itemWidget(item)
+    remove = row.findChild(type(panel._file_list._btn_disk), "BatchFileRowRemove")
+    assert remove is not None
+    assert remove.width() >= 28
+    assert remove.height() >= 28
+
+    remove.click()
+    qtbot.wait(20)
+    assert panel._file_list._empty_label.isVisibleTo(panel)
+    assert panel._file_list._list.isHidden()
+    assert panel._file_facts.text().startswith("0 个数据源")

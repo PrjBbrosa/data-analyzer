@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231769e0'/%3E%3Cpath d='M3 10c2-5 3 3 5-2s3 1 5-2' fill='none' stroke='white' stroke-width='1.4'/%3E%3C/svg%3E">
+<title>TraceLab — 第一层文件管理方案</title>
+<style>
+  :root {
+    --ink:#172033; --ink2:#334155; --muted:#64748b; --quiet:#94a3b8;
+    --line:#dbe4ef; --strong:#c8d4e3; --surface:#fff; --soft:#f7f9fc;
+    --blue:#1769e0; --blue2:#0f56bd; --blueSoft:#eaf2ff;
+    --green:#0ea875; --greenSoft:#e9f8f2; --amber:#ef8c00;
+    --amberSoft:#fff5df; --danger:#dc3f52; --dangerSoft:#fff0f2;
+    --font:"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;
+    --mono:"SF Mono","Menlo","Cascadia Mono",monospace;
+  }
+  *{box-sizing:border-box} html,body{height:100%} body{margin:0;min-width:1080px;color:var(--ink);font-family:var(--font);background:#e8edf4}
+  button,input,select{font:inherit} button{color:inherit;cursor:pointer}
+  button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid rgba(23,105,224,.32);outline-offset:2px}
+  .stage{min-height:100%;display:grid;place-items:center;padding:12px;background:#e8edf4}
+  .window{width:min(1320px,calc(100vw - 24px));height:min(820px,calc(100vh - 24px));min-height:720px;display:grid;grid-template-rows:50px 62px minmax(0,1fr) 54px;overflow:hidden;border:1px solid #c3cfdd;border-radius:16px;background:#fff;box-shadow:0 24px 64px rgba(34,50,73,.20)}
+  .titlebar{display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid #e8edf4;background:#fbfcfe}
+  .traffic{width:12px;height:12px;border-radius:50%}.red{background:#ff5f57}.yellow{background:#febc2e}.green{background:#28c840}
+  .title{margin-left:8px;font-size:13px;font-weight:760;color:#4b596c}.meta{font-size:11px;color:var(--quiet)}
+  .toolbar{margin-left:auto;display:flex;gap:7px}.toolbar button{height:32px;padding:0 11px;border:1px solid var(--strong);border-radius:8px;background:#fff;font-size:11px;font-weight:700}
+  .toolbar .sync{color:var(--blue2);border-color:#c8dbf7;background:#f3f7fe}
+  .pipeline,.workspace{display:grid;grid-template-columns:29% 39% 32%}.pipeline{border-bottom:1px solid var(--line)}
+  .stage-summary{display:grid;grid-template-columns:24px minmax(0,1fr);align-items:center;gap:8px;padding:9px 18px;border-right:1px solid var(--line)}.stage-summary:last-child{border-right:0}
+  .num{width:24px;height:24px;display:grid;place-items:center;border-radius:7px;color:#fff;font:800 10px/1 var(--mono)}.input .num{background:var(--blue)}.analysis .num{background:#0ea875}.output .num{background:var(--amber)}
+  .fact{min-width:0;display:flex;gap:9px;align-items:baseline}.fact b{font-size:12px}.input .fact b{color:var(--blue)}.analysis .fact b{color:#0b8e65}.output .fact b{color:#c97900}.fact span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px}
+  .workspace{min-height:0}.panel{min-width:0;min-height:0;overflow-y:auto;padding:16px 18px 20px;border-right:1px solid var(--line);scrollbar-width:thin;scrollbar-color:#cbd6e4 transparent}.panel:last-child{border-right:0}.analysis-panel{background:#fcfefd}.output-panel{background:#fffdfa}
+  .block+.block{margin-top:17px;padding-top:16px;border-top:1px solid #e8edf4}.block-head{min-height:27px;display:flex;align-items:center;margin-bottom:9px}.block-title{font-size:12px;font-weight:790;color:#26344a}.block-fact{margin-left:auto;color:var(--muted);font-size:9.5px}
+  .state-pill{margin-left:7px;padding:4px 7px;border-radius:10px;color:#087453;background:var(--greenSoft);font-size:9px;font-weight:760}.state-pill.pending{color:#936000;background:var(--amberSoft)}.state-pill.error{color:#b42335;background:var(--dangerSoft)}
+
+  .file-manager{overflow:visible;border:1px solid var(--strong);border-radius:10px;background:#fff}
+  .file-actions{position:relative;display:flex;align-items:center;gap:7px;padding:9px;border-bottom:1px solid #edf1f6;background:#fbfcfe;border-radius:9px 9px 0 0}
+  .action{height:32px;padding:0 10px;border:1px solid var(--strong);border-radius:7px;background:#fff;font-size:10.5px;font-weight:720}.action.primary{color:var(--blue2);border-color:#bdd2f0;background:#f4f8fe}.action:hover{border-color:#9fb1c8;background:#f8fbff}
+  .action-note{margin-left:auto;color:var(--quiet);font-size:9px}.loaded-menu{position:absolute;z-index:4;left:9px;top:44px;width:205px;padding:5px;border:1px solid var(--strong);border-radius:8px;background:#fff;box-shadow:0 10px 30px rgba(33,48,70,.18)}.loaded-menu[hidden]{display:none}.loaded-menu button{width:100%;padding:8px;border:0;border-radius:5px;text-align:left;background:#fff;font-size:10px}.loaded-menu button:hover{background:var(--blueSoft)}
+  .file-list{max-height:174px;overflow-y:auto;padding:0 9px;scrollbar-width:thin;scrollbar-color:#cbd6e4 transparent}
+  .file-row{min-height:54px;display:grid;grid-template-columns:10px minmax(0,1fr) auto 28px;align-items:center;gap:8px;border-bottom:1px solid #edf1f6}.file-row:last-child{border-bottom:0}
+  .status-dot{width:8px;height:8px;border-radius:50%;background:var(--green)}.status-dot.pending{background:var(--amber);box-shadow:0 0 0 3px rgba(239,140,0,.10)}.status-dot.error{background:var(--danger)}
+  .file-copy{min-width:0}.file-copy b,.file-copy small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-copy b{font-size:10.5px}.file-copy small{margin-top:3px;color:var(--muted);font-size:8.7px;font-family:var(--mono)}
+  .row-state{color:#087453;font-size:9px;font-weight:700}.row-state.pending{color:#936000}.row-state.error{color:#b42335}.remove{width:28px;height:28px;border:0;border-radius:6px;color:var(--muted);background:transparent;font-size:16px}.remove:hover{color:var(--danger);background:var(--dangerSoft)}
+  .empty{min-height:108px;display:grid;place-items:center;padding:18px;text-align:center}.empty[hidden]{display:none}.empty b{display:block;font-size:11px}.empty span{display:block;margin-top:5px;color:var(--muted);font-size:9.5px}
+  .manager-foot{padding:7px 9px;border-top:1px solid #edf1f6;color:var(--quiet);background:#fbfcfe;border-radius:0 0 9px 9px;font-size:8.8px}
+  .annotation{margin-top:8px;padding-left:10px;border-left:2px solid #b9d2f5;color:#5e6e83;font-size:9.4px;line-height:1.55}
+
+  .field{display:grid;grid-template-columns:78px minmax(0,1fr);align-items:center;gap:8px}.field+.field{margin-top:9px}.field label{color:#455267;font-size:10.5px;font-weight:680}.control{width:100%;height:36px;min-width:0;padding:0 9px;border:1px solid var(--strong);border-radius:8px;background:#fff;color:var(--ink);font-size:10.5px}.filter{display:flex;align-items:center;padding:9px;border:1px solid var(--line);border-radius:8px;background:#fafbfd}.filter b{font-size:10.5px}.filter span{color:var(--muted);font-size:9.5px}.switch{margin-left:auto;width:31px;height:18px;border:0;border-radius:9px;background:#cbd5e1}
+
+  .method-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.method-tab{height:36px;padding:0 4px;border:1px solid var(--strong);border-radius:8px;background:#fff;font-size:10.5px;font-weight:720}.method-tab.active{color:var(--blue2);border-color:var(--blue);background:var(--blueSoft)}
+  .preset-head{display:flex;align-items:center;margin-top:18px;margin-bottom:8px}.shared{margin-left:auto;padding:4px 7px;border-radius:10px;color:#087453;background:var(--greenSoft);font-size:9px;font-weight:740}.preset-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.preset{height:61px;padding:7px;border:1px solid var(--line);border-radius:8px;text-align:center;background:#fff}.preset b,.preset span{display:block;overflow:hidden;text-overflow:ellipsis}.preset b{font-size:10px}.preset span{margin-top:5px;color:var(--muted);font-size:8.5px;line-height:1.25}.preset.active{color:var(--blue2);border-color:var(--blue);background:var(--blueSoft)}
+  .param-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;margin-top:18px}.param label{display:block;margin-bottom:4px;color:#556378;font-size:9.5px;font-weight:680}.mini{width:100%;height:33px;border:1px solid var(--strong);border-radius:7px;background:#fff;padding:0 8px;font-size:10px}
+  .axis-card{margin-top:16px;overflow:hidden;border:1px solid var(--strong);border-radius:9px;background:#fff}.axis-head{height:35px;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid #e8edf4;background:#fafbfd}.axis-head b{font-size:11px}.axis-head span{margin-left:auto;color:var(--muted);font-size:9px}.axis-row{min-height:51px;display:grid;grid-template-columns:62px 62px minmax(0,1fr);align-items:center;gap:7px;padding:7px 10px;border-bottom:1px solid #edf1f6}.axis-name b,.axis-name span{display:block}.axis-name b{font-size:10px}.axis-name span{margin-top:2px;color:var(--muted);font-size:8px}.auto{font-size:9px;color:var(--muted)}.range{height:31px;border:1px solid var(--line);border-radius:7px;background:#f3f6fa}
+
+  .statusbar{display:grid;grid-template-columns:minmax(160px,.8fr) minmax(240px,1.5fr) 170px auto;align-items:center;gap:14px;padding:0 14px 0 18px;border-top:1px solid var(--strong);background:#fbfcfe}.run-state{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:750}.run-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(14,168,117,.11)}.task-fact{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:650 9.5px/1 var(--mono)}.progress{height:7px;border-radius:4px;background:#dfe6ef}.footer-actions{display:flex;gap:7px}.footer-actions button{height:34px;padding:0 14px;border:1px solid var(--strong);border-radius:8px;background:#fff;font-size:10.5px;font-weight:720}.footer-actions .run{color:#fff;border-color:var(--blue);background:var(--blue)}
+  .prototype-note{position:fixed;right:18px;bottom:18px;display:flex;align-items:center;gap:7px;padding:7px 9px;border:1px solid #bfcbd9;border-radius:9px;background:rgba(255,255,255,.94);box-shadow:0 8px 24px rgba(33,48,70,.14);font-size:9.5px}.prototype-note button{height:27px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:#fff;font-size:9px}.prototype-note button.active{color:var(--blue2);border-color:#a9c9f4;background:var(--blueSoft)}
+  @media(max-width:1180px){.panel{padding-left:12px;padding-right:12px}.stage-summary{padding-left:12px;padding-right:12px}.field{grid-template-columns:66px minmax(0,1fr)}.action-note{display:none}.preset span{display:none}.preset{height:38px}.file-list{max-height:164px}}
+</style>
+</head>
+<body>
+<main class="stage">
+  <section class="window" aria-label="TraceLab 批处理第一层文件管理原型">
+    <header class="titlebar">
+      <i class="traffic red"></i><i class="traffic yellow"></i><i class="traffic green"></i>
+      <span class="title">批处理分析</span><span class="meta">第一层文件管理方案</span>
+      <nav class="toolbar"><button class="sync">●　从当前单次同步</button><button>导入方案…</button><button>导出方案…</button></nav>
+    </header>
+    <div class="pipeline">
+      <div class="stage-summary input"><span class="num">01</span><div class="fact"><b>输入</b><span id="pipelineInput">3 数据源 · 126 共同信号</span></div></div>
+      <div class="stage-summary analysis"><span class="num">02</span><div class="fact"><b>分析</b><span>FFT · 测试预设</span></div></div>
+      <div class="stage-summary output"><span class="num">03</span><div class="fact"><b>输出</b><span>XLSX + PNG</span></div></div>
+    </div>
+    <div class="workspace">
+      <section class="panel input-panel">
+        <div class="block">
+          <div class="block-head"><span class="block-title">数据文件</span><span class="block-fact" id="fileFact">3 个数据源 · 126 个共同信号</span><span class="state-pill pending" id="overallState">解析中</span></div>
+          <div class="file-manager">
+            <div class="file-actions">
+              <button class="action primary" id="loadedButton">+ 已加载</button>
+              <button class="action" id="diskButton">+ 从磁盘…</button>
+              <input id="diskInput" type="file" multiple hidden>
+              <span class="action-note">添加、状态、移除都在这一层完成</span>
+              <div class="loaded-menu" id="loadedMenu" hidden>
+                <button data-name="current_measurement.mf4" data-path="主窗口已加载 · current_measurement.mf4">current_measurement.mf4</button>
+                <button data-name="reference_run.hdf" data-path="主窗口已加载 · reference_run.hdf">reference_run.hdf</button>
+              </div>
+            </div>
+            <div class="file-list" id="fileList"></div>
+            <div class="empty" id="emptyState" hidden><div><b>还没有数据文件</b><span>从主窗口已加载文件选择，或直接从磁盘添加。</span></div></div>
+            <div class="manager-foot">文件在后台解析；路径、逻辑数据源和异常原因保留在当前列表。</div>
+          </div>
+          <p class="annotation">调整点：取消“管理文件”按钮和二级空弹窗；同一份文件模型、添加入口、解析状态和逐行移除全部直接展开。</p>
+        </div>
+        <div class="block">
+          <div class="block-head"><span class="block-title">目标</span><span class="block-fact">文件间匹配</span></div>
+          <div class="field"><label>目标策略</label><select class="control"><option>所有来源共有</option><option>按来源可用</option></select></div>
+          <div class="field"><label>目标信号</label><select class="control"><option>Rte_ActRet_mActiveReturnMotorTorque</option></select></div>
+        </div>
+        <div class="block"><div class="filter"><div><b>预处理</b><span>　滤波关闭 · 保留原始数据</span></div><button class="switch" aria-label="启用滤波"></button></div></div>
+      </section>
+      <section class="panel analysis-panel">
+        <div class="block-head"><span class="block-title">分析方法</span><span class="block-fact">四个按钮等宽</span></div>
+        <div class="method-tabs"><button class="method-tab">时域</button><button class="method-tab active">FFT</button><button class="method-tab">FFT vs Time</button><button class="method-tab">阶次</button></div>
+        <div class="preset-head"><span class="block-title">分析预设</span><span class="shared">与单次分析同步</span></div>
+        <div class="preset-grid"><button class="preset active"><b>测试</b><span>幅值优先<br>flattop · 2.5 s</span></button><button class="preset"><b>均衡</b><span>通用诊断<br>hanning · 1.5 s</span></button><button class="preset"><b>时间</b><span>瞬态捕捉<br>hanning · 0.6 s</span></button><button class="preset"><b>自定义</b><span>当前参数<br>手动调整</span></button></div>
+        <div class="param-grid"><div class="param"><label>窗函数</label><select class="mini"><option>flattop</option></select></div><div class="param"><label>NFFT</label><select class="mini"><option>自动</option></select></div><div class="param"><label>窗长</label><input class="mini" value="2.5 s"></div><div class="param"><label>重叠率</label><input class="mini" value="75 %"></div><div class="param"><label>平均模式</label><select class="mini"><option>线性平均</option></select></div><div class="param"><label>频率加权</label><select class="mini"><option>None</option></select></div></div>
+      </section>
+      <section class="panel output-panel">
+        <div class="block-head"><span class="block-title">导出</span><span class="block-fact">XLSX · PNG 1920×1080</span></div>
+        <div class="field"><label>输出目录</label><input class="control" value="~/Desktop/mf4_batch_output"></div>
+        <div class="axis-card"><div class="axis-head"><b>坐标范围</b><span>FFT 显示范围</span></div><div class="axis-row"><div class="axis-name"><b>频率 X</b><span>Hz</span></div><span class="auto">☑ 自动</span><div class="range"></div></div><div class="axis-row"><div class="axis-name"><b>幅值 Y</b><span>dB</span></div><span class="auto">☑ 自动</span><div class="range"></div></div></div>
+      </section>
+    </div>
+    <footer class="statusbar"><div class="run-state"><i class="run-dot"></i><span id="footerState">正在解析 1 个数据源</span></div><div class="task-fact">12 个任务 · 预计 24 个输出</div><div class="progress"></div><div class="footer-actions"><button>关闭</button><button class="run">运行</button></div></footer>
+  </section>
+</main>
+<aside class="prototype-note" aria-label="原型状态切换"><span>原型状态</span><button data-demo="empty">空</button><button data-demo="ready">全部就绪</button><button class="active" data-demo="mixed">混合状态</button></aside>
+<script>
+  const list = document.getElementById('fileList');
+  const empty = document.getElementById('emptyState');
+  const menu = document.getElementById('loadedMenu');
+  const rows = {
+    ready:[
+      {name:'drive_front.mf4',path:'/measurements/drive_front.mf4',state:'已就绪',kind:'ready'},
+      {name:'bench_run_02.hdf',path:'/measurements/bench_run_02.hdf · group:root',state:'已就绪',kind:'ready'},
+      {name:'reference_run.tdms',path:'/measurements/reference_run.tdms',state:'已就绪',kind:'ready'}
+    ],
+    mixed:[
+      {name:'drive_front.mf4',path:'/measurements/drive_front.mf4',state:'已就绪',kind:'ready'},
+      {name:'bench_run_02.hdf',path:'/measurements/bench_run_02.hdf · group:Powertrain',state:'解析中',kind:'pending'},
+      {name:'damaged_source.mf4',path:'/measurements/damaged_source.mf4 · 时间轴不可读取',state:'解析失败',kind:'error'}
+    ]
+  };
+  let files = rows.mixed.map(x=>({...x}));
+  function render(){
+    list.innerHTML=''; empty.hidden=files.length>0; list.hidden=files.length===0;
+    files.forEach((file,index)=>{
+      const row=document.createElement('div'); row.className='file-row';
+      row.innerHTML=`<i class="status-dot ${file.kind==='ready'?'':file.kind}"></i><div class="file-copy"><b>${file.name}</b><small>${file.path}</small></div><span class="row-state ${file.kind==='ready'?'':file.kind}">${file.state}</span><button class="remove" aria-label="移除 ${file.name}">×</button>`;
+      row.querySelector('.remove').onclick=()=>{files.splice(index,1);render()}; list.appendChild(row);
+    });
+    const ready=files.filter(f=>f.kind==='ready').length, pending=files.filter(f=>f.kind==='pending').length, errors=files.filter(f=>f.kind==='error').length;
+    document.getElementById('fileFact').textContent=`${files.length} 个数据源 · ${files.length?126:0} 个共同信号`;
+    document.getElementById('pipelineInput').textContent=`${files.length} 数据源 · ${files.length?126:0} 共同信号`;
+    const pill=document.getElementById('overallState'); pill.className='state-pill';
+    if(errors){pill.textContent=`${errors} 异常`;pill.classList.add('error')}else if(pending){pill.textContent='解析中';pill.classList.add('pending')}else if(files.length){pill.textContent='全部就绪'}else{pill.textContent='待配置';pill.classList.add('pending')}
+    document.getElementById('footerState').textContent=errors?'存在无法解析的数据源':pending?`正在解析 ${pending} 个数据源`:files.length?'文件已就绪':'请添加数据文件';
+  }
+  document.getElementById('loadedButton').onclick=()=>menu.hidden=!menu.hidden;
+  menu.querySelectorAll('button').forEach(button=>button.onclick=()=>{if(!files.some(f=>f.name===button.dataset.name))files.push({name:button.dataset.name,path:button.dataset.path,state:'已就绪',kind:'ready'});menu.hidden=true;render()});
+  document.getElementById('diskButton').onclick=()=>document.getElementById('diskInput').click();
+  document.getElementById('diskInput').onchange=event=>{[...event.target.files].forEach(file=>{if(!files.some(f=>f.name===file.name))files.push({name:file.name,path:`本机磁盘 · ${file.name}`,state:'解析中',kind:'pending'})});render()};
+  document.querySelectorAll('[data-demo]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-demo]').forEach(b=>b.classList.toggle('active',b===button));files=button.dataset.demo==='empty'?[]:rows[button.dataset.demo].map(x=>({...x}));render()});
+  document.addEventListener('click',event=>{if(!event.target.closest('.file-actions'))menu.hidden=true});
+  render();
+</script>
+</body>
+</html>

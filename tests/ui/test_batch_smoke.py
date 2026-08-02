@@ -439,6 +439,29 @@ def test_time_analysis_form_fits_288px_after_repeated_dependency_toggles(
         scroll.show()
         qtbot.wait(20)
 
+        channel_host = form._field_hosts["x_channel"]
+        origin_host = form._field_hosts["x_origin"]
+        form._w_x_source.setCurrentIndex(
+            form._w_x_source.findData("time")
+        )
+        qtbot.wait(20)
+        time_slot = origin_host.geometry()
+        form._w_x_source.setCurrentIndex(
+            form._w_x_source.findData("channel")
+        )
+        qtbot.wait(20)
+        channel_slot = channel_host.geometry()
+        assert sum(
+            host.isVisibleTo(panel) for host in (channel_host, origin_host)
+        ) == 1
+        assert all(
+            abs(actual - expected) <= 1
+            for actual, expected in zip(
+                (channel_slot.x(), channel_slot.y(), channel_slot.width(), channel_slot.height()),
+                (time_slot.x(), time_slot.y(), time_slot.width(), time_slot.height()),
+            )
+        )
+
         def assert_visible_channel_geometry():
             assert form._w_x_channel.isVisibleTo(panel) is True
             assert form._w_x_channel.currentData() == long_channel

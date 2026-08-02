@@ -520,11 +520,7 @@ QPushButton#batchRenderStyleButton:checked {
             self._btn_render_style.setChecked(False)
             return
         popover.set_style(self._render_style, emit=False)
-        anchor = self._btn_render_style
-        origin = anchor.mapToGlobal(anchor.rect().bottomRight())
-        popover.adjustSize()
-        popover.move(origin.x() - popover.width(), origin.y() + 4)
-        popover.show()
+        popover.show_at(self._btn_render_style)
         self._btn_render_style.setChecked(True)
 
     def _on_render_style_changed(self, style: RenderStyle) -> None:

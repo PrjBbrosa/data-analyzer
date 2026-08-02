@@ -33,11 +33,18 @@ _KEY_TO_SLOT = {value: key for key, value in _SLOT_TO_KEY.items()}
 class _PresetCard(QPushButton):
     """Two-level preset card while keeping ``text()`` as the slot name."""
 
+    _TITLE_POINT_SIZE = 10
+    _SUMMARY_POINT_SIZE = 8
+    _NORMAL_HEIGHT = 66
+    _COMPACT_HEIGHT = 40
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._summary = ""
         self._summary_visible = True
-        self.setMinimumHeight(61)
+        self.setProperty("textAlignment", "center")
+        self.setProperty("compact", False)
+        self.setFixedHeight(self._NORMAL_HEIGHT)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
     def set_summary_text(self, text: str) -> None:
@@ -51,9 +58,14 @@ class _PresetCard(QPushButton):
         return self._summary_visible
 
     def set_compact_mode(self, compact: bool) -> None:
-        self._summary_visible = not bool(compact)
-        self.setMinimumHeight(38 if compact else 61)
-        self.setMaximumHeight(38 if compact else 61)
+        compact = bool(compact)
+        self._summary_visible = not compact
+        self.setProperty("compact", compact)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.setFixedHeight(
+            self._COMPACT_HEIGHT if compact else self._NORMAL_HEIGHT
+        )
         self.updateGeometry()
         self.update()
 
@@ -68,18 +80,20 @@ class _PresetCard(QPushButton):
         self.style().drawControl(QStyle.CE_PushButton, option, painter, self)
         rect = QRectF(self.rect()).adjusted(8, 5, -8, -5)
         painter.setPen(QColor("#0f56bd" if self.isChecked() else "#172033"))
-        painter.setFont(QFont(self.font().family(), 9, QFont.Bold))
-        title_height = 20 if self._summary_visible else rect.height()
+        painter.setFont(QFont(
+            self.font().family(), self._TITLE_POINT_SIZE, QFont.Bold,
+        ))
+        title_height = 22 if self._summary_visible else rect.height()
         painter.drawText(
             QRectF(rect.left(), rect.top(), rect.width(), title_height),
-            Qt.AlignLeft | Qt.AlignVCenter, self.text(),
+            Qt.AlignHCenter | Qt.AlignVCenter, self.text(),
         )
         if self._summary_visible:
             painter.setPen(QColor("#506d93" if self.isChecked() else "#64748b"))
-            painter.setFont(QFont(self.font().family(), 7))
+            painter.setFont(QFont(self.font().family(), self._SUMMARY_POINT_SIZE))
             painter.drawText(
-                QRectF(rect.left(), rect.top() + 22, rect.width(), rect.height() - 22),
-                Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, self._summary,
+                QRectF(rect.left(), rect.top() + 24, rect.width(), rect.height() - 24),
+                Qt.AlignHCenter | Qt.AlignVCenter | Qt.TextWordWrap, self._summary,
             )
         painter.end()
 

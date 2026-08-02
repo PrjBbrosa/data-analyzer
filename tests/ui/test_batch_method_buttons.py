@@ -221,6 +221,73 @@ def test_batch_time_method_exposes_exact_sparse_render_fields(qtbot):
     assert form.get_params() == {}
 
 
+def test_time_x_dependency_uses_one_stable_right_grid_slot(qtbot):
+    """The X-source dependent editor must not jump to the left column."""
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.set_x_channel_candidates(("speed",), {})
+    form.resize(280, 260)
+    form.show()
+    qtbot.wait(20)
+
+    channel_host = form._field_hosts["x_channel"]
+    origin_host = form._field_hosts["x_origin"]
+    source_host = form._field_hosts["x_source"]
+    layout_host = form._field_hosts["render_layout"]
+
+    # Both semantic fields retain their adapter identities but share row 2,
+    # column 1 in the visible two-column grid.
+    for host in (channel_host, origin_host):
+        index = form._grid.indexOf(host)
+        assert index >= 0
+        assert form._grid.getItemPosition(index) == (2, 1, 1, 1)
+
+    assert origin_host.isVisibleTo(form) is True
+    assert channel_host.isVisibleTo(form) is False
+    time_slot = origin_host.geometry()
+
+    form.apply_params({"x_source": "channel", "x_channel": "speed"})
+    qtbot.wait(20)
+
+    channel_slot = channel_host.geometry()
+    assert channel_host.isVisibleTo(form) is True
+    assert origin_host.isVisibleTo(form) is False
+    assert sum(
+        host.isVisibleTo(form) for host in (channel_host, origin_host)
+    ) == 1
+    assert channel_slot.x() == source_host.geometry().x()
+    assert channel_slot.x() > layout_host.geometry().x()
+    assert all(
+        abs(actual - expected) <= 1
+        for actual, expected in zip(
+            (channel_slot.x(), channel_slot.y(), channel_slot.width(), channel_slot.height()),
+            (time_slot.x(), time_slot.y(), time_slot.width(), time_slot.height()),
+        )
+    )
+
+
+def test_preset_cards_use_contract_fonts_and_heights(qtbot):
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel, _PresetCard
+
+    panel = AnalysisPanel()
+    qtbot.addWidget(panel)
+
+    assert _PresetCard._TITLE_POINT_SIZE == 10
+    assert _PresetCard._SUMMARY_POINT_SIZE == 8
+    for button in panel._preset_buttons.values():
+        assert button.minimumHeight() == 66
+        assert button.maximumHeight() == 66
+        assert button.property("compact") is False
+        assert button.property("textAlignment") == "center"
+        button.set_compact_mode(True)
+        assert button.minimumHeight() == 40
+        assert button.maximumHeight() == 40
+        assert button.property("compact") is True
+
+
 @pytest.mark.parametrize(
     ("method", "params"),
     (
@@ -586,9 +653,11 @@ def test_method_button_labels_fit_narrow_batch_column_with_production_qss(
         group.show()
         qtbot.wait(20)
 
+        widths = [button.width() for button in group._buttons.values()]
+        assert max(widths) - min(widths) <= 1
         for button in group._buttons.values():
             text_width = button.fontMetrics().horizontalAdvance(button.text())
-            assert button.width() >= text_width + 16
+            assert button.width() >= text_width + 4
     finally:
         group.close()
         qapp.setStyleSheet(old_stylesheet)
@@ -599,7 +668,9 @@ def test_preset_radio_labels_fit_narrow_batch_column_with_production_qss(
 ):
     from pathlib import Path
 
-    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
+    from PyQt5.QtGui import QFont, QFontMetrics
+
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel, _PresetCard
 
     old_stylesheet = qapp.styleSheet()
     try:
@@ -608,13 +679,22 @@ def test_preset_radio_labels_fit_narrow_batch_column_with_production_qss(
         )
         panel = AnalysisPanel()
         qtbot.addWidget(panel)
+        # BatchSheet enters compact mode at the supported 288 px pane width;
+        # retain the 10 pt centred title while hiding the second text level.
+        panel.set_compact_mode(True)
         panel.resize(288, 650)
         panel.show()
         qtbot.wait(20)
 
         for button in panel._preset_buttons.values():
-            text_width = button.fontMetrics().horizontalAdvance(button.text())
-            assert button.width() >= text_width + 22
+            title_metrics = QFontMetrics(QFont(
+                button.font().family(), _PresetCard._TITLE_POINT_SIZE,
+                QFont.Bold,
+            ))
+            assert button.width() >= title_metrics.horizontalAdvance(button.text()) + 16
+            assert button.property("compact") is True
+            assert button.summary_visible() is False
+            assert button.property("textAlignment") == "center"
     finally:
         panel.close()
         qapp.setStyleSheet(old_stylesheet)

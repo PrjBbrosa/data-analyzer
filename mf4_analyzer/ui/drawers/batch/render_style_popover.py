@@ -12,10 +12,11 @@ the blast radius of a batch-panel change.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QRect, Qt, pyqtSignal
+from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
-    QAbstractSpinBox, QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QPushButton, QSlider, QSpinBox, QVBoxLayout,
+    QAbstractScrollArea, QAbstractSpinBox, QButtonGroup, QFrame, QGridLayout,
+    QHBoxLayout, QLabel, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from ....batch_render_style import (
@@ -24,6 +25,11 @@ from ....batch_render_style import (
     TICK_DENSITY_PRESETS, RenderStyle,
 )
 from ....ui_kit.popup_shell import apply_popup_shell
+
+
+_SCREEN_MARGIN = 8
+_ANCHOR_GAP = 4
+_FALLBACK_AVAILABLE_GEOMETRY = QRect(0, 0, 1920, 1080)
 
 
 def _percent(scale: float) -> int:
@@ -43,6 +49,8 @@ class RenderStylePopover(QFrame):
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setFixedWidth(268)
         self._updating = False
+        self._anchor_watchers: tuple[QWidget, ...] = ()
+        self._tracked_scroll_bars = ()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -119,20 +127,145 @@ class RenderStylePopover(QFrame):
         )
         lay.addWidget(self._reset_btn)
 
-        for widget in (
-            self._slider_x, self._spin_x,
-            self._slider_y, self._spin_y,
-            self._slider_font, self._spin_font,
+        for slider, spin in (
+            (self._slider_x, self._spin_x),
+            (self._slider_y, self._spin_y),
+            (self._slider_font, self._spin_font),
         ):
-            widget.valueChanged.connect(self._on_editor_changed)
+            slider.valueChanged.connect(
+                lambda value, peer=spin: self._on_editor_changed(peer, value)
+            )
+            spin.valueChanged.connect(
+                lambda value, peer=slider: self._on_editor_changed(peer, value)
+            )
 
         self.set_style(default, emit=False)
 
     def hideEvent(self, event):  # noqa: N802 (Qt API)
         # A Qt.Popup also closes on any click outside itself, which the opener
         # never hears about; without this its toggle button would stay lit.
+        self._clear_anchor_tracking()
         super().hideEvent(event)
         self.closed.emit()
+
+    def eventFilter(self, watched, event):  # noqa: N802 (Qt API)
+        """Close instead of leaving a detached top-level popup behind.
+
+        ``Qt.Popup`` owns a global window position.  A move/resize of the
+        host, or a scroll that moves one of the anchor's ancestor widgets,
+        therefore makes the old position misleading.  Close it so the next
+        open always recalculates from the live anchor geometry.
+        """
+        if (
+            watched in self._anchor_watchers
+            and self.isVisible()
+            and event.type() in {
+                QEvent.Move,
+                QEvent.Resize,
+                QEvent.Hide,
+                QEvent.Close,
+                QEvent.ParentChange,
+            }
+        ):
+            self.hide()
+        return super().eventFilter(watched, event)
+
+    # ------------------------------------------------------------------
+    # Placement and anchor lifecycle
+    # ------------------------------------------------------------------
+    def _available_geometry_for(self, anchor: QWidget) -> QRect:
+        """Return the available rect of the screen containing *anchor*."""
+        try:
+            center = anchor.mapToGlobal(anchor.rect().center())
+            screen = QGuiApplication.screenAt(center)
+        except RuntimeError:
+            screen = None
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return QRect(_FALLBACK_AVAILABLE_GEOMETRY)
+        return screen.availableGeometry()
+
+    @staticmethod
+    def _clamp(value: int, minimum: int, maximum: int) -> int:
+        # The popup is smaller than every supported screen.  Keep the fallback
+        # deterministic even if a platform reports a pathological rect.
+        if maximum < minimum:
+            return minimum
+        return max(minimum, min(value, maximum))
+
+    def _track_anchor(self, anchor: QWidget) -> None:
+        watchers = []
+        current = anchor
+        while current is not None and current not in watchers:
+            watchers.append(current)
+            current = current.parentWidget()
+        self._anchor_watchers = tuple(watchers)
+        for watcher in self._anchor_watchers:
+            watcher.installEventFilter(self)
+
+        scroll_bars = []
+        for watcher in self._anchor_watchers:
+            if not isinstance(watcher, QAbstractScrollArea):
+                continue
+            for bar in (watcher.horizontalScrollBar(), watcher.verticalScrollBar()):
+                if bar not in scroll_bars:
+                    bar.valueChanged.connect(self._hide_for_anchor_change)
+                    scroll_bars.append(bar)
+        self._tracked_scroll_bars = tuple(scroll_bars)
+
+    def _clear_anchor_tracking(self) -> None:
+        for watcher in self._anchor_watchers:
+            try:
+                watcher.removeEventFilter(self)
+            except RuntimeError:
+                pass
+        self._anchor_watchers = ()
+        for bar in self._tracked_scroll_bars:
+            try:
+                bar.valueChanged.disconnect(self._hide_for_anchor_change)
+            except (RuntimeError, TypeError):
+                pass
+        self._tracked_scroll_bars = ()
+
+    def _hide_for_anchor_change(self, _value=None) -> None:
+        if self.isVisible():
+            self.hide()
+
+    def show_at(self, anchor: QWidget) -> None:
+        """Show from *anchor* without allowing the frame to leave its screen.
+
+        The default right-aligns the popover with the anchor and places it 4px
+        below.  It flips above on bottom overflow; if neither side fits, the
+        final clamp keeps the frame within the 8px available-geometry margin.
+        """
+        self.adjustSize()
+        self._clear_anchor_tracking()
+        self._track_anchor(anchor)
+
+        available = self._available_geometry_for(anchor)
+        anchor_top_left = anchor.mapToGlobal(anchor.rect().topLeft())
+        anchor_bottom_right = anchor.mapToGlobal(anchor.rect().bottomRight())
+        width = self.width()
+        height = self.height()
+
+        left = available.left() + _SCREEN_MARGIN
+        right = available.right() - _SCREEN_MARGIN - width + 1
+        x = self._clamp(anchor_bottom_right.x() - width + 1, left, right)
+
+        top = available.top() + _SCREEN_MARGIN
+        bottom = available.bottom() - _SCREEN_MARGIN - height + 1
+        below = anchor_bottom_right.y() + 1 + _ANCHOR_GAP
+        above = anchor_top_left.y() - _ANCHOR_GAP - height
+        if below <= bottom:
+            y = below
+        elif above >= top:
+            y = above
+        else:
+            y = self._clamp(below, top, bottom)
+
+        self.move(QPoint(x, y))
+        self.show()
 
     # ------------------------------------------------------------------
     def _build_row(self, label, minimum, maximum, value, step, *, suffix="", width=38):
@@ -174,17 +307,19 @@ class RenderStylePopover(QFrame):
             emit=True,
         )
 
-    def _on_editor_changed(self, *_args) -> None:
+    def _on_editor_changed(self, peer, value: int) -> None:
         if self._updating:
             return
-        self.set_style(
-            RenderStyle(
-                tick_density_x=self._spin_x.value(),
-                tick_density_y=self._spin_y.value(),
-                font_scale=self._spin_font.value() / 100.0,
-            ),
-            emit=True,
-        )
+        self._updating = True
+        previous = peer.blockSignals(True)
+        try:
+            peer.setValue(value)
+        finally:
+            peer.blockSignals(previous)
+            self._updating = False
+        style = self.style()
+        self._sync_preset_checks(style)
+        self.style_changed.emit(style)
 
     # ------------------------------------------------------------------
     def style(self) -> RenderStyle:

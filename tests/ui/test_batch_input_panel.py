@@ -153,6 +153,92 @@ def test_limited_source_row_exposes_reason_and_never_runs_probe(qtbot, tmp_path)
     assert called == []
 
 
+def test_inline_file_manager_keeps_a_250px_viewport_for_all_row_counts(qtbot):
+    """Input controls below the file viewport must not move with row count."""
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.drawers.batch.input_panel import (
+        BATCH_INLINE_FILE_MANAGER_HEIGHT, InputPanel,
+    )
+
+    panel = InputPanel()
+    qtbot.addWidget(panel)
+    panel.resize(360, 700)
+    panel.show()
+    qtbot.wait(20)
+
+    target_title = next(
+        label for label in panel.findChildren(QLabel) if label.text() == "目标"
+    )
+    target_y = target_title.mapTo(panel, QPoint(0, 0)).y()
+
+    for index in range(8):
+        if index in {0, 1, 4}:
+            assert panel._file_manager_host.height() == BATCH_INLINE_FILE_MANAGER_HEIGHT
+            assert panel._file_list.height() == panel._file_manager_host.contentsRect().height()
+            assert target_title.mapTo(panel, QPoint(0, 0)).y() == target_y
+        panel._file_list.add_loaded_file(
+            f"source-{index}", f"/tmp/source-{index}.mf4", frozenset({"A"}),
+        )
+        qtbot.wait(5)
+
+    assert panel._file_manager_host.height() == BATCH_INLINE_FILE_MANAGER_HEIGHT
+    assert target_title.mapTo(panel, QPoint(0, 0)).y() == target_y
+    file_scroll = panel._file_list._list.verticalScrollBar()
+    assert file_scroll.maximum() > file_scroll.minimum()
+
+
+def test_file_list_forwards_boundary_wheel_to_outer_input_pane(qtbot):
+    """The nested list must not trap scrolling once it reaches an endpoint."""
+    from PyQt5.QtCore import QPoint, QPointF, Qt
+    from PyQt5.QtGui import QWheelEvent
+    from PyQt5.QtWidgets import QApplication
+
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet.resize(1080, 400)
+    sheet.show()
+    qtbot.wait(20)
+
+    file_list = sheet._input_panel._file_list
+    for index in range(8):
+        file_list.add_loaded_file(
+            f"source-{index}", f"/tmp/source-{index}.mf4", frozenset({"A"}),
+        )
+    qtbot.wait(20)
+
+    inner = file_list._list.verticalScrollBar()
+    outer = sheet._input_scroll.verticalScrollBar()
+    assert inner.maximum() > inner.minimum()
+    assert outer.maximum() > outer.minimum()
+
+    def wheel(delta: int) -> QWheelEvent:
+        viewport = file_list._list.viewport()
+        pos = QPointF(viewport.rect().center())
+        event = QWheelEvent(
+            pos, QPointF(viewport.mapToGlobal(viewport.rect().center())),
+            QPoint(), QPoint(0, delta), Qt.NoButton, Qt.NoModifier,
+            Qt.NoScrollPhase, False,
+        )
+        QApplication.sendEvent(viewport, event)
+        return event
+
+    inner.setValue(inner.maximum())
+    outer.setValue(outer.minimum())
+    down = wheel(-120)
+    assert down.isAccepted()
+    assert outer.value() > outer.minimum()
+
+    inner.setValue(inner.minimum())
+    outer.setValue(outer.maximum())
+    up = wheel(120)
+    assert up.isAccepted()
+    assert outer.value() < outer.maximum()
+
+
 def test_target_policy_switches_common_intersection_to_selectable_union(qtbot):
     from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
 
