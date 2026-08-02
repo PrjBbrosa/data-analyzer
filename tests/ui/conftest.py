@@ -29,6 +29,7 @@ def _isolate_qsettings(tmp_path, monkeypatch):
     any bare ``QSettings()`` (hint bars) away from the registry.
     """
     from PyQt5.QtCore import QSettings
+    import mf4_analyzer.ui.batch_settings as _batch_settings_mod
     import mf4_analyzer.ui.inspector_sections as _pkg
     import mf4_analyzer.ui.inspector_sections._helpers as _helpers_mod
     import mf4_analyzer.ui.inspector_sections.collapsible as _collapsible_mod
@@ -44,6 +45,13 @@ def _isolate_qsettings(tmp_path, monkeypatch):
                 _persistent_top_mod):
         if hasattr(mod, "_preset_settings"):
             monkeypatch.setattr(mod, "_preset_settings", _temp_settings)
+
+    # ``BatchSheet`` restores remembered display preferences on open and
+    # writes them back on close, so every ``BatchSheet(...)`` in this suite
+    # would otherwise round-trip through the real MF4Analyzer/DataAnalyzer
+    # store. Tests that assert ON the persistence still inject their own
+    # ``BatchPanelPrefsStore``; this only covers the implicit default.
+    monkeypatch.setattr(_batch_settings_mod, "_default_settings", _temp_settings)
 
     QSettings.setDefaultFormat(QSettings.IniFormat)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))

@@ -226,16 +226,66 @@ self._output_panel.apply_outputs(BatchOutput(**prefs.outputs))
 - 不记忆窗口几何/分栏位置（另一类问题，不在本次范围）。
 - 不做多套具名「批处理配置档」——若将来需要，应扩展现有 preset 机制。
 
-## 基线记录（第 0 步产出，执行时填写）
+## 基线记录（第 0 步产出）
 
 ```
-日期：
-失败用例：
+日期：2026-08-02（分支 feat/batch-settings-persistence，起点 bf4a5f9）
+
+第 0 步指定的三个文件：119 passed / 0 failed。
+
+全量 tests/ui 基线（在 HEAD 的干净 worktree 里跑，避免 stash 风险）：
+  60 failed / 2695 passed，分布在 10 个文件，与本项无关：
+    test_split_per_pane_controls.py (23) · test_split_focus_routing.py (18) ·
+    test_split_routing.py (6) · test_head_hdf_rail.py (3) ·
+    test_channel_widget_setters.py (3) · test_pg_dense_raster.py (2) ·
+    test_main_window_smoke.py (2) · test_hints.py (1) ·
+    test_db_reference_controls.py (1) · test_chart_stack.py (1)
 ```
 
-## 验收记录（第 6 步产出，执行时填写）
+## 验收记录（第 6 步产出）
 
 ```
-真机往返验证：
-信号/文件未被恢复：
+真机往返验证：已执行（platform=cocoa，非 offscreen）。
+  开 → 把刻度调到 24/16、字号 130%、目录改掉、取消勾选「数据文件」→ 关闭
+  → 重开：刻度 X 24 · Y 16 · 字号 130%、目录、导出开关全部带回来了。
+  「恢复默认」→ 回到 14/10/100% + 默认目录 + 两个开关都勾上，且 QSettings 键被删掉。
+  注意：探针注入的是临时 INI store，没有写用户真实的
+  QSettings("MF4Analyzer","DataAnalyzer")。
+
+信号/文件未被恢复：确认。重开后 selected_signals / file_ids / source_ids 均为空、
+  rpm_channel 为空、x_auto 仍是 True；即使往 QSettings 里手工塞进 signals /
+  file_ids / rpm_channel / axes，也一概不生效
+  （tests/ui/test_batch_smoke.py::test_sheet_does_not_restore_signals_or_files）。
+
+顺带发现（既有缺陷，非本次引入）：导出面板的「导出内容」卡片
+  （BatchExportCard）在真机上宽度为 0，两个勾选框与摘要行看不见。
+  在 bf4a5f9 的干净 worktree 上复现一致，已另行开票。
 ```
+
+## 执行中对计划的偏离（第 6 步产出）
+
+1. **写入时机不能只挂 `closeEvent`。** 计划 2.3 指定的 `closeEvent` 正常分支漏掉了
+   面板的主要出口：「关闭」按钮直接接 `QDialog.reject`（`sheet.py:318`），Esc 也一样，
+   两者**都不产生 `QCloseEvent`**。改成同时挂 `done()`——reject/accept 的唯一汇合点。
+   两个钩子都保留：`QDialog` 只在**可见**时才把 close event 转成 `reject()`，
+   所以没 show 过的 sheet 只走 `closeEvent`；可见时两条都跑，写两遍同样的快照，无害。
+2. **`__init__` 里本来就没有 `apply_preset`。** 计划 1/2.2 引用的 `sheet.py:985-987`
+   实际是 `_on_fill_from_current`（工具栏「从当前单次同步」的槽），不是 `__init__`。
+   `current_preset` 只在用户点按钮时才应用，所以「preset 赢过记忆值」天然成立。
+3. **「恢复默认」放在导出分区标题栏**，而不是刻度弹层里。弹层已有一个只重置刻度/字号的
+   「恢复默认」按钮，把它扩权成「连目录和导出开关一起清」会名不副实；而记忆的三项
+   （目录、导出开关、刻度字体）全部住在 OutputPanel 里，分区标题栏正好是这个作用域。
+4. **`outputs` 白名单里的大部分字段目前在 UI 上不可改。** 紧凑版 `get_outputs()`
+   把 image_format/size/DPI/背景/线宽/冲突策略/写清单全部写死（`output_panel.py:866`），
+   `apply_outputs` 也只读 export_data/export_image。白名单仍按计划 2.1 全量落盘（前向兼容），
+   但当前实际能往返的只有两个导出开关。
+5. **给 `tests/ui/conftest.py` 加了兜底注入**：`BatchSheet` 现在开关都会读写 QSettings，
+   而仓库里已有约 30 处 `BatchSheet(...)` 测试不可能逐个改签名。在
+   `_isolate_qsettings` 里 monkeypatch `batch_settings._default_settings`，
+   保证隐式构造的 store 也落在 tmp_path 的 INI 上。新测试仍各自显式注入。
+6. **第 5 步的「运行时写入」测试改成不起真线程**：最初版本真的 start 了一个
+   `BatchRunnerThread`，结果整个 tests/ui 在
+   `test_db_reference_controls.py::test_dialog_cancel_and_escape_leave_store_and_view_unchanged`
+   处稳定段错误（连续 3 次同一位置）。去掉那一条即恢复 60 failed 基线。
+   改为 stub 掉 `BatchRunnerThread.start`——写入本来就是 `_on_run_clicked` 末尾的同步调用，
+   真线程对断言毫无贡献。

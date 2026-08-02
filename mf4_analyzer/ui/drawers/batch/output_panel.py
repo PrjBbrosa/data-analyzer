@@ -40,6 +40,17 @@ _ORDER_TIME_DB_Z_RANGE = (-50.0, -10.0)
 _ORDER_TIME_METHOD = "order_time"
 _BATCH_AXIS_LABEL_W = 72
 
+
+def default_output_dir() -> str:
+    """The hard-coded output directory, resolved fresh on every call.
+
+    ``Path.home()`` is read at call time rather than at import so the 恢复默认
+    escape hatch lands on the same string the panel is born with, even when a
+    test has redirected ``HOME``.
+    """
+    return str(Path.home() / "Desktop" / "mf4_batch_output")
+
+
 _AXIS_CONTEXTS = {
     "time": {
         "x_label": "时间 (X):",
@@ -78,6 +89,10 @@ _AXIS_CONTEXTS = {
 
 class OutputPanel(QWidget):
     changed = pyqtSignal()
+    #: The 恢复默认 escape hatch. Emitted, not handled here: this widget owns
+    #: the hard-coded defaults, ``BatchSheet`` owns the persisted memory that
+    #: also has to be forgotten.
+    restore_defaults_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -124,6 +139,42 @@ QWidget#BatchExportCard QLabel#batchOutputSettingsSummary {
         note = QLabel("仅保留可操作信息", section_head)
         note.setObjectName("BatchSectionNote")
         section_head_lay.addWidget(note)
+
+        # Escape hatch for the remembered preferences. It sits on the 导出
+        # section head because that is exactly the scope of what is
+        # remembered — output directory, export toggles, tick density and
+        # text size all live in this panel and nowhere else.
+        self._btn_restore_defaults = QPushButton("恢复默认", section_head)
+        self._btn_restore_defaults.setObjectName("batchOutputRestoreDefaults")
+        self._btn_restore_defaults.setToolTip(
+            "清除记住的导出偏好，恢复输出目录、导出内容与刻度字体的默认值"
+        )
+        self._btn_restore_defaults.setCursor(Qt.PointingHandCursor)
+        self._btn_restore_defaults.setSizePolicy(
+            QSizePolicy.Maximum, QSizePolicy.Fixed,
+        )
+        self._btn_restore_defaults.setStyleSheet("""
+QPushButton#batchOutputRestoreDefaults {
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 10px;
+    /* style.qss's global QPushButton rule sets font-weight: 600 and a
+       26px min-height; both have to be answered here or this reads as a
+       primary action instead of the section-note aside it sits next to. */
+    font-weight: 400;
+    min-height: 0;
+    padding: 1px 2px;
+}
+QPushButton#batchOutputRestoreDefaults:hover {
+    color: #1769e0;
+    text-decoration: underline;
+}
+""")
+        self._btn_restore_defaults.clicked.connect(
+            lambda: self.restore_defaults_requested.emit()
+        )
+        section_head_lay.addWidget(self._btn_restore_defaults)
         outer.addWidget(section_head)
 
         form = QFormLayout()
@@ -131,7 +182,7 @@ QWidget#BatchExportCard QLabel#batchOutputSettingsSummary {
 
         # Directory
         self._dir_edit = QLineEdit(self)
-        self._dir_edit.setText(str(Path.home() / "Desktop" / "mf4_batch_output"))
+        self._dir_edit.setText(default_output_dir())
         self._btn_browse = QPushButton("选择…", self)
         self._btn_browse.clicked.connect(self._choose_dir)
         dir_row = QHBoxLayout()
@@ -1012,6 +1063,18 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
             del blockers
         self._sync_output_controls()
         self._refresh_output_summary()
+
+    def restore_defaults(self) -> None:
+        """Reset every persisted display preference to its hard-coded default.
+
+        Deliberately narrow: axes, dB reference, analysis parameters and the
+        source/signal scope are NOT preferences and are left exactly as the
+        user has them (they are also never persisted — see
+        ``mf4_analyzer.ui.batch_settings``).
+        """
+        self.apply_directory(default_output_dir())
+        self.apply_render_style_params(RenderStyle().as_params())
+        self.apply_outputs(BatchOutput())
 
     @staticmethod
     def _set_combo_data(combo: QComboBox, value) -> None:
