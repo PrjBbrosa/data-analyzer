@@ -225,6 +225,8 @@ def test_grouping_cards_expose_html_wave_semantics_and_geometry(qtbot):
     assert cards["channel"].formula_text() == "3 个信号 → 3 张"
     assert cards["source"].wave_semantics() == "fixed-source-vary-signal"
     assert cards["channel"].wave_semantics() == "fixed-signal-vary-source"
+    assert cards["source"].preview_row_labels() == ("S1", "S2", "S3")
+    assert cards["channel"].preview_row_labels() == ("F1", "F2", "F3")
     assert form._w_render_group_by.isHidden() is True
 
 

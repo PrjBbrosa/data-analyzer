@@ -16,6 +16,7 @@ the initial state — required by
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import math
 
 from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
@@ -183,10 +184,18 @@ class _GroupingCard(QPushButton):
             "channel": "fixed-signal-vary-source",
         }[self._mode]
 
+    def preview_row_labels(self) -> tuple[str, ...]:
+        """Return the split-screen row identities shown in the mini chart."""
+        return {
+            "none": (),
+            # One data-source page keeps its different signal categories apart.
+            "source": ("S1", "S2", "S3"),
+            # One signal page compares that signal across data sources.
+            "channel": ("F1", "F2", "F3"),
+        }[self._mode]
+
     @staticmethod
     def _wave_path(rect: QRectF, phase: float = 0.0, offset: float = 0.0) -> QPainterPath:
-        import math
-
         path = QPainterPath()
         for index in range(25):
             ratio = index / 24.0
@@ -195,6 +204,43 @@ class _GroupingCard(QPushButton):
                 rect.center().y() + offset
                 + math.sin(ratio * math.pi * 4.0 + phase) * rect.height() * 0.24
                 + math.sin(ratio * math.pi * 9.0 + phase * 0.7) * rect.height() * 0.08
+            )
+            if index == 0:
+                path.moveTo(QPointF(x, y))
+            else:
+                path.lineTo(QPointF(x, y))
+        return path
+
+    @staticmethod
+    def _step_path(rect: QRectF) -> QPainterPath:
+        """A deliberately non-sinusoidal signal category for the source card."""
+        points = (
+            (0.00, 0.68), (0.24, 0.68), (0.24, 0.24), (0.44, 0.24),
+            (0.44, 0.68), (0.69, 0.68), (0.69, 0.24), (0.87, 0.24),
+            (0.87, 0.68), (1.00, 0.68),
+        )
+        path = QPainterPath()
+        for index, (x_ratio, y_ratio) in enumerate(points):
+            point = QPointF(
+                rect.left() + x_ratio * rect.width(),
+                rect.top() + y_ratio * rect.height(),
+            )
+            if index == 0:
+                path.moveTo(point)
+            else:
+                path.lineTo(point)
+        return path
+
+    @staticmethod
+    def _vibration_path(rect: QRectF) -> QPainterPath:
+        """A dense vibration trace, distinct from the smooth and step lanes."""
+        path = QPainterPath()
+        for index in range(33):
+            ratio = index / 32.0
+            x = rect.left() + ratio * rect.width()
+            y = (
+                rect.center().y()
+                + math.sin(ratio * math.tau * 11.0) * rect.height() * 0.30
             )
             if index == 0:
                 path.moveTo(QPointF(x, y))
@@ -238,30 +284,64 @@ class _GroupingCard(QPushButton):
         painter.setPen(QColor("#0f56bd"))
         painter.drawText(tag_rect, Qt.AlignCenter, tag)
 
+        rows_top = rect.top() + 17
+        row_height = (rect.bottom() - rows_top - 2) / 3.0
+        # These lanes are strokes, not areas. QPainter fills a QPainterPath
+        # with the current brush, so say so explicitly rather than relying on
+        # whatever brush the frame or a legend dot happened to leave behind.
+        painter.setBrush(Qt.NoBrush)
         if self._mode == "source":
-            for index, label in enumerate(("S1", "S2", "S3")):
-                center_y = rect.top() + 21 + index * 11
+            for index, label in enumerate(self.preview_row_labels()):
+                if index:
+                    painter.setPen(QPen(QColor("#d8e2ee"), 0.8, Qt.DotLine))
+                    divider_y = rows_top + index * row_height
+                    painter.drawLine(
+                        QPointF(rect.left() + 4, divider_y),
+                        QPointF(rect.right() - 4, divider_y),
+                    )
+                row_top = rows_top + index * row_height
                 painter.setPen(QColor("#607087"))
-                painter.drawText(QRectF(rect.left() + 4, center_y - 5, 14, 9), Qt.AlignLeft, label)
-                wave_rect = QRectF(rect.left() + 18, center_y - 7, rect.width() - 23, 13)
+                painter.drawText(
+                    QRectF(rect.left() + 4, row_top, 14, row_height),
+                    Qt.AlignLeft | Qt.AlignVCenter, label,
+                )
+                wave_rect = QRectF(
+                    rect.left() + 18, row_top + 1, rect.width() - 23, row_height - 2,
+                )
                 painter.setPen(QPen(QColor(self._COLORS[index]), 1.45))
-                painter.drawPath(self._wave_path(wave_rect, index * 0.85))
+                if index == 0:
+                    painter.drawPath(self._wave_path(wave_rect, 0.0))
+                elif index == 1:
+                    painter.drawPath(self._step_path(wave_rect))
+                else:
+                    painter.drawPath(self._vibration_path(wave_rect))
             return
 
-        for index, label in enumerate(("F1", "F2", "F3")):
+        for index, label in enumerate(self.preview_row_labels()):
             legend_x = rect.right() - 51 + index * 17
             painter.setBrush(QColor(self._COLORS[index]))
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(QPointF(legend_x, rect.top() + 9), 2, 2)
             painter.setPen(QColor("#607087"))
             painter.drawText(QRectF(legend_x + 3, rect.top() + 4, 15, 9), Qt.AlignLeft, label)
-        wave_rect = rect.adjusted(5, 16, -5, -4)
-        for index in range(3):
+        # The legend dots above are filled, so drop their brush before stroking
+        # the lanes; otherwise every lane is flooded with the last dot's colour.
+        painter.setBrush(Qt.NoBrush)
+        for index, _label in enumerate(self.preview_row_labels()):
+            if index:
+                painter.setPen(QPen(QColor("#d8e2ee"), 0.8, Qt.DotLine))
+                divider_y = rows_top + index * row_height
+                painter.drawLine(
+                    QPointF(rect.left() + 4, divider_y),
+                    QPointF(rect.right() - 4, divider_y),
+                )
+            wave_rect = QRectF(
+                rect.left() + 5, rows_top + index * row_height + 1,
+                rect.width() - 10, row_height - 2,
+            )
             pen = QPen(QColor(self._COLORS[index]), 1.45)
-            if index == 1:
-                pen.setStyle(Qt.DashLine)
             painter.setPen(pen)
-            painter.drawPath(self._wave_path(wave_rect, 0.35, (index - 1) * 4.0))
+            painter.drawPath(self._wave_path(wave_rect, index * 0.13))
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = QPainter(self)
