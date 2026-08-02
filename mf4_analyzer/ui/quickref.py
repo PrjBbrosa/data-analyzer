@@ -294,6 +294,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 gesture="刻度与字体",
             ),
             QuickRow(
+                "记住导出偏好",
+                sub="输出目录、导出内容、刻度与字体自动带到下次；文件与信号不记",
+                gesture="恢复默认",
+            ),
+            QuickRow(
                 "存 / 读方案",
                 sub="整套批处理设置存成 JSON，与分析预设槽相互独立",
                 gesture="导入方案… / 导出方案…",

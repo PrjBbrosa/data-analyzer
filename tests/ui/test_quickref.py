@@ -184,6 +184,12 @@ def test_quickref_covers_batch_drawer():
     assert all(not r.keys for r in group.rows), [
         r.desc for r in group.rows if r.keys
     ]
+    # Remembered display preferences: say both what is kept and what is not,
+    # so nobody expects the signal selection to come back with it.
+    memory = next(r for r in group.rows if "记住" in r.desc)
+    assert "刻度与字体" in memory.sub
+    assert "不记" in memory.sub
+    assert memory.gesture == "恢复默认"
     # The picker rewrite has landed — nothing here is a staged capability.
     assert all(not r.soon for r in group.rows)
 
