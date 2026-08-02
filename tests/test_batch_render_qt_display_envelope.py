@@ -205,7 +205,19 @@ def test_high_raster_cost_general_profile_disables_native_antialias(qapp):
         scene.close()
 
 
-def test_show_and_settle_uses_one_layout_and_paint_event_drain(qapp, monkeypatch):
+def test_show_and_settle_uses_a_bounded_paint_event_drain_budget(qapp, monkeypatch):
+    """Settling costs exactly two paint drains — no more, no fewer.
+
+    This used to pin a single drain. Pinning tick density added a second,
+    genuinely load-bearing one: an ``AxisItem`` only learns its height after
+    its tick strings are measured in a paint, and the stacked-subplot layout
+    sizes its shared bottom row from that height, so without a second pass the
+    recorded axis picture disagrees with the settled geometry (see
+    ``test_subplot_export_draws_before_writing_dpi_metadata_and_contains_ticks``).
+    The budget stays pinned because each drain flushes the whole scene's paint;
+    the expensive per-curve envelope work is guarded separately by
+    ``test_time_display_envelope_uses_real_view_width_across_layouts``.
+    """
     x = np.linspace(0.0, 1.0, 1000, dtype=np.float64)
     spec = BatchTimeFigureSpec((BatchSeries(x, np.sin(x), "smooth"),))
     scene = _builder.build_batch_scene(
@@ -229,6 +241,6 @@ def test_show_and_settle_uses_one_layout_and_paint_event_drain(qapp, monkeypatch
     monkeypatch.setattr(_builder, "QApplication", _ApplicationProxy)
     try:
         scene.show_and_settle()
-        assert calls == ["drain"]
+        assert calls == ["drain", "drain"]
     finally:
         scene.close()

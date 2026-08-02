@@ -430,7 +430,14 @@ class BuiltBatchScene:
                 pixel_width=pixel_width,
                 interactive=False,
             )
-            key = (pixel_width, effective_width, x_range)
+            # Key on what the envelope actually consumes. ``pixel_width`` only
+            # feeds ``bucket_width_for`` above; it never reaches
+            # ``positions_envelope``, so two widths that bucket the same
+            # produce byte-identical display data. Including it made the guard
+            # miss on one-pixel axis jitter — pinning wider tick strings grows
+            # the left axis by a pixel — and pay for a full O(n) envelope pass
+            # over the raw channel to recompute the same result.
+            key = (effective_width, x_range)
             if binding.last_key == key:
                 continue
             display_x, display_y = positions_envelope(
@@ -471,8 +478,8 @@ class BuiltBatchScene:
         layout.invalidate()
         layout.activate()
         # Axis tick widths and dual-Y nice ranges can adjust the final ViewBox
-        # geometry. Rebind only curves whose realized pixel width actually
-        # changed; all of this still happens before the sole paint drain.
+        # geometry. Rebind only curves whose effective bucket width or view
+        # range actually changed; all of this happens before the first drain.
         self._bind_time_display_envelopes()
         for plot in self.plots:
             try:
@@ -484,11 +491,17 @@ class BuiltBatchScene:
         # the finished plot.
         self._apply_tick_density()
         if app is not None:
-            # An AxisItem only learns how much space its tick strings need
-            # while painting. Drain that paint here so the resulting text-space
-            # change is folded back into the layout; otherwise the caller's own
-            # render would be the first paint and would capture the
-            # pre-adjustment geometry.
+            # Two drains, and the second one is load-bearing for stacked
+            # subplots: an AxisItem only learns its true height once its tick
+            # strings have been measured in a paint, and
+            # ``settle_subplot_layout`` sizes the shared bottom row from
+            # ``bottom_axis.height()``. Without this second pass the axis
+            # QPicture recorded here does not match a fresh recording of the
+            # settled geometry, which the subplot export-determinism test in
+            # tests/test_batch_render_qt.py catches. (For overlay pages the
+            # second pass is a no-op — rendering is byte-identical without it.)
+            # The rebind below is cheap: it is keyed on the effective bucket
+            # width, so it only recomputes when bucketing actually changed.
             app.processEvents()
             layout.invalidate()
             layout.activate()

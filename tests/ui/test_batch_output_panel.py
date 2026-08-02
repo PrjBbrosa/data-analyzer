@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from PyQt5.QtCore import QPoint, Qt
 from PyQt5.QtGui import QValidator
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QGroupBox, QPushButton, QWidget
 
 
@@ -331,6 +332,21 @@ def test_batch_output_panel_manual_x_range_accepts_typed_negative_values(qtbot):
 
     assert panel.axis_params()["x_min"] == -100.0
     assert panel.axis_params()["x_max"] == -10.0
+
+    # The reported symptom was specifically about typing: "-" first, then the
+    # digits refused to land. validate() alone would still pass if some future
+    # input mask or key handler swallowed the sign, so drive real key events.
+    for spin, typed in ((panel.spin_x_min, "-100.5"), (panel.spin_x_max, "-80")):
+        spin.setFocus()
+        spin.selectAll()
+        QTest.keyClick(spin, Qt.Key_Delete)
+        QTest.keyClicks(spin, typed)
+        QTest.keyClick(spin, Qt.Key_Return)
+        assert spin.value() == pytest.approx(float(typed)), (
+            f"typing {typed!r} landed as {spin.text()!r}"
+        )
+
+    assert panel.axis_params()["x_min"] == pytest.approx(-100.5)
 
 
 def test_batch_output_render_style_round_trips_and_reports_changes(qtbot):
