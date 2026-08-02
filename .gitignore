@@ -44,6 +44,11 @@ package-lock.json
 # Local Codex state
 .state/
 
+# Root-level local planning state retained outside version control.
+/findings.md
+/progress.md
+/task_plan.md
+
 # Local sample data (not part of the repo's own tests)
 testdoc/
 testfile/

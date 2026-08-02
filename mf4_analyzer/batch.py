@@ -46,6 +46,7 @@ from .batch_manifest import (
 )
 from .batch_preprocess import BatchPreprocessResult, preprocess_batch_signal
 from .batch_recipe import normalize_batch_params, recipe_fingerprint
+from .renderer_import_policy import is_optional_renderer_import_error
 from .batch_validation import (
     raise_for_issues,
     resolve_output_image_dimensions,
@@ -420,6 +421,16 @@ class BatchRunner:
 
         return BatchRenderContext, BatchRenderOptions
 
+    @staticmethod
+    def _is_allowed_renderer_import_failure(exc: ImportError) -> bool:
+        """Return whether a probe failure means the optional renderer is absent.
+
+        The probe may degrade only for a genuinely unavailable renderer stack.
+        An import defect inside the application's UI graph is a programming
+        error, not a reason to silently drop requested images.
+        """
+        return is_optional_renderer_import_error(exc)
+
     def _resolve_effective_outputs(self, outputs) -> EffectiveOutputPlan:
         """Resolve one immutable renderer decision for the complete run."""
 
@@ -445,7 +456,9 @@ class BatchRunner:
         if 'image' in effective:
             try:
                 render_backend_types = self._probe_image_backend()
-            except (ImportError, ModuleNotFoundError) as exc:
+            except ImportError as exc:
+                if not self._is_allowed_renderer_import_failure(exc):
+                    raise
                 if 'data' not in requested:
                     raise _ImageBackendUnavailable(
                         _RENDER_BACKEND_IMAGE_ONLY_ERROR

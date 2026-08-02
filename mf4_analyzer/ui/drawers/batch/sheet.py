@@ -151,8 +151,6 @@ class BatchSheet(QDialog):
         self._runner_thread: BatchRunnerThread | None = None
         self._last_result = None
         self._close_pending: bool = False
-        self._resume_manifest_path: str | None = None
-        self._retry_failed_manifest_path: str | None = None
 
         # W7 toast bookkeeping — populated by ``_toast`` so headless tests
         # can assert deterministically without mocking the parent's toast
@@ -329,25 +327,21 @@ class BatchSheet(QDialog):
         self._input_panel._signal_picker.selectionChanged.connect(
             lambda _sel: self._recompute_pipeline_status()
         )
-        self._analysis_panel.methodChanged.connect(
-            lambda _m: self._recompute_pipeline_status()
-        )
         # Drive RPM-row visibility from the method (init-sync below).
         self._analysis_panel.methodChanged.connect(self._input_panel.set_method)
         self._analysis_panel.methodChanged.connect(
             self._output_panel.apply_method_defaults
         )
         self._analysis_panel.methodChanged.connect(self._on_recipe_method_changed)
+        self._analysis_panel.methodChanged.connect(
+            lambda _m: self._recompute_pipeline_status()
+        )
         self._analysis_panel.paramsChanged.connect(self._sync_x_axis_context)
         self._analysis_panel.paramsChanged.connect(self._recompute_pipeline_status)
         self._analysis_panel.presetApplied.connect(
             self._on_builtin_analysis_preset
         )
         self._output_panel.changed.connect(self._on_output_controls_changed)
-        self._output_panel.resumeRequested.connect(self._on_resume_requested)
-        self._output_panel.retryFailedRequested.connect(
-            self._on_retry_failed_requested
-        )
         self._task_list.artifactOpenRequested.connect(
             self._open_artifact_location
         )
@@ -973,40 +967,6 @@ class BatchSheet(QDialog):
             return
         self._toast(f"已导出方案到：{path}", kind="success")
 
-    def _on_resume_requested(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择要恢复的运行清单", "", "JSON (*.json)"
-        )
-        if not path:
-            return
-        self._resume_manifest_path = str(path)
-        self._retry_failed_manifest_path = None
-        outputs = dataclasses.replace(
-            self._output_panel.get_outputs(), resume_policy="manifest",
-        )
-        self._output_panel.apply_outputs(outputs)
-        self._output_panel.set_operation_status(
-            f"恢复清单：{Path(path).name}"
-        )
-        self._recompute_pipeline_status()
-
-    def _on_retry_failed_requested(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择失败任务运行清单", "", "JSON (*.json)"
-        )
-        if not path:
-            return
-        self._retry_failed_manifest_path = str(path)
-        self._resume_manifest_path = None
-        outputs = dataclasses.replace(
-            self._output_panel.get_outputs(), resume_policy="none",
-        )
-        self._output_panel.apply_outputs(outputs)
-        self._output_panel.set_operation_status(
-            f"重试失败：{Path(path).name}"
-        )
-        self._recompute_pipeline_status()
-
     def _build_preset_for_export(self) -> AnalysisPreset:
         """Build the recipe-only preset to persist.
 
@@ -1275,8 +1235,6 @@ class BatchSheet(QDialog):
             preset,
             output_dir,
             parent=self,
-            resume_manifest=self._resume_manifest_path,
-            retry_failed_manifest=self._retry_failed_manifest_path,
         )
         self._runner_thread = thread
         # AutoConnection is correct in production (live event loop). Both
@@ -1327,15 +1285,6 @@ class BatchSheet(QDialog):
         self._last_result = result
         if result is None:
             return
-        status = str(getattr(result, "status", "") or "未知")
-        facts = [f"运行结果：{status}"]
-        run_id = getattr(result, "run_id", None)
-        manifest_path = getattr(result, "manifest_path", None)
-        if run_id:
-            facts.append(f"run_id {run_id}")
-        if manifest_path:
-            facts.append(f"清单 {Path(manifest_path).name}")
-        self._output_panel.set_operation_status(" · ".join(facts))
 
     def _on_thread_finished(self) -> None:
         """Bound to ``QThread.finished`` — guaranteed to fire by Qt even if

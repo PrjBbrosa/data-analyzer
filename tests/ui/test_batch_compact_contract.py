@@ -67,6 +67,7 @@ def test_output_panel_uses_compact_fixed_export_contract(qtbot):
     assert outputs.data_format == "xlsx"
     assert outputs.image_format == "png"
     assert (outputs.image_width, outputs.image_height) == (1920, 1080)
+    assert outputs.image_line_width == 1.5
     assert outputs.conflict_policy == "auto_number"
     assert outputs.write_manifest is True
     assert outputs.resume_policy == "none"
@@ -94,9 +95,14 @@ def test_fft_hides_heatmap_z_range_but_keeps_db_reference(qtbot):
 
     assert sheet._output_panel.db_reference_control.isVisibleTo(sheet)
     assert sheet._output_panel._z_axis_row.isHidden() is True
+    assert sheet._output_panel._amplitude_unit_row.isVisibleTo(sheet)
 
     sheet.apply_method("fft_time")
     assert sheet._output_panel._z_axis_row.isVisibleTo(sheet)
+    assert sheet._output_panel._amplitude_unit_row.isVisibleTo(sheet)
+
+    sheet.apply_method("time")
+    assert not sheet._output_panel._amplitude_unit_row.isVisibleTo(sheet)
 
 
 def test_time_grouping_cards_explain_source_and_signal_semantics(qtbot):

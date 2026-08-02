@@ -54,7 +54,9 @@ class MethodButtonGroup(QWidget):
             btn.setCheckable(True)
             btn.setMinimumWidth(0)
             btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-            btn.clicked.connect(lambda _checked, k=key: self.set_method(k))
+            btn.clicked.connect(
+                lambda _checked, k=key: self._on_button_clicked(k)
+            )
             self._group.addButton(btn)
             self._buttons[key] = btn
             # Keep all four methods on one compact row while giving the only
@@ -63,6 +65,11 @@ class MethodButtonGroup(QWidget):
         # Default to FFT.
         self._current = "fft"
         self._buttons["fft"].setChecked(True)
+
+    def _on_button_clicked(self, method: str) -> None:
+        """Apply a user selection only when it changes the active method."""
+        if method != self._current:
+            self.set_method(method)
 
     def set_method(self, method: str) -> None:
         if method not in self._buttons:
@@ -659,14 +666,17 @@ class DynamicParamForm(QWidget):
         self._sync_x_source()
 
     # ------------------------------------------------------------------
-    def set_method(self, method: str) -> None:
+    def set_method(self, method: str, *, emit: bool = True) -> None:
         if method not in _METHOD_FIELDS:
             return
         self._current = method
         self._render_for(method)
-        # Init-sync per the conditional-visibility-init-sync lesson: do not
-        # rely on a downstream signal to seed visible state; emit once.
-        self.paramsChanged.emit()
+        if emit:
+            # Init-sync per the conditional-visibility-init-sync lesson: do
+            # not rely on a downstream signal to seed visible state; emit
+            # once for direct form users.  The AnalysisPanel method-change
+            # transaction emits its completed method state instead.
+            self.paramsChanged.emit()
 
     def set_grouping_counts(self, *, source_count: int, signal_count: int) -> None:
         self._grouping_cards.set_counts(source_count, signal_count)

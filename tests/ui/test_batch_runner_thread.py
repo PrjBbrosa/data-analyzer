@@ -320,7 +320,7 @@ def test_runner_thread_forwards_resume_and_retry_runtime_paths(tmp_path):
     assert calls[1][2]["retry_failed_manifest"] == tmp_path / "retry.json"
 
 
-def test_sheet_forwards_selected_runtime_manifest_to_runner(
+def test_sheet_does_not_forward_hidden_runtime_manifest_state_to_runner(
     qtbot, tmp_path, monkeypatch,
 ):
     import numpy as np
@@ -331,10 +331,8 @@ def test_sheet_forwards_selected_runtime_manifest_to_runner(
     from mf4_analyzer.ui.drawers.batch import BatchSheet
 
     calls = []
-    prior_results = []
 
     def fake_run(self, preset, output_dir, **kwargs):
-        prior_results.append(sheet._last_result)
         calls.append(kwargs)
         return BatchRunResult(status="done")
 
@@ -351,14 +349,8 @@ def test_sheet_forwards_selected_runtime_manifest_to_runner(
     sheet.apply_signals(("sig",))
     sheet.apply_method("fft")
     sheet.apply_params({"window": "hanning", "nfft": 128})
-    sheet.apply_outputs(BatchOutput(
-        export_data=True,
-        export_image=False,
-        resume_policy="manifest",
-    ))
+    sheet.apply_outputs(BatchOutput(export_data=True, export_image=False))
     sheet._output_panel.apply_directory(str(tmp_path / "out"))
-    sheet._resume_manifest_path = str(tmp_path / "resume.json")
-    sheet._last_result = BatchRunResult(status="blocked", blocked=["stale"])
 
     sheet._on_run_clicked()
     qtbot.waitUntil(lambda: sheet._running is False, timeout=3000)
@@ -366,7 +358,6 @@ def test_sheet_forwards_selected_runtime_manifest_to_runner(
     sheet._on_run_clicked()
     qtbot.waitUntil(lambda: len(calls) == 2 and not sheet._running, timeout=3000)
 
-    assert calls[0]["resume_manifest"] == str(tmp_path / "resume.json")
+    assert calls[0]["resume_manifest"] is None
     assert calls[0]["retry_failed_manifest"] is None
-    assert calls[1]["resume_manifest"] == str(tmp_path / "resume.json")
-    assert prior_results == [None, None]
+    assert calls[1]["resume_manifest"] is None

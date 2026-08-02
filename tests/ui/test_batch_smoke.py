@@ -1,4 +1,5 @@
 import pytest
+from PyQt5.QtCore import Qt
 
 
 def test_batch_sheet_pure_degraded_partial_is_not_reported_as_failure(
@@ -39,6 +40,54 @@ def test_batch_sheet_pure_degraded_partial_is_not_reported_as_failure(
 def test_batch_sheet_can_be_imported_from_new_package():
     from mf4_analyzer.ui.drawers.batch import BatchSheet
     assert BatchSheet is not None
+
+
+def test_method_change_recomputes_after_dependent_panels_update(qtbot, monkeypatch):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    calls = []
+    original = BatchSheet._recompute_pipeline_status
+
+    def _record_recompute(self):
+        calls.append((
+            self._input_panel._rpm_row_visible,
+            self._output_panel._method,
+            self._recipe_method,
+        ))
+        return original(self)
+
+    monkeypatch.setattr(BatchSheet, "_recompute_pipeline_status", _record_recompute)
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    calls.clear()
+
+    sheet.apply_method("time")
+
+    assert calls[0] == (False, "time", "time")
+
+
+def test_method_button_mouse_click_refreshes_all_dependent_panels(qtbot):
+    """A real button click must refresh the whole batch transaction.
+
+    The compact sheet has three downstream consumers of method changes: the
+    parameter form, output-axis context, and pipeline status.  Keep this on
+    the mouse-event path rather than only exercising ``apply_method`` so the
+    actual front-end interaction cannot silently become visual-only.
+    """
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet.show()
+
+    qtbot.mouseClick(
+        sheet._analysis_panel._method_group._buttons["time"], Qt.LeftButton,
+    )
+
+    assert sheet._analysis_panel.current_method() == "time"
+    assert sheet._analysis_panel._param_form._current == "time"
+    assert sheet._output_panel._method == "time"
+    assert sheet._output_panel._amplitude_unit_row.isHidden() is True
 
 
 def test_pipeline_strip_set_stage_updates_summary(qtbot):
@@ -808,35 +857,17 @@ def test_sheet_output_preview_uses_batch_runner_core_facts(qtbot, tmp_path):
     assert "auto_number" in preview
 
 
-def test_sheet_resume_retry_manifest_selection_is_runtime_only(
-    qtbot, tmp_path, monkeypatch,
-):
-    from PyQt5.QtWidgets import QFileDialog
-
+def test_sheet_has_no_gui_resume_or_retry_entry_points(qtbot):
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
 
-    resume_path = tmp_path / "resume.json"
-    retry_path = tmp_path / "retry.json"
-    choices = iter(((str(resume_path), ""), (str(retry_path), "")))
-    monkeypatch.setattr(
-        QFileDialog, "getOpenFileName", lambda *args, **kwargs: next(choices),
-    )
     sheet = BatchSheet(None, files={})
     qtbot.addWidget(sheet)
 
-    sheet._output_panel._btn_resume.click()
-    assert sheet._resume_manifest_path == str(resume_path)
-    assert sheet._retry_failed_manifest_path is None
     assert sheet.get_preset().outputs.resume_policy == "none"
-    assert resume_path.name in sheet._output_panel._operation_status.text()
-
-    sheet._output_panel._btn_retry_failed.click()
-    assert sheet._resume_manifest_path is None
-    assert sheet._retry_failed_manifest_path == str(retry_path)
-    assert sheet.get_preset().outputs.resume_policy == "none"
-    assert retry_path.name in sheet._output_panel._operation_status.text()
-    assert not sheet._output_panel._operation_status.isVisible()
-    assert not hasattr(sheet.get_preset(), "retry_failed_manifest")
+    assert not hasattr(sheet, "_on_resume_requested")
+    assert not hasattr(sheet, "_on_retry_failed_requested")
+    assert not hasattr(sheet, "_resume_manifest_path")
+    assert not hasattr(sheet, "_retry_failed_manifest_path")
 
 
 @pytest.mark.parametrize(
@@ -864,7 +895,7 @@ def test_sheet_routes_output_validation_issues_to_output_stage(
     assert sheet.strip.cards[2].summary_label.text() == "导出设置待完善"
 
 
-def test_sheet_lock_includes_toolbar_and_output_operations(qtbot):
+def test_sheet_lock_includes_toolbar_controls(qtbot):
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
 
     sheet = BatchSheet(None, files={}, current_preset=None)
@@ -874,15 +905,11 @@ def test_sheet_lock_includes_toolbar_and_output_operations(qtbot):
     assert not sheet._btn_fill_from_current.isEnabled()
     assert not sheet._btn_import_preset.isEnabled()
     assert not sheet._btn_export_preset.isEnabled()
-    assert not sheet._output_panel._btn_resume.isEnabled()
-    assert not sheet._output_panel._btn_retry_failed.isEnabled()
 
     sheet.unlock_editing()
     assert not sheet._btn_fill_from_current.isEnabled()
     assert sheet._btn_import_preset.isEnabled()
     assert sheet._btn_export_preset.isEnabled()
-    assert sheet._output_panel._btn_resume.isEnabled()
-    assert sheet._output_panel._btn_retry_failed.isEnabled()
 
 
 def test_sheet_opens_artifact_location_only_after_explicit_row_activation(

@@ -26,6 +26,7 @@ from dataclasses import dataclass, replace
 from itertools import count
 
 import qtawesome as qta
+from PyQt5 import sip
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtWidgets import (
@@ -114,7 +115,17 @@ class _CatalogItemDelegate(QStyledItemDelegate):
         super().paint(painter, self._inset_option(option), index)
 
     def updateEditorGeometry(self, editor, option, index):
-        editor.setGeometry(self._inset_option(option).rect)
+        if editor is None or sip.isdeleted(editor):
+            return
+        try:
+            editor.setGeometry(self._inset_option(option).rect)
+        except RuntimeError:
+            # Qt can dispatch a queued delegate geometry update after the
+            # ScientificReferenceSpinBox cell wrapper was deleted.  Suppress
+            # only that lifecycle race; any other RuntimeError stays visible.
+            if sip.isdeleted(editor):
+                return
+            raise
 
 
 def _rows_from_store(store):

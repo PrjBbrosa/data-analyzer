@@ -11,6 +11,24 @@ def test_method_buttons_emit_signal(qtbot):
     assert seen[-1] == "order_time"
 
 
+def test_method_button_click_is_idempotent_but_programmatic_set_refreshes(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
+
+    group = MethodButtonGroup()
+    qtbot.addWidget(group)
+    seen = []
+    group.methodChanged.connect(seen.append)
+
+    # A user clicking the already active FFT button is a no-op.
+    group._buttons["fft"].click()
+    assert seen == []
+
+    # Full preset application uses the programmatic setter, which remains an
+    # explicit refresh boundary even when the method is unchanged.
+    group.set_method("fft")
+    assert seen == ["fft"]
+
+
 def test_param_form_renders_per_method(qtbot):
     from mf4_analyzer.ui.drawers.batch.method_buttons import (
         MethodButtonGroup, DynamicParamForm,

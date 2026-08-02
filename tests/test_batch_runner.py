@@ -1873,7 +1873,10 @@ def test_runner_overwrite_writer_failure_preserves_old_artifact_set(
 
 def _raise_batch_render_import(name, globals=None, locals=None, fromlist=(), level=0):
     if str(name).endswith("batch_render"):
-        raise ModuleNotFoundError("simulated missing Qt batch render backend")
+        raise ModuleNotFoundError(
+            "simulated missing Qt batch render backend",
+            name="mf4_analyzer.batch_render",
+        )
     return _REAL_IMPORT(name, globals, locals, fromlist, level)
 
 
@@ -3916,7 +3919,7 @@ def test_grouped_backend_missing_degrades_data_image_before_reservation(
         )
 
     def missing_backend():
-        raise ModuleNotFoundError("renderer unavailable")
+        raise ModuleNotFoundError("renderer unavailable", name="pyqtgraph")
 
     monkeypatch.setattr(BatchRunner, "_probe_image_backend", staticmethod(missing_backend))
     monkeypatch.setattr(batch_module, "reserve_output_paths", capture_reserve)
@@ -3946,7 +3949,7 @@ def test_grouped_image_only_missing_backend_fails_before_compute_or_reserve(
     preset = _task6_grouped_time_preset(export_data=False)
 
     def missing_backend():
-        raise ImportError("renderer unavailable")
+        raise ImportError("renderer unavailable", name="pyqtgraph")
 
     def forbidden(*args, **kwargs):
         pytest.fail("image-only missing backend must fail before compute/reserve")
@@ -4473,7 +4476,7 @@ def test_default_lazy_image_only_missing_backend_probes_before_source_load(
 
     def missing_backend():
         events.append("probe")
-        raise ModuleNotFoundError("renderer unavailable")
+        raise ModuleNotFoundError("renderer unavailable", name="pyqtgraph")
 
     def forbidden_reserve(*_args, **_kwargs):
         events.append("reserve")

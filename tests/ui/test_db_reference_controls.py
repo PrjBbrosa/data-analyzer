@@ -10,13 +10,17 @@ CRITICAL: every test constructs its OWN throwaway
 ``QSettings("MF4Analyzer", "DataAnalyzer")``.
 """
 import pytest
-from PyQt5.QtCore import Qt
+from PyQt5 import sip
+from PyQt5.QtCore import QCoreApplication, QEvent, QModelIndex, QRect, Qt
 from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import QDialog
 from PyQt5.QtCore import QSettings
 
 from mf4_analyzer import db_reference
-from mf4_analyzer.ui.db_reference_dialog import DbReferenceDefaultsDialog
+from mf4_analyzer.ui.db_reference_dialog import (
+    DbReferenceDefaultsDialog,
+    _CatalogItemDelegate,
+)
 from mf4_analyzer.ui.db_reference_settings import DbReferenceSettingsStore
 from mf4_analyzer.ui.widgets.db_reference import (
     DbReferenceControl,
@@ -26,6 +30,22 @@ from mf4_analyzer.ui.widgets.db_reference import (
 
 def _settings(tmp_path, name="db-reference.ini"):
     return QSettings(str(tmp_path / name), QSettings.IniFormat)
+
+
+def test_catalog_delegate_ignores_deleted_scientific_reference_editor(qapp):
+    """A queued Qt delegate geometry update may outlive its cell widget."""
+    from PyQt5.QtWidgets import QStyleOptionViewItem
+
+    editor = ScientificReferenceSpinBox()
+    editor.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert sip.isdeleted(editor)
+
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, 160, 32)
+
+    # Must not surface the deleted-wrapper RuntimeError during dialog teardown.
+    _CatalogItemDelegate().updateEditorGeometry(editor, option, QModelIndex())
 
 
 # ---------------------------------------------------------------------------

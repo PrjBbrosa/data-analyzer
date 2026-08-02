@@ -409,6 +409,37 @@ def test_subplot_panel_title_semantics_are_uniform(qapp, group_by, titles):
         scene.close()
 
 
+def test_subplot_titles_preserve_each_panel_amplitude_unit(qapp):
+    scene = _open_scene(
+        qapp,
+        (
+            "time",
+            _time_spec(
+                count=2,
+                dual_y=True,
+                layout="subplot",
+                titles=("acceleration", "speed"),
+            ),
+        ),
+    )
+    try:
+        assert [plot.getAxis("left").labelText for plot in scene.plots] == [
+            "Amplitude (g)", "Amplitude (rpm)",
+        ]
+    finally:
+        scene.close()
+
+
+def test_save_png_rejects_null_qimage_without_creating_target(tmp_path):
+    from mf4_analyzer.batch_render_qt._export import save_png
+
+    target = tmp_path / "null.png"
+    with pytest.raises(RuntimeError, match="null QImage"):
+        save_png(QImage(), target)
+
+    assert not target.exists()
+
+
 @pytest.mark.parametrize(
     ("background", "expected"),
     [

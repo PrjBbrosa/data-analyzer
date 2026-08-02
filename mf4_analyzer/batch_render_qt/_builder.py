@@ -15,17 +15,17 @@ from mf4_analyzer import db_reference
 from mf4_analyzer.batch_image_options import BatchRenderOptions
 from mf4_analyzer.signal._envelope_cutils import positions_envelope
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
-from mf4_analyzer.ui.pg_canvas._shared import (
-    _hide_native_auto_button,
+from mf4_analyzer.qt_plot_helpers import (
+    hide_native_auto_button,
     show_major_grid_left_bottom_only,
 )
-from mf4_analyzer.ui.pg_canvas.render_profile import (
+from mf4_analyzer.render_profile import (
     RenderProfile,
     bucket_width_for,
     classify_render_profile,
     source_revision_for,
 )
-from mf4_analyzer.ui.pg_canvas.ticks_math import _fmt_tick, _frame_to_nice
+from ..ui_kit.ticks_math import _fmt_tick, _frame_to_nice
 
 from ._fonts import apply_axis_font, chart_font
 from ._models import BatchRenderContext, BatchSeries, BatchTimeFigureSpec
@@ -627,7 +627,7 @@ class _SceneBuilder:
 
     def _new_plot(self, row: int, *, grid_alpha: float | None = None):
         plot = self.widget.addPlot(row=row, col=0)
-        _hide_native_auto_button(plot)
+        hide_native_auto_button(plot)
         plot.hideButtons()
         plot.setMenuEnabled(False)
         plot.vb.setMenuEnabled(False)
@@ -771,13 +771,6 @@ class _SceneBuilder:
             self.layout_callbacks.append(position_title)
         self.panel_titles.append(str(title))
         plot.setLabel("left", _linear_amplitude_label(units[0] if units else ""))
-        if title:
-            left_axis = plot.getAxis("left")
-
-            def clear_outer_label(*_args, _axis=left_axis) -> None:
-                _axis.setLabel("")
-
-            self.layout_callbacks.append(clear_outer_label)
         plot.setLabel("bottom", spec.x_label if bottom else "")
         if not bottom:
             bottom_axis = plot.getAxis("bottom")

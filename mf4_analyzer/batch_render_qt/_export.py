@@ -19,6 +19,8 @@ def render_scene_image(
         scene.options.height_px,
         QImage.Format_ARGB32_Premultiplied,
     )
+    if image.isNull():
+        raise RuntimeError("batch renderer created a null QImage")
     image.fill(scene.theme.background)
     for key, value in dict(metadata or {}).items():
         image.setText(str(key), str(value))
@@ -36,6 +38,8 @@ def render_scene_image(
 
 def save_png(image: QImage, path) -> Path:
     target = Path(path)
+    if image.isNull():
+        raise RuntimeError("cannot save a null QImage")
     target.parent.mkdir(parents=True, exist_ok=True)
     if not image.save(str(target), "PNG"):
         raise RuntimeError(f"failed to write batch PNG: {target}")

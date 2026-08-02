@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 
+from mf4_analyzer.qt_plot_helpers import (
+    hide_native_auto_button as _hide_native_auto_button,
+    show_major_grid_left_bottom_only,
+)
 from mf4_analyzer.ui.plot_helpers import _compact_axis_label
 
 
@@ -269,20 +273,3 @@ class _ChannelKeyDict(dict):
                 self._labels.get(composite_key, composite_key),
                 dict.__getitem__(self, composite_key),
             )
-
-
-def _hide_native_auto_button(plot) -> None:
-    """Hide pyqtgraph's built-in lower-left auto-range button."""
-    hide = getattr(plot, "hideButtons", None)
-    if callable(hide):
-        hide()
-
-
-def show_major_grid_left_bottom_only(plot, *, x=True, y=True, alpha=0.25):
-    """Enable major grid on left+bottom and force top/right OFF."""
-    plot.showGrid(x=bool(x), y=bool(y), alpha=alpha)
-    for name in ("top", "right"):
-        try:
-            plot.getAxis(name).setGrid(False)
-        except Exception:
-            pass

@@ -288,7 +288,11 @@ class AnalysisPanel(QWidget):
                 self._clear_applied(emit=True)
 
     def _on_method_changed(self, method: str) -> None:
-        self._param_form.set_method(method)
+        # The sheet must update the dependent input/output panels and recipe
+        # before it recomputes status.  Avoid an intermediate paramsChanged
+        # emission from the form while this method-change transaction is still
+        # incomplete; the following methodChanged is the authoritative refresh.
+        self._param_form.set_method(method, emit=False)
         self._refresh_for_method(clear_selection=True)
         self.methodChanged.emit(method)
         self.presetStateChanged.emit(self.preset_state_text())

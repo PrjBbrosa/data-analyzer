@@ -86,6 +86,10 @@ def _sheet_facts(sheet: BatchSheet, name: str) -> dict:
         "db_visible": _visible_to(
             sheet._output_panel.db_reference_control, sheet,
         ),
+        "amplitude_unit_visible": _visible_to(
+            sheet._output_panel._amplitude_unit_row, sheet,
+        ),
+        "amplitude_unit": sheet._output_panel.combo_amp_unit.currentText(),
         "z_visible": _visible_to(sheet._output_panel._z_axis_row, sheet),
         "axis_card": {
             "title": axis.title(),
@@ -247,6 +251,10 @@ def main() -> int:
     sheet.apply_method("fft")
     sheet._analysis_panel._preset_buttons["torque"].click()
     _save_sheet_state(app, sheet, out_dir, "1080-fft-applied", state_facts)
+    _save_sheet_state(app, sheet, out_dir, "gui-default-linewidth", state_facts)
+    sheet._output_panel.combo_amp_unit.setCurrentText("Linear")
+    _save_sheet_state(app, sheet, out_dir, "fft-linear", state_facts)
+    sheet._output_panel.combo_amp_unit.setCurrentText("dB")
     sheet._analysis_panel._param_form._w_t_win_s.setValue(1.0)
     _save_sheet_state(app, sheet, out_dir, "1080-fft-dirty", state_facts)
     sheet._output_panel.chk_x_auto.setChecked(False)
@@ -323,6 +331,7 @@ def main() -> int:
             "data_format": "xlsx",
             "image_format": "png",
             "image_size": [1920, 1080],
+            "image_line_width": 1.5,
             "conflict_policy": "auto_number",
         },
     }

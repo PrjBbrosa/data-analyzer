@@ -809,6 +809,7 @@ def _make_axis_settings_group(
     z_auto_summary="自动色阶",
     include_z=True,
     pre_header_rows=(),
+    amplitude_unit_row_label: str | None = None,
 ):
     """Build the "坐标轴设置" QGroupBox and attach widgets to ``owner``.
 
@@ -817,7 +818,8 @@ def _make_axis_settings_group(
         chk_x_auto, spin_x_min, spin_x_max
         chk_y_auto, spin_y_min, spin_y_max
         chk_z_auto, spin_z_floor, spin_z_ceiling  (when include_z=True)
-        combo_amp_unit  (the dB ↔ Linear dropdown on the Z row, when present)
+        combo_amp_unit  (the dB ↔ Linear dropdown, when present)
+        _amplitude_unit_row (when ``amplitude_unit_row_label`` is supplied)
 
     Wires::
 
@@ -941,10 +943,21 @@ def _make_axis_settings_group(
         ):
             w.blockSignals(False)
         owner.lbl_z_summary = QLabel(z_auto_summary)
+        owner._amplitude_unit_row = None
+        z_unit_widget = owner.combo_amp_unit
+        if amplitude_unit_row_label is not None:
+            # Batch FFT line plots use an amplitude unit but no colour scale.
+            # Keep this control outside the heatmap-only Z row so changing the
+            # method cannot hide the control or force a widget reparent.
+            owner._amplitude_unit_row = _build_axis_aux_row(
+                amplitude_unit_row_label, owner.combo_amp_unit,
+            )
+            lay.addWidget(owner._amplitude_unit_row)
+            z_unit_widget = None
         z_row, z_parts = _build_axis_row(
             "色阶:", owner.chk_z_auto,
             owner.spin_z_floor, owner.spin_z_ceiling,
-            owner.combo_amp_unit, owner.lbl_z_summary,
+            z_unit_widget, owner.lbl_z_summary,
         )
         owner._axis_row_parts['z'] = z_parts
         owner.axis_z_range_host = z_parts['range_host']

@@ -27,8 +27,11 @@ def test_batch_output_panel_axis_settings_uses_inspector_layout(qtbot):
     assert panel.findChild(QWidget, "axisHeaderRow") is not None
 
     z_parts = panel._axis_row_parts["z"]
-    assert z_parts["unit"].parent().objectName() == "axisUnitLine"
-    assert z_parts["unit"].maximumWidth() == 64
+    # The amplitude unit is deliberately independent from the heatmap-only
+    # colour-scale row: FFT line plots still need it when that row is hidden.
+    assert z_parts["unit"] is None
+    assert panel._amplitude_unit_row is not None
+    assert panel.combo_amp_unit.parent() is panel._amplitude_unit_row
     assert panel._axis_row_parts["x"]["label"].minimumWidth() >= 72
 
     assert z_parts["stack"].currentWidget() is z_parts["summary_page"]
@@ -44,9 +47,10 @@ def test_batch_output_panel_axis_settings_uses_inspector_layout(qtbot):
     panel.resize(360, 420)
     panel.show()
     qtbot.wait(20)
-    unit_top = z_parts["unit"].parentWidget().mapTo(panel, QPoint(0, 0)).y()
+    unit_top = panel._amplitude_unit_row.mapTo(panel, QPoint(0, 0)).y()
     range_top = z_parts["range_host"].mapTo(panel, QPoint(0, 0)).y()
-    assert unit_top > range_top
+    # The stable amplitude unit control sits before the heatmap-only Z row.
+    assert unit_top < range_top
 
 
 def test_batch_output_panel_axis_settings_uses_compact_bordered_card(qtbot):
@@ -93,6 +97,24 @@ def test_batch_output_panel_time_axis_labels(qtbot):
     assert y_parts["label"].text() == "幅值 (Y):"
     assert y_parts["summary"].text() == "自动范围"
     assert panel._z_axis_row.isHidden() is True
+    assert panel._amplitude_unit_row.isHidden() is True
+
+
+def test_batch_output_panel_keeps_amplitude_unit_visible_for_spectral_methods(qtbot):
+    panel = _make_panel(qtbot)
+
+    for method in ("fft", "fft_time", "order_time"):
+        panel.apply_method_defaults(method)
+        assert panel._amplitude_unit_row.isHidden() is False
+
+    panel.apply_method_defaults("fft")
+    panel.combo_amp_unit.setCurrentText("Linear")
+    panel.apply_method_defaults("time")
+    assert panel._amplitude_unit_row.isHidden() is True
+
+    panel.apply_method_defaults("fft")
+    assert panel._amplitude_unit_row.isHidden() is False
+    assert panel.combo_amp_unit.currentText() == "Linear"
 
 
 def test_axis_ranges_are_cached_per_method_without_cross_unit_bleed(qtbot):
@@ -401,13 +423,15 @@ def test_batch_output_import_migrates_to_the_fixed_interactive_contract(qtbot):
     assert panel.data_format() == "xlsx"
 
 
-def test_batch_output_hides_advanced_and_recovery_controls(qtbot):
+def test_batch_output_hides_advanced_controls_and_has_no_recovery_surface(qtbot):
     panel = _make_panel(qtbot)
 
     assert panel._output_settings.isHidden()
     assert not panel._btn_output_settings.isVisible()
-    assert not panel._btn_resume.isVisible()
-    assert not panel._btn_retry_failed.isVisible()
+    assert not hasattr(panel, "resumeRequested")
+    assert not hasattr(panel, "retryFailedRequested")
+    assert not hasattr(panel, "_btn_resume")
+    assert not hasattr(panel, "_btn_retry_failed")
     assert "PNG 1920×1080" in panel._output_summary.text()
     assert "冲突自动编号" in panel._output_summary.text()
 
@@ -440,7 +464,7 @@ def test_batch_output_uses_the_canonical_line_width(qtbot):
     panel = _make_panel(qtbot)
     panel.apply_outputs(BatchOutput(image_line_width=3.25))
 
-    assert panel.get_outputs().image_line_width == pytest.approx(1.0)
+    assert panel.get_outputs().image_line_width == pytest.approx(1.5)
     assert panel._combo_image_line_width.isHidden()
 
 
@@ -455,23 +479,6 @@ def test_batch_output_checkboxes_only_choose_fixed_artifacts(qtbot):
     assert (outputs.image_width, outputs.image_height) == (1920, 1080)
     assert panel._combo_image_format.isHidden()
     assert panel._combo_image_size.isHidden()
-
-
-def test_batch_output_operations_emit_only_on_explicit_button_click(qtbot):
-    panel = _make_panel(qtbot)
-    resumed = []
-    retried = []
-    panel.resumeRequested.connect(lambda: resumed.append(True))
-    panel.retryFailedRequested.connect(lambda: retried.append(True))
-
-    assert resumed == []
-    assert retried == []
-
-    panel._btn_resume.click()
-    panel._btn_retry_failed.click()
-
-    assert resumed == [True]
-    assert retried == [True]
 
 
 def test_batch_output_panel_fits_288px_column(qtbot):

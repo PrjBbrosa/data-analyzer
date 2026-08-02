@@ -5,8 +5,9 @@ Mirrors the pre-W4 ``batch_sheet.py`` output group (recovered from commit
 ``QFileDialog.getExistingDirectory``, ``chk_data`` / ``chk_image`` checkboxes,
 and a ``csv``/``xlsx`` format ``QComboBox``.
 
-``BatchOutput`` owns every portable output option; the directory and selected
-resume/retry manifest remain runtime-only UI state outside the dataclass.
+``BatchOutput`` owns every portable output option.  Runtime resume/retry stays
+available to the runner and manifest APIs, but this compact GUI has no hidden
+recovery-control surface.
 """
 from __future__ import annotations
 
@@ -75,8 +76,6 @@ _AXIS_CONTEXTS = {
 
 class OutputPanel(QWidget):
     changed = pyqtSignal()
-    resumeRequested = pyqtSignal()
-    retryFailedRequested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -302,33 +301,9 @@ QPushButton#batchOutputSettingsButton:checked {
         self._chk_manifest.setChecked(True)
         settings_form.addRow("运行清单", self._chk_manifest)
 
-        self._combo_resume_policy = QComboBox(self)
-        self._combo_resume_policy.addItem("不恢复", "none")
-        self._combo_resume_policy.addItem("Manifest 校验恢复", "manifest")
-        self._compact_field(self._combo_resume_policy)
-        settings_form.addRow("恢复策略", self._combo_resume_policy)
-
-        self._btn_resume = QPushButton("恢复上次运行…", self)
-        self._btn_retry_failed = QPushButton("仅重试失败", self)
-        self._btn_resume.setMinimumWidth(0)
-        self._btn_retry_failed.setMinimumWidth(0)
-        self._btn_resume.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self._btn_retry_failed.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        operation_row = QHBoxLayout()
-        operation_row.setContentsMargins(0, 0, 0, 0)
-        operation_row.setSpacing(6)
-        operation_row.addWidget(self._btn_resume, 1)
-        operation_row.addWidget(self._btn_retry_failed, 1)
-        settings_form.addRow("运行操作", operation_row)
         self._output_settings.hide()
         form.addRow(self._output_settings)
         outer.addLayout(form)
-
-        self._operation_status = QLabel("未选择运行清单", self)
-        self._operation_status.setObjectName("batchOperationStatus")
-        self._operation_status.setWordWrap(True)
-        self._operation_status.setStyleSheet("color:#64748b;font-size:11px;")
-        outer.addWidget(self._operation_status)
 
         self._output_preview = QLabel("运行预览：等待完整配置", self)
         self._output_preview.setObjectName("batchOutputPreview")
@@ -360,6 +335,7 @@ QPushButton#batchOutputSettingsButton:checked {
             y_auto_summary="自动范围",
             z_auto_summary="自动色阶",
             pre_header_rows=(("dB 参考:", self.db_reference_control),),
+            amplitude_unit_row_label="幅值单位:",
         )
         self._axis_group = axis_group
         self._db_reference_row = self.db_reference_control.parentWidget()
@@ -388,17 +364,13 @@ QPushButton#batchOutputSettingsButton:checked {
         # readers; they are not an alternate visible configuration surface.
         self._btn_output_settings.hide()
         self._output_settings.hide()
-        self._operation_status.hide()
         self._output_preview.hide()
-        self._btn_resume.hide()
-        self._btn_retry_failed.hide()
         for widget in (
             self._combo_format, self._combo_image_format,
             self._combo_image_size, self._spin_image_width,
             self._spin_image_height, self._combo_image_background,
             self._combo_image_line_width, self._spin_image_dpi,
             self._combo_conflict, self._chk_manifest,
-            self._combo_resume_policy,
         ):
             widget.hide()
         self._method = "fft"
@@ -439,11 +411,6 @@ QPushButton#batchOutputSettingsButton:checked {
             lambda *_: self.changed.emit()
         )
         self._chk_manifest.toggled.connect(lambda *_: self.changed.emit())
-        self._combo_resume_policy.currentIndexChanged.connect(
-            lambda *_: self.changed.emit()
-        )
-        self._btn_resume.clicked.connect(self.resumeRequested)
-        self._btn_retry_failed.clicked.connect(self.retryFailedRequested)
         self.db_reference_control.editor.valueChanged.connect(
             lambda *_: self.changed.emit()
         )
@@ -580,6 +547,7 @@ QPushButton#batchOutputSettingsButton:checked {
         self._method = str(method)
         context = _AXIS_CONTEXTS.get(str(method), _AXIS_CONTEXTS["fft"])
         self._set_z_axis_visible(str(method) in {"fft_time", "order_time"})
+        self._set_amplitude_unit_visible(str(method) != "time")
         self._set_db_reference_visible(str(method) != "time")
         for axis, suffix_key in (("x", "x_unit"), ("y", "y_unit")):
             suffix = context[suffix_key]
@@ -605,6 +573,11 @@ QPushButton#batchOutputSettingsButton:checked {
 
     def _set_z_axis_visible(self, visible: bool) -> None:
         row = getattr(self, "_z_axis_row", None)
+        if row is not None:
+            row.setVisible(bool(visible))
+
+    def _set_amplitude_unit_visible(self, visible: bool) -> None:
+        row = getattr(self, "_amplitude_unit_row", None)
         if row is not None:
             row.setVisible(bool(visible))
 
@@ -733,7 +706,7 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
             image_height=1080,
             image_dpi=144,
             image_background="white",
-            image_line_width=1.0,
+            image_line_width=1.5,
             conflict_policy="auto_number",
             write_manifest=True,
             resume_policy="none",
@@ -804,9 +777,6 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
             f"冲突策略 {getattr(preview, 'conflict_policy', '')} · "
             f"已有冲突 {int(getattr(preview, 'conflict_count', 0))}"
         )
-
-    def set_operation_status(self, text: str) -> None:
-        self._operation_status.setText(str(text or "未选择运行清单"))
 
     def update_effective_preview(
         self,
