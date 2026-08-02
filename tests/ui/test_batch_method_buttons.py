@@ -59,7 +59,7 @@ def test_batch_sheet_get_preset_includes_rpm_factor_from_input_panel(qtbot):
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
     sheet = BatchSheet(parent=None, files={}, current_preset=None)
     qtbot.addWidget(sheet)
-    sheet._input_panel._rpm_unit_combo.setCurrentText("deg/s")
+    sheet._input_panel._rpm_factor_spin.setValue(1.0 / 6.0)
     sheet.apply_method("order_time")
     preset = sheet.get_preset()
     assert abs(preset.params["rpm_factor"] - 1.0 / 6.0) < 1e-9

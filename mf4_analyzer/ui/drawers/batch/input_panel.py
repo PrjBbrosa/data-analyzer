@@ -10,8 +10,8 @@ Two widgets:
   free function). No ``thread.wait()`` is used (per
   ``pyqt-ui/2026-04-25-qthread-wait-deadlocks-queued-quit.md``).
 
-* ``InputPanel`` — composes the file list + signal picker + RPM channel
-  combo + time-range field. Re-emits a single ``changed`` signal whenever
+* ``InputPanel`` — composes the file list + signal picker + RPM channel and
+  coefficient fields + time-range field. Re-emits a single ``changed`` signal whenever
   any sub-control mutates.
 """
 from __future__ import annotations
@@ -41,17 +41,6 @@ from ...widgets.compact_spinbox import CompactDoubleSpinBox
 from .filter_panel import BatchFilterPanel
 from .signal_picker import SignalPickerPopup
 
-
-# Unit-preset → rpm_factor coefficient. The "自定义" sentinel leaves the
-# spinbox alone so users can free-type. Factors derived analytically:
-#   rad/s → rpm: 60 / (2π) ≈ 9.5492965855
-#   deg/s → rpm: 1 / 6     ≈ 0.1666666667
-_RPM_UNIT_FACTORS: dict[str, float] = {
-    "rpm":   1.0,
-    "rad/s": 60.0 / (2.0 * 3.141592653589793),
-    "deg/s": 1.0 / 6.0,
-}
-_RPM_UNIT_CUSTOM = "自定义"
 
 # Methods whose backend dispatch consumes RPM. Drives InputPanel.set_method
 # row visibility — fft / fft_time skip the row entirely.
@@ -819,7 +808,7 @@ class InputPanel(QWidget):
         self._target_signal_label = QLabel("目标信号", form_host)
         form.addRow(self._target_signal_label, self._signal_picker)
 
-        # ----- RPM row (single-select picker + unit + factor) -----
+        # ----- RPM channel row -----
         rpm_host = QWidget(form_host)
         rpm_lay = QHBoxLayout(rpm_host)
         rpm_lay.setContentsMargins(0, 0, 0, 0)
@@ -830,42 +819,26 @@ class InputPanel(QWidget):
         self._rpm_picker.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         rpm_lay.addWidget(self._rpm_picker, 1)
 
-        self._rpm_unit_combo = QComboBox(rpm_host)
-        for unit in _RPM_UNIT_FACTORS.keys():
-            self._rpm_unit_combo.addItem(unit)
-        self._rpm_unit_combo.addItem(_RPM_UNIT_CUSTOM)
-        # These two controls are actionable configuration, not decorative
-        # suffixes.  With an Ignored policy and zero minimum Qt legitimately
-        # allocated them 0 px in the compact Batch pane, leaving RPM with no
-        # visible unit/factor choice.  Keep them fixed and let only the picker
-        # elide/absorb the remaining horizontal space.
-        self._rpm_unit_combo.setFixedWidth(64)
-        self._rpm_unit_combo.setToolTip(
-            "RPM 原始通道单位；选择后会更新右侧转换系数。"
-        )
-        rpm_lay.addWidget(self._rpm_unit_combo)
-
-        # NOTE: setDecimals(10) so unit-preset factors with infinite
-        # decimal expansions (1/6 ≈ 0.1666666667, 60/(2π) ≈ 9.5492965855)
-        # round-trip through QDoubleSpinBox without losing more than
-        # ~1e-10 of precision. The display stays readable; the maximum
-        # width below keeps the column from ballooning.
-        self._rpm_factor_spin = CompactDoubleSpinBox(rpm_host)
+        # ----- RPM coefficient row -----
+        # Keep sufficient precision for a user-supplied coefficient to
+        # round-trip through a saved Batch preset.
+        self._rpm_factor_spin = CompactDoubleSpinBox(form_host)
         self._rpm_factor_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self._rpm_factor_spin.setDecimals(10)
         self._rpm_factor_spin.setRange(0.0001, 10000.0)
         self._rpm_factor_spin.setValue(1.0)
-        self._rpm_factor_spin.setPrefix("× ")
-        self._rpm_factor_spin.setFixedWidth(86)
         self._rpm_factor_spin.setAccessibleName("RPM 转换系数")
+        self._rpm_factor_spin.setMinimumWidth(0)
+        self._rpm_factor_spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._rpm_factor_spin.setToolTip(
             "转换为 RPM 的系数：原始通道值 × 系数。可直接输入自定义系数。"
         )
-        rpm_lay.addWidget(self._rpm_factor_spin)
 
-        # Form row label
+        # Form row labels
         self._rpm_label_widget = QLabel("RPM 通道", form_host)
         form.addRow(self._rpm_label_widget, rpm_host)
+        self._rpm_factor_label_widget = QLabel("RPM系数", form_host)
+        form.addRow(self._rpm_factor_label_widget, self._rpm_factor_spin)
         form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._rpm_row_host = rpm_host  # referenced by set_method visibility
 
@@ -876,18 +849,17 @@ class InputPanel(QWidget):
         # reparented to ``self`` while detached so they survive the layout
         # round-trip (matches the DynamicParamForm._render_for pattern).
         self._form_ref = form
-        # _rpm_row_index = the QFormLayout row position of the RPM row at
-        # construction time (after target-signals row is row 0). We snap
-        # it from getWidgetPosition so the value is honest even if rows
-        # are added in a different order in the future.
+        # Snap both paired RPM rows from QFormLayout itself so their original
+        # order remains correct even if fields above them move in the future.
         idx, _role = form.getWidgetPosition(self._rpm_row_host)
         if idx < 0:
             raise RuntimeError("RPM row not found in form layout")
         self._rpm_row_index = idx
+        factor_idx, _role = form.getWidgetPosition(self._rpm_factor_spin)
+        if factor_idx < 0:
+            raise RuntimeError("RPM coefficient row not found in form layout")
+        self._rpm_factor_row_index = factor_idx
         self._rpm_row_visible = True  # initial state matches addRow above
-
-        # Internal flag so unit→factor and factor→unit don't ping-pong.
-        self._rpm_factor_sync_busy = False
 
         # Compatibility holder for legacy direct callers.  It is deliberately
         # not inserted into the compact Input form: BatchSheet maps ranges to
@@ -912,8 +884,7 @@ class InputPanel(QWidget):
             self._on_target_policy_changed
         )
         self._rpm_picker.selectionChanged.connect(lambda *_: self.changed.emit())
-        self._rpm_unit_combo.currentTextChanged.connect(self._on_rpm_unit_changed)
-        self._rpm_factor_spin.valueChanged.connect(self._on_rpm_factor_value_changed)
+        self._rpm_factor_spin.valueChanged.connect(lambda _value: self.changed.emit())
         self._time_edit.textChanged.connect(self._on_time_text_changed)
         self._filter_panel.changed.connect(lambda *_: self.changed.emit())
 
@@ -961,37 +932,6 @@ class InputPanel(QWidget):
         self._refresh_signal_universe()
         self.changed.emit()
 
-    def _on_rpm_unit_changed(self, unit: str) -> None:
-        if unit in _RPM_UNIT_FACTORS:
-            self._rpm_factor_sync_busy = True
-            try:
-                self._rpm_factor_spin.setValue(_RPM_UNIT_FACTORS[unit])
-            finally:
-                self._rpm_factor_sync_busy = False
-        # When unit is "自定义", leave spinbox alone.
-        self.changed.emit()
-
-    def _on_rpm_factor_value_changed(self, value: float) -> None:
-        if self._rpm_factor_sync_busy:
-            self.changed.emit()
-            return
-        # Identify if the new value matches a known unit (within tolerance).
-        match = None
-        for unit, factor in _RPM_UNIT_FACTORS.items():
-            if abs(value - factor) < 1e-6:
-                match = unit
-                break
-        target = match if match is not None else _RPM_UNIT_CUSTOM
-        if self._rpm_unit_combo.currentText() != target:
-            self._rpm_unit_combo.blockSignals(True)
-            try:
-                idx = self._rpm_unit_combo.findText(target)
-                if idx >= 0:
-                    self._rpm_unit_combo.setCurrentIndex(idx)
-            finally:
-                self._rpm_unit_combo.blockSignals(False)
-        self.changed.emit()
-
     def _on_time_text_changed(self, _text: str) -> None:
         error = self.time_range_error()
         self._time_edit.setToolTip(error)
@@ -1001,7 +941,7 @@ class InputPanel(QWidget):
         self.changed.emit()
 
     def set_method(self, method: str) -> None:
-        """Show/hide the RPM row based on whether the method consumes RPM.
+        """Show/hide the paired RPM channel/coefficient rows by method.
 
         Driven by ``BatchSheet`` on ``methodChanged``. Per the
         ``conditional-visibility-init-sync-and-paired-field-children``
@@ -1024,17 +964,27 @@ class InputPanel(QWidget):
         if visible == self._rpm_row_visible:
             return
         if visible:
-            # Re-insert at the original row position. ``insertRow`` accepts
-            # the original index even if rows below have shifted up while
-            # the RPM row was absent.
+            # Re-insert in original order.  The second insertion shifts any
+            # row below it, leaving the two RPM controls consecutive.
             self._form_ref.insertRow(
                 self._rpm_row_index, self._rpm_label_widget, self._rpm_row_host,
             )
+            self._form_ref.insertRow(
+                self._rpm_factor_row_index,
+                self._rpm_factor_label_widget,
+                self._rpm_factor_spin,
+            )
             self._rpm_label_widget.setVisible(True)
             self._rpm_row_host.setVisible(True)
+            self._rpm_factor_label_widget.setVisible(True)
+            self._rpm_factor_spin.setVisible(True)
         else:
-            idx, _role = self._form_ref.getWidgetPosition(self._rpm_row_host)
-            if idx >= 0:
+            # Remove bottom first so taking the channel row cannot shift the
+            # coefficient row before we locate it.
+            for field in (self._rpm_factor_spin, self._rpm_row_host):
+                idx, _role = self._form_ref.getWidgetPosition(field)
+                if idx < 0:
+                    continue
                 taken = self._form_ref.takeRow(idx)
                 # Reparent both label and field widgets to ``self`` so they
                 # persist (they're orphaned otherwise once the layout drops
@@ -1173,21 +1123,15 @@ class InputPanel(QWidget):
         self._rpm_picker.set_selected((str(ch),) if ch else ())
 
     def apply_rpm_factor(self, value: float) -> None:
-        """Restore the RPM factor spinbox + unit combo from a preset.
+        """Restore the explicitly saved RPM coefficient from a preset.
 
         Pairs with ``rpm_params()`` so a saved preset's ``rpm_factor``
         round-trips through export → JSON → import without resetting.
-        Picks the matching unit-preset label if ``value`` matches one
-        within tolerance, else "自定义".
         """
         try:
             v = float(value)
         except (TypeError, ValueError):
             return
-        # Sync the spinbox first; _on_rpm_factor_value_changed will then
-        # pick the matching unit ("自定义" if no match) via the existing
-        # bidirectional logic. Do NOT block signals — we want the
-        # combo to follow.
         self._rpm_factor_spin.setValue(v)
 
     def apply_filter_params(self, params: dict | None) -> None:

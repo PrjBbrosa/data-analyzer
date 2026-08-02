@@ -592,20 +592,8 @@ def test_input_panel_rpm_picker_partial_signals_visible_but_disabled(qtbot):
     assert p._rpm_picker.is_disabled("rpm_x") is True
 
 
-def test_input_panel_rpm_unit_preset_sets_factor(qtbot):
-    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
-    p = InputPanel()
-    qtbot.addWidget(p)
-    p._rpm_unit_combo.setCurrentText("deg/s")
-    assert abs(p._rpm_factor_spin.value() - 1.0 / 6.0) < 1e-9
-    p._rpm_unit_combo.setCurrentText("rad/s")
-    assert abs(p._rpm_factor_spin.value() - 60.0 / (2.0 * 3.141592653589793)) < 1e-6
-    p._rpm_unit_combo.setCurrentText("rpm")
-    assert p._rpm_factor_spin.value() == 1.0
-
-
-def test_batch_rpm_coefficient_controls_stay_visible_and_align_with_target(qtbot):
-    """Order's picker, unit, and coefficient stay usable in the narrow pane."""
+def test_batch_rpm_coefficient_has_its_own_aligned_form_row(qtbot):
+    """Order keeps the coefficient readable instead of squeezing it into RPM."""
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
 
     sheet = BatchSheet(parent=None, files={}, current_preset=None)
@@ -617,12 +605,12 @@ def test_batch_rpm_coefficient_controls_stay_visible_and_align_with_target(qtbot
 
     panel = sheet._input_panel
     assert panel._signal_picker.geometry().x() == panel._rpm_row_host.geometry().x()
-    assert panel._rpm_unit_combo.isVisibleTo(sheet)
     assert panel._rpm_factor_spin.isVisibleTo(sheet)
-    assert panel._rpm_unit_combo.width() >= 56
-    assert panel._rpm_factor_spin.width() >= 76
-    assert panel._rpm_picker.geometry().right() < panel._rpm_unit_combo.geometry().x()
-    assert panel._rpm_unit_combo.geometry().right() < panel._rpm_factor_spin.geometry().x()
+    assert not hasattr(panel, "_rpm_unit_combo")
+    assert panel._rpm_factor_spin.geometry().x() == panel._signal_picker.geometry().x()
+    assert panel._rpm_factor_spin.geometry().y() > panel._rpm_row_host.geometry().y()
+    assert panel._rpm_factor_spin.width() == panel._signal_picker.width()
+    assert panel._rpm_picker.width() == panel._signal_picker.width()
 
 
 def test_batch_double_spinboxes_display_compact_text_without_losing_precision(qtbot):
@@ -632,11 +620,11 @@ def test_batch_double_spinboxes_display_compact_text_without_losing_precision(qt
 
     p = InputPanel()
     qtbot.addWidget(p)
-    assert p._rpm_factor_spin.text() == "× 1.0"
+    assert p._rpm_factor_spin.text() == "1.0"
 
     p._rpm_factor_spin.setValue(1.23456789)
     assert abs(p._rpm_factor_spin.value() - 1.23456789) < 1e-9
-    assert p._rpm_factor_spin.text() == "× 1.23456789"
+    assert p._rpm_factor_spin.text() == "1.23456789"
 
     form = DynamicParamForm()
     qtbot.addWidget(form)
@@ -646,13 +634,13 @@ def test_batch_double_spinboxes_display_compact_text_without_losing_precision(qt
     assert form._w_time_res.text() == "0.1"
 
 
-def test_input_panel_rpm_manual_factor_switches_unit_to_custom(qtbot):
+def test_input_panel_rpm_factor_stays_explicit_when_channel_changes(qtbot):
     from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
     p = InputPanel()
     qtbot.addWidget(p)
-    p._rpm_unit_combo.setCurrentText("rpm")
     p._rpm_factor_spin.setValue(0.42)
-    assert p._rpm_unit_combo.currentText() == "自定义"
+    p.apply_rpm_channel("speed_signal")
+    assert p._rpm_factor_spin.value() == 0.42
 
 
 def test_input_panel_rpm_row_hidden_for_fft_method(qtbot):
@@ -662,6 +650,8 @@ def test_input_panel_rpm_row_hidden_for_fft_method(qtbot):
     p.set_method("fft")
     assert p._rpm_row_host.isVisibleTo(p) is False
     assert p._rpm_label_widget.isVisibleTo(p) is False
+    assert p._rpm_factor_spin.isVisibleTo(p) is False
+    assert p._rpm_factor_label_widget.isVisibleTo(p) is False
 
 
 def test_input_panel_rpm_row_visible_for_order_time(qtbot):
@@ -671,6 +661,8 @@ def test_input_panel_rpm_row_visible_for_order_time(qtbot):
     p.set_method("order_time")
     assert p._rpm_row_host.isVisibleTo(p) is True
     assert p._rpm_label_widget.isVisibleTo(p) is True
+    assert p._rpm_factor_spin.isVisibleTo(p) is True
+    assert p._rpm_factor_label_widget.isVisibleTo(p) is True
 
 
 def test_input_panel_rpm_row_hidden_for_fft_time(qtbot):
@@ -680,6 +672,7 @@ def test_input_panel_rpm_row_hidden_for_fft_time(qtbot):
     qtbot.addWidget(p)
     p.set_method("fft_time")
     assert p._rpm_row_host.isVisibleTo(p) is False
+    assert p._rpm_factor_spin.isVisibleTo(p) is False
 
 
 def test_batch_sheet_method_change_drives_rpm_visibility(qtbot):
@@ -689,8 +682,10 @@ def test_batch_sheet_method_change_drives_rpm_visibility(qtbot):
     sheet.show()
     sheet.apply_method("fft")
     assert sheet._input_panel._rpm_row_host.isVisibleTo(sheet) is False
+    assert sheet._input_panel._rpm_factor_spin.isVisibleTo(sheet) is False
     sheet.apply_method("order_time")
     assert sheet._input_panel._rpm_row_host.isVisibleTo(sheet) is True
+    assert sheet._input_panel._rpm_factor_spin.isVisibleTo(sheet) is True
 
 
 def test_input_panel_rpm_factor_round_trips_through_preset(qtbot):
@@ -705,7 +700,7 @@ def test_input_panel_rpm_factor_round_trips_through_preset(qtbot):
     sheet = BatchSheet(parent=None, files={}, current_preset=None)
     qtbot.addWidget(sheet)
     sheet.apply_method("order_time")
-    sheet._input_panel._rpm_unit_combo.setCurrentText("deg/s")
+    sheet._input_panel._rpm_factor_spin.setValue(1.0 / 6.0)
     exported = sheet.get_preset()
     assert abs(exported.params["rpm_factor"] - 1.0 / 6.0) < 1e-9
 
@@ -807,12 +802,12 @@ def test_input_panel_rpm_factor_is_returned_in_params(qtbot):
     ``params == {"rpm_factor": 1.0 / 6.0}`` cannot hold byte-for-byte
     when ``1/6`` has ~16 significant decimal digits. The contract is
     "≤ 1e-10 precision loss" — assert that, mirroring the tolerance
-    used in test_input_panel_rpm_unit_preset_sets_factor.
+    used by the preset round-trip assertion above.
     """
     from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
     p = InputPanel()
     qtbot.addWidget(p)
-    p._rpm_unit_combo.setCurrentText("deg/s")
+    p._rpm_factor_spin.setValue(1.0 / 6.0)
     params = p.rpm_params()
     assert set(params.keys()) == {"rpm_factor"}
     assert abs(params["rpm_factor"] - 1.0 / 6.0) < 1e-9
