@@ -146,3 +146,30 @@
 
 配套实施说明见  
 `docs/superpowers/specs/2026-08-02-batch-post-merge-hardening-design.md`。
+
+---
+
+## 执行记录（2026-08-02）
+
+- **实施代码提交：** `834b8d7 fix(batch): harden renderer and compact UI contracts`。
+  根目录 planning 文件的 tracked 删除已在该分支前置提交 `fc37b85` 出现；该提交同时
+  含一次并发的 `CLAUDE.md` 文档更新，实施代码提交未纳入该用户文档改动。
+- **Gate A：**
+  `tests/ui/test_batch_output_panel.py tests/ui/test_batch_method_buttons.py tests/ui/test_batch_compact_contract.py tests/ui/test_batch_smoke.py` — **110 passed in 6.16s**。
+- **Gate B：**
+  `tests/test_batch_render_qt.py tests/test_batch_render_qt_heatmap.py tests/test_batch_render_qt_display_envelope.py tests/test_batch_renderer.py tests/test_batch_render_import_boundary.py tests/test_batch_runner.py` — **264 passed in 11.17s**；
+  `rg -n 'mf4_analyzer\.ui' mf4_analyzer/batch_render_qt` 无命中。
+- **Gate C 聚焦：** DbReference、Batch 输出/Sheet/Thread/Method 定向组合 —
+  **116 passed in 7.28s**。完整 `tests/ui` 第 1 轮在约 10% 后卡在
+  `QApplication.setStyleSheet()` Qt 样式递归并被安全终止，未得到两轮 100% 通过，
+  因此不得写作稳定性 PASS。
+- **最终 Batch 聚焦矩阵：** Spec §5 的 A/B/C2 命令 — **381 passed in 16.69s**。
+- **固定离屏探针：**
+  `/tmp/tracelab-batch-a-proof.MadN5l/fft-linear.png`、
+  `/tmp/tracelab-batch-a-proof.MadN5l/gui-default-linewidth.png`、
+  `/tmp/tracelab-batch-b-proof.2biOex/subplot-units.png`。
+- **Cocoa：** 见
+  `docs/superpowers/reports/2026-08-02-batch-compact-ui-cocoa-acceptance.md`；
+  1080×760 的 Time、FFT dB/Linear、FFT-vs-Time、Order 和文件管理前台检查通过，
+  但 1440×900 与 running/completed 未验证，结论仍为 **macOS 合并 Batch UI NO-GO**。
+- **Windows：** full/lite onedir 本轮未执行，继续为 **NO-GO**。
