@@ -2711,22 +2711,6 @@ QStatusBar QFrame#chartHintBar QLabel#chartHintDiscovery {
     padding: 0 6px;
 }
 
-/* Batch signal picker chips */
-#SignalChip {
-    background-color: #eef2f7;
-    border: 1px solid #dfe5ee;
-    border-radius: 6px;
-}
-#SignalChipRemove {
-    color: #64748b;
-    background: transparent;
-    border: none;
-    padding: 0;
-    font-weight: 700;
-    min-height: 18px;
-}
-#SignalChipRemove:hover { color: #ef4444; }
-
 /* Collapsible side panels: transparent host; SidePanelStrip paints a
    white rounded pill and blue chevron in Python for crisp corners. */
 QFrame#sidePanelStrip {

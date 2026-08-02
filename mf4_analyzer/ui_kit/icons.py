@@ -30,6 +30,7 @@ MUTED = QColor('#64748B')
 RED = QColor('#DC2626')
 GREEN = QColor('#059669')
 AMBER = QColor('#D97706')
+CHEVRON = QColor('#7B8798')
 
 
 def _canvas(size=20):
@@ -414,6 +415,31 @@ class Icons:
             p.setBrush(QBrush(QColor(100, 116, 139, 60)))
             p.drawRect(QRectF(13, 2, 5, 16))
         return QIcon(pix)
+
+    @classmethod
+    def chevron_down(cls, color=None):
+        """Two-stroke V opening downwards — 'expand this popup'.
+
+        Drawn rather than typed: the ``"⌄"`` glyph rasterizes unevenly across
+        the fallback fonts Qt picks for it. The stroke width matches the other
+        line icons so the chevron sits at the same visual weight as the rest of
+        the icon set. Callers control the rendered size via ``setIconSize``;
+        the default ``#7b8798`` is the resting arrow color of the batch signal
+        picker, with ``#354254`` passed in on hover.
+        """
+        def draw(p):
+            p.drawLine(QPointF(5, 8), QPointF(10, 13))
+            p.drawLine(QPointF(10, 13), QPointF(15, 8))
+        return _line_icon(draw, color or CHEVRON)
+
+    @classmethod
+    def chevron_up(cls, color=None):
+        """Mirror of :meth:`chevron_down` — 'collapse this popup'."""
+
+        def draw(p):
+            p.drawLine(QPointF(5, 12), QPointF(10, 7))
+            p.drawLine(QPointF(10, 7), QPointF(15, 12))
+        return _line_icon(draw, color or CHEVRON)
 
     @classmethod
     def save_disk(cls):
