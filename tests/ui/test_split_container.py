@@ -4,9 +4,14 @@ import numpy as np
 
 
 def _shown_chart_stack(qtbot):
+    # 1400 matches the width MainWindow tests use. At 1000 the stack is
+    # narrower than a two-pane split's minimum, so entering split grows this
+    # top-level window mid-layout and Qt hands the extra pixels out by size
+    # hint — the panes land uneven for a reason that cannot happen inside the
+    # real window, where the stack never resizes itself.
     stack = ChartStack()
     qtbot.addWidget(stack)
-    stack.resize(1000, 620)
+    stack.resize(1400, 620)
     stack.show()
     qtbot.waitExposed(stack)
     return stack

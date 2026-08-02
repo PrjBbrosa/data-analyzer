@@ -10,7 +10,7 @@ import pytest
 from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtGui import QMouseEvent
 
-from tests.ui.test_split_routing import _has_channel
+from tests.ui.test_split_routing import _has_channel, _shows_channel
 from tests.ui.test_view_switch_integration import _fid, _set_checked
 from tests.ui.test_split_routing import _make_speed_vs_torque_views
 
@@ -206,8 +206,10 @@ def test_channel_eye_routes_only_to_focused_view(qtbot, qapp, loaded_csv):
     assert w.navigator.set_channel_visible(fid, "speed", False)
     qapp.processEvents()
 
-    assert not _has_channel(cs.canvas_time, "speed")
-    assert _has_channel(cs.secondary_canvas(), "torque")
+    # The eye takes the selection-delta fast path: the curve stays bound to
+    # the pane and is hidden in place, so assert on what is DRAWN.
+    assert not _shows_channel(cs.canvas_time, "speed")
+    assert _shows_channel(cs.secondary_canvas(), "torque")
     assert w.view_manager.get(0).hidden_channels == [(fid, "speed")]
     assert w.view_manager.get(1).hidden_channels == []
 

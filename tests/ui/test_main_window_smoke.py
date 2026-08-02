@@ -4100,6 +4100,8 @@ def test_alt_view_shortcut_switches_active_section(qapp, qtbot):
     """Alt+i view switching must drive the CURRENTLY shown section's view
     manager (fft/fft_time/order), not only the time section."""
     from mf4_analyzer.ui_kit import load_stylesheet
+    # Installing the app QSS here is safe: conftest's _isolate_app_style
+    # restores the application style/stylesheet after every test.
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
     w = MainWindow()
@@ -4565,6 +4567,10 @@ def test_fft_checked_channel_change_refreshes_auto_db_reference(qapp, qtbot):
     df = pd.DataFrame({"Time": t, "ACC": np.sin(2 * np.pi * 10 * t)})
     w._register_file_data("acc.mf4", df, ["Time", "ACC"], {"ACC": "m/s^2"})
     fid = next(iter(w.files))
+    # _register_file_data is only half of a load; _load_one runs the auto-attach
+    # hook afterwards. Without it the file belongs to no View and no channel can
+    # be checked, so the sentinel below would never be overwritten.
+    w._on_source_load_finished([fid])
 
     w.toolbar.btn_mode_fft.click()
     ctx = w._analysis_ctx("fft")
@@ -4595,6 +4601,7 @@ def test_entering_fft_mode_resolves_auto_db_reference_for_checked_channel(qapp, 
     df = pd.DataFrame({"Time": t, "ACC": np.sin(2 * np.pi * 10 * t)})
     w._register_file_data("acc.mf4", df, ["Time", "ACC"], {"ACC": "m/s^2"})
     fid = next(iter(w.files))
+    w._on_source_load_finished([fid])
 
     # 在 time 模式勾选（不经 FFT 分支），再设哨兵，最后切入 FFT
     w.navigator.check_first_channel(fid)

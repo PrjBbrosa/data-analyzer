@@ -148,6 +148,9 @@ def test_channel_tree_check_raster_selects_all_channels(qapp, tmp_path):
     w = MultiFileChannelWidget()
     fd1 = _make_fd(fp, label_suffix="2x", fs=2000.0, channels=['A', 'B'])
     w.add_file("f0", fd1)
+    # Rows of an unattached file are inert — check propagation is gated on
+    # _is_item_attached, so the raster node would tick nothing.
+    w.set_attached_file_ids(["f0"])
 
     file_node = w.tree.topLevelItem(0)
     raster_node = file_node.child(0)
@@ -173,6 +176,7 @@ def test_get_checked_channels_returns_fid_ch_color(qapp, tmp_path):
     fd2 = _make_fd(fp, label_suffix="1x", channels=['C'])
     w.add_file("f0", fd1)
     w.add_file("f1", fd2)
+    w.set_attached_file_ids(["f0", "f1"])
 
     # Check raster 0's channels
     file_node = w.tree.topLevelItem(0)
@@ -255,6 +259,7 @@ def test_flat_get_checked_channels_works(qapp, tmp_path):
     fd = _make_fd(fp, label_suffix="", channels=['rpm', 'temp'])
     w = MultiFileChannelWidget()
     w.add_file("f0", fd)
+    w.set_attached_file_ids(["f0"])
 
     # Check one channel
     file_node = w.tree.topLevelItem(0)

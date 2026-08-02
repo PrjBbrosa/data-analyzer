@@ -359,6 +359,9 @@ def test_axis_group_menu_open_retires_coaxis_merge_discovery(qapp, qtbot, monkey
     widget.show()
     qtbot.waitExposed(widget)
     widget.add_file("file-a", _MultiChannelStub())
+    # Unattached rows are filtered out of the tree, so visualItemRect would be
+    # empty and the right-click would land on no item at all.
+    widget.set_attached_file_ids(["file-a"])
     widget.tree.expandAll()
     QCoreApplication.processEvents()
 

@@ -67,6 +67,30 @@ def qapp():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_app_style(qapp):
+    """Undo any application-wide style/stylesheet a test installs.
+
+    ``qapp`` is session-scoped, so ``qapp.setStyleSheet(...)`` /
+    ``qapp.setStyle("Fusion")`` outlive the test that called them and silently
+    change widget metrics for everything that runs afterwards. That is how
+    ``test_alt_view_shortcut_switches_active_section`` and the two BLF dialog
+    tests broke ``test_dialog_layout_insets_...``: the app QSS grew the
+    dB-reference delete button from 30px to 32px, three files later.
+
+    Tests that legitimately need the real QSS keep doing so; this only
+    guarantees they cannot leak it. Restoring per test is cheap — Qt only
+    repolishes widgets that still exist.
+    """
+    style_name = qapp.style().objectName()
+    sheet = qapp.styleSheet()
+    yield
+    if qapp.styleSheet() != sheet:
+        qapp.setStyleSheet(sheet)
+    if qapp.style().objectName() != style_name:
+        qapp.setStyle(style_name)
+
+
+@pytest.fixture(autouse=True)
 def _own_chartstacks(qapp, monkeypatch):
     """Keep unowned ChartStack widgets alive until queued layout callbacks drain."""
     from mf4_analyzer.ui.chart_stack import ChartStack

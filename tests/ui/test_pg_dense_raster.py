@@ -130,8 +130,13 @@ def test_dense_raster_is_transform_only_until_100ms_settle(qtbot, qapp):
 
     canvas._primary_xaxis_ax.view_box.setXRange(8.0, 10.0, padding=0)
     qapp.processEvents()
-    qtbot.wait(50)
 
+    # Probe the pre-settle state while the debounce timer is still armed, not
+    # after a wall-clock qtbot.wait(50): under full-suite load that wait can
+    # overrun _INTERACTION_SETTLE_MS, the raster re-renders, and the cacheKey
+    # assertion below fails for a reason that has nothing to do with the
+    # contract under test.
+    assert canvas._refresh_timer.isActive()
     assert canvas._dense_raster.entry_for("EPS_CRC1").item is item
     assert item.pixmap().cacheKey() == before_key
     assert pdi.curve.isVisible() is True
@@ -255,18 +260,21 @@ def test_held_pan_crossing_buffer_gets_coarse_raster_refresh(qtbot, qapp):
 
 def test_dense_raster_visibility_color_and_revision_invalidate(qapp):
     row = _row()
-    canvas = _shown_canvas(qapp, [row])
+    # Overlay, not subplot: a7cec68 made a zero-row subplot selection
+    # structural ("subplot-empty-selection-reset"), so subplot never reaches
+    # the in-place hide this asserts on. Overlay still does.
+    canvas = _shown_canvas(qapp, [row], mode="overlay")
     canvas._dense_raster.flush_pending(canvas._interaction_generation)
     entry = canvas._dense_raster.entry_for("EPS_CRC1")
     first_key = entry.item.pixmap().cacheKey()
     context = canvas._selection_context_key
 
     assert canvas.try_apply_selection_delta(
-        [], mode="subplot", render_context_key=context,
+        [], mode="overlay", render_context_key=context,
     )["applied"] is True
     assert entry.item.isVisible() is False
     assert canvas.try_apply_selection_delta(
-        [row], mode="subplot", render_context_key=context,
+        [row], mode="overlay", render_context_key=context,
     )["applied"] is True
     assert entry.item.isVisible() is True
 
