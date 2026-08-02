@@ -515,3 +515,43 @@ def test_picker_popup_geometry_is_stable_across_filtering(qtbot):
         seen.add((p._popup.height(), p._popup.pos().x(), p._popup.pos().y()))
 
     assert len(seen) == 1, seen
+
+
+def test_picker_popup_shows_whole_rows_and_elides_instead_of_scrolling(qtbot):
+    """No half-clipped last row, and no sideways scrolling.
+
+    The horizontal scrollbar that long EPS names used to trigger stole
+    viewport height, so row N+1 peeked out from under the footer and read as
+    a clipped entry. Rows are middle-elided to the popup width instead, which
+    also keeps both the module prefix and the ``_xds16`` suffix visible.
+    """
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    long_name = "Rte_RotationSpeedCalculation_vSteeringAngleSpeed_xds16"
+    names = [f"Rte_Module{i:02d}_mLongChannelName_xds16" for i in range(24)]
+    names.append(long_name)
+    p = SignalPickerPopup(available_signals=names)
+    qtbot.addWidget(p)
+    p.show_popup()
+    qtbot.wait(20)
+
+    listing = p._list
+    pitch = listing.sizeHintForRow(0)
+    assert pitch > 0
+    # Whole rows only — the viewport is an exact multiple of the row pitch.
+    assert listing.viewport().height() % pitch == 0
+    assert listing.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+    assert not listing.horizontalScrollBar().isVisible()
+
+    row = next(
+        listing.itemWidget(listing.item(i))
+        for i in range(listing.count())
+        if listing.item(i).data(Qt.UserRole) == long_name
+    )
+    assert row.text() != long_name and "…" in row.text()
+    assert row.text().startswith("Rte_Rotation")   # module prefix kept
+    assert row.text().endswith("_xds16")           # type suffix kept
+    assert row.toolTip() == long_name
+    # The public label API must still report the untruncated text.
+    assert p.label_for(long_name) == long_name

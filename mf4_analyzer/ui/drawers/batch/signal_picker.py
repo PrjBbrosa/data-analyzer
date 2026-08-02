@@ -123,6 +123,10 @@ class SignalPickerPopup(QWidget):
     # flip-above decision changed as the user typed.  A fixed row budget
     # keeps the popup one predictable size.
     _LIST_MAX_ROWS = 9
+    # Popup width minus its chrome (layout margins, surface border, the
+    # vertical scrollbar a capped list always shows, and the checkbox
+    # indicator + padding) — what is left is the text budget per row.
+    _ROW_TEXT_INSET = 74
     _SUMMARY_MIN_BUDGET = 60
     _SCREEN_MARGIN = 8
     _POPUP_GAP = 4
@@ -297,10 +301,12 @@ class SignalPickerPopup(QWidget):
         self._list.setObjectName("SignalPickerList")
         self._list.setSelectionMode(QListWidget.NoSelection)
         self._list.setFrameShape(QFrame.NoFrame)
-        # Rows keep their natural width so a name longer than the 420px popup
-        # scrolls instead of being silently cut (spec 4.5).
-        self._list.setHorizontalScrollMode(QListWidget.ScrollPerPixel)
-        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # No horizontal scrolling: dragging a dropdown sideways to read the
+        # end of a name is poor interaction, and the scrollbar also ate
+        # viewport height, leaving the last row clipped under the footer.
+        # Names are middle-elided to the popup width instead (same treatment
+        # as the collapsed summary), with the full name on the tooltip.
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._list.setStyleSheet(
             "#SignalPickerList {border:none; background:transparent;"
             " outline:none;}"
@@ -455,8 +461,8 @@ class SignalPickerPopup(QWidget):
             item = self._list.item(index)
             if item.data(Qt.UserRole) != signal:
                 continue
-            checkbox = self._list.itemWidget(item)
-            return checkbox.text() if isinstance(checkbox, QCheckBox) else item.text()
+            # Not ``checkbox.text()``: that one is elided for display.
+            return self._full_label(signal)
         return ""
 
     def set_search_text(self, text: str) -> None:
@@ -515,6 +521,39 @@ class SignalPickerPopup(QWidget):
             screen = QApplication.primaryScreen()
         return screen.availableGeometry() if screen is not None else None
 
+    def _full_label(self, name: str) -> str:
+        """Untruncated row text: the name plus any partial-availability tag."""
+
+        if name in self._partial:
+            return f"{name} {self._partial[name]}".strip()
+        return name
+
+    def _elide_list_labels(self, popup_width: int) -> None:
+        """Middle-elide every row to the popup width.
+
+        Derived from *popup_width* rather than ``viewport().width()``: this
+        runs right after ``setFixedWidth`` and the viewport has not been
+        re-laid-out yet.  Middle elision keeps both the module prefix and the
+        ``_xds16`` / ``_gdf32`` suffix, which is what tells two otherwise
+        identical EPS channels apart.
+        """
+
+        budget = popup_width - self._ROW_TEXT_INSET
+        if budget <= 0:
+            return
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            checkbox = self._list.itemWidget(item)
+            if not isinstance(checkbox, QCheckBox):
+                continue
+            full = self._full_label(str(item.data(Qt.UserRole) or ""))
+            checkbox.setText(
+                QFontMetrics(checkbox.font()).elidedText(
+                    full, Qt.ElideMiddle, budget,
+                )
+            )
+            item.setSizeHint(checkbox.sizeHint())
+
     def _row_budget(self) -> int:
         """Height of ``_LIST_MAX_ROWS`` rows — anything longer scrolls."""
 
@@ -525,20 +564,18 @@ class SignalPickerPopup(QWidget):
                 break
         if row <= 0:
             row = 26
-        return row * self._LIST_MAX_ROWS + 2 * self._list.frameWidth() + 4
+        # Exactly N rows, no slack: a few spare pixels let row N+1 peek out
+        # from under the footer and read as a clipped entry rather than as
+        # "scroll for more".
+        return row * self._LIST_MAX_ROWS + 2 * self._list.frameWidth()
 
     def _list_content_height(self) -> int:
         total = 0
-        widest = 0
         for index in range(self._list.count()):
-            item = self._list.item(index)
-            if item.isHidden():
+            if self._list.item(index).isHidden():
                 continue
             total += self._list.sizeHintForRow(index)
-            widest = max(widest, item.sizeHint().width())
-        if widest > self._list.viewport().width():
-            total += self._list.horizontalScrollBar().sizeHint().height()
-        return total + 2 * self._list.frameWidth() + 4
+        return total + 2 * self._list.frameWidth()
 
     def _sync_popup_geometry(self) -> None:
         """Size and place the popup against whatever screen room is left."""
@@ -553,6 +590,7 @@ class SignalPickerPopup(QWidget):
         if rect is not None:
             width = min(width, max(self._POPUP_MIN_WIDTH, rect.width() - 2 * margin))
         self._popup.setFixedWidth(width)
+        self._elide_list_labels(width)
 
         room = (rect.bottom() - anchor.y() - margin) if rect is not None else 480
         chrome = (
