@@ -179,6 +179,12 @@ QPushButton#batchOutputRestoreDefaults:hover {
 
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
+        # macOS defaults this to ``FieldsStayAtSizeHint``, which parks every
+        # field at its sizeHint instead of filling the column.  Only fields
+        # that actually ask to expand are affected, so the other rows keep
+        # their current widths.
+        form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        self._output_form = form
 
         # Directory
         self._dir_edit = QLineEdit(self)
@@ -225,13 +231,22 @@ QPushButton#batchOutputSettingsButton:checked {
         export_host = QWidget(self)
         export_host.setObjectName("BatchExportCard")
         export_host.setAttribute(Qt.WA_StyledBackground, True)
+        # ``Ignored`` is deliberate and load bearing: it keeps the panel's
+        # minimumSizeHint at zero so the whole column still fits 288px (see
+        # test_batch_output_panel_fits_288px_column).  It does not cause the
+        # collapse on its own — ``Ignored`` carries ExpandFlag, so the field
+        # grows as soon as the form's growth policy lets it.  The fix is on
+        # the QFormLayout above, not here.
         export_host.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         export_lay = QVBoxLayout(export_host)
         export_lay.setContentsMargins(9, 8, 9, 8)
         export_lay.setSpacing(5)
         self._export_row_layout = QHBoxLayout()
         self._export_row_layout.setContentsMargins(0, 0, 0, 0)
-        self._export_row_layout.setSpacing(8)
+        # 8px left the two CJK labels touching once the card actually had a
+        # width to lay out in — 数据文件's text ran straight into 图片's
+        # indicator.
+        self._export_row_layout.setSpacing(18)
         self._export_row_layout.addWidget(self._chk_data)
         self._export_row_layout.addWidget(self._chk_image)
         self._export_row_layout.addWidget(self._btn_output_settings)

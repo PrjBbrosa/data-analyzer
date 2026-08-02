@@ -802,3 +802,70 @@ def test_batch_output_fixed_contract_fits_288px_column(qtbot):
 
     assert panel.minimumSizeHint().width() <= 288
     assert panel._output_summary.width() <= panel.width()
+
+
+def test_export_card_lays_out_at_usable_width(qtbot):
+    """导出内容 card must not collapse — guard the two causes, not the pixels.
+
+    On the native macOS style the card rendered at width 0, taking the
+    数据文件 / 图片 checkboxes (6px, labels elided away) and the summary line
+    with it. Two things were needed, and a policy matrix over both platforms
+    shows why this test asserts properties rather than only widths:
+
+        style        Ignored+default  Ignored+Grow  Expanding+default  both
+        fusion            287             287             287          287
+        macintosh           0             283             146          283
+
+    Under offscreen/fusion the bug does not reproduce at all, so a width-only
+    assertion would have passed before the fix and guards nothing. The growth
+    policy below is platform-independent and is the actual fix.
+
+    Note the card's own ``Ignored`` horizontal policy is NOT the culprit and
+    must stay: it is what keeps the panel's minimumSizeHint at zero for the
+    288px column contract, and it already carries ExpandFlag, so the field
+    grows the moment the form's growth policy permits it.
+    """
+    from PyQt5.QtWidgets import QFormLayout, QSizePolicy, QStyle
+    from mf4_analyzer.ui.drawers.batch.output_panel import OutputPanel
+
+    panel = OutputPanel()
+    qtbot.addWidget(panel)
+    card = next(
+        w for w in panel.findChildren(QWidget)
+        if w.objectName() == "BatchExportCard"
+    )
+
+    # macOS defaults QFormLayout to FieldsStayAtSizeHint, which parks the
+    # field at its sizeHint — 0 for an Ignored policy — instead of filling
+    # the column.
+    assert panel._output_form.fieldGrowthPolicy() == QFormLayout.ExpandingFieldsGrow
+    # The narrow-column contract must survive the fix.
+    assert card.sizePolicy().horizontalPolicy() == QSizePolicy.Ignored
+    assert panel.minimumSizeHint().width() <= 288
+
+    for width in (384, 300):
+        panel.resize(width, 640)
+        panel.show()
+        qtbot.wait(20)
+        assert card.width() > 0, width
+        # Room for both labels plus the gap between them.
+        assert card.width() >= (
+            panel._chk_data.sizeHint().width()
+            + panel._chk_image.sizeHint().width()
+        ), (width, card.width())
+        # Labels must not be elided away. In the failure mode the checkboxes
+        # were 6px and 5px — indicator only, every glyph gone. A little
+        # squeeze in the narrow column is fine; losing the text is not.
+        indicator = panel._chk_data.style().pixelMetric(
+            QStyle.PM_IndicatorWidth, None, panel._chk_data,
+        )
+        assert panel._chk_data.width() > indicator * 2, (
+            width, panel._chk_data.width(), indicator,
+        )
+        assert panel._chk_image.width() > indicator * 2
+        # ...and must not overlap each other.
+        data_right = panel._chk_data.geometry().right()
+        assert panel._chk_image.geometry().left() > data_right, (
+            width, panel._chk_data.geometry(), panel._chk_image.geometry(),
+        )
+        assert panel._output_summary.width() > 0
