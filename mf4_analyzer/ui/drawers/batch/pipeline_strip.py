@@ -26,7 +26,7 @@ class PipelineCard(QFrame):
         right_border = "0" if last else "1px solid #dbe4ef"
         self.setStyleSheet(
             "QFrame#BatchPipelineStage {"
-            "background-color:transparent; border:0;"
+            "background-color:#ffffff; border:0;"
             f"border-right:{right_border};"
             "}"
         )

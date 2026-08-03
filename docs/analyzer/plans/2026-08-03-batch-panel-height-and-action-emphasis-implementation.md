@@ -65,22 +65,35 @@ _output_panel  minHint h=433
   `fit_dialog_to_available_screen(dialog, parent, target_w, target_h, *, min_w, min_h)`，
   两个类都调它；`sheet.py` 里的 `_fit_to_available_screen` 只是一层薄转发。
 
-### 改动 B — 顶部两行合并为一行 44px（对应问题 2）
+### 改动 B — 顶部保持两行，各自收紧（对应问题 2）
 
-**设计决定**：工具条里的 `QLabel("批处理分析")` 与窗口标题栏的「批处理分析」是同一句话，
-纯冗余；删掉它之后，工具条只剩右侧三个方案按钮，左侧留出的正是管线条需要的宽度。
-于是把 `PipelineStrip` 直接放进工具条这一行，两行合一。
+> **2026-08-03 修订**：初稿把两行合并成一行 44px（删掉与窗口标题栏重复的
+> `QLabel("批处理分析")`，把 `PipelineStrip` 塞进工具条）。已按真机截图评审推翻——
+> 用户要的是「**还是两行，只是不要浪费太多高度**」。合并还有一个实打实的副作用：
+> 管线条 29/39/32 的分栏权重原本与下方三栏严格对齐，右侧被三个方案按钮占掉 ~275px
+> 后这份对齐就没了。**两行结构保留**，只压高度。
 
-**代价（必须在 PR 描述里写明）**：管线条原本 29/39/32 的分栏权重与下方三栏严格对齐，
-合并后右侧 ~275px 被三个方案按钮占用，列对齐从「严格」降为「近似」。用户已明确表示
-顶部这条信息价值不高，此代价可接受。
+两行承载的是两类东西——工具条是方案 I/O（导入/导出/从单次同步），管线条是流水线状态
+——不该混排。收紧手段是各自去掉多余留白：
+
+| 行 | 现在 | 改为 |
+| --- | --- | --- |
+| `_toolbar_host` | 50 | **36** |
+| `strip` | 62 | **40** |
+| `_footer_host` | 54 | **50** |
+| 合计 chrome | 166 | **126**（省 40px） |
+
+36px 的工具条只有配合 QSS 缩短按钮才站得住（见改动 C-2 的第二条）：全局
+`QPushButton` 的最小高度是 26 + padding 8 + border 2 = **36**，直接放进 36px 的行会
+撑爆布局。方案按钮属于次级 chrome，用 `QWidget#BatchCompactToolbar QPushButton`
+把它压到 `min-height:24; padding:2px 10px` → 最小高度 30，配 3px 上下边距正好 36。
 
 `mf4_analyzer/ui/drawers/batch/pipeline_strip.py`
 
 | 项 | 现在 | 改为 |
 | --- | --- | --- |
 | `PipelineCard.setFixedHeight` | 62 | **40** |
-| `PipelineCard` 卡片背景 | `#ffffff` | **`transparent`**（继承工具条 `#fbfcfe`，避免两块白色错位） |
+| `PipelineCard` 卡片背景 | `#ffffff` | **不变**（初稿改成 `transparent` 是为了融进工具条；两行结构下管线条仍是独立一行，保持白底） |
 | 卡片 layout margins | `(18, 9, 18, 9)` | **`(12, 0, 12, 0)`** |
 | 卡片 layout spacing | 8 | **7** |
 | `number_label` 尺寸 | `(24, 24)` | **`(20, 18)`** |
@@ -95,18 +108,12 @@ _output_panel  minHint h=433
 
 `mf4_analyzer/ui/drawers/batch/sheet.py`（第 198-226 行区块）
 
-- `_toolbar_host.setFixedHeight(50)` → **`44`**。
-- `bar.setContentsMargins(14, 8, 14, 8)` → **`(0, 2, 12, 2)`**（左 0 是因为管线条
-  自带 12px 内缩）；`bar.setSpacing(7)` 保持。
-- **删除** `self._toolbar_title` 及其 `bar.addWidget(...)`（全仓库仅此一处引用，
-  已核实）；同时删除 `style.qss:483` 的 `QLabel#BatchToolbarTitle` 规则。
-- **删除** `bar.addStretch(1)`。
-- `self.strip = PipelineStrip(self._toolbar_host)`，`bar.addWidget(self.strip, 1)`
-  放在三个按钮**之前**；`root.addWidget(self.strip)` 那一行删掉。
-- 管线条与按钮之间插一条竖分隔：`QFrame`，`setFrameShape(QFrame.VLine)`，
-  `setFixedWidth(1)`，`setStyleSheet("background-color:#dbe4ef;border:0;")`，
-  上下留 8px 边距。
-- 三个方案按钮（从当前单次同步 / 导入方案… / 导出方案…）保持原样，不改文案不改顺序。
+- `_toolbar_host.setFixedHeight(50)` → **`36`**。
+- `bar.setContentsMargins(14, 8, 14, 8)` → **`(14, 3, 14, 3)`**；`bar.setSpacing(7)` 保持。
+- `self._toolbar_title`（「批处理分析」）、`bar.addStretch(1)`、三个方案按钮的顺序与
+  文案**全部保持原样**；`QLabel#BatchToolbarTitle` 的 QSS 只把 13px 调成 **12px**。
+- `self.strip = PipelineStrip(self)` + `root.addWidget(self.strip)` 保持独立一行，
+  与下方三栏的列对齐因此完整保留。
 
 `_footer_host`（第 298-303 行）
 
@@ -121,7 +128,8 @@ _output_panel  minHint h=433
   > 改成 5px 后 `5+40+5 = 50` 正好贴合（实测 `_footer_lay.minimumSize().height() == 50`，
   > 紧凑/非紧凑两种模式都是）。
 
-合计 chrome：`44 + 50 = 94`（原 166），省出 72px。
+合计 chrome：`36 + 40 + 50 = 126`（原 166），省出 40px。689px 客户区下内容区
+= 563px ≥ 分析栏最小高度 524px，最高的一栏依旧能不出竖向滚动条完整显示。
 
 ### 改动 C — 动作按钮的全局一致强调（对应问题 3）
 
@@ -172,6 +180,16 @@ QDialog#BatchPreviewDialog QPushButton {
 }
 ```
 
+同一区块再加一条**反向**规则，服务改动 B 的 36px 工具条——方案按钮是次级 chrome，
+比 footer 的动作按钮矮一档，正好把主次拉开：
+
+```qss
+QWidget#BatchCompactToolbar QPushButton {
+    min-height: 24px;
+    padding: 2px 10px;
+}
+```
+
 **C-3 角色落位**（`role` 在构造时 `setProperty` 一次即可，之后 enable/visible 切换走
 Qt 伪状态，**不需要** unpolish/polish）：
 
@@ -199,7 +217,7 @@ Qt 伪状态，**不需要** unpolish/polish）：
 
 | 文件:行 | 现断言 | 改为 |
 | --- | --- | --- |
-| `tests/ui/test_batch_compact_contract.py:187` | `_toolbar_host.height() == 50` | `== 44` |
+| `tests/ui/test_batch_compact_contract.py:187` | `_toolbar_host.height() == 50` | `== 36` |
 | `tests/ui/test_batch_compact_contract.py:188` | `strip.height() == 62` | `== 40` |
 | `tests/ui/test_batch_compact_contract.py:189` | `_footer_host.height() == 54` | `== 50` |
 | `tests/ui/test_batch_compact_contract.py:209-210` | `strip.min/maximumHeight() == 62` | `== 40` |
@@ -223,10 +241,12 @@ Qt 伪状态，**不需要** unpolish/polish）：
    —— 断言 8 个按钮的 `property("role")` 与 C-3 表一致（中性两个断言为 `None`）。
 5. `test_accent_role_is_declared_in_global_qss`
    —— 读 `mf4_analyzer/ui_kit/style.qss`，断言存在 `[role="accent"]` 且带 `#1769e0`。
-6. `test_batch_header_merges_strip_and_preset_buttons_into_one_row`
-   —— 断言 `sheet.strip.parent() is sheet._toolbar_host`、
-   `sheet._toolbar_host.height() + sheet._footer_host.height() == 94`、
-   且 `not hasattr(sheet, "_toolbar_title")`。
+6. `test_batch_header_keeps_two_rows_but_tightened`
+   —— 断言 `sheet.strip.parent() is sheet`（**不是** `_toolbar_host`，两行不合并）、
+   `_toolbar_title.text() == "批处理分析"`、三行 chrome 合计 `== 126`。
+7. `test_batch_toolbar_row_fits_its_preset_buttons`
+   —— 加载 production QSS，断言工具条布局最小高度 `<=` 宿主 36px，且三个方案按钮
+   上下各留 3px（36px 行只有配合 C-2 的按钮压缩规则才站得住，这条守住那个耦合）。
 
 ## 6. 验证
 
@@ -240,8 +260,8 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/Scripts/python.exe -m p
 - offscreen 只是排版草稿。**视觉验收必须跑真机**：按 CLAUDE.md 的 Gotchas，
   用原生 `windows` 平台（不设 `QT_QPA_PLATFORM`）构造 `BatchSheet` /
   `BatchPreviewDialog`、`show()` 后 `grab()` 截图，确认
-  (a) 底部「运行」完整可见，(b) 顶部只剩一行，(c) 运行=实心蓝 / 预览=蓝描边 /
-  中断=红描边，(d) 预览弹窗四个按钮同样分级。
+  (a) 底部「运行」完整可见，(b) 顶部两行都收紧且按钮不被压扁，(c) 运行=实心蓝 /
+  预览=蓝描边 / 中断=红描边，(d) 预览弹窗四个按钮同样分级。
 
 ### 6.1 真机验收结果（2026-08-03，本机 1366×768）
 
@@ -252,12 +272,15 @@ real available geometry : QRect(0, 0, 1366, 720)     # 768 − 48 任务栏
 sheet initial size      : QSize(1080, 648)           # 客户区，已夹取
 sheet frame geometry    : QRect(142, 5, 1082, 680)   # 下沿 685 < 720 ✓
 preview initial size    : QSize(1040, 648)           # 同样已夹取 ✓
-chrome toolbar/strip/footer : 44 / 40 / 50           # 顶部合并为一行 ✓
+chrome toolbar/strip/footer : 36 / 40 / 50 = 126     # 原 166 ✓
+toolbar 布局最小高度      : 36（按钮 y=3 h=30，上下各 3px）✓
+footer  布局最小高度      : 50（按钮 y=5 h=40，上下各 5px）✓
 ```
 
-截图确认：顶部只剩一行（01/02/03 + 三个方案按钮，中间 1px 竖分隔）；footer
-四态按钮层级正确——关闭=中性白、预览=蓝描边、运行=实心蓝、中断=红描边；预览弹窗
-返回修改=中性、重新生成=蓝描边、运行全部=实心蓝、取消生成=红描边，与主面板一致。
+截图确认：顶部仍是两行——工具条（批处理分析 + 三个方案按钮）36px，管线条
+（01/02/03）40px 独立一行、与下方三栏列对齐完好；footer 四态按钮层级正确——
+关闭=中性白、预览=蓝描边、运行=实心蓝、中断=红描边；预览弹窗返回修改=中性、
+重新生成=蓝描边、运行全部=实心蓝、取消生成=红描边，与主面板一致。
 
 ## 7. 明确不做（防止范围蔓延）
 

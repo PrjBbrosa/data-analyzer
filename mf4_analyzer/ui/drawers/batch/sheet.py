@@ -197,26 +197,19 @@ class BatchSheet(QDialog):
         #     and save to JSON (spec §6.3).
         self._toolbar_host = QWidget(self)
         self._toolbar_host.setObjectName("BatchCompactToolbar")
-        self._toolbar_host.setFixedHeight(44)
+        # 36px, down from 50: the three preset buttons are secondary chrome,
+        # so a toolbar-scoped QSS rule drops them to min-height 24 (+4 padding
+        # +2 border = 30) and the 3px margins land the row exactly on 36.
+        # The strip keeps its own row below — the two rows carry different
+        # things (方案 I/O vs. pipeline state) and stay separate.
+        self._toolbar_host.setFixedHeight(36)
         bar = QHBoxLayout(self._toolbar_host)
-        bar.setContentsMargins(0, 2, 12, 2)
+        bar.setContentsMargins(14, 3, 14, 3)
         bar.setSpacing(7)
-
-        # The pipeline strip lives in this same row now (plan §3 改动 B): the
-        # toolbar title was pure duplication of the window titlebar, so
-        # removing it freed the width the strip needed and let the two
-        # chrome rows merge into one.
-        self.strip = PipelineStrip(self._toolbar_host)
-        bar.addWidget(self.strip, 1)
-
-        divider = QFrame(self._toolbar_host)
-        divider.setFrameShape(QFrame.VLine)
-        divider.setFixedWidth(1)
-        # 28px centered in the 40px row (after the bar's own 2px top/bottom
-        # content margins) leaves an 8px margin from the toolbar edges.
-        divider.setFixedHeight(28)
-        divider.setStyleSheet("background-color:#dbe4ef;border:0;")
-        bar.addWidget(divider)
+        self._toolbar_title = QLabel("批处理分析", self._toolbar_host)
+        self._toolbar_title.setObjectName("BatchToolbarTitle")
+        bar.addWidget(self._toolbar_title)
+        bar.addStretch(1)
 
         self._btn_fill_from_current = QPushButton("从当前单次同步")
         self._btn_fill_from_current.setEnabled(self._current_preset is not None)
@@ -232,6 +225,10 @@ class BatchSheet(QDialog):
         bar.addWidget(self._btn_export_preset)
 
         root.addWidget(self._toolbar_host)
+
+        # Pipeline strip — its own row, slimmed from 62px to 40px.
+        self.strip = PipelineStrip(self)
+        root.addWidget(self.strip)
 
         # Detail row: input | analysis | output
         detail = QWidget(self)

@@ -184,7 +184,7 @@ def test_batch_shell_matches_html_fixed_rows_and_contiguous_columns(qapp, qtbot)
         sheet = BatchSheet(None, files={})
         _show_at(qtbot, sheet, 1440, 900)
 
-        assert sheet._toolbar_host.height() == 44
+        assert sheet._toolbar_host.height() == 36
         assert sheet.strip.height() == 40
         assert sheet._footer_host.height() == 50
         assert sheet._detail_lay.spacing() == 0
@@ -409,12 +409,59 @@ def test_accent_role_is_declared_in_global_qss():
     assert "#1769e0" in window
 
 
-def test_batch_header_merges_strip_and_preset_buttons_into_one_row(qtbot):
+def test_batch_header_keeps_two_rows_but_tightened(qtbot):
+    """The toolbar and the pipeline strip stay two separate rows — they
+    carry different things (方案 I/O vs. pipeline state). Only their
+    heights shrink: 50 + 62 + 54 = 166px of chrome becomes 36 + 40 + 50
+    = 126px.
+    """
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
 
     sheet = BatchSheet(None, files={})
     qtbot.addWidget(sheet)
 
-    assert sheet.strip.parent() is sheet._toolbar_host
-    assert sheet._toolbar_host.height() + sheet._footer_host.height() == 94
-    assert not hasattr(sheet, "_toolbar_title")
+    assert sheet.strip.parent() is sheet
+    assert sheet.strip.parent() is not sheet._toolbar_host
+    assert sheet._toolbar_title.text() == "批处理分析"
+    chrome = (
+        sheet._toolbar_host.height()
+        + sheet.strip.height()
+        + sheet._footer_host.height()
+    )
+    assert chrome == 126
+
+
+def test_batch_toolbar_row_fits_its_preset_buttons(qapp, qtbot):
+    """36px is only safe because the toolbar-scoped QSS shortens the preset
+    buttons; without it their 36px minimum would overflow the row and Qt
+    would silently pin them to the top edge.
+    """
+    from pathlib import Path
+
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    old_stylesheet = qapp.styleSheet()
+    try:
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        sheet = BatchSheet(None, files={})
+        qtbot.addWidget(sheet)
+        sheet.show()
+        qtbot.wait(20)
+
+        bar = sheet._toolbar_host.layout()
+        assert bar.minimumSize().height() <= sheet._toolbar_host.height()
+        for button in (
+            sheet._btn_fill_from_current,
+            sheet._btn_import_preset,
+            sheet._btn_export_preset,
+        ):
+            assert button.y() >= 3
+            assert (
+                button.y() + button.height()
+                <= sheet._toolbar_host.height() - 3
+            )
+    finally:
+        sheet.close()
+        qapp.setStyleSheet(old_stylesheet)

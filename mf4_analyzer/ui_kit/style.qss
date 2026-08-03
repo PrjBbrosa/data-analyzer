@@ -487,6 +487,13 @@ QWidget#BatchCompactToolbar {
     border-bottom: 1px solid #e8edf4;
     background-color: #fbfcfe;
 }
+/* The preset buttons are secondary chrome, so they run shorter than the
+ * footer's action buttons and let the toolbar row sit at 36px. */
+QWidget#BatchCompactToolbar QPushButton {
+    min-height: 24px;
+    padding: 2px 10px;
+}
+QLabel#BatchToolbarTitle { color: #4b596c; font-size: 12px; font-weight: 700; }
 QLabel#BatchToolbarMeta { color: #94a3b8; font-size: 11px; }
 QLabel#BatchFooterStateDot {
     border-radius: 4px;
