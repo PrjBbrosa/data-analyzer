@@ -283,17 +283,21 @@ def test_picker_arrow_uses_drawn_icon_not_text_glyph(qtbot):
     assert p._arrow_button.icon().cacheKey() == collapsed
 
 
-def test_picker_trigger_has_sunken_resting_background(qtbot):
-    """症状 02：#fff 底落在浅色面板上，静止态看不出可点。"""
+def test_picker_trigger_resting_background_matches_global_inputs(qtbot):
+    """症状 02 的后续修复：静息态曾是 #eef2f7 灰底（比全局禁用输入框还深），
+    用户读成"不可点/只读"。收起态现在改用全局 QLineEdit/QComboBox 的白底 +
+    #dfe5ee 边框（style.qss:65-92），展开态仍是 2px 蓝框强调。"""
     from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
 
     p = SignalPickerPopup(available_signals=["a"])
     qtbot.addWidget(p)
 
     resting = p._trigger.styleSheet()
-    assert "#eef2f7" in resting          # sunken against the panel
-    assert "#e8edf4" in resting          # hover is a distinct third state
-    assert "#fff" not in resting
+    assert "background:#ffffff" in resting     # matches the global input fill
+    assert "#dfe5ee" in resting                # matches the global input border
+    assert "#b7c4d3" in resting                # hover border matches global inputs
+    assert "#eef2f7" not in resting            # no longer the sunken/disabled grey
+    assert "background:#f5f7fb" not in resting  # not the disabled fill either
 
     p.show_popup()
     expanded = p._trigger.styleSheet()
@@ -302,6 +306,101 @@ def test_picker_trigger_has_sunken_resting_background(qtbot):
 
     p.hide_popup()
     assert p._trigger.styleSheet() == resting
+
+
+def test_picker_trigger_disabled_uses_global_disabled_skin(qtbot):
+    """setEnabled(False)（BatchSheet.lock_editing 运行中禁用整个输入面板）
+    必须落到全局禁用配色，而不是跟可用态长得一样。"""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a"])
+    qtbot.addWidget(p)
+    enabled_qss = p._trigger.styleSheet()
+
+    p.setEnabled(False)
+    assert p._trigger.isEnabled() is False
+    disabled_qss = p._trigger.styleSheet()
+    assert "background:#f5f7fb" in disabled_qss   # global disabled fill
+    assert "#eef2f7" in disabled_qss              # global disabled border
+    assert disabled_qss != enabled_qss
+
+    # Re-enabling restores the exact resting skin, not a stale variant.
+    p.setEnabled(True)
+    assert p._trigger.styleSheet() == enabled_qss
+
+
+def test_picker_trigger_disabled_wins_over_active_skin(qtbot):
+    """一个展开/聚焦中的触发器被禁用时，蓝色激活边框必须让位给禁用配色。"""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(p)
+    p.show()
+    p.show_popup()
+    assert "#1769e0" in p._trigger.styleSheet()
+
+    p.setEnabled(False)
+    disabled_qss = p._trigger.styleSheet()
+    assert "#1769e0" not in disabled_qss
+    assert "background:#f5f7fb" in disabled_qss
+
+
+def test_picker_placeholder_text_reads_as_enabled_not_disabled(qtbot):
+    """占位文字色曾几乎等于禁用文字色（#98a3b1），读成"这框不能用"。提一档到
+    #64748b，同时跟真实已选文字（#172033）仍有区分，且两套 summary 皮肤保
+    持相同字体度量（只差颜色），否则省略号计算会错位。"""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a"])
+    qtbot.addWidget(p)
+
+    placeholder_qss = p._summary_label.styleSheet()
+    assert "#64748b" in placeholder_qss
+    assert "#98a3b1" not in placeholder_qss
+
+    p.set_selected(("a",))
+    selected_qss = p._summary_label.styleSheet()
+    assert "#172033" in selected_qss
+    assert "#64748b" not in selected_qss
+
+    # Font metrics must be identical between the two skins — only the
+    # colour differs — or the elision budget in _refresh_display would be
+    # measured against the wrong font.
+    def _without_color(qss: str) -> str:
+        import re
+        return re.sub(r"color:#[0-9a-fA-F]{3,6};", "", qss)
+
+    assert _without_color(placeholder_qss) == _without_color(selected_qss)
+
+
+def test_picker_trigger_geometry_is_stable_across_rest_and_active(qtbot):
+    """1px -> 2px 边框差靠 margin 补回：展开/收起触发器的尺寸不应该跳动。"""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(p)
+    p.resize(288, 38)
+    p.show()
+    qtbot.wait(20)
+
+    size_before = p._trigger.size()
+    hint_before = p.sizeHint()
+
+    p.show_popup()
+    qtbot.wait(20)
+    assert p._trigger.size() == size_before
+    assert p.sizeHint() == hint_before
+
+    p.hide_popup()
+    qtbot.wait(20)
+    assert p._trigger.size() == size_before
+    assert p.sizeHint() == hint_before
+
+    # Same invariant across the disabled skin, which also swaps margins.
+    p.setEnabled(False)
+    qtbot.wait(20)
+    assert p._trigger.size() == size_before
+    assert p.sizeHint() == hint_before
 
 
 def test_picker_trigger_geometry_is_stable_across_search(qtbot):

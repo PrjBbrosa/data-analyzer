@@ -47,6 +47,7 @@ class _TriggerFrame(QFrame):
 
     clicked = pyqtSignal()
     resized = pyqtSignal()
+    enabledChanged = pyqtSignal()
 
     def mousePressEvent(self, event):  # noqa: N802 (Qt API)
         if event.button() == Qt.LeftButton:
@@ -65,6 +66,16 @@ class _TriggerFrame(QFrame):
     def resizeEvent(self, event):  # noqa: N802 (Qt API)
         super().resizeEvent(event)
         self.resized.emit()
+
+    def changeEvent(self, event):  # noqa: N802 (Qt API)
+        super().changeEvent(event)
+        # setEnabled(False) on an ancestor (BatchSheet.lock_editing disables
+        # the whole input panel) cascades effective-enabled state down to
+        # this frame without necessarily calling setEnabled() on it
+        # directly; Qt still delivers EnabledChange here, so re-skin from it
+        # rather than relying solely on a bare QSS ``:disabled`` selector.
+        if event.type() == QEvent.EnabledChange:
+            self.enabledChanged.emit()
 
 
 class _ArrowButton(QPushButton):
@@ -134,31 +145,47 @@ class SignalPickerPopup(QWidget):
     # Resting / active trigger skins.  QSS has no ``box-shadow``, so the
     # prototype's focus glow becomes a 1px -> 2px border; the layout margins
     # give the extra pixel back so nothing shifts between the two states.
+    #
+    # Rest now mirrors the global QLineEdit/QComboBox skin (style.qss:65-92:
+    # white fill, #dfe5ee border, #b7c4d3 on hover) instead of a bespoke
+    # sunken grey — that grey (#eef2f7) sat darker than even the *disabled*
+    # global input fill, so users read the resting trigger as read-only.
     _TRIGGER_REST_QSS = (
-        "#SignalPickerTrigger {border:1px solid #ccd6e2; border-radius:7px;"
-        " background:#eef2f7;}"
-        "#SignalPickerTrigger:hover {background:#e8edf4;"
-        " border-color:#b3c1d1;}"
+        "#SignalPickerTrigger {border:1px solid #dfe5ee; border-radius:7px;"
+        " background:#ffffff;}"
+        "#SignalPickerTrigger:hover {background:#f8fafc;"
+        " border-color:#b7c4d3;}"
     )
     _TRIGGER_ACTIVE_QSS = (
         "#SignalPickerTrigger {border:2px solid #1769e0; border-radius:7px;"
         " background:#fff;}"
     )
+    # Disabled skin — same recipe as QLineEdit:disabled in style.qss. Applied
+    # explicitly from _apply_trigger_style() rather than left to a bare
+    # ``:disabled`` selector: the active skin has no disabled-aware rule of
+    # its own, and a QFrame disabled mid-expand must not keep showing the
+    # blue focus ring.
+    _TRIGGER_DISABLED_QSS = (
+        "#SignalPickerTrigger {border:1px solid #eef2f7; border-radius:7px;"
+        " background:#f5f7fb;}"
+    )
     _TRIGGER_REST_MARGINS = (8, 0, 4, 0)
     _TRIGGER_ACTIVE_MARGINS = (7, 0, 3, 0)
 
-    # Both skins carry the same metrics so switching between placeholder and
-    # signal name never re-measures the elision budget against a different
-    # font.  Only the colour differs.
+    # All three skins carry the same metrics so switching between placeholder,
+    # signal name and disabled text never re-measures the elision budget
+    # against a different font.  Only the colour differs.
     _SUMMARY_QSS = (
         "#SignalPickerSummary {background:transparent; border:none;"
         " color:#172033; font-family:" + _MONO + ";"
         " font-size:" + _MONO_PX + ";}"
+        "#SignalPickerSummary:disabled {color:#94a3b8;}"
     )
     _SUMMARY_PLACEHOLDER_QSS = (
         "#SignalPickerSummary {background:transparent; border:none;"
-        " color:#98a3b1; font-family:" + _MONO + ";"
+        " color:#64748b; font-family:" + _MONO + ";"
         " font-size:" + _MONO_PX + ";}"
+        "#SignalPickerSummary:disabled {color:#94a3b8;}"
     )
 
     def __init__(
@@ -377,6 +404,7 @@ class SignalPickerPopup(QWidget):
         self._trigger.installEventFilter(self)
         self._trigger.clicked.connect(self._open_from_display)
         self._trigger.resized.connect(self._refresh_display)
+        self._trigger.enabledChanged.connect(self._apply_trigger_style)
         self._apply_trigger_style()
         self._rebuild_list()
         self._refresh_display()
@@ -500,6 +528,13 @@ class SignalPickerPopup(QWidget):
         self._apply_trigger_style()
 
     def _apply_trigger_style(self) -> None:
+        if not self._trigger.isEnabled():
+            # Disabled always wins, even mid-expand/focus: a locked panel
+            # (BatchSheet.lock_editing) must not keep showing the blue
+            # active ring underneath the greyed-out contents.
+            self._trigger.setStyleSheet(self._TRIGGER_DISABLED_QSS)
+            self._trigger_layout.setContentsMargins(*self._TRIGGER_REST_MARGINS)
+            return
         active = self._expanded or self._trigger.hasFocus()
         if active:
             self._trigger.setStyleSheet(self._TRIGGER_ACTIVE_QSS)
