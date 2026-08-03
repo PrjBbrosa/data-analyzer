@@ -22,27 +22,27 @@ class PipelineCard(QFrame):
         self.setObjectName("BatchPipelineStage")
         self.setProperty("stageIndex", int(stage_def["index"]))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setFixedHeight(62)
+        self.setFixedHeight(40)
         right_border = "0" if last else "1px solid #dbe4ef"
         self.setStyleSheet(
             "QFrame#BatchPipelineStage {"
-            "background-color:#ffffff; border:0;"
+            "background-color:transparent; border:0;"
             f"border-right:{right_border};"
             "}"
         )
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(18, 9, 18, 9)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(7)
 
         self.number_label = QLabel(f"{int(stage_def['index']):02d}", self)
         self.number_label.setObjectName("BatchPipelineNumber")
-        self.number_label.setFixedSize(24, 24)
+        self.number_label.setFixedSize(20, 18)
         self.number_label.setAlignment(Qt.AlignCenter)
         self.number_label.setStyleSheet(
             "color:#ffffff;"
             f"background-color:{stage_def['color']};"
-            "border-radius:7px;font-size:10px;font-weight:800;"
+            "border-radius:5px;font-size:9px;font-weight:800;"
             'font-family:"SF Mono","Menlo",monospace;'
         )
         layout.addWidget(self.number_label)
@@ -50,7 +50,7 @@ class PipelineCard(QFrame):
         self.title_label = QLabel(str(stage_def["title"]), self)
         self.title_label.setObjectName("BatchPipelineTitle")
         self.title_label.setStyleSheet(
-            f"color:{stage_def['color']};font-size:12px;font-weight:800;"
+            f"color:{stage_def['color']};font-size:11px;font-weight:800;"
         )
         layout.addWidget(self.title_label)
 
@@ -71,7 +71,7 @@ class PipelineStrip(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("BatchPipelineStrip")
-        self.setFixedHeight(62)
+        self.setFixedHeight(40)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)

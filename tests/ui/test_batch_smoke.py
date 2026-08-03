@@ -914,7 +914,7 @@ def test_batch_sheet_respects_1080x760_with_production_qss(qapp, qtbot):
         picker = sheet._input_panel._signal_picker
         assert picker.height() >= picker.sizeHint().height()
         assert not sheet._task_list.isVisible()
-        assert sheet._footer_host.height() == 54
+        assert sheet._footer_host.height() == 50
         assert sheet._footer_progress.isVisible()
         assert sheet._footer_status.isVisible()
     finally:

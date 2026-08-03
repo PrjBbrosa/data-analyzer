@@ -8,6 +8,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ._geometry import fit_dialog_to_available_screen
+
 
 class BatchPreviewDialog(QDialog):
     """Modal chrome around a PNG; the chrome is never part of the image."""
@@ -18,9 +20,12 @@ class BatchPreviewDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("BatchPreviewDialog")
         self.setWindowTitle("代表最终图预览")
         self.setModal(True)
-        self.resize(1040, 720)
+        fit_dialog_to_available_screen(
+            self, parent, 1040, 720, min_w=640, min_h=420,
+        )
         self._busy = False
         self._source_pixmap = QPixmap()
 
@@ -52,13 +57,16 @@ class BatchPreviewDialog(QDialog):
         actions.addWidget(self._btn_back)
         actions.addStretch(1)
         self._btn_regenerate = QPushButton("重新生成", self)
+        self._btn_regenerate.setProperty("role", "accent")
         self._btn_regenerate.clicked.connect(self.regenerate_requested)
         actions.addWidget(self._btn_regenerate)
         self._btn_run_all = QPushButton("运行全部", self)
         self._btn_run_all.setDefault(True)
+        self._btn_run_all.setProperty("role", "primary")
         self._btn_run_all.clicked.connect(self.run_all_requested)
         actions.addWidget(self._btn_run_all)
         self._btn_cancel = QPushButton("取消生成", self)
+        self._btn_cancel.setProperty("role", "destructive")
         self._btn_cancel.clicked.connect(self.cancel_requested)
         self._btn_cancel.hide()
         actions.addWidget(self._btn_cancel)

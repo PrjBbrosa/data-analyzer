@@ -21,9 +21,9 @@ import tempfile
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
-    QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout,
-    QWidget,
+    QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
+    QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
+    QVBoxLayout, QWidget,
 )
 
 from ....batch import AnalysisPreset, BatchOutput, BatchRunner
@@ -36,6 +36,7 @@ from ....batch_validation import (
 )
 from ....io.source_adapters import DEFAULT_SOURCE_ADAPTER_REGISTRY
 from ...batch_settings import BatchPanelPrefs, BatchPanelPrefsStore
+from ._geometry import fit_dialog_to_available_screen
 from .analysis_panel import AnalysisPanel
 from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
 from .output_panel import OutputPanel
@@ -133,7 +134,6 @@ class BatchSheet(QDialog):
         self.setObjectName("SheetSurface")
         self.setModal(True)
         self.setWindowTitle("批处理分析")
-        self.resize(1080, 760)
         self._files = files or {}
         self._current_preset = current_preset
         self._prefs_store = (
@@ -197,14 +197,26 @@ class BatchSheet(QDialog):
         #     and save to JSON (spec §6.3).
         self._toolbar_host = QWidget(self)
         self._toolbar_host.setObjectName("BatchCompactToolbar")
-        self._toolbar_host.setFixedHeight(50)
+        self._toolbar_host.setFixedHeight(44)
         bar = QHBoxLayout(self._toolbar_host)
-        bar.setContentsMargins(14, 8, 14, 8)
+        bar.setContentsMargins(0, 2, 12, 2)
         bar.setSpacing(7)
-        self._toolbar_title = QLabel("批处理分析", self._toolbar_host)
-        self._toolbar_title.setObjectName("BatchToolbarTitle")
-        bar.addWidget(self._toolbar_title)
-        bar.addStretch(1)
+
+        # The pipeline strip lives in this same row now (plan §3 改动 B): the
+        # toolbar title was pure duplication of the window titlebar, so
+        # removing it freed the width the strip needed and let the two
+        # chrome rows merge into one.
+        self.strip = PipelineStrip(self._toolbar_host)
+        bar.addWidget(self.strip, 1)
+
+        divider = QFrame(self._toolbar_host)
+        divider.setFrameShape(QFrame.VLine)
+        divider.setFixedWidth(1)
+        # 28px centered in the 40px row (after the bar's own 2px top/bottom
+        # content margins) leaves an 8px margin from the toolbar edges.
+        divider.setFixedHeight(28)
+        divider.setStyleSheet("background-color:#dbe4ef;border:0;")
+        bar.addWidget(divider)
 
         self._btn_fill_from_current = QPushButton("从当前单次同步")
         self._btn_fill_from_current.setEnabled(self._current_preset is not None)
@@ -220,10 +232,6 @@ class BatchSheet(QDialog):
         bar.addWidget(self._btn_export_preset)
 
         root.addWidget(self._toolbar_host)
-
-        # Pipeline strip
-        self.strip = PipelineStrip(self)
-        root.addWidget(self.strip)
 
         # Detail row: input | analysis | output
         detail = QWidget(self)
@@ -297,9 +305,14 @@ class BatchSheet(QDialog):
         # fallback and accidentally analyse every loaded file/channel.
         self._footer_host = QWidget(self)
         self._footer_host.setObjectName("BatchCompactFooter")
-        self._footer_host.setFixedHeight(54)
+        self._footer_host.setFixedHeight(50)
         self._footer_lay = QHBoxLayout(self._footer_host)
-        self._footer_lay.setContentsMargins(18, 8, 14, 8)
+        # 5px, not 7: the footer action buttons carry QSS min-height 30 plus
+        # 4px padding and a 1px border on each side, so their real minimum
+        # height is 40. 5 + 40 + 5 lands exactly on the 50px host — at 7 the
+        # layout's minimum (54) overflowed the host and Qt silently pinned
+        # the buttons to the top, leaving a lopsided 7px/3px gap.
+        self._footer_lay.setContentsMargins(16, 5, 14, 5)
         self._footer_lay.setSpacing(8)
         self._footer_state_dot = QLabel(self._footer_host)
         self._footer_state_dot.setObjectName("BatchFooterStateDot")
@@ -327,16 +340,19 @@ class BatchSheet(QDialog):
 
         self._btn_preview = QPushButton("预览", self._footer_host)
         self._btn_preview.setToolTip("生成正式渲染链路的代表最终图")
+        self._btn_preview.setProperty("role", "accent")
         self._btn_preview.clicked.connect(self._on_preview_clicked)
         self._footer_lay.addWidget(self._btn_preview)
 
         self._btn_run = QPushButton("运行", self._footer_host)
         self._btn_run.setDefault(True)
+        self._btn_run.setProperty("role", "primary")
         self._btn_run.clicked.connect(self._on_run_clicked)
         self._footer_lay.addWidget(self._btn_run)
 
         # Running-mode button (hidden until a run starts)
         self._btn_abort = QPushButton("中断", self._footer_host)
+        self._btn_abort.setProperty("role", "destructive")
         self._btn_abort.clicked.connect(self._on_cancel_clicked)
         self._btn_abort.setVisible(False)
         self._footer_lay.addWidget(self._btn_abort)
@@ -399,6 +415,46 @@ class BatchSheet(QDialog):
         self._compact_mode: bool | None = None
         self._apply_compact_mode(self.width() <= 1180)
 
+        # Initial size: intersect the 1080x760 target with the available
+        # screen so a small laptop display never clips the footer's run/
+        # preview/close actions off-screen (plan §3 改动 A). Deliberately
+        # last in __init__, after every sub-panel exists, since it only
+        # changes the dialog's own geometry.
+        self._fit_to_available_screen(parent, 1080, 760)
+
+    def _fit_to_available_screen(self, parent, target_w: int, target_h: int) -> None:
+        """Thin forwarder to the shared clamp so ``BatchSheet`` and
+        ``BatchPreviewDialog`` (``preview_dialog.py``) share one
+        implementation instead of drifting apart."""
+        fit_dialog_to_available_screen(
+            self, parent, target_w, target_h, min_w=640, min_h=480,
+        )
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        # Belt-and-suspenders: Qt can still reposition/resize a modal after
+        # the constructor's clamp (e.g. centering it over ``parent``), which
+        # on a small screen can push the bottom back off-screen even though
+        # __init__ sized it correctly. Clamp the actual frame geometry back
+        # into the available screen once more, now that a real screen is
+        # guaranteed to be associated with the window.
+        screen = None
+        try:
+            screen = QApplication.screenAt(self.geometry().center())
+        except Exception:
+            screen = None
+        if screen is None:
+            app = QApplication.instance()
+            screen = app.primaryScreen() if app is not None else None
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        frame = self.frameGeometry()
+        x = max(avail.left(), min(frame.left(), avail.right() - frame.width()))
+        y = max(avail.top(), min(frame.top(), avail.bottom() - frame.height()))
+        if x != frame.left() or y != frame.top():
+            self.move(x, y)
+
     def _apply_compact_mode(self, compact: bool) -> None:
         compact = bool(compact)
         if getattr(self, "_compact_mode", None) is compact:
@@ -408,7 +464,7 @@ class BatchSheet(QDialog):
         self._analysis_panel.set_compact_mode(compact)
         self._output_panel.set_compact_mode(compact)
         side = 12 if compact else 18
-        self._footer_lay.setContentsMargins(side, 8, 14, 8)
+        self._footer_lay.setContentsMargins(side, 5, 14, 5)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)

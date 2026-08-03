@@ -476,11 +476,17 @@ QWidget#BatchCompactFooter {
     border-top: 1px solid #e2e8f0;
     background-color: #fbfcfe;
 }
+QWidget#BatchCompactFooter QPushButton,
+QDialog#BatchPreviewDialog QPushButton {
+    min-height: 30px;
+    min-width: 76px;
+    padding: 4px 14px;
+    font-weight: 700;
+}
 QWidget#BatchCompactToolbar {
     border-bottom: 1px solid #e8edf4;
     background-color: #fbfcfe;
 }
-QLabel#BatchToolbarTitle { color: #4b596c; font-size: 13px; font-weight: 700; }
 QLabel#BatchToolbarMeta { color: #94a3b8; font-size: 11px; }
 QLabel#BatchFooterStateDot {
     border-radius: 4px;
@@ -612,6 +618,27 @@ QToolButton[role="primary"]:hover {
 }
 QPushButton[role="primary"]:disabled,
 QToolButton[role="primary"]:disabled {
+    color: #94a3b8;
+    background-color: #f5f7fb;
+    border-color: #eef2f7;
+}
+
+QPushButton[role="accent"],
+QToolButton[role="accent"] {
+    background-color: #ffffff;
+    border-color: #1769e0;
+    color: #1769e0;
+}
+QPushButton[role="accent"]:hover,
+QToolButton[role="accent"]:hover {
+    background-color: #e8efff;
+    border-color: #135abd;
+    color: #0f3f8f;
+}
+QPushButton[role="accent"]:pressed,
+QToolButton[role="accent"]:pressed { background-color: #d8e6fb; }
+QPushButton[role="accent"]:disabled,
+QToolButton[role="accent"]:disabled {
     color: #94a3b8;
     background-color: #f5f7fb;
     border-color: #eef2f7;

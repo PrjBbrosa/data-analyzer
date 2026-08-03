@@ -184,9 +184,9 @@ def test_batch_shell_matches_html_fixed_rows_and_contiguous_columns(qapp, qtbot)
         sheet = BatchSheet(None, files={})
         _show_at(qtbot, sheet, 1440, 900)
 
-        assert sheet._toolbar_host.height() == 50
-        assert sheet.strip.height() == 62
-        assert sheet._footer_host.height() == 54
+        assert sheet._toolbar_host.height() == 44
+        assert sheet.strip.height() == 40
+        assert sheet._footer_host.height() == 50
         assert sheet._detail_lay.spacing() == 0
 
         panes = (sheet._input_scroll, sheet._analysis_scroll, sheet._output_scroll)
@@ -206,8 +206,8 @@ def test_pipeline_strip_uses_flat_html_stage_summaries(qtbot):
     strip = PipelineStrip()
     qtbot.addWidget(strip)
 
-    assert strip.minimumHeight() == 62
-    assert strip.maximumHeight() == 62
+    assert strip.minimumHeight() == 40
+    assert strip.maximumHeight() == 40
     assert strip.layout().spacing() == 0
     assert [card.number_label.text() for card in strip.cards] == ["01", "02", "03"]
     assert [card.title_label.text() for card in strip.cards] == ["输入", "分析", "输出"]
@@ -316,3 +316,105 @@ def test_file_manager_uses_compact_structured_inline_shell(qtbot):
     assert panel._file_list._empty_label.isVisibleTo(panel)
     assert panel._file_list._list.isHidden()
     assert panel._file_facts.text().startswith("0 个数据源")
+
+
+# ---------------------------------------------------------------------------
+# Plan: docs/analyzer/plans/2026-08-03-batch-panel-height-and-action-emphasis-
+# implementation.md — panel-height convergence + action-button emphasis.
+# ---------------------------------------------------------------------------
+
+
+def test_batch_sheet_initial_size_fits_available_screen(qapp, qtbot):
+    from PyQt5.QtWidgets import QApplication
+
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    screen = QApplication.instance().primaryScreen()
+    avail = screen.availableGeometry()
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+
+    assert sheet.height() <= avail.height() - 40
+    assert sheet.width() <= avail.width() - 24
+
+
+def test_batch_preview_dialog_fits_available_screen(qapp, qtbot):
+    from PyQt5.QtWidgets import QApplication
+
+    from mf4_analyzer.ui.drawers.batch.preview_dialog import BatchPreviewDialog
+
+    screen = QApplication.instance().primaryScreen()
+    avail = screen.availableGeometry()
+
+    dialog = BatchPreviewDialog(None)
+    qtbot.addWidget(dialog)
+
+    assert dialog.height() <= avail.height() - 40
+    assert dialog.width() <= avail.width() - 24
+
+
+def test_batch_footer_actions_stay_inside_a_short_dialog(qapp, qtbot):
+    from pathlib import Path
+
+    from PyQt5.QtCore import QPoint
+
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    old_stylesheet = qapp.styleSheet()
+    try:
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        sheet = BatchSheet(None, files={})
+        qtbot.addWidget(sheet)
+        sheet.resize(1080, 620)
+        sheet.show()
+        qtbot.wait(20)
+
+        top_left = sheet._btn_run.mapTo(sheet, QPoint(0, 0))
+        assert top_left.y() + sheet._btn_run.height() <= sheet.height()
+        assert sheet._btn_run.isVisible()
+    finally:
+        sheet.close()
+        qapp.setStyleSheet(old_stylesheet)
+
+
+def test_batch_action_buttons_use_global_button_roles(qtbot):
+    from mf4_analyzer.ui.drawers.batch.preview_dialog import BatchPreviewDialog
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    assert sheet._btn_run.property("role") == "primary"
+    assert sheet._btn_preview.property("role") == "accent"
+    assert sheet._btn_cancel.property("role") is None
+    assert sheet._btn_abort.property("role") == "destructive"
+
+    dialog = BatchPreviewDialog(None)
+    qtbot.addWidget(dialog)
+    assert dialog._btn_run_all.property("role") == "primary"
+    assert dialog._btn_regenerate.property("role") == "accent"
+    assert dialog._btn_back.property("role") is None
+    assert dialog._btn_cancel.property("role") == "destructive"
+
+
+def test_accent_role_is_declared_in_global_qss():
+    from pathlib import Path
+
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+
+    assert 'role="accent"' in qss
+    window = qss[qss.index('role="accent"'):][:400]
+    assert "#1769e0" in window
+
+
+def test_batch_header_merges_strip_and_preset_buttons_into_one_row(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+
+    assert sheet.strip.parent() is sheet._toolbar_host
+    assert sheet._toolbar_host.height() + sheet._footer_host.height() == 94
+    assert not hasattr(sheet, "_toolbar_title")
