@@ -504,6 +504,53 @@ def test_available_per_source_skips_missing_combinations(tmp_path):
     assert result.status == "done"
 
 
+def test_available_per_source_skips_missing_custom_x_combinations(tmp_path):
+    t = np.arange(8, dtype=float) / 8.0
+    fd_with_x = FileData(
+        tmp_path / "with_x.csv",
+        pd.DataFrame({
+            "Time": t,
+            "sig": np.linspace(0.0, 1.0, len(t)),
+            "angle": np.linspace(0.0, 180.0, len(t)),
+        }),
+        ["Time", "sig", "angle"],
+        {"angle": "deg"},
+        idx=0,
+        fs=8.0,
+    )
+    fd_without_x = FileData(
+        tmp_path / "without_x.csv",
+        pd.DataFrame({
+            "Time": t,
+            "sig": np.linspace(1.0, 2.0, len(t)),
+        }),
+        ["Time", "sig"],
+        {},
+        idx=1,
+        fs=8.0,
+    )
+    preset = AnalysisPreset.free_config(
+        name="per-source custom X",
+        method="time",
+        target_signals=("sig",),
+        target_policy="available_per_source",
+        params={"x_source": "channel", "x_channel": "angle"},
+        outputs=BatchOutput(
+            export_data=True,
+            export_image=False,
+            write_manifest=False,
+        ),
+    )
+    preset = replace(preset, file_ids=(0, 1))
+
+    result = BatchRunner({0: fd_with_x, 1: fd_without_x}).run(
+        preset, tmp_path / "out",
+    )
+
+    assert result.status == "done"
+    assert [(item.file_id, item.signal) for item in result.items] == [(0, "sig")]
+
+
 def test_legacy_progress_callback_still_works(tmp_path):
     fd = _make_fd(tmp_path, "a", idx=0)
     preset = AnalysisPreset.from_current_single(
@@ -3180,7 +3227,7 @@ def test_time_statistics_diagnostic_is_a_nonblocking_group_warning(
         "rows": [],
         "diagnostics": [{
             "code": "chart_statistics.multiple_x_reversals", "panel": 0,
-            "message": "当前曲线检测到多次 X 方向反转，无法确定唯一升程/回程。",
+            "message": "当前统计区间识别到 4 条有效 X 路径，无法确定唯一升程/回程。",
         }],
     }
 
@@ -3228,6 +3275,67 @@ def test_time_statistics_manifest_summarizes_normal_rows(tmp_path, monkeypatch):
         "panel": 0, "branch": "全程", "sample_count": 3,
         "minimum": -1.0, "maximum": 4.0, "mean": 1.0,
     }]
+
+
+def test_noisy_custom_x_statistics_match_between_preview_run_and_manifest(
+    tmp_path, monkeypatch,
+):
+    """The shared producer keeps a noisy physical cycle out of the ERROR path."""
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    forward = np.linspace(-83.0, 83.0, 2001)
+    backward = np.linspace(83.0, -83.0, 2001)[1:]
+    x_values = np.concatenate((forward, backward))
+    x_values += np.resize(
+        np.asarray((0.20, 0.10, 0.0, -0.10, -0.20, -0.10, 0.0, 0.10)),
+        x_values.size,
+    )
+    frame = pd.DataFrame({
+        "Time": np.arange(x_values.size, dtype=float) / 10.0,
+        "angle": x_values,
+        "sig": np.arange(x_values.size, dtype=float),
+    })
+    fd = FileData(
+        tmp_path / "statistics-noisy-cycle.csv", frame, list(frame.columns),
+        {"angle": "deg", "sig": "V"},
+    )
+    captured = []
+
+    def write_image(payload, path, **_kwargs):
+        captured.append(payload[1])
+        Path(path).write_bytes(b"png")
+        return Path(path)
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(write_image))
+    preset = AnalysisPreset.from_current_single(
+        name="statistics noisy cycle", method="time", signal=(0, "sig"),
+        params={
+            "render_group_by": "source", "x_source": "channel", "x_channel": "angle",
+            "chart_statistics": {
+                "enabled": True, "range_mode": "custom",
+                "x_min": -20.0, "x_max": 20.0, "metrics": ["max", "min"],
+            },
+        },
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+
+    runner = BatchRunner({0: fd})
+    preview_plan = runner.preview_outputs(preset, tmp_path / "formal")
+    preview = runner.preview_group(
+        preset, preview_plan.representative_group.group_id, tmp_path / "preview",
+    )
+    result = runner.run(preset, tmp_path / "out")
+
+    facts = load_batch_manifest(result.manifest_path)["render_groups"][0][
+        "effective_facts"
+    ]["chart_statistics"]
+    assert preview.status == result.status == "done"
+    assert preview.warnings == ()
+    assert len(captured) == 2
+    assert [row.direction for row in captured[0].statistics] == ["X↑", "X↓"]
+    assert [row.direction for row in captured[1].statistics] == ["X↑", "X↓"]
+    assert facts["diagnostics"] == []
+    assert [row["branch"] for row in facts["rows"]] == ["路径 1 · X↑", "路径 2 · X↓"]
 
 
 def test_statistics_diagnostic_does_not_stop_the_next_render_group(

@@ -331,6 +331,40 @@ def test_sheet_universe_wires_analysis_candidates_and_clears_stale_x(
     assert "speed" in form.x_channel_validation_message()
 
 
+def test_available_policy_custom_x_uses_only_coavailable_source_rows(
+    qtbot, tmp_path,
+):
+    """A partial X remains usable when it shares a logical source with Y."""
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    first = _time_file_data(tmp_path, "one.csv", speed_unit="rpm")
+    second = _time_file_data(
+        tmp_path, "two.csv", channels=("target", "other"),
+    )
+    sheet = BatchSheet(None, files={"s1": first, "s2": second})
+    qtbot.addWidget(sheet)
+    sheet.apply_files(("s1", "s2"), ())
+    sheet.apply_method("time")
+    sheet._input_panel.apply_target_policy("available_per_source")
+    sheet.apply_signals(("target",))
+
+    form = sheet._analysis_panel._param_form
+    speed_index = form._w_x_channel.findData("speed")
+    assert speed_index >= 0
+    assert form._w_x_channel.model().item(speed_index).isEnabled() is True
+
+    sheet.apply_params({"x_source": "channel", "x_channel": "speed"})
+
+    assert not any(
+        issue.field == "x_channel"
+        and issue.code in {"mixed_x_units", "unavailable_x_channel"}
+        for issue in sheet.preflight_issues()
+    )
+    assert sheet._build_dry_run_preview() == [
+        (first.filename, "target", "time"),
+    ]
+
+
 def test_sheet_time_x_preflight_uses_metadata_then_units_and_fails_mixed(
     qtbot, tmp_path,
 ):

@@ -157,6 +157,8 @@ class BatchSheet(QDialog):
         self._scope_target_policy = "common"
         self._scope_signals: tuple[str, ...] = ()
         self._scope_rpm_channel = ""
+        self._x_channel_common: tuple[str, ...] = ()
+        self._x_channel_partial: dict[str, str] = {}
         self._source_registry = DEFAULT_SOURCE_ADAPTER_REGISTRY
         source_context = getattr(parent, "batch_source_context", {}) if parent else {}
         self._source_context = (
@@ -344,7 +346,7 @@ class BatchSheet(QDialog):
         # Wire status recomputation. Each signal is independent — we wire all
         # of them so that any sub-control mutation flows into a single
         # recompute pass.
-        self._input_panel.changed.connect(self._recompute_pipeline_status)
+        self._input_panel.changed.connect(self._on_input_scope_changed)
         self._input_panel._file_list.filesChanged.connect(self._recompute_pipeline_status)
         self._input_panel._file_list.intersectionChanged.connect(
             lambda _intersection: self._recompute_pipeline_status()
@@ -450,6 +452,10 @@ class BatchSheet(QDialog):
     # ------------------------------------------------------------------
     # Pipeline status recompute
     # ------------------------------------------------------------------
+    def _on_input_scope_changed(self) -> None:
+        self._refresh_x_channel_candidates()
+        self._recompute_pipeline_status()
+
     def _recompute_pipeline_status(self) -> None:
         # INPUT
         fl = self._input_panel._file_list
@@ -1008,14 +1014,56 @@ class BatchSheet(QDialog):
     def _on_channel_universe_changed(
         self, common: tuple, partial: dict,
     ) -> None:
-        self._analysis_panel._param_form.set_x_channel_candidates(
-            common, partial,
-        )
+        self._x_channel_common = tuple(str(name) for name in common if str(name))
+        self._x_channel_partial = {
+            str(name): str(suffix)
+            for name, suffix in partial.items()
+            if str(name)
+        }
+        self._refresh_x_channel_candidates()
         self._sync_x_axis_context()
+
+    def _custom_x_compatible_rows(self, channel: str) -> tuple:
+        """Return logical sources where a custom X can pair with a target.
+
+        ``available_per_source`` deliberately treats a multi-rate container as
+        multiple logical sources. An X channel is eligible only in rows that
+        contain both that channel and at least one selected target.
+        """
+        rows = tuple(self._input_panel._file_list.loaded_rows())
+        if self.target_policy() != "available_per_source":
+            return tuple(row for row in rows if channel in row.channels)
+        selected = frozenset(self.selected_signals())
+        if not selected:
+            return tuple(row for row in rows if channel in row.channels)
+        return tuple(
+            row for row in rows
+            if channel in row.channels and selected.intersection(row.channels)
+        )
+
+    def _refresh_x_channel_candidates(self) -> None:
+        partial_selectable: tuple[str, ...] = ()
+        if self.target_policy() == "available_per_source":
+            selected = frozenset(self.selected_signals())
+            compatible_channels = {
+                str(channel)
+                for row in self._input_panel._file_list.loaded_rows()
+                if not selected or selected.intersection(row.channels)
+                for channel in row.channels
+            }
+            partial_selectable = tuple(
+                name for name in self._x_channel_partial
+                if name in compatible_channels
+            )
+        self._analysis_panel._param_form.set_x_channel_candidates(
+            self._x_channel_common,
+            self._x_channel_partial,
+            partial_selectable=partial_selectable,
+        )
 
     def _x_channel_units(self, channel: str) -> tuple[str, ...]:
         units: set[str] = set()
-        for row in self._input_panel._file_list.loaded_rows():
+        for row in self._custom_x_compatible_rows(channel):
             metadata = dict(getattr(row, "metadata", {}) or {})
             channel_metadata = metadata.get("channel_metadata") or {}
             facts = dict(channel_metadata.get(channel) or {})
@@ -1244,12 +1292,22 @@ class BatchSheet(QDialog):
             self.method() == "time"
             and str(params.get("x_source", "time")) == "channel"
             and x_channel
-            and len(self._x_channel_units(x_channel)) > 1
         ):
-            issues.append(ValidationIssue(
-                "x_channel", "mixed_x_units",
-                "X channel units differ across loaded sources",
-            ))
+            compatible_rows = self._custom_x_compatible_rows(x_channel)
+            if (
+                policy == "available_per_source"
+                and selected
+                and not compatible_rows
+            ):
+                issues.append(ValidationIssue(
+                    "x_channel", "unavailable_x_channel",
+                    "X channel is unavailable for the selected target signals",
+                ))
+            elif len(self._x_channel_units(x_channel)) > 1:
+                issues.append(ValidationIssue(
+                    "x_channel", "mixed_x_units",
+                    "X channel units differ across matching sources",
+                ))
         issues.extend(validate_outputs(self._output_panel.get_outputs()))
         return tuple(issues)
 
@@ -1301,6 +1359,13 @@ class BatchSheet(QDialog):
         fl = self._input_panel._file_list
         policy = preset.target_policy or "common"
         common = fl.current_intersection() if policy == "common" else frozenset()
+        params = dict(preset.params or {})
+        x_channel = str(params.get("x_channel") or "").strip()
+        needs_custom_x = (
+            method == "time"
+            and str(params.get("x_source", "time") or "time") == "channel"
+            and bool(x_channel)
+        )
         for row in fl.loaded_rows():
             fd = self._files.get(row.source_id)
             label = getattr(fd, "filename", None) or row.label or str(row.source_id)
@@ -1308,6 +1373,12 @@ class BatchSheet(QDialog):
                 if policy == "common" and sig not in common:
                     continue
                 if policy == "available_per_source" and sig not in row.channels:
+                    continue
+                if (
+                    policy == "available_per_source"
+                    and needs_custom_x
+                    and x_channel not in row.channels
+                ):
                     continue
                 rows.append((str(label), str(sig), str(method)))
 

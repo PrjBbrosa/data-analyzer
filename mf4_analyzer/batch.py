@@ -2988,6 +2988,14 @@ class BatchRunner:
                 return
 
             selected = tuple(str(ch) for ch in preset.target_signals)
+            params = dict(getattr(preset, 'params', {}) or {})
+            x_channel = str(params.get('x_channel', '') or '').strip()
+            needs_custom_x = (
+                preset.method == 'time'
+                and str(params.get('x_source', 'time') or 'time').lower()
+                == 'channel'
+                and bool(x_channel)
+            )
             channels_by_source = {}
             for source_key in source_keys:
                 fd = self._known_file_data(source_key)
@@ -3018,8 +3026,15 @@ class BatchRunner:
             for source_key in source_keys:
                 available = channels_by_source[source_key]
                 for channel in selected:
-                    if available is None or channel in available:
-                        yield source_key, channel
+                    if available is not None and channel not in available:
+                        continue
+                    if (
+                        needs_custom_x
+                        and available is not None
+                        and x_channel not in available
+                    ):
+                        continue
+                    yield source_key, channel
             return
         # Pattern fallback (legacy / test path): the pre-probe planning pass may
         # enumerate already-resident sources only.  Lazy sources are expanded

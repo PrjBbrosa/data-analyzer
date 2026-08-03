@@ -831,20 +831,31 @@ class DynamicParamForm(QWidget):
         return self._x_channel_validation
 
     def set_x_channel_candidates(
-        self, common: Sequence[str], partial: Mapping[str, str],
+        self,
+        common: Sequence[str],
+        partial: Mapping[str, str],
+        *,
+        partial_selectable: Sequence[str] = (),
     ) -> None:
-        """Replace the X-channel universe without selecting partial rows."""
+        """Replace the X-channel universe and enable eligible partial rows."""
         selected = str(
             self._w_x_channel.currentData() or self._pending_x_channel or ""
         )
         common_names = tuple(dict.fromkeys(
             str(name) for name in common if str(name)
         ))
+        selectable_partial_names = frozenset(
+            str(name) for name in partial_selectable if str(name)
+        )
         partial_items = tuple(
             (str(name), str(suffix))
             for name, suffix in partial.items()
             if str(name) and str(name) not in common_names
         )
+        valid_names = frozenset(common_names) | {
+            name for name, _suffix in partial_items
+            if name in selectable_partial_names
+        }
 
         previous = self._w_x_channel.blockSignals(True)
         try:
@@ -857,11 +868,11 @@ class DynamicParamForm(QWidget):
                 item = self._w_x_channel.model().item(
                     self._w_x_channel.count() - 1
                 )
-                if item is not None:
+                if item is not None and name not in selectable_partial_names:
                     item.setEnabled(False)
 
             index = self._w_x_channel.findData(selected)
-            valid = bool(selected) and selected in common_names
+            valid = bool(selected) and selected in valid_names
             self._w_x_channel.setCurrentIndex(index if valid else 0)
         finally:
             self._w_x_channel.blockSignals(previous)

@@ -132,6 +132,8 @@ lesson by default.
 | [Full Qt UI Gate Must Finish Before It Is Evidence](qt-full-ui-stylesheet-gate-must-finish.md) | A change requires the complete `tests/ui` stability gate, especially | See lesson |
 | [Paired Qt Editors Sync Before Aggregate State Reconstruction](paired-qt-editors-sync-before-aggregate-state.md) | A slider and spinbox edit the same value while one handler rebuilds an | See lesson |
 | [Batch Range Modes Need Exclusive Layout Pages](batch-statistics-range-mode-layout.md) | Adding a compact Batch setting that changes a one-line control group | See lesson |
+| [Batch Custom-X Statistics Need Major Legs Before Range Clipping](batch-custom-x-major-legs-before-range-clipping.md) | Changing Batch time-chart statistics for channel-backed X, especially | See lesson |
+| [Available-Per-Source Custom X Must Share a Logical Source With Its Target](batch-available-per-source-custom-x-coavailability.md) | Changing Batch time-chart custom-X candidates, task expansion, | See lesson |
 
 ## Selection Rules
 
