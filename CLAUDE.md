@@ -2,7 +2,7 @@
 
 **Project:** TraceLab / MF4 Data Analyzer — PyQt5 桌面 GUI，做工程测量数据的导入、
 时域/频域/阶次分析、批处理，以及 CAN/XCP 采集回放。版本单一事实源是
-`mf4_analyzer/app_meta.py` 的 `APP_VERSION`（当前 v7.9.1），别在别处硬编码版本号。
+`mf4_analyzer/app_meta.py` 的 `APP_VERSION`（当前 v7.9.2），别在别处硬编码版本号。
 
 ## Dev commands
 ```bash

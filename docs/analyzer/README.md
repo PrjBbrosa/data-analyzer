@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 7.9.1. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 7.9.2. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and 12-View changes, as well as the native WinWert (`.wwt`),
 ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced in 7.7.
 7.8 added a draft-based channel configuration manager with View matching
@@ -34,7 +34,10 @@ touchpad Ctrl/Shift zoom symmetric across analysis views, restores bidirectional
 Y-axis scaling in overlay mode, and tightens dense-plot interaction budgets.
 7.9.1 refines batch input and image-export workflows, and resolves time-domain
 custom X axes independently per source while preserving source-level failure
-diagnostics.
+diagnostics. 7.9.2 fits the batch panel and its preview window to the available
+screen so the footer actions stay reachable on a laptop, tightens the panel's
+two header rows, and ranks the batch action buttons through the global
+primary/accent/destructive roles.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.
