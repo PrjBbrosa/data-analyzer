@@ -1456,8 +1456,22 @@ class MainWindow(
         its own axis so there is no single "left" to assign. We still store
         the pick so it applies if the user later switches to overlay, but the
         replot only reorders when overlay is active (plot_time guards that).
+
+        The pick belongs to the FOCUSED View, not just the window. Every path
+        that re-projects a View onto a canvas (``_project_view_controls`` /
+        ``_render_view_to_canvas`` → ``view_bridge.apply_controls_from_state``)
+        rewrites ``self._overlay_primary`` from ``ViewState.overlay_primary``,
+        so a pick left only on the window was silently reverted to the first
+        checked channel by the next 加入文件 / 应用通道配置 / 打开项目 /
+        View 投射 — and never made it into a saved project. Capturing the
+        focused View here (same helper ``_switch_view`` uses, so in split it
+        lands on the pane that owns the focus) makes the pick part of the
+        View's own state. Guarded on ``_applying_view`` so we never write back
+        into a View while one is mid-projection.
         """
         self._overlay_primary = (fid, ch)
+        if not getattr(self, '_applying_view', False):
+            self._capture_focused_view()
         self._plot_time_preserving_xlim()
 
     def _safe_capture_primary_xlim(self):
