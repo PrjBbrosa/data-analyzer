@@ -45,6 +45,47 @@ def _open(case, *, width=960, height=640):
     )
 
 
+def _statistics_scene(*, width=960, height=640):
+    """A time page carrying the two extremum markers of the statistics overlay.
+
+    None of the parity cases enable chart statistics, and the markers are the
+    only pxMode items the report draws.
+    """
+    from mf4_analyzer.batch_render_qt import (
+        BatchRenderContext,
+        BatchSeries,
+        BatchTimeFigureSpec,
+    )
+    from mf4_analyzer.batch_statistics import BatchStatisticRow
+
+    x = np.linspace(0.0, 2.0, 601)
+    y = np.sin(2 * np.pi * x)
+    peak, trough = int(np.argmax(y)), int(np.argmin(y))
+    row = BatchStatisticRow(
+        series_key="rack", family_key="rack", label="rack", variant="value",
+        panel=0, branch_label="全程", direction="", sample_count=int(x.size),
+        x_min=float(x[0]), x_max=float(x[-1]),
+        minimum=float(y[trough]), maximum=float(y[peak]),
+        mean=float(y.mean()),
+        argmin_x=float(x[trough]), argmax_x=float(x[peak]),
+    )
+    return build_batch_scene(
+        (
+            "time",
+            BatchTimeFigureSpec(
+                (BatchSeries(x, y, "rack", unit="N", series_key="rack"),),
+                statistics=(row,),
+            ),
+        ),
+        params={"chart_statistics": {"metrics": ["max", "min"]}},
+        options=BatchRenderOptions(width_px=width, height_px=height),
+        context=BatchRenderContext(
+            source_display_name="stats.mf4", group="g", channel="rack",
+            unit="N", method="time", task_id="stats",
+        ),
+    )
+
+
 def _pixels(image: QImage) -> np.ndarray:
     converted = image.convertToFormat(QImage.Format_RGBA8888)
     ptr = converted.bits()
@@ -269,6 +310,68 @@ def test_export_metadata_and_resolution_survive_the_downscale(qapp, tmp_path):
         assert reloaded.dotsPerMeterX() == expected_dpm
     finally:
         scene.close()
+
+
+def test_scatter_markers_get_export_mode_and_give_it_back(qapp):
+    """pxMode symbols ignore the scale-up unless resolutionScale is set.
+
+    ``ScatterPlotItem.paint`` calls ``resetTransform()`` when ``pxMode`` is on,
+    so a symbol is drawn at its device-pixel size on the N x canvas and comes
+    back ``1/factor`` as wide — the statistics markers measured ~6 px instead
+    of ~18 px before this. ``resolutionScale`` is the hook that multiplies
+    ``size``; it has to be handed back afterwards because callers render the
+    same settled scene more than once.
+    """
+    scene = _statistics_scene()
+    try:
+        scene.show_and_settle()
+        graphics_scene = scene.widget.scene()
+        markers = [
+            item for item in graphics_scene.items()
+            if isinstance(item, pg.ScatterPlotItem)
+        ]
+        overlay = [
+            item for item in scene.plots[0].vb.addedItems
+            if isinstance(item, pg.ScatterPlotItem)
+        ]
+        assert len(overlay) == 2, "max and min markers"
+        # PlotCurveItem reads _exportOpts['antialias'] too, and turning it on
+        # scene-wide would cost the drawLines fast path the whole pass buys.
+        curves = [
+            item for item in graphics_scene.items()
+            if isinstance(item, pg.PlotCurveItem)
+        ]
+        assert curves, "the page draws curves"
+
+        with qt_export._prepared_for_supersampling(graphics_scene, 3):
+            for marker in markers:
+                assert marker._exportOpts is not False, "export mode is off"
+                assert marker._exportOpts["resolutionScale"] == 3
+                assert marker._exportOpts["antialias"] is False
+            for curve in curves:
+                assert curve._exportOpts is False
+
+        for marker in markers:
+            assert marker._exportOpts is False
+    finally:
+        scene.close()
+
+
+def test_supersampled_markers_keep_their_one_to_one_size(qapp, monkeypatch):
+    """The measurable payoff: the marker is not shrunk by the downscale."""
+    def marker_ink(factor: int) -> int:
+        _force_factor(monkeypatch, factor)
+        scene = _statistics_scene()
+        try:
+            image = render_scene_image(scene)
+            pixels = _pixels(image)[..., :3].astype(np.int16)
+            red, green, blue = pixels[..., 0], pixels[..., 1], pixels[..., 2]
+            mask = (red > 110) & (red - green > 55) & (red - blue > 55)
+            return int(np.count_nonzero(mask))
+        finally:
+            scene.close()
+
+    assert marker_ink(3) == pytest.approx(marker_ink(1), rel=0.15)
 
 
 def test_prepared_pass_scales_pens_without_moving_the_plot_geometry(qapp):

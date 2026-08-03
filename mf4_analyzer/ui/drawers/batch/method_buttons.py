@@ -126,7 +126,7 @@ _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "order_time": (
         "window", "nfft_mode", "nfft", "max_order", "order_res", "time_res",
-        "rpm_mode", "manual_rpm", "samples_per_rev", "weighting",
+        "samples_per_rev", "weighting",
     ),
 }
 
@@ -522,8 +522,6 @@ class DynamicParamForm(QWidget):
             "avg_mode": "平均模式",
             "avg_overlap": "平均重叠",
             "amplitude_definition": "幅值定义",
-            "rpm_mode": "RPM 模式",
-            "manual_rpm": "手动 RPM",
             "samples_per_rev": "每转样本",
             "render_grouping_cards": "图片分组",
             "render_layout": "图内布局",
@@ -638,23 +636,6 @@ class DynamicParamForm(QWidget):
         )
         self._widgets["amplitude_definition"] = self._w_amplitude_definition
 
-        self._w_rpm_mode = QComboBox(self)
-        self._w_rpm_mode.addItem("Channel", "channel")
-        self._w_rpm_mode.addItem("Manual", "manual")
-        self._w_rpm_mode.currentIndexChanged.connect(self._sync_rpm_mode)
-        self._w_rpm_mode.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
-        self._widgets["rpm_mode"] = self._w_rpm_mode
-
-        self._w_manual_rpm = no_buttons(CompactDoubleSpinBox(self))
-        self._w_manual_rpm.setRange(0.001, 1e7)
-        self._w_manual_rpm.setDecimals(3)
-        self._w_manual_rpm.setValue(1000.0)
-        self._w_manual_rpm.setSuffix(" rpm")
-        self._w_manual_rpm.valueChanged.connect(lambda *_: self.paramsChanged.emit())
-        self._widgets["manual_rpm"] = self._w_manual_rpm
-
         self._w_samples_per_rev = no_buttons(QSpinBox(self))
         self._w_samples_per_rev.setRange(2, 1 << 20)
         self._w_samples_per_rev.setValue(256)
@@ -752,7 +733,6 @@ class DynamicParamForm(QWidget):
         self._render_for("fft")
         self._sync_nfft_mode()
         self._sync_avg_mode()
-        self._sync_rpm_mode()
         self._sync_render_group_by()
         self._sync_x_source()
 
@@ -787,9 +767,6 @@ class DynamicParamForm(QWidget):
 
     def _sync_avg_mode(self, *_args) -> None:
         self._w_avg_overlap.setEnabled(self._w_avg_mode.currentText() != "单帧")
-
-    def _sync_rpm_mode(self, *_args) -> None:
-        self._w_manual_rpm.setEnabled(self._w_rpm_mode.currentData() == "manual")
 
     def _sync_render_group_by(self, *_args) -> None:
         self._grouping_cards.set_mode(
@@ -941,10 +918,6 @@ class DynamicParamForm(QWidget):
             params["amplitude_definition"] = str(
                 self._w_amplitude_definition.currentData() or "native"
             )
-        if "rpm_mode" in self.visible_field_names():
-            params["rpm_mode"] = str(self._w_rpm_mode.currentData() or "channel")
-        if "manual_rpm" in self.visible_field_names():
-            params["manual_rpm"] = float(self._w_manual_rpm.value())
         if "samples_per_rev" in self.visible_field_names():
             params["samples_per_rev"] = int(self._w_samples_per_rev.value())
         return params
@@ -1045,24 +1018,12 @@ class DynamicParamForm(QWidget):
             )
             if idx >= 0:
                 self._w_amplitude_definition.setCurrentIndex(idx)
-        if "rpm_mode" in params:
-            raw = str(params["rpm_mode"]).lower()
-            mode = "manual" if raw in {"manual", "fixed", "手动"} else "channel"
-            idx = self._w_rpm_mode.findData(mode)
-            if idx >= 0:
-                self._w_rpm_mode.setCurrentIndex(idx)
-        if "manual_rpm" in params:
-            try:
-                self._w_manual_rpm.setValue(float(params["manual_rpm"]))
-            except (TypeError, ValueError):
-                pass
         if "samples_per_rev" in params:
             try:
                 self._w_samples_per_rev.setValue(int(params["samples_per_rev"]))
             except (TypeError, ValueError):
                 pass
         self._sync_avg_mode()
-        self._sync_rpm_mode()
         self._sync_render_group_by()
         self._sync_x_source()
 
@@ -1131,6 +1092,5 @@ class DynamicParamForm(QWidget):
                 self._field_hosts[name].setHidden(True)
         self._sync_nfft_mode()
         self._sync_avg_mode()
-        self._sync_rpm_mode()
         self._sync_render_group_by()
         self._sync_x_source()

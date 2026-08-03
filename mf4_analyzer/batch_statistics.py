@@ -118,7 +118,9 @@ def _configuration(config) -> tuple[bool, str, float | None, float | None]:
     try:
         lo, hi = float(config["x_min"]), float(config["x_max"])
     except (KeyError, TypeError, ValueError):
-        return True, "custom", None, None
+        return True, "custom_unavailable", None, None
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        return True, "custom_unavailable", None, None
     return True, "custom", lo, hi
 
 
@@ -336,6 +338,21 @@ def plan_chart_statistics(
     enabled, mode, lo, hi = _configuration(config)
     if not enabled:
         return BatchChartStatisticsPlan()
+    if mode == "custom_unavailable":
+        # Requested a custom range but the bounds are missing/non-finite.
+        # Fail closed like `multiple_x_reversals`: a red diagnostic and no
+        # rows, instead of silently falling back to the full-range statistics
+        # the user did not ask for (design D-D2).
+        panels = tuple(dict.fromkeys(item.panel for item in series))
+        diagnostics = tuple(
+            BatchChartDiagnostic(
+                code="chart_statistics.custom_range_unavailable", panel=panel,
+                message="图内统计设为自定义区间，但区间上下限缺失或无效，未按全时段静默改算。",
+                suggestion="请在图内统计设置里填写完整的自定义区间上下限，或改用“全时段”。",
+            )
+            for panel in panels
+        )
+        return BatchChartStatisticsPlan(diagnostics=diagnostics)
     results = []
     for item in series:
         transformed = StatisticSeriesInput(

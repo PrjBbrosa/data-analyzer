@@ -116,6 +116,76 @@ def test_legacy_vector_preset_migrates_to_png_with_transient_audit(
     assert reloaded.outputs.migration_warnings == ()
 
 
+def test_legacy_manual_rpm_preset_migrates_with_warning_and_drops_fields(
+    tmp_path,
+):
+    """Design 2026-08-03 D-C1: batch order analysis no longer supports manual
+    RPM. Loading an old preset JSON that requested it must drop both fields
+    (not carry them as unrecognized future data) and surface a migration
+    warning, exactly as the legacy image-format migration does."""
+    path = tmp_path / "legacy-manual-rpm.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "name": "legacy manual rpm",
+        "method": "order_time",
+        "target_signals": ["sig"],
+        "params": {
+            "window": "hanning",
+            "max_order": 40.0,
+            "rpm_mode": "manual",
+            "manual_rpm": 1500.0,
+        },
+        "outputs": {
+            "export_data": True,
+            "export_image": True,
+            "data_format": "csv",
+            "image_format": "png",
+        },
+    }), encoding="utf-8")
+
+    loaded = load_preset_from_json(path)
+
+    assert "rpm_mode" not in loaded.params
+    assert "manual_rpm" not in loaded.params
+    assert loaded.params["max_order"] == 40.0
+    assert loaded.outputs.migration_warnings == (
+        "旧预设的手动 RPM 已移除；批处理阶次分析需要指定 RPM 通道。",
+    )
+
+    canonical = tmp_path / "canonical.json"
+    save_preset_to_json(loaded, canonical)
+    raw = json.loads(canonical.read_text(encoding="utf-8"))
+    assert "rpm_mode" not in raw["params"]
+    assert "manual_rpm" not in raw["params"]
+    reloaded = load_preset_from_json(canonical)
+    assert reloaded.outputs.migration_warnings == ()
+
+
+def test_legacy_channel_rpm_mode_preset_migrates_without_warning(tmp_path):
+    """Discarding rpm_mode="channel" changes nothing observable -- channel
+    was always the only mode the runner honored -- so no warning fires."""
+    path = tmp_path / "legacy-channel-rpm.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "name": "legacy channel rpm",
+        "method": "order_time",
+        "target_signals": ["sig"],
+        "rpm_channel": "rpm",
+        "params": {"window": "hanning", "rpm_mode": "channel"},
+        "outputs": {
+            "export_data": True,
+            "export_image": True,
+            "data_format": "csv",
+            "image_format": "png",
+        },
+    }), encoding="utf-8")
+
+    loaded = load_preset_from_json(path)
+
+    assert "rpm_mode" not in loaded.params
+    assert loaded.outputs.migration_warnings == ()
+
+
 @pytest.mark.parametrize("illegal_format", ("pdf", "svg"))
 def test_new_vector_preset_cannot_be_saved_as_if_it_were_legacy(
     tmp_path, illegal_format,

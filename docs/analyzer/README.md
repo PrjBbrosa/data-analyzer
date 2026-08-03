@@ -37,7 +37,13 @@ custom X axes independently per source while preserving source-level failure
 diagnostics. 7.9.2 fits the batch panel and its preview window to the available
 screen so the footer actions stay reachable on a laptop, tightens the panel's
 two header rows, and ranks the batch action buttons through the global
-primary/accent/destructive roles.
+primary/accent/destructive roles. 7.9.2 also adds optional slice export to
+Batch FFT-vs-Time and Order-vs-Time: one fixed-time or fixed-frequency/order
+dimension with up to four overlaid positions, an extra chart row on the
+exported PNG, and a compact slice workbook that replaces the full long-format
+data file when the toggle is on (off leaves both byte-identical to before);
+the same pass also fixes time-domain chart-statistics extrema markers to
+render at their intended on-canvas size.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

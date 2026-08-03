@@ -236,6 +236,43 @@ def test_batch_sheet_time_filter_preset_round_trip(qtbot, tmp_path):
     assert got.params["filter"]["show_filtered"] is True
 
 
+def test_batch_sheet_fft_time_slice_preset_round_trip(qtbot, tmp_path):
+    """The slice panel (stage 6 of the 2026-08-03 batch heatmap slice
+    design) must round-trip through ``apply_preset`` / ``get_preset`` like
+    every other spectrogram param, and its normalized ``positions`` must be
+    sorted + deduplicated (design D7) so resume fingerprints stay stable."""
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    preset = AnalysisPreset.free_config(
+        name="fft_time slice",
+        method="fft_time",
+        target_signals=("sig",),
+        params={
+            "slice": {
+                "enabled": True, "axis": "time", "positions": [15, 5, 15],
+            },
+        },
+    )
+
+    sheet.apply_preset(preset)
+    got = sheet.get_preset()
+
+    assert got.method == "fft_time"
+    assert got.params["slice"] == {
+        "enabled": True, "axis": "time", "positions": [5.0, 15.0],
+    }
+    assert sheet._analysis_panel._slice.isVisibleTo(sheet._analysis_panel) is True
+    assert sheet._analysis_panel._slice._enable_switch.isChecked() is True
+
+    # Leaving the spectrogram method entirely drops the slice block, mirroring
+    # ``normalize_batch_params``'s method-ownership rule for the field.
+    sheet.apply_method("time")
+    assert "slice" not in sheet.params()
+
+
 def test_full_time_preset_with_sparse_params_resets_all_time_render_state(qtbot):
     from mf4_analyzer.batch import AnalysisPreset
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
@@ -631,8 +668,6 @@ def test_time_analysis_form_fits_288px_after_repeated_dependency_toggles(
                 "max_order": 36.0,
                 "order_res": 0.025,
                 "time_res": 0.2,
-                "rpm_mode": "manual",
-                "manual_rpm": 1800.0,
                 "samples_per_rev": 2048,
                 "rpm_factor": 1.0,
                 "amplitude_mode": "Amplitude dB",

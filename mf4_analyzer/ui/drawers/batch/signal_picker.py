@@ -124,6 +124,10 @@ class SignalPickerPopup(QWidget):
     """Read-only summary trigger plus a searchable checkbox popup."""
 
     selectionChanged = pyqtSignal(tuple)
+    # Emitted when the user asks for the partial-availability restriction to be
+    # lifted.  The picker does not own the target policy, so it only reports
+    # the request; whoever owns that state decides (see InputPanel).
+    relaxPolicyRequested = pyqtSignal()
 
     _DISPLAY_HEIGHT = 38
     _POPUP_MIN_WIDTH = 420
@@ -355,6 +359,42 @@ class SignalPickerPopup(QWidget):
         )
         self._empty_label.hide()
         pop_lay.addWidget(self._empty_label)
+
+        # Cause-and-exit row.  When every row is greyed out the list alone says
+        # nothing: the user reads "匹配 18" and cannot tick one of them.  This
+        # names the reason and offers the one action that lifts it.  Kept as a
+        # sibling of the stats footer so the popup keeps a single bottom block.
+        self._notice = QWidget(self._surface)
+        self._notice.setObjectName("SignalPickerNotice")
+        self._notice.setAttribute(Qt.WA_StyledBackground, True)
+        self._notice.setStyleSheet(
+            "#SignalPickerNotice {background:#fff8ec;"
+            " border-top:1px solid #f2e3c9;}"
+            "#SignalPickerNoticeText {color:#8a5a12; background:transparent;}"
+            "#SignalPickerNotice QPushButton {border:1px solid #d9c6a2;"
+            " background:#fffdf8; color:#8a5a12; padding:3px 8px;"
+            " border-radius:5px;}"
+            "#SignalPickerNotice QPushButton:hover {background:#fdf1dc;}"
+        )
+        notice_lay = QHBoxLayout(self._notice)
+        notice_lay.setContentsMargins(10, 7, 10, 7)
+        notice_lay.setSpacing(8)
+        self._notice_label = QLabel(self._notice)
+        self._notice_label.setObjectName("SignalPickerNoticeText")
+        self._notice_label.setWordWrap(True)
+        notice_lay.addWidget(self._notice_label, 1)
+        self._relax_button = QPushButton("改用「按来源可用」", self._notice)
+        self._relax_button.setObjectName("SignalPickerRelax")
+        self._relax_button.setCursor(Qt.PointingHandCursor)
+        self._relax_button.setFocusPolicy(Qt.TabFocus)
+        self._relax_button.setToolTip(
+            "切换目标策略，让只存在于部分来源的通道变为可选"
+        )
+        self._relax_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._relax_button.clicked.connect(self.relaxPolicyRequested)
+        notice_lay.addWidget(self._relax_button)
+        self._notice.hide()
+        pop_lay.addWidget(self._notice)
 
         self._foot = QWidget(self._surface)
         self._foot.setObjectName("SignalPickerFoot")
@@ -636,6 +676,14 @@ class SignalPickerPopup(QWidget):
             + 2 * self._popup_layout.spacing()
             + self._POPUP_GAP
         )
+        if self.is_relax_notice_visible():
+            # The notice is a third fixed block; leaving it out of the chrome
+            # budget makes the list overshoot and pushes the footer off-screen.
+            # Asked via ``isVisibleTo``: this runs from ``show_popup`` before
+            # the popup itself is shown, when ``isVisible()`` is still False.
+            chrome += (
+                self._notice.sizeHint().height() + self._popup_layout.spacing()
+            )
         cap = max(self._LIST_MIN_HEIGHT, room - chrome)
         if self._locked_list_height is None:
             # Measured once per opening, against the unfiltered list, then
@@ -701,7 +749,39 @@ class SignalPickerPopup(QWidget):
                 )
             item.setSizeHint(checkbox.sizeHint())
             self._list.setItemWidget(item, checkbox)
+        # Before the filter pass: ``_on_search_text_changed`` re-syncs the popup
+        # geometry, and that measurement has to see the notice's final state.
+        self._refresh_notice()
         self._on_search_text_changed(self._search.text())
+
+    def _refresh_notice(self) -> None:
+        """Show the cause-and-exit row only when nothing at all can be ticked.
+
+        The trigger is a list that is entirely partial-availability rows under
+        a policy that forbids them — the case where a file split into several
+        logical sources (HDF groups by sample rate) and the selected channels
+        exist in only some of them.
+        """
+
+        blocked = bool(self._partial) and not (
+            self._partial_selectable or self._available
+        )
+        if blocked:
+            self._notice_label.setText(
+                f"{len(self._partial)} 个通道只存在于部分来源，"
+                "「所有来源共有」策略下不可选"
+            )
+        self._notice.setVisible(blocked)
+
+    def is_relax_notice_visible(self) -> bool:
+        """True when the partial-availability explanation row is showing.
+
+        Measured against the surface, not the screen: the popup spends most of
+        its life hidden, and ``isVisible()`` would report False for a row that
+        is correctly armed for the next opening.
+        """
+
+        return self._notice.isVisibleTo(self._surface)
 
     def _apply_selection(self, new: tuple[str, ...]) -> None:
         self._selected = new

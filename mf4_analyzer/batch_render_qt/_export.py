@@ -67,7 +67,16 @@ def _prepared_for_supersampling(graphics_scene, factor: int):
       device pixels and ignore the source->target transform of
       ``QGraphicsScene.render()``; every stroke would come back
       ``1/factor`` as wide. pyqtgraph's own ``resolutionScale`` export hook
-      is no help — only ScatterPlotItem reads it.
+      covers only symbol *sizes* on ScatterPlotItem, so pens still need this.
+    * **pxMode scatter symbols.** ``ScatterPlotItem.paint`` calls
+      ``resetTransform()`` when ``pxMode`` is on, dropping the painter's world
+      transform and drawing each symbol at its device-pixel size — a marker
+      would render at ``size`` on the N x canvas and come back ``size/factor``
+      wide. ``resolutionScale`` is the hook pyqtgraph's own ImageExporter uses
+      for exactly this, and it multiplies ``size`` in ``_style``. Enabling it
+      per item (rather than scene-wide) keeps ``PlotCurveItem`` from reading
+      ``_exportOpts['antialias']``, which would trade away the drawLines fast
+      path this whole pass is built around.
     * **Transform-ignoring items.** ``LegendItem`` (and pyqtgraph's native
       auto-range button) set ``ItemIgnoresTransformations`` to stay
       screen-sized. Clearing the flag lets the painter scale them like
@@ -95,6 +104,14 @@ def _prepared_for_supersampling(graphics_scene, factor: int):
                     restores.append(partial(opts.__setitem__, key, pen))
                     opts[key] = _widened(pen, factor)
                     touched = True
+        if isinstance(item, pg.ScatterPlotItem):
+            # Scales the symbol size only; the pen widening above still has to
+            # carry the outline.
+            restores.append(partial(item.setExportMode, False))
+            item.setExportMode(
+                True, {"antialias": False, "resolutionScale": factor}
+            )
+            touched = True
         if isinstance(item, pg.AxisItem):
             # Grid lines derive from the axis pen, so this covers them too.
             pen = item.pen()

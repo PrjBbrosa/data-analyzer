@@ -376,6 +376,49 @@ def validate_recipe(
                         "chart_statistics requires max, min, or mean metrics",
                     ))
 
+    if method in {"fft_time", "order_time"}:
+        slice_params = params.get("slice")
+        if slice_params is not None:
+            if not isinstance(slice_params, Mapping):
+                issues.append(ValidationIssue(
+                    "slice", "invalid_slice",
+                    "slice must be an object",
+                ))
+            elif bool(slice_params.get("enabled", False)):
+                axis = str(slice_params.get("axis", "time") or "").strip().lower()
+                if axis not in {"time", "y"}:
+                    issues.append(ValidationIssue(
+                        "slice", "invalid_slice_axis",
+                        "slice axis must be time or y",
+                    ))
+
+                positions = slice_params.get("positions", ())
+                valid_positions = (
+                    isinstance(positions, (tuple, list))
+                    and all(_finite_number(item) for item in positions)
+                )
+                if not valid_positions:
+                    issues.append(ValidationIssue(
+                        "slice", "invalid_slice_positions",
+                        "slice positions must be a list of finite numbers",
+                    ))
+                else:
+                    if axis == "y" and any(float(item) < 0 for item in positions):
+                        issues.append(ValidationIssue(
+                            "slice", "invalid_slice_positions",
+                            "slice positions must not be negative when axis is y",
+                        ))
+                    if len(positions) > 4:
+                        issues.append(ValidationIssue(
+                            "slice", "too_many_slice_positions",
+                            "slice supports at most 4 positions",
+                        ))
+                    if len(positions) == 0:
+                        issues.append(ValidationIssue(
+                            "slice", "slice_positions_required",
+                            "slice requires at least one position when enabled",
+                        ))
+
     nfft_mode = str(params.get("nfft_mode", "")).strip().lower()
     nfft = params.get("nfft")
     fixed_nfft = nfft_mode in {"fixed", "manual", "固定"}
@@ -398,19 +441,6 @@ def validate_recipe(
             issues.append(issue)
 
     if method == "order_time":
-        rpm_mode = str(params.get("rpm_mode", "")).strip().lower()
-        if rpm_mode in {"manual", "fixed", "手动"} and not _positive_number(
-            params.get("manual_rpm")
-        ):
-            issues.append(ValidationIssue(
-                "manual_rpm", "invalid_manual_rpm",
-                "manual_rpm must be finite and > 0",
-            ))
-        if rpm_mode in {"channel", "通道"} and not (rpm_channel or rpm_signal):
-            issues.append(ValidationIssue(
-                "rpm_channel", "missing_rpm_channel",
-                "rpm_channel is required in channel RPM mode",
-            ))
         if "samples_per_rev" in params:
             samples_per_rev = params.get("samples_per_rev")
             if (
@@ -496,11 +526,6 @@ def validate_task(
                 ))
             else:
                 effective_rpm = float(np.max(positive_rpm))
-        rpm_mode = str(params.get("rpm_mode", "")).strip().lower()
-        if rpm_mode in {"manual", "fixed", "手动"} and _positive_number(
-            params.get("manual_rpm")
-        ):
-            effective_rpm = float(params["manual_rpm"])
         if effective_rpm is not None and _positive_number(
             params.get("max_order", 20.0)
         ):

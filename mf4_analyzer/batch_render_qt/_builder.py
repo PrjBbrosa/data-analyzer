@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Any, Mapping
 
 import numpy as np
@@ -29,14 +30,22 @@ from mf4_analyzer.render_profile import (
 from ..ui_kit.ticks_math import (
     _fmt_tick,
     _frame_to_nice,
+    _nice_per_div,
     coarsen_nice_step,
     nice_ticks_within,
 )
 from ..batch_statistics import display_x
 
 from ._fonts import apply_axis_font, chart_font
-from ._models import BatchRenderContext, BatchSeries, BatchTimeFigureSpec
+from ._models import (
+    BatchRenderContext,
+    BatchSeries,
+    BatchSlicePlan,
+    BatchTimeFigureSpec,
+    plan_heatmap_slice,
+)
 from ._page import add_report_footer, add_report_header
+from ._palette import slice_palette
 from ._theme import SERIES_COLORS, RenderTheme, render_theme, scaled_fonts
 
 
@@ -252,6 +261,449 @@ def _extract_heatmap(data):
         str(data.y_name),
         dict(metadata),
     )
+
+
+def _axis_unit(name: str) -> str:
+    """Return just the unit of an axis, e.g. ``"s"``, ``"Hz"``, ``""`` (order)."""
+    label = _axis_label(name)
+    if "(" in label and ")" in label:
+        return label.split("(", 1)[1].split(")", 1)[0].strip()
+    return ""
+
+
+def _slice_curve_values(matrix, axis: str, index: int) -> np.ndarray:
+    """Return the amplitude curve for one slice pick.
+
+    ``matrix`` is the display matrix as ``_extract_heatmap`` hands it over:
+    **row-major, rows = Y (frequency/order), columns = X (time)** — see the
+    ``x_major.T`` there. So fixing a *time* takes a column and the curve runs
+    along Y, while fixing a *frequency/order* takes a row and the curve runs
+    along X. Identical to the single-file canvas' ``_apply_slice``
+    (``m[:, idx]`` / ``m[idx, :]``).
+    """
+    values = np.asarray(matrix, dtype=float)
+    if str(axis).strip().lower() == "time":
+        return values[:, int(index)]
+    return values[int(index), :]
+
+
+def _slice_visible_mask(coords, low: float, high: float) -> np.ndarray:
+    """Mask coordinate centers inside the visible range, nearest as fallback.
+
+    Copied from ``ui/pg_canvas/heatmap_canvas.py`` (``_slice_visible_mask``);
+    ``ui/`` must not be importable from the batch renderer, a boundary
+    ``renderer_import_policy`` and ``tests/test_batch_render_import_boundary.py``
+    keep.
+    """
+    array = np.asarray(coords, dtype=float)
+    finite = np.isfinite(array)
+    if array.size == 0:
+        return finite
+    low, high = sorted((float(low), float(high)))
+    mask = finite & (array >= low) & (array <= high)
+    if np.any(mask):
+        return mask
+    valid = np.flatnonzero(finite)
+    if valid.size == 0:
+        return mask
+    target = (low + high) / 2.0
+    nearest = valid[int(np.argmin(np.abs(array[valid] - target)))]
+    mask = np.zeros(array.shape, dtype=bool)
+    mask[nearest] = True
+    return mask
+
+
+# Widest dynamic range a real measurement slice can plausibly span. Bins more
+# than this far below the slice's top are numerically-dead artifacts: the 0 Hz
+# DC bin, zeroed by de-mean and/or A-weighting (gain == 0 at f == 0), then
+# floored by ``amplitude_to_db`` to ``20*log10(np.finfo(float).tiny)`` ≈
+# -6153 dB. A 24-bit acquisition has only ~144 dB of range, so 200 dB only ever
+# catches such dead bins, never real signal (e.g. a deep anti-resonance notch).
+#
+# Copied — not imported — from ``ui/pg_canvas/heatmap_canvas.py`` (the
+# ``_SLICE_MAX_SPAN_DB`` / ``_slice_amp_bounds`` pair around line 385) because
+# the batch renderer may not import ``mf4_analyzer.ui``.
+_SLICE_MAX_SPAN_DB = 200.0
+
+
+def _slice_amp_bounds(values):
+    """Robust ``(lo, hi)`` for the slice amplitude *view* axis, or ``None``.
+
+    Display-only: the curve is always drawn in full; this only picks the Y
+    *view* range. The top is the literal max (a line plot should show real
+    peaks, unlike the colour window). The bottom ignores numerically-dead bins
+    sitting more than ``_SLICE_MAX_SPAN_DB`` below the top, so a single DC bin
+    floored to ≈ -6153 dB can no longer crush the real -40..-60 dB signal into
+    a thin band at the top of the panel. NaN/inf-safe. Returns ``None`` when
+    there is no finite spread to fit.
+    """
+    array = np.asarray(values, dtype=float)
+    finite = array[np.isfinite(array)]
+    if finite.size == 0:
+        return None
+    high = float(np.max(finite))
+    real = finite[finite >= high - _SLICE_MAX_SPAN_DB]
+    low = float(np.min(real)) if real.size else high
+    if high <= low:
+        return None
+    return low, high
+
+
+def _nice_amp_range(low: float, high: float, divisions: int):
+    """Round ``[low, high]`` outward onto whole nice steps, or ``None``.
+
+    Deliberately **not** ``_frame_to_nice``: that helper forces exactly ``n``
+    equal divisions (oscilloscope graticule semantics, ``top = bottom + n *
+    per_div``) on top of a step that ``_nice_per_div`` already rounded up, and
+    the two compound into a mostly-empty axis. At the repository default
+    ``tick_density_y = 10`` it turns ``[-99.11, -34.38]`` into ``[-100, 0]`` —
+    35% of the panel height wasted, the curve squashed into the lower half.
+
+    Taking only the *step* from ``_nice_per_div`` and rounding each end outward
+    on its own gives ``[-100, -30]`` (8% wasted) with equally tidy tick values.
+    Design D19/D19b.
+    """
+    try:
+        low = float(low)
+        high = float(high)
+    except (TypeError, ValueError):
+        return None
+    span = high - low
+    if not math.isfinite(span) or span <= 0:
+        return None
+    step = _nice_per_div(span / max(1, int(divisions))) or span
+    if not math.isfinite(step) or step <= 0:
+        return None
+    bottom = math.floor(low / step) * step
+    top = math.ceil(high / step) * step
+    if not top > bottom:
+        return None
+    return bottom, top
+
+
+def _slice_dimension_title(plan: BatchSlicePlan, x_name: str, y_name: str) -> str:
+    """Legend column head naming the *fixed* dimension."""
+    if plan.axis == "time":
+        return "固定时间"
+    return "固定阶次" if _axis_label(y_name) == "Order" else "固定频率"
+
+
+def _format_slice_position(value: float, unit: str) -> str:
+    """Legend/label text for one landed position, e.g. ``5.00 s``, ``620.0 Hz``."""
+    if unit == "s":
+        return f"{value:.2f} s"
+    if unit:
+        return f"{value:.1f} {unit}"
+    return f"{value:.2f}"
+
+
+# The swatch cell's content and the gap the label cell puts before its text.
+# Both live in the HTML below; measuring a row means measuring these too. The
+# swatch is spelled twice because the entity is what the HTML parser wants and
+# the character is what ``QFontMetricsF`` can measure. A plain space would not
+# do for either: the parser collapses runs of them.
+_SLICE_LEGEND_SWATCH_HTML = "&nbsp;&nbsp;"
+_SLICE_LEGEND_SWATCH_TEXT = chr(0xA0) * 2  # what the entity parses to
+_SLICE_LEGEND_LABEL_GAP = 7.0
+# Air between the slice row's plot area and the legend card parked beside it.
+_SLICE_LEGEND_GUTTER_GAP = 8.0
+
+
+def _page_right_limit(widget) -> float:
+    """Scene x the page's content may reach.
+
+    ``ci`` fills the view, so the printable right edge is its own right edge
+    less the layout's right margin — the same margin every row's plot is laid
+    out against, and therefore the line an overlay drawn straight onto the
+    scene has to respect on its own.
+    """
+    try:
+        return float(widget.ci.sceneBoundingRect().right()) - float(
+            widget.ci.layout.getContentsMargins()[2]
+        )
+    except Exception:  # pragma: no cover - defensive, no known trigger
+        return float(widget.sceneRect().right())
+
+
+def _slice_legend_row_label(pick, unit: str) -> str:
+    """The one row of legend text ``pick`` contributes."""
+    label = _format_slice_position(pick.value, unit)
+    return f"{label}·夹取" if pick.clamped else label
+
+
+def _slice_legend_content_width(
+    plan: BatchSlicePlan,
+    *,
+    title: str,
+    unit: str,
+    title_pt: float,
+    body_pt: float,
+) -> float:
+    """Content width the legend's own strings need (design D-B3).
+
+    ``_StatisticsCard`` passes ``content_width`` straight to
+    ``QTextDocument.setTextWidth`` *and* builds its frame from it, so a
+    hard-coded number is a promise about text nobody measured. The rows carry
+    ``white-space:nowrap``, so an undersized width does not wrap the label —
+    the document simply lays out wider than the frame and the overflow is
+    painted outside the card, which is how ``3000.0 Hz`` ended up cropped by
+    the page edge at the hard-coded 86 px.
+
+    Measured against the same point sizes the HTML declares, since both are
+    multiples of ``axis_font_pt`` and drift apart the moment one of them is
+    edited alone.
+    """
+    body = QFontMetricsF(chart_font(body_pt))
+    title_font = chart_font(title_pt)
+    title_font.setBold(True)  # the heading declares font-weight:600
+    swatch = float(body.width(_SLICE_LEGEND_SWATCH_TEXT))
+    rows = max(
+        (
+            swatch
+            + _SLICE_LEGEND_LABEL_GAP
+            + float(body.width(_slice_legend_row_label(pick, unit)))
+            for pick in plan.picks
+        ),
+        default=0.0,
+    )
+    return max(rows, float(QFontMetricsF(title_font).width(title)))
+
+
+def _slice_legend_html(
+    plan: BatchSlicePlan,
+    palette: tuple[str, ...],
+    *,
+    title: str,
+    unit: str,
+    title_pt: float,
+    body_pt: float,
+) -> str:
+    """Colour-swatch legend for the gutter beside the slice row (design §5.5)."""
+    rows = []
+    for pick, color in zip(plan.picks, palette):
+        label = _slice_legend_row_label(pick, unit)
+        rows.append(
+            '<tr>'
+            f'<td style="background-color:{color}; padding:0px 0px;">'
+            f'{_SLICE_LEGEND_SWATCH_HTML}</td>'
+            '<td style="padding:1px 0px 1px '
+            f'{_SLICE_LEGEND_LABEL_GAP:.0f}px; white-space:nowrap;">'
+            f'{label}</td></tr>'
+        )
+    return (
+        f'<div style="font-size:{title_pt:.2f}pt; font-weight:600; '
+        f'color:#64748b; padding-bottom:3px;">{title}</div>'
+        '<table cellspacing="0" cellpadding="0" '
+        f'style="font-size:{body_pt:.2f}pt; border-collapse:collapse; '
+        f'color:#172033;">{"".join(rows)}</table>'
+    )
+
+
+def _slice_clamp_warning(
+    plan: BatchSlicePlan, low: float, high: float, unit: str
+) -> str | None:
+    """One warning covering every out-of-range and merged position, or ``None``.
+
+    Out-of-range positions never fail a run (design D12): a batch that mixes
+    file lengths would otherwise go red across the board.
+    """
+    clamped = plan.clamped_picks
+    if not clamped and not plan.merged:
+        return None
+    suffix = f" {unit}" if unit else ""
+    parts = []
+    if clamped:
+        requested = ", ".join(f"{pick.requested:.3f}" for pick in clamped)
+        landed = ", ".join(f"{pick.value:.3f}" for pick in clamped)
+        parts.append(
+            f"切片位置 {requested}{suffix} 超出数据范围 "
+            f"[{low:.3f}, {high:.3f}]{suffix}，已取 {landed}{suffix}"
+        )
+    if plan.merged:
+        total = len(plan.picks) + plan.merged
+        parts.append(f"{total} 个位置夹取后合并为 {len(plan.picks)} 个")
+    return "slice.position_clamped: " + "；".join(parts)
+
+
+# pyqtgraph measures every tick string with ``QPainter.boundingRect`` against
+# this probe rect (AxisItem.generateDrawSpecs); reusing it keeps our own
+# measurement on the same footing as the one that ends up on the canvas.
+_TICK_TEXT_PROBE = QRectF(0.0, 0.0, 100.0, 100.0)
+
+
+def _axis_tick_texts(axis) -> list[str]:
+    """Return the tick strings ``axis`` would draw right now.
+
+    ``setTicks`` parks explicit labels on ``_tickLevels``, which is what
+    ``generateDrawSpecs`` reads back; an axis still on pyqtgraph's automatic
+    ticker has to be asked for its values and their formatting instead.
+    """
+    levels = getattr(axis, "_tickLevels", None)
+    if levels:
+        return [
+            str(text)
+            for level in levels
+            for _value, text in level
+            if str(text)
+        ]
+    try:
+        span = float(axis.boundingRect().height())
+        if span <= 0.0:
+            return []
+        low, high = float(axis.range[0]), float(axis.range[1])
+        scale = float(axis.autoSIPrefixScale) * float(axis.scale)
+        texts: list[str] = []
+        for spacing, values in axis.tickValues(low, high, span):
+            texts.extend(
+                str(text)
+                for text in axis.tickStrings(list(values), scale, spacing)
+                if str(text)
+            )
+        return texts
+    except Exception:
+        return []
+
+
+def _left_axis_width_for_ticks(axis) -> float:
+    """Width ``axis`` needs for the tick strings it is carrying *now*.
+
+    ``AxisItem.width()`` cannot answer this. Its automatic width comes from
+    ``AxisItem.textWidth``, and that attribute is only ever refreshed from
+    inside ``generateDrawSpecs`` — i.e. while painting. ``_apply_tick_density``
+    installs the final tick strings after the last paint in
+    ``show_and_settle``, so a width read back at alignment time describes
+    whichever strings were drawn last; on an axis that has never been painted
+    it is pyqtgraph's initial ``textWidth = 30``, which is where a pinned
+    57.4 px left axis came from against the 95.4 px the same ticks get when
+    nothing pins them. Measuring the strings makes the answer independent of
+    paint history.
+
+    The arithmetic deliberately mirrors ``AxisItem._updateWidth``: ``setWidth``
+    stores a *fixed* width that bypasses that method entirely, so everything it
+    would have added — tick text offset, outward tick length, and the rotated
+    label's allowance — has to be included here or the label lands on top of
+    the numbers.
+    """
+    if not axis.isVisible():
+        return 0.0
+    style = axis.style
+    if not style.get("showValues", True):
+        return 0.0
+    font = style.get("tickFont")
+    if font is None:
+        label_item = getattr(axis, "label", None)
+        font = label_item.font() if label_item is not None else chart_font()
+    metrics = QFontMetricsF(font)
+    width = max(
+        (
+            float(
+                metrics.boundingRect(
+                    _TICK_TEXT_PROBE, Qt.AlignCenter, text
+                ).width()
+            )
+            for text in _axis_tick_texts(axis)
+        ),
+        default=0.0,
+    )
+    width += float(style["tickTextOffset"][0])
+    width += float(max(0, style["tickLength"]))
+    label = getattr(axis, "label", None)
+    if label is not None and label.isVisible():
+        # ``_updateWidth`` calls the bounding rect an overestimate and takes
+        # 80% of it; matching that keeps a pinned axis the same width the
+        # unpinned one would have chosen.
+        width += float(label.boundingRect().height()) * 0.8
+    return width
+
+
+def _slice_alignment_callback(layout, main_plot, slice_plot, *, right_reserve=0.0):
+    """Return a callback that squares the slice row's plot area with the map's.
+
+    Two asymmetries have to be cancelled for the two rows to read as one
+    stacked chart:
+
+    * The heatmap row spends its right-hand width on the colorbar, so the
+      slice's ViewBox would otherwise run further right. The slice's (already
+      value-less, frame-only) right axis absorbs the difference — the same
+      trick as ``_set_slice_right_spacer`` in the single-file canvas — which
+      also empties the gutter the legend then sits in.
+    * The two left axes carry different quantities (frequency/order against
+      amplitude), so their tick strings measure differently.
+
+    Every invocation re-measures both left axes from the tick strings they
+    hold at that moment (``_left_axis_width_for_ticks``) and pins the wider of
+    the two onto both. Measuring the strings rather than reading
+    ``axis.width()`` is what keeps this correct once ``_apply_tick_density``
+    swaps the tick strings late in ``show_and_settle``: a width read back from
+    the axis reports the last *painted* strings, so the pin would freeze the
+    row at a stale — typically far too narrow — width and never recover, since
+    a pinned axis no longer resizes when its labels grow. ``align`` is tagged
+    ``runs_after_tick_density`` so ``show_and_settle`` re-runs it once the
+    final strings are in place.
+
+    The right-hand reserve is corrected *relatively* — by how far the two rows'
+    right-hand chrome currently disagrees — rather than by clearing the spacer
+    and re-measuring. A ``QGraphicsWidget`` size hint reaches the enclosing
+    layout through a posted LayoutRequest, so a cleared spacer is not
+    guaranteed to be reflected in the very next ``activate()``; a residual
+    correction converges regardless of which pass the geometry came from, and
+    settles to a no-op once the two edges meet. Bound to ``sigResized`` on both
+    rows with a re-entry guard so the re-layouts it performs cannot recurse.
+
+    ``right_reserve`` is the *floor* under that gutter — the legend's width plus
+    its gap. Below it the colorbar alone decides the reserve, as before.
+    """
+    state = {"busy": False}
+
+    def activate() -> None:
+        layout.invalidate()
+        layout.activate()
+
+    def right_chrome(plot) -> float:
+        """Width the plot spends right of its ViewBox (axis, colorbar, label)."""
+        return float(
+            plot.sceneBoundingRect().right() - plot.vb.sceneBoundingRect().right()
+        )
+
+    def align(*_args) -> None:
+        if state["busy"]:
+            return
+        state["busy"] = True
+        try:
+            left_axes = (main_plot.getAxis("left"), slice_plot.getAxis("left"))
+            target = max(_left_axis_width_for_ticks(axis) for axis in left_axes)
+            if target > 0.0:
+                for axis in left_axes:
+                    axis.setWidth(target)
+            activate()
+            # The legend lives in that right-hand gutter, so the gutter has to
+            # be wide enough to hold it. Buying the width on the *map* row is
+            # what makes it available to both: its frame-only right axis is the
+            # only piece of its right-hand chrome we own — the colorbar stays
+            # anchored to the page's right edge, and the ViewBox column, the
+            # sole expanding one, gives the space up. The slice row is then
+            # squared against the widened chrome by the same correction as
+            # before, so ``right_reserve`` costs the two rows equally and the
+            # left/right edges stay together.
+            shortfall = float(right_reserve) - right_chrome(main_plot)
+            if shortfall > 0.5:
+                main_right = main_plot.getAxis("right")
+                main_right.setWidth(max(1.0, float(main_right.width()) + shortfall))
+                activate()
+            right_axis = slice_plot.getAxis("right")
+            delta = right_chrome(main_plot) - right_chrome(slice_plot)
+            if abs(delta) > 0.5:
+                right_axis.setWidth(max(1.0, float(right_axis.width()) + delta))
+                activate()
+        except Exception:
+            pass
+        finally:
+            state["busy"] = False
+
+    align.runs_after_tick_density = True
+    main_plot.vb.sigResized.connect(align)
+    slice_plot.vb.sigResized.connect(align)
+    return align
 
 
 def _resolve_heatmap_colormap(
@@ -475,6 +927,11 @@ class BuiltBatchScene:
     heatmap_lut: np.ndarray | None = None
     heatmap_levels: tuple[float, float] | None = None
     heatmap_rect: QRectF | None = None
+    slice_plan: BatchSlicePlan | None = None
+    slice_plot: Any = None
+    slice_curves: tuple[Any, ...] = field(default_factory=tuple)
+    slice_marker_lines: tuple[Any, ...] = field(default_factory=tuple)
+    slice_legend: Any = None
     _layout_callbacks: tuple[Any, ...] = field(default_factory=tuple)
     _sync_callbacks: tuple[Any, ...] = field(default_factory=tuple)
     _time_curve_bindings: tuple[_TimeCurveBinding, ...] = field(default_factory=tuple)
@@ -561,6 +1018,16 @@ class BuiltBatchScene:
         # 0..1 before this point, and ticks pinned from that would fall outside
         # the finished plot.
         self._apply_tick_density()
+        # Nothing changes the tick strings after this point, and a callback
+        # that *sizes* an axis from them has to be the one to run last: the
+        # slice row's left-axis alignment pins a fixed width, and a pinned axis
+        # stops re-measuring itself, so a pin taken before the swap would hold
+        # the row at the width of labels that no longer exist. Only callbacks
+        # that opt in re-run here — pages without a slice row keep their exact
+        # previous callback sequence, and with it their byte-identical output.
+        for callback in self._layout_callbacks:
+            if getattr(callback, "runs_after_tick_density", False):
+                callback()
         if app is not None:
             # Two drains, and the second one is load-bearing for stacked
             # subplots: an AxisItem only learns its true height once its tick
@@ -817,6 +1284,11 @@ class _SceneBuilder:
         self.heatmap_lut = None
         self.heatmap_levels = None
         self.heatmap_rect = None
+        self.slice_plan = None
+        self.slice_plot = None
+        self.slice_curves: list[Any] = []
+        self.slice_marker_lines: list[Any] = []
+        self.slice_legend = None
         self._color_index = 0
         self._series_colors: dict[str, str] = {}
 
@@ -1179,10 +1651,8 @@ class _SceneBuilder:
                 text_color=QColor("#7f1d1d"),
             )
         else:
-            metrics = tuple(
-                (self.params.get("chart_statistics") or {}).get("metrics")
-                or ("max", "min", "mean")
-            )
+            chart_config = self.params.get("chart_statistics") or {}
+            metrics = tuple(chart_config.get("metrics") or ("max", "min", "mean"))
             columns = tuple(
                 (key, title, attribute)
                 for key, title, attribute in (
@@ -1199,13 +1669,37 @@ class _SceneBuilder:
             x_unit = next(
                 (item.x_unit for item in spec.series if item.x_unit), "s",
             )
-            range_fact = (
-                f"　{min(all_x):.4g} ~ {max(all_x):.4g} {x_unit}"
+            # The card used to show only the *actual* data span, which looks
+            # identical whether that span came from "auto" or from a custom
+            # request that silently failed to apply — the exact ambiguity
+            # that let a ±80 mm request produce a full-range statistic
+            # without anyone noticing (design D-D1). Spell out which mode
+            # produced the numbers, then still report the actual span.
+            range_mode = str(
+                chart_config.get("range_mode", "full") or "full"
+            ).strip().lower()
+            requested_lo = requested_hi = None
+            if range_mode == "custom":
+                try:
+                    requested_lo = float(chart_config["x_min"])
+                    requested_hi = float(chart_config["x_max"])
+                except (KeyError, TypeError, ValueError):
+                    requested_lo = requested_hi = None
+            mode_fact = (
+                f"设定 {requested_lo:.4g} ~ {requested_hi:.4g} {x_unit}"
+                if requested_lo is not None and requested_hi is not None
+                else "全时段"
+            )
+            actual_fact = (
+                f"实际 {min(all_x):.4g} ~ {max(all_x):.4g} {x_unit}"
                 if all_x else ""
+            )
+            range_fact = "　" + " · ".join(
+                part for part in (mode_fact, actual_fact) if part
             )
             header_cells = "".join(
                 f'<th style="padding:1px 5px; text-align:right; white-space:nowrap; '
-                f'color:{"#c2410c" if key == "max" else "#0f766e" if key == "min" else "#64748b"};">{title}</th>'
+                f'color:{"#b91c1c" if key == "max" else "#15803d" if key == "min" else "#64748b"};">{title}</th>'
                 for key, title, _attr in columns
             )
             row_cells = []
@@ -1253,13 +1747,18 @@ class _SceneBuilder:
                     continue
                 marker_specs = []
                 if "max" in metrics and item.argmax_x is not None and item.maximum is not None:
-                    marker_specs.append(((item.argmax_x, item.maximum), "#f97316", "#fff7ed"))
+                    marker_specs.append(((item.argmax_x, item.maximum), "#dc2626"))
                 if "min" in metrics and item.argmin_x is not None and item.minimum is not None:
-                    marker_specs.append(((item.argmin_x, item.minimum), "#0f766e", "#ecfdf5"))
-                for point, color, fill in marker_specs:
+                    marker_specs.append(((item.argmin_x, item.minimum), "#16a34a"))
+                # Solid dot with a white keyline, matching the single-file
+                # cursor readout (ui/pg_canvas/cursor.py). The near-white
+                # filled ring this replaced read as a smudge once the export's
+                # supersampling shrank it.
+                for point, color in marker_specs:
                     marker = pg.ScatterPlotItem(
-                        symbol="o", size=18.0 * scale,
-                        pen=pg.mkPen(color, width=2.7 * scale), brush=pg.mkBrush(fill),
+                        symbol="o", size=11.0 * scale,
+                        pen=pg.mkPen("#ffffff", width=1.6 * scale),
+                        brush=pg.mkBrush(color),
                     )
                     marker.addPoints([{"pos": point}])
                     marker.setZValue(1200)
@@ -1502,9 +2001,13 @@ class _SceneBuilder:
             x_extent[1] - x_extent[0],
             y_extent[1] - y_extent[0],
         )
-        if not bool(self.params.get("z_auto", True)) and _valid_pair(
-            self.params.get("z_floor"), self.params.get("z_ceiling")
-        ):
+        manual_z = bool(
+            not bool(self.params.get("z_auto", True))
+            and _valid_pair(
+                self.params.get("z_floor"), self.params.get("z_ceiling")
+            )
+        )
+        if manual_z:
             levels = (
                 float(self.params["z_floor"]),
                 float(self.params["z_ceiling"]),
@@ -1552,25 +2055,24 @@ class _SceneBuilder:
         if not bool(self.params.get("x_auto", True)) and _valid_pair(
             self.params.get("x_min"), self.params.get("x_max")
         ):
-            plot.setXRange(
+            main_x_range = (
                 float(self.params["x_min"]),
                 float(self.params["x_max"]),
-                padding=0,
             )
         else:
-            plot.setXRange(*x_extent, padding=0)
+            main_x_range = tuple(float(value) for value in x_extent)
+        plot.setXRange(*main_x_range, padding=0)
         if not bool(self.params.get("y_auto", True)) and _valid_pair(
             self.params.get("y_min"), self.params.get("y_max")
         ):
-            plot.setYRange(
+            main_y_range = (
                 float(self.params["y_min"]),
                 float(self.params["y_max"]),
-                padding=0,
             )
         else:
-            plot.setYRange(*y_extent, padding=0)
+            main_y_range = tuple(float(value) for value in y_extent)
+        plot.setYRange(*main_y_range, padding=0)
 
-        self.widget.ci.layout.setRowStretchFactor(3, 1)
         self.panel_titles.append("")
         self.panel_text_items.append(
             (
@@ -1585,7 +2087,192 @@ class _SceneBuilder:
         self.heatmap_lut = lut
         self.heatmap_levels = tuple(float(value) for value in levels)
         self.heatmap_rect = QRectF(rect)
-        return 4
+
+        plan = plan_heatmap_slice(x_values, y_values, self.params)
+        self.slice_plan = plan
+        if not plan.enabled:
+            # Slice off: not one extra item, not one extra row. Existing
+            # spectrogram presets must keep producing byte-identical PNGs.
+            self.widget.ci.layout.setRowStretchFactor(3, 1)
+            return 4
+
+        palette = slice_palette(plan.axis)
+        # The *fixed* dimension is the one the picks index into; the curve then
+        # runs along the other one. See ``_slice_curve_values`` for the matrix
+        # orientation this depends on.
+        fixed_values = x_values if plan.axis == "time" else y_values
+        fixed_unit = _axis_unit(x_name if plan.axis == "time" else y_name)
+        curve_name = y_name if plan.axis == "time" else x_name
+        curve_coords = np.asarray(
+            y_values if plan.axis == "time" else x_values, dtype=float
+        )
+        curve_range = main_y_range if plan.axis == "time" else main_x_range
+
+        # Marker lines on the image. Vertical when a time is fixed, horizontal
+        # when a frequency/order is fixed. Each colour line rides on a wider
+        # white one: under turbo a pure red or blue disappears entirely over
+        # part of the map (design D16). Widths are fixed pixels tuned for the
+        # 1920px page and do not scale with ``image_size``, exactly like
+        # ``theme.axis`` (design D17).
+        angle = 90.0 if plan.axis == "time" else 0.0
+        for pick, color in zip(plan.picks, palette):
+            for width, pen_color, depth in ((5.2, "#ffffff", 900.0), (2.6, color, 901.0)):
+                line = pg.InfiniteLine(
+                    pos=pick.value,
+                    angle=angle,
+                    movable=False,
+                    pen=pg.mkPen(pen_color, width=width),
+                )
+                line.setZValue(depth)
+                plot.addItem(line, ignoreBounds=True)
+                self.slice_marker_lines.append(line)
+
+        slice_plot = self._new_plot(4, grid_alpha=0.25)
+        self._apply_analysis_frame(slice_plot)
+        slice_plot.setLabel("bottom", _axis_label(curve_name))
+        # One amplitude caliber for the whole page: the slice reads the same
+        # display matrix the image does, so it reuses the colorbar's label.
+        slice_plot.setLabel("left", colorbar_label)
+        self._register_bottom_label_spacing(slice_plot)
+
+        mask = _slice_visible_mask(curve_coords, *curve_range)
+        visible_x = curve_coords[mask]
+        visible_values = []
+        # Design D-B6: 3+ overlaid curves in one 322px panel read as clutter
+        # at full weight. Thinning (not fading — translucency on a white
+        # background just goes grey and reads worse) buys back some
+        # separation. Two curves keep the page's normal weight.
+        curve_line_width = float(self.options.line_width)
+        if len(plan.picks) >= 3:
+            curve_line_width *= 0.85
+        for pick, color in zip(plan.picks, palette):
+            values = _slice_curve_values(display_matrix, plan.axis, pick.index)
+            visible = np.asarray(values, dtype=float)[mask]
+            visible_values.append(visible)
+            curve = pg.PlotDataItem(
+                visible_x,
+                visible,
+                pen=pg.mkPen(color, width=curve_line_width),
+                antialias=False,
+            )
+            slice_plot.addItem(curve)
+            self.slice_curves.append(curve)
+
+        slice_plot.setXRange(*curve_range, padding=0)
+        if manual_z:
+            # A hand-entered z window survives verbatim — no nice rounding —
+            # the same promise ``nice_ticks_within`` already makes for manual
+            # axis ranges (design D20).
+            slice_plot.setYRange(*self.heatmap_levels, padding=0)
+        else:
+            stacked = (
+                np.concatenate(visible_values) if visible_values else np.empty(0)
+            )
+            bounds = _slice_amp_bounds(stacked)
+            amp_range = (
+                None
+                if bounds is None
+                else _nice_amp_range(*bounds, self.style.tick_density_y)
+            )
+            if amp_range is None:
+                slice_plot.enableAutoRange(axis="y", enable=True)
+            else:
+                slice_plot.setYRange(*amp_range, padding=0)
+
+        legend_title = _slice_dimension_title(plan, x_name, y_name)
+        legend_title_pt = self.theme.axis_font_pt * 0.88
+        legend_body_pt = self.theme.axis_font_pt * 0.84
+        legend = _StatisticsCard(
+            _slice_legend_html(
+                plan,
+                palette,
+                title=legend_title,
+                unit=fixed_unit,
+                title_pt=legend_title_pt,
+                body_pt=legend_body_pt,
+            ),
+            # Measured, not budgeted: a fixed 86 px could not hold ``1500.0 Hz``
+            # and the surplus was painted past the page edge (design D-B3).
+            content_width=_slice_legend_content_width(
+                plan,
+                title=legend_title,
+                unit=fixed_unit,
+                title_pt=legend_title_pt,
+                body_pt=legend_body_pt,
+            ),
+            body_font_pt=legend_body_pt,
+            background=QColor(255, 255, 255, 238),
+            border=QColor("#d8e0eb"),
+            text_color=QColor("#172033"),
+        )
+        legend.setZValue(2000)
+        slice_plot.scene().addItem(legend)
+        self.slice_legend = legend
+
+        def position_legend(
+            *_args, _plot=slice_plot, _bar=colorbar, _card=legend,
+            _widget=self.widget,
+        ):
+            # The gutter the colorbar occupies is empty on the slice row — the
+            # X-alignment spacer keeps it that way — so the legend costs zero
+            # data area (design D18).
+            rect = _plot.vb.sceneBoundingRect()
+            try:
+                left = float(_bar.sceneBoundingRect().left())
+            except Exception:
+                left = float(rect.right()) + _SLICE_LEGEND_GUTTER_GAP
+            left = max(left, float(rect.right()) + 6.0)
+            # The colorbar's left edge only bounds the card from one side, and
+            # a card measured to its content can be wider than the colorbar.
+            # The page margin is the edge that actually crops, so it wins.
+            # Read per call, not captured: the widget is still at its default
+            # size while the scene is being built and only reaches the export
+            # size in ``show_and_settle``.
+            limit = _page_right_limit(_widget) - float(
+                _card.boundingRect().width()
+            )
+            _card.setPos(min(left, limit), rect.top())
+
+        slice_plot.vb.sigResized.connect(position_legend)
+        self.layout_callbacks.append(position_legend)
+        self.layout_callbacks.append(
+            _slice_alignment_callback(
+                self.widget.ci.layout,
+                plot,
+                slice_plot,
+                right_reserve=(
+                    float(legend.boundingRect().width()) + _SLICE_LEGEND_GUTTER_GAP
+                ),
+            )
+        )
+
+        warning = _slice_clamp_warning(
+            plan,
+            float(np.min(fixed_values)),
+            float(np.max(fixed_values)),
+            fixed_unit,
+        )
+        if warning is not None and warnings_out is not None:
+            warnings_out.append(warning)
+
+        # 6 : 3 — the slice row carries up to four overlaid curves, so it needs
+        # more than a token strip (design §5.1). QGraphicsGridLayout hands out
+        # preferred height first and only shares the remainder by stretch, so
+        # the ratio has to be stated twice to actually land (the same pairing
+        # the stacked-subplot path uses).
+        self.widget.ci.layout.setRowStretchFactor(3, 6)
+        self.widget.ci.layout.setRowStretchFactor(4, 3)
+        self.widget.ci.layout.setRowPreferredHeight(3, 600.0)
+        self.widget.ci.layout.setRowPreferredHeight(4, 300.0)
+        self.panel_titles.append("")
+        self.panel_text_items.append(
+            (
+                slice_plot.getAxis("left").label,
+                slice_plot.getAxis("bottom").label,
+            )
+        )
+        self.slice_plot = slice_plot
+        return 5
 
     def finish(self, *, kind: str, footer_row: int) -> BuiltBatchScene:
         footer = add_report_footer(
@@ -1613,6 +2300,11 @@ class _SceneBuilder:
             heatmap_lut=self.heatmap_lut,
             heatmap_levels=self.heatmap_levels,
             heatmap_rect=self.heatmap_rect,
+            slice_plan=self.slice_plan,
+            slice_plot=self.slice_plot,
+            slice_curves=tuple(self.slice_curves),
+            slice_marker_lines=tuple(self.slice_marker_lines),
+            slice_legend=self.slice_legend,
             _layout_callbacks=tuple(self.layout_callbacks),
             _sync_callbacks=tuple(self.sync_callbacks),
             _time_curve_bindings=tuple(self.time_curve_bindings),

@@ -81,13 +81,13 @@ def _analysis_issue_summary(issue: ValidationIssue, method: str) -> str:
     label = _METHOD_LABELS.get(method, method or "分析")
     detail = {
         "rpm_channel": "RPM 通道未配置",
-        "manual_rpm": "手动 RPM 无效",
         "x_channel": "X 通道未配置",
         "fs": "采样率无效",
         "nfft": "NFFT 参数无效",
         "x_range": "X 范围无效",
         "y_range": "Y 范围无效",
         "z_range": "色阶范围无效",
+        "slice_positions": "切片位置无效",
     }.get(issue.field, "参数待完善")
     return f"{label} · {detail}"
 
@@ -120,7 +120,7 @@ def _blocked_issue_reason(issue: ValidationIssue) -> str:
         "x_channel": "请选择 X 通道",
         "fs": "请检查采样率",
         "nfft": "请检查 NFFT 参数",
-        "manual_rpm": "请检查手动 RPM",
+        "slice_positions": "请检查切片位置",
     }.get(issue.field, "请检查分析参数")
 
 class BatchSheet(QDialog):
@@ -1301,6 +1301,11 @@ class BatchSheet(QDialog):
             issues.append(ValidationIssue(
                 "time_range", "invalid_text", time_error,
             ))
+        slice_error = self._analysis_panel.slice_positions_error()
+        if slice_error:
+            issues.append(ValidationIssue(
+                "slice_positions", "invalid_text", slice_error,
+            ))
         for reason in self._input_panel._file_list.unavailable_reasons():
             issues.append(ValidationIssue(
                 "source", "source_unavailable", str(reason),
@@ -1332,10 +1337,8 @@ class BatchSheet(QDialog):
             rpm_channel=self.rpm_channel(),
             rpm_signal=effective_rpm_signal,
         ))
-        rpm_mode = str(params.get("rpm_mode", "channel")).strip().lower()
         if (
             self.method() == "order_time"
-            and rpm_mode not in {"manual", "fixed", "手动"}
             and not self.rpm_channel()
             and effective_rpm_signal is None
             and not any(issue.field == "rpm_channel" for issue in issues)
@@ -1538,6 +1541,29 @@ class BatchSheet(QDialog):
         # the user just tuned for exactly this export.
         self._persist_panel_prefs()
 
+    def _representative_channel_gap_message(self, group) -> str:
+        """Name the reason no planned group can show the selected channels.
+
+        "预览不可用" on its own sent a user hunting: his HDF had been split by
+        sample rate into four logical sources and the channels he picked lived
+        in only two of them, which nothing on screen said.  Report the source
+        that was planned and, when that file really did split, how far.
+        """
+
+        # ``display_name`` is ``<basename>`` or ``<basename> · <group>``; the
+        # basename is what ``source_paths()`` can be counted against.
+        base = str(group.display_name or "").split(" · ")[0].strip()
+        siblings = sum(
+            1 for path in self._input_panel.source_paths()
+            if base and Path(str(path)).name == base
+        )
+        detail = (
+            f"；该文件按采样率拆成了 {siblings} 个子来源" if siblings > 1 else ""
+        )
+        return (
+            f"预览不可用：代表来源 {group.display_name} 不含所选通道{detail}"
+        )
+
     def _on_preview_clicked(self) -> None:
         """No-load-plan, then immediately render the first formal group."""
         if self._running or self._preview_thread is not None or not self.is_runnable():
@@ -1545,13 +1571,26 @@ class BatchSheet(QDialog):
         runner = self._make_runner()
         preset = self.get_preset()
         try:
-            plan = runner.preview_outputs(preset, self.output_dir())
+            plan = runner.preview_outputs(
+                preset,
+                self.output_dir(),
+                # One physical file can expand into several logical sources, so
+                # the first planned group is not necessarily one that holds the
+                # selected channels.  Planning is no-load; hand the planner the
+                # probe result the input panel already has.
+                source_channels=self._input_panel.source_channel_sets(),
+            )
         except Exception as exc:  # noqa: BLE001
             self._toast(f"预览不可用：{exc}", kind="warning")
             return
         group = plan.representative_group
         if group is None:
             self._toast("预览不可用：没有可生成的代表输出", kind="warning")
+            return
+        if not group.channel_available:
+            self._toast(
+                self._representative_channel_gap_message(group), kind="warning",
+            )
             return
         dialog = self._preview_dialog
         if dialog is None:

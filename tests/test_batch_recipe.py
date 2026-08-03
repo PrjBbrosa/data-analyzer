@@ -155,8 +155,6 @@ def test_time_render_inactive_fields_are_removed_before_fingerprinting():
                 "max_order": np.float64(40),
                 "order_res": np.float32(0.1),
                 "time_res": np.float64(0.2),
-                "rpm_mode": "manual",
-                "manual_rpm": np.float64(1500),
                 "samples_per_rev": np.int64(256),
                 "rpm_factor": np.float64(60),
                 "rpm_signal": (7, "RPM"),
@@ -244,6 +242,159 @@ def test_normalize_batch_params_migrates_legacy_db_reference_to_manual():
     assert current == {"db_reference": 1.0, "db_reference_mode": "auto"}
 
 
+def test_legacy_manual_rpm_is_dropped_and_warns_with_matching_fingerprint():
+    """Design 2026-08-03 D-C1: batch order analysis no longer supports manual
+    RPM. A legacy recipe that requested it must (1) lose both fields on
+    normalization, (2) surface a migration warning, and (3) fingerprint
+    identically to an equivalent recipe that never had them -- so a resumed
+    run recognizes the outputs as the same task, not a stale one."""
+    legacy = {
+        "window": "hanning",
+        "max_order": 40.0,
+        "rpm_mode": "manual",
+        "manual_rpm": 1000.0,
+    }
+    baseline = {"window": "hanning", "max_order": 40.0}
+
+    normalized = normalize_batch_params(legacy, "order_time")
+
+    assert "rpm_mode" not in normalized
+    assert "manual_rpm" not in normalized
+    assert normalized == baseline
+    assert batch_recipe.legacy_manual_rpm_warning(legacy, "order_time") == (
+        batch_recipe.LEGACY_MANUAL_RPM_WARNING
+    )
+    assert recipe_fingerprint(legacy, "order_time") == recipe_fingerprint(
+        baseline, "order_time",
+    )
+
+
+@pytest.mark.parametrize("rpm_mode", ("channel", "通道", "", None))
+def test_legacy_channel_rpm_mode_is_dropped_silently(rpm_mode):
+    """Discarding rpm_mode="channel" (or an absent rpm_mode) changes nothing
+    observable -- channel was always the only mode that mattered at
+    runtime -- so it must NOT produce a migration warning."""
+    legacy = {"window": "hanning"}
+    if rpm_mode is not None:
+        legacy = {**legacy, "rpm_mode": rpm_mode}
+    baseline = {"window": "hanning"}
+
+    normalized = normalize_batch_params(legacy, "order_time")
+
+    assert "rpm_mode" not in normalized
+    assert normalized == baseline
+    assert batch_recipe.legacy_manual_rpm_warning(legacy, "order_time") is None
+    assert recipe_fingerprint(legacy, "order_time") == recipe_fingerprint(
+        baseline, "order_time",
+    )
+
+
+@pytest.mark.parametrize("method", ("time", "fft", "fft_time"))
+def test_retired_rpm_fields_are_dropped_for_every_method(method):
+    """rpm_mode/manual_rpm belonged only to order_time's field set, but they
+    stay in KNOWN_PARAM_FIELDS globally (design D-C1), so any method drops
+    them via the ordinary known-but-incompatible-field rule."""
+    normalized = normalize_batch_params(
+        {"rpm_mode": "manual", "manual_rpm": 1000.0}, method,
+    )
+
+    assert normalized == {}
+
+
+def test_legacy_manual_rpm_warning_is_order_time_only():
+    # A stray rpm_mode="manual" left over on a non-order_time method (e.g.
+    # after a method switch) must not be reported: the warning is specific
+    # to the removed batch order-analysis feature.
+    assert batch_recipe.legacy_manual_rpm_warning(
+        {"rpm_mode": "manual", "manual_rpm": 1000.0}, "fft",
+    ) is None
+    assert batch_recipe.legacy_manual_rpm_warning(None, "order_time") is None
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_slice_field_is_compatible_only_with_spectrogram_methods(method):
+    assert "slice" in METHOD_PARAM_FIELDS[method]
+
+
+@pytest.mark.parametrize("method", ("time", "fft"))
+def test_slice_field_is_removed_from_non_spectrogram_methods(method):
+    raw = {
+        "slice": {"enabled": True, "axis": "time", "positions": [5.0, 15.0]},
+    }
+
+    assert "slice" not in METHOD_PARAM_FIELDS[method]
+    assert normalize_batch_params(raw, method) == {}
+    assert recipe_fingerprint(raw, method) == recipe_fingerprint({}, method)
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_disabled_slice_is_dropped_and_fingerprint_is_unchanged(method):
+    raw = {
+        "slice": {"enabled": False, "axis": "time", "positions": [5.0, 15.0]},
+    }
+
+    normalized = normalize_batch_params(raw, method)
+
+    assert "slice" not in normalized
+    assert recipe_fingerprint(raw, method) == recipe_fingerprint({}, method)
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_enabled_slice_survives_normalization_and_changes_fingerprint(method):
+    raw = {
+        "slice": {"enabled": True, "axis": "y", "positions": [620.0, 1240.0]},
+    }
+
+    normalized = normalize_batch_params(raw, method)
+
+    assert normalized["slice"] == {
+        "enabled": True,
+        "axis": "y",
+        "positions": [620.0, 1240.0],
+    }
+    assert recipe_fingerprint(raw, method) != recipe_fingerprint({}, method)
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_slice_positions_are_sorted_and_deduplicated_for_fingerprint_stability(
+    method,
+):
+    unsorted = {
+        "slice": {"enabled": True, "axis": "time", "positions": [15, 5, 15]},
+    }
+    sorted_unique = {
+        "slice": {"enabled": True, "axis": "time", "positions": [5, 15]},
+    }
+
+    normalized_unsorted = normalize_batch_params(unsorted, method)
+    normalized_sorted = normalize_batch_params(sorted_unique, method)
+
+    assert normalized_unsorted["slice"]["positions"] == [5.0, 15.0]
+    assert normalized_unsorted == normalized_sorted
+    assert recipe_fingerprint(unsorted, method) == recipe_fingerprint(
+        sorted_unique, method,
+    )
+
+
+def test_slice_axis_is_lowercased_and_positions_are_floats():
+    normalized = normalize_batch_params(
+        {
+            "slice": {
+                "enabled": True,
+                "axis": " Y ",
+                "positions": [np.int64(5), np.float32(15.5)],
+            },
+        },
+        "fft_time",
+    )
+
+    assert normalized["slice"] == {
+        "enabled": True,
+        "axis": "y",
+        "positions": [5.0, 15.5],
+    }
+
+
 def test_normalize_batch_params_does_not_fill_missing_ui_defaults():
     assert normalize_batch_params({"window": "flattop"}, "fft") == {
         "window": "flattop"
@@ -277,11 +428,19 @@ def test_render_style_fields_are_common_typed_and_fingerprinted(method):
 def test_compatible_field_schema_is_method_aware_and_complete():
     assert COMMON_PARAM_FIELDS <= compatible_param_fields("time")
     assert METHOD_PARAM_FIELDS["fft"] <= compatible_param_fields("fft")
-    assert "manual_rpm" in compatible_param_fields("order_time")
+    # Manual RPM is retired (design 2026-08-03 D-C1): no method owns these
+    # fields any more, but they stay in KNOWN_PARAM_FIELDS on purpose so an
+    # old recipe's rpm_mode/manual_rpm is discarded rather than kept around
+    # as unrecognized future data.
+    assert "manual_rpm" not in compatible_param_fields("order_time")
+    assert "rpm_mode" not in compatible_param_fields("order_time")
     assert "manual_rpm" not in compatible_param_fields("fft")
-    assert KNOWN_PARAM_FIELDS == COMMON_PARAM_FIELDS | frozenset().union(
-        *METHOD_PARAM_FIELDS.values()
+    assert KNOWN_PARAM_FIELDS == (
+        COMMON_PARAM_FIELDS
+        | frozenset().union(*METHOD_PARAM_FIELDS.values())
+        | batch_recipe._RETIRED_PARAM_FIELDS
     )
+    assert batch_recipe._RETIRED_PARAM_FIELDS == {"rpm_mode", "manual_rpm"}
 
 
 def test_normalize_analysis_preset_is_duck_typed_and_json_safe():

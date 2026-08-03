@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from ..batch_grouping import is_human_group
 from ._fonts import chart_font
 from ._models import BatchRenderContext
 from ._theme import RenderTheme
@@ -26,24 +27,6 @@ def _elide(value: Any, limit: int) -> str:
     if limit <= 1:
         return "…"[:limit]
     return text[: limit - 1].rstrip() + "…"
-
-
-# Group identities that exist for the runner's benefit, never for a reader's:
-# ``default`` is the fallback every plain file gets (batch_output._group_identity)
-# and ``unresolved-source:<key>`` is the placeholder a not-yet-loaded source
-# carries (batch.py). Neither belongs in a title beside the file name.
-_MACHINE_GROUP_IDENTITIES = ("default",)
-_MACHINE_GROUP_PREFIXES = ("unresolved-source:", "file_id:")
-
-
-def _is_human_group(group: Any) -> bool:
-    text = str(group or "").strip()
-    if not text:
-        return False
-    folded = text.casefold()
-    if folded in _MACHINE_GROUP_IDENTITIES:
-        return False
-    return not folded.startswith(_MACHINE_GROUP_PREFIXES)
 
 
 def _first_present(mapping: Mapping[str, Any], *keys: str):
@@ -128,7 +111,7 @@ def add_report_header(
 ) -> list:
     method = str(context.method).strip() or _DEFAULT_METHOD[kind]
     group_part = (
-        _elide(context.group, 38) if _is_human_group(context.group) else ""
+        _elide(context.group, 38) if is_human_group(context.group) else ""
     )
     identity = " · ".join(
         part

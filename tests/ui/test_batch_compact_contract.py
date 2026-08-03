@@ -357,6 +357,17 @@ def test_batch_preview_dialog_fits_available_screen(qapp, qtbot):
     assert dialog.width() <= avail.width() - 24
 
 
+def test_batch_preview_dialog_has_no_context_help_button(qtbot):
+    # C4: Windows adds a "?" title-bar button to a QDialog by default; it
+    # never wired up to any behavior here, so it must be cleared.
+    from mf4_analyzer.ui.drawers.batch.preview_dialog import BatchPreviewDialog
+
+    dialog = BatchPreviewDialog(None)
+    qtbot.addWidget(dialog)
+
+    assert not (dialog.windowFlags() & Qt.WindowContextHelpButtonHint)
+
+
 def test_batch_footer_actions_stay_inside_a_short_dialog(qapp, qtbot):
     from pathlib import Path
 

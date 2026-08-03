@@ -94,23 +94,24 @@ _PATCHES: dict[str, dict[str, dict[str, Any]]] = {
         },
     },
     "order_time": {
-        # Existing Order signal-type presets intentionally do not declare a
-        # window.  COT keeps its own hanning default and partial apply leaves
-        # the live window untouched.
+        # Window is declared here on purpose, to stay aligned with the
+        # "fft" / "fft_time" presets above (torque -> flattop, vibration /
+        # transient -> hanning).  COT reads it via get_analysis_window, so
+        # applying this patch changes the live order window too.
         "torque": {
             "max_order": 20, "order_res": 0.05, "time_res": 0.10,
             "nfft": "自动", "samples_per_rev": 256,
-            "amplitude_mode": "Amplitude dB",
+            "amplitude_mode": "Amplitude dB", "window": "flattop",
         },
         "vibration": {
             "max_order": 50, "order_res": 0.10, "time_res": 0.05,
             "nfft": "自动", "samples_per_rev": 512,
-            "amplitude_mode": "Amplitude dB",
+            "amplitude_mode": "Amplitude dB", "window": "hanning",
         },
         "transient": {
             "max_order": 30, "order_res": 0.25, "time_res": 0.02,
             "nfft": "自动", "samples_per_rev": 256,
-            "amplitude_mode": "Amplitude dB",
+            "amplitude_mode": "Amplitude dB", "window": "hanning",
         },
     },
 }

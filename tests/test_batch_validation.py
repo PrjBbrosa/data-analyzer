@@ -310,6 +310,137 @@ def test_validate_recipe_rejects_invalid_scalar_contracts(params, field):
     assert any(issue.field == field for issue in issues)
 
 
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_slice_validation_is_spectrogram_only_and_skipped_when_disabled(method):
+    issues_when_absent = validate_recipe(method, {})
+    issues_when_disabled = validate_recipe(
+        method,
+        {"slice": {"enabled": False, "axis": "bogus", "positions": [1, 2, 3, 4, 5]}},
+    )
+
+    assert not any(issue.field == "slice" for issue in issues_when_absent)
+    assert not any(issue.field == "slice" for issue in issues_when_disabled)
+    # slice is not a recognized field on non-spectrogram methods, so an
+    # invalid payload there must not surface as a slice issue.
+    assert not any(
+        issue.field == "slice"
+        for issue in validate_recipe(
+            "time", {"slice": {"enabled": True, "axis": "bogus", "positions": []}},
+        )
+    )
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_slice_validation_rejects_non_mapping_slice(method):
+    issues = validate_recipe(method, {"slice": ["enabled", True]})
+
+    assert any(
+        issue.field == "slice" and issue.code == "invalid_slice"
+        for issue in issues
+    )
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_slice_validation_rejects_unsupported_axis(method):
+    issues = validate_recipe(
+        method,
+        {"slice": {"enabled": True, "axis": "frequency", "positions": [5.0]}},
+    )
+
+    assert any(
+        issue.field == "slice" and issue.code == "invalid_slice_axis"
+        for issue in issues
+    )
+
+
+@pytest.mark.parametrize(
+    "positions",
+    (
+        "5,15",
+        [float("nan")],
+        [float("inf")],
+        [True],
+    ),
+)
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_slice_validation_rejects_invalid_positions_shape_or_values(method, positions):
+    issues = validate_recipe(
+        method,
+        {"slice": {"enabled": True, "axis": "time", "positions": positions}},
+    )
+
+    assert any(
+        issue.field == "slice" and issue.code == "invalid_slice_positions"
+        for issue in issues
+    )
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_slice_validation_rejects_negative_y_axis_positions(method):
+    issues = validate_recipe(
+        method,
+        {"slice": {"enabled": True, "axis": "y", "positions": [-5.0, 10.0]}},
+    )
+
+    assert any(
+        issue.field == "slice" and issue.code == "invalid_slice_positions"
+        for issue in issues
+    )
+    # A negative position on the time axis is not out-of-range at preflight
+    # (no data is loaded yet); only the axis == "y" case is restricted.
+    assert not any(
+        issue.field == "slice"
+        for issue in validate_recipe(
+            method,
+            {"slice": {"enabled": True, "axis": "time", "positions": [-5.0, 10.0]}},
+        )
+    )
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_slice_validation_rejects_more_than_four_positions(method):
+    issues = validate_recipe(
+        method,
+        {"slice": {"enabled": True, "axis": "time", "positions": [1, 2, 3, 4, 5]}},
+    )
+
+    assert any(
+        issue.field == "slice" and issue.code == "too_many_slice_positions"
+        for issue in issues
+    )
+    assert not any(
+        issue.field == "slice"
+        for issue in validate_recipe(
+            method,
+            {"slice": {"enabled": True, "axis": "time", "positions": [1, 2, 3, 4]}},
+        )
+    )
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_slice_validation_requires_at_least_one_position_when_enabled(method):
+    issues = validate_recipe(
+        method,
+        {"slice": {"enabled": True, "axis": "time", "positions": []}},
+    )
+
+    assert any(
+        issue.field == "slice" and issue.code == "slice_positions_required"
+        for issue in issues
+    )
+
+
+def test_slice_validation_does_not_check_out_of_range_positions():
+    # Preflight has no loaded data to check bounds against; out-of-range
+    # positions are clamped at render time (design D12), not rejected here.
+    issues = validate_recipe(
+        "fft_time",
+        {"slice": {"enabled": True, "axis": "time", "positions": [1_000_000.0]}},
+    )
+
+    assert not any(issue.field == "slice" for issue in issues)
+
+
 def test_validate_task_rejects_invalid_effective_fs_and_nyquist():
     invalid_fs = validate_task("fft", {}, fs=float("inf"), sample_count=32)
     above_nyquist = validate_task(
@@ -358,17 +489,29 @@ def test_validate_task_rejects_time_range_with_fewer_than_two_samples():
                for issue in issues)
 
 
-def test_validate_order_recipe_checks_explicit_rpm_mode_and_order_limit():
-    manual_missing = validate_recipe(
+def test_validate_order_recipe_no_longer_checks_retired_manual_rpm_fields():
+    """Manual RPM is removed (design 2026-08-03 D-C1): ``rpm_mode``/
+    ``manual_rpm`` are retired batch fields.  ``normalize_batch_params``
+    drops both before a real run ever sees them, so ``validate_recipe`` no
+    longer recognizes either key -- not even to flag an invalid manual
+    value.  A missing RPM source is instead caught by the pre-existing
+    "rpm channel is required" runtime check in ``_rpm_values``."""
+    issues = validate_recipe(
         "order_time",
         {"rpm_mode": "manual", "manual_rpm": 0.0},
-    )
-    channel_missing = validate_recipe(
-        "order_time",
-        {"rpm_mode": "channel"},
         rpm_channel="",
         rpm_signal=None,
     )
+
+    assert not any(
+        issue.field in {"manual_rpm", "rpm_channel"} for issue in issues
+    )
+
+
+def test_validate_order_task_order_limit_ignores_retired_manual_rpm():
+    """``max_order`` vs. order-Nyquist is still enforced via loaded RPM
+    values (see test_validate_order_task_uses_loaded_rpm_for_order_nyquist);
+    a stale ``manual_rpm`` in params must no longer feed that check."""
     order_above_nyquist = validate_task(
         "order_time",
         {"rpm_mode": "manual", "manual_rpm": 3000.0, "max_order": 20.0},
@@ -376,10 +519,10 @@ def test_validate_order_recipe_checks_explicit_rpm_mode_and_order_limit():
         sample_count=1024,
     )
 
-    assert any(issue.field == "manual_rpm" for issue in manual_missing)
-    assert any(issue.field == "rpm_channel" for issue in channel_missing)
-    assert any(issue.field == "max_order" and issue.code == "above_order_nyquist"
-               for issue in order_above_nyquist)
+    assert not any(
+        issue.field == "max_order" and issue.code == "above_order_nyquist"
+        for issue in order_above_nyquist
+    )
 
 
 def test_validate_order_task_uses_loaded_rpm_for_order_nyquist():

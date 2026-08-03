@@ -72,10 +72,37 @@ def _source_basename(source_identity: str) -> str:
     return name or "source"
 
 
+# Group identities that exist for the runner's benefit, never for a reader's:
+# ``default`` is the fallback every plain file gets (batch_output._group_identity)
+# and ``unresolved-source:<key>`` is the placeholder a not-yet-loaded source
+# carries (batch.py). Neither belongs in a title beside the file name.
+#
+# This is the single source of truth for the rule.  It used to live only in
+# ``batch_render_qt/_page.py``, so chart titles were clean while every other
+# reader-facing surface (preview dialog, task list) leaked
+# ``unresolved-source:hdf:3af2470…`` through ``_source_display_name``.  The
+# rule belongs here because ``batch_grouping`` is GUI-free and sits below both
+# consumers.
+MACHINE_GROUP_IDENTITIES = ("default",)
+MACHINE_GROUP_PREFIXES = ("unresolved-source:", "file_id:")
+
+
+def is_human_group(group: Any) -> bool:
+    """True when *group* is a group name a reader should actually see."""
+
+    text = str(group or "").strip()
+    if not text:
+        return False
+    folded = text.casefold()
+    if folded in MACHINE_GROUP_IDENTITIES:
+        return False
+    return not folded.startswith(MACHINE_GROUP_PREFIXES)
+
+
 def _source_display_name(source_identity: str, group_identity: str) -> str:
     source_name = _source_basename(source_identity)
     group_name = str(group_identity or "").strip()
-    if group_name and group_name != "default":
+    if is_human_group(group_name):
         return f"{source_name} · {group_name}"
     return source_name
 
@@ -159,4 +186,11 @@ def group_render_tasks(
     return tuple(groups)
 
 
-__all__ = ["RenderGroup", "RenderTask", "group_render_tasks"]
+__all__ = [
+    "MACHINE_GROUP_IDENTITIES",
+    "MACHINE_GROUP_PREFIXES",
+    "RenderGroup",
+    "RenderTask",
+    "group_render_tasks",
+    "is_human_group",
+]

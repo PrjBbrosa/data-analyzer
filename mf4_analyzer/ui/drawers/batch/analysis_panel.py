@@ -14,6 +14,7 @@ from ....analysis_presets import list_builtin_presets
 from ...analysis_preset_slots import preset_slot_bus, read_slot
 from .method_buttons import DynamicParamForm, MethodButtonGroup
 from .chart_statistics_panel import ChartStatisticsPanel
+from .slice_panel import SlicePanel
 
 
 _METHOD_TO_KIND = {
@@ -29,6 +30,7 @@ _PARAMETER_TITLES = {
 }
 _SLOT_TO_KEY = {1: "torque", 2: "vibration", 3: "transient", 4: "custom"}
 _KEY_TO_SLOT = {value: key for key, value in _SLOT_TO_KEY.items()}
+_SPECTROGRAM_METHODS = frozenset({"fft_time", "order_time"})
 
 
 class _PresetCard(QPushButton):
@@ -164,10 +166,6 @@ class AnalysisPanel(QWidget):
             row.addWidget(button, 1)
             self._preset_buttons[key] = button
         preset_layout.addLayout(row)
-        self._preset_source_note = QLabel("", self._preset_host)
-        self._preset_source_note.setObjectName("BatchPresetSourceNote")
-        self._preset_source_note.setWordWrap(True)
-        preset_layout.addWidget(self._preset_source_note)
         outer.addWidget(self._preset_host)
 
         params_head = QHBoxLayout()
@@ -184,6 +182,8 @@ class AnalysisPanel(QWidget):
         outer.addWidget(self._param_form)
         self._chart_statistics = ChartStatisticsPanel(self)
         outer.addWidget(self._chart_statistics)
+        self._slice = SlicePanel(self)
+        outer.addWidget(self._slice)
 
         self._source_interval_host = QWidget(self)
         self._source_interval_host.setObjectName("BatchSourceInterval")
@@ -208,6 +208,7 @@ class AnalysisPanel(QWidget):
         self._method_group.methodChanged.connect(self._on_method_changed)
         self._param_form.paramsChanged.connect(self._on_params_changed)
         self._chart_statistics.changed.connect(self._on_params_changed)
+        self._slice.changed.connect(self._on_params_changed)
         self._source_interval_mode.currentIndexChanged.connect(
             self._sync_source_interval_enabled
         )
@@ -256,23 +257,19 @@ class AnalysisPanel(QWidget):
         self._preset_host.setVisible(not is_time)
         self._source_interval_host.setVisible(method == "fft")
         self._chart_statistics.setVisible(is_time)
+        self._slice.setVisible(method in _SPECTROGRAM_METHODS)
+        self._slice.set_context(method=method)
         self._params_title.setText(_PARAMETER_TITLES.get(method, "分析参数"))
         self._preset_state.setVisible(not is_time)
         if is_time:
             self._clear_applied(emit=False, dirty=False)
             return
-        first_name = ""
         for key, button in self._preset_buttons.items():
             name, patch, enabled, stored = self._slot_payload(key)
             button.setText(name)
             button.set_summary_text(self._preset_summary(patch, stored=stored))
             button.setEnabled(enabled)
             button.setToolTip("单次分析保存的预设" if stored else "单次分析内建预设")
-            if key == "torque":
-                first_name = name
-        self._preset_source_note.setText(
-            f"“{first_name}”来自单文件 {method} 预设槽 1；这里不维护第二份名称。"
-        )
         if clear_selection:
             self._clear_applied(emit=False, dirty=False)
 
@@ -392,8 +389,11 @@ class AnalysisPanel(QWidget):
 
     def get_params(self) -> dict:
         params = self._param_form.get_params()
-        if self.current_method() == "time":
+        method = self.current_method()
+        if method == "time":
             params.update(self._chart_statistics.get_params())
+        elif method in _SPECTROGRAM_METHODS:
+            params.update(self._slice.get_params())
         return params
 
     def apply_method(self, method: str) -> None:
@@ -402,6 +402,12 @@ class AnalysisPanel(QWidget):
     def apply_params(self, params: dict) -> None:
         self._param_form.apply_params(params)
         self._chart_statistics.apply_params(params)
+        self._slice.apply_params(params)
+
+    def slice_positions_error(self) -> str:
+        if self.current_method() not in _SPECTROGRAM_METHODS:
+            return ""
+        return self._slice.positions_error()
 
     def set_chart_statistics_x_context(self, *, x_source, x_channel="", unit="s") -> None:
         self._chart_statistics.set_context(x_source=x_source, x_channel=x_channel, unit=unit)
