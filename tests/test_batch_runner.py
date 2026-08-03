@@ -648,7 +648,7 @@ def test_cancel_no_half_written_files(tmp_path):
     out = tmp_path / "out"
     csvs = list(out.glob("*.csv"))
     # The first task's file must exist and be complete (parseable)
-    assert any(p.name.startswith("a__default__sig__fft__") for p in csvs)
+    assert any(p.name.startswith("a__sig__fft__") for p in csvs)
     for p in csvs:
         # No partial writes — file is complete CSV
         text = p.read_text()
@@ -1729,6 +1729,11 @@ def test_runner_records_stable_identity_and_separates_same_basename_sources(tmp_
     assert len({item.task_id for item in result.items}) == 2
     assert len({item.data_path for item in result.items}) == 2
     assert all(item.group_identity == "default" for item in result.items)
+    # The fallback group stays in the identity but never in the filename.
+    assert all(
+        Path(item.data_path).name == f"同名__sig__fft__{item.task_id[:8]}.csv"
+        for item in result.items
+    )
     assert all(item.source_identity and item.effective_params["fs"] == 128.0
                for item in result.items)
     assert all(Path(item.data_path).exists() for item in result.items)
@@ -4038,6 +4043,46 @@ def test_representative_preview_renders_only_first_group_to_private_png(
     assert not list(private_dir.glob("batch-manifest__*.json"))
     assert not (private_dir / ".tracelab").exists()
     assert not formal_dir.exists()
+
+
+@pytest.mark.parametrize("render_group_by", ("none", "source", "channel"))
+def test_preview_group_resolves_image_path_for_every_group_mode(
+    qapp, tmp_path, render_group_by,
+):
+    """Regression: grouped renders (source/channel) must resolve an image_path
+    just like render_group_by="none" does.
+
+    Before the fix, ``preview_group()`` only ever read ``image_path`` off
+    ``result.items``, which grouped-render task results never populate (the
+    group PNG path lives solely on ``RenderGroupResult``). That made the
+    preview button silently fail for "source" and "channel" grouping even
+    though the PNG was rendered to disk.
+    """
+    fd = _make_fd(tmp_path, "representative", channels=("sig", "aux"), idx=0)
+    preset = AnalysisPreset.free_config(
+        name="representative preview",
+        method="time",
+        target_signals=("sig", "aux"),
+        params={"render_group_by": render_group_by},
+        outputs=BatchOutput(
+            export_data=False, export_image=True,
+            image_width=960, image_height=540, image_dpi=144,
+        ),
+    )
+    preset = replace(preset, file_ids=(0,))
+    runner = BatchRunner({0: fd})
+    formal_dir = tmp_path / "formal-output"
+    plan = runner.preview_outputs(preset, formal_dir)
+    group = plan.representative_group
+    assert group is not None
+
+    private_dir = tmp_path / f"private-preview-{render_group_by}"
+    result = runner.preview_group(preset, group.group_id, private_dir)
+
+    assert result.status == "done"
+    assert result.group_id == group.group_id
+    assert result.image_path
+    assert Path(result.image_path).is_file()
 
 
 def test_metadata_probe_unavailable_is_preview_only_fallback(

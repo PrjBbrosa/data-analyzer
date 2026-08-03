@@ -19,6 +19,11 @@ from .batch_recipe import recipe_fingerprint
 _UNSAFE_FILENAME = re.compile(r'[\x00-\x1f<>:"/\\|?*]+')
 _REPEATED_SEPARATOR = re.compile(r"[\s_]+")
 
+#: Group identity used when a source carries no label suffix or group metadata.
+#: It is part of the hashed identity and must never change; it is only omitted
+#: from human-readable filename stems.
+DEFAULT_GROUP_IDENTITY = "default"
+
 
 def unicode_slug(value, fallback: str = "default") -> str:
     """Keep readable Unicode while replacing filesystem-unsafe characters."""
@@ -118,7 +123,23 @@ def _group_identity(source) -> str:
             value = metadata.get(key)
             if value not in (None, ""):
                 return str(value)
-    return "default"
+    return DEFAULT_GROUP_IDENTITY
+
+
+def _group_stem_segments(group_identity) -> tuple[str, ...]:
+    """Return the readable group segment, or nothing when it carries no info.
+
+    Plain sources fall back to :data:`DEFAULT_GROUP_IDENTITY`, which every
+    filename in the run would repeat without telling the reader anything.  The
+    hashed identity keeps the fallback; only the stem drops it.
+    """
+
+    slug = unicode_slug(
+        str(group_identity or "").strip(), DEFAULT_GROUP_IDENTITY,
+    )
+    if slug == DEFAULT_GROUP_IDENTITY:
+        return ()
+    return (slug,)
 
 
 def build_task_output_identity(
@@ -144,7 +165,7 @@ def build_task_output_identity(
     source_stem = unicode_slug(Path(source_identity).stem, "source")
     stem = "__".join((
         source_stem,
-        unicode_slug(group_identity),
+        *_group_stem_segments(group_identity),
         unicode_slug(channel_identity, "channel"),
         unicode_slug(method, "method"),
         task_id[:8],
@@ -188,16 +209,17 @@ def build_group_output_identity(
         source_identity, group_identity, _channel = normalized_members[0]
         readable = (
             unicode_slug(Path(source_identity).stem, "source"),
-            unicode_slug(group_identity),
+            *_group_stem_segments(group_identity),
         )
     elif group_by == "channel":
         readable = (unicode_slug(normalized_members[0][2], "channel"),)
     else:
         readable = ("group",)
+    # The grouping mode is constant for a whole run, so it is left out of the
+    # stem; the group hash still separates differently grouped artifacts.
     stem = "__".join((
         *readable,
         unicode_slug(method, "method"),
-        unicode_slug(group_by, "group"),
         group_id[:8],
     ))
     return GroupOutputIdentity(
@@ -638,6 +660,7 @@ def atomic_write(
 
 
 __all__ = [
+    "DEFAULT_GROUP_IDENTITY",
     "OutputPublishRace",
     "OutputRollbackIncomplete",
     "OutputReservation",

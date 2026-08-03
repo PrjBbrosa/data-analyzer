@@ -225,6 +225,128 @@ def test_task_output_identity_is_stable_and_separates_source_and_group(tmp_path)
     assert "同名__1x__振动__fft__" in first.stem
 
 
+@pytest.mark.parametrize("label", ("", "   ", "default", " default "))
+def test_task_stem_omits_the_uninformative_default_group(tmp_path, label):
+    identity = build_task_output_identity(
+        _Source(tmp_path / "repro.mf4", label),
+        file_id=1,
+        channel="sig",
+        method="time",
+        params={},
+    )
+
+    assert identity.group_identity == "default"
+    assert "default" not in identity.stem
+    assert identity.stem == f"repro__sig__time__{identity.task_id[:8]}"
+
+
+def test_task_stem_keeps_a_real_group_label_after_the_source(tmp_path):
+    identity = build_task_output_identity(
+        _Source(tmp_path / "repro.mf4", "cycle-A"),
+        file_id=1,
+        channel="sig",
+        method="time",
+        params={},
+    )
+
+    assert identity.group_identity == "cycle-A"
+    assert identity.stem == f"repro__cycle-A__sig__time__{identity.task_id[:8]}"
+
+
+def test_task_stem_drops_a_blank_group_that_identity_still_carries(tmp_path):
+    """Whitespace-only metadata stays in the hash but must not reach the name."""
+
+    source = _Source(tmp_path / "repro.mf4")
+    source.source_metadata = {"group": "   "}
+    identity = build_task_output_identity(
+        source, file_id=1, channel="sig", method="time", params={},
+    )
+
+    assert identity.group_identity == "   "
+    assert identity.stem == f"repro__sig__time__{identity.task_id[:8]}"
+
+
+def test_group_stem_drops_the_group_by_literal_and_the_default_group():
+    by_source = batch_output.build_group_output_identity(
+        (
+            ("/runs/repro.mf4", "default", "sig"),
+            ("/runs/repro.mf4", "default", "aux"),
+        ),
+        method="time",
+        params={"render_group_by": "source"},
+        group_by="source",
+    )
+    labelled_source = batch_output.build_group_output_identity(
+        (
+            ("/runs/repro.mf4", "cycle-A", "sig"),
+            ("/runs/repro.mf4", "cycle-A", "aux"),
+        ),
+        method="time",
+        params={"render_group_by": "source"},
+        group_by="source",
+    )
+    by_channel = batch_output.build_group_output_identity(
+        (
+            ("/runs/a.mf4", "default", "aux"),
+            ("/runs/b.mf4", "default", "aux"),
+        ),
+        method="time",
+        params={"render_group_by": "channel"},
+        group_by="channel",
+    )
+
+    assert by_source.stem == f"repro__time__{by_source.group_id[:8]}"
+    assert "default" not in by_source.stem
+    assert "source" not in by_source.stem.split("__")
+    assert labelled_source.stem == (
+        f"repro__cycle-A__time__{labelled_source.group_id[:8]}"
+    )
+    assert "source" not in labelled_source.stem.split("__")
+    assert by_channel.stem == f"aux__time__{by_channel.group_id[:8]}"
+    assert "channel" not in by_channel.stem.split("__")
+
+
+def test_readable_stem_shortening_did_not_move_the_hashed_identities():
+    """Filenames are cosmetic; these hashes drive manifests, resume and reuse.
+
+    The golden values were captured from the pre-shortening implementation, so
+    a diff here means an identity break, not merely a renamed artifact.
+    """
+
+    task = build_task_output_identity(
+        _Source(None), file_id=7, channel="spd", method="fft",
+        params={"fs": 1024.0},
+    )
+    group_source = batch_output.build_group_output_identity(
+        (
+            ("/runs/repro.mf4", "default", "sig"),
+            ("/runs/repro.mf4", "default", "aux"),
+        ),
+        method="time",
+        params={"render_group_by": "source"},
+        group_by="source",
+    )
+    group_channel = batch_output.build_group_output_identity(
+        (
+            ("/runs/a.mf4", "default", "aux"),
+            ("/runs/b.mf4", "default", "aux"),
+        ),
+        method="time",
+        params={"render_group_by": "channel"},
+        group_by="channel",
+    )
+
+    assert task.task_id == (
+        "a57665c65252c07263ead552bd2e73614e43992d2614382c2c2439f5f6f3f7d5"
+    )
+    assert group_source.group_id == (
+        "7def54cefc7b4235eda0c6e4da523bce65dfeb001d0f80101a0e3b800710a704"
+    )
+    assert group_channel.group_id == (
+        "96e0d4bf0b3e28e7461cf7bbb29db0fa53bef40d1a3799815ed2543c2ff25012"
+    )
+
+
 def test_choose_output_paths_auto_numbers_without_overwriting(tmp_path):
     (tmp_path / "result.csv").write_text("old", encoding="utf-8")
 

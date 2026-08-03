@@ -299,6 +299,7 @@ class BatchRunResult:
     run_id: str | None = None
     degraded_count: int = 0
     warnings: list[str] = field(default_factory=list)
+    render_groups: list[RenderGroupResult] = field(default_factory=list)
 
 
 @dataclass
@@ -722,12 +723,23 @@ class BatchRunner:
         result = self.run(
             preview_preset, temp_dir, cancel_token=cancel_token,
         )
-        images = [
-            item.image_path for item in result.items
-            if item.image_path and item.status in {"done", "resumed"}
-        ]
+        matched_group = next(
+            (
+                candidate for candidate in result.render_groups
+                if candidate.group_id == group.identity.group_id
+            ),
+            None,
+        )
+        if matched_group is not None and matched_group.image_path:
+            preview_image_path = matched_group.image_path
+        else:
+            images = [
+                item.image_path for item in result.items
+                if item.image_path and item.status in {"done", "resumed"}
+            ]
+            preview_image_path = images[0] if images else None
         return BatchPreviewResult(
-            image_path=images[0] if images else None,
+            image_path=preview_image_path,
             group_id=group.identity.group_id,
             display_name=group.display_name,
             loaded_source_count=len({member.source_key for member in group.members}),
@@ -806,9 +818,10 @@ class BatchRunner:
                     ))
                 return BatchRunResult(status='blocked', blocked=[err])
 
-        def finish_result(status, items=None, blocked=None):
+        def finish_result(status, items=None, blocked=None, render_groups=None):
             result_items = list(items or ())
             result_blocked = list(blocked or ())
+            result_render_groups = list(render_groups or ())
             result_blocked.extend(manifest_errors)
             result_status = status
             degraded_reasons = list(dict.fromkeys(
@@ -856,6 +869,7 @@ class BatchRunner:
                     *degraded_reasons,
                     *(warning for item in result_items for warning in item.warnings),
                 ])),
+                render_groups=result_render_groups,
             )
 
         def physical_path_for(source_key, fd=None):
@@ -1389,6 +1403,7 @@ class BatchRunner:
             resolved_group_terminals: list[
                 tuple[int, str, str, BatchItemResult, str | None]
             ] = []
+            render_group_outcomes: list[RenderGroupResult] = []
             spool_class = None
             spool_module = None
             if (
@@ -1879,6 +1894,7 @@ class BatchRunner:
                                 status='failed',
                                 message=str(exc),
                             )
+                    render_group_outcomes.append(outcome)
                     if outcome.warnings:
                         for computed in results:
                             if computed.series_refs:
@@ -1976,7 +1992,10 @@ class BatchRunner:
                 status = 'partial'
             else:
                 status = 'done'
-            return finish_result(status, items=items, blocked=blocked)
+            return finish_result(
+                status, items=items, blocked=blocked,
+                render_groups=render_group_outcomes,
+            )
 
         for index, (source_key, signal_name) in enumerate(tasks, start=1):
             # Logical groups from one container share a physical cache entry.
