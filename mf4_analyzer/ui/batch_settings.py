@@ -179,6 +179,11 @@ class BatchPanelPrefs:
     directory: str = ""
     render_style: dict = field(default_factory=dict)
     outputs: dict = field(default_factory=dict)
+    #: 「完成后打开输出文件夹」-- a panel-level UI preference, not part of
+    #: ``BatchOutput`` (the runner never sees it). Defaults to on, and a
+    #: payload written before this field existed lacks the key entirely, so
+    #: the schema version does not need to move for it.
+    open_folder_after_run: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "directory", normalize_directory(self.directory))
@@ -186,6 +191,11 @@ class BatchPanelPrefs:
             self, "render_style", normalize_render_style(self.render_style)
         )
         object.__setattr__(self, "outputs", normalize_outputs(self.outputs))
+        object.__setattr__(
+            self,
+            "open_folder_after_run",
+            _coerce_bool(self.open_folder_after_run, True),
+        )
 
     def as_output(self) -> BatchOutput:
         """Build a ``BatchOutput`` from the remembered fields only.
@@ -201,6 +211,7 @@ class BatchPanelPrefs:
             "directory": self.directory,
             "render_style": dict(self.render_style),
             "outputs": dict(self.outputs),
+            "open_folder_after_run": self.open_folder_after_run,
         }
 
 
@@ -241,6 +252,7 @@ class BatchPanelPrefsStore:
                 directory=data.get("directory", ""),
                 render_style=data.get("render_style"),
                 outputs=data.get("outputs"),
+                open_folder_after_run=data.get("open_folder_after_run", True),
             )
         except Exception:
             return BatchPanelPrefs()
@@ -260,6 +272,9 @@ class BatchPanelPrefsStore:
                     directory=getattr(prefs, "directory", ""),
                     render_style=getattr(prefs, "render_style", None),
                     outputs=getattr(prefs, "outputs", None),
+                    open_folder_after_run=getattr(
+                        prefs, "open_folder_after_run", True
+                    ),
                 ).as_payload(),
                 ensure_ascii=False,
                 sort_keys=True,

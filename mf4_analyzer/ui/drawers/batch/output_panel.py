@@ -197,6 +197,16 @@ QPushButton#batchOutputRestoreDefaults:hover {
         dir_row.addWidget(self._btn_browse)
         form.addRow("输出目录", dir_row)
 
+        # Auto-open the output folder once the run finishes. Visible and
+        # on by default -- unlike the fixed-export-contract holders below,
+        # this is a live, user-facing toggle.
+        self._chk_open_folder = QCheckBox("完成后打开输出文件夹", self)
+        self._chk_open_folder.setChecked(True)
+        self._chk_open_folder.setToolTip(
+            "批处理运行完成（或部分完成）后，自动打开输出目录"
+        )
+        form.addRow(self._chk_open_folder)
+
         # Compact export row. Detailed options stay collapsed until the user
         # clicks the settings button immediately after "图片".
         self._chk_data = QCheckBox("数据文件", self)
@@ -440,6 +450,7 @@ QPushButton#batchOutputSettingsButton:checked {
 
         # Wiring
         self._dir_edit.textChanged.connect(lambda *_: self.changed.emit())
+        self._chk_open_folder.toggled.connect(lambda *_: self.changed.emit())
         self._chk_data.toggled.connect(lambda *_: self.changed.emit())
         self._chk_data.toggled.connect(lambda *_: self._sync_output_controls())
         self._chk_data.toggled.connect(lambda *_: self._refresh_output_summary())
@@ -869,8 +880,24 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
     def directory(self) -> str:
         return self._dir_edit.text().strip()
 
+    def open_folder_after_run(self) -> bool:
+        return bool(self._chk_open_folder.isChecked())
+
+    def apply_open_folder_after_run(self, value: bool) -> None:
+        blocker = QSignalBlocker(self._chk_open_folder)
+        try:
+            self._chk_open_folder.setChecked(bool(value))
+        finally:
+            del blocker
+
     def get_outputs(self) -> BatchOutput:
-        """Return the sole authoritative portable output configuration."""
+        """Return the sole authoritative portable output configuration.
+
+        ``write_manifest`` is always ``False``: the GUI has never consumed
+        the runner's ``.tracelab/runs/batch-manifest__*.json`` (no resume /
+        retry / provenance entry point is exposed here), so a run that only
+        ever gets triggered from this panel must not leave one behind.
+        """
         return BatchOutput(
             export_data=bool(self._chk_data.isChecked()),
             export_image=bool(self._chk_image.isChecked()),
@@ -883,7 +910,7 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
             image_background="white",
             image_line_width=1.5,
             conflict_policy="auto_number",
-            write_manifest=True,
+            write_manifest=False,
             resume_policy="none",
         )
 
@@ -1080,6 +1107,7 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
         ``mf4_analyzer.ui.batch_settings``).
         """
         self.apply_directory(default_output_dir())
+        self.apply_open_folder_after_run(True)
         self.apply_render_style_params(RenderStyle().as_params())
         self.apply_outputs(BatchOutput())
 

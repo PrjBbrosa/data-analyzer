@@ -853,6 +853,9 @@ class BatchSheet(QDialog):
             # panel's own default in place rather than blanking the field.
             if prefs.directory:
                 self._output_panel.apply_directory(prefs.directory)
+            self._output_panel.apply_open_folder_after_run(
+                prefs.open_folder_after_run
+            )
             self._output_panel.apply_render_style_params(prefs.render_style)
             self._output_panel.apply_outputs(prefs.as_output())
         finally:
@@ -866,6 +869,7 @@ class BatchSheet(QDialog):
             directory=self._output_panel.directory(),
             render_style=snapshot["render_style"],
             outputs=snapshot["outputs"],
+            open_folder_after_run=self._output_panel.open_folder_after_run(),
         )
 
     def _persist_panel_prefs(self) -> None:
@@ -1695,6 +1699,7 @@ class BatchSheet(QDialog):
             done=done, total=total, task_count=self._task_list.row_count(),
         )
         self._show_result_toast(result)
+        self._maybe_open_output_folder(result)
 
         # Clean up thread reference.
         thread = self._runner_thread
@@ -1749,6 +1754,27 @@ class BatchSheet(QDialog):
             blocked = getattr(result, "blocked", []) or []
             reason = "; ".join(blocked) if blocked else "未知原因"
             QMessageBox.warning(self, "批处理无法运行", f"原因：{reason}")
+
+    def _maybe_open_output_folder(self, result) -> None:
+        """完成后打开输出文件夹: fires once, right after the (blocking) result
+        toast has been dismissed -- opening Explorer underneath a modal
+        QMessageBox would just fight it for focus.
+
+        Only for a run that actually produced (``done``) or attempted
+        (``partial``) output; ``cancelled`` / ``blocked`` never had a real
+        output pass, so there is nothing worth revealing.
+        """
+        if result is None:
+            return
+        if not self._output_panel.open_folder_after_run():
+            return
+        status = str(getattr(result, "status", "") or "")
+        if status not in {"done", "partial"}:
+            return
+        target_dir = self.output_dir()
+        if not target_dir or not Path(target_dir).expanduser().is_dir():
+            return
+        self._open_artifact_location(target_dir)
 
     def lock_editing(self) -> None:
         """Disable detail panels + swap footer to running mode."""

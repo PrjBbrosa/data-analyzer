@@ -91,11 +91,55 @@ def test_load_returns_defaults_when_key_absent(tmp_path):
     assert loaded == BatchPanelPrefs()
     assert loaded.directory == ""
     assert loaded.render_style == _default_render_style()
+    assert loaded.open_folder_after_run is True
     # The output defaults are BatchOutput's own, minus the runtime fields.
     defaults = BatchOutput()
     assert loaded.outputs["export_data"] is defaults.export_data
     assert loaded.outputs["image_dpi"] == defaults.image_dpi
     assert not set(RUNTIME_OUTPUT_FIELDS) & set(loaded.outputs)
+
+
+def test_open_folder_after_run_round_trips(tmp_path):
+    store = BatchPanelPrefsStore(settings=_settings(tmp_path))
+    store.save(BatchPanelPrefs(open_folder_after_run=False))
+
+    reloaded = BatchPanelPrefsStore(settings=_settings(tmp_path)).load()
+
+    assert reloaded.open_folder_after_run is False
+
+
+def test_open_folder_after_run_defaults_true_for_a_payload_written_before_it_existed(
+    tmp_path,
+):
+    """A pre-existing prefs file has no ``open_folder_after_run`` key at all
+    -- it must default to on rather than fail or fall back to the full
+    hard-coded defaults (the schema version does not need to move for an
+    additively-defaulted field)."""
+    _write_raw(tmp_path, json.dumps({
+        "schema": 1,
+        "directory": str(tmp_path / "exports"),
+        "render_style": {},
+        "outputs": {},
+    }))
+
+    loaded = BatchPanelPrefsStore(settings=_settings(tmp_path)).load()
+
+    assert loaded.open_folder_after_run is True
+    assert loaded.directory == str(tmp_path / "exports")
+
+
+def test_open_folder_after_run_coerces_non_bool_values(tmp_path):
+    _write_raw(tmp_path, json.dumps({
+        "schema": 1,
+        "directory": "",
+        "render_style": {},
+        "outputs": {},
+        "open_folder_after_run": "not a bool",
+    }))
+
+    loaded = BatchPanelPrefsStore(settings=_settings(tmp_path)).load()
+
+    assert loaded.open_folder_after_run is True
 
 
 def test_load_survives_unknown_schema_version(tmp_path):

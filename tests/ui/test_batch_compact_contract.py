@@ -69,7 +69,10 @@ def test_output_panel_uses_compact_fixed_export_contract(qtbot):
     assert (outputs.image_width, outputs.image_height) == (1920, 1080)
     assert outputs.image_line_width == 1.5
     assert outputs.conflict_policy == "auto_number"
-    assert outputs.write_manifest is True
+    # 运行清单只服务于 runner 的断点续跑/失败重试，而这个 compact GUI 既不设
+    # resume_policy 也不回传清单，写出来的 .tracelab/runs/*.json 无人消费，
+    # 只会在用户的导出目录里堆垃圾 —— 固定契约改为不写。
+    assert outputs.write_manifest is False
     assert outputs.resume_policy == "none"
     assert not panel._btn_output_settings.isVisible()
 

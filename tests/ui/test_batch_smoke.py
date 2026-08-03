@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from PyQt5.QtCore import Qt
 
@@ -1071,7 +1073,108 @@ def test_sheet_opens_artifact_location_only_after_explicit_row_activation(
     assert opened == []
     sheet._task_list._on_item_activated(sheet._task_list._items[0])
     assert len(opened) == 1
-    assert opened[0].toLocalFile() == str(tmp_path)
+    # QUrl.toLocalFile() normalises to forward slashes on Windows, so compare
+    # as paths rather than as raw strings.
+    assert Path(opened[0].toLocalFile()) == tmp_path
+
+
+# ---------------------------------------------------------------------------
+# 完成后打开输出文件夹 (auto-open the output folder once a run finishes).
+# Headless: never let this reach the real ``QDesktopServices.openUrl`` --
+# monkeypatch ``_open_artifact_location`` itself and assert on the call.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status", ("done", "partial"))
+def test_sheet_opens_output_folder_after_run_when_checkbox_checked(
+    qtbot, tmp_path, monkeypatch, status,
+):
+    from mf4_analyzer.batch import BatchRunResult
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    assert sheet._output_panel.open_folder_after_run() is True  # default on
+    sheet._output_panel.apply_directory(str(tmp_path))
+    opened = []
+    monkeypatch.setattr(sheet, "_open_artifact_location", opened.append)
+
+    sheet._last_result = BatchRunResult(status=status)
+    sheet._on_thread_finished()
+
+    assert opened == [str(tmp_path)]
+
+
+def test_sheet_does_not_open_output_folder_when_checkbox_unchecked(
+    qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.batch import BatchRunResult
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet._output_panel.apply_directory(str(tmp_path))
+    sheet._output_panel.apply_open_folder_after_run(False)
+    opened = []
+    monkeypatch.setattr(sheet, "_open_artifact_location", opened.append)
+
+    sheet._last_result = BatchRunResult(status="done")
+    sheet._on_thread_finished()
+
+    assert opened == []
+
+
+@pytest.mark.parametrize("status", ("cancelled", "blocked"))
+def test_sheet_does_not_open_output_folder_for_cancelled_or_blocked_runs(
+    qtbot, tmp_path, monkeypatch, status,
+):
+    from mf4_analyzer.batch import BatchRunResult
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet._output_panel.apply_directory(str(tmp_path))
+    opened = []
+    monkeypatch.setattr(sheet, "_open_artifact_location", opened.append)
+
+    sheet._last_result = BatchRunResult(status=status, blocked=["原因"])
+    sheet._on_thread_finished()
+
+    assert opened == []
+
+
+def test_sheet_does_not_open_output_folder_when_directory_is_missing(
+    qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.batch import BatchRunResult
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet._output_panel.apply_directory(str(tmp_path / "never-created"))
+    opened = []
+    monkeypatch.setattr(sheet, "_open_artifact_location", opened.append)
+
+    sheet._last_result = BatchRunResult(status="done")
+    sheet._on_thread_finished()
+
+    assert opened == []
+
+
+def test_sheet_does_not_open_output_folder_when_result_is_none(
+    qtbot, tmp_path, monkeypatch,
+):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet._output_panel.apply_directory(str(tmp_path))
+    opened = []
+    monkeypatch.setattr(sheet, "_open_artifact_location", opened.append)
+
+    sheet._last_result = None
+    sheet._on_thread_finished()
+
+    assert opened == []
 
 
 # ---------------------------------------------------------------------------
@@ -1118,6 +1221,18 @@ def test_sheet_restores_remembered_render_style(qtbot, tmp_path):
     assert "刻度 X 22 · Y 7 · 字号 135%" == (
         sheet._output_panel._render_style_summary.text()
     )
+
+
+def test_sheet_restores_remembered_open_folder_after_run_preference(qtbot, tmp_path):
+    from mf4_analyzer.ui.batch_settings import BatchPanelPrefs
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    _prefs_store(tmp_path).save(BatchPanelPrefs(open_folder_after_run=False))
+
+    sheet = BatchSheet(None, files={}, prefs_store=_prefs_store(tmp_path))
+    qtbot.addWidget(sheet)
+
+    assert sheet._output_panel.open_folder_after_run() is False
 
 
 def test_current_preset_wins_over_remembered_prefs(qtbot, tmp_path):
@@ -1300,10 +1415,12 @@ def test_restore_defaults_clears_the_memory_and_resets_the_panel(qtbot, tmp_path
         directory=str(tmp_path / "remembered-exports"),
         render_style={"tick_density_x": 22, "tick_density_y": 7},
         outputs={"export_data": False},
+        open_folder_after_run=False,
     ))
     sheet = BatchSheet(None, files={}, prefs_store=_prefs_store(tmp_path))
     qtbot.addWidget(sheet)
     assert sheet._output_panel.render_style_params()["tick_density_x"] == 22
+    assert sheet._output_panel.open_folder_after_run() is False
 
     sheet._output_panel._btn_restore_defaults.click()
 
@@ -1312,6 +1429,7 @@ def test_restore_defaults_clears_the_memory_and_resets_the_panel(qtbot, tmp_path
     }
     assert sheet.output_dir() == default_output_dir()
     assert sheet.export_data() is True
+    assert sheet._output_panel.open_folder_after_run() is True
     # The key is gone, so reopening starts from the hard-coded defaults again.
     assert _prefs_store(tmp_path).load() == BatchPanelPrefs()
 

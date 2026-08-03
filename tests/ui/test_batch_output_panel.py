@@ -740,11 +740,36 @@ def test_batch_output_import_migrates_to_the_fixed_interactive_contract(qtbot):
     assert compact.image_format == "png"
     assert (compact.image_width, compact.image_height) == (1920, 1080)
     assert compact.conflict_policy == "auto_number"
-    assert compact.write_manifest is True
+    assert compact.write_manifest is False
     assert compact.resume_policy == "none"
     assert panel.export_data() is outputs.export_data
     assert panel.export_image() is outputs.export_image
     assert panel.data_format() == "xlsx"
+
+
+def test_batch_output_open_folder_checkbox_defaults_on_and_round_trips(qtbot):
+    panel = _make_panel(qtbot)
+
+    # Visible and live -- unlike the fixed-export-contract holders hidden
+    # further down __init__, this checkbox is never in that hidden list.
+    assert not panel._chk_open_folder.isHidden()
+    assert panel.open_folder_after_run() is True
+
+    panel.apply_open_folder_after_run(False)
+    assert panel.open_folder_after_run() is False
+    assert panel._chk_open_folder.isChecked() is False
+
+    panel._chk_open_folder.setChecked(True)
+    assert panel.open_folder_after_run() is True
+
+
+def test_batch_output_get_outputs_never_writes_a_manifest(qtbot):
+    """GUI runs never consume ``batch-manifest__*.json`` -- no resume/retry
+    or provenance entry point is exposed here -- so a run triggered from
+    this panel must not leave one behind."""
+    panel = _make_panel(qtbot)
+
+    assert panel.get_outputs().write_manifest is False
 
 
 def test_batch_output_hides_advanced_controls_and_has_no_recovery_surface(qtbot):
