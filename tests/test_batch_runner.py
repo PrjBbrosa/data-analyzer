@@ -886,8 +886,6 @@ def test_non_time_heatmap_invalid_cmap_adds_runner_warning(tmp_path):
                 "max_order": 5.0,
                 "order_res": 0.5,
                 "time_res": 0.05,
-                "rpm_mode": "manual",
-                "manual_rpm": 3000.0,
                 "samples_per_rev": 64,
             },
         ),
@@ -2911,10 +2909,45 @@ def test_runner_records_effective_filter_clamp_warning(tmp_path):
     assert item.effective_params["filter"]["spec"]["cutoff"] < 500.0
 
 
-def test_order_manual_rpm_mode_runs_without_rpm_channel(tmp_path):
-    fd = _make_fd(tmp_path, "manual_rpm", channels=("sig",), idx=0)
+def test_order_time_without_rpm_channel_fails_with_required_error(tmp_path):
+    """Manual RPM is removed (design 2026-08-03 D-C1): batch order analysis
+    always needs an RPM channel/signal now. No new validation was added for
+    this -- the pre-existing ``_rpm_values`` "rpm channel is required" runtime
+    check is the backstop, surfacing as a per-item failure."""
+    fd = _make_fd(tmp_path, "no_rpm_channel", channels=("sig",), idx=0)
     preset = AnalysisPreset.from_current_single(
-        name="manual rpm",
+        name="no rpm channel",
+        method="order_time",
+        signal=(0, "sig"),
+        params={
+            "fs": 1024.0,
+            "nfft": 64,
+            "samples_per_rev": 64,
+            "max_order": 5.0,
+            "order_res": 0.5,
+            "time_res": 0.1,
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert result.items[0].status == "failed"
+    assert "rpm channel is required" in result.items[0].message
+
+
+def test_legacy_manual_rpm_preset_no_longer_bypasses_rpm_channel_requirement(
+    tmp_path,
+):
+    """A recipe saved before manual RPM was removed may still carry raw
+    ``rpm_mode="manual"``/``manual_rpm`` in ``preset.params`` (e.g. loaded
+    from an old JSON preset without going through normalization first). The
+    runner must treat it exactly like a channel-mode preset with no RPM
+    source configured, not silently honor the retired manual value."""
+    fd = _make_fd(tmp_path, "legacy_manual_rpm", channels=("sig",), idx=0)
+    preset = AnalysisPreset.from_current_single(
+        name="legacy manual rpm",
         method="order_time",
         signal=(0, "sig"),
         params={
@@ -2932,12 +2965,9 @@ def test_order_manual_rpm_mode_runs_without_rpm_channel(tmp_path):
 
     result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
 
-    assert result.status == "done"
-    assert result.items[0].effective_params["manual_rpm"] == 3000.0
-    assert result.items[0].effective_params["rpm_source"] == {
-        "mode": "manual",
-        "value": 3000.0,
-    }
+    assert result.status == "blocked"
+    assert result.items[0].status == "failed"
+    assert "rpm channel is required" in result.items[0].message
 
 
 @pytest.mark.parametrize("method", ("fft_time", "order_time"))
@@ -4181,6 +4211,142 @@ def test_metadata_probe_programming_error_is_not_hidden(tmp_path):
         BatchRunner({}, source_registry=Registry()).preview_outputs(
             preset, tmp_path / "preview",
         )
+
+
+def _split_hdf_preview_fixture(tmp_path, *, source_count=4):
+    """One physical HDF that expanded into several logical sub-sources.
+
+    This is the shape ``io.source_adapters._loaded_groups`` produces when an
+    HDF splits by sample rate: several ``source_id`` values behind one path,
+    none of them resolved at planning time because planning is no-load.  The
+    runner therefore plans a group per sub-source without knowing which of
+    them actually holds the selected channel.
+    """
+
+    physical_path = tmp_path / "eps-run.hdf"
+    physical_path.write_bytes(b"hdf container")
+    source_ids = tuple(f"hdf:eps-run:{index}" for index in range(source_count))
+    preset = AnalysisPreset.free_config(
+        name="multi sub-source",
+        method="time",
+        target_signals=("MotorSpeed",),
+        params={"render_group_by": "source", "render_layout": "overlay"},
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+    preset = replace(
+        preset,
+        source_ids=source_ids,
+        source_paths=(str(physical_path),) * source_count,
+    )
+    runner = BatchRunner({})
+    for source_id in source_ids:
+        runner._register_source_locator(source_id, physical_path)
+    return runner, preset, source_ids
+
+
+def _planned_group_for(runner, preset, source_id, channel):
+    """Independently rebuild the single-source group for *source_id*."""
+
+    from mf4_analyzer.batch_grouping import RenderTask, group_render_tasks
+
+    params = normalize_batch_params(preset.params, preset.method)
+    identity = runner._build_unresolved_task_identity(
+        source_id, channel=channel, method=preset.method, params=params,
+    )
+    return group_render_tasks(
+        (RenderTask(source_id, channel, identity),), params,
+    )[0]
+
+
+def test_preview_representative_is_unchanged_without_a_channel_map(tmp_path):
+    """The optional argument must not move the historical planning result."""
+
+    runner, preset, source_ids = _split_hdf_preview_fixture(tmp_path)
+    out = tmp_path / "out"
+
+    implicit = runner.preview_outputs(preset, out)
+    explicit_none = runner.preview_outputs(preset, out, source_channels=None)
+    empty_map = runner.preview_outputs(preset, out, source_channels={})
+
+    assert implicit == explicit_none == empty_map
+    group = implicit.representative_group
+    assert group is not None
+    assert group.total_groups == 4
+    assert group.ordinal == 1
+    assert group.channel_available is True
+    first = _planned_group_for(runner, preset, source_ids[0], "MotorSpeed")
+    assert group.group_id == first.identity.group_id
+
+
+def test_preview_representative_skips_sub_sources_without_the_channel(tmp_path):
+    """Pick a group the user can actually see rendered, with its real ordinal.
+
+    The acceptance failure: an HDF split into four sub-sources, the selected
+    channel lived in only two, and the preview unconditionally took group one.
+    """
+
+    runner, preset, source_ids = _split_hdf_preview_fixture(tmp_path)
+    source_channels = {
+        source_ids[0]: frozenset({"Time", "SteeringTorque"}),
+        source_ids[1]: frozenset({"Time", "SteeringTorque"}),
+        source_ids[2]: frozenset({"Time", "MotorSpeed"}),
+        source_ids[3]: frozenset({"Time", "MotorSpeed"}),
+    }
+
+    plan = runner.preview_outputs(
+        preset, tmp_path / "out", source_channels=source_channels,
+    )
+
+    group = plan.representative_group
+    expected = _planned_group_for(runner, preset, source_ids[2], "MotorSpeed")
+    assert group.channel_available is True
+    assert group.group_id == expected.identity.group_id
+    assert group.planned_stem == expected.identity.stem
+    # The real index, not the hardcoded 1 the dialog used to display.
+    assert group.ordinal == 3
+    assert group.total_groups == 4
+
+
+def test_preview_representative_reports_when_no_sub_source_has_the_channel(
+    tmp_path,
+):
+    """Fall back to group one, but say so rather than previewing silently."""
+
+    runner, preset, source_ids = _split_hdf_preview_fixture(tmp_path)
+    source_channels = {
+        source_id: frozenset({"Time", "SteeringTorque"})
+        for source_id in source_ids
+    }
+
+    plan = runner.preview_outputs(
+        preset, tmp_path / "out", source_channels=source_channels,
+    )
+
+    group = plan.representative_group
+    first = _planned_group_for(runner, preset, source_ids[0], "MotorSpeed")
+    assert group.channel_available is False
+    assert group.group_id == first.identity.group_id
+    assert group.ordinal == 1
+
+
+def test_preview_representative_ignores_sources_missing_from_the_channel_map(
+    tmp_path,
+):
+    """An unlisted source is unknown, not empty — it must not disqualify."""
+
+    runner, preset, source_ids = _split_hdf_preview_fixture(tmp_path)
+
+    plan = runner.preview_outputs(
+        preset,
+        tmp_path / "out",
+        source_channels={source_ids[1]: frozenset({"SteeringTorque"})},
+    )
+
+    group = plan.representative_group
+    first = _planned_group_for(runner, preset, source_ids[0], "MotorSpeed")
+    assert group.channel_available is True
+    assert group.ordinal == 1
+    assert group.group_id == first.identity.group_id
 
 
 def test_group_checksum_cancellation_marks_run_and_manifest_cancelled(

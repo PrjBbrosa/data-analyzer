@@ -45,6 +45,26 @@ def test_param_form_renders_per_method(qtbot):
         form.visible_field_names())
 
 
+def test_param_form_order_time_has_no_manual_rpm_controls(qtbot):
+    """Design 2026-08-03 D-C1: batch order analysis dropped manual RPM.
+    The panel must show neither the RPM-mode selector nor the manual-RPM
+    spinbox, and the underlying widgets must not exist at all (not just be
+    hidden) -- this is a removal, not a visibility toggle."""
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("order_time")
+
+    assert "rpm_mode" not in form.visible_field_names()
+    assert "manual_rpm" not in form.visible_field_names()
+    assert "rpm_mode" not in form._widgets
+    assert "manual_rpm" not in form._widgets
+    assert not hasattr(form, "_w_rpm_mode")
+    assert not hasattr(form, "_w_manual_rpm")
+    assert not hasattr(form, "_sync_rpm_mode")
+
+
 def test_param_form_no_longer_renders_rpm_factor(qtbot):
     """rpm_factor moved to the InputPanel — method_buttons must not
     render it any more (avoids two competing UI sources of the same key)."""
@@ -269,6 +289,25 @@ def test_time_x_dependency_uses_one_stable_right_grid_slot(qtbot):
     )
 
 
+def test_batch_analysis_panel_drops_preset_source_note_widget(qtbot):
+    # C3: the "从单文件预设槽 1 借名" note was redundant with the
+    # "与单次分析同步" badge already shown next to the preset title. The
+    # widget itself must be gone, not just emptied -- an empty QLabel would
+    # still reserve a row of height in this compact layout.
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
+
+    panel = AnalysisPanel()
+    qtbot.addWidget(panel)
+    panel.set_method("order_time")
+
+    assert not hasattr(panel, "_preset_source_note")
+    assert panel.findChildren(QLabel, "BatchPresetSourceNote") == []
+    # Only the head row (title + sync badge) and the preset-card row remain.
+    assert panel._preset_host.layout().count() == 2
+
+
 def test_preset_cards_use_contract_fonts_and_heights(qtbot):
     from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel, _PresetCard
 
@@ -305,7 +344,6 @@ def test_preset_cards_use_contract_fonts_and_heights(qtbot):
         ("order_time", {
             "window": "bartlett", "nfft_mode": "fixed", "nfft": 2048,
             "max_order": 45.0, "order_res": 0.025, "time_res": 0.2,
-            "rpm_mode": "manual", "manual_rpm": 1800.0,
             "samples_per_rev": 1024, "weighting": "A",
         }),
         ("time", {
@@ -569,7 +607,9 @@ def test_batch_builtin_preset_bar_uses_shared_provider_and_partial_apply(qtbot):
     panel = AnalysisPanel()
     qtbot.addWidget(panel)
     panel.set_method("order_time")
-    panel.apply_params({"window": "kaiser", "manual_rpm": 1234.0})
+    # ``weighting`` is not declared by the order_time builtin patches, so it
+    # is the field that proves "partial apply" only touches declared keys.
+    panel.apply_params({"window": "kaiser", "weighting": "A"})
     emitted = []
     panel.presetApplied.connect(lambda key, patch: emitted.append((key, patch)))
     panel._preset_buttons["torque"].click()
@@ -581,7 +621,12 @@ def test_batch_builtin_preset_bar_uses_shared_provider_and_partial_apply(qtbot):
     assert params["nfft"] is None
     for key in ("max_order", "order_res", "time_res", "samples_per_rev"):
         assert params[key] == expected[key]
-    assert params["window"] == "kaiser"
+    # C2: order_time now declares `window`, so applying the "frequency"
+    # (torque) preset overwrites a previously custom window with flattop,
+    # aligned with fft / fft_time. This is the deliberate behavior change.
+    assert params["window"] == "flattop"
+    # A field the preset patch does NOT declare stays untouched.
+    assert params["weighting"] == "A"
 
 
 def test_batch_time_hides_complete_preset_host_and_fft_restores_it(qtbot):

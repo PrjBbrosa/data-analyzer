@@ -8,6 +8,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from ..batch_statistics import BatchChartDiagnostic, BatchStatisticRow
+from ._palette import MAX_SLICE_POSITIONS
 
 
 def _freeze_fact_value(value: Any):
@@ -115,7 +116,123 @@ class BatchTimeFigureSpec:
         object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
 
 
+@dataclass(frozen=True)
+class BatchSlicePick:
+    """One resolved slice position: where the user aimed, where it landed."""
+
+    index: int
+    value: float
+    requested: float
+    clamped: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "index", int(self.index))
+        object.__setattr__(self, "value", float(self.value))
+        object.__setattr__(self, "requested", float(self.requested))
+        object.__setattr__(self, "clamped", bool(self.clamped))
+
+
+@dataclass(frozen=True)
+class BatchSlicePlan:
+    """Every slice a heatmap page will draw, already snapped to the grid.
+
+    ``axis`` names the *fixed* dimension, matching the recipe field:
+
+    ``"time"``
+        A fixed instant. The curve is amplitude vs frequency/order, so it reads
+        along the matrix' Y coordinates and the main image gets vertical
+        marker lines.
+    ``"y"``
+        A fixed frequency/order. The curve is amplitude vs time, so it reads
+        along the matrix' X coordinates and the marker lines are horizontal.
+    """
+
+    axis: str = "time"
+    picks: tuple[BatchSlicePick, ...] = ()
+    merged: int = 0
+
+    def __post_init__(self) -> None:
+        axis = str(self.axis).strip().lower()
+        object.__setattr__(self, "axis", axis if axis in {"time", "y"} else "time")
+        object.__setattr__(self, "picks", tuple(self.picks))
+        object.__setattr__(self, "merged", int(self.merged))
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.picks)
+
+    @property
+    def clamped_picks(self) -> tuple[BatchSlicePick, ...]:
+        return tuple(pick for pick in self.picks if pick.clamped)
+
+
+def _slice_positions(params: Mapping[str, Any] | None) -> tuple[str, list[float]]:
+    """Read ``params['slice']`` defensively into ``(axis, positions)``."""
+    spec = (params or {}).get("slice")
+    if not isinstance(spec, Mapping) or not bool(spec.get("enabled", False)):
+        return "time", []
+    axis = str(spec.get("axis", "time") or "time").strip().lower()
+    if axis not in {"time", "y"}:
+        axis = "time"
+    raw = spec.get("positions", ())
+    if not isinstance(raw, (tuple, list)):
+        return axis, []
+    positions: list[float] = []
+    for item in raw:
+        if isinstance(item, bool) or not isinstance(item, (int, float, np.floating, np.integer)):
+            continue
+        number = float(item)
+        if np.isfinite(number):
+            positions.append(number)
+    return axis, positions
+
+
+def plan_heatmap_slice(x_values, y_values, params) -> BatchSlicePlan:
+    """Resolve recipe slice positions against a heatmap's own coordinates.
+
+    Each requested position snaps to the nearest grid center, exactly as the
+    single-file canvas' ``_seed_slice`` does (``argmin(|coords - value|)``), so
+    the exported curve is a real matrix column/row and never an interpolation.
+
+    A position outside the file's data range is *clamped* to the nearest edge
+    rather than failing (design D12): a batch that mixes a 30 s file with a
+    ``t=45 s`` recipe must still produce a page. Clamping can make two requests
+    land on the same cell, so the picks are de-duplicated afterwards and the
+    number of dropped requests is reported in :attr:`BatchSlicePlan.merged`
+    (design D13).
+    """
+    axis, positions = _slice_positions(params)
+    if not positions:
+        return BatchSlicePlan(axis=axis)
+    source = x_values if axis == "time" else y_values
+    coords = np.asarray(source, dtype=float)
+    finite = np.flatnonzero(np.isfinite(coords))
+    if finite.size == 0:
+        return BatchSlicePlan(axis=axis)
+    low = float(np.min(coords[finite]))
+    high = float(np.max(coords[finite]))
+    picks: list[BatchSlicePick] = []
+    seen: set[int] = set()
+    merged = 0
+    for requested in positions[:MAX_SLICE_POSITIONS]:
+        index = int(finite[int(np.argmin(np.abs(coords[finite] - requested)))])
+        if index in seen:
+            merged += 1
+            continue
+        seen.add(index)
+        picks.append(
+            BatchSlicePick(
+                index=index,
+                value=float(coords[index]),
+                requested=requested,
+                clamped=not (low <= requested <= high),
+            )
+        )
+    return BatchSlicePlan(axis=axis, picks=tuple(picks), merged=merged)
+
+
 __all__ = [
     "BatchChartDiagnostic", "BatchRenderContext", "BatchSeries",
-    "BatchStatisticRow", "BatchTimeFigureSpec",
+    "BatchSlicePick", "BatchSlicePlan", "BatchStatisticRow",
+    "BatchTimeFigureSpec", "plan_heatmap_slice",
 ]

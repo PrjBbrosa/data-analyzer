@@ -43,6 +43,7 @@ EXPECTED_ORDER = {
         "nfft": "自动",
         "samples_per_rev": 256,
         "amplitude_mode": "Amplitude dB",
+        "window": "flattop",
     },
     "vibration": {
         "max_order": 50,
@@ -51,6 +52,7 @@ EXPECTED_ORDER = {
         "nfft": "自动",
         "samples_per_rev": 512,
         "amplitude_mode": "Amplitude dB",
+        "window": "hanning",
     },
     "transient": {
         "max_order": 30,
@@ -59,6 +61,7 @@ EXPECTED_ORDER = {
         "nfft": "自动",
         "samples_per_rev": 256,
         "amplitude_mode": "Amplitude dB",
+        "window": "hanning",
     },
 }
 
@@ -85,7 +88,20 @@ def test_provider_has_canonical_methods_and_stable_slot_order():
 def test_fft_and_order_values_match_the_existing_contextual_contract():
     assert _params_by_key("fft") == EXPECTED_FFT
     assert _params_by_key("order_time") == EXPECTED_ORDER
-    assert all("window" not in patch for patch in EXPECTED_ORDER.values())
+
+
+def test_order_time_window_is_aligned_with_fft_and_fft_time():
+    # C2: order_time presets now declare `window`, matching fft / fft_time
+    # one-to-one (torque -> flattop, vibration/transient -> hanning). This
+    # is a deliberate behavior change: applying the order "frequency"
+    # (torque) preset switches the live window from hanning to flattop,
+    # for both single-file analysis and batch (analysis_presets is shared).
+    order_presets = _params_by_key("order_time")
+    assert order_presets["torque"]["window"] == "flattop"
+    assert order_presets["vibration"]["window"] == "hanning"
+    assert order_presets["transient"]["window"] == "hanning"
+    for key in ("torque", "vibration", "transient"):
+        assert order_presets[key]["window"] == EXPECTED_FFT[key]["window"]
 
 
 def test_fft_time_values_match_existing_full_contextual_contract():

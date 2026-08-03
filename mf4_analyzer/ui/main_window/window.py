@@ -3280,14 +3280,44 @@ class MainWindow(
             if sig is None or sig[0] not in self.files:
                 self.toast("当前单次预设已失效，请改用自由配置", "warning")
                 current_preset = None
+        # Batch order analysis retired the fixed-RPM mode that the
+        # single-analysis view still offers.  ``_build_current_batch_preset``
+        # already strips the retired keys, so the run would otherwise fail
+        # per item with a generic "rpm channel is required" — say it here,
+        # while the user still remembers typing the RPM value.  The preset is
+        # kept: everything except the RPM source is still valid, so the Sheet
+        # opens pre-filled and only the channel is left to pick.
+        if (current_preset is not None
+                and current_preset.method == 'order_time'
+                and self._order_view_uses_manual_rpm()):
+            self.toast(
+                "批处理阶次分析不支持固定 RPM，请在批处理里指定 RPM 通道",
+                "warning",
+            )
         dlg = BatchSheet(self, self.files, current_preset=current_preset)
         # BatchSheet._on_run_clicked is the only live execution path.  exec_()
         # ends only when the sheet closes; do not launch a duplicate runner
         # after it returns Accepted.
         dlg.exec_()
 
+    def _order_view_uses_manual_rpm(self) -> bool:
+        """True when the live order view is driving off a fixed RPM value.
+
+        Batch order analysis no longer accepts one, so ``open_batch`` warns
+        about it at hand-off time.  Guarded with ``getattr`` because tests
+        substitute lightweight order contexts.
+        """
+        rpm_mode = getattr(self.inspector.order_ctx, 'rpm_mode', None)
+        if not callable(rpm_mode):
+            return False
+        try:
+            return str(rpm_mode()) == 'manual'
+        except Exception:
+            return False
+
     def _build_current_batch_preset(self):
         from ...batch import AnalysisPreset
+        from ...batch_recipe import normalize_batch_params
 
         mode = self.toolbar.current_mode()
         if mode == 'time':
@@ -3372,6 +3402,17 @@ class MainWindow(
             params['rpm_factor'] = self.inspector.order_ctx.rpm_factor()
             if self.inspector.top.range_enabled():
                 params['time_range'] = self.inspector.top.range_values()
+            # Hand batch only what batch still accepts.  The order view emits
+            # ``rpm_mode``/``manual_rpm`` unconditionally, and batch retired
+            # both; forwarding them verbatim built a preset that could only
+            # fail deep inside the run.  Normalizing here — rather than
+            # popping a hard-coded pair — means any future retirement is
+            # followed automatically, because ``normalize_batch_params`` is
+            # the single definition of what a batch recipe may carry.  It
+            # also drops ``time_range``, which batch order discards by design
+            # (the matrix must span the full valid time domain) and which the
+            # Batch sheet only ever surfaces for the FFT method.
+            params = normalize_batch_params(params, 'order_time')
             return AnalysisPreset.from_current_single(
                 name="当前时间-阶次",
                 method="order_time",

@@ -298,6 +298,66 @@ def test_three_significant_range_visits_still_replace_rows_with_a_diagnostic():
     )]
 
 
+def test_custom_range_with_missing_bounds_blocks_rows_instead_of_silently_using_full():
+    """A `custom` request without usable bounds must not fall back to 全程."""
+    from mf4_analyzer.batch_statistics import plan_chart_statistics
+
+    config = {
+        "enabled": True, "range_mode": "custom", "x_min": None, "x_max": None,
+        "metrics": ["max", "min", "mean"],
+    }
+    plan = plan_chart_statistics(
+        (_series([0, 1, 2, 1, 0], [0, 1, 2, 3, 4]),), config,
+        x_source="channel", x_origin="absolute",
+    )
+
+    assert plan.rows == ()
+    assert [item.code for item in plan.diagnostics] == [
+        "chart_statistics.custom_range_unavailable",
+    ]
+
+
+def test_custom_range_with_non_finite_bounds_also_blocks_rows():
+    from mf4_analyzer.batch_statistics import plan_chart_statistics
+
+    config = {
+        "enabled": True, "range_mode": "custom",
+        "x_min": float("nan"), "x_max": float("inf"),
+        "metrics": ["max", "min", "mean"],
+    }
+    plan = plan_chart_statistics(
+        (_series([0, 1, 2, 1, 0], [0, 1, 2, 3, 4]),), config,
+        x_source="channel", x_origin="absolute",
+    )
+
+    assert plan.rows == ()
+    assert [item.code for item in plan.diagnostics] == [
+        "chart_statistics.custom_range_unavailable",
+    ]
+
+
+def test_custom_range_unavailable_blocks_every_panel_present():
+    """The failure is a config-level property, not a per-panel one."""
+    from mf4_analyzer.batch_statistics import plan_chart_statistics
+
+    config = {
+        "enabled": True, "range_mode": "custom", "x_min": None, "x_max": None,
+        "metrics": ["max", "min", "mean"],
+    }
+    plan = plan_chart_statistics(
+        (
+            _series([0, 1, 2, 1, 0], [0, 1, 2, 3, 4], key="a", panel=0),
+            _series([0, 1, 2, 1, 0], [4, 3, 2, 1, 0], key="b", panel=1),
+        ), config, x_source="channel", x_origin="absolute",
+    )
+
+    assert plan.rows == ()
+    assert {item.panel for item in plan.diagnostics} == {0, 1}
+    assert {item.code for item in plan.diagnostics} == {
+        "chart_statistics.custom_range_unavailable",
+    }
+
+
 def test_two_same_direction_range_visits_replace_rows_with_a_diagnostic():
     """Two valid X↑ visits cannot be presented as a matched out-and-back pair."""
     from mf4_analyzer.batch_statistics import plan_chart_statistics

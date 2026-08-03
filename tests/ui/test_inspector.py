@@ -255,6 +255,278 @@ def test_order_contextual_params(qapp):
         assert k in p
 
 
+# ---- 2026-08-03: 阶次 window picker (方案 B) ----
+# F6 gave the order_time built-in presets a ``window`` (频率 -> flattop,
+# 均衡 / 时间 -> hanning) to match fft / fft_time. The batch runner picked it
+# up, but the single-shot order inspector had no window control at all, so
+# _order_mixin's ``op.get('window', 'hanning')`` fallback always won and the
+# two sides disagreed while the batch panel still advertised 与单次分析同步.
+# These tests pin the control, the round-trip, and — most importantly — that
+# the picked window actually reaches the COT math.
+
+def _combo_items(combo):
+    return [combo.itemText(i) for i in range(combo.count())]
+
+
+def _form_label_text_for(host_widget, field_widget):
+    """Return the QFormLayout label text of the row holding ``field_widget``.
+
+    ``_fit_field`` wraps each field in an alignment host, so match on
+    ancestry rather than identity.
+    """
+    from PyQt5.QtWidgets import QFormLayout, QLabel
+
+    for fl in host_widget.findChildren(QFormLayout):
+        for row in range(fl.rowCount()):
+            f_item = fl.itemAt(row, QFormLayout.FieldRole)
+            l_item = fl.itemAt(row, QFormLayout.LabelRole)
+            if f_item is None or l_item is None:
+                continue
+            field = f_item.widget()
+            label = l_item.widget()
+            if field is None or not isinstance(label, QLabel):
+                continue
+            if field is field_widget or field.isAncestorOf(field_widget):
+                return label.text()
+    return None
+
+
+def test_order_contextual_window_picker_mirrors_fft(qapp):
+    """The order 窗函数 picker is a real, labelled, editable form row whose
+    option set is FFTContextual's verbatim — not a hidden state holder."""
+    from mf4_analyzer.ui.inspector_sections import FFTContextual, OrderContextual
+
+    oc = OrderContextual()
+    fc = FFTContextual()
+
+    assert hasattr(oc, 'combo_win'), \
+        "OrderContextual must expose combo_win (same attribute name as FFT)"
+    assert _combo_items(oc.combo_win) == _combo_items(fc.combo_win), (
+        "order window options must be copied from FFTContextual verbatim, "
+        f"got {_combo_items(oc.combo_win)} vs {_combo_items(fc.combo_win)}"
+    )
+    # Default must reproduce the pre-change effective behaviour, i.e. the
+    # ``op.get('window', 'hanning')`` fallback in _order_mixin.
+    assert oc.combo_win.currentText() == 'hanning'
+    assert oc.combo_win.isEnabled()
+    assert not oc.combo_win.isHidden()
+    assert _form_label_text_for(oc, oc.combo_win) == "窗函数:", \
+        "combo_win must sit on a labelled 窗函数 form row, like FFT's"
+    assert oc.combo_win.toolTip() == fc.combo_win.toolTip()
+
+
+def test_order_contextual_window_survives_preset_round_trip(qapp):
+    """_collect_preset emits ``window``; _apply_preset consumes it."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    oc = OrderContextual()
+    assert oc._collect_preset()['window'] == 'hanning'
+
+    oc.combo_win.setCurrentText('flattop')
+    snapshot = oc._collect_preset()
+    assert snapshot['window'] == 'flattop'
+    assert oc.get_params()['window'] == 'flattop'
+    assert oc.current_params()['window'] == 'flattop'
+
+    oc.combo_win.setCurrentText('blackman')
+    assert oc._collect_preset()['window'] == 'blackman'
+
+    oc._apply_preset(snapshot)
+    assert oc.combo_win.currentText() == 'flattop'
+    assert oc._collect_preset() == snapshot
+
+    # apply_params (the view-restore path) round-trips too.
+    oc.apply_params({'window': 'kaiser'})
+    assert oc.combo_win.currentText() == 'kaiser'
+    assert oc.get_params()['window'] == 'kaiser'
+
+
+def test_order_builtin_presets_drive_the_window_picker(qapp):
+    """频率 -> flattop, 均衡 / 时间 -> hanning, same as fft / fft_time."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    oc = OrderContextual()
+    expected = {'torque': 'flattop', 'vibration': 'hanning', 'transient': 'hanning'}
+    for key, want in expected.items():
+        params = oc._SIGNAL_BUILTIN_PRESETS[key]
+        assert params['window'] == want, (key, params.get('window'))
+        assert oc.combo_win.findText(want) >= 0, \
+            f"builtin preset {key} wants window {want!r} the combo cannot show"
+        # Start from a window that is neither the target nor the default so a
+        # no-op set cannot make this pass silently.
+        oc.combo_win.setCurrentText('bartlett')
+        oc._apply_preset(params)
+        assert oc.combo_win.currentText() == want, (key, want)
+        assert oc.get_params()['window'] == want
+
+
+def test_order_frequency_preset_window_reaches_the_cot_computation(qapp):
+    """End-to-end: clicking 频率 must make the ORDER MATH use flattop.
+
+    Replays _order_mixin._compute_order_for's param plumbing verbatim
+    (get_params -> _resolve_order_effective_params -> COTParams) and then
+    runs the real COT compute, asserting the amplitudes match a flattop run
+    and differ from a hanning run. Asserting only that the combo displays
+    'flattop' would not catch a break anywhere along that chain.
+    """
+    from dataclasses import replace
+
+    import numpy as np
+
+    from mf4_analyzer.signal.order_cot import COTOrderAnalyzer, COTParams
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    from mf4_analyzer.ui.inspector_sections._helpers import _preset_settings
+    from mf4_analyzer.ui.main_window._order_mixin import OrderMixin
+
+    settings = _preset_settings()
+    for slot in (1, 2, 3):
+        settings.remove(f"order/preset_override/{slot}")
+
+    oc = OrderContextual()
+    assert oc.combo_win.currentText() == 'hanning'
+    # Slot 1 == 频率 (torque); left-click is the production apply path.
+    oc.preset_bar._on_left_click(1)
+    assert oc.combo_win.currentText() == 'flattop'
+
+    # Constant 600 rpm with a pure 2nd-order ripple, 20 s -> 200 revolutions,
+    # comfortably more than the auto-NFFT resolver needs.
+    fs, dur, rpm_const = 1000.0, 20.0, 600.0
+    t = np.arange(int(fs * dur)) / fs
+    rpm = np.full_like(t, rpm_const)
+    sig = np.sin(2 * np.pi * (2.0 * rpm_const / 60.0) * t)
+
+    # --- verbatim replay of _order_mixin._compute_order_for ---
+    order_params = oc.current_params()
+    op = dict(oc.get_params())
+    op['samples_per_rev'] = int(order_params.get('samples_per_rev', 256))
+    op = OrderMixin._resolve_order_effective_params(op, rpm, t)
+    assert op.get('window', 'hanning') == 'flattop', (
+        "get_params() must carry the picker's window — that is the dict "
+        "_order_mixin builds COTParams from"
+    )
+    cot = COTParams(
+        samples_per_rev=int(op.get('samples_per_rev', 256)),
+        nfft=int(op.get('nfft_effective', op['nfft'])),
+        window=op.get('window', 'hanning'),
+        max_order=float(op['max_order']),
+        order_res=float(op['order_res']),
+        time_res=float(op['time_res']),
+        fs=fs,
+        weighting=str(op.get('weighting', 'None')),
+    )
+    assert cot.window == 'flattop'
+
+    res_preset = COTOrderAnalyzer.compute(sig, rpm, t, cot)
+    res_flattop = COTOrderAnalyzer.compute(
+        sig, rpm, t, replace(cot, window='flattop'))
+    res_hanning = COTOrderAnalyzer.compute(
+        sig, rpm, t, replace(cot, window='hanning'))
+
+    np.testing.assert_allclose(res_preset.amplitude, res_flattop.amplitude)
+    assert not np.allclose(res_preset.amplitude, res_hanning.amplitude), (
+        "applying 频率 must actually COMPUTE with flattop; output identical "
+        "to hanning means the picker never reached COT"
+    )
+
+    # And the recompute gate: window is a registered cache-key field, so the
+    # two windows must produce different analysis cache keys.
+    key_flattop = OrderMixin._order_compute_cache_params(
+        dict(op, window='flattop'), None, None)
+    key_hanning = OrderMixin._order_compute_cache_params(
+        dict(op, window='hanning'), None, None)
+    assert key_flattop != key_hanning
+    assert key_flattop['window'] == 'flattop'
+
+
+def test_order_window_row_fits_288px_pane_with_production_qss(qapp, qtbot):
+    """The added 窗函数 row must not break the narrow-column contract.
+
+    Offscreen rendering here is a layout draft only (this box has no CJK
+    font), so this asserts geometry — label not elided, field inside the
+    pane, label column not widened — never appearance.
+    """
+    from pathlib import Path
+
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        insp = Inspector()
+        qtbot.addWidget(insp)
+        insp.resize(288, 900)
+        insp.set_mode('order')
+        oc = insp.order_ctx
+        # 谱参数 persists collapsed by default — expand it so the new row is
+        # actually laid out.
+        oc._order_section.set_expanded(True)
+        insp.show()
+        qtbot.waitExposed(insp)
+        qapp.processEvents()
+
+        assert oc.combo_win.isVisible()
+
+        label_text = _form_label_text_for(oc, oc.combo_win)
+        assert label_text == "窗函数:"
+
+        # _enforce_label_widths(unify_columns=True) pins every 谱参数 label to
+        # one column width. Adding 窗函数 must not create an outlier — every
+        # label in the form holding combo_win keeps the shared width, and no
+        # label is narrower than its own sizeHint (which would elide it).
+        #
+        # NOTE: this box has no CJK font, so comparing CJK sizeHint widths
+        # against each other is meaningless (every Chinese label measures the
+        # same fallback-glyph width). Uniformity and overflow are the two
+        # font-independent invariants, so those are what this asserts.
+        from PyQt5.QtWidgets import QFormLayout, QLabel
+
+        win_form = None
+        for fl in oc.findChildren(QFormLayout):
+            for row in range(fl.rowCount()):
+                f_item = fl.itemAt(row, QFormLayout.FieldRole)
+                field = f_item.widget() if f_item is not None else None
+                if field is not None and (
+                    field is oc.combo_win or field.isAncestorOf(oc.combo_win)
+                ):
+                    win_form = fl
+        assert win_form is not None
+
+        pinned = {}
+        for row in range(win_form.rowCount()):
+            item = win_form.itemAt(row, QFormLayout.LabelRole)
+            w = item.widget() if item is not None else None
+            if isinstance(w, QLabel) and w.text().strip():
+                pinned[w.text()] = w.minimumWidth()
+                assert w.minimumWidth() >= w.sizeHint().width(), (
+                    f"label {w.text()!r} would elide at 288px"
+                )
+        assert "窗函数:" in pinned
+        assert len(set(pinned.values())) == 1, (
+            "谱参数 labels must share one pinned column width after adding "
+            f"窗函数; got {pinned}"
+        )
+
+        # Field stays inside the scroll body, and the pane does not gain a
+        # horizontal scrollbar (the real 288px overflow symptom).
+        body = insp._scroll_body
+        host = oc.combo_win.parentWidget()
+        host_right = host.mapTo(body, host.rect().topRight()).x()
+        assert host_right <= body.width(), (
+            f"窗函数 field right edge {host_right}px overflows the "
+            f"{body.width()}px inspector body at a 288px pane"
+        )
+        assert insp._scroll.horizontalScrollBar().maximum() == 0, (
+            "adding the 窗函数 row must not make the 288px inspector pane "
+            "scroll horizontally"
+        )
+        insp.hide()
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 def test_order_contextual_emits(qapp, qtbot):
     from mf4_analyzer.ui.inspector_sections import OrderContextual
     oc = OrderContextual()
@@ -1399,7 +1671,7 @@ def test_order_contextual_field_widgets_have_max_width(qapp):
     oc = OrderContextual()
     fields = [
         oc.spin_mo, oc.spin_order_res, oc.spin_time_res,
-        oc.combo_nfft, oc.spin_rf,
+        oc.combo_nfft, oc.combo_win, oc.spin_rf,
     ]
     for f in fields:
         # 16777215 is QWIDGETSIZE_MAX (no cap). We need a real cap.
@@ -4684,9 +4956,16 @@ def test_order_builtin_presets_apply_through_combos(qapp):
         for preset in list_builtin_presets('order_time')
     }
     assert oc._SIGNAL_BUILTIN_PRESETS == expected
+    expected_window = {
+        'torque': 'flattop', 'vibration': 'hanning', 'transient': 'hanning',
+    }
     for key in BUILTIN_PRESET_KEYS:
         p = oc._SIGNAL_BUILTIN_PRESETS[key]
-        assert 'window' not in p
+        # C2: order_time presets now declare `window`, aligned with fft /
+        # fft_time (torque -> flattop, vibration/transient -> hanning).
+        # OrderContextual has no combo_win, so this only exercises the raw
+        # patch dict, not a live control.
+        assert p['window'] == expected_window[key]
         assert oc.spin_mo.minimum() <= p['max_order'] <= oc.spin_mo.maximum()
         assert _combo_text_hits(oc.combo_nfft, p['nfft']), (key, p['nfft'])
         target = 'dB' if 'dB' in p['amplitude_mode'] else 'Linear'

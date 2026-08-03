@@ -82,6 +82,96 @@ def _legacy_image_format_warning(requested_format: object) -> str:
     return f'旧预设图像格式 {requested} 已迁移为 PNG；本次仅输出 PNG。'
 _XLSX_MAX_DATA_ROWS = 1_048_575
 
+#: CSV cannot hold the two sheets a slice workbook needs, and
+#: ``reserve_output_paths`` publishes exactly one file per extension, so
+#: splitting into several csv files would break the write-set's atomicity.
+#: Degrading to the historical long table costs nothing a csv reader had
+#: before and keeps the run green (design D22).
+_SLICE_CSV_FALLBACK_WARNING = (
+    'slice.csv_fallback: 切片工作簿需要 xlsx 格式，当前数据格式为 CSV，'
+    '本次数据文件仍为完整长表'
+)
+
+#: Sheet name and column prefix per *fixed* dimension, keyed by the
+#: ``_Spectro2D`` axis name that dimension carries (design §6.2).
+_SLICE_AXIS_LABELS = {
+    'time_s': ('时间', '时间切片', 't', 's', 2),
+    'frequency_hz': ('频率', '频率切片', 'f', 'Hz', 1),
+    'order': ('阶次', '阶次切片', '阶次', '', 2),
+}
+
+
+def _slice_axis_labels(axis_name: str):
+    """``(dimension, sheet, prefix, unit, decimals)`` for one matrix axis."""
+    return _SLICE_AXIS_LABELS.get(
+        str(axis_name or '').strip().lower(), ('切片', '切片', axis_name, '', 2)
+    )
+
+
+def _load_slice_render_contract():
+    """The renderer's own slice helpers, or ``None`` when it is not installed.
+
+    Acceptance item 11 requires the workbook to reproduce the *drawn* curve
+    exactly, so the grid snapping (``plan_heatmap_slice``), the amplitude scale
+    decision (``_render_in_db``) and the dB reference lookup all come from the
+    renderer rather than from a second implementation here. Two calculation
+    paths would be free to drift; one cannot.
+
+    ``batch.py`` itself stays GUI-free: this import happens only when a slice
+    workbook is actually about to be written, and the caller falls back to the
+    historical long table when the optional Qt renderer is absent -- in that
+    case no curve was drawn, so there is nothing for the table to match.
+    """
+    try:
+        from .batch_render_qt._builder import (
+            _linear_amplitude_label,
+            _render_in_db,
+            _slice_clamp_warning,
+        )
+        from .batch_render_qt._models import plan_heatmap_slice
+        from .batch_render_qt._page import _DEFAULT_METHOD, effective_fact_items
+    except ImportError as exc:
+        if not is_optional_renderer_import_error(exc):
+            raise
+        return None
+    return SimpleNamespace(
+        plan_heatmap_slice=plan_heatmap_slice,
+        render_in_db=_render_in_db,
+        linear_amplitude_label=_linear_amplitude_label,
+        # Same wording the chart emits, so a run that exports both artifacts
+        # cannot report the same clamp twice in two different phrasings.
+        slice_clamp_warning=_slice_clamp_warning,
+        # Same picker the page header uses, so the workbook can never say
+        # ``NFFT=512`` under a chart drawn with ``NFFT=1024`` (plan §5.2).
+        effective_fact_items=effective_fact_items,
+        method_labels=_DEFAULT_METHOD,
+    )
+
+
+#: ``effective_fact_items`` emits ``key=value`` strings sized for a one-line
+#: page header. The workbook has a whole column, so each key gets a readable
+#: Chinese label -- the *values* still arrive from that one shared function.
+_SLICE_FACT_LABELS = {
+    'window': '窗',
+    'NFFT': 'NFFT',
+    'weighting': '计权',
+    'averaging': '平均',
+    'overlap': '重叠',
+    'Fs': '采样率 Fs',
+    'members': '成员',
+}
+
+
+def _slice_fact_rows(items) -> list[tuple[str, str]]:
+    rows = []
+    for item in items:
+        text = str(item)
+        key, sep, value = text.partition('=')
+        if not sep:
+            continue
+        rows.append((_SLICE_FACT_LABELS.get(key, key), value))
+    return rows
+
 
 @dataclass(frozen=True)
 class BatchOutput:
@@ -136,6 +226,10 @@ class BatchRepresentativeGroup:
     planned_stem: str
     ordinal: int
     total_groups: int
+    # False only when the caller supplied a source→channel map and *no*
+    # planned group turned out to hold the selected channels.  Defaults to
+    # True so callers that plan without the map keep the old contract.
+    channel_available: bool = True
 
 
 @dataclass(frozen=True)
@@ -544,8 +638,45 @@ class BatchRunner:
             ).strip(),
         }
 
-    def preview_outputs(self, preset, output_dir) -> BatchOutputPreview:
-        """Return UI-safe output counts without loading unresolved sources."""
+    @staticmethod
+    def _pick_representative_group(groups, source_channels):
+        """Return ``(ordinal, group, channel_available)`` for the preview.
+
+        One physical file may expand into several logical sources (HDF splits
+        by sample rate), and a selected channel commonly lives in only some of
+        them.  Planning stays deliberately no-load, so the runner cannot see
+        which channels a source holds — but the caller can: BatchSheet already
+        has the probe result.  ``source_channels`` maps a source key to its
+        channel names; sources missing from the map are unknown, not empty, so
+        they never disqualify a group.
+
+        Without the map the first planned group wins, exactly as before.
+        """
+
+        if not source_channels:
+            return 1, groups[0], True
+        known = {
+            key: frozenset(str(name) for name in names)
+            for key, names in source_channels.items()
+        }
+        for ordinal, group in enumerate(groups, start=1):
+            if all(
+                member.channel in known[member.source_key]
+                for member in group.members
+                if member.source_key in known
+            ):
+                return ordinal, group, True
+        return 1, groups[0], False
+
+    def preview_outputs(
+        self, preset, output_dir, *, source_channels=None,
+    ) -> BatchOutputPreview:
+        """Return UI-safe output counts without loading unresolved sources.
+
+        ``source_channels`` is an optional ``{source key: channel names}`` map
+        used only to pick a representative group the user can actually see
+        rendered; omitting it preserves the historical planning result.
+        """
 
         output_issues = validate_outputs(preset.outputs)
         if output_issues:
@@ -630,7 +761,9 @@ class BatchRunner:
         width, height = preset.outputs.resolved_image_dimensions()
         representative = None
         if groups:
-            group = groups[0]
+            ordinal, group, channel_available = self._pick_representative_group(
+                groups, source_channels,
+            )
             representative = BatchRepresentativeGroup(
                 group_id=group.identity.group_id,
                 display_name=group.display_name,
@@ -640,8 +773,9 @@ class BatchRunner:
                     member.source_key for member in group.members
                 }),
                 planned_stem=group.identity.stem,
-                ordinal=1,
+                ordinal=ordinal,
                 total_groups=len(groups),
+                channel_available=channel_available,
             )
         return BatchOutputPreview(
             task_count=len(tasks),
@@ -3691,15 +3825,7 @@ class BatchRunner:
             effective_params['filter'] = dict(preprocessed.effective['filter'])
             effective_params['preprocess'] = dict(preprocessed.effective)
             if method == 'order_time':
-                rpm_mode = str(
-                    requested_params.get('rpm_mode', 'channel') or 'channel'
-                ).strip().lower()
-                if rpm_mode in {'manual', 'fixed', '手动'}:
-                    effective_params['rpm_source'] = {
-                        'mode': 'manual',
-                        'value': float(requested_params.get('manual_rpm')),
-                    }
-                elif preset.rpm_signal is not None:
+                if preset.rpm_signal is not None:
                     effective_params['rpm_source'] = {
                         'mode': 'channel',
                         'source_id': preset.rpm_signal[0],
@@ -3807,35 +3933,12 @@ class BatchRunner:
             image_extension = str(
                 getattr(preset.outputs, 'image_format', 'png')
             ).lower().lstrip('.')
-            export_df = None
-            if preset.outputs.export_data:
-                # Preserve the matrix-first image-only path.
-                if time_df is not None:
-                    export_df = time_df
-                elif fft_df is not None:
-                    export_df = fft_df
-                else:
-                    export_df = spectro.to_long_dataframe()
-            export_frame_factory = None
-            if export_df is not None:
-                if spectro is not None:
-                    export_frame_factory = spectro.to_long_dataframe
-                elif time_df is not None:
-                    export_frame_factory = lambda frame=time_df: frame
-                else:
-                    export_frame_factory = lambda: image_payload[1]
-            export_frame_holder = [export_df] if export_df is not None else []
-            # The holder transfers sole ownership of a heatmap long table to
-            # the data writer. Clearing this local reference ensures the long
-            # table is collectible before a 4K/vector render allocates its
-            # figure/RGBA buffers; image_payload keeps only the matrix result.
-            export_df = None
-
             resolution = None
             colorbar_label = None
             image_params = None
             render_options = None
             render_context = None
+            unit = self._channel_unit(fd, signal_name)
             if 'image' in effective_outputs:
                 migrated_params = db_reference.migrate_legacy_reference_params(
                     effective_params
@@ -3877,18 +3980,6 @@ class BatchRunner:
                     background=str(preset.outputs.image_background),
                     line_width=float(preset.outputs.image_line_width),
                 )
-                channel_meta = (
-                    (getattr(fd, 'channel_metadata', None) or {}).get(
-                        signal_name, {}
-                    ) or {}
-                )
-                unit = (
-                    channel_meta.get('unit')
-                    or (getattr(fd, 'channel_units', None) or {}).get(
-                        signal_name, ''
-                    )
-                    or ''
-                )
                 render_context = BatchRenderContext(
                     source_display_name=str(fd.filename),
                     group=identity.group_identity,
@@ -3899,19 +3990,63 @@ class BatchRunner:
                     effective_facts=effective_params,
                 )
 
+            # Resolved after the image decision on purpose: a slice workbook
+            # must quote the dB reference and the effective facts the *page*
+            # was drawn with, so both read them from the same locals rather
+            # than resolving a second time (design §6.2 / acceptance 11).
+            export_frame_factory = None
+            if preset.outputs.export_data:
+                # Preserve the matrix-first image-only path.
+                if time_df is not None:
+                    export_frame_factory = lambda frame=time_df: frame
+                elif fft_df is not None:
+                    export_frame_factory = lambda: image_payload[1]
+                else:
+                    export_frame_factory = self._slice_workbook_factory(
+                        spectro,
+                        method=method,
+                        params=(
+                            image_params if image_params is not None
+                            else effective_params
+                        ),
+                        fact_params=effective_params,
+                        data_extension=data_extension,
+                        resolution=resolution,
+                        fd=fd,
+                        signal_name=signal_name,
+                        unit=unit,
+                        warnings_out=warnings,
+                        owns_clamp_warning=image_params is None,
+                    ) or spectro.to_long_dataframe
+            # The holder transfers sole ownership of the export payload to the
+            # data writer. Clearing the local reference ensures a heatmap long
+            # table is collectible before a 4K/vector render allocates its
+            # figure/RGBA buffers; image_payload keeps only the matrix result.
+            # A slice workbook is a few hundred rows and does not need that,
+            # but it travels the same way so there is only one shape of
+            # write/retry path to reason about.
+            export_frame_holder = (
+                [export_frame_factory()]
+                if export_frame_factory is not None else []
+            )
+
             while True:
                 attempt_warnings = []
                 writers = {}
                 if export_frame_holder:
                     def write_data(path, holder=export_frame_holder):
-                        frame = holder.pop()
+                        payload = holder.pop()
                         try:
                             self._check_cancel(cancel_token, "data write")
-                            result = self._write_dataframe(frame, path)
+                            result = (
+                                self._write_workbook(payload, path)
+                                if isinstance(payload, dict)
+                                else self._write_dataframe(payload, path)
+                            )
                             self._check_cancel(cancel_token, "data write")
                             return result
                         finally:
-                            del frame
+                            del payload
                             holder.clear()
 
                     writers[data_extension] = write_data
@@ -4011,6 +4146,112 @@ class BatchRunner:
             )
         finally:
             reservation.release()
+
+    def _slice_workbook_factory(
+        self,
+        spectro,
+        *,
+        method: str,
+        params: Mapping[str, Any],
+        fact_params: Mapping[str, Any],
+        data_extension: str,
+        resolution,
+        fd,
+        signal_name: str,
+        unit: str,
+        warnings_out: list,
+        owns_clamp_warning: bool = False,
+    ):
+        """A sheet-dict producer for the slice workbook, or ``None``.
+
+        ``None`` means "keep exporting the historical long table". Three ways
+        to get there, all of them deliberate:
+
+        * the preset enables no slice -- then the data file must stay
+          byte-identical to what the same preset produced before this feature
+          existed (design D21, acceptance 12);
+        * the requested format is csv, which cannot carry two sheets
+          (design D22) -- a warning says so;
+        * the optional Qt renderer is not installed, so no curve was drawn and
+          there is nothing for the table to have to match.
+
+        The returned callable is the *only* producer: it is called once up
+        front and again by the ``OutputPublishRace`` retry, exactly like the
+        long-table factory it replaces.
+
+        ``owns_clamp_warning`` is set when this run writes no image. Design
+        §4.5 gave the out-of-range warning to ``build_heatmap``, which is
+        silent on a data-only run -- and that is exactly the run where nobody
+        sees the chart's own annotation, so the clamp would reach the manifest
+        through no channel at all. The chart still owns it whenever one is
+        drawn, so the two paths can never both report the same clamp.
+        """
+        contract = _load_slice_render_contract()
+        if contract is None:
+            return None
+        plan = contract.plan_heatmap_slice(spectro.x, spectro.y, params)
+        if not plan.enabled:
+            return None
+        if data_extension != 'xlsx':
+            if _SLICE_CSV_FALLBACK_WARNING not in warnings_out:
+                warnings_out.append(_SLICE_CSV_FALLBACK_WARNING)
+            return None
+        if owns_clamp_warning:
+            axis_values = spectro.x if plan.axis == 'time' else spectro.y
+            axis_name = (
+                spectro.x_name if plan.axis == 'time' else spectro.y_name
+            )
+            clamp = contract.slice_clamp_warning(
+                plan,
+                float(np.min(axis_values)),
+                float(np.max(axis_values)),
+                _slice_axis_labels(axis_name)[3],
+            )
+            if clamp is not None and clamp not in warnings_out:
+                warnings_out.append(clamp)
+
+        render_db = bool(contract.render_in_db(method, params))
+        reference = None
+        amplitude_label = contract.linear_amplitude_label(unit)
+        if render_db:
+            if resolution is None:
+                # Data-only run: no image block resolved one, so repeat its
+                # exact call (real channel facts + the injected catalogs)
+                # rather than the renderer's facts-free fallback.
+                migrated = db_reference.migrate_legacy_reference_params(params)
+                resolution = db_reference.resolve_db_reference(
+                    mode=migrated.get('db_reference_mode', 'auto'),
+                    manual_value=migrated.get('db_reference'),
+                    facts=self._channel_reference_facts(fd, signal_name),
+                    user_catalog=self._db_reference_user_catalog,
+                    system_catalog=self._db_reference_system_catalog,
+                    prefer_channel_metadata=self._prefer_channel_metadata,
+                )
+            reference = float(resolution.value)
+            amplitude_label = db_reference.format_amplitude_label(
+                resolution,
+                weighting=str(params.get('weighting', 'None')),
+                output_scale='db',
+            )
+
+        facts = contract.effective_fact_items(fact_params, params)
+        method_label = contract.method_labels.get(method, method)
+        source = str(fd.filename)
+
+        def build_sheets():
+            return spectro.to_slice_sheets(
+                plan,
+                render_db=render_db,
+                reference=reference,
+                amplitude_label=amplitude_label,
+                facts=facts,
+                source=source,
+                channel=signal_name,
+                unit=unit,
+                method=method_label,
+            )
+
+        return build_sheets
 
     @staticmethod
     def _channel_unit(fd, channel: str) -> str:
@@ -4782,10 +5023,6 @@ class BatchRunner:
         )
 
     def _rpm_values(self, fd, preset, *, target_source_id=None):
-        rpm_mode = str(preset.params.get('rpm_mode', '')).strip().lower()
-        if rpm_mode in {'manual', 'fixed', '手动'}:
-            manual_rpm = float(preset.params.get('manual_rpm'))
-            return np.full(len(fd.data), manual_rpm, dtype=float)
         if preset.rpm_signal is not None:
             rpm_source_id, rpm_ch = preset.rpm_signal
             if target_source_id is None:
@@ -4875,6 +5112,34 @@ class BatchRunner:
         return atomic_write(path, write)
 
     @staticmethod
+    def _write_workbook(sheets: "dict[str, pd.DataFrame]", path):
+        """Publish several named sheets as one xlsx, atomically.
+
+        The sibling of :meth:`_write_dataframe` for the slice export: same
+        ``atomic_write`` publication, but the caller names every sheet instead
+        of getting one ``数据N`` series. Unlike the long table a slice sheet is
+        a few hundred rows, so there is nothing to split -- exceeding the xlsx
+        row ceiling here would mean the caller handed over the wrong frame, and
+        silently dropping rows is worse than saying so.
+        """
+        path = Path(path)
+        if path.suffix.lower() != '.xlsx':
+            path = path.with_suffix('.xlsx')
+        for name, frame in sheets.items():
+            if len(frame) > _XLSX_MAX_DATA_ROWS:
+                raise ValueError(
+                    f"worksheet {name!r} has {len(frame)} rows, above the "
+                    f"xlsx limit of {_XLSX_MAX_DATA_ROWS}"
+                )
+
+        def write(temp_path):
+            with pd.ExcelWriter(temp_path, engine='openpyxl') as writer:
+                for name, frame in sheets.items():
+                    frame.to_excel(writer, sheet_name=name, index=False)
+
+        return atomic_write(path, write)
+
+    @staticmethod
     def _write_image(
         payload,
         path,
@@ -4930,6 +5195,132 @@ class _Spectro2D:
     def to_long_dataframe(self) -> pd.DataFrame:
         return _matrix_to_long_dataframe(
             self.x, self.y, self.matrix, self.x_name, self.y_name)
+
+    def slice_curve(self, axis: str, index: int) -> np.ndarray:
+        """Amplitudes along one slice pick, straight off the x-major matrix.
+
+        ``matrix`` here is **x-major**, shape ``(len(x), len(y))`` -- the
+        transpose of what the renderer's ``_extract_heatmap`` hands to
+        ``_builder._slice_curve_values`` (it applies ``x_major.T``). So the
+        indexing is mirrored: fixing a *time* takes a matrix **row** and the
+        curve runs along ``y``; fixing a *frequency/order* takes a **column**
+        and the curve runs along ``x``. ``tests/test_batch_slice_export.py``
+        pins this against the rendered curves point by point, because getting
+        it backwards yields a plausible-looking table of the wrong values.
+        """
+        matrix = np.asarray(self.matrix, dtype=float)
+        if str(axis).strip().lower() == 'time':
+            return matrix[int(index), :]
+        return matrix[:, int(index)]
+
+    def to_slice_sheets(
+        self,
+        plan,
+        *,
+        render_db: bool,
+        reference: float | None = None,
+        amplitude_label: str = '',
+        facts: "Sequence[str]" = (),
+        source: str = '',
+        channel: str = '',
+        unit: str = '',
+        method: str = '',
+    ) -> "dict[str, pd.DataFrame]":
+        """``{"切片信息": df, "<时间|频率|阶次>切片": df}`` for one slice plan.
+
+        One wide sheet with a position per column, so a reader can select a few
+        columns in Excel and get the comparison chart the multi-position slice
+        exists for (design D23), plus a key/value sheet that makes the file
+        self-describing.
+
+        Values are written in the **charted** caliber only -- dB when the page
+        renders dB -- with the caliber and its reference recorded on the info
+        sheet rather than doubling the column count with a parallel linear set
+        (design D24).
+        """
+        fixed_name = self.x_name if plan.axis == 'time' else self.y_name
+        curve_name = self.y_name if plan.axis == 'time' else self.x_name
+        curve_coords = np.asarray(
+            self.y if plan.axis == 'time' else self.x, dtype=float
+        )
+        dimension, sheet_name, prefix, position_unit, decimals = (
+            _slice_axis_labels(fixed_name)
+        )
+
+        columns: dict[str, np.ndarray] = {curve_name: curve_coords}
+        for pick in plan.picks:
+            values = self.slice_curve(plan.axis, pick.index)
+            if render_db:
+                from .signal.spectrogram import SpectrogramAnalyzer
+
+                # Element-wise, so converting the picked line alone is
+                # numerically identical to slicing the renderer's full
+                # ``display_matrix``.
+                values = np.asarray(
+                    SpectrogramAnalyzer.amplitude_to_db(
+                        values, reference=float(reference or 1.0)
+                    ),
+                    dtype=float,
+                )
+            name = f'{prefix}={pick.value:.{decimals}f}{position_unit}'
+            suffix = 2
+            while name in columns:
+                name = (
+                    f'{prefix}={pick.value:.{decimals}f}{position_unit}'
+                    f'#{suffix}'
+                )
+                suffix += 1
+            columns[name] = np.asarray(values, dtype=float)
+
+        def _positions(attribute: str) -> str:
+            # Four decimals, not the column headers' 1-2: the whole point of
+            # printing request and landing side by side is that a reader can
+            # see they differ (design D11), and 620.0 vs 615.2 Hz rounds to the
+            # same header text more often than not.
+            joined = ', '.join(
+                f'{getattr(pick, attribute):.4f}' for pick in plan.picks
+            )
+            return f'{joined} {position_unit}'.strip()
+
+        clamped = plan.clamped_picks
+        notes = []
+        if clamped:
+            notes.append(
+                '夹取到数据边界：'
+                + ', '.join(f'{pick.value:.{decimals}f}' for pick in clamped)
+            )
+        if plan.merged:
+            notes.append(
+                f'{len(plan.picks) + plan.merged} 个位置夹取后合并为 '
+                f'{len(plan.picks)} 个'
+            )
+
+        info: list[tuple[str, str]] = [
+            ('来源文件', str(source)),
+            ('通道', str(channel)),
+            ('单位', str(unit)),
+            ('方法', str(method)),
+        ]
+        info.extend(_slice_fact_rows(facts))
+        info.append(('幅值口径', str(amplitude_label)))
+        if render_db:
+            info.append(('dB 参考值', f'{float(reference or 1.0):g}'))
+        info.extend([
+            ('切片维度', f'固定{dimension}'),
+            ('切片位置 请求', _positions('requested')),
+            ('切片位置 落点', _positions('value')),
+            ('切片位置 备注', '；'.join(notes) if notes else '—'),
+        ])
+        return {
+            # An em dash rather than an empty cell: a blank reads as "the
+            # exporter forgot" and round-trips out of xlsx as NaN, while a
+            # unit-less channel is a fact worth stating.
+            '切片信息': pd.DataFrame(
+                {'项目': [key for key, _ in info],
+                 '值': [value if value else '—' for _, value in info]}
+            ),
+            sheet_name: pd.DataFrame(columns),
+        }
 
 
 def _matrix_to_long_dataframe(x_values, y_values, matrix, x_name, y_name):

@@ -884,6 +884,12 @@ class InputPanel(QWidget):
             self._on_target_policy_changed
         )
         self._rpm_picker.selectionChanged.connect(lambda *_: self.changed.emit())
+        self._signal_picker.relaxPolicyRequested.connect(
+            self._on_relax_policy_requested
+        )
+        self._rpm_picker.relaxPolicyRequested.connect(
+            self._on_relax_policy_requested
+        )
         self._rpm_factor_spin.valueChanged.connect(lambda _value: self.changed.emit())
         self._time_edit.textChanged.connect(self._on_time_text_changed)
         self._filter_panel.changed.connect(lambda *_: self.changed.emit())
@@ -931,6 +937,20 @@ class InputPanel(QWidget):
     def _on_target_policy_changed(self, _index: int) -> None:
         self._refresh_signal_universe()
         self.changed.emit()
+
+    def _on_relax_policy_requested(self) -> None:
+        """Honour a picker's request to allow partially-available channels.
+
+        The pickers report the request but never act on it: switching policy
+        changes which outputs a run produces, so it has to be a deliberate
+        click, never an automatic reaction to a greyed-out list.  Moving the
+        combo re-enters ``_on_target_policy_changed``, which refreshes both
+        universes and emits ``changed``.
+        """
+
+        if self.target_policy() == "available_per_source":
+            return
+        self.apply_target_policy("available_per_source")
 
     def _on_time_text_changed(self, _text: str) -> None:
         error = self.time_range_error()
@@ -1018,14 +1038,17 @@ class InputPanel(QWidget):
                 for n, c in counts.items() if c < loaded_count
             }
             partial = {k: partial[k] for k in sorted(partial.keys())}
+        selectable = self.target_policy() == "available_per_source"
         self._signal_picker.set_available(available)
-        self._signal_picker.set_partially_available(
-            partial, selectable=self.target_policy() == "available_per_source",
-        )
+        self._signal_picker.set_partially_available(partial, selectable=selectable)
 
-        # RPM picker shares the same universe.
+        # RPM picker shares the same universe *and* the same policy.  A RPM
+        # channel present in only some sources is legitimate: BatchRunner's
+        # ``_rpm_values`` resamples a cross-source RPM onto the target's time
+        # base with ``np.interp``.  Pinning it to unselectable contradicted
+        # that and left the row permanently grey.
         self._rpm_picker.set_available(available)
-        self._rpm_picker.set_partially_available(partial)
+        self._rpm_picker.set_partially_available(partial, selectable=selectable)
         self.channelUniverseChanged.emit(tuple(available), dict(partial))
 
     # ------------------------------------------------------------------
@@ -1095,6 +1118,20 @@ class InputPanel(QWidget):
 
     def source_paths(self) -> tuple[str, ...]:
         return self._file_list.source_paths()
+
+    def source_channel_sets(self) -> dict:
+        """Return ``{source key: frozenset(channel names)}`` for loaded rows.
+
+        The keys match what ``BatchRunner._expand_tasks`` yields as its source
+        key (``source_ids()``), so ``preview_outputs`` can tell which planned
+        group actually holds the selected channels.  Both accessors walk
+        ``loaded_rows()`` in the same order, which is what makes the zip safe.
+        """
+
+        return dict(zip(
+            self._file_list.loaded_source_ids(),
+            self._file_list.per_file_channel_sets(),
+        ))
 
     def signals_marked_unavailable(self) -> tuple[str, ...]:
         intersection = self._file_list.current_intersection()

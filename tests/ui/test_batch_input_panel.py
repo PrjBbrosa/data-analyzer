@@ -592,6 +592,74 @@ def test_input_panel_rpm_picker_partial_signals_visible_but_disabled(qtbot):
     assert p._rpm_picker.is_disabled("rpm_x") is True
 
 
+def test_rpm_picker_follows_the_same_policy_as_the_target_picker(qtbot):
+    """A part-of-the-sources RPM channel is legitimate under per-source.
+
+    ``BatchRunner._rpm_values`` resamples a cross-source RPM onto the target's
+    time base with ``np.interp``, so pinning the RPM picker to unselectable
+    contradicted the runner and left the row permanently grey.
+    """
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel()
+    qtbot.addWidget(panel)
+    panel._file_list.add_loaded_file(0, "a.mf4", frozenset({"sig", "rpm_x"}))
+    panel._file_list.add_loaded_file(1, "b.mf4", frozenset({"sig"}))
+
+    assert panel.target_policy() == "common"
+    assert panel._rpm_picker.is_disabled("rpm_x") is True
+    assert panel._signal_picker.is_disabled("rpm_x") is True
+
+    panel.apply_target_policy("available_per_source")
+
+    assert panel._rpm_picker.is_disabled("rpm_x") is False
+    assert panel._signal_picker.is_disabled("rpm_x") is False
+    panel.apply_rpm_channel("rpm_x")
+    assert panel.rpm_channel() == "rpm_x"
+
+
+def test_relax_request_from_a_picker_switches_the_policy_once(qtbot):
+    """The picker reports; the panel — which owns the state — decides."""
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel()
+    qtbot.addWidget(panel)
+    panel._file_list.add_loaded_file(0, "a.mf4", frozenset({"only_a"}))
+    panel._file_list.add_loaded_file(1, "b.mf4", frozenset({"only_b"}))
+    changes = []
+    panel.changed.connect(lambda: changes.append(1))
+
+    assert panel._signal_picker.is_relax_notice_visible() is True
+    panel._signal_picker._relax_button.click()
+
+    assert panel.target_policy() == "available_per_source"
+    assert changes, "switching the policy must re-emit changed"
+    assert panel._signal_picker.is_disabled("only_a") is False
+    assert panel._signal_picker.is_relax_notice_visible() is False
+
+    # Idempotent: a second request cannot flip the policy back or re-emit.
+    before = len(changes)
+    panel._on_relax_policy_requested()
+    assert panel.target_policy() == "available_per_source"
+    assert len(changes) == before
+
+
+def test_rpm_picker_relax_request_reaches_the_same_handler(qtbot):
+    """Both pickers share one policy, so either may raise the request."""
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel()
+    qtbot.addWidget(panel)
+    panel._file_list.add_loaded_file(0, "a.mf4", frozenset({"only_a"}))
+    panel._file_list.add_loaded_file(1, "b.mf4", frozenset({"only_b"}))
+
+    assert panel._rpm_picker.is_relax_notice_visible() is True
+    panel._rpm_picker._relax_button.click()
+
+    assert panel.target_policy() == "available_per_source"
+    assert panel._rpm_picker.is_disabled("only_a") is False
+
+
 def test_batch_rpm_coefficient_has_its_own_aligned_form_row(qtbot):
     """Order keeps the coefficient readable instead of squeezing it into RPM."""
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet

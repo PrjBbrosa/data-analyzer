@@ -161,6 +161,23 @@ class OrderContextual(QWidget):
         self.spin_time_res.setSuffix(" s")
         self.spin_time_res.setToolTip('阶次谱图时间轴细度：\n越小时间越细、阶次相应变粗。')
         fl.addRow("时间分辨率:", _fit_field(self.spin_time_res))
+        # 2026-08-03: order gains the same 窗函数 picker FFT / FFT-vs-Time
+        # already expose. COT resolves it through ``get_analysis_window`` just
+        # like the other two methods, and the order built-in presets declare a
+        # ``window`` — without a visible control the 频率 preset silently kept
+        # computing with the hanning fallback while batch used flattop.
+        # Option list + tooltip are copied verbatim from FFTContextual so the
+        # three panels stay one vocabulary; 窗函数 sits directly above the NFFT
+        # row there, and does here too.
+        self.combo_win = QComboBox()
+        self.combo_win.addItems(
+            ['hanning', 'hamming', 'blackman', 'bartlett', 'kaiser', 'flattop']
+        )
+        self.combo_win.setToolTip('抑制频谱泄漏：flattop 幅值最准、\nhanning 最均衡、blackman 旁瓣最低。')
+        fl.addRow(
+            "窗函数:",
+            _fit_field(self.combo_win, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
         self.combo_nfft = QComboBox()
         self.combo_nfft.addItems([
             self._AUTO_NFFT_LABEL, '512', '1024', '2048', '4096', '8192', '16384'
@@ -320,8 +337,14 @@ class OrderContextual(QWidget):
             self.spin_samples_per_rev,
         ):
             spin.valueChanged.connect(self._on_preset_param_changed)
+        self.combo_win.currentTextChanged.connect(self._on_preset_param_changed)
         self.combo_nfft.currentTextChanged.connect(self._on_preset_param_changed)
         self.combo_weighting.currentTextChanged.connect(self._on_preset_param_changed)
+
+    def _apply_window_value(self, value):
+        i = self.combo_win.findText(str(value))
+        if i >= 0:
+            self.combo_win.setCurrentIndex(i)
 
     def _apply_weighting_value(self, value):
         target = 'A' if str(value).upper() == 'A' else 'None'
@@ -421,9 +444,12 @@ class OrderContextual(QWidget):
         return int(min(max(nfft, 256), 16384))
 
     # Signal-type built-in preset params (信号专家 校核定稿 — do NOT alter the
-    # numeric values). Order presets carry NO window field (COT internally
-    # fixes the window); amplitude axis is the legacy ``amplitude_mode`` token
-    # ('Amplitude' / 'Amplitude dB') reverse-mapped onto combo_amp_unit.
+    # numeric values). Order presets DO carry a ``window`` field, aligned
+    # one-for-one with the fft / fft_time presets (频率 -> flattop, 均衡 /
+    # 时间 -> hanning); it round-trips through combo_win and reaches COT via
+    # get_params() -> COTParams.window. Amplitude axis is the legacy
+    # ``amplitude_mode`` token ('Amplitude' / 'Amplitude dB') reverse-mapped
+    # onto combo_amp_unit.
     _SIGNAL_BUILTIN_PRESETS = {
         preset.key: preset.params_copy()
         for preset in list_builtin_presets('order_time')
@@ -452,6 +478,7 @@ class OrderContextual(QWidget):
             max_order=self.spin_mo.value(),
             order_res=self.spin_order_res.value(),
             time_res=self.spin_time_res.value(),
+            window=self.combo_win.currentText(),
             nfft=self.combo_nfft.currentText(),
             nfft_mode=(
                 'auto'
@@ -502,6 +529,8 @@ class OrderContextual(QWidget):
             self.spin_order_res.setValue(float(d['order_res']))
         if 'time_res' in d:
             self.spin_time_res.setValue(float(d['time_res']))
+        if 'window' in d:
+            self._apply_window_value(d['window'])
         if 'nfft' in d:
             if (
                 d.get('nfft_mode') == 'auto'
@@ -667,6 +696,11 @@ class OrderContextual(QWidget):
             max_order=self.spin_mo.value(),
             order_res=self.spin_order_res.value(),
             time_res=self.spin_time_res.value(),
+            # _order_mixin builds COTParams from get_params() (not
+            # current_params()), so ``window`` has to ride on this dict for the
+            # picker to reach the analysis; it is also a registered cache-key
+            # field there, so switching windows forces a recompute.
+            window=self.combo_win.currentText(),
             nfft=nfft,
             nfft_mode=nfft_mode,
             nfft_preview=nfft_preview,
@@ -737,6 +771,8 @@ class OrderContextual(QWidget):
                 self.spin_manual_rpm.setValue(float(d['manual_rpm']))
             except (TypeError, ValueError):
                 pass
+        if 'window' in d:
+            self._apply_window_value(d['window'])
         if 'nfft' in d:
             if (
                 d.get('nfft_mode') == 'auto'

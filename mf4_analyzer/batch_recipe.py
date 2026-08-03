@@ -42,6 +42,11 @@ CHART_STATISTICS_DEFAULTS = {
     "x_max": None,
     "metrics": ("max", "min", "mean"),
 }
+SLICE_DEFAULTS = {
+    "enabled": False,
+    "axis": "time",
+    "positions": (),
+}
 
 COMMON_PARAM_FIELDS = frozenset({
     "fs",
@@ -91,6 +96,7 @@ METHOD_PARAM_FIELDS = {
         "t_win_s",
         "overlap",
         "remove_mean",
+        "slice",
     }),
     "order_time": frozenset({
         "window",
@@ -99,8 +105,6 @@ METHOD_PARAM_FIELDS = {
         "max_order",
         "order_res",
         "time_res",
-        "rpm_mode",
-        "manual_rpm",
         "samples_per_rev",
         "rpm_factor",
         # ``rpm_signal`` normally lives on AnalysisPreset, but old/hand-made
@@ -109,12 +113,56 @@ METHOD_PARAM_FIELDS = {
         # opaque data.
         "rpm_signal",
         "rpm_channel",
+        "slice",
     }),
 }
 
-KNOWN_PARAM_FIELDS = COMMON_PARAM_FIELDS | frozenset().union(
-    *METHOD_PARAM_FIELDS.values()
+#: Fields no method owns any more.  Manual RPM was removed from batch order
+#: analysis (design 2026-08-03 D-C1): every batch order task now requires an
+#: RPM channel.  These two stay in ``KNOWN_PARAM_FIELDS`` on purpose — a
+#: retired field must NOT fall into the "unknown field survives" branch of
+#: ``normalize_batch_params``, or an old recipe would keep silently carrying
+#: dead params that the runner no longer reads.
+_RETIRED_PARAM_FIELDS = frozenset({"rpm_mode", "manual_rpm"})
+
+KNOWN_PARAM_FIELDS = (
+    COMMON_PARAM_FIELDS
+    | frozenset().union(*METHOD_PARAM_FIELDS.values())
+    | _RETIRED_PARAM_FIELDS
 )
+
+_RPM_MANUAL_MODE_TOKENS = frozenset({"manual", "fixed", "手动"})
+
+#: Wording deliberately mirrors ``_legacy_image_format_warning`` (batch.py).
+LEGACY_MANUAL_RPM_WARNING = (
+    "旧预设的手动 RPM 已移除；批处理阶次分析需要指定 RPM 通道。"
+)
+
+
+def legacy_manual_rpm_warning(
+    params: Mapping[str, Any] | None, method: object,
+) -> str | None:
+    """Return the manual-RPM migration warning if *params* requested it.
+
+    ``rpm_mode``/``manual_rpm`` are retired: :func:`normalize_batch_params`
+    always drops them now, for every method.  Discarding ``rpm_mode=
+    "channel"`` (or an absent ``rpm_mode``) changes nothing observable, so it
+    stays silent.  Discarding ``rpm_mode="manual"`` DOES change behavior --
+    a fixed RPM becomes "no RPM configured" -- so a caller that stores or
+    imports a recipe (e.g. preset I/O) can surface this warning next to the
+    normalized params.  Returns ``None`` when no warning applies, including
+    when *method* is not ``order_time``.
+    """
+
+    if _method_key(method) != "order_time":
+        return None
+    if not isinstance(params, Mapping):
+        return None
+    rpm_mode = str(params.get("rpm_mode", "") or "").strip().lower()
+    if rpm_mode in _RPM_MANUAL_MODE_TOKENS:
+        return LEGACY_MANUAL_RPM_WARNING
+    return None
+
 
 _FLOAT_PARAM_FIELDS = frozenset({
     "fs",
@@ -133,7 +181,6 @@ _FLOAT_PARAM_FIELDS = frozenset({
     "max_order",
     "order_res",
     "time_res",
-    "manual_rpm",
     "rpm_factor",
     "font_scale",
 })
@@ -294,6 +341,22 @@ def _normalize_known_value(field: str, value: Any) -> Any:
             "x_max": _normalize_statistics_bound(raw.get("x_max")),
             "metrics": list(canonical),
         }
+    if field == "slice" and isinstance(value, Mapping):
+        raw = dict(value)
+        axis = str(raw.get("axis", "time") or "time").strip().lower()
+        items = raw.get("positions", ())
+        if not isinstance(items, (tuple, list)):
+            items = ()
+        numbers = [
+            float(item) for item in items
+            if isinstance(item, (int, float)) and not isinstance(item, bool)
+        ]
+        return {
+            "enabled": bool(raw.get("enabled", False)),
+            "axis": axis,
+            # 排序 + 去重：fingerprint 必须对输入顺序不敏感（设计 D7）
+            "positions": sorted(dict.fromkeys(numbers)),
+        }
     if field in _FLOAT_PARAM_FIELDS:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return float(value)
@@ -343,6 +406,11 @@ def normalize_batch_params(params: Mapping[str, Any] | None, method: object) -> 
     # would silently crop their matrices in ``batch_preprocess``.
     if method_key in {"fft_time", "order_time"}:
         normalized.pop("time_range", None)
+        slice_params = normalized.get("slice")
+        if isinstance(slice_params, Mapping) and not slice_params.get("enabled", False):
+            # Discard an unopened slice so existing spectrogram presets keep
+            # their fingerprint byte-for-byte (design D6).
+            normalized.pop("slice", None)
     if method_key == "time":
         # Time-domain output is linear engineering data.  dB reference is a
         # spectral display concern and must neither occupy the compact UI nor
@@ -495,11 +563,13 @@ def recipe_fingerprint(
 __all__ = [
     "COMMON_PARAM_FIELDS",
     "KNOWN_PARAM_FIELDS",
+    "LEGACY_MANUAL_RPM_WARNING",
     "METHOD_PARAM_FIELDS",
     "OUTPUT_DEFAULTS",
     "SUPPORTED_RECIPE_METHODS",
     "TIME_RENDER_DEFAULTS",
     "compatible_param_fields",
+    "legacy_manual_rpm_warning",
     "normalize_analysis_preset",
     "normalize_batch_params",
     "recipe_fingerprint",

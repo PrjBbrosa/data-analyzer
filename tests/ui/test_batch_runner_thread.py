@@ -399,3 +399,107 @@ def test_sheet_does_not_forward_hidden_runtime_manifest_state_to_runner(
     assert calls[0]["resume_manifest"] is None
     assert calls[0]["retry_failed_manifest"] is None
     assert calls[1]["resume_manifest"] is None
+
+
+def test_sheet_preview_forwards_probed_channel_sets_to_the_planner(
+    qtbot, tmp_path, monkeypatch,
+):
+    """Planning is no-load, so the sheet must hand over what it probed.
+
+    Without it ``preview_outputs`` takes group one blind, which is how a
+    four-way-split HDF previewed a sub-source holding none of the selected
+    channels.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.batch import BatchOutput, BatchRunner
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    t = np.arange(1024) / 512.0
+    frame = pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 50 * t)})
+    fd = FileData(tmp_path / "preview.csv", frame, list(frame.columns), {}, idx=0)
+    sheet = BatchSheet(None, files={0: fd})
+    qtbot.addWidget(sheet)
+    sheet.apply_files(file_ids=(0,), file_paths=())
+    sheet.apply_signals(("sig",))
+    sheet.apply_method("fft")
+    sheet.apply_params({"window": "hanning", "nfft": 512})
+    sheet.apply_outputs(BatchOutput(export_data=False, export_image=True))
+    sheet._output_panel.apply_directory(str(tmp_path / "formal-output"))
+
+    captured = {}
+    original = BatchRunner.preview_outputs
+
+    def spy(self, preset, output_dir, *, source_channels=None):
+        captured["source_channels"] = source_channels
+        return original(
+            self, preset, output_dir, source_channels=source_channels,
+        )
+
+    monkeypatch.setattr(BatchRunner, "preview_outputs", spy)
+
+    sheet._on_preview_clicked()
+    qtbot.waitUntil(lambda: sheet._preview_thread is None, timeout=10_000)
+
+    assert captured["source_channels"] == sheet._input_panel.source_channel_sets()
+    assert "sig" in captured["source_channels"][0]
+    sheet._cleanup_preview_temp()
+
+
+def test_sheet_names_the_sub_source_gap_instead_of_preview_unavailable(
+    qtbot, tmp_path, monkeypatch,
+):
+    """"预览不可用" alone sent the user hunting; name the actual cause."""
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.batch import (
+        BatchOutput, BatchOutputPreview, BatchRepresentativeGroup, BatchRunner,
+    )
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    t = np.arange(256) / 128.0
+    frame = pd.DataFrame({"Time": t, "sig": np.sin(t)})
+    fd = FileData(tmp_path / "eps-run.hdf", frame, list(frame.columns), {}, idx=0)
+    sheet = BatchSheet(None, files={0: fd})
+    qtbot.addWidget(sheet)
+    # One physical HDF that split into four logical sub-sources.
+    container = str(tmp_path / "eps-run.hdf")
+    for index in range(4):
+        sheet._input_panel._file_list.add_loaded_file(
+            f"hdf:eps-run:{index}", container, frozenset({"Time", "sig"}),
+        )
+    sheet.apply_signals(("sig",))
+    sheet.apply_method("fft")
+    sheet.apply_params({"window": "hanning", "nfft": 128})
+    sheet.apply_outputs(BatchOutput(export_data=False, export_image=True))
+    sheet._output_panel.apply_directory(str(tmp_path / "formal-output"))
+
+    def blocked(self, preset, output_dir, *, source_channels=None):
+        return BatchOutputPreview(
+            task_count=4, artifact_count=4, conflict_count=0,
+            image_format="png", image_width=960, image_height=540,
+            image_dpi=144, conflict_policy="auto_number", group_count=4,
+            representative_group=BatchRepresentativeGroup(
+                group_id="g0", display_name="eps-run.hdf", group_by="source",
+                member_count=1, required_source_count=1,
+                planned_stem="eps-run__time__deadbeef", ordinal=1,
+                total_groups=4, channel_available=False,
+            ),
+        )
+
+    monkeypatch.setattr(BatchRunner, "preview_outputs", blocked)
+
+    sheet._on_preview_clicked()
+
+    assert sheet._last_toast_kind == "warning"
+    assert sheet._last_toast_text == (
+        "预览不可用：代表来源 eps-run.hdf 不含所选通道"
+        "；该文件按采样率拆成了 4 个子来源"
+    )
+    # A knowingly-empty render must not be started at all.
+    assert sheet._preview_thread is None
+    assert sheet._preview_dialog is None

@@ -16,7 +16,7 @@ from .batch import (
     BatchRunner,
     _legacy_image_format_warning,
 )
-from .batch_recipe import normalize_batch_params
+from .batch_recipe import legacy_manual_rpm_warning, normalize_batch_params
 
 
 SCHEMA_VERSION = 1
@@ -145,6 +145,14 @@ def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
             f"unsupported preset image_format: {requested_image_format!r}"
         )
     params_dict = dict(raw.get("params") or {})
+    # Batch order analysis no longer supports manual RPM (design 2026-08-03
+    # D-C1): normalize_batch_params below always drops rpm_mode/manual_rpm,
+    # but that would otherwise be a SILENT behavior change for a preset that
+    # relied on rpm_mode="manual" -- surface it the same way a legacy
+    # image_format migration does.
+    rpm_warning = legacy_manual_rpm_warning(params_dict, method)
+    if rpm_warning:
+        migration_warnings = (*migration_warnings, rpm_warning)
     _migrate_axis_keys(params_dict)
     # dB-reference-defaults spec §13 S4: a legacy preset's bare
     # ``db_reference`` value (no ``db_reference_mode``) IS the old

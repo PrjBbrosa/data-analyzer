@@ -302,10 +302,17 @@ def test_time_statistics_card_and_diagnostic_are_part_of_the_export_scene(qapp):
         ]
         assert len(markers) == 2
         assert {marker.opts["symbol"] for marker in markers} == {"o"}
-        assert {marker.opts["pen"].color().name() for marker in markers} == {
-            "#f97316", "#0f766e",
+        # Solid red/green dot with a white keyline. The size is small because
+        # the export now compensates for the supersampling downscale instead of
+        # the builder over-drawing to survive it; the rendered proof lives in
+        # tests/ui/test_batch_chart_statistics.py.
+        assert {marker.opts["brush"].color().name() for marker in markers} == {
+            "#dc2626", "#16a34a",
         }
-        assert all(marker.opts["size"] >= 16 for marker in markers)
+        assert {marker.opts["pen"].color().name() for marker in markers} == {
+            "#ffffff",
+        }
+        assert all(marker.opts["size"] >= 11 for marker in markers)
         cards = [
             item for item in normal.panel_text_items[0]
             if isinstance(item, _StatisticsCard)
@@ -332,6 +339,56 @@ def test_time_statistics_card_and_diagnostic_are_part_of_the_export_scene(qapp):
     finally:
         normal.close()
         diagnostic.close()
+
+
+def test_time_statistics_card_title_states_the_range_mode_not_only_the_actual_span(qapp):
+    """Auto and custom cards must not read identically (design D-D1).
+
+    Before this fix the title only ever showed the *actual* clipped span, so
+    a ±80 mm custom request that silently fell back to full-range rendered a
+    card indistinguishable from an honest auto/full-range one — exactly the
+    ambiguity that let a bad statistic ship unnoticed.
+    """
+    from mf4_analyzer.batch_statistics import BatchStatisticRow
+
+    _, BatchSeries, BatchTimeFigureSpec, *_ = _qt_api()
+    x = np.array([0.0, 1.0, 2.0])
+    series = BatchSeries(
+        x, np.array([1.0, 3.0, 2.0]), "rack", unit="mm", series_key="rack",
+    )
+    row = BatchStatisticRow(
+        series_key="rack", family_key="rack", label="rack", variant="value",
+        panel=0, branch_label="全程", direction="", sample_count=3,
+        x_min=-79.97, x_max=79.97, minimum=1.0, maximum=3.0, mean=2.0,
+        argmin_x=0.0, argmax_x=1.0,
+    )
+    auto_scene = _open_scene(
+        qapp, ("time", BatchTimeFigureSpec((series,), statistics=(row,))),
+        params={
+            "chart_statistics": {"metrics": ["max", "min"], "range_mode": "full"},
+        },
+    )
+    custom_scene = _open_scene(
+        qapp, ("time", BatchTimeFigureSpec((series,), statistics=(row,))),
+        params={
+            "chart_statistics": {
+                "metrics": ["max", "min"], "range_mode": "custom",
+                "x_min": -80.0, "x_max": 80.0,
+            },
+        },
+    )
+    try:
+        auto_text = " ".join(auto_scene.texts())
+        custom_text = " ".join(custom_scene.texts())
+        assert "全时段" in auto_text
+        assert "实际" in auto_text and "-79.97" in auto_text and "79.97" in auto_text
+        assert "设定" in custom_text
+        assert "-80" in custom_text and "80" in custom_text
+        assert "实际" in custom_text and "-79.97" in custom_text and "79.97" in custom_text
+        assert auto_text != custom_text
+    finally:
+        auto_scene.close()
+        custom_scene.close()
 
 
 def test_time_overlay_rejects_more_than_two_y_units(qapp):

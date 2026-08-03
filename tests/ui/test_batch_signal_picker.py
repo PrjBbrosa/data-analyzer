@@ -654,3 +654,92 @@ def test_picker_popup_shows_whole_rows_and_elides_instead_of_scrolling(qtbot):
     assert row.toolTip() == long_name
     # The public label API must still report the untruncated text.
     assert p.label_for(long_name) == long_name
+
+
+def test_picker_explains_a_fully_disabled_list_and_offers_the_exit(qtbot):
+    """A list where nothing can be ticked must say why, not just grey out.
+
+    The acceptance report: 18 matches, every one unselectable, and no word on
+    screen about the cause ("only in some sources") or the way out.
+    """
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(
+        partially_available={f"sig_{i}": "(2/4)" for i in range(18)},
+    )
+    qtbot.addWidget(p)
+
+    assert p.is_relax_notice_visible() is True
+    assert p._notice_label.text() == (
+        "18 个通道只存在于部分来源，「所有来源共有」策略下不可选"
+    )
+    assert p._relax_button.text() == "改用「按来源可用」"
+    assert p._relax_button.isEnabled() is True
+
+
+def test_picker_hides_the_notice_whenever_something_is_selectable(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(
+        available_signals=["shared"],
+        partially_available={"only_a": "(1/2)"},
+    )
+    qtbot.addWidget(p)
+    # One tickable row is enough — the user is not stuck.
+    assert p.is_relax_notice_visible() is False
+
+    p.set_available([])
+    assert p.is_relax_notice_visible() is True
+
+    # Relaxing the policy makes the partial rows tickable, so the row goes.
+    p.set_partially_available({"only_a": "(1/2)"}, selectable=True)
+    assert p.is_relax_notice_visible() is False
+
+    # No channels at all is a different problem; the notice must not claim it.
+    p.set_partially_available({}, selectable=False)
+    assert p.is_relax_notice_visible() is False
+
+
+def test_picker_requests_a_relaxed_policy_without_changing_it_itself(qtbot):
+    """The picker owns no policy state: it asks, it never decides.
+
+    Switching policy changes which outputs a run produces, so it has to stay a
+    deliberate user action rather than an automatic reaction to a grey list.
+    """
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(partially_available={"only_a": "(1/2)"})
+    qtbot.addWidget(p)
+    requests = []
+    p.relaxPolicyRequested.connect(lambda: requests.append(1))
+
+    p._relax_button.click()
+
+    assert len(requests) == 1
+    # Nothing about the picker's own state moved.
+    assert p._partial_selectable is False
+    assert p.is_disabled("only_a") is True
+    assert p.is_relax_notice_visible() is True
+
+
+def test_picker_notice_keeps_the_footer_inside_the_popup(qtbot):
+    """The notice is a third fixed block; the height budget must include it."""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(
+        partially_available={f"sig_{i}": "(1/4)" for i in range(30)},
+    )
+    qtbot.addWidget(p)
+    p.show_popup()
+    qtbot.wait(20)
+
+    assert p.is_relax_notice_visible() is True
+    popup = p._popup.geometry()
+    for widget in (p._notice, p._foot):
+        corner = widget.mapTo(p._popup, widget.rect().bottomRight())
+        assert corner.y() <= popup.height()
+    # Reading order: explanation above the stats/actions row.
+    assert (
+        p._notice.mapTo(p._popup, p._notice.rect().topLeft()).y()
+        < p._foot.mapTo(p._popup, p._foot.rect().topLeft()).y()
+    )

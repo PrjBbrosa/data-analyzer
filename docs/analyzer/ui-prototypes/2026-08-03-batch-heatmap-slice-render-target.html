@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>批处理谱图切片 · 目标渲染效果</title>
+<style>
+  :root{
+    --ink:#172033; --muted:#64748b; --subtle:#94a3b8;
+    --line:#d8e0eb; --bg:#f1f5f9; --card:#ffffff; --accent:#1769e0;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:32px 24px 72px;
+    background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    font-size:14px; line-height:1.65;
+  }
+  .wrap{max-width:1180px; margin:0 auto}
+  h1{font-size:24px; margin:0 0 6px; letter-spacing:.2px}
+  .sub{color:var(--muted); margin:0 0 32px}
+  h2{font-size:17px; margin:46px 0 6px; padding-bottom:8px; border-bottom:1px solid var(--line)}
+  h2 .n{
+    display:inline-block; width:22px; height:22px; line-height:22px;
+    text-align:center; border-radius:6px; background:var(--ink); color:#fff;
+    font-size:12px; margin-right:9px; vertical-align:1px;
+  }
+  h3{font-size:14px; margin:26px 0 8px; color:var(--muted); font-weight:600}
+  p{margin:10px 0}
+  .note{color:var(--muted); font-size:13px}
+  code{
+    font-family:"Cascadia Mono",Consolas,monospace; font-size:12.5px;
+    background:#eef2f7; padding:1px 5px; border-radius:4px;
+  }
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:18px; margin-top:14px; box-shadow:0 1px 2px rgba(15,23,42,.04);
+  }
+  .page-frame{
+    background:var(--card); border:1px solid var(--line); border-radius:10px;
+    padding:10px; margin-top:14px; overflow-x:auto;
+  }
+  canvas{display:block; max-width:100%; height:auto}
+  .callouts{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(228px,1fr));
+    gap:12px; margin-top:16px;
+  }
+  .callout{
+    border:1px solid var(--line); border-radius:9px; padding:11px 13px;
+    background:#fbfdff; font-size:13px;
+  }
+  .callout b{display:block; margin-bottom:3px; font-size:12.5px}
+  .sw{display:inline-block; width:22px; height:3px; border-radius:2px; margin-right:5px; vertical-align:3px}
+  .dot{
+    display:inline-block; width:10px; height:10px; border-radius:50%;
+    margin-right:5px; vertical-align:0; border:1.5px solid #fff;
+    box-shadow:0 0 0 1px rgba(15,23,42,.18);
+  }
+  table{border-collapse:collapse; width:100%; font-size:13px; margin-top:10px}
+  th,td{border:1px solid var(--line); padding:6px 9px; text-align:left}
+  th{background:#f8fafc; font-weight:600; color:var(--muted)}
+  td.num{text-align:right; font-family:"Cascadia Mono",Consolas,monospace; font-size:12px}
+  .two{display:grid; grid-template-columns:1fr 1fr; gap:18px}
+  @media (max-width:860px){ .two{grid-template-columns:1fr} }
+
+  /* ---- batch card mock (预处理 范式) ---- */
+  .bcard{width:396px; max-width:100%; font-size:13px}
+  .bsum{
+    display:flex; align-items:center; gap:8px;
+    border:1px solid #dbe4ef; border-radius:8px; background:#fafbfd; padding:7px 9px;
+  }
+  .bsum .t{color:#26344a; font-size:12px; font-weight:700; flex:none}
+  .bsum .n{color:#64748b; font-size:11px; flex:1}
+  .pill{
+    width:44px; height:24px; border-radius:12px; flex:none; position:relative;
+    background:#dbe3ee; border:1px solid #aeb9c9;
+  }
+  .pill.on{background:var(--accent); border-color:var(--accent)}
+  .pill::after{
+    content:""; position:absolute; top:2px; left:2px; width:16px; height:16px;
+    border-radius:50%; background:#fff; border:1px solid #d1d9e5;
+  }
+  .pill.on::after{left:auto; right:2px}
+  .bbody{padding:11px 3px 0}
+  .brow{display:flex; align-items:center; gap:9px; margin-bottom:8px}
+  .brow > span:first-child{width:60px; color:var(--muted); flex:none; font-size:12.5px}
+  .inp{
+    flex:1; border:1px solid #cbd5e1; border-radius:6px; padding:4px 9px; background:#fff;
+    font-family:"Cascadia Mono",Consolas,monospace; font-size:12.5px;
+  }
+  .inp.err{border-color:#dc2626; background:#fff5f5}
+  .sel{
+    flex:1; border:1px solid #cbd5e1; border-radius:6px; padding:4px 9px; background:#fff;
+    display:flex; justify-content:space-between; font-size:12.5px;
+  }
+  .sel::after{content:"▾"; color:#94a3b8}
+  .unit{width:24px; color:var(--muted); flex:none; font-size:12px}
+  .hint{color:var(--subtle); font-size:11.5px}
+  .errline{color:#b91c1c; font-size:11.5px; margin-top:2px}
+  .chk{display:inline-flex; align-items:center; gap:5px; margin-right:10px; font-size:12.5px}
+  .box{width:13px; height:13px; border:1.5px solid #94a3b8; border-radius:3px;
+       display:inline-block; position:relative; background:#fff}
+  .box.on{background:var(--accent); border-color:var(--accent)}
+  .box.on::after{content:""; position:absolute; left:3.5px; top:.5px; width:3.5px; height:7px;
+       border:solid #fff; border-width:0 1.7px 1.7px 0; transform:rotate(43deg)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>批处理谱图切片 · 目标渲染效果</h1>
+<p class="sub">
+  2026-08-03 v3 · 配套
+  <code>docs/analyzer/specs/2026-08-03-batch-heatmap-slice-and-stat-marker-design.md</code>
+  <br>谱图与切片曲线由同一份合成矩阵实时绘制 —— 切片确实是矩阵的某几行 / 某几列，不是画出来的示意。
+</p>
+
+<!-- ============================================================ -->
+<h2><span class="n">1</span>固定时间 · 3 个位置</h2>
+<p>
+  一次只切一个维度，页面恒为 <b>两行</b>（6 : 3）。3 个时间位置在同一张切片图里叠加，
+  主图上 3 条同色竖线，图例在右侧 colorbar 占位栏。
+</p>
+<div class="page-frame">
+  <canvas id="pageTime" width="1920" height="1080" style="width:1140px"></canvas>
+</div>
+
+<div class="callouts">
+  <div class="callout">
+    <b><span class="sw" style="background:#dc2626"></span><span class="sw" style="background:#ea580c"></span><span class="sw" style="background:#c026d3"></span>暖色 = 固定时间</b>
+    竖线 + 「幅值 vs 频率」。曲线与它的标记线同色，不看图例也知道谁出谁。
+  </div>
+  <div class="callout">
+    <b>幅值轴走 nice step</b>
+    先剔掉 −6153 dB 的 DC 死区，再按 nice step 把两端向外取整 ——
+    轴端读出来是 −100 / −90 / … / −30，不是 −99.12 / −34.38。
+  </div>
+  <div class="callout">
+    <b>图例占零数据面积</b>
+    右侧占位栏是 X 轴对齐的副产物，本来空着。图例进去代价为零 ——
+    这就是「不需要自适应加宽」的直接理由。
+  </div>
+  <div class="callout">
+    <b>上限 4 个位置</b>
+    约束来自主图：4 条标记线已是热力图不被盖住的上限。右栏纵向其实能放 6 条。
+  </div>
+  <div class="callout">
+    <b>白色底衬</b>
+    每条标记线是 3.6 px 白线打底 + 2.0 px 彩线，按 1920 px 导出尺度定
+    （不照抄单文件屏幕画布的 1 px）。turbo 下纯红在局部会完全消失。
+  </div>
+  <div class="callout">
+    <b>切片关闭 → 回到一行</b>
+    与改动前逐字节相同。既有预设的 fingerprint 和产出都不受影响。
+  </div>
+</div>
+
+<h3>同一份数据 · 固定频率 · 2 个位置</h3>
+<p class="note">
+  换个维度，布局不变，只有轴标签、曲线内容和线的方向变。
+  冷色 + 横线；切片横轴是时间，与主图共享，可以竖着直接读。
+</p>
+<div class="page-frame">
+  <canvas id="pageFreq" width="1920" height="1080" style="width:1140px"></canvas>
+</div>
+<p class="note">
+  <b>为什么不允许两个维度同时切：</b>没有工况需要在同一张报告图上对比这两个维度。
+  「t=15 s 的频谱」和「620 Hz 随时间的走势」是两个独立的问题，硬塞进一页只会让读者
+  先花时间分辨哪条线属于哪个维度。要两个都看就跑两次 —— 得到两张各自干净的图。
+</p>
+
+<h3>Order-vs-Time 的差异</h3>
+<p class="note">
+  结构完全同构，只有 Y 轴物理量换成阶次：主图纵轴 <code>Order</code>、
+  固定时间切片的横轴 <code>Order</code>、图例栏头写「固定阶次」、值写 <code>6.00</code>（无单位）。
+</p>
+
+<!-- ============================================================ -->
+<h2><span class="n">2</span>面板：对齐「预处理」那张卡</h2>
+<p>
+  卡片主开关用 <code>PillSwitch</code>，标题旁带一行摘要，<b>关闭时把设置区整个折叠</b>。
+  维度用下拉二选一，位置用逗号分隔文本框 —— 和既有的「源数据区间」同一个输入范式。
+</p>
+
+<div class="card" style="display:flex; gap:24px; flex-wrap:wrap">
+  <div class="bcard">
+    <h3 style="margin:0 0 8px">切片 · 开启</h3>
+    <div class="bsum">
+      <span class="t">切片</span><span class="n">固定时间 · 3 处</span>
+      <span class="pill on"></span>
+    </div>
+    <div class="bbody">
+      <div class="brow"><span>切片维度</span><span class="sel"><span>固定时间</span></span><span class="unit"></span></div>
+      <div class="brow"><span>位置</span><span class="inp">5, 15, 25</span><span class="unit">s</span></div>
+      <div class="hint">ⓘ 逗号分隔，最多 4 个；一次只切一个维度</div>
+    </div>
+  </div>
+
+  <div class="bcard">
+    <h3 style="margin:0 0 8px">切换维度 → 单位跟着变</h3>
+    <div class="bsum">
+      <span class="t">切片</span><span class="n">固定频率 · 2 处</span>
+      <span class="pill on"></span>
+    </div>
+    <div class="bbody">
+      <div class="brow"><span>切片维度</span><span class="sel"><span>固定频率</span></span><span class="unit"></span></div>
+      <div class="brow"><span>位置</span><span class="inp">620, 1240</span><span class="unit">Hz</span></div>
+      <div class="hint">ⓘ <code>order_time</code> 时第二项是「固定阶次」，位置无单位</div>
+    </div>
+    <h3 style="margin:20px 0 8px">关闭 → 折叠，零高度</h3>
+    <div class="bsum">
+      <span class="t">切片</span><span class="n">切片关闭 · 仅导出谱图</span>
+      <span class="pill"></span>
+    </div>
+  </div>
+
+  <div class="bcard">
+    <h3 style="margin:0 0 8px">超上限 → 内联错误</h3>
+    <div class="bsum">
+      <span class="t">切片</span><span class="n">固定时间 · 5 处</span>
+      <span class="pill on"></span>
+    </div>
+    <div class="bbody">
+      <div class="brow"><span>切片维度</span><span class="sel"><span>固定时间</span></span><span class="unit"></span></div>
+      <div class="brow"><span>位置</span><span class="inp err">2, 5, 10, 15, 25</span><span class="unit">s</span></div>
+      <div class="errline">切片位置：最多 4 个（当前 5 个）</div>
+    </div>
+    <h3 style="margin:20px 0 8px">图内统计 · 同步改造</h3>
+    <div class="bsum">
+      <span class="t">图内统计</span><span class="n">全时段 · 最大/最小/平均</span>
+      <span class="pill on"></span>
+    </div>
+    <div class="bbody">
+      <div class="brow">
+        <span>统计项目</span>
+        <span class="chk"><i class="box on"></i>最大值</span>
+        <span class="chk"><i class="box on"></i>最小值</span>
+        <span class="chk"><i class="box on"></i>样本平均</span>
+      </div>
+      <div class="hint">ⓘ 卡内多选保持 checkbox，只有主开关换成 pill</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="n">3</span>数据文件：60 万行长表 → 一张宽表 + 信息表</h2>
+<div class="two">
+  <div>
+    <h3>现状</h3>
+    <div class="card" style="margin-top:8px">
+      <p style="margin-top:0"><code>数据1 / 数据2</code> 两个 sheet，long 三列：</p>
+      <table>
+        <tr><th>time_s</th><th>frequency_hz</th><th>amplitude</th></tr>
+        <tr><td class="num">0.000</td><td class="num">0.00</td><td class="num">1.02e-6</td></tr>
+        <tr><td class="num">0.000</td><td class="num">9.77</td><td class="num">3.41e-5</td></tr>
+        <tr><td colspan="3" style="text-align:center;color:#94a3b8">⋮ 约 600 000 行 ⋮</td></tr>
+      </table>
+      <p class="note" style="margin-bottom:0">
+        写入几十秒、文件几十 MB、Excel 打不动、要用还得自己 pivot。
+      </p>
+    </div>
+  </div>
+  <div>
+    <h3>目标 · 位置是列</h3>
+    <div class="card" style="margin-top:8px">
+      <p style="margin-top:0"><b>sheet <code>时间切片</code></b></p>
+      <table>
+        <tr><th>frequency_hz</th><th>t=5.00s</th><th>t=15.00s</th><th>t=25.00s</th></tr>
+        <tr><td class="num">0.00</td><td class="num">-119.8</td><td class="num">-118.4</td><td class="num">-119.1</td></tr>
+        <tr><td class="num">9.77</td><td class="num">-89.3</td><td class="num">-87.7</td><td class="num">-90.2</td></tr>
+        <tr><td colspan="4" style="text-align:center;color:#94a3b8">⋮ 513 行 ⋮</td></tr>
+      </table>
+      <p style="margin-bottom:0"><b>sheet <code>切片信息</code></b></p>
+      <table>
+        <tr><td>切片维度</td><td>固定时间</td></tr>
+        <tr><td>位置 请求 → 落点</td><td>5.0, 15.0, 25.0 → 4.9920, 14.9760, 24.9600 s</td></tr>
+        <tr><td>幅值口径</td><td>dB (ref 1 rpm, auto)</td></tr>
+      </table>
+      <p class="note" style="margin-bottom:0">
+        框选几列就能在 Excel 里直接出对比图 —— 这正是多位置切片的使用场景。
+      </p>
+    </div>
+  </div>
+</div>
+<p class="note">
+  值只写<b>图上口径</b>（dB 渲染就是 dB），<code>切片信息</code> 写明口径与 dB 参考值。
+  切片关闭时数据文件保持现状不变。CSV 不支持多表，指定 csv 时退回长表并给
+  <code>slice.csv_fallback</code> 警告。
+</p>
+
+<!-- ============================================================ -->
+<h2><span class="n">4</span>时域统计极值标记</h2>
+<p>
+  根因不是配色：<code>ScatterPlotItem</code> 在 <code>pxMode</code> 下按<b>设备像素</b>绘制，
+  批处理的 3× 超采样从不设置 <code>resolutionScale</code>，
+  于是 18 px 的标记画进 3× 画布、缩回后只剩 <b>≈6 px</b>。
+  修法是超采样期给散点开 export mode，再换成 cursor 的实心红绿点。
+</p>
+<div class="card">
+  <canvas id="markers" width="1180" height="300" style="width:1140px"></canvas>
+</div>
+<div class="callouts">
+  <div class="callout">
+    <b>现状</b>
+    空心圈 · 近白填充 <code>#fff7ed</code> / <code>#ecfdf5</code> · 名义 18 px，出图 ≈6 px
+  </div>
+  <div class="callout">
+    <b>目标 <span class="dot" style="background:#dc2626"></span><span class="dot" style="background:#16a34a"></span></b>
+    实心 <code>#dc2626</code> / <code>#16a34a</code> · 白描边 1.6 px · 名义 11 px，出图 ≈11 px
+  </div>
+  <div class="callout">
+    <b>卡片表头同步</b>
+    「最大值」<code>#c2410c</code> → <code>#b91c1c</code>，
+    「最小值」<code>#0f766e</code> → <code>#15803d</code>，否则点和表对不上
+  </div>
+</div>
+
+</div>
+
+<script>
+"use strict";
+
+/* ---------- turbo colormap ---------- */
+const TURBO = [
+  [0.000, 48, 18, 59], [0.125, 70,107,227], [0.250, 54,183,235],
+  [0.375, 58,229,163], [0.500,135,249, 86], [0.625,211,229, 52],
+  [0.750,250,168, 45], [0.875,232, 86, 17], [1.000,122,  4,  3],
+];
+function turbo(t){
+  t = Math.max(0, Math.min(1, t));
+  for (let i = 1; i < TURBO.length; i++){
+    const b = TURBO[i], a = TURBO[i-1];
+    if (t <= b[0]){
+      const f = (t - a[0]) / (b[0] - a[0]);
+      return [a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f, a[3]+(b[3]-a[3])*f];
+    }
+  }
+  return [122,4,3];
+}
+
+/* palette — spec §5.3 */
+const WARM = ["#dc2626", "#ea580c", "#c026d3", "#a16207"];  // axis = "time"
+const COOL = ["#2563eb", "#0891b2", "#4f46e5", "#0d9488"];  // axis = "y"
+
+/* nice-step helpers — mirrors ui_kit/ticks_math._nice_per_div / _frame_to_nice */
+const NICE_MANTISSAS = [1, 2, 2.5, 5, 10];
+function nicePerDiv(v){
+  if (!(v > 0) || !isFinite(v)) return null;
+  const base = Math.pow(10, Math.floor(Math.log10(v)));
+  const m = v / base;
+  for (const s of NICE_MANTISSAS) if (s >= m - 1e-9) return s * base;
+  return 10 * base;
+}
+/** Snap BOTH ends outward to a nice step → {bottom, top, step}.
+ *  Deliberately NOT ticks_math._frame_to_nice: that helper forces exactly n
+ *  equal divisions (oscilloscope graticule semantics), which at the default
+ *  tick_density_y = 10 pushes the top to 0 and wastes 35–45% of the axis. */
+function snapAmpRange(lo, hi, n){
+  n = Math.max(1, n | 0);
+  const step = nicePerDiv((hi - lo) / n) || ((hi - lo) / n);
+  return {
+    bottom: Math.floor(lo / step) * step,
+    top: Math.ceil(hi / step) * step,
+    step,
+  };
+}
+/** drop numerically dead bins — mirrors heatmap_canvas._slice_amp_bounds */
+const SLICE_MAX_SPAN_DB = 200;
+function sliceAmpBounds(values){
+  const finite = values.filter(v => isFinite(v));
+  if (!finite.length) return null;
+  const hi = Math.max(...finite);
+  const real = finite.filter(v => v >= hi - SLICE_MAX_SPAN_DB);
+  const lo = real.length ? Math.min(...real) : hi;
+  return hi > lo ? [lo, hi] : null;
+}
+
+/* ---------- synthetic EPS motor sweep spectrogram ---------- */
+const NT = 260, NF = 210, T_MAX = 30, F_MAX = 2000;
+const times = Array.from({length:NT}, (_,i) => i * T_MAX / (NT-1));
+const freqs = Array.from({length:NF}, (_,j) => j * F_MAX / (NF-1));
+
+// matrix[j][i] — row = frequency, col = time (mirrors _extract_heatmap row-major)
+const matrix = [];
+for (let j = 0; j < NF; j++) matrix.push(new Float64Array(NT));
+
+const ORDERS = [[1, 0.22], [2, 0.34], [6, 1.00], [12, 0.30]];
+let rnd = 20260803;
+function rand(){ rnd = (rnd * 1103515245 + 12345) & 0x7fffffff; return rnd / 0x7fffffff; }
+
+for (let i = 0; i < NT; i++){
+  const t = times[i];
+  const rpm = 800 + (5200 - 800) * (t / T_MAX);
+  const envelope = Math.exp(-Math.pow((t - 17) / 11, 2));
+  for (let j = 0; j < NF; j++){
+    let v = 2.0e-5 * (0.55 + 0.9 * rand());
+    for (const [ord, gain] of ORDERS){
+      const fc = ord * rpm / 60, bw = 13 + ord * 1.6;
+      v += gain * 0.02 * envelope * Math.exp(-Math.pow((freqs[j] - fc) / bw, 2));
+    }
+    matrix[j][i] = v;
+  }
+}
+const db = matrix.map(row => Array.from(row, v => 20 * Math.log10(Math.max(v, 1e-12))));
+
+let dbHi = -Infinity;
+for (const row of db) for (const v of row) if (v > dbHi) dbHi = v;
+const LEVEL_LO = dbHi - 55, LEVEL_HI = dbHi;
+
+const nearest = (arr, v) => {
+  let best = 0;
+  for (let k = 1; k < arr.length; k++) if (Math.abs(arr[k]-v) < Math.abs(arr[best]-v)) best = k;
+  return best;
+};
+
+/* ---------- drawing helpers ---------- */
+function hidpi(cv){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = cv.width, h = cv.height;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const ctx = cv.getContext("2d");
+  ctx.scale(dpr, dpr);
+  return {ctx, w, h};
+}
+function niceTicks(lo, hi, count){
+  const raw = (hi - lo) / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / mag;
+  const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+  const out = [];
+  for (let v = Math.ceil(lo/step)*step; v <= hi + step*1e-9; v += step) out.push(v);
+  return out;
+}
+const fmt = (v,d) => Math.abs(v) < 1e-9 ? "0" : v.toFixed(d).replace(/\.?0+$/,"") || "0";
+const AXIS = "#94a3b8", MUTED = "#64748b", INK = "#172033", GRID = "rgba(148,163,184,.28)";
+
+function frame(ctx, r){
+  ctx.strokeStyle = AXIS; ctx.lineWidth = 1;
+  ctx.strokeRect(r.x + .5, r.y + .5, r.w - 1, r.h - 1);
+}
+function xAxis(ctx, r, lo, hi, label, {grid = true, count = 8, ticks = null} = {}){
+  ctx.font = "12px 'Segoe UI',sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (const v of (ticks || niceTicks(lo, hi, count))){
+    const x = r.x + (v - lo) / (hi - lo) * r.w;
+    if (grid){ ctx.strokeStyle = GRID; ctx.beginPath(); ctx.moveTo(x, r.y); ctx.lineTo(x, r.y+r.h); ctx.stroke(); }
+    ctx.strokeStyle = AXIS; ctx.beginPath(); ctx.moveTo(x, r.y+r.h); ctx.lineTo(x, r.y+r.h+5); ctx.stroke();
+    ctx.fillStyle = MUTED; ctx.fillText(fmt(v,2), x, r.y+r.h+8);
+  }
+  ctx.fillStyle = INK; ctx.font = "13px 'Segoe UI',sans-serif";
+  ctx.fillText(label, r.x + r.w/2, r.y + r.h + 27);
+}
+function yAxis(ctx, r, lo, hi, label, {grid = true, count = 5, ticks = null} = {}){
+  ctx.font = "12px 'Segoe UI',sans-serif"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const v of (ticks || niceTicks(lo, hi, count))){
+    const y = r.y + r.h - (v - lo)/(hi - lo)*r.h;
+    if (y < r.y - 1 || y > r.y + r.h + 1) continue;
+    if (grid){ ctx.strokeStyle = GRID; ctx.beginPath(); ctx.moveTo(r.x, y); ctx.lineTo(r.x+r.w, y); ctx.stroke(); }
+    ctx.strokeStyle = AXIS; ctx.beginPath(); ctx.moveTo(r.x-5, y); ctx.lineTo(r.x, y); ctx.stroke();
+    ctx.fillStyle = MUTED; ctx.fillText(fmt(v,1), r.x-8, y);
+  }
+  if (!label) return;
+  ctx.save(); ctx.translate(r.x - 64, r.y + r.h/2); ctx.rotate(-Math.PI/2);
+  ctx.fillStyle = INK; ctx.font = "13px 'Segoe UI',sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(label, 0, 0);
+  ctx.restore();
+}
+function curve(ctx, r, xs, ys, xLo, xHi, yLo, yHi, color, width){
+  ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+  ctx.beginPath();
+  for (let k = 0; k < xs.length; k++){
+    const x = r.x + (xs[k]-xLo)/(xHi-xLo)*r.w;
+    const y = r.y + r.h - (ys[k]-yLo)/(yHi-yLo)*r.h;
+    k ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+  }
+  ctx.strokeStyle = color; ctx.lineWidth = width;
+  ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.stroke(); ctx.restore();
+}
+/** white underlay + coloured line — spec §5.4 */
+function markerLine(ctx, r, from, to, color){
+  ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+  for (const [w, c] of [[3.6, "#ffffff"], [2.0, color]]){
+    ctx.beginPath(); ctx.moveTo(from[0], from[1]); ctx.lineTo(to[0], to[1]);
+    ctx.strokeStyle = c; ctx.lineWidth = w; ctx.stroke();
+  }
+  ctx.restore();
+}
+/** legend inside the right-hand colorbar gutter — spec §5.5 */
+function gutterLegend(ctx, r, x, title, entries){
+  const y = r.y + 4;
+  ctx.textAlign = "left"; ctx.textBaseline = "top";
+  ctx.fillStyle = MUTED; ctx.font = "600 12px 'Segoe UI',sans-serif";
+  ctx.fillText(title, x, y);
+  entries.forEach((e, k) => {
+    const ly = y + 21 + k * 21;
+    ctx.strokeStyle = e.color; ctx.lineWidth = 3; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(x, ly + 7); ctx.lineTo(x + 17, ly + 7); ctx.stroke();
+    ctx.fillStyle = INK; ctx.font = "12px 'Segoe UI',sans-serif";
+    ctx.fillText(e.label, x + 23, ly);
+  });
+}
+
+/* ---------- one export page: heatmap + ONE slice row (spec §5.1) ---------- */
+function drawPage(id, {axis, positions}){
+  const {ctx, w, h} = hidpi(document.getElementById(id));
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);
+
+  const ML = 12, MR = 28, MT = 10, MB = 10;
+  const axisW = 98, cbarW = 116, xAxisH = 50, gap = 6;
+  const TICK_DENSITY_Y = 10;   // DEFAULT_TICK_DENSITY_Y (batch_render_style.py:23)
+
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = INK;   ctx.font = "600 27px 'Segoe UI',sans-serif";
+  ctx.fillText("EPS_MotorSweep_2026-07-19_run03.mf4", ML + 4, MT + 27);
+  ctx.fillStyle = MUTED; ctx.font = "18px 'Segoe UI',sans-serif";
+  ctx.fillText("MotorSpeed", ML + 4, MT + 52);
+  ctx.font = "16px 'Segoe UI',sans-serif";
+  ctx.fillText("window=hanning · NFFT=1024 · overlap=50% · Fs=10000 Hz · dB (ref 1 rpm)", ML + 4, MT + 76);
+
+  const headH = 88, footH = 26;
+  const contentTop = MT + headH;
+  const unit = (h - contentTop - footH - MB - gap) / 9;   // 6 : 3
+  const plotX = ML + axisW, plotW = w - MR - cbarW - plotX;
+  const gutterX = plotX + plotW + 26;
+
+  const mapR   = {x:plotX, y:contentTop,               w:plotW, h:unit*6 - xAxisH};
+  const sliceR = {x:plotX, y:contentTop + unit*6 + gap, w:plotW, h:unit*3 - xAxisH};
+
+  /* ---- heatmap ---- */
+  const off = document.createElement("canvas");
+  off.width = NT; off.height = NF;
+  const octx = off.getContext("2d");
+  const img = octx.createImageData(NT, NF);
+  for (let j = 0; j < NF; j++) for (let i = 0; i < NT; i++){
+    const [r,g,b] = turbo((db[j][i] - LEVEL_LO) / (LEVEL_HI - LEVEL_LO));
+    const p = ((NF-1-j)*NT + i) * 4;
+    img.data[p]=r; img.data[p+1]=g; img.data[p+2]=b; img.data[p+3]=255;
+  }
+  octx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(off, mapR.x, mapR.y, mapR.w, mapR.h);
+  xAxis(ctx, mapR, 0, T_MAX, "Time (s)", {grid:false});
+  yAxis(ctx, mapR, 0, F_MAX, "Frequency (Hz)", {grid:false, count:6});
+  frame(ctx, mapR);
+
+  const palette = axis === "time" ? WARM : COOL;
+
+  // one marker line per position — vertical for fixed time, horizontal for fixed Y
+  positions.forEach((p, k) => {
+    if (axis === "time"){
+      const x = mapR.x + times[nearest(times, p)] / T_MAX * mapR.w;
+      markerLine(ctx, mapR, [x, mapR.y], [x, mapR.y + mapR.h], palette[k]);
+    } else {
+      const y = mapR.y + mapR.h - freqs[nearest(freqs, p)] / F_MAX * mapR.h;
+      markerLine(ctx, mapR, [mapR.x, y], [mapR.x + mapR.w, y], palette[k]);
+    }
+  });
+
+  /* ---- colorbar ---- */
+  const cbW = 26;
+  for (let k = 0; k < mapR.h; k++){
+    const [r,g,b] = turbo(1 - k / mapR.h);
+    ctx.fillStyle = `rgb(${r|0},${g|0},${b|0})`;
+    ctx.fillRect(gutterX, mapR.y + k, cbW, 1.2);
+  }
+  ctx.strokeStyle = AXIS; ctx.lineWidth = 1;
+  ctx.strokeRect(gutterX + .5, mapR.y + .5, cbW - 1, mapR.h - 1);
+  ctx.font = "12px 'Segoe UI',sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  for (const v of niceTicks(LEVEL_LO, LEVEL_HI, 5)){
+    const y = mapR.y + mapR.h - (v - LEVEL_LO)/(LEVEL_HI - LEVEL_LO)*mapR.h;
+    if (y < mapR.y - 1 || y > mapR.y + mapR.h + 1) continue;
+    ctx.strokeStyle = AXIS; ctx.beginPath(); ctx.moveTo(gutterX+cbW, y); ctx.lineTo(gutterX+cbW+5, y); ctx.stroke();
+    ctx.fillStyle = MUTED; ctx.fillText(fmt(v,0), gutterX+cbW+8, y);
+  }
+  ctx.save();
+  ctx.translate(gutterX + cbW + 66, mapR.y + mapR.h/2); ctx.rotate(-Math.PI/2);
+  ctx.fillStyle = INK; ctx.font = "13px 'Segoe UI',sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText("Amplitude (dB ref 1 rpm)", 0, 0);
+  ctx.restore();
+
+  /* ---- the single slice row ---- */
+  const isTime = axis === "time";
+  const series = positions.map(p => isTime
+    ? db.map(row => row[nearest(times, p)])   // fixed time  → amp vs frequency
+    : db[nearest(freqs, p)]);                 // fixed freq  → amp vs time
+  const xs   = isTime ? freqs : times;
+  const xHi  = isTime ? F_MAX : T_MAX;
+  const xLbl = isTime ? "Frequency (Hz)" : "Time (s)";
+
+  // amplitude axis: drop dead bins, then expand to nice divisions (spec §5.6)
+  const all = [].concat(...series);
+  const bounds = sliceAmpBounds(all) || [Math.min(...all), Math.max(...all)];
+  const {bottom, top, step} = snapAmpRange(bounds[0], bounds[1], TICK_DENSITY_Y);
+  const yTicks = [];
+  for (let v = bottom; v <= top + step * 1e-9; v += step) yTicks.push(v);
+
+  xAxis(ctx, sliceR, 0, xHi, xLbl);
+  yAxis(ctx, sliceR, bottom, top, "Amplitude (dB)", {ticks:yTicks});
+  series.forEach((s, k) => curve(ctx, sliceR, xs, s, 0, xHi, bottom, top, palette[k], 2.0));
+  frame(ctx, sliceR);
+  gutterLegend(ctx, sliceR, gutterX,
+    isTime ? "固定时间" : "固定频率",
+    positions.map((p, k) => ({
+      color: palette[k],
+      label: isTime ? `${times[nearest(times,p)].toFixed(2)} s`
+                    : `${freqs[nearest(freqs,p)].toFixed(1)} Hz`,
+    })));
+
+  ctx.fillStyle = "#b6c0cf"; ctx.font = "13px 'Segoe UI',sans-serif";
+  ctx.textAlign = "right"; ctx.textBaseline = "alphabetic";
+  ctx.fillText("TraceLab batch export", w - MR, h - MB - 6);
+}
+
+drawPage("pageTime", {axis:"time", positions:[5, 15, 25]});
+drawPage("pageFreq", {axis:"y",    positions:[620, 1240]});
+
+/* ---------- marker before / after ---------- */
+(function drawMarkers(){
+  const {ctx, w, h} = hidpi(document.getElementById("markers"));
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);
+
+  const xs = [], ys = [];
+  for (let k = 0; k <= 400; k++){
+    const t = k / 400 * 12;
+    xs.push(t);
+    ys.push(2.4 * Math.sin(t*1.15) * Math.exp(-Math.pow((t-6.2)/5.6, 2))
+          + 0.55 * Math.sin(t*4.7) + 0.12 * Math.sin(t*19));
+  }
+  let iMax = 0, iMin = 0;
+  ys.forEach((v,k) => { if (v > ys[iMax]) iMax = k; if (v < ys[iMin]) iMin = k; });
+  const yLo = Math.min(...ys) - .5, yHi = Math.max(...ys) + .5;
+
+  const pad = 34, colW = (w - pad*3) / 2;
+  const panels = [
+    {x:pad, title:"现状 · 出图 ≈6 px 空心圈",
+     size:6,  fill:["#fff7ed","#ecfdf5"], edge:["#f97316","#0f766e"], edgeW:1.4},
+    {x:pad*2 + colW, title:"目标 · 出图 ≈11 px 实心点",
+     size:11, fill:["#dc2626","#16a34a"], edge:["#ffffff","#ffffff"], edgeW:1.6},
+  ];
+  for (const p of panels){
+    const r = {x:p.x + 44, y:52, w:colW - 44, h:h - 92};
+    ctx.fillStyle = INK; ctx.font = "600 14px 'Segoe UI',sans-serif";
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    ctx.fillText(p.title, p.x, 38);
+    yAxis(ctx, r, yLo, yHi, "", {count:4});
+    curve(ctx, r, xs, ys, 0, 12, yLo, yHi, "#3b82f6", 1.6);
+    frame(ctx, r);
+    [[iMax,0],[iMin,1]].forEach(([idx,c]) => {
+      const cx = r.x + xs[idx]/12*r.w;
+      const cy = r.y + r.h - (ys[idx]-yLo)/(yHi-yLo)*r.h;
+      ctx.beginPath(); ctx.arc(cx, cy, p.size/2, 0, Math.PI*2);
+      ctx.fillStyle = p.fill[c]; ctx.fill();
+      ctx.strokeStyle = p.edge[c]; ctx.lineWidth = p.edgeW; ctx.stroke();
+    });
+  }
+})();
+</script>
+</body>
+</html>

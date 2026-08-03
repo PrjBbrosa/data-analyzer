@@ -23,6 +23,7 @@ class BatchPreviewDialog(QDialog):
         self.setObjectName("BatchPreviewDialog")
         self.setWindowTitle("代表最终图预览")
         self.setModal(True)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         fit_dialog_to_available_screen(
             self, parent, 1040, 720, min_w=640, min_h=420,
         )

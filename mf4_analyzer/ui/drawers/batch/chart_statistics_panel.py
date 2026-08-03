@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QCheckBox, QFrame, QHBoxLayout, QLabel, QSizePolicy, QStackedLayout,
+    QCheckBox, QHBoxLayout, QLabel, QSizePolicy, QStackedLayout,
     QVBoxLayout, QWidget,
 )
 
 from mf4_analyzer.ui.widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
+from mf4_analyzer.ui.widgets.pill_switch import PillSwitch
 
 
 class ChartStatisticsPanel(QWidget):
@@ -18,21 +19,36 @@ class ChartStatisticsPanel(QWidget):
         self.setObjectName("BatchChartStatistics")
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 6, 0, 4)
-        root.setSpacing(5)
-        head = QHBoxLayout()
-        head.addWidget(QLabel("图内统计", self))
-        head.addStretch(1)
-        self.enabled = QCheckBox("启用", self)
-        head.addWidget(self.enabled)
-        root.addLayout(head)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(6)
 
-        self._divider = QFrame(self)
-        self._divider.setFrameShape(QFrame.HLine)
-        self._divider.setFrameShadow(QFrame.Plain)
-        root.addWidget(self._divider)
+        self._summary_row = QWidget(self)
+        self._summary_row.setObjectName("BatchFilterSummary")
+        self._summary_row.setAttribute(Qt.WA_StyledBackground, True)
+        top_lay = QHBoxLayout(self._summary_row)
+        top_lay.setContentsMargins(9, 7, 9, 7)
+        top_lay.setSpacing(7)
+        self._summary_title = QLabel("图内统计", self._summary_row)
+        self._summary_title.setObjectName("BatchFilterSummaryTitle")
+        top_lay.addWidget(self._summary_title)
+        self._summary_note = QLabel("统计关闭 · 图上不加标注", self._summary_row)
+        self._summary_note.setObjectName("BatchFilterSummaryNote")
+        top_lay.addWidget(self._summary_note, 1)
+        self.enabled = PillSwitch(
+            self._summary_row,
+            object_name="batchChartStatisticsEnableSwitch",
+            accessible_name="图内统计",
+        )
+        self.enabled.setChecked(False)
+        top_lay.addWidget(self.enabled, 0, Qt.AlignVCenter | Qt.AlignRight)
+        root.addWidget(self._summary_row)
 
-        self.range_row = QWidget(self)
+        self._settings = QWidget(self)
+        settings_lay = QVBoxLayout(self._settings)
+        settings_lay.setContentsMargins(0, 0, 0, 0)
+        settings_lay.setSpacing(5)
+
+        self.range_row = QWidget(self._settings)
         range_lay = QHBoxLayout(self.range_row)
         range_lay.setContentsMargins(0, 0, 0, 0)
         range_lay.setSpacing(6)
@@ -81,9 +97,9 @@ class ChartStatisticsPanel(QWidget):
         self._range_stack.addWidget(self._auto_range_page)
         self._range_stack.addWidget(self._manual_range_page)
         range_lay.addWidget(self._range_value_host, 1)
-        root.addWidget(self.range_row)
+        settings_lay.addWidget(self.range_row)
 
-        metrics = QWidget(self)
+        metrics = QWidget(self._settings)
         metrics_lay = QHBoxLayout(metrics)
         metrics_lay.setContentsMargins(0, 0, 0, 0)
         metrics_lay.setSpacing(8)
@@ -96,13 +112,17 @@ class ChartStatisticsPanel(QWidget):
             metrics_lay.addWidget(check)
             check.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         metrics_lay.addStretch(1)
-        root.addWidget(metrics)
-        self.note = QLabel("ⓘ 同一 X 对应多个 Y 时，按采集路径分别统计", self)
+        settings_lay.addWidget(metrics)
+        self.note = QLabel(
+            "ⓘ 同一 X 对应多个 Y 时，按采集路径分别统计", self._settings,
+        )
         self.note.setWordWrap(True)
-        root.addWidget(self.note)
-        self.context = QLabel("", self)
+        settings_lay.addWidget(self.note)
+        self.context = QLabel("", self._settings)
         self.context.setObjectName("BatchChartStatisticsContext")
-        root.addWidget(self.context)
+        settings_lay.addWidget(self.context)
+        root.addWidget(self._settings)
+
         for widget in (
             self.enabled, self.auto_range, self.x_min, self.x_max,
             self.maximum, self.minimum, self.mean,
@@ -118,6 +138,7 @@ class ChartStatisticsPanel(QWidget):
 
     def _sync(self, *_args) -> None:
         active = self.enabled.isChecked()
+        self._settings.setVisible(active)
         automatic = self.auto_range.isChecked()
         self.auto_range.setEnabled(active)
         self._range_stack.setCurrentWidget(
@@ -129,6 +150,25 @@ class ChartStatisticsPanel(QWidget):
             check.setEnabled(active)
         self.note.setEnabled(active)
         self.context.setEnabled(active)
+        self._refresh_summary()
+
+    def _refresh_summary(self, *_args) -> None:
+        if not self.enabled.isChecked():
+            self._summary_note.setText("统计关闭 · 图上不加标注")
+            return
+        names = []
+        if self.maximum.isChecked(): names.append("最大")
+        if self.minimum.isChecked(): names.append("最小")
+        if self.mean.isChecked(): names.append("平均")
+        metrics_text = "/".join(names) if names else "未选统计项目"
+        if self.auto_range.isChecked():
+            range_text = self.range_summary.text() or "全时段"
+        else:
+            unit = self._range_unit.text().strip()
+            range_text = f"{self.x_min.value():g}–{self.x_max.value():g}"
+            if unit:
+                range_text = f"{range_text} {unit}"
+        self._summary_note.setText(f"{range_text} · {metrics_text}")
 
     def set_context(self, *, x_source="time", x_channel="", unit="s") -> None:
         unit_text = str(unit or "").strip()
@@ -143,6 +183,7 @@ class ChartStatisticsPanel(QWidget):
             self.context.setText("时间 X：秒")
             self.range_summary.setText("全时段")
         self._range_unit.setText(unit_text)
+        self._refresh_summary()
 
     def get_params(self) -> dict:
         if not self.enabled.isChecked():
@@ -165,7 +206,18 @@ class ChartStatisticsPanel(QWidget):
         }
 
     def apply_params(self, params) -> None:
-        value = dict((params or {}).get("chart_statistics") or {})
+        raw = (params or {}).get("chart_statistics")
+        if raw is None:
+            # Our own normalization pops the key out entirely once the card
+            # is disabled (`enabled: False` never round-trips). Treating a
+            # missing key as "reset to auto" silently threw away a filled-in
+            # custom range on a plain disable -> re-enable cycle: the switch
+            # correctly went back to off, but auto_range/x_min/x_max should
+            # stay exactly as the user left them.
+            self.enabled.setChecked(False)
+            self._sync()
+            return
+        value = dict(raw)
         self.enabled.setChecked(bool(value.get("enabled", False)))
         self.auto_range.setChecked(str(value.get("range_mode", "full")) != "custom")
         for spin, key in ((self.x_min, "x_min"), (self.x_max, "x_max")):

@@ -347,7 +347,107 @@ def test_build_current_batch_preset_order_uses_complete_current_params(
     assert preset.params["nfft"] is None
     assert preset.params["nfft_mode"] == "auto"
     assert preset.params["samples_per_rev"] == 2048
-    assert preset.params["manual_rpm"] == 1800.0
     assert preset.params["db_reference_mode"] == "auto"
     assert preset.params["fs"] == 4096.0
     assert preset.params["rpm_factor"] == 2.0
+    # Batch retired the fixed-RPM mode, so the hand-off must not forward it
+    # even though the order view still emits it (followup design C1).
+    assert "manual_rpm" not in preset.params
+    assert "rpm_mode" not in preset.params
+
+
+def test_order_handoff_strips_retired_rpm_keys_and_keeps_everything_else(
+    qtbot, monkeypatch,
+):
+    """The bridge hands batch a recipe batch can actually run.
+
+    Before this, an order view sitting on a fixed RPM produced a preset whose
+    only possible outcome was a per-item ``rpm channel is required`` deep in
+    the run — the retired keys travelled but nothing consumed them.
+    """
+    from mf4_analyzer.batch_recipe import KNOWN_PARAM_FIELDS
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    monkeypatch.setattr(win.toolbar, "current_mode", lambda: "order")
+    monkeypatch.setattr(
+        win.inspector.order_ctx, "current_signal", lambda: ("f1", "sig")
+    )
+    # A view on manual RPM reports no channel — that is the whole problem.
+    monkeypatch.setattr(win.inspector.order_ctx, "current_rpm", lambda: None)
+    monkeypatch.setattr(
+        win.inspector.order_ctx,
+        "current_params",
+        lambda: {
+            "max_order": 20.0,
+            "order_res": 0.05,
+            "samples_per_rev": 2048,
+            "weighting": "A",
+            "rpm_mode": "manual",
+            "manual_rpm": 1800.0,
+        },
+    )
+    monkeypatch.setattr(win.inspector.order_ctx, "fs", lambda: 4096.0)
+    monkeypatch.setattr(win.inspector.order_ctx, "rpm_factor", lambda: 2.0)
+    monkeypatch.setattr(win.inspector.top, "range_enabled", lambda: False)
+
+    preset = win._build_current_batch_preset()
+
+    assert "rpm_mode" not in preset.params
+    assert "manual_rpm" not in preset.params
+    # Everything the user actually configured still travels.
+    assert preset.params["max_order"] == 20.0
+    assert preset.params["order_res"] == 0.05
+    assert preset.params["samples_per_rev"] == 2048
+    assert preset.params["weighting"] == "A"
+    assert preset.params["fs"] == 4096.0
+    assert preset.params["rpm_factor"] == 2.0
+    # Nothing retired survives, whatever gets retired next.
+    assert not (set(preset.params) - KNOWN_PARAM_FIELDS) & {
+        "rpm_mode", "manual_rpm",
+    }
+
+
+def test_open_batch_warns_when_order_view_is_on_manual_rpm(qtbot, monkeypatch):
+    """The user hears about it while they still remember typing the value."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    # ``open_batch`` drops a preset whose file is gone before it looks at
+    # anything else, so the file has to be registered for the RPM notice to
+    # be reachable at all.
+    monkeypatch.setitem(win.files, "f1", object())
+    monkeypatch.setattr(win.toolbar, "current_mode", lambda: "order")
+    monkeypatch.setattr(
+        win.inspector.order_ctx, "current_signal", lambda: ("f1", "sig")
+    )
+    monkeypatch.setattr(win.inspector.order_ctx, "current_rpm", lambda: None)
+    monkeypatch.setattr(
+        win.inspector.order_ctx,
+        "current_params",
+        lambda: {"rpm_mode": "manual", "manual_rpm": 1800.0},
+    )
+    monkeypatch.setattr(win.inspector.order_ctx, "fs", lambda: 4096.0)
+    monkeypatch.setattr(win.inspector.order_ctx, "rpm_factor", lambda: 1.0)
+    monkeypatch.setattr(win.inspector.top, "range_enabled", lambda: False)
+
+    toasts = []
+    monkeypatch.setattr(
+        win, "toast", lambda text, kind="info": toasts.append((text, kind))
+    )
+    # The Sheet itself is not under test here — only the hand-off notice.
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.drawers.batch.BatchSheet",
+        lambda *a, **k: type("_D", (), {"exec_": lambda self: 0})(),
+    )
+
+    for mode, expected in (("manual", 1), ("channel", 0)):
+        toasts.clear()
+        monkeypatch.setattr(win.inspector.order_ctx, "rpm_mode", lambda m=mode: m)
+        win.open_batch()
+        rpm_toasts = [t for t, _kind in toasts if "RPM" in t]
+        assert len(rpm_toasts) == expected, (mode, toasts)
+        if expected:
+            assert "RPM 通道" in rpm_toasts[0]
