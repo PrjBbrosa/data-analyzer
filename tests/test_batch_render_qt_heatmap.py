@@ -302,10 +302,13 @@ def test_heatmap_scene_text_has_semantic_labels_without_main_navigation(qapp):
         assert "Time (s)" in texts
         assert "Frequency (Hz)" in texts
         assert "Amplitude (dB re 1×10⁰)" in texts
-        assert "Task T3-heatmap · TraceLab batch export" in texts
-        # The analysis method is legitimately named FFT vs Time, but the full
-        # main-window navigation row from the user's screenshot must not leak.
-        assert texts.count("FFT vs Time") == 1
+        assert "TraceLab batch export" in texts
+        assert "T3-heatmap" not in texts
+        assert "Task" not in texts
+        # 方法名不再印在页眉——三条坐标轴标题已经说清楚这是什么图；页眉第二行
+        # 只留通道名。主窗口那整条导航行更不能泄漏进导出图。
+        assert "Acceleration" in texts
+        assert "FFT vs Time" not in texts
         assert "时域" not in texts
         assert "阶次" not in texts
     finally:

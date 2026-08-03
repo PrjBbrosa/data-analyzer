@@ -173,6 +173,46 @@ def _axis_label(name: str) -> str:
     return labels.get(normalized, str(name or ""))
 
 
+# pyqtgraph 0.14's AxisItem.resizeEvent anchors a bottom title at
+# ``height - boundingRect().height() + nudge`` with ``nudge = 5``. Mirrored
+# here so the offset below is applied from the same base every time instead of
+# compounding across the repeated layout passes in ``show_and_settle``.
+_PG_AXIS_LABEL_NUDGE_PX = 5.0
+
+
+def _space_bottom_axis_label(plot, font_pt: float):
+    """Return a callback that keeps the x-axis title off the tick numbers.
+
+    pyqtgraph reserves only ``label.boundingRect().height() * 0.8`` for an axis
+    title and then anchors it to the bottom of that box, so the bottom title
+    ends up sitting on the tick row with barely a pixel of air.
+
+    The title is nudged down *without touching the axis height*: growing the
+    axis (document margin or ``setHeight``) would take the space out of the
+    plot area, and a smaller plot changes how much of a curve renders as
+    near-vertical stair-steps — enough to move the supersampling stroke-weight
+    ratio that ``tests/test_batch_render_qt_ssaa.py`` pins. A QGraphicsItem is
+    not clipped to its parent, so the title simply overhangs into the empty
+    band above the page footer, exactly as pyqtgraph's own 5px nudge already
+    does.
+    """
+    axis = plot.getAxis("bottom")
+    label = getattr(axis, "label", None)
+    if label is None:
+        return None
+    extra = max(6.0, float(font_pt) * 0.9)
+
+    def reposition(*_args) -> None:
+        if not axis.isVisible() or not str(axis.labelText or "").strip():
+            return
+        rect = label.boundingRect()
+        base_y = float(axis.size().height() - rect.height())
+        label.setPos(label.pos().x(), base_y + _PG_AXIS_LABEL_NUDGE_PX + extra)
+
+    plot.vb.sigResized.connect(reposition)
+    return reposition
+
+
 def _extract_heatmap(data):
     if isinstance(data, pd.DataFrame):
         if "amplitude" not in data.columns or len(data.columns) < 3:
@@ -848,6 +888,13 @@ class _SceneBuilder:
         plot.getAxis("top").setHeight(1)
         plot.getAxis("right").setWidth(1)
 
+    def _register_bottom_label_spacing(self, plot) -> None:
+        """Give this panel's x-axis title air, on every layout pass."""
+
+        reposition = _space_bottom_axis_label(plot, self.theme.axis_font_pt)
+        if reposition is not None:
+            self.layout_callbacks.append(reposition)
+
     def _next_pen(self, linestyle: str, *, fft=False, color_key: str | None = None):
         if fft:
             color = self.theme.fft_line
@@ -961,6 +1008,8 @@ class _SceneBuilder:
         self.panel_titles.append(str(title))
         plot.setLabel("left", _linear_amplitude_label(units[0] if units else ""))
         plot.setLabel("bottom", spec.x_label if bottom else "")
+        if bottom:
+            self._register_bottom_label_spacing(plot)
         if not bottom:
             bottom_axis = plot.getAxis("bottom")
             bottom_axis.setStyle(showValues=False, tickLength=0, maxTickLevel=0)
@@ -1365,6 +1414,7 @@ class _SceneBuilder:
         self._apply_analysis_frame(plot)
         plot.setLabel("bottom", "Frequency (Hz)")
         plot.setLabel("left", y_label)
+        self._register_bottom_label_spacing(plot)
         # Aliased for the same reason as the time curves: the exporter
         # supersamples the page.
         curve = pg.PlotDataItem(
@@ -1469,6 +1519,7 @@ class _SceneBuilder:
         self._apply_analysis_frame(plot)
         plot.setLabel("bottom", _axis_label(x_name))
         plot.setLabel("left", _axis_label(y_name))
+        self._register_bottom_label_spacing(plot)
 
         image_item = _SmoothImageItem(axisOrder="row-major")
         interpolation = str(self.params.get("interp", "bilinear")).lower()

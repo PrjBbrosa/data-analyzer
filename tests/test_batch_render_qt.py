@@ -431,17 +431,82 @@ def test_report_page_facts_footer_legend_and_no_raw_identity_leak(qapp):
     try:
         texts = "\n".join(scene.texts())
         assert "source.mf4 · human group" in texts
-        assert 'accel["front"] · time' in texts
+        # The analysis row carries the channel alone — the method name is
+        # already implied by the axes, so it is not printed.
+        assert scene.page_labels[1].item.toPlainText() == 'accel["front"]'
         assert "window=Hann" in texts
         assert "NFFT=4096" in texts
         assert "weighting=A" in texts
         assert "averaging=linear" in texts
         assert "overlap=50%" in texts
         assert "members=2/2" in texts
-        assert "Task T2-proof · TraceLab batch export" in texts
+        assert "TraceLab batch export" in texts
+        assert "T2-proof" not in texts
+        assert "Task" not in texts
         assert raw_group_key not in texts
         assert raw_source not in texts
         assert '["front"]' in texts
+    finally:
+        scene.close()
+
+
+@pytest.mark.parametrize("raw_group", ["default", "Default", "  default  "])
+def test_report_header_drops_the_noisy_default_group(qapp, raw_group):
+    context = _context(source_display_name="source.mf4", group=raw_group)
+    scene = _open_scene(qapp, ("time", _time_spec()), context=context)
+    try:
+        identity_text = scene.page_labels[0].item.toPlainText()
+        assert identity_text == "source.mf4"
+        assert "default" not in identity_text.lower()
+    finally:
+        scene.close()
+
+
+def test_report_header_keeps_a_real_group_label(qapp):
+    context = _context(source_display_name="source.mf4", group="cycle-A")
+    scene = _open_scene(qapp, ("time", _time_spec()), context=context)
+    try:
+        identity_text = scene.page_labels[0].item.toPlainText()
+        assert identity_text == "source.mf4 · cycle-A"
+    finally:
+        scene.close()
+
+
+def test_grouped_header_drops_the_bare_method_row(qapp):
+    """按通道/按信号源分组时 context 没有单一通道，第二行曾退化成一个孤零零的
+    小写 ``time`` 挂在标题下面（用户反馈：不知道那是什么）。现在整行不画。"""
+    context = _context(
+        source_display_name="Fzyl 1 [E3]",
+        group="",
+        channel="",
+        effective_facts={},
+    )
+    scene = _open_scene(qapp, ("time", _time_spec()), params={}, context=context)
+    try:
+        header_labels = scene.page_labels[:-1]
+        assert len(header_labels) == 1
+        assert header_labels[0].item.toPlainText() == "Fzyl 1 [E3]"
+        assert not any(
+            label.item.toPlainText().strip() == "time"
+            for label in scene.page_labels
+        )
+    finally:
+        scene.close()
+
+
+def test_report_header_skips_the_facts_row_when_there_are_no_facts(qapp):
+    context = _context(
+        source_display_name="source.mf4", group="default", effective_facts={}
+    )
+    scene = _open_scene(qapp, ("time", _time_spec()), params={}, context=context)
+    try:
+        # Only identity + analysis rows: no blank facts label sits between
+        # the header and the first plot.
+        header_labels = scene.page_labels[:-1]
+        assert len(header_labels) == 2
+        texts = "\n".join(scene.texts())
+        assert "window=" not in texts
+        assert "NFFT=" not in texts
     finally:
         scene.close()
 

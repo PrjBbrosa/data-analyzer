@@ -28,6 +28,24 @@ def _elide(value: Any, limit: int) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+# Group identities that exist for the runner's benefit, never for a reader's:
+# ``default`` is the fallback every plain file gets (batch_output._group_identity)
+# and ``unresolved-source:<key>`` is the placeholder a not-yet-loaded source
+# carries (batch.py). Neither belongs in a title beside the file name.
+_MACHINE_GROUP_IDENTITIES = ("default",)
+_MACHINE_GROUP_PREFIXES = ("unresolved-source:", "file_id:")
+
+
+def _is_human_group(group: Any) -> bool:
+    text = str(group or "").strip()
+    if not text:
+        return False
+    folded = text.casefold()
+    if folded in _MACHINE_GROUP_IDENTITIES:
+        return False
+    return not folded.startswith(_MACHINE_GROUP_PREFIXES)
+
+
 def _first_present(mapping: Mapping[str, Any], *keys: str):
     for key in keys:
         if key in mapping:
@@ -109,19 +127,23 @@ def add_report_header(
     extra_facts: tuple[str, ...] = (),
 ) -> list:
     method = str(context.method).strip() or _DEFAULT_METHOD[kind]
+    group_part = (
+        _elide(context.group, 38) if _is_human_group(context.group) else ""
+    )
     identity = " · ".join(
         part
         for part in (
             _elide(context.source_display_name, 52),
-            _elide(context.group, 38),
+            group_part,
         )
         if part
     )
-    analysis = " · ".join(
-        part
-        for part in (_elide(context.channel, 56), _elide(method, 28))
-        if part
-    )
+    # The method name is redundant with the chart itself (the axes already say
+    # whether this is time, spectrum or order), and on grouped renders — where
+    # the context carries no single channel — it degenerated into a lone
+    # lowercase ``time`` floating under the title.  Only the channel earns this
+    # row; without one the row is not drawn at all.
+    analysis = _elide(context.channel, 56)
     if not identity:
         identity = method
     labels = [
@@ -132,25 +154,30 @@ def add_report_header(
             color=theme.text,
             point_size=theme.header_font_pt,
         ),
-        _add_label(
-            widget,
-            row=1,
-            text=analysis,
-            color=theme.muted,
-            point_size=9.0,
-        ),
     ]
+    if analysis:
+        labels.append(
+            _add_label(
+                widget,
+                row=1,
+                text=analysis,
+                color=theme.muted,
+                point_size=9.0,
+            )
+        )
     facts = effective_fact_items(context.effective_facts, params)
     facts.extend(str(value).strip() for value in extra_facts if str(value).strip())
-    labels.append(
-        _add_label(
-            widget,
-            row=2,
-            text=_elide(" · ".join(facts), 170),
-            color=theme.muted,
-            point_size=theme.facts_font_pt,
+    facts_text = _elide(" · ".join(facts), 170)
+    if facts_text:
+        labels.append(
+            _add_label(
+                widget,
+                row=2,
+                text=facts_text,
+                color=theme.muted,
+                point_size=theme.facts_font_pt,
+            )
         )
-    )
     return labels
 
 
@@ -158,8 +185,6 @@ def add_report_footer(
     widget, *, row: int, context: BatchRenderContext, theme: RenderTheme
 ):
     footer = "TraceLab batch export"
-    if str(context.task_id).strip():
-        footer = f"Task {_elide(context.task_id, 72)} · {footer}"
     return _add_label(
         widget,
         row=row,
