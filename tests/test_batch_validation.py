@@ -357,6 +357,7 @@ def test_slice_validation_rejects_unsupported_axis(method):
     "positions",
     (
         "5,15",
+        ["1.5", "2.5"],
         [float("nan")],
         [float("inf")],
         [True],
@@ -373,6 +374,16 @@ def test_slice_validation_rejects_invalid_positions_shape_or_values(method, posi
         issue.field == "slice" and issue.code == "invalid_slice_positions"
         for issue in issues
     )
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_slice_validation_accepts_finite_int_and_float_positions(method):
+    issues = validate_recipe(
+        method,
+        {"slice": {"enabled": True, "axis": "time", "positions": [1.5, 2]}},
+    )
+
+    assert not any(issue.field == "slice" for issue in issues)
 
 
 @pytest.mark.parametrize("method", ("fft_time", "order_time"))

@@ -15,6 +15,7 @@ from mf4_analyzer.batch_recipe import (
     normalize_batch_params,
     recipe_fingerprint,
 )
+from mf4_analyzer.batch_validation import validate_recipe
 
 
 def test_time_render_defaults_are_removed_from_normalized_params():
@@ -393,6 +394,25 @@ def test_slice_axis_is_lowercased_and_positions_are_floats():
         "axis": "y",
         "positions": [5.0, 15.5],
     }
+
+
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_validated_slice_positions_survive_normalization(method):
+    raw = {
+        "slice": {"enabled": True, "axis": "time", "positions": [1.5, 2]},
+    }
+
+    assert not validate_recipe(method, raw)
+    assert normalize_batch_params(raw, method)["slice"]["positions"]
+
+    string_positions = {
+        "slice": {"enabled": True, "axis": "time", "positions": ["1.5", "2.5"]},
+    }
+    assert any(
+        issue.code == "invalid_slice_positions"
+        for issue in validate_recipe(method, string_positions)
+    )
+    assert not normalize_batch_params(string_positions, method)["slice"]["positions"]
 
 
 def test_normalize_batch_params_does_not_fill_missing_ui_defaults():

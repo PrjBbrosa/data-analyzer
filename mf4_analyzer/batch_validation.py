@@ -39,6 +39,13 @@ def _finite_number(value: Any) -> bool:
         return False
 
 
+def _slice_position_number(value: Any) -> bool:
+    # Accepted types have one source of truth in normalization.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(float(value))
+
+
 def _positive_number(value: Any) -> bool:
     return _finite_number(value) and float(value) > 0.0
 
@@ -395,12 +402,12 @@ def validate_recipe(
                 positions = slice_params.get("positions", ())
                 valid_positions = (
                     isinstance(positions, (tuple, list))
-                    and all(_finite_number(item) for item in positions)
+                    and all(_slice_position_number(item) for item in positions)
                 )
                 if not valid_positions:
                     issues.append(ValidationIssue(
                         "slice", "invalid_slice_positions",
-                        "slice positions must be a list of finite numbers",
+                        "slice positions must be a list of finite numbers (strings are not accepted)",
                     ))
                 else:
                     if axis == "y" and any(float(item) < 0 for item in positions):
