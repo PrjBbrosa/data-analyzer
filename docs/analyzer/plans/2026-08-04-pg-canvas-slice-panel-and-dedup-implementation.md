@@ -6,7 +6,7 @@
 
 **设计文档:** [2026-08-04-pg-canvas-slice-panel-and-dedup-design.md](../specs/2026-08-04-pg-canvas-slice-panel-and-dedup-design.md)
 **前置:** 包 B 已合并(`ui/pg_canvas/analysis_axes.py` 存在)。基线以**包 B 合并后的
-main** 为准(本计划行号仍引 `6236a5fe`,Task 0 需重定位)。
+main** 为准(本计划行号仍引 `e385ce5a`,Task 0 需重定位)。
 分支:`refactor/pg-canvas-slice-and-dedup`。
 **`PYTEST` =** `TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest`
 **画布全量 =** `tests/ui/test_pg_heatmap_canvas.py tests/ui/test_pg_line_canvas.py tests/ui/test_pg_timedomain_canvas.py tests/ui/test_pg_canvas_decomposition_characterization.py tests/ui/test_slice_amp_floor_guard.py tests/ui/test_stacked_left_axis_metrics.py tests/ui/test_axis_frame_alignment.py tests/ui/test_pg_remarks.py`

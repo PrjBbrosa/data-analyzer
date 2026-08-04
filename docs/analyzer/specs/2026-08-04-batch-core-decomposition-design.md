@@ -1,7 +1,8 @@
 # 批处理内核拆分与稳定性加固 · 设计
 
 - 日期：2026-08-04
-- 基线：`main` @ `6236a5fe`（v7.9.3）。**本文所有行号以此 commit 为准。**
+- 基线：`main` @ `e385ce5a`（v7.9.3 + 通道表达式功能）。**本文所有行号以此 commit 为准。**
+  （由 `6236a5fe` 更新；间隔仅一次 feature 提交 `6bda7ccb`，未触碰任何批处理文件，行号不变。）
 - 来源：2026-08-04 批处理架构评审（三路并行结构探查：`batch.py` 内部结构 /
   `batch_render_qt` 渲染层 / 卫星模块与测试覆盖，结论均已在本机核实关键锚点）。
 - 实施计划：[2026-08-04-batch-core-decomposition-implementation.md](../plans/2026-08-04-batch-core-decomposition-implementation.md)
@@ -203,7 +204,7 @@ batch runner 依赖的稳定契约面，改动需同步 `batch.py:_load_slice_re
 | 测试引用私有方法断裂 | D2/D3 的类级 `staticmethod(...)` 别名策略，39 处引用零改动 |
 | 渲染字节漂移 | 本设计不触碰 `_builder.py` 实现（D5 只加再导出层）；切片关闭路径已有逐字节 parity 测试 |
 | `AnalysisPreset` 工厂隐藏依赖 | 实施计划 Task 1 内置依赖核对步骤 |
-| 与在途工作冲突 | 基线 `6236a5fe` 工作区有未提交的 `signal/expression` 改动，与批处理无交集;本工作独立分支进行 |
+| 与在途工作冲突 | 表达式功能已合并（`6bda7ccb`），当前无已知在途改动;本工作仍独立分支进行 |
 
 ## 验收准则
 

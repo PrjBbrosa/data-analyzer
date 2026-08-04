@@ -4,7 +4,7 @@
 > 第二阶段(Task 5)有闸门,闸门不满足就停在 Task 4,**不算失败**。
 
 **设计文档:** [2026-08-04-pg-canvas-shared-axes-design.md](../specs/2026-08-04-pg-canvas-shared-axes-design.md)
-**基线:** `main` @ `6236a5fe`。分支:`refactor/pg-canvas-shared-axes`。
+**基线:** `main` @ `e385ce5a`。分支:`refactor/pg-canvas-shared-axes`。
 **`PYTEST` =** `TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest`
 
 ## 全局约束

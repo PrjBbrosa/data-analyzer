@@ -1,7 +1,8 @@
 # pg_canvas 切片子图独立与同构去重 · 设计(包 C)
 
 - 日期:2026-08-04
-- 基线:`main` @ `6236a5fe`(v7.9.3)。**本文所有行号以此 commit 为准。**
+- 基线:`main` @ `e385ce5a`(v7.9.3 + 通道表达式功能)。**本文所有行号以此 commit 为准。**
+  (由 `6236a5fe` 更新;间隔仅一次 feature 提交 `6bda7ccb`,未触碰 pg_canvas,行号不变。)
 - 来源:2026-08-04 全仓复杂度评审(pg_canvas 画布族结构探查)。
 - 实施计划:[2026-08-04-pg-canvas-slice-panel-and-dedup-implementation.md](../plans/2026-08-04-pg-canvas-slice-panel-and-dedup-implementation.md)
 - **前置:包 B(公共轴层)必须已合并**——本包多处依赖 `analysis_axes.py` 存在。

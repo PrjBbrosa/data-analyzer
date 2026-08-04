@@ -5,7 +5,7 @@
 > 就跳过,不算失败。
 
 **设计文档:** [2026-08-04-chartstack-markup-slimming-design.md](../specs/2026-08-04-chartstack-markup-slimming-design.md)
-**基线:** `main` @ `6236a5fe`。分支:`refactor/chartstack-markup-slimming`。
+**基线:** `main` @ `e385ce5a`。分支:`refactor/chartstack-markup-slimming`。
 **`PYTEST` =** `TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest`
 
 ## Task 0: 锚点核验 + 基线(失配即停)

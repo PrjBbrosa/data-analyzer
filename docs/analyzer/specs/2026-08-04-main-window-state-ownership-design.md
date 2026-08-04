@@ -1,7 +1,8 @@
 # MainWindow 状态所有权治理 · 设计(包 E)
 
 - 日期:2026-08-04
-- 基线:`main` @ `6236a5fe`(v7.9.3)。**本文所有行号以此 commit 为准。**
+- 基线:`main` @ `e385ce5a`(v7.9.3 + 通道表达式功能)。**本文所有行号以此 commit 为准。**
+  (由 `6236a5fe` 更新;间隔仅一次 feature 提交 `6bda7ccb`,未触碰 main_window,行号不变。)
 - 来源:2026-08-04 全仓复杂度评审(main_window mixin 组装深度探查)。
 - 实施计划:[2026-08-04-main-window-state-ownership-implementation.md](../plans/2026-08-04-main-window-state-ownership-implementation.md)
 - 前置:无硬前置;但建议在包 A–D 中至少一包完成后再做(先建立手感)。

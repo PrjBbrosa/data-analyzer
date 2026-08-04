@@ -1,7 +1,8 @@
 # ChartStack 与标注编辑器瘦身 · 设计(包 D)
 
 - 日期:2026-08-04
-- 基线:`main` @ `6236a5fe`(v7.9.3)。**本文所有行号以此 commit 为准。**
+- 基线:`main` @ `e385ce5a`(v7.9.3 + 通道表达式功能)。**本文所有行号以此 commit 为准。**
+  (由 `6236a5fe` 更新;间隔仅一次 feature 提交 `6bda7ccb`,未触碰 chart_stack/markup,行号不变。)
 - 来源:2026-08-04 全仓复杂度评审(杂项大文件分诊 + pg_canvas 探查)。
 - 实施计划:[2026-08-04-chartstack-markup-slimming-implementation.md](../plans/2026-08-04-chartstack-markup-slimming-implementation.md)
 - 前置:无(独立于包 A/B/C/E,可并行)。两个目标互相独立,可只做其一。

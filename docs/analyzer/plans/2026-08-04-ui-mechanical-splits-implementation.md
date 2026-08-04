@@ -5,7 +5,7 @@
 > 失败集,确认是自己引入的才修;不是自己引入的记录后继续。
 
 **设计文档:** [2026-08-04-ui-mechanical-splits-design.md](../specs/2026-08-04-ui-mechanical-splits-design.md)
-**基线:** `main` @ `6236a5fe`。分支:`refactor/ui-mechanical-splits`。
+**基线:** `main` @ `e385ce5a`。分支:`refactor/ui-mechanical-splits`。
 **测试命令前缀(下称 `PYTEST`):** `TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest`
 
 ## 全局约束
@@ -22,7 +22,7 @@
 - [ ] **Step 1:** 核验 spec 锚点,任何一条失配 → **停止并回报**,不要凭猜测继续:
   - `grep -n "^class \|^def \|^INTERNAL" mf4_analyzer/ui/widgets/__init__.py`
     应与 spec D-A1 表格一致(:42/:45/:52/:76/:80/:111/:284/:463/:1624/:1670)。
-  - `grep -n "^class " mf4_analyzer/ui/dialogs.py` 应为 :54/:607/:635 三类。
+  - `grep -n "^class " mf4_analyzer/ui/dialogs.py` 应为 :54/:614/:642 三类。
   - `grep -n "def read_blf_frames\|def load_blf\|def probe_blf_dbc" mf4_analyzer/io/loader.py`
     确认公开门面方法;BLF 私有帮助函数区间约 L149-515。
   - `mf4_analyzer/ui/chart_stack/cards.py` 中 `_ChartCard.__init__` 为 L106-404。
@@ -60,8 +60,9 @@ Expected: 全绿(或与基线失败集一致)。
 **Files:** Create `mf4_analyzer/ui/dialogs/{__init__,channel_editor,export,chart_options}.py`;
 Delete `mf4_analyzer/ui/dialogs.py`。
 
-- [ ] **Step 1:** 记录 `dialogs.py` 头部 import 清单;三个类按 :54-604 / :607-633 /
-  :635-1249 切入三个模块,相对导入 `from .xxx` → `from ..xxx`。
+- [ ] **Step 1:** 记录 `dialogs.py` 头部 import 清单;三个类按 :54-613 / :614-641 /
+  :642-1256 切入三个模块,相对导入 `from .xxx` → `from ..xxx`(含 :44 的
+  `from .expression_help import ...`)。
 - [ ] **Step 2:** `__init__.py`:docstring(修正过期的 `AxisEdit` 描述)+
   再导出 `ChannelEditorDialog, ExportDialog, ChartOptionsDialog`。
 - [ ] **Step 3:** 全仓 grep `ui.dialogs`/`from .dialogs`/`from ..dialogs` 确认所有

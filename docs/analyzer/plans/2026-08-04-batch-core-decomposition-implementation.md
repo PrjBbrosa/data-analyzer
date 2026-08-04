@@ -8,8 +8,8 @@
 公开化切片契约(第一步,零行为变化);随后引入日志兜底、收口进度与记录、拆解
 `run()` 巨型函数(第二步,稳定性加固)。
 
-**基线:** `main` @ `6236a5fe`(v7.9.3)。所有行号以此为准。**独立分支执行**
-(工作区有未提交的 `signal/expression` 在途改动,与本工作无交集,不要混入提交)。
+**基线:** `main` @ `e385ce5a`(v7.9.3 + 通道表达式功能)。所有行号以此为准。
+**独立分支执行**。
 
 **测试环境:** `TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest`
 (下文简写为 `PYTEST`)。批处理全量 = `tests/test_batch*.py tests/test_frozen_batch*.py tests/ui/test_batch*.py`。

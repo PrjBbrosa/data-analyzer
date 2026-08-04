@@ -1,7 +1,8 @@
 # UI 机械拆分热身包 · 设计(包 A)
 
 - 日期:2026-08-04
-- 基线:`main` @ `6236a5fe`(v7.9.3)。**本文所有行号以此 commit 为准。**
+- 基线:`main` @ `e385ce5a`(v7.9.3 + 通道表达式功能)。**本文所有行号以此 commit 为准。**
+  (由 `6236a5fe` 更新;`6bda7ccb` 改动了 `ui/dialogs.py`,A2 锚点已按新基线重取。)
 - 来源:2026-08-04 全仓复杂度评审(杂项大文件分诊)。
 - 实施计划:[2026-08-04-ui-mechanical-splits-implementation.md](../plans/2026-08-04-ui-mechanical-splits-implementation.md)
 - 定位:五个整理包中风险最低的一包,四项互相独立,可任意顺序、任意子集执行。
@@ -11,7 +12,7 @@
 | 项 | 目标文件 | 问题 | 动作 |
 | --- | --- | --- | --- |
 | A1 | `ui/widgets/__init__.py`(1760 行) | 包 `__init__` 内联 6 个类的完整实现,含互不相干的通道树 / Toast / 统计条 | 拆 4 个模块,`__init__` 归零为再导出 |
-| A2 | `ui/dialogs.py`(1249 行) | 三个零耦合对话框同居;L1 docstring 已过期(写着不存在的 `AxisEdit`) | 转成 `ui/dialogs/` 包,三类各自成文件 |
+| A2 | `ui/dialogs.py`(1256 行) | 三个零耦合对话框同居;L1 docstring 已过期(写着不存在的 `AxisEdit`) | 转成 `ui/dialogs/` 包,三类各自成文件 |
 | A3 | `io/loader.py`(1147 行) | BLF/DBC 子系统约 366 行内联(L149-515),而 wwt/zfd/mat 均已外提——委托模式不彻底 | 提 `io/blf_format.py`,`DataLoader` 保留门面 |
 | A4 | `ui/chart_stack/cards.py` | `_ChartCard.__init__`(L106-404,299 行)吞掉全部装配;其余 59 个方法健康 | 只拆这一个方法为 `_build_*`/`_wire_*` 序列 |
 
@@ -58,11 +59,12 @@
 
 **D-A2 · `ui/dialogs.py` → `ui/dialogs/` 包**
 
-`channel_editor.py`(`ChannelEditorDialog` :54-604)、`export.py`(`ExportDialog` :607-633)、
-`chart_options.py`(`ChartOptionsDialog` :635-1249),`__init__.py` 再导出三个类。
-原文件内相对导入(`from .xxx`)升一级为 `from ..xxx`。顺手修掉过期 docstring。
-**本包不拆 `ChannelEditorDialog.__init__`(230 行)**——那是行为敏感的 UI 装配,
-留给后续(见非目标)。
+`channel_editor.py`(`ChannelEditorDialog` :54-613)、`export.py`(`ExportDialog` :614-641)、
+`chart_options.py`(`ChartOptionsDialog` :642-1256),`__init__.py` 再导出三个类。
+原文件内相对导入(`from .xxx`)升一级为 `from ..xxx`(含 :44 新增的
+`from .expression_help import ...`)。顺手修掉过期 docstring。
+**本包不拆 `ChannelEditorDialog.__init__`(:67-299,233 行)**——那是行为敏感的
+UI 装配,留给后续(见非目标)。
 
 **D-A3 · `io/blf_format.py`**
 

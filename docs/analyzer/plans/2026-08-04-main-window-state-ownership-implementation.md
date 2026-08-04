@@ -6,7 +6,7 @@
 > 缩小,不是行数减少。
 
 **设计文档:** [2026-08-04-main-window-state-ownership-design.md](../specs/2026-08-04-main-window-state-ownership-design.md)
-**基线:** `main` @ `6236a5fe`(若前包已合并,Task 0 重定位行号)。
+**基线:** `main` @ `e385ce5a`(若前包已合并,Task 0 重定位行号)。
 分支:`refactor/main-window-state-ownership`。
 **`PYTEST` =** `TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest`
 **核心回归集(下称 `CORE`)=** `tests/ui/test_main_window_smoke.py tests/ui/test_analysis_multiview_integration.py tests/ui/test_view_switch_integration.py tests/ui/test_project_session.py tests/ui/test_view_channel_scope.py tests/ui/test_compute_progress_integration.py`
