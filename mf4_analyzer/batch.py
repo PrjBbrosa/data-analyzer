@@ -217,6 +217,213 @@ def _default_loader(path):
     return file_data[0] if len(file_data) == 1 else file_data
 
 
+class _RunReporter:
+    """Single funnel for one ``BatchRunner.run`` call's progress and records.
+
+    Progress emission and manifest recording used to be written twice -- once
+    down the grouped path and once down the non-grouped one -- which is why
+    the two kept drifting apart.  ``run`` now builds exactly one reporter and
+    both paths call it, so these three cross-cutting concerns are defined in a
+    single place:
+
+    * :meth:`emit` -- every ``BatchProgressEvent`` plus :meth:`emit_progress`,
+      the legacy ``progress_callback(int, int)`` shim (which by contract fires
+      only for ``done`` items);
+    * :meth:`record` -- one manifest entry per item, including artifact facts
+      and the recorder-failure fallback;
+    * :meth:`emit_cancelled_range` -- the batched tail-cancellation emission.
+
+    Deliberately private: ``run`` owns the instance, nothing else may import
+    it.  ``run`` learns the recipe, the recorder and the task plan in stages,
+    hence the ``bind_*`` methods rather than one fat constructor.
+    """
+
+    def __init__(self, runner, preset, *, on_event=None,
+                 progress_callback=None, cancel_token=None):
+        self._runner = runner
+        self._preset = preset
+        self._on_event = on_event
+        self._progress_callback = progress_callback
+        self._cancel_token = cancel_token
+        self._recorder = None
+        self._requested_params: Mapping[str, Any] = {}
+        self._tasks: Sequence = ()
+        self._total = 0
+        self._items: list[BatchItemResult] = []
+        self._cancelled_item = None
+        self.manifest_errors: list[str] = []
+
+    # -- wiring ------------------------------------------------------------
+
+    def bind_recipe(self, requested_params) -> None:
+        """Attach the normalized recipe params stamped into every entry."""
+
+        self._requested_params = requested_params
+
+    def bind_recorder(self, recorder) -> None:
+        """Attach the manifest recorder (``None`` disables recording)."""
+
+        self._recorder = recorder
+
+    def bind_plan(self, *, tasks, total, items, cancelled_item) -> None:
+        """Attach the run plan that tail cancellation walks."""
+
+        self._tasks = tasks
+        self._total = total
+        self._items = items
+        self._cancelled_item = cancelled_item
+
+    # -- progress ----------------------------------------------------------
+
+    def emit(self, event: BatchProgressEvent) -> None:
+        if self._on_event:
+            self._on_event(event)
+
+    def emit_progress(self, item, task_index, total) -> None:
+        """Legacy ``progress_callback(int, int)`` shim.
+
+        The historical contract is "called once per completed task": failed,
+        skipped, resumed and cancelled items do not bump it (spec 4.4 / 8).
+        """
+
+        if self._progress_callback and item.status == 'done':
+            self._progress_callback(task_index, total)
+
+    def emit_cancelled_range(
+        self, start_index, message='batch cancelled',
+    ) -> None:
+        """Cancel every task from ``start_index`` to the end of the plan."""
+
+        for task_index in range(start_index, self._total + 1):
+            key, signal = self._tasks[task_index - 1]
+            item = self._cancelled_item(key, signal, message)
+            self._items.append(item)
+            self.record(item, key, self._runner._known_file_data(key))
+            self.emit(BatchProgressEvent(
+                kind='task_cancelled',
+                task_index=task_index,
+                total=self._total,
+                file_name=item.file_name,
+                signal=signal,
+                method=self._preset.method,
+                task_id=item.task_id,
+                message=item.message,
+            ))
+
+    # -- manifest ----------------------------------------------------------
+
+    def _source_path(self, source_key, fd=None):
+        if fd is not None:
+            value = getattr(fd, 'filepath', None)
+            if value not in (None, ''):
+                return value
+        physical_key = self._runner._physical_for_source(source_key)
+        if physical_key is None:
+            return None
+        return self._runner._physical_paths.get(physical_key, physical_key)
+
+    def record(self, item, source_key, fd=None) -> None:
+        recorder = self._recorder
+        if recorder is None:
+            return
+        preset = self._preset
+        source_path = self._source_path(source_key, fd)
+        source_identity = item.source_identity
+        if not source_identity and source_path not in (None, ''):
+            source_identity = str(
+                Path(source_path).expanduser().resolve(strict=False)
+            )
+        source = source_file_facts(
+            source_path,
+            source_identity=source_identity or f"file_id:{source_key!r}",
+        )
+        source.update({
+            'group_identity': item.group_identity or 'default',
+            'display_name': item.file_name,
+        })
+        artifacts = dict(item.artifact_facts or {})
+        if item.status == 'done':
+            if item.data_path:
+                try:
+                    data_format = str(
+                        preset.outputs.data_format
+                    ).lower().lstrip('.')
+                    artifacts['data'] = artifact_facts(
+                        item.data_path,
+                        kind='data',
+                        artifact_format=(
+                            data_format if data_format == 'xlsx' else 'csv'
+                        ),
+                        cancel_token=self._cancel_token,
+                    )
+                except OSError as exc:
+                    item.warnings.append(f"data checksum unavailable: {exc}")
+            if item.image_path:
+                try:
+                    width, height = preset.outputs.resolved_image_dimensions()
+                    artifacts['image'] = artifact_facts(
+                        item.image_path,
+                        kind='image',
+                        artifact_format=str(
+                            preset.outputs.image_format
+                        ).lower().lstrip('.'),
+                        width=width,
+                        height=height,
+                        dpi=int(preset.outputs.image_dpi),
+                        cancel_token=self._cancel_token,
+                    )
+                except OSError as exc:
+                    item.warnings.append(f"image checksum unavailable: {exc}")
+            item.artifact_facts = artifacts
+            if any(
+                facts.get('checksum_status') != 'complete'
+                for facts in artifacts.values()
+            ):
+                item.warnings.append('artifact checksum incomplete')
+                if (
+                    self._cancel_token is not None
+                    and self._cancel_token.is_set()
+                ):
+                    item.status = 'cancelled'
+                    item.message = 'cancelled during artifact checksum'
+        unit = ''
+        if fd is not None:
+            unit = str(
+                (getattr(fd, 'channel_units', None) or {}).get(
+                    item.signal, '',
+                ) or ''
+            )
+        entry = {
+            'task_id': item.task_id,
+            'source_id': source_key,
+            'source': source,
+            'channel': item.signal,
+            'channel_unit': unit,
+            'method': item.method,
+            'requested_params': self._requested_params,
+            'effective_facts': item.effective_params,
+            'status': item.status,
+            'message': item.message,
+            'warnings': list(item.warnings),
+            'requested_outputs': dict(item.requested_outputs),
+            'effective_outputs': dict(item.effective_outputs),
+            'degraded_reason': item.degraded_reason,
+            'started_at': item.started_at,
+            'finished_at': item.finished_at,
+            'artifacts': artifacts,
+        }
+        try:
+            recorder.record(entry)
+        except Exception as exc:
+            logger.warning(
+                "batch run: cannot record manifest entry for task %s "
+                "(source=%r, channel=%s, status=%s): %s",
+                item.task_id, source_key, item.signal, item.status, exc,
+                exc_info=True,
+            )
+            self.manifest_errors.append(f"cannot update batch manifest: {exc}")
+
+
 class BatchRunner:
     SUPPORTED_METHODS = {'time', 'fft', 'order_time', 'fft_time'}
 
@@ -648,6 +855,15 @@ class BatchRunner:
             resume_manifest=None,
             retry_failed_manifest=None) -> BatchRunResult:
         output_dir = Path(output_dir)
+        # One reporter per run: every progress event, every legacy progress
+        # callback and every manifest entry -- grouped path and non-grouped
+        # path alike -- goes through it.
+        reporter = _RunReporter(
+            self, preset,
+            on_event=on_event,
+            progress_callback=progress_callback,
+            cancel_token=cancel_token,
+        )
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
@@ -656,11 +872,10 @@ class BatchRunner:
                 "batch run: cannot create output dir %s: %s",
                 output_dir, exc, exc_info=True,
             )
-            if on_event:
-                on_event(BatchProgressEvent(
-                    kind='run_finished',
-                    final_status='blocked',
-                ))
+            reporter.emit(BatchProgressEvent(
+                kind='run_finished',
+                final_status='blocked',
+            ))
             return BatchRunResult(status='blocked', blocked=[err])
 
         try:
@@ -678,14 +893,16 @@ class BatchRunner:
                 "batch run: cannot normalize recipe params for preset %s: %s",
                 preset.name, exc, exc_info=True,
             )
-            if on_event:
-                on_event(BatchProgressEvent(
-                    kind='run_finished', final_status='blocked',
-                ))
+            reporter.emit(BatchProgressEvent(
+                kind='run_finished', final_status='blocked',
+            ))
             return BatchRunResult(status='blocked', blocked=[str(exc)])
 
+        reporter.bind_recipe(requested_params)
         recorder = None
-        manifest_errors: list[str] = []
+        # The reporter owns the list; ``finish_result`` and the manifest
+        # fallbacks below keep appending to that same object.
+        manifest_errors: list[str] = reporter.manifest_errors
         run_migration_warnings: tuple[str, ...] = tuple(
             getattr(preset.outputs, 'migration_warnings', ()) or ()
         )
@@ -717,11 +934,12 @@ class BatchRunner:
                     "%s for preset %s: %s",
                     output_dir, preset.name, exc, exc_info=True,
                 )
-                if on_event:
-                    on_event(BatchProgressEvent(
-                        kind='run_finished', final_status='blocked',
-                    ))
+                reporter.emit(BatchProgressEvent(
+                    kind='run_finished', final_status='blocked',
+                ))
                 return BatchRunResult(status='blocked', blocked=[err])
+
+        reporter.bind_recorder(recorder)
 
         def finish_result(status, items=None, blocked=None, render_groups=None):
             result_items = list(items or ())
@@ -757,10 +975,9 @@ class BatchRunner:
                     result_blocked.append(f"cannot finalize batch manifest: {exc}")
                     if result_status == 'done':
                         result_status = 'partial'
-            if on_event:
-                on_event(BatchProgressEvent(
-                    kind='run_finished', final_status=result_status,
-                ))
+            reporter.emit(BatchProgressEvent(
+                kind='run_finished', final_status=result_status,
+            ))
             return BatchRunResult(
                 status=result_status,
                 items=result_items,
@@ -776,106 +993,6 @@ class BatchRunner:
                 ])),
                 render_groups=result_render_groups,
             )
-
-        def physical_path_for(source_key, fd=None):
-            if fd is not None:
-                value = getattr(fd, 'filepath', None)
-                if value not in (None, ''):
-                    return value
-            physical_key = self._physical_for_source(source_key)
-            if physical_key is None:
-                return None
-            return self._physical_paths.get(physical_key, physical_key)
-
-        def record_item(item, source_key, fd=None):
-            if recorder is None:
-                return
-            source_path = physical_path_for(source_key, fd)
-            source_identity = item.source_identity
-            if not source_identity and source_path not in (None, ''):
-                source_identity = str(
-                    Path(source_path).expanduser().resolve(strict=False)
-                )
-            source = source_file_facts(
-                source_path,
-                source_identity=source_identity or f"file_id:{source_key!r}",
-            )
-            source.update({
-                'group_identity': item.group_identity or 'default',
-                'display_name': item.file_name,
-            })
-            artifacts = dict(item.artifact_facts or {})
-            if item.status == 'done':
-                if item.data_path:
-                    try:
-                        data_format = str(
-                            preset.outputs.data_format
-                        ).lower().lstrip('.')
-                        artifacts['data'] = artifact_facts(
-                            item.data_path,
-                            kind='data',
-                            artifact_format=(
-                                data_format if data_format == 'xlsx' else 'csv'
-                            ),
-                            cancel_token=cancel_token,
-                        )
-                    except OSError as exc:
-                        item.warnings.append(f"data checksum unavailable: {exc}")
-                if item.image_path:
-                    try:
-                        width, height = preset.outputs.resolved_image_dimensions()
-                        artifacts['image'] = artifact_facts(
-                            item.image_path,
-                            kind='image',
-                            artifact_format=str(
-                                preset.outputs.image_format
-                            ).lower().lstrip('.'),
-                            width=width,
-                            height=height,
-                            dpi=int(preset.outputs.image_dpi),
-                            cancel_token=cancel_token,
-                        )
-                    except OSError as exc:
-                        item.warnings.append(f"image checksum unavailable: {exc}")
-                item.artifact_facts = artifacts
-                if any(
-                    facts.get('checksum_status') != 'complete'
-                    for facts in artifacts.values()
-                ):
-                    item.warnings.append('artifact checksum incomplete')
-                    if cancel_token is not None and cancel_token.is_set():
-                        item.status = 'cancelled'
-                        item.message = 'cancelled during artifact checksum'
-            unit = ''
-            if fd is not None:
-                unit = str(
-                    (getattr(fd, 'channel_units', None) or {}).get(
-                        item.signal, '',
-                    ) or ''
-                )
-            entry = {
-                'task_id': item.task_id,
-                'source_id': source_key,
-                'source': source,
-                'channel': item.signal,
-                'channel_unit': unit,
-                'method': item.method,
-                'requested_params': requested_params,
-                'effective_facts': item.effective_params,
-                'status': item.status,
-                'message': item.message,
-                'warnings': list(item.warnings),
-                'requested_outputs': dict(item.requested_outputs),
-                'effective_outputs': dict(item.effective_outputs),
-                'degraded_reason': item.degraded_reason,
-                'started_at': item.started_at,
-                'finished_at': item.finished_at,
-                'artifacts': artifacts,
-            }
-            try:
-                recorder.record(entry)
-            except Exception as exc:
-                manifest_errors.append(f"cannot update batch manifest: {exc}")
 
         recipe_issues = (
             *validate_outputs(preset.outputs),
@@ -1100,7 +1217,7 @@ class BatchRunner:
                     finished_at=utc_now(),
                 )
                 failed_items.append(item)
-                record_item(item, source_key, fd)
+                reporter.record(item, source_key, fd)
             if recorder is not None:
                 for group in render_groups:
                     try:
@@ -1214,23 +1331,10 @@ class BatchRunner:
                 finished_at=utc_now(),
             )
 
-        def emit_cancelled_range(start_index, message='batch cancelled'):
-            for task_index in range(start_index, total + 1):
-                key, signal = tasks[task_index - 1]
-                item = cancelled_item(key, signal, message)
-                items.append(item)
-                record_item(item, key, self._known_file_data(key))
-                if on_event:
-                    on_event(BatchProgressEvent(
-                        kind='task_cancelled',
-                        task_index=task_index,
-                        total=total,
-                        file_name=item.file_name,
-                        signal=signal,
-                        method=preset.method,
-                        task_id=item.task_id,
-                        message=item.message,
-                    ))
+        reporter.bind_plan(
+            tasks=tasks, total=total, items=items,
+            cancelled_item=cancelled_item,
+        )
 
         if render_groups:
             group_for_task = {
@@ -1404,7 +1508,7 @@ class BatchRunner:
                         prev_physical_key = None
                     if cancel_token is not None and cancel_token.is_set():
                         cancelled = True
-                        emit_cancelled_range(index)
+                        reporter.emit_cancelled_range(index)
                         break
 
                     member = next(
@@ -1484,29 +1588,30 @@ class BatchRunner:
                                     item.warnings.append(data_reservation.warning)
                                 data_reservation.release()
                         items.append(item)
-                        record_item(item, source_key, self._known_file_data(source_key))
+                        reporter.record(
+                            item, source_key, self._known_file_data(source_key),
+                        )
                         if data_conflict_status == 'failed':
                             blocked.append(
                                 f'{item.file_name}:{signal_name}: '
                                 f'{data_conflict_message}'
                             )
-                        if on_event:
-                            on_event(BatchProgressEvent(
-                                kind=(
-                                    'task_failed'
-                                    if item.status == 'failed'
-                                    else 'task_skipped'
-                                    if item.status == 'skipped'
-                                    else 'task_resumed'
-                                ),
-                                task_index=index,
-                                total=total,
-                                file_name=item.file_name,
-                                signal=signal_name,
-                                method='time',
-                                task_id=item.task_id,
-                                message=item.message,
-                            ))
+                        reporter.emit(BatchProgressEvent(
+                            kind=(
+                                'task_failed'
+                                if item.status == 'failed'
+                                else 'task_skipped'
+                                if item.status == 'skipped'
+                                else 'task_resumed'
+                            ),
+                            task_index=index,
+                            total=total,
+                            file_name=item.file_name,
+                            signal=signal_name,
+                            method='time',
+                            task_id=item.task_id,
+                            message=item.message,
+                        ))
                         continue
 
                     fid, fd_or_fail = self._resolve_task_file(source_key)
@@ -1519,15 +1624,14 @@ class BatchRunner:
                         else str(fd_or_fail.filename)
                     )
                     started_at = utc_now()
-                    if on_event:
-                        on_event(BatchProgressEvent(
-                            kind='task_started',
-                            task_index=index,
-                            total=total,
-                            file_name=fname,
-                            signal=signal_name,
-                            method=preset.method,
-                        ))
+                    reporter.emit(BatchProgressEvent(
+                        kind='task_started',
+                        task_index=index,
+                        total=total,
+                        file_name=fname,
+                        signal=signal_name,
+                        method=preset.method,
+                    ))
                     try:
                         if isinstance(fd_or_fail, _LoadFailure):
                             raise IOError(fd_or_fail.error)
@@ -1600,7 +1704,7 @@ class BatchRunner:
                                 group_blocked[
                                     group.identity.group_id
                                 ] = computed.render_error
-                        record_item(item, source_key, fd_or_fail)
+                        reporter.record(item, source_key, fd_or_fail)
                         defer_terminal = bool(
                             computed.series_refs
                             and item.status in {'done', 'resumed'}
@@ -1609,8 +1713,8 @@ class BatchRunner:
                             deferred_group_terminals[item.task_id] = (
                                 index, fname, signal_name,
                             )
-                        elif on_event:
-                            on_event(BatchProgressEvent(
+                        else:
+                            reporter.emit(BatchProgressEvent(
                                 kind=(
                                     'task_failed' if item.status == 'failed'
                                     else 'task_skipped' if item.status == 'skipped'
@@ -1627,12 +1731,8 @@ class BatchRunner:
                                 data_path=item.data_path,
                                 error=(item.message if item.status == 'failed' else None),
                             ))
-                        if (
-                            not defer_terminal
-                            and progress_callback
-                            and item.status == 'done'
-                        ):
-                            progress_callback(index, total)
+                        if not defer_terminal:
+                            reporter.emit_progress(item, index, total)
                     except _BatchCancelled as exc:
                         if data_reservation is not None:
                             data_reservation.release()
@@ -1659,24 +1759,23 @@ class BatchRunner:
                             finished_at=utc_now(),
                         )
                         items.append(item)
-                        record_item(
+                        reporter.record(
                             item,
                             source_key,
                             None if isinstance(fd_or_fail, _LoadFailure)
                             else fd_or_fail,
                         )
-                        if on_event:
-                            on_event(BatchProgressEvent(
-                                kind='task_cancelled',
-                                task_index=index,
-                                total=total,
-                                file_name=fname,
-                                signal=signal_name,
-                                method='time',
-                                task_id=item.task_id,
-                                message=item.message,
-                            ))
-                        emit_cancelled_range(index + 1)
+                        reporter.emit(BatchProgressEvent(
+                            kind='task_cancelled',
+                            task_index=index,
+                            total=total,
+                            file_name=fname,
+                            signal=signal_name,
+                            method='time',
+                            task_id=item.task_id,
+                            message=item.message,
+                        ))
+                        reporter.emit_cancelled_range(index + 1)
                         break
                     except Exception as exc:
                         if data_reservation is not None:
@@ -1708,24 +1807,23 @@ class BatchRunner:
                             group_results[group.identity.group_id].append(
                                 TaskComputeResult(item=item, render_error=str(exc))
                             )
-                        record_item(
+                        reporter.record(
                             item,
                             source_key,
                             None if isinstance(fd_or_fail, _LoadFailure)
                             else fd_or_fail,
                         )
-                        if on_event:
-                            on_event(BatchProgressEvent(
-                                kind='task_failed',
-                                task_index=index,
-                                total=total,
-                                file_name=fname,
-                                signal=signal_name,
-                                method='time',
-                                error=str(exc),
-                                task_id=item.task_id,
-                                message=item.message,
-                            ))
+                        reporter.emit(BatchProgressEvent(
+                            kind='task_failed',
+                            task_index=index,
+                            total=total,
+                            file_name=fname,
+                            signal=signal_name,
+                            method='time',
+                            error=str(exc),
+                            task_id=item.task_id,
+                            message=item.message,
+                        ))
 
                 for physical_key in tuple(self._disk_cache):
                     self._evict_physical(physical_key)
@@ -1827,7 +1925,7 @@ class BatchRunner:
                                     *computed.item.warnings,
                                     *outcome.warnings,
                                 ]))
-                                record_item(computed.item, computed.item.file_id)
+                                reporter.record(computed.item, computed.item.file_id)
                     if outcome.status == 'cancelled':
                         cancelled = True
                         for computed in results:
@@ -1840,7 +1938,7 @@ class BatchRunner:
                                 or 'batch cancelled before group image completed'
                             )
                             item.finished_at = utc_now()
-                            record_item(item, item.file_id)
+                            reporter.record(item, item.file_id)
                     for computed in results:
                         item = computed.item
                         event_context = deferred_group_terminals.pop(
@@ -1891,27 +1989,25 @@ class BatchRunner:
                     item,
                     image_path,
                 ) in sorted(resolved_group_terminals, key=lambda value: value[0]):
-                    if on_event:
-                        on_event(BatchProgressEvent(
-                            kind=(
-                                'task_cancelled'
-                                if item.status == 'cancelled'
-                                else 'task_resumed'
-                                if item.status == 'resumed'
-                                else 'task_done'
-                            ),
-                            task_index=task_index,
-                            total=total,
-                            file_name=file_name,
-                            signal=signal_name,
-                            method=preset.method,
-                            task_id=item.task_id,
-                            message=item.message,
-                            data_path=item.data_path,
-                            image_path=image_path,
-                        ))
-                    if progress_callback and item.status == 'done':
-                        progress_callback(task_index, total)
+                    reporter.emit(BatchProgressEvent(
+                        kind=(
+                            'task_cancelled'
+                            if item.status == 'cancelled'
+                            else 'task_resumed'
+                            if item.status == 'resumed'
+                            else 'task_done'
+                        ),
+                        task_index=task_index,
+                        total=total,
+                        file_name=file_name,
+                        signal=signal_name,
+                        method=preset.method,
+                        task_id=item.task_id,
+                        message=item.message,
+                        data_path=item.data_path,
+                        image_path=image_path,
+                    ))
+                    reporter.emit_progress(item, task_index, total)
 
             if cancelled:
                 status = 'cancelled'
@@ -1942,7 +2038,7 @@ class BatchRunner:
 
             if cancel_token is not None and cancel_token.is_set():
                 cancelled = True
-                emit_cancelled_range(index)
+                reporter.emit_cancelled_range(index)
                 break
             render_task = next(
                 task for task in render_tasks
@@ -1962,7 +2058,7 @@ class BatchRunner:
                 )
                 if cancel_token is not None and cancel_token.is_set():
                     cancelled = True
-                    emit_cancelled_range(
+                    reporter.emit_cancelled_range(
                         index, message='cancelled during resume checksum',
                     )
                     break
@@ -1971,20 +2067,19 @@ class BatchRunner:
                     resumed_item.finished_at = resumed_item.started_at
                     items.append(resumed_item)
                     fd = self._known_file_data(source_key)
-                    record_item(resumed_item, source_key, fd)
-                    if on_event:
-                        on_event(BatchProgressEvent(
-                            kind='task_resumed',
-                            task_index=index,
-                            total=total,
-                            file_name=resumed_item.file_name,
-                            signal=signal_name,
-                            method=preset.method,
-                            task_id=resumed_item.task_id,
-                            message=resumed_item.message,
-                            data_path=resumed_item.data_path,
-                            image_path=resumed_item.image_path,
-                        ))
+                    reporter.record(resumed_item, source_key, fd)
+                    reporter.emit(BatchProgressEvent(
+                        kind='task_resumed',
+                        task_index=index,
+                        total=total,
+                        file_name=resumed_item.file_name,
+                        signal=signal_name,
+                        method=preset.method,
+                        task_id=resumed_item.task_id,
+                        message=resumed_item.message,
+                        data_path=resumed_item.data_path,
+                        image_path=resumed_item.image_path,
+                    ))
                     continue
 
             if (
@@ -2035,7 +2130,9 @@ class BatchRunner:
                         finished_at=utc_now(),
                     )
                     items.append(item)
-                    record_item(item, source_key, self._known_file_data(source_key))
+                    reporter.record(
+                        item, source_key, self._known_file_data(source_key),
+                    )
                     if conflict_status == 'failed':
                         blocked.append(
                             f'{item.file_name}:{signal_name}: {conflict_message}'
@@ -2057,16 +2154,15 @@ class BatchRunner:
 
             if cancel_token is not None and cancel_token.is_set():
                 cancelled = True
-                emit_cancelled_range(index)
+                reporter.emit_cancelled_range(index)
                 break
 
             started_at = utc_now()
-            if on_event:
-                on_event(BatchProgressEvent(
-                    kind='task_started',
-                    task_index=index, total=total,
-                    file_name=fname, signal=signal_name, method=preset.method,
-                ))
+            reporter.emit(BatchProgressEvent(
+                kind='task_started',
+                task_index=index, total=total,
+                file_name=fname, signal=signal_name, method=preset.method,
+            ))
             try:
                 if isinstance(fd_or_fail, _LoadFailure):
                     raise IOError(fd_or_fail.error)
@@ -2080,36 +2176,34 @@ class BatchRunner:
                 item.started_at = started_at
                 item.finished_at = utc_now()
                 items.append(item)
-                record_item(item, source_key, fd_or_fail)
+                reporter.record(item, source_key, fd_or_fail)
                 if item.status == 'skipped':
                     blocked.append(
                         f"{fname}:{signal_name}: {item.message}; "
                         + "; ".join(item.warnings)
                     )
-                if on_event:
-                    kind = (
-                        'task_skipped' if item.status == 'skipped'
-                        else 'task_cancelled' if item.status == 'cancelled'
-                        else 'task_done'
-                    )
-                    on_event(BatchProgressEvent(
-                        kind=kind,
-                        task_index=index, total=total,
-                        file_name=fname, signal=signal_name,
-                        method=preset.method,
-                        task_id=item.task_id,
-                        message=item.message,
-                        data_path=item.data_path,
-                        image_path=item.image_path,
-                    ))
+                kind = (
+                    'task_skipped' if item.status == 'skipped'
+                    else 'task_cancelled' if item.status == 'cancelled'
+                    else 'task_done'
+                )
+                reporter.emit(BatchProgressEvent(
+                    kind=kind,
+                    task_index=index, total=total,
+                    file_name=fname, signal=signal_name,
+                    method=preset.method,
+                    task_id=item.task_id,
+                    message=item.message,
+                    data_path=item.data_path,
+                    image_path=item.image_path,
+                ))
                 # progress_callback fires ONLY on task_done (legacy contract
                 # was "called once per completed task"). Failed tasks do NOT
-                # bump it — see spec §4.4 / §8.
-                if progress_callback and item.status == 'done':
-                    progress_callback(index, total)
+                # bump it — see spec §4.4 / §8; the rule lives in the reporter.
+                reporter.emit_progress(item, index, total)
                 if item.status == 'cancelled':
                     cancelled = True
-                    emit_cancelled_range(index + 1)
+                    reporter.emit_cancelled_range(index + 1)
                     break
             except _BatchCancelled as exc:
                 cancelled = True
@@ -2129,21 +2223,20 @@ class BatchRunner:
                     started_at=started_at,
                     finished_at=utc_now(),
                 ))
-                record_item(items[-1], source_key, (
+                reporter.record(items[-1], source_key, (
                     None if isinstance(fd_or_fail, _LoadFailure) else fd_or_fail
                 ))
-                if on_event:
-                    on_event(BatchProgressEvent(
-                        kind='task_cancelled',
-                        task_index=index,
-                        total=total,
-                        file_name=fname,
-                        signal=signal_name,
-                        method=preset.method,
-                        task_id=items[-1].task_id,
-                        message=str(exc),
-                    ))
-                emit_cancelled_range(index + 1)
+                reporter.emit(BatchProgressEvent(
+                    kind='task_cancelled',
+                    task_index=index,
+                    total=total,
+                    file_name=fname,
+                    signal=signal_name,
+                    method=preset.method,
+                    task_id=items[-1].task_id,
+                    message=str(exc),
+                ))
+                reporter.emit_cancelled_range(index + 1)
                 break
             except Exception as exc:
                 identity = render_task.identity
@@ -2163,18 +2256,17 @@ class BatchRunner:
                     finished_at=utc_now(),
                 ))
                 blocked.append(f"{fname}:{signal_name}: {exc}")
-                record_item(items[-1], source_key, (
+                reporter.record(items[-1], source_key, (
                     None if isinstance(fd_or_fail, _LoadFailure) else fd_or_fail
                 ))
-                if on_event:
-                    on_event(BatchProgressEvent(
-                        kind='task_failed',
-                        task_index=index, total=total,
-                        file_name=fname, signal=signal_name,
-                        method=preset.method, error=str(exc),
-                        task_id=items[-1].task_id,
-                        message=str(exc),
-                    ))
+                reporter.emit(BatchProgressEvent(
+                    kind='task_failed',
+                    task_index=index, total=total,
+                    file_name=fname, signal=signal_name,
+                    method=preset.method, error=str(exc),
+                    task_id=items[-1].task_id,
+                    message=str(exc),
+                ))
 
         # Evict every physical source, including an auxiliary cross-source RPM
         # container that may have been loaded during the final task.
