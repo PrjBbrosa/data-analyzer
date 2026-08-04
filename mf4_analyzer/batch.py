@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import asdict, replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 import logging
@@ -900,7 +901,7 @@ class BatchRunner:
 
         reporter.bind_recipe(requested_params)
         recorder = None
-        # The reporter owns the list; ``finish_result`` and the manifest
+        # The reporter owns the list; ``_finish_result`` and the manifest
         # fallbacks below keep appending to that same object.
         manifest_errors: list[str] = reporter.manifest_errors
         run_migration_warnings: tuple[str, ...] = tuple(
@@ -940,59 +941,13 @@ class BatchRunner:
                 return BatchRunResult(status='blocked', blocked=[err])
 
         reporter.bind_recorder(recorder)
-
-        def finish_result(status, items=None, blocked=None, render_groups=None):
-            result_items = list(items or ())
-            result_blocked = list(blocked or ())
-            result_render_groups = list(render_groups or ())
-            result_blocked.extend(manifest_errors)
-            result_status = status
-            degraded_reasons = list(dict.fromkeys(
-                item.degraded_reason
-                for item in result_items
-                if item.degraded_reason
-            ))
-            degraded_count = sum(
-                bool(item.degraded_reason) for item in result_items
-            )
-            if degraded_count and result_status == 'done':
-                result_status = 'partial'
-            if manifest_errors and result_status == 'done':
-                result_status = 'partial'
-            summary = derive_summary(
-                {'status': item.status} for item in result_items
-            )
-            manifest_path = None
-            run_id = recorder.run_id if recorder is not None else None
-            if recorder is not None:
-                try:
-                    manifest_path = str(recorder.finish(
-                        run_status=result_status,
-                        blocked_reasons=result_blocked,
-                    ))
-                    summary = derive_summary(recorder.entries)
-                except Exception as exc:
-                    result_blocked.append(f"cannot finalize batch manifest: {exc}")
-                    if result_status == 'done':
-                        result_status = 'partial'
-            reporter.emit(BatchProgressEvent(
-                kind='run_finished', final_status=result_status,
-            ))
-            return BatchRunResult(
-                status=result_status,
-                items=result_items,
-                blocked=result_blocked,
-                manifest_path=manifest_path,
-                summary=summary,
-                run_id=run_id,
-                degraded_count=degraded_count,
-                warnings=list(dict.fromkeys([
-                    *run_migration_warnings,
-                    *degraded_reasons,
-                    *(warning for item in result_items for warning in item.warnings),
-                ])),
-                render_groups=result_render_groups,
-            )
+        # Bound once so the 14 terminal exits below stay one call each.  Note
+        # ``run_migration_warnings`` is *not* bound here: it is rebound from
+        # the effective output plan further down, so every call site passes
+        # the value that is current at that point.
+        finish_result = partial(
+            self._finish_result, reporter=reporter, recorder=recorder,
+        )
 
         recipe_issues = (
             *validate_outputs(preset.outputs),
@@ -1005,12 +960,16 @@ class BatchRunner:
         )
         if recipe_issues:
             err = "; ".join(str(issue) for issue in recipe_issues)
-            return finish_result('blocked', blocked=[err])
+            return finish_result(
+                'blocked', blocked=[err],
+                run_migration_warnings=run_migration_warnings,
+            )
 
         if resume_manifest is not None and retry_failed_manifest is not None:
             return finish_result(
                 'blocked',
                 blocked=['resume_manifest and retry_failed_manifest are mutually exclusive'],
+                run_migration_warnings=run_migration_warnings,
             )
 
         resume_data = None
@@ -1023,6 +982,7 @@ class BatchRunner:
                 blocked=[
                     'resume_manifest requires outputs.resume_policy="manifest"'
                 ],
+                run_migration_warnings=run_migration_warnings,
             )
         if resume_policy == 'manifest':
             try:
@@ -1056,6 +1016,7 @@ class BatchRunner:
                 )
                 return finish_result(
                     'blocked', blocked=[f"cannot load resume manifest: {exc}"],
+                    run_migration_warnings=run_migration_warnings,
                 )
 
         retry_scope = None
@@ -1068,54 +1029,32 @@ class BatchRunner:
                     recipe_fingerprint=recipe_id,
                 )
             except ManifestRecipeMismatch as exc:
-                return finish_result('blocked', blocked=[str(exc)])
+                return finish_result(
+                    'blocked', blocked=[str(exc)],
+                    run_migration_warnings=run_migration_warnings,
+                )
             except Exception as exc:
                 return finish_result(
                     'blocked', blocked=[f"cannot load retry manifest: {exc}"],
+                    run_migration_warnings=run_migration_warnings,
                 )
             if not retry_scope:
                 return finish_result(
                     'blocked',
                     blocked=['retry manifest has no failed or cancelled tasks'],
+                    run_migration_warnings=run_migration_warnings,
                 )
 
         group_by = str(requested_params.get(
             'render_group_by', 'none',
         ) or 'none').strip().lower()
         explicit_grouping = preset.method == 'time' and group_by != 'none'
-
-        def apply_retry_scope(tasks, render_tasks, render_groups):
-            if retry_scope is None:
-                return tasks, render_tasks, render_groups
-            if not explicit_grouping:
-                selected = [
-                    (source_key, channel)
-                    for source_key, channel in tasks
-                    if (source_key, channel, preset.method) in retry_scope
-                ]
-                return selected, render_tasks, render_groups
-            selected_groups = tuple(
-                group for group in render_groups
-                if group.identity.group_id in retry_scope.group_ids
-                or any(
-                    (member.source_key, member.channel, preset.method)
-                    in retry_scope
-                    for member in group.members
-                )
-            )
-            selected_pairs = {
-                (member.source_key, member.channel)
-                for group in selected_groups
-                for member in group.members
-            }
-            return (
-                [task for task in tasks if task in selected_pairs],
-                [
-                    task for task in render_tasks
-                    if (task.source_key, task.channel) in selected_pairs
-                ],
-                list(selected_groups),
-            )
+        apply_retry_scope = partial(
+            self._apply_retry_scope,
+            retry_scope=retry_scope,
+            preset=preset,
+            explicit_grouping=explicit_grouping,
+        )
         deferred_path_scope = bool(
             tuple(getattr(preset, 'target_signals', ()) or ())
             and not tuple(getattr(preset, 'target_pairs', ()) or ())
@@ -1141,7 +1080,10 @@ class BatchRunner:
             )
             for physical_key in tuple(self._disk_cache):
                 self._evict_physical(physical_key)
-            return finish_result('blocked', blocked=[str(exc)])
+            return finish_result(
+                'blocked', blocked=[str(exc)],
+                run_migration_warnings=run_migration_warnings,
+            )
         recovery_scope_manifest = retry_data
         if recovery_scope_manifest is None and resume_data is not None:
             recovery_scope_manifest = resume_data
@@ -1235,6 +1177,7 @@ class BatchRunner:
                         )
             return finish_result(
                 'blocked', items=failed_items, blocked=[str(exc)],
+                run_migration_warnings=run_migration_warnings,
             )
 
         if deferred_path_scope:
@@ -1253,12 +1196,16 @@ class BatchRunner:
                 )
                 for physical_key in tuple(self._disk_cache):
                     self._evict_physical(physical_key)
-                return finish_result('blocked', blocked=[str(exc)])
+                return finish_result(
+                    'blocked', blocked=[str(exc)],
+                    run_migration_warnings=run_migration_warnings,
+                )
             if not tasks:
                 for physical_key in tuple(self._disk_cache):
                     self._evict_physical(physical_key)
                 return finish_result(
                     'blocked', blocked=['no matching batch tasks'],
+                    run_migration_warnings=run_migration_warnings,
                 )
             if retry_scope is not None and not explicit_grouping:
                 tasks = [
@@ -1271,6 +1218,7 @@ class BatchRunner:
                         self._evict_physical(physical_key)
                     return finish_result(
                         'blocked', blocked=['no matching batch tasks'],
+                        run_migration_warnings=run_migration_warnings,
                     )
             tasks, render_tasks, render_groups = self._build_run_plan(
                 tasks,
@@ -1289,51 +1237,14 @@ class BatchRunner:
         prev_physical_key = None
         requested_artifacts = self._required_artifacts(preset.outputs)
 
-        def task_file_name(source_key):
-            fd = self._known_file_data(source_key)
-            if fd is not None:
-                return getattr(fd, 'filename', str(source_key))
-            physical_key = self._physical_for_source(source_key)
-            if physical_key is not None:
-                return self._physical_paths.get(physical_key, physical_key)
-            return str(source_key)
-
-        def cancelled_item(source_key, signal, message):
-            fd = self._known_file_data(source_key)
-            if fd is not None:
-                identity = self._build_task_identity(
-                    fd,
-                    file_id=source_key,
-                    channel=signal,
-                    method=preset.method,
-                    params=requested_params,
-                )
-            else:
-                identity = self._build_unresolved_task_identity(
-                    source_key,
-                    channel=signal,
-                    method=preset.method,
-                    params=requested_params,
-                )
-            return BatchItemResult(
-                method=preset.method,
-                file_id=source_key,
-                file_name=task_file_name(source_key),
-                signal=signal,
-                status='cancelled',
-                message=message,
-                task_id=(identity.task_id if identity else ''),
-                source_identity=(identity.source_identity if identity else ''),
-                group_identity=(identity.group_identity if identity else ''),
-                requested_outputs=dict(requested_artifacts),
-                effective_outputs=dict(requested_artifacts),
-                started_at=None,
-                finished_at=utc_now(),
-            )
-
         reporter.bind_plan(
             tasks=tasks, total=total, items=items,
-            cancelled_item=cancelled_item,
+            cancelled_item=partial(
+                self._cancelled_item,
+                preset=preset,
+                requested_params=requested_params,
+                requested_artifacts=requested_artifacts,
+            ),
         )
 
         if render_groups:
@@ -1385,38 +1296,9 @@ class BatchRunner:
                 if entry.get('group_id')
             }
 
-            def planned_group_item(member, *, status, message='', entry=None):
-                artifacts = dict((entry or {}).get('artifacts') or {})
-                data = artifacts.get('data') or {}
-                source = (entry or {}).get('source') or {}
-                return BatchItemResult(
-                    method='time',
-                    file_id=member.source_key,
-                    file_name=str(
-                        source.get('display_name')
-                        or task_file_name(member.source_key)
-                    ),
-                    signal=member.channel,
-                    status=status,
-                    data_path=(data.get('path') if status == 'resumed' else None),
-                    message=message,
-                    task_id=member.identity.task_id,
-                    source_identity=member.identity.source_identity,
-                    group_identity=member.identity.group_identity,
-                    effective_params=dict(
-                        (entry or {}).get('effective_facts') or {}
-                    ),
-                    warnings=list(dict.fromkeys([
-                        *effective_plan.migration_warnings,
-                        *((entry or {}).get('warnings') or []),
-                    ])),
-                    requested_outputs=dict(effective_plan.requested),
-                    effective_outputs=dict(effective_plan.effective),
-                    degraded_reason=effective_plan.degraded_reason,
-                    artifact_facts=(artifacts if status == 'resumed' else {}),
-                    started_at=utc_now(),
-                    finished_at=utc_now(),
-                )
+            planned_group_item = partial(
+                self._planned_group_item, effective_plan=effective_plan,
+            )
 
             group_results: dict[str, list[TaskComputeResult]] = {
                 group.identity.group_id: [] for group in render_groups
@@ -2022,6 +1904,7 @@ class BatchRunner:
             return finish_result(
                 status, items=items, blocked=blocked,
                 render_groups=render_group_outcomes,
+                run_migration_warnings=run_migration_warnings,
             )
 
         for index, (source_key, signal_name) in enumerate(tasks, start=1):
@@ -2118,7 +2001,7 @@ class BatchRunner:
                     item = BatchItemResult(
                         method='time',
                         file_id=source_key,
-                        file_name=task_file_name(source_key),
+                        file_name=self._task_file_name(source_key),
                         signal=signal_name,
                         status=conflict_status,
                         message=conflict_message,
@@ -2283,7 +2166,199 @@ class BatchRunner:
             status = 'partial'
         else:
             status = 'done'
-        return finish_result(status, items=items, blocked=blocked)
+        return finish_result(
+            status, items=items, blocked=blocked,
+            run_migration_warnings=run_migration_warnings,
+        )
+
+    # -- run() helpers -----------------------------------------------------
+    #
+    # The five methods below were closures inside ``run``.  Everything they
+    # used to capture is now an explicit parameter, so the state a single
+    # ``run`` call threads through them is visible at each call site instead
+    # of being implied by the enclosing scope.
+
+    def _finish_result(self, status, *, reporter, recorder,
+                       run_migration_warnings, items=None, blocked=None,
+                       render_groups=None):
+        """Assemble the terminal ``BatchRunResult`` and close the manifest.
+
+        ``manifest_errors`` is deliberately not a parameter: the reporter owns
+        that list and every appender in ``run`` mutates that same object, so
+        reading it back off the reporter is what the closure did.
+        """
+
+        manifest_errors = reporter.manifest_errors
+        result_items = list(items or ())
+        result_blocked = list(blocked or ())
+        result_render_groups = list(render_groups or ())
+        result_blocked.extend(manifest_errors)
+        result_status = status
+        degraded_reasons = list(dict.fromkeys(
+            item.degraded_reason
+            for item in result_items
+            if item.degraded_reason
+        ))
+        degraded_count = sum(
+            bool(item.degraded_reason) for item in result_items
+        )
+        if degraded_count and result_status == 'done':
+            result_status = 'partial'
+        if manifest_errors and result_status == 'done':
+            result_status = 'partial'
+        summary = derive_summary(
+            {'status': item.status} for item in result_items
+        )
+        manifest_path = None
+        run_id = recorder.run_id if recorder is not None else None
+        if recorder is not None:
+            try:
+                manifest_path = str(recorder.finish(
+                    run_status=result_status,
+                    blocked_reasons=result_blocked,
+                ))
+                summary = derive_summary(recorder.entries)
+            except Exception as exc:
+                result_blocked.append(f"cannot finalize batch manifest: {exc}")
+                if result_status == 'done':
+                    result_status = 'partial'
+        reporter.emit(BatchProgressEvent(
+            kind='run_finished', final_status=result_status,
+        ))
+        return BatchRunResult(
+            status=result_status,
+            items=result_items,
+            blocked=result_blocked,
+            manifest_path=manifest_path,
+            summary=summary,
+            run_id=run_id,
+            degraded_count=degraded_count,
+            warnings=list(dict.fromkeys([
+                *run_migration_warnings,
+                *degraded_reasons,
+                *(warning for item in result_items for warning in item.warnings),
+            ])),
+            render_groups=result_render_groups,
+        )
+
+    def _apply_retry_scope(self, tasks, render_tasks, render_groups, *,
+                           retry_scope, preset, explicit_grouping):
+        """Narrow a freshly built run plan down to a retry manifest's scope."""
+
+        if retry_scope is None:
+            return tasks, render_tasks, render_groups
+        if not explicit_grouping:
+            selected = [
+                (source_key, channel)
+                for source_key, channel in tasks
+                if (source_key, channel, preset.method) in retry_scope
+            ]
+            return selected, render_tasks, render_groups
+        selected_groups = tuple(
+            group for group in render_groups
+            if group.identity.group_id in retry_scope.group_ids
+            or any(
+                (member.source_key, member.channel, preset.method)
+                in retry_scope
+                for member in group.members
+            )
+        )
+        selected_pairs = {
+            (member.source_key, member.channel)
+            for group in selected_groups
+            for member in group.members
+        }
+        return (
+            [task for task in tasks if task in selected_pairs],
+            [
+                task for task in render_tasks
+                if (task.source_key, task.channel) in selected_pairs
+            ],
+            list(selected_groups),
+        )
+
+    def _task_file_name(self, source_key):
+        """Display name for a task whose file may never have been loaded."""
+
+        fd = self._known_file_data(source_key)
+        if fd is not None:
+            return getattr(fd, 'filename', str(source_key))
+        physical_key = self._physical_for_source(source_key)
+        if physical_key is not None:
+            return self._physical_paths.get(physical_key, physical_key)
+        return str(source_key)
+
+    def _cancelled_item(self, source_key, signal, message, *, preset,
+                        requested_params, requested_artifacts):
+        """Build the ``cancelled`` item for a task that never started."""
+
+        fd = self._known_file_data(source_key)
+        if fd is not None:
+            identity = self._build_task_identity(
+                fd,
+                file_id=source_key,
+                channel=signal,
+                method=preset.method,
+                params=requested_params,
+            )
+        else:
+            identity = self._build_unresolved_task_identity(
+                source_key,
+                channel=signal,
+                method=preset.method,
+                params=requested_params,
+            )
+        return BatchItemResult(
+            method=preset.method,
+            file_id=source_key,
+            file_name=self._task_file_name(source_key),
+            signal=signal,
+            status='cancelled',
+            message=message,
+            task_id=(identity.task_id if identity else ''),
+            source_identity=(identity.source_identity if identity else ''),
+            group_identity=(identity.group_identity if identity else ''),
+            requested_outputs=dict(requested_artifacts),
+            effective_outputs=dict(requested_artifacts),
+            started_at=None,
+            finished_at=utc_now(),
+        )
+
+    def _planned_group_item(self, member, *, effective_plan, status,
+                            message='', entry=None):
+        """Build a grouped-path item that needs no compute pass."""
+
+        artifacts = dict((entry or {}).get('artifacts') or {})
+        data = artifacts.get('data') or {}
+        source = (entry or {}).get('source') or {}
+        return BatchItemResult(
+            method='time',
+            file_id=member.source_key,
+            file_name=str(
+                source.get('display_name')
+                or self._task_file_name(member.source_key)
+            ),
+            signal=member.channel,
+            status=status,
+            data_path=(data.get('path') if status == 'resumed' else None),
+            message=message,
+            task_id=member.identity.task_id,
+            source_identity=member.identity.source_identity,
+            group_identity=member.identity.group_identity,
+            effective_params=dict(
+                (entry or {}).get('effective_facts') or {}
+            ),
+            warnings=list(dict.fromkeys([
+                *effective_plan.migration_warnings,
+                *((entry or {}).get('warnings') or []),
+            ])),
+            requested_outputs=dict(effective_plan.requested),
+            effective_outputs=dict(effective_plan.effective),
+            degraded_reason=effective_plan.degraded_reason,
+            artifact_facts=(artifacts if status == 'resumed' else {}),
+            started_at=utc_now(),
+            finished_at=utc_now(),
+        )
 
     def _physical_cache_key(self, path) -> str:
         raw = str(path)
