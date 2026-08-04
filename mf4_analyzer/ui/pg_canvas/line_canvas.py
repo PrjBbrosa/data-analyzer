@@ -54,6 +54,11 @@ from ._split_mixin import (
 )
 from .ticks_math import _adjacent_nice_step, _frame_to_nice, _fmt_tick
 from .viewbox import _ModifierWheelViewBox, _WheelDeltaGraphicsLayoutWidget
+from mf4_analyzer.ui_kit.axis_metrics import (
+    activate_item_layouts,
+    left_axis_width_for_ticks,
+    pin_left_axes_to_common_width,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -1516,6 +1521,21 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         return max(120.0, viewport_w - 140.0)
 
     def prepare_split_layout_alignment(self, title_width: float | None) -> None:
+        """Release stale pins, constrain the title, and realize geometry.
+
+        The ``setWidth(None)`` release is kept even though the measurement that
+        follows it is now font-metric based. It is the only thing that lets a
+        cross-pane pin re-TIGHTEN: ``line_layout_metrics`` reports
+        ``max(font need, width())``, so without a release the realized term
+        would still be carrying whatever the previous, possibly much wider,
+        alignment pass pinned, and a pane that switched from rack force to
+        steering torque would keep a rack-force-sized left margin forever.
+
+        It only became load-bearing with the ``_activate_graphics_layout`` fix
+        below. Before that, the release moved size hints that nothing ever
+        realized, so ``width()`` kept reporting the old pin and the release was
+        a no-op that merely looked like one.
+        """
         self._split_title_width = (
             max(80.0, float(title_width))
             if title_width is not None else None
@@ -1547,34 +1567,52 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._unify_stacked_left_axes()
 
     def _unify_stacked_left_axes(self) -> None:
-        """Pin the amp and time-preview left axes to the MAX of their natural
-        widths so both stacked plots share a left edge in single-pane mode.
+        """Pin the amp and time-preview left axes to one width so both stacked
+        plots share a left edge in single-pane mode.
 
-        Call only AFTER prepare_split_layout_alignment(None) released the
-        widths (setWidth(None)) and realized the layout, so width() reports each
-        axis's natural size."""
-        axes = self._alignment_left_axes()
-        widths = []
-        for axis in axes:
-            try:
-                widths.append(float(axis.width()))
-            except Exception:
-                pass
-        if not widths:
-            return
-        target = max(widths)
-        for axis in axes:
-            try:
-                axis.setWidth(target)
-            except Exception:
-                pass
-        self._activate_graphics_layout()
+        The width comes from the tick STRINGS each axis is carrying right now
+        (``pin_left_axes_to_common_width``, folded with each axis's realized
+        ``width()`` so the pin is monotonically non-decreasing within one
+        alignment pass). Reading ``AxisItem.width()`` alone cannot answer the
+        question: pyqtgraph's automatic width is derived from
+        ``AxisItem.textWidth``, which is only refreshed inside
+        ``generateDrawSpecs`` — i.e. while painting — so before the first paint
+        of a new tick set it is still the constructor default of 30. Combined
+        with a ``_activate_graphics_layout`` that used to activate only
+        ``glw.ci.layout`` (never the PlotItem layouts that actually size the
+        axis cell), the pin became a fixed point of itself: plotting a 0-0.8 Nm
+        spectrum and then a 0-480000 N one left the axis at 62.4px against the
+        101.4px its labels needed, and ``generateDrawSpecs`` silently DROPPED
+        every label that did not fit, leaving a spectrum row labelled ``'0'``.
+
+        Call after prepare_split_layout_alignment(None) so the realized term in
+        the max is a released natural width rather than a stale pin.
+        """
+        pin_left_axes_to_common_width(
+            self._alignment_left_axes(), layout_owners=self._layout_owners())
+
+    def _layout_owners(self):
+        """Graphics items whose own ``QGraphicsLayout`` assigns axis geometry.
+
+        Each ``AxisItem``'s cell is sized by its owning PlotItem's layout, NOT
+        by the enclosing ``GraphicsLayout`` grid, so both have to be activated
+        or a width change never reaches realized geometry.
+        """
+        return [self._glw.ci, self._plot_amp, self._plot_time]
 
     def line_layout_metrics(self) -> dict:
         left_widths = []
         for axis in self._alignment_left_axes():
             try:
-                left_widths.append(float(axis.width()))
+                # Same max() as the pin: the font-metric term is the only
+                # honest one before the axis has been painted, and the realized
+                # term keeps an already-sized axis from being narrowed. Reading
+                # width() alone would feed the page-level cross-pane max from
+                # the very numbers the pin is meant to correct.
+                left_widths.append(max(
+                    float(left_axis_width_for_ticks(axis)),
+                    float(axis.width()),
+                ))
             except Exception:
                 pass
         bottom_heights = []
@@ -1709,12 +1747,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             pass
 
     def _activate_graphics_layout(self) -> None:
-        try:
-            layout = self._glw.ci.layout
-            layout.invalidate()
-            layout.activate()
-        except Exception:
-            pass
+        """Realize pending geometry for the outer grid AND both PlotItems.
+
+        Activating only ``self._glw.ci.layout`` re-flows the rows without ever
+        re-sizing the ``AxisItem`` cells inside them, because those cells belong
+        to each PlotItem's own layout. That is why releasing a left-axis pin
+        here used to have no observable effect at all. Mirrors the traversal
+        ``heatmap_canvas._activate_graphics_layout`` already did.
+        """
+        activate_item_layouts(self._layout_owners())
 
     def readout_at(self, freq: float):
         rows = []

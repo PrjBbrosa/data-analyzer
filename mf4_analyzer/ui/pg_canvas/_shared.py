@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from mf4_analyzer.qt_plot_helpers import (
+    GridLabelSlackAxisItem,
     hide_native_auto_button as _hide_native_auto_button,
     show_major_grid_left_bottom_only,
 )

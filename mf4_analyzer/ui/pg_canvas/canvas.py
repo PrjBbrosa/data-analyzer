@@ -111,6 +111,7 @@ from mf4_analyzer.ui.pg_canvas.viewbox import (
 )
 from mf4_analyzer.ui.pg_canvas import renderer as _renderer
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
+from mf4_analyzer.ui_kit.axis_metrics import pin_left_axes_to_common_width
 from mf4_analyzer.ui.axis_group_palette import axis_group_color
 from mf4_analyzer.ui.pg_canvas.quality import QualityManager
 from mf4_analyzer.ui.pg_canvas.dense_raster import DenseDiscreteRasterLayer
@@ -121,6 +122,7 @@ from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
     _capped_hidpi_scale,
 )
 from mf4_analyzer.ui.pg_canvas._shared import (  # noqa: F401
+    GridLabelSlackAxisItem,
     _ChannelKeyDict,
     _hide_native_auto_button,
     _subplot_ylabel_text,
@@ -1926,7 +1928,18 @@ class TimeDomainCanvasPG(QWidget):
                 width=PG_AXIS_NEUTRAL_WIDTH,
             )
         )
-        pi = self._glw.addPlot(row=row, col=col, viewBox=vb)
+        # The left axis is the one that carries the Y grid here
+        # (show_major_grid_left_bottom_only below). pyqtgraph's grid branch in
+        # AxisItem.boundingRect drops the vertical tick-label slack, which
+        # silently DELETES the topmost/bottommost Y tick values; the subclass
+        # restores it. Bottom/top/right keep the stock AxisItem (a horizontal
+        # axis has no such slack to lose, and top/right carry no grid).
+        pi = self._glw.addPlot(
+            row=row,
+            col=col,
+            viewBox=vb,
+            axisItems={"left": GridLabelSlackAxisItem(orientation="left")},
+        )
         _hide_native_auto_button(pi)
         _localize_pg_context_menu(getattr(vb, "menu", None))
         _localize_pg_context_menu(getattr(pi, "ctrlMenu", None))
@@ -3921,9 +3934,26 @@ class TimeDomainCanvasPG(QWidget):
         pyqtgraph sizes each PlotItem's left ``AxisItem`` to its own
         tick-label text width. In subplot mode that makes rows with wider
         numeric labels start further right, skewing the shared time grid.
-        We measure each left axis's current width and pin all of them to
-        the max so the left edges align. Cheap and idempotent: re-running
-        with the same widths leaves the max unchanged.
+        Every left axis is pinned to the widest requirement so the left edges
+        land on the same screen x.
+
+        The requirement is measured from the tick STRINGS each axis is
+        carrying right now (``pin_left_axes_to_common_width``), never by
+        releasing the pin and reading ``AxisItem.width()`` back. That older
+        release-and-remeasure was wrong twice over: ``setWidth(None)`` moves
+        only size hints while ``width()`` reports realized geometry, so with
+        no layout activation in between the read returned the width that was
+        already pinned — the pin was a fixed point of itself and could never
+        grow — and the value it froze at came from a pre-first-paint
+        ``AxisItem.textWidth`` of 30. A row whose labels did not fit (e.g.
+        rack force at +/-5000 N) then had every over-wide label silently
+        dropped by ``AxisItem.generateDrawSpecs``. Font metrics answer the
+        question directly, so the whole dance is gone.
+
+        Pinning is monotonically non-decreasing (the shared helper folds each
+        axis's realized ``width()`` into the max), matching the batch
+        renderer's semantics: an axis does not shrink back when its labels
+        get shorter. See ``ui_kit.axis_metrics`` for the tradeoff note.
 
         Only meaningful in subplot mode (``_subplot_label_specs`` is the
         subplot marker); short-circuits otherwise so overlay/single paths
@@ -3932,42 +3962,22 @@ class TimeDomainCanvasPG(QWidget):
         if not self._subplot_label_specs:
             return
         left_axes = []
+        layout_owners = [self._glw.ci]
+        seen_owners = {id(self._glw.ci)}
         for handle in self.axes_list:
             ax_item = handle._ax("left") if hasattr(handle, "_ax") else None
             if ax_item is not None:
                 left_axes.append(ax_item)
+            plot_item = getattr(handle, "plot_item", None)
+            if plot_item is not None and id(plot_item) not in seen_owners:
+                seen_owners.add(id(plot_item))
+                layout_owners.append(plot_item)
         if len(left_axes) < 2:
             return
-        # Release any prior pin so width() reflects the CURRENT tick-label
-        # text width before we re-measure. Without this, a previous pin
-        # (e.g. from an earlier density level) would make every axis report
-        # the same stale width and the unification would never re-tighten.
-        for ax_item in left_axes:
-            try:
-                ax_item.setWidth(None)
-            except Exception:
-                pass
-        max_w = 0.0
-        for ax_item in left_axes:
-            try:
-                w = float(ax_item.width())
-            except Exception:
-                continue
-            if w > max_w:
-                max_w = w
-        if max_w <= 0.0:
-            return
-        for ax_item in left_axes:
-            try:
-                ax_item.setWidth(max_w)
-            except Exception:
-                pass
-        try:
-            layout = self._glw.ci.layout
-            layout.invalidate()
-            layout.activate()
-        except Exception:
-            pass
+        # The AxisItem cell is sized by its own PlotItem's layout, not by the
+        # outer GraphicsLayout grid, so both have to be activated or the pin
+        # never reaches realized geometry.
+        pin_left_axes_to_common_width(left_axes, layout_owners=layout_owners)
 
     def _unify_subplot_bottom_axis_heights(self):
         """Collapse hidden upper subplot bottom-axis reserves and balance rows.

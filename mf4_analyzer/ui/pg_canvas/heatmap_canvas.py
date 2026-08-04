@@ -37,6 +37,7 @@ from mf4_analyzer.ui._axis_handle import (
 )
 from mf4_analyzer.ui.pg_canvas.context_menu import redesign_pg_context_menu
 from mf4_analyzer.ui.pg_canvas._shared import (
+    GridLabelSlackAxisItem,
     _hide_native_auto_button,
     show_major_grid_left_bottom_only,
 )
@@ -58,6 +59,10 @@ from mf4_analyzer.ui.pg_canvas.remarks import (
 from mf4_analyzer.ui.pg_canvas.viewbox import (
     _ModifierWheelViewBox,
     _WheelDeltaGraphicsLayoutWidget,
+)
+from mf4_analyzer.ui_kit.axis_metrics import (
+    left_axis_width_for_ticks,
+    pin_left_axes_to_common_width,
 )
 
 
@@ -618,8 +623,15 @@ _EMPTY_X_RANGE = (0.0, 30.0)
 _EMPTY_Y_RANGE = (0.0, 1000.0)
 
 
-class _BoundaryGridAxisItem(pg.AxisItem):
+class _BoundaryGridAxisItem(GridLabelSlackAxisItem):
     """AxisItem that suppresses ONLY the outermost (view-boundary) grid line.
+
+    Base class note: it derives from ``GridLabelSlackAxisItem`` (not plain
+    ``pg.AxisItem``) so the LEFT instance also keeps the vertical tick-label
+    slack that pyqtgraph's grid branch drops — without it the top/bottom Y
+    tick VALUES disappear as soon as the grid is on (D2). The two behaviours
+    are orthogonal: this class drops a boundary grid LINE, the base restores
+    boundary tick TEXT.
 
     Analysis plots keep explicit Y/X whitespace (e.g. the empty-state
     ``setYRange(0, 1, padding=0.08)`` and pyqtgraph's autorange margin in the
@@ -2359,8 +2371,19 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         """Release stale pins, constrain the title, and realize geometry.
 
         Called by AnalysisSectionPage before it measures multiple heatmap
-        panes. The release step mirrors TimeDomain's axis-width unifier: first
-        measure natural current text/tick sizes, then pin all panes to maxima.
+        panes: first release to natural current text/tick sizes, then pin all
+        panes to the maxima.
+
+        The ``setWidth(None)`` release is kept even though the measurement that
+        follows it is now font-metric based. It is the only thing that lets a
+        cross-pane pin re-TIGHTEN: ``heatmap_layout_metrics`` reports
+        ``max(font need, width())``, so without a release the realized term
+        would still be carrying whatever the previous alignment pass pinned,
+        and a pane that switched from a frequency map to an order map would
+        keep a five-digit left margin forever. It is safe now only because the
+        font-metric term covers the case the release cannot: a natural width
+        read before the new ticks have ever been painted is derived from a
+        stale ``AxisItem.textWidth`` and under-reports.
         """
         self._split_title_width = (
             max(80.0, float(title_width))
@@ -2396,39 +2419,53 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._position_slice_panel()
 
     def _unify_stacked_left_axes(self) -> None:
-        """Pin the map's and the slice's left axes to the MAX of their natural
-        widths so both plots share a left edge in single-pane mode.
+        """Pin the map's and the slice's left axes to one width so both plots
+        share a left edge in single-pane mode.
 
-        Call only AFTER prepare_split_layout_alignment(None) has released the
-        widths (setWidth(None)) and realized the layout, so width() reports each
-        axis's natural size. No-op without a slice row (single plot, nothing to
-        align)."""
+        The width comes from the tick STRINGS each axis is carrying right now
+        (``pin_left_axes_to_common_width``), folded with the realized
+        ``width()``. Measuring realized geometry alone was wrong here even
+        though this canvas's ``_activate_graphics_layout`` does realize the
+        release in ``prepare_split_layout_alignment``: pyqtgraph derives the
+        automatic width from ``AxisItem.textWidth``, refreshed only inside
+        ``generateDrawSpecs`` — i.e. while painting. The two alignment entry
+        points that matter both run on ``QTimer.singleShot(0, ...)``
+        (``_deferred_first_show_align`` and ``AnalysisSectionPage``'s layout
+        sync), so they can land before the new tick set has ever been painted,
+        where ``textWidth`` is still the constructor default of 30. Measured
+        offscreen: a 0-480000 Hz map aligned before its first paint pinned to
+        75.4px against a 101.4px need, and ``generateDrawSpecs`` then dropped
+        EVERY Y label rather than clipping any (``if br & rect != rect:
+        continue``). Re-plotting a wide map over a narrow one was worse still —
+        the released width fell back to the *previous* labels' 62.4px.
+
+        No-op without a slice row (single plot, nothing to align).
+        """
         if self._slice_plot is None:
             return
         axes = self._alignment_left_axes()
         if len(axes) < 2:
             return
-        widths = []
-        for axis in axes:
-            try:
-                widths.append(float(axis.width()))
-            except Exception:
-                pass
-        if not widths:
-            return
-        target = max(widths)
-        for axis in axes:
-            try:
-                axis.setWidth(target)
-            except Exception:
-                pass
+        # This canvas's own activator additionally resizes ``ci`` to the
+        # widget before walking the sub-layouts, which the plain helper
+        # traversal does not do — so drive it here instead of via
+        # ``layout_owners``.
+        pin_left_axes_to_common_width(axes)
         self._activate_graphics_layout()
 
     def heatmap_layout_metrics(self) -> dict:
         left_widths = []
         for axis in self._alignment_left_axes():
             try:
-                left_widths.append(float(axis.width()))
+                # Same max() as the pin: the font-metric term is the only
+                # honest one before the axis has been painted, and the realized
+                # term keeps an already-sized axis from being narrowed. Reading
+                # width() alone would feed the page-level cross-pane max from
+                # the very numbers the pin is meant to correct.
+                left_widths.append(max(
+                    float(left_axis_width_for_ticks(axis)),
+                    float(axis.width()),
+                ))
             except Exception:
                 pass
         bottom_heights = []

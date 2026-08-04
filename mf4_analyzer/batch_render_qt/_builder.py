@@ -18,6 +18,7 @@ from mf4_analyzer.batch_render_style import RenderStyle, render_style_from_param
 from mf4_analyzer.signal._envelope_cutils import positions_envelope
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
 from mf4_analyzer.qt_plot_helpers import (
+    GridLabelSlackAxisItem,
     hide_native_auto_button,
     show_major_grid_left_bottom_only,
 )
@@ -26,6 +27,12 @@ from mf4_analyzer.render_profile import (
     bucket_width_for,
     classify_render_profile,
     source_revision_for,
+)
+from ..ui_kit.axis_metrics import (
+    TICK_TEXT_PROBE,
+    axis_tick_font,
+    axis_tick_texts,
+    left_axis_width_for_ticks,
 )
 from ..ui_kit.ticks_math import (
     _fmt_tick,
@@ -536,99 +543,16 @@ def _slice_clamp_warning(
     return "slice.position_clamped: " + "；".join(parts)
 
 
-# pyqtgraph measures every tick string with ``QPainter.boundingRect`` against
-# this probe rect (AxisItem.generateDrawSpecs); reusing it keeps our own
-# measurement on the same footing as the one that ends up on the canvas.
-_TICK_TEXT_PROBE = QRectF(0.0, 0.0, 100.0, 100.0)
-
-
-def _axis_tick_texts(axis) -> list[str]:
-    """Return the tick strings ``axis`` would draw right now.
-
-    ``setTicks`` parks explicit labels on ``_tickLevels``, which is what
-    ``generateDrawSpecs`` reads back; an axis still on pyqtgraph's automatic
-    ticker has to be asked for its values and their formatting instead.
-    """
-    levels = getattr(axis, "_tickLevels", None)
-    if levels:
-        return [
-            str(text)
-            for level in levels
-            for _value, text in level
-            if str(text)
-        ]
-    try:
-        span = float(axis.boundingRect().height())
-        if span <= 0.0:
-            return []
-        low, high = float(axis.range[0]), float(axis.range[1])
-        scale = float(axis.autoSIPrefixScale) * float(axis.scale)
-        texts: list[str] = []
-        for spacing, values in axis.tickValues(low, high, span):
-            texts.extend(
-                str(text)
-                for text in axis.tickStrings(list(values), scale, spacing)
-                if str(text)
-            )
-        return texts
-    except Exception:
-        return []
-
-
-def _axis_tick_font(axis, fallback_pt: float):
-    font = axis.style.get("tickFont")
-    if font is None:
-        label_item = getattr(axis, "label", None)
-        font = label_item.font() if label_item is not None else chart_font(fallback_pt)
-    return font
-
-
-def _left_axis_width_for_ticks(axis) -> float:
-    """Width ``axis`` needs for the tick strings it is carrying *now*.
-
-    ``AxisItem.width()`` cannot answer this. Its automatic width comes from
-    ``AxisItem.textWidth``, and that attribute is only ever refreshed from
-    inside ``generateDrawSpecs`` — i.e. while painting. ``_apply_tick_density``
-    installs the final tick strings after the last paint in
-    ``show_and_settle``, so a width read back at alignment time describes
-    whichever strings were drawn last; on an axis that has never been painted
-    it is pyqtgraph's initial ``textWidth = 30``, which is where a pinned
-    57.4 px left axis came from against the 95.4 px the same ticks get when
-    nothing pins them. Measuring the strings makes the answer independent of
-    paint history.
-
-    The arithmetic deliberately mirrors ``AxisItem._updateWidth``: ``setWidth``
-    stores a *fixed* width that bypasses that method entirely, so everything it
-    would have added — tick text offset, outward tick length, and the rotated
-    label's allowance — has to be included here or the label lands on top of
-    the numbers.
-    """
-    if not axis.isVisible():
-        return 0.0
-    style = axis.style
-    if not style.get("showValues", True):
-        return 0.0
-    metrics = QFontMetricsF(_axis_tick_font(axis, 9.0))
-    width = max(
-        (
-            float(
-                metrics.boundingRect(
-                    _TICK_TEXT_PROBE, Qt.AlignCenter, text
-                ).width()
-            )
-            for text in _axis_tick_texts(axis)
-        ),
-        default=0.0,
-    )
-    width += float(style["tickTextOffset"][0])
-    width += float(max(0, style["tickLength"]))
-    label = getattr(axis, "label", None)
-    if label is not None and label.isVisible():
-        # ``_updateWidth`` calls the bounding rect an overestimate and takes
-        # 80% of it; matching that keeps a pinned axis the same width the
-        # unpinned one would have chosen.
-        width += float(label.boundingRect().height()) * 0.8
-    return width
+# These four now live in ``ui_kit.axis_metrics`` so the interactive canvases
+# can share the exact same measurement (see that module's docstring for why
+# ``ui_kit`` and not ``ui.pg_canvas``). The private aliases are kept because
+# ``_slice_alignment_callback`` below resolves ``_left_axis_width_for_ticks``
+# as a module global, which is what
+# ``tests/test_batch_render_qt_heatmap.py`` monkeypatches.
+_TICK_TEXT_PROBE = TICK_TEXT_PROBE
+_axis_tick_texts = axis_tick_texts
+_axis_tick_font = axis_tick_font
+_left_axis_width_for_ticks = left_axis_width_for_ticks
 
 
 def _slice_alignment_callback(layout, main_plot, slice_plot, *, right_reserve=0.0):
@@ -1334,7 +1258,16 @@ class _SceneBuilder:
         return widget
 
     def _new_plot(self, row: int, *, grid_alpha: float | None = None):
-        plot = self.widget.addPlot(row=row, col=0)
+        # Left axis carries the Y grid (show_major_grid_left_bottom_only
+        # below); pyqtgraph's grid branch in AxisItem.boundingRect drops the
+        # vertical tick-label slack and the end-of-range Y tick values with
+        # it. Same defect and same fix as the interactive canvases — verified
+        # to reproduce on this export path too, not assumed.
+        plot = self.widget.addPlot(
+            row=row,
+            col=0,
+            axisItems={"left": GridLabelSlackAxisItem(orientation="left")},
+        )
         hide_native_auto_button(plot)
         plot.hideButtons()
         plot.setMenuEnabled(False)
