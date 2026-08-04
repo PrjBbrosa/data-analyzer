@@ -1345,6 +1345,12 @@ class BatchRunner:
                             ),
                         )
                     except ValueError as exc:
+                        logger.warning(
+                            "batch run: group %s fails spool shape validation "
+                            "(members=%d, layout=%s), degrading to blocked: %s",
+                            group.identity.group_id, len(group.members),
+                            group.layout, exc, exc_info=True,
+                        )
                         group_blocked[group.identity.group_id] = str(exc)
                 if recorder is not None:
                     try:
@@ -1888,6 +1894,11 @@ class BatchRunner:
                             )
                         )
                     except Exception as exc:
+                        logger.warning(
+                            "batch run: cannot upsert render-group manifest "
+                            "entry for group %s (status=running): %s",
+                            group_id, exc, exc_info=True,
+                        )
                         manifest_errors.append(
                             f'cannot update batch manifest: {exc}'
                         )
