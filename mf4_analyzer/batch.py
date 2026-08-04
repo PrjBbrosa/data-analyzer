@@ -117,8 +117,8 @@ def _load_slice_render_contract():
     renderer rather than from a second implementation here. Two calculation
     paths would be free to drift; one cannot.
 
-    ``batch.py`` itself stays GUI-free: this import happens only when a slice
-    workbook is actually about to be written, and the caller falls back to the
+    ``batch.py`` itself stays GUI-free: its caller loads this contract only
+    after confirming that slicing is enabled. The caller falls back to the
     historical long table when the optional Qt renderer is absent -- in that
     case no curve was drawn, so there is nothing for the table to match.
     """
@@ -4186,6 +4186,10 @@ class BatchRunner:
         through no channel at all. The chart still owns it whenever one is
         drawn, so the two paths can never both report the same clamp.
         """
+        raw_slice = params.get('slice') if isinstance(params, Mapping) else None
+        if not isinstance(raw_slice, Mapping) or not raw_slice.get('enabled', False):
+            # Normalization keeps slice only when enabled; do not import the Qt renderer.
+            return None
         contract = _load_slice_render_contract()
         if contract is None:
             return None
