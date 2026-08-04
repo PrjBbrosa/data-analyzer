@@ -855,6 +855,27 @@ class BatchRunner:
             cancel_token: threading.Event | None = None,
             resume_manifest=None,
             retry_failed_manifest=None) -> BatchRunResult:
+        """Execute ``preset`` over the runner's sources and write ``output_dir``.
+
+        This is a dispatch skeleton, not a worker.  It initializes the run
+        (output dir, recipe fingerprint, manifest recorder, resume/retry
+        decision, task expansion, run plan, effective outputs), then hands the
+        actual work to exactly one of two paths and assembles the result:
+
+        * ``render_groups`` non-empty -> :meth:`_run_grouped_compute` followed
+          by :meth:`_run_grouped_render`, both inside one series-spool context;
+        * otherwise -> :meth:`_run_sequential`.
+
+        The two paths stay separate on purpose: the spool, the group image and
+        group-level resume are real product semantics, not duplication.  What
+        *was* duplicated -- progress emission, the legacy progress callback and
+        manifest recording -- is funnelled through the one ``_RunReporter``
+        built here, so both paths report identically by construction.
+
+        Every early exit goes through ``_finish_result`` so a blocked run still
+        finalizes the manifest and emits its ``run_finished`` event.
+        """
+
         output_dir = Path(output_dir)
         # One reporter per run: every progress event, every legacy progress
         # callback and every manifest entry -- grouped path and non-grouped
@@ -941,7 +962,7 @@ class BatchRunner:
                 return BatchRunResult(status='blocked', blocked=[err])
 
         reporter.bind_recorder(recorder)
-        # Bound once so the 14 terminal exits below stay one call each.  Note
+        # Bound once so the 13 terminal exits below stay one call each.  Note
         # ``run_migration_warnings`` is *not* bound here: it is rebound from
         # the effective output plan further down, so every call site passes
         # the value that is current at that point.
@@ -1426,6 +1447,13 @@ class BatchRunner:
             run_migration_warnings=run_migration_warnings,
             items=items, blocked=blocked, total=total,
         )
+
+    # -- run() execution paths ---------------------------------------------
+    #
+    # The three methods below are the two paths ``run`` dispatches to.  They
+    # hold the per-task work that used to be inlined in ``run``; each is a
+    # verbatim lift, with the state it used to read from ``run``'s scope now
+    # passed in explicitly.
 
     def _run_grouped_compute(self, preset, output_dir, tasks, render_tasks,
                              render_groups, spool, *, reporter,
@@ -2278,10 +2306,12 @@ class BatchRunner:
 
     # -- run() helpers -----------------------------------------------------
     #
-    # The five methods below were closures inside ``run``.  Everything they
-    # used to capture is now an explicit parameter, so the state a single
-    # ``run`` call threads through them is visible at each call site instead
-    # of being implied by the enclosing scope.
+    # The five methods below were closures inside ``run``, shared by both
+    # execution paths.  Everything they used to capture is now an explicit
+    # parameter, so the state a single ``run`` call threads through them is
+    # visible at each call site instead of being implied by the enclosing
+    # scope.  ``run`` binds the invariant half of that state once with
+    # ``functools.partial``; the rest is passed per call.
 
     def _finish_result(self, status, *, reporter, recorder,
                        run_migration_warnings, items=None, blocked=None,
