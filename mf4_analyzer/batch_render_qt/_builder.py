@@ -189,7 +189,7 @@ def _axis_label(name: str) -> str:
 _PG_AXIS_LABEL_NUDGE_PX = 5.0
 
 
-def _space_bottom_axis_label(plot, font_pt: float):
+def _space_bottom_axis_label(plot, font_pt: float, *, overhang: bool = True):
     """Return a callback that keeps the x-axis title off the tick numbers.
 
     pyqtgraph reserves only ``label.boundingRect().height() * 0.8`` for an axis
@@ -210,14 +210,25 @@ def _space_bottom_axis_label(plot, font_pt: float):
     if label is None:
         return None
     extra = max(6.0, float(font_pt) * 0.9)
+    base_axis_height = None
 
     def reposition(*_args) -> None:
         if not axis.isVisible() or not str(axis.labelText or "").strip():
             return
+        nonlocal base_axis_height
+        if not overhang:
+            if base_axis_height is None:
+                base_axis_height = float(axis.height())
+            axis.setHeight(base_axis_height + extra)
         rect = label.boundingRect()
         base_y = float(axis.size().height() - rect.height())
-        label.setPos(label.pos().x(), base_y + _PG_AXIS_LABEL_NUDGE_PX + extra)
+        label.setPos(
+            label.pos().x(),
+            base_y + (_PG_AXIS_LABEL_NUDGE_PX + extra if overhang else 0.0),
+        )
 
+    if not overhang:
+        reposition.runs_after_tick_density = True
     plot.vb.sigResized.connect(reposition)
     return reposition
 
@@ -1360,10 +1371,12 @@ class _SceneBuilder:
         plot.getAxis("top").setHeight(1)
         plot.getAxis("right").setWidth(1)
 
-    def _register_bottom_label_spacing(self, plot) -> None:
+    def _register_bottom_label_spacing(self, plot, *, overhang: bool = True) -> None:
         """Give this panel's x-axis title air, on every layout pass."""
 
-        reposition = _space_bottom_axis_label(plot, self.theme.axis_font_pt)
+        reposition = _space_bottom_axis_label(
+            plot, self.theme.axis_font_pt, overhang=overhang,
+        )
         if reposition is not None:
             self.layout_callbacks.append(reposition)
 
@@ -1969,6 +1982,8 @@ class _SceneBuilder:
         matrix, x_values, y_values, x_name, y_name, metadata = _extract_heatmap(
             data
         )
+        plan = plan_heatmap_slice(x_values, y_values, self.params)
+        self.slice_plan = plan
         render_db = _render_in_db(kind, self.params)
         if render_db:
             resolution = _reference_resolution(self.params)
@@ -2022,7 +2037,7 @@ class _SceneBuilder:
         self._apply_analysis_frame(plot)
         plot.setLabel("bottom", _axis_label(x_name))
         plot.setLabel("left", _axis_label(y_name))
-        self._register_bottom_label_spacing(plot)
+        self._register_bottom_label_spacing(plot, overhang=not plan.enabled)
 
         image_item = _SmoothImageItem(axisOrder="row-major")
         interpolation = str(self.params.get("interp", "bilinear")).lower()
@@ -2088,8 +2103,6 @@ class _SceneBuilder:
         self.heatmap_levels = tuple(float(value) for value in levels)
         self.heatmap_rect = QRectF(rect)
 
-        plan = plan_heatmap_slice(x_values, y_values, self.params)
-        self.slice_plan = plan
         if not plan.enabled:
             # Slice off: not one extra item, not one extra row. Existing
             # spectrogram presets must keep producing byte-identical PNGs.
@@ -2133,7 +2146,7 @@ class _SceneBuilder:
         # One amplitude caliber for the whole page: the slice reads the same
         # display matrix the image does, so it reuses the colorbar's label.
         slice_plot.setLabel("left", colorbar_label)
-        self._register_bottom_label_spacing(slice_plot)
+        self._register_bottom_label_spacing(slice_plot, overhang=True)
 
         mask = _slice_visible_mask(curve_coords, *curve_range)
         visible_x = curve_coords[mask]

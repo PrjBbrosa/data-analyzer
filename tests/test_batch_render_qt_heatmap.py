@@ -11,6 +11,7 @@ from PyQt5.QtGui import QFontMetricsF
 from mf4_analyzer.batch_image_options import BatchRenderOptions
 from mf4_analyzer.batch_render_qt import BatchRenderContext
 from mf4_analyzer.batch_render_qt._builder import build_batch_scene
+from mf4_analyzer.batch_render_qt._fonts import chart_font
 from mf4_analyzer.batch_render_qt._palette import SLICE_COOL, SLICE_WARM
 
 
@@ -472,6 +473,31 @@ def test_slice_disabled_png_is_byte_identical_to_no_slice_field(qapp, tmp_path):
     assert disabled == without
 
 
+@pytest.mark.parametrize("font_size", [None, 20])
+def test_slice_main_bottom_label_stays_inside_its_axis_above_slice_row(
+    qapp, font_size,
+):
+    """The main title must use its own axis reserve, never the slice row."""
+    scene = _open_scene(
+        qapp, "fft_time", params=_slice_params("time", [20.0]),
+    )
+    try:
+        main_axis = scene.plots[0].getAxis("bottom")
+        main_label = main_axis.label
+        if font_size is not None:
+            main_label.setFont(chart_font(font_size))
+            scene.show_and_settle()
+            qapp.processEvents()
+
+        label_rect = main_label.sceneBoundingRect()
+        axis_rect = main_axis.sceneBoundingRect()
+        slice_top = scene.slice_plot.vb.sceneBoundingRect().top()
+        assert label_rect.bottom() <= slice_top + 0.5
+        assert axis_rect.contains(label_rect)
+    finally:
+        scene.close()
+
+
 def test_slice_on_time_axis_reads_matrix_columns(qapp):
     """Fixed time → the curve is a *column*, plotted against the Y coordinates.
 
@@ -692,6 +718,7 @@ def _alignment_callback(scene):
         callback
         for callback in scene._layout_callbacks
         if getattr(callback, "runs_after_tick_density", False)
+        and callback.__name__ == "align"
     ]
     return align
 
