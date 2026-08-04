@@ -415,6 +415,20 @@ def test_validated_slice_positions_survive_normalization(method):
     assert not normalize_batch_params(string_positions, method)["slice"]["positions"]
 
 
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_numpy_slice_positions_validate_and_survive_normalization(method):
+    raw = {
+        "slice": {
+            "enabled": True,
+            "axis": "time",
+            "positions": [np.float32(1.5), np.int64(2)],
+        },
+    }
+
+    assert not validate_recipe(method, raw)
+    assert normalize_batch_params(raw, method)["slice"]["positions"] == [1.5, 2.0]
+
+
 def test_normalize_batch_params_does_not_fill_missing_ui_defaults():
     assert normalize_batch_params({"window": "flattop"}, "fft") == {
         "window": "flattop"

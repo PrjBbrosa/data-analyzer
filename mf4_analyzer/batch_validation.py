@@ -41,6 +41,8 @@ def _finite_number(value: Any) -> bool:
 
 def _slice_position_number(value: Any) -> bool:
     # Accepted types have one source of truth in normalization.
+    if isinstance(value, np.generic):
+        value = value.item()
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
     return math.isfinite(float(value))
