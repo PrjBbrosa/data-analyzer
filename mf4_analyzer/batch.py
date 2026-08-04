@@ -1232,7 +1232,6 @@ class BatchRunner:
 
         items: list[BatchItemResult] = []
         blocked: list[str] = []
-        cancelled = False
         total = len(tasks)
         requested_artifacts = self._required_artifacts(preset.outputs)
 
@@ -1295,20 +1294,12 @@ class BatchRunner:
                 if entry.get('group_id')
             }
 
-            planned_group_item = partial(
-                self._planned_group_item, effective_plan=effective_plan,
-            )
-
             group_results: dict[str, list[TaskComputeResult]] = {
                 group.identity.group_id: [] for group in render_groups
             }
             group_blocked: dict[str, str] = {}
             group_failed: dict[str, str] = {}
             deferred_group_terminals: dict[str, tuple[int, str, str]] = {}
-            resolved_group_terminals: list[
-                tuple[int, str, str, BatchItemResult, str | None]
-            ] = []
-            render_group_outcomes: list[RenderGroupResult] = []
             spool_class = None
             spool_module = None
             if (
@@ -1371,524 +1362,41 @@ class BatchRunner:
                             f'cannot update batch manifest: {exc}'
                         )
 
-            prev_physical_key = None
-            run_spool_blocked = False
             if spool_class is not None:
                 spool_context = spool_class()
             else:
                 spool_context = nullcontext(None)
             with spool_context as spool:
-                for index, (source_key, signal_name) in enumerate(tasks, start=1):
-                    group = group_for_task.get((source_key, signal_name))
-                    physical_key = self._physical_for_source(source_key)
-                    if (
-                        prev_physical_key is not None
-                        and physical_key != prev_physical_key
-                    ):
-                        self._evict_physical(prev_physical_key)
-                        prev_physical_key = None
-                    if cancel_token is not None and cancel_token.is_set():
-                        cancelled = True
-                        reporter.emit_cancelled_range(index)
-                        break
-
-                    member = next(
-                        candidate for candidate in group.members
-                        if candidate.source_key == source_key
-                        and candidate.channel == signal_name
-                    )
-                    decision = group_recovery[group.identity.group_id]
-                    task_id = member.identity.task_id
-                    data_write_eligible = bool(
-                        'data' in effective_plan.effective
-                        and task_id in decision.data_write_task_ids
-                    )
-                    payload_required = bool(
-                        'image' in effective_plan.effective
-                        and task_id in decision.payload_task_ids
-                        and group.identity.group_id not in group_blocked
-                        and not run_spool_blocked
-                    )
-                    data_reservation = None
-                    data_conflict_status = ''
-                    data_conflict_message = ''
-                    if data_write_eligible:
-                        data_extension = str(
-                            effective_plan.effective.get('data', 'csv')
-                        ).lower().lstrip('.')
-                        conflict_policy = str(
-                            getattr(
-                                preset.outputs,
-                                'conflict_policy',
-                                'auto_number',
-                            )
-                        ).strip().lower()
-                        reservation_stem = member.identity.stem
-                        prior_data = (
-                            prior_data_entries.get(task_id) or {}
-                        ).get('artifacts', {}).get('data') or {}
-                        prior_data_path = prior_data.get('path')
-                        if prior_data_path:
-                            reservation_stem = Path(prior_data_path).stem
-                            conflict_policy = 'overwrite'
-                        try:
-                            data_reservation = reserve_output_paths(
-                                output_dir,
-                                reservation_stem,
-                                (data_extension,),
-                                conflict_policy=conflict_policy,
-                            )
-                            if data_reservation.status == 'skipped':
-                                data_conflict_status = 'skipped'
-                                data_conflict_message = (
-                                    'task data skipped without manifest provenance'
-                                )
-                        except FileExistsError as exc:
-                            data_conflict_status = 'failed'
-                            data_conflict_message = str(exc)
-                        if data_conflict_status:
-                            data_write_eligible = False
-
-                    if not data_write_eligible and not payload_required:
-                        entry = reusable_data_entries.get(task_id)
-                        if entry is not None:
-                            item = planned_group_item(
-                                member,
-                                status='resumed',
-                                message='manifest-proven data resume',
-                                entry=entry,
-                            )
-                        else:
-                            item = planned_group_item(
-                                member,
-                                status=data_conflict_status or 'done',
-                                message=data_conflict_message,
-                            )
-                            if data_reservation is not None:
-                                if data_reservation.warning:
-                                    item.warnings.append(data_reservation.warning)
-                                data_reservation.release()
-                        items.append(item)
-                        reporter.record(
-                            item, source_key, self._known_file_data(source_key),
-                        )
-                        if data_conflict_status == 'failed':
-                            blocked.append(
-                                f'{item.file_name}:{signal_name}: '
-                                f'{data_conflict_message}'
-                            )
-                        reporter.emit(BatchProgressEvent(
-                            kind=(
-                                'task_failed'
-                                if item.status == 'failed'
-                                else 'task_skipped'
-                                if item.status == 'skipped'
-                                else 'task_resumed'
-                            ),
-                            task_index=index,
-                            total=total,
-                            file_name=item.file_name,
-                            signal=signal_name,
-                            method='time',
-                            task_id=item.task_id,
-                            message=item.message,
-                        ))
-                        continue
-
-                    fid, fd_or_fail = self._resolve_task_file(source_key)
-                    physical_key = self._physical_for_source(source_key)
-                    if physical_key is not None:
-                        prev_physical_key = physical_key
-                    fname = (
-                        fd_or_fail.path
-                        if isinstance(fd_or_fail, _LoadFailure)
-                        else str(fd_or_fail.filename)
-                    )
-                    started_at = utc_now()
-                    reporter.emit(BatchProgressEvent(
-                        kind='task_started',
-                        task_index=index,
-                        total=total,
-                        file_name=fname,
-                        signal=signal_name,
-                        method=preset.method,
-                    ))
-                    try:
-                        if isinstance(fd_or_fail, _LoadFailure):
-                            raise IOError(fd_or_fail.error)
-                        if signal_name not in fd_or_fail.data.columns:
-                            raise ValueError(f'missing signal: {signal_name}')
-                        computed = self._compute_group_task(
-                            preset,
-                            source_key,
-                            fd_or_fail,
-                            signal_name,
-                            output_dir,
-                            spool,
-                            group,
-                            data_write_eligible=data_write_eligible,
-                            payload_required=payload_required,
-                            data_reservation=data_reservation,
-                            effective=effective_plan,
-                            cancel_token=cancel_token,
-                        )
-                        item = computed.item
-                        if not data_write_eligible:
-                            entry = reusable_data_entries.get(task_id)
-                            if data_conflict_status:
-                                item.status = data_conflict_status
-                                item.message = data_conflict_message
-                                item.data_path = None
-                                item.artifact_facts = {}
-                                if (
-                                    data_reservation is not None
-                                    and data_reservation.warning
-                                ):
-                                    item.warnings.append(data_reservation.warning)
-                                if data_conflict_status == 'failed':
-                                    blocked.append(
-                                        f'{fname}:{signal_name}: '
-                                        f'{data_conflict_message}'
-                                    )
-                            elif entry is not None:
-                                data = (entry.get('artifacts') or {}).get('data') or {}
-                                item.status = 'resumed'
-                                item.message = 'manifest-proven data resume'
-                                item.data_path = data.get('path')
-                                item.artifact_facts = dict(
-                                    entry.get('artifacts') or {}
-                                )
-                        item.started_at = started_at
-                        item.finished_at = utc_now()
-                        items.append(item)
-                        if group is not None:
-                            group_results[group.identity.group_id].append(computed)
-                        if computed.render_error and group is not None:
-                            if computed.render_status == 'failed':
-                                group_failed[
-                                    group.identity.group_id
-                                ] = computed.render_error
-                            elif 'run spool exceeds' in computed.render_error:
-                                run_spool_blocked = True
-                                for candidate in render_groups:
-                                    successful = sum(
-                                        bool(result.series_refs)
-                                        for result in group_results[
-                                            candidate.identity.group_id
-                                        ]
-                                    )
-                                    if successful < len(candidate.members):
-                                        group_blocked[
-                                            candidate.identity.group_id
-                                        ] = computed.render_error
-                            else:
-                                group_blocked[
-                                    group.identity.group_id
-                                ] = computed.render_error
-                        reporter.record(item, source_key, fd_or_fail)
-                        defer_terminal = bool(
-                            computed.series_refs
-                            and item.status in {'done', 'resumed'}
-                        )
-                        if defer_terminal:
-                            deferred_group_terminals[item.task_id] = (
-                                index, fname, signal_name,
-                            )
-                        else:
-                            reporter.emit(BatchProgressEvent(
-                                kind=(
-                                    'task_failed' if item.status == 'failed'
-                                    else 'task_skipped' if item.status == 'skipped'
-                                    else 'task_resumed' if item.status == 'resumed'
-                                    else 'task_done'
-                                ),
-                                task_index=index,
-                                total=total,
-                                file_name=fname,
-                                signal=signal_name,
-                                method=preset.method,
-                                task_id=item.task_id,
-                                message=item.message,
-                                data_path=item.data_path,
-                                error=(item.message if item.status == 'failed' else None),
-                            ))
-                        if not defer_terminal:
-                            reporter.emit_progress(item, index, total)
-                    except _BatchCancelled as exc:
-                        if data_reservation is not None:
-                            data_reservation.release()
-                        cancelled = True
-                        identity = next(
-                            task.identity for task in render_tasks
-                            if task.source_key == source_key
-                            and task.channel == signal_name
-                        )
-                        item = BatchItemResult(
-                            method='time',
-                            file_id=source_key,
-                            file_name=fname,
-                            signal=signal_name,
-                            status='cancelled',
-                            message=str(exc),
-                            task_id=identity.task_id,
-                            source_identity=identity.source_identity,
-                            group_identity=identity.group_identity,
-                            requested_outputs=dict(effective_plan.requested),
-                            effective_outputs=dict(effective_plan.effective),
-                            degraded_reason=effective_plan.degraded_reason,
-                            started_at=started_at,
-                            finished_at=utc_now(),
-                        )
-                        items.append(item)
-                        reporter.record(
-                            item,
-                            source_key,
-                            None if isinstance(fd_or_fail, _LoadFailure)
-                            else fd_or_fail,
-                        )
-                        reporter.emit(BatchProgressEvent(
-                            kind='task_cancelled',
-                            task_index=index,
-                            total=total,
-                            file_name=fname,
-                            signal=signal_name,
-                            method='time',
-                            task_id=item.task_id,
-                            message=item.message,
-                        ))
-                        reporter.emit_cancelled_range(index + 1)
-                        break
-                    except Exception as exc:
-                        if data_reservation is not None:
-                            data_reservation.release()
-                        identity = next(
-                            task.identity for task in render_tasks
-                            if task.source_key == source_key
-                            and task.channel == signal_name
-                        )
-                        item = BatchItemResult(
-                            method='time',
-                            file_id=source_key,
-                            file_name=fname,
-                            signal=signal_name,
-                            status='failed',
-                            message=str(exc),
-                            task_id=identity.task_id,
-                            source_identity=identity.source_identity,
-                            group_identity=identity.group_identity,
-                            requested_outputs=dict(effective_plan.requested),
-                            effective_outputs=dict(effective_plan.effective),
-                            degraded_reason=effective_plan.degraded_reason,
-                            started_at=started_at,
-                            finished_at=utc_now(),
-                        )
-                        items.append(item)
-                        blocked.append(f'{fname}:{signal_name}: {exc}')
-                        if group is not None:
-                            group_results[group.identity.group_id].append(
-                                TaskComputeResult(item=item, render_error=str(exc))
-                            )
-                        reporter.record(
-                            item,
-                            source_key,
-                            None if isinstance(fd_or_fail, _LoadFailure)
-                            else fd_or_fail,
-                        )
-                        reporter.emit(BatchProgressEvent(
-                            kind='task_failed',
-                            task_index=index,
-                            total=total,
-                            file_name=fname,
-                            signal=signal_name,
-                            method='time',
-                            error=str(exc),
-                            task_id=item.task_id,
-                            message=item.message,
-                        ))
-
-                for physical_key in tuple(self._disk_cache):
-                    self._evict_physical(physical_key)
-
-                for group in render_groups:
-                    group_id = group.identity.group_id
-                    results = group_results[group_id]
-                    decision = group_recovery[group_id]
-                    if cancelled:
-                        outcome = RenderGroupResult(
-                            group_id=group_id,
-                            status='cancelled',
-                            message='batch cancelled before group image completed',
-                        )
-                    elif decision.reusable_group is not None:
-                        reusable = decision.reusable_group
-                        outcome = RenderGroupResult(
-                            group_id=group_id,
-                            status='done',
-                            image_path=(reusable.get('artifact') or {}).get('path'),
-                            message='manifest-proven group resume',
-                            warnings=list(reusable.get('warnings') or ()),
-                            artifact=dict(reusable.get('artifact') or {}),
-                            effective_facts=dict(
-                                reusable.get('effective_facts') or {}
-                            ),
-                        )
-                    elif effective_plan.degraded_reason:
-                        outcome = RenderGroupResult(
-                            group_id=group_id,
-                            status='degraded',
-                            message=effective_plan.degraded_reason,
-                        )
-                    elif group_id in group_failed:
-                        outcome = RenderGroupResult(
-                            group_id=group_id,
-                            status='failed',
-                            message=group_failed[group_id],
-                        )
-                    elif group_id in group_blocked:
-                        outcome = RenderGroupResult(
-                            group_id=group_id,
-                            status='blocked',
-                            message=group_blocked[group_id],
-                        )
-                    else:
-                        if recorder is not None:
-                            try:
-                                recorder.upsert_render_group(
-                                    self._render_group_manifest_entry(
-                                        group,
-                                        effective_plan,
-                                        status='running',
-                                    )
-                                )
-                            except Exception as exc:
-                                manifest_errors.append(
-                                    f'cannot update batch manifest: {exc}'
-                                )
-                        try:
-                            prior_group = prior_group_entries.get(group_id) or {}
-                            prior_artifact = prior_group.get('artifact') or {}
-                            prior_image_path = prior_artifact.get('path')
-                            outcome = self._render_group(
-                                group,
-                                results,
-                                preset,
-                                output_dir,
-                                spool,
-                                effective=effective_plan,
-                                reservation_stem=(
-                                    Path(prior_image_path).stem
-                                    if prior_image_path else None
-                                ),
-                                conflict_policy_override=(
-                                    'overwrite' if prior_image_path else None
-                                ),
-                                recorder=recorder,
-                                cancel_token=cancel_token,
-                            )
-                        except _BatchCancelled as exc:
-                            cancelled = True
-                            outcome = RenderGroupResult(
-                                group_id=group_id,
-                                status='cancelled',
-                                message=str(exc),
-                            )
-                        except Exception as exc:
-                            outcome = RenderGroupResult(
-                                group_id=group_id,
-                                status='failed',
-                                message=str(exc),
-                            )
-                    render_group_outcomes.append(outcome)
-                    if outcome.warnings:
-                        for computed in results:
-                            if computed.series_refs:
-                                computed.item.warnings = list(dict.fromkeys([
-                                    *computed.item.warnings,
-                                    *outcome.warnings,
-                                ]))
-                                reporter.record(computed.item, computed.item.file_id)
-                    if outcome.status == 'cancelled':
-                        cancelled = True
-                        for computed in results:
-                            item = computed.item
-                            if item.status not in {'done', 'resumed'}:
-                                continue
-                            item.status = 'cancelled'
-                            item.message = (
-                                outcome.message
-                                or 'batch cancelled before group image completed'
-                            )
-                            item.finished_at = utc_now()
-                            reporter.record(item, item.file_id)
-                    for computed in results:
-                        item = computed.item
-                        event_context = deferred_group_terminals.pop(
-                            item.task_id, None,
-                        )
-                        if event_context is None:
-                            continue
-                        task_index, file_name, signal_name = event_context
-                        resolved_group_terminals.append((
-                            task_index,
-                            file_name,
-                            signal_name,
-                            item,
-                            outcome.image_path,
-                        ))
-                    if outcome.status not in {'done', 'degraded'}:
-                        blocked.append(
-                            f'{group.identity.stem}: {outcome.message or outcome.status}'
-                        )
-                    if recorder is not None:
-                        try:
-                            recorder.upsert_render_group(
-                                self._render_group_manifest_entry(
-                                    group,
-                                    effective_plan,
-                                    status=outcome.status,
-                                    message=outcome.message,
-                                    warnings=outcome.warnings,
-                                    artifact=outcome.artifact,
-                                    effective_facts=outcome.effective_facts,
-                                )
-                            )
-                        except Exception as exc:
-                            logger.warning(
-                                "batch run: cannot upsert render-group "
-                                "manifest entry for group %s (status=%s): %s",
-                                group.identity.group_id, outcome.status, exc,
-                                exc_info=True,
-                            )
-                            manifest_errors.append(
-                                f'cannot update batch manifest: {exc}'
-                            )
-
-                for (
-                    task_index,
-                    file_name,
-                    signal_name,
-                    item,
-                    image_path,
-                ) in sorted(resolved_group_terminals, key=lambda value: value[0]):
-                    reporter.emit(BatchProgressEvent(
-                        kind=(
-                            'task_cancelled'
-                            if item.status == 'cancelled'
-                            else 'task_resumed'
-                            if item.status == 'resumed'
-                            else 'task_done'
-                        ),
-                        task_index=task_index,
-                        total=total,
-                        file_name=file_name,
-                        signal=signal_name,
-                        method=preset.method,
-                        task_id=item.task_id,
-                        message=item.message,
-                        data_path=item.data_path,
-                        image_path=image_path,
-                    ))
-                    reporter.emit_progress(item, task_index, total)
+                cancelled = self._run_grouped_compute(
+                    preset, output_dir, tasks, render_tasks, render_groups,
+                    spool,
+                    reporter=reporter,
+                    effective_plan=effective_plan,
+                    cancel_token=cancel_token,
+                    group_for_task=group_for_task,
+                    group_recovery=group_recovery,
+                    group_results=group_results,
+                    group_blocked=group_blocked,
+                    group_failed=group_failed,
+                    reusable_data_entries=reusable_data_entries,
+                    prior_data_entries=prior_data_entries,
+                    deferred_group_terminals=deferred_group_terminals,
+                    items=items, blocked=blocked, total=total,
+                )
+                cancelled, render_group_outcomes = self._run_grouped_render(
+                    preset, output_dir, render_groups, spool,
+                    reporter=reporter,
+                    recorder=recorder,
+                    effective_plan=effective_plan,
+                    cancel_token=cancel_token,
+                    group_results=group_results,
+                    group_recovery=group_recovery,
+                    group_failed=group_failed,
+                    group_blocked=group_blocked,
+                    prior_group_entries=prior_group_entries,
+                    deferred_group_terminals=deferred_group_terminals,
+                    cancelled=cancelled, blocked=blocked, total=total,
+                )
 
             if cancelled:
                 status = 'cancelled'
@@ -1918,6 +1426,570 @@ class BatchRunner:
             run_migration_warnings=run_migration_warnings,
             items=items, blocked=blocked, total=total,
         )
+
+    def _run_grouped_compute(self, preset, output_dir, tasks, render_tasks,
+                             render_groups, spool, *, reporter,
+                             effective_plan, cancel_token, group_for_task,
+                             group_recovery, group_results, group_blocked,
+                             group_failed, reusable_data_entries,
+                             prior_data_entries, deferred_group_terminals,
+                             items, blocked, total) -> bool:
+        """Compute every task of the grouped path, spooling render series.
+
+        Extracted verbatim from ``run``.  Runs inside ``run``'s
+        ``with spool_context as spool`` block, which stays there because
+        :meth:`_run_grouped_render` needs the same open spool -- keeping the
+        ``with`` in ``run`` makes the two methods peers instead of nesting
+        one inside the other.
+
+        Mutates the caller's ``items``/``blocked`` lists and the four group
+        dicts in place; returns whether the run was cancelled.
+        """
+
+        planned_group_item = partial(
+            self._planned_group_item, effective_plan=effective_plan,
+        )
+        cancelled = False
+        prev_physical_key = None
+        run_spool_blocked = False
+
+        for index, (source_key, signal_name) in enumerate(tasks, start=1):
+            group = group_for_task.get((source_key, signal_name))
+            physical_key = self._physical_for_source(source_key)
+            if (
+                prev_physical_key is not None
+                and physical_key != prev_physical_key
+            ):
+                self._evict_physical(prev_physical_key)
+                prev_physical_key = None
+            if cancel_token is not None and cancel_token.is_set():
+                cancelled = True
+                reporter.emit_cancelled_range(index)
+                break
+
+            member = next(
+                candidate for candidate in group.members
+                if candidate.source_key == source_key
+                and candidate.channel == signal_name
+            )
+            decision = group_recovery[group.identity.group_id]
+            task_id = member.identity.task_id
+            data_write_eligible = bool(
+                'data' in effective_plan.effective
+                and task_id in decision.data_write_task_ids
+            )
+            payload_required = bool(
+                'image' in effective_plan.effective
+                and task_id in decision.payload_task_ids
+                and group.identity.group_id not in group_blocked
+                and not run_spool_blocked
+            )
+            data_reservation = None
+            data_conflict_status = ''
+            data_conflict_message = ''
+            if data_write_eligible:
+                data_extension = str(
+                    effective_plan.effective.get('data', 'csv')
+                ).lower().lstrip('.')
+                conflict_policy = str(
+                    getattr(
+                        preset.outputs,
+                        'conflict_policy',
+                        'auto_number',
+                    )
+                ).strip().lower()
+                reservation_stem = member.identity.stem
+                prior_data = (
+                    prior_data_entries.get(task_id) or {}
+                ).get('artifacts', {}).get('data') or {}
+                prior_data_path = prior_data.get('path')
+                if prior_data_path:
+                    reservation_stem = Path(prior_data_path).stem
+                    conflict_policy = 'overwrite'
+                try:
+                    data_reservation = reserve_output_paths(
+                        output_dir,
+                        reservation_stem,
+                        (data_extension,),
+                        conflict_policy=conflict_policy,
+                    )
+                    if data_reservation.status == 'skipped':
+                        data_conflict_status = 'skipped'
+                        data_conflict_message = (
+                            'task data skipped without manifest provenance'
+                        )
+                except FileExistsError as exc:
+                    data_conflict_status = 'failed'
+                    data_conflict_message = str(exc)
+                if data_conflict_status:
+                    data_write_eligible = False
+
+            if not data_write_eligible and not payload_required:
+                entry = reusable_data_entries.get(task_id)
+                if entry is not None:
+                    item = planned_group_item(
+                        member,
+                        status='resumed',
+                        message='manifest-proven data resume',
+                        entry=entry,
+                    )
+                else:
+                    item = planned_group_item(
+                        member,
+                        status=data_conflict_status or 'done',
+                        message=data_conflict_message,
+                    )
+                    if data_reservation is not None:
+                        if data_reservation.warning:
+                            item.warnings.append(data_reservation.warning)
+                        data_reservation.release()
+                items.append(item)
+                reporter.record(
+                    item, source_key, self._known_file_data(source_key),
+                )
+                if data_conflict_status == 'failed':
+                    blocked.append(
+                        f'{item.file_name}:{signal_name}: '
+                        f'{data_conflict_message}'
+                    )
+                reporter.emit(BatchProgressEvent(
+                    kind=(
+                        'task_failed'
+                        if item.status == 'failed'
+                        else 'task_skipped'
+                        if item.status == 'skipped'
+                        else 'task_resumed'
+                    ),
+                    task_index=index,
+                    total=total,
+                    file_name=item.file_name,
+                    signal=signal_name,
+                    method='time',
+                    task_id=item.task_id,
+                    message=item.message,
+                ))
+                continue
+
+            fid, fd_or_fail = self._resolve_task_file(source_key)
+            physical_key = self._physical_for_source(source_key)
+            if physical_key is not None:
+                prev_physical_key = physical_key
+            fname = (
+                fd_or_fail.path
+                if isinstance(fd_or_fail, _LoadFailure)
+                else str(fd_or_fail.filename)
+            )
+            started_at = utc_now()
+            reporter.emit(BatchProgressEvent(
+                kind='task_started',
+                task_index=index,
+                total=total,
+                file_name=fname,
+                signal=signal_name,
+                method=preset.method,
+            ))
+            try:
+                if isinstance(fd_or_fail, _LoadFailure):
+                    raise IOError(fd_or_fail.error)
+                if signal_name not in fd_or_fail.data.columns:
+                    raise ValueError(f'missing signal: {signal_name}')
+                computed = self._compute_group_task(
+                    preset,
+                    source_key,
+                    fd_or_fail,
+                    signal_name,
+                    output_dir,
+                    spool,
+                    group,
+                    data_write_eligible=data_write_eligible,
+                    payload_required=payload_required,
+                    data_reservation=data_reservation,
+                    effective=effective_plan,
+                    cancel_token=cancel_token,
+                )
+                item = computed.item
+                if not data_write_eligible:
+                    entry = reusable_data_entries.get(task_id)
+                    if data_conflict_status:
+                        item.status = data_conflict_status
+                        item.message = data_conflict_message
+                        item.data_path = None
+                        item.artifact_facts = {}
+                        if (
+                            data_reservation is not None
+                            and data_reservation.warning
+                        ):
+                            item.warnings.append(data_reservation.warning)
+                        if data_conflict_status == 'failed':
+                            blocked.append(
+                                f'{fname}:{signal_name}: '
+                                f'{data_conflict_message}'
+                            )
+                    elif entry is not None:
+                        data = (entry.get('artifacts') or {}).get('data') or {}
+                        item.status = 'resumed'
+                        item.message = 'manifest-proven data resume'
+                        item.data_path = data.get('path')
+                        item.artifact_facts = dict(
+                            entry.get('artifacts') or {}
+                        )
+                item.started_at = started_at
+                item.finished_at = utc_now()
+                items.append(item)
+                if group is not None:
+                    group_results[group.identity.group_id].append(computed)
+                if computed.render_error and group is not None:
+                    if computed.render_status == 'failed':
+                        group_failed[
+                            group.identity.group_id
+                        ] = computed.render_error
+                    elif 'run spool exceeds' in computed.render_error:
+                        run_spool_blocked = True
+                        for candidate in render_groups:
+                            successful = sum(
+                                bool(result.series_refs)
+                                for result in group_results[
+                                    candidate.identity.group_id
+                                ]
+                            )
+                            if successful < len(candidate.members):
+                                group_blocked[
+                                    candidate.identity.group_id
+                                ] = computed.render_error
+                    else:
+                        group_blocked[
+                            group.identity.group_id
+                        ] = computed.render_error
+                reporter.record(item, source_key, fd_or_fail)
+                defer_terminal = bool(
+                    computed.series_refs
+                    and item.status in {'done', 'resumed'}
+                )
+                if defer_terminal:
+                    deferred_group_terminals[item.task_id] = (
+                        index, fname, signal_name,
+                    )
+                else:
+                    reporter.emit(BatchProgressEvent(
+                        kind=(
+                            'task_failed' if item.status == 'failed'
+                            else 'task_skipped' if item.status == 'skipped'
+                            else 'task_resumed' if item.status == 'resumed'
+                            else 'task_done'
+                        ),
+                        task_index=index,
+                        total=total,
+                        file_name=fname,
+                        signal=signal_name,
+                        method=preset.method,
+                        task_id=item.task_id,
+                        message=item.message,
+                        data_path=item.data_path,
+                        error=(item.message if item.status == 'failed' else None),
+                    ))
+                if not defer_terminal:
+                    reporter.emit_progress(item, index, total)
+            except _BatchCancelled as exc:
+                if data_reservation is not None:
+                    data_reservation.release()
+                cancelled = True
+                identity = next(
+                    task.identity for task in render_tasks
+                    if task.source_key == source_key
+                    and task.channel == signal_name
+                )
+                item = BatchItemResult(
+                    method='time',
+                    file_id=source_key,
+                    file_name=fname,
+                    signal=signal_name,
+                    status='cancelled',
+                    message=str(exc),
+                    task_id=identity.task_id,
+                    source_identity=identity.source_identity,
+                    group_identity=identity.group_identity,
+                    requested_outputs=dict(effective_plan.requested),
+                    effective_outputs=dict(effective_plan.effective),
+                    degraded_reason=effective_plan.degraded_reason,
+                    started_at=started_at,
+                    finished_at=utc_now(),
+                )
+                items.append(item)
+                reporter.record(
+                    item,
+                    source_key,
+                    None if isinstance(fd_or_fail, _LoadFailure)
+                    else fd_or_fail,
+                )
+                reporter.emit(BatchProgressEvent(
+                    kind='task_cancelled',
+                    task_index=index,
+                    total=total,
+                    file_name=fname,
+                    signal=signal_name,
+                    method='time',
+                    task_id=item.task_id,
+                    message=item.message,
+                ))
+                reporter.emit_cancelled_range(index + 1)
+                break
+            except Exception as exc:
+                if data_reservation is not None:
+                    data_reservation.release()
+                identity = next(
+                    task.identity for task in render_tasks
+                    if task.source_key == source_key
+                    and task.channel == signal_name
+                )
+                item = BatchItemResult(
+                    method='time',
+                    file_id=source_key,
+                    file_name=fname,
+                    signal=signal_name,
+                    status='failed',
+                    message=str(exc),
+                    task_id=identity.task_id,
+                    source_identity=identity.source_identity,
+                    group_identity=identity.group_identity,
+                    requested_outputs=dict(effective_plan.requested),
+                    effective_outputs=dict(effective_plan.effective),
+                    degraded_reason=effective_plan.degraded_reason,
+                    started_at=started_at,
+                    finished_at=utc_now(),
+                )
+                items.append(item)
+                blocked.append(f'{fname}:{signal_name}: {exc}')
+                if group is not None:
+                    group_results[group.identity.group_id].append(
+                        TaskComputeResult(item=item, render_error=str(exc))
+                    )
+                reporter.record(
+                    item,
+                    source_key,
+                    None if isinstance(fd_or_fail, _LoadFailure)
+                    else fd_or_fail,
+                )
+                reporter.emit(BatchProgressEvent(
+                    kind='task_failed',
+                    task_index=index,
+                    total=total,
+                    file_name=fname,
+                    signal=signal_name,
+                    method='time',
+                    error=str(exc),
+                    task_id=item.task_id,
+                    message=item.message,
+                ))
+
+        for physical_key in tuple(self._disk_cache):
+            self._evict_physical(physical_key)
+
+        return cancelled
+
+    def _run_grouped_render(self, preset, output_dir, render_groups, spool,
+                            *, reporter, recorder, effective_plan,
+                            cancel_token, group_results, group_recovery,
+                            group_failed, group_blocked, prior_group_entries,
+                            deferred_group_terminals, cancelled, blocked,
+                            total):
+        """Render one image per group, then flush the deferred task terminals.
+
+        Extracted verbatim from ``run``.  Group members whose terminal event
+        was withheld pending their group image are emitted here, in task
+        order, which is why the deferred-terminal flush travels with the
+        render loop rather than staying behind in ``run``.
+
+        Returns ``(cancelled, render_group_outcomes)``.
+        """
+
+        manifest_errors = reporter.manifest_errors
+        resolved_group_terminals: list[
+            tuple[int, str, str, BatchItemResult, str | None]
+        ] = []
+        render_group_outcomes: list[RenderGroupResult] = []
+
+        for group in render_groups:
+            group_id = group.identity.group_id
+            results = group_results[group_id]
+            decision = group_recovery[group_id]
+            if cancelled:
+                outcome = RenderGroupResult(
+                    group_id=group_id,
+                    status='cancelled',
+                    message='batch cancelled before group image completed',
+                )
+            elif decision.reusable_group is not None:
+                reusable = decision.reusable_group
+                outcome = RenderGroupResult(
+                    group_id=group_id,
+                    status='done',
+                    image_path=(reusable.get('artifact') or {}).get('path'),
+                    message='manifest-proven group resume',
+                    warnings=list(reusable.get('warnings') or ()),
+                    artifact=dict(reusable.get('artifact') or {}),
+                    effective_facts=dict(
+                        reusable.get('effective_facts') or {}
+                    ),
+                )
+            elif effective_plan.degraded_reason:
+                outcome = RenderGroupResult(
+                    group_id=group_id,
+                    status='degraded',
+                    message=effective_plan.degraded_reason,
+                )
+            elif group_id in group_failed:
+                outcome = RenderGroupResult(
+                    group_id=group_id,
+                    status='failed',
+                    message=group_failed[group_id],
+                )
+            elif group_id in group_blocked:
+                outcome = RenderGroupResult(
+                    group_id=group_id,
+                    status='blocked',
+                    message=group_blocked[group_id],
+                )
+            else:
+                if recorder is not None:
+                    try:
+                        recorder.upsert_render_group(
+                            self._render_group_manifest_entry(
+                                group,
+                                effective_plan,
+                                status='running',
+                            )
+                        )
+                    except Exception as exc:
+                        manifest_errors.append(
+                            f'cannot update batch manifest: {exc}'
+                        )
+                try:
+                    prior_group = prior_group_entries.get(group_id) or {}
+                    prior_artifact = prior_group.get('artifact') or {}
+                    prior_image_path = prior_artifact.get('path')
+                    outcome = self._render_group(
+                        group,
+                        results,
+                        preset,
+                        output_dir,
+                        spool,
+                        effective=effective_plan,
+                        reservation_stem=(
+                            Path(prior_image_path).stem
+                            if prior_image_path else None
+                        ),
+                        conflict_policy_override=(
+                            'overwrite' if prior_image_path else None
+                        ),
+                        recorder=recorder,
+                        cancel_token=cancel_token,
+                    )
+                except _BatchCancelled as exc:
+                    cancelled = True
+                    outcome = RenderGroupResult(
+                        group_id=group_id,
+                        status='cancelled',
+                        message=str(exc),
+                    )
+                except Exception as exc:
+                    outcome = RenderGroupResult(
+                        group_id=group_id,
+                        status='failed',
+                        message=str(exc),
+                    )
+            render_group_outcomes.append(outcome)
+            if outcome.warnings:
+                for computed in results:
+                    if computed.series_refs:
+                        computed.item.warnings = list(dict.fromkeys([
+                            *computed.item.warnings,
+                            *outcome.warnings,
+                        ]))
+                        reporter.record(computed.item, computed.item.file_id)
+            if outcome.status == 'cancelled':
+                cancelled = True
+                for computed in results:
+                    item = computed.item
+                    if item.status not in {'done', 'resumed'}:
+                        continue
+                    item.status = 'cancelled'
+                    item.message = (
+                        outcome.message
+                        or 'batch cancelled before group image completed'
+                    )
+                    item.finished_at = utc_now()
+                    reporter.record(item, item.file_id)
+            for computed in results:
+                item = computed.item
+                event_context = deferred_group_terminals.pop(
+                    item.task_id, None,
+                )
+                if event_context is None:
+                    continue
+                task_index, file_name, signal_name = event_context
+                resolved_group_terminals.append((
+                    task_index,
+                    file_name,
+                    signal_name,
+                    item,
+                    outcome.image_path,
+                ))
+            if outcome.status not in {'done', 'degraded'}:
+                blocked.append(
+                    f'{group.identity.stem}: {outcome.message or outcome.status}'
+                )
+            if recorder is not None:
+                try:
+                    recorder.upsert_render_group(
+                        self._render_group_manifest_entry(
+                            group,
+                            effective_plan,
+                            status=outcome.status,
+                            message=outcome.message,
+                            warnings=outcome.warnings,
+                            artifact=outcome.artifact,
+                            effective_facts=outcome.effective_facts,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "batch run: cannot upsert render-group "
+                        "manifest entry for group %s (status=%s): %s",
+                        group.identity.group_id, outcome.status, exc,
+                        exc_info=True,
+                    )
+                    manifest_errors.append(
+                        f'cannot update batch manifest: {exc}'
+                    )
+
+        for (
+            task_index,
+            file_name,
+            signal_name,
+            item,
+            image_path,
+        ) in sorted(resolved_group_terminals, key=lambda value: value[0]):
+            reporter.emit(BatchProgressEvent(
+                kind=(
+                    'task_cancelled'
+                    if item.status == 'cancelled'
+                    else 'task_resumed'
+                    if item.status == 'resumed'
+                    else 'task_done'
+                ),
+                task_index=task_index,
+                total=total,
+                file_name=file_name,
+                signal=signal_name,
+                method=preset.method,
+                task_id=item.task_id,
+                message=item.message,
+                data_path=item.data_path,
+                image_path=image_path,
+            ))
+            reporter.emit_progress(item, task_index, total)
+
+        return cancelled, render_group_outcomes
 
     def _run_sequential(self, preset, output_dir, tasks, render_tasks, *,
                         reporter, recorder, effective_plan,
