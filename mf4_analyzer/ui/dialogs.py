@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -40,33 +41,14 @@ from ..ui_kit.widgets.searchable_combo import SearchableComboBox
 from ._axis_handle import make_handle
 from ._color_utils import is_color_like as _is_color_like
 from ._color_utils import to_hex as _to_hex
+from .expression_help import ExpressionHelpPopup, help_tooltip_text
 from .pg_canvas.heatmap_canvas import SUPPORTED_HEATMAP_COLORMAPS
 from .widgets.compact_spinbox import CompactDoubleSpinBox
 
-# Shown on the ? badge next to the 表达式 input. Hand-wrapped: the app-wide
-# glass tooltip (ui_kit/glass_tooltip.py) sizes itself to the longest line, so
-# every line stays short enough that the popup does not sprawl across the chart.
-EXPR_TOOLTIP = (
-    "自定义表达式 —— 变量 A = 通道A，B = 通道B，t = 时间\n"
-    "\n"
-    "示例\n"
-    "· sqrt(A^2 + B^2)  →  合成幅值\n"
-    "· (A - B) * 0.5 + 1.2  →  括号与系数\n"
-    "· A / max(abs(B), 0.001)  →  避免除零\n"
-    "· A - mean(A)  →  去直流偏置\n"
-    "· where(t > 5, A, B)  →  按时间切换\n"
-    "\n"
-    "可用函数\n"
-    "· 数学 sqrt cbrt abs exp log ln log2 log10\n"
-    "· 三角 sin cos tan asin acos atan atan2\n"
-    "         sinh cosh tanh deg rad\n"
-    "· 取值 min max clip sign floor ceil round\n"
-    "         hypot where cumsum\n"
-    "· 统计 mean median std sum rms（对整条通道求值）\n"
-    "\n"
-    "运算符 + - * / // % ^（幂）、比较、& |；常量 pi e\n"
-    "名称留空按公式自动命名；inf / nan 处曲线断开"
-)
+# Hover text for the ? badge — same reference the pinnable help card renders,
+# so the two can never drift apart (see ui/expression_help.py).
+EXPR_TOOLTIP = help_tooltip_text()
+EXPR_HELP_HINT = "点 ? 打开可拖动的帮助卡片"
 
 
 class ChannelEditorDialog(QDialog):
@@ -212,18 +194,22 @@ class ChannelEditorDialog(QDialog):
         self.edit_expr.setMinimumWidth(self.INPUT_WIDTH - 24)
         self.edit_expr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         erl.addWidget(self.edit_expr, 1)
-        # Hover-only help affordance (a QLabel, not a button: there is nothing
-        # to click). The app-wide glass tooltip renders EXPR_TOOLTIP.
-        self.lbl_expr_help = QLabel("?")
-        self.lbl_expr_help.setObjectName("channelExprHelp")
-        self.lbl_expr_help.setAlignment(Qt.AlignCenter)
-        self.lbl_expr_help.setFixedSize(18, 18)
-        self.lbl_expr_help.setCursor(Qt.WhatsThisCursor)
-        self.lbl_expr_help.setToolTip(EXPR_TOOLTIP)
-        erl.addWidget(self.lbl_expr_help, 0)
+        # Hover shows the reference; clicking pins it as a draggable card so
+        # the user can keep reading while typing the formula.
+        self.btn_expr_help = QToolButton()
+        self.btn_expr_help.setObjectName("channelExprHelp")
+        self.btn_expr_help.setText("?")
+        self.btn_expr_help.setCheckable(True)
+        self.btn_expr_help.setFixedSize(18, 18)
+        self.btn_expr_help.setFocusPolicy(Qt.NoFocus)
+        self.btn_expr_help.setCursor(Qt.PointingHandCursor)
+        self.btn_expr_help.setToolTip(f"{EXPR_TOOLTIP}\n\n{EXPR_HELP_HINT}")
+        self.btn_expr_help.toggled.connect(self._toggle_expr_help)
+        self._expr_help_popup = None
+        erl.addWidget(self.btn_expr_help, 0)
         gl2.addWidget(self._expr_row, 3, 1)
         self.lbl_expr_hint = QLabel(
-            "A=通道A · B=通道B · t=时间 · ^ 为幂 · 详见 ?"
+            "A=通道A · B=通道B · t=时间 · ^ 为幂 · 点 ? 看全部"
         )
         self.lbl_expr_hint.setObjectName("channelExprHint")
         self.lbl_expr_hint.setWordWrap(True)
@@ -452,8 +438,38 @@ class ChannelEditorDialog(QDialog):
         """Show the 表达式 row only for the 自定义 operation."""
         custom = self.combo_op2.currentIndex() == self.CUSTOM_OP_INDEX
         for w in (self.lbl_expr, self._expr_row, self.edit_expr,
-                  self.lbl_expr_help, self.lbl_expr_hint):
+                  self.btn_expr_help, self.lbl_expr_hint):
             w.setVisible(custom)
+        if not custom:
+            # Leaving 自定义 takes the help card with it.
+            self.btn_expr_help.setChecked(False)
+
+    def _toggle_expr_help(self, checked):
+        """Open / close the pinnable, draggable expression help card."""
+        if not checked:
+            if self._expr_help_popup is not None:
+                self._expr_help_popup.hide()
+            return
+        if self._expr_help_popup is None:
+            # Parented to the editor so the drawer's application modality does
+            # not block it (Qt exempts a modal window's own child windows).
+            self._expr_help_popup = ExpressionHelpPopup(self)
+            self._expr_help_popup.closed.connect(
+                lambda: self.btn_expr_help.setChecked(False)
+            )
+        self._expr_help_popup.show_beside(self.edit_expr)
+
+    def hideEvent(self, event):
+        # The card is a separate top-level window; it must not outlive the
+        # editor it documents. hideEvent also fires while the editor is being
+        # torn down, when the child popup's C++ side may already be gone —
+        # hence the RuntimeError guard.
+        if self._expr_help_popup is not None:
+            try:
+                self._expr_help_popup.hide()
+            except RuntimeError:
+                self._expr_help_popup = None
+        super().hideEvent(event)
 
     def _channel_signal(self, name):
         """Signal for a channel name, including ones staged in this session."""

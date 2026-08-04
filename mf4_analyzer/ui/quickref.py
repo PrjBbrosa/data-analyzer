@@ -205,6 +205,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="运算选「自定义表达式…」；A / B / t 加括号系数与 "
                     "sqrt abs log min max mean where，^ 为幂",
             ),
+            QuickRow(
+                "表达式帮助卡片",
+                sub="示例与全部函数一览，可拖到旁边边看边写",
+                gesture="点表达式右侧「?」",
+            ),
             QuickRow("删除通道", sub="列表内多选后删除，确定才生效"),
         ),
     ),

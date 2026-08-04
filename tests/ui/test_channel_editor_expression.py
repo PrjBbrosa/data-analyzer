@@ -38,22 +38,23 @@ def test_custom_op_is_last_entry(qapp, tmp_path):
 
 def test_expression_row_hidden_until_custom_op_selected(qapp, tmp_path):
     dlg = _editor(tmp_path)
-    for w in (dlg.lbl_expr, dlg.edit_expr, dlg.lbl_expr_help, dlg.lbl_expr_hint):
+    for w in (dlg.lbl_expr, dlg.edit_expr, dlg.btn_expr_help, dlg.lbl_expr_hint):
         assert w.isHidden()
     _select_custom(dlg)
-    for w in (dlg.lbl_expr, dlg.edit_expr, dlg.lbl_expr_help, dlg.lbl_expr_hint):
+    for w in (dlg.lbl_expr, dlg.edit_expr, dlg.btn_expr_help, dlg.lbl_expr_hint):
         assert not w.isHidden()
     dlg.combo_op2.setCurrentIndex(0)
-    assert dlg.edit_expr.isHidden() and dlg.lbl_expr_help.isHidden()
+    assert dlg.edit_expr.isHidden() and dlg.btn_expr_help.isHidden()
 
 
 def test_help_badge_tooltip_documents_variables_functions_and_examples(qapp, tmp_path):
     dlg = _select_custom(_editor(tmp_path))
-    tip = dlg.lbl_expr_help.toolTip()
-    assert tip == dlg.edit_expr.toolTip()      # hovering either shows the same
+    tip = dlg.btn_expr_help.toolTip()
+    assert dlg.edit_expr.toolTip() in tip      # hovering either shows the same
     for token in ("A = 通道A", "B = 通道B", "t = 时间", "^", "sqrt", "mean",
                   "where", "pi", "sqrt(A^2 + B^2)"):
         assert token in tip
+    assert "点 ?" in tip                        # advertises the pinnable card
     # Hand-wrapped for the glass tooltip: no line may sprawl.
     assert max(len(line) for line in tip.splitlines()) <= 52
 

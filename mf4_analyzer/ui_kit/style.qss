@@ -2254,20 +2254,27 @@ QDialog#DrawerSurface #ChannelEditorDialog {
     font-family: "SF Mono", "Menlo", "Consolas", "DejaVu Sans Mono", monospace;
     font-size: 12px;
 }
-/* Round ? badge next to the expression input — hover shows the full
- * function/例 reference through the app-wide glass tooltip. */
-#ChannelEditorDialog QLabel#channelExprHelp {
+/* Round ? badge next to the expression input — hover shows the reference
+ * through the app-wide glass tooltip, click pins it as a draggable card
+ * (ui/expression_help.py); the checked state marks the card as open. */
+#ChannelEditorDialog QToolButton#channelExprHelp {
     color: #4b6b9a;
     border: 1px solid #cdddf6;
     border-radius: 9px;
     background-color: #f3f8ff;
     font-size: 11px;
     font-weight: 600;
+    padding: 0;
 }
-#ChannelEditorDialog QLabel#channelExprHelp:hover {
+#ChannelEditorDialog QToolButton#channelExprHelp:hover {
     color: #0f3f8f;
     border-color: #93b4ef;
     background-color: #e8efff;
+}
+#ChannelEditorDialog QToolButton#channelExprHelp:checked {
+    color: #ffffff;
+    border-color: #1769e0;
+    background-color: #1769e0;
 }
 #ChannelEditorDialog QLabel#channelExprHint {
     color: #7b8794;
