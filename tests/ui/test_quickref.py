@@ -190,6 +190,12 @@ def test_quickref_covers_batch_drawer():
     assert "刻度与字体" in memory.sub
     assert "不记" in memory.sub
     assert memory.gesture == "恢复默认"
+    slice_export = next(r for r in group.rows if r.desc == "导出切片")
+    assert "最多 4" in slice_export.sub
+    assert "FFT-时间" in slice_export.sub and "阶次" in slice_export.sub
+    open_folder = next(r for r in group.rows if "完成后" in r.desc)
+    assert "输出目录" in open_folder.desc
+    assert "记" in open_folder.sub and "下次" in open_folder.sub
     # The picker rewrite has landed — nothing here is a staged capability.
     assert all(not r.soon for r in group.rows)
 

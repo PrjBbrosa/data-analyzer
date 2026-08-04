@@ -3283,18 +3283,21 @@ class MainWindow(
         # Batch order analysis retired the fixed-RPM mode that the
         # single-analysis view still offers.  ``_build_current_batch_preset``
         # already strips the retired keys, so the run would otherwise fail
-        # per item with a generic "rpm channel is required" — say it here,
-        # while the user still remembers typing the RPM value.  The preset is
-        # kept: everything except the RPM source is still valid, so the Sheet
-        # opens pre-filled and only the channel is left to pick.
+        # per item with a generic "rpm channel is required".  Keep that notice
+        # inside the modal sheet, where the RPM picker is available.  The
+        # preset is kept: everything except the RPM source is still valid, so
+        # the Sheet opens pre-filled and only the channel is left to pick.
+        handoff_notice = ""
         if (current_preset is not None
                 and current_preset.method == 'order_time'
                 and self._order_view_uses_manual_rpm()):
-            self.toast(
-                "批处理阶次分析不支持固定 RPM，请在批处理里指定 RPM 通道",
-                "warning",
+            handoff_notice = (
+                "批处理阶次分析不支持固定 RPM，请在批处理里指定 RPM 通道"
             )
         dlg = BatchSheet(self, self.files, current_preset=current_preset)
+        if handoff_notice:
+            dlg.set_handoff_notice(handoff_notice)
+        self.chart_stack.mark_discovered("batch.export_options")
         # BatchSheet._on_run_clicked is the only live execution path.  exec_()
         # ends only when the sheet closes; do not launch a duplicate runner
         # after it returns Accepted.
@@ -3381,6 +3384,7 @@ class MainWindow(
             params['fs'] = self.inspector.fft_time_ctx.fs()
             if self.inspector.top.range_enabled():
                 params['time_range'] = self.inspector.top.range_values()
+            params = normalize_batch_params(params, 'fft_time')
             return AnalysisPreset.from_current_single(
                 name="当前 FFT vs Time",
                 method="fft_time",

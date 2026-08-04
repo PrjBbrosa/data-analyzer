@@ -184,6 +184,13 @@ _HINTS = (
         priority=50,
     ),
     Hint(
+        id="batch.export_options",
+        text="切片≤4仅FFT-时间/阶次 · 完成后开输出目录会记住",
+        surface="discovery",
+        retire_on="batch_open",
+        priority=45,
+    ),
+    Hint(
         id="channel.right_click",
         text="左侧通道右键 → 设为叠加图左轴",
         surface="discovery",

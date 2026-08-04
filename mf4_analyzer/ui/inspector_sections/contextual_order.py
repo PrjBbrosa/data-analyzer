@@ -529,8 +529,7 @@ class OrderContextual(QWidget):
             self.spin_order_res.setValue(float(d['order_res']))
         if 'time_res' in d:
             self.spin_time_res.setValue(float(d['time_res']))
-        if 'window' in d:
-            self._apply_window_value(d['window'])
+        self._apply_window_value(d.get('window', 'hanning'))
         if 'nfft' in d:
             if (
                 d.get('nfft_mode') == 'auto'
@@ -771,8 +770,7 @@ class OrderContextual(QWidget):
                 self.spin_manual_rpm.setValue(float(d['manual_rpm']))
             except (TypeError, ValueError):
                 pass
-        if 'window' in d:
-            self._apply_window_value(d['window'])
+        self._apply_window_value(d.get('window', 'hanning'))
         if 'nfft' in d:
             if (
                 d.get('nfft_mode') == 'auto'

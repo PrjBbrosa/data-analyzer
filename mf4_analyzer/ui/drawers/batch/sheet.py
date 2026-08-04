@@ -251,6 +251,19 @@ class BatchSheet(QDialog):
             self, files=self._files, source_registry=self._source_registry,
             source_context=self._source_context,
         )
+        self._handoff_notice = QLabel(self._input_panel)
+        self._handoff_notice.setObjectName("BatchHandoffNotice")
+        self._handoff_notice.setWordWrap(True)
+        self._handoff_notice.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred,
+        )
+        self._handoff_notice.setStyleSheet(
+            "QLabel#BatchHandoffNotice { color:#9a6700;"
+            " background:#fff8dc; border:1px solid #f0d98b;"
+            " border-radius:4px; padding:4px 6px; }"
+        )
+        self._handoff_notice.hide()
+        self._handoff_notice_row_inserted = False
         self._analysis_panel = AnalysisPanel(self)
         self._analysis_panel.set_weighting_options(
             self._weighting_options_from_parent()
@@ -794,6 +807,34 @@ class BatchSheet(QDialog):
 
     def apply_rpm_channel(self, ch: str) -> None:
         self._input_panel.apply_rpm_channel(ch)
+
+    def set_handoff_notice(self, text: str) -> None:
+        """Show a main-window handoff message beside the RPM controls."""
+        notice = str(text or "").strip()
+        self._handoff_notice.setText(notice)
+        if notice and not self._handoff_notice_row_inserted:
+            # When the default FFT method has detached the RPM rows, insert at
+            # their saved position.  Switching to order_time later inserts the
+            # channel and factor rows above this notice, keeping all three
+            # adjacent without coupling the message to pipeline recomputation.
+            row = self._input_panel._rpm_row_index
+            if self._input_panel._rpm_row_visible:
+                factor_row, _role = self._input_panel._form_ref.getWidgetPosition(
+                    self._input_panel._rpm_factor_spin
+                )
+                if factor_row >= 0:
+                    row = factor_row + 1
+            self._input_panel._form_ref.insertRow(row, self._handoff_notice)
+            self._handoff_notice_row_inserted = True
+        elif not notice and self._handoff_notice_row_inserted:
+            row, _role = self._input_panel._form_ref.getWidgetPosition(
+                self._handoff_notice
+            )
+            if row >= 0:
+                self._input_panel._form_ref.takeRow(row)
+            self._handoff_notice.setParent(self._input_panel)
+            self._handoff_notice_row_inserted = False
+        self._handoff_notice.setVisible(bool(notice))
 
     def apply_time_range(self, rng) -> None:
         method = self.method()

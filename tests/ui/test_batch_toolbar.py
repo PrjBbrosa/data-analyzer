@@ -148,6 +148,7 @@ def test_build_current_batch_preset_supports_fft_time(qtbot, monkeypatch):
         "remove_mean": False,
         "weighting": "A",
         "db_reference": 2.0,
+        "avg_mode": "linear",
     }
     monkeypatch.setattr(win.toolbar, "current_mode", lambda: "fft_time")
     monkeypatch.setattr(
@@ -178,7 +179,11 @@ def test_build_current_batch_preset_supports_fft_time(qtbot, monkeypatch):
     assert preset.params["weighting"] == "A"
     assert preset.params["db_reference"] == 2.0
     assert preset.params["fs"] == 512.0
-    assert preset.params["time_range"] == (1.0, 2.5)
+    # FFT-vs-Time consumes the complete valid matrix time domain.  The batch
+    # bridge must use the recipe normalizer, so an FFT-only average field and
+    # the Inspector's display range cannot leak into the preset.
+    assert "avg_mode" not in preset.params
+    assert "time_range" not in preset.params
 
 
 def test_build_current_batch_preset_fft_uses_current_params(qtbot, monkeypatch):
@@ -409,8 +414,8 @@ def test_order_handoff_strips_retired_rpm_keys_and_keeps_everything_else(
     }
 
 
-def test_open_batch_warns_when_order_view_is_on_manual_rpm(qtbot, monkeypatch):
-    """The user hears about it while they still remember typing the value."""
+def test_open_batch_puts_manual_rpm_handoff_notice_in_sheet(qtbot, monkeypatch):
+    """The manual-RPM warning belongs to the modal sheet, not a host toast."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
@@ -437,17 +442,51 @@ def test_open_batch_warns_when_order_view_is_on_manual_rpm(qtbot, monkeypatch):
     monkeypatch.setattr(
         win, "toast", lambda text, kind="info": toasts.append((text, kind))
     )
-    # The Sheet itself is not under test here — only the hand-off notice.
-    monkeypatch.setattr(
-        "mf4_analyzer.ui.drawers.batch.BatchSheet",
-        lambda *a, **k: type("_D", (), {"exec_": lambda self: 0})(),
-    )
+    discovered = []
+    monkeypatch.setattr(win.chart_stack, "mark_discovered", discovered.append)
+    sheets = []
 
-    for mode, expected in (("manual", 1), ("channel", 0)):
+    class _FakeSheet:
+        def __init__(self, *args, **kwargs):
+            self.notice = ""
+            sheets.append(self)
+
+        def set_handoff_notice(self, text):
+            self.notice = text
+
+        def exec_(self):
+            return 0
+
+    monkeypatch.setattr("mf4_analyzer.ui.drawers.batch.BatchSheet", _FakeSheet)
+
+    for mode, expected_notice in (("manual", True), ("channel", False)):
         toasts.clear()
+        sheets.clear()
         monkeypatch.setattr(win.inspector.order_ctx, "rpm_mode", lambda m=mode: m)
         win.open_batch()
-        rpm_toasts = [t for t, _kind in toasts if "RPM" in t]
-        assert len(rpm_toasts) == expected, (mode, toasts)
-        if expected:
-            assert "RPM 通道" in rpm_toasts[0]
+        assert not [t for t, _kind in toasts if "RPM" in t], (mode, toasts)
+        assert bool(sheets[0].notice) is expected_notice
+        assert discovered[-1] == "batch.export_options"
+        if expected_notice:
+            assert "RPM 通道" in sheets[0].notice
+
+
+def test_batch_sheet_handoff_notice_is_visible_beside_rpm_controls(qtbot):
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet.set_handoff_notice(
+        "批处理阶次分析不支持固定 RPM，请在批处理里指定 RPM 通道"
+    )
+    sheet.apply_method("order_time")
+    sheet.show()
+
+    assert sheet._handoff_notice.text() == (
+        "批处理阶次分析不支持固定 RPM，请在批处理里指定 RPM 通道"
+    )
+    assert sheet._handoff_notice.isVisibleTo(sheet)
+    notice_row, _role = sheet._input_panel._form_ref.getWidgetPosition(
+        sheet._handoff_notice
+    )
+    assert notice_row == sheet._input_panel._rpm_factor_row_index + 1

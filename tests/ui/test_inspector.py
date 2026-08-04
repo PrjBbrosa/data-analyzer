@@ -341,6 +341,22 @@ def test_order_contextual_window_survives_preset_round_trip(qapp):
     assert oc.get_params()['window'] == 'kaiser'
 
 
+@pytest.mark.parametrize('apply_path', ('preset', 'view'))
+def test_legacy_order_preset_without_window_restores_hanning(qapp, apply_path):
+    """Old order presets must not inherit a previously selected window."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    oc = OrderContextual()
+    oc.combo_win.setCurrentText('flattop')
+
+    if apply_path == 'preset':
+        oc._apply_preset_values({})
+    else:
+        oc.apply_params({})
+
+    assert oc.combo_win.currentText() == 'hanning'
+
+
 def test_order_builtin_presets_drive_the_window_picker(qapp):
     """频率 -> flattop, 均衡 / 时间 -> hanning, same as fft / fft_time."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual

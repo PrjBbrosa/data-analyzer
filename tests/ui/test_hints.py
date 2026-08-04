@@ -115,6 +115,24 @@ def test_discovery_hint_returns_priority_order_and_skips_discovered():
     assert hints.discovery_hint(all_now) is None
 
 
+def test_batch_export_options_discovery_states_slice_and_folder_limits():
+    batch_hint = next(
+        hint for hint in hints.all_hints() if hint.id == "batch.export_options"
+    )
+    assert "≤4" in batch_hint.text
+    assert "FFT-时间" in batch_hint.text and "阶次" in batch_hint.text
+    assert "完成后" in batch_hint.text and "目录" in batch_hint.text
+    assert "记住" in batch_hint.text
+
+    seen = frozenset(
+        hint.id for hint in hints.all_hints()
+        if hint.surface == "discovery"
+        and hint.ship == "now"
+        and hint.id != batch_hint.id
+    )
+    assert hints.discovery_hint(HintState(discovered=seen)) == batch_hint
+
+
 def test_mark_discovered_round_trips_through_qsettings():
     temp_dir = Path(".pytmp") / "test_hints"
     temp_dir.mkdir(parents=True, exist_ok=True)
