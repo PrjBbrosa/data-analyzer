@@ -693,6 +693,27 @@ class BatchSheet(QDialog):
     def rpm_channel(self) -> str:
         return self._input_panel.rpm_channel()
 
+    def _free_config_rpm_signal(self) -> tuple[object, str] | None:
+        """Return the unambiguous runtime source selected for a free RPM.
+
+        A channel name alone means each target source supplies its own RPM.
+        When that name occurs in exactly one selected logical source, preserve
+        the source pair so ``BatchRunner`` can interpolate it onto a target in
+        another raster group.  The pair remains runtime-only and is therefore
+        intentionally excluded from portable preset JSON.
+        """
+        if self.method() != "order_time":
+            return None
+        rpm_channel = self.rpm_channel()
+        if not rpm_channel:
+            return None
+        channel_sets = self._input_panel.source_channel_sets()
+        source_ids = tuple(
+            source_id for source_id in self.source_ids()
+            if rpm_channel in channel_sets.get(source_id, frozenset())
+        )
+        return (source_ids[0], rpm_channel) if len(source_ids) == 1 else None
+
     def _x_range_crops_time(self) -> bool:
         """Whether the X range doubles as the time-domain data window.
 
@@ -2034,4 +2055,5 @@ class BatchSheet(QDialog):
             file_ids=self.file_ids(),
             file_paths=self.file_paths(),
             target_pairs=exact_pairs,
+            rpm_signal=self._free_config_rpm_signal(),
         )

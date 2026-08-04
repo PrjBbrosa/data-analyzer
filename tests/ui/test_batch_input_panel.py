@@ -542,6 +542,63 @@ def test_order_channel_mode_requires_rpm_selection_before_run(qtbot, tmp_path):
     assert sheet.is_runnable() is True
 
 
+def test_free_order_preset_binds_unique_cross_source_rpm(qtbot, tmp_path):
+    """A partial RPM choice must retain its logical source for COT.
+
+    This catches the multi-rate HDF case where ``Left`` is in a wideband
+    logical source and ``Com_RPS_Speed_DV`` only exists in the low-rate
+    logical source.  Without the source pair, BatchRunner looks for RPM in
+    the Left source and rejects the task instead of interpolating it.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.batch import BatchRunner
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    target = FileData(
+        tmp_path / "noise.csv",
+        pd.DataFrame({
+            "time": [0.0, 0.25, 0.5],
+            "Left": [1.0, 2.0, 3.0],
+        }),
+        ["time", "Left"],
+        {},
+    )
+    speed = FileData(
+        tmp_path / "speed.csv",
+        pd.DataFrame({
+            "time": [0.0, 0.5],
+            "Com_RPS_Speed_DV": [1000.0, 2000.0],
+        }),
+        ["time", "Com_RPS_Speed_DV"],
+        {},
+    )
+    files = {"noise": target, "speed": speed}
+    sheet = BatchSheet(None, files=files)
+    qtbot.addWidget(sheet)
+    file_list = sheet._input_panel._file_list
+    file_list.add_loaded_file("noise", str(target.filepath), frozenset({"Left"}))
+    file_list.add_loaded_file(
+        "speed", str(speed.filepath), frozenset({"Com_RPS_Speed_DV"}),
+    )
+    sheet.apply_method("order_time")
+    sheet._input_panel.apply_target_policy("available_per_source")
+    sheet.apply_signals(("Left",))
+    sheet.apply_rpm_channel("Com_RPS_Speed_DV")
+
+    preset = sheet.get_preset()
+
+    assert preset.rpm_signal == ("speed", "Com_RPS_Speed_DV")
+    runner = BatchRunner(files)
+    assert list(runner._expand_tasks(preset)) == [("noise", "Left")]
+    np.testing.assert_allclose(
+        runner._rpm_values(target, preset, target_source_id="noise"),
+        [1000.0, 1500.0, 2000.0],
+    )
+
+
 def test_loaded_menu_uses_filename_not_fid(qtbot, tmp_path):
     """+ 已加载 菜单和文件行必须显示文件名而非合成 fid (ultrareview bug_003)."""
     import pandas as pd
