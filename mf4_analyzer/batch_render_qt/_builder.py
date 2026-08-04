@@ -61,6 +61,9 @@ _EMPTY_DB_LEVEL = -200.0
 _AUTO_SPAN_DB = 30.0
 _AUTO_CEILING_PERCENTILE = 99.0
 _DISPLAY_DEAD_SPAN_DB = 200.0
+_SLICE_MARKER_HIGHLIGHT_COLOR = QColor(255, 45, 85, 90)
+_SLICE_MARKER_HIGHLIGHT_WIDTH = 18.0
+_SLICE_MARKER_HIGHLIGHT_Z = 898.0
 
 
 def _finite_values(values) -> np.ndarray:
@@ -871,6 +874,7 @@ class BuiltBatchScene:
     slice_plan: BatchSlicePlan | None = None
     slice_plot: Any = None
     slice_curves: tuple[Any, ...] = field(default_factory=tuple)
+    slice_marker_bands: tuple[Any, ...] = field(default_factory=tuple)
     slice_marker_lines: tuple[Any, ...] = field(default_factory=tuple)
     slice_legend: Any = None
     _layout_callbacks: tuple[Any, ...] = field(default_factory=tuple)
@@ -1230,6 +1234,7 @@ class _SceneBuilder:
         self.slice_plan = None
         self.slice_plot = None
         self.slice_curves: list[Any] = []
+        self.slice_marker_bands: list[Any] = []
         self.slice_marker_lines: list[Any] = []
         self.slice_legend = None
         self._color_index = 0
@@ -2063,13 +2068,25 @@ class _SceneBuilder:
         curve_range = main_y_range if plan.axis == "time" else main_x_range
 
         # Marker lines on the image. Vertical when a time is fixed, horizontal
-        # when a frequency/order is fixed. Each colour line rides on a wider
-        # white one: under turbo a pure red or blue disappears entirely over
-        # part of the map (design D16). Widths are fixed pixels tuned for the
-        # 1920px page and do not scale with ``image_size``, exactly like
-        # ``theme.axis`` (design D17).
+        # when a frequency/order is fixed. A translucent red band first makes
+        # every cut easy to locate on a turbo heatmap; the white underlay and
+        # curve-matched colour line above it retain the legend association.
+        # Widths are fixed pixels tuned for the 1920px page and do not scale
+        # with ``image_size``, exactly like ``theme.axis`` (design D17).
         angle = 90.0 if plan.axis == "time" else 0.0
         for pick, color in zip(plan.picks, palette):
+            band = pg.InfiniteLine(
+                pos=pick.value,
+                angle=angle,
+                movable=False,
+                pen=pg.mkPen(
+                    _SLICE_MARKER_HIGHLIGHT_COLOR,
+                    width=_SLICE_MARKER_HIGHLIGHT_WIDTH,
+                ),
+            )
+            band.setZValue(_SLICE_MARKER_HIGHLIGHT_Z)
+            plot.addItem(band, ignoreBounds=True)
+            self.slice_marker_bands.append(band)
             for width, pen_color, depth in ((5.2, "#ffffff", 900.0), (2.6, color, 901.0)):
                 line = pg.InfiniteLine(
                     pos=pick.value,
@@ -2257,6 +2274,7 @@ class _SceneBuilder:
             slice_plan=self.slice_plan,
             slice_plot=self.slice_plot,
             slice_curves=tuple(self.slice_curves),
+            slice_marker_bands=tuple(self.slice_marker_bands),
             slice_marker_lines=tuple(self.slice_marker_lines),
             slice_legend=self.slice_legend,
             _layout_callbacks=tuple(self.layout_callbacks),

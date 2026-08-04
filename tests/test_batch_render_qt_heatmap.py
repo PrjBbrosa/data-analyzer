@@ -452,6 +452,7 @@ def test_slice_disabled_adds_no_row_and_no_items(qapp):
         assert scene.slice_plan is not None and not scene.slice_plan.enabled
         assert scene.slice_plot is None
         assert scene.slice_curves == ()
+        assert scene.slice_marker_bands == ()
         assert scene.slice_marker_lines == ()
         assert scene.slice_legend is None
     finally:
@@ -592,6 +593,33 @@ def test_slice_fixed_frequency_is_cool_with_horizontal_markers(qapp):
         # Design D-B6: below 3 curves, no thinning — full options.line_width.
         curve_widths = {curve.opts["pen"].widthF() for curve in scene.slice_curves}
         assert curve_widths == {scene.options.line_width}
+    finally:
+        scene.close()
+
+
+@pytest.mark.parametrize(
+    ("axis", "positions", "angle"),
+    [
+        ("time", [10.0, 20.0], 90.0),
+        ("y", [1.0, 4.0], 0.0),
+    ],
+)
+def test_slice_markers_have_transparent_red_highlight_bands(
+    qapp, axis, positions, angle,
+):
+    """The heatmap cut remains visible without replacing its curve colour."""
+    scene = _open_scene(qapp, "fft_time", params=_slice_params(axis, positions))
+    try:
+        assert len(scene.slice_marker_bands) == len(positions)
+        assert {band.angle for band in scene.slice_marker_bands} == {angle}
+        assert [band.value() for band in scene.slice_marker_bands] == pytest.approx(
+            positions,
+        )
+        for band in scene.slice_marker_bands:
+            assert band.pen.widthF() == pytest.approx(18.0)
+            assert band.pen.color().getRgb() == (255, 45, 85, 90)
+            assert band.zValue() == pytest.approx(898.0)
+            assert band in scene.plots[0].items
     finally:
         scene.close()
 

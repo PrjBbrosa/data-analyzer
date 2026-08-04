@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 7.9.2. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 7.9.3. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and 12-View changes, as well as the native WinWert (`.wwt`),
 ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced in 7.7.
 7.8 added a draft-based channel configuration manager with View matching
@@ -43,7 +43,11 @@ dimension with up to four overlaid positions, an extra chart row on the
 exported PNG, and a compact slice workbook that replaces the full long-format
 data file when the toggle is on (off leaves both byte-identical to before);
 the same pass also fixes time-domain chart-statistics extrema markers to
-render at their intended on-canvas size.
+render at their intended on-canvas size. 7.9.3 pairs a uniquely named RPM
+signal from another batch source with the selected order-analysis signal, so
+multi-rate inputs can be aligned on time instead of failing source lookup.
+Its batch heatmap exports also add a translucent red highlight band behind each
+slice marker while preserving the curve-matched centre line.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.
