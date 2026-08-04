@@ -187,7 +187,28 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
         ),
     ),
-    # 6 — 游标
+    # 6 — 通道编辑（派生通道）
+    QuickGroup(
+        title="通道编辑（派生通道）",
+        rows=(
+            QuickRow("打开通道编辑", gesture="通道树下方「编辑通道」"),
+            QuickRow(
+                "单通道运算",
+                sub="d/dt · ∫dt · ×系数 · +偏移 · 滑动平均 · |x|",
+            ),
+            QuickRow(
+                "双通道运算",
+                sub="A+B · A−B · A×B · A÷B · max(A,B) · min(A,B)",
+            ),
+            QuickRow(
+                "自定义表达式",
+                sub="运算选「自定义表达式…」；A / B / t 加括号系数与 "
+                    "sqrt abs log min max mean where，^ 为幂",
+            ),
+            QuickRow("删除通道", sub="列表内多选后删除，确定才生效"),
+        ),
+    ),
+    # 7 — 游标
     QuickGroup(
         title="游标",
         rows=(
@@ -199,7 +220,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
         ),
     ),
-    # 7 — 谱图（FFT-时间 / 阶次）
+    # 8 — 谱图（FFT-时间 / 阶次）
     QuickGroup(
         title="谱图（FFT-时间 / 阶次）",
         rows=(
@@ -208,7 +229,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("调谱图/切片高度", sub="双击重置", gesture="拖分隔条"),
         ),
     ),
-    # 8 — dB 参考（FFT / FFT-时间 / 阶次）
+    # 9 — dB 参考（FFT / FFT-时间 / 阶次）
     QuickGroup(
         title="dB 参考（FFT / FFT-时间 / 阶次）",
         rows=(
@@ -227,7 +248,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
         ),
     ),
-    # 9 — 标注
+    # 10 — 标注
     QuickGroup(
         title="标注",
         rows=(
@@ -235,7 +256,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("添加 / 删除最近", gesture="左键加 · 右键删"),
         ),
     ),
-    # 10 — 预设
+    # 11 — 预设
     QuickGroup(
         title="预设",
         rows=(
@@ -243,7 +264,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("重命名 / 重置", gesture="右键预设槽"),
         ),
     ),
-    # 11 — 导出 · 复制
+    # 12 — 导出 · 复制
     QuickGroup(
         title="导出 · 复制",
         rows=(
@@ -260,7 +281,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
         ),
     ),
-    # 12 — 批处理
+    # 13 — 批处理
     QuickGroup(
         title="批处理",
         rows=(
@@ -313,7 +334,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
         ),
     ),
-    # 13 — 右键菜单
+    # 14 — 右键菜单
     QuickGroup(
         title="右键菜单",
         rows=(
