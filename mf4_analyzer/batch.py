@@ -154,28 +154,22 @@ def _load_slice_render_contract():
     case no curve was drawn, so there is nothing for the table to match.
     """
     try:
-        from .batch_render_qt._builder import (
-            _linear_amplitude_label,
-            _render_in_db,
-            _slice_clamp_warning,
-        )
-        from .batch_render_qt._models import plan_heatmap_slice
-        from .batch_render_qt._page import _DEFAULT_METHOD, effective_fact_items
+        from .batch_render_qt import contract
     except ImportError as exc:
         if not is_optional_renderer_import_error(exc):
             raise
         return None
     return SimpleNamespace(
-        plan_heatmap_slice=plan_heatmap_slice,
-        render_in_db=_render_in_db,
-        linear_amplitude_label=_linear_amplitude_label,
+        plan_heatmap_slice=contract.plan_heatmap_slice,
+        render_in_db=contract.render_in_db,
+        linear_amplitude_label=contract.linear_amplitude_label,
         # Same wording the chart emits, so a run that exports both artifacts
         # cannot report the same clamp twice in two different phrasings.
-        slice_clamp_warning=_slice_clamp_warning,
+        slice_clamp_warning=contract.slice_clamp_warning,
         # Same picker the page header uses, so the workbook can never say
         # ``NFFT=512`` under a chart drawn with ``NFFT=1024`` (plan §5.2).
-        effective_fact_items=effective_fact_items,
-        method_labels=_DEFAULT_METHOD,
+        effective_fact_items=contract.effective_fact_items,
+        method_labels=contract.default_method_labels,
     )
 
 
