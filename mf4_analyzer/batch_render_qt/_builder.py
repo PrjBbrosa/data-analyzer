@@ -575,6 +575,14 @@ def _axis_tick_texts(axis) -> list[str]:
         return []
 
 
+def _axis_tick_font(axis, fallback_pt: float):
+    font = axis.style.get("tickFont")
+    if font is None:
+        label_item = getattr(axis, "label", None)
+        font = label_item.font() if label_item is not None else chart_font(fallback_pt)
+    return font
+
+
 def _left_axis_width_for_ticks(axis) -> float:
     """Width ``axis`` needs for the tick strings it is carrying *now*.
 
@@ -600,11 +608,7 @@ def _left_axis_width_for_ticks(axis) -> float:
     style = axis.style
     if not style.get("showValues", True):
         return 0.0
-    font = style.get("tickFont")
-    if font is None:
-        label_item = getattr(axis, "label", None)
-        font = label_item.font() if label_item is not None else chart_font()
-    metrics = QFontMetricsF(font)
+    metrics = QFontMetricsF(_axis_tick_font(axis, 9.0))
     width = max(
         (
             float(
@@ -643,14 +647,13 @@ def _slice_alignment_callback(layout, main_plot, slice_plot, *, right_reserve=0.
 
     Every invocation re-measures both left axes from the tick strings they
     hold at that moment (``_left_axis_width_for_ticks``) and pins the wider of
-    the two onto both. Measuring the strings rather than reading
-    ``axis.width()`` is what keeps this correct once ``_apply_tick_density``
-    swaps the tick strings late in ``show_and_settle``: a width read back from
-    the axis reports the last *painted* strings, so the pin would freeze the
-    row at a stale — typically far too narrow — width and never recover, since
-    a pinned axis no longer resizes when its labels grow. ``align`` is tagged
-    ``runs_after_tick_density`` so ``show_and_settle`` re-runs it once the
-    final strings are in place.
+    the two onto both. That font-metric measurement is the first-paint lower
+    bound; each current ``axis.width()`` is also included so a realized
+    pyqtgraph axis is never narrowed. This makes pinning monotonically
+    non-decreasing, trading away automatic shrinkage after shorter labels are
+    installed in order to preserve already-painted geometry. ``align`` is
+    tagged ``runs_after_tick_density`` so ``show_and_settle`` re-runs it once
+    the final strings are in place.
 
     The right-hand reserve is corrected *relatively* — by how far the two rows'
     right-hand chrome currently disagrees — rather than by clearing the spacer
@@ -682,7 +685,10 @@ def _slice_alignment_callback(layout, main_plot, slice_plot, *, right_reserve=0.
         state["busy"] = True
         try:
             left_axes = (main_plot.getAxis("left"), slice_plot.getAxis("left"))
-            target = max(_left_axis_width_for_ticks(axis) for axis in left_axes)
+            target = max(
+                max(_left_axis_width_for_ticks(axis), float(axis.width()))
+                for axis in left_axes
+            )
             if target > 0.0:
                 for axis in left_axes:
                     axis.setWidth(target)
@@ -1099,7 +1105,6 @@ class BuiltBatchScene:
         there is. Each axis is pinned from its own realized view range, so a
         manually entered range keeps its exact bounds.
         """
-        metrics = QFontMetricsF(chart_font(self.theme.axis_font_pt))
         for plot in self.plots:
             for side, divisions, index in (
                 ("bottom", self.style.tick_density_x, 0),
@@ -1117,6 +1122,9 @@ class BuiltBatchScene:
                 view = axis.linkedView()
                 if view is None:
                     continue
+                metrics = QFontMetricsF(
+                    _axis_tick_font(axis, self.theme.axis_font_pt)
+                )
                 try:
                     lo, hi = view.viewRange()[index]
                 except Exception:
@@ -1162,7 +1170,7 @@ class BuiltBatchScene:
         if horizontal:
             needed = max(metrics.width(text) for text in labels) + 12.0
         else:
-            needed = metrics.height() + 4.0
+            needed = metrics.ascent() + metrics.descent() + 4.0
         return needed * len(labels) <= extent
 
     def texts(self) -> list[str]:

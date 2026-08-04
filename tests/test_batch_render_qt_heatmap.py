@@ -10,7 +10,8 @@ from PyQt5.QtGui import QFontMetricsF
 
 from mf4_analyzer.batch_image_options import BatchRenderOptions
 from mf4_analyzer.batch_render_qt import BatchRenderContext
-from mf4_analyzer.batch_render_qt._builder import build_batch_scene
+from mf4_analyzer.batch_render_qt import _builder as batch_render_builder
+from mf4_analyzer.batch_render_qt._builder import BuiltBatchScene, build_batch_scene
 from mf4_analyzer.batch_render_qt._fonts import chart_font
 from mf4_analyzer.batch_render_qt._palette import SLICE_COOL, SLICE_WARM
 
@@ -740,6 +741,30 @@ def test_slice_row_never_narrows_the_main_left_axis(qapp):
     assert with_slice >= without
 
 
+def test_slice_alignment_keeps_painted_axis_width_when_tick_measurement_is_low(
+    qapp, monkeypatch,
+):
+    without = _main_left_axis_width(qapp, {"amplitude_mode": "amplitude"})
+    scene = _open_scene(
+        qapp, "fft_time", payload=_sweep_spectro(),
+        params=_slice_params("time", [5.0, 15.0, 25.0]),
+    )
+    try:
+        real_measure = batch_render_builder._left_axis_width_for_ticks
+        monkeypatch.setattr(
+            batch_render_builder,
+            "_left_axis_width_for_ticks",
+            lambda axis: real_measure(axis) - 6.0,
+        )
+
+        _alignment_callback(scene)()
+        qapp.processEvents()
+
+        assert float(scene.plots[0].getAxis("left").width()) >= without
+    finally:
+        scene.close()
+
+
 def test_slice_alignment_measures_the_ticks_that_are_actually_installed(qapp):
     """Longer tick strings have to move the pin, not be clipped behind it.
 
@@ -787,6 +812,25 @@ def test_slice_alignment_measures_the_ticks_that_are_actually_installed(qapp):
         )
     finally:
         scene.close()
+
+
+def test_vertical_labels_fit_uses_glyph_height_without_leading():
+    class StubMetrics:
+        def height(self):
+            return 24.0
+
+        def ascent(self):
+            return 12.0
+
+        def descent(self):
+            return 4.0
+
+    assert BuiltBatchScene._labels_fit(
+        [str(value) for value in range(10)],
+        StubMetrics(),
+        260.0,
+        horizontal=False,
+    )
 
 
 def _wide_label_spectro():
