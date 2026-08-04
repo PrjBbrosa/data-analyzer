@@ -65,7 +65,76 @@ def test_method_change_recomputes_after_dependent_panels_update(qtbot, monkeypat
 
     sheet.apply_method("time")
 
+    # The method transaction is signal-driven and therefore debounced.
+    qtbot.waitUntil(lambda: bool(calls), timeout=1000)
     assert calls[0] == (False, "time", "time")
+
+
+def test_pipeline_recompute_runs_preflight_validation_once(qtbot, monkeypatch, tmp_path):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet._input_panel._file_list.add_loaded_file(
+        "s1", "one.mf4", frozenset({"sig"}),
+    )
+    sheet.apply_signals(("sig",))
+    sheet._output_panel.apply_directory(str(tmp_path))
+    original = sheet.preflight_issues
+    calls = 0
+
+    def _counted_preflight():
+        nonlocal calls
+        calls += 1
+        return original()
+
+    monkeypatch.setattr(sheet, "preflight_issues", _counted_preflight)
+
+    sheet._recompute_pipeline_status()
+
+    assert calls == 1
+
+
+def test_slice_position_typing_debounces_pipeline_recompute(
+    qtbot, monkeypatch, tmp_path,
+):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    recomputes = []
+    original = BatchSheet._recompute_pipeline_status
+
+    def _record_recompute(self):
+        recomputes.append(self._analysis_panel._slice._positions_edit.text())
+        return original(self)
+
+    monkeypatch.setattr(BatchSheet, "_recompute_pipeline_status", _record_recompute)
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet._input_panel._file_list.add_loaded_file(
+        "s1", "one.mf4", frozenset({"sig"}),
+    )
+    sheet.apply_signals(("sig",))
+    sheet.apply_method("fft_time")
+    sheet._output_panel.apply_directory(str(tmp_path))
+    sheet._analysis_panel._slice._enable_switch.setChecked(True)
+    sheet._analysis_panel._slice._positions_edit.clear()
+    sheet._recompute_pipeline_status()
+    recomputes.clear()
+
+    for text in (
+        "5", "5,", "5, ", "5, 1", "5, 15",
+        "5, 15,", "5, 15, ", "5, 15, 2", "5, 15, 25",
+    ):
+        sheet._analysis_panel._slice._positions_edit.setText(text)
+
+    qtbot.waitUntil(
+        lambda: sheet._btn_run.isEnabled()
+        and sheet.strip.cards[1].stage_status == "ok",
+        timeout=1000,
+    )
+
+    assert 1 <= len(recomputes) <= 2
+    assert recomputes[-1] == "5, 15, 25"
 
 
 def test_method_button_mouse_click_refreshes_all_dependent_panels(qtbot):
@@ -801,7 +870,13 @@ def test_preflight_rejects_invalid_recipe_fields(qtbot, tmp_path):
 
     assert sheet.is_runnable() is False
     assert any(issue.field == "fs" for issue in sheet.preflight_issues())
-    assert sheet.strip.cards[1].summary_label.text() == "FFT · 采样率无效"
+    expected_summary = "FFT · 采样率无效"
+    # Preset application schedules one coalesced status transaction.
+    qtbot.waitUntil(
+        lambda: sheet.strip.cards[1].summary_label.text() == expected_summary,
+        timeout=1000,
+    )
+    assert sheet.strip.cards[1].summary_label.text() == expected_summary
     assert sheet._footer_task_summary.text() == "请检查采样率"
 
 

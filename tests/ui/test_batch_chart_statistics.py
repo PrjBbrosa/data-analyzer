@@ -5,6 +5,7 @@ import pyqtgraph as pg
 import pytest
 from PyQt5.QtCore import QPointF
 from PyQt5.QtGui import QImage
+from PyQt5.QtTest import QSignalSpy
 from PyQt5.QtWidgets import QAbstractSpinBox, QCheckBox
 
 
@@ -125,6 +126,33 @@ def test_apply_params_without_the_key_disables_but_keeps_the_dialed_in_range(qtb
             "x_min": -80.0, "x_max": 80.0, "metrics": ["max", "mean"],
         },
     }
+
+
+@pytest.mark.parametrize("payload", [
+    {},
+    {"chart_statistics": {
+        "enabled": True,
+        "range_mode": "custom",
+        "x_min": -5.0,
+        "x_max": 15.0,
+        "metrics": ["min"],
+    }},
+])
+def test_chart_statistics_apply_params_emits_one_changed_and_forwarded_notification(
+    qtbot, payload,
+):
+    """One programmatic statistics apply is one observable parameter transaction."""
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
+
+    panel = AnalysisPanel()
+    qtbot.addWidget(panel)
+    changed = QSignalSpy(panel._chart_statistics.changed)
+    forwarded = QSignalSpy(panel.paramsChanged)
+
+    panel._chart_statistics.apply_params(payload)
+
+    assert len(changed) == 1
+    assert len(forwarded) == 1
 
 
 def test_analysis_panel_shows_statistics_for_time_and_merges_recipe(qtbot):

@@ -1,7 +1,7 @@
 """Time-chart statistics controls kept outside the dynamic method form."""
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSignalBlocker, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox, QHBoxLayout, QLabel, QSizePolicy, QStackedLayout,
     QVBoxLayout, QWidget,
@@ -206,23 +206,38 @@ class ChartStatisticsPanel(QWidget):
         }
 
     def apply_params(self, params) -> None:
-        raw = (params or {}).get("chart_statistics")
-        if raw is None:
-            # Our own normalization pops the key out entirely once the card
-            # is disabled (`enabled: False` never round-trips). Treating a
-            # missing key as "reset to auto" silently threw away a filled-in
-            # custom range on a plain disable -> re-enable cycle: the switch
-            # correctly went back to off, but auto_range/x_min/x_max should
-            # stay exactly as the user left them.
-            self.enabled.setChecked(False)
-            self._sync()
-            return
-        value = dict(raw)
-        self.enabled.setChecked(bool(value.get("enabled", False)))
-        self.auto_range.setChecked(str(value.get("range_mode", "full")) != "custom")
-        for spin, key in ((self.x_min, "x_min"), (self.x_max, "x_max")):
-            if value.get(key) is not None: spin.setValue(float(value[key]))
-        wanted = set(value.get("metrics") or ("max", "min", "mean"))
-        for name, check in (("max", self.maximum), ("min", self.minimum), ("mean", self.mean)):
-            check.setChecked(name in wanted)
-        self._sync()
+        blockers = [QSignalBlocker(w) for w in (
+            self.enabled, self.auto_range, self.x_min, self.x_max,
+            self.maximum, self.minimum, self.mean,
+        )]
+        try:
+            raw = (params or {}).get("chart_statistics")
+            if raw is None:
+                # Our own normalization pops the key out entirely once the card
+                # is disabled (`enabled: False` never round-trips). Treating a
+                # missing key as "reset to auto" silently threw away a filled-in
+                # custom range on a plain disable -> re-enable cycle: the switch
+                # correctly went back to off, but auto_range/x_min/x_max should
+                # stay exactly as the user left them.
+                self.enabled.setChecked(False)
+                self._sync()
+            else:
+                value = dict(raw)
+                self.enabled.setChecked(bool(value.get("enabled", False)))
+                self.auto_range.setChecked(
+                    str(value.get("range_mode", "full")) != "custom"
+                )
+                for spin, key in ((self.x_min, "x_min"), (self.x_max, "x_max")):
+                    if value.get(key) is not None:
+                        spin.setValue(float(value[key]))
+                wanted = set(value.get("metrics") or ("max", "min", "mean"))
+                for name, check in (
+                    ("max", self.maximum),
+                    ("min", self.minimum),
+                    ("mean", self.mean),
+                ):
+                    check.setChecked(name in wanted)
+                self._sync()
+        finally:
+            del blockers
+        self.changed.emit()

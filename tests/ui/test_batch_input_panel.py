@@ -404,7 +404,10 @@ def test_pipeline_strip_recomputes_on_input_changes(qtbot):
     sheet._input_panel._file_list.add_loaded_file(0, "a.mf4",
                                                    frozenset({"sig"}))
     sheet._input_panel._signal_picker.set_selected(("sig",))
-    qtbot.wait(20)
+    # Signal-driven pipeline status is intentionally debounced.
+    qtbot.waitUntil(
+        lambda: sheet.strip.cards[0].stage_status == "ok", timeout=1000,
+    )
     assert sheet.strip.cards[0].stage_status == "ok"
 
 
@@ -423,7 +426,8 @@ def test_run_button_disabled_until_runnable(qtbot, tmp_path):
     sheet._input_panel._signal_picker.set_selected(("sig",))
     sheet._analysis_panel.set_method("fft")
     sheet._output_panel.apply_directory(str(tmp_path / "out"))
-    qtbot.wait(20)
+    # Run-button state follows the debounced pipeline transaction.
+    qtbot.waitUntil(run_btn.isEnabled, timeout=1000)
     assert run_btn.isEnabled() is True
 
 
@@ -524,7 +528,13 @@ def test_order_channel_mode_requires_rpm_selection_before_run(qtbot, tmp_path):
 
     assert sheet.is_runnable() is False
     assert any(issue.field == "rpm_channel" for issue in sheet.preflight_issues())
-    assert sheet.strip.cards[1].summary_label.text() == "阶次 · RPM 通道未配置"
+    expected_summary = "阶次 · RPM 通道未配置"
+    # Method changes refresh the pipeline only after their dependent panels settle.
+    qtbot.waitUntil(
+        lambda: sheet.strip.cards[1].summary_label.text() == expected_summary,
+        timeout=1000,
+    )
+    assert sheet.strip.cards[1].summary_label.text() == expected_summary
     assert sheet._footer_task_summary.text() == "请选择 RPM 通道"
 
     sheet._input_panel.apply_rpm_channel("rpm")
@@ -560,11 +570,17 @@ def test_probe_failed_row_blocks_input_ok(qtbot, tmp_path):
     fl = sheet._input_panel._file_list
     fl.add_loaded_file(0, "ok.mf4", frozenset({"sig"}))
     sheet._input_panel._signal_picker.set_selected(("sig",))
-    qtbot.wait(20)
+    # Wait for the coalesced input-stage refresh, not a timing guess.
+    qtbot.waitUntil(
+        lambda: sheet.strip.cards[0].stage_status == "ok", timeout=1000,
+    )
     assert sheet.strip.cards[0].stage_status == "ok"
     # Inject a probe_failed row
     fl._set_row_state(str(tmp_path / "bad.mf4"), "probe_failed")
-    qtbot.wait(20)
+    # The failure signal schedules the same debounced status refresh.
+    qtbot.waitUntil(
+        lambda: sheet.strip.cards[0].stage_status == "warn", timeout=1000,
+    )
     assert sheet.strip.cards[0].stage_status == "warn"
 
 

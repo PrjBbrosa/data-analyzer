@@ -177,6 +177,11 @@ def test_batch_sheet_pipeline_summary_uses_friendly_fft_time_label(qtbot):
     sheet = BatchSheet(parent=None, files={}, current_preset=None)
     qtbot.addWidget(sheet)
     sheet.apply_method("fft_time")
+    # Method-button signals now coalesce into one pipeline refresh.
+    qtbot.waitUntil(
+        lambda: "FFT vs Time" in sheet.strip.cards[1].summary_label.text(),
+        timeout=1000,
+    )
     summary = sheet.strip.cards[1].summary_label.text()
     assert "FFT vs Time" in summary
     assert "fft_time" not in summary  # raw key must NOT leak through
@@ -189,8 +194,14 @@ def test_batch_sheet_pipeline_summary_localizes_order_rpm_issue(qtbot):
     qtbot.addWidget(sheet)
     sheet.apply_method("order_time")
 
+    expected_summary = "阶次 · RPM 通道未配置"
+    # Wait for the debounced method-status projection.
+    qtbot.waitUntil(
+        lambda: sheet.strip.cards[1].summary_label.text() == expected_summary,
+        timeout=1000,
+    )
     summary = sheet.strip.cards[1].summary_label.text()
-    assert summary == "阶次 · RPM 通道未配置"
+    assert summary == expected_summary
     assert "rpm_channel" not in summary
 
 
@@ -202,8 +213,14 @@ def test_batch_sheet_pipeline_summary_localizes_missing_outputs(qtbot):
     sheet._output_panel._chk_data.setChecked(False)
     sheet._output_panel._chk_image.setChecked(False)
 
+    expected_summary = "未选择导出内容"
+    # Both checkbox signals share one delayed output-stage refresh.
+    qtbot.waitUntil(
+        lambda: sheet.strip.cards[2].summary_label.text() == expected_summary,
+        timeout=1000,
+    )
     summary = sheet.strip.cards[2].summary_label.text()
-    assert summary == "未选择导出内容"
+    assert summary == expected_summary
     assert "outputs" not in summary
 
 

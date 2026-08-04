@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSignalBlocker, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout,
     QWidget,
@@ -205,22 +205,28 @@ class SlicePanel(QWidget):
         }
 
     def apply_params(self, params: dict | None) -> None:
-        raw = (params or {}).get("slice")
-        if raw is None:
-            # Normalization removes closed slices. A missing key means a preset did not
-            # enable slicing; it does not mean the user's axis or positions should go away.
-            self._enable_switch.setChecked(False)
-            self._sync_enabled()
-            return
-
-        value = dict(raw)
-        axis = str(value.get("axis") or "time")
-        idx = self._axis_combo.findData(axis)
-        self._axis_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        positions = value.get("positions") or []
-        self._positions_edit.setText(
-            ", ".join(_format_number(item) for item in positions)
-        )
-        self._enable_switch.setChecked(bool(value.get("enabled", False)))
-        self._sync_enabled()
-        self._refresh_unit()
+        blockers = [QSignalBlocker(w) for w in (
+            self._enable_switch, self._axis_combo, self._positions_edit,
+        )]
+        try:
+            raw = (params or {}).get("slice")
+            if raw is None:
+                # Normalization removes closed slices. A missing key means a preset did not
+                # enable slicing; it does not mean the user's axis or positions should go away.
+                self._enable_switch.setChecked(False)
+                self._sync_enabled()
+            else:
+                value = dict(raw)
+                axis = str(value.get("axis") or "time")
+                idx = self._axis_combo.findData(axis)
+                self._axis_combo.setCurrentIndex(idx if idx >= 0 else 0)
+                positions = value.get("positions") or []
+                self._positions_edit.setText(
+                    ", ".join(_format_number(item) for item in positions)
+                )
+                self._enable_switch.setChecked(bool(value.get("enabled", False)))
+                self._sync_enabled()
+                self._refresh_unit()
+        finally:
+            del blockers
+        self.changed.emit()

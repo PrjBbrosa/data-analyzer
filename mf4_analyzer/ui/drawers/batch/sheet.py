@@ -18,7 +18,7 @@ import dataclasses
 from pathlib import Path
 import tempfile
 
-from PyQt5.QtCore import Qt, QUrl
+from PyQt5.QtCore import QTimer, Qt, QUrl
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
@@ -73,6 +73,8 @@ _OUTPUT_ISSUE_FIELDS = frozenset({
     "conflict_policy",
     "resume_policy",
 })
+
+_PIPELINE_RECOMPUTE_DEBOUNCE_MS = 150
 
 
 def _analysis_issue_summary(issue: ValidationIssue, method: str) -> str:
@@ -131,6 +133,10 @@ class BatchSheet(QDialog):
         dialog's open/close cycle cannot read or write the real user config.
         """
         super().__init__(parent)
+        self._recompute_timer = QTimer(self)
+        self._recompute_timer.setSingleShot(True)
+        self._recompute_timer.setInterval(_PIPELINE_RECOMPUTE_DEBOUNCE_MS)
+        self._recompute_timer.timeout.connect(self._recompute_pipeline_status)
         self.setObjectName("SheetSurface")
         self.setModal(True)
         self.setWindowTitle("批处理分析")
@@ -360,12 +366,14 @@ class BatchSheet(QDialog):
         # of them so that any sub-control mutation flows into a single
         # recompute pass.
         self._input_panel.changed.connect(self._on_input_scope_changed)
-        self._input_panel._file_list.filesChanged.connect(self._recompute_pipeline_status)
+        self._input_panel._file_list.filesChanged.connect(
+            self._schedule_pipeline_recompute
+        )
         self._input_panel._file_list.intersectionChanged.connect(
-            lambda _intersection: self._recompute_pipeline_status()
+            lambda _intersection: self._schedule_pipeline_recompute()
         )
         self._input_panel._signal_picker.selectionChanged.connect(
-            lambda _sel: self._recompute_pipeline_status()
+            lambda _sel: self._schedule_pipeline_recompute()
         )
         # Drive RPM-row visibility from the method (init-sync below).
         self._analysis_panel.methodChanged.connect(self._input_panel.set_method)
@@ -374,10 +382,10 @@ class BatchSheet(QDialog):
         )
         self._analysis_panel.methodChanged.connect(self._on_recipe_method_changed)
         self._analysis_panel.methodChanged.connect(
-            lambda _m: self._recompute_pipeline_status()
+            lambda _m: self._schedule_pipeline_recompute()
         )
         self._analysis_panel.paramsChanged.connect(self._sync_x_axis_context)
-        self._analysis_panel.paramsChanged.connect(self._recompute_pipeline_status)
+        self._analysis_panel.paramsChanged.connect(self._schedule_pipeline_recompute)
         self._analysis_panel.presetApplied.connect(
             self._on_builtin_analysis_preset
         )
@@ -507,9 +515,13 @@ class BatchSheet(QDialog):
     # ------------------------------------------------------------------
     def _on_input_scope_changed(self) -> None:
         self._refresh_x_channel_candidates()
-        self._recompute_pipeline_status()
+        self._schedule_pipeline_recompute()
+
+    def _schedule_pipeline_recompute(self) -> None:
+        self._recompute_timer.start()
 
     def _recompute_pipeline_status(self) -> None:
+        self._recompute_timer.stop()
         # INPUT
         fl = self._input_panel._file_list
         loaded_paths = fl.all_loaded_paths()
@@ -633,7 +645,7 @@ class BatchSheet(QDialog):
         # progress, the run button is hidden behind the 中断 swap, so we
         # only adjust enabled-state in idle mode.
         if not self._running:
-            runnable = self.is_runnable()
+            runnable = self.is_runnable(issues=preflight_issues)
             self._btn_run.setEnabled(runnable)
             self._btn_preview.setEnabled(runnable)
             blocked_reason = "请选择文件、信号和输出目录"
@@ -819,7 +831,7 @@ class BatchSheet(QDialog):
         finally:
             self._applying_analysis_preset = False
         self._analysis_preset_output_snapshot = self._output_controls_snapshot()
-        self._recompute_pipeline_status()
+        self._schedule_pipeline_recompute()
 
     def _output_controls_snapshot(self) -> dict:
         return {
@@ -899,7 +911,7 @@ class BatchSheet(QDialog):
             # applied analysis card owns axes, not display preferences, so it
             # must survive this reset without going deaf to the next real edit.
             self._analysis_preset_output_snapshot = self._output_controls_snapshot()
-        self._recompute_pipeline_status()
+        self._schedule_pipeline_recompute()
         self._toast("已恢复导出默认设置", kind="success")
 
     def _on_output_controls_changed(self) -> None:
@@ -912,7 +924,7 @@ class BatchSheet(QDialog):
         ):
             self._analysis_panel.clear_applied_preset()
             self._analysis_preset_output_snapshot = None
-        self._recompute_pipeline_status()
+        self._schedule_pipeline_recompute()
 
     def _db_reference_host(self):
         """Return the owning MainWindow without coupling BatchSheet to it."""
@@ -943,7 +955,7 @@ class BatchSheet(QDialog):
         snapshot = getattr(store, "snapshot", None)
         if callable(snapshot):
             self._output_panel.set_reference_catalog(snapshot())
-        self._recompute_pipeline_status()
+        self._schedule_pipeline_recompute()
 
     def _on_batch_db_reference_view_mode_committed(self, mode: str) -> None:
         """Apply the dialog's current-view mode to Batch, never Inspector."""
@@ -1059,7 +1071,7 @@ class BatchSheet(QDialog):
         self._scope_source_paths = self.source_paths()
         self._scope_signals = self.selected_signals()
         self._scope_rpm_channel = self.rpm_channel()
-        self._recompute_pipeline_status()
+        self._schedule_pipeline_recompute()
 
     def _on_recipe_method_changed(self, method: str) -> None:
         method = str(method)
@@ -1275,7 +1287,9 @@ class BatchSheet(QDialog):
     # ------------------------------------------------------------------
     # Run-time gates
     # ------------------------------------------------------------------
-    def is_runnable(self) -> bool:
+    def is_runnable(
+        self, *, issues: tuple[ValidationIssue, ...] | None = None,
+    ) -> bool:
         fl = self._input_panel._file_list
         for r in fl._rows.values():
             if r.state in (STATE_PATH_PENDING, STATE_PROBING):
@@ -1290,7 +1304,7 @@ class BatchSheet(QDialog):
             return False
         if not self.output_dir():
             return False
-        if self.preflight_issues():
+        if (self.preflight_issues() if issues is None else issues):
             return False
         return True
 

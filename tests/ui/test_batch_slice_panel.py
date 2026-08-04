@@ -10,6 +10,7 @@ comma-separated positions).
 from __future__ import annotations
 
 import pytest
+from PyQt5.QtTest import QSignalSpy
 
 from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
 from mf4_analyzer.ui.drawers.batch.slice_panel import SlicePanel
@@ -175,6 +176,25 @@ def test_slice_panel_apply_params_get_params_round_trip(qtbot):
     panel.apply_params(payload)
 
     assert panel.get_params() == payload
+
+
+@pytest.mark.parametrize("payload", [
+    {},
+    {"slice": {"enabled": True, "axis": "y", "positions": [5.0, 15.0]}},
+])
+def test_slice_apply_params_emits_one_changed_and_forwarded_notification(
+    qtbot, payload,
+):
+    """One programmatic slice apply is one observable parameter transaction."""
+    panel = AnalysisPanel()
+    qtbot.addWidget(panel)
+    changed = QSignalSpy(panel._slice.changed)
+    forwarded = QSignalSpy(panel.paramsChanged)
+
+    panel._slice.apply_params(payload)
+
+    assert len(changed) == 1
+    assert len(forwarded) == 1
 
 
 def test_slice_panel_apply_params_none_slice_resets_to_disabled(qtbot):
