@@ -145,7 +145,9 @@ class SlicePanel(QWidget):
             self._summary_note.setText("切片关闭 · 仅导出谱图")
             return
         dim_label = self._axis_combo.currentText()
-        count = len(self._parse_positions())
+        count = min(
+            len(dict.fromkeys(self._parse_positions())), _MAX_POSITIONS,
+        )
         self._summary_note.setText(f"{dim_label} · {count} 处")
 
     # ------------------------------------------------------------------
@@ -189,6 +191,10 @@ class SlicePanel(QWidget):
             return "位置：请输入以逗号分隔的数字"
         if not all(math.isfinite(value) for value in values):
             return "位置：请输入有限数字"
+        if self._axis_combo.currentData() == "y" and any(
+            value < 0 for value in values
+        ):
+            return "位置：固定频率或阶次不能为负数"
         if len(values) > _MAX_POSITIONS:
             return f"位置：最多 {_MAX_POSITIONS} 个位置"
         return ""

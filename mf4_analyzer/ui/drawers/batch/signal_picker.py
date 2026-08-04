@@ -36,6 +36,7 @@ _MONO_PX = "12px"
 
 _ARROW_REST = QColor("#7b8798")
 _ARROW_HOVER = QColor("#354254")
+_ARROW_DISABLED = QColor("#94a3b8")
 
 
 class _TriggerFrame(QFrame):
@@ -83,7 +84,7 @@ class _ArrowButton(QPushButton):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._icon_cache: dict[tuple[bool, bool], object] = {}
+        self._icon_cache: dict[tuple[bool, bool, bool], object] = {}
         self._expanded = False
         self._hovered = False
         self.setFlat(True)
@@ -109,11 +110,21 @@ class _ArrowButton(QPushButton):
         self._refresh_icon()
         super().leaveEvent(event)
 
+    def changeEvent(self, event):  # noqa: N802 (Qt API)
+        super().changeEvent(event)
+        if event.type() == QEvent.EnabledChange:
+            self._refresh_icon()
+
     def _refresh_icon(self) -> None:
-        key = (self._expanded, self._hovered)
+        enabled = self.isEnabled()
+        key = (self._expanded, self._hovered, enabled)
         icon = self._icon_cache.get(key)
         if icon is None:
-            color = _ARROW_HOVER if self._hovered else _ARROW_REST
+            color = (
+                _ARROW_HOVER if enabled and self._hovered
+                else _ARROW_REST if enabled
+                else _ARROW_DISABLED
+            )
             factory = Icons.chevron_up if self._expanded else Icons.chevron_down
             icon = factory(color)
             self._icon_cache[key] = icon
@@ -573,8 +584,10 @@ class SignalPickerPopup(QWidget):
             # (BatchSheet.lock_editing) must not keep showing the blue
             # active ring underneath the greyed-out contents.
             self._trigger.setStyleSheet(self._TRIGGER_DISABLED_QSS)
+            self._trigger.setCursor(Qt.ArrowCursor)
             self._trigger_layout.setContentsMargins(*self._TRIGGER_REST_MARGINS)
             return
+        self._trigger.setCursor(Qt.PointingHandCursor)
         active = self._expanded or self._trigger.hasFocus()
         if active:
             self._trigger.setStyleSheet(self._TRIGGER_ACTIVE_QSS)

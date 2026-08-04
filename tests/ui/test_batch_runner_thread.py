@@ -503,3 +503,45 @@ def test_sheet_names_the_sub_source_gap_instead_of_preview_unavailable(
     # A knowingly-empty render must not be started at all.
     assert sheet._preview_thread is None
     assert sheet._preview_dialog is None
+
+
+def test_representative_channel_group_gap_message_is_detail_free(qtbot):
+    from mf4_analyzer.batch import BatchRepresentativeGroup
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    group = BatchRepresentativeGroup(
+        group_id="g0", display_name="torque · filtered", group_by="channel",
+        member_count=1, required_source_count=1,
+        planned_stem="torque__time__deadbeef", ordinal=1,
+        total_groups=1, channel_available=False,
+    )
+
+    assert sheet._representative_channel_gap_message(group) == (
+        "预览不可用：代表分组 torque · filtered 不含所选通道"
+    )
+
+
+def test_representative_source_gap_keeps_middle_dot_in_filename(qtbot, tmp_path):
+    from mf4_analyzer.batch import BatchRepresentativeGroup
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    container = str(tmp_path / "eps · run.hdf")
+    for index in range(2):
+        sheet._input_panel._file_list.add_loaded_file(
+            f"hdf:eps-run:{index}", container, frozenset({"Time", "sig"}),
+        )
+    group = BatchRepresentativeGroup(
+        group_id="g0", display_name="eps · run.hdf", group_by="source",
+        member_count=1, required_source_count=1,
+        planned_stem="eps-run__time__deadbeef", ordinal=1,
+        total_groups=2, channel_available=False,
+    )
+
+    assert sheet._representative_channel_gap_message(group) == (
+        "预览不可用：代表来源 eps · run.hdf 不含所选通道"
+        "；该文件按采样率拆成了 2 个子来源"
+    )

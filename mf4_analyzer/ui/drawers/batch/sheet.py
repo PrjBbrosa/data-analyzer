@@ -89,6 +89,7 @@ def _analysis_issue_summary(issue: ValidationIssue, method: str) -> str:
         "x_range": "X 范围无效",
         "y_range": "Y 范围无效",
         "z_range": "色阶范围无效",
+        "slice": "切片位置无效",
         "slice_positions": "切片位置无效",
     }.get(issue.field, "参数待完善")
     return f"{label} · {detail}"
@@ -122,6 +123,7 @@ def _blocked_issue_reason(issue: ValidationIssue) -> str:
         "x_channel": "请选择 X 通道",
         "fs": "请检查采样率",
         "nfft": "请检查 NFFT 参数",
+        "slice": "请检查切片位置",
         "slice_positions": "请检查切片位置",
     }.get(issue.field, "请检查分析参数")
 
@@ -1564,18 +1566,19 @@ class BatchSheet(QDialog):
         that was planned and, when that file really did split, how far.
         """
 
-        # ``display_name`` is ``<basename>`` or ``<basename> · <group>``; the
-        # basename is what ``source_paths()`` can be counted against.
-        base = str(group.display_name or "").split(" · ")[0].strip()
-        siblings = sum(
-            1 for path in self._input_panel.source_paths()
-            if base and Path(str(path)).name == base
-        )
-        detail = (
-            f"；该文件按采样率拆成了 {siblings} 个子来源" if siblings > 1 else ""
-        )
+        detail = ""
+        subject = "代表分组"
+        if group.group_by == "source":
+            subject = "代表来源"
+            base = str(group.display_name or "").strip()
+            siblings = sum(
+                1 for path in self._input_panel.source_paths()
+                if base and Path(str(path)).name == base
+            )
+            if siblings > 1:
+                detail = f"；该文件按采样率拆成了 {siblings} 个子来源"
         return (
-            f"预览不可用：代表来源 {group.display_name} 不含所选通道{detail}"
+            f"预览不可用：{subject} {group.display_name} 不含所选通道{detail}"
         )
 
     def _on_preview_clicked(self) -> None:

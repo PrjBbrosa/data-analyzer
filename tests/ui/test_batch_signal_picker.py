@@ -329,6 +329,46 @@ def test_picker_trigger_disabled_uses_global_disabled_skin(qtbot):
     assert p._trigger.styleSheet() == enabled_qss
 
 
+def test_picker_trigger_uses_arrow_cursor_only_while_disabled(qtbot):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a"])
+    qtbot.addWidget(p)
+
+    assert p._trigger.cursor().shape() == Qt.PointingHandCursor
+
+    p.setEnabled(False)
+    assert p._trigger.cursor().shape() == Qt.ArrowCursor
+
+    p.setEnabled(True)
+    assert p._trigger.cursor().shape() == Qt.PointingHandCursor
+
+
+def test_picker_arrow_icon_uses_disabled_control_gray(qtbot):
+    from PyQt5.QtCore import QSize
+    from PyQt5.QtGui import QIcon
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    def opaque_colors(icon):
+        image = icon.pixmap(QSize(20, 20), QIcon.Normal).toImage()
+        return {
+            image.pixelColor(x, y).name()
+            for y in range(image.height())
+            for x in range(image.width())
+            if image.pixelColor(x, y).alpha() == 255
+        }
+
+    p = SignalPickerPopup(available_signals=["a"])
+    qtbot.addWidget(p)
+    assert "#7b8798" in opaque_colors(p._arrow_button.icon())
+
+    p.setEnabled(False)
+
+    assert "#94a3b8" in opaque_colors(p._arrow_button.icon())
+    assert "#7b8798" not in opaque_colors(p._arrow_button.icon())
+
+
 def test_picker_trigger_disabled_wins_over_active_skin(qtbot):
     """一个展开/聚焦中的触发器被禁用时，蓝色激活边框必须让位给禁用配色。"""
     from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup

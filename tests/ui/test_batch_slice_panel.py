@@ -54,6 +54,22 @@ def test_slice_panel_summary_text_tracks_switch_and_position_count(qtbot):
     assert panel._summary_note.text() == "固定时间 · 3 处"
 
 
+def test_slice_panel_summary_counts_unique_positions(qtbot):
+    panel = _make_panel(qtbot)
+    panel._enable_switch.setChecked(True)
+    panel._positions_edit.setText("15, 5, 15")
+
+    assert panel._summary_note.text() == "固定时间 · 2 处"
+
+
+def test_slice_panel_summary_caps_position_count_at_export_limit(qtbot):
+    panel = _make_panel(qtbot)
+    panel._enable_switch.setChecked(True)
+    panel._positions_edit.setText("1, 2, 3, 4, 5, 6")
+
+    assert panel._summary_note.text() == "固定时间 · 4 处"
+
+
 def test_slice_panel_axis_switch_updates_unit_label(qtbot):
     panel = _make_panel(qtbot)
     assert panel._unit_label.text() == "s"
@@ -161,6 +177,31 @@ def test_slice_panel_positions_error_clear_for_valid_input(qtbot):
     panel._positions_edit.setText("5, 15, 25")
 
     assert panel.positions_error() == ""
+
+
+def test_slice_panel_positions_error_rejects_negative_y_position(qtbot):
+    panel = _make_panel(qtbot)
+    panel._enable_switch.setChecked(True)
+    panel._axis_combo.setCurrentIndex(panel._axis_combo.findData("y"))
+    panel._positions_edit.setText("-5, 10")
+
+    assert panel.positions_error() == "位置：固定频率或阶次不能为负数"
+
+
+def test_sheet_maps_slice_recipe_issue_to_positions_messages():
+    from mf4_analyzer.batch_validation import ValidationIssue
+    from mf4_analyzer.ui.drawers.batch.sheet import (
+        _analysis_issue_summary, _blocked_issue_reason,
+    )
+
+    issue = ValidationIssue(
+        "slice", "invalid_slice_positions", "slice positions are invalid",
+    )
+
+    assert _analysis_issue_summary(issue, "fft_time") == (
+        "FFT vs Time · 切片位置无效"
+    )
+    assert _blocked_issue_reason(issue) == "请检查切片位置"
 
 
 # ---------------------------------------------------------------------------
