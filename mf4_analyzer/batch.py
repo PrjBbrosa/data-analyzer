@@ -14,7 +14,7 @@ Data contracts (presets, item/run results, progress events) live in
 from __future__ import annotations
 
 from contextlib import nullcontext
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 import re
@@ -24,7 +24,13 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
+from . import batch_compute
 from . import db_reference
+from .batch_compute import (
+    _Spectro2D,
+    _guess_rpm_channel,
+    _matrix_to_long_dataframe,
+)
 from .batch_output import (
     OutputPublishRace,
     atomic_write,
@@ -80,7 +86,9 @@ from .io.source_adapters import (
     SourceUnavailableError,
     canonical_source_path,
 )
-from .signal import resolve_nfft, resolve_order_nfft
+# Re-exported (not called directly here) so
+# ``monkeypatch.setattr("mf4_analyzer.batch.FFTAnalyzer.compute_fft", ...)``
+# keeps resolving: it patches the same class object batch_compute imports.
 from .signal.fft import FFTAnalyzer
 
 if TYPE_CHECKING:
@@ -100,6 +108,12 @@ _LEGACY_IMAGE_FORMATS = frozenset({'pdf', 'svg'})
 def _legacy_image_format_warning(requested_format: object) -> str:
     requested = str(requested_format or '').strip().upper()
     return f'旧预设图像格式 {requested} 已迁移为 PNG；本次仅输出 PNG。'
+
+
+#: XLSX permits 1,048,576 rows including the column header. ``batch_compute``
+#: (D2/D3) reads this by name from ``mf4_analyzer.batch`` at call time rather
+#: than owning its own copy, so this stays the one place tests patch to
+#: exercise the split/ceiling behaviour (``tests/test_batch_output.py``).
 _XLSX_MAX_DATA_ROWS = 1_048_575
 
 #: CSV cannot hold the two sheets a slice workbook needs, and
@@ -4308,477 +4322,35 @@ class BatchRunner:
             )
         return None
 
-    @staticmethod
-    def _channel_reference_facts(fd, ch):
-        """Build a :class:`db_reference.ChannelReferenceFacts` for one batch
-        task's ``(FileData, signal_name)`` target (plan Task 9 Step 9.3),
-        reading ONLY ``FileData`` metadata -- never a sample array (mirrors
-        ``MainWindow._channel_reference_facts``; duplicated here rather than
-        imported because ``batch.py`` must never import ``mf4_analyzer.ui.*``).
-        """
-        if fd is None or ch is None:
-            return db_reference.ChannelReferenceFacts(quantity='', unit='')
-        ch_meta = (getattr(fd, 'channel_metadata', None) or {}).get(ch) or {}
-        unit = (
-            ch_meta.get('unit')
-            or (getattr(fd, 'channel_units', None) or {}).get(ch, '')
-            or ''
-        )
-        # Mirror MainWindow._channel_reference_facts: reverse toolchain unit
-        # encoding (U_ prefix, Y for /) at the facts boundary so batch export's
-        # dB labels/refs match the interactive path (U_Nm -> Nm, mYs2 -> m/s2).
-        unit = db_reference.canonicalize_source_unit(unit)
-        quantity = ch_meta.get('quantity') or ''
-        metadata_reference = ch_meta.get('db_reference')
-        is_audio_source_fn = getattr(fd, 'is_audio_source', None)
-        try:
-            is_audio = bool(is_audio_source_fn()) if callable(is_audio_source_fn) else False
-        except Exception:
-            is_audio = False
-        return db_reference.ChannelReferenceFacts(
-            quantity=str(quantity),
-            unit=str(unit),
-            metadata_reference=metadata_reference,
-            is_audio_source=is_audio,
-        )
-
-    @staticmethod
-    def _batch_output_scale(kind, params):
-        """Return ``(render_db, output_scale)`` -- the amp-mode resolution
-        shared by ``_run_one`` (records ``colorbar_label`` on
-        ``BatchItemResult``) and ``_build_export_scene`` (actually draws the
-        image), so the two can never drift on which scale a preset's
-        ``amplitude_mode``/``amp_y`` selects."""
-        default_amp_mode = 'amplitude_db' if kind == 'fft_time' else 'amplitude'
-        amp_mode = str(params.get('amplitude_mode', default_amp_mode)).lower()
-        amp_y = str(params.get('amp_y', '')).lower()
-        render_db = 'db' in amp_mode or amp_y == 'db'
-        return render_db, ('db' if render_db else 'linear')
-
-    @staticmethod
-    def _image_reference_resolution(params):
-        """The effective dB-reference resolution for a batch image render.
-
-        ``_run_one`` (Task 9 Step 9.3) always pre-attaches an already-
-        resolved ``db_reference_resolution`` -- built from the task's real
-        ``(FileData, signal_name)`` facts and the injected catalog snapshot
-        -- onto its OUTPUT param copy before calling ``_write_image``; this
-        just returns that unchanged. Direct calls to ``_build_export_scene``/
-        ``_write_image`` that bypass ``_run_one`` (existing unit tests call
-        these ``@staticmethod``s directly with a bare params dict, no file
-        context -- 2026-06-20 static-image-writer-test-api-wider-than-plan)
-        resolve against EMPTY facts and the immutable factory catalog
-        instead, through the exact same ``db_reference.resolve_db_reference``
-        priority chain, so both paths share ONE formatting/validation rule
-        and neither ever silently coerces an invalid reference via
-        ``max(ref, 1e-12)`` (spec §7 R3 / plan Task 9 Step 9.4)."""
-        existing = params.get('db_reference_resolution')
-        if isinstance(existing, db_reference.DbReferenceResolution):
-            return existing
-        migrated = db_reference.migrate_legacy_reference_params(params)
-        return db_reference.resolve_db_reference(
-            mode=migrated.get('db_reference_mode', 'auto'),
-            manual_value=migrated.get('db_reference'),
-            facts=db_reference.ChannelReferenceFacts(quantity='', unit=''),
-            user_catalog=(),
-            system_catalog=db_reference.FACTORY_CATALOG_V1,
-            prefer_channel_metadata=True,
-        )
-
-    @staticmethod
-    def _check_cancel(cancel_token, stage):
-        if cancel_token is not None and cancel_token.is_set():
-            raise _BatchCancelled(f"cancelled during {stage}")
-
-    @staticmethod
-    def _apply_time_range(sig, time, params, rpm=None):
-        time_range = params.get('time_range')
-        if not time_range or time is None:
-            return sig, time, rpm
-        lo, hi = time_range
-        mask = (time >= float(lo)) & (time <= float(hi))
-        sig = sig[mask]
-        time = time[mask]
-        if rpm is not None:
-            rpm = rpm[mask]
-        return sig, time, rpm
-
-    @staticmethod
-    def _suggest_fs_from_time_axis(time, fallback_fs):
-        arr = np.asarray(time, dtype=float)
-        if arr.size < 2:
-            return float(fallback_fs)
-        dt = np.diff(arr)
-        positive = dt[dt > 0]
-        if positive.size == 0:
-            return float(fallback_fs)
-        median_dt = float(np.median(positive))
-        if not np.isfinite(median_dt) or median_dt <= 0:
-            return float(fallback_fs)
-        return 1.0 / median_dt
-
-    @classmethod
-    def _uniform_time_axis_for_spectrogram(cls, time, fs, length):
-        """Return a spectrogram-safe time axis and matching Fs.
-
-        Batch FFT-vs-Time mirrors the single-file UX: jittered MF4
-        timestamps are rebuilt to ``arange(n) / suggested_fs`` using the
-        median-dt estimate instead of failing every task with the raw
-        ``non-uniform time axis`` validator error.
-        """
-        fs = float(fs)
-        if time is None:
-            return np.arange(int(length), dtype=float) / fs, fs
-        time_arr = np.asarray(time, dtype=float)
-        if time_arr.size < 2:
-            return time_arr, fs
-
-        from .signal.spectrogram import (
-            DEFAULT_TIME_JITTER_TOLERANCE,
-            SpectrogramAnalyzer,
-        )
-
-        try:
-            SpectrogramAnalyzer._validate_time_axis(
-                time_arr, fs, DEFAULT_TIME_JITTER_TOLERANCE,
-            )
-            return time_arr, fs
-        except ValueError as exc:
-            if 'non-uniform time axis' not in str(exc):
-                raise
-
-        suggested = cls._suggest_fs_from_time_axis(time_arr, fs)
-        if not (np.isfinite(suggested) and suggested > 0):
-            suggested = fs
-        return np.arange(len(time_arr), dtype=float) / float(suggested), float(suggested)
-
-    @staticmethod
-    def _time_axis_or_fallback(time, fs, n_samples):
-        if time is not None:
-            arr = np.asarray(time, dtype=float)
-            if arr.size == int(n_samples):
-                return arr
-        fs = float(fs)
-        if not np.isfinite(fs) or fs <= 0:
-            raise ValueError("缺少有效采样率")
-        return np.arange(int(n_samples), dtype=float) / fs
-
-    @staticmethod
-    def _filter_state(params):
-        state = params.get("filter") or {}
-        return state if isinstance(state, dict) else {}
-
-    @classmethod
-    def _filter_enabled(cls, params):
-        return bool(cls._filter_state(params).get("enabled", False))
-
-    @classmethod
-    def _filter_spec_from_params(cls, params):
-        if not cls._filter_enabled(params):
-            return None
-        from .signal.filters import FilterSpec
-
-        return FilterSpec.from_dict(cls._filter_state(params).get("spec") or {})
-
-    @classmethod
-    def _apply_filter_if_enabled(cls, sig, fs, params):
-        spec = cls._filter_spec_from_params(params)
-        if spec is None:
-            return np.asarray(sig, dtype=float), None
-        from .signal import filters as _filters
-
-        guarded, _msg = _filters.nyquist_guard(spec, fs)
-        return _filters.apply(sig, guarded, fs), guarded
-
-    @classmethod
-    def _compute_time_dataframe(cls, sig, time, fs, params):
-        x = cls._time_axis_or_fallback(time, fs, len(sig))
-        filter_state = cls._filter_state(params)
-        if not cls._filter_enabled(params):
-            return pd.DataFrame({
-                "time_s": x,
-                "series": ["original"] * len(sig),
-                "value": np.asarray(sig, dtype=float),
-            })
-
-        show_original = bool(filter_state.get("show_original", True))
-        show_filtered = bool(filter_state.get("show_filtered", True))
-        if not show_original and not show_filtered:
-            raise ValueError("时域导出至少需要原始或滤波后一项")
-
-        frames = []
-        if show_original:
-            frames.append(pd.DataFrame({
-                "time_s": x,
-                "series": ["original"] * len(sig),
-                "value": np.asarray(sig, dtype=float),
-            }))
-        if show_filtered:
-            filtered, _spec = cls._apply_filter_if_enabled(sig, fs, params)
-            frames.append(pd.DataFrame({
-                "time_s": x,
-                "series": ["filtered"] * len(filtered),
-                "value": filtered,
-            }))
-        return pd.concat(frames, ignore_index=True)
-
-    @classmethod
-    def _compute_preprocessed_time_dataframe(
-        cls, pre_filter_signal, filtered_signal, time, fs, params,
-    ):
-        """Build TimeDomain rows from the canonical preprocessing outputs."""
-
-        x = cls._time_axis_or_fallback(time, fs, len(filtered_signal))
-        filter_state = cls._filter_state(params)
-        if not cls._filter_enabled(params):
-            return pd.DataFrame({
-                "time_s": x,
-                "series": ["original"] * len(filtered_signal),
-                "value": np.asarray(filtered_signal, dtype=float),
-            })
-
-        show_original = bool(filter_state.get("show_original", True))
-        show_filtered = bool(filter_state.get("show_filtered", True))
-        if not show_original and not show_filtered:
-            raise ValueError("时域导出至少需要原始或滤波后一项")
-
-        frames = []
-        if show_original:
-            frames.append(pd.DataFrame({
-                "time_s": x,
-                "series": ["original"] * len(pre_filter_signal),
-                "value": np.asarray(pre_filter_signal, dtype=float),
-            }))
-        if show_filtered:
-            frames.append(pd.DataFrame({
-                "time_s": x,
-                "series": ["filtered"] * len(filtered_signal),
-                "value": np.asarray(filtered_signal, dtype=float),
-            }))
-        return pd.concat(frames, ignore_index=True)
-
-    @staticmethod
-    def _compute_fft_dataframe(sig, fs, params):
-        sig, _spec = BatchRunner._apply_filter_if_enabled(sig, fs, params)
-        nfft = BatchRunner._resolve_fft_nfft(len(sig), fs, params)
-        win = params.get('window', params.get('win', 'hanning'))
-        weighting = str(params.get('weighting', 'None'))
-        avg_mode = str(params.get('avg_mode', '单帧'))
-        avg_overlap = BatchRunner._avg_overlap_fraction(params)
-        if avg_mode == '线性平均':
-            freq, amp, _psd = FFTAnalyzer.compute_averaged_fft(
-                sig, fs, win, int(nfft), avg_overlap, weighting=weighting,
-            )
-        elif avg_mode == '峰值保持':
-            freq, amp = FFTAnalyzer.compute_peak_hold_fft(
-                sig, fs, win=win, nfft=int(nfft), overlap=avg_overlap,
-                weighting=weighting,
-            )
-        else:
-            freq, amp = FFTAnalyzer.compute_fft(
-                sig,
-                fs,
-                win=win,
-                nfft=nfft,
-                weighting=weighting,
-            )
-        amp = BatchRunner._convert_fft_amplitude_definition(
-            amp,
-            avg_mode=avg_mode,
-            requested=params.get('amplitude_definition', 'native'),
-        )
-        return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
-
-    @staticmethod
-    def _convert_fft_amplitude_definition(amp, *, avg_mode, requested):
-        """Convert an FFT mode's native linear amplitude to peak or RMS."""
-
-        requested = str(requested or 'native').strip().lower()
-        native = 'rms' if str(avg_mode) == '线性平均' else 'peak'
-        values = np.asarray(amp, dtype=float)
-        if requested == 'native' or requested == native:
-            return values
-        if native == 'rms' and requested == 'peak':
-            return values * np.sqrt(2.0)
-        if native == 'peak' and requested == 'rms':
-            return values / np.sqrt(2.0)
-        # Runner preflight owns the user-facing field error. Keep this helper
-        # fail-closed for direct test/caller use that bypasses run().
-        raise ValueError(
-            "amplitude_definition must be native, peak, or rms"
-        )
-
-    @staticmethod
-    def _avg_overlap_fraction(params):
-        try:
-            value = float(params.get('avg_overlap', 50))
-        except (TypeError, ValueError):
-            value = 50.0
-        if value > 1.0:
-            value /= 100.0
-        return max(0.0, min(0.95, value))
-
-    @staticmethod
-    def _resolve_fft_nfft(n_samples, fs, params):
-        nfft_raw = params.get('nfft')
-        avg_mode = str(params.get('avg_mode', '单帧'))
-        if isinstance(nfft_raw, str):
-            nfft = None if nfft_raw.strip() in ('', '自动', 'auto') else int(nfft_raw)
-        elif nfft_raw is None or nfft_raw <= 0:
-            nfft = None
-        else:
-            nfft = int(nfft_raw)
-        if nfft is None and avg_mode in {'线性平均', '峰值保持'}:
-            t_win_s = float(params.get('t_win_s', 1.5))
-            return int(resolve_nfft(
-                float(fs), int(n_samples), t_win_s,
-                BatchRunner._avg_overlap_fraction(params),
-            ))
-        return nfft
-
-    @staticmethod
-    def _resolve_effective_nfft(method, n_samples, fs, params):
-        raw = params.get('nfft')
-        auto = raw is None or raw == ''
-        if isinstance(raw, str):
-            auto = raw.strip().lower() in {'auto', '自动'}
-        elif isinstance(raw, (int, float, np.integer, np.floating)):
-            auto = float(raw) <= 0
-        if not auto:
-            return int(raw)
-        if method == 'fft':
-            resolved = BatchRunner._resolve_fft_nfft(n_samples, fs, params)
-            return int(n_samples if resolved is None else resolved)
-        if method == 'order_time':
-            return int(resolve_order_nfft(
-                float(params.get('samples_per_rev', 256)),
-                float(params.get('order_res', 0.1)),
-                int(n_samples),
-            ))
-        return int(resolve_nfft(
-            float(fs),
-            int(n_samples),
-            float(params.get('t_win_s', 1.0)),
-            float(params.get('overlap', 0.5)),
-        ))
-
-    @classmethod
-    def _compute_order_time_spectro(cls, sig, rpm, time, fs, params) -> "_Spectro2D":
-        """Compute time-order spectrogram via COT and return a ``_Spectro2D``.
-
-        ``matrix`` is x-major ``(len(times), len(orders))`` so that
-        ``to_long_dataframe()`` round-trips through ``_matrix_to_long_dataframe``
-        without any transpose. The transpose needed for ``imshow`` (rows=y) is
-        applied in ``_write_image``.
-        """
-        from .signal.order_cot import COTOrderAnalyzer, COTParams
-
-        sig, _spec = cls._apply_filter_if_enabled(sig, fs, params)
-
-        # Defensive: COT requires strictly monotonic t. Even microsecond
-        # jitter in MF4 timestamps would raise ValueError. If not strict,
-        # rebuild a uniform fallback from len + fs.
-        time_arr = np.asarray(time, dtype=float)
-        if len(time_arr) < 2 or np.any(np.diff(time_arr) <= 0):
-            time_arr = np.arange(len(time_arr), dtype=float) / float(fs)
-
-        cot_params = COTParams(
-            samples_per_rev=int(params.get('samples_per_rev', 256)),
-            nfft=int(params.get('nfft', 1024)),
-            window=str(params.get('window', 'hanning')),
-            max_order=float(params.get('max_order', params.get('max_ord', 20))),
-            order_res=float(params.get('order_res', 0.1)),
-            time_res=float(params.get('time_res', 0.05)),
-            fs=float(fs),
-            weighting=str(params.get('weighting', 'None')),
-        )
-        result = COTOrderAnalyzer.compute(sig, rpm, time_arr, cot_params)
-        return _Spectro2D(
-            x=np.asarray(result.times, dtype=float),
-            y=np.asarray(result.orders, dtype=float),
-            matrix=np.asarray(result.amplitude, dtype=float),
-            x_name='time_s',
-            y_name='order',
-            metadata=dict(getattr(result, 'metadata', {}) or {}),
-        )
-
-    @classmethod
-    def _compute_order_time_dataframe(cls, sig, rpm, time, fs, params):
-        """Thin wrapper — delegates to ``_compute_order_time_spectro``.
-
-        As of 2026-04-28 the legacy frequency-domain path
-        (``OrderAnalyzer`` time-order result builder) is no longer invoked
-        here; COT handles all RPM regimes (sweep, coast-down, steady-state)
-        without smearing. ``samples_per_rev`` defaults to 256 when absent from
-        preset params; the COT pipeline requires ``time`` to be strictly
-        monotonically increasing.
-        """
-        return cls._compute_order_time_spectro(sig, rpm, time, fs, params).to_long_dataframe()
-
-    @classmethod
-    def _compute_fft_time_spectro(cls, sig, time, fs, params, *,
-                                  channel_name='') -> "_Spectro2D":
-        """Compute one-sided FFT-vs-time spectrogram and return a ``_Spectro2D``.
-
-        ``SpectrogramAnalyzer.compute`` returns ``amplitude`` with shape
-        ``(freq_bins, frames)``. ``_Spectro2D.matrix`` is x-major
-        ``(len(times), len(frequencies))``, so we store ``amplitude.T``
-        (``(frames, freq_bins)``). The exported dataframe stays in linear
-        amplitude — the dB conversion is a display-only choice in
-        ``_write_image``.
-        """
-        from .signal.spectrogram import SpectrogramAnalyzer, SpectrogramParams
-        sig, _spec = cls._apply_filter_if_enabled(sig, fs, params)
-        time, fs = cls._uniform_time_axis_for_spectrogram(time, fs, len(sig))
-        sp = SpectrogramParams(
-            fs=float(fs),
-            nfft=int(params.get('nfft', 1024)),
-            window=str(params.get('window', 'hanning')),
-            overlap=float(params.get('overlap', 0.5)),
-            remove_mean=bool(params.get('remove_mean', True)),
-            weighting=str(params.get('weighting', 'None')),
-        )
-        result = SpectrogramAnalyzer.compute(
-            signal=sig, time=time, params=sp,
-            channel_name=channel_name or 'signal',
-        )
-        return _Spectro2D(
-            x=np.asarray(result.times, dtype=float),
-            y=np.asarray(result.frequencies, dtype=float),
-            matrix=np.asarray(result.amplitude.T, dtype=float),
-            x_name='time_s',
-            y_name='frequency_hz',
-            metadata=dict(getattr(result, 'metadata', {}) or {}),
-        )
-
-    @classmethod
-    def _compute_fft_time_dataframe(cls, sig, time, fs, params, *, channel_name=''):
-        """Thin wrapper — delegates to ``_compute_fft_time_spectro``.
-
-        ``SpectrogramAnalyzer.compute`` returns ``amplitude`` with shape
-        ``(freq_bins, frames)``. ``_matrix_to_long_dataframe`` requires
-        ``matrix.shape == (len(x_values), len(y_values))`` (x-major), so we
-        transpose to ``(frames, freq_bins)`` before flattening. The exported
-        dataframe stays in linear amplitude — the dB conversion is a
-        display-only choice in ``_write_image``.
-        """
-        return cls._compute_fft_time_spectro(
-            sig, time, fs, params, channel_name=channel_name,
-        ).to_long_dataframe()
-
-    @staticmethod
-    def _strict_finite_time_axis(values, expected_length: int) -> bool:
-        try:
-            axis = np.asarray(values, dtype=float)
-        except (TypeError, ValueError):
-            return False
-        return bool(
-            axis.ndim == 1
-            and len(axis) == int(expected_length)
-            and len(axis) >= 2
-            and np.all(np.isfinite(axis))
-            and np.all(np.diff(axis) > 0.0)
-        )
+    # ---- batch_compute compatibility aliases -----------------------------
+    # These 24 names moved to batch_compute.py as module-level functions
+    # (D2). The aliases below exist ONLY so existing test/tool references to
+    # BatchRunner._xxx keep working; new code should import batch_compute
+    # directly instead of going through BatchRunner.
+    _channel_reference_facts = staticmethod(batch_compute.channel_reference_facts)
+    _batch_output_scale = staticmethod(batch_compute.batch_output_scale)
+    _image_reference_resolution = staticmethod(batch_compute.image_reference_resolution)
+    _check_cancel = staticmethod(batch_compute.check_cancel)
+    _apply_time_range = staticmethod(batch_compute.apply_time_range)
+    _suggest_fs_from_time_axis = staticmethod(batch_compute.suggest_fs_from_time_axis)
+    _uniform_time_axis_for_spectrogram = staticmethod(batch_compute.uniform_time_axis_for_spectrogram)
+    _time_axis_or_fallback = staticmethod(batch_compute.time_axis_or_fallback)
+    _filter_state = staticmethod(batch_compute.filter_state)
+    _filter_enabled = staticmethod(batch_compute.filter_enabled)
+    _filter_spec_from_params = staticmethod(batch_compute.filter_spec_from_params)
+    _apply_filter_if_enabled = staticmethod(batch_compute.apply_filter_if_enabled)
+    _compute_time_dataframe = staticmethod(batch_compute.compute_time_dataframe)
+    _compute_preprocessed_time_dataframe = staticmethod(batch_compute.compute_preprocessed_time_dataframe)
+    _compute_fft_dataframe = staticmethod(batch_compute.compute_fft_dataframe)
+    _convert_fft_amplitude_definition = staticmethod(batch_compute.convert_fft_amplitude_definition)
+    _avg_overlap_fraction = staticmethod(batch_compute.avg_overlap_fraction)
+    _resolve_fft_nfft = staticmethod(batch_compute.resolve_fft_nfft)
+    _resolve_effective_nfft = staticmethod(batch_compute.resolve_effective_nfft)
+    _compute_order_time_spectro = staticmethod(batch_compute.compute_order_time_spectro)
+    _compute_order_time_dataframe = staticmethod(batch_compute.compute_order_time_dataframe)
+    _compute_fft_time_spectro = staticmethod(batch_compute.compute_fft_time_spectro)
+    _compute_fft_time_dataframe = staticmethod(batch_compute.compute_fft_time_dataframe)
+    _strict_finite_time_axis = staticmethod(batch_compute.strict_finite_time_axis)
 
     def _rpm_values(
         self,
@@ -4936,171 +4508,3 @@ class BatchRunner:
             ),
         )
 
-
-def _guess_rpm_channel(fd):
-    for ch in fd.get_signal_channels():
-        low = ch.lower()
-        if 'rpm' in low or 'speed' in low or 'tach' in low:
-            return ch
-    return ''
-
-
-@dataclass(frozen=True)
-class _Spectro2D:
-    """2-D analysis result kept matrix-first to avoid a long→wide pivot
-    round-trip on export. ``matrix`` is x-major: shape (len(x), len(y)).
-
-    ``metadata`` preserves analyzer-owned display coverage such as
-    ``coverage_start`` / ``coverage_end``.  It is deliberately absent from
-    :meth:`to_long_dataframe` so CSV values and column order stay unchanged.
-    """
-    x: np.ndarray
-    y: np.ndarray
-    matrix: np.ndarray
-    x_name: str
-    y_name: str
-    metadata: Mapping[str, Any] = field(default_factory=dict)
-
-    def to_long_dataframe(self) -> pd.DataFrame:
-        return _matrix_to_long_dataframe(
-            self.x, self.y, self.matrix, self.x_name, self.y_name)
-
-    def slice_curve(self, axis: str, index: int) -> np.ndarray:
-        """Amplitudes along one slice pick, straight off the x-major matrix.
-
-        ``matrix`` here is **x-major**, shape ``(len(x), len(y))`` -- the
-        transpose of what the renderer's ``_extract_heatmap`` hands to
-        ``_builder._slice_curve_values`` (it applies ``x_major.T``). So the
-        indexing is mirrored: fixing a *time* takes a matrix **row** and the
-        curve runs along ``y``; fixing a *frequency/order* takes a **column**
-        and the curve runs along ``x``. ``tests/test_batch_slice_export.py``
-        pins this against the rendered curves point by point, because getting
-        it backwards yields a plausible-looking table of the wrong values.
-        """
-        matrix = np.asarray(self.matrix, dtype=float)
-        if str(axis).strip().lower() == 'time':
-            return matrix[int(index), :]
-        return matrix[:, int(index)]
-
-    def to_slice_sheets(
-        self,
-        plan,
-        *,
-        render_db: bool,
-        reference: float | None = None,
-        amplitude_label: str = '',
-        facts: "Sequence[str]" = (),
-        source: str = '',
-        channel: str = '',
-        unit: str = '',
-        method: str = '',
-    ) -> "dict[str, pd.DataFrame]":
-        """``{"切片信息": df, "<时间|频率|阶次>切片": df}`` for one slice plan.
-
-        One wide sheet with a position per column, so a reader can select a few
-        columns in Excel and get the comparison chart the multi-position slice
-        exists for (design D23), plus a key/value sheet that makes the file
-        self-describing.
-
-        Values are written in the **charted** caliber only -- dB when the page
-        renders dB -- with the caliber and its reference recorded on the info
-        sheet rather than doubling the column count with a parallel linear set
-        (design D24).
-        """
-        fixed_name = self.x_name if plan.axis == 'time' else self.y_name
-        curve_name = self.y_name if plan.axis == 'time' else self.x_name
-        curve_coords = np.asarray(
-            self.y if plan.axis == 'time' else self.x, dtype=float
-        )
-        dimension, sheet_name, prefix, position_unit, decimals = (
-            _slice_axis_labels(fixed_name)
-        )
-
-        columns: dict[str, np.ndarray] = {curve_name: curve_coords}
-        for pick in plan.picks:
-            values = self.slice_curve(plan.axis, pick.index)
-            if render_db:
-                from .signal.spectrogram import SpectrogramAnalyzer
-
-                # Element-wise, so converting the picked line alone is
-                # numerically identical to slicing the renderer's full
-                # ``display_matrix``.
-                values = np.asarray(
-                    SpectrogramAnalyzer.amplitude_to_db(
-                        values, reference=float(reference or 1.0)
-                    ),
-                    dtype=float,
-                )
-            name = f'{prefix}={pick.value:.{decimals}f}{position_unit}'
-            suffix = 2
-            while name in columns:
-                name = (
-                    f'{prefix}={pick.value:.{decimals}f}{position_unit}'
-                    f'#{suffix}'
-                )
-                suffix += 1
-            columns[name] = np.asarray(values, dtype=float)
-
-        def _positions(attribute: str) -> str:
-            # Four decimals, not the column headers' 1-2: the whole point of
-            # printing request and landing side by side is that a reader can
-            # see they differ (design D11), and 620.0 vs 615.2 Hz rounds to the
-            # same header text more often than not.
-            joined = ', '.join(
-                f'{getattr(pick, attribute):.4f}' for pick in plan.picks
-            )
-            return f'{joined} {position_unit}'.strip()
-
-        clamped = plan.clamped_picks
-        notes = []
-        if clamped:
-            notes.append(
-                '夹取到数据边界：'
-                + ', '.join(f'{pick.value:.{decimals}f}' for pick in clamped)
-            )
-        if plan.merged:
-            notes.append(
-                f'{len(plan.picks) + plan.merged} 个位置夹取后合并为 '
-                f'{len(plan.picks)} 个'
-            )
-
-        info: list[tuple[str, str]] = [
-            ('来源文件', str(source)),
-            ('通道', str(channel)),
-            ('单位', str(unit)),
-            ('方法', str(method)),
-        ]
-        info.extend(_slice_fact_rows(facts))
-        info.append(('幅值口径', str(amplitude_label)))
-        if render_db:
-            info.append(('dB 参考值', f'{float(reference or 1.0):g}'))
-        info.extend([
-            ('切片维度', f'固定{dimension}'),
-            ('切片位置 请求', _positions('requested')),
-            ('切片位置 落点', _positions('value')),
-            ('切片位置 备注', '；'.join(notes) if notes else '—'),
-        ])
-        return {
-            # An em dash rather than an empty cell: a blank reads as "the
-            # exporter forgot" and round-trips out of xlsx as NaN, while a
-            # unit-less channel is a fact worth stating.
-            '切片信息': pd.DataFrame(
-                {'项目': [key for key, _ in info],
-                 '值': [value if value else '—' for _, value in info]}
-            ),
-            sheet_name: pd.DataFrame(columns),
-        }
-
-
-def _matrix_to_long_dataframe(x_values, y_values, matrix, x_name, y_name):
-    x_values = np.asarray(x_values, dtype=float)
-    y_values = np.asarray(y_values, dtype=float)
-    matrix = np.asarray(matrix, dtype=float)
-    if matrix.shape != (len(x_values), len(y_values)):
-        raise ValueError(
-            f"matrix shape {matrix.shape} does not match "
-            f"({len(x_values)}, {len(y_values)})"
-        )
-    xs = np.repeat(x_values, len(y_values))
-    ys = np.tile(y_values, len(x_values))
-    return pd.DataFrame({x_name: xs, y_name: ys, 'amplitude': matrix.reshape(-1)})
