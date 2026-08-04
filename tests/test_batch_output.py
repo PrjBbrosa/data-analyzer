@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import importlib
+import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -631,3 +635,34 @@ def test_automatic_reservation_release_never_unlinks_replaced_token(tmp_path):
 
     assert reservation.token_path.read_text(encoding="utf-8") == "outsider token"
     reservation.token_path.unlink()
+
+
+def test_batch_output_import_does_not_load_pyqt5():
+    """``batch_output`` holds ``write_image``, whose Qt renderer import must
+    stay lazy (inside the function body) so importing the module itself never
+    pulls in PyQt5 -- design D3 / plan Task 3 Step 3.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    script = """
+import json
+import sys
+import mf4_analyzer.batch_output
+blocked = sorted(
+    name for name in sys.modules
+    if name == 'PyQt5' or name.startswith('PyQt5.')
+)
+print(json.dumps(blocked))
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(repo_root)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == []

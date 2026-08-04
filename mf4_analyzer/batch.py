@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from . import batch_compute
+from . import batch_output
 from . import db_reference
 from .batch_compute import (
     _Spectro2D,
@@ -33,7 +34,8 @@ from .batch_compute import (
 )
 from .batch_output import (
     OutputPublishRace,
-    atomic_write,
+    _SLICE_CSV_FALLBACK_WARNING,
+    _XLSX_MAX_DATA_ROWS,
     atomic_write_set,
     build_task_output_identity,
     reserve_output_paths,
@@ -110,21 +112,16 @@ def _legacy_image_format_warning(requested_format: object) -> str:
     return f'旧预设图像格式 {requested} 已迁移为 PNG；本次仅输出 PNG。'
 
 
-#: XLSX permits 1,048,576 rows including the column header. ``batch_compute``
-#: (D2/D3) reads this by name from ``mf4_analyzer.batch`` at call time rather
-#: than owning its own copy, so this stays the one place tests patch to
-#: exercise the split/ceiling behaviour (``tests/test_batch_output.py``).
-_XLSX_MAX_DATA_ROWS = 1_048_575
-
-#: CSV cannot hold the two sheets a slice workbook needs, and
-#: ``reserve_output_paths`` publishes exactly one file per extension, so
-#: splitting into several csv files would break the write-set's atomicity.
-#: Degrading to the historical long table costs nothing a csv reader had
-#: before and keeps the run green (design D22).
-_SLICE_CSV_FALLBACK_WARNING = (
-    'slice.csv_fallback: 切片工作簿需要 xlsx 格式，当前数据格式为 CSV，'
-    '本次数据文件仍为完整长表'
-)
+#: ``_XLSX_MAX_DATA_ROWS`` / ``_SLICE_CSV_FALLBACK_WARNING`` now live in
+#: ``batch_output`` (D3) and are imported above for backward compatibility.
+#: ``_XLSX_MAX_DATA_ROWS`` stays bound as a name in THIS module's namespace
+#: (rather than read through ``batch_output.``) so
+#: ``monkeypatch.setattr(mf4_analyzer.batch, "_XLSX_MAX_DATA_ROWS", ...)``
+#: (``tests/test_batch_output.py``) still reaches the writers -- the
+#: ``BatchRunner._write_dataframe`` / ``_write_workbook`` compatibility
+#: aliases near the bottom of this file read this module global explicitly
+#: at call time and pass it into ``batch_output.write_dataframe`` /
+#: ``write_workbook``.
 
 #: Sheet name and column prefix per *fixed* dimension, keyed by the
 #: ``_Spectro2D`` axis name that dimension carries (design §6.2).
@@ -4425,86 +4422,30 @@ class BatchRunner:
         factor = float(preset.params.get('rpm_factor', 1.0))
         return fd.data[rpm_channel].to_numpy(dtype=float, copy=False) * factor
 
+    # ---- batch_output compatibility aliases -------------------------------
+    # These three byte-output writers moved to batch_output.py as
+    # module-level functions (D3). ``_write_image`` carries no row-limit
+    # dependency, so it is a plain alias. ``_write_dataframe`` /
+    # ``_write_workbook`` are thin forwarders instead of plain aliases: they
+    # read ``_XLSX_MAX_DATA_ROWS`` from THIS module's globals at call time
+    # and pass it in explicitly, so
+    # ``monkeypatch.setattr(mf4_analyzer.batch, "_XLSX_MAX_DATA_ROWS", ...)``
+    # (tests/test_batch_output.py) still reaches the write -- a plain
+    # ``staticmethod(batch_output.write_dataframe)`` alias would instead read
+    # ``batch_output``'s own copy of the constant and silently ignore the
+    # patch. New code should import batch_output directly instead of going
+    # through BatchRunner.
+    _write_image = staticmethod(batch_output.write_image)
+
     @staticmethod
     def _write_dataframe(df, path):
-        path = Path(path)
-        fmt = path.suffix.lower()
-        if fmt not in {'.csv', '.xlsx'}:
-            path = path.with_suffix('.csv')
-
-        def write(temp_path):
-            if path.suffix.lower() == '.xlsx':
-                # XLSX permits 1,048,576 rows including the column header.
-                # Split only at the physical format boundary so a large
-                # batch never silently truncates its final samples.
-                with pd.ExcelWriter(temp_path, engine='openpyxl') as writer:
-                    starts = range(0, len(df), _XLSX_MAX_DATA_ROWS) or (0,)
-                    for sheet_index, start in enumerate(
-                        starts, start=1,
-                    ):
-                        df.iloc[start:start + _XLSX_MAX_DATA_ROWS].to_excel(
-                            writer,
-                            sheet_name=f"数据{sheet_index}",
-                            index=False,
-                        )
-            else:
-                df.to_csv(temp_path, index=False)
-
-        return atomic_write(path, write)
+        return batch_output.write_dataframe(
+            df, path, max_data_rows=_XLSX_MAX_DATA_ROWS,
+        )
 
     @staticmethod
     def _write_workbook(sheets: "dict[str, pd.DataFrame]", path):
-        """Publish several named sheets as one xlsx, atomically.
-
-        The sibling of :meth:`_write_dataframe` for the slice export: same
-        ``atomic_write`` publication, but the caller names every sheet instead
-        of getting one ``数据N`` series. Unlike the long table a slice sheet is
-        a few hundred rows, so there is nothing to split -- exceeding the xlsx
-        row ceiling here would mean the caller handed over the wrong frame, and
-        silently dropping rows is worse than saying so.
-        """
-        path = Path(path)
-        if path.suffix.lower() != '.xlsx':
-            path = path.with_suffix('.xlsx')
-        for name, frame in sheets.items():
-            if len(frame) > _XLSX_MAX_DATA_ROWS:
-                raise ValueError(
-                    f"worksheet {name!r} has {len(frame)} rows, above the "
-                    f"xlsx limit of {_XLSX_MAX_DATA_ROWS}"
-                )
-
-        def write(temp_path):
-            with pd.ExcelWriter(temp_path, engine='openpyxl') as writer:
-                for name, frame in sheets.items():
-                    frame.to_excel(writer, sheet_name=name, index=False)
-
-        return atomic_write(path, write)
-
-    @staticmethod
-    def _write_image(
-        payload,
-        path,
-        params=None,
-        *,
-        options=None,
-        context=None,
-        warnings_out: list[str] | None = None,
-    ):
-        from .batch_render import BatchRenderOptions, render_batch_image
-
-        target = Path(path)
-        render_options = options or BatchRenderOptions(
-            format=target.suffix.lower().lstrip('.') or 'png',
-        )
-        return atomic_write(
-            target,
-            lambda temp: render_batch_image(
-                payload,
-                temp,
-                params=params,
-                options=render_options,
-                context=context,
-                warnings_out=warnings_out,
-            ),
+        return batch_output.write_workbook(
+            sheets, path, max_data_rows=_XLSX_MAX_DATA_ROWS,
         )
 
