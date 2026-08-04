@@ -205,7 +205,15 @@ class SlicePanel(QWidget):
         }
 
     def apply_params(self, params: dict | None) -> None:
-        value = dict((params or {}).get("slice") or {})
+        raw = (params or {}).get("slice")
+        if raw is None:
+            # Normalization removes closed slices. A missing key means a preset did not
+            # enable slicing; it does not mean the user's axis or positions should go away.
+            self._enable_switch.setChecked(False)
+            self._sync_enabled()
+            return
+
+        value = dict(raw)
         axis = str(value.get("axis") or "time")
         idx = self._axis_combo.findData(axis)
         self._axis_combo.setCurrentIndex(idx if idx >= 0 else 0)

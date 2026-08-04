@@ -189,6 +189,19 @@ def test_slice_panel_apply_params_none_slice_resets_to_disabled(qtbot):
     assert panel.get_params() == {}
 
 
+def test_slice_panel_apply_params_without_slice_key_keeps_axis_and_positions(qtbot):
+    """A slice-disabled preset must not erase the user's slice draft."""
+    panel = _make_panel(qtbot)
+    panel._axis_combo.setCurrentIndex(panel._axis_combo.findData("y"))
+    panel._positions_edit.setText("5, 15, 25")
+
+    panel.apply_params({"window": "hanning"})
+
+    assert panel._enable_switch.isChecked() is False
+    assert panel._axis_combo.currentData() == "y"
+    assert panel._positions_edit.text() == "5, 15, 25"
+
+
 # ---------------------------------------------------------------------------
 # AnalysisPanel wiring
 # ---------------------------------------------------------------------------
