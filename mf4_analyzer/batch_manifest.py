@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import math
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,9 @@ import numpy as np
 
 from .app_meta import APP_VERSION
 from .batch_output import atomic_write
+
+
+logger = logging.getLogger(__name__)
 
 
 SCHEMA_VERSION = 1

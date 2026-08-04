@@ -17,6 +17,7 @@ from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
+import logging
 import re
 import threading
 from types import SimpleNamespace
@@ -96,6 +97,9 @@ from .signal.fft import FFTAnalyzer
 if TYPE_CHECKING:
     from .batch_render import BatchSeries, BatchTimeFigureSpec
     from .batch_series_spool import BatchSeriesSpool, SpooledSeriesRef
+
+
+logger = logging.getLogger(__name__)
 
 
 _RENDER_BACKEND_DEGRADED_REASON = (
@@ -648,6 +652,10 @@ class BatchRunner:
             output_dir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
             err = f"cannot create output dir: {exc}"
+            logger.warning(
+                "batch run: cannot create output dir %s: %s",
+                output_dir, exc, exc_info=True,
+            )
             if on_event:
                 on_event(BatchProgressEvent(
                     kind='run_finished',
@@ -666,6 +674,10 @@ class BatchRunner:
                 outputs=output_settings,
             )
         except Exception as exc:
+            logger.warning(
+                "batch run: cannot normalize recipe params for preset %s: %s",
+                preset.name, exc, exc_info=True,
+            )
             if on_event:
                 on_event(BatchProgressEvent(
                     kind='run_finished', final_status='blocked',
@@ -700,6 +712,11 @@ class BatchRunner:
                 recorder.start()
             except Exception as exc:
                 err = f"cannot create batch manifest: {exc}"
+                logger.warning(
+                    "batch run: cannot create/start manifest recorder under "
+                    "%s for preset %s: %s",
+                    output_dir, preset.name, exc, exc_info=True,
+                )
                 if on_event:
                     on_event(BatchProgressEvent(
                         kind='run_finished', final_status='blocked',
@@ -915,6 +932,11 @@ class BatchRunner:
                             resume_data = loaded
                             break
             except Exception as exc:
+                logger.warning(
+                    "batch run: cannot load resume manifest "
+                    "(resume_manifest=%s, output_dir=%s): %s",
+                    resume_manifest, output_dir, exc, exc_info=True,
+                )
                 return finish_result(
                     'blocked', blocked=[f"cannot load resume manifest: {exc}"],
                 )
@@ -995,6 +1017,11 @@ class BatchRunner:
                 allow_source_load=False,
             ))
         except Exception as exc:
+            logger.warning(
+                "batch run: cannot expand tasks for preset %s "
+                "(allow_source_load=False): %s",
+                preset.name, exc, exc_info=True,
+            )
             for physical_key in tuple(self._disk_cache):
                 self._evict_physical(physical_key)
             return finish_result('blocked', blocked=[str(exc)])
@@ -1102,6 +1129,11 @@ class BatchRunner:
                     allow_source_load=True,
                 ))
             except Exception as exc:
+                logger.warning(
+                    "batch run: cannot expand tasks for preset %s "
+                    "(allow_source_load=True): %s",
+                    preset.name, exc, exc_info=True,
+                )
                 for physical_key in tuple(self._disk_cache):
                     self._evict_physical(physical_key)
                 return finish_result('blocked', blocked=[str(exc)])
@@ -1345,6 +1377,11 @@ class BatchRunner:
                             )
                         )
                     except Exception as exc:
+                        logger.warning(
+                            "batch run: cannot upsert render-group manifest "
+                            "entry for group %s (initial state): %s",
+                            group.identity.group_id, exc, exc_info=True,
+                        )
                         manifest_errors.append(
                             f'cannot update batch manifest: {exc}'
                         )
@@ -1837,6 +1874,12 @@ class BatchRunner:
                                 )
                             )
                         except Exception as exc:
+                            logger.warning(
+                                "batch run: cannot upsert render-group "
+                                "manifest entry for group %s (status=%s): %s",
+                                group.identity.group_id, outcome.status, exc,
+                                exc_info=True,
+                            )
                             manifest_errors.append(
                                 f'cannot update batch manifest: {exc}'
                             )

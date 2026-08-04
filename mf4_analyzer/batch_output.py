@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -16,6 +17,9 @@ import uuid
 import pandas as pd
 
 from .batch_recipe import recipe_fingerprint
+
+
+logger = logging.getLogger(__name__)
 
 
 _UNSAFE_FILENAME = re.compile(r'[\x00-\x1f<>:"/\\|?*]+')

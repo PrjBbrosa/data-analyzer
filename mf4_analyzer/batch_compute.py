@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
+import logging
 
 import numpy as np
 import pandas as pd
@@ -25,6 +26,9 @@ from . import db_reference
 from .batch_types import _BatchCancelled
 from .signal import resolve_nfft, resolve_order_nfft
 from .signal.fft import FFTAnalyzer
+
+
+logger = logging.getLogger(__name__)
 
 
 def channel_reference_facts(fd, ch):
@@ -51,7 +55,12 @@ def channel_reference_facts(fd, ch):
     is_audio_source_fn = getattr(fd, 'is_audio_source', None)
     try:
         is_audio = bool(is_audio_source_fn()) if callable(is_audio_source_fn) else False
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "channel_reference_facts: is_audio_source() failed for channel "
+            "%s: %s",
+            ch, exc, exc_info=True,
+        )
         is_audio = False
     return db_reference.ChannelReferenceFacts(
         quantity=str(quantity),
