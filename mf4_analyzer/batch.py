@@ -1234,7 +1234,6 @@ class BatchRunner:
         blocked: list[str] = []
         cancelled = False
         total = len(tasks)
-        prev_physical_key = None
         requested_artifacts = self._required_artifacts(preset.outputs)
 
         reporter.bind_plan(
@@ -1907,6 +1906,39 @@ class BatchRunner:
                 run_migration_warnings=run_migration_warnings,
             )
 
+        return self._run_sequential(
+            preset, output_dir, tasks, render_tasks,
+            reporter=reporter, recorder=recorder,
+            effective_plan=effective_plan,
+            requested_params=requested_params,
+            requested_artifacts=requested_artifacts,
+            resume_data=resume_data, recipe_id=recipe_id,
+            explicit_grouping=explicit_grouping,
+            cancel_token=cancel_token,
+            run_migration_warnings=run_migration_warnings,
+            items=items, blocked=blocked, total=total,
+        )
+
+    def _run_sequential(self, preset, output_dir, tasks, render_tasks, *,
+                        reporter, recorder, effective_plan,
+                        requested_params, requested_artifacts,
+                        resume_data, recipe_id, explicit_grouping,
+                        cancel_token, run_migration_warnings,
+                        items, blocked, total) -> BatchRunResult:
+        """Run the non-grouped path: one compute + one output set per task.
+
+        Extracted verbatim from ``run``.  ``items`` and ``blocked`` are the
+        very lists ``run`` handed the reporter, so tail cancellation keeps
+        appending to the same objects.
+
+        Deliberately *not* merged with the grouped path: the two differ in
+        real product semantics (series spool, group rendering, group-level
+        resume), and this cut only moves the non-grouped loop out of ``run``.
+        """
+
+        cancelled = False
+        prev_physical_key = None
+
         for index, (source_key, signal_name) in enumerate(tasks, start=1):
             # Logical groups from one container share a physical cache entry.
             # Eviction therefore happens only when the physical path changes,
@@ -2166,8 +2198,9 @@ class BatchRunner:
             status = 'partial'
         else:
             status = 'done'
-        return finish_result(
+        return self._finish_result(
             status, items=items, blocked=blocked,
+            reporter=reporter, recorder=recorder,
             run_migration_warnings=run_migration_warnings,
         )
 
