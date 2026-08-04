@@ -18,6 +18,7 @@ from mf4_analyzer.batch_render_style import RenderStyle, render_style_from_param
 from mf4_analyzer.signal._envelope_cutils import positions_envelope
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
 from mf4_analyzer.qt_plot_helpers import (
+    BorderAlignedAxisItem,
     GridLabelSlackAxisItem,
     hide_native_auto_button,
     show_major_grid_left_bottom_only,
@@ -1268,10 +1269,18 @@ class _SceneBuilder:
         # vertical tick-label slack and the end-of-range Y tick values with
         # it. Same defect and same fix as the interactive canvases — verified
         # to reproduce on this export path too, not assumed.
+        #
+        # Both axes are also border-aligned so they stroke over the
+        # ``vb.setBorder`` frame set below rather than one pixel outside it.
+        # Chart plots keep that border; ``_apply_analysis_frame`` clears it
+        # for analysis plots, and the alignment switches itself off there.
         plot = self.widget.addPlot(
             row=row,
             col=0,
-            axisItems={"left": GridLabelSlackAxisItem(orientation="left")},
+            axisItems={
+                "left": GridLabelSlackAxisItem(orientation="left"),
+                "bottom": BorderAlignedAxisItem(orientation="bottom"),
+            },
         )
         hide_native_auto_button(plot)
         plot.hideButtons()

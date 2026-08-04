@@ -122,6 +122,7 @@ from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
     _capped_hidpi_scale,
 )
 from mf4_analyzer.ui.pg_canvas._shared import (  # noqa: F401
+    BorderAlignedAxisItem,
     GridLabelSlackAxisItem,
     _ChannelKeyDict,
     _hide_native_auto_button,
@@ -1932,13 +1933,21 @@ class TimeDomainCanvasPG(QWidget):
         # (show_major_grid_left_bottom_only below). pyqtgraph's grid branch in
         # AxisItem.boundingRect drops the vertical tick-label slack, which
         # silently DELETES the topmost/bottommost Y tick values; the subclass
-        # restores it. Bottom/top/right keep the stock AxisItem (a horizontal
-        # axis has no such slack to lose, and top/right carry no grid).
+        # restores it and keeps the restored end labels inside their own row.
+        #
+        # Both visible axes also have to sit on the ``vb.setBorder`` frame
+        # above instead of one pixel outside it (pyqtgraph 0.14 offsets the
+        # axis line outwards, which showed up as a doubled left edge on
+        # Retina). Top/right keep the stock AxisItem — they are hidden here,
+        # so they stroke nothing to double up with.
         pi = self._glw.addPlot(
             row=row,
             col=col,
             viewBox=vb,
-            axisItems={"left": GridLabelSlackAxisItem(orientation="left")},
+            axisItems={
+                "left": GridLabelSlackAxisItem(orientation="left"),
+                "bottom": BorderAlignedAxisItem(orientation="bottom"),
+            },
         )
         _hide_native_auto_button(pi)
         _localize_pg_context_menu(getattr(vb, "menu", None))
