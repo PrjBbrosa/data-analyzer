@@ -2248,6 +2248,40 @@ QDialog#DrawerSurface #ChannelEditorDialog {
     font-size: 12px;
     background-color: transparent;
 }
+/* 自定义表达式 row: monospace so ()/^/* read unambiguously, plus a dim
+ * one-line cheatsheet under it (variables + the most-used functions). */
+#ChannelEditorDialog QLineEdit#channelExprEdit {
+    font-family: "SF Mono", "Menlo", "Consolas", "DejaVu Sans Mono", monospace;
+    font-size: 12px;
+}
+/* Round ? badge next to the expression input — hover shows the reference
+ * through the app-wide glass tooltip, click pins it as a draggable card
+ * (ui/expression_help.py); the checked state marks the card as open. */
+#ChannelEditorDialog QToolButton#channelExprHelp {
+    color: #4b6b9a;
+    border: 1px solid #cdddf6;
+    border-radius: 9px;
+    background-color: #f3f8ff;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 0;
+}
+#ChannelEditorDialog QToolButton#channelExprHelp:hover {
+    color: #0f3f8f;
+    border-color: #93b4ef;
+    background-color: #e8efff;
+}
+#ChannelEditorDialog QToolButton#channelExprHelp:checked {
+    color: #ffffff;
+    border-color: #1769e0;
+    background-color: #1769e0;
+}
+#ChannelEditorDialog QLabel#channelExprHint {
+    color: #7b8794;
+    font-size: 11px;
+    font-weight: 400;
+    background-color: transparent;
+}
 #ChannelEditorDialog QListWidget#channelDeleteList {
     border: 1px solid #eef2f7;
     border-radius: 7px;

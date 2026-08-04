@@ -1,4 +1,6 @@
 """Modal dialogs: ChannelEditor, Export, AxisEdit."""
+import re
+
 import numpy as np
 
 from PyQt5.QtWidgets import (
@@ -23,6 +25,7 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -30,12 +33,22 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 
 from ..signal import ChannelMath
+from ..signal.expression import ExpressionError
+from ..signal.expression import evaluate as eval_expression
+from ..signal.expression import normalize as normalize_expression
+from ..signal.expression import referenced_names as expression_names
 from ..ui_kit.widgets.searchable_combo import SearchableComboBox
 from ._axis_handle import make_handle
 from ._color_utils import is_color_like as _is_color_like
 from ._color_utils import to_hex as _to_hex
+from .expression_help import ExpressionHelpPopup, help_tooltip_text
 from .pg_canvas.heatmap_canvas import SUPPORTED_HEATMAP_COLORMAPS
 from .widgets.compact_spinbox import CompactDoubleSpinBox
+
+# Hover text for the ? badge — same reference the pinnable help card renders,
+# so the two can never drift apart (see ui/expression_help.py).
+EXPR_TOOLTIP = help_tooltip_text()
+EXPR_HELP_HINT = "点 ? 打开可拖动的帮助卡片"
 
 
 class ChannelEditorDialog(QDialog):
@@ -48,6 +61,8 @@ class ChannelEditorDialog(QDialog):
     export_requested = pyqtSignal(str, list, bool, bool)
     INPUT_WIDTH = 178
     PANEL_WIDTH = 336
+    # Last entry of the 双通道运算 op combo — free-form expression over A/B/t.
+    CUSTOM_OP_INDEX = 6
 
     def __init__(self, parent, files, active_fid):
         super().__init__(parent)
@@ -149,7 +164,10 @@ class ChannelEditorDialog(QDialog):
         gl2.addWidget(self.combo_a, 0, 1)
         gl2.addWidget(QLabel("运算"), 1, 0)
         self.combo_op2 = QComboBox()
-        self.combo_op2.addItems(["A + B", "A - B", "A × B", "A ÷ B", "max(A,B)", "min(A,B)"])
+        self.combo_op2.addItems(
+            ["A + B", "A - B", "A × B", "A ÷ B", "max(A,B)", "min(A,B)", "自定义表达式…"]
+        )
+        self.combo_op2.currentIndexChanged.connect(self._sync_expr_row)
         self._narrow(self.combo_op2)
         gl2.addWidget(self.combo_op2, 1, 1)
         gl2.addWidget(QLabel("通道B"), 2, 0)
@@ -157,16 +175,57 @@ class ChannelEditorDialog(QDialog):
         self._narrow(self.combo_b)
         self.combo_b.currentTextChanged.connect(self.combo_b.setToolTip)
         gl2.addWidget(self.combo_b, 2, 1)
-        gl2.addWidget(QLabel("名称"), 3, 0)
+        # 自定义表达式行 — only shown for the 自定义 op; A / B / t bind to the
+        # two combos above and the file's time base.
+        self.lbl_expr = QLabel("表达式")
+        gl2.addWidget(self.lbl_expr, 3, 0)
+        # The input and its ? badge share ONE grid cell (a nested HBox) so the
+        # other rows keep filling column 1 to the same right edge — adding a
+        # third grid column would indent every combo above by the badge width.
+        self._expr_row = QWidget()
+        erl = QHBoxLayout(self._expr_row)
+        erl.setContentsMargins(0, 0, 0, 0)
+        erl.setSpacing(6)
+        self.edit_expr = QLineEdit()
+        self.edit_expr.setObjectName("channelExprEdit")
+        self.edit_expr.setPlaceholderText("例: sqrt(A^2 + B^2) * 0.5")
+        self.edit_expr.setToolTip(EXPR_TOOLTIP)
+        self.edit_expr.returnPressed.connect(self._create_dual)
+        self.edit_expr.setMinimumWidth(self.INPUT_WIDTH - 24)
+        self.edit_expr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        erl.addWidget(self.edit_expr, 1)
+        # Hover shows the reference; clicking pins it as a draggable card so
+        # the user can keep reading while typing the formula.
+        self.btn_expr_help = QToolButton()
+        self.btn_expr_help.setObjectName("channelExprHelp")
+        self.btn_expr_help.setText("?")
+        self.btn_expr_help.setCheckable(True)
+        self.btn_expr_help.setFixedSize(18, 18)
+        self.btn_expr_help.setFocusPolicy(Qt.NoFocus)
+        self.btn_expr_help.setCursor(Qt.PointingHandCursor)
+        self.btn_expr_help.setToolTip(f"{EXPR_TOOLTIP}\n\n{EXPR_HELP_HINT}")
+        self.btn_expr_help.toggled.connect(self._toggle_expr_help)
+        self._expr_help_popup = None
+        erl.addWidget(self.btn_expr_help, 0)
+        gl2.addWidget(self._expr_row, 3, 1)
+        self.lbl_expr_hint = QLabel(
+            "A=通道A · B=通道B · t=时间 · ^ 为幂 · 点 ? 看全部"
+        )
+        self.lbl_expr_hint.setObjectName("channelExprHint")
+        self.lbl_expr_hint.setWordWrap(True)
+        self.lbl_expr_hint.setToolTip(EXPR_TOOLTIP)
+        gl2.addWidget(self.lbl_expr_hint, 4, 0, 1, 2)
+        gl2.addWidget(QLabel("名称"), 5, 0)
         self.edit_name2 = QLineEdit()
         self.edit_name2.setPlaceholderText("留空自动生成")
         self._narrow(self.edit_name2)
-        gl2.addWidget(self.edit_name2, 3, 1)
+        gl2.addWidget(self.edit_name2, 5, 1)
         btn2 = QPushButton("✚ 创建双通道")
         btn2.setObjectName("channelCreateBtn")
         btn2.setProperty("role", "create")
         btn2.clicked.connect(self._create_dual)
-        gl2.addWidget(btn2, 4, 1, Qt.AlignLeft)
+        gl2.addWidget(btn2, 6, 1, Qt.AlignLeft)
+        self._sync_expr_row()
         # Stretch the INPUT column (col 1) so controls fill to the right edge;
         # no ghost spacer column. The create button keeps Qt.AlignLeft.
         gl2.setColumnStretch(1, 1)
@@ -375,9 +434,124 @@ class ChannelEditorDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
 
+    def _sync_expr_row(self, *_):
+        """Show the 表达式 row only for the 自定义 operation."""
+        custom = self.combo_op2.currentIndex() == self.CUSTOM_OP_INDEX
+        for w in (self.lbl_expr, self._expr_row, self.edit_expr,
+                  self.btn_expr_help, self.lbl_expr_hint):
+            w.setVisible(custom)
+        if not custom:
+            # Leaving 自定义 takes the help card with it.
+            self.btn_expr_help.setChecked(False)
+
+    def _toggle_expr_help(self, checked):
+        """Open / close the pinnable, draggable expression help card."""
+        if not checked:
+            if self._expr_help_popup is not None:
+                self._expr_help_popup.hide()
+            return
+        if self._expr_help_popup is None:
+            # Parented to the editor so the drawer's application modality does
+            # not block it (Qt exempts a modal window's own child windows).
+            self._expr_help_popup = ExpressionHelpPopup(self)
+            self._expr_help_popup.closed.connect(
+                lambda: self.btn_expr_help.setChecked(False)
+            )
+        self._expr_help_popup.show_beside(self.edit_expr)
+
+    def hideEvent(self, event):
+        # The card is a separate top-level window; it must not outlive the
+        # editor it documents. hideEvent also fires while the editor is being
+        # torn down, when the child popup's C++ side may already be gone —
+        # hence the RuntimeError guard.
+        if self._expr_help_popup is not None:
+            try:
+                self._expr_help_popup.hide()
+            except RuntimeError:
+                self._expr_help_popup = None
+        super().hideEvent(event)
+
+    def _channel_signal(self, name):
+        """Signal for a channel name, including ones staged in this session."""
+        if name in self.new_channels:
+            return np.asarray(self.new_channels[name][0], dtype=float)
+        return self.fd.data[name].values.astype(float)
+
+    def _unique_name(self, name):
+        while name in self.fd.data.columns or name in self.new_channels:
+            name += "_1"
+        return name
+
+    def _register_new(self, name, values, unit):
+        self.new_channels[name] = (values, unit)
+        self.lbl.setText(f"新增: {len(self.new_channels)} ({name})")
+        self.combo_src.addItem(name)
+        self.combo_a.addItem(name)
+        self.combo_b.addItem(name)
+
+    def _create_expression(self, ch_a, ch_b):
+        """Build a channel from the user's free-form expression.
+
+        Only the variables the expression actually references are required, so
+        an ``A``-only formula does not care what 通道B is set to.
+        """
+        expr = self.edit_expr.text().strip()
+        if not expr:
+            QMessageBox.warning(self, "无法创建", "请先输入表达式，例如 sqrt(A^2 + B^2)")
+            return
+        try:
+            used = {n.lower() for n in expression_names(expr)}
+        except ExpressionError as e:
+            QMessageBox.warning(self, "表达式错误", str(e))
+            return
+
+        t = np.asarray(self.fd.time_array, dtype=float)
+        variables = {"t": t, "time": t}
+        for key, ch in (("A", ch_a), ("B", ch_b)):
+            if key.lower() not in used:
+                # Still expose the name so a typo reports "未知变量" against the
+                # full variable list, but skip the existence/length checks.
+                variables[key] = np.zeros(t.size)
+                continue
+            if ch not in self.fd.data.columns and ch not in self.new_channels:
+                QMessageBox.warning(self, "无法创建", f"通道{key} 不存在")
+                return
+            sig = self._channel_signal(ch)
+            if sig.size != t.size:
+                QMessageBox.warning(
+                    self, "错误", f"通道{key} 长度不匹配: {sig.size} vs {t.size}")
+                return
+            variables[key] = sig
+
+        try:
+            r = eval_expression(expr, variables, size=t.size)
+        except ExpressionError as e:
+            QMessageBox.warning(self, "表达式错误", str(e))
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"表达式计算失败：{e}")
+            return
+        if not np.any(np.isfinite(r)):
+            QMessageBox.warning(self, "无法创建", "表达式结果全为 NaN/Inf，请检查公式")
+            return
+
+        name = self.edit_name2.text().strip() or self._auto_expr_name(expr)
+        self._register_new(self._unique_name(name), r, '')
+        self.edit_name2.clear()
+
+    @staticmethod
+    def _auto_expr_name(expr):
+        """``sqrt(A^2+B^2)`` → ``expr_sqrt_A_2_B_2`` (safe as a column name)."""
+        cleaned = re.sub(r"[^0-9A-Za-z_]+", "_", normalize_expression(expr)).strip("_")
+        return f"expr_{cleaned[:28]}" if cleaned else "expr"
+
     def _create_dual(self):
         ch_a = self.combo_a.currentText()
         ch_b = self.combo_b.currentText()
+        op = self.combo_op2.currentIndex()
+        if op == self.CUSTOM_OP_INDEX:
+            self._create_expression(ch_a, ch_b)
+            return
         if ch_a not in self.fd.data.columns and ch_a not in self.new_channels:
             QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
             return
@@ -386,20 +560,13 @@ class ChannelEditorDialog(QDialog):
             return
 
         # 获取数据
-        if ch_a in self.new_channels:
-            sig_a = self.new_channels[ch_a][0]
-        else:
-            sig_a = self.fd.data[ch_a].values.astype(float)
-        if ch_b in self.new_channels:
-            sig_b = self.new_channels[ch_b][0]
-        else:
-            sig_b = self.fd.data[ch_b].values.astype(float)
+        sig_a = self._channel_signal(ch_a)
+        sig_b = self._channel_signal(ch_b)
 
         if len(sig_a) != len(sig_b):
             QMessageBox.warning(self, "错误", f"通道长度不匹配: {len(sig_a)} vs {len(sig_b)}")
             return
 
-        op = self.combo_op2.currentIndex()
         op_symbols = ["add", "sub", "mul", "div", "max", "min"]
         try:
             if op == 0:
@@ -423,18 +590,13 @@ class ChannelEditorDialog(QDialog):
             name = self.edit_name2.text().strip()
             if not name:
                 name = f"{op_symbols[op]}_{ch_a}_{ch_b}"
-            while name in self.fd.data.columns or name in self.new_channels: name += "_1"
 
             # 合并单位
             unit_a = self.fd.channel_units.get(ch_a, '')
             unit_b = self.fd.channel_units.get(ch_b, '')
             unit = unit_a if unit_a == unit_b else f"{unit_a}/{unit_b}" if op == 3 else ""
 
-            self.new_channels[name] = (r, unit)
-            self.lbl.setText(f"新增: {len(self.new_channels)} ({name})")
-            self.combo_src.addItem(name);
-            self.combo_a.addItem(name);
-            self.combo_b.addItem(name)
+            self._register_new(self._unique_name(name), r, unit)
             self.edit_name2.clear()
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))

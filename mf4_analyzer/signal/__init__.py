@@ -9,6 +9,8 @@ from .adaptive import (
 from .fft import FFTAnalyzer
 from .order import OrderAnalysisParams, OrderAnalyzer, OrderTimeResult
 from .channel_math import ChannelMath
+from .expression import ExpressionError, evaluate as evaluate_expression
+from .expression import referenced_names as expression_names
 from .spectrogram import SpectrogramAnalyzer, SpectrogramParams, SpectrogramResult
 
 __all__ = [
@@ -22,6 +24,9 @@ __all__ = [
     'OrderAnalysisParams',
     'OrderTimeResult',
     'ChannelMath',
+    'ExpressionError',
+    'evaluate_expression',
+    'expression_names',
     'SpectrogramAnalyzer',
     'SpectrogramParams',
     'SpectrogramResult',
