@@ -2254,27 +2254,25 @@ QDialog#DrawerSurface #ChannelEditorDialog {
     font-family: "SF Mono", "Menlo", "Consolas", "DejaVu Sans Mono", monospace;
     font-size: 12px;
 }
-/* Round ? badge next to the expression input — hover shows the reference
- * through the app-wide glass tooltip, click pins it as a draggable card
- * (ui/expression_help.py); the checked state marks the card as open. */
+/* Bare ? glyph next to the expression input — no chrome, just the accent
+ * color as the "there is help here" cue. Hover shows the reference through
+ * the app-wide glass tooltip; clicking pins it as a draggable card
+ * (ui/expression_help.py), and the checked state deepens the glyph.
+ * padding:0 + explicit min/max sizing keep the styled QToolButton's content
+ * rect from collapsing (Qt would log QPainter::begin engine == 0). */
 #ChannelEditorDialog QToolButton#channelExprHelp {
-    color: #4b6b9a;
-    border: 1px solid #cdddf6;
-    border-radius: 9px;
-    background-color: #f3f8ff;
-    font-size: 11px;
-    font-weight: 600;
+    color: #1769e0;
+    border: none;
+    background-color: transparent;
     padding: 0;
+    min-width: 18px; max-width: 18px;
+    min-height: 18px; max-height: 18px;
+    font-size: 14px;
+    font-weight: 700;
 }
-#ChannelEditorDialog QToolButton#channelExprHelp:hover {
-    color: #0f3f8f;
-    border-color: #93b4ef;
-    background-color: #e8efff;
-}
+#ChannelEditorDialog QToolButton#channelExprHelp:hover,
 #ChannelEditorDialog QToolButton#channelExprHelp:checked {
-    color: #ffffff;
-    border-color: #1769e0;
-    background-color: #1769e0;
+    color: #0f3f8f;
 }
 #ChannelEditorDialog QLabel#channelExprHint {
     color: #7b8794;

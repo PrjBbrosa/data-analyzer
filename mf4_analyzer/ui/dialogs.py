@@ -206,7 +206,9 @@ class ChannelEditorDialog(QDialog):
         self.btn_expr_help.setToolTip(f"{EXPR_TOOLTIP}\n\n{EXPR_HELP_HINT}")
         self.btn_expr_help.toggled.connect(self._toggle_expr_help)
         self._expr_help_popup = None
-        erl.addWidget(self.btn_expr_help, 0)
+        # AlignVCenter: without it the 18px glyph rides the row's top edge and
+        # reads as misaligned against the taller input next to it.
+        erl.addWidget(self.btn_expr_help, 0, Qt.AlignVCenter)
         gl2.addWidget(self._expr_row, 3, 1)
         self.lbl_expr_hint = QLabel(
             "A=通道A · B=通道B · t=时间 · ^ 为幂 · 点 ? 看全部"
