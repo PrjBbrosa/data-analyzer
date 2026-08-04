@@ -15,10 +15,8 @@ wrap.
 """
 from __future__ import annotations
 
+from ..batch_render_models import MAX_SLICE_POSITIONS
 
-#: Upper bound on slice positions per page (design D9). The main heatmap
-#: saturates first: four marker lines already crowd the image.
-MAX_SLICE_POSITIONS = 4
 
 #: ``axis="time"`` — a fixed instant, curve = amplitude vs frequency/order.
 #:
