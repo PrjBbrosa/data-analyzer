@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from types import SimpleNamespace
 
 import numpy as np
@@ -1021,6 +1022,31 @@ def test_slice_position_out_of_range_is_clamped_and_warned(qapp):
         assert message.startswith("slice.position_clamped:")
         assert "400.000" in message and "40.000" in message
         assert "夹取" in scene.slice_legend.toPlainText()
+    finally:
+        scene.close()
+
+
+def test_slice_clamp_warning_uses_finite_bounds_when_coordinates_contain_nan(qapp):
+    payload = _spectro()
+    payload.x = np.asarray([10.0, np.nan, 40.0])
+    warnings_out = []
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        scene = _open_scene(
+            qapp,
+            "fft_time",
+            payload=payload,
+            params=_slice_params("time", [400.0]),
+            warnings_out=warnings_out,
+        )
+
+    try:
+        assert not any(item.category is RuntimeWarning for item in caught)
+        assert len(warnings_out) == 1
+        message = warnings_out[0]
+        assert "[10.000, 40.000]" in message
+        assert "nan" not in message.casefold()
     finally:
         scene.close()
 

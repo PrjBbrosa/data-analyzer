@@ -134,6 +134,7 @@ lesson by default.
 | [Batch Range Modes Need Exclusive Layout Pages](batch-statistics-range-mode-layout.md) | Adding a compact Batch setting that changes a one-line control group | See lesson |
 | [Batch Custom-X Statistics Need Major Legs Before Range Clipping](batch-custom-x-major-legs-before-range-clipping.md) | Changing Batch time-chart statistics for channel-backed X, especially | See lesson |
 | [Available-Per-Source Custom X Must Share a Logical Source With Its Target](batch-available-per-source-custom-x-coavailability.md) | Changing Batch time-chart custom-X candidates, task expansion, | See lesson |
+| [Batch Non-Finite Values Stay Out Of Identity And Warning Bounds](batch-nonfinite-values-stay-out-of-identity-and-warning-bounds.md) | Changing batch recipe normalization, recipe fingerprints, heatmap | See lesson |
 
 ## Selection Rules
 

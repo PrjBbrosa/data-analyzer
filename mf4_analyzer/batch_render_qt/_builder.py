@@ -2269,8 +2269,8 @@ class _SceneBuilder:
 
         warning = _slice_clamp_warning(
             plan,
-            float(np.min(fixed_values)),
-            float(np.max(fixed_values)),
+            float(np.nanmin(fixed_values)),
+            float(np.nanmax(fixed_values)),
             fixed_unit,
         )
         if warning is not None and warnings_out is not None:

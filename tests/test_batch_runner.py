@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -922,9 +923,15 @@ def test_non_time_renderer_warning_reaches_item_and_manifest(
     result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
 
     assert result.status == "done"
-    assert result.items[0].warnings == [warning]
+    expected_warnings = [warning]
+    if method == "order_time":
+        expected_warnings.insert(
+            0,
+            "未指定转速通道，已按名称匹配使用 rpm —— 请确认",
+        )
+    assert result.items[0].warnings == expected_warnings
     entry = load_batch_manifest(result.manifest_path)["entries"][0]
-    assert entry["warnings"] == [warning]
+    assert entry["warnings"] == expected_warnings
 
 
 def test_fft_time_amplitude_ceiling_emits_failed_item(tmp_path, monkeypatch):
@@ -2937,6 +2944,38 @@ def test_order_time_without_rpm_channel_fails_with_required_error(tmp_path):
     assert "rpm channel is required" in result.items[0].message
 
 
+def test_order_time_guessed_rpm_channel_is_named_in_item_warning(tmp_path):
+    guessed_channel = "MotorSpeedRPM"
+    fd = _make_fd(
+        tmp_path,
+        "guessed_rpm_channel",
+        channels=("sig", guessed_channel),
+        idx=0,
+    )
+    preset = AnalysisPreset.from_current_single(
+        name="guessed rpm channel",
+        method="order_time",
+        signal=(0, "sig"),
+        params={
+            "fs": 1024.0,
+            "nfft": 64,
+            "samples_per_rev": 64,
+            "max_order": 5.0,
+            "order_res": 0.5,
+            "time_res": 0.1,
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert (
+        f"未指定转速通道，已按名称匹配使用 {guessed_channel} —— 请确认"
+        in result.items[0].warnings
+    )
+
+
 def test_legacy_manual_rpm_preset_no_longer_bypasses_rpm_channel_requirement(
     tmp_path,
 ):
@@ -2968,6 +3007,49 @@ def test_legacy_manual_rpm_preset_no_longer_bypasses_rpm_channel_requirement(
     assert result.status == "blocked"
     assert result.items[0].status == "failed"
     assert "rpm channel is required" in result.items[0].message
+
+
+def test_slice_workbook_clamp_warning_uses_finite_coordinate_bounds(
+    tmp_path,
+):
+    from mf4_analyzer.batch import _Spectro2D
+
+    fd = _make_fd(tmp_path, "slice_nan_bounds", channels=("sig",), idx=0)
+    spectro = _Spectro2D(
+        x=np.asarray([10.0, np.nan, 40.0]),
+        y=np.asarray([1.0, 4.0]),
+        matrix=np.asarray([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]),
+        x_name="time_s",
+        y_name="frequency_hz",
+    )
+    params = {
+        "amplitude_mode": "amplitude",
+        "slice": {"enabled": True, "axis": "time", "positions": [400.0]},
+    }
+    warnings_out = []
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        factory = BatchRunner({0: fd})._slice_workbook_factory(
+            spectro,
+            method="fft_time",
+            params=params,
+            fact_params={},
+            data_extension="xlsx",
+            resolution=None,
+            fd=fd,
+            signal_name="sig",
+            unit="",
+            warnings_out=warnings_out,
+            owns_clamp_warning=True,
+        )
+
+    assert factory is not None
+    assert not any(item.category is RuntimeWarning for item in caught)
+    assert len(warnings_out) == 1
+    message = warnings_out[0]
+    assert "[10.000, 40.000]" in message
+    assert "nan" not in message.casefold()
 
 
 @pytest.mark.parametrize("method", ("fft_time", "order_time"))

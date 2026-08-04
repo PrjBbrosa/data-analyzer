@@ -347,10 +347,13 @@ def _normalize_known_value(field: str, value: Any) -> Any:
         items = raw.get("positions", ())
         if not isinstance(items, (tuple, list)):
             items = ()
-        numbers = [
-            float(item) for item in items
-            if isinstance(item, (int, float)) and not isinstance(item, bool)
-        ]
+        numbers = []
+        for item in items:
+            if not isinstance(item, (int, float)) or isinstance(item, bool):
+                continue
+            number = float(item)
+            if math.isfinite(number):
+                numbers.append(number)
         return {
             "enabled": bool(raw.get("enabled", False)),
             "axis": axis,

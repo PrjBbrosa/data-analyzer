@@ -3779,10 +3779,14 @@ class BatchRunner:
             fs_raw = requested_params.get('fs')
             fs = float(fd.fs if fs_raw in (None, '') else fs_raw)
 
+            warnings_out: list[str] = []
             rpm = None
             if method == 'order_time':
                 rpm = self._rpm_values(
-                    fd, preset, target_source_id=fid,
+                    fd,
+                    preset,
+                    target_source_id=fid,
+                    warnings_out=warnings_out,
                 )
 
             x_values = None
@@ -3842,6 +3846,7 @@ class BatchRunner:
             warnings = list(dict.fromkeys([
                 *migration_warnings,
                 *preprocessed.warnings,
+                *warnings_out,
             ]))
 
             spectro = None
@@ -4207,8 +4212,8 @@ class BatchRunner:
             )
             clamp = contract.slice_clamp_warning(
                 plan,
-                float(np.min(axis_values)),
-                float(np.max(axis_values)),
+                float(np.nanmin(axis_values)),
+                float(np.nanmax(axis_values)),
                 _slice_axis_labels(axis_name)[3],
             )
             if clamp is not None and clamp not in warnings_out:
@@ -5026,7 +5031,14 @@ class BatchRunner:
             and np.all(np.diff(axis) > 0.0)
         )
 
-    def _rpm_values(self, fd, preset, *, target_source_id=None):
+    def _rpm_values(
+        self,
+        fd,
+        preset,
+        *,
+        target_source_id=None,
+        warnings_out: list[str] | None = None,
+    ):
         if preset.rpm_signal is not None:
             rpm_source_id, rpm_ch = preset.rpm_signal
             if target_source_id is None:
@@ -5083,6 +5095,10 @@ class BatchRunner:
         rpm_channel = preset.rpm_channel
         if not rpm_channel:
             rpm_channel = _guess_rpm_channel(fd)
+            if rpm_channel and warnings_out is not None:
+                warnings_out.append(
+                    f"未指定转速通道，已按名称匹配使用 {rpm_channel} —— 请确认"
+                )
         if not rpm_channel or rpm_channel not in fd.data.columns:
             raise ValueError("rpm channel is required for order batch analysis")
         factor = float(preset.params.get('rpm_factor', 1.0))

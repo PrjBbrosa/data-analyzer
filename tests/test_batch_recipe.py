@@ -377,6 +377,33 @@ def test_slice_positions_are_sorted_and_deduplicated_for_fingerprint_stability(
     )
 
 
+@pytest.mark.parametrize("method", ("fft_time", "order_time"))
+def test_nonfinite_slice_positions_are_removed_before_fingerprinting(method):
+    nan_first = {
+        "slice": {"enabled": True, "axis": "time", "positions": [np.nan, 5.0]},
+    }
+    nan_last = {
+        "slice": {"enabled": True, "axis": "time", "positions": [5.0, np.nan]},
+    }
+    with_infinities = {
+        "slice": {
+            "enabled": True,
+            "axis": "time",
+            "positions": [-np.inf, 5.0, np.inf],
+        },
+    }
+
+    normalized_first = normalize_batch_params(nan_first, method)
+    normalized_last = normalize_batch_params(nan_last, method)
+
+    assert normalized_first["slice"]["positions"] == [5.0]
+    assert normalized_first == normalized_last
+    assert normalize_batch_params(with_infinities, method) == normalized_first
+    assert recipe_fingerprint(nan_first, method) == recipe_fingerprint(
+        nan_last, method,
+    )
+
+
 def test_slice_axis_is_lowercased_and_positions_are_floats():
     normalized = normalize_batch_params(
         {
