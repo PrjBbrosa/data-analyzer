@@ -121,12 +121,12 @@ Run: `PYTEST tests/ui/test_dialogs.py tests/ui/test_dialog_with_handle.py tests/
 
 **Files:** Create `mf4_analyzer/io/blf_format.py`;Modify `mf4_analyzer/io/loader.py`。
 
-- [ ] **Step 1:** 移动 L149-515 的 BLF 子系统(`BlfDbcProbe` + 8 个函数)到
+- [x] **Step 1:** 移动 L149-515 的 BLF 子系统(`BlfDbcProbe` + 8 个函数)到
   `blf_format.py`;`can`/`cantools` 的延迟 import 策略保持在函数体内。
-- [ ] **Step 2:** `DataLoader.read_blf_frames` / `load_blf` / `probe_blf_dbc`(以及
+- [x] **Step 2:** `DataLoader.read_blf_frames` / `load_blf` / `probe_blf_dbc`(以及
   Task 0 核验发现的其他 BLF 公开方法)改为对 `blf_format` 的薄委托,
   **签名与 docstring 逐字保留**。
-- [ ] **Step 3:** 验证(BLF 测试在无 python-can 环境会 importorskip,属正常)。
+- [x] **Step 3:** 验证(BLF 测试在无 python-can 环境会 importorskip,属正常)。
 
 Run: `PYTEST tests/test_blf_loader.py tests/test_blf_dbc_candidates.py tests/test_batch_loader_dispatch.py tests/ui/test_blf_open.py tests/ui/test_blf_batch_import.py -q`
 
