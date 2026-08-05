@@ -33,7 +33,6 @@ from mf4_analyzer.ui.pg_canvas._shared import (
 from mf4_analyzer.ui.pg_canvas.fonts import _apply_pg_axis_font, _pg_chart_font
 
 
-
 def _tick_counts_to_density(x_n: int, y_n: int) -> tuple:
     """Convert inspector tick COUNTS to pg tick-density factors.
 
