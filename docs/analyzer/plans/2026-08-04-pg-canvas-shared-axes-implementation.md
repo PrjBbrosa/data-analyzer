@@ -53,15 +53,18 @@ Run: `PYTEST tests/ui/test_analysis_axes.py -q`
 **Files:** Create `mf4_analyzer/ui/pg_canvas/analysis_axes.py`;
 Modify `mf4_analyzer/ui/pg_canvas/heatmap_canvas.py`(只动 import 区与删除被移动块)。
 
-- [ ] **Step 1:** 新建 `analysis_axes.py`:docstring(spec D-B1 措辞)+ 从
+- [x] **Step 1:** 新建 `analysis_axes.py`:docstring(spec D-B1 措辞)+ 从
   `heatmap_canvas.py` **剪切**组 1+2 的 19 个符号,函数体逐字不动。头部 import
   从 heatmap 现有头部挑选实际需要的(pg / QtCore / numpy / `GridLabelSlackAxisItem` 等),
-  最小化。
-- [ ] **Step 2:** `heatmap_canvas.py` 顶部加
+  最小化。→ 19 个符号 + 7 个随迁私有常量,共 536 行逐字平移;新模块 pyflakes 零告警。
+- [x] **Step 2:** `heatmap_canvas.py` 顶部加
   `from .analysis_axes import (<19 个符号>)  # noqa: F401 — 兼容旧路径与 monkeypatch`,
-  内部调用点**一律不改写**。
-- [ ] **Step 3:** `PYTEST tests/ui/test_pg_heatmap_canvas.py -q` 与基线一致;
+  内部调用点**一律不改写**。→ 再导出 26 个名字(19 + 7 常量);模块路径用绝对形式
+  以匹配本文件其余 import 的既有风格,语义与计划所写等价。
+- [x] **Step 3:** `PYTEST tests/ui/test_pg_heatmap_canvas.py -q` 与基线一致;
   `git diff --color-moved=dimmed-zebra` 人工确认移动块零字符变化。
+  → 211 passed(含新增 53 条);逐行比对确认移动载荷 536 行**字节级相同**;
+  heatmap 侧新增行只有 import 区,函数体零改动。
 
 ## Task 3: line_canvas 切换 import,消除依赖倒置
 
