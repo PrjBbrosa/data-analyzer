@@ -17,21 +17,24 @@
 
 ## Task 0: 锚点核验 + 基线采集(失配即停)
 
-- [ ] **Step 1:** 核验移动清单锚点:
+- [x] **Step 1:** 核验移动清单锚点:
   `grep -n "^def \|^class \|^_AUTO\|^_SLICE" mf4_analyzer/ui/pg_canvas/heatmap_canvas.py | awk -F: '$1 < 830'`
   应与 spec「移动清单」三组一致(组 1+2 共 19 个符号,行号 :260-:784)。
-- [ ] **Step 2:** 核验反向导入现场:`sed -n '29,44p' mf4_analyzer/ui/pg_canvas/line_canvas.py`
-  应为「3 个来自 canvas 的 AA 常量 + 8 个来自 heatmap 的符号」。
-- [ ] **Step 3:** **monkeypatch 风险清单**(spec D-B2 风险点):
+  → 19/19 符号行号逐一吻合,零失配。
+- [x] **Step 2:** 核验反向导入现场:`sed -n '29,44p' mf4_analyzer/ui/pg_canvas/line_canvas.py`
+  应为「3 个来自 canvas 的 AA 常量 + 8 个来自 heatmap 的符号」。→ 吻合。
+- [x] **Step 3:** **monkeypatch 风险清单**(spec D-B2 风险点):
   `grep -rn "heatmap_canvas" tests/ | grep -i "monkeypatch\|setattr\|patch"`,
   并对组 1+2 的每个符号名 `grep -rn "<符号>" tests/`。逐条记录:哪个测试、patch 的
   是哪个模块路径、行使的是哪个画布。存入
   `docs/analyzer/verify/pg-shared-axes-patch-audit.md`。
-- [ ] **Step 4:** 基线失败集:
+  → **零命中**:全仓无测试 monkeypatch `heatmap_canvas` 模块属性,D-B2 风险不成立,
+  Task 3 Step 2 为空操作。附带发现 7 个必须随迁的私有常量(见审计文件末节)。
+- [x] **Step 4:** 基线失败集:
   `PYTEST tests/ui/test_pg_heatmap_canvas.py tests/ui/test_pg_line_canvas.py tests/ui/test_pg_timedomain_canvas.py tests/ui/test_axis_frame_alignment.py tests/ui/test_axis_grid_label_slack.py tests/ui/test_stacked_left_axis_metrics.py tests/ui/test_colorbar_reset.py tests/ui/test_slice_amp_floor_guard.py tests/ui/test_pg_canvas_decomposition_characterization.py -q > docs/analyzer/verify/pg-shared-axes-baseline.txt 2>&1 || true`
-- [ ] **Step 5:** 真机基线截图(macOS 原生,非 offscreen):启动 GUI,对同一份测试数据
-  各出一张 FFT / FFT-Time / Order 图,截图存 `docs/analyzer/evidence/pg-shared-axes/baseline/`。
-  (可参考 `scripts/` 内既有截图辅助;没有就手动截,文件名注明图种。)
+- [~] **Step 5:** 真机基线截图 —— **本次执行跳过**(编排方指示:执行者不启动 GUI、
+  不截图,绝不以 offscreen 冒充真机验收)。改为交付「待人工真机验收清单」,由人执行。
+  Step 4 的 offscreen 基线(706 passed / 0 failed)仅作测试基线,不构成视觉验收。
 
 ## Task 1: 纯函数直接单测(先行,红→绿在基线上)
 
