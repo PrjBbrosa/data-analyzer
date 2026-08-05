@@ -153,6 +153,24 @@ MainWindow、不需要 Qt**,0.82 s 跑完(经 MainWindow 时是 2.87 s)。
 spec 点名的三项纯逻辑里,时间范围掩码与 dB 参考解析已脱离 MainWindow;
 缓存键因上述测试契约留在原处。
 
+## 4c. Task 3 补记:`_apply_xaxis` 保留垫片名写法
+
+`window.py::_apply_xaxis` 是**唯一**没有改写成 `self._custom_xaxis.adopt(...)`
+的写点。原因是 `tests/ui/test_task4_cache_invalidation.py::
+test_apply_custom_xaxis_invalidates_fft_time_analysis_cache` 用
+`types.SimpleNamespace` 冒充「窄 MainWindow 协议」直接调
+`MainWindow._apply_xaxis(mw)`,随后**断言 `mw._custom_xaxis_spec` /
+`_custom_xaxis_fid` / `_custom_xaxis_ch`**。假对象上既没有持有者,
+也没有 property(SimpleNamespace 不走类属性),改代码就得连断言一起改。
+
+保留垫片名写法后:真 window 上这些写入经 property 落到持有者;
+`_view_mixin.py` 已完全不碰这四个名字 → **只剩 window.py 一个文件写**,
+棘轮的「≥2 文件」判据不再成立,4 条照常出白名单。**零测试改动。**
+
+Task 0 §4 的结论因此要修正一句:「写点只在真 MainWindow 上执行」并不普遍成立
+——`_apply_xaxis` 就是反例。判断依据应是「该方法是否被假对象直接调用」,
+而不是「它是不是 mixin 方法」。
+
 ## 5. Task 6 剩余条目逐条处置结论
 
 由 Task 6 填写。

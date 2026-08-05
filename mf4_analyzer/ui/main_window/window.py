@@ -50,6 +50,7 @@ from ..time_xaxis import (
 )
 
 from ._sentinel import _INSPECTOR_TIME_RANGE
+from ._state_holders import CustomXAxisState
 from ._analysis_mixin import AnalysisMixin
 from ._drop_import_mixin import DropImportMixin
 from ._fft_mixin import FFTMixin
@@ -108,6 +109,9 @@ class MainWindow(
         self._fc = 0;
         self._active = None
         self._project_path = None
+        # Applied custom-X state lives in one named holder (spec D-E2).  Built
+        # before _init_ui() so the property shims below always have a target.
+        self._custom_xaxis = CustomXAxisState()
         try:
             self._blf_dbc_history = self._load_recent_blf_dbc_history()
         except Exception:
@@ -155,6 +159,44 @@ class MainWindow(
         )
         self._init_drop_import()
         self._connect()
+
+    # -- compatibility shims for the custom-X holder (spec D-E2) -----------
+    # State moved onto ``self._custom_xaxis``; these keep the historical
+    # attribute names readable and writable so callers outside this package
+    # (``ui/view_bridge.py`` reads them via ``getattr``) and tests that poke
+    # them directly need no change. New code should use the holder.
+
+    @property
+    def _custom_xaxis_spec(self):
+        return self._custom_xaxis.spec
+
+    @_custom_xaxis_spec.setter
+    def _custom_xaxis_spec(self, value):
+        self._custom_xaxis.spec = value
+
+    @property
+    def _custom_xaxis_fid(self):
+        return self._custom_xaxis.fid
+
+    @_custom_xaxis_fid.setter
+    def _custom_xaxis_fid(self, value):
+        self._custom_xaxis.fid = value
+
+    @property
+    def _custom_xaxis_ch(self):
+        return self._custom_xaxis.ch
+
+    @_custom_xaxis_ch.setter
+    def _custom_xaxis_ch(self, value):
+        self._custom_xaxis.ch = value
+
+    @property
+    def _custom_xlabel(self):
+        return self._custom_xaxis.xlabel
+
+    @_custom_xlabel.setter
+    def _custom_xlabel(self, value):
+        self._custom_xaxis.xlabel = value
 
     def _db_reference_settings(self):
         """``QSettings`` for the shared dB-reference catalog store.
@@ -916,10 +958,7 @@ class MainWindow(
         # Applied custom-X state.  The immutable spec is authoritative; the
         # legacy fid/channel fields are retained only as exact-source adapters
         # for old callers while View persistence migrates.
-        self._custom_xlabel = None
-        self._custom_xaxis_fid = None
-        self._custom_xaxis_ch = None
-        self._custom_xaxis_spec = CustomXAxisSpec()
+        self._custom_xaxis.clear()
         # Phase 1 item 4: track range-filter and plot-mode state across
         # plot_time() calls so we can fire the appropriate envelope-cache
         # invalidation when either changes (the cache is keyed on raw
@@ -2049,10 +2088,7 @@ class MainWindow(
         fd = self.files.get(spec.source_fid)
         if fd is not None and spec.channel in fd.data.columns:
             return
-        self._custom_xaxis_spec = CustomXAxisSpec()
-        self._custom_xaxis_fid = None
-        self._custom_xaxis_ch = None
-        self._custom_xlabel = None
+        self._custom_xaxis.clear()
         self.inspector.top.set_xaxis_mode('time')
 
     def _refresh_channel_dependent_controls(self):
@@ -2067,6 +2103,14 @@ class MainWindow(
         idx = self._view_index_for_canvas(canvas)
         previous_spec = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
         mode = self.inspector.top.xaxis_mode()
+        # NOTE: this method writes through the compatibility shims rather than
+        # `self._custom_xaxis` directly.  `tests/ui/test_task4_cache_
+        # invalidation.py` drives it with a `SimpleNamespace` standing in for a
+        # narrow MainWindow protocol and then asserts on these very attribute
+        # names, so the holder does not exist on `self` here.  The shims mean
+        # the writes still land on the holder for a real window, and
+        # `_view_mixin` no longer touches these names at all -- which is what
+        # the ownership ratchet measures.
         if mode == 'time':
             self._custom_xlabel = self.inspector.top.xaxis_label() or None
             self._custom_xaxis_spec = CustomXAxisSpec(

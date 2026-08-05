@@ -385,13 +385,7 @@ class ViewMixin:
             # Candidate construction must see the restored applied spec so it
             # can retain a logical 0/N item or re-inject a legacy exact-source
             # item while the source still exists.
-            self._custom_xaxis_spec = spec
-            self._custom_xaxis_fid = (
-                target_fid if spec.resolver == EXACT_SOURCE else None
-            )
-            self._custom_xaxis_ch = (
-                target_channel if spec.resolver == EXACT_SOURCE else None
-            )
+            self._custom_xaxis.adopt(spec)
             self._refresh_xaxis_candidates()
             combo = top._combo_xaxis_ch
             target_payload = selection_payload(spec)
@@ -409,23 +403,17 @@ class ViewMixin:
         _old_le = _le.blockSignals(True) if _le is not None else False
         try:
             if use_channel:
-                self._custom_xaxis_spec = spec
-                self._custom_xaxis_fid = (
-                    target_fid if spec.resolver == EXACT_SOURCE else None
+                self._custom_xaxis.adopt(
+                    spec, xlabel=label or target_channel,
                 )
-                self._custom_xaxis_ch = (
-                    target_channel if spec.resolver == EXACT_SOURCE else None
-                )
-                self._custom_xlabel = label or target_channel
                 top.set_xaxis_mode('channel')
                 top._combo_xaxis_ch.setEnabled(True)
                 top._combo_xaxis_ch.setCurrentIndex(match_idx)
                 top.edit_xlabel.setText(label or '')
             else:
-                self._custom_xaxis_spec = CustomXAxisSpec(label=label)
-                self._custom_xaxis_fid = None
-                self._custom_xaxis_ch = None
-                self._custom_xlabel = label or None
+                self._custom_xaxis.adopt(
+                    CustomXAxisSpec(label=label), xlabel=label or None,
+                )
                 top.set_xaxis_mode('time')
                 top._combo_xaxis_ch.setEnabled(False)
                 _safe_label = label if (label and label != 'Time (s)') else ''

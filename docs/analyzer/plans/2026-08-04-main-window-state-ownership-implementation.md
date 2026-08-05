@@ -73,12 +73,14 @@ Run: `PYTEST tests/ui/test_analysis_context.py tests/ui/test_main_window_state_o
 新增单测并入 `tests/ui/test_main_window_state_ownership.py` 同目录新文件
 `tests/ui/test_main_window_state_holders.py`。
 
-- [ ] **Step 1:** 定义 `CustomXAxisState`(dataclass:`ch` / `fid` / `spec` /
+- [x] **Step 1:** 定义 `CustomXAxisState`(dataclass:`ch` / `fid` / `spec` /
   `xlabel`,加 `clear()` 与派生查询,以现有用法为准)。单测:设置/清除/
   默认值。
-- [ ] **Step 2:** 两个文件中对四个属性的全部读写改经 `window._custom_xaxis`
+- [x] **Step 2:** 两个文件中对四个属性的全部**写**改经 `window._custom_xaxis`;读点
+  一律不动(靠垫片转发,见 inventory §4)。`_apply_xaxis` 例外,见 inventory §4c。
+  原文:两个文件中对四个属性的全部读写改经 `window._custom_xaxis`
   (Task 0 inventory 给出精确位置清单);测试 poke 过的属性名留 property 垫片。
-- [ ] **Step 3:** 白名单删 4 条;验证。
+- [x] **Step 3:** 白名单删 4 条;验证。→ 16 → 12,CORE 267 passed。
 
 Run: `PYTEST tests/ui/test_main_window_state_holders.py tests/ui/test_main_window_state_ownership.py -q && PYTEST <CORE> -q`
 (重点:自定义 X 轴相关用例——`grep -l "custom_x\|xaxis" tests/ui/` 找到的文件全跑。)
