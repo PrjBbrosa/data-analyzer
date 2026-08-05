@@ -370,10 +370,9 @@ class MainWindow(
             'fft_time': AnalysisResultCache(12),
             'order': AnalysisResultCache(12),
         }
-        # Re-entrancy guard: while a view switch is applying state to the UI,
-        # suppress the inspector signal handlers that would otherwise capture
-        # the half-applied controls back into the outgoing view.
-        self._applying_analysis_view = False
+        # `_applying_analysis_view` is AnalysisMixin's own re-entrancy guard;
+        # its default lives with the owner (see AnalysisMixin) so exactly one
+        # file writes it.
         # Post-load auto-recompute queue. A saved project carries each analysis
         # view's compute params + signal sources but NOT the numeric results
         # (recompute-on-open, per the user's choice). open_project seeds this

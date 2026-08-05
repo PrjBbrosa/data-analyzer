@@ -55,6 +55,13 @@ def _format_db_reference_source_line(resolution):
 
 
 class AnalysisMixin:
+    #: Re-entrancy guard: while a view switch is applying state to the UI,
+    #: suppress the inspector signal handlers that would otherwise capture the
+    #: half-applied controls back into the outgoing view. Owned entirely by
+    #: this mixin, so the default lives here rather than in window.__init__
+    #: (spec D-E2) -- that keeps the guard to exactly one writing file.
+    _applying_analysis_view = False
+
     # -- helpers delegated to AnalysisContext (spec D-E1) ------------------
     # These bodies moved verbatim onto ``analysis_context.AnalysisContext``,
     # which takes its collaborators as named constructor arguments and is

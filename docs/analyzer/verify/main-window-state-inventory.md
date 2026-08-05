@@ -202,7 +202,87 @@ Task 0 §4 的结论因此要修正一句:「写点只在真 MainWindow 上执�
 
 ## 5. Task 6 剩余条目逐条处置结论
 
-由 Task 6 填写。
+**棘轮轨迹:16 →(T3 −4)12 →(T4 −3)9 →(T5 −2)7 →(T6 −1)6。**
+目标 ≤8,达成并超出 2 条。
+
+### 5.1 本包已迁移(9 条)
+
+| 属性 | 归宿 | 任务 |
+| --- | --- | --- |
+| `_custom_xaxis_ch` / `_fid` / `_spec` / `_custom_xlabel` | `CustomXAxisState` | T3 |
+| `_primary_view_idx` / `_secondary_view_idx` / `_focused_view_idx` | `ViewFocusState` | T4 |
+| `_analysis_progress_tokens` | `AnalysisJobService` | T5 |
+| `_restoring_project` | `ProjectIOMixin` 类属性 | T5 |
+| `_applying_analysis_view` | `AnalysisMixin` 类属性 | T6 |
+
+判定「该迁」的那条线:**属性是不是某个 mixin 私有的重入守卫 / 派生状态**。
+是,就归那个 mixin(或专属持有者),window 不该知道它。
+`_restoring_project` 与 `_applying_analysis_view` 都属此类——原来都是
+**非属主文件在替属主声明默认值**,把默认值挪回属主即可,零行为变化。
+
+### 5.2 剩余 6 条:全部属「合理共享」,不在本包迁移
+
+剩下的 6 条是**同一簇**:文件/工程会话身份。它们的形态一致——
+`window.__init__` 声明实例默认值,`_project_io_mixin` 做真正的状态转移:
+
+| # | 属性 | window.py 的写 | `_project_io_mixin.py` 的写 | 处置 |
+| --- | --- | --- | --- | --- |
+| 1 | `files` | `:108` `= OrderedDict()` 初值 | `:290` 增、`:1208`/`:1478` 删 | **合理共享**,见下 |
+| 2 | `_fc` | `:109` `= 0` 初值 | `:271` `+= 1` | 同上(与 `files` 同簇) |
+| 3 | `_project_path` | `:111` `= None` 初值 | `:1275`/`:1407` 存/开工程时设置 | 同上 |
+| 4 | `_blf_dbc_history` | `:118`/`:120` try/except 初始加载 | `:602` 追加新记录 | 同上 |
+| 5 | `_analysis_restore_pending` | `:383` `= set()` 初值 | `:1319` 开工程时填充 | 同上 |
+| 6 | `_active` | `:110` `= None` 初值 **+ `:2001` 真实变更** | `:1213`/`:1370`/`:1480` | **真·双属主**,见下 |
+
+**为什么判为合理共享(1–5):** 这五条里 `window.py` 那一侧**只是 `__init__`
+里声明实例默认值**,不是状态转移;真正的读写归属清晰地落在 `ProjectIOMixin`。
+在 `__init__` 集中声明实例属性是**好实践**,不是散写。
+它们又都不适合走 T5/T6 的「默认值挪成类属性」手法:
+- `files`(`OrderedDict()`)、`_analysis_restore_pending`(`set()`)是**可变默认值**,
+  做成类属性会被所有实例共享——那是 bug,不是重构。
+- `_blf_dbc_history` 的初值来自 `_load_recent_blf_dbc_history()` 的 try/except,
+  是真实初始化逻辑,不是常量默认值。
+- `_fc` / `_project_path` 技术上可以挪成类属性,棘轮能再降 2 条——但**故意不做**:
+  它们是 MainWindow 的会话身份,`__init__` 里声明才是可读的写法,
+  为了让计数变好看而把它们藏成类属性,属于为指标服务而非为代码服务。
+
+**`_active` 是唯一真正的双属主(6):** `window.py:2001` 的
+`_on_file_activated` 是**真实状态变更**,不是初始化。它与 `files`/`_fc` 同属
+「文件注册表」概念。**留待后续独立立项**:把 `files` + `_fc` + `_active` +
+`_project_path` 收进一个 `FileRegistry` / 会话对象。本包不做,因为
+`files` 的读面横跨全仓(仅测试里就 209 次读、41 次写,26 个文件),
+远超本 spec 的范围。
+
+### 5.3 棘轮的已知盲区(留给下一个包)
+
+现有判据是「**写它的文件数** ≥2」,它分不清两种写:
+「在 `__init__` 里声明默认值」和「做状态转移」。上表 1–5 就卡在这个盲区里——
+它们其实已经**单属主**了,只是默认值声明在 window。
+
+若下一个包想把指标做得更准,可考虑把判据换成「**做状态转移的文件数** ≥2」,
+即排除 `__init__` 里的常量初始化。本包**不改判据**:中途换算法会让
+16 → 6 这条轨迹失去可比性,且属超范围改动。
+
+另一个已知盲区:`self.X.pop(k)` / `self.X.append(v)` 这类**方法调用式容器变更**
+不计入(只有 `self.X[k] = v` 和 `del self.X[k]` 计)。本包迁移
+`_analysis_progress_tokens` 时顺带消除了它仅有的两处 `.pop()`,
+当前没有别的属性踩到这个盲区。
+
+## 6b. property 垫片清单(本包新增,全部在 `window.py`)
+
+| 垫片属性 | 转发到 | 为何需要 |
+| --- | --- | --- |
+| `_custom_xaxis_spec` | `_custom_xaxis.spec` | `view_bridge` 经 `getattr` 读;15 处测试写、10 处测试读 |
+| `_custom_xaxis_fid` | `_custom_xaxis.fid` | 同上;9 写 / 6 读 |
+| `_custom_xaxis_ch` | `_custom_xaxis.ch` | 同上;9 写 / 6 读 |
+| `_custom_xlabel` | `_custom_xaxis.xlabel` | 同上;9 写 / 3 读 |
+| `_primary_view_idx` | `_view_focus.primary` | 6 处测试读 |
+| `_secondary_view_idx` | `_view_focus.secondary` | `_channel_scope_mixin` 经 `getattr` 读;4 处测试读 |
+| `_focused_view_idx` | `_view_focus.focused` | `_channel_scope_mixin` 经 `getattr` 读;3 处测试读 |
+| `_analysis_progress_tokens` | `_analysis_jobs.progress_tokens` | 12 处测试写(下标)、12 处测试读;setter 支持整体重绑 |
+
+全部为读写双向垫片,注释标记为兼容层。**测试零改动**:本包没有改动任何
+既有测试文件,也没有动 `__init__.py` 的 monkeypatch 锚点或任何 patch 路径。
 
 ## 5b. `tests/ui/` 基线失败集(Task 0 Step 4)
 

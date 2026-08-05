@@ -63,7 +63,6 @@ FROZEN_MULTI_FILE_STATE: dict[str, tuple[str, ...]] = {
     # -- file/session identity; dispositions recorded in Task 6 -------------
     "_active": ("_project_io_mixin.py", "window.py"),
     "_analysis_restore_pending": ("_project_io_mixin.py", "window.py"),
-    "_applying_analysis_view": ("_analysis_mixin.py", "window.py"),
     "_blf_dbc_history": ("_project_io_mixin.py", "window.py"),
     "_fc": ("_project_io_mixin.py", "window.py"),
     "_project_path": ("_project_io_mixin.py", "window.py"),
