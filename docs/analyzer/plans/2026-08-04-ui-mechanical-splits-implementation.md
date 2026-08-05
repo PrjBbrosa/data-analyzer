@@ -135,7 +135,7 @@ Run: `PYTEST tests/test_blf_loader.py tests/test_blf_dbc_candidates.py tests/tes
 **Files:** Create `tests/ui/test_chart_card_construction.py`;
 Modify `mf4_analyzer/ui/chart_stack/cards.py`。
 
-- [ ] **Step 1(特征测试先行):** 写 `tests/ui/test_chart_card_construction.py`
+- [x] **Step 1(特征测试先行):** 写 `tests/ui/test_chart_card_construction.py`
   (spec「新增测试」第 2 条):对每个 `chart_mode` 构造 `_ChartCard`
   (canvas 参数用与既有测试相同的构造方式,参考 `tests/ui/test_chart_stack.py`
   的夹具),快照子 widget 类名多重集 + 关键属性存在性。在**基线**上跑绿,单独 commit。
