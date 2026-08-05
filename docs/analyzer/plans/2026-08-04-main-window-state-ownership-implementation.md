@@ -14,18 +14,20 @@
 
 ## Task 0: 状态清查 + 锚点核验 + 基线(失配即停)
 
-- [ ] **Step 1(状态清查脚本):** 写一次性脚本(放 scratchpad,不入库):AST 扫描
+- [x] **Step 1(状态清查脚本):** 写一次性脚本(放 scratchpad,不入库):AST 扫描
   `mf4_analyzer/ui/main_window/*.py`,输出「属性 → 赋值文件列表」全表。
   确认多文件赋值属性集合与 spec 所列 17 条一致;不一致以实测为准,更新后续任务
   的目标清单并在 `docs/analyzer/verify/main-window-state-inventory.md` 记录全表。
-- [ ] **Step 2(锚点):** 确认 `window.py:97-100` MRO、`fft_time_coordinator.py`
+  → **实测 16 条**(spec 的 `view_manager` 是关键字实参误计);目标 16 → 7。
+- [x] **Step 2(锚点):** 确认 `window.py:97-100` MRO、`fft_time_coordinator.py`
   与 `AnalysisJobService`(`window.py:116` 附近)存在;grep `AnalysisMixin` 的
   服务方法清单(spec D-E1 七个名字)在 `_analysis_mixin.py` 中的行号,以及
-  FFT/Order/FFTTime 三个 mixin 对它们的调用点。
-- [ ] **Step 3(测试 poke 审计):** 对 17 个目标属性逐个
+  FFT/Order/FFTTime 三个 mixin 对它们的调用点。→ 全部命中,无需重定位。
+- [x] **Step 3(测试 poke 审计):** 对 17 个目标属性逐个
   `grep -rn "<属性名>" tests/`,记录哪些测试直接读/写——这些属性必须留
-  property 垫片。结论进 inventory 文档。
-- [ ] **Step 4(基线):**
+  property 垫片。结论进 inventory 文档。→ 另发现 3 处 **fake 对象**测试,
+  推出「只改写点、不动读点」的迁移手法(inventory §4)。
+- [x] **Step 4(基线):** → `2 failed, 2914 passed` (341s)。
   `PYTEST tests/ui/ -q > docs/analyzer/verify/main-window-state-baseline.txt 2>&1 || true`
   (全量,含既有红;后续所有对比以此为准。)
 
