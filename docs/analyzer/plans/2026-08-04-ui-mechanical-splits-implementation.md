@@ -106,14 +106,14 @@ Expected: 全绿(或与基线失败集一致)。
 **Files:** Create `mf4_analyzer/ui/dialogs/{__init__,channel_editor,export,chart_options}.py`;
 Delete `mf4_analyzer/ui/dialogs.py`。
 
-- [ ] **Step 1:** 记录 `dialogs.py` 头部 import 清单;三个类按 :54-613 / :614-641 /
+- [x] **Step 1:** 记录 `dialogs.py` 头部 import 清单;三个类按 :54-613 / :614-641 /
   :642-1256 切入三个模块,相对导入 `from .xxx` → `from ..xxx`(含 :44 的
   `from .expression_help import ...`)。
-- [ ] **Step 2:** `__init__.py`:docstring(修正过期的 `AxisEdit` 描述)+
+- [x] **Step 2:** `__init__.py`:docstring(修正过期的 `AxisEdit` 描述)+
   再导出 `ChannelEditorDialog, ExportDialog, ChartOptionsDialog`。
-- [ ] **Step 3:** 全仓 grep `ui.dialogs`/`from .dialogs`/`from ..dialogs` 确认所有
+- [x] **Step 3:** 全仓 grep `ui.dialogs`/`from .dialogs`/`from ..dialogs` 确认所有
   消费者(产品 3 处 + 测试)无需改动即可解析。
-- [ ] **Step 4:** 验证。
+- [x] **Step 4:** 验证。
 
 Run: `PYTEST tests/ui/test_dialogs.py tests/ui/test_dialog_with_handle.py tests/ui/test_channel_editor_expression.py tests/ui/test_channel_editor_export.py tests/ui/test_expression_help_popup.py tests/ui/test_axis_interaction.py -q`
 
