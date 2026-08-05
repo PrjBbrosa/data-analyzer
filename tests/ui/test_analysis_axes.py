@@ -7,21 +7,22 @@ math surfaced as a confusing canvas-level failure, and the edge cases
 (empty input, all-NaN, degenerate ranges) had no coverage at all. This
 file pins them directly, per the pg_canvas shared-axes design (D-B3).
 
-IMPORTANT (refactor package B): the import below currently points at
-``heatmap_canvas`` because that is where these symbols live on the
-baseline. Once Task 2 moves them into ``analysis_axes``, this import is
-re-pointed at the new module — that one-line change is the whole point of
-writing these tests first, so the move is covered on both sides.
+These tests were written against ``heatmap_canvas`` — where the symbols
+lived before the extraction — and passed there unchanged before the move.
+The import below is now re-pointed at ``analysis_axes``; that one-line
+change is the whole point of writing them first, since the same
+assertions passing on both sides is the evidence the move preserved
+behaviour.
 
 Every expectation here was read off the baseline implementation rather
 than guessed, so the file is a characterization net: it locks in current
-behaviour, including the two quirks flagged in ``test_*_current_behaviour``.
+behaviour, including the quirk flagged in ``test_*_current_behaviour``.
 """
 import numpy as np
 import pyqtgraph as pg
 import pytest
 
-from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+from mf4_analyzer.ui.pg_canvas.analysis_axes import (
     _apply_axis_tick_density,
     _apply_neutral_axis_frame,
     _AUTO_CEILING_PCT,

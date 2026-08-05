@@ -71,12 +71,17 @@ Modify `mf4_analyzer/ui/pg_canvas/heatmap_canvas.py`(只动 import 区与删除�
 **Files:** Modify `mf4_analyzer/ui/pg_canvas/line_canvas.py`(仅 :35-44 一处);
 按 Task 0 Step 3 的审计结论,可能修改个别测试的 patch 目标。
 
-- [ ] **Step 1:** `from .heatmap_canvas import (...)` → `from .analysis_axes import (...)`。
-- [ ] **Step 2:** 审计清单里「patch heatmap 路径 + 行使 line 行为」的测试,把 patch
+- [x] **Step 1:** `from .heatmap_canvas import (...)` → `from .analysis_axes import (...)`。
+- [~] **Step 2:** 审计清单里「patch heatmap 路径 + 行使 line 行为」的测试,把 patch
   目标改为 `analysis_axes`;每处改动在 commit message 里逐条列出。
-- [ ] **Step 3:** 验证倒置消除:
+  → **空操作**:Task 0 Step 3 审计结论为全仓零 monkeypatch 命中,无测试需要改。
+  仅有的两处「引用 heatmap 路径 + 行使 line 行为」(`test_pg_line_canvas.py:1107`
+  与 `:2063`)是值绑定 import 而非 patch,经再导出解析到同一对象,按纪律不动。
+- [x] **Step 3:** 验证倒置消除:
   `grep "from .heatmap_canvas import" mf4_analyzer/ui/pg_canvas/line_canvas.py` → 空。
-- [ ] **Step 4:** Task 1 的测试文件把 import 改指 `analysis_axes`。
+  → 零命中。文件内仅剩 `:1756` 一处 docstring 文字引用(指向仍留在 heatmap 的
+  `_activate_graphics_layout`,叙述依然准确),不属于 import,不动。
+- [x] **Step 4:** Task 1 的测试文件把 import 改指 `analysis_axes`。
 
 Run: `PYTEST tests/ui/test_pg_line_canvas.py tests/ui/test_analysis_axes.py -q`
 
