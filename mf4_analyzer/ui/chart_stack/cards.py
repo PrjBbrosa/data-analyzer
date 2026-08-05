@@ -105,6 +105,24 @@ class _ChartCard(QWidget):
 
     def __init__(self, canvas, parent=None, annotations=False, chart_mode=''):
         super().__init__(parent)
+        lay = self._init_card_state(canvas, chart_mode)
+        self._build_toolbar(canvas)
+        self._wire_discovery_hooks(canvas)
+        self._wire_nudges(canvas)
+        self._style_toolbar()
+        self._build_toolbar_actions(annotations)
+        self._wire_toolbar_routing()
+        self._build_hint_bar()
+        self._activate_default_tool()
+        self._assemble_layout(lay, canvas)
+        self._build_overlays(chart_mode)
+
+    def _init_card_state(self, canvas, chart_mode):
+        """Seed card state and return the card's column layout.
+
+        The layout is handed back rather than stashed on ``self`` so the
+        assembly step stays the only place that fills it.
+        """
         self.setObjectName("chartCard")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -135,6 +153,9 @@ class _ChartCard(QWidget):
         self._hint_rotation_timer = QTimer(self)
         self._hint_rotation_timer.setSingleShot(True)
         self._hint_rotation_timer.timeout.connect(self._advance_context_hint)
+        return lay
+
+    def _build_toolbar(self, canvas):
         # Pick the pyqtgraph-aware shim for supported chart canvases. The shim
         # exposes the exact same six action keys + mode/pan/zoom surface so
         # downstream helpers (i18n, MDI icons, shortcuts, _find_action) keep
@@ -170,6 +191,8 @@ class _ChartCard(QWidget):
             raise TypeError(
                 f"unsupported canvas type for toolbar: {type(canvas).__name__}"
             )
+
+    def _wire_discovery_hooks(self, canvas):
         context_menu_requested = getattr(canvas, 'context_menu_requested', None)
         if context_menu_requested is not None:
             context_menu_requested.connect(
@@ -194,6 +217,8 @@ class _ChartCard(QWidget):
         slice_hint_requested = getattr(canvas, 'slice_hint_requested', None)
         if slice_hint_requested is not None:
             slice_hint_requested.connect(self._on_slice_hint_requested)
+
+    def _wire_nudges(self, canvas):
         # Refresh situational nudges when the data situation changes: a chart
         # rebuild (time: channel count / units / amplitude) or a render-time
         # colour-level rebase (heatmap: dead colour window). getattr-guarded so
@@ -202,6 +227,8 @@ class _ChartCard(QWidget):
             sig = getattr(canvas, sig_name, None)
             if sig is not None:
                 sig.connect(self._refresh_bottom_hint)
+
+    def _style_toolbar(self):
         self.toolbar.setObjectName("chartToolbar")
         self.toolbar.setIconSize(QSize(18, 18))
         for act in self.toolbar.actions():
@@ -225,6 +252,7 @@ class _ChartCard(QWidget):
             if first_action is not None else self.toolbar.addWidget(self._toolbar_leading_spacer)
         )
 
+    def _build_toolbar_actions(self, annotations):
         # Find Save BEFORE i18n changes labels (text is still 'Save' here);
         # the reference stays valid after relabel because we keep the QAction.
         save_act = _find_action(self.toolbar, 'save')
@@ -294,6 +322,7 @@ class _ChartCard(QWidget):
             )
             self._install_compact_clear_annotation_control_after(annotation_act)
 
+    def _wire_toolbar_routing(self):
         # Only pan/zoom toggling changes the hint; one-shot buttons don't.
         # Subclasses (TimeChartCard) listen to this same signal to flip the
         # axis-lock chip group enabled state.
@@ -305,6 +334,7 @@ class _ChartCard(QWidget):
             if name in ('pan', 'zoom'):
                 act.triggered.connect(self._on_nav_mode_toggled)
 
+    def _build_hint_bar(self):
         # Bottom hint bar. Sits BELOW the canvas so it does not jostle the
         # toolbar layout. The old static persistent label is RETIRED: the base
         # gestures are now the highest-weight, longest-dwell entries of the
@@ -366,6 +396,7 @@ class _ChartCard(QWidget):
         bar_lay.addWidget(self._hint_context, 1)
         bar_lay.addWidget(self._hint_discovery, 0)
 
+    def _activate_default_tool(self):
         # Default: activate the pan tool.
         mode = str(getattr(self.toolbar, 'mode', '')).lower()
         if 'pan' not in mode:
@@ -374,10 +405,12 @@ class _ChartCard(QWidget):
         # with the first hint's dwell, so no explicit fixed-interval start here.
         self._refresh_hint()
 
+    def _assemble_layout(self, lay, canvas):
         lay.addWidget(self.toolbar)
         lay.addWidget(canvas, stretch=1)
         lay.addWidget(self._hint_bar)
 
+    def _build_overlays(self, chart_mode):
         # Split-focus marker: a thin accent strip overlaid on the TOP of the
         # card, raised above the canvas. A QSS border on the card is unreliable
         # here — the full-bleed pyqtgraph canvas paints over it (observed: top

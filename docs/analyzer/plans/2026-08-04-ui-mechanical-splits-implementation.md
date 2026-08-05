@@ -139,11 +139,11 @@ Modify `mf4_analyzer/ui/chart_stack/cards.py`。
   (spec「新增测试」第 2 条):对每个 `chart_mode` 构造 `_ChartCard`
   (canvas 参数用与既有测试相同的构造方式,参考 `tests/ui/test_chart_stack.py`
   的夹具),快照子 widget 类名多重集 + 关键属性存在性。在**基线**上跑绿,单独 commit。
-- [ ] **Step 2:** 把 L106-404 按内部注释带切成 `_init_state` / `_build_chrome` /
+- [x] **Step 2:** 把 L106-404 按内部注释带切成 `_init_state` / `_build_chrome` /
   `_build_toolbar_routing` / `_wire_hint_rotation` / `_wire_discovery_hooks` /
   `_wire_nudges`(实际边界以代码注释块为准,方法名可据实调整),`__init__`
   按**原语句顺序**依次调用。逐条语句对照,禁止重排。
-- [ ] **Step 3:** 验证:特征测试必须原样绿;hint/nudge 行为测试全绿。
+- [x] **Step 3:** 验证:特征测试必须原样绿;hint/nudge 行为测试全绿。
 
 Run: `PYTEST tests/ui/test_chart_card_construction.py tests/ui/test_chart_stack.py tests/ui/test_hint_nudges.py tests/ui/test_nudge_card_surfacing.py -q`
 
