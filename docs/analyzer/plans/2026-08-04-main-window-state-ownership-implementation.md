@@ -116,15 +116,20 @@ Run: `PYTEST tests/ui/test_main_window_state_holders.py tests/ui/test_main_windo
 
 ## Task 6: 剩余多文件属性逐条处置 + 收尾
 
-- [ ] **Step 1:** 白名单剩余条目(约 8 条:`_active`、`_fc`、`files`、
-  `_project_path`、`_blf_dbc_history`、`view_manager`、`_analysis_restore_pending`、
-  `_applying_analysis_view`,以实测为准)逐条写处置结论:本包迁移 / 留待时域
-  抽取时处理 / 属合理共享(说明为何)。**目标 ≤8 条,不强求归零**。
-- [ ] **Step 2:** `PYTEST tests/ui/ -q` 全量,对比 Task 0 基线,差异为空
-  (新增测试除外)。
-- [ ] **Step 3:** 真机验收:spec 验收第 4 条的完整操作链,逐步核对。
-- [ ] **Step 4:** PR 描述:inventory 全表、白名单变化(17 → N)、垫片清单、
-  Task 4 决策记录;并注明「时域模块抽取的启动条件已/未达成」。
+- [x] **Step 1:** 白名单剩余条目(实测 7 条;`view_manager` 属误计不在其中)逐条写
+  处置结论:本包迁移 / 留待时域抽取时处理 / 属合理共享(说明为何)。
+  **目标 ≤8 条,不强求归零**。
+  → 又迁 `_applying_analysis_view`(归 `AnalysisMixin` 类属性),**剩 6 条**;
+  逐条结论见 inventory §5,六条同属「文件/工程会话身份」簇。
+- [x] **Step 2:** `PYTEST tests/ui/ -q` 全量,对比 Task 0 基线,差异为空
+  (新增测试除外)。→ `2 failed, 2990 passed`,失败集与基线**逐条一致**,
+  新增 76 条全绿。另核对 `tests/` 非 ui 部分的 4 条红同为基线既有
+  (已用基线包代码复跑确认)。
+- [~] **Step 3:** 真机验收:**本 agent 按指派跳过**——不启动 GUI,不拿 offscreen
+  冒充真机(CLAUDE.md 明令)。改为交付「待人工真机验收清单」,由人执行。
+- [x] **Step 4:** PR 描述:inventory 全表、白名单变化(**16 → 6**,基线实测 16 而非
+  spec 所称 17)、垫片清单(inventory §6b)、Task 4 决策记录(§4d);
+  并注明「时域模块抽取的启动条件已达成」(白名单 6 ≤ 8)。
 
 ## 明确禁止
 
