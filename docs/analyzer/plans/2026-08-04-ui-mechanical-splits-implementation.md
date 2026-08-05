@@ -19,7 +19,7 @@
 
 ## Task 0: 锚点核验 + 基线采集
 
-- [ ] **Step 1:** 核验 spec 锚点,任何一条失配 → **停止并回报**,不要凭猜测继续:
+- [x] **Step 1:** 核验 spec 锚点,任何一条失配 → **停止并回报**,不要凭猜测继续:
   - `grep -n "^class \|^def \|^INTERNAL" mf4_analyzer/ui/widgets/__init__.py`
     应与 spec D-A1 表格一致(:42/:45/:52/:76/:80/:111/:284/:463/:1624/:1670)。
   - `grep -n "^class " mf4_analyzer/ui/dialogs.py` 应为 :54/:614/:642 三类。
@@ -28,9 +28,22 @@
   - `mf4_analyzer/ui/chart_stack/cards.py` 中 `_ChartCard.__init__` 为 L106-404。
   - 重跑 spec 兼容面的三条 grep(ui.widgets / ui.dialogs / BLF 符号外部引用),
     确认消费者清单未变。
-- [ ] **Step 2:** 跑基线并存档失败集:
+- [x] **Step 2:** 跑基线并存档失败集:
   `PYTEST tests/ui/ -q > docs/analyzer/verify/ui-splits-baseline-ui.txt 2>&1 || true`
   `PYTEST tests/test_blf_loader.py tests/test_blf_dbc_candidates.py tests/test_batch_loader_dispatch.py -q`
+
+**核验结果(2026-08-06,`main` @ `b886a30e`):**
+
+- 行号锚点全部命中:A1 的 :42/:45/:52/:76/:80/:111/:284/:463/:1624/:1670、A2 的
+  :54/:614/:642、A4 的 `_ChartCard.__init__` L106-404、A3 的 BLF 区间 L148-514
+  (`@dataclass` 装饰器在 148;spec 写「8 个函数」,实为 10 个——多出
+  `_emit_progress`:186 与 `_numeric_decoded_values`:329,均在区间内且仓库内无外部引用)。
+- A3 额外公开门面方法:`probe_blf_dbc_frames`(:533)、`load_blf_frames`(:544)。
+- **基线失败集(2 条,与 CLAUDE.md 里「`test_split_*` 全红」的旧描述不符——那批已转绿):**
+  - `tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference`
+  - `tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action`
+  - 计数:`2 failed, 2914 passed, 1 deselected`。
+- **A1 兼容面核验失配 → A1 已停止,见下方 Task A1 的「停止说明」。**
 
 ---
 
@@ -38,6 +51,39 @@
 
 **Files:** Create `mf4_analyzer/ui/widgets/{_swatches,channel_tree,stats,toast}.py`;
 Modify `mf4_analyzer/ui/widgets/__init__.py`;Create `tests/ui/test_widgets_misc.py`。
+
+> **停止说明(2026-08-06):A1 未执行,零代码改动。**
+>
+> Task 0 Step 1 的兼容面复查发现 spec 的「已核实的兼容面」清单不完整:除了纯 import
+> 消费者,还有 **4 处把 `mf4_analyzer.ui.widgets` 当作 monkeypatch 命名空间**的用法。
+> 其中一处与 D-A1 的搬迁方案**语义冲突**,不是靠扩充再导出清单能解决的:
+>
+> - `tests/ui/test_color_swatch_hidpi.py:44-47`
+>   `test_swatch_default_path_picks_up_device_ratio`:
+>   ```python
+>   import mf4_analyzer.ui.widgets as widgets_mod
+>   monkeypatch.setattr(widgets_mod, "icon_device_pixel_ratio", lambda: 2.0)
+>   pix = widgets_mod._swatch_pixmap("#abcdef")
+>   assert pix.devicePixelRatioF() == 2.0
+>   ```
+>   该用例patch 的是 **`ui.widgets` 模块命名空间里的 `icon_device_pixel_ratio`**,
+>   依赖 `_swatch_pixmap.__globals__` 就是 `ui.widgets`。D-A1 把 `_swatch_pixmap`
+>   移进 `_swatches.py` 后,它的 globals 变成 `ui.widgets._swatches`,patch 不再可见
+>   → 断言必失败。再导出 `icon_device_pixel_ratio` 也救不了(patch 的是 `__init__`
+>   的名字,函数读的是 `_swatches` 的名字)。基线该文件 **7 passed**,属于会被改红的既有测试。
+> - `scripts/channel_dot_size_preview.py:43-44` 同样模式(重绑 `widgets_mod._swatch_icon`
+>   期望 `MultiFileChannelWidget` 看得见),搬迁后会静默失效——不是测试,但同样是回归。
+> - 另 3 处仅需 `__init__` 保留属性即可(patch 的是类/模块对象自身属性,全局生效):
+>   `tests/ui/test_hints.py:365`(`ui.widgets.hints.mark_discovered`)、
+>   `tests/ui/test_hints.py:370` 与 `tests/ui/test_channel_widget.py:98`
+>   (`ui.widgets.QMenu.exec_`)、`tests/ui/test_file_navigator.py:279`
+>   (`ui.widgets.QMessageBox.question`)⇒ 再导出清单还须含 `hints`、`QMenu`、`QMessageBox`。
+>
+> 按全局约束「外部 import 路径零改动 / 纯移动 / 不改既有测试」,A1 无法在不动
+> `test_color_swatch_hidpi.py` 的前提下达成。**需 spec 作者裁决**,可选方向:
+> (a) `_swatches.py` 只放 `_fmt_rate`/`_swatch_icon`,`_swatch_pixmap` 留在 `__init__`;
+> (b) 允许改这一个用例改用 `_swatches` 模块作为 patch 目标(超出「纯移动」);
+> (c) A1 整体降级为「只拆 `channel_tree` / `stats` / `toast`,`_swatches` 不拆」。
 
 - [ ] **Step 1(先补测试,红→绿在基线上完成):** 写 `tests/ui/test_widgets_misc.py`
   (spec「新增测试」第 1 条:Toast 显示/自隐/重复调用、StatsStrip 文本与空值、
