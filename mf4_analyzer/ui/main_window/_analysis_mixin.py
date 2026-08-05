@@ -18,6 +18,7 @@ from PyQt5.QtCore import QTimer
 
 from ... import db_reference
 from ..compute_feedback import summarize_compute
+from .analysis_context import AnalysisContext
 
 
 # dB-reference-defaults Task 5 (spec §8.2 source tokens). Presentation-only
@@ -54,19 +55,17 @@ def _format_db_reference_source_line(resolution):
 
 
 class AnalysisMixin:
+    # -- helpers delegated to AnalysisContext (spec D-E1) ------------------
+    # These bodies moved verbatim onto ``analysis_context.AnalysisContext``,
+    # which takes its collaborators as named constructor arguments and is
+    # therefore unit-testable without a MainWindow.  The method names stay
+    # here so the MRO and all three calling mixins are untouched.
+
     def _analysis_ctx(self, section):
-        return {
-            'fft': self.inspector.fft_ctx,
-            'fft_time': self.inspector.fft_time_ctx,
-            'order': self.inspector.order_ctx,
-        }[section]
+        return self._analysis_context.section_ctx(section)
 
     def _analysis_page(self, section):
-        return {
-            'fft': self.chart_stack.page_fft,
-            'fft_time': self.chart_stack.page_fft_time,
-            'order': self.chart_stack.page_order,
-        }[section]
+        return self._analysis_context.page(section)
 
     def _emit_compute_feedback(self, outcome, *, busy=False, section_label="计算"):
         res = summarize_compute(
@@ -257,29 +256,16 @@ class AnalysisMixin:
     # -- source routing (Step 4) ----------------------------------------
     @staticmethod
     def _normalize_analysis_time_range(value):
-        if not value:
-            return None
-        try:
-            lo = float(value[0])
-            hi = float(value[1])
-        except (TypeError, ValueError, IndexError):
-            return None
-        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
-            return None
-        return (lo, hi)
+        return AnalysisContext.normalize_time_range(value)
 
     def _mask_time_range(self, t, *arrays, time_range=None):
-        rng = self._normalize_analysis_time_range(time_range)
-        if rng is None or t is None:
-            return (t, *arrays)
-        lo, hi = rng
-        mask = (t >= lo) & (t <= hi)
-        masked = [arr[mask] for arr in arrays]
-        return (t[mask], *masked)
+        return self._analysis_context.mask_time_range(
+            t, *arrays, time_range=time_range
+        )
 
     @staticmethod
     def _analysis_section_uses_time_range(section):
-        return section in {"fft", "fft_time", "order"}
+        return AnalysisContext.section_uses_time_range(section)
 
     def _capture_analysis_time_range(self, section, state, pane_idx=None):
         if not self._analysis_section_uses_time_range(section):
@@ -321,18 +307,7 @@ class AnalysisMixin:
         top.set_range_from_span(*rng)
 
     def _pane_time_range_for(self, section, pane_idx=None):
-        if not self._analysis_section_uses_time_range(section):
-            return None
-        mgr = self.analysis_managers[section]
-        state = mgr.get(mgr.active)
-        if pane_idx is None:
-            page = self._analysis_page(section)
-            pane_idx = page.focused_index()
-        if not (0 <= int(pane_idx) < len(state.panes)):
-            return None
-        return self._normalize_analysis_time_range(
-            state.panes[int(pane_idx)].time_range
-        )
+        return self._analysis_context.pane_time_range_for(section, pane_idx)
 
     def _capture_analysis_sources(self, section, state, pane_idx=None):
         if section == 'fft' and getattr(self, '_opening_project', False):
@@ -648,42 +623,7 @@ class AnalysisMixin:
     # sync with the focused pane's source + the shared catalog service.
 
     def _channel_reference_facts(self, fid, ch):
-        """Build a :class:`~mf4_analyzer.db_reference.ChannelReferenceFacts`
-        for one ``(fid, ch)`` source, reading ONLY ``FileData`` metadata --
-        never a sample array (docs/lessons-learned/signal-processing/
-        2026-06-22-head-calibration-is-metadata-not-sample-gain.md). Missing/
-        unknown ``(fid, ch)`` and malformed metadata both degrade to empty/
-        unvalidated facts rather than raising -- the resolver (spec §7 R3)
-        is responsible for treating an invalid ``metadata_reference`` as
-        absent and falling through to the catalog."""
-        fd = self.files.get(fid) if fid is not None else None
-        if fd is None or ch is None:
-            return db_reference.ChannelReferenceFacts(quantity="", unit="")
-        ch_meta = (getattr(fd, "channel_metadata", None) or {}).get(ch) or {}
-        unit = (
-            ch_meta.get("unit")
-            or (getattr(fd, "channel_units", None) or {}).get(ch, "")
-            or ""
-        )
-        # Reverse toolchain identifier-safe unit encoding (U_ prefix, Y for /)
-        # at the facts boundary so both catalog matching and the displayed unit
-        # get the clean form -- e.g. U_Nm -> Nm, U_degYsec -> deg/sec, and a
-        # same-encoded vibration unit mYs2 -> m/s2 re-hits the ISO catalog
-        # instead of silently falling to generic. normalize_unit is untouched.
-        unit = db_reference.canonicalize_source_unit(unit)
-        quantity = ch_meta.get("quantity") or ""
-        metadata_reference = ch_meta.get("db_reference")
-        is_audio_source_fn = getattr(fd, "is_audio_source", None)
-        try:
-            is_audio = bool(is_audio_source_fn()) if callable(is_audio_source_fn) else False
-        except Exception:
-            is_audio = False
-        return db_reference.ChannelReferenceFacts(
-            quantity=str(quantity),
-            unit=str(unit),
-            metadata_reference=metadata_reference,
-            is_audio_source=is_audio,
-        )
+        return self._analysis_context.channel_reference_facts(fid, ch)
 
     def _focused_source_for_section(self, section):
         """The ``(fid, ch)`` the section's Inspector control should resolve
@@ -719,21 +659,8 @@ class AnalysisMixin:
         snapshot. Both branches read the SAME snapshot/control so this and
         :meth:`_resolve_and_apply_db_reference` can never silently drift
         apart on the resolution rule itself."""
-        control = self._analysis_ctx(section).db_reference_control
-        mode = control.mode()
-        facts = (
-            self._channel_reference_facts(*source) if source
-            else db_reference.ChannelReferenceFacts(quantity="", unit="")
-        )
-        snapshot = self.db_reference_store.snapshot()
-        manual_value = control.editor.value() if mode == 'manual' else None
-        return db_reference.resolve_db_reference(
-            mode=mode,
-            manual_value=manual_value,
-            facts=facts,
-            user_catalog=snapshot.user_catalog,
-            system_catalog=snapshot.system_catalog,
-            prefer_channel_metadata=snapshot.prefer_channel_metadata,
+        return self._analysis_context.resolve_db_reference_for_source(
+            section, source
         )
 
     def _stamp_db_reference_nudge_facts(self, section):

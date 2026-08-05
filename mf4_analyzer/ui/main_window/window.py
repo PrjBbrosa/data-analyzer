@@ -129,6 +129,19 @@ class MainWindow(
         )
         self._init_ui()
         self._init_channel_scope()
+        # D-E1: the cross-section analysis helpers get their collaborators
+        # injected by name instead of reaching through `self`.  Built after
+        # _init_ui() because inspector / chart_stack / analysis_managers are
+        # created there.  `files` is passed as a provider: the attribute is
+        # rebound on project open/close, so a captured mapping would go stale.
+        from .analysis_context import AnalysisContext
+        self._analysis_context = AnalysisContext(
+            inspector=self.inspector,
+            chart_stack=self.chart_stack,
+            analysis_managers=self.analysis_managers,
+            db_reference_store=self.db_reference_store,
+            files_provider=lambda: self.files,
+        )
         from functools import partial
         from .fft_time_coordinator import (
             FftTimeCoordinator,

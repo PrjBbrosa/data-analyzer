@@ -109,6 +109,50 @@ spec「问题本质」称 17 条多文件赋值属性。**实测 16 条。**
 - `ui/view_bridge.py` 用 `getattr(window, "_custom_xaxis_spec", None)` 形式读,
   垫片同样覆盖;且该文件在 `main_window/` 之外,不受棘轮扫描。
 
+## 4b. Task 2 决策:`AnalysisContext` 只收 D-E1 七法中的四法
+
+计划写「七个方法体逐字迁入」。实测后**迁入 4 个、留下 3 个**,理由逐条如下。
+判据是「该方法的依赖能否表达为具名协作者」——能,就迁;需要注入一把
+window 方法回调,就等于变相注入整个 window(计划明令禁止),不迁。
+
+**迁入(8 个成员,含 4 个支撑用的私有 helper):**
+
+| `AnalysisContext` 成员 | 原名 | 依赖(构造注入) |
+| --- | --- | --- |
+| `section_ctx` | `_analysis_ctx` | `inspector` |
+| `page` | `_analysis_page` | `chart_stack` |
+| `section_uses_time_range` | `_analysis_section_uses_time_range` | 无(纯函数) |
+| `normalize_time_range` | `_normalize_analysis_time_range` | 无(纯函数) |
+| `mask_time_range` | `_mask_time_range` | 无(纯函数) |
+| `pane_time_range_for` | `_pane_time_range_for` | `analysis_managers` + `chart_stack` |
+| `channel_reference_facts` | `_channel_reference_facts` | `files_provider` |
+| `resolve_db_reference_for_source` | `_resolve_db_reference_for_source` | `inspector` + `db_reference_store` + 上一行 |
+
+`files` 用**零参 provider** 注入而非直接传映射:该属性会被重新绑定
+(工程开/关,以及 `tests/ui/test_inspector.py` 里的 `win.files = {}`),
+直接持有引用会拿到过期字典。其余四个协作者在 `__init__` 里只赋值一次,直接传引用。
+
+**留在 `AnalysisMixin`(逐条理由):**
+
+1. `_analysis_cache_key` —— 依赖闭包穿透到三个分区 mixin 自有的算法
+   (`_fft_analysis_cache_key`、`_order_effective_params_for_source`、
+   `_fft_time_effective_params_for_source`……),迁入需注入约 7 个 window 绑定
+   callable。**更硬的约束:** `tests/ui/test_task4_cache_invalidation.py` 建了
+   `class _StubMW(FFTTimeMixin, AnalysisMixin)`,靠**覆写** `_pane_time_range_for`
+   来驱动 `_analysis_cache_key` 的回退分支——它依赖普通 `self.` 分派,
+   迁进协作对象就直接失效。
+2. `_capture_active_analysis_view` —— 转调 `_capture_analysis_sources`,后者读
+   `_opening_project`(window 自有守卫)并调 `_sync_fft_source_summary`
+   (window 的 UI 更新方法)。属编排,不属可复用逻辑。
+3. `_emit_compute_feedback` —— 只是把 `summarize_compute` 的结果打到
+   `toast` + `statusBar` 两个 window UI 出口。纯表现层管道,迁入只会多两个
+   注入回调,换不到任何可测性(`summarize_compute` 本身已可单测)。
+
+**兑现的收益:** `tests/ui/test_analysis_context.py` 41 条用例**不构造
+MainWindow、不需要 Qt**,0.82 s 跑完(经 MainWindow 时是 2.87 s)。
+spec 点名的三项纯逻辑里,时间范围掩码与 dB 参考解析已脱离 MainWindow;
+缓存键因上述测试契约留在原处。
+
 ## 5. Task 6 剩余条目逐条处置结论
 
 由 Task 6 填写。

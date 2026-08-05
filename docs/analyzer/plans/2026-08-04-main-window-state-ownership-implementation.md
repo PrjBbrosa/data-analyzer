@@ -49,20 +49,20 @@ Run: `PYTEST tests/ui/test_main_window_state_ownership.py -q`
 **Files:** Create `mf4_analyzer/ui/main_window/analysis_context.py`、
 `tests/ui/test_analysis_context.py`;Modify `_analysis_mixin.py`、`window.py`。
 
-- [ ] **Step 1(单测先行):** 对七个服务方法先写 `test_analysis_context.py`
+- [x] **Step 1(单测先行):** 对七个服务方法先写 `test_analysis_context.py`
   ——**当前先经由 MainWindow 调用**取得基线行为(时间掩码边界、缓存键对
   参数变化的区分度、dB 参考回退链),期望值实测固化。基线跑绿,commit。
-- [ ] **Step 2:** 创建 `AnalysisContext`(普通类或 QObject,依是否需要信号定,
+- [x] **Step 2:** 创建 `AnalysisContext`(普通类或 QObject,依是否需要信号定,
   参考 `FftTimeCoordinator`):七个方法体**逐字迁入**,`self.<依赖>` 改为构造
   注入的显式字段(inspector / analysis_managers / chart_stack /
   `_analysis_view_cache` 等,以方法体实际触碰为准,逐个列举,禁止整个
   window 注入——那等于没拆)。
-- [ ] **Step 3:** `window.__init__` 构造 `self._analysis_ctx`;`AnalysisMixin`
+- [x] **Step 3:** `window.__init__` 构造 `self._analysis_ctx`;`AnalysisMixin`
   七个方法改一行委托。**调用方(三个分析 mixin)零改动。**
-- [ ] **Step 4:** `test_analysis_context.py` 改为直接构造 `AnalysisContext`
+- [x] **Step 4:** `test_analysis_context.py` 改为直接构造 `AnalysisContext`
   (伪造最小依赖),断言与 Step 1 相同的期望值;确认文件内无
   `import MainWindow`。
-- [ ] **Step 5:** 验证。
+- [x] **Step 5:** 验证。→ 全量 `tests/ui/` 失败集与基线一致(2 failed, 2960 passed)。
 
 Run: `PYTEST tests/ui/test_analysis_context.py tests/ui/test_main_window_state_ownership.py -q && PYTEST <CORE> -q`
 
