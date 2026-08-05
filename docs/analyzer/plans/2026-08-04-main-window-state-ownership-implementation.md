@@ -35,11 +35,12 @@
 
 **Files:** Create `tests/ui/test_main_window_state_ownership.py`
 
-- [ ] **Step 1:** 按 spec D-E0 实现(参考
+- [x] **Step 1:** 按 spec D-E0 实现(参考
   `tests/ui/test_pg_canvas_backref_invariants.py` 的 AST 手法)。白名单 = Task 0
   Step 1 实测集合,按属性名排序、每条注释「当前赋值文件」。
-- [ ] **Step 2:** 基线跑绿,commit。此后每个迁移任务的收尾动作都是「从白名单
-  删条目 + 本测试转绿」。
+  → 扫描限定 `MainWindow` + `*Mixin` 类,`FftTimeCoordinator` 等协作类不计入。
+- [x] **Step 2:** 基线跑绿,commit。此后每个迁移任务的收尾动作都是「从白名单
+  删条目 + 本测试转绿」。→ 16 条白名单,5 passed。
 
 Run: `PYTEST tests/ui/test_main_window_state_ownership.py -q`
 
