@@ -27,7 +27,9 @@ class ChannelScopeMixin:
         return _preset_settings()
 
     def _init_channel_scope(self):
-        self._restoring_project = False
+        # `_restoring_project` is ProjectIOMixin's guard; this mixin only reads
+        # it (see `_should_skip_auto_attach`). Its default now lives with its
+        # owner as a class attribute, so exactly one file writes it.
         settings = self._channel_scope_settings()
         raw = settings.value(AUTO_ATTACH_SETTINGS_KEY, True)
         if isinstance(raw, bool):

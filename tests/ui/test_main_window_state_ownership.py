@@ -60,13 +60,6 @@ MAIN_WINDOW_ROOT = (
 # THIS SET MAY ONLY SHRINK.  Adding an entry means a new piece of MainWindow
 # state escaped its owner; fix the code, not the whitelist.
 FROZEN_MULTI_FILE_STATE: dict[str, tuple[str, ...]] = {
-    # -- progress tokens / restore guard (Task 5) ---------------------------
-    "_analysis_progress_tokens": (
-        "_fft_time_mixin.py",
-        "_order_mixin.py",
-        "window.py",
-    ),
-    "_restoring_project": ("_channel_scope_mixin.py", "_project_io_mixin.py"),
     # -- file/session identity; dispositions recorded in Task 6 -------------
     "_active": ("_project_io_mixin.py", "window.py"),
     "_analysis_restore_pending": ("_project_io_mixin.py", "window.py"),

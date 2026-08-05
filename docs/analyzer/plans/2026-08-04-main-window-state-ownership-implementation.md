@@ -105,12 +105,13 @@ Run: `PYTEST tests/ui/test_main_window_state_holders.py tests/ui/test_main_windo
 **Files:** Modify `window.py`、`_order_mixin.py`、`_fft_time_mixin.py`、
 `_project_io_mixin.py`、`_channel_scope_mixin.py`。
 
-- [ ] **Step 1:** `_analysis_progress_tokens` 三处赋值收进 `AnalysisJobService`
+- [x] **Step 1:** `_analysis_progress_tokens` 三处赋值收进 `AnalysisJobService`
   (它已存在,加最小接口:发放/失效/查询令牌);两个分析 mixin 改调服务方法。
-  白名单删 1 条。
-- [ ] **Step 2:** `_restoring_project`:归 `ProjectIOMixin` 单独持有(或 guard
-  对象),`_channel_scope_mixin` 改为只读查询。白名单删 1 条。
-- [ ] **Step 3:** 验证:
+  白名单删 1 条。→ 9 → 8。
+- [x] **Step 2:** `_restoring_project`:归 `ProjectIOMixin` 单独持有(或 guard
+  对象),`_channel_scope_mixin` 改为只读查询。白名单删 1 条。→ 8 → 7。
+  实现:默认值改为 `ProjectIOMixin` 的**类属性**,实例写入只剩守卫那一处。
+- [x] **Step 3:** 验证:→ 100 passed;CORE 267 passed。
   `PYTEST tests/ui/test_compute_progress_integration.py tests/ui/test_project_session.py tests/ui/test_main_window_state_ownership.py -q && PYTEST <CORE> -q`
 
 ## Task 6: 剩余多文件属性逐条处置 + 收尾

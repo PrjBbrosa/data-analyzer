@@ -120,10 +120,6 @@ class MainWindow(
             self._blf_dbc_history = []
         from ..analysis_jobs import AnalysisJobService
         self._analysis_jobs = AnalysisJobService(self)
-        # UI-only tokens remain owned by the window. Queueing, worker lifetime,
-        # total/completed accounting, and cancellation all belong to the shared
-        # service.
-        self._analysis_progress_tokens = {}
         self._last_batch_preset = None
         self._acquisition_cockpit_window = None
         # dB-reference-defaults Task 5: MainWindow owns the ONE shared
@@ -199,6 +195,19 @@ class MainWindow(
     @_custom_xlabel.setter
     def _custom_xlabel(self, value):
         self._custom_xaxis.xlabel = value
+
+    # -- compatibility shim for the section progress tokens (spec D-E2) ----
+    # The tokens now live on AnalysisJobService, whose batch lifetime they
+    # follow. This keeps the old dict-shaped access working for tests that
+    # poke individual sections.
+
+    @property
+    def _analysis_progress_tokens(self):
+        return self._analysis_jobs.progress_tokens
+
+    @_analysis_progress_tokens.setter
+    def _analysis_progress_tokens(self, value):
+        self._analysis_jobs.progress_tokens = value
 
     # -- compatibility shims for the View-focus holder (spec D-E2) ---------
 

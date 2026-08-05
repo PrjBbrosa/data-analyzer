@@ -66,6 +66,12 @@ class ProjectIOMixin:
     namespace, which the window module owns.
     """
 
+    #: Set while a project restore is in flight. ChannelScopeMixin reads it to
+    #: suppress auto-attach, but only this mixin writes it -- the default lives
+    #: here as a class attribute so the guard has exactly one owning file
+    #: (spec D-E2).
+    _restoring_project = False
+
     def open_files_or_project(self):
         """统一打开入口：文件对话框同时接受数据文件和 .tlproj。"""
         import sys as _sys

@@ -100,6 +100,34 @@ class AnalysisJobService(QObject):
         self._worker_runs: dict[int, _ActiveRun] = {}
         self._thread_runs: dict[int, _ActiveRun] = {}
         self._shutting_down = False
+        # The UI progress token for each section's in-flight batch. Owned here
+        # rather than on MainWindow because its lifetime is exactly a batch's
+        # lifetime, which this service already governs -- previously the two
+        # analysis mixins each reached into a dict on the window (spec D-E2).
+        self._progress_tokens: dict[str, object] = {}
+
+    # -- per-section UI progress tokens -------------------------------------
+
+    @property
+    def progress_tokens(self) -> dict[str, object]:
+        """Live section -> token mapping (mutating it is supported)."""
+        return self._progress_tokens
+
+    @progress_tokens.setter
+    def progress_tokens(self, value) -> None:
+        self._progress_tokens = dict(value or {})
+
+    def set_progress_token(self, section: str, token):
+        """Record ``section``'s progress token and return it."""
+        self._progress_tokens[section] = token
+        return token
+
+    def progress_token(self, section: str):
+        return self._progress_tokens.get(section)
+
+    def clear_progress_token(self, section: str):
+        """Drop ``section``'s token, returning whatever was there."""
+        return self._progress_tokens.pop(section, None)
 
     def submit(self, section: str, job: Job, ctx=None, *, replace: bool = False):
         """Queue ``job`` under ``section`` and return after starting if idle.
