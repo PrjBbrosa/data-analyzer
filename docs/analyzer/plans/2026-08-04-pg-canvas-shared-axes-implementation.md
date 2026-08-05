@@ -40,10 +40,11 @@
 
 **Files:** Create `tests/ui/test_analysis_axes.py`
 
-- [ ] **Step 1:** 按 spec D-B3 的用例清单编写,**当前先 import 自 `heatmap_canvas`**,
+- [x] **Step 1:** 按 spec D-B3 的用例清单编写,**当前先 import 自 `heatmap_canvas`**,
   文件头注释注明「Task 2 落地后 import 改指 `analysis_axes`」。
   断言值以基线实测为准(先跑一次函数看真实输出再固化,不要凭直觉写期望值)。
-- [ ] **Step 2:** 跑绿,单独 commit。
+  → 53 条用例,全部期望值由基线探针实测固化。
+- [x] **Step 2:** 跑绿,单独 commit。→ 53 passed。
 
 Run: `PYTEST tests/ui/test_analysis_axes.py -q`
 
