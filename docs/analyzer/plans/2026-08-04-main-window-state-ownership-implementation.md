@@ -89,12 +89,14 @@ Run: `PYTEST tests/ui/test_main_window_state_holders.py tests/ui/test_main_windo
 
 **Files:** Modify `window.py`、`_view_mixin.py`;可能 Modify `ui/view_state.py`。
 
-- [ ] **Step 1(决策步):** 读 `view_manager`(`ui/view_state.py`)现状,判断
+- [x] **Step 1(决策步):** 读 `view_manager`(`ui/view_state.py`)现状,判断
   `_primary/_secondary/_focused_view_idx` 并入它是否自然(它是否已管理 View
   生命周期与索引)。**把决策与理由写进 inventory 文档**;不自然则用
   `_state_holders.py` 的 `ViewFocusState`。
-- [ ] **Step 2:** 迁移读写 + 垫片(同 Task 3 手法);白名单删 3 条。
-- [ ] **Step 3:** 验证,重点分屏/焦点/12-View 相关:
+  → **决定不并入 `ViewManager`**,改用 `ViewFocusState`;三条理由见 inventory §4d。
+- [x] **Step 2:** 迁移**写**点 + 垫片(同 Task 3 手法);白名单删 3 条。→ 12 → 9。
+- [x] **Step 3:** 验证,重点分屏/焦点/12-View 相关:→ 78 passed;CORE 267 passed。
+  **真机抽查改为交人工清单**(见最终报告),本 agent 不启动 GUI。
   `PYTEST tests/ui/test_view_switch_integration.py tests/ui/test_view_channel_scope.py tests/ui/test_main_window_state_ownership.py -q && PYTEST <CORE> -q`
   注意 CLAUDE.md:View 溢出/tab 压缩/拖拽重排是产品约束,真机抽查一次。
 

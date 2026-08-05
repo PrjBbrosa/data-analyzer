@@ -171,6 +171,35 @@ Task 0 §4 的结论因此要修正一句:「写点只在真 MainWindow 上执�
 ——`_apply_xaxis` 就是反例。判断依据应是「该方法是否被假对象直接调用」,
 而不是「它是不是 mixin 方法」。
 
+## 4d. Task 4 Step 1 决策记录:不并入 `ViewManager`,新建 `ViewFocusState`
+
+**决策:三个索引归 `_state_holders.ViewFocusState`,`ui/view_state.py` 不改。**
+
+先看现状:`_view_mixin._sync_pane_bindings_from_manager` 每次都把
+`_primary_view_idx` / `_secondary_view_idx` 直接赋成 `view_manager.active` /
+`view_manager.split_with`——这两个**本来就是 manager 的派生镜像**;
+真正自有的只有 `_focused_view_idx`(两个绑定分栏里用户最后点了哪个),
+它无法从 manager 推出。
+
+不并入 `ViewManager` 的三条理由:
+
+1. **`ViewManager` 是四个实例共用的类。** 时域工作区一个
+   (`window.py:321`,`max_views=12`),FFT / FFT-vs-Time / Order 各一个
+   (`chart_stack/stack.py:127-131`,`MAX_VIEWS=6`)。但「主/副分栏 + 分栏焦点」
+   只有时域工作区有;三个分析分区的分栏焦点走的是
+   `page.focused_index()`,完全另一套。把焦点字段塞进 `ViewManager`,
+   等于给三个用不上它的实例强行挂概念。
+2. **派生镜像不该塞回真值源。** `primary`/`secondary` 是 manager 状态的投影,
+   放进 manager 自身只会制造两份真相;放进持有者反而能把「投影」这件事
+   显式写成 `bind()`。
+3. **`ViewManager` 会被序列化。** `_split_pairs` 进 `ProjectDocument`
+   (`_project_io_mixin.py:1248-1258`)。焦点是纯瞬时 UI 状态,
+   混进去有泄漏到工程文件的风险。
+
+`ViewFocusState.bind(active=, partner=)` 逐字复刻原来的四行逻辑,并把
+「焦点不能滞留在已不显示的分栏上」这条不变量收进持有者(原来散在
+`_sync_pane_bindings_from_manager` 里,靠一个 `not in (active, partner)` 判断)。
+
 ## 5. Task 6 剩余条目逐条处置结论
 
 由 Task 6 填写。

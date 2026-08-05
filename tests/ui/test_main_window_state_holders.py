@@ -11,7 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from mf4_analyzer.ui.main_window._state_holders import KEEP, CustomXAxisState
+from mf4_analyzer.ui.main_window._state_holders import (
+    KEEP,
+    CustomXAxisState,
+    ViewFocusState,
+)
 from mf4_analyzer.ui.time_xaxis import (
     CHANNEL_MODE,
     EXACT_SOURCE,
@@ -124,6 +128,61 @@ def test_keep_sentinel_is_not_a_plausible_label():
     assert KEEP is not None and not isinstance(KEEP, str)
 
 
+# -- ViewFocusState ----------------------------------------------------------
+
+def test_view_focus_starts_unbound():
+    state = ViewFocusState()
+
+    assert (state.primary, state.secondary, state.focused) == (None, None, None)
+
+
+def test_bind_without_a_partner_focuses_the_active_view():
+    state = ViewFocusState()
+
+    state.bind(active=2, partner=None)
+
+    assert (state.primary, state.secondary, state.focused) == (2, None, 2)
+
+
+def test_bind_mirrors_the_split_pair():
+    state = ViewFocusState()
+
+    state.bind(active=0, partner=3)
+
+    assert (state.primary, state.secondary) == (0, 3)
+
+
+def test_bind_keeps_focus_on_the_secondary_pane_when_it_is_still_bound():
+    """Re-binding on an unrelated manager change must not steal focus back."""
+    state = ViewFocusState()
+    state.bind(active=0, partner=3)
+    state.focused = 3
+
+    state.bind(active=0, partner=3)
+
+    assert state.focused == 3
+
+
+def test_bind_recovers_focus_when_the_focused_view_leaves_the_pair():
+    state = ViewFocusState()
+    state.bind(active=0, partner=3)
+    state.focused = 3
+
+    state.bind(active=0, partner=5)
+
+    assert state.focused == 0
+
+
+def test_leaving_split_pulls_focus_back_to_the_active_view():
+    state = ViewFocusState()
+    state.bind(active=0, partner=3)
+    state.focused = 3
+
+    state.bind(active=0, partner=None)
+
+    assert (state.secondary, state.focused) == (None, 0)
+
+
 # -- MainWindow compatibility shims ------------------------------------------
 
 @pytest.fixture
@@ -175,3 +234,27 @@ def test_getattr_with_a_default_still_sees_the_holder(win):
     win._custom_xaxis.ch = "motor_speed"
 
     assert getattr(win, "_custom_xaxis_ch", None) == "motor_speed"
+
+
+@pytest.mark.parametrize(
+    "attr, holder_field",
+    [
+        ("_primary_view_idx", "primary"),
+        ("_secondary_view_idx", "secondary"),
+        ("_focused_view_idx", "focused"),
+    ],
+)
+def test_view_focus_shims_round_trip(win, attr, holder_field):
+    setattr(win, attr, 4)
+    assert getattr(win._view_focus, holder_field) == 4
+
+    setattr(win._view_focus, holder_field, 1)
+    assert getattr(win, attr) == 1
+
+
+def test_window_starts_bound_to_the_active_view(win):
+    active = win.view_manager.active
+
+    assert win._view_focus.primary == active
+    assert win._view_focus.secondary is None
+    assert win._view_focus.focused == active

@@ -50,7 +50,7 @@ from ..time_xaxis import (
 )
 
 from ._sentinel import _INSPECTOR_TIME_RANGE
-from ._state_holders import CustomXAxisState
+from ._state_holders import CustomXAxisState, ViewFocusState
 from ._analysis_mixin import AnalysisMixin
 from ._drop_import_mixin import DropImportMixin
 from ._fft_mixin import FFTMixin
@@ -109,9 +109,11 @@ class MainWindow(
         self._fc = 0;
         self._active = None
         self._project_path = None
-        # Applied custom-X state lives in one named holder (spec D-E2).  Built
-        # before _init_ui() so the property shims below always have a target.
+        # Applied custom-X state and time-domain View focus each live in one
+        # named holder (spec D-E2).  Built before _init_ui() so the property
+        # shims below always have a target.
         self._custom_xaxis = CustomXAxisState()
+        self._view_focus = ViewFocusState()
         try:
             self._blf_dbc_history = self._load_recent_blf_dbc_history()
         except Exception:
@@ -197,6 +199,32 @@ class MainWindow(
     @_custom_xlabel.setter
     def _custom_xlabel(self, value):
         self._custom_xaxis.xlabel = value
+
+    # -- compatibility shims for the View-focus holder (spec D-E2) ---------
+
+    @property
+    def _primary_view_idx(self):
+        return self._view_focus.primary
+
+    @_primary_view_idx.setter
+    def _primary_view_idx(self, value):
+        self._view_focus.primary = value
+
+    @property
+    def _secondary_view_idx(self):
+        return self._view_focus.secondary
+
+    @_secondary_view_idx.setter
+    def _secondary_view_idx(self, value):
+        self._view_focus.secondary = value
+
+    @property
+    def _focused_view_idx(self):
+        return self._view_focus.focused
+
+    @_focused_view_idx.setter
+    def _focused_view_idx(self, value):
+        self._view_focus.focused = value
 
     def _db_reference_settings(self):
         """``QSettings`` for the shared dB-reference catalog store.
@@ -321,9 +349,7 @@ class MainWindow(
         self.view_manager = ViewManager(self, max_views=12)
         self._view_bridge = view_bridge
         self.view_tabbar = self.chart_stack.attach_view_tabbar(self.view_manager)
-        self._primary_view_idx = self.view_manager.active
-        self._secondary_view_idx = None
-        self._focused_view_idx = self.view_manager.active
+        self._view_focus.bind(active=self.view_manager.active, partner=None)
 
         # V7 Step 2: per-section analysis view managers (owned by ChartStack so
         # the per-section ViewTabBar can dereference a real manager at
@@ -2337,10 +2363,10 @@ class MainWindow(
         self._capture_focused_view()
         self.view_tabbar.set_split_focus(secondary_focused)
         if secondary_focused:
-            self._focused_view_idx = self._secondary_view_idx
+            self._view_focus.focused = self._view_focus.secondary
             which = "对比"
         else:
-            self._focused_view_idx = self._primary_view_idx
+            self._view_focus.focused = self._view_focus.primary
             which = "主"
         if self._focused_view_idx is not None:
             self._sync_focus_accent()

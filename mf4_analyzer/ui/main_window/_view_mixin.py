@@ -96,14 +96,10 @@ class ViewMixin:
         self._capture_focused_view()
 
     def _sync_pane_bindings_from_manager(self):
-        active = self.view_manager.active
-        partner = self.view_manager.split_with
-        self._primary_view_idx = active
-        self._secondary_view_idx = partner
-        if partner is None:
-            self._focused_view_idx = active
-        elif self._focused_view_idx not in (active, partner):
-            self._focused_view_idx = active
+        self._view_focus.bind(
+            active=self.view_manager.active,
+            partner=self.view_manager.split_with,
+        )
 
     def _view_index_for_canvas(self, canvas):
         if canvas is self.canvas_time:
@@ -215,7 +211,7 @@ class ViewMixin:
         else:
             self.chart_stack.enter_split()
             self._ensure_secondary_range_signal_connected()
-        self._focused_view_idx = idx
+        self._view_focus.focused = idx
         self._sync_focus_accent()
         if self.files and self.chart_stack.current_mode() == 'time':
             self._render_view_to_canvas(idx, self.canvas_time, update_primary_ui=True)
@@ -233,8 +229,8 @@ class ViewMixin:
         self._sync_pane_bindings_from_manager()
         if other_idx is None:
             self.chart_stack.exit_split()
-            self._secondary_view_idx = None
-            self._focused_view_idx = self.view_manager.active
+            self._view_focus.secondary = None
+            self._view_focus.focused = self.view_manager.active
             self._sync_focus_accent()
             if self.files and self.chart_stack.current_mode() == 'time':
                 self._render_view_to_canvas(
@@ -251,7 +247,7 @@ class ViewMixin:
 
         self.chart_stack.enter_split()
         self._ensure_secondary_range_signal_connected()
-        self._focused_view_idx = self.view_manager.active
+        self._view_focus.focused = self.view_manager.active
         self._sync_focus_accent()
         if self.files and self.chart_stack.current_mode() == 'time':
             self._render_view_to_canvas(

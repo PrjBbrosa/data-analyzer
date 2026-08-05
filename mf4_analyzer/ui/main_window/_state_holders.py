@@ -64,3 +64,31 @@ class CustomXAxisState:
         self.ch = spec.channel if exact else None
         if xlabel is not KEEP:
             self.xlabel = xlabel
+
+
+@dataclass
+class ViewFocusState:
+    """Which time-domain Views are bound to the two panes, and which has focus.
+
+    ``primary`` / ``secondary`` mirror ``view_manager.active`` /
+    ``view_manager.split_with``; they are re-derived by :meth:`bind` whenever
+    the manager changes.  ``focused`` is the one piece that is *not* derivable
+    -- it records which of the two bound panes the user last selected -- and it
+    is constrained to stay on a bound pane.
+    """
+
+    primary: int | None = None
+    secondary: int | None = None
+    focused: int | None = None
+
+    def bind(self, *, active: int | None, partner: int | None) -> None:
+        """Mirror the manager's active/split pair, keeping focus on a bound pane.
+
+        Focus is preserved across a re-bind when it still points at one of the
+        two panes; otherwise it falls back to the active View, so focus can
+        never strand on a pane that is no longer displayed.
+        """
+        self.primary = active
+        self.secondary = partner
+        if partner is None or self.focused not in (active, partner):
+            self.focused = active

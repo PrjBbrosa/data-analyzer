@@ -60,10 +60,6 @@ MAIN_WINDOW_ROOT = (
 # THIS SET MAY ONLY SHRINK.  Adding an entry means a new piece of MainWindow
 # state escaped its owner; fix the code, not the whitelist.
 FROZEN_MULTI_FILE_STATE: dict[str, tuple[str, ...]] = {
-    # -- View focus; migrates to the ViewManager (Task 4) -------------------
-    "_focused_view_idx": ("_view_mixin.py", "window.py"),
-    "_primary_view_idx": ("_view_mixin.py", "window.py"),
-    "_secondary_view_idx": ("_view_mixin.py", "window.py"),
     # -- progress tokens / restore guard (Task 5) ---------------------------
     "_analysis_progress_tokens": (
         "_fft_time_mixin.py",
