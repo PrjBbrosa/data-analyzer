@@ -17,6 +17,20 @@ from mf4_analyzer.batch_image_options import BatchRenderOptions
 from mf4_analyzer.batch_render_style import RenderStyle, render_style_from_params
 from mf4_analyzer.signal._envelope_cutils import positions_envelope
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
+# The slice amplitude bounds and the smoothed ImageItem used to be hand-copied
+# here, marked "Copied — not imported", because the batch renderer may not
+# import ``mf4_analyzer.ui``. ``qt_analysis_shared`` is the neutral landing site
+# that dissolves that reason: it depends on numpy/pyqtgraph/PyQt5 only, and
+# ``tests/test_batch_render_import_boundary.py`` asserts in a subprocess that
+# importing it never pulls in ``mf4_analyzer.ui``. The canvases
+# (``ui/pg_canvas/``) import the very same objects, so the two sides can no
+# longer drift — see ``docs/analyzer/verify/batch-analysis-maths-dedup.md`` for
+# the diff audit that cleared the switch.
+from mf4_analyzer.qt_analysis_shared import (
+    _SLICE_MAX_SPAN_DB,
+    _SmoothImageItem,
+    _slice_amp_bounds,
+)
 from mf4_analyzer.qt_plot_helpers import (
     BorderAlignedAxisItem,
     GridLabelSlackAxisItem,
@@ -335,42 +349,6 @@ def _slice_visible_mask(coords, low: float, high: float) -> np.ndarray:
     return mask
 
 
-# Widest dynamic range a real measurement slice can plausibly span. Bins more
-# than this far below the slice's top are numerically-dead artifacts: the 0 Hz
-# DC bin, zeroed by de-mean and/or A-weighting (gain == 0 at f == 0), then
-# floored by ``amplitude_to_db`` to ``20*log10(np.finfo(float).tiny)`` ≈
-# -6153 dB. A 24-bit acquisition has only ~144 dB of range, so 200 dB only ever
-# catches such dead bins, never real signal (e.g. a deep anti-resonance notch).
-#
-# Copied — not imported — from ``ui/pg_canvas/heatmap_canvas.py`` (the
-# ``_SLICE_MAX_SPAN_DB`` / ``_slice_amp_bounds`` pair around line 385) because
-# the batch renderer may not import ``mf4_analyzer.ui``.
-_SLICE_MAX_SPAN_DB = 200.0
-
-
-def _slice_amp_bounds(values):
-    """Robust ``(lo, hi)`` for the slice amplitude *view* axis, or ``None``.
-
-    Display-only: the curve is always drawn in full; this only picks the Y
-    *view* range. The top is the literal max (a line plot should show real
-    peaks, unlike the colour window). The bottom ignores numerically-dead bins
-    sitting more than ``_SLICE_MAX_SPAN_DB`` below the top, so a single DC bin
-    floored to ≈ -6153 dB can no longer crush the real -40..-60 dB signal into
-    a thin band at the top of the panel. NaN/inf-safe. Returns ``None`` when
-    there is no finite spread to fit.
-    """
-    array = np.asarray(values, dtype=float)
-    finite = array[np.isfinite(array)]
-    if finite.size == 0:
-        return None
-    high = float(np.max(finite))
-    real = finite[finite >= high - _SLICE_MAX_SPAN_DB]
-    low = float(np.min(real)) if real.size else high
-    if high <= low:
-        return None
-    return low, high
-
-
 def _nice_amp_range(low: float, high: float, divisions: int):
     """Round ``[low, high]`` outward onto whole nice steps, or ``None``.
 
@@ -669,26 +647,6 @@ def _resolve_heatmap_colormap(
         raise RuntimeError("pyqtgraph turbo colormap is unavailable")
     lut = color_map.getLookupTable(0.0, 1.0, 256, alpha=True)
     return color_map, np.asarray(lut, dtype=np.ubyte)
-
-
-class _SmoothImageItem(pg.ImageItem):
-    """Batch-local equivalent of the single-file bilinear ImageItem."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._smooth_transform = False
-
-    def set_smooth_transform(self, enabled: bool) -> None:
-        self._smooth_transform = bool(enabled)
-        self.update()
-
-    def paint(self, painter, *args):
-        previous = painter.testRenderHint(QPainter.SmoothPixmapTransform)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, self._smooth_transform)
-        try:
-            return super().paint(painter, *args)
-        finally:
-            painter.setRenderHint(QPainter.SmoothPixmapTransform, previous)
 
 
 def _display_db_values(amplitude, reference: float) -> np.ndarray:
