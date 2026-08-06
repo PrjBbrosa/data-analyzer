@@ -49,10 +49,17 @@
 
 ## Task A1: 拆 `ui/widgets/__init__.py`
 
-**Files:** Create `mf4_analyzer/ui/widgets/{_swatches,channel_tree,stats,toast}.py`;
+**Files(计划):** Create `mf4_analyzer/ui/widgets/{_swatches,channel_tree,stats,toast}.py`;
 Modify `mf4_analyzer/ui/widgets/__init__.py`;Create `tests/ui/test_widgets_misc.py`。
 
-> **停止说明(2026-08-06):A1 未执行,零代码改动。**
+**Files(实际落地,按下方裁决走方向 c):** Create
+`mf4_analyzer/ui/widgets/{stats,toast}.py` + `tests/ui/test_widgets_misc.py`;
+Modify `mf4_analyzer/ui/widgets/__init__.py`。**`_swatches.py` 与 `channel_tree.py`
+未创建**——理由见「停止说明」与「裁决」两节。
+
+> **停止说明(2026-08-06,第一执行者):A1 未执行,零代码改动。**
+> *(已被下方「裁决」一节部分取代:`stats`/`toast` 已落地,
+> `_swatches`/`channel_tree` 仍保持未执行。)*
 >
 > Task 0 Step 1 的兼容面复查发现 spec 的「已核实的兼容面」清单不完整:除了纯 import
 > 消费者,还有 **4 处把 `mf4_analyzer.ui.widgets` 当作 monkeypatch 命名空间**的用法。
@@ -120,13 +127,39 @@ Modify `mf4_analyzer/ui/widgets/__init__.py`;Create `tests/ui/test_widgets_misc.
   额外锁住一条真实回归:`test_toast_reshow_cancels_pending_fade_out` 覆盖
   `show_message` 里 `_anim.finished.disconnect()` 的存在理由(fade-out 在飞时
   再来一条消息,不得被旧的 finished→hide 连接顺手隐藏)。
-- [ ] **Step 2:** 按 spec D-A1 表格移动代码。注意:`channel_tree.py` 需要
-  `from ._swatches import ...`;各新模块头部 import 按实际使用最小化(从原
-  `__init__.py` 头部 L1-41 的 import 里挑)。
-- [ ] **Step 3:** `__init__.py` 重写为显式再导出:
-  `MultiFileChannelWidget, INTERNAL_FILE_FIDS_MIME, StatsStrip, Toast, StatisticsPanel, _swatch_pixmap, _swatch_icon, _fmt_rate`
-  (+ 若 Step 1 核验发现其他被外部引用的名字,一并保留)。
-- [ ] **Step 4:** 验证。
+### 裁决(2026-08-06):执行方向(c),只拆零风险子集
+
+两次独立执行都证实:按 D-A1 表格把 `_swatches` 纯移动出去会打红既有用例。
+实测数字一致——`tests/ui/test_color_swatch_hidpi.py` 从 **7 passed** 变成
+**1 failed / 6 passed**,失败的是 `test_swatch_default_path_picks_up_device_ratio`,
+报错 `assert 1.0 == 2.0`。原因是 `_swatch_pixmap` 从**自身模块 globals** 读
+`icon_device_pixel_ratio`,而用例 patch 的是 `ui.widgets` 包命名空间的同名属性;
+再导出复制的是绑定不是作用域,补名单救不了。
+
+`channel_tree`(`MultiFileChannelWidget`)另有一处**无测试覆盖的静默风险**:
+`scripts/channel_dot_size_preview.py:43-44` 先重绑 `widgets_mod._swatch_icon`
+再构造 widget,搬走后该重绑不再可见——不会变红,但确是回归。
+
+⇒ 完整拆分需要「改 1 处测试的 patch 目标 + 动 2 处 dev 脚本」,超出本包
+「纯移动 + 零测试改动」的硬约束。方向(a) 要改既有测试、(b) 会在包 `__init__`
+与子模块间引入循环依赖;为凑 `__init__` ≤ 60 行的验收指标去动兼容面得不偿失。
+**本次只落地已核实无晚绑定消费者的零风险子集;`_swatches` 与 `channel_tree`
+的完整拆分留作独立小任务,待用户批准后执行。**
+
+- [x] **Step 2(按方向 c 执行):** `StatisticsPanel` + `StatsStrip` → `stats.py`,
+  `Toast` → `toast.py`,逐字纯移动(已用 AST 逐类比对 `main`,三个类体
+  byte-identical;留在 `__init__.py` 的 6 个顶层符号同样 byte-identical)。
+  `_swatches`(`_fmt_rate`/`_swatch_pixmap`/`_swatch_icon`)与 channel tree
+  (`INTERNAL_FILE_FIDS_MIME`/`_ChannelLeafDelegate`/`_CheckTolerantTree`/
+  `MultiFileChannelWidget`)**原位不动**。
+- [x] **Step 3:** `__init__.py` 顶部显式再导出 `StatisticsPanel, StatsStrip`(`.stats`)
+  与 `Toast`(`.toast`),带 `# noqa: F401`(沿用 `ui/pg_canvases.py` 的再导出惯例)。
+  其余名字与代码原位保留;monkeypatch 锚点 `hints` / `QMenu` / `QMessageBox` /
+  `icon_device_pixel_ratio` 均未动。仅删掉随搬迁失效的 4 个 import
+  (`QFrame`、`QGraphicsOpacityEffect`、`QPropertyAnimation`、`QTimer`)。
+  实测 12 个兼容面名字全部可从 `mf4_analyzer.ui.widgets` 解析,
+  且 `_swatch_pixmap.__module__` 仍为 `mf4_analyzer.ui.widgets`。
+- [x] **Step 4:** 验证。A1 组 **107 passed**(含 `test_color_swatch_hidpi.py` 7/7 全绿)。
 
 Run: `PYTEST tests/ui/test_channel_widget.py tests/ui/test_channel_widget_setters.py tests/ui/test_channel_axis_groups.py tests/ui/test_color_swatch_hidpi.py tests/ui/test_head_hdf_rail.py tests/ui/test_widgets_misc.py tests/ui/test_hints.py -q`
 
@@ -184,8 +217,12 @@ Run: `PYTEST tests/ui/test_chart_card_construction.py tests/ui/test_chart_stack.
 
 - [x] **Step 1:** 全量 UI 测试对比 Task 0 基线失败集,新旧差异必须为空
   (新增测试文件除外)。
-  **结果(2026-08-06,分支 @ `285132b1`):`2 failed, 2957 passed, 1 deselected`
-  in 291.80s。失败集与基线逐字一致:**
+  **结果(2026-08-06)——跑了两轮,A1 方向(c)搬迁前后各一次,数字完全一致:**
+
+  - 搬迁前 @ `285132b1`:`2 failed, 2957 passed, 1 deselected` in 291.80s
+  - 搬迁后(`stats.py`/`toast.py` 落地):`2 failed, 2957 passed, 1 deselected` in 304.98s
+
+  **两轮失败集与基线逐字一致,通过数一个不差 ⇒ 搬迁零回归:**
   - `tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference`
   - `tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action`
 
@@ -223,7 +260,7 @@ Run: `PYTEST tests/ui/test_chart_card_construction.py tests/ui/test_chart_stack.
 
 | 任务 | 变化 | 验收准则 | 结果 |
 | --- | --- | --- | --- |
-| A1 | `ui/widgets/__init__.py` 1760 → **1760(未拆)**;新增测试 +224 | `__init__` ≤ 60 行 | **未达成(已阻塞待裁决)** |
+| A1 | `ui/widgets/__init__.py` 1760 → 1591(−169);新增 `stats.py` 85 + `toast.py` 96;新增测试 +224 | `__init__` ≤ 60 行 | **部分达成**——按裁决只拆零风险子集,`_swatches`/`channel_tree` 留作独立后续项 |
 | A2 | `dialogs.py` 1256 → 删除;新包 15+600+648+38 = 1301 | `dialogs/__init__.py` ≤ 20 行 | 达成(15 行) |
 | A3 | `loader.py` 1147 → 787(−360);新增 `blf_format.py` 384 | `loader.py` 减少 ≥ 330 行 | 达成(−360) |
 | A4 | `cards.py` 1167 → 1200(+33);`__init__` 299 → **14 行**;新增测试 +311 | `__init__` ≤ 40 行 | 达成(14 行) |
