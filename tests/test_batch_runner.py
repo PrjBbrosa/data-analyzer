@@ -4295,7 +4295,7 @@ def test_metadata_probe_programming_error_is_not_hidden(tmp_path):
         )
 
 
-def _split_hdf_preview_fixture(tmp_path, *, source_count=4):
+def _split_hdf_preview_fixture(tmp_path, *, source_count=4, exact_pairs=False):
     """One physical HDF that expanded into several logical sub-sources.
 
     This is the shape ``io.source_adapters._loaded_groups`` produces when an
@@ -4303,6 +4303,15 @@ def _split_hdf_preview_fixture(tmp_path, *, source_count=4):
     none of them resolved at planning time because planning is no-load.  The
     runner therefore plans a group per sub-source without knowing which of
     them actually holds the selected channel.
+
+    ``exact_pairs`` selects the 从当前单次同步 scope, where ``_expand_tasks``
+    yields ``target_pairs`` verbatim and deliberately does *not* drop a pair
+    whose source lacks the channel (``run`` reports those as per-task
+    failures after lazy resolution).  That is the scope where
+    ``_pick_representative_group`` still has to catch the gap: under
+    ``target_signals`` the same channel map now narrows the expansion itself
+    (see ``BatchRunner.seed_source_channels``), so no unrenderable group is
+    planned in the first place.
     """
 
     physical_path = tmp_path / "eps-run.hdf"
@@ -4319,6 +4328,10 @@ def _split_hdf_preview_fixture(tmp_path, *, source_count=4):
         preset,
         source_ids=source_ids,
         source_paths=(str(physical_path),) * source_count,
+        target_pairs=(
+            tuple((source_id, "MotorSpeed") for source_id in source_ids)
+            if exact_pairs else ()
+        ),
     )
     runner = BatchRunner({})
     for source_id in source_ids:
@@ -4367,7 +4380,9 @@ def test_preview_representative_skips_sub_sources_without_the_channel(tmp_path):
     channel lived in only two, and the preview unconditionally took group one.
     """
 
-    runner, preset, source_ids = _split_hdf_preview_fixture(tmp_path)
+    runner, preset, source_ids = _split_hdf_preview_fixture(
+        tmp_path, exact_pairs=True,
+    )
     source_channels = {
         source_ids[0]: frozenset({"Time", "SteeringTorque"}),
         source_ids[1]: frozenset({"Time", "SteeringTorque"}),
@@ -4394,7 +4409,9 @@ def test_preview_representative_reports_when_no_sub_source_has_the_channel(
 ):
     """Fall back to group one, but say so rather than previewing silently."""
 
-    runner, preset, source_ids = _split_hdf_preview_fixture(tmp_path)
+    runner, preset, source_ids = _split_hdf_preview_fixture(
+        tmp_path, exact_pairs=True,
+    )
     source_channels = {
         source_id: frozenset({"Time", "SteeringTorque"})
         for source_id in source_ids
@@ -4416,7 +4433,9 @@ def test_preview_representative_ignores_sources_missing_from_the_channel_map(
 ):
     """An unlisted source is unknown, not empty — it must not disqualify."""
 
-    runner, preset, source_ids = _split_hdf_preview_fixture(tmp_path)
+    runner, preset, source_ids = _split_hdf_preview_fixture(
+        tmp_path, exact_pairs=True,
+    )
 
     plan = runner.preview_outputs(
         preset,
@@ -4429,6 +4448,104 @@ def test_preview_representative_ignores_sources_missing_from_the_channel_map(
     assert group.channel_available is True
     assert group.ordinal == 1
     assert group.group_id == first.identity.group_id
+
+
+def _seeded_split_fixture(tmp_path, *, policy="available_per_source"):
+    """Split sources where only the last two hold the target channel.
+
+    Mirrors the WWT that reported ``Weg`` over a longer span than
+    ``Rack Force``: one physical file, logical sources with disjoint channel
+    sets, and a target that lives in only some of them.
+    """
+
+    runner, preset, source_ids = _split_hdf_preview_fixture(tmp_path)
+    preset = replace(preset, target_policy=policy)
+    channels = {
+        source_ids[0]: frozenset({"Time", "Weg"}),
+        source_ids[1]: frozenset({"Time", "Weg"}),
+        source_ids[2]: frozenset({"Time", "MotorSpeed"}),
+        source_ids[3]: frozenset({"Time", "MotorSpeed"}),
+    }
+    return runner, preset, source_ids, channels
+
+
+def test_seeded_channels_drop_sources_that_cannot_hold_the_target(tmp_path):
+    """No-load planning must not plan a channel into a source that lacks it.
+
+    Without the seed the planner treats every unresolved source as *unknown*
+    and keeps it, so a split file lands tasks on sub-sources that never had
+    the channel -- the phantom ``missing signal`` failure in a Run.
+    """
+
+    runner, preset, source_ids, channels = _seeded_split_fixture(tmp_path)
+
+    before = list(runner._expand_tasks(preset, allow_source_load=False))
+    assert [key for key, _channel in before] == list(source_ids)
+
+    runner.seed_source_channels(channels)
+    after = list(runner._expand_tasks(preset, allow_source_load=False))
+
+    assert after == [
+        (source_ids[2], "MotorSpeed"), (source_ids[3], "MotorSpeed"),
+    ]
+
+
+def test_preview_channel_map_narrows_the_planned_groups(tmp_path):
+    """The map preview already receives must reach the expansion, not just
+    the representative pick.
+
+    The acceptance failure: 5 logical sources, the target in 4 of them, and
+    Preview refused outright ("代表分组 ... 不含所选通道") because the single
+    planned group carried a member that could never render.
+    """
+
+    runner, preset, source_ids, channels = _seeded_split_fixture(tmp_path)
+
+    plan = runner.preview_outputs(
+        preset, tmp_path / "out", source_channels=channels,
+    )
+
+    group = plan.representative_group
+    assert plan.task_count == 2
+    assert group.total_groups == 2
+    assert group.channel_available is True
+    expected = _planned_group_for(runner, preset, source_ids[2], "MotorSpeed")
+    assert group.group_id == expected.identity.group_id
+
+
+def test_seeded_channels_leave_unlisted_sources_planned(tmp_path):
+    """A source absent from the seed is unknown, not empty."""
+
+    runner, preset, source_ids, channels = _seeded_split_fixture(tmp_path)
+    runner.seed_source_channels({source_ids[0]: channels[source_ids[0]]})
+
+    planned = [
+        key for key, _channel
+        in runner._expand_tasks(preset, allow_source_load=False)
+    ]
+
+    assert planned == list(source_ids[1:])
+
+
+def test_seeded_channels_are_overwritten_by_a_real_load(tmp_path):
+    """A stale hint must self-correct rather than outlive the loaded truth."""
+
+    runner, preset, source_ids, _channels = _seeded_split_fixture(tmp_path)
+    runner.seed_source_channels({source_ids[0]: frozenset({"Weg"})})
+    assert runner._source_channel_cache[source_ids[0]] == frozenset({"Weg"})
+
+    t = np.arange(8, dtype=float) / 100.0
+    df = pd.DataFrame({"Time": t, "MotorSpeed": np.zeros(8)})
+    fd = FileData(
+        tmp_path / "eps-run.hdf", df, list(df.columns), {}, idx=0,
+    )
+    runner._normalize_loaded_sources(
+        (fd,),
+        physical_key=str(tmp_path / "eps-run.hdf"),
+        expected_source_id=source_ids[0],
+    )
+
+    assert "MotorSpeed" in runner._source_channel_cache[source_ids[0]]
 
 
 def test_group_checksum_cancellation_marks_run_and_manifest_cancelled(

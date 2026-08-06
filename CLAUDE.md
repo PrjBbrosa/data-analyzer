@@ -93,6 +93,14 @@ Windows 打包脚本、渲染对比）· `configs/` · `assets/`。
 - `.tdms_index` 是 TDMS 配套索引，永远不是可导入的数据文件。
 - WWT 用文件自带的 `Zeit` 时基并保留单位/缩放/偏移；ZFD 在时基无效时可用**显式标注为
   估算**的 1 kHz 回退；MAT 只认可识别的时间变量，不猜工程单位。
+- **一个物理文件可能展开成多个逻辑来源**（`LoadedSource`）：WWT 按 `(点数, dt, t0)`
+  合并 `Zeit` 块，HDF 按采样率拆分。**同采样率但录制时长不同也会拆**——实测
+  `testdoc/2024_3_17/SFNS_40_X04-CSER_000009.wwt` 拆成 `Weg`（10450 点）与
+  `Rack Force`/`Rack Travel`（9460 点）两组，两组都是精确 1000 Hz。
+  各组通道集可以**互不相交**，所以「共同信号」为 0、通道选择器显示 `(4/5)` 都是正常的。
+  批处理规划是 no-load 的，拿不到磁盘来源的通道表，必须由调用方经
+  `BatchRunner.seed_source_channels()` 喂进探针结果（`BatchSheet._make_runner` 已接），
+  否则会把目标信号排到根本没有它的子来源上。
 - 批处理与 GUI 共用同一套 ASCII/TDMS 导入规则。
 - View 上限按 manager 区分：时域工作区 12（`ui/main_window/window.py` 传 `max_views=12`），
   分析分区 6（`ui/view_state.MAX_VIEWS`）。窄宽度下 tab 先压成序号、再溢出到 `»`；
