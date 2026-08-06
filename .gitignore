@@ -73,3 +73,7 @@ configs/signals/vehicles/*.json
 # codex review dumps) — regenerated on demand, not part of the repo.
 output/
 codex-review-report.html
+
+# Playwright CLI runtime artifacts (console logs, page snapshots,
+# screenshots) — regenerated on demand, never part of the repo.
+.playwright-cli/
