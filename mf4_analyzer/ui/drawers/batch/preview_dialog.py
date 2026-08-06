@@ -1,6 +1,8 @@
 """Image-only representative-output preview for the Batch sheet."""
 from __future__ import annotations
 
+import re
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
@@ -9,6 +11,17 @@ from PyQt5.QtWidgets import (
 )
 
 from ._geometry import fit_dialog_to_available_screen
+
+#: 渲染层产出的警告可能带 ``slice.position_clamped: `` 这类机器标识前缀；
+#: 界面上只保留冒号后的人话部分。前缀本身只由点分小写标识符构成、不含空格，
+#: 借此和「data checksum unavailable: ...」这类本身就以自然语言开头、中途才
+#: 出现冒号的英文提示区分开——后者不匹配这个模式，不会被误删。
+_WARNING_PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*:\s*")
+
+
+def _humanize_warning(text: str) -> str:
+    """去掉机器标识前缀，只留给用户看的部分。"""
+    return _WARNING_PREFIX_RE.sub("", text, count=1)
 
 
 class BatchPreviewDialog(QDialog):
@@ -37,6 +50,11 @@ class BatchPreviewDialog(QDialog):
         self._facts.setObjectName("batchPreviewFacts")
         self._facts.setWordWrap(True)
         root.addWidget(self._facts)
+        self._warnings = QLabel(self)
+        self._warnings.setObjectName("batchPreviewWarnings")
+        self._warnings.setWordWrap(True)
+        self._warnings.hide()
+        root.addWidget(self._warnings)
         self._status = QLabel(self)
         self._status.setObjectName("batchPreviewStatus")
         self._status.setAlignment(Qt.AlignCenter)
@@ -76,6 +94,7 @@ class BatchPreviewDialog(QDialog):
     def set_loading(self, facts: str) -> None:
         self._busy = True
         self._facts.setText(facts)
+        self._set_warnings(())
         self._status.setText("正在读取来源并生成代表最终图…")
         self._image.clear()
         self._source_pixmap = QPixmap()
@@ -90,6 +109,7 @@ class BatchPreviewDialog(QDialog):
         self._btn_regenerate.setEnabled(True)
         self._btn_run_all.setEnabled(True)
         self._btn_cancel.hide()
+        self._set_warnings(getattr(result, "warnings", ()) or ())
         image_path = str(getattr(result, "image_path", "") or "")
         if not image_path:
             self._status.setText(
@@ -106,11 +126,26 @@ class BatchPreviewDialog(QDialog):
 
     def set_cancelled(self) -> None:
         self._busy = False
+        self._set_warnings(())
         self._status.setText("已取消代表图生成")
         self._btn_back.setEnabled(True)
         self._btn_regenerate.setEnabled(True)
         self._btn_run_all.setEnabled(True)
         self._btn_cancel.hide()
+
+    def _set_warnings(self, warnings) -> None:
+        """按序去重、去掉机器标识前缀后逐条列出；没有警告时整块隐藏、不占位。"""
+        seen: list[str] = []
+        for raw in warnings:
+            text = _humanize_warning(str(raw).strip())
+            if text and text not in seen:
+                seen.append(text)
+        if not seen:
+            self._warnings.clear()
+            self._warnings.hide()
+            return
+        self._warnings.setText("\n".join(f"• {line}" for line in seen))
+        self._warnings.show()
 
     def closeEvent(self, event):  # noqa: N802
         if self._busy:
