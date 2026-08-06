@@ -35,10 +35,11 @@ from mf4_analyzer.batch_render_qt import (
     BatchSeries,
     BatchTimeFigureSpec,
 )
-from mf4_analyzer.batch_render_qt._builder import build_batch_scene
+from mf4_analyzer.batch_render_qt._builder import build_batch_scene, _text_of
 from mf4_analyzer.batch_render_qt._dispatch import ensure_app
 from mf4_analyzer.batch_render_qt._export import render_scene_image
 from mf4_analyzer.batch_render_qt._page import render_metadata
+from mf4_analyzer.qt_chart_fonts import chart_font
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
 from mf4_analyzer.ui.pg_canvas.canvas import TimeDomainCanvasPG
 from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
@@ -663,14 +664,53 @@ def _visual_pen_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _ranges(views) -> list[dict[str, list[float]]]:
-    return [
-        {
-            "x": [float(value) for value in view.viewRange()[0]],
-            "y": [float(value) for value in view.viewRange()[1]],
-        }
-        for view in views
-    ]
+def _view_data_extent(view, axis: int) -> list[float] | None:
+    """Exact min/max of the arrays *view* actually plots along *axis*.
+
+    Deliberately not ``ViewBox.childrenBounds``: that pads every curve by half
+    its pen width converted through the live view transform, so it moves with
+    both the pen and the viewport height — measured up to 2% apart between the
+    two sides on this harness's short stacked panels. The plotted arrays carry
+    no such halo, so they are the one extent both renderers must agree on.
+    """
+
+    lows: list[float] = []
+    highs: list[float] = []
+    for item in view.addedItems:
+        getter = getattr(item, "getData", None)
+        if not callable(getter):
+            continue
+        try:
+            xs, ys = getter()
+        except Exception:
+            continue
+        values = xs if axis == 0 else ys
+        if values is None:
+            continue
+        array = np.asarray(values, dtype=float)
+        array = array[np.isfinite(array)]
+        if array.size:
+            lows.append(float(array.min()))
+            highs.append(float(array.max()))
+    if not lows:
+        return None
+    return [min(lows), max(highs)]
+
+
+def _ranges(views) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for view in views:
+        auto = view.state["autoRange"]
+        records.append(
+            {
+                "x": [float(value) for value in view.viewRange()[0]],
+                "y": [float(value) for value in view.viewRange()[1]],
+                "data_x": _view_data_extent(view, 0),
+                "data_y": _view_data_extent(view, 1),
+                "auto": [bool(auto[0]), bool(auto[1])],
+            }
+        )
+    return records
 
 
 def _arrays_equal(left, right) -> bool:
@@ -680,16 +720,70 @@ def _arrays_equal(left, right) -> bool:
     )
 
 
-def _range_close(left, right, *, y=True) -> bool:
+# pyqtgraph pads an auto-ranged axis by ``ViewBox.suggestPadding``, which it
+# clips to 10% per side — at most 1.2x the data span — and ``autoRange`` bakes
+# in the pen-width halo of whatever viewport height was current the last time
+# it ran. That halo scales as pen_px / panel_px, so it grows on denser pages
+# and on any platform whose taller tick text leaves the pre-settle panel
+# shorter; 1.2 x 1.125 = 1.35x measured here. 2.0x keeps that mechanism well
+# clear of the bound while still failing a range that has stopped tracking its
+# data — the per-view ``ranges`` records in evidence.json carry ``data_y``, so
+# the real margin on any given machine stays auditable rather than implicit.
+_MAX_AUTO_RANGE_HEADROOM = 2.0
+
+
+def _range_close(left, right) -> bool:
+    """Compare what each side is contractually required to show.
+
+    The x range and any manually pinned y range are explicit specifications,
+    so they are compared exactly. An auto-ranged y range is not a
+    cross-renderer contract: it is the data extent expanded by
+    ``ViewBox.suggestPadding``, a function of the viewport height each side
+    happens to have. The report's stacked panels are shorter than the
+    single-file canvas's, so they pad proportionally more — equating the padded
+    numbers would be asserting that the two layouts have the same geometry,
+    which they deliberately do not. What must match is the data underneath:
+    identical per-view extents, identical view centres, nothing clipped off,
+    and framing that stays inside pyqtgraph's own padding allowance.
+    """
+
     if len(left) != len(right):
         return False
-    for lvalue, rvalue in zip(left, right):
-        if not np.allclose(lvalue["x"], rvalue["x"], rtol=1e-7, atol=1e-7):
+    for lhs, rhs in zip(left, right):
+        if not np.allclose(lhs["x"], rhs["x"], rtol=1e-7, atol=1e-7):
             return False
-        if y and not np.allclose(
-            lvalue["y"], rvalue["y"], rtol=1e-6, atol=1e-6
-        ):
+        # A side that silently stopped auto-ranging (or started) is drift even
+        # when the numbers happen to line up today.
+        if lhs["auto"] != rhs["auto"]:
             return False
+        data_y = lhs["data_y"]
+        span = (
+            0.0 if data_y is None else float(data_y[1]) - float(data_y[0])
+        )
+        # Manual y is an explicit spec. So are the heatmap views, which plot an
+        # ImageItem rather than curves and so expose no array extent to compare
+        # — both must reproduce the requested range exactly.
+        pinned = (
+            not lhs["auto"][1]
+            or data_y is None
+            or rhs["data_y"] is None
+            or span <= 0.0
+        )
+        if pinned:
+            if not np.allclose(lhs["y"], rhs["y"], rtol=1e-6, atol=1e-6):
+                return False
+            continue
+        if not np.allclose(data_y, rhs["data_y"], rtol=1e-9, atol=0.0):
+            return False
+        centres = [(record["y"][0] + record["y"][1]) / 2.0 for record in (lhs, rhs)]
+        if abs(centres[0] - centres[1]) > 1e-6 * span:
+            return False
+        for record in (lhs, rhs):
+            low, high = float(record["y"][0]), float(record["y"][1])
+            if low > data_y[0] or high < data_y[1]:
+                return False
+            if (high - low) > _MAX_AUTO_RANGE_HEADROOM * span:
+                return False
     return True
 
 
@@ -703,6 +797,165 @@ def _non_background_pixels(image: QImage, background="#ffffff") -> int:
     color = QColor(background)
     ref = np.array([color.red(), color.green(), color.blue(), color.alpha()])
     return int(np.count_nonzero(np.any(pixels != ref, axis=2)))
+
+
+def _ink_mask(image: QImage, background) -> np.ndarray:
+    """Boolean per-pixel mask of everything that is not the page background."""
+
+    converted = image.convertToFormat(QImage.Format_RGBA8888)
+    ptr = converted.bits()
+    ptr.setsize(converted.byteCount())
+    pixels = np.frombuffer(ptr, dtype=np.uint8).reshape(
+        converted.height(), converted.width(), 4
+    )
+    color = QColor(background)
+    reference = np.array(
+        [color.red(), color.green(), color.blue(), color.alpha()], dtype=np.int16
+    )
+    # Exact inequality counts even the faintest antialiased fringe as ink,
+    # which is the conservative direction for a collision test: it can only
+    # grow a glyph's measured footprint, never shrink it.
+    return np.any(pixels.astype(np.int16) != reference, axis=2)
+
+
+def _mask_bounds(mask: np.ndarray) -> tuple[int, int, int, int] | None:
+    rows = np.flatnonzero(mask.any(axis=1))
+    columns = np.flatnonzero(mask.any(axis=0))
+    if not rows.size or not columns.size:
+        return None
+    return (
+        int(columns[0]), int(rows[0]), int(columns[-1]), int(rows[-1]),
+    )
+
+
+def _render_scene_region(scene, region: QRectF) -> QImage:
+    """Render one scene rectangle 1:1 into its own image.
+
+    ``render_scene_image`` maps scene rect ``(0, 0, w, h)`` onto the whole
+    page, so scene units are page pixels and a sub-rectangle can be rendered
+    on its own — far cheaper than re-exporting the supersampled page once per
+    text item.
+    """
+
+    width = max(1, int(np.ceil(region.width())))
+    height = max(1, int(np.ceil(region.height())))
+    image = QImage(width, height, QImage.Format_ARGB32_Premultiplied)
+    image.fill(scene.theme.background)
+    painter = QPainter(image)
+    try:
+        painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        scene.widget.scene().render(
+            painter, QRectF(0, 0, width, height), region
+        )
+    finally:
+        painter.end()
+    return image
+
+
+def _text_item_ink_rect(scene, item) -> QRectF | None:
+    """Scene rect of the ink *item* alone contributes to the rendered page.
+
+    Measured by differencing two renders of the item's own neighbourhood, with
+    and without it. Anything else that paints there — curves, grid, a
+    neighbouring label — is present in both and cancels out.
+    """
+
+    region = item.sceneBoundingRect().adjusted(-2.0, -2.0, 2.0, 2.0)
+    was_visible = item.isVisible()
+    item.setVisible(False)
+    without = _ink_mask(_render_scene_region(scene, region), scene.theme.background)
+    item.setVisible(True)
+    with_item = _ink_mask(
+        _render_scene_region(scene, region), scene.theme.background
+    )
+    item.setVisible(was_visible)
+    bounds = _mask_bounds(with_item & ~without)
+    if bounds is None:
+        return None
+    left, top, right, bottom = bounds
+    return QRectF(
+        region.x() + left,
+        region.y() + top,
+        float(right - left + 1),
+        float(bottom - top + 1),
+    )
+
+
+def _visible_text_collisions(scene) -> list[tuple[int, int, str, str]]:
+    """Box-level text overlaps that survive a real ink measurement.
+
+    ``BuiltBatchScene.adjacent_text_overlaps`` intersects QGraphicsItem
+    bounding boxes. For a rotated axis label that box carries QTextDocument's
+    margin plus the font's ascent/descent leading — on this harness's 8-panel
+    page, 60.5 scene px of box around 50 px of glyph ink — so tightly stacked
+    panels report a box overlap while the glyphs still keep a clear gap.
+
+    Boxes that do not intersect cannot have colliding ink, so the product's
+    cheap check still short-circuits every clean case. When it does trip,
+    re-measure the ink the two items actually leave on the page and keep only
+    the pairs that really touch. Pairs that cannot be attributed to isolatable
+    text items (axis tick text is painted by the axis, not by an item of its
+    own) are kept as-is, so the guard never weakens for those.
+    """
+
+    flagged = scene.adjacent_text_overlaps()
+    if not flagged:
+        return []
+    wanted = {(pair[0], pair[2]) for pair in flagged}
+    wanted |= {(pair[1], pair[3]) for pair in flagged}
+    ink: dict[tuple[int, str], QRectF | None] = {}
+    for index, group in enumerate(scene.panel_text_items):
+        for item in group:
+            key = (index, _text_of(item))
+            if key not in wanted or key in ink:
+                continue
+            if not item.isVisible() or not _text_of(item).strip():
+                continue
+            ink[key] = _text_item_ink_rect(scene, item)
+    survivors: list[tuple[int, int, str, str]] = []
+    for upper, lower, text_a, text_b in flagged:
+        rect_a = ink.get((upper, text_a))
+        rect_b = ink.get((lower, text_b))
+        if rect_a is None or rect_b is None:
+            survivors.append((upper, lower, text_a, text_b))
+            continue
+        overlap = rect_a.intersected(rect_b)
+        if overlap.width() > 0.5 and overlap.height() > 0.5:
+            survivors.append((upper, lower, text_a, text_b))
+    return survivors
+
+
+def _gui_axis_font_pt() -> float:
+    """The point size the interactive canvases apply to their axes.
+
+    Every ``mf4_analyzer.ui.pg_canvas`` call site invokes
+    ``_apply_pg_axis_font(axis)`` with no size, so the shared helper's default
+    is the reference side's entire specification. Reading it back from
+    ``chart_font`` keeps this harness from re-declaring a product constant —
+    the drift that produced the old hard-coded ``9.0``. It is also
+    platform-independent: ``chart_font`` sets ``pointSizeF`` explicitly on
+    whichever family resolves, so the number does not move when
+    ``CHART_FONT_FAMILIES`` lands on Microsoft YaHei UI instead of PingFang SC.
+    """
+
+    return float(chart_font().pointSizeF())
+
+
+def _axis_font_matches_spec(side: dict[str, Any]) -> bool:
+    """Every axis on one side carries that side's own declared point size.
+
+    The two sides run different specifications on purpose: the report theme
+    lifts axis text to ``RenderTheme.axis_font_pt`` (scaled by the recipe's
+    ``font_scale``) because a page exported at 1920x1080 leaves 9pt as a few
+    pixels of ink, while the interactive canvases keep the shared
+    ``chart_font`` default. Each side is checked against its own number.
+    """
+
+    points = side["axis_font_points"]
+    expected = float(side["axis_font_expected_pt"])
+    return bool(points) and all(
+        abs(float(value) - expected) <= 0.01 for value in points
+    )
 
 
 def _outer_corners_match(image: QImage, background: QColor) -> bool:
@@ -779,7 +1032,8 @@ def _batch_side(case: ParityCase, options: BatchRenderOptions, output_dir: Path)
             "curve_tokens": [_pen_record(curve) for curve in scene.curves],
             "ranges": _ranges(views),
             "viewport": [rect.width(), rect.height()],
-            "text_overlaps": scene.adjacent_text_overlaps(),
+            "text_overlaps": _visible_text_collisions(scene),
+            "text_box_overlaps": scene.adjacent_text_overlaps(),
             "plot_ink_pixels": _non_background_pixels(crop),
             "plot_corner_ink_pixels": _plot_corner_ink_counts(scene, image),
             "widget_chrome": {
@@ -813,6 +1067,9 @@ def _batch_side(case: ParityCase, options: BatchRenderOptions, output_dir: Path)
                 float(plot.getAxis("bottom").style["tickFont"].pointSizeF())
                 for plot in scene.plots
             ],
+            # The report theme is the batch side's own spec, font_scale
+            # already folded in by ``scaled_fonts``.
+            "axis_font_expected_pt": float(scene.theme.axis_font_pt),
             "axis_pen_colors": [
                 plot.getAxis("left").pen().color().name()
                 for plot in scene.plots
@@ -912,6 +1169,7 @@ def _reference_time(case: ParityCase, target_size: tuple[int, int]):
             float(plot.getAxis("bottom").style["tickFont"].pointSizeF())
             for plot in plots
         ],
+        "axis_font_expected_pt": _gui_axis_font_pt(),
         "axis_pen_colors": [plot.getAxis("left").pen().color().name() for plot in plots],
         "grid_values": [
             [
@@ -971,6 +1229,7 @@ def _reference_fft(case: ParityCase, target_size: tuple[int, int]):
         "axis_font_points": [
             float(canvas._plot_amp.getAxis("bottom").style["tickFont"].pointSizeF())
         ],
+        "axis_font_expected_pt": _gui_axis_font_pt(),
         "axis_pen_colors": [canvas._plot_amp.getAxis("left").pen().color().name()],
         "grid_values": [
             [
@@ -1057,6 +1316,7 @@ def _reference_heatmap(case: ParityCase, target_size: tuple[int, int]):
             float(canvas._plot.getAxis("bottom").style["tickFont"].pointSizeF()),
             float(canvas._cbar.getAxis("right").style["tickFont"].pointSizeF()),
         ],
+        "axis_font_expected_pt": _gui_axis_font_pt(),
         "axis_pen_colors": [canvas._plot.getAxis("left").pen().color().name()],
         "grid_values": [
             [
@@ -1186,10 +1446,9 @@ def _evaluate(case: ParityCase, batch: dict, reference: dict) -> dict[str, bool]
                 and batch["colorbar_menu_disabled"]
                 and reference["colorbar_menu_disabled"]
             ),
-            "axis_font_9pt": all(
-                abs(value - 9.0) <= 0.01
-                for value in batch["axis_font_points"]
-                + reference["axis_font_points"]
+            "axis_font_matches_spec": (
+                _axis_font_matches_spec(batch)
+                and _axis_font_matches_spec(reference)
             ),
             "axis_pen_match": (
                 batch["axis_pen_colors"] == reference["axis_pen_colors"]
@@ -1247,9 +1506,8 @@ def _evaluate(case: ParityCase, batch: dict, reference: dict) -> dict[str, bool]
         "batch_export_curves_aliased": all(
             record["antialias"] is False for record in batch["curve_tokens"]
         ),
-        "axis_font_9pt": all(
-            abs(value - 9.0) <= 0.01
-            for value in batch["axis_font_points"] + reference["axis_font_points"]
+        "axis_font_matches_spec": (
+            _axis_font_matches_spec(batch) and _axis_font_matches_spec(reference)
         ),
         "axis_pen_match": batch["axis_pen_colors"] == reference["axis_pen_colors"],
         "grid_match": grid_match,
@@ -1314,7 +1572,7 @@ def _scene_integration_assertions(scene, image: QImage) -> dict[str, bool]:
         "has_plot_ink": _non_background_pixels(
             crop, scene.theme.background
         ) > 500,
-        "no_text_overlap": scene.adjacent_text_overlaps() == [],
+        "no_text_overlap": _visible_text_collisions(scene) == [],
         "no_native_chrome": (
             all(
                 (
@@ -1439,6 +1697,12 @@ def generate(
                 "plot_corner_ink_pixels"
             ],
             "widget_chrome": batch_machine["widget_chrome"],
+            "axis_font_points": batch_machine["axis_font_points"],
+            "axis_font_expected_pt": batch_machine["axis_font_expected_pt"],
+            # Both are recorded so the evidence shows where the cheap
+            # bounding-box screen tripped and the ink measurement cleared it.
+            "text_box_overlaps": batch_machine["text_box_overlaps"],
+            "text_ink_overlaps": batch_machine["text_overlaps"],
         }
         reference_record = {
             "full": reference_full_record,
@@ -1447,6 +1711,8 @@ def generate(
             "ranges": reference_machine["ranges"],
             "curve_tokens": reference_machine.get("curve_tokens", []),
             "plot_ink_pixels": reference_machine["plot_ink_pixels"],
+            "axis_font_points": reference_machine["axis_font_points"],
+            "axis_font_expected_pt": reference_machine["axis_font_expected_pt"],
         }
         if sheet_module in {"fft_time", "order_time"}:
             batch_record.update(_heatmap_evidence_record(batch_machine))

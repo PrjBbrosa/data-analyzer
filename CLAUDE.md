@@ -17,32 +17,48 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
   收尾再跑全量。
 - **先取基线**（2026-08-06 实测于 `482a21c4`，批处理内核拆分合入后：主体
   3 failed / 5124 passed，`tests/acquisition_ui` 单独 1 failed / 354 passed；早先记录的
-  `test_split_*` 批量红已不复现，54/54 全绿）。动手前先记下当前失败数，别把既有失败
+  `test_split_*` 批量红已不复现，54/54 全绿）。这是**当时那个 commit 的历史读数**——
+  `fix/render-parity-contract` 之后 `test_batch_qt_render_parity.py` 已转绿并新增 5 条守卫，
+  主体计数相应变化，下面的清单才是当前状态。动手前先记下当前失败数，别把既有失败
   算到自己的改动头上：
   - **全量跑法**：裸 `pytest -q` 会在 `tests/acquisition_ui` 段被 pyqtgraph
     `LabelItem.resizeEvent` 的 `RuntimeError`（已删 `QGraphicsTextItem`）打成 **segfault**，
     约 4% 处中断、无汇总。交错相关——单独跑该目录不崩（354 passed）。要拿全量数字：
     `--ignore=tests/acquisition_ui` 跑主体，另起一条单独跑该目录。
-  - **已知既有红 5 条**（均先于 2026-08-06 的重构波，别追也别算新账）：
+  - **已知既有红 3 条**（均先于 2026-08-06 的重构波，别追也别算新账）：
     1. `tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference`
     2. `tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action`
-    3. `tests/test_batch_qt_render_parity.py` —— **真实契约漂移，与平台/字体无关**
-       （2026-08-06 实测更正：先前记为「缺 Microsoft YaHei 的环境性失败」是**错误定性**，
-       该断言比的是字号点数，跟字体族名无关）：
-       - `axis_font_9pt` 14/14 失败 —— `58128904` 有意把 `_theme.py` 的
-         `axis_font_pt` 从 9.0 提到 **12.0**（报告页 1920×1080 导出，9pt 只剩几像素墨迹），
-         但断言仍硬编码 `abs(pt-9.0)<=0.01`。实测 batch 侧 12.0 / GUI 参照侧 9.0，
-         两侧各自符合自己的规格，是**断言把两种规格当成同一个**。Windows 上同样失败。
-       - `axis_ranges_match` 4 例 —— pyqtgraph 自适应 padding：x 完全一致，y 恒定
-         比值 ≈1.0827（batch 子图更矮 → `suggestPadding` 比例更大），而容差是 rtol=1e-6。
-       - 曲线数据/token/网格断言全过，说明数据层无分歧。
-    4. `tests/test_gen_help_screenshots.py` —— 依赖未入库的本机 `testdoc/` 样本目录，
-       新克隆必红（本机有样本，实测通过）。
-    5. `tests/acquisition_ui/test_review_handoff.py::test_analyzer_load_file_delegates_to_load_one`
+    3. `tests/acquisition_ui/test_review_handoff.py::test_analyzer_load_file_delegates_to_load_one`
        —— `e385ce5a` 上即红。
-  - **已结清**：原第 4 条 `test_batch_renderer.py::test_facade_exports_only_supported_qt_renderer_contract`
-    （`b16705e8` 给 facade `__all__` 加的导出未同步契约用例）已由 `0b347d2c` 修复——
-    删掉那两个零消费者的再导出，契约用例未改一字。
+  - **环境性、非代码问题 1 条**：`tests/test_gen_help_screenshots.py` 依赖未入库的本机
+    `testdoc/` 样本目录，新克隆必红（本机有样本，实测通过）。
+  - **已结清 2 条**：
+    - `test_batch_renderer.py::test_facade_exports_only_supported_qt_renderer_contract`
+      （`b16705e8` 给 facade `__all__` 加的导出未同步契约用例）已由 `0b347d2c` 修复——
+      删掉那两个零消费者的再导出，契约用例未改一字。
+    - `tests/test_batch_qt_render_parity.py` 14/14 红，已由
+      `fix/render-parity-contract` 修复。**根因是校验工具的断言漂移，不是字体环境**
+      （更早记的「缺 Microsoft YaHei」是错误定性）。三处都改在
+      `tools/verify_batch_qt_render_parity.py`，产品代码一行没动：
+      - `axis_font_9pt` 把两侧字号并成一个列表要求都等于 9.0。但 `58128904` 有意把
+        `_theme.py` 的 `axis_font_pt` 提到 12.0（1920×1080 报告页上 9pt 只剩几像素墨迹），
+        GUI 侧仍是 `chart_font()` 默认的 9.0——两侧各自合规。改名
+        `axis_font_matches_spec` 并**分侧校验**：batch 比该 case 实际生效的
+        `theme.axis_font_pt`（`font_scale` 已由 `scaled_fonts` 折进去），
+        参照侧比 `chart_font().pointSizeF()`。两个数都从产品读，不再另立常量。
+      - `axis_ranges_match` 直接比带 padding 的 y 视图范围。auto-range 的 y 是数据范围
+        乘 `ViewBox.suggestPadding`，而 padding 是**视口高度的函数**——报告页的堆叠子图比
+        单文件画布矮，padding 比例天然更大（恒定 ≈1.0827）。改为比**真正必须一致的东西**：
+        逐 view 的数据范围（取自曲线数组；`childrenBounds` 带笔宽光晕，会随视口漂移最多 2%）、
+        视图中心、数据不被裁掉、以及框幅不超出 pyqtgraph 自身的 padding 余量。
+        x 轴与手动 y 轴仍是严格比较，容差没放宽。
+      - `no_text_overlap` 走 `adjacent_text_overlaps()`，比的是 QGraphicsItem 包围盒；
+        旋转轴标签的盒子含 QTextDocument 边距+字体 leading（8 子图页上 60.5px 盒子里只有
+        50px 字形墨迹），所以密排子图会报出**渲染里并不存在**的重叠。已按「验真机渲染」
+        实测：相邻标签实际留 6–7px 空隙。包围盒仍作廉价初筛（盒子不相交则墨迹必不相交），
+        触发后再测各自在页面上真正留下的墨迹，只有真碰上才算数。
+      每类断言都做过变异测试（改产品常量 → 对应断言变红 → 已还原），并已把证据固化成
+      `tests/test_batch_qt_render_parity.py` 里的守卫用例。
 
 ## Architecture
 `mf4_analyzer/` 主包：
