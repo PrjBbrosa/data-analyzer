@@ -1,8 +1,4 @@
 """ChartStack — the centre-pane QWidget coordinator."""
-import re
-from html import escape
-from html import unescape
-
 from PyQt5.QtCore import QEvent, QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import (
@@ -28,16 +24,19 @@ from ._helpers import (
     _BOTTOM_HINT_PERSISTENT,
 )
 from .cards import _ChartCard, TimeChartCard
-from .cursor_pill import CursorPill
+from .cursor_pill import (
+    CursorPill,
+    format_cursor_info,
+    format_single_cursor_variants,
+    mini_single_cursor_part,
+    plain_single_cursor_tooltip_line,
+    single_cursor_channel_color,
+    strip_html,
+)
 from .toolbar import PgNavigationToolbar
 
 
 class ChartStack(QWidget):
-    _COLOR_RE = re.compile(r'color:\s*([^;"\']+)')
-    _BOLD_VALUE_RE = re.compile(r'<b[^>]*>(.*?)</b>', re.S)
-    _TAG_RE = re.compile(r'<[^>]+>')
-    _CURSOR_PREFIX_COLORS = {"#64748b"}
-
     mode_changed = pyqtSignal(str)
     plot_mode_changed = pyqtSignal(str)
     cursor_mode_changed = pyqtSignal(str)
@@ -1086,102 +1085,30 @@ class ChartStack(QWidget):
 
         self._update_pill_content(pill, card, update)
 
+    # ---- readout formatting (implemented in cursor_pill.py) ----
+    # Thin delegates: the formatting itself is pure text processing and lives
+    # next to the widget it feeds. Only the `mode` default is resolved here,
+    # because that is the one part that reads live state.
+
     def _format_cursor_info_for_pill(self, text, mode=None):
-        from .cursor_pill import _CURSOR_HTML_SEP
         if mode is None:
             mode = self.cursor_mode()
-        if mode != 'single' or _CURSOR_HTML_SEP not in (text or ''):
-            return text, ''
-        primary, detail, _mini_detail, _tooltip = (
-            self._format_single_cursor_variants_for_pill(text)
-        )
-        return primary, detail
+        return format_cursor_info(text, mode)
 
     def _format_single_cursor_variants_for_pill(self, text):
-        from .cursor_pill import _CURSOR_HTML_SEP
-        parts = [part for part in (text or '').split(_CURSOR_HTML_SEP) if part]
-        if len(parts) <= 1:
-            return text, '', '', ''
-        full_rows = ['<table cellspacing="0" cellpadding="0">']
-        mini_rows = [
-            '<table cellspacing="0" cellpadding="0" '
-            'style="font-size:12px;">'
-        ]
-        tooltip_lines = []
-        for i, part in enumerate(parts[1:]):
-            top_pad = '2px' if i > 0 else '0'
-            full_rows.append(
-                '<tr><td style="padding-top:'
-                f'{top_pad}; padding-bottom:0; line-height:1.15;">'
-                f'{part}</td></tr>'
-            )
-            mini_rows.append(self._mini_single_cursor_part(part, top_pad))
-            tooltip_line = self._plain_single_cursor_tooltip_line(part)
-            if tooltip_line:
-                tooltip_lines.append(tooltip_line)
-        full_rows.append('</table>')
-        mini_rows.append('</table>')
-        return (
-            parts[0],
-            ''.join(full_rows),
-            ''.join(mini_rows),
-            '\n'.join(tooltip_lines),
-        )
+        return format_single_cursor_variants(text)
 
     def _mini_single_cursor_part(self, part, top_pad):
-        color = self._single_cursor_channel_color(part)
-        value_match = self._BOLD_VALUE_RE.search(part or '')
-        if value_match:
-            value = self._strip_html(value_match.group(1)).strip()
-        else:
-            plain = self._strip_html(part).strip()
-            value = plain.split('=', 1)[-1].strip() if '=' in plain else plain
-        value = value or '—'
-        mono = "font-family:'SF Mono',Menlo,Consolas,monospace;"
-        value_html = escape(value)
-        return (
-            '<tr>'
-            f'<td style="padding-top:{top_pad}; padding-right:5px; '
-            'line-height:1.15;">'
-            f'<span style="color:{color};">●</span></td>'
-            f'<td style="padding-top:{top_pad}; color:{color}; '
-            f'line-height:1.15; {mono} font-weight:650;">{value_html}</td>'
-            '</tr>'
-        )
+        return mini_single_cursor_part(part, top_pad)
 
     def _plain_single_cursor_tooltip_line(self, part):
-        plain = self._strip_html(part).replace('\xa0', ' ').strip()
-        plain = re.sub(r'\s+', ' ', plain)
-        if not plain:
-            return ''
-        if '=' not in plain:
-            return re.sub(r'^\[[^\]]+\]\s*', '', plain).strip()
-        name, value = plain.split('=', 1)
-        name = re.sub(r'^\[[^\]]+\]\s*', '', name).strip()
-        value = value.strip()
-        return f'{name}={value}' if name else value
+        return plain_single_cursor_tooltip_line(part)
 
     def _single_cursor_channel_color(self, part):
-        colors = [m.group(1).strip() for m in self._COLOR_RE.finditer(part or '')]
-        if not colors:
-            return '#111827'
-        value_match = self._BOLD_VALUE_RE.search(part or '')
-        if value_match:
-            before_value = part[:value_match.start()]
-            value_colors = [
-                m.group(1).strip()
-                for m in self._COLOR_RE.finditer(before_value)
-            ]
-            for color in reversed(value_colors):
-                if color.lower() not in self._CURSOR_PREFIX_COLORS:
-                    return color
-        for color in reversed(colors):
-            if color.lower() not in self._CURSOR_PREFIX_COLORS:
-                return color
-        return colors[-1]
+        return single_cursor_channel_color(part)
 
     def _strip_html(self, value):
-        return unescape(self._TAG_RE.sub('', value or ''))
+        return strip_html(value)
 
     def _on_dual_cursor_info(self, text, source=None):
         if source is not None:

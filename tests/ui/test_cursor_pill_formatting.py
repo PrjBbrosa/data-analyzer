@@ -20,6 +20,7 @@ matching the readouts the fixtures in ``test_chart_stack.py`` use.
 import pytest
 
 from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
+from mf4_analyzer.ui.chart_stack import cursor_pill
 
 
 # ---------------------------------------------------------------------------
@@ -342,3 +343,54 @@ def test_mini_part_shows_an_em_dash_when_there_is_no_value(stack):
 ])
 def test_tooltip_line_is_plain_name_equals_value(stack, part, expected):
     assert stack._plain_single_cursor_tooltip_line(part) == expected
+
+
+# ---------------------------------------------------------------------------
+# Direct module-level use -- no ChartStack, no widget, no QApplication
+# ---------------------------------------------------------------------------
+
+def test_formatting_works_without_constructing_any_widget():
+    """The point of the move: these are callable as plain functions. No fixture
+    is requested here on purpose, so this fails if formatting ever starts
+    needing a live widget again."""
+    assert cursor_pill.format_single_cursor_variants(SINGLE_MULTI_CHANNEL) == (
+        SINGLE_MULTI_PRIMARY,
+        SINGLE_MULTI_FULL_DETAIL,
+        SINGLE_MULTI_MINI_DETAIL,
+        SINGLE_MULTI_TOOLTIP,
+    )
+    assert cursor_pill.format_cursor_info(SINGLE_ONE_CHANNEL, 'single') == (
+        SINGLE_ONE_PRIMARY, SINGLE_ONE_FULL_DETAIL)
+    assert cursor_pill.strip_html('<b>7.25</b>&nbsp;Nm') == '7.25\xa0Nm'
+    assert cursor_pill.single_cursor_channel_color(
+        '<span style="color:#64748b;">[eps_run]</span> '
+        '<span style="color:#ef4444;">n=<b>1</b></span>') == '#ef4444'
+    assert '—' in cursor_pill.mini_single_cursor_part('', '0')
+    assert cursor_pill.plain_single_cursor_tooltip_line(
+        '<span>[eps_run] n=<b>1</b></span>') == 'n=1'
+
+
+def test_format_cursor_info_requires_an_explicit_mode():
+    """Resolving the default from live state stays on ChartStack; the module
+    function must not grow a mode default that silently guesses."""
+    with pytest.raises(TypeError):
+        cursor_pill.format_cursor_info(SINGLE_ONE_CHANNEL)
+
+
+def test_chart_stack_delegates_are_pure_pass_throughs(stack):
+    """Every ChartStack method kept for compatibility must return exactly what
+    the module function returns."""
+    part = ('<span style="color:#64748b;">[eps_run]</span> '
+            '<span style="color:#ef4444;">Rte_MotorSpeed_xds16=<b>1250 rpm</b></span>')
+
+    assert (stack._format_single_cursor_variants_for_pill(SINGLE_MULTI_CHANNEL)
+            == cursor_pill.format_single_cursor_variants(SINGLE_MULTI_CHANNEL))
+    assert (stack._format_cursor_info_for_pill(SINGLE_MULTI_CHANNEL, 'single')
+            == cursor_pill.format_cursor_info(SINGLE_MULTI_CHANNEL, 'single'))
+    assert (stack._mini_single_cursor_part(part, '2px')
+            == cursor_pill.mini_single_cursor_part(part, '2px'))
+    assert (stack._plain_single_cursor_tooltip_line(part)
+            == cursor_pill.plain_single_cursor_tooltip_line(part))
+    assert (stack._single_cursor_channel_color(part)
+            == cursor_pill.single_cursor_channel_color(part))
+    assert stack._strip_html(part) == cursor_pill.strip_html(part)

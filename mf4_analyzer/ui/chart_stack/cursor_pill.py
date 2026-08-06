@@ -1,4 +1,13 @@
-"""CursorPill, _QualityStatusIndicator, and _CURSOR_HTML_SEP constant."""
+"""CursorPill, _QualityStatusIndicator, and the readout-formatting helpers.
+
+The formatting half of this module is pure text processing: it turns the
+separator-joined HTML the canvases emit on ``cursor_info`` into the pill's
+primary line, its full and mini detail tables, and the mini-mode tooltip.
+It knows nothing about Qt, so it is unit-testable on its own.
+"""
+import re
+from html import escape, unescape
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
@@ -23,6 +32,142 @@ _TOGGLE_EDGE_GAP = 4
 _TOGGLE_FIRST_LINE_RESERVE = 24
 
 _CURSOR_HTML_SEP = '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
+
+_COLOR_RE = re.compile(r'color:\s*([^;"\']+)')
+_BOLD_VALUE_RE = re.compile(r'<b[^>]*>(.*?)</b>', re.S)
+_TAG_RE = re.compile(r'<[^>]+>')
+
+# Colours the canvas uses for chrome rather than for a channel — the dimmed
+# "[file]" prefix. Skipped when picking the colour that represents a channel.
+_CURSOR_PREFIX_COLORS = {"#64748b"}
+
+_MINI_VALUE_FONT = "font-family:'SF Mono',Menlo,Consolas,monospace;"
+
+
+# ---------------------------------------------------------------------------
+# Readout formatting (pure text — no Qt)
+# ---------------------------------------------------------------------------
+
+def strip_html(value):
+    """Return ``value`` with tags removed and entities resolved."""
+    return unescape(_TAG_RE.sub('', value or ''))
+
+
+def single_cursor_channel_color(part):
+    """Pick the colour that stands for the channel in one readout segment.
+
+    A segment is typically ``[file]`` in the dimmed prefix colour followed by
+    ``name=<b>value</b>`` in the channel's own colour, so the last colour before
+    the bold value wins and prefix colours are skipped.
+    """
+    colors = [m.group(1).strip() for m in _COLOR_RE.finditer(part or '')]
+    if not colors:
+        return '#111827'
+    value_match = _BOLD_VALUE_RE.search(part or '')
+    if value_match:
+        before_value = part[:value_match.start()]
+        value_colors = [
+            m.group(1).strip()
+            for m in _COLOR_RE.finditer(before_value)
+        ]
+        for color in reversed(value_colors):
+            if color.lower() not in _CURSOR_PREFIX_COLORS:
+                return color
+    for color in reversed(colors):
+        if color.lower() not in _CURSOR_PREFIX_COLORS:
+            return color
+    return colors[-1]
+
+
+def mini_single_cursor_part(part, top_pad):
+    """Render one readout segment as a mini-mode table row: a coloured dot plus
+    the bare value, with the channel name dropped."""
+    color = single_cursor_channel_color(part)
+    value_match = _BOLD_VALUE_RE.search(part or '')
+    if value_match:
+        value = strip_html(value_match.group(1)).strip()
+    else:
+        plain = strip_html(part).strip()
+        value = plain.split('=', 1)[-1].strip() if '=' in plain else plain
+    value = value or '—'
+    mono = _MINI_VALUE_FONT
+    value_html = escape(value)
+    return (
+        '<tr>'
+        f'<td style="padding-top:{top_pad}; padding-right:5px; '
+        'line-height:1.15;">'
+        f'<span style="color:{color};">●</span></td>'
+        f'<td style="padding-top:{top_pad}; color:{color}; '
+        f'line-height:1.15; {mono} font-weight:650;">{value_html}</td>'
+        '</tr>'
+    )
+
+
+def plain_single_cursor_tooltip_line(part):
+    """Flatten one readout segment to ``name=value`` plain text for the tooltip
+    shown while the pill is collapsed to values only."""
+    plain = strip_html(part).replace('\xa0', ' ').strip()
+    plain = re.sub(r'\s+', ' ', plain)
+    if not plain:
+        return ''
+    if '=' not in plain:
+        return re.sub(r'^\[[^\]]+\]\s*', '', plain).strip()
+    name, value = plain.split('=', 1)
+    name = re.sub(r'^\[[^\]]+\]\s*', '', name).strip()
+    value = value.strip()
+    return f'{name}={value}' if name else value
+
+
+def format_single_cursor_variants(text):
+    """Split a single-cursor readout into ``(primary, full, mini, tooltip)``.
+
+    The first separator-delimited segment is the time readout and stays on the
+    pill's primary line; the rest become one detail row each, rendered twice —
+    full (name and value) and mini (value only) — plus a plain-text tooltip that
+    restores the names the mini variant drops. Text with no separator has no
+    per-channel detail and passes straight through as the primary line.
+    """
+    parts = [part for part in (text or '').split(_CURSOR_HTML_SEP) if part]
+    if len(parts) <= 1:
+        return text, '', '', ''
+    full_rows = ['<table cellspacing="0" cellpadding="0">']
+    mini_rows = [
+        '<table cellspacing="0" cellpadding="0" '
+        'style="font-size:12px;">'
+    ]
+    tooltip_lines = []
+    for i, part in enumerate(parts[1:]):
+        top_pad = '2px' if i > 0 else '0'
+        full_rows.append(
+            '<tr><td style="padding-top:'
+            f'{top_pad}; padding-bottom:0; line-height:1.15;">'
+            f'{part}</td></tr>'
+        )
+        mini_rows.append(mini_single_cursor_part(part, top_pad))
+        tooltip_line = plain_single_cursor_tooltip_line(part)
+        if tooltip_line:
+            tooltip_lines.append(tooltip_line)
+    full_rows.append('</table>')
+    mini_rows.append('</table>')
+    return (
+        parts[0],
+        ''.join(full_rows),
+        ''.join(mini_rows),
+        '\n'.join(tooltip_lines),
+    )
+
+
+def format_cursor_info(text, mode):
+    """Return ``(primary, detail)`` for ``text`` under cursor ``mode``.
+
+    Only single-cursor readouts carrying the separator are split; everything
+    else is the primary line verbatim. ``mode`` is required here — resolving it
+    from live state is the caller's job.
+    """
+    if mode != 'single' or _CURSOR_HTML_SEP not in (text or ''):
+        return text, ''
+    primary, detail, _mini_detail, _tooltip = format_single_cursor_variants(text)
+    return primary, detail
 
 
 # ---------------------------------------------------------------------------
