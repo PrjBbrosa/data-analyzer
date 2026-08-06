@@ -95,60 +95,17 @@ from mf4_analyzer.ui.pg_canvas.viewbox import (
 from mf4_analyzer.ui_kit.axis_metrics import left_axis_width_for_ticks
 
 
-DEFAULT_HEATMAP_CMAP = "gnuplot2"
-SUPPORTED_HEATMAP_COLORMAPS = (
+# 色图整族的真源在 qt_analysis_shared：批处理渲染器要用同一份解析结果，
+# 而它不能 import mf4_analyzer.ui。这里保留同名再导出，既有 import 路径
+# （含 tests/ui/test_colormap_parity.py）不受影响。
+from mf4_analyzer.qt_analysis_shared import (  # noqa: F401
     DEFAULT_HEATMAP_CMAP,
-    "turbo",
-    "viridis",
-    "plasma",
-    "inferno",
-    "magma",
-    "cividis",
+    SUPPORTED_HEATMAP_COLORMAPS,
+    _GNUPLOT2_COLORMAP,
+    _gnuplot2_lut,
+    _normalise_colormap_name,
+    _resolve_colormap,
 )
-
-
-def _gnuplot2_lut() -> np.ndarray:
-    """Return Matplotlib gnuplot2's documented 256-entry RGBA LUT.
-
-    The channel transfer functions are ported locally so the desktop runtime
-    remains independent of Matplotlib.  Values are clipped after evaluating
-    the original piecewise functions, then quantised exactly as a byte LUT.
-    """
-    x = np.linspace(0.0, 1.0, 256)
-    red = np.clip(x / 0.32 - 0.78125, 0.0, 1.0)
-    green = np.clip(2.0 * x - 0.84, 0.0, 1.0)
-    blue = np.where(
-        x < 0.25,
-        4.0 * x,
-        np.where(x < 0.92, -2.0 * x + 1.84, x / 0.08 - 11.5),
-    )
-    blue = np.clip(blue, 0.0, 1.0)
-    rgba = np.column_stack((red, green, blue, np.ones_like(x)))
-    return np.rint(rgba * 255.0).astype(np.ubyte)
-
-
-_GNUPLOT2_COLORMAP = pg.ColorMap(
-    np.linspace(0.0, 1.0, 256), _gnuplot2_lut(), name=DEFAULT_HEATMAP_CMAP,
-)
-
-
-def _normalise_colormap_name(name: str | None) -> str:
-    requested = str(name or DEFAULT_HEATMAP_CMAP)
-    return requested if requested in SUPPORTED_HEATMAP_COLORMAPS else DEFAULT_HEATMAP_CMAP
-
-
-def _resolve_colormap(name: str) -> pg.ColorMap:
-    """Resolve a supported heatmap map without a Matplotlib dependency."""
-    requested = _normalise_colormap_name(name)
-    if requested == DEFAULT_HEATMAP_CMAP:
-        return _GNUPLOT2_COLORMAP
-    try:
-        cm = pg.colormap.get(requested)
-        if cm is not None:
-            return cm
-    except Exception:
-        pass
-    return _GNUPLOT2_COLORMAP
 
 
 class _AxisShim:

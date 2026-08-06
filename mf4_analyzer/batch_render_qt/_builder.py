@@ -27,8 +27,11 @@ from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
 # longer drift — see ``docs/analyzer/verify/batch-analysis-maths-dedup.md`` for
 # the diff audit that cleared the switch.
 from mf4_analyzer.qt_analysis_shared import (
+    DEFAULT_HEATMAP_CMAP,
+    SUPPORTED_HEATMAP_COLORMAPS,
     _SLICE_MAX_SPAN_DB,
     _SmoothImageItem,
+    _resolve_colormap,
     _slice_amp_bounds,
 )
 from mf4_analyzer.qt_plot_helpers import (
@@ -632,19 +635,20 @@ def _slice_alignment_callback(layout, main_plot, slice_plot, *, right_reserve=0.
 def _resolve_heatmap_colormap(
     params: Mapping[str, Any], warnings_out: list[str] | None
 ) -> tuple[pg.ColorMap, np.ndarray]:
-    requested = params.get("cmap", "turbo")
-    try:
-        color_map = pg.colormap.get(str(requested))
-    except Exception:
-        color_map = None
-    if color_map is None:
+    # 默认值和解析器都与交互画布共用（``_resolve_colormap``）。批处理面板没有
+    # 色图控件，以前这里硬编码 "turbo"，而画布默认 gnuplot2 —— 同一份数据在
+    # 单文件里和导出的 PNG 里是两种配色，就是用户看到的「色阶不一致」。
+    # 注意 gnuplot2 不是 pyqtgraph 内置项（本地构造），所以不能用
+    # ``pg.colormap.get`` 直接取。
+    requested = params.get("cmap", DEFAULT_HEATMAP_CMAP)
+    if str(requested) not in SUPPORTED_HEATMAP_COLORMAPS:
+        # 保留既有语义：名字不认识要出警告，不静默改配色。
         if warnings_out is not None:
             warnings_out.append(
-                f"Invalid colormap {requested!r}; using 'turbo'."
+                f"Invalid colormap {requested!r}; using {DEFAULT_HEATMAP_CMAP!r}."
             )
-        color_map = pg.colormap.get("turbo")
-    if color_map is None:  # pragma: no cover - bundled pg 0.14 has turbo
-        raise RuntimeError("pyqtgraph turbo colormap is unavailable")
+        requested = DEFAULT_HEATMAP_CMAP
+    color_map = _resolve_colormap(str(requested))
     lut = color_map.getLookupTable(0.0, 1.0, 256, alpha=True)
     return color_map, np.asarray(lut, dtype=np.ubyte)
 

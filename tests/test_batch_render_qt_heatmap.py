@@ -273,7 +273,7 @@ def test_valid_non_turbo_heatmap_colormap_remains_available(qapp):
         scene.close()
 
 
-def test_invalid_heatmap_colormap_falls_back_to_turbo_and_warns(qapp):
+def test_invalid_heatmap_colormap_falls_back_to_default_and_warns(qapp):
     warnings_out = []
     scene = _open_scene(
         qapp,
@@ -283,11 +283,41 @@ def test_invalid_heatmap_colormap_falls_back_to_turbo_and_warns(qapp):
     )
     try:
         np.testing.assert_array_equal(
-            scene.heatmap_lut, np.load(GOLDEN)["turbo"]
+            scene.heatmap_lut, np.load(GOLDEN)["gnuplot2"]
         )
         assert warnings_out == [
-            "Invalid colormap 'not-a-real-map'; using 'turbo'."
+            "Invalid colormap 'not-a-real-map'; using 'gnuplot2'."
         ]
+    finally:
+        scene.close()
+
+
+@pytest.mark.parametrize("kind", ["fft_time", "order_time"])
+def test_heatmap_without_cmap_uses_the_interactive_canvas_default(qapp, kind):
+    """无 ``cmap`` 键时批处理必须落在画布的默认色图上。
+
+    批处理面板不提供色图控件，所以导出走的就是这条缺省路径。它以前硬编码
+    "turbo"，而画布默认 gnuplot2 —— 同一份数据两种配色。字节级比对 golden，
+    并直接对照 ``qt_analysis_shared`` 的解析结果，任何一侧再漂移都会红。
+    """
+    from mf4_analyzer.qt_analysis_shared import (
+        DEFAULT_HEATMAP_CMAP, _resolve_colormap,
+    )
+
+    scene = _open_scene(qapp, kind, params={"amplitude_mode": "amplitude"})
+    try:
+        np.testing.assert_array_equal(
+            scene.heatmap_lut, np.load(GOLDEN)["gnuplot2"]
+        )
+        np.testing.assert_array_equal(
+            scene.heatmap_lut,
+            np.asarray(
+                _resolve_colormap(DEFAULT_HEATMAP_CMAP).getLookupTable(
+                    0.0, 1.0, 256, alpha=True
+                ),
+                dtype=np.ubyte,
+            ),
+        )
     finally:
         scene.close()
 

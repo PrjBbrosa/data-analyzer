@@ -116,6 +116,12 @@ def run(output_directory: Path, result_json: Path) -> int:
                         "z_auto": False,
                         "z_floor": 0.0,
                         "z_ceiling": 1.0,
+                        # 显式点名色图，不吃产品默认值。这里的证据是
+                        # verify_frozen_batch_render 去图里找 turbo 的两个端点色，
+                        # 用来证明「冻结包里 Qt 真的画出了带色图的热力图」。默认值
+                        # 一改（gnuplot2 的端点是纯黑/纯白，和文字、底色分不开）
+                        # 这个证据就会失效——所以证据用的色图必须由烟测自己钉死。
+                        "cmap": "turbo",
                     },
                     options=BatchRenderOptions(
                         width_px=640,

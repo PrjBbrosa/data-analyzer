@@ -36,6 +36,67 @@ import pyqtgraph as pg
 from PyQt5.QtGui import QPainter
 
 
+# 热力图默认色图。交互画布和批处理渲染器必须用同一个值，否则同一份数据在
+# 单文件里是一种配色、导出的 PNG 里是另一种——用户看到的是「色阶不一致」。
+# 批处理侧以前硬编码 "turbo"，而画布侧是 "gnuplot2"；常量放在这个中立模块里，
+# 两边各自 import，谁也不能再单方面漂移（``batch_render_qt`` 不允许 import
+# ``mf4_analyzer.ui``，所以不能直接引画布里的常量）。
+DEFAULT_HEATMAP_CMAP = "gnuplot2"
+SUPPORTED_HEATMAP_COLORMAPS = (
+    DEFAULT_HEATMAP_CMAP,
+    "turbo",
+    "viridis",
+    "plasma",
+    "inferno",
+    "magma",
+    "cividis",
+)
+
+
+def _gnuplot2_lut() -> np.ndarray:
+    """Return Matplotlib gnuplot2's documented 256-entry RGBA LUT.
+
+    The channel transfer functions are ported locally so the desktop runtime
+    remains independent of Matplotlib.  Values are clipped after evaluating
+    the original piecewise functions, then quantised exactly as a byte LUT.
+    """
+    x = np.linspace(0.0, 1.0, 256)
+    red = np.clip(x / 0.32 - 0.78125, 0.0, 1.0)
+    green = np.clip(2.0 * x - 0.84, 0.0, 1.0)
+    blue = np.where(
+        x < 0.25,
+        4.0 * x,
+        np.where(x < 0.92, -2.0 * x + 1.84, x / 0.08 - 11.5),
+    )
+    blue = np.clip(blue, 0.0, 1.0)
+    rgba = np.column_stack((red, green, blue, np.ones_like(x)))
+    return np.rint(rgba * 255.0).astype(np.ubyte)
+
+
+_GNUPLOT2_COLORMAP = pg.ColorMap(
+    np.linspace(0.0, 1.0, 256), _gnuplot2_lut(), name=DEFAULT_HEATMAP_CMAP,
+)
+
+
+def _normalise_colormap_name(name: str | None) -> str:
+    requested = str(name or DEFAULT_HEATMAP_CMAP)
+    return requested if requested in SUPPORTED_HEATMAP_COLORMAPS else DEFAULT_HEATMAP_CMAP
+
+
+def _resolve_colormap(name: str) -> pg.ColorMap:
+    """Resolve a supported heatmap map without a Matplotlib dependency."""
+    requested = _normalise_colormap_name(name)
+    if requested == DEFAULT_HEATMAP_CMAP:
+        return _GNUPLOT2_COLORMAP
+    try:
+        cm = pg.colormap.get(requested)
+        if cm is not None:
+            return cm
+    except Exception:
+        pass
+    return _GNUPLOT2_COLORMAP
+
+
 def _finite_data_bounds(matrix):
     arr = np.asarray(matrix, dtype=float)
     finite = arr[np.isfinite(arr)]

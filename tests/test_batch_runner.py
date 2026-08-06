@@ -857,11 +857,11 @@ def test_non_time_heatmap_invalid_cmap_adds_runner_warning(tmp_path):
 
     assert result.status == "done"
     assert Path(result.items[0].image_path).is_file()
-    assert "Invalid colormap 'not-a-colormap'; using 'turbo'." in (
+    assert "Invalid colormap 'not-a-colormap'; using 'gnuplot2'." in (
         result.items[0].warnings
     )
     entry = load_batch_manifest(result.manifest_path)["entries"][0]
-    assert "Invalid colormap 'not-a-colormap'; using 'turbo'." in (
+    assert "Invalid colormap 'not-a-colormap'; using 'gnuplot2'." in (
         entry["warnings"]
     )
 

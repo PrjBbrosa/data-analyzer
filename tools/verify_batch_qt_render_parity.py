@@ -38,6 +38,7 @@ from mf4_analyzer.batch_render_qt import (
 from mf4_analyzer.batch_render_qt._builder import build_batch_scene, _text_of
 from mf4_analyzer.batch_render_qt._dispatch import ensure_app
 from mf4_analyzer.batch_render_qt._export import render_scene_image
+from mf4_analyzer.qt_analysis_shared import DEFAULT_HEATMAP_CMAP
 from mf4_analyzer.batch_render_qt._page import render_metadata
 from mf4_analyzer.qt_chart_fonts import chart_font
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
@@ -231,7 +232,7 @@ def _cases() -> list[ParityCase]:
     db_ceiling = float(np.percentile(heatmap_db, 99.0))
     db_auto_levels = (db_ceiling - 30.0, db_ceiling)
     db_label = "Amplitude (dB re 1×10⁰)"
-    invalid_warning = "Invalid colormap 'not-a-real-map'; using 'turbo'."
+    invalid_warning = "Invalid colormap 'not-a-real-map'; using 'gnuplot2'."
 
     return [
         ParityCase(
@@ -1266,7 +1267,10 @@ def _reference_heatmap(case: ParityCase, target_size: tuple[int, int]):
         x_label=ref["x_label"],
         y_label=ref["y_label"],
         title="",
-        cmap="turbo",
+        # 参照侧必须解析 case 自己的 cmap，而不是钉死 turbo：钉死只在批处理的
+        # 缺省/回退恰好也是 turbo 时才成立，等于把「两侧同名同解析」的契约偷换成
+        # 「批处理等于某个常量」。invalid-cmap 那两个 case 就是被这一行漏过去的。
+        cmap=str(case.params.get("cmap", DEFAULT_HEATMAP_CMAP)),
         interp="bilinear",
         cbar_label=ref["colorbar_label"],
         amplitude_mode="amplitude",
@@ -1416,7 +1420,7 @@ def _evaluate(case: ParityCase, batch: dict, reference: dict) -> dict[str, bool]
                 )
                 and len(set(batch["matrix_corners"])) == 4
             ),
-            "turbo_lut_match": bool(
+            "colormap_lut_match": bool(
                 np.array_equal(batch["lut"], reference["lut"])
             ),
             "levels_match": bool(
