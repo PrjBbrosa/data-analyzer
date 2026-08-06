@@ -40,9 +40,13 @@ def test_tab_color_pixmap_invalid_color_still_renders_at_ratio(qapp):
 
 
 def test_swatch_default_path_picks_up_device_ratio(qapp, monkeypatch):
-    # ratio=None => read the live screen ratio via the shared helper.
+    # ratio=None => read the live screen ratio via the shared helper.  The
+    # helper must be patched on ``_swatches`` -- that is the module whose
+    # globals ``_swatch_pixmap`` actually reads -- while the call still goes
+    # through the ``ui.widgets`` re-export the rest of the app imports.
     import mf4_analyzer.ui.widgets as widgets_mod
-    monkeypatch.setattr(widgets_mod, "icon_device_pixel_ratio", lambda: 2.0)
+    import mf4_analyzer.ui.widgets._swatches as swatches_mod
+    monkeypatch.setattr(swatches_mod, "icon_device_pixel_ratio", lambda: 2.0)
     pix = widgets_mod._swatch_pixmap("#abcdef")  # default size, helper ratio
     assert pix.devicePixelRatioF() == 2.0
     assert pix.width() == round(11 * 2.0)  # default size is the compact 11
