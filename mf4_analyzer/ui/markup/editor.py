@@ -9,7 +9,6 @@ from PyQt5.QtGui import (
     QIcon,
     QImage,
     QPainter,
-    QPainterPath,
     QPen,
     QPixmap,
     QTransform,
@@ -48,6 +47,7 @@ from ...ui_kit.icons import icon_device_pixel_ratio
 from .commands import (_AddItemCommand, _CropCommand, _MoveCommand,
                        _DeleteCommand, _GeometryCommand, _StyleCommand)
 from .items import _ArrowAnnotationItem, _TextAnnotationItem
+from .serialization import deserialize_item, item_pen, serialize_item
 from .view import _MarkupGraphicsView
 
 _HIT_TOLERANCE = 12.0
@@ -1160,123 +1160,22 @@ class MarkupEditor(QWidget):
         self._set_scene_to_pixmap_size()
         self.fit_to_window()
 
+    # ---- clipboard payloads (implemented in serialization.py) ----
+
     def _serialize_item(self, item):
-        pen = self._item_pen(item)
-        color = pen.color() if pen is not None else self._color
-        width = pen.width() if pen is not None else self._stroke_width
-        if isinstance(item, QGraphicsRectItem):
-            return ("rect", QRectF(item.rect()), QPointF(item.pos()), QColor(color), width)
-        if isinstance(item, QGraphicsLineItem):
-            return ("line", QLineF(item.line()), QPointF(item.pos()), QColor(color), width)
-        if isinstance(item, QGraphicsPathItem):
-            return ("path", QPainterPath(item.path()), QPointF(item.pos()), QColor(color), width)
-        if isinstance(item, QGraphicsTextItem):
-            font_px = item.font().pixelSize()
-            if font_px <= 0:
-                font_px = self._text_px
-            return ("text", item.toPlainText(), QPointF(item.pos()), QColor(item.defaultTextColor()), font_px)
-        if isinstance(item, _ArrowAnnotationItem):
-            return (
-                "arrow",
-                QPointF(item.start),
-                QPointF(item.end),
-                QPointF(item.pos()),
-                QColor(color),
-                width,
-            )
-        if isinstance(item, QGraphicsItemGroup):
-            circle = None
-            label = None
-            for child in item.childItems():
-                if isinstance(child, QGraphicsEllipseItem):
-                    circle = child
-                elif isinstance(child, QGraphicsSimpleTextItem):
-                    label = child
-            if circle is not None and label is not None:
-                label_px = label.font().pixelSize()
-                if label_px <= 0:
-                    label_px = round(self._number_radius * 1.25)
-                return (
-                    "number",
-                    QRectF(circle.rect()),
-                    label.text(),
-                    QPointF(label.pos()),
-                    QPointF(item.pos()),
-                    QColor(color),
-                    width,
-                    float(item.scale()),
-                    label_px,
-                )
-        return None
+        return serialize_item(
+            item,
+            default_color=self._color,
+            default_width=self._stroke_width,
+            default_text_px=self._text_px,
+            default_number_radius=self._number_radius,
+        )
 
     def _deserialize_item(self, payload):
-        if payload is None:
-            return None
-        previous_color = QColor(self._color)
-        previous_width = self._stroke_width
-        kind = payload[0]
-        if kind == "rect":
-            _kind, rect, pos, color, width = payload
-            self._color, self._stroke_width = QColor(color), width
-            item = self.add_rect_item(rect)
-            item.setPos(pos)
-        elif kind == "line":
-            _kind, line, pos, color, width = payload
-            self._color, self._stroke_width = QColor(color), width
-            item = self.add_line_item(QRectF(line.p1(), line.p2()))
-            item.setPos(pos)
-        elif kind == "path":
-            _kind, path, pos, color, width = payload
-            self._color, self._stroke_width = QColor(color), width
-            item = self.add_path_item(path)
-            item.setPos(pos)
-        elif kind == "text":
-            _kind, text, pos, color, font_px = payload
-            item = self._make_text_item(pos, text, QColor(color), font_px)
-            item._committed = True
-            self._add_markup_item(item)
-            item.setPos(pos)
-        elif kind == "arrow":
-            _kind, start, end, pos, color, width = payload
-            self._color, self._stroke_width = QColor(color), width
-            item = self.add_arrow_item(QRectF(start, end))
-            item.setPos(pos)
-        elif kind == "number":
-            _kind, circle_rect, label_text, label_pos, pos, color, width, scale, label_px = payload
-            self._color, self._stroke_width = QColor(color), width
-            circle = QGraphicsEllipseItem(circle_rect)
-            circle.setPen(self._pen())
-            circle.setBrush(QBrush(self._color))
-            label = QGraphicsSimpleTextItem(label_text)
-            label.setBrush(QBrush(Qt.white))
-            label_font = label.font()
-            label_font.setBold(True)
-            label_font.setPixelSize(max(1, int(label_px)))
-            label.setFont(label_font)
-            label.setPos(label_pos)
-            item = QGraphicsItemGroup()
-            item.addToGroup(circle)
-            item.addToGroup(label)
-            item.setTransformOriginPoint(item.boundingRect().center())
-            self._add_markup_item(item)
-            item.setPos(pos)
-            item.setScale(scale)
-        else:
-            item = None
-        self._color = previous_color
-        self._stroke_width = previous_width
-        return item
+        return deserialize_item(self, payload)
 
     def _item_pen(self, item):
-        if isinstance(item, (QGraphicsRectItem, QGraphicsLineItem, QGraphicsPathItem)):
-            return item.pen()
-        if isinstance(item, _ArrowAnnotationItem):
-            return item.pen()
-        if isinstance(item, QGraphicsItemGroup):
-            for child in item.childItems():
-                if isinstance(child, QGraphicsEllipseItem):
-                    return child.pen()
-        return None
+        return item_pen(item)
 
     @staticmethod
     def _icon_canvas(w: int, h: int):

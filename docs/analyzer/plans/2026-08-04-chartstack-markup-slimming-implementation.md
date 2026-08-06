@@ -57,9 +57,9 @@ Run: `PYTEST tests/ui/test_cursor_pill_formatting.py tests/ui/test_chart_stack.p
 - [x] **Step 1(测试先行):** 按 spec D-D3 写往返测试(每种图元 + 字段逐项比对)。
   **向后兼容用例:** 在基线代码上对每种图元跑一次 `_serialize_item`,把输出 payload
   作为常量固化进测试,断言新代码 `deserialize` 后字段正确。基线跑绿,commit。
-- [ ] **Step 2:** 两个方法移为模块级函数(item 类型判定所需的 import 一并);
+- [x] **Step 2:** 两个方法移为模块级函数(item 类型判定所需的 import 一并);
   editor 薄委托。
-- [ ] **Step 3:** 验证。
+- [x] **Step 3:** 验证。
 
 Run: `PYTEST tests/ui/test_markup_serialization.py tests/ui/test_markup_editor.py -q`
 
