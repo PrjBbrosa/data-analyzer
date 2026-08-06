@@ -11,8 +11,18 @@ from ...ui_kit.icons import icon_device_pixel_ratio
 
 
 def _fmt_rate(fs):
-    """Format a sample rate in Hz or kHz for display (≥1000 Hz → kHz)."""
-    if fs >= 1000:
+    """Format a sample rate in Hz or kHz for display (≥1000 Hz → kHz).
+
+    The branch tests the value *as the Hz branch would print it*, not the raw
+    float.  ``fs`` comes from ``1 / median(diff(time))``, so a nominal 1 kHz
+    axis lands either side of 1000.0 depending on the sample count: two 1 ms
+    groups of one WWT file measured 1000.000000000000796 and
+    999.999999999999091, and a bare ``fs >= 1000`` labelled the same rate
+    "1.0 kHz" on one and "1000 Hz" on the other -- reading as two different
+    rasters.  Rounding first also keeps the branch honest for a genuine
+    999.6 Hz, which the Hz branch would render as the four-digit "1000 Hz".
+    """
+    if round(fs) >= 1000:
         return f"{fs / 1000:.1f} kHz"
     return f"{fs:.0f} Hz"
 
