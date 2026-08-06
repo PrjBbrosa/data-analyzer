@@ -3,9 +3,9 @@
 The absolute-dB colour window, the slice amplitude bounds and the smoothed
 image item are needed identically by the interactive canvases
 (``ui/pg_canvas/``) and by the headless batch Qt renderer
-(``batch_render_qt/``), which currently carries its own copies marked
+(``batch_render_qt/``), which used to carry its own copies marked
 "Copied — not imported". This module is the neutral landing site both sides
-can import without dragging in ``mf4_analyzer.ui``, following the
+import without dragging in ``mf4_analyzer.ui``, following the
 ``qt_plot_helpers.py`` precedent.
 
 Importing this module must never pull in ``mf4_analyzer.ui`` — that is the
@@ -14,10 +14,20 @@ whole point of it existing, and
 So keep the imports below limited to numpy/pyqtgraph/PyQt5.
 
 Moved verbatim out of ``ui/pg_canvas/analysis_axes.py``, which now re-exports
-every name here so existing import paths keep resolving. Switching
-``batch_render_qt`` over to these implementations is a separate piece of
-work: it needs a rebuilt parity baseline, so it is deliberately NOT done
-here.
+every name here so existing import paths keep resolving. ``batch_render_qt``
+has since dropped its duplicates of ``_SLICE_MAX_SPAN_DB``,
+``_slice_amp_bounds`` and ``_SmoothImageItem`` and imports them from here, so
+a change to those three lands on both sides at once — the render-parity
+matrix (``tools/verify_batch_qt_render_parity.py``) is what proves it stays
+safe. The diff audit that cleared the switch is
+``docs/analyzer/verify/batch-analysis-maths-dedup.md``.
+
+One family is deliberately still forked: the batch renderer keeps its own
+``_auto_db_color_limits`` rather than using ``_auto_db_window`` here. They
+agree on real data but not on empty/all-NaN input, where batch falls back to
+its ``_EMPTY_DB_LEVEL`` (-200 dB) baseline and this module falls back to
+``_finite_data_bounds``. Unifying them means picking one empty-state
+semantics, which is its own piece of work.
 """
 from __future__ import annotations
 
