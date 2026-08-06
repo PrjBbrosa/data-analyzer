@@ -17,7 +17,7 @@ from PyQt5.QtGui import QColor, QImage, QPainter, QPixmap
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
 
-import mf4_analyzer.ui.widgets as widgets_mod
+import mf4_analyzer.ui.widgets.channel_tree as channel_tree_mod
 from mf4_analyzer.ui.widgets import MultiFileChannelWidget
 from mf4_analyzer.ui_kit import load_stylesheet
 
@@ -39,9 +39,12 @@ class _FakeFile:
 
 
 def _render_at(app, size):
-    # Pin the swatch size for this render.
-    orig = widgets_mod._swatch_icon
-    widgets_mod._swatch_icon = lambda color, _s=size: orig(color, _s)
+    # Pin the swatch size for this render.  The rebind has to land on
+    # ``channel_tree`` -- that is the module whose globals MultiFileChannelWidget
+    # resolves ``_swatch_icon`` through; rebinding the ``ui.widgets`` re-export
+    # would silently paint the default size instead.
+    orig = channel_tree_mod._swatch_icon
+    channel_tree_mod._swatch_icon = lambda color, _s=size: orig(color, _s)
     try:
         w = MultiFileChannelWidget()
         w.add_file("f1", _FakeFile())
@@ -58,7 +61,7 @@ def _render_at(app, size):
         w.close()
         return img
     finally:
-        widgets_mod._swatch_icon = orig
+        channel_tree_mod._swatch_icon = orig
 
 
 def main():
