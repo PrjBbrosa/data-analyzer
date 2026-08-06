@@ -26,9 +26,16 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
   - **已知既有红 5 条**（均先于 2026-08-06 的重构波，别追也别算新账）：
     1. `tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference`
     2. `tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action`
-    3. `tests/test_batch_qt_render_parity.py` —— **环境性**：本机无 Microsoft YaHei，
-       字体替换致 `axis_font_9pt` 14/14 失败、轴范围 4 例、文本重叠 1 例；
-       曲线数据/token/网格断言全过。evidence.json 可复核，别当代码回归追。
+    3. `tests/test_batch_qt_render_parity.py` —— **真实契约漂移，与平台/字体无关**
+       （2026-08-06 实测更正：先前记为「缺 Microsoft YaHei 的环境性失败」是**错误定性**，
+       该断言比的是字号点数，跟字体族名无关）：
+       - `axis_font_9pt` 14/14 失败 —— `58128904` 有意把 `_theme.py` 的
+         `axis_font_pt` 从 9.0 提到 **12.0**（报告页 1920×1080 导出，9pt 只剩几像素墨迹），
+         但断言仍硬编码 `abs(pt-9.0)<=0.01`。实测 batch 侧 12.0 / GUI 参照侧 9.0，
+         两侧各自符合自己的规格，是**断言把两种规格当成同一个**。Windows 上同样失败。
+       - `axis_ranges_match` 4 例 —— pyqtgraph 自适应 padding：x 完全一致，y 恒定
+         比值 ≈1.0827（batch 子图更矮 → `suggestPadding` 比例更大），而容差是 rtol=1e-6。
+       - 曲线数据/token/网格断言全过，说明数据层无分歧。
     4. `tests/test_gen_help_screenshots.py` —— 依赖未入库的本机 `testdoc/` 样本目录，
        新克隆必红（本机有样本，实测通过）。
     5. `tests/acquisition_ui/test_review_handoff.py::test_analyzer_load_file_delegates_to_load_one`
