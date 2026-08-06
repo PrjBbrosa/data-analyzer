@@ -6,13 +6,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from mf4_analyzer.batch_image_options import BatchRenderOptions
 from mf4_analyzer.batch_render_qt._builder import build_batch_scene
 from mf4_analyzer.batch_render_qt._export import render_scene_image
+from mf4_analyzer.qt_chart_fonts import chart_font
 from tools.verify_batch_qt_render_parity import (
+    _axis_font_matches_spec,
     _cases,
     _plot_corner_ink_counts,
+    _range_close,
     _scene_integration_assertions,
+    _visible_text_collisions,
 )
 
 
@@ -132,6 +138,156 @@ def test_integration_guard_rejects_main_navigation_label(qapp):
         assert not _scene_integration_assertions(
             scene, mutated,
         )["no_main_navigation"]
+    finally:
+        scene.close()
+
+
+def _range_record(
+    *, x=(0.0, 1.0), y, data_y, auto_y=True, data_x=(0.0, 1.0), auto_x=False
+):
+    return {
+        "x": list(x),
+        "y": list(y),
+        "data_x": None if data_x is None else list(data_x),
+        "data_y": None if data_y is None else list(data_y),
+        "auto": [bool(auto_x), bool(auto_y)],
+    }
+
+
+def test_axis_font_guard_checks_each_side_against_its_own_spec():
+    """The two renderers run different sizes on purpose; pooling them drifted.
+
+    ``axis_font_pt`` was deliberately raised to 12.0 for the report page while
+    the interactive canvases stayed on ``chart_font``'s default, so an
+    assertion that demands one number across both sides can only ever fail.
+    """
+
+    batch = {"axis_font_points": [12.0, 12.0], "axis_font_expected_pt": 12.0}
+    reference = {"axis_font_points": [9.0], "axis_font_expected_pt": 9.0}
+    assert _axis_font_matches_spec(batch)
+    assert _axis_font_matches_spec(reference)
+
+    # Drift on either side is still caught.
+    assert not _axis_font_matches_spec(
+        {"axis_font_points": [12.0, 9.0], "axis_font_expected_pt": 12.0}
+    )
+    assert not _axis_font_matches_spec(
+        {"axis_font_points": [11.0], "axis_font_expected_pt": 9.0}
+    )
+    # An empty recording must not pass vacuously: deleting the measurement is
+    # exactly how a guard like this quietly stops guarding.
+    assert not _axis_font_matches_spec(
+        {"axis_font_points": [], "axis_font_expected_pt": 12.0}
+    )
+
+
+def test_axis_font_expectation_tracks_font_scale_not_a_constant(qapp):
+    """The expected size follows theme * font_scale, so it cannot be re-pinned."""
+
+    case = _cases()[0]
+    options = BatchRenderOptions(width_px=960, height_px=640)
+
+    def applied(params):
+        scene = build_batch_scene(
+            case.payload, params=params, options=options, context=case.context,
+        )
+        try:
+            render_scene_image(scene)
+            points = [
+                float(plot.getAxis("bottom").style["tickFont"].pointSizeF())
+                for plot in scene.plots
+            ]
+            return float(scene.theme.axis_font_pt), points
+        finally:
+            scene.close()
+
+    base_pt, base_points = applied({})
+    scaled_pt, scaled_points = applied({"font_scale": 1.5})
+
+    assert base_points and all(abs(v - base_pt) <= 0.01 for v in base_points)
+    assert scaled_points and all(abs(v - scaled_pt) <= 0.01 for v in scaled_points)
+    # The recipe's scale really moved the ruler, and the expectation moved with
+    # it rather than staying on whatever the 100% number happens to be.
+    assert scaled_pt == pytest.approx(base_pt * 1.5)
+    assert scaled_pt != pytest.approx(base_pt)
+
+
+def test_range_guard_ignores_viewport_padding_but_catches_real_drift():
+    """Auto-ranged y differs by ``suggestPadding`` alone; that is not drift.
+
+    The report's stacked panels are shorter than the single-file canvas's, so
+    pyqtgraph pads them proportionally more. Everything the two sides must
+    actually agree on — the data, the centre, the framing — still has to hold.
+    """
+
+    data = (-1.0, 1.0)
+    batch = [_range_record(y=(-1.20, 1.20), data_y=data)]
+    reference = [_range_record(y=(-1.10, 1.10), data_y=data)]
+    assert _range_close(batch, reference)
+
+    # Same padding story, but the data underneath moved.
+    assert not _range_close(
+        batch, [_range_record(y=(-1.10, 1.10), data_y=(-1.0, 1.05))]
+    )
+    # Range shifted off the data centre.
+    assert not _range_close(
+        batch, [_range_record(y=(-0.90, 1.30), data_y=data)]
+    )
+    # Data clipped by the view.
+    assert not _range_close(
+        batch, [_range_record(y=(-0.50, 1.10), data_y=data)]
+    )
+    # Framing far past pyqtgraph's own padding allowance.
+    assert not _range_close(
+        batch, [_range_record(y=(-4.0, 4.0), data_y=data)]
+    )
+    # One side silently stopped auto-ranging.
+    assert not _range_close(
+        batch, [_range_record(y=(-1.10, 1.10), data_y=data, auto_y=False)]
+    )
+    # x is never padding-tolerant.
+    assert not _range_close(
+        batch, [_range_record(x=(0.0, 1.001), y=(-1.10, 1.10), data_y=data)]
+    )
+
+
+def test_range_guard_keeps_manual_y_exact():
+    """A pinned range is an explicit spec, so it is still compared exactly."""
+
+    manual = [_range_record(y=(0.0, 1.1), data_y=(0.1, 1.0), auto_y=False)]
+    assert _range_close(manual, list(manual))
+    assert not _range_close(
+        manual, [_range_record(y=(0.0, 1.155), data_y=(0.1, 1.0), auto_y=False)]
+    )
+
+
+def test_text_overlap_guard_measures_ink_not_layout_boxes(qapp):
+    """A rotated label's box is padding-heavy; only its ink can collide.
+
+    On the 8-panel page the left-axis label boxes intersect by a few pixels of
+    QTextDocument margin while the glyphs keep a clear gap, so the box-level
+    screen alone reports overlaps the render does not have. Grow the label font
+    far enough and the ink really does collide — the guard must still say so.
+    """
+
+    case = next(item for item in _cases() if item.name == "time-subplot8")
+    scene = build_batch_scene(
+        case.payload,
+        params=case.params,
+        options=BatchRenderOptions(width_px=960, height_px=640),
+        context=case.context,
+    )
+    try:
+        render_scene_image(scene)
+        assert len(scene.plots) == 8
+        assert _visible_text_collisions(scene) == []
+
+        for plot in scene.plots:
+            plot.getAxis("left").label.setFont(
+                chart_font(scene.theme.axis_font_pt * 2.4)
+            )
+        render_scene_image(scene)
+        assert _visible_text_collisions(scene) != []
     finally:
         scene.close()
 
