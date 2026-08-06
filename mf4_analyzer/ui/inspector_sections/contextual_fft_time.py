@@ -686,16 +686,20 @@ class FFTTimeContextual(QWidget):
     # DEPRECATED key form; survives via _apply_preset legacy migration on load.
     #
     # Signal-type built-in presets. The compact shape
-    # (window/nfft/overlap/amplitude_mode/freq_auto/dynamic/cmap) is preserved;
+    # (window/nfft/overlap/amplitude_mode/freq_auto/dynamic) is preserved;
     # _builtin_preset_full_params spreads it to the full collect-preset shape.
     # Builtins use auto color levels, with per-preset manual fallback spans for
     # when the user unticks 色阶 auto.
+    #
+    # 不含 ``cmap``：预设从不决定色图。本面板恒定发 _FIXED_CMAP，_apply_preset
+    # 也显式跳过预设里的 cmap（实时选择归图表选项管），所以内建预设里再带一个
+    # 色图名只会是永不生效的误导数据，已从 analysis_presets 里删掉。
     _BUILTIN_PRESETS = {
         preset.key: {
             key: preset.params[key]
             for key in (
                 'window', 't_win_s', 'overlap', 'amplitude_mode',
-                'freq_auto', 'dynamic', 'cmap',
+                'freq_auto', 'dynamic',
             )
         }
         for preset in list_builtin_presets('fft_time')

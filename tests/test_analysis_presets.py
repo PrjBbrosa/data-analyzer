@@ -119,7 +119,6 @@ def test_fft_time_values_match_existing_full_contextual_contract():
         "freq_min": 0.0,
         "freq_max": 0.0,
         "dynamic": "Auto",
-        "cmap": "viridis",
         "x_auto": True,
         "x_min": 0.0,
         "x_max": 0.0,
@@ -133,7 +132,6 @@ def test_fft_time_values_match_existing_full_contextual_contract():
     assert presets["vibration"]["window"] == "hanning"
     assert presets["vibration"]["t_win_s"] == 1.5
     assert presets["vibration"]["overlap"] == 50
-    assert presets["vibration"]["cmap"] == "turbo"
     assert presets["vibration"]["z_floor"] == -40.0
     assert presets["transient"]["t_win_s"] == 0.6
     assert presets["transient"]["overlap"] == 75
@@ -147,6 +145,25 @@ def test_time_has_no_builtin_analysis_presets():
         list_builtin_presets("time")
     with pytest.raises(ValueError, match="unsupported analysis method"):
         get_builtin_preset("time", "transient")
+
+
+def test_no_builtin_preset_carries_a_colormap():
+    """内建预设不得携带 ``cmap``。
+
+    色图由图表选项实时决定：FFT-vs-Time 面板恒定发 ``_FIXED_CMAP``、应用预设时
+    显式跳过预设里的 cmap，批处理参数表单没有色图控件。fft_time 三个预设过去
+    各带一个（torque=viridis、vibration/transient=turbo），全程无人消费，只会
+    让人以为换预设能换配色。这条守卫防止它被「补全」回来。
+    """
+    from mf4_analyzer.analysis_presets import (
+        SUPPORTED_ANALYSIS_METHODS, list_builtin_presets,
+    )
+
+    for method in SUPPORTED_ANALYSIS_METHODS:
+        for preset in list_builtin_presets(method):
+            assert "cmap" not in preset.params, (
+                f"{method}/{preset.key} 又带上了 cmap"
+            )
 
 
 def test_records_and_nested_params_are_immutable_but_each_lookup_is_fresh():

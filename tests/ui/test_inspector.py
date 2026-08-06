@@ -5023,9 +5023,11 @@ def test_fft_time_builtin_presets_apply_through_combos(qtbot):
     )
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
+    # 不含 cmap：色图不由预设决定，内建预设已不再携带它
+    # （见 test_analysis_presets.test_no_builtin_preset_carries_a_colormap）。
     compact_keys = (
         'window', 't_win_s', 'overlap', 'amplitude_mode',
-        'freq_auto', 'dynamic', 'cmap',
+        'freq_auto', 'dynamic',
     )
     expected = {
         preset.key: {

@@ -3,6 +3,11 @@
 The catalog owns only partial analysis-parameter patches.  Runtime scope,
 signals, outputs, conflict policy, weighting and dB-reference state belong to
 the live consumer and are intentionally absent here.
+
+``cmap`` 同样**不属于**这里，别再加回来：色图由图表选项实时决定，FFT-vs-Time
+面板恒定发 ``_FIXED_CMAP``、应用预设时显式跳过预设里的 cmap，批处理的参数表单
+根本没有色图控件。fft_time 三个预设过去各带一个 cmap（torque=viridis、
+vibration/transient=turbo），全程无人消费，纯粹是会误导人的死数据。
 """
 from __future__ import annotations
 
@@ -67,7 +72,7 @@ _PATCHES: dict[str, dict[str, dict[str, Any]]] = {
             "t_win_s": 2.5, "overlap": 75,
             "amplitude_mode": "Amplitude dB", "remove_mean": True,
             "freq_auto": True, "freq_min": 0.0, "freq_max": 0.0,
-            "dynamic": "Auto", "cmap": "viridis",
+            "dynamic": "Auto",
             "x_auto": True, "x_min": 0.0, "x_max": 0.0,
             "y_auto": True, "y_min": 0.0, "y_max": 0.0,
             "z_auto": True, "z_floor": -40.0, "z_ceiling": 0.0,
@@ -77,7 +82,7 @@ _PATCHES: dict[str, dict[str, dict[str, Any]]] = {
             "t_win_s": 1.5, "overlap": 50,
             "amplitude_mode": "Amplitude dB", "remove_mean": True,
             "freq_auto": True, "freq_min": 0.0, "freq_max": 0.0,
-            "dynamic": "Auto", "cmap": "turbo",
+            "dynamic": "Auto",
             "x_auto": True, "x_min": 0.0, "x_max": 0.0,
             "y_auto": True, "y_min": 0.0, "y_max": 0.0,
             "z_auto": True, "z_floor": -40.0, "z_ceiling": 0.0,
@@ -87,7 +92,7 @@ _PATCHES: dict[str, dict[str, dict[str, Any]]] = {
             "t_win_s": 0.6, "overlap": 75,
             "amplitude_mode": "Amplitude dB", "remove_mean": True,
             "freq_auto": True, "freq_min": 0.0, "freq_max": 0.0,
-            "dynamic": "Auto", "cmap": "turbo",
+            "dynamic": "Auto",
             "x_auto": True, "x_min": 0.0, "x_max": 0.0,
             "y_auto": True, "y_min": 0.0, "y_max": 0.0,
             "z_auto": True, "z_floor": -30.0, "z_ceiling": 0.0,

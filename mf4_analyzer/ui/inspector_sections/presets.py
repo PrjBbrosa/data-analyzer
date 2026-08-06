@@ -236,8 +236,10 @@ class _PresetHoverCard(QFrame):
             )
         elif kind == 'fft_time':
             keys = (
+                # 不列 ``cmap``：色图不由预设决定（面板恒定发 _FIXED_CMAP，
+                # 应用预设时显式跳过），列出来只会让用户以为改了预设就能换色图。
                 'window', 'nfft', 'overlap', 'amplitude_mode', 'remove_mean',
-                'db_reference', 'dynamic', 'cmap',
+                'db_reference', 'dynamic',
             )
         elif kind == 'order':
             keys = (
