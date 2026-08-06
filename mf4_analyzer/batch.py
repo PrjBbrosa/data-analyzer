@@ -7,13 +7,18 @@ Two preset entry points are supported:
 
 The runner intentionally depends only on ``FileData`` plus pure analysis and
 output modules, so a desktop worker can delegate work without GUI objects.
+
+Data contracts (presets, item/run results, progress events) live in
+``batch_types``; this module re-exports them for backward compatibility.
 """
 from __future__ import annotations
 
 from contextlib import nullcontext
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, replace
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
+import logging
 import re
 import threading
 from types import SimpleNamespace
@@ -21,10 +26,18 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
+from . import batch_compute
+from . import batch_output
 from . import db_reference
+from .batch_compute import (
+    _Spectro2D,
+    _guess_rpm_channel,
+    _matrix_to_long_dataframe,
+)
 from .batch_output import (
     OutputPublishRace,
-    atomic_write,
+    _SLICE_CSV_FALLBACK_WARNING,
+    _XLSX_MAX_DATA_ROWS,
     atomic_write_set,
     build_task_output_identity,
     reserve_output_paths,
@@ -47,9 +60,26 @@ from .batch_manifest import (
 from .batch_preprocess import BatchPreprocessResult, preprocess_batch_signal
 from .batch_recipe import normalize_batch_params, recipe_fingerprint
 from .renderer_import_policy import is_optional_renderer_import_error
+from .batch_types import (
+    AnalysisPreset,
+    BatchItemResult,
+    BatchOutput,
+    BatchOutputPreview,
+    BatchPreviewResult,
+    BatchProgressEvent,
+    BatchRepresentativeGroup,
+    BatchRunResult,
+    EffectiveOutputPlan,
+    GroupRecoveryDecision,
+    RenderGroupResult,
+    TaskComputeResult,
+    _BatchCancelled,
+    _ImageBackendUnavailable,
+    _LoadFailure,
+    _ResolvedSource,
+)
 from .batch_validation import (
     raise_for_issues,
-    resolve_output_image_dimensions,
     validate_outputs,
     validate_recipe,
     validate_task,
@@ -60,12 +90,17 @@ from .io.source_adapters import (
     SourceUnavailableError,
     canonical_source_path,
 )
-from .signal import resolve_nfft, resolve_order_nfft
+# Re-exported (not called directly here) so
+# ``monkeypatch.setattr("mf4_analyzer.batch.FFTAnalyzer.compute_fft", ...)``
+# keeps resolving: it patches the same class object batch_compute imports.
 from .signal.fft import FFTAnalyzer
 
 if TYPE_CHECKING:
     from .batch_render import BatchSeries, BatchTimeFigureSpec
     from .batch_series_spool import BatchSeriesSpool, SpooledSeriesRef
+
+
+logger = logging.getLogger(__name__)
 
 
 _RENDER_BACKEND_DEGRADED_REASON = (
@@ -80,17 +115,18 @@ _LEGACY_IMAGE_FORMATS = frozenset({'pdf', 'svg'})
 def _legacy_image_format_warning(requested_format: object) -> str:
     requested = str(requested_format or '').strip().upper()
     return f'旧预设图像格式 {requested} 已迁移为 PNG；本次仅输出 PNG。'
-_XLSX_MAX_DATA_ROWS = 1_048_575
 
-#: CSV cannot hold the two sheets a slice workbook needs, and
-#: ``reserve_output_paths`` publishes exactly one file per extension, so
-#: splitting into several csv files would break the write-set's atomicity.
-#: Degrading to the historical long table costs nothing a csv reader had
-#: before and keeps the run green (design D22).
-_SLICE_CSV_FALLBACK_WARNING = (
-    'slice.csv_fallback: 切片工作簿需要 xlsx 格式，当前数据格式为 CSV，'
-    '本次数据文件仍为完整长表'
-)
+
+#: ``_XLSX_MAX_DATA_ROWS`` / ``_SLICE_CSV_FALLBACK_WARNING`` now live in
+#: ``batch_output`` (D3) and are imported above for backward compatibility.
+#: ``_XLSX_MAX_DATA_ROWS`` stays bound as a name in THIS module's namespace
+#: (rather than read through ``batch_output.``) so
+#: ``monkeypatch.setattr(mf4_analyzer.batch, "_XLSX_MAX_DATA_ROWS", ...)``
+#: (``tests/test_batch_output.py``) still reaches the writers -- the
+#: ``BatchRunner._write_dataframe`` / ``_write_workbook`` compatibility
+#: aliases near the bottom of this file read this module global explicitly
+#: at call time and pass it into ``batch_output.write_dataframe`` /
+#: ``write_workbook``.
 
 #: Sheet name and column prefix per *fixed* dimension, keyed by the
 #: ``_Spectro2D`` axis name that dimension carries (design §6.2).
@@ -123,28 +159,22 @@ def _load_slice_render_contract():
     case no curve was drawn, so there is nothing for the table to match.
     """
     try:
-        from .batch_render_qt._builder import (
-            _linear_amplitude_label,
-            _render_in_db,
-            _slice_clamp_warning,
-        )
-        from .batch_render_qt._models import plan_heatmap_slice
-        from .batch_render_qt._page import _DEFAULT_METHOD, effective_fact_items
+        from .batch_render_qt import contract
     except ImportError as exc:
         if not is_optional_renderer_import_error(exc):
             raise
         return None
     return SimpleNamespace(
-        plan_heatmap_slice=plan_heatmap_slice,
-        render_in_db=_render_in_db,
-        linear_amplitude_label=_linear_amplitude_label,
+        plan_heatmap_slice=contract.plan_heatmap_slice,
+        render_in_db=contract.render_in_db,
+        linear_amplitude_label=contract.linear_amplitude_label,
         # Same wording the chart emits, so a run that exports both artifacts
         # cannot report the same clamp twice in two different phrasings.
-        slice_clamp_warning=_slice_clamp_warning,
+        slice_clamp_warning=contract.slice_clamp_warning,
         # Same picker the page header uses, so the workbook can never say
         # ``NFFT=512`` under a chart drawn with ``NFFT=1024`` (plan §5.2).
-        effective_fact_items=effective_fact_items,
-        method_labels=_DEFAULT_METHOD,
+        effective_fact_items=contract.effective_fact_items,
+        method_labels=contract.default_method_labels,
     )
 
 
@@ -173,277 +203,6 @@ def _slice_fact_rows(items) -> list[tuple[str, str]]:
     return rows
 
 
-@dataclass(frozen=True)
-class BatchOutput:
-    export_data: bool = True
-    export_image: bool = True
-    data_format: str = 'csv'
-    image_format: str = 'png'
-    image_size: str = '1920x1080'
-    image_width: int = 1920
-    image_height: int = 1080
-    image_dpi: int = 144
-    image_background: str = 'white'
-    image_line_width: float = 1.5
-    conflict_policy: str = 'auto_number'
-    write_manifest: bool = True
-    resume_policy: str = 'none'
-    requested_image_format: str | None = None
-    migration_warnings: tuple[str, ...] = ()
-
-    def resolved_image_dimensions(self) -> tuple[int, int]:
-        return resolve_output_image_dimensions(self)
-
-
-@dataclass(frozen=True)
-class BatchOutputPreview:
-    task_count: int
-    artifact_count: int
-    conflict_count: int
-    image_format: str
-    image_width: int
-    image_height: int
-    image_dpi: int
-    conflict_policy: str
-    estimated: bool = True
-    group_count: int = 0
-    data_artifact_count: int = 0
-    image_artifact_count: int = 0
-    data_conflict_count: int = 0
-    image_conflict_count: int = 0
-    representative_group: "BatchRepresentativeGroup | None" = None
-
-
-@dataclass(frozen=True)
-class BatchRepresentativeGroup:
-    """One deterministic, no-load render-group description for UI preview."""
-
-    group_id: str
-    display_name: str
-    group_by: str
-    member_count: int
-    required_source_count: int
-    planned_stem: str
-    ordinal: int
-    total_groups: int
-    # False only when the caller supplied a source→channel map and *no*
-    # planned group turned out to hold the selected channels.  Defaults to
-    # True so callers that plan without the map keep the old contract.
-    channel_available: bool = True
-
-
-@dataclass(frozen=True)
-class BatchPreviewResult:
-    """The private, image-only result returned by :meth:`preview_group`."""
-
-    image_path: str | None
-    group_id: str
-    display_name: str
-    loaded_source_count: int
-    warnings: tuple[str, ...] = ()
-    status: str = "blocked"
-    message: str = ""
-
-
-@dataclass
-class AnalysisPreset:
-    name: str
-    method: str
-    source: str
-    params: dict = field(default_factory=dict)
-    outputs: BatchOutput = field(default_factory=BatchOutput)
-    signal: tuple | None = None
-    rpm_signal: tuple | None = None
-    signal_pattern: str = ''
-    rpm_channel: str = ''
-    # NEW (configuration; free_config only)
-    target_signals: tuple = ()
-    # NEW (run-time selection; free_config only; injected via dataclasses.replace)
-    target_pairs: tuple = ()
-    source_ids: tuple = ()
-    source_paths: tuple = ()
-    target_policy: str = 'common'
-    file_ids: tuple = ()
-    file_paths: tuple = ()
-
-    @classmethod
-    def from_current_single(cls, name, method, signal, params=None,
-                            outputs=None, rpm_channel='', rpm_signal=None,
-                            target_signals=None, file_ids=None, file_paths=None):
-        if target_signals:
-            raise ValueError(
-                "target_signals is a free_config-only field; "
-                "use AnalysisPreset.free_config instead"
-            )
-        if file_ids or file_paths:
-            raise ValueError(
-                "file_ids / file_paths are run-time selection fields; "
-                "inject via dataclasses.replace, not from_current_single"
-            )
-        return cls(
-            name=str(name or 'current analysis'),
-            method=str(method),
-            source='current_single',
-            signal=tuple(signal) if signal is not None else None,
-            rpm_signal=tuple(rpm_signal) if rpm_signal is not None else None,
-            rpm_channel=str(rpm_channel or ''),
-            params=dict(params or {}),
-            outputs=outputs or BatchOutput(),
-        )
-
-    @classmethod
-    def free_config(cls, name, method, signal_pattern='', rpm_channel='',
-                    params=None, outputs=None, target_signals=None,
-                    target_policy='common',
-                    file_ids=None, file_paths=None):
-        if file_ids:
-            raise ValueError(
-                "file_ids is a run-time selection field; "
-                "inject via dataclasses.replace after free_config()"
-            )
-        if file_paths:
-            raise ValueError(
-                "file_paths is a run-time selection field; "
-                "inject via dataclasses.replace after free_config()"
-            )
-        return cls(
-            name=str(name or 'custom batch'),
-            method=str(method),
-            source='free_config',
-            signal_pattern=str(signal_pattern or ''),
-            rpm_channel=str(rpm_channel or ''),
-            target_signals=tuple(target_signals or ()),
-            target_policy=str(target_policy or 'common'),
-            params=dict(params or {}),
-            outputs=outputs or BatchOutput(),
-        )
-
-
-@dataclass
-class BatchItemResult:
-    method: str
-    file_id: object
-    file_name: str
-    signal: str
-    status: str
-    data_path: str | None = None
-    image_path: str | None = None
-    message: str = ''
-    # dB-reference-defaults Task 9 (spec §15 C4): output metadata kept for
-    # tests -- never exported into the linear CSV/DataFrame columns.
-    colorbar_label: str | None = None
-    db_reference_value: float | None = None
-    db_reference_source: str | None = None
-    task_id: str = ''
-    source_identity: str = ''
-    group_identity: str = ''
-    effective_params: dict = field(default_factory=dict)
-    warnings: list[str] = field(default_factory=list)
-    requested_outputs: dict = field(default_factory=dict)
-    effective_outputs: dict = field(default_factory=dict)
-    degraded_reason: str = ''
-    artifact_facts: dict = field(default_factory=dict)
-    started_at: str | None = None
-    finished_at: str | None = None
-
-
-@dataclass(frozen=True)
-class EffectiveOutputPlan:
-    requested: Mapping[str, str]
-    effective: Mapping[str, str]
-    render_backend_types: tuple[type, type] | None
-    degraded_reason: str
-    migration_warnings: tuple[str, ...] = ()
-
-
-@dataclass
-class TaskComputeResult:
-    item: BatchItemResult
-    series_refs: tuple[SpooledSeriesRef, ...] = ()
-    render_error: str = ''
-    render_status: str = ''
-
-
-@dataclass
-class RenderGroupResult:
-    group_id: str
-    status: str
-    image_path: str | None = None
-    message: str = ''
-    warnings: list[str] = field(default_factory=list)
-    artifact: dict[str, Any] | None = None
-    effective_facts: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class GroupRecoveryDecision:
-    data_write_task_ids: frozenset[str]
-    payload_task_ids: frozenset[str]
-    image_write_required: bool
-    reusable_group: Mapping[str, Any] | None
-
-
-@dataclass
-class BatchRunResult:
-    status: str
-    items: list[BatchItemResult] = field(default_factory=list)
-    blocked: list[str] = field(default_factory=list)
-    manifest_path: str | None = None
-    summary: dict = field(default_factory=dict)
-    run_id: str | None = None
-    degraded_count: int = 0
-    warnings: list[str] = field(default_factory=list)
-    render_groups: list[RenderGroupResult] = field(default_factory=list)
-
-
-@dataclass
-class BatchProgressEvent:
-    kind: Literal[
-        'task_started', 'task_done', 'task_failed',
-        'task_cancelled', 'task_skipped', 'task_resumed', 'run_finished',
-    ]
-    task_index: int | None = None
-    total: int | None = None
-    file_name: str | None = None
-    signal: str | None = None
-    method: str | None = None
-    error: str | None = None        # task_failed only
-    final_status: str | None = None  # run_finished only
-    task_id: str | None = None
-    message: str | None = None
-    data_path: str | None = None
-    image_path: str | None = None
-
-
-@dataclass
-class _LoadFailure:
-    """Sentinel returned by ``BatchRunner._resolve_files`` when a disk path
-    cannot be loaded. ``_expand_tasks`` still yields tasks for it; ``run``
-    converts each to a ``task_failed`` event with the cached error.
-    """
-    path: str
-    error: str
-
-
-@dataclass(frozen=True)
-class _ResolvedSource:
-    """One logical source resident under a physical-file cache entry."""
-
-    source_id: object
-    physical_path: str
-    group_id: str
-    file_data: object
-    display_name: str
-
-
-class _BatchCancelled(RuntimeError):
-    pass
-
-
-class _ImageBackendUnavailable(RuntimeError):
-    """The task cannot proceed because it requested only rendered output."""
-
-
 def _default_loader(path):
     """Compatibility loader backed by the shared source registry.
 
@@ -457,6 +216,213 @@ def _default_loader(path):
     loaded = DEFAULT_SOURCE_ADAPTER_REGISTRY.load_sources(path)
     file_data = tuple(source.file_data for source in loaded)
     return file_data[0] if len(file_data) == 1 else file_data
+
+
+class _RunReporter:
+    """Single funnel for one ``BatchRunner.run`` call's progress and records.
+
+    Progress emission and manifest recording used to be written twice -- once
+    down the grouped path and once down the non-grouped one -- which is why
+    the two kept drifting apart.  ``run`` now builds exactly one reporter and
+    both paths call it, so these three cross-cutting concerns are defined in a
+    single place:
+
+    * :meth:`emit` -- every ``BatchProgressEvent`` plus :meth:`emit_progress`,
+      the legacy ``progress_callback(int, int)`` shim (which by contract fires
+      only for ``done`` items);
+    * :meth:`record` -- one manifest entry per item, including artifact facts
+      and the recorder-failure fallback;
+    * :meth:`emit_cancelled_range` -- the batched tail-cancellation emission.
+
+    Deliberately private: ``run`` owns the instance, nothing else may import
+    it.  ``run`` learns the recipe, the recorder and the task plan in stages,
+    hence the ``bind_*`` methods rather than one fat constructor.
+    """
+
+    def __init__(self, runner, preset, *, on_event=None,
+                 progress_callback=None, cancel_token=None):
+        self._runner = runner
+        self._preset = preset
+        self._on_event = on_event
+        self._progress_callback = progress_callback
+        self._cancel_token = cancel_token
+        self._recorder = None
+        self._requested_params: Mapping[str, Any] = {}
+        self._tasks: Sequence = ()
+        self._total = 0
+        self._items: list[BatchItemResult] = []
+        self._cancelled_item = None
+        self.manifest_errors: list[str] = []
+
+    # -- wiring ------------------------------------------------------------
+
+    def bind_recipe(self, requested_params) -> None:
+        """Attach the normalized recipe params stamped into every entry."""
+
+        self._requested_params = requested_params
+
+    def bind_recorder(self, recorder) -> None:
+        """Attach the manifest recorder (``None`` disables recording)."""
+
+        self._recorder = recorder
+
+    def bind_plan(self, *, tasks, total, items, cancelled_item) -> None:
+        """Attach the run plan that tail cancellation walks."""
+
+        self._tasks = tasks
+        self._total = total
+        self._items = items
+        self._cancelled_item = cancelled_item
+
+    # -- progress ----------------------------------------------------------
+
+    def emit(self, event: BatchProgressEvent) -> None:
+        if self._on_event:
+            self._on_event(event)
+
+    def emit_progress(self, item, task_index, total) -> None:
+        """Legacy ``progress_callback(int, int)`` shim.
+
+        The historical contract is "called once per completed task": failed,
+        skipped, resumed and cancelled items do not bump it (spec 4.4 / 8).
+        """
+
+        if self._progress_callback and item.status == 'done':
+            self._progress_callback(task_index, total)
+
+    def emit_cancelled_range(
+        self, start_index, message='batch cancelled',
+    ) -> None:
+        """Cancel every task from ``start_index`` to the end of the plan."""
+
+        for task_index in range(start_index, self._total + 1):
+            key, signal = self._tasks[task_index - 1]
+            item = self._cancelled_item(key, signal, message)
+            self._items.append(item)
+            self.record(item, key, self._runner._known_file_data(key))
+            self.emit(BatchProgressEvent(
+                kind='task_cancelled',
+                task_index=task_index,
+                total=self._total,
+                file_name=item.file_name,
+                signal=signal,
+                method=self._preset.method,
+                task_id=item.task_id,
+                message=item.message,
+            ))
+
+    # -- manifest ----------------------------------------------------------
+
+    def _source_path(self, source_key, fd=None):
+        if fd is not None:
+            value = getattr(fd, 'filepath', None)
+            if value not in (None, ''):
+                return value
+        physical_key = self._runner._physical_for_source(source_key)
+        if physical_key is None:
+            return None
+        return self._runner._physical_paths.get(physical_key, physical_key)
+
+    def record(self, item, source_key, fd=None) -> None:
+        recorder = self._recorder
+        if recorder is None:
+            return
+        preset = self._preset
+        source_path = self._source_path(source_key, fd)
+        source_identity = item.source_identity
+        if not source_identity and source_path not in (None, ''):
+            source_identity = str(
+                Path(source_path).expanduser().resolve(strict=False)
+            )
+        source = source_file_facts(
+            source_path,
+            source_identity=source_identity or f"file_id:{source_key!r}",
+        )
+        source.update({
+            'group_identity': item.group_identity or 'default',
+            'display_name': item.file_name,
+        })
+        artifacts = dict(item.artifact_facts or {})
+        if item.status == 'done':
+            if item.data_path:
+                try:
+                    data_format = str(
+                        preset.outputs.data_format
+                    ).lower().lstrip('.')
+                    artifacts['data'] = artifact_facts(
+                        item.data_path,
+                        kind='data',
+                        artifact_format=(
+                            data_format if data_format == 'xlsx' else 'csv'
+                        ),
+                        cancel_token=self._cancel_token,
+                    )
+                except OSError as exc:
+                    item.warnings.append(f"data checksum unavailable: {exc}")
+            if item.image_path:
+                try:
+                    width, height = preset.outputs.resolved_image_dimensions()
+                    artifacts['image'] = artifact_facts(
+                        item.image_path,
+                        kind='image',
+                        artifact_format=str(
+                            preset.outputs.image_format
+                        ).lower().lstrip('.'),
+                        width=width,
+                        height=height,
+                        dpi=int(preset.outputs.image_dpi),
+                        cancel_token=self._cancel_token,
+                    )
+                except OSError as exc:
+                    item.warnings.append(f"image checksum unavailable: {exc}")
+            item.artifact_facts = artifacts
+            if any(
+                facts.get('checksum_status') != 'complete'
+                for facts in artifacts.values()
+            ):
+                item.warnings.append('artifact checksum incomplete')
+                if (
+                    self._cancel_token is not None
+                    and self._cancel_token.is_set()
+                ):
+                    item.status = 'cancelled'
+                    item.message = 'cancelled during artifact checksum'
+        unit = ''
+        if fd is not None:
+            unit = str(
+                (getattr(fd, 'channel_units', None) or {}).get(
+                    item.signal, '',
+                ) or ''
+            )
+        entry = {
+            'task_id': item.task_id,
+            'source_id': source_key,
+            'source': source,
+            'channel': item.signal,
+            'channel_unit': unit,
+            'method': item.method,
+            'requested_params': self._requested_params,
+            'effective_facts': item.effective_params,
+            'status': item.status,
+            'message': item.message,
+            'warnings': list(item.warnings),
+            'requested_outputs': dict(item.requested_outputs),
+            'effective_outputs': dict(item.effective_outputs),
+            'degraded_reason': item.degraded_reason,
+            'started_at': item.started_at,
+            'finished_at': item.finished_at,
+            'artifacts': artifacts,
+        }
+        try:
+            recorder.record(entry)
+        except Exception as exc:
+            logger.warning(
+                "batch run: cannot record manifest entry for task %s "
+                "(source=%r, channel=%s, status=%s): %s",
+                item.task_id, source_key, item.signal, item.status, exc,
+                exc_info=True,
+            )
+            self.manifest_errors.append(f"cannot update batch manifest: {exc}")
 
 
 class BatchRunner:
@@ -889,16 +855,49 @@ class BatchRunner:
             cancel_token: threading.Event | None = None,
             resume_manifest=None,
             retry_failed_manifest=None) -> BatchRunResult:
+        """Execute ``preset`` over the runner's sources and write ``output_dir``.
+
+        This is a dispatch skeleton, not a worker.  It initializes the run
+        (output dir, recipe fingerprint, manifest recorder, resume/retry
+        decision, task expansion, run plan, effective outputs), then hands the
+        actual work to exactly one of two paths and assembles the result:
+
+        * ``render_groups`` non-empty -> :meth:`_run_grouped_compute` followed
+          by :meth:`_run_grouped_render`, both inside one series-spool context;
+        * otherwise -> :meth:`_run_sequential`.
+
+        The two paths stay separate on purpose: the spool, the group image and
+        group-level resume are real product semantics, not duplication.  What
+        *was* duplicated -- progress emission, the legacy progress callback and
+        manifest recording -- is funnelled through the one ``_RunReporter``
+        built here, so both paths report identically by construction.
+
+        Every early exit goes through ``_finish_result`` so a blocked run still
+        finalizes the manifest and emits its ``run_finished`` event.
+        """
+
         output_dir = Path(output_dir)
+        # One reporter per run: every progress event, every legacy progress
+        # callback and every manifest entry -- grouped path and non-grouped
+        # path alike -- goes through it.
+        reporter = _RunReporter(
+            self, preset,
+            on_event=on_event,
+            progress_callback=progress_callback,
+            cancel_token=cancel_token,
+        )
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
             err = f"cannot create output dir: {exc}"
-            if on_event:
-                on_event(BatchProgressEvent(
-                    kind='run_finished',
-                    final_status='blocked',
-                ))
+            logger.warning(
+                "batch run: cannot create output dir %s: %s",
+                output_dir, exc, exc_info=True,
+            )
+            reporter.emit(BatchProgressEvent(
+                kind='run_finished',
+                final_status='blocked',
+            ))
             return BatchRunResult(status='blocked', blocked=[err])
 
         try:
@@ -912,14 +911,20 @@ class BatchRunner:
                 outputs=output_settings,
             )
         except Exception as exc:
-            if on_event:
-                on_event(BatchProgressEvent(
-                    kind='run_finished', final_status='blocked',
-                ))
+            logger.warning(
+                "batch run: cannot normalize recipe params for preset %s: %s",
+                preset.name, exc, exc_info=True,
+            )
+            reporter.emit(BatchProgressEvent(
+                kind='run_finished', final_status='blocked',
+            ))
             return BatchRunResult(status='blocked', blocked=[str(exc)])
 
+        reporter.bind_recipe(requested_params)
         recorder = None
-        manifest_errors: list[str] = []
+        # The reporter owns the list; ``_finish_result`` and the manifest
+        # fallbacks below keep appending to that same object.
+        manifest_errors: list[str] = reporter.manifest_errors
         run_migration_warnings: tuple[str, ...] = tuple(
             getattr(preset.outputs, 'migration_warnings', ()) or ()
         )
@@ -946,165 +951,24 @@ class BatchRunner:
                 recorder.start()
             except Exception as exc:
                 err = f"cannot create batch manifest: {exc}"
-                if on_event:
-                    on_event(BatchProgressEvent(
-                        kind='run_finished', final_status='blocked',
-                    ))
+                logger.warning(
+                    "batch run: cannot create/start manifest recorder under "
+                    "%s for preset %s: %s",
+                    output_dir, preset.name, exc, exc_info=True,
+                )
+                reporter.emit(BatchProgressEvent(
+                    kind='run_finished', final_status='blocked',
+                ))
                 return BatchRunResult(status='blocked', blocked=[err])
 
-        def finish_result(status, items=None, blocked=None, render_groups=None):
-            result_items = list(items or ())
-            result_blocked = list(blocked or ())
-            result_render_groups = list(render_groups or ())
-            result_blocked.extend(manifest_errors)
-            result_status = status
-            degraded_reasons = list(dict.fromkeys(
-                item.degraded_reason
-                for item in result_items
-                if item.degraded_reason
-            ))
-            degraded_count = sum(
-                bool(item.degraded_reason) for item in result_items
-            )
-            if degraded_count and result_status == 'done':
-                result_status = 'partial'
-            if manifest_errors and result_status == 'done':
-                result_status = 'partial'
-            summary = derive_summary(
-                {'status': item.status} for item in result_items
-            )
-            manifest_path = None
-            run_id = recorder.run_id if recorder is not None else None
-            if recorder is not None:
-                try:
-                    manifest_path = str(recorder.finish(
-                        run_status=result_status,
-                        blocked_reasons=result_blocked,
-                    ))
-                    summary = derive_summary(recorder.entries)
-                except Exception as exc:
-                    result_blocked.append(f"cannot finalize batch manifest: {exc}")
-                    if result_status == 'done':
-                        result_status = 'partial'
-            if on_event:
-                on_event(BatchProgressEvent(
-                    kind='run_finished', final_status=result_status,
-                ))
-            return BatchRunResult(
-                status=result_status,
-                items=result_items,
-                blocked=result_blocked,
-                manifest_path=manifest_path,
-                summary=summary,
-                run_id=run_id,
-                degraded_count=degraded_count,
-                warnings=list(dict.fromkeys([
-                    *run_migration_warnings,
-                    *degraded_reasons,
-                    *(warning for item in result_items for warning in item.warnings),
-                ])),
-                render_groups=result_render_groups,
-            )
-
-        def physical_path_for(source_key, fd=None):
-            if fd is not None:
-                value = getattr(fd, 'filepath', None)
-                if value not in (None, ''):
-                    return value
-            physical_key = self._physical_for_source(source_key)
-            if physical_key is None:
-                return None
-            return self._physical_paths.get(physical_key, physical_key)
-
-        def record_item(item, source_key, fd=None):
-            if recorder is None:
-                return
-            source_path = physical_path_for(source_key, fd)
-            source_identity = item.source_identity
-            if not source_identity and source_path not in (None, ''):
-                source_identity = str(
-                    Path(source_path).expanduser().resolve(strict=False)
-                )
-            source = source_file_facts(
-                source_path,
-                source_identity=source_identity or f"file_id:{source_key!r}",
-            )
-            source.update({
-                'group_identity': item.group_identity or 'default',
-                'display_name': item.file_name,
-            })
-            artifacts = dict(item.artifact_facts or {})
-            if item.status == 'done':
-                if item.data_path:
-                    try:
-                        data_format = str(
-                            preset.outputs.data_format
-                        ).lower().lstrip('.')
-                        artifacts['data'] = artifact_facts(
-                            item.data_path,
-                            kind='data',
-                            artifact_format=(
-                                data_format if data_format == 'xlsx' else 'csv'
-                            ),
-                            cancel_token=cancel_token,
-                        )
-                    except OSError as exc:
-                        item.warnings.append(f"data checksum unavailable: {exc}")
-                if item.image_path:
-                    try:
-                        width, height = preset.outputs.resolved_image_dimensions()
-                        artifacts['image'] = artifact_facts(
-                            item.image_path,
-                            kind='image',
-                            artifact_format=str(
-                                preset.outputs.image_format
-                            ).lower().lstrip('.'),
-                            width=width,
-                            height=height,
-                            dpi=int(preset.outputs.image_dpi),
-                            cancel_token=cancel_token,
-                        )
-                    except OSError as exc:
-                        item.warnings.append(f"image checksum unavailable: {exc}")
-                item.artifact_facts = artifacts
-                if any(
-                    facts.get('checksum_status') != 'complete'
-                    for facts in artifacts.values()
-                ):
-                    item.warnings.append('artifact checksum incomplete')
-                    if cancel_token is not None and cancel_token.is_set():
-                        item.status = 'cancelled'
-                        item.message = 'cancelled during artifact checksum'
-            unit = ''
-            if fd is not None:
-                unit = str(
-                    (getattr(fd, 'channel_units', None) or {}).get(
-                        item.signal, '',
-                    ) or ''
-                )
-            entry = {
-                'task_id': item.task_id,
-                'source_id': source_key,
-                'source': source,
-                'channel': item.signal,
-                'channel_unit': unit,
-                'method': item.method,
-                'requested_params': requested_params,
-                'effective_facts': item.effective_params,
-                'status': item.status,
-                'message': item.message,
-                'warnings': list(item.warnings),
-                'requested_outputs': dict(item.requested_outputs),
-                'effective_outputs': dict(item.effective_outputs),
-                'degraded_reason': item.degraded_reason,
-                'started_at': item.started_at,
-                'finished_at': item.finished_at,
-                'artifacts': artifacts,
-            }
-            try:
-                recorder.record(entry)
-            except Exception as exc:
-                manifest_errors.append(f"cannot update batch manifest: {exc}")
+        reporter.bind_recorder(recorder)
+        # Bound once so the 13 terminal exits below stay one call each.  Note
+        # ``run_migration_warnings`` is *not* bound here: it is rebound from
+        # the effective output plan further down, so every call site passes
+        # the value that is current at that point.
+        finish_result = partial(
+            self._finish_result, reporter=reporter, recorder=recorder,
+        )
 
         recipe_issues = (
             *validate_outputs(preset.outputs),
@@ -1117,12 +981,16 @@ class BatchRunner:
         )
         if recipe_issues:
             err = "; ".join(str(issue) for issue in recipe_issues)
-            return finish_result('blocked', blocked=[err])
+            return finish_result(
+                'blocked', blocked=[err],
+                run_migration_warnings=run_migration_warnings,
+            )
 
         if resume_manifest is not None and retry_failed_manifest is not None:
             return finish_result(
                 'blocked',
                 blocked=['resume_manifest and retry_failed_manifest are mutually exclusive'],
+                run_migration_warnings=run_migration_warnings,
             )
 
         resume_data = None
@@ -1135,6 +1003,7 @@ class BatchRunner:
                 blocked=[
                     'resume_manifest requires outputs.resume_policy="manifest"'
                 ],
+                run_migration_warnings=run_migration_warnings,
             )
         if resume_policy == 'manifest':
             try:
@@ -1161,8 +1030,14 @@ class BatchRunner:
                             resume_data = loaded
                             break
             except Exception as exc:
+                logger.warning(
+                    "batch run: cannot load resume manifest "
+                    "(resume_manifest=%s, output_dir=%s): %s",
+                    resume_manifest, output_dir, exc, exc_info=True,
+                )
                 return finish_result(
                     'blocked', blocked=[f"cannot load resume manifest: {exc}"],
+                    run_migration_warnings=run_migration_warnings,
                 )
 
         retry_scope = None
@@ -1175,54 +1050,32 @@ class BatchRunner:
                     recipe_fingerprint=recipe_id,
                 )
             except ManifestRecipeMismatch as exc:
-                return finish_result('blocked', blocked=[str(exc)])
+                return finish_result(
+                    'blocked', blocked=[str(exc)],
+                    run_migration_warnings=run_migration_warnings,
+                )
             except Exception as exc:
                 return finish_result(
                     'blocked', blocked=[f"cannot load retry manifest: {exc}"],
+                    run_migration_warnings=run_migration_warnings,
                 )
             if not retry_scope:
                 return finish_result(
                     'blocked',
                     blocked=['retry manifest has no failed or cancelled tasks'],
+                    run_migration_warnings=run_migration_warnings,
                 )
 
         group_by = str(requested_params.get(
             'render_group_by', 'none',
         ) or 'none').strip().lower()
         explicit_grouping = preset.method == 'time' and group_by != 'none'
-
-        def apply_retry_scope(tasks, render_tasks, render_groups):
-            if retry_scope is None:
-                return tasks, render_tasks, render_groups
-            if not explicit_grouping:
-                selected = [
-                    (source_key, channel)
-                    for source_key, channel in tasks
-                    if (source_key, channel, preset.method) in retry_scope
-                ]
-                return selected, render_tasks, render_groups
-            selected_groups = tuple(
-                group for group in render_groups
-                if group.identity.group_id in retry_scope.group_ids
-                or any(
-                    (member.source_key, member.channel, preset.method)
-                    in retry_scope
-                    for member in group.members
-                )
-            )
-            selected_pairs = {
-                (member.source_key, member.channel)
-                for group in selected_groups
-                for member in group.members
-            }
-            return (
-                [task for task in tasks if task in selected_pairs],
-                [
-                    task for task in render_tasks
-                    if (task.source_key, task.channel) in selected_pairs
-                ],
-                list(selected_groups),
-            )
+        apply_retry_scope = partial(
+            self._apply_retry_scope,
+            retry_scope=retry_scope,
+            preset=preset,
+            explicit_grouping=explicit_grouping,
+        )
         deferred_path_scope = bool(
             tuple(getattr(preset, 'target_signals', ()) or ())
             and not tuple(getattr(preset, 'target_pairs', ()) or ())
@@ -1241,9 +1094,17 @@ class BatchRunner:
                 allow_source_load=False,
             ))
         except Exception as exc:
+            logger.warning(
+                "batch run: cannot expand tasks for preset %s "
+                "(allow_source_load=False): %s",
+                preset.name, exc, exc_info=True,
+            )
             for physical_key in tuple(self._disk_cache):
                 self._evict_physical(physical_key)
-            return finish_result('blocked', blocked=[str(exc)])
+            return finish_result(
+                'blocked', blocked=[str(exc)],
+                run_migration_warnings=run_migration_warnings,
+            )
         recovery_scope_manifest = retry_data
         if recovery_scope_manifest is None and resume_data is not None:
             recovery_scope_manifest = resume_data
@@ -1319,7 +1180,7 @@ class BatchRunner:
                     finished_at=utc_now(),
                 )
                 failed_items.append(item)
-                record_item(item, source_key, fd)
+                reporter.record(item, source_key, fd)
             if recorder is not None:
                 for group in render_groups:
                     try:
@@ -1337,6 +1198,7 @@ class BatchRunner:
                         )
             return finish_result(
                 'blocked', items=failed_items, blocked=[str(exc)],
+                run_migration_warnings=run_migration_warnings,
             )
 
         if deferred_path_scope:
@@ -1348,14 +1210,23 @@ class BatchRunner:
                     allow_source_load=True,
                 ))
             except Exception as exc:
+                logger.warning(
+                    "batch run: cannot expand tasks for preset %s "
+                    "(allow_source_load=True): %s",
+                    preset.name, exc, exc_info=True,
+                )
                 for physical_key in tuple(self._disk_cache):
                     self._evict_physical(physical_key)
-                return finish_result('blocked', blocked=[str(exc)])
+                return finish_result(
+                    'blocked', blocked=[str(exc)],
+                    run_migration_warnings=run_migration_warnings,
+                )
             if not tasks:
                 for physical_key in tuple(self._disk_cache):
                     self._evict_physical(physical_key)
                 return finish_result(
                     'blocked', blocked=['no matching batch tasks'],
+                    run_migration_warnings=run_migration_warnings,
                 )
             if retry_scope is not None and not explicit_grouping:
                 tasks = [
@@ -1368,6 +1239,7 @@ class BatchRunner:
                         self._evict_physical(physical_key)
                     return finish_result(
                         'blocked', blocked=['no matching batch tasks'],
+                        run_migration_warnings=run_migration_warnings,
                     )
             tasks, render_tasks, render_groups = self._build_run_plan(
                 tasks,
@@ -1381,70 +1253,18 @@ class BatchRunner:
 
         items: list[BatchItemResult] = []
         blocked: list[str] = []
-        cancelled = False
         total = len(tasks)
-        prev_physical_key = None
         requested_artifacts = self._required_artifacts(preset.outputs)
 
-        def task_file_name(source_key):
-            fd = self._known_file_data(source_key)
-            if fd is not None:
-                return getattr(fd, 'filename', str(source_key))
-            physical_key = self._physical_for_source(source_key)
-            if physical_key is not None:
-                return self._physical_paths.get(physical_key, physical_key)
-            return str(source_key)
-
-        def cancelled_item(source_key, signal, message):
-            fd = self._known_file_data(source_key)
-            if fd is not None:
-                identity = self._build_task_identity(
-                    fd,
-                    file_id=source_key,
-                    channel=signal,
-                    method=preset.method,
-                    params=requested_params,
-                )
-            else:
-                identity = self._build_unresolved_task_identity(
-                    source_key,
-                    channel=signal,
-                    method=preset.method,
-                    params=requested_params,
-                )
-            return BatchItemResult(
-                method=preset.method,
-                file_id=source_key,
-                file_name=task_file_name(source_key),
-                signal=signal,
-                status='cancelled',
-                message=message,
-                task_id=(identity.task_id if identity else ''),
-                source_identity=(identity.source_identity if identity else ''),
-                group_identity=(identity.group_identity if identity else ''),
-                requested_outputs=dict(requested_artifacts),
-                effective_outputs=dict(requested_artifacts),
-                started_at=None,
-                finished_at=utc_now(),
-            )
-
-        def emit_cancelled_range(start_index, message='batch cancelled'):
-            for task_index in range(start_index, total + 1):
-                key, signal = tasks[task_index - 1]
-                item = cancelled_item(key, signal, message)
-                items.append(item)
-                record_item(item, key, self._known_file_data(key))
-                if on_event:
-                    on_event(BatchProgressEvent(
-                        kind='task_cancelled',
-                        task_index=task_index,
-                        total=total,
-                        file_name=item.file_name,
-                        signal=signal,
-                        method=preset.method,
-                        task_id=item.task_id,
-                        message=item.message,
-                    ))
+        reporter.bind_plan(
+            tasks=tasks, total=total, items=items,
+            cancelled_item=partial(
+                self._cancelled_item,
+                preset=preset,
+                requested_params=requested_params,
+                requested_artifacts=requested_artifacts,
+            ),
+        )
 
         if render_groups:
             group_for_task = {
@@ -1495,49 +1315,12 @@ class BatchRunner:
                 if entry.get('group_id')
             }
 
-            def planned_group_item(member, *, status, message='', entry=None):
-                artifacts = dict((entry or {}).get('artifacts') or {})
-                data = artifacts.get('data') or {}
-                source = (entry or {}).get('source') or {}
-                return BatchItemResult(
-                    method='time',
-                    file_id=member.source_key,
-                    file_name=str(
-                        source.get('display_name')
-                        or task_file_name(member.source_key)
-                    ),
-                    signal=member.channel,
-                    status=status,
-                    data_path=(data.get('path') if status == 'resumed' else None),
-                    message=message,
-                    task_id=member.identity.task_id,
-                    source_identity=member.identity.source_identity,
-                    group_identity=member.identity.group_identity,
-                    effective_params=dict(
-                        (entry or {}).get('effective_facts') or {}
-                    ),
-                    warnings=list(dict.fromkeys([
-                        *effective_plan.migration_warnings,
-                        *((entry or {}).get('warnings') or []),
-                    ])),
-                    requested_outputs=dict(effective_plan.requested),
-                    effective_outputs=dict(effective_plan.effective),
-                    degraded_reason=effective_plan.degraded_reason,
-                    artifact_facts=(artifacts if status == 'resumed' else {}),
-                    started_at=utc_now(),
-                    finished_at=utc_now(),
-                )
-
             group_results: dict[str, list[TaskComputeResult]] = {
                 group.identity.group_id: [] for group in render_groups
             }
             group_blocked: dict[str, str] = {}
             group_failed: dict[str, str] = {}
             deferred_group_terminals: dict[str, tuple[int, str, str]] = {}
-            resolved_group_terminals: list[
-                tuple[int, str, str, BatchItemResult, str | None]
-            ] = []
-            render_group_outcomes: list[RenderGroupResult] = []
             spool_class = None
             spool_module = None
             if (
@@ -1562,6 +1345,12 @@ class BatchRunner:
                             ),
                         )
                     except ValueError as exc:
+                        logger.warning(
+                            "batch run: group %s fails spool shape validation "
+                            "(members=%d, layout=%s), degrading to blocked: %s",
+                            group.identity.group_id, len(group.members),
+                            group.layout, exc, exc_info=True,
+                        )
                         group_blocked[group.identity.group_id] = str(exc)
                 if recorder is not None:
                     try:
@@ -1591,530 +1380,50 @@ class BatchRunner:
                             )
                         )
                     except Exception as exc:
+                        logger.warning(
+                            "batch run: cannot upsert render-group manifest "
+                            "entry for group %s (initial state): %s",
+                            group.identity.group_id, exc, exc_info=True,
+                        )
                         manifest_errors.append(
                             f'cannot update batch manifest: {exc}'
                         )
 
-            prev_physical_key = None
-            run_spool_blocked = False
             if spool_class is not None:
                 spool_context = spool_class()
             else:
                 spool_context = nullcontext(None)
             with spool_context as spool:
-                for index, (source_key, signal_name) in enumerate(tasks, start=1):
-                    group = group_for_task.get((source_key, signal_name))
-                    physical_key = self._physical_for_source(source_key)
-                    if (
-                        prev_physical_key is not None
-                        and physical_key != prev_physical_key
-                    ):
-                        self._evict_physical(prev_physical_key)
-                        prev_physical_key = None
-                    if cancel_token is not None and cancel_token.is_set():
-                        cancelled = True
-                        emit_cancelled_range(index)
-                        break
-
-                    member = next(
-                        candidate for candidate in group.members
-                        if candidate.source_key == source_key
-                        and candidate.channel == signal_name
-                    )
-                    decision = group_recovery[group.identity.group_id]
-                    task_id = member.identity.task_id
-                    data_write_eligible = bool(
-                        'data' in effective_plan.effective
-                        and task_id in decision.data_write_task_ids
-                    )
-                    payload_required = bool(
-                        'image' in effective_plan.effective
-                        and task_id in decision.payload_task_ids
-                        and group.identity.group_id not in group_blocked
-                        and not run_spool_blocked
-                    )
-                    data_reservation = None
-                    data_conflict_status = ''
-                    data_conflict_message = ''
-                    if data_write_eligible:
-                        data_extension = str(
-                            effective_plan.effective.get('data', 'csv')
-                        ).lower().lstrip('.')
-                        conflict_policy = str(
-                            getattr(
-                                preset.outputs,
-                                'conflict_policy',
-                                'auto_number',
-                            )
-                        ).strip().lower()
-                        reservation_stem = member.identity.stem
-                        prior_data = (
-                            prior_data_entries.get(task_id) or {}
-                        ).get('artifacts', {}).get('data') or {}
-                        prior_data_path = prior_data.get('path')
-                        if prior_data_path:
-                            reservation_stem = Path(prior_data_path).stem
-                            conflict_policy = 'overwrite'
-                        try:
-                            data_reservation = reserve_output_paths(
-                                output_dir,
-                                reservation_stem,
-                                (data_extension,),
-                                conflict_policy=conflict_policy,
-                            )
-                            if data_reservation.status == 'skipped':
-                                data_conflict_status = 'skipped'
-                                data_conflict_message = (
-                                    'task data skipped without manifest provenance'
-                                )
-                        except FileExistsError as exc:
-                            data_conflict_status = 'failed'
-                            data_conflict_message = str(exc)
-                        if data_conflict_status:
-                            data_write_eligible = False
-
-                    if not data_write_eligible and not payload_required:
-                        entry = reusable_data_entries.get(task_id)
-                        if entry is not None:
-                            item = planned_group_item(
-                                member,
-                                status='resumed',
-                                message='manifest-proven data resume',
-                                entry=entry,
-                            )
-                        else:
-                            item = planned_group_item(
-                                member,
-                                status=data_conflict_status or 'done',
-                                message=data_conflict_message,
-                            )
-                            if data_reservation is not None:
-                                if data_reservation.warning:
-                                    item.warnings.append(data_reservation.warning)
-                                data_reservation.release()
-                        items.append(item)
-                        record_item(item, source_key, self._known_file_data(source_key))
-                        if data_conflict_status == 'failed':
-                            blocked.append(
-                                f'{item.file_name}:{signal_name}: '
-                                f'{data_conflict_message}'
-                            )
-                        if on_event:
-                            on_event(BatchProgressEvent(
-                                kind=(
-                                    'task_failed'
-                                    if item.status == 'failed'
-                                    else 'task_skipped'
-                                    if item.status == 'skipped'
-                                    else 'task_resumed'
-                                ),
-                                task_index=index,
-                                total=total,
-                                file_name=item.file_name,
-                                signal=signal_name,
-                                method='time',
-                                task_id=item.task_id,
-                                message=item.message,
-                            ))
-                        continue
-
-                    fid, fd_or_fail = self._resolve_task_file(source_key)
-                    physical_key = self._physical_for_source(source_key)
-                    if physical_key is not None:
-                        prev_physical_key = physical_key
-                    fname = (
-                        fd_or_fail.path
-                        if isinstance(fd_or_fail, _LoadFailure)
-                        else str(fd_or_fail.filename)
-                    )
-                    started_at = utc_now()
-                    if on_event:
-                        on_event(BatchProgressEvent(
-                            kind='task_started',
-                            task_index=index,
-                            total=total,
-                            file_name=fname,
-                            signal=signal_name,
-                            method=preset.method,
-                        ))
-                    try:
-                        if isinstance(fd_or_fail, _LoadFailure):
-                            raise IOError(fd_or_fail.error)
-                        if signal_name not in fd_or_fail.data.columns:
-                            raise ValueError(f'missing signal: {signal_name}')
-                        computed = self._compute_group_task(
-                            preset,
-                            source_key,
-                            fd_or_fail,
-                            signal_name,
-                            output_dir,
-                            spool,
-                            group,
-                            data_write_eligible=data_write_eligible,
-                            payload_required=payload_required,
-                            data_reservation=data_reservation,
-                            effective=effective_plan,
-                            cancel_token=cancel_token,
-                        )
-                        item = computed.item
-                        if not data_write_eligible:
-                            entry = reusable_data_entries.get(task_id)
-                            if data_conflict_status:
-                                item.status = data_conflict_status
-                                item.message = data_conflict_message
-                                item.data_path = None
-                                item.artifact_facts = {}
-                                if (
-                                    data_reservation is not None
-                                    and data_reservation.warning
-                                ):
-                                    item.warnings.append(data_reservation.warning)
-                                if data_conflict_status == 'failed':
-                                    blocked.append(
-                                        f'{fname}:{signal_name}: '
-                                        f'{data_conflict_message}'
-                                    )
-                            elif entry is not None:
-                                data = (entry.get('artifacts') or {}).get('data') or {}
-                                item.status = 'resumed'
-                                item.message = 'manifest-proven data resume'
-                                item.data_path = data.get('path')
-                                item.artifact_facts = dict(
-                                    entry.get('artifacts') or {}
-                                )
-                        item.started_at = started_at
-                        item.finished_at = utc_now()
-                        items.append(item)
-                        if group is not None:
-                            group_results[group.identity.group_id].append(computed)
-                        if computed.render_error and group is not None:
-                            if computed.render_status == 'failed':
-                                group_failed[
-                                    group.identity.group_id
-                                ] = computed.render_error
-                            elif 'run spool exceeds' in computed.render_error:
-                                run_spool_blocked = True
-                                for candidate in render_groups:
-                                    successful = sum(
-                                        bool(result.series_refs)
-                                        for result in group_results[
-                                            candidate.identity.group_id
-                                        ]
-                                    )
-                                    if successful < len(candidate.members):
-                                        group_blocked[
-                                            candidate.identity.group_id
-                                        ] = computed.render_error
-                            else:
-                                group_blocked[
-                                    group.identity.group_id
-                                ] = computed.render_error
-                        record_item(item, source_key, fd_or_fail)
-                        defer_terminal = bool(
-                            computed.series_refs
-                            and item.status in {'done', 'resumed'}
-                        )
-                        if defer_terminal:
-                            deferred_group_terminals[item.task_id] = (
-                                index, fname, signal_name,
-                            )
-                        elif on_event:
-                            on_event(BatchProgressEvent(
-                                kind=(
-                                    'task_failed' if item.status == 'failed'
-                                    else 'task_skipped' if item.status == 'skipped'
-                                    else 'task_resumed' if item.status == 'resumed'
-                                    else 'task_done'
-                                ),
-                                task_index=index,
-                                total=total,
-                                file_name=fname,
-                                signal=signal_name,
-                                method=preset.method,
-                                task_id=item.task_id,
-                                message=item.message,
-                                data_path=item.data_path,
-                                error=(item.message if item.status == 'failed' else None),
-                            ))
-                        if (
-                            not defer_terminal
-                            and progress_callback
-                            and item.status == 'done'
-                        ):
-                            progress_callback(index, total)
-                    except _BatchCancelled as exc:
-                        if data_reservation is not None:
-                            data_reservation.release()
-                        cancelled = True
-                        identity = next(
-                            task.identity for task in render_tasks
-                            if task.source_key == source_key
-                            and task.channel == signal_name
-                        )
-                        item = BatchItemResult(
-                            method='time',
-                            file_id=source_key,
-                            file_name=fname,
-                            signal=signal_name,
-                            status='cancelled',
-                            message=str(exc),
-                            task_id=identity.task_id,
-                            source_identity=identity.source_identity,
-                            group_identity=identity.group_identity,
-                            requested_outputs=dict(effective_plan.requested),
-                            effective_outputs=dict(effective_plan.effective),
-                            degraded_reason=effective_plan.degraded_reason,
-                            started_at=started_at,
-                            finished_at=utc_now(),
-                        )
-                        items.append(item)
-                        record_item(
-                            item,
-                            source_key,
-                            None if isinstance(fd_or_fail, _LoadFailure)
-                            else fd_or_fail,
-                        )
-                        if on_event:
-                            on_event(BatchProgressEvent(
-                                kind='task_cancelled',
-                                task_index=index,
-                                total=total,
-                                file_name=fname,
-                                signal=signal_name,
-                                method='time',
-                                task_id=item.task_id,
-                                message=item.message,
-                            ))
-                        emit_cancelled_range(index + 1)
-                        break
-                    except Exception as exc:
-                        if data_reservation is not None:
-                            data_reservation.release()
-                        identity = next(
-                            task.identity for task in render_tasks
-                            if task.source_key == source_key
-                            and task.channel == signal_name
-                        )
-                        item = BatchItemResult(
-                            method='time',
-                            file_id=source_key,
-                            file_name=fname,
-                            signal=signal_name,
-                            status='failed',
-                            message=str(exc),
-                            task_id=identity.task_id,
-                            source_identity=identity.source_identity,
-                            group_identity=identity.group_identity,
-                            requested_outputs=dict(effective_plan.requested),
-                            effective_outputs=dict(effective_plan.effective),
-                            degraded_reason=effective_plan.degraded_reason,
-                            started_at=started_at,
-                            finished_at=utc_now(),
-                        )
-                        items.append(item)
-                        blocked.append(f'{fname}:{signal_name}: {exc}')
-                        if group is not None:
-                            group_results[group.identity.group_id].append(
-                                TaskComputeResult(item=item, render_error=str(exc))
-                            )
-                        record_item(
-                            item,
-                            source_key,
-                            None if isinstance(fd_or_fail, _LoadFailure)
-                            else fd_or_fail,
-                        )
-                        if on_event:
-                            on_event(BatchProgressEvent(
-                                kind='task_failed',
-                                task_index=index,
-                                total=total,
-                                file_name=fname,
-                                signal=signal_name,
-                                method='time',
-                                error=str(exc),
-                                task_id=item.task_id,
-                                message=item.message,
-                            ))
-
-                for physical_key in tuple(self._disk_cache):
-                    self._evict_physical(physical_key)
-
-                for group in render_groups:
-                    group_id = group.identity.group_id
-                    results = group_results[group_id]
-                    decision = group_recovery[group_id]
-                    if cancelled:
-                        outcome = RenderGroupResult(
-                            group_id=group_id,
-                            status='cancelled',
-                            message='batch cancelled before group image completed',
-                        )
-                    elif decision.reusable_group is not None:
-                        reusable = decision.reusable_group
-                        outcome = RenderGroupResult(
-                            group_id=group_id,
-                            status='done',
-                            image_path=(reusable.get('artifact') or {}).get('path'),
-                            message='manifest-proven group resume',
-                            warnings=list(reusable.get('warnings') or ()),
-                            artifact=dict(reusable.get('artifact') or {}),
-                            effective_facts=dict(
-                                reusable.get('effective_facts') or {}
-                            ),
-                        )
-                    elif effective_plan.degraded_reason:
-                        outcome = RenderGroupResult(
-                            group_id=group_id,
-                            status='degraded',
-                            message=effective_plan.degraded_reason,
-                        )
-                    elif group_id in group_failed:
-                        outcome = RenderGroupResult(
-                            group_id=group_id,
-                            status='failed',
-                            message=group_failed[group_id],
-                        )
-                    elif group_id in group_blocked:
-                        outcome = RenderGroupResult(
-                            group_id=group_id,
-                            status='blocked',
-                            message=group_blocked[group_id],
-                        )
-                    else:
-                        if recorder is not None:
-                            try:
-                                recorder.upsert_render_group(
-                                    self._render_group_manifest_entry(
-                                        group,
-                                        effective_plan,
-                                        status='running',
-                                    )
-                                )
-                            except Exception as exc:
-                                manifest_errors.append(
-                                    f'cannot update batch manifest: {exc}'
-                                )
-                        try:
-                            prior_group = prior_group_entries.get(group_id) or {}
-                            prior_artifact = prior_group.get('artifact') or {}
-                            prior_image_path = prior_artifact.get('path')
-                            outcome = self._render_group(
-                                group,
-                                results,
-                                preset,
-                                output_dir,
-                                spool,
-                                effective=effective_plan,
-                                reservation_stem=(
-                                    Path(prior_image_path).stem
-                                    if prior_image_path else None
-                                ),
-                                conflict_policy_override=(
-                                    'overwrite' if prior_image_path else None
-                                ),
-                                recorder=recorder,
-                                cancel_token=cancel_token,
-                            )
-                        except _BatchCancelled as exc:
-                            cancelled = True
-                            outcome = RenderGroupResult(
-                                group_id=group_id,
-                                status='cancelled',
-                                message=str(exc),
-                            )
-                        except Exception as exc:
-                            outcome = RenderGroupResult(
-                                group_id=group_id,
-                                status='failed',
-                                message=str(exc),
-                            )
-                    render_group_outcomes.append(outcome)
-                    if outcome.warnings:
-                        for computed in results:
-                            if computed.series_refs:
-                                computed.item.warnings = list(dict.fromkeys([
-                                    *computed.item.warnings,
-                                    *outcome.warnings,
-                                ]))
-                                record_item(computed.item, computed.item.file_id)
-                    if outcome.status == 'cancelled':
-                        cancelled = True
-                        for computed in results:
-                            item = computed.item
-                            if item.status not in {'done', 'resumed'}:
-                                continue
-                            item.status = 'cancelled'
-                            item.message = (
-                                outcome.message
-                                or 'batch cancelled before group image completed'
-                            )
-                            item.finished_at = utc_now()
-                            record_item(item, item.file_id)
-                    for computed in results:
-                        item = computed.item
-                        event_context = deferred_group_terminals.pop(
-                            item.task_id, None,
-                        )
-                        if event_context is None:
-                            continue
-                        task_index, file_name, signal_name = event_context
-                        resolved_group_terminals.append((
-                            task_index,
-                            file_name,
-                            signal_name,
-                            item,
-                            outcome.image_path,
-                        ))
-                    if outcome.status not in {'done', 'degraded'}:
-                        blocked.append(
-                            f'{group.identity.stem}: {outcome.message or outcome.status}'
-                        )
-                    if recorder is not None:
-                        try:
-                            recorder.upsert_render_group(
-                                self._render_group_manifest_entry(
-                                    group,
-                                    effective_plan,
-                                    status=outcome.status,
-                                    message=outcome.message,
-                                    warnings=outcome.warnings,
-                                    artifact=outcome.artifact,
-                                    effective_facts=outcome.effective_facts,
-                                )
-                            )
-                        except Exception as exc:
-                            manifest_errors.append(
-                                f'cannot update batch manifest: {exc}'
-                            )
-
-                for (
-                    task_index,
-                    file_name,
-                    signal_name,
-                    item,
-                    image_path,
-                ) in sorted(resolved_group_terminals, key=lambda value: value[0]):
-                    if on_event:
-                        on_event(BatchProgressEvent(
-                            kind=(
-                                'task_cancelled'
-                                if item.status == 'cancelled'
-                                else 'task_resumed'
-                                if item.status == 'resumed'
-                                else 'task_done'
-                            ),
-                            task_index=task_index,
-                            total=total,
-                            file_name=file_name,
-                            signal=signal_name,
-                            method=preset.method,
-                            task_id=item.task_id,
-                            message=item.message,
-                            data_path=item.data_path,
-                            image_path=image_path,
-                        ))
-                    if progress_callback and item.status == 'done':
-                        progress_callback(task_index, total)
+                cancelled = self._run_grouped_compute(
+                    preset, output_dir, tasks, render_tasks, render_groups,
+                    spool,
+                    reporter=reporter,
+                    effective_plan=effective_plan,
+                    cancel_token=cancel_token,
+                    group_for_task=group_for_task,
+                    group_recovery=group_recovery,
+                    group_results=group_results,
+                    group_blocked=group_blocked,
+                    group_failed=group_failed,
+                    reusable_data_entries=reusable_data_entries,
+                    prior_data_entries=prior_data_entries,
+                    deferred_group_terminals=deferred_group_terminals,
+                    items=items, blocked=blocked, total=total,
+                )
+                cancelled, render_group_outcomes = self._run_grouped_render(
+                    preset, output_dir, render_groups, spool,
+                    reporter=reporter,
+                    recorder=recorder,
+                    effective_plan=effective_plan,
+                    cancel_token=cancel_token,
+                    group_results=group_results,
+                    group_recovery=group_recovery,
+                    group_failed=group_failed,
+                    group_blocked=group_blocked,
+                    prior_group_entries=prior_group_entries,
+                    deferred_group_terminals=deferred_group_terminals,
+                    cancelled=cancelled, blocked=blocked, total=total,
+                )
 
             if cancelled:
                 status = 'cancelled'
@@ -2129,7 +1438,617 @@ class BatchRunner:
             return finish_result(
                 status, items=items, blocked=blocked,
                 render_groups=render_group_outcomes,
+                run_migration_warnings=run_migration_warnings,
             )
+
+        return self._run_sequential(
+            preset, output_dir, tasks, render_tasks,
+            reporter=reporter, recorder=recorder,
+            effective_plan=effective_plan,
+            requested_params=requested_params,
+            requested_artifacts=requested_artifacts,
+            resume_data=resume_data, recipe_id=recipe_id,
+            explicit_grouping=explicit_grouping,
+            cancel_token=cancel_token,
+            run_migration_warnings=run_migration_warnings,
+            items=items, blocked=blocked, total=total,
+        )
+
+    # -- run() execution paths ---------------------------------------------
+    #
+    # The three methods below are the two paths ``run`` dispatches to.  They
+    # hold the per-task work that used to be inlined in ``run``; each is a
+    # verbatim lift, with the state it used to read from ``run``'s scope now
+    # passed in explicitly.
+
+    def _run_grouped_compute(self, preset, output_dir, tasks, render_tasks,
+                             render_groups, spool, *, reporter,
+                             effective_plan, cancel_token, group_for_task,
+                             group_recovery, group_results, group_blocked,
+                             group_failed, reusable_data_entries,
+                             prior_data_entries, deferred_group_terminals,
+                             items, blocked, total) -> bool:
+        """Compute every task of the grouped path, spooling render series.
+
+        Extracted verbatim from ``run``.  Runs inside ``run``'s
+        ``with spool_context as spool`` block, which stays there because
+        :meth:`_run_grouped_render` needs the same open spool -- keeping the
+        ``with`` in ``run`` makes the two methods peers instead of nesting
+        one inside the other.
+
+        Mutates the caller's ``items``/``blocked`` lists and the four group
+        dicts in place; returns whether the run was cancelled.
+        """
+
+        planned_group_item = partial(
+            self._planned_group_item, effective_plan=effective_plan,
+        )
+        cancelled = False
+        prev_physical_key = None
+        run_spool_blocked = False
+
+        for index, (source_key, signal_name) in enumerate(tasks, start=1):
+            group = group_for_task.get((source_key, signal_name))
+            physical_key = self._physical_for_source(source_key)
+            if (
+                prev_physical_key is not None
+                and physical_key != prev_physical_key
+            ):
+                self._evict_physical(prev_physical_key)
+                prev_physical_key = None
+            if cancel_token is not None and cancel_token.is_set():
+                cancelled = True
+                reporter.emit_cancelled_range(index)
+                break
+
+            member = next(
+                candidate for candidate in group.members
+                if candidate.source_key == source_key
+                and candidate.channel == signal_name
+            )
+            decision = group_recovery[group.identity.group_id]
+            task_id = member.identity.task_id
+            data_write_eligible = bool(
+                'data' in effective_plan.effective
+                and task_id in decision.data_write_task_ids
+            )
+            payload_required = bool(
+                'image' in effective_plan.effective
+                and task_id in decision.payload_task_ids
+                and group.identity.group_id not in group_blocked
+                and not run_spool_blocked
+            )
+            data_reservation = None
+            data_conflict_status = ''
+            data_conflict_message = ''
+            if data_write_eligible:
+                data_extension = str(
+                    effective_plan.effective.get('data', 'csv')
+                ).lower().lstrip('.')
+                conflict_policy = str(
+                    getattr(
+                        preset.outputs,
+                        'conflict_policy',
+                        'auto_number',
+                    )
+                ).strip().lower()
+                reservation_stem = member.identity.stem
+                prior_data = (
+                    prior_data_entries.get(task_id) or {}
+                ).get('artifacts', {}).get('data') or {}
+                prior_data_path = prior_data.get('path')
+                if prior_data_path:
+                    reservation_stem = Path(prior_data_path).stem
+                    conflict_policy = 'overwrite'
+                try:
+                    data_reservation = reserve_output_paths(
+                        output_dir,
+                        reservation_stem,
+                        (data_extension,),
+                        conflict_policy=conflict_policy,
+                    )
+                    if data_reservation.status == 'skipped':
+                        data_conflict_status = 'skipped'
+                        data_conflict_message = (
+                            'task data skipped without manifest provenance'
+                        )
+                except FileExistsError as exc:
+                    data_conflict_status = 'failed'
+                    data_conflict_message = str(exc)
+                if data_conflict_status:
+                    data_write_eligible = False
+
+            if not data_write_eligible and not payload_required:
+                entry = reusable_data_entries.get(task_id)
+                if entry is not None:
+                    item = planned_group_item(
+                        member,
+                        status='resumed',
+                        message='manifest-proven data resume',
+                        entry=entry,
+                    )
+                else:
+                    item = planned_group_item(
+                        member,
+                        status=data_conflict_status or 'done',
+                        message=data_conflict_message,
+                    )
+                    if data_reservation is not None:
+                        if data_reservation.warning:
+                            item.warnings.append(data_reservation.warning)
+                        data_reservation.release()
+                items.append(item)
+                reporter.record(
+                    item, source_key, self._known_file_data(source_key),
+                )
+                if data_conflict_status == 'failed':
+                    blocked.append(
+                        f'{item.file_name}:{signal_name}: '
+                        f'{data_conflict_message}'
+                    )
+                reporter.emit(BatchProgressEvent(
+                    kind=(
+                        'task_failed'
+                        if item.status == 'failed'
+                        else 'task_skipped'
+                        if item.status == 'skipped'
+                        else 'task_resumed'
+                    ),
+                    task_index=index,
+                    total=total,
+                    file_name=item.file_name,
+                    signal=signal_name,
+                    method='time',
+                    task_id=item.task_id,
+                    message=item.message,
+                ))
+                continue
+
+            fid, fd_or_fail = self._resolve_task_file(source_key)
+            physical_key = self._physical_for_source(source_key)
+            if physical_key is not None:
+                prev_physical_key = physical_key
+            fname = (
+                fd_or_fail.path
+                if isinstance(fd_or_fail, _LoadFailure)
+                else str(fd_or_fail.filename)
+            )
+            started_at = utc_now()
+            reporter.emit(BatchProgressEvent(
+                kind='task_started',
+                task_index=index,
+                total=total,
+                file_name=fname,
+                signal=signal_name,
+                method=preset.method,
+            ))
+            try:
+                if isinstance(fd_or_fail, _LoadFailure):
+                    raise IOError(fd_or_fail.error)
+                if signal_name not in fd_or_fail.data.columns:
+                    raise ValueError(f'missing signal: {signal_name}')
+                computed = self._compute_group_task(
+                    preset,
+                    source_key,
+                    fd_or_fail,
+                    signal_name,
+                    output_dir,
+                    spool,
+                    group,
+                    data_write_eligible=data_write_eligible,
+                    payload_required=payload_required,
+                    data_reservation=data_reservation,
+                    effective=effective_plan,
+                    cancel_token=cancel_token,
+                )
+                item = computed.item
+                if not data_write_eligible:
+                    entry = reusable_data_entries.get(task_id)
+                    if data_conflict_status:
+                        item.status = data_conflict_status
+                        item.message = data_conflict_message
+                        item.data_path = None
+                        item.artifact_facts = {}
+                        if (
+                            data_reservation is not None
+                            and data_reservation.warning
+                        ):
+                            item.warnings.append(data_reservation.warning)
+                        if data_conflict_status == 'failed':
+                            blocked.append(
+                                f'{fname}:{signal_name}: '
+                                f'{data_conflict_message}'
+                            )
+                    elif entry is not None:
+                        data = (entry.get('artifacts') or {}).get('data') or {}
+                        item.status = 'resumed'
+                        item.message = 'manifest-proven data resume'
+                        item.data_path = data.get('path')
+                        item.artifact_facts = dict(
+                            entry.get('artifacts') or {}
+                        )
+                item.started_at = started_at
+                item.finished_at = utc_now()
+                items.append(item)
+                if group is not None:
+                    group_results[group.identity.group_id].append(computed)
+                if computed.render_error and group is not None:
+                    if computed.render_status == 'failed':
+                        group_failed[
+                            group.identity.group_id
+                        ] = computed.render_error
+                    elif 'run spool exceeds' in computed.render_error:
+                        run_spool_blocked = True
+                        for candidate in render_groups:
+                            successful = sum(
+                                bool(result.series_refs)
+                                for result in group_results[
+                                    candidate.identity.group_id
+                                ]
+                            )
+                            if successful < len(candidate.members):
+                                group_blocked[
+                                    candidate.identity.group_id
+                                ] = computed.render_error
+                    else:
+                        group_blocked[
+                            group.identity.group_id
+                        ] = computed.render_error
+                reporter.record(item, source_key, fd_or_fail)
+                defer_terminal = bool(
+                    computed.series_refs
+                    and item.status in {'done', 'resumed'}
+                )
+                if defer_terminal:
+                    deferred_group_terminals[item.task_id] = (
+                        index, fname, signal_name,
+                    )
+                else:
+                    reporter.emit(BatchProgressEvent(
+                        kind=(
+                            'task_failed' if item.status == 'failed'
+                            else 'task_skipped' if item.status == 'skipped'
+                            else 'task_resumed' if item.status == 'resumed'
+                            else 'task_done'
+                        ),
+                        task_index=index,
+                        total=total,
+                        file_name=fname,
+                        signal=signal_name,
+                        method=preset.method,
+                        task_id=item.task_id,
+                        message=item.message,
+                        data_path=item.data_path,
+                        error=(item.message if item.status == 'failed' else None),
+                    ))
+                if not defer_terminal:
+                    reporter.emit_progress(item, index, total)
+            except _BatchCancelled as exc:
+                if data_reservation is not None:
+                    data_reservation.release()
+                cancelled = True
+                identity = next(
+                    task.identity for task in render_tasks
+                    if task.source_key == source_key
+                    and task.channel == signal_name
+                )
+                item = BatchItemResult(
+                    method='time',
+                    file_id=source_key,
+                    file_name=fname,
+                    signal=signal_name,
+                    status='cancelled',
+                    message=str(exc),
+                    task_id=identity.task_id,
+                    source_identity=identity.source_identity,
+                    group_identity=identity.group_identity,
+                    requested_outputs=dict(effective_plan.requested),
+                    effective_outputs=dict(effective_plan.effective),
+                    degraded_reason=effective_plan.degraded_reason,
+                    started_at=started_at,
+                    finished_at=utc_now(),
+                )
+                items.append(item)
+                reporter.record(
+                    item,
+                    source_key,
+                    None if isinstance(fd_or_fail, _LoadFailure)
+                    else fd_or_fail,
+                )
+                reporter.emit(BatchProgressEvent(
+                    kind='task_cancelled',
+                    task_index=index,
+                    total=total,
+                    file_name=fname,
+                    signal=signal_name,
+                    method='time',
+                    task_id=item.task_id,
+                    message=item.message,
+                ))
+                reporter.emit_cancelled_range(index + 1)
+                break
+            except Exception as exc:
+                if data_reservation is not None:
+                    data_reservation.release()
+                identity = next(
+                    task.identity for task in render_tasks
+                    if task.source_key == source_key
+                    and task.channel == signal_name
+                )
+                item = BatchItemResult(
+                    method='time',
+                    file_id=source_key,
+                    file_name=fname,
+                    signal=signal_name,
+                    status='failed',
+                    message=str(exc),
+                    task_id=identity.task_id,
+                    source_identity=identity.source_identity,
+                    group_identity=identity.group_identity,
+                    requested_outputs=dict(effective_plan.requested),
+                    effective_outputs=dict(effective_plan.effective),
+                    degraded_reason=effective_plan.degraded_reason,
+                    started_at=started_at,
+                    finished_at=utc_now(),
+                )
+                items.append(item)
+                blocked.append(f'{fname}:{signal_name}: {exc}')
+                if group is not None:
+                    group_results[group.identity.group_id].append(
+                        TaskComputeResult(item=item, render_error=str(exc))
+                    )
+                reporter.record(
+                    item,
+                    source_key,
+                    None if isinstance(fd_or_fail, _LoadFailure)
+                    else fd_or_fail,
+                )
+                reporter.emit(BatchProgressEvent(
+                    kind='task_failed',
+                    task_index=index,
+                    total=total,
+                    file_name=fname,
+                    signal=signal_name,
+                    method='time',
+                    error=str(exc),
+                    task_id=item.task_id,
+                    message=item.message,
+                ))
+
+        for physical_key in tuple(self._disk_cache):
+            self._evict_physical(physical_key)
+
+        return cancelled
+
+    def _run_grouped_render(self, preset, output_dir, render_groups, spool,
+                            *, reporter, recorder, effective_plan,
+                            cancel_token, group_results, group_recovery,
+                            group_failed, group_blocked, prior_group_entries,
+                            deferred_group_terminals, cancelled, blocked,
+                            total):
+        """Render one image per group, then flush the deferred task terminals.
+
+        Extracted verbatim from ``run``.  Group members whose terminal event
+        was withheld pending their group image are emitted here, in task
+        order, which is why the deferred-terminal flush travels with the
+        render loop rather than staying behind in ``run``.
+
+        Returns ``(cancelled, render_group_outcomes)``.
+        """
+
+        manifest_errors = reporter.manifest_errors
+        resolved_group_terminals: list[
+            tuple[int, str, str, BatchItemResult, str | None]
+        ] = []
+        render_group_outcomes: list[RenderGroupResult] = []
+
+        for group in render_groups:
+            group_id = group.identity.group_id
+            results = group_results[group_id]
+            decision = group_recovery[group_id]
+            if cancelled:
+                outcome = RenderGroupResult(
+                    group_id=group_id,
+                    status='cancelled',
+                    message='batch cancelled before group image completed',
+                )
+            elif decision.reusable_group is not None:
+                reusable = decision.reusable_group
+                outcome = RenderGroupResult(
+                    group_id=group_id,
+                    status='done',
+                    image_path=(reusable.get('artifact') or {}).get('path'),
+                    message='manifest-proven group resume',
+                    warnings=list(reusable.get('warnings') or ()),
+                    artifact=dict(reusable.get('artifact') or {}),
+                    effective_facts=dict(
+                        reusable.get('effective_facts') or {}
+                    ),
+                )
+            elif effective_plan.degraded_reason:
+                outcome = RenderGroupResult(
+                    group_id=group_id,
+                    status='degraded',
+                    message=effective_plan.degraded_reason,
+                )
+            elif group_id in group_failed:
+                outcome = RenderGroupResult(
+                    group_id=group_id,
+                    status='failed',
+                    message=group_failed[group_id],
+                )
+            elif group_id in group_blocked:
+                outcome = RenderGroupResult(
+                    group_id=group_id,
+                    status='blocked',
+                    message=group_blocked[group_id],
+                )
+            else:
+                if recorder is not None:
+                    try:
+                        recorder.upsert_render_group(
+                            self._render_group_manifest_entry(
+                                group,
+                                effective_plan,
+                                status='running',
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "batch run: cannot upsert render-group manifest "
+                            "entry for group %s (status=running): %s",
+                            group_id, exc, exc_info=True,
+                        )
+                        manifest_errors.append(
+                            f'cannot update batch manifest: {exc}'
+                        )
+                try:
+                    prior_group = prior_group_entries.get(group_id) or {}
+                    prior_artifact = prior_group.get('artifact') or {}
+                    prior_image_path = prior_artifact.get('path')
+                    outcome = self._render_group(
+                        group,
+                        results,
+                        preset,
+                        output_dir,
+                        spool,
+                        effective=effective_plan,
+                        reservation_stem=(
+                            Path(prior_image_path).stem
+                            if prior_image_path else None
+                        ),
+                        conflict_policy_override=(
+                            'overwrite' if prior_image_path else None
+                        ),
+                        recorder=recorder,
+                        cancel_token=cancel_token,
+                    )
+                except _BatchCancelled as exc:
+                    cancelled = True
+                    outcome = RenderGroupResult(
+                        group_id=group_id,
+                        status='cancelled',
+                        message=str(exc),
+                    )
+                except Exception as exc:
+                    outcome = RenderGroupResult(
+                        group_id=group_id,
+                        status='failed',
+                        message=str(exc),
+                    )
+            render_group_outcomes.append(outcome)
+            if outcome.warnings:
+                for computed in results:
+                    if computed.series_refs:
+                        computed.item.warnings = list(dict.fromkeys([
+                            *computed.item.warnings,
+                            *outcome.warnings,
+                        ]))
+                        reporter.record(computed.item, computed.item.file_id)
+            if outcome.status == 'cancelled':
+                cancelled = True
+                for computed in results:
+                    item = computed.item
+                    if item.status not in {'done', 'resumed'}:
+                        continue
+                    item.status = 'cancelled'
+                    item.message = (
+                        outcome.message
+                        or 'batch cancelled before group image completed'
+                    )
+                    item.finished_at = utc_now()
+                    reporter.record(item, item.file_id)
+            for computed in results:
+                item = computed.item
+                event_context = deferred_group_terminals.pop(
+                    item.task_id, None,
+                )
+                if event_context is None:
+                    continue
+                task_index, file_name, signal_name = event_context
+                resolved_group_terminals.append((
+                    task_index,
+                    file_name,
+                    signal_name,
+                    item,
+                    outcome.image_path,
+                ))
+            if outcome.status not in {'done', 'degraded'}:
+                blocked.append(
+                    f'{group.identity.stem}: {outcome.message or outcome.status}'
+                )
+            if recorder is not None:
+                try:
+                    recorder.upsert_render_group(
+                        self._render_group_manifest_entry(
+                            group,
+                            effective_plan,
+                            status=outcome.status,
+                            message=outcome.message,
+                            warnings=outcome.warnings,
+                            artifact=outcome.artifact,
+                            effective_facts=outcome.effective_facts,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "batch run: cannot upsert render-group "
+                        "manifest entry for group %s (status=%s): %s",
+                        group.identity.group_id, outcome.status, exc,
+                        exc_info=True,
+                    )
+                    manifest_errors.append(
+                        f'cannot update batch manifest: {exc}'
+                    )
+
+        for (
+            task_index,
+            file_name,
+            signal_name,
+            item,
+            image_path,
+        ) in sorted(resolved_group_terminals, key=lambda value: value[0]):
+            reporter.emit(BatchProgressEvent(
+                kind=(
+                    'task_cancelled'
+                    if item.status == 'cancelled'
+                    else 'task_resumed'
+                    if item.status == 'resumed'
+                    else 'task_done'
+                ),
+                task_index=task_index,
+                total=total,
+                file_name=file_name,
+                signal=signal_name,
+                method=preset.method,
+                task_id=item.task_id,
+                message=item.message,
+                data_path=item.data_path,
+                image_path=image_path,
+            ))
+            reporter.emit_progress(item, task_index, total)
+
+        return cancelled, render_group_outcomes
+
+    def _run_sequential(self, preset, output_dir, tasks, render_tasks, *,
+                        reporter, recorder, effective_plan,
+                        requested_params, requested_artifacts,
+                        resume_data, recipe_id, explicit_grouping,
+                        cancel_token, run_migration_warnings,
+                        items, blocked, total) -> BatchRunResult:
+        """Run the non-grouped path: one compute + one output set per task.
+
+        Extracted verbatim from ``run``.  ``items`` and ``blocked`` are the
+        very lists ``run`` handed the reporter, so tail cancellation keeps
+        appending to the same objects.
+
+        Deliberately *not* merged with the grouped path: the two differ in
+        real product semantics (series spool, group rendering, group-level
+        resume), and this cut only moves the non-grouped loop out of ``run``.
+        """
+
+        cancelled = False
+        prev_physical_key = None
 
         for index, (source_key, signal_name) in enumerate(tasks, start=1):
             # Logical groups from one container share a physical cache entry.
@@ -2145,7 +2064,7 @@ class BatchRunner:
 
             if cancel_token is not None and cancel_token.is_set():
                 cancelled = True
-                emit_cancelled_range(index)
+                reporter.emit_cancelled_range(index)
                 break
             render_task = next(
                 task for task in render_tasks
@@ -2165,7 +2084,7 @@ class BatchRunner:
                 )
                 if cancel_token is not None and cancel_token.is_set():
                     cancelled = True
-                    emit_cancelled_range(
+                    reporter.emit_cancelled_range(
                         index, message='cancelled during resume checksum',
                     )
                     break
@@ -2174,20 +2093,19 @@ class BatchRunner:
                     resumed_item.finished_at = resumed_item.started_at
                     items.append(resumed_item)
                     fd = self._known_file_data(source_key)
-                    record_item(resumed_item, source_key, fd)
-                    if on_event:
-                        on_event(BatchProgressEvent(
-                            kind='task_resumed',
-                            task_index=index,
-                            total=total,
-                            file_name=resumed_item.file_name,
-                            signal=signal_name,
-                            method=preset.method,
-                            task_id=resumed_item.task_id,
-                            message=resumed_item.message,
-                            data_path=resumed_item.data_path,
-                            image_path=resumed_item.image_path,
-                        ))
+                    reporter.record(resumed_item, source_key, fd)
+                    reporter.emit(BatchProgressEvent(
+                        kind='task_resumed',
+                        task_index=index,
+                        total=total,
+                        file_name=resumed_item.file_name,
+                        signal=signal_name,
+                        method=preset.method,
+                        task_id=resumed_item.task_id,
+                        message=resumed_item.message,
+                        data_path=resumed_item.data_path,
+                        image_path=resumed_item.image_path,
+                    ))
                     continue
 
             if (
@@ -2226,7 +2144,7 @@ class BatchRunner:
                     item = BatchItemResult(
                         method='time',
                         file_id=source_key,
-                        file_name=task_file_name(source_key),
+                        file_name=self._task_file_name(source_key),
                         signal=signal_name,
                         status=conflict_status,
                         message=conflict_message,
@@ -2238,7 +2156,9 @@ class BatchRunner:
                         finished_at=utc_now(),
                     )
                     items.append(item)
-                    record_item(item, source_key, self._known_file_data(source_key))
+                    reporter.record(
+                        item, source_key, self._known_file_data(source_key),
+                    )
                     if conflict_status == 'failed':
                         blocked.append(
                             f'{item.file_name}:{signal_name}: {conflict_message}'
@@ -2260,16 +2180,15 @@ class BatchRunner:
 
             if cancel_token is not None and cancel_token.is_set():
                 cancelled = True
-                emit_cancelled_range(index)
+                reporter.emit_cancelled_range(index)
                 break
 
             started_at = utc_now()
-            if on_event:
-                on_event(BatchProgressEvent(
-                    kind='task_started',
-                    task_index=index, total=total,
-                    file_name=fname, signal=signal_name, method=preset.method,
-                ))
+            reporter.emit(BatchProgressEvent(
+                kind='task_started',
+                task_index=index, total=total,
+                file_name=fname, signal=signal_name, method=preset.method,
+            ))
             try:
                 if isinstance(fd_or_fail, _LoadFailure):
                     raise IOError(fd_or_fail.error)
@@ -2283,36 +2202,34 @@ class BatchRunner:
                 item.started_at = started_at
                 item.finished_at = utc_now()
                 items.append(item)
-                record_item(item, source_key, fd_or_fail)
+                reporter.record(item, source_key, fd_or_fail)
                 if item.status == 'skipped':
                     blocked.append(
                         f"{fname}:{signal_name}: {item.message}; "
                         + "; ".join(item.warnings)
                     )
-                if on_event:
-                    kind = (
-                        'task_skipped' if item.status == 'skipped'
-                        else 'task_cancelled' if item.status == 'cancelled'
-                        else 'task_done'
-                    )
-                    on_event(BatchProgressEvent(
-                        kind=kind,
-                        task_index=index, total=total,
-                        file_name=fname, signal=signal_name,
-                        method=preset.method,
-                        task_id=item.task_id,
-                        message=item.message,
-                        data_path=item.data_path,
-                        image_path=item.image_path,
-                    ))
+                kind = (
+                    'task_skipped' if item.status == 'skipped'
+                    else 'task_cancelled' if item.status == 'cancelled'
+                    else 'task_done'
+                )
+                reporter.emit(BatchProgressEvent(
+                    kind=kind,
+                    task_index=index, total=total,
+                    file_name=fname, signal=signal_name,
+                    method=preset.method,
+                    task_id=item.task_id,
+                    message=item.message,
+                    data_path=item.data_path,
+                    image_path=item.image_path,
+                ))
                 # progress_callback fires ONLY on task_done (legacy contract
                 # was "called once per completed task"). Failed tasks do NOT
-                # bump it — see spec §4.4 / §8.
-                if progress_callback and item.status == 'done':
-                    progress_callback(index, total)
+                # bump it — see spec §4.4 / §8; the rule lives in the reporter.
+                reporter.emit_progress(item, index, total)
                 if item.status == 'cancelled':
                     cancelled = True
-                    emit_cancelled_range(index + 1)
+                    reporter.emit_cancelled_range(index + 1)
                     break
             except _BatchCancelled as exc:
                 cancelled = True
@@ -2332,21 +2249,20 @@ class BatchRunner:
                     started_at=started_at,
                     finished_at=utc_now(),
                 ))
-                record_item(items[-1], source_key, (
+                reporter.record(items[-1], source_key, (
                     None if isinstance(fd_or_fail, _LoadFailure) else fd_or_fail
                 ))
-                if on_event:
-                    on_event(BatchProgressEvent(
-                        kind='task_cancelled',
-                        task_index=index,
-                        total=total,
-                        file_name=fname,
-                        signal=signal_name,
-                        method=preset.method,
-                        task_id=items[-1].task_id,
-                        message=str(exc),
-                    ))
-                emit_cancelled_range(index + 1)
+                reporter.emit(BatchProgressEvent(
+                    kind='task_cancelled',
+                    task_index=index,
+                    total=total,
+                    file_name=fname,
+                    signal=signal_name,
+                    method=preset.method,
+                    task_id=items[-1].task_id,
+                    message=str(exc),
+                ))
+                reporter.emit_cancelled_range(index + 1)
                 break
             except Exception as exc:
                 identity = render_task.identity
@@ -2366,18 +2282,17 @@ class BatchRunner:
                     finished_at=utc_now(),
                 ))
                 blocked.append(f"{fname}:{signal_name}: {exc}")
-                record_item(items[-1], source_key, (
+                reporter.record(items[-1], source_key, (
                     None if isinstance(fd_or_fail, _LoadFailure) else fd_or_fail
                 ))
-                if on_event:
-                    on_event(BatchProgressEvent(
-                        kind='task_failed',
-                        task_index=index, total=total,
-                        file_name=fname, signal=signal_name,
-                        method=preset.method, error=str(exc),
-                        task_id=items[-1].task_id,
-                        message=str(exc),
-                    ))
+                reporter.emit(BatchProgressEvent(
+                    kind='task_failed',
+                    task_index=index, total=total,
+                    file_name=fname, signal=signal_name,
+                    method=preset.method, error=str(exc),
+                    task_id=items[-1].task_id,
+                    message=str(exc),
+                ))
 
         # Evict every physical source, including an auxiliary cross-source RPM
         # container that may have been loaded during the final task.
@@ -2394,7 +2309,202 @@ class BatchRunner:
             status = 'partial'
         else:
             status = 'done'
-        return finish_result(status, items=items, blocked=blocked)
+        return self._finish_result(
+            status, items=items, blocked=blocked,
+            reporter=reporter, recorder=recorder,
+            run_migration_warnings=run_migration_warnings,
+        )
+
+    # -- run() helpers -----------------------------------------------------
+    #
+    # The five methods below were closures inside ``run``, shared by both
+    # execution paths.  Everything they used to capture is now an explicit
+    # parameter, so the state a single ``run`` call threads through them is
+    # visible at each call site instead of being implied by the enclosing
+    # scope.  ``run`` binds the invariant half of that state once with
+    # ``functools.partial``; the rest is passed per call.
+
+    def _finish_result(self, status, *, reporter, recorder,
+                       run_migration_warnings, items=None, blocked=None,
+                       render_groups=None):
+        """Assemble the terminal ``BatchRunResult`` and close the manifest.
+
+        ``manifest_errors`` is deliberately not a parameter: the reporter owns
+        that list and every appender in ``run`` mutates that same object, so
+        reading it back off the reporter is what the closure did.
+        """
+
+        manifest_errors = reporter.manifest_errors
+        result_items = list(items or ())
+        result_blocked = list(blocked or ())
+        result_render_groups = list(render_groups or ())
+        result_blocked.extend(manifest_errors)
+        result_status = status
+        degraded_reasons = list(dict.fromkeys(
+            item.degraded_reason
+            for item in result_items
+            if item.degraded_reason
+        ))
+        degraded_count = sum(
+            bool(item.degraded_reason) for item in result_items
+        )
+        if degraded_count and result_status == 'done':
+            result_status = 'partial'
+        if manifest_errors and result_status == 'done':
+            result_status = 'partial'
+        summary = derive_summary(
+            {'status': item.status} for item in result_items
+        )
+        manifest_path = None
+        run_id = recorder.run_id if recorder is not None else None
+        if recorder is not None:
+            try:
+                manifest_path = str(recorder.finish(
+                    run_status=result_status,
+                    blocked_reasons=result_blocked,
+                ))
+                summary = derive_summary(recorder.entries)
+            except Exception as exc:
+                result_blocked.append(f"cannot finalize batch manifest: {exc}")
+                if result_status == 'done':
+                    result_status = 'partial'
+        reporter.emit(BatchProgressEvent(
+            kind='run_finished', final_status=result_status,
+        ))
+        return BatchRunResult(
+            status=result_status,
+            items=result_items,
+            blocked=result_blocked,
+            manifest_path=manifest_path,
+            summary=summary,
+            run_id=run_id,
+            degraded_count=degraded_count,
+            warnings=list(dict.fromkeys([
+                *run_migration_warnings,
+                *degraded_reasons,
+                *(warning for item in result_items for warning in item.warnings),
+            ])),
+            render_groups=result_render_groups,
+        )
+
+    def _apply_retry_scope(self, tasks, render_tasks, render_groups, *,
+                           retry_scope, preset, explicit_grouping):
+        """Narrow a freshly built run plan down to a retry manifest's scope."""
+
+        if retry_scope is None:
+            return tasks, render_tasks, render_groups
+        if not explicit_grouping:
+            selected = [
+                (source_key, channel)
+                for source_key, channel in tasks
+                if (source_key, channel, preset.method) in retry_scope
+            ]
+            return selected, render_tasks, render_groups
+        selected_groups = tuple(
+            group for group in render_groups
+            if group.identity.group_id in retry_scope.group_ids
+            or any(
+                (member.source_key, member.channel, preset.method)
+                in retry_scope
+                for member in group.members
+            )
+        )
+        selected_pairs = {
+            (member.source_key, member.channel)
+            for group in selected_groups
+            for member in group.members
+        }
+        return (
+            [task for task in tasks if task in selected_pairs],
+            [
+                task for task in render_tasks
+                if (task.source_key, task.channel) in selected_pairs
+            ],
+            list(selected_groups),
+        )
+
+    def _task_file_name(self, source_key):
+        """Display name for a task whose file may never have been loaded."""
+
+        fd = self._known_file_data(source_key)
+        if fd is not None:
+            return getattr(fd, 'filename', str(source_key))
+        physical_key = self._physical_for_source(source_key)
+        if physical_key is not None:
+            return self._physical_paths.get(physical_key, physical_key)
+        return str(source_key)
+
+    def _cancelled_item(self, source_key, signal, message, *, preset,
+                        requested_params, requested_artifacts):
+        """Build the ``cancelled`` item for a task that never started."""
+
+        fd = self._known_file_data(source_key)
+        if fd is not None:
+            identity = self._build_task_identity(
+                fd,
+                file_id=source_key,
+                channel=signal,
+                method=preset.method,
+                params=requested_params,
+            )
+        else:
+            identity = self._build_unresolved_task_identity(
+                source_key,
+                channel=signal,
+                method=preset.method,
+                params=requested_params,
+            )
+        return BatchItemResult(
+            method=preset.method,
+            file_id=source_key,
+            file_name=self._task_file_name(source_key),
+            signal=signal,
+            status='cancelled',
+            message=message,
+            task_id=(identity.task_id if identity else ''),
+            source_identity=(identity.source_identity if identity else ''),
+            group_identity=(identity.group_identity if identity else ''),
+            requested_outputs=dict(requested_artifacts),
+            effective_outputs=dict(requested_artifacts),
+            started_at=None,
+            finished_at=utc_now(),
+        )
+
+    def _planned_group_item(self, member, *, effective_plan, status,
+                            message='', entry=None):
+        """Build a grouped-path item that needs no compute pass."""
+
+        artifacts = dict((entry or {}).get('artifacts') or {})
+        data = artifacts.get('data') or {}
+        source = (entry or {}).get('source') or {}
+        return BatchItemResult(
+            method='time',
+            file_id=member.source_key,
+            file_name=str(
+                source.get('display_name')
+                or self._task_file_name(member.source_key)
+            ),
+            signal=member.channel,
+            status=status,
+            data_path=(data.get('path') if status == 'resumed' else None),
+            message=message,
+            task_id=member.identity.task_id,
+            source_identity=member.identity.source_identity,
+            group_identity=member.identity.group_identity,
+            effective_params=dict(
+                (entry or {}).get('effective_facts') or {}
+            ),
+            warnings=list(dict.fromkeys([
+                *effective_plan.migration_warnings,
+                *((entry or {}).get('warnings') or []),
+            ])),
+            requested_outputs=dict(effective_plan.requested),
+            effective_outputs=dict(effective_plan.effective),
+            degraded_reason=effective_plan.degraded_reason,
+            artifact_facts=(artifacts if status == 'resumed' else {}),
+            started_at=utc_now(),
+            finished_at=utc_now(),
+        )
 
     def _physical_cache_key(self, path) -> str:
         raw = str(path)
@@ -4559,477 +4669,35 @@ class BatchRunner:
             )
         return None
 
-    @staticmethod
-    def _channel_reference_facts(fd, ch):
-        """Build a :class:`db_reference.ChannelReferenceFacts` for one batch
-        task's ``(FileData, signal_name)`` target (plan Task 9 Step 9.3),
-        reading ONLY ``FileData`` metadata -- never a sample array (mirrors
-        ``MainWindow._channel_reference_facts``; duplicated here rather than
-        imported because ``batch.py`` must never import ``mf4_analyzer.ui.*``).
-        """
-        if fd is None or ch is None:
-            return db_reference.ChannelReferenceFacts(quantity='', unit='')
-        ch_meta = (getattr(fd, 'channel_metadata', None) or {}).get(ch) or {}
-        unit = (
-            ch_meta.get('unit')
-            or (getattr(fd, 'channel_units', None) or {}).get(ch, '')
-            or ''
-        )
-        # Mirror MainWindow._channel_reference_facts: reverse toolchain unit
-        # encoding (U_ prefix, Y for /) at the facts boundary so batch export's
-        # dB labels/refs match the interactive path (U_Nm -> Nm, mYs2 -> m/s2).
-        unit = db_reference.canonicalize_source_unit(unit)
-        quantity = ch_meta.get('quantity') or ''
-        metadata_reference = ch_meta.get('db_reference')
-        is_audio_source_fn = getattr(fd, 'is_audio_source', None)
-        try:
-            is_audio = bool(is_audio_source_fn()) if callable(is_audio_source_fn) else False
-        except Exception:
-            is_audio = False
-        return db_reference.ChannelReferenceFacts(
-            quantity=str(quantity),
-            unit=str(unit),
-            metadata_reference=metadata_reference,
-            is_audio_source=is_audio,
-        )
-
-    @staticmethod
-    def _batch_output_scale(kind, params):
-        """Return ``(render_db, output_scale)`` -- the amp-mode resolution
-        shared by ``_run_one`` (records ``colorbar_label`` on
-        ``BatchItemResult``) and ``_build_export_scene`` (actually draws the
-        image), so the two can never drift on which scale a preset's
-        ``amplitude_mode``/``amp_y`` selects."""
-        default_amp_mode = 'amplitude_db' if kind == 'fft_time' else 'amplitude'
-        amp_mode = str(params.get('amplitude_mode', default_amp_mode)).lower()
-        amp_y = str(params.get('amp_y', '')).lower()
-        render_db = 'db' in amp_mode or amp_y == 'db'
-        return render_db, ('db' if render_db else 'linear')
-
-    @staticmethod
-    def _image_reference_resolution(params):
-        """The effective dB-reference resolution for a batch image render.
-
-        ``_run_one`` (Task 9 Step 9.3) always pre-attaches an already-
-        resolved ``db_reference_resolution`` -- built from the task's real
-        ``(FileData, signal_name)`` facts and the injected catalog snapshot
-        -- onto its OUTPUT param copy before calling ``_write_image``; this
-        just returns that unchanged. Direct calls to ``_build_export_scene``/
-        ``_write_image`` that bypass ``_run_one`` (existing unit tests call
-        these ``@staticmethod``s directly with a bare params dict, no file
-        context -- 2026-06-20 static-image-writer-test-api-wider-than-plan)
-        resolve against EMPTY facts and the immutable factory catalog
-        instead, through the exact same ``db_reference.resolve_db_reference``
-        priority chain, so both paths share ONE formatting/validation rule
-        and neither ever silently coerces an invalid reference via
-        ``max(ref, 1e-12)`` (spec §7 R3 / plan Task 9 Step 9.4)."""
-        existing = params.get('db_reference_resolution')
-        if isinstance(existing, db_reference.DbReferenceResolution):
-            return existing
-        migrated = db_reference.migrate_legacy_reference_params(params)
-        return db_reference.resolve_db_reference(
-            mode=migrated.get('db_reference_mode', 'auto'),
-            manual_value=migrated.get('db_reference'),
-            facts=db_reference.ChannelReferenceFacts(quantity='', unit=''),
-            user_catalog=(),
-            system_catalog=db_reference.FACTORY_CATALOG_V1,
-            prefer_channel_metadata=True,
-        )
-
-    @staticmethod
-    def _check_cancel(cancel_token, stage):
-        if cancel_token is not None and cancel_token.is_set():
-            raise _BatchCancelled(f"cancelled during {stage}")
-
-    @staticmethod
-    def _apply_time_range(sig, time, params, rpm=None):
-        time_range = params.get('time_range')
-        if not time_range or time is None:
-            return sig, time, rpm
-        lo, hi = time_range
-        mask = (time >= float(lo)) & (time <= float(hi))
-        sig = sig[mask]
-        time = time[mask]
-        if rpm is not None:
-            rpm = rpm[mask]
-        return sig, time, rpm
-
-    @staticmethod
-    def _suggest_fs_from_time_axis(time, fallback_fs):
-        arr = np.asarray(time, dtype=float)
-        if arr.size < 2:
-            return float(fallback_fs)
-        dt = np.diff(arr)
-        positive = dt[dt > 0]
-        if positive.size == 0:
-            return float(fallback_fs)
-        median_dt = float(np.median(positive))
-        if not np.isfinite(median_dt) or median_dt <= 0:
-            return float(fallback_fs)
-        return 1.0 / median_dt
-
-    @classmethod
-    def _uniform_time_axis_for_spectrogram(cls, time, fs, length):
-        """Return a spectrogram-safe time axis and matching Fs.
-
-        Batch FFT-vs-Time mirrors the single-file UX: jittered MF4
-        timestamps are rebuilt to ``arange(n) / suggested_fs`` using the
-        median-dt estimate instead of failing every task with the raw
-        ``non-uniform time axis`` validator error.
-        """
-        fs = float(fs)
-        if time is None:
-            return np.arange(int(length), dtype=float) / fs, fs
-        time_arr = np.asarray(time, dtype=float)
-        if time_arr.size < 2:
-            return time_arr, fs
-
-        from .signal.spectrogram import (
-            DEFAULT_TIME_JITTER_TOLERANCE,
-            SpectrogramAnalyzer,
-        )
-
-        try:
-            SpectrogramAnalyzer._validate_time_axis(
-                time_arr, fs, DEFAULT_TIME_JITTER_TOLERANCE,
-            )
-            return time_arr, fs
-        except ValueError as exc:
-            if 'non-uniform time axis' not in str(exc):
-                raise
-
-        suggested = cls._suggest_fs_from_time_axis(time_arr, fs)
-        if not (np.isfinite(suggested) and suggested > 0):
-            suggested = fs
-        return np.arange(len(time_arr), dtype=float) / float(suggested), float(suggested)
-
-    @staticmethod
-    def _time_axis_or_fallback(time, fs, n_samples):
-        if time is not None:
-            arr = np.asarray(time, dtype=float)
-            if arr.size == int(n_samples):
-                return arr
-        fs = float(fs)
-        if not np.isfinite(fs) or fs <= 0:
-            raise ValueError("缺少有效采样率")
-        return np.arange(int(n_samples), dtype=float) / fs
-
-    @staticmethod
-    def _filter_state(params):
-        state = params.get("filter") or {}
-        return state if isinstance(state, dict) else {}
-
-    @classmethod
-    def _filter_enabled(cls, params):
-        return bool(cls._filter_state(params).get("enabled", False))
-
-    @classmethod
-    def _filter_spec_from_params(cls, params):
-        if not cls._filter_enabled(params):
-            return None
-        from .signal.filters import FilterSpec
-
-        return FilterSpec.from_dict(cls._filter_state(params).get("spec") or {})
-
-    @classmethod
-    def _apply_filter_if_enabled(cls, sig, fs, params):
-        spec = cls._filter_spec_from_params(params)
-        if spec is None:
-            return np.asarray(sig, dtype=float), None
-        from .signal import filters as _filters
-
-        guarded, _msg = _filters.nyquist_guard(spec, fs)
-        return _filters.apply(sig, guarded, fs), guarded
-
-    @classmethod
-    def _compute_time_dataframe(cls, sig, time, fs, params):
-        x = cls._time_axis_or_fallback(time, fs, len(sig))
-        filter_state = cls._filter_state(params)
-        if not cls._filter_enabled(params):
-            return pd.DataFrame({
-                "time_s": x,
-                "series": ["original"] * len(sig),
-                "value": np.asarray(sig, dtype=float),
-            })
-
-        show_original = bool(filter_state.get("show_original", True))
-        show_filtered = bool(filter_state.get("show_filtered", True))
-        if not show_original and not show_filtered:
-            raise ValueError("时域导出至少需要原始或滤波后一项")
-
-        frames = []
-        if show_original:
-            frames.append(pd.DataFrame({
-                "time_s": x,
-                "series": ["original"] * len(sig),
-                "value": np.asarray(sig, dtype=float),
-            }))
-        if show_filtered:
-            filtered, _spec = cls._apply_filter_if_enabled(sig, fs, params)
-            frames.append(pd.DataFrame({
-                "time_s": x,
-                "series": ["filtered"] * len(filtered),
-                "value": filtered,
-            }))
-        return pd.concat(frames, ignore_index=True)
-
-    @classmethod
-    def _compute_preprocessed_time_dataframe(
-        cls, pre_filter_signal, filtered_signal, time, fs, params,
-    ):
-        """Build TimeDomain rows from the canonical preprocessing outputs."""
-
-        x = cls._time_axis_or_fallback(time, fs, len(filtered_signal))
-        filter_state = cls._filter_state(params)
-        if not cls._filter_enabled(params):
-            return pd.DataFrame({
-                "time_s": x,
-                "series": ["original"] * len(filtered_signal),
-                "value": np.asarray(filtered_signal, dtype=float),
-            })
-
-        show_original = bool(filter_state.get("show_original", True))
-        show_filtered = bool(filter_state.get("show_filtered", True))
-        if not show_original and not show_filtered:
-            raise ValueError("时域导出至少需要原始或滤波后一项")
-
-        frames = []
-        if show_original:
-            frames.append(pd.DataFrame({
-                "time_s": x,
-                "series": ["original"] * len(pre_filter_signal),
-                "value": np.asarray(pre_filter_signal, dtype=float),
-            }))
-        if show_filtered:
-            frames.append(pd.DataFrame({
-                "time_s": x,
-                "series": ["filtered"] * len(filtered_signal),
-                "value": np.asarray(filtered_signal, dtype=float),
-            }))
-        return pd.concat(frames, ignore_index=True)
-
-    @staticmethod
-    def _compute_fft_dataframe(sig, fs, params):
-        sig, _spec = BatchRunner._apply_filter_if_enabled(sig, fs, params)
-        nfft = BatchRunner._resolve_fft_nfft(len(sig), fs, params)
-        win = params.get('window', params.get('win', 'hanning'))
-        weighting = str(params.get('weighting', 'None'))
-        avg_mode = str(params.get('avg_mode', '单帧'))
-        avg_overlap = BatchRunner._avg_overlap_fraction(params)
-        if avg_mode == '线性平均':
-            freq, amp, _psd = FFTAnalyzer.compute_averaged_fft(
-                sig, fs, win, int(nfft), avg_overlap, weighting=weighting,
-            )
-        elif avg_mode == '峰值保持':
-            freq, amp = FFTAnalyzer.compute_peak_hold_fft(
-                sig, fs, win=win, nfft=int(nfft), overlap=avg_overlap,
-                weighting=weighting,
-            )
-        else:
-            freq, amp = FFTAnalyzer.compute_fft(
-                sig,
-                fs,
-                win=win,
-                nfft=nfft,
-                weighting=weighting,
-            )
-        amp = BatchRunner._convert_fft_amplitude_definition(
-            amp,
-            avg_mode=avg_mode,
-            requested=params.get('amplitude_definition', 'native'),
-        )
-        return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
-
-    @staticmethod
-    def _convert_fft_amplitude_definition(amp, *, avg_mode, requested):
-        """Convert an FFT mode's native linear amplitude to peak or RMS."""
-
-        requested = str(requested or 'native').strip().lower()
-        native = 'rms' if str(avg_mode) == '线性平均' else 'peak'
-        values = np.asarray(amp, dtype=float)
-        if requested == 'native' or requested == native:
-            return values
-        if native == 'rms' and requested == 'peak':
-            return values * np.sqrt(2.0)
-        if native == 'peak' and requested == 'rms':
-            return values / np.sqrt(2.0)
-        # Runner preflight owns the user-facing field error. Keep this helper
-        # fail-closed for direct test/caller use that bypasses run().
-        raise ValueError(
-            "amplitude_definition must be native, peak, or rms"
-        )
-
-    @staticmethod
-    def _avg_overlap_fraction(params):
-        try:
-            value = float(params.get('avg_overlap', 50))
-        except (TypeError, ValueError):
-            value = 50.0
-        if value > 1.0:
-            value /= 100.0
-        return max(0.0, min(0.95, value))
-
-    @staticmethod
-    def _resolve_fft_nfft(n_samples, fs, params):
-        nfft_raw = params.get('nfft')
-        avg_mode = str(params.get('avg_mode', '单帧'))
-        if isinstance(nfft_raw, str):
-            nfft = None if nfft_raw.strip() in ('', '自动', 'auto') else int(nfft_raw)
-        elif nfft_raw is None or nfft_raw <= 0:
-            nfft = None
-        else:
-            nfft = int(nfft_raw)
-        if nfft is None and avg_mode in {'线性平均', '峰值保持'}:
-            t_win_s = float(params.get('t_win_s', 1.5))
-            return int(resolve_nfft(
-                float(fs), int(n_samples), t_win_s,
-                BatchRunner._avg_overlap_fraction(params),
-            ))
-        return nfft
-
-    @staticmethod
-    def _resolve_effective_nfft(method, n_samples, fs, params):
-        raw = params.get('nfft')
-        auto = raw is None or raw == ''
-        if isinstance(raw, str):
-            auto = raw.strip().lower() in {'auto', '自动'}
-        elif isinstance(raw, (int, float, np.integer, np.floating)):
-            auto = float(raw) <= 0
-        if not auto:
-            return int(raw)
-        if method == 'fft':
-            resolved = BatchRunner._resolve_fft_nfft(n_samples, fs, params)
-            return int(n_samples if resolved is None else resolved)
-        if method == 'order_time':
-            return int(resolve_order_nfft(
-                float(params.get('samples_per_rev', 256)),
-                float(params.get('order_res', 0.1)),
-                int(n_samples),
-            ))
-        return int(resolve_nfft(
-            float(fs),
-            int(n_samples),
-            float(params.get('t_win_s', 1.0)),
-            float(params.get('overlap', 0.5)),
-        ))
-
-    @classmethod
-    def _compute_order_time_spectro(cls, sig, rpm, time, fs, params) -> "_Spectro2D":
-        """Compute time-order spectrogram via COT and return a ``_Spectro2D``.
-
-        ``matrix`` is x-major ``(len(times), len(orders))`` so that
-        ``to_long_dataframe()`` round-trips through ``_matrix_to_long_dataframe``
-        without any transpose. The transpose needed for ``imshow`` (rows=y) is
-        applied in ``_write_image``.
-        """
-        from .signal.order_cot import COTOrderAnalyzer, COTParams
-
-        sig, _spec = cls._apply_filter_if_enabled(sig, fs, params)
-
-        # Defensive: COT requires strictly monotonic t. Even microsecond
-        # jitter in MF4 timestamps would raise ValueError. If not strict,
-        # rebuild a uniform fallback from len + fs.
-        time_arr = np.asarray(time, dtype=float)
-        if len(time_arr) < 2 or np.any(np.diff(time_arr) <= 0):
-            time_arr = np.arange(len(time_arr), dtype=float) / float(fs)
-
-        cot_params = COTParams(
-            samples_per_rev=int(params.get('samples_per_rev', 256)),
-            nfft=int(params.get('nfft', 1024)),
-            window=str(params.get('window', 'hanning')),
-            max_order=float(params.get('max_order', params.get('max_ord', 20))),
-            order_res=float(params.get('order_res', 0.1)),
-            time_res=float(params.get('time_res', 0.05)),
-            fs=float(fs),
-            weighting=str(params.get('weighting', 'None')),
-        )
-        result = COTOrderAnalyzer.compute(sig, rpm, time_arr, cot_params)
-        return _Spectro2D(
-            x=np.asarray(result.times, dtype=float),
-            y=np.asarray(result.orders, dtype=float),
-            matrix=np.asarray(result.amplitude, dtype=float),
-            x_name='time_s',
-            y_name='order',
-            metadata=dict(getattr(result, 'metadata', {}) or {}),
-        )
-
-    @classmethod
-    def _compute_order_time_dataframe(cls, sig, rpm, time, fs, params):
-        """Thin wrapper — delegates to ``_compute_order_time_spectro``.
-
-        As of 2026-04-28 the legacy frequency-domain path
-        (``OrderAnalyzer`` time-order result builder) is no longer invoked
-        here; COT handles all RPM regimes (sweep, coast-down, steady-state)
-        without smearing. ``samples_per_rev`` defaults to 256 when absent from
-        preset params; the COT pipeline requires ``time`` to be strictly
-        monotonically increasing.
-        """
-        return cls._compute_order_time_spectro(sig, rpm, time, fs, params).to_long_dataframe()
-
-    @classmethod
-    def _compute_fft_time_spectro(cls, sig, time, fs, params, *,
-                                  channel_name='') -> "_Spectro2D":
-        """Compute one-sided FFT-vs-time spectrogram and return a ``_Spectro2D``.
-
-        ``SpectrogramAnalyzer.compute`` returns ``amplitude`` with shape
-        ``(freq_bins, frames)``. ``_Spectro2D.matrix`` is x-major
-        ``(len(times), len(frequencies))``, so we store ``amplitude.T``
-        (``(frames, freq_bins)``). The exported dataframe stays in linear
-        amplitude — the dB conversion is a display-only choice in
-        ``_write_image``.
-        """
-        from .signal.spectrogram import SpectrogramAnalyzer, SpectrogramParams
-        sig, _spec = cls._apply_filter_if_enabled(sig, fs, params)
-        time, fs = cls._uniform_time_axis_for_spectrogram(time, fs, len(sig))
-        sp = SpectrogramParams(
-            fs=float(fs),
-            nfft=int(params.get('nfft', 1024)),
-            window=str(params.get('window', 'hanning')),
-            overlap=float(params.get('overlap', 0.5)),
-            remove_mean=bool(params.get('remove_mean', True)),
-            weighting=str(params.get('weighting', 'None')),
-        )
-        result = SpectrogramAnalyzer.compute(
-            signal=sig, time=time, params=sp,
-            channel_name=channel_name or 'signal',
-        )
-        return _Spectro2D(
-            x=np.asarray(result.times, dtype=float),
-            y=np.asarray(result.frequencies, dtype=float),
-            matrix=np.asarray(result.amplitude.T, dtype=float),
-            x_name='time_s',
-            y_name='frequency_hz',
-            metadata=dict(getattr(result, 'metadata', {}) or {}),
-        )
-
-    @classmethod
-    def _compute_fft_time_dataframe(cls, sig, time, fs, params, *, channel_name=''):
-        """Thin wrapper — delegates to ``_compute_fft_time_spectro``.
-
-        ``SpectrogramAnalyzer.compute`` returns ``amplitude`` with shape
-        ``(freq_bins, frames)``. ``_matrix_to_long_dataframe`` requires
-        ``matrix.shape == (len(x_values), len(y_values))`` (x-major), so we
-        transpose to ``(frames, freq_bins)`` before flattening. The exported
-        dataframe stays in linear amplitude — the dB conversion is a
-        display-only choice in ``_write_image``.
-        """
-        return cls._compute_fft_time_spectro(
-            sig, time, fs, params, channel_name=channel_name,
-        ).to_long_dataframe()
-
-    @staticmethod
-    def _strict_finite_time_axis(values, expected_length: int) -> bool:
-        try:
-            axis = np.asarray(values, dtype=float)
-        except (TypeError, ValueError):
-            return False
-        return bool(
-            axis.ndim == 1
-            and len(axis) == int(expected_length)
-            and len(axis) >= 2
-            and np.all(np.isfinite(axis))
-            and np.all(np.diff(axis) > 0.0)
-        )
+    # ---- batch_compute compatibility aliases -----------------------------
+    # These 24 names moved to batch_compute.py as module-level functions
+    # (D2). The aliases below exist ONLY so existing test/tool references to
+    # BatchRunner._xxx keep working; new code should import batch_compute
+    # directly instead of going through BatchRunner.
+    _channel_reference_facts = staticmethod(batch_compute.channel_reference_facts)
+    _batch_output_scale = staticmethod(batch_compute.batch_output_scale)
+    _image_reference_resolution = staticmethod(batch_compute.image_reference_resolution)
+    _check_cancel = staticmethod(batch_compute.check_cancel)
+    _apply_time_range = staticmethod(batch_compute.apply_time_range)
+    _suggest_fs_from_time_axis = staticmethod(batch_compute.suggest_fs_from_time_axis)
+    _uniform_time_axis_for_spectrogram = staticmethod(batch_compute.uniform_time_axis_for_spectrogram)
+    _time_axis_or_fallback = staticmethod(batch_compute.time_axis_or_fallback)
+    _filter_state = staticmethod(batch_compute.filter_state)
+    _filter_enabled = staticmethod(batch_compute.filter_enabled)
+    _filter_spec_from_params = staticmethod(batch_compute.filter_spec_from_params)
+    _apply_filter_if_enabled = staticmethod(batch_compute.apply_filter_if_enabled)
+    _compute_time_dataframe = staticmethod(batch_compute.compute_time_dataframe)
+    _compute_preprocessed_time_dataframe = staticmethod(batch_compute.compute_preprocessed_time_dataframe)
+    _compute_fft_dataframe = staticmethod(batch_compute.compute_fft_dataframe)
+    _convert_fft_amplitude_definition = staticmethod(batch_compute.convert_fft_amplitude_definition)
+    _avg_overlap_fraction = staticmethod(batch_compute.avg_overlap_fraction)
+    _resolve_fft_nfft = staticmethod(batch_compute.resolve_fft_nfft)
+    _resolve_effective_nfft = staticmethod(batch_compute.resolve_effective_nfft)
+    _compute_order_time_spectro = staticmethod(batch_compute.compute_order_time_spectro)
+    _compute_order_time_dataframe = staticmethod(batch_compute.compute_order_time_dataframe)
+    _compute_fft_time_spectro = staticmethod(batch_compute.compute_fft_time_spectro)
+    _compute_fft_time_dataframe = staticmethod(batch_compute.compute_fft_time_dataframe)
+    _strict_finite_time_axis = staticmethod(batch_compute.strict_finite_time_axis)
 
     def _rpm_values(
         self,
@@ -5104,254 +4772,30 @@ class BatchRunner:
         factor = float(preset.params.get('rpm_factor', 1.0))
         return fd.data[rpm_channel].to_numpy(dtype=float, copy=False) * factor
 
+    # ---- batch_output compatibility aliases -------------------------------
+    # These three byte-output writers moved to batch_output.py as
+    # module-level functions (D3). ``_write_image`` carries no row-limit
+    # dependency, so it is a plain alias. ``_write_dataframe`` /
+    # ``_write_workbook`` are thin forwarders instead of plain aliases: they
+    # read ``_XLSX_MAX_DATA_ROWS`` from THIS module's globals at call time
+    # and pass it in explicitly, so
+    # ``monkeypatch.setattr(mf4_analyzer.batch, "_XLSX_MAX_DATA_ROWS", ...)``
+    # (tests/test_batch_output.py) still reaches the write -- a plain
+    # ``staticmethod(batch_output.write_dataframe)`` alias would instead read
+    # ``batch_output``'s own copy of the constant and silently ignore the
+    # patch. New code should import batch_output directly instead of going
+    # through BatchRunner.
+    _write_image = staticmethod(batch_output.write_image)
+
     @staticmethod
     def _write_dataframe(df, path):
-        path = Path(path)
-        fmt = path.suffix.lower()
-        if fmt not in {'.csv', '.xlsx'}:
-            path = path.with_suffix('.csv')
-
-        def write(temp_path):
-            if path.suffix.lower() == '.xlsx':
-                # XLSX permits 1,048,576 rows including the column header.
-                # Split only at the physical format boundary so a large
-                # batch never silently truncates its final samples.
-                with pd.ExcelWriter(temp_path, engine='openpyxl') as writer:
-                    starts = range(0, len(df), _XLSX_MAX_DATA_ROWS) or (0,)
-                    for sheet_index, start in enumerate(
-                        starts, start=1,
-                    ):
-                        df.iloc[start:start + _XLSX_MAX_DATA_ROWS].to_excel(
-                            writer,
-                            sheet_name=f"数据{sheet_index}",
-                            index=False,
-                        )
-            else:
-                df.to_csv(temp_path, index=False)
-
-        return atomic_write(path, write)
+        return batch_output.write_dataframe(
+            df, path, max_data_rows=_XLSX_MAX_DATA_ROWS,
+        )
 
     @staticmethod
     def _write_workbook(sheets: "dict[str, pd.DataFrame]", path):
-        """Publish several named sheets as one xlsx, atomically.
-
-        The sibling of :meth:`_write_dataframe` for the slice export: same
-        ``atomic_write`` publication, but the caller names every sheet instead
-        of getting one ``数据N`` series. Unlike the long table a slice sheet is
-        a few hundred rows, so there is nothing to split -- exceeding the xlsx
-        row ceiling here would mean the caller handed over the wrong frame, and
-        silently dropping rows is worse than saying so.
-        """
-        path = Path(path)
-        if path.suffix.lower() != '.xlsx':
-            path = path.with_suffix('.xlsx')
-        for name, frame in sheets.items():
-            if len(frame) > _XLSX_MAX_DATA_ROWS:
-                raise ValueError(
-                    f"worksheet {name!r} has {len(frame)} rows, above the "
-                    f"xlsx limit of {_XLSX_MAX_DATA_ROWS}"
-                )
-
-        def write(temp_path):
-            with pd.ExcelWriter(temp_path, engine='openpyxl') as writer:
-                for name, frame in sheets.items():
-                    frame.to_excel(writer, sheet_name=name, index=False)
-
-        return atomic_write(path, write)
-
-    @staticmethod
-    def _write_image(
-        payload,
-        path,
-        params=None,
-        *,
-        options=None,
-        context=None,
-        warnings_out: list[str] | None = None,
-    ):
-        from .batch_render import BatchRenderOptions, render_batch_image
-
-        target = Path(path)
-        render_options = options or BatchRenderOptions(
-            format=target.suffix.lower().lstrip('.') or 'png',
-        )
-        return atomic_write(
-            target,
-            lambda temp: render_batch_image(
-                payload,
-                temp,
-                params=params,
-                options=render_options,
-                context=context,
-                warnings_out=warnings_out,
-            ),
+        return batch_output.write_workbook(
+            sheets, path, max_data_rows=_XLSX_MAX_DATA_ROWS,
         )
 
-
-def _guess_rpm_channel(fd):
-    for ch in fd.get_signal_channels():
-        low = ch.lower()
-        if 'rpm' in low or 'speed' in low or 'tach' in low:
-            return ch
-    return ''
-
-
-@dataclass(frozen=True)
-class _Spectro2D:
-    """2-D analysis result kept matrix-first to avoid a long→wide pivot
-    round-trip on export. ``matrix`` is x-major: shape (len(x), len(y)).
-
-    ``metadata`` preserves analyzer-owned display coverage such as
-    ``coverage_start`` / ``coverage_end``.  It is deliberately absent from
-    :meth:`to_long_dataframe` so CSV values and column order stay unchanged.
-    """
-    x: np.ndarray
-    y: np.ndarray
-    matrix: np.ndarray
-    x_name: str
-    y_name: str
-    metadata: Mapping[str, Any] = field(default_factory=dict)
-
-    def to_long_dataframe(self) -> pd.DataFrame:
-        return _matrix_to_long_dataframe(
-            self.x, self.y, self.matrix, self.x_name, self.y_name)
-
-    def slice_curve(self, axis: str, index: int) -> np.ndarray:
-        """Amplitudes along one slice pick, straight off the x-major matrix.
-
-        ``matrix`` here is **x-major**, shape ``(len(x), len(y))`` -- the
-        transpose of what the renderer's ``_extract_heatmap`` hands to
-        ``_builder._slice_curve_values`` (it applies ``x_major.T``). So the
-        indexing is mirrored: fixing a *time* takes a matrix **row** and the
-        curve runs along ``y``; fixing a *frequency/order* takes a **column**
-        and the curve runs along ``x``. ``tests/test_batch_slice_export.py``
-        pins this against the rendered curves point by point, because getting
-        it backwards yields a plausible-looking table of the wrong values.
-        """
-        matrix = np.asarray(self.matrix, dtype=float)
-        if str(axis).strip().lower() == 'time':
-            return matrix[int(index), :]
-        return matrix[:, int(index)]
-
-    def to_slice_sheets(
-        self,
-        plan,
-        *,
-        render_db: bool,
-        reference: float | None = None,
-        amplitude_label: str = '',
-        facts: "Sequence[str]" = (),
-        source: str = '',
-        channel: str = '',
-        unit: str = '',
-        method: str = '',
-    ) -> "dict[str, pd.DataFrame]":
-        """``{"切片信息": df, "<时间|频率|阶次>切片": df}`` for one slice plan.
-
-        One wide sheet with a position per column, so a reader can select a few
-        columns in Excel and get the comparison chart the multi-position slice
-        exists for (design D23), plus a key/value sheet that makes the file
-        self-describing.
-
-        Values are written in the **charted** caliber only -- dB when the page
-        renders dB -- with the caliber and its reference recorded on the info
-        sheet rather than doubling the column count with a parallel linear set
-        (design D24).
-        """
-        fixed_name = self.x_name if plan.axis == 'time' else self.y_name
-        curve_name = self.y_name if plan.axis == 'time' else self.x_name
-        curve_coords = np.asarray(
-            self.y if plan.axis == 'time' else self.x, dtype=float
-        )
-        dimension, sheet_name, prefix, position_unit, decimals = (
-            _slice_axis_labels(fixed_name)
-        )
-
-        columns: dict[str, np.ndarray] = {curve_name: curve_coords}
-        for pick in plan.picks:
-            values = self.slice_curve(plan.axis, pick.index)
-            if render_db:
-                from .signal.spectrogram import SpectrogramAnalyzer
-
-                # Element-wise, so converting the picked line alone is
-                # numerically identical to slicing the renderer's full
-                # ``display_matrix``.
-                values = np.asarray(
-                    SpectrogramAnalyzer.amplitude_to_db(
-                        values, reference=float(reference or 1.0)
-                    ),
-                    dtype=float,
-                )
-            name = f'{prefix}={pick.value:.{decimals}f}{position_unit}'
-            suffix = 2
-            while name in columns:
-                name = (
-                    f'{prefix}={pick.value:.{decimals}f}{position_unit}'
-                    f'#{suffix}'
-                )
-                suffix += 1
-            columns[name] = np.asarray(values, dtype=float)
-
-        def _positions(attribute: str) -> str:
-            # Four decimals, not the column headers' 1-2: the whole point of
-            # printing request and landing side by side is that a reader can
-            # see they differ (design D11), and 620.0 vs 615.2 Hz rounds to the
-            # same header text more often than not.
-            joined = ', '.join(
-                f'{getattr(pick, attribute):.4f}' for pick in plan.picks
-            )
-            return f'{joined} {position_unit}'.strip()
-
-        clamped = plan.clamped_picks
-        notes = []
-        if clamped:
-            notes.append(
-                '夹取到数据边界：'
-                + ', '.join(f'{pick.value:.{decimals}f}' for pick in clamped)
-            )
-        if plan.merged:
-            notes.append(
-                f'{len(plan.picks) + plan.merged} 个位置夹取后合并为 '
-                f'{len(plan.picks)} 个'
-            )
-
-        info: list[tuple[str, str]] = [
-            ('来源文件', str(source)),
-            ('通道', str(channel)),
-            ('单位', str(unit)),
-            ('方法', str(method)),
-        ]
-        info.extend(_slice_fact_rows(facts))
-        info.append(('幅值口径', str(amplitude_label)))
-        if render_db:
-            info.append(('dB 参考值', f'{float(reference or 1.0):g}'))
-        info.extend([
-            ('切片维度', f'固定{dimension}'),
-            ('切片位置 请求', _positions('requested')),
-            ('切片位置 落点', _positions('value')),
-            ('切片位置 备注', '；'.join(notes) if notes else '—'),
-        ])
-        return {
-            # An em dash rather than an empty cell: a blank reads as "the
-            # exporter forgot" and round-trips out of xlsx as NaN, while a
-            # unit-less channel is a fact worth stating.
-            '切片信息': pd.DataFrame(
-                {'项目': [key for key, _ in info],
-                 '值': [value if value else '—' for _, value in info]}
-            ),
-            sheet_name: pd.DataFrame(columns),
-        }
-
-
-def _matrix_to_long_dataframe(x_values, y_values, matrix, x_name, y_name):
-    x_values = np.asarray(x_values, dtype=float)
-    y_values = np.asarray(y_values, dtype=float)
-    matrix = np.asarray(matrix, dtype=float)
-    if matrix.shape != (len(x_values), len(y_values)):
-        raise ValueError(
-            f"matrix shape {matrix.shape} does not match "
-            f"({len(x_values)}, {len(y_values)})"
-        )
-    xs = np.repeat(x_values, len(y_values))
-    ys = np.tile(y_values, len(x_values))
-    return pd.DataFrame({x_name: xs, y_name: ys, 'amplitude': matrix.reshape(-1)})

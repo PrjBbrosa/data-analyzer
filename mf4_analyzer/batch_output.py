@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -13,11 +14,35 @@ import tempfile
 from typing import Any, Callable, Iterable, Mapping, Sequence
 import uuid
 
+import pandas as pd
+
 from .batch_recipe import recipe_fingerprint
+
+
+logger = logging.getLogger(__name__)
 
 
 _UNSAFE_FILENAME = re.compile(r'[\x00-\x1f<>:"/\\|?*]+')
 _REPEATED_SEPARATOR = re.compile(r"[\s_]+")
+
+#: XLSX permits 1,048,576 rows including the column header. ``batch.py``
+#: imports this by name into its own module namespace (rather than reading
+#: this module's copy at call time) so
+#: ``monkeypatch.setattr(mf4_analyzer.batch, "_XLSX_MAX_DATA_ROWS", ...)``
+#: keeps working -- ``BatchRunner._write_dataframe`` / ``_write_workbook``
+#: read that patched module global explicitly at call time and pass it in
+#: (see the compatibility aliases at the bottom of ``batch.py``).
+_XLSX_MAX_DATA_ROWS = 1_048_575
+
+#: CSV cannot hold the two sheets a slice workbook needs, and
+#: ``reserve_output_paths`` publishes exactly one file per extension, so
+#: splitting into several csv files would break the write-set's atomicity.
+#: Degrading to the historical long table costs nothing a csv reader had
+#: before and keeps the run green (design D22).
+_SLICE_CSV_FALLBACK_WARNING = (
+    'slice.csv_fallback: 切片工作簿需要 xlsx 格式，当前数据格式为 CSV，'
+    '本次数据文件仍为完整长表'
+)
 
 #: Group identity used when a source carries no label suffix or group metadata.
 #: It is part of the hashed identity and must never change; it is only omitted
@@ -659,6 +684,94 @@ def atomic_write(
     return target
 
 
+def write_dataframe(df, path, *, max_data_rows: int = _XLSX_MAX_DATA_ROWS):
+    path = Path(path)
+    fmt = path.suffix.lower()
+    if fmt not in {'.csv', '.xlsx'}:
+        path = path.with_suffix('.csv')
+
+    def write(temp_path):
+        if path.suffix.lower() == '.xlsx':
+            # XLSX permits 1,048,576 rows including the column header.
+            # Split only at the physical format boundary so a large
+            # batch never silently truncates its final samples.
+            with pd.ExcelWriter(temp_path, engine='openpyxl') as writer:
+                starts = range(0, len(df), max_data_rows) or (0,)
+                for sheet_index, start in enumerate(
+                    starts, start=1,
+                ):
+                    df.iloc[start:start + max_data_rows].to_excel(
+                        writer,
+                        sheet_name=f"数据{sheet_index}",
+                        index=False,
+                    )
+        else:
+            df.to_csv(temp_path, index=False)
+
+    return atomic_write(path, write)
+
+
+def write_workbook(
+    sheets: "dict[str, pd.DataFrame]",
+    path,
+    *,
+    max_data_rows: int = _XLSX_MAX_DATA_ROWS,
+):
+    """Publish several named sheets as one xlsx, atomically.
+
+    The sibling of :func:`write_dataframe` for the slice export: same
+    ``atomic_write`` publication, but the caller names every sheet instead
+    of getting one ``数据N`` series. Unlike the long table a slice sheet is
+    a few hundred rows, so there is nothing to split -- exceeding the xlsx
+    row ceiling here would mean the caller handed over the wrong frame, and
+    silently dropping rows is worse than saying so.
+    """
+    path = Path(path)
+    if path.suffix.lower() != '.xlsx':
+        path = path.with_suffix('.xlsx')
+    for name, frame in sheets.items():
+        if len(frame) > max_data_rows:
+            raise ValueError(
+                f"worksheet {name!r} has {len(frame)} rows, above the "
+                f"xlsx limit of {max_data_rows}"
+            )
+
+    def write(temp_path):
+        with pd.ExcelWriter(temp_path, engine='openpyxl') as writer:
+            for name, frame in sheets.items():
+                frame.to_excel(writer, sheet_name=name, index=False)
+
+    return atomic_write(path, write)
+
+
+def write_image(
+    payload,
+    path,
+    params=None,
+    *,
+    options=None,
+    context=None,
+    warnings_out: list[str] | None = None,
+):
+    from .batch_render import BatchRenderOptions, render_batch_image
+
+    target = Path(path)
+    render_options = options or BatchRenderOptions(
+        format=target.suffix.lower().lstrip('.') or 'png',
+    )
+    return atomic_write(
+        target,
+        lambda temp: render_batch_image(
+            payload,
+            temp,
+            params=params,
+            options=render_options,
+            context=context,
+            warnings_out=warnings_out,
+        ),
+    )
+
+
 __all__ = [
     "DEFAULT_GROUP_IDENTITY",
     "OutputPublishRace",
@@ -676,4 +789,7 @@ __all__ = [
     "release_output_reservation",
     "reserve_output_paths",
     "unicode_slug",
+    "write_dataframe",
+    "write_workbook",
+    "write_image",
 ]

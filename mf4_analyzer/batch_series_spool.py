@@ -9,7 +9,7 @@ from typing import Sequence
 
 import numpy as np
 
-from .batch_render import BatchSeries
+from .batch_render_models import BatchSeries
 
 
 _MAX_GROUP_MEMBERS = 32

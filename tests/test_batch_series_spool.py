@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -231,3 +236,34 @@ def test_spool_load_closes_partial_mappings_immediately_on_later_load_error(
         assert len(mappings) == 1
         assert mappings[0]._mmap.closed
         refs[0].x_path.unlink()
+
+
+def test_batch_series_spool_import_does_not_load_pyqt5():
+    """``batch_series_spool`` now sources ``BatchSeries`` from the neutral
+    ``batch_render_models`` module (design D4), so importing it must stay
+    free of the Qt renderer facade's PyQt5 side effects.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    script = """
+import json
+import sys
+import mf4_analyzer.batch_series_spool
+blocked = sorted(
+    name for name in sys.modules
+    if name == 'PyQt5' or name.startswith('PyQt5.')
+)
+print(json.dumps(blocked))
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(repo_root)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == []

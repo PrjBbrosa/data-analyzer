@@ -1,0 +1,40 @@
+# 批处理内核拆分 · 基线（Task 0）
+#
+# 计划: docs/analyzer/plans/2026-08-04-batch-core-decomposition-implementation.md
+# 设计: docs/analyzer/specs/2026-08-04-batch-core-decomposition-design.md
+
+分支:        refactor/batch-core-decomposition
+基线 commit: b886a30e338514df31da5fe4874e992f5be110eb
+设计基线:    e385ce5a（mf4_analyzer/ 自该 commit 起零改动，spec 行号有效）
+
+## 结构锚点
+
+wc -l mf4_analyzer/batch.py                        = 5357
+wc -l mf4_analyzer/batch_output.py                 = 679
+wc -l mf4_analyzer/batch_render_qt/_models.py      = 238
+wc -l mf4_analyzer/batch_series_spool.py           = 217
+grep -c "except Exception" mf4_analyzer/batch.py   = 20   （与设计预期一致）
+
+## 批处理全量测试
+
+命令: TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest \
+      tests/test_batch*.py tests/test_frozen_batch*.py tests/ui/test_batch*.py -q
+
+结果: 3 failed, 1168 passed, 1 warning in 32.59s
+
+## 基线失败集（3 条，均为改动前既有失败，后续任务必须保持完全一致）
+
+FAILED tests/test_batch_qt_render_parity.py::test_parity_tool_generates_current_machine_evidence
+FAILED tests/test_batch_renderer.py::test_facade_exports_only_supported_qt_renderer_contract
+FAILED tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference
+
+### 失败原因速记（供后续任务判别「是不是我弄红的」）
+
+- test_facade_exports_only_supported_qt_renderer_contract:
+  测试硬编码的 `batch_render.__all__` 名单已过时，实际门面多导出
+  `BatchChartDiagnostic` / `BatchTimeFigureSpec` 等。**与 Task 4 直接相关**：
+  Task 4 改 `batch_render.py` 再导出路径后，此测试应仍是同样的「名单不匹配」失败，
+  不得变成 ImportError/AttributeError 等新形态。
+- test_parity_tool_generates_current_machine_evidence: 渲染 parity 工具的本机证据文件缺失。
+- test_sheet_preview_and_result_share_channel_metadata_reference: UI 预览文案与断言不符
+  （'dB 参考：等待文件解析' vs 期望 '1×metadata'）。
