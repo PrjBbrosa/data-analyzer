@@ -68,7 +68,7 @@ Run: `PYTEST tests/ui/test_markup_serialization.py tests/ui/test_markup_editor.p
 **Files:** Create `mf4_analyzer/ui/markup/toolbar.py`;Modify `editor.py`;
 Modify(新增用例)`tests/ui/test_markup_editor.py` 或新文件。
 
-- [ ] **Step 1(接线特征测试先行):** 新增用例:构造 `MarkupEditor`,快照工具栏
+- [x] **Step 1(接线特征测试先行):** 新增用例:构造 `MarkupEditor`,快照工具栏
   按钮清单(objectName/文本/checkable/初始态)与样式面板控件清单。基线跑绿,commit。
 - [ ] **Step 2:** `_build_toolbar` / `_build_style_panel` / 图标生成(:1282-1324)
   移入 `toolbar.py`,以「传入 editor 回调/信号」的方式接线;**按钮创建顺序与
