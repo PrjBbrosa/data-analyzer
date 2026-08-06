@@ -192,6 +192,20 @@ import 到 `slice_panel.py` 是安全的。
 `clear_empty_hint` 签名不变(薄委托),`_empty_hint_item` / `_empty_hint_text`
 仍是**画布实例属性**(`on_state` 回写),因为多处测试与 `ui/main_window` 直接读它们。
 
+## C2 · remark 视口层(已完成)
+
+两处逐字 100% 相同,无差异需要归类。移入 `remarks.py` 的模块级函数:
+
+| 新函数 | 参数 | 取代 |
+| --- | --- | --- |
+| `viewport_pos_to_scene(view, viewport_pos)` | 显式收 `QGraphicsView` | 两画布的 `_viewport_pos_to_scene`(各 5 行) |
+| `remark_at_viewport_pos(remarks, view, viewport_pos)` | 显式收 remark 列表 + view | 两画布的 `_remark_item_at_viewport_pos`(各 45 行) |
+
+裸字面量 `12 ** 2` 提为 `_LABEL_HIT_RADIUS_PX`。
+两画布保留同名薄委托方法(`RemarkInteraction` 回调和测试都按名字调用)。
+
+`annotations.py` 的第三份拷贝按计划**不动**(它服务 `canvas.py`)。
+
 ## C3 · 差异审计表
 
 见本文件在 C3 提交中的增补。

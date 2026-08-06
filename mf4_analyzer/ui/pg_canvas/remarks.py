@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html import escape
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QPointF, Qt
 from PyQt5.QtGui import QColor, QCursor, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QApplication
 
@@ -14,6 +14,9 @@ import pyqtgraph as pg
 
 _ANNOTATION_CURSOR = None
 _REMARK_DOT_COLOR = "#dc2626"
+# Click tolerance (scene px) around a label's anchor point, used when the
+# cursor is near a label but not over any of its scene items.
+_LABEL_HIT_RADIUS_PX = 12
 
 
 @dataclass(slots=True)
@@ -172,6 +175,72 @@ class RemarkArtist:
         remarks.clear()
 
 
+def viewport_pos_to_scene(view, viewport_pos):
+    """Map a viewport-space position to scene coordinates, or None."""
+    try:
+        return view.mapToScene(viewport_pos)
+    except Exception:
+        return None
+
+
+def remark_at_viewport_pos(remarks, view, viewport_pos):
+    """Return the remark under a viewport click, or None.
+
+    Two stages, in this order:
+
+    1. whatever scene item is actually under the cursor -- walked outermost so
+       overlapping remarks resolve by the scene's own stacking order rather
+       than by insertion order in ``remarks``;
+    2. a ``_LABEL_HIT_RADIUS_PX`` tolerance around each label's anchor, which
+       catches a cursor near a label that is not over any of its items.
+
+    Malformed entries (no vb, no text) are skipped rather than raised on --
+    the caller is a mouse-event path and must not take the app down.
+    """
+    if not remarks:
+        return None
+    scene_pos = viewport_pos_to_scene(view, viewport_pos)
+    if scene_pos is None:
+        return None
+    try:
+        scene_items = view.scene().items(scene_pos)
+    except Exception:
+        scene_items = []
+    for item in scene_items:
+        for remark in remarks:
+            text = remark.get('text')
+            candidates = (
+                text,
+                getattr(text, 'textItem', None),
+                remark.get('dot'),
+                remark.get('leader'),
+            )
+            if any(
+                item is candidate
+                for candidate in candidates
+                if candidate is not None
+            ):
+                return remark
+    try:
+        sp = scene_pos.toPoint() if hasattr(scene_pos, 'toPoint') else scene_pos
+        for remark in remarks:
+            vb = remark.get('vb')
+            text = remark.get('text')
+            if vb is None or text is None:
+                continue
+            lpos = text.pos()
+            label_scene_pos = vb.mapViewToScene(QPointF(lpos.x(), lpos.y()))
+            dist_sq = (
+                (label_scene_pos.x() - sp.x()) ** 2
+                + (label_scene_pos.y() - sp.y()) ** 2
+            )
+            if dist_sq <= _LABEL_HIT_RADIUS_PX ** 2:
+                return remark
+    except Exception:
+        return None
+    return None
+
+
 class RemarkInteraction:
     """Shared annotation-mode mouse routing for pyqtgraph chart viewports."""
 
@@ -275,4 +344,6 @@ __all__ = [
     "RemarkPoint",
     "_annotation_pen_cursor",
     "format_remark_label",
+    "remark_at_viewport_pos",
+    "viewport_pos_to_scene",
 ]

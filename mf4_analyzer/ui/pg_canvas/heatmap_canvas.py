@@ -90,6 +90,8 @@ from mf4_analyzer.ui.pg_canvas.remarks import (
     RemarkArtist,
     RemarkInteraction,
     RemarkPoint,
+    remark_at_viewport_pos,
+    viewport_pos_to_scene,
 )
 from mf4_analyzer.ui.pg_canvas.viewbox import (
     _ModifierWheelViewBox,
@@ -2193,10 +2195,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._remarks.remove(nearest)
 
     def _viewport_pos_to_scene(self, viewport_pos):
-        try:
-            return self._glw.mapToScene(viewport_pos)
-        except Exception:
-            return None
+        return viewport_pos_to_scene(self._glw, viewport_pos)
 
     def _add_remark_at_viewport_pos(self, viewport_pos) -> None:
         scene_pos = self._viewport_pos_to_scene(viewport_pos)
@@ -2218,50 +2217,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self.remove_remark_near(p.x(), p.y())
 
     def _remark_item_at_viewport_pos(self, viewport_pos):
-        from PyQt5.QtCore import QPointF as _QPointF
-
-        if not self._remarks:
-            return None
-        scene_pos = self._viewport_pos_to_scene(viewport_pos)
-        if scene_pos is None:
-            return None
-        try:
-            scene_items = self._glw.scene().items(scene_pos)
-        except Exception:
-            scene_items = []
-        for item in scene_items:
-            for remark in self._remarks:
-                text = remark.get('text')
-                candidates = (
-                    text,
-                    getattr(text, 'textItem', None),
-                    remark.get('dot'),
-                    remark.get('leader'),
-                )
-                if any(
-                    item is candidate
-                    for candidate in candidates
-                    if candidate is not None
-                ):
-                    return remark
-        try:
-            sp = scene_pos.toPoint() if hasattr(scene_pos, 'toPoint') else scene_pos
-            for remark in self._remarks:
-                vb = remark.get('vb')
-                text = remark.get('text')
-                if vb is None or text is None:
-                    continue
-                lpos = text.pos()
-                label_scene_pos = vb.mapViewToScene(_QPointF(lpos.x(), lpos.y()))
-                dist_sq = (
-                    (label_scene_pos.x() - sp.x()) ** 2
-                    + (label_scene_pos.y() - sp.y()) ** 2
-                )
-                if dist_sq <= 12 ** 2:
-                    return remark
-        except Exception:
-            return None
-        return None
+        return remark_at_viewport_pos(self._remarks, self._glw, viewport_pos)
 
     def eventFilter(self, obj, event):
         try:
