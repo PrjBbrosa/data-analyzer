@@ -723,9 +723,13 @@ def _arrays_equal(left, right) -> bool:
 # pyqtgraph pads an auto-ranged axis by ``ViewBox.suggestPadding``, which it
 # clips to 10% per side — at most 1.2x the data span — and ``autoRange`` bakes
 # in the pen-width halo of whatever viewport height was current the last time
-# it ran. 1.5x clears both (measured worst case 1.35x) while still failing a
-# view whose range has drifted away from the data it is supposed to frame.
-_MAX_AUTO_RANGE_HEADROOM = 1.5
+# it ran. That halo scales as pen_px / panel_px, so it grows on denser pages
+# and on any platform whose taller tick text leaves the pre-settle panel
+# shorter; 1.2 x 1.125 = 1.35x measured here. 2.0x keeps that mechanism well
+# clear of the bound while still failing a range that has stopped tracking its
+# data — the per-view ``ranges`` records in evidence.json carry ``data_y``, so
+# the real margin on any given machine stays auditable rather than implicit.
+_MAX_AUTO_RANGE_HEADROOM = 2.0
 
 
 def _range_close(left, right) -> bool:
@@ -756,9 +760,16 @@ def _range_close(left, right) -> bool:
         span = (
             0.0 if data_y is None else float(data_y[1]) - float(data_y[0])
         )
-        if not lhs["auto"][1] or data_y is None or rhs["data_y"] is None or span <= 0.0:
-            # Manual y (and the heatmap views, which plot an ImageItem rather
-            # than curves) must reproduce the requested range exactly.
+        # Manual y is an explicit spec. So are the heatmap views, which plot an
+        # ImageItem rather than curves and so expose no array extent to compare
+        # — both must reproduce the requested range exactly.
+        pinned = (
+            not lhs["auto"][1]
+            or data_y is None
+            or rhs["data_y"] is None
+            or span <= 0.0
+        )
+        if pinned:
             if not np.allclose(lhs["y"], rhs["y"], rtol=1e-6, atol=1e-6):
                 return False
             continue

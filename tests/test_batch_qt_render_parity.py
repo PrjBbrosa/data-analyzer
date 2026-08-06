@@ -239,7 +239,7 @@ def test_range_guard_ignores_viewport_padding_but_catches_real_drift():
     )
     # Framing far past pyqtgraph's own padding allowance.
     assert not _range_close(
-        batch, [_range_record(y=(-4.0, 4.0), data_y=data)]
+        batch, [_range_record(y=(-2.5, 2.5), data_y=data)]
     )
     # One side silently stopped auto-ranging.
     assert not _range_close(
