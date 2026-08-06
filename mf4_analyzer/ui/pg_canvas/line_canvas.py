@@ -64,7 +64,6 @@ from .viewbox import _ModifierWheelViewBox, _WheelDeltaGraphicsLayoutWidget
 from mf4_analyzer.ui_kit.axis_metrics import (
     activate_item_layouts,
     left_axis_width_for_ticks,
-    pin_left_axes_to_common_width,
 )
 
 
@@ -1490,76 +1489,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             viewport_w = float(self._glw.width())
         return max(120.0, viewport_w - 140.0)
 
-    def prepare_split_layout_alignment(self, title_width: float | None) -> None:
-        """Release stale pins, constrain the title, and realize geometry.
-
-        The ``setWidth(None)`` release is kept even though the measurement that
-        follows it is now font-metric based. It is the only thing that lets a
-        cross-pane pin re-TIGHTEN: ``line_layout_metrics`` reports
-        ``max(font need, width())``, so without a release the realized term
-        would still be carrying whatever the previous, possibly much wider,
-        alignment pass pinned, and a pane that switched from rack force to
-        steering torque would keep a rack-force-sized left margin forever.
-
-        It only became load-bearing with the ``_activate_graphics_layout`` fix
-        below. Before that, the release moved size hints that nothing ever
-        realized, so ``width()`` kept reporting the old pin and the release was
-        a no-op that merely looked like one.
-        """
-        self._split_title_width = (
-            max(80.0, float(title_width))
-            if title_width is not None else None
-        )
-        for axis in self._alignment_left_axes():
-            try:
-                axis.setWidth(None)
-            except Exception:
-                pass
-        for axis in self._alignment_bottom_axes():
-            try:
-                axis.setHeight(None)
-            except Exception:
-                pass
+    def _release_split_right_spacers(self) -> None:
         self._set_right_spacer(self._plot_amp, None)
         self._set_right_spacer(self._plot_time, None)
+
+    def _release_split_titles(self) -> None:
         self._apply_title_texts()
-        self._activate_graphics_layout()
-
-    def reset_split_layout_alignment(self) -> None:
-        self.prepare_split_layout_alignment(None)
-        # Single-pane: unify the amp and time-preview left axes to a common
-        # width so both rows share a left edge. prepare_* just released the
-        # widths to their natural sizes, which differ when the two plots' y
-        # tick labels differ (e.g. spectrum amplitude vs time-domain
-        # amplitude) → misaligned left edges. Split mode (≥2 panes) is handled
-        # by the page via apply_split_layout_alignment, which already unifies
-        # left widths, so do this only on the single-pane reset path.
-        self._unify_stacked_left_axes()
-
-    def _unify_stacked_left_axes(self) -> None:
-        """Pin the amp and time-preview left axes to one width so both stacked
-        plots share a left edge in single-pane mode.
-
-        The width comes from the tick STRINGS each axis is carrying right now
-        (``pin_left_axes_to_common_width``, folded with each axis's realized
-        ``width()`` so the pin is monotonically non-decreasing within one
-        alignment pass). Reading ``AxisItem.width()`` alone cannot answer the
-        question: pyqtgraph's automatic width is derived from
-        ``AxisItem.textWidth``, which is only refreshed inside
-        ``generateDrawSpecs`` — i.e. while painting — so before the first paint
-        of a new tick set it is still the constructor default of 30. Combined
-        with a ``_activate_graphics_layout`` that used to activate only
-        ``glw.ci.layout`` (never the PlotItem layouts that actually size the
-        axis cell), the pin became a fixed point of itself: plotting a 0-0.8 Nm
-        spectrum and then a 0-480000 N one left the axis at 62.4px against the
-        101.4px its labels needed, and ``generateDrawSpecs`` silently DROPPED
-        every label that did not fit, leaving a spectrum row labelled ``'0'``.
-
-        Call after prepare_split_layout_alignment(None) so the realized term in
-        the max is a released natural width rather than a stale pin.
-        """
-        pin_left_axes_to_common_width(
-            self._alignment_left_axes(), layout_owners=self._layout_owners())
 
     def _layout_owners(self):
         """Graphics items whose own ``QGraphicsLayout`` assigns axis geometry.
@@ -1612,23 +1547,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         amp_right_reserve: float | None = None,
         time_right_reserve: float | None = None,
     ) -> None:
-        for axis in self._alignment_left_axes():
-            try:
-                axis.setWidth(float(left_axis_width))
-            except Exception:
-                pass
-        if amp_bottom_axis_height is not None:
-            try:
-                self._plot_amp.getAxis('bottom').setHeight(
-                    float(amp_bottom_axis_height))
-            except Exception:
-                pass
-        if time_bottom_axis_height is not None:
-            try:
-                self._plot_time.getAxis('bottom').setHeight(
-                    float(time_bottom_axis_height))
-            except Exception:
-                pass
+        self._pin_split_left_axes(left_axis_width)
+        self._pin_split_bottom_heights((
+            (self._plot_amp, amp_bottom_axis_height),
+            (self._plot_time, time_bottom_axis_height),
+        ))
         if amp_right_reserve is not None:
             self._set_right_spacer(self._plot_amp, float(amp_right_reserve))
         if time_right_reserve is not None:

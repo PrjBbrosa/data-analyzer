@@ -97,10 +97,7 @@ from mf4_analyzer.ui.pg_canvas.viewbox import (
     _ModifierWheelViewBox,
     _WheelDeltaGraphicsLayoutWidget,
 )
-from mf4_analyzer.ui_kit.axis_metrics import (
-    left_axis_width_for_ticks,
-    pin_left_axes_to_common_width,
-)
+from mf4_analyzer.ui_kit.axis_metrics import left_axis_width_for_ticks
 
 
 class _SliceDirToggle(QWidget):
@@ -1830,91 +1827,35 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             viewport_w = float(self._glw.width())
         return max(120.0, viewport_w - 160.0)
 
-    def prepare_split_layout_alignment(self, title_width: float | None) -> None:
-        """Release stale pins, constrain the title, and realize geometry.
-
-        Called by AnalysisSectionPage before it measures multiple heatmap
-        panes: first release to natural current text/tick sizes, then pin all
-        panes to the maxima.
-
-        The ``setWidth(None)`` release is kept even though the measurement that
-        follows it is now font-metric based. It is the only thing that lets a
-        cross-pane pin re-TIGHTEN: ``heatmap_layout_metrics`` reports
-        ``max(font need, width())``, so without a release the realized term
-        would still be carrying whatever the previous alignment pass pinned,
-        and a pane that switched from a frequency map to an order map would
-        keep a five-digit left margin forever. It is safe now only because the
-        font-metric term covers the case the release cannot: a natural width
-        read before the new ticks have ever been painted is derived from a
-        stale ``AxisItem.textWidth`` and under-reports.
-        """
-        self._split_title_width = (
-            max(80.0, float(title_width))
-            if title_width is not None else None
-        )
-        for axis in self._alignment_left_axes():
-            try:
-                axis.setWidth(None)
-            except Exception:
-                pass
-        for axis in self._alignment_bottom_axes():
-            try:
-                axis.setHeight(None)
-            except Exception:
-                pass
+    def _release_split_right_spacers(self) -> None:
         self._set_slice_right_spacer(None)
+
+    def _release_split_titles(self) -> None:
         self._apply_title_text()
-        self._activate_graphics_layout()
 
     def reset_split_layout_alignment(self) -> None:
+        """Single-pane path, with the slice's own follow-up geometry.
+
+        Overridden rather than inherited for two reasons. The ``_split_aligned``
+        flag is heatmap-only -- it tells the ``_after_split_*`` divider hooks
+        that the page owns alignment right now, and the line canvas overrides
+        none of them. And order matters here: unify the left axes FIRST (that
+        shifts each plot's left edge), then pull the slice's RIGHT edge in to
+        the heatmap's, then re-place the info panel in the freed column.
+
+        The ``_bottom_collapsed`` guard is deliberately NOT pushed down into
+        the mixin: the line canvas unifies unconditionally today, and whether
+        that is a bug or simply harmless there is not decidable from the code
+        (``pin_left_axes_to_common_width`` folds realized ``width()`` into its
+        max, so a collapsed row's stale width may or may not leak). See the
+        C3 audit table in docs/analyzer/verify/pg-slice-dedup-anchors.md.
+        """
         self._split_aligned = False
         self.prepare_split_layout_alignment(None)
-        # Single-pane: unify the two stacked left axes to a common width so the
-        # map and the slice share a left edge (prepare_* just released them to
-        # their natural widths, which differ when the y tick labels differ →
-        # misaligned left edges). Order matters: unify the left axes FIRST (it
-        # shifts each plot's left edge), then align the slice's RIGHT edge to
-        # the heatmap. Split mode (≥2 panes) is handled by the page via
-        # apply_split_layout_alignment, which already unifies left widths.
         if not getattr(self, '_bottom_collapsed', False):
             self._unify_stacked_left_axes()
             self._align_slice_to_main()
             self._position_slice_panel()
-
-    def _unify_stacked_left_axes(self) -> None:
-        """Pin the map's and the slice's left axes to one width so both plots
-        share a left edge in single-pane mode.
-
-        The width comes from the tick STRINGS each axis is carrying right now
-        (``pin_left_axes_to_common_width``), folded with the realized
-        ``width()``. Measuring realized geometry alone was wrong here even
-        though this canvas's ``_activate_graphics_layout`` does realize the
-        release in ``prepare_split_layout_alignment``: pyqtgraph derives the
-        automatic width from ``AxisItem.textWidth``, refreshed only inside
-        ``generateDrawSpecs`` — i.e. while painting. The two alignment entry
-        points that matter both run on ``QTimer.singleShot(0, ...)``
-        (``_deferred_first_show_align`` and ``AnalysisSectionPage``'s layout
-        sync), so they can land before the new tick set has ever been painted,
-        where ``textWidth`` is still the constructor default of 30. Measured
-        offscreen: a 0-480000 Hz map aligned before its first paint pinned to
-        75.4px against a 101.4px need, and ``generateDrawSpecs`` then dropped
-        EVERY Y label rather than clipping any (``if br & rect != rect:
-        continue``). Re-plotting a wide map over a narrow one was worse still —
-        the released width fell back to the *previous* labels' 62.4px.
-
-        No-op without a slice row (single plot, nothing to align).
-        """
-        if self._slice_plot is None:
-            return
-        axes = self._alignment_left_axes()
-        if len(axes) < 2:
-            return
-        # This canvas's own activator additionally resizes ``ci`` to the
-        # widget before walking the sub-layouts, which the plain helper
-        # traversal does not do — so drive it here instead of via
-        # ``layout_owners``.
-        pin_left_axes_to_common_width(axes)
-        self._activate_graphics_layout()
 
     def heatmap_layout_metrics(self) -> dict:
         left_widths = []
@@ -1986,23 +1927,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         slice_right_reserve: float | None = None,
     ) -> None:
         self._split_aligned = True
-        for axis in self._alignment_left_axes():
-            try:
-                axis.setWidth(float(left_axis_width))
-            except Exception:
-                pass
-        if main_bottom_axis_height is not None:
-            try:
-                self._plot.getAxis('bottom').setHeight(
-                    float(main_bottom_axis_height))
-            except Exception:
-                pass
-        if self._slice_plot is not None and slice_bottom_axis_height is not None:
-            try:
-                self._slice_plot.getAxis('bottom').setHeight(
-                    float(slice_bottom_axis_height))
-            except Exception:
-                pass
+        self._pin_split_left_axes(left_axis_width)
+        self._pin_split_bottom_heights((
+            (self._plot, main_bottom_axis_height),
+            (self._slice_plot, slice_bottom_axis_height),
+        ))
         if slice_right_reserve is not None:
             self._set_slice_right_spacer(float(slice_right_reserve))
         self._activate_graphics_layout()

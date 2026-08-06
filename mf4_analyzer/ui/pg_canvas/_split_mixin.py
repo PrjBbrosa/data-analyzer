@@ -1,9 +1,11 @@
-"""Shared split/collapse controls for two-row analysis canvases."""
+"""Shared split/collapse controls and layout alignment for two-row canvases."""
 from __future__ import annotations
 
 from PyQt5.QtCore import QPointF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen, QPolygonF
 from PyQt5.QtWidgets import QFrame, QWidget
+
+from mf4_analyzer.ui_kit.axis_metrics import pin_left_axes_to_common_width
 
 
 # Minimum PlotItem heights enforced while dragging the split divider, so a drag
@@ -288,3 +290,156 @@ class _StackedSplitMixin:
         self._position_collapse_ctrl()
         self._after_split_reset()
         self.layout_geometry_changed.emit()
+
+    # ------------------------------------------------------------------
+    # Cross-pane layout alignment.
+    #
+    # AnalysisSectionPage drives a three-call protocol on every pane it lays
+    # out side by side: prepare (release to natural sizes) -> *_layout_metrics
+    # (measure) -> apply (pin to the cross-pane maxima). reset_* is the
+    # single-pane path. The two canvases keep their own apply_* signatures --
+    # the page passes different keyword names per canvas type and that is part
+    # of the contract -- so only the shared body lives here.
+    # ------------------------------------------------------------------
+
+    def _alignment_left_axes(self):
+        """Left AxisItems that must end up sharing one width."""
+        raise NotImplementedError
+
+    def _alignment_bottom_axes(self):
+        """Bottom AxisItems whose heights participate in alignment."""
+        raise NotImplementedError
+
+    def _activate_graphics_layout(self) -> None:
+        """Realize pending geometry for this canvas's layout owners."""
+        raise NotImplementedError
+
+    def _release_split_right_spacers(self) -> None:
+        """Reset the right-edge reserve to its no-split state.
+
+        Genuinely per-canvas: the line canvas keeps a thin VISIBLE 1px frame on
+        both rows so each plot reads as a closed rectangle, while the heatmap
+        HIDES the slice's right axis so it cannot pollute the reserve
+        measurement that follows. Same call site, opposite intent.
+        """
+
+    def _release_split_titles(self) -> None:
+        """Re-apply/collapse plot titles after the size release."""
+
+    def prepare_split_layout_alignment(self, title_width: float | None) -> None:
+        """Release stale pins, constrain the title, and realize geometry.
+
+        Called by AnalysisSectionPage before it measures multiple panes: first
+        release to the natural current text/tick sizes, then pin every pane to
+        the maxima.
+
+        The ``setWidth(None)`` release is kept even though the measurement that
+        follows it is now font-metric based. It is the only thing that lets a
+        cross-pane pin re-TIGHTEN: ``*_layout_metrics`` reports ``max(font
+        need, width())``, so without a release the realized term would still be
+        carrying whatever the previous -- possibly much wider -- alignment pass
+        pinned. A line pane that switched from rack force to steering torque
+        would keep a rack-force-sized left margin forever, and a heatmap pane
+        that switched from a frequency map to an order map would keep a
+        five-digit one.
+
+        Two things had to be true before the release could be trusted. It only
+        became load-bearing at all once ``_activate_graphics_layout`` started
+        walking the PlotItem layouts: before that it moved size hints nothing
+        ever realized, so ``width()`` kept reporting the old pin and the
+        release was a no-op that merely looked like one. And it is only SAFE
+        because the font-metric term covers the case the release cannot -- a
+        natural width read before the new ticks have ever been painted comes
+        from a stale ``AxisItem.textWidth`` and under-reports.
+        """
+        self._split_title_width = (
+            max(80.0, float(title_width))
+            if title_width is not None else None
+        )
+        for axis in self._alignment_left_axes():
+            try:
+                axis.setWidth(None)
+            except Exception:
+                pass
+        for axis in self._alignment_bottom_axes():
+            try:
+                axis.setHeight(None)
+            except Exception:
+                pass
+        self._release_split_right_spacers()
+        self._release_split_titles()
+        self._activate_graphics_layout()
+
+    def reset_split_layout_alignment(self) -> None:
+        """Single-pane path: release, then unify the stacked left edges.
+
+        prepare_* just released the widths to their natural sizes, which differ
+        whenever the two rows' y tick labels differ (spectrum amplitude vs
+        time-domain amplitude) -> misaligned left edges. Split mode (>=2 panes)
+        is handled by the page via apply_split_layout_alignment, which already
+        unifies left widths, so this only runs on the single-pane reset.
+        """
+        self.prepare_split_layout_alignment(None)
+        self._unify_stacked_left_axes()
+
+    def _unify_stacked_left_axes(self) -> None:
+        """Pin the stacked left axes to one width so both rows share an edge.
+
+        The width comes from the tick STRINGS each axis is carrying right now
+        (``pin_left_axes_to_common_width``), folded with each axis's realized
+        ``width()`` so the pin is monotonically non-decreasing within one pass.
+
+        Reading ``AxisItem.width()`` alone cannot answer the question:
+        pyqtgraph derives the automatic width from ``AxisItem.textWidth``,
+        refreshed only inside ``generateDrawSpecs`` -- i.e. while painting --
+        so before the first paint of a new tick set it is still the constructor
+        default of 30. Both alignment entry points that matter run on
+        ``QTimer.singleShot(0, ...)`` (``_deferred_first_show_align`` and
+        AnalysisSectionPage's layout sync), so they routinely land there.
+
+        Two measurements, one per canvas, of what that cost: a 0-480000 N
+        spectrum pinned the line canvas's axis to 62.4px against the 101.4px
+        its labels needed, leaving a row labelled ``'0'``; a 0-480000 Hz map
+        aligned before its first paint pinned the heatmap's to 75.4px against
+        the same 101.4px. In both cases ``generateDrawSpecs`` silently DROPPED
+        every label that did not fit rather than clipping any (``if br & rect
+        != rect: continue``). Re-plotting a wide map over a narrow one was
+        worse still -- the released width fell back to the previous labels'
+        62.4px.
+
+        No-op with fewer than two axes (a canvas with no second row).
+
+        Note the activation is driven through ``_activate_graphics_layout``
+        rather than the helper's ``layout_owners`` argument: they are the same
+        call for the line canvas, but the heatmap's activator additionally
+        resizes ``ci`` to the widget first, which the plain helper traversal
+        does not do.
+        """
+        axes = self._alignment_left_axes()
+        if len(axes) < 2:
+            return
+        pin_left_axes_to_common_width(axes)
+        self._activate_graphics_layout()
+
+    def _pin_split_left_axes(self, left_axis_width: float) -> None:
+        for axis in self._alignment_left_axes():
+            try:
+                axis.setWidth(float(left_axis_width))
+            except Exception:
+                pass
+
+    @staticmethod
+    def _pin_split_bottom_heights(pairs) -> None:
+        """Set each ``(plot, height)`` bottom-axis height, skipping blanks.
+
+        A ``None`` plot is a row this canvas does not have (the heatmap without
+        a slice row); a ``None`` height is a measurement the page chose not to
+        send.
+        """
+        for plot, height in pairs:
+            if plot is None or height is None:
+                continue
+            try:
+                plot.getAxis('bottom').setHeight(float(height))
+            except Exception:
+                pass
