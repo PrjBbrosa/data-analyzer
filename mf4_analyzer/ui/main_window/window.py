@@ -50,6 +50,7 @@ from ..time_xaxis import (
 )
 
 from ._sentinel import _INSPECTOR_TIME_RANGE
+from ._state_holders import CustomXAxisState, ViewFocusState
 from ._analysis_mixin import AnalysisMixin
 from ._drop_import_mixin import DropImportMixin
 from ._fft_mixin import FFTMixin
@@ -108,16 +109,17 @@ class MainWindow(
         self._fc = 0;
         self._active = None
         self._project_path = None
+        # Applied custom-X state and time-domain View focus each live in one
+        # named holder (spec D-E2).  Built before _init_ui() so the property
+        # shims below always have a target.
+        self._custom_xaxis = CustomXAxisState()
+        self._view_focus = ViewFocusState()
         try:
             self._blf_dbc_history = self._load_recent_blf_dbc_history()
         except Exception:
             self._blf_dbc_history = []
         from ..analysis_jobs import AnalysisJobService
         self._analysis_jobs = AnalysisJobService(self)
-        # UI-only tokens remain owned by the window. Queueing, worker lifetime,
-        # total/completed accounting, and cancellation all belong to the shared
-        # service.
-        self._analysis_progress_tokens = {}
         self._last_batch_preset = None
         self._acquisition_cockpit_window = None
         # dB-reference-defaults Task 5: MainWindow owns the ONE shared
@@ -129,6 +131,19 @@ class MainWindow(
         )
         self._init_ui()
         self._init_channel_scope()
+        # D-E1: the cross-section analysis helpers get their collaborators
+        # injected by name instead of reaching through `self`.  Built after
+        # _init_ui() because inspector / chart_stack / analysis_managers are
+        # created there.  `files` is passed as a provider: the attribute is
+        # rebound on project open/close, so a captured mapping would go stale.
+        from .analysis_context import AnalysisContext
+        self._analysis_context = AnalysisContext(
+            inspector=self.inspector,
+            chart_stack=self.chart_stack,
+            analysis_managers=self.analysis_managers,
+            db_reference_store=self.db_reference_store,
+            files_provider=lambda: self.files,
+        )
         from functools import partial
         from .fft_time_coordinator import (
             FftTimeCoordinator,
@@ -142,6 +157,83 @@ class MainWindow(
         )
         self._init_drop_import()
         self._connect()
+
+    # -- compatibility shims for the custom-X holder (spec D-E2) -----------
+    # State moved onto ``self._custom_xaxis``; these keep the historical
+    # attribute names readable and writable so callers outside this package
+    # (``ui/view_bridge.py`` reads them via ``getattr``) and tests that poke
+    # them directly need no change. New code should use the holder.
+
+    @property
+    def _custom_xaxis_spec(self):
+        return self._custom_xaxis.spec
+
+    @_custom_xaxis_spec.setter
+    def _custom_xaxis_spec(self, value):
+        self._custom_xaxis.spec = value
+
+    @property
+    def _custom_xaxis_fid(self):
+        return self._custom_xaxis.fid
+
+    @_custom_xaxis_fid.setter
+    def _custom_xaxis_fid(self, value):
+        self._custom_xaxis.fid = value
+
+    @property
+    def _custom_xaxis_ch(self):
+        return self._custom_xaxis.ch
+
+    @_custom_xaxis_ch.setter
+    def _custom_xaxis_ch(self, value):
+        self._custom_xaxis.ch = value
+
+    @property
+    def _custom_xlabel(self):
+        return self._custom_xaxis.xlabel
+
+    @_custom_xlabel.setter
+    def _custom_xlabel(self, value):
+        self._custom_xaxis.xlabel = value
+
+    # -- compatibility shim for the section progress tokens (spec D-E2) ----
+    # The tokens now live on AnalysisJobService, whose batch lifetime they
+    # follow. This keeps the old dict-shaped access working for tests that
+    # poke individual sections.
+
+    @property
+    def _analysis_progress_tokens(self):
+        return self._analysis_jobs.progress_tokens
+
+    @_analysis_progress_tokens.setter
+    def _analysis_progress_tokens(self, value):
+        self._analysis_jobs.progress_tokens = value
+
+    # -- compatibility shims for the View-focus holder (spec D-E2) ---------
+
+    @property
+    def _primary_view_idx(self):
+        return self._view_focus.primary
+
+    @_primary_view_idx.setter
+    def _primary_view_idx(self, value):
+        self._view_focus.primary = value
+
+    @property
+    def _secondary_view_idx(self):
+        return self._view_focus.secondary
+
+    @_secondary_view_idx.setter
+    def _secondary_view_idx(self, value):
+        self._view_focus.secondary = value
+
+    @property
+    def _focused_view_idx(self):
+        return self._view_focus.focused
+
+    @_focused_view_idx.setter
+    def _focused_view_idx(self, value):
+        self._view_focus.focused = value
 
     def _db_reference_settings(self):
         """``QSettings`` for the shared dB-reference catalog store.
@@ -266,9 +358,7 @@ class MainWindow(
         self.view_manager = ViewManager(self, max_views=12)
         self._view_bridge = view_bridge
         self.view_tabbar = self.chart_stack.attach_view_tabbar(self.view_manager)
-        self._primary_view_idx = self.view_manager.active
-        self._secondary_view_idx = None
-        self._focused_view_idx = self.view_manager.active
+        self._view_focus.bind(active=self.view_manager.active, partner=None)
 
         # V7 Step 2: per-section analysis view managers (owned by ChartStack so
         # the per-section ViewTabBar can dereference a real manager at
@@ -280,10 +370,9 @@ class MainWindow(
             'fft_time': AnalysisResultCache(12),
             'order': AnalysisResultCache(12),
         }
-        # Re-entrancy guard: while a view switch is applying state to the UI,
-        # suppress the inspector signal handlers that would otherwise capture
-        # the half-applied controls back into the outgoing view.
-        self._applying_analysis_view = False
+        # `_applying_analysis_view` is AnalysisMixin's own re-entrancy guard;
+        # its default lives with the owner (see AnalysisMixin) so exactly one
+        # file writes it.
         # Post-load auto-recompute queue. A saved project carries each analysis
         # view's compute params + signal sources but NOT the numeric results
         # (recompute-on-open, per the user's choice). open_project seeds this
@@ -903,10 +992,7 @@ class MainWindow(
         # Applied custom-X state.  The immutable spec is authoritative; the
         # legacy fid/channel fields are retained only as exact-source adapters
         # for old callers while View persistence migrates.
-        self._custom_xlabel = None
-        self._custom_xaxis_fid = None
-        self._custom_xaxis_ch = None
-        self._custom_xaxis_spec = CustomXAxisSpec()
+        self._custom_xaxis.clear()
         # Phase 1 item 4: track range-filter and plot-mode state across
         # plot_time() calls so we can fire the appropriate envelope-cache
         # invalidation when either changes (the cache is keyed on raw
@@ -2036,10 +2122,7 @@ class MainWindow(
         fd = self.files.get(spec.source_fid)
         if fd is not None and spec.channel in fd.data.columns:
             return
-        self._custom_xaxis_spec = CustomXAxisSpec()
-        self._custom_xaxis_fid = None
-        self._custom_xaxis_ch = None
-        self._custom_xlabel = None
+        self._custom_xaxis.clear()
         self.inspector.top.set_xaxis_mode('time')
 
     def _refresh_channel_dependent_controls(self):
@@ -2054,6 +2137,14 @@ class MainWindow(
         idx = self._view_index_for_canvas(canvas)
         previous_spec = getattr(self, '_custom_xaxis_spec', CustomXAxisSpec())
         mode = self.inspector.top.xaxis_mode()
+        # NOTE: this method writes through the compatibility shims rather than
+        # `self._custom_xaxis` directly.  `tests/ui/test_task4_cache_
+        # invalidation.py` drives it with a `SimpleNamespace` standing in for a
+        # narrow MainWindow protocol and then asserts on these very attribute
+        # names, so the holder does not exist on `self` here.  The shims mean
+        # the writes still land on the holder for a real window, and
+        # `_view_mixin` no longer touches these names at all -- which is what
+        # the ownership ratchet measures.
         if mode == 'time':
             self._custom_xlabel = self.inspector.top.xaxis_label() or None
             self._custom_xaxis_spec = CustomXAxisSpec(
@@ -2280,10 +2371,10 @@ class MainWindow(
         self._capture_focused_view()
         self.view_tabbar.set_split_focus(secondary_focused)
         if secondary_focused:
-            self._focused_view_idx = self._secondary_view_idx
+            self._view_focus.focused = self._view_focus.secondary
             which = "对比"
         else:
-            self._focused_view_idx = self._primary_view_idx
+            self._view_focus.focused = self._view_focus.primary
             which = "主"
         if self._focused_view_idx is not None:
             self._sync_focus_accent()

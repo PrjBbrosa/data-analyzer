@@ -1,0 +1,118 @@
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  7%]
+........................................................................ [  9%]
+...................................................F.................... [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 17%]
+........................................................................ [ 19%]
+........................................................................ [ 22%]
+........................................................................ [ 24%]
+........................................................................ [ 27%]
+........................................................................ [ 29%]
+........................................................................ [ 32%]
+........................................................................ [ 34%]
+..................F..................................................... [ 37%]
+........................................................................ [ 39%]
+........................................................................ [ 41%]
+........................................................................ [ 44%]
+........................................................................ [ 46%]
+........................................................................ [ 49%]
+........................................................................ [ 51%]
+........................................................................ [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 59%]
+........................................................................ [ 61%]
+........................................................................ [ 64%]
+........................................................................ [ 66%]
+........................................................................ [ 69%]
+........................................................................ [ 71%]
+........................................................................ [ 74%]
+........................................................................ [ 76%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+........................................................................ [ 83%]
+........................................................................ [ 86%]
+........................................................................ [ 88%]
+........................................................................ [ 91%]
+........................................................................ [ 93%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+....................................                                     [100%]
+=================================== FAILURES ===================================
+________ test_sheet_preview_and_result_share_channel_metadata_reference ________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x117d78d40>
+tmp_path = PosixPath('/private/tmp/pytest-of-donghang/pytest-906/test_sheet_preview_and_result_0')
+
+    def test_sheet_preview_and_result_share_channel_metadata_reference(qtbot, tmp_path):
+        import dataclasses
+    
+        import numpy as np
+        import pandas as pd
+        import pytest
+    
+        from mf4_analyzer.batch import BatchOutput, BatchRunner
+        from mf4_analyzer.io import FileData
+        from mf4_analyzer.ui.drawers.batch import BatchSheet
+    
+        n = 1024
+        t = np.arange(n) / 512.0
+        fd = FileData(
+            tmp_path / "metadata.csv",
+            pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 50 * t)}),
+            ["Time", "sig"], {"sig": "Nm"}, idx=0,
+            channel_metadata={
+                "sig": {
+                    "quantity": "torque", "unit": "Nm", "db_reference": 4.5,
+                },
+            },
+        )
+        sheet = BatchSheet(None, files={0: fd})
+        qtbot.addWidget(sheet)
+        sheet.apply_files(file_ids=(0,), file_paths=())
+        sheet.apply_signals(("sig",))
+        sheet.apply_method("fft")
+        sheet.apply_params({"window": "hanning", "nfft": 512})
+        sheet.apply_outputs(BatchOutput(
+            export_data=False, export_image=True, data_format="csv",
+        ))
+    
+        preview = sheet._output_panel.effective_preview_text()
+>       assert "1×metadata" in preview
+E       AssertionError: assert '1×metadata' in 'dB 参考：等待文件解析'
+
+tests/ui/test_batch_runner_thread.py:314: AssertionError
+________ test_view_compact_tabs_ranks_between_coaxis_and_custom_action _________
+
+    def test_view_compact_tabs_ranks_between_coaxis_and_custom_action():
+        # Exact-match queue order: a discovery hint's priority IS its rotation
+        # position, so pin it. (view.history is ship="later" -> absent.)
+>       assert _discovery_walk(mode="time", plot_mode="overlay") == [
+            "toolbar.shortcuts_exist",
+            "chart.copy_image",
+            "chart.right_click_menu",
+            "channel.right_click",
+            "coaxis.merge",
+            "view.compact_tabs",
+            "chart.custom_action_slot",
+        ]
+E       AssertionError: assert ['toolbar.sho...ct_tabs', ...] == ['toolbar.sho...ct_tabs', ...]
+E         
+E         Left contains one more item: 'batch.export_options'
+E         Use -v to get more diff
+
+tests/ui/test_hint_nudges.py:342: AssertionError
+=============================== warnings summary ===============================
+tests/ui/test_analysis_multiview_integration.py: 31 warnings
+tests/ui/test_pg_heatmap_canvas.py: 2 warnings
+tests/ui/test_pg_line_canvas.py: 5 warnings
+  /Users/donghang/Downloads/data analyzer/.venv/lib/python3.12/site-packages/pyqtgraph/functions.py:2996: DeprecationWarning: Setting the shape on a NumPy array has been deprecated in NumPy 2.5.
+  As an alternative, you can create a new view using np.reshape (with copy=False if needed).
+    arr.shape = (3, 3)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference
+FAILED tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action
+2 failed, 2914 passed, 1 deselected, 38 warnings in 341.55s (0:05:41)

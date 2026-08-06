@@ -391,10 +391,13 @@ class OrderMixin:
 
     def _start_order_batch(self, jobs):
         total = len(jobs)
-        self._analysis_progress_tokens['order'] = self._begin_compute_progress(
-            "阶次 1/%d" % total,
-            total=1000,
-            process_events=False,
+        self._analysis_jobs.set_progress_token(
+            'order',
+            self._begin_compute_progress(
+                "阶次 1/%d" % total,
+                total=1000,
+                process_events=False,
+            ),
         )
         self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
         self.inspector.order_ctx.set_progress("计算中...")
@@ -719,7 +722,7 @@ class OrderMixin:
 
     def _on_order_job_progress(self, done, total):
         """Project service-owned batch progress onto the existing UI bar."""
-        token = self._analysis_progress_tokens.get('order')
+        token = self._analysis_jobs.progress_token('order')
         if token is None:
             return
         completed, total_jobs = self._analysis_jobs.progress_counts('order')
@@ -731,6 +734,6 @@ class OrderMixin:
         )
         if done == total and not self._analysis_jobs.is_running('order'):
             self._finish_compute_progress(token=token)
-            self._analysis_progress_tokens.pop('order', None)
+            self._analysis_jobs.clear_progress_token('order')
             self.inspector.order_ctx.set_progress("")
             self._finish_order_outcome_feedback()

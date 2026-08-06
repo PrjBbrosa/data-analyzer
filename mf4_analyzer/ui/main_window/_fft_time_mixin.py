@@ -323,10 +323,13 @@ class FFTTimeMixin:
 
     def _on_fft_time_batch_started(self, total, first_ctx):
         """Create the UI token before service submission can finish skips."""
-        self._analysis_progress_tokens['fft_time'] = self._begin_compute_progress(
-            "FFT-时间 1/%d" % total,
-            total=1000,
-            process_events=False,
+        self._analysis_jobs.set_progress_token(
+            'fft_time',
+            self._begin_compute_progress(
+                "FFT-时间 1/%d" % total,
+                total=1000,
+                process_events=False,
+            ),
         )
         p = first_ctx.get('render_params') or {}
         nfft = p.get('nfft_effective', p.get('nfft'))
@@ -612,7 +615,7 @@ class FFTTimeMixin:
 
     def _on_fft_time_job_progress(self, done, total):
         """Project service-owned batch progress onto the existing UI bar."""
-        token = self._analysis_progress_tokens.get('fft_time')
+        token = self._analysis_jobs.progress_token('fft_time')
         if token is None:
             return
         completed, total_jobs = self._analysis_jobs.progress_counts('fft_time')
@@ -624,5 +627,5 @@ class FFTTimeMixin:
         )
         if done == total and not self._analysis_jobs.is_running('fft_time'):
             self._finish_compute_progress(token=token)
-            self._analysis_progress_tokens.pop('fft_time', None)
+            self._analysis_jobs.clear_progress_token('fft_time')
             self._finish_fft_time_outcome_feedback()
