@@ -33,6 +33,22 @@ EXPECTED_WRITE_THROUGH = {
     "TickDensityController": set(),
     "AnnotationManager": {"_last_rclick_scene_pos"},
     "QualityManager": set(),
+    # _SliceStrip writes its whole state through on purpose, which is why the
+    # set is long rather than empty. The slice cursor position, direction and
+    # AA flag have to stay readable as canvas._slice_* -- tests and
+    # ui/main_window/_order_mixin.py reach for them by name -- so the strip
+    # owns the behaviour and the canvas keeps owning the state.
+    "_SliceStrip": {
+        "_slice_aa_on",
+        "_slice_dir",
+        "_slice_marker_updating",
+        "_slice_x_btn_label",
+        "_slice_x_idx",
+        "_slice_x_val",
+        "_slice_y_btn_label",
+        "_slice_y_idx",
+        "_slice_y_val",
+    },
 }
 
 COLLABORATOR_CLASSES = (
