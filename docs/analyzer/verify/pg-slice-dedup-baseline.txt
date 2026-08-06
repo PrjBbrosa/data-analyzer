@@ -1,0 +1,32 @@
+包 C 基线 — 采集于 main @ ab19622f(包 B 已合并),2026-08-06
+PYTEST = TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest
+(全部加 -p no:randomly 以固定顺序)
+
+== 画布全量 ==
+tests/ui/test_pg_heatmap_canvas.py
+tests/ui/test_pg_line_canvas.py
+tests/ui/test_pg_timedomain_canvas.py
+tests/ui/test_pg_canvas_decomposition_characterization.py
+tests/ui/test_slice_amp_floor_guard.py
+tests/ui/test_stacked_left_axis_metrics.py
+tests/ui/test_axis_frame_alignment.py
+tests/ui/test_pg_remarks.py
+
+698 passed, 1 deselected, 7 warnings in 29.28s
+FAILED: (无)
+
+== tests/ui/ 全量 ==
+2 failed, 3086 passed, 1 deselected, 38 warnings in 345.37s
+
+FAILED tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference
+FAILED tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action
+
+→ 与 CLAUDE.md「Dev commands」节记录的两条既有红完全一致,无额外红。
+
+== 行数基线 ==
+mf4_analyzer/ui/pg_canvas/heatmap_canvas.py   2518
+mf4_analyzer/ui/pg_canvas/line_canvas.py      2235
+mf4_analyzer/ui/pg_canvas/_split_mixin.py      290
+mf4_analyzer/ui/pg_canvas/remarks.py           278
+mf4_analyzer/ui/pg_canvas/analysis_axes.py     467
+(目标:heatmap_canvas.py 较此基线再减 ≥400 行)
