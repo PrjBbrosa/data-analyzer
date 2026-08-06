@@ -1,4 +1,6 @@
 import numpy as np
+import pytest
+
 from mf4_analyzer.signal.order_cot import COTOrderAnalyzer, COTParams
 
 
@@ -156,7 +158,13 @@ def test_cot_result_params_carries_fs():
     assert res.params.fs == fs
 
 
-def test_cot_tail_frame_metadata_covers_time_end():
+def test_cot_metadata_coverage_wraps_the_support_grid():
+    """覆盖区间 = 支撑点各自的半格，不再是整段录制。
+
+    旧语义把 coverage 报成「首帧左沿 → 末帧右沿」，渲染层会把帧均匀铺满这个
+    比实际分析区间宽得多的范围。现在 coverage 必须紧贴支撑网格，且因为头尾
+    放不下整窗，它一定落在录制区间**里面**。
+    """
     fs = 1000.0
     t, sig, rpm = _synth_constant_rpm_with_2nd_order(fs=fs, dur=5.3)
     p = COTParams(
@@ -165,12 +173,14 @@ def test_cot_tail_frame_metadata_covers_time_end():
     )
 
     res = COTOrderAnalyzer.compute(sig, rpm, t, p)
+    md = res.metadata
 
-    assert 'coverage_start' in res.metadata
-    assert 'coverage_end' in res.metadata
-    assert res.metadata['coverage_start'] <= res.times[0]
-    assert res.metadata['coverage_end'] >= res.times[-1]
-    assert abs(float(res.metadata['coverage_end']) - float(t[-1])) < 0.02
+    step = float(md['time_step_s'])
+    assert md['coverage_start'] == pytest.approx(res.times[0] - step / 2.0)
+    assert md['coverage_end'] == pytest.approx(res.times[-1] + step / 2.0)
+    # 半窗死区是真实物理：分析区间必须缩在录制区间内部。
+    assert md['coverage_start'] > float(t[0])
+    assert md['coverage_end'] < float(t[-1])
 
 
 # ---------------------------------------------------------------------------
@@ -234,24 +244,33 @@ def test_smaller_time_res_gives_more_frames():
     )
 
 
-def test_extreme_small_time_res_hop_is_at_least_one():
-    """Boundary: extremely small time_res → hop clamped to 1, no crash, ≥1 frame."""
+def test_extreme_small_time_res_is_floored_at_one_angle_sample():
+    """极小 time_res：网格步长被抬到「一个角度样本」这条线，不爆内存。
+
+    网格再密也不可能比角度域采样更细，支撑点数上限就是可能的帧起点数
+    ——正好等于旧实现 hop 被夹到 1 时的帧数。
+    """
     t, sig, rpm = _synth_cot_signal()
-    p = COTParams(samples_per_rev=256, nfft=512, max_order=10.0,
+    nfft = 512
+    p = COTParams(samples_per_rev=256, nfft=nfft, max_order=10.0,
                   order_res=0.1, time_res=1e-9)
     res = COTOrderAnalyzer.compute(sig, rpm, t, p)
-    assert res.metadata['hop'] >= 1
-    assert res.metadata['frames'] >= 1
+    md = res.metadata
+    assert md['time_step_s'] > 1e-9          # 被下限抬过
+    assert md['frames'] >= 1
+    assert md['frames'] <= int(md['angle_samples']) - nfft + 1
     assert np.all(np.isfinite(res.amplitude))
 
 
-def test_extreme_large_time_res_hop_at_most_nfft():
-    """Boundary: extremely large time_res → hop clamped to nfft, no crash, ≥1 frame."""
+def test_extreme_large_time_res_falls_back_to_one_centred_frame():
+    """极大 time_res：没有整点落进可放窗区间 → 兜底单帧，覆盖不撑爆 x 轴。"""
     t, sig, rpm = _synth_cot_signal()
     nfft = 512
     p = COTParams(samples_per_rev=256, nfft=nfft, max_order=10.0,
                   order_res=0.1, time_res=1e6)
     res = COTOrderAnalyzer.compute(sig, rpm, t, p)
-    assert res.metadata['hop'] <= nfft
-    assert res.metadata['frames'] >= 1
+    md = res.metadata
+    assert md['frames'] == 1
+    # 兜底帧报的是它自己那个窗的真实中心，覆盖不超出录制区间。
+    assert float(t[0]) <= md['coverage_start'] < md['coverage_end'] <= float(t[-1])
     assert np.all(np.isfinite(res.amplitude))
