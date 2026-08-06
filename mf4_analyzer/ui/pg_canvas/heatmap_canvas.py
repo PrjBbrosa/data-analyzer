@@ -72,6 +72,7 @@ from mf4_analyzer.ui.pg_canvas.analysis_axes import (  # noqa: F401
     time_axis_display_extent,
 )
 from mf4_analyzer.ui.pg_canvas.context_menu import redesign_pg_context_menu
+from mf4_analyzer.ui.pg_canvas.empty_hint import EmptyHintOverlay
 from mf4_analyzer.ui.pg_canvas._shared import (
     show_major_grid_left_bottom_only,
 )
@@ -390,6 +391,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         )
         self._empty_hint_text = ''
         self._empty_hint_item = None
+        # The overlay owns the behaviour; the two attributes above stay the
+        # public read surface (main_window and several tests read them).
+        self._empty_hint = EmptyHintOverlay(
+            viewbox_getter=lambda: self._plot.vb,
+            reposition_slot=self._reposition_empty_hint,
+            on_state=self._store_empty_hint_state,
+        )
         self._mouse_mode_controller = None
         self._copy_image_handler = None
         self._bottom_tick_target = None
@@ -716,62 +724,18 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     # ------------------------------------------------------------------
     # empty hint (source/params selected, result cache not ready)
     # ------------------------------------------------------------------
+    def _store_empty_hint_state(self, item, text: str) -> None:
+        self._empty_hint_item = item
+        self._empty_hint_text = text
+
     def show_empty_hint(self, text: str) -> None:
-        self._empty_hint_text = str(text or '')
-        if not self._empty_hint_text:
-            self.clear_empty_hint()
-            return
-        if self._empty_hint_item is None:
-            hint = pg.TextItem(
-                '',
-                color='#6b7280',
-                fill=pg.mkBrush(255, 255, 255, 220),
-                border=pg.mkPen('#d1d5db', width=1),
-                anchor=(0.5, 0.5),
-            )
-            hint.setZValue(1000)
-            self._empty_hint_item = hint
-        self._empty_hint_item.setText(self._empty_hint_text)
-        if self._empty_hint_item.scene() is None:
-            self._plot.vb.addItem(self._empty_hint_item, ignoreBounds=True)
-        self._empty_hint_item.setVisible(True)
-        for sig in (self._plot.vb.sigResized,
-                    self._plot.vb.sigRangeChanged):
-            try:
-                sig.disconnect(self._reposition_empty_hint)
-            except (TypeError, RuntimeError):
-                pass
-            try:
-                sig.connect(self._reposition_empty_hint)
-            except Exception:
-                pass
-        self._reposition_empty_hint()
+        self._empty_hint.show(text)
 
     def _reposition_empty_hint(self, *_args) -> None:
-        if self._empty_hint_item is None or not self._empty_hint_text:
-            return
-        try:
-            rect = self._plot.vb.sceneBoundingRect()
-            self._empty_hint_item.setPos(
-                self._plot.vb.mapSceneToView(rect.center()))
-        except Exception:
-            pass
+        self._empty_hint.reposition()
 
     def clear_empty_hint(self) -> None:
-        self._empty_hint_text = ''
-        if self._empty_hint_item is None:
-            return
-        for sig in (self._plot.vb.sigResized,
-                    self._plot.vb.sigRangeChanged):
-            try:
-                sig.disconnect(self._reposition_empty_hint)
-            except (TypeError, RuntimeError):
-                pass
-        try:
-            self._plot.vb.removeItem(self._empty_hint_item)
-        except Exception:
-            pass
-        self._empty_hint_item = None
+        self._empty_hint.clear()
 
     def reference_delta_since_last_render(self, new_reference: float) -> float | None:
         """Spec §8.3.1: dB-reference-change × manual colour levels.

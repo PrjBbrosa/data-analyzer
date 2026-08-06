@@ -173,6 +173,25 @@ import 到 `slice_panel.py` 是安全的。
 真机截图基线:**本次执行按编排要求跳过**(改由 orchestrator 的两侧真机渲染
 哈希对比覆盖)。本文件末尾列出改动触碰的可视面清单。
 
+## C1 · 空态提示差异归类(已完成)
+
+逐行 diff 的全部 8 处差异,归类:
+
+| # | 位置 | 差异 | 归类 | 处置 |
+| --- | --- | --- | --- | --- |
+| 1 | `show`:`addItem` | `_plot_amp.vb` ↔ `_plot.vb` | **真实差异**——line 是两行堆叠(谱 + 时域预览),提示挂在幅值行;heatmap 只有主图 | `viewbox_getter` 回调吸收 |
+| 2-3 | `show`:信号连接 | 同上 | 同上 | 同上 |
+| 4-5 | `_reposition`:`sceneBoundingRect` / `mapSceneToView` | 同上 | 同上 | 同上 |
+| 6-7 | `clear`:信号断开 | 同上 | 同上 | 同上 |
+| 8 | `clear`:`removeItem` | 同上 | 同上 | 同上 |
+
+「无意漂移」0 处;两边的样式常量、Z 值、异常分支、连接前先断开的顺序完全一致。
+→ 共享实现 `ui/pg_canvas/empty_hint.py::EmptyHintOverlay`,零分叉。
+
+保留的公开面:两画布的 `show_empty_hint` / `_reposition_empty_hint` /
+`clear_empty_hint` 签名不变(薄委托),`_empty_hint_item` / `_empty_hint_text`
+仍是**画布实例属性**(`on_state` 回写),因为多处测试与 `ui/main_window` 直接读它们。
+
 ## C3 · 差异审计表
 
 见本文件在 C3 提交中的增补。
