@@ -483,6 +483,17 @@ QDialog#BatchPreviewDialog QPushButton {
     padding: 4px 14px;
     font-weight: 700;
 }
+/* 代表最终图预览对话框里的警告条——沿用项目既有的低饱和琥珀警示色
+ * （见 cockpitRecIndicator[recState="warn"] / rightVerdictBanner[verdict="warn"]）。
+ * 只在 result.warnings 非空时显示，空时整块隐藏、不占位。 */
+QLabel#batchPreviewWarnings {
+    background-color: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 6px;
+    color: #92400e;
+    padding: 6px 10px;
+    font-size: 12px;
+}
 QWidget#BatchCompactToolbar {
     border-bottom: 1px solid #e8edf4;
     background-color: #fbfcfe;
