@@ -159,7 +159,9 @@ class OrderContextual(QWidget):
         self.spin_time_res.setRange(0.01, 1.0)
         self.spin_time_res.setValue(0.05)
         self.spin_time_res.setSuffix(" s")
-        self.spin_time_res.setToolTip('阶次谱图时间轴细度：\n越小时间越细、阶次相应变粗。')
+        self.spin_time_res.setToolTip(
+            '阶次谱图时间轴步长：越小时间越细、\n计算量越大；分析窗不变，不影响阶次细度。'
+        )
         fl.addRow("时间分辨率:", _fit_field(self.spin_time_res))
         # 2026-08-03: order gains the same 窗函数 picker FFT / FFT-vs-Time
         # already expose. COT resolves it through ``get_analysis_window`` just
