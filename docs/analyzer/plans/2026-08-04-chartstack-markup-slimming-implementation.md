@@ -10,16 +10,16 @@
 
 ## Task 0: 锚点核验 + 基线(失配即停)
 
-- [ ] **Step 1:** **通读 `mf4_analyzer/ui/chart_stack/cursor_pill.py` 现有内容**
+- [x] **Step 1:** **通读 `mf4_analyzer/ui/chart_stack/cursor_pill.py` 现有内容**
   (本计划多处并入它,必须先知道里面已有什么、避免命名冲突)。
-- [ ] **Step 2:** 核验 stack.py pill 区方法清单(spec 锚点 :1032-1305)与
+- [x] **Step 2:** 核验 stack.py pill 区方法清单(spec 锚点 :1032-1305)与
   editor.py 各带(:394/:701/:901/:1163/:1212/:1282/:1325)。
-- [ ] **Step 3:** 纯度审计:对六个格式化方法逐个 grep 方法体内的 `self.`,记录
+- [x] **Step 3:** 纯度审计:对六个格式化方法逐个 grep 方法体内的 `self.`,记录
   每处 self 依赖(预期:`_single_cursor_channel_color` 可能查通道颜色)。结论存
   `docs/analyzer/verify/chartstack-markup-anchors.md`。
-- [ ] **Step 4:** 采集测试语料:`grep -rn "cursor_pill\|_format_cursor\|dual_cursor" tests/ui/test_chart_stack.py | head -30`,
+- [x] **Step 4:** 采集测试语料:`grep -rn "cursor_pill\|_format_cursor\|dual_cursor" tests/ui/test_chart_stack.py | head -30`,
   记录既有 pill 测试与其中的文本 fixture,供 Task 1 复用。
-- [ ] **Step 5:** 基线:
+- [x] **Step 5:** 基线:
   `PYTEST tests/ui/test_chart_stack.py tests/ui/test_markup_editor.py tests/ui/test_copy_thumbnail.py tests/ui/test_chart_stack_stats_visibility.py -q > docs/analyzer/verify/chartstack-markup-baseline.txt 2>&1 || true`
   真机基线截图:单/双游标 pill、标注编辑器工具栏,存
   `docs/analyzer/evidence/chartstack-markup/baseline/`。
