@@ -15,9 +15,11 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
 - Qt 用例需要 offscreen 平台；`TMPDIR=/tmp` 用来绕开下面 Gotchas 里的 TCC 问题。
 - 默认套件约 4600 条、**跑满近 20 分钟**，别当成快速检查；改动局部时先跑对应子目录，
   收尾再跑全量。
-- **先取基线**：`main` 上目前就有一批 `tests/ui/` 用例是红的（主要是分屏相关的
-  `test_split_*`，`canvas_time.get_visible_xlim()` 返回 `None`，offscreen 和原生平台
-  都复现）。动手前先记下当前失败数，别把既有失败算到自己的改动头上。
+- **先取基线**：`main` 上目前有两条既有红测试（2026-08-06 实测；早先记录的
+  `test_split_*` 批量红已不复现，全绿）：
+  `tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference`
+  与 `tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action`。
+  动手前先记下当前失败数，别把既有失败算到自己的改动头上。
 
 ## Architecture
 `mf4_analyzer/` 主包：
