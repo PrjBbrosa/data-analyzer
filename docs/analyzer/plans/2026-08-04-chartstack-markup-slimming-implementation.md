@@ -40,6 +40,12 @@ Run: `PYTEST tests/ui/test_cursor_pill_formatting.py tests/ui/test_chart_stack.p
 
 ## Task D2(可选,闸门 = D1 全绿): pill 定位收拢为控制器
 
+> **2026-08-06:跳过。** 闸门(D1 全绿)满足,但耦合实测显示收益不成立:
+> `_secondary_card` 在 stack.py 有 76 处引用、`_time_card` 41 处,且 `_pill_secondary`
+> 由分屏入口(:639)创建——控制器拿不到所有权,只能反向引用逐个转发,是位移不是接缝。
+> 加上本次执行跳过真机,而 pill 定位正是 offscreen 验不了的那类。理由详见
+> `docs/analyzer/verify/chartstack-markup-anchors.md` §6.2。
+
 **Files:** Modify `cursor_pill.py`、`stack.py`。
 
 - [ ] **Step 1:** `_reposition_pill` / `_reposition_one_pill` / `_pill_for_canvas` /
@@ -75,6 +81,8 @@ Modify(新增用例)`tests/ui/test_markup_editor.py` 或新文件。
   connect 顺序逐条保持**。
 - [x] **Step 3:** 特征测试原样绿 + `test_markup_editor.py` 与基线一致;真机打开
   编辑器对照工具栏截图。
+  > 特征测试 36 条搬后原样绿,未改一字。**真机部分按编排跳过**,可视面见
+  > anchors §6.6-B。另:图标生成未移出,原因见 anchors §6.3。
 
 Run: `PYTEST tests/ui/test_markup_editor.py -q`
 
@@ -85,14 +93,20 @@ Run: `PYTEST tests/ui/test_markup_editor.py -q`
   命中、等比缩放、裁剪钳制);耦合部分留在 editor。
 - [x] **Step 2:** `PYTEST tests/ui/test_markup_editor.py -q` + 真机:拖动矩形手柄、
   裁剪、缩放文字,行为与基线一致。红了 → revert 本任务。
+  > pytest 部分完成(68 passed,与基线一致),并新增 `tests/ui/test_markup_handles.py`
+  > 35 条纯几何直接单测。**真机部分按编排跳过**,可视面见 anchors §6.6-D。
 
 ## Task 6: 收尾
 
-- [ ] **Step 1:** 全量对比基线失败集(Task 0 Step 5 同一命令),差异为空
+- [x] **Step 1:** 全量对比基线失败集(Task 0 Step 5 同一命令),差异为空
   (新增测试除外)。
 - [ ] **Step 2:** 真机完整过一遍 spec 验收第 4 条(pill + 标注编辑器全流程),
   截图存 `.../evidence/chartstack-markup/after/`。
-- [ ] **Step 3:** PR 描述:行数变化、纯度审计表、向后兼容 payload 说明。
+  > **2026-08-06:本次执行按编排要求跳过所有真机核对**(不启动 GUI、不截图、
+  > 不用 offscreen 冒充视觉验收),改由 orchestrator 做两侧自动化渲染对比。
+  > 本包改动触碰的可视面清单见
+  > `docs/analyzer/verify/chartstack-markup-anchors.md` §6.6。**此项仍未完成。**
+- [x] **Step 3:** PR 描述:行数变化、纯度审计表、向后兼容 payload 说明。
 
 ## 明确禁止
 
