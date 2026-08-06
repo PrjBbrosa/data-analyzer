@@ -43,8 +43,15 @@ from .analysis_axes import (
     _visual_padded_bounds,
 )
 from .context_menu import redesign_pg_context_menu
+from .empty_hint import EmptyHintOverlay
 from .fonts import _apply_pg_axis_font
-from .remarks import RemarkArtist, RemarkInteraction, RemarkPoint
+from .remarks import (
+    RemarkArtist,
+    RemarkInteraction,
+    RemarkPoint,
+    remark_at_viewport_pos,
+    viewport_pos_to_scene,
+)
 from ._shared import show_major_grid_left_bottom_only
 from ._split_mixin import (
     _CollapsedRail,
@@ -57,7 +64,6 @@ from .viewbox import _ModifierWheelViewBox, _WheelDeltaGraphicsLayoutWidget
 from mf4_analyzer.ui_kit.axis_metrics import (
     activate_item_layouts,
     left_axis_width_for_ticks,
-    pin_left_axes_to_common_width,
 )
 
 
@@ -258,6 +264,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._stale_banner = None
         self._empty_hint_text = ''
         self._empty_hint_item = None
+        # The overlay owns the behaviour; the two attributes above stay the
+        # public read surface (main_window and several tests read them).
+        self._empty_hint = EmptyHintOverlay(
+            viewbox_getter=lambda: self._plot_amp.vb,
+            reposition_slot=self._reposition_empty_hint,
+            on_state=self._store_empty_hint_state,
+        )
         self._bottom_tick_target = None
         self._bottom_tick_density = None
 
@@ -700,62 +713,18 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     # ------------------------------------------------------------------
     # empty hint (source/params selected, result cache not ready)
     # ------------------------------------------------------------------
+    def _store_empty_hint_state(self, item, text: str) -> None:
+        self._empty_hint_item = item
+        self._empty_hint_text = text
+
     def show_empty_hint(self, text: str) -> None:
-        self._empty_hint_text = str(text or '')
-        if not self._empty_hint_text:
-            self.clear_empty_hint()
-            return
-        if self._empty_hint_item is None:
-            hint = pg.TextItem(
-                '',
-                color='#6b7280',
-                fill=pg.mkBrush(255, 255, 255, 220),
-                border=pg.mkPen('#d1d5db', width=1),
-                anchor=(0.5, 0.5),
-            )
-            hint.setZValue(1000)
-            self._empty_hint_item = hint
-        self._empty_hint_item.setText(self._empty_hint_text)
-        if self._empty_hint_item.scene() is None:
-            self._plot_amp.vb.addItem(self._empty_hint_item, ignoreBounds=True)
-        self._empty_hint_item.setVisible(True)
-        for sig in (self._plot_amp.vb.sigResized,
-                    self._plot_amp.vb.sigRangeChanged):
-            try:
-                sig.disconnect(self._reposition_empty_hint)
-            except (TypeError, RuntimeError):
-                pass
-            try:
-                sig.connect(self._reposition_empty_hint)
-            except Exception:
-                pass
-        self._reposition_empty_hint()
+        self._empty_hint.show(text)
 
     def _reposition_empty_hint(self, *_args) -> None:
-        if self._empty_hint_item is None or not self._empty_hint_text:
-            return
-        try:
-            rect = self._plot_amp.vb.sceneBoundingRect()
-            self._empty_hint_item.setPos(
-                self._plot_amp.vb.mapSceneToView(rect.center()))
-        except Exception:
-            pass
+        self._empty_hint.reposition()
 
     def clear_empty_hint(self) -> None:
-        self._empty_hint_text = ''
-        if self._empty_hint_item is None:
-            return
-        for sig in (self._plot_amp.vb.sigResized,
-                    self._plot_amp.vb.sigRangeChanged):
-            try:
-                sig.disconnect(self._reposition_empty_hint)
-            except (TypeError, RuntimeError):
-                pass
-        try:
-            self._plot_amp.vb.removeItem(self._empty_hint_item)
-        except Exception:
-            pass
-        self._empty_hint_item = None
+        self._empty_hint.clear()
 
     # ------------------------------------------------------------------
     def plot_spectra(self, entries, *, xlim, amp_label, title,
@@ -1520,76 +1489,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             viewport_w = float(self._glw.width())
         return max(120.0, viewport_w - 140.0)
 
-    def prepare_split_layout_alignment(self, title_width: float | None) -> None:
-        """Release stale pins, constrain the title, and realize geometry.
-
-        The ``setWidth(None)`` release is kept even though the measurement that
-        follows it is now font-metric based. It is the only thing that lets a
-        cross-pane pin re-TIGHTEN: ``line_layout_metrics`` reports
-        ``max(font need, width())``, so without a release the realized term
-        would still be carrying whatever the previous, possibly much wider,
-        alignment pass pinned, and a pane that switched from rack force to
-        steering torque would keep a rack-force-sized left margin forever.
-
-        It only became load-bearing with the ``_activate_graphics_layout`` fix
-        below. Before that, the release moved size hints that nothing ever
-        realized, so ``width()`` kept reporting the old pin and the release was
-        a no-op that merely looked like one.
-        """
-        self._split_title_width = (
-            max(80.0, float(title_width))
-            if title_width is not None else None
-        )
-        for axis in self._alignment_left_axes():
-            try:
-                axis.setWidth(None)
-            except Exception:
-                pass
-        for axis in self._alignment_bottom_axes():
-            try:
-                axis.setHeight(None)
-            except Exception:
-                pass
+    def _release_split_right_spacers(self) -> None:
         self._set_right_spacer(self._plot_amp, None)
         self._set_right_spacer(self._plot_time, None)
+
+    def _release_split_titles(self) -> None:
         self._apply_title_texts()
-        self._activate_graphics_layout()
-
-    def reset_split_layout_alignment(self) -> None:
-        self.prepare_split_layout_alignment(None)
-        # Single-pane: unify the amp and time-preview left axes to a common
-        # width so both rows share a left edge. prepare_* just released the
-        # widths to their natural sizes, which differ when the two plots' y
-        # tick labels differ (e.g. spectrum amplitude vs time-domain
-        # amplitude) → misaligned left edges. Split mode (≥2 panes) is handled
-        # by the page via apply_split_layout_alignment, which already unifies
-        # left widths, so do this only on the single-pane reset path.
-        self._unify_stacked_left_axes()
-
-    def _unify_stacked_left_axes(self) -> None:
-        """Pin the amp and time-preview left axes to one width so both stacked
-        plots share a left edge in single-pane mode.
-
-        The width comes from the tick STRINGS each axis is carrying right now
-        (``pin_left_axes_to_common_width``, folded with each axis's realized
-        ``width()`` so the pin is monotonically non-decreasing within one
-        alignment pass). Reading ``AxisItem.width()`` alone cannot answer the
-        question: pyqtgraph's automatic width is derived from
-        ``AxisItem.textWidth``, which is only refreshed inside
-        ``generateDrawSpecs`` — i.e. while painting — so before the first paint
-        of a new tick set it is still the constructor default of 30. Combined
-        with a ``_activate_graphics_layout`` that used to activate only
-        ``glw.ci.layout`` (never the PlotItem layouts that actually size the
-        axis cell), the pin became a fixed point of itself: plotting a 0-0.8 Nm
-        spectrum and then a 0-480000 N one left the axis at 62.4px against the
-        101.4px its labels needed, and ``generateDrawSpecs`` silently DROPPED
-        every label that did not fit, leaving a spectrum row labelled ``'0'``.
-
-        Call after prepare_split_layout_alignment(None) so the realized term in
-        the max is a released natural width rather than a stale pin.
-        """
-        pin_left_axes_to_common_width(
-            self._alignment_left_axes(), layout_owners=self._layout_owners())
 
     def _layout_owners(self):
         """Graphics items whose own ``QGraphicsLayout`` assigns axis geometry.
@@ -1642,23 +1547,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         amp_right_reserve: float | None = None,
         time_right_reserve: float | None = None,
     ) -> None:
-        for axis in self._alignment_left_axes():
-            try:
-                axis.setWidth(float(left_axis_width))
-            except Exception:
-                pass
-        if amp_bottom_axis_height is not None:
-            try:
-                self._plot_amp.getAxis('bottom').setHeight(
-                    float(amp_bottom_axis_height))
-            except Exception:
-                pass
-        if time_bottom_axis_height is not None:
-            try:
-                self._plot_time.getAxis('bottom').setHeight(
-                    float(time_bottom_axis_height))
-            except Exception:
-                pass
+        self._pin_split_left_axes(left_axis_width)
+        self._pin_split_bottom_heights((
+            (self._plot_amp, amp_bottom_axis_height),
+            (self._plot_time, time_bottom_axis_height),
+        ))
         if amp_right_reserve is not None:
             self._set_right_spacer(self._plot_amp, float(amp_right_reserve))
         if time_right_reserve is not None:
@@ -2093,10 +1986,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._remove_remark(best[1])
 
     def _viewport_pos_to_scene(self, viewport_pos):
-        try:
-            return self._glw.mapToScene(viewport_pos)
-        except Exception:
-            return None
+        return viewport_pos_to_scene(self._glw, viewport_pos)
 
     def _add_remark_at_viewport_pos(self, viewport_pos) -> None:
         scene_pos = self._viewport_pos_to_scene(viewport_pos)
@@ -2121,50 +2011,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self.remove_remark_near('time', v.x())
 
     def _remark_item_at_viewport_pos(self, viewport_pos):
-        from PyQt5.QtCore import QPointF as _QPointF
-
-        if not self._remarks:
-            return None
-        scene_pos = self._viewport_pos_to_scene(viewport_pos)
-        if scene_pos is None:
-            return None
-        try:
-            scene_items = self._glw.scene().items(scene_pos)
-        except Exception:
-            scene_items = []
-        for item in scene_items:
-            for remark in self._remarks:
-                text = remark.get('text')
-                candidates = (
-                    text,
-                    getattr(text, 'textItem', None),
-                    remark.get('dot'),
-                    remark.get('leader'),
-                )
-                if any(
-                    item is candidate
-                    for candidate in candidates
-                    if candidate is not None
-                ):
-                    return remark
-        try:
-            sp = scene_pos.toPoint() if hasattr(scene_pos, 'toPoint') else scene_pos
-            for remark in self._remarks:
-                vb = remark.get('vb')
-                text = remark.get('text')
-                if vb is None or text is None:
-                    continue
-                lpos = text.pos()
-                label_scene_pos = vb.mapViewToScene(_QPointF(lpos.x(), lpos.y()))
-                dist_sq = (
-                    (label_scene_pos.x() - sp.x()) ** 2
-                    + (label_scene_pos.y() - sp.y()) ** 2
-                )
-                if dist_sq <= 12 ** 2:
-                    return remark
-        except Exception:
-            return None
-        return None
+        return remark_at_viewport_pos(self._remarks, self._glw, viewport_pos)
 
     def eventFilter(self, obj, event):
         try:

@@ -1,0 +1,379 @@
+# 包 C · 锚点重定位与盘点(Task 0)
+
+- 重定位基线:`main` @ `ab19622f`(包 B 已合并)。计划/设计文档里引 `e385ce5a`
+  的行号**全部作废**——包 B 把 `heatmap_canvas.py` 从 3021 削到 **2518** 行,
+  `line_canvas.py` = 2235 行。
+- 本文档随 C1–C4 推进增补(差异归类、审计表)。
+
+## Step 1 · 三组锚点的当前位置
+
+### 空态提示三件套
+
+| 方法 | `line_canvas.py` | `heatmap_canvas.py` |
+| --- | --- | --- |
+| 字段 `_empty_hint_text` / `_empty_hint_item` | 259-260 | 391-392 |
+| `show_empty_hint` | 703-732 | 719-748 |
+| `_reposition_empty_hint` | 734-742 | 750-758 |
+| `clear_empty_hint` | 744-758 | 760-774 |
+
+逐行 diff(56 行 vs 56 行,行数完全一致):**唯一差异是宿主 ViewBox 的取法**
+——line 用 `self._plot_amp.vb`,heatmap 用 `self._plot.vb`,共 8 处。
+没有任何逻辑/顺序/异常处理差异。→ 用「目标 ViewBox」一个参数即可吸收,
+不需要留分叉。
+
+`canvas.py`(时域)另有一份 `show_empty_hint` / `clear_empty_hint`
+(2623-2647),实现完全不同(挂在 `self._glw` 而非 vb,无 reposition)。
+**明确禁止动 `canvas.py`**,不纳入 C1。
+
+外部消费面(必须保持签名/属性不变):
+- `ui/main_window/_analysis_mixin.py:610-621`、`ui/main_window/window.py:2775,2835`
+  调 `show_empty_hint` / `clear_empty_hint`。
+- 测试直接读 `_empty_hint_item` / `_empty_hint_text`:
+  `tests/ui/test_analysis_multiview_integration.py`(多处)、
+  `tests/ui/test_pg_heatmap_canvas.py:1040-1049`、
+  `tests/ui/test_pg_timedomain_canvas.py:1666-1678`、
+  `tests/ui/test_main_window_smoke.py`、`tests/ui/test_project_session.py:251`。
+  → 两个字段必须留在**画布实例**上,不能只存在于帮助类里。
+
+### remark 视口层
+
+| 方法 | `line_canvas.py` | `heatmap_canvas.py` | 结论 |
+| --- | --- | --- | --- |
+| `_viewport_pos_to_scene` | 2095-2099 | 2231-2235 | **逐字 100% 相同**(5 行) |
+| `_remark_item_at_viewport_pos` | 2123-2167 | 2256-2300 | **逐字 100% 相同**(45 行) |
+
+第三份拷贝:`annotations.py:230-274`(`AnnotationManager`,服务 `canvas.py`)。
+与上面两份只差 `self.remarks` ↔ `self._remarks` 和一行 docstring
+(相似度 0.911)。属 `canvas.py` 的委托面,**本包不动**,仅记录。
+
+外部消费面:
+- `line_canvas.py:241` / `heatmap_canvas.py:389` 把 `_remark_item_at_viewport_pos`
+  作为 `RemarkInteraction(remark_at_viewport_pos=...)` 的回调传入。
+- `tests/ui/test_pg_timedomain_canvas.py:1233,1334,1392` monkeypatch 的是
+  **canvas.py 侧**(`AnnotationManager`),不受本包影响。
+
+### 分栏对齐四件套
+
+| 方法 | `line_canvas.py` | `heatmap_canvas.py` |
+| --- | --- | --- |
+| `prepare_split_layout_alignment` | 1523-1556 | 1867-1901 |
+| `reset_split_layout_alignment` | 1558-1567 | 1903-1916 |
+| `_unify_stacked_left_axes` | 1569-1592 | 1918-1951 |
+| `apply_split_layout_alignment` | 1636-1666 | 2015-2042 |
+| (周边)`_alignment_left_axes` | 1668-1669 | 2044-2048 |
+| (周边)`_alignment_bottom_axes` | 1671-1675 | 2050-2054 |
+| (周边)`recommended_split_title_width` | 1515-1521 | 1853-1865 |
+
+公共基类已存在:`_split_mixin._StackedSplitMixin`(`_split_mixin.py:211-290`),
+两画布都继承。差异审计见下面 §C3。
+
+外部消费面(签名是与页面的契约,**不可改**):
+`ui/analysis_section_page.py:465-544` 按 `hasattr` 探测三个 `*_split_layout_alignment`
+并用**不同的关键字**分别调用两种画布
+(line:`amp_bottom_axis_height` / `time_bottom_axis_height` / `amp_right_reserve` /
+`time_right_reserve`;heatmap:`main_bottom_axis_height` / `slice_bottom_axis_height` /
+`slice_right_reserve`)。指标方法名也不同:`line_layout_metrics` /
+`heatmap_layout_metrics`。
+
+### 切片带盘点(C4 的接口面)
+
+`_SliceDirToggle` 类:`heatmap_canvas.py:103-149`(47 行)。
+
+`__init__` 里的 `_slice_*` 字段簇:
+- 397-401 抗锯齿:`_slice_aa_on`、`_slice_aa_idle_timer`
+- 419-456 状态簇:`_slice_curve` `_slice_plot` `_slice_marker` `_slice_toggle`
+  `_slice_hint` `_slice_panel`(**注意:这是那个 QWidget 信息面板,名字已被占用**)
+  `_slice_dir` `_slice_x_idx` `_slice_y_idx` `_slice_x_val` `_slice_y_val`
+  `_slice_marker_updating` `_slice_x_btn_label` `_slice_y_btn_label` `_slice_toggle_w`
+- 513-593 `with_slice=True` 构造块(slice PlotItem、curve、marker、面板/toggle/hint)
+- 594-615 **不是切片的**:split divider / collapsed rail / colorbar
+  ——归 `_StackedSplitMixin` 与主图,C4 不搬。
+
+#### 切片专属(C4 搬迁候选)
+
+| 方法 | 行 | 行数 |
+| --- | --- | --- |
+| `_apply_slice_curve_aa_state` | 646-653 | 8 |
+| `_reset_slice_quality_for_rebuild` | 655-661 | 7 |
+| `_slice_coords` | 1394-1409 | 16 |
+| `_seed_slice` | 1411-1433 | 23 |
+| `set_slice_direction` (公开) | 1435-1447 | 13 |
+| `select_time_index` (公开) | 1449-1459 | 11 |
+| `_slice_visible_mask` (staticmethod) | 1487-1504 | 18 |
+| `_set_slice_x_range` | 1506-1518 | 13 |
+| `_slice_axis_range` | 1520-1535 | 16 |
+| `_apply_slice_amp_range` | 1537-1565 | 29 |
+| `_apply_slice` | 1567-1624 | 58 |
+| `_on_slice_marker_dragged` | 1626-1646 | 21 |
+| `_update_slice_hint` | 1666-1681 | 16 |
+| `_select_slice_at` | 1683-1704 | 22 |
+| `set_slice_button_labels` (公开) | 1706-1712 | 7 |
+| `_align_slice_to_main` | 1714-1730 | 17 |
+| `_position_slice_panel` | 1732-1766 | 35 |
+| `_set_slice_right_spacer` | 2056-2081 | 26 |
+| **小计** | | **356** |
+| `_SliceDirToggle` | 103-149 | 47 |
+| **合计** | | **403** |
+
+#### 主图/切片共用(留在 `PgHeatmapCanvas`,是 C4 的接口面)
+
+传递依赖用 AST 扫过每个上表方法的函数体得到(不是 grep `def`,
+所以模块级常量与被引用的宿主属性都在内),**搬迁时必须一并满足**:
+
+宿主属性/方法(切片侧要读,留在画布):
+`_glw` `_plot` `_cbar` · `_matrix_disp` `_x_coords` `_y_coords` `_extents`
+`_x_label` `_y_label` · `_panel_time_range` `_panel_freq_range` `_panel_amp_range` ·
+`_main_view_range()` `_current_amplitude_axis_label()` `_apply_default_axis_labels()`
+`_short_axis_label()` `_time_index_for()` `_freq_index_for()` ·
+`_set_curve_aa()` `disable_interactive_quality()` `schedule_idle_quality()` ·
+`_activate_graphics_layout()` · QWidget 的 `width()` / `isVisible()` ·
+信号 `layout_geometry_changed` `slice_picked` `slice_hint_requested`。
+
+模块级传递依赖(C4 Step 3 移出文件时必须一起 import,否则 NameError):
+`np` `pg` · `PG_AXIS_NEUTRAL_COLOR` `PG_AXIS_NEUTRAL_WIDTH`(来自
+`ui/_axis_handle`)· `_hide_plot_title` `_slice_amp_bounds`(来自
+`pg_canvas/analysis_axes`,实体在顶层 `qt_analysis_shared.py`)。
+**`_slice_amp_bounds` / `_SLICE_MAX_SPAN_DB` / `_SmoothImageItem` 等 8 个符号
+已在中立层,算「共用」,不搬回本包。**
+
+`heatmap_canvas.py:38-45` 的注释警告:内部调用点靠本模块 globals 解析,
+以便 `monkeypatch.setattr(heatmap_canvas, ...)` 生效。已复查:
+仓库里**没有**测试 monkeypatch 本模块的 `_slice_amp_bounds` / `_hide_plot_title`
+(`tests/ui/test_slice_amp_floor_guard.py` 直接调 `hc._slice_amp_bounds`,
+只依赖再导出存在),所以 C4 Step 3 把这两个名字改从 `analysis_axes` 直接
+import 到 `slice_panel.py` 是安全的。
+
+## Step 2 · 外部消费面(必须保留薄委托)
+
+产品代码:
+- `ui/chart_stack/stack.py:150-151` → `set_slice_button_labels()`、`set_slice_direction()`
+- `ui/chart_stack/cards.py:210-219,974-994` → 信号 `slice_picked`、`slice_hint_requested`
+- `ui/main_window/_order_mixin.py:653-654` → `canvas._slice_curve`(判空)、`canvas._seed_slice()`
+- `ui/analysis_section_page.py:485-503` → 只读 `heatmap_layout_metrics()` 的
+  `slice_bottom_axis_height` / `slice_right_reserve` 键
+
+测试(`tests/ui/test_pg_heatmap_canvas.py` 为主):
+`_slice_plot`(54)、`_slice_curve`(18+1)、`set_slice_direction`(16)、
+`_slice_marker`(14)、`_slice_panel`(7)、`_select_slice_at`(6)、`_seed_slice`(5)、
+`set_slice_button_labels`(4)、`_slice_dir`(4)、`_slice_aa_on`(4)、
+`_slice_aa_idle_timer`(4)、`_slice_x_idx`(2)、`_slice_toggle`(1)、
+`_align_slice_to_main`(1)。
+`tests/ui/test_slice_amp_floor_guard.py` 只用模块级 `hc._slice_amp_bounds`。
+
+> **命名冲突警告:** 计划里 C4 建议的聚合对象名 `self._slice_panel` **已被占用**
+> ——它是切片信息面板那个 `QWidget`,且被 7 处测试直接读。聚合对象改用
+> `self._slice`。
+
+## Step 3 · 基线
+
+见 [`pg-slice-dedup-baseline.txt`](pg-slice-dedup-baseline.txt)。
+画布全量 **698 passed / 0 failed**;`tests/ui/` 全量
+**3086 passed / 2 failed**,与 CLAUDE.md 记录的两条既有红完全一致。
+
+真机截图基线:**本次执行按编排要求跳过**(改由 orchestrator 的两侧真机渲染
+哈希对比覆盖)。本文件末尾列出改动触碰的可视面清单。
+
+## C1 · 空态提示差异归类(已完成)
+
+逐行 diff 的全部 8 处差异,归类:
+
+| # | 位置 | 差异 | 归类 | 处置 |
+| --- | --- | --- | --- | --- |
+| 1 | `show`:`addItem` | `_plot_amp.vb` ↔ `_plot.vb` | **真实差异**——line 是两行堆叠(谱 + 时域预览),提示挂在幅值行;heatmap 只有主图 | `viewbox_getter` 回调吸收 |
+| 2-3 | `show`:信号连接 | 同上 | 同上 | 同上 |
+| 4-5 | `_reposition`:`sceneBoundingRect` / `mapSceneToView` | 同上 | 同上 | 同上 |
+| 6-7 | `clear`:信号断开 | 同上 | 同上 | 同上 |
+| 8 | `clear`:`removeItem` | 同上 | 同上 | 同上 |
+
+「无意漂移」0 处;两边的样式常量、Z 值、异常分支、连接前先断开的顺序完全一致。
+→ 共享实现 `ui/pg_canvas/empty_hint.py::EmptyHintOverlay`,零分叉。
+
+保留的公开面:两画布的 `show_empty_hint` / `_reposition_empty_hint` /
+`clear_empty_hint` 签名不变(薄委托),`_empty_hint_item` / `_empty_hint_text`
+仍是**画布实例属性**(`on_state` 回写),因为多处测试与 `ui/main_window` 直接读它们。
+
+## C2 · remark 视口层(已完成)
+
+两处逐字 100% 相同,无差异需要归类。移入 `remarks.py` 的模块级函数:
+
+| 新函数 | 参数 | 取代 |
+| --- | --- | --- |
+| `viewport_pos_to_scene(view, viewport_pos)` | 显式收 `QGraphicsView` | 两画布的 `_viewport_pos_to_scene`(各 5 行) |
+| `remark_at_viewport_pos(remarks, view, viewport_pos)` | 显式收 remark 列表 + view | 两画布的 `_remark_item_at_viewport_pos`(各 45 行) |
+
+裸字面量 `12 ** 2` 提为 `_LABEL_HIT_RADIUS_PX`。
+两画布保留同名薄委托方法(`RemarkInteraction` 回调和测试都按名字调用)。
+
+`annotations.py` 的第三份拷贝按计划**不动**(它服务 `canvas.py`)。
+
+## C3 · 差异审计表
+
+逐对 diff 的相似度:`prepare` 0.638 · `reset` 0.167 · `_unify` 0.172 ·
+`apply` 0.509。**没有一对是逐字相同**,所以下表把每一处差异单独定性。
+
+判定口径:
+- **(a) 无意漂移** → 统一,写明统一到哪一边、为什么等价;
+- **(b) 真实差异** → 用钩子/子类覆盖吸收,不合并;
+- **(c) 无法判定** → **保留分叉并写测试钉住**(计划规定超过 2 处即停)。
+
+| # | 方法 | 差异 | 判定 | 处置 |
+| --- | --- | --- | --- | --- |
+| 1 | `prepare` | docstring 措辞不同(heatmap 多一段调用方说明;各自引 `line_layout_metrics` / `heatmap_layout_metrics`;line 讲 `_activate_graphics_layout` 变成 load-bearing,heatmap 讲字体度量项) | (a) 文档层漂移——**同一个机制的两份笔记** | 合并成 mixin 上一份docstring,两条历史都保留,无信息丢失 |
+| 2 | `prepare` | 右侧留白释放:line `_set_right_spacer(plot, None)` ×2 ↔ heatmap `_set_slice_right_spacer(None)` ×1 | (b) 真实——line 有两个图各一条右轴;heatmap 只给切片图设,且 `width=None` 时**语义相反**(line 画 1px 可见边框,heatmap 隐藏右轴以保证 reserve 测量干净) | 钩子 `_release_split_right_spacers()` |
+| 3 | `prepare` | 标题释放:`_apply_title_texts()`(两图)↔ `_apply_title_text()`(一图) | (b) 真实——图数量不同 | 钩子 `_release_split_titles()` |
+| 4 | `prepare` | 其余 11 行(标题宽度钳制 80、左轴 `setWidth(None)`、底轴 `setHeight(None)`、末尾 `_activate_graphics_layout()`)完全一致 | (a) | 提入 mixin |
+| 5 | `_unify` | line `pin_left_axes_to_common_width(axes, layout_owners=self._layout_owners())` ↔ heatmap `pin_left_axes_to_common_width(axes)` + `self._activate_graphics_layout()` | (a) 无意漂移——**两种写法等价**:line 的 `_activate_graphics_layout()` 就是 `activate_item_layouts(self._layout_owners())`,与 helper 内部末尾那一行同一个函数同一个参数 | 统一到 heatmap 写法(经各画布自己的 activator,heatmap 的还多一步 `ci.resize`) |
+| 6 | `_unify` | heatmap 有 `if self._slice_plot is None: return` + `if len(axes) < 2: return`;line 无守卫 | (a)——前者被后者**完全蕴含**(`_alignment_left_axes` 只在 `_slice_plot` 存在时才 append),而 line 永远返回 2 条轴,守卫对它是恒真的空操作 | 统一为 `if len(axes) < 2: return` |
+| 7 | `_unify` | docstring 各自记录了自己那次实测(line:0-480000 N 谱把轴钉在 62.4px / 需 101.4px;heatmap:0-480000 Hz 图首绘前钉在 75.4px / 需 101.4px) | (a) 文档层 | 合并,两组实测数字都留着 |
+| 8 | `apply` | 关键字名不同(`amp_*`/`time_*` ↔ `main_*`/`slice_*`),指标方法名也不同(`line_layout_metrics` / `heatmap_layout_metrics`) | (b) 真实——**这是与 `ui/analysis_section_page.py:465-544` 的契约**,页面按 canvas 类型传不同关键字 | 签名保持分叉,只把公共动作抽成 `_pin_split_left_axes` / `_pin_split_bottom_heights` |
+| 9 | `apply` | heatmap `self._split_aligned = True`;line 没有这个字段 | (b) 真实——该标志只服务 heatmap 的 `_after_split_*` 钩子(切片重对齐),line 一个 `_after_split_*` 都没覆盖,没有读者 | 留在 heatmap |
+| 10 | `apply` | 底轴高度:heatmap 多一个 `self._slice_plot is not None` 守卫 | (a)——line 的两个 plot 永不为 None,加上这个守卫是恒真空操作 | 统一成 `_pin_split_bottom_heights(((plot, height), ...))`,内部同时判 plot/height 为 None |
+| 11 | `reset` | heatmap 开头 `self._split_aligned = False` | (b) 同 #9 | 留在 heatmap 覆盖里 |
+| 12 | `reset` | heatmap 额外 `_align_slice_to_main()` + `_position_slice_panel()` | (b) 真实——切片专属 | 留在 heatmap 覆盖里 |
+| 13 | `reset` | heatmap 用 `if not self._bottom_collapsed:` 包住 unify;**line 没有这个守卫** | **(c) 无法判定** | **保留分叉**,见下 |
+
+### 唯一一处「无法判定」(#13)
+
+heatmap 在切片行折叠时跳过 `_unify_stacked_left_axes`;line 在时域预览行折叠时
+照常 unify。两边都有 `_bottom_collapsed`(line 在 `line_canvas.py:322`),
+所以「line 忘了加守卫」是**可能的**;但也可能不需要——
+`left_axis_width_for_ticks` 对不可见轴返回 0.0,而 `pin_left_axes_to_common_width`
+的 max 里还有 `axis.width()` 这一项,折叠后的 realized 宽度会不会污染另一条轴,
+从代码读不出来,需要真机量。
+
+**处置:不合并。** 两种行为各自用测试钉住
+(`tests/ui/test_split_layout_alignment.py::test_heatmap_reset_skips_alignment_while_the_slice_is_collapsed`
+与 `::test_line_reset_unifies_even_while_the_bottom_row_is_collapsed`),
+mixin 提供 line 的形态作为默认实现,heatmap 整方法覆盖。
+计数:无法判定 **1 处** ≤ 2,按计划继续。
+
+### 范围外记录(未合并)
+
+`recommended_split_title_width`:line `viewport_w - 140.0`,heatmap
+`viewport_w - 160.0`。不在计划点名的四件套内,且 heatmap 多出的 20px 很可能
+是 colorbar 列的预留(无注释佐证)。**本包不动**,留给后续包。
+
+`_split_title_width` 两边都只写不读(`prepare` 写入后没有任何消费者)。
+同样不在本包范围,仅记录。
+
+## C4 · 切片子图独立(已完成)
+
+两步走,行为零变化:
+
+- **Step 2(类内聚拢)**:18 个切片专属方法搬到 `_SliceStrip(_CanvasBackref)`,
+  **函数体逐字未改**;`PgHeatmapCanvas` 保留全部同名薄委托。
+  聚合对象名用 `self._slice`(不是计划建议的 `self._slice_panel`——那个名字已被
+  信息面板 QWidget 占用,7 处测试直接读)。
+- **Step 3(移出文件)**:`_SliceDirToggle` + `_SliceStrip` → `ui/pg_canvas/slice_panel.py`
+  (483 行)。传递依赖按 Task 0 的 AST 清单一并 import:
+  `np` `pg` `PG_AXIS_NEUTRAL_COLOR` `PG_AXIS_NEUTRAL_WIDTH` `_hide_plot_title`
+  `_slice_amp_bounds`。`_slice_amp_bounds` / `_SLICE_MAX_SPAN_DB` 仍留在中立层,
+  经 `analysis_axes` 导入,**没有搬回本包**。
+
+**为什么所有 `_slice_*` 字段仍在画布上**:`_CanvasBackref` 把读写都转发给画布,
+所以 `canvas._slice_plot` / `._slice_dir` / `._slice_x_idx` 对测试和
+`ui/main_window/_order_mixin.py` 照旧生效——这也正是函数体能一字不改搬走的原因。
+代价是 `_SliceStrip` 的 write-through 集合很长(9 个字段),已按包 E 的棘轮要求
+登记进 `tests/ui/test_pg_canvas_backref_invariants.py::EXPECTED_WRITE_THROUGH`。
+
+## 收尾量化
+
+| 文件 | 基线 `ab19622f` | 现在 | 变化 |
+| --- | ---: | ---: | ---: |
+| `heatmap_canvas.py` | 2518 | **1999** | **−519**(目标 ≥400 ✅) |
+| `line_canvas.py` | 2235 | 2082 | −153 |
+| `slice_panel.py` | — | 483 | 新增 |
+| `empty_hint.py` | — | 137 | 新增 |
+| `remarks.py` | 278 | 349 | +71 |
+| `_split_mixin.py` | 290 | 445 | +155 |
+
+### C1/C2 逐字重复对复查(Task 0 grep 重跑)
+
+两画布 45 对同名方法中,**函数体逐字相同**的:
+
+| | 基线 | 现在 |
+| --- | ---: | ---: |
+| 逐字相同的对数 | 6 | 10 |
+| 其中每份的总行数 | 58 | 21 |
+| **C1/C2 范围内的重复实现行数** | **50** | **10** |
+
+「对数变多、行数变少」是预期结果:C1/C2 范围内 5 个方法
+(`show_empty_hint` / `clear_empty_hint` / `_reposition_empty_hint` /
+`_viewport_pos_to_scene` / `_remark_item_at_viewport_pos`)现在两边都是
+**2 行薄委托**,因而「逐字相同」——计划要求的正是薄委托。
+**实现层的逐字重复已归零**:`_remark_item_at_viewport_pos` 45 行 → 2 行,
+`_viewport_pos_to_scene` 5 行 → 2 行,空态三件套 2×56 行 → 2×(2/2/3) 行。
+剩下的 `clear_remarks` / `remark_count` / `register_*` 4 对 2 行方法基线上就相同,
+不在 C1/C2 范围。
+
+### 失败集
+
+| 范围 | 基线 | 现在 |
+| --- | --- | --- |
+| 画布全量(计划点名的 8 个文件) | 698 passed / 0 failed | **722 passed / 0 failed** |
+| `tests/ui/` 全量 | 3086 passed / **2 failed** | **3204 passed / 2 failed** |
+
+失败集**完全一致**,仍是 CLAUDE.md 记录的两条既有红:
+`test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference`
+与 `test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action`。
+新增 118 条测试(空态 32 + remark 24 + 分栏 29 + 切片 33)。
+
+另跑边界用例(`_split_mixin` 新增了对 `ui_kit.axis_metrics` 的依赖,需确认没有
+把 `ui` 层拖进批处理/signal 的导入图):`tests/ui_kit` `tests/integration`
+`test_native_import_boundaries` `test_signal_no_gui_import`
+`test_batch_render_import_boundary` `test_packaging_imports` 等 —— 118 passed / 3 skipped。
+
+## 改动触碰的可视面(供 orchestrator 扩充真机对比场景)
+
+本次**未做真机截图验收**(按编排要求跳过)。以下是改动实际经过的绘制/几何路径,
+每条都值得进两侧真机渲染哈希对比:
+
+**1. 空态提示(C1)** —— `ui/pg_canvas/empty_hint.py`
+- 提示标签本体的样式常量:文字色 `#6b7280`、填充 `rgba(255,255,255,220)`、
+  边框 `#d1d5db` 1px、`anchor=(0.5,0.5)`、`ZValue=1000`。
+- **定位几何**:标签中心 = 宿主 ViewBox `sceneBoundingRect().center()` 经
+  `mapSceneToView` 反解。line 挂 `_plot_amp.vb`(两行堆叠的上行),
+  heatmap 挂 `_plot.vb`。
+- **触发场景**:FFT / FFT-vs-Time / Order 各自「已选源未计算」的空态;
+  窗口 resize 与视图 range 变化后标签是否跟随居中;反复 show 是否叠字。
+- 时域画布(`canvas.py`)的空态提示**未改动**,可作对照组。
+
+**2. remark 命中层(C2)** —— `ui/pg_canvas/remarks.py`
+- 无绘制改动,但**命中判定**变了归属:两阶段命中(场景 item 命中 → 标签锚点
+  12px 半径回退)现在是共享实现。
+- **值得验的可视后果**:标注模式下点击 remark 点/引线/标签的抓取范围;
+  两个 remark 重叠时选中哪一个(按场景 z 序,不是插入序);
+  右键删除最近 remark 的判定。
+- 半径常量从裸 `12 ** 2` 变成具名 `_LABEL_HIT_RADIUS_PX`,数值未变。
+
+**3. 分栏对齐(C3)** —— `ui/pg_canvas/_split_mixin.py`
+- **左轴宽度**:两行堆叠图的左轴共同宽度(`pin_left_axes_to_common_width` 的
+  `max(字体度量需求, 已实现 width())`)——即两行的**左边缘是否对齐**、
+  y 刻度标签是否被 `generateDrawSpecs` 整批丢弃。
+- **底轴高度**:`apply_split_layout_alignment` 钉的 amp/time(line)与
+  main/slice(heatmap)底轴高度。
+- **右侧留白语义(两边相反,是本包唯一用钩子吸收的真实差异)**:
+  line 单栏时右轴保留 **1px 可见边框**(图形成闭合矩形);
+  heatmap 单栏时**隐藏**切片图右轴(保证 reserve 测量干净),之后再由
+  `_align_slice_to_main` 画回边框。这条最值得截图核对。
+- **标题带**:`prepare` 里的标题释放(line 两个图 / heatmap 一个图)。
+- **折叠态差异(保留分叉,见 #13)**:heatmap 在切片行折叠时跳过 unify,
+  line 不跳过 —— 建议真机对比「时域预览行折叠 → 再展开」后 line 的左边缘。
+- 场景:分屏 2/3 栏、折叠/展开、拖分隔条、双击分隔条复位、窄宽度。
+
+**4. 切片条(C4)** —— `ui/pg_canvas/slice_panel.py`
+- **切片曲线**:方向 x(定时间,曲线 = 幅值 vs 频率/阶次)/ y(定频率或阶次,
+  曲线 = 幅值 vs 时间)的数据与横轴范围。
+- **幅值域**:手动 z 时钉 `[z_floor, z_ceiling]`(与 colorbar 同一口径);
+  自动 z 时 `_slice_amp_bounds` 剔除 dB 底噪后上下各留 5% padding。
+- **切片线(marker)**:角度 90(x 向)/ 0(y 向)、位置、拖动时降抗锯齿再恢复。
+- **右边缘对齐**:`_align_slice_to_main` 把切片图右缘拉到与热力图右缘齐平
+  (热力图右缘被 colorbar 内缩),reserve = `slice_r - main_r`,
+  ≤1.0 时退回 `PG_AXIS_NEUTRAL_WIDTH`。**这是最容易看出偏差的几何量**。
+- **信息面板定位**:`_position_slice_panel` 的
+  x = colorbar 左缘 − 2(colorbar 在切片右侧时)否则切片右缘 + 6;
+  y = 切片 viewbox 顶;w = `canvas.width() − x − 4`;h = 切片 viewbox 高;
+  toggle 宽度 = `min(86, max(52, w − 12))` —— **窄宽度下 toggle 的钳制**。
+- **读数文本**:`Prefix = <值><单位>`,值保留 2 位小数并去尾零。
+- 场景:FFT-vs-Time 与 Order 各一张,两个切片方向、拖动切片线、
+  开关切片行(折叠/展开)、窄列宽。
