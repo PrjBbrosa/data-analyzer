@@ -1055,6 +1055,10 @@ class BatchRunner:
                     run_migration_warnings=run_migration_warnings,
                 )
             except Exception as exc:
+                logger.warning(
+                    "batch run: cannot load retry manifest %s: %s",
+                    retry_failed_manifest, exc, exc_info=True,
+                )
                 return finish_result(
                     'blocked', blocked=[f"cannot load retry manifest: {exc}"],
                     run_migration_warnings=run_migration_warnings,
@@ -1193,6 +1197,12 @@ class BatchRunner:
                             )
                         )
                     except Exception as manifest_exc:
+                        logger.warning(
+                            "batch run: cannot upsert render-group manifest "
+                            "entry for group %s (image backend unavailable): %s",
+                            group.identity.group_id, manifest_exc,
+                            exc_info=True,
+                        )
                         manifest_errors.append(
                             f'cannot update batch manifest: {manifest_exc}'
                         )
@@ -2365,6 +2375,11 @@ class BatchRunner:
                 ))
                 summary = derive_summary(recorder.entries)
             except Exception as exc:
+                logger.warning(
+                    "batch run: cannot finalize batch manifest "
+                    "(run_status=%s): %s",
+                    result_status, exc, exc_info=True,
+                )
                 result_blocked.append(f"cannot finalize batch manifest: {exc}")
                 if result_status == 'done':
                     result_status = 'partial'

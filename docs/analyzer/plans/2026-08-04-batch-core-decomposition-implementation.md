@@ -241,7 +241,7 @@ Run: `PYTEST tests/test_batch*.py tests/test_frozen_batch*.py tests/ui/test_batc
 | 5 | `run` — resume 分支 `load_batch_manifest(candidate)` | 基础设施 + 坏数据 | 保留。段内除 `ManifestValidationError`(`ValueError` 子类)外还有 `directory.glob` / `path.stat()` 的 `OSError` 与 `Path()` 的 `TypeError`;已 log。 |
 | 6 | `run` — retry 分支紧跟 `except ManifestRecipeMismatch` 的裸兜底 `blocked=[f"cannot load retry manifest: {exc}"]` | 基础设施 + 坏数据 | **计划点名的收窄候选,评估后保留**,理由见表下「关于第 6 行」。 |
 | 7 | `run` — `self._expand_tasks(preset, allow_source_load=False)` | 坏数据 / 坏 scope | 保留。展开要读通道表、解析 pattern、可能触发 IO;已 blocked + log。 |
-| 8 | `run` — `_ImageBackendUnavailable` 分支内 `recorder.upsert_render_group(..., status='failed')` | 基础设施 | 保留降级。**仍无 log**,见表下「遗留」。 |
+| 8 | `run` — `_ImageBackendUnavailable` 分支内 `recorder.upsert_render_group(..., status='failed')` | 基础设施 | 保留降级,已补 log(收尾轮,参数 `group_id`)。 |
 | 9 | `run` — `self._expand_tasks(preset, allow_source_load=True)` | 同第 7 行 | 保留,已 log。 |
 | 10 | `run` — 组预循环 `recorder.upsert_render_group(... 'done'/'degraded'/'pending')` | 基础设施 | 保留,T6 已 log。 |
 | 11 | `_run_grouped_compute` — 单任务 catch-all(`data_reservation.release()` → `status='failed'`) | **预期的 item 级失败** | 保留。这正是「数据坏 / 通道缺 / 后端不可用」的落点,status+message 机制原样不动。 |
@@ -249,7 +249,7 @@ Run: `PYTEST tests/test_batch*.py tests/test_frozen_batch*.py tests/ui/test_batc
 | 13 | `_run_grouped_render` — `self._render_group(...)` → `RenderGroupResult(status='failed')` | 预期的组级失败 | 保留。与第 11 行同档,只是粒度是组。 |
 | 14 | `_run_grouped_render` — 组收尾 `upsert_render_group(..., status=outcome.status)` | 基础设施 | 保留,T6 已 log。 |
 | 15 | `_run_sequential` — 单任务 catch-all | 预期的 item 级失败 | 保留。非分组路径的第 11 行对应物。 |
-| 16 | `_finish_result` — `recorder.finish(...)` + `derive_summary(recorder.entries)` | 基础设施 | 保留降级(追加 `blocked` + `done`→`partial`)。**仍无 log**,见表下「遗留」。 |
+| 16 | `_finish_result` — `recorder.finish(...)` + `derive_summary(recorder.entries)` | 基础设施 | 保留降级(追加 `blocked` + `done`→`partial`),已补 log(收尾轮,参数 `run_status`)。 |
 | 17 | `_load_physical_sources` — 加载 + `_normalize_loaded_sources(...)` | **不是吞异常** | 保留。`except` 体末尾是裸 `raise`,只做「把失败缓存成 `_LoadFailure`」的记账;窄化会让部分失败不进缓存,同一物理文件被反复重载。 |
 | 18 | `_resolve_task_file` — `self._load_physical_sources(...)`(已带 `# noqa: BLE001`) | 预期的 item 级失败 | 保留。任何加载失败转 `_LoadFailure`,由调用方变成该 item 的 `failed`;宽是刻意的,`noqa` 就是当初的声明。 |
 | 19 | `_compute_group_task` — `spool.append(...)` 的 catch-all | 预期的 item 级失败 | 保留。同一 `try` 里 `ValueError`→`blocked`、`_BatchCancelled`→`raise` 已各自分流,三档语义本就分好了。 |
@@ -274,11 +274,14 @@ Run: `PYTEST tests/test_batch*.py tests/test_frozen_batch*.py tests/ui/test_batc
 3. **D9 的原意已经由 Task 6 满足了。** 「疑似编程错误被压成字符串」的真正代价是查不到,
    而不是捕获得宽;可见性由 log 解决,控制流没有需要改的地方。
 
-**遗留(明确记录,不在本任务的两处补 log 范围内):** 第 6、8、16 行三处至今没有
-`logger.warning`——它们都不在 D6 表格里,Task 6 因此没碰,Task 9 的授权范围也只包含
-Step 1b 点名的两处。三处的控制流都正确,缺的只是可见性;下一次碰批处理清单代码时
-按同一范式补上即可(参数:第 6 行 `retry_failed_manifest`、第 8 行 `group_id`、
-第 16 行 `run_status`)。
+**遗留(已结清):** 第 6、8、16 行三处曾是审计表里仅剩的无 log 基础设施吞异常
+——它们都不在 D6 表格里,Task 6 因此没碰,Task 9 的授权范围也只包含 Step 1b 点名的
+两处。**收尾轮已按同一范式补齐**(参数一如当初记录:第 6 行 `retry_failed_manifest`、
+第 8 行 `group_id`、第 16 行 `run_status`),控制流一行未动。三处均已实证触发:
+构造坏 retry manifest / 令 `recorder.finish` 抛 `OSError` / 令
+`upsert_render_group` 在 `_ImageBackendUnavailable` 降级分支里抛 `RuntimeError`,
+各自捕到恰好一条带 `exc_info` 的 WARNING,且 `status`、`blocked`、`manifest_errors`
+与补 log 前一致。至此 D6 意义上的静默基础设施失败在批处理内核里归零。
 
 **`except Exception` 计数:基线 20 → 现 19。** 这 1 的减少来自 Task 2 的模块搬迁
 (`channel_reference_facts` 连同它的 `except Exception` 迁进了 `batch_compute.py`),
@@ -335,7 +338,7 @@ recorder / resume 与 retry 决策 / 任务展开 / `_build_run_plan` / 生效�
 `_prepare_run(...)`(返回一个 run-context 对象或具名元组),`run()` 即可落到 200 行
 以内;那是一次独立的、有自己验证面的改动,不塞进本轮。
 
-**本轮已知未做的事:** 审计表第 6、8、16 行的 log 补齐(理由见「遗留」);
+**本轮已知未做的事:** ~~审计表第 6、8、16 行的 log 补齐~~(已于收尾轮结清,见「遗留」);
 `except Exception` 计数的实质性下降(审计结论是无处可安全收窄);
 `batch.py` ≤3400 与 `run()` <300 两个数字目标(标定失误,已如实记录)。
 `CLAUDE.md` 架构段经复核无需改动。
