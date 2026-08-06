@@ -15,11 +15,25 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
 - Qt 用例需要 offscreen 平台；`TMPDIR=/tmp` 用来绕开下面 Gotchas 里的 TCC 问题。
 - 默认套件约 4600 条、**跑满近 20 分钟**，别当成快速检查；改动局部时先跑对应子目录，
   收尾再跑全量。
-- **先取基线**：`main` 上目前有两条既有红测试（2026-08-06 实测；早先记录的
-  `test_split_*` 批量红已不复现，全绿）：
-  `tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference`
-  与 `tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action`。
-  动手前先记下当前失败数，别把既有失败算到自己的改动头上。
+- **先取基线**（2026-08-06 实测于 `ab19622f`；早先记录的 `test_split_*` 批量红已不复现，
+  54/54 全绿）。动手前先记下当前失败数，别把既有失败算到自己的改动头上：
+  - **全量跑法**：裸 `pytest -q` 会在 `tests/acquisition_ui` 段被 pyqtgraph
+    `LabelItem.resizeEvent` 的 `RuntimeError`（已删 `QGraphicsTextItem`）打成 **segfault**，
+    约 4% 处中断、无汇总。交错相关——单独跑该目录不崩（354 passed）。要拿全量数字：
+    `--ignore=tests/acquisition_ui` 跑主体，另起一条单独跑该目录。
+  - **已知既有红 6 条**（均先于 2026-08-06 的重构波，别追也别算新账）：
+    1. `tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference`
+    2. `tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action`
+    3. `tests/test_batch_qt_render_parity.py` —— **环境性**：本机无 Microsoft YaHei，
+       字体替换致 `axis_font_9pt` 14/14 失败、轴范围 4 例、文本重叠 1 例；
+       曲线数据/token/网格断言全过。evidence.json 可复核，别当代码回归追。
+    4. `tests/test_batch_renderer.py::test_facade_exports_only_supported_qt_renderer_contract
+       `—— **真实契约漂移**：`b16705e8`（2026-08-03 in-chart statistics）给 facade
+       `__all__` 加了导出，契约用例未同步。修复归批处理分解线。
+    5. `tests/test_gen_help_screenshots.py` —— 依赖未入库的本机 `testdoc/` 样本目录，
+       新克隆必红。
+    6. `tests/acquisition_ui/test_review_handoff.py::test_analyzer_load_file_delegates_to_load_one`
+       —— `e385ce5a` 上即红。
 
 ## Architecture
 `mf4_analyzer/` 主包：
