@@ -10,9 +10,7 @@ from __future__ import annotations
 from .batch_image_options import BatchRenderOptions
 from .batch_render_qt import (
     BatchRenderContext,
-    BatchChartDiagnostic,
     BatchSeries,
-    BatchStatisticRow,
     BatchTimeFigureSpec,
     render_batch_image,
 )
@@ -20,10 +18,8 @@ from .batch_render_qt import (
 
 __all__ = [
     "BatchRenderContext",
-    "BatchChartDiagnostic",
     "BatchRenderOptions",
     "BatchSeries",
-    "BatchStatisticRow",
     "BatchTimeFigureSpec",
     "render_batch_image",
 ]
