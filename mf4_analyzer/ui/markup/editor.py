@@ -9,13 +9,11 @@ from PyQt5.QtGui import (
     QIcon,
     QImage,
     QPainter,
-    QPainterPath,
     QPen,
     QPixmap,
     QTransform,
 )
 from PyQt5.QtWidgets import (
-    QButtonGroup,
     QFileDialog,
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -28,15 +26,9 @@ from PyQt5.QtWidgets import (
     QGraphicsSimpleTextItem,
     QGraphicsTextItem,
     QGraphicsView,
-    QGridLayout,
-    QHBoxLayout,
-    QMenu,
-    QPushButton,
-    QToolButton,
     QUndoStack,
     QVBoxLayout,
     QWidget,
-    QWidgetAction,
 )
 
 import qtawesome as qta
@@ -48,6 +40,23 @@ from ...ui_kit.icons import icon_device_pixel_ratio
 from .commands import (_AddItemCommand, _CropCommand, _MoveCommand,
                        _DeleteCommand, _GeometryCommand, _StyleCommand)
 from .items import _ArrowAnnotationItem, _TextAnnotationItem
+from .handles import (
+    CROP_ROLE_PREFIX,
+    bare_role,
+    centered_scale_factor,
+    corner_scale_factor,
+    handle_hit_tolerance,
+    handle_points,
+    nearest_within_tolerance,
+    resize_rect,
+)
+from .serialization import deserialize_item, item_pen, serialize_item
+from .toolbar import (
+    build_style_panel,
+    build_toolbar,
+    color_button_qss,
+    compact_tool_button_qss,
+)
 from .view import _MarkupGraphicsView
 
 _HIT_TOLERANCE = 12.0
@@ -391,162 +400,10 @@ class MarkupEditor(QWidget):
         )
         return path
 
+    # ---- chrome construction (implemented in toolbar.py) ----
+
     def _build_toolbar(self) -> QWidget:
-        toolbar = QWidget(self)
-        toolbar.setObjectName("markupEditorToolbar")
-        layout = QGridLayout(toolbar)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setHorizontalSpacing(6)
-        layout.setVerticalSpacing(0)
-
-        def make_group(name: str):
-            group = QWidget(toolbar)
-            group.setObjectName(name)
-            group_layout = QHBoxLayout(group)
-            group_layout.setContentsMargins(0, 0, 0, 0)
-            group_layout.setSpacing(6)
-            return group, group_layout
-
-        left_group, left_layout = make_group("markupToolbarLeftGroup")
-        center_group, center_layout = make_group("markupToolbarCenterGroup")
-        right_group, right_layout = make_group("markupToolbarRightGroup")
-
-        close_btn = QToolButton(left_group)
-        close_btn.setObjectName("markupCloseButton")
-        close_btn.setText("")
-        close_btn.setIcon(qta.icon("ph.x", color="#dc2626"))
-        close_btn.setIconSize(QSize(24, 24))
-        close_btn.setToolTip("关闭 (Esc)")
-        close_btn.setAutoRaise(True)
-        close_btn.setFixedSize(QSize(44, 44))
-        close_btn.setStyleSheet(
-            "QToolButton#markupCloseButton {"
-            "padding: 0px;"
-            "border: 1px solid #f2b8b8; border-radius: 6px;"
-            "background: #fffafa;"
-            "}"
-            "QToolButton#markupCloseButton:hover {"
-            "background: #fee2e2; border-color: #dc2626;"
-            "}"
-        )
-        close_btn.clicked.connect(self.close)
-        left_layout.addWidget(close_btn)
-
-        self._style_button = QToolButton(center_group)
-        self._style_button.setObjectName("markupStyleButton")
-        self._style_button.setToolTip("样式（颜色 / 线宽） · [ ] 调线宽")
-        self._style_button.setAutoRaise(True)
-        self._style_button.setIconSize(QSize(54, 24))
-        self._style_button.setFixedSize(QSize(76, 44))
-        self._style_button.setPopupMode(QToolButton.InstantPopup)
-        self._style_button.setStyleSheet(self._compact_tool_button_qss())
-        style_menu = QMenu(self._style_button)
-        style_menu.setObjectName("markupStyleMenu")
-        # Match the rounded-popup shell contract: QSS radius needs a transparent
-        # menu window, and macOS needs native frame/shadow disabled so no square
-        # backing remains behind the rounded style panel.
-        style_menu.setWindowFlags(
-            style_menu.windowFlags()
-            | Qt.FramelessWindowHint
-            | Qt.NoDropShadowWindowHint
-        )
-        style_menu.setAttribute(Qt.WA_TranslucentBackground, True)
-        # Make the menu a transparent shell: the rounded surface lives on the
-        # inner panel below. Otherwise the global QMenu rule paints a square
-        # white rect (radius 12 > padding) that pokes past the rounded corners.
-        style_menu.setStyleSheet(
-            "QMenu#markupStyleMenu { background: transparent; border: none; padding: 0px; }"
-        )
-        style_action = QWidgetAction(style_menu)
-        style_action.setDefaultWidget(self._build_style_panel(style_menu))
-        style_menu.addAction(style_action)
-        self._style_button.setMenu(style_menu)
-        center_layout.addWidget(self._style_button)
-        self._refresh_style_button_icon()
-
-        tool_group = QButtonGroup(toolbar)
-        tool_group.setExclusive(True)
-        labels = {
-            "select": "选择",
-            "crop": "裁剪",
-            "arrow": "箭头",
-            "line": "直线",
-            "rect": "矩形",
-            "pen": "画笔",
-            "text": "文字",
-            "number": "序号",
-        }
-        self._tool_buttons = {}
-        for tool in self.TOOLS:
-            active = tool == self._tool
-            button = QToolButton(center_group)
-            button.setText("")
-            button.setIcon(self._tool_icon(tool, active))
-            button.setIconSize(QSize(24, 24))
-            button.setToolTip(f"{labels[tool]} ({tool[0].upper()})")
-            button.setObjectName(f"markupTool_{tool}")
-            button.setCheckable(True)
-            button.setAutoRaise(True)
-            button.setFixedSize(QSize(44, 44))
-            button.setStyleSheet(self._compact_tool_button_qss())
-            button.clicked.connect(
-                lambda checked=False, name=tool: self.set_tool(name)
-            )
-            if active:
-                button.setChecked(True)
-            tool_group.addButton(button)
-            center_layout.addWidget(button)
-            self._tool_buttons[tool] = button
-
-        undo_btn = QToolButton(center_group)
-        undo_btn.setObjectName("markupUndoButton")
-        undo_btn.setText("")
-        undo_btn.setIcon(qta.icon("ph.arrow-counter-clockwise", color="#374151"))
-        undo_btn.setIconSize(QSize(24, 24))
-        undo_btn.setToolTip("撤销 (Ctrl+Z)")
-        undo_btn.setAutoRaise(True)
-        undo_btn.setFixedSize(QSize(44, 44))
-        undo_btn.setStyleSheet(self._compact_tool_button_qss())
-        undo_btn.clicked.connect(self._undo_stack.undo)
-        center_layout.addWidget(undo_btn)
-
-        redo_btn = QToolButton(center_group)
-        redo_btn.setObjectName("markupRedoButton")
-        redo_btn.setText("")
-        redo_btn.setIcon(qta.icon("ph.arrow-clockwise", color="#374151"))
-        redo_btn.setIconSize(QSize(24, 24))
-        redo_btn.setToolTip("重做 (Ctrl+Y)")
-        redo_btn.setAutoRaise(True)
-        redo_btn.setFixedSize(QSize(44, 44))
-        redo_btn.setStyleSheet(self._compact_tool_button_qss())
-        redo_btn.clicked.connect(self._undo_stack.redo)
-        center_layout.addWidget(redo_btn)
-
-        save_btn = QPushButton("保存", right_group)
-        save_btn.setObjectName("markupSaveButton")
-        save_btn.clicked.connect(self.save_result)
-        right_layout.addWidget(save_btn)
-
-        done_btn = QPushButton("完成复制", right_group)
-        done_btn.setObjectName("markupDoneButton")
-        done_btn.setProperty("variant", "primary")
-        done_btn.setStyleSheet(
-            "QPushButton#markupDoneButton {"
-            "background: #1769e0; color: white; border: none;"
-            "border-radius: 6px; padding: 6px 14px; font-weight: 600;"
-            "}"
-            "QPushButton#markupDoneButton:hover { background: #0f5ec8; }"
-        )
-        done_btn.clicked.connect(self.finish_and_copy)
-        right_layout.addWidget(done_btn)
-
-        layout.addWidget(left_group, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
-        layout.addWidget(center_group, 0, 1, Qt.AlignCenter)
-        layout.addWidget(right_group, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 0)
-        layout.setColumnStretch(2, 1)
-        return toolbar
+        return build_toolbar(self)
 
     def zoom_by(self, factor: float) -> None:
         self.set_zoom(self._zoom * factor)
@@ -619,29 +476,10 @@ class MarkupEditor(QWidget):
         return pen
 
     def _compact_tool_button_qss(self) -> str:
-        return (
-            "QToolButton {"
-            "padding: 0px;"
-            "border: 1px solid #c9d6ea; border-radius: 6px;"
-            "background: #ffffff;"
-            "}"
-            "QToolButton:hover { background: #eef4ff; border-color: #1769e0; }"
-            # Selected tool: solid accent fill behind the white (contrast) glyph.
-            "QToolButton:checked { background: #1769e0; border-color: #1769e0; }"
-        )
+        return compact_tool_button_qss()
 
     def _color_button_qss(self) -> str:
-        # Same rounded chip as the tools; selected swatch gets a blue ring
-        # (not a fill) so the colour stays readable.
-        return (
-            "QToolButton {"
-            "padding: 0px;"
-            "border: 1px solid #c9d6ea; border-radius: 6px;"
-            "background: #ffffff;"
-            "}"
-            "QToolButton:hover { background: #eef4ff; border-color: #1769e0; }"
-            "QToolButton:checked { border: 2px solid #1769e0; background: #eaf2ff; }"
-        )
+        return color_button_qss()
 
     def _tool_icon(self, tool: str, active: bool) -> QIcon:
         color = self._TOOL_ICON_COLOR_ACTIVE if active else self._TOOL_ICON_COLOR
@@ -699,76 +537,7 @@ class MarkupEditor(QWidget):
             button.setIconSize(QSize(54, 24))
 
     def _build_style_panel(self, menu):
-        panel = QWidget()
-        panel.setObjectName("markupStylePanel")
-        # The panel is the only visible surface inside the transparent menu
-        # shell, so it carries the rounded background/border itself.
-        panel.setAttribute(Qt.WA_StyledBackground, True)
-        panel.setStyleSheet(
-            "QWidget#markupStylePanel {"
-            "background: #ffffff;"
-            "border: 1px solid #c9d6ea;"
-            "border-radius: 10px;"
-            "}"
-        )
-        outer = QVBoxLayout(panel)
-        outer.setContentsMargins(12, 10, 12, 12)
-        outer.setSpacing(8)
-
-        self._color_buttons = {}
-        color_row = QHBoxLayout()
-        color_row.setSpacing(8)
-        for name, color in (
-            ("红色", "#e53935"),
-            ("橙色", "#f97316"),
-            ("黄色", "#eab308"),
-            ("绿色", "#059669"),
-            ("蓝色", "#2563eb"),
-            ("黑色", "#111827"),
-        ):
-            button = QToolButton(panel)
-            button.setObjectName(f"markupColor_{color[1:]}")
-            button.setIcon(self._color_icon(QColor(color)))
-            button.setIconSize(QSize(18, 18))
-            button.setToolTip(name)
-            button.setAutoRaise(True)
-            button.setCheckable(True)
-            button.setFixedSize(QSize(30, 30))
-            button.setStyleSheet(self._color_button_qss())
-            button.clicked.connect(
-                lambda checked=False, c=color, m=menu: (
-                    self.set_color(QColor(c)),
-                    m.hide(),
-                )
-            )
-            color_row.addWidget(button)
-            self._color_buttons[color.lower()] = button
-        outer.addLayout(color_row)
-
-        self._width_buttons = {}
-        width_row = QHBoxLayout()
-        width_row.setSpacing(8)
-        for width in (2, 4, 6, 8):
-            button = QToolButton(panel)
-            button.setObjectName(f"markupWidth_{width}")
-            button.setIcon(self._width_icon(width))
-            button.setIconSize(QSize(24, 18))
-            button.setToolTip(f"{width}px")
-            button.setAutoRaise(True)
-            button.setCheckable(True)
-            button.setFixedSize(QSize(34, 30))
-            button.setStyleSheet(self._compact_tool_button_qss())
-            button.clicked.connect(
-                lambda checked=False, w=width, m=menu: (
-                    self.set_stroke_width(w),
-                    m.hide(),
-                )
-            )
-            width_row.addWidget(button)
-            self._width_buttons[width] = button
-        outer.addLayout(width_row)
-        self._sync_style_panel()
-        return panel
+        return build_style_panel(self, menu)
 
     def selected_markup_items(self):
         items = []
@@ -899,30 +668,15 @@ class MarkupEditor(QWidget):
         self.refresh_handles()
 
     def handle_at(self, point: QPointF):
-        tol = _HANDLE_HIT_SCREEN_PX / max(self._zoom, 0.1)
-        nearest = None
-        nearest_distance = None
-        for handle in self._handles:
-            center = handle.sceneBoundingRect().center()
-            hit_rect = QRectF(
-                center.x() - tol,
-                center.y() - tol,
-                tol * 2,
-                tol * 2,
-            )
-            if hit_rect.contains(point):
-                distance = (center.x() - point.x()) ** 2 + (center.y() - point.y()) ** 2
-                if nearest_distance is None or distance < nearest_distance:
-                    nearest = handle
-                    nearest_distance = distance
-        return nearest
+        tol = handle_hit_tolerance(_HANDLE_HIT_SCREEN_PX, self._zoom)
+        centers = [h.sceneBoundingRect().center() for h in self._handles]
+        index = nearest_within_tolerance(centers, point, tol)
+        return None if index is None else self._handles[index]
 
     def _cursor_for(self, point: QPointF):
         handle = self.handle_at(point)
         if handle is not None:
-            role = getattr(handle, "_role", "")
-            if role.startswith("crop_"):
-                role = role[5:]
+            role = bare_role(getattr(handle, "_role", ""))
             return self._HANDLE_CURSORS.get(role, Qt.SizeAllCursor)
         if self.markup_item_at(point) is not None:
             return Qt.SizeAllCursor
@@ -977,18 +731,7 @@ class MarkupEditor(QWidget):
 
     def _add_handles_for_item(self, item):
         if isinstance(item, QGraphicsRectItem):
-            rect = item.rect()
-            points = {
-                "tl": rect.topLeft(),
-                "top": QPointF(rect.center().x(), rect.top()),
-                "tr": rect.topRight(),
-                "right": QPointF(rect.right(), rect.center().y()),
-                "br": rect.bottomRight(),
-                "bottom": QPointF(rect.center().x(), rect.bottom()),
-                "bl": rect.bottomLeft(),
-                "left": QPointF(rect.left(), rect.center().y()),
-            }
-            for role, point in points.items():
+            for role, point in handle_points(item.rect()).items():
                 self._make_handle(item.mapToScene(point), role, item)
         elif isinstance(item, QGraphicsLineItem):
             line = item.line()
@@ -1007,88 +750,37 @@ class MarkupEditor(QWidget):
         self._make_handle(item.mapToScene(rect.bottomRight()), "scale", item)
 
     def _add_crop_handles(self):
-        rect = self._active_crop_rect
-        for role, point in {
-            "crop_tl": rect.topLeft(),
-            "crop_top": QPointF(rect.center().x(), rect.top()),
-            "crop_tr": rect.topRight(),
-            "crop_right": QPointF(rect.right(), rect.center().y()),
-            "crop_br": rect.bottomRight(),
-            "crop_bottom": QPointF(rect.center().x(), rect.bottom()),
-            "crop_bl": rect.bottomLeft(),
-            "crop_left": QPointF(rect.left(), rect.center().y()),
-        }.items():
-            self._make_handle(point, role, None)
+        for role, point in handle_points(self._active_crop_rect).items():
+            self._make_handle(point, CROP_ROLE_PREFIX + role, None)
 
     def _drag_crop_handle(self, role: str, point: QPointF):
-        rect = QRectF(self._active_crop_rect)
-        if role == "crop_tl":
-            rect.setTopLeft(point)
-        elif role == "crop_top":
-            rect.setTop(point.y())
-        elif role == "crop_tr":
-            rect.setTopRight(point)
-        elif role == "crop_right":
-            rect.setRight(point.x())
-        elif role == "crop_br":
-            rect.setBottomRight(point)
-        elif role == "crop_bottom":
-            rect.setBottom(point.y())
-        elif role == "crop_bl":
-            rect.setBottomLeft(point)
-        elif role == "crop_left":
-            rect.setLeft(point.x())
-        self.set_active_crop_rect(rect.normalized())
+        self.set_active_crop_rect(
+            resize_rect(self._active_crop_rect, role, point)
+        )
 
     def _drag_rect_handle(self, item: QGraphicsRectItem, role: str, point: QPointF):
-        local = item.mapFromScene(point)
-        rect = QRectF(item.rect())
-        if role == "tl":
-            rect.setTopLeft(local)
-        elif role == "top":
-            rect.setTop(local.y())
-        elif role == "tr":
-            rect.setTopRight(local)
-        elif role == "right":
-            rect.setRight(local.x())
-        elif role == "br":
-            rect.setBottomRight(local)
-        elif role == "bottom":
-            rect.setBottom(local.y())
-        elif role == "bl":
-            rect.setBottomLeft(local)
-        elif role == "left":
-            rect.setLeft(local.x())
-        item.setRect(rect.normalized())
+        item.setRect(resize_rect(item.rect(), role, item.mapFromScene(point)))
 
     def _drag_scale_handle(self, item, point: QPointF):
         rect = item.boundingRect()
         if rect.width() <= 0 or rect.height() <= 0:
             return
         if isinstance(item, QGraphicsItemGroup):
+            # Badges grow about their centre so the number stays put.
             center = rect.center()
-            center_scene = item.mapToScene(center)
-            half_width = max(rect.width() / 2.0, 0.001)
-            half_height = max(rect.height() / 2.0, 0.001)
-            scale = max(
-                abs(point.x() - center_scene.x()) / half_width,
-                abs(point.y() - center_scene.y()) / half_height,
-                0.25,
+            scale = centered_scale_factor(
+                item.mapToScene(center), point, rect.width(), rect.height()
             )
             item.setTransformOriginPoint(center)
             item.setScale(scale)
             return
         top_left = rect.topLeft()
-        top_left_scene = item.mapToScene(top_left)
         item.setTransformOriginPoint(top_left)
-        candidates = []
-        if rect.width() > 0.001:
-            candidates.append((point.x() - top_left_scene.x()) / rect.width())
-        if rect.height() > 0.001:
-            candidates.append((point.y() - top_left_scene.y()) / rect.height())
-        if not candidates:
+        scale = corner_scale_factor(
+            item.mapToScene(top_left), point, rect.width(), rect.height()
+        )
+        if scale is None:
             return
-        scale = max(max(candidates), 0.25)
         current = float(item.scale())
         if abs(scale - current) < 1e-9:
             scale = current
@@ -1160,123 +852,29 @@ class MarkupEditor(QWidget):
         self._set_scene_to_pixmap_size()
         self.fit_to_window()
 
+    # ---- clipboard payloads (implemented in serialization.py) ----
+
     def _serialize_item(self, item):
-        pen = self._item_pen(item)
-        color = pen.color() if pen is not None else self._color
-        width = pen.width() if pen is not None else self._stroke_width
-        if isinstance(item, QGraphicsRectItem):
-            return ("rect", QRectF(item.rect()), QPointF(item.pos()), QColor(color), width)
-        if isinstance(item, QGraphicsLineItem):
-            return ("line", QLineF(item.line()), QPointF(item.pos()), QColor(color), width)
-        if isinstance(item, QGraphicsPathItem):
-            return ("path", QPainterPath(item.path()), QPointF(item.pos()), QColor(color), width)
-        if isinstance(item, QGraphicsTextItem):
-            font_px = item.font().pixelSize()
-            if font_px <= 0:
-                font_px = self._text_px
-            return ("text", item.toPlainText(), QPointF(item.pos()), QColor(item.defaultTextColor()), font_px)
-        if isinstance(item, _ArrowAnnotationItem):
-            return (
-                "arrow",
-                QPointF(item.start),
-                QPointF(item.end),
-                QPointF(item.pos()),
-                QColor(color),
-                width,
-            )
-        if isinstance(item, QGraphicsItemGroup):
-            circle = None
-            label = None
-            for child in item.childItems():
-                if isinstance(child, QGraphicsEllipseItem):
-                    circle = child
-                elif isinstance(child, QGraphicsSimpleTextItem):
-                    label = child
-            if circle is not None and label is not None:
-                label_px = label.font().pixelSize()
-                if label_px <= 0:
-                    label_px = round(self._number_radius * 1.25)
-                return (
-                    "number",
-                    QRectF(circle.rect()),
-                    label.text(),
-                    QPointF(label.pos()),
-                    QPointF(item.pos()),
-                    QColor(color),
-                    width,
-                    float(item.scale()),
-                    label_px,
-                )
-        return None
+        return serialize_item(
+            item,
+            default_color=self._color,
+            default_width=self._stroke_width,
+            default_text_px=self._text_px,
+            default_number_radius=self._number_radius,
+        )
 
     def _deserialize_item(self, payload):
-        if payload is None:
-            return None
-        previous_color = QColor(self._color)
-        previous_width = self._stroke_width
-        kind = payload[0]
-        if kind == "rect":
-            _kind, rect, pos, color, width = payload
-            self._color, self._stroke_width = QColor(color), width
-            item = self.add_rect_item(rect)
-            item.setPos(pos)
-        elif kind == "line":
-            _kind, line, pos, color, width = payload
-            self._color, self._stroke_width = QColor(color), width
-            item = self.add_line_item(QRectF(line.p1(), line.p2()))
-            item.setPos(pos)
-        elif kind == "path":
-            _kind, path, pos, color, width = payload
-            self._color, self._stroke_width = QColor(color), width
-            item = self.add_path_item(path)
-            item.setPos(pos)
-        elif kind == "text":
-            _kind, text, pos, color, font_px = payload
-            item = self._make_text_item(pos, text, QColor(color), font_px)
-            item._committed = True
-            self._add_markup_item(item)
-            item.setPos(pos)
-        elif kind == "arrow":
-            _kind, start, end, pos, color, width = payload
-            self._color, self._stroke_width = QColor(color), width
-            item = self.add_arrow_item(QRectF(start, end))
-            item.setPos(pos)
-        elif kind == "number":
-            _kind, circle_rect, label_text, label_pos, pos, color, width, scale, label_px = payload
-            self._color, self._stroke_width = QColor(color), width
-            circle = QGraphicsEllipseItem(circle_rect)
-            circle.setPen(self._pen())
-            circle.setBrush(QBrush(self._color))
-            label = QGraphicsSimpleTextItem(label_text)
-            label.setBrush(QBrush(Qt.white))
-            label_font = label.font()
-            label_font.setBold(True)
-            label_font.setPixelSize(max(1, int(label_px)))
-            label.setFont(label_font)
-            label.setPos(label_pos)
-            item = QGraphicsItemGroup()
-            item.addToGroup(circle)
-            item.addToGroup(label)
-            item.setTransformOriginPoint(item.boundingRect().center())
-            self._add_markup_item(item)
-            item.setPos(pos)
-            item.setScale(scale)
-        else:
-            item = None
-        self._color = previous_color
-        self._stroke_width = previous_width
-        return item
+        return deserialize_item(self, payload)
 
     def _item_pen(self, item):
-        if isinstance(item, (QGraphicsRectItem, QGraphicsLineItem, QGraphicsPathItem)):
-            return item.pen()
-        if isinstance(item, _ArrowAnnotationItem):
-            return item.pen()
-        if isinstance(item, QGraphicsItemGroup):
-            for child in item.childItems():
-                if isinstance(child, QGraphicsEllipseItem):
-                    return child.pen()
-        return None
+        return item_pen(item)
+
+    # ---- painted icons ----
+    # These stay here rather than moving to toolbar.py with the rest of the
+    # chrome: _icon_canvas resolves icon_device_pixel_ratio from this module's
+    # globals, and tests/ui/test_color_swatch_hidpi.py patches it here to fake
+    # a 2x screen. Re-exporting the function elsewhere copies the binding, not
+    # the scope, so that patch would stop reaching the code under test.
 
     @staticmethod
     def _icon_canvas(w: int, h: int):
