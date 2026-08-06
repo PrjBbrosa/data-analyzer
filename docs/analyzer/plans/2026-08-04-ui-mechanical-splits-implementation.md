@@ -84,11 +84,42 @@ Modify `mf4_analyzer/ui/widgets/__init__.py`;Create `tests/ui/test_widgets_misc.
 > (a) `_swatches.py` 只放 `_fmt_rate`/`_swatch_icon`,`_swatch_pixmap` 留在 `__init__`;
 > (b) 允许改这一个用例改用 `_swatches` 模块作为 patch 目标(超出「纯移动」);
 > (c) A1 整体降级为「只拆 `channel_tree` / `stats` / `toast`,`_swatches` 不拆」。
+>
+> **复核(2026-08-06,第二执行者,分支 @ `285132b1`):停止结论成立,且已实测坐实。**
+>
+> - 锚点重验全部命中(:42/:45/:52/:76/:80/:111/:284/:463/:1624/:1670),
+>   `ui/widgets/__init__.py` 与 `main` 逐字一致,未被本分支动过。
+> - **实测**:按 D-A1 建 `_swatches.py`(`_fmt_rate`/`_swatch_pixmap`/`_swatch_icon`)、
+>   `__init__` 改为 `from ._swatches import ...` 再导出后跑
+>   `tests/ui/test_color_swatch_hidpi.py` → **`1 failed, 6 passed`**(基线 7 passed),
+>   失败即 `test_swatch_default_path_picks_up_device_ratio`,报错
+>   `assert 1.0 == 2.0`。实验已回滚,工作树干净。
+>   根因与上文一致:`_swatch_pixmap` 在函数体里读 `icon_device_pixel_ratio()`,
+>   走的是**自身模块 globals**;用例 patch 的是 `ui.widgets.__init__` 的同名属性。
+>   搬走后两者不再是同一个命名空间,再导出无法弥合(再导出复制的是绑定,不是作用域)。
+> - 兼容面清单再补一条 spec 与前次都漏掉的消费者:
+>   **`scripts/color_swatch_hidpi_smoke.py:31`** `from mf4_analyzer.ui.widgets import _swatch_pixmap`
+>   ——纯 import,再导出即可,不构成新阻塞,但应计入 A1 的兼容面。
+> - 另确认 `channel_tree` 的搬迁也有同类(较轻)代价:`scripts/channel_dot_size_preview.py:43-44`
+>   先重绑 `widgets_mod._swatch_icon` 再构造 `MultiFileChannelWidget`,依赖
+>   widget 代码从 `ui.widgets` globals 里解析 `_swatch_icon`。搬进
+>   `channel_tree.py` 后该重绑静默失效(无测试覆盖 ⇒ 不会变红,但确是回归)。
+> - **可安全搬迁的子集(已核实无晚绑定消费者)**:`stats.py`
+>   (`StatisticsPanel` + `StatsStrip`)与 `toast.py`(`Toast`)——三者函数体只引用
+>   Qt 符号与 `StatisticsPanel` 自身,仓库内无人 patch `ui.widgets` 上的这些名字。
+>   即选项(c)的「stats / toast」部分零风险;有争议的只有 `_swatches` 与 `channel_tree`。
+> - 裁决仍属 spec 作者:选(b)要改既有用例、选(a)/(c)要改 D-A1 表格,两者都超出
+>   本包「纯移动 + 不改既有测试」的全局约束,执行者不自行决定。Step 2-4 保持未勾。
 
-- [ ] **Step 1(先补测试,红→绿在基线上完成):** 写 `tests/ui/test_widgets_misc.py`
+- [x] **Step 1(先补测试,红→绿在基线上完成):** 写 `tests/ui/test_widgets_misc.py`
   (spec「新增测试」第 1 条:Toast 显示/自隐/重复调用、StatsStrip 文本与空值、
   StatisticsPanel 冒烟)。写前先读 `Toast`(:1670-1760)与 `StatsStrip`(:1624-1668)
   的真实接口,按实际方法名写断言。在**基线代码**上跑绿后单独 commit。
+  **已完成**(`285132b1`,224 行 / 19 用例,拆分前代码上全绿)。Step 1 不依赖
+  搬迁方案,三个可选方向(a)/(b)/(c)选哪个都不影响这些断言,故先落地。
+  额外锁住一条真实回归:`test_toast_reshow_cancels_pending_fade_out` 覆盖
+  `show_message` 里 `_anim.finished.disconnect()` 的存在理由(fade-out 在飞时
+  再来一条消息,不得被旧的 finished→hide 连接顺手隐藏)。
 - [ ] **Step 2:** 按 spec D-A1 表格移动代码。注意:`channel_tree.py` 需要
   `from ._swatches import ...`;各新模块头部 import 按实际使用最小化(从原
   `__init__.py` 头部 L1-41 的 import 里挑)。
@@ -151,11 +182,50 @@ Run: `PYTEST tests/ui/test_chart_card_construction.py tests/ui/test_chart_stack.
 
 ## Task 5: 收尾
 
-- [ ] **Step 1:** 全量 UI 测试对比 Task 0 基线失败集,新旧差异必须为空
+- [x] **Step 1:** 全量 UI 测试对比 Task 0 基线失败集,新旧差异必须为空
   (新增测试文件除外)。
-- [ ] **Step 2:** 真机冒烟(非 offscreen):启动 GUI,打开一个数据文件,确认通道树、
-  Toast(触发一次保存工程之类的提示)、统计条、FFT 卡片、通道编辑器对话框、
-  图表选项对话框各出现一次且外观无异常。**本包不改行为,此步只为兜底。**
-- [ ] **Step 3:** 汇总四项的行数变化与 commit 清单,附在 PR 描述。
+  **结果(2026-08-06,分支 @ `285132b1`):`2 failed, 2957 passed, 1 deselected`
+  in 291.80s。失败集与基线逐字一致:**
+  - `tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference`
+  - `tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action`
+
+  通过数 2914 → 2957(+43),与两个新测试文件的收集数**精确对账**:
+  `test_widgets_misc.py` 19 + `test_chart_card_construction.py` 24(含参数化展开)
+  = 43。即零回归、零新增失败。
+
+- [ ] **Step 2:** 真机冒烟(非 offscreen)。**本轮未执行**——按调度要求跳过 GUI 启动,
+  且 offscreen 不得冒充真机验收(CLAUDE.md Gotchas)。改为交人工验收,清单见下。
+  A2/A3/A4 涉及的对话框、FFT 卡片、BLF 已由前序执行者覆盖,此处只列 A1 相关三样;
+  但注意 **A1 的搬迁并未落地(见上文停止说明),这三样代码本轮零改动**,
+  该清单实为「若将来执行 A1 搬迁后需复验」的项:
+  - **通道树**:打开一个多通道文件 → 展开文件节点 → 每行左侧色点清晰无锯齿
+    (Retina 下尤其看边缘),勾选/取消勾选状态与色点颜色随通道配置同步。
+    判定标准:色点为 11pt 紧凑圆角块、非模糊、非 14pt 重块。
+  - **Toast**:触发一次保存工程(或任意带提示的操作)→ 底部居中浮出提示条,
+    文案正确、约 3.5s 后自行淡出;连续触发两次只显示最新一条,不叠加、不残留。
+  - **统计条**:勾选 2 个以上通道 → 折叠态一行显示每通道 `min/max/rms/p2p`
+    并以 ` │ ` 分隔;点展开箭头 → 展开出 7 列统计表;取消全部勾选 → 回到「— 无通道 —」。
+
+- [x] **Step 3:** 汇总四项的行数变化与 commit 清单,附在 PR 描述。
+
+**Commit 清单(`main`..HEAD,时间顺序):**
+
+| Commit | 任务 | 说明 |
+| --- | --- | --- |
+| `741852cf` | Task 0 | 记录 `tests/ui/` 基线失败集 |
+| `2d4d8ee0` | A2 | `dialogs.py` → `ui/dialogs/` 包 |
+| `562b9477` | A3 | BLF/DBC 子系统提到 `io/blf_format.py` |
+| `c39acc9f` | A4 | `_ChartCard.__init__` 装配特征测试(拆分前) |
+| `9c0b479c` | A4 | `__init__` 拆成有序 build/wire 方法 |
+| `285132b1` | A1 | Toast / StatsStrip / StatisticsPanel 直测(Step 1) |
+
+**行数变化:**
+
+| 任务 | 变化 | 验收准则 | 结果 |
+| --- | --- | --- | --- |
+| A1 | `ui/widgets/__init__.py` 1760 → **1760(未拆)**;新增测试 +224 | `__init__` ≤ 60 行 | **未达成(已阻塞待裁决)** |
+| A2 | `dialogs.py` 1256 → 删除;新包 15+600+648+38 = 1301 | `dialogs/__init__.py` ≤ 20 行 | 达成(15 行) |
+| A3 | `loader.py` 1147 → 787(−360);新增 `blf_format.py` 384 | `loader.py` 减少 ≥ 330 行 | 达成(−360) |
+| A4 | `cards.py` 1167 → 1200(+33);`__init__` 299 → **14 行**;新增测试 +311 | `__init__` ≤ 40 行 | 达成(14 行) |
 
 Run: `PYTEST tests/ui/ -q`
