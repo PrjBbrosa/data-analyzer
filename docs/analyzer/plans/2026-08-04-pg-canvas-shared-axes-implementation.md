@@ -93,9 +93,11 @@ Run: `PYTEST tests/ui/test_pg_line_canvas.py tests/ui/test_analysis_axes.py -q`
   `test_main_window_smoke.py` + 两条 import 边界测试(127 passed),全绿。
 - [x] **Step 2:** 像素守护:`PYTEST tests/ui/test_pg_canvas_decomposition_characterization.py -q` 绿。
   → 10 passed。
-- [~] **Step 3:** 真机复验 —— **本次执行跳过**,交人工。执行者不启动 GUI、不截图;
-  offscreen 结果**不构成**视觉验收(CLAUDE.md 明令)。待办清单见交付报告
-  「待人工真机验收清单」。**本步未完成 = 第一阶段尚未正式收尾。**
+- [x] **Step 3:** 真机复验 —— 执行者未做(不启动 GUI、不截图);**由 orchestrator 在真实
+  cocoa 平台完成并签收**:同一场景脚本分别跑 `main @ b886a30e` 与本分支,12 个场景
+  (FFT 线图默认/tick 极值/窄宽度、FFT-Time 热图含切片 X/Y、Order 热图 dB/线性)
+  **sha256 逐像素一致**;另有逐行多重集纯度审计,唯一残差为孤立 import 行重组,
+  与执行者声明相符。**Task 4 正式关闭。**
 - [x] **Step 4:** 量化核对:`heatmap_canvas.py` 减少 ≥500 行;PR 描述附
   patch-audit 文件与截图对照。
   → `heatmap_canvas.py` 3021 → 2518(**-503**,达标);新增 `analysis_axes.py` 572 行;
@@ -104,20 +106,31 @@ Run: `PYTEST tests/ui/test_pg_line_canvas.py tests/ui/test_analysis_axes.py -q`
 ## Task 5(可选,闸门见 spec D-B4): 中立层下沉
 
 - [x] **Step 0(闸门):** Task 4 全部通过才可开始;否则停止,本包到此收尾。
-  → **闸门不满足,本包停在 Task 4,Task 5 未执行**(计划已声明这不算失败)。
-  理由:Task 4 Step 3(真机复验)按编排要求交人工,尚未完成;spec 第一阶段验收
-  准则第 5 条「真机验收」因此仍未签收,而 D-B4 闸门第 1 条要求「第一阶段已收尾」。
-  中立层下沉是又一次结构位移,应当在视觉验收签收之后再启动。
-- [ ] **Step 1:** Create `mf4_analyzer/qt_analysis_shared.py`,从 `analysis_axes.py`
+  → **闸门满足**:orchestrator 完成真机逐像素复验并关闭 Task 4(见上),
+  全量测试与基线一致,`test_batch_render_import_boundary.py` 通过。Task 5 启动。
+- [x] **Step 1:** Create `mf4_analyzer/qt_analysis_shared.py`,从 `analysis_axes.py`
   剪切 `_robust_db_ceiling` / `_auto_db_window` / `_slice_amp_bounds` /
   `_SLICE_MAX_SPAN_DB` / `_SmoothImageItem`;`analysis_axes.py` 改为再导出
   (`from ..qt_analysis_shared import ...`——注意包层级,`analysis_axes` 在
   `ui/pg_canvas/` 下,需 `from mf4_analyzer.qt_analysis_shared import`)。
-- [ ] **Step 2:** 断言中立性:子进程 `import mf4_analyzer.qt_analysis_shared` 后
+  → 已用绝对路径 `from mf4_analyzer.qt_analysis_shared import`。
+  **实际移动集比计划所列 5 个多 3 个**,原因是传递依赖必须一起下沉,否则中立模块
+  就得反向 import `mf4_analyzer.ui`,与 Step 2 的中立性断言直接冲突:
+  `_robust_db_ceiling` 的默认参数是 `_AUTO_CEILING_PCT`、函数体调用
+  `_finite_data_bounds`;`_auto_db_window` 还用 `_AUTO_SPAN_DB`。
+  故一并下沉 `_AUTO_CEILING_PCT` / `_AUTO_SPAN_DB` / `_finite_data_bounds`
+  (与 Task 2 中 7 个私有常量同一性质:符号级清单漏掉的传递依赖)。
+  125 行载荷经逐行比对确认**字节级相同**。
+- [x] **Step 2:** 断言中立性:子进程 `import mf4_analyzer.qt_analysis_shared` 后
   `sys.modules` 无 `mf4_analyzer.ui`(仿 `tests/test_batch_render_import_boundary.py`
   写一条新测试放进该文件)。
-- [ ] **Step 3:** `PYTEST tests/test_batch_render_import_boundary.py tests/ui/test_analysis_axes.py tests/ui/test_pg_heatmap_canvas.py tests/ui/test_pg_line_canvas.py -q`
+  → 新增 `test_qt_analysis_shared_import_does_not_load_ui_package`,通过;
+  直接探针复核 `mf4_analyzer.ui` 载入数 = **0**。
+- [x] **Step 3:** `PYTEST tests/test_batch_render_import_boundary.py tests/ui/test_analysis_axes.py tests/ui/test_pg_heatmap_canvas.py tests/ui/test_pg_line_canvas.py -q`
   全部与基线一致。**不改 `batch_render_qt` 任何文件**(那是批处理第三步的事)。
+  → 346 passed;9 文件基线集复跑 `706 passed, 1 deselected`,与基线**逐字相同**;
+  另跑 13 个相关文件 564 passed。`git diff main...HEAD -- mf4_analyzer/batch_render_qt/`
+  **为空**,该目录一个文件都没碰。
 
 ---
 

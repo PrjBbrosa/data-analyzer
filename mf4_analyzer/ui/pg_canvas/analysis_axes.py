@@ -12,6 +12,12 @@ into a de-facto shared library that ``line_canvas.py`` imported backwards
 — every axis fix had to land inside a 3000-line heatmap file. Behaviour is
 unchanged by the move; ``heatmap_canvas`` re-exports every name here so
 the old import paths keep resolving.
+
+The Qt-free subset of the maths (the absolute-dB window, the slice
+amplitude bounds and ``_SmoothImageItem``) has since sunk one level
+further, into ``mf4_analyzer.qt_analysis_shared``, so the headless batch
+renderer can share it without importing ``mf4_analyzer.ui``. It is
+re-exported below and is still reachable under its original name here.
 """
 from __future__ import annotations
 
@@ -19,9 +25,26 @@ import math
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtGui import QFontMetrics, QPainter
+from PyQt5.QtGui import QFontMetrics
 from PyQt5.QtWidgets import QWidget
 
+# The pure dB/amplitude maths and the smoothed image item now live in a
+# UI-free module so the headless batch renderer can share them (it currently
+# keeps its own copies). They are re-exported here — unqualified, exactly as
+# before — so every existing path keeps working: line_canvas imports
+# _AUTO_SPAN_DB/_AUTO_CEILING_PCT from here, heatmap_canvas re-exports the
+# whole set onward, and `hc._auto_db_window`-style module-attribute access in
+# the tests still resolves.
+from mf4_analyzer.qt_analysis_shared import (  # noqa: F401
+    _AUTO_CEILING_PCT,
+    _AUTO_SPAN_DB,
+    _SLICE_MAX_SPAN_DB,
+    _SmoothImageItem,
+    _auto_db_window,
+    _finite_data_bounds,
+    _robust_db_ceiling,
+    _slice_amp_bounds,
+)
 from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
@@ -57,18 +80,6 @@ def _finite_float(value):
     return value if np.isfinite(value) else None
 
 
-def _finite_data_bounds(matrix):
-    arr = np.asarray(matrix, dtype=float)
-    finite = arr[np.isfinite(arr)]
-    if finite.size == 0:
-        return 0.0, 1.0
-    lo = float(np.nanmin(finite))
-    hi = float(np.nanmax(finite))
-    if hi <= lo:
-        hi = lo + 1.0
-    return lo, hi
-
-
 # Fraction of cells that must fall inside the visible colour gradient for the
 # heatmap to read as "alive". Below this, the colour window has collapsed the
 # image to ~one flat colour (all dark / all bright) and the colorbar-reset nudge
@@ -95,95 +106,6 @@ def _colorbar_is_dead(matrix, lo, hi):
     norm = (finite - lo) / (hi - lo)
     visible = int(np.count_nonzero((norm > 0.02) & (norm < 0.98)))
     return (visible / finite.size) < _COLORBAR_DEAD_VISIBLE_FRAC
-
-
-# Default dynamic range span used by the *absolute-dB* auto color window
-# (plot_result path, FFT-vs-Time and Order).  The canvas normalises to
-# [ceiling - _AUTO_SPAN_DB, ceiling] (ceiling = _robust_db_ceiling, below)
-# so the "auto" and "manual-after-write-back" windows are identical —
-# eliminating the 30+ dB jump that occurred when the old code treated
-# z_floor/z_ceiling as *peak offsets* while the manual path used them as
-# *absolute* dB values.
-#
-# Deliberately NOT read from the inspector's z_floor/z_ceiling: reading
-# from those fields would make the auto window depend on spin state and
-# re-introduce a feedback loop.  A fixed span is predictable and safe.
-# Default 30 dB — the window most noise analysis uses; high-dynamic-range data
-# may later auto-widen toward 40 dB (Phase A2 of the auto-color-span plan).
-_AUTO_SPAN_DB: float = 30.0
-
-# Percentile used to anchor the *ceiling* of the absolute-dB auto window
-# (plot_result path, FFT-vs-Time and Order).  Real measurement spectra have
-# sharp transient peaks 30-40 dB above the informative bulk; anchoring the
-# auto ceiling at the literal data MAX (np.nanmax) put the whole field below
-# the floor → an all-dark image the user had to drag down ~38 dB to read.
-# Using a high percentile makes the ceiling track the top of the *bulk*
-# instead of a lone outlier, so "自动" lands where the user actually wants it.
-# For well-behaved data with no outliers, the 99th percentile ≈ max, so this
-# is a no-op there and only kicks in when there is a heavy upper tail.
-_AUTO_CEILING_PCT: float = 99.0
-
-
-def _robust_db_ceiling(matrix, pct=_AUTO_CEILING_PCT):
-    """Return a high-percentile ceiling for the absolute-dB auto window.
-
-    Robust to the outlier transient peaks common in real measurement data:
-    unlike ``np.nanmax`` it ignores the top ``(100 - pct)``% of cells, so a
-    handful of bright spikes no longer drag the whole colour window up and
-    bury the informative bulk below the floor.  NaN/inf-safe (matches
-    ``_finite_data_bounds``); falls back to that bound when the matrix has
-    no finite values.
-    """
-    arr = np.asarray(matrix, dtype=float)
-    finite = arr[np.isfinite(arr)]
-    if finite.size == 0:
-        return _finite_data_bounds(matrix)[1]
-    return float(np.percentile(finite, pct))
-
-
-def _auto_db_window(matrix):
-    """Single source for the absolute-dB auto colour window → ``(vmin, vmax)``.
-
-    ceiling = robust high-percentile (``_robust_db_ceiling``, anti-transient);
-    span = ``_AUTO_SPAN_DB`` below it. Both the heatmap ``z_auto`` path and the
-    Order render override resolve the window here, so the two can never drift
-    apart (the recurring compute-vs-display split). Display-only: callers clamp
-    COLOURS to this window, never the stored matrix.
-    """
-    ceiling = _robust_db_ceiling(matrix, _AUTO_CEILING_PCT)
-    return ceiling - _AUTO_SPAN_DB, ceiling
-
-
-# Widest dynamic range a real measurement slice can plausibly span. Bins more
-# than this far below the slice's top are numerically-dead artifacts: the 0 Hz
-# DC bin, zeroed by de-mean and/or A-weighting (gain == 0 at f == 0), then
-# floored by ``amplitude_to_db`` to ``20*log10(np.finfo(float).tiny)`` ≈
-# -6153 dB. A 24-bit acquisition has only ~144 dB of range, so 200 dB only ever
-# catches such dead bins, never real signal (e.g. a deep anti-resonance notch).
-_SLICE_MAX_SPAN_DB: float = 200.0
-
-
-def _slice_amp_bounds(values):
-    """Robust ``(lo, hi)`` for the slice amplitude *view* axis, or ``None``.
-
-    Display-only: the slice curve is always drawn in full (``setData`` is
-    untouched); this only picks the Y *view* range. The top is the literal max
-    (a line plot should show real peaks, unlike the colour window). The bottom
-    ignores numerically-dead bins sitting more than ``_SLICE_MAX_SPAN_DB`` below
-    the top, so a single DC bin floored to ≈ -6153 dB can no longer crush the
-    real -40..-60 dB signal into a thin band at the top of the panel. NaN/inf
-    -safe. Returns ``None`` when there is no finite spread to fit (the caller
-    then falls back to pyqtgraph auto-range)."""
-    arr = np.asarray(values, dtype=float)
-    finite = arr[np.isfinite(arr)]
-    if finite.size == 0:
-        return None
-    hi = float(np.max(finite))
-    real = finite[finite >= hi - _SLICE_MAX_SPAN_DB]
-    lo = float(np.min(real)) if real.size else hi
-    if hi <= lo:
-        return None
-    return lo, hi
 
 
 def time_axis_display_extent(times, *, params=None, metadata=None, fallback=None):
@@ -543,29 +465,3 @@ def _hide_plot_title(plot) -> None:
                 updater()
             except Exception:
                 pass
-
-
-class _SmoothImageItem(pg.ImageItem):
-    """ImageItem that honors mpl-style interpolation hints via QPainter."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._smooth_transform = False
-
-    def set_smooth_transform(self, enabled: bool) -> None:
-        enabled = bool(enabled)
-        if self._smooth_transform == enabled:
-            return
-        self._smooth_transform = enabled
-        self.update()
-
-    def smooth_transform_enabled(self) -> bool:
-        return self._smooth_transform
-
-    def paint(self, painter, *args):
-        previous = painter.testRenderHint(QPainter.SmoothPixmapTransform)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, self._smooth_transform)
-        try:
-            return super().paint(painter, *args)
-        finally:
-            painter.setRenderHint(QPainter.SmoothPixmapTransform, previous)
