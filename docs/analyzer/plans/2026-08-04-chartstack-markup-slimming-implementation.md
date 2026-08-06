@@ -29,7 +29,7 @@
 **Files:** Modify `mf4_analyzer/ui/chart_stack/cursor_pill.py`、`stack.py`;
 Create `tests/ui/test_cursor_pill_formatting.py`。
 
-- [ ] **Step 1(测试先行):** 按 spec D-D1 写格式化测试。语料来源:Task 0 Step 4
+- [x] **Step 1(测试先行):** 按 spec D-D1 写格式化测试。语料来源:Task 0 Step 4
   的既有 fixture;不够则真机/offscreen 跑一次游标操作,把 `_on_cursor_info`
   收到的真实字符串打印采集。期望值实测固化。基线跑绿,commit。
 - [ ] **Step 2:** 六个方法移为 `cursor_pill.py` 模块级函数;self 依赖按 Task 0
