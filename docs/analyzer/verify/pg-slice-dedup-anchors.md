@@ -208,7 +208,53 @@ import 到 `slice_panel.py` 是安全的。
 
 ## C3 · 差异审计表
 
-见本文件在 C3 提交中的增补。
+逐对 diff 的相似度:`prepare` 0.638 · `reset` 0.167 · `_unify` 0.172 ·
+`apply` 0.509。**没有一对是逐字相同**,所以下表把每一处差异单独定性。
+
+判定口径:
+- **(a) 无意漂移** → 统一,写明统一到哪一边、为什么等价;
+- **(b) 真实差异** → 用钩子/子类覆盖吸收,不合并;
+- **(c) 无法判定** → **保留分叉并写测试钉住**(计划规定超过 2 处即停)。
+
+| # | 方法 | 差异 | 判定 | 处置 |
+| --- | --- | --- | --- | --- |
+| 1 | `prepare` | docstring 措辞不同(heatmap 多一段调用方说明;各自引 `line_layout_metrics` / `heatmap_layout_metrics`;line 讲 `_activate_graphics_layout` 变成 load-bearing,heatmap 讲字体度量项) | (a) 文档层漂移——**同一个机制的两份笔记** | 合并成 mixin 上一份docstring,两条历史都保留,无信息丢失 |
+| 2 | `prepare` | 右侧留白释放:line `_set_right_spacer(plot, None)` ×2 ↔ heatmap `_set_slice_right_spacer(None)` ×1 | (b) 真实——line 有两个图各一条右轴;heatmap 只给切片图设,且 `width=None` 时**语义相反**(line 画 1px 可见边框,heatmap 隐藏右轴以保证 reserve 测量干净) | 钩子 `_release_split_right_spacers()` |
+| 3 | `prepare` | 标题释放:`_apply_title_texts()`(两图)↔ `_apply_title_text()`(一图) | (b) 真实——图数量不同 | 钩子 `_release_split_titles()` |
+| 4 | `prepare` | 其余 11 行(标题宽度钳制 80、左轴 `setWidth(None)`、底轴 `setHeight(None)`、末尾 `_activate_graphics_layout()`)完全一致 | (a) | 提入 mixin |
+| 5 | `_unify` | line `pin_left_axes_to_common_width(axes, layout_owners=self._layout_owners())` ↔ heatmap `pin_left_axes_to_common_width(axes)` + `self._activate_graphics_layout()` | (a) 无意漂移——**两种写法等价**:line 的 `_activate_graphics_layout()` 就是 `activate_item_layouts(self._layout_owners())`,与 helper 内部末尾那一行同一个函数同一个参数 | 统一到 heatmap 写法(经各画布自己的 activator,heatmap 的还多一步 `ci.resize`) |
+| 6 | `_unify` | heatmap 有 `if self._slice_plot is None: return` + `if len(axes) < 2: return`;line 无守卫 | (a)——前者被后者**完全蕴含**(`_alignment_left_axes` 只在 `_slice_plot` 存在时才 append),而 line 永远返回 2 条轴,守卫对它是恒真的空操作 | 统一为 `if len(axes) < 2: return` |
+| 7 | `_unify` | docstring 各自记录了自己那次实测(line:0-480000 N 谱把轴钉在 62.4px / 需 101.4px;heatmap:0-480000 Hz 图首绘前钉在 75.4px / 需 101.4px) | (a) 文档层 | 合并,两组实测数字都留着 |
+| 8 | `apply` | 关键字名不同(`amp_*`/`time_*` ↔ `main_*`/`slice_*`),指标方法名也不同(`line_layout_metrics` / `heatmap_layout_metrics`) | (b) 真实——**这是与 `ui/analysis_section_page.py:465-544` 的契约**,页面按 canvas 类型传不同关键字 | 签名保持分叉,只把公共动作抽成 `_pin_split_left_axes` / `_pin_split_bottom_heights` |
+| 9 | `apply` | heatmap `self._split_aligned = True`;line 没有这个字段 | (b) 真实——该标志只服务 heatmap 的 `_after_split_*` 钩子(切片重对齐),line 一个 `_after_split_*` 都没覆盖,没有读者 | 留在 heatmap |
+| 10 | `apply` | 底轴高度:heatmap 多一个 `self._slice_plot is not None` 守卫 | (a)——line 的两个 plot 永不为 None,加上这个守卫是恒真空操作 | 统一成 `_pin_split_bottom_heights(((plot, height), ...))`,内部同时判 plot/height 为 None |
+| 11 | `reset` | heatmap 开头 `self._split_aligned = False` | (b) 同 #9 | 留在 heatmap 覆盖里 |
+| 12 | `reset` | heatmap 额外 `_align_slice_to_main()` + `_position_slice_panel()` | (b) 真实——切片专属 | 留在 heatmap 覆盖里 |
+| 13 | `reset` | heatmap 用 `if not self._bottom_collapsed:` 包住 unify;**line 没有这个守卫** | **(c) 无法判定** | **保留分叉**,见下 |
+
+### 唯一一处「无法判定」(#13)
+
+heatmap 在切片行折叠时跳过 `_unify_stacked_left_axes`;line 在时域预览行折叠时
+照常 unify。两边都有 `_bottom_collapsed`(line 在 `line_canvas.py:322`),
+所以「line 忘了加守卫」是**可能的**;但也可能不需要——
+`left_axis_width_for_ticks` 对不可见轴返回 0.0,而 `pin_left_axes_to_common_width`
+的 max 里还有 `axis.width()` 这一项,折叠后的 realized 宽度会不会污染另一条轴,
+从代码读不出来,需要真机量。
+
+**处置:不合并。** 两种行为各自用测试钉住
+(`tests/ui/test_split_layout_alignment.py::test_heatmap_reset_skips_alignment_while_the_slice_is_collapsed`
+与 `::test_line_reset_unifies_even_while_the_bottom_row_is_collapsed`),
+mixin 提供 line 的形态作为默认实现,heatmap 整方法覆盖。
+计数:无法判定 **1 处** ≤ 2,按计划继续。
+
+### 范围外记录(未合并)
+
+`recommended_split_title_width`:line `viewport_w - 140.0`,heatmap
+`viewport_w - 160.0`。不在计划点名的四件套内,且 heatmap 多出的 20px 很可能
+是 colorbar 列的预留(无注释佐证)。**本包不动**,留给后续包。
+
+`_split_title_width` 两边都只写不读(`prepare` 写入后没有任何消费者)。
+同样不在本包范围,仅记录。
 
 ## 改动触碰的可视面
 
