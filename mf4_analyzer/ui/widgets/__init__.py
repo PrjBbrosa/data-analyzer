@@ -4,8 +4,6 @@ from collections import Counter
 
 from PyQt5.QtWidgets import (
     QAbstractItemView,
-    QFrame,
-    QGraphicsOpacityEffect,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -24,11 +22,9 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import (
     Qt,
-    QPropertyAnimation,
     QRect,
     QSettings,
     QSize,
-    QTimer,
     pyqtSignal,
 )
 from PyQt5.QtGui import QColor, QBrush, QFontMetrics, QIcon, QPainter, QPen, QPixmap
@@ -37,6 +33,11 @@ from ...ui_kit.icons import Icons, icon_device_pixel_ratio
 from .. import hints
 from ..axis_group_palette import axis_group_color
 from .channel_config_bar import ChannelConfigBar
+# Re-exported so ``from mf4_analyzer.ui.widgets import StatsStrip / Toast /
+# StatisticsPanel`` keeps resolving after the split (ui/chart_stack/stack.py,
+# ui/main_window/window.py, ui/markup/editor.py and the UI tests all use it).
+from .stats import StatisticsPanel, StatsStrip  # noqa: F401
+from .toast import Toast  # noqa: F401
 
 
 INTERNAL_FILE_FIDS_MIME = "application/x-tracelab-file-fids"
@@ -75,37 +76,6 @@ def _swatch_pixmap(color, size=11, ratio=None):
 
 def _swatch_icon(color, size=11):
     return QIcon(_swatch_pixmap(color, size))
-
-
-class StatisticsPanel(QFrame):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken);
-        self.setMaximumHeight(110)
-        layout = QVBoxLayout(self);
-        layout.setContentsMargins(4, 2, 4, 2)
-        self.tree = QTreeWidget();
-        self.tree.setHeaderLabels(['Channel', 'Min', 'Max', 'Mean', 'RMS', 'Std', 'P-P'])
-        self.tree.setAlternatingRowColors(True);
-        self.tree.setRootIsDecorated(False);
-        h = self.tree.header();
-        h.setStretchLastSection(False);
-        h.setSectionResizeMode(0, QHeaderView.Stretch)
-        for i in range(1, 7): h.setSectionResizeMode(i, QHeaderView.ResizeToContents)
-        layout.addWidget(self.tree)
-
-    def update_stats(self, stats):
-        self.tree.clear()
-        for ch, s in stats.items():
-            # The stats key may be a composite (data_id, name) identity key
-            # (canvas.get_statistics, multi-file same-name decouple); prefer the
-            # human-readable display_label for the Channel column when present,
-            # else fall back to the key itself (window.py's live strip passes
-            # the plain display name as the key with no display_label).
-            header = s.get('display_label', ch) if isinstance(s, dict) else ch
-            self.tree.addTopLevelItem(QTreeWidgetItem(
-                [header, f"{s['min']:.3g}", f"{s['max']:.3g}", f"{s['mean']:.3g}", f"{s['rms']:.3g}",
-                 f"{s['std']:.3g}", f"{s['p2p']:.3g}"]))
 
 
 class _ChannelLeafDelegate(QStyledItemDelegate):
@@ -1619,142 +1589,3 @@ class MultiFileChannelWidget(QWidget):
         self._apply_filters()
         self._update_config_context()
         self.channels_changed.emit()
-
-
-class StatsStrip(QFrame):
-    """Compact stats line + click-to-expand full table.
-
-    Collapsed: one-liner per channel joined with ' │ '.
-    Expanded: full StatisticsPanel with the 6-metric tree.
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        from PyQt5.QtWidgets import QHBoxLayout, QLabel, QToolButton, QVBoxLayout
-        self._expanded = False
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(6, 4, 6, 4)
-        top = QHBoxLayout()
-        self._btn_expand = QToolButton()
-        self._btn_expand.setObjectName("statsExpand")
-        self._btn_expand.setText(">")
-        self._btn_expand.setProperty("role", "tool")
-        self._btn_expand.clicked.connect(self.toggle)
-        top.addWidget(self._btn_expand)
-        self._lbl_summary = QLabel("— 无通道 —")
-        top.addWidget(self._lbl_summary, stretch=1)
-        lay.addLayout(top)
-        self._panel = StatisticsPanel(self)
-        self._panel.setVisible(False)
-        lay.addWidget(self._panel)
-
-    def toggle(self):
-        self._expanded = not self._expanded
-        self._btn_expand.setText("v" if self._expanded else ">")
-        self._panel.setVisible(self._expanded)
-
-    def update_stats(self, stats):
-        if not stats:
-            self._lbl_summary.setText("— 无通道 —")
-            self._panel.update_stats({})
-            return
-        parts = []
-        for ch, s in stats.items():
-            parts.append(
-                f"● {ch}: min={s['min']:.3g} max={s['max']:.3g} "
-                f"rms={s['rms']:.3g} p2p={s['p2p']:.3g}"
-            )
-        self._lbl_summary.setText(" │ ".join(parts))
-        self._panel.update_stats(stats)
-
-
-class Toast(QFrame):
-    """Floating non-blocking acknowledgement toast.
-
-    One toast at a time per parent: a new message replaces the current one
-    instead of stacking, which keeps the bottom edge of the window clean and
-    matches user expectation that "the latest action wins". Levels map to
-    accent colors (info/success/warning/error) defined in style.qss.
-    """
-
-    _HOLD_MS = {'info': 3500, 'success': 3500, 'warning': 5000, 'error': 7000}
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("toast")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.setFocusPolicy(Qt.NoFocus)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 9, 14, 9)
-        lay.setSpacing(10)
-        self._icon = QLabel(self)
-        self._icon.setObjectName("toastIcon")
-        self._msg = QLabel("", self)
-        self._msg.setObjectName("toastText")
-        self._msg.setTextFormat(Qt.PlainText)
-        lay.addWidget(self._icon)
-        lay.addWidget(self._msg)
-
-        self._effect = QGraphicsOpacityEffect(self)
-        self._effect.setOpacity(0.0)
-        self.setGraphicsEffect(self._effect)
-        self._anim = QPropertyAnimation(self._effect, b"opacity", self)
-        self._anim.setDuration(180)
-
-        self._hide_timer = QTimer(self)
-        self._hide_timer.setSingleShot(True)
-        self._hide_timer.timeout.connect(self._fade_out)
-
-        self.hide()
-
-    _GLYPHS = {
-        'info': '✓',
-        'success': '✓',
-        'warning': '!',
-        'error': '✕',
-    }
-
-    def show_message(self, text, level='info'):
-        level = level if level in self._HOLD_MS else 'info'
-        self.setProperty('level', level)
-        self._icon.setProperty('level', level)
-        # Re-polish to reapply QSS based on new property value.
-        self.style().unpolish(self); self.style().polish(self)
-        self._icon.style().unpolish(self._icon); self._icon.style().polish(self._icon)
-        self._icon.setText(self._GLYPHS[level])
-        self._msg.setText(text)
-        self.adjustSize()
-        self._reposition()
-        self.show()
-        self.raise_()
-        # Drop any leftover fade-out → hide connection so this fade-in
-        # doesn't get auto-dismissed when it reaches full opacity.
-        self._anim.stop()
-        try:
-            self._anim.finished.disconnect()
-        except TypeError:
-            pass
-        self._anim.setStartValue(self._effect.opacity())
-        self._anim.setEndValue(1.0)
-        self._anim.start()
-        self._hide_timer.start(self._HOLD_MS[level])
-
-    def _fade_out(self):
-        self._anim.stop()
-        try:
-            self._anim.finished.disconnect()
-        except TypeError:
-            pass
-        self._anim.finished.connect(self.hide)
-        self._anim.setStartValue(self._effect.opacity())
-        self._anim.setEndValue(0.0)
-        self._anim.start()
-
-    def _reposition(self):
-        parent = self.parentWidget()
-        if parent is None:
-            return
-        margin_bottom = 36  # leave room for status bar
-        x = (parent.width() - self.width()) // 2
-        y = parent.height() - self.height() - margin_bottom
-        self.move(max(8, x), max(8, y))
