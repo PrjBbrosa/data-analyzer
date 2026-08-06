@@ -32,7 +32,7 @@ from .canvas import (
     _OVERLAY_GRID_ALPHA,
 )
 
-from .heatmap_canvas import (
+from .analysis_axes import (
     _AUTO_CEILING_PCT,
     _AUTO_SPAN_DB,
     _apply_axis_tick_density,

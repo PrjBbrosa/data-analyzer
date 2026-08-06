@@ -1,0 +1,24 @@
+........................................................................ [ 10%]
+........................................................................ [ 20%]
+........................................................................ [ 30%]
+........................................................................ [ 40%]
+........................................................................ [ 50%]
+........................................................................ [ 61%]
+........................................................................ [ 71%]
+........................................................................ [ 81%]
+........................................................................ [ 91%]
+..........................................................               [100%]
+=============================== warnings summary ===============================
+tests/ui/test_pg_heatmap_canvas.py::test_full_reset_clears_empty_hint
+tests/ui/test_pg_heatmap_canvas.py::test_full_reset_clears_empty_hint
+tests/ui/test_pg_line_canvas.py::test_remark_snaps_to_curve
+tests/ui/test_pg_line_canvas.py::test_add_and_clear_remark_on_time_preview
+tests/ui/test_pg_line_canvas.py::test_time_remark_right_click_removes_nearest
+tests/ui/test_pg_line_canvas.py::test_time_remark_right_click_removes_nearest
+tests/ui/test_pg_line_canvas.py::test_spectrum_remark_still_works_with_time_branch
+  /Users/donghang/Downloads/data analyzer/.venv/lib/python3.12/site-packages/pyqtgraph/functions.py:2996: DeprecationWarning: Setting the shape on a NumPy array has been deprecated in NumPy 2.5.
+  As an alternative, you can create a new view using np.reshape (with copy=False if needed).
+    arr.shape = (3, 3)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+706 passed, 1 deselected, 7 warnings in 32.82s
