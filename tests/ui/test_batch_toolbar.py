@@ -490,3 +490,77 @@ def test_batch_sheet_handoff_notice_is_visible_beside_rpm_controls(qtbot):
         sheet._handoff_notice
     )
     assert notice_row == sheet._input_panel._rpm_factor_row_index + 1
+
+
+def test_sheet_toast_paints_on_the_sheet_not_behind_it(qtbot):
+    """A visible sheet must own its toast.
+
+    ``MainWindow._toast`` is a child of the main window, so forwarding there
+    while this modal sheet is up painted the message *underneath* it: the
+    acceptance report was a user hitting 预览, seeing nothing happen, and
+    only finding "预览不可用：..." after dragging the sheet aside.
+    """
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+    from PyQt5.QtWidgets import QWidget
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    forwarded = []
+    host.toast = lambda text, kind="info": forwarded.append((text, kind))
+
+    sheet = BatchSheet(host, files={})
+    qtbot.addWidget(sheet)
+    sheet.show()
+    qtbot.waitExposed(sheet)
+
+    sheet._toast("预览不可用：代表分组 Rack Force 不含所选通道", kind="warning")
+
+    assert not forwarded, "a visible sheet must not hand its toast to the host"
+    toast = sheet._own_toast
+    assert toast is not None
+    assert toast.parentWidget() is sheet
+    assert toast.isVisibleTo(sheet)
+    assert toast._msg.text() == "预览不可用：代表分组 Rack Force 不含所选通道"
+    # Bookkeeping the headless assertions elsewhere rely on stays intact.
+    assert sheet._last_toast_kind == "warning"
+
+
+def test_sheet_toast_clears_the_footer_button_row(qtbot):
+    """The toast must not land on 关闭 / 预览 / 运行.
+
+    Toast's default bottom margin is sized for MainWindow's status bar; this
+    sheet's footer is taller, and the first fix put the message on top of it.
+    """
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet.resize(1080, 760)
+    sheet.show()
+    qtbot.waitExposed(sheet)
+
+    sheet._toast("预览不可用：代表分组 Rack Force 不含所选通道", kind="warning")
+    toast = sheet._own_toast
+
+    footer_top = sheet._footer_host.mapTo(sheet, sheet._footer_host.rect().topLeft()).y()
+    assert toast.geometry().bottom() < footer_top
+    assert toast.geometry().top() > 0
+    assert sheet.rect().contains(toast.geometry())
+
+
+def test_sheet_toast_falls_back_to_the_host_once_closed(qtbot):
+    """Anything raised after the sheet closes still needs a visible surface."""
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+    from PyQt5.QtWidgets import QWidget
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    forwarded = []
+    host.toast = lambda text, kind="info": forwarded.append((text, kind))
+
+    sheet = BatchSheet(host, files={})
+    qtbot.addWidget(sheet)
+
+    sheet._toast("已导出方案", kind="success")
+
+    assert forwarded == [("已导出方案", "success")]

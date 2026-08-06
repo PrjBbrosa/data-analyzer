@@ -36,6 +36,7 @@ from ....batch_validation import (
 )
 from ....io.source_adapters import DEFAULT_SOURCE_ADAPTER_REGISTRY
 from ...batch_settings import BatchPanelPrefs, BatchPanelPrefsStore
+from ...widgets.toast import Toast
 from ._geometry import fit_dialog_to_available_screen
 from .analysis_panel import AnalysisPanel
 from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
@@ -187,10 +188,11 @@ class BatchSheet(QDialog):
 
         # W7 toast bookkeeping — populated by ``_toast`` so headless tests
         # can assert deterministically without mocking the parent's toast
-        # API. Production paths additionally forward to ``parent.toast`` if
-        # the host exposes one (MainWindow does).
+        # API. Production paths additionally render the message, on this
+        # sheet while it is up and on ``parent.toast`` otherwise.
         self._last_toast_text: str = ""
         self._last_toast_kind: str = ""
+        self._own_toast: Toast | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -1331,14 +1333,33 @@ class BatchSheet(QDialog):
         )
 
     def _toast(self, text: str, kind: str = "info") -> None:
-        """Surface a toast to the parent (MainWindow has ``toast``).
+        """Show a toast on whichever surface the user is actually looking at.
 
         Always records ``_last_toast_*`` so headless tests can assert
-        without needing a parent to mock. Production paths additionally
-        forward to ``parent.toast`` so the user sees the message.
+        without needing a parent to mock.
+
+        ``MainWindow._toast`` is a child of the main window, so forwarding
+        there while this sheet is up painted the message *underneath* the
+        sheet: a user who hit 预览 saw nothing happen and only found the
+        reason after dragging the sheet aside.  While the sheet is visible it
+        owns its own toast; the parent's stays the target for anything raised
+        after it closes.
         """
         self._last_toast_text = text
         self._last_toast_kind = kind
+        if self.isVisible():
+            try:
+                if self._own_toast is None:
+                    self._own_toast = Toast(
+                        self,
+                        bottom_margin=self._footer_host.height() + 12,
+                    )
+                self._own_toast.show_message(text, level=kind)
+                return
+            except Exception:  # noqa: BLE001
+                # Toast is purely informational — fall through to the parent
+                # rather than letting a paint bug break the action.
+                pass
         parent = self.parent()
         if parent is not None and hasattr(parent, "toast"):
             try:

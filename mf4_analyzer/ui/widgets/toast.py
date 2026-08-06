@@ -14,8 +14,18 @@ class Toast(QFrame):
 
     _HOLD_MS = {'info': 3500, 'success': 3500, 'warning': 5000, 'error': 7000}
 
-    def __init__(self, parent=None):
+    #: Clearance under the toast. The default leaves room for MainWindow's
+    #: status bar; a host with a taller bottom chrome (the batch sheet's 50px
+    #: footer with its Close/Preview/Run row) passes its own so the message
+    #: floats above that band instead of landing on the buttons.
+    DEFAULT_BOTTOM_MARGIN = 36
+
+    def __init__(self, parent=None, *, bottom_margin=None):
         super().__init__(parent)
+        self._bottom_margin = (
+            self.DEFAULT_BOTTOM_MARGIN if bottom_margin is None
+            else int(bottom_margin)
+        )
         self.setObjectName("toast")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -90,7 +100,6 @@ class Toast(QFrame):
         parent = self.parentWidget()
         if parent is None:
             return
-        margin_bottom = 36  # leave room for status bar
         x = (parent.width() - self.width()) // 2
-        y = parent.height() - self.height() - margin_bottom
+        y = parent.height() - self.height() - self._bottom_margin
         self.move(max(8, x), max(8, y))
