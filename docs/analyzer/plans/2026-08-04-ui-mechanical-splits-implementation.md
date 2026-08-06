@@ -43,7 +43,7 @@
   - `tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference`
   - `tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action`
   - 计数:`2 failed, 2914 passed, 1 deselected`。
-- **A1 兼容面核验失配 → A1 已停止,见下方 Task A1 的「停止说明」。**
+- **A1 兼容面核验失配 → 一度停止;用户批准兼容面变更后已完整落地,见 Task A1 的「收尾」。**
 
 ---
 
@@ -52,10 +52,12 @@
 **Files(计划):** Create `mf4_analyzer/ui/widgets/{_swatches,channel_tree,stats,toast}.py`;
 Modify `mf4_analyzer/ui/widgets/__init__.py`;Create `tests/ui/test_widgets_misc.py`。
 
-**Files(实际落地,按下方裁决走方向 c):** Create
+**Files(最终落地,分两批):** 第一批按下方裁决走方向 c,Create
 `mf4_analyzer/ui/widgets/{stats,toast}.py` + `tests/ui/test_widgets_misc.py`;
-Modify `mf4_analyzer/ui/widgets/__init__.py`。**`_swatches.py` 与 `channel_tree.py`
-未创建**——理由见「停止说明」与「裁决」两节。
+第二批在用户批准兼容面变更后补齐 `_swatches.py` 与 `channel_tree.py`,
+外加 Modify `tests/ui/test_color_swatch_hidpi.py`(1 处 patch 目标)与
+`scripts/channel_dot_size_preview.py`(1 处重绑目标)。**D-A1 表格已完整实现**
+——过程见「停止说明」「裁决」「收尾」三节。
 
 > **停止说明(2026-08-06,第一执行者):A1 未执行,零代码改动。**
 > *(已被下方「裁决」一节部分取代:`stats`/`toast` 已落地,
@@ -164,6 +166,34 @@ Modify `mf4_analyzer/ui/widgets/__init__.py`。**`_swatches.py` 与 `channel_tre
 Run: `PYTEST tests/ui/test_channel_widget.py tests/ui/test_channel_widget_setters.py tests/ui/test_channel_axis_groups.py tests/ui/test_color_swatch_hidpi.py tests/ui/test_head_hdf_rail.py tests/ui/test_widgets_misc.py tests/ui/test_hints.py -q`
 
 Expected: 全绿(或与基线失败集一致)。
+
+### 收尾(2026-08-06,第三执行者):用户批准兼容面变更,D-A1 完整落地
+
+用户明确批准了裁决一节点名的那笔代价——**改 1 处既有测试的 patch 目标 + 2 个 dev 脚本**
+(实际只需动 1 个,见下)——A1 遂按 D-A1 表格补齐:
+
+- [x] `_swatches.py`(`_fmt_rate`/`_swatch_pixmap`/`_swatch_icon`)与
+  `channel_tree.py`(`INTERNAL_FILE_FIDS_MIME`/`_ChannelLeafDelegate`/
+  `_CheckTolerantTree`/`MultiFileChannelWidget`,`from ._swatches import` 取用)
+  建成。7 个定义已用 AST `get_source_segment` 与 `main` 逐一比对:**全部 byte-identical**。
+- [x] `__init__.py` 缩到 **23 行**纯再导出(目标 ≤60)。12 个兼容面名字实测全部可解析。
+- [x] `tests/ui/test_color_swatch_hidpi.py::test_swatch_default_path_picks_up_device_ratio`
+  的 patch 目标改为 `...widgets._swatches.icon_device_pixel_ratio`,调用仍走
+  `widgets_mod._swatch_pixmap` 再导出——同时覆盖真实路径与兼容名。**7/7 全绿**。
+  已用三段判别探针证明不是恒真假绿:不 patch → 1.0;patch `_swatches` → 2.0
+  (行为改变);patch 旧的 `ui.widgets` 目标 → 仍 1.0(搬迁后确已失效)。
+- [x] `scripts/channel_dot_size_preview.py` 的重绑改指 `channel_tree`。实测坐实了
+  「停止说明」预言的静默回归:重绑 `channel_tree` → `_swatch_icon` 被调用 7 次(生效);
+  重绑 `ui.widgets` → 0 次(已死)。
+- [x] `scripts/color_swatch_hidpi_smoke.py` **无需改动**:它只 `from mf4_analyzer.ui.widgets
+  import _swatch_pixmap`,facade 仍再导出该名字。未做无谓改写。两个脚本各跑一次均正常出图。
+- [x] 验证:`tests/ui/` 全量 **2 failed, 3342 passed**,失败集与基线逐条相同
+  (`test_batch_runner_thread` + `test_hint_nudges` 两条既有红),零新增失败。
+
+> 遗留观察(与本次重构无关,未处理):`channel_dot_size_preview.py` 出图的四块面板
+> 只有表头、没有通道行。已确认 widget 侧数据是好的(1 个文件节点 + 7 个子行),且
+> `MultiFileChannelWidget` 类体与 `main` byte-identical ⇒ 属该脚本既有的抓帧问题,
+> 不由本次搬迁引入。
 
 ## Task A2: `ui/dialogs.py` → `ui/dialogs/` 包
 
