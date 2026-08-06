@@ -112,8 +112,63 @@ from mf4_analyzer.qt_analysis_shared import (
 - 导入边界靠 `tests/test_batch_render_import_boundary.py` 的子进程断言守住：
   中立层不得拉起 `mf4_analyzer.ui`。
 
-## 阶段 3 验证
+## 阶段 3 验证（实测结果）
 
-见分支上的最终报告：parity 14/14 与 `--full-matrix` 84/84、导入边界、画布用例、
-`-k batch`，以及变异测试（改中立层 `_slice_amp_bounds` → 批处理侧与 GUI 侧同时变红
-→ 已还原）——变异测试是「两侧真的共用同一份实现」的唯一硬证据。
+| 项目 | 结果 |
+| --- | --- |
+| `tools/verify_batch_qt_render_parity.py` | **14/14 PASS**（0 failed） |
+| 同上 `--full-matrix` | parity **14/14 PASS** + integration matrix **84/84 PASS**，`status: PASS` |
+| `tests/test_batch_render_import_boundary.py` | 4 passed —— 中立层未拉起 `mf4_analyzer.ui` |
+| 画布用例（`test_pg_heatmap_canvas` / `test_slice_panel` / `test_slice_amp_floor_guard` / `test_analysis_axes`） | 253 passed |
+| `-k batch`（`--ignore=tests/acquisition_ui`） | 1232 passed / 1 failed —— 唯一那条是 CLAUDE.md 既有红 #1 `test_sheet_preview_and_result_share_channel_metadata_reference`，失败集未变 |
+
+### 零像素变化的硬证据
+
+没有靠「断言过了」判定渲染没变，而是**两棵树各跑一次、逐文件哈希**：改动前的树
+（`git stash` 掉本次改动）与改动后的树，各自 `--full-matrix` 渲染到独立的 scratch
+目录，再比 sha256。
+
+```
+PNG artifacts compared: 60
+  byte-identical : 60
+  differing      : 0
+evidence.json（剔除 generated_at / commit_sha / source_state_sha256 / path）: identical
+  before: cases 14  matrix 84   status PASS
+  after : cases 14  matrix 84   status PASS
+```
+
+60/60 逐字节相同 —— 这次去重**一个像素都没动**。
+
+（注：`docs/superpowers/verify/batch-qt-render/` 下入库的 evidence 产物**本次未更新**。
+校验一律输出到 scratch 目录，避免给一个不改像素的重构塞进 60 个二进制文件的环境性
+churn；入库那份与本机重新生成的产物本就有环境差，重新生成反而会污染上面的对照。）
+
+### 变异测试：证明两侧真的共用同一份实现
+
+只改**中立层** `_slice_amp_bounds` 的函数体（不动常量，这样测的是「函数是否共用」
+而不只是「常量是否共用」）：
+
+```diff
+-    real = finite[finite >= hi - _SLICE_MAX_SPAN_DB]
++    real = finite[finite >= hi - 20.0]      # 变异
+```
+
+一处改动，**两侧同时变红**：
+
+| 侧 | 变异前 | 变异后 |
+| --- | --- | --- |
+| GUI | 91 passed | **4 failed** / 87 passed：`test_slice_amp_bounds_keeps_a_bin_exactly_at_the_span_limit`、`test_slice_amp_bounds_drops_a_bin_just_past_the_span_limit`、`test_slice_amp_bounds_excludes_db_floor_outlier`、`test_slice_amp_bounds_keeps_real_low_data` |
+| 批处理 | 59 passed | **2 failed** / 57 passed：`test_slice_amplitude_axis_ends_on_whole_nice_steps`（视图下沿 `-36.0` → `-22.0`）、`test_slice_amplitude_axis_ignores_the_dc_dead_zone` |
+
+批处理侧的 `-36.0 → -22.0` 是最直接的证据：那条断言读的是
+`scene.slice_plot.vb.viewRange()[1]`，值确实跟着中立层的函数体走了。已还原，还原后
+150 passed，`git status` 干净。
+
+### 顺带测出来的一件事：parity 抓不到这类改动
+
+变异还在的时候跑 parity，结果**仍是 14/14 PASS**。这不是 bug，是它的定义域：
+parity 比的是**批处理侧 vs GUI 参照侧**，而共用实现被改时两侧一起动，差值不变。
+
+结论要记住：**parity 守的是「两侧不许分叉」，`tests/ui/` + `tests/test_batch_render_qt_heatmap.py`
+的单测守的才是「绝对行为不许变」。** 去重之后这条分工更重要了——以前两份副本各自
+锚住自己的绝对行为，现在只剩一份，绝对行为全靠单测钉住。
