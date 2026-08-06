@@ -14,7 +14,6 @@ from PyQt5.QtGui import (
     QTransform,
 )
 from PyQt5.QtWidgets import (
-    QButtonGroup,
     QFileDialog,
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -27,15 +26,9 @@ from PyQt5.QtWidgets import (
     QGraphicsSimpleTextItem,
     QGraphicsTextItem,
     QGraphicsView,
-    QGridLayout,
-    QHBoxLayout,
-    QMenu,
-    QPushButton,
-    QToolButton,
     QUndoStack,
     QVBoxLayout,
     QWidget,
-    QWidgetAction,
 )
 
 import qtawesome as qta
@@ -48,6 +41,12 @@ from .commands import (_AddItemCommand, _CropCommand, _MoveCommand,
                        _DeleteCommand, _GeometryCommand, _StyleCommand)
 from .items import _ArrowAnnotationItem, _TextAnnotationItem
 from .serialization import deserialize_item, item_pen, serialize_item
+from .toolbar import (
+    build_style_panel,
+    build_toolbar,
+    color_button_qss,
+    compact_tool_button_qss,
+)
 from .view import _MarkupGraphicsView
 
 _HIT_TOLERANCE = 12.0
@@ -391,162 +390,10 @@ class MarkupEditor(QWidget):
         )
         return path
 
+    # ---- chrome construction (implemented in toolbar.py) ----
+
     def _build_toolbar(self) -> QWidget:
-        toolbar = QWidget(self)
-        toolbar.setObjectName("markupEditorToolbar")
-        layout = QGridLayout(toolbar)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setHorizontalSpacing(6)
-        layout.setVerticalSpacing(0)
-
-        def make_group(name: str):
-            group = QWidget(toolbar)
-            group.setObjectName(name)
-            group_layout = QHBoxLayout(group)
-            group_layout.setContentsMargins(0, 0, 0, 0)
-            group_layout.setSpacing(6)
-            return group, group_layout
-
-        left_group, left_layout = make_group("markupToolbarLeftGroup")
-        center_group, center_layout = make_group("markupToolbarCenterGroup")
-        right_group, right_layout = make_group("markupToolbarRightGroup")
-
-        close_btn = QToolButton(left_group)
-        close_btn.setObjectName("markupCloseButton")
-        close_btn.setText("")
-        close_btn.setIcon(qta.icon("ph.x", color="#dc2626"))
-        close_btn.setIconSize(QSize(24, 24))
-        close_btn.setToolTip("关闭 (Esc)")
-        close_btn.setAutoRaise(True)
-        close_btn.setFixedSize(QSize(44, 44))
-        close_btn.setStyleSheet(
-            "QToolButton#markupCloseButton {"
-            "padding: 0px;"
-            "border: 1px solid #f2b8b8; border-radius: 6px;"
-            "background: #fffafa;"
-            "}"
-            "QToolButton#markupCloseButton:hover {"
-            "background: #fee2e2; border-color: #dc2626;"
-            "}"
-        )
-        close_btn.clicked.connect(self.close)
-        left_layout.addWidget(close_btn)
-
-        self._style_button = QToolButton(center_group)
-        self._style_button.setObjectName("markupStyleButton")
-        self._style_button.setToolTip("样式（颜色 / 线宽） · [ ] 调线宽")
-        self._style_button.setAutoRaise(True)
-        self._style_button.setIconSize(QSize(54, 24))
-        self._style_button.setFixedSize(QSize(76, 44))
-        self._style_button.setPopupMode(QToolButton.InstantPopup)
-        self._style_button.setStyleSheet(self._compact_tool_button_qss())
-        style_menu = QMenu(self._style_button)
-        style_menu.setObjectName("markupStyleMenu")
-        # Match the rounded-popup shell contract: QSS radius needs a transparent
-        # menu window, and macOS needs native frame/shadow disabled so no square
-        # backing remains behind the rounded style panel.
-        style_menu.setWindowFlags(
-            style_menu.windowFlags()
-            | Qt.FramelessWindowHint
-            | Qt.NoDropShadowWindowHint
-        )
-        style_menu.setAttribute(Qt.WA_TranslucentBackground, True)
-        # Make the menu a transparent shell: the rounded surface lives on the
-        # inner panel below. Otherwise the global QMenu rule paints a square
-        # white rect (radius 12 > padding) that pokes past the rounded corners.
-        style_menu.setStyleSheet(
-            "QMenu#markupStyleMenu { background: transparent; border: none; padding: 0px; }"
-        )
-        style_action = QWidgetAction(style_menu)
-        style_action.setDefaultWidget(self._build_style_panel(style_menu))
-        style_menu.addAction(style_action)
-        self._style_button.setMenu(style_menu)
-        center_layout.addWidget(self._style_button)
-        self._refresh_style_button_icon()
-
-        tool_group = QButtonGroup(toolbar)
-        tool_group.setExclusive(True)
-        labels = {
-            "select": "选择",
-            "crop": "裁剪",
-            "arrow": "箭头",
-            "line": "直线",
-            "rect": "矩形",
-            "pen": "画笔",
-            "text": "文字",
-            "number": "序号",
-        }
-        self._tool_buttons = {}
-        for tool in self.TOOLS:
-            active = tool == self._tool
-            button = QToolButton(center_group)
-            button.setText("")
-            button.setIcon(self._tool_icon(tool, active))
-            button.setIconSize(QSize(24, 24))
-            button.setToolTip(f"{labels[tool]} ({tool[0].upper()})")
-            button.setObjectName(f"markupTool_{tool}")
-            button.setCheckable(True)
-            button.setAutoRaise(True)
-            button.setFixedSize(QSize(44, 44))
-            button.setStyleSheet(self._compact_tool_button_qss())
-            button.clicked.connect(
-                lambda checked=False, name=tool: self.set_tool(name)
-            )
-            if active:
-                button.setChecked(True)
-            tool_group.addButton(button)
-            center_layout.addWidget(button)
-            self._tool_buttons[tool] = button
-
-        undo_btn = QToolButton(center_group)
-        undo_btn.setObjectName("markupUndoButton")
-        undo_btn.setText("")
-        undo_btn.setIcon(qta.icon("ph.arrow-counter-clockwise", color="#374151"))
-        undo_btn.setIconSize(QSize(24, 24))
-        undo_btn.setToolTip("撤销 (Ctrl+Z)")
-        undo_btn.setAutoRaise(True)
-        undo_btn.setFixedSize(QSize(44, 44))
-        undo_btn.setStyleSheet(self._compact_tool_button_qss())
-        undo_btn.clicked.connect(self._undo_stack.undo)
-        center_layout.addWidget(undo_btn)
-
-        redo_btn = QToolButton(center_group)
-        redo_btn.setObjectName("markupRedoButton")
-        redo_btn.setText("")
-        redo_btn.setIcon(qta.icon("ph.arrow-clockwise", color="#374151"))
-        redo_btn.setIconSize(QSize(24, 24))
-        redo_btn.setToolTip("重做 (Ctrl+Y)")
-        redo_btn.setAutoRaise(True)
-        redo_btn.setFixedSize(QSize(44, 44))
-        redo_btn.setStyleSheet(self._compact_tool_button_qss())
-        redo_btn.clicked.connect(self._undo_stack.redo)
-        center_layout.addWidget(redo_btn)
-
-        save_btn = QPushButton("保存", right_group)
-        save_btn.setObjectName("markupSaveButton")
-        save_btn.clicked.connect(self.save_result)
-        right_layout.addWidget(save_btn)
-
-        done_btn = QPushButton("完成复制", right_group)
-        done_btn.setObjectName("markupDoneButton")
-        done_btn.setProperty("variant", "primary")
-        done_btn.setStyleSheet(
-            "QPushButton#markupDoneButton {"
-            "background: #1769e0; color: white; border: none;"
-            "border-radius: 6px; padding: 6px 14px; font-weight: 600;"
-            "}"
-            "QPushButton#markupDoneButton:hover { background: #0f5ec8; }"
-        )
-        done_btn.clicked.connect(self.finish_and_copy)
-        right_layout.addWidget(done_btn)
-
-        layout.addWidget(left_group, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
-        layout.addWidget(center_group, 0, 1, Qt.AlignCenter)
-        layout.addWidget(right_group, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 0)
-        layout.setColumnStretch(2, 1)
-        return toolbar
+        return build_toolbar(self)
 
     def zoom_by(self, factor: float) -> None:
         self.set_zoom(self._zoom * factor)
@@ -619,29 +466,10 @@ class MarkupEditor(QWidget):
         return pen
 
     def _compact_tool_button_qss(self) -> str:
-        return (
-            "QToolButton {"
-            "padding: 0px;"
-            "border: 1px solid #c9d6ea; border-radius: 6px;"
-            "background: #ffffff;"
-            "}"
-            "QToolButton:hover { background: #eef4ff; border-color: #1769e0; }"
-            # Selected tool: solid accent fill behind the white (contrast) glyph.
-            "QToolButton:checked { background: #1769e0; border-color: #1769e0; }"
-        )
+        return compact_tool_button_qss()
 
     def _color_button_qss(self) -> str:
-        # Same rounded chip as the tools; selected swatch gets a blue ring
-        # (not a fill) so the colour stays readable.
-        return (
-            "QToolButton {"
-            "padding: 0px;"
-            "border: 1px solid #c9d6ea; border-radius: 6px;"
-            "background: #ffffff;"
-            "}"
-            "QToolButton:hover { background: #eef4ff; border-color: #1769e0; }"
-            "QToolButton:checked { border: 2px solid #1769e0; background: #eaf2ff; }"
-        )
+        return color_button_qss()
 
     def _tool_icon(self, tool: str, active: bool) -> QIcon:
         color = self._TOOL_ICON_COLOR_ACTIVE if active else self._TOOL_ICON_COLOR
@@ -699,76 +527,7 @@ class MarkupEditor(QWidget):
             button.setIconSize(QSize(54, 24))
 
     def _build_style_panel(self, menu):
-        panel = QWidget()
-        panel.setObjectName("markupStylePanel")
-        # The panel is the only visible surface inside the transparent menu
-        # shell, so it carries the rounded background/border itself.
-        panel.setAttribute(Qt.WA_StyledBackground, True)
-        panel.setStyleSheet(
-            "QWidget#markupStylePanel {"
-            "background: #ffffff;"
-            "border: 1px solid #c9d6ea;"
-            "border-radius: 10px;"
-            "}"
-        )
-        outer = QVBoxLayout(panel)
-        outer.setContentsMargins(12, 10, 12, 12)
-        outer.setSpacing(8)
-
-        self._color_buttons = {}
-        color_row = QHBoxLayout()
-        color_row.setSpacing(8)
-        for name, color in (
-            ("红色", "#e53935"),
-            ("橙色", "#f97316"),
-            ("黄色", "#eab308"),
-            ("绿色", "#059669"),
-            ("蓝色", "#2563eb"),
-            ("黑色", "#111827"),
-        ):
-            button = QToolButton(panel)
-            button.setObjectName(f"markupColor_{color[1:]}")
-            button.setIcon(self._color_icon(QColor(color)))
-            button.setIconSize(QSize(18, 18))
-            button.setToolTip(name)
-            button.setAutoRaise(True)
-            button.setCheckable(True)
-            button.setFixedSize(QSize(30, 30))
-            button.setStyleSheet(self._color_button_qss())
-            button.clicked.connect(
-                lambda checked=False, c=color, m=menu: (
-                    self.set_color(QColor(c)),
-                    m.hide(),
-                )
-            )
-            color_row.addWidget(button)
-            self._color_buttons[color.lower()] = button
-        outer.addLayout(color_row)
-
-        self._width_buttons = {}
-        width_row = QHBoxLayout()
-        width_row.setSpacing(8)
-        for width in (2, 4, 6, 8):
-            button = QToolButton(panel)
-            button.setObjectName(f"markupWidth_{width}")
-            button.setIcon(self._width_icon(width))
-            button.setIconSize(QSize(24, 18))
-            button.setToolTip(f"{width}px")
-            button.setAutoRaise(True)
-            button.setCheckable(True)
-            button.setFixedSize(QSize(34, 30))
-            button.setStyleSheet(self._compact_tool_button_qss())
-            button.clicked.connect(
-                lambda checked=False, w=width, m=menu: (
-                    self.set_stroke_width(w),
-                    m.hide(),
-                )
-            )
-            width_row.addWidget(button)
-            self._width_buttons[width] = button
-        outer.addLayout(width_row)
-        self._sync_style_panel()
-        return panel
+        return build_style_panel(self, menu)
 
     def selected_markup_items(self):
         items = []
@@ -1176,6 +935,13 @@ class MarkupEditor(QWidget):
 
     def _item_pen(self, item):
         return item_pen(item)
+
+    # ---- painted icons ----
+    # These stay here rather than moving to toolbar.py with the rest of the
+    # chrome: _icon_canvas resolves icon_device_pixel_ratio from this module's
+    # globals, and tests/ui/test_color_swatch_hidpi.py patches it here to fake
+    # a 2x screen. Re-exporting the function elsewhere copies the binding, not
+    # the scope, so that patch would stop reaching the code under test.
 
     @staticmethod
     def _icon_canvas(w: int, h: int):
