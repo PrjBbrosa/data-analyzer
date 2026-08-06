@@ -30,3 +30,40 @@ mf4_analyzer/ui/pg_canvas/_split_mixin.py      290
 mf4_analyzer/ui/pg_canvas/remarks.py           278
 mf4_analyzer/ui/pg_canvas/analysis_axes.py     467
 (目标:heatmap_canvas.py 较此基线再减 ≥400 行)
+
+
+===========================================================================
+包 C 完成后实测(同一条命令、同一台机器)
+===========================================================================
+
+== 画布全量 ==
+722 passed, 1 deselected  (基线 698;+24 = test_pg_remarks.py 新增用例)
+FAILED: (无)  —— 与基线一致
+
+== tests/ui/ 全量 ==
+2 failed, 3204 passed, 1 deselected  in 322.75s
+
+FAILED tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference
+FAILED tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action
+
+→ 失败集与基线**完全一致**,无新增红。
+   +118 passed = 空态 32 + remark 24 + 分栏 29 + 切片 33。
+
+== 额外的边界确认(_split_mixin 新增 ui_kit.axis_metrics 依赖) ==
+tests/ui_kit tests/integration test_native_import_boundaries
+test_signal_no_gui_import test_batch_render_import_boundary
+test_packaging_imports test_diagnostics test_batch_slice_export
+test_batch_render_qt_heatmap
+→ 118 passed, 3 skipped
+
+== 行数 ==
+heatmap_canvas.py   2518 -> 1999   (-519,目标 -400 ✅)
+line_canvas.py      2235 -> 2082   (-153)
+slice_panel.py         — ->  483   (新增)
+empty_hint.py          — ->  137   (新增)
+remarks.py           278 ->  349   (+71)
+_split_mixin.py      290 ->  445   (+155)
+
+== C1/C2 逐字重复对 ==
+实现层重复行数(C1/C2 范围)  50 -> 10,且剩下的 10 行全部是 2 行薄委托。
+明细见 pg-slice-dedup-anchors.md「收尾量化」节。
