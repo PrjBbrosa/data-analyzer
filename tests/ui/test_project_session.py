@@ -5,8 +5,8 @@ from mf4_analyzer import app_meta
 
 
 def test_app_meta_constants():
-    assert app_meta.APP_VERSION == "v7.9.3"
-    assert app_meta.WINDOW_TITLE == "TraceLab v7.9.3"
+    assert app_meta.APP_VERSION == "v7.9.4"
+    assert app_meta.WINDOW_TITLE == "TraceLab v7.9.4"
     assert app_meta.RELEASE_URL.startswith("https://")
 
 

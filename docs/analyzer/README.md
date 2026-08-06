@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 7.9.3. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 7.9.4. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and 12-View changes, as well as the native WinWert (`.wwt`),
 ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced in 7.7.
 7.8 added a draft-based channel configuration manager with View matching
@@ -47,7 +47,14 @@ render at their intended on-canvas size. 7.9.3 pairs a uniquely named RPM
 signal from another batch source with the selected order-analysis signal, so
 multi-rate inputs can be aligned on time instead of failing source lookup.
 Its batch heatmap exports also add a translucent red highlight band behind each
-slice marker while preserving the curve-matched centre line.
+slice marker while preserving the curve-matched centre line. 7.9.4 moves the
+COT order spectrogram's supporting points onto an evenly spaced *time* grid
+(ArtemiS Step Size semantics) instead of hopping through the angle domain, so
+frame centres land on multiples of the requested time resolution and a batch
+slice at t=10 s hits 10.000 s exactly; the reported coverage now spans only the
+analysed range, so the time axis no longer implies data outside it. The batch
+representative-image preview also surfaces the renderer's slice clamp/merge
+warnings instead of dropping them.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.
