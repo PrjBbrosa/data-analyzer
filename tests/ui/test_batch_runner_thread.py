@@ -545,3 +545,42 @@ def test_representative_source_gap_keeps_middle_dot_in_filename(qtbot, tmp_path)
         "预览不可用：代表来源 eps · run.hdf 不含所选通道"
         "；该文件按采样率拆成了 2 个子来源"
     )
+
+
+def test_sheet_runner_carries_the_probe_channels_into_planning(qtbot, tmp_path):
+    """Run must plan against the channels the input panel already probed.
+
+    Preview got the map through ``preview_outputs(source_channels=...)``; Run
+    had no such seam, so a file that split into logical sources with disjoint
+    channels planned the target onto a source that never held it and reported
+    a phantom ``missing signal`` failure.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    t = np.arange(256) / 128.0
+    frame = pd.DataFrame({"Time": t, "Rack Force": np.sin(t)})
+    fd = FileData(tmp_path / "sfns.wwt", frame, list(frame.columns), {}, idx=0)
+    sheet = BatchSheet(None, files={0: fd})
+    qtbot.addWidget(sheet)
+
+    # One physical WWT whose two Zeit blocks carry disjoint channels.
+    container = str(tmp_path / "sfns.wwt")
+    sheet._input_panel._file_list.add_loaded_file(
+        "wwt:sfns:0", container, frozenset({"Time", "Weg"}),
+    )
+    sheet._input_panel._file_list.add_loaded_file(
+        "wwt:sfns:1", container, frozenset({"Time", "Rack Force"}),
+    )
+
+    runner = sheet._make_runner()
+
+    assert runner._source_channel_cache["wwt:sfns:0"] == frozenset(
+        {"Time", "Weg"}
+    )
+    assert runner._source_channel_cache["wwt:sfns:1"] == frozenset(
+        {"Time", "Rack Force"}
+    )

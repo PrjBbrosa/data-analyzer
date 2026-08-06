@@ -604,6 +604,33 @@ class BatchRunner:
             ).strip(),
         }
 
+    def seed_source_channels(self, source_channels) -> None:
+        """Record known ``{source key: channel names}`` for no-load planning.
+
+        ``_expand_tasks`` filters ``available_per_source`` / ``common`` targets
+        against the channels a source actually holds, but planning is
+        deliberately no-load: without a resident ``FileData`` it treats every
+        source as *unknown* and keeps the task.  One physical file can expand
+        into several logical sources holding disjoint channels (a WWT whose
+        signals were recorded over different spans, an HDF split by sample
+        rate), so the unknown case plans channels into sources that never had
+        them -- which blocks Preview outright and lands a spurious
+        ``missing signal`` failure in a Run.
+
+        The caller usually does know: BatchSheet holds the probe result the
+        input panel already displays.  Seeding it here reaches every planning
+        path (Preview and Run alike) without another load.  A later real load
+        overwrites these entries with the loaded channel names, so a stale
+        hint self-corrects rather than persisting.
+        """
+
+        for source_key, names in dict(source_channels or {}).items():
+            if names is None:
+                continue
+            self._source_channel_cache[source_key] = frozenset(
+                str(name) for name in names
+            )
+
     @staticmethod
     def _pick_representative_group(groups, source_channels):
         """Return ``(ordinal, group, channel_available)`` for the preview.
@@ -639,11 +666,14 @@ class BatchRunner:
     ) -> BatchOutputPreview:
         """Return UI-safe output counts without loading unresolved sources.
 
-        ``source_channels`` is an optional ``{source key: channel names}`` map
-        used only to pick a representative group the user can actually see
-        rendered; omitting it preserves the historical planning result.
+        ``source_channels`` is an optional ``{source key: channel names}`` map.
+        It both narrows the no-load expansion to the channels a source really
+        holds (see :meth:`seed_source_channels`) and picks a representative
+        group the user can actually see rendered; omitting it preserves the
+        historical planning result.
         """
 
+        self.seed_source_channels(source_channels)
         output_issues = validate_outputs(preset.outputs)
         if output_issues:
             raise ValueError('; '.join(str(issue) for issue in output_issues))

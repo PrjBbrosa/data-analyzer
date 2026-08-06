@@ -1531,18 +1531,28 @@ class BatchSheet(QDialog):
         store = getattr(self.parent(), "db_reference_store", None)
         if store is not None:
             snapshot = store.snapshot()
-            return BatchRunner(
+            runner = BatchRunner(
                 self._files,
                 source_registry=self._source_registry,
                 source_context=self._source_context,
                 db_reference_catalog=snapshot,
                 prefer_channel_metadata=snapshot.prefer_channel_metadata,
             )
-        return BatchRunner(
-            self._files,
-            source_registry=self._source_registry,
-            source_context=self._source_context,
-        )
+        else:
+            runner = BatchRunner(
+                self._files,
+                source_registry=self._source_registry,
+                source_context=self._source_context,
+            )
+        # Planning is no-load, so a disk row's channels are invisible to the
+        # runner unless we hand over the probe result the input panel already
+        # holds.  Without it a file that split into logical sources with
+        # disjoint channels (WWT recorded over different spans, HDF split by
+        # sample rate) gets the target planned into the source that never had
+        # it -- Preview refuses outright, Run reports a phantom
+        # ``missing signal``.
+        runner.seed_source_channels(self._input_panel.source_channel_sets())
+        return runner
 
     def _on_run_clicked(self) -> None:
         """Idle-mode 运行 handler — synchronously locks the dialog and starts
