@@ -80,10 +80,10 @@ Run: `PYTEST tests/ui/test_markup_editor.py -q`
 
 ## Task D5(可选,闸门 = D3+D4 全绿): 手柄几何 → `markup/handles.py`
 
-- [ ] **Step 1:** 审计 :901-1096:分「纯几何」(命中判定/缩放矩形计算)与
+- [x] **Step 1:** 审计 :901-1096:分「纯几何」(命中判定/缩放矩形计算)与
   「QGraphicsItem 耦合」两栏。纯几何部分移出并补直接单测(典型:四角/边中点
   命中、等比缩放、裁剪钳制);耦合部分留在 editor。
-- [ ] **Step 2:** `PYTEST tests/ui/test_markup_editor.py -q` + 真机:拖动矩形手柄、
+- [x] **Step 2:** `PYTEST tests/ui/test_markup_editor.py -q` + 真机:拖动矩形手柄、
   裁剪、缩放文字,行为与基线一致。红了 → revert 本任务。
 
 ## Task 6: 收尾

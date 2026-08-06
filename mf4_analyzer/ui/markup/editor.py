@@ -40,6 +40,16 @@ from ...ui_kit.icons import icon_device_pixel_ratio
 from .commands import (_AddItemCommand, _CropCommand, _MoveCommand,
                        _DeleteCommand, _GeometryCommand, _StyleCommand)
 from .items import _ArrowAnnotationItem, _TextAnnotationItem
+from .handles import (
+    CROP_ROLE_PREFIX,
+    bare_role,
+    centered_scale_factor,
+    corner_scale_factor,
+    handle_hit_tolerance,
+    handle_points,
+    nearest_within_tolerance,
+    resize_rect,
+)
 from .serialization import deserialize_item, item_pen, serialize_item
 from .toolbar import (
     build_style_panel,
@@ -658,30 +668,15 @@ class MarkupEditor(QWidget):
         self.refresh_handles()
 
     def handle_at(self, point: QPointF):
-        tol = _HANDLE_HIT_SCREEN_PX / max(self._zoom, 0.1)
-        nearest = None
-        nearest_distance = None
-        for handle in self._handles:
-            center = handle.sceneBoundingRect().center()
-            hit_rect = QRectF(
-                center.x() - tol,
-                center.y() - tol,
-                tol * 2,
-                tol * 2,
-            )
-            if hit_rect.contains(point):
-                distance = (center.x() - point.x()) ** 2 + (center.y() - point.y()) ** 2
-                if nearest_distance is None or distance < nearest_distance:
-                    nearest = handle
-                    nearest_distance = distance
-        return nearest
+        tol = handle_hit_tolerance(_HANDLE_HIT_SCREEN_PX, self._zoom)
+        centers = [h.sceneBoundingRect().center() for h in self._handles]
+        index = nearest_within_tolerance(centers, point, tol)
+        return None if index is None else self._handles[index]
 
     def _cursor_for(self, point: QPointF):
         handle = self.handle_at(point)
         if handle is not None:
-            role = getattr(handle, "_role", "")
-            if role.startswith("crop_"):
-                role = role[5:]
+            role = bare_role(getattr(handle, "_role", ""))
             return self._HANDLE_CURSORS.get(role, Qt.SizeAllCursor)
         if self.markup_item_at(point) is not None:
             return Qt.SizeAllCursor
@@ -736,18 +731,7 @@ class MarkupEditor(QWidget):
 
     def _add_handles_for_item(self, item):
         if isinstance(item, QGraphicsRectItem):
-            rect = item.rect()
-            points = {
-                "tl": rect.topLeft(),
-                "top": QPointF(rect.center().x(), rect.top()),
-                "tr": rect.topRight(),
-                "right": QPointF(rect.right(), rect.center().y()),
-                "br": rect.bottomRight(),
-                "bottom": QPointF(rect.center().x(), rect.bottom()),
-                "bl": rect.bottomLeft(),
-                "left": QPointF(rect.left(), rect.center().y()),
-            }
-            for role, point in points.items():
+            for role, point in handle_points(item.rect()).items():
                 self._make_handle(item.mapToScene(point), role, item)
         elif isinstance(item, QGraphicsLineItem):
             line = item.line()
@@ -766,88 +750,37 @@ class MarkupEditor(QWidget):
         self._make_handle(item.mapToScene(rect.bottomRight()), "scale", item)
 
     def _add_crop_handles(self):
-        rect = self._active_crop_rect
-        for role, point in {
-            "crop_tl": rect.topLeft(),
-            "crop_top": QPointF(rect.center().x(), rect.top()),
-            "crop_tr": rect.topRight(),
-            "crop_right": QPointF(rect.right(), rect.center().y()),
-            "crop_br": rect.bottomRight(),
-            "crop_bottom": QPointF(rect.center().x(), rect.bottom()),
-            "crop_bl": rect.bottomLeft(),
-            "crop_left": QPointF(rect.left(), rect.center().y()),
-        }.items():
-            self._make_handle(point, role, None)
+        for role, point in handle_points(self._active_crop_rect).items():
+            self._make_handle(point, CROP_ROLE_PREFIX + role, None)
 
     def _drag_crop_handle(self, role: str, point: QPointF):
-        rect = QRectF(self._active_crop_rect)
-        if role == "crop_tl":
-            rect.setTopLeft(point)
-        elif role == "crop_top":
-            rect.setTop(point.y())
-        elif role == "crop_tr":
-            rect.setTopRight(point)
-        elif role == "crop_right":
-            rect.setRight(point.x())
-        elif role == "crop_br":
-            rect.setBottomRight(point)
-        elif role == "crop_bottom":
-            rect.setBottom(point.y())
-        elif role == "crop_bl":
-            rect.setBottomLeft(point)
-        elif role == "crop_left":
-            rect.setLeft(point.x())
-        self.set_active_crop_rect(rect.normalized())
+        self.set_active_crop_rect(
+            resize_rect(self._active_crop_rect, role, point)
+        )
 
     def _drag_rect_handle(self, item: QGraphicsRectItem, role: str, point: QPointF):
-        local = item.mapFromScene(point)
-        rect = QRectF(item.rect())
-        if role == "tl":
-            rect.setTopLeft(local)
-        elif role == "top":
-            rect.setTop(local.y())
-        elif role == "tr":
-            rect.setTopRight(local)
-        elif role == "right":
-            rect.setRight(local.x())
-        elif role == "br":
-            rect.setBottomRight(local)
-        elif role == "bottom":
-            rect.setBottom(local.y())
-        elif role == "bl":
-            rect.setBottomLeft(local)
-        elif role == "left":
-            rect.setLeft(local.x())
-        item.setRect(rect.normalized())
+        item.setRect(resize_rect(item.rect(), role, item.mapFromScene(point)))
 
     def _drag_scale_handle(self, item, point: QPointF):
         rect = item.boundingRect()
         if rect.width() <= 0 or rect.height() <= 0:
             return
         if isinstance(item, QGraphicsItemGroup):
+            # Badges grow about their centre so the number stays put.
             center = rect.center()
-            center_scene = item.mapToScene(center)
-            half_width = max(rect.width() / 2.0, 0.001)
-            half_height = max(rect.height() / 2.0, 0.001)
-            scale = max(
-                abs(point.x() - center_scene.x()) / half_width,
-                abs(point.y() - center_scene.y()) / half_height,
-                0.25,
+            scale = centered_scale_factor(
+                item.mapToScene(center), point, rect.width(), rect.height()
             )
             item.setTransformOriginPoint(center)
             item.setScale(scale)
             return
         top_left = rect.topLeft()
-        top_left_scene = item.mapToScene(top_left)
         item.setTransformOriginPoint(top_left)
-        candidates = []
-        if rect.width() > 0.001:
-            candidates.append((point.x() - top_left_scene.x()) / rect.width())
-        if rect.height() > 0.001:
-            candidates.append((point.y() - top_left_scene.y()) / rect.height())
-        if not candidates:
+        scale = corner_scale_factor(
+            item.mapToScene(top_left), point, rect.width(), rect.height()
+        )
+        if scale is None:
             return
-        scale = max(max(candidates), 0.25)
         current = float(item.scale())
         if abs(scale - current) < 1e-9:
             scale = current
