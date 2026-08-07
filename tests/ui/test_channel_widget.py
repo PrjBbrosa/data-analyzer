@@ -663,3 +663,104 @@ def test_refresh_file_preserves_view_attachment_and_tree_interactions(qapp, qtbo
     assert [refreshed.child(i).text(0) for i in range(refreshed.childCount())] == [
         "speed", "torque", "d_dt_speed",
     ]
+
+
+class _LongNameFileData:
+    """Names shaped like the HEAD CAN channels: long, distinguished by suffix."""
+    data = [1, 2, 3]
+    channel_units = {
+        "Com_Motor_Torque_DV": "Nm",
+        "Com_Motor_Torque_PV": "Nm",
+        "Com_Motor_Torque_VT": "",
+    }
+
+    def get_signal_channels(self):
+        return list(self.channel_units)
+
+    def get_color_palette(self):
+        return ["#1769e0", "#8b5cf6", "#f43f5e"]
+
+
+def test_channel_rows_carry_full_name_tooltip(qapp, qtbot):
+    """An elided name must stay readable somewhere — column 0 had no tooltip.
+
+    The Channel column is narrow at the default dock width (real render: ~42 px
+    of text room once indentation, checkbox and swatch are subtracted), so
+    20-character measurement names are always elided there. Rows only had
+    tooltips on the eye column, leaving the name itself unreadable.
+    """
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    _add_attached_file(widget, "file-a", _LongNameFileData())
+
+    parent = widget._file_items["file-a"]
+    tips = {
+        parent.child(i).text(0): parent.child(i).toolTip(0)
+        for i in range(parent.childCount())
+    }
+    assert tips["Com_Motor_Torque_DV"] == "Com_Motor_Torque_DV [Nm]"
+    assert tips["Com_Motor_Torque_PV"] == "Com_Motor_Torque_PV [Nm]"
+    # No unit recorded -> bare name, not a dangling "[]"
+    assert tips["Com_Motor_Torque_VT"] == "Com_Motor_Torque_VT"
+
+
+def test_channel_names_elide_in_the_middle_to_keep_the_suffix(qapp, qtbot):
+    """ElideRight ate the only part that distinguishes these channels.
+
+    ``Com_Motor_Torque_DV`` / ``_PV`` / ``_VT`` share a 16-character prefix.
+    Tail elision renders all three as the same ``Com_Motor_Torq…`` row; middle
+    elision keeps both ends, so the suffix survives at any column width.
+    """
+    from PyQt5.QtGui import QFontMetrics
+    from mf4_analyzer.ui.widgets.channel_tree import _ChannelLeafDelegate
+
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    _add_attached_file(widget, "file-a", _LongNameFileData())
+    delegate = widget.tree.itemDelegate()
+    assert isinstance(delegate, _ChannelLeafDelegate)
+
+    fm = QFontMetrics(widget.tree.font())
+    names = list(_LongNameFileData.channel_units)
+    width = fm.horizontalAdvance(names[0]) * 2 // 3   # forces elision
+
+    tail = {fm.elidedText(n, Qt.ElideRight, width) for n in names}
+    middle = {fm.elidedText(n, Qt.ElideMiddle, width) for n in names}
+    assert len(tail) == 1, "tail elision collapses the three into one label"
+    assert len(middle) == 3, "middle elision keeps them distinguishable"
+    for name, shown in zip(names, (fm.elidedText(n, Qt.ElideMiddle, width)
+                                   for n in names)):
+        assert shown.endswith(name[-2:])
+
+
+def test_delegate_paints_channel_names_with_middle_elision(qapp, qtbot):
+    """Guard the delegate's own elide mode, not just QFontMetrics behaviour."""
+    from PyQt5.QtGui import QFontMetrics
+    from PyQt5.QtWidgets import QStyleOptionViewItem
+
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    _add_attached_file(widget, "file-a", _LongNameFileData())
+    delegate = widget.tree.itemDelegate()
+
+    captured = []
+    original = delegate._paint_text
+
+    def spy(painter, rect, text, color, alignment, option, elide=Qt.ElideRight):
+        captured.append((str(text), elide))
+        return original(painter, rect, text, color, alignment, option, elide)
+
+    delegate._paint_text = spy
+    widget.resize(240, 300)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.tree.expandAll()
+    qapp.processEvents()
+    widget.tree.viewport().grab()
+
+    name_paints = [
+        (text, elide) for text, elide in captured
+        if text in _LongNameFileData.channel_units
+    ]
+    assert name_paints, "channel names were never painted by the delegate"
+    assert all(elide == Qt.ElideMiddle for _text, elide in name_paints)
