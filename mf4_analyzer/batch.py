@@ -4843,4 +4843,3 @@ class BatchRunner:
         return batch_output.write_workbook(
             sheets, path, max_data_rows=_XLSX_MAX_DATA_ROWS,
         )
-

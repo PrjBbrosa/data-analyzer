@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -12,18 +13,56 @@ from mf4_analyzer.batch_image_options import BatchRenderOptions
 from mf4_analyzer.batch_render_qt._builder import build_batch_scene
 from mf4_analyzer.batch_render_qt._export import render_scene_image
 from mf4_analyzer.qt_chart_fonts import chart_font
-from tools.verify_batch_qt_render_parity import (
-    _axis_font_matches_spec,
-    _cases,
-    _plot_corner_ink_counts,
-    _range_close,
-    _scene_integration_assertions,
-    _visible_text_collisions,
-)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "verify_batch_qt_render_parity.py"
+
+
+@lru_cache(maxsize=1)
+def _parity_helpers():
+    """Load concrete foreground canvases only after a test owns qapp."""
+    from tools.verify_batch_qt_render_parity import (
+        _axis_font_matches_spec,
+        _cases,
+        _plot_corner_ink_counts,
+        _range_close,
+        _scene_integration_assertions,
+        _visible_text_collisions,
+    )
+
+    return (
+        _axis_font_matches_spec,
+        _cases,
+        _plot_corner_ink_counts,
+        _range_close,
+        _scene_integration_assertions,
+        _visible_text_collisions,
+    )
+
+
+def _axis_font_matches_spec(record):
+    return _parity_helpers()[0](record)
+
+
+def _cases():
+    return _parity_helpers()[1]()
+
+
+def _plot_corner_ink_counts(scene, image):
+    return _parity_helpers()[2](scene, image)
+
+
+def _range_close(batch, reference):
+    return _parity_helpers()[3](batch, reference)
+
+
+def _scene_integration_assertions(scene, image):
+    return _parity_helpers()[4](scene, image)
+
+
+def _visible_text_collisions(scene):
+    return _parity_helpers()[5](scene)
 
 
 def test_production_qt_renderer_does_not_import_main_ui_or_concrete_canvases():
@@ -68,6 +107,30 @@ def test_parity_tool_declares_complete_batch3_heatmap_matrix():
         "order-time-invalid-cmap",
     ):
         assert case in source
+
+
+def test_module_import_defers_the_foreground_parity_driver():
+    """Pytest collection must not load concrete canvases before qapp exists."""
+    source = Path(__file__).resolve()
+    code = (
+        "import importlib.util, sys; "
+        f"spec = importlib.util.spec_from_file_location('parity_import_probe', {str(source)!r}); "
+        "module = importlib.util.module_from_spec(spec); "
+        "spec.loader.exec_module(module); "
+        "assert 'tools.verify_batch_qt_render_parity' not in sys.modules; "
+        "assert not any(name in sys.modules for name in ("
+        "'mf4_analyzer.ui.pg_canvas.canvas', "
+        "'mf4_analyzer.ui.pg_canvas.heatmap_canvas', "
+        "'mf4_analyzer.ui.pg_canvas.line_canvas'))"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=source.parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_plot_corner_pixel_guard_detects_native_auto_range_button(qapp):
@@ -154,7 +217,7 @@ def _range_record(
     }
 
 
-def test_axis_font_guard_checks_each_side_against_its_own_spec():
+def test_axis_font_guard_checks_each_side_against_its_own_spec(qapp):
     """The two renderers run different sizes on purpose; pooling them drifted.
 
     ``axis_font_pt`` was deliberately raised to 12.0 for the report page while
@@ -212,7 +275,7 @@ def test_axis_font_expectation_tracks_font_scale_not_a_constant(qapp):
     assert scaled_pt != pytest.approx(base_pt)
 
 
-def test_range_guard_ignores_viewport_padding_but_catches_real_drift():
+def test_range_guard_ignores_viewport_padding_but_catches_real_drift(qapp):
     """Auto-ranged y differs by ``suggestPadding`` alone; that is not drift.
 
     The report's stacked panels are shorter than the single-file canvas's, so
@@ -251,7 +314,7 @@ def test_range_guard_ignores_viewport_padding_but_catches_real_drift():
     )
 
 
-def test_range_guard_keeps_manual_y_exact():
+def test_range_guard_keeps_manual_y_exact(qapp):
     """A pinned range is an explicit spec, so it is still compared exactly."""
 
     manual = [_range_record(y=(0.0, 1.1), data_y=(0.1, 1.0), auto_y=False)]

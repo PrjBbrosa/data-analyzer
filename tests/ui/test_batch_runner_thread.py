@@ -310,6 +310,12 @@ def test_sheet_preview_and_result_share_channel_metadata_reference(qtbot, tmp_pa
         export_data=False, export_image=True, data_format="csv",
     ))
 
+    # ``BatchSheet`` refreshes its summary through a short debounce timer.
+    # Read it only once the queued refresh has incorporated channel metadata.
+    qtbot.waitUntil(
+        lambda: "4.5" in sheet._output_panel.effective_preview_text(),
+        timeout=1_000,
+    )
     preview = sheet._output_panel.effective_preview_text()
     assert "1×metadata" in preview
     assert "4.5" in preview

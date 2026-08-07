@@ -336,7 +336,7 @@ def test_view_compact_tabs_is_a_shipped_time_scoped_discovery_hint():
     assert "悬停" in hint.text
 
 
-def test_view_compact_tabs_ranks_between_coaxis_and_custom_action():
+def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export():
     # Exact-match queue order: a discovery hint's priority IS its rotation
     # position, so pin it. (view.history is ship="later" -> absent.)
     assert _discovery_walk(mode="time", plot_mode="overlay") == [
@@ -347,6 +347,7 @@ def test_view_compact_tabs_ranks_between_coaxis_and_custom_action():
         "coaxis.merge",
         "view.compact_tabs",
         "chart.custom_action_slot",
+        "batch.export_options",
     ]
 
 

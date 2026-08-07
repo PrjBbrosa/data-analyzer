@@ -725,41 +725,41 @@ def test_review_modal_accept_idempotent(qapp, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_analyzer_main_window_has_public_load_file(qapp):
+def test_analyzer_main_window_has_public_load_file(qtbot):
     """The Analyzer ``MainWindow`` must expose ``load_file(path)`` as a
     public method (Stage 5 plan requirement)."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
-    try:
-        assert callable(getattr(win, "load_file", None))
-        # Signature accepts both str and Path; we don't actually invoke
-        # the loader (no MF4 on disk in this test). The smoke test
-        # `tests/ui/test_main_window_smoke.py` already covers the
-        # private _load_one body.
-    finally:
-        win.close()
+    qtbot.addWidget(win)
+    assert callable(getattr(win, "load_file", None))
+    # Signature accepts both str and Path; we don't actually invoke
+    # the loader (no MF4 on disk in this test). The smoke test
+    # `tests/ui/test_main_window_smoke.py` already covers the
+    # private _load_one body.
 
 
-def test_analyzer_load_file_delegates_to_load_one(qapp, monkeypatch):
+def test_analyzer_load_file_delegates_to_load_one(qtbot, monkeypatch):
     """``MainWindow.load_file`` delegates to the private ``_load_one``
     flow — the only Analyzer-side modification authorized by Stage 5.
     """
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
-    try:
-        captured: list[str] = []
-        monkeypatch.setattr(
-            win, "_load_one", lambda fp: captured.append(fp)
-        )
-        win.load_file("/tmp/some.mf4")
-        assert captured == ["/tmp/some.mf4"]
-        # Also accepts a Path.
-        win.load_file(Path("/tmp/another.mf4"))
-        assert captured[-1] == str(Path("/tmp/another.mf4"))
-    finally:
-        win.close()
+    qtbot.addWidget(win)
+    captured: list[tuple[str, object]] = []
+
+    def _load_one(fp, *, progress_callback=None):
+        captured.append((fp, progress_callback))
+
+    monkeypatch.setattr(win, "_load_one", _load_one)
+    win.load_file("/tmp/some.mf4")
+    assert captured[0][0] == "/tmp/some.mf4"
+    assert callable(captured[0][1])
+    # Also accepts a Path.
+    win.load_file(Path("/tmp/another.mf4"))
+    assert captured[-1][0] == str(Path("/tmp/another.mf4"))
+    assert callable(captured[-1][1])
 
 
 # ---------------------------------------------------------------------------

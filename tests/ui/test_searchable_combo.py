@@ -32,6 +32,7 @@ def test_completer_model_rebinds_after_addItems(qapp):
     cb.addItems(["C", "D", "E"])
     assert cb.count() == 3
     assert cb.completer().model() is not None
+    assert cb._proxy_model.sourceModel() is cb.model()
     assert first_model is not None  # original kept alive but unused
 
 

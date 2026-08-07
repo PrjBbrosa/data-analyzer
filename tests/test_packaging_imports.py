@@ -6,10 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from mf4_analyzer.app_meta import APP_VERSION
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SPEC_PATH = REPO_ROOT / "build" / "spec" / "TraceLab7.6.spec"
+APP_ARTIFACT_NAME = f"TraceLab{APP_VERSION.removeprefix('v')}"
+SPEC_PATH = REPO_ROOT / "build" / "spec" / f"{APP_ARTIFACT_NAME}.spec"
 WINDOWS_BUILD_SCRIPT = REPO_ROOT / "tools" / "build_windows_folder.ps1"
+WINDOWS_RUN_WRAPPER = REPO_ROOT / "tools" / "run_windows_exe.bat"
 
 REQUIRED_HIDDEN_IMPORTS = [
     "mf4_analyzer.ui_kit",
@@ -85,6 +89,13 @@ def test_windows_build_script_lists_new_modules_and_widget_collection():
     assert "mf4_analyzer.acquisition_ui.widgets" in text
     assert "pyqtgraph" in text
     assert '"--collect-submodules", "pyqtgraph"' in text
+
+
+def test_windows_run_wrapper_defaults_to_current_release_name():
+    text = WINDOWS_RUN_WRAPPER.read_text(encoding="utf-8")
+
+    assert f'set "APPNAME={APP_ARTIFACT_NAME}"' in text
+    assert 'if not "%~1"=="" set "APPNAME=%~1"' in text
 
 
 def test_packaging_hidden_import_modules_import_on_this_checkout():

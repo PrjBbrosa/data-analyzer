@@ -32,6 +32,23 @@ def _settings(tmp_path, name="db-reference.ini"):
     return QSettings(str(tmp_path / name), QSettings.IniFormat)
 
 
+def _dispose_dialog(dialog):
+    """Delete an unparented test dialog before pytest-qt's post-call turn.
+
+    ``qtbot.addWidget`` closes widgets during pytest's teardown phase, but
+    pytest-qt first runs ``QApplication.processEvents()`` immediately after
+    the test call.  A rejected, unparented dialog still owns a QTableWidget
+    whose delayed layout timer can fire in that gap.  Flush this test-owned
+    top-level dialog's DeferredDelete event first so the table and its index
+    widgets are gone before that global event pass.
+    """
+    if sip.isdeleted(dialog):
+        return
+    dialog.close()
+    dialog.deleteLater()
+    QCoreApplication.sendPostedEvents(dialog, QEvent.DeferredDelete)
+
+
 def test_catalog_delegate_ignores_deleted_scientific_reference_editor(qapp):
     """A queued Qt delegate geometry update may outlive its cell widget."""
     from PyQt5.QtWidgets import QStyleOptionViewItem
@@ -271,6 +288,14 @@ def test_dialog_cancel_and_escape_leave_store_and_view_unchanged(qtbot, tmp_path
     assert dlg2.result() == QDialog.Rejected
     assert store.snapshot() == before
     assert len(mode_spy2) == 0
+
+    # Both dialogs have completed their behavioral assertions.  They are
+    # unparented test-only top levels, so dispose them before pytest-qt's
+    # post-call event drain can run their delayed QTableWidget layouts.
+    _dispose_dialog(dlg2)
+    _dispose_dialog(dlg)
+    assert sip.isdeleted(dlg2)
+    assert sip.isdeleted(dlg)
 
 
 def test_dialog_save_is_atomic_and_updates_provenance(qtbot, tmp_path):

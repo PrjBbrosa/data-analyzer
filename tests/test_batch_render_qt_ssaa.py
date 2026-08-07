@@ -8,6 +8,11 @@ and the metadata that has to survive the downscale.
 """
 from __future__ import annotations
 
+from functools import lru_cache
+from pathlib import Path
+import subprocess
+import sys
+
 import numpy as np
 import pyqtgraph as pg
 import pytest
@@ -21,10 +26,22 @@ from mf4_analyzer.batch_render_qt._export import (
     render_scene_image,
     supersample_factor,
 )
-from tools.verify_batch_qt_render_parity import _cases
 
 
-ALL_CASES = {case.name: case for case in _cases()}
+@lru_cache(maxsize=1)
+def _all_cases():
+    """Load the foreground parity driver only after pytest has a qapp.
+
+    The driver imports concrete analyzer canvases for visual reference output.
+    Importing it at pytest collection time initializes another pyqtgraph path
+    before QApplication, which can leave queued LabelItem resize callbacks
+    behind for the later acquisition-ui suite.
+    """
+    from tools.verify_batch_qt_render_parity import _cases
+
+    return {case.name: case for case in _cases()}
+
+
 ONE_PER_KIND = (
     "time-subplot8",
     "fft-linear",
@@ -122,6 +139,30 @@ def test_supersample_factor_clamps_to_qimage_and_memory_limits():
     assert supersample_factor(16_000, 320) == 2
 
 
+def test_module_import_defers_the_foreground_parity_driver():
+    """Collection must not import concrete canvas classes before qapp exists."""
+    source = Path(__file__).resolve()
+    code = (
+        "import importlib.util, sys; "
+        f"spec = importlib.util.spec_from_file_location('ssaa_import_probe', {str(source)!r}); "
+        "module = importlib.util.module_from_spec(spec); "
+        "spec.loader.exec_module(module); "
+        "assert 'tools.verify_batch_qt_render_parity' not in sys.modules; "
+        "assert not any(name in sys.modules for name in ("
+        "'mf4_analyzer.ui.pg_canvas.canvas', "
+        "'mf4_analyzer.ui.pg_canvas.heatmap_canvas', "
+        "'mf4_analyzer.ui.pg_canvas.line_canvas'))"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=source.parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize("name", ONE_PER_KIND)
 def test_one_to_one_render_matches_the_widget_render_primitive(
     qapp, monkeypatch, name
@@ -132,7 +173,7 @@ def test_one_to_one_render_matches_the_widget_render_primitive(
     1 the two have to agree pixel for pixel, or the swap moved the layout.
     """
     _force_factor(monkeypatch, 1)
-    scene = _open(ALL_CASES[name])
+    scene = _open(_all_cases()[name])
     try:
         image = render_scene_image(scene)
 
@@ -162,7 +203,7 @@ def test_export_restores_the_device_pixel_state_it_scales_up(qapp, name):
     def pen_value(pen):
         return pen.widthF(), pen.color().name(), pen.style(), pen.isCosmetic()
 
-    scene = _open(ALL_CASES[name])
+    scene = _open(_all_cases()[name])
     try:
         scene.show_and_settle()
         items = list(scene.widget.scene().items())
@@ -207,7 +248,7 @@ def test_repeated_exports_do_not_compound_the_scaled_pens(qapp, name):
     next one three times heavier again — and that the scene has reached a
     steady state by the second export.
     """
-    scene = _open(ALL_CASES[name])
+    scene = _open(_all_cases()[name])
     try:
         images = [render_scene_image(scene) for _ in range(3)]
         counts = [_ink_pixels(image, scene.theme.background) for image in images]
@@ -228,7 +269,7 @@ def test_supersampling_replaces_hard_strokes_with_blended_ones(
     into a band of blends, so the count of pixels sitting at the exact pen
     colour collapses while the stroke keeps its weight.
     """
-    case = ALL_CASES["fft-linear"]
+    case = _all_cases()["fft-linear"]
 
     def measure(factor: int) -> tuple[int, int]:
         _force_factor(monkeypatch, factor)
@@ -265,7 +306,7 @@ def test_legend_keeps_its_one_to_one_size_through_the_downscale(
     then shrunk by the downscale — measured at roughly a quarter of its ink
     before the export learned to clear the flag.
     """
-    case = ALL_CASES["fft-linear"]
+    case = _all_cases()["fft-linear"]
 
     def legend_ink(factor: int) -> int:
         _force_factor(monkeypatch, factor)
@@ -292,7 +333,7 @@ def test_legend_keeps_its_one_to_one_size_through_the_downscale(
 
 
 def test_export_metadata_and_resolution_survive_the_downscale(qapp, tmp_path):
-    scene = _open(ALL_CASES["time-subplot8"], width=1920, height=1080)
+    scene = _open(_all_cases()["time-subplot8"], width=1920, height=1080)
     try:
         assert qt_export.supersample_factor(1920, 1080) > 1
         image = render_scene_image(scene, metadata={"Title": "batch page"})
@@ -376,7 +417,7 @@ def test_supersampled_markers_keep_their_one_to_one_size(qapp, monkeypatch):
 
 def test_prepared_pass_scales_pens_without_moving_the_plot_geometry(qapp):
     """Widening pens inflates bounding rects; it must not move the layout."""
-    scene = _open(ALL_CASES["time-subplot8"])
+    scene = _open(_all_cases()["time-subplot8"])
     try:
         scene.show_and_settle()
         before_rects = [p.vb.sceneBoundingRect() for p in scene.plots]

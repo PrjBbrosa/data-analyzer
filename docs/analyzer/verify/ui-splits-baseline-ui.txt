@@ -47,15 +47,15 @@ tmp_path = PosixPath('/private/tmp/pytest-of-donghang/pytest-910/test_sheet_prev
 
     def test_sheet_preview_and_result_share_channel_metadata_reference(qtbot, tmp_path):
         import dataclasses
-    
+
         import numpy as np
         import pandas as pd
         import pytest
-    
+
         from mf4_analyzer.batch import BatchOutput, BatchRunner
         from mf4_analyzer.io import FileData
         from mf4_analyzer.ui.drawers.batch import BatchSheet
-    
+
         n = 1024
         t = np.arange(n) / 512.0
         fd = FileData(
@@ -77,7 +77,7 @@ tmp_path = PosixPath('/private/tmp/pytest-of-donghang/pytest-910/test_sheet_prev
         sheet.apply_outputs(BatchOutput(
             export_data=False, export_image=True, data_format="csv",
         ))
-    
+
         preview = sheet._output_panel.effective_preview_text()
 >       assert "1×metadata" in preview
 E       AssertionError: assert '1×metadata' in 'dB 参考：等待文件解析'
@@ -98,7 +98,7 @@ ________ test_view_compact_tabs_ranks_between_coaxis_and_custom_action _________
             "chart.custom_action_slot",
         ]
 E       AssertionError: assert ['toolbar.sho...ct_tabs', ...] == ['toolbar.sho...ct_tabs', ...]
-E         
+E
 E         Left contains one more item: 'batch.export_options'
 E         Use -v to get more diff
 

@@ -253,10 +253,19 @@ class SearchableComboBox(QComboBox):
         self._sync_popup_geometry()
 
     def _rebind_completer_model(self):
-        self._proxy_model.setSourceModel(self.model())
+        # QComboBox keeps its internal item model while add/clear mutates it.
+        # Re-setting that exact same source while it is emitting its change
+        # signals can leave QSortFilterProxyModel with a stale pending-change
+        # record (visible as "inconsistent changes reported by source model"
+        # during inspector combo refreshes).  Only a genuine model replacement
+        # needs a proxy rebind; ordinary item mutations are propagated by Qt.
+        source_model = self.model()
+        if self._proxy_model.sourceModel() is not source_model:
+            self._proxy_model.setSourceModel(source_model)
         c = self.completer()
-        if c is not None:
+        if c is not None and c.model() is not self._proxy_model:
             c.setModel(self._proxy_model)
+        if c is not None:
             c.popup().setItemDelegate(self._completer_delegate)
         self._sync_popup_geometry()
 
@@ -320,6 +329,14 @@ class SearchableComboBox(QComboBox):
         self._rebind_completer_model()
 
     def clear(self):
+        # Qt's internal QComboBox model clears through a reset-like sequence
+        # that its attached completer proxy does not consistently observe on
+        # Cocoa.  Detach for that one mutation, then reconnect to the same
+        # live model after it has settled.  Without this, every inspector
+        # candidate refresh emits "inconsistent changes reported by source
+        # model" and can leave the completion popup out of sync.
+        if self._proxy_model.sourceModel() is self.model():
+            self._proxy_model.setSourceModel(None)
         super().clear()
         self._rebind_completer_model()
 

@@ -26,12 +26,24 @@ def test_staging_dir_is_under_output_not_assets():
     assert ASSETS_DIR.parts[-3:] == ("mf4_analyzer", "help", "assets")
 
 
-def test_import_screenshot_uses_real_checked_in_samples():
-    from tools.gen_help_screenshots import EXTRA_FILES, IMPORT_SAMPLES
+def test_import_screenshot_builds_clean_checkout_parser_samples(tmp_path):
+    from mf4_analyzer.io.loader import DataLoader
+    from tools.gen_help_screenshots import (
+        EXTRA_FILES, IMPORT_SAMPLE_SUFFIXES, build_import_samples,
+    )
 
     assert EXTRA_FILES == {"imports": "imports-panel.png"}
-    assert [path.suffix for path in IMPORT_SAMPLES] == [".wwt", ".zfd", ".mat"]
-    assert all(path.exists() for path in IMPORT_SAMPLES)
+    samples = build_import_samples(tmp_path)
+    assert tuple(path.suffix for path in samples) == IMPORT_SAMPLE_SUFFIXES
+    assert all(path.exists() for path in samples)
+    for loader, path in zip(
+        (DataLoader.load_wwt, DataLoader.load_zfd, DataLoader.load_mat), samples,
+    ):
+        assert loader(path), f"generated parser fixture did not load: {path.name}"
+
+    source = (Path(__file__).resolve().parents[1] / "tools" /
+              "gen_help_screenshots.py").read_text(encoding="utf-8")
+    assert "testdoc" not in source
 
 
 def test_analysis_wait_uses_job_service_not_retired_window_callbacks():

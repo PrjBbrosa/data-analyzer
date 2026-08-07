@@ -7,10 +7,10 @@ then re-run with --promote to copy them over mf4_analyzer/help/assets/. The
 guides' numbered pins are tied to UI element positions, so after promoting
 NEW screenshots you must re-check the pin left/top% in each *-guide.html.
 
-The ``imports`` shot loads checked-in real WWT, ZFD and MAT samples.  It is
-used by the software manual as visual evidence that the current build opens
-those formats; unlike the four analysis panels, it is not a synthetic-data
-demonstration.
+The ``imports`` shot builds small valid WWT, ZFD and MAT parser fixtures, then
+loads them through the real import path.  It is used by the software manual as
+visual evidence that the current build opens those formats; unlike the four
+analysis panels, it is not a CSV synthetic-data demonstration.
 
 Renders against a REAL Qt platform (cocoa on macOS) by default so the panels
 look exactly as the user sees them. --platform offscreen is a headless
@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import struct
 import sys
 import tempfile
 from pathlib import Path
@@ -67,11 +68,58 @@ CH_RPM = "电机转速"
 CH_SIGNAL = "方向盘扭矩"
 CH_TORQUE = "电机扭矩"
 
-IMPORT_SAMPLES = (
-    REPO_ROOT / "testdoc" / "wwt" / "NLTNP_000089.wwt",
-    REPO_ROOT / "testdoc" / "wwt" / "end of travel_1.zfd",
-    REPO_ROOT / "testdoc" / "175rpm_-45deg-270tighten.mat",
-)
+IMPORT_SAMPLE_SUFFIXES = (".wwt", ".zfd", ".mat")
+
+
+def _wwt_record(tag: str, n: int, *, name: str, unit: str = "",
+                a: float = 1.0, b: float = 0.0, c: float = 0.0,
+                payload: bytes = b"") -> bytes:
+    """Build one minimal WinWert 156-byte record plus its inline payload."""
+    record = bytearray(156)
+    record[:5] = tag.encode("ascii").ljust(5, b"\0")
+    struct.pack_into("<IH", record, 5, n, 0)
+    for offset, text, size in ((0x1B, name, 40), (0x43, unit, 17)):
+        encoded = text.encode("latin-1")[:size]
+        record[offset:offset + len(encoded)] = encoded
+    struct.pack_into("<ddd", record, 0x84, a, b, c)
+    return bytes(record) + payload
+
+
+def build_import_samples(directory: Path) -> tuple[Path, Path, Path]:
+    """Create valid WWT/ZFD/MAT files without depending on local test data."""
+    from scipy.io import savemat
+
+    directory.mkdir(parents=True, exist_ok=True)
+    n = 256
+    time = np.arange(n, dtype=np.float64) * 0.01
+    torque = np.sin(2 * np.pi * time)
+
+    wwt = directory / "generated-help-import.wwt"
+    header = bytearray(0x211)
+    header[:len(b"WinWert091293")] = b"WinWert091293"
+    struct.pack_into("<H", header, 0x20F, 2)
+    wwt.write_bytes(
+        bytes(header)
+        + _wwt_record("Zeit", n, name="Time", unit="s", b=0.01)
+        + _wwt_record(
+            "Real", n, name="Steering torque", unit="Nm",
+            payload=np.asarray(torque, dtype="<f8").tobytes(),
+        )
+    )
+
+    zfd = directory / "generated-help-import.zfd"
+    travel = np.linspace(-25.0, 25.0, n, dtype=np.float32)
+    zfd.write_bytes(
+        b"ZFGE2\nTraceLab generated ZFD\nHelp import sample\n"
+        + struct.pack("<dHHH", 0.01, 4, n, 0)
+        + b"E1: travel\nmm\n\0\0"
+        + struct.pack("<dd", float(travel.min()), float(travel.max()))
+        + travel.astype("<f4", copy=False).tobytes()
+    )
+
+    mat = directory / "generated-help-import.mat"
+    savemat(mat, {"time": time, "motor_torque": np.cos(2 * np.pi * time)})
+    return wwt, zfd, mat
 
 
 def _install_isolated_qsettings(settings_dir: Path) -> None:
@@ -182,14 +230,14 @@ def _wait_for_analysis(trigger, section: str, win, timeout_ms=60_000) -> bool:
     return not state["timed_out"] and not state["failed"]
 
 
-def _drive_imports(win, app) -> None:
+def _drive_imports(win, app, samples: tuple[Path, Path, Path]) -> None:
     """Load three real measurement formats and show one WWT curve."""
     from PyQt5.QtCore import QEventLoop, QTimer
 
-    missing = [str(path) for path in IMPORT_SAMPLES if not path.exists()]
+    missing = [str(path) for path in samples if not path.exists()]
     if missing:
         raise FileNotFoundError(f"missing import screenshot samples: {missing}")
-    for path in IMPORT_SAMPLES:
+    for path in samples:
         win.load_file(str(path))
         app.processEvents()
         # Let the real proxy/source models finish one file before the next
@@ -277,7 +325,10 @@ def main() -> int:
     app.processEvents()
 
     if args.only == "imports":
-        _drive_imports(win, app)
+        _drive_imports(
+            win, app,
+            build_import_samples(Path(settings_tmp.name) / "import-samples"),
+        )
         modes = EXTRA_SHOTS
     else:
         win.load_file(str(build_synthetic_csv()))

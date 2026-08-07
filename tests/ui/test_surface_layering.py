@@ -14,10 +14,16 @@ from mf4_analyzer.ui.side_panels import SidePanelStrip
 QSS_PATH = Path("mf4_analyzer/ui_kit/style.qss")
 
 
-def _apply_app_qss(qapp):
-    old = qapp.styleSheet()
-    qapp.setStyleSheet(QSS_PATH.read_text(encoding="utf-8"))
-    return old
+def _apply_widget_qss(widget):
+    """Apply production QSS only to the visual tree under test.
+
+    Reapplying it to ``QApplication`` late in the full UI suite forces Qt to
+    repolish every earlier, unowned widget tree.  These tests render a single
+    root widget, so an ancestor stylesheet has the same relevant cascade
+    without mutating global application state.
+    """
+    widget.setStyleSheet(QSS_PATH.read_text(encoding="utf-8"))
+    return widget
 
 
 def _qss_block(qss, selector):
@@ -28,9 +34,8 @@ def _qss_block(qss, selector):
 
 
 def test_surface_shell_uses_porcelain_tray_and_real_statusbar(qapp, qtbot):
-    old = _apply_app_qss(qapp)
+    win = _apply_widget_qss(MainWindow())
     try:
-        win = MainWindow()
         qtbot.addWidget(win)
         win.show()
         qtbot.waitExposed(win)
@@ -62,7 +67,7 @@ def test_surface_shell_uses_porcelain_tray_and_real_statusbar(qapp, qtbot):
         win.statusBar.showMessage("surface ok")
         assert win.statusBar.currentMessage() == "surface ok"
     finally:
-        qapp.setStyleSheet(old)
+        win.setStyleSheet("")
 
 
 def test_surface_qss_contract_has_porcelain_bars_and_flat_chart_toolbar():
@@ -137,9 +142,8 @@ def test_surface_mode_buttons_use_readable_centered_type():
 
 
 def test_surface_mode_buttons_are_vertically_centered_in_topbar(qapp, qtbot):
-    old = _apply_app_qss(qapp)
+    win = _apply_widget_qss(MainWindow())
     try:
-        win = MainWindow()
         qtbot.addWidget(win)
         win.resize(1450, 850)
         win.show()
@@ -156,13 +160,12 @@ def test_surface_mode_buttons_are_vertically_centered_in_topbar(qapp, qtbot):
             button_center = button.mapTo(win.toolbar, button.rect().center()).y()
             assert abs(button_center - toolbar_center_y) <= 1, button.text()
     finally:
-        qapp.setStyleSheet(old)
+        win.setStyleSheet("")
 
 
 def test_surface_file_area_is_outer_card_aligned_with_channel_card(qapp, qtbot):
-    old = _apply_app_qss(qapp)
+    win = _apply_widget_qss(MainWindow())
     try:
-        win = MainWindow()
         qtbot.addWidget(win)
         win.resize(1450, 850)
         win.show()
@@ -191,7 +194,7 @@ def test_surface_file_area_is_outer_card_aligned_with_channel_card(qapp, qtbot):
         assert "border: none;" in file_scroll_block
         assert "border-radius" not in file_scroll_block
     finally:
-        qapp.setStyleSheet(old)
+        win.setStyleSheet("")
 
 
 def test_surface_collapsed_rails_use_compact_affordance_widths():
@@ -341,9 +344,8 @@ def test_batch_inline_file_manager_keeps_rounded_border_arcs_with_real_children(
     """The inline body/list viewport must never overpaint the parent arc."""
     from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
 
-    old = _apply_app_qss(qapp)
+    panel = _apply_widget_qss(InputPanel())
     try:
-        panel = InputPanel()
         qtbot.addWidget(panel)
         panel.resize(360, 700)
         panel.show()
@@ -377,13 +379,12 @@ def test_batch_inline_file_manager_keeps_rounded_border_arcs_with_real_children(
                 assert center.alpha() > 245
                 assert min(center.red(), center.green(), center.blue()) > 245
     finally:
-        qapp.setStyleSheet(old)
+        panel.setStyleSheet("")
 
 
 def test_surface_version_affordance_is_transparent_icon_text(qapp, qtbot):
-    old = _apply_app_qss(qapp)
+    win = _apply_widget_qss(MainWindow())
     try:
-        win = MainWindow()
         qtbot.addWidget(win)
         win.show()
         qtbot.waitExposed(win)
@@ -406,13 +407,12 @@ def test_surface_version_affordance_is_transparent_icon_text(qapp, qtbot):
         assert bar_rect.right() - btn_rect.right() >= 4
         assert bar_rect.bottom() - btn_rect.bottom() >= 2
     finally:
-        qapp.setStyleSheet(old)
+        win.setStyleSheet("")
 
 
 def test_surface_panel_children_leave_outer_shell_visible(qapp, qtbot):
-    old = _apply_app_qss(qapp)
+    win = _apply_widget_qss(MainWindow())
     try:
-        win = MainWindow()
         qtbot.addWidget(win)
         win.resize(1450, 850)
         win.show()
@@ -434,13 +434,12 @@ def test_surface_panel_children_leave_outer_shell_visible(qapp, qtbot):
         assert not scroll.autoFillBackground()
         assert not scroll.viewport().autoFillBackground()
     finally:
-        qapp.setStyleSheet(old)
+        win.setStyleSheet("")
 
 
 def test_surface_top_bottom_and_panels_render_rounded_corners(qapp, qtbot):
-    old = _apply_app_qss(qapp)
+    win = _apply_widget_qss(MainWindow())
     try:
-        win = MainWindow()
         qtbot.addWidget(win)
         win.resize(1450, 850)
         win.show()
@@ -459,4 +458,4 @@ def test_surface_top_bottom_and_panels_render_rounded_corners(qapp, qtbot):
             assert max(alphas) < 12, f"{label} has opaque corner pixels: {alphas}"
             assert _has_opaque_white_body(widget), f"{label} lost its opaque body"
     finally:
-        qapp.setStyleSheet(old)
+        win.setStyleSheet("")
