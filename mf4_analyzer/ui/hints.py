@@ -385,6 +385,26 @@ _HINTS = (
         requires=frozenset({"annotation_on"}),
         priority=100,
     ),
+    # ---- 分析信号选择范围 (View-scoped pickers) ----
+    # The 信号 pickers used to enumerate every loaded file; they now offer only
+    # the focused TimeDomain View's attached files, matching what the navigator
+    # and channel tree already project. The failure this answers is silent: ten
+    # files open, one in the View, and the user searches for a channel that
+    # simply is not listed. Nothing on screen explains the scope, and there is
+    # no gesture to discover — so this is a context hint on the three analysis
+    # sections rather than a discovery entry that retires once exercised.
+    # Deliberately NOT a nudge: nudge predicates read HintState signals fed by
+    # _ChartCard._nudge_signals(), and View attachment is navigator state that
+    # never reaches it (same reasoning as view.compact_tabs above).
+    # Priority 75 seats it under the sections' headline gestures (slice at 100)
+    # and level with fft.preview_pick_source.
+    Hint(
+        id="analysis.view_scope",
+        text="分析信号只列当前 View 的文件",
+        surface="context",
+        modes=frozenset({"fft", "fft_time", "order"}),
+        priority=75,
+    ),
     # ---- 共轴组 (shared-axis groups): shipped 2026-06-27. Designed in
     # 2026-06-24-overlay-shared-axis-and-channel-indent-design.md, landed and
     # user-verified on-device. coaxis.merge is a discovery hint retired by the

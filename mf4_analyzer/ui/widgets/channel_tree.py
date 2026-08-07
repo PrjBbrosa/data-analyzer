@@ -41,6 +41,23 @@ from ._swatches import _fmt_rate, _swatch_icon
 INTERNAL_FILE_FIDS_MIME = "application/x-tracelab-file-fids"
 
 
+def _channel_tip(channel, fd):
+    """Full channel name (+ unit) for the row's column-0 tooltip.
+
+    The Channel column stretches but stays narrow at the default dock width,
+    so long names are elided. Without a tooltip an elided name was simply
+    unreadable — the HEAD files in this domain routinely carry 20+ character
+    names whose distinguishing part is a trailing ``_DV`` / ``_PV`` / ``_VT``
+    suffix, which is exactly what elision eats.
+    """
+    unit = ""
+    try:
+        unit = (getattr(fd, "channel_units", None) or {}).get(channel) or ""
+    except Exception:
+        unit = ""
+    return f"{channel} [{unit}]" if unit else str(channel)
+
+
 class _ChannelLeafDelegate(QStyledItemDelegate):
     """Paint channel leaves with one invariant three-column geometry.
 
@@ -131,7 +148,8 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             )
         painter.restore()
 
-    def _paint_text(self, painter, rect, text, color, alignment, option):
+    def _paint_text(self, painter, rect, text, color, alignment, option,
+                    elide=Qt.ElideRight):
         painter.save()
         painter.setFont(option.font)
         painter.setPen(color)
@@ -139,7 +157,7 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
         painter.drawText(
             rect,
             alignment,
-            metrics.elidedText(str(text or ""), Qt.ElideRight, rect.width()),
+            metrics.elidedText(str(text or ""), elide, rect.width()),
         )
         painter.restore()
 
@@ -188,9 +206,15 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             icon = index.data(Qt.DecorationRole)
             if isinstance(icon, QIcon) and not icon.isNull():
                 icon.paint(painter, swatch, Qt.AlignCenter)
+            # Elide the middle, not the tail: measurement channels in this
+            # domain differ only by a trailing suffix (Com_Motor_Torque_DV vs
+            # _PV vs _VT), so ElideRight collapses distinct channels into
+            # identical-looking rows. Keeping both ends readable is what makes
+            # a narrow column still usable; the tooltip carries the full name.
             self._paint_text(
                 painter, text, index.data(Qt.DisplayRole), self.TEXT,
                 Qt.AlignLeft | Qt.AlignVCenter, option,
+                elide=Qt.ElideMiddle,
             )
             return
 
@@ -564,6 +588,7 @@ class MultiFileChannelWidget(QWidget):
                 ci.setCheckState(0, Qt.Unchecked)
                 ci.setData(0, Qt.UserRole, ('channel', fid, ch))
                 ci.setIcon(0, _swatch_icon(color))
+                ci.setToolTip(0, _channel_tip(ch, fd))
                 ci.setForeground(0, QBrush(QColor('#111827')))
                 ci.setForeground(1, QBrush(QColor('#64748b')))
                 raster_item.addChild(ci)
@@ -603,6 +628,7 @@ class MultiFileChannelWidget(QWidget):
                 ci.setCheckState(0, Qt.Unchecked)
                 ci.setData(0, Qt.UserRole, ('channel', fid, ch))
                 ci.setIcon(0, _swatch_icon(color))
+                ci.setToolTip(0, _channel_tip(ch, fd))
                 ci.setForeground(0, QBrush(QColor('#111827')))
                 ci.setForeground(1, QBrush(QColor('#64748b')))
                 fi.addChild(ci)

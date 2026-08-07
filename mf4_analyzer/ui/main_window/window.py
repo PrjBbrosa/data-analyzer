@@ -1619,13 +1619,27 @@ class MainWindow(
         except Exception:
             return
         new_lo, new_hi = xlim
-        # Skip restoration if the captured window has zero or
-        # degenerate overlap with the new axis' autoscale window — that
-        # means the underlying data extent is no longer compatible
-        # (channel set changed, file closed, etc.). Use <= / >= so a
-        # single tangent point (zero-length intersection) also falls
-        # back to autoscale instead of locking onto a one-pixel slice.
-        if new_hi <= cur_lo or new_lo >= cur_hi:
+        # Two ways the captured window can stop belonging to what is drawn:
+        #   1. zero / degenerate overlap with the new axis window — the extent
+        #      is outright incompatible (file closed, channel set swapped).
+        #      Use <= / >= so a single tangent point counts as no overlap
+        #      instead of locking onto a one-pixel slice.
+        #   2. it overlaps but overruns the plotted data — a window sized for
+        #      a longer recording, leaving the chart mostly blank.
+        # Either way, abandoning the window is not enough on its own: a replot
+        # onto existing axes leaves X untouched, so returning here would keep
+        # the very window just rejected. Frame the new extent instead.
+        if (
+            new_hi <= cur_lo
+            or new_lo >= cur_hi
+            or not self._preserved_xlim_fits_data(canvas, new_lo, new_hi)
+        ):
+            frame = getattr(canvas, 'frame_x_to_data', None)
+            if callable(frame):
+                try:
+                    frame()
+                except Exception:
+                    pass
             return
         try:
             ax.set_xlim(new_lo, new_hi)
@@ -1641,6 +1655,44 @@ class MainWindow(
                 flush()
             except Exception:
                 pass
+
+    @staticmethod
+    def _preserved_xlim_fits_data(canvas, lo, hi):
+        """Is a carried-over X window still a window *into* the new data?
+
+        Preserving X across a replot exists so ticking a channel on or off
+        does not yank the viewport away from wherever the user zoomed. That
+        only makes sense while the carried window still sits inside what is
+        drawn. When the replot swapped in a shorter recording, the old window
+        keeps its old width and the chart ends up mostly blank to the right —
+        49.5 s of data framed by a 185 s window left over from another file.
+        The overlap check above passes there (the ranges do intersect), so it
+        cannot catch this on its own.
+
+        Rule: keep the window only when it lies within the plotted extent;
+        otherwise let the fresh ``_set_xrange_to_data_union`` framing stand.
+        Zooming in is preserved (a zoom window is a subset by construction);
+        a full-view window survives too, since it equals the extent. Data
+        growing longer than the window is left alone on purpose — that is a
+        legitimate "stay where I am looking" case, and Home reframes it.
+        """
+        union = None
+        getter = getattr(canvas, 'get_data_x_union', None)
+        if callable(getter):
+            try:
+                union = getter()
+            except Exception:
+                union = None
+        if union is None:
+            return True                      # nothing plotted to judge against
+        union_lo, union_hi = union
+        span = union_hi - union_lo
+        if not np.isfinite(span) or span <= 0:
+            return True
+        # 1% of the extent absorbs float drift and pyqtgraph's own rounding
+        # on the full-view case without admitting a visibly empty margin.
+        tol = 0.01 * span
+        return lo >= union_lo - tol and hi <= union_hi + tol
 
     def _on_time_canvas_xrange_changed(self, lo, hi):
         # In split mode: skip update when focus is on the secondary canvas so
@@ -2351,10 +2403,32 @@ class MainWindow(
         # Re-plot remaining channels (or clear if empty)
         self.plot_time()
 
+    def _analysis_scope_fids(self):
+        """File ids the analysis signal pickers may offer, in navigator order.
+
+        Scope is the focused TimeDomain View's attached files — the same set
+        the navigator's file list and channel tree project. Ten open files with
+        one dragged into the View means one file's channels are searchable, not
+        ten: picking a signal the View never loaded produced an analysis with
+        no counterpart anywhere on screen.
+
+        Before any View exists (early startup) there is nothing to scope to,
+        so every loaded file stays available rather than blanking the pickers.
+        """
+        resolved = self._focused_time_view_state()
+        if resolved is None:
+            return list(self.files)
+        return [
+            fid for fid in resolved[1].attached_file_ids if fid in self.files
+        ]
+
     def _update_combos(self):
         sig_cands = []
         rpm_cands = []
-        for fid, fd in self.files.items():
+        for fid in self._analysis_scope_fids():
+            fd = self.files.get(fid)
+            if fd is None:
+                continue
             px = f"[{fd.short_name}] "
             for ch in fd.get_signal_channels():
                 sig_cands.append((px + ch, (fid, ch)))

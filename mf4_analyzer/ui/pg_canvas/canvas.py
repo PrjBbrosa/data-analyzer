@@ -2034,6 +2034,26 @@ class TimeDomainCanvasPG(QWidget):
         """Return the current visible X range, or None before any plot."""
         return self._capture_primary_xlim()
 
+    def get_data_x_union(self):
+        """Return ``(lo, hi)`` spanning all plotted data, or None when empty.
+
+        This is what Home frames to and what a fresh ``plot_channels`` seeds
+        the axes with — i.e. the full extent of what is currently drawn, with
+        no view padding. Owners compare a preserved window against it to tell
+        "user zoomed into the data" from "window left over from other data".
+        """
+        return self._data_x_union()
+
+    def frame_x_to_data(self):
+        """Re-frame X onto the plotted extent (what Home does for X).
+
+        A replot that reuses existing axes leaves the X range alone, so a
+        window sized for a previous, longer recording survives onto shorter
+        data. Owners call this when they decide the carried-over window no
+        longer belongs to what is drawn.
+        """
+        self._set_xrange_to_data_union()
+
     def restore_visible_xlim(self, xlim):
         """Restore visible X through the existing synchronized restore path."""
         if xlim is not None:

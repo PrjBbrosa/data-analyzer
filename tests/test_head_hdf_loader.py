@@ -119,6 +119,88 @@ def test_duplicate_truncated_channel_names_are_disambiguated_not_overwritten(tmp
         assert g["channel_metadata"][c]["quantity"] == "torque"
 
 
+def test_ext_name_str_restores_names_truncated_by_name_str(tmp_path):
+    """``;#ext name str`` 是被 16 字符截断的 ``name str`` 的完整名来源。
+
+    真实文件 260417-ripple 实测：19 个 CAN 通道全部踩满 16 字符，用户在通道树
+    里看到的是 ``Com_TAS_Torque (`` / ``Com_TAS_Angle (C`` 这种断在半途的名字，
+    拉宽面板也补不回来——字符压根没进内存。其中 4 个还塌成同一个
+    ``Com_Motor_Torque``，只能靠 ``[idx]`` 序号消歧，序号对工程师无意义。
+
+    ext 行保留了完整名（``Com_Motor_Torque_DV (CAN.Sig.2)``）；尾部
+    ``(CAN.Sig.N)`` 是 HEAD 的采集槽位标记而非信号名，剥掉后既是全名，
+    也让这 4 个通道靠真实后缀天然分开。
+    """
+    n = 4
+    s = lambda v: np.full(n, float(v))
+    ch = lambda name, ext, v: {
+        "name": name, "ext_name": ext, "factor": 1, "quantity": "torque",
+        "unit": "Nm", "calibration": 1.0, "samples": s(v),
+    }
+    p = write_head_hdf(
+        tmp_path / "ext.hdf", n_scans=n, delta=1.0, start_of_data=4096,
+        channels=[
+            ch("Com_Motor_Torque", "Com_Motor_Torque_DV (CAN.Sig.2)", 1),
+            ch("Com_Motor_Torque", "Com_Motor_Torque_PV (CAN.Sig.6)", 2),
+            ch("Com_Motor_Torque", "Com_Motor_Torque (CAN.Sig.11)", 3),
+            ch("Com_TAS_Torque (", "Com_TAS_Torque (CAN.Sig.14)", 4),
+        ])
+    groups = DataLoader.load_hdf(str(p))
+    g = next(g for g in groups if "1x" in g["label_suffix"])
+    cols = [c for c in g["channels"] if c != "Time"]
+    assert cols == [
+        "Com_Motor_Torque_DV",
+        "Com_Motor_Torque_PV",
+        "Com_Motor_Torque",
+        "Com_TAS_Torque",
+    ]
+    # 每列还是自己那一路数据，去重没有错位
+    for col, v in zip(cols, (1, 2, 3, 4)):
+        np.testing.assert_allclose(g["data"][col].to_numpy(), s(v))
+    # 截断前的原值留档，老工程按旧键排查时能查回去
+    meta = g["channel_metadata"]["Com_TAS_Torque"]
+    assert meta["head_name_str"] == "Com_TAS_Torque ("
+    assert meta["ext_name"] == "Com_TAS_Torque (CAN.Sig.14)"
+
+
+def test_ext_name_collision_falls_back_to_source_tagged_name(tmp_path):
+    """剥掉 ``(CAN.Sig.N)`` 后真撞名时，退回带标记的完整 ext 名而不是序号。
+
+    同一 CAN 信号采两路时剥离后同名。带槽位标记的 ext 名天然唯一，比
+    ``[idx]`` 序号更能告诉工程师这两列的区别在哪。
+    """
+    n = 3
+    ch = lambda ext, v: {
+        "name": "Com_RPS_Speed (", "ext_name": ext, "factor": 1,
+        "quantity": "speed of rotation", "unit": "rpm", "calibration": 1.0,
+        "samples": np.full(n, float(v)),
+    }
+    p = write_head_hdf(
+        tmp_path / "collide.hdf", n_scans=n, delta=1.0, start_of_data=4096,
+        channels=[ch("Com_RPS_Speed (CAN.Sig.7)", 1),
+                  ch("Com_RPS_Speed (CAN.Sig.9)", 2)])
+    groups = DataLoader.load_hdf(str(p))
+    g = next(g for g in groups if "1x" in g["label_suffix"])
+    cols = [c for c in g["channels"] if c != "Time"]
+    assert cols == ["Com_RPS_Speed", "Com_RPS_Speed (CAN.Sig.9)"]
+    np.testing.assert_allclose(g["data"][cols[1]].to_numpy(), np.full(n, 2.0))
+
+
+def test_channels_without_ext_name_keep_name_str(tmp_path):
+    """没有 ext 行的通道（麦克风等非 CAN 通道）仍用 ``name str``。"""
+    n = 4
+    p = write_head_hdf(
+        tmp_path / "noext.hdf", n_scans=n, delta=1.0, start_of_data=2048,
+        channels=[
+            {"name": "MOTOR X", "factor": 1, "quantity": "acceleration",
+             "unit": "m/s^2", "calibration": 1.0,
+             "samples": np.arange(n, dtype=float)},
+        ])
+    groups = DataLoader.load_hdf(str(p))
+    g = next(g for g in groups if "1x" in g["label_suffix"])
+    assert "MOTOR X" in g["channels"]
+
+
 def test_unique_channel_names_keep_their_exact_name(tmp_path):
     """无碰撞时通道列名保持原样（去重只对真正重复的名字生效）。"""
     n = 4

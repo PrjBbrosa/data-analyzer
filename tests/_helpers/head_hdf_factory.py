@@ -36,6 +36,8 @@ def write_head_hdf(path, *, channels, n_scans, delta=3.861e-06,
     for i, c in enumerate(channels, 1):
         a(f"channel definition:                {i}")
         a(f"name str:                          {c['name']}")
+        if c.get("ext_name"):
+            a(f";#ext name str:                    {c['ext_name']}")
         a(f";#moniker:                         {c.get('moniker', '')}")
         a(f"physical channel nbr:              {i - 1}")
         a(f"physical quantity:                 {c['quantity']}")

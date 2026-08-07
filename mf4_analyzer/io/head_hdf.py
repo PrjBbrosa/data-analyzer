@@ -22,6 +22,7 @@ class HeadChannel:
     unit: str = ""
     calibration: float = 1.0
     db_reference: str = ""
+    ext_name: str = ""
     moniker: str = ""
     physical_channel_nbr: int = -1
     impl_type: str = "FLOAT32"
@@ -46,6 +47,30 @@ class HeadHdfFile:
     timezone: str
     channels: list = field(default_factory=list)
     ch_order: list = field(default_factory=list)
+
+
+# HEAD 给每个 CAN 导入通道的 ext 名追加的来源标记，形如 ``(CAN.Sig.14)``。
+# 它是采集端的槽位编号，不是信号名的一部分——工程师认的是 ``Com_TAS_Torque``。
+_EXT_SOURCE_TAG = re.compile(r"\s*\((?:CAN|LIN|FlexRay)\.Sig\.\d+\)\s*$")
+
+
+def full_channel_name(ch: HeadChannel) -> str:
+    """通道的完整名（丢失信息的 ``name str`` 的替代）。
+
+    HEAD 的 ``name str`` 字段硬截断到 16 字符：实测一个真实文件里 19 个 CAN
+    通道全部踩线，其中 4 个塌成同一个 ``Com_Motor_Torque``（真名分别以
+    ``_DV`` / ``_PV`` / ``_VT`` 结尾或无后缀），2 个塌成 ``Com_RPS_SpeedFil``。
+    ``;#ext name str`` 行保留完整名（``Com_Motor_Torque_DV (CAN.Sig.2)``），
+    剥掉来源标记后既是全名又天然互不相同。
+
+    没有 ext 行的通道（麦克风、加速度计等非 CAN 通道）退回 ``name str``——
+    它们的名字本来就短，没被截断。
+    """
+    ext = (ch.ext_name or "").strip()
+    if not ext:
+        return ch.name
+    stripped = _EXT_SOURCE_TAG.sub("", ext).strip()
+    return stripped or ext
 
 
 def _kv(line: str):
@@ -101,6 +126,8 @@ def parse_head_hdf(path) -> HeadHdfFile:
         if section == "channel" and cur is not None:
             if key == "name str":
                 cur.name = val
+            elif key == "ext name str":
+                cur.ext_name = val
             elif key == "physical quantity":
                 cur.quantity = val
             elif key == "physical unit":
