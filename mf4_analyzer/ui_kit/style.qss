@@ -105,10 +105,36 @@ QDoubleSpinBox:disabled {
  * vector glyph rasterized to the screen DPR keeps the chevron crisp
  * across scale factors and aligns naturally inside the 22px gutter.
  */
+/* The gutter's own corner radii are NOT decoration — they are what keeps
+ * the parent's rounded frame visible. ::drop-down is an opaque rectangle
+ * laid over the combo's right edge; with square corners its fill paints
+ * straight over the two right-hand border arcs, so the frame reads as a
+ * pill on the left and a butchered square on the right (the arcs simply
+ * vanish, measured 0.44 of the left corners' border ink).
+ *
+ * Radius rule: subcontrol radius = parent border-radius - border-width.
+ * ::drop-down is laid out against the PADDING box, which is already
+ * inset by the 1px border, so its arc is one pixel inside the parent's.
+ * Here 7px - 1px = 6px. Verified by pixel-diffing the right corners
+ * against the (subcontrol-free) left corners: 6px restores the arc with
+ * the fill flush against it, while 7px overshoots and leaves a feathered
+ * gap between fill and border.
+ *
+ * This is the ONE gutter rule in the file, and it stays that way because
+ * every combo in the app is 7px — the two call sites that used to pick
+ * their own radius (#measurementEventSelect at 6px, the import dialog's
+ * 34px field at 8px) were folded back in. 7px is the input family's
+ * radius, shared with QLineEdit / QSpinBox / QDoubleSpinBox, which combos
+ * sit beside constantly in forms; a combo-only value would break that
+ * alignment. Introducing a differently-rounded combo means re-deriving
+ * this gutter radius for it — tests/ui_kit/test_combo_corner_radius.py
+ * fails on both the mismatch and the divergence. */
 QComboBox::drop-down {
     width: 22px;
     border: none;
     border-left: 1px solid #eef2f7;
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
     background-color: #fafbfd;
 }
 QComboBox::drop-down:hover { background-color: #eef2f7; }
@@ -1105,12 +1131,20 @@ QLabel#measurementEventPrefix {
     font-size: 12px;
     font-weight: 800;
 }
+/* Tighter padding and type than the standard field, but deliberately NOT a
+ * tighter corner: every combo in the app shares one 7px radius, so the
+ * family reads as a single control regardless of row height.
+ *
+ * Spelled out rather than left to cascade from the input rule at the top:
+ * this block sets the `border` shorthand, and Qt re-resolves the whole
+ * border box from the winning rule, so an omitted radius renders as 0 —
+ * measured, the arc came back at 0.80 of the left corners' ink. */
 QComboBox#measurementEventSelect,
 QComboBox#batchEventSelect {
     min-height: 24px;
     padding: 1px 6px;
     border: 1px solid #dfe5ee;
-    border-radius: 6px;
+    border-radius: 7px;
     background-color: #ffffff;
     color: #111827;
     font-size: 11px;
@@ -2886,6 +2920,10 @@ QLineEdit#channelConfigHtmlConfigSearch:focus,
 QLineEdit#channelConfigHtmlChannelSearch:focus,
 QDialog#channelConfigHtmlRenameDialog QLineEdit:focus,
 QDialog#channelConfigHtmlImportDialog QComboBox:focus { border-color: #0a6de7; }
+/* The 34px field family above is otherwise 8px, but a combo is a combo: it
+ * rejoins the app-wide 7px so every dropdown matches. Keeps the height and
+ * padding of its neighbours; only the corner defers to the combo family. */
+QDialog#channelConfigHtmlImportDialog QComboBox { border-radius: 7px; }
 QScrollArea#channelConfigHtmlConfigScroll { border: none; background-color: #fbfcfe; }
 QWidget#channelConfigHtmlConfigList { background-color: #fbfcfe; }
 QWidget#channelConfigHtmlConfigCopy { background-color: transparent; }
