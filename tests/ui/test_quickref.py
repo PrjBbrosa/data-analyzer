@@ -208,3 +208,36 @@ def test_dataclasses_are_frozen():
     assert dataclasses.is_dataclass(row)
     with pytest.raises(dataclasses.FrozenInstanceError):
         row.desc = "mutated"
+
+
+def _row_by_desc(desc):
+    for _group, row in _all_rows():
+        if row.desc == desc:
+            return row
+    raise AssertionError(f"quickref has no row named {desc!r}")
+
+
+def test_catalog_covers_getting_a_file_into_a_view():
+    """Opening a file is not the same as putting it in a View.
+
+    Everything downstream — plotting, the channel tree, and the analysis signal
+    pickers — is scoped to the focused View's attached files, so the catalog
+    has to name both the drag and the auto-attach toggle that governs it.
+    """
+    attach = _row_by_desc("把文件加入当前 View")
+    assert "拖" in attach.gesture
+    auto = _row_by_desc("自动加入开关")
+    assert "开" in auto.sub and "关" in auto.sub
+
+
+def test_catalog_states_the_analysis_picker_scope():
+    """A short signal list is silent by design; the catalog must explain it."""
+    row = _row_by_desc("分析信号的可选范围")
+    assert "当前 View" in row.sub
+    for section in ("FFT", "阶次"):
+        assert section in row.sub
+
+
+def test_catalog_says_how_to_read_a_truncated_channel_name():
+    row = _row_by_desc("看通道全名")
+    assert "悬停" in row.gesture

@@ -96,6 +96,16 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="MF4 · MDF · BLF · ASCII · TDMS · WWT · ZFD · MAT · 表格 · HDF · 音视频",
             ),
             QuickRow("BLF 报文解码", sub="需配 DBC 文件"),
+            QuickRow(
+                "把文件加入当前 View",
+                sub="打开只是载入；要画图/分析得先加入 View",
+                gesture="从文件列表拖到通道树",
+            ),
+            QuickRow(
+                "自动加入开关",
+                sub="开=新文件自动进当前 View · 关=只打开不加入",
+                gesture="文件区链接图标",
+            ),
             QuickRow("保存会话", gesture=".tlproj 项目"),
             QuickRow("软件说明书", gesture="右下角 📖"),
         ),
@@ -184,6 +194,15 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 "合并为共轴比幅值",
                 sub="Ctrl+单击不连续多选；Shift+单击连续范围",
                 gesture="多选后右键",
+            ),
+            QuickRow(
+                "看通道全名",
+                sub="名字过长时中间省略，首尾都保留",
+                gesture="悬停通道名",
+            ),
+            QuickRow(
+                "分析信号的可选范围",
+                sub="FFT / FFT-时间 / 阶次的信号框只列当前 View 已加入的文件",
             ),
         ),
     ),

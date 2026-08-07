@@ -401,3 +401,37 @@ def test_axis_group_menu_open_retires_coaxis_merge_discovery(qapp, qtbot, monkey
     solo_pos = widget.tree.visualItemRect(second).center()
     widget._on_context_menu(solo_pos)
     assert "coaxis.merge" not in recorded
+
+
+def test_analysis_view_scope_surfaces_on_every_analysis_section():
+    """The View-scoped signal pickers need an explanation on all three pages.
+
+    The pickers offer only the focused View's attached files. When a wanted
+    channel is absent there is no error and no gesture to discover — the list
+    is simply short — so the footer carries the rule on the sections where the
+    pickers live, and nowhere else.
+    """
+    for mode in ("fft", "fft_time", "order"):
+        ids = [hint.id for hint in hints.context_hints(HintState(mode=mode))]
+        assert "analysis.view_scope" in ids, mode
+
+    time_ids = [
+        hint.id
+        for hint in hints.context_hints(
+            HintState(mode="time", plot_mode="overlay")
+        )
+    ]
+    assert "analysis.view_scope" not in time_ids, (
+        "time domain picks channels in the tree, not through the signal picker"
+    )
+
+
+def test_analysis_view_scope_trails_the_section_headline_gesture():
+    """Scope explanation must not displace a section's primary gesture."""
+    ids = [
+        hint.id
+        for hint in hints.context_hints(
+            HintState(mode="order", chart_kind="order")
+        )
+    ]
+    assert ids.index("order.slice") < ids.index("analysis.view_scope")

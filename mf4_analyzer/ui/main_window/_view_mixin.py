@@ -145,6 +145,13 @@ class ViewMixin:
             )
         finally:
             self._applying_view = old_applying_view
+        # The analysis signal pickers are scoped to this View's attached files
+        # (`_analysis_scope_fids`), and this is the one funnel every projection
+        # goes through — View switch, file attach, file detach. Repopulate here
+        # or the pickers keep offering the previous View's files.
+        update_combos = getattr(self, '_update_combos', None)
+        if callable(update_combos):
+            update_combos()
 
     def _sync_focus_accent(self):
         idx = self._focused_view_idx
