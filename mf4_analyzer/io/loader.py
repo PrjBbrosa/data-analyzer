@@ -15,7 +15,7 @@ from .blf_format import (
     _raw_blf_channels,
     _read_blf_frames,
 )
-from .head_hdf import parse_head_hdf
+from .head_hdf import full_channel_name as head_full_channel_name, parse_head_hdf
 from .wwt_format import load_wwt_groups
 from .zfd_format import load_zfd_groups
 from .mat_format import load_mat_groups
@@ -694,7 +694,8 @@ class DataLoader:
 
         # 标定 + 丢全 NaN；收集被丢通道名+原因（不静默丢弃）。带 1-based 文件内
         # 序号 idx：HEAD 的 name str 截断到 16 字符会让物理不同的通道塌成同名，
-        # 用序号消歧（moniker / physical_channel_nbr 实测常为同值，无法消歧）。
+        # 序号是最后的消歧兜底（moniker / physical_channel_nbr 实测常为同值）。
+        # 正常路径已不靠它——full_channel_name 从 `ext name str` 取回了全名。
         live = []
         dropped = []
         for idx, c in enumerate(hf.channels, 1):
@@ -703,7 +704,9 @@ class DataLoader:
                 reason = (f"non-FLOAT32: {c.impl_type}"
                           if c.impl_type and c.impl_type != "FLOAT32"
                           else "no samples (unknown)")
-                dropped.append({"name": c.name, "reason": reason})
+                dropped.append(
+                    {"name": head_full_channel_name(c), "reason": reason}
+                )
                 continue
             # HEAD FLOAT32 样本本身已是物理工程值；calibration 是元数据，
             # 不可当作对原始样本的乘法增益（旧 bug 会把转角/转速/扭矩放大到
@@ -711,7 +714,9 @@ class DataLoader:
             # calibration 仍存入 channel_metadata 供显示/参考。
             s = c.samples
             if np.isnan(s).all():
-                dropped.append({"name": c.name, "reason": "all-NaN"})
+                dropped.append(
+                    {"name": head_full_channel_name(c), "reason": "all-NaN"}
+                )
                 continue
             live.append((idx, c, s))
 
@@ -739,20 +744,29 @@ class DataLoader:
             units = {}
             cmeta = {}
             for idx, c, s in items:
-                # 组内去重：截断同名（如 4 个 Com_Motor_Torque）不能用同一 dict
-                # 键——否则后者覆盖前者、真实数据被全 0 通道盖掉。首次出现保留原名，
-                # 碰撞时追加文件内序号 [idx]（罕见二次碰撞再补下划线兜底）。
-                name = c.name
+                # 组内去重：`name str` 截断出的同名（如 4 个 Com_Motor_Torque）
+                # 不能用同一 dict 键——否则后者覆盖前者、真实数据被全 0 通道盖掉。
+                # full_channel_name 走 `ext name str`，已经把这类碰撞在源头解开；
+                # 下面两级兜底留给真同名（同一信号采两路）和无 ext 行的老文件：
+                # 先退回带来源标记的完整 ext 名（天然唯一），再退回文件内序号。
+                name = head_full_channel_name(c)
                 if name in data:
-                    name = f"{c.name} [{idx}]"
-                    while name in data:
-                        name = f"{name}_"
+                    qualified = (c.ext_name or "").strip()
+                    if qualified and qualified not in data:
+                        name = qualified
+                    else:
+                        name = f"{name} [{idx}]"
+                        while name in data:
+                            name = f"{name}_"
                 data[name] = s
                 units[name] = c.unit
                 cmeta[name] = {
                     "quantity": c.quantity, "unit": c.unit,
                     "calibration": c.calibration,
                     "db_reference": c.db_reference, "moniker": c.moniker,
+                    # 原始 `name str`（16 字符截断值）留档：老工程文件按它存过
+                    # 通道键，排查「通道对不上」时要能查回去。
+                    "head_name_str": c.name, "ext_name": c.ext_name,
                     "physical_channel_nbr": c.physical_channel_nbr,
                     "raster_factor": c.factor, "impl_type": c.impl_type,
                     "equalization": c.equalization, "emphasis": c.emphasis,
