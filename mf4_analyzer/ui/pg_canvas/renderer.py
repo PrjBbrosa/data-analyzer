@@ -145,6 +145,28 @@ _INK_MIN_BUCKETS = 350
 
 
 # ---------------------------------------------------------------------------
+# Vector-AA / raster-upgrade admission band (spec §4.2 / §4.3 / §5).
+#
+# One shared boundary, two consumers: the idle-AA gate refuses vector AA while
+# the summed ink of native-AA-path lines exceeds _INK_AA_OFF (re-allowing only
+# below _INK_AA_ON), and the dense-raster backend ADMITS a line for the smooth
+# pixmap upgrade over the same band — the lines vector AA cannot afford are
+# exactly the ones the raster path exists for, and sharing the band keeps the
+# two decisions from flapping against each other at the boundary.
+#
+# Calibration anchors (2026-08-08, Cocoa dpr 2.0): the smooth control is
+# ≈145k dev px and its idle AA frame (240–475 ms) is today's accepted
+# behavior — it MUST stay allowed, so the band sits above it. The 6ch
+# oscillating rows (≈612k/row) and the 1ch fit-Y case (≈4.1M) measured
+# 3.6 s and 63 s per AA frame — they must stay blocked. Same calibration
+# discipline as the constants above: change spec §5 first, re-measure with
+# scripts/probe_aa_ink_budget.py on real hardware.
+# ---------------------------------------------------------------------------
+_INK_AA_ON = 200_000
+_INK_AA_OFF = 300_000
+
+
+# ---------------------------------------------------------------------------
 # High-variation envelope cap (CRC / rolling-counter style channels).
 #
 # Keep the previous private constant/helper surface for tests and local probes,
