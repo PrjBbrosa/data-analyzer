@@ -27,6 +27,7 @@ Usage:
     .venv/bin/python scripts/probe_aa_ink_budget.py sweep-buckets --json-out out.json
     .venv/bin/python scripts/probe_aa_ink_budget.py aa-frame --json-out out.json
     .venv/bin/python scripts/probe_aa_ink_budget.py raster-build --json-out out.json
+    .venv/bin/python scripts/probe_aa_ink_budget.py overlay-gate --json-out out.json
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -152,6 +154,42 @@ def _timed_repaint(canvas, viewport, *, retries=1, floor_ms=1.0):
         if elapsed_ms >= floor_ms:
             break
     return elapsed_ms, elapsed_ms < floor_ms
+
+
+def _wait_window_exposed(app, widget, *, timeout_ms=3000.0):
+    """Spin the event loop until the window server has really mapped ``widget``.
+
+    ``show()`` + one ``processEvents()`` is NOT enough on Cocoa when a probe
+    creates and closes a canvas per case: the next window can still be
+    unexposed when the first repaint is requested, and an unexposed window
+    turns ``viewport.repaint()`` into a silent no-op. Observed directly — a
+    whole case measuring 0.0/0.1/0.0 ms for AA-off, first-AA and steady-AA
+    frames while the identical case immediately before it measured
+    4.5/203.5/204.7 ms, and the layout width differed too (1490 vs 1511 px),
+    i.e. the window had not even settled its geometry. This is the same
+    missed-repaint failure ``_timed_repaint``'s floor guard exists to CATCH;
+    waiting for exposure is what PREVENTS it, because no number of retries
+    can make an unmapped window paint.
+
+    Returns True when exposed. Callers should record a False as a suspect
+    measurement rather than trusting the frame times that follow.
+    """
+    handle = widget.windowHandle()
+    deadline = time.perf_counter() + float(timeout_ms) / 1000.0
+    while time.perf_counter() < deadline:
+        app.processEvents()
+        if handle is None:
+            handle = widget.windowHandle()
+        try:
+            if handle is not None and handle.isExposed():
+                # One more spin so the exposure-driven relayout/resize lands
+                # before anything reads _current_pixel_width().
+                app.processEvents()
+                return True
+        except Exception:
+            return False
+        time.sleep(0.01)
+    return False
 
 
 def _filter_cases(cases, spec):
@@ -481,6 +519,461 @@ def cmd_raster_build(_args):
 
 
 # --------------------------------------------------------------------------
+# overlay-gate : old overlay density gate vs ink gate, disagreement set
+#                (plan 2026-08-08-overlay-density-gate-ink-migration Task 1)
+# --------------------------------------------------------------------------
+#
+# The overlay AA gate still ships TWO independent refusals
+# (quality._idle_aa_density_ok):
+#
+#   old:  _overlay_density_pressure_status() -- >= 2 visible curves whose RAW
+#         decimation ratio (source samples / _current_pixel_width) reaches
+#         _SUBPLOT_DENSE_DECIMATION (8.0);
+#   ink:  the frame's summed native-AA ink vs _INK_AA_ON / _INK_AA_OFF.
+#
+# The two disagree in both directions, and this subcommand measures the whole
+# 2x2 so the migration decision rests on numbers rather than on the argument:
+#
+#   A  high ratio / low ink  -- old BLOCKS, ink ALLOWS  = false positive, the
+#                               class the migration would RELEASE. Its measured
+#                               AA frame IS the risk of the migration.
+#   B  low ratio / high ink  -- old ALLOWS, ink BLOCKS  = false negative, the
+#                               class the old gate never contributed to.
+#   C  high ratio / high ink -- both block (no behavior change).
+#   D  low ratio / low ink   -- both allow (no behavior change).
+#
+# GO / NO-GO (fixed by the plan before any number was taken): class A's AA-on
+# frame <= 300 ms -> go; > 300 ms -> the conclusion becomes "overlay needs a
+# tighter ink band of its own", not "delete the gate".
+#
+# Fixture calibration (2026-08-08). The plan's first-draft frequencies (1.0 /
+# 1.3 Hz for the smooth pairs) do NOT land in their intended quadrants on this
+# canvas: they measure 334.2k dev px of frame ink, i.e. above _INK_AA_OFF, so
+# the ink gate refuses them and neither A (false positive) nor D (double-low)
+# exists at those parameters. Ink is linear in the number of displayed cycles
+# (f x duration), so both smooth pairs were retuned DOWN in frequency until the
+# frame ink sits just under _INK_AA_ON: 0.56 / 0.73 Hz -> ~187k dev px. That is
+# deliberately the WORST case inside the released region rather than a
+# comfortable one -- the migration releases exactly those overlays whose frame
+# ink clears the band, so the most expensive AA frame it can hand a user is the
+# one at the band edge. A2 is a supplementary mid-band point (0.25 / 0.33 Hz,
+# ~84k) that gives the cost-vs-ink slope, so a NO-GO verdict can name where an
+# overlay-specific band would have to sit instead of just failing.
+#
+# A and D differ ONLY in source sample count (1M @ 20 kHz vs 10k @ 200 Hz over
+# the same 50 s span, identical waveform) -- that isolates the raw density the
+# old gate keys on, with ink held constant. B and C are the same controlled
+# pair on the oscillating side.
+#
+# Real machine only: these are Cocoa paint timings. Class B and C AA frames are
+# expected to take tens of seconds each (that is the cost the ink gate exists
+# to refuse), not a hang.
+
+OVERLAY_GATE_AMPLITUDE = 100.0
+
+OVERLAY_GATE_CASES = (
+    {
+        "key": "A", "kind": "smooth",
+        "label": "A false-positive (hi ratio/lo ink)",
+        "expect": "old=block ink=allow",
+        "n_points": 1_000_000, "fs": 20_000.0, "freqs": (0.56, 0.73),
+    },
+    {
+        "key": "D", "kind": "smooth",
+        "label": "D double-low   (lo ratio/lo ink)",
+        "expect": "old=allow ink=allow",
+        "n_points": 10_000, "fs": 200.0, "freqs": (0.56, 0.73),
+    },
+    {
+        "key": "A2", "kind": "smooth",
+        "label": "A2 mid-band    (hi ratio/lo ink)",
+        "expect": "old=block ink=allow",
+        "n_points": 1_000_000, "fs": 20_000.0, "freqs": (0.25, 0.33),
+    },
+    {
+        "key": "B", "kind": "oscillating",
+        "label": "B false-negative(lo ratio/hi ink)",
+        "expect": "old=allow ink=block",
+        "n_points": 10_000, "fs": 200.0, "freqs": (97.0, 94.0),
+    },
+    {
+        "key": "C", "kind": "oscillating",
+        "label": "C double-high  (hi ratio/hi ink)",
+        "expect": "old=block ink=block",
+        "n_points": 1_000_000, "fs": 20_000.0, "freqs": (2300.0, 2437.0),
+    },
+)
+
+OVERLAY_GATE_GO_LIMIT_MS = 300.0
+
+
+def make_overlay_rows(*, n_points, fs, freqs, tag):
+    """Two-channel overlay fixture: pure sines, +-OVERLAY_GATE_AMPLITUDE.
+
+    A plain sine (never a synthesized square / alternating sequence) keeps the
+    RenderProfile on ``general``: an alternating full-scale sequence would
+    classify as ``dense_discrete`` and be refused by the raster-cost gate
+    instead of the ink gate, measuring the wrong mechanism.
+    """
+    import numpy as np
+
+    t = np.arange(int(n_points), dtype=np.float64) / float(fs)
+    rows = []
+    for i, freq in enumerate(freqs):
+        sig = OVERLAY_GATE_AMPLITUDE * np.sin(2.0 * np.pi * float(freq) * t)
+        rows.append((
+            f"Motor Speed {i + 1}", True, t, sig,
+            COLORS[i % len(COLORS)], "rpm", tag,
+        ))
+    return rows
+
+
+@contextmanager
+def _overlay_pressure_disabled():
+    """Simulate Task 2 (deleting the old overlay density gate) for one block.
+
+    Patches ``QualityManager._overlay_density_pressure_status`` on the CLASS,
+    not the instance: ``QualityManager`` is a ``_CanvasBackref``, whose
+    ``__setattr__`` forwards any name outside ``_owned_names`` /
+    ``_delegate_names`` to the CANVAS — an instance-level patch would land on
+    the wrong object and be silently ignored by the gate.
+
+    No product code is modified; this only lets the probe read the
+    post-migration verdict and, for class A, actually reach the AA frame the
+    shipped gate refuses to let it paint.
+    """
+    from mf4_analyzer.ui.pg_canvas.quality import QualityManager
+
+    original = QualityManager._overlay_density_pressure_status
+    QualityManager._overlay_density_pressure_status = (
+        lambda self: {"blocked": False, "count": 0, "labels": ()}
+    )
+    try:
+        yield
+    finally:
+        QualityManager._overlay_density_pressure_status = original
+
+
+def _overlay_gate_line_metrics(canvas):
+    """Per-line source density + recorded ink for the current frame."""
+    pixel_width = int(canvas._current_pixel_width())
+    lines = []
+    for ck, name, (axis, line) in canvas._channel_lines.composite_items():
+        try:
+            source_points = int(len(canvas.channel_data.get(ck)[1]))
+        except Exception:
+            source_points = 0
+        state = canvas._line_ink_state.get(ck)
+        try:
+            ink = float(state[0])
+        except (TypeError, IndexError, ValueError):
+            ink = float("nan")
+        try:
+            xd, _ = line.plot_data_item.getData()
+            displayed = 0 if xd is None else int(len(xd))
+        except Exception:
+            displayed = 0
+        try:
+            ylim = [round(float(v), 1) for v in axis.get_ylim()]
+        except Exception:
+            ylim = [0.0, 0.0]
+        lines.append({
+            "name": str(name),
+            "source_points": source_points,
+            "decimation_ratio": (
+                source_points / pixel_width if pixel_width > 0 else float("inf")
+            ),
+            "ink_dev_px": ink,
+            "displayed_points": displayed,
+            "ylim": ylim,
+        })
+    return pixel_width, lines
+
+
+def _run_overlay_gate_case(app, case, *, self_check=False):
+    import numpy as np
+
+    label = case["label"]
+    rows = make_overlay_rows(
+        n_points=case["n_points"], fs=case["fs"], freqs=case["freqs"],
+        tag=f"overlay-gate-{case['key']}",
+    )
+    canvas, viewport = _new_canvas(app)
+    canvas.raise_()
+    canvas.activateWindow()
+    exposed = _wait_window_exposed(app, canvas)
+    canvas.plot_channels(
+        rows, mode="overlay",
+        render_context_key=("overlay-gate", case["key"]),
+    )
+    app.processEvents()
+    viewport.repaint()
+    # Production Y auto-fit, then settle the pending refresh so the recorded
+    # per-line ink belongs to the geometry actually on screen.
+    canvas.fit_y_to_visible_x()
+    canvas._flush_pending_refresh()
+    app.processEvents()
+    viewport.repaint()
+
+    quality = canvas._quality
+    pixel_width, lines = _overlay_gate_line_metrics(canvas)
+    frame_ink = float(quality._frame_native_ink_total())
+    pressure = quality._overlay_density_pressure_status()
+    raster_cost = quality._high_raster_cost_status()
+    density = quality._density_status()
+    overlay_mode = bool(getattr(canvas, "_overlay_mode", False))
+
+    # Verdict pair. Order matters: read the SHIPPED gate first, then the
+    # post-migration one, so the hysteresis seeding the first call performs is
+    # the same seeding production would perform today.
+    gate_today = bool(quality._idle_aa_density_ok())
+    status_today = quality.quality_status()
+    with _overlay_pressure_disabled():
+        gate_post = bool(quality._idle_aa_density_ok())
+
+    result = {
+        "key": case["key"], "label": label, "expect": case["expect"],
+        "fixture": {
+            "n_points": case["n_points"], "fs": case["fs"],
+            "freqs": list(case["freqs"]), "kind": case["kind"],
+            "amplitude": OVERLAY_GATE_AMPLITUDE,
+        },
+        "overlay_mode": overlay_mode,
+        "window_exposed": exposed,
+        "pixel_width": pixel_width,
+        "lines": lines,
+        "frame_ink_dev_px": frame_ink,
+        "old_gate_blocked": bool(pressure["blocked"]),
+        "old_gate_dense_count": int(pressure["count"]),
+        "ink_gate_blocked": not gate_post,
+        "aa_gate_today": "allow" if gate_today else "block",
+        "aa_gate_post_migration": "allow" if gate_post else "block",
+        "block_reason_today": status_today.get("block_reason"),
+        "raster_cost_blocked": bool(raster_cost["blocked"]),
+        "point_metric": int(density["metric"]),
+        "point_budget": int(density["off_budget"]),
+    }
+
+    ratios = ", ".join(f"{ln['decimation_ratio']:.1f}" for ln in lines)
+    inks = ", ".join(f"{ln['ink_dev_px'] / 1000:.1f}k" for ln in lines)
+    print(
+        f"  {label}  pw={pixel_width} ratio=[{ratios}] ink=[{inks}] "
+        f"frame_ink={frame_ink / 1000:.1f}k  old={'BLOCK' if pressure['blocked'] else 'allow'} "
+        f"ink={'BLOCK' if result['ink_gate_blocked'] else 'allow'} "
+        f"(today={result['aa_gate_today']}, post={result['aa_gate_post_migration']})",
+        flush=True,
+    )
+    if self_check:
+        canvas.close()
+        app.processEvents()
+        return result
+
+    # AA-off frame (what the user gets while dragging). Cancel the pending idle
+    # upgrade first: the 150 ms timer can otherwise fire inside one of this
+    # probe's own processEvents() calls and hand the "AA-off" slot an AA frame.
+    quality.disable_interactive_quality()
+    off = []
+    off_suspect = False
+    for _ in range(4):
+        ms, suspect = _timed_repaint(canvas, viewport)
+        off.append(ms)
+        off_suspect = off_suspect or suspect
+    result["aa_off_frame_ms"] = float(np.median(off[1:]))
+
+    # AA-on frames, measured with the migration simulated. When the (migrated)
+    # gate still refuses -- B and C -- AA is forced on anyway so the refused
+    # cost is on the record; forcing deliberately skips _open_aa_backstop_epoch
+    # so the measured-frame latch cannot tear AA off between the first frame
+    # and the steady one.
+    with _overlay_pressure_disabled():
+        enable_started = time.perf_counter()
+        quality.try_enable_idle_quality()
+        enable_ms = (time.perf_counter() - enable_started) * 1000.0
+        aa_engaged = bool(quality.aa_on)
+        forced = False
+        if not aa_engaged:
+            forced = True
+            enable_ms = 0.0
+            quality._set_curves_antialias(True)
+            quality.aa_on = True
+        first_repaint_ms, first_suspect = _timed_repaint(canvas, viewport)
+        first_aa_ms = enable_ms + first_repaint_ms
+        app.processEvents()  # lets a tripped backstop's zero-delay timer land
+
+        backstop_reason = quality.aa_backstop_reason
+        steady_reforced = False
+        if not quality.aa_on:
+            steady_reforced = True
+            quality._set_curves_antialias(True)
+            quality.aa_on = True
+        steady_aa_ms, steady_suspect = _timed_repaint(canvas, viewport)
+        app.processEvents()
+        # Confirm the timed frames really were antialiased rather than trusting
+        # the aa_on flag: a frame billed as "AA on" that painted without AA
+        # would understate the very cost this probe exists to bound.
+        curves_aa = all(
+            bool(it.opts.get("antialias", False))
+            for it in quality._collect_curve_items()
+        ) and bool(quality._collect_curve_items())
+        quality.disable_interactive_quality()
+
+    result.update({
+        "aa_engaged_via_gate": aa_engaged,
+        "aa_forced": forced,
+        "first_aa_frame_ms": first_aa_ms,
+        "steady_aa_frame_ms": steady_aa_ms,
+        "aa_actually_on_during_frames": curves_aa,
+        "steady_reforced_after_backstop": steady_reforced,
+        "backstop_reason": (
+            [str(backstop_reason[0]), float(backstop_reason[1])]
+            if backstop_reason else None
+        ),
+        "suspect": {
+            "aa_off": off_suspect, "first_aa": first_suspect,
+            "steady_aa": steady_suspect, "not_exposed": not exposed,
+        },
+    })
+    suspect_txt = "  SUSPECT=" + ",".join(
+        k for k, v in result["suspect"].items() if v
+    ) if any(result["suspect"].values()) else ""
+    print(
+        f"      aa_off={result['aa_off_frame_ms']:8.1f}ms  "
+        f"first_aa={first_aa_ms:10.1f}ms  steady_aa={steady_aa_ms:10.1f}ms  "
+        f"engaged={'gate' if aa_engaged else 'FORCED'}"
+        f"{'  backstop=' + str(backstop_reason[0]) if backstop_reason else ''}"
+        f"{suspect_txt}",
+        flush=True,
+    )
+
+    canvas.close()
+    app.processEvents()
+    return result
+
+
+def cmd_overlay_gate(args):
+    app = _qapp()
+    probe_canvas, _vp = _new_canvas(app)
+    env = _environment(app, probe_canvas)
+    probe_canvas.close()
+    app.processEvents()
+
+    self_check = bool(getattr(args, "self_check", False))
+    repeats = 1 if self_check else max(1, int(getattr(args, "repeats", 2) or 2))
+    cases = [c for c in OVERLAY_GATE_CASES if _overlay_case_selected(c, args)]
+
+    print(f"platform={app.platformName()} dpr={env.get('dpr')}", flush=True)
+    print(
+        "== overlay AA gate: old raw-density gate vs ink gate =="
+        + ("  [self-check: quadrants only, no AA frames]" if self_check else ""),
+        flush=True,
+    )
+
+    cases_out = []
+    for case in cases:
+        for run_index in range(repeats):
+            print(f"[{case['key']} run {run_index + 1}/{repeats}] expect {case['expect']}",
+                  flush=True)
+            run = _run_overlay_gate_case(app, case, self_check=self_check)
+            # A suspect run is a MISSED repaint, not a fast one. Redo the whole
+            # case once on a fresh canvas rather than letting a 0 ms frame into
+            # the record — it would drag a max/median toward "affordable" for
+            # exactly the class whose affordability is the question.
+            if not self_check and any(run.get("suspect", {}).values()):
+                print("      -> suspect run, redoing case on a fresh canvas",
+                      flush=True)
+                retry = _run_overlay_gate_case(app, case, self_check=self_check)
+                retry["retried_after_suspect"] = True
+                run = retry
+            run["run_index"] = run_index
+            cases_out.append(run)
+
+    verdict = None
+    if not self_check:
+        verdict = _overlay_gate_verdict(cases_out)
+        if verdict is None:
+            print("\nVERDICT: n/a — class A was not run", flush=True)
+        else:
+            print(
+                f"\nVERDICT: {verdict['verdict'].upper()} — class A steady AA frame "
+                f"{verdict['class_a_steady_max_ms']:.1f} ms (max over "
+                f"{len(verdict['class_a_steady_ms'])} runs, spread "
+                f"{verdict['class_a_steady_spread'] * 100:.0f}%) vs limit "
+                f"{OVERLAY_GATE_GO_LIMIT_MS:.0f} ms",
+                flush=True,
+            )
+    return {
+        "command": "overlay-gate", "environment": env,
+        "go_limit_ms": OVERLAY_GATE_GO_LIMIT_MS,
+        "self_check": self_check, "repeats": repeats,
+        "runs": cases_out, "verdict": verdict,
+    }
+
+
+def _overlay_case_selected(case, args):
+    spec = getattr(args, "cases", None)
+    if not spec:
+        return True
+    needles = [p.strip().lower() for p in spec.split(",") if p.strip()]
+    if not needles:
+        return True
+    key = case["key"].lower()
+    label = case["label"].lower()
+    # Keys are one or two characters, so substring matching against the label
+    # would make "A" select every case with an "a" anywhere in its prose
+    # ("false-negative", "double-high", ...). Short needles match the KEY
+    # exactly; only needles long enough to be words fall back to the label.
+    return any(
+        n == key or (len(n) >= 3 and n in label) for n in needles
+    )
+
+
+def _overlay_gate_verdict(runs):
+    """go / no-go on the plan's single fixed criterion: class A's AA frame.
+
+    Class A is the only class whose behavior the migration changes (old gate
+    blocks it, ink gate allows it), so its measured AA cost is the entire risk.
+    Takes the WORST run rather than the mean: the criterion is an upper bound
+    on what a user can be handed, and reports the first/steady spread so an
+    unstable measurement is visible instead of averaged away.
+    """
+    a_runs = [r for r in runs if r["key"] == "A" and "steady_aa_frame_ms" in r]
+    if not a_runs:
+        return None
+    steady = [float(r["steady_aa_frame_ms"]) for r in a_runs]
+    first = [float(r["first_aa_frame_ms"]) for r in a_runs]
+    worst_steady = max(steady)
+    spread = (
+        (max(steady) - min(steady)) / min(steady) if min(steady) > 0 else 0.0
+    )
+    suspect = [i for i, r in enumerate(a_runs) if any(r.get("suspect", {}).values())]
+    forced = [i for i, r in enumerate(a_runs) if r.get("aa_forced")]
+    not_aa = [i for i, r in enumerate(a_runs)
+              if not r.get("aa_actually_on_during_frames", True)]
+    # A verdict is only as good as the frames behind it: a suspect (missed)
+    # repaint or a frame that did not actually paint antialiased would both
+    # read as "cheap" for the wrong reason, so they void the call instead of
+    # producing a cheerful go.
+    if suspect or not_aa:
+        verdict = "invalid"
+    elif worst_steady <= OVERLAY_GATE_GO_LIMIT_MS:
+        verdict = "go"
+    else:
+        verdict = "no-go"
+    return {
+        "verdict": verdict,
+        "class_a_steady_max_ms": worst_steady,
+        "class_a_steady_ms": steady,
+        "class_a_first_ms": first,
+        "class_a_steady_spread": spread,
+        "steady_spread_unstable": spread > 0.5,
+        "suspect_run_indices": suspect,
+        "forced_run_indices": forced,
+        "frames_not_antialiased_run_indices": not_aa,
+        "limit_ms": OVERLAY_GATE_GO_LIMIT_MS,
+    }
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
@@ -489,6 +982,7 @@ _HANDLERS = {
     "sweep-buckets": cmd_sweep_buckets,
     "aa-frame": cmd_aa_frame,
     "raster-build": cmd_raster_build,
+    "overlay-gate": cmd_overlay_gate,
 }
 
 
@@ -533,6 +1027,34 @@ def _arguments():
              "the only subcommand valid headless.",
     )
     p.add_argument("--json-out", type=Path)
+
+    p = sub.add_parser(
+        "overlay-gate",
+        help="Overlay AA gate disagreement set: the old raw-density gate vs "
+             "the ink gate over the 2x2 (A false positive / B false negative "
+             "/ C both block / D both allow), with measured AA frames. Backs "
+             "the go/no-go in the overlay-density-gate-ink-migration plan "
+             "Task 1. Real machine only; the B and C AA frames are expected "
+             "to take tens of seconds each, not a hang.",
+    )
+    p.add_argument("--json-out", type=Path)
+    p.add_argument(
+        "--repeats", type=int, default=2,
+        help="Runs per case for timing consistency (default 2; a >50%% spread "
+             "on class A means the timing is unstable, not that AA got faster).",
+    )
+    p.add_argument(
+        "--cases",
+        help="Comma-separated case keys (A,A2,B,C,D) or label substrings. "
+             "Default: all.",
+    )
+    p.add_argument(
+        "--self-check", action="store_true",
+        help="Quadrant self-check only: print ratio / ink / both gate verdicts "
+             "per case and skip every AA frame. Use this to confirm the "
+             "fixtures still land in their intended quadrants before paying "
+             "for the slow AA timings.",
+    )
 
     return parser.parse_args()
 
