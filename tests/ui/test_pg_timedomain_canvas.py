@@ -28,6 +28,7 @@ fallback branch was reached".
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -853,6 +854,83 @@ class TestInkBudget:
         status = canvas.quality_status()
         assert status["block_reason"] == "high-raster-cost"
         assert "密集离散跳变" in status["tooltip"]
+
+    # -- ink with no record yet is measured, never assumed cheap --------
+    #
+    # plot_channels ends with schedule_idle_quality() while _line_ink_state is
+    # still EMPTY (the first frame comes from the bind envelope, not from
+    # _refresh_visible_data). Summing an empty map to 0.0 let the idle timer
+    # switch vector AA on for a curve nobody had measured: 65.9 s, measured on
+    # Cocoa right after a plain plot_channels of this fixture, with no user
+    # interaction at all. The backstop caught it — after the frame was paid.
+
+    def test_unrecorded_line_ink_is_measured_not_assumed_zero(self, qapp):
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+        canvas, _t, _sig = self._oscillating_canvas(qapp)
+        # State right after plot_channels: bound, drawn, never refreshed.
+        assert len(canvas._line_ink_state) == 0
+        assert canvas._quality._frame_native_ink_total() > _INK_AA_OFF
+        assert canvas._quality._idle_aa_density_ok() is False
+
+    def test_unrecorded_ink_blocks_the_idle_timer_end_to_end(self, qapp):
+        """The actual reported path: plot, touch nothing, let the timer fire."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas, _t, _sig = self._oscillating_canvas(qapp)
+        # Neutralize the repaint request so a regression fails the assert
+        # instead of hanging the suite on a 65 s antialiased frame.
+        canvas._glw.update = lambda *a, **k: None
+        deadline = time.time() + 0.8
+        while time.time() < deadline:
+            QCoreApplication.processEvents()
+            time.sleep(0.01)
+
+        assert canvas._quality.aa_on is False
+        assert canvas._aa_backstop_armed is False
+        for item in canvas._quality._collect_curve_items():
+            assert item.opts.get("antialias") is False
+
+    def test_recorded_ink_wins_over_the_on_the_spot_value(self, qapp):
+        """One shared pre-cap number keeps the AA gate and the raster
+        admission on the same boundary (spec §4.2 / §4.3); the on-the-spot
+        measurement is only ever a stand-in for a line that has no record."""
+        canvas, _t, _sig = self._ink_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        ax.set_ylim(-6.0, 6.0)
+        canvas._flush_pending_refresh()
+        ck = canvas._channel_lines.composite_key_for("ch0")
+        assert ck in canvas._line_ink_state
+
+        canvas._line_ink_state[ck] = (12_345.0, False)
+        assert canvas._quality._frame_native_ink_total() == 12_345.0
+
+    def test_low_ink_chart_still_gets_aa_on_the_first_idle_window(self, qapp):
+        """The fix must stay inside the hole: a genuinely cheap chart keeps
+        getting AA immediately, without waiting for a settled refresh."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 900)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.arange(1_000_000, dtype=np.float64) / 20_000.0
+        rows = [("ch0", True, t, 100.0 * np.sin(2 * np.pi * 1.0 * t),
+                 "#1769e0", "u", "fid-0")]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+
+        assert len(canvas._line_ink_state) == 0  # still unrecorded…
+        assert canvas._quality._idle_aa_density_ok() is True  # …and still fine
+        canvas._quality.try_enable_idle_quality()
+        assert canvas._quality.aa_on is True
+
+    def test_export_refuses_unrecorded_high_ink(self, qapp):
+        """Export forces AA on every curve — assuming "cheap" costs the same
+        multi-second frame, just inside a copy/save."""
+        canvas, _t, _sig = self._oscillating_canvas(qapp)
+        assert len(canvas._line_ink_state) == 0
+        assert canvas._quality._export_aa_affordable() is False
 
     def test_low_ink_frame_reports_no_ink_block(self, qapp):
         """Zero behavior change for the smooth control (spec §5 anchor)."""
@@ -7565,6 +7643,28 @@ class TestAutoIdleAA:
         assert 200_000 <= _INK_AA_OFF <= 600_000
         assert _INK_AA_OFF > _INK_AA_ON
 
+    def _fabricate_line_ink(self, canvas, value, high=False):
+        """Pin a fabricated ink value onto a REAL visible line.
+
+        The ink sum walks the lines that will actually paint and looks each
+        one up by composite key, so an entry parked under a key that matches
+        no line is correctly ignored (a stale record from a removed channel
+        must not block AA forever). Fabricating therefore has to target a
+        line that exists.
+        """
+        canvas._line_ink_state.clear()
+        target = None
+        for ck, _name, _pair in canvas._channel_lines.composite_items():
+            if target is None:
+                target = ck
+                canvas._line_ink_state[ck] = (float(value), bool(high))
+            else:
+                # Every OTHER line needs a record too, or it would be measured
+                # on the spot and added to the sum, and the fabricated total
+                # would no longer be the number the test is reasoning about.
+                canvas._line_ink_state[ck] = (0.0, False)
+        return target
+
     def test_ink_gate_rejects_frame_over_off_budget(self, qapp):
         """A frame whose summed native-AA-path ink exceeds `_INK_AA_OFF`
         must hard-fail the idle-AA gate — the direct AND partner to the
@@ -7573,8 +7673,7 @@ class TestAutoIdleAA:
         from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
 
         canvas = self._plot(qapp)
-        canvas._line_ink_state.clear()
-        canvas._line_ink_state["fabricated"] = (float(_INK_AA_OFF) + 1.0, True)
+        self._fabricate_line_ink(canvas, float(_INK_AA_OFF) + 1.0, high=True)
 
         assert canvas._quality._idle_aa_density_ok() is False
 
@@ -7587,8 +7686,7 @@ class TestAutoIdleAA:
 
         canvas = self._plot(qapp)
         mid = (_INK_AA_ON + _INK_AA_OFF) // 2
-        canvas._line_ink_state.clear()
-        canvas._line_ink_state["fabricated"] = (float(mid), False)
+        self._fabricate_line_ink(canvas, float(mid))
         canvas._quality.ink_seeded = False
         canvas._quality.ink_allowed = False  # must not stick False cold
 
@@ -7607,8 +7705,7 @@ class TestAutoIdleAA:
 
         canvas = self._plot(qapp)
         mid = (_INK_AA_ON + _INK_AA_OFF) // 2
-        canvas._line_ink_state.clear()
-        canvas._line_ink_state["fabricated"] = (float(mid), False)
+        self._fabricate_line_ink(canvas, float(mid))
         canvas._quality.ink_seeded = True
 
         canvas._quality.ink_allowed = True
@@ -7625,8 +7722,7 @@ class TestAutoIdleAA:
         from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_ON
 
         canvas = self._plot(qapp)
-        canvas._line_ink_state.clear()
-        canvas._line_ink_state["fabricated"] = (float(_INK_AA_ON) - 1.0, False)
+        self._fabricate_line_ink(canvas, float(_INK_AA_ON) - 1.0)
         canvas._quality.ink_seeded = True
         canvas._quality.ink_allowed = False
 
@@ -7694,8 +7790,7 @@ class TestAutoIdleAA:
         from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
 
         canvas = self._plot(qapp)
-        canvas._line_ink_state.clear()
-        canvas._line_ink_state["fabricated"] = (float(_INK_AA_OFF) + 1.0, True)
+        self._fabricate_line_ink(canvas, float(_INK_AA_OFF) + 1.0, high=True)
 
         assert canvas._quality._export_aa_affordable() is False
 

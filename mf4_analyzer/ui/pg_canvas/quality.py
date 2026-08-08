@@ -14,6 +14,7 @@ from ._backref import _CanvasBackref
 
 import pyqtgraph as pg
 
+from .render_profile import envelope_ink_dev_px
 from .renderer import (
     _INK_AA_OFF,
     _INK_AA_ON,
@@ -298,37 +299,79 @@ class QualityManager(_CanvasBackref):
         covered = self._raster_covered_curve_items()
         return [it for it in self._collect_curve_items() if it not in covered]
 
+    def _line_ink_now(self, axis, pdi) -> float:
+        """Ink for the data CURRENTLY bound to ``pdi``, computed on the spot.
+
+        The fallback for a line the renderer has not recorded yet. It reads
+        the same three inputs ``_refresh_visible_data`` would
+        (the bound samples, the line's Y view span, its row height in device
+        pixels), so the number is directly comparable to a recorded one.
+        A degenerate handle — no view box, collapsed Y span, fewer than two
+        samples — yields 0.0 through ``envelope_ink_dev_px``'s own sentinels.
+        """
+        try:
+            _x, y = pdi.getData()
+            if y is None:
+                return 0.0
+            lo, hi = axis.get_ylim()
+            y_span = abs(float(hi) - float(lo))
+            view_box = getattr(axis, "view_box", None)
+            row_height = (
+                float(view_box.sceneBoundingRect().height())
+                if view_box is not None else 0.0
+            )
+            dpr = float(self._glw.devicePixelRatioF())
+        except Exception:
+            return 0.0
+        try:
+            return float(envelope_ink_dev_px(
+                y, y_span=y_span, row_height_px=row_height, dpr=dpr,
+            ))
+        except Exception:
+            return 0.0
+
     def _frame_native_ink_total(self) -> float:
         """Sum this frame's per-line ink for lines still on the native-AA
         paint path (spec §4.2 / renderer ``_line_ink_state``).
 
-        Excludes lines whose curve is already covered by a settled
-        dense-raster entry (``_raster_covered_curve_items`` — the raster
-        upgrade already replaced their paint cost, so their recorded ink must
-        not keep blocking AA for the rest of the frame) and lines whose
-        ``PlotDataItem`` is not currently visible. Matched by COMPOSITE
-        ``(data_id, name)`` identity, never the display name, for the same
-        multi-file-same-name reason the renderer's own per-line cache uses
-        composite keys.
+        Walks the LINES that will actually paint natively rather than the
+        recorded ink entries, because the two sets are not the same and the
+        difference is load-bearing. A line counts when it is visible and NOT
+        already covered by a settled dense-raster entry
+        (``_raster_covered_curve_items`` — the raster upgrade replaced its
+        paint cost, so its recorded ink must not keep blocking AA for the rest
+        of the frame).
+
+        A line with no record yet is MEASURED ON THE SPOT (``_line_ink_now``),
+        never treated as zero. ``plot_channels`` ends with
+        ``schedule_idle_quality()`` while ``_line_ink_state`` is still empty —
+        the first frame is bound by the bind envelope, not by
+        ``_refresh_visible_data`` — so summing an empty map to 0.0 let the idle
+        timer switch vector AA on for a curve nobody had measured: 65.9 s,
+        measured on Cocoa right after a plain plot_channels of the spec §3.2
+        fixture, with no user interaction at all. The backstop caught it, after
+        the frame was paid. Computing instead of refusing keeps the fix inside
+        the actual hole: charts whose ink is genuinely low still get AA on the
+        first idle window, exactly as before.
+
+        Recorded values win when present, so the AA gate and the raster
+        admission keep deciding on the one shared pre-cap number
+        (spec §4.2 / §4.3); the on-the-spot value is only ever a stand-in for a
+        line that has none.
+
+        Matched by COMPOSITE ``(data_id, name)`` identity, never the display
+        name, for the same multi-file-same-name reason the renderer's own
+        per-line cache uses composite keys.
         """
-        ink_state = getattr(self, "_line_ink_state", None)
-        if not ink_state:
-            return 0.0
         covered = self._raster_covered_curve_items()
-        pdi_by_ck = {}
+        ink_state = getattr(self, "_line_ink_state", None)
         try:
-            entries = self._channel_lines.composite_items()
+            entries = list(self._channel_lines.composite_items())
         except Exception:
-            entries = ()
-        for ck, _name, (_axis, line) in entries:
-            pdi_by_ck[ck] = getattr(line, "plot_data_item", None)
+            return 0.0
         total = 0.0
-        for ck, _name, state in ink_state.composite_items():
-            try:
-                ink = float(state[0])
-            except (TypeError, IndexError, ValueError):
-                continue
-            pdi = pdi_by_ck.get(ck)
+        for ck, _name, (axis, line) in entries:
+            pdi = getattr(line, "plot_data_item", None)
             try:
                 if pdi is not None and not pdi.isVisible():
                     continue
@@ -339,7 +382,21 @@ class QualityManager(_CanvasBackref):
                     continue
             except Exception:
                 pass
-            total += ink
+            state = None
+            if ink_state is not None:
+                try:
+                    state = ink_state.get(ck)
+                except Exception:
+                    state = None
+            ink = None
+            if state is not None:
+                try:
+                    ink = float(state[0])
+                except (TypeError, IndexError, ValueError):
+                    ink = None
+            if ink is None and pdi is not None:
+                ink = self._line_ink_now(axis, pdi)
+            total += ink or 0.0
         return total
 
     def _set_curves_antialias(self, on: bool) -> int:
@@ -713,7 +770,9 @@ class QualityManager(_CanvasBackref):
         # Same ink ceiling as the idle-AA gate (spec §4.2), one-shot: export
         # has no hysteresis state to seed or hold, it decides fresh on every
         # call, so this is a plain comparison against _INK_AA_OFF (no ON/OFF
-        # dead band, no self.ink_allowed/ink_seeded mutation).
+        # dead band, no self.ink_allowed/ink_seeded mutation). Lines with no
+        # recorded ink are measured on the spot by _frame_native_ink_total,
+        # so export cannot be talked into forcing AA over an unmeasured curve.
         if self._frame_native_ink_total() > _INK_AA_OFF:
             return False
         if self._overlay_density_pressure_status()["blocked"]:
