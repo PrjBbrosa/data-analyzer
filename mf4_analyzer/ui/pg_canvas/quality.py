@@ -739,15 +739,22 @@ class QualityManager(_CanvasBackref):
         Visibility matters: a dormant curve retained by the selection-delta
         path must not block AA for the curves that are actually painted.
         """
+        empty = {
+            "blocked": False, "count": 0, "labels": (),
+            "dense_labels": (), "ink_labels": (),
+        }
         covered_curves = self._raster_covered_curve_items()
         lines = getattr(self, "_channel_lines", None)
         labels = []
+        dense_labels = []
+        ink_labels = []
         if lines is None or not hasattr(lines, "composite_items"):
-            return {"blocked": False, "count": 0, "labels": ()}
+            return empty
         try:
             entries = list(lines.composite_items())
         except Exception:
-            return {"blocked": False, "count": 0, "labels": ()}
+            return empty
+        profiles = self._channel_render_profiles
         for composite_key, display_name, pair in entries:
             try:
                 pdi = pair[1].plot_data_item
@@ -758,11 +765,27 @@ class QualityManager(_CanvasBackref):
             if self._raster_backend_eligible(composite_key):
                 if getattr(pdi, "curve", None) in covered_curves:
                     continue
-                labels.append(str(display_name))
+                name = str(display_name)
+                labels.append(name)
+                # Split by WHICH leg admitted the line, because the two carry
+                # different user-facing explanations. "密集离散跳变" is only
+                # true of the dense-discrete profile (integer-like, <=512
+                # unique values — a CRC/counter trace). An analog line
+                # admitted on ink alone is a smooth-valued waveform that
+                # merely fills its row, and telling the user it is a discrete
+                # jump signal is simply wrong.
+                if getattr(
+                    profiles.get(composite_key), "strategy", None,
+                ) == "dense_discrete":
+                    dense_labels.append(name)
+                else:
+                    ink_labels.append(name)
         return {
             "blocked": bool(labels),
             "count": len(labels),
             "labels": tuple(labels),
+            "dense_labels": tuple(dense_labels),
+            "ink_labels": tuple(ink_labels),
         }
 
     def _overlay_density_pressure_status(self):
@@ -884,20 +907,54 @@ class QualityManager(_CanvasBackref):
                     "high_raster_curve_count": raster_cost["count"],
                     "tooltip": "平滑曲线正在生成（高分辨率缓存）",
                 }
-            labels = list(raster_cost["labels"])
-            preview = "、".join(labels[:2])
-            if len(labels) > 2:
-                preview += f" 等 {len(labels)} 条"
+            def _preview(names):
+                text = "、".join(names[:2])
+                if len(names) > 2:
+                    text += f" 等 {len(names)} 条"
+                return text
+
+            # One block, two possible causes — name the one that actually
+            # applies to each curve instead of labelling every admitted line
+            # a discrete-jump signal (see _high_raster_cost_status).
+            parts = []
+            if raster_cost["dense_labels"]:
+                parts.append(
+                    f"高光栅成本曲线 {_preview(list(raster_cost['dense_labels']))}"
+                    "（密集离散跳变）"
+                )
+            if raster_cost["ink_labels"]:
+                parts.append(
+                    f"满幅振荡曲线 {_preview(list(raster_cost['ink_labels']))}"
+                    "（绘制量超预算）"
+                )
             return {
                 **base,
                 "state": "red",
                 "render_path": "native-non-aa",
                 "block_reason": "high-raster-cost",
                 "high_raster_curve_count": raster_cost["count"],
-                "tooltip": (
-                    f"抗锯齿未激活：高光栅成本曲线 {preview}"
-                    "（密集离散跳变）"
-                ),
+                "high_raster_dense_count": len(raster_cost["dense_labels"]),
+                "high_raster_ink_count": len(raster_cost["ink_labels"]),
+                "tooltip": "抗锯齿未激活：" + "；".join(parts),
+            }
+        # Ink gate (spec §4.2), reported in the SAME order the decision is
+        # made in _idle_aa_density_ok: after the raster-cost block, before
+        # overlay pressure and the point-count budget. Without this branch a
+        # frame refused purely on ink — every overlay high-ink frame, now that
+        # the ink admission leg short-circuits in overlay — falls through to
+        # the bare "抗锯齿未激活" with no reason at all, which is exactly the
+        # question the quality dot exists to answer. Reads the LATCHED gate
+        # state (seeded + refused) rather than recomputing, so the dead band
+        # is honored and this reporting path stays non-mutating.
+        if self.ink_seeded and not self.ink_allowed:
+            return {
+                **base,
+                "state": "red",
+                "render_path": "native-non-aa",
+                "block_reason": "high-ink",
+                "frame_ink": int(self._frame_native_ink_total()),
+                "ink_budget": int(_INK_AA_OFF),
+                "tooltip": "抗锯齿未激活：波形填满绘图区，绘制量超预算",
             }
         if pressure["blocked"]:
             return {

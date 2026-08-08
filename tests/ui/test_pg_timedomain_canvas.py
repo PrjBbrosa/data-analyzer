@@ -745,6 +745,137 @@ class TestInkBudget:
         xd, _ = line.plot_data_item.getData()
         return 0 if xd is None else len(xd)
 
+    # -- quality-dot reporting for the two admission legs ----------------
+    #
+    # The gate DECIDES in _idle_aa_density_ok; quality_status() REPORTS. The
+    # two diverged once the ink leg widened raster admission: an analog line
+    # admitted on ink alone was being described to the user as a
+    # "密集离散跳变" (dense-discrete) signal, which is a property it does not
+    # have, and an overlay high-ink frame claimed a high-raster-cost block for
+    # a backend that does not run in overlay at all.
+
+    def test_ink_admitted_line_is_not_reported_as_dense_discrete(self, qapp):
+        """An analog high-ink line must be named for what it is."""
+        canvas, _t, _sig = self._oscillating_canvas(qapp)
+        canvas.fit_y_to_visible_x()
+        # Deny the raster upgrade so the report falls to the red branch.
+        canvas._dense_raster.max_item_bytes = 0
+        canvas._dense_raster.deactivate_channel("ch0")
+        canvas._flush_pending_refresh()
+
+        ck = canvas._channel_lines.composite_key_for("ch0")
+        assert canvas._raster_backend_eligible(ck) is True
+        assert (
+            getattr(canvas._channel_render_profiles.get(ck), "strategy", None)
+            == "general"
+        ), "premise: this fixture is an analog trace, not a discrete counter"
+
+        raster_cost = canvas._quality._high_raster_cost_status()
+        assert raster_cost["blocked"] is True
+        assert raster_cost["ink_labels"] == ("ch0",)
+        assert raster_cost["dense_labels"] == ()
+
+        status = canvas.quality_status()
+        assert status["state"] == "red"
+        assert status["block_reason"] == "high-raster-cost"
+        assert "密集离散跳变" not in status["tooltip"]
+        assert "满幅振荡曲线 ch0" in status["tooltip"]
+
+    def test_overlay_high_ink_reports_ink_not_raster_cost(self, qapp):
+        """Overlay has no raster backend, so it must not claim one.
+
+        `_dense_visible_keys` / `refresh_all` both bail out in overlay, so
+        admitting an overlay line on ink would assert "needs the raster
+        backend" about a mode that has none. The ink leg short-circuits there
+        and the frame reports through the ink branch instead.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 900)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.arange(1_000_000, dtype=np.float64) / 20_000.0
+        rows = [
+            ("ch0", True, t, 100.0 * np.sin(2 * np.pi * 2300.0 * t),
+             "#1769e0", "u", "fid-0"),
+            ("ch1", True, t, 100.0 * np.sin(2 * np.pi * 2437.0 * t),
+             "#00a67d", "u", "fid-0"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        canvas.fit_y_to_visible_x()
+        canvas._flush_pending_refresh()
+
+        assert canvas._overlay_mode is True
+        ck = canvas._channel_lines.composite_key_for("ch0")
+        assert canvas._raster_backend_eligible(ck) is False
+        assert canvas._quality._high_raster_cost_status()["blocked"] is False
+        # AA must still be refused — only the REASON changed, not the safety.
+        assert canvas._quality._idle_aa_density_ok() is False
+
+        status = canvas.quality_status()
+        assert status["state"] == "red"
+        assert status["block_reason"] == "high-ink"
+        assert status["frame_ink"] > status["ink_budget"]
+        assert "波形填满绘图区" in status["tooltip"]
+
+    def test_overlay_short_circuit_spares_the_dense_discrete_leg(self, qapp):
+        """Only the ink leg short-circuits in overlay.
+
+        The dense-discrete leg's overlay behavior predates the ink work; it
+        must stay byte-identical or this becomes an unrelated regression.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 900)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.linspace(0.0, 10.0, 200_000, dtype=np.float64)
+        counter = np.tile(np.arange(64, dtype=np.float64), t.size // 64 + 1)
+        rows = [
+            ("crc0", True, t, counter[:t.size], "#1769e0", "u", "fid-0"),
+            ("crc1", True, t, counter[:t.size][::-1], "#00a67d", "u", "fid-0"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        canvas._flush_pending_refresh()
+
+        assert canvas._overlay_mode is True
+        ck = canvas._channel_lines.composite_key_for("crc0")
+        assert (
+            getattr(canvas._channel_render_profiles.get(ck), "strategy", None)
+            == "dense_discrete"
+        ), "premise: fixture must classify as the discrete-counter strategy"
+        # Unchanged by the overlay short-circuit.
+        assert canvas._raster_backend_eligible(ck) is True
+        status = canvas.quality_status()
+        assert status["block_reason"] == "high-raster-cost"
+        assert "密集离散跳变" in status["tooltip"]
+
+    def test_low_ink_frame_reports_no_ink_block(self, qapp):
+        """Zero behavior change for the smooth control (spec §5 anchor)."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 900)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.arange(1_000_000, dtype=np.float64) / 20_000.0
+        rows = [("ch0", True, t, 100.0 * np.sin(2 * np.pi * 1.0 * t),
+                 "#1769e0", "u", "fid-0")]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        canvas.fit_y_to_visible_x()
+        canvas._flush_pending_refresh()
+
+        assert canvas._quality._idle_aa_density_ok() is True
+        canvas._quality.try_enable_idle_quality()
+        status = canvas.quality_status()
+        assert status.get("block_reason") is None
+        assert status["state"] == "green"
+
     @staticmethod
     def _expected_cap(effective_width, ink):
         """Re-derive spec §4.1's clamp from the ink the renderer recorded.

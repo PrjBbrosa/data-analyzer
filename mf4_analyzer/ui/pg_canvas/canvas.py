@@ -2368,6 +2368,20 @@ class TimeDomainCanvasPG(QWidget):
             "dense_discrete"
         ):
             return True
+        # OVERLAY short-circuit — INK LEG ONLY. The raster backend refuses to
+        # run in overlay at all (`_dense_visible_keys` returns nothing and
+        # `refresh_all` drops every entry there), so admitting a line on ink
+        # would assert "needs the raster backend" about a mode that has no
+        # raster backend — and _high_raster_cost_status would then report a
+        # high-raster-cost block for a path that does not exist. Overlay's
+        # high-ink frames are refused by the ink AA gate on their own merits
+        # and report through the ink branch of quality_status() instead.
+        # The dense-discrete leg above is deliberately NOT short-circuited:
+        # its overlay behavior predates the ink work and stays byte-identical.
+        # The admitted set is left untouched (not discarded) so a
+        # subplot→overlay→subplot round trip keeps its hysteresis memory.
+        if bool(getattr(self, "_overlay_mode", False)):
+            return False
         admitted = ck in self._ink_raster_admitted
         state = self._line_ink_state.get(ck)
         try:
