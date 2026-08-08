@@ -573,3 +573,290 @@ def test_clear_replaces_timers_and_stale_timeouts_cannot_touch_rebuild(qapp):
     assert manager.entry_for("EPS_CRC1") is new_entry
     assert new_entry.item.pixmap().cacheKey() == new_key
     assert new_entry.generation == canvas._interaction_generation
+
+
+# ---------------------------------------------------------------------------
+# Ink-driven raster admission (spec §4.3, plan Task 4).
+#
+# The raster backend used to be reserved for ``strategy == "dense_discrete"``.
+# Spec §4.3 widens it to the OTHER geometry vector AA cannot afford: a line
+# whose measured vertical ink is over the shared AA/raster band. Everything
+# below fences that widening — the shared predicate itself, the five consumers
+# that were re-pointed at it, and the memory caps that had to be re-baselined
+# so a full-row image is admissible at all.
+# ---------------------------------------------------------------------------
+
+_MIB = 1024 * 1024
+
+
+def _oscillating_row(name="ch0", *, data_id="ink-fid"):
+    """Spec §3.2 fixture: 1M samples @20 kHz, a 2300 Hz ±100 oscillation on a
+    slow 0.7 Hz swing. Every envelope bucket spans nearly the full amplitude,
+    so with Y fitted to the data the line paints as a solid ink band —
+    ``strategy`` stays ``general`` (approx_unique is huge), which is exactly
+    why the old dense-discrete-only admission could never reach it.
+    """
+    t = np.arange(1_000_000, dtype=np.float64) / 20_000.0
+    sig = (
+        100.0 * np.sin(2 * np.pi * 2300.0 * t)
+        + 8.0 * np.sin(2 * np.pi * 0.7 * t)
+    )
+    return (name, True, t, sig, "#1769e0", "u", data_id)
+
+
+def _ink_canvas(qapp, *, width=1920, height=900, rows=None):
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(width, height)
+    canvas.show()
+    qapp.processEvents()
+    canvas.plot_channels(rows or [_oscillating_row()], mode="subplot")
+    qapp.processEvents()
+    return canvas
+
+
+def _ink_admitted_canvas(qapp, **kwargs):
+    """A settled canvas whose single ``general`` line is over the ink band."""
+    canvas = _ink_canvas(qapp, **kwargs)
+    canvas.fit_y_to_visible_x()
+    canvas._flush_pending_refresh()
+    canvas._dense_raster.flush_pending(canvas._interaction_generation)
+    return canvas, canvas._channel_lines.composite_key_for("ch0")
+
+
+def _row_image_bytes(canvas, ck):
+    """The item-cap target for this row: logical-2x device pixels x 4 B."""
+    axis, _line = canvas._channel_lines[ck]
+    rect = axis.view_box.sceneBoundingRect()
+    raster_dpr = max(2.0, float(canvas._glw.devicePixelRatioF()))
+    return (
+        max(1, int(round(int(round(rect.width())) * raster_dpr)))
+        * max(1, int(round(int(round(rect.height())) * raster_dpr)))
+        * 4
+    )
+
+
+def test_raster_backend_eligible_admits_dense_discrete_at_any_ink(qapp):
+    """Leg one of the predicate: the original strategy admission is untouched
+    and does NOT consult ink (a CRC counter is admissible while flat)."""
+    canvas = _shown_canvas(qapp, [_row()])
+    ck = canvas._channel_lines.composite_key_for("EPS_CRC1")
+
+    assert canvas._channel_render_profiles[ck].strategy == "dense_discrete"
+    canvas._line_ink_state[ck] = (0.0, False)
+    assert canvas._raster_backend_eligible(ck) is True
+    assert ck not in canvas._ink_raster_admitted
+
+
+def test_raster_backend_eligible_ink_admission_has_hysteresis(qapp):
+    """Leg two: a ``general`` line is admitted over ``_INK_AA_OFF`` and only
+    released under ``_INK_AA_ON``. Inside the band the previous decision is
+    held, so a line hovering on the boundary cannot flap between the raster
+    and vector backends (spec §4.3 "同一边界防抖").
+    """
+    from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_ON, _INK_AA_OFF
+
+    canvas = _shown_canvas(qapp, [_smooth_row()])
+    ck = canvas._channel_lines.composite_key_for("smooth")
+    assert canvas._channel_render_profiles[ck].strategy != "dense_discrete"
+    mid = (_INK_AA_ON + _INK_AA_OFF) / 2.0
+
+    def eligible(ink):
+        canvas._line_ink_state[ck] = (float(ink), ink > _INK_AA_OFF)
+        return canvas._raster_backend_eligible(ck)
+
+    # Below the ON threshold: out.
+    assert eligible(_INK_AA_ON - 1.0) is False
+    # Rising INTO the band is not enough — admission needs the OFF crossing.
+    assert eligible(mid) is False
+    assert eligible(_INK_AA_OFF) is False
+    # Over OFF: admitted, and the admission set records it.
+    assert eligible(_INK_AA_OFF + 1.0) is True
+    assert ck in canvas._ink_raster_admitted
+    # Falling back INTO the band keeps the raster backend (no flap).
+    assert eligible(mid) is True
+    assert eligible(_INK_AA_ON) is True
+    # Only under ON is it released.
+    assert eligible(_INK_AA_ON - 1.0) is False
+    assert ck not in canvas._ink_raster_admitted
+
+
+def test_raster_backend_eligible_round_trips_the_band_without_flapping(qapp):
+    """Ten boundary round trips must produce exactly ten state changes — the
+    admission is a function of the crossing, not of the visit count."""
+    from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_ON, _INK_AA_OFF
+
+    canvas = _shown_canvas(qapp, [_smooth_row()])
+    ck = canvas._channel_lines.composite_key_for("smooth")
+    mid = (_INK_AA_ON + _INK_AA_OFF) / 2.0
+    observed = []
+    for _ in range(5):
+        for ink in (_INK_AA_OFF + 1.0, mid, mid, _INK_AA_ON - 1.0, mid, mid):
+            canvas._line_ink_state[ck] = (float(ink), False)
+            observed.append(canvas._raster_backend_eligible(ck))
+
+    assert observed == [True, True, True, False, False, False] * 5
+
+
+def test_clear_resets_ink_raster_admission(qapp):
+    from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+    canvas = _shown_canvas(qapp, [_smooth_row()])
+    ck = canvas._channel_lines.composite_key_for("smooth")
+    canvas._line_ink_state[ck] = (_INK_AA_OFF * 2.0, True)
+    assert canvas._raster_backend_eligible(ck) is True
+
+    canvas.clear()
+
+    assert canvas._ink_raster_admitted == set()
+
+
+def test_high_ink_general_line_gets_raster_entry_and_suppressed_pen(qapp):
+    """End to end: the geometry vector AA measured at 63 s/frame settles onto
+    the raster backend instead — entry present, native stroke suppressed, and
+    the quality dot reads the dense-raster path (spec §4.3)."""
+    from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+    canvas, ck = _ink_admitted_canvas(qapp)
+    ink, high = canvas._line_ink_state.get(ck)
+    pdi = canvas._channel_lines[ck][1].plot_data_item
+
+    assert high is True
+    assert ink > _INK_AA_OFF
+    assert canvas._channel_render_profiles[ck].strategy != "dense_discrete"
+    assert canvas._raster_backend_eligible(ck) is True
+
+    entry = canvas._dense_raster.entry_for(ck)
+    assert entry is not None and entry.item.isVisible()
+    assert pdi.opts["pen"] is None
+    assert _curve_has_no_pen(pdi.curve)
+    assert pdi.isVisible() is True
+    status = canvas.quality_status()
+    assert status["state"] == "green"
+    assert status["render_path"] == "dense-raster"
+
+
+def test_ink_falling_under_band_restores_the_native_vector_line(qapp):
+    """Widening Y drops the ink under ``_INK_AA_ON``; the raster entry is
+    dropped and the saved native pen comes back."""
+    from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_ON
+
+    canvas, ck = _ink_admitted_canvas(qapp)
+    assert canvas._dense_raster.entry_for(ck) is not None
+    axis, line = canvas._channel_lines[ck]
+    pdi = line.plot_data_item
+
+    axis.set_ylim(-100_000.0, 100_000.0)
+    canvas._flush_pending_refresh()
+
+    ink, high = canvas._line_ink_state.get(ck)
+    assert high is False
+    assert ink < _INK_AA_ON
+    assert canvas._raster_backend_eligible(ck) is False
+    assert canvas._dense_raster.entry_for(ck) is None
+    assert pdi.opts["pen"] is not None
+    assert not _curve_has_no_pen(pdi.curve)
+
+
+def test_interactive_skip_path_covers_ink_admitted_lines(qapp):
+    """The transform-only interaction contract must extend to the widened
+    admission: while a held gesture stays inside the raster's own coverage the
+    line takes ZERO ``setData`` calls (the ``held_pan_setdata_count == 0``
+    contract in scripts/benchmark_timedomain_interaction.py).
+    """
+    canvas, ck = _ink_admitted_canvas(qapp)
+    entry = canvas._dense_raster.entry_for(ck)
+    assert entry is not None
+    coverage = canvas._display_x_coverage_by_channel[ck]
+
+    setdata_calls = []
+    pdi = canvas._channel_lines[ck][1].plot_data_item
+    original_setdata = pdi.setData
+
+    def counted_setdata(*args, **kwargs):
+        setdata_calls.append(args)
+        return original_setdata(*args, **kwargs)
+
+    pdi.setData = counted_setdata
+
+    lo, hi = (float(v) for v in coverage)
+    span = hi - lo
+    canvas._begin_view_interaction()
+    try:
+        for step in range(1, 6):
+            inset = span * 0.02 * step
+            canvas._refresh_visible_data(
+                xlim_override=(lo + inset, hi - inset), interactive=True,
+            )
+    finally:
+        canvas._end_view_interaction()
+
+    assert setdata_calls == []
+    assert canvas._dense_raster.entry_for(ck) is entry
+    # The skip must also carry the recorded ink forward, or the AA gate would
+    # re-arm mid-gesture over an ink band that is still on screen.
+    assert canvas._frame_ink_high is True
+
+
+def test_full_row_raster_image_fits_the_item_cap(qapp):
+    """Spec §4.3: a single 1920x900 row is ~26 MiB at logical 2x. Under the
+    old 16 MiB item cap the raster upgrade was rejected for exactly the
+    geometry that needs it most."""
+    from mf4_analyzer.ui.pg_canvas.dense_raster import DEFAULT_MAX_ITEM_BYTES
+
+    canvas, ck = _ink_admitted_canvas(qapp)
+    entry = canvas._dense_raster.entry_for(ck)
+    target = _row_image_bytes(canvas, ck)
+
+    assert canvas._glw.devicePixelRatioF() == 1.0  # offscreen; raster_dpr = 2
+    assert 16 * _MIB < target <= DEFAULT_MAX_ITEM_BYTES
+    assert entry is not None
+    assert entry.memory_bytes == target
+
+
+def test_legacy_16mib_item_cap_rejects_the_row_and_stays_native_non_aa(qapp):
+    """The rejection path is unchanged by the widening: native non-AA plus a
+    red dot — never a fallback into the vector AA the ink budget just refused.
+    """
+    canvas, ck = _ink_admitted_canvas(qapp)
+    pdi = canvas._channel_lines[ck][1].plot_data_item
+    assert canvas._dense_raster.entry_for(ck) is not None
+    aa_before = bool(pdi.curve.opts.get("antialias", False))
+
+    canvas._dense_raster.max_item_bytes = 16 * _MIB
+    canvas._dense_raster.invalidate_all("legacy-item-cap", schedule=True)
+    canvas._dense_raster.flush_pending(canvas._interaction_generation)
+
+    assert canvas._dense_raster.entry_for(ck) is None
+    assert pdi.opts["pen"] is not None
+    assert pdi.curve.isVisible() is True
+    assert bool(pdi.curve.opts.get("antialias", False)) is aa_before
+    assert canvas._quality.aa_on is False
+    status = canvas.quality_status()
+    assert status["state"] == "red"
+    assert status["render_path"] == "native-non-aa"
+    assert status["block_reason"] == "high-raster-cost"
+
+
+def test_dense_raster_memory_caps_stay_in_the_spec_band():
+    """Mutation guard for the two caps re-baselined in spec §4.3 / §5.
+
+    Change spec §5 FIRST, then these bands. The tiling argument they encode:
+    subplot rows tile the viewport, so the sum of all row images is about one
+    viewport of device pixels (1920x1080 @dpr2 -> 3840x2160 x 4 B ~ 31.6 MiB),
+    while the single worst-case ROW image is ~26 MiB (1920x900 logical at
+    logical 2x). The item cap must clear that row; the global cap must hold a
+    tiled viewport PLUS the 2x QImage+QPixmap peak of the row being built.
+    """
+    from mf4_analyzer.ui.pg_canvas.dense_raster import (
+        DEFAULT_MAX_GLOBAL_BYTES, DEFAULT_MAX_ITEM_BYTES,
+    )
+
+    # Below 24 MiB the full-row upgrade is rejected (the bug this fixes);
+    # above 64 MiB one retained row could outweigh the whole tiled viewport.
+    assert 24 * _MIB <= DEFAULT_MAX_ITEM_BYTES <= 64 * _MIB
+    # Below 64 MiB a tiled viewport plus one build peak no longer fits; above
+    # 128 MiB the aggregate stops being a meaningful ceiling.
+    assert 64 * _MIB <= DEFAULT_MAX_GLOBAL_BYTES <= 128 * _MIB
+    # The global cap has to absorb the build-time QImage+QPixmap 2x peak of a
+    # single max-size item on top of what is already retained.
+    assert DEFAULT_MAX_GLOBAL_BYTES >= 2 * DEFAULT_MAX_ITEM_BYTES
