@@ -51,13 +51,13 @@ CLAUDE.md），别把既有红算到本改动头上。
 
 **Files:** Add `scripts/probe_aa_ink_budget.py`
 
-- [ ] 把本次调查的四个 scratchpad 脚本合并为一个带子命令的探针：
+- [x] 把本次调查的四个 scratchpad 脚本合并为一个带子命令的探针：
   `--sweep-y`（ratio 0.05→9.8 扫描）、`--sweep-buckets`、`--aa-frame`
   （首帧/稳态 AA 计时）、`--raster-build`。合成信号、画布尺寸、输出
   列格式照抄本次调查（spec §1/§3 的表要能直接复跑出来）。
-- [ ] 跑一遍，输出与 spec 基线数字同量级（±30%，机器态漂移可接受），
+- [x] 跑一遍，输出与 spec 基线数字同量级（±30%，机器态漂移可接受），
   结果存 `--json-out` 供 Task 7 对照。
-- [ ] 脚本头注释写清「真机 Cocoa 跑，offscreen 数字无效」。
+- [x] 脚本头注释写清「真机 Cocoa 跑，offscreen 数字无效」。
 
 ### Task 1: ink 纯函数
 
