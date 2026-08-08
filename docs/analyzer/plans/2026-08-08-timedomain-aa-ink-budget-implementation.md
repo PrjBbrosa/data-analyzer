@@ -127,24 +127,33 @@ Test `test_pg_timedomain_canvas.py`、`test_pg_canvas_backref_invariants.py`
 **Files:** Modify `canvas.py`、`dense_raster.py`、`renderer.py`、
 `quality.py`；Test `tests/ui/test_pg_dense_raster.py`
 
-- [ ] 红测：
+- [x] 红测（全部落在 `tests/ui/test_pg_dense_raster.py`，10 条）：
   - `_raster_backend_eligible`: dense_discrete → True；general+高 ink
-    → True；general+低 ink → False；进入/退出滞回（边界来回不抖）；
+    → True；general+低 ink → False；进入/退出滞回（边界来回不抖，
+    5 轮往返只产生 5 次状态翻转）；`clear()` 复位准入集；
   - 高 ink general 线 settle 后拿到 `DenseRasterEntry`、native pen 被
     抑制、质量点进入 dense-raster 绿态；ink 回落（Y 放宽）→ entry
     移除、pen 恢复（复用现 dense 用例结构）；
   - interactive 跳过路径对 ink 准入线同样生效（transform-only，
     held pan 零 setData——benchmark 的 `held_pan_setdata_count`
     契约不许破）；
-  - 内存帽：1600×950@dpr2 整行（18.9 MiB）**必须被接受**；
-    构造超 36 MiB 的假尺寸 → 拒收且回退原生非 AA（红点），
-    不碰向量 AA；全局 96 MiB 峰值核算用例。
-  - 变异测试：帽改回 16 MiB → 整行接受用例红。
-- [ ] 实现：谓词放 canvas（读 `_channel_render_profiles` +
-  `_line_ink_state`），spec §4.3 列出的五个消费者全部改走谓词；
+  - 内存帽：1920×900@offscreen dpr1（raster_dpr 2）整行实测
+    **24.18 MiB 必须被接受**；monkeypatch `max_item_bytes` 回 16 MiB
+    → 拒收且回退原生非 AA（红点、`block_reason=high-raster-cost`），
+    不碰向量 AA。全局 96 MiB 的 QImage+QPixmap 2× 峰值核算沿用既有
+    `test_overlay_and_memory_limit_fall_back_to_native_non_aa`，
+    守卫用例另加 `global >= 2 × item` 的不变式。
+  - 变异测试（已做，已还原）：帽改回 16 MiB → 6 红（含整行接受用例
+    与常量守卫）；谓词 ink 支路强制 False → 8 红（含端到端 entry 用例）。
+- [x] 实现：谓词放 canvas（读 `_channel_render_profiles` +
+  `_line_ink_state`），spec §4.3 列出的五个消费者全部改走谓词
+  （外加同文件的 `dense_raster.sync_visibility`，否则 refresh_all 末尾
+  的可见性同步会把刚抑制的 pen 又还回去）；
   `DEFAULT_MAX_ITEM_BYTES = 36 MiB`、`DEFAULT_MAX_GLOBAL_BYTES = 96 MiB`
   （常量注释写平铺论证）。
-- [ ] `pytest tests/ui/test_pg_dense_raster.py tests/ui/test_pg_timedomain_canvas.py -q` 绿。
+- [x] `pytest tests/ui/test_pg_dense_raster.py tests/ui/test_pg_timedomain_canvas.py -q`
+  绿：427 passed / 1 deselected（基线 417 + 新增 10），`tests/ui` 全目录
+  3391 passed / 1 deselected，零新红。
 
 ### Task 5: 实测兜底（paint 计时 + 签名闩锁）
 

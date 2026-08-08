@@ -546,7 +546,7 @@ class Renderer(_CanvasBackref):
             )
             if (
                 interactive
-                and profile.strategy == "dense_discrete"
+                and self._raster_backend_eligible(ck)
                 and dense_entry is not None
                 and self._coverage_contains(cached_coverage, xlim)
                 and self._coverage_contains(raster_coverage, xlim)
@@ -671,13 +671,22 @@ class Renderer(_CanvasBackref):
                 line_facade.plot_data_item.setData(env_t, env_s)
             except Exception as exc:
                 _log.warning("PlotDataItem.setData failed for %r: %s", name, exc)
-                if profile.strategy == "dense_discrete":
+                if self._raster_backend_eligible(ck):
                     self._dense_raster.deactivate_channel(ck)
                 previous_coverage = coverage_by_channel.get(ck)
                 if previous_coverage is not None:
                     active_coverages.append(previous_coverage)
             else:
-                if profile.strategy == "dense_discrete" and not overlay:
+                # The recorded ink is the line's PRE-cap demand for this
+                # geometry (what the clamp above was derived from), so a
+                # cache-HIT frame and the AA gate see the same number the
+                # decision was made on. Recorded BEFORE the raster branch:
+                # _raster_backend_eligible reads this very entry, and a
+                # one-frame-stale read would make the backend choice lag the
+                # geometry by a frame — exactly the flap the band's hysteresis
+                # exists to prevent.
+                self._line_ink_state[ck] = (float(line_ink), line_ink_high)
+                if self._raster_backend_eligible(ck) and not overlay:
                     self._dense_raster.update_channel(
                         ck,
                         axis_facade,
@@ -691,11 +700,6 @@ class Renderer(_CanvasBackref):
                     )
                 else:
                     self._dense_raster.deactivate_channel(ck)
-                # The recorded ink is the line's PRE-cap demand for this
-                # geometry (what the clamp above was derived from), so a
-                # cache-HIT frame and the AA gate see the same number the
-                # decision was made on.
-                self._line_ink_state[ck] = (float(line_ink), line_ink_high)
                 self._last_range_key[ck] = range_key
                 updated_any = True
                 actual_coverage = _finite_x_coverage(env_t)

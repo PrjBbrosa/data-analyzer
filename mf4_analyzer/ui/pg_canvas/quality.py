@@ -79,20 +79,21 @@ class QualityManager(_CanvasBackref):
         return [it for it in scene.items() if isinstance(it, pg.PlotCurveItem)]
 
     def _raster_covered_curve_items(self):
-        """Visible dense curves fully replaced by a ready raster backend."""
+        """Visible raster-backed curves fully replaced by a ready raster."""
         try:
             if self._dense_raster.quality_status().get("state") != "green":
                 return set()
         except Exception:
             return set()
-        profiles = self._channel_render_profiles
         covered = set()
         try:
             entries = self._channel_lines.composite_items()
         except Exception:
             return covered
         for ck, _name, (_axis, line) in entries:
-            if getattr(profiles.get(ck), "strategy", None) != "dense_discrete":
+            # Shared admission predicate (spec §4.3): dense-discrete by
+            # strategy, or a line the ink budget admitted to the raster path.
+            if not self._raster_backend_eligible(ck):
                 continue
             pdi = getattr(line, "plot_data_item", None)
             try:
@@ -290,14 +291,16 @@ class QualityManager(_CanvasBackref):
         return status["metric"] <= status["off_budget"]
 
     def _high_raster_cost_status(self):
-        """Describe visible curves whose raw profile makes AA unaffordable.
+        """Describe visible curves that need the raster backend but lack it.
 
-        The profile mapping is keyed by the same composite ``(data_id, name)``
-        identity as ``_channel_lines``.  Visibility matters: a dormant curve
-        retained by the selection-delta path must not block AA for the curves
-        that are actually painted.
+        Membership is the canvas' shared admission predicate (spec §4.3), keyed
+        by the same composite ``(data_id, name)`` identity as
+        ``_channel_lines``: a dense-discrete profile, or a line whose measured
+        ink puts vector AA out of reach.  Either way, until a ready raster
+        covers it the curve is on native non-AA and must block the AA gate.
+        Visibility matters: a dormant curve retained by the selection-delta
+        path must not block AA for the curves that are actually painted.
         """
-        profiles = self._channel_render_profiles
         covered_curves = self._raster_covered_curve_items()
         lines = getattr(self, "_channel_lines", None)
         labels = []
@@ -314,8 +317,7 @@ class QualityManager(_CanvasBackref):
                     continue
             except Exception:
                 continue
-            profile = profiles.get(composite_key)
-            if getattr(profile, "strategy", None) == "dense_discrete":
+            if self._raster_backend_eligible(composite_key):
                 if getattr(pdi, "curve", None) in covered_curves:
                     continue
                 labels.append(str(display_name))
