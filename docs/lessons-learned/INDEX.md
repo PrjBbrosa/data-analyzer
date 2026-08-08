@@ -139,6 +139,7 @@ lesson by default.
 | [Free-Config Batch RPM Keeps Its Logical Source](batch-free-config-cross-source-rpm-pairing.md) | Editing BatchSheet free-config order analysis, RPM-channel selection, | See lesson |
 | [Changelog Slides Keep Recent Front And Pack History At End](changelog-slides-reserve-bottom-safe-area.md) | Adding or editing entries in the application-help changelog deck. | See lesson |
 | [Qt Popup Singletons Validate The C++ Lifetime](qt-popup-singleton-validates-cpp-lifetime.md) | Keeping a parentless QWidget or popup in a Python class-level singleton | See lesson |
+| [Zsh Path Variables Can Clobber Command Search](zsh-path-variable-clobbers-command-search.md) | Writing an inline zsh loop or helper that assigns a shell variable | See lesson |
 
 ## Selection Rules
 
