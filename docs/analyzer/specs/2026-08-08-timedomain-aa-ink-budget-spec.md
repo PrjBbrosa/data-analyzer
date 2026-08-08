@@ -75,6 +75,19 @@ Y 自适应之后，缩放和拖动全面卡顿。实测三个独立的成本出
 | subplot 密集分桶帽（`_SUBPLOT_DENSE_*`） | ≥2 条密集通道 | 单通道拿不到降桶；实测 6ch（866 点/行）反而比 1ch（3104 点/行）快 |
 | dense_discrete 光栅缓存 | 整数小值域（unique≤512） | 模拟量信号 `strategy=general`、`approx_unique=8192`，永远进不来 |
 
+> **迁移注记（2026-08-08）**：上表三道防线已全部由 ink 取代或收编——
+> wall 守卫由 §4.1 的 ink 降桶替换（Task 2，符号已删除）；dense_discrete
+> 准入扩展为 ink 准入（§4.3，Task 4）；subplot 密集帽保留（它管的是
+> 「多行合计」预算，与单行 ink 正交）。**第四道**——overlay 专属的原始
+> 密度门禁 `_overlay_density_pressure_status`（`源点数/像素宽 >= 8` 且
+> >= 2 条）——不在本 spec 的清点里，已由
+> `docs/analyzer/plans/2026-08-08-overlay-density-gate-ink-migration-plan.md`
+> 单独迁移并删除：它同时假阳性（2 条平滑 500k 曲线 ink 仅 2812、低于
+> 阈值 71 倍却被拦）与假阴性（低采样率满幅振荡 ratio 6.6 不计数，实测
+> 29.8 s/帧，真正拦住它的是 ink 闸）。该计划的「迁移后遗留」段记录了
+> overlay 仍存的第二个假阳性源（点数闸 `_AA_OVERLAY_SEGMENT_OFF`），
+> 需单开任务测量后再动。
+
 ### 1.3 AA 闸门的指标失效
 
 `_idle_aa_density_ok` / `_export_aa_affordable` 用**显示点数**做代理，

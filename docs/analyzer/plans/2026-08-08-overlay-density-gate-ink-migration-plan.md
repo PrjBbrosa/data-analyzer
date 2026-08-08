@@ -171,11 +171,29 @@ Test `tests/ui/test_pg_timedomain_canvas.py`
 
 ### Task 3: 真机验收
 
-- [ ] `probe_aa_ink_budget.py overlay-gate` 迁移前后对比：A 类放开后
-  AA 帧 ≤300 ms；B/C 类仍被拦；D 类不变。
-- [ ] `benchmark_timedomain_interaction.py --assert-standards` 全绿
-  （COCOA_LIMITS_MS 不放宽）。
-- [ ] 补一条 overlay 专项：6~8 条通道叠加 + Y 自适应，确认无秒级帧。
+- [x] `overlay-gate` 迁移前后对比（真机 Cocoa，dpr 2.0，1600×950）：
+
+| 类 | 帧 ink | 旧门禁 | 迁移前闸门 | 迁移后闸门 | AA-off | 稳态 AA |
+|---|---|---|---|---|---|---|
+| **A** 假阳性 | 187.5k | 拦 | block | **allow** | 4.7 ms | 203.3 ms |
+| **A2** 带内 | 84.3k | 拦 | block | **allow** | 3.5 ms | 52.7 ms |
+| **B** 假阴性 | 6112.5k | **放** | block | block | 48.6 ms | 29728 ms |
+| **C** 双高 | 6319.6k | 拦 | block | block | 36.0 ms | 18542 ms |
+| **D** 双低 | 187.4k | 放 | allow | allow | 4.9 ms | 178.6 ms |
+
+  A/A2 如期放开且 AA 帧 203.3 / 52.7 ms ≤ 300 ms；B/C 仍被 ink 闸拦下
+  （旧门禁本来就放行 B——假阴性被 ink 接住）；D 不变。行为与 Task 1
+  的预测逐格吻合。
+- [x] `benchmark_timedomain_interaction.py --assert-standards` 通过
+  （rc=0，COCOA_LIMITS_MS 未放宽）。
+- [x] overlay 专项（8 通道 + Y 自适应，12 秒放任事件循环）：平滑
+  ink 496966 最慢帧 11.1 ms；满幅振荡 ink 9987240 最慢帧 180.7 ms。
+  两者均未开 AA、backstop 未触发，无秒级帧。
+- [x] **探针适配**：`overlay-gate` 原本调用被删除的
+  `_overlay_density_pressure_status()`。改为在探针内部按旧规则
+  （`源点数/像素宽 >= 8` 且 >= 2 条）重算「旧门禁会怎么判」，使这份
+  对照在被描述对象消失后仍可复跑；`_overlay_pressure_disabled()`
+  模拟上下文随之删除（迁移后 today == post，两列按构造重合）。
 - [ ] **兜底闩锁余量核对（Task 1 实测暴露）**：A 类稳态 204.5 ms 距
   `_BACKSTOP_STEADY_AA_MS` (250) 只剩 45.5 ms（≈18%）。本机通过，但更慢的
   机器上 A 类会**例行触发 §4.4 闩锁**。行为仍安全（一个签名只付一次坏帧后
@@ -191,12 +209,36 @@ Test `tests/ui/test_pg_timedomain_canvas.py`
 
 ### Task 4: 收尾
 
-- [ ] 全量双段跑法（主体 `--ignore=tests/acquisition_ui` + 单独跑
-  `tests/acquisition_ui`），对照基线零新红。
-- [ ] spec §1.2 的「三道防线」表加一行迁移注记；本计划补实测数字。
-- [ ] `/update-hints` 检查：本任务**确实删除了一种用户可见的红灯理由**，
-  与 `fix/aa-ink-budget` 不同，需要确认 `ui/hints.py` / `ui/quickref.py`
-  是否提及该门禁。
+- [x] 全量双段跑法，对照基线零新红（数字见收尾 commit）。
+- [x] spec §1.2「三道防线」表加迁移注记；本计划补实测数字（上表）。
+- [x] `/update-hints` 检查：`ui/hints.py` / `ui/quickref.py` 均未提及
+  该门禁或其 tooltip（`grep -rn "叠加高密度"` 在 `mf4_analyzer/help/`
+  与 `docs/analyzer/user-guide/` 下亦无命中），无需同步。
+
+---
+
+## 迁移后遗留：overlay 的第二个假阳性源（点数闸）
+
+本计划「非目标」里写过「不动 `_AA_OVERLAY_SEGMENT_ON/OFF` 点数双阈值——
+点太多仍是真实且正交的约束」。迁移后的实测给了这条判断一个**反证**，
+记录在此作为后续项，本任务不动手：
+
+| 平滑 overlay | 帧 ink (ON=200k) | ink 闸 | 点数 (OFF=7000) | 点数闸 | 最终 | 真实 AA 帧 |
+|---|---|---|---|---|---|---|
+| 2ch | 67 570 | 过 | 6060 | 过 | **放行** | 40.3 ms |
+| 4ch | 172 921 | **过** | 9104 | **拦** | 拒绝 | **58.6 ms** |
+| 8ch | 496 966 | 拦 | 9088 | 拦 | 拒绝 | — |
+
+4ch 是**点数闸单独拦下**的，而它真实 AA 帧只有 58.6 ms，完全负担得起。
+成因是两套机制互相打架：overlay 分桶帽的 `K = _OVERLAY_BUCKET_BUDGET_MULT
+= 1.3` 在 2026-06-22 是**刻意**把显示点数顶到 7000 之上的（当时的目的
+就是让 AA 保持关闭，见该 spec 的「Tightening correction」段），而 ink
+现在说这些帧其实便宜。
+
+要动它必须先做一轮与 Task 1 同规格的测量（平滑 overlay 在 2/4/6/8 通道
+下的真实 AA 帧 vs 点数），并同步 2026-06-22 spec 的既有契约——那份
+spec 的 K=1.3 与其守卫用例直接依赖「summed > off_budget」这一后果。
+单开任务，不要顺手改阈值。
 
 ---
 

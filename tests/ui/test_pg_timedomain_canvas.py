@@ -412,89 +412,103 @@ class TestOverlayBucketCap:
                     f"{full_width_pts}; cap is not biting"
                 )
 
-    def test_dense_two_curve_overlay_blocks_native_aa_below_display_budget(
-        self, qapp,
-    ):
+    def test_smooth_dense_overlay_now_gets_aa(self, qapp):
+        """MIGRATION (2026-08-08): the retired raw-density gate blocked this.
+
+        Two 500k-sample overlay curves clear the old
+        ``source_len / pixel_width >= 8`` test with a decimation ratio of
+        ~333, so the old gate refused AA for both. Their measured ink is
+        2812 device px — 71x UNDER the 200k allow threshold — because the
+        traces are smooth: they cross a pixel column once, not top-to-bottom.
+        Sample count was never the cost; vertical ink is. Real-machine
+        Task 1 data for this quadrant: 204.5 ms steady AA frame, inside the
+        300 ms acceptance limit (see the overlay-density-gate migration plan).
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_ON
+
         canvas = self._make_overlay(qapp, 2)
         assert (canvas.width(), canvas.height()) == (1920, 600)
         for handle in canvas.axes_list:
             handle.y_axis_item().setWidth(120)
         qapp.processEvents()
         canvas._flush_pending_refresh()
+
         density = canvas._quality._density_status()
-        pressure = canvas._quality._overlay_density_pressure_status()
         assert density["metric"] <= density["off_budget"]
-        assert pressure == {
-            "blocked": True,
-            "count": 2,
-            "labels": ("ch0", "ch1"),
-        }
+        assert canvas._quality._frame_native_ink_total() < _INK_AA_ON
+
+        assert canvas._quality._idle_aa_density_ok() is True
+        assert canvas._quality._export_aa_affordable() is True
+        status = canvas.quality_status()
+        assert status.get("block_reason") is None
+
+    def test_overlay_density_pressure_reason_is_retired(self, qapp):
+        """The old reason must not be reachable from any overlay state."""
+        assert not hasattr(
+            canvas_quality_cls := type(self._make_overlay(qapp, 2)._quality),
+            "_overlay_density_pressure_status",
+        ), f"{canvas_quality_cls.__name__} still carries the retired gate"
+
+    def test_high_ink_overlay_still_blocked_after_migration(self, qapp):
+        """The migration removes false positives, not the real protection.
+
+        The retired gate ALLOWED this shape (low sample count -> ratio below
+        8); what refuses it is the ink gate, exactly as Task 1 measured
+        (29.8 s per AA frame for the low-ratio/high-ink quadrant).
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+        t = np.linspace(0.0, 10.0, 10_000, dtype=np.float64)
+        rows = [
+            ("ch0", True, t, 100.0 * np.sin(2 * np.pi * 97.0 * t),
+             "#1769e0", "u", "fid-0"),
+            ("ch1", True, t, 100.0 * np.sin(2 * np.pi * 94.0 * t),
+             "#ef4444", "u", "fid-1"),
+        ]
+        canvas = self._make_canvas(qapp, rows, mode="overlay")
+        canvas.fit_y_to_visible_x()
+        canvas._flush_pending_refresh()
+
+        pixel_width = canvas._current_pixel_width()
+        assert len(t) / pixel_width < 8.0, (
+            "premise: the retired gate would NOT have counted these curves"
+        )
+        assert canvas._quality._frame_native_ink_total() > _INK_AA_OFF
         assert canvas._quality._idle_aa_density_ok() is False
         assert canvas._quality._export_aa_affordable() is False
-        status = canvas.quality_status()
-        assert status["metric"] == density["metric"]
-        assert status["block_reason"] == "overlay-density-pressure"
-
-    def test_overlay_density_pressure_ignores_hidden_curve(self, qapp):
-        canvas = self._make_overlay(qapp, 2)
-        entries = list(canvas._channel_lines.composite_items())
-        entries[1][2][1].plot_data_item.setVisible(False)
-
-        assert canvas._quality._overlay_density_pressure_status() == {
-            "blocked": False,
-            "count": 1,
-            "labels": ("ch0",),
-        }
+        assert canvas.quality_status()["block_reason"] == "high-ink"
 
     def test_low_density_overlay_does_not_block_native_aa(self, qapp):
         canvas = self._make_overlay(qapp, 2, n_points=100)
 
-        assert canvas._quality._overlay_density_pressure_status() == {
-            "blocked": False,
-            "count": 0,
-            "labels": (),
-        }
         assert canvas._quality._export_aa_affordable() is True
+        assert canvas._quality._idle_aa_density_ok() is True
 
-    def test_subplot_dense_curves_do_not_create_overlay_pressure(self, qapp):
-        canvas = self._make_overlay(qapp, 2, mode="subplot")
+    def test_overlay_ink_sum_preserves_composite_identity(self, qapp):
+        """Same display name from two files must count as two lines.
 
-        assert canvas._quality._overlay_density_pressure_status() == {
-            "blocked": False,
-            "count": 0,
-            "labels": (),
-        }
-
-    def test_overlay_density_pressure_unblocked_when_pixel_width_unreadable(
-        self, qapp, monkeypatch,
-    ):
-        canvas = self._make_overlay(qapp, 2)
-
-        def unreadable_width():
-            raise RuntimeError("width unavailable")
-
-        monkeypatch.setattr(canvas, "_current_pixel_width", unreadable_width)
-
-        assert canvas._quality._overlay_density_pressure_status() == {
-            "blocked": False,
-            "count": 0,
-            "labels": (),
-        }
-
-    def test_overlay_density_pressure_preserves_composite_identity(self, qapp):
+        The retired gate carried its own composite-key walk; after the
+        migration the ink sum is the only thing standing between two
+        same-named curves and one of them being silently dropped from the
+        affordability decision.
+        """
         t = np.linspace(0.0, 10.0, 500_000, dtype=np.float64)
         rows = [
             ("speed", True, t, np.sin(t), "#1769e0", "u", "fid-a"),
             ("speed", True, t, np.cos(t), "#ef4444", "u", "fid-b"),
         ]
         canvas = self._make_canvas(qapp, rows, mode="overlay")
+        canvas._flush_pending_refresh()
 
-        pressure = canvas._quality._overlay_density_pressure_status()
-        assert pressure == {
-            "blocked": True,
-            "count": 2,
-            "labels": ("speed", "speed"),
-        }
+        assert len(list(canvas._channel_lines.composite_items())) == 2
+        assert len(canvas._line_ink_state) == 2
+        per_line = [
+            float(state[0])
+            for _ck, _n, state in canvas._line_ink_state.composite_items()
+        ]
+        assert canvas._quality._frame_native_ink_total() == pytest.approx(
+            sum(per_line)
+        )
 
     def test_subplot_mode_not_capped(self, qapp):
         from PyQt5.QtCore import QCoreApplication

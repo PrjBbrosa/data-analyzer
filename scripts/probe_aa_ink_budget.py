@@ -628,30 +628,44 @@ def make_overlay_rows(*, n_points, fs, freqs, tag):
     return rows
 
 
-@contextmanager
-def _overlay_pressure_disabled():
-    """Simulate Task 2 (deleting the old overlay density gate) for one block.
+def _retired_overlay_pressure_verdict(canvas, pixel_width):
+    """Recompute the RETIRED raw-density gate so the comparison survives it.
 
-    Patches ``QualityManager._overlay_density_pressure_status`` on the CLASS,
-    not the instance: ``QualityManager`` is a ``_CanvasBackref``, whose
-    ``__setattr__`` forwards any name outside ``_owned_names`` /
-    ``_delegate_names`` to the CANVAS — an instance-level patch would land on
-    the wrong object and be silently ignored by the gate.
-
-    No product code is modified; this only lets the probe read the
-    post-migration verdict and, for class A, actually reach the AA frame the
-    shipped gate refuses to let it paint.
+    The gate itself was deleted from the product in the Task 2 migration
+    (`quality._overlay_density_pressure_status`). Its rule is reproduced here
+    — and ONLY here, in the probe — so this subcommand keeps answering the
+    question it exists to answer ("what would the old gate have said?") after
+    the thing it describes is gone. Rule as shipped up to 2026-08-08:
+    a visible overlay curve counts when ``source_len / pixel_width >= 8``,
+    and the gate blocked once two or more curves counted.
     """
-    from mf4_analyzer.ui.pg_canvas.quality import QualityManager
-
-    original = QualityManager._overlay_density_pressure_status
-    QualityManager._overlay_density_pressure_status = (
-        lambda self: {"blocked": False, "count": 0, "labels": ()}
-    )
+    if not bool(getattr(canvas, "_overlay_mode", False)):
+        return {"blocked": False, "count": 0, "labels": ()}
     try:
-        yield
-    finally:
-        QualityManager._overlay_density_pressure_status = original
+        width = float(pixel_width)
+    except (TypeError, ValueError):
+        return {"blocked": False, "count": 0, "labels": ()}
+    if width <= 0:
+        return {"blocked": False, "count": 0, "labels": ()}
+    labels = []
+    try:
+        entries = list(canvas._channel_lines.composite_items())
+    except Exception:
+        return {"blocked": False, "count": 0, "labels": ()}
+    for ck, name, (_axis, line) in entries:
+        try:
+            pdi = line.plot_data_item
+            if pdi is None or not pdi.isVisible():
+                continue
+            if len(canvas.channel_data.get(ck)[1]) / width >= 8.0:
+                labels.append(str(name))
+        except Exception:
+            continue
+    return {
+        "blocked": len(labels) >= 2,
+        "count": len(labels),
+        "labels": tuple(labels),
+    }
 
 
 def _overlay_gate_line_metrics(canvas):
@@ -718,7 +732,7 @@ def _run_overlay_gate_case(app, case, *, self_check=False):
     quality = canvas._quality
     pixel_width, lines = _overlay_gate_line_metrics(canvas)
     frame_ink = float(quality._frame_native_ink_total())
-    pressure = quality._overlay_density_pressure_status()
+    pressure = _retired_overlay_pressure_verdict(canvas, pixel_width)
     raster_cost = quality._high_raster_cost_status()
     density = quality._density_status()
     overlay_mode = bool(getattr(canvas, "_overlay_mode", False))
@@ -728,8 +742,10 @@ def _run_overlay_gate_case(app, case, *, self_check=False):
     # the same seeding production would perform today.
     gate_today = bool(quality._idle_aa_density_ok())
     status_today = quality.quality_status()
-    with _overlay_pressure_disabled():
-        gate_post = bool(quality._idle_aa_density_ok())
+    # Post-migration IS today: the old gate no longer exists, so the two
+    # columns coincide by construction. Kept side by side so a re-run of this
+    # subcommand still reads against the pre-migration baseline JSON.
+    gate_post = gate_today
 
     result = {
         "key": case["key"], "label": label, "expect": case["expect"],
@@ -780,12 +796,11 @@ def _run_overlay_gate_case(app, case, *, self_check=False):
         off_suspect = off_suspect or suspect
     result["aa_off_frame_ms"] = float(np.median(off[1:]))
 
-    # AA-on frames, measured with the migration simulated. When the (migrated)
-    # gate still refuses -- B and C -- AA is forced on anyway so the refused
-    # cost is on the record; forcing deliberately skips _open_aa_backstop_epoch
-    # so the measured-frame latch cannot tear AA off between the first frame
-    # and the steady one.
-    with _overlay_pressure_disabled():
+    # AA-on frames. When the gate refuses -- B and C -- AA is forced on anyway
+    # so the refused cost is on the record; forcing deliberately skips
+    # _open_aa_backstop_epoch so the measured-frame latch cannot tear AA off
+    # between the first frame and the steady one.
+    if True:
         enable_started = time.perf_counter()
         quality.try_enable_idle_quality()
         enable_ms = (time.perf_counter() - enable_started) * 1000.0
