@@ -172,8 +172,14 @@ spec：`docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`。
   性能读数）。要复现或对比历史读数先翻这里，别重新发明基线。
 - 结构治理类改动的既有范式：spec（设计 + 为什么现在做 + 量化收益）配 plan（分 Task），
   见 `docs/analyzer/specs|plans/2026-08-04-*` 与 `2026-08-08-*`。新的同类改动照这个格式走。
-- `AGENTS.md` + `docs/lessons-learned/` + `scripts/lessons/` 是 **Codex 专用**的
-  lessons 系统，Claude 不需要走它的 check/promote 流程。其中 `pyqt-ui/`
+- `AGENTS.md` 是 **Codex 侧与本文平级的契约文件**（它开头自己声明 "for Codex only"，
+  也写明别去改 `CLAUDE.md` / `.claude/`）。它按 Version And Documentation Contracts /
+  Architecture Contracts / Robustness Rules / Change Discipline / Verification Gates
+  组织，覆盖的是**同一套护栏**（状态所有权棘轮的 shrink-only、ink 判据、import boundary
+  清单、禁止宽泛 `except Exception`），只是换了另一份表述——**别把它当 lessons 系统读**。
+  真要动某条护栏，记得两份文件都描述了它（该文件在持续迭代，以当前内容为准）。
+- `docs/lessons-learned/` + `scripts/lessons/` 才是 Codex 的 lessons 系统（AGENTS.md
+  最后一节），Claude 不需要走它的 check/promote 流程。其中 `pyqt-ui/`
   `signal-processing/` `refactor/` 下的踩坑记录可以当参考检索；`orchestrator/` 是已废弃的
   多 agent 调度产物。
 - `/update-hints` 是项目内命令：UI 交互有增删改时，用它同步 `ui/hints.py`（滚动提示）与
