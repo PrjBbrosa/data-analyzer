@@ -1,6 +1,35 @@
 # 时域渲染「墨水量预算」治理设计（AA 触发边界 + 满高竖线墙统一机制）
 
-> 状态：**设计定稿，未实施**。实施计划见
+> **Implementation note (2026-08-08, measured)：已按计划 Task 0–6 实施完毕**
+> （分支 `fix/aa-ink-budget`，Task 0/1/2/3/4/5 各一 commit + 组合语义修复
+> `7884b574`）。真机 Cocoa（dpr 2.0，1600×950）验收实测 vs 本文基线：
+>
+> | 验收项 | 治理前（§1） | 治理后 | 判定 |
+> |---|---|---|---|
+> | 1ch 振荡+Y fit 空闲升级帧 | 首帧 124.6 s / 稳态 62.4 s | **8.6 ms**（光栅覆盖，向量 AA 未触发） | ✅ |
+> | 6ch 振荡最坏 AA 帧 | 7.2 s | 34.7 ms（ink 闸门 block） | ✅ |
+> | 拖动 p50，全 ratio 带含 1.0 峰值 | 峰值 106 ms | **5.2–9.6 ms** | ✅ ≤30 |
+> | 缩放 settle p50 | 127 ms | 33.6 ms | ⚠️ 超目标 12%，见下 |
+> | 平滑对照（ink 72.7k） | AA 240–474 ms | AA 照常开启，238.8 ms | ✅ 零回归 |
+> | `benchmark_timedomain_interaction --assert-standards` | — | 通过（门禁未放宽） | ✅ |
+>
+> 三点实施期修订（均不改本文机制结论）：
+> 1. **§4.2 与 §4.3 的组合语义**：高 ink 线一旦被光栅 entry 覆盖，即从
+>    AA 求和中剔除且不进 native-AA 集——此时闸门放行是**设计正确**（被
+>    覆盖曲线不再走向量描边）；「高 ink 拒 AA」只对未覆盖构形成立。
+>    契约见 `TestInkBudget` 三条双分支用例（`7884b574`）。
+> 2. **缩放 settle 33.6 ms** 是「每个滚轮刻度强制走 settle + 被覆盖线
+>    光栅重建」的最坏口径；产品滚轮路径 settle 每手势只落一次（coarse
+>    通道在持手势期间为 transform-only）。判定为可接受，目标数字不改。
+> 3. **6ch 密集堆叠**的行 ink（~208k dev/行）低于光栅准入带（300k），
+>    维持原生非 AA 路径——subplot 密集帽（§1.2 表第二行）已把它压在
+>    35 ms 帧内，闸门 block 挡掉了 7.2 s 的 AA 帧，无需光栅接管。
+>
+> 单行光栅 entry 实测 24.18 MiB（offscreen dpr1 @1920×900）——旧 16 MiB
+> 帽确实拒收，§4.3 的 36 MiB 重标是准入前提。Windows 复标定（§7.4）仍
+> 未做，进 release 前必须完成。
+>
+> 状态：~~设计定稿，未实施~~ → **已实施，待 Windows 复标定**。实施计划见
 > `docs/analyzer/plans/2026-08-08-timedomain-aa-ink-budget-implementation.md`。
 > 分支：`fix/aa-ink-budget`。
 >

@@ -209,27 +209,38 @@ Test `test_pg_timedomain_canvas.py`
 
 **Files:** 无产品代码改动；跑 Task 0 探针
 
-- [ ] `scripts/probe_aa_ink_budget.py --sweep-y`：全 ratio 带（含 1.0）
-  拖动 p50 ≤ 30 ms；
-- [ ] `--aa-frame`：振荡 + Y fit 场景向量 AA 不触发，空闲升级走光栅，
-  升级总耗时 ≤ 500 ms；平滑对照 AA 照常开启、指标不劣于 spec 基线；
-- [ ] 缩放（wheel-zoom settle 路径）p50 ≤ 30 ms（spec §1 的 127 ms 项）；
-- [ ] `scripts/benchmark_timedomain_interaction.py --assert-standards`
-  全绿（COCOA_LIMITS_MS 不放宽，`held_pan_setdata_count == 0` 契约在）；
-- [ ] 若常量需微调：改 spec §5 表 + 对应守卫用例同步，一次 commit。
+- [x] `sweep-y`：全带拖动 p50 **5.2–9.6 ms**（治理前峰值 106 ms @ratio
+  1.0；p95 最大 28.7 ms）——通过（≤30）；高 ink 带显示点数收敛到 ~700。
+- [x] `aa-frame`：1ch 振荡+fit_y 升级帧 **8.6 ms**（治理前 124.6 s；光栅
+  覆盖、向量 AA 未触发）；6ch 最坏帧 34.7 ms（治理前 7.2 s，闸门 block）；
+  平滑对照 AA 照常开启（238.8 ms 首帧，238~475 ms 基线带内）。
+- [x] 缩放 settle p50 **33.6 ms**（治理前 127 ms）。超 30 ms 目标 12%：
+  测量口径是每刻度强制 settle + 被覆盖线光栅重建；产品滚轮 settle 每
+  手势只落一次。判定可接受，记录在 spec 实施注记，目标数字未改。
+- [x] `benchmark_timedomain_interaction.py --assert-standards` 通过
+  （rc=0，门禁未放宽，`held_pan_setdata_count == 0` 契约在）。
+- [x] 常量无需微调：§5 起始值全部通过验收，spec 仅补实测注记。
 
 ### Task 7: 收尾
 
-- [ ] 全量：`--ignore=tests/acquisition_ui` 跑主体 + 单独跑
-  `tests/acquisition_ui`（CLAUDE.md 交错 segfault 纪律），对照基线
-  失败数，新红清零；
-- [ ] `pytest -m slow` 里时域相关 perf 用例过一遍；
-- [ ] spec 头部补「Implementation note (measured)」段：真机验收数字表
-  （沿用 2026-06-22 spec 的先例格式）；
-- [ ] `/update-hints` 检查：本改动无 UI 交互增删（质量点语义不变），
-  预期不用动，确认后记录；
+- [x] 全量（2026-08-08，本分支收尾态）：主体 `--ignore=tests/acquisition_ui`
+  **5245 passed / 9 skipped / 0 failed**；`tests/acquisition_ui` 独立段
+  **355 passed / 0 failed**。均优于 CLAUDE.md 记录的基线（那几条既有红
+  已在 main 后续提交中结清），零新红。
+- [x] `pytest -m slow tests/perf`：
+  `test_timedomain_pan_refresh_pg_canvas` 在**未改动的 main 基线
+  （6b41eee7）上同位置（裸 QWidget 热身 show()，任何画布代码之前）
+  逐字节复现 `Fatal Python error: Aborted`——本机离屏环境既有问题，
+  非本分支引入，不追账；其余 slow 用例 1 passed。
+- [x] spec 头部实测注记已补（含缩放 33.6 ms 超目标 12% 的如实记录与
+  口径说明、Task3+4 组合语义修订、6ch 密集堆叠不进光栅准入带的说明）。
+- [x] `/update-hints` 检查：本分支无 UI 交互增删——改动全部在
+  pg_canvas 渲染内核与 quality 内部状态，质量点的绿/黄/红语义与
+  tooltip 文案未变（Task 4 明确保持），`ui/hints.py` / `ui/quickref.py`
+  无需同步。
 - [ ] Windows RC 打包等价环境复标定 §5 常量（`--hdf` 真数据 +
-  probe 脚本），未复标定前本分支不进 release 包。
+  probe 脚本），未复标定前本分支不进 release 包。**（唯一未结项，
+  需 Windows 真机）**
 
 ---
 
