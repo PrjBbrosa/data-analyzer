@@ -879,13 +879,31 @@ class TestInkBudget:
         assert pts >= _INK_MIN_BUCKETS
 
     def test_high_ink_holds_aa_off(self, qapp):
+        """Composed spec §4.2 + §4.3 contract: a high-ink line refuses vector
+        AA exactly while the raster backend does NOT cover it. Once the
+        settled flush hands the line to the pixmap backend, the vector stroke
+        is suppressed and enabling AA for what remains is safe — the covered
+        curve is excluded from the ink sum AND from the AA flip itself.
+        """
         canvas, _t, _sig = self._ink_canvas(qapp)
-        ax, _line = canvas._channel_lines["ch0"]
+        ax, line = canvas._channel_lines["ch0"]
         ax.set_ylim(-0.005, 0.005)
         canvas._flush_pending_refresh()
         assert canvas._frame_ink_high is True
-        # The idle-AA gate must hard-fail (AA stays OFF) on a high-ink frame,
-        # regardless of how few points the downsample left.
+
+        # Covered branch: entry ready, stroke suppressed, gate may re-arm —
+        # but the covered curve must not be in the native-AA set it re-arms.
+        assert canvas._dense_raster.entry_for("ch0") is not None
+        assert line.plot_data_item.opts.get("pen") is None
+        assert canvas._quality._idle_aa_density_ok() is True
+        covered = canvas._quality._raster_covered_curve_items()
+        assert line.plot_data_item.curve in covered
+
+        # Uncovered branch (memory cap / any raster rejection): the gate must
+        # hard-fail regardless of how few points the downsample left.
+        canvas._dense_raster.max_item_bytes = 0
+        canvas._dense_raster.deactivate_channel("ch0")
+        assert canvas._dense_raster.entry_for("ch0") is None
         assert canvas._quality._idle_aa_density_ok() is False
 
     def test_oscillating_fit_y_holds_aa_off_spec_1_3_reversal(self, qapp):
@@ -900,7 +918,7 @@ class TestInkBudget:
         from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
 
         canvas, _t, _sig = self._oscillating_canvas(qapp)
-        ax, _line = canvas._channel_lines["ch0"]
+        ax, line = canvas._channel_lines["ch0"]
         canvas.fit_y_to_visible_x()
         canvas._flush_pending_refresh()
         ink, high = canvas._line_ink_state.get("ch0")
@@ -911,6 +929,22 @@ class TestInkBudget:
             "downsample budget"
         )
 
+        # Composed with spec §4.3: on the settled frame the raster backend
+        # has already admitted exactly this line, so the 63-second vector-AA
+        # stroke can never be painted — the curve sits outside the native-AA
+        # set entirely, and export stays WYSIWYG-raster instead of forcing AA.
+        assert canvas._dense_raster.entry_for("ch0") is not None
+        assert line.plot_data_item.curve not in (
+            canvas._quality._native_aa_curve_items()
+        )
+        assert canvas._quality._export_aa_affordable() is False
+
+        # If coverage is unavailable (memory cap / raster rejection), the
+        # catalogue case must fall back to the hard refusal — never to the
+        # old point-count allow.
+        canvas._dense_raster.max_item_bytes = 0
+        canvas._dense_raster.deactivate_channel("ch0")
+        assert canvas._dense_raster.entry_for("ch0") is None
         assert canvas._quality._idle_aa_density_ok() is False
         assert canvas._quality._export_aa_affordable() is False
 
@@ -923,8 +957,13 @@ class TestInkBudget:
         canvas, _t, _sig = self._ink_canvas(qapp)
         ax, _line = canvas._channel_lines["ch0"]
         ax.set_ylim(-0.005, 0.005)
+        # Pin the UNCOVERED configuration: with the raster backend rejected by
+        # a zero memory cap, the only thing keeping AA off across no-op
+        # flushes is the preserved ink state itself.
+        canvas._dense_raster.max_item_bytes = 0
         canvas._flush_pending_refresh()
         assert canvas._frame_ink_high is True
+        assert canvas._dense_raster.entry_for("ch0") is None
         recorded = canvas._line_ink_state.get("ch0")
 
         # Second flush, nothing changed → every line takes the cache-hit path.
