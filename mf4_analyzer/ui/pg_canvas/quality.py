@@ -12,7 +12,7 @@ from ._backref import _CanvasBackref
 
 import pyqtgraph as pg
 
-from .renderer import _SUBPLOT_DENSE_DECIMATION
+from .renderer import _INK_AA_OFF, _INK_AA_ON, _SUBPLOT_DENSE_DECIMATION
 
 
 class QualityManager(_CanvasBackref):
@@ -26,6 +26,8 @@ class QualityManager(_CanvasBackref):
         "aa_on",
         "density_allowed",
         "density_seeded",
+        "ink_allowed",
+        "ink_seeded",
         "last_emitted_status",
         "timer",
     })
@@ -52,6 +54,11 @@ class QualityManager(_CanvasBackref):
         self.timer.timeout.connect(self.try_enable_idle_quality)
         self.density_allowed = False
         self.density_seeded = False
+        # Ink-sum hysteresis state (spec §4.2), mirrors density_allowed /
+        # density_seeded above but tracks the SUMMED per-line ink of the
+        # native-AA-path lines rather than displayed point count.
+        self.ink_allowed = False
+        self.ink_seeded = False
         self.last_emitted_status = None
 
     def reset_for_rebuild(self):
@@ -65,6 +72,8 @@ class QualityManager(_CanvasBackref):
         # Rebuild changes the curve set / point counts, so the next decision
         # must re-seed via the OFF threshold rather than inherit stale state.
         self.density_seeded = False
+        self.ink_allowed = False
+        self.ink_seeded = False
         self.last_emitted_status = None
         self._emit_quality_status_changed()
 
@@ -109,6 +118,50 @@ class QualityManager(_CanvasBackref):
     def _native_aa_curve_items(self):
         covered = self._raster_covered_curve_items()
         return [it for it in self._collect_curve_items() if it not in covered]
+
+    def _frame_native_ink_total(self) -> float:
+        """Sum this frame's per-line ink for lines still on the native-AA
+        paint path (spec §4.2 / renderer ``_line_ink_state``).
+
+        Excludes lines whose curve is already covered by a settled
+        dense-raster entry (``_raster_covered_curve_items`` — the raster
+        upgrade already replaced their paint cost, so their recorded ink must
+        not keep blocking AA for the rest of the frame) and lines whose
+        ``PlotDataItem`` is not currently visible. Matched by COMPOSITE
+        ``(data_id, name)`` identity, never the display name, for the same
+        multi-file-same-name reason the renderer's own per-line cache uses
+        composite keys.
+        """
+        ink_state = getattr(self, "_line_ink_state", None)
+        if not ink_state:
+            return 0.0
+        covered = self._raster_covered_curve_items()
+        pdi_by_ck = {}
+        try:
+            entries = self._channel_lines.composite_items()
+        except Exception:
+            entries = ()
+        for ck, _name, (_axis, line) in entries:
+            pdi_by_ck[ck] = getattr(line, "plot_data_item", None)
+        total = 0.0
+        for ck, _name, state in ink_state.composite_items():
+            try:
+                ink = float(state[0])
+            except (TypeError, IndexError, ValueError):
+                continue
+            pdi = pdi_by_ck.get(ck)
+            try:
+                if pdi is not None and not pdi.isVisible():
+                    continue
+            except Exception:
+                pass
+            try:
+                if pdi is not None and pdi.curve in covered:
+                    continue
+            except Exception:
+                pass
+            total += ink
+        return total
 
     def _set_curves_antialias(self, on: bool) -> int:
         """Persistently set curve AA without repainting or changing data."""
@@ -240,14 +293,25 @@ class QualityManager(_CanvasBackref):
         if self._high_raster_cost_status()["blocked"]:
             self.density_allowed = False
             return False
-        # Universal ink budget: while any line is over _INK_OFF_BUDGET device
-        # pixels of vertical ink (see renderer module constants) the idle timer
-        # must NOT re-arm AA — the expensive AA compositing over an ink band is
-        # exactly the cost this guard exists to avoid. The bucket cut already
-        # coarsened the strokes; holding AA off keeps the frame cheap until the
-        # geometry changes. Reuses the existing density gate (no new AA pathway)
-        # by hard-failing it for the high-ink frame.
-        if getattr(self, "_frame_ink_high", False):
+        # Universal ink budget (spec §4.2): sum the per-line vertical ink of
+        # every line still on the native-AA path (raster-covered lines are
+        # excluded by _frame_native_ink_total — their paint cost was already
+        # replaced by the raster upgrade, so one high-ink raster-covered line
+        # must not keep blocking AA for the rest of the frame). Double-
+        # threshold hysteresis, same shape as the point-count density gate
+        # below: a sum parked in the (_INK_AA_ON, _INK_AA_OFF] dead band holds
+        # whatever the previous decision was instead of flapping every frame.
+        # AND'd with the point-count gate below, not a replacement for it —
+        # "too many points" is still a real, orthogonal constraint.
+        total_ink = self._frame_native_ink_total()
+        if not self.ink_seeded:
+            self.ink_allowed = total_ink <= _INK_AA_OFF
+            self.ink_seeded = True
+        elif total_ink <= _INK_AA_ON:
+            self.ink_allowed = True
+        elif total_ink > _INK_AA_OFF:
+            self.ink_allowed = False
+        if not self.ink_allowed:
             self.density_allowed = False
             return False
         if self._overlay_density_pressure_status()["blocked"]:
@@ -276,6 +340,12 @@ class QualityManager(_CanvasBackref):
         # the idle hysteresis state opt a dense-discrete curve back into the
         # temporary forced-AA context used by grab_pixmap().
         if self._high_raster_cost_status()["blocked"]:
+            return False
+        # Same ink ceiling as the idle-AA gate (spec §4.2), one-shot: export
+        # has no hysteresis state to seed or hold, it decides fresh on every
+        # call, so this is a plain comparison against _INK_AA_OFF (no ON/OFF
+        # dead band, no self.ink_allowed/ink_seeded mutation).
+        if self._frame_native_ink_total() > _INK_AA_OFF:
             return False
         if self._overlay_density_pressure_status()["blocked"]:
             return False

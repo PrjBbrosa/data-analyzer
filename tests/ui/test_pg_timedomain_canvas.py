@@ -888,6 +888,32 @@ class TestInkBudget:
         # regardless of how few points the downsample left.
         assert canvas._quality._idle_aa_density_ok() is False
 
+    def test_oscillating_fit_y_holds_aa_off_spec_1_3_reversal(self, qapp):
+        """Direct reversal of spec §1.3's failure catalogue: the "1ch
+        oscillating + Y fit" case is the one all THREE old defenses (wall
+        guard, subplot dense cap, dense_discrete raster) let straight
+        through to a measured 63-SECOND AA frame, because the point-count
+        metric alone reports the same ~3104 displayed points as the smooth
+        control the spec lists at 3.8 ms AA-on (934× blind spot). The
+        ink-sum AA gate (spec §4.2) must refuse it on ink alone.
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+        canvas, _t, _sig = self._oscillating_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        canvas.fit_y_to_visible_x()
+        canvas._flush_pending_refresh()
+        ink, high = canvas._line_ink_state.get("ch0")
+        assert high is True
+        assert ink > _INK_AA_OFF, (
+            "premise: the fit-Y oscillating line's recorded (pre-cap) ink "
+            "demand must clear the AA ceiling, not just the lower "
+            "downsample budget"
+        )
+
+        assert canvas._quality._idle_aa_density_ok() is False
+        assert canvas._quality._export_aa_affordable() is False
+
     def test_cache_hit_frame_preserves_high_ink_state(self, qapp):
         """A no-op refresh (range-key cache HIT) must carry the recorded ink
         state forward. Otherwise the idle-AA gate re-arms over a still-present
@@ -7350,6 +7376,180 @@ class TestAutoIdleAA:
 
         assert canvas._quality._idle_aa_density_ok() is False
         assert canvas._quality.density_allowed is False
+
+    # -- ink-sum AA gate (spec §4.2), replacing the old hard
+    # `_frame_ink_high` block with a summed-ink hysteresis gate ANDed with
+    # the point-count gate above ---------------------------------------
+
+    def test_ink_aa_gate_constants_stay_in_calibrated_band(self):
+        """`_INK_AA_ON` / `_INK_AA_OFF` are real-hardware calibrations (spec
+        §5), not tuning knobs. Before changing either, update spec §5 AND
+        re-run scripts/probe_aa_ink_budget.py on real hardware — an
+        offscreen suite cannot measure paint cost. The band fences the
+        order of magnitude the smooth-vs-oscillating separation (spec §3.2:
+        72.7k allowed, 306k/4.1M blocked) depends on.
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF, _INK_AA_ON
+
+        assert 100_000 <= _INK_AA_ON <= 400_000
+        assert 200_000 <= _INK_AA_OFF <= 600_000
+        assert _INK_AA_OFF > _INK_AA_ON
+
+    def test_ink_gate_rejects_frame_over_off_budget(self, qapp):
+        """A frame whose summed native-AA-path ink exceeds `_INK_AA_OFF`
+        must hard-fail the idle-AA gate — the direct AND partner to the
+        point-count gate, not a replacement for it (the displayed point
+        count here is trivially under budget)."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+        canvas = self._plot(qapp)
+        canvas._line_ink_state.clear()
+        canvas._line_ink_state["fabricated"] = (float(_INK_AA_OFF) + 1.0, True)
+
+        assert canvas._quality._idle_aa_density_ok() is False
+
+    def test_ink_gate_cold_start_seeds_via_off_threshold(self, qapp):
+        """First-ever decision (`ink_seeded` False) seeds by comparing
+        against `_INK_AA_OFF`, the same seeding rule as the point-count
+        gate's `density_seeded` (mirrors
+        `test_single_subplot_curve_6000_passes_on_first_decision`)."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF, _INK_AA_ON
+
+        canvas = self._plot(qapp)
+        mid = (_INK_AA_ON + _INK_AA_OFF) // 2
+        canvas._line_ink_state.clear()
+        canvas._line_ink_state["fabricated"] = (float(mid), False)
+        canvas._quality.ink_seeded = False
+        canvas._quality.ink_allowed = False  # must not stick False cold
+
+        assert canvas._quality._idle_aa_density_ok() is True, (
+            "cold start must seed via the OFF threshold (mid <= OFF), not "
+            "inherit the prior ink_allowed value"
+        )
+        assert canvas._quality.ink_seeded is True
+
+    def test_ink_gate_hysteresis_holds_in_dead_band(self, qapp):
+        """Ink parked strictly between `_INK_AA_ON` and `_INK_AA_OFF` holds
+        whatever the previous decision was — same three-way shape as the
+        point-count gate (mirrors
+        `test_overlay_on_off_hysteresis_do_not_flap`)."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF, _INK_AA_ON
+
+        canvas = self._plot(qapp)
+        mid = (_INK_AA_ON + _INK_AA_OFF) // 2
+        canvas._line_ink_state.clear()
+        canvas._line_ink_state["fabricated"] = (float(mid), False)
+        canvas._quality.ink_seeded = True
+
+        canvas._quality.ink_allowed = True
+        assert canvas._quality._idle_aa_density_ok() is True
+        assert canvas._quality._idle_aa_density_ok() is True  # stable, no flap
+
+        canvas._quality.ink_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is False
+        assert canvas._quality._idle_aa_density_ok() is False  # stable, no flap
+
+    def test_ink_gate_reallows_below_on_threshold(self, qapp):
+        """Below `_INK_AA_ON` the gate re-allows regardless of the prior
+        decision — the recovery half of the hysteresis."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_ON
+
+        canvas = self._plot(qapp)
+        canvas._line_ink_state.clear()
+        canvas._line_ink_state["fabricated"] = (float(_INK_AA_ON) - 1.0, False)
+        canvas._quality.ink_seeded = True
+        canvas._quality.ink_allowed = False
+
+        assert canvas._quality._idle_aa_density_ok() is True
+
+    def test_ink_gate_excludes_raster_covered_line_from_sum(
+        self, qapp, monkeypatch,
+    ):
+        """A dense_discrete line whose raster entry has SETTLED (green,
+        `_raster_covered_curve_items`) must not count toward the summed
+        ink — its paint cost was already replaced by the raster upgrade, so
+        an arbitrarily large recorded demand on that line must not keep
+        blocking AA for the rest of the frame (spec §4.2). Reuses the
+        production dense_discrete + smooth mix already covered end-to-end by
+        `test_dense_discrete_idle_aa_is_blocked_below_display_budget` /
+        `test_quality_status_reports_dense_overlay_gate`-adjacent fixtures."""
+        from PyQt5.QtCore import QCoreApplication, Qt
+        from PyQt5.QtWidgets import QApplication
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+        n = 5_727
+        t_dense = np.arange(n, dtype=np.float64) / 100.0
+        dense_vals = (np.arange(n) % 256).astype(np.float64)
+        t_smooth = np.linspace(0.0, 57.26, 2_000)
+        smooth_vals = np.sin(t_smooth)
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(
+            [
+                ("EPS_CRC1", True, t_dense, dense_vals, "#16a34a", "", "mixed-ink"),
+                ("smooth", True, t_smooth, smooth_vals, "#2563eb", "", "mixed-ink"),
+            ],
+            mode="subplot",
+        )
+        QCoreApplication.processEvents()
+        canvas._flush_pending_refresh()
+        # Settle the dense raster so EPS_CRC1's curve enters the covered set.
+        canvas._dense_raster.flush_pending(canvas._interaction_generation)
+        assert canvas._dense_raster.entry_for("EPS_CRC1") is not None
+        assert any(
+            p.strategy == "dense_discrete"
+            for p in canvas._channel_render_profiles.values()
+        )
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+
+        smooth_state = canvas._line_ink_state.get("smooth")
+        assert smooth_state is not None
+        assert smooth_state[0] <= _INK_AA_OFF, (
+            "fixture premise: the uncovered smooth line must itself be "
+            "affordable so the covered line is what the test isolates"
+        )
+        # Fabricate a wildly high ink demand on the now raster-covered dense
+        # line: if the gate summed it in, this alone would block AA for the
+        # whole frame no matter how cheap the smooth line is.
+        canvas._line_ink_state["EPS_CRC1"] = (10.0 * float(_INK_AA_OFF), True)
+        canvas._quality.ink_seeded = False
+
+        assert canvas._quality._idle_aa_density_ok() is True
+
+    def test_export_aa_affordable_false_when_frame_ink_over_budget(self, qapp):
+        """`_export_aa_affordable` applies the same ink ceiling as the idle
+        gate (one-shot, no hysteresis) — fixes the copy/export freeze on a
+        high-ink geometry the point-count metric alone missed."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+        canvas = self._plot(qapp)
+        canvas._line_ink_state.clear()
+        canvas._line_ink_state["fabricated"] = (float(_INK_AA_OFF) + 1.0, True)
+
+        assert canvas._quality._export_aa_affordable() is False
+
+    def test_export_aa_affordable_true_for_smooth_low_ink_real_fixture(
+        self, qapp,
+    ):
+        """Regression guard: a real (not fabricated) smooth multi-channel
+        fixture — the spec's accepted-behavior control — must stay
+        affordable. Reads the ink the renderer actually recorded, it is not
+        overridden."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_ON
+
+        canvas = self._plot(qapp)
+        canvas._flush_pending_refresh()
+        total_ink = sum(
+            state[0] for state in canvas._line_ink_state.values()
+        )
+        assert total_ink <= _INK_AA_ON, (
+            "fixture premise: the smooth multi-channel control must be well "
+            "under the AA ceiling for this to be a meaningful regression "
+            f"guard (got {total_ink})"
+        )
+
+        assert canvas._quality._export_aa_affordable() is True
 
     def test_resize_event_rearms_idle_timer(self, qapp):
         """Fix C: a resize debounces a settle pass; once the settle timer
