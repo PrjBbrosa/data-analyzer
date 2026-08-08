@@ -170,19 +170,40 @@ Test `test_pg_timedomain_canvas.py`、`test_pg_canvas_backref_invariants.py`
 **Files:** Modify `canvas.py`、`quality.py`；
 Test `test_pg_timedomain_canvas.py`
 
-- [ ] 红测（计时源打桩，不依赖真实帧耗时）：
-  - 首 AA 帧超 `BACKSTOP_FIRST_AA_MS` → AA 立即关、当前签名入黑名单、
+- [x] 红测（计时源打桩，不依赖真实帧耗时）：新增 `TestAaBackstopLatch`
+  15 条，全部先红后绿。计时源有两种桩：`_FakeFrameClock`（固定步长的
+  `perf_counter` 替身，monkeypatch 到 `quality` 模块，喂真 paintEvent）
+  与直接调 `_note_aa_frame(ms)`。
+  - 首 AA 帧超 `_BACKSTOP_FIRST_AA_MS` → AA 立即关、当前签名入黑名单、
     同签名 `try_enable_idle_quality` 不再开 AA；
-  - 签名变化（改 xlim / 改通道集）→ 重新武装；
-  - 黑名单 LRU 上限 32，第 33 条挤掉最旧；
-  - 稳态 EMA 超 `BACKSTOP_STEADY_AA_MS` → 同处置；
-  - 正常帧（桩值 5 ms）→ 永不闩锁（零行为变化）。
-- [ ] 实现：常驻轻量版 `__class__` swap paint 计时（照
-  `_perf_probe.install_paint_probe` 的实现要点，含幂等标记；
-  `clear()`/重建画布时的 timer 世代纪律照抄 dense_raster 的
-  sender-identity 模式）；签名 = quantized xlim key + y_key +
-  通道集指纹 + pixel_width；闩锁检查挂在 `_idle_quality_allowed`。
-- [ ] 子目录绿。
+  - 签名变化（改 xlim / 隐藏一条曲线改通道集）→ 重新武装（两条）；
+  - 黑名单 LRU 上限 32，第 33 条挤掉最旧；命中刷新 recency（两条）；
+  - 稳态 EMA 超 `_BACKSTOP_STEADY_AA_MS` → 同处置（α=0.5 被数值钉死：
+    5/100/500 → 300 ms 触发；5/100/300 → 200 ms 不触发）；
+  - 正常帧（桩值 5 ms × 200）→ 永不闩锁、质量点仍绿（零行为变化）；
+  - 闩锁后 `quality_status()` 不抛且状态 ∈ {red, yellow}；
+  - 世代纪律：为旧 epoch 排队的 trip 不得掐掉新 epoch 的 AA；
+  - `__class__` swap 装在类层面且幂等；真 paintEvent 写 canvas 上的
+    `_last_frame_paint_ms`；未武装时的坏帧完全不进闩锁。
+- [x] 实现：常驻轻量版 `__class__` swap paint 计时
+  （`quality.install_frame_paint_timer`，按 base 类 memoize 生成子类，
+  实例幂等标记 `_tracelab_frame_timer_installed`；常态每帧 = 两次
+  `perf_counter` + 一次 float 存储 + 一次布尔读）；trip 的场景变更半程
+  经零延时 QTimer 推迟出 paint，并带 AA epoch 的 Qt 动态属性做世代校验
+  （dense_raster 的 generation-property 纪律；该 timer 从不被替换，
+  故不需要额外的 sender-identity 校验）。签名 = quantized xlim key
+  （`_quantize_range_key`）+ 逐行 y_key（`_quantize_y_span_key`）+
+  可见通道集指纹 + pixel_width + overlay 标志；闩锁检查挂在
+  `_idle_quality_allowed`。`reset_for_rebuild` 复位 epoch 计数但**保留
+  黑名单**（重建不改变「该视图构形画不起 AA」这一事实，且签名本身已
+  携带会让该事实过期的全部输入；LRU 兜底让不再匹配的条目自然老化）。
+- [x] 子目录绿：`test_pg_timedomain_canvas.py` + `test_pg_dense_raster.py`
+  + `test_pg_canvas_backref_invariants.py` = 454 passed / 1 deselected
+  （基线 439 + 新增 15，零新红）；`tests/ui` 全目录 3415 passed /
+  1 deselected。变异测试（均已还原）：`_BACKSTOP_FIRST_AA_MS` → 10000
+  得 10 红（含 `test_first_aa_frame_over_budget_latches_and_blacklists_signature`）；
+  `_BACKSTOP_STEADY_AA_MS` → 25000 得 2 红（含
+  `test_steady_aa_frame_ema_over_budget_latches`）。
 
 ### Task 6: 真机验收（Cocoa）
 

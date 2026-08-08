@@ -113,7 +113,10 @@ from mf4_analyzer.ui.pg_canvas import renderer as _renderer
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
 from mf4_analyzer.ui_kit.axis_metrics import pin_left_axes_to_common_width
 from mf4_analyzer.ui.axis_group_palette import axis_group_color
-from mf4_analyzer.ui.pg_canvas.quality import QualityManager
+from mf4_analyzer.ui.pg_canvas.quality import (
+    QualityManager,
+    install_frame_paint_timer,
+)
 from mf4_analyzer.ui.pg_canvas.dense_raster import DenseDiscreteRasterLayer
 from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
     Renderer,
@@ -536,6 +539,20 @@ class TimeDomainCanvasPG(QWidget):
         # so the expensive AA compositing never re-arms over an ink band. Reset
         # to False on every refresh that finds every line under budget.
         self._frame_ink_high = False
+        # --- measured-frame backstop (spec §4.4) ------------------------
+        # Written by the resident paint timer installed on _glw below
+        # (quality.install_frame_paint_timer). Deliberately PLAIN attributes,
+        # not properties or a collaborator hop: they are touched from inside
+        # Qt's paintEvent on every frame, so the write has to be a bare
+        # __dict__ store. _last_frame_paint_ms is the most recent measured
+        # frame in milliseconds (diagnostics + tests read it);
+        # _aa_backstop_armed is the pairing token the paint timer tests before
+        # doing anything beyond that store — it is True ONLY between the
+        # moment idle AA is switched on and the moment it goes back off, so
+        # non-AA frames cost one boolean read and are never offered to the
+        # latch. QualityManager owns the flag's lifecycle.
+        self._last_frame_paint_ms = 0.0
+        self._aa_backstop_armed = False
         # The X-master axis handle in overlay mode. Its ViewBox owns the
         # shared X range, the default mouse-pan, and the scene geometry
         # anchor; NO curves are attached to it (every channel — including
@@ -578,6 +595,12 @@ class TimeDomainCanvasPG(QWidget):
         self._dense_raster = DenseDiscreteRasterLayer(self)
         self._quality = QualityManager(self)
         self._renderer = Renderer(self)
+        # Resident paint timer (spec §4.4). Installed after _quality exists
+        # because a timed frame calls straight into it. _glw is built once in
+        # this constructor and is never replaced (clear() only empties it), so
+        # one install covers the canvas' whole life; the call is idempotent
+        # regardless.
+        install_frame_paint_timer(self)
 
     # ------------------------------------------------------------------
     # Public surface (signal/method names frozen by W0 contract tests).
