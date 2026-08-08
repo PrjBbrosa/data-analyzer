@@ -7769,6 +7769,472 @@ class TestAutoIdleAA:
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
 
 
+class _FakeFrameClock:
+    """Deterministic ``perf_counter`` stand-in for the paint timer.
+
+    Every call advances by a FIXED step, so the hook's ``t1 - t0`` is exactly
+    ``step`` no matter how many frames Qt decides to paint — the measurement
+    under test never depends on real render speed (which offscreen Qt cannot
+    reproduce anyway).
+    """
+
+    def __init__(self, step_seconds: float):
+        self.step = float(step_seconds)
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        self.now += self.step
+        return self.now
+
+
+class TestAaBackstopLatch:
+    """Measured-frame backstop + view-signature latch (spec §4.4).
+
+    Everything upstream of this (ink downsample, AA ink gate, raster
+    admission) is a PREDICTION. This layer is the one that measures what
+    actually happened: if an AA frame really did cost seconds, the view
+    signature that produced it is blacklisted so the same configuration never
+    pays that frame twice, and any change to the view re-arms automatically.
+
+    The timing SOURCE is stubbed in every test here. An offscreen suite cannot
+    reproduce real paint cost (CLAUDE.md Gotchas), so the contract under test
+    is the LATCH LOGIC and its wiring, never a wall-clock threshold.
+    """
+
+    def _plot(self, qapp, *, mode="subplot"):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows(), mode=mode)
+        QCoreApplication.processEvents()
+        return canvas
+
+    def _curves(self, canvas):
+        import pyqtgraph as pg
+
+        return [
+            it for it in canvas._glw.scene().items()
+            if isinstance(it, pg.PlotCurveItem)
+        ]
+
+    def _hands_off(self, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+
+    def _settle(self, qapp):
+        """Drain the deferred (out-of-paint) half of a backstop trip."""
+        from PyQt5.QtCore import QCoreApplication
+
+        QCoreApplication.processEvents()
+        QCoreApplication.processEvents()
+
+    # -- constants ------------------------------------------------------
+
+    def test_backstop_constants_stay_in_calibrated_band(self):
+        """Both thresholds are real-hardware calibrations, not knobs (spec §5).
+
+        ``_BACKSTOP_FIRST_AA_MS`` must stay ABOVE the smooth control's measured
+        474 ms first AA frame (which includes cache construction and is
+        today's accepted behavior), and below the "this is an incident" line.
+        ``_BACKSTOP_STEADY_AA_MS`` must stay above the smooth control's 240 ms
+        steady AA frame — 240 ms is explicitly allowed by the spec — while
+        staying far below the seconds-scale frames the backstop exists for.
+        """
+        from mf4_analyzer.ui.pg_canvas.quality import (
+            _BACKSTOP_BLACKLIST_MAX,
+            _BACKSTOP_FIRST_AA_MS,
+            _BACKSTOP_STEADY_AA_MS,
+            _BACKSTOP_STEADY_EMA_ALPHA,
+        )
+
+        assert 474.0 < _BACKSTOP_FIRST_AA_MS <= 2_000.0
+        assert 240.0 < _BACKSTOP_STEADY_AA_MS <= 500.0
+        assert _BACKSTOP_STEADY_AA_MS < _BACKSTOP_FIRST_AA_MS
+        assert _BACKSTOP_BLACKLIST_MAX == 32
+        assert 0.0 < _BACKSTOP_STEADY_EMA_ALPHA <= 1.0
+
+    # -- paint-timer wiring ---------------------------------------------
+
+    def test_paint_timer_is_installed_as_a_class_swap_and_is_idempotent(
+        self, qapp,
+    ):
+        """Qt dispatches ``paintEvent`` from C++ and only reaches Python when
+        the method is overridden AT CLASS LEVEL (``_perf_probe`` docstring:
+        an instance attribute or a viewport subclass is never called). So the
+        timer has to be a ``__class__`` swap, and installing twice must not
+        stack a second wrapper.
+        """
+        from mf4_analyzer.ui.pg_canvas import quality as quality_mod
+        from mf4_analyzer.ui.pg_canvas.viewbox import (
+            _WheelDeltaGraphicsLayoutWidget,
+        )
+
+        canvas = self._plot(qapp)
+        glw = canvas._glw
+
+        assert type(glw) is not _WheelDeltaGraphicsLayoutWidget
+        assert isinstance(glw, _WheelDeltaGraphicsLayoutWidget)
+        assert "paintEvent" in vars(type(glw))
+
+        installed_class = type(glw)
+        assert quality_mod.install_frame_paint_timer(canvas) is False
+        assert type(glw) is installed_class
+
+    def _paint_one_frame(self, canvas):
+        """Make Qt actually dispatch a paint to the swapped class.
+
+        Measured under ``QT_QPA_PLATFORM=offscreen``: ``repaint()`` delivers
+        nothing at all and ``_glw.update()`` delivers only the FIRST time
+        (the view-level update does not re-dirty an already-clean viewport),
+        while dirtying the viewport delivers on every call. This is a harness
+        detail of the offscreen platform, not of the timer — the frames it
+        produces travel the same C++ virtual dispatch as production ones.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas._glw.viewport().update()
+        QCoreApplication.processEvents()
+
+    def test_real_paint_event_records_frame_time_on_the_canvas(
+        self, qapp, monkeypatch,
+    ):
+        """End-to-end: a Qt-dispatched frame writes the plain float attribute."""
+        from mf4_analyzer.ui.pg_canvas import quality as quality_mod
+
+        canvas = self._plot(qapp)
+        canvas._last_frame_paint_ms = 0.0
+        monkeypatch.setattr(
+            quality_mod, "perf_counter", _FakeFrameClock(0.007),
+        )
+
+        self._paint_one_frame(canvas)
+
+        assert canvas._last_frame_paint_ms == pytest.approx(7.0)
+
+    def test_real_paint_event_feeds_the_latch_only_while_armed(
+        self, qapp, monkeypatch,
+    ):
+        """The armed flag is the pairing token: frames painted while AA is OFF
+        are never offered to the latch at all, so an interleaved non-AA frame
+        can never be mistaken for "the first AA frame"."""
+        from mf4_analyzer.ui.pg_canvas import quality as quality_mod
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        # 1.5 s per frame — way over the first-frame ceiling.
+        monkeypatch.setattr(
+            quality_mod, "perf_counter", _FakeFrameClock(1.5),
+        )
+
+        # AA off => not armed => a catastrophic frame changes nothing.
+        assert canvas._aa_backstop_armed is False
+        self._paint_one_frame(canvas)
+        assert canvas._last_frame_paint_ms == pytest.approx(1500.0)
+        assert canvas._quality.aa_backstop_blacklist == {}
+        assert canvas._quality.aa_epoch_frames == 0
+
+        # Now arm it by really enabling idle AA, and paint one more frame.
+        canvas.try_enable_idle_quality()
+        assert canvas._quality.aa_on is True
+        assert canvas._aa_backstop_armed is True
+        self._paint_one_frame(canvas)
+        self._settle(qapp)
+
+        assert canvas._quality.aa_on is False
+        assert len(canvas._quality.aa_backstop_blacklist) == 1
+
+    # -- first-frame latch ----------------------------------------------
+
+    def test_first_aa_frame_over_budget_latches_and_blacklists_signature(
+        self, qapp, monkeypatch,
+    ):
+        """Spec §4.4 core: one bad frame per signature, then never again."""
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+        signature = quality.aa_backstop_signature
+        assert signature is not None
+
+        quality._note_aa_frame(3_500.0)
+
+        # Blacklisting is synchronous (pure Python, safe inside paintEvent);
+        # only the scene mutation is deferred out of the paint.
+        assert signature in quality.aa_backstop_blacklist
+        assert canvas._aa_backstop_armed is False
+        assert quality.backstop_timer.isActive() is True
+        self._settle(qapp)
+        assert quality.aa_on is False
+        assert not any(c.opts.get("antialias") for c in self._curves(canvas))
+
+        # Same view => AA is refused, no second bad frame.
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is False
+        assert canvas._quality._idle_quality_allowed() is False
+
+    def test_quality_status_stays_readable_after_a_latch(
+        self, qapp, monkeypatch,
+    ):
+        """After the latch the chart quality dot must still resolve.
+
+        AA is off and no raster covers these smooth curves, so the honest
+        reader-facing state is RED ("抗锯齿未激活"); YELLOW is also acceptable
+        because a queued idle/refresh pass legitimately reports "waiting".
+        What is NOT acceptable is an exception from the status walk.
+        """
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+
+        canvas.try_enable_idle_quality()
+        canvas._quality._note_aa_frame(9_000.0)
+        self._settle(qapp)
+
+        status = canvas.quality_status()
+        assert status["state"] in {"red", "yellow"}
+        assert isinstance(status["tooltip"], str) and status["tooltip"]
+
+    # -- re-arming -------------------------------------------------------
+
+    def test_changed_xlim_signature_rearms_the_gate(self, qapp, monkeypatch):
+        """A different view is a different prediction: the latch must not
+        leak into a window the bad frame was never measured on."""
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        quality._note_aa_frame(4_000.0)
+        self._settle(qapp)
+        latched = quality.aa_backstop_signature
+        assert quality.aa_on is False
+
+        canvas.set_xlim(0.15, 0.45)
+        assert quality._view_signature() != latched
+
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+
+    def test_changed_visible_channel_set_rearms_the_gate(
+        self, qapp, monkeypatch,
+    ):
+        """The signature carries the visible-channel fingerprint, so hiding a
+        curve (显示原始/显示滤波后) re-arms even at an unchanged xlim."""
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        quality._note_aa_frame(4_000.0)
+        self._settle(qapp)
+        latched = quality.aa_backstop_signature
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is False, "precondition: same signature stays latched"
+
+        _axis, line = canvas._channel_lines["speed"]
+        line.plot_data_item.setVisible(False)
+        assert quality._view_signature() != latched
+
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+
+    def test_rebuild_resets_epoch_state_but_keeps_the_blacklist(
+        self, qapp, monkeypatch,
+    ):
+        """A rebuild does not change the fact that THIS view geometry cannot
+        afford vector AA, so the blacklist survives it. The per-epoch counters
+        do not — they belong to the AA session that just ended.
+        """
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        quality._note_aa_frame(6_000.0)
+        self._settle(qapp)
+        assert len(quality.aa_backstop_blacklist) == 1
+
+        quality.reset_for_rebuild()
+
+        assert len(quality.aa_backstop_blacklist) == 1
+        assert quality.aa_epoch_frames == 0
+        assert quality.aa_frame_ema is None
+        assert quality.aa_backstop_signature is None
+        assert canvas._aa_backstop_armed is False
+
+    # -- steady-state EMA -------------------------------------------------
+
+    def test_steady_aa_frame_ema_over_budget_latches(self, qapp, monkeypatch):
+        """Post-first frames feed an EMA, and crossing the steady ceiling gets
+        the identical treatment: AA off + signature blacklisted.
+
+        The EMA coefficient is pinned here, not just the outcome: with
+        alpha = 0.5 the sequence 5 / 100 / 500 ms lands on
+        0.5*500 + 0.5*100 = 300 ms, over the 250 ms ceiling.
+        """
+        from mf4_analyzer.ui.pg_canvas.quality import _BACKSTOP_STEADY_AA_MS
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        signature = quality.aa_backstop_signature
+
+        quality._note_aa_frame(5.0)      # first frame, far under the ceiling
+        quality._note_aa_frame(100.0)    # seeds the EMA
+        assert quality.aa_frame_ema == pytest.approx(100.0)
+        assert quality.aa_backstop_blacklist == {}
+
+        quality._note_aa_frame(500.0)
+        assert quality.aa_frame_ema == pytest.approx(300.0)
+        assert quality.aa_frame_ema > _BACKSTOP_STEADY_AA_MS
+        assert signature in quality.aa_backstop_blacklist
+
+        self._settle(qapp)
+        assert quality.aa_on is False
+
+    def test_single_mild_outlier_does_not_latch(self, qapp, monkeypatch):
+        """Why an EMA and not a per-frame comparison: one mildly slow frame
+        (a hover repaint landing on a cold cache) must be absorbed, or the
+        latch would fire on noise. 5 / 100 / 300 ms averages to 200 ms.
+        """
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        quality._note_aa_frame(5.0)
+        quality._note_aa_frame(100.0)
+        quality._note_aa_frame(300.0)
+
+        assert quality.aa_frame_ema == pytest.approx(200.0)
+        assert quality.aa_backstop_blacklist == {}
+        assert quality.aa_on is True
+        assert canvas._aa_backstop_armed is True
+
+    # -- zero behavior change on healthy frames ---------------------------
+
+    def test_normal_frames_never_latch(self, qapp, monkeypatch):
+        """The healthy path must be untouched: 5 ms frames, forever."""
+        from mf4_analyzer.ui.pg_canvas.quality import _BACKSTOP_STEADY_AA_MS
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+        for _ in range(200):
+            quality._note_aa_frame(5.0)
+        assert quality.aa_frame_ema == pytest.approx(5.0)
+        self._settle(qapp)
+
+        assert quality.aa_backstop_blacklist == {}
+        assert quality.aa_on is True
+        assert canvas._aa_backstop_armed is True
+        # The settle above paints REAL (sub-millisecond, offscreen) frames,
+        # which are measured too — that is the point of a resident timer — so
+        # the EMA moves. What must hold is that it stays far under the ceiling.
+        assert quality.aa_frame_ema < _BACKSTOP_STEADY_AA_MS
+        assert all(c.opts.get("antialias") for c in self._curves(canvas))
+        assert canvas.quality_status()["state"] == "green"
+
+    # -- bounded blacklist -------------------------------------------------
+
+    def _latch_signature(self, quality, signature):
+        """Trip the latch once for a synthetic view signature.
+
+        Opens a real AA session (so the frame goes down the first-frame
+        branch, not the EMA one — these tests are about the container, not the
+        thresholds) and substitutes the signature the canvas computed, which
+        stands in for "the user moved to a different view".
+        """
+        quality._open_aa_backstop_epoch()
+        quality.aa_backstop_signature = signature
+        quality._note_aa_frame(5_000.0)
+        assert signature in quality.aa_backstop_blacklist
+
+    def test_blacklist_is_an_lru_capped_at_32(self, qapp, monkeypatch):
+        """Unbounded state on a UI object is a leak; 32 distinct view
+        signatures is far more than a user visits between rebuilds."""
+        from mf4_analyzer.ui.pg_canvas.quality import _BACKSTOP_BLACKLIST_MAX
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        for index in range(_BACKSTOP_BLACKLIST_MAX):
+            self._latch_signature(quality, ("sig", index))
+        assert len(quality.aa_backstop_blacklist) == _BACKSTOP_BLACKLIST_MAX
+        assert ("sig", 0) in quality.aa_backstop_blacklist
+
+        self._latch_signature(quality, ("sig", _BACKSTOP_BLACKLIST_MAX))
+
+        assert len(quality.aa_backstop_blacklist) == _BACKSTOP_BLACKLIST_MAX
+        assert ("sig", 0) not in quality.aa_backstop_blacklist, (
+            "the OLDEST signature must be the one evicted"
+        )
+        assert ("sig", 1) in quality.aa_backstop_blacklist
+        assert ("sig", _BACKSTOP_BLACKLIST_MAX) in quality.aa_backstop_blacklist
+
+    def test_blacklist_hit_refreshes_lru_recency(self, qapp, monkeypatch):
+        """A signature the user keeps returning to must not be evicted by 31
+        signatures they visited once."""
+        from mf4_analyzer.ui.pg_canvas.quality import _BACKSTOP_BLACKLIST_MAX
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        for index in range(_BACKSTOP_BLACKLIST_MAX):
+            self._latch_signature(quality, ("sig", index))
+
+        # Re-trip the oldest signature: it becomes the most recent.
+        self._latch_signature(quality, ("sig", 0))
+        self._latch_signature(quality, ("sig", 999))
+
+        assert ("sig", 0) in quality.aa_backstop_blacklist
+        assert ("sig", 1) not in quality.aa_backstop_blacklist
+
+    # -- generation discipline ---------------------------------------------
+
+    def test_stale_trip_from_a_previous_epoch_is_ignored(
+        self, qapp, monkeypatch,
+    ):
+        """The deferred half of a trip carries the AA epoch it was raised for
+        (dense_raster's generation-property pattern). If a rebuild or a fresh
+        AA session happened first, the queued disable must be a no-op instead
+        of tearing AA off the CURRENT epoch.
+        """
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        quality._note_aa_frame(7_000.0)
+        assert quality.backstop_timer.isActive() is True
+
+        # A new AA session starts before the queued disable is delivered.
+        canvas.disable_interactive_quality()
+        canvas.set_xlim(0.3, 0.7)
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+        fresh_epoch = quality.aa_backstop_epoch
+
+        self._settle(qapp)
+
+        assert quality.aa_on is True, (
+            "a trip raised for an earlier AA epoch must not disable the new one"
+        )
+        assert quality.aa_backstop_epoch == fresh_epoch
+
+
 class TestOverlayYSnapToGrid:
     """Snap-to-grid helper and integration tests."""
 
