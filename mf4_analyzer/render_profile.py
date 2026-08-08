@@ -192,11 +192,48 @@ def bucket_width_for(
     return width
 
 
+def envelope_ink_dev_px(env_s, *, y_span, row_height_px, dpr) -> float:
+    """Return the device-pixel vertical "ink" an envelope will paint this
+    frame::
+
+        ink_dev_px = Σ min(|Δy_i|, y_span) / y_span × row_height_px × dpr
+
+    ``Δy`` is the pairwise diff of adjacent samples in ``env_s`` (the
+    min/max-pair envelope output). A pair is skipped — contributing 0, not
+    NaN — when either side is non-finite, so one NaN break in the trace
+    never contaminates its finite neighbors. Each step's magnitude is
+    clipped to ``y_span`` before summing: a single full-height vertical
+    stroke can only ever contribute ``row_height_px × dpr`` of ink, never
+    whatever part of it would have fallen outside the visible row.
+
+    ``y_span`` is a defensive sentinel (mirrors the retired
+    ``_is_y_overflow_wall`` guard's degenerate-input policy): non-finite or
+    ``<= 0`` returns ``0.0`` rather than dividing by a collapsed/garbage
+    window. Vectorized (masked diff + clip + sum) — no Python-level loop.
+    """
+    try:
+        ys = float(y_span)
+    except (TypeError, ValueError):
+        return 0.0
+    if not np.isfinite(ys) or ys <= 0.0:
+        return 0.0
+    arr = np.asarray(env_s, dtype=np.float64).reshape(-1)
+    if arr.size < 2:
+        return 0.0
+    finite = np.isfinite(arr)
+    pair_finite = finite[:-1] & finite[1:]
+    deltas = np.where(pair_finite, np.abs(np.diff(arr)), 0.0)
+    clipped = np.minimum(deltas, ys)
+    total = float(np.sum(clipped))
+    return total / ys * float(row_height_px) * float(dpr)
+
+
 __all__ = [
     "DENSE_DISCRETE_BUCKET_BUDGET",
     "DENSE_DISCRETE_INTERACTIVE_BUCKET_BUDGET",
     "RenderProfile",
     "bucket_width_for",
     "classify_render_profile",
+    "envelope_ink_dev_px",
     "source_revision_for",
 ]

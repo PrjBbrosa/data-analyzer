@@ -64,7 +64,7 @@ CLAUDE.md），别把既有红算到本改动头上。
 **Files:** Modify `mf4_analyzer/render_profile.py`；
 Test `tests/ui/test_pg_timedomain_canvas.py`（新 `TestEnvelopeInk`）
 
-- [ ] 红测：
+- [x] 红测：
   - 平线 → 0；单点/空数组 → 0；`y_span<=0`（含 NaN/inf）→ 0（哨兵，
     与旧 `_is_y_overflow_wall` 的防御语义一致）；
   - NaN 段跳过且不传染（`[0, nan, 5]` 只计有限相邻对）；
@@ -72,10 +72,10 @@ Test `tests/ui/test_pg_timedomain_canvas.py`（新 `TestEnvelopeInk`）
     `row_height×dpr`，不多计屏外部分）；
   - 线性：振幅×2（clip 内）→ ink×2；`dpr` ×2 → ink×2；
   - 锚点回归：spec §3.2 的合成振荡 envelope → ink ≈ 2042k×dpr（±5%）。
-- [ ] 实现 `envelope_ink_dev_px(env_s, y_span, row_height_px, dpr)`：
+- [x] 实现 `envelope_ink_dev_px(env_s, y_span, row_height_px, dpr)`：
   掩码 diff + clip + sum，无循环。`tests/test_signal_no_gui_import.py`
   的投毒边界不涉及本模块，但保持 render_profile 无 PyQt import。
-- [ ] `pytest tests/ui/test_pg_timedomain_canvas.py -q -k Ink` 绿。
+- [x] `pytest tests/ui/test_pg_timedomain_canvas.py -q -k Ink` 绿。
 
 ### Task 2: renderer 集成 —— ink 降桶取代 wall 守卫
 
