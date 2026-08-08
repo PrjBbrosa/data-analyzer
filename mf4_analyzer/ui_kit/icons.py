@@ -214,21 +214,20 @@ class Icons:
 
     @classmethod
     def mode_frf(cls):
-        """Directional input/output response curves for system identification."""
+        """Input -> transfer block -> output, legible at toolbar size."""
         with _painting() as (pix, p):
-            p.setPen(_pen(BLUE, 1.45))
+            p.setPen(_pen(BLUE, 1.35))
             p.setBrush(Qt.NoBrush)
-            source = QPainterPath()
-            source.moveTo(2.5, 7)
-            source.cubicTo(5, 2.5, 7.5, 11.5, 10, 7)
-            p.drawPath(source)
-            response = QPainterPath()
-            response.moveTo(10, 13)
-            response.cubicTo(12.5, 8, 15, 17.5, 17.5, 13)
-            p.drawPath(response)
-            p.drawLine(QPointF(8.5, 10), QPointF(13.5, 10))
-            p.drawLine(QPointF(11.5, 8), QPointF(13.5, 10))
-            p.drawLine(QPointF(11.5, 12), QPointF(13.5, 10))
+            p.drawLine(QPointF(2.5, 10), QPointF(6.0, 10))
+            p.drawRoundedRect(QRectF(6.0, 5.5, 7.5, 9.0), 1.4, 1.4)
+            font = QFont()
+            font.setPointSizeF(6.0)
+            font.setBold(True)
+            p.setFont(font)
+            p.drawText(QRectF(6.0, 5.5, 7.5, 9.0), Qt.AlignCenter, "H")
+            p.drawLine(QPointF(13.5, 10), QPointF(17.5, 10))
+            p.drawLine(QPointF(15.4, 7.9), QPointF(17.5, 10))
+            p.drawLine(QPointF(15.4, 12.1), QPointF(17.5, 10))
         return QIcon(pix)
 
     @classmethod

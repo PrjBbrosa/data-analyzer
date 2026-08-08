@@ -518,34 +518,50 @@ class AnalysisSectionPage(QWidget):
                     c.reset_split_layout_alignment()
                 except Exception:
                     pass
-            return
+        else:
+            title_width = min(c.recommended_split_title_width() for c in line_canvases)
+            for c in line_canvases:
+                c.prepare_split_layout_alignment(title_width)
 
-        title_width = min(c.recommended_split_title_width() for c in line_canvases)
-        for c in line_canvases:
-            c.prepare_split_layout_alignment(title_width)
+            metrics = [c.line_layout_metrics() for c in line_canvases]
+            left_width = max(m.get('left_axis_width', 0.0) for m in metrics)
+            amp_bottom_height = max(
+                m.get('amp_bottom_axis_height', 0.0) for m in metrics)
+            time_bottom_height = max(
+                m.get('time_bottom_axis_height', 0.0) for m in metrics)
 
-        metrics = [c.line_layout_metrics() for c in line_canvases]
-        left_width = max(m.get('left_axis_width', 0.0) for m in metrics)
-        amp_bottom_height = max(
-            m.get('amp_bottom_axis_height', 0.0) for m in metrics)
-        time_bottom_height = max(
-            m.get('time_bottom_axis_height', 0.0) for m in metrics)
+            # Right reserves are intentionally NOT cross-synced for line canvases.
+            # The time-preview overlay Y-axes (one per extra source) are a per-pane
+            # feature that already occupy their own layout columns. Pushing the
+            # global-max reserve (spacer + overlay) onto every pane's right SPACER
+            # double-counts the overlay width — it shrank both panes' plot areas and
+            # inset an overlay-free pane by the other pane's overlay reserve. Each
+            # pane keeps the thin frame set by prepare() and is inset only by its
+            # OWN overlay axes; the FFT spectrum row (no overlay) stays aligned via
+            # the shared left-axis width and bottom-axis heights below.
+            for c in line_canvases:
+                c.apply_split_layout_alignment(
+                    left_axis_width=left_width,
+                    amp_bottom_axis_height=amp_bottom_height,
+                    time_bottom_axis_height=time_bottom_height,
+                )
 
-        # Right reserves are intentionally NOT cross-synced for line canvases.
-        # The time-preview overlay Y-axes (one per extra source) are a per-pane
-        # feature that already occupy their own layout columns. Pushing the
-        # global-max reserve (spacer + overlay) onto every pane's right SPACER
-        # double-counts the overlay width — it shrank both panes' plot areas and
-        # inset an overlay-free pane by the other pane's overlay reserve. Each
-        # pane keeps the thin frame set by prepare() and is inset only by its
-        # OWN overlay axes; the FFT spectrum row (no overlay) stays aligned via
-        # the shared left-axis width and bottom-axis heights below.
-        for c in line_canvases:
-            c.apply_split_layout_alignment(
-                left_axis_width=left_width,
-                amp_bottom_axis_height=amp_bottom_height,
-                time_bottom_axis_height=time_bottom_height,
-            )
+        frf_canvases = [
+            c for c in (getattr(card, 'canvas', None) for card in self._cards)
+            if hasattr(c, 'prepare_frf_layout_alignment')
+            and hasattr(c, 'frf_layout_metrics')
+            and hasattr(c, 'apply_frf_layout_alignment')
+        ]
+        if len(frf_canvases) < 2:
+            for c in frf_canvases:
+                c.reset_frf_layout_alignment()
+        else:
+            for c in frf_canvases:
+                c.prepare_frf_layout_alignment()
+            metrics = [c.frf_layout_metrics() for c in frf_canvases]
+            left_width = max(m.get('left_axis_width', 0.0) for m in metrics)
+            for c in frf_canvases:
+                c.apply_frf_layout_alignment(left_axis_width=left_width)
 
     def _is_heatmap_section(self) -> bool:
         canvas = getattr(self._cards[0], 'canvas', None)

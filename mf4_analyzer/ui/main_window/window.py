@@ -1876,6 +1876,7 @@ class MainWindow(
         for page in (
             self.chart_stack.page_fft,
             self.chart_stack.page_fft_time,
+            self.chart_stack.page_frf,
             self.chart_stack.page_order,
         ):
             for pane_idx in range(page.pane_count()):

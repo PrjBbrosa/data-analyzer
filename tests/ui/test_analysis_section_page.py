@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import QVBoxLayout
 from mf4_analyzer.ui.analysis_section_page import AnalysisSectionPage, _FOCUS_ACCENT
 from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
 from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
+from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
 from mf4_analyzer.ui.view_state import ViewManager
 from mf4_analyzer.ui.analysis_view_state import AnalysisViewState
 from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
@@ -41,6 +42,25 @@ class _FakeLineCard:
         w = QWidget()
         w.setObjectName("chartCard")
         w.canvas = PgLineCanvas(w)
+        w._focus_marker_color = None
+
+        def set_focus_marker(color):
+            w._focus_marker_color = color
+
+        w.set_focus_marker = set_focus_marker
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(w.canvas)
+        return w
+
+
+class _FakeFrfCard:
+    """Three-row FRF variant used to exercise the shared split alignment."""
+    def __new__(cls):
+        from PyQt5.QtWidgets import QWidget
+        w = QWidget()
+        w.setObjectName("chartCard")
+        w.canvas = PgFrfCanvas(w)
         w._focus_marker_color = None
 
         def set_focus_marker(color):
@@ -96,6 +116,18 @@ def line_page(qapp):
         card_factory=lambda: _FakeLineCard(),
     )
     p.resize(800, 500)
+    p.show()
+    yield p
+    p.deleteLater()
+
+
+@pytest.fixture
+def frf_page(qapp):
+    mgr = _make_manager()
+    p = AnalysisSectionPage(
+        section='frf', manager=mgr, card_factory=lambda: _FakeFrfCard(),
+    )
+    p.resize(1000, 700)
     p.show()
     yield p
     p.deleteLater()
@@ -268,6 +300,36 @@ def test_split_fft_line_plot_areas_align(line_page, qapp):
     assert time0.right() == pytest.approx(amp0.right(), abs=1.0)
     assert time1.left() == pytest.approx(amp1.left(), abs=1.0)
     assert time1.right() == pytest.approx(amp1.right(), abs=1.0)
+
+
+def test_split_frf_plot_areas_align_all_three_rows(frf_page, qapp):
+    from types import SimpleNamespace
+
+    frf_page.enter_split()
+    left, right = frf_page.pane_canvas(0), frf_page.pane_canvas(1)
+    frequencies = np.array([1.0, 2.0, 10.0, 100.0])
+    left.set_result(SimpleNamespace(
+        frequencies=frequencies,
+        transfer=np.array([1.0, 2.0, 1.5, 2.5], dtype=complex),
+        coherence=np.ones(4),
+    ), {"frequency_scale": "log"}, {})
+    right.set_result(SimpleNamespace(
+        frequencies=frequencies,
+        transfer=np.array([1e-6, 1e5, 1e6, 1e4], dtype=complex),
+        coherence=np.ones(4),
+    ), {"frequency_scale": "log"}, {})
+    frf_page.sync_heatmap_layouts()
+    for _ in range(3):
+        qapp.processEvents()
+
+    left_rects = [plot.vb.sceneBoundingRect() for plot in left.plots]
+    right_rects = [plot.vb.sceneBoundingRect() for plot in right.plots]
+    for lhs, rhs in zip(left_rects, right_rects):
+        assert lhs.left() == pytest.approx(rhs.left(), abs=1.0)
+        assert lhs.width() == pytest.approx(rhs.width(), abs=1.0)
+    for rect in left_rects[1:]:
+        assert rect.left() == pytest.approx(left_rects[0].left(), abs=1.0)
+        assert rect.right() == pytest.approx(left_rects[0].right(), abs=1.0)
 
 
 def test_split_fft_overlay_does_not_shrink_peer_time_preview(line_page, qapp):

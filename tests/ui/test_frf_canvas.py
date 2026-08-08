@@ -5,6 +5,7 @@ import numpy as np
 import pyqtgraph as pg
 import pytest
 from PyQt5.QtCore import QCoreApplication, QEvent
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPainter
 
 
@@ -23,9 +24,13 @@ def _result():
 
 def test_frf_canvas_builds_three_shared_frequency_plots(qtbot):
     from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+    from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox
 
     canvas = PgFrfCanvas()
     qtbot.addWidget(canvas)
+    canvas.resize(900, 700)
+    canvas.show()
+    qtbot.wait(20)
 
     assert canvas.plots == (
         canvas._plot_magnitude,
@@ -34,9 +39,18 @@ def test_frf_canvas_builds_three_shared_frequency_plots(qtbot):
     )
     assert canvas._plot_phase.vb.linkedView(pg.ViewBox.XAxis) is canvas._plot_magnitude.vb
     assert canvas._plot_coherence.vb.linkedView(pg.ViewBox.XAxis) is canvas._plot_magnitude.vb
-    assert canvas._plot_magnitude.getAxis("bottom").isVisible() is False
-    assert canvas._plot_phase.getAxis("bottom").isVisible() is False
+    # Upper rows retain a one-pixel bottom frame; hiding that axis entirely
+    # used to leave the magnitude and phase plots visually open.
+    for plot in (canvas._plot_magnitude, canvas._plot_phase):
+        bottom = plot.getAxis("bottom")
+        assert bottom.isVisible() is True
+        assert bottom.style["showValues"] is False
+        assert bottom.height() <= 1.0
     assert canvas._plot_coherence.getAxis("bottom").labelText == "Frequency (Hz)"
+    for plot in canvas.plots:
+        assert isinstance(plot.vb, _ModifierWheelViewBox)
+        assert getattr(plot, "buttonsHidden", False) is True
+        assert plot.vb.border is None
 
 
 def test_frf_canvas_display_transforms_do_not_mutate_result(qtbot):
@@ -193,6 +207,39 @@ def test_frf_canvas_toolbar_history_round_trips_log_ranges_in_hz(qtbot):
     assert canvas.get_xlim() == pytest.approx((1.0, 10.0))
     toolbar.forward()
     assert canvas.get_xlim() == pytest.approx((10.0, 100.0))
+
+
+def test_frf_canvas_reuses_analysis_wheel_and_tick_density_contract(qtbot):
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.set_result(_result(), {"frequency_scale": "linear"}, {})
+    canvas._plot_magnitude.setXRange(0.0, 4.0, padding=0)
+    canvas._plot_magnitude.setYRange(-10.0, 10.0, padding=0)
+
+    x_before, y_before = canvas._plot_magnitude.vb.viewRange()
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ControlModifier, x_pos=2.0, y_pos=0.0,
+        view_box=canvas._plot_magnitude.vb,
+    ) is True
+    x_after, y_after = canvas._plot_magnitude.vb.viewRange()
+    assert x_after[1] - x_after[0] < x_before[1] - x_before[0]
+    assert y_after == pytest.approx(y_before)
+
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ShiftModifier, x_pos=2.0, y_pos=0.0,
+        view_box=canvas._plot_magnitude.vb,
+    ) is True
+    _, y_zoomed = canvas._plot_magnitude.vb.viewRange()
+    assert y_zoomed[1] - y_zoomed[0] < y_before[1] - y_before[0]
+
+    canvas.set_tick_density(20, 12)
+    assert canvas._plot_coherence.getAxis("bottom")._tickDensity == pytest.approx(2.0)
+    for plot in canvas.plots:
+        axis = plot.getAxis("left")
+        assert axis._tickDensity == pytest.approx(2.0)
+        assert axis.style["maxTickLevel"] == 0
 
 
 def test_frf_canvas_never_sends_all_nan_data_to_low_coherence_scatter(qtbot):

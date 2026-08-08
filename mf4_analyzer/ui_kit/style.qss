@@ -816,6 +816,7 @@ Toolbar QPushButton[role="panel-toggle"]:checked {
 Toolbar QPushButton[segment="time"],
 Toolbar QPushButton[segment="fft"],
 Toolbar QPushButton[segment="fft_time"],
+Toolbar QPushButton[segment="frf"],
 Toolbar QPushButton[segment="order"] {
     min-width: 60px;
     min-height: 24px;
@@ -1617,7 +1618,8 @@ Inspector QWidget#inspectorPairField {
  * (the wider frame the user asked for). */
 QWidget#fftContextual,
 QWidget#fftTimeContextual,
-QWidget#orderContextual {
+QWidget#orderContextual,
+QWidget#frfContextual {
     border: none;
     background-color: transparent;
 }
@@ -1625,10 +1627,85 @@ QWidget#orderContextual {
 /* Lower parameter panel (谱参数 / 时频参数 + 坐标轴设置 + 预设 + action). */
 Inspector QFrame#fftParamsCard,
 Inspector QFrame#fftTimeParamsCard,
-Inspector QFrame#orderParamsCard {
+Inspector QFrame#orderParamsCard,
+Inspector QFrame#frfSignalCard,
+Inspector QFrame#frfParamsCard,
+Inspector QFrame#frfDisplayCard {
     background-color: #ffffff;
     border: 1px solid #dbe2eb;
     border-radius: 6px;
+}
+
+Inspector QLabel#frfContextTitle {
+    color: #111827;
+    font-size: 16px;
+    font-weight: 700;
+    padding: 2px 0 0 0;
+    background: transparent;
+}
+Inspector QLabel#frfSisoBadge {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 700;
+    background: transparent;
+}
+Inspector QFrame#frfSignalRow,
+Inspector QFrame#frfSystemFlow {
+    border: none;
+    background: transparent;
+}
+Inspector QLabel#frfSignalRole {
+    min-width: 44px;
+    color: #1f2937;
+    font-weight: 700;
+    background: transparent;
+}
+Inspector QLabel#frfInputDot { color: #2563eb; background: transparent; }
+Inspector QLabel#frfOutputDot { color: #f97316; background: transparent; }
+Inspector QLabel#frfFlowInput,
+Inspector QLabel#frfFlowOutput {
+    color: #64748b;
+    font-size: 11px;
+    background: transparent;
+}
+Inspector QLabel#frfFlowArrow {
+    color: #1769e0;
+    font-size: 15px;
+    font-weight: 700;
+    background: transparent;
+}
+Inspector QLabel#frfFlowBlock {
+    min-height: 28px;
+    padding: 2px 6px;
+    border: 1px solid #9cbbe9;
+    border-radius: 6px;
+    background: #f2f7ff;
+    color: #245aa5;
+    font-size: 11px;
+    font-weight: 700;
+}
+Inspector QFrame#frfSegmentChoice {
+    border: 1px solid #dbe2eb;
+    border-radius: 7px;
+    background: #ffffff;
+}
+Inspector QFrame#frfSegmentChoice QPushButton[role="frf-segment"] {
+    min-height: 26px;
+    padding: 1px 5px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: #64748b;
+    font-weight: 700;
+}
+Inspector QFrame#frfSegmentChoice QPushButton[role="frf-segment"]:checked {
+    background: #e8efff;
+    color: #1769e0;
+}
+Inspector QPushButton#frfFadeToggle[role="choice"]:checked {
+    background: #1769e0;
+    border-color: #1769e0;
+    color: #ffffff;
 }
 
 /* The axis-settings grid is always hosted inside the params_card, so

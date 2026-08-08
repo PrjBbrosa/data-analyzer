@@ -87,6 +87,14 @@ def test_toolbar_exposes_five_exact_mode_names_and_keys(qtbot):
     assert sum(button.isChecked() for button in buttons) == 1
 
 
+def test_toolbar_frf_unselected_uses_the_same_segment_style_as_other_modes():
+    from pathlib import Path
+
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    selector = qss[qss.index('Toolbar QPushButton[segment="time"]'):qss.index('Toolbar QPushButton[segment]:hover')]
+    assert 'Toolbar QPushButton[segment="frf"]' in selector
+
+
 
 def test_toolbar_open_save_split_and_no_export(qtbot):
     from mf4_analyzer.ui.toolbar import Toolbar

@@ -84,6 +84,21 @@ def test_main_window_builds_directional_frf_cache_and_coordinator(qtbot):
     assert win.canvas_frf is win.chart_stack.canvas_frf
 
 
+def test_global_tick_density_updates_all_frf_panes(qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    page = win.chart_stack.page_frf
+    calls = []
+    monkeypatch.setattr(
+        page.pane_canvas(0), "set_tick_density",
+        lambda x, y: calls.append((x, y)),
+    )
+
+    win._update_all_tick_density_pair(14, 9)
+
+    assert calls == [(14, 9)]
+
+
 def test_frf_scope_refresh_keeps_out_of_scope_pair_visible_and_pane_synced(qtbot):
     """The current TimeDomain View leaves no hidden UI/pane pair mismatch."""
     win, _fid, state, _time = _window_with_pair(qtbot)

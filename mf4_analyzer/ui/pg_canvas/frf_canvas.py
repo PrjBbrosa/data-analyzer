@@ -22,7 +22,9 @@ from mf4_analyzer.signal.frf import (
 )
 
 from .empty_hint import EmptyHintOverlay
-from .fonts import _apply_pg_axis_font
+from .analysis_axes import _apply_axis_tick_density, _tick_counts_to_density, _visual_padded_bounds
+from .context_menu import redesign_pg_context_menu
+from .frf_plot_host import FrfStackedPlotHost
 
 
 logger = logging.getLogger(__name__)
@@ -87,6 +89,7 @@ class PgFrfCanvas(QWidget):
     """Three-row magnitude/phase/coherence work surface with shared X."""
 
     cursor_info = pyqtSignal(str)
+    context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
     manual_zoom_changed = pyqtSignal(bool)
 
@@ -97,34 +100,19 @@ class PgFrfCanvas(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._glw = pg.GraphicsLayoutWidget(parent=self)
-        self._glw.setBackground("w")
+        self._plot_host = FrfStackedPlotHost(self)
+        self._glw = self._plot_host.widget
         layout.addWidget(self._glw)
 
-        self._plot_magnitude = self._glw.addPlot(row=0, col=0)
-        self._plot_phase = self._glw.addPlot(row=1, col=0)
-        self._plot_coherence = self._glw.addPlot(row=2, col=0)
+        self._plot_magnitude, self._plot_phase, self._plot_coherence = self._plot_host.plots
         self._plot = self._plot_magnitude  # AnalysisSectionPage primary surface
-        self.plots = (
-            self._plot_magnitude,
-            self._plot_phase,
-            self._plot_coherence,
-        )
-        self._plot_phase.setXLink(self._plot_magnitude)
-        self._plot_coherence.setXLink(self._plot_magnitude)
-        self._plot_magnitude.hideAxis("bottom")
-        self._plot_phase.hideAxis("bottom")
+        self.plots = self._plot_host.plots
         self._plot_coherence.setLabel("bottom", "Frequency (Hz)")
         self._plot_magnitude.setLabel("left", "Magnitude (dB)")
         self._plot_phase.setLabel("left", "Phase (deg)")
         self._plot_coherence.setLabel("left", "Coherence")
         self._plot_coherence.setYRange(0.0, 1.0, padding=0)
         self._plot_coherence.vb.enableAutoRange(axis="y", enable=False)
-        for plot in self.plots:
-            plot.showGrid(x=True, y=True, alpha=0.12)
-            for orientation in ("left", "bottom"):
-                _apply_pg_axis_font(plot.getAxis(orientation))
-
         normal_pen = pg.mkPen("#1769e0", width=1.6)
         faded_pen = pg.mkPen((23, 105, 224, 70), width=1.4)
         coherence_pen = pg.mkPen("#0f9f83", width=1.5)
@@ -213,6 +201,7 @@ class PgFrfCanvas(QWidget):
             self._frequency_range_slot
         )
         self.set_state("empty")
+        self._plot_host.schedule_alignment()
 
     def _store_empty_hint_state(self, item, text):
         self._empty_hint_item = item
@@ -264,6 +253,7 @@ class PgFrfCanvas(QWidget):
         self._state = "ready"
         self.clear_empty_hint()
         self._render_result()
+        self._plot_host.schedule_alignment()
         self._run_replot_callbacks()
         self.layout_geometry_changed.emit()
 
@@ -275,6 +265,7 @@ class PgFrfCanvas(QWidget):
             if old_xlim is not None:
                 self.set_xlim(*old_xlim)
             self.layout_geometry_changed.emit()
+            self._plot_host.schedule_alignment()
 
     def display_params(self) -> dict:
         return dict(self._display_params)
@@ -484,15 +475,118 @@ class PgFrfCanvas(QWidget):
             return
         finite_x = self._draw_frequencies[np.isfinite(self._draw_frequencies)]
         if finite_x.size:
-            self._plot_magnitude.setXRange(
+            lo, hi = _visual_padded_bounds(
                 self._hz_to_view_x(float(finite_x.min())),
                 self._hz_to_view_x(float(finite_x.max())),
-                padding=0.02,
+            )
+            self._plot_magnitude.setXRange(
+                lo, hi, padding=0,
             )
         self._plot_magnitude.vb.enableAutoRange(axis="y", enable=True)
         self._plot_phase.vb.enableAutoRange(axis="y", enable=True)
         self._plot_coherence.setYRange(0.0, 1.0, padding=0)
         self._plot_coherence.vb.enableAutoRange(axis="y", enable=False)
+        self._plot_host.schedule_alignment()
+
+    def _fit_y_to_visible_x(self, plot) -> None:
+        if plot is self._plot_coherence:
+            self._plot_coherence.setYRange(0.0, 1.0, padding=0)
+            return
+        values = (
+            self._draw_magnitude if plot is self._plot_magnitude
+            else self._draw_phase
+        )
+        lo, hi = plot.vb.viewRange()[0]
+        frequencies = self._draw_frequencies
+        mask = (
+            np.isfinite(frequencies) & np.isfinite(values)
+            & (frequencies >= self._view_x_to_hz(lo))
+            & (frequencies <= self._view_x_to_hz(hi))
+        )
+        visible = values[mask]
+        if visible.size == 0:
+            return
+        y_lo, y_hi = _visual_padded_bounds(float(visible.min()), float(visible.max()))
+        if y_hi <= y_lo:
+            y_lo -= 0.5
+            y_hi += 0.5
+        plot.vb.enableAutoRange(axis="y", enable=False)
+        plot.setYRange(y_lo, y_hi, padding=0)
+        self._plot_host.schedule_alignment()
+
+    def _redesign_context_menu_for_viewbox(self, view_box, menu) -> None:
+        plot = next((item for item in self.plots if item.vb is view_box), None)
+        if plot is None:
+            return
+        redesign_pg_context_menu(
+            menu, plot, self._mouse_mode_controller,
+            view_all_handler=self.reset_view_to_data_extents,
+            y_autofit_handler=lambda: self._fit_y_to_visible_x(plot),
+            copy_image_handler=self._copy_image_handler,
+            allow_y_grid=True, keep_plot_options=False, view_box=view_box,
+        )
+
+    def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,
+                               view_box=None, scene_pos=None, axis=None):
+        step = 1 if delta > 0 else -1 if delta < 0 else 0
+        if step == 0 or view_box is None:
+            return False
+        ctrl = bool(modifiers & Qt.ControlModifier)
+        shift = bool(modifiers & Qt.ShiftModifier)
+        if not (ctrl or shift):
+            return False
+        factor = 0.85 if step > 0 else 1.0 / 0.85
+        try:
+            x_range, y_range = view_box.viewRange()
+            if ctrl:
+                lo, hi = x_range
+                center = float(x_pos) if np.isfinite(x_pos) else (lo + hi) / 2.0
+                view_box.setXRange(
+                    center - (center - lo) * factor,
+                    center + (hi - center) * factor, padding=0,
+                )
+                self.manual_zoom_changed.emit(True)
+            else:
+                lo, hi = y_range
+                center = float(y_pos) if np.isfinite(y_pos) else (lo + hi) / 2.0
+                view_box.enableAutoRange(axis="y", enable=False)
+                view_box.setYRange(
+                    center - (center - lo) * factor,
+                    center + (hi - center) * factor, padding=0,
+                )
+        except (RuntimeError, TypeError, ValueError, FloatingPointError):
+            return False
+        self.layout_geometry_changed.emit()
+        self._plot_host.schedule_alignment()
+        return True
+
+    def set_tick_density(self, x, y) -> None:
+        try:
+            x_count, y_count = max(3, int(x)), max(3, int(y))
+        except (TypeError, ValueError):
+            return
+        x_density, y_density = _tick_counts_to_density(x_count, y_count)
+        for plot in self.plots:
+            _apply_axis_tick_density(plot.getAxis("left"), y_density)
+        bottom = self._plot_coherence.getAxis("bottom")
+        if self._is_log_frequency():
+            self._sync_frequency_ticks()
+        else:
+            _apply_axis_tick_density(bottom, x_density)
+        self.layout_geometry_changed.emit()
+        self._plot_host.schedule_alignment()
+
+    def frf_layout_metrics(self) -> dict:
+        return self._plot_host.layout_metrics()
+
+    def prepare_frf_layout_alignment(self) -> None:
+        self._plot_host.prepare_alignment()
+
+    def reset_frf_layout_alignment(self) -> None:
+        self._plot_host.reset_alignment()
+
+    def apply_frf_layout_alignment(self, *, left_axis_width: float) -> None:
+        self._plot_host.apply_alignment(left_axis_width=left_axis_width)
 
     def _on_scene_mouse_moved(self, scene_pos) -> None:
         for plot in self.plots:
@@ -606,6 +700,14 @@ class PgFrfCanvas(QWidget):
             pass
         self._empty_hint.clear()
         super().closeEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._plot_host.schedule_alignment()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._plot_host.schedule_alignment()
 
 
 __all__ = ["PgFrfCanvas"]

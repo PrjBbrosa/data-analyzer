@@ -224,6 +224,54 @@ def test_frf_valid_pair_stays_computable_after_parameter_or_preset_change(qtbot)
     assert ctx.btn_compute.isEnabled()
 
 
+def test_frf_contextual_uses_three_separated_html_information_cards(qtbot):
+    """The FRF mapping, estimator and display controls must not blend together."""
+    from PyQt5.QtWidgets import QFrame, QLabel
+
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    ctx.resize(320, 980)
+    ctx.show()
+    qtbot.wait(20)
+
+    signal = ctx.findChild(QFrame, "frfSignalCard")
+    params = ctx.findChild(QFrame, "frfParamsCard")
+    display = ctx.findChild(QFrame, "frfDisplayCard")
+    assert all((signal, params, display))
+    assert signal.y() + signal.height() <= params.y() - 8
+    assert params.y() + params.height() <= display.y() - 8
+    assert ctx.findChild(QLabel, "frfContextTitle").text() == "系统辨识 · 频响（FRF）"
+    assert ctx.findChild(QLabel, "frfSisoBadge").text() == "SISO"
+    assert ctx.findChild(QLabel, "frfFlowBlock").text() == "被辨识系统  H(f)"
+
+
+def test_frf_contextual_visible_choice_rows_keep_preset_state_api(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    assert ctx.btn_frequency_log.isChecked()
+    assert ctx.btn_phase_unwrapped.isChecked()
+    assert ctx.btn_fade_low_coherence.isChecked()
+
+    ctx.btn_frequency_linear.click()
+    ctx.btn_phase_wrapped.click()
+    ctx.btn_fade_low_coherence.click()
+    assert ctx.display_params() == {
+        "magnitude_scale": "db",
+        "frequency_scale": "linear",
+        "phase_mode": "wrapped",
+        "coherence_threshold": 0.8,
+        "fade_low_coherence": False,
+    }
+
+    ctx.apply_params({"frequency_scale": "log", "phase_mode": "unwrapped"})
+    assert ctx.btn_frequency_log.isChecked()
+    assert ctx.btn_phase_unwrapped.isChecked()
+
+
 
 # ---- Task 2.3: PersistentTop ----
 
