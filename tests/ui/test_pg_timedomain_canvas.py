@@ -804,6 +804,137 @@ class TestYOverflowWallGuard:
         assert canvas._line_wall_state.get("ch0") in (False, None)
 
 
+class TestEnvelopeInk:
+    """Pure-function coverage for ``envelope_ink_dev_px`` (spec
+    ``docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`` §3):
+    the device-pixel vertical "ink" metric that will replace the
+    ``_is_y_overflow_wall`` wall guard as the AA/downsample trigger. No
+    ``qapp`` needed — these are plain numpy in, float out.
+    """
+
+    def test_flat_line_is_zero_ink(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        env_s = np.full(64, 3.0, dtype=np.float64)
+        assert envelope_ink_dev_px(
+            env_s, y_span=10.0, row_height_px=800, dpr=2.0,
+        ) == 0.0
+
+    def test_empty_and_single_element_are_zero_ink(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        assert envelope_ink_dev_px(
+            np.empty(0, dtype=np.float64), y_span=10.0, row_height_px=800,
+            dpr=1.0,
+        ) == 0.0
+        assert envelope_ink_dev_px(
+            np.array([1.0]), y_span=10.0, row_height_px=800, dpr=1.0,
+        ) == 0.0
+
+    def test_degenerate_y_span_is_defensive_zero(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        env_s = np.array([0.0, 5.0, 0.0, 5.0], dtype=np.float64)
+        # zero / negative / NaN / inf y_span all fall back to the sentinel.
+        assert envelope_ink_dev_px(
+            env_s, y_span=0.0, row_height_px=800, dpr=1.0) == 0.0
+        assert envelope_ink_dev_px(
+            env_s, y_span=-1.0, row_height_px=800, dpr=1.0) == 0.0
+        assert envelope_ink_dev_px(
+            env_s, y_span=float("nan"), row_height_px=800, dpr=1.0) == 0.0
+        assert envelope_ink_dev_px(
+            env_s, y_span=float("inf"), row_height_px=800, dpr=1.0) == 0.0
+
+    def test_nan_pairs_skipped_without_contaminating_neighbors(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        # Both adjacent pairs touch the NaN → both skipped → zero ink.
+        env_s = np.array([0.0, np.nan, 5.0], dtype=np.float64)
+        assert envelope_ink_dev_px(
+            env_s, y_span=100.0, row_height_px=800, dpr=1.0) == 0.0
+
+        # Only the (3, nan) and (nan, 5) pairs are skipped; (0, 3) and
+        # (5, 6) survive → ink counts only |3-0|=3 and |6-5|=1.
+        env_s2 = np.array([0.0, 3.0, np.nan, 5.0, 6.0], dtype=np.float64)
+        y_span = 100.0
+        row_height_px = 800.0
+        dpr = 1.0
+        expected = (3.0 + 1.0) / y_span * row_height_px * dpr
+        got = envelope_ink_dev_px(
+            env_s2, y_span=y_span, row_height_px=row_height_px, dpr=dpr,
+        )
+        assert got == pytest.approx(expected)
+
+    def test_single_overflowing_step_clips_to_full_row_height(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        y_span = 1.0
+        row_height_px = 800.0
+        dpr = 2.0
+        # |Δy| = 1000 >> y_span: clipped so the contribution is exactly one
+        # full-height stroke, never the part that would fall off-screen.
+        env_s = np.array([0.0, 1000.0], dtype=np.float64)
+        got = envelope_ink_dev_px(
+            env_s, y_span=y_span, row_height_px=row_height_px, dpr=dpr,
+        )
+        assert got == pytest.approx(row_height_px * dpr)
+
+    def test_linear_in_amplitude_within_clip(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        base = np.array([0.0, 1.0, 0.0, 1.0, 0.0], dtype=np.float64)
+        # y_span generous enough that neither amplitude clips.
+        y_span = 1000.0
+        ink1 = envelope_ink_dev_px(
+            base, y_span=y_span, row_height_px=800, dpr=1.0)
+        ink2 = envelope_ink_dev_px(
+            base * 2.0, y_span=y_span, row_height_px=800, dpr=1.0)
+        assert ink2 == pytest.approx(ink1 * 2.0)
+
+    def test_linear_in_dpr(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        env_s = np.array([0.0, 1.0, 0.0, 1.0, 0.0], dtype=np.float64)
+        ink_dpr1 = envelope_ink_dev_px(
+            env_s, y_span=1000.0, row_height_px=800, dpr=1.0)
+        ink_dpr2 = envelope_ink_dev_px(
+            env_s, y_span=1000.0, row_height_px=800, dpr=2.0)
+        assert ink_dpr2 == pytest.approx(ink_dpr1 * 2.0)
+
+    def test_linear_in_row_height(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        env_s = np.array([0.0, 1.0, 0.0, 1.0, 0.0], dtype=np.float64)
+        ink_h1 = envelope_ink_dev_px(
+            env_s, y_span=1000.0, row_height_px=400, dpr=1.0)
+        ink_h2 = envelope_ink_dev_px(
+            env_s, y_span=1000.0, row_height_px=800, dpr=1.0)
+        assert ink_h2 == pytest.approx(ink_h1 * 2.0)
+
+    def test_anchor_regression_oscillating_signal_fit_y(self):
+        """Spec §3.2 real-hardware anchor: 1ch 满屏振荡 + Y fit → ink ≈
+        2042k dev px (measured on Cocoa, dpr=2.0; this test uses dpr=1.0 so
+        the raw logical-px anchor number applies directly). ±5% tolerance
+        for cross-machine numeric drift.
+        """
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        t = np.arange(1_000_000, dtype=np.float64) / 20_000.0
+        sig = (
+            100.0 * np.sin(2 * np.pi * 2300.0 * t)
+            + 8.0 * np.sin(2 * np.pi * 0.7 * t)
+        )
+        env_t, env_s = ec.positions_envelope(
+            t, sig, xlim=(float(t[0]), float(t[-1])), pixel_width=1550,
+            is_monotonic=True,
+        )
+        del env_t
+        ink = envelope_ink_dev_px(
+            env_s, y_span=237.6, row_height_px=800, dpr=1.0,
+        )
+        assert ink == pytest.approx(2_042_000.0, rel=0.05)
+
+
 # -- A: re-show original must NOT recompute the envelope -----------------
 
 
