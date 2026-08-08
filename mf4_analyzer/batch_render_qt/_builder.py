@@ -53,11 +53,13 @@ from ..ui_kit.axis_metrics import (
     left_axis_width_for_ticks,
 )
 from ..ui_kit.ticks_math import (
+    _DEGENERATE_SPAN_RATIO,
     _fmt_tick,
     _frame_to_nice,
     _nice_per_div,
     coarsen_nice_step,
     nice_ticks_within,
+    pad_y_extent,
 )
 from ..batch_statistics import display_x
 
@@ -922,6 +924,7 @@ class BuiltBatchScene:
                 plot.vb.updateAutoRange()
             except Exception:
                 pass
+        self._widen_residue_only_auto_y()
         # Only now are the view ranges final — an auto-ranged panel still reads
         # 0..1 before this point, and ticks pinned from that would fall outside
         # the finished plot.
@@ -953,6 +956,56 @@ class BuiltBatchScene:
             layout.activate()
             self._bind_time_display_envelopes()
             app.processEvents()
+
+    def _widen_residue_only_auto_y(self) -> None:
+        """Reframe an auto-ranged Y whose span is float64 residue, not signal.
+
+        pyqtgraph's ViewBox already refuses to frame onto a degenerate range,
+        but its test is exact equality (``mn == mx``, expanded by half the
+        previous span). A channel produced by channel maths — ``A*3 - A*2 - A``,
+        ``A - B``, ``A/B*B`` — is constant in INTENT but not bit-exact, so its
+        min and max differ by ~1e-16 relative and sail straight past that test.
+        This extends it to the relative one, ``_DEGENERATE_SPAN_RATIO``, which
+        is the same judgement ``pad_y_extent`` and ``_frame_to_nice`` apply.
+
+        Why it has to happen HERE rather than in the tick math (2026-08-09
+        「纵坐标 35.0000000034 把 canvas 推到右边」): a single-series time panel
+        has no ``settle_nice`` callback, so its Y is whatever ``updateAutoRange``
+        just chose, and the only downstream consumer is ``_fit_axis_ticks`` —
+        which routes through ``nice_ticks_within``, whose contract is that a
+        range it is handed survives verbatim. Widening there would break the
+        manually entered ``y_min``/``y_max`` case it exists to protect. So the
+        fix belongs to the range, not to the ticks. Left unfixed the report is
+        silently broken rather than ugly: at a residue span the per-division
+        step is ~1e-15, ``_fmt_tick`` prints 16 significant digits, and
+        ``AxisItem.generateDrawSpecs`` DROPS every label that does not fit its
+        realized width — 136px of text into a 25px axis — so the exported PNG
+        ships with a bare Y axis carrying no numbers at all.
+
+        Only genuinely auto-ranged Y is touched. Every manual or settled range
+        (``y_min``/``y_max``, ``settle_primary``/``settle_nice``, the FRF and
+        slice rows) reaches here with auto-range already disabled by its own
+        ``setYRange``/``enableAutoRange`` call, which is exactly the population
+        whose bounds must survive verbatim. Auxiliary right-axis views are not
+        scanned because the only ones that exist on a time page are created
+        together with the ``settle_nice`` callback that pins them.
+
+        A zero span is deliberately left to pyqtgraph: it already handles that
+        case, and every constant-channel report in the field was rendered by
+        it, so reframing it here would move pixels for no defect.
+        """
+        for plot in self.plots:
+            view = plot.vb
+            if not view.autoRangeEnabled()[1]:
+                continue
+            lo, hi = (float(value) for value in view.viewRange()[1])
+            if not (math.isfinite(lo) and math.isfinite(hi)):
+                continue
+            span = hi - lo
+            if not (0.0 < span <= max(abs(lo), abs(hi)) * _DEGENERATE_SPAN_RATIO):
+                continue
+            view.enableAutoRange(axis="y", enable=False)
+            view.setYRange(*pad_y_extent(lo, hi), padding=0)
 
     def _fit_axis_labels(self) -> None:
         """Shrink a Y-axis label that is longer than its own panel is tall.

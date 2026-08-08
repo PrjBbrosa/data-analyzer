@@ -19,6 +19,8 @@ from mf4_analyzer.ui_kit.ticks_math import (  # noqa: F401 re-export
     _adjacent_nice_step,
     _fmt_tick,
     _frame_to_nice,
+    bounded_tick_strings,
+    pad_y_extent,
 )
 
 
@@ -50,4 +52,6 @@ __all__ = [
     "_fmt_tick",
     "_frame_to_nice",
     "_quantize_range_key",
+    "bounded_tick_strings",
+    "pad_y_extent",
 ]
