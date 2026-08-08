@@ -187,7 +187,7 @@ def cmd_sweep_y(_args):
 
     print(f"platform={app.platformName()} dpr={canvas._glw.devicePixelRatioF()} "
           f"data_span={data_span:.1f}", flush=True)
-    print(f"{'y_half':>8} {'ratio':>7} {'pts':>6} {'wall':>5} "
+    print(f"{'y_half':>8} {'ratio':>7} {'pts':>6} {'ink':>5} "
           f"{'pan_p50_ms':>11} {'pan_p95_ms':>11}", flush=True)
 
     y_halves = (2000, 800, 400, 250, 160, 130, 115, 108, 104, 95, 85, 75,
@@ -201,7 +201,7 @@ def cmd_sweep_y(_args):
         viewport.repaint()
         xd, _ = line.plot_data_item.getData()
         pts = 0 if xd is None else len(xd)
-        wall = bool(getattr(canvas, "_y_overflow_wall_active", False))
+        ink_high = bool(getattr(canvas, "_frame_ink_high", False))
 
         canvas._begin_view_interaction()
         pan = []
@@ -219,10 +219,10 @@ def cmd_sweep_y(_args):
         pan_p50, pan_p95 = _percentiles(pan[2:])
         ratio = data_span / (2.0 * y_half)
         rows_out.append({
-            "y_half": y_half, "ratio": ratio, "pts": pts, "wall": wall,
+            "y_half": y_half, "ratio": ratio, "pts": pts, "ink_high": ink_high,
             "pan_p50_ms": pan_p50, "pan_p95_ms": pan_p95,
         })
-        print(f"{y_half:>8} {ratio:>7.2f} {pts:>6} {'Y' if wall else 'n':>5} "
+        print(f"{y_half:>8} {ratio:>7.2f} {pts:>6} {'Y' if ink_high else 'n':>5} "
               f"{pan_p50:>11.1f} {pan_p95:>11.1f}", flush=True)
 
     canvas.close()
@@ -266,7 +266,7 @@ def _run_bucket_case(app, *, n_rows, y_half, bucket_cap, label, iterations=8):
     for _ck, _name, (_axis, line) in canvas._channel_lines.composite_items():
         xd, _ = line.plot_data_item.getData()
         pts += 0 if xd is None else len(xd)
-    wall = bool(getattr(canvas, "_y_overflow_wall_active", False))
+    ink_high = bool(getattr(canvas, "_frame_ink_high", False))
     aa_allowed = canvas._quality._idle_aa_density_ok()
 
     xlo, xhi = canvas._data_x_union()
@@ -292,12 +292,12 @@ def _run_bucket_case(app, *, n_rows, y_half, bucket_cap, label, iterations=8):
     ratio = 200.0 / (2.0 * y_half)
     result = {
         "label": label, "bucket_cap": bucket_cap, "ratio": ratio, "pts": pts,
-        "wall": wall, "aa_ok": aa_allowed, "pan_p50_ms": pan_p50,
+        "ink_high": ink_high, "aa_ok": aa_allowed, "pan_p50_ms": pan_p50,
         "pan_p95_ms": pan_p95,
     }
     print(
         f"{label:<34} ratio={ratio:6.2f} pts={pts:6d} "
-        f"wall={'Y' if wall else 'n'} aa_ok={'Y' if aa_allowed else 'n'} "
+        f"ink_high={'Y' if ink_high else 'n'} aa_ok={'Y' if aa_allowed else 'n'} "
         f"pan p50={pan_p50:7.1f} p95={pan_p95:7.1f}ms", flush=True,
     )
     return result
@@ -421,7 +421,7 @@ def cmd_raster_build(_args):
     for label, pw, logical in (
         ("1ch full row  (1550x800)", 1550, (1550, 800)),
         ("6ch row       (1550x120)", 1550, (1550, 120)),
-        ("wall-capped   (1800x800)", 1800, (1550, 800)),
+        ("1800-bucket   (1800x800)", 1800, (1550, 800)),
     ):
         env_t, env_s = positions_envelope(
             t, sig, xlim=(float(t[0]), float(t[-1])), pixel_width=pw,

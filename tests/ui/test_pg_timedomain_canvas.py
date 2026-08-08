@@ -625,69 +625,34 @@ class TestSubplotDenseBucketCap:
             assert eff * n <= bound * 1.05
 
 
-# -- universal data-amplitude vs Y-window wall guard ---------------------
+# -- universal ink-budget downsample guard -------------------------------
 
 
-class TestYOverflowWallGuard:
-    """Renderer-layer 兜底 guard for the 满高竖线墙 (full-height vertical-stroke
-    wall) regime that the static density caps (overlay channel-count /
-    subplot decimation) do NOT see: a dense curve drawn into a Y view window
-    far smaller than its amplitude. Every trigger path (manual narrow Y,
-    box-zoom Y, scroll Y, stale narrow Y across a view switch) funnels into one
-    ``setData`` per line in ``_refresh_visible_data``; the guard compares each
-    line's window data amplitude span to its Y view span and, on overflow >
-    ``_WALL_OVERFLOW_RATIO_K``×, caps the bucket count and holds AA off.
+class TestInkBudget:
+    """Renderer-layer 墨水量预算 guard (spec
+    ``docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`` §4.1),
+    the replacement for the retired ``data_span / y_span`` 满高竖线墙 wall guard.
 
-    Pure performance guard: it changes NO Y range, NO autorange, NO data — only
-    the number of drawn strokes + the AA state for the wall frame. Normal frames
-    (data hugs the window) are untouched and pay zero extra per-frame cost.
+    The wall guard measured the WRONG axis: it fired only when the data
+    overflowed the Y window by > 4×, while the real cost peak sits at
+    ratio ≈ 1.0 — i.e. exactly the output of Y auto-fit. The ink metric
+    (``envelope_ink_dev_px``, device-pixel vertical stroke length) predicts
+    the frame cost directly, so it covers BOTH regimes with one number:
+    the old narrow-Y wall still trips it (behavior does not regress) and the
+    previously-invisible "oscillating curve fitted to its window" case now
+    trips it too. A smooth curve fitted to its window keeps full resolution —
+    the ink metric is what tells the two fitted cases apart (spec §3.3).
+
+    Pure performance guard: it changes NO Y range, NO autorange, NO data —
+    only the number of drawn strokes + the AA state for the high-ink frame.
+    Low-ink frames are untouched and pay only one vectorized diff.
     """
 
-    # -- pure predicate / helper unit coverage (no Qt) -------------------
-
-    def test_predicate_triggers_on_large_overflow(self):
-        from mf4_analyzer.ui.pg_canvas.renderer import (
-            Renderer, _WALL_OVERFLOW_RATIO_K,
-        )
-        # data_span/y_span = 10/0.1 = 100 >> K
-        assert Renderer._is_y_overflow_wall(10.0, 0.1) is True
-        # exactly at K is NOT a wall (strict >)
-        assert Renderer._is_y_overflow_wall(
-            _WALL_OVERFLOW_RATIO_K, 1.0) is False
-        # just above K is a wall
-        assert Renderer._is_y_overflow_wall(
-            _WALL_OVERFLOW_RATIO_K + 0.01, 1.0) is True
-
-    def test_predicate_no_trigger_when_data_fits_window(self):
-        from mf4_analyzer.ui.pg_canvas.renderer import Renderer
-        # data ±5 in a ±6 window: data_span 10, y_span 12, ratio < 1 → no wall
-        assert Renderer._is_y_overflow_wall(10.0, 12.0) is False
-        # data exactly fills window (ratio 1) → no wall
-        assert Renderer._is_y_overflow_wall(10.0, 10.0) is False
-
-    def test_predicate_degenerate_inputs_do_not_crash_or_trigger(self):
-        from mf4_analyzer.ui.pg_canvas.renderer import Renderer
-        # y_span ≈ 0 (collapsed window): no div-by-zero, no trigger
-        assert Renderer._is_y_overflow_wall(5.0, 0.0) is False
-        assert Renderer._is_y_overflow_wall(5.0, -1.0) is False
-        # data_span ≈ 0 (flat line): one horizontal stroke, NOT a wall
-        assert Renderer._is_y_overflow_wall(0.0, 0.001) is False
-        # non-finite inputs are absorbed
-        assert Renderer._is_y_overflow_wall(float("nan"), 1.0) is False
-        assert Renderer._is_y_overflow_wall(1.0, float("inf")) is False
-
-    def test_wall_capped_width_only_reduces(self):
-        from mf4_analyzer.ui.pg_canvas.renderer import (
-            Renderer, _WALL_BUCKET_BUDGET,
-        )
-        # above the budget → clamped down
-        assert Renderer._wall_capped_width(_WALL_BUCKET_BUDGET + 5000) == (
-            _WALL_BUCKET_BUDGET
-        )
-        # already below the budget → unchanged (never raised)
-        assert Renderer._wall_capped_width(500) == 500
-        # degenerate width floors at 1
-        assert Renderer._wall_capped_width(0) == 1
+    # -- pure helper unit coverage (no Qt) -------------------------------
+    #
+    # The ink metric itself is covered by ``TestEnvelopeInk``; the clamp is
+    # inline in ``_refresh_visible_data`` (single call site) and is covered
+    # end-to-end below.
 
     def test_y_span_key_changes_with_y_zoom(self):
         from mf4_analyzer.ui.pg_canvas.renderer import _quantize_y_span_key
@@ -699,20 +664,77 @@ class TestYOverflowWallGuard:
         assert _quantize_y_span_key(0.0) == 0
         assert _quantize_y_span_key(-1.0) == 0
 
+    # -- constant mutation guards ----------------------------------------
+
+    def test_ink_off_budget_constant_stays_in_calibrated_band(self):
+        """``_INK_OFF_BUDGET`` is a real-hardware calibration, not a knob.
+
+        Spec §5: 1.2M device px ≈ a 20 ms interaction frame at the measured
+        16.5 ns/dev px (Cocoa, dpr 2.0). Before changing it, update spec §5
+        AND re-run the real-machine calibration
+        (``scripts/probe_aa_ink_budget.py``) — an offscreen suite cannot
+        measure paint cost. The band below is the order-of-magnitude fence
+        the downsample cases depend on: 10× either way silently disables
+        (or over-applies) the guard.
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_OFF_BUDGET
+
+        assert 600_000 <= _INK_OFF_BUDGET <= 2_400_000
+
+    def test_ink_min_buckets_constant_stays_in_calibrated_band(self):
+        """``_INK_MIN_BUCKETS`` is the silhouette-fidelity floor.
+
+        Spec §5: 350 buckets, inherited from ``_SUBPLOT_DENSE_MIN_BUCKETS``
+        (measured 17 ms/frame at that width). Before changing it, update
+        spec §5 and re-calibrate on real hardware: below ~200 the coarse
+        outline visibly loses features, above ~700 the floor stops bounding
+        the worst case.
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_MIN_BUCKETS
+
+        assert 200 <= _INK_MIN_BUCKETS <= 700
+
     # -- end-to-end on a live canvas -------------------------------------
 
-    def _wall_canvas(self, qapp):
+    def _ink_canvas(self, qapp, height=900):
         from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
-        canvas.resize(1920, 600)
+        # 900 px tall so the single subplot row is ~850 px — the row height is
+        # a direct factor of the ink metric, and offscreen Qt reports dpr 1.0
+        # (real Cocoa is 2.0), so a short canvas would land the narrow-Y case
+        # under budget for geometry reasons alone.
+        canvas.resize(1920, height)
         canvas.show()
         QCoreApplication.processEvents()
-        # ONE dense channel, amplitude ±5 (data_span ~10). A single channel is
-        # below BOTH static caps (overlay needs >=2 curves; subplot dense cap
-        # needs >=2 dense rows), so only the universal wall guard can fire here.
+        # ONE dense but SMOOTH channel, amplitude ±5. A single channel is below
+        # BOTH static caps (overlay needs >=2 curves; subplot dense cap needs
+        # >=2 dense rows), so only the universal ink guard can fire here.
         t = np.linspace(0.0, 10.0, 1_000_000, dtype=np.float64)
         sig = 5.0 * np.sin(t * 30.0)
+        rows = [("ch0", True, t, sig, "#1769e0", "u", "fid-0")]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        return canvas, t, sig
+
+    def _oscillating_canvas(self, qapp, height=900):
+        """Spec §3.2 real-hardware fixture: 1M samples @ 20 kHz carrying a
+        2300 Hz oscillation (±100) plus a slow 0.7 Hz swing. Every envelope
+        bucket spans nearly the full amplitude, so once Y is fitted to the
+        data the curve paints as a solid ink band — the case the retired wall
+        guard could never see (its ratio is ≈ 1.0, far below K = 4).
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, height)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.arange(1_000_000, dtype=np.float64) / 20_000.0
+        sig = (
+            100.0 * np.sin(2 * np.pi * 2300.0 * t)
+            + 8.0 * np.sin(2 * np.pi * 0.7 * t)
+        )
         rows = [("ch0", True, t, sig, "#1769e0", "u", "fid-0")]
         canvas.plot_channels(rows, mode="subplot")
         QCoreApplication.processEvents()
@@ -723,75 +745,189 @@ class TestYOverflowWallGuard:
         xd, _ = line.plot_data_item.getData()
         return 0 if xd is None else len(xd)
 
-    def test_narrow_y_caps_points_and_flags_wall(self, qapp):
-        from mf4_analyzer.ui.pg_canvas.renderer import _WALL_BUCKET_BUDGET
+    @staticmethod
+    def _expected_cap(effective_width, ink):
+        """Re-derive spec §4.1's clamp from the ink the renderer recorded.
 
-        canvas, _t, _sig = self._wall_canvas(qapp)
+        Deliberately NOT a hard-coded bucket count: the fixture's ink depends
+        on the row height the platform hands out, so the expectation has to
+        be reconstructed from the measured value.
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import (
+            _INK_MIN_BUCKETS, _INK_OFF_BUDGET,
+        )
+
+        raw = int(effective_width * _INK_OFF_BUDGET / ink)
+        return max(_INK_MIN_BUCKETS, min(raw, effective_width))
+
+    def test_narrow_y_caps_points_and_flags_high_ink(self, qapp):
+        """Old wall scenario (data_span/y_span ≈ 1000) must NOT regress: a
+        dense curve pinned into a sliver of Y still paints full-height strokes,
+        so its ink is still over budget and it is still coarsened + AA-blocked.
+        """
+        canvas, _t, _sig = self._ink_canvas(qapp)
         ax, _line = canvas._channel_lines["ch0"]
-        # Baseline: window hugs the data (±6), no wall.
+        # Baseline: window hugs the data (±6) — smooth curve, low ink.
         ax.set_ylim(-6.0, 6.0)
         canvas._last_range_key.clear()
         canvas._flush_pending_refresh()
         full_pts = self._displayed_points(canvas, "ch0")
-        assert canvas._y_overflow_wall_active is False
-        assert canvas._line_wall_state.get("ch0") is False
+        pw = canvas._current_pixel_width()
+        assert canvas._frame_ink_high is False
+        assert canvas._line_ink_state.get("ch0")[1] is False
+        # Un-capped: ~2 envelope samples per pixel column.
+        assert full_pts > pw
 
-        # Now pin Y to ±0.05 (data_span/y_span ≈ 10/0.1 = 100 >> K): wall.
-        ax.set_ylim(-0.05, 0.05)
+        # Now pin Y to ±0.005: every bucket's min/max pair overflows the
+        # window → full-height strokes → ink over budget.
+        ax.set_ylim(-0.005, 0.005)
         canvas._flush_pending_refresh()
-        wall_pts = self._displayed_points(canvas, "ch0")
-        assert canvas._y_overflow_wall_active is True
-        assert canvas._line_wall_state.get("ch0") is True
-        # Bucket count额外封顶: each bucket emits ~2 envelope samples, so the
-        # displayed count is bounded by ~2× the wall budget.
-        assert wall_pts <= 2 * _WALL_BUCKET_BUDGET + 4
-        # And it is strictly fewer strokes than the un-capped (fitting) frame.
-        assert wall_pts < full_pts
+        capped_pts = self._displayed_points(canvas, "ch0")
+        assert canvas._frame_ink_high is True
+        ink, high = canvas._line_ink_state.get("ch0")
+        assert high is True
+        assert ink > 0.0
+        # Each bucket emits ~2 envelope samples, so the displayed count is
+        # bounded by ~2× the width the spec §4.1 clamp selects.
+        assert capped_pts <= 2 * self._expected_cap(pw, ink) + 4
+        # And it is strictly fewer strokes than the un-capped frame.
+        assert capped_pts < full_pts
+
+    def test_oscillating_fit_y_caps_points_and_flags_high_ink(self, qapp):
+        """The case the wall guard missed (spec §1.1 / §3.3): an oscillating
+        curve with Y auto-fitted to it — ratio ≈ 1.0, which the retired
+        ``data_span / y_span > 4`` predicate scored as a perfectly normal
+        frame while it was in fact the measured cost PEAK.
+        """
+        canvas, _t, _sig = self._oscillating_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        pw = canvas._current_pixel_width()
+        # Reference frame: a very wide Y window. Same data, same bucket count,
+        # but the strokes are a thin band → low ink → no downsample.
+        ax.set_ylim(-10_000.0, 10_000.0)
+        canvas._last_range_key.clear()
+        canvas._flush_pending_refresh()
+        full_pts = self._displayed_points(canvas, "ch0")
+        assert canvas._frame_ink_high is False
+        assert full_pts > pw
+
+        # Now the product's own Y auto-fit → ratio ≈ 1.0.
+        canvas.fit_y_to_visible_x()
+        canvas._flush_pending_refresh()
+        ylo, yhi = ax.get_ylim()
+        data_span = 2 * 108.0  # ±(100 + 8)
+        ratio = data_span / abs(float(yhi) - float(ylo))
+        # Premise check: this frame is NOT a wall by the old predicate (which
+        # needed ratio > 4) — it is the fitted-window regime.
+        assert 0.5 < ratio < 1.5
+
+        fit_pts = self._displayed_points(canvas, "ch0")
+        assert canvas._frame_ink_high is True
+        ink, high = canvas._line_ink_state.get("ch0")
+        assert high is True
+        assert ink > 0.0
+        assert fit_pts < full_pts
+        assert fit_pts <= 2 * self._expected_cap(pw, ink) + 4
 
     def test_fitting_window_full_resolution_no_cap(self, qapp):
-        canvas, _t, _sig = self._wall_canvas(qapp)
+        """Contract kept from the wall era (spec §3.3): a SMOOTH curve fitted
+        to its window must keep full pixel-width resolution. Its ink is far
+        under budget precisely because the strokes are thin, which is how the
+        metric separates it from the oscillating fitted case above.
+        """
+        canvas, _t, _sig = self._ink_canvas(qapp)
         ax, _line = canvas._channel_lines["ch0"]
         pw = canvas._current_pixel_width()
         ax.set_ylim(-6.0, 6.0)
         canvas._last_range_key.clear()
         canvas._flush_pending_refresh()
         pts = self._displayed_points(canvas, "ch0")
-        # Full pixel-width resolution: ~2 samples per pixel column, far above
-        # the wall budget; no cap engaged.
-        assert canvas._y_overflow_wall_active is False
-        assert pts > pw  # not coarsened down to the wall budget
+        # Full pixel-width resolution: ~2 samples per pixel column, no cap.
+        assert canvas._frame_ink_high is False
+        ink, high = canvas._line_ink_state.get("ch0")
+        assert high is False
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_OFF_BUDGET
+        assert ink <= _INK_OFF_BUDGET
+        assert pts > pw  # not coarsened
 
-    def test_wall_holds_aa_off(self, qapp):
-        canvas, _t, _sig = self._wall_canvas(qapp)
+    def test_min_buckets_floor_bounds_the_downsample(self, qapp):
+        """The proportional clamp must never coarsen a line below
+        ``_INK_MIN_BUCKETS`` — the outline has to stay recognizable even when
+        the ink is many times the budget (spec §4.1 clamp lower bound).
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import (
+            _INK_MIN_BUCKETS, _INK_OFF_BUDGET,
+        )
+
+        # A very tall row multiplies the ink (it is linear in row height), so
+        # the proportional term alone would ask for far fewer buckets than the
+        # floor allows.
+        canvas, _t, _sig = self._oscillating_canvas(qapp, height=2400)
         ax, _line = canvas._channel_lines["ch0"]
-        ax.set_ylim(-0.05, 0.05)
+        pw = canvas._current_pixel_width()
+        ax.set_ylim(-1.0, 1.0)
+        canvas._last_range_key.clear()
         canvas._flush_pending_refresh()
-        assert canvas._y_overflow_wall_active is True
-        # The idle-AA gate must hard-fail (AA stays OFF) while the wall is up,
-        # regardless of how few points the cap left.
+        pts = self._displayed_points(canvas, "ch0")
+
+        ink, high = canvas._line_ink_state.get("ch0")
+        assert high is True
+        # Premise: the floor — not the proportional term — is what binds here.
+        assert int(pw * _INK_OFF_BUDGET / ink) < _INK_MIN_BUCKETS
+        # Floored, not collapsed: ~2 samples per bucket at exactly the floor.
+        assert pts <= 2 * _INK_MIN_BUCKETS + 4
+        assert pts >= _INK_MIN_BUCKETS
+
+    def test_high_ink_holds_aa_off(self, qapp):
+        canvas, _t, _sig = self._ink_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        ax.set_ylim(-0.005, 0.005)
+        canvas._flush_pending_refresh()
+        assert canvas._frame_ink_high is True
+        # The idle-AA gate must hard-fail (AA stays OFF) on a high-ink frame,
+        # regardless of how few points the downsample left.
         assert canvas._quality._idle_aa_density_ok() is False
 
-    def test_wall_state_clears_when_window_widens_back(self, qapp):
-        canvas, _t, _sig = self._wall_canvas(qapp)
+    def test_cache_hit_frame_preserves_high_ink_state(self, qapp):
+        """A no-op refresh (range-key cache HIT) must carry the recorded ink
+        state forward. Otherwise the idle-AA gate re-arms over a still-present
+        ink band on the very next flush
+        (pyqt-ui/2026-06-23-y-overflow-wall-guard-needs-y-in-range-key-and-cache-hit-state).
+        """
+        canvas, _t, _sig = self._ink_canvas(qapp)
         ax, _line = canvas._channel_lines["ch0"]
-        ax.set_ylim(-0.05, 0.05)
+        ax.set_ylim(-0.005, 0.005)
         canvas._flush_pending_refresh()
-        assert canvas._y_overflow_wall_active is True
-        # Widen Y back to fit: the wall must clear so AA can re-arm later.
+        assert canvas._frame_ink_high is True
+        recorded = canvas._line_ink_state.get("ch0")
+
+        # Second flush, nothing changed → every line takes the cache-hit path.
+        canvas._flush_pending_refresh()
+        assert canvas._frame_ink_high is True
+        assert canvas._line_ink_state.get("ch0") == recorded
+        assert canvas._quality._idle_aa_density_ok() is False
+
+    def test_ink_state_clears_when_window_widens_back(self, qapp):
+        canvas, _t, _sig = self._ink_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        ax.set_ylim(-0.005, 0.005)
+        canvas._flush_pending_refresh()
+        assert canvas._frame_ink_high is True
+        # Widen Y back to fit: ink drops under budget so AA can re-arm later.
         ax.set_ylim(-6.0, 6.0)
         canvas._flush_pending_refresh()
-        assert canvas._y_overflow_wall_active is False
-        assert canvas._line_wall_state.get("ch0") is False
+        assert canvas._frame_ink_high is False
+        assert canvas._line_ink_state.get("ch0")[1] is False
 
     def test_flat_line_in_narrow_window_does_not_trigger(self, qapp):
         from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
-        canvas.resize(1920, 600)
+        canvas.resize(1920, 900)
         canvas.show()
         QCoreApplication.processEvents()
-        # A genuinely flat (constant) dense line: data_span ≈ 0. Even in a
-        # narrow Y window it is one horizontal stroke, never a fill wall.
+        # A genuinely flat (constant) dense line: zero vertical ink. Even in a
+        # razor-thin Y window it is one horizontal stroke, never a fill band.
         t = np.linspace(0.0, 10.0, 1_000_000, dtype=np.float64)
         sig = np.full_like(t, 2.0)
         rows = [("ch0", True, t, sig, "#1769e0", "u", "fid-0")]
@@ -800,16 +936,18 @@ class TestYOverflowWallGuard:
         ax, _line = canvas._channel_lines["ch0"]
         ax.set_ylim(1.999, 2.001)
         canvas._flush_pending_refresh()
-        assert canvas._y_overflow_wall_active is False
-        assert canvas._line_wall_state.get("ch0") in (False, None)
+        assert canvas._frame_ink_high is False
+        state = canvas._line_ink_state.get("ch0")
+        assert state is None or state == (0.0, False)
 
 
 class TestEnvelopeInk:
     """Pure-function coverage for ``envelope_ink_dev_px`` (spec
     ``docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`` §3):
-    the device-pixel vertical "ink" metric that will replace the
-    ``_is_y_overflow_wall`` wall guard as the AA/downsample trigger. No
-    ``qapp`` needed — these are plain numpy in, float out.
+    the device-pixel vertical "ink" metric that replaced the retired
+    ``_is_y_overflow_wall`` wall guard as the AA/downsample trigger (see
+    ``TestInkBudget`` for the renderer-level behavior). No ``qapp`` needed —
+    these are plain numpy in, float out.
     """
 
     def test_flat_line_is_zero_ink(self):

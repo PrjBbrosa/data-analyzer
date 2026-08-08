@@ -474,14 +474,14 @@ class TimeDomainCanvasPG(QWidget):
         # other's refresh (pyqt-ui/2026-06-11-cache-key-stability-id-reuse-and-
         # param-roundtrip). Bare-name reads still resolve for legacy/test code.
         self._last_range_key = _ChannelKeyDict()
-        # Per-channel Y-overflow wall state (renderer._refresh_visible_data):
-        # remembers whether THIS line was last flushed in the 满高竖线墙 regime so
-        # a range-key cache-HIT (no-op refresh) can keep the frame wall flag set
-        # — AA must stay off until the user widens Y, not until the next real
-        # recompute. Cleared alongside _last_range_key on rebuild/invalidate.
-        # Composite (fid, name) keyed for the same cross-file non-collision
-        # reason as _last_range_key.
-        self._line_wall_state = _ChannelKeyDict()
+        # Per-channel ink state (renderer._refresh_visible_data): the
+        # ``(ink_dev_px, high)`` pair recorded for THIS line at its last
+        # un-skipped flush, so a range-key cache-HIT (no-op refresh) can keep
+        # the frame ink flag set — AA must stay off until the geometry actually
+        # changes, not until the next real recompute. Cleared alongside
+        # _last_range_key on rebuild/invalidate. Composite (fid, name) keyed for
+        # the same cross-file non-collision reason as _last_range_key.
+        self._line_ink_state = _ChannelKeyDict()
         self._last_refresh_signature = None
         self._monotonic_fingerprint_cache: dict = {}
 
@@ -522,13 +522,12 @@ class TimeDomainCanvasPG(QWidget):
         # dense-stack bucket cap engages at >= 2). Recomputed each
         # plot_channels; 0 in overlay/single/low-density layouts.
         self._subplot_dense_count = 0
-        # Y-overflow wall guard (renderer._refresh_visible_data). Set True for
-        # the current frame when ANY line's window data amplitude span overflows
-        # its Y view window by more than _WALL_OVERFLOW_RATIO_K (the dense
-        # narrow-Y "满高竖线墙" regime). While active the idle-AA gate keeps
-        # antialiasing OFF so the expensive AA compositing never re-arms over a
-        # raster-fill wall. Reset to False on every refresh that finds no wall.
-        self._y_overflow_wall_active = False
+        # Ink budget (renderer._refresh_visible_data). Set True for the current
+        # frame when ANY line's envelope is over _INK_OFF_BUDGET device pixels
+        # of vertical ink. While active the idle-AA gate keeps antialiasing OFF
+        # so the expensive AA compositing never re-arms over an ink band. Reset
+        # to False on every refresh that finds every line under budget.
+        self._frame_ink_high = False
         # The X-master axis handle in overlay mode. Its ViewBox owns the
         # shared X range, the default mouse-pan, and the scene geometry
         # anchor; NO curves are attached to it (every channel — including
@@ -2621,8 +2620,8 @@ class TimeDomainCanvasPG(QWidget):
         self._subplot_row_constraints = {}
         self._curve_path_cache.clear()
         self._last_range_key.clear()
-        self._line_wall_state.clear()
-        self._y_overflow_wall_active = False
+        self._line_ink_state.clear()
+        self._frame_ink_high = False
         self._last_refresh_signature = None
         self._overlay_mode = False
         # T6 — drop overlay selection + subplot label scaffolding so the
@@ -2672,8 +2671,8 @@ class TimeDomainCanvasPG(QWidget):
         self._cursor.reset_all_state()
         self._curve_path_cache.clear()
         self._last_range_key.clear()
-        self._line_wall_state.clear()
-        self._y_overflow_wall_active = False
+        self._line_ink_state.clear()
+        self._frame_ink_high = False
         self._last_refresh_signature = None
         self._monotonic_fingerprint_cache.clear()
         self.draw_idle()
@@ -3107,17 +3106,17 @@ class TimeDomainCanvasPG(QWidget):
             if data_id is not None:
                 ck = _view_state_channel_key(data_id, channel)
                 self._last_range_key.pop(ck, None)
-                self._line_wall_state.pop(ck, None)
+                self._line_ink_state.pop(ck, None)
             else:
                 self._last_range_key.pop(channel, None)
-                self._line_wall_state.pop(channel, None)
+                self._line_ink_state.pop(channel, None)
         elif data_id is not None:
             for ck, _name, ch_data_id in list(
                 self._channel_data_id.composite_items()
             ):
                 if ch_data_id == data_id:
                     self._last_range_key.pop(ck, None)
-                    self._line_wall_state.pop(ck, None)
+                    self._line_ink_state.pop(ck, None)
 
     def invalidate_monotonicity_cache(self, custom_xaxis_fid=None, custom_xaxis_ch=None):
         """Drop per-channel monotonicity flags. Mirrors the matplotlib

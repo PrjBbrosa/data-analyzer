@@ -240,14 +240,14 @@ class QualityManager(_CanvasBackref):
         if self._high_raster_cost_status()["blocked"]:
             self.density_allowed = False
             return False
-        # Universal Y-overflow wall guard: while any line is drawn data≫window
-        # (full-height vertical-stroke 满高竖线墙, see renderer module constants)
-        # the idle timer must NOT re-arm AA — the expensive AA compositing over a
-        # raster-fill wall is exactly the cost this guard exists to avoid. The
-        # bucket cap already coarsened the strokes; holding AA off keeps the
-        # frame cheap until the user widens Y. Reuses the existing density gate
-        # (no new AA pathway) by hard-failing it for the wall frame.
-        if getattr(self, "_y_overflow_wall_active", False):
+        # Universal ink budget: while any line is over _INK_OFF_BUDGET device
+        # pixels of vertical ink (see renderer module constants) the idle timer
+        # must NOT re-arm AA — the expensive AA compositing over an ink band is
+        # exactly the cost this guard exists to avoid. The bucket cut already
+        # coarsened the strokes; holding AA off keeps the frame cheap until the
+        # geometry changes. Reuses the existing density gate (no new AA pathway)
+        # by hard-failing it for the high-ink frame.
+        if getattr(self, "_frame_ink_high", False):
             self.density_allowed = False
             return False
         if self._overlay_density_pressure_status()["blocked"]:

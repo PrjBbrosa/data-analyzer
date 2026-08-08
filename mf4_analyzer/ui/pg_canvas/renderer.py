@@ -15,6 +15,7 @@ from .render_profile import (
     DENSE_DISCRETE_BUCKET_BUDGET,
     bucket_width_for,
     classify_render_profile,
+    envelope_ink_dev_px,
     source_revision_for,
 )
 
@@ -95,42 +96,52 @@ _SUBPLOT_DENSE_MIN_BUCKETS = 350
 
 
 # ---------------------------------------------------------------------------
-# Universal "data amplitude vs Y view window" wall guard (满高竖线墙 兜底).
+# Universal per-line INK BUDGET (墨水量预算) — spec
+# docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md §4.1 / §5.
 #
 # The two caps above key off STATIC density (source_len / pixel_width) or
-# channel count. They miss the GENERAL trigger of the full-height vertical
-# stroke wall: a dense curve drawn into a Y view window FAR SMALLER than the
-# curve's amplitude. In that regime every envelope bucket's min/max pair spans
-# the entire canvas height as one vertical stroke, and the per-frame raster-fill
-# cost explodes (Windows real-machine ~十几秒). This happens for paths the
-# density caps don't see: manual narrow-Y on a SINGLE dense channel, box-zoom to
-# a thin Y band, scroll-zoom Y, a stale narrow-Y carried across a view switch,
-# overlay re-pin, etc. — all of which funnel into ONE setData per line in
-# _refresh_visible_data.
+# channel count. They miss the GENERAL trigger of the expensive frame: the
+# amount of VERTICAL INK the envelope has to paint. Every path funnels into ONE
+# setData per line in _refresh_visible_data, so the metric is computed there,
+# from the envelope that is already in hand (one vectorized diff, near-free):
 #
-# Guard: per line, compare the window data amplitude span (data_span, free from
-# the envelope's own min/max) to the line's current Y view span (y_span). When
+#     ink_dev_px = Σ min(|Δy_i|, y_span) / y_span × row_height_px × dpr
 #
-#     data_span / y_span > _WALL_OVERFLOW_RATIO_K
+# (envelope_ink_dev_px, mf4_analyzer/render_profile.py.)
 #
-# the data overflows the window by > K× → it is guaranteed to paint as a
-# full-height wall regardless of mode/density, so this line is treated EXACTLY
-# like a dense signal: its bucket count is额外封顶 to _WALL_BUCKET_BUDGET and AA
-# is held OFF for the frame (via the canvas _y_overflow_wall_active flag, which
-# the idle-AA gate respects). K is an empirical 4.0: below ~3–4× the data still
-# roughly fits the window (thin line, not a wall); 4× is a safe margin that does
-# not false-trigger on data that merely brushes the window edges. NORMAL frames
-# (data_span ≈ y_span, data hugs the window) skip the guard entirely — zero
-# behavior change and zero extra per-frame cost beyond the free min/max read.
+# This REPLACES the retired data_span/y_span "满高竖线墙" wall guard (K = 4.0,
+# 1800-bucket ceiling), which measured the wrong axis. 2026-08-08 real-machine
+# sweep (Cocoa, dpr 2.0, 1600×950, 1M samples @ 20 kHz): drag p50 by Y ratio
+# was 3.9 ms at ratio 9.8 — where the wall guard DID fire — and 106 ms at
+# ratio 1.0, where it did not. The cost peak sits exactly at ratio ≈ 1.0, i.e.
+# the output of Y auto-fit, because that is where the strokes are longest
+# without being clipped away by the viewport. Ink, unlike the ratio, is
+# linear in the measured cost across the whole band, and separates the two
+# fitted-window cases the ratio cannot tell apart (spec §3.3): a SMOOTH curve
+# fitted to its window is 72.7k ink (keep full resolution) while an
+# OSCILLATING one is 2042k (coarsen).
 #
-# _WALL_BUCKET_BUDGET (1800) is a hard per-line ceiling on displayed strokes in
-# the wall regime — same order as the overlay per-curve cap (~758) scaled up for
-# the single-line case, low enough to collapse the raster cost (linear in stroke
-# count) but high enough to keep the wall's silhouette faithful (it's already a
-# solid fill, so fewer strokes lose no visible feature).
+# _INK_OFF_BUDGET is the per-line ceiling above which the bucket count is cut
+# proportionally (spec §4.1 clamp) and the frame is flagged high-ink so the
+# idle-AA gate holds AA off. 1.2M device px ≈ a 20 ms interaction frame at the
+# measured 16.5 ns/dev px (equivalently 33 ns per logical px at dpr 2.0).
+# Anchors on that line: 350 buckets → 461k ink → predicted 15.2 ms, measured
+# 17.0 ms; the bucket sweep 1550/1200/800/500/350 measured 64/51/35/23/17 ms.
+#
+# _INK_MIN_BUCKETS is the floor the proportional cut may never go below, so a
+# hugely over-budget line still keeps a recognizable silhouette. It reuses
+# _SUBPLOT_DENSE_MIN_BUCKETS' value (350) and its justification, and the same
+# measurement backs it: 350 buckets is a 17 ms frame, comfortably inside the
+# 30 ms interaction target even at the floor.
+#
+# Both are CALIBRATIONS, not knobs: the ns/px coefficient is Cocoa @ dpr 2.0.
+# Changing either requires updating spec §5 and re-running
+# scripts/probe_aa_ink_budget.py on real hardware (an offscreen suite cannot
+# measure paint cost); tests/ui/test_pg_timedomain_canvas.py::TestInkBudget
+# fences the order of magnitude.
 # ---------------------------------------------------------------------------
-_WALL_OVERFLOW_RATIO_K = 4.0
-_WALL_BUCKET_BUDGET = 1800
+_INK_OFF_BUDGET = 1_200_000
+_INK_MIN_BUCKETS = 350
 
 
 # ---------------------------------------------------------------------------
@@ -239,8 +250,6 @@ class Renderer(_CanvasBackref):
     _delegate_names = frozenset({
         "_current_pixel_width",
         "_effective_pixel_width",
-        "_is_y_overflow_wall",
-        "_wall_capped_width",
         "_refresh_visible_data",
         "_build_painter_path",
         "_build_painter_path_loop",
@@ -378,48 +387,6 @@ class Renderer(_CanvasBackref):
         cap = max(_SUBPLOT_DENSE_MIN_BUCKETS, cap)
         return max(1, min(pw, cap))
 
-    @staticmethod
-    def _is_y_overflow_wall(data_span, y_span) -> bool:
-        """Return True when window data amplitude overflows the Y view window
-        by more than ``_WALL_OVERFLOW_RATIO_K`` — the dense narrow-Y full-height
-        vertical-stroke wall regime.
-
-        Pure, cheap, defensive: a non-finite or non-positive ``y_span``
-        (degenerate / collapsed Y window) returns False rather than dividing by
-        zero, and a non-finite / zero ``data_span`` (flat line) never triggers
-        — a flat trace is one horizontal stroke, not a fill wall, so it must NOT
-        be coarsened. The comparison is strict ``>`` so a curve that exactly
-        fits the window (ratio 1) is left untouched.
-        """
-        try:
-            ds = float(data_span)
-            ys = float(y_span)
-        except (TypeError, ValueError):
-            return False
-        if not np.isfinite(ds) or not np.isfinite(ys):
-            return False
-        if ys <= 0.0 or ds <= 0.0:
-            return False
-        return ds / ys > _WALL_OVERFLOW_RATIO_K
-
-    @staticmethod
-    def _wall_capped_width(effective_width: int) -> int:
-        """Clamp an already-computed ``effective_width`` down to the per-line
-        wall ceiling ``_WALL_BUCKET_BUDGET``.
-
-        Applied ON TOP of the mode-specific cap so the wall guard can only ever
-        REDUCE the bucket count (never raise it above what overlay/subplot
-        already chose). A width already at or below the budget is returned
-        unchanged.
-        """
-        try:
-            ew = int(effective_width)
-        except (TypeError, ValueError):
-            return effective_width
-        if ew < 1:
-            return 1
-        return min(ew, _WALL_BUCKET_BUDGET)
-
     def _refresh_visible_data(self, *, xlim_override=None, interactive=False):
         """Bind one envelope window without mutating the owning ViewBox.
 
@@ -485,12 +452,18 @@ class Renderer(_CanvasBackref):
 
         updated_any = False
         last_effective_width = overlay_effective_width
-        # Per-frame Y-overflow wall state (reset every refresh): True once ANY
-        # line is found in the data≫window full-height-stroke regime. The
-        # idle-AA gate reads this to hold AA OFF over the wall.
-        frame_wall = False
+        # Per-frame ink state (reset every refresh): True once ANY line is
+        # found over _INK_OFF_BUDGET. The idle-AA gate reads this to hold AA
+        # OFF over an ink band.
+        frame_ink_high = False
+        # Device pixel ratio for the whole canvas: ink is measured in DEVICE
+        # pixels so the budget is comparable across machines (dpr 1 vs 2).
+        try:
+            dpr = float(self._glw.devicePixelRatioF())
+        except Exception:
+            dpr = 1.0
         # Iterate by COMPOSITE (fid, name) key: the per-line viewport caches
-        # (_last_range_key / _line_wall_state) MUST key on the composite key,
+        # (_last_range_key / _line_ink_state) MUST key on the composite key,
         # never the display name, or two same-named channels from different
         # files cross-contaminate — one channel's cache-HIT would suppress the
         # other's refresh and the curve would freeze/vanish on un-check
@@ -558,8 +531,9 @@ class Renderer(_CanvasBackref):
             ):
                 if cached_coverage is not None:
                     active_coverages.append(cached_coverage)
-                if self._line_wall_state.get(ck):
-                    frame_wall = True
+                prev_ink_state = self._line_ink_state.get(ck)
+                if prev_ink_state is not None and prev_ink_state[1]:
+                    frame_ink_high = True
                 last_effective_width = effective_width
                 continue
 
@@ -567,8 +541,8 @@ class Renderer(_CanvasBackref):
             # range key so a pure-Y narrow (box-zoom Y / scroll Y / stale narrow
             # Y carried across a view switch) — which leaves xlim and
             # effective_width unchanged — still invalidates the cache and lets
-            # the wall guard re-evaluate. Defensive: a degenerate handle gives
-            # y_span 0.0, which _is_y_overflow_wall treats as "no wall".
+            # the ink budget re-evaluate. Defensive: a degenerate handle gives
+            # y_span 0.0, which envelope_ink_dev_px reports as zero ink.
             try:
                 _ylo, _yhi = axis_facade.get_ylim()
                 y_span = abs(float(_yhi) - float(_ylo))
@@ -589,11 +563,13 @@ class Renderer(_CanvasBackref):
                 self._last_range_key.get(ck) == range_key
                 and cached_coverage is not None
             ):
-                # Cache hit: preserve the wall state recorded for this line at
+                # Cache hit: preserve the ink state recorded for this line at
                 # the last (un-skipped) flush so a no-op refresh does not clear
-                # a still-active wall (AA must stay off until the user widens Y).
-                if self._line_wall_state.get(ck):
-                    frame_wall = True
+                # a still-high ink band (AA must stay off until the geometry
+                # actually changes, not until the next real recompute).
+                prev_ink_state = self._line_ink_state.get(ck)
+                if prev_ink_state is not None and prev_ink_state[1]:
+                    frame_ink_high = True
                 last_effective_width = effective_width
                 active_coverages.append(cached_coverage)
                 continue
@@ -613,43 +589,59 @@ class Renderer(_CanvasBackref):
                 )
                 continue
 
-            # Y-overflow wall guard (universal 兜底, see module constants). The
-            # envelope's own min/max gives data_span for FREE; compare to the
-            # line's Y view span. data≫window → guaranteed full-height stroke
-            # wall regardless of mode/density →额外封顶 the bucket count and recompute
-            # ONCE at the wall width (numpy over the visible window, ms-level;
-            # only paid in the wall case), and flag the frame so AA stays off.
-            line_wall = False
+            # Ink budget (universal 兜底, see module constants). The envelope is
+            # already in hand, so the device-pixel vertical ink this line will
+            # paint costs one vectorized diff. Over budget → cut the bucket
+            # count proportionally (spec §4.1) and recompute the envelope ONCE
+            # at that width (numpy over the visible window, ms-level; only paid
+            # in the over-budget case), and flag the frame so AA stays off.
+            # Row height is THIS line's own axis (subplot rows are independent);
+            # a degenerate handle yields 0.0 → zero ink → never triggers.
             try:
-                _es = np.asarray(env_s, dtype=np.float64)
-                _finite = _es[np.isfinite(_es)]
-                data_span = (
-                    float(_finite.max() - _finite.min())
-                    if _finite.size else 0.0
+                row_height_px = float(
+                    axis_facade.view_box.sceneBoundingRect().height()
                 )
             except Exception:
-                data_span = 0.0
-            if self._is_y_overflow_wall(data_span, y_span):
-                wall_width = self._wall_capped_width(effective_width)
-                if wall_width < effective_width:
+                row_height_px = 0.0
+            try:
+                line_ink = envelope_ink_dev_px(
+                    env_s,
+                    y_span=y_span,
+                    row_height_px=row_height_px,
+                    dpr=dpr,
+                )
+            except Exception:
+                line_ink = 0.0
+            line_ink_high = False
+            if line_ink > _INK_OFF_BUDGET:
+                capped_width = int(
+                    effective_width * _INK_OFF_BUDGET / line_ink
+                )
+                # Clamp so the cut can only ever REDUCE the bucket count (never
+                # raise it above what overlay/subplot already chose) and never
+                # coarsen past the silhouette floor.
+                capped_width = max(
+                    _INK_MIN_BUCKETS, min(capped_width, effective_width),
+                )
+                if capped_width < effective_width:
                     try:
                         env_t, env_s = positions_envelope(
                             t, sig,
                             xlim=xlim,
-                            pixel_width=wall_width,
+                            pixel_width=capped_width,
                             is_monotonic=is_monotonic,
                         )
                     except Exception as exc:
                         _log.warning(
-                            "wall-capped positions_envelope failed for %r: %s",
+                            "ink-capped positions_envelope failed for %r: %s",
                             name, exc,
                         )
                     else:
-                        effective_width = wall_width
-                # Even when the width was already at/below the wall ceiling we
-                # still hold AA off — the wall is present, just already coarse.
-                line_wall = True
-                frame_wall = True
+                        effective_width = capped_width
+                # Even when the width was already at/below the floor we still
+                # hold AA off — the ink band is present, just already coarse.
+                line_ink_high = True
+                frame_ink_high = True
 
             last_effective_width = effective_width
 
@@ -677,7 +669,11 @@ class Renderer(_CanvasBackref):
                     )
                 else:
                     self._dense_raster.deactivate_channel(ck)
-                self._line_wall_state[ck] = line_wall
+                # The recorded ink is the line's PRE-cap demand for this
+                # geometry (what the clamp above was derived from), so a
+                # cache-HIT frame and the AA gate see the same number the
+                # decision was made on.
+                self._line_ink_state[ck] = (float(line_ink), line_ink_high)
                 self._last_range_key[ck] = range_key
                 updated_any = True
                 actual_coverage = _finite_x_coverage(env_t)
@@ -695,8 +691,8 @@ class Renderer(_CanvasBackref):
                 display_coverage = (float(coverage_lo), float(coverage_hi))
         self._display_x_coverage = display_coverage
 
-        # Publish the frame's wall state for the idle-AA gate (quality.py).
-        self._y_overflow_wall_active = bool(frame_wall)
+        # Publish the frame's ink state for the idle-AA gate (quality.py).
+        self._frame_ink_high = bool(frame_ink_high)
 
         # Debounced tail work: retick axes and notify listeners only once after
         # rapid drag ticks settle, instead of blocking every mouse-move event.

@@ -82,7 +82,7 @@ Test `tests/ui/test_pg_timedomain_canvas.py`（新 `TestEnvelopeInk`）
 **Files:** Modify `renderer.py`、`canvas.py`；
 Test `test_pg_timedomain_canvas.py`、`test_pg_canvas_backref_invariants.py`
 
-- [ ] 红测（改写 `TestWallGuard` → `TestInkBudget`，语义映射见 spec §7.3）：
+- [x] 红测（改写 `TestWallGuard` → `TestInkBudget`，语义映射见 spec §7.3）：
   - 窄 Y（旧 wall 场景，ratio 100）：仍降桶、仍标高 ink —— 行为不回退；
   - **新增核心用例**：振荡数据 + `fit_y_to_visible_x()`（ratio≈1.0）→
     显示点数 ≤ `2×capped_width+4`、`_frame_ink_high is True`；
@@ -93,7 +93,7 @@ Test `test_pg_timedomain_canvas.py`、`test_pg_canvas_backref_invariants.py`
   - 变异测试固化：`INK_OFF_BUDGET` 调大 10× → 降桶用例红；
     `_INK_MIN_BUCKETS` 改 1 → 轮廓下限用例红（写成两条守卫用例，
     断言常量本身的数量级区间）。
-- [ ] 实现：
+- [x] 实现：
   - `_refresh_visible_data` 中 envelope 后调 `envelope_ink_dev_px`
     （`row_height` 取该 axis viewbox sceneBoundingRect 高，`dpr` 取
     `_glw.devicePixelRatioF()`）；超 `INK_OFF_BUDGET` 按 spec §4.1
@@ -104,7 +104,7 @@ Test `test_pg_timedomain_canvas.py`、`test_pg_canvas_backref_invariants.py`
     两个 `_WALL_*` 常量及 renderer `_delegate_names` 对应项；
     backref invariants 清单同步。
   - subplot 密集帽 / overlay 帽调用序**一行不动**。
-- [ ] `pytest tests/ui/test_pg_timedomain_canvas.py tests/ui/test_pg_canvas_backref_invariants.py -q` 与基线差 = 0 新红。
+- [x] `pytest tests/ui/test_pg_timedomain_canvas.py tests/ui/test_pg_canvas_backref_invariants.py -q` 与基线差 = 0 新红。
 
 ### Task 3: AA 闸门与导出
 
