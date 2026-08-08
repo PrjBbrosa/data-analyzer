@@ -870,7 +870,7 @@ def test_preflight_rejects_invalid_recipe_fields(qtbot, tmp_path):
 
     assert sheet.is_runnable() is False
     assert any(issue.field == "fs" for issue in sheet.preflight_issues())
-    expected_summary = "FFT · 采样率无效"
+    expected_summary = "频谱 · 采样率无效"
     # Preset application schedules one coalesced status transaction.
     qtbot.waitUntil(
         lambda: sheet.strip.cards[1].summary_label.text() == expected_summary,

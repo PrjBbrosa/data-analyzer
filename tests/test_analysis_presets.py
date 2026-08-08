@@ -79,10 +79,28 @@ def test_provider_has_canonical_methods_and_stable_slot_order():
         list_builtin_presets,
     )
 
-    assert SUPPORTED_ANALYSIS_METHODS == ("fft", "fft_time", "order_time")
+    assert SUPPORTED_ANALYSIS_METHODS == ("fft", "fft_time", "frf", "order_time")
     assert BUILTIN_PRESET_KEYS == ("torque", "vibration", "transient")
-    for method in SUPPORTED_ANALYSIS_METHODS:
+    for method in ("fft", "fft_time", "order_time"):
         assert tuple(p.key for p in list_builtin_presets(method)) == BUILTIN_PRESET_KEYS
+
+
+def test_frf_has_method_specific_names_and_reproducible_defaults():
+    from mf4_analyzer.analysis_presets import list_builtin_presets
+
+    presets = list_builtin_presets("frf")
+    assert tuple(p.key for p in presets) == ("robust", "low_frequency", "fast")
+    assert tuple(p.display_name for p in presets) == ("稳健", "低频", "快速")
+    assert tuple(p.slot for p in presets) == (1, 2, 3)
+    assert [p.params["t_win_s"] for p in presets] == [2.0, 8.0, 0.5]
+    assert [p.params["overlap"] for p in presets] == [0.5, 0.75, 0.5]
+    for preset in presets:
+        assert preset.params["estimator"] == "h1"
+        assert preset.params["window"] == "hanning"
+        assert preset.params["nfft_mode"] == "auto"
+        assert preset.params["nfft"] is None
+        assert preset.params["frequency_scale"] == "log"
+        assert preset.params["phase_mode"] == "unwrapped"
 
 
 def test_fft_and_order_values_match_the_existing_contextual_contract():

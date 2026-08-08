@@ -13,8 +13,12 @@ from mf4_analyzer.batch_recipe import (
     compatible_param_fields,
     normalize_analysis_preset,
     normalize_batch_params,
+    normalize_frf_compute_params,
     recipe_fingerprint,
+    frf_compute_fingerprint,
+    frf_compute_params_fingerprint,
 )
+from mf4_analyzer.batch_types import FrfPairRule
 from mf4_analyzer.batch_validation import validate_recipe
 
 
@@ -746,3 +750,187 @@ def test_normalizers_reject_ambiguous_inputs():
         normalize_batch_params([("nfft", 1024)], "fft")
     with pytest.raises(ValueError, match="method"):
         normalize_analysis_preset({"params": {}})
+
+
+def test_frf_recipe_keeps_only_owned_known_fields_and_future_fields():
+    raw = {
+        "time_range": (1, 3),
+        "fs": 1024,
+        "estimator": " H1 ",
+        "window": " HANNING ",
+        "periodic_window": True,
+        "t_win_s": 2,
+        "overlap": 0.5,
+        "nfft_mode": " Fixed ",
+        "nfft": 2048,
+        "detrend": " CONSTANT ",
+        "magnitude_scale": " DB ",
+        "frequency_scale": " LOG ",
+        "phase_mode": " UNWRAPPED ",
+        "coherence_threshold": 0.8,
+        "fade_low_coherence": True,
+        "x_auto": False,
+        "x_min": 1,
+        "x_max": 400,
+        "y_auto": True,
+        "tick_density_x": 8,
+        "tick_density_y": 6,
+        "font_scale": 1.1,
+        "render_group_by": " SOURCE ",
+        "weighting": "A",
+        "db_reference": 2e-5,
+        "db_reference_mode": "manual",
+        "rpm_channel": "rpm",
+        "samples_per_rev": 256,
+        "slice": {"enabled": True, "positions": [1.0]},
+        "x_source": "channel",
+        "x_channel": "other",
+        "z_auto": True,
+        "cmap": "viridis",
+        "future_frf_option": {"mode": "keep"},
+    }
+
+    normalized = normalize_batch_params(raw, "frf")
+
+    assert compatible_param_fields("frf") == (
+        batch_recipe.FRF_COMPUTE_PARAM_FIELDS
+        | batch_recipe.FRF_RENDER_PARAM_FIELDS
+    )
+    assert normalized["time_range"] == [1.0, 3.0]
+    assert normalized["fs"] == 1024.0
+    assert normalized["estimator"] == "h1"
+    assert normalized["window"] == "hanning"
+    assert normalized["nfft_mode"] == "manual"
+    assert normalized["magnitude_scale"] == "db"
+    assert normalized["frequency_scale"] == "log"
+    assert normalized["phase_mode"] == "unwrapped"
+    assert normalized["detrend"] == "constant"
+    assert normalized["render_group_by"] == "source"
+    assert normalized["future_frf_option"] == {"mode": "keep"}
+    for excluded in (
+        "weighting", "db_reference", "db_reference_mode", "rpm_channel",
+        "samples_per_rev", "slice", "x_source", "x_channel", "z_auto", "cmap",
+    ):
+        assert excluded not in normalized
+
+
+def test_frf_compute_fingerprint_excludes_display_only_params():
+    base = {
+        "estimator": "h1",
+        "window": "hanning",
+        "periodic_window": True,
+        "t_win_s": 2.0,
+        "overlap": 0.5,
+        "coherence_threshold": 0.8,
+        "frequency_scale": "log",
+    }
+    display_changed = {
+        **base,
+        "coherence_threshold": 0.3,
+        "frequency_scale": "linear",
+    }
+    compute_changed = {**base, "overlap": 0.75}
+
+    assert normalize_frf_compute_params(base) == normalize_frf_compute_params(
+        display_changed
+    )
+    assert frf_compute_params_fingerprint(base) == frf_compute_params_fingerprint(display_changed)
+    assert frf_compute_params_fingerprint(base) != frf_compute_params_fingerprint(compute_changed)
+    assert recipe_fingerprint(base, "frf") != recipe_fingerprint(
+        display_changed, "frf"
+    )
+
+
+def test_frf_result_compute_fingerprint_requires_full_directional_identity():
+    params = {"estimator": "h1", "nfft_mode": "auto"}
+    base = frf_compute_fingerprint(
+        params,
+        source_identity="/data/a/run.mf4",
+        group_identity="raster-a",
+        input_channel="cmd",
+        output_channel="actual",
+    )
+    same_display_name_other_source = frf_compute_fingerprint(
+        params,
+        source_identity="/archive/a/run.mf4",
+        group_identity="raster-a",
+        input_channel="cmd",
+        output_channel="actual",
+    )
+    other_group = frf_compute_fingerprint(
+        params,
+        source_identity="/data/a/run.mf4",
+        group_identity="raster-b",
+        input_channel="cmd",
+        output_channel="actual",
+    )
+    reverse = frf_compute_fingerprint(
+        params,
+        source_identity="/data/a/run.mf4",
+        group_identity="raster-a",
+        input_channel="actual",
+        output_channel="cmd",
+    )
+
+    assert len({base, same_display_name_other_source, other_group, reverse}) == 4
+
+
+@pytest.mark.parametrize(
+    "identity",
+    (
+        {},
+        {"source_identity": "", "group_identity": "g", "input_channel": "x", "output_channel": "y"},
+        {"source_identity": "s", "group_identity": "", "input_channel": "x", "output_channel": "y"},
+        {"source_identity": "s", "group_identity": "g", "input_channel": "", "output_channel": "y"},
+        {"source_identity": "s", "group_identity": "g", "input_channel": "x", "output_channel": ""},
+        {"source_identity": "s", "group_identity": "g", "input_channel": "x", "output_channel": "x"},
+    ),
+)
+def test_frf_result_compute_fingerprint_rejects_incomplete_identity(identity):
+    with pytest.raises((TypeError, ValueError)):
+        frf_compute_fingerprint(
+            {"nfft_mode": "auto"},
+            **identity,
+        )
+
+
+@pytest.mark.parametrize("detrend", ("constant", "none"))
+def test_frf_detrend_enum_round_trips_as_canonical_string(detrend):
+    normalized = normalize_batch_params(
+        {"detrend": f" {detrend.upper()} "}, "frf",
+    )
+
+    assert normalized["detrend"] == detrend
+    assert isinstance(normalized["detrend"], str)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (
+        ("fixed", "manual"),
+        ("固定", "manual"),
+        ("手动", "manual"),
+        ("manual", "manual"),
+        ("auto", "auto"),
+        ("自动", "auto"),
+    ),
+)
+def test_frf_nfft_mode_canonicalizes_to_core_tokens(raw, expected):
+    assert normalize_batch_params({"nfft_mode": raw}, "frf") == {
+        "nfft_mode": expected,
+    }
+
+
+def test_frf_preset_normalization_serializes_portable_pair_rules():
+    normalized = normalize_analysis_preset(SimpleNamespace(
+        name="FRF",
+        method="frf",
+        source="free_config",
+        params={"estimator": "H1"},
+        outputs=SimpleNamespace(export_data=True, export_image=False, data_format="csv"),
+        frf_pair_rules=(FrfPairRule("cmd", ("actual", "angle")),),
+    ))
+
+    assert normalized["frf_pair_rules"] == [
+        {"input_channel": "cmd", "output_channels": ["actual", "angle"]}
+    ]

@@ -114,8 +114,8 @@ def test_secondary_toolbar_broadcasts_mouse_mode_to_primary_in_split(qapp, qtbot
 
 def test_chart_stack_has_three_canvases(qapp):
     cs = ChartStack()
-    # Four canvases after Task 3 (time / fft / fft_time / order); test name kept for git history.
-    assert cs.count() == 4
+    # Five canvases after FRF (time / fft / fft_time / frf / order); test name kept for git history.
+    assert cs.count() == 5
 
 
 def test_analysis_heatmap_sections_start_with_section_axis_labels(qapp, qtbot):
@@ -149,8 +149,27 @@ def test_chart_stack_set_mode(qapp):
     assert cs.current_mode() == 'fft'
     cs.set_mode('order')
     assert cs.current_mode() == 'order'
+    cs.set_mode('frf')
+    assert cs.current_mode() == 'frf'
     cs.set_mode('time')
     assert cs.current_mode() == 'time'
+
+
+def test_chart_stack_registers_frf_page_manager_and_reset(qapp, qtbot):
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    assert "frf" in cs.analysis_managers
+    assert cs.page_for_mode["frf"] is cs.page_frf
+    assert isinstance(cs.canvas_frf, PgFrfCanvas)
+    assert cs._frf_card._chart_mode == "frf"
+
+    cs.canvas_frf.set_state("error", "boom")
+    cs.full_reset_all()
+    assert cs.canvas_frf.state() == "empty"
+
 
 
 def test_cursor_pill_updates_on_time_signal(qapp, qtbot):

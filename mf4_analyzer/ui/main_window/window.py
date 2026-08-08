@@ -56,6 +56,7 @@ from ._drop_import_mixin import DropImportMixin
 from ._fft_mixin import FFTMixin
 from ._order_mixin import OrderMixin
 from ._fft_time_mixin import FFTTimeMixin
+from ._frf_mixin import FrfMixin
 from ._channel_scope_mixin import ChannelScopeMixin
 from ._project_io_mixin import ProjectIOMixin
 from ._view_mixin import ViewMixin
@@ -96,7 +97,7 @@ class SurfaceStatusBar(QStatusBar):
 
 
 class MainWindow(
-    DropImportMixin, AnalysisMixin, FFTMixin, OrderMixin, FFTTimeMixin,
+    DropImportMixin, AnalysisMixin, FFTMixin, OrderMixin, FFTTimeMixin, FrfMixin,
     ChannelScopeMixin, ProjectIOMixin, ViewMixin, QMainWindow,
 ):
     def __init__(self):
@@ -154,6 +155,10 @@ class MainWindow(
             fft_time_cache,
             self._analysis_jobs,
             partial(make_fft_time_analysis_key, fft_time_cache.make_key),
+        )
+        from .frf_coordinator import FrfCoordinator
+        self._frf_coordinator = FrfCoordinator(
+            self.analysis_caches['frf'], self._analysis_jobs, parent=self
         )
         self._init_drop_import()
         self._connect()
@@ -351,6 +356,7 @@ class MainWindow(
         self.canvas_fft = self.chart_stack.canvas_fft
         self.canvas_order = self.chart_stack.canvas_order
         self.canvas_fft_time = self.chart_stack.canvas_fft_time
+        self.canvas_frf = self.chart_stack.canvas_frf
         self.channel_list = self.navigator.channel_list
         self.navigator.set_time_visibility_available(True)
         # Time domain runs a wider View cap than the analysis sections (which
@@ -363,11 +369,12 @@ class MainWindow(
         # V7 Step 2: per-section analysis view managers (owned by ChartStack so
         # the per-section ViewTabBar can dereference a real manager at
         # construction) + per-section LRU result caches (owned here).
-        from ..analysis_cache import AnalysisResultCache
+        from ..analysis_cache import AnalysisResultCache, FrfAnalysisResultCache
         self.analysis_managers = self.chart_stack.analysis_managers
         self.analysis_caches = {
             'fft': AnalysisResultCache(32),
             'fft_time': AnalysisResultCache(12),
+            'frf': FrfAnalysisResultCache(12),
             'order': AnalysisResultCache(12),
         }
         # `_applying_analysis_view` is AnalysisMixin's own re-entrancy guard;
@@ -738,6 +745,8 @@ class MainWindow(
     def _on_analysis_job_progress(self, section, done, total):
         if section == 'fft_time':
             self._on_fft_time_job_progress(done, total)
+        elif section == 'frf':
+            self._on_frf_job_progress(done, total)
         elif section == 'order':
             self._on_order_job_progress(done, total)
 
@@ -753,6 +762,11 @@ class MainWindow(
         self._fft_time_coordinator.batch_started.connect(
             self._on_fft_time_batch_started
         )
+        self._frf_coordinator.render_requested.connect(
+            self._on_frf_render_requested
+        )
+        self._frf_coordinator.failed.connect(self._on_frf_failed)
+        self._frf_coordinator.job_queued.connect(self._on_frf_job_queued)
         self.toolbar.open_requested.connect(self.open_files_or_project)
         self.toolbar.save_project_requested.connect(self.save_project_via_dialog)
         self.toolbar.save_project_as_requested.connect(self.save_project_as_via_dialog)
@@ -822,6 +836,26 @@ class MainWindow(
             fp.original_visibility_changed.connect(self._on_show_original_toggled)
             fp.filtered_visibility_changed.connect(self._on_show_filtered_toggled)
         self.inspector.fft_requested.connect(self.do_fft)
+        self.inspector.frf_requested.connect(self.do_frf)
+        self.inspector.frf_view_in_time_requested.connect(
+            self._view_frf_pair_in_time_domain
+        )
+        self.inspector.frf_ctx.pair_changed.connect(self._on_frf_pair_changed)
+        self.inspector.frf_ctx.compute_params_changed.connect(
+            self._on_frf_compute_params_changed
+        )
+        self.inspector.frf_ctx.display_params_changed.connect(
+            self._on_frf_display_params_changed
+        )
+        self.inspector.frf_ctx.range_mode_changed.connect(
+            self._on_frf_range_mode_changed
+        )
+        self.inspector.top.spin_start.valueChanged.connect(
+            self._on_frf_manual_time_range_edited
+        )
+        self.inspector.top.spin_end.valueChanged.connect(
+            self._on_frf_manual_time_range_edited
+        )
         self.inspector.order_time_requested.connect(self.do_order_time)
         # dB reference is display-only: changing it while in FFT mode should
         # immediately re-render without recompute. Re-evaluate _fft_render_signature
@@ -927,6 +961,7 @@ class MainWindow(
         for sec, page in (
             ('fft', self.chart_stack.page_fft),
             ('fft_time', self.chart_stack.page_fft_time),
+            ('frf', self.chart_stack.page_frf),
             ('order', self.chart_stack.page_order),
         ):
             mgr = self.analysis_managers[sec]
@@ -965,7 +1000,7 @@ class MainWindow(
             # MainWindow path is the SEPARATE concern of echoing the FOCUSED
             # pane's dragged range back into the inspector Z controls. Pane 1
             # is wired later in _connect_new_pane (it does not exist yet).
-            if sec != 'fft':
+            if sec in {'fft_time', 'order'}:
                 page.pane_canvas(0).levels_changed.connect(
                     lambda lo, hi, s=sec: self._on_analysis_levels_dragged(
                         s, 0, lo, hi))
@@ -1017,6 +1052,11 @@ class MainWindow(
         xrange_changed = getattr(self.canvas_time, 'xrange_changed', None)
         if xrange_changed is not None:
             xrange_changed.connect(self._on_time_canvas_xrange_changed)
+            xrange_changed.connect(
+                lambda lo, hi: self._on_frf_source_time_xrange_changed(
+                    self.canvas_time, lo, hi
+                )
+            )
         self._connect_canvas_range_signals(self.canvas_time)
         self._connect_channel_color_sync(self.canvas_time)
 
@@ -1450,7 +1490,7 @@ class MainWindow(
         self.navigator.set_time_visibility_available(mode == 'time')
         self.inspector.set_mode(mode)
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
-        if mode in self.analysis_managers:
+        if mode in {'fft', 'fft_time', 'order'}:
             # dB-reference-defaults nudge feed (spec S5 / A17): a section
             # entered without any signal/value/mode change since its last
             # visit still needs a fresh stamp -- additive, no render effect.
@@ -2271,6 +2311,12 @@ class MainWindow(
                 # Y limits and every other View option, but let the new X
                 # data extent establish the viewport.
                 state.xlim = None
+                if current_spec.mode == CHANNEL_MODE:
+                    self._invalidate_frf_time_view_link(
+                        state.view_id,
+                        "关联的时域 View 已切换为自定义横轴；"
+                        "请切回物理时间后重新关联。",
+                    )
         if self.files and self.chart_stack.current_mode() == 'time':
             rendered = self._replot_canvas_for_view(
                 idx,
@@ -2436,6 +2482,7 @@ class MainWindow(
         self.inspector.fft_ctx.set_signal_candidates(sig_cands)
         self.inspector.fft_time_ctx.set_signal_candidates(sig_cands)
         self.inspector.order_ctx.set_signal_candidates(sig_cands)
+        self.inspector.frf_ctx.set_channel_candidates(sig_cands)
         self.inspector.order_ctx.set_rpm_candidates(rpm_cands)
         self._sync_fft_source_summary()
 
@@ -3369,6 +3416,7 @@ class MainWindow(
                 fd.channels.remove(name)
             fd.channel_units.pop(name, None)
         self._remove_channels_from_all_time_views(fid, removed_channels)
+        self._remove_channels_from_all_analysis_views(fid, removed_channels)
         nav_blocked = self.navigator.blockSignals(True)
         list_blocked = self.channel_list.blockSignals(True)
         try:

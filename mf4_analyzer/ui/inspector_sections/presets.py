@@ -298,6 +298,7 @@ class _PresetHoverCard(QFrame):
         return {
             'fft': 'FFT',
             'fft_time': 'FFT vs Time',
+            'frf': '频响（FRF）',
             'order': 'Order Time',
         }.get(kind, kind)
 
@@ -552,6 +553,13 @@ class PresetBar(QWidget):
         self._recommended_slot = slot
         self._refresh_states()
 
+    def set_custom_active(self):
+        """Mark the method's custom slot after a user edits any preset field."""
+        slot = next(iter(self._custom_slots), None)
+        self._recommended_slot = None
+        self._selected_slot = slot
+        self._refresh_states()
+
     def eventFilter(self, obj, event):
         slot = None
         for n, btn in self._load_btns.items():
@@ -586,10 +594,16 @@ class PresetBar(QWidget):
             current_params = {}
         # Resolve blurb for builtin slots: reverse-map slot index → preset key.
         _SLOT_TO_KEY = {v: k for k, v in _PRESET_KEY_TO_SLOT.items()}
-        builtin_blurb = (
-            BUILTIN_PRESET_BLURB.get(_SLOT_TO_KEY.get(slot, ''), '')
-            if builtin else ''
-        )
+        builtin_blurb = ''
+        if builtin:
+            builtin_entry = (
+                self._builtins.get(slot, {}) if self._builtins else {}
+            )
+            if isinstance(builtin_entry, dict):
+                builtin_blurb = str(builtin_entry.get('blurb') or '')
+            if not builtin_blurb:
+                builtin_blurb = BUILTIN_PRESET_BLURB.get(
+                    _SLOT_TO_KEY.get(slot, ''), '')
         self._hover_slot = slot
         self._hover_card.set_summary(
             name=name,
@@ -659,6 +673,16 @@ class PresetBar(QWidget):
         'order_res': '阶次分辨率',
         'time_res': '时间分辨率',
         'samples_per_rev': '每转样本数',
+        'estimator': '估计器',
+        'periodic_window': '周期窗',
+        't_win_s': '段长',
+        'nfft_mode': 'NFFT 模式',
+        'detrend': '去趋势',
+        'magnitude_scale': '幅值',
+        'frequency_scale': '频率',
+        'phase_mode': '相位',
+        'coherence_threshold': '相干阈值',
+        'fade_low_coherence': '低相干淡化',
     }
 
     def _format_summary(self, name, params):

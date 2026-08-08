@@ -65,3 +65,22 @@ def test_native_dependencies_have_no_unapproved_static_imports():
                         violations.append(f"{rel}:{node.lineno} from {node.module}")
 
     assert not violations, "\n".join(violations)
+
+
+def test_batch_frf_pair_resolver_is_gui_free():
+    path = ROOT / "mf4_analyzer" / "batch_frf.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    forbidden_prefixes = ("PyQt", "pyqtgraph", "mf4_analyzer.ui")
+    violations = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = tuple(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names = (node.module,)
+        else:
+            continue
+        for name in names:
+            if name.startswith(forbidden_prefixes):
+                violations.append(f"{path.name}:{node.lineno} {name}")
+
+    assert not violations, "\n".join(violations)

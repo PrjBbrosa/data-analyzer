@@ -233,6 +233,36 @@ def test_old_manifest_without_render_groups_still_loads():
     assert "render_groups" not in loaded
 
 
+def test_frf_manifest_entry_requires_and_preserves_directional_pair():
+    entry = _task_entry("done", channel="response / command", method="frf")
+    entry["frf_pair"] = {
+        "input": {"channel": "command", "unit": "V"},
+        "output": {"channel": "response", "unit": "N"},
+    }
+
+    loaded = load_batch_manifest(_manifest([entry]))
+
+    assert loaded["entries"][0]["frf_pair"] == entry["frf_pair"]
+
+
+@pytest.mark.parametrize(
+    "pair",
+    (
+        None,
+        {},
+        {"input": {"channel": "", "unit": "V"}, "output": {"channel": "y", "unit": "N"}},
+        {"input": {"channel": "x", "unit": 1}, "output": {"channel": "y", "unit": "N"}},
+    ),
+)
+def test_frf_manifest_entry_rejects_missing_or_malformed_pair(pair):
+    entry = _task_entry("done", channel="response / command", method="frf")
+    if pair is not None:
+        entry["frf_pair"] = pair
+
+    with pytest.raises(ManifestValidationError, match="frf_pair"):
+        load_batch_manifest(_manifest([entry]))
+
+
 def test_manifest_recorder_writes_partial_then_terminal_v1_atomically(tmp_path):
     source_path = tmp_path / "source.csv"
     source_path.write_text("source", encoding="utf-8")

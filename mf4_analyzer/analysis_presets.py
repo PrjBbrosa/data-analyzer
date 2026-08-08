@@ -19,7 +19,7 @@ from typing import Any
 from .db_reference import normalize_unit
 
 
-SUPPORTED_ANALYSIS_METHODS = ("fft", "fft_time", "order_time")
+SUPPORTED_ANALYSIS_METHODS = ("fft", "fft_time", "frf", "order_time")
 BUILTIN_PRESET_KEYS = ("torque", "vibration", "transient")
 BUILTIN_PRESET_DISPLAY = MappingProxyType({
     "torque": "频率",
@@ -33,6 +33,24 @@ BUILTIN_PRESET_BLURB = MappingProxyType({
 })
 PRESET_KEY_TO_SLOT = MappingProxyType(
     {"torque": 1, "vibration": 2, "transient": 3}
+)
+
+# FRF uses method-specific business names.  Keep the established three-method
+# constants above unchanged because existing consumers intentionally share
+# their frequency/balanced/time vocabulary.
+_FRF_PRESET_KEYS = ("robust", "low_frequency", "fast")
+_FRF_PRESET_DISPLAY = MappingProxyType({
+    "robust": "稳健",
+    "low_frequency": "低频",
+    "fast": "快速",
+})
+_FRF_PRESET_BLURB = MappingProxyType({
+    "robust": "通用设置，适合输出侧噪声占主导的常规系统辨识",
+    "low_frequency": "更长分段，提高低频分辨率并要求更长记录",
+    "fast": "更短分段，适合短记录和快速检查",
+})
+_FRF_PRESET_KEY_TO_SLOT = MappingProxyType(
+    {"robust": 1, "low_frequency": 2, "fast": 3}
 )
 
 
@@ -96,6 +114,32 @@ _PATCHES: dict[str, dict[str, dict[str, Any]]] = {
             "x_auto": True, "x_min": 0.0, "x_max": 0.0,
             "y_auto": True, "y_min": 0.0, "y_max": 0.0,
             "z_auto": True, "z_floor": -30.0, "z_ceiling": 0.0,
+        },
+    },
+    "frf": {
+        "robust": {
+            "estimator": "h1", "window": "hanning",
+            "periodic_window": True, "t_win_s": 2.0, "overlap": 0.5,
+            "nfft_mode": "auto", "nfft": None, "detrend": "constant",
+            "magnitude_scale": "db", "frequency_scale": "log",
+            "phase_mode": "unwrapped", "coherence_threshold": 0.8,
+            "fade_low_coherence": True,
+        },
+        "low_frequency": {
+            "estimator": "h1", "window": "hanning",
+            "periodic_window": True, "t_win_s": 8.0, "overlap": 0.75,
+            "nfft_mode": "auto", "nfft": None, "detrend": "constant",
+            "magnitude_scale": "db", "frequency_scale": "log",
+            "phase_mode": "unwrapped", "coherence_threshold": 0.8,
+            "fade_low_coherence": True,
+        },
+        "fast": {
+            "estimator": "h1", "window": "hanning",
+            "periodic_window": True, "t_win_s": 0.5, "overlap": 0.5,
+            "nfft_mode": "auto", "nfft": None, "detrend": "constant",
+            "magnitude_scale": "db", "frequency_scale": "log",
+            "phase_mode": "unwrapped", "coherence_threshold": 0.8,
+            "fade_low_coherence": True,
         },
     },
     "order_time": {
@@ -197,22 +241,31 @@ def get_builtin_preset(method: str, key: str) -> BuiltinAnalysisPreset:
         for alias, target in _ALIASES.get(token, {}).items()
         if target == canonical_key
     )
+    if token == "frf":
+        display_name = _FRF_PRESET_DISPLAY[canonical_key]
+        slot = _FRF_PRESET_KEY_TO_SLOT[canonical_key]
+        blurb = _FRF_PRESET_BLURB[canonical_key]
+    else:
+        display_name = BUILTIN_PRESET_DISPLAY[canonical_key]
+        slot = PRESET_KEY_TO_SLOT[canonical_key]
+        blurb = BUILTIN_PRESET_BLURB[canonical_key]
     return BuiltinAnalysisPreset(
         method=token,
         key=canonical_key,
-        display_name=BUILTIN_PRESET_DISPLAY[canonical_key],
-        slot=PRESET_KEY_TO_SLOT[canonical_key],
+        display_name=display_name,
+        slot=slot,
         enabled=_ENABLED.get(token, {}).get(canonical_key, True),
         params=patch,
         aliases=aliases,
-        blurb=BUILTIN_PRESET_BLURB[canonical_key],
+        blurb=blurb,
     )
 
 
 def list_builtin_presets(method: str) -> tuple[BuiltinAnalysisPreset, ...]:
     """Return fresh records in the stable PresetBar slot order."""
     token = _check_method(method)
-    return tuple(get_builtin_preset(token, key) for key in BUILTIN_PRESET_KEYS)
+    keys = _FRF_PRESET_KEYS if token == "frf" else BUILTIN_PRESET_KEYS
+    return tuple(get_builtin_preset(token, key) for key in keys)
 
 
 def recommend_builtin_preset(unit: object) -> str:

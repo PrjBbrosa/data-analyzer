@@ -20,12 +20,14 @@ from .slice_panel import SlicePanel
 _METHOD_TO_KIND = {
     "fft": "fft",
     "fft_time": "fft_time",
+    "frf": "frf",
     "order_time": "order",
 }
 _PARAMETER_TITLES = {
     "time": "图片如何合并",
     "fft": "FFT 参数",
     "fft_time": "FFT vs Time 参数",
+    "frf": "FRF 估计与显示",
     "order_time": "阶次参数",
 }
 _SLOT_TO_KEY = {1: "torque", 2: "vibration", 3: "transient", 4: "custom"}
@@ -228,7 +230,10 @@ class AnalysisPanel(QWidget):
         method = self.current_method()
         if method == "time":
             return {}
-        return {item.key: item for item in list_builtin_presets(method)}
+        presets = tuple(list_builtin_presets(method))
+        if method == "frf":
+            return dict(zip(("torque", "vibration", "transient"), presets))
+        return {item.key: item for item in presets}
 
     def _slot_payload(self, key: str) -> tuple[str, dict, bool, bool]:
         """Return name, patch, enabled and stored-state for a visible card."""

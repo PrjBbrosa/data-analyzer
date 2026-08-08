@@ -1205,6 +1205,7 @@ class ProjectIOMixin:
         # (previously two separate calls; now one, semantically equivalent).
         self._invalidate_all_analysis_caches_for_fid(fid)
         self._remove_file_from_all_time_views(fid)
+        self._remove_file_from_all_analysis_views(fid)
         del self.files[fid]
         self.navigator.remove_file(fid, emit=False)
         resolved = self._focused_time_view_state()
@@ -1301,6 +1302,12 @@ class ProjectIOMixin:
             fd.fs = float(ref.fs)
             if ref.time_source in ("generated", "manual"):
                 fd.rebuild_time_axis(float(ref.fs))
+                # ``rebuild_time_axis`` records an interactive user override as
+                # ``manual``.  During project restore, however, the persisted
+                # provenance remains authoritative: a loader-generated axis
+                # must not be promoted to a real/manual axis merely because we
+                # reconstructed it at the saved sampling rate.
+                fd._time_source = ref.time_source
         return fid_map, missing
 
     def open_project(self, path):
@@ -1346,7 +1353,10 @@ class ProjectIOMixin:
         # freshly minted ids). An old project without analysis_views yields an
         # empty remapped dict -> every section keeps its default single view.
         from ..project_io import remap_analysis_view_fids
-        from ..analysis_view_state import AnalysisViewState
+        from ..analysis_view_state import (
+            AnalysisViewState,
+            analysis_view_has_sources,
+        )
         remapped = remap_analysis_view_fids(doc.analysis_views, fid_map)
         for sec, mgr in self.analysis_managers.items():
             block = remapped.get(sec)
@@ -1358,9 +1368,9 @@ class ProjectIOMixin:
             # open): the project stored params + sources but not the numeric
             # results. The active view recomputes immediately via the emit
             # below; the rest recompute lazily the first time they're shown.
-            for i, v in enumerate(mgr.views):
-                if any(p.sources for p in v.panes):
-                    self._analysis_restore_pending.add((sec, i))
+            for v in mgr.views:
+                if analysis_view_has_sources(sec, v):
+                    self._analysis_restore_pending.add((sec, v.view_id))
             mgr.views_changed.emit()
             # active_changed drives _on_analysis_view_switched: it applies the
             # restored structure/params/sources, then _render_analysis_view_from
@@ -1473,8 +1483,12 @@ class ProjectIOMixin:
         coordinator = getattr(self, "_fft_time_coordinator", None)
         if coordinator is not None:
             coordinator.invalidate_all()
+        frf_coordinator = getattr(self, "_frf_coordinator", None)
+        if frf_coordinator is not None:
+            frf_coordinator.invalidate_all()
         for fid in list(self.files.keys()):
             self._remove_file_from_all_time_views(fid)
+            self._remove_file_from_all_analysis_views(fid)
             del self.files[fid]
             self.navigator.remove_file(fid, emit=False)
         self._active = None

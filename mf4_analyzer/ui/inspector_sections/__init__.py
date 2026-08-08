@@ -64,3 +64,4 @@ from .contextual_time import TimeContextual  # noqa: F401
 from .contextual_fft import FFTContextual  # noqa: F401
 from .contextual_order import OrderContextual  # noqa: F401
 from .contextual_fft_time import FFTTimeContextual  # noqa: F401
+from .contextual_frf import FrfContextual  # noqa: F401

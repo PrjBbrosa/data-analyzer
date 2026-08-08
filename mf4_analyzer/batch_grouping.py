@@ -20,6 +20,29 @@ class RenderTask:
     source_key: object
     channel: str
     identity: TaskOutputIdentity
+    input_channel: str = ""
+    output_channel: str = ""
+
+    def __post_init__(self) -> None:
+        identity_input = str(self.identity.input_channel_identity or "").strip()
+        identity_output = str(self.identity.output_channel_identity or "").strip()
+        if bool(identity_input) != bool(identity_output):
+            raise ValueError("FRF identity must carry both directional endpoints")
+        task_input = str(self.input_channel or "").strip()
+        task_output = str(self.output_channel or "").strip()
+        if bool(task_input) != bool(task_output):
+            raise ValueError("FRF render task must carry both directional endpoints")
+        if identity_input:
+            if task_input and (task_input, task_output) != (
+                identity_input, identity_output,
+            ):
+                raise ValueError("FRF render task endpoints do not match task identity")
+            if identity_input == identity_output:
+                raise ValueError("FRF input and output channels must differ")
+            object.__setattr__(self, "input_channel", identity_input)
+            object.__setattr__(self, "output_channel", identity_output)
+        elif task_input:
+            raise ValueError("legacy task identity cannot carry FRF endpoints")
 
 
 @dataclass(frozen=True)
@@ -32,18 +55,27 @@ class RenderGroup:
     members: tuple[RenderTask, ...]
 
 
-def _task_sort_key(task: RenderTask) -> tuple[str, str, str, str]:
+def _task_sort_key(task: RenderTask) -> tuple[str, ...]:
     identity = task.identity
     return (
         identity.source_identity,
         identity.group_identity,
         identity.channel_identity,
+        task.input_channel,
+        task.output_channel,
         identity.task_id,
     )
 
 
-def _member_identity(task: RenderTask) -> tuple[str, str, str]:
+def _member_identity(task: RenderTask) -> tuple[str, ...]:
     identity = task.identity
+    if task.input_channel or task.output_channel:
+        return (
+            identity.source_identity,
+            identity.group_identity,
+            task.input_channel,
+            task.output_channel,
+        )
     return (
         identity.source_identity,
         identity.group_identity,
@@ -108,7 +140,7 @@ def _source_display_name(source_identity: str, group_identity: str) -> str:
 
 
 def group_render_tasks(
-    tasks: Sequence[RenderTask], params: Mapping[str, Any],
+    tasks: Sequence[RenderTask], params: Mapping[str, Any], *, outputs=None,
 ) -> tuple[RenderGroup, ...]:
     """Return deterministic singleton, source, or channel render groups."""
 
@@ -126,6 +158,10 @@ def group_render_tasks(
         raise ValueError(f"unsupported render layout: {layout!r}")
 
     ordered = tuple(sorted(tasks, key=_task_sort_key))
+    pair_kinds = {bool(task.input_channel) for task in ordered}
+    if len(pair_kinds) > 1:
+        raise ValueError("cannot mix single-channel and FRF render tasks")
+    is_frf = pair_kinds == {True}
     if group_by == "none":
         return tuple(
             RenderGroup(
@@ -150,8 +186,17 @@ def group_render_tasks(
     for task in ordered:
         identity = task.identity
         key = (
-            (identity.source_identity, identity.group_identity)
+            (
+                identity.source_identity,
+                identity.group_identity,
+                task.input_channel,
+            )
             if group_by == "source"
+            and is_frf
+            else (identity.source_identity, identity.group_identity)
+            if group_by == "source"
+            else (task.input_channel, task.output_channel)
+            if is_frf
             else identity.channel_identity
         )
         buckets.setdefault(key, []).append(task)
@@ -161,18 +206,26 @@ def group_render_tasks(
         members = tuple(sorted(buckets[key], key=_task_sort_key))
         identity = build_group_output_identity(
             tuple(_member_identity(member) for member in members),
-            method="time",
+            method="frf" if is_frf else "time",
             params=params,
             group_by=group_by,
+            outputs=outputs,
         )
         group_key = (
-            _source_group_key(*key)
+            _source_group_key(*key[:2])
             if group_by == "source"
+            else json.dumps(key, ensure_ascii=False, separators=(",", ":"))
+            if is_frf
             else str(key)
         )
         display_name = (
-            _source_display_name(*key)
+            (
+                f"{_source_display_name(*key[:2])} · input {key[2]}"
+                if is_frf else _source_display_name(*key)
+            )
             if group_by == "source"
+            else f"{key[1]} / {key[0]}"
+            if is_frf
             else str(key)
         )
         groups.append(RenderGroup(

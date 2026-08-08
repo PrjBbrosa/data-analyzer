@@ -16,6 +16,7 @@ _GUIDE_FILES = {
     'order': 'order-analysis-guide.html',
     'fft': 'fft-guide.html',
     'fft_time': 'ffttime-guide.html',
+    'frf': 'frf-guide.html',
     'time': 'time-domain-guide.html',
     'manual': 'TraceLab-使用说明.html',
     'acquisition': 'acquisition-cockpit-guide.html',

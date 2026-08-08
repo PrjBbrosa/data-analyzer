@@ -1,7 +1,7 @@
 """Build offscreen pyqtgraph report scenes for all batch image payloads."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 from typing import Any, Mapping
 
@@ -17,6 +17,12 @@ from mf4_analyzer.batch_image_options import BatchRenderOptions
 from mf4_analyzer.batch_render_style import RenderStyle, render_style_from_params
 from mf4_analyzer.signal._envelope_cutils import positions_envelope
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
+from mf4_analyzer.signal.frf import (
+    magnitude_db,
+    magnitude_linear,
+    phase_unwrapped_deg,
+    phase_wrapped_deg,
+)
 # The slice amplitude bounds and the smoothed ImageItem used to be hand-copied
 # here, marked "Copied — not imported", because the batch renderer may not
 # import ``mf4_analyzer.ui``. ``qt_analysis_shared`` is the neutral landing site
@@ -65,6 +71,8 @@ from ..batch_statistics import display_x
 
 from ._fonts import apply_axis_font, chart_font
 from ._models import (
+    BatchFrfFigureSpec,
+    BatchFrfSeries,
     BatchRenderContext,
     BatchSeries,
     BatchSlicePlan,
@@ -76,7 +84,7 @@ from ._palette import slice_palette
 from ._theme import SERIES_COLORS, RenderTheme, render_theme, scaled_fonts
 
 
-_SUPPORTED_KINDS = frozenset({"time", "fft", "fft_time", "order_time"})
+_SUPPORTED_KINDS = frozenset({"time", "fft", "fft_time", "frf", "order_time"})
 _EMPTY_DB_LEVEL = -200.0
 _AUTO_SPAN_DB = 30.0
 _AUTO_CEILING_PERCENTILE = 99.0
@@ -89,6 +97,56 @@ _SLICE_MARKER_HIGHLIGHT_Z = 898.0
 def _finite_values(values) -> np.ndarray:
     array = np.asarray(values, dtype=float)
     return array[np.isfinite(array)]
+
+
+def _finite_singleton_mask(x_values, y_values) -> np.ndarray:
+    """Return finite samples whose contiguous finite run has length one."""
+
+    finite = np.isfinite(x_values) & np.isfinite(y_values)
+    if finite.size == 0:
+        return finite
+    left = np.r_[False, finite[:-1]]
+    right = np.r_[finite[1:], False]
+    return finite & ~left & ~right
+
+
+def _frf_ratio_unit(series: BatchFrfSeries) -> str:
+    output_unit = str(series.output_unit or "").strip()
+    input_unit = str(series.input_unit or "").strip()
+    if output_unit and input_unit:
+        return "1" if output_unit == input_unit else f"{output_unit}/{input_unit}"
+    if output_unit:
+        return output_unit
+    if input_unit:
+        return f"1/{input_unit}"
+    return "ratio"
+
+
+def _frf_group_presentation(
+    spec: BatchFrfFigureSpec,
+    context: BatchRenderContext,
+) -> tuple[str, str]:
+    """Derive report identity from portable DTO fields, never labels."""
+
+    series = spec.series
+    inputs = tuple(dict.fromkeys(item.input_channel for item in series))
+    outputs = tuple(dict.fromkeys(item.output_channel for item in series))
+    pairs = tuple(dict.fromkeys(
+        (item.input_channel, item.output_channel) for item in series
+    ))
+    first_source = series[0].source_display_name or context.source_display_name
+    if len(series) == 1:
+        input_channel, output_channel = pairs[0]
+        return first_source, f"{output_channel} / {input_channel}"
+    if len(inputs) == 1 and len(outputs) == len(series) and len(outputs) > 1:
+        return first_source, f"{len(outputs)} outputs / {inputs[0]}"
+    if len(pairs) == 1:
+        input_channel, output_channel = pairs[0]
+        return (
+            f"{len(series)} sources",
+            f"{output_channel} / {input_channel} · {len(series)} sources",
+        )
+    return first_source, f"{len(series)} FRF series"
 
 
 def _valid_pair(low, high) -> bool:
@@ -829,6 +887,7 @@ class BuiltBatchScene:
     legend: Any
     options: BatchRenderOptions
     theme: RenderTheme
+    kind: str = ""
     style: RenderStyle = field(default_factory=RenderStyle)
     image_item: Any = None
     colorbar: Any = None
@@ -842,6 +901,15 @@ class BuiltBatchScene:
     slice_marker_bands: tuple[Any, ...] = field(default_factory=tuple)
     slice_marker_lines: tuple[Any, ...] = field(default_factory=tuple)
     slice_legend: Any = None
+    frf_panel_curves: tuple[tuple[Any, ...], ...] = field(default_factory=tuple)
+    frf_bright_curves: tuple[tuple[Any, ...], ...] = field(default_factory=tuple)
+    frf_threshold_line: Any = None
+    frf_high_singleton_markers: tuple[tuple[Any, ...], ...] = field(
+        default_factory=tuple
+    )
+    frf_low_singleton_markers: tuple[tuple[Any, ...], ...] = field(
+        default_factory=tuple
+    )
     _layout_callbacks: tuple[Any, ...] = field(default_factory=tuple)
     _sync_callbacks: tuple[Any, ...] = field(default_factory=tuple)
     _time_curve_bindings: tuple[_TimeCurveBinding, ...] = field(default_factory=tuple)
@@ -1056,7 +1124,24 @@ class BuiltBatchScene:
                 ("right", self.style.tick_density_y, 1),
             ):
                 axis = plot.getAxis(side)
-                if axis is None or not axis.isVisible():
+                if axis is None:
+                    continue
+                if self.kind == "frf" and side == "bottom" and axis.logMode:
+                    # The ViewBox is log10-space but the report contract is
+                    # physical Hz.  AxisItem's default log minor ticks label
+                    # every 2..9 multiplier at this page width, producing a
+                    # dense unreadable row.  Pin decade locations while
+                    # formatting their values back to Hz.
+                    view = axis.linkedView()
+                    if view is not None:
+                        lo, hi = view.viewRange()[0]
+                        decades = range(int(math.ceil(lo)), int(math.floor(hi)) + 1)
+                        axis.setTicks([[
+                            (float(power), f"{10.0 ** power:g}")
+                            for power in decades
+                        ], []])
+                    continue
+                if not axis.isVisible():
                     continue
                 if not axis.style.get("showValues", True):
                     # Stacked subplots hide values on every axis but the
@@ -1253,6 +1338,11 @@ class _SceneBuilder:
         self.slice_marker_bands: list[Any] = []
         self.slice_marker_lines: list[Any] = []
         self.slice_legend = None
+        self.frf_panel_curves: list[list[Any]] = [[], [], []]
+        self.frf_bright_curves: list[list[Any]] = [[], [], []]
+        self.frf_threshold_line = None
+        self.frf_high_singleton_markers: list[list[Any]] = [[], [], []]
+        self.frf_low_singleton_markers: list[list[Any]] = [[], [], []]
         self._color_index = 0
         self._series_colors: dict[str, str] = {}
 
@@ -1943,6 +2033,220 @@ class _SceneBuilder:
         )
         return 4
 
+    def build_frf(self, data) -> int:
+        if not isinstance(data, BatchFrfFigureSpec):
+            raise TypeError("frf payload must be a BatchFrfFigureSpec")
+        spec = data
+        ratio_units = tuple(_frf_ratio_unit(item) for item in spec.series)
+        unique_ratio_units = tuple(dict.fromkeys(ratio_units))
+        magnitude_unit = (
+            "dB"
+            if spec.magnitude_scale == "db"
+            else unique_ratio_units[0]
+            if len(unique_ratio_units) == 1
+            else "mixed ratios"
+        )
+        titles = ("Magnitude", "Phase", "Coherence")
+        plots = []
+        for panel, title in enumerate(titles):
+            plot = self._new_plot(3 + panel, grid_alpha=0.25)
+            self._apply_analysis_frame(plot)
+            plot.setTitle(title, color=self.theme.text)
+            plot.setLabel(
+                "left",
+                (
+                    f"Magnitude ({magnitude_unit})"
+                    if panel == 0
+                    else "Phase (deg)"
+                    if panel == 1
+                    else "Coherence"
+                ),
+            )
+            if panel < 2:
+                plot.hideAxis("bottom")
+            else:
+                plot.setLabel("bottom", "Frequency (Hz)")
+                self._register_bottom_label_spacing(plot)
+            plots.append(plot)
+            self.panel_titles.append(title)
+            self.panel_text_items.append(
+                tuple(
+                    item for item in (
+                        plot.titleLabel,
+                        plot.getAxis("left").label,
+                        plot.getAxis("bottom").label,
+                    ) if item is not None
+                )
+            )
+            self.widget.ci.layout.setRowStretchFactor(3 + panel, 1)
+
+        threshold = pg.InfiniteLine(
+            pos=spec.coherence_threshold,
+            angle=0,
+            movable=False,
+            pen=pg.mkPen("#d97706", width=1.2, style=Qt.DashLine),
+        )
+        plots[2].addItem(threshold)
+        plots[2].setYRange(0.0, 1.0, padding=0)
+        plots[2].vb.enableAutoRange(axis="y", enable=False)
+        self.frf_threshold_line = threshold
+
+        legend = plots[0].addLegend(offset=(8, 8))
+        legend.setBrush(pg.mkBrush(self.theme.legend_background))
+        legend.setPen(pg.mkPen(self.theme.grid, width=0.8))
+        self._apply_legend_font(legend)
+        self.legend = legend
+
+        for series_index, series in enumerate(spec.series):
+            if not isinstance(series, BatchFrfSeries):
+                raise TypeError("frf figure contains a non-FRF series")
+            draw = series.frequency_hz > 0.0 if spec.frequency_scale == "log" else np.ones(
+                series.frequency_hz.shape, dtype=bool
+            )
+            frequency = series.frequency_hz[draw]
+            transfer = series.transfer[draw]
+            coherence = series.coherence[draw]
+            magnitude = (
+                magnitude_db(transfer)
+                if spec.magnitude_scale == "db"
+                else magnitude_linear(transfer)
+            )
+            phase = (
+                phase_unwrapped_deg(transfer)
+                if spec.phase_mode == "unwrapped"
+                else phase_wrapped_deg(transfer)
+            )
+            panel_values = (magnitude, phase, coherence)
+            low_trust = ~np.isfinite(coherence) | (
+                coherence < spec.coherence_threshold
+            )
+            color_key = f"frf-series-{series_index}"
+            primary_pen = self._next_pen("-", color_key=color_key)
+            color = primary_pen.color()
+            for panel, values in enumerate(panel_values):
+                base_pen = pg.mkPen(primary_pen)
+                if spec.fade_low_coherence and panel < 2:
+                    faded = QColor(color)
+                    faded.setAlpha(80)
+                    base_pen.setColor(faded)
+                curve = pg.PlotDataItem(
+                    frequency,
+                    values,
+                    pen=base_pen,
+                    connect="finite",
+                    antialias=False,
+                )
+                plots[panel].addItem(curve)
+                self.curves.append(curve)
+                self.frf_panel_curves[panel].append(curve)
+
+                bright_values = np.asarray(values, dtype=float).copy()
+                if spec.fade_low_coherence and panel < 2:
+                    bright_values[low_trust] = np.nan
+                bright = pg.PlotDataItem(
+                    frequency,
+                    bright_values,
+                    pen=primary_pen,
+                    connect="finite",
+                    antialias=False,
+                )
+                plots[panel].addItem(bright)
+                self.curves.append(bright)
+                self.frf_bright_curves[panel].append(bright)
+
+                high_singletons = _finite_singleton_mask(
+                    frequency, bright_values
+                )
+                high_marker = pg.PlotDataItem(
+                    frequency[high_singletons], bright_values[high_singletons],
+                    pen=None, symbol="o", symbolSize=4.5, symbolPen=None,
+                    symbolBrush=pg.mkBrush(
+                        color.red(), color.green(), color.blue(), 255
+                    ),
+                )
+                plots[panel].addItem(high_marker)
+                self.frf_high_singleton_markers[panel].append(high_marker)
+
+                low_values = (
+                    np.where(low_trust, values, np.nan)
+                    if spec.fade_low_coherence and panel < 2
+                    else np.empty(0, dtype=float)
+                )
+                low_singletons = _finite_singleton_mask(
+                    frequency if low_values.size else np.empty(0, dtype=float),
+                    low_values,
+                )
+                low_marker = pg.PlotDataItem(
+                    frequency[low_singletons] if low_values.size else [],
+                    low_values[low_singletons] if low_values.size else [],
+                    pen=None, symbol="o", symbolSize=4.5, symbolPen=None,
+                    symbolBrush=pg.mkBrush(
+                        color.red(), color.green(), color.blue(), 80
+                    ),
+                )
+                plots[panel].addItem(low_marker)
+                self.frf_low_singleton_markers[panel].append(low_marker)
+            legend_label = series.label
+            if spec.magnitude_scale == "linear" and len(unique_ratio_units) > 1:
+                legend_label = f"{legend_label} [{ratio_units[series_index]}]"
+            # Legend identity remains full-alpha even when the plotted base
+            # curve is faded for low coherence.
+            legend.addItem(self.frf_bright_curves[0][-1], legend_label)
+
+        log_frequency = spec.frequency_scale == "log"
+        for plot in plots:
+            plot.setLogMode(x=log_frequency, y=False)
+
+        def settle_frf_layout(*_args) -> None:
+            layout = self.widget.ci.layout
+            for row in range(3, 6):
+                layout.setRowStretchFactor(row, 1)
+                layout.setRowPreferredHeight(row, 100.0)
+            layout.invalidate()
+            layout.activate()
+            bottom_height = float(plots[-1].getAxis("bottom").height())
+            if bottom_height > 1.0:
+                layout.setRowPreferredHeight(5, 100.0 + bottom_height)
+            left_axes = [plot.getAxis("left") for plot in plots]
+            for axis in left_axes:
+                axis.setWidth(None)
+            max_width = max(float(axis.width()) for axis in left_axes)
+            for axis in left_axes:
+                axis.setWidth(max_width)
+            layout.invalidate()
+            layout.activate()
+
+        self.layout_callbacks.append(settle_frf_layout)
+
+        def sync_frf_x(*_args) -> None:
+            low_x, high_x = plots[0].vb.viewRange()[0]
+            for linked_plot in plots[1:]:
+                linked_plot.vb.setXRange(low_x, high_x, padding=0)
+
+        plots[0].vb.sigXRangeChanged.connect(sync_frf_x)
+        self.sync_callbacks.append(sync_frf_x)
+
+        def settle_coherence_y(*_args) -> None:
+            plots[2].vb.enableAutoRange(axis="y", enable=False)
+            plots[2].setYRange(0.0, 1.0, padding=0)
+
+        self.sync_callbacks.append(settle_coherence_y)
+        all_frequency = np.concatenate([
+            item.frequency_hz[item.frequency_hz > 0.0]
+            if log_frequency else item.frequency_hz
+            for item in spec.series
+        ])
+        finite_frequency = all_frequency[np.isfinite(all_frequency)]
+        if finite_frequency.size:
+            low = float(np.min(finite_frequency))
+            high = float(np.max(finite_frequency))
+            if high <= low:
+                high = low * 10.0 if log_frequency else low + 1.0
+            if log_frequency:
+                low, high = float(np.log10(low)), float(np.log10(high))
+            plots[0].setXRange(low, high, padding=0.02)
+        return 6
+
     def build_heatmap(
         self,
         kind: str,
@@ -2288,6 +2592,7 @@ class _SceneBuilder:
             legend=self.legend,
             options=self.options,
             theme=self.theme,
+            kind=kind,
             style=self.style,
             image_item=self.image_item,
             colorbar=self.colorbar,
@@ -2301,6 +2606,19 @@ class _SceneBuilder:
             slice_marker_bands=tuple(self.slice_marker_bands),
             slice_marker_lines=tuple(self.slice_marker_lines),
             slice_legend=self.slice_legend,
+            frf_panel_curves=tuple(
+                tuple(curves) for curves in self.frf_panel_curves
+            ),
+            frf_bright_curves=tuple(
+                tuple(curves) for curves in self.frf_bright_curves
+            ),
+            frf_threshold_line=self.frf_threshold_line,
+            frf_high_singleton_markers=tuple(
+                tuple(markers) for markers in self.frf_high_singleton_markers
+            ),
+            frf_low_singleton_markers=tuple(
+                tuple(markers) for markers in self.frf_low_singleton_markers
+            ),
             _layout_callbacks=tuple(self.layout_callbacks),
             _sync_callbacks=tuple(self.sync_callbacks),
             _time_curve_bindings=tuple(self.time_curve_bindings),
@@ -2324,6 +2642,19 @@ def build_batch_scene(
         raise ValueError(f"unsupported batch render kind: {kind}")
     render_options = options or BatchRenderOptions()
     render_context = context or BatchRenderContext()
+    if kind == "frf":
+        if not isinstance(data, BatchFrfFigureSpec):
+            raise TypeError("frf payload must be a BatchFrfFigureSpec")
+        first = data.series[0]
+        source_title, subtitle = _frf_group_presentation(data, render_context)
+        render_context = replace(
+            render_context,
+            source_display_name=source_title,
+            channel=subtitle,
+            effective_facts=(
+                render_context.effective_facts or first.effective_facts
+            ),
+        )
     render_params = dict(params or {})
     style = render_style_from_params(render_params)
     # Scale before the header/footer labels are added so page text and axis
@@ -2351,6 +2682,8 @@ def build_batch_scene(
             footer_row = builder.build_time(data)
         elif kind == "fft":
             footer_row = builder.build_fft(data)
+        elif kind == "frf":
+            footer_row = builder.build_frf(data)
         else:
             footer_row = builder.build_heatmap(kind, data, warnings_out)
         return builder.finish(kind=kind, footer_row=footer_row)

@@ -745,13 +745,13 @@ def test_batch_rpm_coefficient_has_its_own_aligned_form_row(qtbot):
     qtbot.wait(20)
 
     panel = sheet._input_panel
-    assert panel._signal_picker.geometry().x() == panel._rpm_row_host.geometry().x()
+    assert panel._target_stack.geometry().x() == panel._rpm_row_host.geometry().x()
     assert panel._rpm_factor_spin.isVisibleTo(sheet)
     assert not hasattr(panel, "_rpm_unit_combo")
-    assert panel._rpm_factor_spin.geometry().x() == panel._signal_picker.geometry().x()
+    assert panel._rpm_factor_spin.geometry().x() == panel._target_stack.geometry().x()
     assert panel._rpm_factor_spin.geometry().y() > panel._rpm_row_host.geometry().y()
-    assert panel._rpm_factor_spin.width() == panel._signal_picker.width()
-    assert panel._rpm_picker.width() == panel._signal_picker.width()
+    assert panel._rpm_factor_spin.width() == panel._target_stack.width()
+    assert panel._rpm_picker.width() == panel._target_stack.width()
 
 
 def test_batch_double_spinboxes_display_compact_text_without_losing_precision(qtbot):

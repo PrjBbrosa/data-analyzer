@@ -1,8 +1,9 @@
-"""Guard test: ``mf4_analyzer.signal.fft`` must not depend on GUI libraries.
+"""Guard test: the signal layer must not depend on GUI/SciPy/plot libraries.
 
 Per the modular-restructure design spec, the ``signal/`` subpackage is
-forbidden from importing ``PyQt5`` or ``matplotlib.pyplot`` (directly or
-transitively). This test enforces the rule mechanically.
+forbidden from importing ``PyQt5``, ``matplotlib``, SciPy, or
+``mf4_analyzer.ui`` (directly or transitively). This test enforces the rule
+mechanically.
 
 Mechanism: we spawn a fresh child Python process whose ``sys.modules``
 has ``PyQt5`` and ``matplotlib.pyplot`` POISONED with ``None`` BEFORE
@@ -28,13 +29,15 @@ import unittest
 CHILD_SCRIPT = r"""
 import sys
 
-# Poison the GUI modules BEFORE importing anything from the signal layer.
+# Poison the forbidden modules BEFORE importing anything from the signal layer.
 # `None` in sys.modules causes CPython's import machinery to raise
 # ModuleNotFoundError on any subsequent `import PyQt5` / `import matplotlib.pyplot`
 # with message "import of <name> halted; None in sys.modules". This is
 # the documented way to block a module from being imported.
 sys.modules['PyQt5'] = None
+sys.modules['matplotlib'] = None
 sys.modules['matplotlib.pyplot'] = None
+sys.modules['scipy'] = None
 
 # Meta-sanity check: confirm the poisoning idiom actually blocks imports,
 # so a false-positive "clean" can't mask a broken guard.
@@ -47,6 +50,14 @@ else:
     sys.exit(2)
 
 try:
+    import matplotlib  # noqa: F401
+except ModuleNotFoundError:
+    pass
+else:
+    print('POISON_INEFFECTIVE_matplotlib')
+    sys.exit(2)
+
+try:
     import matplotlib.pyplot  # noqa: F401
 except ModuleNotFoundError:
     pass
@@ -54,9 +65,18 @@ else:
     print('POISON_INEFFECTIVE_matplotlib_pyplot')
     sys.exit(2)
 
+try:
+    import scipy  # noqa: F401
+except ModuleNotFoundError:
+    pass
+else:
+    print('POISON_INEFFECTIVE_scipy')
+    sys.exit(2)
+
 # The actual rule check: importing the signal layer must NOT trigger
 # either poisoned import.
 import mf4_analyzer.signal.fft  # noqa: F401
+import mf4_analyzer.signal.frf  # noqa: F401
 import mf4_analyzer.signal.spectrogram  # noqa: F401
 
 # A sanity smoke: the classes must exist and be callable.
@@ -66,6 +86,11 @@ assert hasattr(FFTAnalyzer, 'compute_fft'), 'FFTAnalyzer.compute_fft missing'
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
 assert hasattr(SpectrogramAnalyzer, 'compute'), 'SpectrogramAnalyzer.compute missing'
 assert hasattr(SpectrogramAnalyzer, 'amplitude_to_db'), 'SpectrogramAnalyzer.amplitude_to_db missing'
+
+from mf4_analyzer.signal.frf import compute_frf
+assert callable(compute_frf), 'compute_frf missing'
+assert 'scipy' not in sys.modules or sys.modules['scipy'] is None
+assert 'mf4_analyzer.ui' not in sys.modules, 'signal import pulled in mf4_analyzer.ui'
 
 print('clean')
 """

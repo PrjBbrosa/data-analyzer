@@ -13,6 +13,7 @@ from .. import hints
 from ..file_navigator import _ElidedLabel
 from ..pg_canvases import TimeDomainCanvasPG
 from ..pg_canvas.heatmap_canvas import PgHeatmapCanvas
+from ..pg_canvas.frf_canvas import PgFrfCanvas
 from ..pg_canvas.line_canvas import PgLineCanvas
 
 from ._helpers import (
@@ -160,7 +161,10 @@ class _ChartCard(QWidget):
         # exposes the exact same six action keys + mode/pan/zoom surface so
         # downstream helpers (i18n, MDI icons, shortcuts, _find_action) keep
         # working unchanged.
-        if isinstance(canvas, (TimeDomainCanvasPG, PgHeatmapCanvas, PgLineCanvas)):
+        if isinstance(
+            canvas,
+            (TimeDomainCanvasPG, PgHeatmapCanvas, PgLineCanvas, PgFrfCanvas),
+        ):
             self.toolbar = PgNavigationToolbar(canvas, self)
             # Bug 3: re-apply the toolbar's current pan/zoom mode to the
             # ViewBoxes that plot_channels rebuilds, so box-zoom survives a

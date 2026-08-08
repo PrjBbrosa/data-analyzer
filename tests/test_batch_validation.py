@@ -562,3 +562,68 @@ def test_guard_filter_params_preserves_nyquist_clamp_warning_and_effective_spec(
 
     assert warnings and "钳制" in warnings[0]
     assert 0.0 < effective["filter"]["spec"]["cutoff"] < 500.0
+
+
+def test_validate_frf_recipe_accepts_complete_owned_parameters():
+    issues = validate_recipe("frf", {
+        "estimator": "h1",
+        "window": "hanning",
+        "periodic_window": True,
+        "t_win_s": 2.0,
+        "overlap": 0.5,
+        "nfft_mode": "fixed",
+        "nfft": 2048,
+        "detrend": "constant",
+        "magnitude_scale": "db",
+        "frequency_scale": "log",
+        "phase_mode": "unwrapped",
+        "coherence_threshold": 0.8,
+        "fade_low_coherence": True,
+        "render_group_by": "channel",
+    })
+
+    assert issues == ()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    (
+        ("estimator", "h3", "unsupported_estimator"),
+        ("t_win_s", 0.0, "invalid_segment_duration"),
+        ("overlap", 1.0, "invalid_overlap"),
+        ("coherence_threshold", 1.1, "invalid_coherence_threshold"),
+        ("magnitude_scale", "power", "unsupported_magnitude_scale"),
+        ("frequency_scale", "octave", "unsupported_frequency_scale"),
+        ("phase_mode", "delay", "unsupported_phase_mode"),
+        ("detrend", True, "unsupported_detrend"),
+        ("render_group_by", "pair", "unsupported_grouping"),
+    ),
+)
+def test_validate_frf_recipe_rejects_invalid_owned_parameter(field, value, code):
+    issues = validate_recipe("frf", {field: value})
+    assert any(issue.field == field and issue.code == code for issue in issues)
+
+
+@pytest.mark.parametrize("mode", ("auto", "自动"))
+def test_validate_frf_rejects_explicit_nfft_in_auto_mode(mode):
+    issues = validate_recipe("frf", {"nfft_mode": mode, "nfft": 1024})
+    assert any(issue.code == "nfft_not_allowed_in_auto" for issue in issues)
+
+
+@pytest.mark.parametrize("mode", ("manual", "fixed", "固定", "手动"))
+def test_validate_frf_manual_nfft_requires_positive_integer(mode):
+    missing = validate_recipe("frf", {"nfft_mode": mode})
+    invalid = validate_recipe("frf", {"nfft_mode": mode, "nfft": 1.5})
+
+    assert any(issue.code == "manual_nfft_required" for issue in missing)
+    assert any(issue.code == "invalid_nfft" for issue in invalid)
+
+
+def test_validate_frf_rejects_unknown_nfft_mode():
+    issues = validate_recipe("frf", {"nfft_mode": "largest"})
+    assert any(issue.code == "unsupported_nfft_mode" for issue in issues)
+
+
+def test_validate_frf_uses_core_auto_nfft_default_when_mode_is_absent():
+    issues = validate_recipe("frf", {})
+    assert not any(issue.field in {"nfft_mode", "nfft"} for issue in issues)

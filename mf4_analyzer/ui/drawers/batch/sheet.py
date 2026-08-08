@@ -49,8 +49,9 @@ from .task_list import TaskListWidget
 
 _METHOD_LABELS: dict[str, str] = {
     "time": "时域",
-    "fft": "FFT",
-    "fft_time": "FFT vs Time",
+    "fft": "频谱",
+    "fft_time": "时频",
+    "frf": "频响",
     "order_time": "阶次",
 }
 
@@ -126,6 +127,7 @@ def _blocked_issue_reason(issue: ValidationIssue) -> str:
         "nfft": "请检查 NFFT 参数",
         "slice": "请检查切片位置",
         "slice_positions": "请检查切片位置",
+        "frf_pair_rules": "请检查 FRF 输入/输出配对",
     }.get(issue.field, "请检查分析参数")
 
 class BatchSheet(QDialog):
@@ -546,6 +548,7 @@ class BatchSheet(QDialog):
         unavailable_reasons = fl.unavailable_reasons()
         any_failed = fl.has_probe_failed() or bool(unavailable_reasons)
         selected = self._input_panel.selected_signals()
+        pair_error = self._input_panel.frf_pair_validation_message()
         self._analysis_panel.set_grouping_counts(
             source_count=len(fl.loaded_rows()), signal_count=len(selected),
         )
@@ -553,6 +556,9 @@ class BatchSheet(QDialog):
         if any_pending:
             input_status = "pending"
             input_summary = "正在解析…"
+        elif pair_error:
+            input_status = "warn"
+            input_summary = f"输入 · {pair_error}"
         elif time_error:
             input_status = "warn"
             input_summary = time_error
@@ -583,6 +589,7 @@ class BatchSheet(QDialog):
         analysis_issues = tuple(
             issue for issue in preflight_issues
             if issue.field != "time_range"
+            and issue.field != "frf_pair_rules"
             and issue.field not in _OUTPUT_ISSUE_FIELDS
         )
         if analysis_issues:
@@ -1105,6 +1112,10 @@ class BatchSheet(QDialog):
                 self.apply_signals(tuple(preset.target_signals))
 
             self.apply_method(method)
+            if method == "frf":
+                self._input_panel.apply_frf_pair_rules(
+                    tuple(getattr(preset, "frf_pair_rules", ()) or ())
+                )
             # ``apply_preset`` is a full-recipe boundary.  Canonical time
             # recipes omit default-valued sparse fields, so materialize those
             # defaults for the controls here.  ``apply_params`` itself remains
@@ -1121,6 +1132,7 @@ class BatchSheet(QDialog):
             self._output_panel.apply_axis_params(params)
             self._output_panel.apply_reference_params(params)
             self._output_panel.apply_render_style_params(params)
+            self._output_panel.apply_frf_render_params(params)
             rpm_channel = preset.rpm_channel or (
                 preset.rpm_signal[1] if preset.rpm_signal is not None else ""
             )
@@ -1237,6 +1249,7 @@ class BatchSheet(QDialog):
         params.update(axis)
         params.update(self._output_panel.reference_params())
         params.update(self._output_panel.render_style_params())
+        params.update(self._output_panel.frf_render_params())
         if method_key == "fft":
             params["amp_y"] = (
                 "dB" if axis.get("amplitude_mode") == "amplitude_db" else "Linear"
@@ -1395,6 +1408,11 @@ class BatchSheet(QDialog):
 
     def preflight_issues(self) -> tuple[ValidationIssue, ...]:
         issues: list[ValidationIssue] = []
+        pair_error = self._input_panel.frf_pair_validation_message()
+        if self.method() == "frf" and pair_error:
+            issues.append(ValidationIssue(
+                "frf_pair_rules", "invalid_pair", pair_error,
+            ))
         time_error = self._time_range_error()
         if time_error:
             issues.append(ValidationIssue(
@@ -1412,7 +1430,7 @@ class BatchSheet(QDialog):
         rows = self._input_panel._file_list.loaded_rows()
         selected = self.selected_signals()
         policy = self.target_policy()
-        if policy != "exact_pairs" and selected:
+        if self.method() != "frf" and policy != "exact_pairs" and selected:
             if policy == "common":
                 common = self._input_panel._file_list.current_intersection()
                 missing = tuple(signal for signal in selected if signal not in common)
@@ -2073,11 +2091,14 @@ class BatchSheet(QDialog):
         base = AnalysisPreset.free_config(
             name=self._base_name or self._preset_name(),
             method=self.method(),
-            target_signals=self.selected_signals(),
+            target_signals=(
+                () if self.method() == "frf" else self.selected_signals()
+            ),
             rpm_channel=self.rpm_channel(),
             params=params,
             outputs=outputs,
             target_policy=policy,
+            frf_pair_rules=self._input_panel.frf_pair_rules(),
         )
         return dataclasses.replace(
             base,

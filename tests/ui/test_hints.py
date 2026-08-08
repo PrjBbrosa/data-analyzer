@@ -133,6 +133,27 @@ def test_batch_export_options_discovery_states_slice_and_folder_limits():
     assert hints.discovery_hint(HintState(discovered=seen)) == batch_hint
 
 
+def test_frf_hints_cover_cursor_display_range_snapshot_and_time_domain_limits():
+    frf_hints = {
+        hint.id: hint.text
+        for hint in hints.all_hints()
+        if hint.id.startswith("frf.")
+    }
+    assert set(frf_hints) == {
+        "frf.linked_cursor",
+        "frf.coherence_display_only",
+        "frf.time_range_snapshot",
+        "frf.custom_x_limit",
+        "frf.view_in_time_domain",
+    }
+    joined = " ".join(frf_hints.values())
+    for phrase in (
+        "三图", "阈值", "显示", "快照", "不重算", "自定义 X", "不是秒",
+        "时域查看", "新建或复用",
+    ):
+        assert phrase in joined
+
+
 def test_mark_discovered_round_trips_through_qsettings():
     temp_dir = Path(".pytmp") / "test_hints"
     temp_dir.mkdir(parents=True, exist_ok=True)

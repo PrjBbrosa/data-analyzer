@@ -1,5 +1,9 @@
 """project_io: analysis_views persistence + fid remap."""
-from mf4_analyzer.ui.analysis_view_state import AnalysisViewState
+from mf4_analyzer.ui.analysis_view_state import (
+    AnalysisViewState,
+    PaneState,
+    analysis_view_has_sources,
+)
 from mf4_analyzer.ui.project_io import (
     ProjectDocument, load_project_from_json, remap_analysis_view_fids,
     save_project_to_json,
@@ -50,14 +54,61 @@ def test_remap_drops_missing_fids():
     assert srcs == [["F1", "vib"]]
 
 
+def test_remap_frf_role_endpoints_is_directional_and_symmetric():
+    analysis_views = {
+        "frf": {
+            "active": 0,
+            "views": [{
+                "schema": 3,
+                "name": "FRF",
+                "tab_color": "#2d7ff9",
+                "panes": [{
+                    "sources": [],
+                    "input_source": ["f1", "force"],
+                    "output_source": ["f2", "accel"],
+                }],
+            }],
+        },
+    }
+
+    both = remap_analysis_view_fids(
+        analysis_views, {"f1": "new-in", "f2": "new-out"}
+    )
+    pane = both["frf"]["views"][0]["panes"][0]
+    assert pane["input_source"] == ["new-in", "force"]
+    assert pane["output_source"] == ["new-out", "accel"]
+
+    missing_output = remap_analysis_view_fids(
+        analysis_views, {"f1": "new-in"}
+    )
+    pane = missing_output["frf"]["views"][0]["panes"][0]
+    assert pane["input_source"] == ["new-in", "force"]
+    assert pane["output_source"] is None
+
+
+def test_project_restore_source_predicate_requires_a_complete_frf_pair():
+    frf = AnalysisViewState(name="FRF", tab_color="#2d7ff9")
+    frf.panes = [
+        PaneState(input_source=("f1", "in"), output_source=("f1", "out"))
+    ]
+    incomplete = AnalysisViewState(name="FRF", tab_color="#2d7ff9")
+    incomplete.panes = [PaneState(input_source=("f1", "in"))]
+    fft = AnalysisViewState(name="FFT", tab_color="#2d7ff9")
+    fft.panes[0].sources = [("f1", "sig")]
+
+    assert analysis_view_has_sources("frf", frf) is True
+    assert analysis_view_has_sources("frf", incomplete) is False
+    assert analysis_view_has_sources("fft", fft) is True
+
+
 # ----------------------------------------------------------------------
-# Task 8 Step 8.1: AnalysisViewState nested schema 1 -> 2 migration (spec
-# §13 S3/S5). The migration keys off "params has db_reference and no
+# Task 8 Step 8.1 plus FRF: AnalysisViewState nested schema 1 -> 2 -> 3
+# migration (spec §13 S3/S5). The migration keys off "params has db_reference and no
 # db_reference_mode", NOT the nested schema number -- from_dict() ignores
-# the schema field entirely (that is what lets an OLDER build open a
-# schema-2 project: it applies the snapshot db_reference manual-style).
+# the schema field entirely, so schema-2 and schema-3 projects both apply the
+# snapshot db_reference manual-style.
 # ----------------------------------------------------------------------
-def test_analysis_view_schema2_round_trip_preserves_db_reference_mode_and_value():
+def test_analysis_view_schema3_round_trip_preserves_db_reference_mode_and_value():
     v = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
     v.params = {
         "db_reference_mode": "manual",
@@ -65,7 +116,7 @@ def test_analysis_view_schema2_round_trip_preserves_db_reference_mode_and_value(
         "nfft": 4096,
     }
     d = v.to_dict()
-    assert d["schema"] == 2
+    assert d["schema"] == 3
 
     v2 = AnalysisViewState.from_dict(d)
     assert v2.params["db_reference_mode"] == "manual"

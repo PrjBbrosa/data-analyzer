@@ -26,9 +26,295 @@ from . import db_reference
 from .batch_types import _BatchCancelled
 from .signal import resolve_nfft, resolve_order_nfft
 from .signal.fft import FFTAnalyzer
+from .signal.frf import (
+    FrfParams,
+    FrfRequestValidationError,
+    FrfResult,
+    compute_frf,
+    magnitude_db,
+    magnitude_linear,
+    plan_frf_request,
+    phase_unwrapped_deg,
+    phase_wrapped_deg,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+FRF_EXPORT_COLUMNS = (
+    "frequency_hz",
+    "transfer_real",
+    "transfer_imag",
+    "magnitude_linear",
+    "magnitude_db",
+    "phase_deg_wrapped",
+    "phase_deg_unwrapped",
+    "coherence",
+    "pxx",
+    "pyy",
+    "pxy_real",
+    "pxy_imag",
+)
+
+
+class BatchFrfDataError(ValueError):
+    """Expected FRF recipe/source/sample failure safe to record as an item."""
+
+
+@dataclass(frozen=True)
+class PreparedBatchFrf:
+    """Fully loaded, data-preflighted FRF inputs; no artifact is reserved."""
+
+    input_channel: str
+    output_channel: str
+    input_values: np.ndarray
+    output_values: np.ndarray
+    input_time: np.ndarray
+    output_time: np.ndarray
+    fs: float
+    params: FrfParams
+    input_unit: str = ""
+    output_unit: str = ""
+
+
+@dataclass(frozen=True)
+class BatchFrfComputeResult:
+    """Numeric export table plus the raw complex result for later rendering."""
+
+    dataframe: pd.DataFrame
+    result: FrfResult
+    input_channel: str
+    output_channel: str
+    input_unit: str = ""
+    output_unit: str = ""
+
+
+def _frf_numeric_vector(values, label: str) -> np.ndarray:
+    """Validate only vector shape/dtype before any time-range selection."""
+
+    try:
+        array = np.asarray(values)
+    except (TypeError, ValueError) as exc:
+        raise BatchFrfDataError(
+            f"{label} must contain real numeric values"
+        ) from exc
+    if array.ndim != 1:
+        raise BatchFrfDataError(f"{label} must be one-dimensional")
+    if array.size == 0:
+        raise BatchFrfDataError(f"{label} is empty")
+    if np.issubdtype(array.dtype, np.bool_) or np.iscomplexobj(array):
+        raise BatchFrfDataError(f"{label} must contain real numeric values")
+    if not np.issubdtype(array.dtype, np.number):
+        raise BatchFrfDataError(f"{label} must contain real numeric values")
+    return array.astype(np.float64, copy=False)
+
+
+def _frf_require_finite(values: np.ndarray, label: str) -> None:
+    if not np.all(np.isfinite(values)):
+        raise BatchFrfDataError(f"{label} contains non-finite samples")
+
+
+def _frf_channel_unit(fd, channel: str) -> str:
+    metadata = (getattr(fd, "channel_metadata", None) or {}).get(channel) or {}
+    return str(
+        metadata.get("unit")
+        or (getattr(fd, "channel_units", None) or {}).get(channel, "")
+        or ""
+    )
+
+
+def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> PreparedBatchFrf:
+    """Load-neutral-to-compute seam for one directional FRF pair.
+
+    The caller must supply one fully loaded logical ``FileData``.  This step
+    deliberately rejects generated or absent time axes and never truncates,
+    rebuilds, or estimates an axis/sample rate.
+    """
+
+    if fd is None:
+        raise BatchFrfDataError("FRF requires a loaded logical source")
+    input_channel = str(input_channel or "").strip()
+    output_channel = str(output_channel or "").strip()
+    if not input_channel or not output_channel:
+        raise BatchFrfDataError("FRF input and output channels are required")
+    if input_channel == output_channel:
+        raise BatchFrfDataError("FRF input and output channels must differ")
+    data = getattr(fd, "data", None)
+    if data is None or input_channel not in data or output_channel not in data:
+        raise BatchFrfDataError(
+            "FRF input and output channels must exist in the same logical source"
+        )
+
+    input_values = _frf_numeric_vector(
+        data[input_channel].to_numpy(copy=False), "input",
+    ).copy()
+    output_values = _frf_numeric_vector(
+        data[output_channel].to_numpy(copy=False), "output",
+    ).copy()
+    if input_values.size != output_values.size:
+        raise BatchFrfDataError("input and output must have the same length")
+
+    time_source = str(getattr(fd, "_time_source", "") or "").strip().lower()
+    time_values = getattr(fd, "time_array", None)
+    if time_values is None or time_source == "generated":
+        raise BatchFrfDataError(
+            "FRF 需要真实时间轴，不能使用缺失或自动生成的时间轴"
+        )
+    time = _frf_numeric_vector(time_values, "time").copy()
+    if time.size != input_values.size:
+        raise BatchFrfDataError(
+            "time and both FRF signals must have the same length（等长）"
+        )
+
+    raw_fs = params.get("fs", getattr(fd, "fs", None))
+    if isinstance(raw_fs, (bool, np.bool_)):
+        raise BatchFrfDataError("FRF fs must be finite and > 0")
+    try:
+        fs = float(raw_fs)
+    except (TypeError, ValueError) as exc:
+        raise BatchFrfDataError("FRF fs must be finite and > 0") from exc
+    if not np.isfinite(fs) or fs <= 0.0:
+        raise BatchFrfDataError("FRF fs must be finite and > 0")
+
+    # Build exactly one mask from the unmodified physical time array, then
+    # apply it to t/x/y together. Finiteness, monotonicity and uniformity are
+    # selected-range facts: an excluded numeric glitch must not poison the
+    # requested interval, while a selected glitch must fail closed.
+    time_range = params.get("time_range")
+    if time_range is not None:
+        if (
+            not isinstance(time_range, (tuple, list, np.ndarray))
+            or isinstance(time_range, (str, bytes))
+            or len(time_range) != 2
+        ):
+            raise BatchFrfDataError("time_range requires [start, end]")
+        try:
+            lo, hi = float(time_range[0]), float(time_range[1])
+        except (TypeError, ValueError) as exc:
+            raise BatchFrfDataError(
+                "time_range start/end must be finite"
+            ) from exc
+        if not (np.isfinite(lo) and np.isfinite(hi) and lo < hi):
+            raise BatchFrfDataError(
+                "time_range requires finite start < end"
+            )
+        mask = (time >= lo) & (time <= hi)
+        time = time[mask]
+        input_values = input_values[mask]
+        output_values = output_values[mask]
+
+    _frf_require_finite(time, "time")
+    _frf_require_finite(input_values, "input")
+    _frf_require_finite(output_values, "output")
+    if time.size < 2 or np.any(np.diff(time) <= 0.0):
+        raise BatchFrfDataError("FRF time must be strictly increasing")
+
+    from .signal.spectrogram import DEFAULT_TIME_JITTER_TOLERANCE
+
+    nominal_dt = 1.0 / fs
+    relative_jitter = float(
+        np.max(np.abs(np.diff(time) - nominal_dt)) / nominal_dt
+    )
+    if relative_jitter > DEFAULT_TIME_JITTER_TOLERANCE:
+        raise BatchFrfDataError(
+            "FRF time is non-uniform: relative_jitter="
+            f"{relative_jitter:.6g} exceeds tolerance="
+            f"{DEFAULT_TIME_JITTER_TOLERANCE:.6g}"
+        )
+
+    try:
+        frf_params = FrfParams(
+            estimator=str(params.get("estimator", "h1") or "").strip().lower(),
+            t_win_s=params.get("t_win_s", 2.0),
+            overlap=params.get("overlap", 0.5),
+            nfft_mode=str(params.get("nfft_mode", "auto") or "").strip().lower(),
+            nfft=params.get("nfft"),
+            window=str(params.get("window", "hanning") or "").strip().lower(),
+            periodic_window=params.get("periodic_window", True),
+            detrend=str(params.get("detrend", "constant") or "").strip().lower(),
+        )
+    except ValueError as exc:
+        raise BatchFrfDataError(str(exc)) from exc
+    try:
+        plan_frf_request(
+            n_samples=int(input_values.size),
+            fs=fs,
+            params=frf_params,
+        )
+    except FrfRequestValidationError as exc:
+        raise BatchFrfDataError(str(exc)) from exc
+
+    time.setflags(write=False)
+    input_values.setflags(write=False)
+    output_values.setflags(write=False)
+    return PreparedBatchFrf(
+        input_channel=input_channel,
+        output_channel=output_channel,
+        input_values=input_values,
+        output_values=output_values,
+        input_time=time,
+        output_time=time,
+        fs=fs,
+        params=frf_params,
+        input_unit=_frf_channel_unit(fd, input_channel),
+        output_unit=_frf_channel_unit(fd, output_channel),
+    )
+
+
+def compute_prepared_frf(
+    prepared: PreparedBatchFrf,
+    *,
+    cancel_token=None,
+    progress=None,
+) -> BatchFrfComputeResult:
+    """Call the sole NumPy FRF implementation and build the fixed table."""
+
+    try:
+        result = compute_frf(
+            prepared.input_values,
+            prepared.output_values,
+            fs=prepared.fs,
+            params=prepared.params,
+            input_time=prepared.input_time,
+            output_time=prepared.output_time,
+            cancel_check=(
+                None if cancel_token is None else cancel_token.is_set
+            ),
+            progress=progress,
+        )
+    except RuntimeError as exc:
+        if str(exc) == "FRF computation cancelled":
+            raise _BatchCancelled("cancelled during FRF computation") from exc
+        raise
+    except ValueError as exc:
+        if str(exc) == "spectral accumulation overflow; rescale the input signals":
+            raise BatchFrfDataError(str(exc)) from exc
+        raise
+    transfer = result.transfer
+    pxy = result.pxy
+    frame = pd.DataFrame({
+        "frequency_hz": result.frequencies,
+        "transfer_real": transfer.real,
+        "transfer_imag": transfer.imag,
+        "magnitude_linear": magnitude_linear(transfer),
+        "magnitude_db": magnitude_db(transfer),
+        "phase_deg_wrapped": phase_wrapped_deg(transfer),
+        "phase_deg_unwrapped": phase_unwrapped_deg(transfer),
+        "coherence": result.coherence,
+        "pxx": result.pxx,
+        "pyy": result.pyy,
+        "pxy_real": pxy.real,
+        "pxy_imag": pxy.imag,
+    }, columns=FRF_EXPORT_COLUMNS)
+    return BatchFrfComputeResult(
+        dataframe=frame,
+        result=result,
+        input_channel=prepared.input_channel,
+        output_channel=prepared.output_channel,
+        input_unit=prepared.input_unit,
+        output_unit=prepared.output_unit,
+    )
 
 
 def channel_reference_facts(fd, ch):

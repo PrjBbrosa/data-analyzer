@@ -7,7 +7,7 @@ the panel renders. These tests guard:
 * every keyboard chip resolves through ``hints.shortcut_tooltip`` (the single
   source of truth for shortcut strings) — a missing key must surface, never
   silently blank;
-* the 四个分析模式 group has exactly 4 rows, each carrying a one-line ``sub``;
+* the 五个分析模式 group has exactly 5 rows, each carrying a one-line ``sub``;
 * the 共轴 row shipped 2026-06-27 — it carries no ``soon`` badge and no catalog
   row stays ``soon`` (matching ``coaxis.* ship="now"``);
 * the 阶次 mode purpose names EPS 电机转速 (this user analyzes EPS — order base
@@ -19,7 +19,7 @@ from mf4_analyzer.ui import hints
 
 EXPECTED_TITLES = [
     "开始 · 文件",
-    "四个分析模式",
+    "五个分析模式",
     "图表手势",
     "快捷键",
     "通道树（左侧）",
@@ -105,17 +105,19 @@ def test_sc_helper_surfaces_missing_key():
         quickref._sc("definitely-not-a-real-shortcut-key")
 
 
-def test_modes_group_has_four_rows_each_with_sub():
-    modes = next(g for g in quickref.QUICKREF if g.title == "四个分析模式")
-    assert len(modes.rows) == 4, [r.desc for r in modes.rows]
+def test_modes_group_has_five_rows_each_with_sub_and_frf_explanation():
+    modes = next(g for g in quickref.QUICKREF if g.title == "五个分析模式")
+    assert [row.desc for row in modes.rows] == ["时域", "频谱", "时频", "频响", "阶次"]
     for row in modes.rows:
         assert row.sub, f"mode row {row.desc!r} missing a one-line sub/purpose"
+    frf = next(row for row in modes.rows if row.desc == "频响")
+    assert "FRF" in frf.sub and "系统辨识" in frf.sub
     # The group spans two columns in the rendered grid.
     assert modes.wide is True
 
 
 def test_order_mode_names_eps_motor_speed():
-    modes = next(g for g in quickref.QUICKREF if g.title == "四个分析模式")
+    modes = next(g for g in quickref.QUICKREF if g.title == "五个分析模式")
     order_row = next(r for r in modes.rows if r.desc == "阶次")
     assert "EPS" in order_row.sub
     assert "电机转速" in order_row.sub
@@ -199,6 +201,15 @@ def test_quickref_covers_batch_drawer():
     assert "记" in open_folder.sub and "下次" in open_folder.sub
     # The picker rewrite has landed — nothing here is a staged capability.
     assert all(not r.soon for r in group.rows)
+
+
+def test_quickref_covers_batch_frf_pairing_policy_and_outputs():
+    group = next(g for g in quickref.QUICKREF if g.title == "批处理")
+    haystack = " ".join(f"{r.desc} {r.sub} {r.gesture}" for r in group.rows)
+    assert "输入" in haystack and "输出" in haystack and "同一来源" in haystack
+    assert "common" in haystack and "available_per_source" in haystack
+    for label in ("每对一张", "按来源", "按输入/输出对"):
+        assert label in haystack
 
 
 def test_dataclasses_are_frozen():

@@ -216,3 +216,50 @@ def test_remap_identity_when_map_matches():
     out = pio.remap_view_fids([view], {"f0": "f0"})[0]
     assert out["checked"] == [["f0", "rpm"]]
     assert out["hidden_channels"] == [["f0", "rpm"]]
+
+
+def test_remap_rewrites_directional_frf_time_view_signature():
+    view = {
+        "name": "Renamed by user",
+        "checked": [["f0", "command"], ["f0", "response"]],
+        "hidden_channels": [],
+        "colors": {},
+        "overlay_primary": None,
+        "axis_opts": {
+            "x_axis": {"mode": "time"},
+            "frf_source_signature": {
+                "input": ["f0", "command"],
+                "output": ["f0", "response"],
+                "effective_time_range": [1.0, 2.0],
+            },
+        },
+    }
+
+    out = pio.remap_view_fids([view], {"f0": "f9"})[0]
+
+    assert out["axis_opts"]["frf_source_signature"] == {
+        "input": ["f9", "command"],
+        "output": ["f9", "response"],
+        "effective_time_range": [1.0, 2.0],
+    }
+
+
+def test_remap_drops_frf_time_view_signature_when_either_endpoint_is_missing():
+    view = {
+        "name": "FRF",
+        "checked": [["f0", "command"], ["f1", "response"]],
+        "hidden_channels": [],
+        "colors": {},
+        "overlay_primary": None,
+        "axis_opts": {
+            "frf_source_signature": {
+                "input": ["f0", "command"],
+                "output": ["f1", "response"],
+                "effective_time_range": [1.0, 2.0],
+            },
+        },
+    }
+
+    out = pio.remap_view_fids([view], {"f0": "f9"})[0]
+
+    assert "frf_source_signature" not in out["axis_opts"]

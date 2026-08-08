@@ -42,7 +42,13 @@ _NAV_SHORTCUTS = hints.NAV_SHORTCUTS
 # Keys mirror the attribute names so the install helper can locate the button.
 _TIME_CARD_SHORTCUTS = hints.TIME_CARD_SHORTCUTS
 
-_MODE_TO_INDEX = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}
+_MODE_TO_INDEX = {
+    'time': 0,
+    'fft': 1,
+    'fft_time': 2,
+    'frf': 3,
+    'order': 4,
+}
 _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
 
 # Legacy module constant. The static "persistent" footer label was RETIRED:

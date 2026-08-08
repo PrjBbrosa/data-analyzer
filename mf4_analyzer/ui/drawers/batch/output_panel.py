@@ -76,6 +76,14 @@ _AXIS_CONTEXTS = {
         "y_unit": "Hz",
         "y_summary": "0 → Nyquist",
     },
+    "frf": {
+        "x_label": "频率 (X):",
+        "x_unit": "Hz",
+        "x_summary": "自动范围",
+        "y_label": "幅值 (Y):",
+        "y_unit": "",
+        "y_summary": "自动范围",
+    },
     "order_time": {
         "x_label": "时间 (X):",
         "x_unit": "s",
@@ -383,6 +391,24 @@ QPushButton#batchOutputSettingsButton:checked {
         form.addRow(self._output_settings)
         outer.addLayout(form)
 
+        self._frf_grouping_row = QFrame(self)
+        self._frf_grouping_row.setObjectName("BatchFrfImageGrouping")
+        grouping_layout = QHBoxLayout(self._frf_grouping_row)
+        grouping_layout.setContentsMargins(0, 0, 0, 0)
+        grouping_layout.setSpacing(8)
+        grouping_layout.addWidget(QLabel("图片组织", self._frf_grouping_row))
+        self._frf_grouping_combo = QComboBox(self._frf_grouping_row)
+        self._frf_grouping_combo.addItem("每对一张", "none")
+        self._frf_grouping_combo.addItem("按来源叠加", "source")
+        self._frf_grouping_combo.addItem("按输入/输出对叠加", "channel")
+        self._frf_grouping_combo.setMinimumWidth(0)
+        self._frf_grouping_combo.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed,
+        )
+        grouping_layout.addWidget(self._frf_grouping_combo, 1)
+        outer.addWidget(self._frf_grouping_row)
+        self._frf_grouping_row.hide()
+
         self._output_preview = QLabel("运行预览：等待完整配置", self)
         self._output_preview.setObjectName("batchOutputPreview")
         self._output_preview.setWordWrap(True)
@@ -481,6 +507,9 @@ QPushButton#batchOutputSettingsButton:checked {
             spin.valueChanged.connect(lambda *_: self.changed.emit())
             spin.valueChanged.connect(lambda *_: self._refresh_output_summary())
         self._combo_conflict.currentIndexChanged.connect(
+            lambda *_: self.changed.emit()
+        )
+        self._frf_grouping_combo.currentIndexChanged.connect(
             lambda *_: self.changed.emit()
         )
         self._chk_manifest.toggled.connect(lambda *_: self.changed.emit())
@@ -735,9 +764,12 @@ QPushButton#batchRenderStyleButton:checked {
     def _apply_method_axis_context(self, method: str) -> None:
         self._method = str(method)
         context = _AXIS_CONTEXTS.get(str(method), _AXIS_CONTEXTS["fft"])
+        is_frf = str(method) == "frf"
+        self._frf_grouping_row.setVisible(is_frf)
+        self._output_preview.setVisible(is_frf)
         self._set_z_axis_visible(str(method) in {"fft_time", "order_time"})
-        self._set_amplitude_unit_visible(str(method) != "time")
-        self._set_db_reference_visible(str(method) != "time")
+        self._set_amplitude_unit_visible(str(method) not in {"time", "frf"})
+        self._set_db_reference_visible(str(method) not in {"time", "frf"})
         for axis, suffix_key in (("x", "x_unit"), ("y", "y_unit")):
             suffix = context[suffix_key]
             text = f" {suffix}" if suffix else ""
@@ -747,6 +779,24 @@ QPushButton#batchRenderStyleButton:checked {
         self._axis_row_parts["x"]["summary"].setText(context["x_summary"])
         self._axis_row_parts["y"]["label"].setText(context["y_label"])
         self._axis_row_parts["y"]["summary"].setText(context["y_summary"])
+
+    def frf_render_params(self) -> dict:
+        if self._method != "frf":
+            return {}
+        return {
+            "render_group_by": str(
+                self._frf_grouping_combo.currentData() or "none"
+            )
+        }
+
+    def apply_frf_render_params(self, params) -> None:
+        if not isinstance(params, dict) or "render_group_by" not in params:
+            return
+        index = self._frf_grouping_combo.findData(
+            str(params.get("render_group_by") or "none")
+        )
+        if index >= 0:
+            self._frf_grouping_combo.setCurrentIndex(index)
 
     def set_x_axis_context(self, *, label: str, unit: str = "") -> None:
         """Update the presented X-axis identity without changing the recipe."""
@@ -972,6 +1022,20 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
             f"{int(getattr(preview, 'image_height', 0))}"
         )
         dpi = int(getattr(preview, "image_dpi", 0))
+        if self._method == "frf":
+            representative = getattr(preview, "representative_group", None)
+            stem = str(getattr(representative, "planned_stem", "") or "")
+            stem_text = f"；文件名 {stem}" if stem else ""
+            self._output_preview.setText(
+                f"{estimate}：{int(getattr(preview, 'task_count', 0))} 任务 · "
+                f"{int(getattr(preview, 'data_artifact_count', 0))} 数据 · "
+                f"{int(getattr(preview, 'image_artifact_count', 0))} 图片组 · "
+                f"{int(getattr(preview, 'conflict_count', 0))} 冲突；"
+                f"数据列 12 列；{fmt} {size} @ {dpi} DPI；"
+                "元数据预估，真实时基/分段尚未预检"
+                f"{stem_text}"
+            )
+            return
         self._output_preview.setText(
             f"{estimate}：{int(getattr(preview, 'task_count', 0))} 任务 · "
             f"{int(getattr(preview, 'artifact_count', 0))} 文件；"
@@ -1140,7 +1204,7 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
                 else "amplitude"
             ),
         }
-        if getattr(self, "_method", "fft") == "time":
+        if getattr(self, "_method", "fft") in {"time", "frf"}:
             params.pop("z_auto", None)
             params.pop("z_floor", None)
             params.pop("z_ceiling", None)

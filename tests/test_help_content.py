@@ -4,6 +4,7 @@ from pathlib import Path
 
 HELP = Path(__file__).resolve().parents[1] / "mf4_analyzer" / "help"
 MANUAL = HELP / "TraceLab-使用说明.html"
+FRF_GUIDE = HELP / "frf-guide.html"
 PUBLISHED_GUIDE = (
     Path(__file__).resolve().parents[1]
     / "docs" / "analyzer" / "user-guide" / "user-guide.html"
@@ -141,9 +142,13 @@ def test_published_guide_tracks_v795_and_real_ui_assets():
 def test_help_has_no_developer_jargon():
     banned = ["pyqtgraph", "matplotlib", "scipy", "QWidget", "PyQt5"]
     for f in HELP.glob("*.html"):
-        text = f.read_text(encoding="utf-8")
+        text = f.read_text(encoding="utf-8").lower()
         for b in banned:
-            assert b not in text, f"{f.name} contains dev jargon: {b}"
+            # FRF names the user-visible NumPy-only/SciPy parity boundary; every
+            # other help page keeps the existing no-developer-jargon ratchet.
+            if f == FRF_GUIDE and b.lower() == "scipy":
+                continue
+            assert b.lower() not in text, f"{f.name} contains dev jargon: {b}"
 
 
 def test_panel_guides_cover_new_topics():
@@ -158,3 +163,27 @@ def test_panel_guides_cover_new_topics():
         assert "TraceLab v7.9.5" in text
         for kw in kws:
             assert kw in text, f"{fname} missing: {kw}"
+
+
+def test_frf_guide_is_mapped_and_covers_frozen_frf_contract():
+    from mf4_analyzer.help import guide_path
+
+    assert guide_path("frf") == FRF_GUIDE
+    assert FRF_GUIDE.is_file()
+    text = FRF_GUIDE.read_text(encoding="utf-8")
+    for keyword in (
+        "H1", "H2", "coherence", "窗长", "重叠", "df", "段数",
+        "20log10", "1 ratio-unit", "output/input", "严格同时间轴",
+        "NumPy-only", "SciPy", "custom-X", "common",
+        "available_per_source", "frequency_hz", "pxy_imag",
+    ):
+        assert keyword in text, f"FRF guide missing: {keyword}"
+    assert "先复用同一签名" in text
+    assert "没有时才新建" in text
+
+
+def test_main_manual_and_published_guide_name_the_five_modes_and_frf():
+    for guide in (MANUAL, PUBLISHED_GUIDE):
+        text = guide.read_text(encoding="utf-8")
+        for label in ("时域", "频谱", "时频", "频响", "阶次", "FRF"):
+            assert label in text, f"{guide.name} missing: {label}"

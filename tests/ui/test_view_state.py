@@ -69,6 +69,17 @@ def test_viewstate_defaults_are_empty():
     assert st.ylims == {}
     assert st.overlay_primary is None
     assert st.axis_opts == {}
+    assert isinstance(st.view_id, str) and st.view_id
+
+
+def test_view_id_round_trips_and_legacy_payload_gets_a_fresh_id():
+    state = ViewState(name="View 1", tab_color="#2d7ff9")
+    restored = ViewState.from_dict(state.to_dict())
+    legacy = ViewState.from_dict({"name": "Legacy", "tab_color": "#2d7ff9"})
+
+    assert restored.view_id == state.view_id
+    assert legacy.view_id
+    assert legacy.view_id != state.view_id
 
 
 def test_viewstate_legacy_payload_defaults_all_checked_channels_visible():

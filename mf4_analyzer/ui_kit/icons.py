@@ -213,6 +213,25 @@ class Icons:
         return _line_icon(draw, BLUE)
 
     @classmethod
+    def mode_frf(cls):
+        """Directional input/output response curves for system identification."""
+        with _painting() as (pix, p):
+            p.setPen(_pen(BLUE, 1.45))
+            p.setBrush(Qt.NoBrush)
+            source = QPainterPath()
+            source.moveTo(2.5, 7)
+            source.cubicTo(5, 2.5, 7.5, 11.5, 10, 7)
+            p.drawPath(source)
+            response = QPainterPath()
+            response.moveTo(10, 13)
+            response.cubicTo(12.5, 8, 15, 17.5, 17.5, 13)
+            p.drawPath(response)
+            p.drawLine(QPointF(8.5, 10), QPointF(13.5, 10))
+            p.drawLine(QPointF(11.5, 8), QPointF(13.5, 10))
+            p.drawLine(QPointF(11.5, 12), QPointF(13.5, 10))
+        return QIcon(pix)
+
+    @classmethod
     def mode_order(cls):
         def draw(p):
             for x in (4, 10, 16):

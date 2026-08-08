@@ -16,6 +16,7 @@ _DEFAULT_METHOD = {
     "time": "Time",
     "fft": "FFT",
     "fft_time": "FFT vs Time",
+    "frf": "FRF",
     "order_time": "Order",
 }
 
@@ -58,6 +59,9 @@ def effective_fact_items(
     facts = dict(params)
     facts.update(effective_facts)
     items: list[str] = []
+    estimator = _first_present(facts, "estimator")
+    if estimator not in (None, ""):
+        items.append(str(estimator).upper())
     window = _first_present(facts, "window", "effective_window")
     if window not in (None, ""):
         items.append(f"window={_elide(window, 24)}")
@@ -78,12 +82,15 @@ def effective_fact_items(
     if overlap not in (None, ""):
         items.append(f"overlap={_format_overlap(overlap)}")
     actual_fs = _first_present(facts, "actual_fs", "effective_fs", "fs")
+    segments = _first_present(facts, "segments", "segment_count")
+    if segments not in (None, ""):
+        items.append(f"segments={_format_fact_value(segments)}")
     if actual_fs not in (None, ""):
         items.append(f"Fs={_format_fact_value(actual_fs)} Hz")
     members = _first_present(facts, "members")
     if members not in (None, ""):
         return [*items[:5], f"members={_format_fact_value(members)}"]
-    return items[:6]
+    return items[:7]
 
 
 def _add_label(widget, *, row, text, color, point_size, bold=False, justify="left"):

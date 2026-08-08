@@ -51,6 +51,7 @@ class _Inspector:
     def __init__(self):
         self.fft_ctx = _SectionCtx("fft")
         self.fft_time_ctx = _SectionCtx("fft_time")
+        self.frf_ctx = _SectionCtx("frf")
         self.order_ctx = _SectionCtx("order")
 
 
@@ -67,6 +68,7 @@ class _ChartStack:
     def __init__(self):
         self.page_fft = _Page("fft")
         self.page_fft_time = _Page("fft_time")
+        self.page_frf = _Page("frf")
         self.page_order = _Page("order")
 
 
@@ -132,6 +134,7 @@ def managers():
     return {
         "fft": _Manager([_Pane(), _Pane()]),
         "fft_time": _Manager([_Pane()]),
+        "frf": _Manager([_Pane()]),
         "order": _Manager([_Pane()]),
     }
 
@@ -185,10 +188,21 @@ def test_normalize_time_range(value, expected):
 
 @pytest.mark.parametrize(
     "section, uses",
-    [("fft", True), ("fft_time", True), ("order", True), ("time", False)],
+    [
+        ("fft", True),
+        ("fft_time", True),
+        ("frf", True),
+        ("order", True),
+        ("time", False),
+    ],
 )
 def test_section_uses_time_range(section, uses):
     assert AnalysisContext.section_uses_time_range(section) is uses
+
+
+def test_frf_section_routes_to_its_context_and_page(ctx, inspector, chart_stack):
+    assert ctx.section_ctx("frf") is inspector.frf_ctx
+    assert ctx.page("frf") is chart_stack.page_frf
 
 
 # -- masking -----------------------------------------------------------------

@@ -17,6 +17,212 @@ def test_inspector_switch_mode_changes_contextual(qapp):
     assert insp.contextual_widget_name() == 'fft'
     insp.set_mode('order')
     assert insp.contextual_widget_name() == 'order'
+    insp.set_mode('frf')
+    assert insp.contextual_widget_name() == 'frf'
+
+
+def test_frf_contextual_keeps_composite_pair_and_blocks_same_channel(qtbot):
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    candidates = [
+        ("A · speed [m/s]", ("fid-a", "speed")),
+        ("B · speed [m/s]", ("fid-b", "speed")),
+    ]
+    ctx.set_channel_candidates(candidates)
+    ctx.set_input_source(("fid-a", "speed"))
+    ctx.set_output_source(("fid-b", "speed"))
+    assert ctx.input_source() == ("fid-a", "speed")
+    assert ctx.output_source() == ("fid-b", "speed")
+    assert ctx.btn_compute.isEnabled()
+    assert ctx.findChild(QLabel, "frfSourceDescription") is None
+    assert ctx.findChild(QLabel, "frfEffectiveFacts") is None
+
+    ctx.btn_swap.click()
+    assert ctx.input_source() == ("fid-b", "speed")
+    assert ctx.output_source() == ("fid-a", "speed")
+
+    ctx.set_output_source(("fid-b", "speed"))
+    assert not ctx.btn_compute.isEnabled()
+    assert "不能相同" in ctx.validation_message()
+
+
+def test_frf_swap_button_cannot_collapse_in_narrow_inspector(qtbot):
+    """The mapping action stays legible in the real narrow Inspector width."""
+    from PyQt5.QtWidgets import QSizePolicy
+
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    ctx.set_channel_candidates([
+        (
+            "Rig A · Force transducer with extended source identity [N]",
+            ("source-a", "Force"),
+        ),
+        (
+            "Rig A · Acceleration response with extended source identity [m/s²]",
+            ("source-a", "Acceleration"),
+        ),
+    ])
+    ctx.set_input_source(("source-a", "Force"))
+    ctx.set_output_source(("source-a", "Acceleration"))
+    ctx.resize(272, 520)
+    ctx.show()
+    qtbot.wait(20)
+
+    button = ctx.btn_swap
+    assert button.minimumHeight() >= button.sizeHint().height()
+    assert button.sizePolicy().verticalPolicy() == QSizePolicy.Fixed
+    assert button.height() >= button.fontMetrics().height() + 10
+
+
+def test_frf_contextual_separates_compute_and_display_params(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    ctx.apply_params({
+        "estimator": "h2",
+        "window": "hamming",
+        "periodic_window": False,
+        "t_win_s": 3.0,
+        "overlap": 0.25,
+        "nfft_mode": "manual",
+        "nfft": 4096,
+        "detrend": "none",
+        "magnitude_scale": "linear",
+        "frequency_scale": "linear",
+        "phase_mode": "wrapped",
+        "coherence_threshold": 0.6,
+        "fade_low_coherence": False,
+    })
+
+    compute = ctx.compute_params()
+    display = ctx.display_params()
+    assert compute == {
+        "estimator": "h2",
+        "t_win_s": 3.0,
+        "overlap": 0.25,
+        "nfft_mode": "manual",
+        "nfft": 4096,
+        "window": "hamming",
+        "periodic_window": False,
+        "detrend": "none",
+    }
+    assert display == {
+        "magnitude_scale": "linear",
+        "frequency_scale": "linear",
+        "phase_mode": "wrapped",
+        "coherence_threshold": 0.6,
+        "fade_low_coherence": False,
+    }
+    assert set(compute).isdisjoint(display)
+    assert ctx.combo_nfft_mode.currentText() == "手动"
+    assert compute["nfft_mode"] == "manual"
+
+
+def test_frf_contextual_emits_user_compute_and_display_changes_but_restore_is_silent(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    compute_seen = []
+    display_seen = []
+    ctx.compute_params_changed.connect(compute_seen.append)
+    ctx.display_params_changed.connect(display_seen.append)
+
+    ctx.spin_t_win.setValue(3.0)
+    assert compute_seen[-1]["t_win_s"] == 3.0
+    assert display_seen == []
+    assert ctx.preset_bar._load_btns[4].property("applied") == "true"
+
+    ctx.combo_frequency_scale.setCurrentIndex(1)
+    assert display_seen[-1]["frequency_scale"] == "linear"
+    compute_count = len(compute_seen)
+    display_count = len(display_seen)
+
+    ctx.apply_params({"t_win_s": 4.0, "frequency_scale": "log"})
+    assert len(compute_seen) == compute_count
+    assert len(display_seen) == display_count
+
+    ctx._apply_preset({"t_win_s": 5.0, "frequency_scale": "linear"})
+    assert compute_seen[-1]["t_win_s"] == 5.0
+    assert display_seen[-1]["frequency_scale"] == "linear"
+
+
+def test_frf_contextual_presets_signals_and_inspector_range_reparent(qtbot):
+    from mf4_analyzer.ui.inspector import Inspector
+
+    inspector = Inspector()
+    qtbot.addWidget(inspector)
+    ctx = inspector.frf_ctx
+    ctx.set_channel_candidates([
+        ("A · input [N]", ("fid", "input")),
+        ("A · output [m/s]", ("fid", "output")),
+    ])
+    ctx.set_input_source(("fid", "input"))
+    ctx.set_output_source(("fid", "output"))
+    assert [ctx.preset_bar._load_btns[n].text() for n in (1, 2, 3, 4)] == [
+        "稳健", "低频", "快速", "自定义",
+    ]
+
+    with qtbot.waitSignal(ctx.frf_requested, timeout=200):
+        ctx.btn_compute.click()
+    with qtbot.waitSignal(ctx.view_in_time_requested, timeout=200):
+        ctx.btn_view_time.click()
+
+    inspector.top.chk_range.setChecked(True)
+    inspector.set_mode("frf")
+    assert ctx.isAncestorOf(inspector.top.range_group())
+    inspector.set_mode("time")
+    assert inspector.top.range_group().parentWidget() is inspector.top.range_card()
+
+
+def test_frf_candidate_scope_refresh_keeps_visible_pair_and_blocks_compute(qtbot):
+    """An out-of-scope pair stays visibly synchronized with pane state."""
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    candidates = [
+        ("A · input", ("source-a", "input")),
+        ("A · output", ("source-a", "output")),
+    ]
+    ctx.set_channel_candidates(candidates)
+    ctx.set_input_source(("source-a", "input"))
+    ctx.set_output_source(("source-a", "output"))
+    ctx.set_channel_candidates([candidates[0]])
+
+    assert ctx.pair() == (("source-a", "input"), ("source-a", "output"))
+    assert "当前时域 View 外" in ctx.combo_output.currentText()
+    assert not ctx.btn_compute.isEnabled()
+    assert not ctx.btn_view_time.isEnabled()
+    assert "当前时域 View" in ctx.validation_message()
+
+
+def test_frf_valid_pair_stays_computable_after_parameter_or_preset_change(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    ctx.set_channel_candidates([
+        ("A · input", ("source-a", "input")),
+        ("A · output", ("source-a", "output")),
+    ])
+    ctx.set_input_source(("source-a", "input"))
+    ctx.set_output_source(("source-a", "output"))
+    ctx.set_validation_message("上一次分段不足")
+    assert not ctx.btn_compute.isEnabled()
+
+    ctx.spin_t_win.setValue(1.0)
+    assert ctx.btn_compute.isEnabled()
+    ctx._apply_preset({"t_win_s": 0.5, "frequency_scale": "linear"})
+    assert ctx.btn_compute.isEnabled()
+
 
 
 # ---- Task 2.3: PersistentTop ----
@@ -130,6 +336,7 @@ def test_inspector_primary_buttons_share_section_width(qapp, qtbot):
         for mode, ctx_name, button_name in (
             ("fft", "fft_ctx", "btn_fft"),
             ("fft_time", "fft_time_ctx", "btn_compute"),
+            ("frf", "frf_ctx", "btn_compute"),
             ("order", "order_ctx", "btn_ot"),
         ):
             inspector.set_mode(mode)

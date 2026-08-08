@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from mf4_analyzer.batch_render_models import (
     BatchChartDiagnostic,
+    BatchFrfFigureSpec,
+    BatchFrfSeries,
     BatchRenderContext,
     BatchSeries,
     BatchSlicePick,
@@ -15,6 +17,8 @@ from mf4_analyzer.batch_render_models import (
 
 __all__ = [
     "BatchChartDiagnostic",
+    "BatchFrfFigureSpec",
+    "BatchFrfSeries",
     "BatchRenderContext",
     "BatchSeries",
     "BatchSlicePick",

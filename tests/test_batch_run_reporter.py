@@ -214,6 +214,35 @@ def test_record_forwards_a_manifest_entry(tmp_path):
     assert entry["requested_params"] == {"nfft": 64}
 
 
+def test_record_adds_frf_pair_channels_and_units(tmp_path):
+    fd = _make_fd(tmp_path, channels=("command", "response"))
+    fd.channel_units.update({"command": "V", "response": "N"})
+    runner = BatchRunner({0: fd})
+    recorder = _StubRecorder()
+    reporter = batch_module._RunReporter(runner, _preset())
+    reporter.bind_recipe({"estimator": "h1"})
+    reporter.bind_recorder(recorder)
+    item = BatchItemResult(
+        method="frf",
+        file_id=0,
+        file_name=fd.filename,
+        signal="response / command",
+        input_signal="command",
+        output_signal="response",
+        status="failed",
+        task_id="frf-task",
+    )
+
+    reporter.record(item, 0, fd)
+
+    assert recorder.entries[0]["channel"] == "response / command"
+    assert recorder.entries[0]["channel_unit"] == "N"
+    assert recorder.entries[0]["frf_pair"] == {
+        "input": {"channel": "command", "unit": "V"},
+        "output": {"channel": "response", "unit": "N"},
+    }
+
+
 def test_record_without_a_recorder_is_a_noop(tmp_path):
     reporter = _reporter(tmp_path, recorder=None)
 

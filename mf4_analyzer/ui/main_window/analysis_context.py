@@ -80,6 +80,7 @@ class AnalysisContext:
         return {
             'fft': self._inspector.fft_ctx,
             'fft_time': self._inspector.fft_time_ctx,
+            'frf': self._inspector.frf_ctx,
             'order': self._inspector.order_ctx,
         }[section]
 
@@ -88,6 +89,7 @@ class AnalysisContext:
         return {
             'fft': self._chart_stack.page_fft,
             'fft_time': self._chart_stack.page_fft_time,
+            'frf': self._chart_stack.page_frf,
             'order': self._chart_stack.page_order,
         }[section]
 
@@ -95,7 +97,7 @@ class AnalysisContext:
 
     @staticmethod
     def section_uses_time_range(section):
-        return section in {"fft", "fft_time", "order"}
+        return section in {"fft", "fft_time", "frf", "order"}
 
     @staticmethod
     def normalize_time_range(value):

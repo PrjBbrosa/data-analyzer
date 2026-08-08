@@ -292,7 +292,7 @@ def validate_recipe(
             "fs", "invalid_fs", "fs must be finite and > 0",
         ))
 
-    if method in {"fft", "fft_time", "order_time"}:
+    if method in {"fft", "fft_time", "frf", "order_time"}:
         window = params.get("window", params.get("win", "hanning"))
         try:
             get_analysis_window(window, 2)
@@ -311,6 +311,56 @@ def validate_recipe(
                 "amplitude_definition", "unsupported_amplitude_definition",
                 "amplitude_definition must be native, peak, or rms",
             ))
+
+    if method == "frf":
+        estimator = str(params.get("estimator", "h1") or "").strip().lower()
+        if estimator not in {"h1", "h2"}:
+            issues.append(ValidationIssue(
+                "estimator", "unsupported_estimator",
+                "FRF estimator must be h1 or h2",
+            ))
+        if "t_win_s" in params and not _positive_number(params.get("t_win_s")):
+            issues.append(ValidationIssue(
+                "t_win_s", "invalid_segment_duration",
+                "FRF segment duration must be finite and > 0",
+            ))
+        if "overlap" in params:
+            overlap = params.get("overlap")
+            if not _finite_number(overlap) or not 0.0 <= float(overlap) < 1.0:
+                issues.append(ValidationIssue(
+                    "overlap", "invalid_overlap",
+                    "FRF overlap must satisfy 0 <= overlap < 1",
+                ))
+        if "coherence_threshold" in params:
+            threshold = params.get("coherence_threshold")
+            if not _finite_number(threshold) or not 0.0 <= float(threshold) <= 1.0:
+                issues.append(ValidationIssue(
+                    "coherence_threshold", "invalid_coherence_threshold",
+                    "coherence_threshold must satisfy 0 <= value <= 1",
+                ))
+        if "detrend" in params:
+            detrend = params.get("detrend")
+            if not isinstance(detrend, str) or detrend.strip().lower() not in {
+                "constant", "none",
+            }:
+                issues.append(ValidationIssue(
+                    "detrend", "unsupported_detrend",
+                    "detrend must be constant or none",
+                ))
+        for field, allowed, code in (
+            ("magnitude_scale", {"linear", "db"}, "unsupported_magnitude_scale"),
+            ("frequency_scale", {"linear", "log"}, "unsupported_frequency_scale"),
+            ("phase_mode", {"wrapped", "unwrapped"}, "unsupported_phase_mode"),
+            ("render_group_by", {"none", "source", "channel"}, "unsupported_grouping"),
+        ):
+            if field not in params:
+                continue
+            value = str(params.get(field) or "").strip().lower()
+            if value not in allowed:
+                issues.append(ValidationIssue(
+                    field, code,
+                    f"{field} must be one of {', '.join(sorted(allowed))}",
+                ))
 
     if method == "time":
         group_by = str(params.get(
@@ -428,21 +478,55 @@ def validate_recipe(
                             "slice requires at least one position when enabled",
                         ))
 
-    nfft_mode = str(params.get("nfft_mode", "")).strip().lower()
+    nfft_mode = str(
+        params.get("nfft_mode", "auto" if method == "frf" else "")
+    ).strip().lower()
     nfft = params.get("nfft")
-    fixed_nfft = nfft_mode in {"fixed", "manual", "固定"}
     explicit_nfft = nfft not in (None, "", "auto", "自动")
-    if fixed_nfft or explicit_nfft:
-        valid_nfft = (
-            not isinstance(nfft, (bool, np.bool_))
-            and isinstance(nfft, (int, np.integer))
-            and int(nfft) >= 2
-        )
-        if not valid_nfft:
+    if method == "frf":
+        if nfft_mode in {"fixed", "固定", "手动"}:
+            nfft_mode = "manual"
+        elif nfft_mode == "自动":
+            nfft_mode = "auto"
+        if nfft_mode not in {"auto", "manual"}:
+            issues.append(ValidationIssue(
+                "nfft_mode", "unsupported_nfft_mode",
+                "FRF nfft_mode must be auto or manual",
+            ))
+        elif nfft_mode == "auto" and explicit_nfft:
+            issues.append(ValidationIssue(
+                "nfft", "nfft_not_allowed_in_auto",
+                "FRF auto nfft_mode must not include an explicit nfft",
+            ))
+        elif nfft_mode == "manual" and not explicit_nfft:
+            issues.append(ValidationIssue(
+                "nfft", "manual_nfft_required",
+                "FRF manual nfft_mode requires nfft",
+            ))
+        elif nfft_mode == "manual" and (
+            isinstance(nfft, (bool, np.bool_))
+            or not isinstance(nfft, (int, np.integer))
+            or int(nfft) < 2
+        ):
             issues.append(ValidationIssue(
                 "nfft", "invalid_nfft",
-                "fixed nfft must be an integer >= 2",
+                "FRF manual nfft must be an integer >= 2",
             ))
+    else:
+        fixed_nfft = nfft_mode in {"fixed", "manual", "固定"}
+        if not (fixed_nfft or explicit_nfft):
+            fixed_nfft = False
+        if fixed_nfft or explicit_nfft:
+            valid_nfft = (
+                not isinstance(nfft, (bool, np.bool_))
+                and isinstance(nfft, (int, np.integer))
+                and int(nfft) >= 2
+            )
+            if not valid_nfft:
+                issues.append(ValidationIssue(
+                    "nfft", "invalid_nfft",
+                    "fixed nfft must be an integer >= 2",
+                ))
 
     for axis in ("x", "y", "z"):
         issue = _range_issue(params, axis=axis)

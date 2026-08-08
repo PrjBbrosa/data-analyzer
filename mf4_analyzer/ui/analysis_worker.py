@@ -8,7 +8,12 @@ emit ``progress`` and poll ``cancelled()`` as its cancel token.
 """
 from __future__ import annotations
 
+import logging
+
 from PyQt5.QtCore import QObject, pyqtSignal
+
+
+logger = logging.getLogger(__name__)
 
 
 class AnalysisComputeWorker(QObject):
@@ -32,6 +37,7 @@ class AnalysisComputeWorker(QObject):
         try:
             result = self._job(self)
         except Exception as exc:
+            logger.exception("analysis compute job failed")
             self.failed.emit(str(exc))
         else:
             self.finished.emit(result)

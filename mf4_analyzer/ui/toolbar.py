@@ -71,7 +71,7 @@ class Toolbar(QWidget):
     save_project_as_requested = pyqtSignal()
     batch_requested = pyqtSignal()
     # Center segment
-    mode_changed = pyqtSignal(str)  # 'time' | 'fft' | 'fft_time' | 'order'
+    mode_changed = pyqtSignal(str)  # time | fft | fft_time | frf | order
     # Right segment
     acquisition_cockpit_requested = pyqtSignal()
     # Panel toggle signals
@@ -124,17 +124,24 @@ class Toolbar(QWidget):
         # ── center mode segment ─────────────────────────────────────────────
         self.btn_mode_time = QPushButton("时域", self)
         self.btn_mode_time.setIcon(Icons.mode_time())
-        self.btn_mode_fft = QPushButton("FFT", self)
+        self.btn_mode_time.setToolTip("时域（Time Domain）")
+        self.btn_mode_fft = QPushButton("频谱", self)
         self.btn_mode_fft.setIcon(Icons.mode_fft())
-        self.btn_mode_fft_time = QPushButton("FFT vs Time", self)
+        self.btn_mode_fft.setToolTip("频谱（FFT）")
+        self.btn_mode_fft_time = QPushButton("时频", self)
         self.btn_mode_fft_time.setIcon(Icons.mode_fft_time())
+        self.btn_mode_fft_time.setToolTip("时频（FFT vs Time）")
+        self.btn_mode_frf = QPushButton("频响", self)
+        self.btn_mode_frf.setIcon(Icons.mode_frf())
+        self.btn_mode_frf.setToolTip("频响（FRF / 系统辨识）")
         self.btn_mode_order = QPushButton("阶次", self)
         self.btn_mode_order.setIcon(Icons.mode_order())
+        self.btn_mode_order.setToolTip("阶次（Order）")
 
         for b in (self.btn_add, self.btn_save_project, self.btn_save_project_as,
                   self.btn_batch,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
-                  self.btn_mode_order):
+                  self.btn_mode_frf, self.btn_mode_order):
             b.setIconSize(QSize(16, 16))
 
         # left layout
@@ -168,6 +175,7 @@ class Toolbar(QWidget):
         for key, b in [('time', self.btn_mode_time),
                        ('fft', self.btn_mode_fft),
                        ('fft_time', self.btn_mode_fft_time),
+                       ('frf', self.btn_mode_frf),
                        ('order', self.btn_mode_order)]:
             b.setCheckable(True)
             b.setProperty("segment", key)
@@ -249,6 +257,7 @@ class Toolbar(QWidget):
         for key, b in [('time', self.btn_mode_time),
                        ('fft', self.btn_mode_fft),
                        ('fft_time', self.btn_mode_fft_time),
+                       ('frf', self.btn_mode_frf),
                        ('order', self.btn_mode_order)]:
             b.clicked.connect(lambda _=False, k=key: self._set_mode(k))
         self.btn_toggle_nav.clicked.connect(self.nav_panel_toggled)
@@ -263,6 +272,7 @@ class Toolbar(QWidget):
             'time': self.btn_mode_time,
             'fft': self.btn_mode_fft,
             'fft_time': self.btn_mode_fft_time,
+            'frf': self.btn_mode_frf,
             'order': self.btn_mode_order,
         }
         if mode in mapping:

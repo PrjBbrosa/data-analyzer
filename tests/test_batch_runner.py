@@ -702,9 +702,9 @@ def test_supported_methods_excludes_removed_order_rpm_and_order_track():
     undefined). This regression test pins the strict-subset invariant so
     later plans can't silently re-introduce a ghost handler (per
     ``signal-processing/2026-04-27-plan-verbatim-source-must-reconcile-with-recent-removals.md``).
-    """
+        """
     assert BatchRunner.SUPPORTED_METHODS == {
-        "time", "fft", "order_time", "fft_time",
+        "time", "fft", "frf", "order_time", "fft_time",
     }
     assert "order_rpm" not in BatchRunner.SUPPORTED_METHODS
     assert "order_track" not in BatchRunner.SUPPORTED_METHODS
@@ -6565,3 +6565,875 @@ def test_batch_runner_module_has_no_gui_render_dependencies():
     source = inspect.getsource(batch_module)
     for forbidden in ("PyQt", "pyqtgraph", "QApplication"):
         assert forbidden not in source
+
+
+def _make_frf_fd(
+    tmp_path,
+    name="frf",
+    *,
+    gain=2.0,
+    fs=100.0,
+    samples=400,
+    output_channels=("response",),
+):
+    t = np.arange(samples, dtype=float) / fs
+    command = np.sin(2.0 * np.pi * 5.0 * t)
+    values = {"Time": t, "command": command}
+    units = {"command": "V"}
+    for index, channel in enumerate(output_channels, start=1):
+        values[channel] = gain * index * command
+        units[channel] = "N"
+    frame = pd.DataFrame(values)
+    return FileData(
+        tmp_path / f"{name}.csv",
+        frame,
+        list(frame.columns),
+        units,
+        idx=0,
+    )
+
+
+def _frf_preset(
+    *,
+    export_data=True,
+    export_image=False,
+    output_channels=("response",),
+    param_updates=None,
+):
+    from mf4_analyzer.batch_types import FrfPairRule
+
+    return AnalysisPreset.free_config(
+        name="FRF batch",
+        method="frf",
+        frf_pair_rules=(FrfPairRule("command", tuple(output_channels)),),
+        params={
+            "estimator": "h1",
+            "window": "hanning",
+            "periodic_window": True,
+            "t_win_s": 0.5,
+            "overlap": 0.5,
+            "nfft_mode": "auto",
+            "detrend": "none",
+            **dict(param_updates or {}),
+        },
+        outputs=BatchOutput(
+            export_data=export_data,
+            export_image=export_image,
+        ),
+    )
+
+
+def test_batch_supported_methods_include_frf():
+    assert "frf" in BatchRunner.SUPPORTED_METHODS
+
+
+def test_batch_frf_data_only_runs_directional_pair_and_fixed_export(tmp_path):
+    from mf4_analyzer.batch_compute import FRF_EXPORT_COLUMNS
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    result = BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+        _frf_preset(), tmp_path / "out",
+    )
+
+    assert result.status == "done"
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item.status == "done"
+    assert item.signal == "response / command"
+    assert (item.input_signal, item.output_signal) == ("command", "response")
+    exported = pd.read_csv(item.data_path)
+    assert tuple(exported.columns) == FRF_EXPORT_COLUMNS
+    manifest = load_batch_manifest(result.manifest_path)
+    assert manifest["entries"][0]["frf_pair"] == {
+        "input": {"channel": "command", "unit": "V"},
+        "output": {"channel": "response", "unit": "N"},
+    }
+
+
+def test_batch_frf_xlsx_preserves_the_same_fixed_column_contract(tmp_path):
+    from dataclasses import replace
+    from mf4_analyzer.batch_compute import FRF_EXPORT_COLUMNS
+
+    preset = _frf_preset()
+    preset = replace(
+        preset,
+        outputs=replace(preset.outputs, data_format="xlsx"),
+    )
+
+    result = BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+        preset, tmp_path / "out",
+    )
+
+    assert result.status == "done"
+    assert Path(result.items[0].data_path).suffix == ".xlsx"
+    assert tuple(pd.read_excel(result.items[0].data_path).columns) == (
+        FRF_EXPORT_COLUMNS
+    )
+
+
+def test_batch_frf_resume_uses_hashed_identity_not_readable_pair_label(tmp_path):
+    from copy import deepcopy
+    from dataclasses import replace
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    fd = _make_frf_fd(tmp_path)
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: fd}).run(_frf_preset(), output_dir)
+    manifest = deepcopy(load_batch_manifest(first.manifest_path))
+    manifest["entries"][0]["channel"] = "display label intentionally changed"
+    preset = _frf_preset()
+    preset = replace(
+        preset,
+        outputs=replace(preset.outputs, resume_policy="manifest"),
+    )
+
+    resumed = BatchRunner({0: fd}).run(
+        preset, output_dir, resume_manifest=manifest,
+    )
+
+    assert resumed.status == "done"
+    assert resumed.items[0].status == "resumed"
+    assert resumed.items[0].task_id == first.items[0].task_id
+
+
+def test_batch_frf_full_preflight_precedes_first_artifact_reservation(
+    tmp_path, monkeypatch,
+):
+    import mf4_analyzer.batch as batch_module
+
+    trace = []
+    real_prepare = batch_module.batch_compute.prepare_frf_task
+    real_reserve = batch_module.reserve_output_paths
+
+    def prepare(*args, **kwargs):
+        trace.append("preflight")
+        return real_prepare(*args, **kwargs)
+
+    def reserve(*args, **kwargs):
+        trace.append("reserve")
+        return real_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(batch_module.batch_compute, "prepare_frf_task", prepare)
+    monkeypatch.setattr(batch_module, "reserve_output_paths", reserve)
+    result = BatchRunner({
+        0: _make_frf_fd(tmp_path, "a"),
+        1: _make_frf_fd(tmp_path, "b"),
+    }).run(_frf_preset(), tmp_path / "out")
+
+    assert result.status == "done"
+    assert trace == ["preflight", "preflight", "reserve", "reserve"]
+
+
+@pytest.mark.parametrize(
+    ("error_type", "message"),
+    [
+        (ValueError, "programming reservation contract defect"),
+        (ImportError, "unexpected reservation import defect"),
+    ],
+)
+def test_batch_frf_second_reservation_programming_error_releases_first_token(
+    tmp_path, monkeypatch, error_type, message,
+):
+    import mf4_analyzer.batch as batch_module
+
+    real_reserve = batch_module.reserve_output_paths
+    reservation_calls = []
+
+    def reserve(*args, **kwargs):
+        reservation_calls.append((args, kwargs))
+        if len(reservation_calls) == 2:
+            raise error_type(message)
+        return real_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(batch_module, "reserve_output_paths", reserve)
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(error_type, match=message):
+        BatchRunner({
+            0: _make_frf_fd(tmp_path, "a"),
+            1: _make_frf_fd(tmp_path, "b"),
+        }).run(_frf_preset(), output_dir)
+
+    assert len(reservation_calls) == 2
+    assert list(output_dir.glob(".*.batch-reserve")) == []
+    assert list(output_dir.glob("*.csv")) == []
+
+
+def test_batch_frf_oversized_manual_nfft_fails_before_any_reservation(
+    tmp_path, monkeypatch,
+):
+    from dataclasses import replace
+    import mf4_analyzer.batch as batch_module
+
+    preset = _frf_preset()
+    preset = replace(
+        preset,
+        params={
+            **preset.params,
+            "nfft_mode": "manual",
+            "nfft": 4_194_304,
+        },
+    )
+    reservation_calls = []
+
+    def forbidden_reserve(*args, **kwargs):
+        reservation_calls.append((args, kwargs))
+        pytest.fail("oversized FRF request must fail before reservation")
+
+    monkeypatch.setattr(batch_module, "reserve_output_paths", forbidden_reserve)
+    output_dir = tmp_path / "out"
+
+    result = BatchRunner({0: _make_frf_fd(tmp_path)}).run(preset, output_dir)
+
+    assert result.status == "blocked"
+    assert [item.status for item in result.items] == ["failed"]
+    assert "temporary complex" in result.items[0].message
+    assert "64 MiB" in result.items[0].message
+    assert reservation_calls == []
+    assert list(output_dir.glob(".*.batch-reserve")) == []
+    assert list(output_dir.glob("*.csv")) == []
+
+
+def test_batch_frf_each_task_has_exactly_one_started_and_terminal_event(tmp_path):
+    events = []
+    result = BatchRunner({
+        0: _make_frf_fd(tmp_path, "a"),
+        1: _make_frf_fd(tmp_path, "b"),
+    }).run(_frf_preset(), tmp_path / "out", on_event=events.append)
+
+    assert result.status == "done"
+    task_events = [event for event in events if event.task_index is not None]
+    assert [(event.task_index, event.kind) for event in task_events] == [
+        (1, "task_started"), (1, "task_done"),
+        (2, "task_started"), (2, "task_done"),
+    ]
+
+
+def test_batch_frf_data_plus_image_publishes_one_coordinated_artifact_set(
+    qapp, tmp_path,
+):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    result = BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+        _frf_preset(export_data=True, export_image=True), tmp_path / "out",
+    )
+
+    assert result.status == "done"
+    assert Path(result.items[0].data_path).is_file()
+    assert Path(result.items[0].image_path).is_file()
+    assert result.items[0].degraded_reason == ""
+    assert Path(result.items[0].data_path).stem == Path(
+        result.items[0].image_path
+    ).stem
+    entry = load_batch_manifest(result.manifest_path)["entries"][0]
+    assert set(entry["artifacts"]) == {"data", "image"}
+    assert all(
+        artifact["checksum_status"] == "complete"
+        for artifact in entry["artifacts"].values()
+    )
+
+
+def test_batch_frf_image_only_publishes_png(qapp, tmp_path):
+    events = []
+    result = BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+        _frf_preset(export_data=False, export_image=True),
+        tmp_path / "out",
+        on_event=events.append,
+    )
+
+    assert result.status == "done"
+    assert result.items[0].data_path is None
+    assert Path(result.items[0].image_path).is_file()
+    assert Path(result.items[0].image_path).read_bytes().startswith(b"\x89PNG")
+    assert [event.kind for event in events if event.task_index is not None] == [
+        "task_started", "task_done",
+    ]
+
+
+def test_batch_frf_source_group_renders_one_input_three_outputs(qapp, tmp_path):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    outputs = ("response-a", "response-b", "response-c")
+    preset = _frf_preset(
+        export_data=True,
+        export_image=True,
+        output_channels=outputs,
+        param_updates={"render_group_by": "source"},
+    )
+    events = []
+    result = BatchRunner({
+        0: _make_frf_fd(tmp_path, output_channels=outputs),
+    }).run(preset, tmp_path / "out", on_event=events.append)
+
+    assert result.status == "done"
+    assert [item.output_signal for item in result.items] == list(outputs)
+    assert all(Path(item.data_path).is_file() for item in result.items)
+    assert all(item.image_path is None for item in result.items)
+    assert len(result.render_groups) == 1
+    assert result.render_groups[0].status == "done"
+    assert Path(result.render_groups[0].image_path).is_file()
+    manifest_group = load_batch_manifest(result.manifest_path)["render_groups"][0]
+    assert manifest_group["group_by"] == "source"
+    assert len(manifest_group["members"]) == 3
+    assert manifest_group["artifact"]["checksum_status"] == "complete"
+    task_events = [event for event in events if event.task_index is not None]
+    assert [(event.task_index, event.kind) for event in task_events] == [
+        (1, "task_started"),
+        (2, "task_started"),
+        (3, "task_started"),
+        (1, "task_done"),
+        (2, "task_done"),
+        (3, "task_done"),
+    ]
+    assert all(
+        Path(event.image_path) == Path(result.render_groups[0].image_path)
+        for event in task_events if event.kind == "task_done"
+    )
+
+
+def test_batch_frf_channel_group_renders_same_pair_across_three_sources(
+    qapp, tmp_path,
+):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    preset = _frf_preset(
+        export_data=False,
+        export_image=True,
+        param_updates={"render_group_by": "channel"},
+    )
+    result = BatchRunner({
+        index: _make_frf_fd(tmp_path, f"source-{index}", gain=index + 1.0)
+        for index in range(3)
+    }).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert len(result.items) == 3
+    assert len(result.render_groups) == 1
+    assert Path(result.render_groups[0].image_path).is_file()
+    group = load_batch_manifest(result.manifest_path)["render_groups"][0]
+    assert group["group_by"] == "channel"
+    assert len(group["members"]) == 3
+
+
+def test_batch_frf_group_preview_and_run_share_identity_members_and_png_bytes(
+    qapp, tmp_path,
+):
+    outputs = ("response-a", "response-b", "response-c")
+    preset = _frf_preset(
+        export_data=False,
+        export_image=True,
+        output_channels=outputs,
+        param_updates={"render_group_by": "source"},
+    )
+    runner = BatchRunner({
+        0: _make_frf_fd(tmp_path, output_channels=outputs),
+    })
+    output_preview = runner.preview_outputs(preset, tmp_path / "out")
+
+    preview = runner.preview_group(
+        preset,
+        output_preview.representative_group.group_id,
+        tmp_path / "preview",
+    )
+    result = runner.run(preset, tmp_path / "out")
+
+    assert preview.status == "done"
+    assert preview.group_id == result.render_groups[0].group_id
+    assert Path(preview.image_path).read_bytes() == Path(
+        result.render_groups[0].image_path
+    ).read_bytes()
+
+
+def test_batch_frf_group_cancellation_releases_pre_reserved_image(
+    qapp, tmp_path, monkeypatch,
+):
+    import threading
+    import mf4_analyzer.batch as batch_module
+
+    outputs = ("response-a", "response-b", "response-c")
+    preset = _frf_preset(
+        export_data=True,
+        export_image=True,
+        output_channels=outputs,
+        param_updates={"render_group_by": "source"},
+    )
+    token = threading.Event()
+    real_compute = batch_module.batch_compute.compute_prepared_frf
+    real_reserve = batch_module.reserve_output_paths
+    reservations = []
+
+    def cancel_after_first(*args, **kwargs):
+        computed = real_compute(*args, **kwargs)
+        token.set()
+        return computed
+
+    def reserve(*args, **kwargs):
+        reservations.append(tuple(args[2]))
+        return real_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(
+        batch_module.batch_compute, "compute_prepared_frf", cancel_after_first,
+    )
+    monkeypatch.setattr(batch_module, "reserve_output_paths", reserve)
+    output_dir = tmp_path / "out"
+
+    result = BatchRunner({
+        0: _make_frf_fd(tmp_path, output_channels=outputs),
+    }).run(preset, output_dir, cancel_token=token)
+
+    assert result.status == "cancelled"
+    assert ("png",) in reservations
+    assert list(output_dir.glob(".*.batch-reserve")) == []
+    assert list(output_dir.glob("*.png")) == []
+
+
+def test_batch_frf_unexpected_renderer_probe_import_error_propagates_before_reserve(
+    tmp_path, monkeypatch,
+):
+    import mf4_analyzer.batch as batch_module
+
+    def broken_probe():
+        raise ImportError(
+            "internal FRF renderer contract defect",
+            name="mf4_analyzer.ui.plot_helpers",
+        )
+
+    def forbidden_reserve(*args, **kwargs):
+        pytest.fail("programming renderer probe errors must precede reservation")
+
+    monkeypatch.setattr(
+        BatchRunner, "_probe_image_backend", staticmethod(broken_probe),
+    )
+    monkeypatch.setattr(
+        batch_module, "reserve_output_paths", forbidden_reserve,
+    )
+
+    with pytest.raises(ImportError, match="internal FRF renderer"):
+        BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+            _frf_preset(export_data=True, export_image=True),
+            tmp_path / "out",
+        )
+
+
+def test_batch_frf_optional_renderer_absence_degrades_only_requested_image(
+    tmp_path, monkeypatch,
+):
+    import mf4_analyzer.batch as batch_module
+
+    real_reserve = batch_module.reserve_output_paths
+    reservations = []
+
+    def missing_backend():
+        raise ModuleNotFoundError("renderer unavailable", name="pyqtgraph")
+
+    def reserve(*args, **kwargs):
+        reservations.append(tuple(args[2]))
+        return real_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(
+        BatchRunner, "_probe_image_backend", staticmethod(missing_backend),
+    )
+    monkeypatch.setattr(batch_module, "reserve_output_paths", reserve)
+
+    result = BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+        _frf_preset(export_data=True, export_image=True), tmp_path / "out",
+    )
+
+    assert result.status == "partial"
+    assert Path(result.items[0].data_path).is_file()
+    assert result.items[0].image_path is None
+    assert result.items[0].degraded_reason
+    assert reservations == [("csv",)]
+
+
+def test_batch_frf_image_only_optional_renderer_absence_never_reserves_or_computes(
+    tmp_path, monkeypatch,
+):
+    import mf4_analyzer.batch as batch_module
+
+    def missing_backend():
+        raise ModuleNotFoundError("renderer unavailable", name="pyqtgraph")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("missing image-only backend must not reserve or compute")
+
+    monkeypatch.setattr(
+        BatchRunner, "_probe_image_backend", staticmethod(missing_backend),
+    )
+    monkeypatch.setattr(batch_module, "reserve_output_paths", forbidden)
+    monkeypatch.setattr(
+        batch_module.batch_compute, "compute_prepared_frf", forbidden,
+    )
+
+    result = BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+        _frf_preset(export_data=False, export_image=True), tmp_path / "out",
+    )
+
+    assert result.status == "blocked"
+    assert [item.status for item in result.items] == ["failed"]
+
+
+def test_batch_frf_renderer_programming_value_error_propagates_and_rolls_back_set(
+    qapp, tmp_path, monkeypatch,
+):
+    def defect(*args, **kwargs):
+        raise ValueError("unexpected FRF renderer payload defect")
+
+    monkeypatch.setattr(BatchRunner, "_write_image", staticmethod(defect))
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="renderer payload defect"):
+        BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+            _frf_preset(export_data=True, export_image=True), output_dir,
+        )
+
+    assert list(output_dir.glob(".*.batch-reserve")) == []
+    assert list(output_dir.glob("*.csv")) == []
+    assert list(output_dir.glob("*.png")) == []
+
+
+def test_batch_frf_none_data_image_resume_reuses_coordinated_artifacts(
+    qapp, tmp_path, monkeypatch,
+):
+    from dataclasses import replace
+    import mf4_analyzer.batch as batch_module
+
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+        _frf_preset(export_data=True, export_image=True), output_dir,
+    )
+    preset = _frf_preset(export_data=True, export_image=True)
+    preset = replace(
+        preset,
+        outputs=replace(preset.outputs, resume_policy="manifest"),
+    )
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("checksum-proven FRF artifacts must not recompute")
+
+    monkeypatch.setattr(
+        batch_module.batch_compute, "compute_prepared_frf", forbidden,
+    )
+    second = BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+        preset, output_dir, resume_manifest=first.manifest_path,
+    )
+
+    assert second.status == "done"
+    assert [item.status for item in second.items] == ["resumed"]
+    assert second.items[0].data_path == first.items[0].data_path
+    assert second.items[0].image_path == first.items[0].image_path
+
+
+def test_batch_frf_group_image_resume_reuses_group_without_compute(
+    qapp, tmp_path, monkeypatch,
+):
+    from dataclasses import replace
+    import mf4_analyzer.batch as batch_module
+
+    outputs = ("response-a", "response-b", "response-c")
+    base = _frf_preset(
+        export_data=False,
+        export_image=True,
+        output_channels=outputs,
+        param_updates={"render_group_by": "source"},
+    )
+    files = {0: _make_frf_fd(tmp_path, output_channels=outputs)}
+    output_dir = tmp_path / "out"
+    first = BatchRunner(files).run(base, output_dir)
+    preset = replace(
+        base,
+        outputs=replace(base.outputs, resume_policy="manifest"),
+    )
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("checksum-proven FRF group must not recompute")
+
+    monkeypatch.setattr(
+        batch_module.batch_compute, "compute_prepared_frf", forbidden,
+    )
+    second = BatchRunner(files).run(
+        preset, output_dir, resume_manifest=first.manifest_path,
+    )
+
+    assert second.status == "done"
+    assert [item.status for item in second.items] == ["resumed"] * 3
+    assert len(second.render_groups) == 1
+    assert second.render_groups[0].message == "manifest-proven group resume"
+    assert second.render_groups[0].image_path == first.render_groups[0].image_path
+
+
+def test_batch_frf_none_conflict_error_keeps_coordinated_set_unchanged(
+    qapp, tmp_path,
+):
+    from dataclasses import replace
+
+    preset = _frf_preset(export_data=True, export_image=True)
+    preset = replace(
+        preset,
+        outputs=replace(preset.outputs, conflict_policy="error"),
+    )
+    output_dir = tmp_path / "out"
+    first = BatchRunner({0: _make_frf_fd(tmp_path)}).run(preset, output_dir)
+    original_data = Path(first.items[0].data_path).read_bytes()
+    original_image = Path(first.items[0].image_path).read_bytes()
+
+    second = BatchRunner({0: _make_frf_fd(tmp_path)}).run(preset, output_dir)
+
+    assert second.status == "blocked"
+    assert [item.status for item in second.items] == ["failed"]
+    assert Path(first.items[0].data_path).read_bytes() == original_data
+    assert Path(first.items[0].image_path).read_bytes() == original_image
+    assert list(output_dir.glob(".*.batch-reserve")) == []
+
+
+def test_batch_frf_preview_is_metadata_only_and_estimated(tmp_path):
+    from dataclasses import replace
+
+    source_path = str(tmp_path / "lazy.csv")
+    load_calls = []
+
+    def loader(path):
+        load_calls.append(path)
+        return _make_frf_fd(tmp_path, "loaded")
+
+    preset = replace(
+        _frf_preset(export_data=True, export_image=True),
+        file_paths=(source_path,),
+    )
+    preview = BatchRunner({}, loader=loader).preview_outputs(
+        preset,
+        tmp_path / "out",
+        source_channels={source_path: ("command", "response")},
+    )
+
+    assert preview.estimated is True
+    assert preview.task_count == 1
+    assert preview.artifact_count == 2
+    assert load_calls == []
+
+
+def test_batch_frf_representative_preview_loads_only_selected_group_and_computes(
+    tmp_path,
+):
+    from dataclasses import replace
+
+    source_paths = (str(tmp_path / "a.csv"), str(tmp_path / "b.csv"))
+    load_calls = []
+
+    def loader(path):
+        load_calls.append(str(path))
+        return _make_frf_fd(tmp_path, f"loaded-{len(load_calls)}")
+
+    preset = replace(
+        _frf_preset(export_data=True, export_image=True),
+        file_paths=source_paths,
+    )
+    runner = BatchRunner({}, loader=loader)
+    preview = runner.preview_outputs(
+        preset,
+        tmp_path / "out",
+        source_channels={
+            path: ("command", "response") for path in source_paths
+        },
+    )
+
+    result = runner.preview_group(
+        preset, preview.representative_group.group_id, tmp_path / "preview",
+    )
+
+    assert len(load_calls) == 1
+    assert result.loaded_source_count == 1
+    assert result.status == "done"
+    assert Path(result.image_path).is_file()
+
+
+def test_batch_frf_data_preflight_failure_writes_no_task_artifact(tmp_path):
+    fd = _make_frf_fd(tmp_path)
+    fd._time_source = "generated"
+
+    result = BatchRunner({0: fd}).run(_frf_preset(), tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert result.items[0].status == "failed"
+    assert result.items[0].data_path is None
+    assert list((tmp_path / "out").glob("*.csv")) == []
+
+
+def test_batch_frf_unexpected_import_error_propagates_and_releases_reservation(
+    tmp_path, monkeypatch,
+):
+    import mf4_analyzer.batch as batch_module
+
+    def programming_error(*args, **kwargs):
+        raise ImportError("unexpected FRF adapter defect")
+
+    monkeypatch.setattr(
+        batch_module.batch_compute,
+        "compute_prepared_frf",
+        programming_error,
+    )
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ImportError, match="unexpected FRF adapter defect"):
+        BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+            _frf_preset(), output_dir,
+        )
+
+    assert list(output_dir.glob(".*.batch-reserve")) == []
+    assert list(output_dir.glob("*.csv")) == []
+
+
+def test_batch_frf_programming_value_error_propagates_and_releases_reservation(
+    tmp_path, monkeypatch,
+):
+    import mf4_analyzer.batch as batch_module
+
+    def programming_error(*args, **kwargs):
+        raise ValueError("programming dataframe contract defect")
+
+    monkeypatch.setattr(
+        batch_module.batch_compute,
+        "compute_prepared_frf",
+        programming_error,
+    )
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="programming dataframe contract defect"):
+        BatchRunner({0: _make_frf_fd(tmp_path)}).run(
+            _frf_preset(), output_dir,
+        )
+
+    assert list(output_dir.glob(".*.batch-reserve")) == []
+    assert list(output_dir.glob("*.csv")) == []
+
+
+def test_batch_frf_cancellation_releases_all_pre_reserved_artifacts(
+    tmp_path, monkeypatch,
+):
+    import threading
+    import mf4_analyzer.batch as batch_module
+
+    token = threading.Event()
+    events = []
+    real_compute = batch_module.batch_compute.compute_prepared_frf
+
+    def cancel_first(prepared, **kwargs):
+        token.set()
+        return real_compute(prepared, **kwargs)
+
+    monkeypatch.setattr(
+        batch_module.batch_compute, "compute_prepared_frf", cancel_first,
+    )
+    output_dir = tmp_path / "out"
+    result = BatchRunner({
+        0: _make_frf_fd(tmp_path, "a"),
+        1: _make_frf_fd(tmp_path, "b"),
+    }).run(
+        _frf_preset(), output_dir, cancel_token=token, on_event=events.append,
+    )
+
+    assert result.status == "cancelled"
+    assert [item.status for item in result.items] == ["cancelled", "cancelled"]
+    assert [event.kind for event in events if event.task_index is not None] == [
+        "task_started", "task_cancelled",
+        "task_started", "task_cancelled",
+    ]
+    assert list(output_dir.glob(".*.batch-reserve")) == []
+    assert list(output_dir.glob("*.csv")) == []
+
+
+def test_batch_frf_cancellation_between_stage2_tasks_never_reserves_or_writes(
+    tmp_path, monkeypatch,
+):
+    import threading
+    import mf4_analyzer.batch as batch_module
+
+    token = threading.Event()
+    trace = []
+    real_prepare = batch_module.batch_compute.prepare_frf_task
+    real_reserve = batch_module.reserve_output_paths
+
+    def cancel_after_first_preflight(*args, **kwargs):
+        trace.append("preflight")
+        prepared = real_prepare(*args, **kwargs)
+        token.set()
+        return prepared
+
+    def reserve(*args, **kwargs):
+        trace.append("reserve")
+        return real_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(
+        batch_module.batch_compute,
+        "prepare_frf_task",
+        cancel_after_first_preflight,
+    )
+    monkeypatch.setattr(batch_module, "reserve_output_paths", reserve)
+    output_dir = tmp_path / "out"
+
+    result = BatchRunner({
+        0: _make_frf_fd(tmp_path, "a"),
+        1: _make_frf_fd(tmp_path, "b"),
+    }).run(_frf_preset(), output_dir, cancel_token=token)
+
+    assert result.status == "cancelled"
+    assert trace == ["preflight"]
+    assert [item.status for item in result.items] == ["cancelled", "cancelled"]
+    assert list(output_dir.glob(".*.batch-reserve")) == []
+    assert list(output_dir.glob("*.csv")) == []
+
+
+def test_batch_frf_available_policy_records_one_skipped_candidate_and_continues(
+    tmp_path,
+):
+    from dataclasses import replace
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    missing = _make_frf_fd(tmp_path, "missing")
+    missing.data = missing.data.drop(columns=["response"])
+    missing.channels = ["Time", "command"]
+    valid = _make_frf_fd(tmp_path, "valid")
+    preset = replace(_frf_preset(), target_policy="available_per_source")
+
+    events = []
+    result = BatchRunner({0: missing, 1: valid}).run(
+        preset, tmp_path / "out", on_event=events.append,
+    )
+
+    assert result.status == "done"
+    assert [(item.file_id, item.status) for item in result.items] == [
+        (0, "skipped"), (1, "done"),
+    ]
+    skipped_item, valid_item = result.items
+    assert not any("does not contain" in warning for warning in valid_item.warnings)
+    assert skipped_item.data_path is None
+    assert all(token in skipped_item.message for token in (
+        "0", "command", "response", "建议",
+    ))
+    assert [event.kind for event in events if event.task_index == 1] == [
+        "task_started", "task_skipped",
+    ]
+    assert sum(event.kind == "task_skipped" for event in events) == 1
+    assert any("does not contain" in warning for warning in result.warnings)
+    manifest = load_batch_manifest(result.manifest_path)
+    skipped_entries = [
+        entry for entry in manifest["entries"]
+        if entry["status"] == "skipped"
+    ]
+    assert len(skipped_entries) == 1
+    assert skipped_entries[0]["frf_pair"]["input"]["channel"] == "command"
+    assert skipped_entries[0]["frf_pair"]["output"]["channel"] == "response"
+
+
+def test_batch_frf_unexpected_loader_import_error_propagates(tmp_path):
+    from dataclasses import replace
+
+    source_path = str(tmp_path / "lazy.csv")
+
+    def loader(_path):
+        raise ImportError("loader programming defect")
+
+    preset = replace(_frf_preset(), file_paths=(source_path,))
+
+    with pytest.raises(ImportError, match="loader programming defect"):
+        BatchRunner({}, loader=loader).run(preset, tmp_path / "out")

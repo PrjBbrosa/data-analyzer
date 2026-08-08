@@ -7,6 +7,17 @@ from .adaptive import (
     resolve_order_nfft,
 )
 from .fft import FFTAnalyzer
+from .frf import (
+    FrfEffectiveFacts,
+    FrfParams,
+    FrfResult,
+    compute_frf,
+    get_frf_window,
+    magnitude_db,
+    magnitude_linear,
+    phase_unwrapped_deg,
+    phase_wrapped_deg,
+)
 from .order import OrderAnalysisParams, OrderAnalyzer, OrderTimeResult
 from .channel_math import ChannelMath
 from .expression import ExpressionError, evaluate as evaluate_expression
@@ -20,6 +31,15 @@ __all__ = [
     'resolve_nfft',
     'resolve_order_nfft',
     'FFTAnalyzer',
+    'FrfEffectiveFacts',
+    'FrfParams',
+    'FrfResult',
+    'compute_frf',
+    'get_frf_window',
+    'magnitude_db',
+    'magnitude_linear',
+    'phase_unwrapped_deg',
+    'phase_wrapped_deg',
     'OrderAnalyzer',
     'OrderAnalysisParams',
     'OrderTimeResult',

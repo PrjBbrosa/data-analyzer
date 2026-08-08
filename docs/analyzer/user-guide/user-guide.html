@@ -888,8 +888,9 @@
     </div>
     <div class="tags">
       <span class="tag">时域</span>
-      <span class="tag">FFT</span>
-      <span class="tag">FFT vs Time</span>
+      <span class="tag">频谱（FFT）</span>
+      <span class="tag">时频（FFT vs Time）</span>
+      <span class="tag">频响（FRF）</span>
       <span class="tag">阶次</span>
       <span class="tag">WWT / ZFD / MAT</span>
     </div>
@@ -899,7 +900,7 @@
   <nav class="toc">
     <a href="#layout">界面布局</a><span class="sep">·</span>
     <a href="#toolbar">顶部工具栏</a><span class="sep">·</span>
-    <a href="#modes">四种分析模式</a><span class="sep">·</span>
+    <a href="#modes">五种分析模式</a><span class="sep">·</span>
     <a href="#walkthrough">5 步上手</a><span class="sep">·</span>
     <a href="#chart">图表区按钮</a><span class="sep">·</span>
     <a href="#preset">预设栏</a><span class="sep">·</span>
@@ -970,8 +971,9 @@
 
       <div class="seg">
         <button class="tb-btn active" data-tb="mode-time">时域</button>
-        <button class="tb-btn" data-tb="mode-fft">FFT</button>
-        <button class="tb-btn" data-tb="mode-fft-time">FFT vs Time</button>
+        <button class="tb-btn" data-tb="mode-fft">频谱</button>
+        <button class="tb-btn" data-tb="mode-fft-time">时频</button>
+        <button class="tb-btn" data-tb="mode-frf">频响</button>
         <button class="tb-btn" data-tb="mode-order">阶次</button>
       </div>
 
@@ -988,13 +990,14 @@
 
   <!-- 3. MODES ─────────────────────────────────────────── -->
   <section class="card" id="modes">
-    <h2>3 · 四种分析模式</h2>
+    <h2>3 · 五种分析模式</h2>
     <div class="h2-sub">选不同模式，Inspector 下半部分跟着换。每个模式负责不同的"问题"。</div>
 
     <div class="mode-tabs" id="modeTabs">
       <button class="active" data-mode="time">时域</button>
-      <button data-mode="fft">FFT</button>
-      <button data-mode="fft-time">FFT vs Time</button>
+      <button data-mode="fft">频谱</button>
+      <button data-mode="fft-time">时频</button>
+      <button data-mode="frf">频响</button>
       <button data-mode="order">阶次</button>
     </div>
 
@@ -1085,6 +1088,34 @@
           <div class="insp-row">色标范围 <span class="v">自动</span></div>
           <span class="insp-action">▶ 计算时频</span>
           <span class="insp-action" style="background:var(--muted-2);margin-left:6px">导出主图</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- FRF ──────────────────── -->
+    <div class="mode-panel" data-panel="frf">
+      <div class="info-box">
+        <h4>这个模式解决什么问题</h4>
+        <ul>
+          <li>看一个系统如何把输入传递到输出</li>
+          <li>同时查看幅值、相位和 coherence</li>
+          <li>确认结果的物理时间关联，而不是把不同来源硬配在一起</li>
+        </ul>
+        <div class="when"><b>什么时候选它：</b>已知激励和响应通道，想做频响（FRF / 系统辨识）而不是只看单通道频谱。</div>
+      </div>
+      <div class="inspector-mock">
+        <div class="insp-header">Inspector · 频响模式</div>
+        <div class="insp-group">
+          <div class="insp-group-title">通道映射</div>
+          <div class="insp-row">输入 <span class="v">同一来源的激励通道</span></div>
+          <div class="insp-row">输出 <span class="v">同一来源的响应通道</span></div>
+          <div class="insp-row">估计器 <span class="v">H1 / H2</span></div>
+        </div>
+        <div class="insp-group">
+          <div class="insp-group-title">分段与显示</div>
+          <div class="insp-row">窗长 / 重叠 <span class="v">决定 df 与段数</span></div>
+          <div class="insp-row">coherence 阈值 <span class="v">只影响显示</span></div>
+          <span class="insp-action">▶ 计算频响</span>
         </div>
       </div>
     </div>
@@ -1341,7 +1372,7 @@
       </div>
       <div class="info-box" style="background:var(--surface-2);border:1px solid var(--line);padding:12px;border-radius:10px">
         <h4 style="margin:0 0 4px;color:var(--accent-deep);font-size:13px">② Pipeline · 步骤</h4>
-        <p style="margin:0;font-size:13px;color:var(--ink)">勾选要跑的分析（时域 / FFT / 阶次…），每个分析可单独配参数。可用 <b>从当前单次填入</b> 把主界面的 Inspector 配置一键复制过来。</p>
+        <p style="margin:0;font-size:13px;color:var(--ink)">勾选要跑的分析（时域 / 频谱 / 时频 / 频响 / 阶次），每个分析可单独配参数。频响只在同一来源内按输入/输出配对；可用 <b>从当前单次填入</b> 复制配置。</p>
       </div>
       <div class="info-box" style="background:var(--surface-2);border:1px solid var(--line);padding:12px;border-radius:10px">
         <h4 style="margin:0 0 4px;color:var(--accent-deep);font-size:13px">③ Output · 输出</h4>
@@ -1436,10 +1467,11 @@ const tbDescs = {
   export:  {t:'导出',     d:'打开"导出 Excel"抽屉。把当前图表的数据 / 参数 / 图片导出为一个 Excel 文件。',                                 meta:'需要先加载文件 + 出过图'},
   batch:   {t:'批处理',   d:'打开批处理抽屉，对多个文件跑同一套 Pipeline。详情见下方第 7 节。',                                              meta:'始终可点 · 不需要先打开文件'},
   inspector:{t:'Inspector', d:'右侧 Inspector 面板的显隐开关。蓝色 = 显示，灰色 = 隐藏。隐藏时图表区会自动撑满。',                          meta:'状态按钮 · 可切换'},
-  'mode-time':    {t:'时域模式',      d:'看波形随时间的变化。Inspector 下半部分变成"时域参数"卡。',                                          meta:'4 选 1 · 默认选中'},
-  'mode-fft':     {t:'FFT 模式',      d:'对当前通道做整段 FFT。Inspector 出现窗函数 / 分段长度 / 重叠 / 平均方式等参数。',                  meta:'4 选 1'},
-  'mode-fft-time':{t:'FFT vs Time',   d:'时频分析（瀑布图 / 谱图）。结果在后台线程算，可中断。Inspector 出现时频参数 + 幅值 + 色标。',     meta:'4 选 1 · 重型计算 · 可取消'},
-  'mode-order':   {t:'阶次模式',      d:'用转速参考通道，把频谱换算成阶次谱。Inspector 需要选振动通道和转速通道。',                          meta:'4 选 1 · 需要转速通道'}
+  'mode-time':    {t:'时域模式',      d:'看波形随时间的变化。Inspector 下半部分变成"时域参数"卡。',                                          meta:'5 选 1 · 默认选中'},
+  'mode-fft':     {t:'频谱模式',      d:'对当前通道做整段 FFT。Inspector 出现窗函数 / 分段长度 / 重叠 / 平均方式等参数。',                  meta:'5 选 1'},
+  'mode-fft-time':{t:'时频模式',      d:'时频分析（瀑布图 / 谱图）。结果在后台线程算，可中断。Inspector 出现时频参数 + 幅值 + 色标。',     meta:'5 选 1 · 重型计算 · 可取消'},
+  'mode-frf':     {t:'频响（FRF）',   d:'为同一来源的输入/输出计算传递比、相位和 coherence；时间范围必须是真实秒轴。',                       meta:'5 选 1 · 系统辨识'},
+  'mode-order':   {t:'阶次模式',      d:'用转速参考通道，把频谱换算成阶次谱。Inspector 需要选振动通道和转速通道。',                          meta:'5 选 1 · 需要转速通道'}
 };
 const tbDetail = document.getElementById('tbDetail');
 document.querySelectorAll('.tb-mock [data-tb]').forEach(b => {

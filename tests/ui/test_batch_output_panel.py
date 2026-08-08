@@ -23,6 +23,33 @@ def _make_panel(qtbot):
     return panel
 
 
+def test_frf_output_preview_shows_fixed_columns_and_split_artifact_counts(qtbot):
+    from mf4_analyzer.batch_types import BatchOutputPreview
+
+    panel = _make_panel(qtbot)
+    panel.apply_method_defaults("frf")
+    assert not panel._frf_grouping_row.isHidden()
+    assert panel._frf_grouping_combo.itemText(0) == "每对一张"
+    assert panel._frf_grouping_combo.itemText(1) == "按来源叠加"
+    assert panel._frf_grouping_combo.itemText(2) == "按输入/输出对叠加"
+    panel._frf_grouping_combo.setCurrentIndex(1)
+    assert panel.frf_render_params() == {"render_group_by": "source"}
+    panel.set_output_preview(BatchOutputPreview(
+        task_count=6, artifact_count=10, conflict_count=2,
+        image_format="png", image_width=1920, image_height=1080,
+        image_dpi=144, conflict_policy="auto_number", group_count=4,
+        data_artifact_count=6, image_artifact_count=4,
+        data_conflict_count=1, image_conflict_count=1,
+    ))
+
+    text = panel.output_preview_text()
+    assert "12 列" in text
+    assert "6 任务" in text
+    assert "6 数据" in text
+    assert "4 图片组" in text
+    assert "2 冲突" in text
+
+
 def _anchor_screen_geometry(anchor: QWidget) -> QRect:
     center = anchor.mapToGlobal(anchor.rect().center())
     screen = QGuiApplication.screenAt(center) or QGuiApplication.primaryScreen()
