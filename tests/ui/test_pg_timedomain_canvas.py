@@ -625,69 +625,34 @@ class TestSubplotDenseBucketCap:
             assert eff * n <= bound * 1.05
 
 
-# -- universal data-amplitude vs Y-window wall guard ---------------------
+# -- universal ink-budget downsample guard -------------------------------
 
 
-class TestYOverflowWallGuard:
-    """Renderer-layer 兜底 guard for the 满高竖线墙 (full-height vertical-stroke
-    wall) regime that the static density caps (overlay channel-count /
-    subplot decimation) do NOT see: a dense curve drawn into a Y view window
-    far smaller than its amplitude. Every trigger path (manual narrow Y,
-    box-zoom Y, scroll Y, stale narrow Y across a view switch) funnels into one
-    ``setData`` per line in ``_refresh_visible_data``; the guard compares each
-    line's window data amplitude span to its Y view span and, on overflow >
-    ``_WALL_OVERFLOW_RATIO_K``×, caps the bucket count and holds AA off.
+class TestInkBudget:
+    """Renderer-layer 墨水量预算 guard (spec
+    ``docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`` §4.1),
+    the replacement for the retired ``data_span / y_span`` 满高竖线墙 wall guard.
 
-    Pure performance guard: it changes NO Y range, NO autorange, NO data — only
-    the number of drawn strokes + the AA state for the wall frame. Normal frames
-    (data hugs the window) are untouched and pay zero extra per-frame cost.
+    The wall guard measured the WRONG axis: it fired only when the data
+    overflowed the Y window by > 4×, while the real cost peak sits at
+    ratio ≈ 1.0 — i.e. exactly the output of Y auto-fit. The ink metric
+    (``envelope_ink_dev_px``, device-pixel vertical stroke length) predicts
+    the frame cost directly, so it covers BOTH regimes with one number:
+    the old narrow-Y wall still trips it (behavior does not regress) and the
+    previously-invisible "oscillating curve fitted to its window" case now
+    trips it too. A smooth curve fitted to its window keeps full resolution —
+    the ink metric is what tells the two fitted cases apart (spec §3.3).
+
+    Pure performance guard: it changes NO Y range, NO autorange, NO data —
+    only the number of drawn strokes + the AA state for the high-ink frame.
+    Low-ink frames are untouched and pay only one vectorized diff.
     """
 
-    # -- pure predicate / helper unit coverage (no Qt) -------------------
-
-    def test_predicate_triggers_on_large_overflow(self):
-        from mf4_analyzer.ui.pg_canvas.renderer import (
-            Renderer, _WALL_OVERFLOW_RATIO_K,
-        )
-        # data_span/y_span = 10/0.1 = 100 >> K
-        assert Renderer._is_y_overflow_wall(10.0, 0.1) is True
-        # exactly at K is NOT a wall (strict >)
-        assert Renderer._is_y_overflow_wall(
-            _WALL_OVERFLOW_RATIO_K, 1.0) is False
-        # just above K is a wall
-        assert Renderer._is_y_overflow_wall(
-            _WALL_OVERFLOW_RATIO_K + 0.01, 1.0) is True
-
-    def test_predicate_no_trigger_when_data_fits_window(self):
-        from mf4_analyzer.ui.pg_canvas.renderer import Renderer
-        # data ±5 in a ±6 window: data_span 10, y_span 12, ratio < 1 → no wall
-        assert Renderer._is_y_overflow_wall(10.0, 12.0) is False
-        # data exactly fills window (ratio 1) → no wall
-        assert Renderer._is_y_overflow_wall(10.0, 10.0) is False
-
-    def test_predicate_degenerate_inputs_do_not_crash_or_trigger(self):
-        from mf4_analyzer.ui.pg_canvas.renderer import Renderer
-        # y_span ≈ 0 (collapsed window): no div-by-zero, no trigger
-        assert Renderer._is_y_overflow_wall(5.0, 0.0) is False
-        assert Renderer._is_y_overflow_wall(5.0, -1.0) is False
-        # data_span ≈ 0 (flat line): one horizontal stroke, NOT a wall
-        assert Renderer._is_y_overflow_wall(0.0, 0.001) is False
-        # non-finite inputs are absorbed
-        assert Renderer._is_y_overflow_wall(float("nan"), 1.0) is False
-        assert Renderer._is_y_overflow_wall(1.0, float("inf")) is False
-
-    def test_wall_capped_width_only_reduces(self):
-        from mf4_analyzer.ui.pg_canvas.renderer import (
-            Renderer, _WALL_BUCKET_BUDGET,
-        )
-        # above the budget → clamped down
-        assert Renderer._wall_capped_width(_WALL_BUCKET_BUDGET + 5000) == (
-            _WALL_BUCKET_BUDGET
-        )
-        # already below the budget → unchanged (never raised)
-        assert Renderer._wall_capped_width(500) == 500
-        # degenerate width floors at 1
-        assert Renderer._wall_capped_width(0) == 1
+    # -- pure helper unit coverage (no Qt) -------------------------------
+    #
+    # The ink metric itself is covered by ``TestEnvelopeInk``; the clamp is
+    # inline in ``_refresh_visible_data`` (single call site) and is covered
+    # end-to-end below.
 
     def test_y_span_key_changes_with_y_zoom(self):
         from mf4_analyzer.ui.pg_canvas.renderer import _quantize_y_span_key
@@ -699,20 +664,77 @@ class TestYOverflowWallGuard:
         assert _quantize_y_span_key(0.0) == 0
         assert _quantize_y_span_key(-1.0) == 0
 
+    # -- constant mutation guards ----------------------------------------
+
+    def test_ink_off_budget_constant_stays_in_calibrated_band(self):
+        """``_INK_OFF_BUDGET`` is a real-hardware calibration, not a knob.
+
+        Spec §5: 1.2M device px ≈ a 20 ms interaction frame at the measured
+        16.5 ns/dev px (Cocoa, dpr 2.0). Before changing it, update spec §5
+        AND re-run the real-machine calibration
+        (``scripts/probe_aa_ink_budget.py``) — an offscreen suite cannot
+        measure paint cost. The band below is the order-of-magnitude fence
+        the downsample cases depend on: 10× either way silently disables
+        (or over-applies) the guard.
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_OFF_BUDGET
+
+        assert 600_000 <= _INK_OFF_BUDGET <= 2_400_000
+
+    def test_ink_min_buckets_constant_stays_in_calibrated_band(self):
+        """``_INK_MIN_BUCKETS`` is the silhouette-fidelity floor.
+
+        Spec §5: 350 buckets, inherited from ``_SUBPLOT_DENSE_MIN_BUCKETS``
+        (measured 17 ms/frame at that width). Before changing it, update
+        spec §5 and re-calibrate on real hardware: below ~200 the coarse
+        outline visibly loses features, above ~700 the floor stops bounding
+        the worst case.
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_MIN_BUCKETS
+
+        assert 200 <= _INK_MIN_BUCKETS <= 700
+
     # -- end-to-end on a live canvas -------------------------------------
 
-    def _wall_canvas(self, qapp):
+    def _ink_canvas(self, qapp, height=900):
         from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
-        canvas.resize(1920, 600)
+        # 900 px tall so the single subplot row is ~850 px — the row height is
+        # a direct factor of the ink metric, and offscreen Qt reports dpr 1.0
+        # (real Cocoa is 2.0), so a short canvas would land the narrow-Y case
+        # under budget for geometry reasons alone.
+        canvas.resize(1920, height)
         canvas.show()
         QCoreApplication.processEvents()
-        # ONE dense channel, amplitude ±5 (data_span ~10). A single channel is
-        # below BOTH static caps (overlay needs >=2 curves; subplot dense cap
-        # needs >=2 dense rows), so only the universal wall guard can fire here.
+        # ONE dense but SMOOTH channel, amplitude ±5. A single channel is below
+        # BOTH static caps (overlay needs >=2 curves; subplot dense cap needs
+        # >=2 dense rows), so only the universal ink guard can fire here.
         t = np.linspace(0.0, 10.0, 1_000_000, dtype=np.float64)
         sig = 5.0 * np.sin(t * 30.0)
+        rows = [("ch0", True, t, sig, "#1769e0", "u", "fid-0")]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        return canvas, t, sig
+
+    def _oscillating_canvas(self, qapp, height=900):
+        """Spec §3.2 real-hardware fixture: 1M samples @ 20 kHz carrying a
+        2300 Hz oscillation (±100) plus a slow 0.7 Hz swing. Every envelope
+        bucket spans nearly the full amplitude, so once Y is fitted to the
+        data the curve paints as a solid ink band — the case the retired wall
+        guard could never see (its ratio is ≈ 1.0, far below K = 4).
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, height)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.arange(1_000_000, dtype=np.float64) / 20_000.0
+        sig = (
+            100.0 * np.sin(2 * np.pi * 2300.0 * t)
+            + 8.0 * np.sin(2 * np.pi * 0.7 * t)
+        )
         rows = [("ch0", True, t, sig, "#1769e0", "u", "fid-0")]
         canvas.plot_channels(rows, mode="subplot")
         QCoreApplication.processEvents()
@@ -723,75 +745,385 @@ class TestYOverflowWallGuard:
         xd, _ = line.plot_data_item.getData()
         return 0 if xd is None else len(xd)
 
-    def test_narrow_y_caps_points_and_flags_wall(self, qapp):
-        from mf4_analyzer.ui.pg_canvas.renderer import _WALL_BUCKET_BUDGET
+    # -- quality-dot reporting for the two admission legs ----------------
+    #
+    # The gate DECIDES in _idle_aa_density_ok; quality_status() REPORTS. The
+    # two diverged once the ink leg widened raster admission: an analog line
+    # admitted on ink alone was being described to the user as a
+    # "密集离散跳变" (dense-discrete) signal, which is a property it does not
+    # have, and an overlay high-ink frame claimed a high-raster-cost block for
+    # a backend that does not run in overlay at all.
 
-        canvas, _t, _sig = self._wall_canvas(qapp)
+    def test_ink_admitted_line_is_not_reported_as_dense_discrete(self, qapp):
+        """An analog high-ink line must be named for what it is."""
+        canvas, _t, _sig = self._oscillating_canvas(qapp)
+        canvas.fit_y_to_visible_x()
+        # Deny the raster upgrade so the report falls to the red branch.
+        canvas._dense_raster.max_item_bytes = 0
+        canvas._dense_raster.deactivate_channel("ch0")
+        canvas._flush_pending_refresh()
+
+        ck = canvas._channel_lines.composite_key_for("ch0")
+        assert canvas._raster_backend_eligible(ck) is True
+        assert (
+            getattr(canvas._channel_render_profiles.get(ck), "strategy", None)
+            == "general"
+        ), "premise: this fixture is an analog trace, not a discrete counter"
+
+        raster_cost = canvas._quality._high_raster_cost_status()
+        assert raster_cost["blocked"] is True
+        assert raster_cost["ink_labels"] == ("ch0",)
+        assert raster_cost["dense_labels"] == ()
+
+        status = canvas.quality_status()
+        assert status["state"] == "red"
+        assert status["block_reason"] == "high-raster-cost"
+        assert "密集离散跳变" not in status["tooltip"]
+        assert "满幅振荡曲线 ch0" in status["tooltip"]
+
+    def test_overlay_high_ink_reports_ink_not_raster_cost(self, qapp):
+        """Overlay has no raster backend, so it must not claim one.
+
+        `_dense_visible_keys` / `refresh_all` both bail out in overlay, so
+        admitting an overlay line on ink would assert "needs the raster
+        backend" about a mode that has none. The ink leg short-circuits there
+        and the frame reports through the ink branch instead.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 900)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.arange(1_000_000, dtype=np.float64) / 20_000.0
+        rows = [
+            ("ch0", True, t, 100.0 * np.sin(2 * np.pi * 2300.0 * t),
+             "#1769e0", "u", "fid-0"),
+            ("ch1", True, t, 100.0 * np.sin(2 * np.pi * 2437.0 * t),
+             "#00a67d", "u", "fid-0"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        canvas.fit_y_to_visible_x()
+        canvas._flush_pending_refresh()
+
+        assert canvas._overlay_mode is True
+        ck = canvas._channel_lines.composite_key_for("ch0")
+        assert canvas._raster_backend_eligible(ck) is False
+        assert canvas._quality._high_raster_cost_status()["blocked"] is False
+        # AA must still be refused — only the REASON changed, not the safety.
+        assert canvas._quality._idle_aa_density_ok() is False
+
+        status = canvas.quality_status()
+        assert status["state"] == "red"
+        assert status["block_reason"] == "high-ink"
+        assert status["frame_ink"] > status["ink_budget"]
+        assert "波形填满绘图区" in status["tooltip"]
+
+    def test_overlay_short_circuit_spares_the_dense_discrete_leg(self, qapp):
+        """Only the ink leg short-circuits in overlay.
+
+        The dense-discrete leg's overlay behavior predates the ink work; it
+        must stay byte-identical or this becomes an unrelated regression.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 900)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.linspace(0.0, 10.0, 200_000, dtype=np.float64)
+        counter = np.tile(np.arange(64, dtype=np.float64), t.size // 64 + 1)
+        rows = [
+            ("crc0", True, t, counter[:t.size], "#1769e0", "u", "fid-0"),
+            ("crc1", True, t, counter[:t.size][::-1], "#00a67d", "u", "fid-0"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        canvas._flush_pending_refresh()
+
+        assert canvas._overlay_mode is True
+        ck = canvas._channel_lines.composite_key_for("crc0")
+        assert (
+            getattr(canvas._channel_render_profiles.get(ck), "strategy", None)
+            == "dense_discrete"
+        ), "premise: fixture must classify as the discrete-counter strategy"
+        # Unchanged by the overlay short-circuit.
+        assert canvas._raster_backend_eligible(ck) is True
+        status = canvas.quality_status()
+        assert status["block_reason"] == "high-raster-cost"
+        assert "密集离散跳变" in status["tooltip"]
+
+    def test_low_ink_frame_reports_no_ink_block(self, qapp):
+        """Zero behavior change for the smooth control (spec §5 anchor)."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 900)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.arange(1_000_000, dtype=np.float64) / 20_000.0
+        rows = [("ch0", True, t, 100.0 * np.sin(2 * np.pi * 1.0 * t),
+                 "#1769e0", "u", "fid-0")]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        canvas.fit_y_to_visible_x()
+        canvas._flush_pending_refresh()
+
+        assert canvas._quality._idle_aa_density_ok() is True
+        canvas._quality.try_enable_idle_quality()
+        status = canvas.quality_status()
+        assert status.get("block_reason") is None
+        assert status["state"] == "green"
+
+    @staticmethod
+    def _expected_cap(effective_width, ink):
+        """Re-derive spec §4.1's clamp from the ink the renderer recorded.
+
+        Deliberately NOT a hard-coded bucket count: the fixture's ink depends
+        on the row height the platform hands out, so the expectation has to
+        be reconstructed from the measured value.
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import (
+            _INK_MIN_BUCKETS, _INK_OFF_BUDGET,
+        )
+
+        raw = int(effective_width * _INK_OFF_BUDGET / ink)
+        return max(_INK_MIN_BUCKETS, min(raw, effective_width))
+
+    def test_narrow_y_caps_points_and_flags_high_ink(self, qapp):
+        """Old wall scenario (data_span/y_span ≈ 1000) must NOT regress: a
+        dense curve pinned into a sliver of Y still paints full-height strokes,
+        so its ink is still over budget and it is still coarsened + AA-blocked.
+        """
+        canvas, _t, _sig = self._ink_canvas(qapp)
         ax, _line = canvas._channel_lines["ch0"]
-        # Baseline: window hugs the data (±6), no wall.
+        # Baseline: window hugs the data (±6) — smooth curve, low ink.
         ax.set_ylim(-6.0, 6.0)
         canvas._last_range_key.clear()
         canvas._flush_pending_refresh()
         full_pts = self._displayed_points(canvas, "ch0")
-        assert canvas._y_overflow_wall_active is False
-        assert canvas._line_wall_state.get("ch0") is False
+        pw = canvas._current_pixel_width()
+        assert canvas._frame_ink_high is False
+        assert canvas._line_ink_state.get("ch0")[1] is False
+        # Un-capped: ~2 envelope samples per pixel column.
+        assert full_pts > pw
 
-        # Now pin Y to ±0.05 (data_span/y_span ≈ 10/0.1 = 100 >> K): wall.
-        ax.set_ylim(-0.05, 0.05)
+        # Now pin Y to ±0.005: every bucket's min/max pair overflows the
+        # window → full-height strokes → ink over budget.
+        ax.set_ylim(-0.005, 0.005)
         canvas._flush_pending_refresh()
-        wall_pts = self._displayed_points(canvas, "ch0")
-        assert canvas._y_overflow_wall_active is True
-        assert canvas._line_wall_state.get("ch0") is True
-        # Bucket count额外封顶: each bucket emits ~2 envelope samples, so the
-        # displayed count is bounded by ~2× the wall budget.
-        assert wall_pts <= 2 * _WALL_BUCKET_BUDGET + 4
-        # And it is strictly fewer strokes than the un-capped (fitting) frame.
-        assert wall_pts < full_pts
+        capped_pts = self._displayed_points(canvas, "ch0")
+        assert canvas._frame_ink_high is True
+        ink, high = canvas._line_ink_state.get("ch0")
+        assert high is True
+        assert ink > 0.0
+        # Each bucket emits ~2 envelope samples, so the displayed count is
+        # bounded by ~2× the width the spec §4.1 clamp selects.
+        assert capped_pts <= 2 * self._expected_cap(pw, ink) + 4
+        # And it is strictly fewer strokes than the un-capped frame.
+        assert capped_pts < full_pts
+
+    def test_oscillating_fit_y_caps_points_and_flags_high_ink(self, qapp):
+        """The case the wall guard missed (spec §1.1 / §3.3): an oscillating
+        curve with Y auto-fitted to it — ratio ≈ 1.0, which the retired
+        ``data_span / y_span > 4`` predicate scored as a perfectly normal
+        frame while it was in fact the measured cost PEAK.
+        """
+        canvas, _t, _sig = self._oscillating_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        pw = canvas._current_pixel_width()
+        # Reference frame: a very wide Y window. Same data, same bucket count,
+        # but the strokes are a thin band → low ink → no downsample.
+        ax.set_ylim(-10_000.0, 10_000.0)
+        canvas._last_range_key.clear()
+        canvas._flush_pending_refresh()
+        full_pts = self._displayed_points(canvas, "ch0")
+        assert canvas._frame_ink_high is False
+        assert full_pts > pw
+
+        # Now the product's own Y auto-fit → ratio ≈ 1.0.
+        canvas.fit_y_to_visible_x()
+        canvas._flush_pending_refresh()
+        ylo, yhi = ax.get_ylim()
+        data_span = 2 * 108.0  # ±(100 + 8)
+        ratio = data_span / abs(float(yhi) - float(ylo))
+        # Premise check: this frame is NOT a wall by the old predicate (which
+        # needed ratio > 4) — it is the fitted-window regime.
+        assert 0.5 < ratio < 1.5
+
+        fit_pts = self._displayed_points(canvas, "ch0")
+        assert canvas._frame_ink_high is True
+        ink, high = canvas._line_ink_state.get("ch0")
+        assert high is True
+        assert ink > 0.0
+        assert fit_pts < full_pts
+        assert fit_pts <= 2 * self._expected_cap(pw, ink) + 4
 
     def test_fitting_window_full_resolution_no_cap(self, qapp):
-        canvas, _t, _sig = self._wall_canvas(qapp)
+        """Contract kept from the wall era (spec §3.3): a SMOOTH curve fitted
+        to its window must keep full pixel-width resolution. Its ink is far
+        under budget precisely because the strokes are thin, which is how the
+        metric separates it from the oscillating fitted case above.
+        """
+        canvas, _t, _sig = self._ink_canvas(qapp)
         ax, _line = canvas._channel_lines["ch0"]
         pw = canvas._current_pixel_width()
         ax.set_ylim(-6.0, 6.0)
         canvas._last_range_key.clear()
         canvas._flush_pending_refresh()
         pts = self._displayed_points(canvas, "ch0")
-        # Full pixel-width resolution: ~2 samples per pixel column, far above
-        # the wall budget; no cap engaged.
-        assert canvas._y_overflow_wall_active is False
-        assert pts > pw  # not coarsened down to the wall budget
+        # Full pixel-width resolution: ~2 samples per pixel column, no cap.
+        assert canvas._frame_ink_high is False
+        ink, high = canvas._line_ink_state.get("ch0")
+        assert high is False
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_OFF_BUDGET
+        assert ink <= _INK_OFF_BUDGET
+        assert pts > pw  # not coarsened
 
-    def test_wall_holds_aa_off(self, qapp):
-        canvas, _t, _sig = self._wall_canvas(qapp)
+    def test_min_buckets_floor_bounds_the_downsample(self, qapp):
+        """The proportional clamp must never coarsen a line below
+        ``_INK_MIN_BUCKETS`` — the outline has to stay recognizable even when
+        the ink is many times the budget (spec §4.1 clamp lower bound).
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import (
+            _INK_MIN_BUCKETS, _INK_OFF_BUDGET,
+        )
+
+        # A very tall row multiplies the ink (it is linear in row height), so
+        # the proportional term alone would ask for far fewer buckets than the
+        # floor allows.
+        canvas, _t, _sig = self._oscillating_canvas(qapp, height=2400)
         ax, _line = canvas._channel_lines["ch0"]
-        ax.set_ylim(-0.05, 0.05)
+        pw = canvas._current_pixel_width()
+        ax.set_ylim(-1.0, 1.0)
+        canvas._last_range_key.clear()
         canvas._flush_pending_refresh()
-        assert canvas._y_overflow_wall_active is True
-        # The idle-AA gate must hard-fail (AA stays OFF) while the wall is up,
-        # regardless of how few points the cap left.
+        pts = self._displayed_points(canvas, "ch0")
+
+        ink, high = canvas._line_ink_state.get("ch0")
+        assert high is True
+        # Premise: the floor — not the proportional term — is what binds here.
+        assert int(pw * _INK_OFF_BUDGET / ink) < _INK_MIN_BUCKETS
+        # Floored, not collapsed: ~2 samples per bucket at exactly the floor.
+        assert pts <= 2 * _INK_MIN_BUCKETS + 4
+        assert pts >= _INK_MIN_BUCKETS
+
+    def test_high_ink_holds_aa_off(self, qapp):
+        """Composed spec §4.2 + §4.3 contract: a high-ink line refuses vector
+        AA exactly while the raster backend does NOT cover it. Once the
+        settled flush hands the line to the pixmap backend, the vector stroke
+        is suppressed and enabling AA for what remains is safe — the covered
+        curve is excluded from the ink sum AND from the AA flip itself.
+        """
+        canvas, _t, _sig = self._ink_canvas(qapp)
+        ax, line = canvas._channel_lines["ch0"]
+        ax.set_ylim(-0.005, 0.005)
+        canvas._flush_pending_refresh()
+        assert canvas._frame_ink_high is True
+
+        # Covered branch: entry ready, stroke suppressed, gate may re-arm —
+        # but the covered curve must not be in the native-AA set it re-arms.
+        assert canvas._dense_raster.entry_for("ch0") is not None
+        assert line.plot_data_item.opts.get("pen") is None
+        assert canvas._quality._idle_aa_density_ok() is True
+        covered = canvas._quality._raster_covered_curve_items()
+        assert line.plot_data_item.curve in covered
+
+        # Uncovered branch (memory cap / any raster rejection): the gate must
+        # hard-fail regardless of how few points the downsample left.
+        canvas._dense_raster.max_item_bytes = 0
+        canvas._dense_raster.deactivate_channel("ch0")
+        assert canvas._dense_raster.entry_for("ch0") is None
         assert canvas._quality._idle_aa_density_ok() is False
 
-    def test_wall_state_clears_when_window_widens_back(self, qapp):
-        canvas, _t, _sig = self._wall_canvas(qapp)
-        ax, _line = canvas._channel_lines["ch0"]
-        ax.set_ylim(-0.05, 0.05)
+    def test_oscillating_fit_y_holds_aa_off_spec_1_3_reversal(self, qapp):
+        """Direct reversal of spec §1.3's failure catalogue: the "1ch
+        oscillating + Y fit" case is the one all THREE old defenses (wall
+        guard, subplot dense cap, dense_discrete raster) let straight
+        through to a measured 63-SECOND AA frame, because the point-count
+        metric alone reports the same ~3104 displayed points as the smooth
+        control the spec lists at 3.8 ms AA-on (934× blind spot). The
+        ink-sum AA gate (spec §4.2) must refuse it on ink alone.
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+        canvas, _t, _sig = self._oscillating_canvas(qapp)
+        ax, line = canvas._channel_lines["ch0"]
+        canvas.fit_y_to_visible_x()
         canvas._flush_pending_refresh()
-        assert canvas._y_overflow_wall_active is True
-        # Widen Y back to fit: the wall must clear so AA can re-arm later.
+        ink, high = canvas._line_ink_state.get("ch0")
+        assert high is True
+        assert ink > _INK_AA_OFF, (
+            "premise: the fit-Y oscillating line's recorded (pre-cap) ink "
+            "demand must clear the AA ceiling, not just the lower "
+            "downsample budget"
+        )
+
+        # Composed with spec §4.3: on the settled frame the raster backend
+        # has already admitted exactly this line, so the 63-second vector-AA
+        # stroke can never be painted — the curve sits outside the native-AA
+        # set entirely, and export stays WYSIWYG-raster instead of forcing AA.
+        assert canvas._dense_raster.entry_for("ch0") is not None
+        assert line.plot_data_item.curve not in (
+            canvas._quality._native_aa_curve_items()
+        )
+        assert canvas._quality._export_aa_affordable() is False
+
+        # If coverage is unavailable (memory cap / raster rejection), the
+        # catalogue case must fall back to the hard refusal — never to the
+        # old point-count allow.
+        canvas._dense_raster.max_item_bytes = 0
+        canvas._dense_raster.deactivate_channel("ch0")
+        assert canvas._dense_raster.entry_for("ch0") is None
+        assert canvas._quality._idle_aa_density_ok() is False
+        assert canvas._quality._export_aa_affordable() is False
+
+    def test_cache_hit_frame_preserves_high_ink_state(self, qapp):
+        """A no-op refresh (range-key cache HIT) must carry the recorded ink
+        state forward. Otherwise the idle-AA gate re-arms over a still-present
+        ink band on the very next flush
+        (pyqt-ui/2026-06-23-y-overflow-wall-guard-needs-y-in-range-key-and-cache-hit-state).
+        """
+        canvas, _t, _sig = self._ink_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        ax.set_ylim(-0.005, 0.005)
+        # Pin the UNCOVERED configuration: with the raster backend rejected by
+        # a zero memory cap, the only thing keeping AA off across no-op
+        # flushes is the preserved ink state itself.
+        canvas._dense_raster.max_item_bytes = 0
+        canvas._flush_pending_refresh()
+        assert canvas._frame_ink_high is True
+        assert canvas._dense_raster.entry_for("ch0") is None
+        recorded = canvas._line_ink_state.get("ch0")
+
+        # Second flush, nothing changed → every line takes the cache-hit path.
+        canvas._flush_pending_refresh()
+        assert canvas._frame_ink_high is True
+        assert canvas._line_ink_state.get("ch0") == recorded
+        assert canvas._quality._idle_aa_density_ok() is False
+
+    def test_ink_state_clears_when_window_widens_back(self, qapp):
+        canvas, _t, _sig = self._ink_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        ax.set_ylim(-0.005, 0.005)
+        canvas._flush_pending_refresh()
+        assert canvas._frame_ink_high is True
+        # Widen Y back to fit: ink drops under budget so AA can re-arm later.
         ax.set_ylim(-6.0, 6.0)
         canvas._flush_pending_refresh()
-        assert canvas._y_overflow_wall_active is False
-        assert canvas._line_wall_state.get("ch0") is False
+        assert canvas._frame_ink_high is False
+        assert canvas._line_ink_state.get("ch0")[1] is False
 
     def test_flat_line_in_narrow_window_does_not_trigger(self, qapp):
         from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
-        canvas.resize(1920, 600)
+        canvas.resize(1920, 900)
         canvas.show()
         QCoreApplication.processEvents()
-        # A genuinely flat (constant) dense line: data_span ≈ 0. Even in a
-        # narrow Y window it is one horizontal stroke, never a fill wall.
+        # A genuinely flat (constant) dense line: zero vertical ink. Even in a
+        # razor-thin Y window it is one horizontal stroke, never a fill band.
         t = np.linspace(0.0, 10.0, 1_000_000, dtype=np.float64)
         sig = np.full_like(t, 2.0)
         rows = [("ch0", True, t, sig, "#1769e0", "u", "fid-0")]
@@ -800,8 +1132,141 @@ class TestYOverflowWallGuard:
         ax, _line = canvas._channel_lines["ch0"]
         ax.set_ylim(1.999, 2.001)
         canvas._flush_pending_refresh()
-        assert canvas._y_overflow_wall_active is False
-        assert canvas._line_wall_state.get("ch0") in (False, None)
+        assert canvas._frame_ink_high is False
+        state = canvas._line_ink_state.get("ch0")
+        assert state is None or state == (0.0, False)
+
+
+class TestEnvelopeInk:
+    """Pure-function coverage for ``envelope_ink_dev_px`` (spec
+    ``docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`` §3):
+    the device-pixel vertical "ink" metric that replaced the retired
+    ``_is_y_overflow_wall`` wall guard as the AA/downsample trigger (see
+    ``TestInkBudget`` for the renderer-level behavior). No ``qapp`` needed —
+    these are plain numpy in, float out.
+    """
+
+    def test_flat_line_is_zero_ink(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        env_s = np.full(64, 3.0, dtype=np.float64)
+        assert envelope_ink_dev_px(
+            env_s, y_span=10.0, row_height_px=800, dpr=2.0,
+        ) == 0.0
+
+    def test_empty_and_single_element_are_zero_ink(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        assert envelope_ink_dev_px(
+            np.empty(0, dtype=np.float64), y_span=10.0, row_height_px=800,
+            dpr=1.0,
+        ) == 0.0
+        assert envelope_ink_dev_px(
+            np.array([1.0]), y_span=10.0, row_height_px=800, dpr=1.0,
+        ) == 0.0
+
+    def test_degenerate_y_span_is_defensive_zero(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        env_s = np.array([0.0, 5.0, 0.0, 5.0], dtype=np.float64)
+        # zero / negative / NaN / inf y_span all fall back to the sentinel.
+        assert envelope_ink_dev_px(
+            env_s, y_span=0.0, row_height_px=800, dpr=1.0) == 0.0
+        assert envelope_ink_dev_px(
+            env_s, y_span=-1.0, row_height_px=800, dpr=1.0) == 0.0
+        assert envelope_ink_dev_px(
+            env_s, y_span=float("nan"), row_height_px=800, dpr=1.0) == 0.0
+        assert envelope_ink_dev_px(
+            env_s, y_span=float("inf"), row_height_px=800, dpr=1.0) == 0.0
+
+    def test_nan_pairs_skipped_without_contaminating_neighbors(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        # Both adjacent pairs touch the NaN → both skipped → zero ink.
+        env_s = np.array([0.0, np.nan, 5.0], dtype=np.float64)
+        assert envelope_ink_dev_px(
+            env_s, y_span=100.0, row_height_px=800, dpr=1.0) == 0.0
+
+        # Only the (3, nan) and (nan, 5) pairs are skipped; (0, 3) and
+        # (5, 6) survive → ink counts only |3-0|=3 and |6-5|=1.
+        env_s2 = np.array([0.0, 3.0, np.nan, 5.0, 6.0], dtype=np.float64)
+        y_span = 100.0
+        row_height_px = 800.0
+        dpr = 1.0
+        expected = (3.0 + 1.0) / y_span * row_height_px * dpr
+        got = envelope_ink_dev_px(
+            env_s2, y_span=y_span, row_height_px=row_height_px, dpr=dpr,
+        )
+        assert got == pytest.approx(expected)
+
+    def test_single_overflowing_step_clips_to_full_row_height(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        y_span = 1.0
+        row_height_px = 800.0
+        dpr = 2.0
+        # |Δy| = 1000 >> y_span: clipped so the contribution is exactly one
+        # full-height stroke, never the part that would fall off-screen.
+        env_s = np.array([0.0, 1000.0], dtype=np.float64)
+        got = envelope_ink_dev_px(
+            env_s, y_span=y_span, row_height_px=row_height_px, dpr=dpr,
+        )
+        assert got == pytest.approx(row_height_px * dpr)
+
+    def test_linear_in_amplitude_within_clip(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        base = np.array([0.0, 1.0, 0.0, 1.0, 0.0], dtype=np.float64)
+        # y_span generous enough that neither amplitude clips.
+        y_span = 1000.0
+        ink1 = envelope_ink_dev_px(
+            base, y_span=y_span, row_height_px=800, dpr=1.0)
+        ink2 = envelope_ink_dev_px(
+            base * 2.0, y_span=y_span, row_height_px=800, dpr=1.0)
+        assert ink2 == pytest.approx(ink1 * 2.0)
+
+    def test_linear_in_dpr(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        env_s = np.array([0.0, 1.0, 0.0, 1.0, 0.0], dtype=np.float64)
+        ink_dpr1 = envelope_ink_dev_px(
+            env_s, y_span=1000.0, row_height_px=800, dpr=1.0)
+        ink_dpr2 = envelope_ink_dev_px(
+            env_s, y_span=1000.0, row_height_px=800, dpr=2.0)
+        assert ink_dpr2 == pytest.approx(ink_dpr1 * 2.0)
+
+    def test_linear_in_row_height(self):
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        env_s = np.array([0.0, 1.0, 0.0, 1.0, 0.0], dtype=np.float64)
+        ink_h1 = envelope_ink_dev_px(
+            env_s, y_span=1000.0, row_height_px=400, dpr=1.0)
+        ink_h2 = envelope_ink_dev_px(
+            env_s, y_span=1000.0, row_height_px=800, dpr=1.0)
+        assert ink_h2 == pytest.approx(ink_h1 * 2.0)
+
+    def test_anchor_regression_oscillating_signal_fit_y(self):
+        """Spec §3.2 real-hardware anchor: 1ch 满屏振荡 + Y fit → ink ≈
+        2042k dev px (measured on Cocoa, dpr=2.0; this test uses dpr=1.0 so
+        the raw logical-px anchor number applies directly). ±5% tolerance
+        for cross-machine numeric drift.
+        """
+        from mf4_analyzer.render_profile import envelope_ink_dev_px
+
+        t = np.arange(1_000_000, dtype=np.float64) / 20_000.0
+        sig = (
+            100.0 * np.sin(2 * np.pi * 2300.0 * t)
+            + 8.0 * np.sin(2 * np.pi * 0.7 * t)
+        )
+        env_t, env_s = ec.positions_envelope(
+            t, sig, xlim=(float(t[0]), float(t[-1])), pixel_width=1550,
+            is_monotonic=True,
+        )
+        del env_t
+        ink = envelope_ink_dev_px(
+            env_s, y_span=237.6, row_height_px=800, dpr=1.0,
+        )
+        assert ink == pytest.approx(2_042_000.0, rel=0.05)
 
 
 # -- A: re-show original must NOT recompute the envelope -----------------
@@ -7082,6 +7547,180 @@ class TestAutoIdleAA:
         assert canvas._quality._idle_aa_density_ok() is False
         assert canvas._quality.density_allowed is False
 
+    # -- ink-sum AA gate (spec §4.2), replacing the old hard
+    # `_frame_ink_high` block with a summed-ink hysteresis gate ANDed with
+    # the point-count gate above ---------------------------------------
+
+    def test_ink_aa_gate_constants_stay_in_calibrated_band(self):
+        """`_INK_AA_ON` / `_INK_AA_OFF` are real-hardware calibrations (spec
+        §5), not tuning knobs. Before changing either, update spec §5 AND
+        re-run scripts/probe_aa_ink_budget.py on real hardware — an
+        offscreen suite cannot measure paint cost. The band fences the
+        order of magnitude the smooth-vs-oscillating separation (spec §3.2:
+        72.7k allowed, 306k/4.1M blocked) depends on.
+        """
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF, _INK_AA_ON
+
+        assert 100_000 <= _INK_AA_ON <= 400_000
+        assert 200_000 <= _INK_AA_OFF <= 600_000
+        assert _INK_AA_OFF > _INK_AA_ON
+
+    def test_ink_gate_rejects_frame_over_off_budget(self, qapp):
+        """A frame whose summed native-AA-path ink exceeds `_INK_AA_OFF`
+        must hard-fail the idle-AA gate — the direct AND partner to the
+        point-count gate, not a replacement for it (the displayed point
+        count here is trivially under budget)."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+        canvas = self._plot(qapp)
+        canvas._line_ink_state.clear()
+        canvas._line_ink_state["fabricated"] = (float(_INK_AA_OFF) + 1.0, True)
+
+        assert canvas._quality._idle_aa_density_ok() is False
+
+    def test_ink_gate_cold_start_seeds_via_off_threshold(self, qapp):
+        """First-ever decision (`ink_seeded` False) seeds by comparing
+        against `_INK_AA_OFF`, the same seeding rule as the point-count
+        gate's `density_seeded` (mirrors
+        `test_single_subplot_curve_6000_passes_on_first_decision`)."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF, _INK_AA_ON
+
+        canvas = self._plot(qapp)
+        mid = (_INK_AA_ON + _INK_AA_OFF) // 2
+        canvas._line_ink_state.clear()
+        canvas._line_ink_state["fabricated"] = (float(mid), False)
+        canvas._quality.ink_seeded = False
+        canvas._quality.ink_allowed = False  # must not stick False cold
+
+        assert canvas._quality._idle_aa_density_ok() is True, (
+            "cold start must seed via the OFF threshold (mid <= OFF), not "
+            "inherit the prior ink_allowed value"
+        )
+        assert canvas._quality.ink_seeded is True
+
+    def test_ink_gate_hysteresis_holds_in_dead_band(self, qapp):
+        """Ink parked strictly between `_INK_AA_ON` and `_INK_AA_OFF` holds
+        whatever the previous decision was — same three-way shape as the
+        point-count gate (mirrors
+        `test_overlay_on_off_hysteresis_do_not_flap`)."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF, _INK_AA_ON
+
+        canvas = self._plot(qapp)
+        mid = (_INK_AA_ON + _INK_AA_OFF) // 2
+        canvas._line_ink_state.clear()
+        canvas._line_ink_state["fabricated"] = (float(mid), False)
+        canvas._quality.ink_seeded = True
+
+        canvas._quality.ink_allowed = True
+        assert canvas._quality._idle_aa_density_ok() is True
+        assert canvas._quality._idle_aa_density_ok() is True  # stable, no flap
+
+        canvas._quality.ink_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is False
+        assert canvas._quality._idle_aa_density_ok() is False  # stable, no flap
+
+    def test_ink_gate_reallows_below_on_threshold(self, qapp):
+        """Below `_INK_AA_ON` the gate re-allows regardless of the prior
+        decision — the recovery half of the hysteresis."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_ON
+
+        canvas = self._plot(qapp)
+        canvas._line_ink_state.clear()
+        canvas._line_ink_state["fabricated"] = (float(_INK_AA_ON) - 1.0, False)
+        canvas._quality.ink_seeded = True
+        canvas._quality.ink_allowed = False
+
+        assert canvas._quality._idle_aa_density_ok() is True
+
+    def test_ink_gate_excludes_raster_covered_line_from_sum(
+        self, qapp, monkeypatch,
+    ):
+        """A dense_discrete line whose raster entry has SETTLED (green,
+        `_raster_covered_curve_items`) must not count toward the summed
+        ink — its paint cost was already replaced by the raster upgrade, so
+        an arbitrarily large recorded demand on that line must not keep
+        blocking AA for the rest of the frame (spec §4.2). Reuses the
+        production dense_discrete + smooth mix already covered end-to-end by
+        `test_dense_discrete_idle_aa_is_blocked_below_display_budget` /
+        `test_quality_status_reports_dense_overlay_gate`-adjacent fixtures."""
+        from PyQt5.QtCore import QCoreApplication, Qt
+        from PyQt5.QtWidgets import QApplication
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+        n = 5_727
+        t_dense = np.arange(n, dtype=np.float64) / 100.0
+        dense_vals = (np.arange(n) % 256).astype(np.float64)
+        t_smooth = np.linspace(0.0, 57.26, 2_000)
+        smooth_vals = np.sin(t_smooth)
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(
+            [
+                ("EPS_CRC1", True, t_dense, dense_vals, "#16a34a", "", "mixed-ink"),
+                ("smooth", True, t_smooth, smooth_vals, "#2563eb", "", "mixed-ink"),
+            ],
+            mode="subplot",
+        )
+        QCoreApplication.processEvents()
+        canvas._flush_pending_refresh()
+        # Settle the dense raster so EPS_CRC1's curve enters the covered set.
+        canvas._dense_raster.flush_pending(canvas._interaction_generation)
+        assert canvas._dense_raster.entry_for("EPS_CRC1") is not None
+        assert any(
+            p.strategy == "dense_discrete"
+            for p in canvas._channel_render_profiles.values()
+        )
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+
+        smooth_state = canvas._line_ink_state.get("smooth")
+        assert smooth_state is not None
+        assert smooth_state[0] <= _INK_AA_OFF, (
+            "fixture premise: the uncovered smooth line must itself be "
+            "affordable so the covered line is what the test isolates"
+        )
+        # Fabricate a wildly high ink demand on the now raster-covered dense
+        # line: if the gate summed it in, this alone would block AA for the
+        # whole frame no matter how cheap the smooth line is.
+        canvas._line_ink_state["EPS_CRC1"] = (10.0 * float(_INK_AA_OFF), True)
+        canvas._quality.ink_seeded = False
+
+        assert canvas._quality._idle_aa_density_ok() is True
+
+    def test_export_aa_affordable_false_when_frame_ink_over_budget(self, qapp):
+        """`_export_aa_affordable` applies the same ink ceiling as the idle
+        gate (one-shot, no hysteresis) — fixes the copy/export freeze on a
+        high-ink geometry the point-count metric alone missed."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+        canvas = self._plot(qapp)
+        canvas._line_ink_state.clear()
+        canvas._line_ink_state["fabricated"] = (float(_INK_AA_OFF) + 1.0, True)
+
+        assert canvas._quality._export_aa_affordable() is False
+
+    def test_export_aa_affordable_true_for_smooth_low_ink_real_fixture(
+        self, qapp,
+    ):
+        """Regression guard: a real (not fabricated) smooth multi-channel
+        fixture — the spec's accepted-behavior control — must stay
+        affordable. Reads the ink the renderer actually recorded, it is not
+        overridden."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_ON
+
+        canvas = self._plot(qapp)
+        canvas._flush_pending_refresh()
+        total_ink = sum(
+            state[0] for state in canvas._line_ink_state.values()
+        )
+        assert total_ink <= _INK_AA_ON, (
+            "fixture premise: the smooth multi-channel control must be well "
+            "under the AA ceiling for this to be a meaningful regression "
+            f"guard (got {total_ink})"
+        )
+
+        assert canvas._quality._export_aa_affordable() is True
+
     def test_resize_event_rearms_idle_timer(self, qapp):
         """Fix C: a resize debounces a settle pass; once the settle timer
         fires it recomputes the envelope and re-arms the idle-AA timer so
@@ -7259,6 +7898,472 @@ class TestAutoIdleAA:
         canvas.set_xlim(0.2, 0.8)
         assert canvas._quality.aa_on is False
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
+
+
+class _FakeFrameClock:
+    """Deterministic ``perf_counter`` stand-in for the paint timer.
+
+    Every call advances by a FIXED step, so the hook's ``t1 - t0`` is exactly
+    ``step`` no matter how many frames Qt decides to paint — the measurement
+    under test never depends on real render speed (which offscreen Qt cannot
+    reproduce anyway).
+    """
+
+    def __init__(self, step_seconds: float):
+        self.step = float(step_seconds)
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        self.now += self.step
+        return self.now
+
+
+class TestAaBackstopLatch:
+    """Measured-frame backstop + view-signature latch (spec §4.4).
+
+    Everything upstream of this (ink downsample, AA ink gate, raster
+    admission) is a PREDICTION. This layer is the one that measures what
+    actually happened: if an AA frame really did cost seconds, the view
+    signature that produced it is blacklisted so the same configuration never
+    pays that frame twice, and any change to the view re-arms automatically.
+
+    The timing SOURCE is stubbed in every test here. An offscreen suite cannot
+    reproduce real paint cost (CLAUDE.md Gotchas), so the contract under test
+    is the LATCH LOGIC and its wiring, never a wall-clock threshold.
+    """
+
+    def _plot(self, qapp, *, mode="subplot"):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows(), mode=mode)
+        QCoreApplication.processEvents()
+        return canvas
+
+    def _curves(self, canvas):
+        import pyqtgraph as pg
+
+        return [
+            it for it in canvas._glw.scene().items()
+            if isinstance(it, pg.PlotCurveItem)
+        ]
+
+    def _hands_off(self, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+
+    def _settle(self, qapp):
+        """Drain the deferred (out-of-paint) half of a backstop trip."""
+        from PyQt5.QtCore import QCoreApplication
+
+        QCoreApplication.processEvents()
+        QCoreApplication.processEvents()
+
+    # -- constants ------------------------------------------------------
+
+    def test_backstop_constants_stay_in_calibrated_band(self):
+        """Both thresholds are real-hardware calibrations, not knobs (spec §5).
+
+        ``_BACKSTOP_FIRST_AA_MS`` must stay ABOVE the smooth control's measured
+        474 ms first AA frame (which includes cache construction and is
+        today's accepted behavior), and below the "this is an incident" line.
+        ``_BACKSTOP_STEADY_AA_MS`` must stay above the smooth control's 240 ms
+        steady AA frame — 240 ms is explicitly allowed by the spec — while
+        staying far below the seconds-scale frames the backstop exists for.
+        """
+        from mf4_analyzer.ui.pg_canvas.quality import (
+            _BACKSTOP_BLACKLIST_MAX,
+            _BACKSTOP_FIRST_AA_MS,
+            _BACKSTOP_STEADY_AA_MS,
+            _BACKSTOP_STEADY_EMA_ALPHA,
+        )
+
+        assert 474.0 < _BACKSTOP_FIRST_AA_MS <= 2_000.0
+        assert 240.0 < _BACKSTOP_STEADY_AA_MS <= 500.0
+        assert _BACKSTOP_STEADY_AA_MS < _BACKSTOP_FIRST_AA_MS
+        assert _BACKSTOP_BLACKLIST_MAX == 32
+        assert 0.0 < _BACKSTOP_STEADY_EMA_ALPHA <= 1.0
+
+    # -- paint-timer wiring ---------------------------------------------
+
+    def test_paint_timer_is_installed_as_a_class_swap_and_is_idempotent(
+        self, qapp,
+    ):
+        """Qt dispatches ``paintEvent`` from C++ and only reaches Python when
+        the method is overridden AT CLASS LEVEL (``_perf_probe`` docstring:
+        an instance attribute or a viewport subclass is never called). So the
+        timer has to be a ``__class__`` swap, and installing twice must not
+        stack a second wrapper.
+        """
+        from mf4_analyzer.ui.pg_canvas import quality as quality_mod
+        from mf4_analyzer.ui.pg_canvas.viewbox import (
+            _WheelDeltaGraphicsLayoutWidget,
+        )
+
+        canvas = self._plot(qapp)
+        glw = canvas._glw
+
+        assert type(glw) is not _WheelDeltaGraphicsLayoutWidget
+        assert isinstance(glw, _WheelDeltaGraphicsLayoutWidget)
+        assert "paintEvent" in vars(type(glw))
+
+        installed_class = type(glw)
+        assert quality_mod.install_frame_paint_timer(canvas) is False
+        assert type(glw) is installed_class
+
+    def _paint_one_frame(self, canvas):
+        """Make Qt actually dispatch a paint to the swapped class.
+
+        Measured under ``QT_QPA_PLATFORM=offscreen``: ``repaint()`` delivers
+        nothing at all and ``_glw.update()`` delivers only the FIRST time
+        (the view-level update does not re-dirty an already-clean viewport),
+        while dirtying the viewport delivers on every call. This is a harness
+        detail of the offscreen platform, not of the timer — the frames it
+        produces travel the same C++ virtual dispatch as production ones.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas._glw.viewport().update()
+        QCoreApplication.processEvents()
+
+    def test_real_paint_event_records_frame_time_on_the_canvas(
+        self, qapp, monkeypatch,
+    ):
+        """End-to-end: a Qt-dispatched frame writes the plain float attribute."""
+        from mf4_analyzer.ui.pg_canvas import quality as quality_mod
+
+        canvas = self._plot(qapp)
+        canvas._last_frame_paint_ms = 0.0
+        monkeypatch.setattr(
+            quality_mod, "perf_counter", _FakeFrameClock(0.007),
+        )
+
+        self._paint_one_frame(canvas)
+
+        assert canvas._last_frame_paint_ms == pytest.approx(7.0)
+
+    def test_real_paint_event_feeds_the_latch_only_while_armed(
+        self, qapp, monkeypatch,
+    ):
+        """The armed flag is the pairing token: frames painted while AA is OFF
+        are never offered to the latch at all, so an interleaved non-AA frame
+        can never be mistaken for "the first AA frame"."""
+        from mf4_analyzer.ui.pg_canvas import quality as quality_mod
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        # 1.5 s per frame — way over the first-frame ceiling.
+        monkeypatch.setattr(
+            quality_mod, "perf_counter", _FakeFrameClock(1.5),
+        )
+
+        # AA off => not armed => a catastrophic frame changes nothing.
+        assert canvas._aa_backstop_armed is False
+        self._paint_one_frame(canvas)
+        assert canvas._last_frame_paint_ms == pytest.approx(1500.0)
+        assert canvas._quality.aa_backstop_blacklist == {}
+        assert canvas._quality.aa_epoch_frames == 0
+
+        # Now arm it by really enabling idle AA, and paint one more frame.
+        canvas.try_enable_idle_quality()
+        assert canvas._quality.aa_on is True
+        assert canvas._aa_backstop_armed is True
+        self._paint_one_frame(canvas)
+        self._settle(qapp)
+
+        assert canvas._quality.aa_on is False
+        assert len(canvas._quality.aa_backstop_blacklist) == 1
+
+    # -- first-frame latch ----------------------------------------------
+
+    def test_first_aa_frame_over_budget_latches_and_blacklists_signature(
+        self, qapp, monkeypatch,
+    ):
+        """Spec §4.4 core: one bad frame per signature, then never again."""
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+        signature = quality.aa_backstop_signature
+        assert signature is not None
+
+        quality._note_aa_frame(3_500.0)
+
+        # Blacklisting is synchronous (pure Python, safe inside paintEvent);
+        # only the scene mutation is deferred out of the paint.
+        assert signature in quality.aa_backstop_blacklist
+        assert canvas._aa_backstop_armed is False
+        assert quality.backstop_timer.isActive() is True
+        self._settle(qapp)
+        assert quality.aa_on is False
+        assert not any(c.opts.get("antialias") for c in self._curves(canvas))
+
+        # Same view => AA is refused, no second bad frame.
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is False
+        assert canvas._quality._idle_quality_allowed() is False
+
+    def test_quality_status_stays_readable_after_a_latch(
+        self, qapp, monkeypatch,
+    ):
+        """After the latch the chart quality dot must still resolve.
+
+        AA is off and no raster covers these smooth curves, so the honest
+        reader-facing state is RED ("抗锯齿未激活"); YELLOW is also acceptable
+        because a queued idle/refresh pass legitimately reports "waiting".
+        What is NOT acceptable is an exception from the status walk.
+        """
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+
+        canvas.try_enable_idle_quality()
+        canvas._quality._note_aa_frame(9_000.0)
+        self._settle(qapp)
+
+        status = canvas.quality_status()
+        assert status["state"] in {"red", "yellow"}
+        assert isinstance(status["tooltip"], str) and status["tooltip"]
+
+    # -- re-arming -------------------------------------------------------
+
+    def test_changed_xlim_signature_rearms_the_gate(self, qapp, monkeypatch):
+        """A different view is a different prediction: the latch must not
+        leak into a window the bad frame was never measured on."""
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        quality._note_aa_frame(4_000.0)
+        self._settle(qapp)
+        latched = quality.aa_backstop_signature
+        assert quality.aa_on is False
+
+        canvas.set_xlim(0.15, 0.45)
+        assert quality._view_signature() != latched
+
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+
+    def test_changed_visible_channel_set_rearms_the_gate(
+        self, qapp, monkeypatch,
+    ):
+        """The signature carries the visible-channel fingerprint, so hiding a
+        curve (显示原始/显示滤波后) re-arms even at an unchanged xlim."""
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        quality._note_aa_frame(4_000.0)
+        self._settle(qapp)
+        latched = quality.aa_backstop_signature
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is False, "precondition: same signature stays latched"
+
+        _axis, line = canvas._channel_lines["speed"]
+        line.plot_data_item.setVisible(False)
+        assert quality._view_signature() != latched
+
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+
+    def test_rebuild_resets_epoch_state_but_keeps_the_blacklist(
+        self, qapp, monkeypatch,
+    ):
+        """A rebuild does not change the fact that THIS view geometry cannot
+        afford vector AA, so the blacklist survives it. The per-epoch counters
+        do not — they belong to the AA session that just ended.
+        """
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        quality._note_aa_frame(6_000.0)
+        self._settle(qapp)
+        assert len(quality.aa_backstop_blacklist) == 1
+
+        quality.reset_for_rebuild()
+
+        assert len(quality.aa_backstop_blacklist) == 1
+        assert quality.aa_epoch_frames == 0
+        assert quality.aa_frame_ema is None
+        assert quality.aa_backstop_signature is None
+        assert canvas._aa_backstop_armed is False
+
+    # -- steady-state EMA -------------------------------------------------
+
+    def test_steady_aa_frame_ema_over_budget_latches(self, qapp, monkeypatch):
+        """Post-first frames feed an EMA, and crossing the steady ceiling gets
+        the identical treatment: AA off + signature blacklisted.
+
+        The EMA coefficient is pinned here, not just the outcome: with
+        alpha = 0.5 the sequence 5 / 100 / 500 ms lands on
+        0.5*500 + 0.5*100 = 300 ms, over the 250 ms ceiling.
+        """
+        from mf4_analyzer.ui.pg_canvas.quality import _BACKSTOP_STEADY_AA_MS
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        signature = quality.aa_backstop_signature
+
+        quality._note_aa_frame(5.0)      # first frame, far under the ceiling
+        quality._note_aa_frame(100.0)    # seeds the EMA
+        assert quality.aa_frame_ema == pytest.approx(100.0)
+        assert quality.aa_backstop_blacklist == {}
+
+        quality._note_aa_frame(500.0)
+        assert quality.aa_frame_ema == pytest.approx(300.0)
+        assert quality.aa_frame_ema > _BACKSTOP_STEADY_AA_MS
+        assert signature in quality.aa_backstop_blacklist
+
+        self._settle(qapp)
+        assert quality.aa_on is False
+
+    def test_single_mild_outlier_does_not_latch(self, qapp, monkeypatch):
+        """Why an EMA and not a per-frame comparison: one mildly slow frame
+        (a hover repaint landing on a cold cache) must be absorbed, or the
+        latch would fire on noise. 5 / 100 / 300 ms averages to 200 ms.
+        """
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        quality._note_aa_frame(5.0)
+        quality._note_aa_frame(100.0)
+        quality._note_aa_frame(300.0)
+
+        assert quality.aa_frame_ema == pytest.approx(200.0)
+        assert quality.aa_backstop_blacklist == {}
+        assert quality.aa_on is True
+        assert canvas._aa_backstop_armed is True
+
+    # -- zero behavior change on healthy frames ---------------------------
+
+    def test_normal_frames_never_latch(self, qapp, monkeypatch):
+        """The healthy path must be untouched: 5 ms frames, forever."""
+        from mf4_analyzer.ui.pg_canvas.quality import _BACKSTOP_STEADY_AA_MS
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+        for _ in range(200):
+            quality._note_aa_frame(5.0)
+        assert quality.aa_frame_ema == pytest.approx(5.0)
+        self._settle(qapp)
+
+        assert quality.aa_backstop_blacklist == {}
+        assert quality.aa_on is True
+        assert canvas._aa_backstop_armed is True
+        # The settle above paints REAL (sub-millisecond, offscreen) frames,
+        # which are measured too — that is the point of a resident timer — so
+        # the EMA moves. What must hold is that it stays far under the ceiling.
+        assert quality.aa_frame_ema < _BACKSTOP_STEADY_AA_MS
+        assert all(c.opts.get("antialias") for c in self._curves(canvas))
+        assert canvas.quality_status()["state"] == "green"
+
+    # -- bounded blacklist -------------------------------------------------
+
+    def _latch_signature(self, quality, signature):
+        """Trip the latch once for a synthetic view signature.
+
+        Opens a real AA session (so the frame goes down the first-frame
+        branch, not the EMA one — these tests are about the container, not the
+        thresholds) and substitutes the signature the canvas computed, which
+        stands in for "the user moved to a different view".
+        """
+        quality._open_aa_backstop_epoch()
+        quality.aa_backstop_signature = signature
+        quality._note_aa_frame(5_000.0)
+        assert signature in quality.aa_backstop_blacklist
+
+    def test_blacklist_is_an_lru_capped_at_32(self, qapp, monkeypatch):
+        """Unbounded state on a UI object is a leak; 32 distinct view
+        signatures is far more than a user visits between rebuilds."""
+        from mf4_analyzer.ui.pg_canvas.quality import _BACKSTOP_BLACKLIST_MAX
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        for index in range(_BACKSTOP_BLACKLIST_MAX):
+            self._latch_signature(quality, ("sig", index))
+        assert len(quality.aa_backstop_blacklist) == _BACKSTOP_BLACKLIST_MAX
+        assert ("sig", 0) in quality.aa_backstop_blacklist
+
+        self._latch_signature(quality, ("sig", _BACKSTOP_BLACKLIST_MAX))
+
+        assert len(quality.aa_backstop_blacklist) == _BACKSTOP_BLACKLIST_MAX
+        assert ("sig", 0) not in quality.aa_backstop_blacklist, (
+            "the OLDEST signature must be the one evicted"
+        )
+        assert ("sig", 1) in quality.aa_backstop_blacklist
+        assert ("sig", _BACKSTOP_BLACKLIST_MAX) in quality.aa_backstop_blacklist
+
+    def test_blacklist_hit_refreshes_lru_recency(self, qapp, monkeypatch):
+        """A signature the user keeps returning to must not be evicted by 31
+        signatures they visited once."""
+        from mf4_analyzer.ui.pg_canvas.quality import _BACKSTOP_BLACKLIST_MAX
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        for index in range(_BACKSTOP_BLACKLIST_MAX):
+            self._latch_signature(quality, ("sig", index))
+
+        # Re-trip the oldest signature: it becomes the most recent.
+        self._latch_signature(quality, ("sig", 0))
+        self._latch_signature(quality, ("sig", 999))
+
+        assert ("sig", 0) in quality.aa_backstop_blacklist
+        assert ("sig", 1) not in quality.aa_backstop_blacklist
+
+    # -- generation discipline ---------------------------------------------
+
+    def test_stale_trip_from_a_previous_epoch_is_ignored(
+        self, qapp, monkeypatch,
+    ):
+        """The deferred half of a trip carries the AA epoch it was raised for
+        (dense_raster's generation-property pattern). If a rebuild or a fresh
+        AA session happened first, the queued disable must be a no-op instead
+        of tearing AA off the CURRENT epoch.
+        """
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        quality = canvas._quality
+
+        canvas.try_enable_idle_quality()
+        quality._note_aa_frame(7_000.0)
+        assert quality.backstop_timer.isActive() is True
+
+        # A new AA session starts before the queued disable is delivered.
+        canvas.disable_interactive_quality()
+        canvas.set_xlim(0.3, 0.7)
+        canvas.try_enable_idle_quality()
+        assert quality.aa_on is True
+        fresh_epoch = quality.aa_backstop_epoch
+
+        self._settle(qapp)
+
+        assert quality.aa_on is True, (
+            "a trip raised for an earlier AA epoch must not disable the new one"
+        )
+        assert quality.aa_backstop_epoch == fresh_epoch
 
 
 class TestOverlayYSnapToGrid:

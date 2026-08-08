@@ -25,14 +25,20 @@ EXPECTED_WRITE_THROUGH = {
         "_display_x_coverage",
         "_display_x_coverage_by_channel",
         "_last_refresh_signature",
+        "_frame_ink_high",
         "_refresh_pending",
-        "_y_overflow_wall_active",
     },
     "OverlayAxisManager": set(),
     "CursorController": set(),
     "TickDensityController": set(),
     "AnnotationManager": {"_last_rclick_scene_pos"},
-    "QualityManager": set(),
+    # _aa_backstop_armed is the ONE piece of quality state that deliberately
+    # lives on the canvas: the resident paint timer reads it from inside Qt's
+    # paintEvent on every frame, and it holds the canvas, not the manager.
+    # QualityManager owns the flag's lifecycle (arm on AA-on, drop on AA-off
+    # and on a trip) but the storage stays one bare attribute hop from the
+    # paint path.
+    "QualityManager": {"_aa_backstop_armed"},
     # _SliceStrip writes its whole state through on purpose, which is why the
     # set is long rather than empty. The slice cursor position, direction and
     # AA flag have to stay readable as canvas._slice_* -- tests and

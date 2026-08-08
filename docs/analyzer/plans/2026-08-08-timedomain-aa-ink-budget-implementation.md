@@ -1,0 +1,258 @@
+# 时域 AA 墨水量预算实施计划
+
+**设计**：`docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`
+（先读 spec，本文只写执行序，不复述依据）。
+
+**Goal:** 满屏振荡曲线在 Y 自适应后，拖动/缩放帧 ≤30 ms，空闲平滑升级
+走光栅缓存（≤500 ms 一次性），向量 AA 永不进入秒级帧；平滑曲线行为不变。
+
+**Architecture:** 数据流不变（channel_data → positions_envelope →
+PlotDataItem.setData / dense_raster）。新增一个纯函数 ink 指标 +
+canvas 持有的 per-line ink 状态，替换 wall 守卫触发条件、并联进 AA
+闸门、扩展 dense_raster 准入，最后加 paint 计时兜底。
+
+**Tech Stack:** Python 3.12，PyQt5，pyqtgraph，numpy，pytest-qt，
+仓库 venv `.venv/bin/python`；Qt 用例 `TMPDIR=/tmp
+QT_QPA_PLATFORM=offscreen PYTHONPATH=.`；**性能验收必须真机 Cocoa**
+（offscreen 只当排版草稿——CLAUDE.md Gotchas）。
+
+**基线纪律：** 动手前先跑
+`.venv/bin/python -m pytest tests/ui/test_pg_timedomain_canvas.py tests/ui/test_pg_canvas_backref_invariants.py -q`
+记录当前失败数（2026-08-08 主体基线 3 failed / 5124 passed，见
+CLAUDE.md），别把既有红算到本改动头上。
+
+---
+
+## File Structure
+
+- Modify `mf4_analyzer/render_profile.py` — 新增纯函数
+  `envelope_ink_dev_px()`（UI-neutral，禁 PyQt import）。
+- Modify `mf4_analyzer/ui/pg_canvas/renderer.py` — ink 计算与降桶；
+  删除 `_is_y_overflow_wall` / `_wall_capped_width` /
+  `_WALL_OVERFLOW_RATIO_K` / `_WALL_BUCKET_BUDGET`；新常量。
+- Modify `mf4_analyzer/ui/pg_canvas/canvas.py` — `_line_ink_state` /
+  `_frame_ink_high` 状态、`_raster_backend_eligible()` 谓词、
+  paint 计时与 AA 签名闩锁状态。
+- Modify `mf4_analyzer/ui/pg_canvas/quality.py` — AA 闸门 ink 判据 +
+  闩锁检查 + `_export_aa_affordable`。
+- Modify `mf4_analyzer/ui/pg_canvas/dense_raster.py` — 准入谓词接线、
+  内存帽 16→36 MiB / 64→96 MiB。
+- Add `scripts/probe_aa_ink_budget.py` — 四合一真机探针（Y 扫描 /
+  分桶扫描 / AA 帧 / 光栅 build）。
+- Modify `tests/ui/test_pg_timedomain_canvas.py`、
+  `tests/ui/test_pg_canvas_backref_invariants.py`、
+  `tests/ui/test_pg_dense_raster.py`（若无则建）。
+
+每个 Task 内先写红测再实现（TDD）；只跑对应子目录，收尾 Task 7 跑全量。
+
+---
+
+### Task 0: 收编真机探针脚本
+
+**Files:** Add `scripts/probe_aa_ink_budget.py`
+
+- [x] 把本次调查的四个 scratchpad 脚本合并为一个带子命令的探针：
+  `--sweep-y`（ratio 0.05→9.8 扫描）、`--sweep-buckets`、`--aa-frame`
+  （首帧/稳态 AA 计时）、`--raster-build`。合成信号、画布尺寸、输出
+  列格式照抄本次调查（spec §1/§3 的表要能直接复跑出来）。
+- [x] 跑一遍，输出与 spec 基线数字同量级（±30%，机器态漂移可接受），
+  结果存 `--json-out` 供 Task 7 对照。
+- [x] 脚本头注释写清「真机 Cocoa 跑，offscreen 数字无效」。
+
+### Task 1: ink 纯函数
+
+**Files:** Modify `mf4_analyzer/render_profile.py`；
+Test `tests/ui/test_pg_timedomain_canvas.py`（新 `TestEnvelopeInk`）
+
+- [x] 红测：
+  - 平线 → 0；单点/空数组 → 0；`y_span<=0`（含 NaN/inf）→ 0（哨兵，
+    与旧 `_is_y_overflow_wall` 的防御语义一致）；
+  - NaN 段跳过且不传染（`[0, nan, 5]` 只计有限相邻对）；
+  - 每步 `|Δy|` 被 clip 到 `y_span`（一根满高竖线贡献恰好
+    `row_height×dpr`，不多计屏外部分）；
+  - 线性：振幅×2（clip 内）→ ink×2；`dpr` ×2 → ink×2；
+  - 锚点回归：spec §3.2 的合成振荡 envelope → ink ≈ 2042k×dpr（±5%）。
+- [x] 实现 `envelope_ink_dev_px(env_s, y_span, row_height_px, dpr)`：
+  掩码 diff + clip + sum，无循环。`tests/test_signal_no_gui_import.py`
+  的投毒边界不涉及本模块，但保持 render_profile 无 PyQt import。
+- [x] `pytest tests/ui/test_pg_timedomain_canvas.py -q -k Ink` 绿。
+
+### Task 2: renderer 集成 —— ink 降桶取代 wall 守卫
+
+**Files:** Modify `renderer.py`、`canvas.py`；
+Test `test_pg_timedomain_canvas.py`、`test_pg_canvas_backref_invariants.py`
+
+- [x] 红测（改写 `TestWallGuard` → `TestInkBudget`，语义映射见 spec §7.3）：
+  - 窄 Y（旧 wall 场景，ratio 100）：仍降桶、仍标高 ink —— 行为不回退；
+  - **新增核心用例**：振荡数据 + `fit_y_to_visible_x()`（ratio≈1.0）→
+    显示点数 ≤ `2×capped_width+4`、`_frame_ink_high is True`；
+  - 平滑正弦 + Y 贴合 → 不降桶不标高（保留原
+    `test_fitting_window_full_resolution_no_cap` 主体，fixture 本就
+    平滑）；平线窄 Y → 永不触发（原语义保留）；
+  - 缓存命中帧保持上次 ink 状态（照抄现 wall 的 cache-hit 用例结构）；
+  - 变异测试固化：`INK_OFF_BUDGET` 调大 10× → 降桶用例红；
+    `_INK_MIN_BUCKETS` 改 1 → 轮廓下限用例红（写成两条守卫用例，
+    断言常量本身的数量级区间）。
+- [x] 实现：
+  - `_refresh_visible_data` 中 envelope 后调 `envelope_ink_dev_px`
+    （`row_height` 取该 axis viewbox sceneBoundingRect 高，`dpr` 取
+    `_glw.devicePixelRatioF()`）；超 `INK_OFF_BUDGET` 按 spec §4.1
+    公式二次 envelope（照抄现 wall 二次调用结构）；
+  - 状态改名并**删除**旧面：`_line_wall_state`→`_line_ink_state`
+    （存 `(ink_dev_px, high)`），`_y_overflow_wall_active`→
+    `_frame_ink_high`；删 `_is_y_overflow_wall` / `_wall_capped_width` /
+    两个 `_WALL_*` 常量及 renderer `_delegate_names` 对应项；
+    backref invariants 清单同步。
+  - subplot 密集帽 / overlay 帽调用序**一行不动**。
+- [x] `pytest tests/ui/test_pg_timedomain_canvas.py tests/ui/test_pg_canvas_backref_invariants.py -q` 与基线差 = 0 新红。
+
+### Task 3: AA 闸门与导出
+
+**Files:** Modify `quality.py`；Test `test_pg_timedomain_canvas.py`
+
+- [x] 红测：
+  - 高 ink 帧 `_idle_aa_density_ok() is False`（复用 Task 2 的
+    fit-Y 振荡 fixture；这是对 spec §1.3「三场景全 allow」的直接反转）；
+  - 双阈值滞回：ink 从高降到 ON/OFF 之间不翻转，低于 ON 才放行；
+  - `_export_aa_affordable` 高 ink → False（修导出冻结）；
+  - 平滑对照（真实 fixture，ink 远低于 `_INK_AA_ON`）→ 仍 allow（不许
+    回归今日行为；offscreen 测试环境 dpr=1、画布远小于真机，实测总量级
+    是千级而非 spec §5 引用的 145k dev，但相对阈值的「远低于」关系
+    不变，守卫的是这个关系，不是绝对数字）；
+  - 光栅覆盖的线不计入帧 ink 合计（覆盖后 AA 应可为其余低 ink 线开启）。
+- [x] 实现：`_idle_aa_density_ok` 在原 `_frame_ink_high` 硬拒块位置
+  换成 ink 判据（读 `_line_ink_state` 求和，排除 raster-covered 与
+  不可见线），与现点数双阈值 AND；`_export_aa_affordable` 同判据
+  （一次性判据，无滞回状态）。
+- [x] 子目录绿：`tests/ui/test_pg_timedomain_canvas.py` 403 passed / 1
+  deselected（该 commit 基线 394 passed / 1 deselected，净增 9 条新测试，
+  零新红）；`test_pg_canvas_backref_invariants.py` + `test_pg_dense_raster.py`
+  26 passed，未受影响。变异测试：`_INK_AA_OFF` ×100 → 3 条用例转红
+  （`test_high_ink_holds_aa_off` / `test_oscillating_fit_y_holds_aa_off_spec_1_3_reversal` /
+  `test_ink_aa_gate_constants_stay_in_calibrated_band`），已还原并复核
+  `git diff` 为空。
+
+### Task 4: 光栅准入扩展 + 内存帽
+
+**Files:** Modify `canvas.py`、`dense_raster.py`、`renderer.py`、
+`quality.py`；Test `tests/ui/test_pg_dense_raster.py`
+
+- [x] 红测（全部落在 `tests/ui/test_pg_dense_raster.py`，10 条）：
+  - `_raster_backend_eligible`: dense_discrete → True；general+高 ink
+    → True；general+低 ink → False；进入/退出滞回（边界来回不抖，
+    5 轮往返只产生 5 次状态翻转）；`clear()` 复位准入集；
+  - 高 ink general 线 settle 后拿到 `DenseRasterEntry`、native pen 被
+    抑制、质量点进入 dense-raster 绿态；ink 回落（Y 放宽）→ entry
+    移除、pen 恢复（复用现 dense 用例结构）；
+  - interactive 跳过路径对 ink 准入线同样生效（transform-only，
+    held pan 零 setData——benchmark 的 `held_pan_setdata_count`
+    契约不许破）；
+  - 内存帽：1920×900@offscreen dpr1（raster_dpr 2）整行实测
+    **24.18 MiB 必须被接受**；monkeypatch `max_item_bytes` 回 16 MiB
+    → 拒收且回退原生非 AA（红点、`block_reason=high-raster-cost`），
+    不碰向量 AA。全局 96 MiB 的 QImage+QPixmap 2× 峰值核算沿用既有
+    `test_overlay_and_memory_limit_fall_back_to_native_non_aa`，
+    守卫用例另加 `global >= 2 × item` 的不变式。
+  - 变异测试（已做，已还原）：帽改回 16 MiB → 6 红（含整行接受用例
+    与常量守卫）；谓词 ink 支路强制 False → 8 红（含端到端 entry 用例）。
+- [x] 实现：谓词放 canvas（读 `_channel_render_profiles` +
+  `_line_ink_state`），spec §4.3 列出的五个消费者全部改走谓词
+  （外加同文件的 `dense_raster.sync_visibility`，否则 refresh_all 末尾
+  的可见性同步会把刚抑制的 pen 又还回去）；
+  `DEFAULT_MAX_ITEM_BYTES = 36 MiB`、`DEFAULT_MAX_GLOBAL_BYTES = 96 MiB`
+  （常量注释写平铺论证）。
+- [x] `pytest tests/ui/test_pg_dense_raster.py tests/ui/test_pg_timedomain_canvas.py -q`
+  绿：427 passed / 1 deselected（基线 417 + 新增 10），`tests/ui` 全目录
+  3391 passed / 1 deselected，零新红。
+
+### Task 5: 实测兜底（paint 计时 + 签名闩锁）
+
+**Files:** Modify `canvas.py`、`quality.py`；
+Test `test_pg_timedomain_canvas.py`
+
+- [x] 红测（计时源打桩，不依赖真实帧耗时）：新增 `TestAaBackstopLatch`
+  15 条，全部先红后绿。计时源有两种桩：`_FakeFrameClock`（固定步长的
+  `perf_counter` 替身，monkeypatch 到 `quality` 模块，喂真 paintEvent）
+  与直接调 `_note_aa_frame(ms)`。
+  - 首 AA 帧超 `_BACKSTOP_FIRST_AA_MS` → AA 立即关、当前签名入黑名单、
+    同签名 `try_enable_idle_quality` 不再开 AA；
+  - 签名变化（改 xlim / 隐藏一条曲线改通道集）→ 重新武装（两条）；
+  - 黑名单 LRU 上限 32，第 33 条挤掉最旧；命中刷新 recency（两条）；
+  - 稳态 EMA 超 `_BACKSTOP_STEADY_AA_MS` → 同处置（α=0.5 被数值钉死：
+    5/100/500 → 300 ms 触发；5/100/300 → 200 ms 不触发）；
+  - 正常帧（桩值 5 ms × 200）→ 永不闩锁、质量点仍绿（零行为变化）；
+  - 闩锁后 `quality_status()` 不抛且状态 ∈ {red, yellow}；
+  - 世代纪律：为旧 epoch 排队的 trip 不得掐掉新 epoch 的 AA；
+  - `__class__` swap 装在类层面且幂等；真 paintEvent 写 canvas 上的
+    `_last_frame_paint_ms`；未武装时的坏帧完全不进闩锁。
+- [x] 实现：常驻轻量版 `__class__` swap paint 计时
+  （`quality.install_frame_paint_timer`，按 base 类 memoize 生成子类，
+  实例幂等标记 `_tracelab_frame_timer_installed`；常态每帧 = 两次
+  `perf_counter` + 一次 float 存储 + 一次布尔读）；trip 的场景变更半程
+  经零延时 QTimer 推迟出 paint，并带 AA epoch 的 Qt 动态属性做世代校验
+  （dense_raster 的 generation-property 纪律；该 timer 从不被替换，
+  故不需要额外的 sender-identity 校验）。签名 = quantized xlim key
+  （`_quantize_range_key`）+ 逐行 y_key（`_quantize_y_span_key`）+
+  可见通道集指纹 + pixel_width + overlay 标志；闩锁检查挂在
+  `_idle_quality_allowed`。`reset_for_rebuild` 复位 epoch 计数但**保留
+  黑名单**（重建不改变「该视图构形画不起 AA」这一事实，且签名本身已
+  携带会让该事实过期的全部输入；LRU 兜底让不再匹配的条目自然老化）。
+- [x] 子目录绿：`test_pg_timedomain_canvas.py` + `test_pg_dense_raster.py`
+  + `test_pg_canvas_backref_invariants.py` = 454 passed / 1 deselected
+  （基线 439 + 新增 15，零新红）；`tests/ui` 全目录 3415 passed /
+  1 deselected。变异测试（均已还原）：`_BACKSTOP_FIRST_AA_MS` → 10000
+  得 10 红（含 `test_first_aa_frame_over_budget_latches_and_blacklists_signature`）；
+  `_BACKSTOP_STEADY_AA_MS` → 25000 得 2 红（含
+  `test_steady_aa_frame_ema_over_budget_latches`）。
+
+### Task 6: 真机验收（Cocoa）
+
+**Files:** 无产品代码改动；跑 Task 0 探针
+
+- [x] `sweep-y`：全带拖动 p50 **5.2–9.6 ms**（治理前峰值 106 ms @ratio
+  1.0；p95 最大 28.7 ms）——通过（≤30）；高 ink 带显示点数收敛到 ~700。
+- [x] `aa-frame`：1ch 振荡+fit_y 升级帧 **8.6 ms**（治理前 124.6 s；光栅
+  覆盖、向量 AA 未触发）；6ch 最坏帧 34.7 ms（治理前 7.2 s，闸门 block）；
+  平滑对照 AA 照常开启（238.8 ms 首帧，238~475 ms 基线带内）。
+- [x] 缩放 settle p50 **33.6 ms**（治理前 127 ms）。超 30 ms 目标 12%：
+  测量口径是每刻度强制 settle + 被覆盖线光栅重建；产品滚轮 settle 每
+  手势只落一次。判定可接受，记录在 spec 实施注记，目标数字未改。
+- [x] `benchmark_timedomain_interaction.py --assert-standards` 通过
+  （rc=0，门禁未放宽，`held_pan_setdata_count == 0` 契约在）。
+- [x] 常量无需微调：§5 起始值全部通过验收，spec 仅补实测注记。
+
+### Task 7: 收尾
+
+- [x] 全量（2026-08-08，本分支收尾态）：主体 `--ignore=tests/acquisition_ui`
+  **5245 passed / 9 skipped / 0 failed**；`tests/acquisition_ui` 独立段
+  **355 passed / 0 failed**。均优于 CLAUDE.md 记录的基线（那几条既有红
+  已在 main 后续提交中结清），零新红。
+- [x] `pytest -m slow tests/perf`：
+  `test_timedomain_pan_refresh_pg_canvas` 在**未改动的 main 基线
+  （6b41eee7）上同位置（裸 QWidget 热身 show()，任何画布代码之前）
+  逐字节复现 `Fatal Python error: Aborted`——本机离屏环境既有问题，
+  非本分支引入，不追账；其余 slow 用例 1 passed。
+- [x] spec 头部实测注记已补（含缩放 33.6 ms 超目标 12% 的如实记录与
+  口径说明、Task3+4 组合语义修订、6ch 密集堆叠不进光栅准入带的说明）。
+- [x] `/update-hints` 检查：本分支无 UI 交互增删——改动全部在
+  pg_canvas 渲染内核与 quality 内部状态，质量点的绿/黄/红语义与
+  tooltip 文案未变（Task 4 明确保持），`ui/hints.py` / `ui/quickref.py`
+  无需同步。
+- [ ] Windows RC 打包等价环境复标定 §5 常量（`--hdf` 真数据 +
+  probe 脚本），未复标定前本分支不进 release 包。**（唯一未结项，
+  需 Windows 真机）**
+
+---
+
+## 风险与回退
+
+- **ink 二次 envelope 的额外成本**：只在超预算帧发生，且桶数已被降到
+  ~几百，numpy 毫秒级；探针 `--sweep-buckets` 直接覆盖。
+- **光栅↔向量抖动**：准入滞回 + AA 滞回同边界（spec §5），Task 4 有
+  专用往返用例。
+- **`__class__` swap 与画布重建**：幂等标记 + 世代检查；若 Task 5 在
+  真机出现不可解释的崩溃/泄漏，兜底层可独立摘除（谓词、闸门、降桶
+  不依赖它），其余四层已把已知形态全部覆盖。
+- **回退单位**：每个 Task 一个独立 commit，任意层可单独 revert；
+  Task 2 删除旧 wall 面是唯一破坏性步骤，其 commit message 需列出
+  被删符号清单。

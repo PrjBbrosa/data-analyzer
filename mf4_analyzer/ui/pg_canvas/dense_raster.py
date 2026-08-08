@@ -18,10 +18,33 @@ from PyQt5.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QTransform
 from PyQt5.QtWidgets import QApplication, QGraphicsPixmapItem
 
 
-# The retained logical-2x pixmap for a 1200x700 chart is about 13 MiB.
 # Per-item and aggregate caps keep large/stacked surfaces on native non-AA.
-DEFAULT_MAX_ITEM_BYTES = 16 * 1024 * 1024
-DEFAULT_MAX_GLOBAL_BYTES = 64 * 1024 * 1024
+#
+# RE-BASELINED 2026-08-08 for the widened, ink-driven admission
+# (docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md §4.3 / §5).
+# The old 16 MiB item cap was sized for the CRC-counter case (a 1200x700 chart
+# retains ~13 MiB at logical 2x) and rejected the single geometry the raster
+# upgrade now exists for: one 1920x900 row is 3840x1800 x 4 B ~ 26.4 MiB.
+#
+# The sizing argument is TILING, not per-item generosity. Subplot rows tile the
+# viewport, so however many rows there are, the sum of their images is about
+# ONE viewport of device pixels: 1920x1080 @dpr2 -> 3840x2160 x 4 B ~ 31.6 MiB.
+# Splitting that viewport into more rows makes each image smaller, never the
+# total larger. So:
+#
+#   * DEFAULT_MAX_ITEM_BYTES must clear the WORST SINGLE ROW, which is the
+#     un-split, full-height case (~26.4 MiB above). 36 MiB clears it with room
+#     for a taller window without letting one item approach the tiled total.
+#   * DEFAULT_MAX_GLOBAL_BYTES must hold a fully tiled viewport (~31.6 MiB)
+#     PLUS the build-time peak of the row being rebuilt, where the QImage and
+#     the QPixmap converted from it conservatively coexist (2x the item, so up
+#     to ~53 MiB for a max-size item). 96 MiB covers ~85 MiB of worst case and
+#     stays a real ceiling rather than a formality.
+#
+# These are spec-backed, not knobs: change spec §5 first. The bands are fenced
+# by tests/ui/test_pg_dense_raster.py::test_dense_raster_memory_caps_stay_in_the_spec_band.
+DEFAULT_MAX_ITEM_BYTES = 36 * 1024 * 1024
+DEFAULT_MAX_GLOBAL_BYTES = 96 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -238,10 +261,12 @@ class DenseDiscreteRasterLayer(QObject):
     def _dense_visible_keys(self):
         if bool(getattr(self.canvas, "_overlay_mode", False)):
             return []
-        profiles = self.canvas._channel_render_profiles
         keys = []
         for ck, _name, (_axis, line) in self.canvas._channel_lines.composite_items():
-            if getattr(profiles.get(ck), "strategy", None) != "dense_discrete":
+            # Admission is the canvas' shared predicate (spec §4.3): dense
+            # discrete BY STRATEGY, or any line the ink budget put out of reach
+            # of vector AA.
+            if not self.canvas._raster_backend_eligible(ck):
                 continue
             pdi = getattr(line, "plot_data_item", None)
             try:
@@ -400,7 +425,6 @@ class DenseDiscreteRasterLayer(QObject):
         self._remove_entry(composite or key)
 
     def sync_visibility(self, *, schedule_missing=True):
-        profiles = self.canvas._channel_render_profiles
         for ck, _name, (_axis, line) in self.canvas._channel_lines.composite_items():
             pdi = getattr(line, "plot_data_item", None)
             curve = getattr(pdi, "curve", None)
@@ -409,7 +433,7 @@ class DenseDiscreteRasterLayer(QObject):
             except Exception:
                 visible = False
             entry = self.entries.get(ck)
-            dense = getattr(profiles.get(ck), "strategy", None) == "dense_discrete"
+            dense = self.canvas._raster_backend_eligible(ck)
             if entry is not None:
                 entry.item.setVisible(visible)
             if curve is not None:
@@ -437,7 +461,10 @@ class DenseDiscreteRasterLayer(QObject):
         rebuilt = False
         for ck, _name, (axis, line) in self.canvas._channel_lines.composite_items():
             profile = profiles.get(ck)
-            if getattr(profile, "strategy", None) != "dense_discrete":
+            # Shared admission predicate (spec §4.3). A missing profile keeps
+            # the pre-existing defensive skip: source_revision below reads off
+            # it, and an unclassified line has nothing to key a signature on.
+            if profile is None or not self.canvas._raster_backend_eligible(ck):
                 self.incompatible_keys.discard(ck)
                 self._remove_entry(ck)
                 continue
@@ -473,7 +500,7 @@ class DenseDiscreteRasterLayer(QObject):
         for ck in list(self.entries):
             if ck not in active:
                 pair = self.canvas._channel_lines.get(ck)
-                if pair is None or getattr(profiles.get(ck), "strategy", None) != "dense_discrete":
+                if pair is None or not self.canvas._raster_backend_eligible(ck):
                     self._remove_entry(ck)
         self.sync_visibility(schedule_missing=False)
         return rebuilt

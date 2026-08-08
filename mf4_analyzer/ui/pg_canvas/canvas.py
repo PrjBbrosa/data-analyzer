@@ -113,12 +113,17 @@ from mf4_analyzer.ui.pg_canvas import renderer as _renderer
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
 from mf4_analyzer.ui_kit.axis_metrics import pin_left_axes_to_common_width
 from mf4_analyzer.ui.axis_group_palette import axis_group_color
-from mf4_analyzer.ui.pg_canvas.quality import QualityManager
+from mf4_analyzer.ui.pg_canvas.quality import (
+    QualityManager,
+    install_frame_paint_timer,
+)
 from mf4_analyzer.ui.pg_canvas.dense_raster import DenseDiscreteRasterLayer
 from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
     Renderer,
     _HIDPI_COPY_SCALE,
     _HIDPI_MAX_WIDTH,
+    _INK_AA_OFF,
+    _INK_AA_ON,
     _capped_hidpi_scale,
 )
 from mf4_analyzer.ui.pg_canvas._shared import (  # noqa: F401
@@ -474,14 +479,20 @@ class TimeDomainCanvasPG(QWidget):
         # other's refresh (pyqt-ui/2026-06-11-cache-key-stability-id-reuse-and-
         # param-roundtrip). Bare-name reads still resolve for legacy/test code.
         self._last_range_key = _ChannelKeyDict()
-        # Per-channel Y-overflow wall state (renderer._refresh_visible_data):
-        # remembers whether THIS line was last flushed in the 满高竖线墙 regime so
-        # a range-key cache-HIT (no-op refresh) can keep the frame wall flag set
-        # — AA must stay off until the user widens Y, not until the next real
-        # recompute. Cleared alongside _last_range_key on rebuild/invalidate.
-        # Composite (fid, name) keyed for the same cross-file non-collision
-        # reason as _last_range_key.
-        self._line_wall_state = _ChannelKeyDict()
+        # Per-channel ink state (renderer._refresh_visible_data): the
+        # ``(ink_dev_px, high)`` pair recorded for THIS line at its last
+        # un-skipped flush, so a range-key cache-HIT (no-op refresh) can keep
+        # the frame ink flag set — AA must stay off until the geometry actually
+        # changes, not until the next real recompute. Cleared alongside
+        # _last_range_key on rebuild/invalidate. Composite (fid, name) keyed for
+        # the same cross-file non-collision reason as _last_range_key.
+        self._line_ink_state = _ChannelKeyDict()
+        # Composite keys currently admitted to the dense-raster backend BY INK
+        # (see _raster_backend_eligible). dense_discrete lines are admitted by
+        # strategy and never enter this set. Hysteresis state, so it has to
+        # survive between frames and be dropped with the rest of the per-line
+        # caches on rebuild/full reset.
+        self._ink_raster_admitted = set()
         self._last_refresh_signature = None
         self._monotonic_fingerprint_cache: dict = {}
 
@@ -522,13 +533,26 @@ class TimeDomainCanvasPG(QWidget):
         # dense-stack bucket cap engages at >= 2). Recomputed each
         # plot_channels; 0 in overlay/single/low-density layouts.
         self._subplot_dense_count = 0
-        # Y-overflow wall guard (renderer._refresh_visible_data). Set True for
-        # the current frame when ANY line's window data amplitude span overflows
-        # its Y view window by more than _WALL_OVERFLOW_RATIO_K (the dense
-        # narrow-Y "满高竖线墙" regime). While active the idle-AA gate keeps
-        # antialiasing OFF so the expensive AA compositing never re-arms over a
-        # raster-fill wall. Reset to False on every refresh that finds no wall.
-        self._y_overflow_wall_active = False
+        # Ink budget (renderer._refresh_visible_data). Set True for the current
+        # frame when ANY line's envelope is over _INK_OFF_BUDGET device pixels
+        # of vertical ink. While active the idle-AA gate keeps antialiasing OFF
+        # so the expensive AA compositing never re-arms over an ink band. Reset
+        # to False on every refresh that finds every line under budget.
+        self._frame_ink_high = False
+        # --- measured-frame backstop (spec §4.4) ------------------------
+        # Written by the resident paint timer installed on _glw below
+        # (quality.install_frame_paint_timer). Deliberately PLAIN attributes,
+        # not properties or a collaborator hop: they are touched from inside
+        # Qt's paintEvent on every frame, so the write has to be a bare
+        # __dict__ store. _last_frame_paint_ms is the most recent measured
+        # frame in milliseconds (diagnostics + tests read it);
+        # _aa_backstop_armed is the pairing token the paint timer tests before
+        # doing anything beyond that store — it is True ONLY between the
+        # moment idle AA is switched on and the moment it goes back off, so
+        # non-AA frames cost one boolean read and are never offered to the
+        # latch. QualityManager owns the flag's lifecycle.
+        self._last_frame_paint_ms = 0.0
+        self._aa_backstop_armed = False
         # The X-master axis handle in overlay mode. Its ViewBox owns the
         # shared X range, the default mouse-pan, and the scene geometry
         # anchor; NO curves are attached to it (every channel — including
@@ -571,6 +595,12 @@ class TimeDomainCanvasPG(QWidget):
         self._dense_raster = DenseDiscreteRasterLayer(self)
         self._quality = QualityManager(self)
         self._renderer = Renderer(self)
+        # Resident paint timer (spec §4.4). Installed after _quality exists
+        # because a timed frame calls straight into it. _glw is built once in
+        # this constructor and is never replaced (clear() only empties it), so
+        # one install covers the canvas' whole life; the call is idempotent
+        # regardless.
+        install_frame_paint_timer(self)
 
     # ------------------------------------------------------------------
     # Public surface (signal/method names frozen by W0 contract tests).
@@ -2304,6 +2334,71 @@ class TimeDomainCanvasPG(QWidget):
         self._dense_raster.invalidate_all("color-changed", schedule=True)
         return result
 
+    def _raster_backend_eligible(self, ck) -> bool:
+        """Whether ``ck`` should render through the dense-raster backend.
+
+        ONE predicate, five consumers (spec §4.3): ``_dense_visible_keys`` /
+        ``refresh_all`` in dense_raster, the renderer's interactive skip path
+        and its ``update_channel`` / ``deactivate_channel`` branch, and
+        ``_raster_covered_curve_items`` / ``_high_raster_cost_status`` in
+        quality. Keeping it in one place is what lets the green/yellow/red
+        state machine, the pen suppression and the rebuild-timer semantics stay
+        untouched while the admission itself widens.
+
+        Two legs:
+
+        * ``strategy == "dense_discrete"`` — the original CRC/counter
+          admission, unchanged and independent of ink.
+        * INK — a ``general`` line whose measured vertical ink puts it out of
+          reach of vector AA. The raster path is the only remaining way to
+          give it a smooth presentation at a bounded cost (spec §4.3: same
+          geometry, 43 ms raster build vs 124 s vector AA).
+
+        The ink leg carries HYSTERESIS over the shared AA band: a line is
+        admitted above ``_INK_AA_OFF`` and released only below ``_INK_AA_ON``.
+        Inside the band the previous decision stands, so a line sitting on the
+        boundary cannot flap between backends frame to frame. The ink read is
+        the PRE-cap demand recorded by ``_refresh_visible_data`` — the same
+        number the AA gate refuses on, which is what keeps the two decisions on
+        one boundary. A line with no recorded ink yet (never flushed, or its
+        cache was dropped) keeps whatever it had; ``clear()`` / ``full_reset()``
+        are what actually reset the set.
+        """
+        if getattr(self._channel_render_profiles.get(ck), "strategy", None) == (
+            "dense_discrete"
+        ):
+            return True
+        # OVERLAY short-circuit — INK LEG ONLY. The raster backend refuses to
+        # run in overlay at all (`_dense_visible_keys` returns nothing and
+        # `refresh_all` drops every entry there), so admitting a line on ink
+        # would assert "needs the raster backend" about a mode that has no
+        # raster backend — and _high_raster_cost_status would then report a
+        # high-raster-cost block for a path that does not exist. Overlay's
+        # high-ink frames are refused by the ink AA gate on their own merits
+        # and report through the ink branch of quality_status() instead.
+        # The dense-discrete leg above is deliberately NOT short-circuited:
+        # its overlay behavior predates the ink work and stays byte-identical.
+        # The admitted set is left untouched (not discarded) so a
+        # subplot→overlay→subplot round trip keeps its hysteresis memory.
+        if bool(getattr(self, "_overlay_mode", False)):
+            return False
+        admitted = ck in self._ink_raster_admitted
+        state = self._line_ink_state.get(ck)
+        try:
+            ink = float(state[0]) if state is not None else None
+        except (TypeError, ValueError, IndexError):
+            ink = None
+        if ink is not None and isfinite(ink):
+            if ink > _INK_AA_OFF:
+                admitted = True
+            elif ink < _INK_AA_ON:
+                admitted = False
+        if admitted:
+            self._ink_raster_admitted.add(ck)
+        else:
+            self._ink_raster_admitted.discard(ck)
+        return admitted
+
     def _on_pg_axis_scale_changed(self):
         """Synchronously replace an incompatible linear dense raster path."""
         if not self._dense_raster.has_dense_candidates():
@@ -2621,8 +2716,9 @@ class TimeDomainCanvasPG(QWidget):
         self._subplot_row_constraints = {}
         self._curve_path_cache.clear()
         self._last_range_key.clear()
-        self._line_wall_state.clear()
-        self._y_overflow_wall_active = False
+        self._line_ink_state.clear()
+        self._ink_raster_admitted.clear()
+        self._frame_ink_high = False
         self._last_refresh_signature = None
         self._overlay_mode = False
         # T6 — drop overlay selection + subplot label scaffolding so the
@@ -2672,8 +2768,9 @@ class TimeDomainCanvasPG(QWidget):
         self._cursor.reset_all_state()
         self._curve_path_cache.clear()
         self._last_range_key.clear()
-        self._line_wall_state.clear()
-        self._y_overflow_wall_active = False
+        self._line_ink_state.clear()
+        self._ink_raster_admitted.clear()
+        self._frame_ink_high = False
         self._last_refresh_signature = None
         self._monotonic_fingerprint_cache.clear()
         self.draw_idle()
@@ -3107,17 +3204,20 @@ class TimeDomainCanvasPG(QWidget):
             if data_id is not None:
                 ck = _view_state_channel_key(data_id, channel)
                 self._last_range_key.pop(ck, None)
-                self._line_wall_state.pop(ck, None)
+                self._line_ink_state.pop(ck, None)
+                self._ink_raster_admitted.discard(ck)
             else:
                 self._last_range_key.pop(channel, None)
-                self._line_wall_state.pop(channel, None)
+                self._line_ink_state.pop(channel, None)
+                self._ink_raster_admitted.discard(channel)
         elif data_id is not None:
             for ck, _name, ch_data_id in list(
                 self._channel_data_id.composite_items()
             ):
                 if ch_data_id == data_id:
                     self._last_range_key.pop(ck, None)
-                    self._line_wall_state.pop(ck, None)
+                    self._line_ink_state.pop(ck, None)
+                    self._ink_raster_admitted.discard(ck)
 
     def invalidate_monotonicity_cache(self, custom_xaxis_fid=None, custom_xaxis_ch=None):
         """Drop per-channel monotonicity flags. Mirrors the matplotlib

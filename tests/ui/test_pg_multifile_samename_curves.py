@@ -5,7 +5,7 @@ Root bug (S1 fix, lesson
 
 The pyqtgraph time-domain canvas keyed its per-channel storage dicts
 (``channel_data`` / ``_channel_lines`` / ``_channel_data_id`` /
-``_channel_is_monotonic`` / ``_last_range_key`` / ``_line_wall_state``) on the
+``_channel_is_monotonic`` / ``_last_range_key`` / ``_line_ink_state``) on the
 channel's *display* name ``[short_name] ch``. ``FileData`` head-truncated the
 filename to build ``short_name`` (``stem[:18]``), so two files whose names are
 identical for the first >=18 characters but differ AFTER produced the SAME

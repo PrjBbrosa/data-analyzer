@@ -5,6 +5,7 @@ from mf4_analyzer.render_profile import (  # noqa: F401
     RenderProfile,
     bucket_width_for,
     classify_render_profile,
+    envelope_ink_dev_px,
     source_revision_for,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "RenderProfile",
     "bucket_width_for",
     "classify_render_profile",
+    "envelope_ink_dev_px",
     "source_revision_for",
 ]
