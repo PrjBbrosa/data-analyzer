@@ -9,6 +9,10 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
   source of truth. Dated specs, plans, reviews, and files under
   `docs/analyzer/verify/` are historical evidence, not proof that the current
   tree is complete or green.
+- `AGENTS.md` and `CLAUDE.md` are peer instructions for different agents but
+  describe shared product and architecture contracts. Compare both when a
+  shared guard changes; keep their semantics aligned without copying
+  tool-specific commands or editing `CLAUDE.md` unless the user asks.
 - Make the smallest change in the module that owns the behavior. Do not put new
   implementation into a compatibility facade merely because the old import
   path is convenient.
@@ -16,21 +20,42 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
   generated evidence or local runtime artifacts to Git unless the task calls
   for a durable artifact.
 
+## Version And Documentation Contracts
+
+- `mf4_analyzer/app_meta.py:APP_VERSION` is the version source of truth; do not
+  introduce another product-version constant. A release bump must synchronize
+  README/current-baseline text, the main help deck and four analysis guides,
+  the analyzer user guide, Windows build/launcher scripts, and the existing
+  help, packaging, and project-session version tests. Do not rewrite dated
+  specs, plans, or acquisition records to make their historical version look
+  current.
+- Put new analyzer specs, plans, reviews, user guides, UI prototypes, and
+  verification notes under the routed `docs/analyzer/` tree.
+  `docs/superpowers/` is a historical workflow archive, not the destination for
+  new work.
+- When user-visible interactions are added, removed, or renamed, update both
+  `ui/hints.py` and `ui/quickref.py`; do not rely on a Claude-only command name
+  to enforce this product requirement.
+
 ## Architecture Contracts
 
 ### Dependency Direction And Compatibility
 
-- Keep neutral layers import-safe: `signal/`, `io/`, `batch_types.py`,
-  `batch_compute.py`, `batch_output.py`, `batch_render_models.py`, and
-  `qt_analysis_shared.py` must not pull in `mf4_analyzer.ui`, `MainWindow`, or
+- Keep neutral layers import-safe: `signal/`, `io/`, `render_profile.py`,
+  `batch_types.py`, `batch_compute.py`, `batch_output.py`,
+  `batch_render_models.py`, and `qt_analysis_shared.py` must not pull in
+  `mf4_analyzer.ui`, `MainWindow`, or
   the Qt renderer at module import time. Optional renderer imports stay lazy.
 - `batch.py` owns batch orchestration and backward-compatible runner exports;
   DSP belongs in `batch_compute.py`, byte/output work in `batch_output.py`, and
   render DTOs in `batch_render_models.py`. Do not reintroduce copied compute or
   renderer logic into the runner.
-- `batch_render.py` and `ui/pg_canvases.py` are compatibility facades. Keep them
-  thin, preserve supported imports and monkeypatch seams, and put new behavior
-  in `batch_render_qt/` or `ui/pg_canvas/` respectively.
+- `batch_render.py`, `ui/canvases.py`, and `ui/pg_canvases.py` are compatibility
+  facades. Keep them thin, preserve supported imports and monkeypatch seams,
+  and put new behavior in `batch_render_qt/` or `ui/pg_canvas/` respectively.
+- `render_profile.py` owns UI-neutral render policy and ink calculations;
+  `ui/pg_canvas/render_profile.py` is a re-export shim, not an implementation
+  home.
 - Treat `batch_render_qt/contract.py` as the runner-to-renderer seam. An optional
   backend may degrade only for a recognized optional-renderer import failure;
   unrelated `ImportError`, UI bugs, and programming errors must propagate.
@@ -38,6 +63,9 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
   `qt_analysis_shared.py`. Before consolidating similar code, prove semantic
   equivalence; retain and document intentional differences instead of forcing
   false deduplication.
+- The runtime chart stack is pyqtgraph-based. Do not reintroduce PyQt5 or
+  `matplotlib.pyplot` into `signal/`, or add matplotlib back as a runtime
+  rendering dependency.
 
 ### UI Package Ownership
 
@@ -51,8 +79,14 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
   neutral Batch contracts and runner instead of placing compute, output, or
   renderer algorithms back into widgets.
 - `ui/main_window/` coordinates product-level state through its mixins and
-  collaborators. Prefer adding a typed coordinator/manager to expanding
-  `window.py` or creating another cross-mixin state cluster.
+  explicit collaborators such as `analysis_context.py`,
+  `fft_time_coordinator.py`, and `_state_holders.py`. Prefer extending an owning
+  holder/coordinator to expanding `window.py` or creating another cross-mixin
+  state cluster.
+- `ui/pg_canvas/canvas.py` is the host; renderer, quality, cursor, overlay,
+  annotation, tick, raster, and slice collaborators cross the host boundary
+  through `_CanvasBackref`. Keep each collaborator's `_owned_names` and
+  `_delegate_names` declarations accurate instead of adding undeclared writes.
 
 ### Identity And State Ownership
 
@@ -75,6 +109,20 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
   point-count or full-height-wall heuristic without new measurements and
   contract tests.
 
+### Product Data Contracts
+
+- Never invent a sampling rate, time axis, engineering unit, or channel match.
+  Use format metadata or an explicitly documented and user-visible estimate.
+- One physical file may expand into multiple `LoadedSource` objects with
+  different and even disjoint channel sets. Planning and selection must retain
+  logical-source identity; Batch callers must seed probed source channels via
+  `BatchRunner.seed_source_channels()` rather than assuming every split source
+  contains the requested signal.
+- View limits are manager-specific: the time-domain workspace uses 12 and
+  analysis sections use `ui/view_state.py:MAX_VIEWS` (currently 6). Use the
+  manager's limit instead of hard-coding one global cap, and preserve active-tab
+  visibility, full-name tooltips, reorder, overflow, and context-menu behavior.
+
 ## Robustness Rules
 
 - Preserve the error taxonomy: user/data failures become explicit item status
@@ -87,6 +135,9 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
 - Preserve the cross-platform diagnostics path and global Python/thread/Qt
   exception hooks. A fallback must remain observable through logs, returned
   warnings, run results, or user-visible status.
+- Batch progress emission and result recording are single-owner behavior in the
+  private `_RunReporter`. New grouped or sequential branches must route through
+  it and must not add a second hand-written emit/record path.
 - Treat Qt ownership as a correctness contract: create and paint Qt objects on
   the GUI thread, give test widgets explicit ownership, drain deferred deletes
   when a test creates parentless dialogs, and stop timers/signals before their
@@ -118,10 +169,14 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
 
 - Run focused tests for the changed owner first. Then run the relevant boundary
   gates, including as applicable:
+  `tests/ui/test_pg_canvas_backref_invariants.py`,
+  `tests/ui/test_import_boundaries.py`,
+  `tests/test_signal_no_gui_import.py`,
   `tests/test_batch_render_import_boundary.py`,
   `tests/test_native_import_boundaries.py`,
   `tests/test_packaging_imports.py`, and
-  `tests/ui/test_main_window_state_ownership.py`.
+  `tests/ui/test_main_window_state_ownership.py`. Batch orchestration changes
+  also run `tests/test_batch_run_reporter.py`.
 - Renderer parity proves two paths do not diverge; it does not prove a shared
   implementation is absolutely correct. Pair parity with owner-level unit tests
   and, for visual/output changes, deterministic real-render or artifact diffs.
@@ -129,6 +184,11 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
   `TMPDIR=/tmp MPLCONFIGDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest ...`.
   An abnormal exit, crash, timeout, or interrupted full suite is `UNVERIFIED`,
   never a pass inferred from the tests that completed first.
+- The current full-suite gate is two fresh processes because combining
+  `tests/acquisition_ui` with the main suite can trigger an order-sensitive Qt
+  teardown segfault. Record the pre-change baseline, then run the main suite
+  with `--ignore=tests/acquisition_ui` and run `tests/acquisition_ui` separately;
+  do not hard-code historical pass counts into this file.
 - Keep evidence classes separate: offscreen Qt, real macOS Cocoa, foreground
   TraceLab, source-level Windows packaging checks, and fresh Windows Full/Lite
   frozen executables are distinct gates. Do not substitute one for another.
@@ -139,6 +199,12 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
 - For releases, synchronize version/package/help surfaces, run focused release
   checks plus `git diff --check`, and report any unrun macOS foreground or
   Windows frozen acceptance explicitly.
+- `envelope_ink_dev_px` in the neutral `render_profile.py` is the canonical
+  time-domain cost metric. Raw source density may drive fidelity-preserving
+  decimation but must not return as a render-cost gate; unmeasured curves are
+  measured, never treated as zero ink. Changing ink thresholds requires the
+  governing spec, focused `TestInkBudget` coverage, a real Cocoa probe, and the
+  interaction benchmark rather than an offscreen timing claim.
 
 <!-- BEGIN CODEX LESSONS SYSTEM -->
 
