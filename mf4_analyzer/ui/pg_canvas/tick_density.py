@@ -26,6 +26,7 @@ class TickDensityController(_CanvasBackref):
         "_apply_tick_density_to_all_axes",
         "_apply_target_x_ticks_to_all_axes",
         "_x_tick_axis_handles",
+        "_use_adaptive_x_ticks_during_range_change",
         "_apply_target_x_ticks",
         "_reset_x_ticks_to_adaptive",
         "_compute_target_x_ticks",
@@ -87,6 +88,20 @@ class TickDensityController(_CanvasBackref):
         if self._overlay_mode and self._x_master_handle is not None:
             handles.insert(0, self._x_master_handle)
         return handles
+
+    def _use_adaptive_x_ticks_during_range_change(self):
+        """Release stale explicit X ticks once per interaction burst."""
+        seen = set()
+        for handle in self._x_tick_axis_handles():
+            axis = handle.x_axis_item() if hasattr(handle, "x_axis_item") else None
+            if axis is None:
+                continue
+            key = id(axis)
+            if key in seen:
+                continue
+            seen.add(key)
+            if getattr(axis, "_tickLevels", None) is not None:
+                self._reset_x_ticks_to_adaptive(axis)
 
     def _apply_target_x_ticks(self, axis, handle):
         try:

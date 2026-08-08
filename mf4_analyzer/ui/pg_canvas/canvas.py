@@ -1979,6 +1979,14 @@ class TimeDomainCanvasPG(QWidget):
                 "bottom": BorderAlignedAxisItem(orientation="bottom"),
             },
         )
+        # Keep the bottom-axis text reserve stable while interaction-time
+        # adaptive ticks replace the settled explicit target ticks. The
+        # default auto-reduction collapses this reserve to zero when a frame
+        # has no drawable labels, moving the ViewBox border until reticking.
+        # autoExpandTextSpace remains enabled so genuinely taller text can
+        # still grow the axis; hidden upper subplot axes are separately pinned
+        # to 1 px by _unify_subplot_bottom_axis_heights().
+        pi.getAxis("bottom").setStyle(autoReduceTextSpace=False)
         _hide_native_auto_button(pi)
         _localize_pg_context_menu(getattr(vb, "menu", None))
         _localize_pg_context_menu(getattr(pi, "ctrlMenu", None))
@@ -3287,6 +3295,7 @@ class TimeDomainCanvasPG(QWidget):
         receive its own range back as a redundant write.
         """
         self.disable_interactive_quality()
+        self._tick_density_controller._use_adaptive_x_ticks_during_range_change()
         # Drag ticks keep only the cheap visual work synchronous: quality drop
         # plus sibling-x propagation so subplot rows move together. Tick
         # recompute and range signals are flushed from _refresh_visible_data.

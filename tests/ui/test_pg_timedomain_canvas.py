@@ -2660,6 +2660,20 @@ def _major_tick_labels(axis):
     return list(levels[0])
 
 
+def _drawn_tick_labels(axis):
+    """Return the tick strings pyqtgraph would paint for ``axis`` now."""
+    from PyQt5.QtGui import QPainter, QPicture
+
+    picture = QPicture()
+    painter = QPainter(picture)
+    try:
+        specs = axis.generateDrawSpecs(painter)
+    finally:
+        painter.end()
+    assert specs is not None, "expected a realized AxisItem draw specification"
+    return [str(text) for _rect, _flags, text in specs[2]]
+
+
 def _label_rects_for_axis(axis, values_and_labels, lo, hi):
     from PyQt5.QtGui import QFontMetrics
     from mf4_analyzer.ui.pg_canvases import _pg_chart_font
@@ -2772,6 +2786,148 @@ def test_target_x_ticks_refresh_after_xlim_change(qapp):
     assert min(after) >= 20.0 - 1e-9
     assert max(after) <= 40.0 + 1e-9
     assert 18 <= len(after) <= 21
+
+    canvas.deleteLater()
+
+
+@pytest.mark.parametrize(
+    ("mode", "channel_count"),
+    [
+        pytest.param("subplot", 1, id="subplot-1"),
+        pytest.param("subplot", 3, id="subplot-3"),
+        pytest.param("overlay", 3, id="overlay-3"),
+    ],
+)
+def test_x_ticks_and_bottom_geometry_stay_stable_before_zoom_settles(
+    qapp, mode, channel_count,
+):
+    """The held-interaction frame keeps labels and bottom geometry stable.
+
+    This deliberately inspects the frame before ``_flush_pending_refresh``:
+    the settled frame was already covered, while the old explicit ticks could
+    all fall outside the new range during the quiet window and temporarily
+    collapse the bottom AxisItem.
+    """
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(1000, 600)
+    canvas.show()
+    QCoreApplication.processEvents()
+
+    t = np.linspace(0.0, 100.0, 5000)
+    rows = [
+        (f"ch{i}", True, t, np.sin(t + i), "#1769e0", "", "f")
+        for i in range(channel_count)
+    ]
+    canvas.plot_channels(rows, mode=mode)
+    canvas.set_tick_density(20, 6)
+    QCoreApplication.processEvents()
+
+    if mode == "overlay":
+        visible_handle = canvas._x_master_handle
+    else:
+        visible_handle = canvas.axes_list[-1]
+    axis = visible_handle.x_axis_item()
+    initial_explicit = _major_tick_labels(axis)
+    assert _drawn_tick_labels(axis)
+    QCoreApplication.processEvents()
+    initial_axis_height = float(axis.height())
+    initial_viewbox_bottom = float(
+        visible_handle.view_box.sceneBoundingRect().bottom()
+    )
+
+    initial_values = sorted(float(value) for value, _label in initial_explicit)
+    assert len(initial_values) >= 2
+    gap_lo, gap_hi = initial_values[0], initial_values[1]
+    gap = gap_hi - gap_lo
+    zoom_lo = gap_lo + 0.2 * gap
+    zoom_hi = gap_lo + 0.8 * gap
+    assert not any(zoom_lo <= value <= zoom_hi for value in initial_values)
+
+    canvas._begin_view_interaction()
+    visible_handle.set_xlim(zoom_lo, zoom_hi)
+    # Exercise the actual paint path before the held gesture is released.
+    canvas.grab()
+    interaction_labels = _drawn_tick_labels(axis)
+    QCoreApplication.processEvents()
+    interaction_axis_height = float(axis.height())
+    interaction_viewbox_bottom = float(
+        visible_handle.view_box.sceneBoundingRect().bottom()
+    )
+
+    assert interaction_labels, "zooming must not leave the X axis label-free"
+    assert interaction_axis_height == pytest.approx(initial_axis_height, abs=0.5)
+    assert interaction_viewbox_bottom == pytest.approx(
+        initial_viewbox_bottom, abs=0.5,
+    )
+    if mode == "subplot" and channel_count > 1:
+        hidden_heights = [
+            float(handle.x_axis_item().height())
+            for handle in canvas.axes_list[:-1]
+        ]
+        assert all(height <= 4.0 for height in hidden_heights)
+
+    canvas._end_view_interaction()
+    canvas._flush_pending_refresh()
+    QCoreApplication.processEvents()
+    settled_explicit = _major_tick_labels(axis)
+    settled_labels = _drawn_tick_labels(axis)
+    QCoreApplication.processEvents()
+
+    assert settled_explicit
+    assert settled_labels
+    assert all(
+        zoom_lo - 1e-9 <= float(value) <= zoom_hi + 1e-9
+        for value, _label in settled_explicit
+    )
+    assert float(axis.height()) == pytest.approx(initial_axis_height, abs=0.5)
+    assert float(visible_handle.view_box.sceneBoundingRect().bottom()) == pytest.approx(
+        initial_viewbox_bottom, abs=0.5,
+    )
+
+    canvas.deleteLater()
+
+
+def test_range_change_burst_resets_explicit_x_ticks_only_once(qapp, monkeypatch):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(1000, 500)
+    canvas.show()
+    QCoreApplication.processEvents()
+
+    t = np.linspace(0.0, 100.0, 5000)
+    rows = [("speed", True, t, np.sin(t), "#1769e0", "", "f")]
+    canvas.plot_channels(rows, mode="subplot")
+    canvas.set_tick_density(20, 6)
+    QCoreApplication.processEvents()
+
+    controller = canvas._tick_density_controller
+    calls = []
+    original = type(controller)._reset_x_ticks_to_adaptive
+
+    def _spy(self, axis):
+        calls.append(axis)
+        return original(self, axis)
+
+    monkeypatch.setattr(type(controller), "_reset_x_ticks_to_adaptive", _spy)
+
+    handle = canvas.axes_list[0]
+    canvas._begin_view_interaction()
+    handle.set_xlim(20.1, 20.4)
+    handle.set_xlim(20.2, 20.5)
+    handle.set_xlim(20.3, 20.6)
+
+    assert len(calls) == 1
+    assert getattr(handle.x_axis_item(), "_tickLevels", None) is None
+
+    canvas._end_view_interaction()
+    canvas._flush_pending_refresh()
+    QCoreApplication.processEvents()
+    assert getattr(handle.x_axis_item(), "_tickLevels", None) is not None
 
     canvas.deleteLater()
 
