@@ -2,7 +2,7 @@
 
 **Project:** TraceLab / MF4 Data Analyzer — PyQt5 桌面 GUI，做工程测量数据的导入、
 时域/频域/阶次分析、批处理，以及 CAN/XCP 采集回放。版本单一事实源是
-`mf4_analyzer/app_meta.py` 的 `APP_VERSION`（当前 v7.9.4），别在别处硬编码版本号。
+`mf4_analyzer/app_meta.py` 的 `APP_VERSION`（当前 v7.9.5），别在别处硬编码版本号。
 升版本要同步的扇出面：`README.md` · `docs/analyzer/README.md` 的 Current Product
 Baseline · `mf4_analyzer/help/` 下使用说明（`meta.version`/`versionLabel`/`updated`
 + changelog 新增条目）与四个分析指南 · `docs/analyzer/user-guide/user-guide.html` ·
@@ -19,52 +19,20 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
 ```
 - 本机验证走仓库 venv（`.venv/bin/python`）；裸 `python` / `pytest` 未必存在。
 - Qt 用例需要 offscreen 平台；`TMPDIR=/tmp` 用来绕开下面 Gotchas 里的 TCC 问题。
-- 默认套件约 4600 条、**跑满近 20 分钟**，别当成快速检查；改动局部时先跑对应子目录，
-  收尾再跑全量。
-- **先取基线**（2026-08-06 实测于 `482a21c4`，批处理内核拆分合入后：主体
-  3 failed / 5124 passed，`tests/acquisition_ui` 单独 1 failed / 354 passed；早先记录的
-  `test_split_*` 批量红已不复现，54/54 全绿）。这是**当时那个 commit 的历史读数**——
-  `fix/render-parity-contract` 之后 `test_batch_qt_render_parity.py` 已转绿并新增 5 条守卫，
-  主体计数相应变化，下面的清单才是当前状态。动手前先记下当前失败数，别把既有失败
-  算到自己的改动头上：
-  - **全量跑法**：裸 `pytest -q` 会在 `tests/acquisition_ui` 段被 pyqtgraph
-    `LabelItem.resizeEvent` 的 `RuntimeError`（已删 `QGraphicsTextItem`）打成 **segfault**，
-    约 4% 处中断、无汇总。交错相关——单独跑该目录不崩（354 passed）。要拿全量数字：
-    `--ignore=tests/acquisition_ui` 跑主体，另起一条单独跑该目录。
-  - **已知既有红 3 条**（均先于 2026-08-06 的重构波，别追也别算新账）：
-    1. `tests/ui/test_batch_runner_thread.py::test_sheet_preview_and_result_share_channel_metadata_reference`
-    2. `tests/ui/test_hint_nudges.py::test_view_compact_tabs_ranks_between_coaxis_and_custom_action`
-    3. `tests/acquisition_ui/test_review_handoff.py::test_analyzer_load_file_delegates_to_load_one`
-       —— `e385ce5a` 上即红。
-  - **环境性、非代码问题 1 条**：`tests/test_gen_help_screenshots.py` 依赖未入库的本机
-    `testdoc/` 样本目录，新克隆必红（本机有样本，实测通过）。
-  - **已结清 2 条**：
-    - `test_batch_renderer.py::test_facade_exports_only_supported_qt_renderer_contract`
-      （`b16705e8` 给 facade `__all__` 加的导出未同步契约用例）已由 `0b347d2c` 修复——
-      删掉那两个零消费者的再导出，契约用例未改一字。
-    - `tests/test_batch_qt_render_parity.py` 14/14 红，已由
-      `fix/render-parity-contract` 修复。**根因是校验工具的断言漂移，不是字体环境**
-      （更早记的「缺 Microsoft YaHei」是错误定性）。三处都改在
-      `tools/verify_batch_qt_render_parity.py`，产品代码一行没动：
-      - `axis_font_9pt` 把两侧字号并成一个列表要求都等于 9.0。但 `58128904` 有意把
-        `_theme.py` 的 `axis_font_pt` 提到 12.0（1920×1080 报告页上 9pt 只剩几像素墨迹），
-        GUI 侧仍是 `chart_font()` 默认的 9.0——两侧各自合规。改名
-        `axis_font_matches_spec` 并**分侧校验**：batch 比该 case 实际生效的
-        `theme.axis_font_pt`（`font_scale` 已由 `scaled_fonts` 折进去），
-        参照侧比 `chart_font().pointSizeF()`。两个数都从产品读，不再另立常量。
-      - `axis_ranges_match` 直接比带 padding 的 y 视图范围。auto-range 的 y 是数据范围
-        乘 `ViewBox.suggestPadding`，而 padding 是**视口高度的函数**——报告页的堆叠子图比
-        单文件画布矮，padding 比例天然更大（恒定 ≈1.0827）。改为比**真正必须一致的东西**：
-        逐 view 的数据范围（取自曲线数组；`childrenBounds` 带笔宽光晕，会随视口漂移最多 2%）、
-        视图中心、数据不被裁掉、以及框幅不超出 pyqtgraph 自身的 padding 余量。
-        x 轴与手动 y 轴仍是严格比较，容差没放宽。
-      - `no_text_overlap` 走 `adjacent_text_overlaps()`，比的是 QGraphicsItem 包围盒；
-        旋转轴标签的盒子含 QTextDocument 边距+字体 leading（8 子图页上 60.5px 盒子里只有
-        50px 字形墨迹），所以密排子图会报出**渲染里并不存在**的重叠。已按「验真机渲染」
-        实测：相邻标签实际留 6–7px 空隙。包围盒仍作廉价初筛（盒子不相交则墨迹必不相交），
-        触发后再测各自在页面上真正留下的墨迹，只有真碰上才算数。
-      每类断言都做过变异测试（改产品常量 → 对应断言变红 → 已还原），并已把证据固化成
-      `tests/test_batch_qt_render_parity.py` 里的守卫用例。
+- 默认套件约 5600 条，主体约 6 分钟 + `tests/acquisition_ui` 约 10 秒（2026-08-08 本机实测；
+  早先记的「近 20 分钟」已不成立）。仍建议改动局部时先跑对应子目录，收尾再跑全量。
+- **全量要分两条命令跑**：裸 `pytest -q` 会在 `tests/acquisition_ui` 段被 pyqtgraph
+  `LabelItem.resizeEvent` 的 `RuntimeError`（已删 `QGraphicsTextItem`）打成 **segfault**，
+  约 4% 处中断、无汇总。交错相关——单独跑该目录不崩。要拿全量数字：
+  `--ignore=tests/acquisition_ui` 跑主体，另起一条单独跑该目录。
+- **动手前先记下当前失败数**，别把既有失败算到自己的改动头上。
+  当前基线（2026-08-08 实测于 `3fd691a8` / v7.9.5）：主体 **5258 passed / 9 skipped /
+  0 failed**，`tests/acquisition_ui` 单独 **355 passed**——**两边全绿**。
+  唯一环境性风险是 `tests/test_gen_help_screenshots.py`：它依赖未入库的本机 `testdoc/`
+  样本目录，本机有样本所以通过，新克隆会红，那不是代码问题。
+  本文先前记录的三条「历史既有红」已全部转绿并从本文删除（别从旧版抄回；其中
+  `test_hint_nudges` 那条连用例名都改了）。渲染 parity 那次的定性过程留在
+  `tools/verify_batch_qt_render_parity.py` 的注释与该文件的 13 条守卫用例里。
 
 ## Architecture
 `mf4_analyzer/` 主包：
@@ -73,12 +41,28 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
   `head_hdf` / `wwt_format` / `zfd_format` / `mat_format`）
 - `signal/` 纯数值算法（`fft` / `order` / `order_cot` / `filters` / `envelope` /
   `spectrogram` / `weighting` / `adaptive` / `channel_math`）——**禁止 import PyQt5 或
-  matplotlib.pyplot**，`tests/test_signal_no_gui_import.py` 用子进程投毒法强制这条边界
-- `ui/` 主界面：`main_window/`（mixin 组装）· `pg_canvas/`（pyqtgraph 画布）·
-  `chart_stack/` · `drawers/` · `inspector_sections/` · `markup/` · `widgets/` ·
-  `view_state.py`（View 管理）· `hints.py` + `quickref.py`（两个发现性面）
+  matplotlib.pyplot**
+- `render_profile.py` UI 中立的显示策略画像 + `envelope_ink_dev_px` 等纯函数
+  （`ui/pg_canvas/render_profile.py` 只是再导出 shim，别往里加实现）
+- `ui/` 主界面：
+  - `main_window/` 8-mixin 组装（`window.py:98` 的 MRO）+ 显式协作对象：
+    `analysis_context.py`（跨 mixin 的分析服务面）· `fft_time_coordinator.py` ·
+    `_state_holders.py`（原本散写的状态改由具名 dataclass 持有，窗口侧留 property shim）
+  - `pg_canvas/` pyqtgraph 画布：`canvas.py` 宿主 + `renderer` / `quality` / `cursor` /
+    `overlay_axes` / `annotations` / `tick_density` / `dense_raster` / `slice_panel` 等
+    协作者，全部经 `_backref._CanvasBackref` 代理回宿主，各自用
+    `_owned_names` / `_delegate_names` 声明状态归属
+  - `chart_stack/` · `drawers/` · `inspector_sections/` · `markup/` · `widgets/` ·
+    `view_state.py`（View 管理）· `hints.py` + `quickref.py`（两个发现性面）
+  - `canvases.py` / `pg_canvases.py` 是**兼容 shim**（打包 hidden import、测试
+    monkeypatch 缝），别往里加实现
 - `ui_kit/` 通用控件与样式：`style.qss` · `fonts.py`（中文字体）· `popup_shell.py` · `icons.py`
-- `batch*.py` + `batch_render_qt/` 批处理：GUI-free runner + Qt 渲染导出
+- 批处理：`batch.py` 已收成编排层（`BatchRunner` + 私有 `_RunReporter`），DTO / DSP /
+  IO / 校验 / 清单 / 输出各自成模块（`batch_types` · `batch_compute` · `batch_output` ·
+  `batch_validation` · `batch_manifest` · `batch_recipe` · `batch_preprocess` ·
+  `batch_grouping` · `batch_series_spool` · `batch_statistics` …）；`batch_render_qt/`
+  是 GUI-free 的 Qt 渲染导出，经 `batch_render.py` 门面进入，可选依赖缺失由
+  `renderer_import_policy.py` 判定
 - `acquisition/`（清单/预检）· `acquisition_capture/`（XCP/Vector 运行时）·
   `acquisition_ui/`（Cockpit 界面）
 - `help/` 应用内 HTML 帮助页
@@ -88,7 +72,63 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
 Windows 打包脚本、渲染对比）· `configs/` · `assets/`。
 
 **渲染栈**：图表全量走 pyqtgraph（时域、FFT、阶次、时频、批处理导出）。matplotlib 已从
-运行时移除，代码里残留的 `matplotlib` 字样只是历史注释和配色兼容函数，不是活依赖。
+运行时移除（`requirements.txt` 里也没有），代码里残留的 `matplotlib` 字样只是历史注释和
+配色兼容函数，不是活依赖。
+
+## 机械护栏（这些是 2026-08 架构加固的产出，改动必须维持）
+下面每条都由常驻测试机械看守。**红了就修代码，不是放宽护栏**；确实要改护栏，先改对应
+spec 再改测试，并在提交里写清为什么。
+- **状态所有权棘轮** `tests/ui/test_main_window_state_ownership.py`：AST 扫描
+  `ui/main_window/*.py`，冻结「在 ≥2 个文件被写」的属性集合。白名单**只许缩小**
+  （治理起点 17 项，现存 6 项，全是 `_project_io_mixin` 与 `window.py` 之间的
+  文件/会话身份）。新增多文件赋值属性会立刻红。注意判据：`self.X = v` 算写，
+  `self.X.field = v` 不算——所以迁移的方向是把裸散状态搬进具名 holder。
+- **画布状态归属** `tests/ui/test_pg_canvas_backref_invariants.py`：断言各协作者
+  写穿到宿主的属性集合**恰好等于**白名单。想写穿新属性，先问该状态是不是应该归协作者。
+- **UI 三层分层** `tests/ui/test_import_boundaries.py`：`ui_kit` 是最底层，不 import
+  `ui` / `acquisition_ui`；`ui` 不 import `acquisition_ui`（反向允许）。
+- **signal 无 GUI** `tests/test_signal_no_gui_import.py`：子进程投毒法强制
+  `signal/` 不碰 PyQt5 / matplotlib.pyplot。
+- **批渲染无 UI 副作用** `tests/test_batch_render_import_boundary.py`：`import
+  mf4_analyzer.batch_render` 不得把 `ui` 包或 `MainWindow` 拉进 `sys.modules`。
+- **原生依赖惰性化** `tests/test_native_import_boundaries.py`：`pya2l` / `pyxcp`
+  只能在函数体内 import（白名单外无例外），保证没装驱动的机器照样能起。
+- **批处理 / GUI 渲染一致性** `tests/test_batch_qt_render_parity.py` + `tools/
+  verify_batch_qt_render_parity.py`：比的是「真正必须一致的东西」——数据范围、视图中心、
+  数据不被裁、真实墨迹不重叠；字号与 padding 分侧按各自产品常量校验，别把两侧并成一个
+  常量比。
+- **批处理内核不许静默失败**：`batch.py` 有 `logger`，吞掉的基础设施失败必须留痕；
+  进度发射与结果记录**单点**走 `_RunReporter`（`tests/test_batch_run_reporter.py`
+  看守，含 `test_run_routes_every_event_through_the_reporter` 和
+  `test_reporter_stays_private_to_the_batch_module`）。新增编排分支不要再手写第二份
+  emit/record。
+
+## 时域渲染成本判据：ink（墨水量）
+2026-08-08 起，时域渲染**成本**的统一判据是 ink（`ink_dev_px = Σ min(|Δy|, y_span)
+/ y_span × row_height_px × dpr`，纯函数 `render_profile.envelope_ink_dev_px`）。
+成本的真实自变量是要画的**垂直墨迹量**，不是点数、不是采样密度、不是通道数。
+spec：`docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`。
+- 三个预测消费者 + 一道实测兜底：交互路径按 `_INK_OFF_BUDGET` 比例降桶（下限
+  `_INK_MIN_BUCKETS`）· 向量 AA 闸门与导出按 `_INK_AA_ON`/`_INK_AA_OFF` 判 ·
+  光栅缓存准入共用同一条带（AA 付不起的形状正是光栅路径存在的理由，共用边界防两个决策
+  在边界互相抖）· `ui/pg_canvas/quality.py` 的常驻 paint 计时 + 签名闩锁是**实测兜底**，
+  前三者都是预测，兜底保证预测错了也最多为一个签名付一帧。
+- **别再拿原始采样密度（源点数/像素宽）当成本门禁。** 实测这类判据两头都错：假阳性
+  （2×500k 平滑 overlay，ink 只有阈值的 1/71，却被旧门禁拦下）+ 假阴性（10k 点满幅振荡，
+  旧门禁零贡献放行，真实 AA 帧 29.8 s）。`quality._overlay_density_pressure_status`
+  因此被删，`test_overlay_density_pressure_reason_is_retired` 看着它别复活。
+  注意区分**仍然合法**的两处：`renderer._SUBPLOT_DENSE_DECIMATION` 用同一比率决定
+  「要不要降桶」——那是**保真**判据（每像素列已塌成 min/max 墙，粗化不丢特征），不是成本
+  门禁；AA 闸门里那条按**已绘 segment 数**的腿也留着，它与 ink 腿是 AND 的正交约束。
+- ink 表没记录过的曲线**必须当场测量**，不能当成 0——`plot_channels` 尾部就
+  `schedule_idle_quality()`，首帧走 bind envelope 不经 `_refresh_visible_data`，
+  当年这个空表就是 66 s 一帧的活口。
+- 那几个常量是**标定值不是旋钮**（Cocoa @ dpr 2.0 的 ns/px 系数）。要改：先改 spec §5，
+  再用 `scripts/probe_aa_ink_budget.py` 在**真机**重测（offscreen 量不出 paint 成本），
+  `tests/ui/test_pg_timedomain_canvas.py::TestInkBudget` 只栅栏量级。
+- 性能门禁：`scripts/benchmark_timedomain_interaction.py --assert-standards`
+  （`COCOA_LIMITS_MS`），准则与已接受参考读数在
+  `docs/analyzer/specs/2026-07-26-plot-performance-standards.md`。**别放宽上限**来让改动通过。
 
 ## 产品约束（碰导入 / View 相关代码前必读）
 - 支持格式：MF4/MDF、CSV/Excel/HDF、BLF+DBC、音视频、通用 ASCII（`.asc`/`.fdc`）、
@@ -113,8 +153,10 @@ Windows 打包脚本、渲染对比）· `configs/` · `assets/`。
   改动要保住活动 View 可见性、tooltip 全名、拖拽重排与右键菜单。
 
 ## Gotchas
-- **验真机渲染**：UI/视觉问题（尤其 macOS 原生）必须验真实渲染（截图 / objc 读原生属性），
-  别凭「属性设上了 + 单测过」判定修好。`offscreen` 只能当排版草稿，不能写成视觉验收通过。
+- **验真机渲染**：UI/视觉/性能问题（尤其 macOS 原生）必须验真实渲染（截图 / objc 读原生
+  属性 / 真机计时），别凭「属性设上了 + 单测过」判定修好。`offscreen` 只能当排版草稿，
+  量不出 paint 成本，也不能写成视觉验收通过。`scripts/probe_aa_ink_budget.py` 的
+  docstring 直接引用了这条。
 - 嵌入浮层/菜单的自定义 `QWidget` 必须透明背景；`WA_TranslucentBackground` 会让本体 QSS
   失效 → 需 `paintEvent` 或内部子 widget 兜底。
 - 项目位于 `~/Downloads`：子进程跑过后触发 macOS TCC，对项目目录 EPERM。解法：给终端
@@ -126,6 +168,10 @@ Windows 打包脚本、渲染对比）· `configs/` · `assets/`。
 - 新的分析器文档（计划、评审、用户指南、UI 原型）放 `docs/analyzer/`，子目录分工见
   `docs/analyzer/README.md` 的 Routing 表；`docs/superpowers/` 是历史工作流归档，
   别往里加新内容。
+- `docs/analyzer/verify/` 与 `evidence/` 存**真机测量基线与锚点清单**（重构前的行号快照、
+  性能读数）。要复现或对比历史读数先翻这里，别重新发明基线。
+- 结构治理类改动的既有范式：spec（设计 + 为什么现在做 + 量化收益）配 plan（分 Task），
+  见 `docs/analyzer/specs|plans/2026-08-04-*` 与 `2026-08-08-*`。新的同类改动照这个格式走。
 - `AGENTS.md` + `docs/lessons-learned/` + `scripts/lessons/` 是 **Codex 专用**的
   lessons 系统，Claude 不需要走它的 check/promote 流程。其中 `pyqt-ui/`
   `signal-processing/` `refactor/` 下的踩坑记录可以当参考检索；`orchestrator/` 是已废弃的
