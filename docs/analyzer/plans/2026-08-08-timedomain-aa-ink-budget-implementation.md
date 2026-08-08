@@ -110,17 +110,27 @@ Test `test_pg_timedomain_canvas.py`、`test_pg_canvas_backref_invariants.py`
 
 **Files:** Modify `quality.py`；Test `test_pg_timedomain_canvas.py`
 
-- [ ] 红测：
+- [x] 红测：
   - 高 ink 帧 `_idle_aa_density_ok() is False`（复用 Task 2 的
     fit-Y 振荡 fixture；这是对 spec §1.3「三场景全 allow」的直接反转）；
   - 双阈值滞回：ink 从高降到 ON/OFF 之间不翻转，低于 ON 才放行；
   - `_export_aa_affordable` 高 ink → False（修导出冻结）；
-  - 平滑对照（ink≈145k dev）→ 仍 allow（不许回归今日行为）；
+  - 平滑对照（真实 fixture，ink 远低于 `_INK_AA_ON`）→ 仍 allow（不许
+    回归今日行为；offscreen 测试环境 dpr=1、画布远小于真机，实测总量级
+    是千级而非 spec §5 引用的 145k dev，但相对阈值的「远低于」关系
+    不变，守卫的是这个关系，不是绝对数字）；
   - 光栅覆盖的线不计入帧 ink 合计（覆盖后 AA 应可为其余低 ink 线开启）。
-- [ ] 实现：`_idle_aa_density_ok` 在现 `_y_overflow_wall_active` 检查位
-  换成 ink 判据（读 `_line_ink_state` 求和，排除 raster-covered），
-  与现点数双阈值 AND；`_export_aa_affordable` 同判据。
-- [ ] 子目录绿。
+- [x] 实现：`_idle_aa_density_ok` 在原 `_frame_ink_high` 硬拒块位置
+  换成 ink 判据（读 `_line_ink_state` 求和，排除 raster-covered 与
+  不可见线），与现点数双阈值 AND；`_export_aa_affordable` 同判据
+  （一次性判据，无滞回状态）。
+- [x] 子目录绿：`tests/ui/test_pg_timedomain_canvas.py` 403 passed / 1
+  deselected（该 commit 基线 394 passed / 1 deselected，净增 9 条新测试，
+  零新红）；`test_pg_canvas_backref_invariants.py` + `test_pg_dense_raster.py`
+  26 passed，未受影响。变异测试：`_INK_AA_OFF` ×100 → 3 条用例转红
+  （`test_high_ink_holds_aa_off` / `test_oscillating_fit_y_holds_aa_off_spec_1_3_reversal` /
+  `test_ink_aa_gate_constants_stay_in_calibrated_band`），已还原并复核
+  `git diff` 为空。
 
 ### Task 4: 光栅准入扩展 + 内存帽
 
