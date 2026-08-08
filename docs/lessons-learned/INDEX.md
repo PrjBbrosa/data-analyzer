@@ -137,6 +137,8 @@ lesson by default.
 | [Batch Non-Finite Values Stay Out Of Identity And Warning Bounds](batch-nonfinite-values-stay-out-of-identity-and-warning-bounds.md) | Changing batch recipe normalization, recipe fingerprints, heatmap | See lesson |
 | [Qt Composite Disabled Cues Follow Effective State](qt-composite-disabled-cues-follow-effective-state.md) | Changing disabled styling or interaction cues on a composite Qt | See lesson |
 | [Free-Config Batch RPM Keeps Its Logical Source](batch-free-config-cross-source-rpm-pairing.md) | Editing BatchSheet free-config order analysis, RPM-channel selection, | See lesson |
+| [Changelog Slides Keep Recent Front And Pack History At End](changelog-slides-reserve-bottom-safe-area.md) | Adding or editing entries in the application-help changelog deck. | See lesson |
+| [Qt Popup Singletons Validate The C++ Lifetime](qt-popup-singleton-validates-cpp-lifetime.md) | Keeping a parentless QWidget or popup in a Python class-level singleton | See lesson |
 
 ## Selection Rules
 

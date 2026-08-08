@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TraceLab v7.9.4 · 使用说明</title>
+<title>TraceLab v7.9.5 · 使用说明</title>
 <!-- ===== FONTS ===== -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -135,6 +135,13 @@ img,video,canvas,svg{max-width:100%;max-height:100%;}
 .cl .e ul{list-style:none;display:flex;flex-direction:column;gap:9px;}
 .cl .e li{font-size:25px;color:var(--ink);line-height:1.45;padding-left:26px;position:relative;}
 .cl .e li::before{content:"›";position:absolute;left:4px;color:var(--coral);font-weight:700;}
+.slide.changelog-page .body{bottom:220px;}
+.slide.changelog-history-page .h2{font-size:58px;}
+.slide.changelog-history-page .cl .e{gap:28px;padding:16px 0;}
+.slide.changelog-history-page .cl .e .ver{font-size:25px;flex-basis:190px;}
+.slide.changelog-history-page .cl .e .ver small{font-size:16px;margin-top:4px;}
+.slide.changelog-history-page .cl .e ul{gap:6px;}
+.slide.changelog-history-page .cl .e li{font-size:21px;line-height:1.35;padding-left:22px;}
 
 /* 界面示意 */
 .apptb{position:absolute;left:0;right:0;top:300px;height:66px;display:flex;gap:10px;align-items:center;background:var(--ink);border-radius:8px;padding:0 16px;}
@@ -248,20 +255,17 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 {
   "meta": {
     "title": "TraceLab",
-    "version": "v7.9.4",
-    "versionLabel": "使用说明 · V7.9.4",
+    "version": "v7.9.5",
+    "versionLabel": "使用说明 · V7.9.5",
     "subtitle": "打开数据、看图分析、导出结果 —— 一份照着做就会的使用说明",
-    "docVersion": "2.9",
-    "updated": "2026-08-06"
+    "docVersion": "3.0",
+    "updated": "2026-08-08"
   },
   "slides": [
     { "type": "cover" },
 
     { "id": "changelog", "sec": "更新", "kicker": "CHANGELOG · RECENT", "title": "最近<c>更新</c>", "foot": "本说明会随软件持续更新", "density": "compact",
-      "blocks": [ { "type": "changelog", "start": 0, "end": 2 } ] },
-
-    { "id": "changelog-history", "sec": "更新", "kicker": "CHANGELOG · HISTORY", "title": "更早的<c>更新</c>", "foot": "完整变更记录", "density": "compact",
-      "blocks": [ { "type": "changelog", "start": 2 } ] },
+      "blocks": [ { "type": "changelog", "start": 0 } ] },
 
     { "id": "overview", "sec": "开始之前", "kicker": "OVERVIEW", "title": "它能帮你做<c>什么</c>", "foot": "TraceLab",
       "blocks": [
@@ -277,7 +281,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       ] },
 
     { "id": "interface", "sec": "界面导览", "kicker": "THE WINDOW", "title": "界面分三块，<c>各管一件事</c>", "foot": "顶部工具栏：左边管文件与项目，中间切视图，右上是品牌与更新",
-      "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.png' alt='TraceLab v7.9.4 时域主界面的真实截图'><div class='shotcap reveal'>当前 v7.9.4 主窗口：左侧文件与通道、中间图表工作区、右侧参数面板。</div>" } ] },
+      "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.png' alt='TraceLab v7.9.5 时域主界面的真实截图'><div class='shotcap reveal'>当前 v7.9.5 主窗口：左侧文件与通道、中间图表工作区、右侧参数面板。</div>" } ] },
 
     { "id": "load", "sec": "第一步", "kicker": "STEP 1 · LOAD", "title": "第一步 · 打开你的<c>数据</c>", "foot": "TraceLab", "density": "compact",
       "blocks": [
@@ -301,9 +305,9 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         { "type": "tip", "label": "提示", "html": "打开多个文件后，可以同时勾选<b>不同文件</b>里的通道放在一起对比——很适合「这批和上批有什么不一样」。" }
       ] },
 
-    { "id": "imports", "sec": "真实导入", "kicker": "V7.9.4 · REAL FILES", "title": "三种新格式，已经用<c>真文件验证</c>", "foot": "真实 Cocoa 界面 · WWT / ZFD / MAT",
+    { "id": "imports", "sec": "真实导入", "kicker": "V7.9.5 · REAL FILES", "title": "三种新格式，已经用<c>真文件验证</c>", "foot": "真实 Cocoa 界面 · WWT / ZFD / MAT",
       "blocks": [
-        { "type": "raw", "html": "<img class='realshot reveal' src='assets/imports-panel.png' alt='TraceLab v7.9.4 同时载入 WWT、ZFD 和 MAT 的真实界面'><div class='shotcap reveal'>图中三个文件卡片来自仓库内真实 WWT、ZFD、MAT 样本；中间为 WWT 的 Steering torque 实际曲线。</div>" }
+        { "type": "raw", "html": "<img class='realshot reveal' src='assets/imports-panel.png' alt='TraceLab v7.9.5 同时载入 WWT、ZFD 和 MAT 的真实界面'><div class='shotcap reveal'>图中三个文件卡片来自仓库内真实 WWT、ZFD、MAT 样本；中间为 WWT 的 Steering torque 实际曲线。</div>" }
       ] },
 
     { "id": "project", "sec": "存工程", "kicker": "PROJECT · .tlproj", "title": "把整个分析存成<c>工程</c>", "foot": "保存项目 → 下次一键还原",
@@ -512,56 +516,50 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ] }
       ] },
 
-    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v7.9.4 · 使用说明", "density": "compact",
+    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v7.9.5 · 使用说明", "density": "compact",
       "blocks": [
         { "type": "flow", "height": 550, "cols": [
           { "title": "场景一", "key": "快速看一个文件", "items": [ "添加文件", "勾选要看的通道", "时域看波形、拖动放大", "需要就切 FFT / 阶次", "导出 Excel 或图片" ] },
           { "title": "场景二", "key": "批量分析一批文件", "accent": "teal", "items": [ "先分析好一个代表文件", "存成预设", "选中一批文件", "跑批处理", "自动出图、出表" ] },
           { "title": "场景三", "key": "边录边看", "items": [ "打开 Cockpit", "配置要采集的信号", "开始采集、看实时卡片", "停止，自动存档", "用 Replay 回放分析" ] }
         ] },
-        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v7.9.4" }
+        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v7.9.5" }
       ] }
   ],
 
   "changelog": [
+    { "v": "v7.9.5", "date": "2026-08-08", "items": [
+      "HEAD HDF 文件会从扩展名称字段取回<b>完整通道名</b>；列表里的长名称从中间省略，鼠标悬停仍能看到全名。",
+      "FFT、时频和阶次分析的信号选择，以及时域 X 轴的取景范围，都会跟随<b>当前 View</b> 中实际挂载的数据源，不再混入其他 View 的文件。",
+      "时域高变化曲线改用屏幕实际<b>墨水量</b>统一控制降采样、抗锯齿和光栅缓存，Y 自适应后不再因为满高竖线造成长时间冻结。",
+      "下拉框右侧圆角不再被内部按钮的方形背景盖住，统一为 <b>7px</b> 圆角。"
+    ] },
     { "v": "v7.9.4", "date": "2026-08-06", "items": [
       "阶次谱图的<b>时间轴</b>改为等距刻度：分析点落在你设定的时间分辨率整数倍上，批处理里填 10 秒切片就精确切在 10.000 秒，不再被挪到附近的位置。",
       "阶次谱图的时间轴只显示<b>真正算出结果</b>的那一段。以前两端会画上没有分析结果的区间，看着像有数据、实际切不到；现在坐标轴和数据一致。",
       "批处理<b>代表图预览</b>会显示切片位置的提示：位置超出可分析范围被就近取值、或多个位置合并成一条时，都会直接写在图上方，不必再对着图猜。",
-      "阶次面板<b>时间分辨率</b>的说明更正：它只决定时间轴的疏密，不会让阶次变粗。",
-      "软件版本更新至 <b>v7.9.4</b>；状态栏、使用说明、上手指南和四个分析指南统一使用当前版本标识。",
-      "Windows 完整包与仅分析功能的轻量包默认名称同步为 <b>TraceLab7.9.4</b> 和 <b>TraceLabAnalyzer7.9.4</b>。"
+      "阶次面板<b>时间分辨率</b>的说明更正：它只决定时间轴的疏密，不会让阶次变粗。"
     ] },
     { "v": "v7.9.3", "date": "2026-08-04", "items": [
       "批处理的阶次分析现在可以配对其他采样率数据源中唯一匹配的 <b>RPM</b> 通道，并按时间轴对齐；噪音与转速采样率不同也能正常计算。",
-      "批处理时频图和阶次图的<b>切片</b>位置新增半透明红色高亮带，同时保留与下方曲线对应的彩色中心线，导出图更容易定位。",
-      "软件版本更新至 <b>v7.9.3</b>；状态栏、使用说明、上手指南和四个分析指南统一使用当前版本标识。",
-      "Windows 完整包与仅分析功能的轻量包默认名称同步为 <b>TraceLab7.9.3</b> 和 <b>TraceLabAnalyzer7.9.3</b>。"
+      "批处理时频图和阶次图的<b>切片</b>位置新增半透明红色高亮带，同时保留与下方曲线对应的彩色中心线，导出图更容易定位。"
     ] },
     { "v": "v7.9.2", "date": "2026-08-03", "items": [
       "批处理面板会按当前屏幕的可用高度自适应，笔记本上不会再出现底部<b>运行 / 预览 / 关闭</b>被裁掉、点不到的情况；代表图预览窗口同样自适应。",
       "批处理面板顶部两行收紧，省出的高度让中间的分析栏在 1366×768 屏幕上可以完整显示，不必再上下滚动。",
-      "批处理的<b>运行</b>、<b>预览</b>、<b>中断</b>以及预览窗口内的按钮改用全局统一的主次配色，主操作一眼可辨。",
-      "软件版本更新至 <b>v7.9.2</b>；状态栏、使用说明、上手指南和四个分析指南统一使用当前版本标识。",
-      "Windows 完整包与仅分析功能的轻量包默认名称同步为 <b>TraceLab7.9.2</b> 和 <b>TraceLabAnalyzer7.9.2</b>。"
+      "批处理的<b>运行</b>、<b>预览</b>、<b>中断</b>以及预览窗口内的按钮改用全局统一的主次配色，主操作一眼可辨。"
     ] },
     { "v": "v7.9.1", "date": "2026-08-01", "items": [
       "批处理文件与通道选择流程重新梳理，图像导出选项、格式校验和渲染结果提示更清晰。",
-      "时域自定义横轴改为按数据源独立解析；不兼容来源会保留明确诊断，不再阻断其他可用来源。",
-      "软件版本更新至 <b>v7.9.1</b>；状态栏、使用说明、上手指南和四个分析指南统一使用当前版本标识。",
-      "Windows 完整包与仅分析功能的轻量包默认名称同步为 <b>TraceLab7.9.1</b> 和 <b>TraceLabAnalyzer7.9.1</b>。"
+      "时域自定义横轴改为按数据源独立解析；不兼容来源会保留明确诊断，不再阻断其他可用来源。"
     ] },
     { "v": "v7.9", "date": "2026-07-29", "items": [
       "精密触控板的 <b>Ctrl / Shift</b> 缩放在时域、FFT、FFT 预览、时频图、阶次和切片视图中统一支持双向操作；叠加模式下 Shift 缩放 Y 轴可正常放大和缩小。",
-      "时域交互的粗刷新间隔限制为 <b>100 ms</b>，密集叠加曲线会按绘制压力自动控制抗锯齿，拖动与缩放更稳定。",
-      "软件版本更新至 <b>v7.9</b>；状态栏、使用说明、上手指南和四个分析指南统一使用当前版本标识。",
-      "Windows 完整包与仅分析功能的轻量包默认名称同步为 <b>TraceLab7.9</b> 和 <b>TraceLabAnalyzer7.9</b>。"
+      "时域交互的粗刷新间隔限制为 <b>100 ms</b>，密集叠加曲线会按绘制压力自动控制抗锯齿，拖动与缩放更稳定。"
     ] },
     { "v": "v7.8", "date": "2026-07-24", "items": [
       "通道配置管理系统升级为<b>草稿编辑</b>：可查看通道、单位与当前 View 的匹配情况，支持新建、复制、重命名、单项/批量删除和一次撤销；只有点击<b>保存更改</b>才会写入本机。",
-      "通道配置支持 <b>JSON 导入 / 导出</b>；遇到同名配置可选择保留、替换或跳过，旧配置仍可继续读取。",
-      "软件版本更新至 <b>v7.8</b>；状态栏、使用说明和四个分析指南统一使用当前版本标识。",
-      "Windows 完整包与仅分析功能的轻量包默认名称同步为 <b>TraceLab7.8</b> 和 <b>TraceLabAnalyzer7.8</b>。"
+      "通道配置支持 <b>JSON 导入 / 导出</b>；遇到同名配置可选择保留、替换或跳过，旧配置仍可继续读取。"
     ] },
    { "v": "v7.7", "date": "2026-07-17", "items": [
       "新增原生 <b>WinWert（.wwt）</b>、<b>ZFGE2 / TestRunPRO（.zfd）</b>和 <b>MATLAB（.mat）</b>导入，并保留各格式的时基准确性边界。",
@@ -683,8 +681,16 @@ function renderBlock(b, p, nested){
       return `<div class="flow reveal${blk}" style="${b.height?`height:${b.height}px;`:''}">${cols}</div>`;
     }
     case 'changelog': {
-      const entries=DECK.changelog.slice(b.start||0,b.end);
-      const es=entries.map(e=>`<div class="e"><div class="ver">${e.v}<small>${e.date}</small></div><ul>${e.items.map(x=>`<li>${x}</li>`).join('')}</ul></div>`).join('');
+      const start=b.start||0;
+      const end=b.end==null?DECK.changelog.length:b.end;
+      const indices=Array.isArray(b.indices)
+        ? b.indices
+        : Array.from({length:Math.max(0,end-start)},(_,index)=>start+index);
+      const es=indices.map(releaseIndex=>{
+        const e=DECK.changelog[releaseIndex];
+        if(!e)return '';
+        return `<div class="e" data-release-index="${releaseIndex}"><div class="ver">${e.v}<small>${e.date}</small></div><ul>${e.items.map(x=>`<li>${x}</li>`).join('')}</ul></div>`;
+      }).join('');
       return `<div class="cl reveal${blk}">${es}</div>`;
     }
     case 'raw': return b.html;
@@ -714,15 +720,99 @@ function renderCover(m){
   </section>`;
 }
 
+function changelogSlide(template,sourceIndex,blockIndex,releaseIndices,history,pageIndex){
+  const blocks=template.blocks.map((item,index)=>index===blockIndex
+    ? {...item,indices:releaseIndices}
+    : item);
+  return {
+    ...template,
+    _sourceIndex:sourceIndex,
+    id:history?`changelog-history-${pageIndex}`:`${template.id}-recent`,
+    kicker:history?'CHANGELOG · HISTORY':'CHANGELOG · RECENT',
+    title:history?'历史<c>版本</c>':'最近<c>更新</c>',
+    foot:history?'历史版本 · 只保留用户可见变化':template.foot,
+    changelogPage:true,
+    historyPage:history,
+    releaseIndices,
+    blocks,
+  };
+}
+
+function arrangeChangelogSlides(slides,packedHistoryGroups=null){
+  const mainSlides=[];
+  const historyIndices=[];
+  let templateInfo=null;
+  slides.forEach((slide,sourceIndex)=>{
+    const blockIndex=(slide.blocks||[]).findIndex(b=>b.type==='changelog');
+    if(blockIndex<0){mainSlides.push({...slide,_sourceIndex:sourceIndex});return;}
+    const block=slide.blocks[blockIndex];
+    const start=block.start||0;
+    const end=block.end==null?DECK.changelog.length:block.end;
+    const indices=Array.from({length:Math.max(0,end-start)},(_,index)=>start+index)
+      .filter(index=>DECK.changelog[index]);
+    const recent=indices.filter(index=>index===0);
+    if(recent.length){
+      mainSlides.push(changelogSlide(slide,sourceIndex,blockIndex,recent,false,0));
+    }
+    historyIndices.push(...indices.filter(index=>index>0));
+    templateInfo={slide,sourceIndex,blockIndex};
+  });
+  if(!templateInfo)return mainSlides;
+  const groups=packedHistoryGroups||historyIndices.map(index=>[index]);
+  const historySlides=groups.map((indices,pageIndex)=>changelogSlide(
+    templateInfo.slide,
+    templateInfo.sourceIndex,
+    templateInfo.blockIndex,
+    indices,
+    true,
+    pageIndex,
+  ));
+  return mainSlides.concat(historySlides);
+}
+
+function packChangelogHistory(){
+  const pages=[...document.querySelectorAll('.changelog-history-page')];
+  if(!pages.length)return [];
+  const heights=new Map();
+  const orderedIndices=[];
+  pages.forEach(page=>page.querySelectorAll('.cl .e').forEach(entry=>{
+    const index=Number(entry.dataset.releaseIndex);
+    if(!Number.isFinite(index))return;
+    heights.set(index,entry.offsetHeight);
+    orderedIndices.push(index);
+  }));
+  const sample=pages[0];
+  const body=sample.querySelector('.body');
+  const changelog=sample.querySelector('.cl');
+  const bottomWhitespace=64;
+  const maxHeight=Math.max(1,body.clientHeight-changelog.offsetTop-bottomWhitespace);
+  const groups=[];
+  let current=[];
+  let used=0;
+  orderedIndices.forEach(index=>{
+    const height=heights.get(index)||maxHeight;
+    if(current.length&&used+height>maxHeight){groups.push(current);current=[];used=0;}
+    current.push(index);
+    used+=height;
+  });
+  if(current.length)groups.push(current);
+  return groups;
+}
+
 function renderContentSlide(s, idx, total, m){
   const verLabel = `${m.title} ${m.version} 使用说明`;
-  const blocks = (s.blocks||[]).map((b,bi)=>renderBlock(b,['slides',idx,'blocks',bi],false)).join('');
-  return `<section class="slide${s.density ? ` ${s.density}` : ''}">
+  const sourceIndex=s._sourceIndex==null?idx:s._sourceIndex;
+  const blocks = (s.blocks||[]).map((b,bi)=>renderBlock(b,['slides',sourceIndex,'blocks',bi],false)).join('');
+  const title=s.changelogPage
+    ? `<h2 class="h2 reveal">${cmark(s.title)}</h2>`
+    : ed(['slides',sourceIndex,'title'],cmark(s.title),'h2','h2 reveal');
+  const releaseAttr=s.changelogPage?` data-release-indices="${s.releaseIndices.join(',')}"`:'';
+  return `<section class="slide${s.density ? ` ${s.density}` : ''}${s.changelogPage?' changelog-page':''}${s.historyPage?' changelog-history-page':''}"${releaseAttr}>
     <div class="grat"></div><div class="toprule"></div>
     <div class="chrome"><span class="sec"><b></b>${s.sec||''}</span><span>${verLabel}</span></div>
     <div class="body">
       <div class="h-kick reveal">${s.kicker||''}</div>
-      ${ed(['slides',idx,'title'],cmark(s.title),'h2','h2 reveal')}
+      ${title}
       ${blocks}
     </div>
     <div class="foot"><span>${s.foot||''}</span><span class="pg">第 <b>${String(idx+1).padStart(2,'0')}</b> / ${total} 页</span></div>
@@ -730,9 +820,15 @@ function renderContentSlide(s, idx, total, m){
 }
 
 function render(){
-  const m=DECK.meta, total=DECK.slides.length;
-  const html=DECK.slides.map((s,i)=>s.type==='cover'?renderCover(m):renderContentSlide(s,i,total,m)).join('');
-  document.getElementById('deckStage').innerHTML=html;
+  const m=DECK.meta;
+  const renderSlides=slides=>{
+    const total=slides.length;
+    const html=slides.map((s,i)=>s.type==='cover'?renderCover(m):renderContentSlide(s,i,total,m)).join('');
+    document.getElementById('deckStage').innerHTML=html;
+  };
+  renderSlides(arrangeChangelogSlides(DECK.slides));
+  const historyGroups=packChangelogHistory();
+  renderSlides(arrangeChangelogSlides(DECK.slides,historyGroups));
   // 封面 FFT 频谱条（确定性，不用随机数）
   const fft=document.getElementById('coverFft');
   if(fft){for(let i=0;i<64;i++){const b=document.createElement('i');

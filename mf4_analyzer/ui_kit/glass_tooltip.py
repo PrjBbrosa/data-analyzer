@@ -4,6 +4,7 @@ Call ``install_glass_tooltips(app)`` once after QApplication is created.
 All widgets that have a toolTip() set will use the glass popup instead of
 the native Qt tooltip, positioned just below the hovered widget.
 """
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QObject, QPoint, QTimer, Qt
 from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
@@ -16,6 +17,7 @@ class _GlassTooltipPopup(QWidget):
 
     def __init__(self):
         super().__init__(None, Qt.ToolTip | Qt.FramelessWindowHint)
+        self.destroyed.connect(type(self)._clear_instance)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
 
@@ -33,10 +35,25 @@ class _GlassTooltipPopup(QWidget):
         self._hide_timer.timeout.connect(self.hide)
 
     @classmethod
+    def _clear_instance(cls, _object=None):
+        cls._instance = None
+
+    @classmethod
+    def existing(cls):
+        """Return the live popup without creating one during teardown."""
+        popup = cls._instance
+        if popup is not None and sip.isdeleted(popup):
+            cls._instance = None
+            return None
+        return popup
+
+    @classmethod
     def instance(cls):
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
+        popup = cls.existing()
+        if popup is None:
+            popup = cls()
+            cls._instance = popup
+        return popup
 
     def show_for(self, text, anchor):
         """Show tooltip with *text* anchored just below *anchor* (global coords)."""
@@ -104,8 +121,8 @@ class _TooltipEventFilter(QObject):
                 return True  # suppress native tooltip
 
         elif etype in (QEvent.Leave, QEvent.MouseButtonPress, QEvent.Hide):
-            popup = _GlassTooltipPopup.instance()
-            if popup.isVisible():
+            popup = _GlassTooltipPopup.existing()
+            if popup is not None and popup.isVisible():
                 popup.schedule_hide()
 
         return False

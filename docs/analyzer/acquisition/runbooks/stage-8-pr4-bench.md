@@ -33,7 +33,7 @@ collector.
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File tools\build_windows_folder.ps1
-   .\dist\TraceLab7.9.4\TraceLab7.9.4.exe --acquisition-runtime-smoke --json docs\analyzer\acquisition\evidence\vector-xcp\packaged-runtime-smoke.json
+   .\dist\TraceLab7.9.5\TraceLab7.9.5.exe --acquisition-runtime-smoke --json docs\analyzer\acquisition\evidence\vector-xcp\packaged-runtime-smoke.json
    ```
 
    W2 must use the default `--windowed` build above, because that is the
@@ -47,7 +47,7 @@ collector.
    from the source-environment `api-contract.json`. The packaged smoke must
    report the pinned pya2ldb metadata and successful hidden-child pya2l import
    probe. Its `a2l_parse_probe` must also be green and show
-   `TraceLab7.9.4.exe --a2l-probe-child`, return code zero, and the expected
+   `TraceLab7.9.5.exe --a2l-probe-child`, return code zero, and the expected
    `RuntimeSmokeSignal`/`0x1000`/`UWORD` facts from the unpickled one-signal
    fixture. Then load the exact ECU A2L once in the frozen app before
    connecting the ECU.

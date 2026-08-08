@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 7.9.4. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 7.9.5. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and 12-View changes, as well as the native WinWert (`.wwt`),
 ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced in 7.7.
 7.8 added a draft-based channel configuration manager with View matching
@@ -54,7 +54,15 @@ frame centres land on multiples of the requested time resolution and a batch
 slice at t=10 s hits 10.000 s exactly; the reported coverage now spans only the
 analysed range, so the time axis no longer implies data outside it. The batch
 representative-image preview also surfaces the renderer's slice clamp/merge
-warnings instead of dropping them.
+warnings instead of dropping them. 7.9.5 recovers complete HEAD HDF channel
+names from the file's extended-name field, shows their full text in channel-tree
+tooltips while middle-eliding long rows, and limits analysis signal pickers and
+the time-domain X viewport to sources attached to the current View. TimeDomain
+rendering now uses measured on-screen ink to govern envelope downsampling,
+anti-aliasing, and raster-cache admission, with a frame-time fallback for
+unexpected expensive paints. The Cocoa acceptance gate passed; Windows ink
+threshold recalibration remains a separate release gate. The same release also
+repairs the covered right corners of combo boxes and standardises them at 7 px.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.
