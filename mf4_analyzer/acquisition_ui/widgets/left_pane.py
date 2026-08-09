@@ -34,7 +34,6 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -55,6 +54,7 @@ from mf4_analyzer.acquisition_capture.search import (
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+from mf4_analyzer.ui_kit.widgets import SearchField
 
 
 _SELECTED_ROW_BG = QColor("#EAF2FF")
@@ -161,9 +161,9 @@ class LeftPane(QFrame):
         header_row.addWidget(self._summary)
         outer.addLayout(header_row)
 
-        self._search = QLineEdit(self)
+        self._search = SearchField("搜索测量…", self)
         self._search.setObjectName("channelSearch")
-        self._search.setPlaceholderText("搜索 name / 0x40A...")
+        self._search.setToolTip("可搜索 name / 0x40A")
         self._search.textChanged.connect(self._on_search_text_changed)
         outer.addWidget(self._search)
 

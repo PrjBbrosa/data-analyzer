@@ -31,7 +31,6 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMenu,
     QPushButton,
     QStackedWidget,
@@ -46,6 +45,7 @@ from mf4_analyzer.acquisition.manifest import (
     resolve_entry_path,
 )
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+from mf4_analyzer.ui_kit.widgets import SearchField
 
 logger = logging.getLogger(__name__)
 
@@ -409,7 +409,7 @@ class HistoryTab(QWidget):
         return self._set_filter
 
     @property
-    def search_box(self) -> QLineEdit:
+    def search_box(self) -> SearchField:
         return self._search_box
 
     def set_manifest_path(self, path: Path | str | None) -> None:
@@ -489,9 +489,9 @@ class HistoryTab(QWidget):
         self._scenario_filter = self._make_filter_combo("historyScenarioFilter")
         self._path_kind_filter = self._make_filter_combo("historyPathKindFilter")
         self._set_filter = self._make_filter_combo("historySetFilter")
-        self._search_box = QLineEdit(self)
+        self._search_box = SearchField("搜索记录…", self)
         self._search_box.setObjectName("historySearchBox")
-        self._search_box.setPlaceholderText("搜索 name / id")
+        self._search_box.setToolTip("可搜索 name / id")
         self._search_box.textChanged.connect(self._proxy_model.set_search)
 
         filter_row.addWidget(QLabel("车辆", self))

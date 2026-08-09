@@ -228,7 +228,7 @@ def test_review_modal_has_four_actions(qapp, tmp_path):
 
 
 def test_review_modal_visual_hierarchy(qtbot, tmp_path):
-    """Spec 2026-07-08 G4: title/facts/secondary diagnostics + destructive action."""
+    """Spec 2026-07-08 G4: title/facts/secondary diagnostics + danger action."""
     ctx = _finalize_and_make_context(tmp_path)
     modal = ReviewModal(ctx)
     qtbot.addWidget(modal)
@@ -240,7 +240,7 @@ def test_review_modal_visual_hierarchy(qtbot, tmp_path):
     pf = modal.findChild(QLabel, "reviewPreflight")
     assert "已选通道" in pf.text() and "rows=" not in pf.text()
     assert "rows=" in pf.toolTip()
-    assert modal._btn_discard.property("role") == "destructive"
+    assert modal._btn_discard.property("role") == "danger"
     modal.show()
     qtbot.waitExposed(modal)
     gap = modal._btn_save_only.x() - (

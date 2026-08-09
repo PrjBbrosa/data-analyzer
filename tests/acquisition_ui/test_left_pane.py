@@ -102,7 +102,8 @@ def test_pool_shows_with_daq_filter_default_on(qapp):
     pane = LeftPane()
     pane.set_pool(_pool(), a2l_has_daq_events=True)
     assert pane._header.text() == "A2L Measurement"
-    assert pane._search.placeholderText() == "搜索 name / 0x40A..."
+    assert pane._search.placeholderText() == "搜索测量…"
+    assert pane._search.toolTip() == "可搜索 name / 0x40A"
     # 有 DAQ defaults on ⇒ OnlyCal (no available_events) is filtered.
     assert pane._list.count() == 2
     first_row = _row_widget(pane, 0)

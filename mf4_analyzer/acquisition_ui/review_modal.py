@@ -283,7 +283,7 @@ class ReviewModal(QDialog):
 
         self._btn_discard = QPushButton(ACTION_DISCARD, self)
         self._btn_discard.setObjectName("reviewBtnDiscard")
-        self._btn_discard.setProperty("role", "destructive")
+        self._btn_discard.setProperty("role", "danger")
         self._btn_discard.clicked.connect(
             lambda _checked=False: self.do_discard()
         )
