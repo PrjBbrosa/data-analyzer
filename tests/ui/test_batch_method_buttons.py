@@ -441,9 +441,44 @@ def test_batch_time_method_exposes_exact_sparse_render_fields(qtbot):
     } == expected
     assert form.visible_field_names() == expected - {"x_channel"}
     assert form._w_render_layout.isEnabled() is False
+    assert form._choice_render_layout.isEnabled() is False
     assert form._w_x_channel.isHidden() is True
-    assert form._w_x_origin.isHidden() is False
+    assert form._field_hosts["x_origin"].isHidden() is False
+    assert form._choice_x_origin.isHidden() is False
+    assert form._w_x_origin.isHidden() is True  # bound combo stays hidden
     assert form.get_params() == {}
+
+
+def test_time_binary_fields_use_segmented_choice(qtbot):
+    """图内布局 / X 轴来源 / 时间原点 match the Linear·dB one-click surface."""
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+    from mf4_analyzer.ui_kit.widgets.segmented_choice import SegmentedChoice
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("time")
+    form.resize(288, 320)
+    form.show()
+    qtbot.wait(20)
+
+    expected = {
+        "render_layout": ("叠加", "分屏"),
+        "x_source": ("时间", "通道"),
+        "x_origin": ("从零开始", "绝对时间"),
+    }
+    for name, labels in expected.items():
+        choice = form._choice_widgets[name]
+        assert isinstance(choice, SegmentedChoice)
+        assert choice.bound_combo() is form._widgets[name]
+        assert form._widgets[name].isHidden() is True
+        assert choice.isVisibleTo(form) is True
+        assert tuple(button.text() for button in choice.buttons()) == labels
+        # Two-column Batch grid leaves each binary field ~half width; require
+        # equal segments rather than full glyph advance (4-hanzi labels can
+        # be 1px under at 288px offscreen).
+        widths = [button.width() for button in choice.buttons()]
+        assert min(widths) > 0
+        assert abs(widths[0] - widths[1]) <= 1
 
 
 def test_time_x_dependency_uses_one_stable_right_grid_slot(qtbot):
@@ -775,18 +810,18 @@ def test_non_time_render_hides_both_x_dependency_rows_and_time_restores(
     form.set_method("time")
     form.apply_params({"x_source": "channel"})
     assert form._w_x_channel.isHidden() is False
-    assert form._w_x_origin.isHidden() is True
+    assert form._field_hosts["x_origin"].isHidden() is True
 
     form.set_method(method)
 
     assert form._form.indexOf(form._w_x_channel) == -1
     assert form._form.indexOf(form._w_x_origin) == -1
     assert form._w_x_channel.isHidden() is True
-    assert form._w_x_origin.isHidden() is True
+    assert form._field_hosts["x_origin"].isHidden() is True
 
     form.set_method("time")
     assert form._w_x_channel.isHidden() is False
-    assert form._w_x_origin.isHidden() is True
+    assert form._field_hosts["x_origin"].isHidden() is True
 
 
 def test_time_dependency_rows_resync_after_method_round_trip(qtbot):
@@ -800,8 +835,9 @@ def test_time_dependency_rows_resync_after_method_round_trip(qtbot):
     form.set_method("time")
 
     assert form._w_render_layout.isEnabled() is True
+    assert form._choice_render_layout.isEnabled() is True
     assert form._w_x_channel.isHidden() is False
-    assert form._w_x_origin.isHidden() is True
+    assert form._field_hosts["x_origin"].isHidden() is True
 
 
 def test_batch_builtin_preset_bar_uses_shared_provider_and_partial_apply(qtbot):

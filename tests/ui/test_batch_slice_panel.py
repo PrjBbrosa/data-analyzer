@@ -4,8 +4,8 @@
 ``SlicePanel`` only applies to the two spectrogram methods (``fft_time`` /
 ``order_time``); ``time``/``fft`` never see it. The panel follows the
 "预处理" card skeleton: a ``PillSwitch`` main toggle that collapses the whole
-settings area when off, plus a single-dimension slice editor (axis combo +
-comma-separated positions).
+settings area when off, plus a single-dimension slice editor (segmented axis
+choice + comma-separated positions).
 """
 from __future__ import annotations
 
@@ -81,9 +81,9 @@ def test_slice_panel_axis_switch_updates_unit_label(qtbot):
     assert panel._unit_label.text() == "s"
 
 
-def test_slice_axis_combo_stays_visible_when_its_slot_cannot_fit_segments(qtbot):
-    """Do not replace a 90px Batch slot with clipped two-segment labels."""
-    from PyQt5.QtWidgets import QComboBox
+def test_slice_axis_uses_segmented_choice_not_dropdown(qtbot):
+    """Binary 切片维度 is a one-click SegmentedChoice; the combo stays hidden."""
+    from mf4_analyzer.ui_kit.widgets.segmented_choice import SegmentedChoice
 
     panel = _make_panel(qtbot)
     panel._enable_switch.setChecked(True)
@@ -91,14 +91,17 @@ def test_slice_axis_combo_stays_visible_when_its_slot_cannot_fit_segments(qtbot)
     panel.show()
     qtbot.wait(20)
 
-    combo = panel._axis_combo
-    required_width = (
-        2 * max(combo.fontMetrics().horizontalAdvance(combo.itemText(index))
-                for index in range(combo.count()))
-        + 28  # two button paddings/borders plus the segmented track edge
+    assert isinstance(panel._axis_choice, SegmentedChoice)
+    assert panel._axis_choice.bound_combo() is panel._axis_combo
+    assert panel._axis_combo.isHidden() is True
+    assert panel._axis_choice.isVisibleTo(panel) is True
+    assert tuple(button.text() for button in panel._axis_choice.buttons()) == (
+        "固定时间",
+        "固定频率",
     )
-    assert isinstance(combo, QComboBox)
-    assert combo.width() < required_width
+    # Both segment labels remain fully painted inside the narrow Batch column.
+    for button in panel._axis_choice.buttons():
+        assert button.width() >= button.fontMetrics().horizontalAdvance(button.text())
 
 
 def test_slice_panel_order_time_context_renames_second_axis_and_clears_unit(qtbot):
@@ -106,6 +109,7 @@ def test_slice_panel_order_time_context_renames_second_axis_and_clears_unit(qtbo
     panel.set_context(method="order_time")
 
     assert panel._axis_combo.itemText(1) == "固定阶次"
+    assert panel._axis_choice.buttons()[1].text() == "固定阶次"
 
     panel._axis_combo.setCurrentIndex(panel._axis_combo.findData("y"))
     assert panel._unit_label.text() == ""
@@ -117,6 +121,7 @@ def test_slice_panel_context_switch_back_to_fft_time_restores_frequency_wording(
     panel.set_context(method="fft_time")
 
     assert panel._axis_combo.itemText(1) == "固定频率"
+    assert panel._axis_choice.buttons()[1].text() == "固定频率"
 
     panel._axis_combo.setCurrentIndex(panel._axis_combo.findData("y"))
     assert panel._unit_label.text() == "Hz"

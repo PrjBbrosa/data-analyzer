@@ -150,6 +150,9 @@ _WEIGHTINGS: tuple[str, ...] = ("None", "A")
 _BINARY_CHOICE_FIELDS = frozenset({
     "estimator", "nfft_mode", "weighting", "magnitude_scale",
     "frequency_scale", "phase_mode",
+    # Time-domain binary editors share the same one-click SegmentedChoice
+    # surface as FRF display toggles / 切片维度.
+    "render_layout", "x_source", "x_origin",
 })
 _FRF_ESTIMATION_FIELDS = (
     "estimator", "window", "t_win_s", "overlap", "nfft_mode", "nfft",
@@ -558,7 +561,14 @@ class _GridFormAdapter:
         host = self._owner._field_hosts.get(name)
         if host is not None:
             host.setVisible(bool(visible))
-        widget.setVisible(bool(visible))
+        visible_widget = self._owner._visible_widgets.get(name, widget)
+        if visible_widget is not widget:
+            # SegmentedChoice (and other hosts) own the painted surface; the
+            # bound combo must stay hidden even while the row is shown.
+            widget.hide()
+            visible_widget.setVisible(bool(visible))
+        else:
+            widget.setVisible(bool(visible))
         label = self._owner._field_labels.get(name)
         if label is not None:
             label.setVisible(bool(visible))
@@ -872,6 +882,8 @@ class DynamicParamForm(QWidget):
                     choice.bind(widget, labels=("展开", "±180°"))
                 else:
                     choice.bind(widget)
+                choice.setMinimumWidth(0)
+                choice.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
                 self._choice_widgets[name] = choice
                 setattr(self, f"_choice_{name}", choice)
                 visible_widget = choice
@@ -960,9 +972,11 @@ class DynamicParamForm(QWidget):
         self._grouping_cards.set_mode(
             str(self._w_render_group_by.currentData() or "none"), emit=False,
         )
-        self._w_render_layout.setEnabled(
-            self._w_render_group_by.currentData() != "none"
-        )
+        enabled = self._w_render_group_by.currentData() != "none"
+        self._w_render_layout.setEnabled(enabled)
+        choice = self._choice_widgets.get("render_layout")
+        if choice is not None:
+            choice.setEnabled(enabled)
 
     def _on_grouping_card_changed(self, mode: str) -> None:
         index = self._w_render_group_by.findData(str(mode))

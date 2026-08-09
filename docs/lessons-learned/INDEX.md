@@ -148,6 +148,7 @@ lesson by default.
 | [Batch Picker Layout Uses The Current Stack Page And Readable Empty State](batch-current-stack-page-and-empty-picker-height.md) | Changing a Batch stacked field that swaps compact and multi-row pages, or the signal-picker popup's empty/list geometry. | See lesson |
 | [Batch Filter Fields Share One Form Column](batch-filter-fields-share-form-column.md) | Editing batch dialog form rows that wrap short combo/spin editors, | See lesson |
 | [Comma List Inputs Accept Chinese Separators](comma-list-inputs-accept-chinese-separators.md) | Adding or editing a user-typed comma-separated field (slice | See lesson |
+| [Binary Batch Combos Prefer SegmentedChoice](binary-batch-combos-prefer-segmented-choice.md) | Replacing or reviewing a product control that has exactly two fixed | See lesson |
 
 ## Selection Rules
 

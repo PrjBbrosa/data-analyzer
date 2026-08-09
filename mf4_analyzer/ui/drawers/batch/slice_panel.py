@@ -11,27 +11,16 @@ import math
 
 from PyQt5.QtCore import QSignalBlocker, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout,
-    QWidget,
+    QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QSizePolicy,
+    QVBoxLayout, QWidget,
 )
 
 from ....list_text import split_list_text
+from ....ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...widgets.pill_switch import PillSwitch
 
 
 _MAX_POSITIONS = 4
-
-
-def _field(widget: QWidget, max_width: int | None = None) -> QWidget:
-    host = QWidget()
-    lay = QHBoxLayout(host)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(6)
-    if max_width is not None:
-        widget.setMaximumWidth(max_width)
-    lay.addWidget(widget)
-    lay.addStretch(1)
-    return host
 
 
 def _format_number(value: float) -> str:
@@ -84,11 +73,18 @@ class SlicePanel(QWidget):
         form.setHorizontalSpacing(6)
         form.setVerticalSpacing(4)
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
+        # Hidden combo keeps preset / currentData APIs; SegmentedChoice is the
+        # visible binary control (same pattern as Batch 目标策略 / 幅值单位).
         self._axis_combo = QComboBox(form_host)
         self._axis_combo.addItem("固定时间", "time")
         self._axis_combo.addItem("固定频率", "y")
-        form.addRow("切片维度", _field(self._axis_combo, 140))
+        self._axis_choice = SegmentedChoice(form_host)
+        self._axis_choice.bind(self._axis_combo)
+        self._axis_choice.setMinimumWidth(0)
+        self._axis_choice.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        form.addRow("切片维度", self._axis_choice)
 
         position_row = QWidget(form_host)
         position_lay = QHBoxLayout(position_row)
@@ -157,6 +153,7 @@ class SlicePanel(QWidget):
         self._method = str(method or "fft_time")
         label = "固定阶次" if self._method == "order_time" else "固定频率"
         self._axis_combo.setItemText(1, label)
+        self._axis_choice.refresh_from_bound_combo()
         self._refresh_unit()
         self._refresh_summary()
 
@@ -232,4 +229,5 @@ class SlicePanel(QWidget):
                 self._refresh_unit()
         finally:
             del blockers
+        self._axis_choice.sync_from_bound_combo()
         self.changed.emit()
