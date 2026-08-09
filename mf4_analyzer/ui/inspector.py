@@ -265,6 +265,7 @@ class Inspector(QWidget):
         if mode == 'time':
             target_layout = self.top.range_group_layout()
             self.top.set_range_group_embedded(False)
+            self.top.set_range_from_time_visible(False)
             self.top.set_xaxis_section_visible(True)
             self.top.setVisible(True)
             # The range card hosts [range_group, filter_panel]; re-insert the
@@ -279,6 +280,7 @@ class Inspector(QWidget):
             }[mode]
             target_layout = ctx.time_range_layout()
             self.top.set_range_group_embedded(True)
+            self.top.set_range_from_time_visible(mode == 'frf')
             self.top.setVisible(False)
             target_layout.addWidget(group)
         self._range_group_owner_layout = target_layout

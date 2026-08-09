@@ -133,14 +133,14 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 accent=_MODE_FFT_TIME,
             ),
             QuickRow(
-                "频响",
-                sub="频响（FRF / 系统辨识）：看输出相对输入的传递特性",
-                accent=_MODE_FRF,
-            ),
-            QuickRow(
                 "阶次",
                 sub="按电机转速跟踪频率（EPS 电机转速为 base）",
                 accent=_MODE_ORDER,
+            ),
+            QuickRow(
+                "频响",
+                sub="频响（FRF / 系统辨识）：看输出相对输入；取时域范围为一次性快照",
+                accent=_MODE_FRF,
             ),
         ),
     ),

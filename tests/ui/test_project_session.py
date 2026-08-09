@@ -28,6 +28,14 @@ def _write_csv(path, n=40):
             w.writerow([i / 100.0, float(i)])
 
 
+def _write_frf_csv(path, n=2_000):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["time", "input", "output"])
+        for i in range(n):
+            w.writerow([i / 1_000.0, float(i % 13), float((i + 3) % 17)])
+
+
 def test_save_project_writes_file(qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui import project_io as pio
@@ -62,6 +70,50 @@ def test_open_project_roundtrip(qapp, tmp_path):
     assert [fd.filename for fd in mw2.files.values()] == ["a.csv", "b.csv"]
     assert mw2.view_manager.views[0].name == "主视图"
     assert mw2.chart_stack.current_mode() == "time"
+
+
+def test_open_project_migrates_legacy_frf_range_to_explicit_seconds(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "frf.csv"
+    project = tmp_path / "legacy-frf-range.tlproj"
+    _write_frf_csv(csv_a)
+    window = MainWindow()
+    window._load_one(str(csv_a))
+    fid = next(iter(window.files))
+    pane = window.analysis_managers["frf"].get(0).panes[0]
+    pane.input_source = (fid, "input")
+    pane.output_source = (fid, "output")
+    pane.time_range = (0.25, 0.75)
+    window.save_project(project)
+
+    payload = json.loads(project.read_text(encoding="utf-8"))
+    payload["current_mode"] = "frf"
+    frf_view = payload["analysis_views"]["frf"]["views"][0]
+    frf_view["schema"] = 5
+    frf_view["params"]["range_mode"] = "current_time"
+    frf_view["panes"][0]["time_range"] = [0.25, 0.75]
+    frf_view["panes"][0]["source_time_view_id"] = "legacy-time-view"
+    project.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    restored = MainWindow()
+    restored.open_project(project)
+
+    assert restored.inspector.top.range_enabled()
+    assert restored.inspector.top.range_values() == (0.25, 0.75)
+    restored_pane = restored.analysis_managers["frf"].get(0).panes[0]
+    assert restored_pane.time_range == (0.25, 0.75)
+    assert restored_pane.source_time_view_id is None
+
+    rewritten = tmp_path / "rewritten.tlproj"
+    restored.save_project(rewritten)
+    rewritten_frf = json.loads(rewritten.read_text(encoding="utf-8"))[
+        "analysis_views"
+    ]["frf"]["views"][0]
+    assert "range_mode" not in rewritten_frf["params"]
+    assert "source_time_view_id" not in rewritten_frf["panes"][0]
 
 
 def test_project_roundtrip_preserves_per_source_name_xaxis(qapp, tmp_path):

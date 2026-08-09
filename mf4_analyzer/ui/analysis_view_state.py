@@ -20,12 +20,15 @@ from ..db_reference import migrate_legacy_reference_params
 ChannelKey = tuple[str, str]
 MAX_PANES = 2  # spec §2: v1 caps split at 2; the model is list-shaped for later N
 # dB reference defaults (Task 8, spec §13 S3) introduced nested schema 2;
-# FRF role state adds schema 3, including separate requested/effective ranges.
+# FRF role state adds schema 3, including separate requested/effective ranges;
+# schema 4 added the pane-local FRF cursor flag; schema 5 replaces it with the
+# shared frequency-domain off/single/dual cursor mode for FFT and FRF panes;
+# schema 6 removes the obsolete FRF Time-View link from persisted output.
 # The additions are field-presence tolerant -- from_dict() keys the
 # migration off "params has db_reference and no db_reference_mode", NOT this
-# number, so schema-2 and schema-3 projects both apply the
+# number, so schema-2 through schema-6 projects all apply the
 # saved snapshot value manual-style instead of erroring or dropping it.
-_SCHEMA = 3
+_SCHEMA = 6
 
 
 def _coerce_key(value: Any) -> ChannelKey:
@@ -63,7 +66,6 @@ class PaneState:
             "xlim": list(self.xlim) if self.xlim else None,
             "ylim": list(self.ylim) if self.ylim else None,
             "ylims": {key: list(value) for key, value in self.ylims.items()},
-            "source_time_view_id": self.source_time_view_id,
             "effective_time_range": (
                 list(self.effective_time_range)
                 if self.effective_time_range else None
@@ -135,6 +137,23 @@ class AnalysisViewState:
         # db_reference at all keeps the key absent so the live control's
         # current Auto/Manual state drives it instead of an injected default.
         params = migrate_legacy_reference_params(dict(data.get("params", {})))
+        # Schema-5-and-earlier FRF views hid range origin and Time-View
+        # identity beside the shared range inputs.  Read that historical
+        # state once, then reduce it to the universal explicit pane range
+        # contract.  A missing old range_mode meant "full"; schema 6 no
+        # longer writes it, so do not erase a newly persisted explicit range.
+        is_legacy_payload = int(data.get("schema") or 0) < _SCHEMA
+        is_frf = any(
+            pane.input_source is not None and pane.output_source is not None
+            for pane in panes
+        )
+        if "range_mode" in params or (is_legacy_payload and is_frf):
+            legacy_range_mode = str(params.pop("range_mode", "full") or "full")
+            if legacy_range_mode not in {"manual", "current_time"}:
+                for pane in panes:
+                    pane.time_range = None
+            for pane in panes:
+                pane.source_time_view_id = None
         return cls(
             name=data["name"],
             tab_color=data["tab_color"],

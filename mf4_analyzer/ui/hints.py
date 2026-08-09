@@ -281,7 +281,7 @@ _HINTS = (
     ),
     Hint(
         id="frf.time_range_snapshot",
-        text="时域范围取快照，拖动后不重算",
+        text="取时域范围一次填入；缩放不改写",
         surface="context",
         modes=frozenset({"frf"}),
         priority=100,

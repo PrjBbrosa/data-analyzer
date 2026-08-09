@@ -45,14 +45,11 @@ _FRF_TOOLTIPS = {
     "input": "系统激励输入 x(t)。输入与输出必须来自同一逻辑来源，并共享真实时间轴。",
     "output": "系统响应输出 y(t)。FRF 表示输出相对输入的传递特性。",
     "swap": "交换系统激励输入 x(t) 与响应输出 y(t)；会改变 H(f) 的传递方向。",
-    "range": "全范围使用全部数据；“当前时域范围”在选择时冻结为快照；手动范围按秒指定。",
     "window": "窗函数控制频谱泄漏与主瓣宽度；它不改变数据本身的物理频率分辨率。",
-    "periodic": "使用 FFT 周期窗语义，避免重复对称窗端点；不表示原始信号必须周期。",
     "segment": "段越长，频率分辨率越细；同一时长内可用于平均的完整段数通常越少。",
     "overlap": "提高相邻段重叠会增加分段密度和计算量，不等于增加同等数量的独立信息。",
     "nfft_mode": "自动按段长选择 NFFT；手动 NFFT 不得小于段长。",
     "nfft": "零填充只加密频率采样点，不提高由段长决定的物理频率分辨率。",
-    "detrend": "每段减去均值以抑制 DC 泄漏；这不是线性去趋势。",
     "magnitude": "dB 显示传递比的 20 log10(|H|)；线性显示传递比本身，不使用绝对 dB reference。",
     "frequency": "对数轴只在显示层隐藏 DC；不会删除原始 FRF 结果或导出数据。",
     "phase_unwrapped": "展开只移除 ±360° 跳变；真实系统延迟仍完整保留在相位斜率中。",
@@ -159,7 +156,6 @@ class FrfContextual(QWidget):
     pair_changed = pyqtSignal(object, object)
     compute_params_changed = pyqtSignal(object)
     display_params_changed = pyqtSignal(object)
-    range_mode_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -214,18 +210,6 @@ class FrfContextual(QWidget):
         self.btn_swap.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         pair_actions.addWidget(self.btn_swap)
         mapping_layout.addLayout(pair_actions)
-        range_form = QFormLayout()
-        _configure_form(range_form)
-        self.combo_range_mode = QComboBox(mapping_card)
-        self.combo_range_mode.addItem("全范围", "full")
-        self.combo_range_mode.addItem("使用当前时域范围", "current_time")
-        self.combo_range_mode.addItem("手动范围", "manual")
-        self.combo_range_mode.setToolTip(_FRF_TOOLTIPS["range"])
-        range_form.addRow(
-            "分析范围:",
-            _fit_field(self.combo_range_mode, max_width=_LONG_FIELD_MAX_WIDTH),
-        )
-        mapping_layout.addLayout(range_form)
         self._time_range_slot = QVBoxLayout()
         self._time_range_slot.setContentsMargins(0, 0, 0, 0)
         self._time_range_slot.setSpacing(0)
@@ -280,15 +264,6 @@ class FrfContextual(QWidget):
             "窗函数:", _fit_field(self.combo_window, max_width=_SHORT_FIELD_MAX_WIDTH)
         )
 
-        self.chk_periodic = QCheckBox("周期窗", params_card)
-        # Keep checkbox rows on the same 32px cadence as the surrounding
-        # editors.  A bare QCheckBox otherwise settles at 18px, making the
-        # following field jump up by 14px in this compact FRF form.
-        self.chk_periodic.setFixedHeight(32)
-        self.chk_periodic.setChecked(True)
-        self.chk_periodic.setToolTip(_FRF_TOOLTIPS["periodic"])
-        compute_form.addRow("窗语义:", self.chk_periodic)
-
         self.spin_t_win = _no_buttons(QDoubleSpinBox(params_card))
         self.spin_t_win.setDecimals(3)
         self.spin_t_win.setRange(0.001, 3600.0)
@@ -333,11 +308,6 @@ class FrfContextual(QWidget):
             "NFFT:", _fit_field(self.spin_nfft, max_width=_SHORT_FIELD_MAX_WIDTH)
         )
 
-        self.chk_detrend = QCheckBox("每段去均值", params_card)
-        self.chk_detrend.setFixedHeight(32)
-        self.chk_detrend.setChecked(True)
-        self.chk_detrend.setToolTip(_FRF_TOOLTIPS["detrend"])
-        compute_form.addRow("去趋势:", self.chk_detrend)
         params_layout.addLayout(compute_form)
 
         self.lbl_validation = QLabel("", params_card)
@@ -531,9 +501,6 @@ class FrfContextual(QWidget):
     def _wire(self) -> None:
         self.combo_input.currentIndexChanged.connect(self._on_pair_changed)
         self.combo_output.currentIndexChanged.connect(self._on_pair_changed)
-        self.combo_range_mode.currentIndexChanged.connect(
-            lambda _index: self.range_mode_changed.emit(self.range_mode())
-        )
         self.btn_swap.clicked.connect(self.swap_sources)
         self.combo_nfft_mode.currentIndexChanged.connect(self._sync_nfft_enabled)
         self.btn_compute.clicked.connect(self.frf_requested)
@@ -560,11 +527,7 @@ class FrfContextual(QWidget):
             self.spin_coherence_threshold,
         ):
             spin.valueChanged.connect(self._on_param_changed)
-        for check in (
-            self.chk_periodic,
-            self.chk_detrend,
-            self.chk_fade_low_coherence,
-        ):
+        for check in (self.chk_fade_low_coherence,):
             check.toggled.connect(self._on_param_changed)
     def time_range_layout(self):
         return self._time_range_slot
@@ -671,12 +634,6 @@ class FrfContextual(QWidget):
 
     def pair(self):
         return self.input_source(), self.output_source()
-
-    def range_mode(self) -> str:
-        return str(self.combo_range_mode.currentData())
-
-    def set_range_mode(self, mode) -> bool:
-        return self._set_combo_data(self.combo_range_mode, str(mode))
 
     def swap_sources(self) -> None:
         input_source, output_source = self.pair()
@@ -801,8 +758,8 @@ class FrfContextual(QWidget):
             "nfft_mode": nfft_mode,
             "nfft": int(self.spin_nfft.value()) if nfft_mode == "manual" else None,
             "window": str(self.combo_window.currentData()),
-            "periodic_window": bool(self.chk_periodic.isChecked()),
-            "detrend": "constant" if self.chk_detrend.isChecked() else "none",
+            "periodic_window": True,
+            "detrend": "constant",
         }
 
     def frf_params(self):
@@ -843,8 +800,6 @@ class FrfContextual(QWidget):
                 self._set_combo_data(self.combo_estimator, str(values["estimator"]).lower())
             if "window" in values:
                 self._set_combo_data(self.combo_window, str(values["window"]).lower())
-            if "periodic_window" in values:
-                self.chk_periodic.setChecked(bool(values["periodic_window"]))
             if "t_win_s" in values:
                 self.spin_t_win.setValue(float(values["t_win_s"]))
             if "overlap" in values:
@@ -855,8 +810,6 @@ class FrfContextual(QWidget):
                 self._set_combo_data(self.combo_nfft_mode, token)
             if values.get("nfft") is not None:
                 self.spin_nfft.setValue(int(values["nfft"]))
-            if "detrend" in values:
-                self.chk_detrend.setChecked(str(values["detrend"]).lower() == "constant")
             if "magnitude_scale" in values:
                 self._set_combo_data(
                     self.combo_magnitude_scale,

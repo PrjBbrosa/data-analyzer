@@ -847,15 +847,6 @@ class MainWindow(
         self.inspector.frf_ctx.display_params_changed.connect(
             self._on_frf_display_params_changed
         )
-        self.inspector.frf_ctx.range_mode_changed.connect(
-            self._on_frf_range_mode_changed
-        )
-        self.inspector.top.spin_start.valueChanged.connect(
-            self._on_frf_manual_time_range_edited
-        )
-        self.inspector.top.spin_end.valueChanged.connect(
-            self._on_frf_manual_time_range_edited
-        )
         self.inspector.order_time_requested.connect(self.do_order_time)
         # dB reference is display-only: changing it while in FFT mode should
         # immediately re-render without recompute. Re-evaluate _fft_render_signature
@@ -1049,14 +1040,12 @@ class MainWindow(
         self.inspector.top.max_range_requested.connect(
             self._on_time_range_max_requested
         )
+        self.inspector.top.range_from_time_requested.connect(
+            self._on_frf_range_from_time_requested
+        )
         xrange_changed = getattr(self.canvas_time, 'xrange_changed', None)
         if xrange_changed is not None:
             xrange_changed.connect(self._on_time_canvas_xrange_changed)
-            xrange_changed.connect(
-                lambda lo, hi: self._on_frf_source_time_xrange_changed(
-                    self.canvas_time, lo, hi
-                )
-            )
         self._connect_canvas_range_signals(self.canvas_time)
         self._connect_channel_color_sync(self.canvas_time)
 
@@ -1489,6 +1478,8 @@ class MainWindow(
         self.chart_stack.set_mode(mode)
         self.navigator.set_time_visibility_available(mode == 'time')
         self.inspector.set_mode(mode)
+        if mode == 'frf':
+            self._sync_frf_range_from_time_action()
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
         if mode in {'fft', 'fft_time', 'order'}:
             # dB-reference-defaults nudge feed (spec S5 / A17): a section
@@ -1735,6 +1726,10 @@ class MainWindow(
         return lo >= union_lo - tol and hi <= union_hi + tol
 
     def _on_time_canvas_xrange_changed(self, lo, hi):
+        if self.chart_stack.current_mode() != 'time':
+            if self.chart_stack.current_mode() == 'frf':
+                self._sync_frf_range_from_time_action()
+            return
         # In split mode: skip update when focus is on the secondary canvas so
         # the inspector shows the focused pane's range, not the primary's.
         if (self.chart_stack.split_active()
@@ -1743,6 +1738,10 @@ class MainWindow(
         self._sync_time_range_inputs_from_visible_xlim((lo, hi))
 
     def _on_secondary_canvas_xrange_changed(self, lo, hi):
+        if self.chart_stack.current_mode() != 'time':
+            if self.chart_stack.current_mode() == 'frf':
+                self._sync_frf_range_from_time_action()
+            return
         if self.chart_stack.focused_canvas() is self.chart_stack.secondary_canvas():
             self._sync_time_range_inputs_from_visible_xlim((lo, hi))
 
@@ -1812,14 +1811,26 @@ class MainWindow(
         top.set_range_limits(lo, hi)
         # 同步填入 [lo, hi] 并（blockSignals 地）勾选，避免可见 xlim 覆盖。
         top.set_range_from_span(lo, hi)
-        # 按当前模式应用（与现有处理器的尾部保持一致）。
+        mode = self.chart_stack.current_mode()
+        if mode in self.analysis_managers:
+            manager = self.analysis_managers[mode]
+            state = manager.get(manager.active)
+            page = self._analysis_page(mode)
+            pane_idx = page.focused_index()
+            before = self._normalize_analysis_time_range(
+                state.panes[pane_idx].time_range
+            )
+            self._capture_analysis_time_range(mode, state, pane_idx=pane_idx)
+            if mode == 'frf' and state.panes[pane_idx].time_range != before:
+                self._dirty_frf_pane(state, pane_idx, clear_effective=True)
+            return
+        # 按当前 Time 模式应用（与现有处理器的尾部保持一致）。
         canvas = self.chart_stack.focused_canvas()
         idx = self._view_index_for_canvas(canvas)
         if idx is not None and 0 <= idx < len(self.view_manager.views):
             self._capture_range_change_into_view(
                 self.view_manager.get(idx), canvas
             )
-        mode = self.chart_stack.current_mode()
         if mode == 'time':
             if self.files and self.navigator.get_checked_channels():
                 self._replot_canvas_for_view(idx, canvas)
@@ -1829,6 +1840,19 @@ class MainWindow(
         # （与拖拽预览路径一致）。
 
     def _on_time_range_enabled_changed(self, enabled):
+        mode = self.chart_stack.current_mode()
+        if mode in self.analysis_managers:
+            manager = self.analysis_managers[mode]
+            state = manager.get(manager.active)
+            page = self._analysis_page(mode)
+            pane_idx = page.focused_index()
+            before = self._normalize_analysis_time_range(
+                state.panes[pane_idx].time_range
+            )
+            self._capture_analysis_time_range(mode, state, pane_idx=pane_idx)
+            if mode == 'frf' and state.panes[pane_idx].time_range != before:
+                self._dirty_frf_pane(state, pane_idx, clear_effective=True)
+            return
         canvas = self.chart_stack.focused_canvas()
         xaxis_draft = self._snapshot_xaxis_controls()
         try:
@@ -2312,12 +2336,6 @@ class MainWindow(
                 # Y limits and every other View option, but let the new X
                 # data extent establish the viewport.
                 state.xlim = None
-                if current_spec.mode == CHANNEL_MODE:
-                    self._invalidate_frf_time_view_link(
-                        state.view_id,
-                        "关联的时域 View 已切换为自定义横轴；"
-                        "请切回物理时间后重新关联。",
-                    )
         if self.files and self.chart_stack.current_mode() == 'time':
             rendered = self._replot_canvas_for_view(
                 idx,

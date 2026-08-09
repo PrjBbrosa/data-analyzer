@@ -102,13 +102,13 @@ def test_project_restore_source_predicate_requires_a_complete_frf_pair():
 
 
 # ----------------------------------------------------------------------
-# Task 8 Step 8.1 plus FRF: AnalysisViewState nested schema 1 -> 2 -> 3
+# Task 8 Step 8.1 plus FRF: AnalysisViewState nested schema 1 -> 2 -> 3 -> 4 -> 5
 # migration (spec §13 S3/S5). The migration keys off "params has db_reference and no
 # db_reference_mode", NOT the nested schema number -- from_dict() ignores
-# the schema field entirely, so schema-2 and schema-3 projects both apply the
+# the schema field entirely, so schema-2 through schema-5 projects all apply the
 # snapshot db_reference manual-style.
 # ----------------------------------------------------------------------
-def test_analysis_view_schema3_round_trip_preserves_db_reference_mode_and_value():
+def test_analysis_view_schema6_round_trip_preserves_db_reference_mode_and_value():
     v = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
     v.params = {
         "db_reference_mode": "manual",
@@ -116,7 +116,7 @@ def test_analysis_view_schema3_round_trip_preserves_db_reference_mode_and_value(
         "nfft": 4096,
     }
     d = v.to_dict()
-    assert d["schema"] == 3
+    assert d["schema"] == 6
 
     v2 = AnalysisViewState.from_dict(d)
     assert v2.params["db_reference_mode"] == "manual"

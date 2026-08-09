@@ -107,7 +107,7 @@ def test_param_form_fft_time_fields(qtbot):
     visible = form.visible_field_names()
     assert {
         "window", "nfft_mode", "nfft", "t_win_s", "overlap",
-        "remove_mean", "weighting",
+        "weighting",
     } == visible
 
 
@@ -210,7 +210,7 @@ def test_batch_sheet_weighting_options_match_main_panel(qtbot):
     assert actual == expected
 
 
-def test_param_form_fft_time_overlap_and_remove_mean_round_trip(qtbot):
+def test_param_form_fft_time_overlap_ignores_legacy_remove_mean(qtbot):
     from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
     form = DynamicParamForm()
     qtbot.addWidget(form)
@@ -218,7 +218,7 @@ def test_param_form_fft_time_overlap_and_remove_mean_round_trip(qtbot):
     form.apply_params({"overlap": 0.75, "remove_mean": False, "nfft": 512})
     out = form.get_params()
     assert out["overlap"] == 0.75
-    assert out["remove_mean"] is False
+    assert "remove_mean" not in out
     assert out["nfft"] == 512
 
 
@@ -357,8 +357,8 @@ def test_batch_frf_param_form_uses_canonical_compute_and_display_fields(qtbot):
     qtbot.addWidget(form)
     form.set_method("frf")
     assert {
-        "estimator", "window", "periodic_window", "t_win_s", "overlap",
-        "nfft_mode", "nfft", "detrend", "magnitude_scale",
+        "estimator", "window", "t_win_s", "overlap", "nfft_mode", "nfft",
+        "magnitude_scale",
         "frequency_scale", "phase_mode", "coherence_threshold",
         "fade_low_coherence",
     } == form.visible_field_names()
@@ -496,8 +496,7 @@ def test_preset_cards_use_contract_fonts_and_heights(qtbot):
         }),
         ("fft_time", {
             "window": "blackman", "nfft_mode": "fixed", "nfft": 4096,
-            "t_win_s": 0.75, "overlap": 0.8, "remove_mean": False,
-            "weighting": "A",
+            "t_win_s": 0.75, "overlap": 0.8, "weighting": "A",
         }),
         ("order_time", {
             "window": "bartlett", "nfft_mode": "fixed", "nfft": 2048,

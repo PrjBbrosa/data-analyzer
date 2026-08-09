@@ -90,10 +90,6 @@ class ViewMixin:
         xrange_changed = getattr(canvas, 'xrange_changed', None)
         if xrange_changed is not None:
             xrange_changed.connect(self._on_secondary_canvas_xrange_changed)
-            xrange_changed.connect(
-                lambda lo, hi, c=canvas:
-                self._on_frf_source_time_xrange_changed(c, lo, hi)
-            )
         canvas._view_range_connected = True
 
     def _capture_current_view(self):
@@ -330,9 +326,7 @@ class ViewMixin:
             return
         if not self._confirm_view_delete(self.view_manager.get(idx).name):
             return
-        deleted_view_id = self.view_manager.get(idx).view_id
         self._capture_current_view()
-        self._on_frf_source_time_view_deleted(deleted_view_id)
         self.view_manager.delete_view(idx)
 
     def _confirm_view_delete(self, name):
@@ -369,19 +363,23 @@ class ViewMixin:
         axis_opts = axis_opts or {}
         top = self.inspector.top
 
-        range_opts = axis_opts.get('range_filter') or {}
-        range_enabled = bool(range_opts.get('enabled', False))
-        range_start = range_opts.get('start', top.spin_start.value())
-        range_end = range_opts.get('end', top.spin_end.value())
-        old_chk = top.chk_range.blockSignals(True)
-        try:
-            top.chk_range.setChecked(range_enabled)
-        finally:
-            top.chk_range.blockSignals(old_chk)
-        top.set_range_values(range_start, range_end)
-        update_range_rows = getattr(top, '_update_range_rows_visible', None)
-        if callable(update_range_rows):
-            update_range_rows()
+        # The range widgets are shared with analysis sections.  Restoring a
+        # Time View while FRF/FFT is on screen must not overwrite the
+        # analysis section's explicit range with Time View filter state.
+        if self.chart_stack.current_mode() == 'time':
+            range_opts = axis_opts.get('range_filter') or {}
+            range_enabled = bool(range_opts.get('enabled', False))
+            range_start = range_opts.get('start', top.spin_start.value())
+            range_end = range_opts.get('end', top.spin_end.value())
+            old_chk = top.chk_range.blockSignals(True)
+            try:
+                top.chk_range.setChecked(range_enabled)
+            finally:
+                top.chk_range.blockSignals(old_chk)
+            top.set_range_values(range_start, range_end)
+            update_range_rows = getattr(top, '_update_range_rows_visible', None)
+            if callable(update_range_rows):
+                update_range_rows()
 
         spec = CustomXAxisSpec.from_axis_opts(axis_opts.get('x_axis'))
         requested_mode = spec.mode

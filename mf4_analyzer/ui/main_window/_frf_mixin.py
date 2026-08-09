@@ -131,32 +131,6 @@ class FrfMixin:
             if limits is not None:
                 canvas.set_ylim(panel, *limits)
 
-    def _capture_frf_time_range(self, state, pane_idx=None):
-        page = self._analysis_page("frf")
-        if pane_idx is None:
-            pane_idx = page.focused_index()
-        idx = min(int(pane_idx), len(state.panes) - 1)
-        pane = state.panes[idx]
-        mode = self.inspector.frf_ctx.range_mode()
-        state.params["range_mode"] = mode
-        if mode == "manual":
-            pane.source_time_view_id = None
-            pane.time_range = self._normalize_analysis_time_range(
-                self.inspector.top.range_values()
-            )
-        elif mode == "full":
-            pane.source_time_view_id = None
-            pane.time_range = None
-
-    def _apply_frf_time_range(self, state):
-        page = self._analysis_page("frf")
-        idx = min(page.focused_index(), len(state.panes) - 1)
-        pane = state.panes[idx]
-        mode = str(state.params.get("range_mode", "full"))
-        self.inspector.frf_ctx.set_range_mode(mode)
-        if mode == "manual" and pane.time_range is not None:
-            self.inspector.top.set_range_from_span(*pane.time_range)
-
     def _mark_frf_pane_stale(self, state, pane_idx):
         manager = self.analysis_managers["frf"]
         if manager.get(manager.active) is not state:
@@ -208,69 +182,6 @@ class FrfMixin:
         for idx in range(min(page.pane_count(), len(state.panes))):
             page.pane_canvas(idx).set_display_params(params)
 
-    def _on_frf_range_mode_changed(self, mode):
-        if self._applying_analysis_view:
-            return
-        _manager, state, _page, pane_idx, pane = self._active_frf_state()
-        state.params["range_mode"] = str(mode)
-        self.inspector.frf_ctx.set_validation_message("")
-        if mode == "current_time":
-            try:
-                source_state, time_range = self._current_physical_time_view_range()
-            except FrfPreflightError as issue:
-                pane.source_time_view_id = None
-                self.inspector.frf_ctx.set_validation_message(str(issue))
-                self.toast(str(issue), "warning")
-            else:
-                pane.source_time_view_id = source_state.view_id
-                pane.time_range = time_range
-                if pane.input_source is not None and pane.output_source is not None:
-                    try:
-                        self._frf_pair_effective_range(
-                            state, pane, lightweight=True
-                        )
-                    except FrfPreflightError as issue:
-                        self.inspector.frf_ctx.set_validation_message(str(issue))
-                        self.toast(str(issue), "warning")
-        elif mode == "manual":
-            pane.source_time_view_id = None
-            pane.time_range = self._normalize_analysis_time_range(
-                self.inspector.top.range_values()
-            )
-        else:
-            pane.source_time_view_id = None
-            pane.time_range = None
-        self._dirty_frf_pane(state, pane_idx, clear_effective=True)
-
-    def _on_frf_manual_time_range_edited(self, *_args):
-        if (
-            self._applying_analysis_view
-            or self.chart_stack.current_mode() != "frf"
-            or self.inspector.frf_ctx.range_mode() != "manual"
-        ):
-            return False
-        _manager, state, _page, pane_idx, pane = self._active_frf_state()
-        time_range = self._normalize_analysis_time_range(
-            self.inspector.top.range_values()
-        )
-        old = self._normalize_analysis_time_range(pane.time_range)
-        if (
-            old is not None
-            and time_range is not None
-            and np.allclose(old, time_range, rtol=0.0, atol=1e-12)
-        ):
-            return False
-        pane.time_range = time_range
-        self._dirty_frf_pane(state, pane_idx, clear_effective=True)
-        return True
-
-    def _time_view_state_by_id(self, view_id):
-        target = str(view_id or "")
-        for state in self.view_manager.views:
-            if state.view_id == target:
-                return state
-        return None
-
     def _current_physical_time_view_range(self):
         resolved = self._focused_time_view_state()
         if resolved is None:
@@ -294,6 +205,39 @@ class FrfMixin:
         if time_range is None:
             raise FrfPreflightError("当前时域 View 没有有限、递增的可见时间范围")
         return state, time_range
+
+    def _sync_frf_range_from_time_action(self):
+        """Keep the FRF snapshot action truthful about the active Time View."""
+        if self.chart_stack.current_mode() != "frf":
+            return
+        top = self.inspector.top
+        try:
+            self._current_physical_time_view_range()
+        except FrfPreflightError as issue:
+            top.set_range_from_time_enabled(False, str(issue))
+        else:
+            top.set_range_from_time_enabled(
+                True, "将当前时域 View 的可见范围一次性填入分析时间。"
+            )
+
+    def _on_frf_range_from_time_requested(self):
+        """Copy the committed physical-time span into the shared range inputs."""
+        try:
+            _time_state, time_range = self._current_physical_time_view_range()
+        except FrfPreflightError as issue:
+            self._sync_frf_range_from_time_action()
+            self.inspector.frf_ctx.set_validation_message(str(issue))
+            self.toast(str(issue), "warning")
+            return False
+        _manager, state, _page, pane_idx, pane = self._active_frf_state()
+        before = self._normalize_analysis_time_range(pane.time_range)
+        self.inspector.top.set_range_from_span(*time_range)
+        self._capture_analysis_time_range("frf", state, pane_idx=pane_idx)
+        if pane.time_range != before:
+            self._dirty_frf_pane(state, pane_idx, clear_effective=True)
+        self.inspector.frf_ctx.set_validation_message("")
+        self._sync_frf_range_from_time_action()
+        return True
 
     @staticmethod
     def _frf_validate_array_shapes(time, signal, role):
@@ -354,44 +298,6 @@ class FrfMixin:
         unit = str((getattr(fd, "channel_units", None) or {}).get(channel, "") or "")
         return (fid, channel), fd, time, signal, fs, unit
 
-    def _frf_requested_range(self, state, pane):
-        mode = str(state.params.get("range_mode", "full"))
-        if mode == "current_time":
-            if pane.source_time_view_id is None:
-                raise FrfPreflightError(
-                    "关联的时域 View 已失效；请重新关联：选择『当前时域范围』。"
-                )
-            source_state = self._time_view_state_by_id(pane.source_time_view_id)
-            if source_state is None:
-                pane.source_time_view_id = None
-                raise FrfPreflightError(
-                    "关联的时域 View 已删除；请重新关联：选择『当前时域范围』。"
-                )
-            spec = CustomXAxisSpec.from_axis_opts(
-                (source_state.axis_opts or {}).get("x_axis")
-            )
-            if spec.mode == CHANNEL_MODE:
-                pane.source_time_view_id = None
-                raise FrfPreflightError(
-                    "关联的时域 View 已切换为自定义横轴；请切回物理时间后重新关联。"
-                )
-            if pane.time_range is None:
-                pane.source_time_view_id = None
-                raise FrfPreflightError(
-                    "关联的时域范围快照缺失；请重新关联：选择『当前时域范围』。"
-                )
-            time_range = pane.time_range
-        elif mode == "manual":
-            time_range = pane.time_range
-            if time_range is None:
-                raise FrfPreflightError("请输入有限、递增的手动时间范围")
-        elif mode == "full":
-            pane.source_time_view_id = None
-            time_range = None
-        else:
-            raise FrfPreflightError(f"未知 FRF 分析范围模式：{mode}")
-        return self._normalize_analysis_time_range(time_range)
-
     def _frf_prepare_pair_samples(self, state, pane, *, validate_selected=True):
         """Read and validate the directional pair on one common time crop."""
 
@@ -410,7 +316,26 @@ class FrfMixin:
         if len(input_time) == 0 or len(output_time) == 0:
             raise FrfPreflightError("输入和输出没有共同的物理时间样本")
 
-        requested_range = self._frf_requested_range(state, pane)
+        try:
+            pane_idx = state.panes.index(pane)
+        except ValueError:
+            # Defensive path for a detached pane supplied by a narrow caller.
+            # Normal candidate construction always owns a pane in ``state``.
+            requested_range = self._normalize_analysis_time_range(
+                pane.time_range
+            )
+        else:
+            active_state = self.analysis_managers["frf"].get(
+                self.analysis_managers["frf"].active
+            )
+            if active_state is state:
+                requested_range = self._pane_time_range_for("frf", pane_idx)
+            else:
+                # The shared helper intentionally addresses the active view;
+                # an inactive restore candidate must use its own pane instead.
+                requested_range = self._normalize_analysis_time_range(
+                    pane.time_range
+                )
         common_lo = max(float(input_time[0]), float(output_time[0]))
         common_hi = min(float(input_time[-1]), float(output_time[-1]))
         if requested_range is not None:
@@ -539,7 +464,6 @@ class FrfMixin:
             "params": {"fs": input_fs, **params.__dict__},
             "time_range": effective_range,
             "render_params": render_params,
-            "source_time_view_id": pane.source_time_view_id,
             "input_unit": input_unit,
             "output_unit": output_unit,
             "input_label": f"{input_fd.short_name} · {input_key[1]}",
@@ -654,7 +578,6 @@ class FrfMixin:
             float(result.effective.time_start),
             float(result.effective.time_end),
         )
-        pane.source_time_view_id = context.get("source_time_view_id")
         manager = self.analysis_managers["frf"]
         if manager.get(manager.active) is not state:
             return
@@ -749,74 +672,6 @@ class FrfMixin:
         self._sync_frf_effective_facts(state)
         if missing:
             self.statusBar.showMessage("参数/输入输出已就绪，点击计算频响")
-
-    def _on_frf_source_time_xrange_changed(self, canvas, lo, hi):
-        # Time canvases emit settled ranges while a View is being rebuilt and
-        # its saved X limits are restored. Those are projection transients,
-        # not user interaction, and must never rewrite FRF snapshots.
-        if getattr(self, "_applying_view", False):
-            return False
-        view_idx = self._view_index_for_canvas(canvas)
-        if view_idx is None or not (0 <= view_idx < len(self.view_manager.views)):
-            return False
-        time_state = self.view_manager.get(view_idx)
-        spec = CustomXAxisSpec.from_axis_opts(
-            (time_state.axis_opts or {}).get("x_axis")
-        )
-        manager = self.analysis_managers["frf"]
-        if spec.mode == CHANNEL_MODE:
-            message = (
-                "当前时域横轴不是物理时间，无法作为 FRF 时间范围；"
-                "关联已解除，请切回时间轴后重新选择『当前时域范围』。"
-            )
-            return self._invalidate_frf_time_view_link(
-                time_state.view_id, message
-            )
-        time_range = self._normalize_analysis_time_range((lo, hi))
-        if time_range is None:
-            return False
-        changed = False
-        for state in manager.views:
-            for pane_idx, pane in enumerate(state.panes):
-                if pane.source_time_view_id != time_state.view_id:
-                    continue
-                old = self._normalize_analysis_time_range(pane.time_range)
-                if old is not None and np.allclose(
-                    old, time_range, rtol=0.0, atol=1e-12
-                ):
-                    continue
-                pane.time_range = time_range
-                changed = True
-                self._dirty_frf_pane(state, pane_idx, clear_effective=True)
-        return changed
-
-    def _invalidate_frf_time_view_link(self, view_id, message):
-        """Clear every FRF link to one Time View and suppress late results."""
-
-        manager = self.analysis_managers["frf"]
-        active_state = manager.get(manager.active)
-        page = self._analysis_page("frf")
-        changed = False
-        for state in manager.views:
-            for pane_idx, pane in enumerate(state.panes):
-                if pane.source_time_view_id != str(view_id):
-                    continue
-                pane.source_time_view_id = None
-                changed = True
-                self._dirty_frf_pane(state, pane_idx, clear_effective=True)
-                if (
-                    state is active_state
-                    and pane_idx < page.pane_count()
-                    and pane_idx == page.focused_index()
-                ):
-                    self.inspector.frf_ctx.set_validation_message(message)
-        return changed
-
-    def _on_frf_source_time_view_deleted(self, view_id):
-        return self._invalidate_frf_time_view_link(
-            view_id,
-            "关联的时域 View 已删除；请重新关联：选择『当前时域范围』。",
-        )
 
     def _frf_pair_effective_range(self, state, pane, *, lightweight=False):
         return self._frf_prepare_pair_samples(

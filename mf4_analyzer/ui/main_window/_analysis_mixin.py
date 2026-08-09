@@ -179,9 +179,12 @@ class AnalysisMixin:
         state = mgr.get(mgr.active)
         capture_params_to_state(self._analysis_ctx(section), state)
         if section == 'frf':
-            self._capture_frf_time_range(state)
             self._capture_frf_canvas_ranges(state)
-        else:
+        # The shared range widgets only represent the visible section.  Saving
+        # a project flushes every analysis section, so reading them for an
+        # inactive section would overwrite that section's retained range with
+        # whichever mode happens to be on screen.
+        if self.chart_stack.current_mode() == section:
             self._capture_analysis_time_range(section, state)
         if capture_sources:
             self._capture_analysis_sources(section, state)
@@ -218,10 +221,6 @@ class AnalysisMixin:
                 x_linked=x_linked, levels_locked=levels_locked)
             # 3. Params + focused-pane source echo.
             apply_params_from_state(self._analysis_ctx(section), state)
-            if section == 'frf':
-                self.inspector.frf_ctx.set_range_mode(
-                    state.params.get('range_mode', 'full')
-                )
             self._apply_analysis_sources(section, state)
             self._apply_analysis_time_range(section, state)
         finally:
@@ -296,9 +295,6 @@ class AnalysisMixin:
     def _capture_analysis_time_range(self, section, state, pane_idx=None):
         if not self._analysis_section_uses_time_range(section):
             return
-        if section == 'frf':
-            self._capture_frf_time_range(state, pane_idx)
-            return
         page = self._analysis_page(section)
         if pane_idx is None:
             pane_idx = page.focused_index()
@@ -311,14 +307,21 @@ class AnalysisMixin:
         else:
             pane.time_range = None
 
-    def _set_top_range_enabled_silently(self, enabled):
+    def _set_top_range_enabled_silently(self, enabled, *, mode=None):
         top = self.inspector.top
+        target_mode = mode or top._range_mode
+        top._range_checked_by_mode[target_mode] = bool(enabled)
+        # Project restore can apply an analysis view before the toolbar has
+        # switched the Inspector into that mode.  Remember that mode's intent
+        # without clobbering the visible Time-mode checkbox; checkout later
+        # restores the right state as the shared group is reparented.
+        if target_mode != top._range_mode:
+            return
         old = top.chk_range.blockSignals(True)
         try:
             top.chk_range.setChecked(bool(enabled))
         finally:
             top.chk_range.blockSignals(old)
-        top._range_checked_by_mode[top._range_mode] = bool(enabled)
         update = getattr(top, "_update_range_rows_visible", None)
         if callable(update):
             update()
@@ -326,17 +329,15 @@ class AnalysisMixin:
     def _apply_analysis_time_range(self, section, state):
         if not self._analysis_section_uses_time_range(section):
             return
-        if section == 'frf':
-            self._apply_frf_time_range(state)
-            return
         page = self._analysis_page(section)
         idx = min(page.focused_index(), len(state.panes) - 1)
         rng = self._normalize_analysis_time_range(state.panes[idx].time_range)
         top = self.inspector.top
         if rng is None:
-            self._set_top_range_enabled_silently(False)
+            self._set_top_range_enabled_silently(False, mode=section)
             return
-        top.set_range_from_span(*rng)
+        top.set_range_values(*rng)
+        self._set_top_range_enabled_silently(True, mode=section)
 
     def _pane_time_range_for(self, section, pane_idx=None):
         return self._analysis_context.pane_time_range_for(section, pane_idx)

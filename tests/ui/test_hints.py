@@ -133,7 +133,7 @@ def test_batch_export_options_discovery_states_slice_and_folder_limits():
     assert hints.discovery_hint(HintState(discovered=seen)) == batch_hint
 
 
-def test_frf_hints_cover_cursor_display_range_snapshot_and_time_domain_limits():
+def test_frf_hints_cover_cursor_display_explicit_range_and_time_domain_limits():
     frf_hints = {
         hint.id: hint.text
         for hint in hints.all_hints()
@@ -148,10 +148,11 @@ def test_frf_hints_cover_cursor_display_range_snapshot_and_time_domain_limits():
     }
     joined = " ".join(frf_hints.values())
     for phrase in (
-        "三图", "阈值", "显示", "快照", "不重算", "自定义 X", "不是秒",
+        "阈值", "显示", "取时域范围", "一次", "不改写", "自定义 X", "不是秒",
         "时域查看", "新建或复用",
     ):
         assert phrase in joined
+
 
 
 def test_mark_discovered_round_trips_through_qsettings():

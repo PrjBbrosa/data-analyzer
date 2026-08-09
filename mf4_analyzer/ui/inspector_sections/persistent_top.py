@@ -51,6 +51,9 @@ class PersistentTop(QWidget):
     # 「最大」按钮：将时间范围设为整段数据并勾选「使用选定时间范围」。
     # 控件只负责发信号，由 MainWindow 按当前模式负责重绘/刷新。
     max_range_requested = pyqtSignal()
+    # FRF 专属的一次性填充动作：把当前时域 View 的已提交可见范围
+    # 写进共享的分析时间输入框，绝不建立后续联动关系。
+    range_from_time_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -174,7 +177,23 @@ class PersistentTop(QWidget):
             "}"
             "QToolButton#inspectorRangeMax:hover { background: #eef2f7; }"
         )
-        # Host row: [chk_range][stretch][btn_range_max].
+        self.btn_range_from_time = QToolButton(self)
+        self.btn_range_from_time.setObjectName("inspectorRangeFromTime")
+        self.btn_range_from_time.setText("取时域范围")
+        self.btn_range_from_time.setToolTip(
+            "将当前时域 View 的可见范围一次性填入分析时间。"
+        )
+        self.btn_range_from_time.setAutoRaise(True)
+        self.btn_range_from_time.setCursor(Qt.PointingHandCursor)
+        self.btn_range_from_time.setStyleSheet(
+            "QToolButton#inspectorRangeFromTime { "
+            "  min-height: 20px; padding: 2px 8px; border: none; "
+            "  background: transparent; color: #2563eb; font-weight: 600; "
+            "}"
+            "QToolButton#inspectorRangeFromTime:hover { background: #eef2f7; }"
+        )
+        self.btn_range_from_time.hide()
+        # Host row: [chk_range][stretch][取时域范围][最大].
         self._chk_range_host = QWidget()
         self._chk_range_host.setObjectName("timeRangeToggleRow")
         self._chk_range_host.setAutoFillBackground(False)
@@ -184,6 +203,7 @@ class PersistentTop(QWidget):
         _chk_host_lay.setSpacing(6)
         _chk_host_lay.addWidget(self.chk_range)
         _chk_host_lay.addStretch(1)
+        _chk_host_lay.addWidget(self.btn_range_from_time)
         _chk_host_lay.addWidget(self.btn_range_max)
         fl.addRow(self._chk_range_host)
         # 紧凑化【1】: 开始 / 结束 share one form row.
@@ -268,6 +288,7 @@ class PersistentTop(QWidget):
         self.chk_range.toggled.connect(self._update_range_rows_visible)
         # 「最大」按钮只转发信号；MainWindow 负责按当前模式重绘/刷新。
         self.btn_range_max.clicked.connect(self.max_range_requested)
+        self.btn_range_from_time.clicked.connect(self.range_from_time_requested)
         self.btn_apply_xaxis.clicked.connect(self.xaxis_apply_requested)
         self.spin_xt.valueChanged.connect(self._emit_ticks)
         self.spin_yt.valueChanged.connect(self._emit_ticks)
@@ -327,6 +348,14 @@ class PersistentTop(QWidget):
 
     def set_range_group_embedded(self, embedded):
         self._range_group.setTitle("分析时间" if embedded else "时间范围")
+
+    def set_range_from_time_visible(self, visible):
+        self.btn_range_from_time.setVisible(bool(visible))
+
+    def set_range_from_time_enabled(self, enabled, tooltip=None):
+        self.btn_range_from_time.setEnabled(bool(enabled))
+        if tooltip is not None:
+            self.btn_range_from_time.setToolTip(str(tooltip))
 
     def _sync_xlabel_from_channel(self, idx):
         if idx < 0:
@@ -438,10 +467,13 @@ class PersistentTop(QWidget):
         replot pipeline, and main_window wires ``chk_range.toggled`` to a
         replot slot that must not fire spuriously here.
         """
-        # Save current mode's state before leaving it.
-        self._range_checked_by_mode[self._range_mode] = self.chk_range.isChecked()
         if mode == self._range_mode:
             return
+        # Save current mode's state before leaving it. Applying a restored
+        # analysis view can seed the target mode before its card is visible;
+        # a same-mode checkout must not overwrite that seed with the still
+        # displayed previous checkbox value.
+        self._range_checked_by_mode[self._range_mode] = self.chk_range.isChecked()
         target = bool(self._range_checked_by_mode.get(mode, False))
         old = self.chk_range.blockSignals(True)
         try:

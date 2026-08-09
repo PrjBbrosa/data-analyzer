@@ -63,7 +63,6 @@ class FFTTimeContextual(QWidget):
     - ``spin_fs`` — sampling frequency (Hz).
     - ``btn_rebuild`` — relay anchor for "rebuild time axis" host action.
     - ``combo_nfft`` / ``combo_win`` / ``spin_overlap`` /
-      ``chk_remove_mean`` — analysis parameters.
     - ``spin_db_ref`` — dB reference (linear amplitude).
     - 坐标轴设置 group (2026-04-29 B polish):
       ``chk_x_auto`` / ``spin_x_min`` / ``spin_x_max`` — X time (s);
@@ -185,10 +184,6 @@ class FFTTimeContextual(QWidget):
         self.spin_overlap.setSuffix(" %")
         self.spin_overlap.setToolTip('相邻时间帧的重叠：越高时频图越平滑、\n计算量越大。')
         fl.addRow("重叠:", _fit_field(self.spin_overlap, max_width=_SHORT_FIELD_MAX_WIDTH))
-        self.chk_remove_mean = QCheckBox("去均值")
-        self.chk_remove_mean.setChecked(True)
-        self.chk_remove_mean.setToolTip('减去直流，避免 0 Hz 大值压低低频成分。')
-        fl.addRow(self.chk_remove_mean)
         self.combo_weighting = QComboBox()
         self.combo_weighting.addItems(['None', 'A'])
         self.combo_weighting.setCurrentText('None')
@@ -341,7 +336,6 @@ class FFTTimeContextual(QWidget):
         self.combo_win.currentTextChanged.connect(self._on_preset_param_changed)
         self.combo_weighting.currentTextChanged.connect(self._on_preset_param_changed)
         self.spin_overlap.valueChanged.connect(self._on_preset_param_changed)
-        self.chk_remove_mean.toggled.connect(self._on_preset_param_changed)
 
     def _apply_weighting_value(self, value):
         target = 'A' if str(value).upper() == 'A' else 'None'
@@ -523,7 +517,7 @@ class FFTTimeContextual(QWidget):
             window=self.combo_win.currentText(),
             overlap=self.spin_overlap.value() / 100.0,
             weighting=self.combo_weighting.currentText(),
-            remove_mean=self.chk_remove_mean.isChecked(),
+            remove_mean=True,
             amplitude_mode=amp_mode,
             **db_reference_params(self.db_reference_control),
             # Legacy freq_* keys are aliases of the Y-frequency axis.
@@ -604,8 +598,6 @@ class FFTTimeContextual(QWidget):
                 self.spin_overlap.setValue(int(round(float(d['overlap']) * 100)))
             except (TypeError, ValueError):
                 pass
-        if 'remove_mean' in d:
-            self.chk_remove_mean.setChecked(bool(d['remove_mean']))
         apply_db_reference_partial(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])
@@ -763,7 +755,7 @@ class FFTTimeContextual(QWidget):
             overlap=self.spin_overlap.value(),
             weighting=self.combo_weighting.currentText(),
             amplitude_mode=amp_mode,
-            remove_mean=self.chk_remove_mean.isChecked(),
+            remove_mean=True,
             **db_reference_params(self.db_reference_control),
             freq_auto=bool(self.chk_y_auto.isChecked()),
             freq_min=float(self.spin_y_min.value()),
@@ -819,8 +811,6 @@ class FFTTimeContextual(QWidget):
                 self.spin_overlap.setValue(int(d['overlap']))
             except (TypeError, ValueError):
                 pass
-        if 'remove_mean' in d:
-            self.chk_remove_mean.setChecked(bool(d['remove_mean']))
         apply_db_reference_preset(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])

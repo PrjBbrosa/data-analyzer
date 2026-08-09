@@ -107,13 +107,15 @@ def test_sc_helper_surfaces_missing_key():
 
 def test_modes_group_has_five_rows_each_with_sub_and_frf_explanation():
     modes = next(g for g in quickref.QUICKREF if g.title == "五个分析模式")
-    assert [row.desc for row in modes.rows] == ["时域", "频谱", "时频", "频响", "阶次"]
+    assert [row.desc for row in modes.rows] == ["时域", "频谱", "时频", "阶次", "频响"]
     for row in modes.rows:
         assert row.sub, f"mode row {row.desc!r} missing a one-line sub/purpose"
     frf = next(row for row in modes.rows if row.desc == "频响")
     assert "FRF" in frf.sub and "系统辨识" in frf.sub
+    assert "取时域范围" in frf.sub and "一次性" in frf.sub
     # The group spans two columns in the rendered grid.
     assert modes.wide is True
+
 
 
 def test_order_mode_names_eps_motor_speed():

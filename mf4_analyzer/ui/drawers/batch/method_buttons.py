@@ -165,11 +165,11 @@ _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "fft_time": (
         "window", "nfft_mode", "nfft", "t_win_s", "overlap",
-        "remove_mean", "weighting",
+        "weighting",
     ),
     "frf": (
-        "estimator", "window", "periodic_window", "t_win_s", "overlap",
-        "nfft_mode", "nfft", "detrend", "magnitude_scale",
+        "estimator", "window", "t_win_s", "overlap",
+        "nfft_mode", "nfft", "magnitude_scale",
         "frequency_scale", "phase_mode", "coherence_threshold",
         "fade_low_coherence",
     ),
@@ -582,8 +582,6 @@ class DynamicParamForm(QWidget):
         self._labels: dict[str, str] = {
             "window": "窗函数",
             "estimator": "估计器",
-            "periodic_window": "窗语义",
-            "detrend": "去趋势",
             "magnitude_scale": "幅值",
             "frequency_scale": "频率轴",
             "phase_mode": "相位",
@@ -596,7 +594,6 @@ class DynamicParamForm(QWidget):
             "order_res": "阶次分辨率",
             "time_res": "时间分辨率",
             "overlap": "重叠率",
-            "remove_mean": "去均值",
             "weighting": "频率加权",
             "avg_mode": "平均模式",
             "avg_overlap": "平均重叠",
@@ -631,13 +628,6 @@ class DynamicParamForm(QWidget):
         self._w_window.currentIndexChanged.connect(lambda *_: self.paramsChanged.emit())
         self._widgets["window"] = self._w_window
 
-        self._w_periodic_window = QCheckBox("周期窗", self)
-        self._w_periodic_window.setChecked(True)
-        self._w_periodic_window.toggled.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
-        self._widgets["periodic_window"] = self._w_periodic_window
-
         self._w_nfft_mode = QComboBox(self)
         self._w_nfft_mode.addItem("Auto", "auto")
         self._w_nfft_mode.addItem("Fixed", "fixed")
@@ -664,14 +654,6 @@ class DynamicParamForm(QWidget):
         self._w_nfft.setValue(1024)
         self._w_nfft.valueChanged.connect(lambda *_: self.paramsChanged.emit())
         self._widgets["nfft"] = self._w_nfft
-
-        self._w_detrend = QComboBox(self)
-        self._w_detrend.addItem("每段去均值", "constant")
-        self._w_detrend.addItem("不去趋势", "none")
-        self._w_detrend.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
-        self._widgets["detrend"] = self._w_detrend
 
         self._w_magnitude_scale = QComboBox(self)
         self._w_magnitude_scale.addItem("dB", "db")
@@ -754,12 +736,6 @@ class DynamicParamForm(QWidget):
         self._w_overlap.setValue(0.5)
         self._w_overlap.valueChanged.connect(lambda *_: self.paramsChanged.emit())
         self._widgets["overlap"] = self._w_overlap
-
-        # remove_mean — QCheckBox
-        self._w_remove_mean = QCheckBox(self)
-        self._w_remove_mean.setChecked(True)
-        self._w_remove_mean.toggled.connect(lambda *_: self.paramsChanged.emit())
-        self._widgets["remove_mean"] = self._w_remove_mean
 
         self._w_avg_mode = QComboBox(self)
         self._w_avg_mode.addItems(["单帧", "线性平均", "峰值保持"])
@@ -1075,8 +1051,6 @@ class DynamicParamForm(QWidget):
             params["estimator"] = str(self._w_estimator.currentData() or "h1")
         if "window" in self.visible_field_names():
             params["window"] = self._w_window.currentText()
-        if "periodic_window" in self.visible_field_names():
-            params["periodic_window"] = bool(self._w_periodic_window.isChecked())
         if "nfft" in self.visible_field_names():
             mode = str(self._w_nfft_mode.currentData() or "auto")
             params["nfft_mode"] = mode
@@ -1093,8 +1067,6 @@ class DynamicParamForm(QWidget):
             params["time_res"] = float(self._w_time_res.value())
         if "overlap" in self.visible_field_names():
             params["overlap"] = float(self._w_overlap.value())
-        if "remove_mean" in self.visible_field_names():
-            params["remove_mean"] = bool(self._w_remove_mean.isChecked())
         if "weighting" in self.visible_field_names():
             params["weighting"] = self._w_weighting.currentText()
         if "avg_mode" in self.visible_field_names():
@@ -1107,8 +1079,6 @@ class DynamicParamForm(QWidget):
             )
         if "samples_per_rev" in self.visible_field_names():
             params["samples_per_rev"] = int(self._w_samples_per_rev.value())
-        if "detrend" in self.visible_field_names():
-            params["detrend"] = str(self._w_detrend.currentData() or "constant")
         if "magnitude_scale" in self.visible_field_names():
             params["magnitude_scale"] = str(
                 self._w_magnitude_scale.currentData() or "db"
@@ -1136,7 +1106,6 @@ class DynamicParamForm(QWidget):
             return
         for key, combo in (
             ("estimator", self._w_estimator),
-            ("detrend", self._w_detrend),
             ("magnitude_scale", self._w_magnitude_scale),
             ("frequency_scale", self._w_frequency_scale),
             ("phase_mode", self._w_phase_mode),
@@ -1215,10 +1184,6 @@ class DynamicParamForm(QWidget):
                 self._w_overlap.setValue(value / 100.0 if value > 1.0 else value)
             except (TypeError, ValueError):
                 pass
-        if "remove_mean" in params:
-            self._w_remove_mean.setChecked(bool(params["remove_mean"]))
-        if "periodic_window" in params:
-            self._w_periodic_window.setChecked(bool(params["periodic_window"]))
         if "coherence_threshold" in params:
             try:
                 self._w_coherence_threshold.setValue(

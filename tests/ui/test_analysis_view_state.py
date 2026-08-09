@@ -105,17 +105,18 @@ def test_frf_role_state_round_trip_keeps_sources_as_a_separate_contract():
     assert restored.effective_time_range == (1.001, 2.999)
     assert restored.ylim == (-20.0, 20.0)
     assert restored.ylims == pane.ylims
-    assert restored.source_time_view_id == "time-view-123"
+    assert "source_time_view_id" not in payload
+    assert restored.source_time_view_id is None
 
 
-def test_analysis_view_schema3_is_additive_and_field_presence_tolerant():
+def test_analysis_view_schema6_is_additive_and_migrates_the_old_frf_toggle():
     view = AnalysisViewState(name="FRF", tab_color="#2d7ff9")
     view.panes[0].input_source = ("f1", "in")
     view.panes[0].output_source = ("f1", "out")
 
     payload = view.to_dict()
 
-    assert payload["schema"] == 3
+    assert payload["schema"] == 6
     legacy = AnalysisViewState.from_dict({
         "schema": 2,
         "name": "Legacy",

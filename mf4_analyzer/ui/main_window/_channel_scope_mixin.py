@@ -372,7 +372,6 @@ class ChannelScopeMixin:
                     ):
                         pane.input_source = None
                         pane.output_source = None
-                        pane.source_time_view_id = None
 
     def _remove_channels_from_all_analysis_views(self, fid, channels):
         removed = {
@@ -402,7 +401,6 @@ class ChannelScopeMixin:
                     ):
                         pane.input_source = None
                         pane.output_source = None
-                        pane.source_time_view_id = None
 
     @staticmethod
     def _filter_time_view_state_for_removed_fids(state, removed):

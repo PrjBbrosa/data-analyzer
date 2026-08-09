@@ -192,8 +192,8 @@ def test_frf_contextual_separates_compute_and_display_params(qtbot):
         "nfft_mode": "manual",
         "nfft": 4096,
         "window": "hamming",
-        "periodic_window": False,
-        "detrend": "none",
+        "periodic_window": True,
+        "detrend": "constant",
     }
     assert display == {
         "magnitude_scale": "linear",
@@ -331,8 +331,8 @@ def test_frf_contextual_uses_four_separated_html_information_cards(qtbot):
     assert ctx.findChild(QLabel, "frfFlowBlock").text() == "被辨识系统  H(f)"
 
 
-def test_frf_compute_checkbox_rows_keep_standard_32px_rhythm(qapp, qtbot):
-    """FRF checkbox rows must not collapse the surrounding 32px form rhythm."""
+def test_frf_compute_rows_keep_standard_32px_rhythm(qapp, qtbot):
+    """The reduced FRF compute form keeps its standard row rhythm."""
     from PyQt5.QtCore import QPoint
 
     from mf4_analyzer.ui.inspector_sections import FrfContextual
@@ -354,12 +354,10 @@ def test_frf_compute_checkbox_rows_keep_standard_32px_rhythm(qapp, qtbot):
         rows = (
             ctx.choice_estimator,
             ctx.combo_window,
-            ctx.chk_periodic,
             ctx.spin_t_win,
             ctx.spin_overlap,
             ctx.choice_nfft_mode,
             ctx.spin_nfft,
-            ctx.chk_detrend,
         )
         row_tops = [widget.mapTo(ctx, QPoint(0, 0)).y() for widget in rows]
 
@@ -401,9 +399,8 @@ def test_frf_contextual_explains_estimators_parameters_and_retained_delay(qtbot)
     assert "输入侧" in ctx.combo_estimator.toolTip()
 
     for widget in (
-        ctx.combo_input, ctx.combo_output, ctx.combo_range_mode,
-        ctx.combo_window, ctx.chk_periodic, ctx.spin_t_win, ctx.spin_overlap,
-        ctx.combo_nfft_mode, ctx.spin_nfft, ctx.chk_detrend,
+        ctx.combo_input, ctx.combo_output, ctx.combo_window, ctx.spin_t_win,
+        ctx.spin_overlap, ctx.combo_nfft_mode, ctx.spin_nfft,
         ctx.combo_magnitude_scale, ctx.combo_frequency_scale,
         ctx.spin_coherence_threshold, ctx.btn_fade_low_coherence,
         ctx.btn_compute, ctx.btn_view_time,
@@ -1344,7 +1341,7 @@ def _set_first_summary_field(ctx, kind):
 
 def _mutate_non_summary_param(ctx, kind):
     if kind == "fft_time":
-        ctx.chk_remove_mean.toggle()
+        ctx.combo_weighting.setCurrentText("A")
     elif kind == "fft":
         ctx.combo_avg_mode.setCurrentIndex(1)
     else:
@@ -5104,7 +5101,6 @@ def test_fft_time_apply_params_idempotent(qtbot):
     ctx.combo_nfft.setCurrentText('2048')
     ctx.combo_win.setCurrentText('hamming')
     ctx.spin_overlap.setValue(75)
-    ctx.chk_remove_mean.setChecked(False)
     ctx.combo_amp_unit.setCurrentText('dB')
     ctx.spin_db_ref.setValue(2.5)
     ctx.spin_fs.setValue(48000.0)
@@ -5126,7 +5122,6 @@ def test_fft_time_apply_params_idempotent(qtbot):
     ctx.combo_nfft.setCurrentText('4096')
     ctx.combo_win.setCurrentText('hanning')
     ctx.spin_overlap.setValue(25)
-    ctx.chk_remove_mean.setChecked(True)
     ctx.combo_amp_unit.setCurrentText('Linear')
     ctx.spin_db_ref.setValue(1.0)
     ctx.spin_fs.setValue(1000.0)
@@ -5835,7 +5830,6 @@ def test_fft_time_param_tooltips(qtbot):
         (ctx.combo_win, "泄漏"),
         (ctx.combo_nfft, "频率"),
         (ctx.spin_overlap, "重叠"),
-        (ctx.chk_remove_mean, "直流"),
         (ctx.spin_db_ref, "dB"),
         (ctx.combo_amp_unit, "动态"),
         (ctx.spin_z_floor, "映射"),
