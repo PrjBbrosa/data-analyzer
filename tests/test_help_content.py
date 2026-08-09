@@ -24,19 +24,39 @@ def _deck_data() -> dict:
 
 def test_deck_data_valid_and_version_bumped():
     d = _deck_data()
-    assert d["meta"]["version"] == "v7.9.5"
-    assert d["meta"]["updated"] == "2026-08-08"
+    assert d["meta"]["version"] == "v7.9.7"
+    assert d["meta"]["updated"] == "2026-08-09"
     assert d["meta"]["docVersion"] == "3.0"
-    assert [c["v"] for c in d["changelog"]][:3] == ["v7.9.5", "v7.9.4", "v7.9.3"]
+    assert [c["v"] for c in d["changelog"]][:4] == [
+        "v7.9.7", "v7.9.6", "v7.9.5", "v7.9.4",
+    ]
+
+
+def test_v797_changelog_covers_control_surface_and_frf_markup():
+    current = _deck_data()["changelog"][0]
+    assert current["v"] == "v7.9.7"
+    description = " ".join(current["items"])
+    for keyword in (
+        "当前 View", "Δf / ΔY", "真实 Hz", "标注", "使用选定时间范围",
+    ):
+        assert keyword in description
+
+
+def test_v796_changelog_covers_frf_system_identification_and_batch_output():
+    current = _deck_data()["changelog"][1]
+    assert current["v"] == "v7.9.6"
+    description = " ".join(current["items"])
+    for keyword in (
+        "频响（FRF）系统辨识", "H1 / H2", "相干度", "批处理", "CSV、PNG 和 manifest",
+    ):
+        assert keyword in description
 
 
 def test_v795_changelog_covers_hdf_view_scope_and_ink_budget():
-    current = _deck_data()["changelog"][0]
+    current = _deck_data()["changelog"][2]
     assert current["v"] == "v7.9.5"
     description = " ".join(current["items"])
-    for keyword in (
-        "HDF", "完整通道名", "当前 View", "使用选定时间范围", "参数面板", "墨水量", "7px",
-    ):
+    for keyword in ("HDF", "完整通道名", "当前 View", "墨水量", "7px"):
         assert keyword in description
 
 
@@ -111,6 +131,13 @@ def test_changelog_keeps_recent_front_and_packs_history_at_end():
     assert int(safe_area.group(1)) >= 200
 
 
+def test_changelog_renders_v797_and_v796_as_separate_recent_pages():
+    html = MANUAL.read_text(encoding="utf-8")
+    assert "const RECENT_CHANGELOG_COUNT=2;" in html
+    assert "recent.forEach((index,pageIndex)=>{" in html
+    assert "indices.filter(index=>index>=RECENT_CHANGELOG_COUNT)" in html
+
+
 def test_manual_has_filter_slide():
     d = _deck_data()
     assert any(s.get("id") == "filter" for s in d["slides"])
@@ -131,9 +158,9 @@ def test_manual_uses_current_real_ui_assets():
         assert f"assets/{name}" in html
 
 
-def test_published_guide_tracks_v795_and_real_ui_assets():
+def test_published_guide_tracks_v797_and_real_ui_assets():
     html = PUBLISHED_GUIDE.read_text(encoding="utf-8")
-    assert "TraceLab v7.9.5" in html
+    assert "TraceLab v7.9.7" in html
     for name in ("WWT", "ZFD", "MAT", "time-panel.png", "imports-panel.png"):
         assert name in html
     assert "matplotlib" not in html
@@ -160,7 +187,7 @@ def test_panel_guides_cover_new_topics():
     }
     for fname, kws in checks.items():
         text = (HELP / fname).read_text(encoding="utf-8")
-        assert "TraceLab v7.9.5" in text
+        assert "TraceLab v7.9.7" in text
         for kw in kws:
             assert kw in text, f"{fname} missing: {kw}"
 

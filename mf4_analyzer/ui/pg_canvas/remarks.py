@@ -29,6 +29,11 @@ class RemarkPoint:
     color: str = _REMARK_DOT_COLOR
     unit_x: str = ""
     unit_y: str = ""
+    # A log-scaled plot stores ``x`` in its transformed ViewBox coordinate,
+    # while its annotation must still show the physical value to the user.
+    # Keep the optional presentation coordinate separate from the placement
+    # coordinate so all canvases can share the same artist.
+    display_x: float | None = None
     z: float | None = None
     unit_z: str = ""
 
@@ -67,8 +72,9 @@ def format_remark_label(point: RemarkPoint) -> str:
     """Return the shared X=/Y=/Z= HTML label for point remarks."""
 
     y_color = escape(str(point.color or "#1769e0"), quote=True)
+    display_x = point.x if point.display_x is None else point.display_x
     rows = [
-        f"<div>X={_value_with_unit(point.x, point.unit_x)}</div>",
+        f"<div>X={_value_with_unit(display_x, point.unit_x)}</div>",
         (
             f"<div style='color:{y_color}; font-weight:600;'>"
             f"Y={_value_with_unit(point.y, point.unit_y)}</div>"

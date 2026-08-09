@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "7.9.5",
+    [string]$Version = "7.9.7",
     [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
@@ -67,7 +67,7 @@ $SpecDir = Join-Path $RepoRoot "build\spec-lite"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
 $BuildEvidenceDir = Join-Path $RepoRoot ".state\build-evidence"
-# Default output: dist\TraceLabAnalyzer7.9.5\TraceLabAnalyzer7.9.5.exe
+# Default output: dist\TraceLabAnalyzer7.9.7\TraceLabAnalyzer7.9.7.exe
 # (override with -Version or -AppName)
 
 foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $BatchRenderSmokeTool)) {

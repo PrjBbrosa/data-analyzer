@@ -11,7 +11,7 @@ import logging
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 
@@ -30,6 +30,13 @@ from .empty_hint import EmptyHintOverlay
 from .analysis_axes import _apply_axis_tick_density, _tick_counts_to_density, _visual_padded_bounds
 from .context_menu import redesign_pg_context_menu
 from .frf_plot_host import FrfStackedPlotHost
+from .remarks import (
+    RemarkArtist,
+    RemarkInteraction,
+    RemarkPoint,
+    remark_at_viewport_pos,
+    viewport_pos_to_scene,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -186,6 +193,23 @@ class PgFrfCanvas(QWidget):
         self._cursor_b_frequency = None
         self._next_dual_cursor = "a"
 
+        # The three FRF panels share the standard pyqtgraph point-remark
+        # artist/interaction contract used by FFT and heatmap canvases.  The
+        # only FRF-specific part lives in _remark_point_at: it chooses one
+        # panel's nearest physical-frequency sample and preserves Hz labels on
+        # log axes whose ViewBox coordinates are log10(Hz).
+        self._remarks = []
+        self._remark_enabled = False
+        self._remark_artist = RemarkArtist()
+        self._remark_interaction = RemarkInteraction(
+            add_at_viewport_pos=self._add_remark_at_viewport_pos,
+            remove_at_viewport_pos=self._remove_remark_at_viewport_pos,
+            remark_at_viewport_pos=self._remark_item_at_viewport_pos,
+        )
+        self._remark_viewport = self._glw.viewport()
+        self._remark_viewport.setMouseTracking(True)
+        self._remark_viewport.installEventFilter(self)
+
         self.axes_list = [_AxisShim(plot.vb) for plot in self.plots]
         self._channel_lines = {
             name: (_HistoryHandle(self, plot), None)
@@ -339,6 +363,9 @@ class PgFrfCanvas(QWidget):
             raise ValueError("FRF result arrays must be one-dimensional")
         if not (frequencies.size == transfer.size == coherence.size):
             raise ValueError("FRF result arrays must have equal length")
+        # Point labels include panel values, so they cannot survive a new
+        # calculation even if the frequency grid happens to be unchanged.
+        self.clear_remarks()
         self._result = result
         self._context = dict(context or {})
         if display_params:
@@ -355,6 +382,9 @@ class PgFrfCanvas(QWidget):
         old_xlim = self.get_xlim()
         self._display_params.update(dict(params or {}))
         if self._result is not None:
+            # Magnitude scale, phase wrapping, and coherence presentation can
+            # all change the value written into an existing remark label.
+            self.clear_remarks()
             self._render_result()
             if old_xlim is not None:
                 self.set_xlim(*old_xlim)
@@ -594,6 +624,143 @@ class PgFrfCanvas(QWidget):
         except KeyError:
             raise ValueError(f"unknown FRF panel: {panel!r}") from None
 
+    def set_remark_enabled(self, enabled: bool) -> None:
+        """Enable the shared add/delete point-remark interaction for FRF."""
+        self._remark_enabled = bool(enabled)
+        self._remark_interaction.set_enabled(
+            self._remark_enabled,
+            viewport=self._remark_viewport,
+            menu_viewboxes=tuple(plot.vb for plot in self.plots),
+        )
+
+    def clear_remarks(self) -> None:
+        self._remark_artist.clear(self._remarks)
+
+    def remark_count(self) -> int:
+        return len(self._remarks)
+
+    def _remark_panel_at_scene_pos(self, scene_pos):
+        if scene_pos is None:
+            return None
+        for panel, plot in (
+            ("magnitude", self._plot_magnitude),
+            ("phase", self._plot_phase),
+            ("coherence", self._plot_coherence),
+        ):
+            if plot.vb.sceneBoundingRect().contains(scene_pos):
+                return panel, plot
+        return None
+
+    def _remark_point_at(self, panel: str, frequency: float):
+        idx = self._nearest_frequency_index(frequency)
+        if idx is None:
+            return None
+        try:
+            plot, values, color, unit_y = {
+                "magnitude": (
+                    self._plot_magnitude,
+                    self._draw_magnitude,
+                    "#1769e0",
+                    "dB" if str(self._display_params.get("magnitude_scale")).lower() == "db"
+                    else self._ratio_unit_label(),
+                ),
+                "phase": (
+                    self._plot_phase,
+                    self._draw_phase,
+                    "#1769e0",
+                    "deg",
+                ),
+                "coherence": (
+                    self._plot_coherence,
+                    self._draw_coherence,
+                    "#0f9f83",
+                    "",
+                ),
+            }[str(panel)]
+        except KeyError:
+            raise ValueError(f"unknown FRF panel: {panel!r}") from None
+        physical_frequency = float(self._draw_frequencies[idx])
+        value = float(values[idx])
+        if not (np.isfinite(physical_frequency) and np.isfinite(value)):
+            return None
+        return RemarkPoint(
+            vb=plot.vb,
+            x=self._hz_to_view_x(physical_frequency),
+            y=value,
+            color=color,
+            unit_x="Hz",
+            unit_y=unit_y,
+            display_x=physical_frequency,
+        )
+
+    def add_remark_at(self, panel: str, frequency: float) -> None:
+        if not self._remark_enabled:
+            return
+        point = self._remark_point_at(panel, frequency)
+        if point is not None:
+            self._remarks.append(self._remark_artist.add(point))
+
+    def _remove_remark(self, remark) -> None:
+        self._remark_artist.remove(remark)
+        try:
+            self._remarks.remove(remark)
+        except ValueError:
+            pass
+
+    def remove_remark_near(self, panel: str, frequency: float) -> None:
+        plot = self._plot_for_panel(panel)
+        candidates = [
+            remark for remark in self._remarks if remark.get("vb") is plot.vb
+        ]
+        if not candidates:
+            return
+        target_x = self._hz_to_view_x(float(frequency))
+        nearest = min(
+            candidates,
+            key=lambda remark: abs(float(remark["data_x"]) - target_x),
+        )
+        self._remove_remark(nearest)
+
+    def _viewport_pos_to_scene(self, viewport_pos):
+        return viewport_pos_to_scene(self._glw, viewport_pos)
+
+    def _add_remark_at_viewport_pos(self, viewport_pos) -> None:
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        target = self._remark_panel_at_scene_pos(scene_pos)
+        if target is None:
+            return
+        panel, plot = target
+        position = plot.vb.mapSceneToView(scene_pos)
+        self.add_remark_at(panel, self._view_x_to_hz(position.x()))
+
+    def _remove_remark_at_viewport_pos(self, viewport_pos) -> None:
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        target = self._remark_panel_at_scene_pos(scene_pos)
+        if target is None:
+            return
+        panel, plot = target
+        position = plot.vb.mapSceneToView(scene_pos)
+        self.remove_remark_near(panel, self._view_x_to_hz(position.x()))
+
+    def _remark_item_at_viewport_pos(self, viewport_pos):
+        return remark_at_viewport_pos(self._remarks, self._glw, viewport_pos)
+
+    def eventFilter(self, obj, event):
+        if obj is self._remark_viewport and self._remark_enabled:
+            if event.type() == QEvent.MouseButtonPress:
+                result = self._remark_interaction.handle_mouse_press(event)
+                if result is not None:
+                    return result
+            elif event.type() == QEvent.MouseMove:
+                result = self._remark_interaction.handle_mouse_move(event)
+                if result is not None:
+                    return result
+            elif event.type() == QEvent.MouseButtonRelease:
+                result = self._remark_interaction.handle_mouse_release(event)
+                if result is not None:
+                    return result
+        return super().eventFilter(obj, event)
+
     def reset_view_to_data_extents(self) -> None:
         if self._draw_frequencies.size == 0:
             return
@@ -728,6 +895,8 @@ class PgFrfCanvas(QWidget):
                 return
 
     def _on_scene_mouse_clicked(self, event) -> None:
+        if self._remark_enabled:
+            return
         if self._cursor_mode != "dual" or event.button() != Qt.LeftButton:
             return
         scene_pos = event.scenePos()
@@ -893,6 +1062,7 @@ class PgFrfCanvas(QWidget):
         return self._result is not None
 
     def clear(self) -> None:
+        self.clear_remarks()
         self._result = None
         self._context = {}
         self._draw_frequencies = np.empty(0, dtype=float)

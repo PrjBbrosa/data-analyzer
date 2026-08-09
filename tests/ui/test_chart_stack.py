@@ -792,7 +792,7 @@ def test_analysis_cards_expose_annotation_toolbar_controls(qapp, qtbot):
     assert cs._time_card._clear_annotation_btn.text() == ''
     assert cs._time_card._clear_annotation_btn.toolTip()
     assert cs._time_card._annotation_btn.toolTip()
-    for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
+    for card in (cs._fft_card, cs._fft_time_card, cs._frf_card, cs._order_card):
         assert hasattr(card, '_annotation_btn')
         assert hasattr(card, '_clear_annotation_btn')
         assert card._annotation_btn.objectName() == 'chartAnnotationButton'
@@ -849,6 +849,18 @@ def test_time_clear_annotation_button_calls_canvas_clear_remarks(qapp, qtbot):
     assert calls == ["clear"]
 
 
+def test_frf_clear_annotation_button_calls_canvas_clear_remarks(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    calls = []
+    cs._frf_card.canvas.clear_remarks = lambda: calls.append("clear")
+
+    cs._frf_card._clear_annotation_btn.click()
+
+    assert calls == ["clear"]
+
+
 def test_clear_annotation_skips_confirm_when_no_remarks(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
@@ -892,7 +904,7 @@ def test_analysis_annotation_controls_follow_zoom_on_left(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
 
-    for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
+    for card in (cs._fft_card, cs._fft_time_card, cs._frf_card, cs._order_card):
         actions = card.toolbar.actions()
         toolbar_widgets = [card.toolbar.widgetForAction(act) for act in actions]
         assert not any(
@@ -2430,9 +2442,14 @@ def test_annotation_toolbar_toggles_canvas_modes(qapp, qtbot):
     assert cs.canvas_order._remark_enabled is True
     assert cs._order_card._annotation_btn.isChecked()
 
+    cs._frf_card._annotation_btn.click()
+    assert cs.canvas_frf._remark_enabled is True
+    assert cs._frf_card._annotation_btn.isChecked()
+
     assert ('time', True) in seen
     assert ('fft', True) in seen
     assert ('fft_time', True) in seen
+    assert ('frf', True) in seen
     assert ('order', True) in seen
 
 

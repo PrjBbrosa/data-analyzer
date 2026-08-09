@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 7.9.5. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 7.9.7. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and 12-View changes, as well as the native WinWert (`.wwt`),
 ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced in 7.7.
 7.8 added a draft-based channel configuration manager with View matching
@@ -63,6 +63,14 @@ anti-aliasing, and raster-cache admission, with a frame-time fallback for
 unexpected expensive paints. The Cocoa acceptance gate passed; Windows ink
 threshold recalibration remains a separate release gate. The same release also
 repairs the covered right corners of combo boxes and standardises them at 7 px.
+7.9.6 adds single-analysis and Batch FRF system identification with explicit
+input/output pairing, H1/H2 transfer estimates, magnitude/phase/coherence
+panels, and CSV/PNG/manifest output. 7.9.7 then unifies the analysis and Batch
+control surfaces, simplifies parameters that did not alter the default
+calculation, and completes FRF's shared frequency interactions: linked
+single/dual cursor readouts, physical-Hz log ticks, and the same point-markup
+and clear controls as TimeDomain. Current-View file removal is also available
+while analysis modes are active.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

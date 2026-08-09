@@ -1320,4 +1320,6 @@ class FrfChartCard(FrequencyCursorCard):
     """Frequency-cursor card configured for the three-row FRF canvas."""
 
     def __init__(self, canvas, parent=None):
-        super().__init__(canvas, parent, annotations=False, chart_mode='frf')
+        # Reuse the same compact annotate/clear controls and confirmation flow
+        # as TimeDomain and the other analysis cards.
+        super().__init__(canvas, parent, annotations=True, chart_mode='frf')

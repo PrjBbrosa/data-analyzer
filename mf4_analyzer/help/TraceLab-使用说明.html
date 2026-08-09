@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TraceLab v7.9.5 · 使用说明</title>
+<title>TraceLab v7.9.7 · 使用说明</title>
 <!-- ===== FONTS ===== -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -255,11 +255,11 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 {
   "meta": {
     "title": "TraceLab",
-    "version": "v7.9.5",
-    "versionLabel": "使用说明 · V7.9.5",
+    "version": "v7.9.7",
+    "versionLabel": "使用说明 · V7.9.7",
     "subtitle": "打开数据、看图分析、导出结果 —— 一份照着做就会的使用说明",
     "docVersion": "3.0",
-    "updated": "2026-08-08"
+    "updated": "2026-08-09"
   },
   "slides": [
     { "type": "cover" },
@@ -281,7 +281,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       ] },
 
     { "id": "interface", "sec": "界面导览", "kicker": "THE WINDOW", "title": "界面分三块，<c>各管一件事</c>", "foot": "顶部工具栏：左边管文件与项目，中间切视图，右上是品牌与更新",
-      "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.png' alt='TraceLab v7.9.5 时域主界面的真实截图'><div class='shotcap reveal'>当前 v7.9.5 主窗口：左侧文件与通道、中间图表工作区、右侧参数面板。</div>" } ] },
+      "blocks": [ { "type": "raw", "html": "<img class='realshot reveal' src='assets/time-panel.png' alt='TraceLab v7.9.7 时域主界面的真实截图'><div class='shotcap reveal'>当前 v7.9.7 主窗口：左侧文件与通道、中间图表工作区、右侧参数面板。</div>" } ] },
 
     { "id": "load", "sec": "第一步", "kicker": "STEP 1 · LOAD", "title": "第一步 · 打开你的<c>数据</c>", "foot": "TraceLab", "density": "compact",
       "blocks": [
@@ -305,9 +305,9 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         { "type": "tip", "label": "提示", "html": "打开多个文件后，可以同时勾选<b>不同文件</b>里的通道放在一起对比——很适合「这批和上批有什么不一样」。" }
       ] },
 
-    { "id": "imports", "sec": "真实导入", "kicker": "V7.9.5 · REAL FILES", "title": "三种新格式，已经用<c>真文件验证</c>", "foot": "真实 Cocoa 界面 · WWT / ZFD / MAT",
+    { "id": "imports", "sec": "真实导入", "kicker": "V7.9.7 · REAL FILES", "title": "三种新格式，已经用<c>真文件验证</c>", "foot": "真实 Cocoa 界面 · WWT / ZFD / MAT",
       "blocks": [
-        { "type": "raw", "html": "<img class='realshot reveal' src='assets/imports-panel.png' alt='TraceLab v7.9.5 同时载入 WWT、ZFD 和 MAT 的真实界面'><div class='shotcap reveal'>图中三个文件卡片来自仓库内真实 WWT、ZFD、MAT 样本；中间为 WWT 的 Steering torque 实际曲线。</div>" }
+        { "type": "raw", "html": "<img class='realshot reveal' src='assets/imports-panel.png' alt='TraceLab v7.9.7 同时载入 WWT、ZFD 和 MAT 的真实界面'><div class='shotcap reveal'>图中三个文件卡片来自仓库内真实 WWT、ZFD、MAT 样本；中间为 WWT 的 Steering torque 实际曲线。</div>" }
       ] },
 
     { "id": "project", "sec": "存工程", "kicker": "PROJECT · .tlproj", "title": "把整个分析存成<c>工程</c>", "foot": "保存项目 → 下次一键还原",
@@ -531,22 +531,32 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ] }
       ] },
 
-    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v7.9.5 · 使用说明", "density": "compact",
+    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v7.9.7 · 使用说明", "density": "compact",
       "blocks": [
         { "type": "flow", "height": 550, "cols": [
           { "title": "场景一", "key": "快速看一个文件", "items": [ "添加文件", "勾选要看的通道", "时域看波形、拖动放大", "需要就切 FFT / 阶次", "导出 Excel 或图片" ] },
           { "title": "场景二", "key": "批量分析一批文件", "accent": "teal", "items": [ "先分析好一个代表文件", "存成预设", "选中一批文件", "跑批处理", "自动出图、出表" ] },
           { "title": "场景三", "key": "边录边看", "items": [ "打开 Cockpit", "配置要采集的信号", "开始采集、看实时卡片", "停止，自动存档", "用 Replay 回放分析" ] }
         ] },
-        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v7.9.5" }
+        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v7.9.7" }
       ] }
   ],
 
   "changelog": [
+    { "v": "v7.9.7", "date": "2026-08-09", "items": [
+      "分析和批处理的按钮、输入框、预设与工具栏按同一套视觉和布局规则收口；常用主操作更醒目，当前 View 中的文件也可直接从分析模式移除。",
+      "频响（FRF）的频率刻度、三图左轴和单/双游标读数继续对齐；双游标保留 A/B 数值并突出 <b>Δf / ΔY</b>，对数频率轴始终显示真实 Hz。",
+      "频响工具栏补齐与时域一致的<b>标注</b>和清除标注：左键吸附到当前面板的真实频率点，右键删除最近一处，幅值/相位/相干度读数不会混淆。",
+      "频响与时频的参数面板移除不会改变默认计算的开关；FRF 分析时间统一通过“<b>使用选定时间范围</b>”直接填写。"
+    ] },
+    { "v": "v7.9.6", "date": "2026-08-09", "items": [
+      "新增独立的<b>频响（FRF）系统辨识</b>：明确输入/输出配对，支持 <b>H1 / H2</b>、幅值、相位和相干度三图，不把逐点四则运算误当作传递函数。",
+      "FRF 结果会给出有效采样、频率分辨率和低相干度等事实/告警；对数频率、dB/线性幅值和相位显示可按分析目的调整。",
+      "批处理支持一输入配多输出的 FRF 任务，可按来源组织结果并导出<b> CSV、PNG 和 manifest</b>；缺少成对通道会显示明确状态。"
+    ] },
     { "v": "v7.9.5", "date": "2026-08-08", "items": [
       "HEAD HDF 文件会从扩展名称字段取回<b>完整通道名</b>；列表里的长名称从中间省略，鼠标悬停仍能看到全名。",
       "FFT、时频和阶次分析的信号选择，以及时域 X 轴的取景范围，都会跟随<b>当前 View</b> 中实际挂载的数据源，不再混入其他 View 的文件。",
-      "频响（FRF）与时频的参数面板去掉了不会改变默认计算的开关；FRF 分析时间统一通过“<b>使用选定时间范围</b>”直接填写。",
       "时域高变化曲线改用屏幕实际<b>墨水量</b>统一控制降采样、抗锯齿和光栅缓存，Y 自适应后不再因为满高竖线造成长时间冻结。",
       "下拉框右侧圆角不再被内部按钮的方形背景盖住，统一为 <b>7px</b> 圆角。"
     ] },
@@ -743,7 +753,7 @@ function changelogSlide(template,sourceIndex,blockIndex,releaseIndices,history,p
   return {
     ...template,
     _sourceIndex:sourceIndex,
-    id:history?`changelog-history-${pageIndex}`:`${template.id}-recent`,
+    id:history?`changelog-history-${pageIndex}`:`${template.id}-recent-${pageIndex}`,
     kicker:history?'CHANGELOG · HISTORY':'CHANGELOG · RECENT',
     title:history?'历史<c>版本</c>':'最近<c>更新</c>',
     foot:history?'历史版本 · 只保留用户可见变化':template.foot,
@@ -755,6 +765,7 @@ function changelogSlide(template,sourceIndex,blockIndex,releaseIndices,history,p
 }
 
 function arrangeChangelogSlides(slides,packedHistoryGroups=null){
+  const RECENT_CHANGELOG_COUNT=2;
   const mainSlides=[];
   const historyIndices=[];
   let templateInfo=null;
@@ -766,11 +777,11 @@ function arrangeChangelogSlides(slides,packedHistoryGroups=null){
     const end=block.end==null?DECK.changelog.length:block.end;
     const indices=Array.from({length:Math.max(0,end-start)},(_,index)=>start+index)
       .filter(index=>DECK.changelog[index]);
-    const recent=indices.filter(index=>index===0);
-    if(recent.length){
-      mainSlides.push(changelogSlide(slide,sourceIndex,blockIndex,recent,false,0));
-    }
-    historyIndices.push(...indices.filter(index=>index>0));
+    const recent=indices.filter(index=>index<RECENT_CHANGELOG_COUNT);
+    recent.forEach((index,pageIndex)=>{
+      mainSlides.push(changelogSlide(slide,sourceIndex,blockIndex,[index],false,pageIndex));
+    });
+    historyIndices.push(...indices.filter(index=>index>=RECENT_CHANGELOG_COUNT));
     templateInfo={slide,sourceIndex,blockIndex};
   });
   if(!templateInfo)return mainSlides;

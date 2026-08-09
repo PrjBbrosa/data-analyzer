@@ -205,6 +205,44 @@ def test_frf_canvas_log_xlim_and_cursor_keep_public_units_in_hz(qtbot):
     assert np.count_nonzero(np.isfinite(canvas._magnitude_low_points.yData)) == 1
 
 
+def test_frf_canvas_remarks_snap_to_panel_data_and_keep_hz_on_log_axis(qtbot):
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    result = SimpleNamespace(
+        frequencies=np.array([1.0, 10.0, 100.0]),
+        transfer=np.array([1.0 + 0j, 3.0 + 0j, 5.0 + 0j]),
+        coherence=np.array([0.9, 0.8, 0.7]),
+    )
+    canvas.set_result(
+        result,
+        {"frequency_scale": "log", "magnitude_scale": "linear"},
+        {"input_unit": "N", "output_unit": "m/s"},
+    )
+    canvas.set_remark_enabled(True)
+
+    canvas.add_remark_at("magnitude", 11.0)
+    assert canvas.remark_count() == 1
+    magnitude = canvas._remarks[0]
+    assert magnitude["vb"] is canvas._plot_magnitude.vb
+    assert magnitude["data_x"] == pytest.approx(1.0)  # log10(10 Hz)
+    label = magnitude["text"].textItem.toPlainText()
+    assert "X=10 Hz" in label
+    assert "Y=3 m/s/N" in label
+
+    canvas.add_remark_at("coherence", 97.0)
+    assert canvas.remark_count() == 2
+    assert canvas._remarks[1]["vb"] is canvas._plot_coherence.vb
+
+    canvas.remove_remark_near("magnitude", 10.0)
+    assert canvas.remark_count() == 1
+    assert canvas._remarks[0]["vb"] is canvas._plot_coherence.vb
+
+    canvas.clear_remarks()
+    assert canvas.remark_count() == 0
+
+
 def test_frf_canvas_log_axis_uses_sparse_physical_hz_decades(qtbot):
     from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
 
