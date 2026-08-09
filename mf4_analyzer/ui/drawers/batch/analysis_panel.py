@@ -40,7 +40,7 @@ class _PresetCard(QPushButton):
 
     # Match the denser single-analysis preset strip while retaining Batch's
     # larger click target and parameter summary.
-    _TITLE_POINT_SIZE = 9
+    _TITLE_POINT_SIZE = 11
     _SUMMARY_POINT_SIZE = 8
     _NORMAL_HEIGHT = 66
     _COMPACT_HEIGHT = 40

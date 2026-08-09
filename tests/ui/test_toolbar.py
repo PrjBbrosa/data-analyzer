@@ -186,3 +186,13 @@ def test_toolbar_open_save_split_and_no_export(qtbot):
     assert hasattr(tb, "save_project_requested")
     assert hasattr(tb, "save_project_as_requested")
     assert not hasattr(tb, "export_requested")
+
+
+def test_toolbar_open_keeps_primary_entry_cue_and_other_file_actions_are_secondary(qtbot):
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+
+    assert tb.btn_add.property("role") == "primary"
+    assert [button.property("role") for button in (
+        tb.btn_save_project, tb.btn_save_project_as, tb.btn_batch,
+    )] == ["secondary"] * 3

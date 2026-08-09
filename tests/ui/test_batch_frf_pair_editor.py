@@ -46,20 +46,46 @@ def test_pair_editor_blocks_self_duplicate_empty_and_supports_groups(qtbot):
     assert editor.validation_message() == ""
 
 
-def test_pair_editor_uses_one_aligned_heading_and_no_duplicate_invalid_summary(qtbot):
-    from PyQt5.QtCore import QPoint
-
+def test_pair_editor_hides_duplicate_invalid_summary(qtbot):
     editor = _editor(qtbot)
     editor.resize(480, 300)
     editor.show()
     qtbot.waitExposed(editor)
 
-    first = editor._groups[0]
-    title_left = editor._title.mapTo(editor, QPoint(7, 0)).x()
-    group_left = first.title.mapTo(editor, QPoint(0, 0)).x()
-    assert abs(title_left - group_left) <= 1
     assert editor._validation.text() == "配对组 1：请选择输入"
     assert editor._task_summary.isHidden()
+
+
+def test_input_panel_aligns_frf_pair_label_with_target_policy(qtbot):
+    """The parent label owns the shared form column; no nested FRF heading."""
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel()
+    qtbot.addWidget(panel)
+    panel._file_list.add_loaded_file(
+        ("file-a", "group-1"), "a.mf4 · group-1",
+        frozenset({"Force", "Acceleration"}),
+    )
+    panel.set_method("frf")
+    panel.resize(600, 900)
+    panel.show()
+    qtbot.waitExposed(panel)
+    qtbot.wait(20)
+
+    policy_label = panel._form_ref.labelForField(panel._target_policy_choice)
+    pair_label = panel._target_signal_label
+    group_title = panel._frf_pair_editor._groups[0].title
+
+    assert isinstance(policy_label, QLabel)
+    assert pair_label.mapTo(panel, QPoint(0, 0)).x() == policy_label.mapTo(panel, QPoint(0, 0)).x()
+    pair_text_top = (
+        pair_label.mapTo(panel, QPoint(0, 0)).y()
+        + pair_label.contentsMargins().top()
+    )
+    assert abs(pair_text_top - group_title.mapTo(panel, QPoint(0, 0)).y()) <= 1
 
 
 def test_pair_labels_do_not_replace_source_group_runtime_identity(qtbot):

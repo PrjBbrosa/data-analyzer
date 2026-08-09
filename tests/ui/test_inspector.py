@@ -365,12 +365,8 @@ def test_frf_compute_rows_keep_standard_32px_rhythm(qapp, qtbot):
         row_tops = [widget.mapTo(ctx, QPoint(0, 0)).y() for widget in rows]
 
         assert [widget.height() for widget in rows] == [32] * len(rows)
-        # The compact two-column grid keeps paired controls on one baseline
-        # and moves to the next parameter line in a single 58px step.
-        assert row_tops[0] == row_tops[1]
-        assert row_tops[2] == row_tops[3]
-        assert row_tops[4] == row_tops[5]
-        assert [row_tops[2] - row_tops[0], row_tops[4] - row_tops[2]] == [58, 58]
+        # The single-file Inspector remains a one-column parameter form.
+        assert [current - previous for previous, current in zip(row_tops, row_tops[1:])] == [36] * 5
     finally:
         qapp.setStyleSheet(old_sheet)
 

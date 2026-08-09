@@ -519,7 +519,7 @@ def test_preset_cards_use_contract_fonts_and_heights(qtbot):
     panel = AnalysisPanel()
     qtbot.addWidget(panel)
 
-    assert _PresetCard._TITLE_POINT_SIZE == 9
+    assert _PresetCard._TITLE_POINT_SIZE == 11
     assert _PresetCard._SUMMARY_POINT_SIZE == 8
     for button in panel._preset_buttons.values():
         assert button.minimumHeight() == 66

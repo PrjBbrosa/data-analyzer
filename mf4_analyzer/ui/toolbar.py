@@ -122,6 +122,8 @@ class Toolbar(QWidget):
         # ── left group ──────────────────────────────────────────────────────
         self.btn_add = QPushButton("打开", self)
         self.btn_add.setIcon(Icons.add_file(QColor("#ffffff")))
+        # Opening data is the primary entry point; retain its filled cue while
+        # save/save-as/batch remain secondary file actions.
         self.btn_add.setProperty("role", "primary")
         self.btn_add.setToolTip("打开数据文件或项目（.tlproj）")
         self.btn_save_project = QPushButton("保存", self)
@@ -132,6 +134,10 @@ class Toolbar(QWidget):
         self.btn_save_project_as.setToolTip("将当前会话另存为新的 .tlproj 项目")
         self.btn_batch = QPushButton("批处理", self)
         self.btn_batch.setIcon(Icons.batch())
+        for button in (
+            self.btn_save_project, self.btn_save_project_as, self.btn_batch,
+        ):
+            button.setProperty("role", "secondary")
 
         # ── center mode segment ─────────────────────────────────────────────
         self.btn_mode_time = QPushButton("时域", self)

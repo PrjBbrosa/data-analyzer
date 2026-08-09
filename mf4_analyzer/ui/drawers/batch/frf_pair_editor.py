@@ -52,12 +52,6 @@ class FrfPairEditor(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(6)
-        self._title = QLabel("FRF 配对", self)
-        self._title.setObjectName("BatchFrfPairEditorTitle")
-        # Pair groups have a 7px card inset; match it so the editor heading,
-        # group title, and input/output labels share one left datum.
-        self._title.setContentsMargins(7, 0, 0, 0)
-        outer.addWidget(self._title)
         self._groups_layout = QVBoxLayout()
         self._groups_layout.setContentsMargins(0, 0, 0, 0)
         self._groups_layout.setSpacing(6)

@@ -355,18 +355,6 @@ QLabel#BatchParamColumnTitle {
     font-weight: 700;
     background-color: transparent;
 }
-QLabel#BatchFrfPairEditorTitle {
-    color: #253247;
-    font-size: 12px;
-    font-weight: 700;
-    background-color: transparent;
-}
-QLabel#frfComputeLabel {
-    color: #556378;
-    font-size: 11px;
-    font-weight: 600;
-    background-color: transparent;
-}
 QPushButton#BatchAnalysisPresetCard {
     /* 54px content + 5px top/bottom padding + 1px borders = 66px surface. */
     min-height: 54px;

@@ -1043,10 +1043,12 @@ class InputPanel(QWidget):
         self._method = str(method)
         self._filter_panel.set_method(method)
         is_frf = self._method == "frf"
-        # FRF owns its own in-field heading, aligned with the pair groups.
-        # Keep this form label blank to retain the shared field column without
-        # leaving a second, visually offset “FRF 配对” beside it.
-        self._target_signal_label.setText("" if is_frf else "目标信号")
+        self._target_signal_label.setText("FRF 配对" if is_frf else "目标信号")
+        # The FRF group title starts after its card's 6px top inset.  Put the
+        # form label on the same baseline while retaining the Target form's
+        # shared left label column.
+        self._target_signal_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self._target_signal_label.setContentsMargins(0, 6 if is_frf else 0, 0, 0)
         self._target_stack.setCurrentWidget(
             self._frf_pair_editor if is_frf else self._signal_picker
         )
