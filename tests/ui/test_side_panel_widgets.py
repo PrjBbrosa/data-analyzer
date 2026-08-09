@@ -1,7 +1,5 @@
 # tests/ui/test_side_panel_widgets.py
 """qtbot widget/controller tests for collapsible side panels."""
-from pathlib import Path
-
 import pytest
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QColor, QImage, QPainter
@@ -9,10 +7,7 @@ from PyQt5.QtWidgets import QWidget, QSplitter
 from PyQt5.QtTest import QTest
 
 from mf4_analyzer.ui.side_panels import Side, SidePanelStrip
-
-
-QSS_PATH = Path("mf4_analyzer/ui_kit/style.qss")
-
+from mf4_analyzer.ui_kit import load_stylesheet
 
 def test_strip_emits_pin_on_left_click(qtbot):
     strip = SidePanelStrip(Side.LEFT)
@@ -44,7 +39,7 @@ def test_strip_hover_out_before_debounce_cancels(qtbot):
 
 def test_strip_renders_porcelain_pill_with_blue_chevron(qapp, qtbot):
     old = qapp.styleSheet()
-    qapp.setStyleSheet(QSS_PATH.read_text(encoding="utf-8"))
+    load_stylesheet(qapp)
     try:
         assert SidePanelStrip.PILL_RADIUS == 3.0
 

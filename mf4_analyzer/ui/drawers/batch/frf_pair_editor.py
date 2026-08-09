@@ -65,7 +65,7 @@ class FrfPairEditor(QWidget):
         self._validation.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         footer.addWidget(self._validation, 1)
         self._add_button = QPushButton("+ 添加配对组", self)
-        self._add_button.setProperty("role", "tool")
+        self._add_button.setProperty("role", "quiet")
         self._add_button.clicked.connect(self.add_group)
         footer.addWidget(self._add_button)
         outer.addLayout(footer)
@@ -112,7 +112,11 @@ class FrfPairEditor(QWidget):
         title = QLabel(host)
         title.setObjectName("BatchFrfPairGroupTitle")
         remove = QPushButton("删除", host)
-        remove.setProperty("role", "tool")
+        # This only removes an uncommitted pair group from the current editor;
+        # it does not delete source data or a saved result.
+        remove.setProperty("role", "quiet")
+        remove.setToolTip("移除该配对组")
+        remove.setAccessibleName("移除该配对组")
         remove.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         input_picker = SignalPickerPopup(parent=host, single_select=True)
         input_picker.setMinimumWidth(0)

@@ -7,7 +7,6 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -30,6 +29,7 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import QColor, QBrush, QFontMetrics, QIcon, QPainter, QPen
 
 from ...ui_kit.icons import Icons
+from ...ui_kit.widgets import SearchField
 from .. import hints
 from ..axis_group_palette import axis_group_color
 from .channel_config_bar import ChannelConfigBar
@@ -440,25 +440,24 @@ class MultiFileChannelWidget(QWidget):
         layout = QVBoxLayout(self);
         layout.setContentsMargins(8, 8, 8, 8);
         layout.setSpacing(6)
-        self.search = QLineEdit();
+        self.search = SearchField("搜索通道…");
         self.search.setObjectName("channelSearch")
-        self.search.setPlaceholderText("Filter channel...");
         self.search.textChanged.connect(self._filter);
         layout.addWidget(self.search)
         bl = QHBoxLayout()
         self.btn_all = QPushButton("全选")
         self.btn_all.setMaximumWidth(48)
-        self.btn_all.setProperty("role", "tool")
+        self.btn_all.setProperty("role", "quiet")
         self.btn_all.clicked.connect(self._all)
         bl.addWidget(self.btn_all)
         self.btn_none = QPushButton("全不")
         self.btn_none.setMaximumWidth(48)
-        self.btn_none.setProperty("role", "tool")
+        self.btn_none.setProperty("role", "quiet")
         self.btn_none.clicked.connect(self._none)
         bl.addWidget(self.btn_none)
         self.btn_selected_only = QPushButton("已选")
         self.btn_selected_only.setMaximumWidth(48)
-        self.btn_selected_only.setProperty("role", "tool")
+        self.btn_selected_only.setProperty("role", "quiet")
         self.btn_selected_only.setCheckable(True)
         self.btn_selected_only.toggled.connect(self._apply_filters)
         bl.addWidget(self.btn_selected_only)
@@ -468,7 +467,7 @@ class MultiFileChannelWidget(QWidget):
         self.btn_edit = QPushButton("编辑通道")
         self.btn_edit.setIcon(Icons.edit_channels())
         self.btn_edit.setIconSize(QSize(16, 16))
-        self.btn_edit.setProperty("role", "tool")
+        self.btn_edit.setProperty("role", "quiet")
         self.btn_edit.setEnabled(False)  # enabled once a file is loaded
         self.btn_edit.clicked.connect(self.channel_editor_requested)
         bl.addWidget(self.btn_edit)

@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
+from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from ._helpers import (
     _SHORT_FIELD_MAX_WIDTH,
@@ -126,7 +127,9 @@ class PersistentTop(QWidget):
         self._xlabel_auto_from_channel = False
         self.combo_xaxis = QComboBox()
         self.combo_xaxis.addItems(['自动(时间)', '指定通道'])
-        fl.addRow("来源:", _fit_field(self.combo_xaxis))
+        self.choice_xaxis = SegmentedChoice()
+        self.choice_xaxis.bind(self.combo_xaxis)
+        fl.addRow("来源:", _fit_field(self.choice_xaxis))
         self._combo_xaxis_ch = SearchableComboBox()
         self._combo_xaxis_ch.setEnabled(False)
         fl.addRow("通道:", _fit_field(self._combo_xaxis_ch))
@@ -251,7 +254,7 @@ class PersistentTop(QWidget):
             sp.setMaximumWidth(_SHORT_FIELD_MAX_WIDTH)
         # Long-text fields: xaxis source combo + label LineEdit may host
         # representative text; keep a generous (but not unbounded) cap.
-        for w in (self.combo_xaxis, self._combo_xaxis_ch, self.edit_xlabel):
+        for w in (self.choice_xaxis, self._combo_xaxis_ch, self.edit_xlabel):
             w.setMaximumWidth(_LONG_FIELD_MAX_WIDTH)
 
     def _wire(self):

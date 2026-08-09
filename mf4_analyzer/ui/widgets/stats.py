@@ -55,7 +55,9 @@ class StatsStrip(QFrame):
         self._btn_expand = QToolButton()
         self._btn_expand.setObjectName("statsExpand")
         self._btn_expand.setText(">")
-        self._btn_expand.setProperty("role", "tool")
+        self._btn_expand.setToolTip("展开统计信息")
+        self._btn_expand.setAccessibleName("展开统计信息")
+        self._btn_expand.setProperty("role", "icon")
         self._btn_expand.clicked.connect(self.toggle)
         top.addWidget(self._btn_expand)
         self._lbl_summary = QLabel("— 无通道 —")
@@ -68,6 +70,9 @@ class StatsStrip(QFrame):
     def toggle(self):
         self._expanded = not self._expanded
         self._btn_expand.setText("v" if self._expanded else ">")
+        action = "收起统计信息" if self._expanded else "展开统计信息"
+        self._btn_expand.setToolTip(action)
+        self._btn_expand.setAccessibleName(action)
         self._panel.setVisible(self._expanded)
 
     def update_stats(self, stats):

@@ -7,8 +7,10 @@ share the exact same visual — track / knob colours, 44×24 size, disabled tint
 caller can swap a ``QCheckBox`` for it without touching its enable/sync logic.
 """
 from PyQt5.QtCore import Qt, QSize, QRectF
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PyQt5.QtWidgets import QAbstractButton, QLabel
+
+from ...ui_kit.control_style import CONTROL_COLORS
 
 
 class PillSwitch(QAbstractButton):
@@ -33,20 +35,62 @@ class PillSwitch(QAbstractButton):
 
         on = self.isChecked()
         enabled = self.isEnabled()
-        track = QColor("#1769e0" if on else "#dbe3ee")
-        border = QColor("#1769e0" if on else "#aeb9c9")
-        knob = QColor("#ffffff")
-        knob_border = QColor("#d1d9e5")
+        color = lambda name: QColor(CONTROL_COLORS[name])
+
+        # Each state only changes ink.  The shared 44×24 geometry, track
+        # rect, knob diameter and left/right insets stay fixed throughout.
         if not enabled:
-            track = QColor("#edf1f6")
-            border = QColor("#d5dde8")
-            knob = QColor("#f8fafc")
-            knob_border = QColor("#e2e8f0")
+            track_top = color("CONTROL_DISABLED_BG")
+            track_bottom = color("CONTROL_TRACK")
+            border = color("CONTROL_DISABLED_LINE")
+            knob_top = color("CONTROL_SURFACE_TOP")
+            knob_bottom = color("CONTROL_SURFACE_BOTTOM")
+            knob_border = color("CONTROL_DISABLED_LINE")
+        elif on:
+            if self.isDown():
+                track_top = color("CONTROL_ACCENT")
+                track_bottom = color("CONTROL_ACCENT_DARK")
+                border = color("CONTROL_ACCENT_DARK")
+            elif self.underMouse():
+                track_top = color("CONTROL_ACCENT_HI")
+                track_bottom = color("CONTROL_ACCENT_HI")
+                border = color("CONTROL_ACCENT_BORDER")
+            else:
+                track_top = color("CONTROL_ACCENT_HI")
+                track_bottom = color("CONTROL_ACCENT")
+                border = color("CONTROL_ACCENT_BORDER")
+            knob_top = color("CONTROL_SURFACE_TOP")
+            knob_bottom = color("CONTROL_SURFACE_BOTTOM")
+            knob_border = color("CONTROL_LINE")
+        elif self.isDown():
+            track_top = color("CONTROL_TRACK")
+            track_bottom = color("CONTROL_TRACK")
+            border = color("CONTROL_LINE_HOVER")
+            knob_top = color("CONTROL_SURFACE_TOP")
+            knob_bottom = color("CONTROL_SURFACE_BOTTOM")
+            knob_border = color("CONTROL_LINE_HOVER")
+        elif self.underMouse():
+            track_top = color("CONTROL_SURFACE_TOP")
+            track_bottom = color("CONTROL_SURFACE_BOTTOM")
+            border = color("CONTROL_LINE_HOVER")
+            knob_top = color("CONTROL_SURFACE_TOP")
+            knob_bottom = color("CONTROL_SURFACE_BOTTOM")
+            knob_border = color("CONTROL_LINE")
+        else:
+            track_top = color("CONTROL_SURFACE_BOTTOM")
+            track_bottom = color("CONTROL_TRACK")
+            border = color("CONTROL_TRACK_LINE")
+            knob_top = color("CONTROL_SURFACE_TOP")
+            knob_bottom = color("CONTROL_SURFACE_BOTTOM")
+            knob_border = color("CONTROL_LINE")
 
         rect = QRectF(1.0, 2.0, self.width() - 2.0, self.height() - 4.0)
         radius = rect.height() / 2.0
+        track_gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+        track_gradient.setColorAt(0.0, track_top)
+        track_gradient.setColorAt(1.0, track_bottom)
         painter.setPen(QPen(border, 1.0))
-        painter.setBrush(track)
+        painter.setBrush(track_gradient)
         painter.drawRoundedRect(rect, radius, radius)
 
         diameter = rect.height() - 4.0
@@ -55,8 +99,14 @@ class PillSwitch(QAbstractButton):
             if on else rect.left() + 2.0
         )
         knob_rect = QRectF(knob_x, rect.top() + 2.0, diameter, diameter)
+        # Keep the knob white, but let its final few pixels cool very slightly
+        # toward the lower edge so it does not read as a flat cut-out.
+        knob_gradient = QLinearGradient(knob_rect.topLeft(), knob_rect.bottomLeft())
+        knob_gradient.setColorAt(0.0, knob_top)
+        knob_gradient.setColorAt(0.72, knob_top)
+        knob_gradient.setColorAt(1.0, knob_bottom)
         painter.setPen(QPen(knob_border, 1.0))
-        painter.setBrush(knob)
+        painter.setBrush(knob_gradient)
         painter.drawEllipse(knob_rect)
 
 

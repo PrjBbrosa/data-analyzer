@@ -314,10 +314,12 @@ QPushButton#batchOutputSettingsButton:checked {
         self._compact_field(self._combo_format)
         settings_form.addRow("数据格式", self._combo_format)
 
-        self._combo_image_format = QComboBox(self)
-        self._combo_image_format.addItem("PNG", "png")
-        self._compact_field(self._combo_image_format)
-        settings_form.addRow("图片格式", self._combo_image_format)
+        # PNG is the fixed export contract, not a one-item choice.  Keep the
+        # same settings-row geometry while removing the misleading drop-down.
+        self._image_format_text = QLabel("PNG", self)
+        self._image_format_text.setObjectName("batchImageFormatText")
+        self._compact_field(self._image_format_text)
+        settings_form.addRow("图片格式", self._image_format_text)
 
         self._combo_image_size = QComboBox(self)
         for label, value in (
@@ -446,7 +448,7 @@ QPushButton#batchOutputSettingsButton:checked {
         self._output_settings.hide()
         self._output_preview.hide()
         for widget in (
-            self._combo_format, self._combo_image_format,
+            self._combo_format, self._image_format_text,
             self._combo_image_size, self._spin_image_width,
             self._spin_image_height, self._combo_image_background,
             self._combo_image_line_width, self._spin_image_dpi,
@@ -469,9 +471,6 @@ QPushButton#batchOutputSettingsButton:checked {
         self._combo_format.currentTextChanged.connect(lambda *_: self.changed.emit())
         self._combo_format.currentTextChanged.connect(
             lambda *_: self._refresh_output_summary()
-        )
-        self._combo_image_format.currentIndexChanged.connect(
-            self._on_image_option_changed
         )
         self._combo_image_size.currentIndexChanged.connect(
             self._on_image_option_changed

@@ -258,6 +258,43 @@ def test_target_policy_switches_common_intersection_to_selectable_union(qtbot):
     assert panel.source_paths() == ("a.csv", "b.csv")
 
 
+def test_target_policy_uses_a_full_width_segmented_choice_at_288px(qapp, qtbot):
+    from PyQt5.QtTest import QSignalSpy
+
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    old_sheet = qapp.styleSheet()
+    try:
+        load_stylesheet(qapp)
+        panel = InputPanel()
+        qtbot.addWidget(panel)
+        panel.resize(288, 900)
+        panel.show()
+        qtbot.wait(20)
+
+        combo = panel._target_policy_combo
+        choice = panel._target_policy_choice
+        assert choice.bound_combo() is combo
+        assert combo.isHidden() is True
+        assert choice.isVisibleTo(panel) is True
+        assert choice.height() == 32
+        assert choice.mapTo(panel, choice.rect().topLeft()).x() == 71
+        assert choice.mapTo(panel, choice.rect().topRight()).x() == 275
+        assert all(
+            button.width() >= button.fontMetrics().horizontalAdvance(button.text())
+            for button in choice.buttons()
+        )
+
+        changed = QSignalSpy(panel.changed)
+        choice.buttons()[1].click()
+        assert len(changed) == 1
+        assert combo.currentData() == "available_per_source"
+        assert panel.target_policy() == "available_per_source"
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 def test_probe_failure_sets_probe_failed(qtbot, tmp_path):
     from mf4_analyzer.ui.drawers.batch.input_panel import FileListWidget
     w = FileListWidget()

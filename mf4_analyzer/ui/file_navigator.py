@@ -93,7 +93,8 @@ class _FileRow(QFrame):
         self._btn_close.setIconSize(QSize(16, 16))
         self._btn_close.setFixedSize(QSize(24, 24))
         self._btn_close.setToolTip("关闭文件")
-        self._btn_close.setProperty("role", "tool")
+        self._btn_close.setAccessibleName("关闭文件")
+        self._btn_close.setProperty("role", "icon")
         self._btn_close.setAutoRaise(True)
         self._btn_close.clicked.connect(
             lambda: self.close_requested.emit(self._rows_key)
@@ -253,7 +254,7 @@ class FileNavigator(QWidget):
         self.btn_auto_attach.setObjectName("autoAttachFiles")
         self.btn_auto_attach.setIconSize(QSize(16, 16))
         self.btn_auto_attach.setFixedSize(QSize(24, 24))
-        self.btn_auto_attach.setProperty("role", "tool")
+        self.btn_auto_attach.setProperty("role", "icon")
         self.btn_auto_attach.setAutoRaise(True)
         self.btn_auto_attach.setCheckable(True)
         self.btn_auto_attach.setChecked(True)
@@ -268,7 +269,8 @@ class FileNavigator(QWidget):
         self._btn_kebab.setIconSize(QSize(16, 16))
         self._btn_kebab.setFixedSize(QSize(24, 24))
         self._btn_kebab.setToolTip("文件操作")
-        self._btn_kebab.setProperty("role", "tool")
+        self._btn_kebab.setAccessibleName("文件操作")
+        self._btn_kebab.setProperty("role", "icon")
         self._btn_kebab.setAutoRaise(True)
         self._btn_kebab.clicked.connect(self._open_kebab)
         head.addWidget(self._btn_kebab)
@@ -479,6 +481,7 @@ class FileNavigator(QWidget):
             if enabled
             else "新加载文件仅打开，不加入当前 View"
         )
+        self.btn_auto_attach.setAccessibleName(self.btn_auto_attach.toolTip())
         self.btn_auto_attach.setProperty("active", enabled)
         self.btn_auto_attach.style().unpolish(self.btn_auto_attach)
         self.btn_auto_attach.style().polish(self.btn_auto_attach)

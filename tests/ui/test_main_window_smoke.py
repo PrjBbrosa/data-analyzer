@@ -1,5 +1,6 @@
 import pytest
 
+from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.ui.main_window import MainWindow
 
 
@@ -667,9 +668,7 @@ def test_status_hint_quickref_button_stays_inside_bar_under_qss(qapp, qtbot):
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         w = MainWindow()
         qtbot.addWidget(w)
         w.resize(1920, 1080)
@@ -773,9 +772,7 @@ def test_main_window_inspector_slot_fixed_at_288_under_qss(qapp, qtbot):
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         w = MainWindow()
         qtbot.addWidget(w)
         w.resize(2048, 1228)

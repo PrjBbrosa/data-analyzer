@@ -505,6 +505,10 @@ class Icons:
 
 # Each entry: (placeholder_key, qtawesome_icon_name, color_hex)
 _ARROW_SPECS = (
+    # Shared search-field leading glyph.  This deliberately follows the same
+    # cache path as the QSS subcontrol icons instead of rasterising for every
+    # SearchField instance.
+    ("ICON_SEARCH", "mdi6.magnify", "#64748b"),
     # Spin box up arrow
     ("ICON_SPIN_UP_REST",     "mdi6.menu-up",   "#475569"),
     ("ICON_SPIN_UP_HOVER",    "mdi6.menu-up",   "#1769e0"),

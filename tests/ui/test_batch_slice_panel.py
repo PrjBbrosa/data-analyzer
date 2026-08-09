@@ -81,6 +81,26 @@ def test_slice_panel_axis_switch_updates_unit_label(qtbot):
     assert panel._unit_label.text() == "s"
 
 
+def test_slice_axis_combo_stays_visible_when_its_slot_cannot_fit_segments(qtbot):
+    """Do not replace a 90px Batch slot with clipped two-segment labels."""
+    from PyQt5.QtWidgets import QComboBox
+
+    panel = _make_panel(qtbot)
+    panel._enable_switch.setChecked(True)
+    panel.resize(288, 400)
+    panel.show()
+    qtbot.wait(20)
+
+    combo = panel._axis_combo
+    required_width = (
+        2 * max(combo.fontMetrics().horizontalAdvance(combo.itemText(index))
+                for index in range(combo.count()))
+        + 28  # two button paddings/borders plus the segmented track edge
+    )
+    assert isinstance(combo, QComboBox)
+    assert combo.width() < required_width
+
+
 def test_slice_panel_order_time_context_renames_second_axis_and_clears_unit(qtbot):
     panel = _make_panel(qtbot)
     panel.set_context(method="order_time")

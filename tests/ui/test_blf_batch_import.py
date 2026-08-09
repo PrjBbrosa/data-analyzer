@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QMessageBox, QPushButton
 pytest.importorskip("can", reason="python-can not installed (win32-gated)")
 pytest.importorskip("cantools", reason="cantools not installed")
 
+from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.io import DataLoader
 from tests._helpers.blf_factory import write_raw_blf, write_sample_blf, write_two_message_dbc
 
@@ -107,10 +108,8 @@ def test_batch_dbc_mismatch_can_skip_without_decoding_wrong_file(
 def test_batch_dbc_dialog_actions_fit_without_text_elision(qapp, qtbot, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
+    load_stylesheet(qapp)
     window = MainWindow()
-    window.setStyleSheet(
-        Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-    )
     qtbot.addWidget(window)
     captured = []
 
@@ -136,10 +135,8 @@ def test_batch_dbc_dialog_actions_fit_without_text_elision(qapp, qtbot, monkeypa
 def test_batch_dbc_mismatch_actions_fit_without_text_elision(qapp, qtbot, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
 
+    load_stylesheet(qapp)
     window = MainWindow()
-    window.setStyleSheet(
-        Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-    )
     qtbot.addWidget(window)
     captured = []
 

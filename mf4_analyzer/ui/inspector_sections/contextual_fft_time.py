@@ -20,6 +20,7 @@ from ...analysis_presets import (
     resolve_builtin_preset_alias,
 )
 from ...ui_kit.icons import Icons
+from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from .._axis_defaults import z_range_for
@@ -124,8 +125,9 @@ class FFTTimeContextual(QWidget):
         self.btn_rebuild.setIcon(Icons.rebuild_time())
         self.btn_rebuild.setIconSize(QSize(16, 16))
         self.btn_rebuild.setFixedSize(QSize(24, 24))
-        self.btn_rebuild.setProperty("role", "tool")
+        self.btn_rebuild.setProperty("role", "icon")
         self.btn_rebuild.setToolTip("重建时间轴")
+        self.btn_rebuild.setAccessibleName("重建时间轴")
         self.btn_rebuild.clicked.connect(
             lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
         )
@@ -193,9 +195,11 @@ class FFTTimeContextual(QWidget):
         self.combo_weighting.setToolTip(
             'A 计权（IEC 61672）：相对加权频谱，非绝对 dB SPL'
         )
+        self.choice_weighting = SegmentedChoice()
+        self.choice_weighting.bind(self.combo_weighting)
         fl.addRow(
             "频率加权:",
-            _fit_field(self.combo_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
+            _fit_field(self.choice_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
         self.db_reference_control = make_db_reference_control(self)
         self.spin_db_ref = self.db_reference_control.editor
@@ -620,6 +624,7 @@ class FFTTimeContextual(QWidget):
                 self.combo_amp_unit.blockSignals(True)
                 self.combo_amp_unit.setCurrentIndex(i)
                 self.combo_amp_unit.blockSignals(False)
+                self.choice_amp_unit.sync_from_bound_combo()
 
         # Legacy ``dynamic`` only fires when no explicit z_floor accompanies
         # it (get_params always emits z_floor, so this is a partial-dict
@@ -849,6 +854,7 @@ class FFTTimeContextual(QWidget):
                 self.combo_amp_unit.blockSignals(True)
                 self.combo_amp_unit.setCurrentIndex(i)
                 self.combo_amp_unit.blockSignals(False)
+                self.choice_amp_unit.sync_from_bound_combo()
         # Legacy ``freq_auto/min/max`` map onto the Y-frequency row of the
         # axis group (chk_y_auto / spin_y_min/max via the alias attributes).
         if 'freq_auto' in d:

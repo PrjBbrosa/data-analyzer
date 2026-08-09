@@ -37,6 +37,7 @@ from ....io.source_adapters import (
     stable_source_id,
 )
 from ....ui_kit.menus import apply_rounded_menu_chrome
+from ....ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...widgets.compact_spinbox import CompactDoubleSpinBox
 from .filter_panel import BatchFilterPanel
 from .frf_pair_editor import FrfPairEditor
@@ -831,7 +832,16 @@ class InputPanel(QWidget):
         self._target_policy_combo.setToolTip(
             "共有：只选择每个来源都有的信号；按来源可用：选择并集，跳过缺失组合。"
         )
-        form.addRow("目标策略", self._target_policy_combo)
+        self._target_policy_choice = SegmentedChoice(form_host)
+        self._target_policy_choice.bind(self._target_policy_combo)
+        # Keep the Batch column shrinkable to its supported 288px width.  At
+        # layout time this field still receives the full form slot; ``Ignored``
+        # only prevents its two label hints from becoming the panel minimum.
+        self._target_policy_choice.setMinimumWidth(0)
+        self._target_policy_choice.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed,
+        )
+        form.addRow("目标策略", self._target_policy_choice)
 
         self._target_stack = _TargetStack(form_host)
         self._target_stack.setMinimumWidth(0)

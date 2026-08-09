@@ -362,7 +362,7 @@ class BatchSheet(QDialog):
 
         self._btn_preview = QPushButton("预览", self._footer_host)
         self._btn_preview.setToolTip("生成正式渲染链路的代表最终图")
-        self._btn_preview.setProperty("role", "accent")
+        self._btn_preview.setProperty("role", "secondary")
         self._btn_preview.clicked.connect(self._on_preview_clicked)
         self._footer_lay.addWidget(self._btn_preview)
 
@@ -374,7 +374,7 @@ class BatchSheet(QDialog):
 
         # Running-mode button (hidden until a run starts)
         self._btn_abort = QPushButton("中断", self._footer_host)
-        self._btn_abort.setProperty("role", "destructive")
+        self._btn_abort.setProperty("role", "danger")
         self._btn_abort.clicked.connect(self._on_cancel_clicked)
         self._btn_abort.setVisible(False)
         self._footer_lay.addWidget(self._btn_abort)

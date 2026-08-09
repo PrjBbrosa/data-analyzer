@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
 
 from ...db_reference import migrate_legacy_reference_params
 from ...db_reference import normalize_unit as _normalize_unit
+from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 from ..widgets.db_reference import DbReferenceControl
@@ -625,7 +626,6 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     row_gap = _AXIS_ROW_GAP
     arrow_width = _AXIS_ARROW_W
     manual_gap = _AXIS_MANUAL_GAP
-    unit_width = 64
     # 2026-06-05 narrow-pane: the range editors are now fluid (Expanding) so
     # the whole group shrinks with the 288px pane instead of forcing a
     # horizontal scrollbar. ``range_floor`` is the smallest the min→max area
@@ -637,8 +637,8 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     spin_floor = 42
 
     # ``container`` is the widget added to the group: line 1 holds
-    # [label][auto][min → max]; an optional line 2 carries the unit combo
-    # right-aligned beneath the editors.
+    # [label][auto][min → max]; an optional line 2 carries the amplitude
+    # unit control beneath the editors without narrowing their range slot.
     container = QWidget()
     container.setObjectName("axisRow")
     container.setAttribute(Qt.WA_StyledBackground, True)
@@ -725,9 +725,13 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
         unit_lay = QHBoxLayout(unit_line)
         unit_lay.setContentsMargins(0, 0, 0, 0)
         unit_lay.setSpacing(0)
+        unit_widget.setMinimumWidth(0)
+        unit_widget.setMaximumWidth(_SHORT_FIELD_MAX_WIDTH)
+        unit_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # The choice must share the grid's trailing datum with the range
+        # editors.  It may cap at the standard field width, but never starts
+        # at the row's left edge when the Inspector has spare width.
         unit_lay.addStretch(1)
-        unit_widget.setMinimumWidth(unit_width)
-        unit_widget.setMaximumWidth(unit_width)
         unit_lay.addWidget(unit_widget)
         outer.addWidget(unit_line)
 
@@ -810,6 +814,7 @@ def _make_axis_settings_group(
     include_z=True,
     pre_header_rows=(),
     amplitude_unit_row_label: str | None = None,
+    amplitude_unit_widget: QWidget | None = None,
 ):
     """Build the "坐标轴设置" QGroupBox and attach widgets to ``owner``.
 
@@ -818,7 +823,8 @@ def _make_axis_settings_group(
         chk_x_auto, spin_x_min, spin_x_max
         chk_y_auto, spin_y_min, spin_y_max
         chk_z_auto, spin_z_floor, spin_z_ceiling  (when include_z=True)
-        combo_amp_unit  (the dB ↔ Linear dropdown, when present)
+        combo_amp_unit  (the helper-owned dB ↔ Linear dropdown, when
+                         ``include_z=True``)
         _amplitude_unit_row (when ``amplitude_unit_row_label`` is supplied)
 
     Wires::
@@ -923,6 +929,12 @@ def _make_axis_settings_group(
     owner.axis_y_range_host = y_parts['range_host']
     lay.addWidget(y_row)
 
+    if amplitude_unit_widget is not None and amplitude_unit_row_label is None:
+        raise ValueError("amplitude_unit_widget requires amplitude_unit_row_label")
+
+    owner._amplitude_unit_row = None
+    z_unit_widget = None
+
     # ---- Z (color scale) row ----
     if include_z:
         owner.chk_z_auto = QCheckBox()
@@ -948,18 +960,32 @@ def _make_axis_settings_group(
             owner.spin_z_ceiling, owner.combo_amp_unit,
         ):
             w.blockSignals(False)
+        owner.choice_amp_unit = SegmentedChoice()
+        owner.choice_amp_unit.bind(owner.combo_amp_unit)
         owner.lbl_z_summary = QLabel(z_auto_summary)
-        owner._amplitude_unit_row = None
-        z_unit_widget = owner.combo_amp_unit
-        if amplitude_unit_row_label is not None:
-            # Batch FFT line plots use an amplitude unit but no colour scale.
-            # Keep this control outside the heatmap-only Z row so changing the
-            # method cannot hide the control or force a widget reparent.
-            owner._amplitude_unit_row = _build_axis_aux_row(
-                amplitude_unit_row_label, owner.combo_amp_unit,
+        z_unit_widget = owner.choice_amp_unit
+
+    if amplitude_unit_row_label is not None:
+        # Line plots need an amplitude unit even without a heatmap-only Z
+        # row.  Callers may therefore inject their existing visual host (for
+        # example FFT's choice bound to combo_amp_y); otherwise the helper's
+        # Z-axis choice remains the existing Batch/FFTTime/Order behavior.
+        unit_widget = (
+            amplitude_unit_widget
+            if amplitude_unit_widget is not None
+            else z_unit_widget
+        )
+        if unit_widget is None:
+            raise ValueError(
+                "amplitude_unit_row_label requires include_z or amplitude_unit_widget"
             )
-            lay.addWidget(owner._amplitude_unit_row)
-            z_unit_widget = None
+        owner._amplitude_unit_row = _build_axis_aux_row(
+            amplitude_unit_row_label, unit_widget,
+        )
+        lay.addWidget(owner._amplitude_unit_row)
+        z_unit_widget = None
+
+    if include_z:
         z_row, z_parts = _build_axis_row(
             "色阶:", owner.chk_z_auto,
             owner.spin_z_floor, owner.spin_z_ceiling,

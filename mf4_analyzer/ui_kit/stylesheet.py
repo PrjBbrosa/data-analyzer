@@ -12,6 +12,7 @@ Extracted from ``mf4_analyzer.app._load_stylesheet`` during Stage 1 of
 from pathlib import Path
 
 from .combo_popup_shell import install_combo_popup_shell
+from .control_style import CONTROL_QSS_TOKENS
 from .icons import ensure_icon_cache, render_qss_template
 from .message_box_buttons import install_message_box_button_roles
 
@@ -39,7 +40,10 @@ def load_stylesheet(app):
     template = qss.read_text(encoding="utf-8")
     try:
         icon_paths = ensure_icon_cache()
-        stylesheet = render_qss_template(template, icon_paths)
+        stylesheet = render_qss_template(
+            template,
+            {**CONTROL_QSS_TOKENS, **icon_paths},
+        )
     except Exception as exc:
         # Defensive: if qtawesome import or icon rendering fails (e.g.
         # an unusual install), fall back to the raw template. Spinbox
@@ -49,7 +53,9 @@ def load_stylesheet(app):
             f"[mf4_analyzer.ui_kit.stylesheet] icon cache generation failed "
             f"({exc!r}); loading stylesheet without subcontrol arrow glyphs.",
         )
-        stylesheet = template
+        # Control tokens do not depend on icon rendering, so retain the shared
+        # action-control contract even when the optional icon cache is absent.
+        stylesheet = render_qss_template(template, CONTROL_QSS_TOKENS)
     app.setStyleSheet(stylesheet)
     # The QSS above rounds the inner QComboBox list, but the popup's
     # top-level window stays a square, natively shadowed rectangle that

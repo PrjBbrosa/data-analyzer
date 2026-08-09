@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
 
 from ...analysis_presets import list_builtin_presets
 from ...ui_kit.icons import Icons
+from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from ._helpers import (
@@ -78,8 +79,9 @@ class FFTContextual(QWidget):
         self.btn_rebuild.setIcon(Icons.rebuild_time())
         self.btn_rebuild.setIconSize(QSize(16, 16))
         self.btn_rebuild.setFixedSize(QSize(24, 24))
-        self.btn_rebuild.setProperty("role", "tool")
+        self.btn_rebuild.setProperty("role", "icon")
         self.btn_rebuild.setToolTip("重建时间轴")
+        self.btn_rebuild.setAccessibleName("重建时间轴")
 
         # ---- 分析信号 (custom header so btn_rebuild docks top-right) ----
         # 2026-04-26 R3 紧凑化 fix-2: do NOT enable WA_StyledBackground on
@@ -194,28 +196,26 @@ class FFTContextual(QWidget):
             lambda txt: self.spin_avg_overlap.setEnabled(txt != '单帧')
         )
 
-        # --- Y-axis scale for the spectrum row ---
+        # ``combo_amp_y`` is the preserved ``amp_y`` preset/project state
+        # surface.  Its visible host moves below the Y-axis row in 坐标轴设置;
+        # it must not be replaced by the helper's different combo_amp_unit.
         self.combo_amp_y = QComboBox()
         self.combo_amp_y.addItems(['Linear', 'dB'])
         self.combo_amp_y.setCurrentText('Linear')
         self.combo_amp_y.setToolTip('dB 看宽动态，Linear 看绝对幅值。')
-        # 2026-06-05 narrow-pane: was "Amplitude 轴:" (144px) — the lone
-        # outlier that inflated the unified label column and forced the
-        # signal field to wrap at the 288px pane. The Chinese form matches
-        # the 幅值 (Y) axis label below and keeps the column tight.
-        fl.addRow(
-            "幅值轴:",
-            _fit_field(self.combo_amp_y, max_width=_SHORT_FIELD_MAX_WIDTH),
-        )
+        self.choice_amp_y = SegmentedChoice()
+        self.choice_amp_y.bind(self.combo_amp_y)
         self.combo_weighting = QComboBox()
         self.combo_weighting.addItems(['None', 'A'])
         self.combo_weighting.setCurrentText('None')
         self.combo_weighting.setToolTip(
             'A 计权（IEC 61672）：相对加权频谱，非绝对 dB SPL'
         )
+        self.choice_weighting = SegmentedChoice()
+        self.choice_weighting.bind(self.combo_weighting)
         fl.addRow(
             "频率加权:",
-            _fit_field(self.combo_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
+            _fit_field(self.choice_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
         self.db_reference_control = make_db_reference_control(self)
         self.spin_db_ref = self.db_reference_control.editor
@@ -244,7 +244,14 @@ class FFTContextual(QWidget):
             y_auto_summary="自动范围",
             include_z=False,
             pre_header_rows=(("dB 参考:", self.db_reference_control),),
+            amplitude_unit_row_label="幅值单位:",
+            amplitude_unit_widget=self.choice_amp_y,
         )
+        # The relocated 32px host adds one axis-layout gap while the removed
+        # form row removes one.  This local 2px rhythm preserves the measured
+        # 748px → 740px compacting contract at a 288px Inspector width; other
+        # analysis panels (including FRF) keep their own vertical spacing.
+        axis_g.layout().setSpacing(2)
         for spin in (self.spin_y_min, self.spin_y_max):
             spin.setRange(-1e12, 1e12)
         params_lay.addWidget(axis_g)

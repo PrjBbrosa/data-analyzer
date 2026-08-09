@@ -2,7 +2,8 @@
 import json
 from html import escape
 
-from PyQt5.QtCore import QEvent, QPoint, QSettings, Qt, pyqtSignal
+from PyQt5 import sip
+from PyQt5.QtCore import QPoint, QSettings, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -303,6 +304,42 @@ class _PresetHoverCard(QFrame):
         }.get(kind, kind)
 
 
+class _PresetLoadButton(QPushButton):
+    """Preset button that owns its hover lifecycle without an event filter."""
+
+    def __init__(self, slot, parent=None):
+        super().__init__(parent)
+        self._slot = slot
+
+    def _preset_bar(self):
+        parent = self.parentWidget()
+        return parent if isinstance(parent, PresetBar) else None
+
+    def enterEvent(self, event):
+        bar = self._preset_bar()
+        if bar is not None and bar.isVisible():
+            bar._show_hover(self._slot)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        bar = self._preset_bar()
+        if bar is not None:
+            bar._hide_hover()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        bar = self._preset_bar()
+        if bar is not None:
+            bar._hide_hover()
+        super().mousePressEvent(event)
+
+    def resizeEvent(self, event):
+        bar = self._preset_bar()
+        if bar is not None and bar.isVisible():
+            bar._position_recommend_badge(self._slot)
+        super().resizeEvent(event)
+
+
 class PresetBar(QWidget):
     """Preset bar with built-in slots and optional user-owned custom slots.
 
@@ -388,6 +425,7 @@ class PresetBar(QWidget):
             dict(default_params) if isinstance(default_params, dict) else None
         )
         self._hover_card = _PresetHoverCard()
+        self._hover_card.destroyed.connect(self._on_hover_card_destroyed)
         self._hover_slot = None
         # Slot currently flagged as the unit-推荐 highlight (None => none).
         self._recommended_slot = None
@@ -402,7 +440,7 @@ class PresetBar(QWidget):
         self._load_btns = {}
         self._recommend_badges = {}
         for n in self._slots:
-            ld = QPushButton(self._default_name(n), self)
+            ld = _PresetLoadButton(n, self)
             ld.setProperty("role", "preset-load")
             ld.setProperty("filled", "false")
             # Four equal-width slots must not raise the Inspector's minimum
@@ -411,7 +449,6 @@ class PresetBar(QWidget):
             ld.setMinimumWidth(0)
             ld.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             ld.setContextMenuPolicy(Qt.CustomContextMenu)
-            ld.installEventFilter(self)
             ld.clicked.connect(lambda _=False, slot=n: self._on_left_click(slot))
             ld.customContextMenuRequested.connect(
                 lambda pos, slot=n: self._show_menu(slot, pos)
@@ -560,21 +597,24 @@ class PresetBar(QWidget):
         self._selected_slot = slot
         self._refresh_states()
 
-    def eventFilter(self, obj, event):
-        slot = None
-        for n, btn in self._load_btns.items():
-            if obj is btn:
-                slot = n
-                break
-        if slot is None:
-            return super().eventFilter(obj, event)
-        if event.type() == QEvent.Enter:
-            self._show_hover(slot)
-        elif event.type() in (QEvent.Leave, QEvent.MouseButtonPress):
-            self._hide_hover()
-        elif event.type() == QEvent.Resize:
-            self._position_recommend_badge(slot)
-        return super().eventFilter(obj, event)
+    def hideEvent(self, event):
+        self._hide_hover()
+        super().hideEvent(event)
+
+    def _on_hover_card_destroyed(self, _destroyed_card=None):
+        """Drop the Python wrapper when Qt tears down the popup window."""
+        self._hover_card = None
+        self._hover_slot = None
+
+    def _live_hover_card(self):
+        """Return the cached card only while its C++ object still exists."""
+        card = getattr(self, "_hover_card", None)
+        if card is None:
+            return None
+        if sip.isdeleted(card):
+            self._on_hover_card_destroyed()
+            return None
+        return card
 
     def _show_hover(self, slot):
         entry = self._read(slot)
@@ -604,8 +644,11 @@ class PresetBar(QWidget):
             if not builtin_blurb:
                 builtin_blurb = BUILTIN_PRESET_BLURB.get(
                     _SLOT_TO_KEY.get(slot, ''), '')
+        card = self._live_hover_card()
+        if card is None:
+            return
         self._hover_slot = slot
-        self._hover_card.set_summary(
+        card.set_summary(
             name=name,
             params=params,
             kind=self._kind,
@@ -614,13 +657,22 @@ class PresetBar(QWidget):
             builtin=builtin,
             blurb=builtin_blurb,
         )
-        self._place_hover(slot)
-        self._hover_card.show()
-        self._hover_card.raise_()
+        if sip.isdeleted(card):
+            self._on_hover_card_destroyed()
+            return
+        self._place_hover(slot, card)
+        if sip.isdeleted(card):
+            self._on_hover_card_destroyed()
+            return
+        card.show()
+        card.raise_()
 
-    def _place_hover(self, slot):
+    def _place_hover(self, slot, card=None):
         btn = self._load_btns[slot]
-        card = self._hover_card
+        if card is None:
+            card = self._live_hover_card()
+        if card is None:
+            return
         card.adjustSize()
         size = card.sizeHint()
         width = max(card.width(), size.width())
@@ -639,8 +691,9 @@ class PresetBar(QWidget):
 
     def _hide_hover(self):
         self._hover_slot = None
-        if hasattr(self, '_hover_card') and self._hover_card is not None:
-            self._hover_card.hide()
+        card = self._live_hover_card()
+        if card is not None:
+            card.hide()
 
     _SUMMARY_LABELS = {
         'window': '窗函数',

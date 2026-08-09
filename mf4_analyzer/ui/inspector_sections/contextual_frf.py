@@ -5,7 +5,6 @@ from collections.abc import Mapping
 
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -22,6 +21,8 @@ from PyQt5.QtWidgets import (
 
 from ...analysis_presets import get_builtin_preset, list_builtin_presets
 from ...ui_kit.icons import Icons
+from ..widgets.pill_switch import PillSwitch
+from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ._helpers import (
     CUSTOM_PRESET_SLOTS,
@@ -189,6 +190,8 @@ class FrfContextual(QWidget):
         ))
         self.combo_input = SearchableComboBox(mapping_card)
         self.combo_output = SearchableComboBox(mapping_card)
+        self.combo_input.setToolTip(_FRF_TOOLTIPS["input"])
+        self.combo_output.setToolTip(_FRF_TOOLTIPS["output"])
         mapping_layout.addWidget(self._make_signal_row(
             mapping_card, "输入 x", "frfInput", self.combo_input,
         ))
@@ -200,8 +203,10 @@ class FrfContextual(QWidget):
         pair_actions.setContentsMargins(0, 0, 0, 0)
         pair_actions.addStretch(1)
         self.btn_swap = QPushButton("交换输入/输出", mapping_card)
-        self.btn_swap.setProperty("role", "tool")
-        self.btn_swap.setToolTip("交换系统激励输入与响应输出的方向")
+        # ``tool`` is reserved for icon-only controls: its QSS deliberately
+        # removes the height floor.  This text action needs its own role.
+        self.btn_swap.setProperty("role", "frf-swap")
+        self.btn_swap.setToolTip(_FRF_TOOLTIPS["swap"])
         # A narrow Inspector can put this action under vertical pressure during
         # a mode/reparent layout pass.  Pin its natural height so every settled
         # and captured frame is legible.
@@ -215,6 +220,7 @@ class FrfContextual(QWidget):
         self.combo_range_mode.addItem("全范围", "full")
         self.combo_range_mode.addItem("使用当前时域范围", "current_time")
         self.combo_range_mode.addItem("手动范围", "manual")
+        self.combo_range_mode.setToolTip(_FRF_TOOLTIPS["range"])
         range_form.addRow(
             "分析范围:",
             _fit_field(self.combo_range_mode, max_width=_LONG_FIELD_MAX_WIDTH),
@@ -249,21 +255,38 @@ class FrfContextual(QWidget):
         _configure_form(compute_form)
 
         self.combo_estimator = QComboBox(params_card)
-        self.combo_estimator.addItem("H1", "h1")
-        self.combo_estimator.addItem("H2", "h2")
+        for text, token, tooltip in _ESTIMATOR_ITEMS:
+            self.combo_estimator.addItem(text, token)
+        _install_combo_tooltips(
+            self.combo_estimator,
+            [item[2] for item in _ESTIMATOR_ITEMS],
+        )
+        self.choice_estimator = SegmentedChoice(params_card)
+        self.choice_estimator.bind(self.combo_estimator, labels=("H1", "H2"))
         compute_form.addRow(
-            "估计器:", _fit_field(self.combo_estimator, max_width=_SHORT_FIELD_MAX_WIDTH)
+            "估计器:", _fit_field(self.choice_estimator, max_width=_SHORT_FIELD_MAX_WIDTH)
         )
 
         self.combo_window = QComboBox(params_card)
         for text in ("hanning", "hamming", "blackman", "bartlett", "kaiser", "flattop"):
             self.combo_window.addItem(text, text)
+        _install_combo_tooltips(
+            self.combo_window,
+            [_WINDOW_ITEM_TOOLTIPS[text] for text in (
+                "hanning", "hamming", "blackman", "bartlett", "kaiser", "flattop",
+            )],
+        )
         compute_form.addRow(
             "窗函数:", _fit_field(self.combo_window, max_width=_SHORT_FIELD_MAX_WIDTH)
         )
 
         self.chk_periodic = QCheckBox("周期窗", params_card)
+        # Keep checkbox rows on the same 32px cadence as the surrounding
+        # editors.  A bare QCheckBox otherwise settles at 18px, making the
+        # following field jump up by 14px in this compact FRF form.
+        self.chk_periodic.setFixedHeight(32)
         self.chk_periodic.setChecked(True)
+        self.chk_periodic.setToolTip(_FRF_TOOLTIPS["periodic"])
         compute_form.addRow("窗语义:", self.chk_periodic)
 
         self.spin_t_win = _no_buttons(QDoubleSpinBox(params_card))
@@ -271,6 +294,7 @@ class FrfContextual(QWidget):
         self.spin_t_win.setRange(0.001, 3600.0)
         self.spin_t_win.setValue(2.0)
         self.spin_t_win.setSuffix(" s")
+        self.spin_t_win.setToolTip(_FRF_TOOLTIPS["segment"])
         compute_form.addRow(
             "段长:", _fit_field(self.spin_t_win, max_width=_SHORT_FIELD_MAX_WIDTH)
         )
@@ -279,6 +303,7 @@ class FrfContextual(QWidget):
         self.spin_overlap.setRange(0, 95)
         self.spin_overlap.setValue(50)
         self.spin_overlap.setSuffix(" %")
+        self.spin_overlap.setToolTip(_FRF_TOOLTIPS["overlap"])
         compute_form.addRow(
             "重叠率:", _fit_field(self.spin_overlap, max_width=_SHORT_FIELD_MAX_WIDTH)
         )
@@ -286,20 +311,32 @@ class FrfContextual(QWidget):
         self.combo_nfft_mode = QComboBox(params_card)
         self.combo_nfft_mode.addItem("自动", "auto")
         self.combo_nfft_mode.addItem("手动", "manual")
+        _install_combo_tooltips(
+            self.combo_nfft_mode,
+            (
+                "自动：按段长选择 NFFT。零填充只加密频率采样，不提升物理分辨率。",
+                "手动：NFFT 不得小于段长。零填充只加密频率采样，不提升物理分辨率。",
+            ),
+        )
+        self.choice_nfft_mode = SegmentedChoice(params_card)
+        self.choice_nfft_mode.bind(self.combo_nfft_mode)
         compute_form.addRow(
             "NFFT 模式:",
-            _fit_field(self.combo_nfft_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
+            _fit_field(self.choice_nfft_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
         self.spin_nfft = _no_buttons(QSpinBox(params_card))
         self.spin_nfft.setRange(1, 16_777_216)
         self.spin_nfft.setValue(2048)
         self.spin_nfft.setEnabled(False)
+        self.spin_nfft.setToolTip(_FRF_TOOLTIPS["nfft"])
         compute_form.addRow(
             "NFFT:", _fit_field(self.spin_nfft, max_width=_SHORT_FIELD_MAX_WIDTH)
         )
 
         self.chk_detrend = QCheckBox("每段去均值", params_card)
+        self.chk_detrend.setFixedHeight(32)
         self.chk_detrend.setChecked(True)
+        self.chk_detrend.setToolTip(_FRF_TOOLTIPS["detrend"])
         compute_form.addRow("去趋势:", self.chk_detrend)
         params_layout.addLayout(compute_form)
 
@@ -313,9 +350,11 @@ class FrfContextual(QWidget):
         self.btn_compute.setIcon(Icons.mode_frf())
         self.btn_compute.setIconSize(QSize(16, 16))
         self.btn_compute.setProperty("role", "primary")
+        self.btn_compute.setToolTip(_FRF_TOOLTIPS["compute"])
         params_layout.addWidget(self.btn_compute)
         self.btn_view_time = QPushButton("在时域查看", params_card)
         self.btn_view_time.setProperty("role", "secondary")
+        self.btn_view_time.setToolTip(_FRF_TOOLTIPS["view_time"])
         params_layout.addWidget(self.btn_view_time)
         root.addWidget(params_card)
 
@@ -330,9 +369,18 @@ class FrfContextual(QWidget):
         self.combo_magnitude_scale = QComboBox(display_card)
         self.combo_magnitude_scale.addItem("dB", "db")
         self.combo_magnitude_scale.addItem("线性", "linear")
+        _install_combo_tooltips(
+            self.combo_magnitude_scale,
+            (
+                "dB：显示传递比的 20 log10(|H|)，不是绝对 dB reference。",
+                "线性：显示传递比本身，不使用绝对 dB reference。",
+            ),
+        )
+        self.choice_magnitude_scale = SegmentedChoice(display_card)
+        self.choice_magnitude_scale.bind(self.combo_magnitude_scale)
         display_form.addRow(
             "幅值:",
-            _fit_field(self.combo_magnitude_scale, max_width=_SHORT_FIELD_MAX_WIDTH),
+            _fit_field(self.choice_magnitude_scale, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
         # Retain the two comboboxes as the stable state/API surface used by
         # presets and project restore, but render the choices as the explicit
@@ -340,28 +388,48 @@ class FrfContextual(QWidget):
         self.combo_frequency_scale = QComboBox(display_card)
         self.combo_frequency_scale.addItem("对数", "log")
         self.combo_frequency_scale.addItem("线性", "linear")
-        self.combo_frequency_scale.hide()
-        frequency_choice, self.btn_frequency_log, self.btn_frequency_linear = (
-            self._make_choice_row(display_card, "对数", "线性")
+        _install_combo_tooltips(
+            self.combo_frequency_scale,
+            (
+                "对数轴只在显示层隐藏 DC；不会删除原始 FRF 结果或导出数据。",
+                "线性轴保留等距频率显示；不会改变原始 FRF 结果或导出数据。",
+            ),
         )
+        self.choice_frequency_scale = SegmentedChoice(display_card)
+        self.choice_frequency_scale.bind(self.combo_frequency_scale)
+        self.btn_frequency_log, self.btn_frequency_linear = self.choice_frequency_scale.buttons()
         display_form.addRow(
-            "频率轴:", frequency_choice,
+            "频率轴:", _fit_field(self.choice_frequency_scale, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
+        self.btn_frequency_log.setToolTip(_FRF_TOOLTIPS["frequency"])
+        self.btn_frequency_linear.setToolTip(
+            "线性轴保留等距频率显示；不会改变原始 FRF 结果或导出数据。"
         )
         self.combo_phase_mode = QComboBox(display_card)
         self.combo_phase_mode.addItem("展开", "unwrapped")
         self.combo_phase_mode.addItem("包裹", "wrapped")
-        self.combo_phase_mode.hide()
-        phase_choice, self.btn_phase_unwrapped, self.btn_phase_wrapped = (
-            self._make_choice_row(display_card, "展开", "±180°")
+        _install_combo_tooltips(
+            self.combo_phase_mode,
+            (_FRF_TOOLTIPS["phase_unwrapped"], _FRF_TOOLTIPS["phase_wrapped"]),
         )
+        self.choice_phase_mode = SegmentedChoice(display_card)
+        self.choice_phase_mode.bind(self.combo_phase_mode, labels=("展开", "±180°"))
+        self.btn_phase_unwrapped, self.btn_phase_wrapped = self.choice_phase_mode.buttons()
         display_form.addRow(
-            "相位:", phase_choice,
+            "相位:", _fit_field(self.choice_phase_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
+        self.btn_phase_unwrapped.setToolTip(_FRF_TOOLTIPS["phase_unwrapped"])
+        self.btn_phase_wrapped.setToolTip(_FRF_TOOLTIPS["phase_wrapped"])
+        self.lbl_delay_retention = QLabel("系统延迟：保留（不补偿）", display_card)
+        self.lbl_delay_retention.setObjectName("frfDelayRetention")
+        self.lbl_delay_retention.setToolTip(_FRF_TOOLTIPS["delay"])
+        self.lbl_delay_retention.setTextInteractionFlags(Qt.NoTextInteraction)
         self.spin_coherence_threshold = _no_buttons(QDoubleSpinBox(display_card))
         self.spin_coherence_threshold.setDecimals(2)
         self.spin_coherence_threshold.setSingleStep(0.05)
         self.spin_coherence_threshold.setRange(0.0, 1.0)
         self.spin_coherence_threshold.setValue(0.8)
+        self.spin_coherence_threshold.setToolTip(_FRF_TOOLTIPS["coherence"])
         display_form.addRow(
             "相干阈值:",
             _fit_field(
@@ -371,13 +439,16 @@ class FrfContextual(QWidget):
         self.chk_fade_low_coherence = QCheckBox(display_card)
         self.chk_fade_low_coherence.setChecked(True)
         self.chk_fade_low_coherence.hide()
-        self.btn_fade_low_coherence = QPushButton("淡化", display_card)
-        self.btn_fade_low_coherence.setObjectName("frfFadeToggle")
-        self.btn_fade_low_coherence.setCheckable(True)
+        self.btn_fade_low_coherence = PillSwitch(
+            display_card,
+            object_name="frfFadeToggle",
+            accessible_name="低相干区淡化",
+        )
         self.btn_fade_low_coherence.setChecked(True)
-        self.btn_fade_low_coherence.setProperty("role", "choice")
+        self.btn_fade_low_coherence.setToolTip(_FRF_TOOLTIPS["fade"])
         display_form.addRow("低相干区淡化:", self.btn_fade_low_coherence)
         display_layout.addLayout(display_form)
+        display_layout.addWidget(self.lbl_delay_retention)
         root.addWidget(display_card)
 
         # Resident measured facts (spec §5.3/§13). The status bar message is
@@ -457,24 +528,6 @@ class FrfContextual(QWidget):
             layout.addWidget(label, 1 if name == "frfFlowBlock" else 0)
         return flow
 
-    @staticmethod
-    def _make_choice_row(parent, primary, secondary):
-        host = QFrame(parent)
-        host.setObjectName("frfSegmentChoice")
-        layout = QHBoxLayout(host)
-        layout.setContentsMargins(1, 1, 1, 1)
-        layout.setSpacing(0)
-        first = QPushButton(primary, host)
-        second = QPushButton(secondary, host)
-        group = QButtonGroup(host)
-        group.setExclusive(True)
-        for button in (first, second):
-            button.setCheckable(True)
-            button.setProperty("role", "frf-segment")
-            group.addButton(button)
-            layout.addWidget(button, 1)
-        return host, first, second
-
     def _wire(self) -> None:
         self.combo_input.currentIndexChanged.connect(self._on_pair_changed)
         self.combo_output.currentIndexChanged.connect(self._on_pair_changed)
@@ -485,18 +538,6 @@ class FrfContextual(QWidget):
         self.combo_nfft_mode.currentIndexChanged.connect(self._sync_nfft_enabled)
         self.btn_compute.clicked.connect(self.frf_requested)
         self.btn_view_time.clicked.connect(self.view_in_time_requested)
-        self.btn_frequency_log.clicked.connect(
-            lambda: self._set_combo_data(self.combo_frequency_scale, "log")
-        )
-        self.btn_frequency_linear.clicked.connect(
-            lambda: self._set_combo_data(self.combo_frequency_scale, "linear")
-        )
-        self.btn_phase_unwrapped.clicked.connect(
-            lambda: self._set_combo_data(self.combo_phase_mode, "unwrapped")
-        )
-        self.btn_phase_wrapped.clicked.connect(
-            lambda: self._set_combo_data(self.combo_phase_mode, "wrapped")
-        )
         self.btn_fade_low_coherence.toggled.connect(
             self.chk_fade_low_coherence.setChecked
         )
@@ -512,12 +553,6 @@ class FrfContextual(QWidget):
             self.combo_phase_mode,
         ):
             combo.currentIndexChanged.connect(self._on_param_changed)
-        self.combo_frequency_scale.currentIndexChanged.connect(
-            self._sync_display_choice_buttons
-        )
-        self.combo_phase_mode.currentIndexChanged.connect(
-            self._sync_display_choice_buttons
-        )
         for spin in (
             self.spin_t_win,
             self.spin_overlap,
@@ -531,22 +566,6 @@ class FrfContextual(QWidget):
             self.chk_fade_low_coherence,
         ):
             check.toggled.connect(self._on_param_changed)
-        self._sync_display_choice_buttons()
-
-    def _sync_display_choice_buttons(self, *_args) -> None:
-        self.btn_frequency_log.setChecked(
-            self.combo_frequency_scale.currentData() == "log"
-        )
-        self.btn_frequency_linear.setChecked(
-            self.combo_frequency_scale.currentData() == "linear"
-        )
-        self.btn_phase_unwrapped.setChecked(
-            self.combo_phase_mode.currentData() == "unwrapped"
-        )
-        self.btn_phase_wrapped.setChecked(
-            self.combo_phase_mode.currentData() == "wrapped"
-        )
-
     def time_range_layout(self):
         return self._time_range_slot
 

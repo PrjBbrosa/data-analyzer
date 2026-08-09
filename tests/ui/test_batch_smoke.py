@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 from PyQt5.QtCore import Qt
 
+from mf4_analyzer.ui_kit import load_stylesheet
+
 
 def test_batch_sheet_pure_degraded_partial_is_not_reported_as_failure(
     qtbot, monkeypatch,
@@ -600,9 +602,7 @@ def test_time_analysis_form_fits_288px_after_repeated_dependency_toggles(
     old_stylesheet = qapp.styleSheet()
     scroll = None
     try:
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         panel = AnalysisPanel()
         panel._param_form.set_x_channel_candidates(
             ("engine_speed_channel_name_that_is_deliberately_very_long",), {}
@@ -1007,9 +1007,7 @@ def test_batch_sheet_respects_1080x760_with_production_qss(qapp, qtbot):
 
     old_stylesheet = qapp.styleSheet()
     try:
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         sheet = BatchSheet(None, files={})
         qtbot.addWidget(sheet)
         file_list = sheet._input_panel._file_list

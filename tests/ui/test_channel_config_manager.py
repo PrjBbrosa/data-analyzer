@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import QCheckBox, QLabel
 
 from mf4_analyzer.ui.channel_config import ChannelConfigPreview, ChannelSelectionConfig
 from mf4_analyzer.ui.channel_config_transfer import parse_transfer, serialize_transfer
+from mf4_analyzer.ui_kit.control_style import CONTROL_HEIGHTS
 from mf4_analyzer.ui.widgets.channel_config_manager import ChannelConfigManagerDialog
 
 
@@ -231,13 +232,52 @@ def test_manager_geometry_preserves_html_controls_at_minimum_size(qtbot):
         dialog.btn_close,
         dialog.btn_save,
     )
-    assert all(control.height() == 36 for control in controls)
+    assert dialog.CONTROL_HEIGHT == CONTROL_HEIGHTS["base"]
+    assert all(control.height() == CONTROL_HEIGHTS["base"] for control in controls)
+    assert dialog.config_search.height() == CONTROL_HEIGHTS["base"]
+    assert dialog.channel_search.height() == CONTROL_HEIGHTS["base"]
     assert dialog.sidebar.width() == 310
     assert dialog.config_summary.height() == 28
     assert dialog.view_summary.height() == 28
     assert dialog.channel_table.columnWidth(1) >= 240
     assert dialog.channel_table.rowHeight(0) == 49
     assert dialog.btn_save.geometry().bottom() <= dialog.height() - 10
+
+
+def test_manager_ordinary_controls_render_on_base_track_with_production_qss(qapp, qtbot):
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    previous = qapp.styleSheet()
+    load_stylesheet(qapp)
+    try:
+        dialog = _dialog(
+            qtbot,
+            [_config("drive", "动力分析", ("EPS_CRC", "Torque", "Long_Channel_Name"))],
+            "drive",
+        )
+        qtbot.wait(20)
+        controls = {
+            "import": dialog.btn_import,
+            "new": dialog.btn_new,
+            "batch": dialog.btn_batch,
+            "export": dialog.btn_export,
+            "rename": dialog.btn_rename,
+            "copy": dialog.btn_copy,
+            "delete": dialog.btn_delete_config,
+            "select": dialog.btn_select_channels,
+            "clear": dialog.btn_clear_channels,
+            "remove": dialog.btn_remove_channels,
+            "add": dialog.btn_add_current,
+            "close": dialog.btn_close,
+            "save": dialog.btn_save,
+            "config search": dialog.config_search,
+            "channel search": dialog.channel_search,
+        }
+        assert {name: control.height() for name, control in controls.items()} == {
+            name: CONTROL_HEIGHTS["base"] for name in controls
+        }
+    finally:
+        qapp.setStyleSheet(previous)
 
 
 def test_channel_checkbox_cell_remains_centered_for_selected_rows(qtbot):

@@ -16,13 +16,14 @@ from typing import Iterable, Mapping
 from PyQt5.QtCore import QEvent, QPoint, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFontMetrics
 from PyQt5.QtWidgets import (
-    QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel,
     QLayout, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QVBoxLayout,
     QWidget,
 )
 
 from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui_kit.popup_shell import apply_popup_shell
+from mf4_analyzer.ui_kit.widgets import SearchField
 
 
 # Signal names are code identifiers; a monospace face lines up the ``_xds16`` /
@@ -320,17 +321,8 @@ class SignalPickerPopup(QWidget):
         pop_lay.setSpacing(6)
         self._popup_layout = pop_lay
 
-        self._search = QLineEdit(self._surface)
+        self._search = SearchField("搜索信号…", self._surface)
         self._search.setObjectName("SignalPickerSearch")
-        self._search.setPlaceholderText("搜索信号…")
-        self._search.setFrame(False)
-        self._search.setFixedHeight(32)
-        self._search.setStyleSheet(
-            "#SignalPickerSearch {border:1px solid #d3dbe5; border-radius:7px;"
-            " background:#f7f9fc; color:#172033; padding:0 9px;}"
-            "#SignalPickerSearch:focus {border:1px solid #1769e0;"
-            " background:#fff;}"
-        )
         self._search.textChanged.connect(self._on_search_text_changed)
         self._search.installEventFilter(self)
         pop_lay.addWidget(self._search)

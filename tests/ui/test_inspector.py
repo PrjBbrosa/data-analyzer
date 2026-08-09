@@ -4,6 +4,42 @@ import pytest
 from mf4_analyzer.ui.inspector import Inspector
 
 
+def _load_production_stylesheet(qapp):
+    """Install the rendered QSS template rather than its token source."""
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    load_stylesheet(qapp)
+
+
+@pytest.fixture
+def _owned_qt_widgets(qtbot):
+    """Keep parentless test widgets alive until pytest-qt closes them.
+
+    ``qtbot.addWidget`` deliberately stores a weak reference.  A contextual
+    widget that owns child controls with queued Qt events must therefore have a
+    test-side strong owner through pytest-qt's close/deferred-delete phase.
+    """
+    widgets = []
+
+    def own(widget):
+        widgets.append(widget)
+        qtbot.addWidget(widget)
+        return widget
+
+    yield own
+
+    from PyQt5 import sip
+    from PyQt5.QtCore import QCoreApplication, QEvent
+
+    for widget in widgets:
+        if not sip.isdeleted(widget):
+            widget.close()
+            widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    QCoreApplication.processEvents()
+    widgets.clear()
+
+
 def test_inspector_constructs(qapp):
     insp = Inspector()
     assert insp is not None
@@ -80,6 +116,50 @@ def test_frf_swap_button_cannot_collapse_in_narrow_inspector(qtbot):
     assert button.minimumHeight() >= button.sizeHint().height()
     assert button.sizePolicy().verticalPolicy() == QSizePolicy.Fixed
     assert button.height() >= button.fontMetrics().height() + 10
+
+
+def test_frf_swap_button_stays_legible_with_production_stylesheet(qtbot, qapp):
+    """The Inspector's shared QSS must not turn this text action into icon chrome."""
+    from mf4_analyzer.ui.inspector import Inspector
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    inspector = Inspector()
+    qtbot.addWidget(inspector)
+    inspector.set_mode("frf")
+    ctx = inspector.frf_ctx
+    ctx.set_channel_candidates([
+        ("Rig A · input [N]", ("source-a", "input")),
+        ("Rig A · output [m/s²]", ("source-a", "output")),
+    ])
+    ctx.set_input_source(("source-a", "input"))
+    ctx.set_output_source(("source-a", "output"))
+    inspector.resize(288, 520)
+    inspector.show()
+    qtbot.wait(20)
+
+    button = ctx.btn_swap
+    assert button.property("role") == "frf-swap"
+    assert button.minimumHeight() >= button.fontMetrics().height() + 6
+    assert button.height() >= button.fontMetrics().height() + 6
+
+
+def test_frf_low_coherence_fade_uses_a_pill_switch(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+    from mf4_analyzer.ui.widgets.pill_switch import PillSwitch
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+
+    switch = ctx.btn_fade_low_coherence
+    assert isinstance(switch, PillSwitch)
+    assert switch.accessibleName() == "低相干区淡化"
+    assert switch.isChecked()
+
+    switch.click()
+    assert not ctx.chk_fade_low_coherence.isChecked()
+    assert ctx.display_params()["fade_low_coherence"] is False
 
 
 def test_frf_contextual_separates_compute_and_display_params(qtbot):
@@ -251,6 +331,46 @@ def test_frf_contextual_uses_four_separated_html_information_cards(qtbot):
     assert ctx.findChild(QLabel, "frfFlowBlock").text() == "被辨识系统  H(f)"
 
 
+def test_frf_compute_checkbox_rows_keep_standard_32px_rhythm(qapp, qtbot):
+    """FRF checkbox rows must not collapse the surrounding 32px form rhythm."""
+    from PyQt5.QtCore import QPoint
+
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        _load_production_stylesheet(qapp)
+        ctx = FrfContextual()
+        qtbot.addWidget(ctx)
+        # Let the complete FRF card use its natural height: a short host
+        # deliberately compresses layout spacings, unlike the scroll-hosted
+        # Inspector pane this regression protects.
+        ctx.resize(288, 1200)
+        ctx.show()
+        qtbot.waitExposed(ctx)
+        qtbot.wait(20)
+
+        rows = (
+            ctx.choice_estimator,
+            ctx.combo_window,
+            ctx.chk_periodic,
+            ctx.spin_t_win,
+            ctx.spin_overlap,
+            ctx.choice_nfft_mode,
+            ctx.spin_nfft,
+            ctx.chk_detrend,
+        )
+        row_tops = [widget.mapTo(ctx, QPoint(0, 0)).y() for widget in rows]
+
+        assert [widget.height() for widget in rows] == [32] * len(rows)
+        assert [
+            current - previous for previous, current in zip(row_tops, row_tops[1:])
+        ] == [36] * (len(rows) - 1)
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 def test_frf_contextual_visible_choice_rows_keep_preset_state_api(qtbot):
     from mf4_analyzer.ui.inspector_sections import FrfContextual
 
@@ -259,6 +379,46 @@ def test_frf_contextual_visible_choice_rows_keep_preset_state_api(qtbot):
     assert ctx.btn_frequency_log.isChecked()
     assert ctx.btn_phase_unwrapped.isChecked()
     assert ctx.btn_fade_low_coherence.isChecked()
+
+
+def test_frf_contextual_explains_estimators_parameters_and_retained_delay(qtbot):
+    """FRF controls with numerical semantics must not be unexplained labels."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+
+    assert ctx.combo_estimator.itemData(0) == "h1"
+    assert ctx.combo_estimator.itemData(1) == "h2"
+    assert "输出噪声" in ctx.combo_estimator.itemText(0)
+    assert "输入噪声" in ctx.combo_estimator.itemText(1)
+    assert "Pxy / Pxx" in ctx.combo_estimator.itemData(0, Qt.ToolTipRole)
+    assert "Pyy / conj(Pxy)" in ctx.combo_estimator.itemData(1, Qt.ToolTipRole)
+    ctx.combo_estimator.setCurrentIndex(1)
+    assert "输入侧" in ctx.combo_estimator.toolTip()
+
+    for widget in (
+        ctx.combo_input, ctx.combo_output, ctx.combo_range_mode,
+        ctx.combo_window, ctx.chk_periodic, ctx.spin_t_win, ctx.spin_overlap,
+        ctx.combo_nfft_mode, ctx.spin_nfft, ctx.chk_detrend,
+        ctx.combo_magnitude_scale, ctx.combo_frequency_scale,
+        ctx.spin_coherence_threshold, ctx.btn_fade_low_coherence,
+        ctx.btn_compute, ctx.btn_view_time,
+    ):
+        assert widget.toolTip(), widget.objectName() or type(widget).__name__
+
+    assert "系统延迟" in ctx.btn_phase_unwrapped.toolTip()
+    assert "系统延迟" in ctx.btn_phase_wrapped.toolTip()
+    assert "DC" in ctx.btn_frequency_log.toolTip()
+    assert "原始 FRF" in ctx.btn_frequency_linear.toolTip()
+    retention = ctx.findChild(QLabel, "frfDelayRetention")
+    assert retention is not None
+    assert retention.text() == "系统延迟：保留（不补偿）"
+    assert retention.textInteractionFlags() == Qt.NoTextInteraction
+    assert "相位" in retention.toolTip()
 
     ctx.btn_frequency_linear.click()
     ctx.btn_phase_wrapped.click()
@@ -511,9 +671,7 @@ def test_inspector_primary_buttons_share_section_width(qapp, qtbot):
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        _load_production_stylesheet(qapp)
 
         inspector = Inspector()
         qtbot.addWidget(inspector)
@@ -580,6 +738,94 @@ def test_fft_contextual_uses_xy_axis_settings_group(qapp):
     assert fc.chk_autoscale is fc.chk_x_auto
     assert fc.chk_x_auto.isChecked()
     assert fc.chk_y_auto.isChecked()
+
+
+def test_fft_amplitude_unit_relocates_without_changing_amp_y_state_contract(qtbot):
+    from PyQt5.QtWidgets import QFormLayout, QGroupBox, QLabel
+
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    amp_combo = ctx.combo_amp_y
+    params_form = ctx._fft_section._body_widget.layout()
+    param_labels = []
+    for row in range(params_form.rowCount()):
+        item = params_form.itemAt(row, QFormLayout.LabelRole)
+        label = item.widget() if item is not None else None
+        if isinstance(label, QLabel):
+            param_labels.append(label.text())
+
+    assert amp_combo is ctx.combo_amp_y
+    assert [amp_combo.itemText(index) for index in range(amp_combo.count())] == [
+        "Linear", "dB",
+    ]
+    assert amp_combo.currentText() == "Linear"
+    assert "幅值轴:" not in param_labels
+    assert ctx._fft_section._body_widget.isAncestorOf(ctx.choice_amp_y) is False
+
+    axis_group = next(
+        group for group in ctx.findChildren(QGroupBox)
+        if group.title() == "坐标轴设置"
+    )
+    assert ctx._amplitude_unit_row.parentWidget() is axis_group
+    assert axis_group.isAncestorOf(ctx.choice_amp_y)
+    assert ctx.choice_amp_y.bound_combo() is amp_combo
+    assert amp_combo.parentWidget() is ctx.choice_amp_y
+
+    with qtbot.waitSignal(amp_combo.currentTextChanged, timeout=200) as changed:
+        ctx.choice_amp_y.buttons()[1].click()
+    assert changed.args == ["dB"]
+    assert ctx.current_params()["amp_y"] == "dB"
+    ctx.apply_params({"amp_y": "Linear"})
+    assert ctx.combo_amp_y is amp_combo
+    assert amp_combo.currentText() == "Linear"
+
+
+def test_fft_relocated_amplitude_unit_keeps_288px_axis_geometry(qapp, qtbot):
+    from PyQt5.QtWidgets import QGroupBox
+
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        _load_production_stylesheet(qapp)
+        ctx = FFTContextual()
+        qtbot.addWidget(ctx)
+        ctx._fft_section.set_expanded(True)
+        ctx.resize(288, 900)
+        ctx.show()
+        qtbot.waitExposed(ctx)
+        qtbot.wait(20)
+
+        axis_group = next(
+            group for group in ctx.findChildren(QGroupBox)
+            if group.title() == "坐标轴设置"
+        )
+        axis_layout = axis_group.layout()
+        y_row = ctx._axis_row_parts["y"]["label"].parentWidget().parentWidget()
+        assert axis_layout.indexOf(ctx._amplitude_unit_row) == (
+            axis_layout.indexOf(y_row) + 1
+        )
+        assert ctx._fft_section._body_widget.layout().rowCount() == 6
+        assert axis_layout.count() == 5
+        assert ctx._fft_section._body_widget.layout().rowCount() + axis_layout.count() == 11
+
+        unit = ctx.choice_amp_y
+        unit_right = unit.mapTo(ctx, unit.rect().topRight()).x()
+        row_right = ctx._amplitude_unit_row.mapTo(
+            ctx, ctx._amplitude_unit_row.rect().topRight(),
+        ).x()
+        weighting_right = ctx.choice_weighting.mapTo(
+            ctx, ctx.choice_weighting.rect().topRight(),
+        ).x()
+        assert abs(unit_right - row_right) <= 1
+        assert abs(unit_right - weighting_right) <= 2
+        assert unit_right <= ctx.width()
+        assert ctx.sizeHint().height() == 740
+    finally:
+        qapp.setStyleSheet(old_sheet)
 
 
 def test_fft_contextual_xy_axis_params_round_trip(qapp):
@@ -872,9 +1118,7 @@ def test_order_window_row_fits_288px_pane_with_production_qss(qapp, qtbot):
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        _load_production_stylesheet(qapp)
         insp = Inspector()
         qtbot.addWidget(insp)
         insp.resize(288, 900)
@@ -1177,7 +1421,8 @@ def _restore_settings(settings, saved):
     ],
 )
 def test_contextual_param_sections_are_merged_collapsed_and_summarized(
-    qapp, qtbot, kind, cls_name, section_attr, helper_name, title, settings_key,
+    qapp, qtbot, _owned_qt_widgets, kind, cls_name, section_attr, helper_name,
+    title, settings_key,
 ):
     from PyQt5.QtWidgets import QGroupBox, QToolButton
     from mf4_analyzer.ui.inspector_sections import (
@@ -1197,8 +1442,7 @@ def test_contextual_param_sections_are_merged_collapsed_and_summarized(
     settings.remove(settings_key)
     settings.sync()
     try:
-        ctx = classes[cls_name]()
-        qtbot.addWidget(ctx)
+        ctx = _owned_qt_widgets(classes[cls_name]())
         ctx.resize(360, 760)
         ctx.show()
         qtbot.waitExposed(ctx)
@@ -1811,7 +2055,8 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
     # Programmatic access works regardless of visibility — preserves contract.
     for attr in (
         "spin_xt", "spin_yt", "chk_range", "spin_start", "spin_end",
-        "combo_xaxis", "_combo_xaxis_ch", "edit_xlabel", "btn_apply_xaxis",
+        "combo_xaxis", "choice_xaxis", "_combo_xaxis_ch", "edit_xlabel",
+        "btn_apply_xaxis",
     ):
         assert getattr(pt, attr) is not None, f"missing attr: {attr}"
     pt.show()
@@ -1826,7 +2071,8 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
         assert pt._collapser_body.isVisible() is True
         # Group-level controls still visible; migrated tick controls stay out
         # of the Inspector even when the body is expanded.
-        assert pt.combo_xaxis.isVisible() is True
+        assert pt.choice_xaxis.isVisible() is True
+        assert pt.combo_xaxis.isHidden() is True
         assert pt.spin_start.isVisible() is True
         assert pt.spin_xt.isHidden() is True
         assert pt.spin_yt.isHidden() is True
@@ -2451,9 +2697,7 @@ def test_inspector_body_fills_288_width_under_qss(qapp, qtbot):
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        _load_production_stylesheet(qapp)
         insp = Inspector()
         qtbot.addWidget(insp)
         insp.resize(288, 850)
@@ -2478,9 +2722,7 @@ def test_fft_contextual_fields_fill_column_under_qss(qapp, qtbot):
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        _load_production_stylesheet(qapp)
         insp = Inspector()
         qtbot.addWidget(insp)
         insp.resize(360, 850)
@@ -2533,9 +2775,7 @@ def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbo
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        _load_production_stylesheet(qapp)
         insp = Inspector()
         qtbot.addWidget(insp)
         insp.resize(288, 850)
@@ -2584,9 +2824,7 @@ def test_time_domain_settings_render_inside_two_rounded_cards(qapp, qtbot):
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        _load_production_stylesheet(qapp)
         insp = Inspector()
         qtbot.addWidget(insp)
         insp.resize(288, 850)
@@ -4265,9 +4503,7 @@ def test_axis_auto_rows_use_manual_height_on_first_display(qapp, qtbot):
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        _load_production_stylesheet(qapp)
 
         for mode, ctx_name in (
             ("fft_time", "fft_time_ctx"),
@@ -4389,9 +4625,7 @@ def test_axis_rows_fit_inspector_and_align_with_panel_right_edge(qapp, qtbot):
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        _load_production_stylesheet(qapp)
 
         for mode, ctx_name in (
             ("fft_time", "fft_time_ctx"),
@@ -4453,9 +4687,7 @@ def test_axis_settings_grid_background_matches_tinted_panel(qapp, qtbot):
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        _load_production_stylesheet(qapp)
 
         for mode, ctx_name in (
             ("fft_time", "fft_time_ctx"),
@@ -4513,9 +4745,7 @@ def test_fft_axis_settings_grid_background_matches_tinted_panel(qapp, qtbot):
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        _load_production_stylesheet(qapp)
 
         inspector = Inspector()
         qtbot.addWidget(inspector)
@@ -5822,8 +6052,8 @@ def test_db_reference_compound_row_precedes_axis_header_and_fits_within_320px(qt
                 f"does not align with its axis row right edge {row_right}px "
                 f"at pane={pane_width}px"
             )
-            weighting_right = ctx.combo_weighting.mapTo(
-                ctx, ctx.combo_weighting.rect().topRight(),
+            weighting_right = ctx.choice_weighting.mapTo(
+                ctx, ctx.choice_weighting.rect().topRight(),
             ).x()
             # The two QGroupBox bodies have a 2px frame-boundary difference;
             # control/weighting edges within that tolerance are visually one

@@ -5,5 +5,6 @@ Anything coupled to ``mf4_analyzer.ui`` internals (FileData, Inspector
 panels, etc.) must stay in ``mf4_analyzer/ui/widgets/``.
 """
 from .searchable_combo import SearchableComboBox
+from .search_field import SearchField
 
-__all__ = ["SearchableComboBox"]
+__all__ = ["SearchableComboBox", "SearchField"]

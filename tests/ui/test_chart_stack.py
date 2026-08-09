@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QSizePolicy
 
+from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
 
 
@@ -187,9 +188,7 @@ def test_cursor_pill_renders_transparent_rounded_corners(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import CursorPill
 
     old_sheet = qapp.styleSheet()
-    qapp.setStyleSheet(
-        Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-    )
+    load_stylesheet(qapp)
     try:
         pill = CursorPill()
         qtbot.addWidget(pill)
@@ -1341,20 +1340,20 @@ def test_pg_toolbar_home_restores_global_x_and_y_from_raw_data(qapp, qtbot):
     assert ylo1 <= float(raw_b.min()) and yhi1 >= float(raw_b.max())
 
 
-def test_chart_choice_checked_qss_uses_visible_blue_selection_tokens():
+def test_chart_choice_checked_qss_uses_shared_selection_signature():
     qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-    match = re.search(
-        r'QWidget#chartToolbar QPushButton\[role="chart-choice"\]:checked\s*\{(?P<body>[^}]*)\}',
-        qss,
-        flags=re.S,
-    )
-    assert match is not None
-    body = match.group('body')
+    selector = 'QWidget#chartToolbar QPushButton[role="chart-choice"]:checked'
+    try:
+        start = qss.index(selector)
+        body = qss[start:qss.index("\n}", start)]
+    except ValueError as exc:
+        raise AssertionError(selector) from exc
 
-    assert 'background-color: #ffffff;' not in body
-    assert 'background-color: #e8efff;' in body
-    assert 'border-color: #2563eb;' in body
-    assert 'color: #2563eb;' in body
+    assert 'background-color: {{CONTROL_SURFACE_TOP}};' in body
+    assert 'border-color: {{CONTROL_SELECT_LINE}};' in body
+    assert 'color: {{CONTROL_TEXT_ON_SELECT}};' in body
+    assert '#e8efff' not in body
+    assert '#2563eb' not in body
 
 
 def test_time_toolbar_controls_fit_when_inspector_narrows_chart(qapp, qtbot):

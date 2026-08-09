@@ -66,7 +66,8 @@ QLineEdit,
 QComboBox,
 QSpinBox,
 QDoubleSpinBox {
-    min-height: 24px;
+    /* 24px content + 3px vertical padding × 2 + 1px border × 2 = 32px. */
+    min-height: {{CONTROL_H_BASE_INPUT_CONTENT}};
     padding: 3px 8px;
     border: 1px solid #dfe5ee;
     border-radius: 7px;
@@ -90,6 +91,10 @@ QDoubleSpinBox:disabled {
     background-color: #f5f7fb;
     border-color: #eef2f7;
 }
+/* Search is an input-family semantic, not a separate height family.  Named
+ * search selectors retain their local colour/chrome only and must resolve to
+ * this same base content height. */
+QLineEdit[role="search"] { min-height: {{CONTROL_H_BASE_INPUT_CONTENT}}; }
 
 /* Combo / spin button regions — provide a faint resting tint so the
  * click target is discoverable without hover, plus explicit arrow
@@ -257,8 +262,8 @@ QFrame#channelConfigManagerFooter {
 }
 QFrame#channelConfigManagerToolbar { border-bottom: 1px solid #eef2f7; }
 QFrame#channelConfigManagerFooter { border-top: 1px solid #eef2f7; }
-QLineEdit#channelConfigManagerSearch { min-height: 28px; }
-QPushButton#channelConfigManagerCreate { min-height: 28px; }
+QLineEdit#channelConfigManagerSearch { min-height: {{CONTROL_H_BASE_INPUT_CONTENT}}; }
+QPushButton#channelConfigManagerCreate { min-height: {{CONTROL_H_BASE_BUTTON_CONTENT}}; }
 QWidget#channelConfigManagerContent { background-color: #ffffff; }
 QTableWidget#channelConfigManagerTable {
     border: none;
@@ -404,9 +409,9 @@ QPushButton#BatchGroupingCard:hover {
     background-color: #f8fbff;
 }
 QPushButton#BatchGroupingCard:checked {
-    border: 2px solid #1769e0;
-    background-color: #eef5ff;
-    color: #0f4fa8;
+    border: 1px solid {{CONTROL_SELECT_LINE}};
+    background-color: {{CONTROL_TRACK}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
 }
 QFrame#BatchInlineFileManager {
     border: 1px solid #d7e2f0;
@@ -504,7 +509,7 @@ QWidget#BatchCompactFooter {
 }
 QWidget#BatchCompactFooter QPushButton,
 QDialog#BatchPreviewDialog QPushButton {
-    min-height: 30px;
+    min-height: {{CONTROL_H_CTA_BUTTON_CONTENT}};
     min-width: 76px;
     padding: 4px 14px;
     font-weight: 700;
@@ -527,7 +532,7 @@ QWidget#BatchCompactToolbar {
 /* The preset buttons are secondary chrome, so they run shorter than the
  * footer's action buttons and let the toolbar row sit at 36px. */
 QWidget#BatchCompactToolbar QPushButton {
-    min-height: 24px;
+    min-height: {{CONTROL_H_COMPACT_BUTTON_CONTENT}};
     padding: 2px 10px;
 }
 QLabel#BatchToolbarTitle { color: #4b596c; font-size: 12px; font-weight: 700; }
@@ -617,32 +622,36 @@ QCheckBox::indicator:checked:disabled {
 /* Buttons */
 QPushButton,
 QToolButton {
-    min-height: 26px;
+    /* base 32px = 22px content + 4px vertical padding × 2 + 1px border × 2 */
+    min-height: {{CONTROL_H_BASE_BUTTON_CONTENT}};
     padding: 4px 10px;
-    border: 1px solid #dfe5ee;
+    border: 1px solid {{CONTROL_LINE}};
     border-radius: 8px;
-    background-color: #ffffff;
-    color: #111827;
+    background-color: qlineargradient(
+        x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 {{CONTROL_SURFACE_TOP}}, stop: 1 {{CONTROL_SURFACE_BOTTOM}}
+    );
+    color: {{CONTROL_TEXT}};
     font-weight: 600;
 }
 QPushButton:hover,
 QToolButton:hover {
-    background-color: #f5f7fb;
-    border-color: #b7c4d3;
+    background-color: {{CONTROL_ACCENT_WASH}};
+    border-color: {{CONTROL_LINE_HOVER}};
 }
 QPushButton:pressed,
-QToolButton:pressed { background-color: #eef2f7; }
+QToolButton:pressed { background-color: {{CONTROL_TRACK}}; }
 QPushButton:checked,
 QToolButton:checked {
-    background-color: #e8efff;
-    border-color: #1769e0;
-    color: #0f3f8f;
+    background-color: {{CONTROL_ACCENT_WASH}};
+    border-color: {{CONTROL_SELECT_LINE}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
 }
 QPushButton:disabled,
 QToolButton:disabled {
-    color: #94a3b8;
-    background-color: #f5f7fb;
-    border-color: #eef2f7;
+    color: {{CONTROL_TEXT_MUTED}};
+    background-color: {{CONTROL_DISABLED_BG}};
+    border-color: {{CONTROL_DISABLED_LINE}};
 }
 #chartToolbar QToolButton[navActive="true"] {
     background-color: #e8efff;
@@ -651,53 +660,232 @@ QToolButton:disabled {
 
 QPushButton[role="primary"],
 QToolButton[role="primary"] {
-    background-color: #1769e0;
-    border-color: #1769e0;
-    color: #ffffff;
+    min-height: {{CONTROL_H_CTA_BUTTON_CONTENT}};
+    background-color: qlineargradient(
+        x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 {{CONTROL_ACCENT_HI}}, stop: 1 {{CONTROL_ACCENT}}
+    );
+    border-color: {{CONTROL_ACCENT_BORDER}};
+    color: {{CONTROL_SURFACE_TOP}};
 }
 QPushButton[role="primary"]:hover,
 QToolButton[role="primary"]:hover {
-    background-color: #135abd;
-    border-color: #135abd;
+    background-color: {{CONTROL_ACCENT_HI}};
+    border-color: {{CONTROL_ACCENT}};
+}
+QPushButton[role="primary"]:pressed,
+QToolButton[role="primary"]:pressed {
+    background-color: {{CONTROL_ACCENT_DARK}};
+    border-color: {{CONTROL_ACCENT_DARK}};
+}
+QPushButton[role="primary"]:checked,
+QToolButton[role="primary"]:checked {
+    background-color: {{CONTROL_ACCENT}};
+    border-color: {{CONTROL_ACCENT_BORDER}};
+    color: {{CONTROL_SURFACE_TOP}};
 }
 QPushButton[role="primary"]:disabled,
 QToolButton[role="primary"]:disabled {
-    color: #94a3b8;
-    background-color: #f5f7fb;
-    border-color: #eef2f7;
+    color: {{CONTROL_TEXT_MUTED}};
+    background-color: {{CONTROL_DISABLED_BG}};
+    border-color: {{CONTROL_DISABLED_LINE}};
 }
 
+QPushButton[role="secondary"],
+QToolButton[role="secondary"],
 QPushButton[role="accent"],
-QToolButton[role="accent"] {
-    background-color: #ffffff;
-    border-color: #1769e0;
-    color: #1769e0;
+QToolButton[role="accent"],
+QPushButton[role="create"],
+QToolButton[role="create"] {
+    background-color: qlineargradient(
+        x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 {{CONTROL_SURFACE_TOP}}, stop: 1 {{CONTROL_ACCENT_WASH}}
+    );
+    border-color: {{CONTROL_ACCENT_LINE_SOFT}};
+    color: {{CONTROL_ACCENT}};
 }
+QPushButton[role="secondary"]:hover,
+QToolButton[role="secondary"]:hover,
 QPushButton[role="accent"]:hover,
-QToolButton[role="accent"]:hover {
-    background-color: #e8efff;
-    border-color: #135abd;
-    color: #0f3f8f;
+QToolButton[role="accent"]:hover,
+QPushButton[role="create"]:hover,
+QToolButton[role="create"]:hover {
+    background-color: {{CONTROL_ACCENT_WASH}};
+    border-color: {{CONTROL_ACCENT}};
+    color: {{CONTROL_ACCENT_DARK}};
 }
+QPushButton[role="secondary"]:pressed,
+QToolButton[role="secondary"]:pressed,
 QPushButton[role="accent"]:pressed,
-QToolButton[role="accent"]:pressed { background-color: #d8e6fb; }
+QToolButton[role="accent"]:pressed,
+QPushButton[role="create"]:pressed,
+QToolButton[role="create"]:pressed {
+    background-color: {{CONTROL_TRACK}};
+    border-color: {{CONTROL_ACCENT_LINE_SOFT}};
+}
+QPushButton[role="secondary"]:checked,
+QToolButton[role="secondary"]:checked,
+QPushButton[role="accent"]:checked,
+QToolButton[role="accent"]:checked,
+QPushButton[role="create"]:checked,
+QToolButton[role="create"]:checked {
+    background-color: {{CONTROL_ACCENT_WASH}};
+    border-color: {{CONTROL_ACCENT}};
+    color: {{CONTROL_ACCENT_DARK}};
+}
+QPushButton[role="secondary"]:disabled,
+QToolButton[role="secondary"]:disabled,
 QPushButton[role="accent"]:disabled,
-QToolButton[role="accent"]:disabled {
-    color: #94a3b8;
-    background-color: #f5f7fb;
-    border-color: #eef2f7;
+QToolButton[role="accent"]:disabled,
+QPushButton[role="create"]:disabled,
+QToolButton[role="create"]:disabled {
+    color: {{CONTROL_TEXT_MUTED}};
+    background-color: {{CONTROL_DISABLED_BG}};
+    border-color: {{CONTROL_DISABLED_LINE}};
 }
 
-QPushButton[role="destructive"] {
-    color: #dc2626;
-    border: 1px solid #fca5a5;
-    background: transparent;
+QPushButton[role="quiet"],
+QToolButton[role="quiet"],
+QPushButton[role="icon"],
+QToolButton[role="icon"] {
+    border-color: transparent;
+    background-color: transparent;
+    color: {{CONTROL_TEXT_MUTED}};
 }
-QPushButton[role="destructive"]:hover { background: #fef2f2; }
-QPushButton[role="destructive"]:pressed { background: #fee2e2; }
-QPushButton[role="destructive"]:disabled {
-    color: #fca5a5;
-    border-color: #fecaca;
+QPushButton[role="quiet"]:hover,
+QToolButton[role="quiet"]:hover,
+QPushButton[role="icon"]:hover,
+QToolButton[role="icon"]:hover {
+    background-color: {{CONTROL_ACCENT_WASH}};
+    border-color: {{CONTROL_LINE_HOVER}};
+    color: {{CONTROL_TEXT}};
+}
+QPushButton[role="quiet"]:pressed,
+QToolButton[role="quiet"]:pressed,
+QPushButton[role="icon"]:pressed,
+QToolButton[role="icon"]:pressed {
+    background-color: {{CONTROL_TRACK}};
+    border-color: {{CONTROL_TRACK_LINE}};
+}
+QPushButton[role="quiet"]:checked,
+QToolButton[role="quiet"]:checked,
+QPushButton[role="icon"]:checked,
+QToolButton[role="icon"]:checked {
+    background-color: {{CONTROL_ACCENT_WASH}};
+    border-color: {{CONTROL_SELECT_LINE}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
+}
+QPushButton[role="quiet"]:disabled,
+QToolButton[role="quiet"]:disabled,
+QPushButton[role="icon"]:disabled,
+QToolButton[role="icon"]:disabled {
+    background-color: transparent;
+    border-color: transparent;
+    color: {{CONTROL_TEXT_MUTED}};
+}
+
+/* Icon roles deliberately have no fixed outer size: a 24px/28px caller
+ * geometry stays authoritative. These values are calibrated against the real
+ * 16px-icon QToolButton style hint: its fixed 24px host stays 24×24 and no
+ * longer clips because the hint asks for 29×27. */
+QPushButton[role="icon"],
+QToolButton[role="icon"] {
+    min-width: {{CONTROL_H_ICON_HINT_CONTENT}};
+    min-height: {{CONTROL_H_ICON_HINT_CONTENT}};
+    padding: 0;
+}
+
+QPushButton[role="danger"],
+QToolButton[role="danger"],
+QPushButton[role="destructive"],
+QToolButton[role="destructive"] {
+    color: {{CONTROL_DANGER}};
+    border-color: {{CONTROL_DANGER}};
+    background-color: {{CONTROL_SURFACE_TOP}};
+}
+QPushButton[role="danger"]:hover,
+QToolButton[role="danger"]:hover,
+QPushButton[role="destructive"]:hover,
+QToolButton[role="destructive"]:hover {
+    background-color: {{CONTROL_DANGER_WASH}};
+    border-color: {{CONTROL_DANGER}};
+}
+QPushButton[role="danger"]:pressed,
+QToolButton[role="danger"]:pressed,
+QPushButton[role="destructive"]:pressed,
+QToolButton[role="destructive"]:pressed {
+    background-color: {{CONTROL_DANGER_WASH}};
+    border-color: {{CONTROL_DANGER}};
+}
+QPushButton[role="danger"]:checked,
+QToolButton[role="danger"]:checked,
+QPushButton[role="destructive"]:checked,
+QToolButton[role="destructive"]:checked {
+    background-color: {{CONTROL_DANGER_WASH}};
+    border-color: {{CONTROL_DANGER}};
+    color: {{CONTROL_DANGER}};
+}
+QPushButton[role="danger"]:disabled,
+QToolButton[role="danger"]:disabled,
+QPushButton[role="destructive"]:disabled,
+QToolButton[role="destructive"]:disabled {
+    color: {{CONTROL_TEXT_MUTED}};
+    background-color: {{CONTROL_DISABLED_BG}};
+    border-color: {{CONTROL_DISABLED_LINE}};
+}
+
+QPushButton[role="choice"],
+QToolButton[role="choice"] {
+    background-color: transparent;
+    border-color: transparent;
+    color: {{CONTROL_TEXT_MUTED}};
+}
+QPushButton[role="choice"]:hover,
+QToolButton[role="choice"]:hover {
+    background-color: {{CONTROL_TRACK}};
+    border-color: {{CONTROL_TRACK_LINE}};
+    color: {{CONTROL_TEXT}};
+}
+QPushButton[role="choice"]:pressed,
+QToolButton[role="choice"]:pressed {
+    background-color: {{CONTROL_TRACK}};
+    border-color: {{CONTROL_SELECT_LINE}};
+}
+QPushButton[role="choice"]:checked,
+QToolButton[role="choice"]:checked {
+    background-color: {{CONTROL_SURFACE_TOP}};
+    border-color: {{CONTROL_SELECT_LINE}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
+}
+QPushButton[role="choice"]:disabled,
+QToolButton[role="choice"]:disabled {
+    color: {{CONTROL_TEXT_MUTED}};
+    background-color: {{CONTROL_DISABLED_BG}};
+    border-color: {{CONTROL_DISABLED_LINE}};
+}
+
+/* An explicit helper size is an opt-in track override.  Role defaults above
+ * still keep an unannotated primary on cta and ordinary actions on base. */
+QPushButton[controlSize="compact"],
+QToolButton[controlSize="compact"] {
+    min-height: {{CONTROL_H_COMPACT_STANDARD_BUTTON_CONTENT}};
+}
+QPushButton[controlSize="base"],
+QToolButton[controlSize="base"] {
+    min-height: {{CONTROL_H_BASE_BUTTON_CONTENT}};
+}
+QPushButton[controlSize="cta"],
+QToolButton[controlSize="cta"] {
+    min-height: {{CONTROL_H_CTA_BUTTON_CONTENT}};
+}
+/* Icon-only QToolButtons have additional Qt icon chrome in their size hint.
+ * Keep the calibrated 19px floor so fixed 24px and 28px callers remain
+ * authoritative without clipping their 16px glyphs. */
+QPushButton[role="icon"][controlSize="compact"],
+QToolButton[role="icon"][controlSize="compact"] {
+    min-width: {{CONTROL_H_ICON_HINT_CONTENT}};
+    min-height: {{CONTROL_H_ICON_HINT_CONTENT}};
+    padding: 0;
 }
 
 QMessageBox QPushButton {
@@ -715,13 +903,13 @@ QMessageBox QPushButton[messageBoxRole="neutral"]:hover {
     border-color: #b7c4d3;
 }
 QMessageBox QPushButton[messageBoxRole="primary"] {
-    background-color: #1769e0;
-    border-color: #1769e0;
-    color: #ffffff;
+    background-color: {{CONTROL_ACCENT}};
+    border-color: {{CONTROL_ACCENT_BORDER}};
+    color: {{CONTROL_SURFACE_TOP}};
 }
 QMessageBox QPushButton[messageBoxRole="primary"]:hover {
-    background-color: #135abd;
-    border-color: #135abd;
+    background-color: {{CONTROL_ACCENT_DARK}};
+    border-color: {{CONTROL_ACCENT_DARK}};
 }
 QMessageBox QPushButton[messageBoxRole="warning"] {
     background-color: #d97706;
@@ -733,13 +921,14 @@ QMessageBox QPushButton[messageBoxRole="warning"]:hover {
     border-color: #b45309;
 }
 QMessageBox QPushButton[messageBoxRole="danger"] {
-    background-color: #dc2626;
-    border-color: #dc2626;
-    color: #ffffff;
+    background-color: {{CONTROL_DANGER}};
+    border-color: {{CONTROL_DANGER}};
+    color: {{CONTROL_SURFACE_TOP}};
 }
 QMessageBox QPushButton[messageBoxRole="danger"]:hover {
-    background-color: #b91c1c;
-    border-color: #b91c1c;
+    background-color: {{CONTROL_DANGER_WASH}};
+    border-color: {{CONTROL_DANGER}};
+    color: {{CONTROL_DANGER}};
 }
 
 /* 2026-04-26 R3 紧凑化 fix-4: tool buttons are icon-only chrome
@@ -762,7 +951,7 @@ QToolButton[role="tool"] {
 }
 
 /* Saved-channel config controls live in the navigator rail.  They are action
- * peers, not compact toolbar glyphs: keep both at the same readable size. */
+ * peers, not compact toolbar glyphs: keep both on the base track. */
 QPushButton#channelConfigSave,
 QPushButton#channelConfigApply {
     /* Qt stylesheet widths exclude padding and borders.  46 + 16 + 2 gives
@@ -772,8 +961,7 @@ QPushButton#channelConfigApply {
     max-width: 46px;
     /* 22px content + 4px vertical padding × 2 + 1px border × 2 = 32px,
      * exactly matching #channelConfigCombo's fixed outer height. */
-    min-height: 22px;
-    max-height: 22px;
+    min-height: {{CONTROL_H_BASE_BUTTON_CONTENT}};
     padding: 4px 8px;
 }
 
@@ -793,7 +981,7 @@ Toolbar QWidget#toolbarRightGroup {
 }
 Toolbar QPushButton {
     min-width: 0;
-    min-height: 22px;
+    min-height: {{CONTROL_H_COMPACT_BUTTON_CONTENT}};
     padding: 2px 12px;
 }
 Toolbar QPushButton[role="panel-toggle"] {
@@ -834,13 +1022,92 @@ Toolbar QPushButton[segment]:hover {
     color: #334155;
 }
 Toolbar QPushButton[segment]:checked {
-    background-color: #e8efff;
+    background-color: qlineargradient(
+        x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #ffffff, stop: 1 #edf5ff
+    );
     color: #1769e0;
-    border: 1px solid #1769e0;
+    border: 1px solid #2d7ff9;
 }
 QWidget#modeSegment {
     padding: 2px;
     background-color: transparent;
+}
+/* The toolbar has three peer zones: file actions, analysis mode, and
+ * brand/panel controls.  The mode zone is sized by its contents; its two
+ * equal QHBoxLayout gaps place the boundary markers symmetrically rather than
+ * relying on hand-tuned absolute offsets. */
+Toolbar QFrame#toolbarModeZone {
+    background-color: #fbfcff;
+    border-radius: 7px;
+}
+Toolbar QFrame#modeZoneDivider {
+    background-color: #fbfcff;
+    border-left: 1px solid #e4eaf2;
+    border-right: 1px solid #e4eaf2;
+    border-radius: 3px;
+}
+Toolbar QFrame#modeZoneDividerTick {
+    background-color: #2d7ff9;
+    border: none;
+    border-radius: 2px;
+}
+Toolbar QFrame#modeActiveDot {
+    background-color: #1677ff;
+    border: 1px solid #ffffff;
+    border-radius: 3px;
+}
+
+/* Batch keeps its equal-width, text-only choices, but uses the same analysis
+ * mode language as the top toolbar: a restrained pale-blue zone, symmetrical
+ * boundary markers, and one raised active choice. */
+QWidget#BatchMethodGroup {
+    background-color: {{CONTROL_TRACK}};
+    border: 1px solid {{CONTROL_TRACK_LINE}};
+    border-radius: 7px;
+}
+QWidget#BatchMethodSegment {
+    background-color: transparent;
+}
+QWidget#BatchMethodGroup QPushButton[batchMethod] {
+    /* Retain Batch's existing touch target; only the visual language changes
+     * here, not the vertical rhythm of the analysis panel. */
+    /* Preserve the prior 34px outer button: 24 content + 4px padding × 2
+     * + 1px transparent border × 2.  Checked only swaps colours. */
+    min-height: 24px;
+    margin: 0;
+    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background-color: transparent;
+    color: {{CONTROL_TEXT_MUTED}};
+    font-size: 13px;
+    font-weight: 700;
+}
+QWidget#BatchMethodGroup QPushButton[batchMethod]:hover {
+    background-color: transparent;
+    color: {{CONTROL_TEXT}};
+}
+QWidget#BatchMethodGroup QPushButton[batchMethod]:checked {
+    background-color: {{CONTROL_SURFACE_TOP}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
+    border-color: {{CONTROL_SELECT_LINE}};
+}
+QFrame#BatchMethodZoneDivider {
+    background-color: #fbfcff;
+    border-left: 1px solid #e4eaf2;
+    border-right: 1px solid #e4eaf2;
+    border-radius: 3px;
+}
+QFrame#BatchMethodZoneDividerTick {
+    background-color: #2d7ff9;
+    border: none;
+    border-radius: 2px;
+}
+QFrame#BatchMethodActiveDot {
+    background-color: #1677ff;
+    border: 1px solid #ffffff;
+    border-radius: 3px;
 }
 
 /* Acquisition Cockpit v3 shell. These selectors are object-name/property
@@ -990,9 +1257,9 @@ QWidget#cockpitModeSegment {
     min-height: 32px;
     max-height: 32px;
     padding: 2px;
-    border: 1px solid #dfe5ee;
+    border: 1px solid {{CONTROL_TRACK_LINE}};
     border-radius: 7px;
-    background-color: #f8fafc;
+    background-color: {{CONTROL_TRACK}};
 }
 QWidget#cockpitModeSegment QPushButton[cockpitMode] {
     min-width: 56px;
@@ -1003,16 +1270,16 @@ QWidget#cockpitModeSegment QPushButton[cockpitMode] {
     border: 1px solid transparent;
     border-radius: 5px;
     background-color: transparent;
-    color: #64748b;
+    color: {{CONTROL_TEXT_MUTED}};
 }
 QWidget#cockpitModeSegment QPushButton[cockpitMode]:hover {
-    color: #334155;
-    background-color: #eef2f7;
+    color: {{CONTROL_TEXT}};
+    background-color: transparent;
 }
 QWidget#cockpitModeSegment QPushButton[cockpitMode]:checked {
-    color: #0f3f8f;
-    background-color: #ffffff;
-    border-color: #dfe5ee;
+    color: {{CONTROL_TEXT_ON_SELECT}};
+    background-color: {{CONTROL_SURFACE_TOP}};
+    border-color: {{CONTROL_SELECT_LINE}};
 }
 
 QLabel#cockpitRecIndicator {
@@ -1432,7 +1699,10 @@ QLabel#fileRowMeta {
     font-size: 11px;
 }
 
-QLineEdit#channelSearch { min-height: 26px; background-color: #ffffff; }
+QLineEdit#channelSearch {
+    min-height: {{CONTROL_H_BASE_INPUT_CONTENT}};
+    background-color: #ffffff;
+}
 
 /* Channel tree — remove zebra stripe + flat header */
 QTreeWidget#channelTree {
@@ -1673,6 +1943,13 @@ Inspector QFrame#frfFactsCard QLabel[factsRole="warning"][factsState="stale"] {
     color: #94a3b8;
 }
 
+Inspector QLabel#frfDelayRetention {
+    color: #64748b;
+    font-size: 11px;
+    background: transparent;
+    padding-left: 88px;
+}
+
 Inspector QLabel#frfContextTitle {
     color: #111827;
     font-size: 16px;
@@ -1721,28 +1998,35 @@ Inspector QLabel#frfFlowBlock {
     font-size: 11px;
     font-weight: 700;
 }
-Inspector QFrame#frfSegmentChoice {
-    border: 1px solid #dbe2eb;
+QFrame#frfSegmentChoice {
+    border: 1px solid {{CONTROL_TRACK_LINE}};
     border-radius: 7px;
-    background: #ffffff;
+    background: {{CONTROL_TRACK}};
 }
-Inspector QFrame#frfSegmentChoice QPushButton[role="frf-segment"] {
-    min-height: 26px;
+QFrame#frfSegmentChoice QPushButton[role="frf-segment"] {
+    /* Keep the old 28px outer segment after reserving a 1px border. */
+    min-height: 24px;
     padding: 1px 5px;
-    border: none;
+    border: 1px solid transparent;
     border-radius: 5px;
     background: transparent;
-    color: #64748b;
+    color: {{CONTROL_TEXT_MUTED}};
     font-weight: 700;
 }
-Inspector QFrame#frfSegmentChoice QPushButton[role="frf-segment"]:checked {
-    background: #e8efff;
-    color: #1769e0;
+QFrame#frfSegmentChoice QPushButton[role="frf-segment"]:hover {
+    background: transparent;
+    color: {{CONTROL_TEXT}};
 }
-Inspector QPushButton#frfFadeToggle[role="choice"]:checked {
-    background: #1769e0;
-    border-color: #1769e0;
-    color: #ffffff;
+QFrame#frfSegmentChoice QPushButton[role="frf-segment"]:checked {
+    background: {{CONTROL_SURFACE_TOP}};
+    border-color: {{CONTROL_SELECT_LINE}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
+}
+/* The mapping swap is a textual action, not icon-only toolbar chrome.
+ * Its own height floor must win over the compact [role="tool"] rule. */
+Inspector QPushButton[role="frf-swap"] {
+    min-height: 19px;
+    padding: 1px 8px;
 }
 
 /* The axis-settings grid is always hosted inside the params_card, so
@@ -2024,11 +2308,11 @@ Inspector QPushButton[role="choice"] {
     font-weight: 700;
 }
 Inspector QPushButton[role="choice"]:checked {
-    background-color: #1769e0;
-    border-color: #1769e0;
-    color: #ffffff;
+    background-color: {{CONTROL_SURFACE_TOP}};
+    border-color: {{CONTROL_SELECT_LINE}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
 }
-Inspector QPushButton[role="primary"] { min-height: 30px; }
+Inspector QPushButton[role="primary"] { min-height: {{CONTROL_H_CTA_BUTTON_CONTENT}}; }
 
 /* ============ Chart stack ============ */
 ChartStack { background-color: #ffffff; border: 1px solid #dbe2eb; border-radius: 7px; }
@@ -2068,23 +2352,29 @@ QWidget#slicePanel {
     border-radius: 7px;
 }
 QWidget#sliceDirToggle {
-    background-color: #eef2f8;
-    border: 1px solid #c7d2e2;
+    background-color: {{CONTROL_TRACK}};
+    border: 1px solid {{CONTROL_TRACK_LINE}};
     border-radius: 8px;
 }
 QWidget#sliceDirToggle QPushButton[role="slice-seg"] {
-    border: none;
+    border: 1px solid transparent;
     background: transparent;
-    color: #7b8699;
+    color: {{CONTROL_TEXT_MUTED}};
     font-size: 9px;
     font-weight: 700;
-    min-height: 18px;
+    /* Keep the old 18px outer segment after reserving a stable border. */
+    min-height: 16px;
     padding: 0 3px;
     border-radius: 7px;
 }
+QWidget#sliceDirToggle QPushButton[role="slice-seg"]:hover {
+    background-color: transparent;
+    color: {{CONTROL_TEXT}};
+}
 QWidget#sliceDirToggle QPushButton[role="slice-seg"]:checked {
-    background-color: #2563eb;
-    color: #ffffff;
+    background-color: {{CONTROL_SURFACE_TOP}};
+    border-color: {{CONTROL_SELECT_LINE}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
 }
 QLabel#sliceHint {
     color: #33425c;
@@ -2239,25 +2529,28 @@ QFrame#TickDensitySurface QLabel#tickDensityScope {
     font-size: 11px;
 }
 QFrame#TickDensitySurface QFrame#tickDensityPresetHost {
-    background-color: transparent;
+    background-color: {{CONTROL_TRACK}};
+    border: 1px solid {{CONTROL_TRACK_LINE}};
+    border-radius: 7px;
 }
 QFrame#TickDensitySurface QPushButton[role="tick-density-preset"] {
     min-height: 28px;
-    border: 1px solid #dbe5f1;
+    border: 1px solid transparent;
     border-radius: 6px;
-    background-color: #ffffff;
-    color: #334155;
+    background-color: transparent;
+    color: {{CONTROL_TEXT_MUTED}};
     font-size: 12px;
     font-weight: 700;
 }
 QFrame#TickDensitySurface QPushButton[role="tick-density-preset"]:hover {
-    border-color: #b7c8dc;
-    background-color: #f8fbff;
+    border-color: transparent;
+    background-color: transparent;
+    color: {{CONTROL_TEXT}};
 }
 QFrame#TickDensitySurface QPushButton[role="tick-density-preset"]:checked {
-    color: #0b7af3;
-    border-color: #0b7af3;
-    background-color: #e7f1ff;
+    color: {{CONTROL_TEXT_ON_SELECT}};
+    border-color: {{CONTROL_SELECT_LINE}};
+    background-color: {{CONTROL_SURFACE_TOP}};
 }
 QFrame#TickDensitySurface QFrame#tickDensityAxisRow {
     background-color: transparent;
@@ -2667,20 +2960,24 @@ QWidget#chartToolbar QPushButton[role="chart-choice"] {
     border: 1px solid transparent;
     border-radius: 6px;
     background-color: transparent;
-    color: #64748b;
+    color: {{CONTROL_TEXT_MUTED}};
     font-weight: 600;
 }
 QWidget#chartToolbar QPushButton[role="chart-choice"]:hover {
-    background-color: #eef2f7;
-    color: #334155;
+    background-color: transparent;
+    color: {{CONTROL_TEXT}};
 }
 QWidget#chartToolbar QPushButton[role="chart-choice"]:checked {
-    background-color: #e8efff;
-    border-color: #2563eb;
-    color: #2563eb;
+    background-color: {{CONTROL_SURFACE_TOP}};
+    border-color: {{CONTROL_SELECT_LINE}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
 }
 
 QWidget#chartToolbar QWidget#chartTimeControlsSpacer {
+    background-color: transparent;
+}
+
+QWidget#chartToolbar QWidget#chartFrequencyControlsSpacer {
     background-color: transparent;
 }
 
@@ -3021,8 +3318,8 @@ QLineEdit#channelConfigHtmlConfigSearch,
 QLineEdit#channelConfigHtmlChannelSearch,
 QDialog#channelConfigHtmlRenameDialog QLineEdit,
 QDialog#channelConfigHtmlImportDialog QComboBox {
-    min-height: 34px;
-    max-height: 34px;
+    /* Flat manager chrome: 30px content + 1px borders = base 32px. */
+    min-height: {{CONTROL_H_BASE_FLAT_CONTENT}};
     padding: 0 10px;
     border: 1px solid #c8d4e3;
     border-radius: 8px;
@@ -3034,8 +3331,8 @@ QLineEdit#channelConfigHtmlConfigSearch:focus,
 QLineEdit#channelConfigHtmlChannelSearch:focus,
 QDialog#channelConfigHtmlRenameDialog QLineEdit:focus,
 QDialog#channelConfigHtmlImportDialog QComboBox:focus { border-color: #0a6de7; }
-/* The 34px field family above is otherwise 8px, but a combo is a combo: it
- * rejoins the app-wide 7px so every dropdown matches. Keeps the height and
+/* The base-track field family above is otherwise 8px, but a combo is a combo:
+ * it rejoins the app-wide 7px so every dropdown matches. Keeps the height and
  * padding of its neighbours; only the corner defers to the combo family. */
 QDialog#channelConfigHtmlImportDialog QComboBox { border-radius: 7px; }
 QScrollArea#channelConfigHtmlConfigScroll { border: none; background-color: #fbfcfe; }
@@ -3151,8 +3448,7 @@ QDialog#channelConfigManagerHtml QPushButton,
 QDialog#channelConfigManagerHtml QToolButton {
     min-width: 0;
     /* Qt's CSS content height excludes the 1px top/bottom borders. */
-    min-height: 34px;
-    max-height: 34px;
+    min-height: {{CONTROL_H_BASE_FLAT_CONTENT}};
     padding: 0 10px;
     border: 1px solid #c8d4e3;
     border-radius: 8px;
@@ -3174,14 +3470,14 @@ QDialog#channelConfigManagerHtml QToolButton:disabled {
 }
 QDialog#channelConfigManagerHtml QPushButton[role="primary"],
 QDialog#channelConfigManagerHtml QToolButton[role="primary"] {
-    border-color: #0a6de7;
-    background-color: #0a6de7;
-    color: #ffffff;
+    border-color: {{CONTROL_ACCENT_BORDER}};
+    background-color: {{CONTROL_ACCENT}};
+    color: {{CONTROL_SURFACE_TOP}};
 }
 QDialog#channelConfigManagerHtml QPushButton[role="primary"]:hover,
 QDialog#channelConfigManagerHtml QToolButton[role="primary"]:hover {
-    border-color: #085abf;
-    background-color: #085abf;
+    border-color: {{CONTROL_ACCENT_DARK}};
+    background-color: {{CONTROL_ACCENT_DARK}};
 }
 QPushButton#channelConfigHtmlDeleteConfig,
 QPushButton#channelConfigHtmlDeleteConfigs,
@@ -3232,8 +3528,7 @@ QDialog#channelConfigHtmlDiscardDialog {
 QDialog#channelConfigHtmlRenameDialog QPushButton,
 QDialog#channelConfigHtmlImportDialog QPushButton,
 QDialog#channelConfigHtmlDiscardDialog QPushButton {
-    min-height: 34px;
-    max-height: 34px;
+    min-height: {{CONTROL_H_BASE_FLAT_CONTENT}};
     padding: 0 10px;
     border: 1px solid #c8d4e3;
     border-radius: 8px;
@@ -3245,9 +3540,9 @@ QDialog#channelConfigHtmlDiscardDialog QPushButton {
 QDialog#channelConfigHtmlRenameDialog QPushButton[role="primary"],
 QDialog#channelConfigHtmlImportDialog QPushButton[role="primary"],
 QDialog#channelConfigHtmlDiscardDialog QPushButton[role="primary"] {
-    border-color: #0a6de7;
-    background-color: #0a6de7;
-    color: #ffffff;
+    border-color: {{CONTROL_ACCENT_BORDER}};
+    background-color: {{CONTROL_ACCENT}};
+    color: {{CONTROL_SURFACE_TOP}};
 }
 QLabel#channelConfigHtmlPopoverTitle { color: #172033; font-size: 15px; font-weight: 700; }
 QLabel#channelConfigHtmlPopoverCopy,
@@ -3290,4 +3585,35 @@ QDialog#channelConfigManagerHtml QPushButton#channelConfigHtmlRemoveOne {
 QDialog#channelConfigManagerHtml QPushButton#channelConfigHtmlRemoveOne:hover {
     border-color: #f1b8be;
     background-color: #fff2f3;
+}
+
+/* ============ Shared segmented-choice signature ============
+ * The host owns the recessed track; segments reserve their border in every
+ * state and only the checked segment becomes a raised white pill.  This is
+ * intentionally placed after Inspector-local rules so a SegmentedChoice used
+ * in that panel cannot fall back to the historic solid-blue choice styling. */
+QFrame#segmentedChoice {
+    border: 1px solid {{CONTROL_TRACK_LINE}};
+    border-radius: 7px;
+    background-color: {{CONTROL_TRACK}};
+}
+QFrame#segmentedChoice QPushButton[role="choice"] {
+    /* 26px outer segment = 20px content + 2px padding × 2 + 1px border × 2. */
+    min-height: 20px;
+    padding: 2px 5px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background-color: transparent;
+    color: {{CONTROL_TEXT_MUTED}};
+    font-weight: 700;
+}
+QFrame#segmentedChoice QPushButton[role="choice"]:hover {
+    background-color: transparent;
+    border-color: transparent;
+    color: {{CONTROL_TEXT}};
+}
+QFrame#segmentedChoice QPushButton[role="choice"]:checked {
+    background-color: {{CONTROL_SURFACE_TOP}};
+    border-color: {{CONTROL_SELECT_LINE}};
+    color: {{CONTROL_TEXT_ON_SELECT}};
 }

@@ -74,7 +74,7 @@ class RebuildTimePopover(QDialog):
         btns = QHBoxLayout()
         btns.addStretch()
         self.btn_cancel = QPushButton("取消")
-        self.btn_cancel.setProperty("role", "tool")
+        self.btn_cancel.setProperty("role", "quiet")
         self.btn_cancel.clicked.connect(self.reject)
         btns.addWidget(self.btn_cancel)
         self.btn_ok = QPushButton("确定")

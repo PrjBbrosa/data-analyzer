@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 
 from ...analysis_presets import list_builtin_presets
 from ...ui_kit.icons import Icons
+from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from .._axis_defaults import z_range_for
@@ -82,8 +83,9 @@ class OrderContextual(QWidget):
         self.btn_rebuild.setIcon(Icons.rebuild_time())
         self.btn_rebuild.setIconSize(QSize(16, 16))
         self.btn_rebuild.setFixedSize(QSize(24, 24))
-        self.btn_rebuild.setProperty("role", "tool")
+        self.btn_rebuild.setProperty("role", "icon")
         self.btn_rebuild.setToolTip("重建时间轴")
+        self.btn_rebuild.setAccessibleName("重建时间轴")
         self.btn_rebuild.clicked.connect(
             lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
         )
@@ -104,9 +106,11 @@ class OrderContextual(QWidget):
         self.combo_rpm_mode = QComboBox()
         self.combo_rpm_mode.addItem("转速通道", "channel")
         self.combo_rpm_mode.addItem("手动 RPM", "manual")
+        self.choice_rpm_mode = SegmentedChoice()
+        self.choice_rpm_mode.bind(self.combo_rpm_mode)
         fl.addRow(
             "转速来源:",
-            _fit_field(self.combo_rpm_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
+            _fit_field(self.choice_rpm_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
         self.combo_rpm = SearchableComboBox()
         fl.addRow("转速:", _fit_field(self.combo_rpm, max_width=_LONG_FIELD_MAX_WIDTH))
@@ -193,9 +197,11 @@ class OrderContextual(QWidget):
         self.combo_weighting.setToolTip(
             'A 计权（IEC 61672）：相对加权频谱，非绝对 dB SPL'
         )
+        self.choice_weighting = SegmentedChoice()
+        self.choice_weighting.bind(self.combo_weighting)
         fl.addRow(
             "频率加权:",
-            _fit_field(self.combo_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
+            _fit_field(self.choice_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
         self.db_reference_control = make_db_reference_control(self)
         self.spin_db_ref = self.db_reference_control.editor
@@ -579,6 +585,7 @@ class OrderContextual(QWidget):
                 self.combo_amp_unit.blockSignals(True)
                 self.combo_amp_unit.setCurrentIndex(i)
                 self.combo_amp_unit.blockSignals(False)
+                self.choice_amp_unit.sync_from_bound_combo()
         # Apply new axis keys directly when present (preferred path).
         for key, attr in (
             ('z_auto', 'chk_z_auto'), ('y_auto', 'chk_y_auto'), ('x_auto', 'chk_x_auto'),
@@ -814,6 +821,7 @@ class OrderContextual(QWidget):
                 self.combo_amp_unit.blockSignals(True)
                 self.combo_amp_unit.setCurrentIndex(i)
                 self.combo_amp_unit.blockSignals(False)
+                self.choice_amp_unit.sync_from_bound_combo()
 
         # Legacy 'dynamic' key compat — translate to z_floor/ceiling/auto.
         # The new explicit z_floor key (already applied above) takes

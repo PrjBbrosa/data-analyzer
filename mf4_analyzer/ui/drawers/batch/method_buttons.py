@@ -22,49 +22,98 @@ from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QFormLayout,
-    QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSpinBox,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSpinBox,
     QStyle, QStyleOptionButton, QVBoxLayout, QWidget,
 )
 
 from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
+from ....ui_kit.widgets.segmented_choice import SegmentedChoice
 
 
 _METHODS: tuple[tuple[str, str], ...] = (
     ("time", "时域"),
     ("fft", "频谱"),
     ("fft_time", "时频"),
-    ("frf", "频响"),
     ("order_time", "阶次"),
+    ("frf", "频响"),
 )
 
 
+def _make_method_zone_divider(parent: QWidget) -> QFrame:
+    """Create one compact boundary marker for the batch method zone."""
+    divider = QFrame(parent)
+    divider.setObjectName("BatchMethodZoneDivider")
+    divider.setFixedSize(8, 16)
+    tick = QFrame(divider)
+    tick.setObjectName("BatchMethodZoneDividerTick")
+    tick.setFixedSize(3, 8)
+    tick.move(2, 4)
+    return divider
+
+
 class MethodButtonGroup(QWidget):
-    """Three exclusive toggle buttons emitting ``methodChanged(str)``."""
+    """Five equal-width analysis-mode buttons emitting ``methodChanged(str)``."""
 
     methodChanged = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("BatchMethodGroup")
         self._buttons: dict[str, QPushButton] = {}
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
-        lay = QHBoxLayout(self)
+        outer = QHBoxLayout(self)
+        # Keep the markers inside the batch column's surface; at zero margin
+        # their hairlines land on the clip edge and look uneven.
+        outer.setContentsMargins(6, 0, 6, 0)
+        outer.setSpacing(12)
+
+        segment = QWidget(self)
+        segment.setObjectName("BatchMethodSegment")
+        lay = QHBoxLayout(segment)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
+
+        left_divider = _make_method_zone_divider(self)
+        right_divider = _make_method_zone_divider(self)
+        outer.addWidget(left_divider, 0, Qt.AlignVCenter)
+        outer.addWidget(segment, 1)
+        outer.addWidget(right_divider, 0, Qt.AlignVCenter)
+
+        self._mode_segment = segment
+        self._mode_zone_dividers = (left_divider, right_divider)
+        self._mode_active_dots: dict[str, QFrame] = {}
         for key, label in _METHODS:
             btn = QPushButton(label, self)
             btn.setCheckable(True)
             btn.setMinimumWidth(0)
             btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            btn.setProperty("batchMethod", key)
             btn.clicked.connect(
                 lambda _checked, k=key: self._on_button_clicked(k)
             )
             self._group.addButton(btn)
             self._buttons[key] = btn
             lay.addWidget(btn, 1)
+            dot = QFrame(btn)
+            dot.setObjectName("BatchMethodActiveDot")
+            dot.setFixedSize(6, 6)
+            dot.hide()
+            self._mode_active_dots[key] = dot
         # Default to FFT.
         self._current = "fft"
         self._buttons["fft"].setChecked(True)
+        self._sync_mode_active_dots()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._sync_mode_active_dots()
+
+    def _sync_mode_active_dots(self) -> None:
+        for key, button in self._buttons.items():
+            dot = self._mode_active_dots[key]
+            dot.move(max(0, button.width() - dot.width() - 5), 4)
+            dot.setVisible(button.isChecked())
 
     def _on_button_clicked(self, method: str) -> None:
         """Apply a user selection only when it changes the active method."""
@@ -79,9 +128,11 @@ class MethodButtonGroup(QWidget):
             btn.setChecked(True)
         if method == self._current:
             # Still emit on explicit set so callers/tests observe the call.
+            self._sync_mode_active_dots()
             self.methodChanged.emit(method)
             return
         self._current = method
+        self._sync_mode_active_dots()
         self.methodChanged.emit(method)
 
     def current_method(self) -> str:
@@ -95,6 +146,10 @@ _WINDOWS: tuple[str, ...] = (
     "hanning", "hamming", "blackman", "bartlett", "kaiser", "flattop",
 )
 _WEIGHTINGS: tuple[str, ...] = ("None", "A")
+_BINARY_CHOICE_FIELDS = frozenset({
+    "estimator", "nfft_mode", "weighting", "magnitude_scale",
+    "frequency_scale", "phase_mode",
+})
 
 
 # Per-method visible field set, taken verbatim from spec §3.3 minus the
@@ -559,6 +614,12 @@ class DynamicParamForm(QWidget):
         self._w_estimator = QComboBox(self)
         self._w_estimator.addItem("H1", "h1")
         self._w_estimator.addItem("H2", "h2")
+        self._w_estimator.setItemData(
+            0, "H1：适合输出端噪声主导的测量（Pxy / Pxx）。", Qt.ToolTipRole,
+        )
+        self._w_estimator.setItemData(
+            1, "H2：适合输入端噪声主导的测量（Pyy / conj(Pxy)）。", Qt.ToolTipRole,
+        )
         self._w_estimator.currentIndexChanged.connect(
             lambda *_: self.paramsChanged.emit()
         )
@@ -796,6 +857,8 @@ class DynamicParamForm(QWidget):
         # where it overlaps the first spectral parameter label.
         self._w_render_group_by.hide()
 
+        self._choice_widgets: dict[str, SegmentedChoice] = {}
+        self._visible_widgets: dict[str, QWidget] = {}
         self._name_by_widget = {
             widget: name for name, widget in self._widgets.items()
         }
@@ -811,8 +874,17 @@ class DynamicParamForm(QWidget):
             label.setObjectName("BatchParamLabel")
             label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             cell.addWidget(label)
-            widget.setParent(host)
-            cell.addWidget(widget)
+            if name in _BINARY_CHOICE_FIELDS:
+                choice = SegmentedChoice(host)
+                choice.bind(widget)
+                self._choice_widgets[name] = choice
+                setattr(self, f"_choice_{name}", choice)
+                visible_widget = choice
+            else:
+                widget.setParent(host)
+                visible_widget = widget
+            cell.addWidget(visible_widget)
+            self._visible_widgets[name] = visible_widget
             self._field_hosts[name] = host
             self._field_labels[name] = label
 
@@ -848,7 +920,7 @@ class DynamicParamForm(QWidget):
     def visible_field_names(self) -> set[str]:
         out: set[str] = set()
         for name, w in self._widgets.items():
-            if not w.isHidden() and self._form.indexOf(w) >= 0:
+            if not self._field_hosts[name].isHidden() and self._form.indexOf(w) >= 0:
                 out.add(name)
         return out
 
@@ -871,6 +943,7 @@ class DynamicParamForm(QWidget):
             self._w_nfft_mode.setCurrentIndex(1 if manual else 0)
         finally:
             self._w_nfft_mode.blockSignals(previous)
+        self._choice_nfft_mode.refresh_from_bound_combo()
         self._sync_nfft_mode()
 
     def _sync_avg_mode(self, *_args) -> None:
@@ -1206,6 +1279,7 @@ class DynamicParamForm(QWidget):
                 self._w_weighting.setCurrentIndex(idx)
         finally:
             self._w_weighting.blockSignals(False)
+        self._choice_weighting.refresh_from_bound_combo()
 
     # ------------------------------------------------------------------
     def _render_for(self, method: str) -> None:
@@ -1220,7 +1294,10 @@ class DynamicParamForm(QWidget):
         for name in self._active_fields:
             host = self._field_hosts[name]
             widget = self._widgets[name]
-            widget.setHidden(False)
+            visible_widget = self._visible_widgets[name]
+            visible_widget.setHidden(False)
+            if visible_widget is not widget:
+                widget.hide()
             host.setHidden(False)
             if name == "render_grouping_cards":
                 # The semantic cards are the block itself, not a field next to
@@ -1251,6 +1328,7 @@ class DynamicParamForm(QWidget):
         for name, widget in self._widgets.items():
             if name not in active:
                 widget.setHidden(True)
+                self._visible_widgets[name].setHidden(True)
                 self._field_hosts[name].setHidden(True)
         self._sync_nfft_mode()
         self._sync_avg_mode()

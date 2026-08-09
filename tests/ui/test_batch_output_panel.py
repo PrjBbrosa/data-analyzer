@@ -44,6 +44,31 @@ def test_frf_chart_grouping_lives_with_analysis_not_output(qtbot):
     assert output._output_preview.isHidden() is True
 
 
+def test_batch_analysis_interval_combo_stays_visible_when_its_slot_cannot_fit_segments(
+    qtbot,
+):
+    """Preserve the original interval/edit field split rather than clipping."""
+    from PyQt5.QtWidgets import QComboBox
+
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
+
+    panel = AnalysisPanel()
+    qtbot.addWidget(panel)
+    panel.set_method("fft")
+    panel.resize(288, 900)
+    panel.show()
+    qtbot.wait(20)
+
+    combo = panel._source_interval_mode
+    required_width = (
+        2 * max(combo.fontMetrics().horizontalAdvance(combo.itemText(index))
+                for index in range(combo.count()))
+        + 28
+    )
+    assert isinstance(combo, QComboBox)
+    assert combo.width() < required_width
+
+
 def _anchor_screen_geometry(anchor: QWidget) -> QRect:
     center = anchor.mapToGlobal(anchor.rect().center())
     screen = QGuiApplication.screenAt(center) or QGuiApplication.primaryScreen()
@@ -71,7 +96,9 @@ def test_batch_output_panel_axis_settings_uses_inspector_layout(qtbot):
     # colour-scale row: FFT line plots still need it when that row is hidden.
     assert z_parts["unit"] is None
     assert panel._amplitude_unit_row is not None
-    assert panel.combo_amp_unit.parent() is panel._amplitude_unit_row
+    assert panel.choice_amp_unit.parent() is panel._amplitude_unit_row
+    assert panel.choice_amp_unit.bound_combo() is panel.combo_amp_unit
+    assert panel.combo_amp_unit.isHidden() is True
     assert panel._axis_row_parts["x"]["label"].minimumWidth() >= 72
 
     assert z_parts["stack"].currentWidget() is z_parts["summary_page"]
@@ -847,8 +874,18 @@ def test_batch_output_checkboxes_only_choose_fixed_artifacts(qtbot):
     assert outputs.export_image is False
     assert outputs.export_data is True
     assert (outputs.image_width, outputs.image_height) == (1920, 1080)
-    assert panel._combo_image_format.isHidden()
+    assert panel._image_format_text.text() == "PNG"
     assert panel._combo_image_size.isHidden()
+
+
+def test_batch_output_uses_static_png_text_instead_of_a_single_item_combo(qtbot):
+    from PyQt5.QtWidgets import QLabel
+
+    panel = _make_panel(qtbot)
+
+    assert isinstance(panel._image_format_text, QLabel)
+    assert panel._image_format_text.text() == "PNG"
+    assert not hasattr(panel, "_combo_image_format")
 
 
 def test_batch_output_panel_fits_288px_column(qtbot):

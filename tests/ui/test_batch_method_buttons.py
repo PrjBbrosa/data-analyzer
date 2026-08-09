@@ -1,5 +1,7 @@
 import pytest
 
+from mf4_analyzer.ui_kit import load_stylesheet
+
 
 def test_method_buttons_emit_signal(qtbot):
     from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
@@ -133,6 +135,62 @@ def test_param_form_weighting_round_trips(qtbot):
     assert form.get_params()["weighting"] == "A"
 
 
+def test_batch_binary_params_use_segmented_choices_without_changing_combo_state(
+    qtbot,
+):
+    """Binary Batch params keep their combo API but render one full field slot."""
+    from PyQt5.QtTest import QSignalSpy
+
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("frf")
+    form.resize(288, 900)
+    form.show()
+    qtbot.wait(20)
+
+    for name in (
+        "estimator", "nfft_mode", "magnitude_scale", "frequency_scale",
+        "phase_mode",
+    ):
+        combo = getattr(form, f"_w_{name}")
+        choice = getattr(form, f"_choice_{name}")
+        host = form._field_hosts[name]
+        assert choice.bound_combo() is combo
+        assert combo.isHidden() is True
+        assert choice.isVisibleTo(form) is True
+        assert choice.height() == 32
+        assert choice.mapTo(form, choice.rect().topLeft()).x() == (
+            host.mapTo(form, host.rect().topLeft()).x()
+        )
+        assert choice.mapTo(form, choice.rect().topRight()).x() == (
+            host.mapTo(form, host.rect().topRight()).x()
+        )
+
+    estimator_events = QSignalSpy(form.paramsChanged)
+    form._choice_estimator.buttons()[1].click()
+    assert len(estimator_events) == 1
+    assert form._w_estimator.currentData() == "h2"
+    assert form.get_params()["estimator"] == "h2"
+    assert "输出端噪声" in form._choice_estimator.buttons()[0].toolTip()
+    assert "输入端噪声" in form._choice_estimator.buttons()[1].toolTip()
+
+    form._w_nfft_mode.setCurrentIndex(1)
+    assert form._choice_nfft_mode.buttons()[1].isChecked()
+    assert form.get_params()["nfft_mode"] == "manual"
+
+    form.set_method("fft")
+    assert [button.text() for button in form._choice_nfft_mode.buttons()] == [
+        "Auto", "Fixed",
+    ]
+    weight_choice = form._choice_weighting
+    assert form._w_weighting.isHidden() is True
+    assert weight_choice.isVisibleTo(form) is True
+    weight_choice.buttons()[1].click()
+    assert form.get_params()["weighting"] == "A"
+
+
 def test_batch_sheet_weighting_options_match_main_panel(qtbot):
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
     from mf4_analyzer.ui.main_window import MainWindow
@@ -231,10 +289,10 @@ def test_batch_method_buttons_include_time_and_user_labels(qtbot):
     qtbot.addWidget(group)
 
     assert tuple(group._buttons) == (
-        "time", "fft", "fft_time", "frf", "order_time",
+        "time", "fft", "fft_time", "order_time", "frf",
     )
     assert tuple(button.text() for button in group._buttons.values()) == (
-        "时域", "频谱", "时频", "频响", "阶次",
+        "时域", "频谱", "时频", "阶次", "频响",
     )
 
 
@@ -254,6 +312,41 @@ def test_batch_method_buttons_are_equal_and_unclipped_at_narrow_width(qtbot):
         assert button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 8
         assert button.font().stretch() in {0, 100}
     assert len({button.font().stretch() for button in group._buttons.values()}) == 1
+
+
+def test_batch_method_zone_uses_symmetric_markers_and_active_dot(qtbot, qapp):
+    """Batch keeps equal-width modes while sharing the toolbar's mode chrome."""
+    from mf4_analyzer.ui_kit import load_stylesheet
+    from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
+
+    old_stylesheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        group = MethodButtonGroup()
+        qtbot.addWidget(group)
+        group.show()
+
+        for width in (288, 806):
+            group.resize(width, 44)
+            qtbot.wait(20)
+            left_divider, right_divider = group._mode_zone_dividers
+            segment = group._mode_segment
+            left_gap = segment.x() - (left_divider.x() + left_divider.width())
+            right_gap = right_divider.x() - (segment.x() + segment.width())
+            assert left_gap == right_gap == 12
+            assert left_divider.height() == right_divider.height() == 16
+            widths = [button.width() for button in group._buttons.values()]
+            assert max(widths) - min(widths) <= 1
+
+        assert group._mode_active_dots["fft"].isVisible()
+        assert not group._mode_active_dots["time"].isVisible()
+        group._buttons["frf"].click()
+        assert group._mode_active_dots["frf"].isVisible()
+        assert not group._mode_active_dots["fft"].isVisible()
+    finally:
+        group.close()
+        qapp.setStyleSheet(old_stylesheet)
 
 
 def test_batch_frf_param_form_uses_canonical_compute_and_display_fields(qtbot):
@@ -754,9 +847,7 @@ def test_method_button_labels_fit_narrow_batch_column_with_production_qss(
 
     old_stylesheet = qapp.styleSheet()
     try:
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         group = MethodButtonGroup()
         qtbot.addWidget(group)
         group.resize(288, group.sizeHint().height())
@@ -784,9 +875,7 @@ def test_preset_radio_labels_fit_narrow_batch_column_with_production_qss(
 
     old_stylesheet = qapp.styleSheet()
     try:
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         panel = AnalysisPanel()
         qtbot.addWidget(panel)
         # BatchSheet enters compact mode at the supported 288 px pane width;

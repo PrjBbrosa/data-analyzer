@@ -9,6 +9,8 @@ from mf4_analyzer import app_meta
 from mf4_analyzer.ui.pg_canvas._split_mixin import _CollapsedRail
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.side_panels import SidePanelStrip
+from mf4_analyzer.ui_kit.control_style import CONTROL_QSS_TOKENS
+from mf4_analyzer.ui_kit.icons import render_qss_template
 
 
 QSS_PATH = Path("mf4_analyzer/ui_kit/style.qss")
@@ -22,7 +24,12 @@ def _apply_widget_qss(widget):
     root widget, so an ancestor stylesheet has the same relevant cascade
     without mutating global application state.
     """
-    widget.setStyleSheet(QSS_PATH.read_text(encoding="utf-8"))
+    # ``style.qss`` is a template now.  Keep this test's local-root cascade
+    # (rather than repolishing every live qapp widget), but resolve the shared
+    # control tokens exactly as the production stylesheet loader does.
+    widget.setStyleSheet(render_qss_template(
+        QSS_PATH.read_text(encoding="utf-8"), CONTROL_QSS_TOKENS,
+    ))
     return widget
 
 

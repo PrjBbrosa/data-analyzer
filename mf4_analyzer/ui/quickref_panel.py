@@ -30,7 +30,6 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QScrollArea,
     QToolButton,
     QVBoxLayout,
@@ -38,6 +37,7 @@ from PyQt5.QtWidgets import (
 )
 
 from . import quickref
+from ..ui_kit.widgets import SearchField
 
 
 # --- Precision Light tokens (read from ui_kit/style.qss; do NOT hardcode the
@@ -88,8 +88,8 @@ def _qss():
         color: {_INK3}; font-size: 12px; background: transparent;
     }}
     QLineEdit#quickrefSearch {{
-        min-height: 26px;
-        padding: 3px 10px;
+        min-height: 22px;
+        padding: 4px 10px;
         border: 1px solid #e2eaf5;
         border-radius: 9px;
         background-color: {_TRAY};
@@ -473,10 +473,8 @@ class QuickRefPanel(QWidget):
         lay.addLayout(titles, 0)
         lay.addStretch(1)
 
-        self._search = QLineEdit()
+        self._search = SearchField("搜索操作…")
         self._search.setObjectName("quickrefSearch")
-        self._search.setPlaceholderText("搜索操作…")
-        self._search.setClearButtonEnabled(True)
         self._search.setFixedWidth(220)
         self._search.textChanged.connect(self._on_search)
         self._search.installEventFilter(self)

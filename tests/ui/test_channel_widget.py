@@ -5,6 +5,7 @@ from PyQt5.QtGui import QColor, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QMessageBox, QPushButton
 
+from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui.widgets import MultiFileChannelWidget
 
@@ -14,9 +15,7 @@ def test_channel_tree_selected_rows_render_approved_windows_highlight(qapp, qtbo
     old_style = qapp.style().objectName()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         widget = MultiFileChannelWidget()
         qtbot.addWidget(widget)
         widget.resize(520, 360)

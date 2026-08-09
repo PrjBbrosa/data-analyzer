@@ -5,6 +5,8 @@ import json
 
 from PyQt5.QtCore import Qt
 
+from mf4_analyzer.ui_kit import load_stylesheet
+
 
 def _show_at(qtbot, widget, width: int, height: int) -> None:
     qtbot.addWidget(widget)
@@ -181,9 +183,7 @@ def test_batch_shell_matches_html_fixed_rows_and_contiguous_columns(qapp, qtbot)
 
     old_stylesheet = qapp.styleSheet()
     try:
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         sheet = BatchSheet(None, files={})
         _show_at(qtbot, sheet, 1440, 900)
 
@@ -243,9 +243,7 @@ def test_spectral_presets_use_html_cards_with_parameter_summaries(qapp, qtbot):
 
     old = qapp.styleSheet()
     try:
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         panel = AnalysisPanel()
         qtbot.addWidget(panel)
         panel.resize(500, 700)
@@ -377,9 +375,7 @@ def test_batch_footer_actions_stay_inside_a_short_dialog(qapp, qtbot):
 
     old_stylesheet = qapp.styleSheet()
     try:
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         sheet = BatchSheet(None, files={})
         qtbot.addWidget(sheet)
         sheet.resize(1080, 620)
@@ -401,26 +397,27 @@ def test_batch_action_buttons_use_global_button_roles(qtbot):
     sheet = BatchSheet(None, files={})
     qtbot.addWidget(sheet)
     assert sheet._btn_run.property("role") == "primary"
-    assert sheet._btn_preview.property("role") == "accent"
+    assert sheet._btn_preview.property("role") == "secondary"
     assert sheet._btn_cancel.property("role") is None
-    assert sheet._btn_abort.property("role") == "destructive"
+    assert sheet._btn_abort.property("role") == "danger"
 
     dialog = BatchPreviewDialog(None)
     qtbot.addWidget(dialog)
     assert dialog._btn_run_all.property("role") == "primary"
-    assert dialog._btn_regenerate.property("role") == "accent"
+    assert dialog._btn_regenerate.property("role") == "secondary"
     assert dialog._btn_back.property("role") is None
-    assert dialog._btn_cancel.property("role") == "destructive"
+    assert dialog._btn_cancel.property("role") == "danger"
 
 
-def test_accent_role_is_declared_in_global_qss():
+def test_accent_compatibility_role_uses_the_shared_secondary_qss_tokens():
     from pathlib import Path
 
     qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
 
     assert 'role="accent"' in qss
     window = qss[qss.index('role="accent"'):][:400]
-    assert "#1769e0" in window
+    assert "{{CONTROL_ACCENT}}" in window
+    assert 'role="secondary"' in window
 
 
 def test_batch_header_keeps_two_rows_but_tightened(qtbot):
@@ -456,9 +453,7 @@ def test_batch_toolbar_row_fits_its_preset_buttons(qapp, qtbot):
 
     old_stylesheet = qapp.styleSheet()
     try:
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         sheet = BatchSheet(None, files={})
         qtbot.addWidget(sheet)
         sheet.show()

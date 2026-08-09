@@ -31,6 +31,8 @@ from PyQt5.QtWidgets import (
 )
 
 from ..channel_config import ChannelConfigPreview, ChannelSelectionConfig
+from ...ui_kit.control_style import CONTROL_HEIGHTS
+from ...ui_kit.widgets import SearchField
 from ..channel_config_transfer import (
     TRANSFER_SUFFIX,
     ImportMergeResult,
@@ -115,7 +117,7 @@ class ChannelConfigManagerDialog(QDialog):
 
     save_requested = pyqtSignal(object)
 
-    CONTROL_HEIGHT = 36
+    CONTROL_HEIGHT = CONTROL_HEIGHTS["base"]
     ICON_SIZE = 36
 
     def __init__(
@@ -249,11 +251,8 @@ class ChannelConfigManagerDialog(QDialog):
         self.btn_new.clicked.connect(self._create_from_checked)
         title_row.addWidget(self.btn_new)
         tools_layout.addLayout(title_row)
-        self.config_search = QLineEdit(tools)
+        self.config_search = SearchField("搜索配置…", tools)
         self.config_search.setObjectName("channelConfigHtmlConfigSearch")
-        self.config_search.setPlaceholderText("搜索配置或通道")
-        self.config_search.setClearButtonEnabled(True)
-        self.config_search.setFixedHeight(self.CONTROL_HEIGHT)
         self.config_search.textChanged.connect(self._rebuild_config_rows)
         tools_layout.addWidget(self.config_search)
         layout.addWidget(tools)
@@ -279,7 +278,7 @@ class ChannelConfigManagerDialog(QDialog):
         footer_layout.setSpacing(8)
         self.btn_batch = QPushButton("批量管理配置", footer)
         self._control(self.btn_batch)
-        self.btn_batch.setProperty("role", "tool")
+        self.btn_batch.setProperty("role", "quiet")
         self.btn_batch.clicked.connect(self._enter_batch_mode)
         footer_layout.addWidget(self.btn_batch)
         self.batch_actions = QWidget(footer)
@@ -292,7 +291,7 @@ class ChannelConfigManagerDialog(QDialog):
         batch_layout.addWidget(self.btn_exit_batch)
         self.btn_delete_configs = QPushButton("删除所选", self.batch_actions)
         self.btn_delete_configs.setObjectName("channelConfigHtmlDeleteConfigs")
-        self.btn_delete_configs.setProperty("role", "destructive")
+        self.btn_delete_configs.setProperty("role", "danger")
         self._control(self.btn_delete_configs)
         self.btn_delete_configs.clicked.connect(self._delete_batch_configs)
         batch_layout.addWidget(self.btn_delete_configs)
@@ -349,7 +348,7 @@ class ChannelConfigManagerDialog(QDialog):
         head_layout.addWidget(self.btn_copy)
         self.btn_delete_config = QPushButton("删除配置", head)
         self.btn_delete_config.setObjectName("channelConfigHtmlDeleteConfig")
-        self.btn_delete_config.setProperty("role", "destructive")
+        self.btn_delete_config.setProperty("role", "danger")
         self._control(self.btn_delete_config)
         self.btn_delete_config.clicked.connect(self._delete_active_config)
         head_layout.addWidget(self.btn_delete_config)
@@ -384,11 +383,8 @@ class ChannelConfigManagerDialog(QDialog):
         tools_layout = QHBoxLayout(tools)
         tools_layout.setContentsMargins(20, 12, 20, 12)
         tools_layout.setSpacing(8)
-        self.channel_search = QLineEdit(tools)
+        self.channel_search = SearchField("搜索通道…", tools)
         self.channel_search.setObjectName("channelConfigHtmlChannelSearch")
-        self.channel_search.setPlaceholderText("搜索此配置中的通道")
-        self.channel_search.setClearButtonEnabled(True)
-        self.channel_search.setFixedHeight(self.CONTROL_HEIGHT)
         self.channel_search.setMaximumWidth(280)
         self.channel_search.textChanged.connect(self._rebuild_channel_rows)
         tools_layout.addWidget(self.channel_search)
@@ -402,7 +398,7 @@ class ChannelConfigManagerDialog(QDialog):
         tools_layout.addWidget(self.btn_clear_channels)
         self.btn_remove_channels = QPushButton("移除所选", tools)
         self.btn_remove_channels.setObjectName("channelConfigHtmlRemoveChannels")
-        self.btn_remove_channels.setProperty("role", "destructive")
+        self.btn_remove_channels.setProperty("role", "danger")
         self._control(self.btn_remove_channels)
         self.btn_remove_channels.clicked.connect(self._remove_selected_channels)
         tools_layout.addWidget(self.btn_remove_channels)
@@ -1248,7 +1244,7 @@ class ChannelConfigManagerDialog(QDialog):
         actions.addStretch(1)
         keep = QPushButton("继续编辑", dialog)
         discard = QPushButton("放弃修改", dialog)
-        discard.setProperty("role", "destructive")
+        discard.setProperty("role", "danger")
         self._control(keep)
         self._control(discard)
         actions.addWidget(keep)

@@ -6,6 +6,7 @@ from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.main_window import window as window_mod
 from mf4_analyzer.ui.main_window.window import TimePlotBuildResult
 from mf4_analyzer.ui.plot_risk import PlotRisk, PlotRiskLevel
+from mf4_analyzer.ui_kit import load_stylesheet
 
 
 def _risk(level, *, filter_enabled=False):
@@ -228,9 +229,7 @@ def test_status_bar_risk_progress_and_help_controls_do_not_overlap_under_qss(
     old_sheet = qapp.styleSheet()
     try:
         qapp.setStyle("Fusion")
-        qapp.setStyleSheet(
-            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-        )
+        load_stylesheet(qapp)
         w = MainWindow()
         qtbot.addWidget(w)
         w.resize(1100, 640)

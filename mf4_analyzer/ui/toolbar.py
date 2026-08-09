@@ -1,5 +1,5 @@
 """Top three-segment toolbar: file actions · mode switcher · canvas actions."""
-from PyQt5.QtCore import QSize, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
@@ -16,6 +16,18 @@ def _make_sep(parent):
     sep.setFixedWidth(1)
     sep.setStyleSheet("background: #eef2f7; border: none;")
     return sep
+
+
+def _make_mode_zone_divider(parent):
+    """Return one symmetrical boundary marker for the analysis-mode zone."""
+    divider = QFrame(parent)
+    divider.setObjectName("modeZoneDivider")
+    divider.setFixedSize(8, 16)
+    tick = QFrame(divider)
+    tick.setObjectName("modeZoneDividerTick")
+    tick.setFixedSize(3, 8)
+    tick.move(2, 4)
+    return divider
 
 
 class _LogoLabel(QLabel):
@@ -163,7 +175,10 @@ class Toolbar(QWidget):
         left_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         left_widget.setObjectName("toolbarLeftGroup")
 
-        # center layout inside a framed segment widget
+        # Center modes live in a self-contained zone.  Its equal inner layout
+        # gaps keep both boundary markers at the same perceived distance from
+        # the first/last mode button; the whole zone is then centered by the
+        # balanced outer side hosts below.
         center = QHBoxLayout()
         center.setContentsMargins(0, 0, 0, 0)
         center.setSpacing(0)
@@ -172,15 +187,33 @@ class Toolbar(QWidget):
         segment_frame.setLayout(center)
         self._mode_group = QButtonGroup(self)
         self._mode_group.setExclusive(True)
+        self._mode_active_dots = {}
         for key, b in [('time', self.btn_mode_time),
                        ('fft', self.btn_mode_fft),
                        ('fft_time', self.btn_mode_fft_time),
-                       ('frf', self.btn_mode_frf),
-                       ('order', self.btn_mode_order)]:
+                       ('order', self.btn_mode_order),
+                       ('frf', self.btn_mode_frf)]:
             b.setCheckable(True)
             b.setProperty("segment", key)
             self._mode_group.addButton(b)
             center.addWidget(b, 0, Qt.AlignVCenter)
+            dot = QFrame(b)
+            dot.setObjectName("modeActiveDot")
+            dot.setFixedSize(6, 6)
+            dot.hide()
+            self._mode_active_dots[key] = dot
+
+        mode_zone = QFrame(self)
+        mode_zone.setObjectName("toolbarModeZone")
+        mode_zone.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        mode_zone_layout = QHBoxLayout(mode_zone)
+        mode_zone_layout.setContentsMargins(6, 0, 6, 0)
+        mode_zone_layout.setSpacing(12)
+        left_mode_divider = _make_mode_zone_divider(mode_zone)
+        right_mode_divider = _make_mode_zone_divider(mode_zone)
+        mode_zone_layout.addWidget(left_mode_divider, 0, Qt.AlignVCenter)
+        mode_zone_layout.addWidget(segment_frame, 0, Qt.AlignVCenter)
+        mode_zone_layout.addWidget(right_mode_divider, 0, Qt.AlignVCenter)
 
         # ── right layout ────────────────────────────────────────────────────
         right = QHBoxLayout()
@@ -211,7 +244,7 @@ class Toolbar(QWidget):
         lay.addWidget(_make_sep(self))
         lay.addWidget(left_widget)
         lay.addStretch(1)
-        lay.addWidget(segment_frame)
+        lay.addWidget(mode_zone)
         lay.addStretch(1)
         lay.addWidget(right_widget)
         lay.addWidget(_make_sep(self))
@@ -223,15 +256,35 @@ class Toolbar(QWidget):
         # Keep mirror width in sync with left_widget after layout is settled.
         self._left_widget = left_widget
         self._right_widget = right_widget
+        self._left_layout = left
+        self._right_layout = right
+        self._mode_zone = mode_zone
+        self._mode_segment = segment_frame
+        self._mode_zone_dividers = (left_mode_divider, right_mode_divider)
+        self._pending_mirror_sync = False
+        self._left_widget.installEventFilter(self)
+        self._right_widget.installEventFilter(self)
         self._wire()
+        self._sync_mode_active_dots()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._sync_mirror()
+        self._sync_mode_active_dots()
 
     def showEvent(self, event):
         super().showEvent(event)
         self._sync_mirror()
+        self._sync_mode_active_dots()
+
+    def eventFilter(self, watched, event):
+        if watched in (self._left_widget, self._right_widget) and event.type() in (
+            QEvent.ChildAdded,
+            QEvent.ChildRemoved,
+            QEvent.LayoutRequest,
+        ):
+            self._schedule_mirror_sync()
+        return super().eventFilter(watched, event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -243,9 +296,41 @@ class Toolbar(QWidget):
         super().paintEvent(event)
 
     def _sync_mirror(self):
-        """Keep the right-side control host the same width as left_widget."""
-        w = self._left_widget.sizeHint().width()
-        self._right_widget.setFixedWidth(max(w, 1))
+        """Balance both side hosts so the analysis mode zone stays centered."""
+        w = max(
+            self._left_layout.sizeHint().width(),
+            self._right_layout.sizeHint().width(),
+            1,
+        )
+        # Fix both hosts to the same content-aware width.  Mirroring only the
+        # right side works while left content grows, but would shift the zone
+        # when a future top-level action is added on the right.
+        if self._left_widget.width() != w:
+            self._left_widget.setFixedWidth(w)
+        if self._right_widget.width() != w:
+            self._right_widget.setFixedWidth(w)
+
+    def _schedule_mirror_sync(self):
+        if self._pending_mirror_sync:
+            return
+        self._pending_mirror_sync = True
+        QTimer.singleShot(0, self._run_scheduled_mirror_sync)
+
+    def _run_scheduled_mirror_sync(self):
+        self._pending_mirror_sync = False
+        self._sync_mirror()
+
+    def _sync_mode_active_dots(self):
+        for key, button in (
+            ("time", self.btn_mode_time),
+            ("fft", self.btn_mode_fft),
+            ("fft_time", self.btn_mode_fft_time),
+            ("order", self.btn_mode_order),
+            ("frf", self.btn_mode_frf),
+        ):
+            dot = self._mode_active_dots[key]
+            dot.move(max(0, button.width() - dot.width() - 5), 4)
+            dot.setVisible(button.isChecked())
 
     def _wire(self):
         self.btn_add.clicked.connect(self.open_requested)
@@ -257,8 +342,8 @@ class Toolbar(QWidget):
         for key, b in [('time', self.btn_mode_time),
                        ('fft', self.btn_mode_fft),
                        ('fft_time', self.btn_mode_fft_time),
-                       ('frf', self.btn_mode_frf),
-                       ('order', self.btn_mode_order)]:
+                       ('order', self.btn_mode_order),
+                       ('frf', self.btn_mode_frf)]:
             b.clicked.connect(lambda _=False, k=key: self._set_mode(k))
         self.btn_toggle_nav.clicked.connect(self.nav_panel_toggled)
         self.btn_toggle_inspector.clicked.connect(self.inspector_panel_toggled)
@@ -277,6 +362,7 @@ class Toolbar(QWidget):
         }
         if mode in mapping:
             mapping[mode].setChecked(True)
+        self._sync_mode_active_dots()
         self.mode_changed.emit(mode)
 
     def set_enabled_for_mode(self, mode, has_file):
