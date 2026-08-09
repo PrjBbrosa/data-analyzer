@@ -36,6 +36,120 @@ from ._helpers import (
 from .presets import PresetBar
 
 
+_FACTS_PLACEHOLDER = "尚无计算结果；点击『计算频响』后在此显示实际参数。"
+_FACTS_STALE_PREFIX = "（已过期）参数已改动，以下为上一次计算的结果"
+
+
+_FRF_TOOLTIPS = {
+    "input": "系统激励输入 x(t)。输入与输出必须来自同一逻辑来源，并共享真实时间轴。",
+    "output": "系统响应输出 y(t)。FRF 表示输出相对输入的传递特性。",
+    "swap": "交换系统激励输入 x(t) 与响应输出 y(t)；会改变 H(f) 的传递方向。",
+    "range": "全范围使用全部数据；“当前时域范围”在选择时冻结为快照；手动范围按秒指定。",
+    "window": "窗函数控制频谱泄漏与主瓣宽度；它不改变数据本身的物理频率分辨率。",
+    "periodic": "使用 FFT 周期窗语义，避免重复对称窗端点；不表示原始信号必须周期。",
+    "segment": "段越长，频率分辨率越细；同一时长内可用于平均的完整段数通常越少。",
+    "overlap": "提高相邻段重叠会增加分段密度和计算量，不等于增加同等数量的独立信息。",
+    "nfft_mode": "自动按段长选择 NFFT；手动 NFFT 不得小于段长。",
+    "nfft": "零填充只加密频率采样点，不提高由段长决定的物理频率分辨率。",
+    "detrend": "每段减去均值以抑制 DC 泄漏；这不是线性去趋势。",
+    "magnitude": "dB 显示传递比的 20 log10(|H|)；线性显示传递比本身，不使用绝对 dB reference。",
+    "frequency": "对数轴只在显示层隐藏 DC；不会删除原始 FRF 结果或导出数据。",
+    "phase_unwrapped": "展开只移除 ±360° 跳变；真实系统延迟仍完整保留在相位斜率中。",
+    "phase_wrapped": "将相位限制在 ±180°；真实系统延迟仍完整保留，未做任何补偿。",
+    "delay": "纯延迟会形成随频率下降的线性相位项。相位展开只处理 360° 跳变，不移除该延迟。",
+    "coherence": "低于此值只会触发可信度提示/淡化；不会删除数据或改变 FRF 计算。",
+    "fade": "仅淡化低相干点的显示，不删除数据，也不会重新计算频响。",
+    "compute": "按当前 pane 的输入、输出、时间范围和参数计算频响；不足两个完整段时会阻断。",
+    "view_time": "在时域中复用或新建包含该输入、输出和分析范围的独立 View。",
+}
+
+_ESTIMATOR_ITEMS = (
+    ("H1（输出噪声）", "h1", "H1 = Pxy / Pxx。适合输出侧测量噪声占主导的常见测量；默认。"),
+    ("H2（输入噪声）", "h2", "H2 = Pyy / conj(Pxy)。适合输入侧测量噪声占主导；需明确选择。"),
+)
+
+_WINDOW_ITEM_TOOLTIPS = {
+    "hanning": "Hanning：通用平衡，适合大多数 FRF 测量。",
+    "hamming": "Hamming：较低旁瓣，主瓣略宽。",
+    "blackman": "Blackman：更强旁瓣抑制，主瓣更宽。",
+    "bartlett": "Bartlett：三角窗，简单的泄漏抑制。",
+    "kaiser": "Kaiser（β=14）：强旁瓣抑制，主瓣较宽。",
+    "flattop": "Flattop：幅值读数更准确，主瓣最宽。",
+}
+
+
+def _install_combo_tooltips(combo: QComboBox, item_tooltips) -> None:
+    """Set popup-item tips and keep the collapsed combo's tip in sync."""
+    for index, text in enumerate(item_tooltips):
+        combo.setItemData(index, text, Qt.ToolTipRole)
+
+    def sync(index: int) -> None:
+        combo.setToolTip(item_tooltips[index] if 0 <= index < len(item_tooltips) else "")
+
+    combo.currentIndexChanged.connect(sync)
+    sync(combo.currentIndex())
+
+
+def _fact(facts, name):
+    """Read one field off ``FrfEffectiveFacts`` or an equivalent mapping."""
+    if isinstance(facts, Mapping):
+        return facts.get(name)
+    return getattr(facts, name, None)
+
+
+def _fact_number(facts, name, spec):
+    value = _fact(facts, name)
+    if value is None:
+        return None
+    try:
+        return format(float(value), spec)
+    except (TypeError, ValueError):
+        return None
+
+
+def format_effective_facts(facts) -> list[str]:
+    """Render the resident "有效事实" rows for one completed FRF run.
+
+    Pure, UI-free formatting so the MainWindow adapter can hand over the raw
+    :class:`~mf4_analyzer.signal.frf.FrfEffectiveFacts` (or any mapping with
+    the same field names) without knowing how it is presented.  Fields that a
+    caller cannot supply are dropped rather than printed as ``None``.
+    """
+    rows: list[tuple[str, str]] = []
+    fs_text = _fact_number(facts, "fs", "g")
+    if fs_text is not None:
+        rows.append(("实际 Fs", f"{fs_text} Hz"))
+    df_text = _fact_number(facts, "df", "g")
+    if df_text is not None:
+        rows.append(("频率分辨率 df", f"{df_text} Hz"))
+    segments = _fact(facts, "segments")
+    if segments is not None:
+        rows.append(("完整段数", f"{int(segments)}"))
+    start = _fact_number(facts, "time_start", "g")
+    end = _fact_number(facts, "time_end", "g")
+    if start is not None and end is not None:
+        rows.append(("有效时间范围", f"{start} – {end} s"))
+    jitter_text = _fact_number(facts, "max_time_jitter", ".3g")
+    if jitter_text is not None:
+        # The numeric core reports jitter relative to the nominal sample step,
+        # so the row must not read as seconds.
+        rows.append(("最大时间抖动", f"{jitter_text}（相对 dt）"))
+    invalid_bins = _fact(facts, "invalid_bins")
+    if invalid_bins is not None:
+        rows.append(("无效频点", f"{int(invalid_bins)} 个"))
+    return [f"{label}：{value}" for label, value in rows]
+
+
+def normalize_effective_warnings(warnings) -> list[str]:
+    """De-duplicate warning lines, keeping first-appearance order."""
+    seen: list[str] = []
+    for raw in warnings or ():
+        text = str(raw).strip()
+        if text and text not in seen:
+            seen.append(text)
+    return seen
+
+
 class FrfContextual(QWidget):
     """Directional input/output mapping plus compute and display controls."""
 
@@ -265,7 +379,41 @@ class FrfContextual(QWidget):
         display_form.addRow("低相干区淡化:", self.btn_fade_low_coherence)
         display_layout.addLayout(display_form)
         root.addWidget(display_card)
+
+        # Resident measured facts (spec §5.3/§13). The status bar message is
+        # transient, so the numbers a reading depends on — and every warning
+        # the numeric core produced — must also live somewhere permanent.
+        facts_card = QFrame(self)
+        facts_card.setObjectName("frfFactsCard")
+        facts_layout = QVBoxLayout(facts_card)
+        facts_layout.setContentsMargins(11, 8, 11, 10)
+        facts_layout.setSpacing(6)
+        facts_layout.addWidget(_make_group_header("有效事实", parent=facts_card))
+        self.lbl_facts_placeholder = QLabel(_FACTS_PLACEHOLDER, facts_card)
+        self.lbl_facts_placeholder.setObjectName("frfFactsPlaceholder")
+        self.lbl_facts_placeholder.setWordWrap(True)
+        facts_layout.addWidget(self.lbl_facts_placeholder)
+        self.lbl_effective_facts = QLabel("", facts_card)
+        self.lbl_effective_facts.setObjectName("frfEffectiveFacts")
+        self.lbl_effective_facts.setWordWrap(True)
+        self.lbl_effective_facts.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        self.lbl_effective_facts.hide()
+        facts_layout.addWidget(self.lbl_effective_facts)
+        self.lbl_effective_warnings = QLabel("", facts_card)
+        self.lbl_effective_warnings.setObjectName("frfEffectiveWarnings")
+        self.lbl_effective_warnings.setWordWrap(True)
+        self.lbl_effective_warnings.setProperty("factsRole", "warning")
+        self.lbl_effective_warnings.hide()
+        facts_layout.addWidget(self.lbl_effective_warnings)
+        root.addWidget(facts_card)
         root.addStretch(1)
+
+        self._effective_facts_rows = []
+        self._effective_warnings = []
+        self._effective_facts_stale = False
+        self._refresh_effective_facts()
 
         _enforce_label_widths(self, unify_columns=True)
         self._wire()
@@ -557,6 +705,74 @@ class FrfContextual(QWidget):
             and not candidate_scope_message
         )
 
+    # -- resident effective facts ---------------------------------------
+
+    def set_effective_facts(self, facts, warnings=()) -> None:
+        """Publish one completed run's measured facts and its warnings.
+
+        ``facts`` is the raw :class:`FrfEffectiveFacts` (or an equivalent
+        mapping) so the MainWindow adapter only moves data; every formatting
+        decision stays here.  Publishing always clears any stale marking —
+        these numbers describe the result now on screen.
+        """
+        self._effective_facts_rows = format_effective_facts(facts)
+        self._effective_warnings = normalize_effective_warnings(warnings)
+        self._effective_facts_stale = False
+        self._refresh_effective_facts()
+
+    def clear_effective_facts(self) -> None:
+        self._effective_facts_rows = []
+        self._effective_warnings = []
+        self._effective_facts_stale = False
+        self._refresh_effective_facts()
+
+    def mark_effective_facts_stale(self) -> None:
+        """Age the shown facts without dropping them.
+
+        Compute parameters changed but nothing was recomputed: the previous
+        numbers are still the user's only reference, so they stay readable and
+        are only labelled and dimmed.  An empty card has nothing to age.
+        """
+        if not self._effective_facts_rows and not self._effective_warnings:
+            return
+        if self._effective_facts_stale:
+            return
+        self._effective_facts_stale = True
+        self._refresh_effective_facts()
+
+    def effective_facts_text(self) -> str:
+        return self.lbl_effective_facts.text()
+
+    def effective_warnings_text(self) -> str:
+        return self.lbl_effective_warnings.text()
+
+    def effective_facts_is_stale(self) -> bool:
+        return bool(self._effective_facts_stale)
+
+    def _refresh_effective_facts(self) -> None:
+        rows = list(self._effective_facts_rows)
+        if rows and self._effective_facts_stale:
+            rows.insert(0, _FACTS_STALE_PREFIX)
+        has_content = bool(rows or self._effective_warnings)
+        self.lbl_effective_facts.setText("\n".join(rows))
+        self.lbl_effective_facts.setVisible(bool(rows))
+        self.lbl_effective_warnings.setText(
+            "\n".join(f"• {line}" for line in self._effective_warnings)
+        )
+        self.lbl_effective_warnings.setVisible(bool(self._effective_warnings))
+        self.lbl_facts_placeholder.setVisible(not has_content)
+        state = "stale" if self._effective_facts_stale else "fresh"
+        for widget in (
+            self.lbl_effective_facts,
+            self.lbl_effective_warnings,
+            self.lbl_facts_placeholder,
+        ):
+            if widget.property("factsState") == state:
+                continue
+            widget.setProperty("factsState", state)
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+
     def compute_params(self) -> dict:
         nfft_mode = str(self.combo_nfft_mode.currentData())
         return {
@@ -709,4 +925,8 @@ class FrfContextual(QWidget):
             self.compute_params_changed.emit(self.compute_params())
 
 
-__all__ = ["FrfContextual"]
+__all__ = [
+    "FrfContextual",
+    "format_effective_facts",
+    "normalize_effective_warnings",
+]

@@ -58,6 +58,50 @@ class FrfMixin:
             ctx.combo_output.blockSignals(old_output)
             ctx.combo_input.blockSignals(old_input)
         ctx._refresh_validation()
+        # This is the single echo point the analysis mixin drives on BOTH a
+        # focused-pane change and a View switch, so the resident facts follow
+        # the pair they describe without a second notification path.
+        self._sync_frf_effective_facts(state)
+
+    def _frf_focused_pane_index(self, state):
+        """Focused pane index while ``state`` is the one on screen, else None."""
+        manager = self.analysis_managers["frf"]
+        if manager.get(manager.active) is not state:
+            return None
+        page = self._analysis_page("frf")
+        idx = page.focused_index()
+        if not (0 <= idx < min(page.pane_count(), len(state.panes))):
+            return None
+        return idx
+
+    def _frf_cached_result_for_pane(self, state, pane):
+        key = self._frf_cache_key_for_pane(state, pane)
+        if key is None:
+            return None
+        return self.analysis_caches["frf"].get(key)
+
+    def _publish_frf_effective_facts(self, result):
+        self.inspector.frf_ctx.set_effective_facts(
+            result.effective, getattr(result, "warnings", ()) or ()
+        )
+
+    def _sync_frf_effective_facts(self, state):
+        """Re-fill the Inspector facts card from the focused pane's result.
+
+        The completed-result cache is the same source the canvases render
+        from, so the facts card can never disagree with the curve beside it,
+        and no derived copy has to be parked on PaneState to make the focus
+        follow work.
+        """
+        idx = self._frf_focused_pane_index(state)
+        result = (
+            None if idx is None
+            else self._frf_cached_result_for_pane(state, state.panes[idx])
+        )
+        if result is None:
+            self.inspector.frf_ctx.clear_effective_facts()
+            return
+        self._publish_frf_effective_facts(result)
 
     def _capture_frf_canvas_ranges(self, state):
         page = self._analysis_page("frf")
@@ -131,6 +175,10 @@ class FrfMixin:
             state.panes[idx].effective_time_range = None
         self._frf_coordinator.invalidate_pane(state.view_id, idx)
         self._mark_frf_pane_stale(state, idx)
+        if idx == self._frf_focused_pane_index(state):
+            # The canvas went stale; the numbers describing it must say so too
+            # instead of silently reading as current.
+            self.inspector.frf_ctx.mark_effective_facts_stale()
 
     def _on_frf_pair_changed(self, input_source, output_source):
         if self._applying_analysis_view:
@@ -633,6 +681,9 @@ class FrfMixin:
         self._restore_frf_canvas_ranges(canvas, pane)
         if pane_idx == page.focused_index():
             self.inspector.frf_ctx.set_validation_message("")
+            # Both the worker completion and the synchronous cache hit land
+            # here, so the resident facts are filled exactly once per render.
+            self._publish_frf_effective_facts(result)
         suffix = "（缓存）" if cache_hit else ""
         self.statusBar.showMessage(
             f"频响完成{suffix} · {result.effective.segments} 段 · "
@@ -695,6 +746,7 @@ class FrfMixin:
                 context=self._frf_render_context_for_pane(pane),
             )
             self._restore_frf_canvas_ranges(canvas, pane)
+        self._sync_frf_effective_facts(state)
         if missing:
             self.statusBar.showMessage("参数/输入输出已就绪，点击计算频响")
 

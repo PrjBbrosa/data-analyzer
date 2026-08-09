@@ -39,7 +39,9 @@ def test_frf_contextual_keeps_composite_pair_and_blocks_same_channel(qtbot):
     assert ctx.output_source() == ("fid-b", "speed")
     assert ctx.btn_compute.isEnabled()
     assert ctx.findChild(QLabel, "frfSourceDescription") is None
-    assert ctx.findChild(QLabel, "frfEffectiveFacts") is None
+    # The effective-facts card exists from construction (spec §5.3/§13 wants it
+    # resident) but stays empty until a run completes.
+    assert ctx.findChild(QLabel, "frfEffectiveFacts").text() == ""
 
     ctx.btn_swap.click()
     assert ctx.input_source() == ("fid-b", "speed")
@@ -224,24 +226,26 @@ def test_frf_valid_pair_stays_computable_after_parameter_or_preset_change(qtbot)
     assert ctx.btn_compute.isEnabled()
 
 
-def test_frf_contextual_uses_three_separated_html_information_cards(qtbot):
-    """The FRF mapping, estimator and display controls must not blend together."""
+def test_frf_contextual_uses_four_separated_html_information_cards(qtbot):
+    """The FRF mapping, estimator, display and facts blocks must not blend."""
     from PyQt5.QtWidgets import QFrame, QLabel
 
     from mf4_analyzer.ui.inspector_sections import FrfContextual
 
     ctx = FrfContextual()
     qtbot.addWidget(ctx)
-    ctx.resize(320, 980)
+    ctx.resize(320, 1180)
     ctx.show()
     qtbot.wait(20)
 
     signal = ctx.findChild(QFrame, "frfSignalCard")
     params = ctx.findChild(QFrame, "frfParamsCard")
     display = ctx.findChild(QFrame, "frfDisplayCard")
-    assert all((signal, params, display))
+    facts = ctx.findChild(QFrame, "frfFactsCard")
+    assert all((signal, params, display, facts))
     assert signal.y() + signal.height() <= params.y() - 8
     assert params.y() + params.height() <= display.y() - 8
+    assert display.y() + display.height() <= facts.y() - 8
     assert ctx.findChild(QLabel, "frfContextTitle").text() == "系统辨识 · 频响（FRF）"
     assert ctx.findChild(QLabel, "frfSisoBadge").text() == "SISO"
     assert ctx.findChild(QLabel, "frfFlowBlock").text() == "被辨识系统  H(f)"
@@ -270,6 +274,151 @@ def test_frf_contextual_visible_choice_rows_keep_preset_state_api(qtbot):
     ctx.apply_params({"frequency_scale": "log", "phase_mode": "unwrapped"})
     assert ctx.btn_frequency_log.isChecked()
     assert ctx.btn_phase_unwrapped.isChecked()
+
+
+def _frf_effective_facts(**overrides):
+    from mf4_analyzer.signal.frf import FrfEffectiveFacts
+
+    values = dict(
+        requested_t_win_s=0.5,
+        requested_nperseg=500,
+        nperseg=500,
+        nfft=512,
+        noverlap=250,
+        hop=250,
+        segments=2,
+        fs=1000.0,
+        df=1.953125,
+        n_samples=2000,
+        time_start=0.0,
+        time_end=1.999,
+        window="hanning",
+        periodic_window=True,
+        detrend="constant",
+        max_time_jitter=1.25e-06,
+        max_time_difference=0.0,
+        invalid_bins=3,
+    )
+    values.update(overrides)
+    return FrfEffectiveFacts(**values)
+
+
+def test_frf_facts_card_lists_every_required_effective_fact(qtbot):
+    """spec §5.3/§13: the measured run facts stay resident, not toast-only."""
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    placeholder = ctx.findChild(QLabel, "frfFactsPlaceholder")
+    assert placeholder is not None and placeholder.text()
+
+    ctx.set_effective_facts(_frf_effective_facts(), ())
+
+    text = ctx.effective_facts_text()
+    assert "1000 Hz" in text            # 实际 Fs
+    assert "1.95312 Hz" in text         # 频率分辨率 df
+    assert "2" in text                  # 完整段数
+    assert "0 – 1.999 s" in text        # 有效时间范围
+    assert "1.25e-06" in text           # 最大时间抖动
+    assert "3" in text                  # invalid bins
+    for label in ("实际 Fs", "频率分辨率", "完整段数", "有效时间范围",
+                  "最大时间抖动", "无效频点"):
+        assert label in text
+    assert ctx.lbl_effective_facts.isVisibleTo(ctx)
+    assert not placeholder.isVisibleTo(ctx)
+
+
+def test_frf_facts_card_shows_result_warnings_with_the_warning_style(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+
+    ctx.set_effective_facts(
+        _frf_effective_facts(),
+        (
+            "statistical stability is low: only 2 complete segments",
+            "3 frequency bins are invalid due to near-zero excitation",
+            "statistical stability is low: only 2 complete segments",
+        ),
+    )
+
+    warnings_text = ctx.effective_warnings_text()
+    assert "only 2 complete segments" in warnings_text
+    assert "near-zero excitation" in warnings_text
+    # Duplicates collapse; order of first appearance is kept.
+    assert warnings_text.count("only 2 complete segments") == 1
+    assert ctx.lbl_effective_warnings.isVisibleTo(ctx)
+    assert ctx.lbl_effective_warnings.objectName() == "frfEffectiveWarnings"
+    assert ctx.lbl_effective_warnings.property("factsRole") == "warning"
+
+    ctx.set_effective_facts(_frf_effective_facts(), ())
+    assert ctx.effective_warnings_text() == ""
+    assert not ctx.lbl_effective_warnings.isVisibleTo(ctx)
+
+
+def test_frf_facts_card_clear_empties_facts_and_warnings(qtbot):
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    ctx.set_effective_facts(_frf_effective_facts(), ("some warning",))
+
+    ctx.clear_effective_facts()
+
+    assert ctx.effective_facts_text() == ""
+    assert ctx.effective_warnings_text() == ""
+    assert not ctx.effective_facts_is_stale()
+    assert not ctx.lbl_effective_facts.isVisibleTo(ctx)
+    assert not ctx.lbl_effective_warnings.isVisibleTo(ctx)
+    assert ctx.findChild(QLabel, "frfFactsPlaceholder").isVisibleTo(ctx)
+
+
+def test_frf_facts_card_stale_mark_keeps_the_previous_numbers_readable(qtbot):
+    """Params changed but nothing recomputed: age the facts, never drop them."""
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    ctx.set_effective_facts(
+        _frf_effective_facts(),
+        ("statistical stability is low: only 2 complete segments",),
+    )
+
+    ctx.mark_effective_facts_stale()
+
+    text = ctx.effective_facts_text()
+    assert "（已过期）" in text
+    assert "完整段数" in text and "1.95312 Hz" in text
+    assert "only 2 complete segments" in ctx.effective_warnings_text()
+    assert ctx.effective_facts_is_stale()
+    # The whole block ages together — a stale warning must not keep shouting
+    # in live amber next to dimmed numbers.
+    assert ctx.lbl_effective_facts.property("factsState") == "stale"
+    assert ctx.lbl_effective_warnings.property("factsState") == "stale"
+
+    # A fresh completion clears the stale marking again.
+    ctx.set_effective_facts(_frf_effective_facts(segments=8), ())
+    assert "（已过期）" not in ctx.effective_facts_text()
+    assert not ctx.effective_facts_is_stale()
+    assert ctx.lbl_effective_facts.property("factsState") == "fresh"
+    assert ctx.lbl_effective_warnings.property("factsState") == "fresh"
+
+
+def test_frf_facts_card_stale_mark_on_an_empty_card_stays_empty(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+
+    ctx.mark_effective_facts_stale()
+
+    assert ctx.effective_facts_text() == ""
+    assert not ctx.effective_facts_is_stale()
 
 
 

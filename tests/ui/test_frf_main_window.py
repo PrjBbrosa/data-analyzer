@@ -42,7 +42,7 @@ def _window_with_pair(qtbot, *, n=2000, fs=1000.0):
     return win, fid, state, time
 
 
-def _result(time, fs):
+def _result(time, fs, *, segments=6, warnings=()):
     frequency = np.array([0.0, 10.0, 20.0])
     facts = FrfEffectiveFacts(
         requested_t_win_s=0.5,
@@ -51,7 +51,7 @@ def _result(time, fs):
         nfft=500,
         noverlap=250,
         hop=250,
-        segments=6,
+        segments=segments,
         fs=fs,
         df=2.0,
         n_samples=len(time),
@@ -72,7 +72,21 @@ def _result(time, fs):
         pxy=np.ones(3, dtype=complex),
         coherence=np.ones(3),
         effective=facts,
+        warnings=tuple(warnings),
     )
+
+
+def _seed_frf_cache(win, state, pane_idx, result):
+    """Put ``result`` where a completed run for this pane would have left it."""
+    pane = state.panes[pane_idx]
+    pane.effective_time_range = (
+        float(result.effective.time_start),
+        float(result.effective.time_end),
+    )
+    key = win._frf_cache_key_for_pane(state, pane)
+    assert key is not None
+    win.analysis_caches["frf"].put(key, result)
+    return key
 
 
 def test_main_window_builds_directional_frf_cache_and_coordinator(qtbot):
@@ -840,3 +854,125 @@ def test_project_restore_preserves_explicit_manual_time_axis(
     new_fid = next(iter(restored.files))
     assert restored.files[new_fid]._time_source == "manual"
     assert restored.files[new_fid].fs == pytest.approx(2000.0)
+
+
+def test_frf_completion_publishes_resident_effective_facts_and_warnings(qtbot):
+    """spec §5.3/§13: a real low-segment run must leave a resident warning."""
+    from mf4_analyzer.signal.frf import FrfParams, compute_frf
+
+    win, fid, state, time = _window_with_pair(qtbot)
+    win.toolbar._set_mode("frf")
+    ctx = win.inspector.frf_ctx
+    # 2000 samples @ 1 kHz with 1 s segments and no overlap = exactly 2 segments.
+    ctx.apply_params({"t_win_s": 1.0, "overlap": 0.0}, emit_changes=True)
+    frame = win.files[fid].data
+    result = compute_frf(
+        frame["input"].to_numpy(),
+        frame["output"].to_numpy(),
+        fs=1000.0,
+        params=FrfParams(**ctx.compute_params()),
+        input_time=time,
+        output_time=time,
+    )
+    assert result.effective.segments == 2
+    assert any("2 complete segments" in warning for warning in result.warnings)
+    _seed_frf_cache(win, state, 0, result)
+
+    assert win.do_frf() is False  # served synchronously from the cache
+
+    facts = ctx.effective_facts_text()
+    assert "实际 Fs" in facts and "1000 Hz" in facts
+    assert "完整段数" in facts
+    assert "有效时间范围" in facts
+    assert "最大时间抖动" in facts
+    assert "无效频点" in facts
+    assert "only 2 complete segments" in ctx.effective_warnings_text()
+    assert not ctx.effective_facts_is_stale()
+
+
+def test_frf_fresh_and_cached_renders_both_fill_the_inspector_facts(qtbot):
+    win, _fid, state, time = _window_with_pair(qtbot)
+    ctx = win.inspector.frf_ctx
+
+    for cache_hit in (False, True):
+        ctx.clear_effective_facts()
+        win._on_frf_render_requested(
+            {"view_id": state.view_id, "pane_idx": 0},
+            _result(
+                time,
+                1000.0,
+                segments=2,
+                warnings=(
+                    "statistical stability is low: only 2 complete segments",
+                ),
+            ),
+            cache_hit,
+        )
+
+        assert "完整段数" in ctx.effective_facts_text()
+        assert "only 2 complete segments" in ctx.effective_warnings_text()
+
+
+def test_frf_display_only_change_leaves_the_effective_facts_untouched(qtbot):
+    win, _fid, state, time = _window_with_pair(qtbot)
+    ctx = win.inspector.frf_ctx
+    win._on_frf_render_requested(
+        {"view_id": state.view_id, "pane_idx": 0}, _result(time, 1000.0), False
+    )
+    before = ctx.effective_facts_text()
+    assert before
+
+    win._on_frf_display_params_changed({"magnitude_scale": "linear"})
+
+    assert ctx.effective_facts_text() == before
+    assert not ctx.effective_facts_is_stale()
+
+
+def test_frf_compute_param_change_marks_the_effective_facts_stale(qtbot):
+    win, _fid, state, time = _window_with_pair(qtbot)
+    ctx = win.inspector.frf_ctx
+    win._on_frf_render_requested(
+        {"view_id": state.view_id, "pane_idx": 0}, _result(time, 1000.0), False
+    )
+
+    win._on_frf_compute_params_changed({"t_win_s": 1.0})
+
+    facts = ctx.effective_facts_text()
+    assert ctx.effective_facts_is_stale()
+    assert "（已过期）" in facts
+    assert "完整段数" in facts  # the previous numbers stay readable
+
+
+def test_frf_focus_switch_follows_each_panes_effective_facts(qtbot):
+    win, fid, state, time = _window_with_pair(qtbot)
+    ctx = win.inspector.frf_ctx
+    page = win.chart_stack.page_frf
+    state.add_pane()
+    page.enter_split()
+    state.panes[1].input_source = (fid, "input")
+    state.panes[1].output_source = (fid, "output")
+    _seed_frf_cache(win, state, 0, _result(time, 1000.0))
+    win._on_frf_render_requested(
+        {"view_id": state.view_id, "pane_idx": 0}, _result(time, 1000.0), True
+    )
+    assert "完整段数" in ctx.effective_facts_text()
+
+    page.set_focused_index(1)
+    assert ctx.effective_facts_text() == ""  # pane 1 never computed
+
+    page.set_focused_index(0)
+    assert "完整段数" in ctx.effective_facts_text()
+
+
+def test_switching_to_a_frf_view_without_results_clears_the_facts_card(qtbot):
+    win, _fid, state, time = _window_with_pair(qtbot)
+    ctx = win.inspector.frf_ctx
+    win._on_frf_render_requested(
+        {"view_id": state.view_id, "pane_idx": 0}, _result(time, 1000.0), False
+    )
+    assert ctx.effective_facts_text()
+
+    manager = win.analysis_managers["frf"]
+    manager.set_active(manager.new_view())
+
+    assert ctx.effective_facts_text() == ""
