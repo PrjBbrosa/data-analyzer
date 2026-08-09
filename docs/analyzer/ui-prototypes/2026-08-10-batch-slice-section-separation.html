@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TraceLab — 切片区弱分隔方案</title>
+<style>
+  :root {
+    --ink: #172033;
+    --ink-2: #334155;
+    --muted: #64748b;
+    --quiet: #94a3b8;
+    --line: #dbe4ef;
+    --line-soft: #eef2f7;
+    --line-strong: #c8d4e3;
+    --surface: #ffffff;
+    --surface-2: #f7f9fc;
+    --surface-3: #fafbfd;
+    --blue: #1769e0;
+    --blue-2: #0f56bd;
+    --blue-soft: #eaf2ff;
+    --blue-wash: #f3f7fe;
+    --green: #0ea875;
+    --green-soft: #e9f8f2;
+    --radius: 9px;
+    --control-h: 30px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 12% 0%, rgba(255,255,255,.8), transparent 28%),
+      #e8eef5;
+    font: 13px/1.45 "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .page {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 28px 22px 48px;
+  }
+  h1 {
+    margin: 0 0 6px;
+    font-size: 22px;
+    font-weight: 760;
+    letter-spacing: -.02em;
+  }
+  .lede {
+    margin: 0 0 22px;
+    max-width: 62ch;
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+  @media (max-width: 1100px) {
+    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 720px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid #cfd9e6;
+    border-radius: 14px;
+    box-shadow: 0 10px 28px rgba(34, 50, 73, .08);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .card-head {
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--line-soft);
+    background: #fbfcfe;
+  }
+  .card-head .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+    color: var(--blue-2);
+    font-size: 11px;
+    font-weight: 750;
+    letter-spacing: .02em;
+  }
+  .card-head .tag i {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--blue);
+    box-shadow: 0 0 0 3px rgba(23,105,224,.12);
+  }
+  .card-head h2 {
+    margin: 0;
+    font-size: 14.5px;
+    font-weight: 750;
+  }
+  .card-head p {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+  .panel {
+    padding: 14px;
+    background: var(--surface);
+    flex: 1;
+  }
+  .section-title {
+    margin: 0 0 8px;
+    color: #26344a;
+    font-size: 12px;
+    font-weight: 750;
+  }
+  .params {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px 10px;
+    margin-bottom: 0;
+  }
+  .field {
+    display: grid;
+    grid-template-columns: 58px 1fr;
+    align-items: center;
+    gap: 6px;
+  }
+  .field label {
+    text-align: right;
+    color: var(--ink-2);
+    font-size: 11px;
+  }
+  .control, .seg, .input {
+    height: var(--control-h);
+    border: 1px solid var(--line-strong);
+    border-radius: 7px;
+    background: #fff;
+  }
+  .control, .input {
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    color: var(--ink-2);
+    font-size: 11.5px;
+  }
+  .seg {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    padding: 2px;
+    gap: 2px;
+    background: #f1f5f9;
+    border-color: #d7e0eb;
+  }
+  .seg span {
+    display: grid;
+    place-items: center;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 650;
+    color: var(--muted);
+  }
+  .seg span.on {
+    background: #fff;
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .08);
+  }
+  .slice-block { margin-top: 10px; }
+  .summary {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 9px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface-3);
+  }
+  .summary .title { font-size: 11px; font-weight: 750; color: #26344a; }
+  .summary .note { flex: 1; font-size: 10px; color: var(--muted); }
+  .switch {
+    width: 34px; height: 20px; border-radius: 999px;
+    background: var(--blue);
+    position: relative;
+    flex: 0 0 auto;
+  }
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 2px; right: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(15,23,42,.18);
+  }
+  .slice-form {
+    margin-top: 8px;
+    display: grid;
+    gap: 6px;
+  }
+  .hint {
+    margin-top: 6px;
+    color: var(--quiet);
+    font-size: 10.5px;
+  }
+  .verdict {
+    margin-top: auto;
+    padding: 10px 14px 12px;
+    border-top: 1px solid var(--line-soft);
+    background: #fbfcfe;
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+  .verdict strong { color: var(--ink-2); font-weight: 700; }
+
+  /* ——— Option treatments ——— */
+
+  /* A: status quo — nothing extra */
+  .opt-a .slice-block { margin-top: 10px; }
+
+  /* B: soft hairline + breath */
+  .opt-b .divider {
+    height: 1px;
+    margin: 14px 0 12px;
+    background: var(--line-soft);
+  }
+
+  /* C: eyebrow caption */
+  .opt-c .eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 14px 0 8px;
+    color: var(--quiet);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+  .opt-c .eyebrow::before,
+  .opt-c .eyebrow::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background: var(--line-soft);
+  }
+
+  /* D: tinted nest card */
+  .opt-d .slice-nest {
+    margin-top: 12px;
+    padding: 10px;
+    border: 1px solid #dde7f4;
+    border-radius: 10px;
+    background: linear-gradient(180deg, var(--blue-wash), #f7faff);
+  }
+  .opt-d .slice-nest .summary {
+    background: rgba(255,255,255,.82);
+    border-color: #d5e2f3;
+  }
+
+  /* E: left accent rail */
+  .opt-e .slice-rail {
+    margin-top: 12px;
+    padding-left: 10px;
+    border-left: 2px solid rgba(23, 105, 224, .45);
+  }
+
+  /* F: optional badge on summary */
+  .opt-f .slice-block { margin-top: 12px; }
+  .opt-f .summary {
+    background: #f6f9fd;
+    border-color: #d5e1f0;
+  }
+  .opt-f .badge {
+    display: inline-flex;
+    align-items: center;
+    height: 16px;
+    padding: 0 6px;
+    margin-right: 2px;
+    border-radius: 999px;
+    background: var(--blue-soft);
+    color: var(--blue-2);
+    font-size: 9.5px;
+    font-weight: 750;
+  }
+
+  .anti {
+    opacity: .55;
+    filter: grayscale(.15);
+  }
+  .anti .card-head .tag { color: #9aa8ba; }
+  .anti .card-head .tag i { background: #94a3b8; box-shadow: none; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <h1>切片区 · 弱分隔方案</h1>
+    <p class="lede">
+      目标：让「切片」读起来是分析区里的<strong>可选导出增强</strong>，与上方 FFT 参数有层级差，
+      但不出现黑线/硬分割。色板对齐现有批处理（hairline <code>#eef2f7</code>、摘要条
+      <code>BatchFilterSummary</code>）。
+    </p>
+
+    <div class="grid">
+      <!-- A -->
+      <article class="card opt-a">
+        <div class="card-head">
+          <div class="tag"><i></i>A · 现状</div>
+          <h2>仅靠间距</h2>
+          <p>参数区与切片摘要直接相邻，层级靠标题字重。</p>
+        </div>
+        <div class="panel">
+          <div class="section-title">FFT vs Time 参数</div>
+          <div class="params">
+            <div class="field"><label>窗函数</label><div class="control">hanning</div></div>
+            <div class="field"><label>NFFT 模式</label><div class="seg"><span class="on">Auto</span><span>Fixed</span></div></div>
+            <div class="field"><label>窗长</label><div class="control">1.5 s</div></div>
+            <div class="field"><label>重叠率</label><div class="control">0.5</div></div>
+          </div>
+          <div class="slice-block">
+            <div class="summary">
+              <span class="title">切片</span>
+              <span class="note">固定时间 · 0 处</span>
+              <span class="switch" aria-hidden="true"></span>
+            </div>
+            <div class="slice-form">
+              <div class="field"><label>切片维度</label><div class="seg"><span class="on">固定时间</span><span>固定频率</span></div></div>
+              <div class="field"><label>位置</label><div class="input">5, 15, 25&nbsp;&nbsp;s</div></div>
+            </div>
+            <div class="hint">ⓘ 中英文逗号均可，最多 4 个</div>
+          </div>
+        </div>
+        <div class="verdict"><strong>基线。</strong>最省事，但开启后容易和 FFT 参数读成同一表单。</div>
+      </article>
+
+      <!-- B -->
+      <article class="card opt-b">
+        <div class="card-head">
+          <div class="tag"><i></i>B · 推荐候选</div>
+          <h2>浅 hairline + 呼吸间距</h2>
+          <p>1px <code>#eef2f7</code>，比正文线更淡；上下各留一点空白。</p>
+        </div>
+        <div class="panel">
+          <div class="section-title">FFT vs Time 参数</div>
+          <div class="params">
+            <div class="field"><label>窗函数</label><div class="control">hanning</div></div>
+            <div class="field"><label>NFFT 模式</label><div class="seg"><span class="on">Auto</span><span>Fixed</span></div></div>
+            <div class="field"><label>窗长</label><div class="control">1.5 s</div></div>
+            <div class="field"><label>重叠率</label><div class="control">0.5</div></div>
+          </div>
+          <div class="divider" aria-hidden="true"></div>
+          <div class="slice-block" style="margin-top:0">
+            <div class="summary">
+              <span class="title">切片</span>
+              <span class="note">固定时间 · 0 处</span>
+              <span class="switch" aria-hidden="true"></span>
+            </div>
+            <div class="slice-form">
+              <div class="field"><label>切片维度</label><div class="seg"><span class="on">固定时间</span><span>固定频率</span></div></div>
+              <div class="field"><label>位置</label><div class="input">5, 15, 25&nbsp;&nbsp;s</div></div>
+            </div>
+            <div class="hint">ⓘ 中英文逗号均可，最多 4 个</div>
+          </div>
+        </div>
+        <div class="verdict"><strong>最轻量。</strong>Qt 易实现；和 style.qss 已有 within-card hairline 语义一致。</div>
+      </article>
+
+      <!-- C -->
+      <article class="card opt-c">
+        <div class="card-head">
+          <div class="tag"><i></i>C · 推荐候选</div>
+          <h2>眉题中分线</h2>
+          <p>淡线中间夹「可选 · 导出增强」，语义比纯线更清楚。</p>
+        </div>
+        <div class="panel">
+          <div class="section-title">FFT vs Time 参数</div>
+          <div class="params">
+            <div class="field"><label>窗函数</label><div class="control">hanning</div></div>
+            <div class="field"><label>NFFT 模式</label><div class="seg"><span class="on">Auto</span><span>Fixed</span></div></div>
+            <div class="field"><label>窗长</label><div class="control">1.5 s</div></div>
+            <div class="field"><label>重叠率</label><div class="control">0.5</div></div>
+          </div>
+          <div class="eyebrow">可选 · 导出增强</div>
+          <div class="slice-block" style="margin-top:0">
+            <div class="summary">
+              <span class="title">切片</span>
+              <span class="note">固定时间 · 0 处</span>
+              <span class="switch" aria-hidden="true"></span>
+            </div>
+            <div class="slice-form">
+              <div class="field"><label>切片维度</label><div class="seg"><span class="on">固定时间</span><span>固定频率</span></div></div>
+              <div class="field"><label>位置</label><div class="input">5, 15, 25&nbsp;&nbsp;s</div></div>
+            </div>
+            <div class="hint">ⓘ 中英文逗号均可，最多 4 个</div>
+          </div>
+        </div>
+        <div class="verdict"><strong>语义最清晰。</strong>略占垂直空间；文案可改成「导出切片」。</div>
+      </article>
+
+      <!-- D -->
+      <article class="card opt-d">
+        <div class="card-head">
+          <div class="tag"><i></i>D</div>
+          <h2>浅色嵌套卡片</h2>
+          <p>整块切片沉入微蓝底，像「附加模块」。</p>
+        </div>
+        <div class="panel">
+          <div class="section-title">FFT vs Time 参数</div>
+          <div class="params">
+            <div class="field"><label>窗函数</label><div class="control">hanning</div></div>
+            <div class="field"><label>NFFT 模式</label><div class="seg"><span class="on">Auto</span><span>Fixed</span></div></div>
+            <div class="field"><label>窗长</label><div class="control">1.5 s</div></div>
+            <div class="field"><label>重叠率</label><div class="control">0.5</div></div>
+          </div>
+          <div class="slice-nest">
+            <div class="summary">
+              <span class="title">切片</span>
+              <span class="note">固定时间 · 0 处</span>
+              <span class="switch" aria-hidden="true"></span>
+            </div>
+            <div class="slice-form">
+              <div class="field"><label>切片维度</label><div class="seg"><span class="on">固定时间</span><span>固定频率</span></div></div>
+              <div class="field"><label>位置</label><div class="input">5, 15, 25&nbsp;&nbsp;s</div></div>
+            </div>
+            <div class="hint">ⓘ 中英文逗号均可，最多 4 个</div>
+          </div>
+        </div>
+        <div class="verdict"><strong>区分度最高。</strong>关闭态也会显得「一块」；注意与预处理摘要条别叠两层卡片。</div>
+      </article>
+
+      <!-- E -->
+      <article class="card opt-e">
+        <div class="card-head">
+          <div class="tag"><i></i>E</div>
+          <h2>左侧淡蓝轨</h2>
+          <p>2px 半透明蓝轨，不打断水平流。</p>
+        </div>
+        <div class="panel">
+          <div class="section-title">FFT vs Time 参数</div>
+          <div class="params">
+            <div class="field"><label>窗函数</label><div class="control">hanning</div></div>
+            <div class="field"><label>NFFT 模式</label><div class="seg"><span class="on">Auto</span><span>Fixed</span></div></div>
+            <div class="field"><label>窗长</label><div class="control">1.5 s</div></div>
+            <div class="field"><label>重叠率</label><div class="control">0.5</div></div>
+          </div>
+          <div class="slice-rail">
+            <div class="summary">
+              <span class="title">切片</span>
+              <span class="note">固定时间 · 0 处</span>
+              <span class="switch" aria-hidden="true"></span>
+            </div>
+            <div class="slice-form">
+              <div class="field"><label>切片维度</label><div class="seg"><span class="on">固定时间</span><span>固定频率</span></div></div>
+              <div class="field"><label>位置</label><div class="input">5, 15, 25&nbsp;&nbsp;s</div></div>
+            </div>
+            <div class="hint">ⓘ 中英文逗号均可，最多 4 个</div>
+          </div>
+        </div>
+        <div class="verdict"><strong>安静但有标识。</strong>关闭时轨仍在；可做成「仅开启时显示轨」更克制。</div>
+      </article>
+
+      <!-- F -->
+      <article class="card opt-f">
+        <div class="card-head">
+          <div class="tag"><i></i>F</div>
+          <h2>摘要条徽章</h2>
+          <p>不增加分隔线，用「可选」pill 声明身份。</p>
+        </div>
+        <div class="panel">
+          <div class="section-title">FFT vs Time 参数</div>
+          <div class="params">
+            <div class="field"><label>窗函数</label><div class="control">hanning</div></div>
+            <div class="field"><label>NFFT 模式</label><div class="seg"><span class="on">Auto</span><span>Fixed</span></div></div>
+            <div class="field"><label>窗长</label><div class="control">1.5 s</div></div>
+            <div class="field"><label>重叠率</label><div class="control">0.5</div></div>
+          </div>
+          <div class="slice-block">
+            <div class="summary">
+              <span class="badge">可选</span>
+              <span class="title">切片</span>
+              <span class="note">固定时间 · 0 处</span>
+              <span class="switch" aria-hidden="true"></span>
+            </div>
+            <div class="slice-form">
+              <div class="field"><label>切片维度</label><div class="seg"><span class="on">固定时间</span><span>固定频率</span></div></div>
+              <div class="field"><label>位置</label><div class="input">5, 15, 25&nbsp;&nbsp;s</div></div>
+            </div>
+            <div class="hint">ⓘ 中英文逗号均可，最多 4 个</div>
+          </div>
+        </div>
+        <div class="verdict"><strong>零硬分隔。</strong>依赖阅读摘要条；与预处理（同骨架）若也加徽章需统一规则。</div>
+      </article>
+    </div>
+
+    <p class="lede" style="margin-top:22px">
+      <strong>已选定：C · 眉题中分线</strong>（2026-08-10）。落地控件
+      <code>BatchOptionalEyebrow</code>，挂在切片 / 图内统计 / 预处理 / 图表组织 / 分析区间。
+    </p>
+  </div>
+</body>
+</html>

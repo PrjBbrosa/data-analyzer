@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
 from ....list_text import split_list_text
 from ....ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...widgets.pill_switch import PillSwitch
+from .optional_eyebrow import BatchOptionalEyebrow
 
 
 _MAX_POSITIONS = 4
@@ -40,6 +41,9 @@ class SlicePanel(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(6)
+
+        self._eyebrow = BatchOptionalEyebrow("可选 · 导出切片", self)
+        root.addWidget(self._eyebrow)
 
         self._summary_row = QWidget(self)
         self._summary_row.setObjectName("BatchFilterSummary")

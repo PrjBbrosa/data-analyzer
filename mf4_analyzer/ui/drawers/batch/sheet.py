@@ -36,6 +36,12 @@ from ....batch_validation import (
 )
 from ....io.source_adapters import DEFAULT_SOURCE_ADAPTER_REGISTRY
 from ...batch_settings import BatchPanelPrefs, BatchPanelPrefsStore
+from ...drop_paths import (
+    DropOverlay,
+    filter_drop_files,
+    has_supported_drop_suffix,
+    iter_local_paths,
+)
 from ...widgets.toast import Toast
 from ._geometry import fit_dialog_to_available_screen
 from .analysis_panel import AnalysisPanel
@@ -445,6 +451,7 @@ class BatchSheet(QDialog):
         # last in __init__, after every sub-panel exists, since it only
         # changes the dialog's own geometry.
         self._fit_to_available_screen(parent, 1080, 760)
+        self._init_drop_import()
 
     def _fit_to_available_screen(self, parent, target_w: int, target_h: int) -> None:
         """Thin forwarder to the shared clamp so ``BatchSheet`` and
@@ -494,6 +501,67 @@ class BatchSheet(QDialog):
         super().resizeEvent(event)
         if hasattr(self, "_analysis_panel"):
             self._apply_compact_mode(event.size().width() <= 1180)
+        overlay = getattr(self, "_drop_overlay", None)
+        if overlay is not None and not overlay.isHidden():
+            overlay.setGeometry(self.rect())
+
+    def _init_drop_import(self) -> None:
+        self.setAcceptDrops(True)
+        self._drop_overlay = None
+
+    def _drop_suffixes(self) -> set[str]:
+        return {ext.lower() for ext in self._source_registry.supported_extensions}
+
+    def _show_drop_overlay(self) -> None:
+        if self._drop_overlay is None:
+            self._drop_overlay = DropOverlay(self, message="松手添加到批处理")
+        self._drop_overlay.setGeometry(self.rect())
+        self._drop_overlay.raise_()
+        self._drop_overlay.show()
+
+    def _hide_drop_overlay(self) -> None:
+        if self._drop_overlay is not None:
+            self._drop_overlay.hide()
+
+    def _has_batch_drop_urls(self, mime) -> bool:
+        return has_supported_drop_suffix(
+            iter_local_paths(mime), suffixes=self._drop_suffixes(),
+        )
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if self._running or not self._has_batch_drop_urls(event.mimeData()):
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self._show_drop_overlay()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if self._running or not self._has_batch_drop_urls(event.mimeData()):
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._hide_drop_overlay()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._hide_drop_overlay()
+        if self._running:
+            event.ignore()
+            return
+        mime = event.mimeData()
+        local_paths = iter_local_paths(mime)
+        paths = filter_drop_files(local_paths, suffixes=self._drop_suffixes())
+        total = len(local_paths)
+        if paths:
+            event.acceptProposedAction()
+            self._input_panel.add_disk_paths(paths)
+        else:
+            event.ignore()
+        skipped = total - len(paths)
+        if skipped > 0:
+            self._toast(f"忽略 {skipped} 个不支持的文件", kind="warning")
 
     def _present_footer(
         self, state: str, *, done: int = 0, total: int = 1,

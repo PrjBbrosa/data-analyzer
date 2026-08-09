@@ -57,8 +57,9 @@ def test_pair_editor_hides_duplicate_invalid_summary(qtbot):
 
 
 def test_input_panel_aligns_frf_pair_label_with_target_policy(qtbot):
-    """The parent label owns the shared form column; no nested FRF heading."""
+    """Form label shares the policy column and centers on the pair header."""
     from PyQt5.QtCore import QPoint
+    from PyQt5.QtGui import QFontMetrics
     from PyQt5.QtWidgets import QLabel
 
     from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
@@ -81,11 +82,17 @@ def test_input_panel_aligns_frf_pair_label_with_target_policy(qtbot):
 
     assert isinstance(policy_label, QLabel)
     assert pair_label.mapTo(panel, QPoint(0, 0)).x() == policy_label.mapTo(panel, QPoint(0, 0)).x()
-    pair_text_top = (
+    # "配对组 N" sits in a taller header row with the delete button; center
+    # the form label on that row instead of the card's outer top edge.
+    pair_text_mid = (
         pair_label.mapTo(panel, QPoint(0, 0)).y()
         + pair_label.contentsMargins().top()
+        + QFontMetrics(pair_label.font()).height() / 2
     )
-    assert abs(pair_text_top - group_title.mapTo(panel, QPoint(0, 0)).y()) <= 1
+    header_mid = (
+        group_title.mapTo(panel, QPoint(0, 0)).y() + group_title.height() / 2
+    )
+    assert abs(pair_text_mid - header_mid) <= 1
 
 
 def test_pair_labels_do_not_replace_source_group_runtime_identity(qtbot):

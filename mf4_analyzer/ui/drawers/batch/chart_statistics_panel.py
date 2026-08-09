@@ -3,12 +3,18 @@ from __future__ import annotations
 
 from PyQt5.QtCore import QSignalBlocker, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QCheckBox, QHBoxLayout, QLabel, QSizePolicy, QStackedLayout,
+    QCheckBox, QComboBox, QHBoxLayout, QLabel, QSizePolicy, QStackedLayout,
     QVBoxLayout, QWidget,
 )
 
+from mf4_analyzer.ui_kit.widgets.segmented_choice import SegmentedChoice
 from mf4_analyzer.ui.widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 from mf4_analyzer.ui.widgets.pill_switch import PillSwitch
+
+from .optional_eyebrow import BatchOptionalEyebrow
+
+
+_LABEL_COL_WIDTH = 56
 
 
 class ChartStatisticsPanel(QWidget):
@@ -21,6 +27,9 @@ class ChartStatisticsPanel(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(6)
+
+        self._eyebrow = BatchOptionalEyebrow("可选 · 图内统计", self)
+        root.addWidget(self._eyebrow)
 
         self._summary_row = QWidget(self)
         self._summary_row.setObjectName("BatchFilterSummary")
@@ -46,30 +55,58 @@ class ChartStatisticsPanel(QWidget):
         self._settings = QWidget(self)
         settings_lay = QVBoxLayout(self._settings)
         settings_lay.setContentsMargins(0, 0, 0, 0)
-        settings_lay.setSpacing(5)
+        settings_lay.setSpacing(8)
 
+        # ----- 统计区间：SegmentedChoice + 下方展开自动说明 / 手动双 spin -----
+        # ``auto_range`` stays the boolean state owner (get/apply/tests); the
+        # visible control is a SegmentedChoice bound to a hidden combo.
         self.range_row = QWidget(self._settings)
-        range_lay = QHBoxLayout(self.range_row)
-        range_lay.setContentsMargins(0, 0, 0, 0)
-        range_lay.setSpacing(6)
+        range_outer = QVBoxLayout(self.range_row)
+        range_outer.setContentsMargins(0, 0, 0, 0)
+        range_outer.setSpacing(6)
+
+        mode_row = QHBoxLayout()
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(8)
         self._range_label = QLabel("统计区间", self.range_row)
+        self._range_label.setFixedWidth(_LABEL_COL_WIDTH)
         self._range_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        range_lay.addWidget(self._range_label)
+        mode_row.addWidget(self._range_label, 0, Qt.AlignVCenter)
+
         self.auto_range = QCheckBox("自动", self.range_row)
         self.auto_range.setChecked(True)
-        self.auto_range.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        range_lay.addWidget(self.auto_range)
+        self.auto_range.hide()
+
+        self._range_mode_combo = QComboBox(self.range_row)
+        self._range_mode_combo.addItem("自动", "auto")
+        self._range_mode_combo.addItem("手动", "manual")
+        self._range_mode_choice = SegmentedChoice(self.range_row)
+        self._range_mode_choice.bind(self._range_mode_combo)
+        self._range_mode_choice.setMinimumWidth(0)
+        self._range_mode_choice.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed,
+        )
+        mode_row.addWidget(self._range_mode_choice, 1)
+        range_outer.addLayout(mode_row)
+
+        value_row = QHBoxLayout()
+        value_row.setContentsMargins(0, 0, 0, 0)
+        value_row.setSpacing(8)
+        value_indent = QWidget(self.range_row)
+        value_indent.setFixedWidth(_LABEL_COL_WIDTH)
+        value_row.addWidget(value_indent)
 
         self._range_value_host = QWidget(self.range_row)
         self._range_stack = QStackedLayout(self._range_value_host)
         self._range_stack.setContentsMargins(0, 0, 0, 0)
         self._range_stack.setSpacing(0)
+
         self._auto_range_page = QWidget(self._range_value_host)
         auto_range_lay = QHBoxLayout(self._auto_range_page)
         auto_range_lay.setContentsMargins(0, 0, 0, 0)
         self.range_summary = QLabel("全时段", self._auto_range_page)
         self.range_summary.setObjectName("BatchChartStatisticsRangeSummary")
-        self.range_summary.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.range_summary.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         auto_range_lay.addWidget(self.range_summary)
         auto_range_lay.addStretch(1)
 
@@ -82,7 +119,7 @@ class ChartStatisticsPanel(QWidget):
         for spin in (self.x_min, self.x_max):
             spin.setRange(-1e12, 1e12)
             spin.setDecimals(6)
-            spin.setMinimumWidth(84)
+            spin.setMinimumWidth(72)
             spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._min_label = QLabel("最小", self._manual_range_page)
         self._max_label = QLabel("最大", self._manual_range_page)
@@ -96,31 +133,50 @@ class ChartStatisticsPanel(QWidget):
         manual_range_lay.addWidget(self._range_unit)
         self._range_stack.addWidget(self._auto_range_page)
         self._range_stack.addWidget(self._manual_range_page)
-        range_lay.addWidget(self._range_value_host, 1)
+        value_row.addWidget(self._range_value_host, 1)
+        range_outer.addLayout(value_row)
         settings_lay.addWidget(self.range_row)
 
+        # ----- 统计项目：仍是 QCheckBox（接线不变），外观做成 chip -----
         metrics = QWidget(self._settings)
         metrics_lay = QHBoxLayout(metrics)
         metrics_lay.setContentsMargins(0, 0, 0, 0)
         metrics_lay.setSpacing(8)
-        metrics_lay.addWidget(QLabel("统计项目", metrics))
+        metrics_label = QLabel("统计项目", metrics)
+        metrics_label.setFixedWidth(_LABEL_COL_WIDTH)
+        metrics_lay.addWidget(metrics_label, 0, Qt.AlignVCenter)
         self.maximum = QCheckBox("最大值", metrics)
         self.minimum = QCheckBox("最小值", metrics)
         self.mean = QCheckBox("样本平均", metrics)
         for check in (self.maximum, self.minimum, self.mean):
+            check.setObjectName("BatchChartStatisticsMetric")
             check.setChecked(True)
-            metrics_lay.addWidget(check)
             check.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+            metrics_lay.addWidget(check)
         metrics_lay.addStretch(1)
         settings_lay.addWidget(metrics)
+
         self.note = QLabel(
             "ⓘ 同一 X 对应多个 Y 时，按采集路径分别统计", self._settings,
         )
         self.note.setWordWrap(True)
         settings_lay.addWidget(self.note)
-        self.context = QLabel("", self._settings)
+
+        self._context_field = QWidget(self._settings)
+        self._context_field.setObjectName("BatchChartStatisticsContextField")
+        self._context_field.setAttribute(Qt.WA_StyledBackground, True)
+        context_lay = QHBoxLayout(self._context_field)
+        context_lay.setContentsMargins(8, 0, 8, 0)
+        context_lay.setSpacing(6)
+        self._context_prefix = QLabel("X", self._context_field)
+        self._context_prefix.setObjectName("BatchChartStatisticsContextPrefix")
+        context_lay.addWidget(self._context_prefix, 0)
+        self.context = QLabel("", self._context_field)
         self.context.setObjectName("BatchChartStatisticsContext")
-        settings_lay.addWidget(self.context)
+        self.context.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.context.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        context_lay.addWidget(self.context, 1)
+        settings_lay.addWidget(self._context_field)
         root.addWidget(self._settings)
 
         for widget in (
@@ -134,13 +190,29 @@ class ChartStatisticsPanel(QWidget):
             )
             signal.connect(self._sync)
             signal.connect(self.changed)
+        self._range_mode_combo.currentIndexChanged.connect(self._on_range_mode_ui)
         self._sync()
+
+    def _on_range_mode_ui(self, index: int) -> None:
+        """SegmentedChoice → hidden auto_range checkbox (state owner)."""
+        automatic = int(index) == 0
+        if self.auto_range.isChecked() != automatic:
+            self.auto_range.setChecked(automatic)
+
+    def _sync_range_mode_ui(self) -> None:
+        want = 0 if self.auto_range.isChecked() else 1
+        if self._range_mode_combo.currentIndex() != want:
+            with QSignalBlocker(self._range_mode_combo):
+                self._range_mode_combo.setCurrentIndex(want)
+            self._range_mode_choice.sync_from_bound_combo()
 
     def _sync(self, *_args) -> None:
         active = self.enabled.isChecked()
         self._settings.setVisible(active)
         automatic = self.auto_range.isChecked()
         self.auto_range.setEnabled(active)
+        self._range_mode_choice.setEnabled(active)
+        self._sync_range_mode_ui()
         self._range_stack.setCurrentWidget(
             self._auto_range_page if automatic else self._manual_range_page
         )
@@ -150,6 +222,7 @@ class ChartStatisticsPanel(QWidget):
             check.setEnabled(active)
         self.note.setEnabled(active)
         self.context.setEnabled(active)
+        self._context_field.setEnabled(active)
         self._refresh_summary()
 
     def _refresh_summary(self, *_args) -> None:
@@ -157,9 +230,12 @@ class ChartStatisticsPanel(QWidget):
             self._summary_note.setText("统计关闭 · 图上不加标注")
             return
         names = []
-        if self.maximum.isChecked(): names.append("最大")
-        if self.minimum.isChecked(): names.append("最小")
-        if self.mean.isChecked(): names.append("平均")
+        if self.maximum.isChecked():
+            names.append("最大")
+        if self.minimum.isChecked():
+            names.append("最小")
+        if self.mean.isChecked():
+            names.append("平均")
         metrics_text = "/".join(names) if names else "未选统计项目"
         if self.auto_range.isChecked():
             range_text = self.range_summary.text() or "全时段"
@@ -207,7 +283,8 @@ class ChartStatisticsPanel(QWidget):
 
     def apply_params(self, params) -> None:
         blockers = [QSignalBlocker(w) for w in (
-            self.enabled, self.auto_range, self.x_min, self.x_max,
+            self.enabled, self.auto_range, self._range_mode_combo,
+            self.x_min, self.x_max,
             self.maximum, self.minimum, self.mean,
         )]
         try:

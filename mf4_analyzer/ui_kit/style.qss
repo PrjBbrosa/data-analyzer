@@ -515,6 +515,22 @@ QLabel#BatchFilterSummaryTitle {
     font-weight: 700;
 }
 QLabel#BatchFilterSummaryNote { color: #64748b; font-size: 10px; }
+/* Option C soft separator: pale within-card hairline + quiet caption.
+ * Used above optional Batch add-ons (slice / chart stats / preprocessing…). */
+QWidget#BatchOptionalEyebrow {
+    background-color: transparent;
+}
+QWidget#BatchOptionalEyebrowRule {
+    background-color: #eef2f7;
+    border: none;
+}
+QLabel#BatchOptionalEyebrowLabel {
+    color: #94a3b8;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    background-color: transparent;
+}
 QWidget#BatchCompactFooter {
     border-top: 1px solid #e2e8f0;
     background-color: #fbfcfe;

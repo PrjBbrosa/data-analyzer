@@ -1045,14 +1045,20 @@ class InputPanel(QWidget):
         self._filter_panel.set_method(method)
         is_frf = self._method == "frf"
         self._target_signal_label.setText("FRF 配对" if is_frf else "目标信号")
-        # The FRF group title starts after its card's 6px top inset.  Put the
-        # form label on the same baseline.  Standard target-signal pickers
-        # are one row tall, so their label stays vertically centered in the
-        # shared form label column.
+        # FRF: pin the form label to the top of the tall field cell, then
+        # inset it so its text centers on the first pair-group header row
+        # ("配对组 N" + delete).  Non-FRF pickers are one row tall, so their
+        # label stays vertically centered in the shared form label column.
         self._target_signal_label.setAlignment(
             Qt.AlignLeft | (Qt.AlignTop if is_frf else Qt.AlignVCenter)
         )
-        self._target_signal_label.setContentsMargins(0, 6 if is_frf else 0, 0, 0)
+        top_inset = (
+            self._frf_pair_editor.form_label_top_inset(
+                self._target_signal_label.font()
+            )
+            if is_frf else 0
+        )
+        self._target_signal_label.setContentsMargins(0, top_inset, 0, 0)
         self._target_stack.setCurrentWidget(
             self._frf_pair_editor if is_frf else self._signal_picker
         )
@@ -1217,6 +1223,11 @@ class InputPanel(QWidget):
         if lo >= hi:
             return "时间范围：起点必须小于终点"
         return ""
+
+    def add_disk_paths(self, paths) -> None:
+        """Add local disk paths via the existing ``FileListWidget.add_disk_path`` sink."""
+        for path in paths or ():
+            self._file_list.add_disk_path(path)
 
     def file_ids(self) -> tuple:
         return self._file_list.loaded_file_ids()

@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -22,6 +23,11 @@ from PyQt5.QtWidgets import (
 
 from ....batch_types import FrfPairRule
 from .signal_picker import SignalPickerPopup
+
+# Top inset of each BatchFrfPairGroup card.  The owning QFormLayout label
+# ("FRF 配对") uses this plus the header-row height so it centers on
+# "配对组 N" / "删除", not on the card's outer top edge.
+GROUP_CARD_TOP_INSET = 6
 
 
 @dataclass
@@ -106,7 +112,7 @@ class FrfPairEditor(QWidget):
         host = QFrame(self)
         host.setObjectName("BatchFrfPairGroup")
         grid = QGridLayout(host)
-        grid.setContentsMargins(7, 6, 7, 7)
+        grid.setContentsMargins(7, GROUP_CARD_TOP_INSET, 7, 7)
         grid.setHorizontalSpacing(6)
         grid.setVerticalSpacing(5)
         title = QLabel(host)
@@ -124,8 +130,8 @@ class FrfPairEditor(QWidget):
         output_picker = SignalPickerPopup(parent=host)
         output_picker.setMinimumWidth(0)
         output_picker.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        grid.addWidget(title, 0, 0)
-        grid.addWidget(remove, 0, 1, Qt.AlignRight)
+        grid.addWidget(title, 0, 0, Qt.AlignVCenter)
+        grid.addWidget(remove, 0, 1, Qt.AlignRight | Qt.AlignVCenter)
         grid.addWidget(QLabel("输入", host), 1, 0)
         grid.addWidget(input_picker, 1, 1)
         grid.addWidget(QLabel("输出", host), 2, 0)
@@ -323,5 +329,23 @@ class FrfPairEditor(QWidget):
     def group_count(self) -> int:
         return len(self._groups)
 
+    def form_label_top_inset(self, label_font: QFont) -> int:
+        """Top inset that vertically centers a form label on the header row.
 
-__all__ = ["FrfPairEditor"]
+        The first pair-group header ("配对组 N" + delete) is taller than the
+        bare label text because of the delete button.  Top-aligning to the
+        card inset alone leaves "FRF 配对" visually above that header.
+        """
+        text_h = QFontMetrics(label_font).height()
+        header_h = text_h
+        if self._groups:
+            group = self._groups[0]
+            header_h = max(
+                group.title.sizeHint().height(),
+                group.remove_button.sizeHint().height(),
+                text_h,
+            )
+        return GROUP_CARD_TOP_INSET + max(0, (header_h - text_h) // 2)
+
+
+__all__ = ["FrfPairEditor", "GROUP_CARD_TOP_INSET"]

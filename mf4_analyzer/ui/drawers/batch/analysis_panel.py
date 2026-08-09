@@ -15,6 +15,7 @@ from ....list_text import split_list_text
 from ...analysis_preset_slots import preset_slot_bus, read_slot
 from .method_buttons import DynamicParamForm, MethodButtonGroup
 from .chart_statistics_panel import ChartStatisticsPanel
+from .optional_eyebrow import BatchOptionalEyebrow
 from .slice_panel import SlicePanel
 
 
@@ -188,11 +189,19 @@ class AnalysisPanel(QWidget):
 
         self._frf_grouping_host = QWidget(self)
         self._frf_grouping_host.setObjectName("BatchFrfChartGrouping")
-        grouping_lay = QHBoxLayout(self._frf_grouping_host)
+        grouping_outer = QVBoxLayout(self._frf_grouping_host)
+        grouping_outer.setContentsMargins(0, 0, 0, 0)
+        grouping_outer.setSpacing(0)
+        self._frf_grouping_eyebrow = BatchOptionalEyebrow(
+            "可选 · 图表组织", self._frf_grouping_host,
+        )
+        grouping_outer.addWidget(self._frf_grouping_eyebrow)
+        grouping_row = QWidget(self._frf_grouping_host)
+        grouping_lay = QHBoxLayout(grouping_row)
         grouping_lay.setContentsMargins(0, 0, 0, 0)
         grouping_lay.setSpacing(8)
-        grouping_lay.addWidget(QLabel("图表组织", self._frf_grouping_host))
-        self._frf_grouping_combo = QComboBox(self._frf_grouping_host)
+        grouping_lay.addWidget(QLabel("图表组织", grouping_row))
+        self._frf_grouping_combo = QComboBox(grouping_row)
         self._frf_grouping_combo.addItem("每对一张", "none")
         self._frf_grouping_combo.addItem("按来源叠加", "source")
         self._frf_grouping_combo.addItem("按输入/输出对叠加", "channel")
@@ -201,6 +210,7 @@ class AnalysisPanel(QWidget):
             QSizePolicy.Ignored, QSizePolicy.Fixed,
         )
         grouping_lay.addWidget(self._frf_grouping_combo, 1)
+        grouping_outer.addWidget(grouping_row)
         self._frf_grouping_host.hide()
         outer.addWidget(self._frf_grouping_host)
         self._chart_statistics = ChartStatisticsPanel(self)
@@ -210,18 +220,27 @@ class AnalysisPanel(QWidget):
 
         self._source_interval_host = QWidget(self)
         self._source_interval_host.setObjectName("BatchSourceInterval")
-        source_row = QHBoxLayout(self._source_interval_host)
+        source_outer = QVBoxLayout(self._source_interval_host)
+        source_outer.setContentsMargins(0, 0, 0, 0)
+        source_outer.setSpacing(0)
+        self._source_interval_eyebrow = BatchOptionalEyebrow(
+            "可选 · 分析区间", self._source_interval_host,
+        )
+        source_outer.addWidget(self._source_interval_eyebrow)
+        source_row_host = QWidget(self._source_interval_host)
+        source_row = QHBoxLayout(source_row_host)
         source_row.setContentsMargins(0, 0, 0, 0)
         source_row.setSpacing(6)
-        source_row.addWidget(QLabel("源数据区间", self._source_interval_host))
-        self._source_interval_mode = QComboBox(self._source_interval_host)
+        source_row.addWidget(QLabel("源数据区间", source_row_host))
+        self._source_interval_mode = QComboBox(source_row_host)
         self._source_interval_mode.addItem("全时段", "all")
         self._source_interval_mode.addItem("指定区间", "manual")
-        self._source_interval_edit = QLineEdit(self._source_interval_host)
+        self._source_interval_edit = QLineEdit(source_row_host)
         self._source_interval_edit.setPlaceholderText("0.0, 120.0 s")
         self._source_interval_edit.setEnabled(False)
         source_row.addWidget(self._source_interval_mode)
         source_row.addWidget(self._source_interval_edit, 1)
+        source_outer.addWidget(source_row_host)
         outer.addWidget(self._source_interval_host)
         outer.addStretch(1)
 

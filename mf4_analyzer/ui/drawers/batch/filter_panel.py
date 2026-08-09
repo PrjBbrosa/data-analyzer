@@ -10,6 +10,7 @@ from ....signal.filters import FilterSpec
 from ...inspector_sections._helpers import _fit_field, _pair_field
 from ...widgets.pill_switch import PillSwitch
 from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
+from .optional_eyebrow import BatchOptionalEyebrow
 
 
 _KIND_LABEL_TO_KEY = {
@@ -33,6 +34,9 @@ class BatchFilterPanel(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(6)
+
+        self._eyebrow = BatchOptionalEyebrow("可选 · 预处理", self)
+        root.addWidget(self._eyebrow)
 
         self._summary_row = QWidget(self)
         self._summary_row.setObjectName("BatchFilterSummary")
