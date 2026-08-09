@@ -313,7 +313,7 @@ _HINTS = (
         id="annotation.mode",
         text="左键添加标注 · 右键删除最近一处",
         surface="context",
-        modes=frozenset({"fft", "order"}),
+        modes=frozenset({"fft", "frf", "order"}),
         requires=frozenset({"annotation_on"}),
         priority=100,
     ),
@@ -441,9 +441,9 @@ _HINTS = (
     # and level with fft.preview_pick_source.
     Hint(
         id="analysis.view_scope",
-        text="分析信号只列当前 View 的文件",
+        text="分析只列当前 View；右侧 × 可移除",
         surface="context",
-        modes=frozenset({"fft", "fft_time", "order"}),
+        modes=frozenset({"fft", "fft_time", "frf", "order"}),
         priority=75,
     ),
     # ---- 共轴组 (shared-axis groups): shipped 2026-06-27. Designed in

@@ -1045,9 +1045,12 @@ class InputPanel(QWidget):
         is_frf = self._method == "frf"
         self._target_signal_label.setText("FRF 配对" if is_frf else "目标信号")
         # The FRF group title starts after its card's 6px top inset.  Put the
-        # form label on the same baseline while retaining the Target form's
-        # shared left label column.
-        self._target_signal_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        # form label on the same baseline.  Standard target-signal pickers
+        # are one row tall, so their label stays vertically centered in the
+        # shared form label column.
+        self._target_signal_label.setAlignment(
+            Qt.AlignLeft | (Qt.AlignTop if is_frf else Qt.AlignVCenter)
+        )
         self._target_signal_label.setContentsMargins(0, 6 if is_frf else 0, 0, 0)
         self._target_stack.setCurrentWidget(
             self._frf_pair_editor if is_frf else self._signal_picker

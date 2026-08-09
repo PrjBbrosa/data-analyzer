@@ -110,6 +110,27 @@ def test_order_rpm_picker_is_scoped_too(win_two_files):
     assert fids == {long_fid}
 
 
+def test_file_remove_action_stays_available_in_every_analysis_mode(
+    win_two_files, qapp,
+):
+    """All analysis modes retain the focused View's file-removal action."""
+    win, _long_fid, short_fid = win_two_files
+    tree = win.navigator.channel_list.tree
+    item = win.navigator.channel_list._file_items[short_fid]
+    _, state = win._focused_time_view_state()
+
+    for mode in ("fft", "fft_time", "frf", "order"):
+        win._on_mode_changed(mode)
+        qapp.processEvents()
+
+        assert not tree.isColumnHidden(2), mode
+        win.navigator.channel_list._on_item_clicked(item, 2)
+        assert short_fid not in state.attached_file_ids, mode
+
+        win._attach_files_to_focused_view([short_fid])
+        assert short_fid in state.attached_file_ids, mode
+
+
 def _visible_xlim(win):
     return win.canvas_time.get_visible_xlim()
 

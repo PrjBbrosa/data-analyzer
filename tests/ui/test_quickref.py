@@ -258,6 +258,13 @@ def test_catalog_states_the_analysis_picker_scope():
         assert section in row.sub
 
 
+def test_catalog_states_file_remove_action_is_available_in_every_mode():
+    row = _row_by_desc("从当前 View 移除文件")
+    assert "显示" in row.gesture and "×" in row.gesture
+    for mode in ("时域", "频谱", "时频", "频响", "阶次"):
+        assert mode in row.sub
+
+
 def test_catalog_says_how_to_read_a_truncated_channel_name():
     row = _row_by_desc("看通道全名")
     assert "悬停" in row.gesture

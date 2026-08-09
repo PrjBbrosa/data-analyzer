@@ -210,6 +210,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 "分析信号的可选范围",
                 sub="FFT / FFT-时间 / 阶次的信号框只列当前 View 已加入的文件",
             ),
+            QuickRow(
+                "从当前 View 移除文件",
+                sub="时域、频谱、时频、频响、阶次都可用；文件行右侧悬停显示 ×",
+                gesture="点击「显示」列的 ×",
+            ),
         ),
     ),
     # 6 — 通道编辑（派生通道）
@@ -286,8 +291,13 @@ QUICKREF: Tuple[QuickGroup, ...] = (
     QuickGroup(
         title="标注",
         rows=(
-            QuickRow("开启标注", gesture="工具栏按钮"),
+            QuickRow(
+                "开启标注",
+                sub="时域、频谱、时频、频响、阶次图表均可用",
+                gesture="工具栏按钮",
+            ),
             QuickRow("添加 / 删除最近", gesture="左键加 · 右键删"),
+            QuickRow("清除当前图表标注", gesture="工具栏橡皮擦按钮"),
         ),
     ),
     # 11 — 预设

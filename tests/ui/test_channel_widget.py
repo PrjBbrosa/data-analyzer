@@ -48,6 +48,42 @@ def test_channel_tree_selected_rows_render_approved_windows_highlight(qapp, qtbo
         qapp.setStyle(old_style)
 
 
+def test_selected_file_parent_keeps_a_visible_expander(qapp, qtbot):
+    """The selected-row tint must not swallow a clickable parent chevron."""
+    old_sheet = qapp.styleSheet()
+    old_style = qapp.style().objectName()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        widget = MultiFileChannelWidget()
+        qtbot.addWidget(widget)
+        widget.resize(520, 360)
+        _add_attached_file(widget, "file-a", _MultiChannelFileData())
+        widget.show()
+        qtbot.waitExposed(widget)
+
+        parent = widget._file_items["file-a"]
+        widget.tree.setCurrentItem(parent)
+        parent.setSelected(True)
+        qapp.processEvents()
+
+        row = widget.tree.visualItemRect(parent)
+        image = widget.tree.viewport().grab().toImage()
+        gutter_left = widget.tree.columnViewportPosition(0)
+        gutter_right = row.left() - 1
+        dark_pixels = [
+            image.pixelColor(x, y)
+            for y in range(row.top() + 4, row.bottom() - 3)
+            for x in range(gutter_left + 2, gutter_right)
+            if image.pixelColor(x, y).lightness() < 175
+        ]
+
+        assert dark_pixels, "selected file row lost its expand/collapse chevron"
+    finally:
+        qapp.setStyleSheet(old_sheet)
+        qapp.setStyle(old_style)
+
+
 class _FakeFileData:
     data = [1, 2, 3]
 
@@ -68,6 +104,14 @@ class _MultiChannelFileData:
         return ["#1769e0", "#8b5cf6", "#f43f5e"]
 
 
+class _GroupedFileData(_MultiChannelFileData):
+    def __init__(self, fs, label_suffix):
+        self.data = list(range(100))
+        self.fs = fs
+        self.filepath = Path("/tmp/260417-ripple-PK2C.mf4")
+        self.label_suffix = label_suffix
+
+
 class _ReplaceableFileData:
     data = [1, 2, 3]
 
@@ -85,6 +129,50 @@ def _add_attached_file(widget, fid, file_data):
     """Mirror the production View contract for channel-widget tests."""
     widget.add_file(fid, file_data)
     widget.set_attached_file_ids([*widget.get_attached_file_ids(), fid])
+
+
+def test_nested_parent_checkbox_geometry_stays_aligned_when_selected(qapp, qtbot):
+    """Selected raster rows keep the sibling box and hit band in one slot."""
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(520, 360)
+    _add_attached_file(widget, "f0", _GroupedFileData(1188000, "24.0 kHz"))
+    _add_attached_file(widget, "f1", _GroupedFileData(49500, "1.0 kHz"))
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.tree.expandAll()
+
+    selected = widget._raster_items["f0"]
+    sibling = widget._raster_items["f1"]
+    widget.tree.setCurrentItem(selected)
+    selected.setSelected(True)
+    qapp.processEvents()
+
+    delegate = widget.tree.itemDelegate()
+    selected_box = delegate.parent_geometry(
+        widget.tree.visualItemRect(selected)
+    )[0]
+    sibling_box = delegate.parent_geometry(
+        widget.tree.visualItemRect(sibling)
+    )[0]
+    assert selected_box.left() == sibling_box.left()
+    assert selected_box.width() == sibling_box.width()
+
+    hit = widget.tree._check_hit_rect(
+        selected, widget.tree.indexFromItem(selected, 0)
+    )
+    assert hit.contains(selected_box.center())
+    assert not hit.contains(
+        QPoint(selected_box.right() + widget.tree.HIT_PAD + 2,
+               selected_box.center().y())
+    )
+
+    QTest.mouseClick(
+        widget.tree.viewport(), Qt.LeftButton, Qt.NoModifier,
+        selected_box.center(),
+    )
+    qapp.processEvents()
+    assert selected.checkState(0) == Qt.Checked
 
 
 def test_channel_context_menu_uses_translucent_rounded_shell(qapp, qtbot, monkeypatch):
@@ -207,15 +295,21 @@ def test_eye_click_never_propagates_to_other_selected_rows(qapp, qtbot):
     assert not second.icon(2).isNull()
 
 
-def test_time_visibility_column_hides_outside_time_mode(qapp, qtbot):
+def test_time_visibility_toggle_hides_channel_eyes_but_not_file_remove(qapp, qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
+    _add_attached_file(widget, "file-a", _MultiChannelFileData())
+    widget.set_checked_channels([("file-a", "speed")])
+    file_item = widget._file_items["file-a"]
+    channel = file_item.child(0)
 
     widget.set_time_visibility_available(False)
-    assert widget.tree.isColumnHidden(2)
+    assert not widget.tree.isColumnHidden(2)
+    assert channel.icon(2).isNull()
 
     widget.set_time_visibility_available(True)
     assert not widget.tree.isColumnHidden(2)
+    assert not channel.icon(2).isNull()
 
 
 def test_channel_search_expands_parent_to_show_matches(qapp, qtbot):

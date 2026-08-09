@@ -1288,3 +1288,18 @@ def test_order_target_picker_does_not_reserve_hidden_frf_editor_height(qtbot):
     assert panel._signal_picker.isVisibleTo(panel) is True
     assert panel._frf_pair_editor.isVisibleTo(panel) is False
     assert panel._target_stack.height() == panel._signal_picker.height()
+
+
+def test_non_frf_target_signal_label_is_vertically_centered(qtbot):
+    from PyQt5.QtCore import Qt
+
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel(None, files={})
+    qtbot.addWidget(panel)
+    panel.set_method("fft")
+
+    assert panel._target_signal_label.alignment() == (
+        Qt.AlignLeft | Qt.AlignVCenter
+    )
+    assert panel._target_signal_label.contentsMargins().top() == 0

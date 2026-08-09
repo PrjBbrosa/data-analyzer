@@ -1,5 +1,6 @@
 """The multi-file channel tree: MultiFileChannelWidget and its private helpers."""
 import json
+import sys
 from collections import Counter
 
 from PyQt5.QtWidgets import (
@@ -11,6 +12,8 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStyle,
+    QStyleFactory,
+    QStyleOption,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QStackedLayout,
@@ -63,9 +66,9 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
 
     ``QTreeWidgetItem`` delegates checkbox and icon layout to the platform
     style.  On macOS a selected row can therefore shift the native checkbox
-    while its decoration icon and column-2 eye keep a different anchor.  A
-    channel row is compact enough to own these three visual primitives, so
-    paint them once here and leave parent/source rows on the native delegate.
+    while its decoration icon and column-2 eye keep a different anchor.  The
+    channel tree uses one fixed geometry for every checkable row so selection
+    never changes either the visual box or its hit target.
     """
 
     CHECK_SIZE = 18
@@ -74,6 +77,7 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
     LEFT_INSET = 6
     CHECK_TO_SWATCH_GAP = 6
     SWATCH_TO_TEXT_GAP = 4
+    PARENT_TEXT_GAP = 9
     CELL_RIGHT_INSET = 7
     SELECTED_BG = QColor("#b7d3f2")
     TEXT = QColor("#111827")
@@ -113,6 +117,29 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
         )
         return check, swatch, text
 
+    def parent_geometry(self, row_rect):
+        """Return stable checkbox/text rects for file/source/raster rows.
+
+        The native macOS item delegate applies a different decoration inset
+        while a parent row is selected.  Keeping the checkbox in the same
+        indentation slot as its unselected siblings also keeps the click band
+        predictable for nested source/raster trees.
+        """
+        check = QRect(
+            row_rect.left() + self.LEFT_INSET,
+            row_rect.top() + (row_rect.height() - self.CHECK_SIZE) // 2,
+            self.CHECK_SIZE,
+            self.CHECK_SIZE,
+        )
+        text = QRect(
+            check.right() + 1 + self.PARENT_TEXT_GAP,
+            row_rect.top(),
+            max(0, row_rect.right() - self.CELL_RIGHT_INSET
+                - check.right() - self.PARENT_TEXT_GAP),
+            row_rect.height(),
+        )
+        return check, text
+
     def column_action_geometry(self, row_rect):
         """Center a row action inside the fixed display column."""
         return QRect(
@@ -148,6 +175,35 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             )
         painter.restore()
 
+    def _item_paint_option(self, option, index):
+        """Keep item-level font/metrics while retaining the view's geometry."""
+        styled = QStyleOptionViewItem(option)
+        self.initStyleOption(styled, index)
+        styled.rect = option.rect
+        styled.state = option.state
+        return styled
+
+    def _paint_checkable_parent(self, painter, option, index):
+        """Paint a file/source/raster cell without platform inset drift."""
+        styled = self._item_paint_option(option, index)
+        if self._is_selected(option):
+            painter.fillRect(option.rect, self.SELECTED_BG)
+        check, text = self.parent_geometry(option.rect)
+        self._paint_checkbox(
+            painter,
+            check,
+            index.data(Qt.CheckStateRole) == Qt.Checked,
+        )
+        self._paint_text(
+            painter,
+            text,
+            index.data(Qt.DisplayRole),
+            self.TEXT,
+            Qt.AlignLeft | Qt.AlignVCenter,
+            styled,
+            elide=Qt.ElideMiddle,
+        )
+
     def _paint_text(self, painter, rect, text, color, alignment, option,
                     elide=Qt.ElideRight):
         painter.save()
@@ -163,6 +219,15 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         if not self._is_channel(index):
+            data = self._channel_data(index)
+            if (
+                index.column() == 0
+                and data
+                and data[0] in ("file", "source", "raster")
+                and (index.flags() & Qt.ItemIsUserCheckable)
+            ):
+                self._paint_checkable_parent(painter, option, index)
+                return
             icon = index.data(Qt.DecorationRole)
             if (index.column() == 2 and isinstance(icon, QIcon)
                     and not icon.isNull()):
@@ -192,6 +257,7 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             return
 
         column = index.column()
+        styled = self._item_paint_option(option, index)
         selected = self._is_selected(option)
         if selected:
             painter.fillRect(option.rect, self.SELECTED_BG)
@@ -213,7 +279,7 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             # a narrow column still usable; the tooltip carries the full name.
             self._paint_text(
                 painter, text, index.data(Qt.DisplayRole), self.TEXT,
-                Qt.AlignLeft | Qt.AlignVCenter, option,
+                Qt.AlignLeft | Qt.AlignVCenter, styled,
                 elide=Qt.ElideMiddle,
             )
             return
@@ -225,7 +291,7 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
                 index.data(Qt.DisplayRole),
                 self.TEXT if selected else self.MUTED,
                 Qt.AlignRight | Qt.AlignVCenter,
-                option,
+                styled,
             )
             return
 
@@ -257,6 +323,10 @@ class _CheckTolerantTree(QTreeWidget):
         self._consume_check_release = False
         self._owner = None  # set by MultiFileChannelWidget; drawBranches reads it
         self._channel_delegate = _ChannelLeafDelegate(self)
+        self._native_branch_style = (
+            QStyleFactory.create("macintosh")
+            if sys.platform == "darwin" else None
+        )
         self.setItemDelegate(self._channel_delegate)
 
     def _check_hit_rect(self, item, index):
@@ -268,6 +338,12 @@ class _CheckTolerantTree(QTreeWidget):
         row = self.visualRect(index)
         if data and data[0] == "channel":
             indicator = self._channel_delegate.channel_geometry(row)[0]
+            hit = indicator.adjusted(-self.HIT_PAD, 0, self.HIT_PAD, 0)
+            hit.setTop(row.top())
+            hit.setBottom(row.bottom())
+            return hit
+        if data and data[0] in ("file", "source", "raster"):
+            indicator = self._channel_delegate.parent_geometry(row)[0]
             hit = indicator.adjusted(-self.HIT_PAD, 0, self.HIT_PAD, 0)
             hit.setTop(row.top())
             hit.setBottom(row.bottom())
@@ -374,8 +450,15 @@ class _CheckTolerantTree(QTreeWidget):
     def drawBranches(self, painter, rect, index):
         item = self.itemFromIndex(index)
         data = item.data(0, Qt.UserRole) if item is not None else None
-        # 文件/源/采样率行：保留默认展开箭头。
         super().drawBranches(painter, rect, index)
+        if (
+            data
+            and data[0] in ('file', 'source', 'raster')
+            and item.childCount() > 0
+            and item.isSelected()
+            and self._native_branch_style is not None
+        ):
+            self._paint_selected_expander(painter, rect, item.isExpanded())
         if not (data and data[0] == 'channel'):
             return
         # On macOS the native tree style leaves an independently painted grey
@@ -395,6 +478,29 @@ class _CheckTolerantTree(QTreeWidget):
         if not gid:
             return
         self._paint_group_badge(painter, rect, gid)
+
+    def _paint_selected_expander(self, painter, rect, expanded):
+        """Repaint the selected glyph through the platform tree style."""
+        style = self._native_branch_style
+        if style is None:
+            return
+        option = QStyleOption()
+        option.initFrom(self)
+        # ``drawBranches`` supplies the complete indentation gutter.  The
+        # platform primitive expects the current 16px branch slot, so center
+        # it on the same right-edge anchor Qt uses for the unselected row.
+        draw_rect = QRect(rect)
+        # QMacStyle's unselected branch primitive sits two logical pixels
+        # farther right than the selected primitive.  Use the same right-edge
+        # anchor as the sibling row so both the glyph and its click slot line
+        # up after selection.
+        target_center_x = rect.right() - 8
+        draw_rect.translate(target_center_x - rect.center().x(), 0)
+        option.rect = draw_rect
+        option.state |= QStyle.State_Children | QStyle.State_Item
+        if expanded:
+            option.state |= QStyle.State_Open
+        style.drawPrimitive(QStyle.PE_IndicatorBranch, option, painter, self)
 
     def _paint_group_badge(self, painter, rect, gid):
         """在缩进槽右端（紧贴勾选框前）画组徽标：组色圆角方块 + 白色组号。
@@ -529,6 +635,10 @@ class MultiFileChannelWidget(QWidget):
         # Per-TimeDomain-View projection. The persisted owner is ViewState;
         # this set is the live channel-tree copy for the currently focused View.
         self._hidden_channels = set()
+        # The action column is shared by every product mode: file/raster rows
+        # use it to leave the focused View.  Only channel-eye toggles are
+        # time-domain-specific.
+        self._time_channel_visibility_available = True
         self.axis_groups_changed.connect(self.tree.viewport().update)
         self._sync_empty_state()
 
@@ -962,7 +1072,7 @@ class MultiFileChannelWidget(QWidget):
         previous = self._updating
         self._updating = True
         try:
-            if not checked:
+            if not self._time_channel_visibility_available or not checked:
                 item.setIcon(2, QIcon())
                 item.setToolTip(2, '')
             elif key in self._hidden_channels:
@@ -1026,7 +1136,15 @@ class MultiFileChannelWidget(QWidget):
         return changed
 
     def set_time_visibility_available(self, available):
-        self.tree.setColumnHidden(2, not bool(available))
+        """Enable channel eye toggles only while the time view is active.
+
+        File/raster removal shares this column and is meaningful to every
+        analysis module because their signal pickers use the focused View's
+        attached files.  Therefore switching analysis modes must suppress
+        only the time-domain eye action, not the whole column.
+        """
+        self._time_channel_visibility_available = bool(available)
+        self._refresh_visibility_icons()
 
     def _on_item_clicked(self, item, column):
         if column != 2:
@@ -1035,6 +1153,8 @@ class MultiFileChannelWidget(QWidget):
         fids = self._fids_for_node(item)
         if fids:
             self.files_detach_requested.emit(fids, item.text(0))
+            return
+        if not self._time_channel_visibility_available:
             return
         if not (data and data[0] == 'channel'):
             return

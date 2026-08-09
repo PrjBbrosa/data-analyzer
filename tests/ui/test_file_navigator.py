@@ -72,14 +72,21 @@ def test_channel_visibility_delegates_and_signal_bubbles(qapp, qtbot):
     assert blocker.args == ["f0", "speed", True]
 
 
-def test_time_visibility_column_availability_delegates(qapp):
+def test_time_visibility_toggle_keeps_file_remove_column_available(qapp):
     nav = FileNavigator()
+    _add_attached(nav, "f0", FakeFd())
+    tree = nav.channel_list.tree
+    parent = nav.channel_list._file_items["f0"]
+    channel = parent.child(0)
+    nav.set_checked_channels([("f0", "speed")])
 
     nav.set_time_visibility_available(False)
-    assert nav.channel_list.tree.isColumnHidden(2)
+    assert not tree.isColumnHidden(2)
+    assert channel.icon(2).isNull()
 
     nav.set_time_visibility_available(True)
-    assert not nav.channel_list.tree.isColumnHidden(2)
+    assert not tree.isColumnHidden(2)
+    assert not channel.icon(2).isNull()
 
 
 def test_channel_tree_file_parent_uses_full_filename_stem(qapp):
