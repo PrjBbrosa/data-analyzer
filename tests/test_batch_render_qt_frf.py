@@ -192,6 +192,44 @@ def test_frf_renderer_builds_shared_three_panel_scene_without_mutating_dc(qapp):
         scene.close()
 
 
+def test_frf_narrow_band_log_axis_still_labels_physical_hz(qapp):
+    """Regression: a narrow band straddling no decade integer lost every label.
+
+    ``_apply_tick_density`` pinned decade powers only, so a 20..80 Hz FRF with
+    a log frequency axis exported a PNG whose frequency axis was blank.
+    """
+    from mf4_analyzer.batch_render_qt._builder import build_batch_scene
+
+    frequency = np.array([20.0, 30.0, 40.0, 55.0, 70.0, 80.0])
+    narrow = BatchFrfSeries(
+        frequency_hz=frequency,
+        transfer=(1.0 + frequency / 100.0) * np.exp(1j * frequency / 200.0),
+        coherence=np.full(frequency.size, 0.95),
+        label="Acceleration / Force",
+        source_display_name="Rig A",
+        input_channel="Force",
+        output_channel="Acceleration",
+        input_unit="N",
+        output_unit="m/s²",
+    )
+    scene = build_batch_scene(
+        ("frf", BatchFrfFigureSpec((narrow,), frequency_scale="log")),
+        options=BatchRenderOptions(width_px=960, height_px=640),
+        context=BatchRenderContext(source_display_name="Rig A", method="frf"),
+    )
+    try:
+        scene.show_and_settle()
+        axis = scene.plots[2].getAxis("bottom")
+        assert axis.logMode is True
+        major = axis._tickLevels[0]
+        assert len(major) >= 2
+        for coord, label in major:
+            assert float(label) == pytest.approx(10.0 ** coord, rel=1e-9)
+        assert {label for _coord, label in major} == {"20", "50"}
+    finally:
+        scene.close()
+
+
 def test_frf_render_options_control_exact_image_geometry_and_background(qapp):
     from PyQt5.QtGui import QColor
 

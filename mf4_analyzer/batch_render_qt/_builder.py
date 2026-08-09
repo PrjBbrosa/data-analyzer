@@ -50,6 +50,7 @@ from mf4_analyzer.render_profile import (
     RenderProfile,
     bucket_width_for,
     classify_render_profile,
+    log_frequency_tick_levels,
     source_revision_for,
 )
 from ..ui_kit.axis_metrics import (
@@ -1130,16 +1131,16 @@ class BuiltBatchScene:
                     # The ViewBox is log10-space but the report contract is
                     # physical Hz.  AxisItem's default log minor ticks label
                     # every 2..9 multiplier at this page width, producing a
-                    # dense unreadable row.  Pin decade locations while
-                    # formatting their values back to Hz.
+                    # dense unreadable row.  Pin sparse decade locations while
+                    # formatting their values back to Hz -- via the same pure
+                    # ladder the interactive canvas uses, so a narrow band that
+                    # straddles no decade integer still gets labels here.
                     view = axis.linkedView()
                     if view is not None:
                         lo, hi = view.viewRange()[0]
-                        decades = range(int(math.ceil(lo)), int(math.floor(hi)) + 1)
-                        axis.setTicks([[
-                            (float(power), f"{10.0 ** power:g}")
-                            for power in decades
-                        ], []])
+                        ticks = log_frequency_tick_levels(float(lo), float(hi))
+                        if ticks:
+                            axis.setTicks([list(ticks), []])
                     continue
                 if not axis.isVisible():
                     continue

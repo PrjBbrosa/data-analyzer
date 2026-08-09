@@ -187,6 +187,141 @@ def test_frf_canvas_log_axis_uses_sparse_physical_hz_decades(qtbot):
     )
 
 
+def _wideband_result():
+    frequencies = np.array([0.0, 5.0, 20.0, 40.0, 80.0, 200.0])
+    transfer = np.array(
+        [1 + 0j, 2 + 0j, 3 + 1j, 1 - 1j, 0.5 + 0.5j, 0.25 + 0j]
+    )
+    coherence = np.array([1.0, 0.95, 0.99, 0.97, 0.93, 0.9])
+    return SimpleNamespace(
+        frequencies=frequencies,
+        transfer=transfer,
+        coherence=coherence,
+        effective=SimpleNamespace(fs=1000.0, df=1.0, segments=4),
+        warnings=(),
+    )
+
+
+def test_frf_canvas_log_axis_keeps_labels_when_zoomed_inside_one_decade(qtbot):
+    """Regression: zooming between two decade integers blanked the whole axis.
+
+    ``_sync_frequency_ticks`` pinned decade powers only, so a 20..80 Hz view --
+    which straddles no integer power of ten -- produced ``[[], []]`` and
+    pyqtgraph drew a frequency axis with no labels at all.
+    """
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(1600, 1000)
+    canvas.show()
+    canvas.set_result(_wideband_result(), {"frequency_scale": "log"}, {})
+
+    canvas.set_xlim(20.0, 80.0)
+    qtbot.wait(20)
+
+    axis = canvas._plot_coherence.getAxis("bottom")
+    major = axis._tickLevels[0]
+    assert len(major) >= 2
+    assert [label for _coord, label in major] == ["20", "50"]
+    # Labels remain physical Hz, not log10 coordinates.
+    for coord, label in major:
+        assert float(label) == pytest.approx(10.0 ** coord)
+
+    # Widening back out restores the sparse decade row unchanged.
+    canvas.set_xlim(1.0, 100.0)
+    qtbot.wait(20)
+    assert axis._tickLevels[0] == [(0.0, "1"), (1.0, "10"), (2.0, "100")]
+
+
+def test_frf_canvas_densest_mantissa_row_keeps_labels_from_colliding(qtbot):
+    """``setTicks`` is a hard specification -- pyqtgraph never thins it.
+
+    The worst case the ladder can produce is a just-under-two-decade window
+    holding five 1-2-5 rungs (20/50/100/200/500), so that row is the one whose
+    label geometry has to be checked.
+    """
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    result = _wideband_result()
+    result.frequencies = np.array([0.0, 10.5, 50.0, 200.0, 500.0, 950.0])
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 620)
+    canvas.show()
+    canvas.set_result(result, {"frequency_scale": "log"}, {})
+    canvas.set_xlim(10.5, 950.0)
+    qtbot.wait(20)
+
+    axis = canvas._plot_coherence.getAxis("bottom")
+    labels = [label for _coord, label in axis._tickLevels[0]]
+    assert labels == ["20", "50", "100", "200", "500"]
+
+    image = QImage(8, 8, QImage.Format_ARGB32_Premultiplied)
+    painter = QPainter(image)
+    try:
+        _axis_spec, _tick_specs, text_specs = axis.generateDrawSpecs(painter)
+    finally:
+        painter.end()
+    rects = [
+        rect for rect, _flags, text in text_specs if text in set(labels)
+    ]
+    assert len(rects) >= 2
+    rects.sort(key=lambda rect: rect.left())
+    assert all(
+        rects[index].right() < rects[index + 1].left()
+        for index in range(len(rects) - 1)
+    )
+
+
+def test_frf_canvas_cursor_magnitude_carries_its_scale_unit(qtbot):
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.set_result(
+        _wideband_result(),
+        {"magnitude_scale": "db", "frequency_scale": "linear"},
+        {"input_unit": "N", "output_unit": "m/s"},
+    )
+
+    db_readout = canvas.set_cursor_frequency(20.0)
+    assert " dB" in db_readout
+    assert "phase=" in db_readout and "coherence=" in db_readout
+
+    canvas.set_display_params({"magnitude_scale": "linear"})
+    linear_readout = canvas.set_cursor_frequency(20.0)
+    assert " dB" not in linear_readout
+    # Linear magnitude keeps the directional ratio unit of the pair.
+    assert "m/s/N" in linear_readout
+    magnitude = float(
+        linear_readout.split("|H|=")[1].split(" ")[0]
+    )
+    assert magnitude == pytest.approx(abs(3 + 1j), rel=1e-4)
+
+
+def test_frf_canvas_cursor_omits_a_dimensionless_ratio_suffix(qtbot):
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.set_result(
+        _wideband_result(),
+        {"magnitude_scale": "linear", "frequency_scale": "linear"},
+        {"input_unit": "N", "output_unit": "N"},
+    )
+
+    readout = canvas.set_cursor_frequency(20.0)
+    assert " dB" not in readout
+    # output/input of matching units is "1"; a bare "1" suffix reads as a digit.
+    assert "|H|=3.1623 |" in readout
+
+    canvas.set_result(
+        _wideband_result(), {"magnitude_scale": "linear"}, {},
+    )
+    assert "ratio" not in canvas.set_cursor_frequency(20.0)
+
+
 def test_frf_canvas_toolbar_history_round_trips_log_ranges_in_hz(qtbot):
     from mf4_analyzer.ui.chart_stack.toolbar import PgNavigationToolbar
     from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas

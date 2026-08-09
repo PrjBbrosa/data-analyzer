@@ -14,6 +14,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
+from mf4_analyzer.render_profile import log_frequency_tick_levels
 from mf4_analyzer.signal.frf import (
     magnitude_db,
     magnitude_linear,
@@ -318,6 +319,19 @@ class PgFrfCanvas(QWidget):
             return f"1/{input_unit}"
         return "ratio"
 
+    def _magnitude_unit_suffix(self) -> str:
+        """Return the unit written after the cursor's ``|H|`` value.
+
+        The magnitude panel's own axis label already carries this unit; the
+        readout used to print a bare number, so a dB figure and a linear ratio
+        were indistinguishable. ``"ratio"``/``"1"`` are dropped because a
+        trailing ``1`` reads as part of the number.
+        """
+        if str(self._display_params.get("magnitude_scale")).lower() == "db":
+            return " dB"
+        unit = self._ratio_unit_label()
+        return "" if unit in ("ratio", "1") else f" {unit}"
+
     def _apply_curve_data(self) -> None:
         threshold = float(self._display_params["coherence_threshold"])
         fade = bool(self._display_params["fade_low_coherence"])
@@ -405,10 +419,14 @@ class PgFrfCanvas(QWidget):
             axis.setTicks(None)
             return
         lo, hi = self._plot_magnitude.vb.viewRange()[0]
-        decades = range(int(np.ceil(lo)), int(np.floor(hi)) + 1)
-        axis.setTicks([[
-            (float(power), f"{10.0 ** power:g}") for power in decades
-        ], []])
+        # Shared with the batch report's log frequency axis so a zoom and its
+        # exported PNG agree on which frequencies get labelled.
+        ticks = log_frequency_tick_levels(float(lo), float(hi))
+        if not ticks:
+            # Degenerate view range mid-transition; keep the existing row
+            # rather than blanking the axis.
+            return
+        axis.setTicks([list(ticks), []])
 
     def set_xlim(self, xmin, xmax) -> None:
         lo, hi = float(xmin), float(xmax)
@@ -612,7 +630,9 @@ class PgFrfCanvas(QWidget):
             line.setValue(self._hz_to_view_x(f_value))
             line.show()
         text = (
-            f"f={f_value:g} Hz | |H|={self._draw_magnitude[idx]:.5g} | "
+            f"f={f_value:g} Hz | "
+            f"|H|={self._draw_magnitude[idx]:.5g}"
+            f"{self._magnitude_unit_suffix()} | "
             f"phase={self._draw_phase[idx]:.5g}° | "
             f"coherence={self._draw_coherence[idx]:.4g}"
         )
