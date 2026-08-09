@@ -139,7 +139,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "频响",
-                sub="频响（FRF / 系统辨识）：看输出相对输入；取时域范围为一次性快照",
+                sub="频响（FRF / 系统辨识）：看输出相对输入",
                 accent=_MODE_FRF,
             ),
         ),
@@ -247,6 +247,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 "双游标",
                 sub="点 A 点 B → ΔT 与区间统计",
                 keys=(_sc("cursor_dual"),),
+            ),
+            QuickRow(
+                "频谱 / 频响游标",
+                sub="工具栏选关 / 单 / 双；双游标读 A/B、突出 Δf 与 ΔY；每个 pane 记住，默认关闭",
             ),
         ),
     ),

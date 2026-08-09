@@ -120,6 +120,42 @@ class FrfMixin:
             }
             pane.ylim = pane.ylims.get("magnitude")
 
+    def _capture_frequency_cursor_controls(self, section, state):
+        """Capture the shared off/single/dual cursor state for FFT or FRF."""
+        page = self._analysis_page(section)
+        for pane_idx in range(min(page.pane_count(), len(state.panes))):
+            card = page._cards[pane_idx]
+            getter = getattr(card, "cursor_mode", None)
+            if callable(getter):
+                state.panes[pane_idx].cursor_mode = getter()
+
+    def _apply_frequency_cursor_controls(self, section, state):
+        """Restore FFT/FRF pane cursor states without emitting a user edge."""
+        page = self._analysis_page(section)
+        for pane_idx in range(min(page.pane_count(), len(state.panes))):
+            card = page._cards[pane_idx]
+            setter = getattr(card, "set_cursor_mode", None)
+            if callable(setter):
+                setter(
+                    state.panes[pane_idx].cursor_mode,
+                    notify=False,
+                )
+        sync = getattr(page, "_sync_frequency_cursor_control", None)
+        if callable(sync):
+            sync()
+
+    def _on_analysis_cursor_mode_changed(self, section, canvas, mode):
+        """Persist a frequency cursor selection onto exactly its owning pane."""
+        if section not in {"fft", "frf"}:
+            return
+        manager = self.analysis_managers[section]
+        state = manager.get(manager.active)
+        page = self._analysis_page(section)
+        for pane_idx in range(min(page.pane_count(), len(state.panes))):
+            if page.pane_canvas(pane_idx) is canvas:
+                state.panes[pane_idx].cursor_mode = mode
+                break
+
     def _restore_frf_canvas_ranges(self, canvas, pane):
         if pane.xlim is not None:
             canvas.set_xlim(*pane.xlim)

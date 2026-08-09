@@ -117,6 +117,14 @@ def test_modes_group_has_five_rows_each_with_sub_and_frf_explanation():
     assert modes.wide is True
 
 
+def test_quickref_explains_the_pane_local_frequency_cursor_modes():
+    group = next(g for g in quickref.QUICKREF if g.title == "游标")
+    row = next(row for row in group.rows if row.desc == "频谱 / 频响游标")
+    assert "关 / 单 / 双" in row.sub
+    assert "Δf" in row.sub
+    assert "ΔY" in row.sub
+    assert "pane" in row.sub and "默认关闭" in row.sub
+
 
 def test_order_mode_names_eps_motor_speed():
     modes = next(g for g in quickref.QUICKREF if g.title == "五个分析模式")

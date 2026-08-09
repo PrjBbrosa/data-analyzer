@@ -371,7 +371,17 @@ class _BoundaryGridAxisItem(GridLabelSlackAxisItem):
         return axis_spec, kept, text_specs
 
 
-def _make_analysis_plot(glw, row, col, view_box):
+class _FrfBottomAxisItem(_BoundaryGridAxisItem):
+    """FRF-only bottom axis: labelled majors plus visible log minor grids."""
+
+    def set_frf_log_ticks(self, major_ticks, minor_values) -> None:
+        self._frf_minor_tick_values = tuple(float(value) for value in minor_values)
+        self.setTicks([
+            list(major_ticks),
+            [(float(value), "") for value in self._frf_minor_tick_values],
+        ])
+
+def _make_analysis_plot(glw, row, col, view_box, *, frf_bottom_axis=False):
     """Add a PlotItem whose left+bottom axes use ``_BoundaryGridAxisItem`` so the
     outermost grid line never doubles up with the neutral frame.
 
@@ -384,7 +394,10 @@ def _make_analysis_plot(glw, row, col, view_box):
         viewBox=view_box,
         axisItems={
             'left': _BoundaryGridAxisItem(orientation='left'),
-            'bottom': _BoundaryGridAxisItem(orientation='bottom'),
+            'bottom': (
+                _FrfBottomAxisItem(orientation='bottom')
+                if frf_bottom_axis else _BoundaryGridAxisItem(orientation='bottom')
+            ),
         },
     )
 

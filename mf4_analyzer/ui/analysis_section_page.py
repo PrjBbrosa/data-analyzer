@@ -290,6 +290,19 @@ class AnalysisSectionPage(QWidget):
         toolbar._save_pixmap_provider = self.grab_combined_pixmap
         if self._cards:
             self._cards[0]._options_canvas_provider = self.focused_canvas
+            set_cursor_target = getattr(
+                self._cards[0], 'set_frequency_cursor_target_provider', None)
+            if callable(set_cursor_target):
+                # The primary card's toolbar is detached before ``_focused``
+                # is initialized in __init__; default to pane 0 during that
+                # construction-only interval.
+                set_cursor_target(
+                    lambda: self._cards[getattr(self, '_focused', 0)]
+                )
+                sync_cursor = getattr(
+                    self._cards[0], 'sync_frequency_cursor_control', None)
+                if callable(sync_cursor):
+                    sync_cursor()
 
     def _focused_nav_delegate(self):
         if self._focused <= 0 or self._focused >= len(self._cards):
@@ -346,11 +359,20 @@ class AnalysisSectionPage(QWidget):
         idx = max(0, min(idx, len(self._cards) - 1))
         if idx == self._focused:
             self._apply_focus_style()
+            self._sync_frequency_cursor_control()
             return
         self._previous_focused = self._focused
         self._focused = idx
         self._apply_focus_style()
+        self._sync_frequency_cursor_control()
         self.focus_changed.emit(idx)
+
+    def _sync_frequency_cursor_control(self) -> None:
+        if not self._cards:
+            return
+        sync = getattr(self._cards[0], 'sync_frequency_cursor_control', None)
+        if callable(sync):
+            sync()
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.MouseButtonPress and len(self._cards) > 1:

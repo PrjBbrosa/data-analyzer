@@ -6,15 +6,19 @@ and owns the three linked plotting surfaces.
 """
 from __future__ import annotations
 
+from html import escape
 import logging
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 
-from mf4_analyzer.render_profile import log_frequency_tick_levels
+from mf4_analyzer.render_profile import (
+    log_frequency_minor_tick_levels,
+    log_frequency_tick_levels,
+)
 from mf4_analyzer.signal.frf import (
     magnitude_db,
     magnitude_linear,
@@ -43,6 +47,10 @@ _STATE_TEXT = {
     "progress": "正在计算",
     "error": "计算失败",
 }
+
+_DUAL_CURSOR_DELTA_STYLE = (
+    "color:#0b7af3; background-color:#e8f1ff; font-weight:700;"
+)
 
 
 def _finite_singleton_mask(x_values, y_values) -> np.ndarray:
@@ -90,6 +98,7 @@ class PgFrfCanvas(QWidget):
     """Three-row magnitude/phase/coherence work surface with shared X."""
 
     cursor_info = pyqtSignal(str)
+    dual_cursor_info = pyqtSignal(str)
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
     manual_zoom_changed = pyqtSignal(bool)
@@ -152,6 +161,15 @@ class PgFrfCanvas(QWidget):
         self._coherence_curve = self._plot_coherence.plot(
             [], [], pen=coherence_pen, connect="finite", antialias=True
         )
+        # Keep the settled FRF curves crisp, but do not rasterize five
+        # full-length AA curves on every interactive zoom frame.  This mirrors
+        # the FFT canvas policy: AA drops immediately, then comes back after a
+        # short hands-off interval.
+        self._aa_on = True
+        self._aa_idle_timer = QTimer(self)
+        self._aa_idle_timer.setSingleShot(True)
+        self._aa_idle_timer.setInterval(150)
+        self._aa_idle_timer.timeout.connect(self._enable_idle_quality)
         self._threshold_line = pg.InfiniteLine(
             pos=_DEFAULT_DISPLAY["coherence_threshold"],
             angle=0,
@@ -160,15 +178,13 @@ class PgFrfCanvas(QWidget):
         )
         self._plot_coherence.addItem(self._threshold_line)
 
-        self._cursor_lines = []
-        for plot in self.plots:
-            line = pg.InfiniteLine(
-                angle=90, movable=False, pen=pg.mkPen("#64748b", width=1)
-            )
-            line.setZValue(50)
-            line.hide()
-            plot.addItem(line, ignoreBounds=True)
-            self._cursor_lines.append(line)
+        self._cursor_lines = self._make_cursor_lines("#64748b")
+        self._cursor_a_lines = self._make_cursor_lines("#1769e0")
+        self._cursor_b_lines = self._make_cursor_lines("#d97706")
+        self._cursor_mode = "off"
+        self._cursor_a_frequency = None
+        self._cursor_b_frequency = None
+        self._next_dual_cursor = "a"
 
         self.axes_list = [_AxisShim(plot.vb) for plot in self.plots]
         self._channel_lines = {
@@ -197,16 +213,92 @@ class PgFrfCanvas(QWidget):
         )
         self._scene_mouse_slot = self._on_scene_mouse_moved
         self._glw.scene().sigMouseMoved.connect(self._scene_mouse_slot)
+        self._scene_click_slot = self._on_scene_mouse_clicked
+        self._glw.scene().sigMouseClicked.connect(self._scene_click_slot)
         self._frequency_range_slot = self._sync_frequency_ticks
         self._plot_magnitude.vb.sigXRangeChanged.connect(
             self._frequency_range_slot
         )
+        self._interactive_range_slot = self._on_interactive_range_changed
+        for plot in self.plots:
+            plot.vb.sigRangeChangedManually.connect(
+                self._interactive_range_slot
+            )
         self.set_state("empty")
         self._plot_host.schedule_alignment()
 
     def _store_empty_hint_state(self, item, text):
         self._empty_hint_item = item
         self._empty_hint_text = text
+
+    def _make_cursor_lines(self, color):
+        lines = []
+        for plot in self.plots:
+            line = pg.InfiniteLine(
+                angle=90, movable=False, pen=pg.mkPen(color, width=1.2)
+            )
+            line.setZValue(50)
+            line.hide()
+            plot.addItem(line, ignoreBounds=True)
+            lines.append(line)
+        return lines
+
+    def _interactive_curves(self):
+        return (
+            self._magnitude_curve,
+            self._magnitude_low_curve,
+            self._phase_curve,
+            self._phase_low_curve,
+            self._coherence_curve,
+        )
+
+    @staticmethod
+    def _set_curve_aa(curve, on) -> None:
+        on = bool(on)
+        try:
+            curve.opts["antialias"] = on
+        except (AttributeError, TypeError):
+            pass
+        # pyqtgraph applies PlotDataItem AA to its child PlotCurveItem only
+        # through setData().  Zooming intentionally does not call setData(),
+        # so update the painted child directly.
+        child = getattr(curve, "curve", None)
+        if child is not None:
+            try:
+                child.opts["antialias"] = on
+                child.update()
+            except (AttributeError, RuntimeError, TypeError):
+                pass
+
+    def disable_interactive_quality(self) -> None:
+        """Use AA-off curves while an FRF pan or zoom is in progress."""
+        self._aa_idle_timer.stop()
+        if not self._aa_on:
+            return
+        for curve in self._interactive_curves():
+            self._set_curve_aa(curve, False)
+        self._aa_on = False
+        self._glw.update()
+
+    def schedule_idle_quality(self) -> None:
+        """Restore anti-aliasing only after the interactive gesture settles."""
+        self._aa_idle_timer.start()
+
+    def _enable_idle_quality(self) -> None:
+        if self._aa_on:
+            return
+        if QApplication.mouseButtons() != Qt.NoButton:
+            self._aa_idle_timer.start()
+            return
+        for curve in self._interactive_curves():
+            self._set_curve_aa(curve, True)
+        self._aa_on = True
+        self._glw.update()
+
+    def _on_interactive_range_changed(self, *_args) -> None:
+        """Treat native ViewBox wheel/pan updates like modifier-wheel zoom."""
+        self.disable_interactive_quality()
+        self.schedule_idle_quality()
 
     def _reposition_empty_hint(self, *_args):
         self._empty_hint.reposition()
@@ -252,6 +344,7 @@ class PgFrfCanvas(QWidget):
         if display_params:
             self._display_params.update(dict(display_params))
         self._state = "ready"
+        self._clear_frequency_cursor_readout()
         self.clear_empty_hint()
         self._render_result()
         self._plot_host.schedule_alignment()
@@ -414,9 +507,14 @@ class PgFrfCanvas(QWidget):
         )
 
     def _sync_frequency_ticks(self, *_args) -> None:
-        axis = self._plot_coherence.getAxis("bottom")
+        axes = [plot.getAxis("bottom") for plot in self.plots]
         if not self._is_log_frequency():
-            axis.setTicks(None)
+            # A restored linear scale may reuse this axis after a log view.
+            # Do not let its former 2..9 decade positions shorten unrelated
+            # adaptive linear ticks in the custom draw path.
+            for axis in axes:
+                setattr(axis, "_frf_minor_tick_values", ())
+                axis.setTicks(None)
             return
         lo, hi = self._plot_magnitude.vb.viewRange()[0]
         # Shared with the batch report's log frequency axis so a zoom and its
@@ -426,7 +524,15 @@ class PgFrfCanvas(QWidget):
             # Degenerate view range mid-transition; keep the existing row
             # rather than blanking the axis.
             return
-        axis.setTicks([list(ticks), []])
+        minor_ticks = log_frequency_minor_tick_levels(lo, hi, ticks)
+        for axis in axes:
+            setter = getattr(axis, "set_frf_log_ticks", None)
+            if callable(setter):
+                setter(ticks, minor_ticks)
+            else:
+                axis.setTicks([
+                    list(ticks), [(value, "") for value in minor_ticks],
+                ])
 
     def set_xlim(self, xmin, xmax) -> None:
         lo, hi = float(xmin), float(xmax)
@@ -574,6 +680,10 @@ class PgFrfCanvas(QWidget):
                 )
         except (RuntimeError, TypeError, ValueError, FloatingPointError):
             return False
+        # Programmatic ranges do not emit sigRangeChangedManually, so this
+        # modifier-wheel path must enter the same AA-off interaction state.
+        self.disable_interactive_quality()
+        self.schedule_idle_quality()
         self.layout_geometry_changed.emit()
         self._plot_host.schedule_alignment()
         return True
@@ -607,6 +717,8 @@ class PgFrfCanvas(QWidget):
         self._plot_host.apply_alignment(left_axis_width=left_axis_width)
 
     def _on_scene_mouse_moved(self, scene_pos) -> None:
+        if self._cursor_mode != "single":
+            return
         for plot in self.plots:
             if plot.vb.sceneBoundingRect().contains(scene_pos):
                 frequency = self._view_x_to_hz(
@@ -615,20 +727,65 @@ class PgFrfCanvas(QWidget):
                 self.set_cursor_frequency(frequency)
                 return
 
-    def set_cursor_frequency(self, frequency) -> str:
+    def _on_scene_mouse_clicked(self, event) -> None:
+        if self._cursor_mode != "dual" or event.button() != Qt.LeftButton:
+            return
+        scene_pos = event.scenePos()
+        for plot in self.plots:
+            if plot.vb.sceneBoundingRect().contains(scene_pos):
+                frequency = self._view_x_to_hz(
+                    plot.vb.mapSceneToView(scene_pos).x()
+                )
+                if self._next_dual_cursor == "a":
+                    self.set_dual_cursor_frequencies(frequency, None)
+                    self._next_dual_cursor = "b"
+                else:
+                    self.set_dual_cursor_frequencies(
+                        self._cursor_a_frequency, frequency
+                    )
+                    self._next_dual_cursor = "a"
+                event.accept()
+                return
+
+    def _nearest_frequency_index(self, frequency):
         if self._draw_frequencies.size == 0:
-            self.cursor_info.emit("")
-            return ""
-        target = float(frequency)
+            return None
         finite = np.isfinite(self._draw_frequencies)
         if not np.any(finite):
-            return ""
+            return None
         finite_indices = np.flatnonzero(finite)
-        idx = int(finite_indices[np.argmin(np.abs(self._draw_frequencies[finite] - target))])
-        f_value = float(self._draw_frequencies[idx])
-        for line in self._cursor_lines:
-            line.setValue(self._hz_to_view_x(f_value))
+        return int(finite_indices[np.argmin(
+            np.abs(self._draw_frequencies[finite] - float(frequency))
+        )])
+
+    def _show_frequency_lines(self, lines, frequency) -> None:
+        for line in lines:
+            line.setValue(self._hz_to_view_x(frequency))
             line.show()
+
+    @staticmethod
+    def _hide_frequency_lines(lines) -> None:
+        for line in lines:
+            line.hide()
+
+    def _clear_frequency_cursor_readout(self) -> None:
+        """Clear samples/lines without changing the persisted cursor mode."""
+        self._hide_frequency_lines(self._cursor_lines)
+        self._hide_frequency_lines(self._cursor_a_lines)
+        self._hide_frequency_lines(self._cursor_b_lines)
+        self._cursor_a_frequency = None
+        self._cursor_b_frequency = None
+        self._next_dual_cursor = "a"
+        self.cursor_info.emit("")
+        self.dual_cursor_info.emit("")
+
+    def set_cursor_frequency(self, frequency) -> str:
+        idx = self._nearest_frequency_index(frequency)
+        if idx is None:
+            self.cursor_info.emit("")
+            return ""
+        f_value = float(self._draw_frequencies[idx])
+        self._show_frequency_lines(self._cursor_lines, f_value)
         text = (
             f"f={f_value:g} Hz | "
             f"|H|={self._draw_magnitude[idx]:.5g}"
@@ -638,6 +795,82 @@ class PgFrfCanvas(QWidget):
         )
         self.cursor_info.emit(text)
         return text
+
+    def _format_dual_sample(self, prefix, index) -> str:
+        frequency = float(self._draw_frequencies[index])
+        return (
+            f"{prefix}: f={frequency:g} Hz | "
+            f"|H|={self._draw_magnitude[index]:.5g}{self._magnitude_unit_suffix()} | "
+            f"phase={self._draw_phase[index]:.5g}° | "
+            f"coherence={self._draw_coherence[index]:.4g}"
+        )
+
+    def _format_dual_delta(self, a_index, b_index) -> str:
+        """Return the highlighted B-minus-A readout for every FRF Y axis."""
+        magnitude = self._draw_magnitude[b_index] - self._draw_magnitude[a_index]
+        phase = self._draw_phase[b_index] - self._draw_phase[a_index]
+        coherence = self._draw_coherence[b_index] - self._draw_coherence[a_index]
+        return (
+            f'<span style="{_DUAL_CURSOR_DELTA_STYLE}">'
+            "ΔY："
+            f"Δ|H|={magnitude:+.5g}{escape(self._magnitude_unit_suffix())} | "
+            f"Δphase={phase:+.5g}° | "
+            f"Δcoherence={coherence:+.4g}"
+            "</span>"
+        )
+
+    def set_dual_cursor_frequencies(self, a_frequency, b_frequency) -> str:
+        """Place the FRF A/B cursors and publish fA/fB/Δf plus both values."""
+        a_index = self._nearest_frequency_index(a_frequency)
+        if a_index is None:
+            self.cursor_info.emit("")
+            self.dual_cursor_info.emit("")
+            return ""
+        self._cursor_a_frequency = float(self._draw_frequencies[a_index])
+        self._show_frequency_lines(self._cursor_a_lines, self._cursor_a_frequency)
+        self._cursor_b_frequency = None
+        self._hide_frequency_lines(self._cursor_b_lines)
+        if b_frequency is None:
+            primary = f"A: f={self._cursor_a_frequency:g} Hz | 点击 B 选择第二点"
+            self.cursor_info.emit(primary)
+            self.dual_cursor_info.emit("")
+            return primary
+        b_index = self._nearest_frequency_index(b_frequency)
+        if b_index is None:
+            return ""
+        self._cursor_b_frequency = float(self._draw_frequencies[b_index])
+        self._show_frequency_lines(self._cursor_b_lines, self._cursor_b_frequency)
+        delta = self._cursor_b_frequency - self._cursor_a_frequency
+        primary = (
+            f"A={self._cursor_a_frequency:g} Hz | "
+            f"B={self._cursor_b_frequency:g} Hz | "
+            f'<span style="{_DUAL_CURSOR_DELTA_STYLE}">'
+            f"Δf={delta:+g} Hz</span>"
+        )
+        self.cursor_info.emit(primary)
+        self.dual_cursor_info.emit(
+            f"{self._format_dual_sample('A', a_index)}<br>"
+            f"{self._format_dual_sample('B', b_index)}<br>"
+            f"{self._format_dual_delta(a_index, b_index)}"
+        )
+        return primary
+
+    def cursor_mode(self) -> str:
+        return self._cursor_mode
+
+    def set_cursor_mode(self, mode: str) -> None:
+        if mode not in {"off", "single", "dual"}:
+            return
+        self._cursor_mode = mode
+        self._clear_frequency_cursor_readout()
+
+    def cursor_enabled(self) -> bool:
+        """Whether this FRF pane exposes its linked frequency readout."""
+        return self._cursor_mode != "off"
+
+    def set_cursor_enabled(self, enabled: bool) -> None:
+        """Compatibility bridge for schema-4 callers (true → single)."""
+        self.set_cursor_mode("single" if enabled else "off")
 
     def register_replot_callback(self, callback) -> None:
         if callable(callback):
@@ -679,9 +912,7 @@ class PgFrfCanvas(QWidget):
             self._coherence_singleton_points,
         ):
             curve.setData([], [])
-        for line in self._cursor_lines:
-            line.hide()
-        self.cursor_info.emit("")
+        self._clear_frequency_cursor_readout()
         self.set_state("empty")
         self._run_replot_callbacks()
         self.layout_geometry_changed.emit()
@@ -705,8 +936,15 @@ class PgFrfCanvas(QWidget):
         )
 
     def closeEvent(self, event):
+        self._aa_idle_timer.stop()
         try:
             self._glw.scene().sigMouseMoved.disconnect(self._scene_mouse_slot)
+        except (TypeError, RuntimeError):
+            # The scene or signal wrapper may already be gone during QObject
+            # child teardown; no live callback remains in either case.
+            pass
+        try:
+            self._glw.scene().sigMouseClicked.disconnect(self._scene_click_slot)
         except (TypeError, RuntimeError):
             # The scene or signal wrapper may already be gone during QObject
             # child teardown; no live callback remains in either case.
@@ -718,6 +956,14 @@ class PgFrfCanvas(QWidget):
         except (TypeError, RuntimeError):
             # The ViewBox wrapper can already be invalid during child teardown.
             pass
+        for plot in self.plots:
+            try:
+                plot.vb.sigRangeChangedManually.disconnect(
+                    self._interactive_range_slot
+                )
+            except (TypeError, RuntimeError):
+                # The ViewBox wrapper can already be invalid during teardown.
+                pass
         self._empty_hint.clear()
         super().closeEvent(event)
 

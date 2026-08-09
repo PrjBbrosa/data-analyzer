@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -170,6 +171,113 @@ def test_chart_stack_registers_frf_page_manager_and_reset(qapp, qtbot):
     cs.canvas_frf.set_state("error", "boom")
     cs.full_reset_all()
     assert cs.canvas_frf.state() == "empty"
+
+
+def test_frf_cursor_toolbar_reuses_the_off_single_dual_controls(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(1000, 700)
+    cs.show()
+    cs.set_mode("frf")
+    canvas = cs.canvas_frf
+    canvas.set_result(
+        SimpleNamespace(
+            frequencies=np.array([1.0, 10.0, 100.0]),
+            transfer=np.array([1 + 0j, 2 + 0j, 3 + 0j]),
+            coherence=np.array([1.0, 0.95, 0.9]),
+            effective=SimpleNamespace(fs=1000.0, df=1.0, segments=4),
+            warnings=(),
+        ),
+        {"frequency_scale": "log"},
+        {},
+    )
+    buttons = cs._frf_card._cursor_buttons
+
+    assert buttons["off"].isChecked()
+    assert not canvas.cursor_enabled()
+    buttons["single"].click()
+    assert buttons["single"].isChecked()
+    assert canvas.cursor_mode() == "single"
+    assert canvas.cursor_enabled()
+    canvas.set_cursor_frequency(10.0)
+    qapp.processEvents()
+    assert cs._pill.isVisible()
+    assert "coherence=" in cs._pill.primary_text()
+
+    buttons["dual"].click()
+    qapp.processEvents()
+    assert canvas.cursor_mode() == "dual"
+    canvas.set_dual_cursor_frequencies(1.0, 100.0)
+    assert cs._pill.isVisible()
+    assert "Δf=" in cs._pill.primary_text()
+    assert "background-color:#e8f1ff" in cs._pill.primary_text()
+    assert "ΔY：Δ|H|=" in cs._pill._detail.text()
+    assert cs._pill.has_detail()
+
+    buttons["off"].click()
+    qapp.processEvents()
+    assert not canvas.cursor_enabled()
+    assert all(not line.isVisible() for lines in (
+        canvas._cursor_lines, canvas._cursor_a_lines, canvas._cursor_b_lines,
+    ) for line in lines)
+    assert not cs._pill.isVisible()
+
+
+def test_fft_card_exposes_the_same_frequency_cursor_options(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(1000, 700)
+    cs.show()
+    cs.set_mode("fft")
+    card = cs._fft_card
+    canvas = cs.canvas_fft
+    canvas._entries = [{
+        "freq": np.array([1.0, 10.0, 100.0]),
+        "amp": np.array([2.0, 3.0, 4.0]),
+        "label": "Acceleration",
+    }]
+
+    assert set(card._cursor_buttons) == {"off", "single", "dual"}
+    assert card._cursor_buttons["off"].toolTip().endswith(
+        f"({QKeySequence('Ctrl+3').toString(QKeySequence.NativeText)})"
+    )
+    assert card._cursor_buttons["single"].toolTip().endswith(
+        f"({QKeySequence('Ctrl+4').toString(QKeySequence.NativeText)})"
+    )
+    assert card._cursor_buttons["dual"].toolTip().endswith(
+        f"({QKeySequence('Ctrl+5').toString(QKeySequence.NativeText)})"
+    )
+    card._cursor_buttons["dual"].click()
+    canvas.set_dual_cursor_frequencies(1.0, 100.0)
+    qapp.processEvents()
+    assert canvas.cursor_mode() == "dual"
+    assert "Δf=" in cs._pill.primary_text()
+    assert "background-color:#e8f1ff" in cs._pill.primary_text()
+    assert "ΔY：Acceleration=" in cs._pill._detail.text()
+    assert "background-color:#e8f1ff" in cs._pill._detail.text()
+    assert cs._pill.has_detail()
+
+
+def test_frequency_cursor_controls_are_trailing_aligned_like_time(qapp, qtbot):
+    """Shown toolbars must spend spare width before, not after, the segment."""
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(1000, 700)
+    cs.show()
+    qapp.processEvents()
+
+    for mode, card in (("fft", cs._fft_card), ("frf", cs._frf_card)):
+        cs.set_mode(mode)
+        qapp.processEvents()
+        spacer = card._frequency_controls_spacer
+        buttons = tuple(card._cursor_buttons.values())
+        assert spacer.width() > 0
+        assert buttons[0].geometry().left() > spacer.geometry().right()
+        # The last selection button reaches the toolbar's trailing content
+        # edge, just as the time-domain 双游标 button does.
+        assert (
+            card.toolbar.contentsRect().right() - buttons[-1].geometry().right()
+        ) <= 8
 
 
 
@@ -2108,6 +2216,18 @@ def test_time_controls_spacer_has_toolbar_background_rule():
 
     match = re.search(
         r"QWidget#chartToolbar QWidget#chartTimeControlsSpacer\s*\{(?P<body>[^}]*)\}",
+        qss,
+        flags=re.S,
+    )
+    assert match is not None
+    assert "background-color: transparent;" in match.group("body")
+
+
+def test_frequency_controls_spacer_has_toolbar_background_rule():
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+
+    match = re.search(
+        r"QWidget#chartToolbar QWidget#chartFrequencyControlsSpacer\s*\{(?P<body>[^}]*)\}",
         qss,
         flags=re.S,
     )

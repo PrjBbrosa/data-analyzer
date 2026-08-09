@@ -36,6 +36,14 @@ def _coerce_key(value: Any) -> ChannelKey:
     return (str(fid), str(ch))
 
 
+def _cursor_mode_from_data(data: dict[str, Any]) -> str:
+    """Read schema-5 mode, migrating the short-lived schema-4 FRF flag."""
+    mode = str(data.get("cursor_mode") or "")
+    if mode in {"off", "single", "dual"}:
+        return mode
+    return "single" if data.get("frf_cursor_enabled") else "off"
+
+
 @dataclass
 class PaneState:
     sources: list[ChannelKey] = field(default_factory=list)
@@ -51,6 +59,9 @@ class PaneState:
     # user's manual/current-Time-View snapshot and must not be overwritten by
     # sample-grid rounding during candidate construction.
     effective_time_range: tuple[float, float] | None = None
+    # FFT and FRF only.  ``frf_cursor_enabled`` was the schema-4 predecessor;
+    # old project payloads migrate its true value to the single-cursor mode.
+    cursor_mode: str = "off"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -70,6 +81,7 @@ class PaneState:
                 list(self.effective_time_range)
                 if self.effective_time_range else None
             ),
+            "cursor_mode": self.cursor_mode,
         }
 
     @classmethod
@@ -97,6 +109,7 @@ class PaneState:
                 if data.get("source_time_view_id") else None
             ),
             effective_time_range=pair(data.get("effective_time_range")),
+            cursor_mode=_cursor_mode_from_data(data),
         )
 
 

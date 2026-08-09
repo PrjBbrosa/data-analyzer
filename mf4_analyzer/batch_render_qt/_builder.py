@@ -41,7 +41,7 @@ from mf4_analyzer.qt_analysis_shared import (
     _slice_amp_bounds,
 )
 from mf4_analyzer.qt_plot_helpers import (
-    BorderAlignedAxisItem,
+    FrfMinorTickAxisItem,
     GridLabelSlackAxisItem,
     hide_native_auto_button,
     show_major_grid_left_bottom_only,
@@ -50,6 +50,7 @@ from mf4_analyzer.render_profile import (
     RenderProfile,
     bucket_width_for,
     classify_render_profile,
+    log_frequency_minor_tick_levels,
     log_frequency_tick_levels,
     source_revision_for,
 )
@@ -1140,7 +1141,17 @@ class BuiltBatchScene:
                         lo, hi = view.viewRange()[0]
                         ticks = log_frequency_tick_levels(float(lo), float(hi))
                         if ticks:
-                            axis.setTicks([list(ticks), []])
+                            minor_ticks = log_frequency_minor_tick_levels(
+                                lo, hi, ticks
+                            )
+                            setter = getattr(axis, "set_frf_log_ticks", None)
+                            if callable(setter):
+                                setter(ticks, minor_ticks)
+                            else:
+                                axis.setTicks([
+                                    list(ticks),
+                                    [(value, "") for value in minor_ticks],
+                                ])
                     continue
                 if not axis.isVisible():
                     continue
@@ -1385,7 +1396,7 @@ class _SceneBuilder:
             col=0,
             axisItems={
                 "left": GridLabelSlackAxisItem(orientation="left"),
-                "bottom": BorderAlignedAxisItem(orientation="bottom"),
+                "bottom": FrfMinorTickAxisItem(orientation="bottom"),
             },
         )
         hide_native_auto_button(plot)

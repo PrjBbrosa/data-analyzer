@@ -31,14 +31,15 @@ class FrfStackedPlotHost:
         self.widget.ci.setSpacing(2)
         self.plots = tuple(
             _make_analysis_plot(
-                self.widget, row, 0, _ModifierWheelViewBox(owner_canvas=owner)
+                self.widget, row, 0, _ModifierWheelViewBox(owner_canvas=owner),
+                frf_bottom_axis=True,
             )
             for row in range(3)
         )
         self._alignment_pending = False
         for plot in self.plots:
             _apply_neutral_axis_frame(plot)
-            show_major_grid_left_bottom_only(plot, alpha=0.12)
+            show_major_grid_left_bottom_only(plot, alpha=0.28)
 
         # Keep a real one-pixel bottom frame on the upper rows.  ``hideAxis``
         # removes that side of the rectangle completely, which was the visible

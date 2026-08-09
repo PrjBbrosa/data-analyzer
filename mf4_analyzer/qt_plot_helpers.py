@@ -122,6 +122,16 @@ class BorderAlignedAxisItem(pg.AxisItem):
         return (pen, p1 + shift, p2 + shift), tick_specs, text_specs
 
 
+class FrfMinorTickAxisItem(BorderAlignedAxisItem):
+    """Bottom axis that accepts explicit FRF log minor-grid tick levels."""
+
+    def set_frf_log_ticks(self, major_ticks, minor_values) -> None:
+        self._frf_minor_tick_values = tuple(float(value) for value in minor_values)
+        self.setTicks([
+            list(major_ticks),
+            [(float(value), "") for value in self._frf_minor_tick_values],
+        ])
+
 class GridLabelSlackAxisItem(BorderAlignedAxisItem):
     """Vertical ``AxisItem`` that keeps its tick-label slack when a grid is on.
 
@@ -270,6 +280,7 @@ class GridLabelSlackAxisItem(BorderAlignedAxisItem):
 
 __all__ = [
     "BorderAlignedAxisItem",
+    "FrfMinorTickAxisItem",
     "GridLabelSlackAxisItem",
     "hide_native_auto_button",
     "show_major_grid_left_bottom_only",

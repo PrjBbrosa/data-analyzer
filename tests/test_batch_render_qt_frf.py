@@ -226,6 +226,9 @@ def test_frf_narrow_band_log_axis_still_labels_physical_hz(qapp):
         for coord, label in major:
             assert float(label) == pytest.approx(10.0 ** coord, rel=1e-9)
         assert {label for _coord, label in major} == {"20", "50"}
+        minor_hz = [10.0 ** coord for coord, _label in axis._tickLevels[1]]
+        assert minor_hz == pytest.approx([30.0, 40.0, 60.0, 70.0, 80.0])
+        assert {label for _coord, label in axis._tickLevels[1]} == {""}
     finally:
         scene.close()
 

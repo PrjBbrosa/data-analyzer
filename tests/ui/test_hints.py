@@ -148,11 +148,13 @@ def test_frf_hints_cover_cursor_display_explicit_range_and_time_domain_limits():
     }
     joined = " ".join(frf_hints.values())
     for phrase in (
-        "阈值", "显示", "取时域范围", "一次", "不改写", "自定义 X", "不是秒",
+        "工具栏", "游标", "三图", "读数", "阈值", "显示", "取时域范围", "一次", "不改写", "自定义 X", "不是秒",
         "时域查看", "新建或复用",
     ):
         assert phrase in joined
 
+    fft_hints = {hint.id: hint.text for hint in hints.all_hints() if hint.id.startswith("fft.")}
+    assert fft_hints["fft.frequency_cursor"] == "频谱工具栏：关/单/双游标，双游标读 Δf"
 
 
 def test_mark_discovered_round_trips_through_qsettings():

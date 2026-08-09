@@ -261,16 +261,24 @@ _HINTS = (
         priority=120,
     ),
     # ---- 频响（FRF）----
-    # These state the frozen interaction contract without inventing additional
-    # controls: the three plots share a frequency cursor; the threshold only
-    # affects presentation; a selected time range is a snapshot rather than a
-    # live pan/zoom subscription.
+    # The explicit toolbar control enables the shared three-plot frequency
+    # cursor. The threshold only affects presentation; the explicit action
+    # copies a time range once and is never a live pan/zoom subscription.
     Hint(
         id="frf.linked_cursor",
-        text="频响三图共用一个频率游标",
+        text="工具栏：关/单/双游标，三图双游标读数 Δf",
         surface="context",
         modes=frozenset({"frf"}),
         priority=120,
+        dwell_ms=8000,
+    ),
+    Hint(
+        id="fft.frequency_cursor",
+        text="频谱工具栏：关/单/双游标，双游标读 Δf",
+        surface="context",
+        modes=frozenset({"fft"}),
+        priority=120,
+        dwell_ms=8000,
     ),
     Hint(
         id="frf.coherence_display_only",
@@ -278,13 +286,6 @@ _HINTS = (
         surface="context",
         modes=frozenset({"frf"}),
         priority=110,
-    ),
-    Hint(
-        id="frf.time_range_snapshot",
-        text="取时域范围一次填入；缩放不改写",
-        surface="context",
-        modes=frozenset({"frf"}),
-        priority=100,
     ),
     Hint(
         id="frf.custom_x_limit",

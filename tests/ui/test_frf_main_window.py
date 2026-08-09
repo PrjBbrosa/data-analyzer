@@ -257,6 +257,35 @@ def test_frf_capture_keeps_directional_roles_and_three_y_ranges(qtbot):
     assert pane.xlim is not None
 
 
+def test_frf_cursor_mode_is_pane_local_and_restores_across_view_switches(qtbot):
+    """The shared frequency toolbar must not leak A/B mode by focus or View."""
+    win, _fid, state, _time = _window_with_pair(qtbot)
+    page = win.chart_stack.page_frf
+    assert state.add_pane() is True
+    page.enter_split()
+
+    first_card = page._cards[0]
+    first_card.set_cursor_mode("dual")
+    assert state.panes[0].cursor_mode == "dual"
+    assert state.panes[1].cursor_mode == "off"
+
+    page.set_focused_index(1)
+    assert first_card._cursor_buttons["off"].isChecked()
+    assert page._cards[0].cursor_mode() == "dual"
+    assert page._cards[1].cursor_mode() == "off"
+
+    manager = win.analysis_managers["frf"]
+    other_idx = manager.new_view()
+    manager.set_active(other_idx)
+    assert page.pane_count() == 1
+    assert page._cards[0].cursor_mode() == "off"
+
+    manager.set_active(0)
+    assert page.pane_count() == 2
+    assert page._cards[0].cursor_mode() == "dual"
+    assert page._cards[1].cursor_mode() == "off"
+
+
 def test_frf_main_window_runs_shared_worker_and_renders_result(qtbot):
     win, _fid, _state, _time = _window_with_pair(qtbot, n=4000)
     win.inspector.frf_ctx.spin_t_win.setValue(0.5)
@@ -270,154 +299,6 @@ def test_frf_main_window_runs_shared_worker_and_renders_result(qtbot):
 
     assert canvas._result.effective.segments >= 2
     assert win._analysis_jobs.progress_token("frf") is None
-
-
-def test_settled_time_xrange_only_marks_linked_frf_pane_stale(qtbot, monkeypatch):
-    win, _fid, state, _time = _window_with_pair(qtbot)
-    time_state = win.view_manager.get(win.view_manager.active)
-    time_state.axis_opts = {
-        "x_axis": CustomXAxisSpec(mode="time").to_axis_opts()
-    }
-    pane = state.panes[0]
-    pane.source_time_view_id = time_state.view_id
-    pane.time_range = (0.0, 1.0)
-    canvas = win.chart_stack.page_frf.pane_canvas(0)
-    calls = []
-    monkeypatch.setattr(win, "do_frf", lambda *args, **kwargs: calls.append(True))
-
-    changed = win._on_frf_source_time_xrange_changed(win.canvas_time, 0.2, 0.8)
-
-    assert changed is True
-    assert pane.time_range == (0.2, 0.8)
-    assert canvas.state() == "stale"
-    assert calls == []
-
-
-def test_identical_settled_time_snapshot_does_not_invalidate_frf(qtbot, monkeypatch):
-    win, _fid, state, _time = _window_with_pair(qtbot)
-    time_state = win.view_manager.get(win.view_manager.active)
-    time_state.axis_opts = {
-        "x_axis": CustomXAxisSpec(mode="time").to_axis_opts()
-    }
-    pane = state.panes[0]
-    pane.source_time_view_id = time_state.view_id
-    pane.time_range = (0.2, 0.8)
-    invalidated = []
-    monkeypatch.setattr(
-        win._frf_coordinator,
-        "invalidate_pane",
-        lambda view_id, pane_idx: invalidated.append((view_id, pane_idx)),
-    )
-
-    changed = win._on_frf_source_time_xrange_changed(win.canvas_time, 0.2, 0.8)
-
-    assert changed is False
-    assert invalidated == []
-
-
-def test_canvas_rebuild_xrange_is_ignored_while_applying_time_view(qtbot, monkeypatch):
-    win, _fid, state, _time = _window_with_pair(qtbot)
-    time_state = win.view_manager.get(win.view_manager.active)
-    time_state.axis_opts = {
-        "x_axis": CustomXAxisSpec(mode="time").to_axis_opts()
-    }
-    pane = state.panes[0]
-    pane.source_time_view_id = time_state.view_id
-    pane.time_range = (0.2, 0.8)
-    invalidated = []
-    monkeypatch.setattr(
-        win._frf_coordinator,
-        "invalidate_pane",
-        lambda view_id, pane_idx: invalidated.append((view_id, pane_idx)),
-    )
-
-    win._applying_view = True
-    try:
-        changed = win._on_frf_source_time_xrange_changed(
-            win.canvas_time, 0.0, 1.5
-        )
-    finally:
-        win._applying_view = False
-
-    assert changed is False
-    assert pane.time_range == (0.2, 0.8)
-    assert invalidated == []
-
-
-def test_custom_x_settled_signal_invalidates_link_without_using_values_as_seconds(
-    qtbot,
-):
-    win, _fid, state, _time = _window_with_pair(qtbot)
-    time_state = win.view_manager.get(win.view_manager.active)
-    time_state.axis_opts = {
-        "x_axis": CustomXAxisSpec(
-            mode="channel",
-            resolver="exact_source",
-            source_fid="source-a",
-            channel="input",
-        ).to_axis_opts()
-    }
-    pane = state.panes[0]
-    pane.source_time_view_id = time_state.view_id
-    pane.time_range = (0.0, 1.0)
-    state.params["range_mode"] = "current_time"
-
-    changed = win._on_frf_source_time_xrange_changed(
-        win.canvas_time, 100.0, 200.0
-    )
-
-    assert changed is True
-    assert pane.time_range == (0.0, 1.0)
-    assert pane.source_time_view_id is None
-    assert win.chart_stack.page_frf.pane_canvas(0).state() == "stale"
-    assert "不是物理时间" in win.inspector.frf_ctx.validation_message()
-    with pytest.raises(FrfPreflightError, match="重新关联"):
-        win._build_frf_candidate(state, 0)
-
-
-def test_applying_custom_x_clears_link_before_any_settled_range_signal(qtbot):
-    win, _fid, state, _time = _window_with_pair(qtbot)
-    time_state = win.view_manager.get(win.view_manager.active)
-    pane = state.panes[0]
-    pane.source_time_view_id = time_state.view_id
-    pane.time_range = (0.0, 1.0)
-    state.params["range_mode"] = "current_time"
-    win.inspector.top.set_xaxis_mode("channel")
-    win._on_xaxis_mode_changed("channel")
-    combo = win.inspector.top._combo_xaxis_ch
-    target = next(
-        idx for idx in range(combo.count())
-        if tuple(combo.itemData(idx) or ()) == (
-            "per_source_name", None, "input"
-        )
-    )
-    combo.setCurrentIndex(target)
-
-    win._apply_xaxis()
-
-    assert pane.source_time_view_id is None
-    assert "自定义横轴" in win.inspector.frf_ctx.validation_message()
-
-
-def test_linked_time_view_delete_clears_identity_and_blocks_recompute(
-    qtbot, monkeypatch
-):
-    win, _fid, state, _time = _window_with_pair(qtbot)
-    linked_idx = win.view_manager.new_view()
-    linked = win.view_manager.get(linked_idx)
-    linked.axis_opts = {"x_axis": CustomXAxisSpec(mode="time").to_axis_opts()}
-    win.view_manager.set_active(0)
-    pane = state.panes[0]
-    pane.source_time_view_id = linked.view_id
-    pane.time_range = (0.1, 0.9)
-    state.params["range_mode"] = "current_time"
-    monkeypatch.setattr(win, "_confirm_view_delete", lambda _name: True)
-
-    win._on_view_delete(linked_idx)
-
-    assert pane.source_time_view_id is None
-    with pytest.raises(FrfPreflightError, match="重新关联"):
-        win._build_frf_candidate(state, 0)
 
 
 def test_candidate_keeps_requested_snapshot_separate_from_effective_samples(qtbot):
@@ -466,27 +347,6 @@ def test_delete_frf_analysis_view_invalidates_its_pending_panes(qtbot, monkeypat
     win._on_analysis_delete("frf", 0)
 
     assert invalidated == [(state.view_id, 0), (state.view_id, 1)]
-
-
-def test_manual_range_edit_invalidates_current_pane_generation(qtbot, monkeypatch):
-    win, _fid, state, _time = _window_with_pair(qtbot)
-    win.toolbar._set_mode("frf")
-    win.inspector.frf_ctx.set_range_mode("manual")
-    pane = state.panes[0]
-    pane.time_range = (0.1, 0.9)
-    invalidated = []
-    monkeypatch.setattr(
-        win._frf_coordinator,
-        "invalidate_pane",
-        lambda view_id, pane_idx: invalidated.append((view_id, pane_idx)),
-    )
-    win.inspector.top.set_range_values(0.2, 0.8)
-
-    changed = win._on_frf_manual_time_range_edited()
-
-    assert changed is True
-    assert pane.time_range == (0.2, 0.8)
-    assert invalidated == [(state.view_id, 0)]
 
 
 def test_display_change_does_not_invalidate_and_completion_uses_latest_params(
@@ -606,30 +466,6 @@ def test_view_in_time_rejects_range_without_common_samples(qtbot, monkeypatch):
     assert any("共同" in message for message, _level in messages)
 
 
-def test_current_time_mode_validates_complete_pair_intersection_immediately(
-    qtbot, monkeypatch
-):
-    win, _fid, state, time = _window_with_pair(qtbot)
-    frame = pd.DataFrame({"output": np.cos(2 * np.pi * 20.0 * time)})
-    win.files["source-b"] = FileData(
-        "source-b.csv", frame, ["output"], {"output": "m/s2"}, fs=1000.0
-    )
-    win.files["source-b"].time_array = time
-    state.panes[0].output_source = ("source-b", "output")
-    time_state = win.view_manager.get(win.view_manager.active)
-    time_state.axis_opts = {"x_axis": CustomXAxisSpec(mode="time").to_axis_opts()}
-    time_state.xlim = (0.1, 0.9)
-    messages = []
-    monkeypatch.setattr(
-        win, "toast", lambda message, level="info": messages.append((message, level))
-    )
-
-    win._on_frf_range_mode_changed("current_time")
-
-    assert "同一个逻辑来源" in win.inspector.frf_ctx.validation_message()
-    assert any("同一个逻辑来源" in message for message, _level in messages)
-
-
 def test_restored_frf_view_dispatches_every_complete_pane_without_live_capture(
     qtbot, monkeypatch
 ):
@@ -731,6 +567,9 @@ def test_project_restore_recomputes_directional_frf_pair(
     pane = source.analysis_managers["frf"].get(0).panes[0]
     pane.input_source = (old_fid, "input")
     pane.output_source = (old_fid, "output")
+    # Use the real toolbar/card path: saving captures live controls back to
+    # state, so a bare field assignment would intentionally be overwritten.
+    source.chart_stack.page_frf._cards[0].set_cursor_mode("single")
     source.save_project(project)
 
     restored = MainWindow()
@@ -748,6 +587,9 @@ def test_project_restore_recomputes_directional_frf_pair(
     restored_pane = restored.analysis_managers["frf"].get(0).panes[0]
     assert restored_pane.input_source == (new_fid, "input")
     assert restored_pane.output_source == (new_fid, "output")
+    assert restored_pane.cursor_mode == "single"
+    restored.toolbar._set_mode("frf")
+    assert restored.chart_stack.page_frf._cards[0].cursor_mode() == "single"
     assert restored.analysis_managers["frf"].get(0).view_id in recomputed
 
 

@@ -132,9 +132,15 @@ tooltip、Inspector 组标题、导出报告、帮助文档和数据列中。内
 
 共同交互：
 
-- 一个频率游标贯穿三图；读数卡同时显示 `f/|H|/phase/coherence`；
+- 频响与频谱卡工具栏均采用与时域一致的 `游标关 / 单游标 / 双游标` 三态控件，默认关闭。
+  FRF 单游标贯穿三图并显示 `f/|H|/phase/coherence`；双游标依次放置 A、B，显示
+  `fA/fB/Δf` 和两点读数。频谱单/双游标显示 frequency、amplitude 及 `fA/fB/Δf`。关闭时
+  所有指针线与读数卡一并清空；状态按 pane 保存并随 project round-trip，不泄漏到 split 的
+  另一个 pane 或其他 View；
 - 三图只共享 frequency X，不与 TimeDomain 的 X 轴同步；
-- log-frequency 模式只在绘制层隐藏 `f <= 0`，原始结果和 CSV 保留 DC；
+- log-frequency 模式只在绘制层隐藏 `f <= 0`，原始结果和 CSV 保留 DC；主刻度按物理 Hz
+  标注，2–9 倍频程位置以无标签的纵向 minor grid 显示，并在幅值、相位、相干性三图对齐；
+- FRF 主网格透明度固定为 `0.28`，与时域图统一；
 - 低于相干性阈值的幅相曲线可淡化，但不能删除数据点；
 - 空态依次为“请选择输入和输出”“参数已变化，点击计算”“正在计算”“计算失败”；
 - 每个 pane 首版只显示一对输入/输出；比较多对使用 analysis split 或多个 View，
@@ -145,13 +151,21 @@ tooltip、Inspector 组标题、导出报告、帮助文档和数据列中。内
 （2026-08-09 定版：按 `61053293` 实施后的 as-built 卡片结构描述，替代本节最初的
 八项线性列表；“先选通道、再挑预设”更贴近实际操作流，经真机截图验收。）
 
+（2026-08-09 参数面精简修订：第 2 项的 `分析范围` 三选下拉与第 3 项的“周期语义”
+“每段去均值”移出 UI，理由与实测依据见
+`docs/analyzer/specs/2026-08-09-analysis-parameter-surface-simplification-spec.md`
+§3–§4。数值默认值不变，字段与有效事实记录不变。）
+
 由上至下：
 
 1. 标题 `系统辨识 · 频响（FRF）`；
 2. 信号映射卡（`frfSignalCard`）：输入、被辨识系统流向图、输出、交换按钮、
-   `分析范围`（全范围 / 使用当前时域范围 / 手动范围）与时间范围控件；
+   与其余三个分析 section 共用的 `分析时间` 组（`使用选定时间范围` 复选框 + 起止秒 +
+   `最大` + FRF 专属的 `取时域范围` 填充按钮）；不再有 `分析范围` 下拉；
 3. 辨识参数卡（`frfParamsCard`）：预设条（稳健 / 低频 / 快速 / 自定义）、
-   `估计器` H1/H2、窗口与周期语义、段长秒数、重叠率、NFFT、每段去均值、
+   `估计器` H1/H2（含输出噪声/输入噪声适用条件的 tooltip）、窗函数、段长秒数、
+   重叠率、NFFT（其余计算与显示字段同样提供简短 tooltip）、
+   静态说明 `系统延迟：保留（不补偿）`、
    validation 提示、主按钮 `计算频响`、次按钮 `在时域查看`；
 4. 显示卡（`frfDisplayCard`）：幅值 dB/线性、频率 log/linear、相位展开/包裹、
    相干阈值、低相干淡化；
@@ -175,6 +189,9 @@ FRF 拥有方法专属 display names；不得把现有 FFT/时频/阶次的全�
 
 三套内建预设共同默认：periodic Hann、每段去均值、自动 NFFT=`nperseg`、dB、log
 频率、展开相位、相干阈值 0.8、低相干淡化开启、保留系统延迟。
+
+（2026-08-09 参数面精简修订：其中 periodic Hann 与每段去均值不再有 UI 入口，
+三套预设仍显式携带这两个字段值，预设切换也仍然写入它们。）
 
 ## 6. 数值定义
 
@@ -264,6 +281,11 @@ y'_k = y_k - mean(y_k)
 
 首版只提供 constant detrend（开/关），不提供线性 detrend。
 
+（2026-08-09 参数面精简修订：constant detrend **固定开启**，UI 不再提供开关；
+`FrfParams.detrend` 字段与 `"none"` 取值保留，批处理配方可显式覆盖并照旧执行。
+实测依据——有直流偏置时关闭 detrend 会把低频 `|H|` 读成两路偏置之比，误差达 24.5 dB，
+而相干反而升高；见参数面精简 spec §3.1。）
+
 ### 6.4 窗函数
 
 默认 `periodic Hann`：
@@ -282,6 +304,12 @@ flattop，则每一种都必须在 `get_frf_window(name, nperseg, periodic=True)
 `hanning` 的兼容 alias。六项统一按 symmetric generator 的 `nperseg + 1` 长度生成后
 去掉最后一点；Kaiser 固定 `beta=14`，flattop 复用现有五项系数。每项都必须与 SciPy
 `get_window(..., fftbins=True)` 的显式数组对照；未完成定义的项不能出现在 UI。
+
+（2026-08-09 参数面精简修订：**窗的周期性不再是 UI 可选项**——`周期窗` 复选框从单次
+Inspector 与批处理参数网格移除，语义固定为 periodic。`FrfParams.periodic_window` 字段、
+`get_frf_window(..., periodic=)` 参数与有效事实记录保留。实测依据——periodic 与 symmetric
+的结果差 7.4e-04 dB / 5.5e-03°，且 SciPy `welch/csd` 同样不提供该开关；见参数面精简
+spec §3.1。窗函数**种类**下拉不受影响，继续可选。）
 
 ### 6.5 Welch PSD/CSD 与单边缩放
 
@@ -429,7 +457,14 @@ input_source: ChannelKey | None = None
 output_source: ChannelKey | None = None
 ylims: dict[str, tuple[float, float]] = field(default_factory=dict)
 source_time_view_id: str | None = None
+cursor_mode: Literal["off", "single", "dual"] = "off"
 ```
+
+（2026-08-09 参数面精简修订：`source_time_view_id` 自本次起**不再写入**——
+`使用当前时域范围` 的隐藏快照改为 `取时域范围` 按钮把秒数直接填进起止输入框，
+时间范围的唯一真相源就是那两个输入框。`from_dict` 保留读取该字段以兼容老项目，
+恢复时按参数面精简 spec §4 D4 的折叠表转为“勾选 + 起止秒”，随后丢弃。
+`params["range_mode"]` 同样只读不写。）
 
 FRF 的 canonical role 只来自这两个字段；不得同时复制进 `sources` 形成第二真相源。
 其他分析继续使用 `sources`，Order 继续使用 `rpm_source`。FRF 的 `ylims` keys 固定为
@@ -441,8 +476,10 @@ TimeDomain view 增加持久化稳定字符串 `view_id`；duplicate 必须生�
 
 序列化：
 
-- nested analysis view schema `2 → 3`；
+- nested analysis view schema `2 → 3 → 4 → 5`；
 - `to_dict/from_dict` 加 `input_source/output_source`；
+- schema 4 的 `frf_cursor_enabled=True` 迁移为 `cursor_mode="single"`，`False` 或缺失时为
+  `"off"`；
 - 旧 view 无字段时 role/link 得到 `None`、`ylims={}`，无需猜测迁移；
 - `project_io.remap_analysis_view_fids()` 同时 remap 两端；
 - 关闭文件、rebuild、clear 和 project restore 对两端对称处理；
@@ -526,31 +563,39 @@ per-pane 手动触发，单击「计算频响」只提交当前 pane，因此：
 
 - 输入/输出复合 channel identity；
 - 物理时间范围 `(t_start_s, t_end_s)`；
-- 来源 TimeDomain 的稳定 `ViewState.view_id` 与本次物理范围快照。
+- ~~来源 TimeDomain 的稳定 `ViewState.view_id` 与本次物理范围快照~~
+  （2026-08-09 参数面精简修订作废：范围以秒数形式明文存在起止输入框里，
+  不再保留来源 View 的溯源，见 §9.2）。
 
 绝不关联：TimeDomain X ViewBox 与 FRF frequency ViewBox。秒和 Hz 量纲不同。
 
-### 9.2 `使用当前时域范围`
+### 9.2 `取时域范围`（原 `使用当前时域范围`）
+
+（2026-08-09 参数面精简修订：本节整体改写。原设计把时域范围存成 pane 上的**隐藏快照**
+并维护 `view_id` 溯源，导致屏幕上的起止秒与实际计算范围可以不一致——三处已复现的背离见
+参数面精简 spec §3.2。现改为一次性填充按钮：秒数直接写进共享 `分析时间` 组的起止输入框，
+那两个框成为唯一真相源，溯源与失效重连整套机制随之退休。原文保留在 git 历史中。）
+
+形态：与 `最大` 同排的次级按钮，仅在 FRF 嵌入共享 `分析时间` 组时可见。
 
 启用条件：
 
 - 当前 TimeDomain view 的 X source 是物理 time；
-- 可得到有限、递增的 committed visible range；
-- 该范围与 FRF pair 所在逻辑来源的真实时间范围有非空交集。
+- 可得到有限、递增的 committed visible range。
+
+（原第三条“与 FRF pair 逻辑来源的真实时间范围有非空交集”下放到计算前的 preflight：
+按钮只负责填数，交集判定与其他来路填进来的秒数走同一条校验。）
 
 行为：
 
-- 捕获物理时间范围快照，经过 shared preprocess 对输入输出应用同一 mask；
-- 保留来源 `view_id` 与范围快照；
-- 后续时域拖动不自动计算；
-- 原 view 切到 custom X 后，关联失效并提示重新选择范围，不把 custom-X 数值当秒。
+- 读取当前 TimeDomain view 的 committed visible range，写入起止输入框并勾选
+  `使用选定时间范围`；写入即完成；
+- 之后时域再缩放**不改变**已填入的数字，也**不再**标记 FRF pane stale——快照就是屏幕上
+  的数字，要更新就再点一次。这比原先“承诺不联动、却又在源变化时标 stale”更自洽；
+- 因此不再需要监听 `xrange_changed` 来同步 FRF pane，也不再需要 `view_id` 溯源与
+  “请重新关联”类报错。
 
-范围变动监听使用 TimeDomain canvas 已有的 settled `xrange_changed(float, float)`；禁止监听
-包含频繁 Y/restore 事件的 `visible_range_changed`，也不新增第二套 quiet timer。若同
-`view_id` 的 settled physical xlim 与保存快照不同，只标记关联 FRF pane stale，不自动
-提交计算。
-
-若当前 TimeDomain 使用 custom X，按钮禁用并显示：
+若当前 TimeDomain 使用 custom X，按钮禁用并在 tooltip 显示：
 “当前时域横轴不是物理时间，无法作为 FRF 时间范围；请切回时间轴或手动输入秒范围。”
 
 ### 9.3 `在时域查看`
@@ -618,7 +663,10 @@ InputPanel 在 method=`frf` 时把普通“目标信号”区切换为“输入 
 - 可选 `available_per_source`：仅在同一来源内两端都存在时展开，并把缺失记为明确
   warning/skip 统计；不得静默消失。
 
-AnalysisPanel 显示 FRF 参数；OutputPanel 显示：
+AnalysisPanel 显示 FRF 参数（2026-08-09 参数面精简修订：可见字段中去掉
+`periodic_window` 与 `detrend`，method=`fft_time` 去掉 `remove_mean`；
+`METHOD_PARAM_FIELDS` 等配方白名单不动，老配方的显式值照旧执行，
+见参数面精简 spec §4 D4 与 §5.2）；OutputPanel 显示：
 
 - 数据列预览；
 - 图片组织：`每对一张`（默认）、`按来源叠加`、`按输入/输出对叠加`；
@@ -943,6 +991,11 @@ typed selective propagation；但 worker 必须记录 traceback，使失败保�
   全范围 / 使用当前时域范围 / 手动范围三选；`在时域查看` 次按钮缺失（原型只有画布
   上方的“时域预览”入口，位置与 §5.3 不同）；estimator 只展示了 H1 选中态，H2 必须
   按 §5.3 可选并可见；通道映射控件未按“来源名 · 通道名 [单位]”展示。
+  - **2026-08-09 更正：这一条的第一句作废，原型是对的。** 三选下拉与四个 section
+    共用的时间范围组语义重叠，实测产生三处“屏幕显示与实际计算不一致”，已回到单复选框
+    形态 +（FRF 专属的）`取时域范围` 填充按钮。依据见
+    `docs/analyzer/specs/2026-08-09-analysis-parameter-surface-simplification-spec.md`
+    §3.2 与 §4 D3。该条其余三句仍然成立。
 - Batch 稿：图片组织只画了“每对一图 / 按来源叠加”两项，缺 §10.2 的
   “按输入/输出对叠加”；出现 spec 未定义的“平均模式”下拉——首版不实现，平均方式
   固定为 Welch 线性平均；数据列预览与 §11.4 的 12 列不一致（缺

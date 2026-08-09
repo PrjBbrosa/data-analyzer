@@ -186,6 +186,8 @@ class AnalysisMixin:
         # whichever mode happens to be on screen.
         if self.chart_stack.current_mode() == section:
             self._capture_analysis_time_range(section, state)
+        if section in {'fft', 'frf'}:
+            self._capture_frequency_cursor_controls(section, state)
         if capture_sources:
             self._capture_analysis_sources(section, state)
 
@@ -221,6 +223,8 @@ class AnalysisMixin:
                 x_linked=x_linked, levels_locked=levels_locked)
             # 3. Params + focused-pane source echo.
             apply_params_from_state(self._analysis_ctx(section), state)
+            if section in {'fft', 'frf'}:
+                self._apply_frequency_cursor_controls(section, state)
             self._apply_analysis_sources(section, state)
             self._apply_analysis_time_range(section, state)
         finally:
@@ -242,6 +246,8 @@ class AnalysisMixin:
         self._capture_analysis_time_range(section, state, pane_idx=old_idx)
         self._apply_analysis_sources(section, state)
         self._apply_analysis_time_range(section, state)
+        if section in {'fft', 'frf'}:
+            self._apply_frequency_cursor_controls(section, state)
 
     def _on_analysis_compare_toggled(self, section, key, on):
         """A page compare toggle (联动缩放 / 锁定色阶) flipped → persist it onto

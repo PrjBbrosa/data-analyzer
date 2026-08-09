@@ -356,6 +356,40 @@ def log_frequency_tick_levels(
     ]
 
 
+def log_frequency_minor_tick_levels(
+    lo_log: float, hi_log: float, major_coords=(),
+) -> List[float]:
+    """Return unlabelled 2..9 log-decade ticks within a log10 view range.
+
+    The caller supplies the already-selected major coordinates so a narrow
+    view's fallback labels (for example 20 and 50 Hz) never get duplicated as
+    minor marks. Returned values are pyqtgraph log-space coordinates, not Hz.
+    """
+    try:
+        lo = float(lo_log)
+        hi = float(hi_log)
+    except (TypeError, ValueError):
+        return []
+    if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+        return []
+    major = set()
+    for item in major_coords or ():
+        value = item[0] if isinstance(item, (tuple, list)) else item
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value):
+            major.add(round(value, 12))
+    ticks = []
+    for power in range(int(math.floor(lo)) - 1, int(math.ceil(hi)) + 2):
+        for mantissa in range(2, 10):
+            coord = math.log10(float(mantissa)) + power
+            if lo <= coord <= hi and round(coord, 12) not in major:
+                ticks.append(coord)
+    return ticks
+
+
 __all__ = [
     "DENSE_DISCRETE_BUCKET_BUDGET",
     "DENSE_DISCRETE_INTERACTIVE_BUCKET_BUDGET",
@@ -365,5 +399,6 @@ __all__ = [
     "classify_render_profile",
     "envelope_ink_dev_px",
     "log_frequency_tick_levels",
+    "log_frequency_minor_tick_levels",
     "source_revision_for",
 ]

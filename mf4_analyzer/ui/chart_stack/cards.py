@@ -1202,3 +1202,122 @@ class TimeChartCard(_ChartCard):
         elif mode == 'zoom':
             self.toolbar.zoom()
         self._refresh_hint()
+
+
+class FrequencyCursorCard(_ChartCard):
+    """Shared 关/单/双 cursor controls for frequency-domain cards.
+
+    Frequency-domain views use the same deliberate cursor choices as the time
+    chart.  Their canvas owns the meaning of A/B (frequency and value rows,
+    rather than time-span statistics), while this card only owns the toolbar
+    and routes the one shared toolbar in a split analysis view to its focus.
+    """
+
+    cursor_mode_changed = pyqtSignal(str)
+
+    def __init__(self, canvas, parent=None, *, annotations=False, chart_mode):
+        self._frequency_cursor_target_provider = None
+        super().__init__(canvas, parent, annotations=annotations, chart_mode=chart_mode)
+        # Keep the frequency cursor segment against the trailing edge, matching
+        # the time card.  Without this expanding spacer the controls follow
+        # the navigation buttons and leave a conspicuous empty right side.
+        loc_action = getattr(self, '_loc_action', None)
+        self._frequency_controls_spacer = QWidget(self.toolbar)
+        self._frequency_controls_spacer.setObjectName(
+            "chartFrequencyControlsSpacer"
+        )
+        self._frequency_controls_spacer.setAttribute(Qt.WA_StyledBackground, True)
+        self._frequency_controls_spacer.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred
+        )
+        self._insert_right_toolbar_widget(
+            loc_action, self._frequency_controls_spacer
+        )
+        self._frequency_controls_separator = _vline()
+        self._insert_right_toolbar_widget(
+            loc_action, self._frequency_controls_separator
+        )
+        self._cursor_buttons = {}
+        tooltips = {
+            'off': '关闭频率游标并清空读数。',
+            'single': '移动鼠标读取一个频率点。',
+            'dual': '依次点击 A、B 两个频率点，读取 Δf 和两点数值。',
+        }
+        for label, key in (('游标关', 'off'), ('单游标', 'single'), ('双游标', 'dual')):
+            button = QPushButton(label, self.toolbar)
+            button.setCheckable(True)
+            button.setProperty('role', 'chart-choice')
+            button.setFlat(True)
+            button.setToolTip(tooltips[key])
+            self._insert_right_toolbar_widget(loc_action, button)
+            self._cursor_buttons[key] = button
+            button.clicked.connect(
+                lambda _checked=False, value=key: self._on_cursor_mode_clicked(value)
+            )
+        # Keep the same Ctrl+3/4/5 keyboard contract as the time card.  The
+        # shortcuts belong to this card, so a hidden analysis mode cannot
+        # consume a time-domain shortcut.
+        self._frequency_cursor_shortcuts = []
+        from ._helpers import _TIME_CARD_SHORTCUTS
+        for key, label, shortcut in _TIME_CARD_SHORTCUTS:
+            if key not in {'cursor_off', 'cursor_single', 'cursor_dual'}:
+                continue
+            mode = key.removeprefix('cursor_')
+            self._frequency_cursor_shortcuts.append(
+                _install_button_shortcut(
+                    self, self._cursor_buttons[mode], label, shortcut, key
+                )
+            )
+        self.set_cursor_mode(
+            getattr(self.canvas, 'cursor_mode', lambda: 'off')(), notify=False
+        )
+
+    def set_frequency_cursor_target_provider(self, provider) -> None:
+        self._frequency_cursor_target_provider = provider if callable(provider) else None
+        self.sync_frequency_cursor_control()
+
+    def cursor_mode(self) -> str:
+        getter = getattr(self.canvas, 'cursor_mode', None)
+        value = getter() if callable(getter) else 'off'
+        return value if value in {'off', 'single', 'dual'} else 'off'
+
+    def set_cursor_mode(self, mode: str, *, notify=True) -> None:
+        if mode not in {'off', 'single', 'dual'}:
+            return
+        old = self.cursor_mode()
+        setter = getattr(self.canvas, 'set_cursor_mode', None)
+        if callable(setter):
+            setter(mode)
+        self._set_cursor_buttons(mode)
+        if notify and old != mode:
+            self.cursor_mode_changed.emit(mode)
+
+    def sync_frequency_cursor_control(self) -> None:
+        target = self._frequency_cursor_target()
+        self._set_cursor_buttons(target.cursor_mode())
+
+    def _frequency_cursor_target(self):
+        provider = self._frequency_cursor_target_provider
+        target = provider() if callable(provider) else self
+        return target if isinstance(target, FrequencyCursorCard) else self
+
+    def _set_cursor_buttons(self, mode: str) -> None:
+        for key, button in self._cursor_buttons.items():
+            old = button.blockSignals(True)
+            try:
+                button.setChecked(key == mode)
+            finally:
+                button.blockSignals(old)
+
+    def _on_cursor_mode_clicked(self, mode: str) -> None:
+        target = self._frequency_cursor_target()
+        target.set_cursor_mode(mode)
+        if target is not self:
+            self.sync_frequency_cursor_control()
+
+
+class FrfChartCard(FrequencyCursorCard):
+    """Frequency-cursor card configured for the three-row FRF canvas."""
+
+    def __init__(self, canvas, parent=None):
+        super().__init__(canvas, parent, annotations=False, chart_mode='frf')

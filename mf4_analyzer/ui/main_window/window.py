@@ -906,6 +906,9 @@ class MainWindow(
             self._on_annotation_enabled_changed
         )
         self.chart_stack.cursor_mode_changed.connect(self._on_cursor_mode_changed)
+        self.chart_stack.analysis_cursor_mode_changed.connect(
+            self._on_analysis_cursor_mode_changed
+        )
         self.chart_stack.plot_mode_changed.connect(self._on_plot_mode_changed)
         self.chart_stack.focus_changed.connect(self._on_chart_focus_changed)
         self.chart_stack.quickref_requested.connect(self.toggle_quickref_panel)
@@ -1039,9 +1042,6 @@ class MainWindow(
         )
         self.inspector.top.max_range_requested.connect(
             self._on_time_range_max_requested
-        )
-        self.inspector.top.range_from_time_requested.connect(
-            self._on_frf_range_from_time_requested
         )
         xrange_changed = getattr(self.canvas_time, 'xrange_changed', None)
         if xrange_changed is not None:
@@ -1478,8 +1478,6 @@ class MainWindow(
         self.chart_stack.set_mode(mode)
         self.navigator.set_time_visibility_available(mode == 'time')
         self.inspector.set_mode(mode)
-        if mode == 'frf':
-            self._sync_frf_range_from_time_action()
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
         if mode in {'fft', 'fft_time', 'order'}:
             # dB-reference-defaults nudge feed (spec S5 / A17): a section
@@ -1727,8 +1725,6 @@ class MainWindow(
 
     def _on_time_canvas_xrange_changed(self, lo, hi):
         if self.chart_stack.current_mode() != 'time':
-            if self.chart_stack.current_mode() == 'frf':
-                self._sync_frf_range_from_time_action()
             return
         # In split mode: skip update when focus is on the secondary canvas so
         # the inspector shows the focused pane's range, not the primary's.
@@ -1739,8 +1735,6 @@ class MainWindow(
 
     def _on_secondary_canvas_xrange_changed(self, lo, hi):
         if self.chart_stack.current_mode() != 'time':
-            if self.chart_stack.current_mode() == 'frf':
-                self._sync_frf_range_from_time_action()
             return
         if self.chart_stack.focused_canvas() is self.chart_stack.secondary_canvas():
             self._sync_time_range_inputs_from_visible_xlim((lo, hi))

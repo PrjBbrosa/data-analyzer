@@ -24,7 +24,7 @@ from ._helpers import (
     _INDEX_TO_MODE,
     _BOTTOM_HINT_PERSISTENT,
 )
-from .cards import _ChartCard, TimeChartCard
+from .cards import _ChartCard, FrequencyCursorCard, FrfChartCard, TimeChartCard
 from .cursor_pill import (
     CursorPill,
     format_cursor_info,
@@ -41,6 +41,7 @@ class ChartStack(QWidget):
     mode_changed = pyqtSignal(str)
     plot_mode_changed = pyqtSignal(str)
     cursor_mode_changed = pyqtSignal(str)
+    analysis_cursor_mode_changed = pyqtSignal(str, object, str)
     annotation_enabled_changed = pyqtSignal(str, bool)
     image_copied = pyqtSignal(str)  # legacy status text signal
     image_captured = pyqtSignal(QPixmap)  # final pixmap for MainWindow publishing
@@ -132,7 +133,7 @@ class ChartStack(QWidget):
         }
 
         def _fft_card_factory():
-            return _ChartCard(
+            return FrequencyCursorCard(
                 PgLineCanvas(self), annotations=True, chart_mode='fft'
             )
 
@@ -143,9 +144,7 @@ class ChartStack(QWidget):
             )
 
         def _frf_card_factory():
-            return _ChartCard(
-                PgFrfCanvas(self), annotations=False, chart_mode='frf'
-            )
+            return FrfChartCard(PgFrfCanvas(self))
 
         def _order_card_factory():
             canvas = PgHeatmapCanvas(self, with_slice=True)
@@ -286,11 +285,20 @@ class ChartStack(QWidget):
         )
         card.tick_density_changed.connect(self._on_card_tick_density_changed)
         card.quickref_requested.connect(self.quickref_requested.emit)
+        if mode in {'fft', 'frf'} and hasattr(card, 'cursor_mode_changed'):
+            card.cursor_mode_changed.connect(
+                lambda cursor_mode, m=mode, c=card.canvas:
+                self.analysis_cursor_mode_changed.emit(m, c, cursor_mode)
+            )
         canvas = getattr(card, 'canvas', None)
         if (canvas is not None and hasattr(canvas, 'cursor_info')
                 and not isinstance(canvas, PgHeatmapCanvas)):
             canvas.cursor_info.connect(
                 lambda text, c=canvas: self._on_cursor_info(text, c)
+            )
+        if canvas is not None and hasattr(canvas, 'dual_cursor_info'):
+            canvas.dual_cursor_info.connect(
+                lambda text, c=canvas: self._on_dual_cursor_info(text, c)
             )
 
     def _all_cards(self):
@@ -471,6 +479,11 @@ class ChartStack(QWidget):
 
         Mirrors :meth:`plot_mode_for_canvas`: the readout layout depends on the
         mode of the pane that emitted it, not always the primary's."""
+        if isinstance(canvas, (PgLineCanvas, PgFrfCanvas)):
+            card = self._card_for_canvas(canvas)
+            getter = getattr(card, 'cursor_mode', None)
+            if callable(getter):
+                return getter()
         if (canvas is not None
                 and self._secondary_card is not None
                 and canvas is self._secondary_card.canvas):
@@ -1066,9 +1079,15 @@ class ChartStack(QWidget):
             return self._pill_secondary
         return self._pill
 
-    def _cursor_pill_visible_for_mode(self, mode=None):
+    def _cursor_pill_visible_for_mode(self, mode=None, source=None):
         mode = self.current_mode() if mode is None else mode
-        return mode == 'time'
+        if mode == 'time':
+            return True
+        if mode in {'fft', 'frf'}:
+            card = self._card_for_canvas(source)
+            getter = getattr(card, 'cursor_mode', None)
+            return bool(callable(getter) and getter() != 'off')
+        return False
 
     def _update_pill_content(self, pill, card, update):
         """Run ``update`` (a content mutation that may resize ``pill``) and then
@@ -1111,7 +1130,9 @@ class ChartStack(QWidget):
             else:
                 primary, _detail = self._format_cursor_info_for_pill(text, mode)
                 pill.set_primary(primary)
-            pill.setVisible(self._cursor_pill_visible_for_mode())
+            pill.setVisible(
+                self._cursor_pill_visible_for_mode(self.current_mode(), source)
+            )
 
         self._update_pill_content(pill, card, update)
 
@@ -1148,7 +1169,8 @@ class ChartStack(QWidget):
 
         def update():
             pill.set_detail_html(text)
-            if self.current_mode() == 'time' and (text or pill.primary_text()):
+            if (self._cursor_pill_visible_for_mode(self.current_mode(), source)
+                    and (text or pill.primary_text())):
                 pill.setVisible(True)
 
         self._update_pill_content(pill, card, update)
@@ -1168,7 +1190,8 @@ class ChartStack(QWidget):
 
     def _reposition_pill(self):
         current = self.current_mode()
-        if not self._cursor_pill_visible_for_mode(current):
+        active_canvas = getattr(self._active_cursor_card, 'canvas', None)
+        if not self._cursor_pill_visible_for_mode(current, active_canvas):
             self._pill.setVisible(False)
             if self._pill_secondary is not None:
                 self._pill_secondary.setVisible(False)

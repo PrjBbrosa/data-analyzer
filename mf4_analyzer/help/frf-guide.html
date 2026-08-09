@@ -44,13 +44,13 @@
   <section class="slide">
     <div class="frame">
       <div class="topbar reveal d1"><span class="eyebrow">02 · <b>读三联图</b></span><span class="turbo-rule"></span></div>
-      <div class="step-head reveal d2"><span class="big">|H| · ∠H · γ²</span><h2>一个频率游标，三份读数</h2></div>
+      <div class="step-head reveal d2"><span class="big">|H| · ∠H · γ²</span><h2>单 / 双频率游标，三份读数</h2></div>
       <div class="paths">
         <div class="path reveal d3"><div class="tagA">幅值</div><div class="ptxt">幅值显示输出相对输入的大小。线性值是 <b>|H|</b>；dB 是 <b>20log10(|H| / 1 ratio-unit)</b>，是传递比，不是绝对声学 reference。</div></div>
         <div class="path reveal d4"><div class="tagA g">相位</div><div class="ptxt">相位可看展开或包裹结果，单位按 <b>output/input</b> 显示；同单位时也仍是 ratio。</div></div>
         <div class="path reveal d5"><div class="tagA">coherence</div><div class="ptxt"><b>coherence</b> 在 0 到 1 之间，越接近 1 说明该频点的线性关联越可信。阈值只影响低相干曲线的显示，不删除、不改写原始数据或导出。</div></div>
       </div>
-      <div class="tip reveal d5"><span class="ic">↔</span><p>三张图共用频率 X 轴和一个游标；读数卡同时显示 f、|H|、phase、coherence。</p></div>
+      <div class="tip reveal d5"><span class="ic">↔</span><p>频响工具栏可选“游标关 / 单游标 / 双游标”，默认关闭。单游标贯穿三张图并显示 f、|H|、phase、coherence；双游标依次点 A、B，同时比较两点读数和 Δf。log X 的 1/10/100 是主刻度，2–9 也会以对齐三图的纵向网格显示。</p></div>
     </div>
   </section>
 
@@ -80,11 +80,11 @@
       <div class="topbar reveal d1"><span class="eyebrow">04 · <b>时域关联</b></span><span class="turbo-rule"></span></div>
       <div class="step-head reveal d2"><span class="big">同一物理时间</span><h2>先确认关联，再点击计算</h2></div>
       <div class="paths">
-        <div class="path reveal d3"><div class="tagA">范围</div><div class="ptxt">“使用当前时域范围”会取一个<b>snapshot</b>。之后在时域 pan/zoom 只会让结果变为待重算，不会连续自动重算。</div></div>
-        <div class="path reveal d4"><div class="tagA g">custom-X</div><div class="ptxt"><b>custom-X</b> 不是秒，不能作为 FRF 的时间范围。请回到真实时间轴选择范围。</div></div>
+        <div class="path reveal d3"><div class="tagA">范围</div><div class="ptxt">点击“<b>取时域范围</b>”会把当前时域 View 的可见秒数一次性填入“分析时间”。之后缩放不会改写该范围；想更新时，再点一次即可。</div></div>
+        <div class="path reveal d4"><div class="tagA g">custom-X</div><div class="ptxt"><b>custom-X</b> 不是秒，“取时域范围”会禁用。请切回真实时间轴，或直接手动输入秒范围。</div></div>
         <div class="path reveal d5"><div class="tagA">查看</div><div class="ptxt">“在时域查看”会先复用同一签名的时域 View；没有时才新建，并带回输入、输出和已选范围，不覆盖无关 View。</div></div>
       </div>
-      <div class="tip reveal d5"><span class="ic">!</span><p>输入与输出必须严格同时间轴：长度、每个时刻和采样间隔都要一致。时间不一致、非均匀或缺采样时，先显式重建或对齐，FRF 不会静默截短或插值。</p></div>
+      <div class="tip reveal d5"><span class="ic">!</span><p>输入与输出必须严格同时间轴：长度、每个时刻和采样间隔都要一致。时间不一致、非均匀或缺采样时，先显式重建或对齐，FRF 不会静默截短或插值。系统真实延迟默认保留，不做自动补偿；相位曲线会如实显示这部分延迟。</p></div>
     </div>
   </section>
 

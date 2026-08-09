@@ -10,7 +10,10 @@ import math
 
 import pytest
 
-from mf4_analyzer.render_profile import log_frequency_tick_levels
+from mf4_analyzer.render_profile import (
+    log_frequency_minor_tick_levels,
+    log_frequency_tick_levels,
+)
 
 
 def _labels(ticks):
@@ -47,6 +50,30 @@ def test_log_frequency_ticks_use_full_mantissas_when_the_ladder_is_too_coarse():
     ticks = log_frequency_tick_levels(math.log10(21.0), math.log10(49.0))
 
     assert _labels(ticks) == ["30", "40"]
+
+
+def test_log_frequency_minor_ticks_fill_decades_without_duplicating_majors():
+    majors = log_frequency_tick_levels(0.0, 2.0)
+    minors = log_frequency_minor_tick_levels(0.0, 2.0, majors)
+
+    assert [10.0 ** value for value in minors] == pytest.approx(
+        [2, 3, 4, 5, 6, 7, 8, 9, 20, 30, 40, 50, 60, 70, 80, 90]
+    )
+    assert all(round(value, 12) not in {0.0, 1.0, 2.0} for value in minors)
+
+
+def test_log_frequency_minor_ticks_clip_and_exclude_narrow_band_major_labels():
+    lo, hi = math.log10(20.0), math.log10(80.0)
+    majors = log_frequency_tick_levels(lo, hi)
+    minors = log_frequency_minor_tick_levels(lo, hi, majors)
+
+    assert all(lo <= value <= hi for value in minors)
+    assert all(
+        round(value, 12) not in {round(coord, 12) for coord, _label in majors}
+        for value in minors
+    )
+    assert log_frequency_minor_tick_levels(float("nan"), 1.0, majors) == []
+    assert log_frequency_minor_tick_levels(1.0, 1.0, majors) == []
 
 
 @pytest.mark.parametrize(

@@ -7,6 +7,7 @@ breaks grab_pixmap exports on this project.
 """
 from __future__ import annotations
 
+from html import escape
 import logging
 
 import numpy as np
@@ -68,6 +69,11 @@ from mf4_analyzer.ui_kit.axis_metrics import (
 
 
 logger = logging.getLogger(__name__)
+
+
+_DUAL_CURSOR_DELTA_STYLE = (
+    "color:#0b7af3; background-color:#e8f1ff; font-weight:700;"
+)
 
 
 # Fallback envelope bucket count used when the time-preview plot area has no
@@ -156,6 +162,7 @@ class _HistoryHandle:
 
 class PgLineCanvas(_StackedSplitMixin, QWidget):
     cursor_info = pyqtSignal(str)
+    dual_cursor_info = pyqtSignal(str)
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
     time_preview_range_changed = pyqtSignal(float, float)
@@ -214,6 +221,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
         self._amp_curves = []
         self._time_curves = []
+        self._cursor_lines = self._make_frequency_cursor_lines("#64748b")
+        self._cursor_a_lines = self._make_frequency_cursor_lines("#1769e0")
+        self._cursor_b_lines = self._make_frequency_cursor_lines("#d97706")
+        self._cursor_mode = "off"
+        self._cursor_a_frequency = None
+        self._cursor_b_frequency = None
+        self._next_dual_cursor = "a"
         # Multi-Y overlay for the time preview: when >1 source is overlaid each
         # extra curve gets its own auto-scaled aux ViewBox + a colour-coded
         # right axis (mirrors TimeDomainCanvasPG overlay). The first curve stays
@@ -731,6 +745,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                      y_auto=True, y_min=0.0, y_max=0.0):
         """Plot FFT curves and show all source time traces below."""
         self.clear_empty_hint()
+        self._clear_frequency_cursor_readout()
         for p, curves in ((self._plot_amp, self._amp_curves),
                           (self._plot_time, self._time_curves)):
             for c in curves:
@@ -949,6 +964,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
     def full_reset(self) -> None:
         self.clear_empty_hint()
+        self._clear_frequency_cursor_readout()
         for p, curves in ((self._plot_amp, self._amp_curves),
                           (self._plot_time, self._time_curves)):
             for c in curves:
@@ -975,7 +991,6 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # 后续 plot_*/reset 会重新设范围，这里只管空态观感。
         for p in (self._plot_amp, self._plot_time):
             p.setYRange(0.0, 1.0, padding=0.08)
-        self.cursor_info.emit("")
         self.layout_geometry_changed.emit()
         # Curves are gone → the AA dot must fall back to red ("no curves")
         # instead of showing the previous render's stale green.
@@ -1667,6 +1682,107 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             ))
         return rows
 
+    def _make_frequency_cursor_lines(self, color):
+        line = pg.InfiniteLine(
+            angle=90, movable=False, pen=pg.mkPen(color, width=1.2)
+        )
+        line.setZValue(50)
+        line.hide()
+        self._plot_amp.addItem(line, ignoreBounds=True)
+        return [line]
+
+    @staticmethod
+    def _hide_frequency_cursor_lines(lines) -> None:
+        for line in lines:
+            line.hide()
+
+    @staticmethod
+    def _show_frequency_cursor_lines(lines, frequency) -> None:
+        for line in lines:
+            line.setValue(float(frequency))
+            line.show()
+
+    def _clear_frequency_cursor_readout(self) -> None:
+        """Clear samples/lines without changing the pane's selected mode."""
+        for lines in (
+            self._cursor_lines, self._cursor_a_lines, self._cursor_b_lines,
+        ):
+            self._hide_frequency_cursor_lines(lines)
+        self._cursor_a_frequency = None
+        self._cursor_b_frequency = None
+        self._next_dual_cursor = "a"
+        self.cursor_info.emit("")
+        self.dual_cursor_info.emit("")
+
+    def cursor_mode(self) -> str:
+        return self._cursor_mode
+
+    def set_cursor_mode(self, mode: str) -> None:
+        if mode not in {"off", "single", "dual"}:
+            return
+        self._cursor_mode = mode
+        self._clear_frequency_cursor_readout()
+
+    def _nearest_frequency(self, frequency):
+        rows = self.readout_at(float(frequency))
+        return float(rows[0][1]) if rows else None
+
+    def set_cursor_frequency(self, frequency) -> str:
+        snapped = self._nearest_frequency(frequency)
+        if snapped is None:
+            self.cursor_info.emit("")
+            return ""
+        self._show_frequency_cursor_lines(self._cursor_lines, snapped)
+        text = self.format_readout(snapped)
+        self.cursor_info.emit(text)
+        return text
+
+    def set_dual_cursor_frequencies(self, a_frequency, b_frequency) -> str:
+        a_value = self._nearest_frequency(a_frequency)
+        if a_value is None:
+            self.cursor_info.emit("")
+            self.dual_cursor_info.emit("")
+            return ""
+        self._cursor_a_frequency = a_value
+        self._show_frequency_cursor_lines(self._cursor_a_lines, a_value)
+        self._cursor_b_frequency = None
+        self._hide_frequency_cursor_lines(self._cursor_b_lines)
+        if b_frequency is None:
+            primary = f"A: f={a_value:g} Hz | 点击 B 选择第二点"
+            self.cursor_info.emit(primary)
+            self.dual_cursor_info.emit("")
+            return primary
+        b_value = self._nearest_frequency(b_frequency)
+        if b_value is None:
+            return ""
+        self._cursor_b_frequency = b_value
+        self._show_frequency_cursor_lines(self._cursor_b_lines, b_value)
+        primary = (
+            f"A={a_value:g} Hz | B={b_value:g} Hz | "
+            f'<span style="{_DUAL_CURSOR_DELTA_STYLE}">'
+            f"Δf={b_value - a_value:+g} Hz</span>"
+        )
+        self.cursor_info.emit(primary)
+        self.dual_cursor_info.emit(self._format_dual_cursor_detail(a_value, b_value))
+        return primary
+
+    def _format_dual_cursor_detail(self, a_value: float, b_value: float) -> str:
+        """Keep A/B values while surfacing every B-minus-A spectrum delta."""
+        a_rows = self.readout_at(a_value)
+        b_rows = self.readout_at(b_value)
+        deltas = []
+        for a_row, b_row in zip(a_rows, b_rows):
+            label = str(b_row[0])
+            delta = float(b_row[2]) - float(a_row[2])
+            deltas.append(f"{escape(label)}={delta:+.4g}")
+        delta_html = " · ".join(deltas) or "—"
+        return (
+            f"A：{escape(self.format_readout(a_value))}<br>"
+            f"B：{escape(self.format_readout(b_value))}<br>"
+            f'<span style="{_DUAL_CURSOR_DELTA_STYLE}">'
+            f"ΔY：{delta_html}</span>"
+        )
+
     def format_readout(self, freq: float) -> str:
         rows = self.readout_at(freq)
         if not rows:
@@ -1681,11 +1797,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         return f"f={rows[0][1]:.2f} Hz  " + "  |  ".join(parts)
 
     def _on_hover(self, pos) -> None:
+        if self._cursor_mode != "single":
+            return
         if not self._plot_amp.vb.sceneBoundingRect().contains(pos) or not self._entries:
             self.cursor_info.emit("")
             return
         x = self._plot_amp.vb.mapSceneToView(pos).x()
-        self.cursor_info.emit(self.format_readout(x))
+        self.set_cursor_frequency(x)
 
     def _nearest_entry_index(self, freq: float, amp_y: float) -> int | None:
         if not self._entries:
@@ -2040,6 +2158,17 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         if self._plot_amp.vb.sceneBoundingRect().contains(scene_pos):
             v = self._plot_amp.vb.mapSceneToView(scene_pos)
             if ev.button() == Qt.LeftButton:
+                if self._cursor_mode == "dual":
+                    if self._next_dual_cursor == "a":
+                        self.set_dual_cursor_frequencies(v.x(), None)
+                        self._next_dual_cursor = "b"
+                    else:
+                        self.set_dual_cursor_frequencies(
+                            self._cursor_a_frequency, v.x()
+                        )
+                        self._next_dual_cursor = "a"
+                    ev.accept()
+                    return
                 if self._remark_enabled:
                     self.add_remark_at('amp', v.x(), v.y())
                 else:

@@ -126,6 +126,63 @@ def test_frf_canvas_coherence_range_cursor_and_independent_y_ranges(qtbot):
     assert all(line.value() == 1.0 for line in canvas._cursor_lines)
 
 
+def test_frf_cursor_is_off_by_default_and_mouse_gate_clears_all_three_lines(qtbot):
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 700)
+    canvas.show()
+    canvas.set_result(_result(), {"frequency_scale": "linear"}, {})
+    qtbot.wait(20)
+    seen = []
+    canvas.cursor_info.connect(seen.append)
+    scene_pos = canvas._plot_magnitude.vb.sceneBoundingRect().center()
+
+    assert canvas.cursor_enabled() is False
+    canvas._on_scene_mouse_moved(scene_pos)
+    assert seen == []
+    assert all(line.isVisible() is False for line in canvas._cursor_lines)
+
+    canvas.set_cursor_enabled(True)
+    canvas._on_scene_mouse_moved(scene_pos)
+    assert seen and "f=" in seen[-1]
+    assert all(line.isVisible() for line in canvas._cursor_lines)
+
+    canvas.set_cursor_enabled(False)
+    assert seen[-1] == ""
+    assert all(line.isVisible() is False for line in canvas._cursor_lines)
+
+
+def test_frf_dual_cursor_reports_frequency_delta_and_both_frf_values(qtbot):
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.set_result(_result(), {"frequency_scale": "linear"}, {})
+    primary, detail = [], []
+    canvas.cursor_info.connect(primary.append)
+    canvas.dual_cursor_info.connect(detail.append)
+
+    canvas.set_cursor_mode("dual")
+    text = canvas.set_dual_cursor_frequencies(1.1, 3.8)
+
+    assert "A=1 Hz" in text and "B=4 Hz" in text and "Δf=+3 Hz" in text
+    assert "background-color:#e8f1ff" in text
+    assert "|H|=" in detail[-1] and "coherence=" in detail[-1]
+    assert "ΔY：Δ|H|=" in detail[-1]
+    assert "Δphase=" in detail[-1] and "Δcoherence=" in detail[-1]
+    assert "background-color:#e8f1ff" in detail[-1]
+    assert all(line.value() == pytest.approx(1.0) for line in canvas._cursor_a_lines)
+    assert all(line.value() == pytest.approx(4.0) for line in canvas._cursor_b_lines)
+
+    canvas.set_cursor_mode("off")
+    assert primary[-1] == "" and detail[-1] == ""
+    assert all(not line.isVisible() for lines in (
+        canvas._cursor_lines, canvas._cursor_a_lines, canvas._cursor_b_lines,
+    ) for line in lines)
+
+
 def test_frf_canvas_log_xlim_and_cursor_keep_public_units_in_hz(qtbot):
     from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
 
@@ -165,12 +222,29 @@ def test_frf_canvas_log_axis_uses_sparse_physical_hz_decades(qtbot):
     assert axis._tickLevels[0] == [
         (0.0, "1"), (1.0, "10"), (2.0, "100"), (3.0, "1000"),
     ]
+    expected_minor = [
+        np.log10(value)
+        for decade in (1.0, 10.0, 100.0)
+        for value in (2.0 * decade, 3.0 * decade, 4.0 * decade,
+                      5.0 * decade, 6.0 * decade, 7.0 * decade,
+                      8.0 * decade, 9.0 * decade)
+    ]
+    assert [coord for coord, label in axis._tickLevels[1]] == pytest.approx(expected_minor)
+    assert {label for _coord, label in axis._tickLevels[1]} == {""}
+    # The FRF grid is intentionally as visible as the time-domain grid.
+    assert axis.grid == round(0.28 * 255.0)
     image = QImage(8, 8, QImage.Format_ARGB32_Premultiplied)
     painter = QPainter(image)
     try:
-        _axis_spec, _tick_specs, text_specs = axis.generateDrawSpecs(painter)
+        _axis_spec, tick_specs, text_specs = axis.generateDrawSpecs(painter)
     finally:
         painter.end()
+    # The 2..9 multipliers are visible full-height grids in every FRF row, so
+    # the coherence X axis aligns with the magnitude and phase frequency grid.
+    vertical_lengths = [abs(p2.y() - p1.y()) for _pen, p1, p2 in tick_specs]
+    assert vertical_lengths and min(vertical_lengths) > 100.0
+    for plot in canvas.plots:
+        assert plot.getAxis("bottom")._tickLevels == axis._tickLevels
     physical_labels = {"1", "10", "100", "1000"}
     visible_specs = [
         (rect, text) for rect, _flags, text in text_specs
@@ -232,6 +306,15 @@ def test_frf_canvas_log_axis_keeps_labels_when_zoomed_inside_one_decade(qtbot):
     canvas.set_xlim(1.0, 100.0)
     qtbot.wait(20)
     assert axis._tickLevels[0] == [(0.0, "1"), (1.0, "10"), (2.0, "100")]
+    expected_minor = [
+        np.log10(value)
+        for decade in (1.0, 10.0)
+        for value in (2.0 * decade, 3.0 * decade, 4.0 * decade,
+                      5.0 * decade, 6.0 * decade, 7.0 * decade,
+                      8.0 * decade, 9.0 * decade)
+    ]
+    assert [coord for coord, label in axis._tickLevels[1]] == pytest.approx(expected_minor)
+    assert {label for _coord, label in axis._tickLevels[1]} == {""}
 
 
 def test_frf_canvas_densest_mantissa_row_keeps_labels_from_colliding(qtbot):
@@ -375,6 +458,61 @@ def test_frf_canvas_reuses_analysis_wheel_and_tick_density_contract(qtbot):
         axis = plot.getAxis("left")
         assert axis._tickDensity == pytest.approx(2.0)
         assert axis.style["maxTickLevel"] == 0
+
+
+def test_frf_canvas_wheel_zoom_temporarily_disables_curve_antialiasing(
+    qtbot, monkeypatch
+):
+    """FRF must take the cheap raster path for an active wheel gesture."""
+    from mf4_analyzer.ui.pg_canvas import frf_canvas
+
+    # This unit test directly invokes the idle slot; preceding widget tests
+    # can leave Qt's process-wide button state stale.  The production guard is
+    # still covered by its real mouse-event paths, while this probe explicitly
+    # exercises the no-button branch.
+    monkeypatch.setattr(
+        frf_canvas,
+        "QApplication",
+        SimpleNamespace(mouseButtons=lambda: Qt.NoButton),
+    )
+    PgFrfCanvas = frf_canvas.PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.set_result(_result(), {"frequency_scale": "linear"}, {})
+    canvas._plot_magnitude.setXRange(0.0, 4.0, padding=0)
+    canvas._plot_magnitude.setYRange(-10.0, 10.0, padding=0)
+    curves = (
+        canvas._magnitude_curve,
+        canvas._magnitude_low_curve,
+        canvas._phase_curve,
+        canvas._phase_low_curve,
+        canvas._coherence_curve,
+    )
+    assert all(curve.opts["antialias"] for curve in curves)
+
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ControlModifier, x_pos=2.0, y_pos=0.0,
+        view_box=canvas._plot_magnitude.vb,
+    ) is True
+
+    assert canvas._aa_on is False
+    assert all(curve.opts["antialias"] is False for curve in curves)
+    assert canvas._aa_idle_timer.isActive()
+
+    canvas._enable_idle_quality()
+
+    assert canvas._aa_on is True
+    assert all(curve.opts["antialias"] is True for curve in curves)
+
+    # Native pan/plain-wheel gestures arrive through ViewBox's manual-range
+    # signal rather than the modifier-wheel dispatch above.
+    view_box = canvas._plot_magnitude.vb
+    view_box.sigRangeChangedManually.emit(view_box.state["mouseEnabled"])
+
+    assert canvas._aa_on is False
+    assert all(curve.opts["antialias"] is False for curve in curves)
+    assert canvas._aa_idle_timer.isActive()
 
 
 def test_frf_canvas_never_sends_all_nan_data_to_low_coherence_scatter(qtbot):

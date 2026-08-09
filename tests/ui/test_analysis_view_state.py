@@ -92,6 +92,7 @@ def test_frf_role_state_round_trip_keeps_sources_as_a_separate_contract():
             "coherence": (0.0, 1.0),
         },
         source_time_view_id="time-view-123",
+        cursor_mode="dual",
     )
 
     payload = pane.to_dict()
@@ -107,6 +108,7 @@ def test_frf_role_state_round_trip_keeps_sources_as_a_separate_contract():
     assert restored.ylims == pane.ylims
     assert "source_time_view_id" not in payload
     assert restored.source_time_view_id is None
+    assert restored.cursor_mode == "dual"
 
 
 def test_analysis_view_schema6_is_additive_and_migrates_the_old_frf_toggle():
@@ -129,6 +131,14 @@ def test_analysis_view_schema6_is_additive_and_migrates_the_old_frf_toggle():
     assert legacy.panes[0].ylims == {}
     assert legacy.panes[0].ylim == (-1.0, 1.0)
     assert legacy.panes[0].effective_time_range is None
+    assert legacy.panes[0].cursor_mode == "off"
+    schema4 = AnalysisViewState.from_dict({
+        "schema": 4,
+        "name": "FRF legacy cursor",
+        "tab_color": "#2d7ff9",
+        "panes": [{"frf_cursor_enabled": True}],
+    })
+    assert schema4.panes[0].cursor_mode == "single"
 
 
 def test_duplicate_frf_pane_state_does_not_share_mutable_ylims(qapp):
