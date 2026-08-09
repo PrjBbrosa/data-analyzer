@@ -102,6 +102,14 @@ spec 再改测试，并在提交里写清为什么。
   看守，含 `test_run_routes_every_event_through_the_reporter` 和
   `test_reporter_stays_private_to_the_batch_module`）。新增编排分支不要再手写第二份
   emit/record。
+- **目录 conftest 作用域** 仓库根 `conftest.py` + `tests/test_conftest_autouse_scope.py`：
+  pytest 9.1.1 在参数「离开又回到同一目录」时（`pytest tests/ui/a.py tests/x.py
+  tests/ui/b.py`）会为该目录重建第二个 collector 节点，而 fixture 查找按**节点身份**匹配，
+  于是该目录 conftest 的 fixture **静默失效**——不报错、不告警，测试照跑，只是没了 fixture。
+  根 conftest 让被重复收集的目录复用首次生成的子目录节点，恢复「一个目录一个节点」。
+  **别删根 conftest，也别往里加项目 fixture**（那是各目录 conftest 的事）。
+  `tests/ui/test_qsettings_isolation.py` 是它失效时的第二道显性告警：没有隔离，UI 测试
+  会去读写开发机真实的 `MF4Analyzer/DataAnalyzer` 偏好，把本机残留读成测试前置状态。
 
 ## 时域渲染成本判据：ink（墨水量）
 2026-08-08 起，时域渲染**成本**的统一判据是 ink（`ink_dev_px = Σ min(|Δy|, y_span)
