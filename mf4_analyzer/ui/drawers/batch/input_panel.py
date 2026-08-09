@@ -912,6 +912,9 @@ class InputPanel(QWidget):
         self._signal_picker.relaxPolicyRequested.connect(
             self._on_relax_policy_requested
         )
+        self._frf_pair_editor.relaxPolicyRequested.connect(
+            self._on_relax_policy_requested
+        )
         self._rpm_picker.relaxPolicyRequested.connect(
             self._on_relax_policy_requested
         )

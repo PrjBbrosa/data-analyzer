@@ -182,6 +182,24 @@ class AnalysisPanel(QWidget):
 
         self._param_form = DynamicParamForm(self)
         outer.addWidget(self._param_form)
+
+        self._frf_grouping_host = QWidget(self)
+        self._frf_grouping_host.setObjectName("BatchFrfChartGrouping")
+        grouping_lay = QHBoxLayout(self._frf_grouping_host)
+        grouping_lay.setContentsMargins(0, 0, 0, 0)
+        grouping_lay.setSpacing(8)
+        grouping_lay.addWidget(QLabel("图表组织", self._frf_grouping_host))
+        self._frf_grouping_combo = QComboBox(self._frf_grouping_host)
+        self._frf_grouping_combo.addItem("每对一张", "none")
+        self._frf_grouping_combo.addItem("按来源叠加", "source")
+        self._frf_grouping_combo.addItem("按输入/输出对叠加", "channel")
+        self._frf_grouping_combo.setMinimumWidth(0)
+        self._frf_grouping_combo.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed,
+        )
+        grouping_lay.addWidget(self._frf_grouping_combo, 1)
+        self._frf_grouping_host.hide()
+        outer.addWidget(self._frf_grouping_host)
         self._chart_statistics = ChartStatisticsPanel(self)
         outer.addWidget(self._chart_statistics)
         self._slice = SlicePanel(self)
@@ -209,6 +227,7 @@ class AnalysisPanel(QWidget):
         self._applied_snapshot: dict = {}
         self._method_group.methodChanged.connect(self._on_method_changed)
         self._param_form.paramsChanged.connect(self._on_params_changed)
+        self._frf_grouping_combo.currentIndexChanged.connect(self._on_params_changed)
         self._chart_statistics.changed.connect(self._on_params_changed)
         self._slice.changed.connect(self._on_params_changed)
         self._source_interval_mode.currentIndexChanged.connect(
@@ -266,6 +285,7 @@ class AnalysisPanel(QWidget):
         self._slice.set_context(method=method)
         self._params_title.setText(_PARAMETER_TITLES.get(method, "分析参数"))
         self._preset_state.setVisible(not is_time)
+        self._frf_grouping_host.setVisible(method == "frf")
         if is_time:
             self._clear_applied(emit=False, dirty=False)
             return
@@ -397,6 +417,10 @@ class AnalysisPanel(QWidget):
         method = self.current_method()
         if method == "time":
             params.update(self._chart_statistics.get_params())
+        elif method == "frf":
+            params["render_group_by"] = str(
+                self._frf_grouping_combo.currentData() or "none"
+            )
         elif method in _SPECTROGRAM_METHODS:
             params.update(self._slice.get_params())
         return params
@@ -406,6 +430,12 @@ class AnalysisPanel(QWidget):
 
     def apply_params(self, params: dict) -> None:
         self._param_form.apply_params(params)
+        if isinstance(params, dict) and "render_group_by" in params:
+            index = self._frf_grouping_combo.findData(
+                str(params.get("render_group_by") or "none")
+            )
+            if index >= 0:
+                self._frf_grouping_combo.setCurrentIndex(index)
         self._chart_statistics.apply_params(params)
         self._slice.apply_params(params)
 

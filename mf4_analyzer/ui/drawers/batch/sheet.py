@@ -1132,7 +1132,6 @@ class BatchSheet(QDialog):
             self._output_panel.apply_axis_params(params)
             self._output_panel.apply_reference_params(params)
             self._output_panel.apply_render_style_params(params)
-            self._output_panel.apply_frf_render_params(params)
             rpm_channel = preset.rpm_channel or (
                 preset.rpm_signal[1] if preset.rpm_signal is not None else ""
             )
@@ -1249,7 +1248,6 @@ class BatchSheet(QDialog):
         params.update(axis)
         params.update(self._output_panel.reference_params())
         params.update(self._output_panel.render_style_params())
-        params.update(self._output_panel.frf_render_params())
         if method_key == "fft":
             params["amp_y"] = (
                 "dB" if axis.get("amplitude_mode") == "amplitude_db" else "Linear"

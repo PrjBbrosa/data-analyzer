@@ -1100,6 +1100,38 @@ def test_picker_excludes_time_column(qtbot, tmp_path):
     assert "Time" not in visible and "time" not in visible
 
 
+def test_frf_pair_editor_reuses_searchable_signal_pickers(qtbot):
+    from mf4_analyzer.ui.drawers.batch.frf_pair_editor import FrfPairEditor
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    command = "Rte_ActRet_mActiveReturnMotorTorq4Check_xds16"
+    response = "Rte_ESChkPlausi_mESMotorTorque_xds16"
+    other = "Rte_MosfetTemperatureCalculation_cPCBTemp_xds16"
+    editor = FrfPairEditor()
+    qtbot.addWidget(editor)
+    editor.set_channel_universe(
+        (command, response, other), {}, policy="common", source_count=2,
+    )
+    editor.resize(288, 160)
+    editor.show()
+    qtbot.wait(20)
+
+    group = editor._groups[0]
+    assert isinstance(group.input_picker, SignalPickerPopup)
+    assert isinstance(group.output_picker, SignalPickerPopup)
+    assert group.input_picker.width() > 140
+    assert group.output_picker.width() > 140
+
+    group.input_picker.set_selected((command,))
+    group.output_picker.set_selected((response, other))
+    assert editor.rules()[0].input_channel == command
+    assert editor.rules()[0].output_channels == (response, other)
+
+    group.output_picker.show_popup()
+    assert group.output_picker._popup.width() >= 420
+    assert group.output_picker.label_for(response) == response
+
+
 def test_batch_input_filter_params_round_trip(qtbot):
     from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
 

@@ -115,7 +115,7 @@ def test_batch_sheet_frf_rules_round_trip_and_invalid_pair_maps_to_input(qtbot):
         "source-a", "a.mf4", frozenset({"Force", "Acceleration"}),
     )
     sheet.apply_preset(AnalysisPreset.free_config(
-        "frf", "frf", params={},
+        "frf", "frf", params={"render_group_by": "channel"},
         frf_pair_rules=(FrfPairRule("Force", ("Acceleration",)),),
     ))
     exported = sheet.get_preset()
@@ -123,6 +123,8 @@ def test_batch_sheet_frf_rules_round_trip_and_invalid_pair_maps_to_input(qtbot):
         FrfPairRule("Force", ("Acceleration",)),
     )
     assert exported.target_signals == ()
+    assert sheet._analysis_panel._frf_grouping_combo.currentData() == "channel"
+    assert exported.params["render_group_by"] == "channel"
 
     sheet._input_panel._frf_pair_editor.set_group_values(
         0, "Force", ("Force",),

@@ -391,24 +391,6 @@ QPushButton#batchOutputSettingsButton:checked {
         form.addRow(self._output_settings)
         outer.addLayout(form)
 
-        self._frf_grouping_row = QFrame(self)
-        self._frf_grouping_row.setObjectName("BatchFrfImageGrouping")
-        grouping_layout = QHBoxLayout(self._frf_grouping_row)
-        grouping_layout.setContentsMargins(0, 0, 0, 0)
-        grouping_layout.setSpacing(8)
-        grouping_layout.addWidget(QLabel("图片组织", self._frf_grouping_row))
-        self._frf_grouping_combo = QComboBox(self._frf_grouping_row)
-        self._frf_grouping_combo.addItem("每对一张", "none")
-        self._frf_grouping_combo.addItem("按来源叠加", "source")
-        self._frf_grouping_combo.addItem("按输入/输出对叠加", "channel")
-        self._frf_grouping_combo.setMinimumWidth(0)
-        self._frf_grouping_combo.setSizePolicy(
-            QSizePolicy.Ignored, QSizePolicy.Fixed,
-        )
-        grouping_layout.addWidget(self._frf_grouping_combo, 1)
-        outer.addWidget(self._frf_grouping_row)
-        self._frf_grouping_row.hide()
-
         self._output_preview = QLabel("运行预览：等待完整配置", self)
         self._output_preview.setObjectName("batchOutputPreview")
         self._output_preview.setWordWrap(True)
@@ -507,9 +489,6 @@ QPushButton#batchOutputSettingsButton:checked {
             spin.valueChanged.connect(lambda *_: self.changed.emit())
             spin.valueChanged.connect(lambda *_: self._refresh_output_summary())
         self._combo_conflict.currentIndexChanged.connect(
-            lambda *_: self.changed.emit()
-        )
-        self._frf_grouping_combo.currentIndexChanged.connect(
             lambda *_: self.changed.emit()
         )
         self._chk_manifest.toggled.connect(lambda *_: self.changed.emit())
@@ -764,9 +743,7 @@ QPushButton#batchRenderStyleButton:checked {
     def _apply_method_axis_context(self, method: str) -> None:
         self._method = str(method)
         context = _AXIS_CONTEXTS.get(str(method), _AXIS_CONTEXTS["fft"])
-        is_frf = str(method) == "frf"
-        self._frf_grouping_row.setVisible(is_frf)
-        self._output_preview.setVisible(is_frf)
+        self._output_preview.setVisible(False)
         self._set_z_axis_visible(str(method) in {"fft_time", "order_time"})
         self._set_amplitude_unit_visible(str(method) not in {"time", "frf"})
         self._set_db_reference_visible(str(method) not in {"time", "frf"})
@@ -779,24 +756,6 @@ QPushButton#batchRenderStyleButton:checked {
         self._axis_row_parts["x"]["summary"].setText(context["x_summary"])
         self._axis_row_parts["y"]["label"].setText(context["y_label"])
         self._axis_row_parts["y"]["summary"].setText(context["y_summary"])
-
-    def frf_render_params(self) -> dict:
-        if self._method != "frf":
-            return {}
-        return {
-            "render_group_by": str(
-                self._frf_grouping_combo.currentData() or "none"
-            )
-        }
-
-    def apply_frf_render_params(self, params) -> None:
-        if not isinstance(params, dict) or "render_group_by" not in params:
-            return
-        index = self._frf_grouping_combo.findData(
-            str(params.get("render_group_by") or "none")
-        )
-        if index >= 0:
-            self._frf_grouping_combo.setCurrentIndex(index)
 
     def set_x_axis_context(self, *, label: str, unit: str = "") -> None:
         """Update the presented X-axis identity without changing the recipe."""
@@ -1009,40 +968,18 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
         return self._output_preview.text()
 
     def set_output_preview(self, preview=None, *, error: str = "") -> None:
+        """Keep planning facts available to callers without adding UI noise.
+
+        Detailed task, artifact and stem facts belong to the Preview dialog.
+        The compact output column only surfaces a short availability state.
+        """
         if error:
             self._output_preview.setText(f"运行预览不可用：{error}")
             return
         if preview is None:
             self._output_preview.setText("运行预览：等待完整配置")
             return
-        estimate = "预估" if bool(getattr(preview, "estimated", False)) else "预览"
-        fmt = str(getattr(preview, "image_format", "")).upper()
-        size = (
-            f"{int(getattr(preview, 'image_width', 0))}×"
-            f"{int(getattr(preview, 'image_height', 0))}"
-        )
-        dpi = int(getattr(preview, "image_dpi", 0))
-        if self._method == "frf":
-            representative = getattr(preview, "representative_group", None)
-            stem = str(getattr(representative, "planned_stem", "") or "")
-            stem_text = f"；文件名 {stem}" if stem else ""
-            self._output_preview.setText(
-                f"{estimate}：{int(getattr(preview, 'task_count', 0))} 任务 · "
-                f"{int(getattr(preview, 'data_artifact_count', 0))} 数据 · "
-                f"{int(getattr(preview, 'image_artifact_count', 0))} 图片组 · "
-                f"{int(getattr(preview, 'conflict_count', 0))} 冲突；"
-                f"数据列 12 列；{fmt} {size} @ {dpi} DPI；"
-                "元数据预估，真实时基/分段尚未预检"
-                f"{stem_text}"
-            )
-            return
-        self._output_preview.setText(
-            f"{estimate}：{int(getattr(preview, 'task_count', 0))} 任务 · "
-            f"{int(getattr(preview, 'artifact_count', 0))} 文件；"
-            f"{fmt} {size} @ {dpi} DPI；"
-            f"冲突策略 {getattr(preview, 'conflict_policy', '')} · "
-            f"已有冲突 {int(getattr(preview, 'conflict_count', 0))}"
-        )
+        self._output_preview.setText("输出预览已就绪")
 
     def update_effective_preview(
         self,

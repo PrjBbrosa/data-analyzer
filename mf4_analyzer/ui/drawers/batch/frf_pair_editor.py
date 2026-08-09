@@ -10,14 +10,10 @@ from dataclasses import dataclass
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QAbstractItemView,
-    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -25,14 +21,15 @@ from PyQt5.QtWidgets import (
 )
 
 from ....batch_types import FrfPairRule
+from .signal_picker import SignalPickerPopup
 
 
 @dataclass
 class _PairGroup:
     host: QFrame
     title: QLabel
-    input_combo: QComboBox
-    outputs: QListWidget
+    input_picker: SignalPickerPopup
+    output_picker: SignalPickerPopup
     remove_button: QPushButton
 
 
@@ -40,6 +37,7 @@ class FrfPairEditor(QWidget):
     """Edit one-input/many-output portable FRF pairing groups."""
 
     changed = pyqtSignal()
+    relaxPolicyRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -77,55 +75,32 @@ class FrfPairEditor(QWidget):
         outer.addWidget(self._task_summary)
         self.add_group(emit=False)
 
-    def _candidate_items(self) -> tuple[tuple[str, str], ...]:
-        items = [(name, name) for name in self._common]
-        if self._policy == "available_per_source":
-            items.extend(
-                (f"{name} {suffix}".strip(), name)
-                for name, suffix in self._partial.items()
-                if name not in self._common
-            )
-        return tuple(items)
-
     @staticmethod
     def _input_value(group: _PairGroup) -> str:
-        return str(group.input_combo.currentData(Qt.UserRole) or "")
+        return next(iter(group.input_picker.selected()), "")
 
     @staticmethod
     def _output_values(group: _PairGroup) -> tuple[str, ...]:
-        return tuple(
-            str(item.data(Qt.UserRole) or "")
-            for item in group.outputs.selectedItems()
-            if str(item.data(Qt.UserRole) or "")
-        )
+        return group.output_picker.selected()
 
     def _populate_group(
         self, group: _PairGroup, input_channel: str, outputs: tuple[str, ...]
     ) -> None:
-        candidates = list(self._candidate_items())
-        known = {value for _label, value in candidates}
+        available = tuple(self._common)
+        partial = dict(self._partial)
+        known = set(available) | set(partial)
         for value in (input_channel, *outputs):
             if value and value not in known:
-                candidates.append((f"{value} · 当前来源不可用", value))
+                partial[value] = "当前来源不可用"
                 known.add(value)
-        group.input_combo.blockSignals(True)
-        group.outputs.blockSignals(True)
-        try:
-            group.input_combo.clear()
-            group.input_combo.addItem("请选择输入", "")
-            group.outputs.clear()
-            for label, value in candidates:
-                group.input_combo.addItem(label, value)
-                item = QListWidgetItem(label, group.outputs)
-                item.setData(Qt.UserRole, value)
-                item.setToolTip(f"通道身份：{value}")
-                if value in outputs:
-                    item.setSelected(True)
-            index = group.input_combo.findData(input_channel, Qt.UserRole)
-            group.input_combo.setCurrentIndex(max(0, index))
-        finally:
-            group.outputs.blockSignals(False)
-            group.input_combo.blockSignals(False)
+        selectable = self._policy == "available_per_source"
+        for picker, selected in (
+            (group.input_picker, (input_channel,) if input_channel else ()),
+            (group.output_picker, outputs),
+        ):
+            picker.set_available(available)
+            picker.set_partially_available(partial, selectable=selectable)
+            picker.set_selected(selected)
 
     def add_group(self, _checked=False, *, emit: bool = True) -> int:
         host = QFrame(self)
@@ -139,25 +114,26 @@ class FrfPairEditor(QWidget):
         remove = QPushButton("删除", host)
         remove.setProperty("role", "tool")
         remove.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        input_combo = QComboBox(host)
-        input_combo.setMinimumWidth(0)
-        input_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        outputs = QListWidget(host)
-        outputs.setSelectionMode(QAbstractItemView.MultiSelection)
-        outputs.setFixedHeight(84)
-        outputs.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        input_picker = SignalPickerPopup(parent=host, single_select=True)
+        input_picker.setMinimumWidth(0)
+        input_picker.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        output_picker = SignalPickerPopup(parent=host)
+        output_picker.setMinimumWidth(0)
+        output_picker.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         grid.addWidget(title, 0, 0)
         grid.addWidget(remove, 0, 1, Qt.AlignRight)
         grid.addWidget(QLabel("输入", host), 1, 0)
-        grid.addWidget(input_combo, 1, 1)
-        grid.addWidget(QLabel("输出（可多选）", host), 2, 0, Qt.AlignTop)
-        grid.addWidget(outputs, 2, 1)
+        grid.addWidget(input_picker, 1, 1)
+        grid.addWidget(QLabel("输出", host), 2, 0)
+        grid.addWidget(output_picker, 2, 1)
         grid.setColumnStretch(1, 1)
-        group = _PairGroup(host, title, input_combo, outputs, remove)
+        group = _PairGroup(host, title, input_picker, output_picker, remove)
         self._groups.append(group)
         self._groups_layout.addWidget(host)
-        input_combo.currentIndexChanged.connect(self._on_changed)
-        outputs.itemSelectionChanged.connect(self._on_changed)
+        input_picker.selectionChanged.connect(self._on_changed)
+        output_picker.selectionChanged.connect(self._on_changed)
+        input_picker.relaxPolicyRequested.connect(self.relaxPolicyRequested)
+        output_picker.relaxPolicyRequested.connect(self.relaxPolicyRequested)
         remove.clicked.connect(lambda _checked=False, g=group: self._remove_group_object(g))
         self._populate_group(group, "", ())
         self._refresh_titles()

@@ -1099,10 +1099,8 @@ def test_sheet_output_preview_uses_batch_runner_core_facts(qtbot, tmp_path):
     sheet._recompute_pipeline_status()
 
     preview = sheet._output_panel.output_preview_text()
-    assert "1 任务" in preview
-    assert "2 文件" in preview
-    assert "PNG 1920×1080" in preview
-    assert "auto_number" in preview
+    assert preview == "输出预览已就绪"
+    assert sheet._output_panel._output_preview.isHidden() is True
 
 
 def test_sheet_has_no_gui_resume_or_retry_entry_points(qtbot):
