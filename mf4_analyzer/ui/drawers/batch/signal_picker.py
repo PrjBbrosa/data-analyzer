@@ -703,7 +703,8 @@ class SignalPickerPopup(QWidget):
             # held: a popup that resizes while you type also re-decides
             # whether to open upwards, which reads as the panel jumping.
             self._locked_list_height = max(
-                32, min(self._list_content_height(), self._row_budget(), cap),
+                self._LIST_MIN_HEIGHT,
+                min(self._list_content_height(), self._row_budget(), cap),
             )
         height = min(self._locked_list_height, cap)
         self._list.setFixedHeight(height)

@@ -1211,3 +1211,19 @@ def test_batch_filter_time_output_toggles_only_visible_for_time(qtbot):
 
     panel._filter_panel._enable_switch.setChecked(True)
     assert panel._filter_panel.time_output_options_visible() is True
+
+
+def test_order_target_picker_does_not_reserve_hidden_frf_editor_height(qtbot):
+    """阶次目标信号行只应占收起态 picker 的一行高度。"""
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel(None, files={})
+    qtbot.addWidget(panel)
+    panel.resize(560, 760)
+    panel.show()
+    panel.set_method("order_time")
+    qtbot.wait(20)
+
+    assert panel._signal_picker.isVisibleTo(panel) is True
+    assert panel._frf_pair_editor.isVisibleTo(panel) is False
+    assert panel._target_stack.height() == panel._signal_picker.height()

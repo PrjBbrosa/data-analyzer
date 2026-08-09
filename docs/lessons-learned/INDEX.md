@@ -144,6 +144,7 @@ lesson by default.
 | [Action Button Natural Height Under Wrapped Label Pressure](pyqt-ui/2026-08-08-action-button-natural-height-under-wrapped-label-pressure.md) | A compact vertical Qt form places a user action between elastic controls and a word-wrapped description, especially during mode switching or widget reparenting. | See lesson |
 | [Validate FRF Data After Applying The Shared Physical-Time Mask](frf-range-mask-before-data-validation.md) | Changing FRF range selection, timebase validation, or GUI/Batch | See lesson |
 | [Deferred Analysis Restore Uses Stable View Identity](deferred-analysis-restore-uses-stable-view-identity.md) | Adding deferred project restore or asynchronous compute for analysis | See lesson |
+| [Batch Picker Layout Uses The Current Stack Page And Readable Empty State](batch-current-stack-page-and-empty-picker-height.md) | Changing a Batch stacked field that swaps compact and multi-row pages, or the signal-picker popup's empty/list geometry. | See lesson |
 
 ## Selection Rules
 

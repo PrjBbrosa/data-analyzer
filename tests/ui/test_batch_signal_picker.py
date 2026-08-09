@@ -578,6 +578,19 @@ def test_picker_popup_shows_empty_state_when_nothing_matches(qtbot):
     assert p._foot_stats.text() == "已选 0 · 匹配 0"
 
 
+def test_picker_empty_state_has_room_for_its_text(qtbot):
+    """无匹配时提示文字不能被自身的固定高度裁掉。"""
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup()
+    qtbot.addWidget(p)
+    p.show_popup()
+    qtbot.wait(20)
+
+    assert p._empty_label.isVisibleTo(p._popup) is True
+    assert p._empty_label.height() >= p._empty_label.sizeHint().height()
+
+
 def test_picker_popup_clears_search_when_closed(qtbot):
     from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
 

@@ -68,9 +68,32 @@ STATE_UNAVAILABLE = "unavailable"
 class _TargetStack(QStackedWidget):
     """Elastic target field whose current page may contain wide labels."""
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(self._refresh_current_page_geometry)
+
+    def _refresh_current_page_geometry(self, _index: int) -> None:
+        """Let the owning form remeasure after switching signal/FRF pages."""
+
+        self.updateGeometry()
+        parent = self.parentWidget()
+        if parent is not None and parent.layout() is not None:
+            parent.layout().invalidate()
+
+    def sizeHint(self):  # noqa: N802 (Qt API)
+        hint = super().sizeHint()
+        current = self.currentWidget()
+        if current is None:
+            return hint
+        # QStackedWidget normally takes the tallest page's hint.  That leaves
+        # the FRF pair editor's full height beneath the one-line target-signal
+        # picker in every non-FRF method.
+        return QSize(hint.width(), current.sizeHint().height())
+
     def minimumSizeHint(self):  # noqa: N802 (Qt API)
-        hint = super().minimumSizeHint()
-        return QSize(0, hint.height())
+        current = self.currentWidget()
+        height = current.minimumSizeHint().height() if current is not None else 0
+        return QSize(0, height)
 
 
 # ---------------------------------------------------------------------------
