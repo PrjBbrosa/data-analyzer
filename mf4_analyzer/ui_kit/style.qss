@@ -996,6 +996,10 @@ Toolbar QPushButton {
     min-height: {{CONTROL_H_COMPACT_BUTTON_CONTENT}};
     padding: 2px 12px;
 }
+/* “打开” keeps the primary fill but shares this compact toolbar row's height. */
+Toolbar QPushButton[role="primary"] {
+    min-height: {{CONTROL_H_COMPACT_BUTTON_CONTENT}};
+}
 Toolbar QPushButton[role="panel-toggle"] {
     min-width: 0;
     min-height: 0;

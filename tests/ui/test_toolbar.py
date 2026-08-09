@@ -196,3 +196,17 @@ def test_toolbar_open_keeps_primary_entry_cue_and_other_file_actions_are_seconda
     assert [button.property("role") for button in (
         tb.btn_save_project, tb.btn_save_project_as, tb.btn_batch,
     )] == ["secondary"] * 3
+
+
+def test_toolbar_primary_open_matches_secondary_file_action_height(qtbot, qapp):
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    tb.resize(720, 44)
+    tb.show()
+    qtbot.wait(20)
+
+    assert tb.btn_add.height() == tb.btn_save_project.height() == tb.btn_batch.height()
