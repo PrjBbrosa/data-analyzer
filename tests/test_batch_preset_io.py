@@ -6,6 +6,7 @@ from mf4_analyzer.batch import AnalysisPreset, BatchOutput
 from mf4_analyzer.batch_preset_io import (
     save_preset_to_json, load_preset_from_json, UnsupportedPresetVersion,
 )
+from mf4_analyzer.batch_types import FrfPairRule
 
 
 def _basic_preset():
@@ -404,3 +405,84 @@ def test_round_trip_preserves_chinese_signal_names(tmp_path):
     assert loaded.target_signals == ("振动_x", "转速")
     assert loaded.rpm_channel == "转速"
     assert loaded.params["备注"] == "中文参数"
+
+
+def test_frf_pair_rules_round_trip_in_schema_v1_preserving_user_order(tmp_path):
+    preset = AnalysisPreset.free_config(
+        name="FRF pairs",
+        method="frf",
+        frf_pair_rules=(
+            FrfPairRule("cmd_b", ("out_2", "out_1")),
+            FrfPairRule("cmd_a", ("out_3",)),
+        ),
+        params={"estimator": "H1", "coherence_threshold": 0.8},
+    )
+    path = tmp_path / "frf.json"
+
+    save_preset_to_json(preset, path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    loaded = load_preset_from_json(path)
+
+    assert raw["schema_version"] == 1
+    assert raw["frf_pair_rules"] == [
+        {"input_channel": "cmd_b", "output_channels": ["out_2", "out_1"]},
+        {"input_channel": "cmd_a", "output_channels": ["out_3"]},
+    ]
+    assert loaded.frf_pair_rules == preset.frf_pair_rules
+    assert not hasattr(loaded, "resolved_frf_tasks")
+
+
+def test_frf_runtime_resolution_never_leaks_into_portable_json(tmp_path):
+    preset = AnalysisPreset.free_config(
+        name="FRF",
+        method="frf",
+        frf_pair_rules=(FrfPairRule("cmd", ("actual",)),),
+    )
+    # Deliberately inject an accidental transient attribute: the serializer is
+    # whitelist-based and must still ignore it.
+    preset.resolved_frf_tasks = (("source-a", "cmd", "actual"),)
+    path = tmp_path / "frf.json"
+
+    save_preset_to_json(preset, path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+
+    assert "frf_pair_rules" in raw
+    assert "resolved_frf_tasks" not in raw
+
+
+def test_handwritten_frf_db_reference_is_dropped_with_migration_warning(tmp_path):
+    path = tmp_path / "frf-db-reference.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "name": "FRF",
+        "method": "frf",
+        "frf_pair_rules": [
+            {"input_channel": "cmd", "output_channels": ["actual"]}
+        ],
+        "params": {
+            "estimator": "h1",
+            "db_reference": 2e-5,
+            "db_reference_mode": "manual",
+        },
+        "outputs": {},
+    }), encoding="utf-8")
+
+    loaded = load_preset_from_json(path)
+
+    assert "db_reference" not in loaded.params
+    assert "db_reference_mode" not in loaded.params
+    assert any("FRF" in warning for warning in loaded.outputs.migration_warnings)
+
+
+def test_malformed_frf_pair_rule_is_rejected_instead_of_silently_dropped(tmp_path):
+    path = tmp_path / "invalid-frf-rule.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "method": "frf",
+        "frf_pair_rules": ["not-an-object"],
+        "params": {},
+        "outputs": {},
+    }), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="frf_pair_rules"):
+        load_preset_from_json(path)

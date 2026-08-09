@@ -355,6 +355,55 @@ class ChannelScopeMixin:
         for state in self.view_manager.views:
             self._filter_time_view_state_for_removed_channels(state, removed)
 
+    def _remove_file_from_all_analysis_views(self, fid):
+        removed = str(fid)
+        for manager in self.analysis_managers.values():
+            for state in manager.views:
+                for pane in state.panes:
+                    pane.sources = [
+                        key for key in pane.sources if str(key[0]) != removed
+                    ]
+                    if pane.rpm_source and str(pane.rpm_source[0]) == removed:
+                        pane.rpm_source = None
+                    if (
+                        pane.input_source and str(pane.input_source[0]) == removed
+                    ) or (
+                        pane.output_source and str(pane.output_source[0]) == removed
+                    ):
+                        pane.input_source = None
+                        pane.output_source = None
+                        pane.source_time_view_id = None
+
+    def _remove_channels_from_all_analysis_views(self, fid, channels):
+        removed = {
+            (str(fid), str(channel)) for channel in channels or ()
+        }
+        if not removed:
+            return
+        for manager in self.analysis_managers.values():
+            for state in manager.views:
+                for pane in state.panes:
+                    pane.sources = [
+                        key for key in pane.sources
+                        if (str(key[0]), str(key[1])) not in removed
+                    ]
+                    if pane.rpm_source and (
+                        str(pane.rpm_source[0]), str(pane.rpm_source[1])
+                    ) in removed:
+                        pane.rpm_source = None
+                    if (
+                        pane.input_source and (
+                            str(pane.input_source[0]), str(pane.input_source[1])
+                        ) in removed
+                    ) or (
+                        pane.output_source and (
+                            str(pane.output_source[0]), str(pane.output_source[1])
+                        ) in removed
+                    ):
+                        pane.input_source = None
+                        pane.output_source = None
+                        pane.source_time_view_id = None
+
     @staticmethod
     def _filter_time_view_state_for_removed_fids(state, removed):
         removed = {str(fid) for fid in removed}
@@ -381,7 +430,17 @@ class ChannelScopeMixin:
             and str(spec.source_fid) in removed
         ):
             axis_opts["x_axis"] = CustomXAxisSpec(label=spec.label).to_axis_opts()
-            state.axis_opts = axis_opts
+        signature = axis_opts.get("frf_source_signature")
+        if isinstance(signature, dict):
+            endpoints = (signature.get("input"), signature.get("output"))
+            if any(
+                isinstance(source, (list, tuple))
+                and len(source) == 2
+                and str(source[0]) in removed
+                for source in endpoints
+            ):
+                axis_opts.pop("frf_source_signature", None)
+        state.axis_opts = axis_opts
 
     @staticmethod
     def _filter_time_view_state_for_removed_channels(state, removed):
@@ -411,4 +470,14 @@ class ChannelScopeMixin:
             and (str(spec.source_fid), str(spec.channel)) in removed
         ):
             axis_opts["x_axis"] = CustomXAxisSpec(label=spec.label).to_axis_opts()
-            state.axis_opts = axis_opts
+        signature = axis_opts.get("frf_source_signature")
+        if isinstance(signature, dict):
+            endpoints = (signature.get("input"), signature.get("output"))
+            if any(
+                isinstance(source, (list, tuple))
+                and len(source) == 2
+                and (str(source[0]), str(source[1])) in removed
+                for source in endpoints
+            ):
+                axis_opts.pop("frf_source_signature", None)
+        state.axis_opts = axis_opts

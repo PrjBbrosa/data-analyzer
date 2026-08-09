@@ -213,6 +213,24 @@ class Icons:
         return _line_icon(draw, BLUE)
 
     @classmethod
+    def mode_frf(cls):
+        """Input -> transfer block -> output, legible at toolbar size."""
+        with _painting() as (pix, p):
+            p.setPen(_pen(BLUE, 1.35))
+            p.setBrush(Qt.NoBrush)
+            p.drawLine(QPointF(2.5, 10), QPointF(6.0, 10))
+            p.drawRoundedRect(QRectF(6.0, 5.5, 7.5, 9.0), 1.4, 1.4)
+            font = QFont()
+            font.setPointSizeF(6.0)
+            font.setBold(True)
+            p.setFont(font)
+            p.drawText(QRectF(6.0, 5.5, 7.5, 9.0), Qt.AlignCenter, "H")
+            p.drawLine(QPointF(13.5, 10), QPointF(17.5, 10))
+            p.drawLine(QPointF(15.4, 7.9), QPointF(17.5, 10))
+            p.drawLine(QPointF(15.4, 12.1), QPointF(17.5, 10))
+        return QIcon(pix)
+
+    @classmethod
     def mode_order(cls):
         def draw(p):
             for x in (4, 10, 16):

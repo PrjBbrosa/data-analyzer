@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
 from .inspector_sections import (
     FFTContextual,
     FFTTimeContextual,
+    FrfContextual,
     OrderContextual,
     PersistentTop,
     TimeContextual,
@@ -44,6 +45,8 @@ class Inspector(QWidget):
     plot_time_requested = pyqtSignal()
     fft_requested = pyqtSignal()
     fft_time_requested = pyqtSignal()
+    frf_requested = pyqtSignal()
+    frf_view_in_time_requested = pyqtSignal()
     order_time_requested = pyqtSignal()
     xaxis_apply_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode: 'fft'|'order')
@@ -169,9 +172,11 @@ class Inspector(QWidget):
         self.contextual_stack = QStackedWidget(self._scroll_body)
         self.fft_ctx = FFTContextual(self._scroll_body)
         self.fft_time_ctx = FFTTimeContextual(self._scroll_body)
+        self.frf_ctx = FrfContextual(self._scroll_body)
         self.order_ctx = OrderContextual(self._scroll_body)
         self.contextual_stack.addWidget(self.fft_ctx)
         self.contextual_stack.addWidget(self.fft_time_ctx)
+        self.contextual_stack.addWidget(self.frf_ctx)
         self.contextual_stack.addWidget(self.order_ctx)
         body_lay.addWidget(self.contextual_stack)
         self.contextual_stack.setVisible(False)
@@ -217,6 +222,11 @@ class Inspector(QWidget):
         self.fft_time_ctx.rebuild_time_requested.connect(
             lambda a: self.rebuild_time_requested.emit(a, 'fft_time'))
         self.fft_time_ctx.signal_changed.connect(self.fft_time_signal_changed)
+        self.frf_ctx.frf_requested.connect(self.frf_requested)
+        self.frf_ctx.view_in_time_requested.connect(
+            self.frf_view_in_time_requested
+        )
+        self.frf_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
 
     def set_mode(self, mode):
         self._current_mode = mode
@@ -224,7 +234,7 @@ class Inspector(QWidget):
             self._time_domain_card.setVisible(True)
             self.contextual_stack.setVisible(False)
         else:
-            idx = {'fft': 0, 'fft_time': 1, 'order': 2}[mode]
+            idx = {'fft': 0, 'fft_time': 1, 'frf': 2, 'order': 3}[mode]
             self._time_domain_card.setVisible(False)
             self.contextual_stack.setVisible(True)
             self.contextual_stack.setCurrentIndex(idx)
@@ -235,7 +245,7 @@ class Inspector(QWidget):
         # The persistent bottom-right help link targets the current mode's
         # guide; mode strings map 1:1 to open_guide() names.
         self._help_guide_name = mode if mode in (
-            'time', 'fft', 'fft_time', 'order',
+            'time', 'fft', 'fft_time', 'frf', 'order',
         ) else 'time'
 
     def _open_current_guide(self):
@@ -264,6 +274,7 @@ class Inspector(QWidget):
             ctx = {
                 'fft': self.fft_ctx,
                 'fft_time': self.fft_time_ctx,
+                'frf': self.frf_ctx,
                 'order': self.order_ctx,
             }[mode]
             target_layout = ctx.time_range_layout()

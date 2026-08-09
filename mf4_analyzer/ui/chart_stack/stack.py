@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
 
 from ..pg_canvases import TimeDomainCanvasPG
 from ..pg_canvas.heatmap_canvas import PgHeatmapCanvas
+from ..pg_canvas.frf_canvas import PgFrfCanvas
 from ..pg_canvas.line_canvas import PgLineCanvas
 from ..widgets import StatsStrip
 from ..analysis_section_page import AnalysisSectionPage
@@ -126,6 +127,7 @@ class ChartStack(QWidget):
         self.analysis_managers = {
             'fft': ViewManager(self, state_factory=AnalysisViewState),
             'fft_time': ViewManager(self, state_factory=AnalysisViewState),
+            'frf': ViewManager(self, state_factory=AnalysisViewState),
             'order': ViewManager(self, state_factory=AnalysisViewState),
         }
 
@@ -138,6 +140,11 @@ class ChartStack(QWidget):
             return _ChartCard(
                 PgHeatmapCanvas(self, with_slice=True),
                 annotations=True, chart_mode='fft_time',
+            )
+
+        def _frf_card_factory():
+            return _ChartCard(
+                PgFrfCanvas(self), annotations=False, chart_mode='frf'
             )
 
         def _order_card_factory():
@@ -158,6 +165,10 @@ class ChartStack(QWidget):
             section='fft_time', manager=self.analysis_managers['fft_time'],
             card_factory=_fft_time_card_factory, parent=self,
         )
+        self.page_frf = AnalysisSectionPage(
+            section='frf', manager=self.analysis_managers['frf'],
+            card_factory=_frf_card_factory, parent=self,
+        )
         self.page_order = AnalysisSectionPage(
             section='order', manager=self.analysis_managers['order'],
             card_factory=_order_card_factory, parent=self,
@@ -165,8 +176,11 @@ class ChartStack(QWidget):
         self.stack.addWidget(self._time_page)
         self.stack.addWidget(self.page_fft)
         self.stack.addWidget(self.page_fft_time)
+        self.stack.addWidget(self.page_frf)
         self.stack.addWidget(self.page_order)
-        for page in (self.page_fft, self.page_fft_time, self.page_order):
+        for page in (
+            self.page_fft, self.page_fft_time, self.page_frf, self.page_order,
+        ):
             page.setAttribute(Qt.WA_TranslucentBackground, True)
             page.setAttribute(Qt.WA_NoSystemBackground, True)
             page.setAutoFillBackground(False)
@@ -262,7 +276,7 @@ class ChartStack(QWidget):
 
         Called for pane 0 at construction and (via MainWindow re-wiring) is the
         single place a freshly split pane's card would be hooked. ``_chart_mode``
-        is the card's section key ('fft'/'fft_time'/'order')."""
+        is the card's section key ('fft'/'fft_time'/'frf'/'order')."""
         card.copy_image_requested.connect(
             lambda c=card: self._copy_card_image(c)
         )
@@ -283,7 +297,9 @@ class ChartStack(QWidget):
         cards = [self._time_card]
         if self._secondary_card is not None:
             cards.append(self._secondary_card)
-        for page in (self.page_fft, self.page_fft_time, self.page_order):
+        for page in (
+            self.page_fft, self.page_fft_time, self.page_frf, self.page_order,
+        ):
             cards.extend(page._cards)
         return [card for card in cards if card is not None]
 
@@ -302,6 +318,7 @@ class ChartStack(QWidget):
         return {
             'fft': self.page_fft,
             'fft_time': self.page_fft_time,
+            'frf': self.page_frf,
             'order': self.page_order,
         }
 
@@ -314,6 +331,10 @@ class ChartStack(QWidget):
         return self.page_fft_time._cards[0]
 
     @property
+    def _frf_card(self):
+        return self.page_frf._cards[0]
+
+    @property
     def _order_card(self):
         return self.page_order._cards[0]
 
@@ -324,6 +345,10 @@ class ChartStack(QWidget):
     @property
     def canvas_fft_time(self):
         return self.page_fft_time.pane_canvas(0)
+
+    @property
+    def canvas_frf(self):
+        return self.page_frf.pane_canvas(0)
 
     @property
     def canvas_order(self):
@@ -722,6 +747,8 @@ class ChartStack(QWidget):
             return self._fft_card._hint_bar
         if mode == 'fft_time':
             return self._fft_time_card._hint_bar
+        if mode == 'frf':
+            return self._frf_card._hint_bar
         if mode == 'order':
             return self._order_card._hint_bar
         raise KeyError(mode)
@@ -880,6 +907,7 @@ class ChartStack(QWidget):
             self._time_card,
             self._fft_card,
             self._fft_time_card,
+            self._frf_card,
             self._order_card,
         ):
             card.mark_discovered(hint_id)
@@ -889,6 +917,7 @@ class ChartStack(QWidget):
             'time': self._time_card,
             'fft': self._fft_card,
             'fft_time': self._fft_time_card,
+            'frf': self._frf_card,
             'order': self._order_card,
         }
         card = cards.get(mode)
@@ -901,6 +930,7 @@ class ChartStack(QWidget):
             self._secondary_card.canvas.full_reset()
         self.canvas_fft.full_reset()
         self.canvas_fft_time.full_reset()
+        self.canvas_frf.full_reset()
         self.canvas_order.full_reset()
 
     def _set_secondary_time_controls_enabled(self, enabled):
@@ -952,13 +982,13 @@ class ChartStack(QWidget):
             if pix is not None and not pix.isNull():
                 self.image_captured.emit(pix)
             return
-        # Analysis sections (fft/fft_time/order) own their own per-section
+        # Analysis sections (fft/fft_time/frf/order) own their own per-section
         # split via AnalysisSectionPage. When the card's page is split, export
         # ALL panes composited side-by-side (grab_combined_pixmap), parallel to
         # the time-domain _combined_split_pixmap branch above. Single-pane falls
         # through to the plain grab below (byte-identical to pre-split copy).
         mode = getattr(card, '_chart_mode', '')
-        if mode in ('fft', 'fft_time', 'order'):
+        if mode in ('fft', 'fft_time', 'frf', 'order'):
             page = self.page_for_mode.get(mode)
             if page is not None and page.pane_count() > 1:
                 pix = page.grab_combined_pixmap(scale=_HIDPI_EXPORT_SCALE)

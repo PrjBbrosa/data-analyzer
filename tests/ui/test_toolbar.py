@@ -55,7 +55,45 @@ def test_toolbar_exposes_fft_time_mode(qtbot):
 
     assert tb.current_mode() == 'fft_time'
     assert seen[-1] == 'fft_time'
-    assert tb.btn_mode_fft_time.text() == 'FFT vs Time'
+    assert tb.btn_mode_fft_time.text() == '时频'
+
+
+def test_toolbar_exposes_five_exact_mode_names_and_keys(qtbot):
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+
+    buttons = [
+        tb.btn_mode_time,
+        tb.btn_mode_fft,
+        tb.btn_mode_fft_time,
+        tb.btn_mode_frf,
+        tb.btn_mode_order,
+    ]
+    assert [button.text() for button in buttons] == [
+        "时域", "频谱", "时频", "频响", "阶次",
+    ]
+    assert [button.property("segment") for button in buttons] == [
+        "time", "fft", "fft_time", "frf", "order",
+    ]
+    assert "FFT" in tb.btn_mode_fft.toolTip()
+    assert "FRF" in tb.btn_mode_frf.toolTip()
+
+    seen = []
+    tb.mode_changed.connect(seen.append)
+    tb.btn_mode_frf.click()
+    assert tb.current_mode() == "frf"
+    assert seen == ["frf"]
+    assert tb.btn_mode_frf.isChecked()
+    assert sum(button.isChecked() for button in buttons) == 1
+
+
+def test_toolbar_frf_unselected_uses_the_same_segment_style_as_other_modes():
+    from pathlib import Path
+
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    selector = qss[qss.index('Toolbar QPushButton[segment="time"]'):qss.index('Toolbar QPushButton[segment]:hover')]
+    assert 'Toolbar QPushButton[segment="frf"]' in selector
+
 
 
 def test_toolbar_open_save_split_and_no_export(qtbot):

@@ -166,7 +166,7 @@ def test_param_form_fft_time_overlap_and_remove_mean_round_trip(qtbot):
 
 def test_batch_sheet_pipeline_summary_uses_friendly_fft_time_label(qtbot):
     """_METHOD_LABELS in sheet.py must include fft_time so the pipeline
-    ANALYSIS strip shows 'FFT vs Time · <window>' instead of falling
+    ANALYSIS strip shows the product label '时频 · <window>' instead of falling
     back to the raw 'fft_time' key (codex rev-2 minor finding).
 
     PipelineStrip API (from pipeline_strip.py): the three cards live on
@@ -179,11 +179,11 @@ def test_batch_sheet_pipeline_summary_uses_friendly_fft_time_label(qtbot):
     sheet.apply_method("fft_time")
     # Method-button signals now coalesce into one pipeline refresh.
     qtbot.waitUntil(
-        lambda: "FFT vs Time" in sheet.strip.cards[1].summary_label.text(),
+        lambda: "时频" in sheet.strip.cards[1].summary_label.text(),
         timeout=1000,
     )
     summary = sheet.strip.cards[1].summary_label.text()
-    assert "FFT vs Time" in summary
+    assert "时频" in summary
     assert "fft_time" not in summary  # raw key must NOT leak through
 
 
@@ -230,9 +230,57 @@ def test_batch_method_buttons_include_time_and_user_labels(qtbot):
     group = MethodButtonGroup()
     qtbot.addWidget(group)
 
-    assert set(group._buttons) == {"time", "fft", "fft_time", "order_time"}
-    assert group._buttons["time"].text() == "时域"
-    assert group._buttons["order_time"].text() == "阶次"
+    assert tuple(group._buttons) == (
+        "time", "fft", "fft_time", "frf", "order_time",
+    )
+    assert tuple(button.text() for button in group._buttons.values()) == (
+        "时域", "频谱", "时频", "频响", "阶次",
+    )
+
+
+def test_batch_method_buttons_are_equal_and_unclipped_at_narrow_width(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
+
+    group = MethodButtonGroup()
+    qtbot.addWidget(group)
+    group.resize(288, 44)
+    group.show()
+    qtbot.wait(20)
+
+    widths = [button.width() for button in group._buttons.values()]
+    # Qt distributes indivisible pixels across equal-stretch cells.
+    assert max(widths) - min(widths) <= 1
+    for button in group._buttons.values():
+        assert button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 8
+        assert button.font().stretch() in {0, 100}
+    assert len({button.font().stretch() for button in group._buttons.values()}) == 1
+
+
+def test_batch_frf_param_form_uses_canonical_compute_and_display_fields(qtbot):
+    from mf4_analyzer.batch_recipe import normalize_batch_params
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("frf")
+    assert {
+        "estimator", "window", "periodic_window", "t_win_s", "overlap",
+        "nfft_mode", "nfft", "detrend", "magnitude_scale",
+        "frequency_scale", "phase_mode", "coherence_threshold",
+        "fade_low_coherence",
+    } == form.visible_field_names()
+
+    form.apply_params({
+        "estimator": "h2", "periodic_window": False,
+        "nfft_mode": "manual", "nfft": 4096, "detrend": "none",
+        "magnitude_scale": "linear", "frequency_scale": "linear",
+        "phase_mode": "wrapped", "coherence_threshold": 0.6,
+        "fade_low_coherence": False, "render_group_by": "source",
+    })
+    params = form.get_params()
+    assert form._w_nfft_mode.currentText() == "手动"
+    assert params["nfft_mode"] == "manual"
+    assert params == normalize_batch_params(params, "frf")
 
 
 def test_batch_time_method_exposes_exact_sparse_render_fields(qtbot):

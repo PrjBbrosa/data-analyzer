@@ -67,7 +67,7 @@ class QuickGroup:
     title — section heading.
     rows  — ordered rows.
     note  — optional right-aligned header note (e.g. "不知道用哪个？先看这里").
-    wide  — True spans two grid columns (the 四个分析模式 group).
+    wide  — True spans two grid columns (the 五个分析模式 group).
     """
 
     title: str
@@ -76,12 +76,13 @@ class QuickGroup:
     wide: bool = False
 
 
-# Per-mode accent colors (match the mockup's four left color bars: blue/orange/
-# green/violet). These are CHART/data accents, intentionally distinct from the
+# Per-mode accent colors (blue/orange/green/teal/violet). These are CHART/data
+# accents, intentionally distinct from the
 # UI chrome accent (#1769e0) so they read as mode tags, not selection chrome.
 _MODE_TIME = "#3f7fc4"
 _MODE_FFT = "#e0883c"
 _MODE_FFT_TIME = "#6a8f4f"
+_MODE_FRF = "#168f91"
 _MODE_ORDER = "#9b6bd0"
 
 
@@ -110,9 +111,9 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("软件说明书", gesture="右下角 📖"),
         ),
     ),
-    # 2 — 四个分析模式 (wide, spans two columns)
+    # 2 — 五个分析模式 (wide, spans two columns)
     QuickGroup(
-        title="四个分析模式",
+        title="五个分析模式",
         note="不知道用哪个？先看这里",
         wide=True,
         rows=(
@@ -122,14 +123,19 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 accent=_MODE_TIME,
             ),
             QuickRow(
-                "FFT",
+                "频谱",
                 sub="看频率成分有多少（频谱、可平均）",
                 accent=_MODE_FFT,
             ),
             QuickRow(
-                "FFT-时间",
+                "时频",
                 sub="看频率随时间怎么变（谱图 / 热力图）",
                 accent=_MODE_FFT_TIME,
+            ),
+            QuickRow(
+                "频响",
+                sub="频响（FRF / 系统辨识）：看输出相对输入的传递特性",
+                accent=_MODE_FRF,
             ),
             QuickRow(
                 "阶次",
@@ -332,6 +338,18 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow(
                 "RPM 通道",
                 sub="单选，只能选一个通道；系数把原始值换算成 RPM",
+            ),
+            QuickRow(
+                "频响输入 / 输出配对",
+                sub="同一来源（logical source）内选一个输入和多个输出；不把跨来源通道配成一对",
+            ),
+            QuickRow(
+                "频响缺通道策略",
+                sub="common 要求每个来源都有完整配对；available_per_source 明确跳过并告警",
+            ),
+            QuickRow(
+                "频响图片组织",
+                sub="每对一张（默认）· 按来源叠加 · 按输入/输出对叠加",
             ),
             QuickRow(
                 "刻度与字体",

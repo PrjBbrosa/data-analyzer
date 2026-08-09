@@ -482,6 +482,30 @@ def load_batch_manifest(path_or_manifest) -> dict:
             raise ManifestValidationError(
                 f"{prefix}.warnings", "must be an array of strings",
             )
+        if entry["method"] == "frf":
+            pair = entry.get("frf_pair")
+            if not isinstance(pair, Mapping):
+                raise ManifestValidationError(
+                    f"{prefix}.frf_pair", "is required for method=frf",
+                )
+            for endpoint in ("input", "output"):
+                endpoint_value = pair.get(endpoint)
+                endpoint_prefix = f"{prefix}.frf_pair.{endpoint}"
+                if not isinstance(endpoint_value, Mapping):
+                    raise ManifestValidationError(
+                        endpoint_prefix, "must be an object",
+                    )
+                channel = endpoint_value.get("channel")
+                unit = endpoint_value.get("unit")
+                if not isinstance(channel, str) or not channel.strip():
+                    raise ManifestValidationError(
+                        f"{endpoint_prefix}.channel",
+                        "must be a non-empty string",
+                    )
+                if not isinstance(unit, str):
+                    raise ManifestValidationError(
+                        f"{endpoint_prefix}.unit", "must be a string",
+                    )
 
     render_groups = raw.get("render_groups", [])
     if not isinstance(render_groups, list):

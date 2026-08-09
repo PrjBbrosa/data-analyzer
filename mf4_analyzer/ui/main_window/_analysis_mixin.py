@@ -101,7 +101,16 @@ class AnalysisMixin:
 
     def _on_analysis_delete(self, section, idx):
         self._capture_active_analysis_view(section)
-        self.analysis_managers[section].delete_view(idx)
+        mgr = self.analysis_managers[section]
+        if len(mgr.views) > 1 and 0 <= idx < len(mgr.views):
+            state = mgr.get(idx)
+            self._analysis_restore_pending.discard((section, state.view_id))
+            if section == 'frf':
+                for pane_idx in range(len(state.panes)):
+                    self._frf_coordinator.invalidate_pane(
+                        state.view_id, pane_idx
+                    )
+        mgr.delete_view(idx)
 
     def _on_analysis_duplicate(self, section, idx):
         self._capture_active_analysis_view(section)
@@ -128,6 +137,8 @@ class AnalysisMixin:
                 page.enter_split()
                 self._connect_new_pane(section, page)
         else:
+            if section == 'frf' and len(state.panes) > 1:
+                self._frf_coordinator.invalidate_pane(state.view_id, 1)
             state.remove_second_pane()
             page.exit_split()
 
@@ -144,7 +155,7 @@ class AnalysisMixin:
         # the canvas (enter_split builds a fresh card each time, so a stale
         # connection on a destroyed canvas is never reused — but a duplicate
         # connect on the same long-lived canvas would double-fire).
-        if section != 'fft':
+        if section in {'fft_time', 'order'}:
             canvas = page.pane_canvas(1)
             if not getattr(canvas, '_levels_echo_wired', False):
                 canvas.levels_changed.connect(
@@ -167,7 +178,11 @@ class AnalysisMixin:
         mgr = self.analysis_managers[section]
         state = mgr.get(mgr.active)
         capture_params_to_state(self._analysis_ctx(section), state)
-        self._capture_analysis_time_range(section, state)
+        if section == 'frf':
+            self._capture_frf_time_range(state)
+            self._capture_frf_canvas_ranges(state)
+        else:
+            self._capture_analysis_time_range(section, state)
         if capture_sources:
             self._capture_analysis_sources(section, state)
 
@@ -203,6 +218,10 @@ class AnalysisMixin:
                 x_linked=x_linked, levels_locked=levels_locked)
             # 3. Params + focused-pane source echo.
             apply_params_from_state(self._analysis_ctx(section), state)
+            if section == 'frf':
+                self.inspector.frf_ctx.set_range_mode(
+                    state.params.get('range_mode', 'full')
+                )
             self._apply_analysis_sources(section, state)
             self._apply_analysis_time_range(section, state)
         finally:
@@ -277,6 +296,9 @@ class AnalysisMixin:
     def _capture_analysis_time_range(self, section, state, pane_idx=None):
         if not self._analysis_section_uses_time_range(section):
             return
+        if section == 'frf':
+            self._capture_frf_time_range(state, pane_idx)
+            return
         page = self._analysis_page(section)
         if pane_idx is None:
             pane_idx = page.focused_index()
@@ -303,6 +325,9 @@ class AnalysisMixin:
 
     def _apply_analysis_time_range(self, section, state):
         if not self._analysis_section_uses_time_range(section):
+            return
+        if section == 'frf':
+            self._apply_frf_time_range(state)
             return
         page = self._analysis_page(section)
         idx = min(page.focused_index(), len(state.panes) - 1)
@@ -336,6 +361,9 @@ class AnalysisMixin:
             pane_idx = page.focused_index()
         idx = min(int(pane_idx), len(state.panes) - 1)
         pane = state.panes[idx]
+        if section == 'frf':
+            self._capture_frf_sources(state, idx)
+            return
         if section == 'fft':
             checked = self.navigator.get_checked_channels()
             pane.sources = [(fid, ch) for fid, ch, _color in checked]
@@ -370,6 +398,9 @@ class AnalysisMixin:
         page = self._analysis_page(section)
         idx = min(page.focused_index(), len(state.panes) - 1)
         pane = state.panes[idx]
+        if section == 'frf':
+            self._apply_frf_sources(state)
+            return
         if section == 'fft':
             self.navigator.set_checked_channels(list(pane.sources))
             self._sync_fft_source_summary()
@@ -400,6 +431,9 @@ class AnalysisMixin:
         does not invalidate the cache."""
         ctx = self._analysis_ctx(section)
         p = ctx.get_params()
+        if section == 'frf':
+            from .frf_coordinator import frf_compute_cache_params
+            return frf_compute_cache_params(p)
         if section == 'fft':
             # Compute inputs for FFT spectra are window / nfft / averaging mode
             # + averaging overlap (see _fft_compute_arrays). The plain
@@ -530,6 +564,8 @@ class AnalysisMixin:
                 self.do_order_time()
             elif section == 'fft_time':
                 self.do_fft_time()
+            elif section == 'frf':
+                self.do_frf()
         except Exception:
             self.toast("恢复渲染失败，请手动点计算", "warning")
 
@@ -542,21 +578,42 @@ class AnalysisMixin:
         and still has sources, recompute it once so the saved params + sources
         repopulate the chart, then fall back to the normal cache-render path on
         every subsequent call."""
+        from ..analysis_view_state import analysis_view_has_sources
+
         mgr = self.analysis_managers.get(section)
         if mgr is not None:
-            restore_key = (section, mgr.active)
+            # Persisted view identity, not a mutable list position, owns a
+            # restore task. Reordering an inactive view before its deferred
+            # callback runs must not redirect compute to another View.
+            restore_key = (section, state.view_id)
             if restore_key in self._analysis_restore_pending:
                 self._analysis_restore_pending.discard(restore_key)
-                if any(p.sources for p in state.panes):
+                if analysis_view_has_sources(section, state):
                     # Defer the recompute to the next event-loop turn instead of
                     # running it inline. open_project drives this for all three
                     # sections mid-restore; a synchronous compute could pop a
                     # blocking QMessageBox (FFT/order compute error) that would
                     # interrupt the half-finished open. Deferring lets the window
                     # finish opening first, so any error surfaces cleanly after.
-                    QTimer.singleShot(
-                        0, lambda s=section: self._recompute_analysis_section(s))
+                    if section == 'frf':
+                        # FRF has pane-local directional sources. Restore from
+                        # the persisted state directly; ``do_frf`` captures the
+                        # focused live combo pair and would erase inactive or
+                        # split-pane intent during project opening.
+                        QTimer.singleShot(
+                            0,
+                            lambda view_id=state.view_id:
+                            self._recompute_restored_frf_view(view_id),
+                        )
+                    else:
+                        QTimer.singleShot(
+                            0,
+                            lambda s=section: self._recompute_analysis_section(s),
+                        )
                     return
+        if section == 'frf':
+            self._render_frf_view_from_cache(state)
+            return
         page = self._analysis_page(section)
         any_missing = False
         for pane_idx in range(page.pane_count()):

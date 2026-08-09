@@ -221,6 +221,128 @@ def test_manual_signed_x_range_is_kept_verbatim_with_ticks_inside(qapp):
         scene.close()
 
 
+def _residue_only(value: float, x: np.ndarray) -> np.ndarray:
+    """A channel that is ``value`` everywhere, to within float64 rounding.
+
+    Built the way the Inspector's channel maths builds one (``3a - 2a - a`` is
+    algebraically zero but each product rounds independently) rather than by
+    perturbing bits by hand, so the residue is the real thing.
+    """
+    ramp = value + np.sin(x) * value * 1e-3
+    signal = value + (ramp * 3.0 - ramp * 2.0 - ramp)
+    assert signal.min() < signal.max(), "precondition: the residue is a real span"
+    assert signal.max() - signal.min() < abs(value) * 1e-12, (
+        "precondition: and it is only residue"
+    )
+    return signal
+
+
+def test_residue_only_channel_exports_a_y_axis_that_still_carries_numbers(qapp):
+    """Reported 2026-08-09: a computed channel exported with a BARE Y axis.
+
+    A channel produced by two-channel maths is constant in intent but not
+    bit-exact, so pyqtgraph's auto-range — whose degeneracy test is exact
+    equality — framed Y onto ~1e-13 of float64 residue. ``_fit_axis_ticks``
+    then derived a ~1e-14 per-division step and ``_fmt_tick`` faithfully
+    printed 16 significant digits, so the labels measured 136 px against the
+    25 px the axis realized. ``AxisItem.generateDrawSpecs`` DROPS a label that
+    does not fit rather than clipping it, which is why this shipped as a
+    silently broken artifact instead of an ugly one: the report PNG went out
+    with a Y axis carrying no numbers at all.
+
+    Hence the three assertions, in the order they failed: the axis is wide
+    enough for what it is carrying (so nothing gets dropped), there is more
+    than one label left, and the labels are engineering-length. The ordinary
+    control is here so the test still says something if the residue case ever
+    regresses all the way to "no ticks at all" — that state would otherwise
+    satisfy a width bound trivially.
+    """
+    from mf4_analyzer.ui_kit.axis_metrics import (
+        axis_tick_texts,
+        left_axis_width_for_ticks,
+    )
+
+    _, BatchSeries, BatchTimeFigureSpec, *_rest = _qt_api()
+    x = np.linspace(0.0, 2.0, 4001)
+
+    def _left_axis_facts(y):
+        spec = BatchTimeFigureSpec(
+            (BatchSeries(x, y, "mActiveReturnMotorTorq_calc", unit="Nm"),),
+        )
+        scene = _open_scene(
+            qapp,
+            ("time", spec),
+            context=_context(channel="mActiveReturnMotorTorq_calc", unit="Nm"),
+        )
+        try:
+            axis = scene.plots[0].getAxis("left")
+            return (
+                axis_tick_texts(axis),
+                left_axis_width_for_ticks(axis),
+                float(axis.width()),
+                tuple(float(v) for v in scene.plots[0].vb.viewRange()[1]),
+            )
+        finally:
+            scene.close()
+
+    residue_ticks, residue_needs, residue_has, residue_y = _left_axis_facts(
+        _residue_only(35.0, x)
+    )
+    normal_ticks, normal_needs, normal_has, _normal_y = _left_axis_facts(
+        35.0 + np.sin(x) * 0.7
+    )
+
+    # Control: the ordinary channel is unaffected, so a failure below is about
+    # the residue case and not about the harness or the axis metrics.
+    assert len(normal_ticks) >= 2, normal_ticks
+    assert normal_needs <= normal_has + 0.5, (
+        f"control channel already overflows: {normal_needs:.1f}px of "
+        f"{normal_ticks!r} into a {normal_has:.1f}px axis"
+    )
+
+    assert residue_needs <= residue_has + 0.5, (
+        f"residue channel needs {residue_needs:.1f}px for {residue_ticks!r} but "
+        f"the axis realized {residue_has:.1f}px — generateDrawSpecs drops every "
+        f"label that does not fit, so this exports a bare Y axis"
+    )
+    assert len(residue_ticks) >= 2, (
+        f"only {residue_ticks!r} survived on Y=[{residue_y[0]!r}, "
+        f"{residue_y[1]!r}]"
+    )
+    assert max(len(text) for text in residue_ticks) <= 8, residue_ticks
+    assert residue_y[0] < 35.0 < residue_y[1], residue_y
+    assert residue_y[1] - residue_y[0] > 1.0, (
+        f"Y is still framed on the float residue: {residue_y!r}"
+    )
+
+
+def test_manual_y_range_survives_a_residue_only_channel_verbatim(qapp):
+    """The bound on the fix above: it may only touch AUTO-ranged Y.
+
+    ``_widen_residue_only_auto_y`` skips any view whose Y auto-range is
+    already disabled, which is precisely the population — manual ``y_min`` /
+    ``y_max``, ``settle_primary`` / ``settle_nice``, the FRF and slice rows —
+    whose bounds the report contract promises verbatim. Without that skip the
+    same collapse would silently widen a manually entered range, which is the
+    contract ``nice_ticks_within`` exists to keep.
+    """
+    _, BatchSeries, BatchTimeFigureSpec, *_rest = _qt_api()
+    x = np.linspace(0.0, 2.0, 4001)
+    spec = BatchTimeFigureSpec(
+        (BatchSeries(x, _residue_only(35.0, x), "calc", unit="Nm"),),
+    )
+    scene = _open_scene(
+        qapp,
+        ("time", spec),
+        params={"y_auto": False, "y_min": 34.0, "y_max": 36.0},
+    )
+    try:
+        lo, hi = scene.plots[0].vb.viewRange()[1]
+        assert (lo, hi) == pytest.approx((34.0, 36.0))
+    finally:
+        scene.close()
+
+
 def test_time_overlay_uses_one_palette_across_dual_y_and_distinct_styles(qapp):
     scene = _open_scene(qapp, ("time", _time_spec(count=4, dual_y=True)))
     try:

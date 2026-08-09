@@ -91,6 +91,41 @@ class BatchPreviewResult:
     message: str = ""
 
 
+def _frf_channel_name(value: object, *, field_name: str) -> str:
+    name = str(value or "").strip()
+    if not name:
+        raise ValueError(f"{field_name} must be a non-empty channel name")
+    return name
+
+
+@dataclass(frozen=True)
+class FrfPairRule:
+    """Portable FRF intent: one input channel and ordered output channels."""
+
+    input_channel: str
+    output_channels: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        input_channel = _frf_channel_name(
+            self.input_channel, field_name="input_channel",
+        )
+        raw_outputs = self.output_channels
+        if isinstance(raw_outputs, (str, bytes)):
+            raise ValueError("output_channels must be a non-empty channel sequence")
+        output_channels = tuple(
+            _frf_channel_name(value, field_name="output_channels")
+            for value in tuple(raw_outputs or ())
+        )
+        if not output_channels:
+            raise ValueError("output_channels must contain at least one channel")
+        if input_channel in output_channels:
+            raise ValueError("an FRF input channel cannot be paired with itself")
+        if len(set(output_channels)) != len(output_channels):
+            raise ValueError("output_channels must not contain duplicate channels")
+        object.__setattr__(self, "input_channel", input_channel)
+        object.__setattr__(self, "output_channels", output_channels)
+
+
 @dataclass
 class AnalysisPreset:
     name: str
@@ -111,6 +146,10 @@ class AnalysisPreset:
     target_policy: str = 'common'
     file_ids: tuple = ()
     file_paths: tuple = ()
+    # Portable FRF intent. Runtime resolved tasks live in FrfExecutionPlan,
+    # never in this mutable/persisted preset. Kept last for positional
+    # compatibility with the pre-FRF dataclass constructor.
+    frf_pair_rules: tuple[FrfPairRule, ...] = ()
 
     @classmethod
     def from_current_single(cls, name, method, signal, params=None,
@@ -141,7 +180,7 @@ class AnalysisPreset:
     def free_config(cls, name, method, signal_pattern='', rpm_channel='',
                     params=None, outputs=None, target_signals=None,
                     target_policy='common',
-                    file_ids=None, file_paths=None):
+                    file_ids=None, file_paths=None, frf_pair_rules=None):
         if file_ids:
             raise ValueError(
                 "file_ids is a run-time selection field; "
@@ -152,6 +191,11 @@ class AnalysisPreset:
                 "file_paths is a run-time selection field; "
                 "inject via dataclasses.replace after free_config()"
             )
+        rules = tuple(frf_pair_rules or ())
+        if any(not isinstance(rule, FrfPairRule) for rule in rules):
+            raise TypeError("frf_pair_rules must contain FrfPairRule values")
+        if rules and str(method).strip().lower() != "frf":
+            raise ValueError("frf_pair_rules require method='frf'")
         return cls(
             name=str(name or 'custom batch'),
             method=str(method),
@@ -159,6 +203,7 @@ class AnalysisPreset:
             signal_pattern=str(signal_pattern or ''),
             rpm_channel=str(rpm_channel or ''),
             target_signals=tuple(target_signals or ()),
+            frf_pair_rules=rules,
             target_policy=str(target_policy or 'common'),
             params=dict(params or {}),
             outputs=outputs or BatchOutput(),
@@ -191,6 +236,10 @@ class BatchItemResult:
     artifact_facts: dict = field(default_factory=dict)
     started_at: str | None = None
     finished_at: str | None = None
+    # Directional FRF endpoints. ``signal`` remains the legacy display label
+    # ``output / input`` so existing task/result consumers stay compatible.
+    input_signal: str = ''
+    output_signal: str = ''
 
 
 @dataclass(frozen=True)

@@ -76,6 +76,14 @@ _AXIS_CONTEXTS = {
         "y_unit": "Hz",
         "y_summary": "0 → Nyquist",
     },
+    "frf": {
+        "x_label": "频率 (X):",
+        "x_unit": "Hz",
+        "x_summary": "自动范围",
+        "y_label": "幅值 (Y):",
+        "y_unit": "",
+        "y_summary": "自动范围",
+    },
     "order_time": {
         "x_label": "时间 (X):",
         "x_unit": "s",
@@ -735,9 +743,10 @@ QPushButton#batchRenderStyleButton:checked {
     def _apply_method_axis_context(self, method: str) -> None:
         self._method = str(method)
         context = _AXIS_CONTEXTS.get(str(method), _AXIS_CONTEXTS["fft"])
+        self._output_preview.setVisible(False)
         self._set_z_axis_visible(str(method) in {"fft_time", "order_time"})
-        self._set_amplitude_unit_visible(str(method) != "time")
-        self._set_db_reference_visible(str(method) != "time")
+        self._set_amplitude_unit_visible(str(method) not in {"time", "frf"})
+        self._set_db_reference_visible(str(method) not in {"time", "frf"})
         for axis, suffix_key in (("x", "x_unit"), ("y", "y_unit")):
             suffix = context[suffix_key]
             text = f" {suffix}" if suffix else ""
@@ -959,26 +968,18 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
         return self._output_preview.text()
 
     def set_output_preview(self, preview=None, *, error: str = "") -> None:
+        """Keep planning facts available to callers without adding UI noise.
+
+        Detailed task, artifact and stem facts belong to the Preview dialog.
+        The compact output column only surfaces a short availability state.
+        """
         if error:
             self._output_preview.setText(f"运行预览不可用：{error}")
             return
         if preview is None:
             self._output_preview.setText("运行预览：等待完整配置")
             return
-        estimate = "预估" if bool(getattr(preview, "estimated", False)) else "预览"
-        fmt = str(getattr(preview, "image_format", "")).upper()
-        size = (
-            f"{int(getattr(preview, 'image_width', 0))}×"
-            f"{int(getattr(preview, 'image_height', 0))}"
-        )
-        dpi = int(getattr(preview, "image_dpi", 0))
-        self._output_preview.setText(
-            f"{estimate}：{int(getattr(preview, 'task_count', 0))} 任务 · "
-            f"{int(getattr(preview, 'artifact_count', 0))} 文件；"
-            f"{fmt} {size} @ {dpi} DPI；"
-            f"冲突策略 {getattr(preview, 'conflict_policy', '')} · "
-            f"已有冲突 {int(getattr(preview, 'conflict_count', 0))}"
-        )
+        self._output_preview.setText("输出预览已就绪")
 
     def update_effective_preview(
         self,
@@ -1140,7 +1141,7 @@ QGroupBox#axisSettingsGroup QWidget#axisRow {
                 else "amplitude"
             ),
         }
-        if getattr(self, "_method", "fft") == "time":
+        if getattr(self, "_method", "fft") in {"time", "frf"}:
             params.pop("z_auto", None)
             params.pop("z_floor", None)
             params.pop("z_ceiling", None)

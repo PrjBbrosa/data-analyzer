@@ -4,6 +4,8 @@ from __future__ import annotations
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
 
+from mf4_analyzer.ui_kit.ticks_math import bounded_tick_strings
+
 
 def hide_native_auto_button(plot) -> None:
     """Hide pyqtgraph's built-in lower-left auto-range button."""
@@ -166,7 +168,36 @@ class GridLabelSlackAxisItem(BorderAlignedAxisItem):
         * Keeping the end labels is only half the job: they are centred ON the
           axis end, so on stacked subplots they land in the neighbouring row.
           ``generateDrawSpecs`` below pulls them back inside.
+        * ``tickStrings`` below bounds how WIDE a label may get in the first
+          place; that is a separate defect from either of the above.
     """
+
+    def tickStrings(self, values, scale, spacing):
+        """Bound the printed digit count of an automatically ticked Y axis.
+
+        Why (2026-08-09 "纵坐标 35.0000000034 把 canvas 推到右边"): pyqtgraph's
+        default formatting has no exit from its fixed-point branch, so an axis
+        framed onto float64 rounding residue emits 18-character labels and
+        ``pin_left_axes_to_common_width`` pins every subplot row's left axis to
+        the ~143 px they measure. See ``ui_kit.ticks_math.bounded_tick_strings``
+        for the full mechanism and for why ordinary axes come out unchanged.
+
+        Vertical only. Horizontal axes pay for a long label in a dimension they
+        have to spare, and the time-domain X path already backs off on label
+        collision (``tick_density._fit_x_tick_labels``) — re-formatting under
+        it would only perturb which ticks that fit chooses. Log mode has its
+        own ``logTickStrings`` and is left to pyqtgraph.
+
+        This is a SAFETY NET for ranges that arrive from outside auto-framing
+        (wheel zoom, a restored project range, a manually entered range);
+        ``_frame_handle_y`` is what stops auto-framing producing them.
+        """
+        if self.orientation not in ("left", "right") or self.logMode:
+            return super().tickStrings(values, scale, spacing)
+        try:
+            return bounded_tick_strings(values, scale, spacing)
+        except (TypeError, ValueError, OverflowError):
+            return super().tickStrings(values, scale, spacing)
 
     def generateDrawSpecs(self, p):
         """Keep every end-of-range tick label inside this axis's own span.

@@ -27,6 +27,7 @@ fallback branch was reached".
 
 from __future__ import annotations
 
+import gc
 import json
 import time
 from pathlib import Path
@@ -662,6 +663,28 @@ class TestInkBudget:
     only the number of drawn strokes + the AA state for the high-ink frame.
     Low-ink frames are untouched and pay only one vectorized diff.
     """
+
+    @pytest.fixture(autouse=True)
+    def _drop_leaked_raster_budget(self):
+        """Reclaim retained raster pixmaps so admission is not order-dependent.
+
+        ``DenseDiscreteRasterLayer`` accounts memory PROCESS-WIDE (a class-level
+        ``WeakSet`` of every live layer against a 96 MiB cap), and ``_pg_canvas``
+        never disposes of the canvases it builds — they survive until Python
+        happens to collect the Qt/closure reference cycles they sit in. Each
+        1920x900 ink canvas retains ~24.2 MiB, and admission needs its item plus
+        a 2x build peak, so with two canvases still alive the next admission
+        asks for 48.5 + 48.4 MiB and is refused. ``entry_for(...) is not None``
+        then fails for a reason that has nothing to do with the ink guard.
+
+        Collecting first makes that reclamation deterministic. It relaxes no
+        assertion and changes no constant — without it, whether these tests pass
+        depends on collection timing, i.e. on which OTHER tests ran first, which
+        is how two unrelated new tests elsewhere in the suite were able to turn
+        this class red.
+        """
+        gc.collect()
+        yield
 
     # -- pure helper unit coverage (no Qt) -------------------------------
     #

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from typing import Any
+from uuid import uuid4
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
@@ -45,6 +46,9 @@ class ViewState:
     ylims: dict[str, tuple[float, float]] = field(default_factory=dict)
     overlay_primary: ChannelKey | None = None
     axis_opts: dict[str, Any] = field(default_factory=dict)
+    # Appended to preserve the positional constructor contract of older
+    # callers while giving persisted TimeDomain views a stable identity.
+    view_id: str = field(default_factory=lambda: str(uuid4()))
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -66,6 +70,7 @@ class ViewState:
         return cls(
             name=data["name"],
             tab_color=data["tab_color"],
+            view_id=str(data.get("view_id") or uuid4()),
             attached_file_ids=[
                 str(fid) for fid in data.get("attached_file_ids", [])
             ],
@@ -189,6 +194,8 @@ class ViewManager(QObject):
         source = self.views[idx]
         copied = type(source).from_dict(source.to_dict())
         copied.name = f"{source.name} 副本"
+        if hasattr(copied, "view_id"):
+            copied.view_id = str(uuid4())
         self.views.insert(idx + 1, copied)
         self.active = self._index_of_state(active_state)
         self._restore_pairs_by_object(pairs)

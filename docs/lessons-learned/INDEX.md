@@ -141,6 +141,9 @@ lesson by default.
 | [Qt Popup Singletons Validate The C++ Lifetime](qt-popup-singleton-validates-cpp-lifetime.md) | Keeping a parentless QWidget or popup in a Python class-level singleton | See lesson |
 | [Zsh Path Variables Can Clobber Command Search](zsh-path-variable-clobbers-command-search.md) | Writing an inline zsh loop or helper that assigns a shell variable | See lesson |
 | [TimeDomain X-Axis Interaction Keeps Layout Stable](timedomain-xaxis-interaction-keeps-layout-stable.md) | Changing TimeDomain target X ticks, X-range interaction, the interaction quiet window, or bottom AxisItem sizing. | See lesson |
+| [Action Button Natural Height Under Wrapped Label Pressure](pyqt-ui/2026-08-08-action-button-natural-height-under-wrapped-label-pressure.md) | A compact vertical Qt form places a user action between elastic controls and a word-wrapped description, especially during mode switching or widget reparenting. | See lesson |
+| [Validate FRF Data After Applying The Shared Physical-Time Mask](frf-range-mask-before-data-validation.md) | Changing FRF range selection, timebase validation, or GUI/Batch | See lesson |
+| [Deferred Analysis Restore Uses Stable View Identity](deferred-analysis-restore-uses-stable-view-identity.md) | Adding deferred project restore or asynchronous compute for analysis | See lesson |
 
 ## Selection Rules
 

@@ -227,6 +227,28 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
         )
 
         axis = dict(view.get("axis_opts") or {})
+        signature = axis.get("frf_source_signature")
+        if isinstance(signature, dict):
+            input_source = signature.get("input")
+            output_source = signature.get("output")
+            if (
+                isinstance(input_source, (list, tuple))
+                and len(input_source) == 2
+                and isinstance(output_source, (list, tuple))
+                and len(output_source) == 2
+                and input_source[0] in fid_map
+                and output_source[0] in fid_map
+            ):
+                mapped_signature = dict(signature)
+                mapped_signature["input"] = [
+                    fid_map[input_source[0]], input_source[1]
+                ]
+                mapped_signature["output"] = [
+                    fid_map[output_source[0]], output_source[1]
+                ]
+                axis["frf_source_signature"] = mapped_signature
+            else:
+                axis.pop("frf_source_signature", None)
         if "x_axis" in axis:
             spec = CustomXAxisSpec.from_axis_opts(axis["x_axis"])
             if spec.resolver == PER_SOURCE_NAME:
@@ -236,6 +258,7 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
             else:
                 mapped_spec = CustomXAxisSpec(label=spec.label)
             axis["x_axis"] = mapped_spec.to_axis_opts()
+        if axis or "axis_opts" in view:
             v["axis_opts"] = axis
 
         out.append(v)
@@ -263,6 +286,12 @@ def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
                     [fid_map[rpm[0]], rpm[1]]
                     if rpm and rpm[0] in fid_map else None
                 )
+                for role in ("input_source", "output_source"):
+                    source = pane.get(role)
+                    pn[role] = (
+                        [fid_map[source[0]], source[1]]
+                        if source and source[0] in fid_map else None
+                    )
                 panes.append(pn)
             v["panes"] = panes
             views.append(v)

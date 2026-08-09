@@ -95,6 +95,119 @@ class BatchSeries:
 
 
 @dataclass(frozen=True)
+class BatchFrfSeries:
+    """One raw directional FRF series prepared for a report figure."""
+
+    frequency_hz: np.ndarray
+    transfer: np.ndarray
+    coherence: np.ndarray
+    label: str
+    source_display_name: str = ""
+    input_channel: str = ""
+    output_channel: str = ""
+    input_unit: str = ""
+    output_unit: str = ""
+    effective_facts: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        frequency = np.asarray(self.frequency_hz, dtype=np.float64)
+        transfer = np.asarray(self.transfer)
+        coherence = np.asarray(self.coherence, dtype=np.float64)
+        if frequency.ndim != 1 or transfer.ndim != 1 or coherence.ndim != 1:
+            raise ValueError("BatchFrfSeries arrays must be one-dimensional")
+        if not (frequency.size == transfer.size == coherence.size):
+            raise ValueError("BatchFrfSeries arrays must have equal lengths")
+        if frequency.size == 0:
+            raise ValueError("BatchFrfSeries arrays must not be empty")
+        if not np.iscomplexobj(transfer):
+            raise ValueError("BatchFrfSeries transfer must be complex")
+        if np.any(~np.isfinite(frequency)) or np.any(frequency < 0.0):
+            raise ValueError("BatchFrfSeries frequency must be finite and non-negative")
+        if frequency.size > 1 and np.any(np.diff(frequency) <= 0.0):
+            raise ValueError("BatchFrfSeries frequency must be strictly increasing")
+        finite_real = np.isfinite(transfer.real)
+        finite_imag = np.isfinite(transfer.imag)
+        if np.any(np.isinf(transfer.real)) or np.any(np.isinf(transfer.imag)):
+            raise ValueError("BatchFrfSeries transfer must not contain infinity")
+        if not np.array_equal(finite_real, finite_imag):
+            raise ValueError(
+                "BatchFrfSeries transfer real/imag finite masks must match"
+            )
+        finite_coherence = np.isfinite(coherence)
+        if np.any(np.isinf(coherence)):
+            raise ValueError("BatchFrfSeries coherence must not contain infinity")
+        if np.any((coherence[finite_coherence] < 0.0) | (coherence[finite_coherence] > 1.0)):
+            raise ValueError("BatchFrfSeries finite coherence must lie in [0, 1]")
+        label = str(self.label or "").strip()
+        if not label:
+            raise ValueError("BatchFrfSeries label must not be empty")
+        input_channel = str(self.input_channel or "").strip()
+        output_channel = str(self.output_channel or "").strip()
+        if bool(input_channel) != bool(output_channel):
+            raise ValueError("BatchFrfSeries identity requires both input and output")
+        if input_channel and input_channel == output_channel:
+            raise ValueError("BatchFrfSeries input and output must differ")
+        frequency = frequency.copy()
+        transfer = np.asarray(transfer, dtype=np.complex128).copy()
+        coherence = coherence.copy()
+        for array in (frequency, transfer, coherence):
+            array.setflags(write=False)
+        object.__setattr__(self, "frequency_hz", frequency)
+        object.__setattr__(self, "transfer", transfer)
+        object.__setattr__(self, "coherence", coherence)
+        object.__setattr__(self, "label", label)
+        object.__setattr__(self, "source_display_name", str(self.source_display_name or ""))
+        object.__setattr__(self, "input_channel", input_channel)
+        object.__setattr__(self, "output_channel", output_channel)
+        object.__setattr__(self, "input_unit", str(self.input_unit or "").strip())
+        object.__setattr__(self, "output_unit", str(self.output_unit or "").strip())
+        object.__setattr__(
+            self, "effective_facts",
+            MappingProxyType({
+                str(key): _freeze_fact_value(value)
+                for key, value in dict(self.effective_facts).items()
+            }),
+        )
+
+
+@dataclass(frozen=True)
+class BatchFrfFigureSpec:
+    """Pure-data specification for a three-panel FRF report page."""
+
+    series: tuple[BatchFrfSeries, ...]
+    magnitude_scale: str = "db"
+    frequency_scale: str = "log"
+    phase_mode: str = "unwrapped"
+    coherence_threshold: float = 0.8
+    fade_low_coherence: bool = True
+
+    def __post_init__(self) -> None:
+        series = tuple(self.series)
+        if not series or not all(isinstance(item, BatchFrfSeries) for item in series):
+            raise TypeError(
+                "BatchFrfFigureSpec series must contain BatchFrfSeries"
+            )
+        magnitude_scale = str(self.magnitude_scale).strip().lower()
+        frequency_scale = str(self.frequency_scale).strip().lower()
+        phase_mode = str(self.phase_mode).strip().lower()
+        if magnitude_scale not in {"db", "linear"}:
+            raise ValueError("BatchFrfFigureSpec magnitude_scale must be db or linear")
+        if frequency_scale not in {"log", "linear"}:
+            raise ValueError("BatchFrfFigureSpec frequency_scale must be log or linear")
+        if phase_mode not in {"unwrapped", "wrapped"}:
+            raise ValueError("BatchFrfFigureSpec phase_mode must be unwrapped or wrapped")
+        threshold = float(self.coherence_threshold)
+        if not np.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+            raise ValueError("BatchFrfFigureSpec coherence_threshold must lie in [0, 1]")
+        object.__setattr__(self, "series", series)
+        object.__setattr__(self, "magnitude_scale", magnitude_scale)
+        object.__setattr__(self, "frequency_scale", frequency_scale)
+        object.__setattr__(self, "phase_mode", phase_mode)
+        object.__setattr__(self, "coherence_threshold", threshold)
+        object.__setattr__(self, "fade_low_coherence", bool(self.fade_low_coherence))
+
+
+@dataclass(frozen=True)
 class BatchTimeFigureSpec:
     """Pure data specification for a grouped time-domain report plot."""
 
@@ -243,7 +356,8 @@ def plan_heatmap_slice(x_values, y_values, params) -> BatchSlicePlan:
 
 
 __all__ = [
-    "BatchChartDiagnostic", "BatchRenderContext", "BatchSeries",
+    "BatchChartDiagnostic", "BatchFrfFigureSpec", "BatchFrfSeries",
+    "BatchRenderContext", "BatchSeries",
     "BatchSlicePick", "BatchSlicePlan", "BatchStatisticRow",
     "BatchTimeFigureSpec", "MAX_SLICE_POSITIONS", "plan_heatmap_slice",
 ]

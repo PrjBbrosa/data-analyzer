@@ -103,6 +103,11 @@ class FFTTimeMixin:
                 if coordinator is not None:
                     coordinator.invalidate_fid(fid)
                     continue
+            if section == 'frf':
+                coordinator = getattr(self, '_frf_coordinator', None)
+                if coordinator is not None:
+                    coordinator.invalidate_fid(fid)
+                    continue
             cache.invalidate_fid(fid)
 
     def _get_fft_time_signal(self):

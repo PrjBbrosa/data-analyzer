@@ -870,7 +870,7 @@ def test_preflight_rejects_invalid_recipe_fields(qtbot, tmp_path):
 
     assert sheet.is_runnable() is False
     assert any(issue.field == "fs" for issue in sheet.preflight_issues())
-    expected_summary = "FFT · 采样率无效"
+    expected_summary = "频谱 · 采样率无效"
     # Preset application schedules one coalesced status transaction.
     qtbot.waitUntil(
         lambda: sheet.strip.cards[1].summary_label.text() == expected_summary,
@@ -1099,10 +1099,8 @@ def test_sheet_output_preview_uses_batch_runner_core_facts(qtbot, tmp_path):
     sheet._recompute_pipeline_status()
 
     preview = sheet._output_panel.output_preview_text()
-    assert "1 任务" in preview
-    assert "2 文件" in preview
-    assert "PNG 1920×1080" in preview
-    assert "auto_number" in preview
+    assert preview == "输出预览已就绪"
+    assert sheet._output_panel._output_preview.isHidden() is True
 
 
 def test_sheet_has_no_gui_resume_or_retry_entry_points(qtbot):

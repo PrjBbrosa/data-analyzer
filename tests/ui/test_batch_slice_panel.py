@@ -199,7 +199,7 @@ def test_sheet_maps_slice_recipe_issue_to_positions_messages():
     )
 
     assert _analysis_issue_summary(issue, "fft_time") == (
-        "FFT vs Time · 切片位置无效"
+        "时频 · 切片位置无效"
     )
     assert _blocked_issue_reason(issue) == "请检查切片位置"
 

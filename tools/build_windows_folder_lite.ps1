@@ -129,7 +129,10 @@ $HiddenImports = @(
     "mf4_analyzer.ui_kit.widgets.searchable_combo",
     "mf4_analyzer.ui",
     "mf4_analyzer.ui.main_window",
+    "mf4_analyzer.ui.main_window.frf_coordinator",
     "mf4_analyzer.ui.pg_canvases",
+    "mf4_analyzer.signal.frf",
+    "mf4_analyzer.batch_frf",
     "mf4_analyzer.io.importer_runtime_smoke"
     # NOTE: no mf4_analyzer.acquisition_capture.* / acquisition_ui.* here — that
     # omission is what makes this the lite build. Likewise the full build's

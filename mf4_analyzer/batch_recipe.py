@@ -26,7 +26,9 @@ import numpy as np
 from . import db_reference
 
 
-SUPPORTED_RECIPE_METHODS = frozenset({"time", "fft", "fft_time", "order_time"})
+SUPPORTED_RECIPE_METHODS = frozenset({
+    "time", "fft", "fft_time", "frf", "order_time",
+})
 
 TIME_RENDER_DEFAULTS = {
     "render_group_by": "none",
@@ -97,6 +99,22 @@ METHOD_PARAM_FIELDS = {
         "overlap",
         "remove_mean",
         "slice",
+    }),
+    "frf": frozenset({
+        "estimator",
+        "window",
+        "periodic_window",
+        "t_win_s",
+        "overlap",
+        "nfft_mode",
+        "nfft",
+        "detrend",
+        "magnitude_scale",
+        "frequency_scale",
+        "phase_mode",
+        "coherence_threshold",
+        "fade_low_coherence",
+        "render_group_by",
     }),
     "order_time": frozenset({
         "window",
@@ -183,6 +201,7 @@ _FLOAT_PARAM_FIELDS = frozenset({
     "time_res",
     "rpm_factor",
     "font_scale",
+    "coherence_threshold",
 })
 _INT_PARAM_FIELDS = frozenset({
     "nfft",
@@ -195,12 +214,30 @@ _BOOL_PARAM_FIELDS = frozenset({
     "y_auto",
     "z_auto",
     "remove_mean",
+    "periodic_window",
+    "fade_low_coherence",
 })
 _NORMALIZED_ENUM_PARAM_FIELDS = frozenset({
     "render_group_by",
     "render_layout",
     "x_source",
     "x_origin",
+    "estimator",
+    "magnitude_scale",
+    "frequency_scale",
+    "phase_mode",
+    "detrend",
+})
+
+FRF_COMPUTE_PARAM_FIELDS = frozenset({
+    "time_range", "fs", "estimator", "window", "periodic_window",
+    "t_win_s", "overlap", "nfft_mode", "nfft", "detrend",
+})
+FRF_RENDER_PARAM_FIELDS = frozenset({
+    "magnitude_scale", "frequency_scale", "phase_mode",
+    "coherence_threshold", "fade_low_coherence",
+    "x_auto", "x_min", "x_max", "y_auto", "y_min", "y_max",
+    "tick_density_x", "tick_density_y", "font_scale", "render_group_by",
 })
 
 _PRESET_FIELDS = (
@@ -214,6 +251,7 @@ _PRESET_FIELDS = (
     "signal_pattern",
     "rpm_channel",
     "target_signals",
+    "frf_pair_rules",
     "target_pairs",
     "source_ids",
     "source_paths",
@@ -272,6 +310,10 @@ def compatible_param_fields(method: object) -> frozenset[str]:
     """
 
     key = _method_key(method)
+    if key == "frf":
+        # FRF deliberately does not inherit legacy spectral common fields
+        # such as weighting/db_reference, heatmap Z state, or preprocessing.
+        return FRF_COMPUTE_PARAM_FIELDS | FRF_RENDER_PARAM_FIELDS
     return COMMON_PARAM_FIELDS | METHOD_PARAM_FIELDS[key]
 
 
@@ -440,7 +482,38 @@ def normalize_batch_params(params: Mapping[str, Any] | None, method: object) -> 
         statistics = normalized.get("chart_statistics")
         if isinstance(statistics, Mapping) and not statistics.get("enabled", False):
             normalized.pop("chart_statistics", None)
+    elif method_key == "frf":
+        # FRF is an output/input transfer ratio and may carry engineering units.
+        # Absolute spectrum reference, preprocessing/filter state, heatmap axes
+        # and custom-X intent belong to other analyses and must not leak through
+        # method switching.
+        owned_known = FRF_COMPUTE_PARAM_FIELDS | FRF_RENDER_PARAM_FIELDS
+        for field in tuple(normalized):
+            if field in KNOWN_PARAM_FIELDS and field not in owned_known:
+                normalized.pop(field, None)
+        # These names pre-date FRF and existing FFT recipes preserve their
+        # spelling. Canonicalize them only on the new FRF route so adding FRF
+        # cannot change old recipe fingerprints.
+        for field in ("window", "nfft_mode"):
+            value = normalized.get(field)
+            if isinstance(value, str):
+                normalized[field] = value.strip().lower()
+        nfft_mode = normalized.get("nfft_mode")
+        if nfft_mode in {"fixed", "固定", "手动", "manual"}:
+            normalized["nfft_mode"] = "manual"
+        elif nfft_mode in {"auto", "自动"}:
+            normalized["nfft_mode"] = "auto"
     return normalized
+
+
+def normalize_frf_compute_params(params: Mapping[str, Any] | None) -> dict:
+    """Return only canonical parameters that can change numeric FRF arrays."""
+
+    normalized = normalize_batch_params(params, "frf")
+    return {
+        field: value for field, value in normalized.items()
+        if field in FRF_COMPUTE_PARAM_FIELDS
+    }
 
 
 def _duck_outputs(outputs: object) -> Any:
@@ -488,6 +561,22 @@ def normalize_analysis_preset(preset: Mapping[str, Any] | object) -> dict:
             normalized[field] = normalize_batch_params(value, method)
         elif field == "outputs":
             normalized[field] = _duck_outputs(value)
+        elif field == "frf_pair_rules":
+            normalized[field] = [
+                {
+                    "input_channel": str(
+                        rule.get("input_channel", "")
+                        if isinstance(rule, Mapping)
+                        else getattr(rule, "input_channel")
+                    ),
+                    "output_channels": _json_safe(
+                        rule.get("output_channels", ())
+                        if isinstance(rule, Mapping)
+                        else getattr(rule, "output_channels")
+                    ),
+                }
+                for rule in tuple(value or ())
+            ]
         else:
             normalized[field] = _json_safe(value)
     return normalized
@@ -563,8 +652,59 @@ def recipe_fingerprint(
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def frf_compute_params_fingerprint(
+    params: Mapping[str, Any] | None,
+) -> str:
+    """Fingerprint only normalized FRF numeric parameters, without identity."""
+
+    payload = {
+        "method": "frf",
+        "params": normalize_frf_compute_params(params),
+    }
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def frf_compute_fingerprint(
+    params: Mapping[str, Any] | None,
+    *,
+    source_identity: object,
+    group_identity: object,
+    input_channel: object,
+    output_channel: object,
+) -> str:
+    """Fingerprint one directional FRF compute result/cache entry.
+
+    Result/cache identity is never display-only: all four composite identity
+    fields are mandatory and the directional endpoints must differ. Artifact
+    reservation still uses :func:`build_frf_task_output_identity`, whose hash
+    additionally includes render and requested-output byte settings.
+    """
+
+    identity = {}
+    for field, value in {
+        "source_identity": source_identity,
+        "group_identity": group_identity,
+        "input_channel": input_channel,
+        "output_channel": output_channel,
+    }.items():
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError(f"FRF compute fingerprint requires non-empty {field}")
+        identity[field] = normalized
+    if identity["input_channel"] == identity["output_channel"]:
+        raise ValueError("FRF compute fingerprint requires directional endpoints")
+    payload = {
+        "method": "frf",
+        "params": normalize_frf_compute_params(params),
+        **identity,
+    }
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
 __all__ = [
     "COMMON_PARAM_FIELDS",
+    "FRF_COMPUTE_PARAM_FIELDS",
+    "FRF_RENDER_PARAM_FIELDS",
     "KNOWN_PARAM_FIELDS",
     "LEGACY_MANUAL_RPM_WARNING",
     "METHOD_PARAM_FIELDS",
@@ -575,5 +715,8 @@ __all__ = [
     "legacy_manual_rpm_warning",
     "normalize_analysis_preset",
     "normalize_batch_params",
+    "normalize_frf_compute_params",
+    "frf_compute_params_fingerprint",
+    "frf_compute_fingerprint",
     "recipe_fingerprint",
 ]

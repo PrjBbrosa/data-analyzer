@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
     QAbstractScrollArea, QAbstractSpinBox, QAction, QComboBox, QFileDialog,
     QFormLayout, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
-    QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from ....io.source_adapters import (
@@ -39,6 +39,7 @@ from ....io.source_adapters import (
 from ....ui_kit.menus import apply_rounded_menu_chrome
 from ...widgets.compact_spinbox import CompactDoubleSpinBox
 from .filter_panel import BatchFilterPanel
+from .frf_pair_editor import FrfPairEditor
 from .signal_picker import SignalPickerPopup
 
 
@@ -62,6 +63,14 @@ STATE_PATH_PENDING = "path_pending"
 STATE_PROBING = "probing"
 STATE_PROBE_FAILED = "probe_failed"
 STATE_UNAVAILABLE = "unavailable"
+
+
+class _TargetStack(QStackedWidget):
+    """Elastic target field whose current page may contain wide labels."""
+
+    def minimumSizeHint(self):  # noqa: N802 (Qt API)
+        hint = super().minimumSizeHint()
+        return QSize(0, hint.height())
 
 
 # ---------------------------------------------------------------------------
@@ -801,12 +810,27 @@ class InputPanel(QWidget):
         )
         form.addRow("目标策略", self._target_policy_combo)
 
-        self._signal_picker = SignalPickerPopup(parent=form_host)
+        self._target_stack = _TargetStack(form_host)
+        self._target_stack.setMinimumWidth(0)
+        self._target_stack.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred,
+        )
+        self._signal_picker = SignalPickerPopup(parent=self._target_stack)
         # Use an explicit label widget for both paired rows.  QFormLayout then
         # owns one shared label column instead of allowing one string label to
         # pick up a different effective margin on a later relayout.
         self._target_signal_label = QLabel("目标信号", form_host)
-        form.addRow(self._target_signal_label, self._signal_picker)
+        self._target_stack.addWidget(self._signal_picker)
+
+        self._frf_pair_editor = FrfPairEditor(self._target_stack)
+        self._frf_pair_editor.setMinimumWidth(0)
+        self._frf_pair_editor.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred,
+        )
+        self._target_stack.addWidget(self._frf_pair_editor)
+        self._target_stack.setCurrentWidget(self._signal_picker)
+        form.addRow(self._target_signal_label, self._target_stack)
+        self._method = "fft"
 
         # ----- RPM channel row -----
         rpm_host = QWidget(form_host)
@@ -880,11 +904,15 @@ class InputPanel(QWidget):
         self._file_list.filesChanged.connect(self._on_files_changed)
         self._file_list.filesChanged.connect(self._refresh_file_summary)
         self._signal_picker.selectionChanged.connect(lambda *_: self.changed.emit())
+        self._frf_pair_editor.changed.connect(lambda *_: self.changed.emit())
         self._target_policy_combo.currentIndexChanged.connect(
             self._on_target_policy_changed
         )
         self._rpm_picker.selectionChanged.connect(lambda *_: self.changed.emit())
         self._signal_picker.relaxPolicyRequested.connect(
+            self._on_relax_policy_requested
+        )
+        self._frf_pair_editor.relaxPolicyRequested.connect(
             self._on_relax_policy_requested
         )
         self._rpm_picker.relaxPolicyRequested.connect(
@@ -979,7 +1007,19 @@ class InputPanel(QWidget):
         reparented to ``self`` so they survive the layout round-trip
         and can be re-inserted later.
         """
+        self._method = str(method)
         self._filter_panel.set_method(method)
+        is_frf = self._method == "frf"
+        self._target_signal_label.setText("FRF 配对" if is_frf else "目标信号")
+        self._target_stack.setCurrentWidget(
+            self._frf_pair_editor if is_frf else self._signal_picker
+        )
+        self._frf_pair_editor.set_channel_universe(
+            self._file_list.current_intersection(),
+            self._partial_channel_facts(),
+            policy=self.target_policy(),
+            source_count=len(self._file_list.per_file_channel_sets()),
+        )
         visible = method in _RPM_USING_METHODS
         if visible == self._rpm_row_visible:
             return
@@ -1049,13 +1089,42 @@ class InputPanel(QWidget):
         # that and left the row permanently grey.
         self._rpm_picker.set_available(available)
         self._rpm_picker.set_partially_available(partial, selectable=selectable)
+        self._frf_pair_editor.set_channel_universe(
+            tuple(available), partial,
+            policy=self.target_policy(), source_count=loaded_count,
+        )
         self.channelUniverseChanged.emit(tuple(available), dict(partial))
+
+    def _partial_channel_facts(self) -> dict[str, str]:
+        per_file = self._file_list.per_file_channel_sets()
+        count = len(per_file)
+        if not count:
+            return {}
+        totals: dict[str, int] = {}
+        for channels in per_file:
+            for name in channels:
+                totals[str(name)] = totals.get(str(name), 0) + 1
+        return {
+            name: f"({total}/{count})"
+            for name, total in sorted(totals.items()) if total < count
+        }
 
     # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
     def selected_signals(self) -> tuple[str, ...]:
+        if self._method == "frf":
+            return self._frf_pair_editor.selected_channels()
         return self._signal_picker.selected()
+
+    def frf_pair_rules(self):
+        return self._frf_pair_editor.rules() if self._method == "frf" else ()
+
+    def frf_pair_validation_message(self) -> str:
+        return (
+            self._frf_pair_editor.validation_message()
+            if self._method == "frf" else ""
+        )
 
     def target_policy(self) -> str:
         return str(self._target_policy_combo.currentData() or "common")
@@ -1145,6 +1214,9 @@ class InputPanel(QWidget):
     # ------------------------------------------------------------------
     def apply_signals(self, signals: Iterable[str]) -> None:
         self._signal_picker.set_selected(tuple(signals))
+
+    def apply_frf_pair_rules(self, rules) -> None:
+        self._frf_pair_editor.apply_rules(tuple(rules or ()))
 
     def apply_target_policy(self, policy: str) -> None:
         token = str(policy or "common")

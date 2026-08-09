@@ -14,6 +14,7 @@ APP_ARTIFACT_NAME = f"TraceLab{APP_VERSION.removeprefix('v')}"
 SPEC_PATH = REPO_ROOT / "build" / "spec" / f"{APP_ARTIFACT_NAME}.spec"
 WINDOWS_BUILD_SCRIPT = REPO_ROOT / "tools" / "build_windows_folder.ps1"
 WINDOWS_RUN_WRAPPER = REPO_ROOT / "tools" / "run_windows_exe.bat"
+FRF_GUIDE = REPO_ROOT / "mf4_analyzer" / "help" / "frf-guide.html"
 
 REQUIRED_HIDDEN_IMPORTS = [
     "mf4_analyzer.ui_kit",
@@ -22,6 +23,9 @@ REQUIRED_HIDDEN_IMPORTS = [
     "mf4_analyzer.ui_kit.stylesheet",
     "mf4_analyzer.ui_kit.widgets.searchable_combo",
     "mf4_analyzer.ui.pg_canvases",
+    "mf4_analyzer.signal.frf",
+    "mf4_analyzer.batch_frf",
+    "mf4_analyzer.ui.main_window.frf_coordinator",
     "mf4_analyzer.acquisition_capture",
     "mf4_analyzer.acquisition_capture.thresholds",
     "mf4_analyzer.acquisition_capture.health",
@@ -89,6 +93,26 @@ def test_windows_build_script_lists_new_modules_and_widget_collection():
     assert "mf4_analyzer.acquisition_ui.widgets" in text
     assert "pyqtgraph" in text
     assert '"--collect-submodules", "pyqtgraph"' in text
+
+
+def test_frf_guide_is_bundled_by_the_existing_help_data_contract():
+    """The whole help tree is a frozen data root, including the FRF guide."""
+    assert FRF_GUIDE.is_file()
+    for script_name in ("build_windows_folder.ps1", "build_windows_folder_lite.ps1"):
+        text = (REPO_ROOT / "tools" / script_name).read_text(encoding="utf-8")
+        assert '"mf4_analyzer\\help"' in text
+        assert '"--add-data", $AddDataHelp' in text
+
+
+def test_frf_modules_are_hidden_imports_in_both_windows_build_flavors():
+    for script_name in ("build_windows_folder.ps1", "build_windows_folder_lite.ps1"):
+        text = (REPO_ROOT / "tools" / script_name).read_text(encoding="utf-8")
+        for module_name in (
+            "mf4_analyzer.signal.frf",
+            "mf4_analyzer.batch_frf",
+            "mf4_analyzer.ui.main_window.frf_coordinator",
+        ):
+            assert module_name in text, f"{script_name} misses {module_name}"
 
 
 def test_windows_run_wrapper_defaults_to_current_release_name():

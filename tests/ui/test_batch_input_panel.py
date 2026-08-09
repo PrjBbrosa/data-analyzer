@@ -745,13 +745,13 @@ def test_batch_rpm_coefficient_has_its_own_aligned_form_row(qtbot):
     qtbot.wait(20)
 
     panel = sheet._input_panel
-    assert panel._signal_picker.geometry().x() == panel._rpm_row_host.geometry().x()
+    assert panel._target_stack.geometry().x() == panel._rpm_row_host.geometry().x()
     assert panel._rpm_factor_spin.isVisibleTo(sheet)
     assert not hasattr(panel, "_rpm_unit_combo")
-    assert panel._rpm_factor_spin.geometry().x() == panel._signal_picker.geometry().x()
+    assert panel._rpm_factor_spin.geometry().x() == panel._target_stack.geometry().x()
     assert panel._rpm_factor_spin.geometry().y() > panel._rpm_row_host.geometry().y()
-    assert panel._rpm_factor_spin.width() == panel._signal_picker.width()
-    assert panel._rpm_picker.width() == panel._signal_picker.width()
+    assert panel._rpm_factor_spin.width() == panel._target_stack.width()
+    assert panel._rpm_picker.width() == panel._target_stack.width()
 
 
 def test_batch_double_spinboxes_display_compact_text_without_losing_precision(qtbot):
@@ -1098,6 +1098,38 @@ def test_picker_excludes_time_column(qtbot, tmp_path):
     visible = sheet._input_panel._signal_picker.visible_items()
     assert "vibration_x" in visible
     assert "Time" not in visible and "time" not in visible
+
+
+def test_frf_pair_editor_reuses_searchable_signal_pickers(qtbot):
+    from mf4_analyzer.ui.drawers.batch.frf_pair_editor import FrfPairEditor
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    command = "Rte_ActRet_mActiveReturnMotorTorq4Check_xds16"
+    response = "Rte_ESChkPlausi_mESMotorTorque_xds16"
+    other = "Rte_MosfetTemperatureCalculation_cPCBTemp_xds16"
+    editor = FrfPairEditor()
+    qtbot.addWidget(editor)
+    editor.set_channel_universe(
+        (command, response, other), {}, policy="common", source_count=2,
+    )
+    editor.resize(288, 160)
+    editor.show()
+    qtbot.wait(20)
+
+    group = editor._groups[0]
+    assert isinstance(group.input_picker, SignalPickerPopup)
+    assert isinstance(group.output_picker, SignalPickerPopup)
+    assert group.input_picker.width() > 140
+    assert group.output_picker.width() > 140
+
+    group.input_picker.set_selected((command,))
+    group.output_picker.set_selected((response, other))
+    assert editor.rules()[0].input_channel == command
+    assert editor.rules()[0].output_channels == (response, other)
+
+    group.output_picker.show_popup()
+    assert group.output_picker._popup.width() >= 420
+    assert group.output_picker.label_for(response) == response
 
 
 def test_batch_input_filter_params_round_trip(qtbot):

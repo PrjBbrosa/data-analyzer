@@ -65,13 +65,15 @@ class TaskOutputIdentity:
     group_identity: str
     channel_identity: str
     stem: str
+    input_channel_identity: str = ""
+    output_channel_identity: str = ""
 
 
 @dataclass(frozen=True)
 class GroupOutputIdentity:
     group_id: str
     stem: str
-    members: tuple[tuple[str, str, str], ...]
+    members: tuple[tuple[str, ...], ...]
 
 
 class OutputPublishRace(FileExistsError):
@@ -204,21 +206,85 @@ def build_task_output_identity(
     )
 
 
+def build_frf_task_output_identity(
+    source,
+    *,
+    file_id,
+    input_channel: str,
+    output_channel: str,
+    params,
+    outputs=None,
+) -> TaskOutputIdentity:
+    """Build a directional FRF artifact identity.
+
+    Unlike :func:`frf_compute_fingerprint`, this coordinated task identity
+    includes presentation and requested-output settings because either can
+    change CSV/XLSX/PNG bytes.  The readable pair is never used as identity.
+    """
+
+    source_identity = _source_identity(source, file_id)
+    group_identity = _group_identity(source)
+    input_identity = str(input_channel or "").strip()
+    output_identity = str(output_channel or "").strip()
+    if not input_identity or not output_identity:
+        raise ValueError("FRF task identity requires non-empty input and output channels")
+    if input_identity == output_identity:
+        raise ValueError("FRF task identity requires different input and output channels")
+    channel_identity = f"{output_identity} / {input_identity}"
+    task_id = recipe_fingerprint(
+        params,
+        "frf",
+        source_identity=source_identity,
+        group_identity=group_identity,
+        channel_identity={
+            "input": input_identity,
+            "output": output_identity,
+        },
+        outputs=outputs,
+    )
+    source_stem = unicode_slug(Path(source_identity).stem, "source")
+    pair_stem = (
+        f"{unicode_slug(output_identity, 'output')}-over-"
+        f"{unicode_slug(input_identity, 'input')}"
+    )
+    stem = "__".join((
+        source_stem,
+        *_group_stem_segments(group_identity),
+        pair_stem,
+        "frf",
+        task_id[:8],
+    ))
+    return TaskOutputIdentity(
+        task_id=task_id,
+        source_identity=source_identity,
+        group_identity=group_identity,
+        channel_identity=channel_identity,
+        stem=stem,
+        input_channel_identity=input_identity,
+        output_channel_identity=output_identity,
+    )
+
+
 def build_group_output_identity(
-    members: Sequence[tuple[str, str, str]],
+    members: Sequence[tuple[str, ...]],
     *,
     method: str,
     params: Mapping[str, Any],
     group_by: str,
+    outputs=None,
 ) -> GroupOutputIdentity:
     """Build an order-independent identity for one rendered member set."""
 
     normalized_members = tuple(sorted(
-        (str(source), str(group), str(channel))
-        for source, group, channel in members
+        tuple(str(value) for value in member) for member in members
     ))
     if not normalized_members:
         raise ValueError("render group requires at least one member")
+    expected_size = 4 if str(method).strip().lower() == "frf" else 3
+    if any(len(member) != expected_size for member in normalized_members):
+        raise ValueError(
+            f"{method} render members require {expected_size} identity fields"
+        )
     group_by = str(group_by or "").strip().lower()
     if group_by not in {"none", "source", "channel"}:
         raise ValueError(f"unsupported render grouping: {group_by!r}")
@@ -229,15 +295,23 @@ def build_group_output_identity(
             "group_by": group_by,
             "members": normalized_members,
         },
+        outputs=outputs,
     )
     if group_by == "source":
-        source_identity, group_identity, _channel = normalized_members[0]
+        source_identity, group_identity = normalized_members[0][:2]
         readable = (
             unicode_slug(Path(source_identity).stem, "source"),
             *_group_stem_segments(group_identity),
         )
     elif group_by == "channel":
-        readable = (unicode_slug(normalized_members[0][2], "channel"),)
+        if expected_size == 4:
+            input_identity, output_identity = normalized_members[0][2:]
+            readable = (
+                f"{unicode_slug(output_identity, 'output')}-over-"
+                f"{unicode_slug(input_identity, 'input')}",
+            )
+        else:
+            readable = (unicode_slug(normalized_members[0][2], "channel"),)
     else:
         readable = ("group",)
     # The grouping mode is constant for a whole run, so it is left out of the
@@ -782,6 +856,7 @@ __all__ = [
     "TaskOutputIdentity",
     "atomic_write",
     "atomic_write_set",
+    "build_frf_task_output_identity",
     "build_task_output_identity",
     "build_group_output_identity",
     "choose_output_paths",

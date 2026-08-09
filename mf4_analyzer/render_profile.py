@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Tuple
+import math
+from typing import Any, List, Tuple
 import zlib
 
 import numpy as np
@@ -10,6 +11,11 @@ import numpy as np
 
 DENSE_DISCRETE_BUCKET_BUDGET = 350
 DENSE_DISCRETE_INTERACTIVE_BUCKET_BUDGET = 250
+
+LOG_FREQUENCY_MIN_TICKS = 2
+_LOG_TICK_MANTISSAS_125 = (1.0, 2.0, 5.0)
+_LOG_TICK_MANTISSAS_FULL = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
+_LOG_TICK_LINEAR_DIVISIONS = 3.0
 
 _PROFILE_SAMPLE_LIMIT = 8192
 _PROFILE_SAMPLE_BLOCKS = 8
@@ -228,12 +234,136 @@ def envelope_ink_dev_px(env_s, *, y_span, row_height_px, dpr) -> float:
     return total / ys * float(row_height_px) * float(dpr)
 
 
+def _hz_tick_label(value: float) -> str:
+    return f"{value:g}"
+
+
+def _mantissa_ticks(
+    lo_log: float, hi_log: float, mantissas: Tuple[float, ...],
+) -> List[Tuple[float, str]]:
+    """Return ``mantissa × 10**power`` rungs whose log10 falls in the window.
+
+    The decade sweep is widened by one on both ends so a rung sitting exactly
+    on a boundary is never lost to floating-point drift in ``floor``/``ceil``.
+    """
+    ticks: List[Tuple[float, str]] = []
+    first_power = int(math.floor(lo_log)) - 1
+    last_power = int(math.ceil(hi_log)) + 1
+    for power in range(first_power, last_power + 1):
+        decade = 10.0 ** power
+        for mantissa in mantissas:
+            value = mantissa * decade
+            if value <= 0.0 or not math.isfinite(value):
+                continue
+            coordinate = math.log10(value)
+            if lo_log <= coordinate <= hi_log:
+                ticks.append((coordinate, _hz_tick_label(value)))
+    ticks.sort(key=lambda item: item[0])
+    return ticks
+
+
+def _nice_step_at_or_below(value: float) -> float:
+    """Largest ``{1, 2, 5} × 10**k`` step not exceeding ``value``."""
+    if not math.isfinite(value) or value <= 0.0:
+        return 0.0
+    base = 10.0 ** math.floor(math.log10(value))
+    for mantissa in (5.0, 2.0, 1.0):
+        if mantissa * base <= value:
+            return mantissa * base
+    # log10 rounding put ``base`` above ``value``; drop a decade rather than
+    # returning a step the caller cannot subdivide with.
+    return base / 10.0
+
+
+def _linear_hz_ticks(lo_log: float, hi_log: float) -> List[Tuple[float, str]]:
+    """Nice round Hz values for a window narrower than one mantissa rung."""
+    lo_hz, hi_hz = 10.0 ** lo_log, 10.0 ** hi_log
+    span = hi_hz - lo_hz
+    if not math.isfinite(span) or span <= 0.0:
+        return []
+    step = _nice_step_at_or_below(span / _LOG_TICK_LINEAR_DIVISIONS)
+    if step <= 0.0:
+        return []
+    first_index = math.ceil(lo_hz / step)
+    last_index = math.floor(hi_hz / step)
+    ticks: List[Tuple[float, str]] = []
+    for index in range(int(first_index), int(last_index) + 1):
+        value = index * step
+        if value <= 0.0:
+            continue
+        ticks.append((math.log10(value), _hz_tick_label(value)))
+    return ticks
+
+
+def log_frequency_tick_levels(
+    lo_log: float, hi_log: float,
+) -> List[Tuple[float, str]]:
+    """Return major ticks for a log10 frequency axis as ``(coord, Hz label)``.
+
+    ``lo_log``/``hi_log`` are the *view range in log10 space* (pyqtgraph's
+    coordinate system once ``setLogMode(x=True)`` is on); the labels are the
+    physical Hz values those coordinates stand for, which is the product
+    contract on both the interactive canvas and the batch report.
+
+    Pinning decade powers alone — the original rule — returns nothing at all
+    once the view sits between two integer powers of ten (a 20..80 Hz zoom, or
+    a narrow-band export), which drew a frequency axis with no labels. The
+    ladder therefore degrades in three steps:
+
+    1. two or more decade integers in view -> decade powers only, keeping the
+       deliberately sparse ``10 / 100 / 1000`` row;
+    2. fewer than two -> ``1-2-5`` mantissa rungs (``…10, 20, 50, 100…``);
+    3. still fewer than two -> full ``1..9`` mantissa rungs, and finally nice
+       round Hz values on a linear step for windows narrower than one rung.
+
+    Any finite window with ``hi_log > lo_log`` therefore yields at least
+    ``LOG_FREQUENCY_MIN_TICKS`` ticks. Degenerate input (non-finite, or an
+    empty/inverted range) returns ``[]`` so the caller can keep the axis's
+    existing ticks instead of aborting a paint.
+
+    Density is intentionally *not* pixel-aware: ``setTicks`` is a hard
+    specification that pyqtgraph will not thin, so the ladder is capped by
+    construction — a sub-decade window yields at most five or six labels.
+    """
+    try:
+        lo = float(lo_log)
+        hi = float(hi_log)
+    except (TypeError, ValueError):
+        return []
+    if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+        return []
+
+    decades = range(math.ceil(lo), math.floor(hi) + 1)
+    decade_ticks = [
+        (float(power), _hz_tick_label(10.0 ** power)) for power in decades
+    ]
+    if len(decade_ticks) >= LOG_FREQUENCY_MIN_TICKS:
+        return decade_ticks
+
+    for mantissas in (_LOG_TICK_MANTISSAS_125, _LOG_TICK_MANTISSAS_FULL):
+        ticks = _mantissa_ticks(lo, hi, mantissas)
+        if len(ticks) >= LOG_FREQUENCY_MIN_TICKS:
+            return ticks
+
+    ticks = _linear_hz_ticks(lo, hi)
+    if len(ticks) >= LOG_FREQUENCY_MIN_TICKS:
+        return ticks
+    # Sub-resolution window: label the edges rather than hand back a blank
+    # axis. Unreachable for any range a user can actually zoom to.
+    return [
+        (lo, _hz_tick_label(10.0 ** lo)),
+        (hi, _hz_tick_label(10.0 ** hi)),
+    ]
+
+
 __all__ = [
     "DENSE_DISCRETE_BUCKET_BUDGET",
     "DENSE_DISCRETE_INTERACTIVE_BUCKET_BUDGET",
+    "LOG_FREQUENCY_MIN_TICKS",
     "RenderProfile",
     "bucket_width_for",
     "classify_render_profile",
     "envelope_ink_dev_px",
+    "log_frequency_tick_levels",
     "source_revision_for",
 ]

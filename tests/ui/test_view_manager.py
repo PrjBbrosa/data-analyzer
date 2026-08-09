@@ -54,6 +54,7 @@ def test_delete_cannot_empty(qtbot):
 def test_duplicate_inserts_after_with_suffix(qtbot):
     m = make()
     m.views[0].name = "A"
+    original_view_id = m.views[0].view_id
 
     with qtbot.waitSignals(
         [m.views_changed, m.active_changed],
@@ -64,6 +65,7 @@ def test_duplicate_inserts_after_with_suffix(qtbot):
 
     assert idx == 1
     assert m.views[1].name == "A 副本"
+    assert m.views[1].view_id != original_view_id
     assert m.active == 1
 
 
@@ -109,12 +111,14 @@ def test_reorder_moves_item_and_preserves_active_view(qtbot):
     m.new_view()
     m.new_view()
     m.views[0].name, m.views[1].name, m.views[2].name = "A", "B", "C"
+    ids_by_name = {view.name: view.view_id for view in m.views}
     m.set_active(1)
 
     with qtbot.waitSignal(m.views_changed, timeout=100):
         m.reorder(0, 2)
 
     assert [v.name for v in m.views] == ["B", "C", "A"]
+    assert {view.name: view.view_id for view in m.views} == ids_by_name
     assert m.active == 0
 
 

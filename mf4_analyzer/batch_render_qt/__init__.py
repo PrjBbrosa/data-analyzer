@@ -10,7 +10,8 @@ from ._builder import build_batch_scene
 from ._dispatch import render_on_gui_thread
 from ._export import render_scene_image, save_png
 from ._models import (
-    BatchChartDiagnostic, BatchRenderContext, BatchSeries, BatchStatisticRow,
+    BatchChartDiagnostic, BatchFrfFigureSpec, BatchFrfSeries,
+    BatchRenderContext, BatchSeries, BatchStatisticRow,
     BatchTimeFigureSpec,
 )
 from ._page import render_metadata
@@ -59,6 +60,8 @@ def render_batch_image(
 __all__ = [
     "BatchRenderContext",
     "BatchChartDiagnostic",
+    "BatchFrfFigureSpec",
+    "BatchFrfSeries",
     "BatchRenderOptions",
     "BatchSeries",
     "BatchStatisticRow",

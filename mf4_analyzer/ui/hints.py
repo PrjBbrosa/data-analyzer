@@ -260,6 +260,46 @@ _HINTS = (
         cursor_modes=frozenset({"dual"}),
         priority=120,
     ),
+    # ---- 频响（FRF）----
+    # These state the frozen interaction contract without inventing additional
+    # controls: the three plots share a frequency cursor; the threshold only
+    # affects presentation; a selected time range is a snapshot rather than a
+    # live pan/zoom subscription.
+    Hint(
+        id="frf.linked_cursor",
+        text="频响三图共用一个频率游标",
+        surface="context",
+        modes=frozenset({"frf"}),
+        priority=120,
+    ),
+    Hint(
+        id="frf.coherence_display_only",
+        text="相干阈值只影响显示，不改数据",
+        surface="context",
+        modes=frozenset({"frf"}),
+        priority=110,
+    ),
+    Hint(
+        id="frf.time_range_snapshot",
+        text="时域范围取快照，拖动后不重算",
+        surface="context",
+        modes=frozenset({"frf"}),
+        priority=100,
+    ),
+    Hint(
+        id="frf.custom_x_limit",
+        text="自定义 X 不是秒，不能作频响范围",
+        surface="context",
+        modes=frozenset({"frf"}),
+        priority=90,
+    ),
+    Hint(
+        id="frf.view_in_time_domain",
+        text="时域查看新建或复用对应 View",
+        surface="context",
+        modes=frozenset({"frf"}),
+        priority=80,
+    ),
     Hint(
         id="spectrogram.slice",
         text="点击谱图某一时刻 → 查看该帧频率切片",

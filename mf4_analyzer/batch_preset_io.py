@@ -13,17 +13,43 @@ from . import db_reference
 from .batch import (
     AnalysisPreset,
     BatchOutput,
-    BatchRunner,
     _legacy_image_format_warning,
 )
 from .batch_recipe import legacy_manual_rpm_warning, normalize_batch_params
+from .batch_recipe import SUPPORTED_RECIPE_METHODS
+from .batch_types import FrfPairRule
 
 
 SCHEMA_VERSION = 1
+FRF_DB_REFERENCE_WARNING = (
+    "FRF 使用传递比参考，已丢弃手写预设中的绝对 db_reference 设置。"
+)
 
 
 class UnsupportedPresetVersion(ValueError):
     """Raised when reading a preset whose schema_version is unknown."""
+
+
+def _load_frf_pair_rules(raw_rules) -> tuple[FrfPairRule, ...]:
+    if raw_rules is None:
+        return ()
+    if not isinstance(raw_rules, list):
+        raise ValueError("frf_pair_rules must be a JSON array")
+    rules = []
+    for index, item in enumerate(raw_rules):
+        if not isinstance(item, dict):
+            raise ValueError(f"frf_pair_rules[{index}] must be a JSON object")
+        try:
+            output_channels = item.get("output_channels")
+            if not isinstance(output_channels, list):
+                raise ValueError("output_channels must be a JSON array")
+            rules.append(FrfPairRule(
+                item.get("input_channel", ""),
+                tuple(output_channels),
+            ))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid frf_pair_rules[{index}]: {exc}") from exc
+    return tuple(rules)
 
 
 def _migrate_axis_keys(params: dict) -> dict:
@@ -84,6 +110,14 @@ def save_preset_to_json(preset: AnalysisPreset, path: str | Path) -> None:
             "resume_policy": str(preset.outputs.resume_policy),
         },
     }
+    if preset.method == "frf" or preset.frf_pair_rules:
+        payload["frf_pair_rules"] = [
+            {
+                "input_channel": rule.input_channel,
+                "output_channels": list(rule.output_channels),
+            }
+            for rule in preset.frf_pair_rules
+        ]
     path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -93,13 +127,13 @@ def save_preset_to_json(preset: AnalysisPreset, path: str | Path) -> None:
 def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
     """Read preset from JSON. Missing schema_version → v1; unknown → reject.
 
-    Returns ``None`` when the preset's ``method`` is no longer in
-    ``BatchRunner.SUPPORTED_METHODS`` — e.g. a legacy ``order_track`` preset
+    Returns ``None`` when the preset's ``method`` is no longer in the neutral
+    recipe method catalog — e.g. a legacy ``order_track`` preset
     saved before 2026-04-28. The skip is silent (no exception) so the
     import handler can surface a friendly toast instead of crashing
-    ``_run_one``'s ``else: raise`` at run time. Importing
-    ``SUPPORTED_METHODS`` from ``batch`` (rather than duplicating the set)
-    follows the cross-layer-constant promote rule.
+    ``_run_one``'s ``else: raise`` at run time. The neutral recipe catalog is
+    used so additive portable methods can be imported before the runner
+    dispatcher is wired.
     """
     path = Path(path)
     text = path.read_text(encoding="utf-8")
@@ -123,7 +157,7 @@ def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
     # 2026-04-28; silently skip presets that still reference it instead of
     # crashing _run_one's `else: raise`.
     method = raw.get("method", "fft")
-    if method not in BatchRunner.SUPPORTED_METHODS:
+    if method not in SUPPORTED_RECIPE_METHODS:
         return None
 
     outputs_raw = raw.get("outputs") or {}
@@ -145,6 +179,10 @@ def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
             f"unsupported preset image_format: {requested_image_format!r}"
         )
     params_dict = dict(raw.get("params") or {})
+    if method == "frf" and (
+        "db_reference" in params_dict or "db_reference_mode" in params_dict
+    ):
+        migration_warnings = (*migration_warnings, FRF_DB_REFERENCE_WARNING)
     # Batch order analysis no longer supports manual RPM (design 2026-08-03
     # D-C1): normalize_batch_params below always drops rpm_mode/manual_rpm,
     # but that would otherwise be a SILENT behavior change for a preset that
@@ -166,6 +204,10 @@ def load_preset_from_json(path: str | Path) -> AnalysisPreset | None:
         method=method,
         rpm_channel=raw.get("rpm_channel", ""),
         target_signals=tuple(raw.get("target_signals") or ()),
+        frf_pair_rules=(
+            _load_frf_pair_rules(raw.get("frf_pair_rules"))
+            if method == "frf" else ()
+        ),
         target_policy=raw.get("target_policy", "common"),
         params=params_dict,
         outputs=BatchOutput(

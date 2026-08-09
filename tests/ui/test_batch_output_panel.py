@@ -23,6 +23,27 @@ def _make_panel(qtbot):
     return panel
 
 
+def test_frf_chart_grouping_lives_with_analysis_not_output(qtbot):
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
+
+    panel = AnalysisPanel()
+    qtbot.addWidget(panel)
+    panel.set_method("frf")
+    panel.show()
+    qtbot.wait(20)
+
+    assert panel._frf_grouping_host.isVisibleTo(panel) is True
+    assert panel._frf_grouping_combo.itemText(0) == "每对一张"
+    assert panel._frf_grouping_combo.itemText(1) == "按来源叠加"
+    assert panel._frf_grouping_combo.itemText(2) == "按输入/输出对叠加"
+    panel._frf_grouping_combo.setCurrentIndex(1)
+    assert panel.get_params()["render_group_by"] == "source"
+
+    output = _make_panel(qtbot)
+    output.apply_method_defaults("frf")
+    assert output._output_preview.isHidden() is True
+
+
 def _anchor_screen_geometry(anchor: QWidget) -> QRect:
     center = anchor.mapToGlobal(anchor.rect().center())
     screen = QGuiApplication.screenAt(center) or QGuiApplication.primaryScreen()

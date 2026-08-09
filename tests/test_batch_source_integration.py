@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from mf4_analyzer.batch import AnalysisPreset, BatchOutput, BatchRunner
+from mf4_analyzer.batch_types import FrfPairRule
 from mf4_analyzer.batch_recipe import normalize_batch_params
 from mf4_analyzer.io import FileData
 from mf4_analyzer.io.source_adapters import LoadedSource, SourceDescriptor
@@ -32,8 +33,12 @@ def _file_data(path, channels, *, time=None, label_suffix=""):
     )
 
 
-def _loaded(source_id, path, group_id, channels, *, label_suffix=""):
-    file_data = _file_data(path, channels, label_suffix=label_suffix)
+def _loaded(
+    source_id, path, group_id, channels, *, label_suffix="", time=None,
+):
+    file_data = _file_data(
+        path, channels, label_suffix=label_suffix, time=time,
+    )
     file_data.source_metadata.update({
         "source_id": source_id,
         "group_id": group_id,
@@ -89,6 +94,83 @@ def _free_preset(*, signals, policy="common"):
         params={"nfft": 8, "window": "hanning"},
         outputs=BatchOutput(export_data=True, export_image=False),
     )
+
+
+def _frf_source_preset():
+    return AnalysisPreset.free_config(
+        name="FRF source integration",
+        method="frf",
+        frf_pair_rules=(FrfPairRule("command", ("response",)),),
+        params={
+            "estimator": "h1",
+            "t_win_s": 0.5,
+            "overlap": 0.5,
+            "nfft_mode": "auto",
+            "window": "hanning",
+            "detrend": "none",
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+
+def test_frf_planned_resolved_and_resumed_source_ids_stay_identical(tmp_path):
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
+    physical_path = tmp_path / "frf-groups.hdf"
+    time = np.arange(400, dtype=float) / 100.0
+    sources = (
+        _loaded(
+            "frf:group-a", physical_path, "raster:a",
+            ("command", "response"), time=time,
+        ),
+        _loaded(
+            "frf:group-b", physical_path, "raster:b",
+            ("command", "response"), time=time,
+        ),
+    )
+    preset = replace(
+        _frf_source_preset(), source_paths=(str(physical_path),),
+    )
+    registry = _Registry({physical_path: sources})
+    runner = BatchRunner({}, source_registry=registry)
+    plan = runner._frf_execution_plan(preset)
+    output_settings = runner._requested_output_settings(preset.outputs)
+    planned = [
+        (
+            task.source_id,
+            runner._build_frf_task_identity(
+                task, None,
+                params=normalize_batch_params(preset.params, "frf"),
+                output_settings=output_settings,
+            ).task_id,
+        )
+        for task in plan.tasks
+    ]
+
+    first = runner.run(preset, tmp_path / "out")
+
+    assert first.status == "done"
+    assert [(item.file_id, item.task_id) for item in first.items] == planned
+    manifest = load_batch_manifest(first.manifest_path)
+    assert [entry["source_id"] for entry in manifest["entries"]] == [
+        "frf:group-a", "frf:group-b",
+    ]
+
+    resume_preset = replace(
+        preset,
+        outputs=replace(preset.outputs, resume_policy="manifest"),
+    )
+    resumed = BatchRunner(
+        {}, source_registry=_Registry({physical_path: sources}),
+    ).run(
+        resume_preset,
+        tmp_path / "out",
+        resume_manifest=manifest,
+    )
+
+    assert resumed.status == "done"
+    assert [item.status for item in resumed.items] == ["resumed", "resumed"]
+    assert [(item.file_id, item.task_id) for item in resumed.items] == planned
 
 
 def test_multi_group_source_ids_share_one_physical_load_and_distinct_outputs(tmp_path):

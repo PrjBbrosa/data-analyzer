@@ -16,6 +16,7 @@ from mf4_analyzer.batch_output import (
     atomic_write,
     atomic_write_set,
     build_task_output_identity,
+    build_frf_task_output_identity,
     choose_output_paths,
     inspect_output_reservation,
     release_output_reservation,
@@ -191,6 +192,95 @@ def test_default_time_render_params_preserve_task_identity(tmp_path):
 
 def test_unicode_slug_keeps_cjk_and_removes_only_path_unsafe_characters():
     assert unicode_slug("振动/通道:左侧") == "振动_通道_左侧"
+
+
+def test_frf_task_identity_is_directional_and_pair_aware(tmp_path):
+    source = _Source(tmp_path / "试验:01.mf4", "default")
+    outputs = {
+        "export_data": True,
+        "export_image": True,
+        "data_format": "csv",
+        "image_format": "png",
+    }
+    forward = build_frf_task_output_identity(
+        source,
+        file_id="logical-a",
+        input_channel="命令/输入",
+        output_channel="响应:输出",
+        params={"estimator": "h1", "frequency_scale": "log"},
+        outputs=outputs,
+    )
+    repeated = build_frf_task_output_identity(
+        source,
+        file_id="ignored-when-path-exists",
+        input_channel="命令/输入",
+        output_channel="响应:输出",
+        params={"estimator": "h1", "frequency_scale": "log"},
+        outputs=outputs,
+    )
+    reverse = build_frf_task_output_identity(
+        source,
+        file_id="logical-a",
+        input_channel="响应:输出",
+        output_channel="命令/输入",
+        params={"estimator": "h1", "frequency_scale": "log"},
+        outputs=outputs,
+    )
+
+    assert forward == repeated
+    assert forward.task_id != reverse.task_id
+    assert forward.input_channel_identity == "命令/输入"
+    assert forward.output_channel_identity == "响应:输出"
+    assert forward.channel_identity == "响应:输出 / 命令/输入"
+    assert forward.stem.startswith("试验_01__响应_输出-over-命令_输入__frf__")
+
+
+def test_frf_coordinated_artifact_identity_includes_render_and_output_bytes(tmp_path):
+    source = _Source(tmp_path / "run.mf4")
+    base_outputs = {
+        "export_data": True,
+        "export_image": True,
+        "data_format": "csv",
+        "image_format": "png",
+        "image_width": 1920,
+    }
+
+    def identity(params, outputs=base_outputs):
+        return build_frf_task_output_identity(
+            source,
+            file_id=1,
+            input_channel="cmd",
+            output_channel="actual",
+            params=params,
+            outputs=outputs,
+        )
+
+    base = identity({"estimator": "h1", "coherence_threshold": 0.8})
+    render_changed = identity({"estimator": "h1", "coherence_threshold": 0.5})
+    output_changed = identity(
+        {"estimator": "h1", "coherence_threshold": 0.8},
+        {**base_outputs, "image_width": 2560},
+    )
+
+    assert base.task_id != render_changed.task_id
+    assert base.task_id != output_changed.task_id
+
+
+@pytest.mark.parametrize(
+    ("input_channel", "output_channel"),
+    (("", "out"), ("in", ""), ("same", "same")),
+)
+def test_frf_task_identity_rejects_missing_or_self_pair(
+    tmp_path, input_channel, output_channel,
+):
+    with pytest.raises(ValueError):
+        build_frf_task_output_identity(
+            _Source(tmp_path / "source.mf4"),
+            file_id=1,
+            input_channel=input_channel,
+            output_channel=output_channel,
+            params={"nfft_mode": "auto"},
+        )
 
 
 def test_task_output_identity_is_stable_and_separates_source_and_group(tmp_path):

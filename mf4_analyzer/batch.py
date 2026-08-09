@@ -30,6 +30,7 @@ from . import batch_compute
 from . import batch_output
 from . import db_reference
 from .batch_compute import (
+    BatchFrfDataError,
     _Spectro2D,
     _guess_rpm_channel,
     _matrix_to_long_dataframe,
@@ -39,9 +40,11 @@ from .batch_output import (
     _SLICE_CSV_FALLBACK_WARNING,
     _XLSX_MAX_DATA_ROWS,
     atomic_write_set,
+    build_frf_task_output_identity,
     build_task_output_identity,
     reserve_output_paths,
 )
+from .batch_frf import FrfExecutionPlan, SkippedFrfTask, resolve_frf_tasks
 from .batch_grouping import RenderGroup, RenderTask, group_render_tasks
 from .batch_manifest import (
     BatchManifestRecorder,
@@ -413,6 +416,18 @@ class _RunReporter:
             'finished_at': item.finished_at,
             'artifacts': artifacts,
         }
+        if item.method == 'frf':
+            input_signal = str(item.input_signal or '').strip()
+            output_signal = str(item.output_signal or '').strip()
+            input_unit = output_unit = ''
+            if fd is not None:
+                input_unit = self._runner._channel_unit(fd, input_signal)
+                output_unit = self._runner._channel_unit(fd, output_signal)
+            entry['channel_unit'] = output_unit
+            entry['frf_pair'] = {
+                'input': {'channel': input_signal, 'unit': input_unit},
+                'output': {'channel': output_signal, 'unit': output_unit},
+            }
         try:
             recorder.record(entry)
         except Exception as exc:
@@ -426,7 +441,7 @@ class _RunReporter:
 
 
 class BatchRunner:
-    SUPPORTED_METHODS = {'time', 'fft', 'order_time', 'fft_time'}
+    SUPPORTED_METHODS = {'time', 'fft', 'frf', 'order_time', 'fft_time'}
 
     def __init__(self, files, loader: Callable | None = None, *,
                  source_registry=None, source_context=None,
@@ -632,6 +647,170 @@ class BatchRunner:
             )
 
     @staticmethod
+    def _serialized_frf_pair_rules(preset) -> list[dict[str, Any]]:
+        return [
+            {
+                'input_channel': str(rule.input_channel),
+                'output_channels': [
+                    str(channel) for channel in rule.output_channels
+                ],
+            }
+            for rule in tuple(getattr(preset, 'frf_pair_rules', ()) or ())
+        ]
+
+    def _frf_execution_plan(self, preset) -> FrfExecutionPlan:
+        """Resolve FRF pairs from metadata only; never load sample arrays."""
+
+        source_keys = self._scope_source_keys(
+            preset, allow_source_load=False,
+        )
+        inventories = []
+        for source_key in source_keys:
+            fd = self._known_file_data(source_key)
+            if fd is not None:
+                metadata = getattr(fd, 'source_metadata', {}) or {}
+                group_identity = str(
+                    metadata.get('group_id')
+                    or metadata.get('group_identity')
+                    or getattr(fd, 'label_suffix', '')
+                    or 'default'
+                )
+                channels = tuple(fd.get_signal_channels())
+            else:
+                group_identity = str(
+                    self._source_group_identity_hints.get(source_key)
+                    or f'unresolved-source:{source_key}'
+                )
+                cached = self._source_channel_cache.get(source_key)
+                channels = None if cached is None else tuple(cached)
+            inventories.append({
+                'source_id': source_key,
+                'group_identity': group_identity,
+                'channel_names': channels,
+            })
+        return resolve_frf_tasks(
+            tuple(getattr(preset, 'frf_pair_rules', ()) or ()),
+            inventories,
+            target_policy=getattr(preset, 'target_policy', 'common'),
+        )
+
+    def _build_frf_task_identity(
+        self, task, fd, *, params, output_settings,
+    ):
+        physical_key = self._physical_for_source(task.source_id)
+        source_path = getattr(fd, 'filepath', None) if fd is not None else None
+        if source_path in (None, '') and physical_key is not None:
+            source_path = self._physical_paths.get(physical_key, physical_key)
+        source = SimpleNamespace(
+            filepath=source_path,
+            label_suffix=task.group_identity,
+            source_metadata={'group_identity': task.group_identity},
+        )
+        return build_frf_task_output_identity(
+            source,
+            file_id=task.source_id,
+            input_channel=task.input_channel,
+            output_channel=task.output_channel,
+            params=params,
+            outputs=output_settings,
+        )
+
+    def _frf_effective_outputs(self, outputs) -> EffectiveOutputPlan:
+        """Resolve FRF images through the same lazy Qt capability taxonomy."""
+
+        return self._resolve_effective_outputs(outputs)
+
+    @staticmethod
+    def _frf_effective_facts(prepared, computed) -> dict[str, Any]:
+        facts = asdict(computed.result.effective)
+        facts.update({
+            'estimator': prepared.params.estimator,
+            'nfft_mode': prepared.params.nfft_mode,
+            'nfft_effective': computed.result.effective.nfft,
+            'actual_fs': computed.result.effective.fs,
+            'input_channel': prepared.input_channel,
+            'output_channel': prepared.output_channel,
+            'input_unit': computed.input_unit,
+            'output_unit': computed.output_unit,
+        })
+        return facts
+
+    @staticmethod
+    def _frf_render_series(slot, computed, group):
+        from .batch_render_models import BatchFrfSeries
+
+        task = slot['task']
+        fd = slot['fd']
+        source_name = str(getattr(fd, 'filename', slot['source_key']))
+        label = (
+            source_name
+            if group.group_by == 'channel'
+            else f'{task.output_channel} / {task.input_channel}'
+        )
+        return BatchFrfSeries(
+            frequency_hz=computed.result.frequencies,
+            transfer=computed.result.transfer,
+            coherence=computed.result.coherence,
+            label=label,
+            source_display_name=source_name,
+            input_channel=task.input_channel,
+            output_channel=task.output_channel,
+            input_unit=computed.input_unit,
+            output_unit=computed.output_unit,
+            effective_facts=BatchRunner._frf_effective_facts(
+                slot['prepared'], computed,
+            ),
+        )
+
+    def _write_frf_group_image(
+        self,
+        group,
+        series,
+        path,
+        *,
+        preset,
+        params,
+        effective,
+        warnings_out=None,
+    ):
+        """Build the finalized neutral FRF DTO and call the lazy Qt seam."""
+
+        from .batch_render_models import BatchFrfFigureSpec
+
+        spec = BatchFrfFigureSpec(
+            tuple(series),
+            magnitude_scale=str(params.get('magnitude_scale', 'db')),
+            frequency_scale=str(params.get('frequency_scale', 'log')),
+            phase_mode=str(params.get('phase_mode', 'unwrapped')),
+            coherence_threshold=float(params.get('coherence_threshold', 0.8)),
+            fade_low_coherence=bool(params.get('fade_low_coherence', True)),
+        )
+        BatchRenderContext, BatchRenderOptions = effective.render_backend_types
+        width, height = preset.outputs.resolved_image_dimensions()
+        options = BatchRenderOptions(
+            width_px=width,
+            height_px=height,
+            dpi=int(preset.outputs.image_dpi),
+            format='png',
+            background=str(preset.outputs.image_background),
+            line_width=float(preset.outputs.image_line_width),
+        )
+        context = BatchRenderContext(
+            source_display_name=group.display_name,
+            method='frf',
+            task_id=group.identity.group_id,
+            effective_facts=dict(series[0].effective_facts),
+        )
+        return self._write_image(
+            ('frf', spec),
+            path,
+            params=params,
+            options=options,
+            context=context,
+            warnings_out=warnings_out,
+        )
+
+    @staticmethod
     def _pick_representative_group(groups, source_channels):
         """Return ``(ordinal, group, channel_available)`` for the preview.
 
@@ -677,6 +856,10 @@ class BatchRunner:
         output_issues = validate_outputs(preset.outputs)
         if output_issues:
             raise ValueError('; '.join(str(issue) for issue in output_issues))
+        if preset.method == 'frf':
+            return self._preview_frf_outputs(
+                preset, output_dir, source_channels=source_channels,
+            )
         tasks = list(self._expand_tasks(preset, allow_source_load=False))
         requested_params = normalize_batch_params(preset.params, preset.method)
         render_tasks = []
@@ -790,6 +973,138 @@ class BatchRunner:
             representative_group=representative,
         )
 
+    def _preview_frf_outputs(
+        self, preset, output_dir, *, source_channels=None,
+    ) -> BatchOutputPreview:
+        """Estimate FRF artifacts from metadata only; never validate samples."""
+
+        requested_params = normalize_batch_params(preset.params, 'frf')
+        plan = self._frf_execution_plan(preset)
+        blocking = [
+            issue.message for issue in plan.issues if issue.severity == 'error'
+        ]
+        if blocking:
+            raise ValueError('; '.join(blocking))
+        output_settings = self._requested_output_settings(preset.outputs)
+        render_tasks = []
+        for task in plan.ordered_candidates:
+            if isinstance(task, SkippedFrfTask):
+                continue
+            fd = self._known_file_data(task.source_id)
+            identity = self._build_frf_task_identity(
+                task,
+                fd,
+                params=requested_params,
+                output_settings=output_settings,
+            )
+            render_tasks.append(RenderTask(
+                task.source_id,
+                f'{task.output_channel} / {task.input_channel}',
+                identity,
+            ))
+
+        required = self._required_artifacts(preset.outputs)
+        data_extension = required.get('data')
+        image_extension = required.get('image')
+        output_dir = Path(output_dir)
+        data_conflicting_tasks = {
+            task.identity.task_id
+            for task in render_tasks
+            if data_extension is not None
+            and (output_dir / f'{task.identity.stem}.{data_extension}').exists()
+        }
+        groups = (
+            group_render_tasks(
+                render_tasks,
+                requested_params,
+                outputs=output_settings,
+            )
+            if image_extension is not None else ()
+        )
+        group_by = str(
+            requested_params.get('render_group_by', 'none') or 'none'
+        ).strip().lower()
+        if group_by == 'none' and groups:
+            by_id = {group.identity.group_id: group for group in groups}
+            groups = tuple(by_id[task.identity.task_id] for task in render_tasks)
+        image_conflicting_groups = {
+            group.identity.group_id
+            for group in groups
+            if (output_dir / f'{group.identity.stem}.{image_extension}').exists()
+        }
+        image_conflicting_tasks = {
+            member.identity.task_id
+            for group in groups
+            if group.identity.group_id in image_conflicting_groups
+            and group.group_by == 'none'
+            for member in group.members
+        }
+        data_conflict_count = len(data_conflicting_tasks)
+        image_conflict_count = len(image_conflicting_groups)
+        conflict_count = (
+            len(data_conflicting_tasks | image_conflicting_tasks)
+            if group_by == 'none'
+            else data_conflict_count + image_conflict_count
+        )
+        width, height = preset.outputs.resolved_image_dimensions()
+        representative = None
+        if groups:
+            ordinal, group, channel_available = 1, groups[0], True
+            if source_channels:
+                known = {
+                    key: frozenset(str(name) for name in names)
+                    for key, names in source_channels.items()
+                }
+                channel_available = False
+                for candidate_index, candidate in enumerate(groups, start=1):
+                    if all(
+                        member.source_key not in known
+                        or {
+                            member.input_channel,
+                            member.output_channel,
+                        }.issubset(known[member.source_key])
+                        for member in candidate.members
+                    ):
+                        ordinal, group, channel_available = (
+                            candidate_index, candidate, True
+                        )
+                        break
+            representative = BatchRepresentativeGroup(
+                group_id=group.identity.group_id,
+                display_name=group.display_name,
+                group_by=group.group_by,
+                member_count=len(group.members),
+                required_source_count=len({
+                    member.source_key for member in group.members
+                }),
+                planned_stem=group.identity.stem,
+                ordinal=ordinal,
+                total_groups=len(groups),
+                channel_available=channel_available,
+            )
+        return BatchOutputPreview(
+            task_count=len(plan.ordered_candidates),
+            artifact_count=(
+                (len(render_tasks) if data_extension is not None else 0)
+                + len(groups)
+            ),
+            conflict_count=conflict_count,
+            image_format=str(preset.outputs.image_format).lower().lstrip('.'),
+            image_width=width,
+            image_height=height,
+            image_dpi=int(preset.outputs.image_dpi),
+            conflict_policy=str(preset.outputs.conflict_policy).lower(),
+            estimated=True,
+            group_count=(0 if group_by == 'none' else len(groups)),
+            data_artifact_count=(
+                len(render_tasks) if data_extension is not None else 0
+            ),
+            image_artifact_count=len(groups),
+            data_conflict_count=data_conflict_count,
+            image_conflict_count=image_conflict_count,
+            representative_group=representative,
+        )
+
     def preview_group(
         self,
         preset,
@@ -805,6 +1120,10 @@ class BatchRunner:
         output contract, which keeps preprocessing, figure specification,
         renderer, dimensions, and DPI identical to a formal run.
         """
+        if preset.method == 'frf':
+            return self._preview_frf_group(
+                preset, group_id, temp_dir, cancel_token=cancel_token,
+            )
         requested_params = normalize_batch_params(preset.params, preset.method)
         tasks = list(self._expand_tasks(preset, allow_source_load=False))
         render_tasks = []
@@ -878,6 +1197,146 @@ class BatchRunner:
             message="; ".join(result.blocked),
         )
 
+    def _preview_frf_group(
+        self, preset, group_id: str, temp_dir, *, cancel_token=None,
+    ) -> BatchPreviewResult:
+        """Load, preflight, compute and render only the selected FRF group."""
+
+        params = normalize_batch_params(preset.params, 'frf')
+        plan = self._frf_execution_plan(preset)
+        if plan.has_blocking_issues:
+            message = '; '.join(
+                issue.message for issue in plan.issues
+                if issue.severity == 'error'
+            )
+            return BatchPreviewResult(
+                image_path=None,
+                group_id=str(group_id),
+                display_name='',
+                loaded_source_count=0,
+                status='blocked',
+                message=message,
+            )
+        output_settings = self._requested_output_settings(preset.outputs)
+        render_tasks = []
+        for task in plan.ordered_candidates:
+            if isinstance(task, SkippedFrfTask):
+                continue
+            identity = self._build_frf_task_identity(
+                task,
+                self._known_file_data(task.source_id),
+                params=params,
+                output_settings=output_settings,
+            )
+            render_tasks.append(RenderTask(
+                task.source_id,
+                f'{task.output_channel} / {task.input_channel}',
+                identity,
+            ))
+        groups = group_render_tasks(
+            render_tasks, params, outputs=output_settings,
+        )
+        group = next(
+            (
+                candidate for candidate in groups
+                if candidate.identity.group_id == str(group_id)
+            ),
+            None,
+        )
+        if group is None:
+            return BatchPreviewResult(
+                image_path=None,
+                group_id=str(group_id),
+                display_name='',
+                loaded_source_count=0,
+                status='blocked',
+                message='代表输出组已失效',
+            )
+
+        try:
+            effective = self._frf_effective_outputs(preset.outputs)
+        except _ImageBackendUnavailable as exc:
+            return BatchPreviewResult(
+                image_path=None,
+                group_id=group.identity.group_id,
+                display_name=group.display_name,
+                loaded_source_count=0,
+                status='blocked',
+                message=str(exc),
+            )
+        if 'image' not in effective.effective:
+            return BatchPreviewResult(
+                image_path=None,
+                group_id=group.identity.group_id,
+                display_name=group.display_name,
+                loaded_source_count=0,
+                status='blocked',
+                message=effective.degraded_reason,
+            )
+
+        warnings = list(effective.migration_warnings)
+        loaded_sources = set()
+        series = []
+        try:
+            for member in group.members:
+                self._check_cancel(cancel_token, 'FRF representative preview')
+                _fid, fd_or_fail = self._resolve_task_file(member.source_key)
+                if isinstance(fd_or_fail, _LoadFailure):
+                    raise IOError(fd_or_fail.error)
+                prepared = batch_compute.prepare_frf_task(
+                    fd_or_fail,
+                    member.input_channel,
+                    member.output_channel,
+                    params,
+                )
+                computed = batch_compute.compute_prepared_frf(
+                    prepared, cancel_token=cancel_token,
+                )
+                warnings.extend(computed.result.warnings)
+                loaded_sources.add(member.source_key)
+                slot = {
+                    'task': member,
+                    'source_key': member.source_key,
+                    'fd': fd_or_fail,
+                    'prepared': prepared,
+                }
+                series.append(self._frf_render_series(slot, computed, group))
+            self._check_cancel(cancel_token, 'FRF representative render')
+            preview_dir = Path(temp_dir)
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            image_path = preview_dir / f'{group.identity.stem}.png'
+            self._write_frf_group_image(
+                group,
+                series,
+                image_path,
+                preset=preset,
+                params=params,
+                effective=effective,
+                warnings_out=warnings,
+            )
+        except (_BatchCancelled, BatchFrfDataError, OSError) as exc:
+            return BatchPreviewResult(
+                image_path=None,
+                group_id=group.identity.group_id,
+                display_name=group.display_name,
+                loaded_source_count=len(loaded_sources),
+                warnings=tuple(dict.fromkeys(warnings)),
+                status='blocked',
+                message=str(exc),
+            )
+        finally:
+            for physical_key in tuple(self._disk_cache):
+                self._evict_physical(physical_key)
+        return BatchPreviewResult(
+            image_path=str(image_path),
+            group_id=group.identity.group_id,
+            display_name=group.display_name,
+            loaded_source_count=len(loaded_sources),
+            warnings=tuple(dict.fromkeys(warnings)),
+            status='done',
+            message='',
+        )
+
     def run(self, preset, output_dir,
             progress_callback: Callable[[int, int], None] | None = None,
             *,
@@ -938,6 +1397,10 @@ class BatchRunner:
             recipe_id = recipe_fingerprint(
                 requested_params,
                 preset.method,
+                group_identity=(
+                    {'frf_pair_rules': self._serialized_frf_pair_rules(preset)}
+                    if preset.method == 'frf' else None
+                ),
                 outputs=output_settings,
             )
         except Exception as exc:
@@ -967,6 +1430,10 @@ class BatchRunner:
                     'rpm_signal': preset.rpm_signal,
                     'outputs': output_settings,
                 }
+                if preset.method == 'frf':
+                    normalized_recipe['frf_pair_rules'] = (
+                        self._serialized_frf_pair_rules(preset)
+                    )
                 execution_scope = self._lazy_pattern_execution_scope(preset)
                 if execution_scope is not None:
                     normalized_recipe['execution_scope'] = execution_scope
@@ -1099,6 +1566,22 @@ class BatchRunner:
                     blocked=['retry manifest has no failed or cancelled tasks'],
                     run_migration_warnings=run_migration_warnings,
                 )
+
+        if preset.method == 'frf':
+            return self._run_frf(
+                preset,
+                output_dir,
+                reporter=reporter,
+                recorder=recorder,
+                finish_result=finish_result,
+                requested_params=requested_params,
+                output_settings=output_settings,
+                recipe_id=recipe_id,
+                resume_data=resume_data,
+                retry_data=retry_data,
+                cancel_token=cancel_token,
+                run_migration_warnings=run_migration_warnings,
+            )
 
         group_by = str(requested_params.get(
             'render_group_by', 'none',
@@ -2069,6 +2552,920 @@ class BatchRunner:
             reporter.emit_progress(item, task_index, total)
 
         return cancelled, render_group_outcomes
+
+    def _run_frf(
+        self,
+        preset,
+        output_dir,
+        *,
+        reporter,
+        recorder,
+        finish_result,
+        requested_params,
+        output_settings,
+        recipe_id,
+        resume_data,
+        retry_data,
+        cancel_token,
+        run_migration_warnings,
+    ) -> BatchRunResult:
+        """Execute the FRF data path with a strict plan/preflight barrier.
+
+        No reservation or artifact write occurs until every metadata-planned
+        task has been fully loaded and data-preflighted. Runtime resolved tasks
+        stay local to this invocation and are never written back to ``preset``.
+        """
+
+        try:
+            plan = self._frf_execution_plan(preset)
+        except (TypeError, ValueError, OSError) as exc:
+            return finish_result(
+                'blocked', blocked=[str(exc)],
+                run_migration_warnings=run_migration_warnings,
+            )
+        blocking_issues = [
+            issue.message for issue in plan.issues if issue.severity == 'error'
+        ]
+        if blocking_issues:
+            return finish_result(
+                'blocked', blocked=list(dict.fromkeys(blocking_issues)),
+                run_migration_warnings=run_migration_warnings,
+            )
+        if not plan.ordered_candidates:
+            return finish_result(
+                'blocked', blocked=['no matching FRF tasks'],
+                run_migration_warnings=run_migration_warnings,
+            )
+
+        image_only_error = ''
+        try:
+            effective_plan = self._frf_effective_outputs(preset.outputs)
+            run_migration_warnings = tuple(dict.fromkeys((
+                *effective_plan.migration_warnings,
+                *(
+                    issue.message for issue in plan.issues
+                    if issue.severity == 'warning'
+                ),
+            )))
+        except _ImageBackendUnavailable as exc:
+            image_only_error = str(exc)
+            effective_plan = EffectiveOutputPlan(
+                requested=self._requested_artifacts(preset.outputs),
+                effective={},
+                render_backend_types=None,
+                degraded_reason='',
+                migration_warnings=tuple(
+                    getattr(preset.outputs, 'migration_warnings', ()) or ()
+                ),
+            )
+            run_migration_warnings = tuple(dict.fromkeys((
+                *effective_plan.migration_warnings,
+                *(
+                    issue.message for issue in plan.issues
+                    if issue.severity == 'warning'
+                ),
+            )))
+
+        # Stage 2: authoritative full load + data preflight.  ``slots`` is the
+        # final task universe; it remains write-free until this loop completes.
+        slots = []
+        for planned_task in plan.ordered_candidates:
+            if isinstance(planned_task, SkippedFrfTask):
+                identity = self._build_frf_task_identity(
+                    planned_task,
+                    self._known_file_data(planned_task.source_id),
+                    params=requested_params,
+                    output_settings=output_settings,
+                )
+                missing = ', '.join(planned_task.missing_channels)
+                slots.append({
+                    'task': planned_task,
+                    'source_key': planned_task.source_id,
+                    'fid': planned_task.source_id,
+                    'fd': self._known_file_data(planned_task.source_id),
+                    'identity': identity,
+                    'prepared': None,
+                    'error': None,
+                    'skip_message': (
+                        f"来源 {planned_task.source_id!r} 的 FRF pair "
+                        f"input={planned_task.input_channel!r}, "
+                        f"output={planned_task.output_channel!r} 缺少通道 "
+                        f"{missing}；建议检查通道映射或调整 FRF pair 规则"
+                    ),
+                    'reservation': None,
+                    'resumed': None,
+                })
+                continue
+            source_key = planned_task.source_id
+            if cancel_token is not None and cancel_token.is_set():
+                identity = self._build_frf_task_identity(
+                    planned_task,
+                    self._known_file_data(source_key),
+                    params=requested_params,
+                    output_settings=output_settings,
+                )
+                slots.append({
+                    'task': planned_task,
+                    'source_key': source_key,
+                    'fid': source_key,
+                    'fd': self._known_file_data(source_key),
+                    'identity': identity,
+                    'prepared': None,
+                    'error': None,
+                    'skip_message': '',
+                    'reservation': None,
+                    'resumed': None,
+                })
+                continue
+            fid, fd_or_fail = self._resolve_task_file(source_key)
+            fd = None if isinstance(fd_or_fail, _LoadFailure) else fd_or_fail
+            task = planned_task
+            if fd is not None:
+                metadata = getattr(fd, 'source_metadata', {}) or {}
+                actual_group = str(
+                    metadata.get('group_id')
+                    or metadata.get('group_identity')
+                    or getattr(fd, 'label_suffix', '')
+                    or 'default'
+                )
+                if actual_group != task.group_identity:
+                    task = replace(task, group_identity=actual_group)
+            identity = self._build_frf_task_identity(
+                task,
+                fd,
+                params=requested_params,
+                output_settings=output_settings,
+            )
+            error = None
+            prepared = None
+            if isinstance(fd_or_fail, _LoadFailure):
+                error = IOError(fd_or_fail.error)
+            else:
+                try:
+                    prepared = batch_compute.prepare_frf_task(
+                        fd,
+                        task.input_channel,
+                        task.output_channel,
+                        requested_params,
+                    )
+                except BatchFrfDataError as exc:
+                    error = exc
+            slots.append({
+                'task': task,
+                'source_key': source_key,
+                'fid': fid,
+                'fd': fd,
+                'identity': identity,
+                'prepared': prepared,
+                'error': error,
+                'skip_message': '',
+                'reservation': None,
+                'resumed': None,
+            })
+
+        if retry_data is not None:
+            retry_task_ids = {
+                str(entry.get('task_id'))
+                for entry in retry_data.get('entries', ())
+                if entry.get('status') in {'failed', 'cancelled'}
+            }
+            slots = [
+                slot for slot in slots
+                if slot['identity'].task_id in retry_task_ids
+            ]
+            if not slots:
+                return finish_result(
+                    'blocked', blocked=['no matching FRF retry tasks'],
+                    run_migration_warnings=run_migration_warnings,
+                )
+
+        if image_only_error:
+            for slot in slots:
+                if slot['error'] is None:
+                    slot['error'] = _ImageBackendUnavailable(image_only_error)
+
+        render_tasks = tuple(
+            RenderTask(
+                slot['source_key'],
+                (
+                    f"{slot['task'].output_channel} / "
+                    f"{slot['task'].input_channel}"
+                ),
+                slot['identity'],
+            )
+            for slot in slots
+            if not slot.get('skip_message')
+        )
+        render_groups = (
+            group_render_tasks(
+                render_tasks,
+                requested_params,
+                outputs=output_settings,
+            )
+            if 'image' in effective_plan.effective and render_tasks
+            else ()
+        )
+        group_by = str(
+            requested_params.get('render_group_by', 'none') or 'none'
+        ).strip().lower()
+        group_for_task = {
+            member.identity.task_id: group
+            for group in render_groups
+            for member in group.members
+        }
+        group_slots = [
+            {
+                'group': group,
+                'reservation': None,
+                'error': None,
+                'resumed': None,
+            }
+            for group in render_groups
+            if group.group_by != 'none'
+        ]
+
+        item_required_artifacts = (
+            dict(effective_plan.effective)
+            if group_by == 'none'
+            else ({
+                'data': effective_plan.effective['data']
+            } if 'data' in effective_plan.effective else {})
+        )
+        for slot in slots:
+            if (
+                slot['error'] is not None
+                or slot.get('skip_message')
+                or resume_data is None
+            ):
+                continue
+            fd = slot['fd']
+            source_path = (
+                getattr(fd, 'filepath', None) if fd is not None else None
+            )
+            source_stat = source_file_facts(
+                source_path,
+                source_identity=slot['identity'].source_identity,
+            )
+            slot['resumed'] = find_resumable_entry(
+                resume_data,
+                recipe_fingerprint=recipe_id,
+                task_id=slot['identity'].task_id,
+                source_id=slot['source_key'],
+                source_identity=slot['identity'].source_identity,
+                source_stat=source_stat,
+                required_artifacts=item_required_artifacts,
+                cancel_token=cancel_token,
+            )
+
+        if resume_data is not None and 'image' in effective_plan.effective:
+            image_extension = str(effective_plan.effective['image'])
+            slot_by_task_id = {
+                slot['identity'].task_id: slot for slot in slots
+            }
+            for group_slot in group_slots:
+                group = group_slot['group']
+                members = []
+                for member in group.members:
+                    slot = slot_by_task_id[member.identity.task_id]
+                    fd = slot['fd']
+                    source_path = (
+                        getattr(fd, 'filepath', None)
+                        if fd is not None else None
+                    )
+                    members.append(GroupMemberResumeFact(
+                        task_id=member.identity.task_id,
+                        source=source_file_facts(
+                            source_path,
+                            source_identity=member.identity.source_identity,
+                        ),
+                    ))
+                group_slot['resumed'] = find_resumable_group(
+                    resume_data,
+                    recipe_fingerprint=recipe_id,
+                    group_id=group.identity.group_id,
+                    members=tuple(members),
+                    image_format=image_extension,
+                    cancel_token=cancel_token,
+                )
+
+        # Stage 3: reserve the complete non-resumed, preflighted task universe
+        # before the first compute/write/publish operation begins.
+        data_extension = str(
+            effective_plan.effective.get('data', '')
+        ).lower().lstrip('.')
+        image_extension = str(
+            effective_plan.effective.get('image', '')
+        ).lower().lstrip('.')
+        conflict_policy = str(
+            getattr(preset.outputs, 'conflict_policy', 'auto_number')
+        ).strip().lower()
+        def reserve_all_slots():
+            if cancel_token is not None and cancel_token.is_set():
+                return
+            for slot in slots:
+                if (
+                    slot['error'] is not None
+                    or slot.get('skip_message')
+                    or slot['resumed'] is not None
+                ):
+                    continue
+                extensions = (
+                    tuple(effective_plan.effective.values())
+                    if group_by == 'none'
+                    else ((data_extension,) if data_extension else ())
+                )
+                if not extensions:
+                    continue
+                try:
+                    slot['reservation'] = reserve_output_paths(
+                        output_dir,
+                        slot['identity'].stem,
+                        extensions,
+                        conflict_policy=conflict_policy,
+                    )
+                except (FileExistsError, OSError) as exc:
+                    slot['error'] = exc
+            if group_by == 'none' or not image_extension:
+                return
+            for group_slot in group_slots:
+                if group_slot['resumed'] is not None:
+                    continue
+                group = group_slot['group']
+                if not any(
+                    slot['error'] is None
+                    and not slot.get('skip_message')
+                    and slot['prepared'] is not None
+                    for slot in slots
+                    if slot['identity'].task_id in {
+                        member.identity.task_id for member in group.members
+                    }
+                ):
+                    continue
+                try:
+                    group_slot['reservation'] = reserve_output_paths(
+                        output_dir,
+                        group.identity.stem,
+                        (image_extension,),
+                        conflict_policy=conflict_policy,
+                    )
+                except (FileExistsError, OSError) as exc:
+                    group_slot['error'] = exc
+
+        items: list[BatchItemResult] = []
+        blocked: list[str] = []
+        total = len(slots)
+        cancelled = False
+
+        def issue_messages_for(slot):
+            task = slot['task']
+            return [
+                issue.message for issue in plan.issues
+                if (
+                    issue.source_id in (None, task.source_id)
+                    and (
+                        not issue.input_channel
+                        or issue.input_channel == task.input_channel
+                    )
+                    and (
+                        not issue.output_channel
+                        or issue.output_channel == task.output_channel
+                    )
+                )
+            ]
+
+        def item_for(slot, *, status, message='', **updates):
+            task = slot['task']
+            fd = slot['fd']
+            identity = slot['identity']
+            values = dict(
+                method='frf',
+                file_id=slot['fid'],
+                file_name=str(
+                    getattr(fd, 'filename', slot['source_key'])
+                ),
+                signal=f'{task.output_channel} / {task.input_channel}',
+                input_signal=task.input_channel,
+                output_signal=task.output_channel,
+                status=status,
+                message=str(message),
+                task_id=identity.task_id,
+                source_identity=identity.source_identity,
+                group_identity=identity.group_identity,
+                requested_outputs=dict(effective_plan.requested),
+                effective_outputs=dict(effective_plan.effective),
+                degraded_reason=effective_plan.degraded_reason,
+                warnings=list(dict.fromkeys([
+                    *effective_plan.migration_warnings,
+                    *issue_messages_for(slot),
+                ])),
+            )
+            values.update(updates)
+            return BatchItemResult(**values)
+
+        def emit_started(slot, index, started_at):
+            task = slot['task']
+            reporter.emit(BatchProgressEvent(
+                kind='task_started',
+                task_index=index,
+                total=total,
+                file_name=str(
+                    getattr(slot['fd'], 'filename', slot['source_key'])
+                ),
+                signal=f'{task.output_channel} / {task.input_channel}',
+                method='frf',
+                task_id=slot['identity'].task_id,
+                message=started_at,
+            ))
+
+        def append_and_record(slot, item):
+            items.append(item)
+            reporter.record(item, slot['source_key'], slot['fd'])
+
+        def emit_terminal(item, index, kind, *, image_path=None):
+            reporter.emit(BatchProgressEvent(
+                kind=kind,
+                task_index=index,
+                total=total,
+                file_name=item.file_name,
+                signal=item.signal,
+                method='frf',
+                error=item.message if kind == 'task_failed' else None,
+                task_id=item.task_id,
+                message=item.message,
+                data_path=item.data_path,
+                image_path=image_path or item.image_path,
+            ))
+            reporter.emit_progress(item, index, total)
+
+        def record_terminal(slot, item, index, kind):
+            append_and_record(slot, item)
+            emit_terminal(item, index, kind)
+
+        group_slot_by_id = {
+            entry['group'].identity.group_id: entry for entry in group_slots
+        }
+        slot_by_task_id = {
+            slot['identity'].task_id: slot for slot in slots
+        }
+        deferred_terminals = []
+        render_group_outcomes: list[RenderGroupResult] = []
+
+        try:
+            reserve_all_slots()
+            for index, slot in enumerate(slots, start=1):
+                started_at = utc_now()
+                emit_started(slot, index, started_at)
+                if cancel_token is not None and cancel_token.is_set():
+                    cancelled = True
+                    item = item_for(
+                        slot,
+                        status='cancelled',
+                        message='batch cancelled',
+                        started_at=started_at,
+                        finished_at=utc_now(),
+                    )
+                    record_terminal(slot, item, index, 'task_cancelled')
+                    continue
+
+                if slot.get('skip_message'):
+                    item = item_for(
+                        slot,
+                        status='skipped',
+                        message=slot['skip_message'],
+                        effective_outputs={},
+                        degraded_reason='',
+                        started_at=started_at,
+                        finished_at=utc_now(),
+                    )
+                    record_terminal(slot, item, index, 'task_skipped')
+                    continue
+
+                if slot['error'] is not None:
+                    message = str(slot['error'])
+                    item = item_for(
+                        slot,
+                        status='failed',
+                        message=message,
+                        started_at=started_at,
+                        finished_at=utc_now(),
+                    )
+                    blocked.append(f'{item.file_name}:{item.signal}: {message}')
+                    record_terminal(slot, item, index, 'task_failed')
+                    continue
+
+                resumed = slot['resumed']
+                group = group_for_task.get(slot['identity'].task_id)
+                grouped_image = bool(
+                    group is not None
+                    and group.group_by != 'none'
+                    and image_extension
+                )
+                group_slot = (
+                    group_slot_by_id.get(group.identity.group_id)
+                    if grouped_image else None
+                )
+                needs_group_payload = bool(
+                    grouped_image
+                    and group_slot is not None
+                    and group_slot['resumed'] is None
+                )
+                if resumed is not None and not needs_group_payload:
+                    artifacts = dict(resumed.get('artifacts') or {})
+                    item = item_for(
+                        slot,
+                        status='resumed',
+                        message='manifest-proven resume',
+                        data_path=(artifacts.get('data') or {}).get('path'),
+                        image_path=(artifacts.get('image') or {}).get('path'),
+                        effective_params=dict(
+                            resumed.get('effective_facts') or {}
+                        ),
+                        artifact_facts=artifacts,
+                        started_at=started_at,
+                        finished_at=utc_now(),
+                    )
+                    if grouped_image:
+                        append_and_record(slot, item)
+                        deferred_terminals.append((index, slot, item, group))
+                    else:
+                        record_terminal(slot, item, index, 'task_resumed')
+                    continue
+
+                reservation = slot['reservation']
+                reservation_skipped = bool(
+                    reservation is not None and reservation.status == 'skipped'
+                )
+                if reservation_skipped and not needs_group_payload:
+                    existing_data = (
+                        reservation.paths.get(data_extension)
+                        if data_extension else None
+                    )
+                    existing_image = (
+                        reservation.paths.get(image_extension)
+                        if image_extension else None
+                    )
+                    item = item_for(
+                        slot,
+                        status='skipped',
+                        message='task output skipped without manifest provenance',
+                        data_path=(
+                            str(existing_data)
+                            if existing_data is not None and existing_data.exists()
+                            else None
+                        ),
+                        image_path=(
+                            str(existing_image)
+                            if existing_image is not None and existing_image.exists()
+                            else None
+                        ),
+                        started_at=started_at,
+                        finished_at=utc_now(),
+                    )
+                    if reservation.warning:
+                        item.warnings.append(reservation.warning)
+                    blocked.append(f'{item.file_name}:{item.signal}: {item.message}')
+                    record_terminal(slot, item, index, 'task_skipped')
+                    continue
+
+                try:
+                    computed = batch_compute.compute_prepared_frf(
+                        slot['prepared'], cancel_token=cancel_token,
+                    )
+                    slot['computed'] = computed
+                    published = {}
+                    render_warnings = []
+                    if reservation is not None and not reservation_skipped:
+                        writers = {}
+                        if data_extension and resumed is None:
+                            writers[data_extension] = (
+                                lambda path, frame=computed.dataframe:
+                                self._write_dataframe(frame, path)
+                            )
+                        if image_extension and group_by == 'none':
+                            singleton_group = group_for_task[
+                                slot['identity'].task_id
+                            ]
+                            singleton_series = self._frf_render_series(
+                                slot, computed, singleton_group,
+                            )
+                            writers[image_extension] = (
+                                lambda path, singleton_group=singleton_group,
+                                singleton_series=singleton_series:
+                                self._write_frf_group_image(
+                                    singleton_group,
+                                    (singleton_series,),
+                                    path,
+                                    preset=preset,
+                                    params=requested_params,
+                                    effective=effective_plan,
+                                    warnings_out=render_warnings,
+                                )
+                            )
+                        if writers:
+                            reservation.before_publish = lambda: self._check_cancel(
+                                cancel_token, 'FRF artifact publish',
+                            )
+                            published = atomic_write_set(
+                                reservation, writers,
+                            )
+                    effective_facts = self._frf_effective_facts(
+                        slot['prepared'], computed,
+                    )
+                    prior_artifacts = dict(
+                        (resumed or {}).get('artifacts') or {}
+                    )
+                    data_path = (
+                        str(published[data_extension])
+                        if data_extension in published
+                        else (prior_artifacts.get('data') or {}).get('path')
+                    )
+                    image_path = (
+                        str(published[image_extension])
+                        if image_extension in published
+                        else (prior_artifacts.get('image') or {}).get('path')
+                    )
+                    item_status = (
+                        'skipped' if reservation_skipped
+                        else 'resumed' if resumed is not None
+                        else 'done'
+                    )
+                    item = item_for(
+                        slot,
+                        status=item_status,
+                        message=(
+                            'task data skipped without manifest provenance'
+                            if reservation_skipped
+                            else 'manifest-proven resume'
+                            if resumed is not None else ''
+                        ),
+                        data_path=data_path,
+                        image_path=image_path,
+                        effective_params=effective_facts,
+                        artifact_facts=prior_artifacts,
+                        warnings=list(dict.fromkeys([
+                            *effective_plan.migration_warnings,
+                            *issue_messages_for(slot),
+                            *computed.result.warnings,
+                            *render_warnings,
+                        ])),
+                        started_at=started_at,
+                        finished_at=utc_now(),
+                    )
+                    if reservation_skipped:
+                        blocked.append(
+                            f'{item.file_name}:{item.signal}: {item.message}'
+                        )
+                        record_terminal(slot, item, index, 'task_skipped')
+                    elif grouped_image:
+                        append_and_record(slot, item)
+                        deferred_terminals.append((index, slot, item, group))
+                    else:
+                        record_terminal(
+                            slot,
+                            item,
+                            index,
+                            (
+                                'task_resumed'
+                                if item.status == 'resumed'
+                                else 'task_done'
+                            ),
+                        )
+                except _BatchCancelled as exc:
+                    cancelled = True
+                    item = item_for(
+                        slot,
+                        status='cancelled',
+                        message=str(exc),
+                        started_at=started_at,
+                        finished_at=utc_now(),
+                    )
+                    record_terminal(slot, item, index, 'task_cancelled')
+                except (BatchFrfDataError, OSError, OutputPublishRace) as exc:
+                    message = str(exc)
+                    item = item_for(
+                        slot,
+                        status='failed',
+                        message=message,
+                        started_at=started_at,
+                        finished_at=utc_now(),
+                    )
+                    blocked.append(f'{item.file_name}:{item.signal}: {message}')
+                    record_terminal(slot, item, index, 'task_failed')
+
+            if group_slots:
+                for group_slot in group_slots:
+                    group = group_slot['group']
+                    group_id = group.identity.group_id
+                    outcome = None
+                    if group_slot['error'] is not None:
+                        outcome = RenderGroupResult(
+                            group_id=group_id,
+                            status='failed',
+                            message=str(group_slot['error']),
+                        )
+                    elif cancel_token is not None and cancel_token.is_set():
+                        cancelled = True
+                        outcome = RenderGroupResult(
+                            group_id=group_id,
+                            status='cancelled',
+                            message='batch cancelled before FRF group render',
+                        )
+                    elif group_slot['resumed'] is not None:
+                        previous = group_slot['resumed']
+                        artifact = dict(previous.get('artifact') or {})
+                        outcome = RenderGroupResult(
+                            group_id=group_id,
+                            status='done',
+                            image_path=artifact.get('path'),
+                            message='manifest-proven group resume',
+                            artifact=artifact,
+                            effective_facts=dict(
+                                previous.get('effective_facts') or {}
+                            ),
+                        )
+                    else:
+                        member_slots = [
+                            slot_by_task_id[member.identity.task_id]
+                            for member in group.members
+                        ]
+                        if not all(slot.get('computed') is not None for slot in member_slots):
+                            outcome = RenderGroupResult(
+                                group_id=group_id,
+                                status='failed',
+                                message='FRF group requires every planned member payload',
+                            )
+                        elif group_slot['reservation'] is None:
+                            outcome = RenderGroupResult(
+                                group_id=group_id,
+                                status='failed',
+                                message='FRF group image was not reserved',
+                            )
+                        elif group_slot['reservation'].status == 'skipped':
+                            outcome = RenderGroupResult(
+                                group_id=group_id,
+                                status='skipped',
+                                message='group image skipped without manifest provenance',
+                                warnings=[group_slot['reservation'].warning],
+                            )
+                        else:
+                            reservation = group_slot['reservation']
+                            series = tuple(
+                                self._frf_render_series(
+                                    slot, slot['computed'], group,
+                                )
+                                for slot in member_slots
+                            )
+                            attempt_warnings = []
+                            try:
+                                reservation.before_publish = lambda: self._check_cancel(
+                                    cancel_token, 'FRF group image publish',
+                                )
+                                published = atomic_write_set(
+                                    reservation,
+                                    {
+                                        image_extension: lambda path: self._write_frf_group_image(
+                                            group,
+                                            series,
+                                            path,
+                                            preset=preset,
+                                            params=requested_params,
+                                            effective=effective_plan,
+                                            warnings_out=attempt_warnings,
+                                        ),
+                                    },
+                                )
+                                image_path = published[image_extension]
+                                artifact = artifact_facts(
+                                    image_path,
+                                    kind='image',
+                                    artifact_format=image_extension,
+                                    width=preset.outputs.resolved_image_dimensions()[0],
+                                    height=preset.outputs.resolved_image_dimensions()[1],
+                                    dpi=int(preset.outputs.image_dpi),
+                                    cancel_token=cancel_token,
+                                )
+                                outcome = RenderGroupResult(
+                                    group_id=group_id,
+                                    status=(
+                                        'cancelled'
+                                        if artifact.get('checksum_status') != 'complete'
+                                        else 'done'
+                                    ),
+                                    image_path=str(image_path),
+                                    message=(
+                                        'cancelled during group artifact checksum'
+                                        if artifact.get('checksum_status') != 'complete'
+                                        else ''
+                                    ),
+                                    warnings=list(dict.fromkeys(attempt_warnings)),
+                                    artifact=artifact,
+                                    effective_facts=dict(
+                                        series[0].effective_facts
+                                    ),
+                                )
+                            except _BatchCancelled as exc:
+                                cancelled = True
+                                outcome = RenderGroupResult(
+                                    group_id=group_id,
+                                    status='cancelled',
+                                    message=str(exc),
+                                )
+                            except (OSError, OutputPublishRace) as exc:
+                                outcome = RenderGroupResult(
+                                    group_id=group_id,
+                                    status='failed',
+                                    message=str(exc),
+                                )
+
+                    render_group_outcomes.append(outcome)
+                    if outcome.status == 'cancelled':
+                        cancelled = True
+                    elif outcome.status != 'done':
+                        blocked.append(
+                            f'{group.identity.stem}: '
+                            f'{outcome.message or outcome.status}'
+                        )
+                    if recorder is not None:
+                        try:
+                            recorder.upsert_render_group(
+                                self._render_group_manifest_entry(
+                                    group,
+                                    effective_plan,
+                                    status=outcome.status,
+                                    message=outcome.message,
+                                    warnings=outcome.warnings,
+                                    artifact=outcome.artifact,
+                                    effective_facts=outcome.effective_facts,
+                                )
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                'batch run: cannot record FRF render group %s: %s',
+                                group_id,
+                                exc,
+                                exc_info=True,
+                            )
+                            reporter.manifest_errors.append(
+                                f'cannot update batch manifest: {exc}'
+                            )
+
+                outcome_by_group = {
+                    outcome.group_id: outcome
+                    for outcome in render_group_outcomes
+                }
+                for index, slot, item, group in sorted(
+                    deferred_terminals, key=lambda entry: entry[0],
+                ):
+                    outcome = outcome_by_group[group.identity.group_id]
+                    if outcome.status == 'cancelled':
+                        item.status = 'cancelled'
+                        item.message = (
+                            outcome.message
+                            or 'batch cancelled before FRF group image completed'
+                        )
+                        item.finished_at = utc_now()
+                        reporter.record(item, slot['source_key'], slot['fd'])
+                    emit_terminal(
+                        item,
+                        index,
+                        (
+                            'task_cancelled'
+                            if item.status == 'cancelled'
+                            else 'task_resumed'
+                            if item.status == 'resumed'
+                            else 'task_done'
+                        ),
+                        image_path=outcome.image_path,
+                    )
+        finally:
+            for slot in slots:
+                reservation = slot.get('reservation')
+                if reservation is not None:
+                    reservation.release()
+            for group_slot in group_slots:
+                reservation = group_slot.get('reservation')
+                if reservation is not None:
+                    reservation.release()
+            for physical_key in tuple(self._disk_cache):
+                self._evict_physical(physical_key)
+
+        if cancelled:
+            status = 'cancelled'
+        elif blocked and not any(
+            item.status in {'done', 'resumed', 'skipped'} for item in items
+        ):
+            status = 'blocked'
+        elif blocked:
+            status = 'partial'
+        else:
+            status = 'done'
+        return finish_result(
+            status,
+            items=items,
+            blocked=blocked,
+            render_groups=render_group_outcomes,
+            run_migration_warnings=run_migration_warnings,
+        )
 
     def _run_sequential(self, preset, output_dir, tasks, render_tasks, *,
                         reporter, recorder, effective_plan,
@@ -3088,6 +4485,8 @@ class BatchRunner:
                     expected_source_id if self._loader is not None else None
                 ),
             )
+        except ImportError:
+            raise
         except Exception as exc:
             failure = _LoadFailure(str(raw_path), str(exc))
             self._disk_cache[physical_key] = failure
@@ -3137,6 +4536,8 @@ class BatchRunner:
                 physical_key,
                 expected_source_id=source_key,
             )
+        except ImportError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raw_path = self._physical_paths.get(physical_key, physical_key)
             return source_key, _LoadFailure(str(raw_path), str(exc))

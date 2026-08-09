@@ -1,7 +1,7 @@
 """Method-selector button group + dynamic per-method parameter form.
 
-Exposes exactly FOUR method buttons — ``time``, ``fft``, ``fft_time``,
-``order_time``. ``order_rpm`` was removed by upstream commit ``cfb301b``
+Exposes exactly five method buttons — ``time``, ``fft``, ``fft_time``,
+``frf``, ``order_time``. ``order_rpm`` was removed by upstream commit ``cfb301b``
 and ``order_track`` was removed 2026-04-28; ``batch.BatchRunner.SUPPORTED_METHODS``
 no longer accepts either, and ``fft_time`` was added in Wave 3a so the UI
 selection stays in lock-step with the dispatcher (see
@@ -31,8 +31,9 @@ from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 
 _METHODS: tuple[tuple[str, str], ...] = (
     ("time", "时域"),
-    ("fft", "FFT"),
-    ("fft_time", "FFT vs Time"),
+    ("fft", "频谱"),
+    ("fft_time", "时频"),
+    ("frf", "频响"),
     ("order_time", "阶次"),
 )
 
@@ -49,7 +50,7 @@ class MethodButtonGroup(QWidget):
         self._group.setExclusive(True)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
+        lay.setSpacing(4)
         for key, label in _METHODS:
             btn = QPushButton(label, self)
             btn.setCheckable(True)
@@ -64,19 +65,6 @@ class MethodButtonGroup(QWidget):
         # Default to FFT.
         self._current = "fft"
         self._buttons["fft"].setChecked(True)
-
-    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
-        super().resizeEvent(event)
-        # Equal visual cells are the product contract.  Only at the narrow
-        # 288 px pane boundary does the long label need a modestly condensed
-        # face; normal BatchSheet widths keep all four labels typographically
-        # consistent.
-        button = self._buttons["fft_time"]
-        font = button.font()
-        stretch = 80 if self.width() < 320 else 100
-        if font.stretch() != stretch:
-            font.setStretch(stretch)
-            button.setFont(font)
 
     def _on_button_clicked(self, method: str) -> None:
         """Apply a user selection only when it changes the active method."""
@@ -124,6 +112,12 @@ _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
         "window", "nfft_mode", "nfft", "t_win_s", "overlap",
         "remove_mean", "weighting",
     ),
+    "frf": (
+        "estimator", "window", "periodic_window", "t_win_s", "overlap",
+        "nfft_mode", "nfft", "detrend", "magnitude_scale",
+        "frequency_scale", "phase_mode", "coherence_threshold",
+        "fade_low_coherence",
+    ),
     "order_time": (
         "window", "nfft_mode", "nfft", "max_order", "order_res", "time_res",
         "samples_per_rev", "weighting",
@@ -164,6 +158,11 @@ class _GroupingCard(QPushButton):
     def set_counts(self, source_count: int, signal_count: int) -> None:
         self._source_count = max(0, int(source_count))
         self._signal_count = max(0, int(signal_count))
+        self.update()
+
+    def set_title(self, text: str) -> None:
+        self.setText(str(text))
+        self._title = str(text).splitlines()[0]
         self.update()
 
     def set_compact_mode(self, compact: bool) -> None:
@@ -426,6 +425,23 @@ class _GroupingCards(QWidget):
             self._buttons[mode] = button
         self.set_mode("none", emit=False)
 
+    def set_context(self, method: str) -> None:
+        labels = (
+            {
+                "none": "每对一张",
+                "source": "按来源叠加",
+                "channel": "按输入/输出对叠加",
+            }
+            if str(method) == "frf"
+            else {
+                "none": "每项单独\n每任务一张",
+                "source": "按数据源\n每文件一张",
+                "channel": "按信号\n每信号一张",
+            }
+        )
+        for mode, button in self._buttons.items():
+            button.set_title(labels[mode])
+
     def set_counts(self, source_count: int, signal_count: int) -> None:
         for button in self._buttons.values():
             button.set_counts(source_count, signal_count)
@@ -510,6 +526,14 @@ class DynamicParamForm(QWidget):
         # an extra row.
         self._labels: dict[str, str] = {
             "window": "窗函数",
+            "estimator": "估计器",
+            "periodic_window": "窗语义",
+            "detrend": "去趋势",
+            "magnitude_scale": "幅值",
+            "frequency_scale": "频率轴",
+            "phase_mode": "相位",
+            "coherence_threshold": "相干阈值",
+            "fade_low_coherence": "低相干淡化",
             "nfft_mode": "NFFT 模式",
             "nfft": "NFFT",
             "t_win_s": "窗长",
@@ -532,11 +556,26 @@ class DynamicParamForm(QWidget):
 
         self._widgets: dict[str, QWidget] = {}
 
+        self._w_estimator = QComboBox(self)
+        self._w_estimator.addItem("H1", "h1")
+        self._w_estimator.addItem("H2", "h2")
+        self._w_estimator.currentIndexChanged.connect(
+            lambda *_: self.paramsChanged.emit()
+        )
+        self._widgets["estimator"] = self._w_estimator
+
         # window — QComboBox
         self._w_window = QComboBox(self)
         self._w_window.addItems(_WINDOWS)
         self._w_window.currentIndexChanged.connect(lambda *_: self.paramsChanged.emit())
         self._widgets["window"] = self._w_window
+
+        self._w_periodic_window = QCheckBox("周期窗", self)
+        self._w_periodic_window.setChecked(True)
+        self._w_periodic_window.toggled.connect(
+            lambda *_: self.paramsChanged.emit()
+        )
+        self._widgets["periodic_window"] = self._w_periodic_window
 
         self._w_nfft_mode = QComboBox(self)
         self._w_nfft_mode.addItem("Auto", "auto")
@@ -564,6 +603,55 @@ class DynamicParamForm(QWidget):
         self._w_nfft.setValue(1024)
         self._w_nfft.valueChanged.connect(lambda *_: self.paramsChanged.emit())
         self._widgets["nfft"] = self._w_nfft
+
+        self._w_detrend = QComboBox(self)
+        self._w_detrend.addItem("每段去均值", "constant")
+        self._w_detrend.addItem("不去趋势", "none")
+        self._w_detrend.currentIndexChanged.connect(
+            lambda *_: self.paramsChanged.emit()
+        )
+        self._widgets["detrend"] = self._w_detrend
+
+        self._w_magnitude_scale = QComboBox(self)
+        self._w_magnitude_scale.addItem("dB", "db")
+        self._w_magnitude_scale.addItem("线性", "linear")
+        self._w_magnitude_scale.currentIndexChanged.connect(
+            lambda *_: self.paramsChanged.emit()
+        )
+        self._widgets["magnitude_scale"] = self._w_magnitude_scale
+
+        self._w_frequency_scale = QComboBox(self)
+        self._w_frequency_scale.addItem("对数", "log")
+        self._w_frequency_scale.addItem("线性", "linear")
+        self._w_frequency_scale.currentIndexChanged.connect(
+            lambda *_: self.paramsChanged.emit()
+        )
+        self._widgets["frequency_scale"] = self._w_frequency_scale
+
+        self._w_phase_mode = QComboBox(self)
+        self._w_phase_mode.addItem("展开", "unwrapped")
+        self._w_phase_mode.addItem("包裹", "wrapped")
+        self._w_phase_mode.currentIndexChanged.connect(
+            lambda *_: self.paramsChanged.emit()
+        )
+        self._widgets["phase_mode"] = self._w_phase_mode
+
+        self._w_coherence_threshold = no_buttons(CompactDoubleSpinBox(self))
+        self._w_coherence_threshold.setRange(0.0, 1.0)
+        self._w_coherence_threshold.setDecimals(2)
+        self._w_coherence_threshold.setSingleStep(0.05)
+        self._w_coherence_threshold.setValue(0.8)
+        self._w_coherence_threshold.valueChanged.connect(
+            lambda *_: self.paramsChanged.emit()
+        )
+        self._widgets["coherence_threshold"] = self._w_coherence_threshold
+
+        self._w_fade_low_coherence = QCheckBox("开启", self)
+        self._w_fade_low_coherence.setChecked(True)
+        self._w_fade_low_coherence.toggled.connect(
+            lambda *_: self.paramsChanged.emit()
+        )
+        self._widgets["fade_low_coherence"] = self._w_fade_low_coherence
 
         self._w_t_win_s = no_buttons(CompactDoubleSpinBox(self))
         self._w_t_win_s.setRange(0.001, 3600.0)
@@ -741,6 +829,8 @@ class DynamicParamForm(QWidget):
         if method not in _METHOD_FIELDS:
             return
         self._current = method
+        self._configure_nfft_mode_for_method(method)
+        self._grouping_cards.set_context(method)
         self._render_for(method)
         if emit:
             # Init-sync per the conditional-visibility-init-sync lesson: do
@@ -763,7 +853,25 @@ class DynamicParamForm(QWidget):
         return out
 
     def _sync_nfft_mode(self, *_args) -> None:
-        self._w_nfft.setEnabled(self._w_nfft_mode.currentData() == "fixed")
+        self._w_nfft.setEnabled(
+            self._w_nfft_mode.currentData() in {"fixed", "manual"}
+        )
+
+    def _configure_nfft_mode_for_method(self, method: str) -> None:
+        current = str(self._w_nfft_mode.currentData() or "auto")
+        manual = current in {"fixed", "manual"}
+        previous = self._w_nfft_mode.blockSignals(True)
+        try:
+            self._w_nfft_mode.clear()
+            self._w_nfft_mode.addItem("自动" if method == "frf" else "Auto", "auto")
+            self._w_nfft_mode.addItem(
+                "手动" if method == "frf" else "Fixed",
+                "manual" if method == "frf" else "fixed",
+            )
+            self._w_nfft_mode.setCurrentIndex(1 if manual else 0)
+        finally:
+            self._w_nfft_mode.blockSignals(previous)
+        self._sync_nfft_mode()
 
     def _sync_avg_mode(self, *_args) -> None:
         self._w_avg_overlap.setEnabled(self._w_avg_mode.currentText() != "单帧")
@@ -890,12 +998,18 @@ class DynamicParamForm(QWidget):
                     params["x_origin"] = origin
             return params
         params: dict = {}
+        if "estimator" in self.visible_field_names():
+            params["estimator"] = str(self._w_estimator.currentData() or "h1")
         if "window" in self.visible_field_names():
             params["window"] = self._w_window.currentText()
+        if "periodic_window" in self.visible_field_names():
+            params["periodic_window"] = bool(self._w_periodic_window.isChecked())
         if "nfft" in self.visible_field_names():
             mode = str(self._w_nfft_mode.currentData() or "auto")
             params["nfft_mode"] = mode
-            params["nfft"] = int(self._w_nfft.value()) if mode == "fixed" else None
+            params["nfft"] = (
+                int(self._w_nfft.value()) if mode in {"fixed", "manual"} else None
+            )
         if "t_win_s" in self.visible_field_names():
             params["t_win_s"] = float(self._w_t_win_s.value())
         if "max_order" in self.visible_field_names():
@@ -920,11 +1034,44 @@ class DynamicParamForm(QWidget):
             )
         if "samples_per_rev" in self.visible_field_names():
             params["samples_per_rev"] = int(self._w_samples_per_rev.value())
+        if "detrend" in self.visible_field_names():
+            params["detrend"] = str(self._w_detrend.currentData() or "constant")
+        if "magnitude_scale" in self.visible_field_names():
+            params["magnitude_scale"] = str(
+                self._w_magnitude_scale.currentData() or "db"
+            )
+        if "frequency_scale" in self.visible_field_names():
+            params["frequency_scale"] = str(
+                self._w_frequency_scale.currentData() or "log"
+            )
+        if "phase_mode" in self.visible_field_names():
+            params["phase_mode"] = str(
+                self._w_phase_mode.currentData() or "unwrapped"
+            )
+        if "coherence_threshold" in self.visible_field_names():
+            params["coherence_threshold"] = float(
+                self._w_coherence_threshold.value()
+            )
+        if "fade_low_coherence" in self.visible_field_names():
+            params["fade_low_coherence"] = bool(
+                self._w_fade_low_coherence.isChecked()
+            )
         return params
 
     def apply_params(self, params: dict) -> None:
         if not params:
             return
+        for key, combo in (
+            ("estimator", self._w_estimator),
+            ("detrend", self._w_detrend),
+            ("magnitude_scale", self._w_magnitude_scale),
+            ("frequency_scale", self._w_frequency_scale),
+            ("phase_mode", self._w_phase_mode),
+        ):
+            if key in params:
+                index = combo.findData(str(params[key]).lower())
+                if index >= 0:
+                    combo.setCurrentIndex(index)
         for key, combo in (
             ("render_group_by", self._w_render_group_by),
             ("render_layout", self._w_render_layout),
@@ -962,7 +1109,9 @@ class DynamicParamForm(QWidget):
             auto = raw_mode in {"auto", "自动"} or raw_nfft in {
                 None, "", "auto", "自动",
             }
-            mode = "auto" if auto else "fixed"
+            mode = "auto" if auto else (
+                "manual" if self._current == "frf" else "fixed"
+            )
             index = self._w_nfft_mode.findData(mode)
             if index >= 0:
                 self._w_nfft_mode.setCurrentIndex(index)
@@ -995,6 +1144,19 @@ class DynamicParamForm(QWidget):
                 pass
         if "remove_mean" in params:
             self._w_remove_mean.setChecked(bool(params["remove_mean"]))
+        if "periodic_window" in params:
+            self._w_periodic_window.setChecked(bool(params["periodic_window"]))
+        if "coherence_threshold" in params:
+            try:
+                self._w_coherence_threshold.setValue(
+                    float(params["coherence_threshold"])
+                )
+            except (TypeError, ValueError):
+                pass
+        if "fade_low_coherence" in params:
+            self._w_fade_low_coherence.setChecked(
+                bool(params["fade_low_coherence"])
+            )
         if "weighting" in params:
             txt = str(params["weighting"])
             idx = self._w_weighting.findText(txt)

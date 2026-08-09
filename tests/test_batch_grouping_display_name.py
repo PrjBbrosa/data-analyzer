@@ -110,3 +110,123 @@ def test_channel_group_preserves_legal_channel_text_exactly(channel):
 
     assert group.display_name == channel
     assert group.group_key == channel
+
+
+def _frf_task(source, group, input_channel, output_channel, token):
+    pair_label = f"{output_channel} / {input_channel}"
+    return RenderTask(
+        source_key=token,
+        channel=pair_label,
+        input_channel=input_channel,
+        output_channel=output_channel,
+        identity=TaskOutputIdentity(
+            task_id=f"task-{token}",
+            source_identity=source,
+            group_identity=group,
+            channel_identity=pair_label,
+            stem=f"stem-{token}",
+            input_channel_identity=input_channel,
+            output_channel_identity=output_channel,
+        ),
+    )
+
+
+def test_frf_source_grouping_means_same_source_and_input_multiple_outputs():
+    groups = group_render_tasks(
+        (
+            _frf_task("/data/a.mf4", "g", "cmd", "actual", "a1"),
+            _frf_task("/data/a.mf4", "g", "cmd", "angle", "a2"),
+            _frf_task("/data/a.mf4", "g", "other", "actual", "a3"),
+        ),
+        {"render_group_by": "source", "frequency_scale": "log"},
+    )
+
+    assert [len(group.members) for group in groups] == [2, 1]
+    assert {member.input_channel for member in groups[0].members} == {"cmd"}
+    assert all(len(member.identity.input_channel_identity) > 0 for group in groups for member in group.members)
+
+
+def test_frf_channel_grouping_means_same_directional_pair_across_sources():
+    groups = group_render_tasks(
+        (
+            _frf_task("/data/a.mf4", "g1", "cmd", "actual", "a"),
+            _frf_task("/data/b.mf4", "g2", "cmd", "actual", "b"),
+            _frf_task("/data/b.mf4", "g2", "actual", "cmd", "reverse"),
+        ),
+        {"render_group_by": "channel", "phase_mode": "unwrapped"},
+    )
+
+    assert sorted(len(group.members) for group in groups) == [1, 2]
+    paired = next(group for group in groups if len(group.members) == 2)
+    assert {(member.input_channel, member.output_channel) for member in paired.members} == {
+        ("cmd", "actual"),
+    }
+    assert all(len(member) == 4 for member in paired.identity.members)
+
+
+def test_frf_render_group_identity_includes_render_params_not_member_order():
+    tasks = (
+        _frf_task("/data/a.mf4", "g1", "cmd", "actual", "a"),
+        _frf_task("/data/b.mf4", "g2", "cmd", "actual", "b"),
+    )
+    first = group_render_tasks(
+        tasks,
+        {"render_group_by": "channel", "coherence_threshold": 0.8},
+    )[0]
+    reversed_group = group_render_tasks(
+        tuple(reversed(tasks)),
+        {"render_group_by": "channel", "coherence_threshold": 0.8},
+    )[0]
+    changed = group_render_tasks(
+        tasks,
+        {"render_group_by": "channel", "coherence_threshold": 0.5},
+    )[0]
+
+    assert first.identity == reversed_group.identity
+    assert first.identity.group_id != changed.identity.group_id
+
+
+def test_frf_render_group_identity_includes_output_byte_settings():
+    tasks = (
+        _frf_task("/data/a.mf4", "g1", "cmd", "actual", "a"),
+        _frf_task("/data/b.mf4", "g2", "cmd", "actual", "b"),
+    )
+    first = group_render_tasks(
+        tasks,
+        {"render_group_by": "channel"},
+        outputs={"image_width": 1920, "image_dpi": 144},
+    )[0]
+    changed = group_render_tasks(
+        tasks,
+        {"render_group_by": "channel"},
+        outputs={"image_width": 2560, "image_dpi": 144},
+    )[0]
+
+    assert first.identity.group_id != changed.identity.group_id
+
+
+def test_render_group_rejects_mixed_single_channel_and_frf_tasks():
+    with pytest.raises(ValueError, match="cannot mix"):
+        group_render_tasks(
+            (
+                _task("/data/a.mf4", "default", "acc", "single"),
+                _frf_task("/data/a.mf4", "default", "cmd", "acc", "pair"),
+            ),
+            {"render_group_by": "none"},
+        )
+
+
+def test_render_task_derives_pair_only_from_matching_identity():
+    identity = _frf_task(
+        "/data/a.mf4", "default", "cmd", "acc", "pair",
+    ).identity
+    derived = RenderTask(source_key="a", channel="acc / cmd", identity=identity)
+    assert (derived.input_channel, derived.output_channel) == ("cmd", "acc")
+    with pytest.raises(ValueError, match="do not match"):
+        RenderTask(
+            source_key="a",
+            channel="acc / other",
+            identity=identity,
+            input_channel="other",
+            output_channel="acc",
+        )

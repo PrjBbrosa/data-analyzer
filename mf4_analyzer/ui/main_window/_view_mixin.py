@@ -90,6 +90,10 @@ class ViewMixin:
         xrange_changed = getattr(canvas, 'xrange_changed', None)
         if xrange_changed is not None:
             xrange_changed.connect(self._on_secondary_canvas_xrange_changed)
+            xrange_changed.connect(
+                lambda lo, hi, c=canvas:
+                self._on_frf_source_time_xrange_changed(c, lo, hi)
+            )
         canvas._view_range_connected = True
 
     def _capture_current_view(self):
@@ -190,12 +194,12 @@ class ViewMixin:
         """Alt+i: switch the view of whatever section is currently shown.
 
         The time section keeps the cross-view pairing path (``_switch_view``);
-        analysis sections (fft/fft_time/order) route to their own manager via
+        analysis sections (fft/fft_time/frf/order) route to their own manager via
         ``_on_analysis_switch``. Both already guard idx range + no-op on no
         change, so out-of-range Alt keys are safe.
         """
         mode = self.chart_stack.current_mode()
-        if mode in ('fft', 'fft_time', 'order'):
+        if mode in ('fft', 'fft_time', 'frf', 'order'):
             self._on_analysis_switch(mode, idx)
         else:
             self._switch_view(idx)
@@ -326,7 +330,9 @@ class ViewMixin:
             return
         if not self._confirm_view_delete(self.view_manager.get(idx).name):
             return
+        deleted_view_id = self.view_manager.get(idx).view_id
         self._capture_current_view()
+        self._on_frf_source_time_view_deleted(deleted_view_id)
         self.view_manager.delete_view(idx)
 
     def _confirm_view_delete(self, name):

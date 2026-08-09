@@ -129,6 +129,7 @@ def test_surface_mode_buttons_use_readable_centered_type():
         r'Toolbar QPushButton\[segment="time"\],\s*'
         r'Toolbar QPushButton\[segment="fft"\],\s*'
         r'Toolbar QPushButton\[segment="fft_time"\],\s*'
+        r'Toolbar QPushButton\[segment="frf"\],\s*'
         r'Toolbar QPushButton\[segment="order"\]\s*\{(?P<body>[^}]*)\}',
         qss,
         flags=re.S,

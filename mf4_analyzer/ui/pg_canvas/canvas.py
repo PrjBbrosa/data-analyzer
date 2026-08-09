@@ -103,7 +103,11 @@ from mf4_analyzer.ui.pg_canvas.fonts import (
 )
 from mf4_analyzer.ui.pg_canvas.annotations import AnnotationManager
 from mf4_analyzer.ui.pg_canvas.cursor import CursorController
-from mf4_analyzer.ui.pg_canvas.ticks_math import _quantize_range_key, _frame_to_nice
+from mf4_analyzer.ui.pg_canvas.ticks_math import (
+    _quantize_range_key,
+    _frame_to_nice,
+    pad_y_extent,
+)
 from mf4_analyzer.ui.pg_canvas.tick_density import TickDensityController
 from mf4_analyzer.ui.pg_canvas.viewbox import (
     _ModifierWheelViewBox,  # noqa: F401
@@ -1708,13 +1712,16 @@ class TimeDomainCanvasPG(QWidget):
     def _frame_handle_y(self, handle, extent, n_y, *, frame_to_nice):
         """Pad ``extent`` (lo, hi), optionally snap to nice ticks, and apply it
         via ``set_ylim`` (which disables that ViewBox's Y auto-range). Returns
-        True on success."""
-        lo, hi = extent
-        if hi <= lo:
-            pad = abs(lo) * 0.05 or 1.0
-        else:
-            pad = (hi - lo) * 0.05
-        lo, hi = lo - pad, hi + pad
+        True on success.
+
+        The padding lives in ``ticks_math.pad_y_extent`` because the constant
+        case is subtler than the ``hi <= lo`` test that used to be inlined
+        here: a channel computed from two others is constant in intent but not
+        bit-exact, and auto-framing onto that ~1e-16 relative residue is what
+        produced 18-character Y tick labels and a left axis pinned six times
+        too wide. See that function for the mechanism.
+        """
+        lo, hi = pad_y_extent(*extent)
         if frame_to_nice:
             try:
                 lo, hi, _ticks = _frame_to_nice(lo, hi, n_y)
@@ -2220,11 +2227,10 @@ class TimeDomainCanvasPG(QWidget):
         hi = float(window.max())
         if not (np.isfinite(lo) and np.isfinite(hi)):
             return False
-        if hi <= lo:
-            pad = abs(lo) * 0.05 or 1.0
-        else:
-            pad = (hi - lo) * 0.05
-        lo, hi = lo - pad, hi + pad
+        # Same padding contract as ``_frame_handle_y`` — including the
+        # residue-only-span collapse, without which a computed channel that is
+        # flat across the visible window frames Y onto its own float64 noise.
+        lo, hi = pad_y_extent(lo, hi)
         if frame_to_nice:
             lo, hi, _ticks = _frame_to_nice(lo, hi, n_y)
         try:
