@@ -34,9 +34,15 @@ class FrfCoordinator(QObject):
     """Coordinate per-pane FRF requests over the shared section FIFO.
 
     ``AnalysisJobService`` remains the only thread and queue owner.  A newer
-    request invalidates only the same pane's generation; it never calls the
-    service's section-wide ``cancel``/``replace`` operations, so requests for
-    other panes remain queued and complete normally.
+    request always invalidates the originating pane's generation, so a stale
+    completion can never render or reach the cache.
+
+    The service's ``replace``/``cancel`` operations are section-wide, so they
+    are used only in the one case where "section-wide" and "this pane" mean
+    the same thing: nothing else the coordinator still tracks is outstanding
+    (see ``_may_replace_section``).  Whenever another pane holds queued or
+    in-flight work, the request is a plain append and the older job is
+    suppressed on completion instead of being cancelled.
     """
 
     render_requested = pyqtSignal(object, object, bool)
@@ -94,6 +100,10 @@ class FrfCoordinator(QObject):
         if not callable(job):
             raise TypeError("FRF candidate job must be callable")
 
+        # Decide before this request joins the ledger: ``_pending`` must show
+        # only what *other* work the section still owes.
+        replace = self._may_replace_section()
+
         self._next_job_id += 1
         job_id = self._next_job_id
         ctx["_coordinator_job_id"] = job_id
@@ -105,9 +115,30 @@ class FrfCoordinator(QObject):
             self._SECTION,
             job,
             ctx=ctx,
-            replace=False,
+            replace=replace,
         )
         return True
+
+    def _may_replace_section(self) -> bool:
+        """Whether a section-level replace can only hit superseded work.
+
+        ``_begin_pane_request`` has already dropped the calling pane's own
+        contexts, so a non-empty ``_pending`` means another pane still owns a
+        queued or in-flight job -- ``cancel('frf')`` would discard it and its
+        user-visible result, which spec 8.4 forbids.
+
+        An empty ``_pending`` with a live section is the opposite case: every
+        remaining worker is one whose result this coordinator has already
+        committed to discarding (superseded by this very request, or dropped
+        by ``invalidate_pane``/``invalidate_fid``/``invalidate_all``).
+        Cancelling stops a full wasted compute and lets the replacement start
+        immediately instead of queueing behind it.  ``is_running`` gates the
+        idle case so a cold section is a plain append with nothing to cancel.
+        """
+
+        if self._pending:
+            return False
+        return bool(self._job_service.is_running(self._SECTION))
 
     def invalidate_fid(self, fid: str) -> None:
         """Invalidate cache and suppress late jobs touching either endpoint."""
