@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....analysis_presets import list_builtin_presets
+from ....list_text import split_list_text
 from ...analysis_preset_slots import preset_slot_bus, read_slot
 from .method_buttons import DynamicParamForm, MethodButtonGroup
 from .chart_statistics_panel import ChartStatisticsPanel
@@ -459,8 +460,10 @@ class AnalysisPanel(QWidget):
         if self.current_method() != "fft" or self._source_interval_mode.currentData() != "manual":
             return None
         try:
-            lo_text, hi_text = (item.strip() for item in self._source_interval_edit.text().split(","))
-            lo, hi = float(lo_text), float(hi_text)
+            parts = split_list_text(self._source_interval_edit.text())
+            if len(parts) != 2:
+                return None
+            lo, hi = float(parts[0]), float(parts[1])
         except (TypeError, ValueError):
             return None
         return (lo, hi) if math.isfinite(lo) and math.isfinite(hi) and lo < hi else None
@@ -468,13 +471,13 @@ class AnalysisPanel(QWidget):
     def source_time_range_error(self) -> str:
         if self.current_method() != "fft" or self._source_interval_mode.currentData() != "manual":
             return ""
-        parts = tuple(item.strip() for item in self._source_interval_edit.text().split(","))
-        if len(parts) != 2:
-            return "源数据区间：请输入两个数字"
+        parts = split_list_text(self._source_interval_edit.text())
+        if len(parts) != 2 or not all(parts):
+            return "源数据区间：请输入两个逗号分隔的数字（中英文均可）"
         try:
             lo, hi = (float(item) for item in parts)
         except ValueError:
-            return "源数据区间：请输入两个数字"
+            return "源数据区间：请输入两个逗号分隔的数字（中英文均可）"
         if not math.isfinite(lo) or not math.isfinite(hi):
             return "源数据区间：请输入有限数字"
         if lo >= hi:

@@ -52,6 +52,7 @@ from mf4_analyzer.acquisition_capture.session import (
 )
 from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
 from mf4_analyzer.acquisition_capture.writer import Mf4WriterError
+from mf4_analyzer.list_text import split_list_text
 
 
 _DATATYPE_PAYLOAD_BYTES = {
@@ -79,7 +80,7 @@ _DATATYPE_PAYLOAD_BYTES = {
 
 
 def _parse_signals(spec: str) -> tuple[SelectedMeasurement, ...]:
-    names = [tok.strip() for tok in spec.split(",") if tok.strip()]
+    names = [tok for tok in split_list_text(spec) if tok]
     if not names:
         raise argparse.ArgumentTypeError("--signals requires at least one name")
     return tuple(SelectedMeasurement(name=n) for n in names)

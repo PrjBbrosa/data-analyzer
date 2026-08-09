@@ -146,6 +146,8 @@ lesson by default.
 | [Deferred Analysis Restore Uses Stable View Identity](deferred-analysis-restore-uses-stable-view-identity.md) | Adding deferred project restore or asynchronous compute for analysis | See lesson |
 | [Text Actions Must Not Reuse Icon-Only QSS Roles](pyqt-ui/2026-08-09-text-action-role-avoids-icon-qss-height.md) | Adding or reviewing a textual button in a compact Qt form that uses a | See lesson |
 | [Batch Picker Layout Uses The Current Stack Page And Readable Empty State](batch-current-stack-page-and-empty-picker-height.md) | Changing a Batch stacked field that swaps compact and multi-row pages, or the signal-picker popup's empty/list geometry. | See lesson |
+| [Batch Filter Fields Share One Form Column](batch-filter-fields-share-form-column.md) | Editing batch dialog form rows that wrap short combo/spin editors, | See lesson |
+| [Comma List Inputs Accept Chinese Separators](comma-list-inputs-accept-chinese-separators.md) | Adding or editing a user-typed comma-separated field (slice | See lesson |
 
 ## Selection Rules
 

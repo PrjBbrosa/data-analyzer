@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....signal.filters import FilterSpec
+from ...inspector_sections._helpers import _fit_field, _pair_field
 from ...widgets.pill_switch import PillSwitch
 from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 
@@ -18,18 +19,6 @@ _KIND_LABEL_TO_KEY = {
     "带阻": "bandstop",
 }
 _KIND_KEY_TO_LABEL = {value: key for key, value in _KIND_LABEL_TO_KEY.items()}
-
-
-def _field(widget: QWidget, max_width: int | None = None) -> QWidget:
-    host = QWidget()
-    lay = QHBoxLayout(host)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(6)
-    if max_width is not None:
-        widget.setMaximumWidth(max_width)
-    lay.addWidget(widget)
-    lay.addStretch(1)
-    return host
 
 
 class BatchFilterPanel(QWidget):
@@ -72,10 +61,14 @@ class BatchFilterPanel(QWidget):
         form.setHorizontalSpacing(6)
         form.setVerticalSpacing(4)
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # macOS defaults to FieldsStayAtSizeHint, which parks each editor at
+        # its own sizeHint and makes 类型 / 截止 / 阶数 look jagged. Match the
+        # time-domain FilterPanel: expand every field to one shared column.
+        form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
         self.combo_kind = QComboBox(self._settings)
         self.combo_kind.addItems(tuple(_KIND_LABEL_TO_KEY))
-        form.addRow("类型", _field(self.combo_kind, 120))
+        form.addRow("类型", _fit_field(self.combo_kind))
 
         self.spin_cutoff = no_buttons(CompactDoubleSpinBox(self._settings))
         self.spin_cutoff.setDecimals(1)
@@ -83,7 +76,7 @@ class BatchFilterPanel(QWidget):
         self.spin_cutoff.setSuffix(" Hz")
         self.spin_cutoff.setValue(100.0)
         self._single_label = QLabel("截止", self._settings)
-        self._single_row = _field(self.spin_cutoff, 120)
+        self._single_row = _fit_field(self.spin_cutoff)
         form.addRow(self._single_label, self._single_row)
 
         self.spin_cutoff_lo = no_buttons(CompactDoubleSpinBox(self._settings))
@@ -97,20 +90,13 @@ class BatchFilterPanel(QWidget):
         self.spin_cutoff_hi.setSuffix(" Hz")
         self.spin_cutoff_hi.setValue(2000.0)
         self._band_label = QLabel("频段", self._settings)
-        self._band_row = QWidget(self._settings)
-        band_lay = QHBoxLayout(self._band_row)
-        band_lay.setContentsMargins(0, 0, 0, 0)
-        band_lay.setSpacing(6)
-        for spin in (self.spin_cutoff_lo, self.spin_cutoff_hi):
-            spin.setMaximumWidth(112)
-            band_lay.addWidget(spin)
-        band_lay.addStretch(1)
+        self._band_row = _pair_field(self.spin_cutoff_lo, "–", self.spin_cutoff_hi)
         form.addRow(self._band_label, self._band_row)
 
         self.combo_order = QComboBox(self._settings)
         self.combo_order.addItems(("2", "4", "6", "8"))
         self.combo_order.setCurrentText("4")
-        form.addRow("阶数", _field(self.combo_order, 120))
+        form.addRow("阶数", _fit_field(self.combo_order))
 
         root.addWidget(self._settings)
 

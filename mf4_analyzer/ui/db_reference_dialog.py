@@ -47,6 +47,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import db_reference
+from ..list_text import split_list_text
 from .widgets.db_reference import ScientificReferenceSpinBox
 from .widgets.pill_switch import PillSwitch, PillSwitchLabel
 
@@ -68,9 +69,10 @@ _custom_id_seq = count(1)
 
 def _split_aliases(text):
     """Split a "单位 / 别名" cell into a non-empty, stripped alias list.
-    Accepts ``,`` or the full-width ``，`` as separators."""
-    parts = [p.strip() for p in text.replace("，", ",").split(",")]
-    return [p for p in parts if p]
+
+    Accepts ASCII/Chinese commas and semicolons (see ``split_list_text``).
+    """
+    return [p for p in split_list_text(text) if p]
 
 
 @dataclass

@@ -204,6 +204,7 @@ def test_quickref_covers_batch_drawer():
     assert memory.gesture == "恢复默认"
     slice_export = next(r for r in group.rows if r.desc == "导出切片")
     assert "最多 4" in slice_export.sub
+    assert "中英文" in slice_export.sub
     assert "FFT-时间" in slice_export.sub and "阶次" in slice_export.sub
     open_folder = next(r for r in group.rows if "完成后" in r.desc)
     assert "输出目录" in open_folder.desc

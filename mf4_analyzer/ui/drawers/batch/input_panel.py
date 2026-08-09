@@ -36,6 +36,7 @@ from ....io.source_adapters import (
     canonical_source_path,
     stable_source_id,
 )
+from ....list_text import split_list_text
 from ....ui_kit.menus import apply_rounded_menu_chrome
 from ....ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...widgets.compact_spinbox import CompactDoubleSpinBox
@@ -1189,7 +1190,7 @@ class InputPanel(QWidget):
         text = self._time_edit.text().strip()
         if not text:
             return None
-        parts = [p.strip() for p in text.split(",")]
+        parts = split_list_text(text)
         if len(parts) != 2:
             return None
         try:
@@ -1204,13 +1205,13 @@ class InputPanel(QWidget):
         text = self._time_edit.text().strip()
         if not text:
             return ""
-        parts = [p.strip() for p in text.split(",")]
+        parts = split_list_text(text)
         if len(parts) != 2 or not all(parts):
-            return "时间范围：请输入两个以逗号分隔的数字"
+            return "时间范围：请输入两个逗号分隔的数字（中英文均可）"
         try:
             lo, hi = float(parts[0]), float(parts[1])
         except ValueError:
-            return "时间范围：请输入两个以逗号分隔的数字"
+            return "时间范围：请输入两个逗号分隔的数字（中英文均可）"
         if not (math.isfinite(lo) and math.isfinite(hi)):
             return "时间范围：起点和终点必须是有限数"
         if lo >= hi:

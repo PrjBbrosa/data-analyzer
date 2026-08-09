@@ -279,7 +279,7 @@ def test_target_policy_uses_a_full_width_segmented_choice_at_288px(qapp, qtbot):
         assert combo.isHidden() is True
         assert choice.isVisibleTo(panel) is True
         assert choice.height() == 32
-        assert choice.mapTo(panel, choice.rect().topLeft()).x() == 71
+        assert choice.mapTo(panel, choice.rect().topLeft()).x() == 72
         assert choice.mapTo(panel, choice.rect().topRight()).x() == 275
         assert all(
             button.width() >= button.fontMetrics().horizontalAdvance(button.text())
@@ -540,6 +540,31 @@ def test_invalid_time_range_text_blocks_run_with_field_error(
     assert sheet.is_runnable() is False
     assert "源数据区间" in sheet._time_range_error()
     assert message_part in sheet._time_range_error()
+
+
+@pytest.mark.parametrize("text", ("2.0，5.0", "2.0、5.0", "2.0；5.0"))
+def test_source_interval_accepts_chinese_separators(qtbot, text):
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet._analysis_panel.set_method("fft")
+    sheet._analysis_panel._source_interval_mode.setCurrentIndex(1)
+    sheet._analysis_panel._source_interval_edit.setText(text)
+
+    assert sheet._time_range_error() == ""
+    assert sheet.time_range() == (2.0, 5.0)
+
+
+def test_input_panel_time_range_accepts_chinese_separators(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel(None, files={})
+    qtbot.addWidget(panel)
+    panel._time_edit.setText("1.5，3.5")
+
+    assert panel.time_range_error() == ""
+    assert panel.time_range() == (1.5, 3.5)
 
 
 def test_empty_time_range_remains_valid_full_segment(qtbot, tmp_path):
@@ -1256,6 +1281,24 @@ def test_batch_filter_row_uses_panel_style_switch(qtbot):
 
     panel._filter_panel._enable_switch.setChecked(True)
     assert panel._filter_panel._settings.isVisibleTo(panel) is True
+
+
+def test_batch_filter_editors_share_one_field_column(qtbot):
+    """类型、截止和阶数 must share one field-column left/right edge."""
+    from mf4_analyzer.ui.drawers.batch.filter_panel import BatchFilterPanel
+
+    panel = BatchFilterPanel()
+    qtbot.addWidget(panel)
+    panel.resize(360, 260)
+    panel._enable_switch.setChecked(True)
+    panel.show()
+    qtbot.waitExposed(panel)
+
+    editors = (panel.combo_kind, panel.spin_cutoff, panel.combo_order)
+    left_edges = {editor.geometry().left() for editor in editors}
+    right_edges = {editor.geometry().right() for editor in editors}
+    assert len(left_edges) == 1
+    assert len(right_edges) == 1
 
 
 def test_batch_filter_time_output_toggles_only_visible_for_time(qtbot):

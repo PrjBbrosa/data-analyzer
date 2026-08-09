@@ -138,6 +138,21 @@ def test_slice_panel_comma_separated_positions_parse_to_floats(qtbot):
     }
 
 
+@pytest.mark.parametrize(
+    "text",
+    ("5，15，25", "5、15、25", "5， 15, 25", "5;15；25"),
+)
+def test_slice_panel_accepts_chinese_and_mixed_separators(qtbot, text):
+    panel = _make_panel(qtbot)
+    panel._enable_switch.setChecked(True)
+    panel._positions_edit.setText(text)
+
+    assert panel.positions_error() == ""
+    assert panel.get_params()["slice"]["positions"] == [5.0, 15.0, 25.0]
+    # Stored recipe stays ASCII-normalized floats; raw editor text is untouched.
+    assert panel._positions_edit.text() == text
+
+
 def test_slice_panel_disabled_get_params_is_empty(qtbot):
     panel = _make_panel(qtbot)
     panel._positions_edit.setText("5, 15, 25")

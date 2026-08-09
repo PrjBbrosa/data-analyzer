@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ....list_text import split_list_text
 from ...widgets.pill_switch import PillSwitch
 
 
@@ -103,7 +104,7 @@ class SlicePanel(QWidget):
         settings_lay.addWidget(form_host)
 
         self._note = QLabel(
-            "ⓘ 逗号分隔，最多 4 个；一次只切一个维度", self._settings,
+            "ⓘ 中英文逗号均可，最多 4 个；一次只切一个维度", self._settings,
         )
         self._note.setWordWrap(True)
         settings_lay.addWidget(self._note)
@@ -160,12 +161,8 @@ class SlicePanel(QWidget):
         self._refresh_summary()
 
     def _parse_positions(self) -> list[float]:
-        text = self._positions_edit.text().strip()
-        if not text:
-            return []
         values: list[float] = []
-        for item in text.split(","):
-            item = item.strip()
+        for item in split_list_text(self._positions_edit.text()):
             if not item:
                 continue
             try:
@@ -182,13 +179,13 @@ class SlicePanel(QWidget):
         text = self._positions_edit.text().strip()
         if not text:
             return "位置：切片已启用，请填写至少一个位置"
-        parts = [item.strip() for item in text.split(",")]
+        parts = split_list_text(text)
         if any(not item for item in parts):
-            return "位置：请输入以逗号分隔的数字"
+            return "位置：请输入逗号分隔的数字（中英文均可）"
         try:
             values = [float(item) for item in parts]
         except ValueError:
-            return "位置：请输入以逗号分隔的数字"
+            return "位置：请输入逗号分隔的数字（中英文均可）"
         if not all(math.isfinite(value) for value in values):
             return "位置：请输入有限数字"
         if self._axis_combo.currentData() == "y" and any(
