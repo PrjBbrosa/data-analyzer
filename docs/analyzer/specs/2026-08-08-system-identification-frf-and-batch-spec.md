@@ -142,16 +142,21 @@ tooltip、Inspector 组标题、导出报告、帮助文档和数据列中。内
 
 ### 5.3 Inspector 目标布局
 
+（2026-08-09 定版：按 `61053293` 实施后的 as-built 卡片结构描述，替代本节最初的
+八项线性列表；“先选通道、再挑预设”更贴近实际操作流，经真机截图验收。）
+
 由上至下：
 
-1. `预设`：稳健 / 低频 / 快速 / 自定义；
-2. `通道映射`：输入、输出、交换按钮、来源说明；
-3. `分析范围`：全范围 / 使用当前时域范围 / 手动范围；
-4. `估计器`：H1 / H2；
-5. `分段`：窗口、段长秒数、重叠率、NFFT、每段去均值；
-6. `显示`：幅值 dB/线性、频率 log/linear、相位展开/包裹、相干阈值、低相干淡化；
-7. 主按钮 `计算频响`；次按钮 `在时域查看`；
-8. 有效事实：实际 Fs、频率分辨率、完整段数、有效时间范围、时间抖动和告警。
+1. 标题 `系统辨识 · 频响（FRF）`；
+2. 信号映射卡（`frfSignalCard`）：输入、被辨识系统流向图、输出、交换按钮、
+   `分析范围`（全范围 / 使用当前时域范围 / 手动范围）与时间范围控件；
+3. 辨识参数卡（`frfParamsCard`）：预设条（稳健 / 低频 / 快速 / 自定义）、
+   `估计器` H1/H2、窗口与周期语义、段长秒数、重叠率、NFFT、每段去均值、
+   validation 提示、主按钮 `计算频响`、次按钮 `在时域查看`；
+4. 显示卡（`frfDisplayCard`）：幅值 dB/线性、频率 log/linear、相位展开/包裹、
+   相干阈值、低相干淡化；
+5. 有效事实区：实际 Fs、频率分辨率、完整段数、有效时间范围、时间抖动和告警
+   （含 `FrfResult.warnings`，须常驻可见而非仅 toast/状态栏）。
 
 输入/输出控件显示 `来源名 · 通道名 [单位]`，内部值始终为 `(fid, channel)`。
 同名通道不得以 display name 作身份。
@@ -495,6 +500,13 @@ per-pane 手动触发，单击「计算频响」只提交当前 pane，因此：
 - 首版 coordinator 一律普通入队并依赖 per-pane generation 抑制同 pane 旧结果，不调用
   service 级 `replace=True`/`cancel(section)`。旧计算不会被抢占，只是完成后不落缓存、
   不渲染；selective cancellation 属于后续独立的 service 能力。
+- （2026-08-09 as-built，优化 Task O3 已取代上一条的“一律普通入队”）条件式取消已
+  实现：`request()` 丢弃发起 pane 自己的旧 pending 后，当且仅当 `_pending` 为空
+  **且** `is_running('frf')` 为真（确实存在可取消的物理旧任务）时以 `replace=True`
+  提交，立即抢占同 pane 的在途旧计算；否则维持普通入队 + per-pane 抑制。跨 pane
+  存在任何 pending 时永不触发 section 级取消。被取消任务经 `cancel_check` 走
+  failed 路径，service 的 generation 检查拦下迟到信号，coordinator
+  `_take_current_pending` 兜底。
 
 ### 8.5 参数变更与重算
 
