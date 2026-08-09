@@ -20,12 +20,18 @@ def test_chart_statistics_panel_round_trips_only_when_enabled(qtbot):
     panel.show()
 
     # Main switch is a PillSwitch (drop-in for the old QCheckBox), matching the
-    # 预处理/切片 cards; the in-card multi-select checkboxes stay QCheckBox.
+    # 预处理/切片 cards; the in-card multi-select checkboxes stay QCheckBox
+    # (chip-styled) and auto_range stays the boolean state owner behind a
+    # SegmentedChoice.
     assert isinstance(panel.enabled, PillSwitch)
     assert not isinstance(panel.enabled, QCheckBox)
     assert isinstance(panel.maximum, QCheckBox)
     assert isinstance(panel.minimum, QCheckBox)
     assert isinstance(panel.mean, QCheckBox)
+    assert isinstance(panel.auto_range, QCheckBox)
+    assert panel.auto_range.isHidden() is True
+    assert panel._range_mode_choice.bound_combo() is panel._range_mode_combo
+    assert panel._range_mode_choice.isVisibleTo(panel) is False  # settings collapsed
 
     assert panel.get_params() == {}
     # Off by default -> settings area collapses entirely, same as filter/slice.
@@ -34,23 +40,37 @@ def test_chart_statistics_panel_round_trips_only_when_enabled(qtbot):
 
     panel.enabled.setChecked(True)
     assert not panel._settings.isHidden()
+    assert panel._range_mode_choice.isVisibleTo(panel) is True
+    assert tuple(b.text() for b in panel._range_mode_choice.buttons()) == (
+        "自动", "手动",
+    )
     assert all(
         check.isVisibleTo(panel)
         for check in (panel.maximum, panel.minimum, panel.mean)
     )
     assert panel._summary_note.text() == "全时段 · 最大/最小/平均"
     assert panel.auto_range.isChecked()
+    assert panel._range_mode_combo.currentIndex() == 0
     assert panel.range_summary.text() == "全时段"
+    assert panel.range_summary.isVisibleTo(panel)
     assert panel.x_min.buttonSymbols() == QAbstractSpinBox.NoButtons
     assert panel.x_max.buttonSymbols() == QAbstractSpinBox.NoButtons
     assert panel.x_min.property("compact") is True
     assert panel.x_max.property("compact") is True
 
+    # Manual mode: spins expand below the segmented control (same range_row).
     panel.auto_range.setChecked(False)
+    assert panel._range_mode_combo.currentIndex() == 1
     assert panel.x_min.isVisibleTo(panel)
     assert panel.x_max.isVisibleTo(panel)
     assert panel.range_row.isAncestorOf(panel.x_min)
     assert panel.range_row.isAncestorOf(panel.x_max)
+    assert panel.range_summary.isVisibleTo(panel) is False
+    # UI path: clicking the 手动 segment flips the same auto_range owner.
+    panel.auto_range.setChecked(True)
+    panel._range_mode_choice.buttons()[1].click()
+    assert panel.auto_range.isChecked() is False
+    assert panel._range_mode_combo.currentIndex() == 1
     panel.x_min.setValue(-12.5)
     panel.x_max.setValue(88.0)
     panel.minimum.setChecked(False)
@@ -168,7 +188,8 @@ def test_analysis_panel_shows_statistics_for_time_and_merges_recipe(qtbot):
     )
 
     assert panel._chart_statistics.isVisibleTo(panel)
-    assert "rack (mm)" in panel._chart_statistics.context.text()
+    assert panel._chart_statistics.context.text() == "rack"
+    assert panel._chart_statistics._context_unit.text() == "mm"
     assert panel.get_params()["chart_statistics"]["enabled"] is True
 
     panel.set_method("fft")

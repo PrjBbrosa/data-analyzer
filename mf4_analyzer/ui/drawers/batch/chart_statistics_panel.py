@@ -69,6 +69,7 @@ class ChartStatisticsPanel(QWidget):
         mode_row.setContentsMargins(0, 0, 0, 0)
         mode_row.setSpacing(8)
         self._range_label = QLabel("统计区间", self.range_row)
+        self._range_label.setObjectName("BatchChartStatisticsRowLabel")
         self._range_label.setFixedWidth(_LABEL_COL_WIDTH)
         self._range_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         mode_row.addWidget(self._range_label, 0, Qt.AlignVCenter)
@@ -123,8 +124,12 @@ class ChartStatisticsPanel(QWidget):
             spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._min_label = QLabel("最小", self._manual_range_page)
         self._max_label = QLabel("最大", self._manual_range_page)
+        for lab in (self._min_label, self._max_label):
+            lab.setObjectName("BatchChartStatisticsSpinLab")
         self._range_dash = QLabel("—", self._manual_range_page)
+        self._range_dash.setObjectName("BatchChartStatisticsDash")
         self._range_unit = QLabel("", self._manual_range_page)
+        self._range_unit.setObjectName("BatchChartStatisticsUnit")
         manual_range_lay.addWidget(self._min_label)
         manual_range_lay.addWidget(self.x_min, 1)
         manual_range_lay.addWidget(self._range_dash)
@@ -137,12 +142,13 @@ class ChartStatisticsPanel(QWidget):
         range_outer.addLayout(value_row)
         settings_lay.addWidget(self.range_row)
 
-        # ----- 统计项目：仍是 QCheckBox（接线不变），外观做成 chip -----
+        # ----- 统计项目：仍是 QCheckBox（接线不变），外观做成 HTML .mchip -----
         metrics = QWidget(self._settings)
         metrics_lay = QHBoxLayout(metrics)
         metrics_lay.setContentsMargins(0, 0, 0, 0)
-        metrics_lay.setSpacing(8)
+        metrics_lay.setSpacing(6)
         metrics_label = QLabel("统计项目", metrics)
+        metrics_label.setObjectName("BatchChartStatisticsRowLabel")
         metrics_label.setFixedWidth(_LABEL_COL_WIDTH)
         metrics_lay.addWidget(metrics_label, 0, Qt.AlignVCenter)
         self.maximum = QCheckBox("最大值", metrics)
@@ -150,6 +156,7 @@ class ChartStatisticsPanel(QWidget):
         self.mean = QCheckBox("样本平均", metrics)
         for check in (self.maximum, self.minimum, self.mean):
             check.setObjectName("BatchChartStatisticsMetric")
+            check.setAttribute(Qt.WA_StyledBackground, True)
             check.setChecked(True)
             check.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
             metrics_lay.addWidget(check)
@@ -159,9 +166,11 @@ class ChartStatisticsPanel(QWidget):
         self.note = QLabel(
             "ⓘ 同一 X 对应多个 Y 时，按采集路径分别统计", self._settings,
         )
+        self.note.setObjectName("BatchChartStatisticsNote")
         self.note.setWordWrap(True)
         settings_lay.addWidget(self.note)
 
+        # HTML .field：前缀 X · 主文案 · 右侧单位（避免「X 时间 X：秒」叠字）
         self._context_field = QWidget(self._settings)
         self._context_field.setObjectName("BatchChartStatisticsContextField")
         self._context_field.setAttribute(Qt.WA_StyledBackground, True)
@@ -176,6 +185,9 @@ class ChartStatisticsPanel(QWidget):
         self.context.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.context.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         context_lay.addWidget(self.context, 1)
+        self._context_unit = QLabel("", self._context_field)
+        self._context_unit.setObjectName("BatchChartStatisticsContextUnit")
+        context_lay.addWidget(self._context_unit, 0)
         settings_lay.addWidget(self._context_field)
         root.addWidget(self._settings)
 
@@ -250,14 +262,15 @@ class ChartStatisticsPanel(QWidget):
         unit_text = str(unit or "").strip()
         if x_source == "channel":
             channel_text = x_channel or "请选择通道"
-            self.context.setText(
-                f"自定义 X：{channel_text} ({unit_text})"
-                if unit_text else f"自定义 X：{channel_text}"
-            )
+            self.context.setText(channel_text)
+            self._context_unit.setText(unit_text)
             self.range_summary.setText("全范围")
         else:
-            self.context.setText("时间 X：秒")
+            display_unit = "秒" if unit_text.lower() in ("", "s", "sec", "秒") else unit_text
+            self.context.setText("时间")
+            self._context_unit.setText(display_unit)
             self.range_summary.setText("全时段")
+            unit_text = display_unit
         self._range_unit.setText(unit_text)
         self._refresh_summary()
 

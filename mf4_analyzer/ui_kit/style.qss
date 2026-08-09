@@ -531,6 +531,112 @@ QLabel#BatchOptionalEyebrowLabel {
     letter-spacing: 0.4px;
     background-color: transparent;
 }
+/* 图内统计 · 方案 A（对齐 HTML 原型）：淡蓝 chip + 圆点，不是实心勾选框 */
+QLabel#BatchChartStatisticsRowLabel {
+    color: #556378;
+    font-size: 10px;
+    font-weight: 600;
+    background-color: transparent;
+}
+QLabel#BatchChartStatisticsSpinLab {
+    color: #94a3b8;
+    font-size: 10px;
+    font-weight: 700;
+    background-color: transparent;
+}
+QLabel#BatchChartStatisticsDash,
+QLabel#BatchChartStatisticsUnit {
+    color: #94a3b8;
+    font-size: 10px;
+    background-color: transparent;
+}
+QLabel#BatchChartStatisticsNote {
+    color: #64748b;
+    font-size: 10px;
+    background-color: transparent;
+}
+QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric {
+    min-height: 26px;
+    max-height: 26px;
+    spacing: 5px;
+    padding: 0 9px 0 7px;
+    border: 1px solid #dbe4ef;
+    border-radius: 999px;
+    background-color: #ffffff;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+}
+QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric:hover {
+    border-color: #c8d4e3;
+    color: #334155;
+}
+QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric:checked {
+    border-color: #cfe0f8;
+    background-color: #eaf2ff;
+    color: #0f56bd;
+    font-weight: 700;
+}
+QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric:disabled {
+    color: #94a3b8;
+    background-color: #f8fafc;
+    border-color: #e2e8f0;
+}
+/* 压过全局 16px 蓝底白勾，做成 HTML .mchip .dot */
+QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric::indicator {
+    width: 8px;
+    height: 8px;
+    border: none;
+    border-radius: 4px;
+    background-color: #94a3b8;
+    image: none;
+}
+QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric::indicator:hover {
+    border: none;
+    background-color: #64748b;
+    image: none;
+}
+QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric::indicator:checked {
+    border: none;
+    background-color: #5b8fd4;
+    image: none;
+}
+QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric::indicator:disabled {
+    border: none;
+    background-color: #cbd5e1;
+    image: none;
+}
+QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric::indicator:checked:disabled {
+    border: none;
+    background-color: #cbd5e1;
+    image: none;
+}
+QLabel#BatchChartStatisticsRangeSummary {
+    color: #64748b;
+    font-size: 10px;
+}
+QWidget#BatchChartStatisticsContextField {
+    min-height: 28px;
+    border: 1px solid #dbe4ef;
+    border-radius: 7px;
+    background-color: #ffffff;
+}
+QLabel#BatchChartStatisticsContextPrefix {
+    color: #94a3b8;
+    font-size: 10px;
+    font-weight: 700;
+    background-color: transparent;
+}
+QLabel#BatchChartStatisticsContext {
+    color: #26344a;
+    font-size: 10px;
+    background-color: transparent;
+}
+QLabel#BatchChartStatisticsContextUnit {
+    color: #94a3b8;
+    font-size: 10px;
+    background-color: transparent;
+}
 QWidget#BatchCompactFooter {
     border-top: 1px solid #e2e8f0;
     background-color: #fbfcfe;

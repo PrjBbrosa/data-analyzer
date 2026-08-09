@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TraceLab — 图内统计 UI 方案对比</title>
+<style>
+  :root {
+    --ink: #172033;
+    --ink-2: #26344a;
+    --muted: #64748b;
+    --quiet: #94a3b8;
+    --line: #dbe4ef;
+    --line-strong: #c8d4e3;
+    --surface: #ffffff;
+    --surface-2: #fafbfd;
+    --surface-3: #f7f9fc;
+    --track: #eef2f7;
+    --blue: #1769e0;
+    --blue-2: #0f56bd;
+    --blue-soft: #eaf2ff;
+    --blue-line: #cfe0f8;
+    --green: #0ea875;
+    --radius: 8px;
+    --mono: "SF Mono", "Menlo", "Cascadia Mono", ui-monospace, monospace;
+    --sans: "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 12% 0%, #fff 0%, transparent 36%),
+      radial-gradient(circle at 90% 12%, rgba(23,105,224,.06), transparent 28%),
+      #e8eef5;
+    font: 13px/1.45 var(--sans);
+  }
+
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px 22px 48px;
+  }
+
+  header.hero {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 22px;
+  }
+  header.hero h1 {
+    margin: 0;
+    font-size: 22px;
+    letter-spacing: -.02em;
+    color: var(--ink);
+  }
+  header.hero p {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgba(255,255,255,.8);
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .chip b { color: var(--ink-2); font-weight: 700; }
+
+  .picker {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+    margin: 18px 0 16px;
+  }
+  @media (max-width: 900px) {
+    .picker { grid-template-columns: 1fr 1fr; }
+  }
+  .picker label {
+    display: grid;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #fff;
+    cursor: pointer;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .picker label:hover { border-color: var(--blue-line); }
+  .picker input { position: absolute; opacity: 0; pointer-events: none; }
+  .picker label:has(input:checked) {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 3px rgba(23,105,224,.12);
+    background: linear-gradient(#fff, #f7fbff);
+  }
+  .picker .k { font-size: 11px; font-weight: 800; color: var(--blue); }
+  .picker .t { font-size: 12px; font-weight: 700; color: var(--ink-2); }
+  .picker .d { font-size: 11px; color: var(--muted); }
+
+  .stage {
+    display: grid;
+    grid-template-columns: 340px minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .stage { grid-template-columns: 1fr; }
+  }
+
+  .preview-shell {
+    border: 1px solid #c3cfdd;
+    border-radius: 14px;
+    background: #f4f7fb;
+    box-shadow: 0 18px 40px rgba(34, 50, 73, .14);
+    overflow: hidden;
+  }
+  .preview-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #fbfcfe;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .preview-bar strong { color: var(--ink-2); }
+  .preview-body {
+    padding: 16px 14px 18px;
+    background:
+      linear-gradient(180deg, #f7f9fc, #eef3f8);
+  }
+  .panel-slot {
+    width: 288px;
+    margin: 0 auto;
+  }
+
+  .notes {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #fff;
+    padding: 14px 16px;
+  }
+  .notes h2 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: var(--ink-2);
+  }
+  .notes ul {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .notes li { margin: 6px 0; }
+  .notes .tag {
+    display: inline-block;
+    margin-right: 4px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--blue-soft);
+    color: var(--blue-2);
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  /* Shared panel primitives — TraceLab batch tokens */
+  .card {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    padding: 0;
+    overflow: hidden;
+  }
+  .summary {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0;
+    padding: 7px 9px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface-2);
+  }
+  .summary .title {
+    color: var(--ink-2);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .summary .note {
+    flex: 1;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pill {
+    width: 36px;
+    height: 20px;
+    border-radius: 999px;
+    background: var(--blue);
+    position: relative;
+    flex: 0 0 auto;
+  }
+  .pill::after {
+    content: "";
+    position: absolute;
+    top: 2px; right: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .18);
+  }
+
+  .body { padding: 8px 2px 2px; display: grid; gap: 8px; }
+  .row {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+  }
+  .row > .lab {
+    color: var(--ink-2);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .seg {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    gap: 0;
+    height: 28px;
+    padding: 2px;
+    border: 1px solid var(--line-strong);
+    border-radius: 7px;
+    background: var(--track);
+  }
+  .seg button {
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--muted);
+    font: 700 11px/1 var(--sans);
+    cursor: pointer;
+  }
+  .seg button.on {
+    background: #fff;
+    border-color: var(--blue-line);
+    color: var(--blue);
+  }
+
+  .checks { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }
+  .check {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--ink-2);
+    font-size: 11px;
+  }
+  .box {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    background: var(--blue);
+    color: #fff;
+    display: grid; place-items: center;
+    font-size: 10px; font-weight: 800;
+    line-height: 1;
+  }
+
+  .hint {
+    color: var(--muted);
+    font-size: 10px;
+    display: flex;
+    gap: 5px;
+    align-items: flex-start;
+  }
+  .hint .i {
+    flex: 0 0 auto;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 1px solid #cbd5e1;
+    color: #64748b;
+    display: grid; place-items: center;
+    font-size: 9px; font-weight: 800;
+    margin-top: 1px;
+  }
+
+  .ctx {
+    color: var(--muted);
+    font-size: 10px;
+  }
+  .ctx b { color: var(--ink-2); font-weight: 600; }
+  .ctx .mono {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--ink-2);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .mchip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 9px 0 7px;
+    border: 1px solid var(--blue-line);
+    border-radius: 999px;
+    background: var(--blue-soft);
+    color: var(--blue-2);
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .mchip.off {
+    border-color: var(--line);
+    background: #fff;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .mchip .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: currentColor; opacity: .55;
+  }
+
+  .field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: #fff;
+  }
+  .field .mono {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--ink-2);
+  }
+  .field .unit {
+    color: var(--quiet);
+    font-size: 10px;
+    flex: 0 0 auto;
+  }
+
+  .manual {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto 1fr auto;
+    gap: 6px;
+    align-items: center;
+  }
+  .manual[hidden] { display: none !important; }
+  .spin {
+    height: 28px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: #fff;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    color: var(--ink-2);
+    font-size: 11px;
+    min-width: 0;
+  }
+  .spin-lab {
+    color: var(--quiet);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .dash { color: var(--quiet); }
+  .range-block {
+    display: grid;
+    gap: 6px;
+  }
+  .auto-caption {
+    color: var(--muted);
+    font-size: 10px;
+  }
+  .auto-caption[hidden] { display: none !important; }
+
+  /* Option-specific shells */
+  .opt { display: none; }
+  body[data-opt="now"] #opt-now,
+  body[data-opt="a"] #opt-a,
+  body[data-opt="b"] #opt-b,
+  body[data-opt="c"] #opt-c,
+  body[data-opt="d"] #opt-d { display: block; }
+
+  body[data-opt="now"] #note-now,
+  body[data-opt="a"] #note-a,
+  body[data-opt="b"] #note-b,
+  body[data-opt="c"] #note-c,
+  body[data-opt="d"] #note-d { display: block; }
+  .note-block { display: none; }
+
+  /* Option C denser */
+  .c-body { gap: 10px; }
+  .c-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .c-metrics button {
+    height: 30px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: #fff;
+    color: var(--muted);
+    font: 700 11px/1 var(--sans);
+    cursor: pointer;
+  }
+  .c-metrics button.on {
+    border-color: var(--blue-line);
+    background: var(--blue-soft);
+    color: var(--blue);
+  }
+
+  /* Option D: folded context into summary + cleaner hierarchy */
+  .d-body { padding-top: 10px; gap: 10px; }
+  .d-block {
+    display: grid;
+    gap: 6px;
+  }
+  .d-block .lab {
+    color: var(--quiet);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+</style>
+</head>
+<body data-opt="a">
+  <div class="page">
+    <header class="hero">
+      <h1>图内统计 · UI 对比方案</h1>
+      <p>
+        基于当前批处理面板语言（摘要条 + PillSwitch、SegmentedChoice、蓝白强调色），
+        对「图内统计」给 4 个可落地优化方向。语义不变：开关、区间、三项指标、路径说明、X 上下文。
+      </p>
+      <div class="meta">
+        <span class="chip"><b>对照宽</b> 288px Batch 栏</span>
+        <span class="chip"><b>现有问题</b> 区间像勾选、项目碎、上下文纯文字</span>
+        <span class="chip"><b>约束</b> 不发明采样率 / 保持中文工程用语</span>
+      </div>
+    </header>
+
+    <div class="picker" role="radiogroup" aria-label="方案选择">
+      <label>
+        <input type="radio" name="opt" value="now">
+        <span class="k">NOW</span>
+        <span class="t">现状复刻</span>
+        <span class="d">复选框堆叠，偏系统默认</span>
+      </label>
+      <label>
+        <input type="radio" name="opt" value="a" checked>
+        <span class="k">A · 推荐</span>
+        <span class="t">分段 + 指标芯片</span>
+        <span class="d">与 Linear/dB、切片维度一致</span>
+      </label>
+      <label>
+        <input type="radio" name="opt" value="b">
+        <span class="k">B</span>
+        <span class="t">分段 + 保留勾选</span>
+        <span class="d">改动最小，只修区间语义</span>
+      </label>
+      <label>
+        <input type="radio" name="opt" value="c">
+        <span class="k">C</span>
+        <span class="t">三格指标块</span>
+        <span class="d">更像工具条，信息更齐</span>
+      </label>
+      <label>
+        <input type="radio" name="opt" value="d">
+        <span class="k">D</span>
+        <span class="t">上下文进字段条</span>
+        <span class="d">通道名可读性优先</span>
+      </label>
+    </div>
+
+    <div class="stage">
+      <div class="preview-shell">
+        <div class="preview-bar">
+          <span>批处理 · 分析列预览</span>
+          <strong id="preview-name">方案 A</strong>
+        </div>
+        <div class="preview-body">
+          <div class="panel-slot">
+
+            <!-- NOW -->
+            <div class="opt" id="opt-now">
+              <div class="summary">
+                <span class="title">图内统计</span>
+                <span class="note">全范围 · 最大/最小/平均</span>
+                <span class="pill" title="开"></span>
+              </div>
+              <div class="body">
+                <div class="row">
+                  <div class="lab">统计区间</div>
+                  <div class="checks">
+                    <span class="check"><span class="box">✓</span>自动</span>
+                    <span class="ctx">全范围</span>
+                  </div>
+                </div>
+                <div class="row">
+                  <div class="lab">统计项目</div>
+                  <div class="checks">
+                    <span class="check"><span class="box">✓</span>最大值</span>
+                    <span class="check"><span class="box">✓</span>最小值</span>
+                    <span class="check"><span class="box">✓</span>样本平均</span>
+                  </div>
+                </div>
+                <div class="hint"><span class="i">i</span><span>同一 X 对应多个 Y 时，按采集路径分别统计</span></div>
+                <div class="ctx">自定义 X：Rte_PA_mAtMotorTorque_xds16 (Nm)</div>
+              </div>
+            </div>
+
+            <!-- A -->
+            <div class="opt" id="opt-a">
+              <div class="summary">
+                <span class="title">图内统计</span>
+                <span class="note range-summary-note">全范围 · 最大/最小/平均</span>
+                <span class="pill" title="开"></span>
+              </div>
+              <div class="body">
+                <div class="row" style="align-items:start">
+                  <div class="lab" style="padding-top:7px">统计区间</div>
+                  <div class="range-block" data-range>
+                    <div class="seg" aria-label="统计区间">
+                      <button type="button" class="on" data-mode="auto">自动</button>
+                      <button type="button" data-mode="manual">手动</button>
+                    </div>
+                    <div class="auto-caption" data-auto-caption>当前：全范围（跟图 X）</div>
+                    <div class="manual" data-manual hidden>
+                      <span class="spin-lab">最小</span>
+                      <div class="spin">0</div>
+                      <span class="dash">—</span>
+                      <span class="spin-lab">最大</span>
+                      <div class="spin">120</div>
+                      <span class="unit" style="color:var(--quiet);font-size:10px">Nm</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="row" style="align-items:start">
+                  <div class="lab" style="padding-top:6px">统计项目</div>
+                  <div class="chips">
+                    <button type="button" class="mchip"><span class="dot"></span>最大值</button>
+                    <button type="button" class="mchip"><span class="dot"></span>最小值</button>
+                    <button type="button" class="mchip"><span class="dot"></span>样本平均</button>
+                  </div>
+                </div>
+                <div class="hint"><span class="i">i</span><span>同一 X 对应多个 Y 时，按采集路径分别统计</span></div>
+                <div class="field" title="自定义 X 上下文">
+                  <span style="color:var(--quiet);font-size:10px;font-weight:700;flex:0 0 auto">X</span>
+                  <span class="mono">Rte_PA_mAtMotorTorque_xds16</span>
+                  <span class="unit">Nm</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- B -->
+            <div class="opt" id="opt-b">
+              <div class="summary">
+                <span class="title">图内统计</span>
+                <span class="note range-summary-note">全范围 · 最大/最小/平均</span>
+                <span class="pill" title="开"></span>
+              </div>
+              <div class="body">
+                <div class="row" style="align-items:start">
+                  <div class="lab" style="padding-top:7px">统计区间</div>
+                  <div class="range-block" data-range>
+                    <div class="seg">
+                      <button type="button" class="on" data-mode="auto">自动</button>
+                      <button type="button" data-mode="manual">手动</button>
+                    </div>
+                    <div class="auto-caption" data-auto-caption>当前：全范围</div>
+                    <div class="manual" data-manual hidden>
+                      <span class="spin-lab">最小</span>
+                      <div class="spin">0</div>
+                      <span class="dash">—</span>
+                      <span class="spin-lab">最大</span>
+                      <div class="spin">120</div>
+                      <span class="unit" style="color:var(--quiet);font-size:10px">Nm</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="row">
+                  <div class="lab">统计项目</div>
+                  <div class="checks">
+                    <span class="check"><span class="box">✓</span>最大值</span>
+                    <span class="check"><span class="box">✓</span>最小值</span>
+                    <span class="check"><span class="box">✓</span>样本平均</span>
+                  </div>
+                </div>
+                <div class="hint"><span class="i">i</span><span>同一 X 对应多个 Y 时，按采集路径分别统计</span></div>
+                <div class="ctx"><b>自定义 X</b> · <span class="mono">Rte_PA_mAtMotorTorque_xds16</span> · Nm</div>
+              </div>
+            </div>
+
+            <!-- C -->
+            <div class="opt" id="opt-c">
+              <div class="summary">
+                <span class="title">图内统计</span>
+                <span class="note range-summary-note">全范围 · 最大/最小/平均</span>
+                <span class="pill" title="开"></span>
+              </div>
+              <div class="body c-body">
+                <div class="d-block" data-range>
+                  <div class="lab">统计区间</div>
+                  <div class="seg">
+                    <button type="button" class="on" data-mode="auto">自动</button>
+                    <button type="button" data-mode="manual">手动</button>
+                  </div>
+                  <div class="auto-caption" data-auto-caption>当前：全范围（跟图 X）</div>
+                  <div class="manual" data-manual hidden>
+                    <span class="spin-lab">最小</span>
+                    <div class="spin">0</div>
+                    <span class="dash">—</span>
+                    <span class="spin-lab">最大</span>
+                    <div class="spin">120</div>
+                    <span class="unit" style="color:var(--quiet);font-size:10px">Nm</span>
+                  </div>
+                </div>
+                <div class="d-block">
+                  <div class="lab">统计项目</div>
+                  <div class="c-metrics">
+                    <button type="button" class="on">最大</button>
+                    <button type="button" class="on">最小</button>
+                    <button type="button" class="on">平均</button>
+                  </div>
+                </div>
+                <div class="hint"><span class="i">i</span><span>同一 X 对应多个 Y 时，按采集路径分别统计</span></div>
+                <div class="field">
+                  <span style="color:var(--quiet);font-size:10px;font-weight:700">自定义 X</span>
+                  <span class="mono">Rte_PA_mAtMotorTorque_xds16</span>
+                  <span class="unit">Nm</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- D -->
+            <div class="opt" id="opt-d">
+              <div class="summary">
+                <span class="title">图内统计</span>
+                <span class="note range-summary-note">全范围 · 三项 · 通道 X</span>
+                <span class="pill" title="开"></span>
+              </div>
+              <div class="body d-body">
+                <div class="field" style="height:32px">
+                  <span style="color:var(--quiet);font-size:10px;font-weight:700">X</span>
+                  <span class="mono">Rte_PA_mAtMotorTorque_xds16</span>
+                  <span class="unit">Nm</span>
+                </div>
+                <div class="row" style="align-items:start">
+                  <div class="lab" style="padding-top:7px">区间</div>
+                  <div class="range-block" data-range>
+                    <div class="seg">
+                      <button type="button" class="on" data-mode="auto">自动</button>
+                      <button type="button" data-mode="manual">手动</button>
+                    </div>
+                    <div class="auto-caption" data-auto-caption>当前：全范围</div>
+                    <div class="manual" data-manual hidden>
+                      <span class="spin-lab">最小</span>
+                      <div class="spin">0</div>
+                      <span class="dash">—</span>
+                      <span class="spin-lab">最大</span>
+                      <div class="spin">120</div>
+                      <span class="unit" style="color:var(--quiet);font-size:10px">Nm</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="row" style="align-items:start">
+                  <div class="lab" style="padding-top:6px">项目</div>
+                  <div class="chips">
+                    <button type="button" class="mchip"><span class="dot"></span>最大</button>
+                    <button type="button" class="mchip"><span class="dot"></span>最小</button>
+                    <button type="button" class="mchip"><span class="dot"></span>平均</button>
+                  </div>
+                </div>
+                <div class="hint"><span class="i">i</span><span>多 Y 同 X 时按采集路径分别统计</span></div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <aside class="notes">
+        <div class="note-block" id="note-now">
+          <h2>现状问题</h2>
+          <ul>
+            <li><span class="tag">语义</span>「自动」用复选框，看起来像可多选，实际是区间模式。</li>
+            <li><span class="tag">节奏</span>三个勾选横向挤在一起，和上方摘要条、切片/滤波卡不统一。</li>
+            <li><span class="tag">上下文</span>自定义 X 长通道名纯文本，窄栏易读性差。</li>
+          </ul>
+        </div>
+        <div class="note-block" id="note-a">
+          <h2>方案 A · 推荐</h2>
+          <ul>
+            <li><span class="tag">一致</span>区间改 SegmentedChoice（自动 / 手动），与幅值单位、切片维度同族。</li>
+            <li><span class="tag">手动范围</span>点「手动」后，在分段<strong>正下方</strong>展开「最小 — 最大 + 单位」双 spin（点预览里的「手动」可看）。</li>
+            <li><span class="tag">为何不并排</span>288px 栏里分段已占满字段列；并排放 spin 会挤成现状那种碎行。</li>
+            <li><span class="tag">可扫</span>指标改成可点 chip；X 上下文收入字段条。</li>
+          </ul>
+        </div>
+        <div class="note-block" id="note-b">
+          <h2>方案 B · 最小改动</h2>
+          <ul>
+            <li>只把区间换成分段；统计项目仍用复选框。</li>
+            <li>适合想先修「自动像勾选」这个最大违和，不动指标交互习惯。</li>
+            <li>上下文略加强分隔，但仍偏朴素。</li>
+          </ul>
+        </div>
+        <div class="note-block" id="note-c">
+          <h2>方案 C · 工具条感</h2>
+          <ul>
+            <li>区间、指标都改成等宽分段块；标签上移成小节 caption。</li>
+            <li>三项指标并排更整齐，窄栏下仍稳定。</li>
+            <li>比 A 更“硬”，实现仍是 SegmentedChoice / 三按钮互不互斥组。</li>
+          </ul>
+        </div>
+        <div class="note-block" id="note-d">
+          <h2>方案 D · 上下文优先</h2>
+          <ul>
+            <li>把自定义 X 提到设置区第一行字段条，摘要里只留短状态。</li>
+            <li>适合通道名很长、用户常要确认「统计绑在哪个 X」的场景。</li>
+            <li>文案更短（区间/项目），信息密度略高。</li>
+          </ul>
+        </div>
+        <h2 style="margin-top:16px">建议</h2>
+        <ul>
+          <li>产品默认走 <b>A</b>：和刚落地的分段控件一致，视觉提升最明显。</li>
+          <li>若只想快修语义违和，可先上 <b>B</b>，指标 chip 留二期。</li>
+          <li>手动区间仍用现有双 spin（最小—最大 + 单位），各方案切换到「手动」时共用同一套。</li>
+        </ul>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const names = {
+      now: "现状",
+      a: "方案 A · 推荐",
+      b: "方案 B",
+      c: "方案 C",
+      d: "方案 D",
+    };
+    const preview = document.getElementById("preview-name");
+    document.querySelectorAll('input[name="opt"]').forEach((input) => {
+      input.addEventListener("change", () => {
+        if (!input.checked) return;
+        document.body.dataset.opt = input.value;
+        preview.textContent = names[input.value];
+      });
+    });
+
+    function setRangeMode(block, mode) {
+      const auto = mode === "auto";
+      const caption = block.querySelector("[data-auto-caption]");
+      const manual = block.querySelector("[data-manual]");
+      const opt = block.closest(".opt");
+      const note = opt?.querySelector(".range-summary-note");
+      if (caption) caption.hidden = !auto;
+      if (manual) manual.hidden = auto;
+      if (note) {
+        const isD = opt?.id === "opt-d";
+        note.textContent = auto
+          ? (isD ? "全范围 · 三项 · 通道 X" : "全范围 · 最大/最小/平均")
+          : (isD ? "0–120 Nm · 三项 · 通道 X" : "0–120 Nm · 最大/最小/平均");
+      }
+    }
+
+    document.querySelectorAll("[data-range]").forEach((block) => {
+      const seg = block.querySelector(".seg");
+      if (!seg) return;
+      seg.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-mode]");
+        if (!btn) return;
+        seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === btn));
+        setRangeMode(block, btn.dataset.mode);
+      });
+    });
+
+    document.querySelectorAll(".chips").forEach((group) => {
+      group.addEventListener("click", (e) => {
+        const btn = e.target.closest("button.mchip");
+        if (!btn) return;
+        btn.classList.toggle("off");
+      });
+    });
+    document.querySelectorAll(".c-metrics").forEach((group) => {
+      group.addEventListener("click", (e) => {
+        const btn = e.target.closest("button");
+        if (!btn) return;
+        btn.classList.toggle("on");
+      });
+    });
+  </script>
+</body>
+</html>
