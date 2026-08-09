@@ -38,7 +38,9 @@ _SPECTROGRAM_METHODS = frozenset({"fft_time", "order_time"})
 class _PresetCard(QPushButton):
     """Two-level preset card while keeping ``text()`` as the slot name."""
 
-    _TITLE_POINT_SIZE = 10
+    # Match the denser single-analysis preset strip while retaining Batch's
+    # larger click target and parameter summary.
+    _TITLE_POINT_SIZE = 9
     _SUMMARY_POINT_SIZE = 8
     _NORMAL_HEIGHT = 66
     _COMPACT_HEIGHT = 40
@@ -84,7 +86,7 @@ class _PresetCard(QPushButton):
             option.state |= QStyle.State_On
         self.style().drawControl(QStyle.CE_PushButton, option, painter, self)
         rect = QRectF(self.rect()).adjusted(8, 5, -8, -5)
-        painter.setPen(QColor("#0f56bd" if self.isChecked() else "#172033"))
+        painter.setPen(QColor("#0b73e7" if self.isChecked() else "#111827"))
         painter.setFont(QFont(
             self.font().family(), self._TITLE_POINT_SIZE, QFont.Bold,
         ))

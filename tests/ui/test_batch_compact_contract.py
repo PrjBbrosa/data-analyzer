@@ -272,6 +272,10 @@ def test_batch_preset_card_qss_matches_normal_and_compact_outer_heights():
     )[1].split("}", 1)[0]
     assert "min-height: 54px;" in normal
     assert "max-height: 54px;" in normal
+    assert "border: 1px solid #dfe5ee;" in normal
+    assert "border-color: #0b73e7;" in qss.split(
+        "QPushButton#BatchAnalysisPresetCard:checked {", 1
+    )[1].split("}", 1)[0]
     assert "min-height: 28px;" in compact
     assert "max-height: 28px;" in compact
 

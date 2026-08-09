@@ -87,7 +87,10 @@ class FilterPanel(QWidget):
         self.spin_cut.setRange(0.0, 1e6)
         self.spin_cut.setSuffix(" Hz")
         self.spin_cut.setValue(100.0)
-        self._single_row = _fit_field(self.spin_cut, max_width=120)
+        # Keep the three filter editors on one field-column datum.  A short
+        # 120px cap makes the cutoff and order controls trail-align while the
+        # kind combo fills the field, producing visibly staggered left edges.
+        self._single_row = _fit_field(self.spin_cut)
         self._single_label = QLabel("截止:")
         fl.addRow(self._single_label, self._single_row)
 
@@ -109,7 +112,7 @@ class FilterPanel(QWidget):
         self.combo_order = QComboBox()
         self.combo_order.addItems(["2", "4", "6", "8"])
         self.combo_order.setCurrentText("4")
-        fl.addRow("阶数:", _fit_field(self.combo_order, max_width=120))
+        fl.addRow("阶数:", _fit_field(self.combo_order))
         settings_lay.addLayout(fl)
 
         row = QHBoxLayout()

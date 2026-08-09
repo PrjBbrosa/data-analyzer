@@ -354,11 +354,17 @@ QPushButton#BatchAnalysisPresetCard {
     min-height: 54px;
     max-height: 54px;
     padding: 5px 7px;
-    border: 1px solid #d7e2f0;
+    /* Same quiet button chrome as the single-analysis preset strip.  Batch
+     * keeps its two-line content and 66px hit target, not a second visual
+     * button family. */
+    border: 1px solid #dfe5ee;
     border-radius: 8px;
-    background-color: #ffffff;
-    color: #334155;
-    font-size: 11px;
+    background-color: qlineargradient(
+        x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 {{CONTROL_SURFACE_TOP}}, stop: 1 {{CONTROL_SURFACE_BOTTOM}}
+    );
+    color: {{CONTROL_TEXT}};
+    font-size: 10px;
     font-weight: 600;
 }
 /* Compact cards retain a 40px outer surface under the shared card chrome. */
@@ -367,13 +373,13 @@ QPushButton#BatchAnalysisPresetCard[compact="true"] {
     max-height: 28px;
 }
 QPushButton#BatchAnalysisPresetCard:hover {
-    border-color: #9fc1ee;
-    background-color: #f8fbff;
+    border-color: #b7c4d3;
+    background-color: {{CONTROL_ACCENT_WASH}};
 }
 QPushButton#BatchAnalysisPresetCard:checked {
-    border-color: #1769e0;
-    background-color: #eaf2ff;
-    color: #0f4fa8;
+    border-color: #0b73e7;
+    background-color: #e8f1ff;
+    color: #0b73e7;
 }
 QPushButton#BatchAnalysisPresetCard:disabled {
     color: #a0aec0;

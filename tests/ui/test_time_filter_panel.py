@@ -31,6 +31,20 @@ def test_no_zero_phase_control(qtbot):
     assert not hasattr(p, "chk_zero_phase")
 
 
+def test_filter_editors_share_one_field_column(qtbot):
+    """类型、截止和阶数 must have matching left/right editor geometry."""
+    p = FilterPanel(); qtbot.addWidget(p)
+    p.resize(360, 260)
+    p.show()
+    qtbot.waitExposed(p)
+
+    editors = (p.combo_kind, p.spin_cut, p.combo_order)
+    left_edges = {editor.geometry().left() for editor in editors}
+    right_edges = {editor.geometry().right() for editor in editors}
+    assert len(left_edges) == 1
+    assert len(right_edges) == 1
+
+
 # --- Task 4: 卡片重组 + 挂载 结构断言 ---------------------------------------
 
 def test_inspector_mounts_filter_panel_in_range_card(qtbot):
