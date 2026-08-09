@@ -112,7 +112,6 @@ def test_modes_group_has_five_rows_each_with_sub_and_frf_explanation():
         assert row.sub, f"mode row {row.desc!r} missing a one-line sub/purpose"
     frf = next(row for row in modes.rows if row.desc == "频响")
     assert "FRF" in frf.sub and "系统辨识" in frf.sub
-    assert "取时域范围" in frf.sub and "一次性" in frf.sub
     # The group spans two columns in the rendered grid.
     assert modes.wide is True
 

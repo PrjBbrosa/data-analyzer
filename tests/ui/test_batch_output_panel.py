@@ -116,8 +116,11 @@ def test_batch_output_panel_axis_settings_uses_inspector_layout(qtbot):
     qtbot.wait(20)
     unit_top = panel._amplitude_unit_row.mapTo(panel, QPoint(0, 0)).y()
     range_top = z_parts["range_host"].mapTo(panel, QPoint(0, 0)).y()
-    # The stable amplitude unit control sits before the heatmap-only Z row.
-    assert unit_top < range_top
+    # Colour scale comes first; its amplitude unit choice follows it.
+    assert unit_top > range_top
+    unit_left = panel.choice_amp_unit.mapTo(panel, QPoint(0, 0)).x()
+    range_left = z_parts["spin_min"].mapTo(panel, QPoint(0, 0)).x()
+    assert abs(unit_left - range_left) <= 1
 
 
 def test_batch_output_panel_axis_settings_uses_compact_bordered_card(qtbot):

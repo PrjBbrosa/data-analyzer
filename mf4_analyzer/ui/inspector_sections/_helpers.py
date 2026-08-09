@@ -815,6 +815,7 @@ def _make_axis_settings_group(
     pre_header_rows=(),
     amplitude_unit_row_label: str | None = None,
     amplitude_unit_widget: QWidget | None = None,
+    amplitude_unit_row_after_z: bool = False,
 ):
     """Build the "坐标轴设置" QGroupBox and attach widgets to ``owner``.
 
@@ -945,7 +946,10 @@ def _make_axis_settings_group(
         owner.spin_z_ceiling.setRange(-500.0, 500.0)
         owner.spin_z_ceiling.setDecimals(2)
         owner.combo_amp_unit = QComboBox()
-        owner.combo_amp_unit.addItems(['dB', 'Linear'])
+        # Keep the visible binary-choice order identical to FFT 1D.  The
+        # default remains dB (index 1), so spectrogram/order colour-scale
+        # semantics and their first-open ranges do not change.
+        owner.combo_amp_unit.addItems(['Linear', 'dB'])
         for w in (
             owner.chk_z_auto, owner.spin_z_floor,
             owner.spin_z_ceiling, owner.combo_amp_unit,
@@ -954,7 +958,7 @@ def _make_axis_settings_group(
         owner.chk_z_auto.setChecked(bool(z_default_auto))
         owner.spin_z_floor.setValue(float(z_default_floor))
         owner.spin_z_ceiling.setValue(float(z_default_ceiling))
-        owner.combo_amp_unit.setCurrentIndex(0)
+        owner.combo_amp_unit.setCurrentIndex(1)
         for w in (
             owner.chk_z_auto, owner.spin_z_floor,
             owner.spin_z_ceiling, owner.combo_amp_unit,
@@ -964,6 +968,11 @@ def _make_axis_settings_group(
         owner.choice_amp_unit.bind(owner.combo_amp_unit)
         owner.lbl_z_summary = QLabel(z_auto_summary)
         z_unit_widget = owner.choice_amp_unit
+
+    if amplitude_unit_row_after_z and amplitude_unit_row_label is None:
+        raise ValueError(
+            "amplitude_unit_row_after_z requires amplitude_unit_row_label"
+        )
 
     if amplitude_unit_row_label is not None:
         # Line plots need an amplitude unit even without a heatmap-only Z
@@ -982,7 +991,8 @@ def _make_axis_settings_group(
         owner._amplitude_unit_row = _build_axis_aux_row(
             amplitude_unit_row_label, unit_widget,
         )
-        lay.addWidget(owner._amplitude_unit_row)
+        if not amplitude_unit_row_after_z:
+            lay.addWidget(owner._amplitude_unit_row)
         z_unit_widget = None
 
     if include_z:
@@ -994,6 +1004,9 @@ def _make_axis_settings_group(
         owner._axis_row_parts['z'] = z_parts
         owner.axis_z_range_host = z_parts['range_host']
         lay.addWidget(z_row)
+
+    if amplitude_unit_row_after_z:
+        lay.addWidget(owner._amplitude_unit_row)
 
     # ---- wire signals AFTER seeding initial values ----
     owner.chk_x_auto.toggled.connect(owner._sync_axis_enabled)

@@ -21,12 +21,13 @@ import math
 from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QFormLayout,
+    QButtonGroup, QComboBox, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSpinBox,
     QStyle, QStyleOptionButton, QVBoxLayout, QWidget,
 )
 
 from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
+from ...widgets.pill_switch import PillSwitch
 from ....ui_kit.widgets.segmented_choice import SegmentedChoice
 
 
@@ -150,6 +151,13 @@ _BINARY_CHOICE_FIELDS = frozenset({
     "estimator", "nfft_mode", "weighting", "magnitude_scale",
     "frequency_scale", "phase_mode",
 })
+_FRF_ESTIMATION_FIELDS = (
+    "estimator", "window", "t_win_s", "overlap", "nfft_mode", "nfft",
+)
+_FRF_DISPLAY_FIELDS = (
+    "magnitude_scale", "frequency_scale", "phase_mode",
+    "coherence_threshold", "fade_low_coherence",
+)
 
 
 # Per-method visible field set, taken verbatim from spec §3.3 minus the
@@ -574,6 +582,10 @@ class DynamicParamForm(QWidget):
         self._field_hosts: dict[str, QWidget] = {}
         self._field_labels: dict[str, QLabel] = {}
         self._form = _GridFormAdapter(self)
+        self._frf_estimation_title = QLabel("FRF 估计参数", self)
+        self._frf_estimation_title.setObjectName("BatchParamColumnTitle")
+        self._frf_display_title = QLabel("显示设置", self)
+        self._frf_display_title.setObjectName("BatchParamColumnTitle")
 
         # rpm_factor is owned by InputPanel (Wave 2 Task 5) — no entry
         # here on purpose; if a future preset injects an unmapped key it
@@ -689,7 +701,11 @@ class DynamicParamForm(QWidget):
         )
         self._widgets["coherence_threshold"] = self._w_coherence_threshold
 
-        self._w_fade_low_coherence = QCheckBox("开启", self)
+        self._w_fade_low_coherence = PillSwitch(
+            self,
+            object_name="batchFrfFadeToggle",
+            accessible_name="低相干淡化",
+        )
         self._w_fade_low_coherence.setChecked(True)
         self._w_fade_low_coherence.toggled.connect(
             lambda *_: self.paramsChanged.emit()
@@ -852,10 +868,25 @@ class DynamicParamForm(QWidget):
             cell.addWidget(label)
             if name in _BINARY_CHOICE_FIELDS:
                 choice = SegmentedChoice(host)
-                choice.bind(widget)
+                if name == "phase_mode":
+                    choice.bind(widget, labels=("展开", "±180°"))
+                else:
+                    choice.bind(widget)
                 self._choice_widgets[name] = choice
                 setattr(self, f"_choice_{name}", choice)
                 visible_widget = choice
+            elif name == "fade_low_coherence":
+                # Keep the 44×24 switch centred on the shared 32px field
+                # track, so its left edge and row rhythm match the
+                # single-analysis FRF display controls.
+                switch_host = QWidget(host)
+                switch_host.setObjectName("BatchFrfSwitchField")
+                switch_host.setFixedHeight(32)
+                switch_lay = QHBoxLayout(switch_host)
+                switch_lay.setContentsMargins(0, 0, 0, 0)
+                switch_lay.addWidget(widget, 0, Qt.AlignLeft | Qt.AlignVCenter)
+                switch_lay.addStretch(1)
+                visible_widget = switch_host
             else:
                 widget.setParent(host)
                 visible_widget = widget
@@ -1252,7 +1283,46 @@ class DynamicParamForm(QWidget):
             self._grid.takeAt(0)
         for host in self._field_hosts.values():
             host.hide()
+        self._frf_estimation_title.hide()
+        self._frf_display_title.hide()
         self._active_fields = list(_METHOD_FIELDS[method])
+
+        if method == "frf":
+            # FRF has two stable semantic columns instead of interleaving
+            # calculation and display controls by row.  The display controls
+            # now mirror the single-analysis card as one vertical group.
+            self._frf_estimation_title.show()
+            self._frf_display_title.show()
+            self._grid.addWidget(self._frf_estimation_title, 0, 0)
+            self._grid.addWidget(self._frf_display_title, 0, 1)
+            for row, name in enumerate(_FRF_ESTIMATION_FIELDS, start=1):
+                host = self._field_hosts[name]
+                widget = self._widgets[name]
+                visible_widget = self._visible_widgets[name]
+                visible_widget.setHidden(False)
+                if visible_widget is not widget:
+                    if name in _BINARY_CHOICE_FIELDS:
+                        widget.hide()
+                    else:
+                        widget.show()
+                host.setHidden(False)
+                self._field_labels[name].show()
+                self._grid.addWidget(host, row, 0)
+            for row, name in enumerate(_FRF_DISPLAY_FIELDS, start=1):
+                host = self._field_hosts[name]
+                widget = self._widgets[name]
+                visible_widget = self._visible_widgets[name]
+                visible_widget.setHidden(False)
+                if visible_widget is not widget:
+                    if name in _BINARY_CHOICE_FIELDS:
+                        widget.hide()
+                    else:
+                        widget.show()
+                host.setHidden(False)
+                self._field_labels[name].show()
+                self._grid.addWidget(host, row, 1)
+            self._sync_nfft_mode()
+            return
 
         row = 0
         column = 0

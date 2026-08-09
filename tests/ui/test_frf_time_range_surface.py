@@ -6,7 +6,6 @@ import pandas as pd
 
 from mf4_analyzer.io import FileData
 from mf4_analyzer.ui.main_window import MainWindow
-from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec, EXACT_SOURCE
 
 
 def _window_with_pair(qtbot):
@@ -41,49 +40,9 @@ def test_frf_range_checkbox_only_captures_its_visible_inputs(qtbot):
     win.inspector.frf_ctx.spin_t_win.setValue(0.1)
 
     assert pane.time_range == (0.25, 0.75)
+    assert not hasattr(top, "btn_range_from_time")
     top.chk_range.setChecked(False)
     assert pane.time_range is None
-
-
-def test_frf_range_from_time_is_an_explicit_snapshot(qtbot):
-    win, pane = _window_with_pair(qtbot)
-    top = win.inspector.top
-    win.view_manager.get(0).xlim = (0.4, 1.2)
-    win._sync_frf_range_from_time_action()
-
-    assert not top.btn_range_from_time.isHidden()
-    assert top.btn_range_from_time.isEnabled()
-    assert (
-        top.btn_range_from_time.sizeHint().height()
-        == top.btn_range_max.sizeHint().height()
-    )
-    top.btn_range_from_time.click()
-
-    assert top.range_values() == (0.4, 1.2)
-    assert top.range_enabled()
-    assert pane.time_range == (0.4, 1.2)
-
-    win._on_time_canvas_xrange_changed(0.5, 1.0)
-    assert top.range_values() == (0.4, 1.2)
-    assert pane.time_range == (0.4, 1.2)
-
-
-def test_frf_range_from_time_explains_why_custom_x_is_unavailable(qtbot):
-    win, _pane = _window_with_pair(qtbot)
-    win.view_manager.get(0).axis_opts = {
-        "x_axis": CustomXAxisSpec(
-            mode="channel", resolver=EXACT_SOURCE,
-            source_fid="source-a", channel="input",
-        ).to_axis_opts(),
-    }
-    win._sync_frf_range_from_time_action()
-
-    button = win.inspector.top.btn_range_from_time
-    assert not button.isEnabled()
-    assert button.toolTip() == (
-        "当前时域横轴不是物理时间，无法作为 FRF 时间范围；"
-        "请切回时间轴或手动输入秒范围。"
-    )
 
 
 def test_frf_max_uses_the_shared_range_without_mutating_the_time_view(qtbot):

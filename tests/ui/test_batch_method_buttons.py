@@ -376,6 +376,53 @@ def test_batch_frf_param_form_uses_canonical_compute_and_display_fields(qtbot):
     assert params == normalize_batch_params(params, "frf")
 
 
+def test_batch_frf_keeps_estimation_and_display_in_stable_columns(qtbot):
+    """FRF's calculation and display controls must not interleave by row."""
+    from PyQt5.QtCore import QPoint
+
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("frf")
+    form.resize(800, 420)
+    form.show()
+    qtbot.waitExposed(form)
+
+    estimation = (
+        "estimator", "window", "t_win_s", "overlap", "nfft_mode", "nfft",
+    )
+    display = (
+        "magnitude_scale", "frequency_scale", "phase_mode",
+        "coherence_threshold", "fade_low_coherence",
+    )
+    for row, name in enumerate(estimation, start=1):
+        index = form._grid.indexOf(form._field_hosts[name])
+        assert form._grid.getItemPosition(index) == (row, 0, 1, 1)
+    for row, name in enumerate(display, start=1):
+        index = form._grid.indexOf(form._field_hosts[name])
+        assert form._grid.getItemPosition(index) == (row, 1, 1, 1)
+
+    assert form._frf_estimation_title.isVisibleTo(form)
+    assert form._frf_display_title.isVisibleTo(form)
+    assert [button.text() for button in form._choice_phase_mode.buttons()] == [
+        "展开", "±180°",
+    ]
+    display_lefts = [
+        control.mapTo(form, QPoint(0, 0)).x()
+        for control in (
+            form._choice_magnitude_scale,
+            form._choice_frequency_scale,
+            form._choice_phase_mode,
+            form._w_coherence_threshold,
+            form._w_fade_low_coherence,
+        )
+    ]
+    assert max(display_lefts) - min(display_lefts) <= 1
+    assert form._w_fade_low_coherence.size().width() == 44
+    assert form._w_fade_low_coherence.size().height() == 24
+
+
 def test_batch_time_method_exposes_exact_sparse_render_fields(qtbot):
     from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
 

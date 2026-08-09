@@ -52,6 +52,12 @@ class FrfPairEditor(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(6)
+        self._title = QLabel("FRF 配对", self)
+        self._title.setObjectName("BatchFrfPairEditorTitle")
+        # Pair groups have a 7px card inset; match it so the editor heading,
+        # group title, and input/output labels share one left datum.
+        self._title.setContentsMargins(7, 0, 0, 0)
+        outer.addWidget(self._title)
         self._groups_layout = QVBoxLayout()
         self._groups_layout.setContentsMargins(0, 0, 0, 0)
         self._groups_layout.setSpacing(6)
@@ -287,8 +293,13 @@ class FrfPairEditor(QWidget):
             self._task_summary.setText(
                 f"{pairs} 个方向对 · {self._source_count} 个逻辑来源 · {policy}"
             )
+            self._task_summary.show()
         else:
-            self._task_summary.setText(issues[0] if issues else "待选择 FRF 输入/输出")
+            # The footer validation line already explains an invalid group.
+            # Repeating it beneath the add button looks like a second broken
+            # group and gives no additional action to the user.
+            self._task_summary.clear()
+            self._task_summary.hide()
         self._validation.style().unpolish(self._validation)
         self._validation.style().polish(self._validation)
 

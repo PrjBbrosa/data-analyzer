@@ -326,9 +326,12 @@ def test_frf_contextual_uses_four_separated_html_information_cards(qtbot):
     assert signal.y() + signal.height() <= params.y() - 8
     assert params.y() + params.height() <= display.y() - 8
     assert display.y() + display.height() <= facts.y() - 8
-    assert ctx.findChild(QLabel, "frfContextTitle").text() == "系统辨识 · 频响（FRF）"
+    assert ctx.findChild(QLabel, "frfContextTitle") is None
     assert ctx.findChild(QLabel, "frfSisoBadge").text() == "SISO"
     assert ctx.findChild(QLabel, "frfFlowBlock").text() == "被辨识系统  H(f)"
+    flow = ctx.findChild(QFrame, "frfSystemFlow")
+    input_row = ctx.combo_input.parentWidget()
+    assert flow.y() < input_row.y()
 
 
 def test_frf_compute_rows_keep_standard_32px_rhythm(qapp, qtbot):
@@ -362,9 +365,12 @@ def test_frf_compute_rows_keep_standard_32px_rhythm(qapp, qtbot):
         row_tops = [widget.mapTo(ctx, QPoint(0, 0)).y() for widget in rows]
 
         assert [widget.height() for widget in rows] == [32] * len(rows)
-        assert [
-            current - previous for previous, current in zip(row_tops, row_tops[1:])
-        ] == [36] * (len(rows) - 1)
+        # The compact two-column grid keeps paired controls on one baseline
+        # and moves to the next parameter line in a single 58px step.
+        assert row_tops[0] == row_tops[1]
+        assert row_tops[2] == row_tops[3]
+        assert row_tops[4] == row_tops[5]
+        assert [row_tops[2] - row_tops[0], row_tops[4] - row_tops[2]] == [58, 58]
     finally:
         qapp.setStyleSheet(old_sheet)
 
@@ -823,6 +829,78 @@ def test_fft_relocated_amplitude_unit_keeps_288px_axis_geometry(qapp, qtbot):
         assert ctx.sizeHint().height() == 740
     finally:
         qapp.setStyleSheet(old_sheet)
+
+
+@pytest.mark.parametrize("mode", ("time", "fft", "fft_time", "order", "frf"))
+def test_shared_analysis_time_range_aligns_checkbox_and_equal_editors(
+    qapp, qtbot, mode,
+):
+    """All modes reuse one range group with a single left field datum."""
+    from PyQt5.QtCore import QPoint
+
+    inspector = Inspector()
+    qtbot.addWidget(inspector)
+    inspector.resize(540, 900)
+    inspector.set_mode(mode)
+    inspector.show()
+    qtbot.waitExposed(inspector)
+    qapp.processEvents()
+
+    top = inspector.top
+    group = top._range_group
+    checkbox_left = top.chk_range.mapTo(group, QPoint(0, 0)).x()
+    start_left = top.spin_start.mapTo(group, QPoint(0, 0)).x()
+    assert abs(checkbox_left - start_left) <= 1
+    assert top.spin_start.width() == top.spin_end.width()
+    assert top.spin_start.height() == top.spin_end.height()
+
+
+@pytest.mark.parametrize(
+    "context_type, section_name",
+    [
+        ("FFTTimeContextual", "_tf_section"),
+        ("OrderContextual", "_order_section"),
+    ],
+)
+def test_spectrogram_amplitude_unit_uses_the_fft_full_width_choice(
+    qapp, qtbot, context_type, section_name,
+):
+    """All analysis panels expose one full-width ``Linear | dB`` control."""
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QGroupBox
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual, OrderContextual
+
+    context_cls = {
+        "FFTTimeContextual": FFTTimeContextual,
+        "OrderContextual": OrderContextual,
+    }[context_type]
+    context = context_cls()
+    qtbot.addWidget(context)
+    getattr(context, section_name).set_expanded(True)
+    context.resize(276, 960)
+    context.show()
+    qtbot.waitExposed(context)
+
+    choice = context.choice_amp_unit
+    assert [button.text() for button in choice.buttons()] == ["Linear", "dB"]
+    assert choice.height() == 32
+    assert choice.width() >= 160
+    axis_group = next(
+        group for group in context.findChildren(QGroupBox)
+        if group.title() == "坐标轴设置"
+    )
+    axis_layout = axis_group.layout()
+    z_row = context._axis_row_parts["z"]["label"].parentWidget().parentWidget()
+    assert axis_layout.indexOf(context._amplitude_unit_row) == (
+        axis_layout.indexOf(z_row) + 1
+    )
+    unit_right = choice.mapTo(context, choice.rect().topRight()).x()
+    row_right = context._amplitude_unit_row.mapTo(
+        context, QPoint(context._amplitude_unit_row.width(), 0),
+    ).x()
+    assert abs(unit_right - row_right) <= 1
+    assert context._axis_row_parts["z"]["unit"] is None
+    assert context._amplitude_unit_row.parentWidget() is not None
 
 
 def test_fft_contextual_xy_axis_params_round_trip(qapp):

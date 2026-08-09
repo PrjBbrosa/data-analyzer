@@ -80,8 +80,8 @@
       <div class="topbar reveal d1"><span class="eyebrow">04 · <b>时域关联</b></span><span class="turbo-rule"></span></div>
       <div class="step-head reveal d2"><span class="big">同一物理时间</span><h2>先确认关联，再点击计算</h2></div>
       <div class="paths">
-        <div class="path reveal d3"><div class="tagA">范围</div><div class="ptxt">点击“<b>取时域范围</b>”会把当前时域 View 的可见秒数一次性填入“分析时间”。之后缩放不会改写该范围；想更新时，再点一次即可。</div></div>
-        <div class="path reveal d4"><div class="tagA g">custom-X</div><div class="ptxt"><b>custom-X</b> 不是秒，“取时域范围”会禁用。请切回真实时间轴，或直接手动输入秒范围。</div></div>
+        <div class="path reveal d3"><div class="tagA">范围</div><div class="ptxt">如需只计算一段数据，勾选“使用选定时间范围”，再直接填写开始和结束秒数。</div></div>
+        <div class="path reveal d4"><div class="tagA g">custom-X</div><div class="ptxt"><b>custom-X</b> 不是秒；FRF 分析时间仍应按真实时间轴的秒数填写。</div></div>
         <div class="path reveal d5"><div class="tagA">查看</div><div class="ptxt">“在时域查看”会先复用同一签名的时域 View；没有时才新建，并带回输入、输出和已选范围，不覆盖无关 View。</div></div>
       </div>
       <div class="tip reveal d5"><span class="ic">!</span><p>输入与输出必须严格同时间轴：长度、每个时刻和采样间隔都要一致。时间不一致、非均匀或缺采样时，先显式重建或对齐，FRF 不会静默截短或插值。系统真实延迟默认保留，不做自动补偿；相位曲线会如实显示这部分延迟。</p></div>

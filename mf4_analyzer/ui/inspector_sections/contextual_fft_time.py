@@ -232,6 +232,8 @@ class FFTTimeContextual(QWidget):
             y_auto_summary="0 → Nyquist",
             z_auto_summary="自动色阶",
             pre_header_rows=(("dB 参考:", self.db_reference_control),),
+            amplitude_unit_row_label="幅值单位:",
+            amplitude_unit_row_after_z=True,
         )
         params_lay.addWidget(axis_g)
         # Tooltips for widgets created inside _make_axis_settings_group.

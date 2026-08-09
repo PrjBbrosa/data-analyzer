@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import qtawesome as qta
-from PyQt5.QtCore import QSize, QSignalBlocker, Qt, pyqtSignal
+from PyQt5.QtCore import QPoint, QSize, QSignalBlocker, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSizePolicy, QSpinBox, QVBoxLayout,
@@ -424,6 +424,7 @@ QPushButton#batchOutputSettingsButton:checked {
             z_auto_summary="自动色阶",
             pre_header_rows=(("dB 参考:", self.db_reference_control),),
             amplitude_unit_row_label="幅值单位:",
+            amplitude_unit_row_after_z=True,
         )
         self._axis_group = axis_group
         self._db_reference_row = self.db_reference_control.parentWidget()
@@ -433,6 +434,7 @@ QPushButton#batchOutputSettingsButton:checked {
         for spin in (self.spin_y_min, self.spin_y_max):
             spin.setRange(-1e12, 1e12)
         self._widen_axis_label_column(axis_group)
+        self._align_amplitude_unit_to_axis_range()
         self._flatten_axis_group_chrome(axis_group)
         self._z_axis_row = (
             self._axis_row_parts["z"]["label"].parentWidget().parentWidget()
@@ -799,6 +801,58 @@ QPushButton#batchRenderStyleButton:checked {
                 QSizePolicy.Minimum,
             )
             header_layout.invalidate()
+
+    def _align_amplitude_unit_to_axis_range(self) -> None:
+        """Start Batch's amplitude choice at the shared Z range datum."""
+        row = self._amplitude_unit_row
+        if row is None or row.layout() is None:
+            return
+        label_host = row.layout().itemAt(0).widget()
+        if label_host is None:
+            return
+        # [axis label][4px gap][auto checkbox][4px gap][range host].  The
+        # row layout supplies the final 4px gap before the choice itself.
+        # aligns the compact switcher with the colour-scale fields above and
+        # avoids the previous full-row slab stretching into the label column.
+        label_host.setFixedWidth(_BATCH_AXIS_LABEL_W + 4 + 30)
+        self._amplitude_unit_label_host = label_host
+        self.choice_amp_unit.setMinimumWidth(0)
+        self.choice_amp_unit.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed,
+        )
+        self._queue_amplitude_unit_alignment()
+
+    def _queue_amplitude_unit_alignment(self) -> None:
+        if getattr(self, "_amplitude_unit_alignment_pending", False):
+            return
+        self._amplitude_unit_alignment_pending = True
+        QTimer.singleShot(0, self._sync_amplitude_unit_left_edge)
+
+    def _sync_amplitude_unit_left_edge(self) -> None:
+        """Align the segmented choice with Z's first range editor."""
+        self._amplitude_unit_alignment_pending = False
+        label_host = getattr(self, "_amplitude_unit_label_host", None)
+        if label_host is None or not self.isVisible():
+            return
+        z_parts = self._axis_row_parts.get("z")
+        if z_parts is None or not z_parts["spin_min"].isVisibleTo(self):
+            return
+        target_left = z_parts["spin_min"].mapTo(self, QPoint(0, 0)).x()
+        choice_left = self.choice_amp_unit.mapTo(self, QPoint(0, 0)).x()
+        delta = target_left - choice_left
+        if delta:
+            label_host.setFixedWidth(max(0, label_host.width() + delta))
+            parent_layout = label_host.parentWidget().layout()
+            if parent_layout is not None:
+                parent_layout.activate()
+
+    def showEvent(self, event):  # noqa: N802 - Qt override
+        super().showEvent(event)
+        self._queue_amplitude_unit_alignment()
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._queue_amplitude_unit_alignment()
 
     def _flatten_axis_group_chrome(self, axis_group: QWidget) -> None:
         axis_group.setTitle("坐标范围")

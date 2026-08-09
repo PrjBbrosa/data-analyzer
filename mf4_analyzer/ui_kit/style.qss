@@ -349,6 +349,24 @@ QLabel#BatchParamLabel {
     font-weight: 600;
     background-color: transparent;
 }
+QLabel#BatchParamColumnTitle {
+    color: #334155;
+    font-size: 11px;
+    font-weight: 700;
+    background-color: transparent;
+}
+QLabel#BatchFrfPairEditorTitle {
+    color: #253247;
+    font-size: 12px;
+    font-weight: 700;
+    background-color: transparent;
+}
+QLabel#frfComputeLabel {
+    color: #556378;
+    font-size: 11px;
+    font-weight: 600;
+    background-color: transparent;
+}
 QPushButton#BatchAnalysisPresetCard {
     /* 54px content + 5px top/bottom padding + 1px borders = 66px surface. */
     min-height: 54px;
@@ -1956,13 +1974,6 @@ Inspector QLabel#frfDelayRetention {
     padding-left: 88px;
 }
 
-Inspector QLabel#frfContextTitle {
-    color: #111827;
-    font-size: 16px;
-    font-weight: 700;
-    padding: 2px 0 0 0;
-    background: transparent;
-}
 Inspector QLabel#frfSisoBadge {
     color: #64748b;
     font-size: 11px;

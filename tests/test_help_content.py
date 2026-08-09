@@ -35,7 +35,7 @@ def test_v795_changelog_covers_hdf_view_scope_and_ink_budget():
     assert current["v"] == "v7.9.5"
     description = " ".join(current["items"])
     for keyword in (
-        "HDF", "完整通道名", "当前 View", "取时域范围", "参数面板", "墨水量", "7px",
+        "HDF", "完整通道名", "当前 View", "使用选定时间范围", "参数面板", "墨水量", "7px",
     ):
         assert keyword in description
 
@@ -181,8 +181,8 @@ def test_frf_guide_is_mapped_and_covers_frozen_frf_contract():
         assert keyword in text, f"FRF guide missing: {keyword}"
     assert "先复用同一签名" in text
     assert "没有时才新建" in text
-    assert "取时域范围" in text
-    assert "一次性填入" in text
+    assert "使用选定时间范围" in text
+    assert "取时域范围" not in text
 
 
 def test_main_manual_and_published_guide_name_the_five_modes_and_frf():
@@ -192,7 +192,8 @@ def test_main_manual_and_published_guide_name_the_five_modes_and_frf():
             assert label in text, f"{guide.name} missing: {label}"
 
 
-def test_published_guide_removes_the_hidden_mean_toggle_and_explains_frf_range():
+def test_published_guide_removes_hidden_controls_and_explains_frf_range():
     text = PUBLISHED_GUIDE.read_text(encoding="utf-8")
     assert "去均值" not in text
-    assert "取时域范围" in text
+    assert "取时域范围" not in text
+    assert "使用选定时间范围" in text

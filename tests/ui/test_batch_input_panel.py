@@ -295,6 +295,30 @@ def test_target_policy_uses_a_full_width_segmented_choice_at_288px(qapp, qtbot):
         qapp.setStyleSheet(old_sheet)
 
 
+def test_rpm_picker_matches_the_standard_input_height(qapp, qtbot):
+    """Batch's searchable RPM picker must align with the coefficient editor."""
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    old_sheet = qapp.styleSheet()
+    try:
+        load_stylesheet(qapp)
+        panel = InputPanel()
+        qtbot.addWidget(panel)
+        panel.set_method("order_time")
+        panel.resize(576, 700)
+        panel.show()
+        qtbot.wait(20)
+
+        picker = panel._rpm_picker
+        assert picker.height() == panel._rpm_factor_spin.height() == 32
+        assert picker._trigger.height() == 32
+        arrow_center = picker._arrow_button.geometry().center().y()
+        assert abs(arrow_center - picker.rect().center().y()) <= 1
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 def test_probe_failure_sets_probe_failed(qtbot, tmp_path):
     from mf4_analyzer.ui.drawers.batch.input_panel import FileListWidget
     w = FileListWidget()

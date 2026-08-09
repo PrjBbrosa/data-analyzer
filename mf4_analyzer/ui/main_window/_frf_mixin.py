@@ -218,63 +218,6 @@ class FrfMixin:
         for idx in range(min(page.pane_count(), len(state.panes))):
             page.pane_canvas(idx).set_display_params(params)
 
-    def _current_physical_time_view_range(self):
-        resolved = self._focused_time_view_state()
-        if resolved is None:
-            raise FrfPreflightError("没有可关联的时域 View")
-        _idx, state = resolved
-        spec = CustomXAxisSpec.from_axis_opts(
-            (state.axis_opts or {}).get("x_axis")
-        )
-        if spec.mode == CHANNEL_MODE:
-            raise FrfPreflightError(
-                "当前时域横轴不是物理时间，无法作为 FRF 时间范围；"
-                "请切回时间轴或手动输入秒范围。"
-            )
-        time_range = self._normalize_analysis_time_range(state.xlim)
-        if time_range is None:
-            canvas = self._canvas_for_view_index(resolved[0])
-            if canvas is not None:
-                time_range = self._normalize_analysis_time_range(
-                    canvas.get_visible_xlim()
-                )
-        if time_range is None:
-            raise FrfPreflightError("当前时域 View 没有有限、递增的可见时间范围")
-        return state, time_range
-
-    def _sync_frf_range_from_time_action(self):
-        """Keep the FRF snapshot action truthful about the active Time View."""
-        if self.chart_stack.current_mode() != "frf":
-            return
-        top = self.inspector.top
-        try:
-            self._current_physical_time_view_range()
-        except FrfPreflightError as issue:
-            top.set_range_from_time_enabled(False, str(issue))
-        else:
-            top.set_range_from_time_enabled(
-                True, "将当前时域 View 的可见范围一次性填入分析时间。"
-            )
-
-    def _on_frf_range_from_time_requested(self):
-        """Copy the committed physical-time span into the shared range inputs."""
-        try:
-            _time_state, time_range = self._current_physical_time_view_range()
-        except FrfPreflightError as issue:
-            self._sync_frf_range_from_time_action()
-            self.inspector.frf_ctx.set_validation_message(str(issue))
-            self.toast(str(issue), "warning")
-            return False
-        _manager, state, _page, pane_idx, pane = self._active_frf_state()
-        before = self._normalize_analysis_time_range(pane.time_range)
-        self.inspector.top.set_range_from_span(*time_range)
-        self._capture_analysis_time_range("frf", state, pane_idx=pane_idx)
-        if pane.time_range != before:
-            self._dirty_frf_pane(state, pane_idx, clear_effective=True)
-        self.inspector.frf_ctx.set_validation_message("")
-        self._sync_frf_range_from_time_action()
-        return True
-
     @staticmethod
     def _frf_validate_array_shapes(time, signal, role):
         if time.ndim != 1 or signal.ndim != 1:

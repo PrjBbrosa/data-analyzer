@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
 
 from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui_kit.popup_shell import apply_popup_shell
+from mf4_analyzer.ui_kit.control_style import CONTROL_HEIGHTS
 from mf4_analyzer.ui_kit.widgets import SearchField
 
 
@@ -141,7 +142,10 @@ class SignalPickerPopup(QWidget):
     # the request; whoever owns that state decides (see InputPanel).
     relaxPolicyRequested = pyqtSignal()
 
-    _DISPLAY_HEIGHT = 38
+    # The collapsed picker is an input-family control.  Keep its trigger on
+    # the shared 32px base track so it aligns with RPM coefficient editors and
+    # the ordinary ComboBox/SpinBox fields beside it.
+    _DISPLAY_HEIGHT = CONTROL_HEIGHTS["base"]
     _POPUP_MIN_WIDTH = 420
     _LIST_MIN_HEIGHT = 96
     # Rows shown before the list starts scrolling.  Without a cap the popup

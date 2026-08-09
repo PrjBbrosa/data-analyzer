@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -170,10 +171,6 @@ class FrfContextual(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
 
-        title = QLabel("系统辨识 · 频响（FRF）", self)
-        title.setObjectName("frfContextTitle")
-        root.addWidget(title)
-
         mapping_card = QFrame(self)
         mapping_card.setObjectName("frfSignalCard")
         mapping_layout = QVBoxLayout(mapping_card)
@@ -181,6 +178,9 @@ class FrfContextual(QWidget):
         mapping_layout.setSpacing(5)
         siso = QLabel("SISO", mapping_card)
         siso.setObjectName("frfSisoBadge")
+        # Lead with the signal-flow model so FRF's input/output relationship
+        # is visible before any field; the redundant outer heading is gone.
+        mapping_layout.addWidget(self._make_system_flow(mapping_card))
         mapping_layout.addWidget(_make_group_header(
             "输入 / 输出 + 时间", action_button=siso, parent=mapping_card,
         ))
@@ -191,7 +191,6 @@ class FrfContextual(QWidget):
         mapping_layout.addWidget(self._make_signal_row(
             mapping_card, "输入 x", "frfInput", self.combo_input,
         ))
-        mapping_layout.addWidget(self._make_system_flow(mapping_card))
         mapping_layout.addWidget(self._make_signal_row(
             mapping_card, "输出 y", "frfOutput", self.combo_output,
         ))
@@ -235,8 +234,25 @@ class FrfContextual(QWidget):
             custom_slots=CUSTOM_PRESET_SLOTS,
         )
         params_layout.addWidget(self.preset_bar)
-        compute_form = QFormLayout()
-        _configure_form(compute_form)
+        compute_grid = QGridLayout()
+        compute_grid.setContentsMargins(0, 0, 0, 0)
+        compute_grid.setHorizontalSpacing(8)
+        compute_grid.setVerticalSpacing(7)
+        compute_grid.setColumnStretch(0, 1)
+        compute_grid.setColumnStretch(1, 1)
+
+        def add_compute_cell(row, column, label, field):
+            cell = QWidget(params_card)
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            cell_layout.setSpacing(3)
+            caption = QLabel(label, cell)
+            caption.setObjectName("frfComputeLabel")
+            cell_layout.addWidget(caption)
+            cell_layout.addWidget(_fit_field(
+                field, max_width=_SHORT_FIELD_MAX_WIDTH, align_right=False,
+            ))
+            compute_grid.addWidget(cell, row, column)
 
         self.combo_estimator = QComboBox(params_card)
         for text, token, tooltip in _ESTIMATOR_ITEMS:
@@ -247,9 +263,6 @@ class FrfContextual(QWidget):
         )
         self.choice_estimator = SegmentedChoice(params_card)
         self.choice_estimator.bind(self.combo_estimator, labels=("H1", "H2"))
-        compute_form.addRow(
-            "估计器:", _fit_field(self.choice_estimator, max_width=_SHORT_FIELD_MAX_WIDTH)
-        )
 
         self.combo_window = QComboBox(params_card)
         for text in ("hanning", "hamming", "blackman", "bartlett", "kaiser", "flattop"):
@@ -260,9 +273,6 @@ class FrfContextual(QWidget):
                 "hanning", "hamming", "blackman", "bartlett", "kaiser", "flattop",
             )],
         )
-        compute_form.addRow(
-            "窗函数:", _fit_field(self.combo_window, max_width=_SHORT_FIELD_MAX_WIDTH)
-        )
 
         self.spin_t_win = _no_buttons(QDoubleSpinBox(params_card))
         self.spin_t_win.setDecimals(3)
@@ -270,18 +280,12 @@ class FrfContextual(QWidget):
         self.spin_t_win.setValue(2.0)
         self.spin_t_win.setSuffix(" s")
         self.spin_t_win.setToolTip(_FRF_TOOLTIPS["segment"])
-        compute_form.addRow(
-            "段长:", _fit_field(self.spin_t_win, max_width=_SHORT_FIELD_MAX_WIDTH)
-        )
 
         self.spin_overlap = _no_buttons(QSpinBox(params_card))
         self.spin_overlap.setRange(0, 95)
         self.spin_overlap.setValue(50)
         self.spin_overlap.setSuffix(" %")
         self.spin_overlap.setToolTip(_FRF_TOOLTIPS["overlap"])
-        compute_form.addRow(
-            "重叠率:", _fit_field(self.spin_overlap, max_width=_SHORT_FIELD_MAX_WIDTH)
-        )
 
         self.combo_nfft_mode = QComboBox(params_card)
         self.combo_nfft_mode.addItem("自动", "auto")
@@ -295,20 +299,18 @@ class FrfContextual(QWidget):
         )
         self.choice_nfft_mode = SegmentedChoice(params_card)
         self.choice_nfft_mode.bind(self.combo_nfft_mode)
-        compute_form.addRow(
-            "NFFT 模式:",
-            _fit_field(self.choice_nfft_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
-        )
         self.spin_nfft = _no_buttons(QSpinBox(params_card))
         self.spin_nfft.setRange(1, 16_777_216)
         self.spin_nfft.setValue(2048)
         self.spin_nfft.setEnabled(False)
         self.spin_nfft.setToolTip(_FRF_TOOLTIPS["nfft"])
-        compute_form.addRow(
-            "NFFT:", _fit_field(self.spin_nfft, max_width=_SHORT_FIELD_MAX_WIDTH)
-        )
-
-        params_layout.addLayout(compute_form)
+        add_compute_cell(0, 0, "估计器", self.choice_estimator)
+        add_compute_cell(0, 1, "窗函数", self.combo_window)
+        add_compute_cell(1, 0, "段长", self.spin_t_win)
+        add_compute_cell(1, 1, "重叠率", self.spin_overlap)
+        add_compute_cell(2, 0, "NFFT 模式", self.choice_nfft_mode)
+        add_compute_cell(2, 1, "NFFT", self.spin_nfft)
+        params_layout.addLayout(compute_grid)
 
         self.lbl_validation = QLabel("", params_card)
         self.lbl_validation.setObjectName("frfValidationMessage")

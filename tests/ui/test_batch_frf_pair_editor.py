@@ -46,6 +46,22 @@ def test_pair_editor_blocks_self_duplicate_empty_and_supports_groups(qtbot):
     assert editor.validation_message() == ""
 
 
+def test_pair_editor_uses_one_aligned_heading_and_no_duplicate_invalid_summary(qtbot):
+    from PyQt5.QtCore import QPoint
+
+    editor = _editor(qtbot)
+    editor.resize(480, 300)
+    editor.show()
+    qtbot.waitExposed(editor)
+
+    first = editor._groups[0]
+    title_left = editor._title.mapTo(editor, QPoint(7, 0)).x()
+    group_left = first.title.mapTo(editor, QPoint(0, 0)).x()
+    assert abs(title_left - group_left) <= 1
+    assert editor._validation.text() == "配对组 1：请选择输入"
+    assert editor._task_summary.isHidden()
+
+
 def test_pair_labels_do_not_replace_source_group_runtime_identity(qtbot):
     """Portable labels stay names; neutral resolution binds composite sources."""
     from mf4_analyzer.batch_frf import resolve_frf_tasks
