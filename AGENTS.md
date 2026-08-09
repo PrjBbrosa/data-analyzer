@@ -189,6 +189,21 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
   teardown segfault. Record the pre-change baseline, then run the main suite
   with `--ignore=tests/acquisition_ui` and run `tests/acquisition_ui` separately;
   do not hard-code historical pass counts into this file.
+- The repo-root `conftest.py` exists solely to repair a pytest collection
+  regression: when the argument list leaves and re-enters a directory
+  (`pytest tests/ui/a.py tests/x.py tests/ui/b.py`), pytest rebuilds that
+  directory's collector node, and because fixture lookup matches on node
+  identity, every fixture from the directory's `conftest.py` silently stops
+  applying — no error, no warning, the tests just run without them. Keep that
+  file, keep project fixtures out of it (directory conftests own those), and
+  treat `tests/test_conftest_autouse_scope.py` as the gate that says whether it
+  is still needed. `tests/ui/test_qsettings_isolation.py` is the second alarm:
+  without the UI isolation fixtures the suite reads and writes the developer's
+  real `MF4Analyzer/DataAnalyzer` store, so machine-local leftovers become
+  invisible test preconditions. A test that only fails for some argument
+  orderings is this failure mode until proven otherwise; diagnose it by
+  comparing the item's fixture closure across orderings, and never paper over
+  it with a fixed test order, `xfail`, or a sleep.
 - Keep evidence classes separate: offscreen Qt, real macOS Cocoa, foreground
   TraceLab, source-level Windows packaging checks, and fresh Windows Full/Lite
   frozen executables are distinct gates. Do not substitute one for another.
