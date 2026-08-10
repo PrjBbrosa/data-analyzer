@@ -198,6 +198,12 @@ _HINTS = (
         priority=80,
     ),
     Hint(
+        id="file.scope_follow",
+        text="链接=文件范围跟随（加载/新建/切分析）",
+        surface="discovery",
+        priority=78,
+    ),
+    Hint(
         id="view.history",
         text="图表可后退/前进到上一个视图（Ctrl+Z）",
         surface="discovery",

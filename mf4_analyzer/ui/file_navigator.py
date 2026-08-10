@@ -202,7 +202,11 @@ class FileNavigator(QWidget):
     channel_editor_requested = pyqtSignal()
     files_attach_requested = pyqtSignal(object)
     files_detach_requested = pyqtSignal(object, str)
+    # Item-1 shim: still emitted when attach_on_load flips so older callers
+    # (and tests) keep working without knowing about the follow menu.
     auto_attach_changed = pyqtSignal(bool)
+    # Stage 1.1: full follow-prefs payload (FollowPrefs dataclass).
+    follow_prefs_changed = pyqtSignal(object)
     channel_config_save_requested = pyqtSignal()
     channel_config_apply_requested = pyqtSignal(str)
     channel_config_manage_requested = pyqtSignal(object)
@@ -258,9 +262,31 @@ class FileNavigator(QWidget):
         self.btn_auto_attach.setFixedSize(QSize(24, 24))
         self.btn_auto_attach.setProperty("role", "icon")
         self.btn_auto_attach.setAutoRaise(True)
-        self.btn_auto_attach.setCheckable(True)
-        self.btn_auto_attach.setChecked(True)
-        self.btn_auto_attach.toggled.connect(self._on_auto_attach_toggled)
+        # InstantPopup menu — click opens checkable follow prefs, not a toggle.
+        self.btn_auto_attach.setPopupMode(QToolButton.InstantPopup)
+        self._follow_menu = apply_rounded_menu_chrome(
+            QMenu(self.btn_auto_attach), gutter="check"
+        )
+        self._act_attach_on_load = self._follow_menu.addAction("新文件加入当前 View")
+        self._act_attach_on_load.setCheckable(True)
+        self._act_attach_on_load.setChecked(True)
+        self._act_inherit_on_new_view = self._follow_menu.addAction(
+            "新建 View 继承文件范围"
+        )
+        self._act_inherit_on_new_view.setCheckable(True)
+        self._act_inherit_on_new_view.setChecked(False)
+        self._act_fill_on_mode_entry = self._follow_menu.addAction(
+            "切换分析时填充空 View"
+        )
+        self._act_fill_on_mode_entry.setCheckable(True)
+        self._act_fill_on_mode_entry.setChecked(False)
+        for act in (
+            self._act_attach_on_load,
+            self._act_inherit_on_new_view,
+            self._act_fill_on_mode_entry,
+        ):
+            act.toggled.connect(self._on_follow_action_toggled)
+        self.btn_auto_attach.setMenu(self._follow_menu)
         self._sync_auto_attach_button()
         head.addWidget(self.btn_auto_attach)
         # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24) — same as
@@ -414,12 +440,40 @@ class FileNavigator(QWidget):
         self.channel_list.set_attached_file_ids(fids)
 
     def auto_attach_enabled(self):
-        return self.btn_auto_attach.isChecked()
+        """Item-1 shim: whether new loads attach into the active context."""
+        return self._act_attach_on_load.isChecked()
 
     def set_auto_attach_enabled(self, enabled):
-        blocker = QSignalBlocker(self.btn_auto_attach)
-        self.btn_auto_attach.setChecked(bool(enabled))
+        """Item-1 shim: update attach_on_load without emitting prefs signals."""
+        blocker = QSignalBlocker(self._act_attach_on_load)
+        self._act_attach_on_load.setChecked(bool(enabled))
         del blocker
+        self._sync_auto_attach_button()
+
+    def follow_prefs(self):
+        from .main_window.file_scope_follow import FollowPrefs
+
+        return FollowPrefs(
+            attach_on_load=self._act_attach_on_load.isChecked(),
+            inherit_on_new_view=self._act_inherit_on_new_view.isChecked(),
+            fill_on_mode_entry=self._act_fill_on_mode_entry.isChecked(),
+        )
+
+    def set_follow_prefs(self, prefs):
+        """Apply FollowPrefs (or duck-typed equivalent) without emitting."""
+        blockers = [
+            QSignalBlocker(self._act_attach_on_load),
+            QSignalBlocker(self._act_inherit_on_new_view),
+            QSignalBlocker(self._act_fill_on_mode_entry),
+        ]
+        self._act_attach_on_load.setChecked(bool(getattr(prefs, "attach_on_load", True)))
+        self._act_inherit_on_new_view.setChecked(
+            bool(getattr(prefs, "inherit_on_new_view", False))
+        )
+        self._act_fill_on_mode_entry.setChecked(
+            bool(getattr(prefs, "fill_on_mode_entry", False))
+        )
+        del blockers
         self._sync_auto_attach_button()
 
     def get_hidden_channels(self):
@@ -479,20 +533,30 @@ class FileNavigator(QWidget):
             self._rows[new_key].set_active(True)
         self.file_activated.emit(fid)
 
-    def _on_auto_attach_toggled(self, enabled):
+    def _on_follow_action_toggled(self, _checked=False):
+        prefs = self.follow_prefs()
         self._sync_auto_attach_button()
-        self.auto_attach_changed.emit(bool(enabled))
+        self.follow_prefs_changed.emit(prefs)
+        # Keep the legacy bool signal in sync with item 1 for older callers.
+        self.auto_attach_changed.emit(bool(prefs.attach_on_load))
 
     def _sync_auto_attach_button(self):
-        enabled = self.btn_auto_attach.isChecked()
+        # Read actions directly so chrome sync never imports main_window.
+        flags = (
+            self._act_attach_on_load.isChecked(),
+            self._act_inherit_on_new_view.isChecked(),
+            self._act_fill_on_mode_entry.isChecked(),
+        )
+        enabled = any(flags)
+        count = sum(1 for flag in flags if flag)
         self.btn_auto_attach.setIcon(qta.icon(
             "mdi.link-variant" if enabled else "mdi.link-variant-off",
             color="#4b6078" if enabled else "#8b98aa",
         ))
         self.btn_auto_attach.setToolTip(
-            "新加载文件自动加入当前时域 View"
+            f"已启用 {count} 项文件范围跟随 · 点击调整"
             if enabled
-            else "新加载文件仅打开，不加入时域 View"
+            else "未启用文件范围跟随"
         )
         self.btn_auto_attach.setAccessibleName(self.btn_auto_attach.toolTip())
         self.btn_auto_attach.setProperty("active", enabled)

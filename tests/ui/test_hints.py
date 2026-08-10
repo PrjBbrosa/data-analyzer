@@ -185,6 +185,7 @@ def test_custom_action_slot_discovery_surfaces_and_retires():
         "chart.copy_image",
         "chart.right_click_menu",
         "channel.right_click",
+        "file.scope_follow",
         "view.history",
     }
     state = HintState(discovered=frozenset(seen))

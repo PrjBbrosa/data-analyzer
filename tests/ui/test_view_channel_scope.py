@@ -46,8 +46,10 @@ def test_normal_load_auto_attaches_only_current_view(
 
 
 def test_auto_attach_off_affects_only_future_loads(qtbot, qapp, loaded_csv):
+    from mf4_analyzer.ui.main_window.file_scope_follow import FollowPrefs
+
     window = _window(qtbot, qapp)
-    window.navigator.btn_auto_attach.click()
+    window.navigator.set_follow_prefs(FollowPrefs(False, False, False))
 
     window.load_file(loaded_csv)
     qapp.processEvents()
@@ -58,8 +60,11 @@ def test_auto_attach_off_affects_only_future_loads(qtbot, qapp, loaded_csv):
 
 
 def test_auto_attach_preference_is_reused_by_new_windows(qtbot, qapp):
+    from mf4_analyzer.ui.main_window.file_scope_follow import FollowPrefs
+
     first = _window(qtbot, qapp)
-    first.navigator.btn_auto_attach.click()
+    first.navigator.set_follow_prefs(FollowPrefs(False, False, False))
+    first._on_follow_prefs_changed(first.navigator.follow_prefs())
 
     second = _window(qtbot, qapp)
 
@@ -111,10 +116,12 @@ def test_duplicate_view_preserves_attached_files(qtbot, qapp, loaded_csv):
 
 
 def test_attach_targets_secondary_focused_view(qtbot, qapp, loaded_csv):
+    from mf4_analyzer.ui.main_window.file_scope_follow import FollowPrefs
+
     window = _window(qtbot, qapp)
     window._on_view_new()
     window.view_manager.set_split(0)
-    window.navigator.btn_auto_attach.click()
+    window.navigator.set_follow_prefs(FollowPrefs(False, False, False))
     window.load_file(loaded_csv)
     fid = _fid(window)
     window._on_chart_focus_changed(True)

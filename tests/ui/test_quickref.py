@@ -243,15 +243,15 @@ def test_catalog_covers_getting_a_file_into_a_view():
 
     Everything downstream — plotting, the channel tree, and the analysis signal
     pickers — is scoped to the active section/View's attached files, so the
-    catalog has to name both the drag and the auto-attach toggle that governs
-    time-View intake.
+    catalog has to name both the drag and the follow-link menu that governs
+    file-scope intake.
     """
     attach = _row_by_desc("把文件加入当前 View")
     assert "拖" in attach.gesture
     assert "全局" in attach.sub and "当前 View" in attach.sub
-    auto = _row_by_desc("自动加入开关")
-    assert "开" in auto.sub and "关" in auto.sub
-    assert "时域" in auto.sub
+    follow = _row_by_desc("文件范围跟随")
+    assert "链接" in follow.gesture
+    assert "继承" in follow.sub and "填充" in follow.sub
 
 
 def test_catalog_states_the_analysis_picker_scope():

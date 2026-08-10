@@ -97,7 +97,52 @@ class AnalysisMixin:
 
     def _on_analysis_new(self, section):
         self._capture_active_analysis_view(section)
-        self.analysis_managers[section].new_view()
+        prefs = self.navigator.follow_prefs()
+        inherit = (
+            prefs.inherit_on_new_view
+            and not getattr(self, "_opening_project", False)
+            and not getattr(self, "_restoring_project", False)
+        )
+        template_fids = []
+        template_name = ""
+        if inherit:
+            from .file_scope_follow import resolve_new_view_template
+
+            mgr = self.analysis_managers[section]
+            section_state = mgr.get(mgr.active) if mgr.views else None
+            section_att = (
+                list(section_state.attached_file_ids)
+                if section_state is not None
+                else []
+            )
+            time_resolved = self._focused_time_view_state()
+            time_att = (
+                list(time_resolved[1].attached_file_ids)
+                if time_resolved is not None
+                else []
+            )
+            template_fids = resolve_new_view_template(
+                section_att, time_att, self.files
+            )
+            section_only = resolve_new_view_template(
+                section_att, [], self.files
+            )
+            if section_only and section_state is not None:
+                template_name = section_state.name
+            elif time_resolved is not None:
+                template_name = time_resolved[1].name
+        idx = self.analysis_managers[section].new_view()
+        if idx < 0:
+            return
+        if inherit and template_fids:
+            added = self._attach_files_to_active_analysis_view(
+                section, template_fids
+            )
+            if added:
+                self.toast(
+                    f"已继承 {len(added)} 个文件 · 来自 {template_name}",
+                    "success",
+                )
 
     def _on_analysis_delete(self, section, idx):
         self._capture_active_analysis_view(section)
