@@ -361,6 +361,30 @@ def test_open_project_restores_non_time_mode_consistently(qapp, tmp_path):
     mw2.open_project(proj)
     assert mw2.chart_stack.current_mode() == "fft"
     assert mw2.toolbar.current_mode() == "fft"
+    assert "频谱 · View 1" in mw2.navigator.channel_list.empty_state.text()
+
+
+def test_open_project_keeps_analysis_empty_owner_after_time_view_restore(
+        qapp, tmp_path):
+    """The final Time-view restore must not overwrite a visible analysis owner."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    proj = tmp_path / "analysis-owner.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(csv_a))
+    assert mw.view_manager.new_view() == 1
+    mw.toolbar._set_mode("frf")
+    assert mw.analysis_managers["frf"].new_view() == 1
+    mw.save_project(proj)
+
+    mw2 = MainWindow()
+    mw2.open_project(proj)
+
+    assert mw2.chart_stack.current_mode() == "frf"
+    assert mw2.view_manager.active == 1
+    assert mw2.analysis_managers["frf"].active == 1
+    assert "FRF · View 2" in mw2.navigator.channel_list.empty_state.text()
 
 
 def test_open_project_auto_recomputes_source_bearing_analysis_views(

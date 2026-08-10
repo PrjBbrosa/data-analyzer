@@ -220,16 +220,22 @@ class ViewMixin:
             self._ensure_secondary_range_signal_connected()
         self._view_focus.focused = idx
         self._sync_focus_accent()
-        if self.files and self.chart_stack.current_mode() == 'time':
-            self._render_view_to_canvas(idx, self.canvas_time, update_primary_ui=True)
-            if partner is not None:
+        # The shared navigator belongs to the visible section.  A Time-view
+        # restore may still call this method while an analysis section is on
+        # screen (notably at the end of project reopen); in that case it must
+        # not overwrite the analysis View's projected attachments/empty owner.
+        if self.chart_stack.current_mode() == 'time':
+            if self.files:
                 self._render_view_to_canvas(
-                    partner,
-                    self.chart_stack.secondary_canvas(),
-                    update_primary_ui=False,
-                )
-        else:
-            self._project_view_controls(idx)
+                    idx, self.canvas_time, update_primary_ui=True)
+                if partner is not None:
+                    self._render_view_to_canvas(
+                        partner,
+                        self.chart_stack.secondary_canvas(),
+                        update_primary_ui=False,
+                    )
+            else:
+                self._project_view_controls(idx)
 
     def _on_view_split(self, other_idx):
         self._capture_focused_view()

@@ -2291,6 +2291,51 @@ def test_view_switch_restore_renders_pane_own_reference_label(two_file_win, qtbo
     assert canvas._cbar.getAxis("left").labelText == expected_label_b
 
 
+def test_order_view_switch_with_cold_cache_does_not_submit_worker(
+    two_file_win, qtbot, monkeypatch,
+):
+    """Applying a View's saved display reference is restore, not compute.
+
+    The dB-reference editor emits ``valueChanged`` while params are projected
+    into the live Inspector.  That programmatic signal must not schedule the
+    normal user-edit cache-render callback: on a cold cache that callback
+    would otherwise fall through to an Order worker submission.
+    """
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
+    mgr = win.analysis_managers["order"]
+    first = mgr.get(mgr.active)
+    first.panes[0].sources = [(fids[0], "torque")]
+    first.panes[0].rpm_source = (fids[0], "speed")
+    first.params = dict(win.inspector.order_ctx.get_params())
+    first.params["db_reference"] = 2.0
+
+    assert mgr.new_view() == 1
+    _seed_active_analysis_attachments(win)
+    second = mgr.get(mgr.active)
+    second.panes[0].sources = [(fids[1], "torque")]
+    second.panes[0].rpm_source = (fids[1], "speed")
+    second.params = dict(win.inspector.order_ctx.get_params())
+    second.params["db_reference"] = 3.0
+
+    win.analysis_caches["order"].clear()
+    submitted = []
+    monkeypatch.setattr(
+        win._analysis_jobs,
+        "submit_batch",
+        lambda section, jobs, **kwargs: submitted.append(
+            (section, len(list(jobs)), kwargs)
+        ),
+    )
+
+    mgr.set_active(0)
+    qtbot.wait(50)
+
+    assert submitted == []
+
+
 def test_heatmap_reference_change_rerenders_cached_result_without_worker(
     two_file_win, qtbot,
 ):

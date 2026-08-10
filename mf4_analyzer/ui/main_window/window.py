@@ -2098,7 +2098,10 @@ class MainWindow(
         stamping (spec 2026-07-12 S5 / A17), no render/resolve-logic change.
         ``rerender_fn`` is the SAME callable each ``_connect`` call site
         already deferred via ``QTimer.singleShot(0, ...)``."""
-        if getattr(self._analysis_ctx(section), "_applying_preset", False):
+        if (
+            self._applying_analysis_view
+            or getattr(self._analysis_ctx(section), "_applying_preset", False)
+        ):
             return
         self._stamp_db_reference_nudge_facts(section)
         QTimer.singleShot(0, rerender_fn)

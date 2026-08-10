@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>分析 View 来源隔离 · 最终验收</title>
+  <style>
+    :root { color-scheme: light; --ink:#18212f; --muted:#64748b; --line:#dbe4ef;
+      --blue:#1677ff; --blue-soft:#edf5ff; --green:#14804a; --green-soft:#eaf8f0;
+      --amber:#9a5b00; --amber-soft:#fff7e6; --red:#b42318; --red-soft:#fff0ee; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#f3f6fa; color:var(--ink); font:15px/1.62 -apple-system,
+      BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+    main { max-width:1180px; margin:28px auto 64px; padding:0 24px; }
+    header,.card { background:#fff; border:1px solid var(--line); border-radius:16px;
+      box-shadow:0 8px 30px rgba(31,50,81,.06); }
+    header { padding:32px 36px; border-top:5px solid var(--blue); }
+    h1 { margin:0 0 8px; font-size:30px; line-height:1.25; }
+    h2 { margin:0 0 16px; font-size:21px; }
+    h3 { margin:22px 0 8px; font-size:17px; }
+    p { margin:8px 0; }
+    code { padding:2px 6px; border-radius:6px; background:#f2f5f9; font-family:ui-monospace,
+      SFMono-Regular,Menlo,monospace; font-size:.92em; }
+    .meta { color:var(--muted); }
+    .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-top:20px; }
+    .metric { padding:15px 17px; border-radius:12px; background:#f7f9fc; border:1px solid var(--line); }
+    .metric b { display:block; font-size:20px; }
+    .metric span { color:var(--muted); font-size:13px; }
+    .card { margin-top:18px; padding:26px 30px; }
+    .verdict { border-left:5px solid #e49a11; background:var(--amber-soft); }
+    .callout { margin:14px 0; padding:13px 16px; border-radius:10px; }
+    .good { background:var(--green-soft); color:#0d6037; }
+    .warn { background:var(--amber-soft); color:#754600; }
+    .bad { background:var(--red-soft); color:#842018; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; }
+    th,td { padding:10px 11px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:#f4f7fb; }
+    .pass { color:var(--green); font-weight:700; }
+    .partial { color:var(--amber); font-weight:700; }
+    ul,ol { padding-left:22px; }
+    li { margin:5px 0; }
+    .shots { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    figure { margin:0; padding:8px; border:1px solid var(--line); border-radius:12px; background:#fafcff; }
+    figure img { display:block; width:100%; border-radius:8px; }
+    figcaption { padding:7px 3px 1px; color:var(--muted); font-size:13px; }
+    a { color:#0969da; text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    footer { margin-top:22px; color:var(--muted); font-size:13px; text-align:center; }
+    @media (max-width:800px) { .grid,.shots { grid-template-columns:1fr; } main{padding:0 12px}
+      header,.card{padding:22px 20px} table{display:block;overflow:auto} }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="meta">TraceLab v7.9.7 · 2026-08-11 · macOS Cocoa + offscreen Qt</div>
+    <h1>分析 View 来源隔离 · 最终验收</h1>
+    <p>分支 <code>codex/analysis-view-source-isolation-pilot</code>，基础提交
+      <code>9ed578dff63bf0e516dbb0da90e3c80ab500c264</code>，并包含本轮两个未提交窄修复。</p>
+    <div class="grid">
+      <div class="metric"><b>50 / 250</b><span>切换轮次 / 状态比较，0 次计算提交</span></div>
+      <div class="metric"><b>540 passed</b><span>最终聚焦来源隔离与项目恢复门禁</span></div>
+      <div class="metric"><b>567.78 ms</b><span>1,800 candidates 当前 p95，低于 693.98 ms 门槛</span></div>
+    </div>
+  </header>
+
+  <section class="card verdict">
+    <h2>结论：受限试运行 GO，正式全量验收未关闭</h2>
+    <p>来源隔离的状态模型、View 恢复、局部 detach、项目 round-trip、deferred restore 和性能门槛
+      已闭环，没有观察到 spec 定义的状态破坏型 NO-GO。</p>
+    <p>但 A17 只能判为 <b>PARTIAL</b>：真实 Cocoa 已覆盖 3 文件/4 logical sources、五模式、多 View、
+      空态、Inspector 默认、项目重开及全局关闭默认取消；Qt 嵌套 QDrag 未被系统级控制工具完成，
+      所以前台拖入、角色选择、局部 detach 与明确级联未取得真实手势证据。</p>
+    <p>主全量仍有已在 <code>1617b2d0</code> 复现的 Batch 基线红项，不能写成仓库全绿。</p>
+  </section>
+
+  <section class="card">
+    <h2>本轮发现并修复的两个问题</h2>
+    <h3>R1 · 程序化 View restore 提交冷缓存计算</h3>
+    <p>Order View 应用保存的 dB reference 时发出 <code>valueChanged</code>，延迟执行用户编辑回调，
+      冷缓存进一步提交 worker。现在 <code>_on_db_reference_value_edited()</code> 在
+      <code>_applying_analysis_view</code> / preset apply 期间不响应。新增测试在修复前红、修复后绿，
+      Task-10 最终记录 0 次 <code>submit_batch</code>。</p>
+    <h3>R2 · 项目重开后隐藏时域覆盖分析 owner</h3>
+    <p>项目保存于 FRF View 2，重开后画布与 Inspector 已是 FRF，但左栏写成“时域 · View 2”。
+      根因是最后的 Time manager restore 在非时域模式仍投影共享 navigator。现在仅当可见模式为
+      <code>time</code> 时投影时域控件；offscreen 回归与真实 Cocoa 均恢复为“FRF · View 2”。</p>
+  </section>
+
+  <section class="card">
+    <h2>Task 10 状态矩阵</h2>
+    <table>
+      <tr><th>项目</th><th>结果</th></tr>
+      <tr><td>输入</td><td>3 个物理文件、4 个 logical sources；分组 HDF 产生 2x / 1x</td></tr>
+      <tr><td>切换</td><td class="pass">5 模式 × 2 View，50 轮，250 次比较全部通过</td></tr>
+      <tr><td>计算提交</td><td class="pass">0</td></tr>
+      <tr><td>局部 detach</td><td class="pass">Time B 通过；FFT B 取消/确认通过；sibling/cache 保持</td></tr>
+      <tr><td>分组关闭</td><td class="pass">2 logical sources 汇总为一次确认，取消后全保留</td></tr>
+      <tr><td>保存重开</td><td class="pass">3 physical / 4 logical 完整恢复</td></tr>
+      <tr><td>Deferred restore</td><td class="pass">reorder 后继续按 view_id 恢复</td></tr>
+    </table>
+    <p class="meta">原始证据：<a href="../../../.state/analysis-source-isolation-pilot/task10-state-matrix.json">
+      task10-state-matrix.json</a></p>
+  </section>
+
+  <section class="card">
+    <h2>性能门禁</h2>
+    <p>6 CSV × 300 通道 = 1,800 candidates；5 次预热、50 次测量；相同 QSettings 隔离环境；
+      基线 <code>1617b2d0</code>。</p>
+    <table>
+      <tr><th>路径</th><th>基线 p50 / p95</th><th>当前 p50 / p95</th><th>门槛</th><th>判定</th></tr>
+      <tr><td>Candidate refresh</td><td>538.9529 / 555.1843 ms</td><td>548.8396 / 567.7764 ms</td>
+        <td>693.9804 ms</td><td class="pass">PASS</td></tr>
+      <tr><td>Attachment projection</td><td>2.9761 / 3.2114 ms</td><td>8.1937 / 8.5333 ms</td>
+        <td>53.2114 ms</td><td class="pass">PASS</td></tr>
+    </table>
+    <p class="meta">这是 offscreen 定量证据；Cocoa 前台未观察到肉眼冻结，但两类证据不互相替代。
+      <a href="../../../.state/analysis-source-isolation-pilot/task10-candidate-comparison.json">查看 JSON</a></p>
+  </section>
+
+  <section class="card">
+    <h2>自动化门禁与 Batch 归因</h2>
+    <div class="callout good">聚焦门禁：540 passed, 787 warnings in 76.06s。边界门禁：9 passed,
+      1 skipped in 0.88s。Task-10 矩阵：PASS。</div>
+    <p>最终两进程全量：主进程
+      <code>5914 passed, 9 skipped, 3 deselected, 2 failed, 8 errors in 650.27s</code>；
+      acquisition <code>355 passed, 4 warnings in 8.62s</code>。</p>
+    <p>已在基线 <code>1617b2d0</code> 逐项复现：</p>
+    <ul>
+      <li>Batch segmented choice：期望 x=72，实际 x=71；</li>
+      <li>Batch signal picker：期望 height=38，实际 height=32；</li>
+      <li>三个 BatchSheet 用例 test body 已通过，teardown 访问已删除 C++ wrapper；</li>
+      <li>后续 BLF setup error 为 teardown 污染，单独运行通过。</li>
+    </ul>
+    <div class="callout warn">这些红项是 Batch 几何/生命周期既存债务，不是来源隔离回归；
+      本轮未修改 Batch 代码或测试来做绿。</div>
+  </section>
+
+  <section class="card">
+    <h2>真实 macOS Cocoa 前台</h2>
+    <p>版本 v7.9.7，Qt platform = cocoa。HEAD 记录为 <code>9ed578…</code>，进程使用当前工作树，
+      因而包含本轮两个未提交修复。QSettings 隔离在 <code>.state</code>。</p>
+    <ol>
+      <li>3 张物理文件卡；分组 HDF 显示 2 轨并映射为 2 logical sources；</li>
+      <li>Time、FFT、FFT-time、Order、FRF 均创建 View 2；新 View 空且 Inspector 回到 section 默认；</li>
+      <li>保存/重开后恢复 3 physical / 4 logical、五 section 的两个 View 和 active FRF View 2；</li>
+      <li>修复后左栏 owner 与顶部一致为“FRF · View 2”；</li>
+      <li>关闭分组 HDF 只显示一次摘要，列出两个 Time attachment，焦点默认在“取消”。</li>
+    </ol>
+    <div class="shots">
+      <figure><img src="../../../.state/analysis-source-isolation-pilot/foreground-02-time-empty-view.jpg"
+        alt="Time View 2 空态"><figcaption>Time View 2：新 View 空态</figcaption></figure>
+      <figure><img src="../../../.state/analysis-source-isolation-pilot/foreground-03-fft-empty-view.jpg"
+        alt="FFT View 2 空态"><figcaption>FFT View 2：空来源与默认 Inspector</figcaption></figure>
+      <figure><img src="../../../.state/analysis-source-isolation-pilot/foreground-06-frf-empty-view.jpg"
+        alt="FRF View 2 空态"><figcaption>FRF View 2：空输入/输出</figcaption></figure>
+      <figure><img src="../../../.state/analysis-source-isolation-pilot/foreground-07-project-reopened.jpg"
+        alt="项目重开后的 FRF View 2"><figcaption>项目重开：修复后 owner 为 FRF · View 2</figcaption></figure>
+      <figure><img src="../../../.state/analysis-source-isolation-pilot/foreground-08-global-close-cancel.jpg"
+        alt="分组文件全局关闭默认取消"><figcaption>分组关闭：一次摘要，默认取消</figcaption></figure>
+    </div>
+    <div class="callout warn">前台未证实：拖文件加入分析 View、右侧角色选择、局部 detach、明确全局级联。
+      Qt QDrag 的嵌套事件循环未被系统级控制工具完成；自动化覆盖不能冒充真实手势证据。</div>
+  </section>
+
+  <section class="card">
+    <h2>A1–A18 最终台账</h2>
+    <table>
+      <tr><th>ID</th><th>状态</th><th>证据摘要</th></tr>
+      <tr><td>A1–A6</td><td class="pass">PASS</td><td>schema/migration、section picker、Time/FFT owner、不可编辑候选模式</td></tr>
+      <tr><td>A7</td><td class="pass">PASS</td><td>四分析新 View 空状态与默认 Inspector；Cocoa 截图</td></tr>
+      <tr><td>A8–A9</td><td class="pass">PASS</td><td>Duplicate 新 view_id；250 次切换零漂移/零 job</td></tr>
+      <tr><td>A10–A12</td><td class="pass">PASS</td><td>局部 detach/cache、全局 close、channel delete/exact-X/overlay</td></tr>
+      <tr><td>A13–A16</td><td class="pass">PASS</td><td>round-trip、degraded-save、deferred restore、文案同步</td></tr>
+      <tr><td>A17</td><td class="partial">PARTIAL</td><td>Cocoa 的 3 文件 × 多 View × 5 模式通过；拖入/角色/局部 detach/明确级联未证实</td></tr>
+      <tr><td>A18</td><td class="pass">PASS</td><td>1,800 candidates 两条 p95 低于门槛</td></tr>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>试运行控制建议</h2>
+    <ol>
+      <li>可继续少量真实工程试运行，但不标记“正式全量验收完成”；</li>
+      <li>重点人工观察真实鼠标拖入、角色选择、局部 detach 文案，任一错位立即停止扩大；</li>
+      <li>先提交本轮两处修复与测试，再扩大试运行，保持证据树与运行树一致；</li>
+      <li>Batch 几何/teardown 债务单独立项，不和来源隔离混修；</li>
+      <li>Stage 2 unresolved/relink 尚未实现，全局明确关闭会清理引用，不承诺自动重连。</li>
+    </ol>
+    <p>完整文字版：<a href="2026-08-11-analysis-view-source-isolation-final-acceptance.md">
+      2026-08-11-analysis-view-source-isolation-final-acceptance.md</a></p>
+  </section>
+
+  <footer>本报告生成时未 commit / push；.state 证据为本地验收产物，不建议提交 Git。</footer>
+</main>
+</body>
+</html>
