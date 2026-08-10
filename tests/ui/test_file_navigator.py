@@ -427,7 +427,10 @@ def test_follow_link_menu_is_compact_and_emits_prefs(qapp, qtbot):
     qtbot.addWidget(nav)
 
     assert nav.btn_auto_attach.maximumWidth() <= 24
-    assert nav.btn_auto_attach.popupMode() == QToolButton.InstantPopup
+    # Icon-only chrome like the kebab: no InstantPopup/setMenu triangle.
+    assert nav.btn_auto_attach.menu() is None
+    assert nav.btn_auto_attach.popupMode() != QToolButton.InstantPopup
+    assert nav._follow_menu is not None
     assert nav.auto_attach_enabled() is True
     assert nav.follow_prefs() == FollowPrefs(True, False, False)
     enabled_icon_key = nav.btn_auto_attach.icon().cacheKey()

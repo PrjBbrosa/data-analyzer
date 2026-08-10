@@ -262,8 +262,8 @@ class FileNavigator(QWidget):
         self.btn_auto_attach.setFixedSize(QSize(24, 24))
         self.btn_auto_attach.setProperty("role", "icon")
         self.btn_auto_attach.setAutoRaise(True)
-        # InstantPopup menu — click opens checkable follow prefs, not a toggle.
-        self.btn_auto_attach.setPopupMode(QToolButton.InstantPopup)
+        # Same chrome as the kebab: icon-only click opens a menu. Do not use
+        # InstantPopup+setMenu — that paints the gray dropdown triangle.
         self._follow_menu = apply_rounded_menu_chrome(
             QMenu(self.btn_auto_attach), gutter="check"
         )
@@ -286,7 +286,7 @@ class FileNavigator(QWidget):
             self._act_fill_on_mode_entry,
         ):
             act.toggled.connect(self._on_follow_action_toggled)
-        self.btn_auto_attach.setMenu(self._follow_menu)
+        self.btn_auto_attach.clicked.connect(self._open_follow_menu)
         self._sync_auto_attach_button()
         head.addWidget(self.btn_auto_attach)
         # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24) — same as
@@ -583,6 +583,12 @@ class FileNavigator(QWidget):
             return
         target = fids[0] if fids else fid
         self.file_close_requested.emit(target)
+
+    def _open_follow_menu(self):
+        """Open the follow prefs menu under the link icon (no dropdown triangle)."""
+        btn = self.btn_auto_attach
+        gp = btn.mapToGlobal(btn.rect().bottomLeft())
+        self._follow_menu.exec_(gp)
 
     def _open_kebab(self):
         menu = apply_rounded_menu_chrome(QMenu(self))
