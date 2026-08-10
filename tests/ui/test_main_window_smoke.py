@@ -3896,6 +3896,11 @@ def test_fft_panel_keeps_signal_selection_across_channel_edit(
     # unrelated file A is edited.
     fid_first = next(iter(w.files))
     fid_second = list(w.files.keys())[1]
+    # Stage 1: analysis pickers use each section's own View attachments, not
+    # the time View. Seed both analysis Views so file B is a candidate.
+    for section in ("fft", "order"):
+        w.analysis_managers[section].get(0).attached_file_ids = list(w.files)
+    w._refresh_analysis_candidates()
     fft_combo = w.inspector.fft_ctx.combo_sig
     order_combo = w.inspector.order_ctx.combo_sig
 
@@ -4581,6 +4586,8 @@ def test_fft_checked_channel_change_refreshes_auto_db_reference(qapp, qtbot):
     w._on_source_load_finished([fid])
 
     w.toolbar.btn_mode_fft.click()
+    # FFT View owns its own attachments; seed so the checked channel is in scope.
+    w._attach_files_to_active_context([fid])
     ctx = w._analysis_ctx("fft")
     ctx.db_reference_control.set_mode("auto")
     # 哨兵：假装控件停在一个「旧」值，勾选若真触发 auto 会覆盖它
@@ -4596,8 +4603,10 @@ def test_fft_checked_channel_change_refreshes_auto_db_reference(qapp, qtbot):
 
 
 def test_entering_fft_mode_resolves_auto_db_reference_for_checked_channel(qapp, qtbot):
-    """从 time 模式勾选通道后切入 FFT，Auto 的 dB reference 应在进入 FFT 时就
-    按已勾选通道解析（acceleration 1e-6），而不是等到下一次勾选变化才刷新。"""
+    """切入 FFT 并勾选通道后，Auto 的 dB reference 应按该通道解析。
+
+    Stage 1：频谱 View 不继承时域勾选；进入 FFT 后需先加入文件再勾选。
+    """
     import numpy as np
     import pandas as pd
     import pytest
@@ -4611,8 +4620,6 @@ def test_entering_fft_mode_resolves_auto_db_reference_for_checked_channel(qapp, 
     fid = next(iter(w.files))
     w._on_source_load_finished([fid])
 
-    # 在 time 模式勾选（不经 FFT 分支），再设哨兵，最后切入 FFT
-    w.navigator.check_first_channel(fid)
     ctx = w._analysis_ctx("fft")
     ctx.db_reference_control.set_mode("auto")
     editor = ctx.db_reference_control.editor
@@ -4622,6 +4629,9 @@ def test_entering_fft_mode_resolves_auto_db_reference_for_checked_channel(qapp, 
 
     w.toolbar.btn_mode_fft.click()
     qtbot.wait(20)  # _enter_fft_mode 经 QTimer.singleShot(0) 延后一个事件循环
+    w._attach_files_to_active_context([fid])
+    w.navigator.check_first_channel(fid)
+    w._enter_fft_mode()
 
     assert ctx.db_reference_control.mode() == "auto"
     assert editor.value() == pytest.approx(1e-6)
