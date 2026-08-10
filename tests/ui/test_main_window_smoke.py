@@ -4606,6 +4606,10 @@ def test_entering_fft_mode_resolves_auto_db_reference_for_checked_channel(qapp, 
     """切入 FFT 并勾选通道后，Auto 的 dB reference 应按该通道解析。
 
     Stage 1：频谱 View 不继承时域勾选；进入 FFT 后需先加入文件再勾选。
+    这条走真实事件链：navigator 勾选变化经 ``channels_changed`` ->
+    ``window._ch_changed``（role == 'fft_sources' 分支，window.py 约 2735
+    行）直接调用 ``_resolve_and_apply_db_reference('fft')`` —— 不手动重放
+    ``_enter_fft_mode()``，勾选本身就该触发 Auto 解析。
     """
     import numpy as np
     import pandas as pd
@@ -4631,7 +4635,6 @@ def test_entering_fft_mode_resolves_auto_db_reference_for_checked_channel(qapp, 
     qtbot.wait(20)  # _enter_fft_mode 经 QTimer.singleShot(0) 延后一个事件循环
     w._attach_files_to_active_context([fid])
     w.navigator.check_first_channel(fid)
-    w._enter_fft_mode()
 
     assert ctx.db_reference_control.mode() == "auto"
     assert editor.value() == pytest.approx(1e-6)
