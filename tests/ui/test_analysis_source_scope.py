@@ -496,6 +496,75 @@ def test_close_files_group_is_atomic_on_cancel_and_confirm(win_two, monkeypatch)
     assert len(confirms) == 1
 
 
+def test_close_files_group_emits_one_aggregated_toast_and_reset(
+    win_two, monkeypatch,
+):
+    """A 2-fid physical-file group must surface one summary, not N.
+
+    Regression coverage for the group-close feedback fan-out: before the
+    fix, ``_close_files`` looped over ``_close`` unchanged and each call
+    fired its own toast + statusBar + full plot-state reset.
+    """
+    win, fid_a, fid_b = win_two
+    monkeypatch.setattr(win, "_confirm_global_file_close", lambda *a, **k: True)
+    toasts = []
+    monkeypatch.setattr(
+        win, "toast", lambda msg, level="info": toasts.append((msg, level))
+    )
+    resets = []
+    orig_reset = win._reset_plot_state
+
+    def _tracked_reset(*a, **k):
+        resets.append((a, k))
+        return orig_reset(*a, **k)
+
+    monkeypatch.setattr(win, "_reset_plot_state", _tracked_reset)
+
+    win._close_files([fid_a, fid_b])
+
+    assert fid_a not in win.files and fid_b not in win.files
+    close_toasts = [t for t in toasts if t[0].startswith("已关闭")]
+    assert len(close_toasts) == 1
+    msg, level = close_toasts[0]
+    assert "2" in msg and "个来源" in msg
+    assert level == "info"
+    assert len(resets) == 1
+    assert win.statusBar.currentMessage() == "已关闭 2 个来源 | 剩余 0 文件"
+
+
+def test_close_files_single_member_group_keeps_itemized_toast(
+    win_two, monkeypatch,
+):
+    """The navigator routes even an ordinary (non-grouped) file's own close
+    button through ``_close_files`` with a 1-fid list. That common case must
+    keep ``_close``'s itemized, filename-bearing toast rather than the
+    group summary wording."""
+    win, fid_a, fid_b = win_two
+    name_a = win.files[fid_a].short_name
+    monkeypatch.setattr(win, "_confirm_global_file_close", lambda *a, **k: True)
+    toasts = []
+    monkeypatch.setattr(
+        win, "toast", lambda msg, level="info": toasts.append((msg, level))
+    )
+    resets = []
+    orig_reset = win._reset_plot_state
+
+    def _tracked_reset(*a, **k):
+        resets.append((a, k))
+        return orig_reset(*a, **k)
+
+    monkeypatch.setattr(win, "_reset_plot_state", _tracked_reset)
+
+    win._close_files([fid_a])
+
+    assert fid_a not in win.files and fid_b in win.files
+    close_toasts = [t for t in toasts if t[0].startswith("已关闭")]
+    assert len(close_toasts) == 1
+    assert close_toasts[0] == (f"已关闭 {name_a}", "info")
+    assert len(resets) == 1
+    assert win.statusBar.currentMessage() == f"已关闭 | 剩余 {len(win.files)} 文件"
+
+
 def test_explicit_global_cascade_cleans_every_reference_and_cache(
     win_two, monkeypatch,
 ):

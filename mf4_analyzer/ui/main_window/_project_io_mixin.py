@@ -1249,7 +1249,16 @@ class ProjectIOMixin:
         )
         return list(dbcs)
 
-    def _close(self, fid, *, force=False):
+    def _close(self, fid, *, force=False, notify=True):
+        """Close one logical source (fid).
+
+        ``notify`` gates the tail-end user feedback (plot-state reset +
+        statusBar + toast). It defaults to True so every existing call site
+        — including the single-file ``file_close_requested`` →
+        ``_on_file_close_requested`` → ``_close`` path — is byte-for-byte
+        unchanged. ``_close_files`` passes ``notify=False`` for multi-source
+        physical-file groups and emits one aggregated summary itself instead
+        (spec: group close must not spam N toasts / N full canvas resets)."""
         if fid not in self.files: return
         from .analysis_source_scope import collect_source_uses
 
@@ -1292,9 +1301,10 @@ class ProjectIOMixin:
         self._refresh_analysis_candidates()
         self._active = self.navigator._active_fid  # navigator picks fallback
         self._update_info()
-        self._reset_plot_state(scope='file')
-        self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
-        self.toast(f"已关闭 {name}", "info")
+        if notify:
+            self._reset_plot_state(scope='file')
+            self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
+            self.toast(f"已关闭 {name}", "info")
 
     def save_project(self, path):
         """Serialize the current session (open files + all Views) to a

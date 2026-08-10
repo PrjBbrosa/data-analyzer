@@ -2177,6 +2177,16 @@ class MainWindow(
 
         Dependencies across the whole group are summarized once. Cancel keeps
         all members; confirm force-closes each so partial success is impossible.
+
+        A single-member group (the common case: an ordinary file's own close
+        button also routes here via the navigator's group-close request)
+        keeps the itemized ``_close`` feedback — filename in the toast. A
+        genuine multi-source group (e.g. an HDF file split into several
+        ``LoadedSource`` entries) would otherwise fire one toast + one full
+        plot-state reset per fid; those are suppressed per-fid (``notify=
+        False``) and replaced with a single aggregated summary after the
+        loop, since ``_reset_plot_state`` only reflects final ``self.files``/
+        ``self._active`` state and is safe to defer to the end.
         """
         ordered = []
         seen = set()
@@ -2202,9 +2212,21 @@ class MainWindow(
             uses, files=tuple(ordered),
         ):
             return
+        group_close = len(ordered) > 1
+        closed = []
         for fid in ordered:
             if fid in self.files:
-                self._close(fid, force=True)
+                self._close(fid, force=True, notify=not group_close)
+                closed.append(fid)
+        if group_close and closed:
+            self._reset_plot_state(scope='file')
+            self.statusBar.showMessage(
+                f"已关闭 {len(closed)} 个来源 | 剩余 {len(self.files)} 文件"
+            )
+            self.toast(
+                f"已关闭 {len(closed)} 个来源 · 剩余 {len(self.files)} 文件",
+                "info",
+            )
 
     def _on_close_all_requested(self):
         # Single product confirm (dependency summary + close-all) lives here;
