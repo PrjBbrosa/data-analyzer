@@ -13,6 +13,7 @@ from ..analysis_view_state import (
     analysis_view_source_fids,
     normalize_analysis_attachments,
 )
+from ..time_xaxis import EXACT_SOURCE, CustomXAxisSpec
 
 
 @dataclass(frozen=True)
@@ -21,7 +22,7 @@ class SourceUse:
     view_id: str
     view_name: str
     pane_idx: int | None
-    role: str  # attachment | checked | signal | rpm | input | output
+    role: str  # attachment | checked | signal | rpm | input | output | overlay_primary | x_axis
     fid: str
     channel: str | None = None
 
@@ -48,6 +49,67 @@ def analysis_scope_fids(
     return [
         str(fid) for fid in state.attached_file_ids if str(fid) in loaded
     ]
+
+
+def _append_time_persisted_uses(
+    uses: list[SourceUse],
+    state: Any,
+    *,
+    target: str,
+    view_id: str,
+    view_name: str,
+) -> None:
+    """Index Time View persisted refs that are not attachment/checked."""
+    overlay = getattr(state, "overlay_primary", None)
+    if overlay is not None and str(overlay[0]) == target:
+        uses.append(SourceUse(
+            domain="time",
+            view_id=view_id,
+            view_name=view_name,
+            pane_idx=None,
+            role="overlay_primary",
+            fid=target,
+            channel=str(overlay[1]),
+        ))
+
+    axis_opts = getattr(state, "axis_opts", None) or {}
+    if not isinstance(axis_opts, Mapping):
+        return
+    spec = CustomXAxisSpec.from_axis_opts(axis_opts.get("x_axis"))
+    if (
+        spec.resolver == EXACT_SOURCE
+        and spec.source_fid is not None
+        and str(spec.source_fid) == target
+    ):
+        uses.append(SourceUse(
+            domain="time",
+            view_id=view_id,
+            view_name=view_name,
+            pane_idx=None,
+            role="x_axis",
+            fid=target,
+            channel=str(spec.channel) if spec.channel else None,
+        ))
+
+    signature = axis_opts.get("frf_source_signature")
+    if not isinstance(signature, dict):
+        return
+    for role_name in ("input", "output"):
+        endpoint = signature.get(role_name)
+        if (
+            isinstance(endpoint, (list, tuple))
+            and len(endpoint) == 2
+            and str(endpoint[0]) == target
+        ):
+            uses.append(SourceUse(
+                domain="time",
+                view_id=view_id,
+                view_name=view_name,
+                pane_idx=None,
+                role=role_name,
+                fid=target,
+                channel=str(endpoint[1]),
+            ))
 
 
 def collect_source_uses(
@@ -85,6 +147,13 @@ def collect_source_uses(
                     fid=target,
                     channel=str(key[1]),
                 ))
+        _append_time_persisted_uses(
+            uses,
+            state,
+            target=target,
+            view_id=view_id,
+            view_name=view_name,
+        )
 
     for section, manager in (analysis_managers or {}).items():
         views = getattr(manager, "views", None) or ()
@@ -165,7 +234,6 @@ def collect_channel_uses(
         if (use.fid, use.channel) in wanted:
             uses.append(use)
     return uses
-
 
 def detach_analysis_files(
     state: AnalysisViewState,

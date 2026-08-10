@@ -236,6 +236,30 @@ def test_channel_tree_has_compact_time_visibility_column(qapp, qtbot):
     assert widget.tree.header().sectionSize(2) == 42
 
 
+def test_projection_role_updates_header_and_checkable_flags(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    _add_attached_file(widget, "f0", _MultiChannelFileData())
+    channel = widget._file_items["f0"].child(0)
+    assert channel is not None
+    assert channel.flags() & Qt.ItemIsUserCheckable
+
+    widget.set_projection_role("fft_sources")
+    assert widget.tree.headerItem().text(2) == "来源"
+    assert channel.flags() & Qt.ItemIsUserCheckable
+
+    widget.set_projection_role("analysis_candidates")
+    assert widget.tree.headerItem().text(2) == "移出"
+    assert not (channel.flags() & Qt.ItemIsUserCheckable)
+    file_item = widget._file_items["f0"]
+    assert not (file_item.flags() & Qt.ItemIsUserCheckable)
+
+    widget.set_projection_role("time")
+    assert widget.tree.headerItem().text(2) == "显示"
+    assert channel.flags() & Qt.ItemIsUserCheckable
+    assert file_item.flags() & Qt.ItemIsUserCheckable
+
+
 def test_time_visibility_icons_are_distinct(qapp):
     opened = Icons.eye_open()
     closed = Icons.eye_closed()

@@ -752,6 +752,9 @@ class MultiFileChannelWidget(QWidget):
         self._apply_filters()
         self._refresh_visibility_icons()
         self._update_edit_enabled()
+        # Newly built rows always start checkable; re-apply role chrome so
+        # analysis_candidates stays non-checkable after add/refresh.
+        self._sync_projection_chrome()
 
     def refresh_file(self, fid, fd):
         """Rebuild one file's channel rows without detaching it from a View.
@@ -1199,6 +1202,15 @@ class MultiFileChannelWidget(QWidget):
             self._empty_view_name = str(view_name)
         self._sync_empty_state()
 
+    def _iter_tree_items(self):
+        def _walk(node):
+            yield node
+            for i in range(node.childCount()):
+                yield from _walk(node.child(i))
+
+        for i in range(self.tree.topLevelItemCount()):
+            yield from _walk(self.tree.topLevelItem(i))
+
     def _sync_projection_chrome(self):
         # Channel-config apply/save is a Time View feature.
         is_time = self._projection_role == "time"
@@ -1208,6 +1220,31 @@ class MultiFileChannelWidget(QWidget):
         editable = self._channel_checks_editable
         for widget in (self.btn_all, self.btn_none, self.btn_selected_only):
             widget.setEnabled(editable and bool(self._attached_file_ids))
+        header = self.tree.headerItem()
+        if header is not None:
+            header.setText(
+                2,
+                {
+                    "time": "显示",
+                    "fft_sources": "来源",
+                    "analysis_candidates": "移出",
+                }.get(self._projection_role, "显示"),
+            )
+        # analysis_candidates must not present checkboxes; time / fft_sources
+        # re-enable them so role switches reverse cleanly after a rebuild.
+        self._updating = True
+        try:
+            for item in self._iter_tree_items():
+                data = item.data(0, Qt.UserRole)
+                if not data or data[0] not in ("channel", "file", "source", "raster"):
+                    continue
+                flags = item.flags()
+                if editable:
+                    item.setFlags(flags | Qt.ItemIsUserCheckable)
+                else:
+                    item.setFlags(flags & ~Qt.ItemIsUserCheckable)
+        finally:
+            self._updating = False
 
     def _on_item_clicked(self, item, column):
         if column != 2:

@@ -161,6 +161,65 @@ def test_collect_source_uses_indexes_time_and_analysis_roles():
     assert any(u.domain == "fft" and u.role == "signal" for u in uses)
 
 
+def test_collect_source_uses_indexes_exact_x_without_attachment():
+    from mf4_analyzer.ui.main_window.analysis_source_scope import (
+        collect_source_uses,
+    )
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec, EXACT_SOURCE
+
+    time_views = [
+        ViewState(
+            name="T-exact",
+            tab_color="#111",
+            attached_file_ids=[],
+            checked=[],
+            view_id="tv-x",
+            axis_opts={
+                "x_axis": CustomXAxisSpec(
+                    mode="channel",
+                    resolver=EXACT_SOURCE,
+                    source_fid="f1",
+                    channel="xpos",
+                    label="xpos",
+                ).to_axis_opts(),
+            },
+        ),
+    ]
+    uses = collect_source_uses("f1", time_views=time_views)
+    assert uses
+    assert any(u.role == "x_axis" and u.channel == "xpos" for u in uses)
+
+
+def test_collect_source_uses_indexes_overlay_and_frf_signature():
+    from mf4_analyzer.ui.main_window.analysis_source_scope import (
+        collect_source_uses,
+    )
+
+    time_views = [
+        ViewState(
+            name="T-overlay",
+            tab_color="#111",
+            attached_file_ids=[],
+            checked=[],
+            view_id="tv-o",
+            overlay_primary=("f1", "torque"),
+            axis_opts={
+                "frf_source_signature": {
+                    "input": ["f1", "in"],
+                    "output": ["f2", "out"],
+                    "effective_time_range": [0.0, 1.0],
+                },
+            },
+        ),
+    ]
+    uses_f1 = collect_source_uses("f1", time_views=time_views)
+    roles_f1 = {u.role for u in uses_f1}
+    assert "overlay_primary" in roles_f1
+    assert "input" in roles_f1
+    uses_f2 = collect_source_uses("f2", time_views=time_views)
+    assert any(u.role == "output" and u.channel == "out" for u in uses_f2)
+
+
 # ---------------------------------------------------------------------------
 # Live projection contracts (require product wiring)
 # ---------------------------------------------------------------------------
@@ -277,13 +336,45 @@ def test_mode_switch_applies_target_active_view_before_capture(win_two, qtbot):
     fft = win.analysis_managers["fft"]
     fft.get(0).attached_file_ids = [fid_b]
     fft.get(0).panes[0].sources = [(fid_b, "sig")]
-    fft.get(0).params = {"nfft": 2048}
+    fft.get(0).params = {"nfft": 2048, "nfft_mode": "fixed"}
+
+    # Poison live Inspector with a different NFFT while still in time mode.
+    win.inspector.fft_ctx.apply_params({"nfft": 128, "nfft_mode": "fixed"})
+    assert win.inspector.fft_ctx.get_params().get("nfft") == 128
 
     win._on_mode_changed("fft")
-    qtbot.wait(20)
+    qtbot.waitUntil(
+        lambda: win.chart_stack.current_mode() == "fft"
+        and win.inspector.fft_ctx.get_params().get("nfft") == 2048,
+        timeout=1000,
+    )
 
     assert win.navigator.get_attached_file_ids() == [fid_b]
     assert set(_picker_fids(win.inspector.fft_ctx)) == {fid_b}
+    live_nfft = win.inspector.fft_ctx.get_params().get("nfft")
+    state_nfft = fft.get(0).params.get("nfft")
+    assert live_nfft == 2048
+    assert state_nfft == 2048
+
+
+def test_local_analysis_detach_clears_active_fft_canvas(win_two, monkeypatch, qtbot):
+    win, fid_a, fid_b = win_two
+    monkeypatch.setattr(win, "_confirm_analysis_detach", lambda *a, **k: True)
+    win.chart_stack.set_mode("fft")
+    fft = win.analysis_managers["fft"]
+    fft.get(0).attached_file_ids = [fid_b]
+    fft.get(0).panes[0].sources = [(fid_b, "sig")]
+    win._project_analysis_attachments("fft", fft.get(0))
+    win.navigator.set_checked_channels([(fid_b, "sig")])
+    win.do_fft()
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert canvas.has_result()
+
+    win._detach_files_from_active_context([fid_b], label="b.csv")
+    qtbot.wait(20)
+    assert fid_b not in fft.get(0).attached_file_ids
+    assert fft.get(0).panes[0].sources == []
+    assert canvas.has_result() is False
 
 
 def test_local_analysis_detach_does_not_touch_sibling_or_other_section(
@@ -343,6 +434,66 @@ def test_global_close_with_dependencies_defaults_to_cancel(win_two, monkeypatch)
     assert fid_b in win.files
     assert fft.get(0).attached_file_ids == [fid_b]
     assert fft.get(0).panes[0].sources == [(fid_b, "sig")]
+
+
+def test_global_close_defaults_cancel_for_exact_x_only_dependency(
+    win_two, monkeypatch,
+):
+    from mf4_analyzer.ui.time_xaxis import CustomXAxisSpec, EXACT_SOURCE
+
+    win, fid_a, fid_b = win_two
+    # No attachment / checked / analysis refs — only exact custom X.
+    time_state = win.view_manager.get(0)
+    time_state.attached_file_ids = [fid_a]
+    time_state.checked = [(fid_a, "sig")]
+    time_state.axis_opts = {
+        "x_axis": CustomXAxisSpec(
+            mode="channel",
+            resolver=EXACT_SOURCE,
+            source_fid=fid_b,
+            channel="sig",
+            label="sig",
+        ).to_axis_opts(),
+    }
+    confirms = []
+
+    def _confirm(uses, **kwargs):
+        confirms.append(list(uses))
+        return False
+
+    monkeypatch.setattr(win, "_confirm_global_file_close", _confirm)
+    win._close(fid_b)
+    assert fid_b in win.files
+    assert confirms and any(u.role == "x_axis" for u in confirms[0])
+    assert time_state.axis_opts["x_axis"]["fid"] == fid_b
+
+
+def test_close_files_group_is_atomic_on_cancel_and_confirm(win_two, monkeypatch):
+    win, fid_a, fid_b = win_two
+    fft = win.analysis_managers["fft"]
+    fft.get(0).attached_file_ids = [fid_a]
+    fft.get(0).panes[0].sources = [(fid_a, "sig")]
+    confirms = []
+
+    def _confirm(uses, **kwargs):
+        confirms.append((list(uses), kwargs.get("files")))
+        return False
+
+    monkeypatch.setattr(win, "_confirm_global_file_close", _confirm)
+    win._close_files([fid_a, fid_b])
+    assert fid_a in win.files and fid_b in win.files
+    assert len(confirms) == 1
+    assert set(confirms[0][1]) == {fid_a, fid_b}
+
+    confirms.clear()
+    monkeypatch.setattr(
+        win,
+        "_confirm_global_file_close",
+        lambda uses, **kwargs: confirms.append(kwargs.get("files")) or True,
+    )
+    win._close_files([fid_a, fid_b])
+    assert fid_a not in win.files and fid_b not in win.files
+    assert len(confirms) == 1
 
 
 def test_explicit_global_cascade_cleans_every_reference_and_cache(

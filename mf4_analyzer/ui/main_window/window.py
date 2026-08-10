@@ -794,6 +794,7 @@ class MainWindow(
         self.navigator.channel_editor_requested.connect(self.open_editor)
         self.navigator.file_activated.connect(self._on_file_activated)
         self.navigator.file_close_requested.connect(self._on_file_close_requested)
+        self.navigator.file_group_close_requested.connect(self._close_files)
         self.navigator.close_all_requested.connect(self._on_close_all_requested)
         self.navigator.files_attach_requested.connect(
             self._attach_files_from_drop
@@ -1243,17 +1244,20 @@ class MainWindow(
         all work (fixes both the vanishing spectrum and the re-entry lag). When
         the inputs did change, restore the spectrum from cache (also redraws the
         preview); fall back to a bare time preview only when no source is
-        cached."""
+        cached.
+
+        Mode entry already applied the target View's params/sources via
+        ``_apply_active_analysis_context``. This path must NOT capture live
+        Inspector params back onto that View (Stage 1 source-isolation F2).
+        """
         if self.chart_stack.current_mode() != 'fft' or not self.files:
             return
         mgr = self.analysis_managers['fft']
         state = mgr.get(mgr.active)
-        # Mirror do_fft / the view-switch path: pull the (possibly changed)
-        # navigator selection into the active view so the cache lookup and the
-        # signature reflect what is actually selected right now.
-        self._capture_active_analysis_view('fft')
-        # 进入 FFT 时按当前勾选的焦点源刷新 Auto 的 dB reference（从别的模式勾好
-        # 通道再切进来时，控件必须立即反映该通道，而非等下一次勾选变化）。
+        # Sync navigator checkbox → focused pane sources only. Params / range
+        # stay owned by the state that was just applied on mode entry.
+        self._capture_analysis_sources('fft', state)
+        # 进入 FFT 时按当前勾选的焦点源刷新 Auto 的 dB reference。
         # rerender=False：只刷识别不重算；Manual View 在 helper 内 no-op。
         self._resolve_and_apply_db_reference('fft')
         signature = self._fft_render_signature()
@@ -1512,12 +1516,12 @@ class MainWindow(
             )
             self.navigator.set_projection_role(role)
             if mode == 'fft':
-                # Stage 1 still projects this View's attachments/sources, but
-                # FFT canvas restore stays with `_enter_fft_mode` so an
-                # unchanged signature reuses retained curves and live
-                # cross-section param drift (e.g. weighting) stays visible.
+                # Always apply target View params/sources/range first so live
+                # Inspector never overwrites the destination state. Canvas
+                # restore stays deferred in `_enter_fft_mode` so an unchanged
+                # signature can reuse retained curves without a blank flash.
                 self._apply_active_analysis_context(
-                    mode, render=False, apply_params=False
+                    mode, render=False, apply_params=True
                 )
                 if self.files:
                     QTimer.singleShot(0, self._enter_fft_mode)
@@ -2164,6 +2168,40 @@ class MainWindow(
 
     def _on_file_close_requested(self, fid):
         self._close(fid)
+
+    def _close_files(self, fids):
+        """Atomically close every logical source in a physical file group.
+
+        Dependencies across the whole group are summarized once. Cancel keeps
+        all members; confirm force-closes each so partial success is impossible.
+        """
+        ordered = []
+        seen = set()
+        for raw in fids or ():
+            fid = str(raw)
+            if fid in self.files and fid not in seen:
+                seen.add(fid)
+                ordered.append(fid)
+        if not ordered:
+            return
+        from .analysis_source_scope import collect_source_uses
+
+        uses = []
+        for fid in ordered:
+            uses.extend(
+                collect_source_uses(
+                    fid,
+                    time_views=self.view_manager.views,
+                    analysis_managers=self.analysis_managers,
+                )
+            )
+        if uses and not self._confirm_global_file_close(
+            uses, files=tuple(ordered),
+        ):
+            return
+        for fid in ordered:
+            if fid in self.files:
+                self._close(fid, force=True)
 
     def _on_close_all_requested(self):
         # Single product confirm (dependency summary + close-all) lives here;
@@ -3621,6 +3659,13 @@ class MainWindow(
             self.channel_list.blockSignals(list_blocked)
             self.navigator.blockSignals(nav_blocked)
         self._refresh_channel_dependent_controls()
+        mode = self.chart_stack.current_mode()
+        if mode in self.analysis_managers:
+            # Channel deletes already scrubbed analysis pane roles; re-project
+            # the active analysis canvas so empty panes clear instead of
+            # retaining stale curves.
+            mgr = self.analysis_managers[mode]
+            self._render_analysis_view_from_cache(mode, mgr.get(mgr.active))
         self.statusBar.showMessage(
             f"编辑: +{len(new_channels)} -{len(removed_channels)}"
         )

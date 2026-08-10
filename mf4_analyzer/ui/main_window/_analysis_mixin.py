@@ -196,10 +196,11 @@ class AnalysisMixin:
         """manager.active_changed → apply the new view's structure, params and
         sources, then render whatever the cache already holds (never compute).
 
-        ``render`` / ``apply_params`` let FFT *mode entry* project Stage 1
-        attachments + sources while leaving the signature-aware canvas restore
-        to ``_enter_fft_mode`` (which must see live inspector drift such as a
-        cross-section weighting default).
+        ``render`` / ``apply_params`` let FFT *mode entry* apply the target
+        View's params/sources while deferring canvas restore to
+        ``_enter_fft_mode`` (signature-aware reuse). Params must always be
+        applied on mode entry so live Inspector values cannot overwrite the
+        destination View.
         """
         from ..analysis_view_bridge import apply_params_from_state
         mgr = self.analysis_managers[section]

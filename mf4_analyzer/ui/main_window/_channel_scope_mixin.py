@@ -245,6 +245,10 @@ class ChannelScopeMixin:
         if self.chart_stack.current_mode() == section:
             self._project_analysis_attachments(section, state)
             self._apply_analysis_sources(section, state)
+            # Keep the visible canvas aligned with Pane state. Empty sources
+            # clear the chart via the shared cache-render path; sibling Views
+            # and shared per-fid caches stay untouched.
+            self._render_analysis_view_from_cache(section, state)
         self._refresh_analysis_candidates(section)
         # Local detach must NOT call _invalidate_all_analysis_caches_for_fid.
         shown_label = label or f"{len(removing)} 个文件"

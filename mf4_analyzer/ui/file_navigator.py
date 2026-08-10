@@ -190,6 +190,8 @@ class _FileRow(QFrame):
 class FileNavigator(QWidget):
     file_activated = pyqtSignal(str)
     file_close_requested = pyqtSignal(str)
+    # Physical card close: every logical source in the group, once.
+    file_group_close_requested = pyqtSignal(list)
     close_all_requested = pyqtSignal()
     channels_changed = pyqtSignal()
     visibility_changed = pyqtSignal(str, str, bool)
@@ -498,15 +500,25 @@ class FileNavigator(QWidget):
         self.btn_auto_attach.style().polish(self.btn_auto_attach)
 
     def _request_close_group(self, rows_key):
-        """Emit close_requested for ALL fids belonging to this rows_key."""
+        """Emit one group-close request for ALL fids under ``rows_key``.
+
+        Physical-card close must be atomic: MainWindow aggregates dependencies
+        once and either keeps or unloads every logical source together.
+        """
         fids = [f for f, k in self._fid_to_key.items() if k == rows_key]
-        for f in fids:
-            self.file_close_requested.emit(f)
+        if not fids:
+            return
+        self.file_group_close_requested.emit(list(fids))
 
     # Backwards-compat alias used by existing tests that call _request_close(fid)
     def _request_close(self, fid):
         rows_key = self._fid_to_key.get(fid, fid)
-        self._request_close_group(rows_key)
+        fids = [f for f, k in self._fid_to_key.items() if k == rows_key]
+        if len(fids) > 1:
+            self.file_group_close_requested.emit(list(fids))
+            return
+        target = fids[0] if fids else fid
+        self.file_close_requested.emit(target)
 
     def _open_kebab(self):
         menu = apply_rounded_menu_chrome(QMenu(self))
