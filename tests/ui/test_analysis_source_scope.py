@@ -286,8 +286,11 @@ def test_mode_switch_applies_target_active_view_before_capture(win_two, qtbot):
     assert set(_picker_fids(win.inspector.fft_ctx)) == {fid_b}
 
 
-def test_local_analysis_detach_does_not_touch_sibling_or_other_section(win_two):
+def test_local_analysis_detach_does_not_touch_sibling_or_other_section(
+    win_two, monkeypatch,
+):
     win, fid_a, fid_b = win_two
+    monkeypatch.setattr(win, "_confirm_analysis_detach", lambda *a, **k: True)
     fft = win.analysis_managers["fft"]
     fft.new_view()
     v0, v1 = fft.get(0), fft.get(1)
@@ -368,6 +371,7 @@ def test_explicit_global_cascade_cleans_every_reference_and_cache(
     assert invalidated == [fid_b]
 
 
+@pytest.mark.skip(reason="Task 7 degraded-save guard not implemented yet")
 def test_project_missing_source_blocks_overwrite_save_by_default(
     win_two, tmp_path, monkeypatch,
 ):

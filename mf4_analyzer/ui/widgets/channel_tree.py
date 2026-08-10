@@ -617,6 +617,8 @@ class MultiFileChannelWidget(QWidget):
         self.empty_state.setAlignment(Qt.AlignCenter)
         self.empty_state.setWordWrap(True)
         self._tree_stack.addWidget(self.empty_state)
+        self._empty_section_label = "时域"
+        self._empty_view_name = "View 1"
         layout.addWidget(self._tree_stack_host)
         self.config_bar = ChannelConfigBar(self)
         layout.addWidget(self.config_bar)
@@ -639,8 +641,11 @@ class MultiFileChannelWidget(QWidget):
         # use it to leave the focused View.  Only channel-eye toggles are
         # time-domain-specific.
         self._time_channel_visibility_available = True
+        self._projection_role = "time"
+        self._channel_checks_editable = True
         self.axis_groups_changed.connect(self.tree.viewport().update)
         self._sync_empty_state()
+        self._sync_projection_chrome()
 
     def add_file(self, fid, fd):
         self._files[fid] = fd
@@ -974,15 +979,29 @@ class MultiFileChannelWidget(QWidget):
     def _sync_empty_state(self):
         has_attached = bool(self._attached_file_ids)
         self._tree_stack.setCurrentWidget(self.tree if has_attached else self.empty_state)
+        if not has_attached:
+            section = getattr(self, "_empty_section_label", "时域")
+            view_name = getattr(self, "_empty_view_name", "View")
+            if self._projection_role == "time":
+                self.empty_state.setText(
+                    f"当前“{section} · {view_name}”尚未加入文件\n"
+                    "从上方拖入文件，或开启自动加入"
+                )
+            else:
+                self.empty_state.setText(
+                    f"当前“{section} · {view_name}”尚未加入文件\n"
+                    "从上方拖入文件；要沿用当前配置请复制 View"
+                )
+        editable = self._channel_checks_editable
         for widget in (
             self.search,
-            self.btn_all,
-            self.btn_none,
-            self.btn_selected_only,
             self.btn_edit,
         ):
             widget.setEnabled(has_attached)
+        for widget in (self.btn_all, self.btn_none, self.btn_selected_only):
+            widget.setEnabled(has_attached and editable)
         self._update_config_context()
+        self._sync_projection_chrome()
 
     def _update_config_context(self):
         self.config_bar.set_context(
@@ -1136,15 +1155,59 @@ class MultiFileChannelWidget(QWidget):
         return changed
 
     def set_time_visibility_available(self, available):
-        """Enable channel eye toggles only while the time view is active.
+        """Compatibility shim: eye toggles only while the time projection is active.
 
-        File/raster removal shares this column and is meaningful to every
-        analysis module because their signal pickers use the focused View's
-        attached files.  Therefore switching analysis modes must suppress
-        only the time-domain eye action, not the whole column.
+        Prefer ``set_projection_role``. File/raster removal shares column 2 and
+        remains available in every role.
         """
         self._time_channel_visibility_available = bool(available)
+        if available and self._projection_role != "time":
+            self._projection_role = "time"
+            self._channel_checks_editable = True
+        elif not available and self._projection_role == "time":
+            # Legacy callers only flipped the eye; keep role but disable eye.
+            pass
         self._refresh_visibility_icons()
+        self._sync_projection_chrome()
+
+    def projection_role(self):
+        return self._projection_role
+
+    def set_projection_role(self, role):
+        """Present the channel tree for the active mode context.
+
+        Roles:
+        - ``time``: checkbox + eye + detach; channel-config apply row shown
+        - ``fft_sources``: checkbox = focused FFT pane sources; no eye; detach ok
+        - ``analysis_candidates``: checkboxes non-editable; no eye; detach ok
+        """
+        allowed = {"time", "fft_sources", "analysis_candidates"}
+        role = str(role or "time")
+        if role not in allowed:
+            role = "time"
+        self._projection_role = role
+        self._time_channel_visibility_available = role == "time"
+        self._channel_checks_editable = role != "analysis_candidates"
+        self._refresh_visibility_icons()
+        self._sync_projection_chrome()
+        self._sync_empty_state()
+
+    def set_empty_state_context(self, *, section_label=None, view_name=None):
+        if section_label is not None:
+            self._empty_section_label = str(section_label)
+        if view_name is not None:
+            self._empty_view_name = str(view_name)
+        self._sync_empty_state()
+
+    def _sync_projection_chrome(self):
+        # Channel-config apply/save is a Time View feature.
+        is_time = self._projection_role == "time"
+        self.config_bar.setVisible(is_time)
+        self.config_bar.setEnabled(is_time)
+        # Bulk check helpers are meaningless for read-only candidate trees.
+        editable = self._channel_checks_editable
+        for widget in (self.btn_all, self.btn_none, self.btn_selected_only):
+            widget.setEnabled(editable and bool(self._attached_file_ids))
 
     def _on_item_clicked(self, item, column):
         if column != 2:
@@ -1170,6 +1233,25 @@ class MultiFileChannelWidget(QWidget):
         # Only column 0 owns checkbox membership; treating icon writes as
         # checkbox edits would recursively clear a whole grouped source.
         if self._updating or col != 0:
+            return
+        if not self._channel_checks_editable:
+            # analysis_candidates: force unchecked and do not emit.
+            self._updating = True
+            try:
+                item.setCheckState(0, Qt.Unchecked)
+
+                def _clear(node):
+                    node.setCheckState(0, Qt.Unchecked)
+                    for i in range(node.childCount()):
+                        _clear(node.child(i))
+
+                if item.data(0, Qt.UserRole) and item.data(0, Qt.UserRole)[0] in (
+                    "file", "source", "raster",
+                ):
+                    for i in range(item.childCount()):
+                        _clear(item.child(i))
+            finally:
+                self._updating = False
             return
         data = item.data(0, Qt.UserRole)
 

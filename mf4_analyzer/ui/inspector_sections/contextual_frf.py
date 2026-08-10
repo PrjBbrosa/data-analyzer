@@ -572,7 +572,7 @@ class FrfContextual(QWidget):
             if source is None or source in item_sources:
                 continue
             label = self._channel_labels.get(source, source[1])
-            items.append((f"{label}（当前时域 View 外）", source))
+            items.append((f"{label}（来源不可用）", source))
             item_sources.add(source)
         old_input_blocked = self.combo_input.blockSignals(True)
         old_output_blocked = self.combo_output.blockSignals(True)
@@ -600,7 +600,7 @@ class FrfContextual(QWidget):
         if not roles:
             return ""
         return (
-            f"当前时域 View 未包含原{'、'.join(roles)}通道，"
+            f"当前分析 View 未包含原{'、'.join(roles)}通道（来源不可用），"
             "请重新选择输入和输出。"
         )
 
@@ -846,6 +846,13 @@ class FrfContextual(QWidget):
                 self.compute_params_changed.emit(compute)
             if display != before_display:
                 self.display_params_changed.emit(display)
+
+    def reset_to_defaults(self) -> None:
+        """Restore construction-time defaults for a blank analysis View."""
+        bar = getattr(self, "preset_bar", None)
+        defaults = getattr(bar, "_default_params", None) if bar is not None else None
+        if isinstance(defaults, dict) and defaults:
+            self.apply_params(dict(defaults))
 
     def _collect_preset(self) -> dict:
         return self.current_params()

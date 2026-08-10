@@ -116,7 +116,7 @@ def test_analysis_view_schema6_round_trip_preserves_db_reference_mode_and_value(
         "nfft": 4096,
     }
     d = v.to_dict()
-    assert d["schema"] == 6
+    assert d["schema"] == 7
 
     v2 = AnalysisViewState.from_dict(d)
     assert v2.params["db_reference_mode"] == "manual"

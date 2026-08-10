@@ -183,7 +183,7 @@ def test_global_file_close_cleans_every_time_view(qtbot, qapp, loaded_csv):
         state.colors = {(fid, "speed"): "#123456"}
         state.overlay_primary = (fid, "speed")
 
-    window._close(fid)
+    window._close(fid, force=True)
 
     assert fid not in window.files
     for state in window.view_manager.views:

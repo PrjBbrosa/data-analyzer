@@ -1745,7 +1745,7 @@ def test_close_file_resets_inspector(qapp, qtbot, loaded_csv):
                return_value=([loaded_csv], "")):
         w.load_files()
     assert w.files
-    w._close(next(iter(w.files)))
+    w._close(next(iter(w.files)), force=True)
     # No crash; stats strip shows placeholder
     assert '—' in w.chart_stack.stats_strip._lbl_summary.text()
 
@@ -1796,7 +1796,7 @@ def test_file_load_reload_with_prior_checks_still_opens_empty(qapp, qtbot, loade
     assert len(w.channel_list.get_checked_channels()) == 1
 
     # Close that file and reload — the fresh fid must come up unchecked.
-    w._close(fid_first)
+    w._close(fid_first, force=True)
     qapp.processEvents()
     assert w.channel_list.get_checked_channels() == []
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
@@ -1974,11 +1974,22 @@ def test_channel_eye_column_is_only_available_in_time_mode(qapp, qtbot):
     w = MainWindow()
     qtbot.addWidget(w)
 
+    # Column 2 stays for file detach in every mode; only the eye action is
+    # gated by the time projection role.
     assert not w.channel_list.tree.isColumnHidden(2)
+    assert w.navigator.projection_role() == "time"
+    assert w.channel_list._time_channel_visibility_available
     w._on_mode_changed("fft")
-    assert w.channel_list.tree.isColumnHidden(2)
+    assert not w.channel_list.tree.isColumnHidden(2)
+    assert w.navigator.projection_role() == "fft_sources"
+    assert not w.channel_list._time_channel_visibility_available
+    w._on_mode_changed("fft_time")
+    assert w.navigator.projection_role() == "analysis_candidates"
+    assert not w.channel_list._time_channel_visibility_available
     w._on_mode_changed("time")
     assert not w.channel_list.tree.isColumnHidden(2)
+    assert w.navigator.projection_role() == "time"
+    assert w.channel_list._time_channel_visibility_available
 
 
 def test_hiding_checked_channel_collapses_subplot_and_restores_y_range(
@@ -3149,7 +3160,7 @@ def test_fft_time_analysis_cache_clears_on_close_all(qtbot):
     win.files['f1'] = object()
     win.navigator.add_file = lambda *a, **kw: None  # silence side effects
     win.navigator.remove_file = lambda *a, **kw: None
-    win.close_all()
+    win.close_all(force=True)
     assert len(cache._store) == 0
 
 

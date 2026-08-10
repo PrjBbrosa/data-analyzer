@@ -145,13 +145,13 @@ class ViewMixin:
             )
         finally:
             self._applying_view = old_applying_view
-        # The analysis signal pickers are scoped to this View's attached files
-        # (`_analysis_scope_fids`), and this is the one funnel every projection
-        # goes through — View switch, file attach, file detach. Repopulate here
-        # or the pickers keep offering the previous View's files.
-        update_combos = getattr(self, '_update_combos', None)
-        if callable(update_combos):
-            update_combos()
+        # Analysis pickers follow each analysis View's own attachments
+        # (Stage 1 source isolation). Time View projection must not rebuild
+        # analysis candidates — that would re-couple the two scopes.
+        state = self.view_manager.get(idx)
+        empty = getattr(self.navigator, 'set_empty_state_context', None)
+        if callable(empty):
+            empty(section_label='时域', view_name=state.name)
 
     def _sync_focus_accent(self):
         idx = self._focused_view_idx

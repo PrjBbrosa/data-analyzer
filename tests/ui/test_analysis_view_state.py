@@ -111,6 +111,7 @@ def test_from_dict_tolerates_existing_pane_missing_time_range():
 
 def test_overlay_validation():
     v = AnalysisViewState(name="v", tab_color="#fff")
+    v.attached_file_ids = ["f1"]
     v.panes[0].sources = [("f1", "a"), ("f1", "b")]
     assert v.validate(allow_overlay=True) == []
     errs = v.validate(allow_overlay=False)

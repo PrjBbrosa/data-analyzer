@@ -1212,8 +1212,21 @@ class ProjectIOMixin:
         )
         return list(dbcs)
 
-    def _close(self, fid):
+    def _close(self, fid, *, force=False):
         if fid not in self.files: return
+        from .analysis_source_scope import collect_source_uses
+
+        uses = collect_source_uses(
+            fid,
+            time_views=self.view_manager.views,
+            analysis_managers=self.analysis_managers,
+        )
+        if (
+            uses
+            and not force
+            and not self._confirm_global_file_close(uses, files=(fid,))
+        ):
+            return
         name = self.files[fid].short_name
         # Cache invalidation site 2: drop entries for this file before
         # we discard the FileData — capture fid so the per-data_id filter
@@ -1233,8 +1246,13 @@ class ProjectIOMixin:
         del self.files[fid]
         self.navigator.remove_file(fid, emit=False)
         resolved = self._focused_time_view_state()
-        if resolved is not None:
+        if resolved is not None and self.chart_stack.current_mode() == "time":
             self._project_view_controls(resolved[0])
+        elif self.chart_stack.current_mode() in self.analysis_managers:
+            mode = self.chart_stack.current_mode()
+            mgr = self.analysis_managers[mode]
+            self._project_analysis_attachments(mode, mgr.get(mgr.active))
+        self._refresh_analysis_candidates()
         self._active = self.navigator._active_fid  # navigator picks fallback
         self._update_info()
         self._reset_plot_state(scope='file')
@@ -1345,7 +1363,7 @@ class ProjectIOMixin:
         path = Path(path)
 
         doc = pio.load_project_from_json(path)
-        self.close_all()
+        self.close_all(force=True)
         # Fresh restore: clear any stale auto-recompute queue from a prior open.
         self._analysis_restore_pending = set()
 
@@ -1489,9 +1507,26 @@ class ProjectIOMixin:
         fp.chk_filt.setChecked(bool(payload.get("show_filtered", True)))
         fp.set_enabled(bool(payload.get("enabled", False)))
 
-    def close_all(self):
+    def close_all(self, *, force=False):
         if not self.files:
             return
+        from .analysis_source_scope import collect_source_uses
+
+        fids = list(self.files.keys())
+        if not force:
+            uses = []
+            for fid in fids:
+                uses.extend(
+                    collect_source_uses(
+                        fid,
+                        time_views=self.view_manager.views,
+                        analysis_managers=self.analysis_managers,
+                    )
+                )
+            if not self._confirm_global_file_close(
+                uses, files=fids, close_all=True
+            ):
+                return
         n = len(self.files)
         # Cache invalidation site 2 (close-all variant): wipe everything.
         self.canvas_time.invalidate_envelope_cache("all files closed")
@@ -1516,6 +1551,7 @@ class ProjectIOMixin:
             del self.files[fid]
             self.navigator.remove_file(fid, emit=False)
         self._active = None
+        self._refresh_analysis_candidates()
         self._update_info()
         self._reset_plot_state(scope='all')
         self.statusBar.showMessage("已关闭全部")

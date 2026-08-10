@@ -437,6 +437,17 @@ class FileNavigator(QWidget):
     def set_time_visibility_available(self, available):
         self.channel_list.set_time_visibility_available(available)
 
+    def projection_role(self):
+        return self.channel_list.projection_role()
+
+    def set_projection_role(self, role):
+        self.channel_list.set_projection_role(role)
+
+    def set_empty_state_context(self, *, section_label=None, view_name=None):
+        self.channel_list.set_empty_state_context(
+            section_label=section_label, view_name=view_name
+        )
+
     def get_channel_colors(self):
         return self.channel_list.get_channel_colors()
 
@@ -504,13 +515,9 @@ class FileNavigator(QWidget):
         gp = self._btn_kebab.mapToGlobal(self._btn_kebab.rect().bottomLeft())
         chosen = menu.exec_(gp)
         if chosen == act:
-            n_fids = len(self._fid_to_key)
-            ans = QMessageBox.question(
-                self, "确认", f"关闭全部 {n_fids} 文件?",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if ans == QMessageBox.Yes:
-                self.close_all_requested.emit()
+            # Confirm lives in MainWindow.close_all so dependency preflight
+            # and close-all share one product dialog.
+            self.close_all_requested.emit()
 
     def _refresh_header(self):
         self._lbl_count.setText(str(len(self._rows)))
