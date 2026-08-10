@@ -150,6 +150,7 @@ lesson by default.
 | [Comma List Inputs Accept Chinese Separators](comma-list-inputs-accept-chinese-separators.md) | Adding or editing a user-typed comma-separated field (slice | See lesson |
 | [Binary Batch Combos Prefer SegmentedChoice](binary-batch-combos-prefer-segmented-choice.md) | Replacing or reviewing a product control that has exactly two fixed | See lesson |
 | [Chart Statistics UI Redesigns Keep Param Wiring](chart-statistics-ui-keep-param-wiring.md) | Restyling Batch 图内统计 (SegmentedChoice, chips, field bars) or any | See lesson |
+| [Analysis View Tests Must Seed Attachments](analysis-view-tests-seed-attachments.md) | Writing or updating integration tests that switch into FFT / FFT-vs-Time / | See lesson |
 
 ## Selection Rules
 

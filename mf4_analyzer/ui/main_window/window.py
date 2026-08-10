@@ -1511,9 +1511,18 @@ class MainWindow(
                 'fft_sources' if mode == 'fft' else 'analysis_candidates'
             )
             self.navigator.set_projection_role(role)
-            self._apply_active_analysis_context(mode)
-            if mode == 'fft' and self.files:
-                QTimer.singleShot(0, self._enter_fft_mode)
+            if mode == 'fft':
+                # Stage 1 still projects this View's attachments/sources, but
+                # FFT canvas restore stays with `_enter_fft_mode` so an
+                # unchanged signature reuses retained curves and live
+                # cross-section param drift (e.g. weighting) stays visible.
+                self._apply_active_analysis_context(
+                    mode, render=False, apply_params=False
+                )
+                if self.files:
+                    QTimer.singleShot(0, self._enter_fft_mode)
+            else:
+                self._apply_active_analysis_context(mode)
 
     def _on_cursor_mode_changed(self, mode):
         if self.chart_stack.split_active():

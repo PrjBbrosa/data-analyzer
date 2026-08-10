@@ -191,9 +191,16 @@ class AnalysisMixin:
         if capture_sources:
             self._capture_analysis_sources(section, state)
 
-    def _on_analysis_view_switched(self, section, idx):
+    def _on_analysis_view_switched(self, section, idx, *, render=True,
+                                   apply_params=True):
         """manager.active_changed → apply the new view's structure, params and
-        sources, then render whatever the cache already holds (never compute)."""
+        sources, then render whatever the cache already holds (never compute).
+
+        ``render`` / ``apply_params`` let FFT *mode entry* project Stage 1
+        attachments + sources while leaving the signature-aware canvas restore
+        to ``_enter_fft_mode`` (which must see live inspector drift such as a
+        cross-section weighting default).
+        """
         from ..analysis_view_bridge import apply_params_from_state
         mgr = self.analysis_managers[section]
         if not (0 <= idx < len(mgr.views)):
@@ -227,7 +234,8 @@ class AnalysisMixin:
                 self._project_analysis_attachments(section, state)
             self._refresh_analysis_candidates(section)
             # 4. Params + focused-pane source echo.
-            apply_params_from_state(self._analysis_ctx(section), state)
+            if apply_params:
+                apply_params_from_state(self._analysis_ctx(section), state)
             if section in {'fft', 'frf'}:
                 self._apply_frequency_cursor_controls(section, state)
             self._apply_analysis_sources(section, state)
@@ -235,7 +243,8 @@ class AnalysisMixin:
         finally:
             self._applying_analysis_view = False
         # 5. Render from cache only (spec §4: switching never auto-computes).
-        self._render_analysis_view_from_cache(section, state)
+        if render:
+            self._render_analysis_view_from_cache(section, state)
 
     def _project_analysis_attachments(self, section, state):
         """Project one analysis View's file range onto the shared navigator."""
@@ -253,14 +262,17 @@ class AnalysisMixin:
             # Candidate roles do not own checkbox selection.
             self.navigator.set_checked_channels([])
 
-    def _apply_active_analysis_context(self, section):
+    def _apply_active_analysis_context(self, section, *, render=True,
+                                       apply_params=True):
         """Full-apply the active View of ``section`` after a mode switch."""
         mgr = self.analysis_managers[section]
         if not mgr.views:
             return
         # Reuse the view-switch pipeline against the already-active index so
         # mode entry and View switch stay byte-equivalent for the target.
-        self._on_analysis_view_switched(section, mgr.active)
+        self._on_analysis_view_switched(
+            section, mgr.active, render=render, apply_params=apply_params
+        )
 
     def _on_analysis_focus_changed(self, section, idx):
         """A pane click changed the focused pane: capture the source selection
