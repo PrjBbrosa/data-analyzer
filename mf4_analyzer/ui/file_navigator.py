@@ -5,7 +5,7 @@ import qtawesome as qta
 from PyQt5.QtCore import QMimeData, QPoint, QSignalBlocker, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QDrag
 from PyQt5.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox,
+    QApplication, QFrame, QHBoxLayout, QLabel, QMenu,
     QScrollArea, QSizePolicy, QSplitter, QToolButton, QVBoxLayout, QWidget,
 )
 
