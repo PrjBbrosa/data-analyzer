@@ -26,10 +26,10 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
   约 4% 处中断、无汇总。交错相关——单独跑该目录不崩。要拿全量数字：
   `--ignore=tests/acquisition_ui` 跑主体，另起一条单独跑该目录。
 - **动手前先记下当前失败数**，别把既有失败算到自己的改动头上。
-  当前基线（2026-08-11 实测于 `777135c8` + 当日 5 项工作树修复，修复清单见
+  当前基线（2026-08-11 实测，树内容即 merge `2c8e9b5a`；修复清单见
   `docs/analyzer/reviews/2026-08-11-two-day-delivery-and-frf-view-review.md` §7）：
   主体 **5925 passed / 9 skipped / 0 failed / 0 errors**，`tests/acquisition_ui`
-  单独 **355 passed**——**两边全绿**（该批修复落库后建议把基线戳换成落库提交号）。
+  单独 **355 passed**——**两边全绿**。
   期间曾出现过的 Batch 2 failed + 8 errors（几何契约漏同步 + `BatchSheet`
   lambda/属性回调导致的僵尸 wrapper teardown 簇）已随上述修复清零，定性与引入点
   见同一文档 §4.2/§4.3——别从旧版验收文档把「单独进程运行通过」的说法抄回来，
