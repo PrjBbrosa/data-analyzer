@@ -261,6 +261,7 @@ class BatchSheet(QDialog):
             self, files=self._files, source_registry=self._source_registry,
             source_context=self._source_context,
         )
+        self._input_panel.set_disk_paths_handler(self._add_disk_paths_with_blf_context)
         self._handoff_notice = QLabel(self._input_panel)
         self._handoff_notice.setObjectName("BatchHandoffNotice")
         self._handoff_notice.setWordWrap(True)
@@ -562,6 +563,70 @@ class BatchSheet(QDialog):
         skipped = total - len(paths)
         if skipped > 0:
             self._toast(f"忽略 {skipped} 个不支持的文件", kind="warning")
+
+    def _set_source_context(self, source_context: dict) -> None:
+        self._source_context = dict(source_context or {})
+        self._input_panel.set_source_context(self._source_context)
+
+    def _blf_paths_among(self, paths) -> list[str]:
+        return [
+            str(path) for path in (paths or ())
+            if Path(path).suffix.lower() == ".blf"
+        ]
+
+    def _ensure_blf_dbc_context(self, paths) -> bool:
+        """Resolve DBC via MainWindow's shared dialog path when needed.
+
+        Returns False when BLF intake must abort (cancel / no resolver).
+        Non-BLF paths never fail this gate.
+        """
+        blf_paths = self._blf_paths_among(paths)
+        if not blf_paths:
+            return True
+        existing = [
+            str(item)
+            for item in (self._source_context.get("dbc_paths") or ())
+            if item
+        ]
+        if existing:
+            return True
+
+        parent = self.parent()
+        resolver = getattr(self, "_blf_dbc_resolver", None)
+        if not callable(resolver):
+            resolver = getattr(parent, "resolve_blf_dbc_paths_for_batch", None)
+        if not callable(resolver):
+            self._toast(
+                "无法为 BLF 选择 DBC（批处理未连接到主窗口）",
+                kind="warning",
+            )
+            return False
+
+        resolved = resolver(blf_paths)
+        if not resolved:
+            self._toast("已取消 BLF 的 DBC 选择", kind="info")
+            return False
+
+        context = dict(self._source_context)
+        context["dbc_paths"] = list(resolved)
+        self._set_source_context(context)
+        return True
+
+    def _add_disk_paths_with_blf_context(self, paths) -> None:
+        """Disk/drop intake: ensure BLF DBC context, then add paths.
+
+        On DBC cancel, non-BLF files in the same selection are still added.
+        """
+        selected = [str(path) for path in (paths or ()) if path]
+        if not selected:
+            return
+        blf_paths = self._blf_paths_among(selected)
+        others = [path for path in selected if path not in set(blf_paths)]
+        if blf_paths and not self._ensure_blf_dbc_context(blf_paths):
+            if others:
+                self._input_panel.add_disk_paths_resolved(others)
+            return
+        self._input_panel.add_disk_paths_resolved(selected)
 
     def _present_footer(
         self, state: str, *, done: int = 0, total: int = 1,
@@ -953,10 +1018,28 @@ class BatchSheet(QDialog):
         self._output_panel.apply_outputs(out)
 
     def apply_files(self, file_ids: tuple, file_paths: tuple[str, ...]) -> None:
-        self._input_panel.apply_files(file_ids, file_paths)
+        paths = tuple(str(path) for path in (file_paths or ()) if path)
+        if self._blf_paths_among(paths):
+            if not self._ensure_blf_dbc_context(paths):
+                paths = tuple(
+                    path for path in paths
+                    if Path(path).suffix.lower() != ".blf"
+                )
+                if not paths and not file_ids:
+                    return
+        self._input_panel.apply_files(file_ids, paths)
 
     def apply_sources(self, source_ids: tuple, source_paths: tuple[str, ...]) -> None:
-        self._input_panel.apply_sources(source_ids, source_paths)
+        paths = tuple(str(path) for path in (source_paths or ()) if path)
+        if not source_ids and self._blf_paths_among(paths):
+            if not self._ensure_blf_dbc_context(paths):
+                paths = tuple(
+                    path for path in paths
+                    if Path(path).suffix.lower() != ".blf"
+                )
+                if not paths:
+                    return
+        self._input_panel.apply_sources(source_ids, paths)
 
     def _on_builtin_analysis_preset(self, _key: str, patch: dict) -> None:
         # AnalysisPanel already applied its owned fields.  OUTPUT owns display

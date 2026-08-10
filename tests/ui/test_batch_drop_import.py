@@ -152,23 +152,22 @@ def test_batch_drop_filters_unsupported_and_toasts(qapp, qtbot, tmp_path, monkey
 
 
 def test_batch_drop_does_not_call_open_paths(qapp, qtbot, tmp_path, monkeypatch):
-    from PyQt5.QtWidgets import QWidget
-
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
 
     opened = []
 
-    class _Host(QWidget):
-        def _open_paths(self, paths):
-            opened.append(list(paths))
+    def _forbid_open_paths(paths):
+        opened.append(list(paths))
 
-    host = _Host()
-    qtbot.addWidget(host)
     sheet = BatchSheet(
-        parent=host, files={}, current_preset=None,
+        parent=None, files={}, current_preset=None,
         prefs_store=_prefs_store(tmp_path, "batch-drop-no-open.ini"),
     )
     qtbot.addWidget(sheet)
+    # Guard against a regression that routes drops into MainWindow loading.
+    monkeypatch.setattr(
+        sheet, "_open_paths", _forbid_open_paths, raising=False,
+    )
     csv = tmp_path / "a.csv"
     csv.write_text("x")
     calls = []

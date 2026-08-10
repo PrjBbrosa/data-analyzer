@@ -755,6 +755,30 @@ class ProjectIOMixin:
             )
         return None
 
+    def resolve_blf_dbc_paths_for_batch(self, paths):
+        """Reuse the single-file BLF/DBC tip+picker path for BatchSheet intake.
+
+        Returns a non-empty ``dbc_paths`` list, or ``None`` when the user
+        cancels.  BatchSheet keeps one sheet-level ``source_context``; multi-file
+        ``individual`` therefore resolves via the first BLF only (see
+        ``docs/analyzer/specs/2026-08-10-batch-blf-dbc-context-reuse-spec.md``).
+        """
+        blf_paths = [
+            Path(path) for path in (paths or ())
+            if Path(path).suffix.lower() == ".blf"
+        ]
+        if not blf_paths:
+            return []
+        if len(blf_paths) == 1:
+            return self._resolve_blf_dbc_paths(blf_paths[0])
+
+        action = self._ask_blf_batch_dbc_action(blf_paths)
+        if action == "batch":
+            return self._choose_blf_dbc_with_retry(blf_paths[0])
+        if action == "individual":
+            return self._resolve_blf_dbc_paths(blf_paths[0])
+        return None
+
     def _resolve_blf_dbc_paths(self, path, *, frames=None, progress_callback=None):
         candidates = self._probe_blf_dbc_candidates(
             path,
