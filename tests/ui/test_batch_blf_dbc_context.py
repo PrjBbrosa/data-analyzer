@@ -57,12 +57,16 @@ def test_batch_disk_blf_resolves_dbc_via_parent_facade(qtbot, tmp_path, monkeypa
     )
 
     sheet._add_disk_paths_with_blf_context([str(blf)])
-    qtbot.wait(50)
+    # The registry probe runs on the global QThreadPool; wait on the loaded
+    # state instead of a fixed tick so a busy pool cannot flake the test.
+    qtbot.waitUntil(
+        lambda: sheet._input_panel._file_list.loaded_disk_paths() == (str(blf),),
+        timeout=5000,
+    )
 
     assert calls == [[str(blf)]]
     assert sheet._source_context.get("dbc_paths") == [dbc]
     assert sheet._make_runner()._source_context.get("dbc_paths") == [dbc]
-    assert sheet._input_panel._file_list.loaded_disk_paths() == (str(blf),)
 
 
 def test_batch_blf_cancel_skips_blf_but_keeps_other_files(qtbot, tmp_path, monkeypatch):
@@ -97,12 +101,14 @@ def test_batch_blf_cancel_skips_blf_but_keeps_other_files(qtbot, tmp_path, monke
     )
 
     sheet._add_disk_paths_with_blf_context([str(blf), str(other)])
-    qtbot.wait(50)
+    qtbot.waitUntil(
+        lambda: str(other) in sheet._input_panel._file_list.loaded_disk_paths(),
+        timeout=5000,
+    )
 
     assert calls == [[str(blf)]]
     assert "dbc_paths" not in sheet._source_context
     assert str(blf) not in sheet._input_panel._file_list.loaded_disk_paths()
-    assert str(other) in sheet._input_panel._file_list.loaded_disk_paths()
     assert "已取消 BLF 的 DBC 选择" in sheet._last_toast_text
 
 
@@ -129,11 +135,13 @@ def test_batch_blf_reuses_existing_context_without_new_dialog(qtbot, tmp_path, m
     )
 
     sheet._add_disk_paths_with_blf_context([str(blf)])
-    qtbot.wait(50)
+    qtbot.waitUntil(
+        lambda: sheet._input_panel._file_list.loaded_disk_paths() == (str(blf),),
+        timeout=5000,
+    )
 
     assert calls == []
     assert sheet._source_context["dbc_paths"] == [dbc]
-    assert sheet._input_panel._file_list.loaded_disk_paths() == (str(blf),)
 
 
 def test_resolve_blf_dbc_paths_for_batch_single_delegates_to_resolve():

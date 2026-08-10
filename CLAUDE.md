@@ -2,13 +2,16 @@
 
 **Project:** TraceLab / MF4 Data Analyzer — PyQt5 桌面 GUI，做工程测量数据的导入、
 时域/频域/阶次分析、批处理，以及 CAN/XCP 采集回放。版本单一事实源是
-`mf4_analyzer/app_meta.py` 的 `APP_VERSION`（当前 v7.9.7），别在别处硬编码版本号。
+`mf4_analyzer/app_meta.py` 的 `APP_VERSION`（当前 v7.9.8），别在别处硬编码版本号。
 升版本要同步的扇出面：`README.md` · `docs/analyzer/README.md` 的 Current Product
 Baseline · `mf4_analyzer/help/` 下使用说明（`meta.version`/`versionLabel`/`updated`
 + changelog 新增条目）与四个分析指南 · `docs/analyzer/user-guide/user-guide.html` ·
-`tools/build_windows_folder*.ps1` 的 `$Version` · 三个测试契约
-（`test_help_content.py` · `test_windows_build_script.py` · `ui/test_project_session.py`）。
-`docs/analyzer/specs|plans|acquisition/` 下的历史文档记录当时状态，**不要**跟着改。
+`tools/build_windows_folder*.ps1` 的 `$Version` · `tools/run_windows_exe.bat` 的
+`APPNAME` · 四个测试契约（`test_help_content.py` · `test_windows_build_script.py` ·
+`test_packaging_imports.py` · `ui/test_project_session.py`）。
+`docs/analyzer/specs|plans|acquisition/` 下的历史文档记录当时状态，**不要**跟着改
+（唯一例外：`acquisition/runbooks/stage-8-pr4-bench.md` 的构建路径被
+`test_windows_build_script.py` 契约钉在当前版本上，升版要同步）。
 
 ## Dev commands
 ```bash

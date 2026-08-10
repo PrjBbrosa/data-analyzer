@@ -344,6 +344,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "chart.copy_image",
         "chart.right_click_menu",
         "channel.right_click",
+        "file.scope_follow",
         "coaxis.merge",
         "view.compact_tabs",
         "chart.custom_action_slot",
