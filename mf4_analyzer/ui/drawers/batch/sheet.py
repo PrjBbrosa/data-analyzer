@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 import tempfile
+import weakref
 
 from PyQt5.QtCore import QTimer, Qt, QUrl
 from PyQt5.QtGui import QDesktopServices
@@ -261,7 +262,17 @@ class BatchSheet(QDialog):
             self, files=self._files, source_registry=self._source_registry,
             source_context=self._source_context,
         )
-        self._input_panel.set_disk_paths_handler(self._add_disk_paths_with_blf_context)
+        # Route through a closure over a *weak* reference, not the bound
+        # method directly: ``InputPanel``/``FileListWidget`` store this
+        # handler as a plain attribute for the lifetime of the sheet, which
+        # is a strong reference back to ``self`` held by a descendant --
+        # exactly the shape that left ``BatchSheet`` a zombie Python wrapper
+        # in the lambda-connection bug fixed above, except here there is no
+        # QObject-destruction hook to release it. A weak closure means the
+        # descendant never keeps ``self`` alive past its own refcount.
+        self._input_panel.set_disk_paths_handler(
+            self._weak_bound(self._add_disk_paths_with_blf_context)
+        )
         self._handoff_notice = QLabel(self._input_panel)
         self._handoff_notice.setObjectName("BatchHandoffNotice")
         self._handoff_notice.setWordWrap(True)
@@ -395,11 +406,25 @@ class BatchSheet(QDialog):
         self._input_panel._file_list.filesChanged.connect(
             self._schedule_pipeline_recompute
         )
+        # Connect the bound method directly rather than via
+        # ``lambda _x: self._schedule_pipeline_recompute()``: PyQt truncates
+        # the signal's payload to match a slot with fewer parameters, so the
+        # lambda bought nothing. It did cost something -- a lambda closing
+        # over ``self`` is a slot PyQt does not tie to any receiver's
+        # lifetime the way it does a bound method, so when a parentless test
+        # host is torn down by ordinary refcounting (cascading a synchronous
+        # C++ delete through the whole child tree) the closure survives the
+        # cascade as a stray reference, leaving this ``BatchSheet`` a zombie
+        # Python wrapper over an already-deleted C++ object. ``qtbot``
+        # teardown then hits ``RuntimeError: wrapped C/C++ object of type
+        # BatchSheet has been deleted`` calling ``.close()`` on it. A direct
+        # bound-method connection does not exhibit this -- PyQt releases it
+        # promptly when the receiver is destroyed.
         self._input_panel._file_list.intersectionChanged.connect(
-            lambda _intersection: self._schedule_pipeline_recompute()
+            self._schedule_pipeline_recompute
         )
         self._input_panel._signal_picker.selectionChanged.connect(
-            lambda _sel: self._schedule_pipeline_recompute()
+            self._schedule_pipeline_recompute
         )
         # Drive RPM-row visibility from the method (init-sync below).
         self._analysis_panel.methodChanged.connect(self._input_panel.set_method)
@@ -407,9 +432,7 @@ class BatchSheet(QDialog):
             self._output_panel.apply_method_defaults
         )
         self._analysis_panel.methodChanged.connect(self._on_recipe_method_changed)
-        self._analysis_panel.methodChanged.connect(
-            lambda _m: self._schedule_pipeline_recompute()
-        )
+        self._analysis_panel.methodChanged.connect(self._schedule_pipeline_recompute)
         self._analysis_panel.paramsChanged.connect(self._sync_x_axis_context)
         self._analysis_panel.paramsChanged.connect(self._schedule_pipeline_recompute)
         self._analysis_panel.presetApplied.connect(
@@ -611,6 +634,31 @@ class BatchSheet(QDialog):
         context["dbc_paths"] = list(resolved)
         self._set_source_context(context)
         return True
+
+    @staticmethod
+    def _weak_bound(bound_method):
+        """Wrap a bound method in a closure that only holds it weakly.
+
+        Used for callbacks handed to a descendant widget to keep as a plain
+        attribute for the sheet's whole lifetime (as opposed to a normal
+        Qt signal/slot connection, which PyQt already ties to the
+        receiver's lifetime). Without this, the descendant is a strong
+        Python reference back to ``self`` that outlives ``self``'s own
+        underlying C++ object whenever this sheet's Qt parent is torn down
+        by ordinary refcounting rather than an explicit ``close()`` --
+        pytest-qt's parentless test hosts do exactly that. The closure
+        below never touches ``self`` directly, so it does not keep it
+        alive; if the owner is already gone, the call is silently skipped.
+        """
+        ref = weakref.WeakMethod(bound_method)
+
+        def _call(*args, **kwargs):
+            method = ref()
+            if method is not None:
+                return method(*args, **kwargs)
+            return None
+
+        return _call
 
     def _add_disk_paths_with_blf_context(self, paths) -> None:
         """Disk/drop intake: ensure BLF DBC context, then add paths.
