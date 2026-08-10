@@ -5,7 +5,7 @@ import inspect
 from pathlib import Path
 import re
 
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 
@@ -45,7 +45,7 @@ def _load_production_stylesheet(qapp):
     return previous
 
 
-def test_search_field_has_base_height_clear_action_and_leading_cached_icon(qapp, qtbot):
+def test_search_field_has_base_height_and_crisp_leading_trailing_icons(qapp, qtbot):
     from mf4_analyzer.ui_kit.control_style import CONTROL_HEIGHTS
     from mf4_analyzer.ui_kit.widgets import SearchField
 
@@ -65,37 +65,56 @@ def test_search_field_has_base_height_clear_action_and_leading_cached_icon(qapp,
 
         assert field.property("role") == "search"
         assert field.placeholderText() == "搜索通道…"
-        assert field.isClearButtonEnabled()
+        assert not field.isClearButtonEnabled()
         assert field.height() == CONTROL_HEIGHTS["base"]
         assert field.sizeHint().height() == CONTROL_HEIGHTS["base"]
-        assert len(field.actions()) == 1
-        assert not field.actions()[0].icon().isNull()
+        assert not field._search_button.icon().isNull()
+        assert not field._clear_button.icon().isNull()
+        assert not field._clear_button.isVisible()
+        assert field._search_button.y() == (
+            field.height() - field._search_button.height()
+        ) // 2
+
+        field.setText("tas")
+        assert field._clear_button.isVisible()
+        assert field._clear_button.y() == (
+            field.height() - field._clear_button.height()
+        ) // 2
+        field._clear_button.click()
+        assert field.text() == ""
+        assert not field._clear_button.isVisible()
     finally:
         qapp.setStyleSheet(previous)
 
 
-def test_search_field_loads_the_leading_icon_from_cache_once(qapp, tmp_path, monkeypatch):
+def test_search_field_reuses_cached_painter_icons(qapp, monkeypatch):
     from mf4_analyzer.ui_kit.widgets import search_field
 
-    cache_icon = tmp_path / "search.png"
-    pixmap = QPixmap(12, 12)
-    pixmap.fill()
-    assert pixmap.save(str(cache_icon), "PNG")
+    calls = {"search": 0, "clear": 0}
+    search_icon = QIcon()
+    clear_icon = QIcon()
 
-    calls = []
+    def fake_search():
+        calls["search"] += 1
+        return search_icon
 
-    def fake_icon_cache():
-        calls.append(True)
-        return {"ICON_SEARCH": str(cache_icon)}
+    def fake_clear():
+        calls["clear"] += 1
+        return clear_icon
 
-    monkeypatch.setattr(search_field, "ensure_icon_cache", fake_icon_cache)
+    monkeypatch.setattr(search_field.Icons, "search", staticmethod(fake_search))
+    monkeypatch.setattr(
+        search_field.Icons, "clear_field", staticmethod(fake_clear),
+    )
     monkeypatch.setattr(search_field.SearchField, "_cached_search_icon", None)
+    monkeypatch.setattr(search_field.SearchField, "_cached_clear_icon", None)
 
     first = search_field.SearchField("搜索信号…")
     second = search_field.SearchField("搜索配置…")
 
-    assert calls == [True]
-    assert first.actions()[0].icon().cacheKey() == second.actions()[0].icon().cacheKey()
+    assert calls == {"search": 1, "clear": 1}
+    assert first._search_button.icon().cacheKey() == second._search_button.icon().cacheKey()
+    assert first._clear_button.icon().cacheKey() == second._clear_button.icon().cacheKey()
 
 
 def test_eight_visible_search_surfaces_render_on_the_base_track(qapp, qtbot):
@@ -141,8 +160,9 @@ def test_eight_visible_search_surfaces_render_on_the_base_track(qapp, qtbot):
         assert len(visible_fields) == 8
         for surface, field in visible_fields.items():
             assert field.isVisible(), surface
-            assert field.isClearButtonEnabled(), surface
-            assert len(field.actions()) == 1, surface
+            assert not field.isClearButtonEnabled(), surface
+            assert not field._search_button.icon().isNull(), surface
+            assert not field._clear_button.icon().isNull(), surface
             assert re.fullmatch(r"搜索.+…", field.placeholderText()), surface
         assert {surface: field.height() for surface, field in visible_fields.items()} == {
             surface: CONTROL_HEIGHTS["base"] for surface in visible_fields

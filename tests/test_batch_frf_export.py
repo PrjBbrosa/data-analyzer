@@ -90,7 +90,7 @@ def test_batch_frf_preflight_rejects_missing_or_invented_timebase():
         prepare_frf_task(missing, "command", "response", _params())
 
 
-def test_batch_frf_preflight_rejects_time_length_and_uniformity_without_truncation():
+def test_batch_frf_preflight_auto_rebuilds_time_length_uniformity_without_truncation():
     wrong_length = _file_data()
     wrong_length.time_array = wrong_length.time_array[:-1]
     jittered = _file_data()
@@ -99,8 +99,16 @@ def test_batch_frf_preflight_rejects_time_length_and_uniformity_without_truncati
 
     with pytest.raises(ValueError, match="same length|等长"):
         prepare_frf_task(wrong_length, "command", "response", _params())
-    with pytest.raises(ValueError, match="non-uniform|非均匀"):
-        prepare_frf_task(jittered, "command", "response", _params())
+    prepared = prepare_frf_task(jittered, "command", "response", _params())
+    assert prepared.warnings
+    assert "自动重建" in prepared.warnings[0]
+    assert "relative_jitter=" in prepared.warnings[0]
+    np.testing.assert_allclose(
+        np.diff(prepared.input_time),
+        np.full(prepared.input_time.size - 1, 1.0 / prepared.fs),
+        rtol=0,
+        atol=1e-12,
+    )
 
 
 def test_batch_frf_preflight_rejects_insufficient_complete_segments():
@@ -174,24 +182,37 @@ def test_batch_frf_time_range_discards_outside_nonfinite_and_time_glitches():
 
 
 @pytest.mark.parametrize("kind", ("signal", "time"))
-def test_batch_frf_time_range_rejects_glitch_inside_selected_interval(kind):
+def test_batch_frf_time_range_handles_glitch_inside_selected_interval(kind):
     fd = _file_data()
     selected_index = 150
     if kind == "signal":
         fd.data.loc[selected_index, "command"] = np.nan
-        expected = "non-finite"
-    else:
-        fd.time_array = fd.time_array.copy()
-        fd.time_array[selected_index] += 0.002
-        expected = "non-uniform"
+        with pytest.raises(BatchFrfDataError, match="non-finite"):
+            prepare_frf_task(
+                fd,
+                "command",
+                "response",
+                _params(time_range=(1.0, 2.5)),
+            )
+        return
 
-    with pytest.raises(BatchFrfDataError, match=expected):
-        prepare_frf_task(
-            fd,
-            "command",
-            "response",
-            _params(time_range=(1.0, 2.5)),
-        )
+    fd.time_array = fd.time_array.copy()
+    fd.time_array[selected_index] += 0.002
+    prepared = prepare_frf_task(
+        fd,
+        "command",
+        "response",
+        _params(time_range=(1.0, 2.5)),
+    )
+    assert prepared.warnings
+    assert "自动重建" in prepared.warnings[0]
+    assert np.isfinite(prepared.input_time).all()
+    np.testing.assert_allclose(
+        np.diff(prepared.input_time),
+        np.full(prepared.input_time.size - 1, 1.0 / prepared.fs),
+        rtol=0,
+        atol=1e-12,
+    )
 
 
 def test_batch_frf_adapter_does_not_reclassify_programming_compute_value_error(

@@ -91,6 +91,35 @@ def _axis_letter(p, letter, color=None):
     p.drawText(QRectF(4, 8, 12, 9), Qt.AlignCenter, letter)
 
 
+def _line_edit_action_icon(draw, *, logical=16, color=MUTED, filled=False):
+    """Crisp square icon sized for QLineEdit leading/trailing actions.
+
+    Hard-coding the shared ``_canvas(20)`` path left empty margin that made
+    glyphs look coarse and sit optically low inside the 32px search track.
+    This helper paints into a tight ``logical`` box at >=2× DPR so Windows
+    100–150% scaling stays sharp.
+    """
+    ratio = max(float(icon_device_pixel_ratio()), 2.0)
+    physical = max(1, int(round(logical * ratio)))
+    pix = QPixmap(physical, physical)
+    pix.setDevicePixelRatio(ratio)
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    try:
+        if filled:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(color))
+        else:
+            painter.setPen(_pen(color, 1.55))
+            painter.setBrush(Qt.NoBrush)
+        draw(painter, float(logical))
+    finally:
+        painter.end()
+    return QIcon(pix)
+
+
 class Icons:
     @classmethod
     def lock_x(cls):
@@ -105,6 +134,41 @@ class Icons:
             _padlock(p, BLUE)
             _axis_letter(p, 'Y')
         return QIcon(pix)
+
+    @classmethod
+    def search(cls, color=None):
+        """Leading magnifier for shared SearchField — stroke AA, not font glyph."""
+        stroke = color or MUTED
+
+        def draw(p, size):
+            # Optically center the lens; handle stays inside the square.
+            lens = size * 0.58
+            inset = (size - lens) * 0.38
+            p.drawEllipse(QRectF(inset, inset, lens, lens))
+            p.drawLine(
+                QPointF(inset + lens * 0.72, inset + lens * 0.72),
+                QPointF(size - size * 0.14, size - size * 0.14),
+            )
+
+        return _line_edit_action_icon(draw, color=stroke)
+
+    @classmethod
+    def clear_field(cls, color=None):
+        """Trailing clear affordance: soft disc + crisp X (replaces Qt stock)."""
+        fill = color or MUTED
+
+        def draw(p, size):
+            margin = size * 0.12
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(fill))
+            p.drawEllipse(QRectF(margin, margin, size - 2 * margin, size - 2 * margin))
+            p.setPen(_pen(QColor("#ffffff"), 1.45))
+            p.setBrush(Qt.NoBrush)
+            pad = size * 0.34
+            p.drawLine(QPointF(pad, pad), QPointF(size - pad, size - pad))
+            p.drawLine(QPointF(size - pad, pad), QPointF(pad, size - pad))
+
+        return _line_edit_action_icon(draw, color=fill, filled=True)
 
     @classmethod
     def add_file(cls, color=None):
@@ -505,10 +569,6 @@ class Icons:
 
 # Each entry: (placeholder_key, qtawesome_icon_name, color_hex)
 _ARROW_SPECS = (
-    # Shared search-field leading glyph.  This deliberately follows the same
-    # cache path as the QSS subcontrol icons instead of rasterising for every
-    # SearchField instance.
-    ("ICON_SEARCH", "mdi6.magnify", "#64748b"),
     # Spin box up arrow
     ("ICON_SPIN_UP_REST",     "mdi6.menu-up",   "#475569"),
     ("ICON_SPIN_UP_HOVER",    "mdi6.menu-up",   "#1769e0"),

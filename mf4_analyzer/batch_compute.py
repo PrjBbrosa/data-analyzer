@@ -76,6 +76,7 @@ class PreparedBatchFrf:
     params: FrfParams
     input_unit: str = ""
     output_unit: str = ""
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -128,8 +129,11 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
     """Load-neutral-to-compute seam for one directional FRF pair.
 
     The caller must supply one fully loaded logical ``FileData``.  This step
-    deliberately rejects generated or absent time axes and never truncates,
-    rebuilds, or estimates an axis/sample rate.
+    rejects generated or absent time axes and never truncates sample counts.
+    Selected-range timestamp jitter is automatically rebuilt onto a uniform
+    median-Fs grid (task-local) with an auditable warning — matching GUI
+    auto-recovery and Batch FFT-vs-Time adapter policy. ``compute_frf`` still
+    only sees a uniform axis.
     """
 
     if fd is None:
@@ -177,10 +181,12 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
     if not np.isfinite(fs) or fs <= 0.0:
         raise BatchFrfDataError("FRF fs must be finite and > 0")
 
+    adapter_warnings: list[str] = []
+
     # Build exactly one mask from the unmodified physical time array, then
     # apply it to t/x/y together. Finiteness, monotonicity and uniformity are
     # selected-range facts: an excluded numeric glitch must not poison the
-    # requested interval, while a selected glitch must fail closed.
+    # requested interval, while a selected glitch is auto-rebuilt once.
     time_range = params.get("time_range")
     if time_range is not None:
         if (
@@ -217,11 +223,27 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
         np.max(np.abs(np.diff(time) - nominal_dt)) / nominal_dt
     )
     if relative_jitter > DEFAULT_TIME_JITTER_TOLERANCE:
-        raise BatchFrfDataError(
-            "FRF time is non-uniform: relative_jitter="
-            f"{relative_jitter:.6g} exceeds tolerance="
-            f"{DEFAULT_TIME_JITTER_TOLERANCE:.6g}"
+        suggested = suggest_fs_from_time_axis(time, fs)
+        if not (np.isfinite(suggested) and suggested > 0.0):
+            raise BatchFrfDataError(
+                "FRF time is non-uniform and no valid Fs could be suggested"
+            )
+        time = np.arange(len(time), dtype=float) / float(suggested)
+        fs = float(suggested)
+        adapter_warnings.append(
+            "时间轴已按建议 Fs 自动重建为均匀网格（"
+            f"relative_jitter={relative_jitter:.6g} → Fs={fs:g}）"
         )
+        nominal_dt = 1.0 / fs
+        relative_jitter = float(
+            np.max(np.abs(np.diff(time) - nominal_dt)) / nominal_dt
+        )
+        if relative_jitter > DEFAULT_TIME_JITTER_TOLERANCE:
+            raise BatchFrfDataError(
+                "FRF time is non-uniform: relative_jitter="
+                f"{relative_jitter:.6g} exceeds tolerance="
+                f"{DEFAULT_TIME_JITTER_TOLERANCE:.6g}"
+            )
 
     try:
         frf_params = FrfParams(
@@ -259,6 +281,7 @@ def prepare_frf_task(fd, input_channel: str, output_channel: str, params) -> Pre
         params=frf_params,
         input_unit=_frf_channel_unit(fd, input_channel),
         output_unit=_frf_channel_unit(fd, output_channel),
+        warnings=tuple(adapter_warnings),
     )
 
 

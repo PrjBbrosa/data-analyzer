@@ -93,8 +93,31 @@ QDoubleSpinBox:disabled {
 }
 /* Search is an input-family semantic, not a separate height family.  Named
  * search selectors retain their local colour/chrome only and must resolve to
- * this same base content height. */
-QLineEdit[role="search"] { min-height: {{CONTROL_H_BASE_INPUT_CONTENT}}; }
+ * this same base content height. Side icon buttons are child QToolButtons
+ * owned by SearchField (not Qt stock clear / addAction widgets). */
+QLineEdit[role="search"] {
+    min-height: {{CONTROL_H_BASE_INPUT_CONTENT}};
+    padding-left: 4px;
+    padding-right: 4px;
+}
+QToolButton#searchFieldIconButton {
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+    min-height: 0;
+    max-width: 18px;
+    max-height: 18px;
+}
+QToolButton#searchFieldIconButton:hover,
+QToolButton#searchFieldIconButton:pressed,
+QToolButton#searchFieldIconButton:checked,
+QToolButton#searchFieldIconButton:disabled {
+    background: transparent;
+    border: none;
+    color: inherit;
+}
 
 /* Combo / spin button regions — provide a faint resting tint so the
  * click target is discoverable without hover, plus explicit arrow

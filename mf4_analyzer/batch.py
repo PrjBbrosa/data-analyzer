@@ -1292,6 +1292,7 @@ class BatchRunner:
                 computed = batch_compute.compute_prepared_frf(
                     prepared, cancel_token=cancel_token,
                 )
+                warnings.extend(prepared.warnings)
                 warnings.extend(computed.result.warnings)
                 loaded_sources.add(member.source_key)
                 slot = {
@@ -3205,6 +3206,7 @@ class BatchRunner:
                         warnings=list(dict.fromkeys([
                             *effective_plan.migration_warnings,
                             *issue_messages_for(slot),
+                            *getattr(slot["prepared"], "warnings", ()),
                             *computed.result.warnings,
                             *render_warnings,
                         ])),

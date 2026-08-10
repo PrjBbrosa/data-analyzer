@@ -185,17 +185,25 @@ def test_frf_manual_range_ignores_time_jitter_outside_selected_samples(qtbot):
     assert candidate["time_range"] == (0.1, 0.9)
 
 
-def test_frf_manual_range_rejects_time_jitter_inside_selected_samples(qtbot):
+def test_frf_manual_range_auto_rebuilds_time_jitter_inside_selected_samples(qtbot):
     win, fid, state, time = _window_with_pair(qtbot)
     jittered = time.copy()
     jittered[500:] += 0.1
     win.files[fid].time_array = jittered
+    win.files[fid]._time_source = "column"
     win.inspector.frf_ctx.spin_t_win.setValue(0.5)
     state.params["range_mode"] = "manual"
     state.panes[0].time_range = (0.1, 0.9)
 
-    with pytest.raises(FrfPreflightError, match="真实时间轴不均匀"):
-        win._build_frf_candidate(state, 0)
+    candidate = win._build_frf_candidate(state, 0)
+
+    lo, hi = candidate["time_range"]
+    assert 0.1 <= lo <= hi <= 0.9
+    assert win.files[fid]._time_source == "manual"
+    assert win.files[fid].is_time_axis_uniform()
+    assert float(win.files[fid].fs) == pytest.approx(
+        win.files[fid].suggested_fs_from_time_axis()
+    )
 
 
 def test_frf_preflight_rejects_uniform_but_generated_timebase(qtbot):

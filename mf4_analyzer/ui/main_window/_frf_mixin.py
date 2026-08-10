@@ -242,6 +242,64 @@ class FrfMixin:
                 f"{role}真实时间轴不均匀（相对抖动 {jitter:.6g}）"
             )
 
+    @staticmethod
+    def _frf_relative_jitter(time, fs):
+        """Return max relative jitter vs ``1/fs``, or ``None`` if undefined."""
+        arr = np.asarray(time, dtype=float)
+        if arr.size < 2:
+            return None
+        try:
+            sample_rate = float(fs)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(sample_rate) or sample_rate <= 0:
+            return None
+        differences = np.diff(arr)
+        if differences.size == 0 or np.any(differences <= 0):
+            return None
+        nominal_dt = 1.0 / sample_rate
+        return float(np.max(np.abs(differences - nominal_dt)) / nominal_dt)
+
+    def _frf_auto_rebuild_source_time_axis(self, fid, *, relative_jitter=None):
+        """Rebuild one logical source onto a uniform median-Fs grid.
+
+        Returns the Fs used. Leaves a toast/status audit trail so the
+        automatic recovery is not silent.
+        """
+        fd = self.files.get(fid)
+        if fd is None or not hasattr(fd, "rebuild_time_axis"):
+            raise FrfPreflightError("无法自动重建：来源已不可用")
+        suggested = float(fd.suggested_fs_from_time_axis())
+        if not np.isfinite(suggested) or suggested <= 0:
+            raise FrfPreflightError("无法自动重建：建议采样率无效")
+        old_max = float(fd.time_array[-1]) if len(fd.time_array) else 0.0
+        fd.rebuild_time_axis(suggested)
+        new_max = float(fd.time_array[-1]) if len(fd.time_array) else 0.0
+        if hasattr(self, "_invalidate_all_analysis_caches_for_fid"):
+            self._invalidate_all_analysis_caches_for_fid(fid)
+        if hasattr(self, "inspector") and hasattr(self.inspector, "top"):
+            current_hi = self.inspector.top.spin_end.maximum()
+            self.inspector.top.set_range_limits(0, max(current_hi, new_max))
+        if hasattr(self, "plot_time"):
+            self.plot_time()
+        if relative_jitter is not None and np.isfinite(relative_jitter):
+            prefix = (
+                f"时间轴不均匀（相对抖动≈{float(relative_jitter):.3g}），"
+            )
+        else:
+            prefix = "时间轴不均匀，"
+        message = (
+            f"{prefix}已按 Fs≈{suggested:g} Hz 自动重建为均匀网格并继续计算。"
+        )
+        if hasattr(self, "toast"):
+            self.toast(message, "warning")
+        if hasattr(self, "statusBar"):
+            self.statusBar.showMessage(
+                f"频响 · 已自动重建时间轴 · Fs={suggested:g} | "
+                f"{old_max:.1f}s → {new_max:.3f}s"
+            )
+        return suggested
+
     def _frf_source_arrays(self, source, role):
         if source is None:
             raise FrfPreflightError(f"请选择{role}通道")
@@ -277,8 +335,15 @@ class FrfMixin:
         unit = str((getattr(fd, "channel_units", None) or {}).get(channel, "") or "")
         return (fid, channel), fd, time, signal, fs, unit
 
-    def _frf_prepare_pair_samples(self, state, pane, *, validate_selected=True):
-        """Read and validate the directional pair on one common time crop."""
+    def _frf_prepare_pair_samples(
+        self, state, pane, *, validate_selected=True, _auto_rebuilt=False,
+    ):
+        """Read and validate the directional pair on one common time crop.
+
+        When the *selected* physical range is non-uniform, rebuild the
+        logical source onto a median-Fs grid once and retry. Jitter
+        outside the selected range stays irrelevant (no rebuild).
+        """
 
         input_key, input_fd, input_time, input_values, input_fs, input_unit = (
             self._frf_source_arrays(pane.input_source, "输入")
@@ -336,12 +401,29 @@ class FrfMixin:
             # Selected-data validation intentionally follows the common
             # physical mask so jitter outside an explicitly requested range
             # stays irrelevant.
-            self._frf_validate_time_axis(
-                input_time, input_values, input_fs, "输入"
-            )
-            self._frf_validate_time_axis(
-                output_time, output_values, output_fs, "输出"
-            )
+            try:
+                self._frf_validate_time_axis(
+                    input_time, input_values, input_fs, "输入"
+                )
+                self._frf_validate_time_axis(
+                    output_time, output_values, output_fs, "输出"
+                )
+            except FrfPreflightError as issue:
+                message = str(issue)
+                if "真实时间轴不均匀" not in message or _auto_rebuilt:
+                    raise
+                jitter = self._frf_relative_jitter(input_time, input_fs)
+                if jitter is None:
+                    jitter = self._frf_relative_jitter(output_time, output_fs)
+                self._frf_auto_rebuild_source_time_axis(
+                    input_key[0], relative_jitter=jitter,
+                )
+                return self._frf_prepare_pair_samples(
+                    state,
+                    pane,
+                    validate_selected=validate_selected,
+                    _auto_rebuilt=True,
+                )
             if len(input_time) != len(output_time):
                 raise FrfPreflightError(
                     "应用同一物理范围后输入和输出样本数不一致"

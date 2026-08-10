@@ -84,7 +84,7 @@
         <div class="path reveal d4"><div class="tagA g">custom-X</div><div class="ptxt"><b>custom-X</b> 不是秒；FRF 分析时间仍应按真实时间轴的秒数填写。</div></div>
         <div class="path reveal d5"><div class="tagA">查看</div><div class="ptxt">“在时域查看”会先复用同一签名的时域 View；没有时才新建，并带回输入、输出和已选范围，不覆盖无关 View。</div></div>
       </div>
-      <div class="tip reveal d5"><span class="ic">!</span><p>输入与输出必须严格同时间轴：长度、每个时刻和采样间隔都要一致。时间不一致、非均匀或缺采样时，先显式重建或对齐，FRF 不会静默截短或插值。系统真实延迟默认保留，不做自动补偿；相位曲线会如实显示这部分延迟。</p></div>
+      <div class="tip reveal d5"><span class="ic">!</span><p>输入与输出必须严格同时间轴：长度、每个时刻和采样间隔都要一致。时间戳抖动超限时，系统会按建议采样率自动重建均匀网格再计算（不做静默改幅值）；缺失或自动生成的时间轴仍会阻断。系统真实延迟默认保留，不做自动补偿；相位曲线会如实显示这部分延迟。</p></div>
     </div>
   </section>
 
@@ -113,7 +113,7 @@
       <div class="paths">
         <div class="path reveal d3"><div class="tagA">算法</div><div class="ptxt">FRF 主计算是 <b>NumPy-only</b>；<b>SciPy</b> 仅用于显式参数下的 parity 对照，不是运行时依赖，也不替你选择窗口、缩放或估计器。</div></div>
         <div class="path reveal d4"><div class="tagA g">没有结果</div><div class="ptxt">“平均段不足 2”：扩大真实时间范围或缩短窗长；“窗长过短”：增大窗长到至少 2 个样本。</div></div>
-        <div class="path reveal d5"><div class="tagA">数据被阻断</div><div class="ptxt">“时间不一致/非均匀”：在数据准备阶段显式对齐；“NaN/Inf”：清理原始通道后重新计算；“零激励”：检查输入通道是否真的有变化。</div></div>
+        <div class="path reveal d5"><div class="tagA">数据被阻断</div><div class="ptxt">“时间戳抖动/非均匀”：计算前会按建议 Fs <b>自动重建</b>均匀时间轴（toast/Batch warning 可审计）；“NaN/Inf”：清理原始通道后重新计算；“零激励”：检查输入通道是否真的有变化。</div></div>
       </div>
     </div>
   </section>

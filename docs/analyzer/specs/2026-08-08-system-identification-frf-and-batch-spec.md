@@ -2,13 +2,22 @@
 
 日期：2026-08-08
 
-状态：**设计定稿，未实施**
+状态：**已实施；后续修订见文首「修订」**
 
 实施计划：`docs/analyzer/plans/2026-08-08-system-identification-frf-and-batch-implementation.md`
 
 基线：`main@4b216e5a`（本地比 `origin/main` ahead 1；本 spec 不处理该 Git 状态）
 
 目标版本：首版功能；是否随发布升版由后续 release 任务决定，本设计不修改 `APP_VERSION`
+
+### 修订（2026-08-10）— 非均匀真实时间轴自动恢复
+
+- 规格：`docs/analyzer/specs/2026-08-10-frf-nonuniform-time-axis-recovery-spec.md`
+- 计划：`docs/analyzer/plans/2026-08-10-frf-nonuniform-time-axis-recovery-implementation.md`
+- 澄清：§1 / §6.2「不得静默重采样」「不在 FRF 内修复」仍约束 **`compute_frf` 数值核心**；
+  GUI/Batch 适配器在选中范围抖动超限时按建议 Fs **自动**均匀化（toast / warning 可审计），
+  **不**要求用户手动确认 Fs。
+- §6.2「阻断并提示显式重建」修订为：核心仍阻断未恢复的非均匀轴；产品适配器负责自动恢复。
 
 ## 1. 结论
 
@@ -33,8 +42,9 @@ TraceLab 增加一个独立的「频响」分析模式，计算单输入单输�
 - Batch：一输入对多个输出的配对组、SISO 任务展开、预览、导出、图片和 manifest。
 
 首版以正确性优先：每个 FRF 任务的输入、输出必须来自同一个逻辑来源，并共享同一条
-真实物理时间轴和采样率。不得用 `min(len(x), len(y))`、合成时间网格、静默插值或
-静默重采样掩盖不兼容数据。
+真实物理时间轴和采样率。不得用 `min(len(x), len(y))`、合成时间网格在 **数值核心**
+内掩盖不兼容数据。选中范围真实轴抖动超限时，由 GUI/Batch 适配器按建议 Fs 自动
+均匀化并留下 toast/warning（见 2026-08-10 修订）；`compute_frf` 仍只接受已均匀的轴。
 
 ## 2. 当前架构证据与扩展位置
 
@@ -240,7 +250,8 @@ compute_frf(
 - 时间间隔按当前统一采样校验容差检查（首版复用 `signal/spectrogram.py` 的
   `DEFAULT_TIME_JITTER_TOLERANCE=1e-3` 相对抖动口径，同包 import 不新增依赖），
   记录实测最大抖动；
-- 非均匀或两端时刻不一致时阻断并提示显式重建/对齐，不在 FRF 内修复；
+- 非均匀或两端时刻不一致时：数值核心阻断；GUI/Batch 适配器对选中范围抖动按建议 Fs
+  自动均匀化（toast/warning），详见 2026-08-10 修订 spec；
 - 时间范围为半开语义还是闭区间必须复用现有 shared preprocess 的既有选择口径；
   输入和输出只允许应用同一个 mask。
 
