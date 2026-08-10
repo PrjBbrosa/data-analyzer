@@ -559,7 +559,10 @@ class FileNavigator(QWidget):
             else "未启用文件范围跟随"
         )
         self.btn_auto_attach.setAccessibleName(self.btn_auto_attach.toolTip())
-        self.btn_auto_attach.setProperty("active", enabled)
+        # QSS matches [active="true"|"false"] string attrs (same as #fileRow).
+        self.btn_auto_attach.setProperty(
+            "active", "true" if enabled else "false",
+        )
         self.btn_auto_attach.style().unpolish(self.btn_auto_attach)
         self.btn_auto_attach.style().polish(self.btn_auto_attach)
 

@@ -792,6 +792,27 @@ QToolButton:disabled {
     border: 1px solid #1769e0;
 }
 
+/* File-scope follow link: active = persistent wash; idle = icon only.
+ * Generic role="icon" hover/pressed washes must not steal either state —
+ * hover used to erase the active tint, and a click on the idle (all-off)
+ * icon flashed a misleading "on" background. */
+QToolButton#autoAttachFiles[active="true"],
+QToolButton#autoAttachFiles[active="true"]:hover,
+QToolButton#autoAttachFiles[active="true"]:pressed,
+QToolButton#autoAttachFiles[active="true"]:focus {
+    background-color: {{CONTROL_ACCENT_WASH}};
+    border: 1px solid {{CONTROL_SELECT_LINE}};
+    border-radius: 6px;
+}
+QToolButton#autoAttachFiles[active="false"],
+QToolButton#autoAttachFiles[active="false"]:hover,
+QToolButton#autoAttachFiles[active="false"]:pressed,
+QToolButton#autoAttachFiles[active="false"]:focus {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+}
+
 QPushButton[role="primary"],
 QToolButton[role="primary"] {
     min-height: {{CONTROL_H_CTA_BUTTON_CONTENT}};
@@ -1842,7 +1863,10 @@ QLineEdit#channelSearch {
     background-color: #ffffff;
 }
 
-/* Channel tree — remove zebra stripe + flat header */
+/* Channel tree — remove zebra stripe + flat header.
+ * Horizontal item padding stays 0: the leaf delegate owns checkbox / Pts
+ * insets from visualRect. Non-zero QSS padding made macOS selected
+ * checkable rows shift relative to siblings. */
 QTreeWidget#channelTree {
     border: 1px solid #eef2f7;
     border-radius: 9px;
@@ -1852,11 +1876,11 @@ QTreeWidget#channelTree {
 }
 QTreeWidget#channelTree::item {
     min-height: 24px;
-    padding: 2px 4px;
+    padding: 1px 0;
 }
 QTreeWidget#channelTree::item:selected {
     min-height: 24px;
-    padding: 2px 4px;
+    padding: 1px 0;
     background-color: #b7d3f2;
     color: #111827;
 }

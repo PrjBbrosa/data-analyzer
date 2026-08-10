@@ -153,6 +153,8 @@ lesson by default.
 | [Analysis View Tests Must Seed Attachments](analysis-view-tests-seed-attachments.md) | Writing or updating integration tests that switch into FFT / FFT-vs-Time / | See lesson |
 | [Codex Analysis Mode Entry Applies View Params](codex-analysis-mode-entry-apply-view-params.md) | Load when changing analysis mode entry (`_on_mode_changed` / `_enter_fft_mode`) or any path that can capture live Inspector params into an analysis View. | See lesson |
 | [Guard programmatic analysis-View restore at both signal and projection boundaries](codex-analysis-view-restore-projection-guards.md) | Changing analysis View application, project restore, shared Inspector | See lesson |
+| [Channel Tree Uses visualRect And Fixed Pts Width](codex-channel-tree-stable-visualrect-pts-fixed.md) | Changing channel-tree selection chrome, checkbox painting, Pts column | See lesson |
+| [Stateful Icon Buttons Need active QSS And String Attrs](codex-stateful-icon-button-active-qss.md) | Adding or changing a non-checkable icon `QToolButton` whose on/off | See lesson |
 
 ## Selection Rules
 

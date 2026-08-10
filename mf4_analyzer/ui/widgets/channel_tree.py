@@ -65,10 +65,11 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
     """Paint channel leaves with one invariant three-column geometry.
 
     ``QTreeWidgetItem`` delegates checkbox and icon layout to the platform
-    style.  On macOS a selected row can therefore shift the native checkbox
-    while its decoration icon and column-2 eye keep a different anchor.  The
-    channel tree uses one fixed geometry for every checkable row so selection
-    never changes either the visual box or its hit target.
+    style.  On macOS a selected checkable row can therefore shift the native
+    checkbox / QSS-padded ``option.rect`` while its decoration and Pts cell
+    keep a different anchor.  Every role (time / fft_sources /
+    analysis_candidates) paints from the view's ``visualRect`` with fixed
+    insets so selection never changes the box, text, or Pts right edge.
     """
 
     CHECK_SIZE = 18
@@ -79,6 +80,7 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
     SWATCH_TO_TEXT_GAP = 4
     PARENT_TEXT_GAP = 9
     CELL_RIGHT_INSET = 7
+    PTS_LEFT_INSET = 4
     SELECTED_BG = QColor("#b7d3f2")
     TEXT = QColor("#111827")
     MUTED = QColor("#64748b")
@@ -94,16 +96,54 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
         data = cls._channel_data(index)
         return bool(data and data[0] == "channel")
 
-    def channel_geometry(self, row_rect):
-        """Return stable checkbox, swatch and text rects for column 0."""
-        check = QRect(
-            row_rect.left() + self.LEFT_INSET,
-            row_rect.top() + (row_rect.height() - self.CHECK_SIZE) // 2,
-            self.CHECK_SIZE,
-            self.CHECK_SIZE,
-        )
+    def initStyleOption(self, option, index):
+        """Drop native check/decoration slots; we paint both ourselves."""
+        super().initStyleOption(option, index)
+        data = self._channel_data(index)
+        if data and data[0] in ("channel", "file", "source", "raster"):
+            option.features &= ~QStyleOptionViewItem.HasCheckIndicator
+            option.features &= ~QStyleOptionViewItem.HasDecoration
+            option.icon = QIcon()
+
+    def _stable_cell_rect(self, option, index):
+        """Content band for custom painting.
+
+        Prefer ``option.rect`` (the rect the view asked us to paint). After
+        clearing HasCheckIndicator and horizontal QSS padding it stays
+        selection-stable, and it stays out of the branch gutter — using
+        ``visualRect`` alone could place a top-level file checkbox under the
+        expander on macOS so the box looked "gone".
+        """
+        opt = QRect(option.rect)
+        if opt.isValid() and opt.width() > 0 and opt.height() > 0:
+            return opt
+        widget = option.widget or self.parent()
+        if widget is not None and hasattr(widget, "visualRect"):
+            rect = widget.visualRect(index)
+            if rect.isValid() and rect.width() > 0 and rect.height() > 0:
+                return QRect(rect)
+        return opt
+
+    @staticmethod
+    def _row_shows_checkbox(index):
+        """Match parent/channel chrome: only UserCheckable rows get a box."""
+        return bool(index.flags() & Qt.ItemIsUserCheckable)
+
+    def channel_geometry(self, row_rect, *, with_checkbox=True):
+        """Return stable checkbox/swatch/text rects for column 0."""
+        if with_checkbox:
+            check = QRect(
+                row_rect.left() + self.LEFT_INSET,
+                row_rect.top() + (row_rect.height() - self.CHECK_SIZE) // 2,
+                self.CHECK_SIZE,
+                self.CHECK_SIZE,
+            )
+            swatch_left = check.right() + 1 + self.CHECK_TO_SWATCH_GAP
+        else:
+            check = QRect()
+            swatch_left = row_rect.left() + self.LEFT_INSET
         swatch = QRect(
-            check.right() + 1 + self.CHECK_TO_SWATCH_GAP,
+            swatch_left,
             row_rect.top() + (row_rect.height() - self.SWATCH_BOX) // 2,
             self.SWATCH_BOX,
             self.SWATCH_BOX,
@@ -140,6 +180,12 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
         )
         return check, text
 
+    def pts_geometry(self, row_rect):
+        """Right-aligned Pts band with a selection-invariant right inset."""
+        return row_rect.adjusted(
+            self.PTS_LEFT_INSET, 0, -self.CELL_RIGHT_INSET, 0,
+        )
+
     def column_action_geometry(self, row_rect):
         """Center a row action inside the fixed display column."""
         return QRect(
@@ -175,20 +221,26 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             )
         painter.restore()
 
-    def _item_paint_option(self, option, index):
-        """Keep item-level font/metrics while retaining the view's geometry."""
+    def _item_paint_option(self, option, index, cell_rect):
+        """Keep item-level font/metrics while locking geometry to ``cell_rect``."""
         styled = QStyleOptionViewItem(option)
         self.initStyleOption(styled, index)
-        styled.rect = option.rect
+        styled.rect = QRect(cell_rect)
         styled.state = option.state
         return styled
 
-    def _paint_checkable_parent(self, painter, option, index):
-        """Paint a file/source/raster cell without platform inset drift."""
-        styled = self._item_paint_option(option, index)
-        if self._is_selected(option):
+    def _fill_selected(self, painter, option, cell_rect):
+        if not self._is_selected(option):
+            return
+        painter.fillRect(cell_rect, self.SELECTED_BG)
+        if option.rect != cell_rect:
             painter.fillRect(option.rect, self.SELECTED_BG)
-        check, text = self.parent_geometry(option.rect)
+
+    def _paint_checkable_parent(self, painter, option, index, cell_rect):
+        """Paint a file/source/raster cell without platform inset drift."""
+        styled = self._item_paint_option(option, index, cell_rect)
+        self._fill_selected(painter, option, cell_rect)
+        check, text = self.parent_geometry(cell_rect)
         self._paint_checkbox(
             painter,
             check,
@@ -202,6 +254,38 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             Qt.AlignLeft | Qt.AlignVCenter,
             styled,
             elide=Qt.ElideMiddle,
+        )
+
+    def _paint_plain_parent(self, painter, option, index, cell_rect):
+        """Non-checkable file/source/raster label with the same left inset."""
+        styled = self._item_paint_option(option, index, cell_rect)
+        self._fill_selected(painter, option, cell_rect)
+        text = QRect(
+            cell_rect.left() + self.LEFT_INSET,
+            cell_rect.top(),
+            max(0, cell_rect.width() - self.LEFT_INSET - self.CELL_RIGHT_INSET),
+            cell_rect.height(),
+        )
+        self._paint_text(
+            painter,
+            text,
+            index.data(Qt.DisplayRole),
+            self.TEXT,
+            Qt.AlignLeft | Qt.AlignVCenter,
+            styled,
+            elide=Qt.ElideMiddle,
+        )
+
+    def _paint_pts(self, painter, option, index, cell_rect):
+        styled = self._item_paint_option(option, index, cell_rect)
+        self._fill_selected(painter, option, cell_rect)
+        self._paint_text(
+            painter,
+            self.pts_geometry(cell_rect),
+            index.data(Qt.DisplayRole),
+            self.TEXT if self._is_selected(option) else self.MUTED,
+            Qt.AlignRight | Qt.AlignVCenter,
+            styled,
         )
 
     def _paint_text(self, painter, rect, text, color, alignment, option,
@@ -218,18 +302,29 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
         painter.restore()
 
     def paint(self, painter, option, index):
+        cell = self._stable_cell_rect(option, index)
+        data = self._channel_data(index)
+        column = index.column()
+
+        # Pts is role-agnostic: every row type uses the same right edge so
+        # selection / projection switches cannot nudge the numbers sideways.
+        if column == 1:
+            self._paint_pts(painter, option, index, cell)
+            return
+
         if not self._is_channel(index):
-            data = self._channel_data(index)
             if (
-                index.column() == 0
+                column == 0
                 and data
                 and data[0] in ("file", "source", "raster")
-                and (index.flags() & Qt.ItemIsUserCheckable)
             ):
-                self._paint_checkable_parent(painter, option, index)
+                if self._row_shows_checkbox(index):
+                    self._paint_checkable_parent(painter, option, index, cell)
+                else:
+                    self._paint_plain_parent(painter, option, index, cell)
                 return
             icon = index.data(Qt.DecorationRole)
-            if (index.column() == 2 and isinstance(icon, QIcon)
+            if (column == 2 and isinstance(icon, QIcon)
                     and not icon.isNull()):
                 # File/raster detach actions used to follow the native macOS
                 # decoration inset, placing the red x left of the eye-icon
@@ -249,26 +344,27 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
                 )
                 icon.paint(
                     painter,
-                    self.column_action_geometry(option.rect),
+                    self.column_action_geometry(cell),
                     Qt.AlignCenter,
                 )
                 return
             super().paint(painter, option, index)
             return
 
-        column = index.column()
-        styled = self._item_paint_option(option, index)
-        selected = self._is_selected(option)
-        if selected:
-            painter.fillRect(option.rect, self.SELECTED_BG)
+        styled = self._item_paint_option(option, index, cell)
+        self._fill_selected(painter, option, cell)
 
         if column == 0:
-            check, swatch, text = self.channel_geometry(option.rect)
-            self._paint_checkbox(
-                painter,
-                check,
-                index.data(Qt.CheckStateRole) == Qt.Checked,
+            show_check = self._row_shows_checkbox(index)
+            check, swatch, text = self.channel_geometry(
+                cell, with_checkbox=show_check,
             )
+            if show_check:
+                self._paint_checkbox(
+                    painter,
+                    check,
+                    index.data(Qt.CheckStateRole) == Qt.Checked,
+                )
             icon = index.data(Qt.DecorationRole)
             if isinstance(icon, QIcon) and not icon.isNull():
                 icon.paint(painter, swatch, Qt.AlignCenter)
@@ -284,21 +380,10 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             )
             return
 
-        if column == 1:
-            self._paint_text(
-                painter,
-                option.rect.adjusted(0, 0, -self.CELL_RIGHT_INSET, 0),
-                index.data(Qt.DisplayRole),
-                self.TEXT if selected else self.MUTED,
-                Qt.AlignRight | Qt.AlignVCenter,
-                styled,
-            )
-            return
-
         if column == 2:
             icon = index.data(Qt.DecorationRole)
             if isinstance(icon, QIcon) and not icon.isNull():
-                icon.paint(painter, self.eye_geometry(option.rect), Qt.AlignCenter)
+                icon.paint(painter, self.eye_geometry(cell), Qt.AlignCenter)
             return
 
         super().paint(painter, option, index)
@@ -586,10 +671,12 @@ class MultiFileChannelWidget(QWidget):
         self.tree.setHeaderLabels(['Channel', 'Pts', '显示']);
         header = self.tree.header()
         # Channel column owns all spare width so long names aren't elided when
-        # the dock is widened. Pts column auto-fits its 5-7 digit numbers.
+        # the dock is widened. Pts stays Fixed: ResizeToContents remeasured on
+        # selection under macOS QSS and made the numbers jump sideways.
         header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
         header.setSectionResizeMode(2, QHeaderView.Fixed)
+        header.resizeSection(1, self._pts_section_width())
         header.resizeSection(2, 42)
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(40)
@@ -1185,6 +1272,17 @@ class MultiFileChannelWidget(QWidget):
             self._projection_role,
             self._channel_checks_editable,
             self._time_channel_visibility_available,
+        )
+
+    def _pts_section_width(self):
+        """Wide enough for 7-digit point counts plus the delegate's insets."""
+        fm = self.tree.fontMetrics()
+        return max(
+            52,
+            fm.horizontalAdvance("0000000")
+            + _ChannelLeafDelegate.PTS_LEFT_INSET
+            + _ChannelLeafDelegate.CELL_RIGHT_INSET
+            + 8,
         )
 
     def projection_role(self):
