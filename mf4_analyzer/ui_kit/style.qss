@@ -2896,17 +2896,25 @@ QDialog#DrawerSurface #ChannelEditorDialog {
     background-color: #fbe9e7;
 }
 
-/* Menus and status */
+/* Menus and status
+ * Compact density (2026-08-10 Option A): align row height with combo/base
+ * controls (~28 outer) instead of the old 38px items that dwarfed 24px kebabs.
+ * Default right pad is 12 (no empty check gutter). Menus with checkable rows or
+ * submenu arrows set dynamic property gutter="check" for padding-right 22.
+ * pgContextMenu below keeps its own larger Precision Light metrics. */
 QMenu {
-    padding: 7px;
+    padding: 4px;
     border: 1px solid rgba(190, 205, 225, 210);
-    border-radius: 12px;
+    border-radius: 10px;
     background-color: rgba(255, 255, 255, 238);
 }
 QMenu::item {
-    min-height: 24px;
-    padding: 7px 28px 7px 12px;
-    border-radius: 8px;
+    min-height: 20px;
+    padding: 4px 12px 4px 10px;
+    border-radius: 6px;
+}
+QMenu[gutter="check"]::item {
+    padding-right: 22px;
 }
 QMenu::item:selected {
     background-color: rgba(232, 239, 255, 230);
@@ -2914,7 +2922,7 @@ QMenu::item:selected {
 }
 QMenu::separator {
     height: 1px;
-    margin: 7px 10px;
+    margin: 4px 8px;
     background-color: rgba(148, 163, 184, 155);
 }
 

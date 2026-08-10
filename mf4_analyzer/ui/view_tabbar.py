@@ -442,7 +442,8 @@ class ViewTabBar(QWidget):
         # The » menu below lists every View by its FULL name, so opening it is
         # one of the two ways the user learns where the names went.
         self._mark_compact_tabs_discovered()
-        menu = apply_rounded_menu_chrome(QMenu(self))
+        # Checkable rows need the wider QSS right gutter (gutter="check").
+        menu = apply_rounded_menu_chrome(QMenu(self), gutter="check")
         current = self._tabs.currentIndex()
         # Every View, not just the retired ones: the button only exists while
         # something overflowed, and the current View is never among the hidden
