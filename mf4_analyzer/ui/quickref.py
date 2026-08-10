@@ -103,8 +103,8 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 gesture="从文件列表拖到通道树",
             ),
             QuickRow(
-                "自动加入开关",
-                sub="仅时域 View：开=新文件自动进当前时域 View · 关=只打开不加入",
+                "文件范围跟随",
+                sub="链接菜单三项：新文件加入当前 View · 新建 View 继承文件范围 · 切换分析时填充空 View（全关=不跟随）",
                 gesture="文件区链接图标",
             ),
             QuickRow("保存会话", gesture=".tlproj 项目"),

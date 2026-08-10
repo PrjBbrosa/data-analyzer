@@ -997,7 +997,7 @@ class MultiFileChannelWidget(QWidget):
             else:
                 self.empty_state.setText(
                     f"当前“{section} · {view_name}”尚未加入文件\n"
-                    "从上方拖入文件；要沿用当前配置请复制 View"
+                    "从上方拖入；或在链接菜单启用「切换分析时填充空 View」"
                 )
         editable = self._channel_checks_editable
         for widget in (

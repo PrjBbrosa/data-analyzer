@@ -802,8 +802,8 @@ class MainWindow(
         self.navigator.files_detach_requested.connect(
             self._detach_files_from_active_context
         )
-        self.navigator.auto_attach_changed.connect(
-            self._on_auto_attach_changed
+        self.navigator.follow_prefs_changed.connect(
+            self._on_follow_prefs_changed
         )
         self.navigator.channel_config_save_requested.connect(
             self._save_current_channel_config
@@ -1515,6 +1515,9 @@ class MainWindow(
                 'fft_sources' if mode == 'fft' else 'analysis_candidates'
             )
             self.navigator.set_projection_role(role)
+            # Stage 1.1 item 3: fill empty target View from time focus before
+            # the apply pipeline projects it. Do not hook view-switch.
+            self._maybe_fill_empty_analysis_on_mode_entry(mode)
             if mode == 'fft':
                 # Always apply target View params/sources/range first so live
                 # Inspector never overwrites the destination state. Canvas
@@ -1527,6 +1530,37 @@ class MainWindow(
                     QTimer.singleShot(0, self._enter_fft_mode)
             else:
                 self._apply_active_analysis_context(mode)
+
+    def _maybe_fill_empty_analysis_on_mode_entry(self, mode):
+        """Item 3: copy time-focus attachments into an empty analysis View."""
+        prefs = self.navigator.follow_prefs()
+        if (
+            not prefs.fill_on_mode_entry
+            or getattr(self, "_opening_project", False)
+            or getattr(self, "_restoring_project", False)
+        ):
+            return
+        from .file_scope_follow import resolve_mode_entry_fill
+
+        resolved = self._active_analysis_view_state(mode)
+        time_resolved = self._focused_time_view_state()
+        target_att = (
+            list(resolved[2].attached_file_ids) if resolved is not None else []
+        )
+        time_att = (
+            list(time_resolved[1].attached_file_ids)
+            if time_resolved is not None
+            else []
+        )
+        fill = resolve_mode_entry_fill(target_att, time_att, self.files)
+        if not fill:
+            return
+        added = self._attach_files_to_active_analysis_view(mode, fill)
+        if added and time_resolved is not None:
+            self.toast(
+                f"已填充 {len(added)} 个文件 · 来自 {time_resolved[1].name}",
+                "success",
+            )
 
     def _on_cursor_mode_changed(self, mode):
         if self.chart_stack.split_active():

@@ -321,7 +321,37 @@ class ViewMixin:
     # -- view tab-bar intent handlers (time section) --------------------
     def _on_view_new(self):
         self._capture_current_view()
-        self.view_manager.new_view()
+        prefs = self.navigator.follow_prefs()
+        inherit = (
+            prefs.inherit_on_new_view
+            and not getattr(self, "_opening_project", False)
+            and not getattr(self, "_restoring_project", False)
+        )
+        template_fids = []
+        template_name = ""
+        if inherit:
+            from .file_scope_follow import resolve_new_view_template
+
+            resolved = self._focused_time_view_state()
+            section_att = (
+                list(resolved[1].attached_file_ids) if resolved is not None else []
+            )
+            template_name = resolved[1].name if resolved is not None else ""
+            # Time section: same-section template is the focused time View;
+            # the time fallback is identical.
+            template_fids = resolve_new_view_template(
+                section_att, section_att, self.files
+            )
+        idx = self.view_manager.new_view()
+        if idx < 0:
+            return
+        if inherit and template_fids:
+            added = self._attach_files_to_focused_view(template_fids)
+            if added:
+                self.toast(
+                    f"已继承 {len(added)} 个文件 · 来自 {template_name}",
+                    "success",
+                )
 
     def _on_view_delete(self, idx):
         # 删除 View 会一并丢弃它的通道范围、分屏配对与已加入文件，且无法撤销。

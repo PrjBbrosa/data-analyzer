@@ -3,6 +3,7 @@ from pathlib import Path
 
 from PyQt5.QtCore import QMimeData, QPoint, QPointF, Qt
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent
+from PyQt5.QtWidgets import QToolButton
 
 from mf4_analyzer.ui.file_navigator import FileNavigator, _FileRow
 
@@ -419,19 +420,38 @@ def test_file_row_drag_payload_contains_every_group_fid(qapp):
     assert json.loads(bytes(mime.data(row.MIME_TYPE))) == ["f0", "f1"]
 
 
-def test_auto_attach_toggle_is_compact_and_emits(qapp, qtbot):
+def test_follow_link_menu_is_compact_and_emits_prefs(qapp, qtbot):
+    from mf4_analyzer.ui.main_window.file_scope_follow import FollowPrefs
+
     nav = FileNavigator()
     qtbot.addWidget(nav)
 
     assert nav.btn_auto_attach.maximumWidth() <= 24
+    # Icon-only chrome like the kebab: no InstantPopup/setMenu triangle.
+    assert nav.btn_auto_attach.menu() is None
+    assert nav.btn_auto_attach.popupMode() != QToolButton.InstantPopup
+    assert nav._follow_menu is not None
     assert nav.auto_attach_enabled() is True
+    assert nav.follow_prefs() == FollowPrefs(True, False, False)
     enabled_icon_key = nav.btn_auto_attach.icon().cacheKey()
-    with qtbot.waitSignal(nav.auto_attach_changed, timeout=200) as emitted:
-        nav.btn_auto_attach.click()
+    assert "已启用 1 项" in nav.btn_auto_attach.toolTip()
 
-    assert emitted.args == [False]
+    with qtbot.waitSignal(nav.follow_prefs_changed, timeout=200) as emitted:
+        nav._act_attach_on_load.setChecked(False)
+
+    assert emitted.args[0] == FollowPrefs(False, False, False)
     assert nav.auto_attach_enabled() is False
     assert nav.btn_auto_attach.icon().cacheKey() != enabled_icon_key
+    assert nav.btn_auto_attach.toolTip() == "未启用文件范围跟随"
+
+    with qtbot.waitSignal(nav.follow_prefs_changed, timeout=200) as emitted:
+        nav._act_inherit_on_new_view.setChecked(True)
+    assert emitted.args[0].inherit_on_new_view is True
+    assert "已启用 1 项" in nav.btn_auto_attach.toolTip()
+
+    nav.set_follow_prefs(FollowPrefs(True, True, True))
+    assert nav.follow_prefs().enabled_count() == 3
+    assert "已启用 3 项" in nav.btn_auto_attach.toolTip()
 
 
 def test_internal_file_drop_emits_known_fids_once(qapp, qtbot):
