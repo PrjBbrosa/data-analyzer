@@ -99,12 +99,12 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("BLF 报文解码", sub="需配 DBC 文件"),
             QuickRow(
                 "把文件加入当前 View",
-                sub="打开只是载入；要画图/分析得先加入 View",
+                sub="上方=全局已打开；下方=当前模式的当前 View。打开只是载入，要画图/分析得先加入",
                 gesture="从文件列表拖到通道树",
             ),
             QuickRow(
                 "自动加入开关",
-                sub="开=新文件自动进当前 View · 关=只打开不加入",
+                sub="仅时域 View：开=新文件自动进当前时域 View · 关=只打开不加入",
                 gesture="文件区链接图标",
             ),
             QuickRow("保存会话", gesture=".tlproj 项目"),
@@ -208,7 +208,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "分析信号的可选范围",
-                sub="FFT / FFT-时间 / 阶次的信号框只列当前 View 已加入的文件",
+                sub="FFT / 时频 / 频响 / 阶次各自只列该分析 View 已加入的文件，不跟随时域 View",
             ),
             QuickRow(
                 "从当前 View 移除文件",

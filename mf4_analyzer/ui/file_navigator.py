@@ -488,9 +488,9 @@ class FileNavigator(QWidget):
             color="#4b6078" if enabled else "#8b98aa",
         ))
         self.btn_auto_attach.setToolTip(
-            "新加载文件自动加入当前 View"
+            "新加载文件自动加入当前时域 View"
             if enabled
-            else "新加载文件仅打开，不加入当前 View"
+            else "新加载文件仅打开，不加入时域 View"
         )
         self.btn_auto_attach.setAccessibleName(self.btn_auto_attach.toolTip())
         self.btn_auto_attach.setProperty("active", enabled)

@@ -527,3 +527,39 @@ def test_open_project_skips_missing(qapp, tmp_path, monkeypatch):
     mw2.open_project(proj)
     assert [fd.filename for fd in mw2.files.values()] == ["a.csv"]
     assert warned.get("hit") is True
+    health = mw2._project_restore_health
+    assert health.degraded is True
+    assert health.missing_paths
+    assert health.missing_old_fids
+
+
+def test_degraded_project_save_clears_health_after_confirm(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from PyQt5.QtWidgets import QMessageBox
+
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    csv_b = tmp_path / "b.csv"; _write_csv(csv_b)
+    proj = tmp_path / "s.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(csv_a))
+    mw._load_one(str(csv_b))
+    mw.save_project(proj)
+    csv_b.unlink()
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    restored = MainWindow()
+    restored.open_project(proj)
+    assert restored._project_restore_health.degraded is True
+
+    confirmed = []
+    monkeypatch.setattr(
+        restored,
+        "_confirm_degraded_project_save",
+        lambda *a, **k: confirmed.append(True) or True,
+    )
+    out = tmp_path / "rewritten.tlproj"
+    assert restored.save_project(out) is True
+    assert confirmed == [True]
+    assert restored._project_restore_health.degraded is False
+    assert out.is_file()

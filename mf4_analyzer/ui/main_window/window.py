@@ -50,7 +50,11 @@ from ..time_xaxis import (
 )
 
 from ._sentinel import _INSPECTOR_TIME_RANGE
-from ._state_holders import CustomXAxisState, ViewFocusState
+from ._state_holders import (
+    CustomXAxisState,
+    ProjectRestoreHealth,
+    ViewFocusState,
+)
 from ._analysis_mixin import AnalysisMixin
 from ._drop_import_mixin import DropImportMixin
 from ._fft_mixin import FFTMixin
@@ -115,6 +119,9 @@ class MainWindow(
         # shims below always have a target.
         self._custom_xaxis = CustomXAxisState()
         self._view_focus = ViewFocusState()
+        # Stage 1 degraded-save guard: missing project sources / dropped pane
+        # refs. Mutations go through the holder (not multi-file rebinds).
+        self._project_restore_health = ProjectRestoreHealth()
         try:
             self._blf_dbc_history = self._load_recent_blf_dbc_history()
         except Exception:

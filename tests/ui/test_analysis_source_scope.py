@@ -371,11 +371,10 @@ def test_explicit_global_cascade_cleans_every_reference_and_cache(
     assert invalidated == [fid_b]
 
 
-@pytest.mark.skip(reason="Task 7 degraded-save guard not implemented yet")
 def test_project_missing_source_blocks_overwrite_save_by_default(
     win_two, tmp_path, monkeypatch,
 ):
-    win, fid_a, fid_b = win_two
+    win, _fid_a, _fid_b = win_two
     path = tmp_path / "degraded.tlproj"
     win._project_path = str(path)
     health = getattr(win, "_project_restore_health", None)
@@ -394,11 +393,7 @@ def test_project_missing_source_blocks_overwrite_save_by_default(
         "_write_project_document",
         lambda *a, **k: saved.append(True),
     )
-    # Prefer the public save entry if present.
-    if hasattr(win, "save_project"):
-        win.save_project()
-    elif hasattr(win, "_save_project"):
-        win._save_project()
-    else:
-        pytest.skip("no save_project entry")
+    result = win.save_project(path)
+    assert result is False
     assert saved == []
+    assert health.degraded is True

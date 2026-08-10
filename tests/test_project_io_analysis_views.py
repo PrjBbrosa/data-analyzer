@@ -5,8 +5,8 @@ from mf4_analyzer.ui.analysis_view_state import (
     analysis_view_has_sources,
 )
 from mf4_analyzer.ui.project_io import (
-    ProjectDocument, load_project_from_json, remap_analysis_view_fids,
-    save_project_to_json,
+    ProjectDocument, collect_dropped_analysis_refs, load_project_from_json,
+    remap_analysis_view_fids, save_project_to_json,
 )
 
 
@@ -158,3 +158,46 @@ def test_schema1_view_without_reference_does_not_inject_hardcoded_value():
     assert "db_reference" not in v.params
     assert "db_reference_mode" not in v.params
     assert v.params["nfft"] == 2048
+
+
+def test_collect_dropped_analysis_refs_records_missing_pane_roles():
+    av = {
+        "fft": {
+            "active": 0,
+            "views": [{
+                "view_id": "vid-fft",
+                "name": "View 1",
+                "panes": [{
+                    "sources": [["f1", "a"], ["f2", "b"]],
+                    "rpm_source": None,
+                }],
+            }],
+        },
+        "order": {
+            "active": 0,
+            "views": [{
+                "view_id": "vid-ord",
+                "panes": [{
+                    "sources": [["f1", "sig"]],
+                    "rpm_source": ["f2", "rpm"],
+                }],
+            }],
+        },
+        "frf": {
+            "active": 0,
+            "views": [{
+                "view_id": "vid-frf",
+                "panes": [{
+                    "sources": [],
+                    "input_source": ["f2", "in"],
+                    "output_source": ["f1", "out"],
+                }],
+            }],
+        },
+    }
+    dropped = collect_dropped_analysis_refs(av, {"f1": "F1"})
+    assert ("fft", "vid-fft", 0, "signal") in dropped
+    assert ("order", "vid-ord", 0, "rpm") in dropped
+    assert ("frf", "vid-frf", 0, "input") in dropped
+    assert ("frf", "vid-frf", 0, "output") not in dropped
+    assert ("order", "vid-ord", 0, "signal") not in dropped
