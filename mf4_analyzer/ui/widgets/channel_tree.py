@@ -643,6 +643,10 @@ class MultiFileChannelWidget(QWidget):
         self._time_channel_visibility_available = True
         self._projection_role = "time"
         self._channel_checks_editable = True
+        # Cache of the (role, checks_editable, visibility_available) tuple
+        # last fully replayed to chrome/icons by ``set_projection_role``.
+        # ``None`` forces the first call to always do the full replay.
+        self._projection_chrome_signature = None
         self.axis_groups_changed.connect(self.tree.viewport().update)
         self._sync_empty_state()
         self._sync_projection_chrome()
@@ -1172,6 +1176,16 @@ class MultiFileChannelWidget(QWidget):
             pass
         self._refresh_visibility_icons()
         self._sync_projection_chrome()
+        # This shim mutates the same tri-state that ``set_projection_role``
+        # short-circuits on, but bypasses that method entirely. Keep the
+        # cached signature coherent so a later ``set_projection_role`` call
+        # that happens to land back on an already-cached tuple doesn't skip
+        # a replay this shim actually still owes the tree.
+        self._projection_chrome_signature = (
+            self._projection_role,
+            self._channel_checks_editable,
+            self._time_channel_visibility_available,
+        )
 
     def projection_role(self):
         return self._projection_role
@@ -1191,6 +1205,25 @@ class MultiFileChannelWidget(QWidget):
         self._projection_role = role
         self._time_channel_visibility_available = role == "time"
         self._channel_checks_editable = role != "analysis_candidates"
+        signature = (
+            self._projection_role,
+            self._channel_checks_editable,
+            self._time_channel_visibility_available,
+        )
+        if signature == self._projection_chrome_signature:
+            # Mode/View switches call this at high frequency and usually land
+            # on the role that is already active (attachment-projection p95
+            # regressed 2.98ms -> 8.19ms from replaying the icon walk + a
+            # whole-tree setFlags/header pass on every no-op call). Nothing
+            # observable changed, so chrome/icons/empty-state are already
+            # correct -- skip the replay. Row rebuilds (``add_file``) call
+            # ``_sync_projection_chrome()`` directly and are unaffected by
+            # this cache. ``_attached_file_ids``/label changes elsewhere
+            # (``set_attached_file_ids`` / ``set_empty_state_context``) call
+            # ``_sync_empty_state()`` themselves, so skipping it here does
+            # not leave empty-state text/button-enablement stale.
+            return
+        self._projection_chrome_signature = signature
         self._refresh_visibility_icons()
         self._sync_projection_chrome()
         self._sync_empty_state()
