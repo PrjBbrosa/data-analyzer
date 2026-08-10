@@ -339,8 +339,8 @@ def test_mode_switch_applies_target_active_view_before_capture(win_two, qtbot):
     fft.get(0).params = {"nfft": 2048, "nfft_mode": "fixed"}
 
     # Poison live Inspector with a different NFFT while still in time mode.
-    win.inspector.fft_ctx.apply_params({"nfft": 128, "nfft_mode": "fixed"})
-    assert win.inspector.fft_ctx.get_params().get("nfft") == 128
+    win.inspector.fft_ctx.apply_params({"nfft": 512, "nfft_mode": "fixed"})
+    assert win.inspector.fft_ctx.get_params().get("nfft") == 512
 
     win._on_mode_changed("fft")
     qtbot.waitUntil(

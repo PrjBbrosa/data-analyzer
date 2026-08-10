@@ -666,10 +666,13 @@ def test_fft_section_switch_away_and_back_preserves_spectrum(two_file_win, qapp)
 
 
 def test_fft_single_signal_survives_fft_time_weighting_drift(two_file_win, qapp):
-    """The legacy single-signal FFT path draws a visible spectrum but does not
-    populate the multi-source analysis cache. If hidden section activity changes
-    FFT params while away, returning to FFT must keep the visible result and mark
-    it stale instead of clearing the canvas."""
+    """Returning to FFT restores the active View's params and keeps the spectrum.
+
+    Cross-section Inspector edits (e.g. FFT-vs-Time audio weighting defaults)
+    may mutate the shared FFT Contextual while the FFT page is hidden. Stage 1
+    source isolation reapplies the destination View's params on mode entry, so
+    that live drift must not overwrite View state or wipe the retained canvas.
+    """
     win = two_file_win
     fid = list(win.files.keys())[0]
     win.navigator.set_checked_channels([])
@@ -684,11 +687,13 @@ def test_fft_single_signal_survives_fft_time_weighting_drift(two_file_win, qapp)
 
     canvas = win.chart_stack.page_fft.pane_canvas(0)
     assert len(canvas._amp_curves) == 1
+    fft_state = win.analysis_managers["fft"].get(0)
+    weighting_before = fft_state.params.get("weighting")
+    live_before = win.inspector.fft_ctx.get_params().get("weighting")
 
     win.toolbar._set_mode("fft_time")
     qapp.processEvents()
-    # Mirrors the cross-section defaulting side-effect from selecting an audio
-    # source in FFT-vs-Time: FFT's weighting changes while the FFT page is hidden.
+    # Poison live FFT Contextual while away; mode re-entry must re-apply View.
     win.inspector.fft_ctx.combo_weighting.setCurrentText("A")
     qapp.processEvents()
     win.toolbar._set_mode("fft")
@@ -697,7 +702,12 @@ def test_fft_single_signal_survives_fft_time_weighting_drift(two_file_win, qapp)
 
     assert len(canvas._amp_curves) == 1
     assert canvas.has_result()
-    assert canvas.is_spectrum_stale()
+    live_after = win.inspector.fft_ctx.get_params().get("weighting")
+    state_after = fft_state.params.get("weighting")
+    assert state_after == weighting_before
+    assert live_after == live_before == weighting_before
+    assert live_after != "A" or weighting_before == "A"
+    assert canvas.is_spectrum_stale() is False
 
 
 def test_fft_signal_combo_previews_time_before_compute(two_file_win, qapp):
