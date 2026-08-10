@@ -267,7 +267,17 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
 
 def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
     """Rewrite fids inside analysis_views payloads; drop refs whose fid
-    is absent from ``fid_map`` (same contract as remap_view_fids)."""
+    is absent from ``fid_map`` (same contract as remap_view_fids).
+
+    Schema 7 ``attached_file_ids`` are remapped in order. Older payloads
+    without the field derive attachments from remapped pane roles only —
+    never from the full project file set.
+    """
+    from .analysis_view_state import (
+        analysis_view_source_fids,
+        normalize_analysis_attachments,
+    )
+
     out = {}
     for section, block in (analysis_views or {}).items():
         views = []
@@ -294,6 +304,14 @@ def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
                     )
                 panes.append(pn)
             v["panes"] = panes
+            if "attached_file_ids" in view:
+                v["attached_file_ids"] = normalize_analysis_attachments(
+                    fid_map[fid]
+                    for fid in view.get("attached_file_ids", [])
+                    if fid in fid_map
+                )
+            else:
+                v["attached_file_ids"] = analysis_view_source_fids(v)
             views.append(v)
         out[section] = {"active": int(block.get("active", 0)), "views": views}
     return out
