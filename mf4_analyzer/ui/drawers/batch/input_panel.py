@@ -342,6 +342,8 @@ class FileListWidget(QWidget):
             path, context=self._source_context,
         )
         self._pool = QThreadPool.globalInstance()
+        # Optional BatchSheet hook: resolve BLF/DBC before add_disk_path.
+        self._disk_paths_handler = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -387,6 +389,17 @@ class FileListWidget(QWidget):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+    def set_source_context(self, source_context: dict | None) -> None:
+        """Replace probe/availability context (e.g. BLF ``dbc_paths``)."""
+        self._source_context = dict(source_context or {})
+        self._probe_signals_for = lambda path: self._source_registry.probe_sources(
+            path, context=self._source_context,
+        )
+
+    def set_disk_paths_handler(self, handler) -> None:
+        """Optional ``handler(list[str])`` invoked instead of bare disk adds."""
+        self._disk_paths_handler = handler
+
     def add_loaded_file(
         self, fid: object, path: str, channels: frozenset
     ) -> None:
@@ -743,8 +756,14 @@ class FileListWidget(QWidget):
         paths, _ = QFileDialog.getOpenFileNames(
             self, "选择数据文件", "", f"所有支持的数据 ({file_glob})"
         )
-        for p in paths or ():
-            self.add_disk_path(p)
+        selected = [str(path) for path in (paths or ()) if path]
+        if not selected:
+            return
+        if callable(self._disk_paths_handler):
+            self._disk_paths_handler(selected)
+            return
+        for path in selected:
+            self.add_disk_path(path)
 
 
 # ---------------------------------------------------------------------------
@@ -937,6 +956,7 @@ class InputPanel(QWidget):
         # Wiring
         self._file_list.filesChanged.connect(self._on_files_changed)
         self._file_list.filesChanged.connect(self._refresh_file_summary)
+        self._disk_paths_handler = None
         self._signal_picker.selectionChanged.connect(lambda *_: self.changed.emit())
         self._frf_pair_editor.changed.connect(lambda *_: self.changed.emit())
         self._target_policy_combo.currentIndexChanged.connect(
@@ -1224,8 +1244,32 @@ class InputPanel(QWidget):
             return "时间范围：起点必须小于终点"
         return ""
 
+    def set_source_context(self, source_context: dict | None) -> None:
+        """Push BLF/DBC (or other) context into the file list probe path."""
+        self._file_list.set_source_context(source_context)
+
+    def set_disk_paths_handler(self, handler) -> None:
+        """Let BatchSheet intercept disk/drop adds for BLF DBC resolution."""
+        self._disk_paths_handler = handler
+        self._file_list.set_disk_paths_handler(handler)
+
     def add_disk_paths(self, paths) -> None:
-        """Add local disk paths via the existing ``FileListWidget.add_disk_path`` sink."""
+        """Add local disk paths via the existing ``FileListWidget.add_disk_path`` sink.
+
+        When a disk-paths handler is installed (BatchSheet BLF/DBC orchestration),
+        route through it so dialog and programmatic adds share one path.
+        """
+        selected = [str(path) for path in (paths or ()) if path]
+        if not selected:
+            return
+        if callable(self._disk_paths_handler):
+            self._disk_paths_handler(selected)
+            return
+        for path in selected:
+            self._file_list.add_disk_path(path)
+
+    def add_disk_paths_resolved(self, paths) -> None:
+        """Add paths after BLF/DBC context is already ensured (no re-entry)."""
         for path in paths or ():
             self._file_list.add_disk_path(path)
 
