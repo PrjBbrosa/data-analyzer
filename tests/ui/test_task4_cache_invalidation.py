@@ -660,6 +660,6 @@ def test_close_all_clears_fft_time_coordinator_pending(qapp, qtbot):
     w._fft_time_coordinator._pending[999] = {"fid": fid, "ch": "ACC"}
     assert w._fft_time_coordinator._pending  # 前置：确有 pending
 
-    w.close_all()
+    w.close_all(force=True)
 
     assert w._fft_time_coordinator._pending == {}

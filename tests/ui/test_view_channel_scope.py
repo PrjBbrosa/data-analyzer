@@ -183,7 +183,7 @@ def test_global_file_close_cleans_every_time_view(qtbot, qapp, loaded_csv):
         state.colors = {(fid, "speed"): "#123456"}
         state.overlay_primary = (fid, "speed")
 
-    window._close(fid)
+    window._close(fid, force=True)
 
     assert fid not in window.files
     for state in window.view_manager.views:
@@ -195,7 +195,7 @@ def test_global_file_close_cleans_every_time_view(qtbot, qapp, loaded_csv):
 
 
 def test_channel_editor_removal_cleans_deleted_channel_from_every_view(
-    qtbot, qapp, loaded_csv,
+    qtbot, qapp, loaded_csv, monkeypatch,
 ):
     window = _loaded_window(qtbot, qapp, loaded_csv)
     fid = _fid(window)
@@ -223,6 +223,9 @@ def test_channel_editor_removal_cleans_deleted_channel_from_every_view(
         }
     }
 
+    # Stage 1 indexes Time/Analysis uses and asks before a global channel
+    # delete; headless tests must accept that confirm or the modal hangs.
+    monkeypatch.setattr(window, "_confirm_global_channel_delete", lambda _uses: True)
     window._apply_channel_edits(fid, {}, {"torque"})
     qapp.processEvents()
 

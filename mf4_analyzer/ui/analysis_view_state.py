@@ -12,7 +12,7 @@ with one code path.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable, Mapping, Sequence
 from uuid import uuid4
 
 from ..db_reference import migrate_legacy_reference_params
@@ -23,12 +23,13 @@ MAX_PANES = 2  # spec §2: v1 caps split at 2; the model is list-shaped for late
 # FRF role state adds schema 3, including separate requested/effective ranges;
 # schema 4 added the pane-local FRF cursor flag; schema 5 replaces it with the
 # shared frequency-domain off/single/dual cursor mode for FFT and FRF panes;
-# schema 6 removes the obsolete FRF Time-View link from persisted output.
+# schema 6 removes the obsolete FRF Time-View link from persisted output;
+# schema 7 adds per-analysis-View ``attached_file_ids`` (Stage 1 source isolation).
 # The additions are field-presence tolerant -- from_dict() keys the
 # migration off "params has db_reference and no db_reference_mode", NOT this
 # number, so schema-2 through schema-6 projects all apply the
 # saved snapshot value manual-style instead of erroring or dropping it.
-_SCHEMA = 6
+_SCHEMA = 7
 
 
 def _coerce_key(value: Any) -> ChannelKey:
@@ -42,6 +43,53 @@ def _cursor_mode_from_data(data: dict[str, Any]) -> str:
     if mode in {"off", "single", "dual"}:
         return mode
     return "single" if data.get("frf_cursor_enabled") else "off"
+
+
+def normalize_analysis_attachments(values: Iterable[Any] | None) -> list[str]:
+    """Deduplicate fids while preserving first-seen order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values or ():
+        fid = str(value)
+        if not fid or fid in seen:
+            continue
+        seen.add(fid)
+        out.append(fid)
+    return out
+
+
+def analysis_view_source_fids(
+    state_or_payload: "AnalysisViewState | Mapping[str, Any] | None",
+) -> list[str]:
+    """First-seen union of pane role fids (sources / rpm / input / output)."""
+    if state_or_payload is None:
+        return []
+    if isinstance(state_or_payload, AnalysisViewState):
+        panes: Sequence[Any] = state_or_payload.panes
+        role_fids: list[str] = []
+        for pane in panes:
+            for key in pane.sources:
+                role_fids.append(str(key[0]))
+            if pane.rpm_source is not None:
+                role_fids.append(str(pane.rpm_source[0]))
+            if pane.input_source is not None:
+                role_fids.append(str(pane.input_source[0]))
+            if pane.output_source is not None:
+                role_fids.append(str(pane.output_source[0]))
+        return normalize_analysis_attachments(role_fids)
+
+    role_fids = []
+    for pane in (state_or_payload.get("panes") or []):
+        if not isinstance(pane, Mapping):
+            continue
+        for source in pane.get("sources") or []:
+            if isinstance(source, (list, tuple)) and source:
+                role_fids.append(str(source[0]))
+        for role in ("rpm_source", "input_source", "output_source"):
+            source = pane.get(role)
+            if isinstance(source, (list, tuple)) and source:
+                role_fids.append(str(source[0]))
+    return normalize_analysis_attachments(role_fids)
 
 
 @dataclass
@@ -123,6 +171,9 @@ class AnalysisViewState:
         default_factory=lambda: {"x_linked": True, "levels_locked": True})
     # Appended so the pre-FRF positional constructor stays compatible.
     view_id: str = field(default_factory=lambda: str(uuid4()))
+    # Stage 1 source isolation: per-analysis-View file membership. Kept after
+    # ``view_id`` so older positional callers remain valid.
+    attached_file_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -130,6 +181,7 @@ class AnalysisViewState:
             "name": self.name,
             "tab_color": self.tab_color,
             "view_id": self.view_id,
+            "attached_file_ids": list(self.attached_file_ids),
             "panes": [p.to_dict() for p in self.panes],
             "params": dict(self.params),
             "compare": dict(self.compare),
@@ -155,7 +207,7 @@ class AnalysisViewState:
         # state once, then reduce it to the universal explicit pane range
         # contract.  A missing old range_mode meant "full"; schema 6 no
         # longer writes it, so do not erase a newly persisted explicit range.
-        is_legacy_payload = int(data.get("schema") or 0) < _SCHEMA
+        is_legacy_payload = int(data.get("schema") or 0) < 6
         is_frf = any(
             pane.input_source is not None and pane.output_source is not None
             for pane in panes
@@ -167,6 +219,12 @@ class AnalysisViewState:
                     pane.time_range = None
             for pane in panes:
                 pane.source_time_view_id = None
+        if "attached_file_ids" in data:
+            attached = normalize_analysis_attachments(data.get("attached_file_ids"))
+        else:
+            attached = analysis_view_source_fids(
+                {"panes": [p.to_dict() for p in panes]}
+            )
         return cls(
             name=data["name"],
             tab_color=data["tab_color"],
@@ -174,6 +232,7 @@ class AnalysisViewState:
             panes=panes[:MAX_PANES],
             params=params,
             compare=compare,
+            attached_file_ids=attached,
         )
 
     # -- structure ops -------------------------------------------------
@@ -189,11 +248,28 @@ class AnalysisViewState:
     def validate(self, *, allow_overlay: bool) -> list[str]:
         """Heatmap sections pass allow_overlay=False (1 source per pane)."""
         errs = []
+        attached = {str(fid) for fid in self.attached_file_ids}
         for i, p in enumerate(self.panes):
             if not allow_overlay and len(p.sources) > 1:
                 errs.append(
                     f"pane {i}: overlay ({len(p.sources)} sources) "
                     "not allowed for heatmap sections")
+            for key in p.sources:
+                if str(key[0]) not in attached:
+                    errs.append(
+                        f"pane {i}: source fid {key[0]!r} not in "
+                        "attached_file_ids"
+                    )
+            for role_name, role in (
+                ("rpm_source", p.rpm_source),
+                ("input_source", p.input_source),
+                ("output_source", p.output_source),
+            ):
+                if role is not None and str(role[0]) not in attached:
+                    errs.append(
+                        f"pane {i}: {role_name} fid {role[0]!r} "
+                        "not in attached_file_ids"
+                    )
         return errs
 
 

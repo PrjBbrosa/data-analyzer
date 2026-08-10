@@ -150,6 +150,9 @@ lesson by default.
 | [Comma List Inputs Accept Chinese Separators](comma-list-inputs-accept-chinese-separators.md) | Adding or editing a user-typed comma-separated field (slice | See lesson |
 | [Binary Batch Combos Prefer SegmentedChoice](binary-batch-combos-prefer-segmented-choice.md) | Replacing or reviewing a product control that has exactly two fixed | See lesson |
 | [Chart Statistics UI Redesigns Keep Param Wiring](chart-statistics-ui-keep-param-wiring.md) | Restyling Batch 图内统计 (SegmentedChoice, chips, field bars) or any | See lesson |
+| [Analysis View Tests Must Seed Attachments](analysis-view-tests-seed-attachments.md) | Writing or updating integration tests that switch into FFT / FFT-vs-Time / | See lesson |
+| [Codex Analysis Mode Entry Applies View Params](codex-analysis-mode-entry-apply-view-params.md) | Load when changing analysis mode entry (`_on_mode_changed` / `_enter_fft_mode`) or any path that can capture live Inspector params into an analysis View. | See lesson |
+| [Guard programmatic analysis-View restore at both signal and projection boundaries](codex-analysis-view-restore-projection-guards.md) | Changing analysis View application, project restore, shared Inspector | See lesson |
 
 ## Selection Rules
 

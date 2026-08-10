@@ -428,12 +428,12 @@ _HINTS = (
     ),
     # ---- 分析信号选择范围 (View-scoped pickers) ----
     # The 信号 pickers used to enumerate every loaded file; they now offer only
-    # the focused TimeDomain View's attached files, matching what the navigator
-    # and channel tree already project. The failure this answers is silent: ten
-    # files open, one in the View, and the user searches for a channel that
-    # simply is not listed. Nothing on screen explains the scope, and there is
-    # no gesture to discover — so this is a context hint on the three analysis
-    # sections rather than a discovery entry that retires once exercised.
+    # the active analysis section View's attached files (not the time View).
+    # The failure this answers is silent: files open globally, one in the
+    # analysis View, and the user searches for a channel that simply is not
+    # listed. Nothing on screen explains the scope, and there is no gesture to
+    # discover — so this is a context hint on the analysis sections rather than
+    # a discovery entry that retires once exercised.
     # Deliberately NOT a nudge: nudge predicates read HintState signals fed by
     # _ChartCard._nudge_signals(), and View attachment is navigator state that
     # never reaches it (same reasoning as view.compact_tabs above).
@@ -441,7 +441,7 @@ _HINTS = (
     # and level with fft.preview_pick_source.
     Hint(
         id="analysis.view_scope",
-        text="分析只列当前 View；右侧 × 可移除",
+        text="分析按当前分析 View 列文件；× 从该 View 移除",
         surface="context",
         modes=frozenset({"fft", "fft_time", "frf", "order"}),
         priority=75,

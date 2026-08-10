@@ -238,6 +238,43 @@ class ProjectIOMixin:
             fp = fp + ".tlproj"
         self.save_project(Path(fp))
 
+    def _confirm_degraded_project_save(self, health):
+        """Confirm overwrite/save-as after a degraded project restore.
+
+        Default button is Cancel. Stage 1 does not persist unresolved refs;
+        saving freezes the current missing state. Tests monkeypatch this seam.
+        """
+        n_missing = len(getattr(health, "missing_paths", ()) or ())
+        n_analysis = len(getattr(health, "dropped_analysis_refs", ()) or ())
+        n_time = len(getattr(health, "dropped_time_refs", ()) or ())
+        summary = []
+        if n_missing:
+            summary.append(f"缺失文件：{n_missing}")
+        if n_analysis:
+            summary.append(f"跳过的分析 View/Pane 来源：{n_analysis}")
+        if n_time:
+            summary.append(f"跳过的时域通道引用：{n_time}")
+        box = QMessageBox(self)
+        box.setWindowTitle("项目恢复不完整")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(
+            "本次打开项目时有文件或分析来源缺失。"
+            "Stage 1 不会保存未解析的引用；继续保存会固化当前缺失状态。"
+        )
+        if summary:
+            box.setInformativeText("\n".join(summary))
+        save_btn = box.addButton("仍要保存", QMessageBox.AcceptRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
+        box.exec_()
+        return box.clickedButton() is save_btn
+
+    def _write_project_document(self, doc, path):
+        """Write seam for ``save_project`` (tests monkeypatch this)."""
+        from .. import project_io as pio
+        pio.save_project_to_json(doc, path)
+
     def load_files(self):
         import sys as _sys
         _pkg = _sys.modules.get('mf4_analyzer.ui.main_window')
@@ -1212,8 +1249,30 @@ class ProjectIOMixin:
         )
         return list(dbcs)
 
-    def _close(self, fid):
+    def _close(self, fid, *, force=False, notify=True):
+        """Close one logical source (fid).
+
+        ``notify`` gates the tail-end user feedback (plot-state reset +
+        statusBar + toast). It defaults to True so every existing call site
+        — including the single-file ``file_close_requested`` →
+        ``_on_file_close_requested`` → ``_close`` path — is byte-for-byte
+        unchanged. ``_close_files`` passes ``notify=False`` for multi-source
+        physical-file groups and emits one aggregated summary itself instead
+        (spec: group close must not spam N toasts / N full canvas resets)."""
         if fid not in self.files: return
+        from .analysis_source_scope import collect_source_uses
+
+        uses = collect_source_uses(
+            fid,
+            time_views=self.view_manager.views,
+            analysis_managers=self.analysis_managers,
+        )
+        if (
+            uses
+            and not force
+            and not self._confirm_global_file_close(uses, files=(fid,))
+        ):
+            return
         name = self.files[fid].short_name
         # Cache invalidation site 2: drop entries for this file before
         # we discard the FileData — capture fid so the per-data_id filter
@@ -1233,13 +1292,19 @@ class ProjectIOMixin:
         del self.files[fid]
         self.navigator.remove_file(fid, emit=False)
         resolved = self._focused_time_view_state()
-        if resolved is not None:
+        if resolved is not None and self.chart_stack.current_mode() == "time":
             self._project_view_controls(resolved[0])
+        elif self.chart_stack.current_mode() in self.analysis_managers:
+            mode = self.chart_stack.current_mode()
+            mgr = self.analysis_managers[mode]
+            self._project_analysis_attachments(mode, mgr.get(mgr.active))
+        self._refresh_analysis_candidates()
         self._active = self.navigator._active_fid  # navigator picks fallback
         self._update_info()
-        self._reset_plot_state(scope='file')
-        self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
-        self.toast(f"已关闭 {name}", "info")
+        if notify:
+            self._reset_plot_state(scope='file')
+            self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
+            self.toast(f"已关闭 {name}", "info")
 
     def save_project(self, path):
         """Serialize the current session (open files + all Views) to a
@@ -1248,6 +1313,14 @@ class ProjectIOMixin:
         from pathlib import Path
         from .. import project_io as pio
         path = Path(path)
+
+        health = getattr(self, "_project_restore_health", None)
+        if (
+            health is not None
+            and health.degraded
+            and not self._confirm_degraded_project_save(health)
+        ):
+            return False
 
         self._capture_focused_view()
         # Flush each analysis section's live UI state into its active view so
@@ -1296,19 +1369,26 @@ class ProjectIOMixin:
             },
             filter=self._project_filter_payload(),
         )
-        pio.save_project_to_json(doc, path)
+        self._write_project_document(doc, path)
         self._project_path = path
+        if health is not None:
+            health.clear()
         self.statusBar.showMessage(f"已保存项目: {path.name}")
         self.toast("已保存项目", "success")
+        return True
 
     def _restore_project_file_refs(self, doc, path, pio):
+        from ._state_holders import ProjectFileRestoreResult
+
         fid_map = {}
-        missing = []
+        missing_paths = []
+        missing_old_fids = []
         pending_by_path = {}
         for ref in doc.files:
             resolved = pio.resolve_file_path(ref, path)
             if resolved is None:
-                missing.append(ref.path_abs)
+                missing_paths.append(ref.path_abs)
+                missing_old_fids.append(ref.fid)
                 continue
             key = str(resolved)
             if not pending_by_path.get(key):
@@ -1317,7 +1397,8 @@ class ProjectIOMixin:
                 self._load_one(key, blf_dbc_paths=dbc_paths)
                 new_fids = [f for f in self.files.keys() if f not in before]
                 if not new_fids:
-                    missing.append(ref.path_abs)
+                    missing_paths.append(ref.path_abs)
+                    missing_old_fids.append(ref.fid)
                     continue
                 pending_by_path[key] = new_fids
             new_fid = pending_by_path[key].pop(0)
@@ -1332,7 +1413,11 @@ class ProjectIOMixin:
                 # must not be promoted to a real/manual axis merely because we
                 # reconstructed it at the saved sampling rate.
                 fd._time_source = ref.time_source
-        return fid_map, missing
+        return ProjectFileRestoreResult(
+            fid_map=fid_map,
+            missing_paths=missing_paths,
+            missing_old_fids=missing_old_fids,
+        )
 
     def open_project(self, path):
         """Restore a session from a ``.tlproj`` file: re-read referenced source
@@ -1345,16 +1430,31 @@ class ProjectIOMixin:
         path = Path(path)
 
         doc = pio.load_project_from_json(path)
-        self.close_all()
+        self.close_all(force=True)
         # Fresh restore: clear any stale auto-recompute queue from a prior open.
         self._analysis_restore_pending = set()
 
         old_restoring = getattr(self, "_restoring_project", False)
         self._restoring_project = True
         try:
-            fid_map, missing = self._restore_project_file_refs(doc, path, pio)
+            restore = self._restore_project_file_refs(doc, path, pio)
         finally:
             self._restoring_project = old_restoring
+
+        fid_map = restore.fid_map
+        missing = list(restore.missing_paths)
+        dropped_time = pio.collect_dropped_time_refs(doc.views, fid_map)
+        dropped_analysis = pio.collect_dropped_analysis_refs(
+            doc.analysis_views, fid_map,
+        )
+        health = getattr(self, "_project_restore_health", None)
+        if health is not None:
+            health.adopt_restore(
+                missing_paths=missing,
+                missing_old_fids=restore.missing_old_fids,
+                dropped_time_refs=dropped_time,
+                dropped_analysis_refs=dropped_analysis,
+            )
 
         self._restore_project_filter(doc.filter)
 
@@ -1427,7 +1527,32 @@ class ProjectIOMixin:
         try:
             self.toolbar._set_mode(doc.current_mode)
 
-            if missing:
+            if health is not None and health.degraded:
+                lines = []
+                if missing:
+                    lines.append(
+                        "以下文件找不到，已跳过：\n" + "\n".join(missing)
+                    )
+                n_analysis = len(health.dropped_analysis_refs)
+                if n_analysis:
+                    lines.append(
+                        f"另有 {n_analysis} 处分析 View/Pane 来源因文件缺失已跳过。"
+                    )
+                n_time = len(health.dropped_time_refs)
+                if n_time:
+                    lines.append(
+                        f"另有 {n_time} 处时域通道引用因文件缺失已跳过。"
+                    )
+                lines.append(
+                    "再次保存前会提示确认：Stage 1 不会保留未解析引用，"
+                    "保存会固化当前缺失状态。"
+                )
+                QMessageBox.warning(
+                    self, "部分文件缺失",
+                    "\n\n".join(lines),
+                )
+            elif missing:
+                # Defensive: missing paths without a health holder still warn.
                 QMessageBox.warning(
                     self, "部分文件缺失",
                     "以下文件找不到，已跳过：\n" + "\n".join(missing),
@@ -1489,9 +1614,29 @@ class ProjectIOMixin:
         fp.chk_filt.setChecked(bool(payload.get("show_filtered", True)))
         fp.set_enabled(bool(payload.get("enabled", False)))
 
-    def close_all(self):
+    def close_all(self, *, force=False):
+        health = getattr(self, "_project_restore_health", None)
         if not self.files:
+            if health is not None:
+                health.clear()
             return
+        from .analysis_source_scope import collect_source_uses
+
+        fids = list(self.files.keys())
+        if not force:
+            uses = []
+            for fid in fids:
+                uses.extend(
+                    collect_source_uses(
+                        fid,
+                        time_views=self.view_manager.views,
+                        analysis_managers=self.analysis_managers,
+                    )
+                )
+            if not self._confirm_global_file_close(
+                uses, files=fids, close_all=True
+            ):
+                return
         n = len(self.files)
         # Cache invalidation site 2 (close-all variant): wipe everything.
         self.canvas_time.invalidate_envelope_cache("all files closed")
@@ -1516,6 +1661,9 @@ class ProjectIOMixin:
             del self.files[fid]
             self.navigator.remove_file(fid, emit=False)
         self._active = None
+        if health is not None:
+            health.clear()
+        self._refresh_analysis_candidates()
         self._update_info()
         self._reset_plot_state(scope='all')
         self.statusBar.showMessage("已关闭全部")

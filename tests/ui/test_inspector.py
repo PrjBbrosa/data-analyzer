@@ -280,10 +280,10 @@ def test_frf_candidate_scope_refresh_keeps_visible_pair_and_blocks_compute(qtbot
     ctx.set_channel_candidates([candidates[0]])
 
     assert ctx.pair() == (("source-a", "input"), ("source-a", "output"))
-    assert "当前时域 View 外" in ctx.combo_output.currentText()
+    assert "来源不可用" in ctx.combo_output.currentText()
     assert not ctx.btn_compute.isEnabled()
     assert not ctx.btn_view_time.isEnabled()
-    assert "当前时域 View" in ctx.validation_message()
+    assert "来源不可用" in ctx.validation_message()
 
 
 def test_frf_valid_pair_stays_computable_after_parameter_or_preset_change(qtbot):

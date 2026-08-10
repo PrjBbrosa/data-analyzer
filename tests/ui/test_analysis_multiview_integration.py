@@ -33,8 +33,23 @@ def two_file_win(qapp, loaded_csv, tmp_path, qtbot):
     return win
 
 
+def _seed_active_analysis_attachments(win, fids=None):
+    """Attach files to the active analysis View under Stage 1 source isolation.
+
+    Analysis Views own ``attached_file_ids`` (empty by default); auto-attach on
+    load only joins the time View. Integration tests that switch into an
+    analysis section and then tick navigator channels / Inspector combos must
+    seed the active analysis View first, unless they are specifically asserting
+    emptiness for a newly created analysis View.
+    """
+    mode = win.chart_stack.current_mode()
+    if mode in getattr(win, "analysis_managers", {}):
+        win._attach_files_to_active_context(list(fids or win.files.keys()))
+
+
 def _check_speed_in_both(win):
     """Tick the 'speed' channel in both files via the navigator."""
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     win.navigator.set_checked_channels(
         [(fids[0], "speed"), (fids[1], "speed")]
@@ -142,6 +157,7 @@ def test_fft_nonuniform_skip_reason_matches_feedback_contract(
 def test_fft_split_cache_render_uses_channel_swatch_colors(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     red = "#ff0000"
     green = "#00aa00"
@@ -176,6 +192,7 @@ def test_fft_split_cache_render_uses_channel_swatch_colors(two_file_win):
 def test_fft_cache_miss_shows_click_compute_empty_hint(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
 
     mgr = win.analysis_managers["fft"]
@@ -197,6 +214,7 @@ def test_fft_cache_miss_shows_click_compute_empty_hint(two_file_win):
 def test_fft_preview_clears_cache_miss_empty_hint(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
 
     mgr = win.analysis_managers["fft"]
@@ -217,6 +235,7 @@ def test_fft_preview_clears_cache_miss_empty_hint(two_file_win):
 def test_fft_cache_hit_render_clears_cache_miss_empty_hint(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
 
     mgr = win.analysis_managers["fft"]
@@ -243,6 +262,7 @@ def test_fft_cache_hit_render_clears_cache_miss_empty_hint(two_file_win):
 def test_fft_time_analysis_cache_miss_shows_visible_empty_hint(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
 
     mgr = win.analysis_managers["fft_time"]
@@ -265,6 +285,7 @@ def test_fft_time_no_sources_does_not_show_empty_hint(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft_time")
 
+    _seed_active_analysis_attachments(win)
     mgr = win.analysis_managers["fft_time"]
     state = mgr.get(mgr.active)
     state.panes[0].sources = []
@@ -281,6 +302,7 @@ def test_cache_miss_empty_hint_raises_when_canvas_api_fails(
 ):
     win = two_file_win
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
 
     mgr = win.analysis_managers["fft"]
@@ -336,6 +358,7 @@ def test_fft_split_same_source_different_time_ranges_have_distinct_cache_keys(
 ):
     win = two_file_win
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     page = win.chart_stack.page_fft
     mgr = win.analysis_managers["fft"]
@@ -376,6 +399,7 @@ def _time_range_slice(fd, ch, time_range):
 def test_fft_split_same_source_uses_each_pane_time_range(two_file_win, monkeypatch):
     win = two_file_win
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     mgr = win.analysis_managers["fft"]
     state = mgr.get(mgr.active)
@@ -412,6 +436,7 @@ def test_fft_split_same_source_uses_each_pane_time_range(two_file_win, monkeypat
 def test_fft_cached_render_uses_each_pane_time_range_for_preview(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     fid = fids[0]
     page = win.chart_stack.page_fft
@@ -446,6 +471,7 @@ def test_fft_cached_render_uses_each_pane_time_range_for_preview(two_file_win):
 def test_fft_time_dispatch_uses_explicit_time_range(two_file_win, monkeypatch):
     win = two_file_win
     win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     win.inspector.top.set_range_from_span(0.0, 0.25)
 
@@ -495,6 +521,7 @@ def test_fft_time_dispatch_omitted_time_range_uses_inspector_fallback(
 ):
     win = two_file_win
     win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     win.inspector.top.set_range_from_span(0.20, 0.30)
 
@@ -558,6 +585,7 @@ def test_fft_time_dispatch_omitted_time_range_uses_inspector_fallback(
 def test_order_helpers_use_explicit_time_range(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     win.inspector.top.set_range_from_span(0.0, 0.25)
 
@@ -577,6 +605,7 @@ def test_order_helpers_use_explicit_time_range(two_file_win):
 def test_analysis_focus_switch_echoes_pane_local_time_range(two_file_win, qapp):
     win = two_file_win
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     page = win.chart_stack.page_fft
     mgr = win.analysis_managers["fft"]
@@ -637,15 +666,19 @@ def test_fft_section_switch_away_and_back_preserves_spectrum(two_file_win, qapp)
 
 
 def test_fft_single_signal_survives_fft_time_weighting_drift(two_file_win, qapp):
-    """The legacy single-signal FFT path draws a visible spectrum but does not
-    populate the multi-source analysis cache. If hidden section activity changes
-    FFT params while away, returning to FFT must keep the visible result and mark
-    it stale instead of clearing the canvas."""
+    """Returning to FFT restores the active View's params and keeps the spectrum.
+
+    Cross-section Inspector edits (e.g. FFT-vs-Time audio weighting defaults)
+    may mutate the shared FFT Contextual while the FFT page is hidden. Stage 1
+    source isolation reapplies the destination View's params on mode entry, so
+    that live drift must not overwrite View state or wipe the retained canvas.
+    """
     win = two_file_win
     fid = list(win.files.keys())[0]
     win.navigator.set_checked_channels([])
     qapp.processEvents()
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     qapp.processEvents()
     win._echo_combo_signal(win.inspector.fft_ctx.combo_sig, (fid, "speed"))
     qapp.processEvents()
@@ -654,11 +687,13 @@ def test_fft_single_signal_survives_fft_time_weighting_drift(two_file_win, qapp)
 
     canvas = win.chart_stack.page_fft.pane_canvas(0)
     assert len(canvas._amp_curves) == 1
+    fft_state = win.analysis_managers["fft"].get(0)
+    weighting_before = fft_state.params.get("weighting")
+    live_before = win.inspector.fft_ctx.get_params().get("weighting")
 
     win.toolbar._set_mode("fft_time")
     qapp.processEvents()
-    # Mirrors the cross-section defaulting side-effect from selecting an audio
-    # source in FFT-vs-Time: FFT's weighting changes while the FFT page is hidden.
+    # Poison live FFT Contextual while away; mode re-entry must re-apply View.
     win.inspector.fft_ctx.combo_weighting.setCurrentText("A")
     qapp.processEvents()
     win.toolbar._set_mode("fft")
@@ -667,12 +702,18 @@ def test_fft_single_signal_survives_fft_time_weighting_drift(two_file_win, qapp)
 
     assert len(canvas._amp_curves) == 1
     assert canvas.has_result()
-    assert canvas.is_spectrum_stale()
+    live_after = win.inspector.fft_ctx.get_params().get("weighting")
+    state_after = fft_state.params.get("weighting")
+    assert state_after == weighting_before
+    assert live_after == live_before == weighting_before
+    assert live_after != "A" or weighting_before == "A"
+    assert canvas.is_spectrum_stale() is False
 
 
 def test_fft_signal_combo_previews_time_before_compute(two_file_win, qapp):
     win = two_file_win
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     win.navigator.set_checked_channels([])
     qapp.processEvents()
 
@@ -738,6 +779,7 @@ def test_new_view_is_empty_then_switch_back_hits_cache(two_file_win):
 def test_fft_time_focus_switch_preserves_previous_pane_source(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     page = win.chart_stack.page_fft_time
     mgr = win.analysis_managers["fft_time"]
@@ -755,6 +797,7 @@ def test_fft_time_focus_switch_preserves_previous_pane_source(two_file_win):
 def test_analysis_view_switch_missing_compare_defaults_lock_levels_true(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
     mgr = win.analysis_managers["fft_time"]
     state = mgr.get(mgr.active)
     state.compare = {}
@@ -778,6 +821,7 @@ def _split_fft_time_two_sources(win):
     the non-focused pane (1) is set directly on the view state — exactly how
     the live UI populates the two panes."""
     win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     mgr = win.analysis_managers["fft_time"]
     state = mgr.get(mgr.active)
@@ -956,6 +1000,7 @@ def test_fft_time_skip_missing_source_warns_without_short_signal_reason(
 def test_fft_time_reentry_busy_toast(two_file_win, monkeypatch):
     win = two_file_win
     win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
     monkeypatch.setattr(win._analysis_jobs, "is_running", lambda _section: True)
     calls = []
     monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
@@ -970,6 +1015,7 @@ def test_fft_time_single_pane_unchanged_by_queue(two_file_win, qtbot):
     # pane's source — V7 behaviour — and produces exactly one cache entry.
     win = two_file_win
     win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     page = win.chart_stack.page_fft_time
     assert page.pane_count() == 1
@@ -1005,6 +1051,7 @@ def _drain_order_jobs(win, qtbot):
 
 def _split_order_two_sources(win):
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     mgr = win.analysis_managers["order"]
     state = mgr.get(mgr.active)
@@ -1082,6 +1129,7 @@ def test_order_all_cached_emits_info_toast(two_file_win, qtbot, monkeypatch):
 def test_order_skip_short_signal_warns(two_file_win, qtbot, monkeypatch):
     win = two_file_win
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     ctx = win.inspector.order_ctx
     win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))
@@ -1120,6 +1168,7 @@ def test_order_missing_source_warns_without_short_signal_reason(
 def test_order_reentry_emits_busy_toast(two_file_win, monkeypatch):
     win = two_file_win
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     monkeypatch.setattr(win._analysis_jobs, "is_running", lambda _section: True)
     calls = []
     monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
@@ -1136,7 +1185,24 @@ def test_order_reentry_emits_busy_toast(two_file_win, monkeypatch):
 # view tree (count / active / pane count / sources / params / compare)
 # survives. Old projects without analysis_views are covered separately.
 # ----------------------------------------------------------------------
-from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
+from mf4_analyzer.ui.analysis_view_state import (
+    AnalysisViewState,
+    PaneState,
+    analysis_view_source_fids,
+)
+
+
+def _stamp_view_attachments(view):
+    """Ensure constructed analysis views cover every pane role fid."""
+    view.attached_file_ids = analysis_view_source_fids(view)
+    return view
+
+
+def _stamp_views(views):
+    for view in views:
+        _stamp_view_attachments(view)
+    return views
+
 
 
 def _fft_views(fids):
@@ -1158,7 +1224,7 @@ def _fft_views(fids):
         params={"window": "hamming", "nfft": 2048, "overlap": 0.75},
         compare={"x_linked": False, "levels_locked": True},
     )
-    return [v0, v1]
+    return _stamp_views([v0, v1])
 
 
 def _order_views(fids):
@@ -1184,7 +1250,7 @@ def _order_views(fids):
                 "time_res": 0.1},
         compare={"x_linked": False, "levels_locked": False},
     )
-    return [v0, v1]
+    return _stamp_views([v0, v1])
 
 
 def _install_views(win, section, views, active):
@@ -1292,7 +1358,9 @@ def test_analysis_views_survive_project_save_reopen(two_file_win, tmp_path, qtbo
                 ))
             out.append(AnalysisViewState(
                 name=v.name, tab_color=v.tab_color, panes=panes,
-                params=v.params, compare=v.compare))
+                params=v.params, compare=v.compare,
+                attached_file_ids=[fid_remap[f] for f in v.attached_file_ids],
+            ))
         return out
 
     _assert_section_equal(
@@ -1346,6 +1414,7 @@ def test_project_reopen_preserves_auto_manual_per_section_and_pane_sources(
                 "time_res": 0.1,
                 "db_reference_mode": "auto", "db_reference": 1.0},
     )
+    _stamp_views([fft_v0, fft_v1, order_v0, order_v1])
 
     win.toolbar._set_mode("fft")
     # Manual is the ACTIVE view here -- its params get RE-CAPTURED from the
@@ -1418,6 +1487,7 @@ def test_project_save_in_time_mode_does_not_replace_inactive_analysis_sources(
     fids = list(win.files.keys())
 
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     win.navigator.set_checked_channels([(fids[0], "speed")])
     win.inspector.fft_ctx.db_reference_control.set_mode("manual")
     win.inspector.fft_ctx.spin_db_ref.setValue(2.2e-6)
@@ -1461,6 +1531,7 @@ def test_project_reopen_in_time_mode_does_not_replace_inactive_analysis_sources(
     fids = list(win.files.keys())
 
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     win.navigator.set_checked_channels([(fids[0], "speed")])
     # Switching away captures FFT's source into its own view state first.
     win.toolbar._set_mode("time")
@@ -1493,6 +1564,7 @@ def test_project_save_preserves_all_analysis_sections_after_time_selection(
     fids = list(win.files.keys())
 
     win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
     win.navigator.set_checked_channels([(fids[0], "speed")])
     # Switching away should first capture FFT's source into its own state.
     win.toolbar._set_mode("time")
@@ -1631,6 +1703,7 @@ def test_selected_head_channel_auto_applies_metadata_reference(two_file_win, qap
                   "db_reference": "2e-6"},
     }
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     qapp.processEvents()
     ctx = win.inspector.order_ctx
     assert ctx.db_reference_control.mode() == "auto"
@@ -1659,6 +1732,7 @@ def test_metadata_preference_off_uses_user_or_system_catalog(two_file_win, qapp)
     assert result.ok
 
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     qapp.processEvents()
     ctx = win.inspector.order_ctx
     win._echo_combo_signal(ctx.combo_sig, (fid, "speed"))
@@ -1678,6 +1752,7 @@ def test_invalid_metadata_falls_through_to_catalog(two_file_win, qapp):
                   "db_reference": "not-a-number"},
     }
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     qapp.processEvents()
     ctx = win.inspector.order_ctx
     win._echo_combo_signal(ctx.combo_sig, (fid, "speed"))
@@ -1693,6 +1768,7 @@ def test_manual_view_ignores_source_and_catalog_changes(two_file_win, qapp):
     win = two_file_win
     fids = list(win.files.keys())
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     qapp.processEvents()
     ctx = win.inspector.order_ctx
     win._echo_combo_signal(ctx.combo_sig, (fids[0], "speed"))
@@ -1727,6 +1803,7 @@ def test_catalog_save_rerenders_visible_auto_view_without_compute(two_file_win, 
     from the existing cache -- zero compute-worker dispatch (spec 8.3)."""
     win = two_file_win
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     ctx = win.inspector.order_ctx
     win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))
@@ -2052,6 +2129,7 @@ def test_fft_time_dba_colorbar_slice_and_readout_share_reference(two_file_win, q
         "speed": {"quantity": "acceleration", "unit": "m/s²", "db_reference": "1e-6"},
     }
     win.toolbar._set_mode("fft_time")
+    _seed_active_analysis_attachments(win)
     ctx = win.inspector.fft_time_ctx
     win._echo_combo_signal(ctx.combo_sig, (fids[0], "speed"))
     ctx.combo_weighting.setCurrentText("A")
@@ -2092,6 +2170,7 @@ def test_order_db_colorbar_slice_and_readout_share_reference(two_file_win, qtbot
         "torque": {"quantity": "force", "unit": "N", "db_reference": "5e-6"},
     }
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     ctx = win.inspector.order_ctx
     win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))
     win._echo_combo_signal(ctx.combo_rpm, (fids[0], "speed"))
@@ -2168,6 +2247,7 @@ def test_view_switch_restore_renders_pane_own_reference_label(two_file_win, qtbo
         "torque": {"quantity": "force", "unit": "N", "db_reference": "8e-6"},
     }
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     mgr = win.analysis_managers["order"]
     ctx = win.inspector.order_ctx
     page = win.chart_stack.page_order
@@ -2180,6 +2260,7 @@ def test_view_switch_restore_renders_pane_own_reference_label(two_file_win, qtbo
 
     # View 2: source B -- a DIFFERENT file/reference metadata.
     assert mgr.new_view() == 1
+    _seed_active_analysis_attachments(win)
     win._echo_combo_signal(ctx.combo_sig, (fids[1], "torque"))
     win._echo_combo_signal(ctx.combo_rpm, (fids[1], "speed"))
     win.do_order_time()
@@ -2210,6 +2291,51 @@ def test_view_switch_restore_renders_pane_own_reference_label(two_file_win, qtbo
     assert canvas._cbar.getAxis("left").labelText == expected_label_b
 
 
+def test_order_view_switch_with_cold_cache_does_not_submit_worker(
+    two_file_win, qtbot, monkeypatch,
+):
+    """Applying a View's saved display reference is restore, not compute.
+
+    The dB-reference editor emits ``valueChanged`` while params are projected
+    into the live Inspector.  That programmatic signal must not schedule the
+    normal user-edit cache-render callback: on a cold cache that callback
+    would otherwise fall through to an Order worker submission.
+    """
+    win = two_file_win
+    fids = list(win.files.keys())
+    win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
+    mgr = win.analysis_managers["order"]
+    first = mgr.get(mgr.active)
+    first.panes[0].sources = [(fids[0], "torque")]
+    first.panes[0].rpm_source = (fids[0], "speed")
+    first.params = dict(win.inspector.order_ctx.get_params())
+    first.params["db_reference"] = 2.0
+
+    assert mgr.new_view() == 1
+    _seed_active_analysis_attachments(win)
+    second = mgr.get(mgr.active)
+    second.panes[0].sources = [(fids[1], "torque")]
+    second.panes[0].rpm_source = (fids[1], "speed")
+    second.params = dict(win.inspector.order_ctx.get_params())
+    second.params["db_reference"] = 3.0
+
+    win.analysis_caches["order"].clear()
+    submitted = []
+    monkeypatch.setattr(
+        win._analysis_jobs,
+        "submit_batch",
+        lambda section, jobs, **kwargs: submitted.append(
+            (section, len(list(jobs)), kwargs)
+        ),
+    )
+
+    mgr.set_active(0)
+    qtbot.wait(50)
+
+    assert submitted == []
+
+
 def test_heatmap_reference_change_rerenders_cached_result_without_worker(
     two_file_win, qtbot,
 ):
@@ -2219,6 +2345,7 @@ def test_heatmap_reference_change_rerenders_cached_result_without_worker(
     §8.3)."""
     win = two_file_win
     win.toolbar._set_mode("order")
+    _seed_active_analysis_attachments(win)
     fids = list(win.files.keys())
     ctx = win.inspector.order_ctx
     win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))

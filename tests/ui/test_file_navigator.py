@@ -108,6 +108,19 @@ def test_file_row_close_emits(qapp, qtbot):
     assert blocker.args == ["f0"]
 
 
+def test_group_close_emits_all_fids_once(qapp, qtbot):
+    nav = FileNavigator()
+    source = "C:/data/grouped.hdf"
+    nav.add_file("f0", FakeFd(filepath=source, label_suffix="1 kHz"))
+    nav.add_file("f1", FakeFd(filepath=source, label_suffix="2 kHz"))
+    rows_key = nav._fid_to_key["f0"]
+    with qtbot.waitSignal(nav.file_group_close_requested, timeout=200) as blocker:
+        nav._request_close_group(rows_key)
+    assert set(blocker.args[0]) == {"f0", "f1"}
+    with qtbot.assertNotEmitted(nav.file_close_requested):
+        nav._request_close_group(rows_key)
+
+
 def test_file_row_click_emits_activated(qapp, qtbot):
     nav = FileNavigator()
     # Initial add_file auto-activates f0 (emits). Add a second file so that

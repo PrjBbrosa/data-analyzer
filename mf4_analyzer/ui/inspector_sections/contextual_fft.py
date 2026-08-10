@@ -692,3 +692,10 @@ class FFTContextual(QWidget):
         apply_db_reference_partial(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])
+
+    def reset_to_defaults(self):
+        """Restore construction-time defaults for a blank analysis View."""
+        bar = getattr(self, 'preset_bar', None)
+        defaults = getattr(bar, '_default_params', None) if bar is not None else None
+        if isinstance(defaults, dict) and defaults:
+            self.apply_params(dict(defaults))

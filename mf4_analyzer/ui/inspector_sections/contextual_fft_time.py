@@ -672,6 +672,13 @@ class FFTTimeContextual(QWidget):
 
         self._sync_axis_enabled()
 
+    def reset_to_defaults(self):
+        """Restore construction-time defaults for a blank analysis View."""
+        bar = getattr(self, 'preset_bar', None)
+        defaults = getattr(bar, '_default_params', None) if bar is not None else None
+        if isinstance(defaults, dict) and defaults:
+            self.apply_params(dict(defaults))
+
     # ---- built-in presets (design §7) ----
     #
     # NEW-1 (Wave 4 audit): the 'amplitude_mode' / 'dynamic' /

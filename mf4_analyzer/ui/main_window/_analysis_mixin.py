@@ -191,9 +191,17 @@ class AnalysisMixin:
         if capture_sources:
             self._capture_analysis_sources(section, state)
 
-    def _on_analysis_view_switched(self, section, idx):
+    def _on_analysis_view_switched(self, section, idx, *, render=True,
+                                   apply_params=True):
         """manager.active_changed → apply the new view's structure, params and
-        sources, then render whatever the cache already holds (never compute)."""
+        sources, then render whatever the cache already holds (never compute).
+
+        ``render`` / ``apply_params`` let FFT *mode entry* apply the target
+        View's params/sources while deferring canvas restore to
+        ``_enter_fft_mode`` (signature-aware reuse). Params must always be
+        applied on mode entry so live Inspector values cannot overwrite the
+        destination View.
+        """
         from ..analysis_view_bridge import apply_params_from_state
         mgr = self.analysis_managers[section]
         if not (0 <= idx < len(mgr.views)):
@@ -221,16 +229,51 @@ class AnalysisMixin:
             page.set_levels_locked(levels_locked)
             page.sync_compare_buttons(
                 x_linked=x_linked, levels_locked=levels_locked)
-            # 3. Params + focused-pane source echo.
-            apply_params_from_state(self._analysis_ctx(section), state)
+            # 3. Project this View's attachments + section-local candidates
+            #    before echoing sources into live controls.
+            if self.chart_stack.current_mode() == section:
+                self._project_analysis_attachments(section, state)
+            self._refresh_analysis_candidates(section)
+            # 4. Params + focused-pane source echo.
+            if apply_params:
+                apply_params_from_state(self._analysis_ctx(section), state)
             if section in {'fft', 'frf'}:
                 self._apply_frequency_cursor_controls(section, state)
             self._apply_analysis_sources(section, state)
             self._apply_analysis_time_range(section, state)
         finally:
             self._applying_analysis_view = False
-        # 4. Render from cache only (spec §4: switching never auto-computes).
-        self._render_analysis_view_from_cache(section, state)
+        # 5. Render from cache only (spec §4: switching never auto-computes).
+        if render:
+            self._render_analysis_view_from_cache(section, state)
+
+    def _project_analysis_attachments(self, section, state):
+        """Project one analysis View's file range onto the shared navigator."""
+        attached = [
+            fid for fid in state.attached_file_ids if fid in self.files
+        ]
+        setter = getattr(self.navigator, 'set_attached_file_ids', None)
+        if callable(setter):
+            setter(attached)
+        label = self._analysis_section_label(section)
+        empty = getattr(self.navigator, 'set_empty_state_context', None)
+        if callable(empty):
+            empty(section_label=label, view_name=state.name)
+        if section != 'fft':
+            # Candidate roles do not own checkbox selection.
+            self.navigator.set_checked_channels([])
+
+    def _apply_active_analysis_context(self, section, *, render=True,
+                                       apply_params=True):
+        """Full-apply the active View of ``section`` after a mode switch."""
+        mgr = self.analysis_managers[section]
+        if not mgr.views:
+            return
+        # Reuse the view-switch pipeline against the already-active index so
+        # mode entry and View switch stay byte-equivalent for the target.
+        self._on_analysis_view_switched(
+            section, mgr.active, render=render, apply_params=apply_params
+        )
 
     def _on_analysis_focus_changed(self, section, idx):
         """A pane click changed the focused pane: capture the source selection
@@ -411,12 +454,17 @@ class AnalysisMixin:
         if section == 'fft':
             self.navigator.set_checked_channels(list(pane.sources))
             self._sync_fft_source_summary()
+            return
+        ctx = self._analysis_ctx(section)
+        if pane.sources:
+            self._echo_combo_signal(ctx.combo_sig, pane.sources[0])
         else:
-            ctx = self._analysis_ctx(section)
-            if pane.sources:
-                self._echo_combo_signal(ctx.combo_sig, pane.sources[0])
-            if section == 'order' and pane.rpm_source is not None:
+            self._clear_combo_selection(ctx.combo_sig)
+        if section == 'order':
+            if pane.rpm_source is not None:
                 self._echo_combo_signal(ctx.combo_rpm, pane.rpm_source)
+            else:
+                self._clear_combo_selection(ctx.combo_rpm)
 
     @staticmethod
     def _echo_combo_signal(combo, key):
@@ -430,6 +478,21 @@ class AnalysisMixin:
             if data is not None and tuple(data) == target:
                 combo.setCurrentIndex(i)
                 return
+
+    @staticmethod
+    def _clear_combo_selection(combo):
+        """Clear a signal/RPM combo without emitting into PaneState."""
+        old = combo.blockSignals(True)
+        try:
+            # Prefer the explicit "none" row when present; else leave unselected.
+            none_idx = -1
+            for i in range(combo.count()):
+                if combo.itemData(i) is None:
+                    none_idx = i
+                    break
+            combo.setCurrentIndex(none_idx if none_idx >= 0 else -1)
+        finally:
+            combo.blockSignals(old)
 
     # -- cache-backed render on switch (Step 3) -------------------------
     def _analysis_compute_params(self, section):

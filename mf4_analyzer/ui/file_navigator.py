@@ -5,7 +5,7 @@ import qtawesome as qta
 from PyQt5.QtCore import QMimeData, QPoint, QSignalBlocker, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QDrag
 from PyQt5.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox,
+    QApplication, QFrame, QHBoxLayout, QLabel, QMenu,
     QScrollArea, QSizePolicy, QSplitter, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -190,6 +190,8 @@ class _FileRow(QFrame):
 class FileNavigator(QWidget):
     file_activated = pyqtSignal(str)
     file_close_requested = pyqtSignal(str)
+    # Physical card close: every logical source in the group, once.
+    file_group_close_requested = pyqtSignal(list)
     close_all_requested = pyqtSignal()
     channels_changed = pyqtSignal()
     visibility_changed = pyqtSignal(str, str, bool)
@@ -437,6 +439,17 @@ class FileNavigator(QWidget):
     def set_time_visibility_available(self, available):
         self.channel_list.set_time_visibility_available(available)
 
+    def projection_role(self):
+        return self.channel_list.projection_role()
+
+    def set_projection_role(self, role):
+        self.channel_list.set_projection_role(role)
+
+    def set_empty_state_context(self, *, section_label=None, view_name=None):
+        self.channel_list.set_empty_state_context(
+            section_label=section_label, view_name=view_name
+        )
+
     def get_channel_colors(self):
         return self.channel_list.get_channel_colors()
 
@@ -477,9 +490,9 @@ class FileNavigator(QWidget):
             color="#4b6078" if enabled else "#8b98aa",
         ))
         self.btn_auto_attach.setToolTip(
-            "新加载文件自动加入当前 View"
+            "新加载文件自动加入当前时域 View"
             if enabled
-            else "新加载文件仅打开，不加入当前 View"
+            else "新加载文件仅打开，不加入时域 View"
         )
         self.btn_auto_attach.setAccessibleName(self.btn_auto_attach.toolTip())
         self.btn_auto_attach.setProperty("active", enabled)
@@ -487,15 +500,25 @@ class FileNavigator(QWidget):
         self.btn_auto_attach.style().polish(self.btn_auto_attach)
 
     def _request_close_group(self, rows_key):
-        """Emit close_requested for ALL fids belonging to this rows_key."""
+        """Emit one group-close request for ALL fids under ``rows_key``.
+
+        Physical-card close must be atomic: MainWindow aggregates dependencies
+        once and either keeps or unloads every logical source together.
+        """
         fids = [f for f, k in self._fid_to_key.items() if k == rows_key]
-        for f in fids:
-            self.file_close_requested.emit(f)
+        if not fids:
+            return
+        self.file_group_close_requested.emit(list(fids))
 
     # Backwards-compat alias used by existing tests that call _request_close(fid)
     def _request_close(self, fid):
         rows_key = self._fid_to_key.get(fid, fid)
-        self._request_close_group(rows_key)
+        fids = [f for f, k in self._fid_to_key.items() if k == rows_key]
+        if len(fids) > 1:
+            self.file_group_close_requested.emit(list(fids))
+            return
+        target = fids[0] if fids else fid
+        self.file_close_requested.emit(target)
 
     def _open_kebab(self):
         menu = apply_rounded_menu_chrome(QMenu(self))
@@ -504,13 +527,9 @@ class FileNavigator(QWidget):
         gp = self._btn_kebab.mapToGlobal(self._btn_kebab.rect().bottomLeft())
         chosen = menu.exec_(gp)
         if chosen == act:
-            n_fids = len(self._fid_to_key)
-            ans = QMessageBox.question(
-                self, "确认", f"关闭全部 {n_fids} 文件?",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if ans == QMessageBox.Yes:
-                self.close_all_requested.emit()
+            # Confirm lives in MainWindow.close_all so dependency preflight
+            # and close-all share one product dialog.
+            self.close_all_requested.emit()
 
     def _refresh_header(self):
         self._lbl_count.setText(str(len(self._rows)))

@@ -1745,7 +1745,7 @@ def test_close_file_resets_inspector(qapp, qtbot, loaded_csv):
                return_value=([loaded_csv], "")):
         w.load_files()
     assert w.files
-    w._close(next(iter(w.files)))
+    w._close(next(iter(w.files)), force=True)
     # No crash; stats strip shows placeholder
     assert '—' in w.chart_stack.stats_strip._lbl_summary.text()
 
@@ -1796,7 +1796,7 @@ def test_file_load_reload_with_prior_checks_still_opens_empty(qapp, qtbot, loade
     assert len(w.channel_list.get_checked_channels()) == 1
 
     # Close that file and reload — the fresh fid must come up unchecked.
-    w._close(fid_first)
+    w._close(fid_first, force=True)
     qapp.processEvents()
     assert w.channel_list.get_checked_channels() == []
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
@@ -1974,11 +1974,22 @@ def test_channel_eye_column_is_only_available_in_time_mode(qapp, qtbot):
     w = MainWindow()
     qtbot.addWidget(w)
 
+    # Column 2 stays for file detach in every mode; only the eye action is
+    # gated by the time projection role.
     assert not w.channel_list.tree.isColumnHidden(2)
+    assert w.navigator.projection_role() == "time"
+    assert w.channel_list._time_channel_visibility_available
     w._on_mode_changed("fft")
-    assert w.channel_list.tree.isColumnHidden(2)
+    assert not w.channel_list.tree.isColumnHidden(2)
+    assert w.navigator.projection_role() == "fft_sources"
+    assert not w.channel_list._time_channel_visibility_available
+    w._on_mode_changed("fft_time")
+    assert w.navigator.projection_role() == "analysis_candidates"
+    assert not w.channel_list._time_channel_visibility_available
     w._on_mode_changed("time")
     assert not w.channel_list.tree.isColumnHidden(2)
+    assert w.navigator.projection_role() == "time"
+    assert w.channel_list._time_channel_visibility_available
 
 
 def test_hiding_checked_channel_collapses_subplot_and_restores_y_range(
@@ -3149,7 +3160,7 @@ def test_fft_time_analysis_cache_clears_on_close_all(qtbot):
     win.files['f1'] = object()
     win.navigator.add_file = lambda *a, **kw: None  # silence side effects
     win.navigator.remove_file = lambda *a, **kw: None
-    win.close_all()
+    win.close_all(force=True)
     assert len(cache._store) == 0
 
 
@@ -3885,6 +3896,11 @@ def test_fft_panel_keeps_signal_selection_across_channel_edit(
     # unrelated file A is edited.
     fid_first = next(iter(w.files))
     fid_second = list(w.files.keys())[1]
+    # Stage 1: analysis pickers use each section's own View attachments, not
+    # the time View. Seed both analysis Views so file B is a candidate.
+    for section in ("fft", "order"):
+        w.analysis_managers[section].get(0).attached_file_ids = list(w.files)
+    w._refresh_analysis_candidates()
     fft_combo = w.inspector.fft_ctx.combo_sig
     order_combo = w.inspector.order_ctx.combo_sig
 
@@ -4570,6 +4586,8 @@ def test_fft_checked_channel_change_refreshes_auto_db_reference(qapp, qtbot):
     w._on_source_load_finished([fid])
 
     w.toolbar.btn_mode_fft.click()
+    # FFT View owns its own attachments; seed so the checked channel is in scope.
+    w._attach_files_to_active_context([fid])
     ctx = w._analysis_ctx("fft")
     ctx.db_reference_control.set_mode("auto")
     # 哨兵：假装控件停在一个「旧」值，勾选若真触发 auto 会覆盖它
@@ -4585,8 +4603,14 @@ def test_fft_checked_channel_change_refreshes_auto_db_reference(qapp, qtbot):
 
 
 def test_entering_fft_mode_resolves_auto_db_reference_for_checked_channel(qapp, qtbot):
-    """从 time 模式勾选通道后切入 FFT，Auto 的 dB reference 应在进入 FFT 时就
-    按已勾选通道解析（acceleration 1e-6），而不是等到下一次勾选变化才刷新。"""
+    """切入 FFT 并勾选通道后，Auto 的 dB reference 应按该通道解析。
+
+    Stage 1：频谱 View 不继承时域勾选；进入 FFT 后需先加入文件再勾选。
+    这条走真实事件链：navigator 勾选变化经 ``channels_changed`` ->
+    ``window._ch_changed``（role == 'fft_sources' 分支，window.py 约 2735
+    行）直接调用 ``_resolve_and_apply_db_reference('fft')`` —— 不手动重放
+    ``_enter_fft_mode()``，勾选本身就该触发 Auto 解析。
+    """
     import numpy as np
     import pandas as pd
     import pytest
@@ -4600,8 +4624,6 @@ def test_entering_fft_mode_resolves_auto_db_reference_for_checked_channel(qapp, 
     fid = next(iter(w.files))
     w._on_source_load_finished([fid])
 
-    # 在 time 模式勾选（不经 FFT 分支），再设哨兵，最后切入 FFT
-    w.navigator.check_first_channel(fid)
     ctx = w._analysis_ctx("fft")
     ctx.db_reference_control.set_mode("auto")
     editor = ctx.db_reference_control.editor
@@ -4611,6 +4633,8 @@ def test_entering_fft_mode_resolves_auto_db_reference_for_checked_channel(qapp, 
 
     w.toolbar.btn_mode_fft.click()
     qtbot.wait(20)  # _enter_fft_mode 经 QTimer.singleShot(0) 延后一个事件循环
+    w._attach_files_to_active_context([fid])
+    w.navigator.check_first_channel(fid)
 
     assert ctx.db_reference_control.mode() == "auto"
     assert editor.value() == pytest.approx(1e-6)
