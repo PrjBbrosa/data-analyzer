@@ -1,7 +1,9 @@
 # 通道树 delegate paint 交错 segfault — Triage 记录
 
 - 日期：2026-08-11（深夜，pinning 实施 review 期间发现）
-- 状态：**已归因为既有问题（与 pinning 改动无关），待专项修复**
+- 状态：**已修复**（2026-08-12，见 §6；引入提交 `f85b5d4e`，修在
+  `tests/ui/conftest.py`）。§1–§5 保留当晚的归因过程原貌，其中 §2 结尾对引入窗口的
+  推测已被 §6.1 的逐提交验证纠正。
 - 关联：`2026-08-11-analysis-cache-view-pinning-spec.md` 的收尾验证被此崩溃阻断；
   CLAUDE.md「全量要分两条命令跑」记录的 acquisition_ui 交错崩溃是**另一处**同类问题
 
@@ -92,3 +94,100 @@ pytest tests/acquisition_ui                               # 段3：采集 UI（�
 
 结论：除本文的交错 segfault（既有）与上述 `test_surface_layering` 既有红外，
 全部用例在分段口径下通过；pinning 改动未引入任何失败。
+
+## 6. 已修复（2026-08-12）
+
+### 6.1 引入提交
+
+`f85b5d4e`（`fix(ui): stabilize channel-tree and follow-link chrome`）。
+
+逐提交验证走 `git worktree`（主树当时脏且有并行会话），判据＝
+`pytest tests/ui -q` 是否 exit 139。崩溃点在 21%，故「跑过 36% 无崩」即判 good：
+
+| 提交 | 结果 |
+| --- | --- |
+| `2c8e9b5a`（基线 merge） | 36% 无崩 |
+| `fc47cc25`（follow link Stage 1.1） | 36% 无崩 |
+| `d488f348`（release v7.9.8） | 36% 无崩 |
+| `f85b5d4e`（channel-tree chrome） | **exit 139**，栈与 §1 同族 |
+
+§2 里「最早崩溃 02:57 早于 `f85b5d4e`」的推测不成立：02:57 那次崩的是当时**在途**
+的工作区，不是任何一个已提交树。
+
+### 6.2 机制
+
+一句话：**测试体返回后，被 show 过的顶层 widget 变成「只被自身引用环持有」的垃圾，
+而 pytest-qt 还在往它身上泵 paint；paint 里的 Python 分配触发 gen-0 回收，把 widget
+连环收掉，sip 在画到一半时析构了 C++ `QTreeWidget`/viewport，下一次穿过悬垂对象的
+调用就踩空。**
+
+拆开：
+
+1. `QtBot.addWidget` 只存**弱引用**（`pytestqt/qtbot.py` 存 `weakref.ref`，
+   `_close_widgets` 里 `w = w()` 解引用）。测试体一返回，无父的 `QWidget` 就只剩
+   自身引用环撑着——PyQt 里这种环必然存在（`_ChannelTree._owner` 反指持有它的
+   `MultiFileChannelWidget`，每个绑定方法的信号连接又添一条）。引用计数收不掉它，
+   它还是 shown、还排着一次 update。
+2. pytest-qt 随后又调 3 次 `app.processEvents()`（`pytest_runtest_call` 后 1 次、
+   `pytest_runtest_teardown` 里 2 次），把那次排队的 paint 投递下去。
+3. `f85b5d4e` 把 **Pts 列（column 1）的每一行**都改走 Python paint——改之前只有
+   channel 行走自绘、其余行直接落 C++ `super().paint()`，零 Python 分配。现在每个
+   Pts 单元都要 `QRect` 拷贝 + `QStyleOptionViewItem` 拷贝 + `initStyleOption` +
+   `QFontMetrics` + elided `str`。
+4. 这些分配把 gen-0 阈值顶穿，**在 paint 内部**触发一次回收，垃圾环连同 widget 一起
+   被收，C++ 对象当场析构；紧接着的 `QPainter.drawText`（`_paint_text:297`）或
+   `QModelIndex.flags`（`_row_shows_checkbox`）/ `index.sibling().data()`
+   （`_channel_data:92`）就踩空 —— 这解释了为什么每次栈的落点都不同：踩空的是
+   「回收之后恰好执行到的那一句」。
+
+### 6.3 证据（三个实验）
+
+- **探针**：给 `_ChannelLeafDelegate.paint` 加计数、`gc.callbacks` 里报告「回收开始时
+  paint 深度 > 0」。实测输出
+  `!!! GC start during delegate paint (depth=1, gen=0) hit#1`，**紧接着**就是
+  `Fatal Python error: Segmentation fault`。
+- **反证**：同一条命令加 `gc.disable()`（显式的 `gc.collect()` 不受影响，套件本来
+  就每条用例收一次）→ **100% 跑完、0 崩**（880 passed）。
+- **修复后再开探针**：GC 依旧在 paint 中触发（3 次），**不再崩**（882 passed）。
+  即证明救命的是「widget 被钉住」，不是「GC 不再发生」。
+
+### 6.4 修法
+
+只改 `tests/ui/conftest.py`（测试基建的生命周期错误），**未动任何产品代码**，
+未跳过 / 放宽 / 删除任何用例：
+
+- `pytest_runtest_call` 的 post-yield：此刻测试体已返回、pytest-qt 还没开始泵事件，
+  把 `QApplication.topLevelWidgets()` 强引用钉进模块级 `_PINNED_TOPLEVELS`。
+  只钉顶层就够：子 widget 由父在 C++ 侧持有，能被 GC 析构的只有 Python 拥有的顶层。
+- `pytest_runtest_teardown` 的 post-yield：释放，并**立刻 `gc.collect()`**。
+
+第二步的 collect 不是可选的，踩过一次坑：`_collect_mpl_cycles_between_tests` 的
+collect 跑在钉住期间（fixture finalizer 在 teardown 的 yield 里，早于本 hook 的
+post-yield），少了这句，这批 widget 会漏进**下一条用例的体内**——实测让 16 条
+`test_pg_dense_raster` / `test_pill_switch` 变红，因为上一条用例残留的
+`TimeDomainCanvasPG` 仍占着 dense-raster 的内存额度，新画布被拒绝准入
+（`entry_for(ck) is None`）。加上这句后生命周期与修复前等价：一条用例的 widget
+在下一条开始前就已回收，只是回收点从「测试体退出」挪到了「teardown 泵完事件之后」。
+
+释放点也不能更早：本 hook 是普通 wrapper，post-yield 排在 pytest-qt 的 `trylast`
+wrapper **之后**，也排在所有 fixture finalizer 之后（包括自己会 `processEvents()`
+的 `_own_chartstacks`）。任何更早的释放都会重新打开这个窗口。
+
+### 6.5 验证（HEAD `3ab58b48`）
+
+- `pytest tests/ui -q` **连续两次**：**3774 passed / 0 failed / 0 errors**
+  （8:29 与 9:03），两次都无 segfault。这是该目录首次一条命令跑完。
+- 主体一条命令 `pytest --ignore=tests/acquisition_ui -q`：
+  **6048 passed / 11 skipped / 0 failed / 0 errors**（14:27），无 segfault。
+- 对照：同期干净 worktree（`650fecdf`，不含本修复）跑同一段仍 **exit 139**，
+  证明崩溃在新 HEAD 依然存在、且确由本修复消除。
+- 顺带澄清 §5 的两条红：`test_surface_layering` 的圆角用例已由 `4ab994b6` 修复；
+  期间出现过的 `test_channel_config_manager::..._with_production_qss` 是
+  `style.qss` 解析失败导致，已由 `3ab58b48` 修复。两者都与本崩溃无关。
+
+### 6.6 收尾
+
+§3 的三段临时口径可以撤销：主体重新可以一条命令跑完。CLAUDE.md 的全量基线数字与
+「两条命令」说明需要按上面的数字更新，但本次修复期间该文件正被并行会话占用，未改；
+留给下一位接手者（`tests/acquisition_ui` 的 pyqtgraph `LabelItem.resizeEvent` 交错崩
+是**另一处**病灶，本次未动，那条说明仍然有效）。

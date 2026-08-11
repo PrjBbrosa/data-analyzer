@@ -8,6 +8,90 @@ import pytest
 from PyQt5.QtWidgets import QApplication
 
 
+# Strong references to the top-level widgets alive when a test body returned.
+# Read the two hooks below before touching this — it is a lifetime guard, not
+# a cache, and it must stay a module-level list so the references outlive the
+# item's own frames.
+_PINNED_TOPLEVELS = []
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    """Pin live top-level widgets before pytest-qt pumps post-test events.
+
+    ``QtBot.addWidget`` keeps only a **weak** reference (``pytestqt.qtbot``
+    stores ``weakref.ref(widget)`` and resolves it in ``_close_widgets``), so
+    the moment a test body returns, its parentless ``QWidget`` is reachable
+    only through its own reference cycles — a PyQt widget always has some
+    (``_ChannelTree._owner`` points back at the ``MultiFileChannelWidget``
+    that owns the tree; every bound-method signal connection adds more).
+    Refcounting therefore cannot free it, and it stays *shown* with an update
+    still queued.
+
+    pytest-qt then calls ``app.processEvents()`` three more times (once after
+    ``pytest_runtest_call``, twice inside ``pytest_runtest_teardown``), which
+    delivers that queued paint. Now C++ is executing ``QTreeWidget::drawRow``
+    → ``_ChannelLeafDelegate.paint``, and every allocation that delegate makes
+    (``QRect`` copies, the ``QStyleOptionViewItem`` copy plus
+    ``initStyleOption``, ``QFontMetrics``, the elided ``str``) can trip
+    CPython's generational collector. A gen-0 collection at that instant
+    reaps the garbage cycle holding the widget, sip deletes the C++
+    ``QTreeWidget`` and its viewport **underneath the running paint**, and the
+    next call through the dangling object — ``QPainter.drawText`` or
+    ``QModelIndex.flags`` — faults with ``KERN_INVALID_ADDRESS``.
+
+    That is a hard PyQt invariant, not a channel-tree bug: a Python-owned
+    widget must not be collectible while Qt is inside its paint. During the
+    test body itself the widget is safe because the test frame holds a strong
+    reference; only this post-body window is unguarded. So we re-create that
+    strong reference for exactly that window and drop it in
+    ``pytest_runtest_teardown`` below, which then reaps at a point where no
+    ``QPainter`` is live.
+
+    Bisected to ``f85b5d4e`` (``fix(ui): stabilize channel-tree and
+    follow-link chrome``), which routed the Pts column of *every* row type
+    through the Python paint path — previously non-channel rows fell through
+    to C++ ``super().paint()`` and allocated nothing — pushing the per-row
+    allocation count over the gen-0 threshold mid-paint. Do not "fix" a
+    recurrence by trimming allocations from a paint method; that only moves
+    the threshold.
+    """
+    try:
+        return (yield)
+    finally:
+        _PINNED_TOPLEVELS.clear()
+        app = QApplication.instance()
+        if app is not None:
+            _PINNED_TOPLEVELS.extend(app.topLevelWidgets())
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item):
+    """Release the pin, then reap immediately — both halves matter.
+
+    *When to release.* This plain wrapper's post-yield half runs after
+    pytest-qt's (its teardown hook is a ``trylast`` wrapper, so its post-yield
+    goes first) **and** after every fixture finalizer, including
+    ``_own_chartstacks``, which pumps ``processEvents()`` of its own. Releasing
+    any earlier would reopen the window this guard exists to close.
+
+    *Why collect here.* ``_collect_mpl_cycles_between_tests`` runs its
+    ``gc.collect()`` while the pin is still held, so it can no longer reap the
+    test's widgets — without this call they would survive into the *next*
+    test's body. That is not hypothetical: it made 16 ``test_pg_dense_raster``
+    / ``test_pill_switch`` cases fail, because a leftover
+    ``TimeDomainCanvasPG`` still counted against the dense-raster memory caps
+    and the next canvas was refused admission. Collecting here restores the
+    original lifetime — one test's widgets are gone before the next one starts
+    — while keeping them alive for the whole danger window.
+    """
+    try:
+        return (yield)
+    finally:
+        _PINNED_TOPLEVELS.clear()
+        gc.collect()
+
+
 @pytest.fixture(autouse=True)
 def _isolate_qsettings(tmp_path, monkeypatch):
     """Keep UI tests from polluting the real MF4Analyzer/DataAnalyzer store.
