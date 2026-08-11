@@ -629,13 +629,19 @@ class FrfMixin:
     def _render_frf_view_from_cache(self, state):
         page = self._analysis_page("frf")
         missing = False
+        enumerated_panes = set()
         for pane_idx in range(min(page.pane_count(), len(state.panes))):
+            enumerated_panes.add(pane_idx)
             pane = state.panes[pane_idx]
             canvas = page.pane_canvas(pane_idx)
             key = self._frf_cache_key_for_pane(state, pane)
             if key is None:
                 canvas.full_reset()
+                self._replace_analysis_pane_pins(
+                    "frf", state.view_id, pane_idx, ())
                 continue
+            self._replace_analysis_pane_pins(
+                "frf", state.view_id, pane_idx, (key,))
             result = self.analysis_caches["frf"].get(key)
             if result is None:
                 missing = True
@@ -648,6 +654,10 @@ class FrfMixin:
                 context=self._frf_render_context_for_pane(pane),
             )
             self._restore_frf_canvas_ranges(canvas, pane)
+        for pane_idx in range(len(state.panes)):
+            if pane_idx not in enumerated_panes:
+                self._replace_analysis_pane_pins(
+                    "frf", state.view_id, pane_idx, ())
         self._sync_frf_effective_facts(state)
         if missing:
             self.statusBar.showMessage("参数/输入输出已就绪，点击计算频响")

@@ -98,6 +98,7 @@ def test_apply_custom_xaxis_invalidates_fft_time_analysis_cache(qtbot):
         statusBar=types.SimpleNamespace(showMessage=lambda *_args: None),
         _hint_focused_pane=lambda _action: True,
         toast=lambda *_args: None,
+        _clear_analysis_section_pins=lambda *_args, **_kwargs: None,
     )
 
     MainWindow._apply_xaxis(mw)
@@ -359,6 +360,7 @@ class TestFallbackKeyAlignsPrimaryKey:
                     'fft_time': types.SimpleNamespace(
                         active=0,
                         get=lambda _active: types.SimpleNamespace(
+                            view_id='probe-view',
                             panes=[
                                 types.SimpleNamespace(sources=[('f0', 'sig0')]),
                                 types.SimpleNamespace(sources=[('f1', 'sig1')]),

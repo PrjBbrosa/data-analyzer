@@ -178,7 +178,7 @@ class ViewMixin:
         from PyQt5.QtGui import QKeySequence
         from PyQt5.QtCore import Qt
         self._view_shortcuts = []
-        for i in range(6):
+        for i in range(9):
             sc = QShortcut(QKeySequence(f"Alt+{i + 1}"), self)
             sc.setContext(Qt.ApplicationShortcut)
             idx = i

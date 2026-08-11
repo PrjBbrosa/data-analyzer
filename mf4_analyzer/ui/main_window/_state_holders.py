@@ -96,6 +96,55 @@ class ViewFocusState:
 
 
 @dataclass
+class AnalysisPinBook:
+    """Per-pane set of real analysis-cache keys currently bound to a View.
+
+    Owned exclusively by ``MainWindow`` (assigned once in ``window.py``). Mixin
+    helpers mutate through methods so the state-ownership ratchet sees no
+    multi-file bare ``self._analysis_pins[...]`` writes.
+    """
+
+    _slots: dict = field(default_factory=dict)
+
+    def pinned_keys(self, section: str) -> frozenset:
+        pinned = set()
+        for (sec, _view_id, _pane_idx), keys in self._slots.items():
+            if sec == section:
+                pinned.update(keys)
+        return frozenset(pinned)
+
+    def add(self, section, view_id, pane_idx, key) -> None:
+        slot = (section, str(view_id), int(pane_idx))
+        self._slots.setdefault(slot, set()).add(key)
+
+    def replace(self, section, view_id, pane_idx, keys) -> None:
+        slot = (section, str(view_id), int(pane_idx))
+        key_set = set(keys)
+        if key_set:
+            self._slots[slot] = key_set
+        else:
+            self._slots.pop(slot, None)
+
+    def drop_view(self, section, view_id) -> None:
+        view_id = str(view_id)
+        for slot in [
+            key for key in self._slots
+            if key[0] == section and key[1] == view_id
+        ]:
+            del self._slots[slot]
+
+    def clear_section(self, section) -> None:
+        for slot in [key for key in self._slots if key[0] == section]:
+            del self._slots[slot]
+
+    def __contains__(self, slot) -> bool:
+        return slot in self._slots
+
+    def __getitem__(self, slot):
+        return self._slots[slot]
+
+
+@dataclass
 class ProjectFileRestoreResult:
     """Structured outcome of remapping ``.tlproj`` file refs onto freshly loaded fids."""
 

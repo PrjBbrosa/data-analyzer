@@ -162,10 +162,22 @@ class MainWindow(
             fft_time_cache,
             self._analysis_jobs,
             partial(make_fft_time_analysis_key, fft_time_cache.make_key),
+            store_result=lambda view_id, pane_idx, key, result: (
+                self._store_analysis_result(
+                    'fft_time', view_id, pane_idx, key, result
+                )
+            ),
         )
         from .frf_coordinator import FrfCoordinator
         self._frf_coordinator = FrfCoordinator(
-            self.analysis_caches['frf'], self._analysis_jobs, parent=self
+            self.analysis_caches['frf'],
+            self._analysis_jobs,
+            store_result=lambda view_id, pane_idx, key, result: (
+                self._store_analysis_result(
+                    'frf', view_id, pane_idx, key, result
+                )
+            ),
+            parent=self,
         )
         self._init_drop_import()
         self._connect()
@@ -378,12 +390,29 @@ class MainWindow(
         # the per-section ViewTabBar can dereference a real manager at
         # construction) + per-section LRU result caches (owned here).
         from ..analysis_cache import AnalysisResultCache, FrfAnalysisResultCache
+        from ._state_holders import AnalysisPinBook
         self.analysis_managers = self.chart_stack.analysis_managers
+        # Pin book: holder owns the slot map (state-ownership ratchet).
+        self._analysis_pins = AnalysisPinBook()
         self.analysis_caches = {
-            'fft': AnalysisResultCache(32),
-            'fft_time': AnalysisResultCache(12),
-            'frf': FrfAnalysisResultCache(12),
-            'order': AnalysisResultCache(12),
+            'fft': AnalysisResultCache(
+                32,
+                pinned_provider=lambda: self._pinned_keys_for_section('fft'),
+            ),
+            'fft_time': AnalysisResultCache(
+                12,
+                pinned_provider=lambda: self._pinned_keys_for_section(
+                    'fft_time'
+                ),
+            ),
+            'frf': FrfAnalysisResultCache(
+                12,
+                pinned_provider=lambda: self._pinned_keys_for_section('frf'),
+            ),
+            'order': AnalysisResultCache(
+                12,
+                pinned_provider=lambda: self._pinned_keys_for_section('order'),
+            ),
         }
         # `_applying_analysis_view` is AnalysisMixin's own re-entrancy guard;
         # its default lives with the owner (see AnalysisMixin) so exactly one
@@ -2450,6 +2479,7 @@ class MainWindow(
         # remain valid and must not be needlessly evicted.
         if x_source_changed:
             self.analysis_caches['fft_time'].clear()
+            self._clear_analysis_section_pins('fft_time')
         if idx is not None and 0 <= idx < len(self.view_manager.views):
             state = self.view_manager.get(idx)
             self._view_bridge.capture_controls_into(state, self, canvas)

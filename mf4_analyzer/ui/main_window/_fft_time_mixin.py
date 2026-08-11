@@ -250,6 +250,7 @@ class FFTTimeMixin:
                     'render_params': dict(p),
                     'source': (fid, ch),
                     'force': force,
+                    'view_id': state.view_id,
                 })
                 continue
             render_p, _compute_time_range = prepared
@@ -262,6 +263,7 @@ class FFTTimeMixin:
                 'render_params': dict(render_p),
                 'source': (fid, ch),
                 'force': force,
+                'view_id': state.view_id,
                 'job_factory': lambda pane_idx=pane_idx, fid=fid, ch=ch,
                 raw_params=dict(p), time_range=time_range: self._build_fft_time_job(
                     pane_idx, fid, ch, raw_params, time_range=time_range,
@@ -311,6 +313,8 @@ class FFTTimeMixin:
             return
         render_p = self._resolve_fft_time_effective_params(p, len(sig))
         self._fft_time_outcome = None
+        mgr = self.analysis_managers['fft_time']
+        view_id = mgr.get(mgr.active).view_id
         self._fft_time_coordinator.request_batch([{
             'fid': fid,
             'channel': ch,
@@ -320,6 +324,7 @@ class FFTTimeMixin:
             'render_params': dict(render_p),
             'source': (fid, ch),
             'force': force,
+            'view_id': view_id,
             'job_factory': lambda: self._build_fft_time_job(
                 pane_idx, fid, ch, dict(p), time_range=compute_time_range,
                 signal_getter=self._get_fft_time_signal,

@@ -1130,5 +1130,8 @@ def test_order_job_closure_passes_progress_callback_and_cancel_token(
         "analysis_key": ("order", "f1", "torque"),
         "pane_idx": 0,
         "source": ("f1", "torque"),
+        "view_id": win.analysis_managers["order"].get(
+            win.analysis_managers["order"].active
+        ).view_id,
     }
     assert progress_calls == [(1, 2)]

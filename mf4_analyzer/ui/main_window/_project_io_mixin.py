@@ -24,6 +24,7 @@ from ...io import (
 )
 from ...io.loader import (
     AUDIO_VIDEO_EXTS,
+    NO_CAN_FRAMES_MESSAGE,
     format_dropped_channels_notice,
 )
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
@@ -188,13 +189,13 @@ class ProjectIOMixin:
             )
 
         try:
-            blf_paths = [
+            can_log_paths = [
                 path for path in data_files
-                if Path(path).suffix.lower() == ".blf"
+                if self._is_can_log_path(path)
             ]
-            if len(blf_paths) >= 2:
+            if len(can_log_paths) >= 2:
                 self._load_blf_batch(
-                    blf_paths,
+                    can_log_paths,
                     ordered_paths=data_files,
                     progress_callback=lambda input_index, _path, fraction, phase: report(
                         input_index, fraction, phase,
@@ -358,6 +359,19 @@ class ProjectIOMixin:
                 self.inspector.top.spin_end.setValue(fd.time_array[-1])
         return fd
 
+    def _is_can_log_path(self, path) -> bool:
+        """True for Vector BLF or evidence-matched CANoe ASC CAN logs."""
+        suffix = Path(path).suffix.lower()
+        if suffix == ".blf":
+            return True
+        if suffix != ".asc":
+            return False
+        try:
+            from ...io.asc_can_format import sniff_canoe_asc
+            return bool(sniff_canoe_asc(path))
+        except Exception:
+            return False
+
     def _load_one(
         self,
         fp,
@@ -400,6 +414,13 @@ class ProjectIOMixin:
             ext = p.suffix.lower()
             report(0.0, "准备")
             report(0.05, "读取数据")
+            is_canoe_asc = False
+            if ext == ".asc":
+                from ...io.asc_can_format import sniff_canoe_asc
+                try:
+                    is_canoe_asc = bool(sniff_canoe_asc(p))
+                except Exception:
+                    is_canoe_asc = False
             if ext in ('.mf4', '.mdf'):
                 if not HAS_ASAMMDF: QMessageBox.critical(self, "错误", "asammdf 未安装"); return
                 data, chs, units = DataLoader.load_mf4(fp)
@@ -414,7 +435,9 @@ class ProjectIOMixin:
                     f"✅ 已加载音轨: {p.name} ({len(data)} 采样 @ {fs:.0f} Hz) | 共 {len(self.files)} 文件")
                 self.toast(f"已加载音轨 {p.name}", "success")
                 return
-            elif ext == '.blf':
+            elif ext == '.blf' or is_canoe_asc:
+                fmt = "BLF" if ext == ".blf" else "CANoe ASC"
+                source_kind = "blf" if ext == ".blf" else "canoe_asc"
                 frames = blf_frames
                 if frames is None:
                     frames = DataLoader.read_blf_frames(
@@ -451,7 +474,7 @@ class ProjectIOMixin:
                         ),
                     )
                 if not dbc_paths:
-                    self.statusBar.showMessage(f"已取消 BLF: {p.name}")
+                    self.statusBar.showMessage(f"已取消 {fmt}: {p.name}")
                     return
                 decode_start = 0.05 if blf_frames is not None else 0.55
                 decode_span = 0.90 if blf_frames is not None else 0.40
@@ -467,7 +490,7 @@ class ProjectIOMixin:
                 self._register_file_data(
                     fp, data, chs, units,
                     source_metadata={
-                        "source_kind": "blf",
+                        "source_kind": source_kind,
                         "dbc_paths": list(dbc_paths),
                     },
                 )
@@ -475,7 +498,7 @@ class ProjectIOMixin:
                 self._update_info()
                 mode = f"DBC×{len(dbc_paths)} 解码"
                 self.statusBar.showMessage(
-                    f"✅ 已加载 BLF: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件")
+                    f"✅ 已加载 {fmt}: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件")
                 self.toast(f"已加载 {p.name} · {mode}", "success")
                 report(1.0, "已加载")
                 return
@@ -720,7 +743,7 @@ class ProjectIOMixin:
             except ImportError:
                 raise
             except ValueError as exc:
-                if "BLF 文件没有可读的 CAN 数据帧" in str(exc):
+                if NO_CAN_FRAMES_MESSAGE in str(exc):
                     raise
                 continue
             except Exception:
@@ -793,16 +816,17 @@ class ProjectIOMixin:
         return None
 
     def resolve_blf_dbc_paths_for_batch(self, paths):
-        """Reuse the single-file BLF/DBC tip+picker path for BatchSheet intake.
+        """Reuse the single-file CAN-log/DBC tip+picker path for BatchSheet intake.
 
-        Returns a non-empty ``dbc_paths`` list, or ``None`` when the user
-        cancels.  BatchSheet keeps one sheet-level ``source_context``; multi-file
-        ``individual`` therefore resolves via the first BLF only (see
+        Covers Vector BLF and evidence-matched CANoe ASC. Returns a non-empty
+        ``dbc_paths`` list, or ``None`` when the user cancels.  BatchSheet keeps
+        one sheet-level ``source_context``; multi-file ``individual`` therefore
+        resolves via the first CAN log only (see
         ``docs/analyzer/specs/2026-08-10-batch-blf-dbc-context-reuse-spec.md``).
         """
         blf_paths = [
             Path(path) for path in (paths or ())
-            if Path(path).suffix.lower() == ".blf"
+            if self._is_can_log_path(path)
         ]
         if not blf_paths:
             return []
@@ -947,7 +971,7 @@ class ProjectIOMixin:
         skipped = 0
         blf_index = -1
         for index, path in enumerate(ordered_paths):
-            if path.suffix.lower() != ".blf":
+            if not self._is_can_log_path(path):
                 before_fids = set(self.files)
                 self._load_one(
                     str(path),
@@ -1054,8 +1078,8 @@ class ProjectIOMixin:
         """Ask how one multi-file user action should resolve DBCs."""
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Information)
-        box.setWindowTitle("批量导入 BLF")
-        box.setText(f"本次添加了 {len(paths)} 个 BLF 文件。")
+        box.setWindowTitle("批量导入 CAN 日志")
+        box.setText(f"本次添加了 {len(paths)} 个 CAN 日志文件。")
         box.setInformativeText(
             "统一选择的 DBC 会应用到本次全部文件；下次导入仍会重新确认。"
         )
@@ -1645,6 +1669,8 @@ class ProjectIOMixin:
         # variant of the per-fid invalidate in ``_close``).
         for cache in self.analysis_caches.values():
             cache.clear()
+        for section in list(self.analysis_caches):
+            self._clear_analysis_section_pins(section)
         # FftTimeCoordinator holds in-flight pending contexts that cache.clear()
         # above does NOT touch — drop them too so a fft_time job still running
         # when all files close cannot resurrect a dead-fid result into the

@@ -278,7 +278,8 @@ class FFTMixin:
                         outcome.failed += 1
                         QMessageBox.critical(self, 'FFT错误', str(e))
                         continue
-                    cache.put(key, result)
+                    self._store_analysis_result(
+                        'fft', state.view_id, pane_idx, key, result)
                     outcome.computed += 1
                 else:
                     outcome.cached += 1

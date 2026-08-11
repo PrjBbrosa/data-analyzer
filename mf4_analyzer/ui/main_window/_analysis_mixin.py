@@ -9,6 +9,7 @@ call through ``self.``.  Method-resolution order makes those calls find this
 copy regardless of base-class order — there are no name collisions.
 """
 
+import logging
 import math
 
 import numpy as np
@@ -19,6 +20,8 @@ from PyQt5.QtCore import QTimer
 from ... import db_reference
 from ..compute_feedback import summarize_compute
 from .analysis_context import AnalysisContext
+
+logger = logging.getLogger(__name__)
 
 
 # dB-reference-defaults Task 5 (spec §8.2 source tokens). Presentation-only
@@ -150,6 +153,9 @@ class AnalysisMixin:
         if len(mgr.views) > 1 and 0 <= idx < len(mgr.views):
             state = mgr.get(idx)
             self._analysis_restore_pending.discard((section, state.view_id))
+            # Drop pin bookkeeping before the view disappears so later LRU
+            # passes treat its results as unowned history (spec §5).
+            self._drop_analysis_view_pins(section, state.view_id)
             if section == 'frf':
                 for pane_idx in range(len(state.panes)):
                     self._frf_coordinator.invalidate_pane(
@@ -684,6 +690,50 @@ class AnalysisMixin:
         except Exception:
             self.toast("恢复渲染失败，请手动点计算", "warning")
 
+    # -- analysis cache pinning (spec 2026-08-11) -----------------------------
+    # Pin bookkeeping records the *real* cache keys that render/put already
+    # hold. Never re-derive keys from state.params alone (Qt round-trip can
+    # diverge). Pinning is residency only — invalidate_fid still deletes
+    # pinned entries, and dead pin keys are left to the next render replace.
+    # Mutations go through AnalysisPinBook methods (holder), not bare dict
+    # writes on self._analysis_pins.
+
+    def _pinned_keys_for_section(self, section):
+        return self._analysis_pins.pinned_keys(section)
+
+    def _store_analysis_result(self, section, view_id, pane_idx, key, result):
+        """Single write funnel: cache put always, pin append only when
+        ``view_id`` names a real View (spec §4.1/§4.1 footnote).
+
+        A ``None`` view_id means the dispatch path that produced this result
+        never attached a real View identity to its ctx/candidate dict — pin
+        bookkeeping keys off ``str(view_id)``, so pinning here would wedge
+        the result into a permanent ``('<section>', 'None', pane_idx)`` slot
+        that render-time replace can never reach (it only ever replaces real
+        view_id slots). Cache the result anyway so it is not lost, skip the
+        pin, and log so a future dispatch path that forgets to carry
+        view_id is not a silent permanent-pin leak.
+        """
+        self.analysis_caches[section].put(key, result)
+        if view_id is None:
+            logger.warning(
+                "_store_analysis_result: view_id is None for section=%r "
+                "pane_idx=%r key=%r -- result cached but not pinned",
+                section, pane_idx, key,
+            )
+            return
+        self._analysis_pins.add(section, view_id, pane_idx, key)
+
+    def _replace_analysis_pane_pins(self, section, view_id, pane_idx, keys):
+        """Replace one pane's pin set with the keys enumerated at render time."""
+        self._analysis_pins.replace(section, view_id, pane_idx, keys)
+
+    def _drop_analysis_view_pins(self, section, view_id):
+        self._analysis_pins.drop_view(section, view_id)
+
+    def _clear_analysis_section_pins(self, section):
+        self._analysis_pins.clear_section(section)
+
     def _render_analysis_view_from_cache(self, section, state):
         """Render each pane from cached results; panes whose sources are not all
         cached show an empty state and a 'click 计算' status hint.
@@ -731,19 +781,23 @@ class AnalysisMixin:
             return
         page = self._analysis_page(section)
         any_missing = False
+        enumerated_panes = set()
         for pane_idx in range(page.pane_count()):
             if pane_idx >= len(state.panes):
                 break
+            enumerated_panes.add(pane_idx)
             pane = state.panes[pane_idx]
             canvas = page.pane_canvas(pane_idx)
             cache = self.analysis_caches[section]
             if section == 'fft':
                 entries = []
+                pane_keys = []
                 colors = self._analysis_channel_color_map()
                 time_range = self._pane_time_range_for(section, pane_idx)
                 for fid, ch in pane.sources:
                     key = self._analysis_cache_key(
                         section, fid, ch, pane_idx=pane_idx)
+                    pane_keys.append(key)
                     result = cache.get(key)
                     if result is None:
                         any_missing = True
@@ -751,6 +805,8 @@ class AnalysisMixin:
                     entries.append(self._fft_entry_from_cache(
                         result, fid, ch, colors.get((fid, ch)),
                         time_range=time_range))
+                self._replace_analysis_pane_pins(
+                    section, state.view_id, pane_idx, pane_keys)
                 if entries:
                     self._plot_fft_entries(entries, canvas)
                 else:
@@ -762,12 +818,18 @@ class AnalysisMixin:
             else:
                 if not pane.sources:
                     self._clear_analysis_canvas(canvas)
+                    self._replace_analysis_pane_pins(
+                        section, state.view_id, pane_idx, ())
                     continue
                 fid, ch = pane.sources[0]
                 key = self._analysis_cache_key(
                     section, fid, ch,
                     rpm_source=pane.rpm_source if section == 'order' else None,
                     pane_idx=pane_idx)
+                # Record binding intent even on miss so a later put is already
+                # protected (spec §4).
+                self._replace_analysis_pane_pins(
+                    section, state.view_id, pane_idx, (key,))
                 result = cache.get(key)
                 if result is None:
                     any_missing = True
@@ -776,6 +838,11 @@ class AnalysisMixin:
                 else:
                     self._render_cached_heatmap(
                         section, canvas, result, source=(fid, ch))
+        # Panes not visited this render (e.g. split cleared) drop their pins.
+        for pane_idx in range(len(state.panes)):
+            if pane_idx not in enumerated_panes:
+                self._replace_analysis_pane_pins(
+                    section, state.view_id, pane_idx, ())
         if any_missing:
             self.statusBar.showMessage("参数/源已就绪，点击计算")
 

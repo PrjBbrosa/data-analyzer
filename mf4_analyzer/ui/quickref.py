@@ -96,7 +96,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 "支持格式",
                 sub="MF4 · MDF · BLF · ASCII · TDMS · WWT · ZFD · MAT · 表格 · HDF · 音视频",
             ),
-            QuickRow("BLF 报文解码", sub="需配 DBC 文件"),
+            QuickRow("BLF / CANoe ASC 报文解码", sub="需配 DBC 文件"),
             QuickRow(
                 "把文件加入当前 View",
                 sub="上方=全局已打开；下方=当前模式的当前 View。打开只是载入，要画图/分析得先加入",
@@ -187,6 +187,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 keys=(_sc("pan"), _sc("zoom")),
             ),
             QuickRow("复位主视图", keys=(_sc("home"),)),
+            QuickRow(
+                "切换当前分区 View",
+                keys=("Alt+1…9",),
+                sub="第 10–12 个走标签栏或 » 溢出菜单",
+            ),
             QuickRow("顶部按钮的快捷键", sub="悬停按钮即显示"),
         ),
     ),

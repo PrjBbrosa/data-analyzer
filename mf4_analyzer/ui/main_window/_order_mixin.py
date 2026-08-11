@@ -348,7 +348,8 @@ class OrderMixin:
                 pane_idx=pane_idx)
             cached = cache.get(analysis_key)
             if cached is not None:
-                cache.put(analysis_key, cached)
+                self._store_analysis_result(
+                    'order', state.view_id, pane_idx, analysis_key, cached)
                 self._render_order_on(
                     page.pane_canvas(pane_idx), cached, source=(fid, ch))
                 outcome.cached += 1
@@ -472,6 +473,11 @@ class OrderMixin:
             'analysis_key': analysis_key,
             'pane_idx': pane_idx,
             'source': (fid, ch),
+            # Capture at dispatch: completion may land after the user switched
+            # Views, so the callback must not read the then-active view.
+            'view_id': self.analysis_managers['order'].get(
+                self.analysis_managers['order'].active
+            ).view_id,
         }
 
         def job(worker, _sig=sig, _rpm=rpm, _t=t_arr, _p=p):
@@ -685,7 +691,13 @@ class OrderMixin:
     def _on_order_job_finished(self, ctx, result):
         analysis_key = ctx.get('analysis_key')
         if analysis_key is not None:
-            self.analysis_caches['order'].put(analysis_key, result)
+            self._store_analysis_result(
+                'order',
+                ctx.get('view_id'),
+                ctx.get('pane_idx', 0),
+                analysis_key,
+                result,
+            )
         outcome = getattr(self, '_order_outcome', None)
         if outcome is not None:
             outcome.computed += 1
