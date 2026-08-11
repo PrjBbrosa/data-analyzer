@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .blf_format import _emit_progress
+from .blf_format import _emit_progress, _sample_reader_byte_progress
 
 _CANOE_BASE_RE = re.compile(
     r"^base\s+(hex|dec)\s+timestamps\s+(absolute|relative)\b",
@@ -20,6 +20,9 @@ _CANOE_BASE_RE = re.compile(
 )
 _SNIFF_BYTES = 8192
 _SNIFF_MAX_LINES = 64
+# Real CANoe ASC mixes CAN frames with denser SV lines; ~128 B/msg is a
+# conservative hint so synthetic progress stays behind EOF until the final emit.
+_ASC_BYTES_PER_FRAME_HINT = 128
 
 
 def sniff_canoe_asc(path) -> bool:
@@ -79,17 +82,17 @@ def _read_asc_frames(fp, progress_callback=None):
             if report_progress and (
                 frame_index == 1 or frame_index % 512 == 0
             ):
-                try:
-                    byte_pos = int(reader.file.tell())
-                except (AttributeError, OSError, ValueError):
-                    byte_pos = last_reported
-                if byte_pos > last_reported:
-                    _emit_progress(
-                        progress_callback,
-                        min(byte_pos, total_bytes),
-                        total_bytes,
-                    )
-                    last_reported = byte_pos
+                # ASCReader iterates a text stream; ``tell()`` raises during
+                # ``for`` iteration, so the shared helper falls back to a
+                # frame-based byte estimate.
+                last_reported = _sample_reader_byte_progress(
+                    reader,
+                    frame_index,
+                    total_bytes,
+                    last_reported,
+                    progress_callback,
+                    bytes_per_frame_hint=_ASC_BYTES_PER_FRAME_HINT,
+                )
             if msg.is_error_frame or msg.is_remote_frame:
                 continue
             frames.append(

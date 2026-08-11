@@ -3034,13 +3034,16 @@ QStatusBar#surfaceStatusBar QLabel#plotRiskLabel[riskLevel="danger"] {
 QStatusBar#surfaceStatusBar QWidget#computeProgressWidget {
     background-color: transparent;
     margin: 0 4px;
+    min-width: 248px;
+    max-width: 520px;
 }
 
 QStatusBar#surfaceStatusBar QLabel#computeProgressLabel {
     color: #4b5f78;
     font-size: 12px;
     font-weight: 600;
-    qproperty-alignment: AlignVCenter;
+    qproperty-alignment: AlignVCenter | AlignLeft;
+    padding-right: 2px;
 }
 
 QStatusBar#surfaceStatusBar QProgressBar#computeProgressBar {

@@ -551,6 +551,7 @@ class MainWindow(
         token: object | None = None,
         *,
         process_events: bool = False,
+        flush_events: bool = False,
     ) -> None:
         if self._active_compute_progress_token is None:
             return
@@ -560,12 +561,15 @@ class MainWindow(
         ):
             return
         self._compute_progress.set_progress(current, total, label)
-        if process_events:
-            # Render only the tiny status-bar widget.  Draining the entire Qt
-            # queue here can paint the *previous* chart midway through a chart
-            # rebuild, which makes a progress update itself look like a plot
-            # stall.  ``repaint`` is synchronous and scoped to this widget.
+        if process_events or flush_events:
+            # Default path: repaint only the tiny status-bar widget.  Draining
+            # the entire Qt queue during chart rebuild can paint the previous
+            # plot mid-flight.  File-load passes ``flush_events=True`` so the
+            # long synchronous import still lets the bar/label reach the screen.
             self._compute_progress.repaint()
+        if flush_events:
+            from PyQt5.QtCore import QEventLoop
+            QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
     def _finish_compute_progress(
         self,

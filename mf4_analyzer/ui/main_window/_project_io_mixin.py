@@ -111,13 +111,82 @@ class ProjectIOMixin:
 
         self._open_data_paths(data_files)
 
+    # Heavy-load confirm: wall-clock is dominated by parse+decode on the GUI
+    # thread. ASC alone is ~60 MB/s parse; with DBC/decode use a conservative
+    # ~25 MB/s so 10×400 MB ≈ 3 minutes is called out before starting.
+    _HEAVY_LOAD_TOTAL_BYTES = 300 * 1024 * 1024
+    _HEAVY_LOAD_FILE_BYTES = 150 * 1024 * 1024
+    _HEAVY_LOAD_MANY_FILES = 5
+    _HEAVY_LOAD_MANY_TOTAL_BYTES = 100 * 1024 * 1024
+    _HEAVY_LOAD_ESTIMATE_BYTES_PER_SEC = 25 * 1024 * 1024
+
+    def _format_byte_size(self, nbytes: int) -> str:
+        n = float(max(0, int(nbytes)))
+        for unit, scale in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
+            if n >= scale or unit == "KB":
+                value = n / scale
+                if value >= 10:
+                    return f"{value:.0f} {unit}"
+                return f"{value:.1f} {unit}"
+        return f"{int(n)} B"
+
+    def _estimate_heavy_load_seconds(self, total_bytes: int) -> int:
+        return max(
+            1,
+            int(round(total_bytes / float(self._HEAVY_LOAD_ESTIMATE_BYTES_PER_SEC))),
+        )
+
+    def _should_confirm_heavy_load(self, weights) -> bool:
+        weights = [max(1, int(w)) for w in (weights or ())]
+        if not weights:
+            return False
+        total = sum(weights)
+        if total >= self._HEAVY_LOAD_TOTAL_BYTES:
+            return True
+        if any(w >= self._HEAVY_LOAD_FILE_BYTES for w in weights):
+            return True
+        if (
+            len(weights) >= self._HEAVY_LOAD_MANY_FILES
+            and total >= self._HEAVY_LOAD_MANY_TOTAL_BYTES
+        ):
+            return True
+        return False
+
+    def _confirm_heavy_load(self, data_files, weights) -> bool:
+        """Ask before a likely multi-minute, UI-blocking import batch."""
+        total = sum(max(1, int(w)) for w in weights)
+        est_sec = self._estimate_heavy_load_seconds(total)
+        if est_sec < 60:
+            est_text = f"约 {est_sec} 秒"
+        elif est_sec < 3600:
+            est_text = f"约 {max(1, int(round(est_sec / 60)))} 分钟"
+        else:
+            est_text = f"约 {est_sec / 3600:.1f} 小时"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("加载可能较久")
+        box.setText(
+            f"即将加载 {len(data_files)} 个文件（共 {self._format_byte_size(total)}）。"
+        )
+        box.setInformativeText(
+            f"按体积粗估可能需要 {est_text} 或更久，期间界面可能暂时无响应"
+            "（进度条会尽量更新）。是否继续？"
+        )
+        cont = box.addButton("继续加载", QMessageBox.AcceptRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        fit_message_box_buttons_to_text(box)
+        box.setDefaultButton(cont)
+        box.exec_()
+        return box.clickedButton() is cont
+
     def _open_data_paths(self, data_files):
         """Load one user-selected batch with a weighted, truthful status bar.
 
         A file's byte size is the only universally available work estimate
-        across CSV/MDF/BLF/etc.  BLF refines its own fraction from real reader
-        bytes and decoded frames; formats whose libraries expose no safe
-        incremental callback advance only when that file is actually complete.
+        across CSV/MDF/BLF/etc.  BLF/ASC refine their own fraction from reader
+        progress (byte ``tell`` or a frame-based fallback); formats whose
+        libraries expose no safe incremental callback show an indeterminate
+        busy bar for that file, then jump when it completes.
         """
         data_files = list(data_files or ())
         if not data_files:
@@ -145,6 +214,11 @@ class ProjectIOMixin:
                 weights.append(max(1, int(Path(path).stat().st_size)))
             except (OSError, TypeError, ValueError):
                 weights.append(1)
+        if self._should_confirm_heavy_load(weights):
+            if not self._confirm_heavy_load(data_files, weights):
+                self.statusBar.showMessage("已取消加载")
+                self.toast("已取消加载", "info")
+                return
         total_weight = max(1, sum(weights))
         fractions = [0.0] * len(data_files)
         last_paint_at = 0.0
@@ -154,9 +228,26 @@ class ProjectIOMixin:
         )
 
         def report(index, fraction, phase=""):
-            """Advance one file monotonically and repaint at most 25 FPS."""
+            """Advance one file monotonically and repaint at most 25 FPS.
+
+            ``fraction < 0`` means indeterminate busy for formats without a
+            safe incremental loader callback.
+            """
             nonlocal last_paint_at
             if not (0 <= index < len(fractions)):
+                return
+            label = f"加载 {index + 1}/{len(data_files)}"
+            if phase:
+                label += f" · {phase}"
+            if float(fraction) < 0:
+                last_paint_at = monotonic()
+                self._update_compute_progress(
+                    0,
+                    0,
+                    label=label,
+                    token=token,
+                    flush_events=True,
+                )
                 return
             fraction = max(0.0, min(1.0, float(fraction)))
             if fraction > fractions[index]:
@@ -177,15 +268,12 @@ class ProjectIOMixin:
             # The status bar has deliberately limited width.  Keep its live
             # label scannable; the active filename remains in the normal
             # status message set by _load_one.
-            label = f"加载 {index + 1}/{len(data_files)}"
-            if phase:
-                label += f" · {phase}"
             self._update_compute_progress(
                 done,
                 1000,
                 label=label,
                 token=token,
-                process_events=True,
+                flush_events=True,
             )
 
         try:
@@ -423,10 +511,13 @@ class ProjectIOMixin:
                     is_canoe_asc = False
             if ext in ('.mf4', '.mdf'):
                 if not HAS_ASAMMDF: QMessageBox.critical(self, "错误", "asammdf 未安装"); return
+                report(-1.0, "读取 MF4")
                 data, chs, units = DataLoader.load_mf4(fp)
             elif ext in ('.xlsx', '.xls'):
+                report(-1.0, "读取 Excel")
                 data, chs, units = DataLoader.load_excel(fp)
             elif ext in AUDIO_VIDEO_EXTS:
+                report(-1.0, "读取音视频")
                 data, chs, units, fs, smeta = DataLoader.load_audio_video(fp)
                 fd = self._register_file_data(
                     fp, data, chs, units, fs=fs, source_metadata=smeta)
@@ -503,6 +594,7 @@ class ProjectIOMixin:
                 report(1.0, "已加载")
                 return
             elif ext == '.tdms':
+                report(-1.0, "读取 TDMS")
                 data, chs, units = DataLoader.load_tdms(fp)
                 self._register_file_data(
                     fp, data, chs, units, source_metadata={"source_kind": "tdms"})
@@ -512,6 +604,7 @@ class ProjectIOMixin:
                 self.toast(f"已加载 TDMS {p.name} · {len(data)} 行", "success")
                 return
             elif ext == '.hdf':
+                report(-1.0, "读取 HDF")
                 groups = DataLoader.load_hdf(fp)
                 for g in groups:
                     self._register_file_data(
@@ -532,6 +625,7 @@ class ProjectIOMixin:
                     self.toast(notice, "warning")
                 return
             elif ext == '.asc':
+                report(-1.0, "读取 ASCII")
                 data, chs, units, fs, smeta = DataLoader.load_ascii(fp)
                 self._register_file_data(
                     fp, data, chs, units, fs=fs, source_metadata=smeta)
@@ -541,6 +635,7 @@ class ProjectIOMixin:
                 self.toast(f"已加载 ASCII {p.name} · {len(data)} 行", "success")
                 return
             elif ext == '.wwt':
+                report(-1.0, "读取 WWT")
                 groups = DataLoader.load_wwt(fp)
                 for g in groups:
                     self._register_file_data(
@@ -554,6 +649,7 @@ class ProjectIOMixin:
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
                 return
             elif ext == '.zfd':
+                report(-1.0, "读取 ZFD")
                 groups = DataLoader.load_zfd(fp)
                 for g in groups:
                     self._register_file_data(
@@ -567,6 +663,7 @@ class ProjectIOMixin:
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
                 return
             elif ext == '.mat':
+                report(-1.0, "读取 MAT")
                 groups = DataLoader.load_mat(fp)
                 for g in groups:
                     self._register_file_data(
@@ -580,6 +677,7 @@ class ProjectIOMixin:
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
                 return
             else:
+                report(-1.0, "读取表格")
                 data, chs, units = DataLoader.load_csv(fp)
             fd = self._register_file_data(fp, data, chs, units)
             # User-request 2026-05-20: do NOT auto-select channel[0] on file

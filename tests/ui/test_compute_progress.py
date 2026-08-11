@@ -61,6 +61,44 @@ def test_set_progress_clamps_value(qapp, qtbot):
     assert widget.bar.value() == 100
 
 
+def test_long_load_label_does_not_overlap_or_clip_bar(qapp, qtbot):
+    """Load-phase copy is longer than FFT labels; keep label/bar disjoint."""
+    widget = ComputeProgressWidget()
+    qtbot.addWidget(widget)
+    widget.resize(320, 28)
+    widget.show()
+    qtbot.waitExposed(widget)
+    qapp.processEvents()
+
+    widget.begin("加载文件 0/1", total=1000)
+    widget.set_progress(
+        150,
+        1000,
+        label="加载 1/1 · 读取 CAN 帧",
+    )
+    qapp.processEvents()
+
+    assert widget.maximumWidth() >= 480
+    assert widget.bar.width() == widget._BAR_WIDTH
+    assert "读取 CAN 帧" in widget.label.toolTip()
+    assert widget.label.text().endswith("%") or widget.label.text().endswith("…")
+
+    label_rect = widget.label.geometry()
+    bar_rect = widget.bar.geometry()
+    assert label_rect.right() < bar_rect.left(), (
+        f"label {label_rect.getRect()} overlaps bar {bar_rect.getRect()}"
+    )
+    assert bar_rect.right() <= widget.width() - widget._H_MARGIN, (
+        f"bar {bar_rect.getRect()} clipped by widget width {widget.width()}"
+    )
+    # Even when the outer widget is forced narrower than the ideal hint, the
+    # fixed bar must remain fully painted (not squeezed).
+    widget.resize(280, 28)
+    qapp.processEvents()
+    assert widget.bar.width() == widget._BAR_WIDTH
+    assert widget.label.geometry().right() < widget.bar.geometry().left()
+
+
 def test_main_window_compute_progress_token_guards_stale_updates(qapp, qtbot):
     window = MainWindow()
     qtbot.addWidget(window)
