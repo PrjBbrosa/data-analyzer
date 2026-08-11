@@ -87,9 +87,21 @@ Real `testdoc` files always end with a large `DatenFenste2` display block
 | +0 / +8 | double | 轴下限 / 上限 |
 | **+18** | **u16** | **X 轴引用曲线号 —— 0 = 记录 0（Zeit）= 按时间显示** |
 | +20 / +22 | u16 | Selector 勾选 / 是否绘制 |
-| +26 / +34 | double | 主刻度间隔 / 网格间隔（0 = 无网格） |
+| **+26 / +34** | double | 主刻度 / 网格间隔 —— **写 0 = 交给 WinWert 自动**（见下） |
 | **+52** | **double** | **绘图比例 = K / 轴跨度**（见下） |
 | +60 | char[64] | 轴标签 `Name [unit]` |
+| **+263 / +271** | u32 / 3×u8 | 颜色下拉序号 / RGB（配套写） |
+
+**刻度必须写 0**（2026-08-11 实测）：给非零 tick 间隔时，WinWert **首帧**按
+「跨度 ÷ 间隔」布轴，数据量程除不尽就会各 Y 轴长短不一、总范围显示不全，
+手动刷新后才归位。WinWert 自己的导出（含 X 轴行）全部写 0，照抄即可。
+早先 `_nice_step` 那套「跟着量程重算刻度」已删除。
+
+**颜色**：序号 → RGB 实测 `0=黑 000000 · 1=红 ff0000 · 2=绿 00ff00 ·
+3=深蓝 000080 · 4=品红 ff00ff · 5=蓝 0000ff · 6=橄榄 808000 · 8=青 00ffff ·
+9=棕 7f0000`（序号 7 语料未出现，调色板跳过）。WinWert 自己的 `.mat` 导出
+**按曲线序号取色**（curve1..6 = 序号 1..6），X 轴行取 0（黑）。导出侧照此
+循环配色——所有曲线都是从同一个原型记录复制出来的，不单独配色会全是红色。
 
 **+52 绘图比例**：`轴跨度 × +52 = K`，K 在文件内按方向恒定——12 个样本实测
 X 侧 4200、Y 侧 2400，U-Can 版式 X 侧 2000；4200/2400 正好是曲线设置对话框
@@ -123,10 +135,10 @@ SFNS 指 Rack Travel）。
 通道最大误差 0.007°。测试 `test_convert_rescales_quantized_slots` 看守。
 
 **产品写法（已实现）**：`convert_to_wwt(..., time_axis=True)`（默认开）在
-in-place 改写后调用 `_force_time_axis`：**每条曲线记录的 +18 写 0**、全局
-+69 写 0、曲线 0（X 轴行）标签写 `Time [s]` 且量程写实际时间跨度、刻度按
-`_nice_step` 重算、**+52 绘图比例按 K 守恒同步**。写入的曲线各自拿到标签 /
-量程 / 刻度 / 比例并置为可见；**未写入的模板曲线取消勾选**（+22 = 0），
+in-place 改写后调用 `wwt_display.force_time_axis`：**每条曲线记录的 +18 写 0**、
+全局 +69 写 0、曲线 0（X 轴行）标签写 `Time [s]` 且量程写实际时间跨度、
+**刻度/网格写 0**、**+52 绘图比例按 K 守恒同步**。写入的曲线各自拿到标签 /
+量程 / 比例 / 颜色并置为可见；**未写入的模板曲线取消勾选**（+22 = 0），
 否则模板残留数据会跟导出通道画在同一张图上。其余尾块字节原样保留。
 
 ## WinWert 自己写的参照文件（2026-08-11 晚，决定性）
@@ -141,8 +153,10 @@ in-place 改写后调用 `_force_time_axis`：**每条曲线记录的 +18 写 0*
    舍入这些本就该不同的字段）。⇒ 我们的正文格式没有问题。
    附带：WinWert 给 `Zeit` 记录的 min/max 写的是 `[0, 1]`，可见该字段不重要。
 2. **尾块曲线表用的正是本文解出的布局与常数**：X 轴行 `Time [s]` 范围
-   `[0, 285]`（真实时长）K=4200；每条曲线 `+18`=0（时域）、`vis`=1、范围 =
-   数据真实 min/max、K=2400；`ticks`/`grid` 全写 0。⇒ 逆向结论全部证实。
+   `[0, 284.987]`（末点时刻，未做圆整）K=4200；每条曲线 `+18`=0（时域）、
+   `vis`=1、范围 = 数据真实 min/max、K=2400；**`ticks`/`grid` 全写 0**、
+   **颜色按曲线序号 1..6 循环**。⇒ 逆向结论全部证实，后两条还直接给出了
+   「首帧轴布局错位」与「曲线全红」两个问题的正解。
    它还把当时会话的 `Beschriftung` / `.lay` 路径 / CAN 名表原样带了出来，
    说明尾块是**应用显示状态的转储**，与数据无关。
 3. **`xkanalnr` 的真正作用是尾块缺失时的兜底**：`testdoc/20260527.wwt`
@@ -171,7 +185,9 @@ in-place 改写后调用 `_force_time_axis`：**每条曲线记录的 +18 写 0*
 test_bundled_trailer_asset_carries_no_session_text` 看守）。
 
 候选：`probe_cleanroom_I_native.wwt`（DC2E 三通道原生 43062 点 float64）·
-`probe_cleanroom_K_8ch.wwt`（8 通道 5000 点，验证曲线表增长）。**待人工验证**。
+`probe_cleanroom_K_8ch.wwt`（8 通道 5000 点，验证曲线表增长）。
+I 的一轮回执：**打得开、时域显示、±450° 完整**；残留的「首帧范围不对」与
+「曲线全红」已按厂商写法修正（刻度写 0 + 按序号配色），见探针台账。
 
 ### 探针回执台账（2026-08-11，WinWert 实测截图）
 
@@ -185,7 +201,9 @@ test_bundled_trailer_asset_carries_no_session_text` 看守）。
 | F | 产品路径 v2（曲线 +18 全 0 + 隐藏未写入曲线 + 量化重标定） | **时域显示成立**：0–40 s 横轴、三条曲线各自 Y 轴、±450° 角度完整。唯一残留：**首帧**数据挤在左侧、刻度标签重叠，手动刷新后正常 ⇒ 绘图比例 +52 未同步 |
 | G | DC2E 原件仅曲线 +18 全 0 | 同上（机制确认：仅改 +18 即可切时域） |
 | H | DC2E 原件 + 完整显示改写（数据不动） | 同 F，首帧同样需刷新 |
-| F/G/H v3 | 追加 +52 绘图比例同步（K 守恒） | **待验证**（预期首帧即正确） |
+| F/G/H v3 | 追加 +52 绘图比例同步（K 守恒） | 未单独回执（被 clean-room 取代） |
+| I（clean-room v1） | 自写正文 + 重建尾块，原生 43062 点 float64 | **打得开、时域显示、±450° 完整**。两处残留：①**首帧**总范围不对、只显示一半，刷新后正常；②所有曲线同色（红） |
+| I（clean-room v2） | ①刻度/网格写 0（同厂商）②按曲线序号循环配色 | **待验证**（两处残留的正解都直接来自 WinWert 自产文件的写法） |
 
 ## Product surfaces
 
@@ -223,15 +241,17 @@ test_bundled_trailer_asset_carries_no_session_text` 看守）。
   重采样进 ``assets/wwt/winwert_export_template.wwt`` 的 6 个测量槽位
   （n=9936），量化槽位按数据量程重新标定，未写入的曲线取消勾选。
   这条路的显示已由 WinWert 实测通过（探针 F/H）。
-- Channel-editor **导出 → WinWert** 走 ``export_wwt``（可先按范围裁剪；
-  clean-room 不再重采样）。
+- Channel-editor **导出 → WinWert** 走 ``export_wwt``（可先按范围裁剪）。
+- **等间隔 Zeit**：源时间轴非等间隔时，clean-room 自动线性重采样到
+  ``linspace(t0, t1, n)``（保留点数与起止时刻），结果摘要标 ``已重采样``。
 - **拒绝而不是编造**：源短于 ``_MIN_TIMESERIES_SAMPLES``（100）时报错而不是
   上采样——补点等于凭空造数据，且 TraceLab 自己也会把短块当曲线定义跳过。
-  时间轴非等间隔同样明确报错。
 - 模块分工：``wwt_writer``（正文）· ``wwt_display``（``DatenFenste2`` 显示块）·
   ``wwt_inplace``（模板原地改写）· ``wwt_export``（产品门面）。
   资源生成器 ``tools/make_wwt_display_trailer.py``（抽取并清洗会话文本）。
-- 待人工验证：``probe_cleanroom_I_native.wwt`` / ``probe_cleanroom_K_8ch.wwt``
+- 已验证：clean-room 文件 WinWert 打得开、按时域显示、数据完整。
+  v2（刻度写 0 + 逐曲线配色）待复验：``probe_cleanroom_I_native.wwt`` /
+  ``probe_cleanroom_K_8ch.wwt``
   （`emit_wwt_cleanroom_probes.py` 产出）。若 WinWert 拒开，把 UI 的
   ``export_wwt`` 调用加上 ``mode="template"`` 即可退回已验证的路径。
 

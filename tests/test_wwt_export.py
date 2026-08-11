@@ -76,11 +76,28 @@ def test_cleanroom_writes_time_domain_display(tmp_path):
     assert [r["label"] for r in rows[1:]] == [
         "Steering torque [Nm]", "Steering angle [°]"
     ]
-    for row, values in zip(rows[1:], channels.values()):
+    for i, (row, values) in enumerate(zip(rows[1:], channels.values()), start=1):
         assert row["visible"] == 1
         assert row["lo"] == pytest.approx(float(values.min()))
         assert row["hi"] == pytest.approx(float(values.max()))
         assert row["plot_k"] > 0, "绘图比例要跟着量程同步，否则首帧会挤成一条"
+        assert row["ticks"] == 0.0, "刻度交给 WinWert 自动，否则首帧轴布局错位"
+        assert (row["color_index"], row["color_rgb"]) == disp.palette_color(i)
+
+
+def test_cleanroom_gives_every_channel_its_own_colour(tmp_path):
+    """回归：所有曲线都从同一原型复制，不单独配色就会全是红色。"""
+    n = 300
+    t = np.arange(n, dtype=np.float64) * 0.001
+    channels = {f"Ch{i + 1}": float(i + 1) * np.sin(t) for i in range(6)}
+    out = tmp_path / "colours.wwt"
+    export_wwt(out, t, channels, units={k: "Nm" for k in channels})
+
+    rows = disp.read_curve_table(out.read_bytes())
+    colours = [(r["color_index"], r["color_rgb"]) for r in rows[1:]]
+    assert len(set(colours)) == len(colours), f"曲线颜色重复: {colours}"
+    # 与 WinWert 自己的导出同序：curve1..6 → 序号 1..6
+    assert [c[0] for c in colours] == [1, 2, 3, 4, 5, 6]
 
 
 def test_cleanroom_stamps_own_text_and_drops_template_annotations(tmp_path):
@@ -119,14 +136,24 @@ def test_cleanroom_refuses_short_source(tmp_path):
         export_wwt(tmp_path / "short.wwt", t, {"a": np.sin(t)})
 
 
-def test_cleanroom_refuses_uneven_time_axis(tmp_path):
+def test_cleanroom_auto_resamples_uneven_time_axis(tmp_path):
+    """Irregular source axes are common; export must not force manual rebuild."""
     t = np.concatenate([
         np.arange(200, dtype=np.float64) * 0.001,
         0.2 + np.arange(200, dtype=np.float64) * 0.004,
     ])
-    with pytest.raises(WwtExportError, match="非等间隔"):
-        export_wwt(tmp_path / "jitter.wwt", t, {"a": np.sin(t)})
-
+    y = np.sin(t)
+    out = tmp_path / "jitter.wwt"
+    result = export_wwt(out, t, {"a": y})
+    assert result.resampled is True
+    assert result.sample_count == len(t)
+    loaded = DataLoader.load_wwt(str(out))[0]
+    got_t = loaded["data"]["Time"].to_numpy()
+    assert got_t[0] == pytest.approx(t[0])
+    assert got_t[-1] == pytest.approx(t[-1])
+    # Equidistant after export.
+    assert np.allclose(np.diff(got_t), got_t[1] - got_t[0])
+    assert "已重采样" in result.summary
 
 def test_cleanroom_refuses_length_mismatch(tmp_path):
     t = np.arange(200, dtype=np.float64) * 0.001

@@ -100,6 +100,55 @@ def _finite_range(values: np.ndarray) -> tuple[float, float]:
     return (lo, hi + 1.0) if lo == hi else (lo, hi)
 
 
+def _ensure_equidistant(
+    time: np.ndarray,
+    items: list[tuple[str, np.ndarray]],
+) -> tuple[np.ndarray, list[tuple[str, np.ndarray]], bool]:
+    """Return equidistant ``(t, items, resampled)`` suitable for WWT Zeit.
+
+    WWT stores Zeit as ``t0 + k·dt``. Irregular source axes (common in MF4 /
+    event-driven logs) are linearly resampled onto ``linspace(t0, t1, n)``
+    while keeping the original sample count, so WinWert still sees a valid
+    equidistant file without asking the user to rebuild the time base first.
+    """
+    t = np.asarray(time, dtype=np.float64)
+    if t.ndim != 1 or t.size < 2:
+        raise WwtExportError("时间轴至少需要 2 个采样点才能导出 WWT")
+    if not np.all(np.isfinite(t)):
+        raise WwtExportError("时间轴含有非有限值，无法导出 WWT")
+    for name, values in items:
+        if values.shape != t.shape:
+            raise WwtExportError(
+                f"通道 {name!r} 长度 {values.size} 与时间轴 {t.size} 不一致"
+            )
+    try:
+        infer_zeit_params(t)
+        return t, items, False
+    except ValueError:
+        pass
+
+    n = int(t.size)
+    order = np.argsort(t, kind="mergesort")
+    t_sorted = t[order]
+    # Drop exact duplicate timestamps so np.interp stays well-defined.
+    uniq = np.concatenate([[True], np.diff(t_sorted) > 0.0])
+    t_sorted = t_sorted[uniq]
+    if t_sorted.size < 2:
+        raise WwtExportError(
+            "时间轴有效递增采样不足，无法重采样为等间隔 Zeit"
+        )
+    t0 = float(t_sorted[0])
+    t1 = float(t_sorted[-1])
+    if not (t1 > t0):
+        raise WwtExportError("时间轴无效，无法重采样为等间隔 Zeit")
+    t_eq = np.linspace(t0, t1, n, dtype=np.float64)
+    out_items: list[tuple[str, np.ndarray]] = []
+    for name, values in items:
+        y_sorted = np.asarray(values, dtype=np.float64)[order][uniq]
+        out_items.append((name, np.interp(t_eq, t_sorted, y_sorted)))
+    return t_eq, out_items, True
+
+
 def export_cleanroom(
     out_path,
     time: np.ndarray,
@@ -111,24 +160,22 @@ def export_cleanroom(
     annotations: Sequence[str] | None = (),
     trailer_path=None,
 ) -> WwtExportResult:
-    """自写正文 + 重建显示尾块：原生点数、任意通道数、float64 无量化。"""
+    """自写正文 + 重建显示尾块：原生点数、任意通道数、float64 无量化。
+
+    源时间轴若非等间隔，会自动重采样到等间隔网格（保留点数与起止时刻）。
+    """
     items = _as_items(channels)
     units = dict(units or {})
-    t = np.asarray(time, dtype=np.float64)
+    t, items, resampled = _ensure_equidistant(np.asarray(time, dtype=np.float64), items)
     try:
         t0, _dt, n = infer_zeit_params(t)
-    except ValueError as exc:  # UnevenTimeAxisError 也在此列
+    except ValueError as exc:  # 重采样后仍失败才是硬错误
         raise WwtExportError(str(exc)) from exc
     if n < MIN_TIMESERIES_SAMPLES:
         raise WwtExportError(
             f"WWT 需要至少 {MIN_TIMESERIES_SAMPLES} 个采样点（当前 {n}），"
             "更短的块会被当成曲线定义而不是时域测量。"
         )
-    for name, values in items:
-        if values.shape != (n,):
-            raise WwtExportError(
-                f"通道 {name!r} 长度 {values.size} 与时间轴 {n} 不一致"
-            )
 
     spec = [
         (_label(name, units.get(name, "")), *_finite_range(values))
@@ -148,7 +195,7 @@ def export_cleanroom(
     )
     return WwtExportResult(
         path=path, mode=MODE_CLEANROOM, channel_count=len(items),
-        sample_count=n, resampled=False, quantized=False,
+        sample_count=n, resampled=resampled, quantized=False,
     )
 
 
@@ -165,7 +212,10 @@ def export_wwt(
     trailer_path=None,
     annotations: Sequence[str] | None = (),
 ) -> WwtExportResult:
-    """把等间隔序列导出成 WinWert 与 TraceLab 都能打开的 ``.wwt``。"""
+    """把时序导出成 WinWert 与 TraceLab 都能打开的 ``.wwt``。
+
+    源时间轴不必事先等间隔：clean-room 路径会自动重采样到等间隔 Zeit。
+    """
     if mode not in _MODES:
         raise WwtExportError(f"未知的 WWT 导出模式: {mode!r}（可选 {_MODES}）")
     if mode == MODE_CLEANROOM:

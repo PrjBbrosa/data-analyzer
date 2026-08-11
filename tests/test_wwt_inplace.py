@@ -130,6 +130,8 @@ def test_convert_labels_written_curves_and_hides_the_rest(template, tmp_path):
     assert mine["lo"] == pytest.approx(float(y.min()))
     assert mine["hi"] == pytest.approx(float(y.max()))
     assert mine["visible"] == 1
+    assert mine["ticks"] == 0.0, "刻度交给 WinWert 自动"
+    assert (mine["color_index"], mine["color_rgb"]) == disp.palette_color(1)
     others = [r for c, r in rows.items() if c not in (0, rec.index)]
     assert others and all(r["visible"] == 0 for r in others)
 

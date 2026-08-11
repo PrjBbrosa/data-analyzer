@@ -14,11 +14,20 @@ WWT 的正文（记录）只管数据，**「打开后长什么样」全部由�
 | +0 / +8 | double | 轴下限 / 上限 |
 | +18 | u16 | **X 轴引用曲线号；0 = 记录 0（Zeit）= 按时间显示** |
 | +20 / +22 | u16 | Selector 勾选 / 是否绘制 |
-| +26 / +34 | double | 主刻度间隔 / 网格间隔（0 = 无网格） |
+| +26 / +34 | double | 主刻度间隔 / 网格间隔 —— **写 0 = 交给 WinWert 自动**（厂商自己就写 0） |
 | +52 | double | 绘图比例 = K / 轴跨度（见下） |
 | +60 | char[64] | 轴标签 ``Name [unit]`` |
+| +263 | u32 | 颜色下拉序号 |
+| +271 | 3×u8 | 颜色 RGB（与序号配套写） |
 
 尾块头另有 `+27` u32 记录数、`+69` u16 全局 X 曲线号（逐曲线 +18 可覆盖它）。
+
+**刻度必须写 0**：给了非零 tick 间隔时，WinWert **首帧**按「跨度 ÷ 间隔」布轴，
+数据量程除不尽就会让各 Y 轴长短不一、总范围显示不全，手动刷新后才归位
+（2026-08-11 实测）。WinWert 自己的导出全部写 0，照抄即可。
+
+**颜色**：WinWert 自己的导出按**曲线序号循环取色**（curve1..6 = 序号 1..6）。
+不给每条曲线单独配色的话，从同一个原型记录复制出来的曲线会全是一个颜色。
 
 **+52 绘图比例**：`轴跨度 × +52 = K`，K 在文件内按方向恒定——实测 X 侧 4200、
 Y 侧 2400（U-Can 版式 X 侧 2000），正是对话框 `Window size (mm) 210 × 120` 的
@@ -62,6 +71,23 @@ CURVE_GRID = 34
 CURVE_SCALE = 52
 CURVE_LABEL = 60
 CURVE_LABEL_LEN = 64
+CURVE_COLOR_INDEX = 263
+CURVE_COLOR_RGB = 271
+
+# WinWert 颜色下拉的序号 → RGB。从 testdoc 样本与 WinWert 自产的 .mat 导出
+# 对读得到（对话框里的名字：red / green / dark blue / … 与 RGB 一一对上）。
+# 序号 7 语料里没出现过，跳过；序号 0 是黑色，留给 X 轴行。
+CURVE_PALETTE: tuple[tuple[int, bytes], ...] = (
+    (1, b"\xff\x00\x00"),   # red
+    (2, b"\x00\xff\x00"),   # green
+    (3, b"\x00\x00\x80"),   # dark blue
+    (4, b"\xff\x00\xff"),   # magenta
+    (5, b"\x00\x00\xff"),   # blue
+    (6, b"\x80\x80\x00"),   # olive
+    (8, b"\x00\xff\xff"),   # aqua
+    (9, b"\x7f\x00\x00"),   # maroon
+)
+AXIS_COLOR: tuple[int, bytes] = (0, b"\x00\x00\x00")   # black
 
 # 尾块至少要装得下 X 轴行，才谈得上改显示配置。
 MIN_TRAILER_LEN = CURVE_BASE + CURVE_STRIDE
@@ -93,16 +119,9 @@ def declared_record_count(data: bytes, trailer: int) -> int:
     return struct.unpack_from("<I", data, trailer + RECORD_COUNT_OFF)[0]
 
 
-def nice_step(span: float, target: int = 10) -> float:
-    """轴刻度步长：把 ``span/target`` 上舍入到 1/2/5×10ⁿ。"""
-    if not np.isfinite(span) or span <= 0.0:
-        return 0.0
-    raw = span / max(1, target)
-    mag = 10.0 ** np.floor(np.log10(raw))
-    for mult in (1.0, 2.0, 5.0):
-        if raw <= mult * mag:
-            return float(mult * mag)
-    return float(10.0 * mag)
+def palette_color(position: int) -> tuple[int, bytes]:
+    """按曲线位置取色，循环使用调色板（WinWert 自己也是这么配的）。"""
+    return CURVE_PALETTE[max(0, position - 1) % len(CURVE_PALETTE)]
 
 
 def read_curve(data: bytes, trailer: int, curve: int) -> dict | None:
@@ -128,6 +147,8 @@ def read_curve(data: bytes, trailer: int, curve: int) -> dict | None:
         "grid": grid,
         "scale": scale,
         "plot_k": (hi - lo) * scale if hi > lo else 0.0,
+        "color_index": struct.unpack_from("<I", data, off + CURVE_COLOR_INDEX)[0],
+        "color_rgb": bytes(data[off + CURVE_COLOR_RGB:off + CURVE_COLOR_RGB + 3]),
     }
 
 
@@ -155,6 +176,7 @@ def write_curve(
     x_curve: int | None = None,
     visible: bool | None = None,
     plot_k: float | None = None,
+    color: tuple[int, bytes] | None = None,
 ) -> None:
     """改写一条曲线（``curve`` = 记录序号）的显示配置。
 
@@ -166,6 +188,10 @@ def write_curve(
         return
     if x_curve is not None:
         struct.pack_into("<H", data, off + CURVE_X, int(x_curve) & 0xFFFF)
+    if color is not None:
+        index, rgb = color
+        struct.pack_into("<I", data, off + CURVE_COLOR_INDEX, int(index))
+        data[off + CURVE_COLOR_RGB:off + CURVE_COLOR_RGB + 3] = rgb[:3]
     if visible is not None:
         flag = 1 if visible else 0
         struct.pack_into("<H", data, off + CURVE_VISIBLE, flag)
@@ -178,10 +204,10 @@ def write_curve(
         if hi <= lo:
             hi = lo + 1.0
         struct.pack_into("<dd", data, off + CURVE_FROM, float(lo), float(hi))
-        # 刻度/网格必须跟着量程走：模板残留的步长在新量程下会画出百万条
-        # 网格线（或一条都不画）。
-        step = nice_step(hi - lo)
-        struct.pack_into("<dd", data, off + CURVE_TICKS, step, step / 2.0)
+        # 刻度/网格交给 WinWert 自动（写 0，同厂商自己的导出）。留着模板的
+        # 非零间隔会让**首帧**按「跨度 ÷ 间隔」布轴，除不尽就各轴长短不一、
+        # 总范围显示不全，刷新后才归位。
+        struct.pack_into("<dd", data, off + CURVE_TICKS, 0.0, 0.0)
         # 绘图比例：WinWert 首帧按它作图，漏改会把数据挤成左边一条细带。
         if plot_k is not None and plot_k > 0.0:
             struct.pack_into("<d", data, off + CURVE_SCALE, plot_k / (hi - lo))
@@ -227,6 +253,7 @@ def force_time_axis(
     write_curve(
         data, trailer, 0,
         label=TIME_AXIS_LABEL, lo=t0, hi=t1, x_curve=0, plot_k=plot_k_x,
+        color=AXIS_COLOR,
     )
     for curve in curves:
         if curve != 0:
@@ -266,16 +293,17 @@ def rebuild_display_trailer(
     )
 
     def fill(buf: bytearray, label: str, lo: float, hi: float,
-             k: float | None) -> bytearray:
+             k: float | None, color: tuple[int, bytes]) -> bytearray:
         holder = bytearray(CURVE_BASE) + buf
         write_curve(holder, 0, 0, label=label, lo=lo, hi=hi,
-                    x_curve=0, visible=True, plot_k=k)
+                    x_curve=0, visible=True, plot_k=k, color=color)
         return holder[CURVE_BASE:]
 
     table = bytearray()
-    table += fill(proto(0), TIME_AXIS_LABEL, t0, t1, k_x)
-    for label, lo, hi in channels:
-        table += fill(proto(1), label, lo, hi, k_y)
+    table += fill(proto(0), TIME_AXIS_LABEL, t0, t1, k_x, AXIS_COLOR)
+    for i, (label, lo, hi) in enumerate(channels, start=1):
+        # 每条曲线单独配色：所有曲线都从同一个原型记录复制，不改就全是一个颜色。
+        table += fill(proto(1), label, lo, hi, k_y, palette_color(i))
 
     out = bytearray(template_trailer[:CURVE_BASE])
     out += table

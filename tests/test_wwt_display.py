@@ -49,12 +49,21 @@ def test_template_x_axis_is_not_time(template_bytes):
     assert xs - {0}, "模板应当带有非时间的 X 引用（否则相关用例失去意义）"
 
 
-def test_write_curve_syncs_ticks_and_plot_scale(template_bytes):
+def test_write_curve_clears_ticks_and_syncs_plot_scale(template_bytes):
+    """刻度写 0（交给 WinWert 自动），绘图比例按 K 守恒同步。
+
+    回归：留着非零刻度间隔，WinWert 首帧按「跨度 ÷ 间隔」布轴，各 Y 轴长短
+    不一、总范围显示不全，刷新后才归位（2026-08-11 实测）。
+    """
     data = bytearray(template_bytes)
     trailer = disp.find_trailer(bytes(data))
     before = disp.read_curve(bytes(data), trailer, 1)
     k = before["plot_k"]
     assert k > 0
+    # 先埋一个非零刻度，证明写入会清掉它（模板各曲线取值不一，不依赖它）
+    off = disp.curve_offset(trailer, 1)
+    struct.pack_into("<dd", data, off + disp.CURVE_TICKS, 2.5, 1.25)
+    assert disp.read_curve(bytes(data), trailer, 1)["ticks"] == 2.5
 
     disp.write_curve(data, trailer, 1, label="X [Nm]", lo=-5.0, hi=15.0,
                      x_curve=0, visible=True, plot_k=k)
@@ -62,9 +71,27 @@ def test_write_curve_syncs_ticks_and_plot_scale(template_bytes):
     assert row["label"] == "X [Nm]"
     assert (row["lo"], row["hi"]) == (-5.0, 15.0)
     assert row["x_curve"] == 0 and row["visible"] == 1
-    assert row["ticks"] == pytest.approx(2.0)      # 20 / 10 → nice step
-    assert row["grid"] == pytest.approx(1.0)
+    assert row["ticks"] == 0.0 and row["grid"] == 0.0
     assert row["plot_k"] == pytest.approx(k, rel=1e-9), "绘图比例必须守恒"
+
+
+def test_palette_cycles_and_matches_vendor_order():
+    """WinWert 自己的导出按曲线序号取色（curve1..6 = 序号 1..6）。"""
+    assert [disp.palette_color(i)[0] for i in range(1, 7)] == [1, 2, 3, 4, 5, 6]
+    assert disp.palette_color(1) == (1, b"\xff\x00\x00")      # red
+    assert disp.palette_color(3) == (3, b"\x00\x00\x80")      # dark blue
+    n = len(disp.CURVE_PALETTE)
+    assert disp.palette_color(n + 1) == disp.palette_color(1), "超出后循环"
+    assert len({c[0] for c in disp.CURVE_PALETTE}) == n, "序号不许重复"
+
+
+def test_write_curve_sets_color_index_and_rgb(template_bytes):
+    data = bytearray(template_bytes)
+    trailer = disp.find_trailer(bytes(data))
+    disp.write_curve(data, trailer, 1, color=disp.palette_color(2))
+    row = disp.read_curve(bytes(data), trailer, 1)
+    assert row["color_index"] == 2
+    assert row["color_rgb"] == b"\x00\xff\x00"
 
 
 def test_write_curve_ignores_out_of_range_curve(template_bytes):
@@ -106,11 +133,16 @@ def test_rebuild_display_trailer_resizes_curve_table(template_bytes):
     rows = disp.read_curve_table(out, 0)
     assert rows[0]["label"] == "Time [s]"
     assert (rows[0]["lo"], rows[0]["hi"]) == (0.0, 12.5)
-    for row, (label, lo, hi) in zip(rows[1:], spec):
+    assert rows[0]["color_index"] == disp.AXIS_COLOR[0]
+    for i, (row, (label, lo, hi)) in enumerate(zip(rows[1:], spec), start=1):
         assert row["label"] == label
         assert (row["lo"], row["hi"]) == (lo, hi)
         assert row["x_curve"] == 0 and row["visible"] == 1
+        assert row["ticks"] == 0.0 and row["grid"] == 0.0
         assert row["plot_k"] == pytest.approx(rows[1]["plot_k"], rel=1e-9)
+        # 每条曲线一个颜色，否则同一原型复制出来的曲线全是一个色
+        index, rgb = disp.palette_color(i)
+        assert (row["color_index"], row["color_rgb"]) == (index, rgb)
 
 
 def test_rebuild_display_trailer_grows_past_template_slots(template_bytes):

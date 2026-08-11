@@ -40,7 +40,8 @@ def describe(path: Path) -> None:
         who = "X轴行 " if row["curve"] == 0 else f"curve{row['curve']}"
         print(f"   {who} X={row['x_curve']} vis={row['visible']} "
               f"[{row['lo']:>9.4g},{row['hi']:>9.4g}] K={row['plot_k']:.0f} "
-              f"{row['label']!r}")
+              f"tick={row['ticks']:g} color={row['color_index']}"
+              f"/{row['color_rgb'].hex()} {row['label']!r}")
     text = disp.read_display_text(data[disp.find_trailer(data):])
     print(f"   文本块: title={text.get('title')!r} "
           f"comment={text.get('comment')!r} 页脚={text.get('annotations')}")

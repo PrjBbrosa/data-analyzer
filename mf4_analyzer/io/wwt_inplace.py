@@ -353,7 +353,7 @@ def write_wwt_inplace(
             bytes(data), trailer_off, [r.index for r in records if r.index > 0]
         )
     slot_n = slot_recs[0].n
-    for name, values, rec in assignments:
+    for position, (name, values, rec) in enumerate(assignments, start=1):
         phys = np.asarray(values, dtype=np.float64)
         finite = phys[np.isfinite(phys)]
         lo = hi = None
@@ -382,6 +382,7 @@ def write_wwt_inplace(
                 data, trailer_off, rec.index,
                 label=f"{name} [{new_unit}]" if new_unit else name,
                 lo=lo, hi=hi, visible=True, plot_k=plot_k_y,
+                color=_disp.palette_color(position),
             )
 
     if hide_unused and trailer_off >= 0:
