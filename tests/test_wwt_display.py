@@ -43,6 +43,22 @@ def test_curve_table_decodes_real_template(template_bytes):
     assert ys and max(ys) - min(ys) < 1e-6 * max(ys)
 
 
+def test_layout_constants_hold_across_every_curve(template_bytes):
+    """版式常量在文件内恒定——这是「照抄模板的 +44 会错位」的根据。"""
+    trailer = disp.find_trailer(template_bytes)
+    count = disp.declared_record_count(template_bytes, trailer)
+    layout = disp.layout_constants(template_bytes, trailer, range(1, count))
+    assert layout.plot_k_x and layout.plot_k_y
+    assert layout.origin_c_x is not None and layout.origin_c_y is not None
+
+    for row in disp.read_curve_table(template_bytes)[1:]:
+        if row["hi"] <= row["lo"] or row["scale"] <= 0:
+            continue
+        assert row["plot_k"] == pytest.approx(layout.plot_k_y, rel=1e-6)
+        got_c = -(row["hi"] * row["scale"]) - row["origin"]
+        assert got_c == pytest.approx(layout.origin_c_y, abs=1e-3)
+
+
 def test_template_x_axis_is_not_time(template_bytes):
     """前置事实：模板本身是「Y vs 转子位置」，所以导出必须改 X 引用。"""
     xs = {r["x_curve"] for r in disp.read_curve_table(template_bytes)[1:]}
@@ -65,14 +81,21 @@ def test_write_curve_clears_ticks_and_syncs_plot_scale(template_bytes):
     struct.pack_into("<dd", data, off + disp.CURVE_TICKS, 2.5, 1.25)
     assert disp.read_curve(bytes(data), trailer, 1)["ticks"] == 2.5
 
+    count = disp.declared_record_count(bytes(data), trailer)
+    layout = disp.layout_constants(bytes(data), trailer, range(1, count))
     disp.write_curve(data, trailer, 1, label="X [Nm]", lo=-5.0, hi=15.0,
-                     x_curve=0, visible=True, plot_k=k)
+                     x_curve=0, visible=True, plot_k=k,
+                     origin_c=layout.origin_c_y)
     row = disp.read_curve(bytes(data), trailer, 1)
     assert row["label"] == "X [Nm]"
     assert (row["lo"], row["hi"]) == (-5.0, 15.0)
     assert row["x_curve"] == 0 and row["visible"] == 1
     assert row["ticks"] == 0.0 and row["grid"] == 0.0
     assert row["plot_k"] == pytest.approx(k, rel=1e-9), "绘图比例必须守恒"
+    # 轴原点：漏改会让下限为负的曲线首帧只画出正半边
+    assert row["origin"] == pytest.approx(
+        -(15.0 * row["scale"]) - layout.origin_c_y, rel=1e-9
+    )
 
 
 def test_palette_cycles_and_matches_vendor_order():
@@ -130,16 +153,23 @@ def test_rebuild_display_trailer_resizes_curve_table(template_bytes):
     tail = disp.CURVE_BASE + (len(spec) + 1) * disp.CURVE_STRIDE
     assert out[tail:] == src[disp.CURVE_BASE + src_records * disp.CURVE_STRIDE:]
 
+    src_layout = disp.layout_constants(src, 0, range(1, src_records))
     rows = disp.read_curve_table(out, 0)
     assert rows[0]["label"] == "Time [s]"
     assert (rows[0]["lo"], rows[0]["hi"]) == (0.0, 12.5)
     assert rows[0]["color_index"] == disp.AXIS_COLOR[0]
+    assert rows[0]["origin"] == pytest.approx(
+        -(rows[0]["hi"] * rows[0]["scale"]) - src_layout.origin_c_x, rel=1e-9
+    )
     for i, (row, (label, lo, hi)) in enumerate(zip(rows[1:], spec), start=1):
         assert row["label"] == label
         assert (row["lo"], row["hi"]) == (lo, hi)
         assert row["x_curve"] == 0 and row["visible"] == 1
         assert row["ticks"] == 0.0 and row["grid"] == 0.0
         assert row["plot_k"] == pytest.approx(rows[1]["plot_k"], rel=1e-9)
+        assert row["origin"] == pytest.approx(
+            -(hi * row["scale"]) - src_layout.origin_c_y, rel=1e-9
+        )
         # 每条曲线一个颜色，否则同一原型复制出来的曲线全是一个色
         index, rgb = disp.palette_color(i)
         assert (row["color_index"], row["color_rgb"]) == (index, rgb)

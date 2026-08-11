@@ -346,10 +346,10 @@ def write_wwt_inplace(
         assignments.append((name, values, remaining.pop(0)))
 
     trailer_off = _disp.find_trailer(bytes(data))
-    # 绘图比例常数必须在改任何轴范围**之前**从模板原值推出。
-    plot_k_x = plot_k_y = None
+    # 版式常量（绘图比例 + 轴原点）必须在改任何轴范围**之前**从模板原值推出。
+    layout = _disp.LayoutConstants()
     if trailer_off >= 0:
-        plot_k_x, plot_k_y = _disp.plot_scale_constants(
+        layout = _disp.layout_constants(
             bytes(data), trailer_off, [r.index for r in records if r.index > 0]
         )
     slot_n = slot_recs[0].n
@@ -381,7 +381,8 @@ def write_wwt_inplace(
             _disp.write_curve(
                 data, trailer_off, rec.index,
                 label=f"{name} [{new_unit}]" if new_unit else name,
-                lo=lo, hi=hi, visible=True, plot_k=plot_k_y,
+                lo=lo, hi=hi, visible=True, plot_k=layout.plot_k_y,
+                origin_c=layout.origin_c_y,
                 color=_disp.palette_color(position),
             )
 
@@ -413,7 +414,7 @@ def write_wwt_inplace(
         for rec in records:
             struct.pack_into("<H", data, rec.rec_off + _REC_XKANAL_OFF, 0)
         _disp.force_time_axis(
-            data, trailer_off, [r.index for r in records], t0, t1, plot_k_x,
+            data, trailer_off, [r.index for r in records], t0, t1, layout,
         )
 
     if title is not None:

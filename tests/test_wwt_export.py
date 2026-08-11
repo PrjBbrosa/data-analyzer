@@ -85,6 +85,32 @@ def test_cleanroom_writes_time_domain_display(tmp_path):
         assert (row["color_index"], row["color_rgb"]) == disp.palette_color(i)
 
 
+def test_cleanroom_axis_origin_follows_range(tmp_path):
+    """轴原点必须按新量程重算：漏改则首帧只画出正半边（负下限被顶出画面）。"""
+    t, channels, units = _series()
+    out = tmp_path / "origin.wwt"
+    export_wwt(out, t, channels, units=units)
+
+    asset = _TRAILER_ASSET.read_bytes()
+    src_records = disp.declared_record_count(asset, 0)
+    layout = disp.layout_constants(asset, 0, range(1, src_records))
+    rows = disp.read_curve_table(out.read_bytes())
+
+    for row, const in [(rows[0], layout.origin_c_x)] + [
+        (r, layout.origin_c_y) for r in rows[1:]
+    ]:
+        assert row["origin"] == pytest.approx(
+            -(row["hi"] * row["scale"]) - const, rel=1e-9
+        )
+    # 负下限的曲线不能沿用「上限在满幅」的原型值
+    negative = [r for r in rows[1:] if r["lo"] < 0]
+    assert negative, "样例里应当有负下限通道"
+    for row in negative:
+        assert row["origin"] != pytest.approx(
+            -row["plot_k"] - layout.origin_c_y, rel=1e-9
+        )
+
+
 def test_cleanroom_gives_every_channel_its_own_colour(tmp_path):
     """回归：所有曲线都从同一原型复制，不单独配色就会全是红色。"""
     n = 300

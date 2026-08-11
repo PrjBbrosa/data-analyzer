@@ -136,15 +136,20 @@ def test_convert_labels_written_curves_and_hides_the_rest(template, tmp_path):
     assert others and all(r["visible"] == 0 for r in others)
 
 
-def test_convert_keeps_plot_scale_constant(template, tmp_path):
-    """轴范围改了，绘图比例必须同步，否则 WinWert 首帧把数据挤成一条细带。"""
+def test_convert_keeps_layout_constants(template, tmp_path):
+    """轴范围改了，绘图比例与轴原点都必须同步。
+
+    比例漏改 → WinWert 首帧把数据挤成左边一条细带；原点漏改 → 下限为负的
+    曲线首帧只画出正半边（两者都实测过）。
+    """
     from mf4_analyzer.io.wwt_inplace import _iter_records
 
     tpl = _TEMPLATE.read_bytes()
     tpl_trailer = disp.find_trailer(tpl)
     count = disp.declared_record_count(tpl, tpl_trailer)
-    k_x, k_y = disp.plot_scale_constants(tpl, tpl_trailer, range(1, count))
-    assert k_x and k_y
+    layout = disp.layout_constants(tpl, tpl_trailer, range(1, count))
+    assert layout.plot_k_x and layout.plot_k_y
+    assert layout.origin_c_x is not None and layout.origin_c_y is not None
 
     n = 400
     t = np.arange(n, dtype=np.float64) * 0.01
@@ -155,10 +160,15 @@ def test_convert_keeps_plot_scale_constant(template, tmp_path):
     )
     data = out.read_bytes()
     rows = {r["curve"]: r for r in disp.read_curve_table(data)}
-    assert rows[0]["plot_k"] == pytest.approx(k_x, rel=1e-9)
     rec = next(r for r in _iter_records(data, include_unknown=True)
                if r.name == "Rack Force")
-    assert rows[rec.index]["plot_k"] == pytest.approx(k_y, rel=1e-9)
+
+    assert rows[0]["plot_k"] == pytest.approx(layout.plot_k_x, rel=1e-9)
+    assert rows[rec.index]["plot_k"] == pytest.approx(layout.plot_k_y, rel=1e-9)
+    for curve, const in ((0, layout.origin_c_x), (rec.index, layout.origin_c_y)):
+        row = rows[curve]
+        expected = -(row["hi"] * row["scale"]) - const
+        assert row["origin"] == pytest.approx(expected, rel=1e-9)
 
 
 def test_convert_rescales_quantized_slots(template, tmp_path):

@@ -13,6 +13,7 @@ WWT 的正文（记录）只管数据，**「打开后长什么样」全部由�
 | --- | --- | --- |
 | +0 / +8 | double | 轴下限 / 上限 |
 | +18 | u16 | **X 轴引用曲线号；0 = 记录 0（Zeit）= 按时间显示** |
+| +44 | double | **轴原点 = −(上限 × 绘图比例) − C**（C 是版式常量，见下） |
 | +20 / +22 | u16 | Selector 勾选 / 是否绘制 |
 | +26 / +34 | double | 主刻度间隔 / 网格间隔 —— **写 0 = 交给 WinWert 自动**（厂商自己就写 0） |
 | +52 | double | 绘图比例 = K / 轴跨度（见下） |
@@ -22,9 +23,13 @@ WWT 的正文（记录）只管数据，**「打开后长什么样」全部由�
 
 尾块头另有 `+27` u32 记录数、`+69` u16 全局 X 曲线号（逐曲线 +18 可覆盖它）。
 
-**刻度必须写 0**：给了非零 tick 间隔时，WinWert **首帧**按「跨度 ÷ 间隔」布轴，
-数据量程除不尽就会让各 Y 轴长短不一、总范围显示不全，手动刷新后才归位
-（2026-08-11 实测）。WinWert 自己的导出全部写 0，照抄即可。
+**轴原点 +44 必须跟着量程改**：`+44 = −(hi × 比例) − C`，C 在文件内是常量
+（8 个样本、几十条曲线逐条验证；实测 C 因版式而异：100 / 50 / 250，X 轴行
+另有一套）。原型曲线的下限恰好是 0 时 `hi × 比例` 正好等于 K，照抄原型的
++44 就等于宣称「上限在满幅处」——下限为负的曲线于是被顶上去半格，**首帧
+只画出正半边**，刷新后才归位（2026-08-11 实测）。
+
+**刻度写 0**：WinWert 自己的导出（含 X 轴行）全部写 0（= 自动），照抄即可。
 
 **颜色**：WinWert 自己的导出按**曲线序号循环取色**（curve1..6 = 序号 1..6）。
 不给每条曲线单独配色的话，从同一个原型记录复制出来的曲线会全是一个颜色。
@@ -47,6 +52,7 @@ Y 侧 2400（U-Can 版式 X 侧 2000），正是对话框 `Window size (mm) 210 
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 import numpy as np
@@ -64,6 +70,7 @@ CURVE_STRIDE = 283
 CURVE_FROM = 0
 CURVE_TO = 8
 CURVE_X = 18
+CURVE_ORIGIN = 44
 CURVE_SELECTOR = 20
 CURVE_VISIBLE = 22
 CURVE_TICKS = 26
@@ -147,6 +154,7 @@ def read_curve(data: bytes, trailer: int, curve: int) -> dict | None:
         "grid": grid,
         "scale": scale,
         "plot_k": (hi - lo) * scale if hi > lo else 0.0,
+        "origin": struct.unpack_from("<d", data, off + CURVE_ORIGIN)[0],
         "color_index": struct.unpack_from("<I", data, off + CURVE_COLOR_INDEX)[0],
         "color_rgb": bytes(data[off + CURVE_COLOR_RGB:off + CURVE_COLOR_RGB + 3]),
     }
@@ -176,6 +184,7 @@ def write_curve(
     x_curve: int | None = None,
     visible: bool | None = None,
     plot_k: float | None = None,
+    origin_c: float | None = None,
     color: tuple[int, bytes] | None = None,
 ) -> None:
     """改写一条曲线（``curve`` = 记录序号）的显示配置。
@@ -210,33 +219,57 @@ def write_curve(
         struct.pack_into("<dd", data, off + CURVE_TICKS, 0.0, 0.0)
         # 绘图比例：WinWert 首帧按它作图，漏改会把数据挤成左边一条细带。
         if plot_k is not None and plot_k > 0.0:
-            struct.pack_into("<d", data, off + CURVE_SCALE, plot_k / (hi - lo))
+            scale = plot_k / (hi - lo)
+            struct.pack_into("<d", data, off + CURVE_SCALE, scale)
+            # 轴原点：漏改会让下限为负的曲线首帧只画出正半边。
+            if origin_c is not None and np.isfinite(origin_c):
+                struct.pack_into(
+                    "<d", data, off + CURVE_ORIGIN, -(hi * scale) - origin_c
+                )
 
 
-def plot_scale_constants(
-    data: bytes, trailer: int, curves: Iterable[int]
-) -> tuple[float | None, float | None]:
-    """模板的绘图比例常数 ``(K_x, K_y)`` —— 轴跨度 × ``+52``。
+@dataclass(frozen=True)
+class LayoutConstants:
+    """版式常量：改轴范围时必须跟着重算的两个字段的锚点。
 
-    改轴范围必须同步 ``+52``，而 K 是版式属性（绘图区尺寸），跨曲线恒定。
-    这里从**原始字节**取，Y 侧取中位数抗个别脏值。
+    ``plot_k`` —— 轴跨度 × ``+52``（绘图区尺寸 mm × 20）。
+    ``origin_c`` —— ``−(hi × 比例) − +44``。
+    两者都在文件内恒定，X 轴行与 Y 曲线各一套。
     """
-    def k_of(curve: int) -> float | None:
+
+    plot_k_x: float | None = None
+    plot_k_y: float | None = None
+    origin_c_x: float | None = None
+    origin_c_y: float | None = None
+
+
+def layout_constants(
+    data: bytes, trailer: int, curves: Iterable[int]
+) -> LayoutConstants:
+    """从模板原始字节推出版式常量；Y 侧取中位数抗个别脏值。"""
+    def of(curve: int) -> tuple[float, float] | None:
         row = read_curve(data, trailer, curve)
         if row is None or row["hi"] <= row["lo"] or row["scale"] <= 0.0:
             return None
-        if not np.isfinite(row["plot_k"]) or row["plot_k"] <= 0.0:
+        k = float(row["plot_k"])
+        origin = row["origin"]
+        if not np.isfinite(k) or k <= 0.0 or not np.isfinite(origin):
             return None
-        return float(row["plot_k"])
+        return k, -(row["hi"] * row["scale"]) - origin
 
-    k_x = k_of(0)
-    ys = [k for k in (k_of(c) for c in curves) if k is not None]
-    return k_x, (float(np.median(ys)) if ys else None)
+    axis = of(0)
+    ys = [v for v in (of(c) for c in curves) if v is not None]
+    return LayoutConstants(
+        plot_k_x=axis[0] if axis else None,
+        origin_c_x=axis[1] if axis else None,
+        plot_k_y=float(np.median([v[0] for v in ys])) if ys else None,
+        origin_c_y=float(np.median([v[1] for v in ys])) if ys else None,
+    )
 
 
 def force_time_axis(
     data: bytearray, trailer: int, curves: Sequence[int],
-    t0: float, t1: float, plot_k_x: float | None = None,
+    t0: float, t1: float, layout: LayoutConstants | None = None,
 ) -> None:
     """把显示改成时域：每条曲线的 X 引用清 0（0 = 记录 0 = Zeit）。
 
@@ -248,12 +281,12 @@ def force_time_axis(
     struct.pack_into("<H", data, trailer + GLOBAL_X_OFF, 0)
     if not np.isfinite(t0) or not np.isfinite(t1) or t1 <= t0:
         t0, t1 = 0.0, 1.0
-    if plot_k_x is None:
-        plot_k_x, _ = plot_scale_constants(bytes(data), trailer, curves)
+    if layout is None:
+        layout = layout_constants(bytes(data), trailer, curves)
     write_curve(
         data, trailer, 0,
-        label=TIME_AXIS_LABEL, lo=t0, hi=t1, x_curve=0, plot_k=plot_k_x,
-        color=AXIS_COLOR,
+        label=TIME_AXIS_LABEL, lo=t0, hi=t1, x_curve=0,
+        plot_k=layout.plot_k_x, origin_c=layout.origin_c_x, color=AXIS_COLOR,
     )
     for curve in curves:
         if curve != 0:
@@ -288,22 +321,23 @@ def rebuild_display_trailer(
         off = CURVE_BASE + i * CURVE_STRIDE
         return bytearray(template_trailer[off:off + CURVE_STRIDE])
 
-    k_x, k_y = plot_scale_constants(
-        template_trailer, 0, range(1, src_records)
-    )
+    layout = layout_constants(template_trailer, 0, range(1, src_records))
 
     def fill(buf: bytearray, label: str, lo: float, hi: float,
-             k: float | None, color: tuple[int, bytes]) -> bytearray:
+             k: float | None, c: float | None,
+             color: tuple[int, bytes]) -> bytearray:
         holder = bytearray(CURVE_BASE) + buf
-        write_curve(holder, 0, 0, label=label, lo=lo, hi=hi,
-                    x_curve=0, visible=True, plot_k=k, color=color)
+        write_curve(holder, 0, 0, label=label, lo=lo, hi=hi, x_curve=0,
+                    visible=True, plot_k=k, origin_c=c, color=color)
         return holder[CURVE_BASE:]
 
     table = bytearray()
-    table += fill(proto(0), TIME_AXIS_LABEL, t0, t1, k_x, AXIS_COLOR)
+    table += fill(proto(0), TIME_AXIS_LABEL, t0, t1,
+                  layout.plot_k_x, layout.origin_c_x, AXIS_COLOR)
     for i, (label, lo, hi) in enumerate(channels, start=1):
         # 每条曲线单独配色：所有曲线都从同一个原型记录复制，不改就全是一个颜色。
-        table += fill(proto(1), label, lo, hi, k_y, palette_color(i))
+        table += fill(proto(1), label, lo, hi,
+                      layout.plot_k_y, layout.origin_c_y, palette_color(i))
 
     out = bytearray(template_trailer[:CURVE_BASE])
     out += table
