@@ -431,6 +431,14 @@ class FrfContextual(QWidget):
         self.lbl_facts_placeholder = QLabel(_FACTS_PLACEHOLDER, facts_card)
         self.lbl_facts_placeholder.setObjectName("frfFactsPlaceholder")
         self.lbl_facts_placeholder.setWordWrap(True)
+        # 272px 宽的 Inspector 下这段占位文案必换行到两行，但换行高度只走
+        # height-for-width，而 QStackedLayout 不传递 hfw——页面的 plain
+        # sizeHint 会少算第二行,首开时整页预算差 ~17px,全被压进
+        # QFormLayout 的行距里。把两行高度提进 minimumHeight,让 plain
+        # hint 从源头算够。按 fontMetrics 取值,不硬编码像素。
+        self.lbl_facts_placeholder.setMinimumHeight(
+            2 * self.lbl_facts_placeholder.fontMetrics().lineSpacing()
+        )
         facts_layout.addWidget(self.lbl_facts_placeholder)
         self.lbl_effective_facts = QLabel("", facts_card)
         self.lbl_effective_facts.setObjectName("frfEffectiveFacts")
