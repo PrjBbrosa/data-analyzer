@@ -3661,7 +3661,7 @@ class MainWindow(
         # user actually had selected, so we no longer assume self._active.
         drawer = ChannelEditorDrawer(self, self.files, self._active)
         drawer.applied.connect(self._apply_channel_edits)
-        drawer.export_requested.connect(self._do_export_excel)
+        drawer.export_requested.connect(self._do_export_channels)
         drawer.exec_()
 
 
@@ -3734,6 +3734,16 @@ class MainWindow(
         )
         self._plot_time_preserving_xlim()
 
+    def _do_export_channels(self, fid, channels, include_time, use_range,
+                            fmt="excel"):
+        """Channel-editor export entry: ``fmt`` is ``excel`` or ``wwt``."""
+        if str(fmt or "excel").lower() == "wwt":
+            self._do_export_wwt(fid, channels, use_range=use_range)
+        else:
+            self._do_export_excel(
+                fid, channels, include_time=include_time, use_range=use_range
+            )
+
     def _do_export_excel(self, fid, channels, include_time, use_range):
         """Write the given channels of file ``fid`` to an Excel file. Invoked
         by the channel-editor's 导出 section (export_requested). Time column and
@@ -3771,6 +3781,90 @@ class MainWindow(
                 f"已导出 {Path(fp).name} · {len(df)} 行 × {len(df.columns)} 列",
                 "success",
             )
+        except Exception as e:
+            QMessageBox.critical(self, "错误", str(e))
+
+    def _do_export_wwt(self, fid, channels, *, use_range):
+        """Convert selected channels to a WinWert-openable ``.wwt``.
+
+        走 ``io.wwt_export`` 的 clean-room 路径：正文自写（``Zeit`` + N×``Real``
+        float64，点数原生保留、通道数不限、无量化），显示尾块由捆绑的真实
+        WinWert 骨架重建并强制时域横坐标。
+        """
+        from pathlib import Path
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        import numpy as np
+        from ...io.wwt_export import WwtExportError, export_wwt
+
+        fd = self.files.get(fid)
+        requested_channels = channels or []
+        valid_channels = [
+            ch for ch in requested_channels
+            if fd is not None and ch in fd.data.columns
+        ]
+        if fd is None or not valid_channels:
+            self.toast("没有可导出的数据或未勾选通道", "warning")
+            return
+        if fd.time_array is None or len(fd.time_array) < 2:
+            self.toast("当前文件没有可用时间轴，无法导出 WWT", "warning")
+            return
+
+        t = np.asarray(fd.time_array, dtype=np.float64)
+        series = {
+            ch: np.asarray(fd.data[ch].values, dtype=np.float64)
+            for ch in valid_channels
+        }
+        if use_range:
+            lo, hi = self.inspector.top.range_values()
+            mask = (t >= lo) & (t <= hi)
+            t = t[mask]
+            series = {ch: arr[mask] for ch, arr in series.items()}
+        if len(t) < 2:
+            QMessageBox.warning(
+                self,
+                "无法导出 WWT",
+                "选定时间范围内采样点不足，请扩大范围或取消范围限制。",
+            )
+            return
+
+        fp, _ = QFileDialog.getSaveFileName(
+            self, "导出 WinWert WWT", "", "WinWert (*.wwt)"
+        )
+        if not fp:
+            return
+        if not str(fp).lower().endswith(".wwt"):
+            fp = str(fp) + ".wwt"
+
+        try:
+            units = {
+                ch: (fd.channel_units.get(ch, "") or "")
+                for ch in valid_channels
+            }
+            title = ""
+            comment = "Converted by TraceLab"
+            smeta = getattr(fd, "source_metadata", None) or {}
+            if isinstance(smeta, dict):
+                title = str(smeta.get("title") or "")[:256]
+                if smeta.get("comment"):
+                    comment = str(smeta.get("comment"))[:256]
+            result = export_wwt(
+                fp,
+                t,
+                series,
+                units=units,
+                title=title,
+                comment=comment,
+            )
+            self.statusBar.showMessage(
+                f"导出完成: {Path(fp).name} ({result.summary})"
+            )
+            self.toast(
+                f"已导出 {Path(fp).name} · WinWert/TraceLab 可打开 · "
+                f"{result.summary}",
+                "success",
+            )
+        except WwtExportError as e:
+            QMessageBox.warning(self, "无法导出 WWT", str(e))
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
 

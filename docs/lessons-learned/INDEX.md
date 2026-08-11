@@ -155,6 +155,7 @@ lesson by default.
 | [Guard programmatic analysis-View restore at both signal and projection boundaries](codex-analysis-view-restore-projection-guards.md) | Changing analysis View application, project restore, shared Inspector | See lesson |
 | [Channel Tree Uses visualRect And Fixed Pts Width](codex-channel-tree-stable-visualrect-pts-fixed.md) | Changing channel-tree selection chrome, checkbox painting, Pts column | See lesson |
 | [Stateful Icon Buttons Need active QSS And String Attrs](codex-stateful-icon-button-active-qss.md) | Adding or changing a non-checkable icon `QToolButton` whose on/off | See lesson |
+| [Fixed-size bytearray headers must use equal-length slice assigns](codex-bytearray-slice-assign-fixed-size.md) | Packing fixed binary headers with `bytearray(N)` and slice assignment. | See lesson |
 
 ## Selection Rules
 

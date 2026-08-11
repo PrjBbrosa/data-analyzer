@@ -165,6 +165,8 @@ $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
 $AddDataIcons = "$IconsDir;assets\icons"
 $BrandingDir = Join-Path $RepoRoot "assets\branding"
 $AddDataBranding = "$BrandingDir;assets\branding"
+$WwtTemplateDir = Join-Path $RepoRoot "assets\wwt"
+$AddDataWwt = "$WwtTemplateDir;assets\wwt"
 $AddDataVendorPyxcp = "$VendorPyxcpDir;_vendor_pyxcp"
 $AddDataVendorPya2l = "$VendorPya2lDir;_vendor_pya2l"
 # Help docs (panel guides + software manual) are integrated into the app and
@@ -196,6 +198,12 @@ $HiddenImports = @(
     "mf4_analyzer.signal.frf",
     "mf4_analyzer.batch_frf",
     "mf4_analyzer.io.importer_runtime_smoke",
+    # WWT export is imported lazily inside the channel-editor handler; name the
+    # modules so the frozen build cannot lose the export path.
+    "mf4_analyzer.io.wwt_export",
+    "mf4_analyzer.io.wwt_display",
+    "mf4_analyzer.io.wwt_writer",
+    "mf4_analyzer.io.wwt_inplace",
     "mf4_analyzer.acquisition_capture",
     "mf4_analyzer.acquisition_capture.thresholds",
     "mf4_analyzer.acquisition_capture.health",
@@ -284,6 +292,7 @@ $PyInstallerArgs += @(
     "--add-data", $AddDataStyle,
     "--add-data", $AddDataIcons,
     "--add-data", $AddDataBranding,
+    "--add-data", $AddDataWwt,
     "--add-data", $AddDataVendorPyxcp,
     "--add-data", $AddDataVendorPya2l,
     "--add-data", $AddDataHelp,
