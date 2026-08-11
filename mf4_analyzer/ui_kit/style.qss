@@ -3042,7 +3042,11 @@ QStatusBar#surfaceStatusBar QLabel#computeProgressLabel {
     color: #4b5f78;
     font-size: 12px;
     font-weight: 600;
-    qproperty-alignment: AlignVCenter | AlignLeft;
+    /* Qt QSS: combined flag values in qproperty-* MUST be quoted. Unquoted
+     * `A | B` fails the WHOLE application stylesheet parse (every widget
+     * falls back to platform defaults) — guarded by
+     * tests/ui_kit/test_stylesheet_parses.py. */
+    qproperty-alignment: 'AlignVCenter | AlignLeft';
     padding-right: 2px;
 }
 
