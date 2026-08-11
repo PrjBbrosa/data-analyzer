@@ -2479,6 +2479,14 @@ QWidget#timeDomainPage {
 QWidget#timeViewBottomDock {
     background-color: #fbfcff;
     border-top: 1px solid #dbe3ee;
+    /* The dock is the LAST child of the ChartStack card and spans its full
+     * width, so its opaque fill lands on the card's rounded bottom corners.
+     * Without matching radii it squares them off (and the shell background
+     * stops showing through) — see tests/ui/test_surface_layering.py
+     * ::test_surface_top_bottom_and_panels_render_rounded_corners. Keep in
+     * sync with ChartStack's border-radius above. */
+    border-bottom-left-radius: 7px;
+    border-bottom-right-radius: 7px;
 }
 
 QWidget#chartCard {

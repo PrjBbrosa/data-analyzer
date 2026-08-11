@@ -37,6 +37,12 @@ _COMPARE_ROW_QSS = """
 QWidget#analysisCompareRow {
     background-color: #fbfcff;
     border-top: 1px solid #dbe3ee;
+    /* Same reason as #timeViewBottomDock in style.qss: this row is the last
+     * child of the ChartStack card and spans its full width, so an opaque
+     * fill with square corners would overpaint the card's rounded bottom
+     * corners. Radii track ChartStack's border-radius (7px). */
+    border-bottom-left-radius: 7px;
+    border-bottom-right-radius: 7px;
 }
 QToolButton#analysisCompareToggle {
     min-height: 22px;
