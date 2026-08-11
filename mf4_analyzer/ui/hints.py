@@ -423,6 +423,22 @@ _HINTS = (
         priority=55,
     ),
     Hint(
+        id="fft.time_range_manual",
+        text="时间范围：预览缩放只改起止；勾选后才用于计算",
+        surface="context",
+        tier="A",
+        modes=frozenset({"fft"}),
+        priority=70,
+    ),
+    Hint(
+        id="analysis.time_range_confirm",
+        text="计算时若起止已局部但未勾选，会询问是否用局部范围",
+        surface="context",
+        tier="A",
+        modes=frozenset({"fft", "fft_time", "order", "frf"}),
+        priority=68,
+    ),
+    Hint(
         id="fft.preview_axis_gutter",
         text="滚轮停在预览左/右 Y 轴上 → 只调该通道",
         surface="context",

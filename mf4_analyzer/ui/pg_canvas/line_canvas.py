@@ -368,10 +368,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             lambda: self._set_bottom_collapsed(False))
         self._plot_amp.vb.sigResized.connect(self._position_collapse_ctrl)
 
-        # The FFT time window is taken from the preview's VISIBLE x-range:
-        # pan/zoom the preview and `_emit_time_preview_range` (driven by
-        # sigRangeChangedManually) pushes it to the inspector. There is no
-        # separate left-drag region selector anymore — it collided with pan.
+        # Preview pan/zoom emits `_emit_time_preview_range` (via
+        # sigRangeChangedManually) so the inspector start/end spinboxes track
+        # the visible X as a draft. The analysis window is gated by the
+        # shared「使用选定时间范围」checkbox (manual, same as Time-Domain) —
+        # zoom alone does not arm it. There is no separate left-drag region
+        # selector anymore — it collided with pan.
 
         # View-history contract for PgNavigationToolbar (Task C). The toolbar's
         # _snapshot_view/_restore_view walk this map and call pair[0]'s
@@ -561,15 +563,23 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         elif plot is self._plot_amp:
             self.manual_zoom_changed.emit(True)
 
-    def _emit_time_preview_range(self) -> bool:
+    def get_time_preview_xlim(self):
+        """Return the time-preview ViewBox visible X as ``(lo, hi)`` or None."""
         try:
             (lo, hi), _yr = self._plot_time.vb.viewRange()
             lo = float(lo)
             hi = float(hi)
         except Exception:
-            return False
+            return None
         if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return None
+        return (lo, hi)
+
+    def _emit_time_preview_range(self) -> bool:
+        xlim = self.get_time_preview_xlim()
+        if xlim is None:
             return False
+        lo, hi = xlim
         self.time_preview_range_changed.emit(lo, hi)
         return True
 

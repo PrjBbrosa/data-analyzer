@@ -335,6 +335,8 @@ def test_fft_mode_channel_selection_previews_time_before_compute(two_file_win, q
 
 
 def test_fft_time_preview_drag_updates_analysis_time_range(two_file_win, qapp):
+    """Preview pan/zoom drafts start/end; analysis window arms only when
+    「使用选定时间范围」is checked (manual, same as Time-Domain)."""
     win = two_file_win
     win.toolbar._set_mode("fft")
     _check_speed_in_both(win)
@@ -342,15 +344,34 @@ def test_fft_time_preview_drag_updates_analysis_time_range(two_file_win, qapp):
 
     canvas = win.chart_stack.page_fft.pane_canvas(0)
     assert len(canvas._time_curves) == 2
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    pane_idx = 0
     win.inspector.top.chk_range.setChecked(False)
+    qapp.processEvents()
+    assert state.panes[pane_idx].time_range is None
 
     canvas._plot_time.setXRange(0.2, 0.6, padding=0)
     canvas._plot_time.vb.sigRangeChangedManually.emit(
         canvas._plot_time.vb.state['mouseEnabled'])
     qapp.processEvents()
 
-    assert win.inspector.top.range_enabled() is True
+    assert win.inspector.top.range_enabled() is False
     assert win.inspector.top.range_values() == pytest.approx((0.2, 0.6), abs=1e-6)
+    assert state.panes[pane_idx].time_range is None
+
+    win.inspector.top.chk_range.setChecked(True)
+    qapp.processEvents()
+    assert state.panes[pane_idx].time_range == pytest.approx((0.2, 0.6), abs=1e-6)
+
+    canvas._plot_time.setXRange(0.3, 0.7, padding=0)
+    canvas._plot_time.vb.sigRangeChangedManually.emit(
+        canvas._plot_time.vb.state['mouseEnabled'])
+    qapp.processEvents()
+
+    assert win.inspector.top.range_enabled() is True
+    assert win.inspector.top.range_values() == pytest.approx((0.3, 0.7), abs=1e-6)
+    assert state.panes[pane_idx].time_range == pytest.approx((0.3, 0.7), abs=1e-6)
 
 
 def test_fft_split_same_source_different_time_ranges_have_distinct_cache_keys(
@@ -730,6 +751,7 @@ def test_fft_signal_combo_previews_time_before_compute(two_file_win, qapp):
     qapp.processEvents()
     assert len(canvas._amp_curves) == 0
     assert len(canvas._time_curves) == 1
+    assert submitted == []
 
 
 def test_new_view_is_empty_then_switch_back_hits_cache(two_file_win):
@@ -774,6 +796,43 @@ def test_new_view_is_empty_then_switch_back_hits_cache(two_file_win):
     assert len(canvas._time_curves) == 2
     assert get_calls["n"] >= 2, "both sources looked up in the cache on switch"
     assert compute_calls["n"] == 0, "switch-back must NOT recompute (cache hit)"
+
+
+def test_fft_uncalculated_view_switch_restores_time_preview(
+    two_file_win, qapp, monkeypatch,
+):
+    """A checked but uncomputed FFT source still owns the lower preview.
+
+    Creating a sibling View clears the new View by design.  Switching back
+    must restore the old View's source preview without submitting FFT work.
+    """
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _seed_active_analysis_attachments(win)
+    fid = next(iter(win.files))
+    submitted = []
+    monkeypatch.setattr(
+        win._analysis_jobs,
+        "submit_batch",
+        lambda *args, **kwargs: submitted.append((args, kwargs)),
+    )
+    win.navigator.set_checked_channels([(fid, "speed")])
+    qapp.processEvents()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._amp_curves) == 0
+    assert len(canvas._time_curves) == 1
+    assert submitted == []
+
+    win._on_analysis_new("fft")
+    assert len(canvas._time_curves) == 0
+
+    win._on_analysis_switch("fft", 0)
+    qapp.processEvents()
+
+    assert len(canvas._amp_curves) == 0
+    assert len(canvas._time_curves) == 1
+    assert submitted == []
 
 
 def test_fft_view_switch_restores_complete_params_before_cache_lookup(

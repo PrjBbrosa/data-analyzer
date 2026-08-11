@@ -164,7 +164,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow(
                 "FFT 时域预览",
                 gesture="平滚轮 / Y 轴槽 / 右键 / 双击",
-                sub="平移·Shift缩Y·Ctrl缩X；轴槽单通道；设左轴；编辑颜色",
+                sub="平移·Shift缩Y·Ctrl缩X；缩放只改起止，勾选才用于计算；轴槽单通道；设左轴",
             ),
             QuickRow(
                 "编辑某曲线颜色/坐标（叠加）",

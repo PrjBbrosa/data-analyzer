@@ -1884,6 +1884,12 @@ class MainWindow(
         return True
 
     def _on_fft_preview_range_changed(self, pane_idx, lo, hi):
+        """Sync inspector start/end from the FFT time-preview viewport.
+
+        Aligns with Time-Domain: pan/zoom only drafts the spinboxes. The
+        analysis window is armed only while「使用选定时间范围」is checked
+        (or via explicit actions like「最大」that call set_range_from_span).
+        """
         if self.chart_stack.current_mode() != 'fft':
             return False
         page = self.chart_stack.page_fft
@@ -1891,7 +1897,11 @@ class MainWindow(
             return False
         if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
             return False
-        self.inspector.top.set_range_from_span(lo, hi)
+        top = self.inspector.top
+        top.set_range_values(lo, hi)
+        # Unchecked: leave pane.time_range alone (None = full span on compute).
+        if not top.range_enabled():
+            return True
         mgr = self.analysis_managers['fft']
         state = mgr.get(mgr.active)
         state.panes[pane_idx].time_range = (float(lo), float(hi))
@@ -1942,6 +1952,11 @@ class MainWindow(
             self._capture_analysis_time_range(mode, state, pane_idx=pane_idx)
             if mode == 'frf' and state.panes[pane_idx].time_range != before:
                 self._dirty_frf_pane(state, pane_idx, clear_effective=True)
+            if mode == 'fft':
+                # analysis_managers early-return used to skip the dead
+                # ``elif mode == 'fft'`` refresh below; keep preview in sync
+                # with the armed full-extent window.
+                self._refresh_fft_time_preview(clear_spectrum=False)
             return
         # 按当前 Time 模式应用（与现有处理器的尾部保持一致）。
         canvas = self.chart_stack.focused_canvas()
@@ -1953,8 +1968,6 @@ class MainWindow(
         if mode == 'time':
             if self.files and self.navigator.get_checked_channels():
                 self._replot_canvas_for_view(idx, canvas)
-        elif mode == 'fft':
-            self._refresh_fft_time_preview(clear_spectrum=False)
         # fft_time / order: 仅做暂存即可，其计算是手动触发的
         # （与拖拽预览路径一致）。
 
@@ -1968,9 +1981,30 @@ class MainWindow(
             before = self._normalize_analysis_time_range(
                 state.panes[pane_idx].time_range
             )
+            if mode == 'fft' and enabled:
+                # Match Time-Domain: arming the checkbox pulls the current
+                # preview viewport into start/end before capture.
+                canvas = page.pane_canvas(pane_idx)
+                get_xlim = getattr(canvas, 'get_time_preview_xlim', None)
+                if callable(get_xlim):
+                    xlim = get_xlim()
+                    if xlim is not None:
+                        lo, hi = xlim
+                        if (
+                            np.isfinite(lo) and np.isfinite(hi) and hi > lo
+                        ):
+                            self.inspector.top.set_range_values(lo, hi)
             self._capture_analysis_time_range(mode, state, pane_idx=pane_idx)
             if mode == 'frf' and state.panes[pane_idx].time_range != before:
                 self._dirty_frf_pane(state, pane_idx, clear_effective=True)
+            if mode == 'fft':
+                self._refresh_fft_time_preview(clear_spectrum=False)
+                if not enabled:
+                    canvas = page.pane_canvas(pane_idx)
+                    reset = getattr(
+                        canvas, '_reset_time_preview_to_extents', None)
+                    if callable(reset):
+                        reset()
             return
         canvas = self.chart_stack.focused_canvas()
         xaxis_draft = self._snapshot_xaxis_controls()

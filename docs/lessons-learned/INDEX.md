@@ -156,6 +156,9 @@ lesson by default.
 | [Channel Tree Uses visualRect And Fixed Pts Width](codex-channel-tree-stable-visualrect-pts-fixed.md) | Changing channel-tree selection chrome, checkbox painting, Pts column | See lesson |
 | [Stateful Icon Buttons Need active QSS And String Attrs](codex-stateful-icon-button-active-qss.md) | Adding or changing a non-checkable icon `QToolButton` whose on/off | See lesson |
 | [Fixed-size bytearray headers must use equal-length slice assigns](codex-bytearray-slice-assign-fixed-size.md) | Packing fixed binary headers with `bytearray(N)` and slice assignment. | See lesson |
+| [QSS Combined qproperty Flags Need Quotes](qss-qproperty-combined-flags-need-quotes.md) | Editing `mf4_analyzer/ui_kit/style.qss` (or any app-wide QSS template), | See lesson |
+| [FFT Preview Zoom Does Not Auto-Arm Time Range](fft-preview-zoom-no-auto-arm-time-range.md) | Changing FFT time-preview pan/zoom wiring, shared `chk_range` | See lesson |
+| [Confirm Unchecked Local Time Range Before Compute](analysis-compute-confirm-unchecked-local-range.md) | Wiring analysis compute entry points (`do_fft` / `do_fft_time` / | See lesson |
 
 ## Selection Rules
 

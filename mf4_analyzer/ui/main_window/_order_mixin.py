@@ -310,6 +310,8 @@ class OrderMixin:
         """
         # V7 Step 5: capture the active Order view (params + per-pane sources +
         # rpm_source) so a later view switch renders from analysis_caches.
+        if not self._offer_analysis_time_range_before_compute('order'):
+            return
         self._capture_active_analysis_view('order')
         # Preserve the established UI policy: a second click reports busy and
         # drops rather than implicitly replacing the active batch.

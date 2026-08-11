@@ -179,6 +179,7 @@ def test_quickref_fft_preview_row_matches_overlay_contract():
     assert "平移" in (row.sub or "")
     assert "设左轴" in (row.sub or "")
     assert "单通道" in (row.sub or "")
+    assert "勾选" in (row.sub or "")
 
 
 def test_quickref_covers_batch_drawer():

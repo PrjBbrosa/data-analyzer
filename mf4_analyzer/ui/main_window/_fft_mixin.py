@@ -221,6 +221,8 @@ class FFTMixin:
         single-signal UX + tests are unchanged. Captured-but-unfetchable
         sources are summarized as skipped instead.
         """
+        if not self._offer_analysis_time_range_before_compute('fft'):
+            return
         self._capture_active_analysis_view('fft')
         mgr = self.analysis_managers['fft']
         state = mgr.get(mgr.active)

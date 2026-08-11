@@ -309,6 +309,7 @@ def test_fft_preview_hints_match_overlay_wheel_contract():
         "fft.preview_axis_gutter",
         "fft.preview_left_axis",
         "fft.preview_dblclick",
+        "fft.time_range_manual",
     ):
         assert hid in by_id, hid
         assert by_id[hid].modes == frozenset({"fft"})
@@ -316,6 +317,11 @@ def test_fft_preview_hints_match_overlay_wheel_contract():
     assert "平滚轮平移" in wheel
     assert "Shift" in wheel and "Ctrl" in wheel
     assert "平移 Y" in hints.flash_tip("fft.preview_source")
+    manual = by_id["fft.time_range_manual"].text
+    assert "勾选" in manual and "计算" in manual
+    confirm = by_id["analysis.time_range_confirm"]
+    assert confirm.modes == frozenset({"fft", "fft_time", "order", "frf"})
+    assert "局部" in confirm.text and "询问" in confirm.text
 
 
 def test_design_curated_ids_exist_in_registry():

@@ -452,6 +452,8 @@ class FrfMixin:
         }
 
     def do_frf(self, force=False):
+        if not self._offer_analysis_time_range_before_compute("frf"):
+            return False
         self._capture_active_analysis_view("frf")
         _manager, state, page, pane_idx, _pane = self._active_frf_state()
         try:

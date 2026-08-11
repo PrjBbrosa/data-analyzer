@@ -416,12 +416,12 @@ class PersistentTop(QWidget):
             self.spin_end.blockSignals(old_end)
 
     def set_range_from_span(self, xmin, xmax):
-        # Invoked by the FFT/order time-window region-drag preview path. It
-        # stages the start/end values AND enables the range filter so the
-        # next analysis compute (which reads range_enabled()) uses the dragged
-        # window. The checked flag is recorded against the CURRENT mode via
-        # checkout_range_for_mode, so it does not leak into Time-Domain when
-        # the user later switches modes.
+        # Explicit arming path (「最大」, FRF「取时域范围」, tests). Stages
+        # start/end AND enables the range filter so the next analysis compute
+        # (which reads range_enabled()) uses the window. Preview pan/zoom does
+        # NOT call this — it only drafts via set_range_values (manual check,
+        # same as Time-Domain). The checked flag is recorded against the
+        # CURRENT mode so it does not leak into Time-Domain on mode switch.
         self.set_range_values(xmin, xmax)
         old = self.chk_range.blockSignals(True)
         try:

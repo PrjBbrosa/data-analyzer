@@ -205,6 +205,8 @@ class FFTTimeMixin:
         result caching; ``job_factory`` defers non-uniform-axis preflight until
         a true cache miss so a cache hit has no compute-side effects.
         """
+        if not self._offer_analysis_time_range_before_compute('fft_time'):
+            return
         self._capture_active_analysis_view('fft_time')
         if self._analysis_jobs.is_running('fft_time'):
             self._emit_compute_feedback(

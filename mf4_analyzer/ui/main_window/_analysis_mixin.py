@@ -14,7 +14,7 @@ import math
 
 import numpy as np
 
-from PyQt5.QtWidgets import QColorDialog
+from PyQt5.QtWidgets import QColorDialog, QMessageBox
 from PyQt5.QtCore import QTimer
 
 from ... import db_reference
@@ -22,6 +22,10 @@ from ..compute_feedback import summarize_compute
 from .analysis_context import AnalysisContext
 
 logger = logging.getLogger(__name__)
+
+# Relative tolerance vs full data span when deciding whether unchecked
+# start/end spinboxes are a "local draft" worth confirming before compute.
+_TIME_RANGE_DRAFT_LOCAL_TOL = 0.01
 
 
 # dB-reference-defaults Task 5 (spec §8.2 source tokens). Presentation-only
@@ -439,6 +443,84 @@ class AnalysisMixin:
     def _analysis_section_uses_time_range(section):
         return AnalysisContext.section_uses_time_range(section)
 
+    def _analysis_time_range_draft_is_local(self):
+        """Return ``(lo, hi)`` when start/end is an unchecked local draft.
+
+        A draft is "local" when「使用选定时间范围」is off and the spinbox span
+        is a proper subset of the loaded data extent (beyond a 1% tolerance).
+        Returns ``None`` when already armed, invalid, or ≈ full extent — those
+        cases should not interrupt compute with a confirm dialog.
+        """
+        top = self.inspector.top
+        if top.range_enabled():
+            return None
+        try:
+            lo = float(top.spin_start.value())
+            hi = float(top.spin_end.value())
+        except (TypeError, ValueError):
+            return None
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return None
+        extent = getattr(self, '_time_data_extent', None)
+        if not callable(extent):
+            return None
+        full_lo, full_hi = extent()
+        full_span = float(full_hi) - float(full_lo)
+        if not (np.isfinite(full_span) and full_span > 0):
+            return None
+        tol = _TIME_RANGE_DRAFT_LOCAL_TOL * full_span
+        # ≈ full extent → no prompt (user did not draft a window).
+        if lo <= full_lo + tol and hi >= full_hi - tol:
+            return None
+        # Must overlap the data at all; pure out-of-range drafts skip the ask.
+        if hi <= full_lo + tol or lo >= full_hi - tol:
+            return None
+        return (lo, hi)
+
+    def _ask_use_local_time_range(self, lo, hi):
+        """Modal confirm for an unchecked local draft. Returns
+        ``'local'`` / ``'full'`` / ``'cancel'``. Tests monkeypatch this."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("未启用选定时间范围")
+        box.setText(
+            f"开始/结束为 {lo:g}–{hi:g} s，但未勾选「使用选定时间范围」。\n"
+            "是否按该局部范围计算？"
+        )
+        local_btn = box.addButton("用局部范围", QMessageBox.AcceptRole)
+        full_btn = box.addButton("用全时段", QMessageBox.DestructiveRole)
+        cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(local_btn)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is local_btn:
+            return 'local'
+        if clicked is full_btn:
+            return 'full'
+        return 'cancel'
+
+    def _offer_analysis_time_range_before_compute(self, section):
+        """Gate user-initiated analysis compute on an unchecked local draft.
+
+        Returns ``True`` to proceed, ``False`` to abort. Selecting「用局部范围」
+        arms the shared checkbox (via ``set_range_from_span``) so the following
+        ``_capture_active_analysis_view`` writes ``pane.time_range``. Call
+        **before** capture on ``do_fft`` / ``do_fft_time`` / ``do_order_time`` /
+        ``do_frf`` only — not on project-restore auto-recompute or Batch.
+        """
+        if not self._analysis_section_uses_time_range(section):
+            return True
+        draft = self._analysis_time_range_draft_is_local()
+        if draft is None:
+            return True
+        lo, hi = draft
+        choice = self._ask_use_local_time_range(lo, hi)
+        if choice == 'cancel':
+            return False
+        if choice == 'local':
+            self.inspector.top.set_range_from_span(lo, hi)
+        return True
+
     def _capture_analysis_time_range(self, section, state, pane_idx=None):
         if not self._analysis_section_uses_time_range(section):
             return
@@ -815,9 +897,15 @@ class AnalysisMixin:
                     self._plot_fft_entries(entries, canvas)
                 else:
                     # No cached curves (empty sources, or all sources missing
-                    # from the cache) -> empty canvas state.
+                    # from the cache) -> empty canvas state.  A source can be
+                    # intentionally selected before its first FFT compute;
+                    # returning to that View must still restore its lower
+                    # time-domain preview after the pane sources are applied.
                     self._clear_analysis_canvas(canvas)
                     if pane.sources:
+                        if pane_idx == page.focused_index():
+                            self._refresh_fft_time_preview(
+                                clear_spectrum=False)
                         self._show_analysis_empty_hint(canvas)
             else:
                 if not pane.sources:
