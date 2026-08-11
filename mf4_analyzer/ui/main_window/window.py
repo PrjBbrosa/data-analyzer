@@ -49,6 +49,7 @@ from ..time_xaxis import (
     spec_from_selection,
 )
 
+from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from ._state_holders import (
     CustomXAxisState,
@@ -2719,6 +2720,7 @@ class MainWindow(
             )
             cancel = box.addButton("取消", QMessageBox.RejectRole)
             box.setDefaultButton(cancel)
+            fit_message_box_buttons_to_text(box)
             box.exec_()
             return box.clickedButton() is close_btn
 
@@ -2768,6 +2770,7 @@ class MainWindow(
         )
         cancel = box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         return box.clickedButton() is close_btn
 
@@ -2789,6 +2792,7 @@ class MainWindow(
         )
         cancel = box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         return box.clickedButton() is remove
 

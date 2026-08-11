@@ -100,15 +100,15 @@ def test_toast_second_message_replaces_instead_of_stacking(qapp, qtbot, host):
 
 
 def test_toast_default_margin_clears_view_tab_strip(qapp, qtbot, host):
-    """Default toast sits above status + ViewTabBar (~28px), not on the tabs."""
-    assert Toast.DEFAULT_BOTTOM_MARGIN >= 72
+    """Default toast sits above status + ViewTabBar (+ hint), with breathing."""
+    assert Toast.DEFAULT_BOTTOM_MARGIN >= 100
     toast = Toast(host)
     toast.show_message("已保存工程")
     assert toast.isVisible()
     clearance = host.height() - (toast.y() + toast.height())
     assert clearance == Toast.DEFAULT_BOTTOM_MARGIN
-    # Status (~22) + ViewTabBar (~28) still fit under the toast.
-    assert clearance >= 22 + 28
+    # Status (40) + ViewTabBar (28) + hint (20) still fit under the toast.
+    assert clearance >= 40 + 28 + 20
 
 
 def test_toast_custom_bottom_margin_is_honored(qapp, qtbot, host):
