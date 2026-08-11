@@ -19,7 +19,7 @@ class ChannelEditorDrawer(QDialog):
     # necessarily the originally-active file, since the dialog lets the user
     # switch files before applying.
     applied = pyqtSignal(str, dict, set)
-    export_requested = pyqtSignal(str, list, bool, bool)
+    export_requested = pyqtSignal(str, list, bool, bool, str)
 
     # Width matches the narrow "方案 A" layout; the inner dialog scrolls when
     # content overflows, so a modest height is fine.

@@ -47,7 +47,8 @@ class ChannelEditorDialog(QDialog):
     # channel names stay visible and no blank gutter is left on the right (see
     # ``_narrow``). Tokens mirror style.qss (input radius 7 / button radius 8 /
     # primary #1769e0).
-    export_requested = pyqtSignal(str, list, bool, bool)
+    # fid, channels, include_time, use_range, format ("excel" | "wwt")
+    export_requested = pyqtSignal(str, list, bool, bool, str)
     INPUT_WIDTH = 178
     PANEL_WIDTH = 336
     # Last entry of the 双通道运算 op combo — free-form expression over A/B/t.
@@ -231,6 +232,23 @@ class ChannelEditorDialog(QDialog):
         self.list_export.setMinimumHeight(108)
         self.list_export.setMaximumHeight(120)
         gxl.addWidget(self.list_export)
+        fmt_row = QHBoxLayout()
+        fmt_row.setSpacing(8)
+        lbl_fmt = QLabel("格式")
+        lbl_fmt.setMinimumWidth(34)
+        fmt_row.addWidget(lbl_fmt)
+        self.combo_export_format = QComboBox()
+        self.combo_export_format.setObjectName("channelExportFormat")
+        self.combo_export_format.addItem("Excel (.xlsx)", "excel")
+        self.combo_export_format.addItem("WinWert (.wwt)", "wwt")
+        self.combo_export_format.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Fixed
+        )
+        self.combo_export_format.currentIndexChanged.connect(
+            self._sync_export_format_ui
+        )
+        fmt_row.addWidget(self.combo_export_format, 1)
+        gxl.addLayout(fmt_row)
         self.chk_export_time = QCheckBox("包含时间列")
         self.chk_export_time.setChecked(True)
         self.chk_export_range = QCheckBox("仅导出选定时间范围")
@@ -241,6 +259,7 @@ class ChannelEditorDialog(QDialog):
         self.btn_export.setProperty("role", "secondary")
         self.btn_export.clicked.connect(self._on_export_clicked)
         gxl.addWidget(self.btn_export, 0, Qt.AlignLeft)
+        self._sync_export_format_ui()
         bl.addWidget(gx)
 
         # 删除通道
@@ -372,6 +391,28 @@ class ChannelEditorDialog(QDialog):
             self.list_export.addItem(it)
         self.lbl.setText("新增: 0")
 
+    def _export_format(self) -> str:
+        data = self.combo_export_format.currentData()
+        return str(data or "excel")
+
+    def _sync_export_format_ui(self, *_args):
+        fmt = self._export_format()
+        if fmt == "wwt":
+            self.btn_export.setText("导出 WWT")
+            # WWT always carries a Zeit record; keep the checkbox checked but
+            # disabled so the Excel wording does not imply an optional column.
+            self.chk_export_time.setChecked(True)
+            self.chk_export_time.setEnabled(False)
+            self.chk_export_time.setText("写入 Zeit 时基（必需）")
+            self.chk_export_range.setToolTip(
+                "可勾选：只导出选定时间范围（采样率与点数按原始数据保留）。"
+            )
+        else:
+            self.btn_export.setText("导出 Excel")
+            self.chk_export_time.setEnabled(True)
+            self.chk_export_time.setText("包含时间列")
+            self.chk_export_range.setToolTip("")
+
     def _on_export_clicked(self):
         if self.current_fid is None:
             return
@@ -387,6 +428,7 @@ class ChannelEditorDialog(QDialog):
             self.current_fid, channels,
             self.chk_export_time.isChecked(),
             self.chk_export_range.isChecked(),
+            self._export_format(),
         )
 
     def _create_single(self):

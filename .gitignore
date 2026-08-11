@@ -53,6 +53,10 @@ package-lock.json
 testdoc/
 testfile/
 
+# WWT open-trial candidates: generated from testdoc measurements by
+# tools/matlab_ports/emit_wwt_*.py — reproducible, and they carry customer data.
+tools/matlab_ports/wwt_export_candidates/*.wwt
+
 # Local secrets / dotenv
 .env
 .env.*

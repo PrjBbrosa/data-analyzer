@@ -50,6 +50,27 @@ def test_windows_folder_build_script_bundles_help_docs_inside_app():
     # Help tree is bundled into the frozen app at mf4_analyzer\help.
     assert "mf4_analyzer\\help" in text
     assert "$AddDataHelp" in text
+    assert "$AddDataWwt" in text or "assets\\wwt" in text
+
+
+def test_windows_build_scripts_name_the_wwt_export_modules():
+    """导出 WWT 的模块是函数体内惰性 import，冻结构建要显式点名。
+
+    资源（模板骨架 + 显示尾块）走 assets\\wwt 目录整体打包。
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for script_name in ("build_windows_folder.ps1", "build_windows_folder_lite.ps1"):
+        text = (root / "tools" / script_name).read_text(encoding="utf-8")
+        for module_name in (
+            "mf4_analyzer.io.wwt_export",
+            "mf4_analyzer.io.wwt_display",
+            "mf4_analyzer.io.wwt_writer",
+            "mf4_analyzer.io.wwt_inplace",
+        ):
+            assert module_name in text, f"{script_name} misses {module_name}"
+        assert "$AddDataWwt" in text, f"{script_name} misses assets\\wwt bundling"
 
     # The retired copy-next-to-exe step must be gone.
     assert "Copying user guides next to exe" not in text

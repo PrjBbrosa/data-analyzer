@@ -317,7 +317,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="含游标线和读数，可标注",
                 gesture="复制按钮",
             ),
-            QuickRow("导出 Excel", sub="选定通道，可限时间段"),
+            QuickRow(
+                "导出 Excel / WWT",
+                sub="WWT：任意格式转 WinWert，保留原采样率，按时域显示",
+            ),
             QuickRow(
                 "导出图像 / 数据",
                 sub="PNG · SVG · CSV",
