@@ -1,14 +1,17 @@
 """Capture/apply params between a section Contextual and AnalysisViewState.
 
 Mirrors view_bridge.py's capture_view/apply_controls_from_state pattern
-(spec §4). All three analysis Contextuals expose get_params()/
-apply_params(d); the bridge stays duck-typed so tests can stub them.
+(spec §4). ``current_params()`` is the complete View-persistence surface when
+a contextual provides it; older duck-typed contextuals still expose only
+``get_params()`` / ``apply_params(d)``.
 """
 from __future__ import annotations
 
 
 def capture_params_to_state(ctx, state) -> None:
-    state.params = dict(ctx.get_params())
+    current_params = getattr(ctx, "current_params", None)
+    params_getter = current_params if callable(current_params) else ctx.get_params
+    state.params = dict(params_getter())
 
 
 def apply_params_from_state(ctx, state) -> None:

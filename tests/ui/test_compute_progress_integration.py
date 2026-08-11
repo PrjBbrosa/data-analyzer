@@ -576,6 +576,8 @@ def _make_fft_time_dispatch_window(qapp, qtbot, monkeypatch):
 
     monkeypatch.setattr(win, "_capture_active_analysis_view", lambda _section: None)
     monkeypatch.setattr(win.inspector.fft_time_ctx, "get_params", lambda: params)
+    monkeypatch.setattr(
+        win.inspector.fft_time_ctx, "compute_params", lambda: params)
     monkeypatch.setattr(win, "_pane_time_range_for", lambda *_args: None)
     monkeypatch.setattr(
         win,

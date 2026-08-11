@@ -236,6 +236,63 @@ def test_frf_contextual_emits_user_compute_and_display_changes_but_restore_is_si
     assert display_seen[-1]["frequency_scale"] == "linear"
 
 
+@pytest.mark.parametrize(
+    "class_name, display_change, compute_change",
+    [
+        (
+            "FFTContextual",
+            lambda ctx: ctx.combo_amp_y.setCurrentText(
+                "dB" if ctx.combo_amp_y.currentText() != "dB" else "Linear"),
+            lambda ctx: ctx.combo_avg_mode.setCurrentText("线性平均"),
+        ),
+        (
+            "FFTTimeContextual",
+            lambda ctx: ctx.combo_amp_unit.setCurrentText(
+                "dB" if ctx.combo_amp_unit.currentText() != "dB" else "Linear"),
+            lambda ctx: ctx.combo_win.setCurrentText("hamming"),
+        ),
+        (
+            "OrderContextual",
+            lambda ctx: ctx.combo_amp_unit.setCurrentText(
+                "dB" if ctx.combo_amp_unit.currentText() != "dB" else "Linear"),
+            lambda ctx: ctx.spin_samples_per_rev.setValue(512),
+        ),
+    ],
+)
+def test_analysis_contextuals_separate_layers_and_classify_user_edits(
+    qapp, class_name, display_change, compute_change,
+):
+    """P1: cache inputs and render inputs have disjoint ownership.
+
+    This is intentionally contextual-level: the integration counterpart pins
+    the MainWindow's immediate active-View write and zero-worker behavior.
+    """
+    from mf4_analyzer.ui import inspector_sections
+
+    ctx = getattr(inspector_sections, class_name)()
+    compute_seen = []
+    display_seen = []
+    ctx.compute_params_changed.connect(compute_seen.append)
+    ctx.display_params_changed.connect(display_seen.append)
+
+    compute = ctx.compute_params()
+    display = ctx.display_params()
+    assert compute
+    assert display
+    assert set(compute).isdisjoint(display)
+    assert ctx.current_params() == {**compute, **display}
+    assert ctx.get_params() == ctx.current_params()
+
+    display_change(ctx)
+    qapp.processEvents()
+    assert display_seen
+    assert not compute_seen
+
+    compute_change(ctx)
+    qapp.processEvents()
+    assert compute_seen
+
+
 def test_frf_contextual_presets_signals_and_inspector_range_reparent(qtbot):
     from mf4_analyzer.ui.inspector import Inspector
 

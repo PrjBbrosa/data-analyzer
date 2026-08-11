@@ -891,6 +891,19 @@ class MainWindow(
             self._on_frf_display_params_changed
         )
         self.inspector.order_time_requested.connect(self.do_order_time)
+        for _analysis_section, _analysis_ctx in (
+            ('fft', self.inspector.fft_ctx),
+            ('fft_time', self.inspector.fft_time_ctx),
+            ('order', self.inspector.order_ctx),
+        ):
+            _analysis_ctx.compute_params_changed.connect(
+                lambda params, section=_analysis_section:
+                self._on_analysis_compute_params_changed(section, params)
+            )
+            _analysis_ctx.display_params_changed.connect(
+                lambda params, section=_analysis_section:
+                self._on_analysis_display_params_changed(section, params)
+            )
         # dB reference is display-only: changing it while in FFT mode should
         # immediately re-render without recompute. Re-evaluate _fft_render_signature
         # (which now includes db_reference) so the stale-check in _enter_fft_mode
@@ -2179,8 +2192,10 @@ class MainWindow(
         if (
             self._applying_analysis_view
             or getattr(self._analysis_ctx(section), "_applying_preset", False)
+            or self.chart_stack.current_mode() != section
         ):
             return
+        self._sync_active_analysis_params(section)
         self._stamp_db_reference_nudge_facts(section)
         QTimer.singleShot(0, rerender_fn)
 

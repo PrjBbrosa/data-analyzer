@@ -45,6 +45,8 @@ class FFTContextual(QWidget):
     rebuild_time_requested = pyqtSignal(object)
     remark_toggled = pyqtSignal(bool)
     signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
+    compute_params_changed = pyqtSignal(object)
+    display_params_changed = pyqtSignal(object)
     _AUTO_NFFT_LABEL = "自动"
     _NO_SOURCE_SUMMARY = "未选通道，使用单信号"
 
@@ -371,6 +373,13 @@ class FFTContextual(QWidget):
         if not self._applying_preset:
             self.preset_bar.set_recommended(None)
         self._refresh_fft_summary()
+        if self._applying_preset:
+            return
+        sender = self.sender()
+        if sender in self._display_param_widgets:
+            self.display_params_changed.emit(self.display_params())
+        else:
+            self.compute_params_changed.emit(self.compute_params())
 
     def _connect_preset_param_signals(self):
         for combo in (
@@ -382,6 +391,24 @@ class FFTContextual(QWidget):
         ):
             combo.currentTextChanged.connect(self._on_preset_param_changed)
         for spin in (self.spin_overlap, self.spin_avg_overlap):
+            spin.valueChanged.connect(self._on_preset_param_changed)
+        self._display_param_widgets = (
+            self.combo_amp_y,
+            self.spin_overlap,
+            self.chk_x_auto,
+            self.spin_x_min,
+            self.spin_x_max,
+            self.chk_y_auto,
+            self.spin_y_min,
+            self.spin_y_max,
+            self.chk_remark,
+        )
+        for check in (self.chk_x_auto, self.chk_y_auto, self.chk_remark):
+            check.toggled.connect(self._on_preset_param_changed)
+        for spin in (
+            self.spin_x_min, self.spin_x_max,
+            self.spin_y_min, self.spin_y_max,
+        ):
             spin.valueChanged.connect(self._on_preset_param_changed)
 
     def _apply_weighting_value(self, value):
@@ -496,12 +523,15 @@ class FFTContextual(QWidget):
         )
 
     def _apply_preset(self, d):
+        before_compute = self.compute_params()
+        before_display = self.display_params()
         self._applying_preset = True
         try:
             self._apply_preset_values(d)
         finally:
             self._applying_preset = False
             self._refresh_fft_summary()
+        self._emit_param_deltas(before_compute, before_display)
 
     def _apply_preset_values(self, d):
         if 'window' in d:
@@ -595,7 +625,7 @@ class FFTContextual(QWidget):
     def current_signal(self):
         return self.combo_sig.currentData()
 
-    def get_params(self):
+    def compute_params(self):
         nfft_text = self.combo_nfft.currentText()
         auto = nfft_text == self._AUTO_NFFT_LABEL
         nfft = None if auto else int(nfft_text)
@@ -605,8 +635,17 @@ class FFTContextual(QWidget):
             nfft_mode='auto' if auto else 'fixed',
             t_win_s=float(self._t_win_s),
             nfft_effective=None if auto else nfft,
-            overlap=self.spin_overlap.value() / 100.0,
+            avg_mode=self.combo_avg_mode.currentText(),
+            avg_overlap=int(self.spin_avg_overlap.value()),
             weighting=self.combo_weighting.currentText(),
+        )
+
+    def display_params(self):
+        return dict(
+            # This legacy overlap knob is retained in the View/preset payload,
+            # but Welch uses avg_overlap and it is deliberately not part of the
+            # spectrum cache identity.
+            overlap=self.spin_overlap.value() / 100.0,
             **db_reference_params(self.db_reference_control),
             autoscale=self.chk_x_auto.isChecked(),
             x_auto=bool(self.chk_x_auto.isChecked()),
@@ -616,6 +655,7 @@ class FFTContextual(QWidget):
             y_min=float(self.spin_y_min.value()),
             y_max=float(self.spin_y_max.value()),
             remark=self.chk_remark.isChecked(),
+            amp_y=self.combo_amp_y.currentText(),
         )
 
     def fs(self):
@@ -630,17 +670,20 @@ class FFTContextual(QWidget):
         # FFTTimeContextual.set_fs).
         self._refresh_fft_summary()
 
-    # --- Wave 2 / SP2 (Task 2.1): test-friendly param accessors ---
-    # current_params/apply_params extend get_params/_apply_preset with the
-    # newer Welch averaging + linear/dB axis toggles. Existing callers
-    # (main_window, batch presets) continue to use get_params/_collect_preset
-    # without change.
     def current_params(self):
-        p = self.get_params()
-        p['avg_mode'] = self.combo_avg_mode.currentText()
-        p['avg_overlap'] = int(self.spin_avg_overlap.value())
-        p['amp_y'] = self.combo_amp_y.currentText()
-        return p
+        return {**self.compute_params(), **self.display_params()}
+
+    def get_params(self):
+        """Compatibility name for the complete, View-persistent payload."""
+        return self.current_params()
+
+    def _emit_param_deltas(self, before_compute, before_display):
+        compute = self.compute_params()
+        display = self.display_params()
+        if compute != before_compute:
+            self.compute_params_changed.emit(compute)
+        if display != before_display:
+            self.display_params_changed.emit(display)
 
     def apply_params(self, d):
         if 'window' in d:

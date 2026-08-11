@@ -217,7 +217,15 @@ class FFTTimeMixin:
         mgr = self.analysis_managers['fft_time']
         state = mgr.get(mgr.active)
         page = self._analysis_page('fft_time')
-        p = self.inspector.fft_time_ctx.get_params()
+        ctx = self.inspector.fft_time_ctx
+        compute_getter = getattr(ctx, 'compute_params', None)
+        compute_p = (
+            compute_getter() if callable(compute_getter) else ctx.get_params()
+        )
+        display_getter = getattr(ctx, 'display_params', None)
+        display_p = (
+            display_getter() if callable(display_getter) else ctx.get_params()
+        )
 
         focus = page.focused_index()
         pane_order = sorted(
@@ -234,30 +242,31 @@ class FFTTimeMixin:
                 continue
             any_source = True
             fid, ch = sources[0]
-            render_p = p
+            render_p = {**compute_p, **display_p}
             time_range = self._pane_time_range_for('fft_time', pane_idx)
             prepared = self._fft_time_effective_params_for_source(
-                p, fid, ch, time_range)
+                compute_p, fid, ch, time_range)
             if prepared is None:
                 outcome.skipped.append('源通道缺失或样本不足')
                 candidates.append({
                     'fid': fid,
                     'channel': ch,
-                    'params': dict(p),
+                    'params': dict(compute_p),
                     'pane_idx': pane_idx,
                     'time_range': time_range,
                     'job': None,
-                    'render_params': dict(p),
+                    'render_params': dict(render_p),
                     'source': (fid, ch),
                     'force': force,
                     'view_id': state.view_id,
                 })
                 continue
-            render_p, _compute_time_range = prepared
+            effective_compute_p, _compute_time_range = prepared
+            render_p = {**effective_compute_p, **display_p}
             candidates.append({
                 'fid': fid,
                 'channel': ch,
-                'params': dict(render_p),
+                'params': dict(effective_compute_p),
                 'pane_idx': pane_idx,
                 'time_range': time_range,
                 'render_params': dict(render_p),
@@ -265,8 +274,10 @@ class FFTTimeMixin:
                 'force': force,
                 'view_id': state.view_id,
                 'job_factory': lambda pane_idx=pane_idx, fid=fid, ch=ch,
-                raw_params=dict(p), time_range=time_range: self._build_fft_time_job(
+                raw_params=dict(compute_p), display_params=dict(display_p), \
+                time_range=time_range: self._build_fft_time_job(
                     pane_idx, fid, ch, raw_params, time_range=time_range,
+                    display_params=display_params,
                 ),
             })
 
@@ -300,7 +311,15 @@ class FFTTimeMixin:
         if sig is None or len(sig) < 2:
             self.toast("请选择有效信号", "warning")
             return
-        p = self.inspector.fft_time_ctx.get_params()
+        ctx = self.inspector.fft_time_ctx
+        compute_getter = getattr(ctx, 'compute_params', None)
+        compute_p = (
+            compute_getter() if callable(compute_getter) else ctx.get_params()
+        )
+        display_getter = getattr(ctx, 'display_params', None)
+        display_p = (
+            display_getter() if callable(display_getter) else ctx.get_params()
+        )
         compute_time_range = (
             self.inspector.top.range_values()
             if self.inspector.top.range_enabled() else None
@@ -311,14 +330,16 @@ class FFTTimeMixin:
         if sig is None or len(sig) < 2:
             self.toast("当前范围内样本不足", "warning")
             return
-        render_p = self._resolve_fft_time_effective_params(p, len(sig))
+        effective_compute_p = self._resolve_fft_time_effective_params(
+            compute_p, len(sig))
+        render_p = {**effective_compute_p, **display_p}
         self._fft_time_outcome = None
         mgr = self.analysis_managers['fft_time']
         view_id = mgr.get(mgr.active).view_id
         self._fft_time_coordinator.request_batch([{
             'fid': fid,
             'channel': ch,
-            'params': dict(render_p),
+            'params': dict(effective_compute_p),
             'pane_idx': pane_idx,
             'time_range': self._pane_time_range_for('fft_time', pane_idx),
             'render_params': dict(render_p),
@@ -326,8 +347,9 @@ class FFTTimeMixin:
             'force': force,
             'view_id': view_id,
             'job_factory': lambda: self._build_fft_time_job(
-                pane_idx, fid, ch, dict(p), time_range=compute_time_range,
+                pane_idx, fid, ch, dict(compute_p), time_range=compute_time_range,
                 signal_getter=self._get_fft_time_signal,
+                display_params=dict(display_p),
             ),
         }])
 
@@ -361,7 +383,7 @@ class FFTTimeMixin:
 
     def _build_fft_time_job(
         self, pane_idx, fid, ch, raw_params, *, time_range=_INSPECTOR_TIME_RANGE,
-        signal_getter=None,
+        signal_getter=None, display_params=None,
     ):
         """Prepare one job and its immutable completion context, or skip it."""
         from ...signal import SpectrogramParams
@@ -428,11 +450,12 @@ class FFTTimeMixin:
                 cancel_token=worker.cancelled,
             )
 
+        render_params = {**p, **dict(display_params or {})}
         return job, {
             'fid': fid,
             'channel': ch,
             'params': p,
-            'render_params': p,
+            'render_params': render_params,
             'source': (fid, ch),
         }
 

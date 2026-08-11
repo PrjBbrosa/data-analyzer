@@ -95,6 +95,8 @@ class FFTTimeContextual(QWidget):
     fft_time_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
+    compute_params_changed = pyqtSignal(object)
+    display_params_changed = pyqtSignal(object)
     _AUTO_NFFT_LABEL = "自动"
     # 色图由图表选项管理；此值只为新建画布和旧参数消费者保留默认契约。
     _FIXED_CMAP = "gnuplot2"
@@ -332,12 +334,34 @@ class FFTTimeContextual(QWidget):
         if not self._applying_preset:
             self.preset_bar.set_recommended(None)
         self._refresh_tf_summary()
+        if self._applying_preset:
+            return
+        sender = self.sender()
+        if sender in self._display_param_widgets:
+            self.display_params_changed.emit(self.display_params())
+        else:
+            self.compute_params_changed.emit(self.compute_params())
 
     def _connect_preset_param_signals(self):
         self.combo_nfft.currentTextChanged.connect(self._on_preset_param_changed)
         self.combo_win.currentTextChanged.connect(self._on_preset_param_changed)
         self.combo_weighting.currentTextChanged.connect(self._on_preset_param_changed)
         self.spin_overlap.valueChanged.connect(self._on_preset_param_changed)
+        self._display_param_widgets = (
+            self.combo_amp_unit,
+            self.chk_x_auto, self.spin_x_min, self.spin_x_max,
+            self.chk_y_auto, self.spin_y_min, self.spin_y_max,
+            self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling,
+        )
+        self.combo_amp_unit.currentTextChanged.connect(self._on_preset_param_changed)
+        for check in (self.chk_x_auto, self.chk_y_auto, self.chk_z_auto):
+            check.toggled.connect(self._on_preset_param_changed)
+        for spin in (
+            self.spin_x_min, self.spin_x_max,
+            self.spin_y_min, self.spin_y_max,
+            self.spin_z_floor, self.spin_z_ceiling,
+        ):
+            spin.valueChanged.connect(self._on_preset_param_changed)
 
     def _apply_weighting_value(self, value):
         target = 'A' if str(value).upper() == 'A' else 'None'
@@ -480,7 +504,32 @@ class FFTTimeContextual(QWidget):
         nfft = ceil_pow2(fs * t_win)
         return int(min(max(nfft, 64), 8192))
 
-    def get_params(self):
+    def compute_params(self):
+        nfft_text = self.combo_nfft.currentText()
+        if nfft_text == self._AUTO_NFFT_LABEL:
+            nfft = None
+            nfft_mode = 'auto'
+            nfft_effective = None
+            nfft_preview = self._nfft_preview()
+        else:
+            nfft = int(nfft_text)
+            nfft_mode = 'fixed'
+            nfft_effective = nfft
+            nfft_preview = nfft
+        return dict(
+            fs=self.spin_fs.value(),
+            nfft=nfft,
+            nfft_mode=nfft_mode,
+            t_win_s=float(self._t_win_s),
+            nfft_preview=nfft_preview,
+            nfft_effective=nfft_effective,
+            window=self.combo_win.currentText(),
+            overlap=self.spin_overlap.value() / 100.0,
+            weighting=self.combo_weighting.currentText(),
+            remove_mean=True,
+        )
+
+    def display_params(self):
         # Wave 4: amplitude_mode now derives from combo_amp_unit (the dB↔
         # Linear dropdown on the Z axis row). Stays lowercase
         # ('amplitude_db' / 'amplitude') so main_window._render_fft_time →
@@ -497,29 +546,8 @@ class FFTTimeContextual(QWidget):
         else:
             span = abs(float(self.spin_z_floor.value()))
             dynamic_legacy = f"{int(round(span))} dB"
-        nfft_text = self.combo_nfft.currentText()
-        if nfft_text == self._AUTO_NFFT_LABEL:
-            nfft = None
-            nfft_mode = 'auto'
-            nfft_effective = None
-            nfft_preview = self._nfft_preview()
-        else:
-            nfft = int(nfft_text)
-            nfft_mode = 'fixed'
-            nfft_effective = nfft
-            nfft_preview = nfft
         params = dict(
             signal=self.combo_sig.currentData(),
-            fs=self.spin_fs.value(),
-            nfft=nfft,
-            nfft_mode=nfft_mode,
-            t_win_s=float(self._t_win_s),
-            nfft_preview=nfft_preview,
-            nfft_effective=nfft_effective,
-            window=self.combo_win.currentText(),
-            overlap=self.spin_overlap.value() / 100.0,
-            weighting=self.combo_weighting.currentText(),
-            remove_mean=True,
             amplitude_mode=amp_mode,
             **db_reference_params(self.db_reference_control),
             # Legacy freq_* keys are aliases of the Y-frequency axis.
@@ -544,11 +572,12 @@ class FFTTimeContextual(QWidget):
         params['z_ceiling'] = float(self.spin_z_ceiling.value())
         return params
 
-    # Wave 4 alias (mirrors OrderContextual.current_params) so the test
-    # `test_fft_time_contextual_current_params_emits_axis_keys` finds
-    # current_params; runtime callers continue to use get_params.
     def current_params(self):
-        return self.get_params()
+        return {**self.compute_params(), **self.display_params()}
+
+    def get_params(self):
+        """Compatibility name for the complete, View-persistent payload."""
+        return self.current_params()
 
     def apply_params(self, d):
         """Round-trip every key get_params emits back onto its control.
@@ -783,12 +812,23 @@ class FFTTimeContextual(QWidget):
         )
 
     def _apply_preset(self, d):
+        before_compute = self.compute_params()
+        before_display = self.display_params()
         self._applying_preset = True
         try:
             self._apply_preset_values(d)
         finally:
             self._applying_preset = False
             self._refresh_tf_summary()
+        self._emit_param_deltas(before_compute, before_display)
+
+    def _emit_param_deltas(self, before_compute, before_display):
+        compute = self.compute_params()
+        display = self.display_params()
+        if compute != before_compute:
+            self.compute_params_changed.emit(compute)
+        if display != before_display:
+            self.display_params_changed.emit(display)
 
     def _apply_preset_values(self, d):
         """Restore previously-saved params from PresetBar load (R3 C).

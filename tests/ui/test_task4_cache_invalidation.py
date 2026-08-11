@@ -245,6 +245,9 @@ class TestFallbackKeyAlignsPrimaryKey:
         from mf4_analyzer.ui.main_window._analysis_mixin import AnalysisMixin
 
         class _StubCtx:
+            def compute_params(self_):
+                return dict(self._PARAMS)
+
             def get_params(self_):
                 return dict(self._PARAMS)
 
@@ -271,6 +274,10 @@ class TestFallbackKeyAlignsPrimaryKey:
 
             def _pane_time_range_for(self_, section, pane_idx):
                 return self._PARAMS['time_range']
+
+            def _analysis_ctx(self_, section):
+                assert section == 'fft_time'
+                return self_.inspector.fft_time_ctx
 
         mw = _StubMW()
         p = dict(self._PARAMS)

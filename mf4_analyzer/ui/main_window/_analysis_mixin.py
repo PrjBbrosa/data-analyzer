@@ -242,6 +242,53 @@ class AnalysisMixin:
         if capture_sources:
             self._capture_analysis_sources(section, state)
 
+    def _sync_active_analysis_params(self, section):
+        """Persist the active contextual's full View payload immediately.
+
+        The shared Inspector is a projection.  A user edit must therefore
+        update the focused View's complete ledger at the event boundary rather
+        than waiting for the next View switch or project save to capture it.
+        """
+        if self._applying_analysis_view:
+            return None
+        # Shared Inspector controls may be updated by another section while
+        # this analysis page is hidden (for example, source/default routing).
+        # Only the visible section represents an intentional edit to its
+        # active View; a hidden projection must be restored from that View on
+        # re-entry rather than overwriting its ledger.
+        if self.chart_stack.current_mode() != section:
+            return None
+        # Lightweight mixin probes from older tests/extensions predate
+        # AnalysisContext.  Preserve their inspector-only seam while real
+        # MainWindow instances continue through the owning context facade.
+        if hasattr(self, '_analysis_context'):
+            ctx = self._analysis_ctx(section)
+        else:
+            ctx = getattr(self.inspector, f'{section}_ctx')
+        if getattr(ctx, '_applying_preset', False):
+            return None
+        mgr = self.analysis_managers[section]
+        if not mgr.views:
+            return None
+        params_getter = getattr(ctx, 'current_params', ctx.get_params)
+        state = mgr.get(mgr.active)
+        state.params = dict(params_getter())
+        return state
+
+    def _on_analysis_compute_params_changed(self, section, _params):
+        """Record a compute edit without implicitly submitting a new job."""
+        self._sync_active_analysis_params(section)
+
+    def _on_analysis_display_params_changed(self, section, _params):
+        """Record a display edit and redraw only the visible active View."""
+        state = self._sync_active_analysis_params(section)
+        if state is not None and self.chart_stack.current_mode() == section:
+            self._render_analysis_view_from_cache(section, state)
+
+    def _on_fft_display_params_changed(self, value):
+        """Compatibility slot for the original FFT amplitude-unit wiring."""
+        self._on_analysis_display_params_changed('fft', value)
+
     def _on_analysis_view_switched(self, section, idx, *, render=True,
                                    apply_params=True):
         """manager.active_changed → apply the new view's structure, params and
@@ -550,64 +597,21 @@ class AnalysisMixin:
         """Compute-relevant params (cache-key inputs) for the active inspector
         state of ``section``. Display-only knobs are excluded so toggling them
         does not invalidate the cache."""
-        ctx = self._analysis_ctx(section)
-        p = ctx.get_params()
+        if hasattr(self, '_analysis_context'):
+            ctx = self._analysis_ctx(section)
+        else:
+            ctx = getattr(self.inspector, f'{section}_ctx')
+        compute_params = getattr(ctx, 'compute_params', None)
+        p = compute_params() if callable(compute_params) else ctx.get_params()
         if section == 'frf':
             from .frf_coordinator import frf_compute_cache_params
             return frf_compute_cache_params(p)
-        if section == 'fft':
-            # Compute inputs for FFT spectra are window / nfft / averaging mode
-            # + averaging overlap (see _fft_compute_arrays). The plain
-            # ``overlap`` knob feeds only batch presets, NOT the spectrum
-            # compute, so it is excluded from the key (and its get/apply
-            # fraction-vs-percent asymmetry would make the key unstable).
-            cp = ctx.current_params()
-            return {
-                'window': p.get('window'),
-                'nfft': p.get('nfft'),
-                'nfft_mode': p.get('nfft_mode'),
-                't_win_s': p.get('t_win_s', 1.5),
-                'avg_mode': cp.get('avg_mode', '单帧'),
-                'avg_overlap': cp.get('avg_overlap', 50),
-                'weighting': p.get('weighting', 'None'),
-            }
-        if section == 'fft_time':
-            # db_reference is display-only (dB normalisation reference); compute
-            # never reads it, so it is excluded from the cache-key inputs.
-            return {
-                'fs': p.get('fs'),
-                'nfft': p.get('nfft'),
-                'window': p.get('window'),
-                'overlap': p.get('overlap'),
-                'remove_mean': p.get('remove_mean'),
-                'weighting': p.get('weighting', 'None'),
-            }
-        # order: COT params + rpm_source must both be in the key (changing the
-        # RPM channel must NOT hit an old result).
-        return {
-            'nfft': p.get('nfft'),
-            'nfft_mode': p.get('nfft_mode'),
-            'nfft_preview': p.get('nfft_preview'),
-            'nfft_effective': p.get('nfft_effective'),
-            'max_order': p.get('max_order'),
-            'order_res': p.get('order_res'),
-            'time_res': p.get('time_res'),
-            'samples_per_rev': ctx.current_params().get('samples_per_rev'),
-            'rpm_factor': p.get('rpm_factor'),
-            'rpm_mode': p.get('rpm_mode', 'channel'),
-            'manual_rpm': (
-                float(p.get('manual_rpm', 1000.0))
-                if p.get('rpm_mode', 'channel') == 'manual'
-                else None
-            ),
-            'fs': p.get('fs'),
-            'weighting': p.get('weighting', 'None'),
-        }
+        return p
 
     def _analysis_cache_key(self, section, fid, ch, rpm_source=None, pane_idx=None):
         cache = self.analysis_caches[section]
         if section == 'fft_time':
-            p = self.inspector.fft_time_ctx.get_params()
+            p = self._analysis_compute_params('fft_time')
             time_range = self._pane_time_range_for(section, pane_idx)
             prepared = self._fft_time_effective_params_for_source(
                 p, fid, ch, time_range)

@@ -96,6 +96,7 @@ def test_fft_time_analysis_cache_key_auto_uses_effective_nfft(
         "db_reference": 1.0,
     }
     monkeypatch.setattr(w.inspector.fft_time_ctx, "get_params", lambda: params)
+    monkeypatch.setattr(w.inspector.fft_time_ctx, "compute_params", lambda: params)
 
     generic_key = w._analysis_cache_key("fft_time", "f1", "speed", pane_idx=0)
     effective = w._resolve_fft_time_effective_params(params, len(sig))
@@ -451,6 +452,7 @@ def test_fft_analysis_cache_key_auto_uses_effective_nfft(qapp, qtbot, monkeypatc
     }
     monkeypatch.setattr(w.inspector.fft_ctx, "get_params", lambda: params)
     monkeypatch.setattr(w.inspector.fft_ctx, "current_params", lambda: params)
+    monkeypatch.setattr(w.inspector.fft_ctx, "compute_params", lambda: params)
 
     key_96 = w._analysis_cache_key("fft", "f96", "sig", pane_idx=0)
     key_1000 = w._analysis_cache_key("fft", "f1000", "sig", pane_idx=0)
@@ -532,6 +534,7 @@ def test_order_analysis_cache_key_auto_uses_effective_nfft(
     monkeypatch.setattr(w.inspector.order_ctx, "rpm_factor", lambda: 1.0)
     monkeypatch.setattr(w.inspector.order_ctx, "get_params", lambda: params)
     monkeypatch.setattr(w.inspector.order_ctx, "current_params", lambda: current)
+    monkeypatch.setattr(w.inspector.order_ctx, "compute_params", lambda: current)
 
     generic_key = w._analysis_cache_key(
         "order", "f1", "sig", rpm_source=("f1", "rpm"), pane_idx=0
@@ -579,6 +582,7 @@ def test_order_dispatch_uses_effective_auto_nfft(qtbot, monkeypatch):
     monkeypatch.setattr(win.inspector.order_ctx, "fs", lambda: 100.0)
     monkeypatch.setattr(win.inspector.order_ctx, "current_params", lambda: current)
     monkeypatch.setattr(win.inspector.order_ctx, "get_params", lambda: params)
+    monkeypatch.setattr(win.inspector.order_ctx, "compute_params", lambda: current)
 
     real_cot_params = order_cot.COTParams
     seen = {}
@@ -2841,6 +2845,7 @@ def test_fft_time_analysis_cache_hit_status(qtbot, monkeypatch):
         lambda: ('f1', 'ch', np.linspace(0, 0.1, 2), np.ones(2), object()),
     )
     monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params', lambda: p)
+    monkeypatch.setattr(win.inspector.fft_time_ctx, 'compute_params', lambda: p)
     monkeypatch.setattr(win.inspector.top, 'range_enabled', lambda: False)
 
     win.do_fft_time(force=False)
@@ -2892,6 +2897,7 @@ def test_fft_time_primary_hit_skips_nonuniform_preflight_and_service(
         lambda: ("f1", "ch", np.array([0.0, 0.01]), np.ones(2), nonuniform_fd),
     )
     monkeypatch.setattr(win.inspector.fft_time_ctx, "get_params", lambda: p)
+    monkeypatch.setattr(win.inspector.fft_time_ctx, "compute_params", lambda: p)
     monkeypatch.setattr(win.inspector.top, "range_enabled", lambda: False)
     monkeypatch.setattr(
         win,
@@ -2971,6 +2977,7 @@ def test_fft_time_force_bypasses_cache(qtbot, monkeypatch):
         lambda: ('f1', 'ch', np.linspace(0, 0.1, 2), np.ones(2), object()),
     )
     monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params', lambda: p)
+    monkeypatch.setattr(win.inspector.fft_time_ctx, 'compute_params', lambda: p)
     monkeypatch.setattr(win.inspector.top, 'range_enabled', lambda: False)
 
     win.do_fft_time(force=True)
@@ -3028,6 +3035,7 @@ def test_fft_time_failed_compute_keeps_old_chart(qtbot, monkeypatch):
         freq_auto=True, freq_min=0.0, freq_max=0.0,
     )
     monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params', lambda: p)
+    monkeypatch.setattr(win.inspector.fft_time_ctx, 'compute_params', lambda: p)
     monkeypatch.setattr(win.inspector.top, 'range_enabled', lambda: False)
 
     # Toasts should not raise; capture invocations.
@@ -3622,6 +3630,7 @@ def _stub_fft_time_signal(win, monkeypatch):
         freq_auto=True, freq_min=0.0, freq_max=0.0,
     )
     monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params', lambda: p)
+    monkeypatch.setattr(win.inspector.fft_time_ctx, 'compute_params', lambda: p)
     monkeypatch.setattr(win.inspector.top, 'range_enabled', lambda: False)
     return p
 
@@ -3681,6 +3690,8 @@ def _stub_fft_time_signal_nonuniform(win, monkeypatch):
         freq_auto=True, freq_min=0.0, freq_max=0.0,
     )
     monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params',
+                        lambda: dict(p, fs=fake_fd.fs))
+    monkeypatch.setattr(win.inspector.fft_time_ctx, 'compute_params',
                         lambda: dict(p, fs=fake_fd.fs))
     monkeypatch.setattr(win.inspector.top, 'range_enabled', lambda: False)
     return p, fake_fd
@@ -4374,6 +4385,7 @@ def test_fft_time_db_reference_change_triggers_cached_rerender(qapp, qtbot, monk
 
     win = MainWindow()
     qtbot.addWidget(win)
+    win.toolbar._set_mode("fft_time")
     calls = []
 
     def fake_do_fft_time(force=False):

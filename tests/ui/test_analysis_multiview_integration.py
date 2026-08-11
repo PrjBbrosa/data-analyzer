@@ -776,6 +776,277 @@ def test_new_view_is_empty_then_switch_back_hits_cache(two_file_win):
     assert compute_calls["n"] == 0, "switch-back must NOT recompute (cache hit)"
 
 
+def test_fft_view_switch_restores_complete_params_before_cache_lookup(
+    two_file_win, qapp,
+):
+    """A sibling's uncomputed preset-like changes cannot poison View 1's key.
+
+    ``avg_mode`` participates in the FFT cache key while ``amp_y`` is display
+    only.  Both still belong to each View's complete parameter snapshot: when
+    View 2 changes them without computing, switching back must restore View
+    1's controls *before* cache lookup and must not submit another compute.
+    """
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    qapp.processEvents()
+    ctx = win.inspector.fft_ctx
+    ctx.combo_amp_y.setCurrentText("Linear")
+    ctx.combo_avg_mode.setCurrentText("单帧")
+    ctx.spin_avg_overlap.setValue(50)
+    win.do_fft()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._amp_curves) == 2
+
+    compute_calls = {"n": 0}
+    real_compute = win._fft_compute_arrays
+
+    def spy_compute(*args, **kwargs):
+        compute_calls["n"] += 1
+        return real_compute(*args, **kwargs)
+
+    win._fft_compute_arrays = spy_compute
+
+    # A new sibling changes the display unit and an averaging setting that a
+    # preset could change, but does not click 计算.
+    win._on_analysis_new("fft")
+    ctx.combo_amp_y.setCurrentText("dB")
+    ctx.combo_avg_mode.setCurrentText("线性平均")
+    ctx.spin_avg_overlap.setValue(75)
+
+    win._on_analysis_switch("fft", 0)
+
+    assert ctx.combo_amp_y.currentText() == "Linear"
+    assert ctx.combo_avg_mode.currentText() == "单帧"
+    assert ctx.spin_avg_overlap.value() == 50
+    assert len(canvas._amp_curves) == 2
+    assert canvas.has_result()
+    assert compute_calls["n"] == 0
+
+
+def test_order_view_switch_restores_complete_display_and_compute_params(
+    two_file_win,
+):
+    """Order View snapshots include amplitude, samples/rev, and axis settings."""
+    win = two_file_win
+    win.toolbar._set_mode("order")
+    ctx = win.inspector.order_ctx
+    mgr = win.analysis_managers["order"]
+
+    ctx.combo_amp_unit.setCurrentText("Linear")
+    ctx.spin_samples_per_rev.setValue(512)
+    ctx.chk_x_auto.setChecked(False)
+    ctx.spin_x_min.setValue(1.0)
+    ctx.spin_x_max.setValue(12.0)
+
+    win._on_analysis_new("order")
+    assert mgr.active == 1
+    ctx.combo_amp_unit.setCurrentText("dB")
+    ctx.spin_samples_per_rev.setValue(1024)
+    ctx.chk_x_auto.setChecked(True)
+
+    win._on_analysis_switch("order", 0)
+
+    assert ctx.combo_amp_unit.currentText() == "Linear"
+    assert ctx.spin_samples_per_rev.value() == 512
+    assert ctx.chk_x_auto.isChecked() is False
+    assert ctx.spin_x_min.value() == pytest.approx(1.0)
+    assert ctx.spin_x_max.value() == pytest.approx(12.0)
+
+
+def test_fft_legacy_partial_params_restore_without_submitting_work(
+    two_file_win, monkeypatch,
+):
+    """Older projects without averaging/display fields remain safe to restore."""
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    ctx = win.inspector.fft_ctx
+    state = win.analysis_managers["fft"].get(0)
+    # This is the pre-P0 persisted surface: it intentionally lacks avg_mode,
+    # avg_overlap, and amp_y.  Partial ``apply_params`` must accept it.
+    state.params = dict(ctx.get_params())
+    ctx.combo_amp_y.setCurrentText("dB")
+    ctx.combo_avg_mode.setCurrentText("线性平均")
+
+    submitted = []
+    monkeypatch.setattr(
+        win._analysis_jobs,
+        "submit_batch",
+        lambda *args, **kwargs: submitted.append((args, kwargs)),
+    )
+
+    win._on_analysis_view_switched("fft", 0)
+
+    assert submitted == []
+    assert ctx.combo_amp_y.currentText() == "dB"
+    assert ctx.combo_avg_mode.currentText() == "线性平均"
+
+
+def test_fft_display_unit_change_rerenders_cached_result_without_compute(
+    two_file_win, qapp,
+):
+    """Linear/dB is render-only for the active FFT View, never a new job."""
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    qapp.processEvents()
+    win.do_fft()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    entry = canvas._entries[0]
+    raw_amplitude = np.array(entry["amp_for_xlim"], copy=True)
+    reference = entry["db_reference_resolution"].value
+
+    compute_calls = {"n": 0}
+    real_compute = win._fft_compute_arrays
+
+    def spy_compute(*args, **kwargs):
+        compute_calls["n"] += 1
+        return real_compute(*args, **kwargs)
+
+    win._fft_compute_arrays = spy_compute
+    win.inspector.fft_ctx.combo_amp_y.setCurrentText("dB")
+    qapp.processEvents()
+
+    np.testing.assert_allclose(
+        canvas._entries[0]["amp"],
+        win._amplitude_to_db(raw_amplitude, reference),
+    )
+    assert compute_calls["n"] == 0
+
+
+@pytest.mark.parametrize(
+    "section, ctx_attr, display_change, compute_change",
+    [
+        (
+            "fft", "fft_ctx",
+            lambda ctx: ctx.combo_amp_y.setCurrentText(
+                "dB" if ctx.combo_amp_y.currentText() != "dB" else "Linear"),
+            lambda ctx: ctx.combo_avg_mode.setCurrentText("线性平均"),
+        ),
+        (
+            "fft_time", "fft_time_ctx",
+            lambda ctx: ctx.combo_amp_unit.setCurrentText(
+                "dB" if ctx.combo_amp_unit.currentText() != "dB" else "Linear"),
+            lambda ctx: ctx.combo_win.setCurrentText("hamming"),
+        ),
+        (
+            "order", "order_ctx",
+            lambda ctx: ctx.combo_amp_unit.setCurrentText(
+                "dB" if ctx.combo_amp_unit.currentText() != "dB" else "Linear"),
+            lambda ctx: ctx.spin_samples_per_rev.setValue(512),
+        ),
+    ],
+)
+def test_analysis_param_edits_immediately_sync_active_view_without_worker(
+    two_file_win, qapp, monkeypatch, section, ctx_attr, display_change,
+    compute_change,
+):
+    """P1: user edits write the complete View ledger at once.
+
+    Display edits may replay a cache hit, while compute edits deliberately wait
+    for the user to click 计算. Neither path is allowed to submit a worker.
+    """
+    win = two_file_win
+    win.toolbar._set_mode(section)
+    ctx = getattr(win.inspector, ctx_attr)
+    state = win.analysis_managers[section].get(
+        win.analysis_managers[section].active)
+    state.params = dict(ctx.current_params())
+
+    submitted = []
+    monkeypatch.setattr(
+        win._analysis_jobs,
+        "submit_batch",
+        lambda *args, **kwargs: submitted.append((args, kwargs)),
+    )
+
+    compute_before = win._analysis_compute_params(section)
+    display_change(ctx)
+    qapp.processEvents()
+
+    assert state.params == ctx.current_params()
+    assert win._analysis_compute_params(section) == compute_before
+    assert submitted == []
+
+    compute_change(ctx)
+    qapp.processEvents()
+
+    assert state.params == ctx.current_params()
+    assert win._analysis_compute_params(section) != compute_before
+    assert submitted == []
+
+
+@pytest.mark.parametrize(
+    "section, ctx_attr, preset",
+    [
+        ("fft", "fft_ctx", {"avg_mode": "线性平均", "amp_y": "dB"}),
+        (
+            "fft_time", "fft_time_ctx",
+            {"window": "hamming", "amplitude_mode": "amplitude"},
+        ),
+        (
+            "order", "order_ctx",
+            {"samples_per_rev": 512, "amplitude_mode": "Amplitude"},
+        ),
+    ],
+)
+def test_analysis_preset_immediately_syncs_active_view_without_worker(
+    two_file_win, qapp, monkeypatch, section, ctx_attr, preset,
+):
+    """P1: a preset is one user action, so it cannot wait for view capture."""
+    win = two_file_win
+    win.toolbar._set_mode(section)
+    ctx = getattr(win.inspector, ctx_attr)
+    state = win.analysis_managers[section].get(
+        win.analysis_managers[section].active)
+    state.params = dict(ctx.current_params())
+    before = dict(state.params)
+
+    submitted = []
+    monkeypatch.setattr(
+        win._analysis_jobs,
+        "submit_batch",
+        lambda *args, **kwargs: submitted.append((args, kwargs)),
+    )
+
+    ctx._apply_preset(preset)
+    qapp.processEvents()
+
+    assert state.params == ctx.current_params()
+    assert state.params != before
+    assert submitted == []
+
+
+def test_hidden_analysis_display_edit_does_not_overwrite_view_or_submit_worker(
+    two_file_win, qapp, monkeypatch,
+):
+    """A hidden shared Inspector is projection drift, not a user View edit."""
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    fft_state = win.analysis_managers["fft"].get(
+        win.analysis_managers["fft"].active)
+    fft_state.params = dict(win.inspector.fft_ctx.current_params())
+    before = dict(fft_state.params)
+
+    submitted = []
+    monkeypatch.setattr(
+        win._analysis_jobs,
+        "submit_batch",
+        lambda *args, **kwargs: submitted.append((args, kwargs)),
+    )
+
+    win.toolbar._set_mode("fft_time")
+    win.inspector.fft_ctx.spin_db_ref.setValue(
+        win.inspector.fft_ctx.spin_db_ref.value() + 1.0)
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert fft_state.params == before
+    assert submitted == []
+
+
 def test_fft_time_focus_switch_preserves_previous_pane_source(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft_time")

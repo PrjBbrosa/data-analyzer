@@ -435,9 +435,7 @@ class OrderMixin:
             return None
         self._warn_if_order_speed_unsuitable(rpm)
         fs = self.inspector.order_ctx.fs()
-        order_params = self.inspector.order_ctx.current_params()
-        op = dict(self.inspector.order_ctx.get_params())
-        op['samples_per_rev'] = int(order_params.get('samples_per_rev', 256))
+        op = dict(self.inspector.order_ctx.compute_params())
         # Audit fix R6/C7: COT requires strictly monotonic ``t``; synthesise a
         # uniform grid from the inspector fs when the timestamps are degenerate.
         t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
