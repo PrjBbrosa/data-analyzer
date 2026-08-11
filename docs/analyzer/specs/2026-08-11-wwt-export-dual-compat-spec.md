@@ -211,7 +211,7 @@ I 的一轮回执：**打得开、时域显示、±450° 完整**；残留的「
 | F/G/H v3 | 追加 +52 绘图比例同步（K 守恒） | 未单独回执（被 clean-room 取代） |
 | I（clean-room v1） | 自写正文 + 重建尾块，原生 43062 点 float64 | **打得开、时域显示、±450° 完整**。两处残留：①**首帧**总范围不对、只显示一半，刷新后正常；②所有曲线同色（红） |
 | I/K（clean-room v2） | ①刻度/网格写 0 ②按曲线序号循环配色 | 颜色正确；**首帧仍只显示上半边**（Ch4 轴 0..4 而非 −4..4），刷新后完整 |
-| I/K（clean-room v3） | 追加轴原点 +44 按量程重算 | **待验证**（原型下限为 0，照抄其 +44 正好差半个轴高，与实测吻合） |
+| I/K（clean-room v3） | 追加轴原点 +44 按量程重算 | ✅ **用户在 WinWert 实测通过**（2026-08-11）：打开即完整时域视图，量程正确、逐曲线配色，无需刷新 |
 
 ## Product surfaces
 
@@ -257,11 +257,14 @@ I 的一轮回执：**打得开、时域显示、±450° 完整**；残留的「
 - 模块分工：``wwt_writer``（正文）· ``wwt_display``（``DatenFenste2`` 显示块）·
   ``wwt_inplace``（模板原地改写）· ``wwt_export``（产品门面）。
   资源生成器 ``tools/make_wwt_display_trailer.py``（抽取并清洗会话文本）。
-- 已验证：clean-room 文件 WinWert 打得开、按时域显示、数据完整。
-  v2（刻度写 0 + 逐曲线配色）待复验：``probe_cleanroom_I_native.wwt`` /
-  ``probe_cleanroom_K_8ch.wwt``
-  （`emit_wwt_cleanroom_probes.py` 产出）。若 WinWert 拒开，把 UI 的
-  ``export_wwt`` 调用加上 ``mode="template"`` 即可退回已验证的路径。
+- ✅ **已由用户在 WinWert 实测通过（2026-08-11 收尾）**：clean-room 文件打开
+  即完整时域视图——横坐标为时间、每条通道量程完整（含负下限）、逐曲线配色、
+  数据精确，**无需刷新**。探针 ``probe_cleanroom_I_native.wwt``（3 通道原生
+  43062 点）与 ``probe_cleanroom_K_8ch.wwt``（8 通道，超模板槽位）均通过；
+  重新生成用 `tools/matlab_ports/emit_wwt_cleanroom_probes.py`。
+- 若将来某个 WinWert 版本拒开 clean-room 文件，把 UI 的 ``export_wwt`` 调用
+  加上 ``mode="template"`` 即可退回模板路径（代价：6 通道上限 + 重采样到
+  9936 点 + 量化）。
 
 
 ## Related
