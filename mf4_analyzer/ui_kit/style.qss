@@ -2476,8 +2476,8 @@ QWidget#timeDomainPage {
     background-color: transparent;
 }
 
-QFrame#timeViewBottomDock {
-    background-color: transparent;
+QWidget#timeViewBottomDock {
+    background-color: #fbfcff;
     border-top: 1px solid #dbe3ee;
 }
 
@@ -3167,6 +3167,43 @@ QWidget#viewTabBar {
     border: none;
 }
 
+/* Quiet section identity (time / fft / fft_time / frf / order). Display-only:
+ * soft icon badge + label + 1px rule, then a real gap before View tabs.
+ * Matches the HTML option-B quiet anchor; no section rainbow / wash. */
+QWidget#viewTabBar QWidget#viewSectionAnchor {
+    background-color: transparent;
+    border: none;
+    margin: 0 4px 0 0;
+}
+
+QWidget#viewTabBar QLabel#viewSectionAnchorIcon {
+    background-color: #e8f0ff;
+    border: none;
+    border-radius: 5px;
+    padding: 0;
+    margin: 0;
+}
+
+QWidget#viewTabBar QLabel#viewSectionAnchorLabel {
+    background-color: transparent;
+    border: none;
+    color: #3d4f66;
+    font-size: 12px;
+    font-weight: 600;
+    /* CJK line boxes keep empty descent below the glyph; 1px top pad drops
+     * the ink onto the same midline as Latin "View N" in the tab. */
+    padding: 1px 0 0 0;
+    margin: 0;
+}
+
+QWidget#viewTabBar QFrame#viewSectionAnchorRule {
+    background-color: #c8d2e0;
+    border: none;
+    margin: 0 0 0 2px;
+    min-width: 1px;
+    max-width: 1px;
+}
+
 QWidget#viewTabBar QTabBar#viewTabs {
     background-color: transparent;
 }
@@ -3374,14 +3411,14 @@ QFrame#chartHintBar QLabel#chartHintDiscovery {
     background-color: transparent;
 }
 
-QFrame#timeViewBottomDock QFrame#chartHintBar {
+QWidget#timeViewBottomDock QFrame#chartHintBar {
     background-color: transparent;
     border-top: 1px solid #d3dbe6;
 }
 
-QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintPersistent,
-QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintContext,
-QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintDiscovery {
+QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintPersistent,
+QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintContext,
+QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintDiscovery {
     padding: 1px 6px;
 }
 

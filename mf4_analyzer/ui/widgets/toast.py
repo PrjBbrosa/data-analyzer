@@ -14,11 +14,11 @@ class Toast(QFrame):
 
     _HOLD_MS = {'info': 3500, 'success': 3500, 'warning': 5000, 'error': 7000}
 
-    #: Clearance under the toast. The default leaves room for MainWindow's
-    #: status bar; a host with a taller bottom chrome (the batch sheet's 50px
-    #: footer with its Close/Preview/Run row) passes its own so the message
-    #: floats above that band instead of landing on the buttons.
-    DEFAULT_BOTTOM_MARGIN = 36
+    #: Clearance under the toast. Sized to clear MainWindow's status bar AND
+    #: the shared ViewTabBar strip (~28px) so transient messages do not cover
+    #: View tabs / ``+``. A host with a taller bottom chrome (the batch sheet's
+    #: 50px footer) still passes its own margin.
+    DEFAULT_BOTTOM_MARGIN = 72
 
     def __init__(self, parent=None, *, bottom_margin=None):
         super().__init__(parent)

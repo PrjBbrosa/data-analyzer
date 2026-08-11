@@ -145,6 +145,7 @@ class AnalysisSectionPage(QWidget):
         self.tabbar = ViewTabBar(
             manager,
             self._compare_row,
+            section=self.section,
             split_action_mode='active_pane',
             active_split_provider=self.pane_count,
             split_action_labels={

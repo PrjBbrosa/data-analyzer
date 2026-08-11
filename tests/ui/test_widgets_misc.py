@@ -99,6 +99,24 @@ def test_toast_second_message_replaces_instead_of_stacking(qapp, qtbot, host):
     assert len(host.findChildren(Toast)) == 1
 
 
+def test_toast_default_margin_clears_view_tab_strip(qapp, qtbot, host):
+    """Default toast sits above status + ViewTabBar (~28px), not on the tabs."""
+    assert Toast.DEFAULT_BOTTOM_MARGIN >= 72
+    toast = Toast(host)
+    toast.show_message("已保存工程")
+    assert toast.isVisible()
+    clearance = host.height() - (toast.y() + toast.height())
+    assert clearance == Toast.DEFAULT_BOTTOM_MARGIN
+    # Status (~22) + ViewTabBar (~28) still fit under the toast.
+    assert clearance >= 22 + 28
+
+
+def test_toast_custom_bottom_margin_is_honored(qapp, qtbot, host):
+    toast = Toast(host, bottom_margin=50)
+    toast.show_message("预览不可用")
+    assert host.height() - (toast.y() + toast.height()) == 50
+
+
 def test_toast_reshow_cancels_pending_fade_out(qapp, qtbot, host):
     """Regression: a fade-out in flight must not auto-hide the next message.
 

@@ -10,6 +10,7 @@ from PyQt5.QtCore import QEvent, QRectF, QSettings, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -22,9 +23,20 @@ from PyQt5.QtWidgets import (
 )
 
 from . import hints
-from ..ui_kit.icons import icon_device_pixel_ratio
+from ..ui_kit.icons import Icons, icon_device_pixel_ratio
 from ..ui_kit.menus import apply_rounded_menu_chrome
 from .view_state import MAX_VIEWS
+
+# Quiet section identity for the shared ViewTabBar. Keys match ChartStack /
+# AnalysisSectionPage mode ids; display lives here so callers never assemble
+# labels or invent colors. View tab_color stays a View identity cue only.
+_SECTION_ANCHORS = {
+    "time": ("时域", Icons.mode_time),
+    "fft": ("频谱", Icons.mode_fft),
+    "fft_time": ("时频", Icons.mode_fft_time),
+    "frf": ("频响", Icons.mode_frf),
+    "order": ("阶次", Icons.mode_order),
+}
 
 
 class ViewTabBar(QWidget):
@@ -43,6 +55,7 @@ class ViewTabBar(QWidget):
         manager,
         parent=None,
         *,
+        section=None,
         split_action_labels=None,
         split_action_mode='view_pair',
         active_split_provider=None,
@@ -50,6 +63,8 @@ class ViewTabBar(QWidget):
         super().__init__(parent)
         self.setObjectName("viewTabBar")
         self._manager = manager
+        self._section_key = None
+        self._section_anchor = None
         self._split_action_labels = {
             'split': "与此 View 并排",
             'replace': "与此 View 并排（替换当前合并）",
@@ -88,6 +103,10 @@ class ViewTabBar(QWidget):
         layout.setContentsMargins(8, 0, right_margin, 0)
         layout.setSpacing(2)
 
+        if section is not None:
+            self._section_anchor = self._make_section_anchor(section)
+            layout.addWidget(self._section_anchor, 0, Qt.AlignVCenter)
+
         self._tabs = QTabBar(self)
         self._tabs.setObjectName("viewTabs")
         self._tabs.setMovable(True)
@@ -108,7 +127,14 @@ class ViewTabBar(QWidget):
         self._tabs.customContextMenuRequested.connect(self._on_context_menu)
         # Watched for the mouse release that ends a drag-reorder; see eventFilter.
         self._tabs.installEventFilter(self)
-        layout.addWidget(self._tabs, 0)
+        layout.addWidget(self._tabs, 0, Qt.AlignVCenter)
+
+        if self._section_anchor is not None:
+            # Same typeface metrics as View tabs so "时域"/"频谱" share the
+            # Latin "View N" optical line (QLabel defaults can differ).
+            label = self._section_anchor.findChild(QLabel, "viewSectionAnchorLabel")
+            if label is not None:
+                label.setFont(self._tabs.font())
 
         # Part of the fixed right-hand group: like _plus it never compresses,
         # it is only shown when tabs had to be retired. Hidden widgets are
@@ -143,6 +169,64 @@ class ViewTabBar(QWidget):
         manager.active_changed.connect(self._sync_active)
         manager.split_changed.connect(self._on_manager_split_changed)
         self.refresh()
+
+    def _make_section_anchor(self, section: str) -> QWidget:
+        key = str(section)
+        try:
+            label_text, icon_factory = _SECTION_ANCHORS[key]
+        except KeyError as exc:
+            known = ", ".join(sorted(_SECTION_ANCHORS))
+            raise ValueError(
+                f"unknown ViewTabBar section {section!r}; expected one of: {known}"
+            ) from exc
+        self._section_key = key
+
+        # Height matches QTabBar (26). Content margins carve the same ~20px
+        # band the View tabs use (QSS ::tab height 20 + top-biased margin), so
+        # the icon/label midline lands on the View text midline — not the
+        # geometric center of the full 28px outer bar.
+        anchor = QWidget(self)
+        anchor.setObjectName("viewSectionAnchor")
+        anchor.setFocusPolicy(Qt.NoFocus)
+        anchor.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        anchor.setAttribute(Qt.WA_StyledBackground, True)
+        anchor.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        anchor.setFixedHeight(26)
+        anchor.setAccessibleName(f"当前区域：{label_text}")
+
+        row = QHBoxLayout(anchor)
+        # Top 4 / bottom 2: content mid ≈ bar y+14, matching polished tabRect.
+        # Right 10 is the gap before the first View tab.
+        row.setContentsMargins(2, 4, 10, 2)
+        row.setSpacing(6)
+
+        icon_host = QLabel(anchor)
+        icon_host.setObjectName("viewSectionAnchorIcon")
+        icon_host.setFocusPolicy(Qt.NoFocus)
+        icon_host.setFixedSize(18, 18)
+        icon_host.setAlignment(Qt.AlignCenter)
+        icon_host.setPixmap(icon_factory().pixmap(12, 12))
+        row.addWidget(icon_host, 0, Qt.AlignVCenter)
+
+        label = QLabel(label_text, anchor)
+        label.setObjectName("viewSectionAnchorLabel")
+        label.setFocusPolicy(Qt.NoFocus)
+        # Same box as the icon badge so CJK cap-height shares its midline;
+        # QSS padding-top nudges the glyph down (descent space is empty).
+        label.setFixedHeight(18)
+        label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        row.addWidget(label, 0, Qt.AlignVCenter)
+
+        # Dedicated 1px rule — more reliable than border-right on a transparent
+        # host (TimeDomain previously ate borders via WA_TranslucentBackground).
+        rule = QFrame(anchor)
+        rule.setObjectName("viewSectionAnchorRule")
+        rule.setFocusPolicy(Qt.NoFocus)
+        rule.setFixedSize(1, 14)
+        rule.setAttribute(Qt.WA_StyledBackground, True)
+        rule.setAutoFillBackground(True)
+        row.addWidget(rule, 0, Qt.AlignVCenter)
+        return anchor
 
     def _on_manager_split_changed(self, _idx) -> None:
         # Merge created/cancelled: update the status chip AND re-tint tab dots
@@ -316,6 +400,10 @@ class ViewTabBar(QWidget):
             return None
         spacing = max(0, layout.spacing())
         siblings = [self._plus]
+        # Quiet section anchor is a fixed left sibling: same reserve formula as
+        # + / » / split actions. It never compresses; tabs yield first.
+        if self._section_anchor is not None and not self._section_anchor.isHidden():
+            siblings.append(self._section_anchor)
         if include_overflow:
             # Measure at the widest label this bar could ever show ("»" + every
             # View retired) so the reserve cannot jitter as the count changes.

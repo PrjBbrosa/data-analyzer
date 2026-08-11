@@ -2,7 +2,7 @@
 from PyQt5.QtCore import QEvent, QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import (
-    QFrame, QSplitter, QStackedWidget, QVBoxLayout, QWidget,
+    QSplitter, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from ..pg_canvases import TimeDomainCanvasPG
@@ -92,11 +92,20 @@ class ChartStack(QWidget):
         self._time_split.setChildrenCollapsible(False)
         self._time_split.addWidget(self._time_card)
         time_lay.addWidget(self._time_split, stretch=1)
-        self._time_bottom_dock = QFrame(self._time_page)
+        # QWidget (not QFrame): analysisCompareRow is a QWidget, and QFrame +
+        # QSS border-top insets contentsRect by frameWidth (1px), which pushed
+        # the TimeDomain hairline/content 1px off the analysis sections.
+        self._time_bottom_dock = QWidget(self._time_page)
         self._time_bottom_dock.setObjectName("timeViewBottomDock")
+        # Same chrome contract as AnalysisSectionPage's #analysisCompareRow:
+        # an explicit light fill + top divider. WA_TranslucentBackground /
+        # transparent QSS suppress both the fill and the border (and the
+        # quiet-anchor 1px rule inside), which is why TimeDomain looked bare
+        # next to FFT/Order. WA_StyledBackground keeps the QSS fill from
+        # falling back to platform grey.
         self._time_bottom_dock.setAttribute(Qt.WA_StyledBackground, True)
-        self._time_bottom_dock.setAttribute(Qt.WA_TranslucentBackground, True)
-        self._time_bottom_dock.setAttribute(Qt.WA_NoSystemBackground, True)
+        self._time_bottom_dock.setAttribute(Qt.WA_TranslucentBackground, False)
+        self._time_bottom_dock.setAttribute(Qt.WA_NoSystemBackground, False)
         self._time_bottom_dock.setAutoFillBackground(False)
         dock_lay = QVBoxLayout(self._time_bottom_dock)
         dock_lay.setContentsMargins(0, 0, 0, 0)
@@ -125,11 +134,23 @@ class ChartStack(QWidget):
         # ``canvas_fft`` / ``_fft_card`` etc. survive as @property aliases onto
         # pane 0 so the large existing call surface stays unchanged (single-pane
         # behaviour == pre-V7).
+        # Per-section analysis ViewManagers. Cap matches time-domain
+        # (view_state.MAX_VIEWS): one shared ViewTabBar implementation, one
+        # ceiling — only state_factory / split semantics differ per section.
+        from ..view_state import MAX_VIEWS
         self.analysis_managers = {
-            'fft': ViewManager(self, state_factory=AnalysisViewState),
-            'fft_time': ViewManager(self, state_factory=AnalysisViewState),
-            'frf': ViewManager(self, state_factory=AnalysisViewState),
-            'order': ViewManager(self, state_factory=AnalysisViewState),
+            'fft': ViewManager(
+                self, state_factory=AnalysisViewState, max_views=MAX_VIEWS,
+            ),
+            'fft_time': ViewManager(
+                self, state_factory=AnalysisViewState, max_views=MAX_VIEWS,
+            ),
+            'frf': ViewManager(
+                self, state_factory=AnalysisViewState, max_views=MAX_VIEWS,
+            ),
+            'order': ViewManager(
+                self, state_factory=AnalysisViewState, max_views=MAX_VIEWS,
+            ),
         }
 
         def _fft_card_factory():
@@ -747,7 +768,7 @@ class ChartStack(QWidget):
             existing.setVisible(self.current_mode() == 'time')
             return existing
 
-        bar = ViewTabBar(manager, self._time_bottom_dock)
+        bar = ViewTabBar(manager, self._time_bottom_dock, section='time')
         self._time_bottom_dock.layout().insertWidget(0, bar)
         self._view_tabbar = bar
         bar.setVisible(self.current_mode() == 'time')

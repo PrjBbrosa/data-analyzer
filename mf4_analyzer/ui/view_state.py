@@ -14,9 +14,10 @@ from uuid import uuid4
 from PyQt5.QtCore import QObject, pyqtSignal
 
 # Default per-manager View cap. The real cap is per ViewManager instance
-# (``max_views``); this stays the module-level default so the analysis sections
-# (fft / fft_time / order) and every existing caller keep the historical 6.
-MAX_VIEWS = 6
+# (``max_views``); this is the shared product default for every section —
+# time-domain workspace and the four analysis managers all use 12. Narrow
+# bars still degrade via ViewTabBar's roomy → compact → overflow path.
+MAX_VIEWS = 12
 
 # Open Color hues, 12 entries so a 12-View section gets pairwise-distinct tab
 # dots via ``_PALETTE[idx % len(_PALETTE)]``. The FIRST SIX MUST NOT CHANGE in

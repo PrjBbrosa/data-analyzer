@@ -165,9 +165,9 @@ spec：`docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`。
   `BatchRunner.seed_source_channels()` 喂进探针结果（`BatchSheet._make_runner` 已接），
   否则会把目标信号排到根本没有它的子来源上。
 - 批处理与 GUI 共用同一套 ASCII/TDMS 导入规则。
-- View 上限按 manager 区分：时域工作区 12（`ui/main_window/window.py` 传 `max_views=12`），
-  分析分区 6（`ui/view_state.MAX_VIEWS`）。窄宽度下 tab 先压成序号、再溢出到 `»`；
-  改动要保住活动 View 可见性、tooltip 全名、拖拽重排与右键菜单。
+- View 上限按 manager 区分：时域与四个分析分区统一 12（`ui/view_state.MAX_VIEWS`；
+  时域在 `ui/main_window/window.py` 显式传 `max_views=12`）。窄宽度下 tab 先压成序号、
+  再溢出到 `»`；改动要保住活动 View 可见性、tooltip 全名、拖拽重排与右键菜单。
 
 ## Gotchas
 - **验真机渲染**：UI/视觉/性能问题（尤其 macOS 原生）必须验真实渲染（截图 / objc 读原生

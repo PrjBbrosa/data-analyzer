@@ -275,7 +275,7 @@ class MainWindow(
         from ..inspector import Inspector
         from ..toolbar import Toolbar
         from .. import view_bridge
-        from ..view_state import ViewManager
+        from ..view_state import MAX_VIEWS, ViewManager
 
         cw = QWidget()
         self.setCentralWidget(cw)
@@ -366,9 +366,10 @@ class MainWindow(
         self.canvas_frf = self.chart_stack.canvas_frf
         self.channel_list = self.navigator.channel_list
         self.navigator.set_projection_role("time")
-        # Time domain runs a wider View cap than the analysis sections (which
-        # keep view_state.MAX_VIEWS by not passing max_views).
-        self.view_manager = ViewManager(self, max_views=12)
+        # Shared product View cap (view_state.MAX_VIEWS). Time and the four
+        # analysis managers use the same ceiling; ViewTabBar reads the
+        # per-manager value for the ``+`` disable and overflow path.
+        self.view_manager = ViewManager(self, max_views=MAX_VIEWS)
         self._view_bridge = view_bridge
         self.view_tabbar = self.chart_stack.attach_view_tabbar(self.view_manager)
         self._view_focus.bind(active=self.view_manager.active, partner=None)
