@@ -10,7 +10,7 @@ from types import SimpleNamespace
 can = pytest.importorskip("can", reason="python-can not installed (win32-gated)")
 cantools = pytest.importorskip("cantools", reason="cantools not installed")
 
-from mf4_analyzer.io.loader import DataLoader  # noqa: E402
+from mf4_analyzer.io.loader import NO_CAN_FRAMES_MESSAGE, DataLoader  # noqa: E402
 from tests._helpers.blf_factory import (  # noqa: E402
     write_engine_only_dbc,
     write_raw_blf,
@@ -222,5 +222,5 @@ def test_load_blf_dbc_mismatch_raises(tmp_path):
 
 def test_load_blf_empty_raises(tmp_path):
     blf = write_raw_blf(tmp_path / "empty.blf", frames=())
-    with pytest.raises(ValueError, match="没有可读的 CAN"):
+    with pytest.raises(ValueError, match=NO_CAN_FRAMES_MESSAGE):
         DataLoader.load_blf(str(blf), dbc_paths=None)

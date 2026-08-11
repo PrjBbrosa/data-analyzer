@@ -592,10 +592,14 @@ class BatchSheet(QDialog):
         self._input_panel.set_source_context(self._source_context)
 
     def _blf_paths_among(self, paths) -> list[str]:
-        return [
-            str(path) for path in (paths or ())
-            if Path(path).suffix.lower() == ".blf"
-        ]
+        selected = []
+        for path in (paths or ()):
+            try:
+                if DEFAULT_SOURCE_ADAPTER_REGISTRY.adapter_for(path).key == "blf":
+                    selected.append(str(path))
+            except Exception:
+                continue
+        return selected
 
     def _ensure_blf_dbc_context(self, paths) -> bool:
         """Resolve DBC via MainWindow's shared dialog path when needed.
@@ -620,14 +624,14 @@ class BatchSheet(QDialog):
             resolver = getattr(parent, "resolve_blf_dbc_paths_for_batch", None)
         if not callable(resolver):
             self._toast(
-                "无法为 BLF 选择 DBC（批处理未连接到主窗口）",
+                "无法为 CAN 日志选择 DBC（批处理未连接到主窗口）",
                 kind="warning",
             )
             return False
 
         resolved = resolver(blf_paths)
         if not resolved:
-            self._toast("已取消 BLF 的 DBC 选择", kind="info")
+            self._toast("已取消 CAN 日志的 DBC 选择", kind="info")
             return False
 
         context = dict(self._source_context)

@@ -122,3 +122,71 @@ def write_raw_blf(
     finally:
         writer.stop()
     return path
+
+
+def _sample_frame_payloads(n: int = 5):
+    """EngineData / VehicleSpeed payloads matching :func:`write_sample_blf`."""
+    enc16 = lambda v: struct.pack("<H", int(v))  # noqa: E731
+    payloads = []
+    for i in range(n):
+        eng = (
+            enc16((800 + i * 100) / 0.25)
+            + bytes([int((10 + i * 5) / 0.4)])
+            + b"\x00" * 5
+        )
+        spd = enc16((20 + i) / 0.01) + b"\x00" * 6
+        payloads.append((eng, spd))
+    return payloads
+
+
+def write_sample_asc(
+    path: Path,
+    *,
+    n: int = 5,
+    dt: float = 0.1,
+    t_start: float = 1.0,
+) -> Path:
+    """Write a CANoe ASC with the same frame sequence as :func:`write_sample_blf`.
+
+    Inserts two ``SV:`` system-variable lines mid-file so readers must skip
+    non-CAN rows. Self-checks with ``ASCReader`` before returning.
+    """
+    from can.io import ASCReader
+
+    date_line = "date Mon Jan 01 12:00:00 PM 2024"
+    lines = [
+        date_line,
+        "base hex timestamps absolute",
+        "no internal events logged",
+        f"Begin Triggerblock {date_line}",
+    ]
+    payloads = _sample_frame_payloads(n)
+    mid = max(1, n // 2)
+    for i, (eng, spd) in enumerate(payloads):
+        if i == mid:
+            lines.append("   SV: 1 0 1 ::Test::Var = [01 02]")
+            lines.append("   SV: 2 0 1 ::Test::Other = [03 04]")
+        t_eng = t_start + i * dt
+        t_spd = t_start + 0.05 + i * dt
+        eng_hex = " ".join(f"{b:02x}" for b in eng)
+        spd_hex = " ".join(f"{b:02x}" for b in spd)
+        lines.append(
+            f"   {t_eng:.6f} 1  {0x123:03X}             Rx   d 8  {eng_hex}"
+        )
+        lines.append(
+            f"   {t_spd:.6f} 1  {0x100:03X}             Rx   d 8  {spd_hex}"
+        )
+    lines.append("End TriggerBlock")
+    path.write_text("\n".join(lines) + "\n", encoding="ascii")
+
+    reader = ASCReader(str(path))
+    try:
+        messages = list(reader)
+    finally:
+        stop = getattr(reader, "stop", None)
+        if callable(stop):
+            stop()
+    assert len(messages) == n * 2, (
+        f"write_sample_asc self-check expected {n * 2} frames, got {len(messages)}"
+    )
+    return path

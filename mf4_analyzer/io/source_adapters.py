@@ -326,10 +326,13 @@ def _probe_blf(
     dbc_paths = tuple(str(item) for item in context.get("dbc_paths", ()) if item)
     result = DataLoader.probe_blf_dbc(path, list(dbc_paths))
     if not getattr(result, "is_match", False):
-        raise ValueError("BLF 与所选 DBC 不匹配，无法生成信号级来源")
+        raise ValueError("CAN 日志与所选 DBC 不匹配，无法生成信号级来源")
     canonical = canonical_source_path(path)
     group_id = "root"
     names = tuple(str(name) for name in getattr(result, "signal_names", ()))
+    source_kind = (
+        "canoe_asc" if Path(path).suffix.lower() == ".asc" else "blf"
+    )
     return (SourceDescriptor(
         source_id=stable_source_id(adapter.key, canonical, group_id),
         source_path=canonical,
@@ -341,7 +344,7 @@ def _probe_blf(
         metadata={
             "adapter_key": adapter.key,
             "probe_cost": adapter.probe_cost,
-            "source_kind": "blf",
+            "source_kind": source_kind,
             "dbc_paths": dbc_paths,
             "dbc_strength": str(getattr(result, "strength", "")),
             "decoded_signal_count": int(
@@ -391,7 +394,8 @@ class SourceAdapter:
         )
         if missing_context:
             reason = (
-                "BLF 需要 DBC 解码上下文，raw CAN frame 不作为批处理信号来源"
+                "CAN 日志（BLF/CANoe ASC）需要 DBC 解码上下文，raw CAN frame "
+                "不作为批处理信号来源"
                 if self.key == "blf"
                 else "缺少来源上下文: " + ", ".join(missing_context)
             )
@@ -554,7 +558,7 @@ def _default_adapters() -> tuple[SourceAdapter, ...]:
             ),
         ),
         SourceAdapter(
-            "blf", (".blf",), "Vector BLF + DBC", "load_blf", "single3",
+            "blf", (".blf",), "Vector CAN 日志 (BLF/ASC) + DBC", "load_blf", "single3",
             optional_packages=("can", "cantools"),
             context_requirements=("dbc_paths",),
             capability_notes=("decoded signals require explicit DBC context",),
@@ -640,6 +644,15 @@ class SourceAdapterRegistry:
             raise UnsupportedSourceFormatError(
                 f"Unsupported source format: no extension ({raw})"
             )
+        # Same extension, two formats: sniff real .asc paths for CANoe logs and
+        # route them onto the BLF adapter. Bare ".asc" / missing files stay ascii.
+        if extension == ".asc" and not raw.startswith("."):
+            try:
+                from .asc_can_format import sniff_canoe_asc
+                if sniff_canoe_asc(raw):
+                    return self._by_extension[".blf"]
+            except Exception:
+                pass
         try:
             return self._by_extension[extension]
         except KeyError as exc:

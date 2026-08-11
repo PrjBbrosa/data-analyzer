@@ -148,11 +148,12 @@ spec：`docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`。
   `docs/analyzer/specs/2026-07-26-plot-performance-standards.md`。**别放宽上限**来让改动通过。
 
 ## 产品约束（碰导入 / View 相关代码前必读）
-- 支持格式：MF4/MDF、CSV/Excel/HDF、BLF+DBC、音视频、通用 ASCII（`.asc`/`.fdc`）、
+- 支持格式：MF4/MDF、CSV/Excel/HDF、BLF+DBC、CANoe ASC CAN 日志（`.asc` 自动识别，配 DBC，
+  与 BLF 同链路）、音视频、通用 ASCII（`.asc`/`.fdc`）、
   NI TDMS（`.tdms`）、WinWert（`.wwt`）、ZFGE2/TestRunPRO（`.zfd`）、
   MATLAB（`.mat`，v7.3 经 HDF5）。
 - ASCII 需要可识别的时间列，或已验证的固定宽度采样元数据；TDMS 需要有效波形时基
-  ——**绝不臆造采样率**。
+  ——**绝不臆造采样率**。`.asc` 先经 CANoe 取证，命中走 CAN 日志链路，未命中才按通用 ASCII 解析。
 - `.tdms_index` 是 TDMS 配套索引，永远不是可导入的数据文件。
 - WWT 用文件自带的 `Zeit` 时基并保留单位/缩放/偏移；ZFD 在时基无效时可用**显式标注为
   估算**的 1 kHz 回退；MAT 只认可识别的时间变量，不猜工程单位。

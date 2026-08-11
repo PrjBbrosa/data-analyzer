@@ -153,27 +153,34 @@ AUDIO_VIDEO_EXTS = {
 
 CSV_LIKE_EXTS = {'.asc', '.csv', '.fdc'}
 
+# Sentinel matched by ProjectIOMixin when re-raising empty CAN-log reads.
+# Keep loader raises and mixin ``in str(exc)`` checks on the same constant.
+NO_CAN_FRAMES_MESSAGE = "CAN 日志没有可读的数据帧"
+
 
 class DataLoader:
     @staticmethod
     def read_blf_frames(fp, progress_callback=None):
-        """Read one BLF into reusable raw CAN frames.
+        """Read one Vector CAN log (BLF / CANoe ASC) into reusable raw frames.
 
         Import coordinators that need to validate a DBC before decoding can
         keep these frames only for the current file, avoiding a second full
-        ``BLFReader`` pass.  Callers must treat the returned tuples as
-        immutable.
+        reader pass.  Callers must treat the returned tuples as immutable.
         """
-        frames = _read_blf_frames(fp, progress_callback=progress_callback)
+        if Path(fp).suffix.lower() == ".asc":
+            from .asc_can_format import _read_asc_frames
+            frames = _read_asc_frames(fp, progress_callback=progress_callback)
+        else:
+            frames = _read_blf_frames(fp, progress_callback=progress_callback)
         if not frames:
-            raise ValueError("BLF 文件没有可读的 CAN 数据帧")
+            raise ValueError(NO_CAN_FRAMES_MESSAGE)
         return frames
 
     @staticmethod
     def probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None):
-        """Probe a DBC set against already-read BLF frames."""
+        """Probe a DBC set against already-read CAN-log frames."""
         if not frames:
-            raise ValueError("BLF 文件没有可读的 CAN 数据帧")
+            raise ValueError(NO_CAN_FRAMES_MESSAGE)
         return _probe_blf_dbc_frames(
             frames,
             list(dbc_paths or []),
@@ -182,14 +189,14 @@ class DataLoader:
 
     @staticmethod
     def load_blf_frames(frames, dbc_paths=None, progress_callback=None):
-        """Decode or expose a previously-read BLF frame sequence.
+        """Decode or expose a previously-read CAN-log frame sequence.
 
         This is deliberately the same semantic path as :meth:`load_blf`; the
         only difference is that a batch importer supplies its one-file frame
-        list rather than making this method read the BLF again.
+        list rather than making this method read the log again.
         """
         if not frames:
-            raise ValueError("BLF 文件没有可读的 CAN 数据帧")
+            raise ValueError(NO_CAN_FRAMES_MESSAGE)
         t0 = min(frame[0] for frame in frames)
         if dbc_paths:
             return _decode_blf_with_dbc(
@@ -348,7 +355,7 @@ class DataLoader:
 
     @staticmethod
     def load_blf(fp, dbc_paths=None, progress_callback=None):
-        """Load a Vector BLF (raw CAN log) as ``(DataFrame, channels, units)``.
+        """Load a Vector CAN log (BLF / CANoe ASC) as ``(DataFrame, channels, units)``.
 
         With ``dbc_paths`` (one or more ``.dbc``), frames are decoded into named
         physical signals via cantools. Without a DBC, payload bytes are exposed
@@ -551,7 +558,14 @@ class DataLoader:
     @staticmethod
     def load_ascii(fp):
         """Load a tabular ASCII file, retaining detector evidence."""
+        from mf4_analyzer.io.asc_can_format import sniff_canoe_asc
         from mf4_analyzer.io.ascii_format import has_time_column, sniff_fixed_width_ascii
+
+        if sniff_canoe_asc(fp):
+            raise ValueError(
+                "该 .asc 是 CANoe CAN 总线日志：请配 DBC 按 CAN 日志流程解码"
+                "（主窗口打开或批处理导入均可）"
+            )
 
         layout = sniff_fixed_width_ascii(fp)
         if layout is None:

@@ -266,3 +266,53 @@ def test_blf_probe_uses_decoder_context_and_keeps_load_identity(monkeypatch):
     assert adapter.availability(context).status == "ready"
     assert descriptor.channel_names == ("EngineSpeed", "Torque")
     assert descriptor.source_id == loaded.source_id
+
+
+def test_adapter_for_sniffs_canoe_asc_onto_blf_adapter(tmp_path):
+    pytest.importorskip("can", reason="python-can not installed (win32-gated)")
+    from tests._helpers.blf_factory import write_sample_asc
+
+    registry = SourceAdapterRegistry.default()
+    canoe = write_sample_asc(tmp_path / "log.asc", n=2)
+    table = tmp_path / "table.asc"
+    table.write_text("Time\tSpeed\n0.0\t10\n", encoding="utf-8")
+    missing = tmp_path / "missing.asc"
+
+    assert registry.adapter_for(canoe).key == "blf"
+    assert registry.adapter_for(table).key == "ascii"
+    assert registry.adapter_for(missing).key == "ascii"
+    assert registry.adapter_for("run.asc").key == "ascii"
+    assert registry.adapter_for(".asc").key == "ascii"
+
+
+def test_canoe_asc_probe_and_load_match_blf_frame_sequence(tmp_path, monkeypatch):
+    pytest.importorskip("can", reason="python-can not installed (win32-gated)")
+    pytest.importorskip("cantools", reason="cantools not installed")
+    from tests._helpers.blf_factory import (
+        write_sample_asc,
+        write_sample_blf,
+        write_two_message_dbc,
+    )
+
+    monkeypatch.setattr(
+        "mf4_analyzer.io.source_adapters._package_available", lambda _name: True
+    )
+    registry = SourceAdapterRegistry.default()
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    asc = write_sample_asc(tmp_path / "log.asc", n=3)
+    blf = write_sample_blf(tmp_path / "log.blf", n=3)
+    context = {"dbc_paths": (str(dbc),)}
+
+    assert registry.availability_for(asc).status == "limited"
+    descriptors = registry.probe_sources(asc, context=context)
+    assert len(descriptors) == 1
+    assert descriptors[0].metadata["source_kind"] == "canoe_asc"
+    assert descriptors[0].source_id.startswith("blf:")
+    assert "EngineSpeed" in descriptors[0].channel_names
+
+    asc_loaded = registry.load_sources(asc, context=context)[0]
+    blf_loaded = registry.load_sources(blf, context=context)[0]
+    assert "EngineSpeed" in asc_loaded.file_data.channels
+    assert list(asc_loaded.file_data.data["EngineSpeed"]) == pytest.approx(
+        list(blf_loaded.file_data.data["EngineSpeed"])
+    )
