@@ -22,7 +22,7 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
 ```
 - 本机验证走仓库 venv（`.venv/bin/python`）；裸 `python` / `pytest` 未必存在。
 - Qt 用例需要 offscreen 平台；`TMPDIR=/tmp` 用来绕开下面 Gotchas 里的 TCC 问题。
-- 默认套件约 6300 条，主体约 7 分钟 + `tests/acquisition_ui` 约 10 秒（2026-08-11 本机实测；
+- 默认套件约 6400 条，主体约 7 分钟 + `tests/acquisition_ui` 约 15 秒（2026-08-11 本机实测；
   早先记的「近 20 分钟」已不成立）。仍建议改动局部时先跑对应子目录，收尾再跑全量。
 - **全量要分两条命令跑**：裸 `pytest -q` 会在 `tests/acquisition_ui` 段被 pyqtgraph
   `LabelItem.resizeEvent` 的 `RuntimeError`（已删 `QGraphicsTextItem`）打成 **segfault**，
@@ -31,8 +31,14 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
 - **动手前先记下当前失败数**，别把既有失败算到自己的改动头上。
   当前基线（2026-08-11 实测，树内容即 merge `2c8e9b5a`；修复清单见
   `docs/analyzer/reviews/2026-08-11-two-day-delivery-and-frf-view-review.md` §7）：
-  主体 **5925 passed / 9 skipped / 0 failed / 0 errors**，`tests/acquisition_ui`
-  单独 **355 passed**——**两边全绿**。
+  主体 **6048 passed / 11 skipped / 0 failed / 0 errors**，`tests/acquisition_ui`
+  单独 **355 passed**——**两边全绿**（2026-08-12 实测，HEAD `56c42f4d`；此前
+  2026-08-11 记录为主体 5925/9）。
+  主体一条命令在 `f85b5d4e`..`56c42f4d` 期间还有**另一处**交错 segfault
+  （channel-tree delegate paint 中途被 gen-0 GC 回收弱引用顶层 widget），已由
+  `tests/ui/conftest.py` 的「post-call 钉住顶层 widget → teardown 泵完事件再释放
+  + collect」修复——**别删那段 pin 逻辑**，机制、实验与引入提交见
+  `docs/analyzer/reviews/2026-08-11-channel-tree-paint-segfault-triage.md` §6。
   期间曾出现过的 Batch 2 failed + 8 errors（几何契约漏同步 + `BatchSheet`
   lambda/属性回调导致的僵尸 wrapper teardown 簇）已随上述修复清零，定性与引入点
   见同一文档 §4.2/§4.3——别从旧版验收文档把「单独进程运行通过」的说法抄回来，
