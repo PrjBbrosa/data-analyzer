@@ -125,9 +125,18 @@ class _ModifierWheelViewBox(pg.ViewBox):
                 is_left_2d
                 and self.state.get("mouseMode") == pg.ViewBox.RectMode
             )
+            plot_time = getattr(owner, "_plot_time", None) if owner else None
+            # FFT time-preview plot body: pan X only (Y stays on axis gutters).
+            force_time_x_only = (
+                is_left_2d
+                and not is_rect_left_2d
+                and plot_time is not None
+                and self is plot_time.vb
+            )
         except Exception:
             is_left_2d = False
             is_rect_left_2d = False
+            force_time_x_only = False
         if is_left_2d:
             try:
                 if ev.isStart():
@@ -138,7 +147,18 @@ class _ModifierWheelViewBox(pg.ViewBox):
                         owner.disable_interactive_quality()
             except Exception:
                 pass
-        super().mouseDragEvent(ev, axis=axis)
+        if force_time_x_only:
+            try:
+                prev = list(self.state["mouseEnabled"])
+                self.setMouseEnabled(x=True, y=False)
+                super().mouseDragEvent(ev, axis=axis)
+            finally:
+                try:
+                    self.setMouseEnabled(x=bool(prev[0]), y=bool(prev[1]))
+                except Exception:
+                    pass
+        else:
+            super().mouseDragEvent(ev, axis=axis)
         if is_rect_left_2d:
             try:
                 is_xmaster = (
@@ -148,6 +168,14 @@ class _ModifierWheelViewBox(pg.ViewBox):
                 )
                 if is_xmaster and ev.isFinish():
                     owner._apply_overlay_box_zoom_y()
+                apply_preview = getattr(owner, "_apply_time_preview_box_zoom_y", None)
+                if (
+                    callable(apply_preview)
+                    and plot_time is not None
+                    and self is plot_time.vb
+                    and ev.isFinish()
+                ):
+                    apply_preview()
             except Exception:
                 pass
         if is_left_2d:

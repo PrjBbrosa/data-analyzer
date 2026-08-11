@@ -162,6 +162,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="Shift+滚轮缩放，平滚轮平移",
             ),
             QuickRow(
+                "FFT 时域预览",
+                gesture="平滚轮 / Y 轴槽 / 右键 / 双击",
+                sub="平移·Shift缩Y·Ctrl缩X；轴槽单通道；设左轴；编辑颜色",
+            ),
+            QuickRow(
                 "编辑某曲线颜色/坐标（叠加）",
                 gesture="双击曲线或其 Y 轴",
             ),

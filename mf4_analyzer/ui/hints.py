@@ -401,8 +401,8 @@ _HINTS = (
         retire_when_discovered="spectrogram.slice_pick",
     ),
     # FFT time-domain preview (lives on the FFT spectrum line card, below the
-    # spectrum): click a curve to choose the source, and the preview honours
-    # Ctrl/Shift wheel zoom independently of the spectrum above it.
+    # spectrum): click a curve to choose the source; preview Y follows the
+    # TimeDomain overlay wheel contract (plain=pan, Shift=zoom, gutter=one axis).
     Hint(
         id="fft.preview_pick_source",
         text="点击上方频谱曲线 → 选为下方时域预览的源",
@@ -415,12 +415,39 @@ _HINTS = (
     ),
     Hint(
         id="fft.preview_wheel",
-        text="预览图内 Ctrl/Shift+滚轮 独立缩放",
+        text="预览：平滚轮平移 Y · Shift 缩放 Y · Ctrl 缩放 X",
         surface="context",
         tier="A",
         modes=frozenset({"fft"}),
         chart_kinds=frozenset({"fft"}),
         priority=55,
+    ),
+    Hint(
+        id="fft.preview_axis_gutter",
+        text="滚轮停在预览左/右 Y 轴上 → 只调该通道",
+        surface="context",
+        tier="B",
+        modes=frozenset({"fft"}),
+        chart_kinds=frozenset({"fft"}),
+        priority=50,
+    ),
+    Hint(
+        id="fft.preview_left_axis",
+        text="预览右键曲线/右轴 → 设为左轴",
+        surface="context",
+        tier="B",
+        modes=frozenset({"fft"}),
+        chart_kinds=frozenset({"fft"}),
+        priority=48,
+    ),
+    Hint(
+        id="fft.preview_dblclick",
+        text="双击预览曲线或 Y 轴 → 编辑颜色/坐标",
+        surface="context",
+        tier="B",
+        modes=frozenset({"fft"}),
+        chart_kinds=frozenset({"fft"}),
+        priority=46,
     ),
     # Annotation gesture, gated on annotation mode, for the FFT-vs-Time + Order
     # cards as well (the existing annotation.mode hint only covers fft + order).
@@ -563,7 +590,7 @@ _FLASH_TIPS = {
     "spectrogram.slice_pick": "已取该帧切片 · 也可拖动切片标记线移动取样位置",
     "spectrogram.colorbar": "拖 colorbar 调色阶 · 双击 colorbar 可重置范围",
     "spectrogram.divider": "拖上下分隔条调高度 · 双击重置 · 底部可折叠/展开",
-    "fft.preview_source": "已选为时域预览的源 · 预览图支持 Ctrl/Shift 滚轮独立缩放",
+    "fft.preview_source": "已选为时域预览的源 · 平滚轮平移 Y · Shift/Ctrl 缩放 · 右键可设左轴",
     "preset.right_click": "预设槽右键可保存 / 重命名 / 重置为默认",
 }
 

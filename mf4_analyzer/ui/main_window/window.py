@@ -1675,6 +1675,9 @@ class MainWindow(
         the pick so it applies if the user later switches to overlay, but the
         replot only reorders when overlay is active (plot_time guards that).
 
+        When the active section is FFT, also promote the matching time-preview
+        source to the left axis (same product verb, preview-local state).
+
         The pick belongs to the FOCUSED View, not just the window. Every path
         that re-projects a View onto a canvas (``_project_view_controls`` /
         ``_render_view_to_canvas`` → ``view_bridge.apply_controls_from_state``)
@@ -1690,6 +1693,12 @@ class MainWindow(
         self._overlay_primary = (fid, ch)
         if not getattr(self, '_applying_view', False):
             self._capture_focused_view()
+        mode = self.chart_stack.current_mode()
+        if mode == 'fft':
+            canvas = getattr(self, 'canvas_fft', None)
+            promote = getattr(canvas, 'promote_time_entry_to_left_by_channel', None)
+            if callable(promote) and promote(fid, ch):
+                return
         self._plot_time_preserving_xlim()
 
     def _safe_capture_primary_xlim(self):

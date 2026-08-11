@@ -172,6 +172,15 @@ def test_quickref_covers_db_reference_badge_and_manage_button():
     assert all(not r.soon for r in group.rows)
 
 
+def test_quickref_fft_preview_row_matches_overlay_contract():
+    group = next(g for g in quickref.QUICKREF if g.title == "图表手势")
+    row = next(r for r in group.rows if r.desc == "FFT 时域预览")
+    assert "平滚轮" in (row.gesture or "")
+    assert "平移" in (row.sub or "")
+    assert "设左轴" in (row.sub or "")
+    assert "单通道" in (row.sub or "")
+
+
 def test_quickref_covers_batch_drawer():
     """The batch drawer had no quickref presence at all until the option-A
     picker rewrite (plan 2026-08-02). Guard the entry point plus the three

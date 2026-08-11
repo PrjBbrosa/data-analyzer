@@ -302,6 +302,22 @@ def test_flash_tip_registry_has_section_gestures():
     assert hints.flash_tip("missing.id") is None
 
 
+def test_fft_preview_hints_match_overlay_wheel_contract():
+    by_id = {h.id: h for h in hints.all_hints()}
+    for hid in (
+        "fft.preview_wheel",
+        "fft.preview_axis_gutter",
+        "fft.preview_left_axis",
+        "fft.preview_dblclick",
+    ):
+        assert hid in by_id, hid
+        assert by_id[hid].modes == frozenset({"fft"})
+    wheel = by_id["fft.preview_wheel"].text
+    assert "平滚轮平移" in wheel
+    assert "Shift" in wheel and "Ctrl" in wheel
+    assert "平移 Y" in hints.flash_tip("fft.preview_source")
+
+
 def test_design_curated_ids_exist_in_registry():
     spec = (
         "docs/superpowers/specs/2026-06-01-chart-hint-system-design.md"
