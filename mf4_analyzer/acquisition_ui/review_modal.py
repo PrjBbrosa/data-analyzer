@@ -55,6 +55,7 @@ from PyQt5.QtWidgets import (
 from mf4_analyzer.acquisition.manifest import sha256_file
 from mf4_analyzer.acquisition.preflight import PreflightResult, analyze_mf4
 from mf4_analyzer.acquisition_capture.session import SessionSummary
+from mf4_analyzer.ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -413,6 +414,7 @@ class ReviewModal(QDialog):
         confirm_btn = box.addButton("确认删除", QMessageBox.DestructiveRole)
         box.addButton("取消", QMessageBox.RejectRole)
         box.setWindowModality(Qt.WindowModal)
+        fit_message_box_buttons_to_text(box)
 
         def _handle_clicked(button) -> None:
             if button is confirm_btn:
@@ -600,6 +602,9 @@ class ReviewModal(QDialog):
             f"已保存路径: {self._ctx.mf4_path}"
         )
         box.setWindowModality(Qt.WindowModal)
+        if not box.buttons():
+            box.setStandardButtons(QMessageBox.Ok)
+        fit_message_box_buttons_to_text(box)
         self._archive_failure_box = box
         box.open()
 

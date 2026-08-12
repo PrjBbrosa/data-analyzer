@@ -20,6 +20,7 @@ from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
 from mf4_analyzer.acquisition_ui.preflight_view_data import _humanize_duration_s
 from mf4_analyzer.acquisition_ui.settings_dialog import SettingsDialog
 from mf4_analyzer.acquisition_ui.state import CockpitState
+from mf4_analyzer.ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ._defs import (
     DROPPED_FRAMES_PROMPT_TEXT,
     DROPPED_FRAMES_PROMPT_TITLE,
@@ -564,6 +565,9 @@ class SettingsMixin:
             f"{a2l_path.name}\n\n" + "\n".join(f"• {p}" for p in problems)
         )
         box.setWindowModality(Qt.WindowModal)
+        if not box.buttons():
+            box.setStandardButtons(_QMessageBox.Ok)
+        fit_message_box_buttons_to_text(box)
         # Keep a reference so the dialog isn't GC'd before the user
         # dismisses it. Replaces any prior dialog (operator only acts
         # on the most recent A2L pick anyway).
@@ -630,6 +634,7 @@ class SettingsMixin:
         box.setText(DROPPED_FRAMES_PROMPT_TEXT)
         cont_btn = box.addButton("继续录制", _QMessageBox.AcceptRole)
         stop_btn = box.addButton("停止并复盘", _QMessageBox.DestructiveRole)
+        fit_message_box_buttons_to_text(box)
         # Use ``open`` to keep the prompt non-modal w.r.t. the
         # recording loop per spec ("stays inside the Recording state;
         # never auto-dismisses"). Under Windows offscreen Qt, opening a

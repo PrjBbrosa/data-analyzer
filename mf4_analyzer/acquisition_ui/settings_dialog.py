@@ -34,6 +34,7 @@ from mf4_analyzer.acquisition_capture.vector_hw_probe import (
     test_xcp_connection,
     vector_hw_probe,
 )
+from mf4_analyzer.ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
 
 @dataclass(frozen=True)
@@ -524,6 +525,9 @@ class SettingsDialog(QDialog):
         box.setWindowTitle("Test Connection")
         box.setText(result.message)
         box.setIcon(QMessageBox.Information if result.ok else QMessageBox.Warning)
+        if not box.buttons():
+            box.setStandardButtons(QMessageBox.Ok)
+        fit_message_box_buttons_to_text(box)
         self._test_connection_box = box
         if self.isVisible():
             box.open()

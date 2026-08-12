@@ -8,6 +8,7 @@ import sys
 
 import numpy as np
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from collections import OrderedDict
 
@@ -1113,7 +1114,7 @@ class MainWindow(
             bar.delete_requested.connect(
                 lambda idx, s=sec: self._on_analysis_delete(s, idx))
             bar.rename_requested.connect(
-                lambda idx, name, s=sec: self._on_analysis_view_rename(s, idx, name))
+                partial(self._on_analysis_view_rename, sec))
             bar.duplicate_requested.connect(
                 lambda idx, s=sec: self._on_analysis_duplicate(s, idx))
             bar.color_requested.connect(
