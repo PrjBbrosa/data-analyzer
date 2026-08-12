@@ -218,7 +218,7 @@ class AnalysisMixin:
                 # in-flight pane-1 completion cannot repopulate cache.
                 if section == 'frf':
                     self._frf_coordinator.invalidate_pane(state.view_id, 1)
-                if section in {'fft_time', 'order', 'frf'}:
+                if section in {'fft', 'fft_time', 'order', 'frf'}:
                     self._replace_analysis_pane_pins(
                         section, state.view_id, 1, ())
             state.remove_second_pane()
