@@ -4574,6 +4574,28 @@ def test_order_contextual_apply_preset_does_not_emit_unit_signal(qtbot):
     )
 
 
+def test_f14_set_range_limits_blocks_value_changed(qtbot):
+    """F14: programmatic setRange must not emit valueChanged (clamp path)."""
+    from mf4_analyzer.ui.inspector_sections.persistent_top import PersistentTop
+
+    top = PersistentTop()
+    qtbot.addWidget(top)
+    emissions = []
+    top.spin_start.valueChanged.connect(lambda v: emissions.append(("start", v)))
+    top.spin_end.valueChanged.connect(lambda v: emissions.append(("end", v)))
+    top.spin_start.setValue(10.0)
+    top.spin_end.setValue(90.0)
+    emissions.clear()
+
+    top.set_range_limits(0.0, 50.0)
+
+    assert top.spin_end.maximum() == 50.0
+    assert top.spin_end.value() == 50.0
+    assert emissions == [], (
+        f"set_range_limits must blockSignals around setRange; got {emissions}"
+    )
+
+
 def test_order_contextual_current_params_emits_axis_keys(qtbot):
     """current_params must emit the new axis keys."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual

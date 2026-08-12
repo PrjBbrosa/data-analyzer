@@ -4670,3 +4670,83 @@ def test_channel_reference_facts_canonicalizes_toolchain_unit(qapp, qtbot):
     fid = next(iter(w.files))
     assert w._channel_reference_facts(fid, "TQ").unit == "Nm"
     assert w._channel_reference_facts(fid, "SPD").unit == "deg/sec"
+
+
+def test_f8_view_split_skips_time_projection_outside_time_mode(qapp, qtbot):
+    """F8: analysis-mode split must not project time View controls."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.toolbar._set_mode("fft")
+    qtbot.wait(10)
+    calls = []
+    orig = win._project_view_controls
+
+    def _spy(idx):
+        calls.append((idx, win.chart_stack.current_mode()))
+        return orig(idx)
+
+    win._project_view_controls = _spy
+    win._on_view_split(None)
+    assert calls == []
+
+    win.view_manager.new_view()
+    win._on_view_split(1)
+    assert calls == []
+
+
+def test_f8_render_view_finally_skips_projection_outside_time_mode(
+    qapp, qtbot, monkeypatch
+):
+    """F8: `_render_view_to_canvas` finally must not project in analysis mode."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.toolbar._set_mode("fft")
+    qtbot.wait(10)
+    calls = []
+    orig = win._project_view_controls
+
+    def _spy(idx):
+        calls.append(idx)
+        return orig(idx)
+
+    win._project_view_controls = _spy
+    monkeypatch.setattr(
+        win._view_bridge,
+        "apply_controls_from_state",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        win,
+        "_plot_time_on_canvas",
+        lambda *a, **k: True,
+    )
+    win._view_focus.focused = 0
+    win._render_view_to_canvas(0, win.canvas_time, update_primary_ui=False)
+    assert calls == []
+
+
+def test_f10_view_rename_refreshes_navigator_empty_state(qapp, qtbot):
+    """F10: renaming the active View updates empty-state copy immediately."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    cl = win.navigator.channel_list
+
+    win.toolbar._set_mode("time")
+    qtbot.wait(10)
+    win._on_time_view_rename(0, "巡航工况")
+    qtbot.wait(10)
+    assert "时域 · 巡航工况" in cl.empty_state.text()
+    assert cl._empty_view_name == "巡航工况"
+
+    win.toolbar._set_mode("fft")
+    qtbot.wait(10)
+    win._on_analysis_view_rename("fft", 0, "噪声谱")
+    qtbot.wait(10)
+    assert "频谱 · 噪声谱" in cl.empty_state.text()
+    assert cl._empty_view_name == "噪声谱"

@@ -252,14 +252,18 @@ class ViewMixin:
             self._view_focus.secondary = None
             self._view_focus.focused = self.view_manager.active
             self._sync_focus_accent()
-            if self.files and self.chart_stack.current_mode() == 'time':
-                self._render_view_to_canvas(
-                    self.view_manager.active,
-                    self.canvas_time,
-                    update_primary_ui=True,
-                )
-            else:
-                self._project_view_controls(self.view_manager.active)
+            # F8: mirror `_apply_active_view` — only the time section owns the
+            # shared navigator projection. Non-time must not fall through the
+            # "no files" else and overwrite an analysis View's empty-state.
+            if self.chart_stack.current_mode() == 'time':
+                if self.files:
+                    self._render_view_to_canvas(
+                        self.view_manager.active,
+                        self.canvas_time,
+                        update_primary_ui=True,
+                    )
+                else:
+                    self._project_view_controls(self.view_manager.active)
             return
         if not (0 <= other_idx < len(self.view_manager.views)):
             self.chart_stack.exit_split()
@@ -269,19 +273,34 @@ class ViewMixin:
         self._ensure_secondary_range_signal_connected()
         self._view_focus.focused = self.view_manager.active
         self._sync_focus_accent()
-        if self.files and self.chart_stack.current_mode() == 'time':
-            self._render_view_to_canvas(
-                self.view_manager.active, self.canvas_time, update_primary_ui=True
-            )
-            self._render_view_to_canvas(
-                other_idx, self.chart_stack.secondary_canvas(), update_primary_ui=False
-            )
-        else:
-            self._project_view_controls(self.view_manager.active)
+        if self.chart_stack.current_mode() == 'time':
+            if self.files:
+                self._render_view_to_canvas(
+                    self.view_manager.active, self.canvas_time, update_primary_ui=True
+                )
+                self._render_view_to_canvas(
+                    other_idx, self.chart_stack.secondary_canvas(), update_primary_ui=False
+                )
+            else:
+                self._project_view_controls(self.view_manager.active)
 
     def _on_view_clear_split(self, idx):
         self._capture_focused_view()
         self.view_manager.clear_split_for(idx)
+
+    def _on_time_view_rename(self, idx, name):
+        """F10: rename then refresh navigator empty-state for the active View."""
+        self.view_manager.rename(idx, name)
+        if self.chart_stack.current_mode() != 'time':
+            return
+        if idx != self.view_manager.active:
+            return
+        if not (0 <= idx < len(self.view_manager.views)):
+            return
+        state = self.view_manager.get(idx)
+        empty = getattr(self.navigator, 'set_empty_state_context', None)
+        if callable(empty):
+            empty(section_label='时域', view_name=state.name)
 
     def _render_view_to_canvas(self, idx, canvas, *, update_primary_ui):
         if canvas is None:
@@ -320,7 +339,12 @@ class ViewMixin:
             )
         finally:
             self._applying_view = old_applying_view
-            if restore_idx is not None:
+            # F8: secondary-pane restore must not project time controls while
+            # an analysis section owns the shared navigator.
+            if (
+                restore_idx is not None
+                and self.chart_stack.current_mode() == 'time'
+            ):
                 self._project_view_controls(restore_idx)
             if cursor_pill_snapshot is not None:
                 self.chart_stack.restore_cursor_pill_snapshot(cursor_pill_snapshot)

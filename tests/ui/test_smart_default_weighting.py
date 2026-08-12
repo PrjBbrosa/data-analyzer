@@ -150,3 +150,81 @@ def test_load_one_registers_wav_as_audio_source_with_fs(qapp, qtbot, tmp_path):
     assert fd.fs == pytest.approx(float(fs))
     assert "audio" in fd.channels
     assert _all_weightings(win) == {"fft": "A", "fft_time": "A", "order": "A"}
+
+
+def test_a8_audio_weighting_none_survives_analysis_view_switch(qapp, qtbot):
+    """A8: stored weighting=None must survive apply onto an audio source.
+
+    Echoing an audio channel while restoring an analysis View historically
+    re-ran the audio A-weighting default and overwrote weighting=None in the
+    live Inspector (fan-out to sibling sections) while AnalysisViewState kept
+    None — UI/state fork, later capture solidifies A. Loading audio outside
+    the apply window must still default to A (covered elsewhere).
+    """
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.io.file_data import FileData
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    t = np.linspace(0.0, 0.05, 2400)
+    df = pd.DataFrame(
+        {
+            "audio": 0.1 * np.sin(2 * np.pi * 440.0 * t),
+            "sig": np.zeros(2400, dtype=float),
+        }
+    )
+    fd = FileData(
+        "tone.wav",
+        df,
+        ["audio", "sig"],
+        {"audio": "", "sig": "V"},
+        fs=48_000.0,
+    )
+    fd.is_audio_source = lambda: True
+    win.files["audio"] = fd
+
+    win.toolbar._set_mode("fft_time")
+    qtbot.wait(10)
+    mgr = win.analysis_managers["fft_time"]
+    win._on_analysis_new("fft_time")
+    qtbot.wait(10)
+    assert len(mgr.views) == 2
+
+    v0, v1 = mgr.get(0), mgr.get(1)
+    for view in (v0, v1):
+        view.attached_file_ids = ["audio"]
+    v0.params = dict(win.inspector.fft_time_ctx.current_params())
+    v0.params["weighting"] = "None"
+    v0.panes[0].sources = [("audio", "audio")]
+    v1.params = dict(win.inspector.fft_time_ctx.current_params())
+    v1.params["weighting"] = "A"
+    v1.panes[0].sources = [("audio", "sig")]
+
+    # Land on the non-audio View first so switching onto v0 re-echoes audio.
+    win._on_analysis_view_switched("fft_time", 1, render=False)
+    qtbot.wait(10)
+    for ctx in (
+        win.inspector.fft_ctx,
+        win.inspector.fft_time_ctx,
+        win.inspector.order_ctx,
+    ):
+        ctx.set_weighting_default("None")
+    v0.params["weighting"] = "None"
+
+    win._on_analysis_view_switched("fft_time", 0, render=False)
+    qtbot.wait(10)
+
+    assert v0.params.get("weighting") == "None"
+    assert win.inspector.fft_time_ctx.get_params()["weighting"] == "None"
+    assert _all_weightings(win) == {
+        "fft": "None",
+        "fft_time": "None",
+        "order": "None",
+    }
+
+    # Product semantic: outside the apply window, picking audio still sets A.
+    win._on_fft_time_signal_changed(("audio", "audio"))
+    assert _all_weightings(win) == {"fft": "A", "fft_time": "A", "order": "A"}

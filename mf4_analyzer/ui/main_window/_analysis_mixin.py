@@ -102,6 +102,24 @@ class AnalysisMixin:
         self._capture_active_analysis_view(section)
         mgr.set_active(idx)
 
+    def _on_analysis_view_rename(self, section, idx, name):
+        """F10: rename then refresh navigator empty-state for the active View."""
+        mgr = self.analysis_managers[section]
+        mgr.rename(idx, name)
+        if self.chart_stack.current_mode() != section:
+            return
+        if idx != mgr.active:
+            return
+        if not (0 <= idx < len(mgr.views)):
+            return
+        state = mgr.get(idx)
+        empty = getattr(self.navigator, 'set_empty_state_context', None)
+        if callable(empty):
+            empty(
+                section_label=self._analysis_section_label(section),
+                view_name=state.name,
+            )
+
     def _on_analysis_new(self, section):
         self._capture_active_analysis_view(section)
         prefs = self.navigator.follow_prefs()
