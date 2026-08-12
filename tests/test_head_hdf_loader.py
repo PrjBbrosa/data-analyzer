@@ -343,3 +343,62 @@ def test_time_axis_scales_by_total_floats_per_scan_not_max_factor(tmp_path):
     assert ts[-1] == pytest.approx(total - scan_period / 1)
     # per_scan 落入 source_metadata 供对标 HEAD Companion
     assert fast["source_metadata"]["per_scan"] == per_scan
+
+
+def _write_hdf_with_extra_channel_def(path, *, n_scans=4):
+    """Two channel definitions, but ``ch order`` only lists channel 1.
+
+    Channel 2's factor is therefore assumed (A5 warning path). Body matches
+    the declared order (one float per scan).
+    """
+    L = []
+    a = L.append
+    a(";")
+    a("; HEAD acoustics datafile format")
+    a(";")
+    a("version:                           4")
+    a("release:                           6")
+    a("byte order:                        Intel")
+    a("kind:                              Time data")
+    a(";#code page:                       936")
+    start = 4096
+    a(f"start of data:                     {start}")
+    a("nbr of abscissa:                   1")
+    a("nbr of channel:                    2")
+    a("ch order:                          1")
+    a("data org:                          a1b1 a2b2")
+    a("scan mode:                         synchronised multiple")
+    a("abscissa definition:               1")
+    a("name str:                          Time")
+    a("physical quantity:                 time")
+    a("physical unit:                     s")
+    a("absc sort:                         calc")
+    a("first value:                       0")
+    a("delta value:                       1.0")
+    a(f"nbr of scans:                      {n_scans}")
+    a("distribution func:                 linear")
+    for i, name in enumerate(("L", "SP"), 1):
+        a(f"channel definition:                {i}")
+        a(f"name str:                          {name}")
+        a(f"physical channel nbr:              {i - 1}")
+        a("physical quantity:                 sound pressure" if name == "L"
+          else "physical quantity:                 speed of rotation")
+        a("physical unit:                     Pa" if name == "L"
+          else "physical unit:                     deg/s")
+        a("calibration:                       1.0")
+        a("implementation type:               FLOAT32")
+    header = ("\r\n".join(L) + "\r\n").encode("cp936").ljust(start, b" ")
+    body = np.arange(n_scans, dtype="<f4").tobytes()
+    path.write_bytes(header + body)
+    return path
+
+
+def test_assumed_channel_factor_records_warning_in_source_metadata(tmp_path):
+    """A5: factor defaulted via ``.get(i, 1)`` must leave a source_metadata warning."""
+    p = _write_hdf_with_extra_channel_def(tmp_path / "assumed_factor.hdf")
+    groups = DataLoader.load_hdf(str(p))
+    assert len(groups) == 1
+    warnings = groups[0]["source_metadata"].get("warnings") or []
+    assert any("factor" in str(w).lower() and "SP" in str(w) for w in warnings)
+    assert "L" in groups[0]["channels"]
+    assert "SP" not in groups[0]["channels"]  # not in ch order → no samples

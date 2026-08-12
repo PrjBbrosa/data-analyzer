@@ -47,6 +47,7 @@ class HeadHdfFile:
     timezone: str
     channels: list = field(default_factory=list)
     ch_order: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
 
 
 # HEAD 给每个 CAN 导入通道的 ext 名追加的来源标记，形如 ``(CAN.Sig.14)``。
@@ -151,11 +152,26 @@ def parse_head_hdf(path) -> HeadHdfFile:
         else:
             top[key] = val
 
-    ch_order = _parse_ch_order(top.get("ch order", ""))
+    ch_order_raw = top.get("ch order")
+    if ch_order_raw is None or not str(ch_order_raw).strip():
+        raise ValueError("HEAD .hdf 头部缺失 'ch order' 行")
+    n_scans_raw = abscissa.get("nbr of scans")
+    if n_scans_raw is None or not str(n_scans_raw).strip():
+        raise ValueError("HEAD .hdf 头部缺失 'nbr of scans' 行")
+
+    ch_order = _parse_ch_order(ch_order_raw)
     # apply factors from ch order onto channels (1-based)
     factor_by_ch = {ch: f for ch, f in ch_order}
+    warnings = []
     for i, c in enumerate(channels, 1):
-        c.factor = factor_by_ch.get(i, 1)
+        if i in factor_by_ch:
+            c.factor = factor_by_ch[i]
+        else:
+            c.factor = 1
+            label = full_channel_name(c) or c.name or str(i)
+            warnings.append(
+                f"通道 {i} ({label}) 的 factor 未在 ch order 中声明，已按 1 估算"
+            )
 
     # --- variant guards (file-level hard-fails) ---
     if int(top.get("version", "0") or 0) != 4:
@@ -170,7 +186,7 @@ def parse_head_hdf(path) -> HeadHdfFile:
 
     # --- binary demux (insert before building HeadHdfFile) ---
     per_scan = sum(f for _, f in ch_order)
-    n = int(abscissa.get("nbr of scans", "0") or 0)
+    n = int(str(n_scans_raw).strip() or 0)
     if per_scan and n:
         floats = np.frombuffer(raw[start:start + n * per_scan * 4], dtype="<f4")
         mat = floats.reshape(n, per_scan).astype(np.float64)
@@ -198,11 +214,12 @@ def parse_head_hdf(path) -> HeadHdfFile:
         scan_mode=top.get("scan mode", ""),
         code_page=top.get("code page", ""),
         start_of_data=start,
-        n_scans=int(abscissa.get("nbr of scans", "0") or 0),
+        n_scans=n,
         delta=float(abscissa.get("delta value", "0") or 0.0),
         first_value=float(abscissa.get("first value", "0") or 0.0),
         recording_date=top.get("date of recording", ""),
         timezone=top.get("timezone", ""),
         channels=channels,
         ch_order=ch_order,
+        warnings=warnings,
     )

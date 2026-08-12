@@ -136,3 +136,38 @@ def test_guard_rejects_non_time_data(tmp_path):
                    "calibration": 1.0, "samples": np.zeros(4)}])
     with pytest.raises(NotImplementedError, match="Spectrum data"):
         parse_head_hdf(p)
+
+
+def _strip_header_line(path, key_prefix: str) -> None:
+    """Remove the first header line whose key matches ``key_prefix`` (ASCII)."""
+    raw = path.read_bytes()
+    # start_of_data still present so the parser can bound the ASCII header
+    text = raw[:65536].decode("cp936", errors="replace")
+    import re
+    m = re.search(r"(?m)^start of data:\s*(\d+)", text)
+    assert m is not None
+    start = int(m.group(1))
+    header = raw[:start].decode("cp936", errors="replace")
+    body = raw[start:]
+    kept = [
+        line for line in header.splitlines()
+        if not line.lower().lstrip(";").lstrip("#").lstrip().startswith(key_prefix)
+    ]
+    new_header = ("\r\n".join(kept) + "\r\n").encode("cp936").ljust(start, b" ")
+    path.write_bytes(new_header + body)
+
+
+def test_missing_ch_order_raises_header_error(tmp_path):
+    """A5: missing ``ch order`` is a header-level failure (not silent demux skip)."""
+    p = _two_channel_file(tmp_path / "no_order.hdf")
+    _strip_header_line(p, "ch order:")
+    with pytest.raises(ValueError, match=r"ch order"):
+        parse_head_hdf(p)
+
+
+def test_missing_nbr_of_scans_raises_header_error(tmp_path):
+    """A5: missing ``nbr of scans`` is a header-level failure naming that row."""
+    p = _two_channel_file(tmp_path / "no_scans.hdf")
+    _strip_header_line(p, "nbr of scans:")
+    with pytest.raises(ValueError, match=r"nbr of scans"):
+        parse_head_hdf(p)
