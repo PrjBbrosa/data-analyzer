@@ -8385,6 +8385,27 @@ class TestAaBackstopLatch:
         assert quality_mod.install_frame_paint_timer(canvas) is False
         assert type(glw) is installed_class
 
+    def test_paint_timer_install_failure_logs_warning(self, qapp, monkeypatch, caplog):
+        """B1: a failed first install must log, not silently drop the backstop."""
+        import logging
+
+        from mf4_analyzer.ui.pg_canvas.canvas import TimeDomainCanvasPG
+        from PyQt5.QtCore import QCoreApplication
+
+        monkeypatch.setattr(
+            "mf4_analyzer.ui.pg_canvas.canvas.install_frame_paint_timer",
+            lambda _canvas: False,
+        )
+        caplog.set_level(logging.WARNING, logger="mf4_analyzer.ui.pg_canvas.canvas")
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(640, 360)
+        canvas.show()
+        QCoreApplication.processEvents()
+        assert any(
+            "AA frame-paint backstop failed to install" in rec.message
+            for rec in caplog.records
+        )
+
     def test_frame_paint_backstop_is_installed_on_real_canvas(
         self, qapp, monkeypatch,
     ):

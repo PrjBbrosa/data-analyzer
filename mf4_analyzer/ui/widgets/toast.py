@@ -1,8 +1,12 @@
 """Floating non-blocking acknowledgement toast."""
+import logging
+
 from PyQt5.QtCore import Qt, QPropertyAnimation, QTimer
 from PyQt5.QtWidgets import QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel
 
 from ...ui_kit.qt_lifecycle import as_weak_callable
+
+_LOG = logging.getLogger(__name__)
 
 
 class Toast(QFrame):
@@ -86,6 +90,10 @@ class Toast(QFrame):
             try:
                 value = provider()
             except Exception:
+                _LOG.warning(
+                    "toast margin_provider raised; falling back to DEFAULT_BOTTOM_MARGIN",
+                    exc_info=True,
+                )
                 value = None
             if value is not None:
                 try:

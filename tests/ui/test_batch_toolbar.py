@@ -548,6 +548,29 @@ def test_sheet_toast_clears_the_footer_button_row(qtbot):
     assert sheet.rect().contains(toast.geometry())
 
 
+def test_sheet_own_toast_margin_is_footer_height_plus_gap(qtbot):
+    """E6: BatchSheet clearance is live footer height + 12, not a pinned 100."""
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet.resize(1080, 760)
+    sheet.show()
+    qtbot.waitExposed(sheet)
+
+    expected = max(0, int(sheet._footer_host.height())) + 12
+    assert sheet._own_toast_bottom_margin() == expected
+
+    sheet._toast("运行中", kind="info")
+    toast = sheet._own_toast
+    assert toast.isVisible()
+    y_before = toast.y()
+    sheet._footer_host.setFixedHeight(int(sheet._footer_host.height()) + 24)
+    sheet._sync_own_toast_margin()
+    assert sheet._own_toast_bottom_margin() == expected + 24
+    assert toast.y() < y_before
+
+
 def test_sheet_toast_falls_back_to_the_host_once_closed(qtbot):
     """Anything raised after the sheet closes still needs a visible surface."""
     from mf4_analyzer.ui.drawers.batch import BatchSheet
