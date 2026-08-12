@@ -587,3 +587,113 @@ def test_degraded_project_save_clears_health_after_confirm(qapp, tmp_path, monke
     assert confirmed == [True]
     assert restored._project_restore_health.degraded is False
     assert out.is_file()
+
+
+def test_project_roundtrip_preserves_per_channel_ylims(qapp, tmp_path):
+    """A3: ylims keys embed fid; remap_view_fids must rewrite them on reopen.
+
+    Same-window reopen advances ``_fc`` so the remapped fid differs from the
+    saved one — the only way this assertion stays red until remapping lands.
+    """
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.pg_canvas._shared import _view_state_channel_key
+
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=200)
+    proj = tmp_path / "ylims-roundtrip.tlproj"
+
+    mw = MainWindow()
+    mw.resize(1200, 800)
+    mw.show()
+    qapp.processEvents()
+    mw._load_one(str(csv_a))
+    old_fid = next(iter(mw.files))
+    mw.navigator.set_checked_channels([(old_fid, "rpm")])
+    mw.plot_time()
+    qapp.processEvents()
+
+    plotted = mw.canvas_time.get_visible_ylims()
+    assert plotted, "expected rpm subplot after plot_time"
+    # ylims keys use the on-canvas display name (``[short] channel``), not the
+    # bare navigator channel id — take the live key rather than reconstructing.
+    old_key = next(iter(plotted))
+    assert json.loads(old_key)[0] == old_fid
+    lo, hi = plotted[old_key]
+    span = hi - lo if hi > lo else 1.0
+    saved_ylim = (lo + span * 0.2, hi - span * 0.2)
+    mw.canvas_time.restore_visible_ylims({old_key: saved_ylim})
+    qapp.processEvents()
+    assert mw.canvas_time.get_visible_ylims()[old_key] == pytest.approx(saved_ylim)
+    mw._capture_current_view()
+    assert mw.view_manager.get(0).ylims[old_key] == pytest.approx(saved_ylim)
+    mw.save_project(proj)
+
+    payload = json.loads(proj.read_text(encoding="utf-8"))
+    assert old_key in payload["views"][0]["ylims"]
+    assert payload["views"][0]["ylims"][old_key] == pytest.approx(list(saved_ylim))
+
+    mw.open_project(proj)
+    qapp.processEvents()
+
+    new_fid = next(iter(mw.files))
+    assert new_fid != old_fid
+    _, channel_name = json.loads(old_key)
+    new_key = _view_state_channel_key(new_fid, channel_name)
+    assert old_key not in mw.view_manager.get(0).ylims
+    assert mw.view_manager.get(0).ylims.get(new_key) == pytest.approx(saved_ylim)
+    assert mw.canvas_time.get_visible_ylims().get(new_key) == pytest.approx(
+        saved_ylim
+    )
+
+
+def test_viewstate_from_dict_skips_degenerate_ylims_and_xlim():
+    """B6: residual / non-finite pairs must not resurrect a pathological window."""
+    from mf4_analyzer.ui.view_state import ViewState
+    from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
+
+    mid = 35.0
+    residue = mid * _DEGENERATE_SPAN_RATIO * 0.5
+    ok_key = '["f0","ok"]'
+    bad_key = '["f0","residue"]'
+    nan_key = '["f0","nan"]'
+    flat_key = '["f0","flat"]'
+
+    state = ViewState.from_dict({
+        "name": "V",
+        "tab_color": "#2d7ff9",
+        "xlim": [mid - residue / 2.0, mid + residue / 2.0],
+        "ylims": {
+            ok_key: [-10.0, 10.0],
+            bad_key: [mid - residue / 2.0, mid + residue / 2.0],
+            nan_key: [float("nan"), 1.0],
+            flat_key: [5.0, 5.0],
+        },
+    })
+
+    assert state.xlim is None
+    assert state.ylims == {ok_key: (-10.0, 10.0)}
+
+
+def test_file_removal_drops_ylims_for_closed_fid():
+    """A3: close-file cleanup must scrub composite ylims keys for removed fids."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.pg_canvas._shared import _view_state_channel_key
+    from mf4_analyzer.ui.view_state import ViewState
+
+    keep = _view_state_channel_key("f2", "speed")
+    drop = _view_state_channel_key("f1", "speed")
+    state = ViewState(
+        name="Scoped",
+        tab_color="#2d7ff9",
+        attached_file_ids=["f1", "f2"],
+        checked=[("f1", "speed"), ("f2", "speed")],
+        ylims={
+            drop: (-1.0, 1.0),
+            keep: (-2.0, 2.0),
+        },
+    )
+
+    MainWindow._filter_time_view_state_for_removed_fids(state, {"f1"})
+
+    assert drop not in state.ylims
+    assert state.ylims == {keep: (-2.0, 2.0)}

@@ -221,6 +221,22 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
                 new_colors[_encode_channel_key(fid_map[fid], ch)] = color
         v["colors"] = new_colors
 
+        # ylims keys are the same composite encoding as colors
+        # (``_view_state_channel_key`` / ``json.dumps([fid, name])``). Older
+        # projects may omit the field entirely — treat that as empty.
+        new_ylims = {}
+        for key, ylim in (view.get("ylims") or {}).items():
+            try:
+                decoded = json.loads(key)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not (isinstance(decoded, (list, tuple)) and len(decoded) == 2):
+                continue
+            fid, ch = decoded
+            if fid in fid_map:
+                new_ylims[_encode_channel_key(fid_map[fid], ch)] = ylim
+        v["ylims"] = new_ylims
+
         op = view.get("overlay_primary")
         v["overlay_primary"] = (
             [fid_map[op[0]], op[1]] if op and op[0] in fid_map else None

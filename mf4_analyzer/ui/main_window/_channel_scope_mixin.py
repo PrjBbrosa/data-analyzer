@@ -1,6 +1,8 @@
 """Focused TimeDomain View file-attachment behavior."""
 from __future__ import annotations
 
+import json
+
 from PyQt5.QtWidgets import QInputDialog, QLineEdit, QMessageBox
 
 from ..channel_config import (
@@ -585,6 +587,23 @@ class ChannelScopeMixin:
             key: color
             for key, color in state.colors.items()
             if str(key[0]) not in removed
+        }
+
+        def _ylim_fid(key):
+            # ylims are keyed by ``_view_state_channel_key`` JSON strings, not
+            # ChannelKey tuples — decode before comparing against removed fids.
+            try:
+                decoded = json.loads(key)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return None
+            if isinstance(decoded, (list, tuple)) and len(decoded) == 2:
+                return None if decoded[0] is None else str(decoded[0])
+            return None
+
+        state.ylims = {
+            key: ylim
+            for key, ylim in (state.ylims or {}).items()
+            if (fid := _ylim_fid(key)) is not None and fid not in removed
         }
         if state.overlay_primary and str(state.overlay_primary[0]) in removed:
             state.overlay_primary = None

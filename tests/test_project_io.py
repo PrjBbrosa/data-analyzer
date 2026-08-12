@@ -116,7 +116,11 @@ def test_remap_rewrites_and_drops():
         "hidden_channels": [["f0", "rpm"], ["f1", "spd"]],
         "colors": {'["f0","rpm"]': "#ff0000", '["f1","spd"]': "#00ff00"},
         "overlay_primary": ["f1", "spd"],
-        "ylims": {"[a] rpm": [0.0, 10.0]},
+        "ylims": {
+            '["f0","rpm"]': [0.0, 10.0],
+            '["f1","spd"]': [1.0, 2.0],
+            "[display] rpm": [3.0, 4.0],  # unparseable legacy key → dropped
+        },
         "axis_opts": {"x_axis": {"mode": "channel", "fid": "f1",
                                  "channel": "spd", "label": "spd"}},
     }
@@ -126,10 +130,17 @@ def test_remap_rewrites_and_drops():
     assert out["hidden_channels"] == [["f3", "rpm"]]
     assert out["colors"] == {'["f3","rpm"]': "#ff0000"}
     assert out["overlay_primary"] is None
-    assert out["ylims"] == {"[a] rpm": [0.0, 10.0]}          # untouched
+    assert out["ylims"] == {'["f3","rpm"]': [0.0, 10.0]}
     assert out["axis_opts"]["x_axis"]["fid"] is None
     assert out["axis_opts"]["x_axis"]["mode"] == "time"
     assert out["axis_opts"]["x_axis"]["resolver"] is None
+
+
+def test_remap_ylims_skipped_when_absent():
+    view = {"name": "V", "tab_color": "#fff", "checked": [["f0", "rpm"]]}
+    out = pio.remap_view_fids([view], {"f0": "f9"})[0]
+    assert out["checked"] == [["f9", "rpm"]]
+    assert out.get("ylims", {}) == {}
 
 
 def test_remap_migrates_legacy_channel_axis_to_exact_source():

@@ -7,11 +7,14 @@ project persistence.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 from uuid import uuid4
 
 from PyQt5.QtCore import QObject, pyqtSignal
+
+from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
 
 # Default per-manager View cap. The real cap is per ViewManager instance
 # (``max_views``); this is the shared product default for every section —
@@ -88,7 +91,9 @@ class ViewState:
             cursor_mode=data.get("cursor_mode", "off"),
             xlim=_coerce_pair(data.get("xlim")),
             ylims={
-                key: _coerce_pair(value) for key, value in data.get("ylims", {}).items()
+                key: pair
+                for key, value in data.get("ylims", {}).items()
+                if (pair := _coerce_pair(value)) is not None
             },
             overlay_primary=_coerce_optional_channel_key(data.get("overlay_primary")),
             axis_opts=data.get("axis_opts", {}),
@@ -116,10 +121,28 @@ def _coerce_optional_channel_key(value: Any) -> ChannelKey | None:
 
 
 def _coerce_pair(value: Any) -> tuple[float, float] | None:
+    """Validate a persisted ``(lo, hi)`` window.
+
+    Illegal / degenerate pairs return ``None`` so restore callers silently
+    skip them and fall back to auto-framing. The relative-span gate reuses
+    ``ui_kit.ticks_math._DEGENERATE_SPAN_RATIO`` — do not invent a second
+    threshold here.
+    """
     if value is None:
         return None
-    lo, hi = value
-    return (lo, hi)
+    try:
+        lo, hi = value
+        lo_f = float(lo)
+        hi_f = float(hi)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(lo_f) and math.isfinite(hi_f)):
+        return None
+    span = hi_f - lo_f
+    magnitude = max(abs(lo_f), abs(hi_f))
+    if not (span > magnitude * _DEGENERATE_SPAN_RATIO and span > 0.0):
+        return None
+    return (lo_f, hi_f)
 
 
 class ViewManager(QObject):

@@ -160,6 +160,7 @@ lesson by default.
 | [FFT Preview Zoom Does Not Auto-Arm Time Range](fft-preview-zoom-no-auto-arm-time-range.md) | Changing FFT time-preview pan/zoom wiring, shared `chk_range` | See lesson |
 | [Confirm Unchecked Local Time Range Before Compute](analysis-compute-confirm-unchecked-local-range.md) | Wiring analysis compute entry points (`do_fft` / `do_fft_time` / | See lesson |
 | [「全部」用图面已绘制通道时长，不用通道树最长加载文件](time-range-all-uses-plotted-extent.md) | Changing Inspector「全部」/ time-range max, `_time_data_extent`, or | See lesson |
+| [ViewState Composite-Key Tables Stay In Sync](codex-viewstate-composite-key-tables-stay-in-sync.md) | Touching `remap_view_fids`, close-file ViewState cleanup, or any | See lesson |
 
 ## Selection Rules
 
