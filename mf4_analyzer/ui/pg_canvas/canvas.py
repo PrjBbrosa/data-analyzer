@@ -119,6 +119,7 @@ from mf4_analyzer.ui_kit.axis_metrics import pin_left_axes_to_common_width
 from mf4_analyzer.ui.axis_group_palette import axis_group_color
 from mf4_analyzer.ui.pg_canvas.quality import (
     QualityManager,
+    _FRAME_TIMER_INSTALLED_ATTR,
     install_frame_paint_timer,
 )
 from mf4_analyzer.ui.pg_canvas.dense_raster import DenseDiscreteRasterLayer
@@ -603,8 +604,17 @@ class TimeDomainCanvasPG(QWidget):
         # because a timed frame calls straight into it. _glw is built once in
         # this constructor and is never replaced (clear() only empties it), so
         # one install covers the canvas' whole life; the call is idempotent
-        # regardless.
-        install_frame_paint_timer(self)
+        # regardless. Consume the return value (B1): a failed first install
+        # leaves the measured-frame backstop silently absent — log it.
+        if not install_frame_paint_timer(self):
+            glw = getattr(self, "_glw", None)
+            if glw is None or not getattr(
+                glw, _FRAME_TIMER_INSTALLED_ATTR, False,
+            ):
+                _LOG.warning(
+                    "AA frame-paint backstop failed to install; "
+                    "measured-frame safety net is inactive on this canvas"
+                )
 
     # ------------------------------------------------------------------
     # Public surface (signal/method names frozen by W0 contract tests).

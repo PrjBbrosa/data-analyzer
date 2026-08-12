@@ -693,14 +693,21 @@ class TestInkBudget:
     # end-to-end below.
 
     def test_y_span_key_changes_with_y_zoom(self):
-        from mf4_analyzer.ui.pg_canvas.renderer import _quantize_y_span_key
+        from mf4_analyzer.ui.pg_canvas.renderer import (
+            _Y_SPAN_DEGENERATE_KEY,
+            _quantize_y_span_key,
+        )
         # a real Y zoom (10× narrower) must cross at least one bucket boundary
         assert _quantize_y_span_key(10.0) != _quantize_y_span_key(1.0)
         # sub-percent jitter on a static window stays in one bucket
         assert _quantize_y_span_key(5.0) == _quantize_y_span_key(5.0 * 1.001)
-        # degenerate spans map to the sentinel bucket
-        assert _quantize_y_span_key(0.0) == 0
-        assert _quantize_y_span_key(-1.0) == 0
+        # degenerate spans map to a sentinel that does NOT collide with
+        # log2(1.0)=0 (normalized / 0-1 flag channels — B4)
+        assert _quantize_y_span_key(0.0) == _Y_SPAN_DEGENERATE_KEY
+        assert _quantize_y_span_key(-1.0) == _Y_SPAN_DEGENERATE_KEY
+        assert _quantize_y_span_key(float("nan")) == _Y_SPAN_DEGENERATE_KEY
+        assert _quantize_y_span_key(1.0) == 0
+        assert _quantize_y_span_key(1.0) != _Y_SPAN_DEGENERATE_KEY
 
     # -- constant mutation guards ----------------------------------------
 
@@ -818,6 +825,40 @@ class TestInkBudget:
         assert status["block_reason"] == "high-raster-cost"
         assert "密集离散跳变" not in status["tooltip"]
         assert "满幅振荡曲线 ch0" in status["tooltip"]
+
+    def test_quality_status_explanation_order_matches_decision_order(
+        self, qapp, monkeypatch,
+    ):
+        """B7: density error must not preempt raster-cost in quality_status.
+
+        ``_idle_aa_density_ok`` decides raster-cost before density error;
+        the reader-facing status must report in that same order.
+        """
+        canvas, _t, _sig = self._oscillating_canvas(qapp)
+        canvas.fit_y_to_visible_x()
+        canvas._dense_raster.max_item_bytes = 0
+        canvas._dense_raster.deactivate_channel("ch0")
+        canvas._flush_pending_refresh()
+
+        raster_cost = canvas._quality._high_raster_cost_status()
+        assert raster_cost["blocked"] is True
+
+        monkeypatch.setattr(
+            canvas._quality,
+            "_density_status",
+            lambda: {
+                "overlay": False,
+                "metric": 0,
+                "on_budget": 1,
+                "off_budget": 1,
+                "curve_count": 1,
+                "error": True,
+            },
+        )
+        status = canvas.quality_status()
+        assert status["state"] == "red"
+        assert status["block_reason"] == "high-raster-cost"
+        assert "曲线密度不可读取" not in status["tooltip"]
 
     def test_overlay_high_ink_reports_ink_not_raster_cost(self, qapp):
         """Overlay has no raster backend, so it must not claim one.
@@ -961,6 +1002,47 @@ class TestInkBudget:
         assert canvas._quality._idle_aa_density_ok() is True  # …and still fine
         canvas._quality.try_enable_idle_quality()
         assert canvas._quality.aa_on is True
+
+    def test_line_ink_now_failure_is_unknown_not_zero(self, qapp):
+        """B3: measurement exceptions return None; the frame refuses AA and
+        does not persist a fake 0.0 into ``_line_ink_state``."""
+        from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+        canvas, _t, _sig = self._ink_canvas(qapp)
+        ax, line = canvas._channel_lines["ch0"]
+        pdi = line.plot_data_item
+        ck = canvas._channel_lines.composite_key_for("ch0")
+        canvas._line_ink_state.clear()
+
+        def _boom():
+            raise RuntimeError("ylim unavailable")
+
+        ax.get_ylim = _boom
+        assert canvas._quality._line_ink_now(ax, pdi) is None
+        total = canvas._quality._frame_native_ink_total()
+        assert total > _INK_AA_OFF
+        assert ck not in canvas._line_ink_state
+        assert canvas._quality._idle_aa_density_ok() is False
+
+    def test_get_ylim_failure_skips_ink_recording(self, qapp):
+        """B2: renderer must not write 0.0 ink when get_ylim fails."""
+        canvas, _t, _sig = self._ink_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        ck = canvas._channel_lines.composite_key_for("ch0")
+        canvas._flush_pending_refresh()
+        assert ck in canvas._line_ink_state
+        prior = canvas._line_ink_state[ck]
+
+        def _boom():
+            raise RuntimeError("ylim unavailable")
+
+        ax.get_ylim = _boom
+        # Force a refresh that is not a cache hit (change xlim slightly).
+        xlo, xhi = ax.get_xlim()
+        ax.set_xlim(xlo + 0.01, xhi + 0.01)
+        canvas._flush_pending_refresh()
+        # Prior record survives; no fake 0.0 overwrite.
+        assert canvas._line_ink_state.get(ck) == prior
 
     def test_export_refuses_unrecorded_high_ink(self, qapp):
         """Export forces AA on every curve — assuming "cheap" costs the same
@@ -8302,6 +8384,43 @@ class TestAaBackstopLatch:
         installed_class = type(glw)
         assert quality_mod.install_frame_paint_timer(canvas) is False
         assert type(glw) is installed_class
+
+    def test_frame_paint_backstop_is_installed_on_real_canvas(
+        self, qapp, monkeypatch,
+    ):
+        """B1 sentinel: a live canvas must have the paint-timer backstop
+        wired so an armed AA frame reaches ``_note_aa_frame``."""
+        from mf4_analyzer.ui.pg_canvas import quality as quality_mod
+        from mf4_analyzer.ui.pg_canvas.quality import (
+            _FRAME_TIMER_INSTALLED_ATTR,
+            _FRAME_TIMER_OWNER_ATTR,
+        )
+
+        canvas = self._plot(qapp)
+        self._hands_off(monkeypatch)
+        glw = canvas._glw
+        assert getattr(glw, _FRAME_TIMER_INSTALLED_ATTR, False) is True
+        assert getattr(glw, _FRAME_TIMER_OWNER_ATTR, None) is canvas
+
+        noted = []
+        real_note = canvas._quality._note_aa_frame.__func__
+
+        def _spy(self, frame_ms):
+            noted.append(float(frame_ms))
+            return real_note(self, frame_ms)
+
+        # QualityManager routes unknown setattr onto the canvas (backref);
+        # bind the spy on the instance dict directly so paintEvent sees it.
+        object.__setattr__(canvas._quality, "_note_aa_frame",
+                           _spy.__get__(canvas._quality, type(canvas._quality)))
+        monkeypatch.setattr(
+            quality_mod, "perf_counter", _FakeFrameClock(0.012),
+        )
+        canvas.try_enable_idle_quality()
+        assert canvas._aa_backstop_armed is True
+        self._paint_one_frame(canvas)
+        assert len(noted) == 1
+        assert noted[0] == pytest.approx(12.0)
 
     def _paint_one_frame(self, canvas):
         """Make Qt actually dispatch a paint to the swapped class.

@@ -212,6 +212,11 @@ def _capped_hidpi_scale(base_width, requested=_HIDPI_COPY_SCALE):
     return min(eff, cap)
 
 
+# Degenerate / non-finite y_span bucket. Must NOT be 0: log2(1.0)*30 == 0 is a
+# legitimate bucket for normalized / 0-1 flag channels (B4).
+_Y_SPAN_DEGENERATE_KEY = -(1 << 30)
+
+
 def _quantize_y_span_key(y_span: float) -> int:
     """Quantize a Y view span into a stable, change-sensitive bucket index.
 
@@ -221,15 +226,17 @@ def _quantize_y_span_key(y_span: float) -> int:
     out as a no-op refresh — still invalidates the cache and lets the Y-overflow
     wall guard re-evaluate. Uses a LOG bucket (~2.4 % per step, the natural
     log-2 / 30 grid) so a real Y zoom always crosses a boundary while float
-    jitter on a static window stays in one bucket. y_span <= 0 (degenerate /
-    collapsed handle) maps to a single sentinel bucket.
+    jitter on a static window stays in one bucket. y_span <= 0 / non-finite
+    (degenerate / collapsed handle) maps to ``_Y_SPAN_DEGENERATE_KEY``, which
+    is deliberately outside the log2 bucket space so it never collides with
+    ``y_span == 1.0`` (B4).
     """
     try:
         ys = float(y_span)
     except (TypeError, ValueError):
-        return 0
+        return _Y_SPAN_DEGENERATE_KEY
     if not np.isfinite(ys) or ys <= 0.0:
-        return 0
+        return _Y_SPAN_DEGENERATE_KEY
     # ~30 buckets per octave: fine enough to catch any meaningful Y zoom,
     # coarse enough to absorb sub-percent autorange jitter on a static window.
     return int(round(np.log2(ys) * 30.0))
@@ -563,14 +570,18 @@ class Renderer(_CanvasBackref):
             # range key so a pure-Y narrow (box-zoom Y / scroll Y / stale narrow
             # Y carried across a view switch) — which leaves xlim and
             # effective_width unchanged — still invalidates the cache and lets
-            # the ink budget re-evaluate. Defensive: a degenerate handle gives
-            # y_span 0.0, which envelope_ink_dev_px reports as zero ink.
+            # the ink budget re-evaluate. get_ylim failure is UNKNOWN, not
+            # zero: skip ink recording below so a broken handle cannot persist
+            # a fake 0.0 reading that later frames treat as "measured low"
+            # (B2). The range key still advances via the degenerate sentinel.
             try:
                 _ylo, _yhi = axis_facade.get_ylim()
                 y_span = abs(float(_yhi) - float(_ylo))
             except Exception:
-                y_span = 0.0
-            y_key = _quantize_y_span_key(y_span)
+                y_span = None
+            y_key = _quantize_y_span_key(
+                y_span if y_span is not None else float("nan"),
+            )
 
             # Range-key gate: if the key didn't change since the last flush,
             # skip the envelope+setData work entirely. This keeps repeated
@@ -617,25 +628,28 @@ class Renderer(_CanvasBackref):
             # count proportionally (spec §4.1) and recompute the envelope ONCE
             # at that width (numpy over the visible window, ms-level; only paid
             # in the over-budget case), and flag the frame so AA stays off.
-            # Row height is THIS line's own axis (subplot rows are independent);
-            # a degenerate handle yields 0.0 → zero ink → never triggers.
+            # Row height is THIS line's own axis (subplot rows are independent).
+            # Unknown y_span (get_ylim failed) skips measurement entirely —
+            # never invent 0.0 ink (B2).
             try:
                 row_height_px = float(
                     axis_facade.view_box.sceneBoundingRect().height()
                 )
             except Exception:
                 row_height_px = 0.0
-            try:
-                line_ink = envelope_ink_dev_px(
-                    env_s,
-                    y_span=y_span,
-                    row_height_px=row_height_px,
-                    dpr=dpr,
-                )
-            except Exception:
-                line_ink = 0.0
+            line_ink = None
+            if y_span is not None:
+                try:
+                    line_ink = envelope_ink_dev_px(
+                        env_s,
+                        y_span=y_span,
+                        row_height_px=row_height_px,
+                        dpr=dpr,
+                    )
+                except Exception:
+                    line_ink = None
             line_ink_high = False
-            if line_ink > _INK_OFF_BUDGET:
+            if line_ink is not None and line_ink > _INK_OFF_BUDGET:
                 capped_width = int(
                     effective_width * _INK_OFF_BUDGET / line_ink
                 )
@@ -684,8 +698,10 @@ class Renderer(_CanvasBackref):
                 # _raster_backend_eligible reads this very entry, and a
                 # one-frame-stale read would make the backend choice lag the
                 # geometry by a frame — exactly the flap the band's hysteresis
-                # exists to prevent.
-                self._line_ink_state[ck] = (float(line_ink), line_ink_high)
+                # exists to prevent. Unknown measurement (ylim/ink failure)
+                # leaves any prior record untouched rather than writing 0.0.
+                if line_ink is not None:
+                    self._line_ink_state[ck] = (float(line_ink), line_ink_high)
                 if self._raster_backend_eligible(ck) and not overlay:
                     self._dense_raster.update_channel(
                         ck,

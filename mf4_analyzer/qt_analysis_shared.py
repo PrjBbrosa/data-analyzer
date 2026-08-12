@@ -25,15 +25,18 @@ safe. The diff audit that cleared the switch is
 One family is deliberately still forked: the batch renderer keeps its own
 ``_auto_db_color_limits`` rather than using ``_auto_db_window`` here. They
 agree on real data but not on empty/all-NaN input, where batch falls back to
-its ``_EMPTY_DB_LEVEL`` (-200 dB) baseline and this module falls back to
-``_finite_data_bounds``. Unifying them means picking one empty-state
-semantics, which is its own piece of work.
+its ``_EMPTY_DB_LEVEL`` (-200 dB) baseline and this module returns ``None``
+from ``_finite_data_bounds`` / ``_auto_db_window`` so callers take an explicit
+no-data branch (B5). Unifying the two empty-state dialects is its own piece
+of work.
 """
 from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtGui import QPainter
+
+from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
 
 
 # 热力图默认色图。交互画布和批处理渲染器必须用同一个值，否则同一份数据在
@@ -98,13 +101,23 @@ def _resolve_colormap(name: str) -> pg.ColorMap:
 
 
 def _finite_data_bounds(matrix):
+    """Return ``(lo, hi)`` over finite cells, or ``None`` when there are none.
+
+    Degenerate / residue-only spans (relative to
+    ``ui_kit.ticks_math._DEGENERATE_SPAN_RATIO``) are widened by 1.0 so a
+    float64 channel-math constant does not become a 1e-16-wide colour
+    window (B5). All-non-finite input returns ``None`` — callers take the
+    no-data branch; this helper does not invent ``0..1``.
+    """
     arr = np.asarray(matrix, dtype=float)
     finite = arr[np.isfinite(arr)]
     if finite.size == 0:
-        return 0.0, 1.0
+        return None
     lo = float(np.nanmin(finite))
     hi = float(np.nanmax(finite))
-    if hi <= lo:
+    span = hi - lo
+    magnitude = max(abs(lo), abs(hi))
+    if not (span > magnitude * _DEGENERATE_SPAN_RATIO and span > 0.0):
         hi = lo + 1.0
     return lo, hi
 
@@ -143,13 +156,13 @@ def _robust_db_ceiling(matrix, pct=_AUTO_CEILING_PCT):
     unlike ``np.nanmax`` it ignores the top ``(100 - pct)``% of cells, so a
     handful of bright spikes no longer drag the whole colour window up and
     bury the informative bulk below the floor.  NaN/inf-safe (matches
-    ``_finite_data_bounds``); falls back to that bound when the matrix has
-    no finite values.
+    ``_finite_data_bounds``); returns ``None`` when the matrix has no finite
+    values (callers take the no-data branch — B5).
     """
     arr = np.asarray(matrix, dtype=float)
     finite = arr[np.isfinite(arr)]
     if finite.size == 0:
-        return _finite_data_bounds(matrix)[1]
+        return None
     return float(np.percentile(finite, pct))
 
 
@@ -160,9 +173,12 @@ def _auto_db_window(matrix):
     span = ``_AUTO_SPAN_DB`` below it. Both the heatmap ``z_auto`` path and the
     Order render override resolve the window here, so the two can never drift
     apart (the recurring compute-vs-display split). Display-only: callers clamp
-    COLOURS to this window, never the stored matrix.
+    COLOURS to this window, never the stored matrix. Returns ``None`` when
+    there is no finite data to window (B5).
     """
     ceiling = _robust_db_ceiling(matrix, _AUTO_CEILING_PCT)
+    if ceiling is None:
+        return None
     return ceiling - _AUTO_SPAN_DB, ceiling
 
 
@@ -185,7 +201,8 @@ def _slice_amp_bounds(values):
     the top, so a single DC bin floored to ≈ -6153 dB can no longer crush the
     real -40..-60 dB signal into a thin band at the top of the panel. NaN/inf
     -safe. Returns ``None`` when there is no finite spread to fit (the caller
-    then falls back to pyqtgraph auto-range)."""
+    then falls back to pyqtgraph auto-range), including residue-only spans
+    under ``_DEGENERATE_SPAN_RATIO`` (B5)."""
     arr = np.asarray(values, dtype=float)
     finite = arr[np.isfinite(arr)]
     if finite.size == 0:
@@ -193,7 +210,9 @@ def _slice_amp_bounds(values):
     hi = float(np.max(finite))
     real = finite[finite >= hi - _SLICE_MAX_SPAN_DB]
     lo = float(np.min(real)) if real.size else hi
-    if hi <= lo:
+    span = hi - lo
+    magnitude = max(abs(lo), abs(hi))
+    if not (span > magnitude * _DEGENERATE_SPAN_RATIO and span > 0.0):
         return None
     return lo, hi
 

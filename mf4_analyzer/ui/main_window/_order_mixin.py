@@ -588,7 +588,9 @@ class OrderMixin:
         if amp_mode_token == 'amplitude_db':
             if z_auto:
                 from ..pg_canvas.heatmap_canvas import _auto_db_window
-                vmin_override, vmax_override = _auto_db_window(matrix)
+                window = _auto_db_window(matrix)
+                if window is not None:
+                    vmin_override, vmax_override = window
             elif reference_delta is not None:
                 # An already-tuned MANUAL window must track the SAME shift
                 # as the (unclipped) matrix above, else the map goes

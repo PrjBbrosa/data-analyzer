@@ -18,6 +18,7 @@ from .render_profile import envelope_ink_dev_px
 from .renderer import (
     _INK_AA_OFF,
     _INK_AA_ON,
+    _Y_SPAN_DEGENERATE_KEY,
     _quantize_y_span_key,
 )
 from .ticks_math import _quantize_range_key
@@ -298,15 +299,20 @@ class QualityManager(_CanvasBackref):
         covered = self._raster_covered_curve_items()
         return [it for it in self._collect_curve_items() if it not in covered]
 
-    def _line_ink_now(self, axis, pdi) -> float:
+    def _line_ink_now(self, axis, pdi) -> float | None:
         """Ink for the data CURRENTLY bound to ``pdi``, computed on the spot.
 
         The fallback for a line the renderer has not recorded yet. It reads
         the same three inputs ``_refresh_visible_data`` would
         (the bound samples, the line's Y view span, its row height in device
         pixels), so the number is directly comparable to a recorded one.
-        A degenerate handle — no view box, collapsed Y span, fewer than two
-        samples — yields 0.0 through ``envelope_ink_dev_px``'s own sentinels.
+
+        A degenerate handle with fewer than two samples yields 0.0 through
+        ``envelope_ink_dev_px``'s own sentinels — that is a real empty-ink
+        measurement, not a failure. Measurement FAILURE (missing view box,
+        ``get_ylim`` / DPR / envelope exceptions) returns ``None``: unknown
+        is not zero (B3). Callers must refuse AA for the frame and must NOT
+        write ``None`` into ``_line_ink_state``.
         """
         try:
             _x, y = pdi.getData()
@@ -315,19 +321,18 @@ class QualityManager(_CanvasBackref):
             lo, hi = axis.get_ylim()
             y_span = abs(float(hi) - float(lo))
             view_box = getattr(axis, "view_box", None)
-            row_height = (
-                float(view_box.sceneBoundingRect().height())
-                if view_box is not None else 0.0
-            )
+            if view_box is None:
+                return None
+            row_height = float(view_box.sceneBoundingRect().height())
             dpr = float(self._glw.devicePixelRatioF())
         except Exception:
-            return 0.0
+            return None
         try:
             return float(envelope_ink_dev_px(
                 y, y_span=y_span, row_height_px=row_height, dpr=dpr,
             ))
         except Exception:
-            return 0.0
+            return None
 
     def _frame_native_ink_total(self) -> float:
         """Sum this frame's per-line ink for lines still on the native-AA
@@ -352,6 +357,12 @@ class QualityManager(_CanvasBackref):
         the frame was paid. Computing instead of refusing keeps the fix inside
         the actual hole: charts whose ink is genuinely low still get AA on the
         first idle window, exactly as before.
+
+        Measurement FAILURE (``_line_ink_now`` → ``None``) is a different case
+        from "not yet recorded": unknown refuses AA for THIS frame
+        (return over ``_INK_AA_OFF``) without writing ``_line_ink_state``, so
+        the next frame can remeasure. Do not fold the first-frame normal path
+        into that failure path (``0c07517a`` regressed 34 tests that way).
 
         Recorded values win when present, so the AA gate and the raster
         admission keep deciding on the one shared pre-cap number
@@ -395,7 +406,10 @@ class QualityManager(_CanvasBackref):
                     ink = None
             if ink is None and pdi is not None:
                 ink = self._line_ink_now(axis, pdi)
-            total += ink or 0.0
+            if ink is None:
+                # Unknown ≠ 0: refuse AA this frame; do not persist.
+                return float(_INK_AA_OFF) + 1.0
+            total += float(ink)
         return total
 
     def _set_curves_antialias(self, on: bool) -> int:
@@ -481,7 +495,7 @@ class QualityManager(_CanvasBackref):
                     ylo, yhi = axis.get_ylim()
                     y_key = _quantize_y_span_key(abs(float(yhi) - float(ylo)))
                 except Exception:
-                    y_key = 0
+                    y_key = _Y_SPAN_DEGENERATE_KEY
                 rows.append((str(ck), int(y_key)))
             if not rows:
                 return None
@@ -901,12 +915,6 @@ class QualityManager(_CanvasBackref):
                 "state": "red",
                 "tooltip": "抗锯齿未激活：无曲线",
             }
-        if density["error"]:
-            return {
-                **base,
-                "state": "red",
-                "tooltip": "抗锯齿未激活：曲线密度不可读取",
-            }
         if raster_cost["blocked"]:
             if dense_raster["state"] == "green":
                 return {
@@ -972,6 +980,14 @@ class QualityManager(_CanvasBackref):
                 "frame_ink": int(self._frame_native_ink_total()),
                 "ink_budget": int(_INK_AA_OFF),
                 "tooltip": "抗锯齿未激活：波形填满绘图区，绘制量超预算",
+            }
+        # density["error"] AFTER raster-cost and ink — matches
+        # _idle_aa_density_ok decision order (B7).
+        if density["error"]:
+            return {
+                **base,
+                "state": "red",
+                "tooltip": "抗锯齿未激活：曲线密度不可读取",
             }
         label = "叠加密度" if density["overlay"] else "曲线密度"
         if density["metric"] > density["off_budget"]:

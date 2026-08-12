@@ -165,7 +165,12 @@ class _HeatmapMappable:
         if levels is not None:
             lo, hi = levels
             return float(lo), float(hi)
-        return _finite_data_bounds(canvas._matrix_disp)
+        bounds = _finite_data_bounds(canvas._matrix_disp)
+        if bounds is None:
+            # No finite cells and no installed levels: display empty-state
+            # placeholder only (B5 — shared helper no longer invents 0..1).
+            return 0.0, 1.0
+        return bounds
 
     def set_clim(self, vmin, vmax):
         lo, hi = float(vmin), float(vmax)
@@ -717,7 +722,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
         m = np.asarray(matrix, dtype=float)
 
-        auto_vmin, auto_vmax = _finite_data_bounds(m)
+        bounds = _finite_data_bounds(m)
+        if bounds is None:
+            # No finite cells: ImageItem still needs a finite window. This is
+            # the leaf no-data placeholder (B5); the shared helper returns None.
+            auto_vmin, auto_vmax = 0.0, 1.0
+        else:
+            auto_vmin, auto_vmax = bounds
         if vmin is None:
             vmin = float(z_floor) if not z_auto else auto_vmin
         if vmax is None:
@@ -1173,11 +1184,18 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 # widgets, to prevent a feedback loop. Auto levels simply
                 # re-derive from the new matrix — no reference-delta shift
                 # needed (spec §8.3.1: "自动色阶不需处理").
-                vmin, vmax = _auto_db_window(m)
-                # Store the computed absolute window so the caller can
-                # write it back to the inspector spins (blockSignals),
-                # making auto→manual a seamless no-jump transition.
-                self._last_auto_levels = (vmin, vmax)
+                window = _auto_db_window(m)
+                if window is None:
+                    # All-non-finite matrix: keep a display placeholder and
+                    # do not advertise auto levels for spin write-back (B5).
+                    vmin, vmax = 0.0, 1.0
+                    self._last_auto_levels = None
+                else:
+                    vmin, vmax = window
+                    # Store the computed absolute window so the caller can
+                    # write it back to the inspector spins (blockSignals),
+                    # making auto→manual a seamless no-jump transition.
+                    self._last_auto_levels = (vmin, vmax)
                 self._last_manual_levels_shifted = None
             else:
                 vmin, vmax = float(z_floor), float(z_ceiling)
@@ -1199,7 +1217,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             if not z_auto:
                 vmin, vmax = float(z_floor), float(z_ceiling)
             else:
-                vmin, vmax = _finite_data_bounds(m)
+                bounds = _finite_data_bounds(m)
+                if bounds is None:
+                    vmin, vmax = 0.0, 1.0
+                else:
+                    vmin, vmax = bounds
             self._last_manual_levels_shifted = None
             cbar = colorbar_label if colorbar_label is not None else f"Amplitude{unit}"
 

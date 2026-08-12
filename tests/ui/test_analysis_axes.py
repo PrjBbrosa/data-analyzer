@@ -72,14 +72,23 @@ def test_finite_data_bounds_ignores_nan_and_inf():
 
 
 def test_finite_data_bounds_falls_back_when_nothing_is_finite():
-    # No finite data at all → a usable unit range rather than NaN bounds.
-    assert _finite_data_bounds(np.full((2, 2), np.nan)) == (0.0, 1.0)
-    assert _finite_data_bounds(np.array([])) == (0.0, 1.0)
+    # No finite data at all → sentinel None (B5: do not invent 0..1).
+    assert _finite_data_bounds(np.full((2, 2), np.nan)) is None
+    assert _finite_data_bounds(np.array([])) is None
 
 
 def test_finite_data_bounds_widens_a_degenerate_range():
     # A flat matrix would give hi == lo, which is unusable as an axis range.
     assert _finite_data_bounds(np.full((2, 2), 5.0)) == (5.0, 6.0)
+
+
+def test_finite_data_bounds_widens_residue_only_span():
+    # float64 channel-math residue must not become a 1e-16 colour window (B5).
+    from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
+
+    lo = 35.0
+    hi = lo + lo * _DEGENERATE_SPAN_RATIO * 0.5
+    assert _finite_data_bounds(np.array([[lo, hi]])) == (lo, lo + 1.0)
 
 
 # --------------------------------------------------------------------------
@@ -135,8 +144,8 @@ def test_robust_db_ceiling_honours_an_explicit_percentile():
 
 
 def test_robust_db_ceiling_falls_back_when_nothing_is_finite():
-    # Delegates to _finite_data_bounds()[1] → the 1.0 of its (0.0, 1.0).
-    assert _robust_db_ceiling(np.full((4, 4), np.nan)) == 1.0
+    # No finite cells → sentinel None (B5), not an invented 1.0.
+    assert _robust_db_ceiling(np.full((4, 4), np.nan)) is None
 
 
 def test_auto_db_window_is_a_fixed_span_below_the_robust_ceiling():
@@ -158,9 +167,7 @@ def test_auto_db_window_on_an_all_zero_matrix():
 
 
 def test_auto_db_window_keeps_its_span_when_nothing_is_finite():
-    vmin, vmax = _auto_db_window(np.full((4, 4), np.nan))
-    assert (vmin, vmax) == pytest.approx((-29.0, 1.0))
-    assert vmax - vmin == pytest.approx(_AUTO_SPAN_DB)
+    assert _auto_db_window(np.full((4, 4), np.nan)) is None
 
 
 # --------------------------------------------------------------------------
@@ -172,6 +179,14 @@ def test_slice_amp_bounds_returns_none_without_finite_spread():
     assert _slice_amp_bounds(np.full(5, np.nan)) is None
     assert _slice_amp_bounds(np.array([3.0])) is None        # single value
     assert _slice_amp_bounds(np.array([7.0, 7.0])) is None   # flat → hi <= lo
+
+
+def test_slice_amp_bounds_rejects_residue_only_span():
+    from mf4_analyzer.ui_kit.ticks_math import _DEGENERATE_SPAN_RATIO
+
+    lo = 35.0
+    hi = lo + lo * _DEGENERATE_SPAN_RATIO * 0.5
+    assert _slice_amp_bounds(np.array([lo, hi])) is None
 
 
 def test_slice_amp_bounds_spans_normal_data():
