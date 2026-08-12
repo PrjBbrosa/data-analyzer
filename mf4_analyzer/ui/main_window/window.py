@@ -2008,8 +2008,22 @@ class MainWindow(
         the channel tree. Prefer the focused canvas data union (same extent
         Home uses); then checked-channel file time bases; then the active
         analysis View's attached sources; finally all files.
+
+        Analysis modes read the current analysis page's focused pane canvas.
+        ``chart_stack.focused_canvas()`` is a time-domain contract and would
+        frame to a leftover Time View curve.
         """
-        canvas = self.chart_stack.focused_canvas()
+        mode = self.chart_stack.current_mode()
+        managers = getattr(self, 'analysis_managers', None) or {}
+        canvas = None
+        if mode in managers:
+            try:
+                page = self._analysis_page(mode)
+                canvas = page.focused_canvas() if page is not None else None
+            except Exception:
+                canvas = None
+        if canvas is None:
+            canvas = self.chart_stack.focused_canvas()
         getter = getattr(canvas, 'get_data_x_union', None)
         if callable(getter):
             try:
@@ -2068,8 +2082,6 @@ class MainWindow(
 
         # Analysis modes clear the channel-tree checks, so fall back to the
         # active analysis View's attached sources before the global union.
-        mode = self.chart_stack.current_mode()
-        managers = getattr(self, 'analysis_managers', None) or {}
         if mode in managers:
             try:
                 mgr = managers[mode]
