@@ -180,7 +180,7 @@ class ChannelScopeMixin:
         self._toast_analysis_files_attached(section, state, added)
         return added
 
-    def _on_source_load_finished(self, new_fids):
+    def _on_source_load_finished(self, new_fids, *, notify=True):
         if (
             not new_fids
             or getattr(self, "_restoring_project", False)
@@ -192,7 +192,7 @@ class ChannelScopeMixin:
         # docs/analyzer/specs/2026-08-11-file-scope-follow-link-menu-spec.md.
         added = self._attach_files_to_active_context(new_fids)
         mode = self.chart_stack.current_mode()
-        if added and mode in self.analysis_managers:
+        if added and notify and mode in self.analysis_managers:
             resolved = self._active_analysis_view_state(mode)
             if resolved is not None:
                 section, _mgr, state = resolved

@@ -197,3 +197,93 @@ def test_preserved_window_fit_rule(win_two_files):
     assert fits(canvas, union_lo + 0.3 * span, union_lo + 0.6 * span), "zoom in"
     assert not fits(canvas, union_lo, union_hi + 5 * span), "window overruns data"
     assert not fits(canvas, union_lo - 5 * span, union_hi), "window starts early"
+
+
+@pytest.mark.parametrize("mode", ("fft_time", "order", "frf"))
+def test_max_range_in_analysis_mode_uses_attached_short_file(
+    win_two_files, qapp, mode,
+):
+    """A2: 「全部」in order / fft_time / FRF frames to the analysis View's
+    attached sources — not the longest loaded file sitting only on Time."""
+    win, long_fid, short_fid = win_two_files
+    assert float(win.files[long_fid].time_array[-1]) == pytest.approx(30.0, abs=0.2)
+    assert float(win.files[short_fid].time_array[-1]) == pytest.approx(3.0, abs=0.2)
+
+    mgr = win.analysis_managers[mode]
+    mgr.get(0).attached_file_ids = [short_fid]
+    win.chart_stack.set_mode(mode)
+    win.inspector.set_mode(mode)
+    qapp.processEvents()
+
+    top = win.inspector.top
+    top.chk_range.setChecked(False)
+    top.set_range_limits(0.0, 1.0)
+    top.set_range_values(0.0, 1.0)
+
+    top.btn_range_max.click()
+    qapp.processEvents()
+
+    lo, hi = top.range_values()
+    assert lo == pytest.approx(0.0, abs=0.2)
+    assert hi == pytest.approx(3.0, abs=0.2), (
+        f"{mode}: expected short-file extent, got {(lo, hi)}"
+    )
+    assert top.range_enabled() is False
+
+
+def test_heatmap_and_frf_canvas_expose_data_x_union(qapp, qtbot):
+    """A2: Heatmap/FRF canvases expose the same get_data_x_union contract."""
+    import numpy as np
+
+    from mf4_analyzer.signal.frf import FrfEffectiveFacts, FrfResult
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+
+    heatmap = PgHeatmapCanvas()
+    qtbot.addWidget(heatmap)
+    assert heatmap.get_data_x_union() is None
+    matrix = np.zeros((4, 8), dtype=float)
+    heatmap.plot_or_update_heatmap(
+        matrix, x_extent=(1.5, 4.5), y_extent=(0.0, 10.0),
+    )
+    assert heatmap.get_data_x_union() == pytest.approx((1.5, 4.5))
+
+    frf = PgFrfCanvas()
+    qtbot.addWidget(frf)
+    assert frf.get_data_x_union() is None
+    n = 16
+    frequencies = np.linspace(1.0, 100.0, n)
+    transfer = np.ones(n, dtype=np.complex128)
+    coherence = np.ones(n, dtype=float)
+    effective = FrfEffectiveFacts(
+        requested_t_win_s=2.0,
+        requested_nperseg=8,
+        nperseg=8,
+        nfft=8,
+        noverlap=4,
+        hop=4,
+        segments=1,
+        fs=1000.0,
+        df=1.0,
+        n_samples=1000,
+        time_start=0.25,
+        time_end=2.75,
+        window="hann",
+        periodic_window=True,
+        detrend="constant",
+        max_time_jitter=0.0,
+        max_time_difference=0.0,
+        invalid_bins=0,
+    )
+    frf.set_result(
+        FrfResult(
+            frequencies=frequencies,
+            transfer=transfer,
+            pxx=np.ones(n),
+            pyy=np.ones(n),
+            pxy=transfer,
+            coherence=coherence,
+            effective=effective,
+        )
+    )
+    assert frf.get_data_x_union() == pytest.approx((0.25, 2.75))

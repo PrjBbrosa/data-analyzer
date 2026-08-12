@@ -1006,6 +1006,20 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             ):
                 _apply_axis_tick_density(axis, self._bottom_tick_density)
 
+    def get_data_x_union(self):
+        """Return ``(lo, hi)`` spanning plotted X data, or None when empty.
+
+        Same contract as ``PgTimedomainCanvas.get_data_x_union``: the raw
+        extent of what is currently drawn (heatmap ``_extents`` X), with no
+        view padding. Used by「全部」/ Home framing helpers.
+        """
+        if self._extents is None:
+            return None
+        x0, x1 = float(self._extents[0]), float(self._extents[1])
+        if not (np.isfinite(x0) and np.isfinite(x1)) or x1 <= x0:
+            return None
+        return x0, x1
+
     def reset_view_to_data_extents(self) -> None:
         """Toolbar Home helper: restore the view to the full data extents.
 

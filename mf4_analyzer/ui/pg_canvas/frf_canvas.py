@@ -582,6 +582,29 @@ class PgFrfCanvas(QWidget):
         view_range = self._plot_magnitude.vb.viewRange()[0]
         return tuple(self._view_x_to_hz(value) for value in view_range)
 
+    def get_data_x_union(self):
+        """Return ``(lo, hi)`` of the plotted analysis time window, or None.
+
+        FRF's chart X is frequency, but「全部」/ draft-local checks need the
+        *time* extent that produced this result. Prefer
+        ``FrfEffectiveFacts.time_start/time_end`` (same contract shape as
+        ``PgTimedomainCanvas.get_data_x_union``: raw data span or None).
+        """
+        result = self._result
+        if result is None:
+            return None
+        effective = getattr(result, "effective", None)
+        if effective is None:
+            return None
+        try:
+            lo = float(effective.time_start)
+            hi = float(effective.time_end)
+        except (TypeError, ValueError, AttributeError):
+            return None
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return None
+        return lo, hi
+
     def _is_log_frequency(self) -> bool:
         return str(self._display_params.get("frequency_scale")).lower() == "log"
 

@@ -1941,7 +1941,8 @@ class MainWindow(
 
         「全部」must frame to what is *plotted*, not the longest loaded file in
         the channel tree. Prefer the focused canvas data union (same extent
-        Home uses); then checked-channel file time bases; finally all files.
+        Home uses); then checked-channel file time bases; then the active
+        analysis View's attached sources; finally all files.
         """
         canvas = self.chart_stack.focused_canvas()
         getter = getattr(canvas, 'get_data_x_union', None)
@@ -1999,6 +2000,38 @@ class MainWindow(
                 hi = t1 if hi is None else max(hi, t1)
             if lo is not None and hi is not None and hi > lo:
                 return float(lo), float(hi)
+
+        # Analysis modes clear the channel-tree checks, so fall back to the
+        # active analysis View's attached sources before the global union.
+        mode = self.chart_stack.current_mode()
+        managers = getattr(self, 'analysis_managers', None) or {}
+        if mode in managers:
+            try:
+                mgr = managers[mode]
+                attached = list(mgr.get(mgr.active).attached_file_ids)
+            except Exception:
+                attached = []
+            if attached:
+                lo = hi = None
+                for fid in attached:
+                    fd = self.files.get(fid)
+                    if fd is None:
+                        continue
+                    times = getattr(fd, 'time_array', None)
+                    if times is None or len(times) == 0:
+                        continue
+                    try:
+                        t0 = float(times[0])
+                        t1 = float(times[-1])
+                    except Exception:
+                        continue
+                    if not (np.isfinite(t0) and np.isfinite(t1)):
+                        continue
+                    lo = t0 if lo is None else min(lo, t0)
+                    hi = t1 if hi is None else max(hi, t1)
+                if lo is not None and hi is not None and hi > lo:
+                    return float(lo), float(hi)
+
         return self._time_data_extent()
 
     def _on_time_range_max_requested(self):

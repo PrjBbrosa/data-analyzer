@@ -291,6 +291,11 @@ class ProjectIOMixin:
                 )
                 return
 
+            # Multi-file batch: suppress per-file analysis attach toasts and
+            # emit one aggregated「已加入 … · N 个文件」after the loop (F11;
+            # mirrors ``_close_files`` notify=False aggregation).
+            batch_load = len(data_files) > 1
+            batch_attached = []
             for index, fp in enumerate(data_files):
                 before_fids = set(self.files)
                 self._load_one(
@@ -298,12 +303,26 @@ class ProjectIOMixin:
                     progress_callback=lambda fraction, phase, i=index: report(
                         i, fraction, phase,
                     ),
+                    notify=not batch_load,
                 )
                 report(
                     index,
                     1.0,
                     "已加载" if set(self.files) != before_fids else "已跳过",
                 )
+                if batch_load:
+                    batch_attached.extend(
+                        getattr(self, "_last_source_load_attached", ()) or ()
+                    )
+            if batch_load and batch_attached:
+                mode = self.chart_stack.current_mode()
+                if mode in self.analysis_managers:
+                    resolved = self._active_analysis_view_state(mode)
+                    if resolved is not None:
+                        section, _mgr, state = resolved
+                        self._toast_analysis_files_attached(
+                            section, state, batch_attached,
+                        )
         finally:
             self._finish_compute_progress(token=token)
 
@@ -468,7 +487,16 @@ class ProjectIOMixin:
         blf_frames=None,
         blf_dbc_validated=False,
         progress_callback=None,
+        notify=True,
     ):
+        """Load one path and run the shared post-load attach step.
+
+        ``notify`` gates the analysis-mode attach toast (defaults True so
+        single-file callers keep one toast per load). ``_open_data_paths``
+        passes ``notify=False`` for multi-file batches and emits one
+        aggregated「已加入 … · N 个文件」toast itself — same shape as
+        ``_close_files`` / ``_close(..., notify=False)``.
+        """
         before_fids = set(self.files)
         try:
             return self._load_one_impl(
@@ -480,7 +508,9 @@ class ProjectIOMixin:
             )
         finally:
             new_fids = [fid for fid in self.files if fid not in before_fids]
-            self._on_source_load_finished(new_fids)
+            self._last_source_load_attached = self._on_source_load_finished(
+                new_fids, notify=notify,
+            )
 
     def _load_one_impl(
         self,
