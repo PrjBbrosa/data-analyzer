@@ -744,3 +744,91 @@ def test_file_removal_drops_ylims_for_closed_fid():
 
     assert drop not in state.ylims
     assert state.ylims == {keep: (-2.0, 2.0)}
+
+
+def test_load_wwt_toasts_skipped_channels(qapp, tmp_path, monkeypatch):
+    """D3: WWT skipped_channels must surface as a warning toast (HDF template)."""
+    import numpy as np
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests.test_wwt_format import _make_header, _make_record
+
+    n = 120
+    vals = np.arange(n, dtype=np.float64)
+    body = _make_record(b"Zeit", n, name=b"Time", unit=b"s")
+    body += _make_record(b"Real", n, name=b"Weg", unit=b"mm", payload=vals.tobytes())
+    # n mismatch → skipped
+    body += _make_record(b"Real", 6, name=b"Tol_oben", unit=b"mm",
+                         payload=np.zeros(6, dtype=np.float64).tobytes())
+    p = tmp_path / "skip.wwt"
+    p.write_bytes(_make_header(3) + body)
+
+    mw = MainWindow()
+    toasts = []
+    monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    mw._load_one(str(p))
+
+    warn = [(m, lv) for m, lv in toasts if lv == "warning"]
+    assert any("未导入" in m and "Tol_oben" in m for m, _ in warn), toasts
+
+
+def test_load_zfd_estimated_fs_toasts_estimate_wording(qapp, tmp_path, monkeypatch):
+    """A4 exit: fs_estimated=True must toast with an explicit 估算 label."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests.test_zfd_format import _write_minimal_zfd
+
+    p = _write_minimal_zfd(tmp_path / "est.zfd", dt=7200.0, count=4)
+    mw = MainWindow()
+    toasts = []
+    monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    mw._load_one(str(p))
+
+    warn = [(m, lv) for m, lv in toasts if lv == "warning"]
+    assert any("估算" in m for m, _ in warn), toasts
+
+
+def test_load_hdf_toasts_renamed_channels_summary(qapp, tmp_path, monkeypatch):
+    """D4: silent [idx] renames must toast a single summary after load."""
+    import numpy as np
+
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests._helpers.head_hdf_factory import write_head_hdf
+
+    n = 4
+    dup = lambda s: {
+        "name": "Com_Motor_Torque", "factor": 1, "quantity": "torque",
+        "unit": "Nm", "calibration": 1.0, "samples": s,
+    }
+    hdf = write_head_hdf(
+        tmp_path / "dup.hdf", n_scans=n, delta=1.0, start_of_data=4096,
+        channels=[dup(np.zeros(n)), dup(np.arange(n, dtype=float))])
+
+    mw = MainWindow()
+    toasts = []
+    monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    mw._load_one(str(hdf))
+
+    warn = [(m, lv) for m, lv in toasts if lv == "warning"]
+    assert any(m == "1 个通道重名，已加序号区分" for m, _ in warn), toasts
+
+
+def test_load_mat_toasts_skipped_vars(qapp, tmp_path, monkeypatch):
+    """D3: MAT skipped_vars must toast like HDF dropped_channels."""
+    import numpy as np
+    from scipy.io import savemat
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    p = tmp_path / "skip.mat"
+    savemat(str(p), {
+        "t": np.arange(8, dtype=float) * 0.001,
+        "sig": np.arange(8, dtype=float),
+        "notes": np.array(["hello"]),
+    })
+    mw = MainWindow()
+    toasts = []
+    monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    mw._load_one(str(p))
+
+    warn = [(m, lv) for m, lv in toasts if lv == "warning"]
+    assert any("变量未导入" in m and "notes" in m for m, _ in warn), toasts

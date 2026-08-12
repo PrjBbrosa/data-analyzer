@@ -573,7 +573,7 @@ def _default_adapters() -> tuple[SourceAdapter, ...]:
             capability_notes=("decoded signals require explicit DBC context",),
         ),
         SourceAdapter(
-            "tdms", (".tdms",), "NI TDMS", "load_tdms", "single3",
+            "tdms", (".tdms",), "NI TDMS", "load_tdms", "single5",
             optional_packages=("nptdms",),
             capability_notes=("current DataLoader flattens TDMS groups",),
         ),

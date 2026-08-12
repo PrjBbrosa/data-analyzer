@@ -214,14 +214,17 @@ def load_wwt_groups(fp):
         frame = {"Time": t}
         units = {}
         cmeta = {}
+        renamed = []
         for ch in blk["channels"]:
             # 组内同名消歧：追加文件内记录序号（同 load_hdf 的做法），
             # 避免后者静默覆盖前者。
-            col = ch["name"]
+            preferred = ch["name"]
+            col = preferred
             if col in frame:
                 col = f"{ch['name']} [{ch['rec_idx']}]"
                 while col in frame:
                     col = f"{col}_"
+                renamed.append({"original": preferred, "renamed": col})
             frame[col] = ch["values"]
             units[col] = ch["unit"]
             cmeta[col] = {
@@ -230,10 +233,12 @@ def load_wwt_groups(fp):
                 "source_filename": ch["source_filename"],
                 "record_index": ch["rec_idx"],
             }
+        smeta = dict(smeta_base)
+        smeta["renamed_channels"] = renamed
         groups.append({
             "data": pd.DataFrame(frame), "channels": list(frame.keys()),
             "units": units, "channel_metadata": cmeta,
-            "source_metadata": dict(smeta_base),
+            "source_metadata": smeta,
             "axis_key": key,
         })
 
