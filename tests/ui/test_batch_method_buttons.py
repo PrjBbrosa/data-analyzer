@@ -920,6 +920,23 @@ def test_batch_window_options_match_canonical_analysis_factory(qtbot):
     assert form._w_window.findText("rectangular") == -1
 
 
+def test_batch_source_interval_placeholder_and_error_omit_unit_suffix(qtbot):
+    """D9: placeholder must be float()-parseable; errors steer away from units."""
+    from mf4_analyzer.ui.drawers.batch.analysis_panel import AnalysisPanel
+
+    panel = AnalysisPanel()
+    qtbot.addWidget(panel)
+    panel.set_method("fft")
+    assert panel._source_interval_edit.placeholderText() == "0.0, 120.0"
+    assert " s" not in panel._source_interval_edit.placeholderText()
+
+    panel._source_interval_mode.setCurrentIndex(1)  # manual
+    panel._source_interval_edit.setText("0.0, 120.0 s")
+    err = panel.source_time_range_error()
+    assert "数字不要带单位" in err
+    assert panel.source_time_range() is None
+
+
 def test_method_button_labels_fit_narrow_batch_column_with_production_qss(
     qapp, qtbot,
 ):

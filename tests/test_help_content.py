@@ -233,6 +233,9 @@ def test_frf_guide_is_mapped_and_covers_frozen_frf_contract():
     assert "没有时才新建" in text
     assert "使用选定时间范围" in text
     assert "取时域范围" not in text
+    # D8: jitter path is auto-rebuild, not a hard block label.
+    assert '>自动重建</div>' in text
+    assert "数据被阻断" not in text
 
 
 def test_main_manual_and_published_guide_name_the_five_modes_and_frf():

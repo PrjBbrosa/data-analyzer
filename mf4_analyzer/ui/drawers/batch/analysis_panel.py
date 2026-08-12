@@ -236,7 +236,7 @@ class AnalysisPanel(QWidget):
         self._source_interval_mode.addItem("全时段", "all")
         self._source_interval_mode.addItem("指定区间", "manual")
         self._source_interval_edit = QLineEdit(source_row_host)
-        self._source_interval_edit.setPlaceholderText("0.0, 120.0 s")
+        self._source_interval_edit.setPlaceholderText("0.0, 120.0")
         self._source_interval_edit.setEnabled(False)
         source_row.addWidget(self._source_interval_mode)
         source_row.addWidget(self._source_interval_edit, 1)
@@ -492,11 +492,11 @@ class AnalysisPanel(QWidget):
             return ""
         parts = split_list_text(self._source_interval_edit.text())
         if len(parts) != 2 or not all(parts):
-            return "源数据区间：请输入两个逗号分隔的数字（中英文均可）"
+            return "源数据区间：请输入两个逗号分隔的数字（中英文均可），数字不要带单位"
         try:
             lo, hi = (float(item) for item in parts)
         except ValueError:
-            return "源数据区间：请输入两个逗号分隔的数字（中英文均可）"
+            return "源数据区间：请输入两个逗号分隔的数字（中英文均可），数字不要带单位"
         if not math.isfinite(lo) or not math.isfinite(hi):
             return "源数据区间：请输入有限数字"
         if lo >= hi:

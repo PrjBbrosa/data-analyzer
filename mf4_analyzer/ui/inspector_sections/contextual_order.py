@@ -159,7 +159,10 @@ class OrderContextual(QWidget):
         self.spin_order_res.setRange(0.01, 1.0)
         self.spin_order_res.setValue(0.1)
         self.spin_order_res.setSingleStep(0.05)
-        self.spin_order_res.setToolTip('阶次轴细度：越小越细，\n但需更多转数 / 更长数据。')
+        self.spin_order_res.setToolTip(
+            '自动 NFFT 时反向驱动点数：越小阶次轴越细，需更多转数；\n'
+            '手动 NFFT 时只定输出插值网格，不增加信息。'
+        )
         fl.addRow("阶次分辨率:", _fit_field(self.spin_order_res))
         self.spin_time_res = _no_buttons(CompactDoubleSpinBox())
         self.spin_time_res.setRange(0.01, 1.0)
@@ -191,7 +194,10 @@ class OrderContextual(QWidget):
             self._AUTO_NFFT_LABEL, '512', '1024', '2048', '4096', '8192', '16384'
         ])
         self.combo_nfft.setCurrentText(self._AUTO_NFFT_LABEL)
-        self.combo_nfft.setToolTip('越大阶次越细、计算量越高；\n「自动」＝按需取 2 的幂。')
+        self.combo_nfft.setToolTip(
+            '越大阶次轴采样越密、计算量越高。\n'
+            '「自动」由阶次分辨率与可用转数决定；手动固定时，阶次分辨率只定插值网格。'
+        )
         fl.addRow("FFT点数:", _fit_field(self.combo_nfft))
         self.combo_weighting = QComboBox()
         self.combo_weighting.addItems(['None', 'A'])

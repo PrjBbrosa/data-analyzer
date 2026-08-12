@@ -170,7 +170,10 @@ class FFTTimeContextual(QWidget):
             self._AUTO_NFFT_LABEL, '512', '1024', '2048', '4096', '8192',
         ])
         self.combo_nfft.setCurrentText(self._AUTO_NFFT_LABEL)
-        self.combo_nfft.setToolTip('越大频率越细、计算量越高；\n「自动」＝按窗长取 2 的幂。')
+        self.combo_nfft.setToolTip(
+            '越大频率采样越密、计算量越高。\n'
+            '「自动」＝按内部目标时长起步，经最少帧数、数据长度上限与 [64, 8192] 收敛。'
+        )
         fl.addRow("FFT 点数:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.combo_win = QComboBox()
         self.combo_win.addItems(
