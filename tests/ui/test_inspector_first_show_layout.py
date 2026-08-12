@@ -111,3 +111,32 @@ def test_frf_reentry_stays_settled(shown_inspector, qtbot):
         if prev_bottom is not None:
             assert top - prev_bottom >= 4
         prev_bottom = top + field.height()
+
+
+def test_switching_to_shorter_page_drops_dead_white(shown_inspector, qtbot):
+    """E4: contextual_stack sizeHint follows the current page, not the tallest.
+
+    FRF is much taller than FFT. Without a current-page sizeHint override the
+    stack keeps FRF's height after switching to FFT, leaving dead white under
+    the short page. ``_settle_page`` (first-show polish heal) does not address
+    this direction — both must coexist.
+    """
+    _win, inspector = shown_inspector
+    stack = inspector.contextual_stack
+
+    inspector.set_mode("frf")
+    qtbot.wait(50)
+    tall_hint = stack.sizeHint().height()
+    tall_page = inspector.frf_ctx.sizeHint().height()
+    assert tall_hint == tall_page
+
+    inspector.set_mode("fft")
+    qtbot.wait(50)
+    short_hint = stack.sizeHint().height()
+    short_page = inspector.fft_ctx.sizeHint().height()
+    assert short_hint == short_page
+    assert short_hint < tall_hint, (
+        f"stack hint stayed tall after leaving FRF: "
+        f"fft={short_hint} frf={tall_hint}"
+    )
+

@@ -5,6 +5,7 @@ import json
 
 from PyQt5.QtWidgets import QInputDialog, QLineEdit, QMessageBox
 
+from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ..channel_config import (
     ChannelSelectionConfigStore,
     ConfigNameConflict,
@@ -248,6 +249,7 @@ class ChannelScopeMixin:
         remove = box.addButton("从当前 View 移除", QMessageBox.AcceptRole)
         cancel = box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         return box.clickedButton() is remove
 
@@ -402,6 +404,7 @@ class ChannelScopeMixin:
         overwrite = box.addButton("覆盖配置", QMessageBox.AcceptRole)
         cancel = box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         return box.clickedButton() is overwrite
 
@@ -520,6 +523,7 @@ class ChannelScopeMixin:
         remove = box.addButton("从当前 View 移除", QMessageBox.AcceptRole)
         cancel = box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         return box.clickedButton() is remove
 

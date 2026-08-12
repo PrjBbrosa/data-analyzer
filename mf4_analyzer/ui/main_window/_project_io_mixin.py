@@ -1354,6 +1354,7 @@ class ProjectIOMixin:
         choose = box.addButton("选择 DBC", QMessageBox.AcceptRole)
         box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(choose)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         return box.clickedButton() is choose
 
@@ -1392,6 +1393,7 @@ class ProjectIOMixin:
         choose = box.addButton("选择其他 DBC", QMessageBox.ActionRole)
         box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(use)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         clicked = box.clickedButton()
         if clicked is use:
@@ -1437,6 +1439,7 @@ class ProjectIOMixin:
         retry = box.addButton("重新选择", QMessageBox.AcceptRole)
         box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(retry)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         return "retry" if box.clickedButton() is retry else "cancel"
 

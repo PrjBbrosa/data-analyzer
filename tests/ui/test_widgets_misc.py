@@ -100,7 +100,7 @@ def test_toast_second_message_replaces_instead_of_stacking(qapp, qtbot, host):
 
 
 def test_toast_default_margin_clears_view_tab_strip(qapp, qtbot, host):
-    """Default toast sits above status + ViewTabBar (+ hint), with breathing."""
+    """Fallback margin still clears a typical status+View chrome stack."""
     assert Toast.DEFAULT_BOTTOM_MARGIN >= 100
     toast = Toast(host)
     toast.show_message("已保存工程")
@@ -109,6 +109,29 @@ def test_toast_default_margin_clears_view_tab_strip(qapp, qtbot, host):
     assert clearance == Toast.DEFAULT_BOTTOM_MARGIN
     # Status (40) + ViewTabBar (28) + hint (20) still fit under the toast.
     assert clearance >= 40 + 28 + 20
+
+
+def test_toast_margin_provider_used_at_show_time(qapp, qtbot, host):
+    """Display-time provider beats the DEFAULT fallback (E6)."""
+    calls = []
+
+    def provider():
+        calls.append(1)
+        return 64
+
+    toast = Toast(host, margin_provider=provider)
+    toast.show_message("已加入 3 个文件")
+    assert calls, "provider must run when showing"
+    assert host.height() - (toast.y() + toast.height()) == 64
+
+
+def test_toast_set_bottom_margin_repositions_visible_toast(qapp, qtbot, host):
+    """Hosts re-derive clearance when neighbor chrome changes (sheet footer)."""
+    toast = Toast(host, bottom_margin=40)
+    toast.show_message("运行中")
+    assert host.height() - (toast.y() + toast.height()) == 40
+    toast.set_bottom_margin(72)
+    assert host.height() - (toast.y() + toast.height()) == 72
 
 
 def test_toast_custom_bottom_margin_is_honored(qapp, qtbot, host):

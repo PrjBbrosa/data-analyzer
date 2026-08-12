@@ -32,6 +32,7 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import QColor, QBrush, QFontMetrics, QIcon, QPainter, QPen
 
 from ...ui_kit.icons import Icons
+from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ...ui_kit.widgets import SearchField
 from .. import hints
 from ..axis_group_palette import axis_group_color
@@ -1664,6 +1665,7 @@ class MultiFileChannelWidget(QWidget):
         confirm = box.addButton(confirm_text, QMessageBox.AcceptRole)
         cancel = box.addButton('取消操作', QMessageBox.RejectRole)
         box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         return box.clickedButton() is confirm
 

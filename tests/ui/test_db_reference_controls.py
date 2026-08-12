@@ -236,6 +236,8 @@ def test_auto_manual_badge_text_color_state_and_no_clipping(qtbot):
 
 
 def test_source_line_elides_but_tooltip_keeps_full_text(qtbot):
+    from PyQt5.QtCore import Qt
+
     control = DbReferenceControl()
     qtbot.addWidget(control)
     control.resize(160, 70)
@@ -253,6 +255,12 @@ def test_source_line_elides_but_tooltip_keeps_full_text(qtbot):
     assert len(displayed) < len(long_text)
     assert control.source_label.toolTip() == long_text
     assert control.full_source_text() == long_text
+    # E5: middle elision (shared-prefix source lines stay distinguishable).
+    metrics = control.source_label.fontMetrics()
+    expected = metrics.elidedText(
+        long_text, Qt.ElideMiddle, max(control.source_label.width(), 40),
+    )
+    assert displayed == expected
 
 
 # ---------------------------------------------------------------------------

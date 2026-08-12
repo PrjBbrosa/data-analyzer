@@ -5,7 +5,7 @@ caches the user's last input on each mode's contextual widget so that
 switching modes preserves context.
 """
 from PyQt5 import sip
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -41,6 +41,41 @@ from .inspector_sections.time_filter import FilterPanel
 # wraps to its own right-aligned line) so it shrinks with the pane instead
 # of forcing a horizontal scrollbar — see _build_axis_row.
 _INSPECTOR_CONTENT_MAX_WIDTH = 272
+
+
+class _ContextualStack(QStackedWidget):
+    """Elastic stack whose sizeHint follows the *current* analysis page.
+
+    The four contextual pages differ a lot in height (FRF is the tallest).
+    QStackedWidget's default sizeHint takes the maximum across pages, which
+    leaves dead white under a short page after switching away from FRF.
+    Mirror ``batch.input_panel._TargetStack``: hint from the current page and
+    invalidate on ``currentChanged``. Coexists with ``_settle_page`` (first-
+    show polish/layout heal) — that path refreshes field geometry; this one
+    shrinks the stack's allocated height.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(self._refresh_current_page_geometry)
+
+    def _refresh_current_page_geometry(self, _index: int) -> None:
+        self.updateGeometry()
+        parent = self.parentWidget()
+        if parent is not None and parent.layout() is not None:
+            parent.layout().invalidate()
+
+    def sizeHint(self):  # noqa: N802 (Qt API)
+        hint = super().sizeHint()
+        current = self.currentWidget()
+        if current is None:
+            return hint
+        return QSize(hint.width(), current.sizeHint().height())
+
+    def minimumSizeHint(self):  # noqa: N802 (Qt API)
+        current = self.currentWidget()
+        height = current.minimumSizeHint().height() if current is not None else 0
+        return QSize(0, height)
 
 
 class Inspector(QWidget):
@@ -171,7 +206,7 @@ class Inspector(QWidget):
         self.top.range_card_layout().addWidget(self.time_ctx)
         body_lay.addWidget(self._time_domain_card)
 
-        self.contextual_stack = QStackedWidget(self._scroll_body)
+        self.contextual_stack = _ContextualStack(self._scroll_body)
         self.fft_ctx = FFTContextual(self._scroll_body)
         self.fft_time_ctx = FFTTimeContextual(self._scroll_body)
         self.frf_ctx = FrfContextual(self._scroll_body)

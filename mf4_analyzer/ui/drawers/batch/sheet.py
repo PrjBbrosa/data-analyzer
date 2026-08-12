@@ -715,6 +715,25 @@ class BatchSheet(QDialog):
         self._footer_state_dot.setProperty("state", state)
         self._footer_state_dot.style().unpolish(self._footer_state_dot)
         self._footer_state_dot.style().polish(self._footer_state_dot)
+        self._sync_own_toast_margin()
+
+    def _own_toast_bottom_margin(self) -> int:
+        """Live clearance from the compact footer's real height."""
+        host = getattr(self, "_footer_host", None)
+        height = int(host.height()) if host is not None else 0
+        return max(0, height) + 12
+
+    def _sync_own_toast_margin(self) -> None:
+        """Re-derive toast clearance whenever footer geometry may change.
+
+        Uses the live ``margin_provider`` (footer height) rather than pinning
+        an override, so a later taller/shorter footer is picked up on show.
+        """
+        toast = getattr(self, "_own_toast", None)
+        if toast is None:
+            return
+        if toast.isVisible():
+            toast._reposition()
 
     # ------------------------------------------------------------------
     # Pipeline status recompute
@@ -1568,7 +1587,7 @@ class BatchSheet(QDialog):
                 if self._own_toast is None:
                     self._own_toast = Toast(
                         self,
-                        bottom_margin=self._footer_host.height() + 12,
+                        margin_provider=self._own_toast_bottom_margin,
                     )
                 self._own_toast.show_message(text, level=kind)
                 return
