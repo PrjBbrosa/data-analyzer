@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from PyQt5.QtWidgets import QColorDialog, QMessageBox
 
+from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ..time_xaxis import (
     CHANNEL_MODE,
     EXACT_SOURCE,
@@ -406,6 +407,7 @@ class ViewMixin:
         delete = box.addButton("删除", QMessageBox.DestructiveRole)
         cancel = box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         return box.clickedButton() is delete
 

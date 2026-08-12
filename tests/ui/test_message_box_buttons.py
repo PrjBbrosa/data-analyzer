@@ -148,3 +148,28 @@ def test_close_and_remove_from_all_views_label_fits_after_helper(qapp):
         box.close()
         box.deleteLater()
         qapp.setStyleSheet(previous)
+
+
+def test_long_chinese_accept_button_fits_view_remove_label(qapp):
+    """E3 regression: longest confirm label must not keep QSS min-width=52."""
+    previous = qapp.styleSheet()
+    load_stylesheet(qapp)
+    box = QMessageBox()
+    try:
+        box.setWindowTitle("从当前 View 移除")
+        box.setText("将取消若干通道。是否继续？")
+        remove = box.addButton("从当前 View 移除", QMessageBox.AcceptRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        prepare_message_box_buttons(box)
+        fit_message_box_buttons_to_text(box)
+        box.show()
+        qapp.processEvents()
+        text_width = remove.fontMetrics().horizontalAdvance(remove.text())
+        # 10px QSS left/right padding, two 1px borders, plus the helper's
+        # 8px content slack; compare the rendered outer button box.
+        assert remove.width() >= text_width + 8 + 20 + 2
+        assert cancel.width() >= cancel.fontMetrics().horizontalAdvance(cancel.text()) + 8 + 20 + 2
+    finally:
+        box.close()
+        box.deleteLater()
+        qapp.setStyleSheet(previous)

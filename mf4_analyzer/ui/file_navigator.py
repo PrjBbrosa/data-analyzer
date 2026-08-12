@@ -43,7 +43,8 @@ class _ElidedLabel(QLabel):
     def _apply_elided(self):
         fm = self.fontMetrics()
         avail = max(0, self.width())
-        elided = fm.elidedText(self._full_text, Qt.ElideRight, avail)
+        # MF4 names share long prefixes (DC2E_0011_*); keep head+tail visible.
+        elided = fm.elidedText(self._full_text, Qt.ElideMiddle, avail)
         super().setText(elided)
         if elided != self._full_text:
             self.setToolTip(self._full_text)

@@ -383,7 +383,9 @@ class DbReferenceControl(QWidget):
     def _reflow_source_text(self):
         metrics = self.source_label.fontMetrics()
         width = max(self.source_label.width(), 40)
-        elided = metrics.elidedText(self._full_source_text, Qt.ElideRight, width)
+        # Keep distinguishing tails of long source lines (same G8 lesson as
+        # channel_tree / file_navigator).
+        elided = metrics.elidedText(self._full_source_text, Qt.ElideMiddle, width)
         self.source_label.setText(elided)
 
     # -- geometry: square button matches editor height; badge never clips --

@@ -14,19 +14,20 @@ class Toast(QFrame):
 
     _HOLD_MS = {'info': 3500, 'success': 3500, 'warning': 5000, 'error': 7000}
 
-    #: Clearance under the toast. Sized for MainWindow bottom chrome:
-    #: SurfaceStatusBar (40) + ViewTabBar (28) + time hint strip (20 when
-    #: present) + a breathing gap so the toast does not kiss the View row.
-    #: A host with a taller bottom chrome (the batch sheet's 50px footer)
-    #: still passes its own margin.
+    #: Final fallback clearance when no host-derived margin is available
+    #: (construct-time estimate / headless hosts without chrome). Prefer a
+    #: ``margin_provider`` or ``set_bottom_margin`` from real neighbor heights
+    #: at display time — see MainWindow / BatchSheet / MarkupEditor.
     DEFAULT_BOTTOM_MARGIN = 100
 
-    def __init__(self, parent=None, *, bottom_margin=None):
+    def __init__(self, parent=None, *, bottom_margin=None, margin_provider=None):
         super().__init__(parent)
-        self._bottom_margin = (
-            self.DEFAULT_BOTTOM_MARGIN if bottom_margin is None
-            else int(bottom_margin)
+        # Explicit pin (BatchSheet historically passed footer+gap once). ``None``
+        # means "resolve via provider, else DEFAULT_BOTTOM_MARGIN".
+        self._bottom_margin_override = (
+            None if bottom_margin is None else int(bottom_margin)
         )
+        self._margin_provider = margin_provider
         self.setObjectName("toast")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -60,6 +61,34 @@ class Toast(QFrame):
         'warning': '!',
         'error': '✕',
     }
+
+    def set_bottom_margin(self, margin):
+        """Pin clearance in px, or ``None`` to resume provider / default."""
+        self._bottom_margin_override = None if margin is None else int(margin)
+        if self.isVisible():
+            self._reposition()
+
+    def set_margin_provider(self, provider):
+        """Callable returning clearance px at show/reposition time."""
+        self._margin_provider = provider
+        if self.isVisible():
+            self._reposition()
+
+    def _resolved_bottom_margin(self):
+        if self._bottom_margin_override is not None:
+            return max(0, int(self._bottom_margin_override))
+        provider = self._margin_provider
+        if callable(provider):
+            try:
+                value = provider()
+            except Exception:
+                value = None
+            if value is not None:
+                try:
+                    return max(0, int(value))
+                except (TypeError, ValueError):
+                    pass
+        return self.DEFAULT_BOTTOM_MARGIN
 
     def show_message(self, text, level='info'):
         level = level if level in self._HOLD_MS else 'info'
@@ -102,5 +131,5 @@ class Toast(QFrame):
         if parent is None:
             return
         x = (parent.width() - self.width()) // 2
-        y = parent.height() - self.height() - self._bottom_margin
+        y = parent.height() - self.height() - self._resolved_bottom_margin()
         self.move(max(8, x), max(8, y))

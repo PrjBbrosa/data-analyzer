@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
 import qtawesome as qta
 
 from ...ui_kit.icons import Icons
+from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from .. import hints
 from ..file_navigator import _ElidedLabel
 from ..pg_canvases import TimeDomainCanvasPG
@@ -735,6 +736,7 @@ class _ChartCard(QWidget):
         clear = box.addButton('清除标注', QMessageBox.DestructiveRole)
         cancel = box.addButton('取消', QMessageBox.RejectRole)
         box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         return box.clickedButton() is clear
 

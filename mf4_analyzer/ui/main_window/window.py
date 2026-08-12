@@ -444,10 +444,11 @@ class MainWindow(
         self._install_compute_progress()
         self._install_update_indicator()
 
-        # Floating toast (constructed lazily on first use; the parent must
-        # be the main window so the toast floats above the central canvas).
+        # Floating toast: parent is the main window so it floats above the
+        # central canvas. Clearance is derived at show time from real bottom
+        # chrome heights (status + View tabs), not a construct-time magic number.
         from ..widgets import Toast
-        self._toast = Toast(self)
+        self._toast = Toast(self, margin_provider=self._toast_bottom_chrome_clearance)
         from ..markup import CopyThumbnail
         self._copy_thumbnail = CopyThumbnail(self)
         self._copy_thumbnail.clicked.connect(self._open_markup_editor)
@@ -716,6 +717,49 @@ class MainWindow(
         panel = getattr(self, "_quickref_panel", None)
         if panel is not None:
             panel.set_bottom_hints_visible(visible)
+
+    def _toast_bottom_chrome_clearance(self):
+        """Sum real bottom-chrome heights so the toast clears View tabs.
+
+        Layout bottom-up: SurfaceStatusBar (hosts the mode hint bar) sits at
+        the window edge; the active ViewTabBar sits just above it inside the
+        chart pane. A small breathing gap keeps the toast from kissing the
+        View row. Falls through to Toast.DEFAULT_BOTTOM_MARGIN only when
+        chrome widgets are not yet measurable.
+        """
+        gap = 12
+        total = gap
+        status = getattr(self, "statusBar", None)
+        if status is not None and status.isVisible():
+            h = int(status.height() or 0)
+            if h > 0:
+                total += h
+        tabbar = self._visible_view_tabbar()
+        if tabbar is not None and tabbar.isVisible():
+            h = int(tabbar.height() or 0)
+            if h > 0:
+                total += h
+        # If nothing measurable yet (very early init), keep the historical
+        # fallback so offscreen hosts still clear a typical chrome stack.
+        if total <= gap:
+            from ..widgets import Toast
+            return Toast.DEFAULT_BOTTOM_MARGIN
+        return total
+
+    def _visible_view_tabbar(self):
+        chart = getattr(self, "chart_stack", None)
+        if chart is None:
+            return getattr(self, "view_tabbar", None)
+        mode = chart.current_mode()
+        if mode == "time":
+            return getattr(self, "view_tabbar", None)
+        page = {
+            "fft": getattr(chart, "page_fft", None),
+            "fft_time": getattr(chart, "page_fft_time", None),
+            "frf": getattr(chart, "page_frf", None),
+            "order": getattr(chart, "page_order", None),
+        }.get(mode)
+        return getattr(page, "tabbar", None) if page is not None else None
 
     # ---- public toast helper ----
     def toast(self, msg, level='info'):

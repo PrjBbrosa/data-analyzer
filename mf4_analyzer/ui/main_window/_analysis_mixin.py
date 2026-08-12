@@ -17,6 +17,8 @@ import numpy as np
 from PyQt5.QtWidgets import QColorDialog, QMessageBox
 from PyQt5.QtCore import QTimer
 
+from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
+
 from ... import db_reference
 from ..compute_feedback import summarize_compute
 from .analysis_context import AnalysisContext
@@ -519,6 +521,7 @@ class AnalysisMixin:
         full_btn = box.addButton("用全时段", QMessageBox.DestructiveRole)
         cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(local_btn)
+        fit_message_box_buttons_to_text(box)
         box.exec_()
         clicked = box.clickedButton()
         if clicked is local_btn:

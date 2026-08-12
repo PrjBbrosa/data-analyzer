@@ -127,6 +127,7 @@ class MarkupEditor(QWidget):
         self._auto_fit = True
         self._hint_settings = QSettings()
         self._hint_toast = None
+        self._toolbar = None
         self._capability_hint_shown = False
 
         self._scene = QGraphicsScene(self)
@@ -147,7 +148,8 @@ class MarkupEditor(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self._build_toolbar())
+        self._toolbar = self._build_toolbar()
+        layout.addWidget(self._toolbar)
         layout.addWidget(self._view, 1)
         self.resize(960, 640)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -176,7 +178,10 @@ class MarkupEditor(QWidget):
             return
         if self._hint_toast is None:
             from ..widgets import Toast
-            self._hint_toast = Toast(self)
+            self._hint_toast = Toast(
+                self,
+                margin_provider=self._toast_bottom_chrome_clearance,
+            )
         self._hint_toast.show_message(hint.text, level="info")
         hints.mark_discovered(self._hint_settings, hint.id)
 
@@ -401,6 +406,15 @@ class MarkupEditor(QWidget):
         return path
 
     # ---- chrome construction (implemented in toolbar.py) ----
+
+    def _toast_bottom_chrome_clearance(self) -> int:
+        """Clearance from the editor's own toolbar height (+ breathing gap)."""
+        bar = getattr(self, "_toolbar", None)
+        height = int(bar.height()) if bar is not None else 0
+        if height <= 0:
+            from ..widgets import Toast
+            return Toast.DEFAULT_BOTTOM_MARGIN
+        return height + 12
 
     def _build_toolbar(self) -> QWidget:
         return build_toolbar(self)
