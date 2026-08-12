@@ -19,6 +19,7 @@ from ...analysis_presets import (
     list_builtin_presets,
     resolve_builtin_preset_alias,
 )
+from ...signal.analysis_defaults import ANALYSIS_WINDOW_CANDIDATES
 from ...ui_kit.icons import Icons
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
@@ -173,9 +174,7 @@ class FFTTimeContextual(QWidget):
         self.combo_nfft.setToolTip('越大频率越细、计算量越高；\n「自动」＝按窗长取 2 的幂。')
         fl.addRow("FFT 点数:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.combo_win = QComboBox()
-        self.combo_win.addItems(
-            ['hanning', 'flattop', 'hamming', 'blackman', 'kaiser', 'bartlett']
-        )
+        self.combo_win.addItems(list(ANALYSIS_WINDOW_CANDIDATES))
         self.combo_win.setToolTip('抑制频谱泄漏：flattop 幅值最准、\nhanning 最均衡、blackman 旁瓣最低。')
         fl.addRow("窗函数:", _fit_field(self.combo_win, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.spin_overlap = _no_buttons(QSpinBox())

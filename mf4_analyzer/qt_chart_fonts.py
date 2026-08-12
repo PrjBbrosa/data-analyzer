@@ -25,6 +25,9 @@ CHART_FONT_FAMILIES = (
     "PingFang SC",
     "Noto Sans CJK SC",
 )
+# Interactive chart axis / tick measurement point size. Render defaults and
+# QFontMetrics fitters must reference this symbol — not a parallel ``9`` literal.
+CHART_FONT_PT = 9.0
 CJK_CONTRACT_TEXT = "单帧振动加速度"
 CJK_FONT_CANDIDATES = CHART_FONT_FAMILIES
 # Keyed by the exact requested size: the batch report's font scale produces
@@ -57,7 +60,7 @@ def resolve_cjk_font() -> QFont | None:
     return None
 
 
-def chart_font(point_size: float = 9.0) -> QFont:
+def chart_font(point_size: float = CHART_FONT_PT) -> QFont:
     """Return the resolved explicit font for pyqtgraph text and axis items."""
     cache_key = round(float(point_size), 2)
     cached = _CHART_FONT_CACHE.get(cache_key)
@@ -90,7 +93,7 @@ def chart_font(point_size: float = 9.0) -> QFont:
     return font
 
 
-def apply_axis_font(axis, point_size: float = 9.0) -> None:
+def apply_axis_font(axis, point_size: float = CHART_FONT_PT) -> None:
     if axis is None:
         return
     font = chart_font(point_size)
@@ -100,7 +103,7 @@ def apply_axis_font(axis, point_size: float = 9.0) -> None:
         label.setFont(font)
 
 
-def apply_text_item_font(item, point_size: float = 9.0) -> None:
+def apply_text_item_font(item, point_size: float = CHART_FONT_PT) -> None:
     if item is None:
         return
     target = getattr(item, "textItem", item)
@@ -153,6 +156,7 @@ def header_ink_proof(font: QFont, text: str = CJK_CONTRACT_TEXT) -> dict[str, ob
 
 __all__ = [
     "CHART_FONT_FAMILIES",
+    "CHART_FONT_PT",
     "CJK_CONTRACT_TEXT",
     "CJK_FONT_CANDIDATES",
     "apply_axis_font",

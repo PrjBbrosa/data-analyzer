@@ -13,6 +13,7 @@ from ._backref import _CanvasBackref
 
 import pyqtgraph as pg
 
+from mf4_analyzer.qt_chart_fonts import CHART_FONT_PT
 from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
@@ -521,7 +522,7 @@ class OverlayAxisManager(_CanvasBackref):
         if available <= 0:
             return min(len(text), _OVERLAY_AXIS_LABEL_FALLBACK_CHARS)
 
-        metrics = QFontMetrics(_pg_chart_font(9))
+        metrics = QFontMetrics(_pg_chart_font(CHART_FONT_PT))
 
         def text_width(value):
             try:

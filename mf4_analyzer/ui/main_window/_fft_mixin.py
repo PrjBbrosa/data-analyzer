@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from ... import db_reference
 from ...signal import FFTAnalyzer, resolve_nfft, energy_band_fmax
+from ...signal.analysis_defaults import normalize_overlap_fraction
 from ...signal.spectrogram import SpectrogramAnalyzer
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
@@ -74,7 +75,8 @@ class FFTMixin:
             out['nfft_mode'] = 'auto'
             out['t_win_s'] = float(out.get('t_win_s', 1.5))
             if avg_mode in {'线性平均', '峰值保持'}:
-                overlap = float(out.get('avg_overlap', 50)) / 100.0
+                overlap = normalize_overlap_fraction(
+                    out.get('avg_overlap', 50), default=50)
                 effective = resolve_nfft(
                     fs,
                     n_samples,
@@ -145,8 +147,8 @@ class FFTMixin:
         win = fft_params['window']
         nfft = fft_params.get('nfft_effective', fft_params.get('nfft'))
         avg_mode = fft_params.get('avg_mode', '单帧')
-        overlap_pct = int(fft_params.get('avg_overlap', 50))
-        avg_overlap = max(0.0, min(0.95, overlap_pct / 100.0))
+        avg_overlap = normalize_overlap_fraction(
+            fft_params.get('avg_overlap', 50), default=50)
         weighting = str(fft_params.get('weighting', 'None'))
         if avg_mode == '线性平均':
             freq, amp, psd = self._call_fft_analyzer(

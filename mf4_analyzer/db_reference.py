@@ -234,6 +234,21 @@ def validate_reference(value):
     return f > 0.0
 
 
+def degraded_numeric_resolution(params):
+    """Fallback resolution when no ``(fid, ch)`` source is available.
+
+    Used by FFT-vs-Time / Order render helpers for bare-canvas test doubles
+    that never wire a real source. Reads ``params['db_reference']`` (default
+    ``1.0``), validates through :func:`validate_reference`, and returns a
+    generic :class:`DbReferenceResolution`.
+    """
+    value = float(params.get('db_reference', 1.0))
+    if not validate_reference(value):
+        value = 1.0
+    return DbReferenceResolution(
+        value=value, unit='', quantity='', source='generic')
+
+
 # ---------------------------------------------------------------------------
 # Catalog validation (spec R2 duplicate-alias guard)
 # ---------------------------------------------------------------------------

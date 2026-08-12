@@ -25,6 +25,7 @@ import pandas as pd
 from . import db_reference
 from .batch_types import _BatchCancelled
 from .signal import resolve_nfft, resolve_order_nfft
+from .signal.analysis_defaults import normalize_overlap_fraction
 from .signal.fft import FFTAnalyzer
 from .signal.frf import (
     FrfCancelled,
@@ -663,13 +664,8 @@ def convert_fft_amplitude_definition(amp, *, avg_mode, requested):
 
 
 def avg_overlap_fraction(params):
-    try:
-        value = float(params.get('avg_overlap', 50))
-    except (TypeError, ValueError):
-        value = 50.0
-    if value > 1.0:
-        value /= 100.0
-    return max(0.0, min(0.95, value))
+    return normalize_overlap_fraction(
+        params.get('avg_overlap', 50), default=50)
 
 
 def resolve_fft_nfft(n_samples, fs, params):

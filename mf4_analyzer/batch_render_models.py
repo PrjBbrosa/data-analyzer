@@ -15,6 +15,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from .batch_statistics import BatchChartDiagnostic, BatchStatisticRow
+from .signal.analysis_defaults import DEFAULT_COHERENCE_THRESHOLD
 
 
 #: Upper bound on slice positions per page (design D9). The main heatmap
@@ -178,7 +179,7 @@ class BatchFrfFigureSpec:
     magnitude_scale: str = "db"
     frequency_scale: str = "log"
     phase_mode: str = "unwrapped"
-    coherence_threshold: float = 0.8
+    coherence_threshold: float = DEFAULT_COHERENCE_THRESHOLD
     fade_low_coherence: bool = True
 
     def __post_init__(self) -> None:

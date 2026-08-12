@@ -45,6 +45,7 @@ from mf4_analyzer.qt_analysis_shared import (  # noqa: F401
     _robust_db_ceiling,
     _slice_amp_bounds,
 )
+from mf4_analyzer.qt_chart_fonts import CHART_FONT_PT
 from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
@@ -179,7 +180,7 @@ def _apply_target_bottom_ticks(
     if not np.isfinite(raw_step) or raw_step <= 0:
         return False
 
-    metrics = QFontMetrics(_pg_chart_font(9))
+    metrics = QFontMetrics(_pg_chart_font(CHART_FONT_PT))
     extreme_narrow = width < target * 8.0
     min_gap = (
         _TARGET_BOTTOM_TICK_MIN_NARROW_GAP_PX

@@ -19,6 +19,7 @@ from mf4_analyzer.render_profile import (
     log_frequency_minor_tick_levels,
     log_frequency_tick_levels,
 )
+from mf4_analyzer.signal.analysis_defaults import DEFAULT_COHERENCE_THRESHOLD
 from mf4_analyzer.signal.frf import (
     magnitude_db,
     magnitude_linear,
@@ -45,7 +46,7 @@ _DEFAULT_DISPLAY = {
     "magnitude_scale": "db",
     "frequency_scale": "log",
     "phase_mode": "unwrapped",
-    "coherence_threshold": 0.8,
+    "coherence_threshold": DEFAULT_COHERENCE_THRESHOLD,
     "fade_low_coherence": True,
 }
 _STATE_TEXT = {
