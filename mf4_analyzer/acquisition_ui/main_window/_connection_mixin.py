@@ -23,6 +23,7 @@ from mf4_analyzer.acquisition_capture.health import (
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_capture import thresholds
 from mf4_analyzer.acquisition_ui.state import CockpitState
+from mf4_analyzer.ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +252,9 @@ class ConnectionMixin:
             "无法开始真实 ECU 连接：\n\n" + "\n".join(f"• {p}" for p in problems)
         )
         box.setWindowModality(Qt.WindowModal)
+        if not box.buttons():
+            box.setStandardButtons(_QMessageBox.Ok)
+        fit_message_box_buttons_to_text(box)
         self._connection_warning_box = box
         if self.isVisible():
             box.open()
