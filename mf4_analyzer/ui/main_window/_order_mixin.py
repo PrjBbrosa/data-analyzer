@@ -7,7 +7,8 @@ from PyQt5.QtWidgets import QMessageBox
 from ... import db_reference
 from ...signal import assess_speed_for_order, resolve_order_nfft
 from ...signal.spectrogram import SpectrogramAnalyzer
-from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP
+from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP, DEFAULT_HEATMAP_INTERP
+from ...qt_analysis_shared import amplitude_mode_is_db
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 
@@ -528,7 +529,9 @@ class OrderMixin:
         order_params = ctx.current_params() if hasattr(ctx, 'current_params') else {}
         amp_mode_token = (
             'amplitude_db'
-            if order_params.get('amplitude_mode', 'Amplitude dB') == 'Amplitude dB'
+            if amplitude_mode_is_db(
+                order_params.get('amplitude_mode', 'Amplitude dB')
+            )
             else 'amplitude'
         )
         # weighting: prefer the COMPUTED result's own COTParams (the
@@ -614,7 +617,7 @@ class OrderMixin:
             y_label='Order',
             title=title,
             cmap=getattr(canvas, '_cmap_name', DEFAULT_HEATMAP_CMAP),
-            interp='bilinear',
+            interp=DEFAULT_HEATMAP_INTERP,
             cbar_label=cbar_label,
             amplitude_mode=plot_amp_mode,
             amplitude_label=amplitude_label,

@@ -30,6 +30,9 @@ class RenderTheme:
     axis_font_pt: float = 12.0
     panel_title_font_pt: float = 13.0
     header_font_pt: float = 15.0
+    # Channel / analysis row under the identity header (was a bare 9.0 that
+    # ignored ``font_scale`` — C1).
+    channel_font_pt: float = 9.0
     facts_font_pt: float = 11.0
     footer_font_pt: float = 9.5
 
@@ -91,6 +94,7 @@ def scaled_fonts(theme: RenderTheme, scale: float) -> RenderTheme:
         axis_font_pt=theme.axis_font_pt * factor,
         panel_title_font_pt=theme.panel_title_font_pt * factor,
         header_font_pt=theme.header_font_pt * factor,
+        channel_font_pt=theme.channel_font_pt * factor,
         facts_font_pt=theme.facts_font_pt * factor,
         footer_font_pt=theme.footer_font_pt * factor,
     )

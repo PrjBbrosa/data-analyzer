@@ -34,9 +34,15 @@ from mf4_analyzer.signal.frf import (
 # the diff audit that cleared the switch.
 from mf4_analyzer.qt_analysis_shared import (
     DEFAULT_HEATMAP_CMAP,
+    DEFAULT_HEATMAP_INTERP,
+    HEATMAP_SMOOTH_INTERP_MODES,
     SUPPORTED_HEATMAP_COLORMAPS,
+    _AUTO_CEILING_PCT,
+    _AUTO_SPAN_DB,
     _SLICE_MAX_SPAN_DB,
     _SmoothImageItem,
+    amplitude_mode_is_db,
+    default_amplitude_mode_for_kind,
     _resolve_colormap,
     _slice_amp_bounds,
 )
@@ -88,9 +94,6 @@ from ._theme import SERIES_COLORS, RenderTheme, render_theme, scaled_fonts
 
 _SUPPORTED_KINDS = frozenset({"time", "fft", "fft_time", "frf", "order_time"})
 _EMPTY_DB_LEVEL = -200.0
-_AUTO_SPAN_DB = 30.0
-_AUTO_CEILING_PERCENTILE = 99.0
-_DISPLAY_DEAD_SPAN_DB = 200.0
 _SLICE_MARKER_HIGHLIGHT_COLOR = QColor(255, 45, 85, 90)
 _SLICE_MARKER_HIGHLIGHT_WIDTH = 18.0
 _SLICE_MARKER_HIGHLIGHT_Z = 898.0
@@ -172,11 +175,16 @@ def _linear_amplitude_label(unit: str) -> str:
 def _render_in_db(kind: str, params: Mapping[str, Any]) -> bool:
     if kind not in {"fft", "fft_time", "order_time"}:
         return False
-    default_mode = "amplitude_db" if kind == "fft_time" else "amplitude"
-    amplitude_mode = str(params.get("amplitude_mode", default_mode)).lower()
+    amplitude_mode = params.get(
+        "amplitude_mode", default_amplitude_mode_for_kind(kind)
+    )
     amplitude_axis = str(params.get("amplitude_axis", "linear")).lower()
     legacy_axis = str(params.get("amp_y", "")).lower()
-    return "db" in amplitude_mode or amplitude_axis == "db" or legacy_axis == "db"
+    return (
+        amplitude_mode_is_db(amplitude_mode)
+        or amplitude_axis == "db"
+        or legacy_axis == "db"
+    )
 
 
 def _reference_resolution(params: Mapping[str, Any]):
@@ -208,7 +216,7 @@ def _auto_db_color_limits(values) -> tuple[float, float]:
     finite = _finite_values(values)
     if finite.size == 0:
         return (_EMPTY_DB_LEVEL - _AUTO_SPAN_DB, _EMPTY_DB_LEVEL)
-    ceiling = float(np.percentile(finite, _AUTO_CEILING_PERCENTILE))
+    ceiling = float(np.percentile(finite, _AUTO_CEILING_PCT))
     return (ceiling - _AUTO_SPAN_DB, ceiling)
 
 
@@ -720,7 +728,7 @@ def _display_db_values(amplitude, reference: float) -> np.ndarray:
     converted = SpectrogramAnalyzer.amplitude_to_db(linear, reference=reference)
     display_floor = max(
         _EMPTY_DB_LEVEL,
-        float(np.max(converted[np.isfinite(converted)])) - _DISPLAY_DEAD_SPAN_DB
+        float(np.max(converted[np.isfinite(converted)])) - _SLICE_MAX_SPAN_DB
         if np.any(np.isfinite(converted))
         else _EMPTY_DB_LEVEL,
     )
@@ -732,7 +740,7 @@ def _auto_db_line_limits(values) -> tuple[float, float]:
     finite = _finite_values(values)
     if finite.size == 0:
         return (_EMPTY_DB_LEVEL - _AUTO_SPAN_DB, _EMPTY_DB_LEVEL)
-    ceiling = float(np.percentile(finite, _AUTO_CEILING_PERCENTILE))
+    ceiling = float(np.percentile(finite, _AUTO_CEILING_PCT))
     top = max(ceiling, float(np.max(finite)))
     bottom = ceiling - _AUTO_SPAN_DB
     if not top > bottom:
@@ -2326,9 +2334,11 @@ class _SceneBuilder:
         self._register_bottom_label_spacing(plot, overhang=not plan.enabled)
 
         image_item = _SmoothImageItem(axisOrder="row-major")
-        interpolation = str(self.params.get("interp", "bilinear")).lower()
+        interpolation = str(
+            self.params.get("interp", DEFAULT_HEATMAP_INTERP)
+        ).lower()
         image_item.set_smooth_transform(
-            interpolation in {"bilinear", "bicubic", "hanning"}
+            interpolation in HEATMAP_SMOOTH_INTERP_MODES
         )
         image_item.setImage(display_matrix, autoLevels=False)
         image_item.setRect(rect)

@@ -5,9 +5,13 @@ used on a single page; keeping both lets a reader who is flipping through
 several exports tell "the spectrum at one instant" (warm) from "one
 frequency's history" (cool) without reading the axis titles.
 
-The first colour of each family is the single-file canvas' own slice colour
-(``ui/pg_canvas/heatmap_canvas.py``: marker ``#e03131`` / curve ``#2563eb``)
-so the batch page and the interactive canvas open on the same hue.
+The warm family's lead colour (``#dc2626``) is deliberately *not identical*
+to the interactive canvas marker (``#e03131`` in
+``ui/pg_canvas/heatmap_canvas.py``). Batch needs a CIE76 delta-E floor of
+>= 25 across the multi-slice family; pinning the lead slot to the canvas
+hex would collapse that distinguishability budget. Spec §5-2 leaves this
+colour fork in place until a product colour decision lands — do not "fix"
+the docstring by aligning the hexes without that decision.
 
 Both tuples are exactly :data:`MAX_SLICE_POSITIONS` long — the position count
 is capped at the same number by ``batch_validation``, so indexing never has to

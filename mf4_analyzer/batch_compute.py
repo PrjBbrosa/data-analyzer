@@ -384,11 +384,16 @@ def batch_output_scale(kind, params):
     shared by ``_run_one`` (records ``colorbar_label`` on
     ``BatchItemResult``) and ``_build_export_scene`` (actually draws the
     image), so the two can never drift on which scale a preset's
-    ``amplitude_mode``/``amp_y`` selects."""
-    default_amp_mode = 'amplitude_db' if kind == 'fft_time' else 'amplitude'
-    amp_mode = str(params.get('amplitude_mode', default_amp_mode)).lower()
-    amp_y = str(params.get('amp_y', '')).lower()
-    render_db = 'db' in amp_mode or amp_y == 'db'
+    ``amplitude_mode``/``amp_y`` selects.
+
+    Authority is ``batch_render_qt.contract.render_in_db`` (keeps the
+    ``amplitude_axis`` leg); this wrapper only translates the bool into the
+    ``(render_db, output_scale)`` pair callers already expect. Lazy import
+    keeps ``batch_compute`` free of a module-level Qt-renderer dependency.
+    """
+    from mf4_analyzer.batch_render_qt.contract import render_in_db
+
+    render_db = bool(render_in_db(kind, params))
     return render_db, ('db' if render_db else 'linear')
 
 
