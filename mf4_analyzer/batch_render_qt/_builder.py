@@ -1590,7 +1590,13 @@ class _SceneBuilder:
             right_view.setMouseEnabled(x=False, y=False)
             plot.scene().addItem(right_view)
             right_axis.linkToView(right_view)
-            right_view.setXLink(plot.vb)
+            # Do not setXLink. OverlayAxisManager copies xlim with padding=0
+            # for the same reason canvas._on_xrange_changed documents:
+            # linkedViewChanged interpolates by screen geometry and leaves a
+            # sub-pixel X drift (2.00258 vs 2.0) once tick_density_y follows
+            # the GUI 「密」default of 15. Auto-range on X would apply
+            # ViewBox padding independently of the primary window.
+            right_view.enableAutoRange(axis="x", enable=False)
             self.auxiliary_views.append(right_view)
             owners[units[1]] = right_view
 
@@ -1598,8 +1604,10 @@ class _SceneBuilder:
                 *_args, _plot=plot, _view=right_view
             ) -> None:
                 _view.setGeometry(_plot.vb.sceneBoundingRect())
-                _view.linkedViewChanged(_plot.vb, _view.XAxis)
+                xlo, xhi = _plot.vb.viewRange()[0]
+                _view.setXRange(float(xlo), float(xhi), padding=0)
 
+            sync_right.runs_after_tick_density = True
             plot.vb.sigResized.connect(sync_right)
             self.layout_callbacks.append(sync_right)
 
@@ -1970,6 +1978,11 @@ class _SceneBuilder:
                 layout.invalidate()
                 layout.activate()
 
+            # Denser default Y ticks (GUI 「密」15 vs the old batch 10) change
+            # left-axis width after _apply_tick_density. Re-run so stacked
+            # panels keep a shared gutter and the rotated Amplitude labels
+            # stay inside their rows.
+            settle_subplot_layout.runs_after_tick_density = True
             self.layout_callbacks.append(settle_subplot_layout)
             footer_row = 3 + len(panel_ids)
         else:
