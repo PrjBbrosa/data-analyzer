@@ -486,10 +486,19 @@ class ProjectIOMixin:
         fs_estimated = False
         seen_skip_names = set()
         seen_var_names = set()
+        seen_dropped_keys = set()
+        seen_renamed_keys = set()
         for smeta in source_metadatas:
             if not smeta:
                 continue
-            dropped.extend(smeta.get("dropped_channels") or [])
+            for entry in smeta.get("dropped_channels") or []:
+                key = (
+                    entry.get("name") if isinstance(entry, dict) else entry
+                )
+                if key in seen_dropped_keys:
+                    continue
+                seen_dropped_keys.add(key)
+                dropped.append(entry)
             for entry in smeta.get("skipped_channels") or []:
                 key = (
                     entry.get("name") if isinstance(entry, dict) else entry
@@ -506,7 +515,15 @@ class ProjectIOMixin:
                     continue
                 seen_var_names.add(key)
                 skipped_vars.append(entry)
-            renamed.extend(smeta.get("renamed_channels") or [])
+            for entry in smeta.get("renamed_channels") or []:
+                if isinstance(entry, dict):
+                    key = (entry.get("original"), entry.get("renamed"))
+                else:
+                    key = entry
+                if key in seen_renamed_keys:
+                    continue
+                seen_renamed_keys.add(key)
+                renamed.append(entry)
             if smeta.get("fs_estimated"):
                 fs_estimated = True
 
