@@ -154,13 +154,22 @@ class FFTContextual(QWidget):
         self.combo_nfft.addItems(
             [self._AUTO_NFFT_LABEL, '512', '1024', '2048', '4096', '8192', '16384']
         )
-        self.combo_nfft.setToolTip('越大频率越细、计算量越高；\n「自动」＝按窗长取 2 的幂。')
+        self.combo_nfft.setToolTip(
+            '越大频率采样越密、计算量越高。\n'
+            '「自动」：单帧＝整段 FFT；平均/峰值保持＝按内部目标时长起步，'
+            '经最少帧数、数据长度上限与 [64, 8192] 收敛。'
+        )
         fl.addRow("NFFT:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.spin_overlap = _no_buttons(QSpinBox())
         self.spin_overlap.setRange(0, 90)
         self.spin_overlap.setValue(50)
         self.spin_overlap.setSuffix(" %")
-        self.spin_overlap.setToolTip('相邻分析帧的重叠：越高频谱越平滑、计算量越大。')
+        # D5: this legacy knob is retained in View/preset display_params only;
+        # Welch/peak-hold segment overlap is spin_avg_overlap ("重叠率").
+        self.spin_overlap.setToolTip(
+            '当前不参与频谱计算，只保留在 View/预设显示参数里；\n'
+            '平均模式下的段重叠请用下方「重叠率」。'
+        )
         fl.addRow("重叠:", _fit_field(self.spin_overlap, max_width=_SHORT_FIELD_MAX_WIDTH))
 
         # --- Averaging (Welch / peak-hold) — Wave 2 / SP2 / Task 2.1 ---
@@ -359,10 +368,17 @@ class FFTContextual(QWidget):
             preview = self._fft_nfft_preview()
             if preview is not None:
                 nfft_text = f"{self._AUTO_NFFT_LABEL}({preview})"
+        # Summarize compute-relevant avg mode/overlap — not the legacy display
+        # overlap knob (display_params only; see D5 / spin_overlap tooltip).
+        avg_mode = self.combo_avg_mode.currentText()
+        if avg_mode == '单帧':
+            mode_bit = avg_mode
+        else:
+            mode_bit = f"{avg_mode} {int(self.spin_avg_overlap.value())}%"
         return (
             f"{nfft_text} · "
             f"{self.combo_win.currentText()} · "
-            f"{self.spin_overlap.value()}%"
+            f"{mode_bit}"
         )
 
     def _refresh_fft_summary(self):

@@ -6159,7 +6159,7 @@ def test_order_param_tooltips(qtbot):
     checks = [
         (ctx.spin_rf, "电机 rpm"),
         (ctx.spin_mo, "阶次"),
-        (ctx.spin_order_res, "细度"),
+        (ctx.spin_order_res, "插值"),
         (ctx.spin_time_res, "时间"),
         (ctx.combo_nfft, "阶次"),
     ]
@@ -6170,6 +6170,49 @@ def test_order_param_tooltips(qtbot):
         )
     # spin_samples_per_rev must still have its original tooltip
     assert ctx.spin_samples_per_rev.toolTip(), "spin_samples_per_rev tooltip cleared"
+
+
+def test_guideline_hardening_d5_d7_copy_matches_implementation(qtbot):
+    """D5–D7: Inspector tooltips/summary describe this codebase, not generic DSP."""
+    from mf4_analyzer.ui.inspector_sections import (
+        FFTContextual,
+        FFTTimeContextual,
+        OrderContextual,
+    )
+
+    fft = FFTContextual()
+    qtbot.addWidget(fft)
+    tip = fft.spin_overlap.toolTip()
+    assert "不参与频谱计算" in tip
+    assert "更平滑" not in tip
+    assert "重叠率" in tip
+    nfft_tip = fft.combo_nfft.toolTip()
+    assert "整段" in nfft_tip
+    assert "最少帧数" in nfft_tip
+    assert "[64, 8192]" in nfft_tip
+    assert "窗长" not in nfft_tip
+    assert "单帧" in fft._fft_summary_text()
+    assert f"{fft.spin_overlap.value()}%" not in fft._fft_summary_text()
+    fft.combo_avg_mode.setCurrentText("线性平均")
+    fft.spin_avg_overlap.setValue(40)
+    assert "线性平均 40%" in fft._fft_summary_text()
+    assert f"{fft.spin_overlap.value()}%" not in fft._fft_summary_text()
+
+    fft_time = FFTTimeContextual()
+    qtbot.addWidget(fft_time)
+    tf_tip = fft_time.combo_nfft.toolTip()
+    assert "最少帧数" in tf_tip
+    assert "[64, 8192]" in tf_tip
+    assert "窗长" not in tf_tip
+    assert "按窗长取" not in tf_tip
+
+    order = OrderContextual()
+    qtbot.addWidget(order)
+    assert "自动 NFFT" in order.spin_order_res.toolTip()
+    assert "插值网格" in order.spin_order_res.toolTip()
+    assert "不增加信息" in order.spin_order_res.toolTip()
+    assert "插值网格" in order.combo_nfft.toolTip()
+    assert "按需取 2 的幂" not in order.combo_nfft.toolTip()
 
 
 # ---- dB reference placement tests (Task 3) ----

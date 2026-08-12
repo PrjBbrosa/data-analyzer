@@ -113,7 +113,7 @@
       <div class="paths">
         <div class="path reveal d3"><div class="tagA">算法</div><div class="ptxt">FRF 主计算是 <b>NumPy-only</b>；<b>SciPy</b> 仅用于显式参数下的 parity 对照，不是运行时依赖，也不替你选择窗口、缩放或估计器。</div></div>
         <div class="path reveal d4"><div class="tagA g">没有结果</div><div class="ptxt">“平均段不足 2”：扩大真实时间范围或缩短窗长；“窗长过短”：增大窗长到至少 2 个样本。</div></div>
-        <div class="path reveal d5"><div class="tagA">数据被阻断</div><div class="ptxt">“时间戳抖动/非均匀”：计算前会按建议 Fs <b>自动重建</b>均匀时间轴（toast/Batch warning 可审计）；“NaN/Inf”：清理原始通道后重新计算；“零激励”：检查输入通道是否真的有变化。</div></div>
+        <div class="path reveal d5"><div class="tagA">自动重建</div><div class="ptxt">“时间戳抖动/非均匀”：计算前会按建议 Fs <b>自动重建</b>均匀时间轴（toast/Batch warning 可审计）；“NaN/Inf”：清理原始通道后重新计算；“零激励”：检查输入通道是否真的有变化。</div></div>
       </div>
     </div>
   </section>
