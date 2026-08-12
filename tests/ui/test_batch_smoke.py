@@ -34,11 +34,73 @@ def test_batch_sheet_pure_degraded_partial_is_not_reported_as_failure(
         warnings=["图片/PDF 导出后端不可用，本次仅导出数据文件"],
     ))
 
-    assert messages == [(
+    assert len(messages) == 1
+    kind, title, text = messages[0]
+    assert kind == "information"
+    assert title == "批处理降级完成"
+    assert "完成，共 2 个任务仅导出数据文件。" in text
+    assert "图片/PDF 导出后端不可用" in text
+
+
+def test_batch_sheet_result_toast_renders_and_folds_warnings(qtbot, monkeypatch):
+    """D1: Run toast surfaces BatchRunResult.warnings; >3 fold to manifest hint."""
+    from mf4_analyzer.batch import BatchRunResult
+    from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    widget = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(widget)
+    widget.show()
+    messages = []
+    monkeypatch.setattr(
+        sheet_module.QMessageBox,
         "information",
-        "批处理降级完成",
-        "完成，共 2 个任务仅导出数据文件。",
-    )]
+        lambda _parent, title, text: messages.append((title, text)),
+    )
+
+    widget._show_result_toast(BatchRunResult(
+        status="done",
+        warnings=["降采样提示", "checksum 不完整", "迁移提示"],
+    ))
+    assert messages
+    assert "全部任务已完成。" in messages[0][1]
+    assert "降采样提示" in messages[0][1]
+    assert "checksum 不完整" in messages[0][1]
+    assert "迁移提示" in messages[0][1]
+    assert "详见 manifest" not in messages[0][1]
+
+    messages.clear()
+    widget._show_result_toast(BatchRunResult(
+        status="done",
+        warnings=[f"警告 {i}" for i in range(4)],
+    ))
+    assert "4 条警告，详见 manifest" in messages[0][1]
+    assert "警告 0" not in messages[0][1]
+
+
+def test_batch_sheet_footer_shows_folded_run_warnings(qtbot):
+    """D1: completion footer also projects the warning summary."""
+    from mf4_analyzer.batch import BatchItemResult, BatchProgressEvent, BatchRunResult
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet._task_list.apply_dry_run([("a.mf4", "sig", "fft")], outputs_per_task=1)
+    sheet._task_list.on_run_started()
+    sheet._task_list.on_event(BatchProgressEvent(
+        kind="task_done", task_index=1, total=1,
+    ))
+    sheet._last_result = BatchRunResult(
+        status="done",
+        items=[BatchItemResult(
+            method="fft", file_id=0, file_name="a.mf4", signal="sig",
+            status="done",
+            warnings=["w1", "w2", "w3", "w4"],
+        )],
+        warnings=["w1", "w2", "w3", "w4"],
+    )
+    sheet._on_thread_finished()
+    assert "4 条警告，详见 manifest" in sheet._footer_task_summary.text()
 
 
 def test_batch_sheet_can_be_imported_from_new_package():

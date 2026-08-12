@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -65,6 +65,24 @@ class BatchChartDiagnostic:
     message: str = ""
     suggestion: str = ""
     panel: int = 0
+
+
+def format_chart_diagnostic_warning(diagnostic: BatchChartDiagnostic | Mapping[str, Any]) -> str:
+    """Render a statistics diagnostic for Batch warnings / UI surfaces.
+
+    Passes the human ``message`` + ``suggestion`` (not the machine ``code``)
+    so preview/run humanizers do not have to invent a colon prefix.
+    """
+    if isinstance(diagnostic, BatchChartDiagnostic):
+        message = str(diagnostic.message or "").strip()
+        suggestion = str(diagnostic.suggestion or "").strip()
+        code = str(diagnostic.code or "").strip()
+    else:
+        message = str(diagnostic.get("message") or "").strip()
+        suggestion = str(diagnostic.get("suggestion") or "").strip()
+        code = str(diagnostic.get("code") or "").strip()
+    text = " ".join(part for part in (message, suggestion) if part)
+    return text or code
 
 
 @dataclass(frozen=True)
@@ -402,5 +420,6 @@ def plan_chart_statistics(
 
 __all__ = [
     "BatchChartDiagnostic", "BatchChartStatisticsPlan", "BatchStatisticRow",
-    "CANONICAL_METRICS", "StatisticSeriesInput", "display_x", "plan_chart_statistics",
+    "CANONICAL_METRICS", "StatisticSeriesInput", "display_x",
+    "format_chart_diagnostic_warning", "plan_chart_statistics",
 ]

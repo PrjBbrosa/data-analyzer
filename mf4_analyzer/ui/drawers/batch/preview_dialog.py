@@ -24,6 +24,32 @@ def _humanize_warning(text: str) -> str:
     return _WARNING_PREFIX_RE.sub("", text, count=1)
 
 
+def format_batch_run_warnings(
+    warnings,
+    *,
+    max_visible: int = 3,
+    style: str = "block",
+) -> str:
+    """Render run/item warnings for toast, footer, and task-list tooltips.
+
+    More than ``max_visible`` unique warnings collapse to a manifest pointer
+    so the modal/footer stay readable. Humanizer regex is intentionally
+    unchanged — statistics diagnostics now arrive as message+suggestion text.
+    """
+    seen: list[str] = []
+    for raw in warnings or ():
+        text = _humanize_warning(str(raw).strip())
+        if text and text not in seen:
+            seen.append(text)
+    if not seen:
+        return ""
+    if len(seen) > max_visible:
+        return f"{len(seen)} 条警告，详见 manifest"
+    if style == "inline":
+        return "；".join(seen)
+    return "\n".join(f"• {line}" for line in seen)
+
+
 class BatchPreviewDialog(QDialog):
     """Modal chrome around a PNG; the chrome is never part of the image."""
 
@@ -135,16 +161,12 @@ class BatchPreviewDialog(QDialog):
 
     def _set_warnings(self, warnings) -> None:
         """按序去重、去掉机器标识前缀后逐条列出；没有警告时整块隐藏、不占位。"""
-        seen: list[str] = []
-        for raw in warnings:
-            text = _humanize_warning(str(raw).strip())
-            if text and text not in seen:
-                seen.append(text)
-        if not seen:
+        text = format_batch_run_warnings(warnings, max_visible=10**9, style="block")
+        if not text:
             self._warnings.clear()
             self._warnings.hide()
             return
-        self._warnings.setText("\n".join(f"• {line}" for line in seen))
+        self._warnings.setText(text)
         self._warnings.show()
 
     def closeEvent(self, event):  # noqa: N802

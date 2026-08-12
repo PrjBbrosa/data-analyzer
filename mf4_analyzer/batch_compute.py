@@ -460,19 +460,20 @@ def suggest_fs_from_time_axis(time, fallback_fs):
 
 
 def uniform_time_axis_for_spectrogram(time, fs, length):
-    """Return a spectrogram-safe time axis and matching Fs.
+    """Return a spectrogram-safe time axis, matching Fs, and audit warnings.
 
     Batch FFT-vs-Time mirrors the single-file UX: jittered MF4
     timestamps are rebuilt to ``arange(n) / suggested_fs`` using the
     median-dt estimate instead of failing every task with the raw
-    ``non-uniform time axis`` validator error.
+    ``non-uniform time axis`` validator error. Rebuilds emit the same
+    auditable warning shape as Batch FRF auto-recovery.
     """
     fs = float(fs)
     if time is None:
-        return np.arange(int(length), dtype=float) / fs, fs
+        return np.arange(int(length), dtype=float) / fs, fs, ()
     time_arr = np.asarray(time, dtype=float)
     if time_arr.size < 2:
-        return time_arr, fs
+        return time_arr, fs, ()
 
     from .signal.spectrogram import (
         DEFAULT_TIME_JITTER_TOLERANCE,
@@ -483,15 +484,28 @@ def uniform_time_axis_for_spectrogram(time, fs, length):
         SpectrogramAnalyzer._validate_time_axis(
             time_arr, fs, DEFAULT_TIME_JITTER_TOLERANCE,
         )
-        return time_arr, fs
+        return time_arr, fs, ()
     except ValueError as exc:
         if 'non-uniform time axis' not in str(exc):
             raise
 
+    nominal_dt = 1.0 / fs
+    relative_jitter = float(
+        np.max(np.abs(np.diff(time_arr) - nominal_dt)) / nominal_dt
+    )
     suggested = suggest_fs_from_time_axis(time_arr, fs)
     if not (np.isfinite(suggested) and suggested > 0):
         suggested = fs
-    return np.arange(len(time_arr), dtype=float) / float(suggested), float(suggested)
+    suggested = float(suggested)
+    warning = (
+        "时间轴已按建议 Fs 自动重建为均匀网格（"
+        f"relative_jitter={relative_jitter:.6g} → Fs={suggested:g}）"
+    )
+    return (
+        np.arange(len(time_arr), dtype=float) / suggested,
+        suggested,
+        (warning,),
+    )
 
 
 def time_axis_or_fallback(time, fs, n_samples):
@@ -770,7 +784,7 @@ def compute_fft_time_spectro(sig, time, fs, params, *,
     """
     from .signal.spectrogram import SpectrogramAnalyzer, SpectrogramParams
     sig, _spec = apply_filter_if_enabled(sig, fs, params)
-    time, fs = uniform_time_axis_for_spectrogram(time, fs, len(sig))
+    time, fs, axis_warnings = uniform_time_axis_for_spectrogram(time, fs, len(sig))
     sp = SpectrogramParams(
         fs=float(fs),
         nfft=int(params.get('nfft', 1024)),
@@ -783,13 +797,17 @@ def compute_fft_time_spectro(sig, time, fs, params, *,
         signal=sig, time=time, params=sp,
         channel_name=channel_name or 'signal',
     )
+    metadata = dict(getattr(result, 'metadata', {}) or {})
+    metadata['effective_fs'] = float(fs)
+    if axis_warnings:
+        metadata['axis_warnings'] = tuple(axis_warnings)
     return _Spectro2D(
         x=np.asarray(result.times, dtype=float),
         y=np.asarray(result.frequencies, dtype=float),
         matrix=np.asarray(result.amplitude.T, dtype=float),
         x_name='time_s',
         y_name='frequency_hz',
-        metadata=dict(getattr(result, 'metadata', {}) or {}),
+        metadata=metadata,
     )
 
 

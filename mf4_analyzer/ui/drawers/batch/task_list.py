@@ -220,9 +220,48 @@ class TaskListWidget(QWidget):
             if total > 0:
                 pct = int(round(self._done_count * 100.0 / total))
                 self._progress_bar.setValue(max(0, min(100, pct)))
+        elif result is not None:
+            self._apply_result_warning_tooltips(result)
         self._running = False
         self._set_running_mode(False)
         self._refresh_header_text()
+
+    def _apply_result_warning_tooltips(self, result) -> None:
+        """Attach per-item (or run-level) warnings to completed rows.
+
+        Consumer-only: does not invent progress events. Failed/cancelled
+        tooltips already set by ``on_event`` are left alone.
+        """
+        from .preview_dialog import format_batch_run_warnings
+
+        items = list(getattr(result, "items", None) or ())
+        for idx, task in enumerate(self._tasks):
+            if not (0 <= idx < len(self._icons)):
+                continue
+            if self._icons[idx] not in (_ICON_DONE, _ICON_RESUMED, _ICON_SKIPPED):
+                continue
+            if self._tooltips[idx]:
+                continue
+            fname, sig, method = task
+            matched = None
+            for item in items:
+                if (
+                    str(getattr(item, "file_name", "") or "") == str(fname)
+                    and str(getattr(item, "signal", "") or "") == str(sig)
+                    and str(getattr(item, "method", "") or "") == str(method)
+                ):
+                    matched = item
+                    break
+            if matched is None and idx < len(items):
+                matched = items[idx]
+            raw_warnings = (
+                getattr(matched, "warnings", None) if matched is not None else None
+            )
+            if not raw_warnings:
+                raw_warnings = getattr(result, "warnings", None) or ()
+            text = format_batch_run_warnings(raw_warnings, style="block")
+            if text:
+                self._update_row(idx, self._icons[idx], tooltip=text)
 
     def on_event(self, event: BatchProgressEvent) -> None:
         kind = event.kind
