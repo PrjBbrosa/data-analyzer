@@ -926,6 +926,9 @@ class CockpitMainWindow(
             self._manual_pins.remove(name)
         self._refresh_center_cards()
 
+    def _channel_is_pinned(self, name) -> bool:
+        return name in self._effective_pinned_names()
+
     def reset_pins(self) -> None:
         self._manual_pins = []
         self._pin_customized = False

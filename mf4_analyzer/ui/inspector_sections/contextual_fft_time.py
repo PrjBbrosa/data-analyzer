@@ -21,6 +21,7 @@ from ...analysis_presets import (
 )
 from ...signal.analysis_defaults import ANALYSIS_WINDOW_CANDIDATES
 from ...ui_kit.icons import Icons
+from ...ui_kit.qt_lifecycle import as_weak_callable
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
@@ -94,7 +95,7 @@ class FFTTimeContextual(QWidget):
     """
 
     fft_time_requested = pyqtSignal()
-    rebuild_time_requested = pyqtSignal(object)  # anchor widget
+    rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode)
     signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
     compute_params_changed = pyqtSignal(object)
     display_params_changed = pyqtSignal(object)
@@ -130,9 +131,7 @@ class FFTTimeContextual(QWidget):
         self.btn_rebuild.setProperty("role", "icon")
         self.btn_rebuild.setToolTip("重建时间轴")
         self.btn_rebuild.setAccessibleName("重建时间轴")
-        self.btn_rebuild.clicked.connect(
-            lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
-        )
+        self.btn_rebuild.clicked.connect(self._emit_rebuild_time_requested)
         # 2026-04-26 R3 紧凑化 fix-2: WA_StyledBackground intentionally OFF.
         sig_card = QFrame(self)
         sig_card.setObjectName("fftTimeSignalCard")
@@ -482,9 +481,14 @@ class FFTTimeContextual(QWidget):
         current FFT-vs-Time signal (int) or ``None`` when no usable data is
         loaded. Passing ``None`` clears the hook (reverts to the naive preview).
         Refreshes the collapsed summary so the displayed 自动(N) updates at once.
+        Bound methods are held weakly so the contextual cannot keep MainWindow
+        alive past teardown.
         """
-        self._auto_nfft_provider = provider
+        self._auto_nfft_provider = as_weak_callable(provider)
         self._refresh_tf_summary()
+
+    def _emit_rebuild_time_requested(self, *_args):
+        self.rebuild_time_requested.emit(self.btn_rebuild, 'fft_time')
 
     def _nfft_preview(self):
         from ...signal import ceil_pow2, resolve_nfft

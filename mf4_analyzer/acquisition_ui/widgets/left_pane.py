@@ -48,6 +48,7 @@ from mf4_analyzer.acquisition_capture.a2l_events import build_event_intersection
 from mf4_analyzer.acquisition_capture.preflight_estimates import (
     estimate_can_bus_load,
 )
+from mf4_analyzer.ui_kit.qt_lifecycle import as_weak_callable
 from mf4_analyzer.acquisition_capture.search import (
     SearchHit,
     search_measurements,
@@ -266,8 +267,12 @@ class LeftPane(QFrame):
         self._config_path = Path(path) if path is not None else None
 
     def set_pin_state_provider(self, provider) -> None:
-        """注入「该通道当前是否已固定」查询（spec §G6）；None 关闭 pin 菜单项。"""
-        self._pin_state_provider = provider
+        """注入「该通道当前是否已固定」查询（spec §G6）；None 关闭 pin 菜单项。
+
+        Bound methods are held weakly so LeftPane cannot keep the cockpit
+        MainWindow alive past teardown.
+        """
+        self._pin_state_provider = as_weak_callable(provider)
 
     def set_a2l_has_daq_events(self, has_events: bool) -> None:
         """Spec §Left Pane fallback: ``有 DAQ`` chip flips off + disabled

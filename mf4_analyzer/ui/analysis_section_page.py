@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .view_tabbar import ViewTabBar
+from ..ui_kit.qt_lifecycle import as_weak_callable
 
 _FOCUS_ACCENT = "#2d7ff9"
 
@@ -106,8 +107,7 @@ class AnalysisSectionPage(QWidget):
         self._layout_sync_pending = False
         self._cards = [self._make_card()]
         self._split.addWidget(self._cards[0])
-        self._split.splitterMoved.connect(
-            lambda *_args: self._schedule_heatmap_layout_sync())
+        self._split.splitterMoved.connect(self._schedule_heatmap_layout_sync)
         self._toolbar = None
         detach_toolbar = getattr(self._cards[0], 'detach_toolbar', None)
         if callable(detach_toolbar) and getattr(self._cards[0], 'toolbar', None) is not None:
@@ -292,24 +292,32 @@ class AnalysisSectionPage(QWidget):
         toolbar = getattr(self, '_toolbar', None)
         if toolbar is None:
             return
-        toolbar._action_delegate_provider = self._focused_nav_delegate
-        toolbar._peer_toolbars_provider = self._peer_toolbars
-        toolbar._save_pixmap_provider = self.grab_combined_pixmap
+        toolbar._action_delegate_provider = as_weak_callable(
+            self._focused_nav_delegate
+        )
+        toolbar._peer_toolbars_provider = as_weak_callable(self._peer_toolbars)
+        toolbar._save_pixmap_provider = as_weak_callable(
+            self.grab_combined_pixmap
+        )
         if self._cards:
-            self._cards[0]._options_canvas_provider = self.focused_canvas
+            self._cards[0]._options_canvas_provider = as_weak_callable(
+                self.focused_canvas
+            )
             set_cursor_target = getattr(
                 self._cards[0], 'set_frequency_cursor_target_provider', None)
             if callable(set_cursor_target):
                 # The primary card's toolbar is detached before ``_focused``
                 # is initialized in __init__; default to pane 0 during that
-                # construction-only interval.
-                set_cursor_target(
-                    lambda: self._cards[getattr(self, '_focused', 0)]
-                )
+                # construction-only interval. Hold the provider weakly so the
+                # card cannot keep the section page alive past teardown.
+                set_cursor_target(as_weak_callable(self._frequency_cursor_card))
                 sync_cursor = getattr(
                     self._cards[0], 'sync_frequency_cursor_control', None)
                 if callable(sync_cursor):
                     sync_cursor()
+
+    def _frequency_cursor_card(self):
+        return self._cards[getattr(self, '_focused', 0)]
 
     def _focused_nav_delegate(self):
         if self._focused <= 0 or self._focused >= len(self._cards):

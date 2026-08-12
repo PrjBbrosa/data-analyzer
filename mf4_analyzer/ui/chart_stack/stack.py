@@ -35,6 +35,7 @@ from .cursor_pill import (
     strip_html,
 )
 from .toolbar import PgNavigationToolbar
+from ...ui_kit.qt_lifecycle import as_weak_callable
 
 
 class ChartStack(QWidget):
@@ -207,21 +208,23 @@ class ChartStack(QWidget):
             self._connect_analysis_card_signals(page._cards[0])
         # The time card's copy button lives on the shared toolbar; route it to
         # the focused pane so 复制为图片 captures whichever pane is focused.
-        self._time_card.copy_image_requested.connect(
-            lambda: self._copy_card_image(self.focused_card())
-        )
+        self._time_card.copy_image_requested.connect(self._copy_focused_card_image)
         # Shared-toolbar home/save still target the focused pane; pan/zoom and
         # history buttons broadcast to the visible peer toolbar below.
-        self._time_toolbar._action_delegate_provider = self._focused_nav_delegate
-        self._time_toolbar._peer_toolbars_provider = (
-            lambda: [self._secondary_card.toolbar]
-            if (self.split_active() and self._secondary_card is not None)
-            else []
+        self._time_toolbar._action_delegate_provider = as_weak_callable(
+            self._focused_nav_delegate
         )
-        self._time_toolbar._save_pixmap_provider = self._combined_split_pixmap
+        self._time_toolbar._peer_toolbars_provider = as_weak_callable(
+            self._secondary_peer_toolbars
+        )
+        self._time_toolbar._save_pixmap_provider = as_weak_callable(
+            self._combined_split_pixmap
+        )
         self._time_toolbar.home_triggered.connect(self.home_triggered.emit)
         # 图表选项 on the shared toolbar opens for the focused pane's canvas.
-        self._time_card._options_canvas_provider = self.focused_canvas
+        self._time_card._options_canvas_provider = as_weak_callable(
+            self.focused_canvas
+        )
         # Mirror the focused pane's pan/zoom state onto the shared toolbar
         # icons. Connected AFTER the primary card's own _on_nav_mode_toggled
         # (bound during _ChartCard.__init__) so this runs LAST in the action's
@@ -231,11 +234,9 @@ class ChartStack(QWidget):
         for _key in ('pan', 'zoom'):
             _act = self._time_toolbar._actions_by_key.get(_key)
             if _act is not None:
-                _act.triggered.connect(
-                    lambda _checked=False: self._sync_shared_nav_highlight()
-                )
+                _act.triggered.connect(self._sync_shared_nav_highlight)
         self._time_toolbar.mouse_mode_changed.connect(
-            lambda *_a: self._sync_shared_nav_highlight()
+            self._sync_shared_nav_highlight
         )
         lay.addWidget(self.stack, stretch=1)
 
@@ -262,7 +263,7 @@ class ChartStack(QWidget):
             self.canvas_time.dual_cursor_rows.connect(
                 lambda rows: self._on_dual_cursor_rows(rows, self.canvas_time)
             )
-        self.stack.currentChanged.connect(lambda _i: self._reposition_pill())
+        self.stack.currentChanged.connect(self._reposition_pill)
 
         # Relay time-card control signals up to MainWindow consumers.
         self._time_card.plot_mode_changed.connect(self._on_shared_plot_mode_changed)
@@ -415,6 +416,12 @@ class ChartStack(QWidget):
         if self._secondary_card is None:
             return None
         return self._secondary_card.canvas
+
+    def _copy_focused_card_image(self, *_args):
+        self._copy_card_image(self.focused_card())
+
+    def _copy_secondary_card_image(self, *_args):
+        self._copy_card_image(self._secondary_card)
 
     def focused_card(self):
         """Return the time card that channel-check replots target.
@@ -668,7 +675,7 @@ class ChartStack(QWidget):
             self._secondary_card.detach_bottom_hint_bar(self._secondary_card).hide()
             self._set_secondary_time_controls_enabled(False)
             self._secondary_card.copy_image_requested.connect(
-                lambda: self._copy_card_image(self._secondary_card)
+                self._copy_secondary_card_image
             )
             self._secondary_card.tick_density_changed.connect(
                 self._on_card_tick_density_changed
@@ -688,11 +695,11 @@ class ChartStack(QWidget):
             self._secondary_card.cursor_mode_changed.connect(
                 self._on_secondary_cursor_mode_changed
             )
-            self._secondary_card.toolbar._peer_toolbars_provider = (
-                lambda: [self._time_toolbar] if self.split_active() else []
+            self._secondary_card.toolbar._peer_toolbars_provider = as_weak_callable(
+                self._primary_peer_toolbars
             )
             self._secondary_card.toolbar.mouse_mode_changed.connect(
-                lambda *_a: self._sync_shared_nav_highlight()
+                self._sync_shared_nav_highlight
             )
             # The secondary pane has its own pill so both split panes can show
             # independent single/dual cursor readouts at the same time.
@@ -745,8 +752,17 @@ class ChartStack(QWidget):
     def set_secondary_replot_callback(self, cb):
         """MainWindow registers a callable that replots the secondary canvas
         preserving its X window. Used when the secondary card's own plot-mode
-        control flips (subplot↔overlay needs a fresh layout)."""
-        self._replot_secondary_cb = cb
+        control flips (subplot↔overlay needs a fresh layout). Bound methods
+        are held weakly so ChartStack cannot keep MainWindow alive."""
+        self._replot_secondary_cb = as_weak_callable(cb)
+
+    def _primary_peer_toolbars(self):
+        return [self._time_toolbar] if self.split_active() else []
+
+    def _secondary_peer_toolbars(self):
+        if self.split_active() and self._secondary_card is not None:
+            return [self._secondary_card.toolbar]
+        return []
 
     def exit_split(self):
         if self._secondary_card is not None:

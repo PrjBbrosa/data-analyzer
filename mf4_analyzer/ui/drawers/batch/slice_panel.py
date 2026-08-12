@@ -115,10 +115,10 @@ class SlicePanel(QWidget):
         self._refresh_unit()
 
         self._enable_switch.toggled.connect(self._sync_enabled)
-        self._enable_switch.toggled.connect(lambda *_: self.changed.emit())
+        self._enable_switch.toggled.connect(self.changed)
         self._axis_combo.currentIndexChanged.connect(self._on_axis_changed)
         self._positions_edit.textChanged.connect(self._refresh_summary)
-        self._positions_edit.textChanged.connect(lambda *_: self.changed.emit())
+        self._positions_edit.textChanged.connect(self.changed)
 
     # ------------------------------------------------------------------
     def _sync_enabled(self, *_args) -> None:

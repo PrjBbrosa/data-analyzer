@@ -15,6 +15,7 @@ the initial state — required by
 """
 from __future__ import annotations
 
+from functools import partial
 from collections.abc import Mapping, Sequence
 import math
 
@@ -95,9 +96,7 @@ class MethodButtonGroup(QWidget):
             btn.setMinimumWidth(0)
             btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             btn.setProperty("batchMethod", key)
-            btn.clicked.connect(
-                lambda _checked, k=key: self._on_button_clicked(k)
-            )
+            btn.clicked.connect(partial(self._on_button_clicked_from_click, key))
             self._group.addButton(btn)
             self._buttons[key] = btn
             lay.addWidget(btn, 1)
@@ -120,6 +119,9 @@ class MethodButtonGroup(QWidget):
             dot = self._mode_active_dots[key]
             dot.move(max(0, button.width() - dot.width() - 5), 4)
             dot.setVisible(button.isChecked())
+
+    def _on_button_clicked_from_click(self, key, _checked=False):
+        self._on_button_clicked(key)
 
     def _on_button_clicked(self, method: str) -> None:
         """Apply a user selection only when it changes the active method."""
@@ -488,7 +490,7 @@ class _GroupingCards(QWidget):
             ("channel", "按信号\n每信号一张"),
         ):
             button = _GroupingCard(label, mode, self)
-            button.clicked.connect(lambda _checked=False, m=mode: self.set_mode(m))
+            button.clicked.connect(partial(self._set_mode_from_button, mode))
             self._group.addButton(button)
             layout.addWidget(button, 1)
             self._buttons[mode] = button
@@ -518,6 +520,9 @@ class _GroupingCards(QWidget):
     def set_compact_mode(self, compact: bool) -> None:
         for button in self._buttons.values():
             button.set_compact_mode(compact)
+
+    def _set_mode_from_button(self, mode, _checked=False):
+        self.set_mode(mode)
 
     def set_mode(self, mode: str, *, emit: bool = True) -> None:
         if mode not in self._buttons:
@@ -642,24 +647,20 @@ class DynamicParamForm(QWidget):
         self._w_estimator.setItemData(
             1, "H2：适合输入端噪声主导的测量（Pyy / conj(Pxy)）。", Qt.ToolTipRole,
         )
-        self._w_estimator.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_estimator.currentIndexChanged.connect(self.paramsChanged)
         self._widgets["estimator"] = self._w_estimator
 
         # window — QComboBox
         self._w_window = QComboBox(self)
         self._w_window.addItems(_WINDOWS)
-        self._w_window.currentIndexChanged.connect(lambda *_: self.paramsChanged.emit())
+        self._w_window.currentIndexChanged.connect(self.paramsChanged)
         self._widgets["window"] = self._w_window
 
         self._w_nfft_mode = QComboBox(self)
         self._w_nfft_mode.addItem("Auto", "auto")
         self._w_nfft_mode.addItem("Fixed", "fixed")
         self._w_nfft_mode.currentIndexChanged.connect(self._sync_nfft_mode)
-        self._w_nfft_mode.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_nfft_mode.currentIndexChanged.connect(self.paramsChanged)
         self._widgets["nfft_mode"] = self._w_nfft_mode
 
         # weighting — mirrors the single-analysis contextual panels.
@@ -668,40 +669,32 @@ class DynamicParamForm(QWidget):
         self._w_weighting.setToolTip(
             "A 计权（IEC 61672）：相对加权频谱，非绝对 dB SPL"
         )
-        self._w_weighting.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_weighting.currentIndexChanged.connect(self.paramsChanged)
         self._widgets["weighting"] = self._w_weighting
 
         # nfft — QSpinBox
         self._w_nfft = no_buttons(QSpinBox(self))
         self._w_nfft.setRange(64, 1 << 20)
         self._w_nfft.setValue(1024)
-        self._w_nfft.valueChanged.connect(lambda *_: self.paramsChanged.emit())
+        self._w_nfft.valueChanged.connect(self.paramsChanged)
         self._widgets["nfft"] = self._w_nfft
 
         self._w_magnitude_scale = QComboBox(self)
         self._w_magnitude_scale.addItem("dB", "db")
         self._w_magnitude_scale.addItem("线性", "linear")
-        self._w_magnitude_scale.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_magnitude_scale.currentIndexChanged.connect(self.paramsChanged)
         self._widgets["magnitude_scale"] = self._w_magnitude_scale
 
         self._w_frequency_scale = QComboBox(self)
         self._w_frequency_scale.addItem("对数", "log")
         self._w_frequency_scale.addItem("线性", "linear")
-        self._w_frequency_scale.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_frequency_scale.currentIndexChanged.connect(self.paramsChanged)
         self._widgets["frequency_scale"] = self._w_frequency_scale
 
         self._w_phase_mode = QComboBox(self)
         self._w_phase_mode.addItem("展开", "unwrapped")
         self._w_phase_mode.addItem("包裹", "wrapped")
-        self._w_phase_mode.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_phase_mode.currentIndexChanged.connect(self.paramsChanged)
         self._widgets["phase_mode"] = self._w_phase_mode
 
         self._w_coherence_threshold = no_buttons(CompactDoubleSpinBox(self))
@@ -709,9 +702,7 @@ class DynamicParamForm(QWidget):
         self._w_coherence_threshold.setDecimals(2)
         self._w_coherence_threshold.setSingleStep(0.05)
         self._w_coherence_threshold.setValue(DEFAULT_COHERENCE_THRESHOLD)
-        self._w_coherence_threshold.valueChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_coherence_threshold.valueChanged.connect(self.paramsChanged)
         self._widgets["coherence_threshold"] = self._w_coherence_threshold
 
         self._w_fade_low_coherence = PillSwitch(
@@ -720,9 +711,7 @@ class DynamicParamForm(QWidget):
             accessible_name="低相干淡化",
         )
         self._w_fade_low_coherence.setChecked(True)
-        self._w_fade_low_coherence.toggled.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_fade_low_coherence.toggled.connect(self.paramsChanged)
         self._widgets["fade_low_coherence"] = self._w_fade_low_coherence
 
         self._w_t_win_s = no_buttons(CompactDoubleSpinBox(self))
@@ -730,7 +719,7 @@ class DynamicParamForm(QWidget):
         self._w_t_win_s.setDecimals(3)
         self._w_t_win_s.setValue(1.5)
         self._w_t_win_s.setSuffix(" s")
-        self._w_t_win_s.valueChanged.connect(lambda *_: self.paramsChanged.emit())
+        self._w_t_win_s.valueChanged.connect(self.paramsChanged)
         self._widgets["t_win_s"] = self._w_t_win_s
 
         # max_order
@@ -738,7 +727,7 @@ class DynamicParamForm(QWidget):
         self._w_max_order.setRange(0.0, 1000.0)
         self._w_max_order.setDecimals(2)
         self._w_max_order.setValue(20.0)
-        self._w_max_order.valueChanged.connect(lambda *_: self.paramsChanged.emit())
+        self._w_max_order.valueChanged.connect(self.paramsChanged)
         self._widgets["max_order"] = self._w_max_order
 
         # order_res
@@ -746,7 +735,7 @@ class DynamicParamForm(QWidget):
         self._w_order_res.setRange(0.001, 100.0)
         self._w_order_res.setDecimals(3)
         self._w_order_res.setValue(0.05)
-        self._w_order_res.valueChanged.connect(lambda *_: self.paramsChanged.emit())
+        self._w_order_res.valueChanged.connect(self.paramsChanged)
         self._widgets["order_res"] = self._w_order_res
 
         # time_res
@@ -754,7 +743,7 @@ class DynamicParamForm(QWidget):
         self._w_time_res.setRange(0.001, 100.0)
         self._w_time_res.setDecimals(3)
         self._w_time_res.setValue(0.1)
-        self._w_time_res.valueChanged.connect(lambda *_: self.paramsChanged.emit())
+        self._w_time_res.valueChanged.connect(self.paramsChanged)
         self._widgets["time_res"] = self._w_time_res
 
         # overlap — QDoubleSpinBox 0..0.95
@@ -763,39 +752,33 @@ class DynamicParamForm(QWidget):
         self._w_overlap.setSingleStep(0.05)
         self._w_overlap.setDecimals(2)
         self._w_overlap.setValue(0.5)
-        self._w_overlap.valueChanged.connect(lambda *_: self.paramsChanged.emit())
+        self._w_overlap.valueChanged.connect(self.paramsChanged)
         self._widgets["overlap"] = self._w_overlap
 
         self._w_avg_mode = QComboBox(self)
         self._w_avg_mode.addItems(["单帧", "线性平均", "峰值保持"])
         self._w_avg_mode.currentTextChanged.connect(self._sync_avg_mode)
-        self._w_avg_mode.currentTextChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_avg_mode.currentTextChanged.connect(self.paramsChanged)
         self._widgets["avg_mode"] = self._w_avg_mode
 
         self._w_avg_overlap = no_buttons(QSpinBox(self))
         self._w_avg_overlap.setRange(0, 95)
         self._w_avg_overlap.setValue(50)
         self._w_avg_overlap.setSuffix(" %")
-        self._w_avg_overlap.valueChanged.connect(lambda *_: self.paramsChanged.emit())
+        self._w_avg_overlap.valueChanged.connect(self.paramsChanged)
         self._widgets["avg_overlap"] = self._w_avg_overlap
 
         self._w_amplitude_definition = QComboBox(self)
         self._w_amplitude_definition.addItem("算法默认", "native")
         self._w_amplitude_definition.addItem("Peak", "peak")
         self._w_amplitude_definition.addItem("RMS", "rms")
-        self._w_amplitude_definition.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_amplitude_definition.currentIndexChanged.connect(self.paramsChanged)
         self._widgets["amplitude_definition"] = self._w_amplitude_definition
 
         self._w_samples_per_rev = no_buttons(QSpinBox(self))
         self._w_samples_per_rev.setRange(2, 1 << 20)
         self._w_samples_per_rev.setValue(256)
-        self._w_samples_per_rev.valueChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_samples_per_rev.valueChanged.connect(self.paramsChanged)
         self._widgets["samples_per_rev"] = self._w_samples_per_rev
 
         self._w_render_group_by = QComboBox(self)
@@ -805,9 +788,7 @@ class DynamicParamForm(QWidget):
         self._w_render_group_by.currentIndexChanged.connect(
             self._sync_render_group_by
         )
-        self._w_render_group_by.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_render_group_by.currentIndexChanged.connect(self.paramsChanged)
         self._grouping_cards = _GroupingCards(self)
         self._grouping_cards.changed.connect(self._on_grouping_card_changed)
         self._widgets["render_grouping_cards"] = self._grouping_cards
@@ -815,18 +796,14 @@ class DynamicParamForm(QWidget):
         self._w_render_layout = QComboBox(self)
         self._w_render_layout.addItem("叠加", "overlay")
         self._w_render_layout.addItem("分屏", "subplot")
-        self._w_render_layout.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_render_layout.currentIndexChanged.connect(self.paramsChanged)
         self._widgets["render_layout"] = self._w_render_layout
 
         self._w_x_source = QComboBox(self)
         self._w_x_source.addItem("时间", "time")
         self._w_x_source.addItem("通道", "channel")
         self._w_x_source.currentIndexChanged.connect(self._sync_x_source)
-        self._w_x_source.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_x_source.currentIndexChanged.connect(self.paramsChanged)
         self._widgets["x_source"] = self._w_x_source
 
         self._w_x_channel = QComboBox(self)
@@ -842,9 +819,7 @@ class DynamicParamForm(QWidget):
         self._w_x_origin = QComboBox(self)
         self._w_x_origin.addItem("从零开始", "zero")
         self._w_x_origin.addItem("绝对时间", "absolute")
-        self._w_x_origin.currentIndexChanged.connect(
-            lambda *_: self.paramsChanged.emit()
-        )
+        self._w_x_origin.currentIndexChanged.connect(self.paramsChanged)
         self._widgets["x_origin"] = self._w_x_origin
 
         for combo in (

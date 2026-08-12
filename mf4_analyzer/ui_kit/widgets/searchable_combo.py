@@ -8,6 +8,7 @@ The completer matches anywhere in the string (substring), case-insensitive.
 After every model change (addItem, addItems, clear, insertItem) the completer
 is re-bound to the live model so its filter stays correct.
 """
+import functools
 import re
 
 from PyQt5.QtCore import QSortFilterProxyModel, QSize, Qt
@@ -18,6 +19,13 @@ from ..combo_popup_shell import prepare_combo_popup
 
 
 _TOKEN_SPLIT_RE = re.compile(r"[\s_\-:./\\|,;()[\]{}]+")
+
+# Paint-path caches: delegate paint runs per visible row per frame, so
+# (text, query) highlight work and label splits must not redo tokenization
+# and casefold on every call. These are pure functions of their inputs —
+# performance only (E9); GC safety is E7/E8's job, not allocation reduction.
+_HIGHLIGHT_CACHE_MAX = 512
+_SPLIT_CACHE_MAX = 512
 
 
 def _normalized_tokens(text):
@@ -46,11 +54,13 @@ def _token_matches(text, token):
     return False
 
 
+@functools.lru_cache(maxsize=_HIGHLIGHT_CACHE_MAX)
 def _highlight_char_indexes(text, query):
     text = str(text)
     indexes = set()
+    # casefold once per call (not per token) — hot paint path.
+    lowered = text.casefold()
     for token in _normalized_tokens(query):
-        lowered = text.casefold()
         start = lowered.find(token)
         if start >= 0:
             indexes.update(range(start, start + len(token)))
@@ -71,7 +81,7 @@ def _highlight_char_indexes(text, query):
         matched = _fuzzy_indexes_in_chunk(text, list(range(len(text))), token)
         if matched is not None:
             indexes.update(matched)
-    return indexes
+    return frozenset(indexes)
 
 
 def _search_chunks(text):
@@ -104,6 +114,10 @@ def _search_chunks(text):
 def _fuzzy_indexes_in_chunk(chunk, chunk_indexes, token):
     pos = 0
     matched = []
+    # token is already casefolded by _normalized_tokens; casefold chunk chars
+    # once via a parallel lowered view when chunk is long — but chunk is a
+    # CamelCase fragment, so per-char casefold stays cheap. Still avoid
+    # re-casefolding the *query* token (already folded).
     for local_i, ch in enumerate(chunk):
         if ch.casefold() == token[pos]:
             matched.append(chunk_indexes[local_i])
@@ -113,6 +127,7 @@ def _fuzzy_indexes_in_chunk(chunk, chunk_indexes, token):
     return None
 
 
+@functools.lru_cache(maxsize=_SPLIT_CACHE_MAX)
 def _split_combo_label(text):
     raw = str(text)
     prefix = ""
@@ -160,6 +175,12 @@ class _FuzzyCompleter(QCompleter):
 
 class _TwoLineChannelDelegate(QStyledItemDelegate):
     ROW_HEIGHT = 48
+    # Class-level color constants — avoid per-row QColor() in paint().
+    _MAIN_COLOR = QColor("#111827")
+    _META_COLOR = QColor("#64748b")
+    _HIGHLIGHT_COLOR = QColor("#0b73e7")
+    _META_SELECTED = QColor("#dbeafe")
+    _HIGHLIGHT_SELECTED = QColor("#bfdbfe")
 
     def sizeHint(self, option, index):
         size = super().sizeHint(option, index)
@@ -172,6 +193,35 @@ class _TwoLineChannelDelegate(QStyledItemDelegate):
             if line_edit is not None:
                 return line_edit.text()
         return ""
+
+    def _main_font(self, base_font):
+        # Cache bold variant per point-size family key on the instance so
+        # consecutive rows sharing the same option.font reuse one QFont.
+        key = (base_font.family(), base_font.pointSize(), True)
+        cache = getattr(self, "_font_cache", None)
+        if cache is None:
+            cache = {}
+            self._font_cache = cache
+        font = cache.get(key)
+        if font is None:
+            font = QFont(base_font)
+            font.setBold(True)
+            cache[key] = font
+        return font
+
+    def _meta_font(self, base_font):
+        pt = max(8, base_font.pointSize() - 1)
+        key = (base_font.family(), pt, False)
+        cache = getattr(self, "_font_cache", None)
+        if cache is None:
+            cache = {}
+            self._font_cache = cache
+        font = cache.get(key)
+        if font is None:
+            font = QFont(base_font)
+            font.setPointSize(pt)
+            cache[key] = font
+        return font
 
     def _draw_highlighted_text(
         self, painter, x, baseline, text, query, normal_color, highlight_color,
@@ -198,16 +248,18 @@ class _TwoLineChannelDelegate(QStyledItemDelegate):
             style.drawPrimitive(QStyle.PE_PanelItemViewItem, opt, painter, opt.widget)
 
         selected = bool(opt.state & QStyle.State_Selected)
-        main_color = opt.palette.highlightedText().color() if selected else QColor("#111827")
-        meta_color = QColor("#dbeafe") if selected else QColor("#64748b")
-        highlight_color = QColor("#bfdbfe") if selected else QColor("#0b73e7")
+        main_color = (
+            opt.palette.highlightedText().color() if selected else self._MAIN_COLOR
+        )
+        meta_color = self._META_SELECTED if selected else self._META_COLOR
+        highlight_color = (
+            self._HIGHLIGHT_SELECTED if selected else self._HIGHLIGHT_COLOR
+        )
         query = self._query_text()
         rect = opt.rect.adjusted(8, 4, -8, -4)
 
         painter.save()
-        main_font = QFont(opt.font)
-        main_font.setBold(True)
-        painter.setFont(main_font)
+        painter.setFont(self._main_font(opt.font))
         painter.setPen(main_color)
         main_metrics = painter.fontMetrics()
         main_text = main_metrics.elidedText(main, Qt.ElideMiddle, rect.width())
@@ -216,9 +268,7 @@ class _TwoLineChannelDelegate(QStyledItemDelegate):
             main_text, query, main_color, highlight_color,
         )
 
-        meta_font = QFont(opt.font)
-        meta_font.setPointSize(max(8, opt.font.pointSize() - 1))
-        painter.setFont(meta_font)
+        painter.setFont(self._meta_font(opt.font))
         painter.setPen(meta_color)
         meta_metrics = painter.fontMetrics()
         meta_text = meta_metrics.elidedText(meta or text, Qt.ElideMiddle, rect.width())
