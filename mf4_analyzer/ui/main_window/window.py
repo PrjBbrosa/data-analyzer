@@ -1797,7 +1797,12 @@ class MainWindow(
         """
         self._overlay_primary = (fid, ch)
         if not getattr(self, '_applying_view', False):
-            self._capture_focused_view()
+            if self.chart_stack.current_mode() == 'time':
+                self._capture_focused_view()
+            else:
+                # A1: do not capture analysis-projected attached/checked/colors
+                # onto the time View. Persist only the overlay-primary pick.
+                self._capture_overlay_primary_into_focused_view()
         mode = self.chart_stack.current_mode()
         if mode == 'fft':
             canvas = getattr(self, 'canvas_fft', None)

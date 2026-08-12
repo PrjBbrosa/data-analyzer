@@ -125,6 +125,23 @@ def test_toast_margin_provider_used_at_show_time(qapp, qtbot, host):
     assert host.height() - (toast.y() + toast.height()) == 64
 
 
+def test_toast_margin_provider_exception_logs_and_falls_back(qapp, qtbot, host, caplog):
+    """A raising provider must not crash show; fall back to 100 and leave a log."""
+    import logging
+
+    def boom():
+        raise RuntimeError("chrome not ready")
+
+    toast = Toast(host, margin_provider=boom)
+    caplog.set_level(logging.WARNING)
+    toast.show_message("已保存工程")
+    assert toast.isVisible()
+    assert host.height() - (toast.y() + toast.height()) == Toast.DEFAULT_BOTTOM_MARGIN
+    assert any(
+        "margin_provider raised" in rec.message for rec in caplog.records
+    )
+
+
 def test_toast_set_bottom_margin_repositions_visible_toast(qapp, qtbot, host):
     """Hosts re-derive clearance when neighbor chrome changes (sheet footer)."""
     toast = Toast(host, bottom_margin=40)
@@ -154,6 +171,26 @@ def test_toast_reshow_cancels_pending_fade_out(qapp, qtbot, host):
     qtbot.wait(400)              # comfortably longer than the 180ms animation
     assert toast.isVisible()
     assert toast._msg.text() == "第二条"
+
+
+def test_main_window_toast_clearance_is_gap_plus_status_plus_tabbar(
+    qapp, qtbot, monkeypatch,
+):
+    """E6: MainWindow clearance is 12 + status + View tabbar (typical 80)."""
+    from types import SimpleNamespace
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    monkeypatch.setattr(w.statusBar, "isVisible", lambda: True)
+    monkeypatch.setattr(w.statusBar, "height", lambda: 40)
+    monkeypatch.setattr(
+        w,
+        "_visible_view_tabbar",
+        lambda: SimpleNamespace(isVisible=lambda: True, height=lambda: 28),
+    )
+    assert w._toast_bottom_chrome_clearance() == 12 + 40 + 28
 
 
 # --------------------------------------------------------------------------

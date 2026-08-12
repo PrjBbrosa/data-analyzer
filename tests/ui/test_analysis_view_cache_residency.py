@@ -395,11 +395,9 @@ def test_async_fft_time_stale_view_skips_draw_keeps_dispatch_cache(
     assert restored == [(section, result, ("f1", "sig"))]
 
 
-def test_exit_split_drops_fft_time_and_order_pane1_pins(win):
-    """F13: leaving analysis split must drop pane-1 pins for fft_time/order,
-    not only bump the FRF coordinator pane generation.
-    """
-    for section in ("fft_time", "order"):
+def test_exit_split_drops_pane1_pins_for_analysis_sections(win):
+    """F13: leaving analysis split must drop pane-1 pins, including FFT."""
+    for section in ("fft", "fft_time", "order"):
         mgr = win.analysis_managers[section]
         state = mgr.get(mgr.active)
         assert state.add_pane()

@@ -296,11 +296,12 @@ class ProjectIOMixin:
                 )
                 return
 
-            # Multi-file batch: suppress per-file analysis attach toasts and
-            # emit one aggregated「已加入 … · N 个文件」after the loop (F11;
+            # Multi-file batch: suppress per-file success / analysis-attach
+            # toasts and emit one aggregated toast after the loop (F11;
             # mirrors ``_close_files`` notify=False aggregation).
             batch_load = len(data_files) > 1
             batch_attached = []
+            loaded_files = 0
             for index, fp in enumerate(data_files):
                 before_fids = set(self.files)
                 self._load_one(
@@ -310,15 +311,19 @@ class ProjectIOMixin:
                     ),
                     notify=not batch_load,
                 )
+                added = set(self.files) != before_fids
                 report(
                     index,
                     1.0,
-                    "已加载" if set(self.files) != before_fids else "已跳过",
+                    "已加载" if added else "已跳过",
                 )
+                if added:
+                    loaded_files += 1
                 if batch_load:
                     batch_attached.extend(
                         getattr(self, "_last_source_load_attached", ()) or ()
                     )
+            announced = False
             if batch_load and batch_attached:
                 mode = self.chart_stack.current_mode()
                 if mode in self.analysis_managers:
@@ -328,6 +333,12 @@ class ProjectIOMixin:
                         self._toast_analysis_files_attached(
                             section, state, batch_attached,
                         )
+                        announced = True
+            if batch_load and loaded_files and not announced:
+                self.statusBar.showMessage(
+                    f"✅ 已加载 {loaded_files} 个文件 | 共 {len(self.files)} 文件"
+                )
+                self.toast(f"已加载 {loaded_files} 个文件", "success")
         finally:
             self._finish_compute_progress(token=token)
 
@@ -572,11 +583,12 @@ class ProjectIOMixin:
     ):
         """Load one path and run the shared post-load attach step.
 
-        ``notify`` gates the analysis-mode attach toast (defaults True so
-        single-file callers keep one toast per load). ``_open_data_paths``
-        passes ``notify=False`` for multi-file batches and emits one
-        aggregated「已加入 … · N 个文件」toast itself — same shape as
-        ``_close_files`` / ``_close(..., notify=False)``.
+        ``notify`` gates per-file success toast/statusBar and the
+        analysis-mode attach toast (defaults True so single-file callers
+        keep one toast per load). ``_open_data_paths`` passes
+        ``notify=False`` for multi-file batches and emits one aggregated
+        toast itself — same shape as ``_close_files`` /
+        ``_close(..., notify=False)``.
         """
         before_fids = set(self.files)
         try:
@@ -586,6 +598,7 @@ class ProjectIOMixin:
                 blf_frames=blf_frames,
                 blf_dbc_validated=blf_dbc_validated,
                 progress_callback=progress_callback,
+                notify=notify,
             )
         finally:
             new_fids = [fid for fid in self.files if fid not in before_fids]
@@ -601,10 +614,17 @@ class ProjectIOMixin:
         blf_frames=None,
         blf_dbc_validated=False,
         progress_callback=None,
+        notify=True,
     ):
         def report(fraction, phase):
             if callable(progress_callback):
                 progress_callback(float(fraction), str(phase))
+
+        def announce_loaded(status, toast_msg):
+            if not notify:
+                return
+            self.statusBar.showMessage(status)
+            self.toast(toast_msg, "success")
 
         try:
             self.statusBar.showMessage(f"加载: {fp}");
@@ -618,6 +638,8 @@ class ProjectIOMixin:
                 from ...io.asc_can_format import sniff_canoe_asc
                 try:
                     is_canoe_asc = bool(sniff_canoe_asc(p))
+                except ImportError:
+                    raise
                 except Exception:
                     is_canoe_asc = False
             if ext in ('.mf4', '.mdf'):
@@ -633,9 +655,10 @@ class ProjectIOMixin:
                 fd = self._register_file_data(
                     fp, data, chs, units, fs=fs, source_metadata=smeta)
                 self._update_info()
-                self.statusBar.showMessage(
-                    f"✅ 已加载音轨: {p.name} ({len(data)} 采样 @ {fs:.0f} Hz) | 共 {len(self.files)} 文件")
-                self.toast(f"已加载音轨 {p.name}", "success")
+                announce_loaded(
+                    f"✅ 已加载音轨: {p.name} ({len(data)} 采样 @ {fs:.0f} Hz) | 共 {len(self.files)} 文件",
+                    f"已加载音轨 {p.name}",
+                )
                 return
             elif ext == '.blf' or is_canoe_asc:
                 fmt = "BLF" if ext == ".blf" else "CANoe ASC"
@@ -699,9 +722,10 @@ class ProjectIOMixin:
                 self._remember_blf_dbc_paths(dbc_paths)
                 self._update_info()
                 mode = f"DBC×{len(dbc_paths)} 解码"
-                self.statusBar.showMessage(
-                    f"✅ 已加载 {fmt}: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件")
-                self.toast(f"已加载 {p.name} · {mode}", "success")
+                announce_loaded(
+                    f"✅ 已加载 {fmt}: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件",
+                    f"已加载 {p.name} · {mode}",
+                )
                 report(1.0, "已加载")
                 return
             elif ext == '.tdms':
@@ -710,9 +734,10 @@ class ProjectIOMixin:
                 self._register_file_data(
                     fp, data, chs, units, fs=fs, source_metadata=smeta)
                 self._update_info()
-                self.statusBar.showMessage(
-                    f"✅ 已加载 TDMS: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件")
-                self.toast(f"已加载 TDMS {p.name} · {len(data)} 行", "success")
+                announce_loaded(
+                    f"✅ 已加载 TDMS: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件",
+                    f"已加载 TDMS {p.name} · {len(data)} 行",
+                )
                 self._toast_io_load_diagnostics(smeta)
                 return
             elif ext == '.hdf':
@@ -725,9 +750,10 @@ class ProjectIOMixin:
                         channel_metadata=g["channel_metadata"],
                         label_suffix=g["label_suffix"])
                 self._update_info()
-                self.statusBar.showMessage(
-                    f"✅ 已加载: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
-                self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
+                announce_loaded(
+                    f"✅ 已加载: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件",
+                    f"已加载 {p.name} · {len(groups)} 组",
+                )
                 self._toast_io_load_diagnostics(
                     *(g.get("source_metadata") for g in groups))
                 return
@@ -737,9 +763,10 @@ class ProjectIOMixin:
                 self._register_file_data(
                     fp, data, chs, units, fs=fs, source_metadata=smeta)
                 self._update_info()
-                self.statusBar.showMessage(
-                    f"✅ 已加载 ASCII: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件")
-                self.toast(f"已加载 ASCII {p.name} · {len(data)} 行", "success")
+                announce_loaded(
+                    f"✅ 已加载 ASCII: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件",
+                    f"已加载 ASCII {p.name} · {len(data)} 行",
+                )
                 return
             elif ext == '.wwt':
                 report(-1.0, "读取 WWT")
@@ -751,9 +778,10 @@ class ProjectIOMixin:
                         channel_metadata=g["channel_metadata"],
                         label_suffix=g["label_suffix"])
                 self._update_info()
-                self.statusBar.showMessage(
-                    f"✅ 已加载 WWT: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
-                self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
+                announce_loaded(
+                    f"✅ 已加载 WWT: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件",
+                    f"已加载 {p.name} · {len(groups)} 组",
+                )
                 self._toast_io_load_diagnostics(
                     *(g.get("source_metadata") for g in groups))
                 return
@@ -767,9 +795,10 @@ class ProjectIOMixin:
                         channel_metadata=g["channel_metadata"],
                         label_suffix=g["label_suffix"])
                 self._update_info()
-                self.statusBar.showMessage(
-                    f"✅ 已加载 ZFD: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
-                self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
+                announce_loaded(
+                    f"✅ 已加载 ZFD: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件",
+                    f"已加载 {p.name} · {len(groups)} 组",
+                )
                 self._toast_io_load_diagnostics(
                     *(g.get("source_metadata") for g in groups))
                 return
@@ -783,9 +812,10 @@ class ProjectIOMixin:
                         channel_metadata=g["channel_metadata"],
                         label_suffix=g["label_suffix"])
                 self._update_info()
-                self.statusBar.showMessage(
-                    f"✅ 已加载 MAT: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
-                self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
+                announce_loaded(
+                    f"✅ 已加载 MAT: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件",
+                    f"已加载 {p.name} · {len(groups)} 组",
+                )
                 self._toast_io_load_diagnostics(
                     *(g.get("source_metadata") for g in groups))
                 return
@@ -799,11 +829,36 @@ class ProjectIOMixin:
             # *other* loaded files remain checked and visible — their fids
             # are unaffected by the freshly minted ``fid`` above.
             self._update_info()
-            self.statusBar.showMessage(f"✅ 已加载: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件")
-            self.toast(f"已加载 {p.name} · {len(data)} 行", "success")
+            announce_loaded(
+                f"✅ 已加载: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件",
+                f"已加载 {p.name} · {len(data)} 行",
+            )
             report(1.0, "已加载")
+        except ImportError as e:
+            QMessageBox.critical(self, "错误", self._format_load_import_error(e))
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
+
+    def _format_load_import_error(self, exc: ImportError) -> str:
+        """User-facing text for a missing optional loader dependency.
+
+        Task5 lets CANoe ``.asc`` sniffing raise ``ImportError`` instead of
+        falling through to tabular ASCII. The dialog must name python-can
+        rather than dump a traceback or a bare ``No module named 'can'``.
+        """
+        text = str(exc).strip()
+        name = getattr(exc, "name", None)
+        looks_like_can = (
+            name == "can"
+            or "python-can" in text.lower()
+            or "no module named 'can'" in text.lower()
+        )
+        if looks_like_can and "python-can" not in text:
+            return (
+                "python-can 未安装，无法识别或读取 CANoe ASC / BLF。"
+                "请先 pip install python-can"
+            )
+        return text or "缺少依赖，无法加载该文件"
 
     def _canonical_blf_dbc_paths(self, dbc_paths):
         return normalize_dbc_paths(dbc_paths)

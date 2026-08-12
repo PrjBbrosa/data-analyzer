@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....batch import AnalysisPreset, BatchOutput, BatchRunner
+from ....qt_analysis_shared import amplitude_mode_is_db
 from ....ui_kit.qt_lifecycle import weak_bound
 from ....batch_preset_io import (
     UnsupportedPresetVersion, load_preset_from_json, save_preset_to_json,
@@ -1454,7 +1455,7 @@ class BatchSheet(QDialog):
         params.update(self._output_panel.render_style_params())
         if method_key == "fft":
             params["amp_y"] = (
-                "dB" if axis.get("amplitude_mode") == "amplitude_db" else "Linear"
+                "dB" if amplitude_mode_is_db(axis.get("amplitude_mode")) else "Linear"
             )
         params.update(self._input_panel.rpm_params())
         params["filter"] = self._input_panel.filter_params()

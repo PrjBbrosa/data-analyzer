@@ -229,8 +229,12 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
             try:
                 decoded = json.loads(key)
             except (TypeError, ValueError, json.JSONDecodeError):
+                # Legacy display-name keys: keep as-is so restore can still
+                # match ``legacy_lines.get(name)`` on the canvas.
+                new_ylims[key] = ylim
                 continue
             if not (isinstance(decoded, (list, tuple)) and len(decoded) == 2):
+                new_ylims[key] = ylim
                 continue
             fid, ch = decoded
             if fid in fid_map:
