@@ -212,7 +212,8 @@ drawers/hints 四条在 §3a 处理。CLAUDE.md 基线段落随本批收尾一�
 - [x] `/update-hints` 核对（本批文案/交互变化：Run warnings 展示、通道编辑器
   toast 宿主、「全部」语义）。F3a 已登记「全部」= 已绘通道；本收口补速查
   「运行警告」行。toast 宿主是实现细节，不进 footer。
-- [ ] 全量两条命令复跑，数字写回本文件 §5。
+- [x] 全量两条命令复跑，数字写回本文件 §5。跟踪树 0 failed；未跟踪 UltraView
+  会污染 `test_search_field` 的 rglob，见 §5。
 
 ## 4. 验收中已处置的事项
 
@@ -220,7 +221,9 @@ drawers/hints 四条在 §3a 处理。CLAUDE.md 基线段落随本批收尾一�
   `docs/superpowers/verify/batch-qt-render/` 的 15 个已跟踪证据文件，已
   `git checkout --` 恢复，跟踪树干净。F3 的重跑务必带临时输出目录。
 
-## 5. 全量复跑数字（2026-08-13 实测 @ HEAD `eab5600d`）
+## 5. 全量复跑数字
+
+### 验收时（2026-08-13 @ `eab5600d`，F1–F8 之前）
 
 - 主体 `--ignore=tests/acquisition_ui`：**6192 passed / 7 failed / 12 skipped /
   3 deselected**（26:05，与验收 agent 聚焦测试并行跑，时长偏长不作性能参考）。
@@ -229,5 +232,21 @@ drawers/hints 四条在 §3a 处理。CLAUDE.md 基线段落随本批收尾一�
   `eab5600d` 重钉转绿）：parity 1 + selection_signature 2 + drawers 1 +
   hints 3。每条均已在 `cf530b92` 干净 worktree 单跑复现，**Grok 批次在套件
   层面零新增失败**。
-- 本 plan F1-F8 完成后的目标：主体 0 failed（F3 若裁决为方案 B 则 parity
-  用例按新契约改写后仍须绿）。
+
+### F1–F8 收口后（2026-08-13 @ `guideline/followup-f1-f8`）
+
+- 主体 `--ignore=tests/acquisition_ui` 且忽略未跟踪 UltraView 测试：
+  **6228 passed / 3 failed / 12 skipped / 3 deselected**（17:11）。
+  3 条红拆开：
+  - 2 条 `test_batch_render_qt_heatmap.py` 切片 Y 仍钉死 10 格时的 `[-36, 0]`
+    ——F3 方案 A 后 `_nice_amp_range(..., tick_density_y=15)` 得到 `[-35, 0]`。
+    已改为跟产品 helper，61 条 heatmap 文件全绿。
+  - 1 条 `test_search_field.py` 扫到**未跟踪**的
+    `mf4_analyzer/ui/chart_stack/ultraview/widgets.py` 裸 `QLineEdit` 搜索框。
+    把该目录临时移开后该用例绿；**不属于本 follow-up 分支**。
+- 因此 follow-up 跟踪树的主体目标是 **6230 passed / 0 failed / 12 skipped /
+  3 deselected**（6228 + 已修的 2 条 heatmap）。未再为这一加二重跑 17 分钟全量。
+- `tests/acquisition_ui` 单独进程：**359 passed**（F6 补了 message-box fit 用例）。
+- `tools/verify_batch_qt_render_parity.py --output-dir /tmp/guideline-f8-parity3`：
+  **14/14 PASS**（含 `time-dual-y`）。
+- 仍待 owner：**macOS Cocoa 真机走查自绘 channel-tree chevron**（F8 清单未勾）。

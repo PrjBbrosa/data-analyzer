@@ -428,9 +428,9 @@ def _nice_amp_range(low: float, high: float, divisions: int):
     Deliberately **not** ``_frame_to_nice``: that helper forces exactly ``n``
     equal divisions (oscilloscope graticule semantics, ``top = bottom + n *
     per_div``) on top of a step that ``_nice_per_div`` already rounded up, and
-    the two compound into a mostly-empty axis. At the repository default
-    ``tick_density_y = 10`` it turns ``[-99.11, -34.38]`` into ``[-100, 0]`` —
-    35% of the panel height wasted, the curve squashed into the lower half.
+    the two compound into a mostly-empty axis. At ``tick_density_y = 10``
+    it turns ``[-99.11, -34.38]`` into ``[-100, 0]`` — 35% of the panel
+    height wasted, the curve squashed into the lower half.
 
     Taking only the *step* from ``_nice_per_div`` and rounding each end outward
     on its own gives ``[-100, -30]`` (8% wasted) with equally tidy tick values.

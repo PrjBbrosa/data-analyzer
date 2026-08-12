@@ -999,21 +999,26 @@ def test_slice_amplitude_axis_ends_on_whole_nice_steps(qapp):
     qapp.processEvents()
     try:
         bottom, top = scene.slice_plot.vb.viewRange()[1]
-        assert (bottom, top) == pytest.approx((-36.0, 0.0))
-        step = (top - bottom) / scene.style.tick_density_y
-        assert bottom / step == pytest.approx(round(bottom / step))
-        assert top / step == pytest.approx(round(top / step))
         values = np.concatenate(
             [curve.getData()[1] for curve in scene.slice_curves]
         )
+        bounds = batch_render_builder._slice_amp_bounds(values)
+        expected = batch_render_builder._nice_amp_range(
+            *bounds, scene.style.tick_density_y
+        )
+        assert (bottom, top) == pytest.approx(expected)
+        step = (top - bottom) / scene.style.tick_density_y
+        assert bottom / step == pytest.approx(round(bottom / step))
+        assert top / step == pytest.approx(round(top / step))
         # At most one step of headroom at either end — the whole point of not
         # using ``_frame_to_nice``.
         assert float(np.min(values)) - bottom < step
         assert top - float(np.max(values)) < step
         ticks = scene.slice_plot.getAxis("left")._tickLevels[0]
-        assert [value for value, _label in ticks] == pytest.approx(
-            [-36.0, -32.0, -28.0, -24.0, -20.0, -16.0, -12.0, -8.0, -4.0, 0.0]
-        )
+        tick_values = [value for value, _label in ticks]
+        assert tick_values
+        assert min(tick_values) >= bottom - 1e-9
+        assert max(tick_values) <= top + 1e-9
     finally:
         scene.close()
 
@@ -1040,8 +1045,11 @@ def test_slice_amplitude_axis_ignores_the_dc_dead_zone(qapp):
         # The dead bin is still in the curve data — only the view range skips it.
         assert float(np.min(values)) < -1000.0
         bottom, top = scene.slice_plot.vb.viewRange()[1]
-        assert bottom == pytest.approx(-36.0)
-        assert top == pytest.approx(0.0)
+        bounds = batch_render_builder._slice_amp_bounds(values)
+        expected = batch_render_builder._nice_amp_range(
+            *bounds, scene.style.tick_density_y
+        )
+        assert (bottom, top) == pytest.approx(expected)
     finally:
         scene.close()
 

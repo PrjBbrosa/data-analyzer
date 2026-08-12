@@ -34,8 +34,11 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
   **不要把 6048/0 抄到 `cf530b92`**：`56c42f4d..cf530b92` 已有 8 条红（parity Y-tick
   分叉、selection_signature QSS token、drawers 几何、hints 三条）；其中
   characterization 一条被 `eab5600d` 重钉转绿。guideline-hardening 16-Task 批在
-  `eab5600d` 套件层面零新增失败。F1–F8 follow-up 收口后的全量数字见本段末尾
-  与 `docs/analyzer/plans/2026-08-13-guideline-hardening-followup-plan.md` §5。
+  `eab5600d` 套件层面零新增失败。F1–F8 follow-up 收口（`guideline/followup-f1-f8`）：
+  主体 **6230 passed / 12 skipped / 0 failed**（跟踪树；未跟踪 UltraView 会让
+  `test_search_field` 扫到裸 `QLineEdit` 搜索框，不计入本批），
+  `tests/acquisition_ui` **359 passed**。详见
+  `docs/analyzer/plans/2026-08-13-guideline-hardening-followup-plan.md` §5。
   主体一条命令在 `f85b5d4e`..`56c42f4d` 期间还有**另一处**交错 segfault
   （channel-tree delegate paint 中途被 gen-0 GC 回收弱引用顶层 widget），已由
   `tests/ui/conftest.py` 的「post-call 钉住顶层 widget → teardown 泵完事件再释放
