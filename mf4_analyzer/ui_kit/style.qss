@@ -3067,7 +3067,9 @@ QStatusBar#surfaceStatusBar QLabel#computeProgressLabel {
      * falls back to platform defaults) — guarded by
      * tests/ui_kit/test_stylesheet_parses.py. */
     qproperty-alignment: 'AlignVCenter | AlignLeft';
-    padding-right: 2px;
+    /* Keep '%' clear of the rounded progress-bar tip (see ComputeProgressWidget
+     * _SPACING / _TEXT_PAD). */
+    padding-right: 6px;
 }
 
 QStatusBar#surfaceStatusBar QProgressBar#computeProgressBar {

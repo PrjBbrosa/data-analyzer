@@ -1,3 +1,6 @@
+from PyQt5.QtGui import QFontMetrics
+from PyQt5.QtWidgets import QSizePolicy
+
 from mf4_analyzer.ui.compute_progress import ComputeProgressWidget
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.main_window import window as window_mod
@@ -97,6 +100,50 @@ def test_long_load_label_does_not_overlap_or_clip_bar(qapp, qtbot):
     qapp.processEvents()
     assert widget.bar.width() == widget._BAR_WIDTH
     assert widget.label.geometry().right() < widget.bar.geometry().left()
+
+
+def test_percent_ink_stays_clear_of_bar_without_resize(qapp, qtbot):
+    """Regression: full label text must not overflow onto the bar when width is pinned.
+
+    Previously ``_apply_label_text`` wrote the un-elided string and waited for
+    ``resizeEvent`` to trim it.  If the status bar kept the same width,
+    resize never fired and QLabel painted '%' into the progress chunk.
+    """
+    from PyQt5.QtWidgets import QHBoxLayout, QWidget
+
+    host = QWidget()
+    host_layout = QHBoxLayout(host)
+    host_layout.setContentsMargins(0, 0, 0, 0)
+    host_layout.setSpacing(0)
+
+    widget = ComputeProgressWidget()
+    narrow = widget._chrome_width() + widget._MIN_LABEL_WIDTH
+    host.setFixedWidth(narrow)
+    host_layout.addWidget(widget)
+    qtbot.addWidget(host)
+    host.show()
+    qtbot.waitExposed(host)
+    qapp.processEvents()
+
+    widget.begin("加载 1/1 · 解码信号", total=1000)
+    # Same outer width as begin() — the bug path is "text changes, size does not".
+    widget.set_progress(790, 1000, label="加载 1/1 · 解码信号")
+    qapp.processEvents()
+
+    assert widget.width() == narrow
+    assert widget.layout().spacing() >= 12
+    assert widget.sizePolicy().horizontalPolicy() == QSizePolicy.Preferred
+
+    metrics = QFontMetrics(widget.label.font())
+    painted = widget.label.text()
+    ink_right = widget.label.geometry().left() + metrics.horizontalAdvance(painted)
+    assert ink_right <= widget.bar.geometry().left(), (
+        f"label ink ends at {ink_right}, bar starts at {widget.bar.geometry().left()} "
+        f"(painted={painted!r}, full={widget._full_label!r})"
+    )
+    assert metrics.horizontalAdvance(painted) <= widget.label.width()
+    # Full copy stays on the tooltip even when the visible label is elided.
+    assert widget.label.toolTip() == "加载 1/1 · 解码信号 · 79%"
 
 
 def test_main_window_compute_progress_token_guards_stale_updates(qapp, qtbot):

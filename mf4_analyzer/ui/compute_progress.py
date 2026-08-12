@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QFontMetrics
+from PyQt5.QtGui import QFontMetrics, QRegion
 from PyQt5.QtWidgets import QLabel, QHBoxLayout, QProgressBar, QSizePolicy, QWidget
+
+
+class _ClippedProgressLabel(QLabel):
+    """QLabel whose paint is masked to its contents rect (no overflow into the bar)."""
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        # QLabel paints past its rect by default. Mask keeps '%' from landing
+        # on the neighbouring progress bar when elision lags a layout pass.
+        self.setMask(QRegion(self.contentsRect()))
 
 
 class ComputeProgressWidget(QWidget):
@@ -15,7 +25,10 @@ class ComputeProgressWidget(QWidget):
 
     _BAR_WIDTH = 160
     _H_MARGIN = 8
-    _SPACING = 8
+    # Keep a clear gap so '%' ink cannot kiss the rounded bar tip.
+    _SPACING = 12
+    # Extra slack inside the elision budget for bold QSS / ClearType overhang.
+    _TEXT_PAD = 6
     # Wide enough for "加载 1/1 · 读取 CAN 帧 · 100%" at the status-bar font.
     _MAX_WIDTH = 520
     _MIN_LABEL_WIDTH = 72
@@ -26,7 +39,7 @@ class ComputeProgressWidget(QWidget):
         self._label_prefix = ""
         self._full_label = ""
 
-        self.label = QLabel(self)
+        self.label = _ClippedProgressLabel(self)
         self.label.setObjectName("computeProgressLabel")
         self.label.setTextFormat(Qt.PlainText)
         self.label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
@@ -48,19 +61,40 @@ class ComputeProgressWidget(QWidget):
         layout.setAlignment(self.bar, Qt.AlignVCenter)
 
         self.setMaximumWidth(self._MAX_WIDTH)
-        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        # Preferred (not Maximum): status-bar permanent widgets with stretch-0
+        # neighbours honor sizeHint only when the policy asks for it. Maximum
+        # lets the bar keep us at minimumSizeHint while we paint full text.
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.setVisible(False)
 
     def _chrome_width(self) -> int:
         return (2 * self._H_MARGIN) + self._SPACING + self._BAR_WIDTH
 
-    def sizeHint(self) -> QSize:
+    def _text_width(self, text: str) -> int:
+        """Advance width for ``text``, with a CJK-safe fallback.
+
+        Some offscreen / substitute-font setups report ``horizontalAdvance`` 0
+        for Chinese phase labels; without a fallback Preferred sizeHint
+        collapses to the minimum slot and the status bar never grows.
+        """
         metrics = QFontMetrics(self.label.font())
+        width = metrics.horizontalAdvance(text)
+        if width <= 0 and text:
+            width = max(
+                len(text) * max(1, metrics.averageCharWidth()),
+                self._MIN_LABEL_WIDTH,
+            )
+        return width + self._TEXT_PAD
+
+    def sizeHint(self) -> QSize:
         text = self._full_label or self.label.text() or " "
-        label_w = metrics.horizontalAdvance(text) + 4
+        label_w = self._text_width(text)
         width = min(
             self._MAX_WIDTH,
-            max(self._chrome_width() + self._MIN_LABEL_WIDTH, self._chrome_width() + label_w),
+            max(
+                self._chrome_width() + self._MIN_LABEL_WIDTH,
+                self._chrome_width() + label_w,
+            ),
         )
         height = max(22, self.label.sizeHint().height(), self.bar.sizeHint().height())
         return QSize(width, height)
@@ -68,26 +102,46 @@ class ComputeProgressWidget(QWidget):
     def minimumSizeHint(self) -> QSize:
         return QSize(self._chrome_width() + self._MIN_LABEL_WIDTH, 22)
 
+    def _label_text_budget(self) -> int:
+        """Pixels available for label copy in the current layout width."""
+        max_budget = self._MAX_WIDTH - self._chrome_width()
+        if self.width() <= self._chrome_width():
+            return max_budget
+        layout_budget = self.width() - self._chrome_width()
+        label_w = self.label.width()
+        # Ignore pre-layout stub widths that would force "F…" elision.
+        if label_w >= self._MIN_LABEL_WIDTH:
+            layout_budget = min(layout_budget, label_w)
+        return max(self._MIN_LABEL_WIDTH, min(max_budget, layout_budget))
+
     def _apply_label_text(self, text: str) -> None:
         self._full_label = str(text)
         self.label.setToolTip(self._full_label)
-        self._refresh_label_elision(prefer_max_budget=True)
         self.updateGeometry()
+        # setVisible(True) adjustSize()'s to the *previous* sizeHint. When the
+        # label grows (phase · percent) under no parent layout, grow ourselves
+        # so unit tests / free hosts keep the full string. A layout-managed
+        # parent (QStatusBar) owns geometry — we only elide to the slot it
+        # gave us. Never leave full un-elided text on a narrow label: QLabel
+        # paints past its rect and the '%' lands under the bar chunk.
+        parent = self.parentWidget()
+        managed = parent is not None and parent.layout() is not None
+        if not managed:
+            hint = self.sizeHint()
+            if self.width() < hint.width():
+                self.resize(hint.width(), max(self.height(), hint.height()))
+        self._refresh_label_elision()
 
-    def _refresh_label_elision(self, *, prefer_max_budget: bool) -> None:
+    def _refresh_label_elision(self) -> None:
         if not self._full_label:
             return
         metrics = QFontMetrics(self.label.font())
-        full_w = metrics.horizontalAdvance(self._full_label) + 4
-        max_budget = self._MAX_WIDTH - self._chrome_width()
-        if prefer_max_budget:
-            # Grow toward the max first so a longer phase label is not elided
-            # against the previous, shorter sizeHint width.
-            budget = max_budget
-        else:
-            budget = max(
+        budget = max(1, self._label_text_budget() - self._TEXT_PAD)
+        full_w = metrics.horizontalAdvance(self._full_label)
+        if full_w <= 0 and self._full_label:
+            full_w = max(
+                len(self._full_label) * max(1, metrics.averageCharWidth()),
                 self._MIN_LABEL_WIDTH,
-                min(max_budget, self.width() - self._chrome_width()),
             )
         if full_w <= budget:
             self.label.setText(self._full_label)
@@ -135,6 +189,6 @@ class ComputeProgressWidget(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
-        # Parent may give less than sizeHint; elide only then so the bar stays
-        # fully visible without overlapping the label.
-        self._refresh_label_elision(prefer_max_budget=False)
+        # Parent may give less than sizeHint; re-elide so the bar stays
+        # fully visible without the label ink overlapping it.
+        self._refresh_label_elision()
