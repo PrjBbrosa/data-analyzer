@@ -145,8 +145,22 @@ def test_p3_format_range_value_branches_on_rounded_form():
     assert _format_range_value(999.6) == "999.6"
     # Rounds into the scientific branch rather than printing "1000" via .3f.
     assert _format_range_value(999.9996) == f"{999.9996:.3g}"
-    assert _format_range_value(0.0099996) == f"{0.0099996:.3g}"
+    # 0.0091 rounds to 0.009 (inside (0, 0.01)); .3g keeps the extra digit
+    # that .3f would drop. 0.0099996 was tautological: both branches print "0.01".
+    small = 0.0091
+    assert _format_range_value(small) == f"{small:.3g}"
+    assert _format_range_value(small) != f"{small:.3f}".rstrip("0").rstrip(".")
     assert _format_range_value(12.5) == "12.5"
+
+
+@pytest.mark.parametrize("value", [0.0001, -0.0004, 1e-07])
+def test_p3_format_range_value_keeps_sub_milli_nonzero(value):
+    """F4: values that round(·, 3) to 0.0 must not display as '0'/'-0'."""
+    from mf4_analyzer.ui.pg_canvas.context_menu import _format_range_value
+
+    text = _format_range_value(value)
+    assert text not in {"0", "-0"}
+    assert abs(float(text)) > 0.0
 
 
 def test_analysis_defaults_module_has_no_gui_imports():
