@@ -226,9 +226,10 @@ _HINTS = (
     # view.history entry above. Deliberately NOT a nudge: a nudge gates on a
     # HintState data signal fed by _ChartCard._nudge_signals(), and the tab bar
     # is a sibling widget that feeds nothing into that state.
-    # Priority 65 seats it below coaxis.merge (70) and above the
-    # custom-action slot (50). Retired by view_tabbar._mark_compact_tabs_
-    # discovered() from BOTH the compact tab's tooltip and the » menu — the
+    # Priority 65 seats it below coaxis.merge / channel.export_wwt_storage
+    # (both 70) and above the custom-action slot (50). Retired by
+    # view_tabbar._mark_compact_tabs_discovered() from BOTH the compact
+    # tab's tooltip and the » menu — the
     # overflow menu alone would never fire for a row that compacts without
     # overflowing. The 12 cap and the » menu itself live in the quickref panel
     # (时域 View row); repeating them here would just be footer noise.
@@ -431,7 +432,7 @@ _HINTS = (
     ),
     Hint(
         id="fft.time_range_manual",
-        text="时间范围：预览缩放只改起止；勾选后才用于计算",
+        text="预览缩放只改起止；勾选后才用于计算",
         surface="context",
         tier="A",
         modes=frozenset({"fft"}),
@@ -439,7 +440,7 @@ _HINTS = (
     ),
     Hint(
         id="analysis.time_range_confirm",
-        text="计算时若起止已局部但未勾选，会询问是否用局部范围",
+        text="局部起止未勾选时，计算前会询问",
         surface="context",
         tier="A",
         modes=frozenset({"fft", "fft_time", "order", "frf"}),
