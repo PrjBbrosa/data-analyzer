@@ -276,3 +276,146 @@ def test_async_order_completion_pins_dispatch_view_not_active(win, monkeypatch):
     win._on_order_job_finished(ctx, _fake_heatmap("async"))
     assert key in win._analysis_pins[(section, dispatched.view_id, 0)]
     assert (section, later.view_id, 0) not in win._analysis_pins
+
+
+def test_async_order_stale_view_skips_draw_keeps_dispatch_cache(win, monkeypatch):
+    """A7: slow order job finishing after a View switch must not paint the
+    active page, but must still cache/pin under the dispatch-time view_id so
+    switching back can render from cache.
+    """
+    section = "order"
+    mgr = win.analysis_managers[section]
+    mgr.new_view()
+    dispatched = mgr.get(0)
+    later = mgr.get(1)
+    dispatched.panes[0].sources = [("f1", "sig")]
+    mgr.set_active(1)
+    assert mgr.get(mgr.active) is later
+
+    drawn = []
+    monkeypatch.setattr(
+        win, "_render_order_time", lambda *a, **k: drawn.append(("primary", a, k))
+    )
+    monkeypatch.setattr(
+        win, "_render_order_on", lambda *a, **k: drawn.append(("pane", a, k))
+    )
+
+    cache = win.analysis_caches[section]
+    key = cache.make_key("f1", "sig", {"nfft": 64, "time_range": None})
+    result = _fake_heatmap("stale-order")
+    ctx = {
+        "analysis_key": key,
+        "pane_idx": 0,
+        "view_id": dispatched.view_id,
+        "source": ("f1", "sig"),
+    }
+    win._on_order_job_finished(ctx, result)
+
+    assert drawn == [], "stale completion must not paint the active View canvas"
+    assert cache.get(key) is result
+    assert key in win._analysis_pins[(section, dispatched.view_id, 0)]
+    assert (section, later.view_id, 0) not in win._analysis_pins
+
+    restored = []
+    monkeypatch.setattr(
+        win,
+        "_analysis_cache_key",
+        lambda *args, **kwargs: key,
+    )
+    monkeypatch.setattr(
+        win,
+        "_render_cached_heatmap",
+        lambda sec, canvas, res, source=None: restored.append((sec, res, source)),
+    )
+    monkeypatch.setattr(win, "_show_analysis_empty_hint", lambda *a, **k: None)
+    monkeypatch.setattr(win, "_clear_analysis_canvas", lambda *a, **k: None)
+    mgr.set_active(0)
+    restored.clear()  # set_active may already restore; assert the explicit path
+    win._render_analysis_view_from_cache(section, dispatched)
+    assert restored == [(section, result, ("f1", "sig"))]
+
+
+def test_async_fft_time_stale_view_skips_draw_keeps_dispatch_cache(
+    win, monkeypatch,
+):
+    """A7: FFT-vs-Time render_requested for a non-active view_id skips draw
+    only — coordinator already stored cache/pin at dispatch view_id.
+    """
+    section = "fft_time"
+    mgr = win.analysis_managers[section]
+    mgr.new_view()
+    dispatched = mgr.get(0)
+    later = mgr.get(1)
+    dispatched.panes[0].sources = [("f1", "sig")]
+    mgr.set_active(1)
+    assert mgr.get(mgr.active) is later
+
+    # Simulate coordinator store_result before render_requested (production
+    # order in fft_time_coordinator._on_job_finished).
+    cache = win.analysis_caches[section]
+    key = cache.make_key("f1", "sig", {"nfft": 256, "time_range": None})
+    result = _fake_heatmap("stale-fft-time")
+    result.metadata = {"frames": 3}
+    result.params = SimpleNamespace(nfft=256)
+    win._store_analysis_result(section, dispatched.view_id, 0, key, result)
+
+    drawn = []
+    monkeypatch.setattr(
+        win, "_render_fft_time_on", lambda *a, **k: drawn.append(("on", a, k))
+    )
+    monkeypatch.setattr(
+        win, "_render_fft_time", lambda *a, **k: drawn.append(("primary", a, k))
+    )
+
+    ctx = {
+        "analysis_key": key,
+        "pane_idx": 0,
+        "view_id": dispatched.view_id,
+        "source": ("f1", "sig"),
+        "render_params": {"amplitude_mode": "Amplitude dB"},
+    }
+    win._on_fft_time_render_requested(ctx, result, False)
+
+    assert drawn == [], "stale FFT-vs-Time completion must not paint active View"
+    assert cache.get(key) is result
+    assert key in win._analysis_pins[(section, dispatched.view_id, 0)]
+
+    restored = []
+    monkeypatch.setattr(win, "_analysis_cache_key", lambda *a, **k: key)
+    monkeypatch.setattr(
+        win,
+        "_render_cached_heatmap",
+        lambda sec, canvas, res, source=None: restored.append((sec, res, source)),
+    )
+    monkeypatch.setattr(win, "_show_analysis_empty_hint", lambda *a, **k: None)
+    monkeypatch.setattr(win, "_clear_analysis_canvas", lambda *a, **k: None)
+    mgr.set_active(0)
+    restored.clear()  # set_active may already restore; assert the explicit path
+    win._render_analysis_view_from_cache(section, dispatched)
+    assert restored == [(section, result, ("f1", "sig"))]
+
+
+def test_exit_split_drops_fft_time_and_order_pane1_pins(win):
+    """F13: leaving analysis split must drop pane-1 pins for fft_time/order,
+    not only bump the FRF coordinator pane generation.
+    """
+    for section in ("fft_time", "order"):
+        mgr = win.analysis_managers[section]
+        state = mgr.get(mgr.active)
+        assert state.add_pane()
+        cache = win.analysis_caches[section]
+        key0 = cache.make_key("f1", "p0", {"nfft": 64, "time_range": None})
+        key1 = cache.make_key("f1", "p1", {"nfft": 64, "time_range": None})
+        win._store_analysis_result(
+            section, state.view_id, 0, key0, _fake_heatmap(f"{section}-p0")
+        )
+        win._store_analysis_result(
+            section, state.view_id, 1, key1, _fake_heatmap(f"{section}-p1")
+        )
+        assert key1 in win._analysis_pins[(section, state.view_id, 1)]
+
+        win._on_analysis_split(section, False)
+
+        assert (section, state.view_id, 1) not in win._analysis_pins
+        assert key0 in win._analysis_pins[(section, state.view_id, 0)]
+        assert len(state.panes) == 1
