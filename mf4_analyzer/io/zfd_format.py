@@ -16,6 +16,7 @@
   float32[count] 数据（数据即物理值，无缩放）。
 """
 from __future__ import annotations
+import math
 import re
 import struct
 from pathlib import Path
@@ -27,6 +28,8 @@ _MAGIC = b"ZFGE2"
 _PRE_HEADER = 6          # 前置头字节数（u16×3）
 _DISP_OFFSET = 2 + 16    # 单位行 \n 之后：2 pad + 2 float64
 _DEFAULT_FS = 1000.0
+# 接受有限且 0 < dt ≤ 1 h；更慢的采样（温度/耐久）合法，离谱值仍回退 1 kHz。
+_MAX_DT_S = 3600.0
 
 # 候选 marker：字母 + 1~3 位数字 + 冒号 + 空白。必须再结构校验才采纳，
 # 防止在 float32 数据里踩到假标记。
@@ -125,7 +128,7 @@ def load_zfd_groups(fp):
     dt = 1.0 / _DEFAULT_FS
     if first_off >= 14:
         (cand_dt,) = struct.unpack_from("<d", data, first_off - 14)
-        if 0.0 < cand_dt < 1.0:
+        if math.isfinite(cand_dt) and 0.0 < cand_dt <= _MAX_DT_S:
             dt = cand_dt
             fs_estimated = False
 
