@@ -24,18 +24,28 @@ def _deck_data() -> dict:
 
 def test_deck_data_valid_and_version_bumped():
     d = _deck_data()
-    assert d["meta"]["version"] == "v7.9.8"
-    assert d["meta"]["updated"] == "2026-08-11"
+    assert d["meta"]["version"] == "v7.9.9"
+    assert d["meta"]["updated"] == "2026-08-12"
     assert d["meta"]["docVersion"] == "3.0"
-    assert [c["v"] for c in d["changelog"]][:4] == [
-        "v7.9.8", "v7.9.7", "v7.9.6", "v7.9.5",
+    assert [c["v"] for c in d["changelog"]][:5] == [
+        "v7.9.9", "v7.9.8", "v7.9.7", "v7.9.6", "v7.9.5",
     ]
 
 
+def test_v799_changelog_covers_view_all_tick_density_and_wwt():
+    entry = next(
+        entry for entry in _deck_data()["changelog"] if entry["v"] == "v7.9.9"
+    )
+    description = " ".join(entry["items"])
+    for keyword in ("查看全部", "密", "WinWert", "进度", "操作速查"):
+        assert keyword in description
+
+
 def test_v798_changelog_covers_source_isolation_and_follow_menu():
-    current = _deck_data()["changelog"][0]
-    assert current["v"] == "v7.9.8"
-    description = " ".join(current["items"])
+    entry = next(
+        entry for entry in _deck_data()["changelog"] if entry["v"] == "v7.9.8"
+    )
+    description = " ".join(entry["items"])
     for keyword in (
         "文件范围", "文件范围跟随", "新建 View", "填充空 View", "分析 View", "拖拽导入",
     ):
@@ -43,8 +53,9 @@ def test_v798_changelog_covers_source_isolation_and_follow_menu():
 
 
 def test_v797_changelog_covers_control_surface_and_frf_markup():
-    current = _deck_data()["changelog"][1]
-    assert current["v"] == "v7.9.7"
+    current = next(
+        entry for entry in _deck_data()["changelog"] if entry["v"] == "v7.9.7"
+    )
     description = " ".join(current["items"])
     for keyword in (
         "当前 View", "Δf / ΔY", "真实 Hz", "标注", "使用选定时间范围",
@@ -53,8 +64,9 @@ def test_v797_changelog_covers_control_surface_and_frf_markup():
 
 
 def test_v796_changelog_covers_frf_system_identification_and_batch_output():
-    current = _deck_data()["changelog"][2]
-    assert current["v"] == "v7.9.6"
+    current = next(
+        entry for entry in _deck_data()["changelog"] if entry["v"] == "v7.9.6"
+    )
     description = " ".join(current["items"])
     for keyword in (
         "频响（FRF）系统辨识", "H1 / H2", "相干度", "批处理", "CSV、PNG 和 manifest",
@@ -63,8 +75,9 @@ def test_v796_changelog_covers_frf_system_identification_and_batch_output():
 
 
 def test_v795_changelog_covers_hdf_view_scope_and_ink_budget():
-    current = _deck_data()["changelog"][3]
-    assert current["v"] == "v7.9.5"
+    current = next(
+        entry for entry in _deck_data()["changelog"] if entry["v"] == "v7.9.5"
+    )
     description = " ".join(current["items"])
     for keyword in ("HDF", "完整通道名", "当前 View", "墨水量", "7px"):
         assert keyword in description
@@ -168,9 +181,9 @@ def test_manual_uses_current_real_ui_assets():
         assert f"assets/{name}" in html
 
 
-def test_published_guide_tracks_v798_and_real_ui_assets():
+def test_published_guide_tracks_v799_and_real_ui_assets():
     html = PUBLISHED_GUIDE.read_text(encoding="utf-8")
-    assert "TraceLab v7.9.8" in html
+    assert "TraceLab v7.9.9" in html
     for name in ("WWT", "ZFD", "MAT", "time-panel.png", "imports-panel.png"):
         assert name in html
     assert "matplotlib" not in html
@@ -197,7 +210,7 @@ def test_panel_guides_cover_new_topics():
     }
     for fname, kws in checks.items():
         text = (HELP / fname).read_text(encoding="utf-8")
-        assert "TraceLab v7.9.8" in text
+        assert "TraceLab v7.9.9" in text
         for kw in kws:
             assert kw in text, f"{fname} missing: {kw}"
 
