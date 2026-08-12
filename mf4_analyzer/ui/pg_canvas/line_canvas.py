@@ -67,6 +67,7 @@ from .ticks_math import (
     _frame_to_nice,
     _nice_per_div,
 )
+from mf4_analyzer.ui.chart_defaults import DEFAULT_CHART_TICK_DENSITY
 from mf4_analyzer.ui.plot_helpers import _middle_ellipsis
 from .viewbox import _ModifierWheelViewBox, _WheelDeltaGraphicsLayoutWidget
 from mf4_analyzer.ui_kit.axis_metrics import (
@@ -268,8 +269,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # overlay's divisions). Driven by the Y tick density; the left axis and
         # every aux right axis are framed to this many equal nice divisions so
         # all their ticks land on the SAME set of horizontal grid lines.
-        # Default 10 matches the standard global Y tick count.
-        self._time_divisions = 10
+        # Default follows the shared interactive Y tick count.
+        self._time_divisions = DEFAULT_CHART_TICK_DENSITY[1]
         # Set when the user pans/zooms the time preview; cleared after idle
         # repin so tick labels realign to the shared graticule (overlay snap).
         self._time_y_needs_repin = False

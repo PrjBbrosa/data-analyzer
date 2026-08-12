@@ -22,6 +22,7 @@ from mf4_analyzer.ui._axis_handle import (
 )
 from mf4_analyzer.signal.envelope import _is_monotonic_array
 from mf4_analyzer.ui.plot_helpers import _middle_ellipsis
+from mf4_analyzer.ui.chart_defaults import DEFAULT_CHART_TICK_DENSITY
 
 from ._shared import _subplot_ylabel_text, _view_state_channel_key
 from .context_menu import _localize_pg_context_menu
@@ -41,7 +42,7 @@ from .viewbox import _ModifierWheelViewBox
 
 
 _OVERLAY_GRID_ALPHA = 0.28
-_DEFAULT_OVERLAY_DIVISIONS = 10
+_DEFAULT_OVERLAY_DIVISIONS = DEFAULT_CHART_TICK_DENSITY[1]
 _OVERLAY_AXIS_LABEL_MIN_CHARS = 12
 _OVERLAY_AXIS_LABEL_FALLBACK_CHARS = 22
 _OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX = 32.0

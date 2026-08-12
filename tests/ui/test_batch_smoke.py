@@ -1495,7 +1495,7 @@ def test_sheet_does_not_restore_signals_or_files(qtbot, tmp_path):
 def test_close_persists_panel_prefs_but_an_edit_alone_does_not(qtbot, tmp_path):
     """Write points are the normal close and a started run -- not every edit
     (plan 2.3: ``_on_output_controls_changed`` fires on each keystroke)."""
-    from mf4_analyzer.batch_render_style import RenderStyle
+    from mf4_analyzer.batch_render_style import DEFAULT_TICK_DENSITY_X, RenderStyle
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
 
     store = _prefs_store(tmp_path)
@@ -1508,7 +1508,10 @@ def test_close_persists_panel_prefs_but_an_edit_alone_does_not(qtbot, tmp_path):
     sheet._output_panel.apply_directory(str(tmp_path / "picked"))
 
     # Editing alone leaves the store untouched.
-    assert _prefs_store(tmp_path).load().render_style["tick_density_x"] == 14
+    assert (
+        _prefs_store(tmp_path).load().render_style["tick_density_x"]
+        == DEFAULT_TICK_DENSITY_X
+    )
     assert _prefs_store(tmp_path).load().directory == ""
 
     sheet.close()
@@ -1547,7 +1550,7 @@ def test_a_close_requested_mid_run_does_not_persist_until_the_run_stops(
     written until the deferred close actually goes through."""
     from PyQt5.QtWidgets import QMessageBox
 
-    from mf4_analyzer.batch_render_style import RenderStyle
+    from mf4_analyzer.batch_render_style import DEFAULT_TICK_DENSITY_X, RenderStyle
     from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
 
@@ -1566,7 +1569,10 @@ def test_a_close_requested_mid_run_does_not_persist_until_the_run_stops(
     sheet.close()
 
     assert sheet._close_pending is True
-    assert _prefs_store(tmp_path).load().render_style["tick_density_x"] == 14
+    assert (
+        _prefs_store(tmp_path).load().render_style["tick_density_x"]
+        == DEFAULT_TICK_DENSITY_X
+    )
 
     sheet._running = False
     sheet.close()
@@ -1575,6 +1581,11 @@ def test_a_close_requested_mid_run_does_not_persist_until_the_run_stops(
 
 
 def test_restore_defaults_clears_the_memory_and_resets_the_panel(qtbot, tmp_path):
+    from mf4_analyzer.batch_render_style import (
+        DEFAULT_FONT_SCALE,
+        DEFAULT_TICK_DENSITY_X,
+        DEFAULT_TICK_DENSITY_Y,
+    )
     from mf4_analyzer.ui.batch_settings import BatchPanelPrefs
     from mf4_analyzer.ui.drawers.batch.output_panel import default_output_dir
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
@@ -1593,7 +1604,9 @@ def test_restore_defaults_clears_the_memory_and_resets_the_panel(qtbot, tmp_path
     sheet._output_panel._btn_restore_defaults.click()
 
     assert sheet._output_panel.render_style_params() == {
-        "tick_density_x": 14, "tick_density_y": 10, "font_scale": 1.0,
+        "tick_density_x": DEFAULT_TICK_DENSITY_X,
+        "tick_density_y": DEFAULT_TICK_DENSITY_Y,
+        "font_scale": DEFAULT_FONT_SCALE,
     }
     assert sheet.output_dir() == default_output_dir()
     assert sheet.export_data() is True
@@ -1639,7 +1652,7 @@ def test_starting_a_run_persists_panel_prefs(qtbot, tmp_path, monkeypatch):
     import pandas as pd
 
     from mf4_analyzer.batch import BatchOutput
-    from mf4_analyzer.batch_render_style import RenderStyle
+    from mf4_analyzer.batch_render_style import DEFAULT_TICK_DENSITY_X, RenderStyle
     from mf4_analyzer.io import FileData
     from mf4_analyzer.ui.drawers.batch.runner_thread import BatchRunnerThread
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
@@ -1666,7 +1679,10 @@ def test_starting_a_run_persists_panel_prefs(qtbot, tmp_path, monkeypatch):
     sheet._output_panel.apply_render_style_params(
         RenderStyle(tick_density_x=19, tick_density_y=6, font_scale=1.1).as_params()
     )
-    assert _prefs_store(tmp_path).load().render_style["tick_density_x"] == 14
+    assert (
+        _prefs_store(tmp_path).load().render_style["tick_density_x"]
+        == DEFAULT_TICK_DENSITY_X
+    )
 
     sheet._on_run_clicked()
 
