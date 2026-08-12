@@ -108,7 +108,12 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 gesture="文件区链接图标",
             ),
             QuickRow("保存会话", gesture=".tlproj 项目"),
-            QuickRow("软件说明书", gesture="右下角 📖"),
+            QuickRow(
+                "操作速查",
+                sub="底栏默认只留问号；滚动文字提示可在本面板打开「底部提示」",
+                gesture="底栏「?」或键盘 ?",
+            ),
+            QuickRow("软件说明书", gesture="状态栏右侧书本图标"),
         ),
     ),
     # 2 — 五个分析模式 (wide, spans two columns)
@@ -170,9 +175,22 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 "编辑某曲线颜色/坐标（叠加）",
                 gesture="双击曲线或其 Y 轴",
             ),
-            QuickRow("复位视图", keys=(_sc("home"),), gesture="双击"),
+            QuickRow(
+                "复位视图",
+                keys=(_sc("home"),),
+                gesture="双击",
+                sub="回到图面已绘通道范围，不是已加载文件里最长的那条",
+            ),
+            QuickRow(
+                "时间范围「全部」",
+                sub="X 轴回到图面已绘通道的最长全程，不是全局最长文件；不勾选过滤",
+                gesture="Inspector「全部」",
+            ),
             QuickRow("后退 / 前进视图", keys=(_sc("back"),)),
-            QuickRow("时域 View", sub="最多 12 个；窄窗口点「»」切换收纳的 View"),
+            QuickRow(
+                "时域 View",
+                sub="最多 12 个；窄窗口先显示编号，悬停看全名，再用「»」切换收纳的 View",
+            ),
         ),
     ),
     # 4 — 快捷键
@@ -412,7 +430,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
         rows=(
             QuickRow(
                 "图表右键",
-                sub="查看全部 · 轴范围 · 鼠标模式 · 网格 · 自定义动作",
+                sub="查看全部（已绘通道，非全局最长文件） · 轴范围 · 鼠标模式 · 网格 · 自定义动作",
             ),
             QuickRow(
                 "换绑自定义动作",

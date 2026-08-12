@@ -177,6 +177,17 @@ def test_mark_discovered_round_trips_through_qsettings():
     assert hints.discovery_hint(state).id == "chart.right_click_menu"
 
 
+def test_wwt_export_storage_is_a_shipped_discovery_hint():
+    hint = next(
+        h for h in hints.all_hints() if h.id == "channel.export_wwt_storage"
+    )
+    assert hint.surface == "discovery"
+    assert hint.ship == "now"
+    assert "WWT" in hint.text
+    assert "无损" in hint.text and "紧凑" in hint.text
+    assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
+
+
 def test_custom_action_slot_discovery_surfaces_and_retires():
     # After the higher-priority discoveries are seen, the custom-action-slot
     # tip surfaces; rebinding (marking the id) retires it.
@@ -186,6 +197,9 @@ def test_custom_action_slot_discovery_surfaces_and_retires():
         "chart.right_click_menu",
         "channel.right_click",
         "file.scope_follow",
+        # 58030e4d: landed WWT lossless/compact export; same default-mode
+        # discovery pool as custom_action_slot (priority 70 > 50).
+        "channel.export_wwt_storage",
         "view.history",
     }
     state = HintState(discovered=frozenset(seen))
@@ -318,10 +332,12 @@ def test_fft_preview_hints_match_overlay_wheel_contract():
     assert "Shift" in wheel and "Ctrl" in wheel
     assert "平移 Y" in hints.flash_tip("fft.preview_source")
     manual = by_id["fft.time_range_manual"].text
+    assert "预览" in manual and "起止" in manual
     assert "勾选" in manual and "计算" in manual
     confirm = by_id["analysis.time_range_confirm"]
     assert confirm.modes == frozenset({"fft", "fft_time", "order", "frf"})
     assert "局部" in confirm.text and "询问" in confirm.text
+    assert "勾选" in confirm.text
 
 
 def test_design_curated_ids_exist_in_registry():

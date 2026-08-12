@@ -71,7 +71,12 @@ def test_channel_editor_inputs_fill_row_no_right_gutter(qapp, qtbot):
     panel width (no 178px cap, no ghost-column gutter on the right). After
     the 2026-06-03 fill pass, inputs are ``QSizePolicy.Expanding`` with the
     input grid column stretched, so their resolved width tracks the panel
-    inner width rather than sitting at the old 178px cap."""
+    inner width rather than sitting at the old 178px cap.
+
+    422cbc87 added a pinnable ``?`` on the single-op parameter row (same
+    cell as the expression editor). The row still fills to combo_src's
+    right edge; ``spin_p`` itself stops at the badge, by design.
+    """
     from PyQt5.QtCore import QCoreApplication
     from PyQt5.QtWidgets import QSizePolicy
     from mf4_analyzer.ui.drawers.channel_editor_drawer import ChannelEditorDrawer
@@ -122,10 +127,14 @@ def test_channel_editor_inputs_fill_row_no_right_gutter(qapp, qtbot):
             return top_left.x() + widget.width()
 
         expected_right = right_in_drawer(inner.combo_src)
+        # Full-width inputs still share combo_src's right edge. ``spin_p`` is
+        # no longer one of them: 422cbc87 put a pinnable ``?`` in the same
+        # grid cell (18px badge + 6px spacing), matching the expression row.
         for widget in (
             inner.combo_file,
             inner.combo_op,
-            inner.spin_p,
+            inner._param_row,
+            inner.btn_param_help,
             inner.combo_a,
             inner.combo_op2,
             inner.combo_b,
@@ -137,6 +146,18 @@ def test_channel_editor_inputs_fill_row_no_right_gutter(qapp, qtbot):
                 f"{right_in_drawer(widget)} should align with input column "
                 f"right edge {expected_right}"
             )
+        # The spin fills the cell up to the badge, not past it.
+        param_inset = (
+            inner.btn_param_help.width()
+            + inner._param_row.layout().spacing()
+        )
+        assert abs(
+            right_in_drawer(inner.spin_p) - (expected_right - param_inset)
+        ) <= 1, (
+            f"spin_p right edge {right_in_drawer(inner.spin_p)} should sit "
+            f"{param_inset}px left of the input column ({expected_right}) "
+            f"so the parameter ? badge owns the trailing edge"
+        )
     finally:
         qapp.setStyleSheet(old_sheet)
 

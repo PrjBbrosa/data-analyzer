@@ -284,3 +284,38 @@ def test_catalog_states_file_remove_action_is_available_in_every_mode():
 def test_catalog_says_how_to_read_a_truncated_channel_name():
     row = _row_by_desc("看通道全名")
     assert "悬停" in row.gesture
+
+
+def test_catalog_view_all_frames_plotted_channels_not_longest_file():
+    """Inspector「全部」and Home frame plotted ink, not the longest loaded file."""
+    row = _row_by_desc("时间范围「全部」")
+    assert "已绘" in row.sub
+    assert "最长文件" in row.sub or "全局" in row.sub
+    assert "勾选" in row.sub or "过滤" in row.sub
+    assert "全部" in row.gesture
+    home = _row_by_desc("复位视图")
+    assert "已绘" in home.sub
+    menu = _row_by_desc("图表右键")
+    assert "已绘" in menu.sub
+
+
+def test_catalog_bottom_bar_is_question_mark_quickref():
+    """27a479c2: the status hint bar keeps the ? glyph; rotating copy is opt-in."""
+    row = _row_by_desc("操作速查")
+    assert "?" in row.gesture
+    assert "问号" in row.sub
+    assert "底部提示" in row.sub
+    manual = _row_by_desc("软件说明书")
+    assert "状态栏" in manual.gesture
+    assert "📖" not in manual.gesture
+
+
+def test_catalog_channel_editor_create_and_param_help():
+    """422cbc87: both forms say「创建通道」; sliding-average window is 样点数."""
+    group = next(g for g in quickref.QUICKREF if g.title == "通道编辑（派生通道）")
+    haystack = " ".join(f"{r.desc} {r.sub} {r.gesture}" for r in group.rows)
+    assert haystack.count("创建通道") >= 2
+    assert "窗长" in haystack and "样点" in haystack
+    assert "?" in haystack
+    time_views = _row_by_desc("时域 View")
+    assert "悬停" in time_views.sub and "全名" in time_views.sub
