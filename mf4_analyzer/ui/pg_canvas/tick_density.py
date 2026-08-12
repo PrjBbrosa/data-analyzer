@@ -39,8 +39,8 @@ class TickDensityController(_CanvasBackref):
 
     def __init__(self, canvas):
         super().__init__(canvas)
-        # Defaults mirror PersistentTop defaults.
-        self.density = (10, 10)
+        # Defaults mirror DEFAULT_CHART_TICK_DENSITY / 「密」preset.
+        self.density = (20, 15)
         self.ticks_cache = {}
 
     def set_tick_density(self, x, y):

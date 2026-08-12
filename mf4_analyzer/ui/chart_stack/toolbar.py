@@ -9,14 +9,19 @@ from PyQt5.QtWidgets import (
 
 from ._helpers import _grab_pixmap_hidpi
 
+# Interactive chart default = 「密」preset. View restore / Inspector / canvas
+# controllers must share this; batch export keeps its own defaults.
+DEFAULT_CHART_TICK_DENSITY = (20, 15)
+
 
 class _TickDensityPopover(QFrame):
     density_changed = pyqtSignal(int, int)
 
+    _DEFAULT = DEFAULT_CHART_TICK_DENSITY
     _PRESETS = {
         "疏": (6, 5),
         "标准": (10, 10),
-        "密": (20, 15),
+        "密": DEFAULT_CHART_TICK_DENSITY,
     }
 
     def __init__(self, parent=None):
@@ -74,18 +79,23 @@ class _TickDensityPopover(QFrame):
             preset_lay.addWidget(btn)
         lay.addWidget(self._preset_host)
 
+        default_x, default_y = self._DEFAULT
         self._x_row, self._slider_x, self._spin_x = self._build_axis_row(
-            "X", 3, 30, 10
+            "X", 3, 30, default_x
         )
         self._y_row, self._slider_y, self._spin_y = self._build_axis_row(
-            "Y", 3, 20, 10
+            "Y", 3, 20, default_y
         )
         lay.addWidget(self._x_row)
         lay.addWidget(self._y_row)
 
-        self._reset_btn = QPushButton("恢复默认 10 / 10", self._surface)
+        self._reset_btn = QPushButton(
+            f"恢复默认 {default_x} / {default_y}", self._surface
+        )
         self._reset_btn.setObjectName("tickDensityResetButton")
-        self._reset_btn.clicked.connect(lambda: self.set_density(10, 10, emit=True))
+        self._reset_btn.clicked.connect(
+            lambda: self.set_density(default_x, default_y, emit=True)
+        )
         lay.addWidget(self._reset_btn)
 
         self._slider_x.valueChanged.connect(
@@ -100,7 +110,8 @@ class _TickDensityPopover(QFrame):
         self._spin_y.valueChanged.connect(
             lambda value: self.set_density(self._spin_x.value(), value, emit=True)
         )
-        self.set_density(10, 10, emit=False)
+        # Seed sliders + activate the matching preset (「密」).
+        self.set_density(default_x, default_y, emit=False)
 
     def _build_axis_row(self, label, minimum, maximum, value):
         row = QFrame(self._surface)
@@ -158,6 +169,13 @@ class _TickDensityPopover(QFrame):
         try:
             for label, btn in self._preset_buttons.items():
                 btn.setChecked(self._PRESETS[label] == (x, y))
+                # Programmatic setChecked can leave QSS :checked stale until
+                # the next hover; force a polish so 「密」looks activated on open.
+                style = btn.style()
+                if style is not None:
+                    style.unpolish(btn)
+                    style.polish(btn)
+                btn.update()
         finally:
             self._preset_group.setExclusive(True)
 

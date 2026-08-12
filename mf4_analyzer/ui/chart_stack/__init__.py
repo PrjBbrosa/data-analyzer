@@ -37,6 +37,7 @@ from .cursor_pill import (
     _CURSOR_HTML_SEP,
 )
 from .toolbar import (
+    DEFAULT_CHART_TICK_DENSITY,
     PgNavigationToolbar,
     _TickDensityPopover,
 )
@@ -60,6 +61,7 @@ __all__ = [
     "_STATS_STRIP_ENABLED",
     # Additional helpers (re-exported for completeness)
     "PgNavigationToolbar",
+    "DEFAULT_CHART_TICK_DENSITY",
     "_TickDensityPopover",
     "_QualityStatusIndicator",
     "_grab_pixmap_hidpi",

@@ -1891,7 +1891,8 @@ class MainWindow(
 
         Aligns with Time-Domain: pan/zoom only drafts the spinboxes. The
         analysis window is armed only while「使用选定时间范围」is checked
-        (or via explicit actions like「最大」that call set_range_from_span).
+        (or via explicit arming such as FRF「取时域范围」/ compute confirm).
+        「全部」is view-all only and does not arm the checkbox.
         """
         if self.chart_stack.current_mode() != 'fft':
             return False
@@ -1911,68 +1912,77 @@ class MainWindow(
         return True
 
     def _time_data_extent(self):
-        hi = 0.0
+        """Return ``(lo, hi)`` covering the longest loaded time base.
+
+        Multiple logical sources (e.g. WWT splits) may carry different lengths;
+        use the union of finite starts/ends so the view reaches the longest
+        recording. Degenerate / missing data returns ``(0.0, 0.0)``.
+        """
+        lo = None
+        hi = None
         for fd in self.files.values():
             times = getattr(fd, 'time_array', None)
             if times is None or len(times) == 0:
                 continue
             try:
-                candidate = float(times[-1])
+                t0 = float(times[0])
+                t1 = float(times[-1])
             except Exception:
                 continue
-            if np.isfinite(candidate):
-                hi = max(hi, candidate)
-        return 0.0, hi
+            if not (np.isfinite(t0) and np.isfinite(t1)):
+                continue
+            lo = t0 if lo is None else min(lo, t0)
+            hi = t1 if hi is None else max(hi, t1)
+        if lo is None or hi is None:
+            return 0.0, 0.0
+        return float(lo), float(hi)
 
     def _on_time_range_max_requested(self):
-        """「最大」按钮：把时间范围设为整段数据 [0, 全程] 并勾选「使用选定时间
-        范围」，再按当前模式重绘/刷新。
+        """「全部」：查看全部 — 复位可见时间轴到最长时基全程。
 
-        数据范围直接来自已加载文件的 time_array；不要从 spinbox limits
-        反推，因为 limits 是 UI 状态，可能暂时滞后。这里特意走
-        set_range_from_span（它会 blockSignals 地勾选 chk_range 并按当前模式
-        记录 per-mode 勾选状态），从而避开 _on_time_range_enabled_changed
-        —— 后者会用画布当前可见 xlim 覆盖 spinbox，正是我们要避免的。
+        只草稿 spinbox（与未勾选时的视口同步一致），**不**勾选「使用选定
+        时间范围」，也**不**写入 ``pane.time_range`` / View 过滤窗口。
+        数据范围直接来自已加载文件的 time_array，不从可能滞后的 spinbox
+        limits 反推。
         """
         top = self.inspector.top
         lo, hi = self._time_data_extent()
         if not (hi > lo):          # 还没有数据 / 没有可用的整段范围
             return
-        # Keep spinbox limits fresh before setting values; stale/narrow limits
+        # Keep spinbox limits fresh before drafting values; stale/narrow limits
         # would otherwise clamp the data extent back to the old UI maximum.
         top.set_range_limits(lo, hi)
-        # 同步填入 [lo, hi] 并（blockSignals 地）勾选，避免可见 xlim 覆盖。
-        top.set_range_from_span(lo, hi)
+        top.set_range_values(lo, hi)
         mode = self.chart_stack.current_mode()
-        if mode in self.analysis_managers:
-            manager = self.analysis_managers[mode]
-            state = manager.get(manager.active)
-            page = self._analysis_page(mode)
-            pane_idx = page.focused_index()
-            before = self._normalize_analysis_time_range(
-                state.panes[pane_idx].time_range
-            )
-            self._capture_analysis_time_range(mode, state, pane_idx=pane_idx)
-            if mode == 'frf' and state.panes[pane_idx].time_range != before:
-                self._dirty_frf_pane(state, pane_idx, clear_effective=True)
-            if mode == 'fft':
-                # analysis_managers early-return used to skip the dead
-                # ``elif mode == 'fft'`` refresh below; keep preview in sync
-                # with the armed full-extent window.
-                self._refresh_fft_time_preview(clear_spectrum=False)
-            return
-        # 按当前 Time 模式应用（与现有处理器的尾部保持一致）。
         canvas = self.chart_stack.focused_canvas()
-        idx = self._view_index_for_canvas(canvas)
-        if idx is not None and 0 <= idx < len(self.view_manager.views):
-            self._capture_range_change_into_view(
-                self.view_manager.get(idx), canvas
-            )
         if mode == 'time':
-            if self.files and self.navigator.get_checked_channels():
-                self._replot_canvas_for_view(idx, canvas)
-        # fft_time / order: 仅做暂存即可，其计算是手动触发的
-        # （与拖拽预览路径一致）。
+            reset = getattr(canvas, 'reset_view_to_data_extents', None)
+            if callable(reset):
+                reset()
+            # Expand X to the longest loaded time base when plotted curves are
+            # a shorter subset (multi-source length).
+            set_xlim = getattr(canvas, 'set_xlim', None)
+            if callable(set_xlim):
+                set_xlim(lo, hi)
+            return
+        if mode == 'fft':
+            reset = getattr(canvas, 'reset_view_to_data_extents', None)
+            if callable(reset):
+                reset()
+            # Prefer the longest file extent on the time-preview strip when the
+            # preview's own combined bounds are shorter.
+            preview_xlim = getattr(canvas, 'set_time_preview_xlim', None)
+            if callable(preview_xlim):
+                preview_xlim(lo, hi)
+            else:
+                plot_time = getattr(canvas, '_plot_time', None)
+                if plot_time is not None and hasattr(plot_time, 'setXRange'):
+                    try:
+                        plot_time.setXRange(float(lo), float(hi), padding=0)
+                    except Exception:
+                        pass
+            return
+        # fft_time / order / frf: draft-only; compute still uses checkbox.
 
     def _on_time_range_enabled_changed(self, enabled):
         mode = self.chart_stack.current_mode()

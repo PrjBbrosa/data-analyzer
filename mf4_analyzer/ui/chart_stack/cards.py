@@ -300,7 +300,10 @@ class _ChartCard(QWidget):
         )
         self._tick_density_btn.setIconSize(QSize(18, 18))
         self._tick_density_btn.setFixedSize(QSize(32, 32))
-        self._tick_density_btn.setToolTip("刻度密度 X10 / Y10")
+        default_x, default_y = self._tick_density_popover.density()
+        self._tick_density_btn.setToolTip(
+            f"刻度密度 X{int(default_x)} / Y{int(default_y)}"
+        )
         self._tick_density_btn.setFocusPolicy(Qt.NoFocus)
         self._tick_density_btn.setAutoRaise(True)
         self._tick_density_btn.clicked.connect(self._show_tick_density_popover)

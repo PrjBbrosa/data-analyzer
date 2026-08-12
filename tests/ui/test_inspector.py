@@ -1710,7 +1710,7 @@ def test_persistent_top_no_longer_renders_tick_density_group(qapp):
     assert parent_gb is None
     assert pt.spin_xt.isHidden() is True
     assert pt.spin_yt.isHidden() is True
-    assert pt.tick_density() == (10, 10)
+    assert pt.tick_density() == (20, 15)
 
 
 def test_inspector_exposes_fft_time_context(qtbot):
@@ -3851,7 +3851,7 @@ def test_fft_time_preview_honors_selected_time_range(qtbot):
 #
 # Bug: the SINGLE shared ``chk_range`` QCheckBox is reparented across
 # time/fft/fft_time/order modes (inspector._place_range_group_for_mode).
-# Explicit arming (「最大」/ FRF「取时域范围」) routes through
+# Explicit arming (FRF「取时域范围」/ compute confirm) routes through
 # set_range_from_span, which force-checks the box; because the instance is
 # shared, the checked state used to leak into Time-Domain on switch-back.
 # Preview pan/zoom no longer calls set_range_from_span (manual check, same
@@ -3870,7 +3870,7 @@ def test_fft_preview_span_does_not_leak_chk_range_into_time(qapp):
     insp.set_mode('time')
     assert not top.range_enabled()
 
-    # Enter FFT mode and explicitly arm a window (「最大」/ tests use this API).
+    # Enter FFT mode and explicitly arm a window (tests use set_range_from_span).
     insp.set_mode('fft')
     top.set_range_from_span(2.0, 4.0)
     assert top.range_enabled()
@@ -4023,21 +4023,21 @@ def test_fft_uncheck_range_clears_pane_and_refreshes_preview(qapp, qtbot):
     assert reset_calls == [True]
 
 
-# ---- 「最大」 (maximize time range) button ----
+# ---- 「全部」 (view-all time axis) button ----
 #
-# A flat 「最大」 button sits on the right of the 「使用选定时间范围」 row.
-# Clicking it fills 开始/结束 to the full data extent [0, 全程时长] AND ticks
-# the range checkbox, then (in MainWindow) applies for the current mode. The
-# widget itself only emits ``max_range_requested``; the staging is done via
-# ``set_range_from_span`` (which records per-mode checked intent).
+# A flat 「全部」 button sits on the right of the 「使用选定时间范围」 row.
+# Clicking it drafts 开始/结束 to the longest data extent and resets the
+# visible X axis — without checking the range checkbox. The widget itself
+# only emits ``max_range_requested``; MainWindow owns the view-all apply.
 
 
-def test_max_range_button_fills_full_extent_and_enables(qapp, qtbot):
-    """Clicking 「最大」 stages the full [lo, hi] extent into the spinboxes and
-    enables the range filter — even from a partial, unchecked selection.
+def test_max_range_button_fills_full_extent_without_enabling(qapp, qtbot):
+    """Clicking 「全部」 drafts the full [lo, hi] extent into the spinboxes
+    but does NOT enable the range filter.
 
     The widget itself only emits ``max_range_requested``; the owner
-    (MainWindow) does the staging via ``set_range_from_span``.
+    (MainWindow) does the staging via ``set_range_values`` (not
+    ``set_range_from_span``).
     """
     from types import SimpleNamespace
 
@@ -4055,7 +4055,7 @@ def test_max_range_button_fills_full_extent_and_enables(qapp, qtbot):
     win.inspector.set_mode('time')
 
     # Start from a stale/narrow UI limit to prove the real slot reads the data
-    # extent and refreshes limits before filling the range.
+    # extent and refreshes limits before filling the draft values.
     top.set_range_limits(0, 50)
     top.set_range_values(10, 20)
     top.chk_range.setChecked(False)
@@ -4067,7 +4067,32 @@ def test_max_range_button_fills_full_extent_and_enables(qapp, qtbot):
 
     assert top.range_values() == (0.0, 100.0)
     assert top.spin_end.maximum() == 100.0
-    assert top.range_enabled() is True
+    assert top.range_enabled() is False
+
+
+def test_max_range_button_uses_longest_time_base(qapp, qtbot):
+    """With multiple loaded time bases, 「全部」 drafts the longest end."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    top = win.inspector.top
+    win.files = {
+        "short": SimpleNamespace(time_array=np.array([0.0, 10.0], dtype=float)),
+        "long": SimpleNamespace(time_array=np.array([0.0, 100.0], dtype=float)),
+    }
+    win.chart_stack.set_mode('time')
+    win.inspector.set_mode('time')
+    top.chk_range.setChecked(False)
+
+    top.btn_range_max.click()
+
+    assert top.range_values() == (0.0, 100.0)
+    assert top.range_enabled() is False
 
 
 def test_max_range_button_emits_signal(qapp):
@@ -4083,14 +4108,16 @@ def test_max_range_button_emits_signal(qapp):
 
 
 def test_max_range_button_lives_on_chk_range_row(qapp):
-    """The 「最大」 button shares the host row with chk_range; the checkbox row
+    """The 「全部」 button shares the host row with chk_range; the checkbox row
     itself stays visible regardless of checked state, and the button carries
     the exact spec'd label + tooltip."""
     from mf4_analyzer.ui.inspector_sections import PersistentTop
 
     top = PersistentTop()
-    assert top.btn_range_max.text() == "最大"
-    assert top.btn_range_max.toolTip() == "将时间范围设为整段数据（0 ~ 全程）"
+    assert top.btn_range_max.text() == "全部"
+    assert top.btn_range_max.toolTip() == (
+        "查看全部：X 轴回到最长时基全程（不启用「使用选定时间范围」）"
+    )
     # chk_range and btn_range_max share the same host parent.
     assert top.btn_range_max.parentWidget() is top.chk_range.parentWidget()
     # The checkbox row stays visible even when unchecked.
@@ -4103,7 +4130,7 @@ def test_time_range_toggle_row_background_tracks_parent_panel(qapp, qtbot):
 
     This uses a deliberately high-contrast stylesheet: all generic QWidget
     children are grey, while QGroupBox panels are green. The blank stretch
-    between the checkbox label and 「最大」 should sample the panel color.
+    between the checkbox label and 「全部」 should sample the panel color.
     """
     from PyQt5.QtCore import QPoint
     from PyQt5.QtWidgets import QLabel

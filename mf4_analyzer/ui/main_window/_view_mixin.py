@@ -10,6 +10,7 @@ from ..time_xaxis import (
     CustomXAxisSpec,
     selection_payload,
 )
+from ..chart_stack.toolbar import DEFAULT_CHART_TICK_DENSITY
 
 
 class ViewMixin:
@@ -306,9 +307,10 @@ class ViewMixin:
             canvas.restore_visible_xlim(state.xlim)
             canvas.restore_visible_ylims(state.ylims)
             tick_opts = (state.axis_opts or {}).get('tick_density') or {}
+            default_x, default_y = DEFAULT_CHART_TICK_DENSITY
             canvas.set_tick_density(
-                int(tick_opts.get('x', 10)),
-                int(tick_opts.get('y', 6)),
+                int(tick_opts.get('x', default_x)),
+                int(tick_opts.get('y', default_y)),
             )
         finally:
             self._applying_view = old_applying_view
@@ -472,8 +474,9 @@ class ViewMixin:
             update_xaxis_row(top.combo_xaxis.currentIndex())
 
         tick_opts = axis_opts.get('tick_density') or {}
-        xt = tick_opts.get('x', 10)
-        yt = tick_opts.get('y', 6)
+        default_x, default_y = DEFAULT_CHART_TICK_DENSITY
+        xt = tick_opts.get('x', default_x)
+        yt = tick_opts.get('y', default_y)
         self._set_tick_density_controls_silent(xt, yt)
 
     def _applied_xaxis_opts(self):

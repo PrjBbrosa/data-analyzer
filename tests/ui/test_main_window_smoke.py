@@ -2383,12 +2383,11 @@ def test_channel_selection_change_preserves_xlim(qapp, qtbot, loaded_csv):
     assert nhi == pytest.approx(t1, abs=1e-6)
 
 
-def test_max_range_button_sets_full_extent_and_replots_time_mode(
+def test_max_range_button_sets_full_extent_without_arming_time_mode(
     qapp, qtbot, loaded_csv
 ):
-    """「最大」 in time mode: emitting ``max_range_requested`` with a file loaded
-    and a channel checked stages the full [0, 全程] extent, enables the range
-    filter, and triggers a replot without error."""
+    """「全部」 in time mode: drafts [0, 全程], leaves the range filter off,
+    and resets the visible X axis without error."""
     import pytest
 
     w, fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
@@ -2407,7 +2406,7 @@ def test_max_range_button_sets_full_extent_and_replots_time_mode(
     data_hi = float(w.files[fid].time_array[-1])
     assert data_hi > data_lo  # data extent is available after load
 
-    # Simulate stale/narrow spinbox limits. The Max button must fill the data
+    # Simulate stale/narrow spinbox limits. The button must fill the data
     # extent directly, not merely echo whatever limits happen to be installed.
     stale_hi = data_hi / 2.0
     top.set_range_limits(data_lo, stale_hi)
@@ -2422,9 +2421,12 @@ def test_max_range_button_sets_full_extent_and_replots_time_mode(
     assert rlo == pytest.approx(data_lo, abs=1e-6)
     assert rhi == pytest.approx(data_hi, abs=1e-6)
     assert top.spin_end.maximum() == pytest.approx(data_hi, abs=1e-6)
-    assert top.range_enabled() is True
+    assert top.range_enabled() is False
     # A replot must have produced a live primary axis (no exception raised).
     assert w.canvas_time._primary_xaxis_ax is not None
+    xlim = w.canvas_time._primary_xaxis_ax.get_xlim()
+    assert xlim[0] == pytest.approx(data_lo, abs=1e-3)
+    assert xlim[1] == pytest.approx(data_hi, abs=1e-3)
 
 
 def test_max_range_button_noops_without_data_extent(qapp, qtbot):

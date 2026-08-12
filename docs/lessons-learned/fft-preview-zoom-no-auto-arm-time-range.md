@@ -25,7 +25,8 @@ unchecking did not restore a full-span preview.
 
 Rule: FFT preview pan/zoom only `set_range_values` (draft start/end). Write
 `pane.time_range` only while `range_enabled()`. Keep `set_range_from_span` for
-explicit arming (「最大」, FRF「取时域范围»). On FFT checkbox toggle, capture
+explicit arming (FRF「取时域范围」, compute confirm). 「全部」is view-all only
+and must not call `set_range_from_span`. On FFT checkbox toggle, capture
 then refresh the time preview; on uncheck also reset preview X to data extents.
 
 Verification:

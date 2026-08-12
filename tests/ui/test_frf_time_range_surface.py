@@ -45,12 +45,15 @@ def test_frf_range_checkbox_only_captures_its_visible_inputs(qtbot):
     assert pane.time_range is None
 
 
-def test_frf_max_uses_the_shared_range_without_mutating_the_time_view(qtbot):
+def test_frf_view_all_does_not_arm_range_or_mutate_time_view(qtbot):
     win, pane = _window_with_pair(qtbot)
     win.view_manager.get(0).time_range = (0.1, 0.3)
+    win.inspector.top.chk_range.setChecked(False)
     win._on_time_range_max_requested()
 
-    assert pane.time_range == (0.0, 1.999)
+    assert pane.time_range is None
+    assert win.inspector.top.range_enabled() is False
+    assert win.inspector.top.range_values() == (0.0, 1.999)
     assert win.view_manager.get(0).time_range == (0.1, 0.3)
 
 

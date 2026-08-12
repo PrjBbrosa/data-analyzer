@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
 
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
+from ..chart_stack.toolbar import DEFAULT_CHART_TICK_DENSITY
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 from ._helpers import (
     _SHORT_FIELD_MAX_WIDTH,
@@ -48,8 +49,8 @@ class PersistentTop(QWidget):
 
     xaxis_apply_requested = pyqtSignal()
     tick_density_changed = pyqtSignal(int, int)
-    # 「最大」按钮：将时间范围设为整段数据并勾选「使用选定时间范围」。
-    # 控件只负责发信号，由 MainWindow 按当前模式负责重绘/刷新。
+    # 「全部」按钮：查看全部（复位到最长时基全程）；不勾选「使用选定时间范围」。
+    # 控件只负责发信号，由 MainWindow 按当前模式复位视口。
     max_range_requested = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -158,13 +159,14 @@ class PersistentTop(QWidget):
         self.chk_range.setToolTip(
             "勾选后，只使用开始到结束之间的数据；取消勾选则使用全时段。"
         )
-        # 「最大」按钮停靠在勾选框这一行的右端：一键把开始/结束填成整段数据
-        # [0, 全程时长] 并勾选「使用选定时间范围」。用扁平 QToolButton 复用
-        # inspectorCollapser 的轻量观感。
+        # 「全部」停靠在勾选框这一行右端：查看全部（最长时基），不启用过滤。
+        # 用扁平 QToolButton 复用 inspectorCollapser 的轻量观感。
         self.btn_range_max = QToolButton(self)
         self.btn_range_max.setObjectName("inspectorRangeMax")
-        self.btn_range_max.setText("最大")
-        self.btn_range_max.setToolTip("将时间范围设为整段数据（0 ~ 全程）")
+        self.btn_range_max.setText("全部")
+        self.btn_range_max.setToolTip(
+            "查看全部：X 轴回到最长时基全程（不启用「使用选定时间范围」）"
+        )
         self.btn_range_max.setAutoRaise(True)
         self.btn_range_max.setCursor(Qt.PointingHandCursor)
         self.btn_range_max.setStyleSheet(
@@ -174,7 +176,7 @@ class PersistentTop(QWidget):
             "}"
             "QToolButton#inspectorRangeMax:hover { background: #eef2f7; }"
         )
-        # Host row: [chk_range][stretch][最大].
+        # Host row: [chk_range][stretch][全部].
         self._chk_range_host = QWidget()
         self._chk_range_host.setObjectName("timeRangeToggleRow")
         self._chk_range_host.setAutoFillBackground(False)
@@ -213,12 +215,13 @@ class PersistentTop(QWidget):
         # using ``PersistentTop.tick_density()`` without a broad rewrite.
         self.spin_xt = _no_buttons(QSpinBox(self))
         self.spin_xt.setRange(3, 30)
-        self.spin_xt.setValue(10)
+        default_x, default_y = DEFAULT_CHART_TICK_DENSITY
+        self.spin_xt.setValue(default_x)
         self.spin_xt.setToolTip("X 轴主刻度的大致数量，范围 3–30。")
         self.spin_xt.hide()
         self.spin_yt = _no_buttons(QSpinBox(self))
         self.spin_yt.setRange(3, 20)
-        self.spin_yt.setValue(10)
+        self.spin_yt.setValue(default_y)
         self.spin_yt.setToolTip("Y 轴主刻度的大致数量，范围 3–20。")
         self.spin_yt.hide()
 
@@ -269,7 +272,7 @@ class PersistentTop(QWidget):
             self._update_xaxis_channel_row_visible
         )
         self.chk_range.toggled.connect(self._update_range_rows_visible)
-        # 「最大」按钮只转发信号；MainWindow 负责按当前模式重绘/刷新。
+        # 「全部」只转发信号；MainWindow 负责按当前模式复位视口。
         self.btn_range_max.clicked.connect(self.max_range_requested)
         self.btn_apply_xaxis.clicked.connect(self.xaxis_apply_requested)
         self.spin_xt.valueChanged.connect(self._emit_ticks)
@@ -416,12 +419,13 @@ class PersistentTop(QWidget):
             self.spin_end.blockSignals(old_end)
 
     def set_range_from_span(self, xmin, xmax):
-        # Explicit arming path (「最大」, FRF「取时域范围」, tests). Stages
-        # start/end AND enables the range filter so the next analysis compute
-        # (which reads range_enabled()) uses the window. Preview pan/zoom does
-        # NOT call this — it only drafts via set_range_values (manual check,
-        # same as Time-Domain). The checked flag is recorded against the
-        # CURRENT mode so it does not leak into Time-Domain on mode switch.
+        # Explicit arming path (FRF「取时域范围」, compute confirm, tests).
+        # Stages start/end AND enables the range filter so the next analysis
+        # compute (which reads range_enabled()) uses the window. 「全部」/
+        # preview pan/zoom do NOT call this — they only draft via
+        # set_range_values (manual check, same as Time-Domain). The checked
+        # flag is recorded against the CURRENT mode so it does not leak into
+        # Time-Domain on mode switch.
         self.set_range_values(xmin, xmax)
         old = self.chk_range.blockSignals(True)
         try:

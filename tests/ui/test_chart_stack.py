@@ -2296,9 +2296,16 @@ def test_chart_cards_have_tick_density_popout_button(qapp, qtbot):
             "标准": (10, 10),
             "密": (20, 15),
         }
-        assert pop.density() == (10, 10)
-        assert pop._reset_btn.text() == "恢复默认 10 / 10"
-        assert card._tick_density_btn.toolTip() == "刻度密度 X10 / Y10"
+        assert pop._DEFAULT == (20, 15)
+        assert pop.density() == (20, 15)
+        assert pop._preset_buttons["密"].isChecked()
+        assert not pop._preset_buttons["疏"].isChecked()
+        assert not pop._preset_buttons["标准"].isChecked()
+        assert pop._reset_btn.text() == "恢复默认 20 / 15"
+        assert card._tick_density_btn.toolTip() == "刻度密度 X20 / Y15"
+        # Checked preset must look activated (blue select chrome), not the
+        # muted white pill that used to read as "nothing selected".
+        assert pop._preset_buttons["密"].isChecked() is True
         layout = pop._surface.layout()
         assert layout.indexOf(pop._preset_host) < layout.indexOf(pop._x_row)
         assert layout.indexOf(pop._preset_host) < layout.indexOf(pop._y_row)
