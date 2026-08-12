@@ -49,7 +49,7 @@ class PersistentTop(QWidget):
 
     xaxis_apply_requested = pyqtSignal()
     tick_density_changed = pyqtSignal(int, int)
-    # 「全部」按钮：查看全部（复位到最长时基全程）；不勾选「使用选定时间范围」。
+    # 「全部」按钮：查看全部（复位到已绘制通道最长全程）；不勾选「使用选定时间范围」。
     # 控件只负责发信号，由 MainWindow 按当前模式复位视口。
     max_range_requested = pyqtSignal()
 
@@ -159,13 +159,14 @@ class PersistentTop(QWidget):
         self.chk_range.setToolTip(
             "勾选后，只使用开始到结束之间的数据；取消勾选则使用全时段。"
         )
-        # 「全部」停靠在勾选框这一行右端：查看全部（最长时基），不启用过滤。
+        # 「全部」停靠在勾选框这一行右端：查看全部（已绘制通道最长），不启用过滤。
         # 用扁平 QToolButton 复用 inspectorCollapser 的轻量观感。
         self.btn_range_max = QToolButton(self)
         self.btn_range_max.setObjectName("inspectorRangeMax")
         self.btn_range_max.setText("全部")
         self.btn_range_max.setToolTip(
-            "查看全部：X 轴回到最长时基全程（不启用「使用选定时间范围」）"
+            "查看全部：X 轴回到图面已绘制通道的最长全程"
+            "（不启用「使用选定时间范围」）"
         )
         self.btn_range_max.setAutoRaise(True)
         self.btn_range_max.setCursor(Qt.PointingHandCursor)

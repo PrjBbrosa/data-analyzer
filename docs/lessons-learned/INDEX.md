@@ -159,6 +159,7 @@ lesson by default.
 | [QSS Combined qproperty Flags Need Quotes](qss-qproperty-combined-flags-need-quotes.md) | Editing `mf4_analyzer/ui_kit/style.qss` (or any app-wide QSS template), | See lesson |
 | [FFT Preview Zoom Does Not Auto-Arm Time Range](fft-preview-zoom-no-auto-arm-time-range.md) | Changing FFT time-preview pan/zoom wiring, shared `chk_range` | See lesson |
 | [Confirm Unchecked Local Time Range Before Compute](analysis-compute-confirm-unchecked-local-range.md) | Wiring analysis compute entry points (`do_fft` / `do_fft_time` / | See lesson |
+| [「全部」用图面已绘制通道时长，不用通道树最长加载文件](time-range-all-uses-plotted-extent.md) | Changing Inspector「全部」/ time-range max, `_time_data_extent`, or | See lesson |
 
 ## Selection Rules
 

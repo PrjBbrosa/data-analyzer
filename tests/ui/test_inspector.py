@@ -4071,7 +4071,7 @@ def test_max_range_button_fills_full_extent_without_enabling(qapp, qtbot):
 
 
 def test_max_range_button_uses_longest_time_base(qapp, qtbot):
-    """With multiple loaded time bases, 「全部」 drafts the longest end."""
+    """With nothing plotted, 「全部」falls back to the longest loaded file."""
     from types import SimpleNamespace
 
     import numpy as np
@@ -4092,6 +4092,36 @@ def test_max_range_button_uses_longest_time_base(qapp, qtbot):
     top.btn_range_max.click()
 
     assert top.range_values() == (0.0, 100.0)
+    assert top.range_enabled() is False
+
+
+def test_max_range_button_uses_plotted_not_longest_loaded(qapp, qtbot):
+    """「全部」frames to plotted/checked channels, not a longer unchecked file."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    top = win.inspector.top
+    win.files = {
+        "short": SimpleNamespace(time_array=np.array([0.0, 10.0], dtype=float)),
+        "long": SimpleNamespace(time_array=np.array([0.0, 100.0], dtype=float)),
+    }
+    win.chart_stack.set_mode('time')
+    win.inspector.set_mode('time')
+    top.chk_range.setChecked(False)
+
+    # Only the short source is "plotted" (checked in the navigator).
+    win.navigator.get_checked_channels = lambda: [
+        ("short", "ch", "#2563eb"),
+    ]
+
+    top.btn_range_max.click()
+
+    assert top.range_values() == (0.0, 10.0)
     assert top.range_enabled() is False
 
 
@@ -4116,7 +4146,8 @@ def test_max_range_button_lives_on_chk_range_row(qapp):
     top = PersistentTop()
     assert top.btn_range_max.text() == "全部"
     assert top.btn_range_max.toolTip() == (
-        "查看全部：X 轴回到最长时基全程（不启用「使用选定时间范围」）"
+        "查看全部：X 轴回到图面已绘制通道的最长全程"
+        "（不启用「使用选定时间范围」）"
     )
     # chk_range and btn_range_max share the same host parent.
     assert top.btn_range_max.parentWidget() is top.chk_range.parentWidget()

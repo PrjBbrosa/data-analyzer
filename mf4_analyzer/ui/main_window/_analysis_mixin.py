@@ -447,9 +447,10 @@ class AnalysisMixin:
         """Return ``(lo, hi)`` when start/end is an unchecked local draft.
 
         A draft is "local" when「使用选定时间范围」is off and the spinbox span
-        is a proper subset of the loaded data extent (beyond a 1% tolerance).
-        Returns ``None`` when already armed, invalid, or ≈ full extent — those
-        cases should not interrupt compute with a confirm dialog.
+        is a proper subset of the **plotted** data extent (beyond a 1%
+        tolerance). Returns ``None`` when already armed, invalid, or ≈ full
+        plotted extent — those cases should not interrupt compute with a
+        confirm dialog.
         """
         top = self.inspector.top
         if top.range_enabled():
@@ -461,7 +462,9 @@ class AnalysisMixin:
             return None
         if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
             return None
-        extent = getattr(self, '_time_data_extent', None)
+        extent = getattr(self, '_plotted_time_extent', None) or getattr(
+            self, '_time_data_extent', None
+        )
         if not callable(extent):
             return None
         full_lo, full_hi = extent()

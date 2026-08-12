@@ -1912,11 +1912,10 @@ class MainWindow(
         return True
 
     def _time_data_extent(self):
-        """Return ``(lo, hi)`` covering the longest loaded time base.
+        """Return ``(lo, hi)`` covering every loaded file's time base.
 
-        Multiple logical sources (e.g. WWT splits) may carry different lengths;
-        use the union of finite starts/ends so the view reaches the longest
-        recording. Degenerate / missing data returns ``(0.0, 0.0)``.
+        Fallback when nothing is plotted yet. Prefer
+        :meth:`_plotted_time_extent` for「全部」and draft-local checks.
         """
         lo = None
         hi = None
@@ -1937,16 +1936,81 @@ class MainWindow(
             return 0.0, 0.0
         return float(lo), float(hi)
 
+    def _plotted_time_extent(self):
+        """Return ``(lo, hi)`` spanning channels currently drawn on the chart.
+
+        「全部」must frame to what is *plotted*, not the longest loaded file in
+        the channel tree. Prefer the focused canvas data union (same extent
+        Home uses); then checked-channel file time bases; finally all files.
+        """
+        canvas = self.chart_stack.focused_canvas()
+        getter = getattr(canvas, 'get_data_x_union', None)
+        if callable(getter):
+            try:
+                union = getter()
+            except Exception:
+                union = None
+            if union is not None:
+                lo, hi = float(union[0]), float(union[1])
+                if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+                    return lo, hi
+        combined = getattr(canvas, '_combined_time_bounds', None)
+        if callable(combined):
+            try:
+                bounds = combined()
+            except Exception:
+                bounds = None
+            if bounds is not None:
+                lo, hi = float(bounds[0]), float(bounds[1])
+                if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+                    return lo, hi
+
+        checked = None
+        for attr in ('navigator', 'channel_list'):
+            owner = getattr(self, attr, None)
+            get = getattr(owner, 'get_checked_channels', None) if owner else None
+            if callable(get):
+                try:
+                    checked = get()
+                except Exception:
+                    checked = None
+                if checked:
+                    break
+        if checked:
+            lo = hi = None
+            for item in checked:
+                if len(item) < 2:
+                    continue
+                fid = item[0]
+                fd = self.files.get(fid)
+                if fd is None:
+                    continue
+                times = getattr(fd, 'time_array', None)
+                if times is None or len(times) == 0:
+                    continue
+                try:
+                    t0 = float(times[0])
+                    t1 = float(times[-1])
+                except Exception:
+                    continue
+                if not (np.isfinite(t0) and np.isfinite(t1)):
+                    continue
+                lo = t0 if lo is None else min(lo, t0)
+                hi = t1 if hi is None else max(hi, t1)
+            if lo is not None and hi is not None and hi > lo:
+                return float(lo), float(hi)
+        return self._time_data_extent()
+
     def _on_time_range_max_requested(self):
-        """「全部」：查看全部 — 复位可见时间轴到最长时基全程。
+        """「全部」：查看全部 — 复位可见时间轴到**已绘制**通道的最长全程。
 
         只草稿 spinbox（与未勾选时的视口同步一致），**不**勾选「使用选定
         时间范围」，也**不**写入 ``pane.time_range`` / View 过滤窗口。
-        数据范围直接来自已加载文件的 time_array，不从可能滞后的 spinbox
-        limits 反推。
+        范围取自图面已 plot 的通道（canvas data union / 勾选通道），
+        **不是**通道树里所有已加载文件的最长时基。
         """
         top = self.inspector.top
-        lo, hi = self._time_data_extent()
+        lo, hi = self._plotted_time_extent()
         if not (hi > lo):          # 还没有数据 / 没有可用的整段范围
             return
         # Keep spinbox limits fresh before drafting values; stale/narrow limits
@@ -1956,31 +2020,16 @@ class MainWindow(
         mode = self.chart_stack.current_mode()
         canvas = self.chart_stack.focused_canvas()
         if mode == 'time':
+            # Home to plotted data only — do not expand past drawn curves to a
+            # longer unloaded-or-unchecked source in the tree.
             reset = getattr(canvas, 'reset_view_to_data_extents', None)
             if callable(reset):
                 reset()
-            # Expand X to the longest loaded time base when plotted curves are
-            # a shorter subset (multi-source length).
-            set_xlim = getattr(canvas, 'set_xlim', None)
-            if callable(set_xlim):
-                set_xlim(lo, hi)
             return
         if mode == 'fft':
             reset = getattr(canvas, 'reset_view_to_data_extents', None)
             if callable(reset):
                 reset()
-            # Prefer the longest file extent on the time-preview strip when the
-            # preview's own combined bounds are shorter.
-            preview_xlim = getattr(canvas, 'set_time_preview_xlim', None)
-            if callable(preview_xlim):
-                preview_xlim(lo, hi)
-            else:
-                plot_time = getattr(canvas, '_plot_time', None)
-                if plot_time is not None and hasattr(plot_time, 'setXRange'):
-                    try:
-                        plot_time.setXRange(float(lo), float(hi), padding=0)
-                    except Exception:
-                        pass
             return
         # fft_time / order / frf: draft-only; compute still uses checkbox.
 
