@@ -152,23 +152,28 @@ def load_zfd_groups(fp):
         frame = {"Time": t}
         units = {}
         cmeta = {}
+        renamed = []
         for ch in chs:
             # 组内同名消歧：追加 marker id（如两个 Szyl 1 → Szyl 1 [E5]）
-            col = ch["name"] or ch["marker_id"]
+            preferred = ch["name"] or ch["marker_id"]
+            col = preferred
             if col in frame:
                 col = f"{ch['name']} [{ch['marker_id']}]"
                 while col in frame:
                     col = f"{col}_"
+                renamed.append({"original": preferred, "renamed": col})
             frame[col] = ch["values"]
             units[col] = ch["unit"]
             cmeta[col] = {
                 "marker_id": ch["marker_id"], "unit": ch["unit"],
                 "display_min": ch["disp_min"], "display_max": ch["disp_max"],
             }
+        smeta = dict(smeta_base)
+        smeta["renamed_channels"] = renamed
         groups.append({
             "data": pd.DataFrame(frame), "channels": list(frame.keys()),
             "units": units, "channel_metadata": cmeta,
-            "source_metadata": dict(smeta_base),
+            "source_metadata": smeta,
             "_count": count,
         })
 

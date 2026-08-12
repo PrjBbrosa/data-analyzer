@@ -103,6 +103,31 @@ def test_batch_sheet_footer_shows_folded_run_warnings(qtbot):
     assert "4 条警告，详见 manifest" in sheet._footer_task_summary.text()
 
 
+def test_batch_sheet_footer_keeps_guidance_when_zero_tasks_have_warnings(qtbot):
+    """F5: a 0-task finish must not replace idle guidance with a warning summary."""
+    from mf4_analyzer.batch import BatchRunResult
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet._last_result = BatchRunResult(
+        status="done",
+        warnings=["w1", "w2", "w3", "w4"],
+    )
+    sheet._on_thread_finished()
+    text = sheet._footer_task_summary.text()
+    assert "点击运行后生成任务" in text
+    assert "警告" not in text
+
+    sheet._present_footer(
+        "blocked", done=0, total=1, task_count=0,
+        reason="4 条警告，详见 manifest",
+    )
+    blocked_text = sheet._footer_task_summary.text()
+    assert "请选择文件、信号和输出目录" in blocked_text
+    assert "警告" not in blocked_text
+
+
 def test_batch_sheet_can_be_imported_from_new_package():
     from mf4_analyzer.ui.drawers.batch import BatchSheet
     assert BatchSheet is not None

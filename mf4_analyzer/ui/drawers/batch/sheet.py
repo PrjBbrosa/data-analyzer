@@ -673,8 +673,13 @@ class BatchSheet(QDialog):
             "partial": "部分完成",
             "cancelled": "已取消",
         }
-        if state == "ready":
-            task_text = "点击运行后生成任务"
+        if state == "ready" or count == 0:
+            # 0-task completion must keep idle guidance; a run-level
+            # warning summary must not replace it.
+            if state == "blocked":
+                task_text = "请选择文件、信号和输出目录"
+            else:
+                task_text = "点击运行后生成任务"
             value, maximum = 0, 1
         elif state == "blocked":
             task_text = reason or "请选择文件、信号和输出目录"

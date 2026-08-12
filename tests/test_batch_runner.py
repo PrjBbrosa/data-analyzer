@@ -3370,6 +3370,42 @@ def test_time_statistics_diagnostic_is_a_nonblocking_group_warning(
             "suggestion": "请缩小统计区间或拆分数据后重新运行。",
         }],
     }
+    assert expected_warning in result.warnings
+
+
+def test_run_result_warnings_include_render_group_diagnostics_without_item_copy():
+    """F5: run-level aggregation must scan render_groups, not only item.warnings."""
+    from mf4_analyzer.batch import BatchItemResult, RenderGroupResult
+
+    class _Reporter:
+        def __init__(self):
+            self.manifest_errors = []
+
+        def emit(self, event):
+            return None
+
+    diagnostic = (
+        "当前统计区间识别到 4 条有效 X 路径，无法确定唯一升程/回程。 "
+        "请缩小统计区间或拆分数据后重新运行。"
+    )
+    result = BatchRunner({})._finish_result(
+        "done",
+        reporter=_Reporter(),
+        recorder=None,
+        run_migration_warnings=(),
+        items=[
+            BatchItemResult(
+                method="time", file_id=0, file_name="a.csv", signal="sig",
+                status="done",
+            ),
+        ],
+        render_groups=[
+            RenderGroupResult(
+                group_id="g1", status="done", warnings=[diagnostic],
+            ),
+        ],
+    )
+    assert diagnostic in result.warnings
 
 
 def test_time_statistics_manifest_summarizes_normal_rows(tmp_path, monkeypatch):

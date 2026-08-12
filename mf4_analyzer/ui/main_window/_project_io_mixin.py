@@ -475,19 +475,22 @@ class ProjectIOMixin:
         """Surface load-time diagnostics that previously lived only in metadata.
 
         Template: HDF ``dropped_channels`` → formatter → warning toast. Same
-        exit for WWT/TDMS skips, MAT skipped vars, ZFD estimated fs, and
-        collision renames. Aggregates across multi-group loads into one toast
-        per diagnostic kind.
+        exit for WWT/TDMS skips, MAT skipped vars, ZFD estimated fs,
+        collision renames, and HDF ``warnings`` (A5 factor estimates).
+        Aggregates across multi-group loads into one toast per diagnostic
+        kind; file-level lists copied into every raster group are deduped.
         """
         dropped = []
         skipped_channels = []
         skipped_vars = []
         renamed = []
+        load_warnings = []
         fs_estimated = False
         seen_skip_names = set()
         seen_var_names = set()
         seen_dropped_keys = set()
         seen_renamed_keys = set()
+        seen_warning_texts = set()
         for smeta in source_metadatas:
             if not smeta:
                 continue
@@ -524,6 +527,12 @@ class ProjectIOMixin:
                     continue
                 seen_renamed_keys.add(key)
                 renamed.append(entry)
+            for entry in smeta.get("warnings") or []:
+                text = str(entry).strip()
+                if not text or text in seen_warning_texts:
+                    continue
+                seen_warning_texts.add(text)
+                load_warnings.append(text)
             if smeta.get("fs_estimated"):
                 fs_estimated = True
 
@@ -533,6 +542,7 @@ class ProjectIOMixin:
             format_skipped_vars_notice(skipped_vars),
             format_fs_estimated_notice(fs_estimated),
             format_renamed_channels_notice(renamed),
+            *load_warnings,
         ):
             if notice:
                 self.toast(notice, "warning")
