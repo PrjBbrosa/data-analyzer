@@ -30,6 +30,7 @@ from ...signal.expression import ExpressionError
 from ...signal.expression import evaluate as eval_expression
 from ...signal.expression import normalize as normalize_expression
 from ...signal.expression import referenced_names as expression_names
+from ...ui_kit.widgets import SearchField
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..expression_help import ExpressionHelpPopup, help_tooltip_text
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
@@ -222,43 +223,67 @@ class ChannelEditorDialog(QDialog):
         gl2.setColumnStretch(1, 1)
         bl.addWidget(g2)
 
-        # 导出（在双通道运算之下、删除之上）
-        gx = QGroupBox("导出")
+        # 导出 / 删除：同一勾选列表；底部左导出、右删除
+        # Toolbar mirrors the left channel pane: search + 全选/全不/已选, plus
+        # 反选 which export pickers commonly need when lists are long.
+        gx = QGroupBox("导出 / 删除")
         gxl = QVBoxLayout(gx)
-        gxl.setSpacing(8)
+        gxl.setSpacing(6)
+        self.export_search = SearchField("搜索通道…")
+        self.export_search.setObjectName("channelExportSearch")
+        self.export_search.textChanged.connect(self._apply_export_filters)
+        gxl.addWidget(self.export_search)
+        export_tools = QHBoxLayout()
+        export_tools.setContentsMargins(0, 0, 0, 0)
+        export_tools.setSpacing(4)
+        self.btn_export_all = QPushButton("全选")
+        self.btn_export_none = QPushButton("全不")
+        self.btn_export_invert = QPushButton("反选")
+        self.btn_export_selected_only = QPushButton("已选")
+        for btn, handler in (
+            (self.btn_export_all, self._export_check_all),
+            (self.btn_export_none, self._export_check_none),
+            (self.btn_export_invert, self._export_check_invert),
+        ):
+            btn.setMaximumWidth(48)
+            btn.setProperty("role", "quiet")
+            btn.clicked.connect(handler)
+            export_tools.addWidget(btn)
+        self.btn_export_selected_only.setMaximumWidth(48)
+        self.btn_export_selected_only.setProperty("role", "quiet")
+        self.btn_export_selected_only.setCheckable(True)
+        self.btn_export_selected_only.toggled.connect(self._apply_export_filters)
+        export_tools.addWidget(self.btn_export_selected_only)
+        export_tools.addStretch(1)
+        gxl.addLayout(export_tools)
         self.list_export = QListWidget()
         self.list_export.setObjectName("channelExportList")
         self.list_export.setMinimumHeight(108)
-        self.list_export.setMaximumHeight(120)
+        self.list_export.setMaximumHeight(140)
         gxl.addWidget(self.list_export)
+        # 兼容旧引用（对齐测试等）：删除与导出共用勾选列表
+        self.list_rm = self.list_export
         self.chk_export_time = QCheckBox("包含时间列")
         self.chk_export_time.setChecked(True)
         self.chk_export_range = QCheckBox("仅导出选定时间范围")
         gxl.addWidget(self.chk_export_time)
         gxl.addWidget(self.chk_export_range)
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(8)
         self.btn_export = QPushButton("导出 Excel")
         self.btn_export.setObjectName("channelCreateBtn")
         self.btn_export.setProperty("role", "secondary")
         self.btn_export.clicked.connect(self._on_export_clicked)
-        gxl.addWidget(self.btn_export, 0, Qt.AlignLeft)
+        action_row.addWidget(self.btn_export, 0, Qt.AlignLeft)
+        action_row.addStretch(1)
+        self.btn_delete = QPushButton("🗑 删除选中通道")
+        self.btn_delete.setObjectName("channelDeleteBtn")
+        self.btn_delete.setProperty("role", "danger")
+        self.btn_delete.clicked.connect(self._remove)
+        action_row.addWidget(self.btn_delete, 0, Qt.AlignRight)
+        gxl.addLayout(action_row)
         bl.addWidget(gx)
-
-        # 删除通道
-        g3 = QGroupBox("删除")
-        g3l = QVBoxLayout(g3)
-        g3l.setSpacing(8)
-        self.list_rm = QListWidget()
-        self.list_rm.setObjectName("channelDeleteList")
-        self.list_rm.setSelectionMode(QListWidget.ExtendedSelection)
-        self.list_rm.setMinimumHeight(108)
-        self.list_rm.setMaximumHeight(120)
-        g3l.addWidget(self.list_rm)
-        btn_rm = QPushButton("🗑 删除选中通道")
-        btn_rm.setObjectName("channelDeleteBtn")
-        btn_rm.setProperty("role", "danger")
-        btn_rm.clicked.connect(self._remove)
-        g3l.addWidget(btn_rm, 0, Qt.AlignLeft)
-        bl.addWidget(g3)
         bl.addStretch(1)
 
         self._scroll.setWidget(body)
@@ -361,24 +386,64 @@ class ChannelEditorDialog(QDialog):
             # current selection so the full (possibly elided) channel name is
             # visible on hover even when the box width crops it.
             combo.setToolTip(combo.currentText())
-        self.list_rm.clear()
-        for ch in chs:
-            self.list_rm.addItem(ch)
+        self.export_search.blockSignals(True)
+        self.export_search.clear()
+        self.export_search.blockSignals(False)
+        self.btn_export_selected_only.blockSignals(True)
+        self.btn_export_selected_only.setChecked(False)
+        self.btn_export_selected_only.blockSignals(False)
         self.list_export.clear()
         for ch in chs:
-            it = QListWidgetItem(ch)
-            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-            it.setCheckState(Qt.Checked)
-            self.list_export.addItem(it)
+            self._append_export_item(ch, checked=True)
         self.lbl.setText("新增: 0")
+
+    def _append_export_item(self, name, *, checked=True):
+        it = QListWidgetItem(str(name))
+        it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+        it.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        self.list_export.addItem(it)
+
+    def _iter_export_items(self, *, visible_only=False):
+        for i in range(self.list_export.count()):
+            item = self.list_export.item(i)
+            if visible_only and item.isHidden():
+                continue
+            yield item
+
+    def _apply_export_filters(self, *_):
+        query = self.export_search.text().strip().lower()
+        selected_only = self.btn_export_selected_only.isChecked()
+        for item in self._iter_export_items():
+            matches_text = (not query) or (query in item.text().lower())
+            matches_selected = (
+                (not selected_only) or item.checkState() == Qt.Checked
+            )
+            item.setHidden(not (matches_text and matches_selected))
+
+    def _export_check_all(self):
+        for item in self._iter_export_items(visible_only=True):
+            item.setCheckState(Qt.Checked)
+        self._apply_export_filters()
+
+    def _export_check_none(self):
+        for item in self._iter_export_items(visible_only=True):
+            item.setCheckState(Qt.Unchecked)
+        self._apply_export_filters()
+
+    def _export_check_invert(self):
+        for item in self._iter_export_items(visible_only=True):
+            item.setCheckState(
+                Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+            )
+        self._apply_export_filters()
 
     def _on_export_clicked(self):
         if self.current_fid is None:
             return
         channels = [
-            self.list_export.item(i).text()
-            for i in range(self.list_export.count())
-            if self.list_export.item(i).checkState() == Qt.Checked
+            item.text()
+            for item in self._iter_export_items()
+            if item.checkState() == Qt.Checked
         ]
         if not channels:
             QMessageBox.information(self, "导出", "请先勾选要导出的通道。")
@@ -417,11 +482,7 @@ class ChannelEditorDialog(QDialog):
                 return
             name = f"{prefixes[op]}{src}"
             while name in self.fd.data.columns or name in self.new_channels: name += "_1"
-            self.new_channels[name] = (r, self.fd.channel_units.get(src, ''))
-            self.lbl.setText(f"新增: {len(self.new_channels)} ({name})")
-            self.combo_src.addItem(name);
-            self.combo_a.addItem(name);
-            self.combo_b.addItem(name)
+            self._register_new(name, r, self.fd.channel_units.get(src, ''))
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
 
@@ -479,6 +540,8 @@ class ChannelEditorDialog(QDialog):
         self.combo_src.addItem(name)
         self.combo_a.addItem(name)
         self.combo_b.addItem(name)
+        self._append_export_item(name, checked=True)
+        self._apply_export_filters()
 
     def _create_expression(self, ch_a, ch_b):
         """Build a channel from the user's free-form expression.
@@ -593,8 +656,25 @@ class ChannelEditorDialog(QDialog):
             QMessageBox.critical(self, "错误", str(e))
 
     def _remove(self):
-        sel = [i.text() for i in self.list_rm.selectedItems()]
-        if sel and QMessageBox.question(self, "确认", f"删除 {len(sel)} 通道?",
-                                        QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-            self.removed_channels.update(sel)
-            for i in self.list_rm.selectedItems(): self.list_rm.takeItem(self.list_rm.row(i))
+        sel = [
+            item.text()
+            for item in self._iter_export_items()
+            if item.checkState() == Qt.Checked
+        ]
+        if not sel:
+            QMessageBox.information(self, "删除", "请先勾选要删除的通道。")
+            return
+        if QMessageBox.question(
+            self, "确认", f"删除 {len(sel)} 通道?",
+            QMessageBox.Yes | QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        self.removed_channels.update(sel)
+        for name in sel:
+            self.new_channels.pop(name, None)
+        remove = set(sel)
+        for row in range(self.list_export.count() - 1, -1, -1):
+            if self.list_export.item(row).text() in remove:
+                self.list_export.takeItem(row)
+        self.lbl.setText(f"新增: {len(self.new_channels)}")
+        self._apply_export_filters()

@@ -90,17 +90,111 @@ def _make_files(tmp_path):
     return {"f0": fd}
 
 
-def test_editor_has_export_section_between_dual_and_delete(qapp, tmp_path):
+def test_editor_export_toolbar_search_select_and_invert(qapp, tmp_path):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.dialogs import ChannelEditorDialog
+
+    dlg = ChannelEditorDialog(None, _make_files(tmp_path), "f0")
+    assert dlg.export_search.placeholderText() == "搜索通道…"
+    assert dlg.btn_export_all.text() == "全选"
+    assert dlg.btn_export_none.text() == "全不"
+    assert dlg.btn_export_invert.text() == "反选"
+    assert dlg.btn_export_selected_only.isCheckable()
+
+    dlg.export_search.setText("rpm")
+    visible = [
+        dlg.list_export.item(i).text()
+        for i in range(dlg.list_export.count())
+        if not dlg.list_export.item(i).isHidden()
+    ]
+    assert visible == ["rpm"]
+
+    dlg.export_search.clear()
+    dlg.btn_export_none.click()
+    assert all(
+        dlg.list_export.item(i).checkState() == Qt.Unchecked
+        for i in range(dlg.list_export.count())
+    )
+    dlg.btn_export_all.click()
+    assert all(
+        dlg.list_export.item(i).checkState() == Qt.Checked
+        for i in range(dlg.list_export.count())
+    )
+    dlg.btn_export_invert.click()
+    assert all(
+        dlg.list_export.item(i).checkState() == Qt.Unchecked
+        for i in range(dlg.list_export.count())
+    )
+
+    dlg.list_export.item(0).setCheckState(Qt.Checked)
+    dlg.btn_export_selected_only.setChecked(True)
+    visible = [
+        dlg.list_export.item(i).text()
+        for i in range(dlg.list_export.count())
+        if not dlg.list_export.item(i).isHidden()
+    ]
+    assert visible == [dlg.list_export.item(0).text()]
+
+
+def test_editor_has_merged_export_delete_section(qapp, tmp_path):
     from mf4_analyzer.ui.dialogs import ChannelEditorDialog
     from PyQt5.QtWidgets import QGroupBox
     dlg = ChannelEditorDialog(None, _make_files(tmp_path), "f0")
     boxes = [b.title() for b in dlg.findChildren(QGroupBox)]
-    assert "导出" in boxes
-    # order: 双通道运算 ... 导出 ... 删除
-    assert boxes.index("导出") > boxes.index("双通道运算 (A ⊕ B)")
-    assert boxes.index("导出") < boxes.index("删除")
-    # checkable export list, defaults checked
+    assert "导出 / 删除" in boxes
+    assert "删除" not in boxes  # no separate delete group
+    assert boxes.index("导出 / 删除") > boxes.index("双通道运算 (A ⊕ B)")
+    # checkable list, defaults checked; shared action buttons
     assert dlg.list_export.count() == 2  # rpm, spd (time excluded)
+    assert dlg.list_rm is dlg.list_export
+    assert dlg.btn_export.text() == "导出 Excel"
+    assert "删除" in dlg.btn_delete.text()
+    assert dlg.btn_delete.property("role") == "danger"
+
+
+def test_editor_delete_uses_checked_export_items(qapp, tmp_path, monkeypatch):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QMessageBox
+    from mf4_analyzer.ui.dialogs import ChannelEditorDialog
+    dlg = ChannelEditorDialog(None, _make_files(tmp_path), "f0")
+    for i in range(dlg.list_export.count()):
+        it = dlg.list_export.item(i)
+        it.setCheckState(Qt.Checked if it.text() == "rpm" else Qt.Unchecked)
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **k: QMessageBox.Yes,
+    )
+    dlg.btn_delete.click()
+    remaining = [
+        dlg.list_export.item(i).text()
+        for i in range(dlg.list_export.count())
+    ]
+    assert remaining == ["spd"]
+    assert "rpm" in dlg.removed_channels
+
+
+def test_editor_delete_no_selection_does_not_remove(qapp, tmp_path, monkeypatch):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QMessageBox
+    from mf4_analyzer.ui.dialogs import ChannelEditorDialog
+    dlg = ChannelEditorDialog(None, _make_files(tmp_path), "f0")
+    for i in range(dlg.list_export.count()):
+        dlg.list_export.item(i).setCheckState(Qt.Unchecked)
+    info = {}
+    monkeypatch.setattr(
+        QMessageBox, "information",
+        lambda *a, **k: info.setdefault("hit", True),
+    )
+    asked = {"n": 0}
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **k: asked.__setitem__("n", asked["n"] + 1) or QMessageBox.Yes,
+    )
+    dlg.btn_delete.click()
+    assert info.get("hit") is True
+    assert asked["n"] == 0
+    assert dlg.list_export.count() == 2
+    assert not dlg.removed_channels
 
 
 def test_editor_export_button_emits_signal(qapp, tmp_path):

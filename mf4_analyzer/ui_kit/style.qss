@@ -2886,19 +2886,16 @@ QDialog#DrawerSurface #ChannelEditorDialog {
     font-weight: 400;
     background-color: transparent;
 }
-#ChannelEditorDialog QListWidget#channelDeleteList {
+/* 导出/删除共用勾选列表（曾用 #channelDeleteList 多选高亮，已退役） */
+#ChannelEditorDialog QListWidget#channelExportList {
     border: 1px solid #eef2f7;
     border-radius: 7px;
     background-color: #ffffff;
     outline: none;
 }
-#ChannelEditorDialog QListWidget#channelDeleteList::item {
+#ChannelEditorDialog QListWidget#channelExportList::item {
     padding: 3px 6px;
     border-radius: 5px;
-}
-#ChannelEditorDialog QListWidget#channelDeleteList::item:selected {
-    background-color: #e8efff;
-    color: #111827;
 }
 #ChannelEditorDialog QPushButton[role="create"] {
     color: #0f3f8f;

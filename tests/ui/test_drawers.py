@@ -130,7 +130,7 @@ def test_channel_editor_inputs_fill_row_no_right_gutter(qapp, qtbot):
             inner.combo_op2,
             inner.combo_b,
             inner.edit_name2,
-            inner.list_rm,
+            inner.list_export,
         ):
             assert abs(right_in_drawer(widget) - expected_right) <= 1, (
                 f"{widget.objectName() or type(widget).__name__} right edge "
