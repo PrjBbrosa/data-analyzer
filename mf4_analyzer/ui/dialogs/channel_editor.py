@@ -32,12 +32,18 @@ from ...signal.expression import normalize as normalize_expression
 from ...signal.expression import referenced_names as expression_names
 from ...ui_kit.widgets import SearchField
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
-from ..expression_help import ExpressionHelpPopup, help_tooltip_text
+from ..expression_help import (
+    ExpressionHelpPopup,
+    SingleParamHelpPopup,
+    help_tooltip_text,
+    param_help_tooltip_text,
+)
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
 
 # Hover text for the ? badge — same reference the pinnable help card renders,
 # so the two can never drift apart (see ui/expression_help.py).
 EXPR_TOOLTIP = help_tooltip_text()
+PARAM_TOOLTIP = param_help_tooltip_text()
 EXPR_HELP_HINT = "点 ? 打开可拖动的帮助卡片"
 
 
@@ -123,25 +129,51 @@ class ChannelEditorDialog(QDialog):
         gl.addWidget(QLabel("运算"), 1, 0)
         self.combo_op = QComboBox()
         self.combo_op.addItems(["d/dt", "∫dt", "× 系数", "+ 偏移", "滑动平均", "|x| 绝对值"])
+        self.combo_op.currentIndexChanged.connect(self._sync_single_param_row)
         self._narrow(self.combo_op)
         gl.addWidget(self.combo_op, 1, 1)
-        gl.addWidget(QLabel("参数"), 2, 0)
+        self.lbl_param = QLabel("参数")
+        gl.addWidget(self.lbl_param, 2, 0)
+        # Spin + ? share ONE grid cell (same pattern as the 表达式 row) so the
+        # other rows keep filling column 1 to the same right edge.
+        self._param_row = QWidget()
+        prl = QHBoxLayout(self._param_row)
+        prl.setContentsMargins(0, 0, 0, 0)
+        prl.setSpacing(6)
         self.spin_p = CompactDoubleSpinBox()
         self.spin_p.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_p.setRange(-1e12, 1e12)
         self.spin_p.setValue(1)
-        self._narrow(self.spin_p)
-        gl.addWidget(self.spin_p, 2, 1)
-        btn = QPushButton("✚ 创建单通道")
+        self.spin_p.setMinimumWidth(self.INPUT_WIDTH - 24)
+        self.spin_p.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        prl.addWidget(self.spin_p, 1)
+        self.btn_param_help = QToolButton()
+        self.btn_param_help.setObjectName("channelExprHelp")
+        self.btn_param_help.setText("?")
+        self.btn_param_help.setCheckable(True)
+        self.btn_param_help.setFixedSize(18, 18)
+        self.btn_param_help.setFocusPolicy(Qt.NoFocus)
+        self.btn_param_help.setCursor(Qt.PointingHandCursor)
+        self.btn_param_help.setToolTip(f"{PARAM_TOOLTIP}\n\n{EXPR_HELP_HINT}")
+        self.btn_param_help.toggled.connect(self._toggle_param_help)
+        self._param_help_popup = None
+        prl.addWidget(self.btn_param_help, 0, Qt.AlignVCenter)
+        gl.addWidget(self._param_row, 2, 1)
+        # Both forms create a derived channel; the group title already says
+        # single vs dual sources — keep the action verb identical.
+        btn = QPushButton("✚ 创建通道")
         btn.setObjectName("channelCreateBtn")
         btn.setProperty("role", "secondary")
+        btn.setToolTip("用上方源与运算生成一条派生通道")
         btn.clicked.connect(self._create_single)
+        self.btn_create_single = btn
         gl.addWidget(btn, 3, 1, Qt.AlignLeft)
         # Stretch the INPUT column (col 1) so controls fill to the right edge;
         # no ghost spacer column. The create button keeps Qt.AlignLeft so it
         # stays compact and left-anchored inside the now-stretched column.
         gl.setColumnStretch(1, 1)
         bl.addWidget(g)
+        self._sync_single_param_row()
 
         # 双通道运算
         g2 = QGroupBox("双通道运算 (A ⊕ B)")
@@ -213,10 +245,12 @@ class ChannelEditorDialog(QDialog):
         self.edit_name2.setPlaceholderText("留空自动生成")
         self._narrow(self.edit_name2)
         gl2.addWidget(self.edit_name2, 5, 1)
-        btn2 = QPushButton("✚ 创建双通道")
+        btn2 = QPushButton("✚ 创建通道")
         btn2.setObjectName("channelCreateBtn")
         btn2.setProperty("role", "secondary")
+        btn2.setToolTip("用通道 A / B 与运算生成一条派生通道")
         btn2.clicked.connect(self._create_dual)
+        self.btn_create_dual = btn2
         gl2.addWidget(btn2, 6, 1, Qt.AlignLeft)
         self._sync_expr_row()
         # Stretch the INPUT column (col 1) so controls fill to the right edge;
@@ -516,6 +550,57 @@ class ChannelEditorDialog(QDialog):
             self._export_format(),
         )
 
+    def _sync_single_param_row(self, *_):
+        """Retarget the single-op parameter row to the selected operation.
+
+        ``参数`` alone is opaque: for 滑动平均 it means window length in
+        samples (≥3, integer); for scale/offset it is the coefficient/bias;
+        derivative / integral / abs ignore it.
+        """
+        op = self.combo_op.currentIndex()
+        # (label, tooltip, enabled, default_or_None)
+        specs = {
+            0: ("参数", "导数不使用参数", False, None),
+            1: ("参数", "积分不使用参数", False, None),
+            2: ("系数", "整体乘以该系数（换单位等）", True, 1.0),
+            3: ("偏移", "整体加上该偏移（零点对齐）", True, 0.0),
+            4: (
+                "窗长",
+                "滑动平均窗口的样点数（≥ 3，取整）。"
+                "窗口越大越平滑、越钝；小于 3 时按 3 处理。",
+                True,
+                50.0,
+            ),
+            5: ("参数", "绝对值不使用参数", False, None),
+        }
+        label, tip, enabled, default = specs.get(
+            op, ("参数", "", False, None)
+        )
+        self.lbl_param.setText(label)
+        self.lbl_param.setToolTip(tip)
+        self.spin_p.setToolTip(tip)
+        self.spin_p.setEnabled(enabled)
+        if enabled and default is not None:
+            # Seed a sensible default when entering a param-using op so the
+            # leftover 「1.0」 from construction is not mistaken for a window.
+            self.spin_p.setValue(float(default))
+
+    def _toggle_param_help(self, checked):
+        """Open / close the pinnable, draggable single-op parameter help card."""
+        if not checked:
+            if self._param_help_popup is not None:
+                self._param_help_popup.hide()
+            return
+        # Only one help card at a time — closing expression help if open.
+        if self.btn_expr_help.isChecked():
+            self.btn_expr_help.setChecked(False)
+        if self._param_help_popup is None:
+            self._param_help_popup = SingleParamHelpPopup(self)
+            self._param_help_popup.closed.connect(
+                lambda: self.btn_param_help.setChecked(False)
+            )
+        self._param_help_popup.show_beside(self.spin_p)
+
     def _create_single(self):
         src = self.combo_src.currentText()
         if src not in self.fd.data.columns:
@@ -564,6 +649,9 @@ class ChannelEditorDialog(QDialog):
             if self._expr_help_popup is not None:
                 self._expr_help_popup.hide()
             return
+        # Only one help card at a time — closing parameter help if open.
+        if self.btn_param_help.isChecked():
+            self.btn_param_help.setChecked(False)
         if self._expr_help_popup is None:
             # Parented to the editor so the drawer's application modality does
             # not block it (Qt exempts a modal window's own child windows).
@@ -574,15 +662,17 @@ class ChannelEditorDialog(QDialog):
         self._expr_help_popup.show_beside(self.edit_expr)
 
     def hideEvent(self, event):
-        # The card is a separate top-level window; it must not outlive the
-        # editor it documents. hideEvent also fires while the editor is being
-        # torn down, when the child popup's C++ side may already be gone —
+        # The cards are separate top-level windows; they must not outlive the
+        # editor they document. hideEvent also fires while the editor is being
+        # torn down, when a child popup's C++ side may already be gone —
         # hence the RuntimeError guard.
-        if self._expr_help_popup is not None:
-            try:
-                self._expr_help_popup.hide()
-            except RuntimeError:
-                self._expr_help_popup = None
+        for attr in ("_expr_help_popup", "_param_help_popup"):
+            popup = getattr(self, attr, None)
+            if popup is not None:
+                try:
+                    popup.hide()
+                except RuntimeError:
+                    setattr(self, attr, None)
         super().hideEvent(event)
 
     def _channel_signal(self, name):

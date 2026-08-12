@@ -1,13 +1,14 @@
-"""Pinnable, draggable help card for the channel editor's 表达式 row.
+"""Pinnable, draggable help cards for the channel editor.
 
-The ? badge next to the expression input opens this card. Unlike a tooltip it
-stays put — the user reads the function list while typing the formula, and can
-drag it out of the way by its header. It is deliberately NOT focus-sensitive:
-typing in the expression field must never dismiss it.
+Two cards share the same chrome (frameless Tool window, header drag, Esc /
+× close, show_beside):
 
-The reference content lives here as structured data and is rendered twice: as
-this card, and (via :func:`help_tooltip_text`) as the badge's hover tooltip, so
-the two can never drift apart.
+* :class:`ExpressionHelpPopup` — 自定义表达式 row ``?``
+* :class:`SingleParamHelpPopup` — 单通道运算 参数/窗长/系数 row ``?``
+
+Reference content lives next to each card and is also rendered as the badge
+hover tooltip (via ``help_tooltip_text`` / ``param_help_tooltip_text``) so the
+two surfaces cannot drift apart.
 """
 from PyQt5.QtCore import QPoint, QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -19,6 +20,10 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+# ---------------------------------------------------------------------------
+# Expression help content
+# ---------------------------------------------------------------------------
 
 HELP_TITLE = "表达式帮助"
 HELP_SUBTITLE = "A = 通道A　B = 通道B　t = 时间"
@@ -54,7 +59,7 @@ _TOOLTIP_WRAP = {
 
 
 def help_tooltip_text():
-    """Plain-text rendering of the same reference, for the hover tooltip."""
+    """Plain-text rendering of the expression reference, for the hover tooltip."""
     lines = [f"自定义表达式 —— 变量 {HELP_SUBTITLE}", "", "示例"]
     lines += [f"· {expr}  →  {what}" for expr, what in EXAMPLES]
     lines += ["", "可用函数"]
@@ -69,6 +74,48 @@ def help_tooltip_text():
     lines += FOOTNOTES
     return "\n".join(lines)
 
+
+# ---------------------------------------------------------------------------
+# Single-op parameter help content
+# ---------------------------------------------------------------------------
+
+PARAM_HELP_TITLE = "参数帮助"
+PARAM_HELP_SUBTITLE = "随「运算」变化：系数 / 偏移 / 窗长"
+
+PARAM_OP_ROWS = (
+    ("d/dt · ∫dt · |x|", "不使用参数（输入框会灰掉）"),
+    ("× 系数", "整体乘常数，如 0.001 换单位"),
+    ("+ 偏移", "加常数做零点对齐"),
+    ("滑动平均", "窗长 = 样点数（≥ 3，取整）"),
+)
+
+PARAM_MAVG_EXAMPLES = (
+    ("窗长 50 @ 1 kHz", "约 50 ms 平滑"),
+    ("窗长 100 @ 1 kHz", "约 0.1 s 平滑"),
+    ("窗长越小", "越接近原信号"),
+    ("窗长越大", "越平滑、越钝"),
+)
+
+PARAM_FOOTNOTES = (
+    "窗长按整数取；填 1.0 也会抬到至少 3",
+    "窗长 ≥ 信号长度时，整段取均值",
+    "系数 / 偏移可为任意实数（含负数）",
+)
+
+
+def param_help_tooltip_text():
+    """Plain-text rendering of the parameter reference, for the hover tooltip."""
+    lines = [f"{PARAM_HELP_TITLE} —— {PARAM_HELP_SUBTITLE}", "", "运算对照"]
+    lines += [f"· {op}  →  {what}" for op, what in PARAM_OP_ROWS]
+    lines += ["", "滑动平均 · 窗长示例"]
+    lines += [f"· {ex}  →  {what}" for ex, what in PARAM_MAVG_EXAMPLES]
+    lines += ["", *PARAM_FOOTNOTES]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Shared chrome
+# ---------------------------------------------------------------------------
 
 _MONO = '"SF Mono", "Menlo", "Consolas", "DejaVu Sans Mono", monospace'
 
@@ -137,17 +184,19 @@ QToolButton#exprHelpClose:hover {{
 """
 
 
-class ExpressionHelpPopup(QWidget):
-    """Frameless card: drag by the header, close with × or Esc.
+class ReferenceHelpPopup(QWidget):
+    """Frameless card shell: drag by the header, close with × or Esc.
 
     Parented to the channel editor so it is NOT blocked by that dialog's
     application modality (Qt exempts a modal window's own child windows), and
-    so it dies with the editor.
+    so it dies with the editor. Subclasses fill the body via ``_fill_body``.
     """
 
     closed = pyqtSignal()
 
     WIDTH = 330
+    TITLE = ""
+    SUBTITLE = ""
 
     def __init__(self, parent=None):
         super().__init__(
@@ -165,7 +214,6 @@ class ExpressionHelpPopup(QWidget):
         self.setFixedWidth(self.WIDTH)
         self.adjustSize()
 
-    # -- construction ------------------------------------------------------
     def _build(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -182,7 +230,7 @@ class ExpressionHelpPopup(QWidget):
         hl = QHBoxLayout(self._header)
         hl.setContentsMargins(0, 0, 0, 0)
         hl.setSpacing(6)
-        title = QLabel(HELP_TITLE)
+        title = QLabel(self.TITLE)
         title.setObjectName("exprHelpTitle")
         hl.addWidget(title)
         hl.addStretch(1)
@@ -206,54 +254,15 @@ class ExpressionHelpPopup(QWidget):
         self._header.setCursor(Qt.OpenHandCursor)
         title.setCursor(Qt.OpenHandCursor)
 
-        subtitle = QLabel(HELP_SUBTITLE)
-        subtitle.setObjectName("exprHelpSubtitle")
-        lay.addWidget(subtitle)
+        if self.SUBTITLE:
+            subtitle = QLabel(self.SUBTITLE)
+            subtitle.setObjectName("exprHelpSubtitle")
+            lay.addWidget(subtitle)
         lay.addWidget(self._rule(card))
+        self._fill_body(lay, card)
 
-        lay.addWidget(self._section("示例", card))
-        examples = QVBoxLayout()
-        examples.setContentsMargins(0, 0, 0, 0)
-        examples.setSpacing(3)
-        for expr, what in EXAMPLES:
-            row = QHBoxLayout()
-            row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(8)
-            code = QLabel(expr)
-            code.setObjectName("exprHelpCode")
-            row.addWidget(code, 1)
-            note = QLabel(what)
-            note.setObjectName("exprHelpText")
-            row.addWidget(note, 0, Qt.AlignRight)
-            examples.addLayout(row)
-        lay.addLayout(examples)
-
-        lay.addWidget(self._rule(card))
-        lay.addWidget(self._section("可用函数", card))
-        groups = QVBoxLayout()
-        groups.setContentsMargins(0, 0, 0, 0)
-        groups.setSpacing(3)
-        for label, funcs in FUNCTION_GROUPS:
-            group = QLabel(f"{label}　{funcs}")
-            group.setObjectName("exprHelpText")
-            group.setWordWrap(True)
-            groups.addWidget(group)
-        lay.addLayout(groups)
-
-        lay.addWidget(self._rule(card))
-        ops = QLabel(f"运算符　{OPERATORS}")
-        ops.setObjectName("exprHelpText")
-        ops.setWordWrap(True)
-        lay.addWidget(ops)
-        feet = QVBoxLayout()
-        feet.setContentsMargins(0, 0, 0, 0)
-        feet.setSpacing(2)
-        for note in FOOTNOTES:
-            foot = QLabel(f"· {note}")
-            foot.setObjectName("exprHelpFoot")
-            foot.setWordWrap(True)
-            feet.addWidget(foot)
-        lay.addLayout(feet)
+    def _fill_body(self, lay, card):
+        raise NotImplementedError
 
     @staticmethod
     def _section(text, parent):
@@ -268,6 +277,31 @@ class ExpressionHelpPopup(QWidget):
         line.setFrameShape(QFrame.HLine)
         line.setFixedHeight(1)
         return line
+
+    @staticmethod
+    def _code_note_row(code_text, note_text):
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        code = QLabel(code_text)
+        code.setObjectName("exprHelpCode")
+        row.addWidget(code, 1)
+        note = QLabel(note_text)
+        note.setObjectName("exprHelpText")
+        row.addWidget(note, 0, Qt.AlignRight)
+        return row
+
+    @staticmethod
+    def _foot_block(notes):
+        feet = QVBoxLayout()
+        feet.setContentsMargins(0, 0, 0, 0)
+        feet.setSpacing(2)
+        for note in notes:
+            foot = QLabel(f"· {note}")
+            foot.setObjectName("exprHelpFoot")
+            foot.setWordWrap(True)
+            feet.addWidget(foot)
+        return feet
 
     # -- show / hide -------------------------------------------------------
     GAP = 10
@@ -344,3 +378,66 @@ class ExpressionHelpPopup(QWidget):
             return False
         top_left = self._header.mapTo(self, QPoint(0, 0))
         return self._header.rect().translated(top_left).contains(pos)
+
+
+class ExpressionHelpPopup(ReferenceHelpPopup):
+    """表达式帮助 card behind the dual-op ``?`` badge."""
+
+    TITLE = HELP_TITLE
+    SUBTITLE = HELP_SUBTITLE
+
+    def _fill_body(self, lay, card):
+        lay.addWidget(self._section("示例", card))
+        examples = QVBoxLayout()
+        examples.setContentsMargins(0, 0, 0, 0)
+        examples.setSpacing(3)
+        for expr, what in EXAMPLES:
+            examples.addLayout(self._code_note_row(expr, what))
+        lay.addLayout(examples)
+
+        lay.addWidget(self._rule(card))
+        lay.addWidget(self._section("可用函数", card))
+        groups = QVBoxLayout()
+        groups.setContentsMargins(0, 0, 0, 0)
+        groups.setSpacing(3)
+        for label, funcs in FUNCTION_GROUPS:
+            group = QLabel(f"{label}　{funcs}")
+            group.setObjectName("exprHelpText")
+            group.setWordWrap(True)
+            groups.addWidget(group)
+        lay.addLayout(groups)
+
+        lay.addWidget(self._rule(card))
+        ops = QLabel(f"运算符　{OPERATORS}")
+        ops.setObjectName("exprHelpText")
+        ops.setWordWrap(True)
+        lay.addWidget(ops)
+        lay.addLayout(self._foot_block(FOOTNOTES))
+
+
+class SingleParamHelpPopup(ReferenceHelpPopup):
+    """参数帮助 card behind the single-op parameter ``?`` badge."""
+
+    TITLE = PARAM_HELP_TITLE
+    SUBTITLE = PARAM_HELP_SUBTITLE
+
+    def _fill_body(self, lay, card):
+        lay.addWidget(self._section("运算对照", card))
+        ops = QVBoxLayout()
+        ops.setContentsMargins(0, 0, 0, 0)
+        ops.setSpacing(3)
+        for op, what in PARAM_OP_ROWS:
+            ops.addLayout(self._code_note_row(op, what))
+        lay.addLayout(ops)
+
+        lay.addWidget(self._rule(card))
+        lay.addWidget(self._section("滑动平均 · 窗长示例", card))
+        examples = QVBoxLayout()
+        examples.setContentsMargins(0, 0, 0, 0)
+        examples.setSpacing(3)
+        for ex, what in PARAM_MAVG_EXAMPLES:
+            examples.addLayout(self._code_note_row(ex, what))
+        lay.addLayout(examples)
+
+        lay.addWidget(self._rule(card))
+        lay.addLayout(self._foot_block(PARAM_FOOTNOTES))

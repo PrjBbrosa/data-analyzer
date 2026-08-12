@@ -234,11 +234,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("打开通道编辑", gesture="通道树下方「编辑通道」"),
             QuickRow(
                 "单通道运算",
-                sub="d/dt · ∫dt · ×系数 · +偏移 · 滑动平均 · |x|",
+                sub="d/dt · ∫dt · ×系数 · +偏移 · 滑动平均（窗长=样点数）· |x| →「创建通道」；参数旁 ? 看帮助",
             ),
             QuickRow(
                 "双通道运算",
-                sub="A+B · A−B · A×B · A÷B · max(A,B) · min(A,B)",
+                sub="A+B · A−B · A×B · A÷B · max/min → 同样点「创建通道」",
             ),
             QuickRow(
                 "自定义表达式",
@@ -246,9 +246,9 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                     "sqrt abs log min max mean where，^ 为幂",
             ),
             QuickRow(
-                "表达式帮助卡片",
-                sub="示例与全部函数一览，可拖到旁边边看边写",
-                gesture="点表达式右侧「?」",
+                "表达式 / 参数帮助卡片",
+                sub="示例与说明一览，可拖到旁边边看边填",
+                gesture="点输入旁「?」",
             ),
             QuickRow(
                 "删除通道",
