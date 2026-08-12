@@ -41,6 +41,8 @@ class ChannelEditorDrawer(QDialog):
         self._last_toast_text: str = ""
         self._last_toast_kind: str = ""
         self._own_toast: Toast | None = None
+        self._forwarding = False
+        self.is_closing = False
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self._inner)
@@ -72,11 +74,14 @@ class ChannelEditorDrawer(QDialog):
         ``MainWindow._toast`` is a child of the main window, so forwarding
         there while this modal drawer is up painted the message *underneath*
         it (export keeps the drawer open on purpose). While visible the drawer
-        owns its toast; after close, fall back to the parent.
+        owns its toast; after close — or while apply is closing us — fall
+        back to the parent. ``_forwarding`` lets that fallback happen once.
         """
         self._last_toast_text = text
         self._last_toast_kind = kind
-        if self.isVisible():
+        if self._forwarding:
+            return
+        if self.isVisible() and not self.is_closing:
             try:
                 if self._own_toast is None:
                     self._own_toast = Toast(
@@ -90,12 +95,18 @@ class ChannelEditorDrawer(QDialog):
                 pass
         parent = self.parent()
         if parent is not None and hasattr(parent, "toast"):
+            self._forwarding = True
             try:
                 parent.toast(text, kind)
             except Exception:  # noqa: BLE001
                 pass
+            finally:
+                self._forwarding = False
 
     def _on_applied(self):
+        # Drop toast-host eligibility before emit: apply feedback must land
+        # on the main window, because ``accept()`` immediately closes us.
+        self.is_closing = True
         self.applied.emit(
             self._inner.current_fid,
             self._inner.new_channels,

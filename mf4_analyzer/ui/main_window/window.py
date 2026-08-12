@@ -761,6 +761,24 @@ class MainWindow(
         }.get(mode)
         return getattr(page, "tabbar", None) if page is not None else None
 
+    def _channel_editor_toast_host(self):
+        """Drawer that should own toasts: open, not closing, not mid-fallback.
+
+        Export keeps the drawer open, so feedback paints on it. Apply emits
+        then ``accept()``, so routing onto that surface would vanish with it.
+        A fallback already in flight must not bounce back into the drawer.
+        """
+        if getattr(self, "_toast_forwarding", False):
+            return None
+        drawer = getattr(self, "_channel_editor_drawer", None)
+        if drawer is None or not drawer.isVisible():
+            return None
+        if getattr(drawer, "is_closing", False):
+            return None
+        if getattr(drawer, "_forwarding", False):
+            return None
+        return drawer
+
     # ---- public toast helper ----
     def toast(self, msg, level='info'):
         """Show a transient acknowledgement toast at the bottom of the window.
@@ -770,20 +788,25 @@ class MainWindow(
         """
         if not msg:
             return
-        drawer = getattr(self, "_channel_editor_drawer", None)
-        if drawer is not None and drawer.isVisible():
-            drawer.toast(msg, level)
-            return
+        drawer = self._channel_editor_toast_host()
+        if drawer is not None:
+            self._toast_forwarding = True
+            try:
+                drawer.toast(msg, level)
+                return
+            finally:
+                self._toast_forwarding = False
         self._toast.show_message(msg, level=level)
 
     def _status_message(self, message, timeout=0):
         """Status-bar feedback; during channel-editor modal, surface via toast.
 
         The modal drawer occludes the main status bar, so the same text rides
-        the drawer's self-owned toast (BatchSheet pattern).
+        the drawer's self-owned toast (BatchSheet pattern). Apply is about to
+        close the drawer, so that path stays on the main status bar.
         """
-        drawer = getattr(self, "_channel_editor_drawer", None)
-        if drawer is not None and drawer.isVisible():
+        drawer = self._channel_editor_toast_host()
+        if drawer is not None:
             drawer.toast(message, "info")
             return
         self.statusBar.showMessage(message, timeout)

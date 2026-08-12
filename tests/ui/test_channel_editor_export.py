@@ -463,6 +463,105 @@ def test_main_window_routes_toast_and_status_to_open_channel_editor(
     assert drawer._last_toast_kind == "info"
 
 
+def test_channel_editor_apply_feedback_lands_on_main_window_after_close(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    """Apply closes the drawer; 「编辑: +N -M」 must survive on the main window.
+
+    Routing toast/status onto the still-visible drawer used to paint the
+    acknowledgement on a widget that ``accept()`` immediately destroys.
+    """
+    import numpy as np
+    from mf4_analyzer.ui.drawers.channel_editor_drawer import ChannelEditorDrawer
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    a = tmp_path / "a.csv"
+    _csv(a)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(a))
+    fid = next(iter(mw.files))
+
+    drawer = ChannelEditorDrawer(mw, mw.files, fid)
+    qtbot.addWidget(drawer)
+    drawer.show()
+    qtbot.waitExposed(drawer)
+    mw._channel_editor_drawer = drawer
+    drawer.applied.connect(mw._apply_channel_edits)
+
+    host_toasts = []
+    monkeypatch.setattr(
+        mw._toast, "show_message",
+        lambda msg, level="info": host_toasts.append((msg, level)),
+    )
+    status_calls = []
+    orig_status = mw.statusBar.showMessage
+
+    def _capture_status(message, timeout=0):
+        status_calls.append(message)
+        return orig_status(message, timeout)
+
+    monkeypatch.setattr(mw.statusBar, "showMessage", _capture_status)
+
+    n = len(mw.files[fid].data)
+    drawer._inner.new_channels = {
+        "derived": (np.arange(n, dtype=float), "u"),
+    }
+    drawer._on_applied()
+    qapp.processEvents()
+
+    assert not drawer.isVisible()
+    assert any("编辑: +1 -0" in (msg or "") for msg in status_calls), status_calls
+    assert ("通道已更新: 新增 1 · 删除 0", "success") in host_toasts
+
+
+def test_channel_editor_toast_own_failure_falls_back_once_without_recursion(
+    qapp, qtbot, tmp_path, monkeypatch,
+):
+    """Own-toast paint failure must fall back to MainWindow once, not loop.
+
+    drawer.toast → parent.toast → drawer.toast used to recurse until
+    RecursionError was swallowed by ``except Exception`` and the message
+    vanished.
+    """
+    from mf4_analyzer.ui.drawers.channel_editor_drawer import ChannelEditorDrawer
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    a = tmp_path / "a.csv"
+    _csv(a)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(a))
+    fid = next(iter(mw.files))
+
+    drawer = ChannelEditorDrawer(mw, mw.files, fid)
+    qtbot.addWidget(drawer)
+    drawer.show()
+    qtbot.waitExposed(drawer)
+    mw._channel_editor_drawer = drawer
+
+    host_toasts = []
+    monkeypatch.setattr(
+        mw._toast, "show_message",
+        lambda msg, level="info": host_toasts.append((msg, level)),
+    )
+
+    class _BoomToast:
+        def show_message(self, text, level="info"):
+            raise RuntimeError("forced own-toast failure")
+
+    drawer._own_toast = _BoomToast()
+    drawer.toast("forced-fail message", "warning")
+
+    assert host_toasts == [("forced-fail message", "warning")]
+    assert drawer._last_toast_text == "forced-fail message"
+    assert drawer._last_toast_kind == "warning"
+
+    host_toasts.clear()
+    mw.toast("from-main-after-own-fail", "info")
+    assert host_toasts == [("from-main-after-own-fail", "info")]
+
+
 def test_editor_export_no_selection_does_not_emit(qapp, tmp_path, monkeypatch):
     # Clicking 导出 with nothing checked must show an info prompt and NOT emit
     # (exercises the cold QMessageBox branch — guards against a NameError).
