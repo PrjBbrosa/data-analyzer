@@ -3406,13 +3406,20 @@ QFrame#chartHintBar {
     background-color: transparent;
     border-top: 1px solid #d3dbe6;
 }
+/* When docked into the rounded status bar, keep an opaque fill so a crushed
+ * status message cannot peek as a glyph remnant to the left of ``?``. */
+QStatusBar#surfaceStatusBar QFrame#chartHintBar {
+    background-color: #ffffff;
+    border-top: none;
+}
 QFrame#chartHintBar QToolButton#chartHintQuickrefButton {
     min-width: 16px;
     max-width: 16px;
     min-height: 16px;
     max-height: 16px;
     padding: 0;
-    margin: 0 2px 0 0;
+    /* Clear the status-bar border-radius so the circle is not shaved. */
+    margin: 0 4px 0 4px;
     background-color: #eff6ff;
     border: 1px solid #bfdbfe;
     border-radius: 8px;

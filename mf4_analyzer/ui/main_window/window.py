@@ -67,7 +67,9 @@ from ._project_io_mixin import ProjectIOMixin
 from ._view_mixin import ViewMixin
 
 
-_STATUS_HINTS_VISIBLE_SETTINGS_KEY = "quickref/status_hints_visible"
+# v2: default off (glyph-only ``?``). Bumped so prior "on" prefs do not keep
+# crushed rotating copy next to the QuickRef entry after this product change.
+_STATUS_HINTS_VISIBLE_SETTINGS_KEY = "quickref/status_hints_visible_v2"
 
 
 @dataclass
@@ -685,20 +687,21 @@ class MainWindow(
         try:
             return bool(self._status_hint_settings().value(
                 _STATUS_HINTS_VISIBLE_SETTINGS_KEY,
-                True,
+                False,
                 type=bool,
             ))
         except Exception:
-            return True
+            return False
 
     def status_hints_visible(self):
-        return bool(getattr(self, "_status_hints_visible", True))
+        return bool(getattr(self, "_status_hints_visible", False))
 
     def set_status_hints_visible(self, visible):
         """Show/hide bottom hint text and persist the preference.
 
-        The existing ``?`` QuickRef entry stays visible as the only recovery
-        route when the text is disabled.
+        Default is off: the status line keeps only the ``?`` QuickRef entry so
+        rotating/discovery copy cannot be crushed into a clipped remnant next
+        to the button. Users can still re-enable hints from the QuickRef panel.
         """
         visible = bool(visible)
         self._status_hints_visible = visible

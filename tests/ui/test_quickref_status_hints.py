@@ -29,17 +29,10 @@ def test_quickref_bottom_hints_toggle_hides_and_persists(qapp, qtbot):
     qtbot.waitExposed(window)
     qapp.processEvents()
 
-    assert window.status_hints_visible()
-    assert not window._status_hint_bar.isHidden()
-
-    window.toggle_quickref_panel()
-    panel = window._quickref_panel
-    panel._bottom_hints_toggle.click()
-    qapp.processEvents()
-
+    # Default: glyph-only QuickRef entry, no rotating/discovery copy.
     assert not window.status_hints_visible()
+    assert not window._status_hint_bar.isHidden()
     bar = window._status_hint_bar
-    assert not bar.isHidden()
     quickref = bar.findChild(
         QToolButton, "chartHintQuickrefButton", Qt.FindDirectChildrenOnly
     )
@@ -48,8 +41,26 @@ def test_quickref_bottom_hints_toggle_hides_and_persists(qapp, qtbot):
         QLabel, "chartHintDiscovery", Qt.FindDirectChildrenOnly
     )
     assert quickref is not None and quickref.isVisible()
+    assert quickref.text() == "?"
     assert context is not None and context.isVisible()
     assert discovery is not None and discovery.isVisible()
+    assert context.styleSheet() == "color: transparent;"
+    assert discovery.styleSheet() == "color: transparent;"
+
+    window.toggle_quickref_panel()
+    panel = window._quickref_panel
+    assert not panel._bottom_hints_toggle.isChecked()
+    panel._bottom_hints_toggle.click()
+    qapp.processEvents()
+
+    assert window.status_hints_visible()
+    assert context.styleSheet() == ""
+    assert discovery.styleSheet() == ""
+
+    # Turn hints off again and persist.
+    panel._bottom_hints_toggle.click()
+    qapp.processEvents()
+    assert not window.status_hints_visible()
     assert context.styleSheet() == "color: transparent;"
     assert discovery.styleSheet() == "color: transparent;"
     quickref_rect = quickref.geometry()
@@ -87,6 +98,7 @@ def test_quickref_bottom_hints_toggle_hides_and_persists(qapp, qtbot):
         QLabel, "chartHintDiscovery", Qt.FindDirectChildrenOnly
     )
     assert quickref is not None and quickref.isVisible()
+    assert quickref.text() == "?"
     assert context is not None and context.isVisible()
     assert discovery is not None and discovery.isVisible()
     assert context.styleSheet() == "color: transparent;"
@@ -101,3 +113,4 @@ def test_quickref_bottom_hints_toggle_hides_and_persists(qapp, qtbot):
         QToolButton, "chartHintQuickrefButton", Qt.FindDirectChildrenOnly
     )
     assert restored_quickref is not None
+    assert restored_quickref.text() == "?"

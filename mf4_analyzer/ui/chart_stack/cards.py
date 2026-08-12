@@ -387,15 +387,18 @@ class _ChartCard(QWidget):
         )
         self._hint_quickref_btn = QToolButton(self._hint_bar)
         self._hint_quickref_btn.setObjectName("chartHintQuickrefButton")
+        # Glyph only — never "操作速查" beside the mark. The status-bar chrome
+        # is too tight for a caption; a clipped remnant reads as a bug.
         self._hint_quickref_btn.setText("?")
+        self._hint_quickref_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self._hint_quickref_btn.setAutoRaise(True)
         self._hint_quickref_btn.setCursor(Qt.PointingHandCursor)
-        self._hint_quickref_btn.setToolTip("操作速查 (?)")
+        self._hint_quickref_btn.setToolTip("操作速查")
         self._hint_quickref_btn.clicked.connect(self.quickref_requested.emit)
         # Two edge-anchored slots, no centered group / separator: the rotating
         # gesture row hugs the LEFT edge (stretch=1, so it owns the whole left
         # span and elides there if too long), the discovery row hugs the RIGHT
-        # edge. A long left row can never squeeze the right row off the bar.
+        # edge. A long left row can never squeeze the discovery row off the bar.
         bar_lay.addWidget(self._hint_quickref_btn, 0, Qt.AlignVCenter)
         bar_lay.addWidget(self._hint_context, 1)
         bar_lay.addWidget(self._hint_discovery, 0)

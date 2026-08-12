@@ -397,7 +397,7 @@ class QuickRefPanel(QWidget):
         parent=None,
         open_guide=None,
         *,
-        bottom_hints_visible=True,
+        bottom_hints_visible=False,
         set_bottom_hints_visible=None,
     ):
         # Qt.Tool keeps the window off the taskbar and tied to the app without

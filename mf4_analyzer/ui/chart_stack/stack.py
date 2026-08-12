@@ -393,7 +393,9 @@ class ChartStack(QWidget):
         lay = self._time_hint_bar.layout()
         while lay.count():
             lay.takeAt(0)
-        lay.setContentsMargins(8, 1, 8, 1)
+        # Left inset clears SurfaceStatusBar's 8px border-radius so the ``?``
+        # circle is not clipped into a fake glyph remnant.
+        lay.setContentsMargins(10, 1, 8, 1)
         lay.setSpacing(4)
         lay.addWidget(self._time_card._hint_quickref_btn, 0, Qt.AlignVCenter)
         lay.addWidget(self._time_card._hint_context, 1)
