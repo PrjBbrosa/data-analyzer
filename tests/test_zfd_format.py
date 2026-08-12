@@ -97,3 +97,53 @@ def test_non_zfge2_magic_rejected(tmp_path):
     p.write_bytes(b"NOTZF\nfoo\nbar\n" + b"\x00" * 200)
     with pytest.raises(ValueError, match="不是有效的 ZFD"):
         DataLoader.load_zfd(str(p))
+
+
+def _write_minimal_zfd(path: Path, *, dt: float, count: int = 8,
+                       values=None, name: str = "temp", unit: str = "C",
+                       marker: str = "E1") -> Path:
+    """Construct a one-channel ZFGE2 file with an explicit first-channel dt.
+
+    Layout matches ``zfd_format``: text header, then
+    ``float64 dt + u16×3 pre-header + marker/unit lines + pad + disp + f32[count]``.
+    """
+    import struct
+
+    samples = list(range(count)) if values is None else list(values)
+    if len(samples) != count:
+        raise ValueError("values length must equal count")
+    header = b"ZFGE2\nTestRunPRO Data V1\nSlow Sample\n~\n"
+    pre = struct.pack("<dHHH", float(dt), 4, int(count), 0)
+    marker_line = f"{marker}: {name}\n".encode("latin-1")
+    unit_line = f"{unit}\n".encode("latin-1")
+    pad = b"\x00\x00"
+    disp = struct.pack("<dd", float(min(samples)), float(max(samples)))
+    body = np.asarray(samples, dtype="<f4").tobytes()
+    path.write_bytes(header + pre + marker_line + unit_line + pad + disp + body)
+    return path
+
+
+def test_zfd_slow_sample_dt_two_seconds_keeps_half_hz(tmp_path):
+    """A4: dt=2.0 (0.5 Hz) must not be crushed into the 1 kHz estimate."""
+    p = _write_minimal_zfd(tmp_path / "slow.zfd", dt=2.0, count=5,
+                           values=[1.0, 2.0, 3.0, 4.0, 5.0])
+    groups = DataLoader.load_zfd(str(p))
+    assert len(groups) == 1
+    g = groups[0]
+    t = g["data"]["Time"].to_numpy()
+    assert len(t) == 5
+    assert t[1] - t[0] == pytest.approx(2.0)
+    assert g["source_metadata"]["fs_estimated"] is False
+    fd = FileData(str(p), g["data"], g["channels"], g["units"], 0,
+                  source_metadata=g["source_metadata"])
+    assert fd.fs == pytest.approx(0.5, rel=1e-9)
+
+
+def test_zfd_dt_above_hour_falls_back_to_estimated_1khz(tmp_path):
+    """A4: absurd dt (>3600 s) still uses the documented 1 kHz estimate."""
+    p = _write_minimal_zfd(tmp_path / "absurd.zfd", dt=7200.0, count=4)
+    groups = DataLoader.load_zfd(str(p))
+    g = groups[0]
+    t = g["data"]["Time"].to_numpy()
+    assert t[1] - t[0] == pytest.approx(0.001)
+    assert g["source_metadata"]["fs_estimated"] is True

@@ -285,6 +285,54 @@ def test_adapter_for_sniffs_canoe_asc_onto_blf_adapter(tmp_path):
     assert registry.adapter_for(".asc").key == "ascii"
 
 
+def test_asc_sniff_importerror_points_at_python_can(tmp_path, monkeypatch):
+    """P3: ImportError during .asc sniff must not fall through to ASCII."""
+    path = tmp_path / "maybe_canoe.asc"
+    path.write_text(
+        "date Thu Jan 01 00:00:00.000 am 2026\n"
+        "base hex timestamps absolute\n",
+        encoding="utf-8",
+    )
+
+    def _boom(_path):
+        raise ImportError("No module named 'can'")
+
+    monkeypatch.setattr(
+        "mf4_analyzer.io.asc_can_format.sniff_canoe_asc", _boom,
+    )
+    registry = SourceAdapterRegistry.default()
+    with pytest.raises(ImportError, match="python-can"):
+        registry.adapter_for(path)
+
+
+def test_mdf_channel_facts_lookup_failure_unit_is_none(monkeypatch):
+    """P3: channel lookup failure → unit None (not \"\")."""
+    from types import SimpleNamespace
+
+    from mf4_analyzer.io import source_adapters as sa
+
+    monkeypatch.setattr(
+        sa, "unique_mdf_channel_locations", lambda _mdf: {"sig": (0, 0)},
+    )
+
+    class _Channels:
+        def __getitem__(self, _index):
+            raise IndexError("channel missing")
+
+    mdf = SimpleNamespace(groups=[SimpleNamespace(channels=_Channels())])
+    _names, units, channel_metadata = sa._mdf_channel_facts(mdf)
+    assert units["sig"] is None
+    assert channel_metadata["sig"]["unit"] is None
+
+
+def test_mdf_probe_empty_unit_stays_empty_string(tmp_path):
+    """Channel present with no unit stays \"\" (not None)."""
+    path = write_single_channel_mf4(tmp_path / "nounit.mf4", name="sig", unit="")
+    adapter = SourceAdapterRegistry.default().adapter_for(path)
+    descriptor = adapter.probe_sources(path)[0]
+    assert descriptor.units["sig"] == ""
+
+
 def test_canoe_asc_probe_and_load_match_blf_frame_sequence(tmp_path, monkeypatch):
     pytest.importorskip("can", reason="python-can not installed (win32-gated)")
     pytest.importorskip("cantools", reason="cantools not installed")

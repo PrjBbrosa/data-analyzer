@@ -805,6 +805,8 @@ class DataLoader:
                 "source_filename": Path(fp).name,
                 "dropped_channels": dropped,
             }
+            if hf.warnings:
+                smeta["warnings"] = list(hf.warnings)
             groups.append({
                 "data": pd.DataFrame(data), "channels": list(data.keys()),
                 "units": units, "channel_metadata": cmeta,

@@ -89,7 +89,7 @@ class SourceDescriptor:
     group_id: str
     display_name: str
     channel_names: tuple[str, ...]
-    units: Mapping[str, str]
+    units: Mapping[str, str | None]
     fs: float | None
     metadata: Mapping[str, object]
 
@@ -260,13 +260,22 @@ def _mdf_channel_facts(mdf) -> tuple[tuple[str, ...], dict, dict]:
             channel = mdf.groups[group_index].channels[channel_index]
         except Exception:
             channel = None
-        conversion = getattr(channel, "conversion", None)
-        unit = str(
-            getattr(conversion, "unit", "")
-            or getattr(channel, "unit", "")
-            or ""
-        )
-        source = getattr(channel, "source", None)
+        if channel is None:
+            unit = None
+            source = None
+        else:
+            conversion = getattr(channel, "conversion", None)
+            raw_unit = (
+                getattr(conversion, "unit", None)
+                if conversion is not None
+                else None
+            )
+            if raw_unit in (None, ""):
+                raw_unit = getattr(channel, "unit", None)
+            # Lookup succeeded: empty/missing unit stays "" so it stays
+            # distinguishable from a failed channel lookup (None).
+            unit = "" if raw_unit in (None, "") else str(raw_unit)
+            source = getattr(channel, "source", None)
         channels.append(name)
         units[name] = unit
         channel_metadata[name] = {
@@ -651,6 +660,11 @@ class SourceAdapterRegistry:
                 from .asc_can_format import sniff_canoe_asc
                 if sniff_canoe_asc(raw):
                     return self._by_extension[".blf"]
+            except ImportError as exc:
+                raise ImportError(
+                    "python-can 未安装，无法识别 CANoe ASC 文件。"
+                    "请先 pip install python-can"
+                ) from exc
             except Exception:
                 pass
         try:
