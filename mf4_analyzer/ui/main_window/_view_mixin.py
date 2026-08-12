@@ -126,6 +126,12 @@ class ViewMixin:
         self._view_bridge.capture_canvas_ranges_into(self.view_manager.get(idx), canvas)
 
     def _capture_focused_view(self):
+        # Time-domain View capture only — analysis modes project a different
+        # attachment set onto the navigator; writing that back would corrupt
+        # Time View attached/checked/colors (A1). Symmetric with the analysis
+        # capture guard that already keys off current_mode.
+        if self.chart_stack.current_mode() != 'time':
+            return
         idx = self._focused_view_idx
         if idx is None or not (0 <= idx < len(self.view_manager.views)):
             return

@@ -251,3 +251,72 @@ def test_item3_skips_while_opening_project(qtbot, qapp, loaded_csv):
     window._on_mode_changed("fft")
     qapp.processEvents()
     assert window.analysis_managers["fft"].get(0).attached_file_ids == []
+
+
+def test_multi_file_load_aggregates_analysis_attach_toast(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    """F11: multi-file open in analysis mode emits one「已加入 … · N 个文件」toast."""
+    import numpy as np
+    import pandas as pd
+
+    def _csv(path):
+        t = np.linspace(0.0, 1.0, 20)
+        pd.DataFrame({"time": t, "rpm": np.sin(t)}).to_csv(path, index=False)
+        return str(path)
+
+    a = _csv(tmp_path / "multi_a.csv")
+    b = _csv(tmp_path / "multi_b.csv")
+
+    window = _window(qtbot, qapp)
+    window.navigator.set_follow_prefs(FollowPrefs(True, False, False))
+    window._on_mode_changed("fft")
+    qapp.processEvents()
+    assert window.analysis_managers["fft"].get(0).attached_file_ids == []
+
+    messages = []
+    monkeypatch.setattr(
+        window,
+        "toast",
+        lambda message, level="info": messages.append((message, level)),
+    )
+    # Skip the heavy-load confirm so the multi-file path always runs the loop.
+    monkeypatch.setattr(window, "_should_confirm_heavy_load", lambda *_a, **_k: False)
+
+    window._open_data_paths([a, b])
+    qapp.processEvents()
+
+    attach_toasts = [msg for msg, _ in messages if "已加入" in msg]
+    assert len(attach_toasts) == 1, messages
+    assert "2 个文件" in attach_toasts[0]
+    assert len(window.analysis_managers["fft"].get(0).attached_file_ids) == 2
+
+
+def test_single_file_load_still_toasts_analysis_attach(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    """F11: single-file path keeps the per-load attach toast."""
+    import numpy as np
+    import pandas as pd
+
+    path = tmp_path / "one.csv"
+    t = np.linspace(0.0, 1.0, 20)
+    pd.DataFrame({"time": t, "rpm": np.sin(t)}).to_csv(path, index=False)
+
+    window = _window(qtbot, qapp)
+    window.navigator.set_follow_prefs(FollowPrefs(True, False, False))
+    window._on_mode_changed("fft")
+    qapp.processEvents()
+
+    messages = []
+    monkeypatch.setattr(
+        window,
+        "toast",
+        lambda message, level="info": messages.append((message, level)),
+    )
+    window._open_data_paths([str(path)])
+    qapp.processEvents()
+
+    attach_toasts = [msg for msg, _ in messages if "已加入" in msg]
+    assert len(attach_toasts) == 1, messages
+    assert "1 个文件" in attach_toasts[0]

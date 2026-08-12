@@ -343,6 +343,53 @@ def test_project_roundtrip_restores_time_filter_state(qapp, tmp_path):
     assert restored.show_filtered() is True
 
 
+def test_save_project_in_fft_mode_preserves_time_view_scope(qapp, tmp_path):
+    """A1: saving while FFT is active must not overwrite Time View 1.
+
+    ``_capture_focused_view`` used to read the analysis-projected navigator and
+    write its attachments/checked/colors into the focused time View — corrupting
+    the ``.tlproj``. Guard lives inside ``_capture_focused_view`` itself.
+    """
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    csv_b = tmp_path / "b.csv"; _write_csv(csv_b)
+    proj = tmp_path / "a1-scope.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(csv_a))
+    mw._load_one(str(csv_b))
+    fid_a, fid_b = list(mw.files)
+
+    tv = mw.view_manager.get(0)
+    tv.attached_file_ids = [fid_a]
+    tv.checked = [(fid_a, "rpm")]
+    tv.colors = {(fid_a, "rpm"): "#ff0000"}
+    mw._project_view_controls(0)
+
+    mw.chart_stack.set_mode("fft")
+    mw.inspector.set_mode("fft")
+    fft_state = mw.analysis_managers["fft"].get(0)
+    fft_state.attached_file_ids = [fid_b]
+    mw._project_analysis_attachments("fft", fft_state)
+
+    expected_attached = list(tv.attached_file_ids)
+    expected_checked = list(tv.checked)
+    expected_colors = dict(tv.colors)
+
+    mw.save_project(proj)
+
+    tv_after = mw.view_manager.get(0)
+    assert tv_after.attached_file_ids == expected_attached
+    assert tv_after.checked == expected_checked
+    assert tv_after.colors == expected_colors
+
+    doc = json.loads(proj.read_text(encoding="utf-8"))
+    saved_view = doc["views"][0]
+    assert saved_view["attached_file_ids"] == expected_attached
+    assert [tuple(row) for row in saved_view["checked"]] == expected_checked
+
+
 def test_open_project_restores_non_time_mode_consistently(qapp, tmp_path):
     # Reopening a project saved in a non-time mode must leave the chart,
     # the toolbar segment, and the inspector all agreeing on that mode —
