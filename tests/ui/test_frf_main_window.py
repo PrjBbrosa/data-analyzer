@@ -212,6 +212,53 @@ def test_frf_manual_range_auto_rebuilds_time_jitter_inside_selected_samples(qtbo
     )
 
 
+def test_frf_auto_rebuild_dispatches_on_code_not_chinese_substring(qtbot, monkeypatch):
+    """D11: nonuniform recovery keys off FrfPreflightError.code, not message text."""
+    win, fid, state, time = _window_with_pair(qtbot)
+    win.files[fid]._time_source = "column"
+    win.inspector.frf_ctx.spin_t_win.setValue(0.5)
+    state.params["range_mode"] = "manual"
+    state.panes[0].time_range = (0.1, 0.9)
+
+    rebuilt = {"n": 0}
+    real_validate = win._frf_validate_time_axis
+
+    def validate_once(*args, **kwargs):
+        # First pass: raise with the recovery code but a message that does
+        # NOT contain the old Chinese substring the dispatcher used to sniff.
+        if rebuilt["n"] == 0:
+            rebuilt["n"] = 1
+            raise FrfPreflightError(
+                "time axis jitter exceeded tolerance",
+                code=FrfPreflightError.CODE_NONUNIFORM_TIME_AXIS,
+            )
+        return real_validate(*args, **kwargs)
+
+    monkeypatch.setattr(win, "_frf_validate_time_axis", validate_once)
+    monkeypatch.setattr(
+        win,
+        "_frf_auto_rebuild_source_time_axis",
+        lambda *_a, **_k: None,
+    )
+
+    # Must recover (rebuild path) rather than propagate the English message.
+    candidate = win._frf_prepare_pair_samples(state, state.panes[0])
+    assert candidate is not None
+    assert rebuilt["n"] == 1
+
+
+def test_register_file_data_uses_signature_not_typeerror_text():
+    """D11: fs kwarg admission is inspect.signature, not TypeError sniffing."""
+    import inspect
+    from mf4_analyzer.ui.main_window import _project_io_mixin as mod
+
+    src = inspect.getsource(mod.ProjectIOMixin._register_file_data)
+    assert "inspect.signature" in src
+    assert '"fs" not in str' not in src
+    assert "'fs' not in str" not in src
+    assert "fs" in inspect.signature(mod.FileData).parameters
+
+
 def test_frf_preflight_rejects_uniform_but_generated_timebase(qtbot):
     win, _fid, state, _time = _window_with_pair(qtbot)
     win.files[state.panes[0].input_source[0]]._time_source = "generated"

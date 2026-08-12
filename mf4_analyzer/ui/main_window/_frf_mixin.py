@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 import numpy as np
 
@@ -13,9 +14,18 @@ from .frf_coordinator import frf_compute_cache_params
 
 @dataclass
 class FrfPreflightError(ValueError):
-    """A user/data issue that must be shown without starting a worker."""
+    """A user/data issue that must be shown without starting a worker.
+
+    ``code`` is the structured dispatch key (NO_CAN_FRAMES_MESSAGE pattern):
+    adapters branch on ``code``, never on Chinese substrings in ``message``.
+    """
 
     message: str
+    code: str = "generic"
+
+    #: Selected-range time axis failed the uniformity gate; recoverable via
+    #: one automatic rebuild pass.
+    CODE_NONUNIFORM_TIME_AXIS: ClassVar[str] = "nonuniform_time_axis"
 
     def __str__(self) -> str:
         return self.message
@@ -239,7 +249,8 @@ class FrfMixin:
         jitter = float(np.max(np.abs(differences - nominal_dt)) / nominal_dt)
         if jitter > DEFAULT_TIME_JITTER_TOLERANCE:
             raise FrfPreflightError(
-                f"{role}真实时间轴不均匀（相对抖动 {jitter:.6g}）"
+                f"{role}真实时间轴不均匀（相对抖动 {jitter:.6g}）",
+                code=FrfPreflightError.CODE_NONUNIFORM_TIME_AXIS,
             )
 
     @staticmethod
@@ -409,8 +420,10 @@ class FrfMixin:
                     output_time, output_values, output_fs, "输出"
                 )
             except FrfPreflightError as issue:
-                message = str(issue)
-                if "真实时间轴不均匀" not in message or _auto_rebuilt:
+                if (
+                    issue.code != FrfPreflightError.CODE_NONUNIFORM_TIME_AXIS
+                    or _auto_rebuilt
+                ):
                     raise
                 jitter = self._frf_relative_jitter(input_time, input_fs)
                 if jitter is None:

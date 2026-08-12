@@ -443,13 +443,16 @@ def test_relative_denominator_threshold_is_invariant_to_common_signal_scale(
 
 
 def test_spectral_overflow_is_observable_instead_of_returning_inf():
+    from mf4_analyzer.signal.frf import FrfSpectralOverflow
+
     segment = 1e308 * np.array([1.0, 0.0, -1.0, 0.0])
     x = np.tile(segment, 2)
     y = x.copy()
     with warnings.catch_warnings():
         warnings.simplefilter("error", RuntimeWarning)
-        with pytest.raises(ValueError, match="spectral accumulation overflow"):
+        with pytest.raises(FrfSpectralOverflow, match="spectral accumulation overflow"):
             compute_frf(x, y, fs=8.0, params=_basic_params())
+    assert issubclass(FrfSpectralOverflow, ValueError)
 
 
 @pytest.mark.parametrize("estimator", ["h1", "h2"])
@@ -558,6 +561,8 @@ def test_result_arrays_have_stable_dtype_shape_and_read_only_contract():
 
 
 def test_cancel_is_polled_per_segment_and_stops_without_final_progress():
+    from mf4_analyzer.signal.frf import FrfCancelled
+
     x = np.tile(np.array([1.0, 0.0, -1.0, 0.0]), 20)
     y = 2.0 * x
     polls = 0
@@ -568,7 +573,7 @@ def test_cancel_is_polled_per_segment_and_stops_without_final_progress():
         polls += 1
         return polls >= 3
 
-    with pytest.raises(RuntimeError, match="FRF computation cancelled"):
+    with pytest.raises(FrfCancelled, match="FRF computation cancelled"):
         compute_frf(
             x,
             y,
@@ -579,6 +584,8 @@ def test_cancel_is_polled_per_segment_and_stops_without_final_progress():
         )
     assert polls == 3
     assert not progress_calls or progress_calls[-1][0] < progress_calls[-1][1]
+    # Subclass of RuntimeError so older adapters that catch RuntimeError still see it.
+    assert issubclass(FrfCancelled, RuntimeError)
 
 
 def test_progress_is_monotonic_throttled_and_finishes_at_total():
