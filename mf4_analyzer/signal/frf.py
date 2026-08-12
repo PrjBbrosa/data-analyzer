@@ -142,6 +142,32 @@ class FrfRequestValidationError(ValueError):
     """Expected invalid FRF request shape or resource requirement."""
 
 
+class FrfCancelled(RuntimeError):
+    """Cancel token fired during spectral accumulation.
+
+    Structured identity for adapters (Batch / GUI): catch the type, never
+    sniff ``str(exc)``. Message kept stable for logs and older matchers.
+    """
+
+    MESSAGE = "FRF computation cancelled"
+
+    def __init__(self, message: str = MESSAGE):
+        super().__init__(message)
+
+
+class FrfSpectralOverflow(ValueError):
+    """Spectral sums overflowed float64; rescale the input signals.
+
+    Structured identity for adapters: catch the type, never sniff
+    ``str(exc)``. Message kept stable for logs and older matchers.
+    """
+
+    MESSAGE = "spectral accumulation overflow; rescale the input signals"
+
+    def __init__(self, message: str = MESSAGE):
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class FrfRequestPlan:
     """Validated segment/FFT shape before any spectral allocation."""
@@ -451,7 +477,7 @@ def compute_frf(
     with np.errstate(over="ignore", invalid="ignore"):
         for index, start_value in enumerate(starts):
             if cancel_check is not None and cancel_check():
-                raise RuntimeError("FRF computation cancelled")
+                raise FrfCancelled()
             start = int(start_value)
             x_work = input_signal[start : start + nperseg].copy()
             y_work = output_signal[start : start + nperseg].copy()
@@ -491,7 +517,7 @@ def compute_frf(
         and np.isfinite(pxy.real).all()
         and np.isfinite(pxy.imag).all()
     ):
-        raise ValueError("spectral accumulation overflow; rescale the input signals")
+        raise FrfSpectralOverflow()
     pxx = np.maximum(pxx.real, 0.0)
     pyy = np.maximum(pyy.real, 0.0)
 
@@ -600,11 +626,13 @@ def compute_frf(
 
 
 __all__ = [
+    "FrfCancelled",
     "FrfEffectiveFacts",
     "FrfParams",
     "FrfRequestPlan",
     "FrfRequestValidationError",
     "FrfResult",
+    "FrfSpectralOverflow",
     "RELATIVE_DENOMINATOR_EPS_FACTOR",
     "compute_frf",
     "get_frf_window",

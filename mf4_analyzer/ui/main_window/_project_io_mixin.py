@@ -1,5 +1,6 @@
 """ProjectIOMixin: file load/close and .tlproj save/open for MainWindow."""
 
+import inspect
 import json
 import os
 from pathlib import Path
@@ -419,15 +420,15 @@ class ProjectIOMixin:
             channel_metadata=channel_metadata,
             label_suffix=label_suffix,
         )
-        if fs is not None:
+        # Pre-check the constructor signature instead of sniffing TypeError
+        # text for "fs" (CPython 3.10+ wording drifted; any unrelated TypeError
+        # mentioning "fs" used to be swallowed). Same structured-dispatch
+        # idea as NO_CAN_FRAMES_MESSAGE.
+        file_data_accepts_fs = "fs" in inspect.signature(FileData).parameters
+        if fs is not None and file_data_accepts_fs:
             kwargs["fs"] = fs
-        try:
-            fd = FileData(fp, data, chs, units, len(self.files), **kwargs)
-        except TypeError as exc:
-            if fs is None or "fs" not in str(exc):
-                raise
-            kwargs.pop("fs", None)
-            fd = FileData(fp, data, chs, units, len(self.files), **kwargs)
+        fd = FileData(fp, data, chs, units, len(self.files), **kwargs)
+        if fs is not None and not file_data_accepts_fs:
             try:
                 fd.rebuild_time_axis(float(fs))
             except Exception:

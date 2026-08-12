@@ -27,9 +27,11 @@ from .batch_types import _BatchCancelled
 from .signal import resolve_nfft, resolve_order_nfft
 from .signal.fft import FFTAnalyzer
 from .signal.frf import (
+    FrfCancelled,
     FrfParams,
     FrfRequestValidationError,
     FrfResult,
+    FrfSpectralOverflow,
     compute_frf,
     magnitude_db,
     magnitude_linear,
@@ -306,14 +308,10 @@ def compute_prepared_frf(
             ),
             progress=progress,
         )
-    except RuntimeError as exc:
-        if str(exc) == "FRF computation cancelled":
-            raise _BatchCancelled("cancelled during FRF computation") from exc
-        raise
-    except ValueError as exc:
-        if str(exc) == "spectral accumulation overflow; rescale the input signals":
-            raise BatchFrfDataError(str(exc)) from exc
-        raise
+    except FrfCancelled as exc:
+        raise _BatchCancelled("cancelled during FRF computation") from exc
+    except FrfSpectralOverflow as exc:
+        raise BatchFrfDataError(str(exc)) from exc
     transfer = result.transfer
     pxy = result.pxy
     frame = pd.DataFrame({

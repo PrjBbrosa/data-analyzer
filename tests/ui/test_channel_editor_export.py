@@ -371,6 +371,97 @@ def test_drawer_reemits_export_requested(qapp, tmp_path):
     assert got["fid"] == "f0"
     assert got["chs"] == ["rpm", "spd"]   # both default-checked
     assert got["fmt"] == "excel"
+    # Export must not accept/close the drawer (intentional keep-open UX).
+    assert drawer.result() == 0
+
+
+def test_channel_editor_toast_paints_on_drawer_not_behind_it(qtbot, tmp_path):
+    """A visible drawer must own its toast (D10 / BatchSheet pattern).
+
+    MainWindow._toast is a child of the main window, so forwarding there
+    while this modal drawer is up painted the message *underneath* it.
+    Offscreen proves host ownership (grabWindow-style stacking intent);
+    widget.grab() alone would not.
+    """
+    from mf4_analyzer.ui.drawers.channel_editor_drawer import ChannelEditorDrawer
+    from PyQt5.QtWidgets import QWidget
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    forwarded = []
+    host.toast = lambda text, kind="info": forwarded.append((text, kind))
+
+    drawer = ChannelEditorDrawer(host, _make_files(tmp_path), "f0")
+    qtbot.addWidget(drawer)
+    drawer.show()
+    qtbot.waitExposed(drawer)
+
+    drawer.toast("没有可导出的数据或未勾选通道", kind="warning")
+
+    assert not forwarded, "a visible drawer must not hand its toast to the host"
+    toast = drawer._own_toast
+    assert toast is not None
+    assert toast.parentWidget() is drawer
+    assert toast.isVisibleTo(drawer)
+    assert toast._msg.text() == "没有可导出的数据或未勾选通道"
+    assert drawer._last_toast_kind == "warning"
+    assert drawer.rect().contains(toast.geometry())
+
+
+def test_channel_editor_toast_falls_back_to_host_once_closed(qtbot, tmp_path):
+    """Anything raised after the drawer closes still needs a visible surface."""
+    from mf4_analyzer.ui.drawers.channel_editor_drawer import ChannelEditorDrawer
+    from PyQt5.QtWidgets import QWidget
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    forwarded = []
+    host.toast = lambda text, kind="info": forwarded.append((text, kind))
+
+    drawer = ChannelEditorDrawer(host, _make_files(tmp_path), "f0")
+    qtbot.addWidget(drawer)
+
+    drawer.toast("已导出方案", kind="success")
+
+    assert forwarded == [("已导出方案", "success")]
+
+
+def test_main_window_routes_toast_and_status_to_open_channel_editor(
+    qapp, qtbot, tmp_path, monkeypatch
+):
+    """Export handlers keep the drawer open; feedback must paint on it."""
+    from mf4_analyzer.ui.drawers.channel_editor_drawer import ChannelEditorDrawer
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    a = tmp_path / "a.csv"
+    _csv(a)
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(a))
+    fid = next(iter(mw.files))
+
+    drawer = ChannelEditorDrawer(mw, mw.files, fid)
+    qtbot.addWidget(drawer)
+    drawer.show()
+    qtbot.waitExposed(drawer)
+    mw._channel_editor_drawer = drawer
+
+    host_toasts = []
+    monkeypatch.setattr(
+        mw._toast, "show_message",
+        lambda msg, level="info": host_toasts.append((msg, level)),
+    )
+
+    mw.toast("没有可导出的数据或未勾选通道", "warning")
+    assert not host_toasts
+    assert drawer._own_toast is not None
+    assert drawer._own_toast.parentWidget() is drawer
+    assert drawer._own_toast._msg.text() == "没有可导出的数据或未勾选通道"
+
+    mw._status_message("导出完成: out.xlsx (20 行 × 2 列)")
+    assert drawer._own_toast._msg.text() == "导出完成: out.xlsx (20 行 × 2 列)"
+    assert drawer._last_toast_kind == "info"
+
 
 def test_editor_export_no_selection_does_not_emit(qapp, tmp_path, monkeypatch):
     # Clicking 导出 with nothing checked must show an info prompt and NOT emit

@@ -719,10 +719,30 @@ class MainWindow(
 
     # ---- public toast helper ----
     def toast(self, msg, level='info'):
-        """Show a transient acknowledgement toast at the bottom of the window."""
+        """Show a transient acknowledgement toast at the bottom of the window.
+
+        While the channel-editor drawer is modal and visible, paint on the
+        drawer instead — MainWindow's toast would sit *under* it.
+        """
         if not msg:
             return
+        drawer = getattr(self, "_channel_editor_drawer", None)
+        if drawer is not None and drawer.isVisible():
+            drawer.toast(msg, level)
+            return
         self._toast.show_message(msg, level=level)
+
+    def _status_message(self, message, timeout=0):
+        """Status-bar feedback; during channel-editor modal, surface via toast.
+
+        The modal drawer occludes the main status bar, so the same text rides
+        the drawer's self-owned toast (BatchSheet pattern).
+        """
+        drawer = getattr(self, "_channel_editor_drawer", None)
+        if drawer is not None and drawer.isVisible():
+            drawer.toast(message, "info")
+            return
+        self.statusBar.showMessage(message, timeout)
 
     def _warn_action_blocked(self, message):
         """Surface an explicit user action that cannot proceed."""
@@ -3862,7 +3882,13 @@ class MainWindow(
         drawer = ChannelEditorDrawer(self, self.files, self._active)
         drawer.applied.connect(self._apply_channel_edits)
         drawer.export_requested.connect(self._do_export_channels)
-        drawer.exec_()
+        # Keep a live handle so toast/status during export (drawer stays open
+        # by design — emit before accept) paint on the drawer, not under it.
+        self._channel_editor_drawer = drawer
+        try:
+            drawer.exec_()
+        finally:
+            self._channel_editor_drawer = None
 
 
     def _apply_channel_edits(self, fid, new_channels, removed_channels):
@@ -3925,7 +3951,7 @@ class MainWindow(
             # retaining stale curves.
             mgr = self.analysis_managers[mode]
             self._render_analysis_view_from_cache(mode, mgr.get(mgr.active))
-        self.statusBar.showMessage(
+        self._status_message(
             f"编辑: +{len(new_channels)} -{len(removed_channels)}"
         )
         self.toast(
@@ -3978,7 +4004,7 @@ class MainWindow(
                 m = (fd.time_array >= lo) & (fd.time_array <= hi)
                 df = df.loc[m].reset_index(drop=True)
             df.to_excel(fp, index=False, engine='openpyxl')
-            self.statusBar.showMessage(
+            self._status_message(
                 f"导出完成: {Path(fp).name} ({len(df)} 行 × {len(df.columns)} 列)"
             )
             self.toast(
@@ -4060,7 +4086,7 @@ class MainWindow(
                 comment=comment,
                 storage=storage,
             )
-            self.statusBar.showMessage(
+            self._status_message(
                 f"导出完成: {Path(fp).name} ({result.summary})"
             )
             self.toast(

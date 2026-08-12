@@ -159,6 +159,52 @@ def test_batch_frf_compute_cancellation_uses_batch_taxonomy():
         compute_prepared_frf(prepared, cancel_token=token)
 
 
+def test_batch_frf_maps_cancelled_and_overflow_by_exception_type(monkeypatch):
+    """D11: adapters catch FrfCancelled / FrfSpectralOverflow by type.
+
+    A RuntimeError/ValueError that merely *says* the old message must not be
+    remapped — that was the fragile string-equality path.
+    """
+    from mf4_analyzer import batch_compute as batch_compute_module
+    from mf4_analyzer.signal.frf import FrfCancelled, FrfSpectralOverflow
+
+    prepared = prepare_frf_task(
+        _file_data(), "command", "response", _params(),
+    )
+
+    def raise_cancelled(*_a, **_k):
+        raise FrfCancelled()
+
+    monkeypatch.setattr(batch_compute_module, "compute_frf", raise_cancelled)
+    with pytest.raises(_BatchCancelled, match="cancelled during FRF"):
+        compute_prepared_frf(prepared)
+
+    def raise_overflow(*_a, **_k):
+        raise FrfSpectralOverflow()
+
+    monkeypatch.setattr(batch_compute_module, "compute_frf", raise_overflow)
+    with pytest.raises(BatchFrfDataError, match="spectral accumulation overflow"):
+        compute_prepared_frf(prepared)
+
+    def raise_lookalike_runtime(*_a, **_k):
+        raise RuntimeError("FRF computation cancelled")
+
+    monkeypatch.setattr(batch_compute_module, "compute_frf", raise_lookalike_runtime)
+    with pytest.raises(RuntimeError, match="FRF computation cancelled") as raised:
+        compute_prepared_frf(prepared)
+    assert not isinstance(raised.value, _BatchCancelled)
+
+    def raise_lookalike_value(*_a, **_k):
+        raise ValueError(
+            "spectral accumulation overflow; rescale the input signals"
+        )
+
+    monkeypatch.setattr(batch_compute_module, "compute_frf", raise_lookalike_value)
+    with pytest.raises(ValueError, match="spectral accumulation overflow") as raised:
+        compute_prepared_frf(prepared)
+    assert not isinstance(raised.value, BatchFrfDataError)
+
+
 def test_batch_frf_time_range_discards_outside_nonfinite_and_time_glitches():
     fd = _file_data()
     fd.data.loc[0, "command"] = np.nan
