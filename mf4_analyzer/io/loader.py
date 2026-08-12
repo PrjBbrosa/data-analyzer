@@ -1,5 +1,6 @@
 """DataLoader: reads MF4 / Excel / CSV-like inputs."""
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -126,6 +127,51 @@ def format_dropped_channels_notice(dropped):
     return f"{len(dropped)} 个通道未导入：{names}"
 
 
+def _notice_names(entries):
+    """Normalize str / ``{name: ...}`` load-skip entries into display names."""
+    names = []
+    for entry in entries or []:
+        if isinstance(entry, Mapping):
+            names.append(str(entry.get("name", "?")))
+        else:
+            names.append(str(entry))
+    return names
+
+
+def format_skipped_channels_notice(skipped):
+    """Human-facing notice for WWT/TDMS ``skipped_channels`` (names or
+    ``{name, reason}`` dicts). Empty → ``""`` so callers can gate the toast."""
+    names = _notice_names(skipped)
+    if not names:
+        return ""
+    return f"{len(names)} 个通道未导入：" + "、".join(names)
+
+
+def format_skipped_vars_notice(skipped):
+    """Human-facing notice for MAT ``skipped_vars``. Empty → ``""``."""
+    names = _notice_names(skipped)
+    if not names:
+        return ""
+    return f"{len(names)} 个变量未导入：" + "、".join(names)
+
+
+def format_fs_estimated_notice(fs_estimated):
+    """ZFD ``fs_estimated`` toast. Must contain 「估算」 when True; else ``""``."""
+    if not fs_estimated:
+        return ""
+    return "⚠️ ZFD 时基无效，按 1 kHz 估算显示"
+
+
+def format_renamed_channels_notice(renamed):
+    """Summary for collision renames recorded in ``renamed_channels``.
+
+    Exact product copy: ``N 个通道重名，已加序号区分``. Empty → ``""``."""
+    renamed = renamed or []
+    if not renamed:
+        return ""
+    return f"{len(renamed)} 个通道重名，已加序号区分"
+
+
 def _resolve_channel_unit(mdf, sig, group_idx, ch_idx):
     """Return a channel unit, falling back to the MDF conversion block."""
     unit = str(getattr(sig, 'unit', '') or '')
@@ -244,20 +290,31 @@ class DataLoader:
 
         tdms = TdmsFile.read(str(fp))
         raw_channels = []
+        skipped = []
         name_counts = defaultdict(int)
         for group in tdms.groups():
+            group_name = str(group.name or "Group")
             for channel in group.channels():
                 values = np.asarray(channel[:])
-                if (
-                    values.ndim != 1
-                    or values.size == 0
-                    or not np.issubdtype(values.dtype, np.number)
-                ):
+                ch_label = str(channel.name or "Channel")
+                display_skip = (
+                    f"{group_name}.{ch_label}"
+                    if group_name and group_name != "Group"
+                    else ch_label
+                )
+                if values.ndim != 1:
+                    skipped.append({"name": display_skip, "reason": "non-1d"})
                     continue
-                base_name = str(channel.name or "Channel")
+                if values.size == 0:
+                    skipped.append({"name": display_skip, "reason": "empty"})
+                    continue
+                if not np.issubdtype(values.dtype, np.number):
+                    skipped.append({"name": display_skip, "reason": "non-numeric"})
+                    continue
+                base_name = ch_label
                 name_counts[base_name] += 1
                 raw_channels.append({
-                    "group": str(group.name or "Group"),
+                    "group": group_name,
                     "base_name": base_name,
                     "values": values.astype(np.float64, copy=False),
                     "time": waveform_time(channel.properties, values.size),
@@ -279,15 +336,19 @@ class DataLoader:
         data = {"Time": reference_time}
         units = {}
         used_names = {"Time"}
+        renamed = []
         for index, entry in enumerate(raw_channels, 1):
             base_name = entry["base_name"]
-            display_name = (
+            preferred = (
                 base_name
                 if name_counts[base_name] == 1
                 else f"{entry['group']}.{base_name}"
             )
+            display_name = preferred
             if display_name in used_names:
                 display_name = f"{display_name} [{index}]"
+            if display_name != base_name:
+                renamed.append({"original": base_name, "renamed": display_name})
             used_names.add(display_name)
 
             channel_time = entry["time"]
@@ -298,7 +359,13 @@ class DataLoader:
                 data[display_name] = np.interp(reference_time, channel_time, values)
             units[display_name] = entry["unit"]
 
-        return pd.DataFrame(data), list(data.keys()), units
+        smeta = {
+            "source_kind": "tdms",
+            "source_filename": Path(fp).name,
+            "skipped_channels": skipped,
+            "renamed_channels": renamed,
+        }
+        return pd.DataFrame(data), list(data.keys()), units, None, smeta
 
     @staticmethod
     def load_mf4(fp):
@@ -757,13 +824,15 @@ class DataLoader:
             data = {"Time": t}
             units = {}
             cmeta = {}
+            renamed = []
             for idx, c, s in items:
                 # 组内去重：`name str` 截断出的同名（如 4 个 Com_Motor_Torque）
                 # 不能用同一 dict 键——否则后者覆盖前者、真实数据被全 0 通道盖掉。
                 # full_channel_name 走 `ext name str`，已经把这类碰撞在源头解开；
                 # 下面两级兜底留给真同名（同一信号采两路）和无 ext 行的老文件：
                 # 先退回带来源标记的完整 ext 名（天然唯一），再退回文件内序号。
-                name = head_full_channel_name(c)
+                preferred = head_full_channel_name(c)
+                name = preferred
                 if name in data:
                     qualified = (c.ext_name or "").strip()
                     if qualified and qualified not in data:
@@ -772,6 +841,7 @@ class DataLoader:
                         name = f"{name} [{idx}]"
                         while name in data:
                             name = f"{name}_"
+                    renamed.append({"original": preferred, "renamed": name})
                 data[name] = s
                 units[name] = c.unit
                 cmeta[name] = {
@@ -804,6 +874,7 @@ class DataLoader:
                 "per_scan": per_scan,
                 "source_filename": Path(fp).name,
                 "dropped_channels": dropped,
+                "renamed_channels": renamed,
             }
             if hf.warnings:
                 smeta["warnings"] = list(hf.warnings)

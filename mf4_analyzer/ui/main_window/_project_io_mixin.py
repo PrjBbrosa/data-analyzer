@@ -26,6 +26,10 @@ from ...io.loader import (
     AUDIO_VIDEO_EXTS,
     NO_CAN_FRAMES_MESSAGE,
     format_dropped_channels_notice,
+    format_fs_estimated_notice,
+    format_renamed_channels_notice,
+    format_skipped_channels_notice,
+    format_skipped_vars_notice,
 )
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
@@ -466,6 +470,55 @@ class ProjectIOMixin:
                 self.inspector.top.spin_end.setValue(fd.time_array[-1])
         return fd
 
+    def _toast_io_load_diagnostics(self, *source_metadatas):
+        """Surface load-time diagnostics that previously lived only in metadata.
+
+        Template: HDF ``dropped_channels`` → formatter → warning toast. Same
+        exit for WWT/TDMS skips, MAT skipped vars, ZFD estimated fs, and
+        collision renames. Aggregates across multi-group loads into one toast
+        per diagnostic kind.
+        """
+        dropped = []
+        skipped_channels = []
+        skipped_vars = []
+        renamed = []
+        fs_estimated = False
+        seen_skip_names = set()
+        seen_var_names = set()
+        for smeta in source_metadatas:
+            if not smeta:
+                continue
+            dropped.extend(smeta.get("dropped_channels") or [])
+            for entry in smeta.get("skipped_channels") or []:
+                key = (
+                    entry.get("name") if isinstance(entry, dict) else entry
+                )
+                if key in seen_skip_names:
+                    continue
+                seen_skip_names.add(key)
+                skipped_channels.append(entry)
+            for entry in smeta.get("skipped_vars") or []:
+                key = (
+                    entry.get("name") if isinstance(entry, dict) else entry
+                )
+                if key in seen_var_names:
+                    continue
+                seen_var_names.add(key)
+                skipped_vars.append(entry)
+            renamed.extend(smeta.get("renamed_channels") or [])
+            if smeta.get("fs_estimated"):
+                fs_estimated = True
+
+        for notice in (
+            format_dropped_channels_notice(dropped),
+            format_skipped_channels_notice(skipped_channels),
+            format_skipped_vars_notice(skipped_vars),
+            format_fs_estimated_notice(fs_estimated),
+            format_renamed_channels_notice(renamed),
+        ):
+            if notice:
+                self.toast(notice, "warning")
+
     def _is_can_log_path(self, path) -> bool:
         """True for Vector BLF or evidence-matched CANoe ASC CAN logs."""
         suffix = Path(path).suffix.lower()
@@ -625,13 +678,14 @@ class ProjectIOMixin:
                 return
             elif ext == '.tdms':
                 report(-1.0, "读取 TDMS")
-                data, chs, units = DataLoader.load_tdms(fp)
+                data, chs, units, fs, smeta = DataLoader.load_tdms(fp)
                 self._register_file_data(
-                    fp, data, chs, units, source_metadata={"source_kind": "tdms"})
+                    fp, data, chs, units, fs=fs, source_metadata=smeta)
                 self._update_info()
                 self.statusBar.showMessage(
                     f"✅ 已加载 TDMS: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件")
                 self.toast(f"已加载 TDMS {p.name} · {len(data)} 行", "success")
+                self._toast_io_load_diagnostics(smeta)
                 return
             elif ext == '.hdf':
                 report(-1.0, "读取 HDF")
@@ -646,13 +700,8 @@ class ProjectIOMixin:
                 self.statusBar.showMessage(
                     f"✅ 已加载: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
-                # dropped_channels（非 FLOAT32 / 全 NaN）之前只存在 metadata、
-                # 用户无从知晓；加载后显式提示一次，别静默少通道。
-                dropped = (groups[0]["source_metadata"].get("dropped_channels")
-                           if groups else None)
-                notice = format_dropped_channels_notice(dropped)
-                if notice:
-                    self.toast(notice, "warning")
+                self._toast_io_load_diagnostics(
+                    *(g.get("source_metadata") for g in groups))
                 return
             elif ext == '.asc':
                 report(-1.0, "读取 ASCII")
@@ -677,6 +726,8 @@ class ProjectIOMixin:
                 self.statusBar.showMessage(
                     f"✅ 已加载 WWT: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
+                self._toast_io_load_diagnostics(
+                    *(g.get("source_metadata") for g in groups))
                 return
             elif ext == '.zfd':
                 report(-1.0, "读取 ZFD")
@@ -691,6 +742,8 @@ class ProjectIOMixin:
                 self.statusBar.showMessage(
                     f"✅ 已加载 ZFD: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
+                self._toast_io_load_diagnostics(
+                    *(g.get("source_metadata") for g in groups))
                 return
             elif ext == '.mat':
                 report(-1.0, "读取 MAT")
@@ -705,6 +758,8 @@ class ProjectIOMixin:
                 self.statusBar.showMessage(
                     f"✅ 已加载 MAT: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
+                self._toast_io_load_diagnostics(
+                    *(g.get("source_metadata") for g in groups))
                 return
             else:
                 report(-1.0, "读取表格")

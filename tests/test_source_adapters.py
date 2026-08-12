@@ -73,7 +73,7 @@ def test_unknown_extension_is_never_routed_to_an_mdf_or_csv_fallback():
 @pytest.mark.parametrize(
     ("path", "loader_name", "result"),
     [
-        ("run.tdms", "load_tdms", _single3()),
+        ("run.tdms", "load_tdms", (*_single3(), None, {"source_kind": "tdms"})),
         ("run.csv", "load_csv", _single3()),
         ("run.fdc", "load_csv", _single3()),
         ("run.asc", "load_ascii", (*_single3(), None, {"source_kind": "ascii"})),

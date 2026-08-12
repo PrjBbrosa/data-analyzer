@@ -98,7 +98,13 @@ def test_default_loader_dispatches_tdms(monkeypatch, tmp_path):
 
     def fake_load_tdms(fp):
         called["path"] = fp
-        return pd.DataFrame({"Time": [0.0, 0.1], "sig": [1.0, 2.0]}), ["Time", "sig"], {"sig": "V"}
+        return (
+            pd.DataFrame({"Time": [0.0, 0.1], "sig": [1.0, 2.0]}),
+            ["Time", "sig"],
+            {"sig": "V"},
+            None,
+            {"source_kind": "tdms"},
+        )
 
     def fail_load_mf4(fp):
         raise AssertionError(f".tdms should not be loaded as MF4: {fp}")
