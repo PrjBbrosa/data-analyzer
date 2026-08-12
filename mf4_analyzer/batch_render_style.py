@@ -19,8 +19,11 @@ import math
 from numbers import Real
 
 
-DEFAULT_TICK_DENSITY_X = 14
-DEFAULT_TICK_DENSITY_Y = 10
+# Same pair as the interactive 「密」preset; `ui.chart_defaults` imports these
+# rather than declaring a second (20, 15). Saved recipes that already store
+# an explicit tick_density keep that value.
+DEFAULT_TICK_DENSITY_X = 20
+DEFAULT_TICK_DENSITY_Y = 15
 DEFAULT_FONT_SCALE = 1.0
 
 MIN_TICK_DENSITY_X = 3

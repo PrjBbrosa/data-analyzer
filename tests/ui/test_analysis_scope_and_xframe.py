@@ -199,15 +199,78 @@ def test_preserved_window_fit_rule(win_two_files):
     assert not fits(canvas, union_lo - 5 * span, union_hi), "window starts early"
 
 
+def _seed_analysis_canvas_x_extent(win, mode, lo, hi):
+    """Plot a known X span on the analysis page canvas without full compute.
+
+    Heatmap modes use ``plot_or_update_heatmap``; FRF uses ``set_result``
+    with ``FrfEffectiveFacts.time_start/time_end``. Both feed
+    ``get_data_x_union``.
+    """
+    canvas = win._analysis_page(mode).focused_canvas()
+    if mode == "frf":
+        from mf4_analyzer.signal.frf import FrfEffectiveFacts, FrfResult
+
+        n = 16
+        frequencies = np.linspace(1.0, 100.0, n)
+        transfer = np.ones(n, dtype=np.complex128)
+        canvas.set_result(
+            FrfResult(
+                frequencies=frequencies,
+                transfer=transfer,
+                pxx=np.ones(n),
+                pyy=np.ones(n),
+                pxy=transfer,
+                coherence=np.ones(n),
+                effective=FrfEffectiveFacts(
+                    requested_t_win_s=float(hi - lo),
+                    requested_nperseg=8,
+                    nperseg=8,
+                    nfft=8,
+                    noverlap=4,
+                    hop=4,
+                    segments=1,
+                    fs=1000.0,
+                    df=1.0,
+                    n_samples=1000,
+                    time_start=float(lo),
+                    time_end=float(hi),
+                    window="hann",
+                    periodic_window=True,
+                    detrend="constant",
+                    max_time_jitter=0.0,
+                    max_time_difference=0.0,
+                    invalid_bins=0,
+                ),
+            )
+        )
+    else:
+        canvas.plot_or_update_heatmap(
+            np.zeros((4, 8), dtype=float),
+            x_extent=(float(lo), float(hi)),
+            y_extent=(0.0, 10.0),
+        )
+    assert canvas.get_data_x_union() == pytest.approx((float(lo), float(hi)))
+    return canvas
+
+
 @pytest.mark.parametrize("mode", ("fft_time", "order", "frf"))
 def test_max_range_in_analysis_mode_uses_attached_short_file(
     win_two_files, qapp, mode,
 ):
-    """A2: 「全部」in order / fft_time / FRF frames to the analysis View's
-    attached sources — not the longest loaded file sitting only on Time."""
+    """A2/F1: 「全部」in order / fft_time / FRF frames to the analysis canvas
+    plotted extent — not the leftover Time View curve on
+    ``chart_stack.focused_canvas()``."""
     win, long_fid, short_fid = win_two_files
     assert float(win.files[long_fid].time_array[-1]) == pytest.approx(30.0, abs=0.2)
     assert float(win.files[short_fid].time_array[-1]) == pytest.approx(3.0, abs=0.2)
+
+    # Time domain draws the long file so the time-card canvas holds 30 s.
+    win.navigator.set_checked_channels([(long_fid, "speed")])
+    win.plot_time()
+    qapp.processEvents()
+    time_union = win.chart_stack.focused_canvas().get_data_x_union()
+    assert time_union is not None
+    assert time_union[1] == pytest.approx(30.0, abs=0.5)
 
     mgr = win.analysis_managers[mode]
     mgr.get(0).attached_file_ids = [short_fid]
@@ -215,8 +278,24 @@ def test_max_range_in_analysis_mode_uses_attached_short_file(
     win.inspector.set_mode(mode)
     qapp.processEvents()
 
+    # Trap: ChartStack.focused_canvas() stays the time canvas *and* still
+    # holds the 30 s curve. If 「全部」 reads that canvas, it frames to 30 s.
+    assert win.chart_stack.focused_canvas() is win.canvas_time
+    time_union_after = win.canvas_time.get_data_x_union()
+    assert time_union_after is not None
+    assert time_union_after[1] == pytest.approx(30.0, abs=0.5)
+    _seed_analysis_canvas_x_extent(win, mode, 0.0, 3.0)
+
     top = win.inspector.top
     top.chk_range.setChecked(False)
+    # Draft-local must also use the analysis canvas (3 s), not the 30 s
+    # time curve: 0–3 s is the full plotted analysis extent.
+    top.set_range_limits(0.0, 30.0)
+    top.set_range_values(0.0, 3.0)
+    assert win._analysis_time_range_draft_is_local() is None
+    top.set_range_values(0.5, 1.5)
+    assert win._analysis_time_range_draft_is_local() == pytest.approx((0.5, 1.5))
+
     top.set_range_limits(0.0, 1.0)
     top.set_range_values(0.0, 1.0)
 

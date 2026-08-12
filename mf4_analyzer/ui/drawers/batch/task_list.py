@@ -227,8 +227,10 @@ class TaskListWidget(QWidget):
         self._refresh_header_text()
 
     def _apply_result_warning_tooltips(self, result) -> None:
-        """Attach per-item (or run-level) warnings to completed rows.
+        """Attach per-item warnings to completed rows.
 
+        A row without its own warnings stays empty — run-level
+        ``result.warnings`` must not leak onto a clean sibling row.
         Consumer-only: does not invent progress events. Failed/cancelled
         tooltips already set by ``on_event`` are left alone.
         """
@@ -254,11 +256,9 @@ class TaskListWidget(QWidget):
                     break
             if matched is None and idx < len(items):
                 matched = items[idx]
-            raw_warnings = (
-                getattr(matched, "warnings", None) if matched is not None else None
-            )
-            if not raw_warnings:
-                raw_warnings = getattr(result, "warnings", None) or ()
+            if matched is None:
+                continue
+            raw_warnings = getattr(matched, "warnings", None) or ()
             text = format_batch_run_warnings(raw_warnings, style="block")
             if text:
                 self._update_row(idx, self._icons[idx], tooltip=text)

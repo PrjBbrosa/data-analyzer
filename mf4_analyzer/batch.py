@@ -3830,6 +3830,11 @@ class BatchRunner:
                 *run_migration_warnings,
                 *degraded_reasons,
                 *(warning for item in result_items for warning in item.warnings),
+                *(
+                    warning
+                    for group in result_render_groups
+                    for warning in group.warnings
+                ),
             ])),
             render_groups=result_render_groups,
         )

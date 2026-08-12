@@ -8,6 +8,7 @@ import sys
 
 import numpy as np
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from collections import OrderedDict
 
@@ -761,6 +762,24 @@ class MainWindow(
         }.get(mode)
         return getattr(page, "tabbar", None) if page is not None else None
 
+    def _channel_editor_toast_host(self):
+        """Drawer that should own toasts: open, not closing, not mid-fallback.
+
+        Export keeps the drawer open, so feedback paints on it. Apply emits
+        then ``accept()``, so routing onto that surface would vanish with it.
+        A fallback already in flight must not bounce back into the drawer.
+        """
+        if getattr(self, "_toast_forwarding", False):
+            return None
+        drawer = getattr(self, "_channel_editor_drawer", None)
+        if drawer is None or not drawer.isVisible():
+            return None
+        if getattr(drawer, "is_closing", False):
+            return None
+        if getattr(drawer, "_forwarding", False):
+            return None
+        return drawer
+
     # ---- public toast helper ----
     def toast(self, msg, level='info'):
         """Show a transient acknowledgement toast at the bottom of the window.
@@ -770,20 +789,25 @@ class MainWindow(
         """
         if not msg:
             return
-        drawer = getattr(self, "_channel_editor_drawer", None)
-        if drawer is not None and drawer.isVisible():
-            drawer.toast(msg, level)
-            return
+        drawer = self._channel_editor_toast_host()
+        if drawer is not None:
+            self._toast_forwarding = True
+            try:
+                drawer.toast(msg, level)
+                return
+            finally:
+                self._toast_forwarding = False
         self._toast.show_message(msg, level=level)
 
     def _status_message(self, message, timeout=0):
         """Status-bar feedback; during channel-editor modal, surface via toast.
 
         The modal drawer occludes the main status bar, so the same text rides
-        the drawer's self-owned toast (BatchSheet pattern).
+        the drawer's self-owned toast (BatchSheet pattern). Apply is about to
+        close the drawer, so that path stays on the main status bar.
         """
-        drawer = getattr(self, "_channel_editor_drawer", None)
-        if drawer is not None and drawer.isVisible():
+        drawer = self._channel_editor_toast_host()
+        if drawer is not None:
             drawer.toast(message, "info")
             return
         self.statusBar.showMessage(message, timeout)
@@ -1090,7 +1114,7 @@ class MainWindow(
             bar.delete_requested.connect(
                 lambda idx, s=sec: self._on_analysis_delete(s, idx))
             bar.rename_requested.connect(
-                lambda idx, name, s=sec: self._on_analysis_view_rename(s, idx, name))
+                partial(self._on_analysis_view_rename, sec))
             bar.duplicate_requested.connect(
                 lambda idx, s=sec: self._on_analysis_duplicate(s, idx))
             bar.color_requested.connect(
@@ -1773,7 +1797,12 @@ class MainWindow(
         """
         self._overlay_primary = (fid, ch)
         if not getattr(self, '_applying_view', False):
-            self._capture_focused_view()
+            if self.chart_stack.current_mode() == 'time':
+                self._capture_focused_view()
+            else:
+                # A1: do not capture analysis-projected attached/checked/colors
+                # onto the time View. Persist only the overlay-primary pick.
+                self._capture_overlay_primary_into_focused_view()
         mode = self.chart_stack.current_mode()
         if mode == 'fft':
             canvas = getattr(self, 'canvas_fft', None)
@@ -2008,8 +2037,22 @@ class MainWindow(
         the channel tree. Prefer the focused canvas data union (same extent
         Home uses); then checked-channel file time bases; then the active
         analysis View's attached sources; finally all files.
+
+        Analysis modes read the current analysis page's focused pane canvas.
+        ``chart_stack.focused_canvas()`` is a time-domain contract and would
+        frame to a leftover Time View curve.
         """
-        canvas = self.chart_stack.focused_canvas()
+        mode = self.chart_stack.current_mode()
+        managers = getattr(self, 'analysis_managers', None) or {}
+        canvas = None
+        if mode in managers:
+            try:
+                page = self._analysis_page(mode)
+                canvas = page.focused_canvas() if page is not None else None
+            except Exception:
+                canvas = None
+        if canvas is None:
+            canvas = self.chart_stack.focused_canvas()
         getter = getattr(canvas, 'get_data_x_union', None)
         if callable(getter):
             try:
@@ -2068,8 +2111,6 @@ class MainWindow(
 
         # Analysis modes clear the channel-tree checks, so fall back to the
         # active analysis View's attached sources before the global union.
-        mode = self.chart_stack.current_mode()
-        managers = getattr(self, 'analysis_managers', None) or {}
         if mode in managers:
             try:
                 mgr = managers[mode]

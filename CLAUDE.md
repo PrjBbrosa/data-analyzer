@@ -29,11 +29,16 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
   约 4% 处中断、无汇总。交错相关——单独跑该目录不崩。要拿全量数字：
   `--ignore=tests/acquisition_ui` 跑主体，另起一条单独跑该目录。
 - **动手前先记下当前失败数**，别把既有失败算到自己的改动头上。
-  当前基线（2026-08-11 实测，树内容即 merge `2c8e9b5a`；修复清单见
-  `docs/analyzer/reviews/2026-08-11-two-day-delivery-and-frf-view-review.md` §7）：
-  主体 **6048 passed / 11 skipped / 0 failed / 0 errors**，`tests/acquisition_ui`
-  单独 **355 passed**——**两边全绿**（2026-08-12 实测，HEAD `56c42f4d`；此前
-  2026-08-11 记录为主体 5925/9）。
+  当前基线（2026-08-12 实测，HEAD `56c42f4d`）：主体 **6048 passed / 11 skipped /
+  0 failed / 0 errors**，`tests/acquisition_ui` 单独 **355 passed**。
+  **不要把 6048/0 抄到 `cf530b92`**：`56c42f4d..cf530b92` 已有 8 条红（parity Y-tick
+  分叉、selection_signature QSS token、drawers 几何、hints 三条）；其中
+  characterization 一条被 `eab5600d` 重钉转绿。guideline-hardening 16-Task 批在
+  `eab5600d` 套件层面零新增失败。F1–F8 follow-up 收口（`guideline/followup-f1-f8`）：
+  主体 **6230 passed / 12 skipped / 0 failed**（跟踪树；未跟踪 UltraView 会让
+  `test_search_field` 扫到裸 `QLineEdit` 搜索框，不计入本批），
+  `tests/acquisition_ui` **359 passed**。详见
+  `docs/analyzer/plans/2026-08-13-guideline-hardening-followup-plan.md` §5。
   主体一条命令在 `f85b5d4e`..`56c42f4d` 期间还有**另一处**交错 segfault
   （channel-tree delegate paint 中途被 gen-0 GC 回收弱引用顶层 widget），已由
   `tests/ui/conftest.py` 的「post-call 钉住顶层 widget → teardown 泵完事件再释放
@@ -47,7 +52,9 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
   样本目录，本机有样本所以通过，新克隆会红，那不是代码问题。
   本文先前记录的三条「历史既有红」已全部转绿并从本文删除（别从旧版抄回；其中
   `test_hint_nudges` 那条连用例名都改了）。渲染 parity 那次的定性过程留在
-  `tools/verify_batch_qt_render_parity.py` 的注释与该文件的 13 条守卫用例里。
+  `tools/verify_batch_qt_render_parity.py` 的注释与该文件的守卫用例里。
+  跑 `tools/verify_batch_qt_render_parity.py` **必须带 `--output-dir` 指向临时目录**，
+  否则会写脏 `docs/superpowers/verify/batch-qt-render/` 的已跟踪证据。
 
 ## Architecture
 `mf4_analyzer/` 主包：
@@ -125,6 +132,17 @@ spec 再改测试，并在提交里写清为什么。
   **别删根 conftest，也别往里加项目 fixture**（那是各目录 conftest 的事）。
   `tests/ui/test_qsettings_isolation.py` 是它失效时的第二道显性告警：没有隔离，UI 测试
   会去读写开发机真实的 `MF4Analyzer/DataAnalyzer` 偏好，把本机残留读成测试前置状态。
+- **QSS border 简写 lint** `tests/ui_kit/test_qss_border_shorthand.py`：状态规则里的
+  `border:` 简写会把基线 `border-radius` 打成 0（Qt 不是 CSS）。白名单只许缩小；
+  扫描含 `#id[attr]`（按 objectName 反查 `setObjectName` 所属类）和
+  `::sub-control:state`。
+- **`.connect(lambda` 棘轮** `tests/ui/test_no_lambda_signal_connections.py`：AST 冻结
+  `ui/` + `acquisition_ui/` 的 lambda 信号连接数，只许缩小。`window.py` 在 F6 后为 33。
+  新连接改 bound method / `functools.partial`，不要把 `self` 关进 lambda。
+- **paint 计时器哨兵** `tests/ui/test_pg_timedomain_canvas.py` 的
+  `test_frame_paint_backstop_is_installed_on_real_canvas`：真画布必须装上
+  `install_frame_paint_timer` 回退，armed AA 帧才能进 `_note_aa_frame`。失败分支要
+  `logger.warning`，不要静默。
 
 ## 时域渲染成本判据：ink（墨水量）
 2026-08-08 起，时域渲染**成本**的统一判据是 ink（`ink_dev_px = Σ min(|Δy|, y_span)

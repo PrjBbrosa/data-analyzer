@@ -373,13 +373,21 @@ def _format_range_value(value):
     scientific territory must take the ``.3g`` path rather than showing a
     four-digit ``.3f`` result while the raw-float branch still thought it
     was below the threshold.
+
+    ``round(1e-4, 3) == 0.0`` is the other hole: the ``.3f`` path would
+    print ``"0"`` / ``"-0"``, and Enter would submit a zero axis limit.
+    A non-zero input that rounds to 0.0 therefore also takes ``.3g``.
     """
     try:
         value = float(value)
     except (TypeError, ValueError):
         return "0"
     rounded = round(value, 3)
-    if abs(rounded) >= 1000 or (0 < abs(rounded) < 0.01):
+    if (
+        abs(rounded) >= 1000
+        or (value != 0.0 and rounded == 0.0)
+        or (0 < abs(rounded) < 0.01)
+    ):
         return f"{value:.3g}"
     return f"{value:.3f}".rstrip("0").rstrip(".")
 

@@ -75,6 +75,13 @@ def test_zfd_single_group_seven_channels_anchors():
     assert "display_min" in cm and "display_max" in cm
     assert g["channel_metadata"]["Szyl 1 [E5]"]["marker_id"] == "E5"
 
+    renamed = smeta.get("renamed_channels") or []
+    assert renamed, "in-group marker_id disambiguation must record renamed_channels"
+    assert any(
+        r.get("original") == "Szyl 1" and r.get("renamed") == "Szyl 1 [E5]"
+        for r in renamed
+    )
+
 
 def test_zfd_end_to_end_filedata_uniform_time_axis():
     groups = DataLoader.load_zfd(_sample())
@@ -123,6 +130,31 @@ def _write_minimal_zfd(path: Path, *, dt: float, count: int = 8,
     return path
 
 
+def _write_zfd_duplicate_names(path: Path, *, dt: float = 0.001, count: int = 8) -> Path:
+    """Two same-named channels so the second is renamed ``name [marker_id]``."""
+    import struct
+
+    values_a = list(range(count))
+    values_b = [v + 10.0 for v in values_a]
+    header = b"ZFGE2\nTestRunPRO Data V1\nDup Names\n~\n"
+    parts = [header]
+    for index, (marker, values) in enumerate(
+        (("A2", values_a), ("E5", values_b)),
+    ):
+        if index == 0:
+            pre = struct.pack("<dHHH", float(dt), 4, int(count), 0)
+        else:
+            pre = struct.pack("<HHH", 4, int(count), 0)
+        marker_line = f"{marker}: Szyl 1\n".encode("latin-1")
+        unit_line = b"mm\n"
+        pad = b"\x00\x00"
+        disp = struct.pack("<dd", float(min(values)), float(max(values)))
+        body = np.asarray(values, dtype="<f4").tobytes()
+        parts.append(pre + marker_line + unit_line + pad + disp + body)
+    path.write_bytes(b"".join(parts))
+    return path
+
+
 def test_zfd_slow_sample_dt_two_seconds_keeps_half_hz(tmp_path):
     """A4: dt=2.0 (0.5 Hz) must not be crushed into the 1 kHz estimate."""
     p = _write_minimal_zfd(tmp_path / "slow.zfd", dt=2.0, count=5,
@@ -147,3 +179,18 @@ def test_zfd_dt_above_hour_falls_back_to_estimated_1khz(tmp_path):
     t = g["data"]["Time"].to_numpy()
     assert t[1] - t[0] == pytest.approx(0.001)
     assert g["source_metadata"]["fs_estimated"] is True
+
+
+def test_zfd_duplicate_names_record_renamed_channels(tmp_path):
+    """F5: in-group [marker_id] renames must enter source_metadata like HDF/WWT."""
+    from mf4_analyzer.io.loader import format_renamed_channels_notice
+
+    p = _write_zfd_duplicate_names(tmp_path / "dup.zfd")
+    groups = DataLoader.load_zfd(str(p))
+    assert len(groups) == 1
+    g = groups[0]
+    assert "Szyl 1" in g["channels"]
+    assert "Szyl 1 [E5]" in g["channels"]
+    renamed = g["source_metadata"].get("renamed_channels") or []
+    assert renamed == [{"original": "Szyl 1", "renamed": "Szyl 1 [E5]"}]
+    assert format_renamed_channels_notice(renamed) == "1 个通道重名，已加序号区分"

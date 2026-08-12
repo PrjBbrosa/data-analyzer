@@ -157,3 +157,15 @@ def test_mat_skipped_string_var_recorded(tmp_path):
 
 def test_zfd_estimated_notice_text():
     assert "估算" in format_fs_estimated_notice(True)
+
+
+def test_zfd_renamed_channels_recorded_in_source_metadata(tmp_path):
+    from tests.test_zfd_format import _write_zfd_duplicate_names
+
+    p = _write_zfd_duplicate_names(tmp_path / "dup.zfd")
+    groups = DataLoader.load_zfd(str(p))
+    renamed = groups[0]["source_metadata"].get("renamed_channels") or []
+    assert renamed
+    assert all("original" in r and "renamed" in r for r in renamed)
+    assert any(r["original"] == "Szyl 1" for r in renamed)
+    assert format_renamed_channels_notice(renamed)

@@ -832,3 +832,88 @@ def test_load_mat_toasts_skipped_vars(qapp, tmp_path, monkeypatch):
 
     warn = [(m, lv) for m, lv in toasts if lv == "warning"]
     assert any("变量未导入" in m and "notes" in m for m, _ in warn), toasts
+
+
+def test_toast_io_load_diagnostics_dedupes_file_level_dropped_across_groups(
+    qapp, monkeypatch,
+):
+    """HDF dropped/renamed lists are file-level and copied into every raster group.
+
+    Three groups × two dropped channels must toast 「2 个」 once, not 「6 个」.
+    """
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    mw = MainWindow()
+    toasts = []
+    monkeypatch.setattr(
+        mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
+    )
+    smeta = {
+        "dropped_channels": [
+            {"name": "CAN 1@SQuadriga", "reason": "non-FLOAT32: UINT32"},
+            {"name": "Label", "reason": "all-NaN"},
+        ],
+        "renamed_channels": [
+            {"original": "Speed", "renamed": "Speed [2]"},
+        ],
+    }
+    mw._toast_io_load_diagnostics(smeta, smeta, smeta)
+
+    warn = [m for m, lv in toasts if lv == "warning"]
+    dropped = [m for m in warn if "未导入" in m]
+    renamed = [m for m in warn if "重名" in m]
+    assert dropped == ["2 个通道未导入：CAN 1@SQuadriga、Label"], toasts
+    assert renamed == ["1 个通道重名，已加序号区分"], toasts
+
+
+def test_toast_io_load_diagnostics_surfaces_and_dedupes_source_warnings(
+    qapp, monkeypatch,
+):
+    """F5: HDF factor warnings live in smeta['warnings']; toast them once."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    mw = MainWindow()
+    toasts = []
+    monkeypatch.setattr(
+        mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
+    )
+    warning = "通道 2 (SP) 的 factor 未在 ch order 中声明，已按 1 估算"
+    smeta = {"warnings": [warning]}
+    mw._toast_io_load_diagnostics(smeta, smeta, smeta)
+
+    warn = [m for m, lv in toasts if lv == "warning"]
+    assert warn.count(warning) == 1, toasts
+
+
+def test_load_hdf_toasts_assumed_factor_warning(qapp, tmp_path, monkeypatch):
+    """F5: loading an HDF with an assumed factor must toast the A5 warning."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests.test_head_hdf_loader import _write_hdf_with_extra_channel_def
+
+    hdf = _write_hdf_with_extra_channel_def(tmp_path / "assumed_factor.hdf")
+    mw = MainWindow()
+    toasts = []
+    monkeypatch.setattr(
+        mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
+    )
+    mw._load_one(str(hdf))
+
+    warn = [m for m, lv in toasts if lv == "warning"]
+    assert any("factor" in m.lower() and "估算" in m for m in warn), toasts
+
+
+def test_load_zfd_toasts_renamed_channels_summary(qapp, tmp_path, monkeypatch):
+    """F5: ZFD in-group [marker_id] renames must toast like HDF/WWT/TDMS."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    from tests.test_zfd_format import _write_zfd_duplicate_names
+
+    zfd = _write_zfd_duplicate_names(tmp_path / "dup.zfd")
+    mw = MainWindow()
+    toasts = []
+    monkeypatch.setattr(
+        mw, "toast", lambda msg, level="info": toasts.append((msg, level)),
+    )
+    mw._load_one(str(zfd))
+
+    warn = [m for m, lv in toasts if lv == "warning"]
+    assert any(m == "1 个通道重名，已加序号区分" for m in warn), toasts

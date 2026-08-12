@@ -159,6 +159,12 @@ def test_c9_amplitude_mode_helper_covers_dialects_and_order_defaults_db():
     assert default_amplitude_mode_for_kind("fft") == "amplitude"
     assert render_in_db("order_time", {}) is True
     assert batch_output_scale("order_time", {}) == (True, "db")
+    sheet_source = (ROOT / "mf4_analyzer" / "ui" / "drawers" / "batch" / "sheet.py").read_text(
+        encoding="utf-8",
+    )
+    assert "amplitude_mode_is_db" in sheet_source
+    assert '== "amplitude_db"' not in sheet_source
+    assert "== 'amplitude_db'" not in sheet_source
 
 
 def test_c12_frf_frequency_scale_normalizes_and_set_xlim_uses_helper(qtbot):

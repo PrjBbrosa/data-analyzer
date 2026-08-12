@@ -6,8 +6,13 @@ can import the tick-density default without loading ``chart_stack.__init__``
 """
 from __future__ import annotations
 
+from mf4_analyzer.batch_render_style import (
+    DEFAULT_TICK_DENSITY_X,
+    DEFAULT_TICK_DENSITY_Y,
+)
+
 # Interactive chart default = 「密」preset. View restore / Inspector / canvas
-# controllers must share this; batch export keeps its own defaults.
-DEFAULT_CHART_TICK_DENSITY = (20, 15)
+# controllers share this pair with batch export — no GUI↔batch fork.
+DEFAULT_CHART_TICK_DENSITY = (DEFAULT_TICK_DENSITY_X, DEFAULT_TICK_DENSITY_Y)
 
 __all__ = ["DEFAULT_CHART_TICK_DENSITY"]

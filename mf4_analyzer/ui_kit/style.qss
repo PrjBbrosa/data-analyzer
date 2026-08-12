@@ -2738,12 +2738,9 @@ QFrame#TickDensitySurface QPushButton[role="tick-density-preset"]:hover {
     color: {{CONTROL_TEXT}};
 }
 QFrame#TickDensitySurface QPushButton[role="tick-density-preset"]:checked {
-    color: #1769e0;
-    border-color: #2d7ff9;
-    background-color: qlineargradient(
-        x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #ffffff, stop: 1 #edf5ff
-    );
+    color: {{CONTROL_TEXT_ON_SELECT}};
+    border-color: {{CONTROL_SELECT_LINE}};
+    background-color: {{CONTROL_SURFACE_TOP}};
 }
 QFrame#TickDensitySurface QFrame#tickDensityAxisRow {
     background-color: transparent;

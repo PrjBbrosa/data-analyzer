@@ -361,6 +361,9 @@ def test_time_overlay_uses_one_palette_across_dual_y_and_distinct_styles(qapp):
         assert all(width == pytest.approx(1.5) for *_rest, width in signatures)
         assert len(scene.auxiliary_views) == 1
         assert len(scene.legend.items) == 4
+        primary_x = scene.plots[0].vb.viewRange()[0]
+        aux_x = scene.auxiliary_views[0].viewRange()[0]
+        assert aux_x == pytest.approx(primary_x, rel=1e-7, abs=1e-7)
     finally:
         scene.close()
 

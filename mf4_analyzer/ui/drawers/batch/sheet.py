@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....batch import AnalysisPreset, BatchOutput, BatchRunner
+from ....qt_analysis_shared import amplitude_mode_is_db
 from ....ui_kit.qt_lifecycle import weak_bound
 from ....batch_preset_io import (
     UnsupportedPresetVersion, load_preset_from_json, save_preset_to_json,
@@ -673,8 +674,13 @@ class BatchSheet(QDialog):
             "partial": "部分完成",
             "cancelled": "已取消",
         }
-        if state == "ready":
-            task_text = "点击运行后生成任务"
+        if state == "ready" or count == 0:
+            # 0-task completion must keep idle guidance; a run-level
+            # warning summary must not replace it.
+            if state == "blocked":
+                task_text = "请选择文件、信号和输出目录"
+            else:
+                task_text = "点击运行后生成任务"
             value, maximum = 0, 1
         elif state == "blocked":
             task_text = reason or "请选择文件、信号和输出目录"
@@ -1449,7 +1455,7 @@ class BatchSheet(QDialog):
         params.update(self._output_panel.render_style_params())
         if method_key == "fft":
             params["amp_y"] = (
-                "dB" if axis.get("amplitude_mode") == "amplitude_db" else "Linear"
+                "dB" if amplitude_mode_is_db(axis.get("amplitude_mode")) else "Linear"
             )
         params.update(self._input_panel.rpm_params())
         params["filter"] = self._input_panel.filter_params()

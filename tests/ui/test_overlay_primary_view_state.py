@@ -154,3 +154,52 @@ def test_pick_lands_in_focused_split_pane_view(qapp, qtbot, tmp_path):
     assert w.view_manager.get(focused_idx).overlay_primary == (fid, 'pressure')
     unfocused_idx = w._primary_view_idx
     assert w.view_manager.get(unfocused_idx).overlay_primary != (fid, 'pressure')
+
+
+def test_fft_mode_overlay_primary_survives_reproject_and_save(qapp, qtbot, tmp_path):
+    """D-3: picking 设为左轴 in FFT must land on the time View and survive.
+
+    A1 still forbids capturing analysis-projected attached/checked/colors.
+    """
+    w, fid = _make_window(qapp, qtbot, tmp_path)
+    tv = w.view_manager.get(w.view_manager.active)
+    attached_before = list(tv.attached_file_ids)
+    checked_before = list(tv.checked)
+    colors_before = dict(tv.colors)
+    assert attached_before
+    w._capture_focused_view()
+
+    w.chart_stack.set_mode("fft")
+    w.inspector.set_mode("fft")
+    fft_state = w.analysis_managers["fft"].get(0)
+    fft_state.attached_file_ids = []
+    w._project_analysis_attachments("fft", fft_state)
+    qapp.processEvents()
+
+    w.navigator.primary_channel_requested.emit(fid, "pressure")
+    qapp.processEvents()
+
+    tv = w.view_manager.get(w.view_manager.active)
+    assert tv.overlay_primary == (fid, "pressure")
+    assert w._overlay_primary == (fid, "pressure")
+    assert tv.attached_file_ids == attached_before
+    assert tv.checked == checked_before
+    assert tv.colors == colors_before
+
+    w.chart_stack.set_mode("time")
+    w.inspector.set_mode("time")
+    w._apply_active_view(w.view_manager.active)
+    qapp.processEvents()
+    assert w._overlay_primary == (fid, "pressure")
+    assert _left_axis_channel_name(w.canvas_time).endswith("pressure")
+
+    w.chart_stack.set_mode("fft")
+    w.inspector.set_mode("fft")
+    proj = tmp_path / "overlay-fft.tlproj"
+    w.save_project(proj)
+
+    w2 = MainWindow()
+    qtbot.addWidget(w2)
+    w2.open_project(proj)
+    fid2 = next(iter(w2.files))
+    assert w2.view_manager.get(0).overlay_primary == (fid2, "pressure")

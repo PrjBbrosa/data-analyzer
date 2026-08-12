@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_c6_tick_density_uses_shared_default_symbol():
     """C6: canvas default must reference DEFAULT_CHART_TICK_DENSITY, not (20, 15)."""
+    from mf4_analyzer.batch_render_style import (
+        DEFAULT_TICK_DENSITY_X,
+        DEFAULT_TICK_DENSITY_Y,
+    )
     from mf4_analyzer.ui.chart_defaults import DEFAULT_CHART_TICK_DENSITY
     from mf4_analyzer.ui.chart_stack.toolbar import (
         DEFAULT_CHART_TICK_DENSITY as toolbar_default,
@@ -19,11 +23,39 @@ def test_c6_tick_density_uses_shared_default_symbol():
     from mf4_analyzer.ui.pg_canvas import tick_density as td_mod
 
     assert DEFAULT_CHART_TICK_DENSITY == (20, 15)
+    assert DEFAULT_CHART_TICK_DENSITY == (
+        DEFAULT_TICK_DENSITY_X,
+        DEFAULT_TICK_DENSITY_Y,
+    )
     assert toolbar_default is DEFAULT_CHART_TICK_DENSITY
     source = Path(td_mod.__file__).read_text(encoding="utf-8")
     assert "DEFAULT_CHART_TICK_DENSITY" in source
     assert "self.density = (20, 15)" not in source
     assert "self.density = DEFAULT_CHART_TICK_DENSITY" in source
+    chart_defaults_src = (
+        ROOT / "mf4_analyzer" / "ui" / "chart_defaults.py"
+    ).read_text(encoding="utf-8")
+    assert "DEFAULT_TICK_DENSITY_X" in chart_defaults_src
+    assert "DEFAULT_CHART_TICK_DENSITY = (20, 15)" not in chart_defaults_src
+
+
+def test_c6_omitted_tick_density_follows_shared_default_explicit_recipe_does_not():
+    """Scheme A aligns the omitted-key default; stored 14/10 must stay 14/10."""
+    from mf4_analyzer.batch_render_style import (
+        DEFAULT_TICK_DENSITY_X,
+        DEFAULT_TICK_DENSITY_Y,
+        render_style_from_params,
+    )
+    from mf4_analyzer.ui.chart_defaults import DEFAULT_CHART_TICK_DENSITY
+
+    omitted = render_style_from_params({})
+    assert (omitted.tick_density_x, omitted.tick_density_y) == DEFAULT_CHART_TICK_DENSITY
+    assert (omitted.tick_density_x, omitted.tick_density_y) == (
+        DEFAULT_TICK_DENSITY_X,
+        DEFAULT_TICK_DENSITY_Y,
+    )
+    legacy = render_style_from_params({"tick_density_x": 14, "tick_density_y": 10})
+    assert (legacy.tick_density_x, legacy.tick_density_y) == (14, 10)
 
 
 def test_c7_chart_font_pt_shared_by_defaults_and_measure_sites():
@@ -145,8 +177,22 @@ def test_p3_format_range_value_branches_on_rounded_form():
     assert _format_range_value(999.6) == "999.6"
     # Rounds into the scientific branch rather than printing "1000" via .3f.
     assert _format_range_value(999.9996) == f"{999.9996:.3g}"
-    assert _format_range_value(0.0099996) == f"{0.0099996:.3g}"
+    # 0.0091 rounds to 0.009 (inside (0, 0.01)); .3g keeps the extra digit
+    # that .3f would drop. 0.0099996 was tautological: both branches print "0.01".
+    small = 0.0091
+    assert _format_range_value(small) == f"{small:.3g}"
+    assert _format_range_value(small) != f"{small:.3f}".rstrip("0").rstrip(".")
     assert _format_range_value(12.5) == "12.5"
+
+
+@pytest.mark.parametrize("value", [0.0001, -0.0004, 1e-07])
+def test_p3_format_range_value_keeps_sub_milli_nonzero(value):
+    """F4: values that round(·, 3) to 0.0 must not display as '0'/'-0'."""
+    from mf4_analyzer.ui.pg_canvas.context_menu import _format_range_value
+
+    text = _format_range_value(value)
+    assert text not in {"0", "-0"}
+    assert abs(float(text)) > 0.0
 
 
 def test_analysis_defaults_module_has_no_gui_imports():

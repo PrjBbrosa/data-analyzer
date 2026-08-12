@@ -141,6 +141,25 @@ class ViewMixin:
         self._view_bridge.capture_controls_into(state, self, canvas)
         self._view_bridge.capture_canvas_ranges_into(state, canvas)
 
+    def _capture_overlay_primary_into_focused_view(self):
+        """Persist ``_overlay_primary`` without capturing navigator scope (A1).
+
+        ``设为左轴`` is a time-View field. In analysis mode the navigator
+        shows a different attachment set, so full ``_capture_focused_view``
+        must stay gated off; this writes only the pick onto the focused
+        time View so a later projection / save does not revert it.
+        """
+        if getattr(self, '_applying_view', False):
+            return
+        idx = self._focused_view_idx
+        if idx is None or not (0 <= idx < len(self.view_manager.views)):
+            idx = self.view_manager.active
+        if idx is None or not (0 <= idx < len(self.view_manager.views)):
+            return
+        self.view_manager.get(idx).overlay_primary = getattr(
+            self, "_overlay_primary", None,
+        )
+
     def _project_view_controls(self, idx):
         if idx is None or not (0 <= idx < len(self.view_manager.views)):
             return
