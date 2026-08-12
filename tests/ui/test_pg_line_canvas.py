@@ -1796,9 +1796,11 @@ def test_plot_spectra_falls_back_to_base_label_without_legend_label(canvas):
 
 
 def test_fft_time_preview_default_divisions_match_standard_y_density(canvas):
-    # FFT time-preview uses 10 default Y divisions so its graticule matches
-    # the FFT line canvas default framing before the user changes tick density.
-    assert canvas._time_divisions == 10
+    from mf4_analyzer.ui.chart_defaults import DEFAULT_CHART_TICK_DENSITY
+
+    # FFT time-preview uses the shared interactive Y tick count so its
+    # graticule matches the time-domain overlay before the user changes density.
+    assert canvas._time_divisions == DEFAULT_CHART_TICK_DENSITY[1]
 
 
 def test_set_tick_density_accepts_inspector_counts(canvas):

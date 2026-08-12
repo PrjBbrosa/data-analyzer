@@ -192,6 +192,8 @@ class TestCollaboratorStateOwnership:
             assert name not in pg_canvas.__dict__
 
     def test_overlay_state_lives_on_overlay_axis_manager(self, pg_canvas):
+        from mf4_analyzer.ui.chart_defaults import DEFAULT_CHART_TICK_DENSITY
+
         overlay = pg_canvas._overlay_axes
 
         assert overlay.selected_channel is None
@@ -202,7 +204,7 @@ class TestCollaboratorStateOwnership:
         assert overlay.aux_viewboxes == []
         assert overlay.aux_axes == []
         assert overlay.view_sync_connections == []
-        assert overlay.divisions == 10
+        assert overlay.divisions == DEFAULT_CHART_TICK_DENSITY[1]
         assert overlay.grid_lines == []
         assert overlay.default_lw == 1.5
         assert overlay.default_alpha == 1.0

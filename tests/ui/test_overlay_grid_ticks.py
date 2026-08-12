@@ -239,10 +239,13 @@ class TestOverlayDivisions:
         canvas.plot_channels(rows, mode="overlay")
         return canvas
 
-    def test_default_divisions_is_10(self, qapp):
+    def test_default_divisions_follows_chart_tick_density(self, qapp):
+        from mf4_analyzer.ui.chart_defaults import DEFAULT_CHART_TICK_DENSITY
+
         canvas = self._overlay(qapp)
-        assert canvas._overlay_axes.divisions == 10
-        assert len(canvas._overlay_axes.grid_lines) == 10 - 1
+        expected = DEFAULT_CHART_TICK_DENSITY[1]
+        assert canvas._overlay_axes.divisions == expected
+        assert len(canvas._overlay_axes.grid_lines) == expected - 1
 
     def test_set_tick_density_drives_divisions_and_gridlines(self, qapp):
         canvas = self._overlay(qapp)
@@ -592,6 +595,10 @@ class TestOverlayWheel:
         canvas.resize(900, 500)
         canvas.show()
         qapp.processEvents()
+        # (-2.5, 2.5) / (-120, 280) sit on a 10-division nice grid (0.5 and
+        # 40 per div). The round-trip identity is that fixture, not the
+        # product default Y count.
+        canvas.set_tick_density(10, 10)
         frac = 0.85
         initial_ranges = [(-2.5, 2.5), (-120.0, 280.0)]
         for handle, limits in zip(canvas.axes_list, initial_ranges):
