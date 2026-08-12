@@ -87,10 +87,17 @@ def test_mouse_mode_broadcast_uses_non_broadcast_peer_setter(qapp, qtbot):
 
 
 def test_shared_toolbar_highlight_refreshes_on_mouse_mode_signal(qapp, qtbot):
+    """mouse_mode_changed stays wired to the shared-nav highlight refresh.
+
+    Task16 connects the bound method directly (no self-capturing lambda).
+    PyQt keeps that callable, so an instance-attribute shadow no longer
+    redirects the slot — reconnect a spy after construction instead.
+    """
     cs = ChartStack()
     qtbot.addWidget(cs)
     calls = []
-    cs._sync_shared_nav_highlight = lambda: calls.append("sync")
+    cs._time_toolbar.mouse_mode_changed.disconnect(cs._sync_shared_nav_highlight)
+    cs._time_toolbar.mouse_mode_changed.connect(lambda *_a: calls.append("sync"))
 
     cs._time_toolbar.mouse_mode_changed.emit("zoom")
 

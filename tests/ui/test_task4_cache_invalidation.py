@@ -456,6 +456,11 @@ class TestFallbackKeyAlignsPrimaryKey:
             def _check_uniform_or_prompt(self_, _fd, _section):
                 return True
 
+            @staticmethod
+            def _offer_analysis_time_range_before_compute(_section):
+                # Probe is compute-routing only; never surface the confirm dialog.
+                return True
+
             def _fft_time_analysis_cache_key(self_, fid, ch, p, time_range):
                 self_.builder_calls.append((fid, ch, dict(p), time_range))
                 return FFTTimeMixin._fft_time_analysis_cache_key(

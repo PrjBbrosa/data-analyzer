@@ -155,9 +155,13 @@ class TestCollaboratorStateOwnership:
             assert name not in pg_canvas.__dict__
 
     def test_tick_density_state_lives_on_tick_density_controller(self, pg_canvas):
+        from mf4_analyzer.ui.chart_defaults import DEFAULT_CHART_TICK_DENSITY
+
         controller = pg_canvas._tick_density_controller
 
-        assert controller.density == (10, 10)
+        # C6: controller seeds from the product default (20, 15), not a
+        # collaborator-local (10, 10) literal.
+        assert controller.density == DEFAULT_CHART_TICK_DENSITY
         assert "_tick_density" not in pg_canvas.__dict__
 
     def test_cursor_state_lives_on_cursor_controller(self, pg_canvas):

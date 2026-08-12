@@ -12,8 +12,6 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStyle,
-    QStyleFactory,
-    QStyleOption,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QStackedLayout,
@@ -22,14 +20,15 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PyQt5.QtGui import QColor, QBrush, QFontMetrics, QIcon, QPainter, QPen, QPolygon
 from PyQt5.QtCore import (
     Qt,
+    QPoint,
     QRect,
     QSettings,
     QSize,
     pyqtSignal,
 )
-from PyQt5.QtGui import QColor, QBrush, QFontMetrics, QIcon, QPainter, QPen
 
 from ...ui_kit.icons import Icons
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
@@ -409,10 +408,11 @@ class _CheckTolerantTree(QTreeWidget):
         self._consume_check_release = False
         self._owner = None  # set by MultiFileChannelWidget; drawBranches reads it
         self._channel_delegate = _ChannelLeafDelegate(self)
-        self._native_branch_style = (
-            QStyleFactory.create("macintosh")
-            if sys.platform == "darwin" else None
-        )
+        # Darwin-only: selected-row tint washes out Fusion's branch glyph, so
+        # drawBranches overpaints a dark chevron in the branch slot. Kept as a
+        # platform gate (not a QStyle handle) — QMacStyle.PE_IndicatorBranch
+        # can Abort under restricted offscreen hosts.
+        self._repaint_selected_expander = sys.platform == "darwin"
         self.setItemDelegate(self._channel_delegate)
 
     def _check_hit_rect(self, item, index):
@@ -542,7 +542,7 @@ class _CheckTolerantTree(QTreeWidget):
             and data[0] in ('file', 'source', 'raster')
             and item.childCount() > 0
             and item.isSelected()
-            and self._native_branch_style is not None
+            and self._repaint_selected_expander
         ):
             self._paint_selected_expander(painter, rect, item.isExpanded())
         if not (data and data[0] == 'channel'):
@@ -566,27 +566,42 @@ class _CheckTolerantTree(QTreeWidget):
         self._paint_group_badge(painter, rect, gid)
 
     def _paint_selected_expander(self, painter, rect, expanded):
-        """Repaint the selected glyph through the platform tree style."""
-        style = self._native_branch_style
-        if style is None:
-            return
-        option = QStyleOption()
-        option.initFrom(self)
-        # ``drawBranches`` supplies the complete indentation gutter.  The
-        # platform primitive expects the current 16px branch slot, so center
-        # it on the same right-edge anchor Qt uses for the unselected row.
+        """Repaint a dark chevron so the selected tint does not swallow it.
+
+        Historically this called ``QMacStyle.drawPrimitive(PE_IndicatorBranch)``.
+        That native primitive can ``Abort`` under restricted offscreen hosts
+        (sandbox / missing Cocoa) once the selected branch fill is styled, so
+        the glyph is drawn as a plain vector instead. Geometry still tracks the
+        16px right-edge branch slot Qt uses for the unselected row.
+        """
         draw_rect = QRect(rect)
-        # QMacStyle's unselected branch primitive sits two logical pixels
-        # farther right than the selected primitive.  Use the same right-edge
-        # anchor as the sibling row so both the glyph and its click slot line
-        # up after selection.
         target_center_x = rect.right() - 8
         draw_rect.translate(target_center_x - rect.center().x(), 0)
-        option.rect = draw_rect
-        option.state |= QStyle.State_Children | QStyle.State_Item
+        cx = draw_rect.center().x()
+        cy = draw_rect.center().y()
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        pen = QPen(QColor("#334155"))
+        pen.setWidthF(1.7)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
         if expanded:
-            option.state |= QStyle.State_Open
-        style.drawPrimitive(QStyle.PE_IndicatorBranch, option, painter, self)
+            # Downward chevron (open).
+            points = QPolygon([
+                QPoint(cx - 4, cy - 1),
+                QPoint(cx, cy + 3),
+                QPoint(cx + 4, cy - 1),
+            ])
+        else:
+            # Rightward chevron (collapsed).
+            points = QPolygon([
+                QPoint(cx - 1, cy - 4),
+                QPoint(cx + 3, cy),
+                QPoint(cx - 1, cy + 4),
+            ])
+        painter.drawPolyline(points)
+        painter.restore()
 
     def _paint_group_badge(self, painter, rect, gid):
         """在缩进槽右端（紧贴勾选框前）画组徽标：组色圆角方块 + 白色组号。

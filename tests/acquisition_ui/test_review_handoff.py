@@ -749,17 +749,20 @@ def test_analyzer_load_file_delegates_to_load_one(qtbot, monkeypatch):
     qtbot.addWidget(win)
     captured: list[tuple[str, object]] = []
 
-    def _load_one(fp, *, progress_callback=None):
-        captured.append((fp, progress_callback))
+    def _load_one(fp, *, progress_callback=None, notify=True):
+        # ``notify`` is F11's per-file toast gate; single-file load keeps True.
+        captured.append((fp, progress_callback, notify))
 
     monkeypatch.setattr(win, "_load_one", _load_one)
     win.load_file("/tmp/some.mf4")
     assert captured[0][0] == "/tmp/some.mf4"
     assert callable(captured[0][1])
+    assert captured[0][2] is True
     # Also accepts a Path.
     win.load_file(Path("/tmp/another.mf4"))
     assert captured[-1][0] == str(Path("/tmp/another.mf4"))
     assert callable(captured[-1][1])
+    assert captured[-1][2] is True
 
 
 # ---------------------------------------------------------------------------

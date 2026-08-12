@@ -731,7 +731,7 @@ def test_fft_single_signal_survives_fft_time_weighting_drift(two_file_win, qapp)
     assert canvas.is_spectrum_stale() is False
 
 
-def test_fft_signal_combo_previews_time_before_compute(two_file_win, qapp):
+def test_fft_signal_combo_previews_time_before_compute(two_file_win, qapp, monkeypatch):
     win = two_file_win
     win.toolbar._set_mode("fft")
     _seed_active_analysis_attachments(win)
@@ -744,6 +744,13 @@ def test_fft_signal_combo_previews_time_before_compute(two_file_win, qapp):
     # never-computed project (or clearing the selection) plots nothing.
     assert len(canvas._amp_curves) == 0
     assert len(canvas._time_curves) == 0
+
+    submitted = []
+    monkeypatch.setattr(
+        win._analysis_jobs,
+        "submit_batch",
+        lambda *args, **kwargs: submitted.append((args, kwargs)),
+    )
 
     # Explicitly picking a signal in the combo previews its time trace before
     # the user hits 计算 — the preview-before-compute UX is now selection-driven.

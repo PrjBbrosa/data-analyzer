@@ -2,6 +2,8 @@
 from PyQt5.QtCore import Qt, QPropertyAnimation, QTimer
 from PyQt5.QtWidgets import QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel
 
+from ...ui_kit.qt_lifecycle import as_weak_callable
+
 
 class Toast(QFrame):
     """Floating non-blocking acknowledgement toast.
@@ -27,7 +29,9 @@ class Toast(QFrame):
         self._bottom_margin_override = (
             None if bottom_margin is None else int(bottom_margin)
         )
-        self._margin_provider = margin_provider
+        # Bound-method providers must not keep the host alive past Qt teardown
+        # (BatchSheet→Toast→bound method→BatchSheet cycle → zombie wrapper).
+        self._margin_provider = as_weak_callable(margin_provider)
         self.setObjectName("toast")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -70,7 +74,7 @@ class Toast(QFrame):
 
     def set_margin_provider(self, provider):
         """Callable returning clearance px at show/reposition time."""
-        self._margin_provider = provider
+        self._margin_provider = as_weak_callable(provider)
         if self.isVisible():
             self._reposition()
 
