@@ -5053,6 +5053,7 @@ class BatchRunner:
                     {
                         'code': item.code,
                         'message': item.message,
+                        'suggestion': item.suggestion,
                         'panel': item.panel,
                     }
                     for item in spec.diagnostics
@@ -5076,7 +5077,11 @@ class BatchRunner:
                         'diagnostics': diagnostics,
                     },
                 }
-                statistics_warnings = [item['code'] for item in diagnostics]
+                from .batch_statistics import format_chart_diagnostic_warning
+                statistics_warnings = [
+                    format_chart_diagnostic_warning(item)
+                    for item in spec.diagnostics
+                ]
             image_extension = str(effective.effective['image'])
             conflict_policy = str(
                 conflict_policy_override
@@ -5472,6 +5477,12 @@ class BatchRunner:
                 spectro = self._compute_fft_time_spectro(
                     sig, time, fs, compute_params, channel_name=signal_name,
                 )
+                spectro_meta = dict(getattr(spectro, 'metadata', None) or {})
+                axis_warnings = tuple(spectro_meta.get('axis_warnings') or ())
+                if axis_warnings:
+                    warnings.extend(axis_warnings)
+                if 'effective_fs' in spectro_meta:
+                    effective_params['fs'] = float(spectro_meta['effective_fs'])
                 image_payload = ('fft_time', spectro)
             else:
                 if method == 'order_time':

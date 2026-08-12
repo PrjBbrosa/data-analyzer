@@ -706,6 +706,8 @@ class BatchSheet(QDialog):
             value, maximum = 0, 1
         else:
             task_text = f"{value}/{count} 任务"
+            if reason:
+                task_text = f"{task_text} · {reason}"
         self._footer_status.setText(labels.get(state, state))
         self._footer_task_summary.setText(task_text)
         self._footer_progress.setRange(0, maximum)
@@ -2062,9 +2064,15 @@ class BatchSheet(QDialog):
         done = min(total, max(0, self._task_list._done_count))
         if status == "done":
             done = total
+        from .preview_dialog import format_batch_run_warnings
+        warn_summary = format_batch_run_warnings(
+            getattr(result, "warnings", ()) or (),
+            style="inline",
+        ) if result is not None else ""
         self._present_footer(
             status if status in labels else labels.get(status, status),
             done=done, total=total, task_count=self._task_list.row_count(),
+            reason=warn_summary,
         )
         self._show_result_toast(result)
         self._maybe_open_output_folder(result)
@@ -2098,8 +2106,21 @@ class BatchSheet(QDialog):
         status = getattr(result, "status", "") or ""
         if not status:
             return
+        from .preview_dialog import format_batch_run_warnings
+        warn_block = format_batch_run_warnings(
+            getattr(result, "warnings", ()) or (),
+            style="block",
+        )
+
+        def _with_warnings(body: str) -> str:
+            if not warn_block:
+                return body
+            return f"{body}\n\n{warn_block}"
+
         if status == "done":
-            QMessageBox.information(self, "批处理完成", "全部任务已完成。")
+            QMessageBox.information(
+                self, "批处理完成", _with_warnings("全部任务已完成。"),
+            )
         elif status == "partial":
             blocked = getattr(result, "blocked", []) or []
             degraded_count = int(
@@ -2109,19 +2130,27 @@ class BatchSheet(QDialog):
                 QMessageBox.information(
                     self,
                     "批处理降级完成",
-                    f"完成，共 {degraded_count} 个任务仅导出数据文件。",
+                    _with_warnings(
+                        f"完成，共 {degraded_count} 个任务仅导出数据文件。"
+                    ),
                 )
             else:
                 QMessageBox.warning(
                     self, "批处理部分完成",
-                    f"完成，共 {len(blocked)} 个失败任务。",
+                    _with_warnings(f"完成，共 {len(blocked)} 个失败任务。"),
                 )
         elif status == "cancelled":
-            QMessageBox.information(self, "批处理已取消", "运行已被用户取消。")
+            QMessageBox.information(
+                self, "批处理已取消",
+                _with_warnings("运行已被用户取消。"),
+            )
         elif status == "blocked":
             blocked = getattr(result, "blocked", []) or []
             reason = "; ".join(blocked) if blocked else "未知原因"
-            QMessageBox.warning(self, "批处理无法运行", f"原因：{reason}")
+            QMessageBox.warning(
+                self, "批处理无法运行",
+                _with_warnings(f"原因：{reason}"),
+            )
 
     def _maybe_open_output_folder(self, result) -> None:
         """完成后打开输出文件夹: fires once, right after the (blocking) result

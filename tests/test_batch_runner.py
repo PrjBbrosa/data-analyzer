@@ -775,7 +775,14 @@ def test_fft_time_exports_long_format_dataframe(tmp_path):
 
 
 def test_fft_time_batch_auto_rebuilds_nonuniform_time_axis(tmp_path):
-    """Batch FFT-vs-Time should not block on jittered MF4 timestamps."""
+    """Batch FFT-vs-Time should not block on jittered MF4 timestamps.
+
+    A6: rebuild must leave an audit warning and write the rebuilt Fs into
+    ``effective_params`` / the manifest so recorded facts match the compute.
+    """
+    from mf4_analyzer.batch_compute import suggest_fs_from_time_axis
+    from mf4_analyzer.batch_manifest import load_batch_manifest
+
     fs = 500.0
     n = 2048
     nominal_dt = 1.0 / fs
@@ -785,6 +792,7 @@ def test_fft_time_batch_auto_rebuilds_nonuniform_time_axis(tmp_path):
     df = pd.DataFrame({"Time": t, "sig": sig})
     fd = FileData(tmp_path / "jittered.mf4", df, list(df.columns), {}, idx=0)
     assert fd.is_time_axis_uniform() is False
+    rebuilt_fs = float(suggest_fs_from_time_axis(t, fs))
 
     preset = AnalysisPreset.free_config(
         name="batch fft_time jittered",
@@ -803,9 +811,22 @@ def test_fft_time_batch_auto_rebuilds_nonuniform_time_axis(tmp_path):
 
     assert result.status == "done"
     assert result.blocked == []
-    data = pd.read_csv(result.items[0].data_path)
+    item = result.items[0]
+    data = pd.read_csv(item.data_path)
     assert list(data.columns) == ["time_s", "frequency_hz", "amplitude"]
     assert data["time_s"].nunique() > 1
+    assert any("自动重建" in warning for warning in item.warnings)
+    assert any("relative_jitter=" in warning for warning in item.warnings)
+    assert any("自动重建" in warning for warning in result.warnings)
+    assert item.effective_params["fs"] == pytest.approx(rebuilt_fs)
+    assert item.effective_params["fs"] != pytest.approx(fs)
+    manifest = load_batch_manifest(result.manifest_path)
+    entry = next(
+        row for row in manifest["entries"]
+        if row.get("task_id") == item.task_id
+    )
+    assert any("自动重建" in warning for warning in entry["warnings"])
+    assert entry["effective_facts"]["fs"] == pytest.approx(rebuilt_fs)
 
 
 def test_fft_time_exports_image(tmp_path):
@@ -3326,15 +3347,16 @@ def test_time_statistics_diagnostic_is_a_nonblocking_group_warning(
     assert result.status == "done"
     assert result.items[0].status == "done"
     assert Path(result.items[0].data_path).is_file()
+    diagnostic = captured["spec"].diagnostics[0]
+    expected_warning = f"{diagnostic.message} {diagnostic.suggestion}".strip()
     assert preview.status == "done"
-    assert preview.warnings == ("chart_statistics.multiple_x_reversals",)
+    assert preview.warnings == (expected_warning,)
     assert not list((tmp_path / "preview").glob("batch-manifest__*.json"))
     assert not (tmp_path / "preview" / ".tracelab").exists()
-    assert captured["spec"].diagnostics[0].code == (
-        "chart_statistics.multiple_x_reversals"
-    )
+    assert diagnostic.code == "chart_statistics.multiple_x_reversals"
+    assert diagnostic.suggestion
     assert group["status"] == "done"
-    assert group["warnings"] == ["chart_statistics.multiple_x_reversals"]
+    assert group["warnings"] == [expected_warning]
     assert group["effective_facts"]["chart_statistics"] == {
         "config": {
             "enabled": True, "range_mode": "full",
@@ -3345,6 +3367,7 @@ def test_time_statistics_diagnostic_is_a_nonblocking_group_warning(
         "diagnostics": [{
             "code": "chart_statistics.multiple_x_reversals", "panel": 0,
             "message": "当前统计区间识别到 4 条有效 X 路径，无法确定唯一升程/回程。",
+            "suggestion": "请缩小统计区间或拆分数据后重新运行。",
         }],
     }
 
@@ -3504,7 +3527,10 @@ def test_statistics_diagnostic_does_not_stop_the_next_render_group(
     assert result.status == "done"
     assert len(list((tmp_path / "out").glob("*.png"))) == 2
     assert diagnostic["status"] == normal["status"] == "done"
-    assert diagnostic["warnings"] == ["chart_statistics.multiple_x_reversals"]
+    assert len(diagnostic["warnings"]) == 1
+    assert "有效 X 路径" in diagnostic["warnings"][0]
+    assert "缩小统计区间" in diagnostic["warnings"][0]
+    assert "chart_statistics.multiple_x_reversals" not in diagnostic["warnings"]
     assert normal["effective_facts"]["chart_statistics"]["row_count"] == 1
 
 

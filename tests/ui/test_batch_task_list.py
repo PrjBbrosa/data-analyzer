@@ -170,6 +170,43 @@ def test_unexpected_finish_never_marks_running_row_done(qtbot):
     assert w.progress_value() == 100
 
 
+def test_on_run_finished_applies_item_warnings_as_row_tooltips(qtbot):
+    """D1: successful rows expose item warnings via tooltip (fold when >3)."""
+    from mf4_analyzer.batch import BatchItemResult, BatchProgressEvent, BatchRunResult
+    from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget
+
+    w = TaskListWidget()
+    qtbot.addWidget(w)
+    w.apply_dry_run(
+        [("a.mf4", "sig", "fft"), ("b.mf4", "sig", "fft")],
+        outputs_per_task=1,
+    )
+    w.on_run_started()
+    w.on_event(BatchProgressEvent(kind="task_done", task_index=1, total=2))
+    w.on_event(BatchProgressEvent(kind="task_done", task_index=2, total=2))
+
+    w.on_run_finished(BatchRunResult(
+        status="done",
+        items=[
+            BatchItemResult(
+                method="fft", file_id=0, file_name="a.mf4", signal="sig",
+                status="done", warnings=["轴已重建", "checksum incomplete"],
+            ),
+            BatchItemResult(
+                method="fft", file_id=1, file_name="b.mf4", signal="sig",
+                status="done",
+                warnings=[f"warn-{i}" for i in range(4)],
+            ),
+        ],
+        warnings=["轴已重建", "checksum incomplete", "warn-0", "warn-1", "warn-2", "warn-3"],
+    ))
+
+    assert "轴已重建" in w.row_tooltip(0)
+    assert "checksum incomplete" in w.row_tooltip(0)
+    assert "4 条警告，详见 manifest" in w.row_tooltip(1)
+    assert "warn-0" not in w.row_tooltip(1)
+
+
 def test_artifact_open_request_requires_explicit_row_activation(qtbot):
     from mf4_analyzer.batch import BatchProgressEvent
     from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget

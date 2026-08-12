@@ -103,5 +103,5 @@ def test_fft_time_spectro_preserves_coverage_while_normalizing_orientation(
     np.testing.assert_array_equal(payload.x, times)
     np.testing.assert_array_equal(payload.y, frequencies)
     np.testing.assert_array_equal(payload.matrix, amplitude.T)
-    assert payload.metadata == metadata
+    assert payload.metadata == {**metadata, "effective_fs": 100.0}
     assert payload.metadata is not metadata
