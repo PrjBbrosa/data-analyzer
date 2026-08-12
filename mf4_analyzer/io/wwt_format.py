@@ -16,6 +16,8 @@ char[256] + u16 记录总数），随后是「156 字节记录头 + 内联数据
 - ``Pars``（计算通道：数据区开头是 NUL 结尾的公式串 + 变长参数结构，记录头
   里没有长度字段）和未知标签的记录，通过逐字节向前扫描下一条结构上合法的
   记录头 / 尾块标记来确定数据区大小（重同步），跳过并记入 skipped_channels。
+  重同步认头时只校验名称/单位的 **NUL 前缀**；NUL 后的脏填充（见 DC2E_0011）
+  不得挡掉真实 ``Zeit``。
 """
 from __future__ import annotations
 import struct
@@ -63,7 +65,11 @@ def _looks_like_record_header(data: bytes, pos: int) -> bool:
     逐字节踩点，宽了会把数据区里的假标签当记录头、让游标错位：
     - 5 字节标签 ∈ 已知集合（第 5 字节必须是 NUL）；
     - 样本数 u32 在 (0, 50_000_000) 内；
-    - 名称[40] / 单位[17] 是 NUL 填充的 latin-1 文本（字节 ∈ {0}∪[0x20,0xFF]）。
+    - 名称[40] / 单位[17] 的 **NUL 前缀**是可打印 latin-1（字节 ∈ {0}∪[0x20,0xFF]）。
+
+    NUL **之后**的填充不检查：WinWert 有时在 ``Time\\0`` / ``s\\0`` 后面留下
+    未初始化脏字节（DC2E_0011 第二段 Zeit）。若要求整段 40/17 字节洁净，
+    Pars 重同步会假阴性跳过真实 Zeit，后续主测量通道全部因 n 不匹配被丢。
     """
     if pos + _REC_HEADER_SIZE > len(data):
         return False
@@ -73,8 +79,11 @@ def _looks_like_record_header(data: bytes, pos: int) -> bool:
     if not 0 < n < 50_000_000:
         return False
     for off, length in ((0x1b, 40), (0x43, 17)):
-        for byte in data[pos + off:pos + off + length]:
-            if byte != 0 and byte < 0x20:
+        field = data[pos + off:pos + off + length]
+        end = field.find(b"\0")
+        prefix = field if end < 0 else field[:end]
+        for byte in prefix:
+            if byte < 0x20:
                 return False
     return True
 

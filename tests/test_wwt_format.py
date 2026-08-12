@@ -308,6 +308,99 @@ def test_unknown_tag_resyncs_to_next_record(tmp_path):
     assert g["source_metadata"]["records_parsed"] == 3
 
 
+def _make_record_dirty_pad(tag, n, name=b"ch", unit=b"", a=1.0, b=0.001, c=0.0,
+                           payload=b"", *, name_junk=b"", unit_junk=b""):
+    """Like ``_make_record``, but plant control bytes after the NUL in name/unit.
+
+    Mirrors WinWert DC2E_0011's second Zeit header: ``Time\\0`` / ``s\\0`` are
+    fine, yet the remainder of the fixed field holds uninitialized junk that
+    used to fail ``_looks_like_record_header`` and break Pars resync.
+    """
+    rec = bytearray(156)
+    rec[0:len(tag)] = tag
+    struct.pack_into("<IH", rec, 5, n, 0)
+    rec[0x1b:0x1b + len(name)] = name
+    if name_junk:
+        # name is NUL-terminated at len(name) if it contains no NUL; plant junk
+        # starting after an explicit terminator.
+        term = 0x1b + len(name)
+        if term < 0x1b + 40:
+            rec[term] = 0
+            start = term + 1
+            rec[start:start + len(name_junk)] = name_junk[: 0x1b + 40 - start]
+    rec[0x43:0x43 + len(unit)] = unit
+    if unit_junk:
+        term = 0x43 + len(unit)
+        if term < 0x43 + 17:
+            rec[term] = 0
+            start = term + 1
+            rec[start:start + len(unit_junk)] = unit_junk[: 0x43 + 17 - start]
+    struct.pack_into("<ddd", rec, 0x84, a, b, c)
+    return bytes(rec) + payload
+
+
+def test_pars_resync_accepts_zeit_with_dirty_name_padding(tmp_path):
+    """Pars 之后的 Zeit 头若 NUL 后有脏填充，仍必须被重同步认作新时基。
+
+    回归 DC2E_0011：旧判据要求 name/unit 整段洁净，假阴性跳过第二段 Zeit，
+    主测量通道因 n≠前一段 Zeit 被整段丢进 skipped。
+    """
+    n_lim, n_main = 100, 400
+    lim = np.ones(n_lim, dtype=np.float64)
+    main = np.linspace(-2.0, 2.0, n_main).astype(np.float64)
+    # Dirty pad includes bytes < 0x20 (the old reject condition).
+    junk = bytes([0x03, 0x01, 0x58, 0x4a, 0x80, 0x07])
+
+    body = _make_record(b"Zeit", n_lim, name=b"Time", unit=b"s")
+    body += _make_record(b"Real", n_lim, name=b"Diff.Limit A", unit=b"Nm",
+                         payload=lim.tobytes())
+    # Pars with a short formula payload; next header is the dirty Zeit.
+    body += _make_record(b"Pars", 50000, name=b"Diff.Moment A", unit=b"Nm",
+                         payload=b"-(k7-(-k13))\x00" + b"\x00" * 64)
+    body += _make_record_dirty_pad(
+        b"Zeit", n_main, name=b"Time", unit=b"s", b=0.001, c=0.0,
+        name_junk=junk, unit_junk=bytes([0x07, 0x03]),
+    )
+    body += _make_record(b"Real", n_main, name=b"Wheel input torque", unit=b"Nm",
+                         payload=main.tobytes())
+    body += b"DatenFenste2\x00" + b"\x00" * 16
+
+    p = tmp_path / "dirty_zeit.wwt"
+    p.write_bytes(_make_header(5) + body)
+    groups = DataLoader.load_wwt(str(p))
+    assert len(groups) == 2
+    assert len(groups[0]["data"]["Time"]) == n_lim
+    assert groups[0]["channels"] == ["Time", "Diff.Limit A"]
+    assert len(groups[1]["data"]["Time"]) == n_main
+    assert groups[1]["channels"] == ["Time", "Wheel input torque"]
+    np.testing.assert_allclose(
+        groups[1]["data"]["Wheel input torque"].to_numpy(), main)
+    skipped = groups[0]["source_metadata"]["skipped_channels"]
+    assert any(s.startswith("Diff.Moment A") for s in skipped)
+    assert "Wheel input torque" not in skipped
+
+
+def test_dc2e_0011_loads_main_measurement_group():
+    """Real-file anchor: UCAN-b6_DC2E_0011 must keep the 13144-pt measurement."""
+    p = _ROOT / "testdoc" / "UCAN-b6_DC2E_0011.wwt"
+    if not p.exists():
+        pytest.skip(f"sample not found: {p}")
+    groups = DataLoader.load_wwt(str(p))
+    assert len(groups) == 2
+    lengths = sorted(len(g["data"]["Time"]) for g in groups)
+    assert lengths == [1988, 13144]
+    main = next(g for g in groups if len(g["data"]["Time"]) == 13144)
+    for name in (
+        "Wheel input torque", "Rack Force", "Battary Current",
+        "Wheel input angle", "Sensor torque A", "Motor torque A",
+        "Sensor torque B", "Motor torque B",
+    ):
+        assert name in main["channels"], main["channels"]
+    skipped = main["source_metadata"]["skipped_channels"]
+    assert "Wheel input torque" not in skipped
+    assert main["source_metadata"]["records_parsed"] == 21
+
+
 def test_unknown_tag_without_resync_target_rejected(tmp_path):
     """未知标签且其后扫不到任何合法记录头/尾块 → 硬错误（报标签）。
     绝不能猜元素大小继续走：错一次游标全错位。"""
