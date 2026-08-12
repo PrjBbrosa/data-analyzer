@@ -289,6 +289,8 @@ def test_multi_file_load_aggregates_analysis_attach_toast(
     attach_toasts = [msg for msg, _ in messages if "已加入" in msg]
     assert len(attach_toasts) == 1, messages
     assert "2 个文件" in attach_toasts[0]
+    success_toasts = [msg for msg, _ in messages if msg.startswith("已加载")]
+    assert success_toasts == [], messages
     assert len(window.analysis_managers["fft"].get(0).attached_file_ids) == 2
 
 
@@ -320,3 +322,91 @@ def test_single_file_load_still_toasts_analysis_attach(
     attach_toasts = [msg for msg, _ in messages if "已加入" in msg]
     assert len(attach_toasts) == 1, messages
     assert "1 个文件" in attach_toasts[0]
+    success_toasts = [msg for msg, _ in messages if msg.startswith("已加载")]
+    assert len(success_toasts) == 1, messages
+
+
+def test_multi_file_load_aggregates_success_toast_in_time_mode(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    """F11: time-mode multi-file open emits one「已加载 N 个文件」toast."""
+    import numpy as np
+    import pandas as pd
+
+    def _csv(path):
+        t = np.linspace(0.0, 1.0, 20)
+        pd.DataFrame({"time": t, "rpm": np.sin(t)}).to_csv(path, index=False)
+        return str(path)
+
+    a = _csv(tmp_path / "time_a.csv")
+    b = _csv(tmp_path / "time_b.csv")
+    c = _csv(tmp_path / "time_c.csv")
+
+    window = _window(qtbot, qapp)
+    messages = []
+    monkeypatch.setattr(
+        window,
+        "toast",
+        lambda message, level="info": messages.append((message, level)),
+    )
+    monkeypatch.setattr(window, "_should_confirm_heavy_load", lambda *_a, **_k: False)
+
+    window._open_data_paths([a, b, c])
+    qapp.processEvents()
+
+    success_toasts = [msg for msg, _ in messages if msg.startswith("已加载")]
+    assert success_toasts == ["已加载 3 个文件"], messages
+    assert len(window.files) == 3
+
+
+def test_format_load_import_error_names_python_can():
+    window = MainWindow.__new__(MainWindow)
+    wrapped = window._format_load_import_error(
+        ImportError("No module named 'can'", name="can")
+    )
+    assert "python-can" in wrapped
+    already = window._format_load_import_error(
+        ImportError("python-can 未安装，无法读取 CANoe ASC 文件。请先 pip install python-can")
+    )
+    assert already.startswith("python-can 未安装")
+
+
+def test_asc_sniff_importerror_shows_python_can_dialog(
+    qtbot, qapp, tmp_path, monkeypatch,
+):
+    """Task5 sniff ImportError must surface as QMessageBox, not a traceback."""
+    from PyQt5.QtWidgets import QMessageBox
+
+    path = tmp_path / "maybe_canoe.asc"
+    path.write_text(
+        "date Thu Jan 01 00:00:00.000 am 2026\n"
+        "base hex timestamps absolute\n",
+        encoding="utf-8",
+    )
+    boxes = []
+
+    def _critical(_parent, title, text, *args, **kwargs):
+        boxes.append((title, str(text)))
+        return QMessageBox.Ok
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.main_window._project_io_mixin.QMessageBox.critical",
+        _critical,
+    )
+    monkeypatch.setattr(
+        "mf4_analyzer.io.asc_can_format.sniff_canoe_asc",
+        lambda _path: (_ for _ in ()).throw(
+            ImportError("No module named 'can'", name="can")
+        ),
+    )
+
+    window = _window(qtbot, qapp)
+    window._load_one(str(path))
+    qapp.processEvents()
+
+    assert boxes, "ImportError must open a dialog, not escape as a traceback"
+    title, text = boxes[0]
+    assert title == "错误"
+    assert "python-can" in text
+    assert "Traceback" not in text
+    assert window.files == {}
