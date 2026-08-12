@@ -225,3 +225,31 @@ def test_result_summary_reads_naturally(tmp_path):
     t, channels, units = _series()
     result = export_wwt(tmp_path / "s.wwt", t, channels, units=units)
     assert result.summary == f"2 通道 · {len(t)} 点"
+
+
+def test_cleanroom_compact_quantizes_int16_and_roundtrips(tmp_path):
+    from mf4_analyzer.io.wwt_writer import STORAGE_COMPACT
+
+    t, channels, units = _series()
+    out = tmp_path / "compact.wwt"
+    result = export_wwt(
+        out, t, channels, units=units, storage=STORAGE_COMPACT,
+    )
+    assert result.mode == MODE_CLEANROOM
+    assert result.quantized is True
+    assert "量化写入" in result.summary
+    assert b"int1\x00" in out.read_bytes()
+
+    loaded = DataLoader.load_wwt(str(out))[0]
+    for name, values in channels.items():
+        assert loaded["channel_metadata"][name]["tag"] == "int1"
+        got = loaded["data"][name].to_numpy()
+        span = float(np.nanmax(values) - np.nanmin(values))
+        max_err = float(np.max(np.abs(got - values)))
+        assert max_err <= span / 65534.0 + 1e-12
+
+
+def test_unknown_storage_rejected(tmp_path):
+    t, channels, _ = _series()
+    with pytest.raises(WwtExportError, match="存储档位"):
+        export_wwt(tmp_path / "x.wwt", t, channels, storage="zip")

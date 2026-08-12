@@ -272,7 +272,25 @@ class ChannelEditorDialog(QDialog):
         self.combo_export_format = QComboBox()
         self.combo_export_format.setObjectName("channelExportFormat")
         self.combo_export_format.addItem("Excel (.xlsx)", "excel")
-        self.combo_export_format.addItem("WinWert (.wwt)", "wwt")
+        self.combo_export_format.addItem("WinWert 无损 (.wwt)", "wwt")
+        self.combo_export_format.addItem("WinWert 紧凑 (.wwt)", "wwt_compact")
+        # Per-item tips: QComboBox shows the current item's tip on hover.
+        self.combo_export_format.setItemData(
+            0,
+            "表格导出：体积通常更大，便于二次处理。",
+            Qt.ToolTipRole,
+        )
+        self.combo_export_format.setItemData(
+            1,
+            "每个样点 8 字节双精度，体积最大，无量化误差。",
+            Qt.ToolTipRole,
+        )
+        self.combo_export_format.setItemData(
+            2,
+            "按通道量程写入 int16（约 1/4 体积）。最大误差约为量程的 1/65534"
+            "（例：±450° ≈ 0.007°）。WinWert / TraceLab 均可打开。",
+            Qt.ToolTipRole,
+        )
         self.combo_export_format.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Fixed
         )
@@ -462,7 +480,9 @@ class ChannelEditorDialog(QDialog):
 
     def _sync_export_format_ui(self, *_args):
         fmt = self._export_format()
-        if fmt == "wwt":
+        tip = self.combo_export_format.currentData(Qt.ToolTipRole)
+        self.combo_export_format.setToolTip(str(tip or ""))
+        if fmt in ("wwt", "wwt_compact"):
             self.btn_export.setText("导出 WWT")
             # WWT always carries a Zeit record; keep the checkbox checked but
             # disabled so the Excel wording does not imply an optional column.

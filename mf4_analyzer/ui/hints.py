@@ -170,6 +170,13 @@ _HINTS = (
         priority=95,
     ),
     Hint(
+        id="channel.export_wwt_storage",
+        text="通道编辑可导 WWT 无损·紧凑",
+        surface="discovery",
+        retire_on="export_wwt",
+        priority=70,
+    ),
+    Hint(
         id="chart.right_click_menu",
         text="右键图表 → 查看全部 · 轴范围 · 网格",
         surface="discovery",

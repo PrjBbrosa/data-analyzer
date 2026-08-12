@@ -309,6 +309,8 @@ def test_editor_export_wwt_format_emits_and_locks_time(qapp, tmp_path):
     assert dlg.btn_export.text() == "导出 WWT"
     assert dlg.chk_export_time.isChecked()
     assert not dlg.chk_export_time.isEnabled()
+    tip = dlg.combo_export_format.toolTip()
+    assert "双精度" in tip or "无量化" in tip
     captured = {}
     dlg.export_requested.connect(
         lambda fid, chs, t, r, fmt: captured.update(fmt=fmt, chs=chs)
@@ -316,6 +318,46 @@ def test_editor_export_wwt_format_emits_and_locks_time(qapp, tmp_path):
     dlg.btn_export.click()
     assert captured["fmt"] == "wwt"
     assert captured["chs"] == ["rpm", "spd"]
+
+
+def test_editor_export_wwt_compact_format_emits_with_tip(qapp, tmp_path):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.dialogs import ChannelEditorDialog
+    dlg = ChannelEditorDialog(None, _make_files(tmp_path), "f0")
+    idx = dlg.combo_export_format.findData("wwt_compact")
+    assert idx >= 0
+    item_tip = dlg.combo_export_format.itemData(idx, Qt.ToolTipRole)
+    assert item_tip and "int16" in str(item_tip) and "1/65534" in str(item_tip)
+    dlg.combo_export_format.setCurrentIndex(idx)
+    assert dlg.btn_export.text() == "导出 WWT"
+    assert "int16" in dlg.combo_export_format.toolTip()
+    captured = {}
+    dlg.export_requested.connect(
+        lambda fid, chs, t, r, fmt: captured.update(fmt=fmt)
+    )
+    dlg.btn_export.click()
+    assert captured["fmt"] == "wwt_compact"
+
+
+def test_do_export_wwt_compact_writes_int16(qapp, tmp_path, monkeypatch):
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.io.loader import DataLoader
+
+    a = tmp_path / "a.csv"; _csv(a, n=256)
+    out = tmp_path / "compact.wwt"
+    mw = MainWindow(); mw._load_one(str(a))
+    fid = next(iter(mw.files))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a_, **k: (str(out), ""))
+    mw._do_export_channels(fid, ["rpm"], True, False, "wwt_compact")
+    assert out.exists()
+    groups = DataLoader.load_wwt(str(out))
+    assert groups[0]["channel_metadata"]["rpm"]["tag"] == "int1"
+    src = mw.files[fid].data["rpm"].to_numpy()
+    got = groups[0]["data"]["rpm"].to_numpy()
+    span = float(np.nanmax(src) - np.nanmin(src)) or 1.0
+    assert float(np.max(np.abs(got - src))) <= span / 65534.0 + 1e-12
 
 
 def test_drawer_reemits_export_requested(qapp, tmp_path):

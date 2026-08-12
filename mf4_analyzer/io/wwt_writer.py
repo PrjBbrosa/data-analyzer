@@ -3,7 +3,8 @@
 v1 profile (see ``docs/analyzer/specs/2026-08-11-wwt-export-dual-compat-spec.md``):
 
 - Magic ``WinWert091293``
-- One equidistant ``Zeit`` + N ``Real`` (float64 physical) channels
+- One equidistant ``Zeit`` + N data channels
+- Storage: ``lossless`` = ``Real`` float64; ``compact`` = ``int1`` int16 + scale
 - Optional minimal ``DatenFenste2`` stub for WinWert open trials
 
 Not a full WinWert project round-trip: no ``Pars``, tolerance curves, or
@@ -23,9 +24,17 @@ from .wwt_format import (
     _MIN_TIMESERIES_SAMPLES,
     _REC_HEADER_SIZE,
 )
+from .wwt_quantize import fit_scale, physical_to_raw
 
 # Re-export: exporters must keep Zeit length ≥ this or TraceLab skips the block.
 MIN_TIMESERIES_SAMPLES = _MIN_TIMESERIES_SAMPLES
+
+STORAGE_LOSSLESS = "lossless"
+STORAGE_COMPACT = "compact"
+_STORAGE_TAGS = {
+    STORAGE_LOSSLESS: "Real",
+    STORAGE_COMPACT: "int1",
+}
 
 _DEFAULT_MAGIC = b"WinWert091293"
 _NAME_LEN = 40
@@ -163,11 +172,16 @@ def write_wwt(
     trailer: bytes | None = None,
     magic: bytes = _DEFAULT_MAGIC,
     xkanalnr: int | None = None,
+    storage: str = STORAGE_LOSSLESS,
 ) -> Path:
     """Write a v1 WWT file and return the output path.
 
     ``channels`` is an ordered mapping (or sequence of ``(name, values)``)
     of Y series; each must have the same length as ``time``.
+
+    ``storage``:
+    - ``lossless`` — ``Real`` float64 (default, zero quantization);
+    - ``compact`` — ``int1`` int16 with per-channel scale/offset fit (~1/4 size).
 
     Trailer selection:
     - ``trailer=...`` wins (a real / rebuilt ``DatenFenste2`` display block);
@@ -188,6 +202,11 @@ def write_wwt(
         items = list(channels)
     if not items:
         raise ValueError("至少需要一条数据通道才能导出 WWT")
+    if storage not in _STORAGE_TAGS:
+        raise ValueError(
+            f"未知的 WWT 存储档位: {storage!r}（可选 {tuple(_STORAGE_TAGS)}）"
+        )
+    data_tag = _STORAGE_TAGS[storage]
 
     series: list[tuple[str, np.ndarray]] = []
     for name, values in items:
@@ -229,19 +248,24 @@ def write_wwt(
             xkanalnr=0,
         )
     )
+    tag_bytes = (data_tag.encode("ascii") + b"\0")[:5].ljust(5, b"\0")
     for name, arr in series:
         lo, hi = _finite_minmax(arr)
-        payload = np.ascontiguousarray(arr, dtype="<f8").tobytes()
+        if storage == STORAGE_COMPACT:
+            a, c = fit_scale(data_tag, lo, hi)
+        else:
+            a, c = 1.0, 0.0
+        payload = physical_to_raw(arr, data_tag, scale=a, offset=c, n=n)
         chunks.append(
             _pack_record(
-                b"Real",
+                tag_bytes,
                 n,
                 name=name,
                 unit=units.get(name, ""),
                 source_filename=src_name,
-                a=1.0,
+                a=a,
                 b=1.0,
-                c=0.0,
+                c=c,
                 min_v=lo,
                 max_v=hi,
                 xkanalnr=xkanalnr,

@@ -3,10 +3,9 @@
 两条路，语义相同、代价不同：
 
 ``cleanroom``（默认）
-    自己写正文（``Zeit`` + N×``Real`` float64）+ 把真实显示尾块的曲线表按目标
-    通道重建。**点数原生保留、通道数不限、零量化误差**。依据：用户用 WinWert
-    自己把 ``.mat`` 导成 ``.wwt``，其正文正是这个形状，且与 :mod:`wwt_writer`
-    的记录头逐字节一致。
+    自己写正文（``Zeit`` + N 数据通道）+ 把真实显示尾块的曲线表按目标通道重建。
+    **点数原生保留、通道数不限**。``storage=lossless`` 写 ``Real`` float64；
+    ``storage=compact`` 写 ``int1`` int16（按量程重标定，约 1/4 体积）。
 
 ``template``
     把序列重采样进真实骨架的测量槽位（:mod:`wwt_inplace`）。受模板槽位数与
@@ -27,13 +26,20 @@ import numpy as np
 from ..app_meta import asset_path
 from . import wwt_display as _disp
 from .wwt_inplace import WwtInplaceError, convert_to_wwt
-from .wwt_writer import MIN_TIMESERIES_SAMPLES, infer_zeit_params, write_wwt
+from .wwt_writer import (
+    MIN_TIMESERIES_SAMPLES,
+    STORAGE_COMPACT,
+    STORAGE_LOSSLESS,
+    infer_zeit_params,
+    write_wwt,
+)
 
 _TRAILER_ASSET = ("wwt", "winwert_display_trailer.bin")
 
 MODE_CLEANROOM = "cleanroom"
 MODE_TEMPLATE = "template"
 _MODES = (MODE_CLEANROOM, MODE_TEMPLATE)
+_STORAGES = (STORAGE_LOSSLESS, STORAGE_COMPACT)
 
 
 class WwtExportError(ValueError):
@@ -159,11 +165,17 @@ def export_cleanroom(
     comment: str = "Converted by TraceLab",
     annotations: Sequence[str] | None = (),
     trailer_path=None,
+    storage: str = STORAGE_LOSSLESS,
 ) -> WwtExportResult:
-    """自写正文 + 重建显示尾块：原生点数、任意通道数、float64 无量化。
+    """自写正文 + 重建显示尾块：原生点数、任意通道数。
 
+    ``storage=lossless``（默认）写 float64；``compact`` 写 int16 量化。
     源时间轴若非等间隔，会自动重采样到等间隔网格（保留点数与起止时刻）。
     """
+    if storage not in _STORAGES:
+        raise WwtExportError(
+            f"未知的 WWT 存储档位: {storage!r}（可选 {_STORAGES}）"
+        )
     items = _as_items(channels)
     units = dict(units or {})
     t, items, resampled = _ensure_equidistant(np.asarray(time, dtype=np.float64), items)
@@ -191,11 +203,12 @@ def export_cleanroom(
     )
     path = write_wwt(
         out_path, t, items, units=units, title=title, comment=comment,
-        source_filename=Path(out_path).name, trailer=trailer,
+        source_filename=Path(out_path).name, trailer=trailer, storage=storage,
     )
     return WwtExportResult(
         path=path, mode=MODE_CLEANROOM, channel_count=len(items),
-        sample_count=n, resampled=resampled, quantized=False,
+        sample_count=n, resampled=resampled,
+        quantized=(storage == STORAGE_COMPACT),
     )
 
 
@@ -211,10 +224,12 @@ def export_wwt(
     template_path=None,
     trailer_path=None,
     annotations: Sequence[str] | None = (),
+    storage: str = STORAGE_LOSSLESS,
 ) -> WwtExportResult:
     """把时序导出成 WinWert 与 TraceLab 都能打开的 ``.wwt``。
 
     源时间轴不必事先等间隔：clean-room 路径会自动重采样到等间隔 Zeit。
+    ``storage`` 仅作用于 clean-room（``lossless`` / ``compact``）。
     """
     if mode not in _MODES:
         raise WwtExportError(f"未知的 WWT 导出模式: {mode!r}（可选 {_MODES}）")
@@ -222,6 +237,7 @@ def export_wwt(
         return export_cleanroom(
             out_path, time, channels, units=units, title=title,
             comment=comment, annotations=annotations, trailer_path=trailer_path,
+            storage=storage,
         )
     try:
         result = convert_to_wwt(

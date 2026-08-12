@@ -204,6 +204,7 @@ $HiddenImports = @(
     "mf4_analyzer.io.wwt_display",
     "mf4_analyzer.io.wwt_writer",
     "mf4_analyzer.io.wwt_inplace",
+    "mf4_analyzer.io.wwt_quantize",
     "mf4_analyzer.acquisition_capture",
     "mf4_analyzer.acquisition_capture.thresholds",
     "mf4_analyzer.acquisition_capture.health",

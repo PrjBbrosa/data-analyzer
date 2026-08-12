@@ -332,7 +332,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "导出 Excel / WWT",
-                sub="WWT：任意格式转 WinWert，保留原采样率，按时域显示",
+                sub="WWT 无损 float64 · 紧凑 int16（约 1/4 体积）；保留采样率，时域显示",
             ),
             QuickRow(
                 "导出图像 / 数据",

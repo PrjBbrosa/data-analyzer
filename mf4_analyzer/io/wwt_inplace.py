@@ -26,6 +26,7 @@ from .wwt_format import (
     _TRAILER_PREFIX,
     _looks_like_record_header,
 )
+from .wwt_quantize import fit_scale, physical_to_raw
 from .wwt_writer import _encode_field
 
 _TEMPLATE_REL = ("wwt", "winwert_export_template.wwt")
@@ -219,51 +220,23 @@ def resample_series(
 
 
 def _fit_scale(tag: str, lo: float | None, hi: float | None) -> tuple[float, float]:
-    """给量化槽位重新标定 ``(scale, offset)``，使数据量程刚好铺满存储类型。
-
-    模板槽位自带的 scale 是为原始被测量标定的（Servo 模板的 int16 槽位只到
-    ±32）。沿用它写入别的通道会**静默截断**——实测 ±450° 的转向角被削成
-    ±32。因此写入前按本次数据的 min/max 重算：物理值 = raw×a + c。
-    """
-    dtype = _TAG_DTYPES[tag]
-    if dtype is None or dtype.kind == "f":
-        return 1.0, 0.0
-    limit = 32767.0 if dtype.itemsize == 2 else 2147483647.0
-    if lo is None or hi is None or not np.isfinite(lo) or not np.isfinite(hi):
-        return 1.0, 0.0
-    center = (hi + lo) / 2.0
-    half = (hi - lo) / 2.0
-    if half <= 0.0:
-        return 1.0, center
-    # 留一点余量，rint 后不会因为浮点误差顶出量程。
-    return half / (limit - 1.0), center
+    """兼容旧调用点；实现见 :func:`wwt_quantize.fit_scale`。"""
+    return fit_scale(tag, lo, hi)
 
 
 def _physical_to_raw(
     values: np.ndarray, rec: _Record,
     scale: float | None = None, offset: float | None = None,
 ) -> bytes:
-    dtype = _TAG_DTYPES[rec.tag]
-    assert dtype is not None
-    phys = np.asarray(values, dtype=np.float64)
-    if phys.shape != (rec.n,):
-        raise WwtInplaceError(
-            f"通道长度 {phys.size} 与模板槽位 {rec.n} 不一致"
-        )
+    """Encode into ``rec``'s payload; length mismatches become ``WwtInplaceError``."""
     a = rec.a if scale is None else scale
     c = rec.c if offset is None else offset
-    if a == 0.0:
-        a = 1.0
-    raw = (phys - c) / a
-    if dtype == np.dtype("<i2"):
-        raw = np.clip(np.rint(raw), -32768, 32767).astype("<i2")
-    elif dtype == np.dtype("<i4"):
-        raw = np.clip(np.rint(raw), -2147483648, 2147483647).astype("<i4")
-    elif dtype == np.dtype("<f4"):
-        raw = raw.astype("<f4")
-    else:
-        raw = raw.astype("<f8")
-    return np.ascontiguousarray(raw).tobytes()
+    try:
+        return physical_to_raw(
+            values, rec.tag, scale=a, offset=c, n=rec.n,
+        )
+    except ValueError as exc:
+        raise WwtInplaceError(str(exc)) from exc
 
 
 def _update_zeit(data: bytearray, records: list[_Record], n: int,

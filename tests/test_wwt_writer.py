@@ -61,7 +61,7 @@ def test_write_wwt_body_only_still_loads(tmp_path):
     np.testing.assert_allclose(groups[0]["data"]["y"].to_numpy(), y)
 
 
-def _xkanalnrs(data: bytes, n: int, count: int) -> list[int]:
+def _xkanalnrs(data: bytes, n: int, count: int, *, sample_bytes: int = 8) -> list[int]:
     """各记录头 +0x9。布局：0x211 文件头 + 156B 记录头（Zeit 无数据区）。"""
     import struct
 
@@ -69,7 +69,7 @@ def _xkanalnrs(data: bytes, n: int, count: int) -> list[int]:
     off = 0x211
     for i in range(count):
         out.append(struct.unpack_from("<H", data, off + 0x9)[0])
-        off += 156 + (0 if i == 0 else n * 8)
+        off += 156 + (0 if i == 0 else n * sample_bytes)
     return out
 
 
@@ -136,3 +136,33 @@ def test_write_wwt_accepts_grafted_trailer(tmp_path):
     assert struct.unpack_from("<I", data, idx + 13 + 8 + 6)[0] == 2
     groups = DataLoader.load_wwt(str(path))
     assert groups[0]["channels"] == ["Time", "y"]
+
+
+def test_write_wwt_compact_int16_roundtrips_within_lsb(tmp_path):
+    """紧凑档写 int1；往返误差不超过半个 LSB（量程 / 131064）。"""
+    from mf4_analyzer.io.wwt_writer import STORAGE_COMPACT
+
+    n = 512
+    time = np.arange(n, dtype=np.float64) * 0.001
+    angle = np.linspace(-450.0, 450.0, n)
+    path = tmp_path / "compact.wwt"
+    write_wwt(
+        path, time, {"Steer angle": angle},
+        units={"Steer angle": "deg"},
+        storage=STORAGE_COMPACT,
+    )
+    raw = path.read_bytes()
+    assert b"int1\x00" in raw
+    assert b"Real\x00" not in raw
+    groups = DataLoader.load_wwt(str(path))
+    assert groups[0]["channel_metadata"]["Steer angle"]["tag"] == "int1"
+    got = groups[0]["data"]["Steer angle"].to_numpy()
+    span = float(angle.max() - angle.min())
+    max_err = float(np.max(np.abs(got - angle)))
+    assert max_err <= span / 65534.0 + 1e-12
+
+
+def test_write_wwt_rejects_unknown_storage(tmp_path):
+    time = np.arange(128, dtype=np.float64) * 0.001
+    with pytest.raises(ValueError, match="存储档位"):
+        write_wwt(tmp_path / "bad.wwt", time, {"y": time}, storage="zip")

@@ -141,7 +141,8 @@ $HiddenImports = @(
     "mf4_analyzer.io.wwt_export",
     "mf4_analyzer.io.wwt_display",
     "mf4_analyzer.io.wwt_writer",
-    "mf4_analyzer.io.wwt_inplace"
+    "mf4_analyzer.io.wwt_inplace",
+    "mf4_analyzer.io.wwt_quantize"
     # NOTE: no mf4_analyzer.acquisition_capture.* / acquisition_ui.* here — that
     # omission is what makes this the lite build. Likewise the full build's
     # logging.config / logging.handlers / timeit hidden imports are gone: they

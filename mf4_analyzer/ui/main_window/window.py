@@ -3833,9 +3833,13 @@ class MainWindow(
 
     def _do_export_channels(self, fid, channels, include_time, use_range,
                             fmt="excel"):
-        """Channel-editor export entry: ``fmt`` is ``excel`` or ``wwt``."""
-        if str(fmt or "excel").lower() == "wwt":
-            self._do_export_wwt(fid, channels, use_range=use_range)
+        """Channel-editor export entry: ``excel`` / ``wwt`` / ``wwt_compact``."""
+        key = str(fmt or "excel").lower()
+        if key in ("wwt", "wwt_compact"):
+            storage = "compact" if key == "wwt_compact" else "lossless"
+            self._do_export_wwt(
+                fid, channels, use_range=use_range, storage=storage,
+            )
         else:
             self._do_export_excel(
                 fid, channels, include_time=include_time, use_range=use_range
@@ -3881,12 +3885,12 @@ class MainWindow(
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
 
-    def _do_export_wwt(self, fid, channels, *, use_range):
+    def _do_export_wwt(self, fid, channels, *, use_range, storage="lossless"):
         """Convert selected channels to a WinWert-openable ``.wwt``.
 
-        走 ``io.wwt_export`` 的 clean-room 路径：正文自写（``Zeit`` + N×``Real``
-        float64，点数原生保留、通道数不限、无量化），显示尾块由捆绑的真实
-        WinWert 骨架重建并强制时域横坐标。
+        走 ``io.wwt_export`` 的 clean-room 路径：正文自写（``Zeit`` + N 通道），
+        ``storage=lossless`` 为 float64，``compact`` 为 int16 量化；显示尾块由
+        捆绑的真实 WinWert 骨架重建并强制时域横坐标。
         """
         from pathlib import Path
         from PyQt5.QtWidgets import QFileDialog, QMessageBox
@@ -3951,6 +3955,7 @@ class MainWindow(
                 units=units,
                 title=title,
                 comment=comment,
+                storage=storage,
             )
             self.statusBar.showMessage(
                 f"导出完成: {Path(fp).name} ({result.summary})"

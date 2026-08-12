@@ -68,6 +68,7 @@ def test_windows_build_scripts_name_the_wwt_export_modules():
             "mf4_analyzer.io.wwt_display",
             "mf4_analyzer.io.wwt_writer",
             "mf4_analyzer.io.wwt_inplace",
+            "mf4_analyzer.io.wwt_quantize",
         ):
             assert module_name in text, f"{script_name} misses {module_name}"
         assert "$AddDataWwt" in text, f"{script_name} misses assets\\wwt bundling"
