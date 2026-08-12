@@ -176,7 +176,11 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
   `tests/test_batch_render_import_boundary.py`,
   `tests/test_native_import_boundaries.py`,
   `tests/test_packaging_imports.py`, and
-  `tests/ui/test_main_window_state_ownership.py`. Batch orchestration changes
+  `tests/ui/test_main_window_state_ownership.py`. Also keep
+  `tests/ui_kit/test_qss_border_shorthand.py` (border-shorthand vs radius),
+  `tests/ui/test_no_lambda_signal_connections.py` (shrink-only `.connect(lambda`
+  ratchet), and the paint-timer backstop in
+  `tests/ui/test_pg_timedomain_canvas.py`. Batch orchestration changes
   also run `tests/test_batch_run_reporter.py`.
 - Renderer parity proves two paths do not diverge; it does not prove a shared
   implementation is absolutely correct. Pair parity with owner-level unit tests

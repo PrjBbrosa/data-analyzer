@@ -219,6 +219,9 @@ def test_quickref_covers_batch_drawer():
     open_folder = next(r for r in group.rows if "完成后" in r.desc)
     assert "输出目录" in open_folder.desc
     assert "记" in open_folder.sub and "下次" in open_folder.sub
+    run_warnings = next(r for r in group.rows if r.desc == "运行警告")
+    assert "结果区" in run_warnings.sub
+    assert "该行自己" in run_warnings.sub
     # The picker rewrite has landed — nothing here is a staged capability.
     assert all(not r.soon for r in group.rows)
 
