@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "7.9.7",
+    [string]$Version = "7.9.8",
     [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
@@ -67,7 +67,7 @@ $SpecDir = Join-Path $RepoRoot "build\spec-lite"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
 $BuildEvidenceDir = Join-Path $RepoRoot ".state\build-evidence"
-# Default output: dist\TraceLabAnalyzer7.9.7\TraceLabAnalyzer7.9.7.exe
+# Default output: dist\TraceLabAnalyzer7.9.8\TraceLabAnalyzer7.9.8.exe
 # (override with -Version or -AppName)
 
 foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeDependencyTool, $BatchRenderSmokeTool)) {
@@ -117,6 +117,8 @@ $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
 $AddDataIcons = "$IconsDir;assets\icons"
 $BrandingDir = Join-Path $RepoRoot "assets\branding"
 $AddDataBranding = "$BrandingDir;assets\branding"
+$WwtTemplateDir = Join-Path $RepoRoot "assets\wwt"
+$AddDataWwt = "$WwtTemplateDir;assets\wwt"
 # Help docs (panel guides + software manual) ship INSIDE the package; help_dir()
 # resolves to _MEIPASS\mf4_analyzer\help under the frozen build.
 $HelpDir = Join-Path $RepoRoot "mf4_analyzer\help"
@@ -133,7 +135,13 @@ $HiddenImports = @(
     "mf4_analyzer.ui.pg_canvases",
     "mf4_analyzer.signal.frf",
     "mf4_analyzer.batch_frf",
-    "mf4_analyzer.io.importer_runtime_smoke"
+    "mf4_analyzer.io.importer_runtime_smoke",
+    # WWT export is imported lazily inside the channel-editor handler; name the
+    # modules so the frozen build cannot lose the export path.
+    "mf4_analyzer.io.wwt_export",
+    "mf4_analyzer.io.wwt_display",
+    "mf4_analyzer.io.wwt_writer",
+    "mf4_analyzer.io.wwt_inplace"
     # NOTE: no mf4_analyzer.acquisition_capture.* / acquisition_ui.* here — that
     # omission is what makes this the lite build. Likewise the full build's
     # logging.config / logging.handlers / timeit hidden imports are gone: they
@@ -203,6 +211,7 @@ $PyInstallerArgs += @(
     "--add-data", $AddDataStyle,
     "--add-data", $AddDataIcons,
     "--add-data", $AddDataBranding,
+    "--add-data", $AddDataWwt,
     "--add-data", $AddDataHelp,
     # Belt-and-suspenders: keep the acquisition packages and their native-only
     # deps out even if some indirect reference appears. The Analyzer never needs

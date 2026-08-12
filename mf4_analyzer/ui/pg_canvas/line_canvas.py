@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from html import escape
 import logging
+import math
 
 import numpy as np
 from PyQt5.QtCore import QEvent, QPointF, Qt, QTimer, pyqtSignal
@@ -60,7 +61,13 @@ from ._split_mixin import (
     _SplitDivider,
     _StackedSplitMixin,
 )
-from .ticks_math import _adjacent_nice_step, _frame_to_nice, _fmt_tick
+from .ticks_math import (
+    _adjacent_nice_step,
+    _fmt_tick,
+    _frame_to_nice,
+    _nice_per_div,
+)
+from mf4_analyzer.ui.plot_helpers import _middle_ellipsis
 from .viewbox import _ModifierWheelViewBox, _WheelDeltaGraphicsLayoutWidget
 from mf4_analyzer.ui_kit.axis_metrics import (
     activate_item_layouts,
@@ -91,6 +98,16 @@ _PREVIEW_FALLBACK_PIXEL_WIDTH = 2000
 _PREVIEW_MIN_REALIZED_PIXEL_WIDTH = 200
 _SPECTRUM_FALLBACK_PIXEL_WIDTH = 2400
 _SPECTRUM_MIN_REALIZED_PIXEL_WIDTH = 200
+
+# Minimum vertical room per Y tick label on the short time-preview strip.
+# Inspector Y-density still *requests* up to 20 divisions, but labelling every
+# division in ~170 px stacks the text; nicestep itself is fine (e.g. 0.25) —
+# the failure mode is uncapped label count, not a broken nice-step picker.
+_TIME_PREVIEW_MIN_TICK_LABEL_PX = 16.0
+_TIME_EMPHASIS_LW = 1.9
+_TIME_DEEMPHASIS_LW = 1.35
+_TIME_DEEMPHASIS_ALPHA = 0.42
+_TIME_AXIS_LABEL_MAX_CHARS = 14
 
 # Stale-state chrome for the already-computed spectrum when the source
 # selection changed but the user has not re-clicked 计算. Deliberately a
@@ -131,10 +148,8 @@ class _HistoryHandle:
     and ``set_xlim()/set_ylim()`` to restore. This shell reads/writes the
     wrapped ViewBox's ``viewRange()``/``setRange`` directly.
 
-    ``with_y=False`` (the time-preview handle) makes ``set_ylim`` a no-op so a
-    history restore only rewinds the X window: the preview Y is auto-framed to
-    a nice graticule (Task A's ``_reframe_time_y_to_grid``) and restoring an
-    older Y would drag it off those grid lines (spec §3.4/§6).
+    Both amp and time-preview handles restore X and Y: the preview Y is
+    user-draggable (and Shift-wheel zoomable), so history must rewind it too.
     """
 
     __slots__ = ("_vb", "_y")
@@ -157,7 +172,6 @@ class _HistoryHandle:
     def set_ylim(self, lo, hi):
         if self._y:
             self._vb.setYRange(lo, hi, padding=0)
-        # with_y=False (__time__): intentionally a no-op — see class docstring.
 
 
 class PgLineCanvas(_StackedSplitMixin, QWidget):
@@ -199,6 +213,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                     p.getAxis(_ax).setStyle(maxTickLevel=0)
                 except Exception:
                     pass
+        # Time-preview mirrors TimeDomain overlay: native left-axis Y grid is
+        # OFF because each overlay curve has its own Y scale — a shared
+        # fractional graticule (_build_time_y_grid) is the only horizontal
+        # anchor. Keeping both native + custom grids stacks lines and desyncs
+        # labels after a Y pan (lesson: overlay_graticule_wheel_contract).
+        show_major_grid_left_bottom_only(self._plot_time, x=True, y=False, alpha=0.25)
         self._plot_amp.addLegend(offset=(8, 8))
         # Open up the gap between the two stacked plots so the draggable divider
         # line sits in clear whitespace instead of merging with the plot frames.
@@ -250,6 +270,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # all their ticks land on the SAME set of horizontal grid lines.
         # Default 10 matches the standard global Y tick count.
         self._time_divisions = 10
+        # Set when the user pans/zooms the time preview; cleared after idle
+        # repin so tick labels realign to the shared graticule (overlay snap).
+        self._time_y_needs_repin = False
         self._entries = []
         self._selected_time_entry_idx = None
         self._remarks = []
@@ -345,20 +368,21 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             lambda: self._set_bottom_collapsed(False))
         self._plot_amp.vb.sigResized.connect(self._position_collapse_ctrl)
 
-        # The FFT time window is taken from the preview's VISIBLE x-range:
-        # pan/zoom the preview and `_emit_time_preview_range` (driven by
-        # sigRangeChangedManually) pushes it to the inspector. There is no
-        # separate left-drag region selector anymore — it collided with pan.
+        # Preview pan/zoom emits `_emit_time_preview_range` (via
+        # sigRangeChangedManually) so the inspector start/end spinboxes track
+        # the visible X as a draft. The analysis window is gated by the
+        # shared「使用选定时间范围」checkbox (manual, same as Time-Domain) —
+        # zoom alone does not arm it. There is no separate left-drag region
+        # selector anymore — it collided with pan.
 
         # View-history contract for PgNavigationToolbar (Task C). The toolbar's
         # _snapshot_view/_restore_view walk this map and call pair[0]'s
-        # get/set_xlim/ylim. The amp row snapshots+restores X and Y; the time
-        # preview restores ONLY X (its Y is auto-framed to a graticule, so a Y
-        # restore would fight Task A — see _HistoryHandle). The two PlotItems are
+        # get/set_xlim/ylim. Both rows restore X and Y: the time preview is
+        # user-draggable on Y (and Shift-wheel zoomable). The two PlotItems are
         # fixed (never rebuilt), so these handles are built once here.
         self._channel_lines = {
             '__amp__': (_HistoryHandle(self._plot_amp.vb, with_y=True), None),
-            '__time__': (_HistoryHandle(self._plot_time.vb, with_y=False), None),
+            '__time__': (_HistoryHandle(self._plot_time.vb, with_y=True), None),
         }
 
     # ------------------------------------------------------------------
@@ -472,6 +496,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 return
         except Exception:
             pass
+        if self._time_y_needs_repin:
+            self._time_y_needs_repin = False
+            try:
+                self._snap_time_axes_to_grid()
+            except Exception:
+                pass
         self._apply_idle_curve_aa()
         self._aa_on = True
         try:
@@ -528,19 +558,28 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self.disable_interactive_quality()
         self.schedule_idle_quality()
         if plot is self._plot_time:
+            self._time_y_needs_repin = True
             self._emit_time_preview_range()
         elif plot is self._plot_amp:
             self.manual_zoom_changed.emit(True)
 
-    def _emit_time_preview_range(self) -> bool:
+    def get_time_preview_xlim(self):
+        """Return the time-preview ViewBox visible X as ``(lo, hi)`` or None."""
         try:
             (lo, hi), _yr = self._plot_time.vb.viewRange()
             lo = float(lo)
             hi = float(hi)
         except Exception:
-            return False
+            return None
         if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return None
+        return (lo, hi)
+
+    def _emit_time_preview_range(self) -> bool:
+        xlim = self.get_time_preview_xlim()
+        if xlim is None:
             return False
+        lo, hi = xlim
         self.time_preview_range_changed.emit(lo, hi)
         return True
 
@@ -567,9 +606,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 logger.debug("replot callback %r failed", cb, exc_info=True)
 
     def _plot_item_for_view_box(self, view_box):
-        for plot in (self._plot_amp, self._plot_time):
-            if plot.vb is view_box:
-                return plot
+        if view_box is self._plot_amp.vb:
+            return self._plot_amp
+        if view_box is self._plot_time.vb or view_box in self._time_overlay_vbs:
+            return self._plot_time
         return self._plot_amp
 
     def _fit_y_to_visible_x(self, plot) -> None:
@@ -612,11 +652,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         pad = (hi - lo) * 0.05 if hi > lo else (abs(hi) * 0.05 or 1.0)
         self.disable_interactive_quality()
         plot.setYRange(lo - pad, hi + pad, padding=0)
-        # Re-snap the time preview's fitted Y back onto the shared graticule so
-        # the right axes stay aligned (mirrors the time-domain fit path); the
-        # spectrum row has no graticule and keeps the raw fitted range.
+        # Time preview: repin the *fitted* window onto the shared graticule
+        # (TimeDomain overlay contract). Do NOT full-data reframe — that undoes
+        # the visible-X fit. Spectrum row has no graticule.
         if plot is self._plot_time:
-            self._reframe_time_y_to_grid()
+            self._repin_time_y_to_grid()
         self.schedule_idle_quality()
 
     def _redesign_context_menu_for_viewbox(self, view_box, menu) -> None:
@@ -637,19 +677,146 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             keep_plot_options=False,
             view_box=view_box,
         )
+        self._maybe_add_time_preview_left_axis_action(view_box, menu)
+
+    def _maybe_add_time_preview_left_axis_action(self, view_box, menu) -> None:
+        """Overlay-style 「设为左轴」 for multi-source time preview.
+
+        TimeDomain's channel-tree action only rewrites the TD overlay primary;
+        it does not reorder FFT preview sources. When the user right-clicks a
+        non-left preview curve (or its right axis ViewBox), offer the same
+        label and promote that entry to the left axis.
+        """
+        time_vbs = {self._plot_time.vb, *self._time_overlay_vbs}
+        if view_box not in time_vbs or len(self._entries) < 2:
+            return
+        idx = 0
+        if view_box is not self._plot_time.vb:
+            try:
+                idx = 1 + self._time_overlay_vbs.index(view_box)
+            except ValueError:
+                idx = self._nearest_time_entry_for_menu()
+        else:
+            idx = self._nearest_time_entry_for_menu()
+        if idx is None or idx <= 0 or idx >= len(self._entries):
+            return
+        from PyQt5.QtWidgets import QAction
+
+        action = QAction("设为左轴", menu)
+        action.triggered.connect(lambda *_a, i=idx: self.promote_time_entry_to_left(i))
+        try:
+            menu.insertAction(menu.actions()[0] if menu.actions() else None, action)
+        except Exception:
+            menu.addAction(action)
+
+    def _nearest_time_entry_for_menu(self):
+        """Best-effort curve index under the last right-click, else selection."""
+        scene_pos = getattr(self, "_last_rclick_scene_pos", None)
+        if scene_pos is not None:
+            try:
+                if self._plot_time.vb.sceneBoundingRect().contains(scene_pos):
+                    v = self._plot_time.vb.mapSceneToView(scene_pos)
+                    idx = self._nearest_time_entry_index(float(v.x()), float(v.y()))
+                    if idx is not None:
+                        return idx
+            except Exception:
+                pass
+        sel = self._selected_time_entry_idx
+        if sel is not None and int(sel) > 0:
+            return int(sel)
+        return None
+
+    def _nearest_time_entry_index(self, x, y):
+        """Nearest overlay curve to ``(x, y)`` in the main time ViewBox."""
+        best_i = None
+        best_d = None
+        for i, (_curve, vb, _plot) in enumerate(self._time_curve_owners()):
+            try:
+                xs, ys = _curve.getData()
+            except Exception:
+                continue
+            if xs is None or ys is None or len(xs) == 0:
+                continue
+            xs = np.asarray(xs, dtype=float)
+            ys = np.asarray(ys, dtype=float)
+            if vb is not self._plot_time.vb:
+                # Map aux data Y into the main view's scene, then to main data
+                # so distance is screen-comparable.
+                try:
+                    # Compare in scene pixels via each vb.
+                    scene_pts = []
+                    for xi, yi in zip(xs[::max(1, len(xs)//200)], ys[::max(1, len(ys)//200)]):
+                        if not (np.isfinite(xi) and np.isfinite(yi)):
+                            continue
+                        sp = vb.mapViewToScene(QPointF(float(xi), float(yi)))
+                        mp = self._plot_time.vb.mapSceneToView(sp)
+                        scene_pts.append((float(mp.x()), float(mp.y())))
+                    if not scene_pts:
+                        continue
+                    arr = np.asarray(scene_pts, dtype=float)
+                    d = float(np.min((arr[:, 0] - x) ** 2 + (arr[:, 1] - y) ** 2))
+                except Exception:
+                    continue
+            else:
+                mask = np.isfinite(xs) & np.isfinite(ys)
+                if not np.any(mask):
+                    continue
+                d = float(np.min((xs[mask] - x) ** 2 + (ys[mask] - y) ** 2))
+            if best_d is None or d < best_d:
+                best_d = d
+                best_i = i
+        return best_i
+
+    def promote_time_entry_to_left(self, idx: int) -> None:
+        """Move ``entries[idx]`` to the left axis (index 0) and rebuild preview."""
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            return
+        if idx <= 0 or idx >= len(self._entries):
+            return
+        entries = list(self._entries)
+        entry = entries.pop(idx)
+        entries.insert(0, entry)
+        self._entries = entries
+        try:
+            (x0, x1), _ = self._plot_time.vb.viewRange()
+        except Exception:
+            x0 = x1 = None
+        title = "时域预览"
+        self._plot_time_preview_entries(entries, selected_idx=0, title=title)
+        if x0 is not None and x1 is not None and np.isfinite(x0) and np.isfinite(x1) and x1 > x0:
+            try:
+                self._plot_time.setXRange(x0, x1, padding=0)
+            except Exception:
+                pass
+        self._selected_time_entry_idx = 0
+        self.time_source_selected.emit()
+        self.layout_geometry_changed.emit()
 
     def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,
                                view_box=None, scene_pos=None, axis=None):
+        """Wheel contract aligned with TimeDomain overlay + analysis footer.
+
+        * Ctrl → X zoom (any plot)
+        * Time preview, no Ctrl:
+          - plain wheel → Y pan by one division (overlay sign)
+          - Shift → nice-step Y zoom
+          - ``axis == 1`` (Y gutter) → only that ViewBox; else all time VBs
+        * Spectrum row: Shift → Y zoom; plain wheel consumed (no native zoom)
+        """
         step = 1 if delta > 0 else -1 if delta < 0 else 0
         if step == 0 or view_box is None:
             return False
         ctrl = bool(modifiers & Qt.ControlModifier)
         shift = bool(modifiers & Qt.ShiftModifier)
-        if not (ctrl or shift):
-            return False
+        time_vbs = [self._plot_time.vb, *self._time_overlay_vbs]
+        on_time = view_box in time_vbs and bool(self._time_curves)
+
+        if not ctrl and not on_time and not shift:
+            return True  # spectrum plain wheel: consume, no zoom
 
         factor = 0.85 if step > 0 else 1.0 / 0.85
-        time_vbs = [self._plot_time.vb, *self._time_overlay_vbs]
         try:
             x_range, y_range = view_box.viewRange()
             if ctrl:
@@ -660,49 +827,66 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                     center + (hi - center) * factor,
                     padding=0,
                 )
-            elif shift and view_box in time_vbs and self._time_curves:
+                if on_time:
+                    self._emit_time_preview_range()
+                elif view_box is self._plot_amp.vb:
+                    self.manual_zoom_changed.emit(True)
+            elif on_time:
+                pairs = self._time_axis_pairs()
+                if axis == 1:
+                    targets = [(vb, ax) for vb, ax in pairs if vb is view_box]
+                    if not targets:
+                        targets = pairs
+                else:
+                    targets = pairs
+                n = self._effective_time_divisions()
                 lo, hi = y_range
                 span = hi - lo
                 if not (np.isfinite(span) and span > 0):
-                    return False
+                    return True
                 if np.isfinite(y_pos):
                     cursor_fraction = (float(y_pos) - lo) / span
                     cursor_fraction = max(0.0, min(1.0, cursor_fraction))
                 else:
                     cursor_fraction = 0.5
-                n = max(3, min(20, int(self._time_divisions)))
-                pairs = [
-                    (self._plot_time.vb, self._plot_time.getAxis('left')),
-                    *zip(self._time_overlay_vbs, self._time_overlay_axes),
-                ]
-                for target_vb, target_axis in pairs:
+                for target_vb, target_axis in targets:
                     try:
                         target_lo, target_hi = target_vb.viewRange()[1]
                         target_span = target_hi - target_lo
                         if not (np.isfinite(target_span) and target_span > 0):
                             continue
                         current_per_div = target_span / n
-                        next_per_div = _adjacent_nice_step(
-                            current_per_div, -1 if step > 0 else 1
-                        )
-                        if next_per_div is None:
-                            next_per_div = current_per_div * factor
-                        anchor = target_lo + cursor_fraction * target_span
-                        next_span = n * next_per_div
-                        raw_bottom = anchor - cursor_fraction * next_span
-                        bottom = round(raw_bottom / next_per_div) * next_per_div
-                        top = bottom + next_span
-                        ticks = [bottom + k * next_per_div for k in range(n + 1)]
+                        if shift:
+                            next_per_div = _adjacent_nice_step(
+                                current_per_div, -1 if step > 0 else 1
+                            )
+                            if next_per_div is None:
+                                next_per_div = current_per_div * factor
+                            anchor = target_lo + cursor_fraction * target_span
+                            next_span = n * next_per_div
+                            raw_bottom = anchor - cursor_fraction * next_span
+                            bottom = round(raw_bottom / next_per_div) * next_per_div
+                            top = bottom + next_span
+                            tick_per_div = next_per_div
+                        else:
+                            # Plain-wheel vertical pan (Windows-traditional sign).
+                            bottom = target_lo - step * current_per_div
+                            top = target_hi - step * current_per_div
+                            tick_per_div = current_per_div
+                        ticks = [
+                            bottom + k * tick_per_div for k in range(n + 1)
+                        ]
                         target_vb.enableAutoRange(axis='y', enable=False)
                         target_vb.setYRange(bottom, top, padding=0)
                         target_axis.setStyle(maxTickLevel=0)
                         target_axis.setTickDensity(1.0)
                         target_axis.setTicks([[
-                            (value, _fmt_tick(value, next_per_div))
+                            (value, _fmt_tick(value, tick_per_div))
                             for value in ticks
                         ], []])
                     except Exception:
                         continue
+                self._build_time_y_grid(n)
             elif shift:
                 lo, hi = y_range
                 center = float(y_pos) if np.isfinite(y_pos) else (lo + hi) / 2.0
@@ -711,16 +895,14 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                     center + (hi - center) * factor,
                     padding=0,
                 )
+                if view_box is self._plot_amp.vb:
+                    self.manual_zoom_changed.emit(True)
+            else:
+                return True
         except Exception:
             return False
-        # This zoom sets the range programmatically (no sigRangeChangedManually),
-        # so drop AA for the interactive raster and re-arm the idle restore here.
         self.disable_interactive_quality()
         self.schedule_idle_quality()
-        if view_box in time_vbs:
-            self._emit_time_preview_range()
-        elif view_box is self._plot_amp.vb:
-            self.manual_zoom_changed.emit(True)
         self.layout_geometry_changed.emit()
         return True
 
@@ -1044,7 +1226,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # together (fixes "Y tick density had no effect on the right axes").
         _apply_axis_tick_density(self._plot_amp.getAxis('left'), y_d)
         self._time_divisions = max(3, min(20, y_n))
-        self._reframe_time_y_to_grid()
+        # Density only changes division count / tick pin — keep the current Y
+        # window (TimeDomain overlay: set_tick_density → _repin, not full reframe).
+        self._repin_time_y_to_grid()
         self.layout_geometry_changed.emit()
 
     def open_chart_options_dialog(self, parent=None):
@@ -1072,6 +1256,60 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def select_time_entry(self, idx) -> None:
         self._plot_time_preview_entries(self._entries, selected_idx=idx,
                                         title="时域预览")
+        self._apply_time_preview_emphasis()
+
+    def _apply_time_preview_emphasis(self) -> None:
+        """Dim non-selected preview curves (TimeDomain overlay emphasis)."""
+        sel = self._selected_time_entry_idx
+        for i, curve in enumerate(self._time_curves):
+            try:
+                pen = curve.opts.get("pen")
+                if pen is None:
+                    continue
+                if sel is None or i == int(sel):
+                    pen.setWidthF(_TIME_EMPHASIS_LW if sel is not None else 1.5)
+                    curve.setPen(pen)
+                    curve.setOpacity(1.0)
+                else:
+                    pen.setWidthF(_TIME_DEEMPHASIS_LW)
+                    curve.setPen(pen)
+                    curve.setOpacity(_TIME_DEEMPHASIS_ALPHA)
+            except Exception:
+                continue
+
+    def promote_time_entry_to_left_by_channel(self, fid, channel) -> bool:
+        """Promote preview entry matching ``(fid, channel)`` to the left axis.
+
+        Used when the navigator 「设为左轴」 fires while FFT mode is active.
+        Matching is by channel name against entry ``label`` / ``channel`` /
+        trailing segment after ``] `` (file-prefixed display names).
+        """
+        ch = str(channel or "").strip()
+        if not ch or len(self._entries) < 2:
+            return False
+        fid_s = None if fid is None else str(fid)
+
+        def _matches(entry) -> bool:
+            if fid_s is not None:
+                ef = entry.get("file_id", entry.get("fid", entry.get("data_id")))
+                if ef is not None and str(ef) != fid_s:
+                    return False
+            for key in ("channel", "name", "label"):
+                val = entry.get(key)
+                if val is None:
+                    continue
+                text = str(val)
+                if text == ch or text.endswith(ch) or text.endswith(f"] {ch}"):
+                    return True
+                if "]" in text and text.rsplit("]", 1)[-1].strip() == ch:
+                    return True
+            return False
+
+        for i, entry in enumerate(self._entries):
+            if i > 0 and _matches(entry):
+                self.promote_time_entry_to_left(i)
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Time-preview multi-Y overlay (one colour-coded right axis per extra curve)
@@ -1114,7 +1352,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 pass
         self._time_grid_lines = []
 
-    def _add_time_overlay_axis(self, color, position):
+    def _add_time_overlay_axis(self, color, position, *, label=""):
         """Create one aux ViewBox + colour-coded right axis for an overlay
         curve. ``position`` is the 1-based overlay slot (2nd curve → 1, …)."""
         # AxisItem forwards gutter wheel events to its linked ViewBox. Use the
@@ -1134,14 +1372,29 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # glance maps each right axis to its trace (no channel-name clutter).
         axis.setPen(pg.mkPen(color=PG_AXIS_NEUTRAL_COLOR, width=PG_AXIS_NEUTRAL_WIDTH))
         axis.setTextPen(pg.mkPen(color=color))
+        text = _middle_ellipsis(str(label or "").strip(), max_chars=_TIME_AXIS_LABEL_MAX_CHARS)
+        if text:
+            try:
+                axis.setLabel(text)
+            except Exception:
+                pass
         self._plot_time.layout.addItem(axis, 2, 2 + position)
         self._plot_time.layout.setHorizontalSpacing(8)
         self._plot_time.scene().addItem(aux_vb)
         axis.linkToView(aux_vb)
         aux_vb.setXLink(self._plot_time.vb)
-        aux_vb.setMouseEnabled(x=False, y=False)
+        # Y-only on the aux ViewBox so the colour-coded RIGHT axis gutter can
+        # pan/zoom that channel (TimeDomain overlay: gutter owns per-channel Y;
+        # plot body stays on the main vb). X stays linked / non-interactive.
+        aux_vb.setMouseEnabled(x=False, y=True)
         aux_vb.setZValue(-10000)
         aux_vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
+        try:
+            aux_vb.sigRangeChangedManually.connect(
+                lambda *_args: self._on_interactive_range_changed(
+                    self._plot_time))
+        except Exception:
+            pass
         self._time_overlay_vbs.append(aux_vb)
         self._time_overlay_axes.append(axis)
         return aux_vb
@@ -1152,7 +1405,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
         Sits BELOW every aux ViewBox (z = -20000 vs the aux -10000) so the grid
         lines never paint over the curves, and is read-only/non-interactive —
-        the preview Y stays locked, this only supplies a common visual anchor."""
+        it only supplies a common visual anchor while the main preview ViewBox
+        remains the pan/zoom surface."""
         if self._time_grid_vb is not None:
             return self._time_grid_vb
         grid_vb = pg.ViewBox()
@@ -1207,27 +1461,185 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         except Exception:
             pass
 
-    def _reframe_time_y_to_grid(self) -> None:
-        """Frame the time-preview's main axis (curve 0 / left / ``_plot_time.vb``)
-        and every aux right axis to ``_time_divisions`` equal nice divisions and
-        pin their ticks, so all axes land on the SAME k/n horizontal grid lines
-        (mirrors the time-domain overlay graticule).
+    def _effective_time_divisions(self) -> int:
+        """Return the graticule division count that still fits the preview height.
 
-        Curve 0 lives on the main ViewBox (its left axis grid IS the k/n
-        graticule); each extra curve lives on its own aux ViewBox + right axis,
-        so framing every axis to the same n divisions makes the right-axis ticks
-        coincide with the left-axis grid. Empty / constant-signal curves are
-        skipped (``_frame_to_nice`` already guards a zero span)."""
-        n = max(3, min(20, int(self._time_divisions)))
+        ``_time_divisions`` is the inspector request (3..20). On the short
+        time-preview strip, labelling every requested division stacks tick
+        text even when ``_frame_to_nice`` picks a clean step — so cap by the
+        realized ViewBox height (fallback: current bottom-split height).
+        """
+        requested = max(3, min(20, int(self._time_divisions)))
+        height = 0.0
+        try:
+            height = float(self._plot_time.vb.sceneBoundingRect().height())
+        except Exception:
+            height = 0.0
+        if height <= 1.0:
+            try:
+                height = float(self._bottom_split_h or 0.0)
+            except Exception:
+                height = 0.0
+        if height <= 1.0:
+            return requested
+        max_labels = max(4, int(height // _TIME_PREVIEW_MIN_TICK_LABEL_PX))
+        max_divs = max(3, max_labels - 1)
+        return max(3, min(requested, max_divs))
+
+    def _time_axis_triples(self):
+        """(vb, axis, curve) for main left + every aux right overlay axis."""
         if not self._time_curves:
-            return
-        # Single unified pairing: (main vb, left axis, curve0), then each aux.
+            return []
         triples = [(self._plot_time.vb,
                     self._plot_time.getAxis('left'),
                     self._time_curves[0])]
         triples.extend(zip(self._time_overlay_vbs,
                            self._time_overlay_axes,
                            self._time_curves[1:]))
+        return triples
+
+    def _pin_time_axis_y(self, vb, axis, bottom, top, ticks, per_div) -> None:
+        """Write one preview axis to an explicit nice Y window + pinned ticks."""
+        try:
+            vb.enableAutoRange(axis='y', enable=False)
+            vb.setYRange(bottom, top, padding=0)
+            try:
+                axis.enableAutoSIPrefix(False)
+            except Exception:
+                pass
+            axis.setStyle(maxTickLevel=0)
+            axis.setTickDensity(1.0)
+            axis.setTicks([[
+                (value, _fmt_tick(value, per_div)) for value in ticks
+            ], []])
+        except Exception:
+            pass
+
+    def _enable_time_preview_mouse(self) -> None:
+        # Main vb keeps y=True so the LEFT axis gutter can pan/zoom Y (AxisItem
+        # forwards with axis=1 and ViewBox still gates on mouseEnabled[y]).
+        # Plot-body 2D drags are forced X-only in ``_ModifierWheelViewBox`` —
+        # same end state as TimeDomain X-master y=False + per-channel gutters.
+        try:
+            self._plot_time.vb.setMouseEnabled(x=True, y=True)
+        except Exception:
+            pass
+        for vb in self._time_overlay_vbs:
+            try:
+                vb.setMouseEnabled(x=False, y=True)
+            except Exception:
+                pass
+
+    def _time_axis_pairs(self):
+        """``(vb, axis)`` for left + every aux right axis."""
+        return [
+            (self._plot_time.vb, self._plot_time.getAxis('left')),
+            *zip(self._time_overlay_vbs, self._time_overlay_axes),
+        ]
+
+    def _begin_view_interaction(self) -> None:
+        self.disable_interactive_quality()
+        baselines = {}
+        for vb, _axis in self._time_axis_pairs():
+            try:
+                baselines[id(vb)] = tuple(vb.viewRange()[1])
+            except Exception:
+                continue
+        self._box_zoom_y_baselines = baselines
+
+    def _end_view_interaction(self) -> None:
+        self._time_y_needs_repin = True
+        self.schedule_idle_quality()
+
+    def _snap_time_axes_to_grid(self) -> None:
+        """Phase-snap every preview Y window onto the current graticule span."""
+        n = self._effective_time_divisions()
+        triples = self._time_axis_triples()
+        if not triples:
+            return
+        for vb, axis, _curve in triples:
+            try:
+                lo, hi = vb.viewRange()[1]
+                lo, hi = float(lo), float(hi)
+            except Exception:
+                continue
+            span = hi - lo
+            if not (math.isfinite(span) and span > 0):
+                continue
+            per_div = span / n
+            if not (math.isfinite(per_div) and per_div > 0):
+                continue
+            bottom = round(lo / per_div) * per_div
+            if abs(bottom) < per_div * 1e-10:
+                bottom = 0.0
+            top = bottom + span
+            ticks = [bottom + k * per_div for k in range(n + 1)]
+            self._pin_time_axis_y(vb, axis, bottom, top, ticks, per_div)
+        self._build_time_y_grid(n)
+        self._enable_time_preview_mouse()
+
+    def _apply_time_preview_box_zoom_y(self) -> None:
+        """After RectMode on the time preview, map the box Y fraction onto every channel."""
+        baselines = getattr(self, "_box_zoom_y_baselines", None) or {}
+        main = self._plot_time.vb
+        base = baselines.get(id(main))
+        n = self._effective_time_divisions()
+        if base is None:
+            self._repin_time_y_to_grid()
+            return
+        try:
+            new_lo, new_hi = main.viewRange()[1]
+            new_lo, new_hi = float(new_lo), float(new_hi)
+        except Exception:
+            return
+        blo, bhi = float(base[0]), float(base[1])
+        bspan = bhi - blo
+        if not (math.isfinite(bspan) and bspan > 0):
+            return
+        f0 = (new_lo - blo) / bspan
+        f1 = (new_hi - blo) / bspan
+        if abs(f1 - f0) < 1e-6:
+            # X-only box — restore main Y to baseline then repin.
+            try:
+                main.setYRange(blo, bhi, padding=0)
+            except Exception:
+                pass
+            self._repin_time_y_to_grid()
+            return
+        for vb, axis in self._time_axis_pairs():
+            try:
+                if vb is main:
+                    lo, hi = new_lo, new_hi
+                else:
+                    clo, chi = baselines.get(id(vb), vb.viewRange()[1])
+                    clo, chi = float(clo), float(chi)
+                    cspan = chi - clo
+                    if not (math.isfinite(cspan) and cspan > 0):
+                        continue
+                    lo = clo + f0 * cspan
+                    hi = clo + f1 * cspan
+                bottom, top, ticks = _frame_to_nice(lo, hi, n)
+                per_div = (top - bottom) / n
+                self._pin_time_axis_y(vb, axis, bottom, top, ticks, per_div)
+            except Exception:
+                continue
+        self._build_time_y_grid(n)
+        self._enable_time_preview_mouse()
+        self._box_zoom_y_baselines = {}
+        self.layout_geometry_changed.emit()
+
+    def _reframe_time_y_to_grid(self) -> None:
+        """Frame every time-preview axis from **full curve Y** to ``n`` nice divisions.
+
+        Used for new data / view-all / explicit reset — the TimeDomain analogue
+        of fitting to the full signal then pinning the overlay graticule.
+        Density changes and Y-adapt must NOT call this; they use
+        ``_repin_time_y_to_grid`` so the current window survives.
+        """
+        n = self._effective_time_divisions()
+        triples = self._time_axis_triples()
+        if not triples:
+            return
         for vb, axis, curve in triples:
             try:
                 _xs, ys = curve.getData()
@@ -1240,35 +1652,56 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 continue
             bottom, top, ticks = _frame_to_nice(lo, hi, n)
             per_div = (top - bottom) / n
-            try:
-                vb.enableAutoRange(axis='y', enable=False)
-                vb.setYRange(bottom, top, padding=0)
-                # SI prefix OFF + density OFF so this explicit setTicks is the
-                # axis's only tick source — otherwise any earlier
-                # _apply_axis_tick_density(setTicks(None)+setTickDensity) on the
-                # left axis would have it auto-pick a DIFFERENT count than the
-                # aux axes, dropping the left ticks off the shared grid.
-                try:
-                    axis.enableAutoSIPrefix(False)
-                except Exception:
-                    pass
-                axis.setStyle(maxTickLevel=0)
-                axis.setTickDensity(1.0)
-                axis.setTicks([[
-                    (value, _fmt_tick(value, per_div)) for value in ticks
-                ], []])
-            except Exception:
-                pass
-        # Shared horizontal graticule: build/refresh the n-1 grid lines AFTER
-        # every axis is pinned to n divisions so the visual anchor always
-        # matches the live division count.
+            self._pin_time_axis_y(vb, axis, bottom, top, ticks, per_div)
         self._build_time_y_grid(n)
-        # Preview Y is pinned to the graticule: left-drag pans X only (= picks
-        # the FFT window). Confirmed product decision to lock Y.
-        try:
-            self._plot_time.vb.setMouseEnabled(x=True, y=False)
-        except Exception:
-            pass
+        self._enable_time_preview_mouse()
+
+    def _repin_time_y_to_grid(self) -> None:
+        """Repin ticks/graticule from each axis's **current** Y range.
+
+        Mirrors ``OverlayAxisManager._repin_overlay_channel_ticks``: keep the
+        live window when it already sits on a nice per-division; otherwise
+        expand slightly via ``_frame_to_nice`` without rebuilding from full
+        curve extents.
+        """
+        n = self._effective_time_divisions()
+        triples = self._time_axis_triples()
+        if not triples:
+            return
+        for vb, axis, _curve in triples:
+            try:
+                lo, hi = vb.viewRange()[1]
+                lo, hi = float(lo), float(hi)
+            except Exception:
+                continue
+            span = hi - lo
+            if not (math.isfinite(span) and span > 0):
+                continue
+            current_per_div = span / n
+            nice_per_div = _nice_per_div(current_per_div)
+            lower_nice_per_div = (
+                _adjacent_nice_step(nice_per_div, -1)
+                if nice_per_div is not None
+                else None
+            )
+            if any(
+                candidate is not None
+                and math.isclose(
+                    current_per_div,
+                    candidate,
+                    rel_tol=1e-9,
+                    abs_tol=0.0,
+                )
+                for candidate in (nice_per_div, lower_nice_per_div)
+            ):
+                bottom, top, per_div = lo, hi, current_per_div
+                ticks = [bottom + k * per_div for k in range(n + 1)]
+            else:
+                bottom, top, ticks = _frame_to_nice(lo, hi, n)
+                per_div = (top - bottom) / n
+            self._pin_time_axis_y(vb, axis, bottom, top, ticks, per_div)
+        self._build_time_y_grid(n)
+        self._enable_time_preview_mouse()
 
     def _sync_time_overlay_vbs(self, *_args) -> None:
         """Glue every aux ViewBox + the shared grid ViewBox geometry to the time
@@ -1359,7 +1792,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 # Each extra source gets its own auto-scaled aux ViewBox + a
                 # colour-coded right axis so traces with different amplitude
                 # ranges are not squashed onto one shared scale.
-                aux_vb = self._add_time_overlay_axis(color, i)
+                aux_vb = self._add_time_overlay_axis(
+                    color, i, label=e.get('label', ''))
                 curve = pg.PlotDataItem(t_env, sig_env, pen=pen,
                                         antialias=antialias)
                 aux_vb.addItem(curve)
@@ -1387,6 +1821,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # AA off, and the idle timer's _apply_idle_curve_aa lands it on restore.
         if self._aa_on:
             self._apply_idle_curve_aa()
+        self._apply_time_preview_emphasis()
         # Time-preview-only updates (source selection before 计算) rebuild the
         # curve set, so refresh the AA dot here too — otherwise it keeps the
         # previous render's state until the next pan/zoom.
@@ -2133,7 +2568,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
     def eventFilter(self, obj, event):
         try:
-            if obj is self._glw.viewport() and self._remark_enabled:
+            viewport = self._glw.viewport()
+        except Exception:
+            viewport = None
+        try:
+            if obj is viewport and event.type() == QEvent.MouseButtonDblClick:
+                if event.button() == Qt.LeftButton and not self._remark_enabled:
+                    self._handle_time_or_amp_double_click(event.pos())
+                    return True
+            if obj is viewport and self._remark_enabled:
                 if event.type() == QEvent.MouseButtonPress:
                     result = self._remark_interaction.handle_mouse_press(event)
                     if result is not None:
@@ -2149,6 +2592,80 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         except Exception:
             pass
         return super().eventFilter(obj, event)
+
+    def _handle_time_or_amp_double_click(self, viewport_pos) -> None:
+        """Double-click → chart options (amp) or curve color / time options."""
+        try:
+            scene_pos = self._glw.mapToScene(viewport_pos)
+        except Exception:
+            return
+        # Spectrum row → existing amp chart-options dialog.
+        try:
+            if self._plot_amp.vb.sceneBoundingRect().contains(scene_pos):
+                self.open_chart_options_dialog(parent=self.window())
+                return
+        except Exception:
+            pass
+        # Time-preview row → emphasise nearest curve; left opens full options,
+        # aux opens a colour picker (aux curves are not on the main PlotItem).
+        try:
+            in_time = self._plot_time.vb.sceneBoundingRect().contains(scene_pos)
+        except Exception:
+            in_time = False
+        if not in_time:
+            # Right-axis gutters sit outside the main vb rect.
+            for i, ax in enumerate(self._time_overlay_axes):
+                try:
+                    if ax.sceneBoundingRect().contains(scene_pos):
+                        self._edit_time_curve_appearance(i + 1)
+                        return
+                except Exception:
+                    continue
+            return
+        try:
+            v = self._plot_time.vb.mapSceneToView(scene_pos)
+            idx = self._nearest_time_entry_index(float(v.x()), float(v.y()))
+        except Exception:
+            idx = 0
+        if idx is None:
+            idx = 0
+        self._edit_time_curve_appearance(int(idx))
+
+    def _edit_time_curve_appearance(self, idx: int) -> None:
+        if not self._time_curves:
+            return
+        idx = max(0, min(int(idx), len(self._time_curves) - 1))
+        self._selected_time_entry_idx = idx
+        self._apply_time_preview_emphasis()
+        if idx == 0:
+            from mf4_analyzer.ui import _axis_interaction
+            handle = PgAxisHandle(self._plot_time, owner_canvas=self)
+            _axis_interaction.edit_chart_options_dialog(
+                self.window() if self.window() is not None else self, handle)
+            self._apply_time_preview_emphasis()
+            return
+        from PyQt5.QtGui import QColor
+        from PyQt5.QtWidgets import QColorDialog
+
+        curve = self._time_curves[idx]
+        current = QColor(self._curve_color(curve))
+        color = QColorDialog.getColor(
+            current, self.window() if self.window() is not None else self,
+            "曲线颜色")
+        if not color.isValid():
+            return
+        try:
+            pen = curve.opts.get("pen")
+            if pen is not None:
+                pen.setColor(color)
+                curve.setPen(pen)
+            axis = self._time_overlay_axes[idx - 1]
+            axis.setTextPen(pg.mkPen(color=color))
+        except Exception:
+            pass
+        if idx < len(self._entries):
+            self._entries[idx]['color'] = color.name()
+        self.layout_geometry_changed.emit()
 
     def _on_click(self, ev) -> None:
         if self._remark_enabled:

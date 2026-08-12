@@ -1,0 +1,998 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TraceLab — View 地点感方案对比</title>
+<style>
+  :root {
+    --ink: #141c2b;
+    --ink-2: #243247;
+    --muted: #66768c;
+    --quiet: #93a0b4;
+    --line: #d7e0ec;
+    --line-2: #c5d1e0;
+    --surface: #ffffff;
+    --plot: #fbfcfe;
+    --chrome: #f3f6fa;
+    --bg: #e7edf5;
+    --blue: #2d7ff9;
+    --blue-deep: #1b5fd1;
+    --blue-soft: #e8f0ff;
+    --orange: #e8590c;
+    --green: #2f9e44;
+    --violet: #9c36b5;
+    --cyan: #1098ad;
+    --sans: "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB",
+            "Microsoft YaHei UI", system-ui, sans-serif;
+    --mono: "SF Mono", "Menlo", ui-monospace, monospace;
+    --shadow: 0 22px 50px rgba(20, 32, 52, .14), 0 2px 0 rgba(255,255,255,.65) inset;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    color: var(--ink);
+    font: 13px/1.45 var(--sans);
+    background:
+      radial-gradient(900px 420px at 8% -10%, #fff 0%, transparent 55%),
+      radial-gradient(700px 380px at 92% 0%, rgba(45,127,249,.08), transparent 50%),
+      linear-gradient(180deg, #f5f8fc 0%, var(--bg) 48%, #e3eaf3 100%);
+  }
+
+  .page {
+    width: min(1280px, calc(100vw - 36px));
+    margin: 0 auto;
+    padding: 28px 0 56px;
+  }
+
+  .hero {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+  .hero .kicker {
+    color: var(--quiet);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .hero h1 {
+    margin: 0;
+    font-size: 24px;
+    letter-spacing: -.03em;
+    font-weight: 720;
+  }
+  .hero p {
+    margin: 0;
+    max-width: 68ch;
+    color: var(--muted);
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgba(255,255,255,.78);
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .chip b { color: var(--ink-2); font-weight: 700; }
+
+  /* ── option picker ─────────────────────────────────────────── */
+  .picker {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin: 20px 0 14px;
+  }
+  @media (max-width: 960px) {
+    .picker { grid-template-columns: 1fr 1fr; }
+  }
+  .picker label {
+    position: relative;
+    display: grid;
+    gap: 6px;
+    padding: 12px 13px 13px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(255,255,255,.88);
+    cursor: pointer;
+    transition: border-color .16s, box-shadow .16s, transform .16s;
+  }
+  .picker label:hover {
+    border-color: #b7cbeb;
+    transform: translateY(-1px);
+  }
+  .picker input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .picker label:has(input:checked) {
+    border-color: #8eb4ef;
+    box-shadow: 0 0 0 3px rgba(45,127,249,.14), var(--shadow);
+    background: #fff;
+  }
+  .picker .tag {
+    display: inline-flex;
+    width: fit-content;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #eef3f9;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+  .picker label:has(input:checked) .tag {
+    background: var(--blue-soft);
+    color: var(--blue-deep);
+  }
+  .picker strong {
+    font-size: 14px;
+    letter-spacing: -.01em;
+    color: var(--ink);
+  }
+  .picker span.desc {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .stage-note {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .stage-note em {
+    font-style: normal;
+    color: var(--ink-2);
+    font-weight: 650;
+  }
+  .hint-pulse {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(45,127,249,.08);
+    color: var(--blue-deep);
+    font-weight: 650;
+    animation: nudge 2.4s ease-in-out infinite;
+  }
+  @keyframes nudge {
+    0%, 100% { transform: translateX(0); opacity: .85; }
+    50% { transform: translateX(3px); opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hint-pulse { animation: none; }
+  }
+
+  /* ── mock window window ───────────────────────────────────────── */
+  .stage {
+    border: 1px solid #c8d3e2;
+    border-radius: 14px;
+    background: linear-gradient(180deg, #f8fafc, #eef2f7);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .titlebar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 38px;
+    padding: 0 14px;
+    border-bottom: 1px solid #d6deea;
+    background: linear-gradient(180deg, #fbfcfe, #f1f4f8);
+  }
+  .traffic {
+    display: flex;
+    gap: 6px;
+  }
+  .traffic i {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: block;
+  }
+  .traffic i:nth-child(1) { background: #ff5f57; }
+  .traffic i:nth-child(2) { background: #febc2e; }
+  .traffic i:nth-child(3) { background: #28c840; }
+  .win-title {
+    flex: 1;
+    text-align: center;
+    color: #5b6b82;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: -.01em;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--line);
+    background: #f7f9fc;
+  }
+  .tb-left, .tb-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .tb-right { justify-content: flex-end; }
+  .ghost-btn {
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid #d0dae8;
+    border-radius: 7px;
+    background: #fff;
+    color: #334155;
+    font: 600 12px/1 var(--sans);
+  }
+  .modes {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid #d0dae8;
+    border-radius: 9px;
+    background: #eef2f7;
+  }
+  .mode {
+    position: relative;
+    appearance: none;
+    border: 0;
+    height: 28px;
+    padding: 0 12px 0 30px;
+    border-radius: 7px;
+    background: transparent;
+    color: #526277;
+    font: 650 12px/1 var(--sans);
+    cursor: pointer;
+    transition: background .15s, color .15s, box-shadow .15s;
+  }
+  .mode::before {
+    content: "";
+    position: absolute;
+    left: 11px;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    transform: translateY(-50%);
+    background: currentColor;
+    opacity: .55;
+    -webkit-mask: center / contain no-repeat;
+            mask: center / contain no-repeat;
+  }
+  .mode[data-mode="time"]::before {
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M2 11.5 5.2 7l2.3 2.6L11 5l3 3.2V13H2z'/%3E%3C/svg%3E");
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M2 11.5 5.2 7l2.3 2.6L11 5l3 3.2V13H2z'/%3E%3C/svg%3E");
+  }
+  .mode[data-mode="fft"]::before {
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M3 13V8h2v5H3zm4 0V3h2v10H7zm4 0V6h2v7h-2z'/%3E%3C/svg%3E");
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M3 13V8h2v5H3zm4 0V3h2v10H7zm4 0V6h2v7h-2z'/%3E%3C/svg%3E");
+  }
+  .mode[data-mode="fft_time"]::before {
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M2 13h12v1H2zm1-2.2 2.4-3.2 2.1 1.8L11 4.5 14 7.2V11H3z'/%3E%3C/svg%3E");
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M2 13h12v1H2zm1-2.2 2.4-3.2 2.1 1.8L11 4.5 14 7.2V11H3z'/%3E%3C/svg%3E");
+  }
+  .mode[data-mode="order"]::before {
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M8 2a6 6 0 1 0 .001 12.001A6 6 0 0 0 8 2zm0 1.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM7.25 5h1.5v3.1l2.1 1.25-.75 1.25L7.25 9z'/%3E%3C/svg%3E");
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M8 2a6 6 0 1 0 .001 12.001A6 6 0 0 0 8 2zm0 1.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM7.25 5h1.5v3.1l2.1 1.25-.75 1.25L7.25 9z'/%3E%3C/svg%3E");
+  }
+  .mode.active {
+    background: #fff;
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgba(20,32,52,.12), 0 0 0 1px rgba(45,127,249,.18);
+  }
+  .mode.active::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 3px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--blue);
+    transform: translateX(-50%);
+  }
+  .mode.active::before { opacity: .9; color: var(--blue-deep); }
+
+  .workspace {
+    display: grid;
+    grid-template-columns: 200px 1fr 220px;
+    min-height: 420px;
+  }
+  .side, .inspector {
+    background: #f7f9fc;
+    border-right: 1px solid var(--line);
+    padding: 12px;
+  }
+  .inspector {
+    border-right: 0;
+    border-left: 1px solid var(--line);
+  }
+  .side h3, .inspector h3 {
+    margin: 0 0 10px;
+    color: var(--quiet);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+  .file, .param {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 9px;
+    margin-bottom: 6px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: #fff;
+    color: var(--ink-2);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .file.on {
+    border-color: #b7cff5;
+    background: var(--blue-soft);
+  }
+  .dot-sm {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--blue);
+    flex: 0 0 auto;
+  }
+  .param {
+    justify-content: space-between;
+    color: var(--muted);
+    font-weight: 550;
+  }
+  .param b { color: var(--ink-2); font-weight: 700; }
+
+  .canvas-wrap {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    background: var(--plot);
+    min-width: 0;
+  }
+  .plot {
+    position: relative;
+    margin: 12px 14px 0;
+    border: 1px solid #dbe3ee;
+    border-radius: 10px;
+    background:
+      linear-gradient(#eef2f7 1px, transparent 1px) 0 0 / 100% 28px,
+      linear-gradient(90deg, #eef2f7 1px, transparent 1px) 0 0 / 56px 100%,
+      #fbfcfe;
+    overflow: hidden;
+    min-height: 300px;
+  }
+  .plot-label {
+    position: absolute;
+    top: 12px;
+    left: 14px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.88);
+    border: 1px solid rgba(199,210,224,.9);
+    backdrop-filter: blur(8px);
+    color: var(--ink-2);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+  }
+  .plot-label .mode-pill {
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--blue-soft);
+    color: var(--blue-deep);
+  }
+  .curve {
+    position: absolute;
+    inset: 18% 6% 14% 8%;
+    opacity: .95;
+    transition: opacity .2s, filter .2s;
+  }
+  .curve path {
+    fill: none;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .axis-x, .axis-y {
+    position: absolute;
+    color: #8a97ab;
+    font: 500 10px/1 var(--mono);
+  }
+  .axis-x { left: 10%; right: 8%; bottom: 10px; display: flex; justify-content: space-between; }
+  .axis-y { top: 14%; left: 10px; writing-mode: vertical-rl; transform: rotate(180deg); }
+
+  /* ── view strip variants ───────────────────────────────────── */
+  .view-strip {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 34px;
+    padding: 4px 10px 6px;
+    border-top: 1px solid var(--line);
+    background: #f4f7fb;
+  }
+  .tabs {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+    flex: 1;
+  }
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 24px;
+    padding: 0 11px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    color: #526277;
+    font: 650 12px/1 var(--sans);
+    white-space: nowrap;
+    cursor: default;
+    transition: background .15s, border-color .15s, color .15s, box-shadow .2s;
+  }
+  .tab .vdot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+  }
+  .tab.on {
+    background: var(--blue-soft);
+    border-color: #a7bfea;
+    border-bottom: 2px solid var(--blue);
+    color: #173262;
+  }
+  .plus {
+    width: 24px;
+    height: 22px;
+    margin-left: 2px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    color: #1e293b;
+    font: 700 14px/1 var(--sans);
+  }
+  .strip-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    color: var(--quiet);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  /* Option B: place ownership */
+  .opt-b .view-strip {
+    padding-left: 8px;
+  }
+  .place-mark {
+    display: none;
+    align-items: center;
+    gap: 7px;
+    margin-right: 6px;
+    padding: 0 8px 0 4px;
+    border-right: 1px solid #d5deea;
+    color: var(--ink-2);
+    font-size: 11px;
+    font-weight: 720;
+    letter-spacing: -.01em;
+    flex: 0 0 auto;
+  }
+  .place-mark .glyph {
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    display: grid;
+    place-items: center;
+    background: var(--blue-soft);
+    color: var(--blue-deep);
+  }
+  .place-mark .glyph svg { width: 11px; height: 11px; }
+  .place-hairline {
+    display: none;
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 2px;
+    background: var(--blue);
+    opacity: .55;
+  }
+  .opt-b .place-mark,
+  .opt-b .place-hairline { display: flex; }
+  .opt-b .place-hairline { display: block; }
+
+  /* Option C: content titles */
+  .tab .sub {
+    display: none;
+    color: var(--quiet);
+    font-weight: 550;
+    font-size: 10.5px;
+  }
+
+  /* Option D: soft wash */
+  .opt-d .view-strip {
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--mode-accent) 10%, #f4f7fb), #f4f7fb);
+  }
+  .opt-d .place-hairline {
+    display: block;
+    opacity: .35;
+    background: var(--mode-accent);
+  }
+
+  /* Option E: prefix (anti / fallback) */
+  .prefix { display: none; color: var(--quiet); font-weight: 600; }
+
+  /* mode accent variables driven by JS */
+  .stage[data-active-mode="time"] { --mode-accent: #2d7ff9; --mode-name: "时域"; }
+  .stage[data-active-mode="fft"] { --mode-accent: #2d7ff9; --mode-name: "频谱"; }
+  .stage[data-active-mode="fft_time"] { --mode-accent: #1098ad; --mode-name: "时频"; }
+  .stage[data-active-mode="order"] { --mode-accent: #e8590c; --mode-name: "阶次"; }
+
+  .opt-b.stage[data-active-mode="fft_time"] .place-mark .glyph,
+  .opt-d.stage[data-active-mode="fft_time"] .plot-label .mode-pill {
+    background: #e6f7fa;
+    color: #0b7285;
+  }
+  .opt-b.stage[data-active-mode="order"] .place-mark .glyph,
+  .opt-d.stage[data-active-mode="order"] .plot-label .mode-pill {
+    background: #fff0e6;
+    color: #c2410c;
+  }
+  .opt-b.stage[data-active-mode="fft_time"] .place-hairline { background: #1098ad; }
+  .opt-b.stage[data-active-mode="order"] .place-hairline { background: #e8590c; }
+  .opt-b.stage[data-active-mode="time"] .place-hairline,
+  .opt-b.stage[data-active-mode="fft"] .place-hairline { background: #2d7ff9; }
+
+  .flash {
+    animation: placeFlash .55s ease;
+  }
+  @keyframes placeFlash {
+    0% { filter: none; }
+    35% { filter: saturate(1.15) brightness(1.02); }
+    100% { filter: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .flash { animation: none; }
+  }
+
+  /* ── verdict cards ─────────────────────────────────────────── */
+  .verdicts {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 18px;
+  }
+  @media (max-width: 960px) {
+    .verdicts { grid-template-columns: 1fr 1fr; }
+  }
+  .verdict {
+    padding: 12px 13px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(255,255,255,.8);
+  }
+  .verdict h4 {
+    margin: 0 0 6px;
+    font-size: 13px;
+    letter-spacing: -.01em;
+  }
+  .verdict p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .verdict .score {
+    display: inline-flex;
+    margin-bottom: 8px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #eef3f9;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: .04em;
+  }
+  .verdict.best .score {
+    background: #e7f8ee;
+    color: #147a3c;
+  }
+  .verdict.best {
+    border-color: #b7e2c5;
+    box-shadow: 0 0 0 3px rgba(47,158,68,.08);
+  }
+
+  footer.note {
+    margin-top: 18px;
+    color: var(--quiet);
+    font-size: 11.5px;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="kicker">TraceLab · UI prototype</div>
+      <h1>View 地点感：四套方案</h1>
+      <p>
+        问题不是「View 1」这三个字不够具体，而是左右切模式时，底部看起来像同一条连续标签栏。
+        点顶栏模式切换，感受哪一套最有「换地方了」的直觉，又保持 Mac 工程软件的克制。
+      </p>
+      <div class="meta">
+        <span class="chip"><b>原则</b> mode 管地点 · View 管工作台</span>
+        <span class="chip"><b>交互</b> 点顶栏切换模式</span>
+        <span class="chip"><b>日期</b> 2026-08-11</span>
+      </div>
+    </header>
+
+    <div class="picker" id="picker">
+      <label>
+        <input type="radio" name="opt" value="a" checked>
+        <span class="tag">A · 现状</span>
+        <strong>同名同色</strong>
+        <span class="desc">每个 section 都是蓝点 View 1。用来感受混淆本身。</span>
+      </label>
+      <label>
+        <input type="radio" name="opt" value="b">
+        <span class="tag">B · 推荐</span>
+        <strong>安静归属</strong>
+        <span class="desc">View 条左侧 mode 徽章 + 顶沿细线。标签仍叫 View 1。</span>
+      </label>
+      <label>
+        <input type="radio" name="opt" value="c">
+        <span class="tag">C · 进阶</span>
+        <strong>内容命名</strong>
+        <span class="desc">有通道后标签变成信号名。Safari / Xcode 一路。</span>
+      </label>
+      <label>
+        <input type="radio" name="opt" value="d">
+        <span class="tag">D · 备选</span>
+        <strong>淡色洗底</strong>
+        <span class="desc">整条 View 条随 mode 微微变色。更醒目，也更吵一点。</span>
+      </label>
+    </div>
+
+    <div class="stage-note">
+      <div>当前方案：<em id="optName">A · 同名同色</em>　·　请连续点「频谱 → 时频 → 阶次」</div>
+      <div class="hint-pulse">切换模式看底部 →</div>
+    </div>
+
+    <div class="stage opt-a" id="stage" data-active-mode="fft" data-opt="a">
+      <div class="titlebar">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <div class="win-title">TraceLab — EPS_run_0409.tlproj</div>
+      </div>
+
+      <div class="toolbar">
+        <div class="tb-left">
+          <button class="ghost-btn" type="button">打开</button>
+          <button class="ghost-btn" type="button">批处理</button>
+        </div>
+        <div class="modes" id="modes" role="tablist" aria-label="分析模式">
+          <button class="mode" type="button" data-mode="time">时域</button>
+          <button class="mode active" type="button" data-mode="fft">频谱</button>
+          <button class="mode" type="button" data-mode="fft_time">时频</button>
+          <button class="mode" type="button" data-mode="order">阶次</button>
+        </div>
+        <div class="tb-right">
+          <button class="ghost-btn" type="button">复制图</button>
+        </div>
+      </div>
+
+      <div class="workspace">
+        <aside class="side">
+          <h3>Files</h3>
+          <div class="file on"><span class="dot-sm"></span>SFNS_40_X04</div>
+          <div class="file"><span class="dot-sm" style="background:#94a3b8"></span>Rack_Force_run</div>
+          <div class="file"><span class="dot-sm" style="background:#94a3b8"></span>Motor_RPM_set</div>
+          <h3 style="margin-top:16px">Channels</h3>
+          <div class="file on"><span class="dot-sm" style="background:#e8590c"></span>方向盘扭矩</div>
+          <div class="file"><span class="dot-sm" style="background:#2f9e44"></span>电机转速</div>
+          <div class="file"><span class="dot-sm" style="background:#9c36b5"></span>电机扭矩</div>
+        </aside>
+
+        <section class="canvas-wrap">
+          <div class="plot" id="plot">
+            <div class="plot-label">
+              <span class="mode-pill" id="plotModePill">频谱</span>
+              <span id="plotContext">方向盘扭矩 · 0–200 Hz</span>
+            </div>
+            <svg class="curve" id="curve" viewBox="0 0 640 220" preserveAspectRatio="none" aria-hidden="true">
+              <path id="curvePath" stroke="#2d7ff9" d=""></path>
+            </svg>
+            <div class="axis-y" id="axisY">Amplitude</div>
+            <div class="axis-x" id="axisX">
+              <span>0</span><span>50</span><span>100</span><span>150</span><span>200 Hz</span>
+            </div>
+          </div>
+
+          <div class="view-strip" id="viewStrip">
+            <div class="place-hairline" id="hairline"></div>
+            <div class="place-mark" id="placeMark">
+              <span class="glyph" id="placeGlyph" aria-hidden="true"></span>
+              <span id="placeText">频谱</span>
+            </div>
+            <div class="tabs" id="tabs"></div>
+            <button class="plus" type="button" title="新建 View">+</button>
+            <div class="strip-actions">联动缩放</div>
+          </div>
+        </section>
+
+        <aside class="inspector">
+          <h3>Inspector</h3>
+          <div class="param">窗函数 <b>Hann</b></div>
+          <div class="param">平均 <b>线性</b></div>
+          <div class="param">重叠 <b>50%</b></div>
+          <div class="param">分辨率 <b>0.5 Hz</b></div>
+          <div class="param" id="inspHint">地点由顶栏表达</div>
+        </aside>
+      </div>
+    </div>
+
+    <div class="verdicts">
+      <article class="verdict">
+        <div class="score">A · 基线</div>
+        <h4>同名同色</h4>
+        <p>切换时底部零变化。空间记忆失效，最容易把「另一个 section 的 View 1」当成同一个。</p>
+      </article>
+      <article class="verdict best">
+        <div class="score">B · 首选</div>
+        <h4>安静归属</h4>
+        <p>不改命名契约，只让 View 条属于当前 mode。克制、可落地、和现有双击重命名不冲突。</p>
+      </article>
+      <article class="verdict">
+        <div class="score">C · 长期</div>
+        <h4>内容命名</h4>
+        <p>辨识度最高。空 View 仍叫 View 1；有信号后变成内容名。实现与边界情况更多。</p>
+      </article>
+      <article class="verdict">
+        <div class="score">D · 备选</div>
+        <h4>淡色洗底</h4>
+        <p>地点感更强，但容易和 View 色点抢注意力。适合作为 B 的加强版，不宜单独做得很艳。</p>
+      </article>
+    </div>
+
+    <footer class="note">
+      未单独做「频谱 View 1」前缀方案：作为 Mac 工程软件观感偏实验室。若需要对照，可在 B 落地后用文案实验再比。
+      本页只做视觉直觉，不代表最终实现细节。
+    </footer>
+  </div>
+
+<script>
+(() => {
+  const MODES = {
+    time: {
+      label: "时域",
+      y: "Nm",
+      x: ["0", "2", "4", "6", "8 s"],
+      context: "方向盘扭矩 · 全时程",
+      stroke: "#2d7ff9",
+      path: "M0,140 C40,138 55,60 90,70 S150,180 190,120 S250,40 300,85 S360,170 410,110 S480,30 540,75 S600,150 640,120",
+      views: {
+        a: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+        b: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+        c: [
+          { name: "方向盘扭矩", color: "#2d7ff9", on: true, sub: "View 1" },
+          { name: "电机转速", color: "#e8590c", on: false, sub: "View 2" },
+        ],
+        d: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+      },
+      glyph: `<svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 11.5 5.2 7l2.3 2.6L11 5l3 3.2V13H2z"/></svg>`,
+    },
+    fft: {
+      label: "频谱",
+      y: "dB",
+      x: ["0", "50", "100", "150", "200 Hz"],
+      context: "方向盘扭矩 · 0–200 Hz",
+      stroke: "#2d7ff9",
+      path: "M0,170 C20,168 28,40 42,55 S70,180 95,150 S130,20 155,45 S190,175 230,130 S280,25 320,60 S370,185 420,120 S470,35 520,70 S580,160 640,145",
+      views: {
+        a: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+        b: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+        c: [
+          { name: "方向盘扭矩", color: "#2d7ff9", on: true, sub: "View 1" },
+          { name: "电机扭矩 +1", color: "#e8590c", on: false, sub: "View 2" },
+        ],
+        d: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+      },
+      glyph: `<svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 13V8h2v5H3zm4 0V3h2v10H7zm4 0V6h2v7h-2z"/></svg>`,
+    },
+    fft_time: {
+      label: "时频",
+      y: "Hz",
+      x: ["0", "2", "4", "6", "8 s"],
+      context: "方向盘扭矩 · 谱图",
+      stroke: "#1098ad",
+      path: "M0,160 C60,150 80,90 120,100 S180,40 230,70 S290,170 340,120 S400,30 460,80 S520,160 580,100 S620,70 640,90",
+      views: {
+        a: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+        b: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+        c: [
+          { name: "扭矩谱图", color: "#2d7ff9", on: true, sub: "View 1" },
+          { name: "转速谱图", color: "#e8590c", on: false, sub: "View 2" },
+        ],
+        d: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+      },
+      glyph: `<svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 13h12v1H2zm1-2.2 2.4-3.2 2.1 1.8L11 4.5 14 7.2V11H3z"/></svg>`,
+    },
+    order: {
+      label: "阶次",
+      y: "Nm",
+      x: ["0", "10", "20", "30", "40 order"],
+      context: "方向盘扭矩 · base=电机转速",
+      stroke: "#e8590c",
+      path: "M0,150 C30,148 45,40 70,55 S110,170 145,125 S190,25 230,50 S280,175 330,110 S390,20 440,65 S500,170 560,95 S610,40 640,70",
+      views: {
+        a: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+        b: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+        c: [
+          { name: "扭矩阶次", color: "#2d7ff9", on: true, sub: "View 1" },
+          { name: "电机扭矩", color: "#e8590c", on: false, sub: "View 2" },
+        ],
+        d: [
+          { name: "View 1", color: "#2d7ff9", on: true },
+          { name: "View 2", color: "#e8590c", on: false },
+        ],
+      },
+      glyph: `<svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 2a6 6 0 1 0 .001 12.001A6 6 0 0 0 8 2zm0 1.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM7.25 5h1.5v3.1l2.1 1.25-.75 1.25L7.25 9z"/></svg>`,
+    },
+  };
+
+  const OPT_NAMES = {
+    a: "A · 同名同色",
+    b: "B · 安静归属",
+    c: "C · 内容命名",
+    d: "D · 淡色洗底",
+  };
+
+  const stage = document.getElementById("stage");
+  const tabs = document.getElementById("tabs");
+  const optName = document.getElementById("optName");
+  const plotModePill = document.getElementById("plotModePill");
+  const plotContext = document.getElementById("plotContext");
+  const curvePath = document.getElementById("curvePath");
+  const axisX = document.getElementById("axisX");
+  const axisY = document.getElementById("axisY");
+  const placeText = document.getElementById("placeText");
+  const placeGlyph = document.getElementById("placeGlyph");
+  const inspHint = document.getElementById("inspHint");
+  const plot = document.getElementById("plot");
+
+  let activeMode = "fft";
+  let activeOpt = "a";
+
+  function renderTabs() {
+    const views = MODES[activeMode].views[activeOpt];
+    tabs.innerHTML = views.map((v) => {
+      const sub = activeOpt === "c" && v.sub
+        ? `<span class="sub" style="display:inline">· ${v.sub}</span>`
+        : "";
+      return `<div class="tab ${v.on ? "on" : ""}" title="${v.name}">
+        <span class="vdot" style="background:${v.color}"></span>
+        <span>${v.name}</span>${sub}
+      </div>`;
+    }).join("");
+  }
+
+  function renderMode() {
+    const m = MODES[activeMode];
+    stage.dataset.activeMode = activeMode;
+    document.querySelectorAll(".mode").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.mode === activeMode);
+    });
+    plotModePill.textContent = m.label;
+    plotContext.textContent = m.context;
+    curvePath.setAttribute("d", m.path);
+    curvePath.setAttribute("stroke", m.stroke);
+    axisY.textContent = m.y;
+    axisX.innerHTML = m.x.map((t) => `<span>${t}</span>`).join("");
+    placeText.textContent = m.label;
+    placeGlyph.innerHTML = m.glyph;
+    renderTabs();
+
+    plot.classList.remove("flash");
+    void plot.offsetWidth;
+    plot.classList.add("flash");
+  }
+
+  function setOpt(opt) {
+    activeOpt = opt;
+    stage.dataset.opt = opt;
+    stage.classList.remove("opt-a", "opt-b", "opt-c", "opt-d");
+    stage.classList.add(`opt-${opt}`);
+    optName.textContent = OPT_NAMES[opt];
+    inspHint.innerHTML =
+      opt === "a" ? "地点几乎只靠顶栏" :
+      opt === "b" ? "<b>底部也有地点</b>" :
+      opt === "c" ? "<b>标签=内容</b>" :
+      "<b>条带染色</b>";
+    renderMode();
+  }
+
+  document.getElementById("modes").addEventListener("click", (e) => {
+    const btn = e.target.closest(".mode");
+    if (!btn) return;
+    activeMode = btn.dataset.mode;
+    renderMode();
+  });
+
+  document.getElementById("picker").addEventListener("change", (e) => {
+    if (e.target.name === "opt") setOpt(e.target.value);
+  });
+
+  setOpt("a");
+})();
+</script>
+</body>
+</html>

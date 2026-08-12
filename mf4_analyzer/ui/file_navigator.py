@@ -5,7 +5,7 @@ import qtawesome as qta
 from PyQt5.QtCore import QMimeData, QPoint, QSignalBlocker, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QDrag
 from PyQt5.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox,
+    QApplication, QFrame, QHBoxLayout, QLabel, QMenu,
     QScrollArea, QSizePolicy, QSplitter, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -190,6 +190,8 @@ class _FileRow(QFrame):
 class FileNavigator(QWidget):
     file_activated = pyqtSignal(str)
     file_close_requested = pyqtSignal(str)
+    # Physical card close: every logical source in the group, once.
+    file_group_close_requested = pyqtSignal(list)
     close_all_requested = pyqtSignal()
     channels_changed = pyqtSignal()
     visibility_changed = pyqtSignal(str, str, bool)
@@ -200,7 +202,11 @@ class FileNavigator(QWidget):
     channel_editor_requested = pyqtSignal()
     files_attach_requested = pyqtSignal(object)
     files_detach_requested = pyqtSignal(object, str)
+    # Item-1 shim: still emitted when attach_on_load flips so older callers
+    # (and tests) keep working without knowing about the follow menu.
     auto_attach_changed = pyqtSignal(bool)
+    # Stage 1.1: full follow-prefs payload (FollowPrefs dataclass).
+    follow_prefs_changed = pyqtSignal(object)
     channel_config_save_requested = pyqtSignal()
     channel_config_apply_requested = pyqtSignal(str)
     channel_config_manage_requested = pyqtSignal(object)
@@ -256,9 +262,31 @@ class FileNavigator(QWidget):
         self.btn_auto_attach.setFixedSize(QSize(24, 24))
         self.btn_auto_attach.setProperty("role", "icon")
         self.btn_auto_attach.setAutoRaise(True)
-        self.btn_auto_attach.setCheckable(True)
-        self.btn_auto_attach.setChecked(True)
-        self.btn_auto_attach.toggled.connect(self._on_auto_attach_toggled)
+        # Same chrome as the kebab: icon-only click opens a menu. Do not use
+        # InstantPopup+setMenu — that paints the gray dropdown triangle.
+        self._follow_menu = apply_rounded_menu_chrome(
+            QMenu(self.btn_auto_attach), gutter="check"
+        )
+        self._act_attach_on_load = self._follow_menu.addAction("新文件加入当前 View")
+        self._act_attach_on_load.setCheckable(True)
+        self._act_attach_on_load.setChecked(True)
+        self._act_inherit_on_new_view = self._follow_menu.addAction(
+            "新建 View 继承文件范围"
+        )
+        self._act_inherit_on_new_view.setCheckable(True)
+        self._act_inherit_on_new_view.setChecked(False)
+        self._act_fill_on_mode_entry = self._follow_menu.addAction(
+            "切换分析时填充空 View"
+        )
+        self._act_fill_on_mode_entry.setCheckable(True)
+        self._act_fill_on_mode_entry.setChecked(False)
+        for act in (
+            self._act_attach_on_load,
+            self._act_inherit_on_new_view,
+            self._act_fill_on_mode_entry,
+        ):
+            act.toggled.connect(self._on_follow_action_toggled)
+        self.btn_auto_attach.clicked.connect(self._open_follow_menu)
         self._sync_auto_attach_button()
         head.addWidget(self.btn_auto_attach)
         # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24) — same as
@@ -412,12 +440,40 @@ class FileNavigator(QWidget):
         self.channel_list.set_attached_file_ids(fids)
 
     def auto_attach_enabled(self):
-        return self.btn_auto_attach.isChecked()
+        """Item-1 shim: whether new loads attach into the active context."""
+        return self._act_attach_on_load.isChecked()
 
     def set_auto_attach_enabled(self, enabled):
-        blocker = QSignalBlocker(self.btn_auto_attach)
-        self.btn_auto_attach.setChecked(bool(enabled))
+        """Item-1 shim: update attach_on_load without emitting prefs signals."""
+        blocker = QSignalBlocker(self._act_attach_on_load)
+        self._act_attach_on_load.setChecked(bool(enabled))
         del blocker
+        self._sync_auto_attach_button()
+
+    def follow_prefs(self):
+        from .main_window.file_scope_follow import FollowPrefs
+
+        return FollowPrefs(
+            attach_on_load=self._act_attach_on_load.isChecked(),
+            inherit_on_new_view=self._act_inherit_on_new_view.isChecked(),
+            fill_on_mode_entry=self._act_fill_on_mode_entry.isChecked(),
+        )
+
+    def set_follow_prefs(self, prefs):
+        """Apply FollowPrefs (or duck-typed equivalent) without emitting."""
+        blockers = [
+            QSignalBlocker(self._act_attach_on_load),
+            QSignalBlocker(self._act_inherit_on_new_view),
+            QSignalBlocker(self._act_fill_on_mode_entry),
+        ]
+        self._act_attach_on_load.setChecked(bool(getattr(prefs, "attach_on_load", True)))
+        self._act_inherit_on_new_view.setChecked(
+            bool(getattr(prefs, "inherit_on_new_view", False))
+        )
+        self._act_fill_on_mode_entry.setChecked(
+            bool(getattr(prefs, "fill_on_mode_entry", False))
+        )
+        del blockers
         self._sync_auto_attach_button()
 
     def get_hidden_channels(self):
@@ -436,6 +492,17 @@ class FileNavigator(QWidget):
 
     def set_time_visibility_available(self, available):
         self.channel_list.set_time_visibility_available(available)
+
+    def projection_role(self):
+        return self.channel_list.projection_role()
+
+    def set_projection_role(self, role):
+        self.channel_list.set_projection_role(role)
+
+    def set_empty_state_context(self, *, section_label=None, view_name=None):
+        self.channel_list.set_empty_state_context(
+            section_label=section_label, view_name=view_name
+        )
 
     def get_channel_colors(self):
         return self.channel_list.get_channel_colors()
@@ -466,36 +533,65 @@ class FileNavigator(QWidget):
             self._rows[new_key].set_active(True)
         self.file_activated.emit(fid)
 
-    def _on_auto_attach_toggled(self, enabled):
+    def _on_follow_action_toggled(self, _checked=False):
+        prefs = self.follow_prefs()
         self._sync_auto_attach_button()
-        self.auto_attach_changed.emit(bool(enabled))
+        self.follow_prefs_changed.emit(prefs)
+        # Keep the legacy bool signal in sync with item 1 for older callers.
+        self.auto_attach_changed.emit(bool(prefs.attach_on_load))
 
     def _sync_auto_attach_button(self):
-        enabled = self.btn_auto_attach.isChecked()
+        # Read actions directly so chrome sync never imports main_window.
+        flags = (
+            self._act_attach_on_load.isChecked(),
+            self._act_inherit_on_new_view.isChecked(),
+            self._act_fill_on_mode_entry.isChecked(),
+        )
+        enabled = any(flags)
+        count = sum(1 for flag in flags if flag)
         self.btn_auto_attach.setIcon(qta.icon(
             "mdi.link-variant" if enabled else "mdi.link-variant-off",
             color="#4b6078" if enabled else "#8b98aa",
         ))
         self.btn_auto_attach.setToolTip(
-            "新加载文件自动加入当前 View"
+            f"已启用 {count} 项文件范围跟随 · 点击调整"
             if enabled
-            else "新加载文件仅打开，不加入当前 View"
+            else "未启用文件范围跟随"
         )
         self.btn_auto_attach.setAccessibleName(self.btn_auto_attach.toolTip())
-        self.btn_auto_attach.setProperty("active", enabled)
+        # QSS matches [active="true"|"false"] string attrs (same as #fileRow).
+        self.btn_auto_attach.setProperty(
+            "active", "true" if enabled else "false",
+        )
         self.btn_auto_attach.style().unpolish(self.btn_auto_attach)
         self.btn_auto_attach.style().polish(self.btn_auto_attach)
 
     def _request_close_group(self, rows_key):
-        """Emit close_requested for ALL fids belonging to this rows_key."""
+        """Emit one group-close request for ALL fids under ``rows_key``.
+
+        Physical-card close must be atomic: MainWindow aggregates dependencies
+        once and either keeps or unloads every logical source together.
+        """
         fids = [f for f, k in self._fid_to_key.items() if k == rows_key]
-        for f in fids:
-            self.file_close_requested.emit(f)
+        if not fids:
+            return
+        self.file_group_close_requested.emit(list(fids))
 
     # Backwards-compat alias used by existing tests that call _request_close(fid)
     def _request_close(self, fid):
         rows_key = self._fid_to_key.get(fid, fid)
-        self._request_close_group(rows_key)
+        fids = [f for f, k in self._fid_to_key.items() if k == rows_key]
+        if len(fids) > 1:
+            self.file_group_close_requested.emit(list(fids))
+            return
+        target = fids[0] if fids else fid
+        self.file_close_requested.emit(target)
+
+    def _open_follow_menu(self):
+        """Open the follow prefs menu under the link icon (no dropdown triangle)."""
+        btn = self.btn_auto_attach
+        gp = btn.mapToGlobal(btn.rect().bottomLeft())
+        self._follow_menu.exec_(gp)
 
     def _open_kebab(self):
         menu = apply_rounded_menu_chrome(QMenu(self))
@@ -504,13 +600,9 @@ class FileNavigator(QWidget):
         gp = self._btn_kebab.mapToGlobal(self._btn_kebab.rect().bottomLeft())
         chosen = menu.exec_(gp)
         if chosen == act:
-            n_fids = len(self._fid_to_key)
-            ans = QMessageBox.question(
-                self, "确认", f"关闭全部 {n_fids} 文件?",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if ans == QMessageBox.Yes:
-                self.close_all_requested.emit()
+            # Confirm lives in MainWindow.close_all so dependency preflight
+            # and close-all share one product dialog.
+            self.close_all_requested.emit()
 
     def _refresh_header(self):
         self._lbl_count.setText(str(len(self._rows)))

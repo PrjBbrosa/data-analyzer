@@ -13,12 +13,22 @@ from mf4_analyzer.ui.analysis_view_state import AnalysisViewState
 class _StubCtx:
     def __init__(self):
         self._p = {"nfft": 1024, "window": "hanning"}
+        self.reset_calls = 0
 
     def get_params(self):
         return dict(self._p)
 
     def apply_params(self, d):
         self._p.update(d)
+
+    def reset_to_defaults(self):
+        self.reset_calls += 1
+        self._p = {"nfft": 512, "window": "hanning"}
+
+
+class _CurrentParamsCtx(_StubCtx):
+    def current_params(self):
+        return {**self._p, "amp_y": "dB", "avg_mode": "线性平均"}
 
 
 def test_capture_then_apply_round_trip():
@@ -31,8 +41,22 @@ def test_capture_then_apply_round_trip():
     assert ctx.get_params()["nfft"] == 4096
 
 
-def test_apply_with_empty_params_is_noop():
+def test_capture_prefers_complete_current_params_when_available():
+    ctx = _CurrentParamsCtx()
+    state = AnalysisViewState(name="v", tab_color="#fff")
+
+    capture_params_to_state(ctx, state)
+
+    assert state.params == {
+        "nfft": 1024,
+        "window": "hanning",
+        "amp_y": "dB",
+        "avg_mode": "线性平均",
+    }
+
+
+def test_apply_with_empty_params_resets_to_defaults():
     ctx = _StubCtx()
-    before = ctx.get_params()
     apply_params_from_state(ctx, AnalysisViewState(name="v", tab_color="#fff"))
-    assert ctx.get_params() == before
+    assert ctx.reset_calls == 1
+    assert ctx.get_params()["nfft"] == 512

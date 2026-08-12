@@ -815,6 +815,27 @@ QToolButton:disabled {
     border: 1px solid #1769e0;
 }
 
+/* File-scope follow link: active = persistent wash; idle = icon only.
+ * Generic role="icon" hover/pressed washes must not steal either state —
+ * hover used to erase the active tint, and a click on the idle (all-off)
+ * icon flashed a misleading "on" background. */
+QToolButton#autoAttachFiles[active="true"],
+QToolButton#autoAttachFiles[active="true"]:hover,
+QToolButton#autoAttachFiles[active="true"]:pressed,
+QToolButton#autoAttachFiles[active="true"]:focus {
+    background-color: {{CONTROL_ACCENT_WASH}};
+    border: 1px solid {{CONTROL_SELECT_LINE}};
+    border-radius: 6px;
+}
+QToolButton#autoAttachFiles[active="false"],
+QToolButton#autoAttachFiles[active="false"]:hover,
+QToolButton#autoAttachFiles[active="false"]:pressed,
+QToolButton#autoAttachFiles[active="false"]:focus {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+}
+
 QPushButton[role="primary"],
 QToolButton[role="primary"] {
     min-height: {{CONTROL_H_CTA_BUTTON_CONTENT}};
@@ -1865,7 +1886,10 @@ QLineEdit#channelSearch {
     background-color: #ffffff;
 }
 
-/* Channel tree — remove zebra stripe + flat header */
+/* Channel tree — remove zebra stripe + flat header.
+ * Horizontal item padding stays 0: the leaf delegate owns checkbox / Pts
+ * insets from visualRect. Non-zero QSS padding made macOS selected
+ * checkable rows shift relative to siblings. */
 QTreeWidget#channelTree {
     border: 1px solid #eef2f7;
     border-radius: 9px;
@@ -1875,11 +1899,11 @@ QTreeWidget#channelTree {
 }
 QTreeWidget#channelTree::item {
     min-height: 24px;
-    padding: 2px 4px;
+    padding: 1px 0;
 }
 QTreeWidget#channelTree::item:selected {
     min-height: 24px;
-    padding: 2px 4px;
+    padding: 1px 0;
     background-color: #b7d3f2;
     color: #111827;
 }
@@ -2475,9 +2499,17 @@ QWidget#timeDomainPage {
     background-color: transparent;
 }
 
-QFrame#timeViewBottomDock {
-    background-color: transparent;
+QWidget#timeViewBottomDock {
+    background-color: #fbfcff;
     border-top: 1px solid #dbe3ee;
+    /* The dock is the LAST child of the ChartStack card and spans its full
+     * width, so its opaque fill lands on the card's rounded bottom corners.
+     * Without matching radii it squares them off (and the shell background
+     * stops showing through) — see tests/ui/test_surface_layering.py
+     * ::test_surface_top_bottom_and_panels_render_rounded_corners. Keep in
+     * sync with ChartStack's border-radius above. */
+    border-bottom-left-radius: 7px;
+    border-bottom-right-radius: 7px;
 }
 
 QWidget#chartCard {
@@ -2916,17 +2948,25 @@ QDialog#DrawerSurface #ChannelEditorDialog {
     background-color: #fbe9e7;
 }
 
-/* Menus and status */
+/* Menus and status
+ * Compact density (2026-08-10 Option A): align row height with combo/base
+ * controls (~28 outer) instead of the old 38px items that dwarfed 24px kebabs.
+ * Default right pad is 12 (no empty check gutter). Menus with checkable rows or
+ * submenu arrows set dynamic property gutter="check" for padding-right 22.
+ * pgContextMenu below keeps its own larger Precision Light metrics. */
 QMenu {
-    padding: 7px;
+    padding: 4px;
     border: 1px solid rgba(190, 205, 225, 210);
-    border-radius: 12px;
+    border-radius: 10px;
     background-color: rgba(255, 255, 255, 238);
 }
 QMenu::item {
-    min-height: 24px;
-    padding: 7px 28px 7px 12px;
-    border-radius: 8px;
+    min-height: 20px;
+    padding: 4px 12px 4px 10px;
+    border-radius: 6px;
+}
+QMenu[gutter="check"]::item {
+    padding-right: 22px;
 }
 QMenu::item:selected {
     background-color: rgba(232, 239, 255, 230);
@@ -2934,7 +2974,7 @@ QMenu::item:selected {
 }
 QMenu::separator {
     height: 1px;
-    margin: 7px 10px;
+    margin: 4px 8px;
     background-color: rgba(148, 163, 184, 155);
 }
 
@@ -3014,13 +3054,20 @@ QStatusBar#surfaceStatusBar QLabel#plotRiskLabel[riskLevel="danger"] {
 QStatusBar#surfaceStatusBar QWidget#computeProgressWidget {
     background-color: transparent;
     margin: 0 4px;
+    min-width: 248px;
+    max-width: 520px;
 }
 
 QStatusBar#surfaceStatusBar QLabel#computeProgressLabel {
     color: #4b5f78;
     font-size: 12px;
     font-weight: 600;
-    qproperty-alignment: AlignVCenter;
+    /* Qt QSS: combined flag values in qproperty-* MUST be quoted. Unquoted
+     * `A | B` fails the WHOLE application stylesheet parse (every widget
+     * falls back to platform defaults) — guarded by
+     * tests/ui_kit/test_stylesheet_parses.py. */
+    qproperty-alignment: 'AlignVCenter | AlignLeft';
+    padding-right: 2px;
 }
 
 QStatusBar#surfaceStatusBar QProgressBar#computeProgressBar {
@@ -3153,6 +3200,43 @@ QLabel#chartHint {
 QWidget#viewTabBar {
     background-color: transparent;
     border: none;
+}
+
+/* Quiet section identity (time / fft / fft_time / frf / order). Display-only:
+ * soft icon badge + label + 1px rule, then a real gap before View tabs.
+ * Matches the HTML option-B quiet anchor; no section rainbow / wash. */
+QWidget#viewTabBar QWidget#viewSectionAnchor {
+    background-color: transparent;
+    border: none;
+    margin: 0 4px 0 0;
+}
+
+QWidget#viewTabBar QLabel#viewSectionAnchorIcon {
+    background-color: #e8f0ff;
+    border: none;
+    border-radius: 5px;
+    padding: 0;
+    margin: 0;
+}
+
+QWidget#viewTabBar QLabel#viewSectionAnchorLabel {
+    background-color: transparent;
+    border: none;
+    color: #3d4f66;
+    font-size: 12px;
+    font-weight: 600;
+    /* CJK line boxes keep empty descent below the glyph; 1px top pad drops
+     * the ink onto the same midline as Latin "View N" in the tab. */
+    padding: 1px 0 0 0;
+    margin: 0;
+}
+
+QWidget#viewTabBar QFrame#viewSectionAnchorRule {
+    background-color: #c8d2e0;
+    border: none;
+    margin: 0 0 0 2px;
+    min-width: 1px;
+    max-width: 1px;
 }
 
 QWidget#viewTabBar QTabBar#viewTabs {
@@ -3362,14 +3446,14 @@ QFrame#chartHintBar QLabel#chartHintDiscovery {
     background-color: transparent;
 }
 
-QFrame#timeViewBottomDock QFrame#chartHintBar {
+QWidget#timeViewBottomDock QFrame#chartHintBar {
     background-color: transparent;
     border-top: 1px solid #d3dbe6;
 }
 
-QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintPersistent,
-QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintContext,
-QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintDiscovery {
+QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintPersistent,
+QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintContext,
+QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintDiscovery {
     padding: 1px 6px;
 }
 

@@ -1,12 +1,16 @@
 from pathlib import Path
 
+import pytest
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
+    QFrame,
+    QLabel,
     QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
+    QWidget,
 )
 
 from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager, ViewState
@@ -90,6 +94,10 @@ def test_view_tabbar_chrome_is_shared_outside_time_domain_dock():
 
     required_selectors = [
         "QWidget#viewTabBar {",
+        "QWidget#viewTabBar QWidget#viewSectionAnchor {",
+        "QWidget#viewTabBar QLabel#viewSectionAnchorIcon {",
+        "QWidget#viewTabBar QLabel#viewSectionAnchorLabel {",
+        "QWidget#viewTabBar QFrame#viewSectionAnchorRule {",
         "QWidget#viewTabBar QTabBar#viewTabs {",
         "QWidget#viewTabBar QTabBar#viewTabs::tab {",
         'QWidget#viewTabBar QTabBar#viewTabs[density="compact"]::tab {',
@@ -275,20 +283,22 @@ def test_plus_button_disabled_at_view_cap(qtbot):
 
 
 def test_plus_button_follows_the_managers_own_cap_not_the_module_constant(qtbot):
-    manager = ViewManager(max_views=12)
-    for _ in range(MAX_VIEWS - 1):
+    # Cap must differ from MAX_VIEWS so we prove the bar reads the instance,
+    # not the module default (both are 12 in the product today).
+    manager = ViewManager(max_views=4)
+    for _ in range(2):
         manager.new_view()
     bar = ViewTabBar(manager)
     qtbot.addWidget(bar)
     plus = bar.findChild(QPushButton, "viewTabPlus")
 
-    assert len(manager.views) == MAX_VIEWS
+    assert len(manager.views) == 3
     assert plus.isEnabled()
 
     while manager.new_view() != -1:
         pass
 
-    assert len(manager.views) == 12
+    assert len(manager.views) == 4
     assert not plus.isEnabled()
 
 
@@ -824,3 +834,153 @@ def test_reorder_relabels_compact_ordinals_after_the_drag_releases(qtbot):
     assert all(
         tabs.tabToolTip(i) == manager.views[i].name for i in range(tabs.count())
     )
+
+
+# --------------------------------------------------------------------------
+# Section quiet anchor — display-only sibling that steals measured budget.
+# --------------------------------------------------------------------------
+
+def _anchor_widget(bar):
+    return bar.findChild(QWidget, "viewSectionAnchor")
+
+
+def _section_bar(qtbot, *, section, count=2, active=0, max_views=64):
+    manager = ViewManager(max_views=max_views)
+    while len(manager.views) < count:
+        manager.new_view()
+    manager.set_active(active)
+    bar = ViewTabBar(manager, section=section)
+    qtbot.addWidget(bar)
+    return manager, bar
+
+
+def test_section_anchor_renders_known_section_identity_without_focus(qtbot):
+    _manager, bar = _section_bar(qtbot, section="time", count=1)
+    anchor = _anchor_widget(bar)
+    label = bar.findChild(QLabel, "viewSectionAnchorLabel")
+    icon = bar.findChild(QLabel, "viewSectionAnchorIcon")
+    rule = bar.findChild(QFrame, "viewSectionAnchorRule")
+
+    assert anchor is not None
+    assert label is not None and label.text() == "时域"
+    assert icon is not None and not icon.pixmap().isNull()
+    assert icon.width() == 18 and icon.height() == 18
+    assert rule is not None and rule.width() == 1
+    assert rule.height() == 14
+    assert anchor.height() == 26
+    assert label.height() == 18
+    assert icon.height() == 18
+    # Icon / label share a midline (CJK pad is optical, ≤1px).
+    assert abs(icon.geometry().center().y() - label.geometry().center().y()) <= 1
+    assert anchor.focusPolicy() == Qt.NoFocus
+    assert label.focusPolicy() == Qt.NoFocus
+    assert icon.focusPolicy() == Qt.NoFocus
+    assert anchor.accessibleName() == "当前区域：时域"
+
+    _none_manager, none_bar = _bar(qtbot, count=1)
+    assert _anchor_widget(none_bar) is None
+
+    with pytest.raises(ValueError, match="section"):
+        ViewTabBar(ViewManager(), section="not-a-section")
+
+
+def test_section_anchor_measured_width_is_reserved_from_tabs_budget(qtbot):
+    plain_manager = ViewManager()
+    plain = ViewTabBar(plain_manager)
+    qtbot.addWidget(plain)
+    _anchored_manager, anchored = _section_bar(qtbot, section="fft", count=1)
+
+    for bar in (plain, anchored):
+        bar.resize(800, 28)
+        bar.show()
+    QApplication.processEvents()
+
+    anchor = _anchor_widget(anchored)
+    spacing = max(0, anchored.layout().spacing())
+    expected = (
+        max(anchor.sizeHint().width(), anchor.minimumSizeHint().width()) + spacing
+    )
+    plain_budget = plain._tabs_budget(include_overflow=False)
+    anchored_budget = anchored._tabs_budget(include_overflow=False)
+
+    assert plain_budget is not None and anchored_budget is not None
+    assert plain_budget - anchored_budget == expected
+
+
+def test_section_anchor_can_trigger_compact_without_changing_compact_labels(qtbot):
+    _plain_manager, plain = _wide_bar(qtbot, count=10)
+    _anchored_manager, anchored = _section_bar(qtbot, section="order", count=10)
+    anchored.resize(4000, 28)
+    anchored.show()
+    QApplication.processEvents()
+
+    roomy, compact, plain_overhead = _measure(plain)
+    _a_roomy, _a_compact, anchored_overhead = _measure(anchored)
+    delta = anchored_overhead - plain_overhead
+    assert delta > 0
+    assert compact < roomy - delta  # still a compact band after the reserve
+
+    # Same row width that exactly fits plain roomy: anchored must drop first.
+    target_width = roomy + plain_overhead
+    plain.resize(int(target_width), 28)
+    anchored.resize(int(target_width), 28)
+    QApplication.processEvents()
+
+    assert not plain.is_compact()
+    assert anchored.is_compact()
+    assert anchored.overflow_indices() == []
+    tabs = anchored.tabBar()
+    assert all(tabs.tabText(i) == str(i + 1) for i in range(tabs.count()))
+    assert all(
+        tabs.tabToolTip(i) == anchored._manager.views[i].name
+        for i in range(tabs.count())
+    )
+    assert tabs.tabText(0) == "1"  # current stays ordinal too
+
+
+def test_section_anchor_overflow_keeps_current_tail_view_and_count_exact(qtbot):
+    manager, bar = _section_bar(qtbot, section="frf", count=14, active=13)
+    bar.resize(4000, 28)
+    bar.show()
+    QApplication.processEvents()
+    switches = []
+    bar.switch_requested.connect(switches.append)
+    _roomy, compact, _overhead = _measure(bar)
+
+    _resize_to_budget(bar, compact // 2)
+
+    tabs = bar.tabBar()
+    hidden = [i for i in range(tabs.count()) if not tabs.isTabVisible(i)]
+    assert bar.overflow_indices()
+    assert tabs.isTabVisible(13)
+    assert 13 not in bar.overflow_indices()
+    assert tabs.currentIndex() == 13
+    assert manager.active == 13
+    assert bar.overflow_indices() == hidden
+    assert bar._overflow.text() == f"»{len(hidden)}"
+    assert switches == []
+    # Tail retirement: every hidden index is from the end, skipping current.
+    assert hidden == sorted(i for i in range(tabs.count()) if i != 13)[-len(hidden):]
+
+
+def test_section_anchor_and_split_actions_are_both_fixed_budget_siblings(qtbot):
+    manager, bar = _section_bar(qtbot, section="fft_time", count=14)
+    bar.resize(4000, 28)
+    bar.show()
+    QApplication.processEvents()
+    manager.set_split(1)
+    _roomy, compact, _overhead = _measure(bar)
+    _resize_to_budget(bar, compact // 2)
+
+    assert _anchor_widget(bar).isVisible()
+    assert bar._plus.isVisible()
+    assert bar._overflow.isVisible()
+    assert bar._split_clear.isVisible()
+    assert bar.overflow_indices()
+    for widget in (
+        _anchor_widget(bar),
+        bar._plus,
+        bar._overflow,
+        bar._split_clear,
+    ):
+        assert bar.rect().contains(widget.geometry())

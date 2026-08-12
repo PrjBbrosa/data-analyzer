@@ -576,6 +576,8 @@ def _make_fft_time_dispatch_window(qapp, qtbot, monkeypatch):
 
     monkeypatch.setattr(win, "_capture_active_analysis_view", lambda _section: None)
     monkeypatch.setattr(win.inspector.fft_time_ctx, "get_params", lambda: params)
+    monkeypatch.setattr(
+        win.inspector.fft_time_ctx, "compute_params", lambda: params)
     monkeypatch.setattr(win, "_pane_time_range_for", lambda *_args: None)
     monkeypatch.setattr(
         win,
@@ -1130,5 +1132,8 @@ def test_order_job_closure_passes_progress_callback_and_cancel_token(
         "analysis_key": ("order", "f1", "torque"),
         "pane_idx": 0,
         "source": ("f1", "torque"),
+        "view_id": win.analysis_managers["order"].get(
+            win.analysis_managers["order"].active
+        ).view_id,
     }
     assert progress_calls == [(1, 2)]

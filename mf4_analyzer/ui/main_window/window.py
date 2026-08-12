@@ -49,8 +49,13 @@ from ..time_xaxis import (
     spec_from_selection,
 )
 
+from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 from ._sentinel import _INSPECTOR_TIME_RANGE
-from ._state_holders import CustomXAxisState, ViewFocusState
+from ._state_holders import (
+    CustomXAxisState,
+    ProjectRestoreHealth,
+    ViewFocusState,
+)
 from ._analysis_mixin import AnalysisMixin
 from ._drop_import_mixin import DropImportMixin
 from ._fft_mixin import FFTMixin
@@ -115,6 +120,9 @@ class MainWindow(
         # shims below always have a target.
         self._custom_xaxis = CustomXAxisState()
         self._view_focus = ViewFocusState()
+        # Stage 1 degraded-save guard: missing project sources / dropped pane
+        # refs. Mutations go through the holder (not multi-file rebinds).
+        self._project_restore_health = ProjectRestoreHealth()
         try:
             self._blf_dbc_history = self._load_recent_blf_dbc_history()
         except Exception:
@@ -155,10 +163,22 @@ class MainWindow(
             fft_time_cache,
             self._analysis_jobs,
             partial(make_fft_time_analysis_key, fft_time_cache.make_key),
+            store_result=lambda view_id, pane_idx, key, result: (
+                self._store_analysis_result(
+                    'fft_time', view_id, pane_idx, key, result
+                )
+            ),
         )
         from .frf_coordinator import FrfCoordinator
         self._frf_coordinator = FrfCoordinator(
-            self.analysis_caches['frf'], self._analysis_jobs, parent=self
+            self.analysis_caches['frf'],
+            self._analysis_jobs,
+            store_result=lambda view_id, pane_idx, key, result: (
+                self._store_analysis_result(
+                    'frf', view_id, pane_idx, key, result
+                )
+            ),
+            parent=self,
         )
         self._init_drop_import()
         self._connect()
@@ -268,7 +288,7 @@ class MainWindow(
         from ..inspector import Inspector
         from ..toolbar import Toolbar
         from .. import view_bridge
-        from ..view_state import ViewManager
+        from ..view_state import MAX_VIEWS, ViewManager
 
         cw = QWidget()
         self.setCentralWidget(cw)
@@ -358,10 +378,11 @@ class MainWindow(
         self.canvas_fft_time = self.chart_stack.canvas_fft_time
         self.canvas_frf = self.chart_stack.canvas_frf
         self.channel_list = self.navigator.channel_list
-        self.navigator.set_time_visibility_available(True)
-        # Time domain runs a wider View cap than the analysis sections (which
-        # keep view_state.MAX_VIEWS by not passing max_views).
-        self.view_manager = ViewManager(self, max_views=12)
+        self.navigator.set_projection_role("time")
+        # Shared product View cap (view_state.MAX_VIEWS). Time and the four
+        # analysis managers use the same ceiling; ViewTabBar reads the
+        # per-manager value for the ``+`` disable and overflow path.
+        self.view_manager = ViewManager(self, max_views=MAX_VIEWS)
         self._view_bridge = view_bridge
         self.view_tabbar = self.chart_stack.attach_view_tabbar(self.view_manager)
         self._view_focus.bind(active=self.view_manager.active, partner=None)
@@ -370,12 +391,29 @@ class MainWindow(
         # the per-section ViewTabBar can dereference a real manager at
         # construction) + per-section LRU result caches (owned here).
         from ..analysis_cache import AnalysisResultCache, FrfAnalysisResultCache
+        from ._state_holders import AnalysisPinBook
         self.analysis_managers = self.chart_stack.analysis_managers
+        # Pin book: holder owns the slot map (state-ownership ratchet).
+        self._analysis_pins = AnalysisPinBook()
         self.analysis_caches = {
-            'fft': AnalysisResultCache(32),
-            'fft_time': AnalysisResultCache(12),
-            'frf': FrfAnalysisResultCache(12),
-            'order': AnalysisResultCache(12),
+            'fft': AnalysisResultCache(
+                32,
+                pinned_provider=lambda: self._pinned_keys_for_section('fft'),
+            ),
+            'fft_time': AnalysisResultCache(
+                12,
+                pinned_provider=lambda: self._pinned_keys_for_section(
+                    'fft_time'
+                ),
+            ),
+            'frf': FrfAnalysisResultCache(
+                12,
+                pinned_provider=lambda: self._pinned_keys_for_section('frf'),
+            ),
+            'order': AnalysisResultCache(
+                12,
+                pinned_provider=lambda: self._pinned_keys_for_section('order'),
+            ),
         }
         # `_applying_analysis_view` is AnalysisMixin's own re-entrancy guard;
         # its default lives with the owner (see AnalysisMixin) so exactly one
@@ -514,6 +552,7 @@ class MainWindow(
         token: object | None = None,
         *,
         process_events: bool = False,
+        flush_events: bool = False,
     ) -> None:
         if self._active_compute_progress_token is None:
             return
@@ -523,12 +562,15 @@ class MainWindow(
         ):
             return
         self._compute_progress.set_progress(current, total, label)
-        if process_events:
-            # Render only the tiny status-bar widget.  Draining the entire Qt
-            # queue here can paint the *previous* chart midway through a chart
-            # rebuild, which makes a progress update itself look like a plot
-            # stall.  ``repaint`` is synchronous and scoped to this widget.
+        if process_events or flush_events:
+            # Default path: repaint only the tiny status-bar widget.  Draining
+            # the entire Qt queue during chart rebuild can paint the previous
+            # plot mid-flight.  File-load passes ``flush_events=True`` so the
+            # long synchronous import still lets the bar/label reach the screen.
             self._compute_progress.repaint()
+        if flush_events:
+            from PyQt5.QtCore import QEventLoop
+            QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
     def _finish_compute_progress(
         self,
@@ -787,15 +829,16 @@ class MainWindow(
         self.navigator.channel_editor_requested.connect(self.open_editor)
         self.navigator.file_activated.connect(self._on_file_activated)
         self.navigator.file_close_requested.connect(self._on_file_close_requested)
+        self.navigator.file_group_close_requested.connect(self._close_files)
         self.navigator.close_all_requested.connect(self._on_close_all_requested)
         self.navigator.files_attach_requested.connect(
             self._attach_files_from_drop
         )
         self.navigator.files_detach_requested.connect(
-            self._detach_files_from_focused_view
+            self._detach_files_from_active_context
         )
-        self.navigator.auto_attach_changed.connect(
-            self._on_auto_attach_changed
+        self.navigator.follow_prefs_changed.connect(
+            self._on_follow_prefs_changed
         )
         self.navigator.channel_config_save_requested.connect(
             self._save_current_channel_config
@@ -848,6 +891,19 @@ class MainWindow(
             self._on_frf_display_params_changed
         )
         self.inspector.order_time_requested.connect(self.do_order_time)
+        for _analysis_section, _analysis_ctx in (
+            ('fft', self.inspector.fft_ctx),
+            ('fft_time', self.inspector.fft_time_ctx),
+            ('order', self.inspector.order_ctx),
+        ):
+            _analysis_ctx.compute_params_changed.connect(
+                lambda params, section=_analysis_section:
+                self._on_analysis_compute_params_changed(section, params)
+            )
+            _analysis_ctx.display_params_changed.connect(
+                lambda params, section=_analysis_section:
+                self._on_analysis_display_params_changed(section, params)
+            )
         # dB reference is display-only: changing it while in FFT mode should
         # immediately re-render without recompute. Re-evaluate _fft_render_signature
         # (which now includes db_reference) so the stale-check in _enter_fft_mode
@@ -1236,17 +1292,20 @@ class MainWindow(
         all work (fixes both the vanishing spectrum and the re-entry lag). When
         the inputs did change, restore the spectrum from cache (also redraws the
         preview); fall back to a bare time preview only when no source is
-        cached."""
+        cached.
+
+        Mode entry already applied the target View's params/sources via
+        ``_apply_active_analysis_context``. This path must NOT capture live
+        Inspector params back onto that View (Stage 1 source-isolation F2).
+        """
         if self.chart_stack.current_mode() != 'fft' or not self.files:
             return
         mgr = self.analysis_managers['fft']
         state = mgr.get(mgr.active)
-        # Mirror do_fft / the view-switch path: pull the (possibly changed)
-        # navigator selection into the active view so the cache lookup and the
-        # signature reflect what is actually selected right now.
-        self._capture_active_analysis_view('fft')
-        # 进入 FFT 时按当前勾选的焦点源刷新 Auto 的 dB reference（从别的模式勾好
-        # 通道再切进来时，控件必须立即反映该通道，而非等下一次勾选变化）。
+        # Sync navigator checkbox → focused pane sources only. Params / range
+        # stay owned by the state that was just applied on mode entry.
+        self._capture_analysis_sources('fft', state)
+        # 进入 FFT 时按当前勾选的焦点源刷新 Auto 的 dB reference。
         # rerender=False：只刷识别不重算；Manual View 在 helper 内 no-op。
         self._resolve_and_apply_db_reference('fft')
         signature = self._fft_render_signature()
@@ -1476,7 +1535,6 @@ class MainWindow(
             elif old_mode in self.analysis_managers:
                 self._capture_active_analysis_view(old_mode)
         self.chart_stack.set_mode(mode)
-        self.navigator.set_time_visibility_available(mode == 'time')
         self.inspector.set_mode(mode)
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
         if mode in {'fft', 'fft_time', 'order'}:
@@ -1484,15 +1542,73 @@ class MainWindow(
             # entered without any signal/value/mode change since its last
             # visit still needs a fresh stamp -- additive, no render effect.
             self._stamp_db_reference_nudge_facts(mode)
-        # §6.2 auto re-plot on entering time mode with checked channels.
-        # Defer by one tick: QStackedWidget has not yet laid out the newly
-        # visible canvas, and drawing now paints onto a backing store that is
-        # discarded when the layout pass fires (observed regression: plot
-        # blanks after fft → time toggle).
-        if mode == 'time' and self.files and self.navigator.get_checked_channels():
-            QTimer.singleShot(0, self._plot_time_preserving_xlim)
-        elif mode == 'fft' and self.files:
-            QTimer.singleShot(0, self._enter_fft_mode)
+        # Full-apply the target context so live navigator / Inspector / canvas
+        # never keep the outgoing mode's selection (Stage 1 source isolation).
+        if mode == 'time':
+            self.navigator.set_projection_role('time')
+            idx = getattr(self, '_focused_view_idx', None)
+            if idx is None:
+                idx = self.view_manager.active
+            if idx is not None and 0 <= idx < len(self.view_manager.views):
+                self._project_view_controls(idx)
+            # §6.2 auto re-plot on entering time mode with checked channels.
+            # Defer by one tick: QStackedWidget has not yet laid out the newly
+            # visible canvas, and drawing now paints onto a backing store that
+            # is discarded when the layout pass fires (observed regression:
+            # plot blanks after fft → time toggle).
+            if self.files and self.navigator.get_checked_channels():
+                QTimer.singleShot(0, self._plot_time_preserving_xlim)
+        elif mode in self.analysis_managers:
+            role = (
+                'fft_sources' if mode == 'fft' else 'analysis_candidates'
+            )
+            self.navigator.set_projection_role(role)
+            # Stage 1.1 item 3: fill empty target View from time focus before
+            # the apply pipeline projects it. Do not hook view-switch.
+            self._maybe_fill_empty_analysis_on_mode_entry(mode)
+            if mode == 'fft':
+                # Always apply target View params/sources/range first so live
+                # Inspector never overwrites the destination state. Canvas
+                # restore stays deferred in `_enter_fft_mode` so an unchanged
+                # signature can reuse retained curves without a blank flash.
+                self._apply_active_analysis_context(
+                    mode, render=False, apply_params=True
+                )
+                if self.files:
+                    QTimer.singleShot(0, self._enter_fft_mode)
+            else:
+                self._apply_active_analysis_context(mode)
+
+    def _maybe_fill_empty_analysis_on_mode_entry(self, mode):
+        """Item 3: copy time-focus attachments into an empty analysis View."""
+        prefs = self.navigator.follow_prefs()
+        if (
+            not prefs.fill_on_mode_entry
+            or getattr(self, "_opening_project", False)
+            or getattr(self, "_restoring_project", False)
+        ):
+            return
+        from .file_scope_follow import resolve_mode_entry_fill
+
+        resolved = self._active_analysis_view_state(mode)
+        time_resolved = self._focused_time_view_state()
+        target_att = (
+            list(resolved[2].attached_file_ids) if resolved is not None else []
+        )
+        time_att = (
+            list(time_resolved[1].attached_file_ids)
+            if time_resolved is not None
+            else []
+        )
+        fill = resolve_mode_entry_fill(target_att, time_att, self.files)
+        if not fill:
+            return
+        added = self._attach_files_to_active_analysis_view(mode, fill)
+        if added and time_resolved is not None:
+            self.toast(
+                f"已填充 {len(added)} 个文件 · 来自 {time_resolved[1].name}",
+                "success",
+            )
 
     def _on_cursor_mode_changed(self, mode):
         if self.chart_stack.split_active():
@@ -1572,6 +1688,9 @@ class MainWindow(
         the pick so it applies if the user later switches to overlay, but the
         replot only reorders when overlay is active (plot_time guards that).
 
+        When the active section is FFT, also promote the matching time-preview
+        source to the left axis (same product verb, preview-local state).
+
         The pick belongs to the FOCUSED View, not just the window. Every path
         that re-projects a View onto a canvas (``_project_view_controls`` /
         ``_render_view_to_canvas`` → ``view_bridge.apply_controls_from_state``)
@@ -1587,6 +1706,12 @@ class MainWindow(
         self._overlay_primary = (fid, ch)
         if not getattr(self, '_applying_view', False):
             self._capture_focused_view()
+        mode = self.chart_stack.current_mode()
+        if mode == 'fft':
+            canvas = getattr(self, 'canvas_fft', None)
+            promote = getattr(canvas, 'promote_time_entry_to_left_by_channel', None)
+            if callable(promote) and promote(fid, ch):
+                return
         self._plot_time_preserving_xlim()
 
     def _safe_capture_primary_xlim(self):
@@ -1759,6 +1884,12 @@ class MainWindow(
         return True
 
     def _on_fft_preview_range_changed(self, pane_idx, lo, hi):
+        """Sync inspector start/end from the FFT time-preview viewport.
+
+        Aligns with Time-Domain: pan/zoom only drafts the spinboxes. The
+        analysis window is armed only while「使用选定时间范围」is checked
+        (or via explicit actions like「最大」that call set_range_from_span).
+        """
         if self.chart_stack.current_mode() != 'fft':
             return False
         page = self.chart_stack.page_fft
@@ -1766,7 +1897,11 @@ class MainWindow(
             return False
         if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
             return False
-        self.inspector.top.set_range_from_span(lo, hi)
+        top = self.inspector.top
+        top.set_range_values(lo, hi)
+        # Unchecked: leave pane.time_range alone (None = full span on compute).
+        if not top.range_enabled():
+            return True
         mgr = self.analysis_managers['fft']
         state = mgr.get(mgr.active)
         state.panes[pane_idx].time_range = (float(lo), float(hi))
@@ -1817,6 +1952,11 @@ class MainWindow(
             self._capture_analysis_time_range(mode, state, pane_idx=pane_idx)
             if mode == 'frf' and state.panes[pane_idx].time_range != before:
                 self._dirty_frf_pane(state, pane_idx, clear_effective=True)
+            if mode == 'fft':
+                # analysis_managers early-return used to skip the dead
+                # ``elif mode == 'fft'`` refresh below; keep preview in sync
+                # with the armed full-extent window.
+                self._refresh_fft_time_preview(clear_spectrum=False)
             return
         # 按当前 Time 模式应用（与现有处理器的尾部保持一致）。
         canvas = self.chart_stack.focused_canvas()
@@ -1828,8 +1968,6 @@ class MainWindow(
         if mode == 'time':
             if self.files and self.navigator.get_checked_channels():
                 self._replot_canvas_for_view(idx, canvas)
-        elif mode == 'fft':
-            self._refresh_fft_time_preview(clear_spectrum=False)
         # fft_time / order: 仅做暂存即可，其计算是手动触发的
         # （与拖拽预览路径一致）。
 
@@ -1843,9 +1981,30 @@ class MainWindow(
             before = self._normalize_analysis_time_range(
                 state.panes[pane_idx].time_range
             )
+            if mode == 'fft' and enabled:
+                # Match Time-Domain: arming the checkbox pulls the current
+                # preview viewport into start/end before capture.
+                canvas = page.pane_canvas(pane_idx)
+                get_xlim = getattr(canvas, 'get_time_preview_xlim', None)
+                if callable(get_xlim):
+                    xlim = get_xlim()
+                    if xlim is not None:
+                        lo, hi = xlim
+                        if (
+                            np.isfinite(lo) and np.isfinite(hi) and hi > lo
+                        ):
+                            self.inspector.top.set_range_values(lo, hi)
             self._capture_analysis_time_range(mode, state, pane_idx=pane_idx)
             if mode == 'frf' and state.panes[pane_idx].time_range != before:
                 self._dirty_frf_pane(state, pane_idx, clear_effective=True)
+            if mode == 'fft':
+                self._refresh_fft_time_preview(clear_spectrum=False)
+                if not enabled:
+                    canvas = page.pane_canvas(pane_idx)
+                    reset = getattr(
+                        canvas, '_reset_time_preview_to_extents', None)
+                    if callable(reset):
+                        reset()
             return
         canvas = self.chart_stack.focused_canvas()
         xaxis_draft = self._snapshot_xaxis_controls()
@@ -2064,8 +2223,13 @@ class MainWindow(
         stamping (spec 2026-07-12 S5 / A17), no render/resolve-logic change.
         ``rerender_fn`` is the SAME callable each ``_connect`` call site
         already deferred via ``QTimer.singleShot(0, ...)``."""
-        if getattr(self._analysis_ctx(section), "_applying_preset", False):
+        if (
+            self._applying_analysis_view
+            or getattr(self._analysis_ctx(section), "_applying_preset", False)
+            or self.chart_stack.current_mode() != section
+        ):
             return
+        self._sync_active_analysis_params(section)
         self._stamp_db_reference_nudge_facts(section)
         QTimer.singleShot(0, rerender_fn)
 
@@ -2135,8 +2299,65 @@ class MainWindow(
     def _on_file_close_requested(self, fid):
         self._close(fid)
 
+    def _close_files(self, fids):
+        """Atomically close every logical source in a physical file group.
+
+        Dependencies across the whole group are summarized once. Cancel keeps
+        all members; confirm force-closes each so partial success is impossible.
+
+        A single-member group (the common case: an ordinary file's own close
+        button also routes here via the navigator's group-close request)
+        keeps the itemized ``_close`` feedback — filename in the toast. A
+        genuine multi-source group (e.g. an HDF file split into several
+        ``LoadedSource`` entries) would otherwise fire one toast + one full
+        plot-state reset per fid; those are suppressed per-fid (``notify=
+        False``) and replaced with a single aggregated summary after the
+        loop, since ``_reset_plot_state`` only reflects final ``self.files``/
+        ``self._active`` state and is safe to defer to the end.
+        """
+        ordered = []
+        seen = set()
+        for raw in fids or ():
+            fid = str(raw)
+            if fid in self.files and fid not in seen:
+                seen.add(fid)
+                ordered.append(fid)
+        if not ordered:
+            return
+        from .analysis_source_scope import collect_source_uses
+
+        uses = []
+        for fid in ordered:
+            uses.extend(
+                collect_source_uses(
+                    fid,
+                    time_views=self.view_manager.views,
+                    analysis_managers=self.analysis_managers,
+                )
+            )
+        if uses and not self._confirm_global_file_close(
+            uses, files=tuple(ordered),
+        ):
+            return
+        group_close = len(ordered) > 1
+        closed = []
+        for fid in ordered:
+            if fid in self.files:
+                self._close(fid, force=True, notify=not group_close)
+                closed.append(fid)
+        if group_close and closed:
+            self._reset_plot_state(scope='file')
+            self.statusBar.showMessage(
+                f"已关闭 {len(closed)} 个来源 | 剩余 {len(self.files)} 文件"
+            )
+            self.toast(
+                f"已关闭 {len(closed)} 个来源 · 剩余 {len(self.files)} 文件",
+                "info",
+            )
+
     def _on_close_all_requested(self):
-        # Navigator already confirmed; skip the second confirm here.
+        # Single product confirm (dependency summary + close-all) lives here;
+        # the navigator only requests — it must not show a second dialog.
         self.close_all()
 
     def _on_xaxis_mode_changed(self, mode):
@@ -2321,6 +2542,7 @@ class MainWindow(
         # remain valid and must not be needlessly evicted.
         if x_source_changed:
             self.analysis_caches['fft_time'].clear()
+            self._clear_analysis_section_pins('fft_time')
         if idx is not None and 0 <= idx < len(self.view_manager.views):
             state = self.view_manager.get(idx)
             self._view_bridge.capture_controls_into(state, self, canvas)
@@ -2462,42 +2684,175 @@ class MainWindow(
         # Re-plot remaining channels (or clear if empty)
         self.plot_time()
 
-    def _analysis_scope_fids(self):
-        """File ids the analysis signal pickers may offer, in navigator order.
+    def _analysis_section_label(self, section):
+        return {
+            'fft': '频谱',
+            'fft_time': '时频',
+            'frf': 'FRF',
+            'order': '阶次',
+        }.get(section, section)
 
-        Scope is the focused TimeDomain View's attached files — the same set
-        the navigator's file list and channel tree project. Ten open files with
-        one dragged into the View means one file's channels are searchable, not
-        ten: picking a signal the View never loaded produced an analysis with
-        no counterpart anywhere on screen.
+    def _analysis_scope_fids(self, section=None):
+        """Still-loaded fids for one analysis section's active View.
 
-        Before any View exists (early startup) there is nothing to scope to,
-        so every loaded file stays available rather than blanking the pickers.
+        Retired as a shared Time-View scope: each section reads its own
+        ``AnalysisViewState.attached_file_ids``. Prefer
+        ``_refresh_analysis_candidates`` for live picker updates.
         """
-        resolved = self._focused_time_view_state()
-        if resolved is None:
-            return list(self.files)
-        return [
-            fid for fid in resolved[1].attached_file_ids if fid in self.files
-        ]
+        from .analysis_source_scope import analysis_scope_fids
 
-    def _update_combos(self):
+        if section is None:
+            section = self.chart_stack.current_mode()
+        if section not in self.analysis_managers:
+            return list(self.files)
+        mgr = self.analysis_managers[section]
+        if not mgr.views:
+            return list(self.files)
+        return analysis_scope_fids(mgr.get(mgr.active), self.files)
+
+    def _candidate_rows_for_fids(self, fids):
         sig_cands = []
-        rpm_cands = []
-        for fid in self._analysis_scope_fids():
+        for fid in fids:
             fd = self.files.get(fid)
             if fd is None:
                 continue
             px = f"[{fd.short_name}] "
             for ch in fd.get_signal_channels():
                 sig_cands.append((px + ch, (fid, ch)))
-                rpm_cands.append((px + ch, (fid, ch)))
-        self.inspector.fft_ctx.set_signal_candidates(sig_cands)
-        self.inspector.fft_time_ctx.set_signal_candidates(sig_cands)
-        self.inspector.order_ctx.set_signal_candidates(sig_cands)
-        self.inspector.frf_ctx.set_channel_candidates(sig_cands)
-        self.inspector.order_ctx.set_rpm_candidates(rpm_cands)
-        self._sync_fft_source_summary()
+        return sig_cands
+
+    def _refresh_analysis_candidates(self, section=None):
+        """Rebuild analysis signal pickers from each section's active View.
+
+        ``section`` given → only that section. ``None`` → every analysis
+        section (file load / global close / channel edit). Combos already
+        blockSignals inside ``set_*_candidates`` so refresh must not capture
+        into PaneState.
+        """
+        sections = (
+            (section,)
+            if section in self.analysis_managers
+            else tuple(self.analysis_managers)
+        )
+        for sec in sections:
+            fids = self._analysis_scope_fids(sec)
+            sig_cands = self._candidate_rows_for_fids(fids)
+            ctx = self._analysis_ctx(sec)
+            if sec == 'frf':
+                ctx.set_channel_candidates(sig_cands)
+            else:
+                ctx.set_signal_candidates(sig_cands)
+                if sec == 'order':
+                    ctx.set_rpm_candidates(list(sig_cands))
+        if section is None or section == 'fft':
+            self._sync_fft_source_summary()
+
+    def _update_combos(self):
+        """Compatibility wrapper: refresh every analysis section's candidates.
+
+        Retires the old Time-View-scoped shared candidate list. Callers that
+        still invoke ``_update_combos`` after a global file/channel universe
+        change get the new section-aware behavior.
+        """
+        self._refresh_analysis_candidates()
+
+    def _confirm_global_file_close(self, uses, *, files=None, close_all=False):
+        """Confirm cascading unload when Views still reference the file(s).
+
+        Default button is Cancel. Tests monkeypatch this to force accept/reject
+        without a dialog.
+        """
+        from PyQt5.QtWidgets import QMessageBox
+
+        uses = list(uses or ())
+        file_count = len(files or ())
+        if not uses and not close_all:
+            return True
+        if not uses and close_all:
+            box = QMessageBox(self)
+            box.setWindowTitle("关闭全部文件")
+            box.setIcon(QMessageBox.Question)
+            box.setText(f"关闭全部 {file_count or len(self.files)} 个文件？")
+            close_btn = box.addButton(
+                "关闭并从所有 View 移除", QMessageBox.AcceptRole
+            )
+            cancel = box.addButton("取消", QMessageBox.RejectRole)
+            box.setDefaultButton(cancel)
+            fit_message_box_buttons_to_text(box)
+            box.exec_()
+            return box.clickedButton() is close_btn
+
+        time_views = {
+            (u.domain, u.view_id)
+            for u in uses
+            if u.domain == "time" and u.role == "attachment"
+        }
+        analysis_views = {
+            (u.domain, u.view_id)
+            for u in uses
+            if u.domain != "time" and u.role == "attachment"
+        }
+        role_uses = [u for u in uses if u.role != "attachment"]
+        summary_lines = [
+            f"时域 View：{len(time_views)}",
+            f"分析 View：{len(analysis_views)}",
+            f"来源角色：{len(role_uses)}",
+        ]
+        detail = []
+        for use in uses[:12]:
+            where = use.view_name or use.view_id or "?"
+            role = use.role
+            ch = f" · {use.channel}" if use.channel else ""
+            detail.append(f"{use.domain} / {where} / {role}{ch}")
+        if len(uses) > 12:
+            detail.append(f"…另有 {len(uses) - 12} 处引用")
+
+        box = QMessageBox(self)
+        box.setWindowTitle(
+            "关闭全部文件" if close_all else "关闭文件"
+        )
+        box.setIcon(QMessageBox.Warning)
+        if close_all:
+            box.setText(
+                f"关闭全部 {file_count or len(self.files)} 个文件前，"
+                "发现仍被 View 引用的来源。"
+            )
+        else:
+            box.setText("关闭文件前发现仍被 View 引用的来源。")
+        box.setInformativeText(
+            "\n".join(summary_lines)
+            + ("\n\n" + "\n".join(detail) if detail else "")
+        )
+        close_btn = box.addButton(
+            "关闭并从所有 View 移除", QMessageBox.AcceptRole
+        )
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
+        box.exec_()
+        return box.clickedButton() is close_btn
+
+    def _confirm_global_channel_delete(self, uses):
+        from PyQt5.QtWidgets import QMessageBox
+
+        uses = list(uses or ())
+        if not uses:
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle("删除通道")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(
+            f"删除通道前发现 {len(uses)} 处 View 引用。"
+            "继续将从所有 View 移除这些引用。"
+        )
+        remove = box.addButton(
+            "关闭并从所有 View 移除", QMessageBox.AcceptRole
+        )
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
+        box.exec_()
+        return box.clickedButton() is remove
 
     def _on_chart_focus_changed(self, secondary_focused):
         if not self.chart_stack.split_active():
@@ -2515,10 +2870,31 @@ class MainWindow(
             self._project_view_controls(self._focused_view_idx)
         self.statusBar.showMessage(f"聚焦{which}视图：通道勾选将作用于此栏", 2000)
 
+    def _projection_role(self):
+        getter = getattr(self.navigator, "projection_role", None)
+        if callable(getter):
+            return getter()
+        return "time"
+
     def _ch_changed(self):
-        # Capture state before the selection-delta attempt. Cache invalidation
-        # is deferred until `_plot_time_on_canvas` reports an explicit full-
-        # rebuild reason; visibility-only deltas retain unchanged envelopes.
+        role = self._projection_role()
+        if role == "analysis_candidates":
+            # Candidate-tree checkboxes are non-editable; ignore defensive
+            # emissions so they cannot write Time or Analysis state.
+            return
+        if role == "fft_sources":
+            mgr = self.analysis_managers["fft"]
+            state = mgr.get(mgr.active)
+            self._capture_analysis_sources("fft", state)
+            self._sync_fft_source_summary()
+            self._resolve_and_apply_db_reference("fft")
+            self._refresh_fft_time_preview(clear_spectrum=False)
+            return
+
+        # Time projection: capture into the focused TimeDomain View only.
+        # Cache invalidation is deferred until `_plot_time_on_canvas` reports
+        # an explicit full-rebuild reason; visibility-only deltas retain
+        # unchanged envelopes.
         focused = self.chart_stack.focused_canvas()
         idx = self._view_index_for_canvas(focused)
         if idx is not None and 0 <= idx < len(self.view_manager.views):
@@ -2528,18 +2904,7 @@ class MainWindow(
             self._view_bridge.capture_controls_into(
                 self.view_manager.get(idx), self, focused
             )
-        if self.chart_stack.current_mode() == 'fft':
-            self._sync_fft_source_summary()
-            # FFT 的「焦点源」是 navigator 勾选的首条通道，勾选变化必须驱动 Auto
-            # 的 dB reference 重解析（否则控件值/来源行停在旧通道，等于「没有自动
-            # 识别」）。rerender=False：只刷识别，不重算频谱——与下方「不自动重算」
-            # 语义一致。Manual View 在该 helper 内 no-op。
-            self._resolve_and_apply_db_reference('fft')
-            # Channel-checkbox selection changed: keep the already-computed
-            # spectrum on screen but mark it stale (dim + "结果已过期" marker).
-            # Do NOT auto-recompute — the user re-clicks 计算 to refresh.
-            self._refresh_fft_time_preview(clear_spectrum=False)
-        if self.files and self.chart_stack.current_mode() == 'time':
+        if self.files and self.chart_stack.current_mode() == "time":
             self._replot_canvas_for_view(idx, focused)
         self._refresh_channel_config_context()
 
@@ -3393,12 +3758,24 @@ class MainWindow(
         # user actually had selected, so we no longer assume self._active.
         drawer = ChannelEditorDrawer(self, self.files, self._active)
         drawer.applied.connect(self._apply_channel_edits)
-        drawer.export_requested.connect(self._do_export_excel)
+        drawer.export_requested.connect(self._do_export_channels)
         drawer.exec_()
 
 
     def _apply_channel_edits(self, fid, new_channels, removed_channels):
         fd = self.files[fid]
+        removed_channels = list(removed_channels or ())
+        if removed_channels:
+            from .analysis_source_scope import collect_channel_uses
+
+            uses = collect_channel_uses(
+                fid,
+                removed_channels,
+                time_views=self.view_manager.views,
+                analysis_managers=self.analysis_managers,
+            )
+            if uses and not self._confirm_global_channel_delete(uses):
+                return
         self._capture_focused_view()
         # Cache invalidation site 3: each touched channel's underlying
         # ndarray identity may have changed (added) or vanished (removed).
@@ -3438,6 +3815,13 @@ class MainWindow(
             self.channel_list.blockSignals(list_blocked)
             self.navigator.blockSignals(nav_blocked)
         self._refresh_channel_dependent_controls()
+        mode = self.chart_stack.current_mode()
+        if mode in self.analysis_managers:
+            # Channel deletes already scrubbed analysis pane roles; re-project
+            # the active analysis canvas so empty panes clear instead of
+            # retaining stale curves.
+            mgr = self.analysis_managers[mode]
+            self._render_analysis_view_from_cache(mode, mgr.get(mgr.active))
         self.statusBar.showMessage(
             f"编辑: +{len(new_channels)} -{len(removed_channels)}"
         )
@@ -3446,6 +3830,16 @@ class MainWindow(
             "success",
         )
         self._plot_time_preserving_xlim()
+
+    def _do_export_channels(self, fid, channels, include_time, use_range,
+                            fmt="excel"):
+        """Channel-editor export entry: ``fmt`` is ``excel`` or ``wwt``."""
+        if str(fmt or "excel").lower() == "wwt":
+            self._do_export_wwt(fid, channels, use_range=use_range)
+        else:
+            self._do_export_excel(
+                fid, channels, include_time=include_time, use_range=use_range
+            )
 
     def _do_export_excel(self, fid, channels, include_time, use_range):
         """Write the given channels of file ``fid`` to an Excel file. Invoked
@@ -3484,6 +3878,90 @@ class MainWindow(
                 f"已导出 {Path(fp).name} · {len(df)} 行 × {len(df.columns)} 列",
                 "success",
             )
+        except Exception as e:
+            QMessageBox.critical(self, "错误", str(e))
+
+    def _do_export_wwt(self, fid, channels, *, use_range):
+        """Convert selected channels to a WinWert-openable ``.wwt``.
+
+        走 ``io.wwt_export`` 的 clean-room 路径：正文自写（``Zeit`` + N×``Real``
+        float64，点数原生保留、通道数不限、无量化），显示尾块由捆绑的真实
+        WinWert 骨架重建并强制时域横坐标。
+        """
+        from pathlib import Path
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        import numpy as np
+        from ...io.wwt_export import WwtExportError, export_wwt
+
+        fd = self.files.get(fid)
+        requested_channels = channels or []
+        valid_channels = [
+            ch for ch in requested_channels
+            if fd is not None and ch in fd.data.columns
+        ]
+        if fd is None or not valid_channels:
+            self.toast("没有可导出的数据或未勾选通道", "warning")
+            return
+        if fd.time_array is None or len(fd.time_array) < 2:
+            self.toast("当前文件没有可用时间轴，无法导出 WWT", "warning")
+            return
+
+        t = np.asarray(fd.time_array, dtype=np.float64)
+        series = {
+            ch: np.asarray(fd.data[ch].values, dtype=np.float64)
+            for ch in valid_channels
+        }
+        if use_range:
+            lo, hi = self.inspector.top.range_values()
+            mask = (t >= lo) & (t <= hi)
+            t = t[mask]
+            series = {ch: arr[mask] for ch, arr in series.items()}
+        if len(t) < 2:
+            QMessageBox.warning(
+                self,
+                "无法导出 WWT",
+                "选定时间范围内采样点不足，请扩大范围或取消范围限制。",
+            )
+            return
+
+        fp, _ = QFileDialog.getSaveFileName(
+            self, "导出 WinWert WWT", "", "WinWert (*.wwt)"
+        )
+        if not fp:
+            return
+        if not str(fp).lower().endswith(".wwt"):
+            fp = str(fp) + ".wwt"
+
+        try:
+            units = {
+                ch: (fd.channel_units.get(ch, "") or "")
+                for ch in valid_channels
+            }
+            title = ""
+            comment = "Converted by TraceLab"
+            smeta = getattr(fd, "source_metadata", None) or {}
+            if isinstance(smeta, dict):
+                title = str(smeta.get("title") or "")[:256]
+                if smeta.get("comment"):
+                    comment = str(smeta.get("comment"))[:256]
+            result = export_wwt(
+                fp,
+                t,
+                series,
+                units=units,
+                title=title,
+                comment=comment,
+            )
+            self.statusBar.showMessage(
+                f"导出完成: {Path(fp).name} ({result.summary})"
+            )
+            self.toast(
+                f"已导出 {Path(fp).name} · WinWert/TraceLab 可打开 · "
+                f"{result.summary}",
+                "success",
+            )
+        except WwtExportError as e:
+            QMessageBox.warning(self, "无法导出 WWT", str(e))
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
 

@@ -13,9 +13,16 @@ from ..channel_config import (
 from ..plot_risk import PlotRiskLevel
 from ..time_xaxis import CustomXAxisSpec, EXACT_SOURCE
 from ..widgets.channel_config_manager import ChannelConfigManagerDialog
+from .file_scope_follow import (
+    ATTACH_ON_LOAD_KEY,
+    FollowPrefs,
+    load_follow_prefs,
+    save_follow_prefs,
+)
 
 
-AUTO_ATTACH_SETTINGS_KEY = "channel_selection/auto_attach_current_view"
+# Compat alias — historical name used by docs / older patches.
+AUTO_ATTACH_SETTINGS_KEY = ATTACH_ON_LOAD_KEY
 
 
 class ChannelScopeMixin:
@@ -28,22 +35,38 @@ class ChannelScopeMixin:
 
     def _init_channel_scope(self):
         # `_restoring_project` is ProjectIOMixin's guard; this mixin only reads
-        # it (see `_should_skip_auto_attach`). Its default now lives with its
+        # it (see `_on_source_load_finished`). Its default now lives with its
         # owner as a class attribute, so exactly one file writes it.
-        settings = self._channel_scope_settings()
-        raw = settings.value(AUTO_ATTACH_SETTINGS_KEY, True)
-        if isinstance(raw, bool):
-            enabled = raw
-        else:
-            enabled = str(raw).strip().lower() not in {"0", "false", "no", "off"}
-        self.navigator.set_auto_attach_enabled(enabled)
-        self.channel_config_store = ChannelSelectionConfigStore(settings)
+        prefs = load_follow_prefs(self._channel_scope_settings())
+        self.navigator.set_follow_prefs(prefs)
+        self.channel_config_store = ChannelSelectionConfigStore(
+            self._channel_scope_settings()
+        )
         self._reload_channel_config_bar()
 
+    def _on_follow_prefs_changed(self, prefs):
+        if not isinstance(prefs, FollowPrefs):
+            prefs = FollowPrefs(
+                attach_on_load=bool(getattr(prefs, "attach_on_load", True)),
+                inherit_on_new_view=bool(
+                    getattr(prefs, "inherit_on_new_view", False)
+                ),
+                fill_on_mode_entry=bool(
+                    getattr(prefs, "fill_on_mode_entry", False)
+                ),
+            )
+        save_follow_prefs(self._channel_scope_settings(), prefs)
+
     def _on_auto_attach_changed(self, enabled):
-        settings = self._channel_scope_settings()
-        settings.setValue(AUTO_ATTACH_SETTINGS_KEY, bool(enabled))
-        settings.sync()
+        """Item-1 shim: merge into full prefs and persist."""
+        current = self.navigator.follow_prefs()
+        self._on_follow_prefs_changed(
+            FollowPrefs(
+                attach_on_load=bool(enabled),
+                inherit_on_new_view=current.inherit_on_new_view,
+                fill_on_mode_entry=current.fill_on_mode_entry,
+            )
+        )
 
     def _focused_time_view_state(self):
         idx = getattr(self, "_focused_view_idx", None)
@@ -52,6 +75,7 @@ class ChannelScopeMixin:
         return idx, self.view_manager.get(idx)
 
     def _attach_files_to_focused_view(self, fids):
+        """Time-specific compatibility seam: attach into the focused Time View."""
         resolved = self._focused_time_view_state()
         if resolved is None:
             return ()
@@ -71,21 +95,89 @@ class ChannelScopeMixin:
         self._refresh_channel_config_context()
         return tuple(added)
 
-    def _attach_files_from_drop(self, fids):
-        resolved = self._focused_time_view_state()
+    def _active_analysis_view_state(self, section=None):
+        mode = section or self.chart_stack.current_mode()
+        if mode not in self.analysis_managers:
+            return None
+        mgr = self.analysis_managers[mode]
+        if not mgr.views:
+            return None
+        return mode, mgr, mgr.get(mgr.active)
+
+    def _attach_files_to_active_analysis_view(self, section, fids):
+        resolved = self._active_analysis_view_state(section)
         if resolved is None:
-            self.toast("当前没有可接收文件的 TimeDomain View", "warning")
             return ()
-        idx, state = resolved
-        added = self._attach_files_to_focused_view(fids)
+        section, _mgr, state = resolved
+        added = []
+        seen = set(state.attached_file_ids)
+        for value in fids or ():
+            fid = str(value)
+            if fid not in self.files or fid in seen:
+                continue
+            seen.add(fid)
+            added.append(fid)
         if not added:
-            self.toast(f"文件已在当前 View 中 · {state.name}", "info")
             return ()
-        role = "副栏" if idx == getattr(self, "_secondary_view_idx", None) else "主栏"
+        state.attached_file_ids.extend(added)
+        if self.chart_stack.current_mode() == section:
+            self._project_analysis_attachments(section, state)
+        self._refresh_analysis_candidates(section)
+        return tuple(added)
+
+    def _attach_files_to_active_context(self, fids):
+        mode = self.chart_stack.current_mode()
+        if mode == "time":
+            return self._attach_files_to_focused_view(fids)
+        if mode in self.analysis_managers:
+            return self._attach_files_to_active_analysis_view(mode, fids)
+        return ()
+
+    def _toast_analysis_files_attached(self, section, state, added):
+        """Shared success toast for analysis-side attach (drop / load / follow)."""
+        label = self._analysis_section_label(section)
         self.toast(
-            f"已加入{role} · {state.name} · {len(added)} 个文件",
+            f"已加入 {label} · {state.name} · {len(added)} 个文件",
             "success",
         )
+
+    def _attach_files_from_drop(self, fids):
+        mode = self.chart_stack.current_mode()
+        if mode == "time":
+            resolved = self._focused_time_view_state()
+            if resolved is None:
+                self.toast("当前没有可接收文件的 TimeDomain View", "warning")
+                return ()
+            idx, state = resolved
+            added = self._attach_files_to_focused_view(fids)
+            if not added:
+                self.toast(f"文件已在当前 View 中 · {state.name}", "info")
+                return ()
+            role = (
+                "副栏"
+                if idx == getattr(self, "_secondary_view_idx", None)
+                else "主栏"
+            )
+            self.toast(
+                f"已加入{role} · {state.name} · {len(added)} 个文件",
+                "success",
+            )
+            return added
+
+        resolved = self._active_analysis_view_state(mode)
+        if resolved is None:
+            self.toast("当前没有可接收文件的分析 View", "warning")
+            return ()
+        section, _mgr, state = resolved
+        added = self._attach_files_to_active_analysis_view(section, fids)
+        label = self._analysis_section_label(section)
+        if not added:
+            self.toast(
+                f"文件已在 {label} · {state.name} 中",
+                "info",
+            )
+            return ()
+        self._toast_analysis_files_attached(section, state, added)
         return added
 
     def _on_source_load_finished(self, new_fids):
@@ -95,7 +187,17 @@ class ChannelScopeMixin:
             or not self.navigator.auto_attach_enabled()
         ):
             return ()
-        return self._attach_files_to_focused_view(new_fids)
+        # Stage 1.1 item 1: attach into the active focus context (time or
+        # analysis), not always the time View. See
+        # docs/analyzer/specs/2026-08-11-file-scope-follow-link-menu-spec.md.
+        added = self._attach_files_to_active_context(new_fids)
+        mode = self.chart_stack.current_mode()
+        if added and mode in self.analysis_managers:
+            resolved = self._active_analysis_view_state(mode)
+            if resolved is not None:
+                section, _mgr, state = resolved
+                self._toast_analysis_files_attached(section, state, added)
+        return added
 
     def _detach_files_from_focused_view(self, fids, label=""):
         resolved = self._focused_time_view_state()
@@ -126,6 +228,83 @@ class ChannelScopeMixin:
         shown_label = label or f"{len(removing)} 个文件"
         self.toast(f"已从当前 View 移除 {shown_label}", "info")
         return True
+
+    def _confirm_analysis_detach(self, section, state, label, impact):
+        from PyQt5.QtWidgets import QMessageBox
+
+        if not impact.cleared_roles:
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle("从当前分析 View 移除")
+        box.setIcon(QMessageBox.Question)
+        section_label = self._analysis_section_label(section)
+        shown_label = label or "所选文件"
+        box.setText(
+            f"从 {section_label} · {state.name} 移除“{shown_label}”后，"
+            f"将清除 {len(impact.cleared_roles)} 个来源角色。是否继续？"
+        )
+        remove = box.addButton("从当前 View 移除", QMessageBox.AcceptRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec_()
+        return box.clickedButton() is remove
+
+    def _detach_files_from_active_analysis_view(self, section, fids, label=""):
+        from .analysis_source_scope import detach_analysis_files
+
+        resolved = self._active_analysis_view_state(section)
+        if resolved is None:
+            return False
+        section, _mgr, state = resolved
+        if self.chart_stack.current_mode() == section:
+            self._capture_active_analysis_view(section)
+        attached = set(state.attached_file_ids)
+        removing = tuple(
+            fid
+            for fid in dict.fromkeys(str(value) for value in (fids or ()))
+            if fid in attached
+        )
+        if not removing:
+            return False
+
+        # Probe impact on a copy first so Cancel leaves state untouched.
+        from copy import deepcopy
+        from ..analysis_view_state import AnalysisViewState
+
+        probe = AnalysisViewState.from_dict(deepcopy(state.to_dict()))
+        impact = detach_analysis_files(probe, removing)
+        if impact.cleared_roles and not self._confirm_analysis_detach(
+            section, state, label, impact
+        ):
+            return False
+
+        detach_analysis_files(state, removing)
+        if self.chart_stack.current_mode() == section:
+            self._project_analysis_attachments(section, state)
+            self._apply_analysis_sources(section, state)
+            # Keep the visible canvas aligned with Pane state. Empty sources
+            # clear the chart via the shared cache-render path; sibling Views
+            # and shared per-fid caches stay untouched.
+            self._render_analysis_view_from_cache(section, state)
+        self._refresh_analysis_candidates(section)
+        # Local detach must NOT call _invalidate_all_analysis_caches_for_fid.
+        shown_label = label or f"{len(removing)} 个文件"
+        section_label = self._analysis_section_label(section)
+        self.toast(
+            f"已从 {section_label} · {state.name} 移除 {shown_label}",
+            "info",
+        )
+        return True
+
+    def _detach_files_from_active_context(self, fids, label=""):
+        mode = self.chart_stack.current_mode()
+        if mode == "time":
+            return self._detach_files_from_focused_view(fids, label=label)
+        if mode in self.analysis_managers:
+            return self._detach_files_from_active_analysis_view(
+                mode, fids, label=label
+            )
+        return False
 
     def _reload_channel_config_bar(self, selected_id=None):
         bar = self.navigator.channel_list.config_bar
@@ -356,22 +535,12 @@ class ChannelScopeMixin:
             self._filter_time_view_state_for_removed_channels(state, removed)
 
     def _remove_file_from_all_analysis_views(self, fid):
-        removed = str(fid)
+        from .analysis_source_scope import detach_analysis_files
+
+        removed = (str(fid),)
         for manager in self.analysis_managers.values():
             for state in manager.views:
-                for pane in state.panes:
-                    pane.sources = [
-                        key for key in pane.sources if str(key[0]) != removed
-                    ]
-                    if pane.rpm_source and str(pane.rpm_source[0]) == removed:
-                        pane.rpm_source = None
-                    if (
-                        pane.input_source and str(pane.input_source[0]) == removed
-                    ) or (
-                        pane.output_source and str(pane.output_source[0]) == removed
-                    ):
-                        pane.input_source = None
-                        pane.output_source = None
+                detach_analysis_files(state, removed)
 
     def _remove_channels_from_all_analysis_views(self, fid, channels):
         removed = {

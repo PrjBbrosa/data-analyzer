@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>TraceLab · Section View 完整密度方案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1d2a3d; --muted: #68788d; --line: #d5dfeb; --soft: #eef3f8;
+      --paper: #ffffff; --page: #eaf0f7; --canvas: #f8fafd;
+      --blue: #2774d8; --violet: #7958c7; --teal: #168b88; --rose: #b65791; --amber: #d78228;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; color: var(--ink); background: radial-gradient(900px 420px at 50% -90px, #fff 0, rgba(255,255,255,.28) 55%, transparent 100%), var(--page); font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    button, input { font: inherit; } button { cursor: pointer; } button:focus-visible, input:focus-visible { outline: 3px solid rgba(39,116,216,.28); outline-offset: 2px; }
+    .page { width: min(1360px, calc(100vw - 40px)); margin: 0 auto; padding: 29px 0 52px; }
+    .intro { display: flex; align-items: end; justify-content: space-between; gap: 26px; margin-bottom: 18px; }
+    .eyebrow { color: #52647a; font: 750 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .105em; text-transform: uppercase; }
+    h1 { margin: 8px 0 5px; font-size: clamp(24px, 2.45vw, 34px); letter-spacing: -.035em; line-height: 1.12; }
+    .lede { max-width: 73ch; margin: 0; color: var(--muted); font-size: 14px; }
+    .thesis { max-width: 290px; padding: 10px 12px; border: 1px solid #cbd8e6; border-radius: 9px; background: rgba(255,255,255,.7); color: #506279; font-size: 12px; line-height: 1.45; }
+    .thesis b { display: block; margin-bottom: 2px; color: #2c405a; font-size: 12px; }
+    .controlbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px; border: 1px solid #cfdbe8; border-radius: var(--radius); background: rgba(255,255,255,.82); box-shadow: 0 8px 24px rgba(39,55,78,.06); }
+    .controlbar > span { margin-right: 2px; color: #718197; font-size: 11px; font-weight: 720; }
+    .seg { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid #d8e2ed; border-radius: 8px; background: #f3f6fa; }
+    .seg button, .tiny-button { min-height: 28px; padding: 0 9px; border: 0; border-radius: 5px; color: #5d6d82; background: transparent; font-size: 11px; font-weight: 680; }
+    .seg button.active { color: #1d4375; background: #fff; box-shadow: 0 1px 3px rgba(37,54,77,.16); }
+    .tiny-button { border: 1px solid #d5e0ec; background: #fff; }.tiny-button:hover { background: #f3f7fc; }.tiny-button.active { border-color: rgba(39,116,216,.45); color: #225ca8; background: #edf5ff; }
+    .spacer { flex: 1; }.scenario { color: #52647b; font: 650 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .stage-scroll { overflow-x: auto; padding: 20px 1px 25px; }
+    .stage { --stage: 1180px; width: var(--stage); margin: 0 auto; transition: width 180ms ease; }
+    .shell { --accent: var(--violet); --tint: #f5f1fc; overflow: hidden; border: 1px solid #b9c9da; border-radius: 14px; background: #fff; box-shadow: 0 20px 48px rgba(33,49,72,.14); }
+    .titlebar { display: flex; align-items: center; height: 34px; padding: 0 12px; border-bottom: 1px solid #dfe7ef; background: #f8fafc; }.traffic { display: flex; gap: 5px; }.traffic i { width: 9px; height: 9px; border-radius: 50%; background: #fb655e; }.traffic i:nth-child(2) { background: #f7bd42; }.traffic i:nth-child(3) { background: #2bc94d; }.window-name { margin-left: 8px; color: #5c6c80; font-size: 10px; font-weight: 670; }
+    .topnav { display: flex; align-items: stretch; gap: 3px; margin-left: auto; height: 100%; }.mode-button { position: relative; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 0; color: #65758a; background: transparent; font-size: 11px; font-weight: 660; }.mode-button:hover { background: #eef3f8; }.mode-button.active { color: var(--accent); }.mode-button.active::after { position: absolute; right: 8px; bottom: 0; left: 8px; height: 2px; border-radius: 2px 2px 0 0; background: var(--accent); content: ""; }.mode-button svg, .context-icon svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.85; }
+    .workspace { display: grid; min-height: 470px; grid-template-columns: 154px minmax(0,1fr) 244px; }.navigator { padding: 15px 11px; border-right: 1px solid #e0e7ef; background: #fbfcfe; }.nav-title, .pane-title { margin: 0 0 11px; color: #79899b; font-size: 10px; font-weight: 760; letter-spacing: .075em; }.source { padding: 8px; border: 1px solid #dde6ef; border-radius: 7px; background: #fff; }.source + .source { margin-top: 8px; }.source.active { border-color: color-mix(in srgb, var(--accent) 40%, #cfdbe8); box-shadow: inset 3px 0 0 var(--accent); }.source b { display: block; color: #3d4d62; font-size: 11px; }.source span { display: block; margin-top: 3px; color: #8290a0; font-size: 10px; }
+    .plot { position: relative; overflow: hidden; background: var(--canvas); }.plot::before { position: absolute; inset: 42px 30px 34px 35px; background-image: linear-gradient(#e7edf4 1px, transparent 1px), linear-gradient(90deg, #e7edf4 1px, transparent 1px); background-size: 42px 31px; content: ""; }.plot-name { position: absolute; top: 17px; left: 20px; color: #526379; font: 670 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }.plot-unit { position: absolute; right: 24px; bottom: 17px; color: #8593a4; font-size: 10px; }.wave { position: absolute; inset: 70px 35px 48px 38px; width: calc(100% - 73px); height: calc(100% - 118px); }.wave path.main { fill: none; stroke: var(--accent); stroke-width: 2.4; }.wave path.ghost { fill: none; stroke: #b6c5d4; stroke-width: 1.2; }.crosshair { position: absolute; top: 78px; bottom: 43px; left: 53%; width: 1px; background: rgba(93,111,135,.42); }.crosshair::after { position: absolute; top: 43%; left: -4px; width: 7px; height: 7px; border: 2px solid var(--accent); border-radius: 50%; background: #fff; content: ""; }
+    .inspector { padding: 15px 14px; border-left: 1px solid #e0e7ef; background: #fbfcfe; }.field { margin-bottom: 12px; }.field label { display: block; margin-bottom: 4px; color: #758599; font-size: 10px; }.field .value { display: block; padding: 7px 8px; border: 1px solid #d6e0eb; border-radius: 6px; background: #fff; color: #405269; font: 630 11px/1.25 ui-monospace, SFMono-Regular, Menlo, monospace; }.view-card { margin-top: 18px; padding: 10px; border: 1px solid color-mix(in srgb, var(--accent) 34%, #d7e1ec); border-radius: 8px; background: var(--tint); }.view-card small { display: block; color: #718198; font-size: 10px; }.view-card b { display: block; margin-top: 3px; color: #2e4058; font-size: 12px; }.view-card span { display: block; margin-top: 4px; color: #64758b; font-size: 10px; }
+    .view-footer { position: relative; min-height: 44px; border-top: 1px solid #cfdbe7; background: #fbfcfe; }.view-row { display: flex; align-items: stretch; min-width: 0; height: 44px; }.section-anchor { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; min-width: 112px; padding: 0 11px 0 8px; border-right: 1px solid #dce5ef; color: #31435a; background: linear-gradient(90deg, var(--tint), #fbfcfe); font-size: 11px; font-weight: 760; }.section-anchor::before { align-self: stretch; width: 3px; margin-left: -8px; background: var(--accent); content: ""; }.context-icon { color: var(--accent); }.context-icon svg { width: 15px; height: 15px; }
+    .tabs-area { position: relative; display: flex; flex: 1 1 auto; min-width: 0; align-items: stretch; overflow: hidden; }.tablist { display: flex; min-width: 0; height: 100%; }.view-tab { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 0 10px; border: 0; border-right: 1px solid #e0e7ef; color: #63758b; background: transparent; font-size: 11px; white-space: nowrap; }.view-tab:hover { background: rgba(47,68,97,.05); }.view-tab.active { color: #233249; background: #fff; box-shadow: inset 0 -3px 0 var(--accent); font-weight: 740; }.view-tab .dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--dot, #2d7ff9); }.view-tab.compact { padding-inline: 8px; }.view-tab.compact .tab-name { display: none; }.view-tab.active.compact .tab-name { display: inline; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }.view-tab .ordinal { display: none; }.view-tab.compact .ordinal { display: inline; }.view-tab.active.compact .ordinal { display: none; }.overflow { align-self: center; flex: 0 0 auto; min-width: 38px; height: 28px; margin: 0 5px; padding: 0 7px; border: 1px solid #d4deea; border-radius: 6px; color: #53657d; background: #fff; font-size: 11px; font-weight: 720; }.overflow:hover { border-color: color-mix(in srgb, var(--accent) 42%, #d4deea); background: var(--tint); }.add-view, .split-action { flex: 0 0 auto; align-self: center; height: 28px; margin-right: 7px; border: 1px solid #d4deea; border-radius: 6px; background: #fff; color: #52647a; font-size: 11px; font-weight: 680; }.add-view { width: 29px; font-size: 17px; line-height: 1; }.add-view:disabled { color: #acb7c5; background: #f3f6f9; cursor: default; }.split-action { padding: 0 8px; color: #805331; border-color: #ecccae; background: #fff8f1; }.overflow-menu { position: absolute; z-index: 4; right: 49px; bottom: 49px; width: 218px; padding: 6px; border: 1px solid #c9d7e5; border-radius: 9px; background: #fff; box-shadow: 0 12px 28px rgba(38,53,73,.18); }.overflow-menu[hidden] { display: none; }.overflow-menu p { margin: 5px 7px 6px; color: #73839a; font-size: 10px; font-weight: 700; }.menu-view { display: flex; width: 100%; align-items: center; gap: 7px; padding: 7px; border: 0; border-radius: 5px; color: #41536a; background: transparent; text-align: left; font-size: 11px; }.menu-view:hover, .menu-view.active { background: var(--tint); color: #26394f; }.menu-view .check { margin-left: auto; color: var(--accent); font-weight: 800; }
+    .statusbar { display: flex; align-items: center; justify-content: space-between; height: 24px; padding: 0 10px; border-top: 1px solid #e4ebf2; color: #73849a; background: #f7f9fc; font-size: 10px; }.statusbar b { color: #4c637d; font-weight: 700; }
+    .ledger { display: grid; grid-template-columns: 1.25fr .9fr 1fr; gap: 1px; margin-top: 12px; overflow: hidden; border: 1px solid #cbd8e6; border-radius: 9px; background: #cbd8e6; }.ledger > div { min-height: 62px; padding: 10px 12px; background: rgba(255,255,255,.92); }.ledger label { display: block; color: #78899e; font-size: 10px; font-weight: 720; letter-spacing: .055em; }.ledger strong { display: block; margin-top: 2px; color: #31435a; font: 700 13px/1.25 ui-monospace, SFMono-Regular, Menlo, monospace; }.ledger span { display: block; margin-top: 3px; color: #63758b; font-size: 10px; }
+    .rules { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 20px; }.rule-card { padding: 15px 17px; border: 1px solid #cedae7; border-radius: 11px; background: rgba(255,255,255,.78); }.rule-card h2 { margin: 0 0 8px; font-size: 14px; }.rule-card ol { display: grid; gap: 6px; margin: 0; padding-left: 20px; color: #586a81; font-size: 12px; }.rule-card code { padding: 1px 4px; border-radius: 3px; background: #edf2f7; color: #334b68; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    @media (max-width: 780px) { .page { width: min(100% - 24px, 720px); padding-top: 20px; }.intro { display: block; }.thesis { margin-top: 12px; }.controlbar { align-items: flex-start; }.stage { transform-origin: left top; }.workspace { min-height: 420px; grid-template-columns: 118px minmax(0,1fr) 195px; }.topnav .mode-text { display: none; }.section-anchor { min-width: 96px; }.rules { grid-template-columns: 1fr; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="intro">
+      <div>
+        <div class="eyebrow">TraceLab / View navigation complete behavior</div>
+        <h1>安静锚点 + 按预算收缩的 View 条</h1>
+        <p class="lede">这一稿只保留一个最终方向：section 是始终可读的当前位置；当前 View 是始终可读的工作台；其余 View 才从完整名称压成“色点 + 顺序”，最后进入溢出菜单。</p>
+      </div>
+      <div class="thesis"><b>核心变化</b>不是按“第几个 View”写死规则，而是以实际可用宽度和每个标签的真实测量宽度决定密度。</div>
+    </header>
+
+    <section class="controlbar" aria-label="原型状态控制">
+      <span>底栏可用宽度</span>
+      <div class="seg" role="group" aria-label="设置底栏宽度">
+        <button type="button" data-width="1180" class="active">宽 1180</button>
+        <button type="button" data-width="760">中 760</button>
+        <button type="button" data-width="520">窄 520</button>
+      </div>
+      <button class="tiny-button" id="compare-toggle" type="button">模拟合并 View</button>
+      <button class="tiny-button" id="reset" type="button">重置当前 section</button>
+      <div class="spacer"></div><span class="scenario" id="scenario">频谱 · 6 / 6 Views</span>
+    </section>
+
+    <div class="stage-scroll">
+      <section class="stage" id="stage" aria-label="TraceLab View TabBar 完整原型">
+        <div class="shell" id="shell">
+          <div class="titlebar">
+            <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span><span class="window-name">TraceLab · <span id="window-section">频谱</span></span>
+            <nav class="topnav" aria-label="切换分析 section" id="topnav"></nav>
+          </div>
+          <div class="workspace">
+            <aside class="navigator"><p class="nav-title">数据源</p><div class="source active"><b>A-Drive</b><span>12 通道</span></div><div class="source"><b>B-Drive</b><span>8 通道</span></div><div class="source"><b>道路载荷</b><span>5 通道</span></div></aside>
+            <div class="plot"><span class="plot-name" id="plot-name">频谱 · 道路 80 km/h</span><span class="plot-unit">Hz</span><svg class="wave" viewBox="0 0 760 330" preserveAspectRatio="none" aria-hidden="true"><path class="ghost" d="M0 264 L58 240 112 256 166 201 234 228 292 126 348 195 425 102 488 176 553 124 610 162 670 76 760 120"/><path class="main" d="M0 280 C34 272 47 229 74 246 S106 275 134 217 S170 266 200 170 S236 260 273 116 S311 245 344 151 S383 230 420 82 S455 216 487 139 S528 204 556 101 S598 185 632 73 S680 173 760 100"/></svg><i class="crosshair"></i></div>
+            <aside class="inspector"><p class="pane-title">显示设置</p><div class="field"><label>频率范围</label><span class="value">0–2 kHz</span></div><div class="field"><label>窗函数</label><span class="value">Hann</span></div><div class="field"><label>平均</label><span class="value">4</span></div><div class="view-card"><small>当前工作台</small><b id="active-view-card">道路 80 km/h</b><span id="active-view-detail">View 3 / 6 · 已附加数据</span></div></aside>
+          </div>
+          <footer class="view-footer">
+            <div class="view-row">
+              <div class="section-anchor"><span class="context-icon" id="context-icon"></span><span id="anchor-label">频谱</span></div>
+              <div class="tabs-area"><div class="tablist" id="tablist" role="tablist" aria-label="当前 section 的 View"></div></div>
+              <button class="overflow" id="overflow" type="button" hidden aria-haspopup="menu">»</button>
+              <button class="split-action" id="split-action" type="button" hidden>关闭合并</button>
+              <button class="add-view" id="add-view" type="button" aria-label="新建 View" title="新建 View">+</button>
+            </div>
+            <div class="overflow-menu" id="overflow-menu" hidden role="menu"></div>
+          </footer>
+          <div class="statusbar"><span id="status-left">频谱 · 道路 80 km/h</span><b id="status-right">6 / 6 Views</b></div>
+        </div>
+        <div class="ledger" aria-live="polite">
+          <div><label>测量结果</label><strong id="density">roomy</strong><span id="density-detail">所有 View 显示完整名称</span></div>
+          <div><label>当前 View 保护</label><strong id="current-protection">道路 80 km/h</strong><span>无论压缩或溢出，始终留在条上</span></div>
+          <div><label>溢出</label><strong id="overflow-detail">0 hidden</strong><span id="overflow-copy">无需打开完整 View 菜单</span></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="rules">
+      <article class="rule-card"><h2>最终密度顺序</h2><ol><li><b>Roomy：</b>anchor + 所有完整 View 名称。</li><li><b>Compact：</b>anchor 保持完整；当前 View 仍显示完整名；其余显示彩点 + 顺序号，完整名在 tooltip。</li><li><b>Overflow：</b>当前 View 与可容纳的相邻 View 留在条上，其他项进 <code>»N</code>；菜单始终显示完整名称与当前勾选。</li></ol></article>
+      <article class="rule-card"><h2>实现边界</h2><ol><li>每次 <code>resize</code>、切换 View、重命名、增删 View、比较窗格显隐后重新测量。</li><li>不得通过隐藏当前 tab 让 Qt 自动换选；当前 View 必须先被保留，再按邻近顺序收纳其它 tab。</li><li>anchor 是展示层的 <code>SectionContext</code>，不写入 <code>ViewState</code>，也不改现有 View 名称或颜色持久化。</li></ol></article>
+    </section>
+  </main>
+
+  <script>
+    const icons = {
+      time: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c3 0 3-6 6-6s3 12 6 12 3-6 6-6"/></svg>',
+      fft: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18V6m4 12V9m4 9V4m4 14v-7m4 7V8"/></svg>',
+      fft_time: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M9 5v14m4-11v8m4-11v8m4-11v14"/></svg>',
+      frf: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16c4-8 6 4 10-6 2-4 3-3 6-3"/></svg>',
+      order: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 5v7l5 3"/></svg>'
+    };
+    const dotPalette = ['#2d7ff9', '#e8590c', '#2f9e44', '#9c36b5', '#e03131', '#1098ad', '#f08c00', '#c2255c', '#5c940d', '#5f3dc4', '#0ca678', '#495057'];
+    const baseStates = {
+      time: { label: '时域', accent: '#2774d8', tint: '#edf5ff', cap: 12, active: 4, compare: true, plot: '时域 · A-Drive', views: ['View 1', 'View 2', '冷启动', '道路输入', 'View 5', 'View 6', 'View 7', 'View 8', 'View 9'] },
+      fft: { label: '频谱', accent: '#7958c7', tint: '#f5f1fc', cap: 6, active: 2, compare: false, plot: '频谱 · 道路 80 km/h', views: ['View 1', 'View 2', '道路 80 km/h', '共振检查', 'View 5', 'View 6'] },
+      fft_time: { label: '时频', accent: '#168b88', tint: '#eaf8f6', cap: 6, active: 0, compare: false, plot: '时频 · A-Drive', views: ['View 1'] },
+      frf: { label: 'FRF', accent: '#b65791', tint: '#fcf0f7', cap: 6, active: 1, compare: true, plot: 'FRF · Input → Output', views: ['基线 H1', '控制器 H1'] },
+      order: { label: '阶次', accent: '#d78228', tint: '#fff5e8', cap: 6, active: 4, compare: false, plot: '阶次 · 道路 80 km/h', views: ['View 1', '起步段', 'View 3', 'View 4', '2–8 阶', '高转速'] }
+    };
+    const clone = (value) => JSON.parse(JSON.stringify(value));
+    let states = clone(baseStates);
+    let currentMode = 'fft';
+    let stageWidth = 1180;
+    const shell = document.querySelector('#shell');
+    const stage = document.querySelector('#stage');
+    const tablist = document.querySelector('#tablist');
+    const overflowButton = document.querySelector('#overflow');
+    const overflowMenu = document.querySelector('#overflow-menu');
+    const measure = document.createElement('span');
+    measure.style.cssText = 'position:fixed;visibility:hidden;white-space:nowrap;font:11px -apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;padding:0 10px;';
+    document.body.append(measure);
+    const textWidth = (value) => { measure.textContent = value; return Math.ceil(measure.getBoundingClientRect().width); };
+    function mode() { return states[currentMode]; }
+    function fullCost(view) { return 21 + textWidth(view); }
+    function compactCost(index, active) { return index === active ? fullCost(mode().views[index]) : 36; }
+    function budget() {
+      const m = mode();
+      const anchor = 112;
+      const controls = 43 + (m.compare ? 87 : 0);
+      return Math.max(90, stageWidth - anchor - controls - 8);
+    }
+    function chooseLayout() {
+      const m = mode(); const available = budget();
+      const roomy = m.views.reduce((sum, view) => sum + fullCost(view), 0);
+      if (roomy <= available) return { density: 'roomy', visible: m.views.map((_, index) => index), hidden: [] };
+      const compact = m.views.reduce((sum, _, index) => sum + compactCost(index, m.active), 0);
+      if (compact <= available) return { density: 'compact', visible: m.views.map((_, index) => index), hidden: [] };
+      const mustReserve = 48;
+      const visible = [m.active]; let used = compactCost(m.active, m.active) + mustReserve;
+      for (let delta = 1; delta < m.views.length; delta += 1) {
+        for (const index of [m.active - delta, m.active + delta]) {
+          if (index < 0 || index >= m.views.length || visible.includes(index)) continue;
+          const cost = compactCost(index, m.active);
+          if (used + cost <= available) { visible.push(index); used += cost; }
+        }
+      }
+      visible.sort((a, b) => a - b);
+      return { density: 'overflow', visible, hidden: m.views.map((_, index) => index).filter((index) => !visible.includes(index)) };
+    }
+    function setActive(index) { mode().active = index; overflowMenu.hidden = true; render(); }
+    function renderNav() {
+      const nav = document.querySelector('#topnav'); nav.innerHTML = '';
+      Object.entries(states).forEach(([key, item]) => {
+        const button = document.createElement('button'); button.type = 'button'; button.className = `mode-button ${key === currentMode ? 'active' : ''}`;
+        button.setAttribute('aria-current', key === currentMode ? 'page' : 'false'); button.innerHTML = `${icons[key]}<span class="mode-text">${item.label}</span>`; button.title = item.label;
+        button.addEventListener('click', () => { currentMode = key; overflowMenu.hidden = true; render(); }); nav.append(button);
+      });
+    }
+    function renderTabs(layout) {
+      const m = mode(); tablist.innerHTML = '';
+      layout.visible.forEach((index) => {
+        const view = m.views[index]; const active = index === m.active; const button = document.createElement('button');
+        button.type = 'button'; button.className = `view-tab ${active ? 'active' : ''} ${layout.density === 'roomy' ? '' : 'compact'}`;
+        button.style.setProperty('--dot', dotPalette[index % dotPalette.length]); button.title = `${m.label} · ${view}`; button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(active));
+        button.innerHTML = `<i class="dot"></i><span class="ordinal">${index + 1}</span><span class="tab-name">${view}</span>`; button.addEventListener('click', () => setActive(index)); tablist.append(button);
+      });
+      overflowButton.hidden = !layout.hidden.length; overflowButton.textContent = `»${layout.hidden.length}`; overflowButton.title = `另有 ${layout.hidden.length} 个 View 放不下，点击选择`;
+      overflowMenu.innerHTML = ''; if (layout.hidden.length) { const title = document.createElement('p'); title.textContent = `${m.label} 的全部 View`; overflowMenu.append(title); m.views.forEach((view, index) => { const item = document.createElement('button'); item.className = `menu-view ${index === m.active ? 'active' : ''}`; item.type = 'button'; item.setAttribute('role', 'menuitemradio'); item.setAttribute('aria-checked', String(index === m.active)); item.innerHTML = `<i class="dot" style="--dot:${dotPalette[index % dotPalette.length]}"></i><span>${view}</span>${index === m.active ? '<b class="check">✓</b>' : ''}`; item.addEventListener('click', () => setActive(index)); overflowMenu.append(item); }); }
+    }
+    function render() {
+      const m = mode(); const layout = chooseLayout(); stage.style.setProperty('--stage', `${stageWidth}px`); shell.style.setProperty('--accent', m.accent); shell.style.setProperty('--tint', m.tint);
+      document.querySelector('#window-section').textContent = m.label; document.querySelector('#anchor-label').textContent = m.label; document.querySelector('#context-icon').innerHTML = icons[currentMode]; document.querySelector('#plot-name').textContent = m.plot;
+      const activeName = m.views[m.active]; document.querySelector('#active-view-card').textContent = activeName; document.querySelector('#active-view-detail').textContent = `View ${m.active + 1} / ${m.views.length} · 已附加数据`;
+      document.querySelector('#status-left').textContent = `${m.label} · ${activeName}`; document.querySelector('#status-right').textContent = `${m.views.length} / ${m.cap} Views`; document.querySelector('#scenario').textContent = `${m.label} · ${m.views.length} / ${m.cap} Views`;
+      document.querySelector('#split-action').hidden = !m.compare; document.querySelector('#add-view').disabled = m.views.length >= m.cap; document.querySelector('#add-view').title = m.views.length >= m.cap ? 'View 数量已达上限' : '新建 View';
+      document.querySelector('#density').textContent = layout.density; document.querySelector('#density-detail').textContent = layout.density === 'roomy' ? '所有 View 显示完整名称' : layout.density === 'compact' ? '当前 View 完整；其余 View 显示编号' : '当前 View 固定可见；其余按相邻顺序收纳'; document.querySelector('#current-protection').textContent = activeName; document.querySelector('#overflow-detail').textContent = `${layout.hidden.length} hidden`; document.querySelector('#overflow-copy').textContent = layout.hidden.length ? '» 菜单保留所有完整名称与当前勾选' : '无需打开完整 View 菜单';
+      renderNav(); renderTabs(layout); document.querySelectorAll('[data-width]').forEach((button) => button.classList.toggle('active', Number(button.dataset.width) === stageWidth)); document.querySelector('#compare-toggle').classList.toggle('active', m.compare); document.querySelector('#compare-toggle').textContent = m.compare ? '取消模拟合并' : '模拟合并 View';
+    }
+    document.querySelectorAll('[data-width]').forEach((button) => button.addEventListener('click', () => { stageWidth = Number(button.dataset.width); overflowMenu.hidden = true; render(); }));
+    overflowButton.addEventListener('click', () => { overflowMenu.hidden = !overflowMenu.hidden; });
+    document.querySelector('#add-view').addEventListener('click', () => { const m = mode(); if (m.views.length >= m.cap) return; m.views.push(`View ${m.views.length + 1}`); m.active = m.views.length - 1; render(); });
+    document.querySelector('#compare-toggle').addEventListener('click', () => { mode().compare = !mode().compare; overflowMenu.hidden = true; render(); });
+    document.querySelector('#split-action').addEventListener('click', () => { mode().compare = false; render(); });
+    document.querySelector('#reset').addEventListener('click', () => { states[currentMode] = clone(baseStates[currentMode]); overflowMenu.hidden = true; render(); });
+    document.addEventListener('click', (event) => { if (!event.target.closest('.overflow') && !event.target.closest('.overflow-menu')) overflowMenu.hidden = true; });
+    render();
+  </script>
+</body>
+</html>

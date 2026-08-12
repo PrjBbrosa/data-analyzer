@@ -65,10 +65,11 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
     """Paint channel leaves with one invariant three-column geometry.
 
     ``QTreeWidgetItem`` delegates checkbox and icon layout to the platform
-    style.  On macOS a selected row can therefore shift the native checkbox
-    while its decoration icon and column-2 eye keep a different anchor.  The
-    channel tree uses one fixed geometry for every checkable row so selection
-    never changes either the visual box or its hit target.
+    style.  On macOS a selected checkable row can therefore shift the native
+    checkbox / QSS-padded ``option.rect`` while its decoration and Pts cell
+    keep a different anchor.  Every role (time / fft_sources /
+    analysis_candidates) paints from the view's ``visualRect`` with fixed
+    insets so selection never changes the box, text, or Pts right edge.
     """
 
     CHECK_SIZE = 18
@@ -79,6 +80,7 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
     SWATCH_TO_TEXT_GAP = 4
     PARENT_TEXT_GAP = 9
     CELL_RIGHT_INSET = 7
+    PTS_LEFT_INSET = 4
     SELECTED_BG = QColor("#b7d3f2")
     TEXT = QColor("#111827")
     MUTED = QColor("#64748b")
@@ -94,16 +96,54 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
         data = cls._channel_data(index)
         return bool(data and data[0] == "channel")
 
-    def channel_geometry(self, row_rect):
-        """Return stable checkbox, swatch and text rects for column 0."""
-        check = QRect(
-            row_rect.left() + self.LEFT_INSET,
-            row_rect.top() + (row_rect.height() - self.CHECK_SIZE) // 2,
-            self.CHECK_SIZE,
-            self.CHECK_SIZE,
-        )
+    def initStyleOption(self, option, index):
+        """Drop native check/decoration slots; we paint both ourselves."""
+        super().initStyleOption(option, index)
+        data = self._channel_data(index)
+        if data and data[0] in ("channel", "file", "source", "raster"):
+            option.features &= ~QStyleOptionViewItem.HasCheckIndicator
+            option.features &= ~QStyleOptionViewItem.HasDecoration
+            option.icon = QIcon()
+
+    def _stable_cell_rect(self, option, index):
+        """Content band for custom painting.
+
+        Prefer ``option.rect`` (the rect the view asked us to paint). After
+        clearing HasCheckIndicator and horizontal QSS padding it stays
+        selection-stable, and it stays out of the branch gutter — using
+        ``visualRect`` alone could place a top-level file checkbox under the
+        expander on macOS so the box looked "gone".
+        """
+        opt = QRect(option.rect)
+        if opt.isValid() and opt.width() > 0 and opt.height() > 0:
+            return opt
+        widget = option.widget or self.parent()
+        if widget is not None and hasattr(widget, "visualRect"):
+            rect = widget.visualRect(index)
+            if rect.isValid() and rect.width() > 0 and rect.height() > 0:
+                return QRect(rect)
+        return opt
+
+    @staticmethod
+    def _row_shows_checkbox(index):
+        """Match parent/channel chrome: only UserCheckable rows get a box."""
+        return bool(index.flags() & Qt.ItemIsUserCheckable)
+
+    def channel_geometry(self, row_rect, *, with_checkbox=True):
+        """Return stable checkbox/swatch/text rects for column 0."""
+        if with_checkbox:
+            check = QRect(
+                row_rect.left() + self.LEFT_INSET,
+                row_rect.top() + (row_rect.height() - self.CHECK_SIZE) // 2,
+                self.CHECK_SIZE,
+                self.CHECK_SIZE,
+            )
+            swatch_left = check.right() + 1 + self.CHECK_TO_SWATCH_GAP
+        else:
+            check = QRect()
+            swatch_left = row_rect.left() + self.LEFT_INSET
         swatch = QRect(
-            check.right() + 1 + self.CHECK_TO_SWATCH_GAP,
+            swatch_left,
             row_rect.top() + (row_rect.height() - self.SWATCH_BOX) // 2,
             self.SWATCH_BOX,
             self.SWATCH_BOX,
@@ -140,6 +180,12 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
         )
         return check, text
 
+    def pts_geometry(self, row_rect):
+        """Right-aligned Pts band with a selection-invariant right inset."""
+        return row_rect.adjusted(
+            self.PTS_LEFT_INSET, 0, -self.CELL_RIGHT_INSET, 0,
+        )
+
     def column_action_geometry(self, row_rect):
         """Center a row action inside the fixed display column."""
         return QRect(
@@ -175,20 +221,26 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             )
         painter.restore()
 
-    def _item_paint_option(self, option, index):
-        """Keep item-level font/metrics while retaining the view's geometry."""
+    def _item_paint_option(self, option, index, cell_rect):
+        """Keep item-level font/metrics while locking geometry to ``cell_rect``."""
         styled = QStyleOptionViewItem(option)
         self.initStyleOption(styled, index)
-        styled.rect = option.rect
+        styled.rect = QRect(cell_rect)
         styled.state = option.state
         return styled
 
-    def _paint_checkable_parent(self, painter, option, index):
-        """Paint a file/source/raster cell without platform inset drift."""
-        styled = self._item_paint_option(option, index)
-        if self._is_selected(option):
+    def _fill_selected(self, painter, option, cell_rect):
+        if not self._is_selected(option):
+            return
+        painter.fillRect(cell_rect, self.SELECTED_BG)
+        if option.rect != cell_rect:
             painter.fillRect(option.rect, self.SELECTED_BG)
-        check, text = self.parent_geometry(option.rect)
+
+    def _paint_checkable_parent(self, painter, option, index, cell_rect):
+        """Paint a file/source/raster cell without platform inset drift."""
+        styled = self._item_paint_option(option, index, cell_rect)
+        self._fill_selected(painter, option, cell_rect)
+        check, text = self.parent_geometry(cell_rect)
         self._paint_checkbox(
             painter,
             check,
@@ -202,6 +254,38 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             Qt.AlignLeft | Qt.AlignVCenter,
             styled,
             elide=Qt.ElideMiddle,
+        )
+
+    def _paint_plain_parent(self, painter, option, index, cell_rect):
+        """Non-checkable file/source/raster label with the same left inset."""
+        styled = self._item_paint_option(option, index, cell_rect)
+        self._fill_selected(painter, option, cell_rect)
+        text = QRect(
+            cell_rect.left() + self.LEFT_INSET,
+            cell_rect.top(),
+            max(0, cell_rect.width() - self.LEFT_INSET - self.CELL_RIGHT_INSET),
+            cell_rect.height(),
+        )
+        self._paint_text(
+            painter,
+            text,
+            index.data(Qt.DisplayRole),
+            self.TEXT,
+            Qt.AlignLeft | Qt.AlignVCenter,
+            styled,
+            elide=Qt.ElideMiddle,
+        )
+
+    def _paint_pts(self, painter, option, index, cell_rect):
+        styled = self._item_paint_option(option, index, cell_rect)
+        self._fill_selected(painter, option, cell_rect)
+        self._paint_text(
+            painter,
+            self.pts_geometry(cell_rect),
+            index.data(Qt.DisplayRole),
+            self.TEXT if self._is_selected(option) else self.MUTED,
+            Qt.AlignRight | Qt.AlignVCenter,
+            styled,
         )
 
     def _paint_text(self, painter, rect, text, color, alignment, option,
@@ -218,18 +302,29 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
         painter.restore()
 
     def paint(self, painter, option, index):
+        cell = self._stable_cell_rect(option, index)
+        data = self._channel_data(index)
+        column = index.column()
+
+        # Pts is role-agnostic: every row type uses the same right edge so
+        # selection / projection switches cannot nudge the numbers sideways.
+        if column == 1:
+            self._paint_pts(painter, option, index, cell)
+            return
+
         if not self._is_channel(index):
-            data = self._channel_data(index)
             if (
-                index.column() == 0
+                column == 0
                 and data
                 and data[0] in ("file", "source", "raster")
-                and (index.flags() & Qt.ItemIsUserCheckable)
             ):
-                self._paint_checkable_parent(painter, option, index)
+                if self._row_shows_checkbox(index):
+                    self._paint_checkable_parent(painter, option, index, cell)
+                else:
+                    self._paint_plain_parent(painter, option, index, cell)
                 return
             icon = index.data(Qt.DecorationRole)
-            if (index.column() == 2 and isinstance(icon, QIcon)
+            if (column == 2 and isinstance(icon, QIcon)
                     and not icon.isNull()):
                 # File/raster detach actions used to follow the native macOS
                 # decoration inset, placing the red x left of the eye-icon
@@ -249,26 +344,27 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
                 )
                 icon.paint(
                     painter,
-                    self.column_action_geometry(option.rect),
+                    self.column_action_geometry(cell),
                     Qt.AlignCenter,
                 )
                 return
             super().paint(painter, option, index)
             return
 
-        column = index.column()
-        styled = self._item_paint_option(option, index)
-        selected = self._is_selected(option)
-        if selected:
-            painter.fillRect(option.rect, self.SELECTED_BG)
+        styled = self._item_paint_option(option, index, cell)
+        self._fill_selected(painter, option, cell)
 
         if column == 0:
-            check, swatch, text = self.channel_geometry(option.rect)
-            self._paint_checkbox(
-                painter,
-                check,
-                index.data(Qt.CheckStateRole) == Qt.Checked,
+            show_check = self._row_shows_checkbox(index)
+            check, swatch, text = self.channel_geometry(
+                cell, with_checkbox=show_check,
             )
+            if show_check:
+                self._paint_checkbox(
+                    painter,
+                    check,
+                    index.data(Qt.CheckStateRole) == Qt.Checked,
+                )
             icon = index.data(Qt.DecorationRole)
             if isinstance(icon, QIcon) and not icon.isNull():
                 icon.paint(painter, swatch, Qt.AlignCenter)
@@ -284,21 +380,10 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             )
             return
 
-        if column == 1:
-            self._paint_text(
-                painter,
-                option.rect.adjusted(0, 0, -self.CELL_RIGHT_INSET, 0),
-                index.data(Qt.DisplayRole),
-                self.TEXT if selected else self.MUTED,
-                Qt.AlignRight | Qt.AlignVCenter,
-                styled,
-            )
-            return
-
         if column == 2:
             icon = index.data(Qt.DecorationRole)
             if isinstance(icon, QIcon) and not icon.isNull():
-                icon.paint(painter, self.eye_geometry(option.rect), Qt.AlignCenter)
+                icon.paint(painter, self.eye_geometry(cell), Qt.AlignCenter)
             return
 
         super().paint(painter, option, index)
@@ -586,10 +671,12 @@ class MultiFileChannelWidget(QWidget):
         self.tree.setHeaderLabels(['Channel', 'Pts', '显示']);
         header = self.tree.header()
         # Channel column owns all spare width so long names aren't elided when
-        # the dock is widened. Pts column auto-fits its 5-7 digit numbers.
+        # the dock is widened. Pts stays Fixed: ResizeToContents remeasured on
+        # selection under macOS QSS and made the numbers jump sideways.
         header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
         header.setSectionResizeMode(2, QHeaderView.Fixed)
+        header.resizeSection(1, self._pts_section_width())
         header.resizeSection(2, 42)
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(40)
@@ -617,6 +704,8 @@ class MultiFileChannelWidget(QWidget):
         self.empty_state.setAlignment(Qt.AlignCenter)
         self.empty_state.setWordWrap(True)
         self._tree_stack.addWidget(self.empty_state)
+        self._empty_section_label = "时域"
+        self._empty_view_name = "View 1"
         layout.addWidget(self._tree_stack_host)
         self.config_bar = ChannelConfigBar(self)
         layout.addWidget(self.config_bar)
@@ -639,8 +728,15 @@ class MultiFileChannelWidget(QWidget):
         # use it to leave the focused View.  Only channel-eye toggles are
         # time-domain-specific.
         self._time_channel_visibility_available = True
+        self._projection_role = "time"
+        self._channel_checks_editable = True
+        # Cache of the (role, checks_editable, visibility_available) tuple
+        # last fully replayed to chrome/icons by ``set_projection_role``.
+        # ``None`` forces the first call to always do the full replay.
+        self._projection_chrome_signature = None
         self.axis_groups_changed.connect(self.tree.viewport().update)
         self._sync_empty_state()
+        self._sync_projection_chrome()
 
     def add_file(self, fid, fd):
         self._files[fid] = fd
@@ -747,6 +843,9 @@ class MultiFileChannelWidget(QWidget):
         self._apply_filters()
         self._refresh_visibility_icons()
         self._update_edit_enabled()
+        # Newly built rows always start checkable; re-apply role chrome so
+        # analysis_candidates stays non-checkable after add/refresh.
+        self._sync_projection_chrome()
 
     def refresh_file(self, fid, fd):
         """Rebuild one file's channel rows without detaching it from a View.
@@ -974,15 +1073,29 @@ class MultiFileChannelWidget(QWidget):
     def _sync_empty_state(self):
         has_attached = bool(self._attached_file_ids)
         self._tree_stack.setCurrentWidget(self.tree if has_attached else self.empty_state)
+        if not has_attached:
+            section = getattr(self, "_empty_section_label", "时域")
+            view_name = getattr(self, "_empty_view_name", "View")
+            if self._projection_role == "time":
+                self.empty_state.setText(
+                    f"当前“{section} · {view_name}”尚未加入文件\n"
+                    "从上方拖入文件，或开启自动加入"
+                )
+            else:
+                self.empty_state.setText(
+                    f"当前“{section} · {view_name}”尚未加入文件\n"
+                    "从上方拖入；或在链接菜单启用「切换分析时填充空 View」"
+                )
+        editable = self._channel_checks_editable
         for widget in (
             self.search,
-            self.btn_all,
-            self.btn_none,
-            self.btn_selected_only,
             self.btn_edit,
         ):
             widget.setEnabled(has_attached)
+        for widget in (self.btn_all, self.btn_none, self.btn_selected_only):
+            widget.setEnabled(has_attached and editable)
         self._update_config_context()
+        self._sync_projection_chrome()
 
     def _update_config_context(self):
         self.config_bar.set_context(
@@ -1136,15 +1249,133 @@ class MultiFileChannelWidget(QWidget):
         return changed
 
     def set_time_visibility_available(self, available):
-        """Enable channel eye toggles only while the time view is active.
+        """Compatibility shim: eye toggles only while the time projection is active.
 
-        File/raster removal shares this column and is meaningful to every
-        analysis module because their signal pickers use the focused View's
-        attached files.  Therefore switching analysis modes must suppress
-        only the time-domain eye action, not the whole column.
+        Prefer ``set_projection_role``. File/raster removal shares column 2 and
+        remains available in every role.
         """
         self._time_channel_visibility_available = bool(available)
+        if available and self._projection_role != "time":
+            self._projection_role = "time"
+            self._channel_checks_editable = True
+        elif not available and self._projection_role == "time":
+            # Legacy callers only flipped the eye; keep role but disable eye.
+            pass
         self._refresh_visibility_icons()
+        self._sync_projection_chrome()
+        # This shim mutates the same tri-state that ``set_projection_role``
+        # short-circuits on, but bypasses that method entirely. Keep the
+        # cached signature coherent so a later ``set_projection_role`` call
+        # that happens to land back on an already-cached tuple doesn't skip
+        # a replay this shim actually still owes the tree.
+        self._projection_chrome_signature = (
+            self._projection_role,
+            self._channel_checks_editable,
+            self._time_channel_visibility_available,
+        )
+
+    def _pts_section_width(self):
+        """Wide enough for 7-digit point counts plus the delegate's insets."""
+        fm = self.tree.fontMetrics()
+        return max(
+            52,
+            fm.horizontalAdvance("0000000")
+            + _ChannelLeafDelegate.PTS_LEFT_INSET
+            + _ChannelLeafDelegate.CELL_RIGHT_INSET
+            + 8,
+        )
+
+    def projection_role(self):
+        return self._projection_role
+
+    def set_projection_role(self, role):
+        """Present the channel tree for the active mode context.
+
+        Roles:
+        - ``time``: checkbox + eye + detach; channel-config apply row shown
+        - ``fft_sources``: checkbox = focused FFT pane sources; no eye; detach ok
+        - ``analysis_candidates``: checkboxes non-editable; no eye; detach ok
+        """
+        allowed = {"time", "fft_sources", "analysis_candidates"}
+        role = str(role or "time")
+        if role not in allowed:
+            role = "time"
+        self._projection_role = role
+        self._time_channel_visibility_available = role == "time"
+        self._channel_checks_editable = role != "analysis_candidates"
+        signature = (
+            self._projection_role,
+            self._channel_checks_editable,
+            self._time_channel_visibility_available,
+        )
+        if signature == self._projection_chrome_signature:
+            # Mode/View switches call this at high frequency and usually land
+            # on the role that is already active (attachment-projection p95
+            # regressed 2.98ms -> 8.19ms from replaying the icon walk + a
+            # whole-tree setFlags/header pass on every no-op call). Nothing
+            # observable changed, so chrome/icons/empty-state are already
+            # correct -- skip the replay. Row rebuilds (``add_file``) call
+            # ``_sync_projection_chrome()`` directly and are unaffected by
+            # this cache. ``_attached_file_ids``/label changes elsewhere
+            # (``set_attached_file_ids`` / ``set_empty_state_context``) call
+            # ``_sync_empty_state()`` themselves, so skipping it here does
+            # not leave empty-state text/button-enablement stale.
+            return
+        self._projection_chrome_signature = signature
+        self._refresh_visibility_icons()
+        self._sync_projection_chrome()
+        self._sync_empty_state()
+
+    def set_empty_state_context(self, *, section_label=None, view_name=None):
+        if section_label is not None:
+            self._empty_section_label = str(section_label)
+        if view_name is not None:
+            self._empty_view_name = str(view_name)
+        self._sync_empty_state()
+
+    def _iter_tree_items(self):
+        def _walk(node):
+            yield node
+            for i in range(node.childCount()):
+                yield from _walk(node.child(i))
+
+        for i in range(self.tree.topLevelItemCount()):
+            yield from _walk(self.tree.topLevelItem(i))
+
+    def _sync_projection_chrome(self):
+        # Channel-config apply/save is a Time View feature.
+        is_time = self._projection_role == "time"
+        self.config_bar.setVisible(is_time)
+        self.config_bar.setEnabled(is_time)
+        # Bulk check helpers are meaningless for read-only candidate trees.
+        editable = self._channel_checks_editable
+        for widget in (self.btn_all, self.btn_none, self.btn_selected_only):
+            widget.setEnabled(editable and bool(self._attached_file_ids))
+        header = self.tree.headerItem()
+        if header is not None:
+            header.setText(
+                2,
+                {
+                    "time": "显示",
+                    "fft_sources": "来源",
+                    "analysis_candidates": "移出",
+                }.get(self._projection_role, "显示"),
+            )
+        # analysis_candidates must not present checkboxes; time / fft_sources
+        # re-enable them so role switches reverse cleanly after a rebuild.
+        self._updating = True
+        try:
+            for item in self._iter_tree_items():
+                data = item.data(0, Qt.UserRole)
+                if not data or data[0] not in ("channel", "file", "source", "raster"):
+                    continue
+                flags = item.flags()
+                if editable:
+                    item.setFlags(flags | Qt.ItemIsUserCheckable)
+                else:
+                    item.setFlags(flags & ~Qt.ItemIsUserCheckable)
+        finally:
+            self._updating = False
 
     def _on_item_clicked(self, item, column):
         if column != 2:
@@ -1170,6 +1401,25 @@ class MultiFileChannelWidget(QWidget):
         # Only column 0 owns checkbox membership; treating icon writes as
         # checkbox edits would recursively clear a whole grouped source.
         if self._updating or col != 0:
+            return
+        if not self._channel_checks_editable:
+            # analysis_candidates: force unchecked and do not emit.
+            self._updating = True
+            try:
+                item.setCheckState(0, Qt.Unchecked)
+
+                def _clear(node):
+                    node.setCheckState(0, Qt.Unchecked)
+                    for i in range(node.childCount()):
+                        _clear(node.child(i))
+
+                if item.data(0, Qt.UserRole) and item.data(0, Qt.UserRole)[0] in (
+                    "file", "source", "raster",
+                ):
+                    for i in range(item.childCount()):
+                        _clear(item.child(i))
+            finally:
+                self._updating = False
             return
         data = item.data(0, Qt.UserRole)
 

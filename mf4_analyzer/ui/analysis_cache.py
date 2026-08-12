@@ -1,21 +1,30 @@
-"""Per-section LRU result cache (spec §6.4).
+"""Per-section analysis result cache with optional View pinning.
 
-The primary FFT-vs-Time result store has capacity 12. Keys hash only
-compute-relevant params — callers must pass the filtered dict used by
-``_fft_time_analysis_cache_key`` (display-only knobs excluded).
+Capacity is the **unpinned** entry budget (LRU). Entries currently bound by any
+View stay resident regardless of that budget — see
+``docs/analyzer/specs/2026-08-11-analysis-cache-view-pinning-spec.md``.
+
+Without a ``pinned_provider`` the store behaves as a classic capacity-sized
+LRU, matching the historical contract used by existing unit tests.
 """
 from __future__ import annotations
 
 import json
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 class AnalysisResultCache:
-    def __init__(self, capacity: int):
+    def __init__(
+        self,
+        capacity: int,
+        *,
+        pinned_provider: Callable[[], Any] | None = None,
+    ):
         self._capacity = int(capacity)
         self._store: OrderedDict = OrderedDict()
+        self._pinned_provider = pinned_provider
 
     def make_key(self, fid: str, channel: str, params: dict) -> tuple:
         blob = json.dumps(params, sort_keys=True, default=str)
@@ -30,10 +39,22 @@ class AnalysisResultCache:
     def put(self, key, result) -> None:
         self._store[key] = result
         self._store.move_to_end(key)
-        while len(self._store) > self._capacity:
-            self._store.popitem(last=False)
+        pinned = (
+            frozenset(self._pinned_provider())
+            if self._pinned_provider is not None
+            else frozenset()
+        )
+        # Insertion order of OrderedDict is the LRU order (oldest first).
+        unpinned = [k for k in self._store if k not in pinned]
+        while len(unpinned) > self._capacity:
+            del self._store[unpinned.pop(0)]
 
     def invalidate_fid(self, fid: str) -> None:
+        """Drop every entry for ``fid``, including pinned ones.
+
+        Pinning is a residency policy, not a correctness barrier — a closed
+        file's results must not survive.
+        """
         fid = str(fid)
         for key in [k for k in self._store if k[0] == fid]:
             del self._store[key]

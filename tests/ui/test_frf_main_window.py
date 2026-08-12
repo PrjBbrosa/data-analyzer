@@ -34,8 +34,13 @@ def _window_with_pair(qtbot, *, n=2000, fs=1000.0):
     win.files[fid].time_array = time
     win.view_manager.get(win.view_manager.active).attached_file_ids = [fid]
     state = win.analysis_managers["frf"].get(0)
+    # Stage 1: FRF pickers / compute follow the analysis View attachments.
+    # Keep the default Time mode here so view-in-time reuse tests are not
+    # disturbed by a leave-FRF capture that clears pane.time_range.
+    state.attached_file_ids = [fid]
     state.panes[0].input_source = (fid, "input")
     state.panes[0].output_source = (fid, "output")
+    win._refresh_analysis_candidates("frf")
     win._update_combos()
     win.inspector.frf_ctx.set_input_source((fid, "input"))
     win.inspector.frf_ctx.set_output_source((fid, "output"))
@@ -114,19 +119,20 @@ def test_global_tick_density_updates_all_frf_panes(qtbot, monkeypatch):
 
 
 def test_frf_scope_refresh_keeps_out_of_scope_pair_visible_and_pane_synced(qtbot):
-    """The current TimeDomain View leaves no hidden UI/pane pair mismatch."""
+    """Clearing the FRF analysis View attachments must not drop the pane pair."""
     win, _fid, state, _time = _window_with_pair(qtbot)
     ctx = win.inspector.frf_ctx
 
-    win.view_manager.get(win.view_manager.active).attached_file_ids = []
+    state.attached_file_ids = []
+    win._project_analysis_attachments("frf", state)
     win._update_combos()
 
     assert ctx.pair() == (("source-a", "input"), ("source-a", "output"))
     assert state.panes[0].input_source == ("source-a", "input")
     assert state.panes[0].output_source == ("source-a", "output")
-    assert "当前时域 View 外" in ctx.combo_input.currentText()
+    assert "来源不可用" in ctx.combo_input.currentText()
     assert not ctx.btn_compute.isEnabled()
-    assert "当前时域 View" in ctx.validation_message()
+    assert "当前分析 View" in ctx.validation_message()
 
 
 def test_frf_candidate_forwards_both_real_times_and_one_physical_mask(
@@ -572,7 +578,9 @@ def test_project_restore_recomputes_directional_frf_pair(
     qtbot.addWidget(source)
     source._load_one(str(csv_path))
     old_fid = next(iter(source.files))
-    pane = source.analysis_managers["frf"].get(0).panes[0]
+    frf_state = source.analysis_managers["frf"].get(0)
+    frf_state.attached_file_ids = [old_fid]
+    pane = frf_state.panes[0]
     pane.input_source = (old_fid, "input")
     pane.output_source = (old_fid, "output")
     # Use the real toolbar/card path: saving captures live controls back to
@@ -618,6 +626,7 @@ def test_project_restore_dispatches_each_complete_frf_pane(
     source._load_one(str(csv_path))
     old_fid = next(iter(source.files))
     state = source.analysis_managers["frf"].get(0)
+    state.attached_file_ids = [old_fid]
     state.panes[0].input_source = (old_fid, "input")
     state.panes[0].output_source = (old_fid, "output")
     assert state.add_pane() is True
@@ -658,7 +667,9 @@ def test_project_restore_does_not_relabel_generated_axis_as_real(
     source._load_one(str(csv_path))
     old_fid = next(iter(source.files))
     assert source.files[old_fid]._time_source == "generated"
-    pane = source.analysis_managers["frf"].get(0).panes[0]
+    frf_state = source.analysis_managers["frf"].get(0)
+    frf_state.attached_file_ids = [old_fid]
+    pane = frf_state.panes[0]
     pane.input_source = (old_fid, "input")
     pane.output_source = (old_fid, "output")
     source.save_project(project)

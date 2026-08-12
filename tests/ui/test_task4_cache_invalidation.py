@@ -98,6 +98,7 @@ def test_apply_custom_xaxis_invalidates_fft_time_analysis_cache(qtbot):
         statusBar=types.SimpleNamespace(showMessage=lambda *_args: None),
         _hint_focused_pane=lambda _action: True,
         toast=lambda *_args: None,
+        _clear_analysis_section_pins=lambda *_args, **_kwargs: None,
     )
 
     MainWindow._apply_xaxis(mw)
@@ -244,6 +245,9 @@ class TestFallbackKeyAlignsPrimaryKey:
         from mf4_analyzer.ui.main_window._analysis_mixin import AnalysisMixin
 
         class _StubCtx:
+            def compute_params(self_):
+                return dict(self._PARAMS)
+
             def get_params(self_):
                 return dict(self._PARAMS)
 
@@ -270,6 +274,10 @@ class TestFallbackKeyAlignsPrimaryKey:
 
             def _pane_time_range_for(self_, section, pane_idx):
                 return self._PARAMS['time_range']
+
+            def _analysis_ctx(self_, section):
+                assert section == 'fft_time'
+                return self_.inspector.fft_time_ctx
 
         mw = _StubMW()
         p = dict(self._PARAMS)
@@ -359,6 +367,7 @@ class TestFallbackKeyAlignsPrimaryKey:
                     'fft_time': types.SimpleNamespace(
                         active=0,
                         get=lambda _active: types.SimpleNamespace(
+                            view_id='probe-view',
                             panes=[
                                 types.SimpleNamespace(sources=[('f0', 'sig0')]),
                                 types.SimpleNamespace(sources=[('f1', 'sig1')]),
@@ -660,6 +669,6 @@ def test_close_all_clears_fft_time_coordinator_pending(qapp, qtbot):
     w._fft_time_coordinator._pending[999] = {"fid": fid, "ch": "ACC"}
     assert w._fft_time_coordinator._pending  # 前置：确有 pending
 
-    w.close_all()
+    w.close_all(force=True)
 
     assert w._fft_time_coordinator._pending == {}

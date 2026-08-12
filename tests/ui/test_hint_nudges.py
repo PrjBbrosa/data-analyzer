@@ -326,8 +326,8 @@ def test_view_compact_tabs_is_a_shipped_time_scoped_discovery_hint():
     assert hint.surface == "discovery"
     assert hint.scope == "chart"
     assert hint.ship == "now"  # the 12-View bar is live; staging hides it
-    # The tab bar exists in the analysis sections too, but the 12-View cap (and
-    # the confusion) is the time domain's -- matching the quickref 时域 View row.
+    # Analysis sections share the same 12-View ceiling, but this discovery
+    # hint stays time-scoped to match the quickref 时域 View row.
     assert hint.modes == frozenset({"time"})
     assert hint.plot_modes == frozenset()  # subplot AND overlay have the bar
     assert hints.hint_display_width(hint.text) <= hints.HINT_MAX_WIDTH
@@ -344,6 +344,7 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "chart.copy_image",
         "chart.right_click_menu",
         "channel.right_click",
+        "file.scope_follow",
         "coaxis.merge",
         "view.compact_tabs",
         "chart.custom_action_slot",

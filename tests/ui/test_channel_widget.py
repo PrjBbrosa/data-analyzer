@@ -236,6 +236,107 @@ def test_channel_tree_has_compact_time_visibility_column(qapp, qtbot):
     assert widget.tree.header().sectionSize(2) == 42
 
 
+def test_projection_role_updates_header_and_checkable_flags(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    _add_attached_file(widget, "f0", _MultiChannelFileData())
+    channel = widget._file_items["f0"].child(0)
+    assert channel is not None
+    assert channel.flags() & Qt.ItemIsUserCheckable
+
+    widget.set_projection_role("fft_sources")
+    assert widget.tree.headerItem().text(2) == "来源"
+    assert channel.flags() & Qt.ItemIsUserCheckable
+
+    widget.set_projection_role("analysis_candidates")
+    assert widget.tree.headerItem().text(2) == "移出"
+    assert not (channel.flags() & Qt.ItemIsUserCheckable)
+    file_item = widget._file_items["f0"]
+    assert not (file_item.flags() & Qt.ItemIsUserCheckable)
+
+    widget.set_projection_role("time")
+    assert widget.tree.headerItem().text(2) == "显示"
+    assert channel.flags() & Qt.ItemIsUserCheckable
+    assert file_item.flags() & Qt.ItemIsUserCheckable
+
+
+def test_set_projection_role_repeat_call_skips_replay_but_role_change_still_replays(
+    qapp, qtbot, monkeypatch,
+):
+    """A same-role call is a no-op early-return; a real role change still
+    replays icons/chrome/empty-state in full."""
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    _add_attached_file(widget, "f0", _MultiChannelFileData())
+
+    widget.set_projection_role("fft_sources")
+
+    calls = []
+    monkeypatch.setattr(
+        widget, "_refresh_visibility_icons", lambda: calls.append("icons")
+    )
+    monkeypatch.setattr(
+        widget, "_sync_projection_chrome", lambda: calls.append("chrome")
+    )
+    monkeypatch.setattr(
+        widget, "_sync_empty_state", lambda: calls.append("empty")
+    )
+
+    # Redundant call: (role, checks_editable, visibility_available) is
+    # unchanged, so this must hit the early-return path.
+    widget.set_projection_role("fft_sources")
+    assert calls == []
+
+    # A genuine role change must still do the full replay.
+    widget.set_projection_role("analysis_candidates")
+    assert calls == ["icons", "chrome", "empty"]
+
+
+def test_projection_role_repeat_call_then_rebuilt_rows_stay_non_checkable(
+    qapp, qtbot,
+):
+    """Guard against a stale early-return cache: a redundant same-role call
+    must not let later-added/rebuilt rows slip past analysis_candidates'
+    non-checkable chrome. ``add_file`` always calls ``_sync_projection_chrome``
+    directly after building new rows and must not be shadowed by the cache
+    ``set_projection_role`` keeps for its own no-op short-circuit."""
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    _add_attached_file(widget, "f0", _MultiChannelFileData())
+
+    widget.set_projection_role("analysis_candidates")
+    # Redundant call with the same role: expected to early-return internally.
+    widget.set_projection_role("analysis_candidates")
+
+    channel = widget._file_items["f0"].child(0)
+    assert not (channel.flags() & Qt.ItemIsUserCheckable)
+
+    # New rows always start checkable; add_file's own explicit chrome sync
+    # must still flip them non-checkable despite the cached "no change"
+    # signature on set_projection_role.
+    _add_attached_file(widget, "f1", _MultiChannelFileData())
+    new_channel = widget._file_items["f1"].child(0)
+    new_file_item = widget._file_items["f1"]
+    assert not (new_channel.flags() & Qt.ItemIsUserCheckable)
+    assert not (new_file_item.flags() & Qt.ItemIsUserCheckable)
+
+
+def test_set_projection_role_repeat_call_keeps_empty_state_text_stable(
+    qapp, qtbot,
+):
+    """A no-op early-return must not leave the empty-state copy stale."""
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.set_empty_state_context(section_label="频域", view_name="View 2")
+
+    widget.set_projection_role("fft_sources")
+    text_before = widget.empty_state.text()
+    assert "频域 · View 2" in text_before
+
+    widget.set_projection_role("fft_sources")
+    assert widget.empty_state.text() == text_before
+
+
 def test_time_visibility_icons_are_distinct(qapp):
     opened = Icons.eye_open()
     closed = Icons.eye_closed()

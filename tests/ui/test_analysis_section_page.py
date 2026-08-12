@@ -160,6 +160,44 @@ def test_compare_row_has_bar_chrome_like_time_dock(page):
     assert "border-top" in _COMPARE_ROW_QSS
 
 
+@pytest.mark.parametrize(
+    ("section", "label", "factory"),
+    [
+        ("fft", "频谱", "_FakeLineCard"),
+        ("fft_time", "时频", "_FakeSliceCard"),
+        ("frf", "频响", "_FakeFrfCard"),
+        ("order", "阶次", "_FakeCard"),
+    ],
+)
+def test_analysis_section_tabbar_shows_quiet_section_anchor(
+    qapp, section, label, factory,
+):
+    from PyQt5.QtWidgets import QLabel, QWidget
+
+    card_factory = {
+        "_FakeCard": _FakeCard,
+        "_FakeLineCard": _FakeLineCard,
+        "_FakeFrfCard": _FakeFrfCard,
+        "_FakeSliceCard": _FakeSliceCard,
+    }[factory]
+    page = AnalysisSectionPage(
+        section=section,
+        manager=_make_manager(),
+        card_factory=card_factory,
+    )
+    page.resize(800, 500)
+    page.show()
+    try:
+        anchor = page.tabbar.findChild(QWidget, "viewSectionAnchor")
+        text = page.tabbar.findChild(QLabel, "viewSectionAnchorLabel")
+        assert anchor is not None
+        assert text is not None
+        assert text.text() == label
+        assert anchor.accessibleName() == f"当前区域：{label}"
+    finally:
+        page.deleteLater()
+
+
 def test_starts_with_one_pane(page):
     assert page.pane_count() == 1
     assert page.focused_index() == 0

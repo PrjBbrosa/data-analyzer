@@ -431,6 +431,14 @@ class FrfContextual(QWidget):
         self.lbl_facts_placeholder = QLabel(_FACTS_PLACEHOLDER, facts_card)
         self.lbl_facts_placeholder.setObjectName("frfFactsPlaceholder")
         self.lbl_facts_placeholder.setWordWrap(True)
+        # 272px 宽的 Inspector 下这段占位文案必换行到两行，但换行高度只走
+        # height-for-width，而 QStackedLayout 不传递 hfw——页面的 plain
+        # sizeHint 会少算第二行,首开时整页预算差 ~17px,全被压进
+        # QFormLayout 的行距里。把两行高度提进 minimumHeight,让 plain
+        # hint 从源头算够。按 fontMetrics 取值,不硬编码像素。
+        self.lbl_facts_placeholder.setMinimumHeight(
+            2 * self.lbl_facts_placeholder.fontMetrics().lineSpacing()
+        )
         facts_layout.addWidget(self.lbl_facts_placeholder)
         self.lbl_effective_facts = QLabel("", facts_card)
         self.lbl_effective_facts.setObjectName("frfEffectiveFacts")
@@ -572,7 +580,7 @@ class FrfContextual(QWidget):
             if source is None or source in item_sources:
                 continue
             label = self._channel_labels.get(source, source[1])
-            items.append((f"{label}（当前时域 View 外）", source))
+            items.append((f"{label}（来源不可用）", source))
             item_sources.add(source)
         old_input_blocked = self.combo_input.blockSignals(True)
         old_output_blocked = self.combo_output.blockSignals(True)
@@ -600,7 +608,7 @@ class FrfContextual(QWidget):
         if not roles:
             return ""
         return (
-            f"当前时域 View 未包含原{'、'.join(roles)}通道，"
+            f"当前分析 View 未包含原{'、'.join(roles)}通道（来源不可用），"
             "请重新选择输入和输出。"
         )
 
@@ -846,6 +854,13 @@ class FrfContextual(QWidget):
                 self.compute_params_changed.emit(compute)
             if display != before_display:
                 self.display_params_changed.emit(display)
+
+    def reset_to_defaults(self) -> None:
+        """Restore construction-time defaults for a blank analysis View."""
+        bar = getattr(self, "preset_bar", None)
+        defaults = getattr(bar, "_default_params", None) if bar is not None else None
+        if isinstance(defaults, dict) and defaults:
+            self.apply_params(dict(defaults))
 
     def _collect_preset(self) -> dict:
         return self.current_params()

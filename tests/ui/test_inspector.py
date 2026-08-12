@@ -236,6 +236,63 @@ def test_frf_contextual_emits_user_compute_and_display_changes_but_restore_is_si
     assert display_seen[-1]["frequency_scale"] == "linear"
 
 
+@pytest.mark.parametrize(
+    "class_name, display_change, compute_change",
+    [
+        (
+            "FFTContextual",
+            lambda ctx: ctx.combo_amp_y.setCurrentText(
+                "dB" if ctx.combo_amp_y.currentText() != "dB" else "Linear"),
+            lambda ctx: ctx.combo_avg_mode.setCurrentText("线性平均"),
+        ),
+        (
+            "FFTTimeContextual",
+            lambda ctx: ctx.combo_amp_unit.setCurrentText(
+                "dB" if ctx.combo_amp_unit.currentText() != "dB" else "Linear"),
+            lambda ctx: ctx.combo_win.setCurrentText("hamming"),
+        ),
+        (
+            "OrderContextual",
+            lambda ctx: ctx.combo_amp_unit.setCurrentText(
+                "dB" if ctx.combo_amp_unit.currentText() != "dB" else "Linear"),
+            lambda ctx: ctx.spin_samples_per_rev.setValue(512),
+        ),
+    ],
+)
+def test_analysis_contextuals_separate_layers_and_classify_user_edits(
+    qapp, class_name, display_change, compute_change,
+):
+    """P1: cache inputs and render inputs have disjoint ownership.
+
+    This is intentionally contextual-level: the integration counterpart pins
+    the MainWindow's immediate active-View write and zero-worker behavior.
+    """
+    from mf4_analyzer.ui import inspector_sections
+
+    ctx = getattr(inspector_sections, class_name)()
+    compute_seen = []
+    display_seen = []
+    ctx.compute_params_changed.connect(compute_seen.append)
+    ctx.display_params_changed.connect(display_seen.append)
+
+    compute = ctx.compute_params()
+    display = ctx.display_params()
+    assert compute
+    assert display
+    assert set(compute).isdisjoint(display)
+    assert ctx.current_params() == {**compute, **display}
+    assert ctx.get_params() == ctx.current_params()
+
+    display_change(ctx)
+    qapp.processEvents()
+    assert display_seen
+    assert not compute_seen
+
+    compute_change(ctx)
+    qapp.processEvents()
+    assert compute_seen
+
+
 def test_frf_contextual_presets_signals_and_inspector_range_reparent(qtbot):
     from mf4_analyzer.ui.inspector import Inspector
 
@@ -280,10 +337,10 @@ def test_frf_candidate_scope_refresh_keeps_visible_pair_and_blocks_compute(qtbot
     ctx.set_channel_candidates([candidates[0]])
 
     assert ctx.pair() == (("source-a", "input"), ("source-a", "output"))
-    assert "当前时域 View 外" in ctx.combo_output.currentText()
+    assert "来源不可用" in ctx.combo_output.currentText()
     assert not ctx.btn_compute.isEnabled()
     assert not ctx.btn_view_time.isEnabled()
-    assert "当前时域 View" in ctx.validation_message()
+    assert "来源不可用" in ctx.validation_message()
 
 
 def test_frf_valid_pair_stays_computable_after_parameter_or_preset_change(qtbot):
@@ -3790,23 +3847,22 @@ def test_fft_time_preview_honors_selected_time_range(qtbot):
     assert (tx0, tx1) == pytest.approx((1.0, 2.0), abs=0.02)
 
 
-# ---- Regression: FFT time-window drag must not leak chk_range into time ----
+# ---- Regression: explicit set_range_from_span must not leak chk_range ----
 #
 # Bug: the SINGLE shared ``chk_range`` QCheckBox is reparented across
 # time/fft/fft_time/order modes (inspector._place_range_group_for_mode).
-# An FFT time-window region drag routes through set_range_from_span, which
-# force-checks the box; because the instance is shared, the checked state
-# leaked into Time-Domain when the user switched back. The fix decouples the
-# checked flag per mode (PersistentTop.checkout_range_for_mode), invoked on
-# every mode switch. These tests pin both halves: the drag still enables the
-# range for the FFT compute (within FFT mode) AND the box does NOT arrive
-# checked in Time-Domain after a mode switch.
+# Explicit arming (「最大」/ FRF「取时域范围」) routes through
+# set_range_from_span, which force-checks the box; because the instance is
+# shared, the checked state used to leak into Time-Domain on switch-back.
+# Preview pan/zoom no longer calls set_range_from_span (manual check, same
+# as Time-Domain); these tests still pin per-mode isolation for the explicit
+# arming API.
 
 
 def test_fft_preview_span_does_not_leak_chk_range_into_time(qapp):
-    """An FFT time-window drag (set_range_from_span) must enable the range
-    while FFT mode is active, but switching back to time must restore the
-    time-domain checkbox to its own (unchecked) state."""
+    """Explicit set_range_from_span in FFT must enable the range while FFT is
+    active, but switching back to time must restore time's own unchecked
+    state."""
     insp = Inspector()
     top = insp.top
 
@@ -3814,18 +3870,17 @@ def test_fft_preview_span_does_not_leak_chk_range_into_time(qapp):
     insp.set_mode('time')
     assert not top.range_enabled()
 
-    # Enter FFT mode and drag a time window -> stages start/end AND checks the
-    # box so the FFT compute (which reads range_enabled()) uses the window.
+    # Enter FFT mode and explicitly arm a window (「最大」/ tests use this API).
     insp.set_mode('fft')
     top.set_range_from_span(2.0, 4.0)
     assert top.range_enabled()
     assert top.range_values() == (2.0, 4.0)
 
     # Switch back to time-domain: the shared checkbox must NOT carry the FFT
-    # drag's checked state. This is the bug under regression.
+    # arming state's checked flag. This is the bug under regression.
     insp.set_mode('time')
     assert not top.range_enabled(), (
-        "FFT time-window drag leaked chk_range into Time-Domain mode"
+        "FFT set_range_from_span leaked chk_range into Time-Domain mode"
     )
     # On this branch the 开始/结束 row is unconditionally visible; the
     # per-mode checkout must not break that (the spin row stays shown).
@@ -3859,10 +3914,10 @@ def test_time_domain_chk_range_survives_round_trip_through_fft(qapp):
     assert top.range_values() == (1.0, 3.0)
 
 
-def test_main_window_fft_preview_path_does_not_check_time_box(qapp, qtbot):
-    """End-to-end: drive the real _on_fft_preview_range_changed handler in FFT
-    mode, then switch the inspector back to time-domain; the time-domain
-    checkbox must remain unchecked (no leak through the live signal path)."""
+def test_main_window_fft_preview_path_does_not_auto_check(qapp, qtbot):
+    """Preview pan/zoom drafts start/end but does not arm「使用选定时间范围」
+    (manual check, aligned with Time-Domain). Switching back to time must
+    also remain unchecked (no leak)."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
@@ -3879,9 +3934,18 @@ def test_main_window_fft_preview_path_does_not_check_time_box(qapp, qtbot):
     win.chart_stack.set_mode('fft')
     win.inspector.set_mode('fft')
     page = win.chart_stack.page_fft
-    handled = win._on_fft_preview_range_changed(page.focused_index(), 2.0, 4.0)
+    mgr = win.analysis_managers['fft']
+    state = mgr.get(mgr.active)
+    pane_idx = page.focused_index()
+    assert state.panes[pane_idx].time_range is None
+
+    handled = win._on_fft_preview_range_changed(pane_idx, 2.0, 4.0)
     assert handled is True
-    assert top.range_enabled()  # FFT compute window is armed within FFT mode.
+    assert top.range_values() == (2.0, 4.0)
+    assert not top.range_enabled(), (
+        "FFT preview zoom must not auto-check「使用选定时间范围」"
+    )
+    assert state.panes[pane_idx].time_range is None
 
     # Switch back to time-domain: the shared checkbox must not be checked.
     win.chart_stack.set_mode('time')
@@ -3889,6 +3953,74 @@ def test_main_window_fft_preview_path_does_not_check_time_box(qapp, qtbot):
     assert not top.range_enabled(), (
         "live FFT-preview path leaked chk_range into Time-Domain mode"
     )
+
+
+def test_fft_preview_zoom_updates_pane_time_range_when_checked(qapp, qtbot):
+    """Once the range checkbox is armed, preview zoom follows into
+    pane.time_range (live window tracking while checked)."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    top = win.inspector.top
+
+    win.chart_stack.set_mode('fft')
+    win.inspector.set_mode('fft')
+    page = win.chart_stack.page_fft
+    pane_idx = page.focused_index()
+    mgr = win.analysis_managers['fft']
+    state = mgr.get(mgr.active)
+
+    # Explicit arm (blockSignals) so enabling does not pull a blank canvas xlim.
+    top.set_range_from_span(1.0, 2.0)
+    win._capture_analysis_time_range('fft', state, pane_idx=pane_idx)
+    assert state.panes[pane_idx].time_range == (1.0, 2.0)
+
+    handled = win._on_fft_preview_range_changed(pane_idx, 3.0, 5.0)
+    assert handled is True
+    assert top.range_enabled()
+    assert top.range_values() == (3.0, 5.0)
+    assert state.panes[pane_idx].time_range == (3.0, 5.0)
+
+
+def test_fft_uncheck_range_clears_pane_and_refreshes_preview(qapp, qtbot):
+    """Unchecking in FFT clears pane.time_range and refreshes the time
+    preview (full span), then resets the preview X to data extents."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    top = win.inspector.top
+
+    win.chart_stack.set_mode('fft')
+    win.inspector.set_mode('fft')
+    page = win.chart_stack.page_fft
+    pane_idx = page.focused_index()
+    canvas = page.pane_canvas(pane_idx)
+    mgr = win.analysis_managers['fft']
+    state = mgr.get(mgr.active)
+
+    top.set_range_from_span(2.0, 4.0)
+    win._capture_analysis_time_range('fft', state, pane_idx=pane_idx)
+    assert state.panes[pane_idx].time_range == (2.0, 4.0)
+
+    refresh_calls = []
+    reset_calls = []
+    win._refresh_fft_time_preview = (
+        lambda clear_spectrum=True: refresh_calls.append(clear_spectrum)
+    )
+    canvas._reset_time_preview_to_extents = (
+        lambda: reset_calls.append(True)
+    )
+
+    # Drive the live toggled path (not blockSignals).
+    top.chk_range.setChecked(False)
+    qapp.processEvents()
+
+    assert not top.range_enabled()
+    assert state.panes[pane_idx].time_range is None
+    assert refresh_calls == [False]
+    assert reset_calls == [True]
 
 
 # ---- 「最大」 (maximize time range) button ----

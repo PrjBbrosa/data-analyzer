@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>TraceLab · Section / View 定位方案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1b2738;
+      --muted: #66758a;
+      --line: #d7e0eb;
+      --soft-line: #eaf0f6;
+      --paper: #ffffff;
+      --canvas: #f6f9fc;
+      --page: #eaf0f7;
+      --time: #2774d8;
+      --fft: #7958c7;
+      --fft-time: #168b88;
+      --frf: #b65791;
+      --order: #d78228;
+      --view-1: #2d7ff9;
+      --view-2: #e8590c;
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background:
+        radial-gradient(960px 440px at 50% -80px, #ffffff 0%, rgba(255,255,255,.22) 58%, transparent 100%),
+        var(--page);
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    button { font: inherit; }
+    button:focus-visible { outline: 3px solid rgba(39, 116, 216, .32); outline-offset: 2px; }
+    .page { width: min(1640px, calc(100vw - 44px)); margin: 0 auto; padding: 32px 0 52px; }
+    .intro { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px; align-items: end; margin-bottom: 22px; }
+    .eyebrow { color: #506178; font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .1em; text-transform: uppercase; }
+    h1 { margin: 7px 0 5px; font-size: clamp(24px, 2.2vw, 34px); letter-spacing: -.035em; line-height: 1.12; }
+    .lede { max-width: 74ch; margin: 0; color: var(--muted); font-size: 14px; }
+    .rule { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border: 1px solid #ccd8e6; border-radius: 10px; background: rgba(255,255,255,.7); color: #465872; font-size: 12px; white-space: nowrap; }
+    .rule svg { width: 15px; height: 15px; color: var(--fft); }
+    .concept-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; align-items: start; }
+    .concept { overflow: hidden; min-width: 0; border: 1px solid #cbd7e5; border-radius: var(--radius); background: rgba(255,255,255,.78); box-shadow: 0 14px 34px rgba(38, 54, 78, .08); }
+    .concept-header { min-height: 138px; padding: 17px 18px 15px; border-bottom: 1px solid var(--soft-line); background: linear-gradient(180deg, #ffffff, #fbfcfe); }
+    .concept-tag { display: flex; align-items: center; gap: 7px; color: #53667d; font: 700 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .075em; text-transform: uppercase; }
+    .concept-tag i { width: 7px; height: 7px; border-radius: 50%; background: var(--fft); box-shadow: 0 0 0 4px rgba(121,88,199,.12); }
+    .concept h2 { margin: 10px 0 5px; font-size: 17px; letter-spacing: -.02em; }
+    .concept p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .recommend { display: inline-flex; margin-top: 9px; padding: 3px 7px; border-radius: 5px; background: #edf3ff; color: #245fbd; font-size: 10.5px; font-weight: 720; }
+
+    /* Shared miniature TraceLab stage. */
+    .app { --accent: var(--fft); --tint: #f4f0fc; height: 408px; margin: 14px; overflow: hidden; border: 1px solid #b9c7d7; border-radius: 10px; background: var(--paper); box-shadow: 0 8px 20px rgba(32,49,73,.13); display: grid; grid-template-rows: 29px 1fr 42px 20px; }
+    .windowbar { display: flex; align-items: center; gap: 5px; padding: 0 9px; border-bottom: 1px solid #dce5ee; background: #f9fbfd; }
+    .traffic { display: flex; gap: 4px; }
+    .traffic i { width: 7px; height: 7px; border-radius: 50%; background: #ff625d; }
+    .traffic i:nth-child(2) { background: #ffbd43; }.traffic i:nth-child(3) { background: #31c755; }
+    .window-title { margin-left: 4px; color: #5b6a7c; font-size: 9px; font-weight: 650; }
+    .mode-nav { margin-left: auto; display: flex; align-items: stretch; gap: 1px; height: 100%; }
+    .mode-nav button { position: relative; display: grid; place-items: center; width: 25px; padding: 0; border: 0; border-radius: 0; color: #7a8797; background: transparent; cursor: pointer; }
+    .mode-nav button:hover { background: #eef3f9; color: #3d5068; }
+    .mode-nav button.active { color: var(--accent); }
+    .mode-nav button.active::after { position: absolute; right: 4px; bottom: 0; left: 4px; height: 2px; border-radius: 2px 2px 0 0; background: var(--accent); content: ""; }
+    .mode-nav svg, .mode-glyph svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+    .workbench { display: grid; min-height: 0; grid-template-columns: 58px minmax(0, 1fr) 82px; }
+    .left-rail { padding: 10px 7px; border-right: 1px solid #e2e9f1; background: #fbfcfe; }
+    .rail-label { margin: 0 0 7px; color: #95a0ae; font-size: 7.5px; font-weight: 750; letter-spacing: .08em; }
+    .rail-line { height: 5px; margin-bottom: 6px; border-radius: 3px; background: #dfe7f0; }.rail-line.short { width: 72%; }.rail-line.selected { background: var(--accent); }
+    .plot { position: relative; overflow: hidden; min-width: 0; background: var(--canvas); }
+    .plot::before { position: absolute; inset: 14px 14px 20px 18px; background-image: linear-gradient(#e5ebf3 1px, transparent 1px), linear-gradient(90deg, #e5ebf3 1px, transparent 1px); background-size: 24px 20px; content: ""; }
+    .plot-title { position: absolute; top: 10px; left: 14px; color: #516176; font: 650 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .plot-unit { position: absolute; right: 12px; bottom: 7px; color: #8d9aaa; font-size: 8px; }
+    .wave { position: absolute; inset: 30px 10px 17px 14px; width: calc(100% - 24px); height: calc(100% - 47px); }
+    .wave path.main { fill: none; stroke: var(--accent); stroke-width: 2.2; }.wave path.ghost { fill: none; stroke: #b5c2d1; stroke-width: 1.1; }
+    .crosshair { position: absolute; top: 46px; bottom: 20px; left: 52%; width: 1px; background: rgba(72,92,119,.4); }.crosshair::after { position: absolute; top: 44%; left: -3px; width: 7px; height: 7px; border: 2px solid var(--accent); border-radius: 50%; background: #fff; content: ""; }
+    .inspector { padding: 10px 8px; border-left: 1px solid #e2e9f1; background: #fbfcfe; }
+    .inspector h3 { margin: 0 0 9px; color: #67768a; font-size: 8px; font-weight: 750; letter-spacing: .08em; }
+    .field { display: grid; grid-template-columns: 1fr; gap: 3px; margin-bottom: 8px; }.field span { color: #8090a2; font-size: 7.5px; }.field b { padding: 4px 5px; border: 1px solid #d6e0eb; border-radius: 4px; background: #fff; color: #4d5d71; font: 600 8px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .contextbar { position: relative; display: flex; align-items: center; min-width: 0; border-top: 1px solid #cdd9e5; background: #fbfcff; }
+    .contextbar button { border: 0; background: transparent; cursor: pointer; }.contextbar button:hover { background: rgba(47,67,93,.06); }
+    .view-tabs { display: flex; align-items: stretch; height: 100%; min-width: 0; }.view-tab { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; color: #64748a; font-size: 9px; white-space: nowrap; }.view-tab.active { color: #1f2d41; font-weight: 700; background: #fff; box-shadow: inset 0 -2px 0 var(--accent); }.view-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--view-1); }.view-tab:nth-child(2) .view-dot { background: var(--view-2); }.new-view { width: 24px; color: #53657a; font-size: 15px; }.status { display: flex; align-items: center; justify-content: space-between; padding: 0 8px; border-top: 1px solid #e7edf4; background: #f7f9fc; color: #7a899a; font-size: 8px; }.status b { color: #4c657f; font-weight: 650; }
+
+    /* A: a quiet, named location anchor. */
+    .anchor { display: flex; align-items: stretch; align-self: stretch; flex: 0 0 auto; border-right: 1px solid #dfe7f0; background: var(--tint); }
+    .anchor::before { width: 3px; background: var(--accent); content: ""; }.anchor-main { display: inline-flex; align-items: center; gap: 5px; padding: 0 9px 0 7px; color: #334156; font-size: 9px; font-weight: 750; }.anchor .mode-glyph { color: var(--accent); }.anchor .mode-glyph svg { width: 13px; height: 13px; }
+    .a .contextbar .view-tabs { padding-left: 3px; }.a .view-tab { padding-inline: 7px; }
+
+    /* B: a compact instrument nameplate, deliberately more assertive. */
+    .b .app { grid-template-rows: 29px 1fr 45px 20px; }.nameplate { display: grid; grid-template-columns: 39px minmax(0,1fr); width: 100%; height: 100%; background: #fbfcfe; }.plate-code { display: grid; place-items: center; color: white; background: var(--accent); font: 750 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .09em; }.plate-content { display: flex; align-items: center; min-width: 0; padding: 0 7px; border-right: 1px solid #dfe7f0; background: linear-gradient(90deg, var(--tint), #fbfcfe 76%); }.plate-content strong { display: block; color: #2c3b50; font-size: 9px; }.plate-content span { display: block; margin-top: 1px; color: #748398; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }.b .contextbar { display: grid; grid-template-columns: 120px minmax(0,1fr) 24px; }.b .view-tab { padding-inline: 7px; }
+
+    /* C: a structured path; strongest verbal disambiguation. */
+    .crumbs { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; padding: 0 8px; border-right: 1px solid #dfe7f0; color: #78879a; font-size: 8.5px; }.crumbs b { color: #314055; font-weight: 730; }.crumbs .crumb-mode { color: var(--accent); font-weight: 750; }.crumbs i { width: 3px; height: 3px; border-radius: 50%; background: #aebaca; }.c .contextbar .view-tabs { padding-left: 3px; }.c .view-tab { padding-inline: 7px; }.c .app { grid-template-rows: 29px 1fr 42px 20px; }
+
+    .concept-note { padding: 0 18px 17px; color: #65758a; font-size: 11px; }.concept-note strong { color: #2e4058; }
+    .footnote { margin: 20px 0 0; color: #6d7d91; font-size: 12px; }.footnote b { color: #415269; }
+    @media (max-width: 1250px) { .concept-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.concept:last-child { grid-column: 1 / -1; width: calc(50% - 9px); } }
+    @media (max-width: 760px) { .page { width: min(100% - 24px, 560px); padding-top: 22px; }.intro { grid-template-columns: 1fr; gap: 13px; }.rule { width: fit-content; }.concept-grid { grid-template-columns: 1fr; }.concept:last-child { grid-column: auto; width: auto; }.app { height: 390px; margin: 10px; }.concept-header { min-height: auto; }.workbench { grid-template-columns: 48px minmax(0,1fr) 72px; }.b .contextbar { grid-template-columns: 104px minmax(0,1fr) 24px; } }
+    @media (prefers-reduced-motion: no-preference) { .mode-nav button, .view-tab { transition: color 150ms ease, background-color 150ms ease, box-shadow 150ms ease; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="intro">
+      <div>
+        <div class="eyebrow">TraceLab / Navigation study / 2026-08-11</div>
+        <h1>Section 切换后，View 条该怎样告诉人「我在这里」？</h1>
+        <p class="lede">三张原型共享相同的工作区和相同的 <code>View 1</code>，只测试不同的定位语言。点击各卡右上角的 section 图标，以及底部 View 标签，观察它们是否仍能在高频切换时保住方位感。</p>
+      </div>
+      <div class="rule" aria-label="评估约束：不改变 View 数据模型">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h4l2-6 4 12 2-6h4"/></svg>
+        不改 View 名称与持久化，只改变展示层
+      </div>
+    </header>
+
+    <section class="concept-grid" aria-label="三种 Section View 定位方案">
+      <article class="concept a" data-concept="a">
+        <header class="concept-header">
+          <div class="concept-tag"><i></i> Option A · Quiet anchor</div>
+          <h2>安静的当前位置锚点</h2>
+          <p>View 条属于当前 section；用“图标 + 名称 + 细 accent”交代位置。View 继续只表达本 section 内的工作台编号。</p>
+          <span class="recommend">推荐：信息够用，侵入最小</span>
+        </header>
+        <div class="app" data-mode="fft">
+          <div class="windowbar">
+            <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span><span class="window-title">TraceLab · <span data-mode-title>频谱</span></span>
+            <nav class="mode-nav" aria-label="切换分析 section">
+              <button type="button" data-mode-button="time" aria-label="时域" title="时域"><svg viewBox="0 0 24 24"><path d="M3 12c3 0 3-6 6-6s3 12 6 12 3-6 6-6"/></svg></button>
+              <button type="button" data-mode-button="fft" aria-label="频谱" title="频谱"><svg viewBox="0 0 24 24"><path d="M4 18V6m4 12V9m4 9V4m4 14v-7m4 7V8"/></svg></button>
+              <button type="button" data-mode-button="fft-time" aria-label="时频" title="时频"><svg viewBox="0 0 24 24"><path d="M5 4v16M9 5v14m4-11v8m4-11v8m4-11v14"/></svg></button>
+              <button type="button" data-mode-button="frf" aria-label="FRF" title="FRF"><svg viewBox="0 0 24 24"><path d="M4 16c4-8 6 4 10-6 2-4 3-3 6-3"/></svg></button>
+              <button type="button" data-mode-button="order" aria-label="阶次" title="阶次"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 5v7l5 3"/></svg></button>
+            </nav>
+          </div>
+          <div class="workbench"><aside class="left-rail"><p class="rail-label">通道</p><div class="rail-line selected"></div><div class="rail-line"></div><div class="rail-line short"></div><div class="rail-line"></div></aside><div class="plot"><span class="plot-title" data-plot-title>频谱 · A-Drive</span><span class="plot-unit">Hz</span><svg class="wave" viewBox="0 0 240 170" preserveAspectRatio="none" aria-hidden="true"><path class="ghost" d="M0 130 L24 126 45 118 67 121 89 100 112 107 137 68 159 112 185 92 206 104 240 48"/><path class="main" d="M0 138 C14 137 16 119 29 125 S43 135 55 116 S73 135 84 105 S101 131 115 85 S132 127 146 62 S160 117 176 91 S192 119 206 71 S222 105 240 45"/></svg><i class="crosshair"></i></div><aside class="inspector"><h3>显示</h3><div class="field"><span>范围</span><b>0–2 kHz</b></div><div class="field"><span>窗函数</span><b>Hann</b></div><div class="field"><span>平均</span><b>4</b></div></aside></div>
+          <div class="contextbar"><div class="anchor"><span class="anchor-main"><span class="mode-glyph" data-mode-icon></span><span data-mode-title>频谱</span></span></div><div class="view-tabs" aria-label="当前 section 的 View"><button class="view-tab active" type="button" title="频谱 · View 1"><i class="view-dot"></i>View 1</button><button class="view-tab" type="button" title="频谱 · View 2"><i class="view-dot"></i>View 2</button></div><button class="new-view" type="button" aria-label="新建 View" title="新建 View">+</button></div>
+          <div class="status"><span data-status>频谱 · View 1</span><b>12 通道</b></div>
+        </div>
+        <p class="concept-note"><strong>判断点：</strong>用户是否能在眼睛扫到底栏时，先读到“当前 section”，再读到 View 编号。</p>
+      </article>
+
+      <article class="concept b" data-concept="b">
+        <header class="concept-header">
+          <div class="concept-tag"><i></i> Option B · Instrument plate</div>
+          <h2>像仪器铭牌一样的 section</h2>
+          <p>把 section 做成固定的彩色信息块：缩写、名称、当前分析对象。适合一天里在分析 section 间极频繁跳转的操作者。</p>
+        </header>
+        <div class="app" data-mode="fft">
+          <div class="windowbar">
+            <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span><span class="window-title">TraceLab · <span data-mode-title>频谱</span></span>
+            <nav class="mode-nav" aria-label="切换分析 section">
+              <button type="button" data-mode-button="time" aria-label="时域" title="时域"><svg viewBox="0 0 24 24"><path d="M3 12c3 0 3-6 6-6s3 12 6 12 3-6 6-6"/></svg></button><button type="button" data-mode-button="fft" aria-label="频谱" title="频谱"><svg viewBox="0 0 24 24"><path d="M4 18V6m4 12V9m4 9V4m4 14v-7m4 7V8"/></svg></button><button type="button" data-mode-button="fft-time" aria-label="时频" title="时频"><svg viewBox="0 0 24 24"><path d="M5 4v16M9 5v14m4-11v8m4-11v8m4-11v14"/></svg></button><button type="button" data-mode-button="frf" aria-label="FRF" title="FRF"><svg viewBox="0 0 24 24"><path d="M4 16c4-8 6 4 10-6 2-4 3-3 6-3"/></svg></button><button type="button" data-mode-button="order" aria-label="阶次" title="阶次"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 5v7l5 3"/></svg></button>
+            </nav>
+          </div>
+          <div class="workbench"><aside class="left-rail"><p class="rail-label">通道</p><div class="rail-line selected"></div><div class="rail-line"></div><div class="rail-line short"></div><div class="rail-line"></div></aside><div class="plot"><span class="plot-title" data-plot-title>频谱 · A-Drive</span><span class="plot-unit">Hz</span><svg class="wave" viewBox="0 0 240 170" preserveAspectRatio="none" aria-hidden="true"><path class="ghost" d="M0 130 L24 126 45 118 67 121 89 100 112 107 137 68 159 112 185 92 206 104 240 48"/><path class="main" d="M0 138 C14 137 16 119 29 125 S43 135 55 116 S73 135 84 105 S101 131 115 85 S132 127 146 62 S160 117 176 91 S192 119 206 71 S222 105 240 45"/></svg><i class="crosshair"></i></div><aside class="inspector"><h3>显示</h3><div class="field"><span>范围</span><b>0–2 kHz</b></div><div class="field"><span>窗函数</span><b>Hann</b></div><div class="field"><span>平均</span><b>4</b></div></aside></div>
+          <div class="contextbar"><div class="nameplate"><div class="plate-code" data-mode-code>FFT</div><div class="plate-content"><div><strong data-mode-title>频谱</strong><span data-mode-detail>A-Drive · 0–2 kHz</span></div></div></div><div class="view-tabs" aria-label="当前 section 的 View"><button class="view-tab active" type="button" title="频谱 · View 1"><i class="view-dot"></i>View 1</button><button class="view-tab" type="button" title="频谱 · View 2"><i class="view-dot"></i>View 2</button></div><button class="new-view" type="button" aria-label="新建 View" title="新建 View">+</button></div>
+          <div class="status"><span data-status>频谱 · View 1</span><b>12 通道</b></div>
+        </div>
+        <p class="concept-note"><strong>判断点：</strong>定位会最快，但彩色铭牌是否比其余控制更抢眼？</p>
+      </article>
+
+      <article class="concept c" data-concept="c">
+        <header class="concept-header">
+          <div class="concept-tag"><i></i> Option C · Path language</div>
+          <h2>把位置写成一条短路径</h2>
+          <p>用文字而非色块表达层级：分析 / 频谱 / View。最不依赖色觉，但比 A 多一层阅读，适合把“View”明确理解成工作区的人。</p>
+        </header>
+        <div class="app" data-mode="fft">
+          <div class="windowbar">
+            <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span><span class="window-title">TraceLab · <span data-mode-title>频谱</span></span>
+            <nav class="mode-nav" aria-label="切换分析 section">
+              <button type="button" data-mode-button="time" aria-label="时域" title="时域"><svg viewBox="0 0 24 24"><path d="M3 12c3 0 3-6 6-6s3 12 6 12 3-6 6-6"/></svg></button><button type="button" data-mode-button="fft" aria-label="频谱" title="频谱"><svg viewBox="0 0 24 24"><path d="M4 18V6m4 12V9m4 9V4m4 14v-7m4 7V8"/></svg></button><button type="button" data-mode-button="fft-time" aria-label="时频" title="时频"><svg viewBox="0 0 24 24"><path d="M5 4v16M9 5v14m4-11v8m4-11v8m4-11v14"/></svg></button><button type="button" data-mode-button="frf" aria-label="FRF" title="FRF"><svg viewBox="0 0 24 24"><path d="M4 16c4-8 6 4 10-6 2-4 3-3 6-3"/></svg></button><button type="button" data-mode-button="order" aria-label="阶次" title="阶次"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 5v7l5 3"/></svg></button>
+            </nav>
+          </div>
+          <div class="workbench"><aside class="left-rail"><p class="rail-label">通道</p><div class="rail-line selected"></div><div class="rail-line"></div><div class="rail-line short"></div><div class="rail-line"></div></aside><div class="plot"><span class="plot-title" data-plot-title>频谱 · A-Drive</span><span class="plot-unit">Hz</span><svg class="wave" viewBox="0 0 240 170" preserveAspectRatio="none" aria-hidden="true"><path class="ghost" d="M0 130 L24 126 45 118 67 121 89 100 112 107 137 68 159 112 185 92 206 104 240 48"/><path class="main" d="M0 138 C14 137 16 119 29 125 S43 135 55 116 S73 135 84 105 S101 131 115 85 S132 127 146 62 S160 117 176 91 S192 119 206 71 S222 105 240 45"/></svg><i class="crosshair"></i></div><aside class="inspector"><h3>显示</h3><div class="field"><span>范围</span><b>0–2 kHz</b></div><div class="field"><span>窗函数</span><b>Hann</b></div><div class="field"><span>平均</span><b>4</b></div></aside></div>
+          <div class="contextbar"><div class="crumbs"><span>分析</span><i></i><b class="crumb-mode" data-mode-title>频谱</b><i></i><span>View</span></div><div class="view-tabs" aria-label="当前 section 的 View"><button class="view-tab active" type="button" title="频谱 · View 1"><i class="view-dot"></i>View 1</button><button class="view-tab" type="button" title="频谱 · View 2"><i class="view-dot"></i>View 2</button></div><button class="new-view" type="button" aria-label="新建 View" title="新建 View">+</button></div>
+          <div class="status"><span data-status>频谱 · View 1</span><b>12 通道</b></div>
+        </div>
+        <p class="concept-note"><strong>判断点：</strong>层级绝对清楚，但这是否把一个底栏做得太“文档化”？</p>
+      </article>
+    </section>
+    <p class="footnote"><b>建议比较顺序：</b>先只看底栏 1 秒钟能否说出所在 section；再连续切换“频谱 → FRF → 阶次”，判断 A 的轻量定位够不够。原型仅用于交互方向选择，未改变 TraceLab 源码或项目状态。</p>
+  </main>
+
+  <script>
+    const modes = {
+      time: { title: '时域', code: 'TIME', detail: '所有通道 · 0–60 s', plot: '时域 · A-Drive', accent: '#2774d8', tint: '#edf5ff', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c3 0 3-6 6-6s3 12 6 12 3-6 6-6"/></svg>' },
+      fft: { title: '频谱', code: 'FFT', detail: 'A-Drive · 0–2 kHz', plot: '频谱 · A-Drive', accent: '#7958c7', tint: '#f4f0fc', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18V6m4 12V9m4 9V4m4 14v-7m4 7V8"/></svg>' },
+      'fft-time': { title: '时频', code: 'T–F', detail: 'A-Drive · 0–2 kHz', plot: '时频 · A-Drive', accent: '#168b88', tint: '#eaf8f6', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M9 5v14m4-11v8m4-11v8m4-11v14"/></svg>' },
+      frf: { title: 'FRF', code: 'FRF', detail: 'Input / Output · H1', plot: 'FRF · A-Drive', accent: '#b65791', tint: '#fcf0f7', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16c4-8 6 4 10-6 2-4 3-3 6-3"/></svg>' },
+      order: { title: '阶次', code: 'ORD', detail: 'A-Drive · 0–24 阶', plot: '阶次 · A-Drive', accent: '#d78228', tint: '#fff5e8', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 5v7l5 3"/></svg>' }
+    };
+    document.querySelectorAll('.app').forEach((app) => {
+      const setMode = (key) => {
+        const mode = modes[key];
+        app.dataset.mode = key;
+        app.style.setProperty('--accent', mode.accent);
+        app.style.setProperty('--tint', mode.tint);
+        app.querySelectorAll('[data-mode-title]').forEach((node) => node.textContent = mode.title);
+        app.querySelectorAll('[data-mode-code]').forEach((node) => node.textContent = mode.code);
+        app.querySelectorAll('[data-mode-detail]').forEach((node) => node.textContent = mode.detail);
+        app.querySelectorAll('[data-plot-title]').forEach((node) => node.textContent = mode.plot);
+        app.querySelectorAll('[data-mode-icon]').forEach((node) => node.innerHTML = mode.icon);
+        app.querySelectorAll('[data-mode-button]').forEach((button) => {
+          const active = button.dataset.modeButton === key;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-current', active ? 'page' : 'false');
+        });
+        const activeView = app.querySelector('.view-tab.active')?.textContent.trim() || 'View 1';
+        app.querySelector('[data-status]').textContent = `${mode.title} · ${activeView}`;
+      };
+      app.querySelectorAll('[data-mode-button]').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.modeButton)));
+      const activateView = (button) => {
+        app.querySelectorAll('.view-tab').forEach((tab) => tab.classList.toggle('active', tab === button));
+        app.querySelector('[data-status]').textContent = `${modes[app.dataset.mode].title} · ${button.textContent.trim()}`;
+      };
+      const bindView = (button) => button.addEventListener('click', () => activateView(button));
+      app.querySelectorAll('.view-tab').forEach(bindView);
+      app.querySelector('.new-view').addEventListener('click', () => {
+        const tabs = app.querySelector('.view-tabs');
+        const next = tabs.querySelectorAll('.view-tab').length + 1;
+        if (next > 3) return;
+        const view = document.createElement('button');
+        view.type = 'button';
+        view.className = 'view-tab';
+        view.title = `${modes[app.dataset.mode].title} · View ${next}`;
+        view.innerHTML = `<i class="view-dot"></i>View ${next}`;
+        tabs.append(view);
+        bindView(view);
+        activateView(view);
+      });
+      setMode('fft');
+    });
+  </script>
+</body>
+</html>

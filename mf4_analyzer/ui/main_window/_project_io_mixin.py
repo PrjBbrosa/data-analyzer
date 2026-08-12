@@ -24,6 +24,7 @@ from ...io import (
 )
 from ...io.loader import (
     AUDIO_VIDEO_EXTS,
+    NO_CAN_FRAMES_MESSAGE,
     format_dropped_channels_notice,
 )
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
@@ -110,13 +111,82 @@ class ProjectIOMixin:
 
         self._open_data_paths(data_files)
 
+    # Heavy-load confirm: wall-clock is dominated by parse+decode on the GUI
+    # thread. ASC alone is ~60 MB/s parse; with DBC/decode use a conservative
+    # ~25 MB/s so 10×400 MB ≈ 3 minutes is called out before starting.
+    _HEAVY_LOAD_TOTAL_BYTES = 300 * 1024 * 1024
+    _HEAVY_LOAD_FILE_BYTES = 150 * 1024 * 1024
+    _HEAVY_LOAD_MANY_FILES = 5
+    _HEAVY_LOAD_MANY_TOTAL_BYTES = 100 * 1024 * 1024
+    _HEAVY_LOAD_ESTIMATE_BYTES_PER_SEC = 25 * 1024 * 1024
+
+    def _format_byte_size(self, nbytes: int) -> str:
+        n = float(max(0, int(nbytes)))
+        for unit, scale in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
+            if n >= scale or unit == "KB":
+                value = n / scale
+                if value >= 10:
+                    return f"{value:.0f} {unit}"
+                return f"{value:.1f} {unit}"
+        return f"{int(n)} B"
+
+    def _estimate_heavy_load_seconds(self, total_bytes: int) -> int:
+        return max(
+            1,
+            int(round(total_bytes / float(self._HEAVY_LOAD_ESTIMATE_BYTES_PER_SEC))),
+        )
+
+    def _should_confirm_heavy_load(self, weights) -> bool:
+        weights = [max(1, int(w)) for w in (weights or ())]
+        if not weights:
+            return False
+        total = sum(weights)
+        if total >= self._HEAVY_LOAD_TOTAL_BYTES:
+            return True
+        if any(w >= self._HEAVY_LOAD_FILE_BYTES for w in weights):
+            return True
+        if (
+            len(weights) >= self._HEAVY_LOAD_MANY_FILES
+            and total >= self._HEAVY_LOAD_MANY_TOTAL_BYTES
+        ):
+            return True
+        return False
+
+    def _confirm_heavy_load(self, data_files, weights) -> bool:
+        """Ask before a likely multi-minute, UI-blocking import batch."""
+        total = sum(max(1, int(w)) for w in weights)
+        est_sec = self._estimate_heavy_load_seconds(total)
+        if est_sec < 60:
+            est_text = f"约 {est_sec} 秒"
+        elif est_sec < 3600:
+            est_text = f"约 {max(1, int(round(est_sec / 60)))} 分钟"
+        else:
+            est_text = f"约 {est_sec / 3600:.1f} 小时"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("加载可能较久")
+        box.setText(
+            f"即将加载 {len(data_files)} 个文件（共 {self._format_byte_size(total)}）。"
+        )
+        box.setInformativeText(
+            f"按体积粗估可能需要 {est_text} 或更久，期间界面可能暂时无响应"
+            "（进度条会尽量更新）。是否继续？"
+        )
+        cont = box.addButton("继续加载", QMessageBox.AcceptRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        fit_message_box_buttons_to_text(box)
+        box.setDefaultButton(cont)
+        box.exec_()
+        return box.clickedButton() is cont
+
     def _open_data_paths(self, data_files):
         """Load one user-selected batch with a weighted, truthful status bar.
 
         A file's byte size is the only universally available work estimate
-        across CSV/MDF/BLF/etc.  BLF refines its own fraction from real reader
-        bytes and decoded frames; formats whose libraries expose no safe
-        incremental callback advance only when that file is actually complete.
+        across CSV/MDF/BLF/etc.  BLF/ASC refine their own fraction from reader
+        progress (byte ``tell`` or a frame-based fallback); formats whose
+        libraries expose no safe incremental callback show an indeterminate
+        busy bar for that file, then jump when it completes.
         """
         data_files = list(data_files or ())
         if not data_files:
@@ -144,6 +214,11 @@ class ProjectIOMixin:
                 weights.append(max(1, int(Path(path).stat().st_size)))
             except (OSError, TypeError, ValueError):
                 weights.append(1)
+        if self._should_confirm_heavy_load(weights):
+            if not self._confirm_heavy_load(data_files, weights):
+                self.statusBar.showMessage("已取消加载")
+                self.toast("已取消加载", "info")
+                return
         total_weight = max(1, sum(weights))
         fractions = [0.0] * len(data_files)
         last_paint_at = 0.0
@@ -153,9 +228,26 @@ class ProjectIOMixin:
         )
 
         def report(index, fraction, phase=""):
-            """Advance one file monotonically and repaint at most 25 FPS."""
+            """Advance one file monotonically and repaint at most 25 FPS.
+
+            ``fraction < 0`` means indeterminate busy for formats without a
+            safe incremental loader callback.
+            """
             nonlocal last_paint_at
             if not (0 <= index < len(fractions)):
+                return
+            label = f"加载 {index + 1}/{len(data_files)}"
+            if phase:
+                label += f" · {phase}"
+            if float(fraction) < 0:
+                last_paint_at = monotonic()
+                self._update_compute_progress(
+                    0,
+                    0,
+                    label=label,
+                    token=token,
+                    flush_events=True,
+                )
                 return
             fraction = max(0.0, min(1.0, float(fraction)))
             if fraction > fractions[index]:
@@ -176,25 +268,22 @@ class ProjectIOMixin:
             # The status bar has deliberately limited width.  Keep its live
             # label scannable; the active filename remains in the normal
             # status message set by _load_one.
-            label = f"加载 {index + 1}/{len(data_files)}"
-            if phase:
-                label += f" · {phase}"
             self._update_compute_progress(
                 done,
                 1000,
                 label=label,
                 token=token,
-                process_events=True,
+                flush_events=True,
             )
 
         try:
-            blf_paths = [
+            can_log_paths = [
                 path for path in data_files
-                if Path(path).suffix.lower() == ".blf"
+                if self._is_can_log_path(path)
             ]
-            if len(blf_paths) >= 2:
+            if len(can_log_paths) >= 2:
                 self._load_blf_batch(
-                    blf_paths,
+                    can_log_paths,
                     ordered_paths=data_files,
                     progress_callback=lambda input_index, _path, fraction, phase: report(
                         input_index, fraction, phase,
@@ -237,6 +326,43 @@ class ProjectIOMixin:
         if not fp.lower().endswith(".tlproj"):
             fp = fp + ".tlproj"
         self.save_project(Path(fp))
+
+    def _confirm_degraded_project_save(self, health):
+        """Confirm overwrite/save-as after a degraded project restore.
+
+        Default button is Cancel. Stage 1 does not persist unresolved refs;
+        saving freezes the current missing state. Tests monkeypatch this seam.
+        """
+        n_missing = len(getattr(health, "missing_paths", ()) or ())
+        n_analysis = len(getattr(health, "dropped_analysis_refs", ()) or ())
+        n_time = len(getattr(health, "dropped_time_refs", ()) or ())
+        summary = []
+        if n_missing:
+            summary.append(f"缺失文件：{n_missing}")
+        if n_analysis:
+            summary.append(f"跳过的分析 View/Pane 来源：{n_analysis}")
+        if n_time:
+            summary.append(f"跳过的时域通道引用：{n_time}")
+        box = QMessageBox(self)
+        box.setWindowTitle("项目恢复不完整")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(
+            "本次打开项目时有文件或分析来源缺失。"
+            "Stage 1 不会保存未解析的引用；继续保存会固化当前缺失状态。"
+        )
+        if summary:
+            box.setInformativeText("\n".join(summary))
+        save_btn = box.addButton("仍要保存", QMessageBox.AcceptRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        fit_message_box_buttons_to_text(box)
+        box.exec_()
+        return box.clickedButton() is save_btn
+
+    def _write_project_document(self, doc, path):
+        """Write seam for ``save_project`` (tests monkeypatch this)."""
+        from .. import project_io as pio
+        pio.save_project_to_json(doc, path)
 
     def load_files(self):
         import sys as _sys
@@ -321,6 +447,19 @@ class ProjectIOMixin:
                 self.inspector.top.spin_end.setValue(fd.time_array[-1])
         return fd
 
+    def _is_can_log_path(self, path) -> bool:
+        """True for Vector BLF or evidence-matched CANoe ASC CAN logs."""
+        suffix = Path(path).suffix.lower()
+        if suffix == ".blf":
+            return True
+        if suffix != ".asc":
+            return False
+        try:
+            from ...io.asc_can_format import sniff_canoe_asc
+            return bool(sniff_canoe_asc(path))
+        except Exception:
+            return False
+
     def _load_one(
         self,
         fp,
@@ -363,12 +502,22 @@ class ProjectIOMixin:
             ext = p.suffix.lower()
             report(0.0, "准备")
             report(0.05, "读取数据")
+            is_canoe_asc = False
+            if ext == ".asc":
+                from ...io.asc_can_format import sniff_canoe_asc
+                try:
+                    is_canoe_asc = bool(sniff_canoe_asc(p))
+                except Exception:
+                    is_canoe_asc = False
             if ext in ('.mf4', '.mdf'):
                 if not HAS_ASAMMDF: QMessageBox.critical(self, "错误", "asammdf 未安装"); return
+                report(-1.0, "读取 MF4")
                 data, chs, units = DataLoader.load_mf4(fp)
             elif ext in ('.xlsx', '.xls'):
+                report(-1.0, "读取 Excel")
                 data, chs, units = DataLoader.load_excel(fp)
             elif ext in AUDIO_VIDEO_EXTS:
+                report(-1.0, "读取音视频")
                 data, chs, units, fs, smeta = DataLoader.load_audio_video(fp)
                 fd = self._register_file_data(
                     fp, data, chs, units, fs=fs, source_metadata=smeta)
@@ -377,7 +526,9 @@ class ProjectIOMixin:
                     f"✅ 已加载音轨: {p.name} ({len(data)} 采样 @ {fs:.0f} Hz) | 共 {len(self.files)} 文件")
                 self.toast(f"已加载音轨 {p.name}", "success")
                 return
-            elif ext == '.blf':
+            elif ext == '.blf' or is_canoe_asc:
+                fmt = "BLF" if ext == ".blf" else "CANoe ASC"
+                source_kind = "blf" if ext == ".blf" else "canoe_asc"
                 frames = blf_frames
                 if frames is None:
                     frames = DataLoader.read_blf_frames(
@@ -414,7 +565,7 @@ class ProjectIOMixin:
                         ),
                     )
                 if not dbc_paths:
-                    self.statusBar.showMessage(f"已取消 BLF: {p.name}")
+                    self.statusBar.showMessage(f"已取消 {fmt}: {p.name}")
                     return
                 decode_start = 0.05 if blf_frames is not None else 0.55
                 decode_span = 0.90 if blf_frames is not None else 0.40
@@ -430,7 +581,7 @@ class ProjectIOMixin:
                 self._register_file_data(
                     fp, data, chs, units,
                     source_metadata={
-                        "source_kind": "blf",
+                        "source_kind": source_kind,
                         "dbc_paths": list(dbc_paths),
                     },
                 )
@@ -438,11 +589,12 @@ class ProjectIOMixin:
                 self._update_info()
                 mode = f"DBC×{len(dbc_paths)} 解码"
                 self.statusBar.showMessage(
-                    f"✅ 已加载 BLF: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件")
+                    f"✅ 已加载 {fmt}: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件")
                 self.toast(f"已加载 {p.name} · {mode}", "success")
                 report(1.0, "已加载")
                 return
             elif ext == '.tdms':
+                report(-1.0, "读取 TDMS")
                 data, chs, units = DataLoader.load_tdms(fp)
                 self._register_file_data(
                     fp, data, chs, units, source_metadata={"source_kind": "tdms"})
@@ -452,6 +604,7 @@ class ProjectIOMixin:
                 self.toast(f"已加载 TDMS {p.name} · {len(data)} 行", "success")
                 return
             elif ext == '.hdf':
+                report(-1.0, "读取 HDF")
                 groups = DataLoader.load_hdf(fp)
                 for g in groups:
                     self._register_file_data(
@@ -472,6 +625,7 @@ class ProjectIOMixin:
                     self.toast(notice, "warning")
                 return
             elif ext == '.asc':
+                report(-1.0, "读取 ASCII")
                 data, chs, units, fs, smeta = DataLoader.load_ascii(fp)
                 self._register_file_data(
                     fp, data, chs, units, fs=fs, source_metadata=smeta)
@@ -481,6 +635,7 @@ class ProjectIOMixin:
                 self.toast(f"已加载 ASCII {p.name} · {len(data)} 行", "success")
                 return
             elif ext == '.wwt':
+                report(-1.0, "读取 WWT")
                 groups = DataLoader.load_wwt(fp)
                 for g in groups:
                     self._register_file_data(
@@ -494,6 +649,7 @@ class ProjectIOMixin:
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
                 return
             elif ext == '.zfd':
+                report(-1.0, "读取 ZFD")
                 groups = DataLoader.load_zfd(fp)
                 for g in groups:
                     self._register_file_data(
@@ -507,6 +663,7 @@ class ProjectIOMixin:
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
                 return
             elif ext == '.mat':
+                report(-1.0, "读取 MAT")
                 groups = DataLoader.load_mat(fp)
                 for g in groups:
                     self._register_file_data(
@@ -520,6 +677,7 @@ class ProjectIOMixin:
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
                 return
             else:
+                report(-1.0, "读取表格")
                 data, chs, units = DataLoader.load_csv(fp)
             fd = self._register_file_data(fp, data, chs, units)
             # User-request 2026-05-20: do NOT auto-select channel[0] on file
@@ -683,7 +841,7 @@ class ProjectIOMixin:
             except ImportError:
                 raise
             except ValueError as exc:
-                if "BLF 文件没有可读的 CAN 数据帧" in str(exc):
+                if NO_CAN_FRAMES_MESSAGE in str(exc):
                     raise
                 continue
             except Exception:
@@ -753,6 +911,31 @@ class ProjectIOMixin:
             return self._choose_blf_dbc_with_retry(
                 path, frames=frames, progress_callback=progress_callback,
             )
+        return None
+
+    def resolve_blf_dbc_paths_for_batch(self, paths):
+        """Reuse the single-file CAN-log/DBC tip+picker path for BatchSheet intake.
+
+        Covers Vector BLF and evidence-matched CANoe ASC. Returns a non-empty
+        ``dbc_paths`` list, or ``None`` when the user cancels.  BatchSheet keeps
+        one sheet-level ``source_context``; multi-file ``individual`` therefore
+        resolves via the first CAN log only (see
+        ``docs/analyzer/specs/2026-08-10-batch-blf-dbc-context-reuse-spec.md``).
+        """
+        blf_paths = [
+            Path(path) for path in (paths or ())
+            if self._is_can_log_path(path)
+        ]
+        if not blf_paths:
+            return []
+        if len(blf_paths) == 1:
+            return self._resolve_blf_dbc_paths(blf_paths[0])
+
+        action = self._ask_blf_batch_dbc_action(blf_paths)
+        if action == "batch":
+            return self._choose_blf_dbc_with_retry(blf_paths[0])
+        if action == "individual":
+            return self._resolve_blf_dbc_paths(blf_paths[0])
         return None
 
     def _resolve_blf_dbc_paths(self, path, *, frames=None, progress_callback=None):
@@ -886,7 +1069,7 @@ class ProjectIOMixin:
         skipped = 0
         blf_index = -1
         for index, path in enumerate(ordered_paths):
-            if path.suffix.lower() != ".blf":
+            if not self._is_can_log_path(path):
                 before_fids = set(self.files)
                 self._load_one(
                     str(path),
@@ -993,8 +1176,8 @@ class ProjectIOMixin:
         """Ask how one multi-file user action should resolve DBCs."""
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Information)
-        box.setWindowTitle("批量导入 BLF")
-        box.setText(f"本次添加了 {len(paths)} 个 BLF 文件。")
+        box.setWindowTitle("批量导入 CAN 日志")
+        box.setText(f"本次添加了 {len(paths)} 个 CAN 日志文件。")
         box.setInformativeText(
             "统一选择的 DBC 会应用到本次全部文件；下次导入仍会重新确认。"
         )
@@ -1188,8 +1371,30 @@ class ProjectIOMixin:
         )
         return list(dbcs)
 
-    def _close(self, fid):
+    def _close(self, fid, *, force=False, notify=True):
+        """Close one logical source (fid).
+
+        ``notify`` gates the tail-end user feedback (plot-state reset +
+        statusBar + toast). It defaults to True so every existing call site
+        — including the single-file ``file_close_requested`` →
+        ``_on_file_close_requested`` → ``_close`` path — is byte-for-byte
+        unchanged. ``_close_files`` passes ``notify=False`` for multi-source
+        physical-file groups and emits one aggregated summary itself instead
+        (spec: group close must not spam N toasts / N full canvas resets)."""
         if fid not in self.files: return
+        from .analysis_source_scope import collect_source_uses
+
+        uses = collect_source_uses(
+            fid,
+            time_views=self.view_manager.views,
+            analysis_managers=self.analysis_managers,
+        )
+        if (
+            uses
+            and not force
+            and not self._confirm_global_file_close(uses, files=(fid,))
+        ):
+            return
         name = self.files[fid].short_name
         # Cache invalidation site 2: drop entries for this file before
         # we discard the FileData — capture fid so the per-data_id filter
@@ -1209,13 +1414,19 @@ class ProjectIOMixin:
         del self.files[fid]
         self.navigator.remove_file(fid, emit=False)
         resolved = self._focused_time_view_state()
-        if resolved is not None:
+        if resolved is not None and self.chart_stack.current_mode() == "time":
             self._project_view_controls(resolved[0])
+        elif self.chart_stack.current_mode() in self.analysis_managers:
+            mode = self.chart_stack.current_mode()
+            mgr = self.analysis_managers[mode]
+            self._project_analysis_attachments(mode, mgr.get(mgr.active))
+        self._refresh_analysis_candidates()
         self._active = self.navigator._active_fid  # navigator picks fallback
         self._update_info()
-        self._reset_plot_state(scope='file')
-        self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
-        self.toast(f"已关闭 {name}", "info")
+        if notify:
+            self._reset_plot_state(scope='file')
+            self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
+            self.toast(f"已关闭 {name}", "info")
 
     def save_project(self, path):
         """Serialize the current session (open files + all Views) to a
@@ -1224,6 +1435,14 @@ class ProjectIOMixin:
         from pathlib import Path
         from .. import project_io as pio
         path = Path(path)
+
+        health = getattr(self, "_project_restore_health", None)
+        if (
+            health is not None
+            and health.degraded
+            and not self._confirm_degraded_project_save(health)
+        ):
+            return False
 
         self._capture_focused_view()
         # Flush each analysis section's live UI state into its active view so
@@ -1272,19 +1491,26 @@ class ProjectIOMixin:
             },
             filter=self._project_filter_payload(),
         )
-        pio.save_project_to_json(doc, path)
+        self._write_project_document(doc, path)
         self._project_path = path
+        if health is not None:
+            health.clear()
         self.statusBar.showMessage(f"已保存项目: {path.name}")
         self.toast("已保存项目", "success")
+        return True
 
     def _restore_project_file_refs(self, doc, path, pio):
+        from ._state_holders import ProjectFileRestoreResult
+
         fid_map = {}
-        missing = []
+        missing_paths = []
+        missing_old_fids = []
         pending_by_path = {}
         for ref in doc.files:
             resolved = pio.resolve_file_path(ref, path)
             if resolved is None:
-                missing.append(ref.path_abs)
+                missing_paths.append(ref.path_abs)
+                missing_old_fids.append(ref.fid)
                 continue
             key = str(resolved)
             if not pending_by_path.get(key):
@@ -1293,7 +1519,8 @@ class ProjectIOMixin:
                 self._load_one(key, blf_dbc_paths=dbc_paths)
                 new_fids = [f for f in self.files.keys() if f not in before]
                 if not new_fids:
-                    missing.append(ref.path_abs)
+                    missing_paths.append(ref.path_abs)
+                    missing_old_fids.append(ref.fid)
                     continue
                 pending_by_path[key] = new_fids
             new_fid = pending_by_path[key].pop(0)
@@ -1308,7 +1535,11 @@ class ProjectIOMixin:
                 # must not be promoted to a real/manual axis merely because we
                 # reconstructed it at the saved sampling rate.
                 fd._time_source = ref.time_source
-        return fid_map, missing
+        return ProjectFileRestoreResult(
+            fid_map=fid_map,
+            missing_paths=missing_paths,
+            missing_old_fids=missing_old_fids,
+        )
 
     def open_project(self, path):
         """Restore a session from a ``.tlproj`` file: re-read referenced source
@@ -1321,16 +1552,31 @@ class ProjectIOMixin:
         path = Path(path)
 
         doc = pio.load_project_from_json(path)
-        self.close_all()
+        self.close_all(force=True)
         # Fresh restore: clear any stale auto-recompute queue from a prior open.
         self._analysis_restore_pending = set()
 
         old_restoring = getattr(self, "_restoring_project", False)
         self._restoring_project = True
         try:
-            fid_map, missing = self._restore_project_file_refs(doc, path, pio)
+            restore = self._restore_project_file_refs(doc, path, pio)
         finally:
             self._restoring_project = old_restoring
+
+        fid_map = restore.fid_map
+        missing = list(restore.missing_paths)
+        dropped_time = pio.collect_dropped_time_refs(doc.views, fid_map)
+        dropped_analysis = pio.collect_dropped_analysis_refs(
+            doc.analysis_views, fid_map,
+        )
+        health = getattr(self, "_project_restore_health", None)
+        if health is not None:
+            health.adopt_restore(
+                missing_paths=missing,
+                missing_old_fids=restore.missing_old_fids,
+                dropped_time_refs=dropped_time,
+                dropped_analysis_refs=dropped_analysis,
+            )
 
         self._restore_project_filter(doc.filter)
 
@@ -1403,7 +1649,32 @@ class ProjectIOMixin:
         try:
             self.toolbar._set_mode(doc.current_mode)
 
-            if missing:
+            if health is not None and health.degraded:
+                lines = []
+                if missing:
+                    lines.append(
+                        "以下文件找不到，已跳过：\n" + "\n".join(missing)
+                    )
+                n_analysis = len(health.dropped_analysis_refs)
+                if n_analysis:
+                    lines.append(
+                        f"另有 {n_analysis} 处分析 View/Pane 来源因文件缺失已跳过。"
+                    )
+                n_time = len(health.dropped_time_refs)
+                if n_time:
+                    lines.append(
+                        f"另有 {n_time} 处时域通道引用因文件缺失已跳过。"
+                    )
+                lines.append(
+                    "再次保存前会提示确认：Stage 1 不会保留未解析引用，"
+                    "保存会固化当前缺失状态。"
+                )
+                QMessageBox.warning(
+                    self, "部分文件缺失",
+                    "\n\n".join(lines),
+                )
+            elif missing:
+                # Defensive: missing paths without a health holder still warn.
                 QMessageBox.warning(
                     self, "部分文件缺失",
                     "以下文件找不到，已跳过：\n" + "\n".join(missing),
@@ -1465,9 +1736,29 @@ class ProjectIOMixin:
         fp.chk_filt.setChecked(bool(payload.get("show_filtered", True)))
         fp.set_enabled(bool(payload.get("enabled", False)))
 
-    def close_all(self):
+    def close_all(self, *, force=False):
+        health = getattr(self, "_project_restore_health", None)
         if not self.files:
+            if health is not None:
+                health.clear()
             return
+        from .analysis_source_scope import collect_source_uses
+
+        fids = list(self.files.keys())
+        if not force:
+            uses = []
+            for fid in fids:
+                uses.extend(
+                    collect_source_uses(
+                        fid,
+                        time_views=self.view_manager.views,
+                        analysis_managers=self.analysis_managers,
+                    )
+                )
+            if not self._confirm_global_file_close(
+                uses, files=fids, close_all=True
+            ):
+                return
         n = len(self.files)
         # Cache invalidation site 2 (close-all variant): wipe everything.
         self.canvas_time.invalidate_envelope_cache("all files closed")
@@ -1476,6 +1767,8 @@ class ProjectIOMixin:
         # variant of the per-fid invalidate in ``_close``).
         for cache in self.analysis_caches.values():
             cache.clear()
+        for section in list(self.analysis_caches):
+            self._clear_analysis_section_pins(section)
         # FftTimeCoordinator holds in-flight pending contexts that cache.clear()
         # above does NOT touch — drop them too so a fft_time job still running
         # when all files close cannot resurrect a dead-fid result into the
@@ -1492,6 +1785,9 @@ class ProjectIOMixin:
             del self.files[fid]
             self.navigator.remove_file(fid, emit=False)
         self._active = None
+        if health is not None:
+            health.clear()
+        self._refresh_analysis_candidates()
         self._update_info()
         self._reset_plot_state(scope='all')
         self.statusBar.showMessage("已关闭全部")

@@ -10,6 +10,54 @@ def test_default_view_one_empty_pane():
     assert v.panes[0].sources == []
     assert v.compare == {"x_linked": True, "levels_locked": True}
     assert isinstance(v.view_id, str) and v.view_id
+    assert v.attached_file_ids == []
+
+
+def test_analysis_view_default_attachment_is_explicitly_empty():
+    v = AnalysisViewState(name="View 1", tab_color="#2d7ff9")
+    assert v.attached_file_ids == []
+    payload = v.to_dict()
+    assert payload["schema"] == 7
+    assert payload["attached_file_ids"] == []
+    assert AnalysisViewState.from_dict(payload).attached_file_ids == []
+
+
+def test_schema6_analysis_view_derives_attachment_from_all_pane_roles():
+    payload = {
+        "schema": 6,
+        "name": "Legacy",
+        "tab_color": "#2d7ff9",
+        "panes": [
+            {
+                "sources": [["f1", "a"], ["f2", "b"]],
+                "rpm_source": ["f3", "rpm"],
+            },
+            {
+                "sources": [["f2", "c"]],
+                "input_source": ["f4", "in"],
+                "output_source": ["f4", "out"],
+            },
+        ],
+    }
+    state = AnalysisViewState.from_dict(payload)
+    assert state.attached_file_ids == ["f1", "f2", "f3", "f4"]
+    # Explicit empty must not be back-filled from pane roles.
+    empty = AnalysisViewState.from_dict({
+        "schema": 7,
+        "name": "Empty",
+        "tab_color": "#2d7ff9",
+        "attached_file_ids": [],
+        "panes": [{"sources": [["f1", "a"]]}],
+    })
+    assert empty.attached_file_ids == []
+
+
+def test_validate_requires_source_fids_subseteq_attachments():
+    v = AnalysisViewState(name="v", tab_color="#fff")
+    v.attached_file_ids = ["f1"]
+    v.panes[0].sources = [("f1", "a"), ("f2", "b")]
+    errs = v.validate(allow_overlay=True)
+    assert any("attached" in e or "f2" in e for e in errs)
 
 
 def test_round_trip_preserves_everything():
@@ -63,6 +111,7 @@ def test_from_dict_tolerates_existing_pane_missing_time_range():
 
 def test_overlay_validation():
     v = AnalysisViewState(name="v", tab_color="#fff")
+    v.attached_file_ids = ["f1"]
     v.panes[0].sources = [("f1", "a"), ("f1", "b")]
     assert v.validate(allow_overlay=True) == []
     errs = v.validate(allow_overlay=False)
@@ -118,7 +167,8 @@ def test_analysis_view_schema6_is_additive_and_migrates_the_old_frf_toggle():
 
     payload = view.to_dict()
 
-    assert payload["schema"] == 6
+    assert payload["schema"] == 7
+    assert payload["attached_file_ids"] == []
     legacy = AnalysisViewState.from_dict({
         "schema": 2,
         "name": "Legacy",
@@ -126,6 +176,7 @@ def test_analysis_view_schema6_is_additive_and_migrates_the_old_frf_toggle():
         "panes": [{"sources": [["f1", "sig"]], "ylim": [-1, 1]}],
     })
     assert legacy.panes[0].sources == [("f1", "sig")]
+    assert legacy.attached_file_ids == ["f1"]
     assert legacy.panes[0].input_source is None
     assert legacy.panes[0].output_source is None
     assert legacy.panes[0].ylims == {}
@@ -159,3 +210,15 @@ def test_duplicate_frf_pane_state_does_not_share_mutable_ylims(qapp):
     assert original.output_source == ("f1", "out")
     assert original.ylims == {"magnitude": (-20.0, 10.0)}
     assert manager.get(duplicate_idx).view_id != original_view_id
+
+
+def test_duplicate_copies_attached_file_ids_independently(qapp):
+    from mf4_analyzer.ui.view_state import ViewManager
+
+    manager = ViewManager(state_factory=AnalysisViewState)
+    manager.get(0).attached_file_ids = ["f1", "f2"]
+    idx = manager.duplicate(0)
+    copied = manager.get(idx)
+    assert copied.attached_file_ids == ["f1", "f2"]
+    copied.attached_file_ids.append("f3")
+    assert manager.get(0).attached_file_ids == ["f1", "f2"]

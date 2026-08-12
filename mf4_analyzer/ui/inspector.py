@@ -4,11 +4,13 @@ Owns the inspector_state_dict (per section 12.1 of the design spec):
 caches the user's last input on each mode's contextual widget so that
 switching modes preserves context.
 """
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5 import sip
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QPushButton,
     QScrollArea,
     QStackedWidget,
@@ -190,6 +192,9 @@ class Inspector(QWidget):
 
         self._scroll.setWidget(host)
         self._range_group_owner_layout = self.top.range_group_layout()
+        # 分区页首开二次布局的「已 settle」集合（进程生命周期内每页一次），
+        # 见 _settle_page_after_first_show 的注释。
+        self._settled_pages = set()
         self._wire()
         self._place_range_group_for_mode('time')
 
@@ -238,8 +243,45 @@ class Inspector(QWidget):
             self._time_domain_card.setVisible(False)
             self.contextual_stack.setVisible(True)
             self.contextual_stack.setCurrentIndex(idx)
+            self._schedule_first_show_settle(self.contextual_stack.widget(idx))
         self._place_range_group_for_mode(mode)
         self._update_help_guide(mode)
+
+    def _schedule_first_show_settle(self, page):
+        """Queue one post-show relayout for a stack page's first display.
+
+        The four contextual pages are built at startup inside a hidden
+        QStackedWidget, so their very first show interleaves QSS polish
+        with layout: the height budget handed down the layout chain is
+        computed from the pre-polish sizeHint chain and comes up short,
+        QFormLayout then starves its rows below the fields' Fixed-height
+        sizeHints and the fields overflow into the inter-row breathing
+        gaps. QSS polish does not call updateGeometry, so the stale
+        cached hints never self-heal — historically only switching away
+        and back (whose updateGeometry traffic refreshes every cache)
+        fixed it. This schedules that second layout pass mechanically;
+        the one compressed frame before the queued pass lands is an
+        accepted trade-off.
+        """
+        if page is None or id(page) in self._settled_pages:
+            return
+        self._settled_pages.add(id(page))
+        QTimer.singleShot(0, lambda: self._settle_page(page))
+
+    def _settle_page(self, page):
+        if sip.isdeleted(page):
+            return
+        # invalidate() only marks caches dirty; order does not matter
+        # because the recompute happens on the activate() below.
+        for layout in page.findChildren(QLayout):
+            layout.invalidate()
+        root = page.layout()
+        if root is not None:
+            root.invalidate()
+            root.activate()
+        # Bubble the refreshed hints up through the stack / scroll body so
+        # the page's own height allocation is recomputed too.
+        page.updateGeometry()
 
     def _update_help_guide(self, mode):
         # The persistent bottom-right help link targets the current mode's

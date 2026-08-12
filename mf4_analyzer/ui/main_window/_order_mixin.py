@@ -310,6 +310,8 @@ class OrderMixin:
         """
         # V7 Step 5: capture the active Order view (params + per-pane sources +
         # rpm_source) so a later view switch renders from analysis_caches.
+        if not self._offer_analysis_time_range_before_compute('order'):
+            return
         self._capture_active_analysis_view('order')
         # Preserve the established UI policy: a second click reports busy and
         # drops rather than implicitly replacing the active batch.
@@ -348,7 +350,8 @@ class OrderMixin:
                 pane_idx=pane_idx)
             cached = cache.get(analysis_key)
             if cached is not None:
-                cache.put(analysis_key, cached)
+                self._store_analysis_result(
+                    'order', state.view_id, pane_idx, analysis_key, cached)
                 self._render_order_on(
                     page.pane_canvas(pane_idx), cached, source=(fid, ch))
                 outcome.cached += 1
@@ -434,9 +437,7 @@ class OrderMixin:
             return None
         self._warn_if_order_speed_unsuitable(rpm)
         fs = self.inspector.order_ctx.fs()
-        order_params = self.inspector.order_ctx.current_params()
-        op = dict(self.inspector.order_ctx.get_params())
-        op['samples_per_rev'] = int(order_params.get('samples_per_rev', 256))
+        op = dict(self.inspector.order_ctx.compute_params())
         # Audit fix R6/C7: COT requires strictly monotonic ``t``; synthesise a
         # uniform grid from the inspector fs when the timestamps are degenerate.
         t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
@@ -472,6 +473,11 @@ class OrderMixin:
             'analysis_key': analysis_key,
             'pane_idx': pane_idx,
             'source': (fid, ch),
+            # Capture at dispatch: completion may land after the user switched
+            # Views, so the callback must not read the then-active view.
+            'view_id': self.analysis_managers['order'].get(
+                self.analysis_managers['order'].active
+            ).view_id,
         }
 
         def job(worker, _sig=sig, _rpm=rpm, _t=t_arr, _p=p):
@@ -685,7 +691,13 @@ class OrderMixin:
     def _on_order_job_finished(self, ctx, result):
         analysis_key = ctx.get('analysis_key')
         if analysis_key is not None:
-            self.analysis_caches['order'].put(analysis_key, result)
+            self._store_analysis_result(
+                'order',
+                ctx.get('view_id'),
+                ctx.get('pane_idx', 0),
+                analysis_key,
+                result,
+            )
         outcome = getattr(self, '_order_outcome', None)
         if outcome is not None:
             outcome.computed += 1

@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 import tempfile
+import weakref
 
 from PyQt5.QtCore import QTimer, Qt, QUrl
 from PyQt5.QtGui import QDesktopServices
@@ -261,6 +262,17 @@ class BatchSheet(QDialog):
             self, files=self._files, source_registry=self._source_registry,
             source_context=self._source_context,
         )
+        # Route through a closure over a *weak* reference, not the bound
+        # method directly: ``InputPanel``/``FileListWidget`` store this
+        # handler as a plain attribute for the lifetime of the sheet, which
+        # is a strong reference back to ``self`` held by a descendant --
+        # exactly the shape that left ``BatchSheet`` a zombie Python wrapper
+        # in the lambda-connection bug fixed above, except here there is no
+        # QObject-destruction hook to release it. A weak closure means the
+        # descendant never keeps ``self`` alive past its own refcount.
+        self._input_panel.set_disk_paths_handler(
+            self._weak_bound(self._add_disk_paths_with_blf_context)
+        )
         self._handoff_notice = QLabel(self._input_panel)
         self._handoff_notice.setObjectName("BatchHandoffNotice")
         self._handoff_notice.setWordWrap(True)
@@ -394,11 +406,25 @@ class BatchSheet(QDialog):
         self._input_panel._file_list.filesChanged.connect(
             self._schedule_pipeline_recompute
         )
+        # Connect the bound method directly rather than via
+        # ``lambda _x: self._schedule_pipeline_recompute()``: PyQt truncates
+        # the signal's payload to match a slot with fewer parameters, so the
+        # lambda bought nothing. It did cost something -- a lambda closing
+        # over ``self`` is a slot PyQt does not tie to any receiver's
+        # lifetime the way it does a bound method, so when a parentless test
+        # host is torn down by ordinary refcounting (cascading a synchronous
+        # C++ delete through the whole child tree) the closure survives the
+        # cascade as a stray reference, leaving this ``BatchSheet`` a zombie
+        # Python wrapper over an already-deleted C++ object. ``qtbot``
+        # teardown then hits ``RuntimeError: wrapped C/C++ object of type
+        # BatchSheet has been deleted`` calling ``.close()`` on it. A direct
+        # bound-method connection does not exhibit this -- PyQt releases it
+        # promptly when the receiver is destroyed.
         self._input_panel._file_list.intersectionChanged.connect(
-            lambda _intersection: self._schedule_pipeline_recompute()
+            self._schedule_pipeline_recompute
         )
         self._input_panel._signal_picker.selectionChanged.connect(
-            lambda _sel: self._schedule_pipeline_recompute()
+            self._schedule_pipeline_recompute
         )
         # Drive RPM-row visibility from the method (init-sync below).
         self._analysis_panel.methodChanged.connect(self._input_panel.set_method)
@@ -406,9 +432,7 @@ class BatchSheet(QDialog):
             self._output_panel.apply_method_defaults
         )
         self._analysis_panel.methodChanged.connect(self._on_recipe_method_changed)
-        self._analysis_panel.methodChanged.connect(
-            lambda _m: self._schedule_pipeline_recompute()
-        )
+        self._analysis_panel.methodChanged.connect(self._schedule_pipeline_recompute)
         self._analysis_panel.paramsChanged.connect(self._sync_x_axis_context)
         self._analysis_panel.paramsChanged.connect(self._schedule_pipeline_recompute)
         self._analysis_panel.presetApplied.connect(
@@ -562,6 +586,99 @@ class BatchSheet(QDialog):
         skipped = total - len(paths)
         if skipped > 0:
             self._toast(f"忽略 {skipped} 个不支持的文件", kind="warning")
+
+    def _set_source_context(self, source_context: dict) -> None:
+        self._source_context = dict(source_context or {})
+        self._input_panel.set_source_context(self._source_context)
+
+    def _blf_paths_among(self, paths) -> list[str]:
+        selected = []
+        for path in (paths or ()):
+            try:
+                if DEFAULT_SOURCE_ADAPTER_REGISTRY.adapter_for(path).key == "blf":
+                    selected.append(str(path))
+            except Exception:
+                continue
+        return selected
+
+    def _ensure_blf_dbc_context(self, paths) -> bool:
+        """Resolve DBC via MainWindow's shared dialog path when needed.
+
+        Returns False when BLF intake must abort (cancel / no resolver).
+        Non-BLF paths never fail this gate.
+        """
+        blf_paths = self._blf_paths_among(paths)
+        if not blf_paths:
+            return True
+        existing = [
+            str(item)
+            for item in (self._source_context.get("dbc_paths") or ())
+            if item
+        ]
+        if existing:
+            return True
+
+        parent = self.parent()
+        resolver = getattr(self, "_blf_dbc_resolver", None)
+        if not callable(resolver):
+            resolver = getattr(parent, "resolve_blf_dbc_paths_for_batch", None)
+        if not callable(resolver):
+            self._toast(
+                "无法为 CAN 日志选择 DBC（批处理未连接到主窗口）",
+                kind="warning",
+            )
+            return False
+
+        resolved = resolver(blf_paths)
+        if not resolved:
+            self._toast("已取消 CAN 日志的 DBC 选择", kind="info")
+            return False
+
+        context = dict(self._source_context)
+        context["dbc_paths"] = list(resolved)
+        self._set_source_context(context)
+        return True
+
+    @staticmethod
+    def _weak_bound(bound_method):
+        """Wrap a bound method in a closure that only holds it weakly.
+
+        Used for callbacks handed to a descendant widget to keep as a plain
+        attribute for the sheet's whole lifetime (as opposed to a normal
+        Qt signal/slot connection, which PyQt already ties to the
+        receiver's lifetime). Without this, the descendant is a strong
+        Python reference back to ``self`` that outlives ``self``'s own
+        underlying C++ object whenever this sheet's Qt parent is torn down
+        by ordinary refcounting rather than an explicit ``close()`` --
+        pytest-qt's parentless test hosts do exactly that. The closure
+        below never touches ``self`` directly, so it does not keep it
+        alive; if the owner is already gone, the call is silently skipped.
+        """
+        ref = weakref.WeakMethod(bound_method)
+
+        def _call(*args, **kwargs):
+            method = ref()
+            if method is not None:
+                return method(*args, **kwargs)
+            return None
+
+        return _call
+
+    def _add_disk_paths_with_blf_context(self, paths) -> None:
+        """Disk/drop intake: ensure BLF DBC context, then add paths.
+
+        On DBC cancel, non-BLF files in the same selection are still added.
+        """
+        selected = [str(path) for path in (paths or ()) if path]
+        if not selected:
+            return
+        blf_paths = self._blf_paths_among(selected)
+        others = [path for path in selected if path not in set(blf_paths)]
+        if blf_paths and not self._ensure_blf_dbc_context(blf_paths):
+            if others:
+                self._input_panel.add_disk_paths_resolved(others)
+            return
+        self._input_panel.add_disk_paths_resolved(selected)
 
     def _present_footer(
         self, state: str, *, done: int = 0, total: int = 1,
@@ -953,10 +1070,28 @@ class BatchSheet(QDialog):
         self._output_panel.apply_outputs(out)
 
     def apply_files(self, file_ids: tuple, file_paths: tuple[str, ...]) -> None:
-        self._input_panel.apply_files(file_ids, file_paths)
+        paths = tuple(str(path) for path in (file_paths or ()) if path)
+        if self._blf_paths_among(paths):
+            if not self._ensure_blf_dbc_context(paths):
+                paths = tuple(
+                    path for path in paths
+                    if Path(path).suffix.lower() != ".blf"
+                )
+                if not paths and not file_ids:
+                    return
+        self._input_panel.apply_files(file_ids, paths)
 
     def apply_sources(self, source_ids: tuple, source_paths: tuple[str, ...]) -> None:
-        self._input_panel.apply_sources(source_ids, source_paths)
+        paths = tuple(str(path) for path in (source_paths or ()) if path)
+        if not source_ids and self._blf_paths_among(paths):
+            if not self._ensure_blf_dbc_context(paths):
+                paths = tuple(
+                    path for path in paths
+                    if Path(path).suffix.lower() != ".blf"
+                )
+                if not paths:
+                    return
+        self._input_panel.apply_sources(source_ids, paths)
 
     def _on_builtin_analysis_preset(self, _key: str, patch: dict) -> None:
         # AnalysisPanel already applied its owned fields.  OUTPUT owns display

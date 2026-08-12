@@ -137,7 +137,9 @@ def test_picker_display_stays_single_line_and_inside_narrow_host(qtbot):
 
     frame = p._trigger
     assert p.width() == 288
-    assert p.height() == 38
+    # d677718d moved the collapsed picker onto the shared 32px "base" control
+    # track (was a picker-only 38px) so it aligns with RPM/combo fields.
+    assert p.height() == SignalPickerPopup._DISPLAY_HEIGHT
     assert frame.width() <= p.width()
     assert frame.sizeHint().height() <= 44
     for child in (p._summary_label, p._overflow_label, p._arrow_button):

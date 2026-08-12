@@ -1,12 +1,10 @@
 """View-scoped analysis pickers + X reframing when the plotted extent shrinks.
 
-Both behaviours answer the same complaint: the UI kept offering / showing
-something that belongs to data the current View is not looking at.
+Analysis pickers follow each analysis section's active View attachments
+(Stage 1 source isolation), not the focused TimeDomain View.
 
-* The FFT / FFT-vs-Time / Order signal pickers used to enumerate every loaded
-  file. Ten files open with one dragged into the View meant ten files' channels
-  were searchable, and picking one produced an analysis with no counterpart in
-  the navigator, the channel tree, or the chart.
+* The FFT / FFT-vs-Time / Order signal pickers enumerate channels from the
+  active analysis View's ``attached_file_ids``.
 * The replot path preserves the visible X window so ticking a channel does not
   yank the viewport away from a zoom. When the replot swapped in a *shorter*
   recording the stale window survived anyway — 49.5 s of data framed by a 185 s
@@ -30,7 +28,7 @@ def _write_csv(path, *, duration, channels):
 
 @pytest.fixture
 def win_two_files(qapp, qtbot, tmp_path):
-    """MainWindow with a long and a short recording, both auto-attached."""
+    """MainWindow with a long and a short recording, both auto-attached to time."""
     long_p = _write_csv(
         tmp_path / "long.csv", duration=30.0, channels=["speed", "torque"]
     )
@@ -64,43 +62,52 @@ def _all_picker_fids(win):
     }
 
 
-def test_signal_pickers_only_offer_files_attached_to_focused_view(win_two_files):
+def _seed_analysis_attachments(win, fids):
+    for section, mgr in win.analysis_managers.items():
+        mgr.get(mgr.active).attached_file_ids = list(fids)
+    win._refresh_analysis_candidates()
+
+
+def test_signal_pickers_only_offer_files_attached_to_analysis_view(win_two_files):
     win, long_fid, short_fid = win_two_files
-    idx, state = win._focused_time_view_state()
-    assert set(state.attached_file_ids) == {long_fid, short_fid}
+    _seed_analysis_attachments(win, [long_fid, short_fid])
     for section, fids in _all_picker_fids(win).items():
         assert set(fids) == {long_fid, short_fid}, section
 
+    # Time detach must NOT shrink analysis pickers once analysis owns attachments.
     win._detach_files_from_focused_view([short_fid], label="short.csv")
-
-    # Still loaded — just not in this View, so not searchable from it.
     assert short_fid in win.files
-    assert set(win.view_manager.get(idx).attached_file_ids) == {long_fid}
     for section, fids in _all_picker_fids(win).items():
-        assert set(fids) == {long_fid}, section
+        assert set(fids) == {long_fid, short_fid}, section
+
+    # Narrow only the FFT active View; other sections keep both.
+    win.analysis_managers["fft"].get(0).attached_file_ids = [long_fid]
+    win._refresh_analysis_candidates("fft")
+    assert set(_picker_fids(win.inspector.fft_ctx)) == {long_fid}
+    assert set(_picker_fids(win.inspector.fft_time_ctx)) == {long_fid, short_fid}
+    assert set(_picker_fids(win.inspector.order_ctx)) == {long_fid, short_fid}
 
 
-def test_signal_pickers_follow_view_switch(win_two_files):
+def test_signal_pickers_follow_analysis_view_switch(win_two_files):
     win, long_fid, short_fid = win_two_files
-    win._detach_files_from_focused_view([short_fid], label="short.csv")
+    fft = win.analysis_managers["fft"]
+    fft.get(0).attached_file_ids = [long_fid]
+    win._on_mode_changed("fft")
+    win._on_analysis_new("fft")
+    # Fresh analysis View starts empty: nothing offered.
+    assert _picker_fids(win.inspector.fft_ctx) == []
 
-    win._on_view_new()
-    # A fresh View has no attached files: nothing to analyse, nothing offered.
-    for section, fids in _all_picker_fids(win).items():
-        assert fids == [], section
+    win._attach_files_to_active_context([short_fid])
+    assert set(_picker_fids(win.inspector.fft_ctx)) == {short_fid}
 
-    win._attach_files_to_focused_view([short_fid])
-    for section, fids in _all_picker_fids(win).items():
-        assert set(fids) == {short_fid}, section
-
-    win._switch_view(0)
-    for section, fids in _all_picker_fids(win).items():
-        assert set(fids) == {long_fid}, section
+    win._on_analysis_switch("fft", 0)
+    assert set(_picker_fids(win.inspector.fft_ctx)) == {long_fid}
 
 
-def test_order_rpm_picker_is_scoped_too(win_two_files):
+def test_order_rpm_picker_is_scoped_to_order_attachments(win_two_files):
     win, long_fid, short_fid = win_two_files
-    win._detach_files_from_focused_view([short_fid], label="short.csv")
+    win.analysis_managers["order"].get(0).attached_file_ids = [long_fid]
+    win._refresh_analysis_candidates("order")
     combo = win.inspector.order_ctx.combo_rpm
     fids = {
         combo.itemData(i)[0]
@@ -111,24 +118,26 @@ def test_order_rpm_picker_is_scoped_too(win_two_files):
 
 
 def test_file_remove_action_stays_available_in_every_analysis_mode(
-    win_two_files, qapp,
+    win_two_files, qapp, monkeypatch,
 ):
-    """All analysis modes retain the focused View's file-removal action."""
-    win, _long_fid, short_fid = win_two_files
+    """All analysis modes retain the focused analysis View's file-removal action."""
+    win, long_fid, short_fid = win_two_files
+    monkeypatch.setattr(win, "_confirm_analysis_detach", lambda *a, **k: True)
     tree = win.navigator.channel_list.tree
     item = win.navigator.channel_list._file_items[short_fid]
-    _, state = win._focused_time_view_state()
 
     for mode in ("fft", "fft_time", "frf", "order"):
+        mgr = win.analysis_managers[mode]
+        mgr.get(0).attached_file_ids = [long_fid, short_fid]
         win._on_mode_changed(mode)
         qapp.processEvents()
 
         assert not tree.isColumnHidden(2), mode
         win.navigator.channel_list._on_item_clicked(item, 2)
-        assert short_fid not in state.attached_file_ids, mode
+        assert short_fid not in mgr.get(0).attached_file_ids, mode
 
-        win._attach_files_to_focused_view([short_fid])
-        assert short_fid in state.attached_file_ids, mode
+        win._attach_files_to_active_context([short_fid])
+        assert short_fid in mgr.get(0).attached_file_ids, mode
 
 
 def _visible_xlim(win):

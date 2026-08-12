@@ -267,7 +267,17 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
 
 def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
     """Rewrite fids inside analysis_views payloads; drop refs whose fid
-    is absent from ``fid_map`` (same contract as remap_view_fids)."""
+    is absent from ``fid_map`` (same contract as remap_view_fids).
+
+    Schema 7 ``attached_file_ids`` are remapped in order. Older payloads
+    without the field derive attachments from remapped pane roles only —
+    never from the full project file set.
+    """
+    from .analysis_view_state import (
+        analysis_view_source_fids,
+        normalize_analysis_attachments,
+    )
+
     out = {}
     for section, block in (analysis_views or {}).items():
         views = []
@@ -294,6 +304,70 @@ def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
                     )
                 panes.append(pn)
             v["panes"] = panes
+            if "attached_file_ids" in view:
+                v["attached_file_ids"] = normalize_analysis_attachments(
+                    fid_map[fid]
+                    for fid in view.get("attached_file_ids", [])
+                    if fid in fid_map
+                )
+            else:
+                v["attached_file_ids"] = analysis_view_source_fids(v)
             views.append(v)
         out[section] = {"active": int(block.get("active", 0)), "views": views}
     return out
+
+
+def collect_dropped_analysis_refs(analysis_views: dict, fid_map: dict) -> list[tuple]:
+    """Pane roles whose source fid is absent from ``fid_map`` after restore.
+
+    Returns ``(section, view_id, pane_idx, role)`` tuples. Roles are
+    ``signal`` (overlay sources), ``rpm``, ``input``, and ``output``.
+    """
+    dropped: list[tuple] = []
+    for section, block in (analysis_views or {}).items():
+        for view in block.get("views", []) or []:
+            view_id = str(view.get("view_id") or view.get("name") or "")
+            for pane_idx, pane in enumerate(view.get("panes", []) or []):
+                for source in pane.get("sources", []) or []:
+                    if (
+                        isinstance(source, (list, tuple))
+                        and len(source) >= 1
+                        and source[0] not in fid_map
+                    ):
+                        dropped.append((section, view_id, pane_idx, "signal"))
+                rpm = pane.get("rpm_source")
+                if (
+                    isinstance(rpm, (list, tuple))
+                    and len(rpm) >= 1
+                    and rpm[0] not in fid_map
+                ):
+                    dropped.append((section, view_id, pane_idx, "rpm"))
+                for field_name, role in (
+                    ("input_source", "input"),
+                    ("output_source", "output"),
+                ):
+                    source = pane.get(field_name)
+                    if (
+                        isinstance(source, (list, tuple))
+                        and len(source) >= 1
+                        and source[0] not in fid_map
+                    ):
+                        dropped.append((section, view_id, pane_idx, role))
+    return dropped
+
+
+def collect_dropped_time_refs(views: list, fid_map: dict) -> list[tuple]:
+    """Time-View channel refs whose fid is absent from ``fid_map``.
+
+    Returns ``(view_id_or_name, fid, channel)`` tuples from ``checked``.
+    """
+    dropped: list[tuple] = []
+    for view in views or []:
+        view_id = str(view.get("view_id") or view.get("name") or "")
+        for item in view.get("checked", []) or []:
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            fid, channel = item[0], item[1]
+            if fid not in fid_map:
+                dropped.append((view_id, fid, channel))
+    return dropped

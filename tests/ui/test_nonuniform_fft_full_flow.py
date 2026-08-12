@@ -127,6 +127,8 @@ def _wire_fake_file(win, monkeypatch, fake_fd):
     )
     monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params',
                         lambda: dict(p, fs=fake_fd.fs))
+    monkeypatch.setattr(win.inspector.fft_time_ctx, 'compute_params',
+                        lambda: dict(p, fs=fake_fd.fs))
     monkeypatch.setattr(win.inspector.top, 'range_enabled', lambda: False)
     # Register fid -> fd so _show_rebuild_popover's lookup succeeds.
     win.files[fid] = fake_fd

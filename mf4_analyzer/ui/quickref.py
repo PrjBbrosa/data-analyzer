@@ -96,15 +96,15 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 "支持格式",
                 sub="MF4 · MDF · BLF · ASCII · TDMS · WWT · ZFD · MAT · 表格 · HDF · 音视频",
             ),
-            QuickRow("BLF 报文解码", sub="需配 DBC 文件"),
+            QuickRow("BLF / CANoe ASC 报文解码", sub="需配 DBC 文件"),
             QuickRow(
                 "把文件加入当前 View",
-                sub="打开只是载入；要画图/分析得先加入 View",
+                sub="上方=全局已打开；下方=当前模式的当前 View。打开只是载入，要画图/分析得先加入",
                 gesture="从文件列表拖到通道树",
             ),
             QuickRow(
-                "自动加入开关",
-                sub="开=新文件自动进当前 View · 关=只打开不加入",
+                "文件范围跟随",
+                sub="链接菜单三项：新文件加入当前 View · 新建 View 继承文件范围 · 切换分析时填充空 View（全关=不跟随）",
                 gesture="文件区链接图标",
             ),
             QuickRow("保存会话", gesture=".tlproj 项目"),
@@ -162,6 +162,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="Shift+滚轮缩放，平滚轮平移",
             ),
             QuickRow(
+                "FFT 时域预览",
+                gesture="平滚轮 / Y 轴槽 / 右键 / 双击",
+                sub="平移·Shift缩Y·Ctrl缩X；缩放只改起止，勾选才用于计算；轴槽单通道；设左轴",
+            ),
+            QuickRow(
                 "编辑某曲线颜色/坐标（叠加）",
                 gesture="双击曲线或其 Y 轴",
             ),
@@ -187,6 +192,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 keys=(_sc("pan"), _sc("zoom")),
             ),
             QuickRow("复位主视图", keys=(_sc("home"),)),
+            QuickRow(
+                "切换当前分区 View",
+                keys=("Alt+1…9",),
+                sub="第 10–12 个走标签栏或 » 溢出菜单",
+            ),
             QuickRow("顶部按钮的快捷键", sub="悬停按钮即显示"),
         ),
     ),
@@ -208,7 +218,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "分析信号的可选范围",
-                sub="FFT / FFT-时间 / 阶次的信号框只列当前 View 已加入的文件",
+                sub="FFT / 时频 / 频响 / 阶次各自只列该分析 View 已加入的文件，不跟随时域 View",
             ),
             QuickRow(
                 "从当前 View 移除文件",
@@ -320,7 +330,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="含游标线和读数，可标注",
                 gesture="复制按钮",
             ),
-            QuickRow("导出 Excel", sub="选定通道，可限时间段"),
+            QuickRow(
+                "导出 Excel / WWT",
+                sub="WWT：任意格式转 WinWert，保留原采样率，按时域显示",
+            ),
             QuickRow(
                 "导出图像 / 数据",
                 sub="PNG · SVG · CSV",

@@ -150,6 +150,15 @@ lesson by default.
 | [Comma List Inputs Accept Chinese Separators](comma-list-inputs-accept-chinese-separators.md) | Adding or editing a user-typed comma-separated field (slice | See lesson |
 | [Binary Batch Combos Prefer SegmentedChoice](binary-batch-combos-prefer-segmented-choice.md) | Replacing or reviewing a product control that has exactly two fixed | See lesson |
 | [Chart Statistics UI Redesigns Keep Param Wiring](chart-statistics-ui-keep-param-wiring.md) | Restyling Batch 图内统计 (SegmentedChoice, chips, field bars) or any | See lesson |
+| [Analysis View Tests Must Seed Attachments](analysis-view-tests-seed-attachments.md) | Writing or updating integration tests that switch into FFT / FFT-vs-Time / | See lesson |
+| [Codex Analysis Mode Entry Applies View Params](codex-analysis-mode-entry-apply-view-params.md) | Load when changing analysis mode entry (`_on_mode_changed` / `_enter_fft_mode`) or any path that can capture live Inspector params into an analysis View. | See lesson |
+| [Guard programmatic analysis-View restore at both signal and projection boundaries](codex-analysis-view-restore-projection-guards.md) | Changing analysis View application, project restore, shared Inspector | See lesson |
+| [Channel Tree Uses visualRect And Fixed Pts Width](codex-channel-tree-stable-visualrect-pts-fixed.md) | Changing channel-tree selection chrome, checkbox painting, Pts column | See lesson |
+| [Stateful Icon Buttons Need active QSS And String Attrs](codex-stateful-icon-button-active-qss.md) | Adding or changing a non-checkable icon `QToolButton` whose on/off | See lesson |
+| [Fixed-size bytearray headers must use equal-length slice assigns](codex-bytearray-slice-assign-fixed-size.md) | Packing fixed binary headers with `bytearray(N)` and slice assignment. | See lesson |
+| [QSS Combined qproperty Flags Need Quotes](qss-qproperty-combined-flags-need-quotes.md) | Editing `mf4_analyzer/ui_kit/style.qss` (or any app-wide QSS template), | See lesson |
+| [FFT Preview Zoom Does Not Auto-Arm Time Range](fft-preview-zoom-no-auto-arm-time-range.md) | Changing FFT time-preview pan/zoom wiring, shared `chk_range` | See lesson |
+| [Confirm Unchecked Local Time Range Before Compute](analysis-compute-confirm-unchecked-local-range.md) | Wiring analysis compute entry points (`do_fft` / `do_fft_time` / | See lesson |
 
 ## Selection Rules
 

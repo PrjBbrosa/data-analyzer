@@ -185,6 +185,7 @@ def test_custom_action_slot_discovery_surfaces_and_retires():
         "chart.copy_image",
         "chart.right_click_menu",
         "channel.right_click",
+        "file.scope_follow",
         "view.history",
     }
     state = HintState(discovered=frozenset(seen))
@@ -299,6 +300,28 @@ def test_flash_tip_registry_has_section_gestures():
     assert hints.flash_tip("spectrogram.slice_pick")
     assert hints.flash_tip("fft.preview_source")
     assert hints.flash_tip("missing.id") is None
+
+
+def test_fft_preview_hints_match_overlay_wheel_contract():
+    by_id = {h.id: h for h in hints.all_hints()}
+    for hid in (
+        "fft.preview_wheel",
+        "fft.preview_axis_gutter",
+        "fft.preview_left_axis",
+        "fft.preview_dblclick",
+        "fft.time_range_manual",
+    ):
+        assert hid in by_id, hid
+        assert by_id[hid].modes == frozenset({"fft"})
+    wheel = by_id["fft.preview_wheel"].text
+    assert "平滚轮平移" in wheel
+    assert "Shift" in wheel and "Ctrl" in wheel
+    assert "平移 Y" in hints.flash_tip("fft.preview_source")
+    manual = by_id["fft.time_range_manual"].text
+    assert "勾选" in manual and "计算" in manual
+    confirm = by_id["analysis.time_range_confirm"]
+    assert confirm.modes == frozenset({"fft", "fft_time", "order", "frf"})
+    assert "局部" in confirm.text and "询问" in confirm.text
 
 
 def test_design_curated_ids_exist_in_registry():
@@ -429,12 +452,15 @@ def test_axis_group_menu_open_retires_coaxis_merge_discovery(qapp, qtbot, monkey
 def test_analysis_view_scope_surfaces_on_every_analysis_section():
     """The View-scoped signal pickers need an explanation on all three pages.
 
-    The pickers offer only the focused View's attached files. When a wanted
-    channel is absent there is no error and no gesture to discover — the list
-    is simply short — so the footer carries the rule on the sections where the
-    pickers live, and nowhere else.
+    The pickers offer only the active analysis View's attached files. When a
+    wanted channel is absent there is no error and no gesture to discover —
+    the list is simply short — so the footer carries the rule on the sections
+    where the pickers live, and nowhere else.
     """
-    for mode in ("fft", "fft_time", "order"):
+    scope = next(h for h in hints.all_hints() if h.id == "analysis.view_scope")
+    assert "分析 View" in scope.text
+    assert "×" in scope.text
+    for mode in ("fft", "fft_time", "order", "frf"):
         ids = [hint.id for hint in hints.context_hints(HintState(mode=mode))]
         assert "analysis.view_scope" in ids, mode
 

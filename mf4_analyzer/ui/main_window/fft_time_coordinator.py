@@ -42,6 +42,9 @@ class FftTimeCoordinator(QObject):
     neither constructs presentation objects nor understands how a completed
     result is drawn.  Its public events carry opaque contexts for the caller
     that owns those responsibilities.
+
+    Writes go exclusively through ``store_result`` so View pinning can record
+    the dispatch-time ``view_id`` (never the callback-time active View).
     """
 
     render_requested = pyqtSignal(object, object, bool)
@@ -51,11 +54,19 @@ class FftTimeCoordinator(QObject):
     _SECTION = "fft_time"
     _MISSING = object()
 
-    def __init__(self, cache, job_service, key_builder: Callable, parent=None):
+    def __init__(
+        self,
+        cache,
+        job_service,
+        key_builder: Callable,
+        store_result: Callable,
+        parent=None,
+    ):
         super().__init__(parent)
         self._cache = cache
         self._job_service = job_service
         self._key_builder = key_builder
+        self._store_result = store_result
         self._generation = 0
         self._next_job_id = 0
         self._pending: dict[int, dict] = {}
@@ -218,7 +229,12 @@ class FftTimeCoordinator(QObject):
         pending = self._take_current_pending(ctx)
         if pending is None:
             return
-        self._cache.put(pending["analysis_key"], result)
+        self._store_result(
+            pending.get("view_id"),
+            int(pending.get("pane_idx", 0)),
+            pending["analysis_key"],
+            result,
+        )
         self.render_requested.emit(pending, result, False)
 
     def _on_job_failed(self, section: str, ctx, error) -> None:

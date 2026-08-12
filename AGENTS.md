@@ -118,10 +118,11 @@ and `.claude/`; do not edit those files unless the user explicitly asks.
   logical-source identity; Batch callers must seed probed source channels via
   `BatchRunner.seed_source_channels()` rather than assuming every split source
   contains the requested signal.
-- View limits are manager-specific: the time-domain workspace uses 12 and
-  analysis sections use `ui/view_state.py:MAX_VIEWS` (currently 6). Use the
-  manager's limit instead of hard-coding one global cap, and preserve active-tab
-  visibility, full-name tooltips, reorder, overflow, and context-menu behavior.
+- View limits are manager-specific but share one product ceiling: the
+  time-domain workspace and analysis sections both use
+  `ui/view_state.py:MAX_VIEWS` (currently 12). Use the manager's limit
+  instead of hard-coding a second cap, and preserve active-tab visibility,
+  full-name tooltips, reorder, overflow, and context-menu behavior.
 
 ## Robustness Rules
 

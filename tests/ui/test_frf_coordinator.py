@@ -95,7 +95,13 @@ def _candidate(
 def _make_coordinator():
     cache = FrfAnalysisResultCache(capacity=12)
     service = _FakeJobService()
-    coordinator = FrfCoordinator(cache, service)
+    coordinator = FrfCoordinator(
+        cache,
+        service,
+        store_result=lambda _view_id, _pane_idx, key, result: cache.put(
+            key, result
+        ),
+    )
     return cache, service, coordinator
 
 
@@ -343,7 +349,13 @@ def test_real_service_stops_the_superseded_worker_and_hides_its_result(qtbot):
 
     service = AnalysisJobService()
     cache = FrfAnalysisResultCache(capacity=12)
-    coordinator = FrfCoordinator(cache, service)
+    coordinator = FrfCoordinator(
+        cache,
+        service,
+        store_result=lambda _view_id, _pane_idx, key, result: cache.put(
+            key, result
+        ),
+    )
     rendered = []
     failed = []
     coordinator.render_requested.connect(

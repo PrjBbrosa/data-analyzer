@@ -67,6 +67,61 @@ def _emit_progress(progress_callback, current, total):
         pass
 
 
+def _estimate_byte_progress(
+    frame_index: int,
+    total_bytes: int,
+    *,
+    bytes_per_frame_hint: int = 128,
+) -> int:
+    """Synthetic byte position when ``reader.file.tell()`` is unavailable.
+
+    Caps below ``total_bytes`` so the final emit can still mark completion.
+    """
+    total_bytes = max(1, int(total_bytes))
+    hint = max(1, int(bytes_per_frame_hint))
+    est_frames = max(1, total_bytes // hint)
+    if frame_index <= 0:
+        return 0
+    if frame_index >= est_frames:
+        return max(0, total_bytes - 1)
+    return max(1, (int(frame_index) * (total_bytes - 1)) // est_frames)
+
+
+def _sample_reader_byte_progress(
+    reader,
+    frame_index: int,
+    total_bytes: int,
+    last_reported: int,
+    progress_callback,
+    *,
+    bytes_per_frame_hint: int = 128,
+) -> int:
+    """Prefer ``tell()``; fall back to a frame-based byte estimate.
+
+    Text-mode readers (CANoe ASC) disable ``tell()`` during ``for`` iteration
+    (``OSError: telling position disabled by next() call``). Without a
+    fallback the status bar stays frozen for the entire read.
+    """
+    byte_pos = None
+    file_obj = getattr(reader, "file", None)
+    if file_obj is not None:
+        try:
+            byte_pos = int(file_obj.tell())
+        except (AttributeError, OSError, TypeError, ValueError):
+            byte_pos = None
+    if byte_pos is None:
+        byte_pos = _estimate_byte_progress(
+            frame_index,
+            total_bytes,
+            bytes_per_frame_hint=bytes_per_frame_hint,
+        )
+    byte_pos = min(max(0, byte_pos), max(1, int(total_bytes)))
+    if byte_pos > last_reported:
+        _emit_progress(progress_callback, byte_pos, total_bytes)
+        return byte_pos
+    return last_reported
+
+
 def _read_blf_frames(fp, progress_callback=None):
     """Read a Vector BLF into a list of ``(timestamp, arbitration_id, data)``.
 
@@ -102,17 +157,14 @@ def _read_blf_frames(fp, progress_callback=None):
             if report_progress and (
                 frame_index == 1 or frame_index % 512 == 0
             ):
-                try:
-                    byte_pos = int(reader.file.tell())
-                except (AttributeError, OSError, ValueError):
-                    byte_pos = last_reported
-                if byte_pos > last_reported:
-                    _emit_progress(
-                        progress_callback,
-                        min(byte_pos, total_bytes),
-                        total_bytes,
-                    )
-                    last_reported = byte_pos
+                last_reported = _sample_reader_byte_progress(
+                    reader,
+                    frame_index,
+                    total_bytes,
+                    last_reported,
+                    progress_callback,
+                    bytes_per_frame_hint=64,
+                )
             if msg.is_error_frame or msg.is_remote_frame:
                 continue
             frames.append(

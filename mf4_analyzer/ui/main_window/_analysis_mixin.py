@@ -9,16 +9,23 @@ call through ``self.``.  Method-resolution order makes those calls find this
 copy regardless of base-class order — there are no name collisions.
 """
 
+import logging
 import math
 
 import numpy as np
 
-from PyQt5.QtWidgets import QColorDialog
+from PyQt5.QtWidgets import QColorDialog, QMessageBox
 from PyQt5.QtCore import QTimer
 
 from ... import db_reference
 from ..compute_feedback import summarize_compute
 from .analysis_context import AnalysisContext
+
+logger = logging.getLogger(__name__)
+
+# Relative tolerance vs full data span when deciding whether unchecked
+# start/end spinboxes are a "local draft" worth confirming before compute.
+_TIME_RANGE_DRAFT_LOCAL_TOL = 0.01
 
 
 # dB-reference-defaults Task 5 (spec §8.2 source tokens). Presentation-only
@@ -97,7 +104,52 @@ class AnalysisMixin:
 
     def _on_analysis_new(self, section):
         self._capture_active_analysis_view(section)
-        self.analysis_managers[section].new_view()
+        prefs = self.navigator.follow_prefs()
+        inherit = (
+            prefs.inherit_on_new_view
+            and not getattr(self, "_opening_project", False)
+            and not getattr(self, "_restoring_project", False)
+        )
+        template_fids = []
+        template_name = ""
+        if inherit:
+            from .file_scope_follow import resolve_new_view_template
+
+            mgr = self.analysis_managers[section]
+            section_state = mgr.get(mgr.active) if mgr.views else None
+            section_att = (
+                list(section_state.attached_file_ids)
+                if section_state is not None
+                else []
+            )
+            time_resolved = self._focused_time_view_state()
+            time_att = (
+                list(time_resolved[1].attached_file_ids)
+                if time_resolved is not None
+                else []
+            )
+            template_fids = resolve_new_view_template(
+                section_att, time_att, self.files
+            )
+            section_only = resolve_new_view_template(
+                section_att, [], self.files
+            )
+            if section_only and section_state is not None:
+                template_name = section_state.name
+            elif time_resolved is not None:
+                template_name = time_resolved[1].name
+        idx = self.analysis_managers[section].new_view()
+        if idx < 0:
+            return
+        if inherit and template_fids:
+            added = self._attach_files_to_active_analysis_view(
+                section, template_fids
+            )
+            if added:
+                self.toast(
+                    f"已继承 {len(added)} 个文件 · 来自 {template_name}",
+                    "success",
+                )
 
     def _on_analysis_delete(self, section, idx):
         self._capture_active_analysis_view(section)
@@ -105,6 +157,9 @@ class AnalysisMixin:
         if len(mgr.views) > 1 and 0 <= idx < len(mgr.views):
             state = mgr.get(idx)
             self._analysis_restore_pending.discard((section, state.view_id))
+            # Drop pin bookkeeping before the view disappears so later LRU
+            # passes treat its results as unowned history (spec §5).
+            self._drop_analysis_view_pins(section, state.view_id)
             if section == 'frf':
                 for pane_idx in range(len(state.panes)):
                     self._frf_coordinator.invalidate_pane(
@@ -191,9 +246,64 @@ class AnalysisMixin:
         if capture_sources:
             self._capture_analysis_sources(section, state)
 
-    def _on_analysis_view_switched(self, section, idx):
+    def _sync_active_analysis_params(self, section):
+        """Persist the active contextual's full View payload immediately.
+
+        The shared Inspector is a projection.  A user edit must therefore
+        update the focused View's complete ledger at the event boundary rather
+        than waiting for the next View switch or project save to capture it.
+        """
+        if self._applying_analysis_view:
+            return None
+        # Shared Inspector controls may be updated by another section while
+        # this analysis page is hidden (for example, source/default routing).
+        # Only the visible section represents an intentional edit to its
+        # active View; a hidden projection must be restored from that View on
+        # re-entry rather than overwriting its ledger.
+        if self.chart_stack.current_mode() != section:
+            return None
+        # Lightweight mixin probes from older tests/extensions predate
+        # AnalysisContext.  Preserve their inspector-only seam while real
+        # MainWindow instances continue through the owning context facade.
+        if hasattr(self, '_analysis_context'):
+            ctx = self._analysis_ctx(section)
+        else:
+            ctx = getattr(self.inspector, f'{section}_ctx')
+        if getattr(ctx, '_applying_preset', False):
+            return None
+        mgr = self.analysis_managers[section]
+        if not mgr.views:
+            return None
+        params_getter = getattr(ctx, 'current_params', ctx.get_params)
+        state = mgr.get(mgr.active)
+        state.params = dict(params_getter())
+        return state
+
+    def _on_analysis_compute_params_changed(self, section, _params):
+        """Record a compute edit without implicitly submitting a new job."""
+        self._sync_active_analysis_params(section)
+
+    def _on_analysis_display_params_changed(self, section, _params):
+        """Record a display edit and redraw only the visible active View."""
+        state = self._sync_active_analysis_params(section)
+        if state is not None and self.chart_stack.current_mode() == section:
+            self._render_analysis_view_from_cache(section, state)
+
+    def _on_fft_display_params_changed(self, value):
+        """Compatibility slot for the original FFT amplitude-unit wiring."""
+        self._on_analysis_display_params_changed('fft', value)
+
+    def _on_analysis_view_switched(self, section, idx, *, render=True,
+                                   apply_params=True):
         """manager.active_changed → apply the new view's structure, params and
-        sources, then render whatever the cache already holds (never compute)."""
+        sources, then render whatever the cache already holds (never compute).
+
+        ``render`` / ``apply_params`` let FFT *mode entry* apply the target
+        View's params/sources while deferring canvas restore to
+        ``_enter_fft_mode`` (signature-aware reuse). Params must always be
+        applied on mode entry so live Inspector values cannot overwrite the
+        destination View.
+        """
         from ..analysis_view_bridge import apply_params_from_state
         mgr = self.analysis_managers[section]
         if not (0 <= idx < len(mgr.views)):
@@ -221,16 +331,51 @@ class AnalysisMixin:
             page.set_levels_locked(levels_locked)
             page.sync_compare_buttons(
                 x_linked=x_linked, levels_locked=levels_locked)
-            # 3. Params + focused-pane source echo.
-            apply_params_from_state(self._analysis_ctx(section), state)
+            # 3. Project this View's attachments + section-local candidates
+            #    before echoing sources into live controls.
+            if self.chart_stack.current_mode() == section:
+                self._project_analysis_attachments(section, state)
+            self._refresh_analysis_candidates(section)
+            # 4. Params + focused-pane source echo.
+            if apply_params:
+                apply_params_from_state(self._analysis_ctx(section), state)
             if section in {'fft', 'frf'}:
                 self._apply_frequency_cursor_controls(section, state)
             self._apply_analysis_sources(section, state)
             self._apply_analysis_time_range(section, state)
         finally:
             self._applying_analysis_view = False
-        # 4. Render from cache only (spec §4: switching never auto-computes).
-        self._render_analysis_view_from_cache(section, state)
+        # 5. Render from cache only (spec §4: switching never auto-computes).
+        if render:
+            self._render_analysis_view_from_cache(section, state)
+
+    def _project_analysis_attachments(self, section, state):
+        """Project one analysis View's file range onto the shared navigator."""
+        attached = [
+            fid for fid in state.attached_file_ids if fid in self.files
+        ]
+        setter = getattr(self.navigator, 'set_attached_file_ids', None)
+        if callable(setter):
+            setter(attached)
+        label = self._analysis_section_label(section)
+        empty = getattr(self.navigator, 'set_empty_state_context', None)
+        if callable(empty):
+            empty(section_label=label, view_name=state.name)
+        if section != 'fft':
+            # Candidate roles do not own checkbox selection.
+            self.navigator.set_checked_channels([])
+
+    def _apply_active_analysis_context(self, section, *, render=True,
+                                       apply_params=True):
+        """Full-apply the active View of ``section`` after a mode switch."""
+        mgr = self.analysis_managers[section]
+        if not mgr.views:
+            return
+        # Reuse the view-switch pipeline against the already-active index so
+        # mode entry and View switch stay byte-equivalent for the target.
+        self._on_analysis_view_switched(
+            section, mgr.active, render=render, apply_params=apply_params
+        )
 
     def _on_analysis_focus_changed(self, section, idx):
         """A pane click changed the focused pane: capture the source selection
@@ -297,6 +442,84 @@ class AnalysisMixin:
     @staticmethod
     def _analysis_section_uses_time_range(section):
         return AnalysisContext.section_uses_time_range(section)
+
+    def _analysis_time_range_draft_is_local(self):
+        """Return ``(lo, hi)`` when start/end is an unchecked local draft.
+
+        A draft is "local" when「使用选定时间范围」is off and the spinbox span
+        is a proper subset of the loaded data extent (beyond a 1% tolerance).
+        Returns ``None`` when already armed, invalid, or ≈ full extent — those
+        cases should not interrupt compute with a confirm dialog.
+        """
+        top = self.inspector.top
+        if top.range_enabled():
+            return None
+        try:
+            lo = float(top.spin_start.value())
+            hi = float(top.spin_end.value())
+        except (TypeError, ValueError):
+            return None
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return None
+        extent = getattr(self, '_time_data_extent', None)
+        if not callable(extent):
+            return None
+        full_lo, full_hi = extent()
+        full_span = float(full_hi) - float(full_lo)
+        if not (np.isfinite(full_span) and full_span > 0):
+            return None
+        tol = _TIME_RANGE_DRAFT_LOCAL_TOL * full_span
+        # ≈ full extent → no prompt (user did not draft a window).
+        if lo <= full_lo + tol and hi >= full_hi - tol:
+            return None
+        # Must overlap the data at all; pure out-of-range drafts skip the ask.
+        if hi <= full_lo + tol or lo >= full_hi - tol:
+            return None
+        return (lo, hi)
+
+    def _ask_use_local_time_range(self, lo, hi):
+        """Modal confirm for an unchecked local draft. Returns
+        ``'local'`` / ``'full'`` / ``'cancel'``. Tests monkeypatch this."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("未启用选定时间范围")
+        box.setText(
+            f"开始/结束为 {lo:g}–{hi:g} s，但未勾选「使用选定时间范围」。\n"
+            "是否按该局部范围计算？"
+        )
+        local_btn = box.addButton("用局部范围", QMessageBox.AcceptRole)
+        full_btn = box.addButton("用全时段", QMessageBox.DestructiveRole)
+        cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(local_btn)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is local_btn:
+            return 'local'
+        if clicked is full_btn:
+            return 'full'
+        return 'cancel'
+
+    def _offer_analysis_time_range_before_compute(self, section):
+        """Gate user-initiated analysis compute on an unchecked local draft.
+
+        Returns ``True`` to proceed, ``False`` to abort. Selecting「用局部范围」
+        arms the shared checkbox (via ``set_range_from_span``) so the following
+        ``_capture_active_analysis_view`` writes ``pane.time_range``. Call
+        **before** capture on ``do_fft`` / ``do_fft_time`` / ``do_order_time`` /
+        ``do_frf`` only — not on project-restore auto-recompute or Batch.
+        """
+        if not self._analysis_section_uses_time_range(section):
+            return True
+        draft = self._analysis_time_range_draft_is_local()
+        if draft is None:
+            return True
+        lo, hi = draft
+        choice = self._ask_use_local_time_range(lo, hi)
+        if choice == 'cancel':
+            return False
+        if choice == 'local':
+            self.inspector.top.set_range_from_span(lo, hi)
+        return True
 
     def _capture_analysis_time_range(self, section, state, pane_idx=None):
         if not self._analysis_section_uses_time_range(section):
@@ -411,12 +634,17 @@ class AnalysisMixin:
         if section == 'fft':
             self.navigator.set_checked_channels(list(pane.sources))
             self._sync_fft_source_summary()
+            return
+        ctx = self._analysis_ctx(section)
+        if pane.sources:
+            self._echo_combo_signal(ctx.combo_sig, pane.sources[0])
         else:
-            ctx = self._analysis_ctx(section)
-            if pane.sources:
-                self._echo_combo_signal(ctx.combo_sig, pane.sources[0])
-            if section == 'order' and pane.rpm_source is not None:
+            self._clear_combo_selection(ctx.combo_sig)
+        if section == 'order':
+            if pane.rpm_source is not None:
                 self._echo_combo_signal(ctx.combo_rpm, pane.rpm_source)
+            else:
+                self._clear_combo_selection(ctx.combo_rpm)
 
     @staticmethod
     def _echo_combo_signal(combo, key):
@@ -431,69 +659,41 @@ class AnalysisMixin:
                 combo.setCurrentIndex(i)
                 return
 
+    @staticmethod
+    def _clear_combo_selection(combo):
+        """Clear a signal/RPM combo without emitting into PaneState."""
+        old = combo.blockSignals(True)
+        try:
+            # Prefer the explicit "none" row when present; else leave unselected.
+            none_idx = -1
+            for i in range(combo.count()):
+                if combo.itemData(i) is None:
+                    none_idx = i
+                    break
+            combo.setCurrentIndex(none_idx if none_idx >= 0 else -1)
+        finally:
+            combo.blockSignals(old)
+
     # -- cache-backed render on switch (Step 3) -------------------------
     def _analysis_compute_params(self, section):
         """Compute-relevant params (cache-key inputs) for the active inspector
         state of ``section``. Display-only knobs are excluded so toggling them
         does not invalidate the cache."""
-        ctx = self._analysis_ctx(section)
-        p = ctx.get_params()
+        if hasattr(self, '_analysis_context'):
+            ctx = self._analysis_ctx(section)
+        else:
+            ctx = getattr(self.inspector, f'{section}_ctx')
+        compute_params = getattr(ctx, 'compute_params', None)
+        p = compute_params() if callable(compute_params) else ctx.get_params()
         if section == 'frf':
             from .frf_coordinator import frf_compute_cache_params
             return frf_compute_cache_params(p)
-        if section == 'fft':
-            # Compute inputs for FFT spectra are window / nfft / averaging mode
-            # + averaging overlap (see _fft_compute_arrays). The plain
-            # ``overlap`` knob feeds only batch presets, NOT the spectrum
-            # compute, so it is excluded from the key (and its get/apply
-            # fraction-vs-percent asymmetry would make the key unstable).
-            cp = ctx.current_params()
-            return {
-                'window': p.get('window'),
-                'nfft': p.get('nfft'),
-                'nfft_mode': p.get('nfft_mode'),
-                't_win_s': p.get('t_win_s', 1.5),
-                'avg_mode': cp.get('avg_mode', '单帧'),
-                'avg_overlap': cp.get('avg_overlap', 50),
-                'weighting': p.get('weighting', 'None'),
-            }
-        if section == 'fft_time':
-            # db_reference is display-only (dB normalisation reference); compute
-            # never reads it, so it is excluded from the cache-key inputs.
-            return {
-                'fs': p.get('fs'),
-                'nfft': p.get('nfft'),
-                'window': p.get('window'),
-                'overlap': p.get('overlap'),
-                'remove_mean': p.get('remove_mean'),
-                'weighting': p.get('weighting', 'None'),
-            }
-        # order: COT params + rpm_source must both be in the key (changing the
-        # RPM channel must NOT hit an old result).
-        return {
-            'nfft': p.get('nfft'),
-            'nfft_mode': p.get('nfft_mode'),
-            'nfft_preview': p.get('nfft_preview'),
-            'nfft_effective': p.get('nfft_effective'),
-            'max_order': p.get('max_order'),
-            'order_res': p.get('order_res'),
-            'time_res': p.get('time_res'),
-            'samples_per_rev': ctx.current_params().get('samples_per_rev'),
-            'rpm_factor': p.get('rpm_factor'),
-            'rpm_mode': p.get('rpm_mode', 'channel'),
-            'manual_rpm': (
-                float(p.get('manual_rpm', 1000.0))
-                if p.get('rpm_mode', 'channel') == 'manual'
-                else None
-            ),
-            'fs': p.get('fs'),
-            'weighting': p.get('weighting', 'None'),
-        }
+        return p
 
     def _analysis_cache_key(self, section, fid, ch, rpm_source=None, pane_idx=None):
         cache = self.analysis_caches[section]
         if section == 'fft_time':
-            p = self.inspector.fft_time_ctx.get_params()
+            p = self._analysis_compute_params('fft_time')
             time_range = self._pane_time_range_for(section, pane_idx)
             prepared = self._fft_time_effective_params_for_source(
                 p, fid, ch, time_range)
@@ -576,6 +776,50 @@ class AnalysisMixin:
         except Exception:
             self.toast("恢复渲染失败，请手动点计算", "warning")
 
+    # -- analysis cache pinning (spec 2026-08-11) -----------------------------
+    # Pin bookkeeping records the *real* cache keys that render/put already
+    # hold. Never re-derive keys from state.params alone (Qt round-trip can
+    # diverge). Pinning is residency only — invalidate_fid still deletes
+    # pinned entries, and dead pin keys are left to the next render replace.
+    # Mutations go through AnalysisPinBook methods (holder), not bare dict
+    # writes on self._analysis_pins.
+
+    def _pinned_keys_for_section(self, section):
+        return self._analysis_pins.pinned_keys(section)
+
+    def _store_analysis_result(self, section, view_id, pane_idx, key, result):
+        """Single write funnel: cache put always, pin append only when
+        ``view_id`` names a real View (spec §4.1/§4.1 footnote).
+
+        A ``None`` view_id means the dispatch path that produced this result
+        never attached a real View identity to its ctx/candidate dict — pin
+        bookkeeping keys off ``str(view_id)``, so pinning here would wedge
+        the result into a permanent ``('<section>', 'None', pane_idx)`` slot
+        that render-time replace can never reach (it only ever replaces real
+        view_id slots). Cache the result anyway so it is not lost, skip the
+        pin, and log so a future dispatch path that forgets to carry
+        view_id is not a silent permanent-pin leak.
+        """
+        self.analysis_caches[section].put(key, result)
+        if view_id is None:
+            logger.warning(
+                "_store_analysis_result: view_id is None for section=%r "
+                "pane_idx=%r key=%r -- result cached but not pinned",
+                section, pane_idx, key,
+            )
+            return
+        self._analysis_pins.add(section, view_id, pane_idx, key)
+
+    def _replace_analysis_pane_pins(self, section, view_id, pane_idx, keys):
+        """Replace one pane's pin set with the keys enumerated at render time."""
+        self._analysis_pins.replace(section, view_id, pane_idx, keys)
+
+    def _drop_analysis_view_pins(self, section, view_id):
+        self._analysis_pins.drop_view(section, view_id)
+
+    def _clear_analysis_section_pins(self, section):
+        self._analysis_pins.clear_section(section)
+
     def _render_analysis_view_from_cache(self, section, state):
         """Render each pane from cached results; panes whose sources are not all
         cached show an empty state and a 'click 计算' status hint.
@@ -623,19 +867,23 @@ class AnalysisMixin:
             return
         page = self._analysis_page(section)
         any_missing = False
+        enumerated_panes = set()
         for pane_idx in range(page.pane_count()):
             if pane_idx >= len(state.panes):
                 break
+            enumerated_panes.add(pane_idx)
             pane = state.panes[pane_idx]
             canvas = page.pane_canvas(pane_idx)
             cache = self.analysis_caches[section]
             if section == 'fft':
                 entries = []
+                pane_keys = []
                 colors = self._analysis_channel_color_map()
                 time_range = self._pane_time_range_for(section, pane_idx)
                 for fid, ch in pane.sources:
                     key = self._analysis_cache_key(
                         section, fid, ch, pane_idx=pane_idx)
+                    pane_keys.append(key)
                     result = cache.get(key)
                     if result is None:
                         any_missing = True
@@ -643,23 +891,37 @@ class AnalysisMixin:
                     entries.append(self._fft_entry_from_cache(
                         result, fid, ch, colors.get((fid, ch)),
                         time_range=time_range))
+                self._replace_analysis_pane_pins(
+                    section, state.view_id, pane_idx, pane_keys)
                 if entries:
                     self._plot_fft_entries(entries, canvas)
                 else:
                     # No cached curves (empty sources, or all sources missing
-                    # from the cache) -> empty canvas state.
+                    # from the cache) -> empty canvas state.  A source can be
+                    # intentionally selected before its first FFT compute;
+                    # returning to that View must still restore its lower
+                    # time-domain preview after the pane sources are applied.
                     self._clear_analysis_canvas(canvas)
                     if pane.sources:
+                        if pane_idx == page.focused_index():
+                            self._refresh_fft_time_preview(
+                                clear_spectrum=False)
                         self._show_analysis_empty_hint(canvas)
             else:
                 if not pane.sources:
                     self._clear_analysis_canvas(canvas)
+                    self._replace_analysis_pane_pins(
+                        section, state.view_id, pane_idx, ())
                     continue
                 fid, ch = pane.sources[0]
                 key = self._analysis_cache_key(
                     section, fid, ch,
                     rpm_source=pane.rpm_source if section == 'order' else None,
                     pane_idx=pane_idx)
+                # Record binding intent even on miss so a later put is already
+                # protected (spec §4).
+                self._replace_analysis_pane_pins(
+                    section, state.view_id, pane_idx, (key,))
                 result = cache.get(key)
                 if result is None:
                     any_missing = True
@@ -668,6 +930,11 @@ class AnalysisMixin:
                 else:
                     self._render_cached_heatmap(
                         section, canvas, result, source=(fid, ch))
+        # Panes not visited this render (e.g. split cleared) drop their pins.
+        for pane_idx in range(len(state.panes)):
+            if pane_idx not in enumerated_panes:
+                self._replace_analysis_pane_pins(
+                    section, state.view_id, pane_idx, ())
         if any_missing:
             self.statusBar.showMessage("参数/源已就绪，点击计算")
 

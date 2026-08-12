@@ -172,6 +172,16 @@ def test_quickref_covers_db_reference_badge_and_manage_button():
     assert all(not r.soon for r in group.rows)
 
 
+def test_quickref_fft_preview_row_matches_overlay_contract():
+    group = next(g for g in quickref.QUICKREF if g.title == "图表手势")
+    row = next(r for r in group.rows if r.desc == "FFT 时域预览")
+    assert "平滚轮" in (row.gesture or "")
+    assert "平移" in (row.sub or "")
+    assert "设左轴" in (row.sub or "")
+    assert "单通道" in (row.sub or "")
+    assert "勾选" in (row.sub or "")
+
+
 def test_quickref_covers_batch_drawer():
     """The batch drawer had no quickref presence at all until the option-A
     picker rewrite (plan 2026-08-02). Guard the entry point plus the three
@@ -242,19 +252,24 @@ def test_catalog_covers_getting_a_file_into_a_view():
     """Opening a file is not the same as putting it in a View.
 
     Everything downstream — plotting, the channel tree, and the analysis signal
-    pickers — is scoped to the focused View's attached files, so the catalog
-    has to name both the drag and the auto-attach toggle that governs it.
+    pickers — is scoped to the active section/View's attached files, so the
+    catalog has to name both the drag and the follow-link menu that governs
+    file-scope intake.
     """
     attach = _row_by_desc("把文件加入当前 View")
     assert "拖" in attach.gesture
-    auto = _row_by_desc("自动加入开关")
-    assert "开" in auto.sub and "关" in auto.sub
+    assert "全局" in attach.sub and "当前 View" in attach.sub
+    follow = _row_by_desc("文件范围跟随")
+    assert "链接" in follow.gesture
+    assert "继承" in follow.sub and "填充" in follow.sub
 
 
 def test_catalog_states_the_analysis_picker_scope():
     """A short signal list is silent by design; the catalog must explain it."""
     row = _row_by_desc("分析信号的可选范围")
-    assert "当前 View" in row.sub
+    assert "分析 View" in row.sub
+    assert "时域 View" in row.sub
+    assert "跟随" in row.sub
     for section in ("FFT", "阶次"):
         assert section in row.sub
 

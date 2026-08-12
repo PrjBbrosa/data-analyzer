@@ -63,7 +63,15 @@ def _candidate(*, fid="f1", channel="speed", pane_idx=0,
 def coordinator():
     cache = AnalysisResultCache(12)
     service = _FakeJobService()
-    return FftTimeCoordinator(cache, service, _key_builder), cache, service
+    subject = FftTimeCoordinator(
+        cache,
+        service,
+        _key_builder,
+        store_result=lambda _view_id, _pane_idx, key, result: cache.put(
+            key, result
+        ),
+    )
+    return subject, cache, service
 
 
 def test_coordinator_module_has_no_qtwidgets_import():

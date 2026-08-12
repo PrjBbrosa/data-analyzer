@@ -997,7 +997,7 @@ def test_time_preview_left_and_aux_axes_share_tick_count(qapp):
     horizontal grid lines."""
     c = _realized(qapp, _multi_amplitude_entries())
     try:
-        n = c._time_divisions
+        n = c._effective_time_divisions()
         left = c._plot_time.getAxis('left')
         left_ticks = _value_tick_values(left)
         assert len(left_ticks) == n + 1, (
@@ -1019,7 +1019,7 @@ def test_time_preview_shared_grid_lines_at_i_over_n(qapp):
     proportional heights i/n (i = 1..n-1) inside the [0,1] grid ViewBox."""
     c = _realized(qapp, _multi_amplitude_entries())
     try:
-        n = c._time_divisions
+        n = c._effective_time_divisions()
         positions = _grid_line_positions(c)
         assert len(positions) == n - 1
         expected = [i / n for i in range(1, n)]
@@ -1030,26 +1030,30 @@ def test_time_preview_shared_grid_lines_at_i_over_n(qapp):
 
 def test_time_preview_tick_density_resyncs_grid_and_all_axes(qapp):
     """Changing the Y tick count must move the grid-line count AND the left/aux
-    tick counts together (n -> grid n-1, axes n+1)."""
+    tick counts together (n -> grid n-1, axes n+1), subject to height capping."""
     c = _realized(qapp, _multi_amplitude_entries())
     try:
         c.set_tick_density(10, 6)
         qapp.processEvents()
         assert c._time_divisions == 6
-        assert len(_grid_line_positions(c)) == 5      # n - 1
+        n = c._effective_time_divisions()
+        assert n == 6
+        assert len(_grid_line_positions(c)) == n - 1
         left_ticks = _value_tick_values(c._plot_time.getAxis('left'))
-        assert len(left_ticks) == 7                   # n + 1
+        assert len(left_ticks) == n + 1
         for ax in c._time_overlay_axes:
-            assert len(_value_tick_values(ax)) == 7
+            assert len(_value_tick_values(ax)) == n + 1
 
         c.set_tick_density(10, 12)
         qapp.processEvents()
         assert c._time_divisions == 12
-        assert len(_grid_line_positions(c)) == 11
+        n = c._effective_time_divisions()
+        assert n <= 12
+        assert len(_grid_line_positions(c)) == n - 1
         left_ticks = _value_tick_values(c._plot_time.getAxis('left'))
-        assert len(left_ticks) == 13
+        assert len(left_ticks) == n + 1
         for ax in c._time_overlay_axes:
-            assert len(_value_tick_values(ax)) == 13
+            assert len(_value_tick_values(ax)) == n + 1
     finally:
         c.deleteLater()
 
@@ -1075,7 +1079,7 @@ def test_time_preview_single_entry_still_grids_and_aligns(qapp):
          'freq': np.linspace(0, 500, 256), 'amp': np.abs(np.sin(t[:256]))}
     c = _realized(qapp, [e])
     try:
-        n = c._time_divisions
+        n = c._effective_time_divisions()
         assert len(_grid_line_positions(c)) == n - 1
         assert len(_value_tick_values(c._plot_time.getAxis('left'))) == n + 1
     finally:
@@ -1112,7 +1116,7 @@ def test_time_preview_density_path_does_not_unpin_left_ticks(qapp):
         c._reframe_time_y_to_grid()
         qapp.processEvents()
         left_ticks = _value_tick_values(c._plot_time.getAxis('left'))
-        assert len(left_ticks) == c._time_divisions + 1, (
+        assert len(left_ticks) == c._effective_time_divisions() + 1, (
             "re-frame must re-pin the left axis to the shared graticule")
         for ax in c._time_overlay_axes:
             assert len(_value_tick_values(ax)) == len(left_ticks)
@@ -1308,11 +1312,59 @@ def test_line_canvas_grid_is_major_only(canvas):
 
 
 def test_grid_only_on_left_and_bottom(canvas):
-    for plot in (canvas._plot_amp, canvas._plot_time):
-        assert plot.getAxis('top').grid is False
-        assert plot.getAxis('right').grid is False
-        assert plot.getAxis('left').grid is not False     # 仍开启（int alpha）
-        assert plot.getAxis('bottom').grid is not False
+    # Spectrum keeps native left+bottom major grids.
+    assert canvas._plot_amp.getAxis('top').grid is False
+    assert canvas._plot_amp.getAxis('right').grid is False
+    assert canvas._plot_amp.getAxis('left').grid is not False
+    assert canvas._plot_amp.getAxis('bottom').grid is not False
+    # Time preview mirrors TimeDomain overlay: native Y grid OFF; shared
+    # fractional graticule owns horizontal lines. Bottom X grid stays on.
+    assert canvas._plot_time.getAxis('top').grid is False
+    assert canvas._plot_time.getAxis('right').grid is False
+    assert canvas._plot_time.getAxis('left').grid is False
+    assert canvas._plot_time.getAxis('bottom').grid is not False
+
+
+def test_time_preview_aux_axis_enables_y_mouse(canvas):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    assert canvas._plot_time.vb.state['mouseEnabled'] == [True, True]
+    assert canvas._time_overlay_vbs
+    for vb in canvas._time_overlay_vbs:
+        assert vb.state['mouseEnabled'] == [False, True]
+
+
+def test_promote_time_entry_to_left_reorders_preview(canvas, qapp):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    qapp.processEvents()
+    before_labels = [e['label'] for e in canvas._entries]
+    assert len(before_labels) >= 2
+    canvas.promote_time_entry_to_left(1)
+    qapp.processEvents()
+    after_labels = [e['label'] for e in canvas._entries]
+    assert after_labels[0] == before_labels[1]
+    assert after_labels[1] == before_labels[0]
+    # Left axis still carries curve 0 after promote.
+    assert len(canvas._time_curves) == len(after_labels)
+
+
+def test_time_preview_idle_repin_after_y_pan(canvas, qapp):
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0),
+        amp_label='Amplitude', title='FFT',
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    qapp.processEvents()
+    canvas._plot_time.vb.setYRange(0.1, 0.7, padding=0)
+    canvas._on_interactive_range_changed(canvas._plot_time)
+    assert canvas._time_y_needs_repin is True
+    canvas._aa_on = False
+    canvas._enable_idle_quality()
+    assert canvas._time_y_needs_repin is False
+    n = canvas._effective_time_divisions()
+    left = canvas._plot_time.getAxis('left')
+    assert len(_major_tick_values(left)) == n + 1
 
 
 def test_empty_state_time_y_padded_off_top_frame(canvas):
@@ -2094,15 +2146,17 @@ def _major_tick_values(axis):
 
 
 def test_time_preview_axes_share_grid_divisions(canvas):
-    canvas.set_tick_density(10, 8)            # n = 8
+    canvas.set_tick_density(10, 8)            # request n = 8
     canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
                         amp_label='Amplitude', title='t')
     left = canvas._plot_time.getAxis('left')
     rights = list(canvas._time_overlay_axes)
     assert len(rights) == 2
-    # Every axis carries exactly n+1 = 9 pinned major ticks.
+    n = canvas._effective_time_divisions()
+    assert n == 8
+    # Every axis carries exactly n+1 pinned major ticks.
     for axis in (left, *rights):
-        assert len(_major_tick_values(axis)) == 9
+        assert len(_major_tick_values(axis)) == n + 1
 
     # Each axis's tick positions, normalized inside its own ViewBox, share the
     # SAME k/n sequence as the left axis → they coincide on screen.
@@ -2148,7 +2202,7 @@ def test_time_preview_shift_wheel_repins_every_axis_around_cursor(
     qapp.processEvents()
 
     assert consumed is True
-    n = canvas._time_divisions
+    n = canvas._effective_time_divisions()
     for index, ((vb, axis), before, before_anchor) in enumerate(
         zip(pairs, before_ranges, before_anchors)
     ):
@@ -2222,7 +2276,7 @@ def test_time_preview_aux_gutter_consumes_shift_wheel_after_axis_failure(
     kwargs, consumed = dispatch_calls[0]
     assert consumed is True
     assert kwargs["view_box"] is receiving_vb
-    n = canvas._time_divisions
+    n = canvas._effective_time_divisions()
     before_lo, before_hi = before_ranges[1]
     before_span = before_hi - before_lo
     fraction = (kwargs["y_pos"] - before_lo) / before_span
@@ -2235,12 +2289,15 @@ def test_time_preview_aux_gutter_consumes_shift_wheel_after_axis_failure(
     assert receiving_vb.viewRange()[1] == pytest.approx(
         (expected_bottom, expected_bottom + next_span)
     )
-    # The later axis still updates, proving the per-axis failure did not abort
-    # the loop. The exact receiving range proves native zoom was not layered on.
-    after_last = untouched_if_aborted_vb.viewRange()[1]
-    assert (after_last[1] - after_last[0]) < (
-        before_ranges[2][1] - before_ranges[2][0]
+    # Gutter wheel (axis==1) only targets the receiving ViewBox; the other
+    # overlay channel must stay put. The exact receiving range also proves
+    # native zoom was not layered on after our dispatch consumed the event.
+    # setTicks failure on the receiving axis must not undo the Y range
+    # (setYRange runs before setTicks inside the per-axis try).
+    assert untouched_if_aborted_vb.viewRange()[1] == pytest.approx(
+        before_ranges[2]
     )
+    assert pairs[0][0].viewRange()[1] == pytest.approx(before_ranges[0])
 
 
 @pytest.mark.parametrize(
@@ -2259,7 +2316,7 @@ def test_time_preview_shift_wheel_labels_cover_step_and_magnitude_bands(
         [_overlay_entries()[0]], xlim=(0.0, 50.0),
         amp_label='Amplitude', title='t',
     )
-    n = canvas._time_divisions
+    n = canvas._effective_time_divisions()
     vb = canvas._plot_time.vb
     before_top = before_bottom + n * initial_per_div
     vb.setYRange(before_bottom, before_top, padding=0)
@@ -2297,12 +2354,16 @@ def test_tick_density_changes_right_axis_divisions(canvas):
                         amp_label='Amplitude', title='t')
     canvas.set_tick_density(10, 6)
     assert canvas._time_divisions == 6
+    n = canvas._effective_time_divisions()
+    assert n == 6
     for axis in canvas._time_overlay_axes:
-        assert len(_major_tick_values(axis)) == 7
+        assert len(_major_tick_values(axis)) == n + 1
     canvas.set_tick_density(10, 12)
     assert canvas._time_divisions == 12
+    n = canvas._effective_time_divisions()
+    assert 6 < n <= 12
     for axis in canvas._time_overlay_axes:
-        assert len(_major_tick_values(axis)) == 13
+        assert len(_major_tick_values(axis)) == n + 1
 
 
 def test_fit_y_keeps_time_axes_on_grid(canvas):
@@ -2311,8 +2372,60 @@ def test_fit_y_keeps_time_axes_on_grid(canvas):
     canvas._fit_y_to_visible_x(canvas._plot_time)
     left = canvas._plot_time.getAxis('left')
     (lo, hi) = canvas._plot_time.vb.viewRange()[1]
+    n = canvas._effective_time_divisions()
     fr = [round((v - lo) / (hi - lo), 6) for v in _major_tick_values(left)]
-    assert fr == pytest.approx([k / 10 for k in range(11)], abs=1e-6)
+    assert fr == pytest.approx([k / n for k in range(n + 1)], abs=1e-6)
+
+
+def test_time_preview_y_density_preserves_current_ylim(canvas, qapp):
+    """Y tick density must repin the live window — not full-data reframe."""
+    t = np.linspace(0.0, 40.0, 4001)
+    signal = np.where(t < 28.0, (t / 28.0) * 3.0 - 1.0, 2.0 + 0.02 * np.sin(40.0 * t))
+    entry = {
+        'label': 'step', 'color': '#22c55e',
+        'freq': np.linspace(0.0, 50.0, 64), 'amp': np.ones(64),
+        'time': t, 'signal': signal,
+    }
+    canvas.plot_spectra([entry], xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    qapp.processEvents()
+    canvas._plot_time.vb.setYRange(1.6, 2.4, padding=0)
+    before = tuple(canvas._plot_time.vb.viewRange()[1])
+    canvas.set_tick_density(10, 6)
+    qapp.processEvents()
+    after = tuple(canvas._plot_time.vb.viewRange()[1])
+    # Full-data reframe would open to roughly [-1, 2+] (span ≳ 3). Repin keeps
+    # a tight window around the user range (nice expand is OK, full reset is not).
+    assert (after[1] - after[0]) < 2.0
+    mid_before = 0.5 * (before[0] + before[1])
+    mid_after = 0.5 * (after[0] + after[1])
+    assert abs(mid_after - mid_before) < 0.75
+    assert canvas._time_divisions == 6
+    assert len(_major_tick_values(canvas._plot_time.getAxis('left'))) == (
+        canvas._effective_time_divisions() + 1
+    )
+
+
+def test_time_preview_y_adapt_fits_visible_x_window(canvas, qapp):
+    """Y adapt must fit the plateau in the current X window, not the rise."""
+    t = np.linspace(0.0, 40.0, 4001)
+    signal = np.where(t < 28.0, (t / 28.0) * 3.0 - 1.0, 2.0 + 0.02 * np.sin(40.0 * t))
+    entry = {
+        'label': 'step', 'color': '#22c55e',
+        'freq': np.linspace(0.0, 50.0, 64), 'amp': np.ones(64),
+        'time': t, 'signal': signal,
+    }
+    canvas.plot_spectra([entry], xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    qapp.processEvents()
+    # Plateau only — visible Y is ~2; full curve still spans ~-1..2.
+    canvas._plot_time.setXRange(30.0, 36.0, padding=0)
+    canvas._fit_y_to_visible_x(canvas._plot_time)
+    qapp.processEvents()
+    lo, hi = canvas._plot_time.vb.viewRange()[1]
+    assert lo > 1.2
+    assert hi < 2.8
+    assert (hi - lo) < 1.5
 
 
 def test_constant_signal_does_not_raise(canvas):
@@ -2578,17 +2691,154 @@ def test_fft_view_history_back_forward(canvas):
         x_now, abs=1e-6)
 
 
-def test_fft_history_time_handle_only_restores_x(canvas):
-    # The __time__ handle must NOT restore Y (it would fight the graticule):
-    # set_ylim is a no-op, get_ylim reflects the current range.
+def test_fft_history_time_handle_restores_y(canvas):
+    # Preview Y is user-draggable; history must rewind it with X.
     handle = canvas._channel_lines['__time__'][0]
     canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
                         amp_label='Amplitude', title='t')
     canvas._plot_time.vb.setYRange(-7.0, 7.0, padding=0)
-    before = tuple(canvas._plot_time.vb.viewRange()[1])
     handle.set_ylim(-999.0, 999.0)
     after = tuple(canvas._plot_time.vb.viewRange()[1])
-    assert after == pytest.approx(before, abs=1e-6)
+    assert after == pytest.approx((-999.0, 999.0), abs=1e-6)
+
+
+def test_time_preview_enables_xy_pan(canvas):
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0),
+        amp_label='Amplitude', title='FFT',
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    # y=True so left-axis gutter can drag Y; plot-body 2D is forced X-only
+    # inside _ModifierWheelViewBox.
+    assert canvas._plot_time.vb.state['mouseEnabled'] == [True, True]
+
+
+def test_plain_wheel_pans_time_preview_y_not_spectrum(canvas, qapp):
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0),
+        amp_label='Amplitude', title='FFT',
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas._plot_amp.setXRange(0.0, 500.0, padding=0)
+    canvas._plot_amp.setYRange(-1.0, 1.0, padding=0)
+    canvas._plot_time.setXRange(0.0, 1.0, padding=0)
+    canvas._plot_time.setYRange(-2.0, 2.0, padding=0)
+    qapp.processEvents()
+    amp_before = canvas._plot_amp.vb.viewRange()
+    time_x_before, time_y_before = canvas._plot_time.vb.viewRange()
+
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.NoModifier,
+        x_pos=0.5, y_pos=0.0, view_box=canvas._plot_amp.vb,
+    ) is True
+    assert canvas._plot_amp.vb.viewRange()[0] == pytest.approx(amp_before[0])
+    assert canvas._plot_amp.vb.viewRange()[1] == pytest.approx(amp_before[1])
+
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.NoModifier,
+        x_pos=0.5, y_pos=0.0, view_box=canvas._plot_time.vb,
+    ) is True
+    time_x_after, time_y_after = canvas._plot_time.vb.viewRange()
+    assert time_x_after == pytest.approx(time_x_before)
+    # Plain wheel pans Y (does not zoom span).
+    assert (time_y_after[1] - time_y_after[0]) == pytest.approx(
+        time_y_before[1] - time_y_before[0])
+    assert time_y_after != pytest.approx(time_y_before)
+
+
+def test_time_preview_gutter_wheel_targets_single_axis(canvas, qapp):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    qapp.processEvents()
+    main = canvas._plot_time.vb
+    aux = canvas._time_overlay_vbs[0]
+    main.setYRange(-1.0, 1.0, padding=0)
+    aux.setYRange(-2.0, 2.0, padding=0)
+    main_before = main.viewRange()[1]
+    aux_before = aux.viewRange()[1]
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ShiftModifier,
+        x_pos=0.5, y_pos=0.0, view_box=aux, axis=1,
+    ) is True
+    assert main.viewRange()[1] == pytest.approx(main_before)
+    assert (aux.viewRange()[1][1] - aux.viewRange()[1][0]) < (
+        aux_before[1] - aux_before[0])
+
+
+def test_time_preview_emphasis_dims_non_selected(canvas, qapp):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    canvas.select_time_entry(1)
+    qapp.processEvents()
+    assert canvas._time_curves[1].opts['pen'].widthF() == pytest.approx(
+        1.9, abs=0.05)
+    assert canvas._time_curves[0].opacity() == pytest.approx(0.42, abs=0.02)
+
+
+def test_time_preview_right_axis_has_channel_label(canvas, qapp):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    qapp.processEvents()
+    assert canvas._time_overlay_axes
+    label = canvas._time_overlay_axes[0].label.toPlainText()
+    assert 'b' in label
+
+
+def test_promote_by_channel_name(canvas, qapp):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    assert canvas.promote_time_entry_to_left_by_channel(None, 'c') is True
+    assert canvas._entries[0]['label'] == 'c'
+
+
+def test_time_preview_box_zoom_maps_y_fraction_to_aux(canvas, qapp):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    qapp.processEvents()
+    main = canvas._plot_time.vb
+    aux = canvas._time_overlay_vbs[0]
+    main.setYRange(-4.0, 4.0, padding=0)
+    aux.setYRange(-20.0, 20.0, padding=0)
+    canvas._begin_view_interaction()
+    # Simulate RectMode finish that halved the main Y window to the upper half.
+    main.setYRange(0.0, 4.0, padding=0)
+    canvas._apply_time_preview_box_zoom_y()
+    qapp.processEvents()
+    aux_lo, aux_hi = aux.viewRange()[1]
+    # Upper half of [-20, 20] → [0, 20], then nice-framed.
+    assert aux_lo >= -1.0
+    assert aux_hi <= 25.0
+    assert aux_hi - aux_lo < 40.0
+
+
+def test_time_preview_idle_snap_preserves_span(canvas, qapp):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    qapp.processEvents()
+    vb = canvas._plot_time.vb
+    n = canvas._effective_time_divisions()
+    vb.setYRange(-1.37, -1.37 + n * 0.5, padding=0)
+    span_before = vb.viewRange()[1][1] - vb.viewRange()[1][0]
+    canvas._snap_time_axes_to_grid()
+    lo, hi = vb.viewRange()[1]
+    assert (hi - lo) == pytest.approx(span_before)
+    per_div = (hi - lo) / n
+    assert lo == pytest.approx(round(lo / per_div) * per_div, abs=1e-9)
+
+
+def test_time_preview_divisions_capped_by_short_height(canvas, qapp):
+    canvas.set_tick_density(10, 20)
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0),
+        amp_label='Amplitude', title='FFT',
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    qapp.processEvents()
+    assert canvas._time_divisions == 20
+    n = canvas._effective_time_divisions()
+    # Default bottom strip (~170 px) cannot label 20 divisions without stacking.
+    assert n < 20
+    assert len(_major_tick_values(canvas._plot_time.getAxis('left'))) == n + 1
 
 
 # ----------------------------------------------------------------------

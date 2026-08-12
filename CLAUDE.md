@@ -2,13 +2,16 @@
 
 **Project:** TraceLab / MF4 Data Analyzer — PyQt5 桌面 GUI，做工程测量数据的导入、
 时域/频域/阶次分析、批处理，以及 CAN/XCP 采集回放。版本单一事实源是
-`mf4_analyzer/app_meta.py` 的 `APP_VERSION`（当前 v7.9.5），别在别处硬编码版本号。
+`mf4_analyzer/app_meta.py` 的 `APP_VERSION`（当前 v7.9.8），别在别处硬编码版本号。
 升版本要同步的扇出面：`README.md` · `docs/analyzer/README.md` 的 Current Product
 Baseline · `mf4_analyzer/help/` 下使用说明（`meta.version`/`versionLabel`/`updated`
 + changelog 新增条目）与四个分析指南 · `docs/analyzer/user-guide/user-guide.html` ·
-`tools/build_windows_folder*.ps1` 的 `$Version` · 三个测试契约
-（`test_help_content.py` · `test_windows_build_script.py` · `ui/test_project_session.py`）。
-`docs/analyzer/specs|plans|acquisition/` 下的历史文档记录当时状态，**不要**跟着改。
+`tools/build_windows_folder*.ps1` 的 `$Version` · `tools/run_windows_exe.bat` 的
+`APPNAME` · 四个测试契约（`test_help_content.py` · `test_windows_build_script.py` ·
+`test_packaging_imports.py` · `ui/test_project_session.py`）。
+`docs/analyzer/specs|plans|acquisition/` 下的历史文档记录当时状态，**不要**跟着改
+（唯一例外：`acquisition/runbooks/stage-8-pr4-bench.md` 的构建路径被
+`test_windows_build_script.py` 契约钉在当前版本上，升版要同步）。
 
 ## Dev commands
 ```bash
@@ -19,15 +22,27 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
 ```
 - 本机验证走仓库 venv（`.venv/bin/python`）；裸 `python` / `pytest` 未必存在。
 - Qt 用例需要 offscreen 平台；`TMPDIR=/tmp` 用来绕开下面 Gotchas 里的 TCC 问题。
-- 默认套件约 5600 条，主体约 6 分钟 + `tests/acquisition_ui` 约 10 秒（2026-08-08 本机实测；
+- 默认套件约 6400 条，主体约 7 分钟 + `tests/acquisition_ui` 约 15 秒（2026-08-11 本机实测；
   早先记的「近 20 分钟」已不成立）。仍建议改动局部时先跑对应子目录，收尾再跑全量。
 - **全量要分两条命令跑**：裸 `pytest -q` 会在 `tests/acquisition_ui` 段被 pyqtgraph
   `LabelItem.resizeEvent` 的 `RuntimeError`（已删 `QGraphicsTextItem`）打成 **segfault**，
   约 4% 处中断、无汇总。交错相关——单独跑该目录不崩。要拿全量数字：
   `--ignore=tests/acquisition_ui` 跑主体，另起一条单独跑该目录。
 - **动手前先记下当前失败数**，别把既有失败算到自己的改动头上。
-  当前基线（2026-08-08 实测于 `3fd691a8` / v7.9.5）：主体 **5258 passed / 9 skipped /
-  0 failed**，`tests/acquisition_ui` 单独 **355 passed**——**两边全绿**。
+  当前基线（2026-08-11 实测，树内容即 merge `2c8e9b5a`；修复清单见
+  `docs/analyzer/reviews/2026-08-11-two-day-delivery-and-frf-view-review.md` §7）：
+  主体 **6048 passed / 11 skipped / 0 failed / 0 errors**，`tests/acquisition_ui`
+  单独 **355 passed**——**两边全绿**（2026-08-12 实测，HEAD `56c42f4d`；此前
+  2026-08-11 记录为主体 5925/9）。
+  主体一条命令在 `f85b5d4e`..`56c42f4d` 期间还有**另一处**交错 segfault
+  （channel-tree delegate paint 中途被 gen-0 GC 回收弱引用顶层 widget），已由
+  `tests/ui/conftest.py` 的「post-call 钉住顶层 widget → teardown 泵完事件再释放
+  + collect」修复——**别删那段 pin 逻辑**，机制、实验与引入提交见
+  `docs/analyzer/reviews/2026-08-11-channel-tree-paint-segfault-triage.md` §6。
+  期间曾出现过的 Batch 2 failed + 8 errors（几何契约漏同步 + `BatchSheet`
+  lambda/属性回调导致的僵尸 wrapper teardown 簇）已随上述修复清零，定性与引入点
+  见同一文档 §4.2/§4.3——别从旧版验收文档把「单独进程运行通过」的说法抄回来，
+  teardown 簇里 4-5 条单跑也确定性复现。
   唯一环境性风险是 `tests/test_gen_help_screenshots.py`：它依赖未入库的本机 `testdoc/`
   样本目录，本机有样本所以通过，新克隆会红，那不是代码问题。
   本文先前记录的三条「历史既有红」已全部转绿并从本文删除（别从旧版抄回；其中
@@ -139,11 +154,12 @@ spec：`docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`。
   `docs/analyzer/specs/2026-07-26-plot-performance-standards.md`。**别放宽上限**来让改动通过。
 
 ## 产品约束（碰导入 / View 相关代码前必读）
-- 支持格式：MF4/MDF、CSV/Excel/HDF、BLF+DBC、音视频、通用 ASCII（`.asc`/`.fdc`）、
+- 支持格式：MF4/MDF、CSV/Excel/HDF、BLF+DBC、CANoe ASC CAN 日志（`.asc` 自动识别，配 DBC，
+  与 BLF 同链路）、音视频、通用 ASCII（`.asc`/`.fdc`）、
   NI TDMS（`.tdms`）、WinWert（`.wwt`）、ZFGE2/TestRunPRO（`.zfd`）、
   MATLAB（`.mat`，v7.3 经 HDF5）。
 - ASCII 需要可识别的时间列，或已验证的固定宽度采样元数据；TDMS 需要有效波形时基
-  ——**绝不臆造采样率**。
+  ——**绝不臆造采样率**。`.asc` 先经 CANoe 取证，命中走 CAN 日志链路，未命中才按通用 ASCII 解析。
 - `.tdms_index` 是 TDMS 配套索引，永远不是可导入的数据文件。
 - WWT 用文件自带的 `Zeit` 时基并保留单位/缩放/偏移；ZFD 在时基无效时可用**显式标注为
   估算**的 1 kHz 回退；MAT 只认可识别的时间变量，不猜工程单位。
@@ -156,9 +172,9 @@ spec：`docs/analyzer/specs/2026-08-08-timedomain-aa-ink-budget-spec.md`。
   `BatchRunner.seed_source_channels()` 喂进探针结果（`BatchSheet._make_runner` 已接），
   否则会把目标信号排到根本没有它的子来源上。
 - 批处理与 GUI 共用同一套 ASCII/TDMS 导入规则。
-- View 上限按 manager 区分：时域工作区 12（`ui/main_window/window.py` 传 `max_views=12`），
-  分析分区 6（`ui/view_state.MAX_VIEWS`）。窄宽度下 tab 先压成序号、再溢出到 `»`；
-  改动要保住活动 View 可见性、tooltip 全名、拖拽重排与右键菜单。
+- View 上限按 manager 区分：时域与四个分析分区统一 12（`ui/view_state.MAX_VIEWS`；
+  时域在 `ui/main_window/window.py` 显式传 `max_views=12`）。窄宽度下 tab 先压成序号、
+  再溢出到 `»`；改动要保住活动 View 可见性、tooltip 全名、拖拽重排与右键菜单。
 
 ## Gotchas
 - **验真机渲染**：UI/视觉/性能问题（尤其 macOS 原生）必须验真实渲染（截图 / objc 读原生

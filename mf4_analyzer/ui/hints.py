@@ -198,6 +198,12 @@ _HINTS = (
         priority=80,
     ),
     Hint(
+        id="file.scope_follow",
+        text="链接=文件范围跟随（加载/新建/切分析）",
+        surface="discovery",
+        priority=78,
+    ),
+    Hint(
         id="view.history",
         text="图表可后退/前进到上一个视图（Ctrl+Z）",
         surface="discovery",
@@ -395,8 +401,8 @@ _HINTS = (
         retire_when_discovered="spectrogram.slice_pick",
     ),
     # FFT time-domain preview (lives on the FFT spectrum line card, below the
-    # spectrum): click a curve to choose the source, and the preview honours
-    # Ctrl/Shift wheel zoom independently of the spectrum above it.
+    # spectrum): click a curve to choose the source; preview Y follows the
+    # TimeDomain overlay wheel contract (plain=pan, Shift=zoom, gutter=one axis).
     Hint(
         id="fft.preview_pick_source",
         text="点击上方频谱曲线 → 选为下方时域预览的源",
@@ -409,12 +415,55 @@ _HINTS = (
     ),
     Hint(
         id="fft.preview_wheel",
-        text="预览图内 Ctrl/Shift+滚轮 独立缩放",
+        text="预览：平滚轮平移 Y · Shift 缩放 Y · Ctrl 缩放 X",
         surface="context",
         tier="A",
         modes=frozenset({"fft"}),
         chart_kinds=frozenset({"fft"}),
         priority=55,
+    ),
+    Hint(
+        id="fft.time_range_manual",
+        text="时间范围：预览缩放只改起止；勾选后才用于计算",
+        surface="context",
+        tier="A",
+        modes=frozenset({"fft"}),
+        priority=70,
+    ),
+    Hint(
+        id="analysis.time_range_confirm",
+        text="计算时若起止已局部但未勾选，会询问是否用局部范围",
+        surface="context",
+        tier="A",
+        modes=frozenset({"fft", "fft_time", "order", "frf"}),
+        priority=68,
+    ),
+    Hint(
+        id="fft.preview_axis_gutter",
+        text="滚轮停在预览左/右 Y 轴上 → 只调该通道",
+        surface="context",
+        tier="B",
+        modes=frozenset({"fft"}),
+        chart_kinds=frozenset({"fft"}),
+        priority=50,
+    ),
+    Hint(
+        id="fft.preview_left_axis",
+        text="预览右键曲线/右轴 → 设为左轴",
+        surface="context",
+        tier="B",
+        modes=frozenset({"fft"}),
+        chart_kinds=frozenset({"fft"}),
+        priority=48,
+    ),
+    Hint(
+        id="fft.preview_dblclick",
+        text="双击预览曲线或 Y 轴 → 编辑颜色/坐标",
+        surface="context",
+        tier="B",
+        modes=frozenset({"fft"}),
+        chart_kinds=frozenset({"fft"}),
+        priority=46,
     ),
     # Annotation gesture, gated on annotation mode, for the FFT-vs-Time + Order
     # cards as well (the existing annotation.mode hint only covers fft + order).
@@ -428,12 +477,12 @@ _HINTS = (
     ),
     # ---- 分析信号选择范围 (View-scoped pickers) ----
     # The 信号 pickers used to enumerate every loaded file; they now offer only
-    # the focused TimeDomain View's attached files, matching what the navigator
-    # and channel tree already project. The failure this answers is silent: ten
-    # files open, one in the View, and the user searches for a channel that
-    # simply is not listed. Nothing on screen explains the scope, and there is
-    # no gesture to discover — so this is a context hint on the three analysis
-    # sections rather than a discovery entry that retires once exercised.
+    # the active analysis section View's attached files (not the time View).
+    # The failure this answers is silent: files open globally, one in the
+    # analysis View, and the user searches for a channel that simply is not
+    # listed. Nothing on screen explains the scope, and there is no gesture to
+    # discover — so this is a context hint on the analysis sections rather than
+    # a discovery entry that retires once exercised.
     # Deliberately NOT a nudge: nudge predicates read HintState signals fed by
     # _ChartCard._nudge_signals(), and View attachment is navigator state that
     # never reaches it (same reasoning as view.compact_tabs above).
@@ -441,7 +490,7 @@ _HINTS = (
     # and level with fft.preview_pick_source.
     Hint(
         id="analysis.view_scope",
-        text="分析只列当前 View；右侧 × 可移除",
+        text="分析按当前分析 View 列文件；× 从该 View 移除",
         surface="context",
         modes=frozenset({"fft", "fft_time", "frf", "order"}),
         priority=75,
@@ -557,7 +606,7 @@ _FLASH_TIPS = {
     "spectrogram.slice_pick": "已取该帧切片 · 也可拖动切片标记线移动取样位置",
     "spectrogram.colorbar": "拖 colorbar 调色阶 · 双击 colorbar 可重置范围",
     "spectrogram.divider": "拖上下分隔条调高度 · 双击重置 · 底部可折叠/展开",
-    "fft.preview_source": "已选为时域预览的源 · 预览图支持 Ctrl/Shift 滚轮独立缩放",
+    "fft.preview_source": "已选为时域预览的源 · 平滚轮平移 Y · Shift/Ctrl 缩放 · 右键可设左轴",
     "preset.right_click": "预设槽右键可保存 / 重命名 / 重置为默认",
 }
 

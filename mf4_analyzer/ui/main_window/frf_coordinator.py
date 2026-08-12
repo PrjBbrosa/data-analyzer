@@ -43,6 +43,9 @@ class FrfCoordinator(QObject):
     (see ``_may_replace_section``).  Whenever another pane holds queued or
     in-flight work, the request is a plain append and the older job is
     suppressed on completion instead of being cancelled.
+
+    Cache writes go through ``store_result`` so the window can pin by the
+    dispatch-time ``view_id`` carried on the candidate/context.
     """
 
     render_requested = pyqtSignal(object, object, bool)
@@ -51,10 +54,11 @@ class FrfCoordinator(QObject):
 
     _SECTION = "frf"
 
-    def __init__(self, cache, job_service, parent=None):
+    def __init__(self, cache, job_service, store_result, parent=None):
         super().__init__(parent)
         self._cache = cache
         self._job_service = job_service
+        self._store_result = store_result
         self._next_job_id = 0
         self._pane_generations: dict[object, int] = {}
         self._pending: dict[int, dict] = {}
@@ -282,7 +286,12 @@ class FrfCoordinator(QObject):
         pending = self._take_current_pending(ctx)
         if pending is None:
             return
-        self._cache.put(pending["analysis_key"], result)
+        self._store_result(
+            pending.get("view_id"),
+            int(pending.get("pane_idx", 0)),
+            pending["analysis_key"],
+            result,
+        )
         self.render_requested.emit(pending, result, False)
 
     def _on_job_failed(self, section: str, ctx, issue) -> None:

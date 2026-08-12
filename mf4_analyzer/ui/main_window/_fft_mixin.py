@@ -221,11 +221,13 @@ class FFTMixin:
         single-signal UX + tests are unchanged. Captured-but-unfetchable
         sources are summarized as skipped instead.
         """
+        if not self._offer_analysis_time_range_before_compute('fft'):
+            return
         self._capture_active_analysis_view('fft')
         mgr = self.analysis_managers['fft']
         state = mgr.get(mgr.active)
         page = self.chart_stack.page_fft
-        fft_params = self.inspector.fft_ctx.current_params()
+        fft_params = self.inspector.fft_ctx.compute_params()
         cache = self.analysis_caches['fft']
         colors = self._analysis_channel_color_map()
 
@@ -278,7 +280,8 @@ class FFTMixin:
                         outcome.failed += 1
                         QMessageBox.critical(self, 'FFT错误', str(e))
                         continue
-                    cache.put(key, result)
+                    self._store_analysis_result(
+                        'fft', state.view_id, pane_idx, key, result)
                     outcome.computed += 1
                 else:
                     outcome.cached += 1
@@ -327,13 +330,12 @@ class FFTMixin:
             m = (t >= lo) & (t <= hi)
             t = t[m]
             sig = sig[m]
-        fft_params = self.inspector.fft_ctx.current_params()
+        fft_params = self.inspector.fft_ctx.compute_params()
         fs = self.inspector.fft_ctx.fs()
         fft_params = self._resolve_fft_effective_params(
             fft_params, len(sig), fs)
         win = fft_params['window']
         nfft = fft_params['nfft']
-        overlap = fft_params['overlap']
 
         progress_token = self._begin_compute_progress("FFT 计算中")
         error = None
@@ -343,21 +345,22 @@ class FFTMixin:
 
             freq, amp, _psd = self._fft_compute_arrays(sig, fs, fft_params)
 
-            x_auto = bool(fft_params.get('x_auto', fft_params.get('autoscale', True)))
-            x_min = float(fft_params.get('x_min', 0.0))
-            x_max = float(fft_params.get('x_max', 0.0))
+            display_params = self.inspector.fft_ctx.display_params()
+            x_auto = bool(display_params.get('x_auto', display_params.get('autoscale', True)))
+            x_min = float(display_params.get('x_min', 0.0))
+            x_max = float(display_params.get('x_max', 0.0))
             if x_auto:
                 xlim = (0.0, self._fft_auto_xlim(freq, amp))
             elif x_max > x_min:
                 xlim = (x_min, x_max)
             else:
                 xlim = (0.0, fs / 2)
-            y_auto = bool(fft_params.get('y_auto', True))
-            y_min = float(fft_params.get('y_min', 0.0))
-            y_max = float(fft_params.get('y_max', 0.0))
+            y_auto = bool(display_params.get('y_auto', True))
+            y_min = float(display_params.get('y_min', 0.0))
+            y_max = float(display_params.get('y_max', 0.0))
 
             # Wave 2 / SP2 / Task 2.3: per-subplot Linear/dB toggle.
-            amp_y = fft_params.get('amp_y', 'Linear')
+            amp_y = display_params.get('amp_y', 'Linear')
             weighting = fft_params.get('weighting', 'None')
             # dB-reference-defaults Task 11 (spec A9/A17 classification):
             # resolve THIS source's own reference through the same pure

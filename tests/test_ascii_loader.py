@@ -69,3 +69,12 @@ def test_load_ascii_does_not_mistake_unheaded_numeric_text_for_table(tmp_path):
 
     with pytest.raises(ValueError, match="ASCII"):
         DataLoader.load_ascii(path)
+
+
+def test_load_ascii_rejects_canoe_asc_with_actionable_message(tmp_path):
+    pytest.importorskip("can", reason="python-can not installed (win32-gated)")
+    from tests._helpers.blf_factory import write_sample_asc
+
+    path = write_sample_asc(tmp_path / "canoe.asc", n=2)
+    with pytest.raises(ValueError, match="CANoe CAN 总线日志"):
+        DataLoader.load_ascii(path)

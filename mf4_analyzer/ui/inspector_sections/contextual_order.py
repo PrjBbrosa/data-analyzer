@@ -57,6 +57,8 @@ class OrderContextual(QWidget):
     order_time_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # (fid, ch) tuple or None
+    compute_params_changed = pyqtSignal(object)
+    display_params_changed = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -338,6 +340,13 @@ class OrderContextual(QWidget):
         if not self._applying_preset:
             self.preset_bar.set_recommended(None)
         self._refresh_order_summary()
+        if self._applying_preset:
+            return
+        sender = self.sender()
+        if sender in self._display_param_widgets:
+            self.display_params_changed.emit(self.display_params())
+        else:
+            self.compute_params_changed.emit(self.compute_params())
 
     def _connect_preset_param_signals(self):
         for spin in (
@@ -350,6 +359,28 @@ class OrderContextual(QWidget):
         self.combo_win.currentTextChanged.connect(self._on_preset_param_changed)
         self.combo_nfft.currentTextChanged.connect(self._on_preset_param_changed)
         self.combo_weighting.currentTextChanged.connect(self._on_preset_param_changed)
+        for control in (
+            self.spin_rf, self.combo_rpm_mode, self.spin_manual_rpm,
+        ):
+            signal = getattr(control, 'valueChanged', None)
+            if signal is None:
+                signal = control.currentTextChanged
+            signal.connect(self._on_preset_param_changed)
+        self._display_param_widgets = (
+            self.combo_amp_unit,
+            self.chk_x_auto, self.spin_x_min, self.spin_x_max,
+            self.chk_y_auto, self.spin_y_min, self.spin_y_max,
+            self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling,
+        )
+        self.combo_amp_unit.currentTextChanged.connect(self._on_preset_param_changed)
+        for check in (self.chk_x_auto, self.chk_y_auto, self.chk_z_auto):
+            check.toggled.connect(self._on_preset_param_changed)
+        for spin in (
+            self.spin_x_min, self.spin_x_max,
+            self.spin_y_min, self.spin_y_max,
+            self.spin_z_floor, self.spin_z_ceiling,
+        ):
+            spin.valueChanged.connect(self._on_preset_param_changed)
 
     def _apply_window_value(self, value):
         i = self.combo_win.findText(str(value))
@@ -516,12 +547,15 @@ class OrderContextual(QWidget):
         )
 
     def _apply_preset(self, d):
+        before_compute = self.compute_params()
+        before_display = self.display_params()
         self._applying_preset = True
         try:
             self._apply_preset_values(d)
         finally:
             self._applying_preset = False
             self._refresh_order_summary()
+        self._emit_param_deltas(before_compute, before_display)
 
     def _apply_preset_values(self, d):
         if 'rpm_factor' in d:
@@ -690,7 +724,7 @@ class OrderContextual(QWidget):
     def rpm_factor(self):
         return self.spin_rf.value()
 
-    def get_params(self):
+    def compute_params(self):
         nfft_text = self.combo_nfft.currentText()
         if nfft_text == self._AUTO_NFFT_LABEL:
             nfft = None
@@ -706,10 +740,10 @@ class OrderContextual(QWidget):
             max_order=self.spin_mo.value(),
             order_res=self.spin_order_res.value(),
             time_res=self.spin_time_res.value(),
-            # _order_mixin builds COTParams from get_params() (not
-            # current_params()), so ``window`` has to ride on this dict for the
-            # picker to reach the analysis; it is also a registered cache-key
-            # field there, so switching windows forces a recompute.
+            # _order_mixin builds COTParams from compute_params(), so
+            # ``window`` has to ride on this dict for the picker to reach the
+            # analysis; it is also a registered cache-key field there, so
+            # switching windows forces a recompute.
             window=self.combo_win.currentText(),
             nfft=nfft,
             nfft_mode=nfft_mode,
@@ -720,43 +754,41 @@ class OrderContextual(QWidget):
             manual_rpm=self.manual_rpm(),
             fs=self.spin_fs.value(),
             weighting=self.combo_weighting.currentText(),
-            **db_reference_params(self.db_reference_control),
+            samples_per_rev=int(self.spin_samples_per_rev.value()),
         )
 
-    # --- Wave 3 (2026-04-28 plan): test-friendly param accessors ---
-    # current_params/apply_params extend get_params/_apply_preset with the
-    # new 坐标轴设置 group: x/y/z auto + min/max + amplitude unit. The
-    # legacy 'amplitude_mode' key is still emitted (mapped from
-    # combo_amp_unit) for backwards compatibility with downstream callers
-    # that have not yet migrated; Wave 5 will switch the canvas render to
-    # consume the explicit z_floor/z_ceiling keys directly.
-    def current_params(self):
-        p = self.get_params()
-        # Map combo_amp_unit ('dB'/'Linear') back to the legacy mode string
-        # so existing canvas code (Wave 5 will retire it) keeps working.
-        p['amplitude_mode'] = (
-            'Amplitude dB' if self.combo_amp_unit.currentText() == 'dB'
-            else 'Amplitude'
+    def display_params(self):
+        return dict(
+            **db_reference_params(self.db_reference_control),
+            amplitude_mode=(
+                'Amplitude dB' if self.combo_amp_unit.currentText() == 'dB'
+                else 'Amplitude'
+            ),
+            x_auto=bool(self.chk_x_auto.isChecked()),
+            x_min=float(self.spin_x_min.value()),
+            x_max=float(self.spin_x_max.value()),
+            y_auto=bool(self.chk_y_auto.isChecked()),
+            y_min=float(self.spin_y_min.value()),
+            y_max=float(self.spin_y_max.value()),
+            z_auto=bool(self.chk_z_auto.isChecked()),
+            z_floor=float(self.spin_z_floor.value()),
+            z_ceiling=float(self.spin_z_ceiling.value()),
         )
-        # Wave 2 (2026-04-28 plan): combo_algorithm has been removed —
-        # COT is the only tracking algorithm. ``samples_per_rev`` stays
-        # in the param payload because COT consumes it.
-        p['samples_per_rev'] = int(self.spin_samples_per_rev.value())
-        # Display-only parameters (db_reference/db_reference_mode) already
-        # come from get_params() above (2026-07-12 dB-reference-defaults
-        # Task 4 promoted them onto get_params() for parity with FFT/
-        # FFT-vs-Time — spec §5.3 requires BOTH accessors to emit them).
-        # Axis controls (Wave 3): explicit X/Y/Z range + auto flags.
-        p['x_auto'] = bool(self.chk_x_auto.isChecked())
-        p['x_min'] = float(self.spin_x_min.value())
-        p['x_max'] = float(self.spin_x_max.value())
-        p['y_auto'] = bool(self.chk_y_auto.isChecked())
-        p['y_min'] = float(self.spin_y_min.value())
-        p['y_max'] = float(self.spin_y_max.value())
-        p['z_auto'] = bool(self.chk_z_auto.isChecked())
-        p['z_floor'] = float(self.spin_z_floor.value())
-        p['z_ceiling'] = float(self.spin_z_ceiling.value())
-        return p
+
+    def current_params(self):
+        return {**self.compute_params(), **self.display_params()}
+
+    def get_params(self):
+        """Compatibility name for the complete, View-persistent payload."""
+        return self.current_params()
+
+    def _emit_param_deltas(self, before_compute, before_display):
+        compute = self.compute_params()
+        display = self.display_params()
+        if compute != before_compute:
+            self.compute_params_changed.emit(compute)
+        if display != before_display:
+            self.display_params_changed.emit(display)
 
     def apply_params(self, d):
         if 'max_order' in d:
@@ -856,6 +888,13 @@ class OrderContextual(QWidget):
             self._apply_weighting_value(d['weighting'])
 
         self._sync_axis_enabled()
+
+    def reset_to_defaults(self):
+        """Restore construction-time defaults for a blank analysis View."""
+        bar = getattr(self, 'preset_bar', None)
+        defaults = getattr(bar, '_default_params', None) if bar is not None else None
+        if isinstance(defaults, dict) and defaults:
+            self.apply_params(dict(defaults))
 
     def set_progress(self, text):
         self.lbl_progress.setText(text)

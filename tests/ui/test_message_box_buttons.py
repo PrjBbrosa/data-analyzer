@@ -119,3 +119,32 @@ def test_styled_long_message_box_buttons_keep_text_and_padding(qapp):
         box.close()
         box.deleteLater()
         qapp.setStyleSheet(previous)
+
+
+def test_close_and_remove_from_all_views_label_fits_after_helper(qapp):
+    """The file-close confirm label is long Chinese — fit helper must expand it.
+
+    Regression for the clipped orange button on macOS when the shared QSS
+    ``min-width: 52px`` wins over the native text size hint.
+    """
+    previous = qapp.styleSheet()
+    load_stylesheet(qapp)
+    box = QMessageBox()
+    try:
+        box.setIcon(QMessageBox.Warning)
+        box.setText("关闭文件前发现仍被 View 引用的来源。")
+        label = "关闭并从所有 View 移除"
+        confirm = box.addButton(label, QMessageBox.AcceptRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        prepare_message_box_buttons(box)
+        fit_message_box_buttons_to_text(box)
+        box.show()
+        qapp.processEvents()
+
+        text_width = confirm.fontMetrics().horizontalAdvance(label)
+        assert confirm.width() >= text_width + 8 + 20 + 2
+        assert cancel.width() < confirm.width()
+    finally:
+        box.close()
+        box.deleteLater()
+        qapp.setStyleSheet(previous)

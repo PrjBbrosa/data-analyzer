@@ -173,6 +173,17 @@ def test_chart_stack_registers_frf_page_manager_and_reset(qapp, qtbot):
     assert cs.canvas_frf.state() == "empty"
 
 
+def test_analysis_managers_share_the_product_view_cap(qapp, qtbot):
+    from mf4_analyzer.ui.view_state import MAX_VIEWS
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    assert MAX_VIEWS == 12
+    for section, manager in cs.analysis_managers.items():
+        assert manager.max_views == MAX_VIEWS, section
+
+
 def test_frf_cursor_toolbar_reuses_the_off_single_dual_controls(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)

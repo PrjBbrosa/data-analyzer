@@ -130,7 +130,10 @@ class ToolbarMixin:
         self._overflow_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self._overflow_btn.setFixedSize(30, 30)
         self._overflow_btn.setPopupMode(QToolButton.InstantPopup)
-        self._overflow_menu = apply_rounded_menu_chrome(QMenu(self._overflow_btn))
+        # Submenu arrow ("模式 ▶ …") needs the wider QSS right gutter.
+        self._overflow_menu = apply_rounded_menu_chrome(
+            QMenu(self._overflow_btn), gutter="check",
+        )
         self._overflow_menu.setObjectName("cockpitToolbarOverflowMenu")
         self._overflow_btn.setMenu(self._overflow_menu)
         self._overflow_btn.setVisible(False)

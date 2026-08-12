@@ -16,6 +16,7 @@ time-domain plotting, which spec D-E3 puts out of scope for this package.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from ..time_xaxis import EXACT_SOURCE, CustomXAxisSpec
 
@@ -92,3 +93,104 @@ class ViewFocusState:
         self.secondary = partner
         if partner is None or self.focused not in (active, partner):
             self.focused = active
+
+
+@dataclass
+class AnalysisPinBook:
+    """Per-pane set of real analysis-cache keys currently bound to a View.
+
+    Owned exclusively by ``MainWindow`` (assigned once in ``window.py``). Mixin
+    helpers mutate through methods so the state-ownership ratchet sees no
+    multi-file bare ``self._analysis_pins[...]`` writes.
+    """
+
+    _slots: dict = field(default_factory=dict)
+
+    def pinned_keys(self, section: str) -> frozenset:
+        pinned = set()
+        for (sec, _view_id, _pane_idx), keys in self._slots.items():
+            if sec == section:
+                pinned.update(keys)
+        return frozenset(pinned)
+
+    def add(self, section, view_id, pane_idx, key) -> None:
+        slot = (section, str(view_id), int(pane_idx))
+        self._slots.setdefault(slot, set()).add(key)
+
+    def replace(self, section, view_id, pane_idx, keys) -> None:
+        slot = (section, str(view_id), int(pane_idx))
+        key_set = set(keys)
+        if key_set:
+            self._slots[slot] = key_set
+        else:
+            self._slots.pop(slot, None)
+
+    def drop_view(self, section, view_id) -> None:
+        view_id = str(view_id)
+        for slot in [
+            key for key in self._slots
+            if key[0] == section and key[1] == view_id
+        ]:
+            del self._slots[slot]
+
+    def clear_section(self, section) -> None:
+        for slot in [key for key in self._slots if key[0] == section]:
+            del self._slots[slot]
+
+    def __contains__(self, slot) -> bool:
+        return slot in self._slots
+
+    def __getitem__(self, slot):
+        return self._slots[slot]
+
+
+@dataclass
+class ProjectFileRestoreResult:
+    """Structured outcome of remapping ``.tlproj`` file refs onto freshly loaded fids."""
+
+    fid_map: dict = field(default_factory=dict)
+    missing_paths: list[str] = field(default_factory=list)
+    missing_old_fids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ProjectRestoreHealth:
+    """Session-local health of the last project restore (Stage 1 degraded-save guard).
+
+    Mutations stay on this holder so ``MainWindow`` does not grow another
+    multi-file bare attribute write cluster.
+    """
+
+    missing_paths: list[str] = field(default_factory=list)
+    missing_old_fids: list[str] = field(default_factory=list)
+    dropped_time_refs: list[Any] = field(default_factory=list)
+    # (section, view_id, pane_idx, role)
+    dropped_analysis_refs: list[tuple] = field(default_factory=list)
+    degraded: bool = False
+
+    def clear(self) -> None:
+        self.missing_paths.clear()
+        self.missing_old_fids.clear()
+        self.dropped_time_refs.clear()
+        self.dropped_analysis_refs.clear()
+        self.degraded = False
+
+    def adopt_restore(
+        self,
+        *,
+        missing_paths,
+        missing_old_fids,
+        dropped_time_refs=(),
+        dropped_analysis_refs=(),
+    ) -> None:
+        """Replace health from one restore pass and set ``degraded`` accordingly."""
+        self.missing_paths = list(missing_paths or ())
+        self.missing_old_fids = list(missing_old_fids or ())
+        self.dropped_time_refs = list(dropped_time_refs or ())
+        self.dropped_analysis_refs = list(dropped_analysis_refs or ())
+        self.degraded = bool(
+            self.missing_paths
+            or self.missing_old_fids
+            or self.dropped_time_refs
+            or self.dropped_analysis_refs
+        )

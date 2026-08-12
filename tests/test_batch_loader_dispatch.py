@@ -118,3 +118,13 @@ def test_default_loader_rejects_unknown_extension_without_mdf_fallback(tmp_path)
 
     with pytest.raises(UnsupportedSourceFormatError, match=r"\.unknown"):
         _default_loader(str(path))
+
+
+def test_default_loader_canoe_asc_without_dbc_is_unavailable(tmp_path):
+    pytest.importorskip("can", reason="python-can not installed (win32-gated)")
+    from mf4_analyzer.io.source_adapters import SourceUnavailableError
+    from tests._helpers.blf_factory import write_sample_asc
+
+    path = write_sample_asc(tmp_path / "log.asc", n=2)
+    with pytest.raises(SourceUnavailableError, match="DBC"):
+        _default_loader(str(path))

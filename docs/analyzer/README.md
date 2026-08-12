@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 7.9.7. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 7.9.8. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and 12-View changes, as well as the native WinWert (`.wwt`),
 ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced in 7.7.
 7.8 added a draft-based channel configuration manager with View matching
@@ -70,7 +70,16 @@ control surfaces, simplifies parameters that did not alter the default
 calculation, and completes FRF's shared frequency interactions: linked
 single/dual cursor readouts, physical-Hz log ticks, and the same point-markup
 and clear controls as TimeDomain. Current-View file removal is also available
-while analysis modes are active.
+while analysis modes are active. 7.9.8 gives every analysis View its own
+attached-file scope — new Views start empty, switching restores each View's own
+scope, and copying a View is what inherits the full configuration — and
+upgrades the file-pane link button into a composable file-scope follow menu:
+attach new loads to the active context, inherit file scope on newly created
+Views, and fill an empty analysis View from the TimeDomain focus on mode entry.
+With attach-on-load enabled, loading while an analysis section is active now
+attaches to that section's active View instead of the background TimeDomain
+View. Batch sheets accept drag-and-drop file intake and reuse the main-window
+BLF+DBC pairing dialogs for disk imports.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

@@ -237,6 +237,7 @@ def test_analysis_cache_keys_include_weighting_for_view_switch_paths(
 
     monkeypatch.setattr(win.inspector.fft_ctx, "get_params", fft_params)
     monkeypatch.setattr(win.inspector.fft_ctx, "current_params", fft_params)
+    monkeypatch.setattr(win.inspector.fft_ctx, "compute_params", fft_params)
     fft_none = win._analysis_cache_key("fft", "f1", "sig", pane_idx=0)
     mode["weighting"] = "A"
     fft_a = win._analysis_cache_key("fft", "f1", "sig", pane_idx=0)
@@ -258,6 +259,8 @@ def test_analysis_cache_keys_include_weighting_for_view_switch_paths(
 
     mode["weighting"] = "None"
     monkeypatch.setattr(win.inspector.fft_time_ctx, "get_params", fft_time_params)
+    monkeypatch.setattr(
+        win.inspector.fft_time_ctx, "compute_params", fft_time_params)
     fft_time_none = win._analysis_cache_key("fft_time", "f1", "sig", pane_idx=0)
     mode["weighting"] = "A"
     fft_time_a = win._analysis_cache_key("fft_time", "f1", "sig", pane_idx=0)
@@ -283,6 +286,7 @@ def test_analysis_cache_keys_include_weighting_for_view_switch_paths(
     mode["weighting"] = "None"
     monkeypatch.setattr(win.inspector.order_ctx, "get_params", order_params)
     monkeypatch.setattr(win.inspector.order_ctx, "current_params", order_current_params)
+    monkeypatch.setattr(win.inspector.order_ctx, "compute_params", order_current_params)
     monkeypatch.setattr(win.inspector.order_ctx, "rpm_factor", lambda: 1.0)
     order_none = win._analysis_cache_key(
         "order", "f1", "sig", rpm_source=("f1", "rpm"), pane_idx=0)
