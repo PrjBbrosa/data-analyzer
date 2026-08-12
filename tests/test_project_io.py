@@ -119,7 +119,7 @@ def test_remap_rewrites_and_drops():
         "ylims": {
             '["f0","rpm"]': [0.0, 10.0],
             '["f1","spd"]': [1.0, 2.0],
-            "[display] rpm": [3.0, 4.0],  # unparseable legacy key → dropped
+            "[display] rpm": [3.0, 4.0],  # unparseable legacy key → kept
         },
         "axis_opts": {"x_axis": {"mode": "channel", "fid": "f1",
                                  "channel": "spd", "label": "spd"}},
@@ -130,7 +130,10 @@ def test_remap_rewrites_and_drops():
     assert out["hidden_channels"] == [["f3", "rpm"]]
     assert out["colors"] == {'["f3","rpm"]': "#ff0000"}
     assert out["overlay_primary"] is None
-    assert out["ylims"] == {'["f3","rpm"]': [0.0, 10.0]}
+    assert out["ylims"] == {
+        '["f3","rpm"]': [0.0, 10.0],
+        "[display] rpm": [3.0, 4.0],
+    }
     assert out["axis_opts"]["x_axis"]["fid"] is None
     assert out["axis_opts"]["x_axis"]["mode"] == "time"
     assert out["axis_opts"]["x_axis"]["resolver"] is None
