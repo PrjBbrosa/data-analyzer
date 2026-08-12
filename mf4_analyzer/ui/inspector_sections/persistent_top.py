@@ -463,8 +463,15 @@ class PersistentTop(QWidget):
         self._update_range_rows_visible()
 
     def set_range_limits(self, lo, hi):
+        # F14: setRange may clamp the current value and emit valueChanged.
+        # There is no subscriber today, but the next connected slot would see
+        # a programmatic limit refresh as a user edit — block while applying.
         for sp in (self.spin_start, self.spin_end):
-            sp.setRange(lo, hi)
+            old = sp.blockSignals(True)
+            try:
+                sp.setRange(lo, hi)
+            finally:
+                sp.blockSignals(old)
 
     def tick_density(self):
         return (self.spin_xt.value(), self.spin_yt.value())

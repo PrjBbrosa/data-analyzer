@@ -994,7 +994,7 @@ class MainWindow(
         self.view_tabbar.new_requested.connect(self._on_view_new)
         self.view_tabbar.delete_requested.connect(self._on_view_delete)
         self.view_tabbar.duplicate_requested.connect(self._on_view_duplicate)
-        self.view_tabbar.rename_requested.connect(self.view_manager.rename)
+        self.view_tabbar.rename_requested.connect(self._on_time_view_rename)
         self.view_tabbar.color_requested.connect(self._on_view_color)
         self.view_tabbar.reorder_requested.connect(self.view_manager.reorder)
         self.view_tabbar.split_requested.connect(self.view_manager.set_split)
@@ -1025,7 +1025,8 @@ class MainWindow(
                 lambda s=sec: self._on_analysis_new(s))
             bar.delete_requested.connect(
                 lambda idx, s=sec: self._on_analysis_delete(s, idx))
-            bar.rename_requested.connect(mgr.rename)
+            bar.rename_requested.connect(
+                lambda idx, name, s=sec: self._on_analysis_view_rename(s, idx, name))
             bar.duplicate_requested.connect(
                 lambda idx, s=sec: self._on_analysis_duplicate(s, idx))
             bar.color_requested.connect(
@@ -2201,6 +2202,13 @@ class MainWindow(
         return fd.channel_units.get(ch, '') or ''
 
     def _apply_audio_weighting_default(self, data):
+        # A8: View restore is projection, not user input. Echoing an audio
+        # source while `_applying_analysis_view` must not overwrite a stored
+        # weighting=None with the convenience A default (and must not fan
+        # that default into hidden sibling section contextuals). Loading an
+        # audio file still applies A — that path is outside the apply window.
+        if self._applying_analysis_view:
+            return
         if not data:
             return
         fid, _ch = data
