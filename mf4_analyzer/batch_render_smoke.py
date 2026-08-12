@@ -1,4 +1,12 @@
-"""Deterministic non-GUI render probe for a frozen TraceLab executable."""
+"""Deterministic non-GUI render probe for a frozen TraceLab executable.
+
+Colormap *prop* constants (``cmap="turbo"``) may be pinned by this smoke so
+endpoint hunting stays unambiguous; RGB expectations live in the verifier and
+must be read back from the product runtime — see
+``docs/analyzer/specs/2026-08-12-guideline-hardening-spec.md`` §3.3.
+A second heatmap pass omits ``cmap`` so the shipping-default local LUT
+(``DEFAULT_HEATMAP_CMAP`` / gnuplot2) is exercised in the frozen package.
+"""
 from __future__ import annotations
 
 import argparse
@@ -23,7 +31,12 @@ from .batch_render_qt._fonts import header_ink_proof, resolve_cjk_font
 
 SMOKE_TITLE = "单帧振动加速度"
 SMOKE_KINDS = ("time", "fft", "fft_time", "order_time")
+SMOKE_DEFAULT_CMAP_KINDS = ("fft_time", "order_time")
 SMOKE_FORMATS = ("png",)
+SMOKE_ARTIFACT_COUNT = (
+    len(SMOKE_KINDS) * len(SMOKE_FORMATS)
+    + len(SMOKE_DEFAULT_CMAP_KINDS) * len(SMOKE_FORMATS)
+)
 
 
 def _payloads() -> dict[str, object]:
@@ -103,6 +116,12 @@ def run(output_directory: Path, result_json: Path) -> int:
         else:
             cjk_proof = header_ink_proof(cjk_font, SMOKE_TITLE)
         payloads = _payloads()
+        base_params = {
+            "amplitude_mode": "amplitude",
+            "z_auto": False,
+            "z_floor": 0.0,
+            "z_ceiling": 1.0,
+        }
         for kind in SMOKE_KINDS:
             for image_format in SMOKE_FORMATS:
                 target = output_directory / f"{kind}.{image_format}"
@@ -112,17 +131,32 @@ def run(output_directory: Path, result_json: Path) -> int:
                     (kind, payloads[kind]),
                     target,
                     params={
-                        "amplitude_mode": "amplitude",
-                        "z_auto": False,
-                        "z_floor": 0.0,
-                        "z_ceiling": 1.0,
-                        # 显式点名色图，不吃产品默认值。这里的证据是
-                        # verify_frozen_batch_render 去图里找 turbo 的两个端点色，
-                        # 用来证明「冻结包里 Qt 真的画出了带色图的热力图」。默认值
-                        # 一改（gnuplot2 的端点是纯黑/纯白，和文字、底色分不开）
-                        # 这个证据就会失效——所以证据用的色图必须由烟测自己钉死。
+                        **base_params,
+                        # 显式点名色图，不吃产品默认值。turbo 端点色在 verify
+                        # 侧运行时从 pg.colormap.get("turbo") 回读；钉死道具常量
+                        # 是对的，RGB 期望禁止字面量重声明（spec §3.3 / C2）。
                         "cmap": "turbo",
                     },
+                    options=BatchRenderOptions(
+                        width_px=640,
+                        height_px=360,
+                        dpi=72,
+                        format=image_format,
+                    ),
+                    context=context,
+                )
+                outputs.append({"path": str(target), "bytes": target.stat().st_size})
+        # Shipping-default local LUT path (gnuplot2). Omit cmap so the frozen
+        # package actually resolves DEFAULT_HEATMAP_CMAP rather than a prop pin.
+        for kind in SMOKE_DEFAULT_CMAP_KINDS:
+            for image_format in SMOKE_FORMATS:
+                target = output_directory / f"{kind}_default_cmap.{image_format}"
+                if target.exists():
+                    target.unlink()
+                render_batch_image(
+                    (kind, payloads[kind]),
+                    target,
+                    params=dict(base_params),
                     options=BatchRenderOptions(
                         width_px=640,
                         height_px=360,
@@ -137,7 +171,7 @@ def run(output_directory: Path, result_json: Path) -> int:
 
     ok = (
         not error
-        and len(outputs) == len(SMOKE_KINDS) * len(SMOKE_FORMATS)
+        and len(outputs) == SMOKE_ARTIFACT_COUNT
         and all(record["bytes"] > 0 for record in outputs)
         and bool(qt_qpa_platform)
         and bool(qt_platform_name)

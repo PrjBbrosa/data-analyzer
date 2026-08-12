@@ -1,4 +1,10 @@
-"""Launch and verify the batch-render smoke of a Windows onedir executable."""
+"""Launch and verify the batch-render smoke of a Windows onedir executable.
+
+Reference values for colormap endpoints must be read back from the product
+runtime (``pg.colormap.get`` / ``_resolve_colormap``), never re-declared as
+literals — see ``docs/analyzer/specs/2026-08-12-guideline-hardening-spec.md``
+§3.3 (C2/C3 verify-tool contract).
+"""
 from __future__ import annotations
 
 import argparse
@@ -11,17 +17,51 @@ import sys
 from tempfile import TemporaryDirectory
 
 import numpy as np
+import pyqtgraph as pg
 from PyQt5.QtGui import QImage, QImageReader
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from mf4_analyzer.qt_analysis_shared import (  # noqa: E402
+    DEFAULT_HEATMAP_CMAP,
+    _resolve_colormap,
+)
 
 
 TITLE = "单帧振动加速度"
 KINDS = ("time", "fft", "fft_time", "order_time")
 FORMATS = ("png",)
+# Heatmaps that exercise the shipping-default local LUT (gnuplot2), not turbo.
+DEFAULT_CMAP_HEATMAP_KINDS = ("fft_time", "order_time")
 EXPECTED_NAMES = {
     f"{kind}.{image_format}" for kind in KINDS for image_format in FORMATS
+} | {
+    f"{kind}_default_cmap.{image_format}"
+    for kind in DEFAULT_CMAP_HEATMAP_KINDS
+    for image_format in FORMATS
 }
-TURBO_LOW_RGB = (48, 18, 59)
-TURBO_HIGH_RGB = (122, 4, 3)
+
+
+def _endpoint_rgb(color_map: pg.ColorMap) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Return (low, high) RGB triples from a live ColorMap LUT."""
+    lut = color_map.getLookupTable(0.0, 1.0, 256, alpha=False)
+    low = tuple(int(channel) for channel in lut[0][:3])
+    high = tuple(int(channel) for channel in lut[-1][:3])
+    return low, high
+
+
+def _turbo_endpoint_rgb() -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    color_map = pg.colormap.get("turbo")
+    if color_map is None:
+        raise RuntimeError("pyqtgraph colormap 'turbo' is unavailable")
+    return _endpoint_rgb(color_map)
+
+
+def _default_cmap_endpoint_rgb() -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Shipping-default heatmap endpoints via the product local-LUT resolver."""
+    return _endpoint_rgb(_resolve_colormap(DEFAULT_HEATMAP_CMAP))
 
 
 def _tree_measurement(directory: Path) -> dict[str, object]:
@@ -36,20 +76,49 @@ def _tree_measurement(directory: Path) -> dict[str, object]:
     }
 
 
-def _contains_rgb(
-    image: QImage, expected: tuple[int, int, int], tolerance: int = 1
-) -> int:
+def _pixel_rgb_array(image: QImage) -> np.ndarray:
     converted = image.convertToFormat(QImage.Format_RGB888)
     ptr = converted.bits()
     ptr.setsize(converted.byteCount())
     rows = np.frombuffer(ptr, dtype=np.uint8).reshape(
         converted.height(), converted.bytesPerLine()
     )
-    pixels = rows[:, : converted.width() * 3].reshape(
+    return rows[:, : converted.width() * 3].reshape(
         converted.height(), converted.width(), 3
     )
+
+
+def _contains_rgb(
+    image: QImage, expected: tuple[int, int, int], tolerance: int = 1
+) -> int:
+    pixels = _pixel_rgb_array(image)
     wanted = np.asarray(expected, dtype=np.int16)
     delta = np.abs(pixels.astype(np.int16) - wanted)
+    return int(np.count_nonzero(np.all(delta <= tolerance, axis=2)))
+
+
+def _contains_rgb_in_interior(
+    image: QImage,
+    expected: tuple[int, int, int],
+    *,
+    tolerance: int = 1,
+    margin_frac: float = 0.25,
+) -> int:
+    """Count endpoint matches inside the plot interior only.
+
+    gnuplot2 endpoints are pure black/white; full-frame counting confuses them
+    with page chrome / header text. The central crop keeps the heatmap body
+    and drops the report chrome.
+    """
+    pixels = _pixel_rgb_array(image)
+    height, width, _ = pixels.shape
+    top = int(height * margin_frac)
+    bottom = int(height * (1.0 - margin_frac))
+    left = int(width * margin_frac)
+    right = int(width * (1.0 - margin_frac))
+    crop = pixels[top:bottom, left:right]
+    wanted = np.asarray(expected, dtype=np.int16)
+    delta = np.abs(crop.astype(np.int16) - wanted)
     return int(np.count_nonzero(np.all(delta <= tolerance, axis=2)))
 
 
@@ -86,7 +155,8 @@ def verify_artifacts(
     actual_names = {path.name for path in artifacts.iterdir() if path.is_file()}
     if actual_names != EXPECTED_NAMES:
         raise RuntimeError(
-            f"expected exactly 4 render artifacts; missing={sorted(EXPECTED_NAMES - actual_names)}, "
+            f"expected exactly {len(EXPECTED_NAMES)} render artifacts; "
+            f"missing={sorted(EXPECTED_NAMES - actual_names)}, "
             f"extra={sorted(actual_names - EXPECTED_NAMES)}"
         )
 
@@ -114,12 +184,26 @@ def verify_artifacts(
             }
         )
 
+    turbo_low_rgb, turbo_high_rgb = _turbo_endpoint_rgb()
     for kind in ("fft_time", "order_time"):
         image = QImage(str(artifacts / f"{kind}.png"))
-        if _contains_rgb(image, TURBO_LOW_RGB) < 1_000:
+        if _contains_rgb(image, turbo_low_rgb) < 1_000:
             raise RuntimeError(f"Turbo low sample missing from {kind}.png")
-        if _contains_rgb(image, TURBO_HIGH_RGB) < 1_000:
+        if _contains_rgb(image, turbo_high_rgb) < 1_000:
             raise RuntimeError(f"Turbo high sample missing from {kind}.png")
+
+    default_low_rgb, default_high_rgb = _default_cmap_endpoint_rgb()
+    for kind in DEFAULT_CMAP_HEATMAP_KINDS:
+        name = f"{kind}_default_cmap.png"
+        image = QImage(str(artifacts / name))
+        if _contains_rgb_in_interior(image, default_low_rgb) < 1_000:
+            raise RuntimeError(
+                f"{DEFAULT_HEATMAP_CMAP} low sample missing from {name}"
+            )
+        if _contains_rgb_in_interior(image, default_high_rgb) < 1_000:
+            raise RuntimeError(
+                f"{DEFAULT_HEATMAP_CMAP} high sample missing from {name}"
+            )
 
     return {
         "ok": True,
@@ -132,8 +216,13 @@ def verify_artifacts(
         "cjk_proof": cjk_proof,
         "cjk_font_families": child.get("cjk_font_families", []),
         "turbo_samples": {
-            "low_rgb": list(TURBO_LOW_RGB),
-            "high_rgb": list(TURBO_HIGH_RGB),
+            "low_rgb": list(turbo_low_rgb),
+            "high_rgb": list(turbo_high_rgb),
+        },
+        "default_cmap_samples": {
+            "cmap": DEFAULT_HEATMAP_CMAP,
+            "low_rgb": list(default_low_rgb),
+            "high_rgb": list(default_high_rgb),
         },
     }
 

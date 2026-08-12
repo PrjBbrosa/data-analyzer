@@ -23,7 +23,7 @@ def _source_environment() -> dict[str, str]:
     return environment
 
 
-def test_runtime_smoke_cli_generates_four_png_kinds(tmp_path):
+def test_runtime_smoke_cli_generates_heatmap_png_kinds(tmp_path):
     output_directory = tmp_path / "outputs"
     child_json = tmp_path / "child.json"
 
@@ -49,6 +49,9 @@ def test_runtime_smoke_cli_generates_four_png_kinds(tmp_path):
     expected = {
         f"{kind}.png"
         for kind in ("time", "fft", "fft_time", "order_time")
+    } | {
+        f"{kind}_default_cmap.png"
+        for kind in ("fft_time", "order_time")
     }
     assert result["ok"] is True
     assert {Path(record["path"]).name for record in result["outputs"]} == expected
@@ -134,7 +137,7 @@ def test_artifact_verifier_checks_qt_cjk_proof_and_turbo_samples(tmp_path):
     assert completed.returncode == 0, completed.stderr
     evidence = json.loads(evidence_json.read_text(encoding="utf-8"))
     assert evidence["ok"] is True
-    assert evidence["artifact_count"] == 4
+    assert evidence["artifact_count"] == 6
     assert evidence["qt_qpa_platform"] == "offscreen"
     assert evidence["qt_platform_name"] == "offscreen"
     assert evidence["cjk_proof"]["supports"] is True
@@ -142,9 +145,27 @@ def test_artifact_verifier_checks_qt_cjk_proof_and_turbo_samples(tmp_path):
     assert evidence["cjk_proof"]["ink_pixels"] > (
         evidence["cjk_proof"]["empty_ink_pixels"] + 120
     )
+    # Endpoints are read back at verify time; pin the live turbo LUT shape so
+    # a silent literal re-declaration cannot drift unnoticed.
+    import pyqtgraph as pg
+
+    turbo = pg.colormap.get("turbo").getLookupTable(0.0, 1.0, 256, alpha=False)
     assert evidence["turbo_samples"] == {
-        "low_rgb": [48, 18, 59],
-        "high_rgb": [122, 4, 3],
+        "low_rgb": [int(channel) for channel in turbo[0][:3]],
+        "high_rgb": [int(channel) for channel in turbo[-1][:3]],
+    }
+    from mf4_analyzer.qt_analysis_shared import (
+        DEFAULT_HEATMAP_CMAP,
+        _resolve_colormap,
+    )
+
+    default_lut = _resolve_colormap(DEFAULT_HEATMAP_CMAP).getLookupTable(
+        0.0, 1.0, 256, alpha=False
+    )
+    assert evidence["default_cmap_samples"] == {
+        "cmap": DEFAULT_HEATMAP_CMAP,
+        "low_rgb": [int(channel) for channel in default_lut[0][:3]],
+        "high_rgb": [int(channel) for channel in default_lut[-1][:3]],
     }
     assert evidence["title"] == "单帧振动加速度"
 

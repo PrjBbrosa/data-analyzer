@@ -5,6 +5,12 @@ The production renderer never imports concrete application canvases. This
 verification-only harness does: it drives the same prepared arrays into the
 new report renderer and the existing single-file pyqtgraph canvases, derives
 plot crops from live scene geometry, and records structural + visual tokens.
+
+Reference levels / colormap names must be read back from product constants
+(``_AUTO_CEILING_PCT`` / ``_AUTO_SPAN_DB`` / ``DEFAULT_HEATMAP_CMAP``), never
+re-declared as literals — see
+``docs/analyzer/specs/2026-08-12-guideline-hardening-spec.md`` §3.3
+(C2/C3 verify-tool contract).
 """
 from __future__ import annotations
 
@@ -38,7 +44,11 @@ from mf4_analyzer.batch_render_qt import (
 from mf4_analyzer.batch_render_qt._builder import build_batch_scene, _text_of
 from mf4_analyzer.batch_render_qt._dispatch import ensure_app
 from mf4_analyzer.batch_render_qt._export import render_scene_image
-from mf4_analyzer.qt_analysis_shared import DEFAULT_HEATMAP_CMAP
+from mf4_analyzer.qt_analysis_shared import (
+    DEFAULT_HEATMAP_CMAP,
+    _AUTO_CEILING_PCT,
+    _AUTO_SPAN_DB,
+)
 from mf4_analyzer.batch_render_qt._page import render_metadata
 from mf4_analyzer.qt_chart_fonts import chart_font
 from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
@@ -229,10 +239,12 @@ def _cases() -> list[ParityCase]:
         }
 
     linear_levels = (float(np.min(heatmap_linear)), float(np.max(heatmap_linear)))
-    db_ceiling = float(np.percentile(heatmap_db, 99.0))
-    db_auto_levels = (db_ceiling - 30.0, db_ceiling)
+    db_ceiling = float(np.percentile(heatmap_db, _AUTO_CEILING_PCT))
+    db_auto_levels = (db_ceiling - _AUTO_SPAN_DB, db_ceiling)
     db_label = "Amplitude (dB re 1×10⁰)"
-    invalid_warning = "Invalid colormap 'not-a-real-map'; using 'gnuplot2'."
+    invalid_warning = (
+        f"Invalid colormap 'not-a-real-map'; using '{DEFAULT_HEATMAP_CMAP}'."
+    )
 
     return [
         ParityCase(
