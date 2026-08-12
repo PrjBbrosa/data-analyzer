@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ...analysis_presets import list_builtin_presets
+from ...signal.analysis_defaults import ANALYSIS_WINDOW_CANDIDATES
 from ...ui_kit.icons import Icons
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
@@ -178,9 +179,7 @@ class OrderContextual(QWidget):
         # three panels stay one vocabulary; 窗函数 sits directly above the NFFT
         # row there, and does here too.
         self.combo_win = QComboBox()
-        self.combo_win.addItems(
-            ['hanning', 'hamming', 'blackman', 'bartlett', 'kaiser', 'flattop']
-        )
+        self.combo_win.addItems(list(ANALYSIS_WINDOW_CANDIDATES))
         self.combo_win.setToolTip('抑制频谱泄漏：flattop 幅值最准、\nhanning 最均衡、blackman 旁瓣最低。')
         fl.addRow(
             "窗函数:",

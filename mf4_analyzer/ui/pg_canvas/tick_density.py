@@ -7,6 +7,9 @@ import math
 import numpy as np
 from PyQt5.QtGui import QFontMetrics
 
+from mf4_analyzer.qt_chart_fonts import CHART_FONT_PT
+from mf4_analyzer.ui.chart_defaults import DEFAULT_CHART_TICK_DENSITY
+
 from ._backref import _CanvasBackref
 from .fonts import _pg_chart_font
 
@@ -39,8 +42,7 @@ class TickDensityController(_CanvasBackref):
 
     def __init__(self, canvas):
         super().__init__(canvas)
-        # Defaults mirror DEFAULT_CHART_TICK_DENSITY / 「密」preset.
-        self.density = (20, 15)
+        self.density = DEFAULT_CHART_TICK_DENSITY
         self.ticks_cache = {}
 
     def set_tick_density(self, x, y):
@@ -200,7 +202,7 @@ class TickDensityController(_CanvasBackref):
             return [f"{value:g}" for value in values]
 
     def _fit_x_tick_labels(self, values, labels, lo, hi, axis_width):
-        metrics = QFontMetrics(_pg_chart_font(9))
+        metrics = QFontMetrics(_pg_chart_font(CHART_FONT_PT))
         span = hi - lo
         fit_values = []
         fit_labels = []

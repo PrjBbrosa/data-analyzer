@@ -29,6 +29,11 @@ from PyQt5.QtWidgets import (
 from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 from ...widgets.pill_switch import PillSwitch
 from ....ui_kit.widgets.segmented_choice import SegmentedChoice
+from ....signal.analysis_defaults import (
+    ANALYSIS_WINDOW_CANDIDATES,
+    DEFAULT_COHERENCE_THRESHOLD,
+    normalize_overlap_fraction,
+)
 
 
 _METHODS: tuple[tuple[str, str], ...] = (
@@ -143,9 +148,7 @@ class MethodButtonGroup(QWidget):
 # ---------------------------------------------------------------------------
 # Dynamic parameter form
 # ---------------------------------------------------------------------------
-_WINDOWS: tuple[str, ...] = (
-    "hanning", "hamming", "blackman", "bartlett", "kaiser", "flattop",
-)
+_WINDOWS: tuple[str, ...] = ANALYSIS_WINDOW_CANDIDATES
 _WEIGHTINGS: tuple[str, ...] = ("None", "A")
 _BINARY_CHOICE_FIELDS = frozenset({
     "estimator", "nfft_mode", "weighting", "magnitude_scale",
@@ -705,7 +708,7 @@ class DynamicParamForm(QWidget):
         self._w_coherence_threshold.setRange(0.0, 1.0)
         self._w_coherence_threshold.setDecimals(2)
         self._w_coherence_threshold.setSingleStep(0.05)
-        self._w_coherence_threshold.setValue(0.8)
+        self._w_coherence_threshold.setValue(DEFAULT_COHERENCE_THRESHOLD)
         self._w_coherence_threshold.valueChanged.connect(
             lambda *_: self.paramsChanged.emit()
         )
@@ -1225,8 +1228,9 @@ class DynamicParamForm(QWidget):
                     pass
         if "overlap" in params:
             try:
-                value = float(params["overlap"])
-                self._w_overlap.setValue(value / 100.0 if value > 1.0 else value)
+                self._w_overlap.setValue(
+                    normalize_overlap_fraction(params["overlap"])
+                )
             except (TypeError, ValueError):
                 pass
         if "coherence_threshold" in params:

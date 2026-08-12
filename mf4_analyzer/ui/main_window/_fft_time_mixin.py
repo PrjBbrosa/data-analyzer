@@ -482,11 +482,7 @@ class FFTTimeMixin:
         """
         if source is not None:
             return self._resolve_db_reference_for_source('fft_time', source)
-        value = float(p.get('db_reference', 1.0))
-        if not db_reference.validate_reference(value):
-            value = 1.0
-        return db_reference.DbReferenceResolution(
-            value=value, unit='', quantity='', source='generic')
+        return db_reference.degraded_numeric_resolution(p)
 
     def _render_fft_time_on(self, canvas, result, p, source=None):
         """Multi-pane variant: render ``result`` on an arbitrary FFT-vs-Time

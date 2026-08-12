@@ -776,13 +776,16 @@ class BatchRunner:
         """Build the finalized neutral FRF DTO and call the lazy Qt seam."""
 
         from .batch_render_models import BatchFrfFigureSpec
+        from .signal.analysis_defaults import DEFAULT_COHERENCE_THRESHOLD
 
         spec = BatchFrfFigureSpec(
             tuple(series),
             magnitude_scale=str(params.get('magnitude_scale', 'db')),
             frequency_scale=str(params.get('frequency_scale', 'log')),
             phase_mode=str(params.get('phase_mode', 'unwrapped')),
-            coherence_threshold=float(params.get('coherence_threshold', 0.8)),
+            coherence_threshold=float(
+                params.get('coherence_threshold', DEFAULT_COHERENCE_THRESHOLD)
+            ),
             fade_low_coherence=bool(params.get('fade_low_coherence', True)),
         )
         BatchRenderContext, BatchRenderOptions = effective.render_backend_types

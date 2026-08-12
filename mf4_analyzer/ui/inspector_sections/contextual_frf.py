@@ -20,6 +20,10 @@ from PyQt5.QtWidgets import (
 )
 
 from ...analysis_presets import get_builtin_preset, list_builtin_presets
+from ...signal.analysis_defaults import (
+    ANALYSIS_WINDOW_CANDIDATES,
+    DEFAULT_COHERENCE_THRESHOLD,
+)
 from ...ui_kit.icons import Icons
 from ..widgets.pill_switch import PillSwitch
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
@@ -250,13 +254,11 @@ class FrfContextual(QWidget):
         )
 
         self.combo_window = QComboBox(params_card)
-        for text in ("hanning", "hamming", "blackman", "bartlett", "kaiser", "flattop"):
+        for text in ANALYSIS_WINDOW_CANDIDATES:
             self.combo_window.addItem(text, text)
         _install_combo_tooltips(
             self.combo_window,
-            [_WINDOW_ITEM_TOOLTIPS[text] for text in (
-                "hanning", "hamming", "blackman", "bartlett", "kaiser", "flattop",
-            )],
+            [_WINDOW_ITEM_TOOLTIPS[text] for text in ANALYSIS_WINDOW_CANDIDATES],
         )
         compute_form.addRow(
             "窗函数:", _fit_field(self.combo_window, max_width=_SHORT_FIELD_MAX_WIDTH)
@@ -396,7 +398,7 @@ class FrfContextual(QWidget):
         self.spin_coherence_threshold.setDecimals(2)
         self.spin_coherence_threshold.setSingleStep(0.05)
         self.spin_coherence_threshold.setRange(0.0, 1.0)
-        self.spin_coherence_threshold.setValue(0.8)
+        self.spin_coherence_threshold.setValue(DEFAULT_COHERENCE_THRESHOLD)
         self.spin_coherence_threshold.setToolTip(_FRF_TOOLTIPS["coherence"])
         display_form.addRow(
             "相干阈值:",

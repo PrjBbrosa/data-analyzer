@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import QMessageBox
 
 from ... import db_reference
 from ...signal import assess_speed_for_order, resolve_order_nfft
+from ...signal.analysis_defaults import DEFAULT_ANALYSIS_WINDOW
 from ...signal.spectrogram import SpectrogramAnalyzer
 from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP, DEFAULT_HEATMAP_INTERP
 from ...qt_analysis_shared import amplitude_mode_is_db
@@ -245,7 +246,7 @@ class OrderMixin:
         return {
             'nfft': int(nfft),
             'nfft_mode': p.get('nfft_mode', 'fixed'),
-            'window': p.get('window', 'hanning'),
+            'window': p.get('window', DEFAULT_ANALYSIS_WINDOW),
             'max_order': p.get('max_order'),
             'order_res': p.get('order_res'),
             'time_res': p.get('time_res'),
@@ -449,7 +450,7 @@ class OrderMixin:
             p = COTParams(
                 samples_per_rev=int(op.get('samples_per_rev', 256)),
                 nfft=int(op.get('nfft_effective', op['nfft'])),
-                window=op.get('window', 'hanning'),
+                window=op.get('window', DEFAULT_ANALYSIS_WINDOW),
                 max_order=float(op['max_order']),
                 order_res=float(op['order_res']),
                 time_res=float(op['time_res']),
@@ -506,11 +507,7 @@ class OrderMixin:
         """
         if source is not None:
             return self._resolve_db_reference_for_source('order', source)
-        value = float(order_params.get('db_reference', 1.0))
-        if not db_reference.validate_reference(value):
-            value = 1.0
-        return db_reference.DbReferenceResolution(
-            value=value, unit='', quantity='', source='generic')
+        return db_reference.degraded_numeric_resolution(order_params)
 
     def _render_order_on(self, canvas, result, source=None):
         """Multi-pane variant: draw an Order COT ``result`` on an arbitrary

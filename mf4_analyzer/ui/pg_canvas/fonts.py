@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.qt_chart_fonts import (
     CHART_FONT_FAMILIES,
+    CHART_FONT_PT,
     _CHART_FONT_CACHE,
     apply_axis_font,
     apply_text_item_font,
@@ -33,6 +34,7 @@ def apply_global_chart_font(app=None):
 
 
 __all__ = [
+    "CHART_FONT_PT",
     "_PG_CHART_FONT_FAMILIES",
     "_pg_chart_font",
     "_apply_pg_axis_font",

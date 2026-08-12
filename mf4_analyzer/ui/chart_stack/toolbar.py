@@ -7,11 +7,8 @@ from PyQt5.QtWidgets import (
     QSlider, QSpinBox, QToolBar, QVBoxLayout,
 )
 
+from ..chart_defaults import DEFAULT_CHART_TICK_DENSITY
 from ._helpers import _grab_pixmap_hidpi
-
-# Interactive chart default = 「密」preset. View restore / Inspector / canvas
-# controllers must share this; batch export keeps its own defaults.
-DEFAULT_CHART_TICK_DENSITY = (20, 15)
 
 
 class _TickDensityPopover(QFrame):

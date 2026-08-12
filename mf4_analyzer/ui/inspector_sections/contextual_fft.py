@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ...analysis_presets import list_builtin_presets
+from ...signal.analysis_defaults import ANALYSIS_WINDOW_CANDIDATES
 from ...ui_kit.icons import Icons
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
@@ -146,9 +147,7 @@ class FFTContextual(QWidget):
         # 2026-04-26 R3 紧凑化 fix-3: cap each short field so the row
         # column never balloons when the splitter widens.
         self.combo_win = QComboBox()
-        self.combo_win.addItems(
-            ['hanning', 'hamming', 'blackman', 'bartlett', 'kaiser', 'flattop']
-        )
+        self.combo_win.addItems(list(ANALYSIS_WINDOW_CANDIDATES))
         self.combo_win.setToolTip('抑制频谱泄漏：flattop 幅值最准、\nhanning 最均衡、blackman 旁瓣最低。')
         fl.addRow("窗函数:", _fit_field(self.combo_win, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.combo_nfft = QComboBox()

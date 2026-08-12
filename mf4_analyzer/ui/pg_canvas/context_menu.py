@@ -366,12 +366,20 @@ def _route_view_all_action(menu, handler):
 
 
 def _format_range_value(value):
-    """Format ViewBox range values for compact inline editing."""
+    """Format ViewBox range values for compact inline editing.
+
+    Branch on the fixed-point form (as ``.3f`` would print), not the raw
+    float — same discipline as ``_fmt_rate``: a value that rounds into
+    scientific territory must take the ``.3g`` path rather than showing a
+    four-digit ``.3f`` result while the raw-float branch still thought it
+    was below the threshold.
+    """
     try:
         value = float(value)
     except (TypeError, ValueError):
         return "0"
-    if abs(value) >= 1000 or (0 < abs(value) < 0.01):
+    rounded = round(value, 3)
+    if abs(rounded) >= 1000 or (0 < abs(rounded) < 0.01):
         return f"{value:.3g}"
     return f"{value:.3f}".rstrip("0").rstrip(".")
 

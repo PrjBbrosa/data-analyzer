@@ -78,6 +78,7 @@ else:
 import mf4_analyzer.signal.fft  # noqa: F401
 import mf4_analyzer.signal.frf  # noqa: F401
 import mf4_analyzer.signal.spectrogram  # noqa: F401
+import mf4_analyzer.signal.analysis_defaults  # noqa: F401
 
 # A sanity smoke: the classes must exist and be callable.
 from mf4_analyzer.signal.fft import FFTAnalyzer
@@ -89,6 +90,14 @@ assert hasattr(SpectrogramAnalyzer, 'amplitude_to_db'), 'SpectrogramAnalyzer.amp
 
 from mf4_analyzer.signal.frf import compute_frf
 assert callable(compute_frf), 'compute_frf missing'
+from mf4_analyzer.signal.analysis_defaults import (
+    ANALYSIS_WINDOW_CANDIDATES,
+    DEFAULT_COHERENCE_THRESHOLD,
+    normalize_overlap_fraction,
+)
+assert ANALYSIS_WINDOW_CANDIDATES[-1] == 'flattop'
+assert DEFAULT_COHERENCE_THRESHOLD == 0.8
+assert normalize_overlap_fraction(50) == 0.5
 assert 'scipy' not in sys.modules or sys.modules['scipy'] is None
 assert 'mf4_analyzer.ui' not in sys.modules, 'signal import pulled in mf4_analyzer.ui'
 
