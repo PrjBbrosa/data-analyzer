@@ -701,6 +701,10 @@ class OrderMixin:
         outcome = getattr(self, '_order_outcome', None)
         if outcome is not None:
             outcome.computed += 1
+        # A7: cache/pin above uses dispatch-time view_id; only skip the live
+        # page draw when the user has already switched away.
+        if not self._analysis_ctx_targets_active_view('order', ctx):
+            return
         # V7b: render onto the SPECIFIC pane this job was computed for.
         # ``_render_order_time`` (preset + status + toast side-effects) runs
         # only for the primary pane (0); compare panes get a pure canvas draw.

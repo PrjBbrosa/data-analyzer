@@ -584,7 +584,13 @@ class FFTTimeMixin:
 
     # ---- FFT vs Time coordinator events --------------------------------
     def _on_fft_time_render_requested(self, ctx, result, cache_hit):
-        """Render a cache hit or freshly computed result for its own pane."""
+        """Render a cache hit or freshly computed result for its own pane.
+
+        The coordinator stores cache/pin under the dispatch-time ``view_id``
+        before emitting this signal.  When that View is no longer active we
+        skip only the live draw (A7); switching back restores via
+        ``_render_analysis_view_from_cache``.
+        """
         p = ctx.get('render_params') or {}
         pane_idx = ctx.get('pane_idx')
         source = ctx.get('source')
@@ -594,6 +600,8 @@ class FFTTimeMixin:
                 outcome.cached += 1
             else:
                 outcome.computed += 1
+        if not self._analysis_ctx_targets_active_view('fft_time', ctx):
+            return
         if p is not None:
             page = self._analysis_page('fft_time')
             if pane_idx is not None and pane_idx < page.pane_count():

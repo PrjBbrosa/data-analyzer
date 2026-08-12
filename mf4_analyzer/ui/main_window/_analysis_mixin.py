@@ -192,8 +192,15 @@ class AnalysisMixin:
                 page.enter_split()
                 self._connect_new_pane(section, page)
         else:
-            if section == 'frf' and len(state.panes) > 1:
-                self._frf_coordinator.invalidate_pane(state.view_id, 1)
+            if len(state.panes) > 1:
+                # Drop pane-1 residency before the pane disappears from state
+                # (F13). FRF also bumps its coordinator generation so an
+                # in-flight pane-1 completion cannot repopulate cache.
+                if section == 'frf':
+                    self._frf_coordinator.invalidate_pane(state.view_id, 1)
+                if section in {'fft_time', 'order', 'frf'}:
+                    self._replace_analysis_pane_pins(
+                        section, state.view_id, 1, ())
             state.remove_second_pane()
             page.exit_split()
 
@@ -789,6 +796,22 @@ class AnalysisMixin:
 
     def _pinned_keys_for_section(self, section):
         return self._analysis_pins.pinned_keys(section)
+
+    def _analysis_ctx_targets_active_view(self, section, ctx) -> bool:
+        """True when ``ctx['view_id']`` is still this section's active View.
+
+        Async completions always cache/pin under the *dispatch-time*
+        ``view_id`` (see ``fft_time_coordinator`` / order job ctx).  Drawing
+        onto the live page, however, must only happen while that View is
+        still active — otherwise a slow job finishing after a tab switch
+        paints the wrong chart (A7).  Callers keep ``_store_analysis_result``
+        outside this gate so the inactive View can restore from cache.
+        """
+        mgr = self.analysis_managers.get(section)
+        if mgr is None or not mgr.views:
+            return False
+        active = mgr.get(mgr.active)
+        return str(ctx.get("view_id") or "") == str(active.view_id)
 
     def _store_analysis_result(self, section, view_id, pane_idx, key, result):
         """Single write funnel: cache put always, pin append only when
