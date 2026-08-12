@@ -152,7 +152,7 @@ def add_report_header(
                 row=1,
                 text=analysis,
                 color=theme.muted,
-                point_size=9.0,
+                point_size=theme.channel_font_pt,
             )
         )
     facts = effective_fact_items(context.effective_facts, params)

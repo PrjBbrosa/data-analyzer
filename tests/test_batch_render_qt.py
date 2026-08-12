@@ -128,6 +128,7 @@ def test_theme_contract_uses_timedomain_palette_and_precision_tokens():
     assert THEMES["white"].axis_font_pt == pytest.approx(12.0)
     assert THEMES["white"].panel_title_font_pt == pytest.approx(13.0)
     assert THEMES["white"].header_font_pt == pytest.approx(15.0)
+    assert THEMES["white"].channel_font_pt == pytest.approx(9.0)
 
 
 def test_render_style_defaults_beat_the_pyqtgraph_adaptive_x_density(qapp):

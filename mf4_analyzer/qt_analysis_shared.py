@@ -22,13 +22,15 @@ matrix (``tools/verify_batch_qt_render_parity.py``) is what proves it stays
 safe. The diff audit that cleared the switch is
 ``docs/analyzer/verify/batch-analysis-maths-dedup.md``.
 
-One family is deliberately still forked: the batch renderer keeps its own
-``_auto_db_color_limits`` rather than using ``_auto_db_window`` here. They
-agree on real data but not on empty/all-NaN input, where batch falls back to
-its ``_EMPTY_DB_LEVEL`` (-200 dB) baseline and this module returns ``None``
-from ``_finite_data_bounds`` / ``_auto_db_window`` so callers take an explicit
-no-data branch (B5). Unifying the two empty-state dialects is its own piece
-of work.
+One family is deliberately still forked *at the function level*: the batch
+renderer keeps its own ``_auto_db_color_limits`` rather than using
+``_auto_db_window`` here. They agree on real data but not on empty/all-NaN
+input, where batch falls back to its ``_EMPTY_DB_LEVEL`` (-200 dB) baseline
+and this module returns ``None`` from ``_finite_data_bounds`` /
+``_auto_db_window`` so callers take an explicit no-data branch (B5).
+Unifying the two empty-state dialects is its own piece of work. The
+underlying span/percentile *constants* (``_AUTO_SPAN_DB`` /
+``_AUTO_CEILING_PCT``) are shared — only the empty-state function forks.
 """
 from __future__ import annotations
 
@@ -54,6 +56,45 @@ SUPPORTED_HEATMAP_COLORMAPS = (
     "magma",
     "cividis",
 )
+
+# Heatmap interpolation default + the set that enables SmoothPixmapTransform.
+# Interactive canvas (``heatmap_canvas``) and the batch Qt renderer must share
+# these — batch has no interp control, so a silent default fork would paint
+# different ink for the same matrix (the pre-cmap-bug failure mode).
+DEFAULT_HEATMAP_INTERP = "bilinear"
+HEATMAP_SMOOTH_INTERP_MODES = frozenset({"bilinear", "bicubic", "hanning"})
+
+
+def heatmap_interp_is_smooth(interp) -> bool:
+    """Return whether ``interp`` should enable smooth pixmap transforms."""
+    mode = (
+        DEFAULT_HEATMAP_INTERP
+        if interp is None
+        else str(interp).strip().lower()
+    )
+    return mode in HEATMAP_SMOOTH_INTERP_MODES
+
+
+def default_amplitude_mode_for_kind(kind: str) -> str:
+    """Product default when a recipe omits ``amplitude_mode``.
+
+    FFT-vs-Time and Order match the GUI inspector default (dB). Plain FFT
+    stays linear. This is the parity fix for Order batch vs single-file.
+    """
+    if str(kind) in {"fft_time", "order_time"}:
+        return "amplitude_db"
+    return "amplitude"
+
+
+def amplitude_mode_is_db(mode) -> bool:
+    """True when an amplitude-mode token requests a dB axis.
+
+    Covers the three historical dialects in one place: substring ``'db'``
+    (batch ``_render_in_db`` / ``batch_output_scale``), exact
+    ``'amplitude_db'`` (heatmap token), and ``'Amplitude dB'`` (Order
+    inspector label).
+    """
+    return "db" in str(mode or "").lower()
 
 
 def _gnuplot2_lut() -> np.ndarray:

@@ -100,9 +100,12 @@ from mf4_analyzer.ui_kit.axis_metrics import left_axis_width_for_ticks
 # （含 tests/ui/test_colormap_parity.py）不受影响。
 from mf4_analyzer.qt_analysis_shared import (  # noqa: F401
     DEFAULT_HEATMAP_CMAP,
+    DEFAULT_HEATMAP_INTERP,
+    HEATMAP_SMOOTH_INTERP_MODES,
     SUPPORTED_HEATMAP_COLORMAPS,
     _GNUPLOT2_COLORMAP,
     _gnuplot2_lut,
+    amplitude_mode_is_db,
     _normalise_colormap_name,
     _resolve_colormap,
 )
@@ -710,10 +713,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             np.asarray(x_coords, dtype=float) if x_coords is not None else None)
         self._y_coords = (
             np.asarray(y_coords, dtype=float) if y_coords is not None else None)
-        interp_mode = 'bilinear' if interp is None else str(interp).lower()
-        smooth = interp_mode in {'bilinear', 'bicubic', 'hanning'}
+        interp_mode = (
+            DEFAULT_HEATMAP_INTERP if interp is None else str(interp).lower()
+        )
+        smooth = interp_mode in HEATMAP_SMOOTH_INTERP_MODES
         self._img.set_smooth_transform(smooth)
-        if amplitude_mode == 'amplitude_db':
+        if amplitude_mode_is_db(amplitude_mode):
             raise ValueError(
                 "amplitude_db is not accepted by plot_or_update_heatmap. "
                 "Convert to dB in the caller (plot_result / _render_order_on) "
@@ -872,9 +877,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         that never pass the new kwarg see unchanged output."""
         if self._amplitude_axis_label is not None:
             return self._amplitude_axis_label
-        return ('Amplitude (dB)' if self._amplitude_mode == 'amplitude_db'
-                else 'Amplitude')
-
+        return (
+            'Amplitude (dB)'
+            if amplitude_mode_is_db(self._amplitude_mode)
+            else 'Amplitude'
+        )
     def _apply_default_axis_labels(self) -> None:
         self._x_label = self._default_x_label
         self._y_label = self._default_y_label
@@ -1093,7 +1100,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         z_auto=False, z_floor=-80.0, z_ceiling=0.0, freq_range=None,
         x_auto=True, x_min=0.0, x_max=0.0,
         y_auto=True, y_min=0.0, y_max=0.0,
-        interp='bilinear', db_reference=1.0,
+        interp=DEFAULT_HEATMAP_INTERP, db_reference=1.0,
         amplitude_label=None, colorbar_label=None, z_unit_suffix=None,
     ):
         """Render a ``SpectrogramResult`` as a 2D heatmap + frequency slice.
@@ -1145,7 +1152,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # no longer carries it, so changing it never invalidates the compute
         # cache key.
         db_ref = float(db_reference)
-        if amplitude_mode == 'amplitude_db':
+        if amplitude_mode_is_db(amplitude_mode):
             key = (self._result_db_token(result), db_ref)
             if self._db_cache is None or self._db_cache[0] != key:
                 from ...signal.spectrogram import SpectrogramAnalyzer
@@ -1645,7 +1652,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         """
         if self._z_unit_suffix:
             return self._z_unit_suffix
-        if self._amplitude_mode == 'amplitude_db':
+        if amplitude_mode_is_db(self._amplitude_mode):
             return 'dB'
         return self._result.unit or ''
 
@@ -1671,7 +1678,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         remark share ONE label context)."""
         if self._z_unit_suffix:
             return self._z_unit_suffix
-        if self._amplitude_mode == 'amplitude_db':
+        if amplitude_mode_is_db(self._amplitude_mode):
             return 'dB'
         result = self._result
         return str(getattr(result, 'unit', '') or '')

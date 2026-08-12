@@ -369,7 +369,9 @@ class PgFrfCanvas(QWidget):
         self._result = result
         self._context = dict(context or {})
         if display_params:
-            self._display_params.update(dict(display_params))
+            self._display_params.update(
+                self._normalise_display_params(dict(display_params))
+            )
         self._state = "ready"
         self._clear_frequency_cursor_readout()
         self.clear_empty_hint()
@@ -380,7 +382,9 @@ class PgFrfCanvas(QWidget):
 
     def set_display_params(self, params) -> None:
         old_xlim = self.get_xlim()
-        self._display_params.update(dict(params or {}))
+        self._display_params.update(
+            self._normalise_display_params(dict(params or {}))
+        )
         if self._result is not None:
             # Magnitude scale, phase wrapping, and coherence presentation can
             # all change the value written into an existing remark label.
@@ -390,6 +394,15 @@ class PgFrfCanvas(QWidget):
                 self.set_xlim(*old_xlim)
             self.layout_geometry_changed.emit()
             self._plot_host.schedule_alignment()
+
+    @staticmethod
+    def _normalise_display_params(params: dict) -> dict:
+        """Strip/lower frequency_scale so ``"Log"`` matches batch FRF specs."""
+        if "frequency_scale" in params:
+            params["frequency_scale"] = str(
+                params["frequency_scale"]
+            ).strip().lower()
+        return params
 
     def display_params(self) -> dict:
         return dict(self._display_params)
@@ -568,7 +581,7 @@ class PgFrfCanvas(QWidget):
         lo, hi = float(xmin), float(xmax)
         if hi <= lo:
             raise ValueError("xmax must be greater than xmin")
-        if self._display_params.get("frequency_scale") == "log" and lo <= 0:
+        if self._is_log_frequency() and lo <= 0:
             positive = self._draw_frequencies[self._draw_frequencies > 0]
             if positive.size:
                 lo = float(positive.min())
