@@ -123,16 +123,16 @@ class BatchFilterPanel(QWidget):
         self.set_method("fft")
 
         self._enable_switch.toggled.connect(self._sync_enabled)
-        self._enable_switch.toggled.connect(lambda *_: self.changed.emit())
+        self._enable_switch.toggled.connect(self.changed)
         self.combo_kind.currentTextChanged.connect(self._sync_kind_rows)
-        self.combo_kind.currentTextChanged.connect(lambda *_: self.changed.emit())
+        self.combo_kind.currentTextChanged.connect(self.changed)
         self.combo_order.currentTextChanged.connect(self._refresh_summary)
-        self.combo_order.currentTextChanged.connect(lambda *_: self.changed.emit())
+        self.combo_order.currentTextChanged.connect(self.changed)
         for spin in (self.spin_cutoff, self.spin_cutoff_lo, self.spin_cutoff_hi):
             spin.valueChanged.connect(self._refresh_summary)
-            spin.valueChanged.connect(lambda *_: self.changed.emit())
+            spin.valueChanged.connect(self.changed)
         for chk in (self.chk_show_original, self.chk_show_filtered):
-            chk.toggled.connect(lambda *_: self.changed.emit())
+            chk.toggled.connect(self.changed)
 
     def _sync_enabled(self, *_args) -> None:
         enabled = self._enable_switch.isChecked()

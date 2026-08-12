@@ -130,3 +130,31 @@ def test_inspector_channel_combos_are_searchable(qapp):
     # FFTTimeContextual.combo_sig
     fftt = FFTTimeContextual()
     assert isinstance(fftt.combo_sig, SearchableComboBox)
+
+
+def test_highlight_and_split_are_cached_by_text_query():
+    """E9: paint-path helpers must memoize on (text, query)."""
+    from mf4_analyzer.ui_kit.widgets.searchable_combo import (
+        _highlight_char_indexes,
+        _split_combo_label,
+    )
+
+    _highlight_char_indexes.cache_clear()
+    _split_combo_label.cache_clear()
+    text = "Rte_TAS_mTorsionBarTorque_xds16"
+    a = _highlight_char_indexes(text, "tas")
+    b = _highlight_char_indexes(text, "tas")
+    assert a == b
+    assert _highlight_char_indexes.cache_info().hits >= 1
+
+    m1, meta1 = _split_combo_label("[src] head:channel")
+    m2, meta2 = _split_combo_label("[src] head:channel")
+    assert (m1, meta1) == (m2, meta2)
+    assert _split_combo_label.cache_info().hits >= 1
+
+
+def test_delegate_exposes_class_level_colors():
+    from mf4_analyzer.ui_kit.widgets.searchable_combo import _TwoLineChannelDelegate
+
+    assert _TwoLineChannelDelegate._MAIN_COLOR.name() == "#111827"
+    assert _TwoLineChannelDelegate._HIGHLIGHT_COLOR.name() == "#0b73e7"

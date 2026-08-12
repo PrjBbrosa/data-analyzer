@@ -15,6 +15,8 @@ Two widgets:
   any sub-control mutates.
 """
 from __future__ import annotations
+from functools import partial
+from ....ui_kit.qt_lifecycle import as_weak_callable
 
 import math
 import os
@@ -245,7 +247,7 @@ class _StructuredFileRow(QWidget):
         remove.setObjectName("BatchFileRowRemove")
         remove.setFixedSize(28, 28)
         remove.setToolTip("移除数据源")
-        remove.clicked.connect(lambda _checked=False, path=row.path: owner.remove_path(path))
+        remove.clicked.connect(partial(owner._remove_path_clicked, row.path))
         lay.addWidget(remove)
 
 
@@ -392,7 +394,12 @@ class FileListWidget(QWidget):
     def set_source_context(self, source_context: dict | None) -> None:
         """Replace probe/availability context (e.g. BLF ``dbc_paths``)."""
         self._source_context = dict(source_context or {})
-        self._probe_signals_for = lambda path: self._source_registry.probe_sources(
+        # Hold the probe helper weakly: a plain lambda here is a self-cycle
+        # that outlives the C++ side under parentless pytest-qt teardown.
+        self._probe_signals_for = as_weak_callable(self._probe_signals_with_context)
+
+    def _probe_signals_with_context(self, path):
+        return self._source_registry.probe_sources(
             path, context=self._source_context,
         )
 
@@ -463,6 +470,9 @@ class FileListWidget(QWidget):
         # override `_probe_signals_for` between add_disk_path() and the
         # actual probe run (matches the test pattern).
         QTimer.singleShot(0, lambda p=canonical: self._start_probe(p))
+
+    def _remove_path_clicked(self, path, _checked=False):
+        self.remove_path(path)
 
     def remove_path(self, path: str) -> None:
         keys = [
@@ -957,12 +967,12 @@ class InputPanel(QWidget):
         self._file_list.filesChanged.connect(self._on_files_changed)
         self._file_list.filesChanged.connect(self._refresh_file_summary)
         self._disk_paths_handler = None
-        self._signal_picker.selectionChanged.connect(lambda *_: self.changed.emit())
-        self._frf_pair_editor.changed.connect(lambda *_: self.changed.emit())
+        self._signal_picker.selectionChanged.connect(self.changed)
+        self._frf_pair_editor.changed.connect(self.changed)
         self._target_policy_combo.currentIndexChanged.connect(
             self._on_target_policy_changed
         )
-        self._rpm_picker.selectionChanged.connect(lambda *_: self.changed.emit())
+        self._rpm_picker.selectionChanged.connect(self.changed)
         self._signal_picker.relaxPolicyRequested.connect(
             self._on_relax_policy_requested
         )
@@ -972,9 +982,9 @@ class InputPanel(QWidget):
         self._rpm_picker.relaxPolicyRequested.connect(
             self._on_relax_policy_requested
         )
-        self._rpm_factor_spin.valueChanged.connect(lambda _value: self.changed.emit())
+        self._rpm_factor_spin.valueChanged.connect(self.changed)
         self._time_edit.textChanged.connect(self._on_time_text_changed)
-        self._filter_panel.changed.connect(lambda *_: self.changed.emit())
+        self._filter_panel.changed.connect(self.changed)
 
         # Seed picker / RPM with initial empty intersection.
         self._refresh_signal_universe()

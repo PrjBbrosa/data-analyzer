@@ -497,13 +497,11 @@ class ToolbarMixin:
         self._center.set_focus_presentation("inplace")
 
         # Pin 接线（spec 2026-07-08 §G6b）。ReplayTab 的 grid 不启用。
-        self._left_pane.set_pin_state_provider(
-            lambda name: name in self._effective_pinned_names()
-        )
+        self._left_pane.set_pin_state_provider(self._channel_is_pinned)
         self._left_pane.pin_toggle_requested.connect(self._on_pin_toggle)
         self._center.set_pinning_enabled(True)
         self._center.unpin_requested.connect(self.unpin_channel)
-        self._center.pins_reset_requested.connect(lambda: self.reset_pins())
+        self._center.pins_reset_requested.connect(self.reset_pins)
 
         # Spec B3/B4: health moved to the top strip (chips + preflight pill)
         # and the bottom facts / escalation bar, so the capture body is a

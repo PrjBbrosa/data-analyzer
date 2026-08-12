@@ -144,14 +144,14 @@ class FilterPanel(QWidget):
         self._sync_rows()
         self.combo_kind.currentTextChanged.connect(self._sync_rows)
         for w in (self.combo_kind, self.combo_order):
-            w.currentTextChanged.connect(lambda *_: self.filter_changed.emit())
+            w.currentTextChanged.connect(self.filter_changed)
         for s in (self.spin_cut, self.spin_lo, self.spin_hi):
-            s.valueChanged.connect(lambda *_: self.filter_changed.emit())
+            s.valueChanged.connect(self.filter_changed)
         # The enable pill re-emits filter_changed (read on the next 「绘图」) AND
         # greys out the settings block when off. Sync the initial (off) state
         # before wiring so no spurious toggled fires during construction.
         self._apply_enabled_state()
-        self._enable_switch.toggled.connect(lambda *_: self.filter_changed.emit())
+        self._enable_switch.toggled.connect(self.filter_changed)
         self._enable_switch.toggled.connect(self._apply_enabled_state)
         # 显示原始/显示滤波后 are LIVE display toggles: they emit a dedicated
         # signal the host wires to setVisible on existing curves (秒生效，不重绘).

@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
 
 from ...analysis_presets import list_builtin_presets
 from ...ui_kit.icons import Icons
+from ...ui_kit.qt_lifecycle import as_weak_callable
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
@@ -42,9 +43,9 @@ class FFTContextual(QWidget):
     """FFT contextual: signal/Fs/params/options + compute button."""
 
     fft_requested = pyqtSignal()
-    rebuild_time_requested = pyqtSignal(object)
+    rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode)
     remark_toggled = pyqtSignal(bool)
-    signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
+    signal_changed = pyqtSignal(str, object)  # (mode, (fid, ch) | None)
     compute_params_changed = pyqtSignal(object)
     display_params_changed = pyqtSignal(object)
     _AUTO_NFFT_LABEL = "自动"
@@ -195,7 +196,7 @@ class FFTContextual(QWidget):
         )
 
         self.combo_avg_mode.currentTextChanged.connect(
-            lambda txt: self.spin_avg_overlap.setEnabled(txt != '单帧')
+            self._sync_avg_overlap_enabled
         )
 
         # ``combo_amp_y`` is the preserved ``amp_y`` preset/project state
@@ -295,9 +296,7 @@ class FFTContextual(QWidget):
         _enforce_label_widths(self, unify_columns=True)
 
         self.btn_fft.clicked.connect(self.fft_requested)
-        self.btn_rebuild.clicked.connect(
-            lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
-        )
+        self.btn_rebuild.clicked.connect(self._emit_rebuild_time_requested)
         self.chk_remark.toggled.connect(self.remark_toggled)
         self._connect_preset_param_signals()
         self._refresh_fft_summary()
@@ -317,10 +316,17 @@ class FFTContextual(QWidget):
         ``provider`` is a zero-arg callable returning the sample count of the
         current FFT signal (int) or ``None`` when no usable data is loaded.
         Passing ``None`` clears the hook. Refreshes the collapsed summary so the
-        displayed 自动(N) updates at once.
+        displayed 自动(N) updates at once. Bound methods are held weakly so the
+        contextual cannot keep MainWindow alive past teardown.
         """
-        self._auto_nfft_provider = provider
+        self._auto_nfft_provider = as_weak_callable(provider)
         self._refresh_fft_summary()
+
+    def _sync_avg_overlap_enabled(self, txt):
+        self.spin_avg_overlap.setEnabled(txt != '单帧')
+
+    def _emit_rebuild_time_requested(self, *_args):
+        self.rebuild_time_requested.emit(self.btn_rebuild, 'fft')
 
     def _fft_nfft_preview(self):
         """Data-aware effective NFFT for the auto summary, or None if unknown.
@@ -577,7 +583,7 @@ class FFTContextual(QWidget):
             self._apply_weighting_value(d['weighting'])
 
     def _on_sig_index_changed(self):
-        self.signal_changed.emit(self.combo_sig.currentData())
+        self.signal_changed.emit('fft', self.combo_sig.currentData())
 
     def set_source_summary(self, labels):
         labels = [str(v) for v in (labels or []) if str(v)]

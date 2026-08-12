@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 
 from ...analysis_presets import list_builtin_presets
 from ...ui_kit.icons import Icons
+from ...ui_kit.qt_lifecycle import as_weak_callable
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
@@ -55,8 +56,8 @@ class OrderContextual(QWidget):
     _AUTO_NFFT_LABEL = "自动"
 
     order_time_requested = pyqtSignal()
-    rebuild_time_requested = pyqtSignal(object)  # anchor widget
-    signal_changed = pyqtSignal(object)  # (fid, ch) tuple or None
+    rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode)
+    signal_changed = pyqtSignal(str, object)  # (mode, (fid, ch) | None)
     compute_params_changed = pyqtSignal(object)
     display_params_changed = pyqtSignal(object)
 
@@ -88,9 +89,7 @@ class OrderContextual(QWidget):
         self.btn_rebuild.setProperty("role", "icon")
         self.btn_rebuild.setToolTip("重建时间轴")
         self.btn_rebuild.setAccessibleName("重建时间轴")
-        self.btn_rebuild.clicked.connect(
-            lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
-        )
+        self.btn_rebuild.clicked.connect(self._emit_rebuild_time_requested)
 
         # ---- 信号源 (custom header w/ rebuild button) ----
         # 2026-04-26 R3 紧凑化 fix-2: WA_StyledBackground intentionally OFF.
@@ -456,9 +455,14 @@ class OrderContextual(QWidget):
         the current order signal (float) or ``None`` when no usable data is
         loaded. Passing ``None`` clears the hook (reverts to the naive preview).
         Refreshes the collapsed summary so the displayed 自动(N) updates at once.
+        Bound methods are held weakly so the contextual cannot keep MainWindow
+        alive past teardown.
         """
-        self._auto_nfft_provider = provider
+        self._auto_nfft_provider = as_weak_callable(provider)
         self._refresh_order_summary()
+
+    def _emit_rebuild_time_requested(self, *_args):
+        self.rebuild_time_requested.emit(self.btn_rebuild, 'order')
 
     def _order_nfft_preview(self):
         from ...signal import ceil_pow2, resolve_order_nfft
@@ -641,7 +645,7 @@ class OrderContextual(QWidget):
         self._sync_axis_enabled()
 
     def _on_sig_index_changed(self):
-        self.signal_changed.emit(self.combo_sig.currentData())
+        self.signal_changed.emit('order', self.combo_sig.currentData())
 
     def set_signal_candidates(self, candidates):
         # Preserve the user's current selection across repopulation —

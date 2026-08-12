@@ -179,9 +179,7 @@ QPushButton#batchOutputRestoreDefaults:hover {
     text-decoration: underline;
 }
 """)
-        self._btn_restore_defaults.clicked.connect(
-            lambda: self.restore_defaults_requested.emit()
-        )
+        self._btn_restore_defaults.clicked.connect(self.restore_defaults_requested)
         section_head_lay.addWidget(self._btn_restore_defaults)
         outer.addWidget(section_head)
 
@@ -461,19 +459,17 @@ QPushButton#batchOutputSettingsButton:checked {
         self._axis_state_by_method: dict[str, dict] = {}
 
         # Wiring
-        self._dir_edit.textChanged.connect(lambda *_: self.changed.emit())
-        self._chk_open_folder.toggled.connect(lambda *_: self.changed.emit())
-        self._chk_data.toggled.connect(lambda *_: self.changed.emit())
-        self._chk_data.toggled.connect(lambda *_: self._sync_output_controls())
-        self._chk_data.toggled.connect(lambda *_: self._refresh_output_summary())
+        self._dir_edit.textChanged.connect(self.changed)
+        self._chk_open_folder.toggled.connect(self.changed)
+        self._chk_data.toggled.connect(self.changed)
+        self._chk_data.toggled.connect(self._sync_output_controls)
+        self._chk_data.toggled.connect(self._refresh_output_summary)
         self._chk_image.toggled.connect(self._on_image_option_changed)
         self._btn_output_settings.toggled.connect(
             self._on_output_settings_toggled
         )
-        self._combo_format.currentTextChanged.connect(lambda *_: self.changed.emit())
-        self._combo_format.currentTextChanged.connect(
-            lambda *_: self._refresh_output_summary()
-        )
+        self._combo_format.currentTextChanged.connect(self.changed)
+        self._combo_format.currentTextChanged.connect(self._refresh_output_summary)
         self._combo_image_size.currentIndexChanged.connect(
             self._on_image_option_changed
         )
@@ -487,18 +483,12 @@ QPushButton#batchOutputSettingsButton:checked {
             self._spin_image_width, self._spin_image_height,
             self._spin_image_dpi,
         ):
-            spin.valueChanged.connect(lambda *_: self.changed.emit())
-            spin.valueChanged.connect(lambda *_: self._refresh_output_summary())
-        self._combo_conflict.currentIndexChanged.connect(
-            lambda *_: self.changed.emit()
-        )
-        self._chk_manifest.toggled.connect(lambda *_: self.changed.emit())
-        self.db_reference_control.editor.valueChanged.connect(
-            lambda *_: self.changed.emit()
-        )
-        self.db_reference_control.mode_committed.connect(
-            lambda *_: self.changed.emit()
-        )
+            spin.valueChanged.connect(self.changed)
+            spin.valueChanged.connect(self._refresh_output_summary)
+        self._combo_conflict.currentIndexChanged.connect(self.changed)
+        self._chk_manifest.toggled.connect(self.changed)
+        self.db_reference_control.editor.valueChanged.connect(self.changed)
+        self.db_reference_control.mode_committed.connect(self.changed)
         # User-driven dB↔Linear toggle: per spec §1.4 reset z_auto/z_range
         # to the new unit's defaults. Programmatic ``apply_axis_params``
         # path wraps its own ``setCurrentIndex`` in ``blockSignals`` so
@@ -506,17 +496,20 @@ QPushButton#batchOutputSettingsButton:checked {
         # internal mutations (chk + 2 spins) into a single ``changed``
         # emit (§5 风险 OutputPanel emits).
         for chk in (self.chk_x_auto, self.chk_y_auto, self.chk_z_auto):
-            chk.toggled.connect(lambda *_: self.changed.emit())
+            chk.toggled.connect(self.changed)
         for spin in (
             self.spin_x_min, self.spin_x_max,
             self.spin_y_min, self.spin_y_max,
             self.spin_z_floor, self.spin_z_ceiling,
         ):
-            spin.valueChanged.connect(lambda *_: self.changed.emit())
+            spin.valueChanged.connect(self.changed)
         self._apply_method_axis_context("fft")
         self._sync_axis_enabled()
         self._sync_output_controls()
         self._refresh_output_summary()
+
+    def _uncheck_render_style_button(self, *_args):
+        self._btn_render_style.setChecked(False)
 
     @staticmethod
     def _compact_field(widget: QWidget) -> None:
@@ -590,9 +583,7 @@ QPushButton#batchRenderStyleButton:checked {
         if popover is None:
             popover = RenderStylePopover(self)
             popover.style_changed.connect(self._on_render_style_changed)
-            popover.closed.connect(
-                lambda: self._btn_render_style.setChecked(False)
-            )
+            popover.closed.connect(self._uncheck_render_style_button)
             self._render_style_popover = popover
         if popover.isVisible():
             popover.hide()

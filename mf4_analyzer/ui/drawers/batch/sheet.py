@@ -17,7 +17,6 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 import tempfile
-import weakref
 
 from PyQt5.QtCore import QTimer, Qt, QUrl
 from PyQt5.QtGui import QDesktopServices
@@ -28,6 +27,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....batch import AnalysisPreset, BatchOutput, BatchRunner
+from ....ui_kit.qt_lifecycle import weak_bound
 from ....batch_preset_io import (
     UnsupportedPresetVersion, load_preset_from_json, save_preset_to_json,
 )
@@ -271,7 +271,7 @@ class BatchSheet(QDialog):
         # QObject-destruction hook to release it. A weak closure means the
         # descendant never keeps ``self`` alive past its own refcount.
         self._input_panel.set_disk_paths_handler(
-            self._weak_bound(self._add_disk_paths_with_blf_context)
+            weak_bound(self._add_disk_paths_with_blf_context)
         )
         self._handoff_notice = QLabel(self._input_panel)
         self._handoff_notice.setObjectName("BatchHandoffNotice")
@@ -638,31 +638,6 @@ class BatchSheet(QDialog):
         context["dbc_paths"] = list(resolved)
         self._set_source_context(context)
         return True
-
-    @staticmethod
-    def _weak_bound(bound_method):
-        """Wrap a bound method in a closure that only holds it weakly.
-
-        Used for callbacks handed to a descendant widget to keep as a plain
-        attribute for the sheet's whole lifetime (as opposed to a normal
-        Qt signal/slot connection, which PyQt already ties to the
-        receiver's lifetime). Without this, the descendant is a strong
-        Python reference back to ``self`` that outlives ``self``'s own
-        underlying C++ object whenever this sheet's Qt parent is torn down
-        by ordinary refcounting rather than an explicit ``close()`` --
-        pytest-qt's parentless test hosts do exactly that. The closure
-        below never touches ``self`` directly, so it does not keep it
-        alive; if the owner is already gone, the call is silently skipped.
-        """
-        ref = weakref.WeakMethod(bound_method)
-
-        def _call(*args, **kwargs):
-            method = ref()
-            if method is not None:
-                return method(*args, **kwargs)
-            return None
-
-        return _call
 
     def _add_disk_paths_with_blf_context(self, paths) -> None:
         """Disk/drop intake: ensure BLF DBC context, then add paths.
