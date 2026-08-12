@@ -444,7 +444,7 @@ QPushButton#BatchGroupingCard:hover {
     background-color: #f8fbff;
 }
 QPushButton#BatchGroupingCard:checked {
-    border: 1px solid {{CONTROL_SELECT_LINE}};
+    border-color: {{CONTROL_SELECT_LINE}};
     background-color: {{CONTROL_TRACK}};
     color: {{CONTROL_TEXT_ON_SELECT}};
 }
@@ -615,22 +615,18 @@ QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric::indicator {
     image: none;
 }
 QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric::indicator:hover {
-    border: none;
     background-color: #64748b;
     image: none;
 }
 QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric::indicator:checked {
-    border: none;
     background-color: #5b8fd4;
     image: none;
 }
 QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric::indicator:disabled {
-    border: none;
     background-color: #cbd5e1;
     image: none;
 }
 QWidget#BatchChartStatistics QCheckBox#BatchChartStatisticsMetric::indicator:checked:disabled {
-    border: none;
     background-color: #cbd5e1;
     image: none;
 }
@@ -812,7 +808,7 @@ QToolButton:disabled {
 }
 #chartToolbar QToolButton[navActive="true"] {
     background-color: #e8efff;
-    border: 1px solid #1769e0;
+    border-color: #1769e0;
 }
 
 /* File-scope follow link: active = persistent wash; idle = icon only.
@@ -1125,7 +1121,7 @@ QToolButton[role="tool"] {
     min-width: 0;
     min-height: 0;
     padding: 1px 4px;
-    border: 1px solid #dfe5ee;
+    border-color: #dfe5ee;
 }
 
 /* Saved-channel config controls live in the navigator rail.  They are action
@@ -1209,7 +1205,11 @@ Toolbar QPushButton[segment]:checked {
         stop: 0 #ffffff, stop: 1 #edf5ff
     );
     color: #1769e0;
-    border: 1px solid #2d7ff9;
+    /* Base segment rules use border:none; longhands recreate the frame
+     * without the border: shorthand that would zero the 6px radius. */
+    border-width: 1px;
+    border-style: solid;
+    border-color: #2d7ff9;
 }
 QWidget#modeSegment {
     padding: 2px;
@@ -1826,7 +1826,8 @@ QWidget#channelCard {
 }
 QWidget#channelCard[dropActive="true"] {
     background-color: #f5f8ff;
-    border: 2px solid #1769e0;
+    border-width: 2px;
+    border-color: #1769e0;
 }
 QScrollArea#fileScroll {
     background-color: transparent;
@@ -1906,9 +1907,14 @@ QTreeWidget#channelTree::item:selected {
     padding: 1px 0;
     background-color: #b7d3f2;
     color: #111827;
+    /* Parent tree is 9px; item fill sits on the padding box (inset by the
+     * 1px frame), so radius = 9 − 1 = 8. Without this, first/last visible
+     * selected rows paint square corners over the parent arc (E1). */
+    border-radius: 8px;
 }
 QTreeWidget#channelTree::branch:selected {
     background-color: #b7d3f2;
+    border-radius: 8px;
 }
 
 QHeaderView::section {
@@ -2265,7 +2271,7 @@ Inspector QDoubleSpinBox[compact="true"]::down-arrow {
     border: none;
 }
 #dbReferenceEditor[error="true"] {
-    border: 1px solid #dc2626;
+    border-color: #dc2626;
     background-color: #fdf2f2;
 }
 #dbReferenceManageButton {
@@ -2406,7 +2412,7 @@ QPushButton[role="preset-load"][filled="true"] {
 QPushButton[role="preset-load"][applied="true"] {
     color: #0b73e7;
     background-color: #e8f1ff;
-    border: 1px solid #0b73e7;
+    border-color: #0b73e7;
     font-weight: 700;
 }
 QPushButton[role="preset-load"][applied="true"]:hover {
@@ -2416,7 +2422,8 @@ QPushButton[role="preset-load"][applied="true"]:hover {
 QPushButton[role="preset-load"]:disabled {
     color: #a3aebd;
     background-color: transparent;
-    border: 1px dashed #cdd5e0;
+    border-style: dashed;
+    border-color: #cdd5e0;
 }
 /* Unit recommendation is a corner badge only; the button body is reserved
    for the actually applied preset state. */
@@ -2435,7 +2442,7 @@ QPushButton[role="preset-save"] {
     font-weight: 500;
     color: #64748b;
     background-color: transparent;
-    border: 1px solid transparent;
+    border-color: transparent;
 }
 QPushButton[role="preset-save"]:hover {
     color: #334155;
@@ -2647,14 +2654,11 @@ QPushButton#cursorPillToggle {
     max-width: 16px;
     max-height: 16px;
 }
-QPushButton#cursorPillToggle[cursorPillMode="full"] {
-    background: rgba(100, 116, 139, 0.15);
-    border: 1px solid rgba(100, 116, 139, 0.30);
-    color: #475569;
-}
+/* full mode reuses the base #cursorPillToggle chrome — do not restate
+ * border: here (shorthand would zero the 3px radius). */
 QPushButton#cursorPillToggle[cursorPillMode="mini"] {
     background: rgba(37, 99, 235, 0.14);
-    border: 1px solid rgba(37, 99, 235, 0.52);
+    border-color: rgba(37, 99, 235, 0.52);
     color: #2563eb;
 }
 QPushButton#cursorPillToggle[cursorPillMode="full"]:hover {
@@ -2934,7 +2938,7 @@ QDialog#DrawerSurface #ChannelEditorDialog {
 }
 #ChannelEditorDialog QPushButton[role="create"] {
     color: #0f3f8f;
-    border: 1px solid #cdddf6;
+    border-color: #cdddf6;
     background-color: #f3f8ff;
 }
 #ChannelEditorDialog QPushButton[role="create"]:hover {
@@ -2943,7 +2947,7 @@ QDialog#DrawerSurface #ChannelEditorDialog {
 }
 #ChannelEditorDialog QPushButton[role="danger"] {
     color: #b42318;
-    border: 1px solid #f1c9c4;
+    border-color: #f1c9c4;
     background-color: #fdf4f3;
 }
 #ChannelEditorDialog QPushButton[role="danger"]:hover {
@@ -3045,13 +3049,17 @@ QStatusBar#surfaceStatusBar QLabel#plotRiskLabel {
 QStatusBar#surfaceStatusBar QLabel#plotRiskLabel[riskLevel="warning"] {
     color: #8a4b00;
     background-color: #fff7df;
-    border: 1px solid #f0c56a;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #f0c56a;
 }
 
 QStatusBar#surfaceStatusBar QLabel#plotRiskLabel[riskLevel="danger"] {
     color: #b42318;
     background-color: #fff1f0;
-    border: 1px solid #f3a7a0;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #f3a7a0;
 }
 
 QStatusBar#surfaceStatusBar QWidget#computeProgressWidget {

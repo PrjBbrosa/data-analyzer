@@ -143,7 +143,10 @@ def test_all_selection_families_render_the_same_checked_pill_pixels(production_s
 
 
 def test_batch_grouping_card_keeps_a_one_pixel_border_when_checked():
+    """Checked state must keep the base 1px frame (color only — no border: shorthand)."""
     qss = _QSS_PATH.read_text(encoding="utf-8")
     checked = _selector_body(qss, "QPushButton#BatchGroupingCard:checked")
     assert "border: 2px" not in checked
-    assert "border: 1px solid {{CONTROL_SELECT_LINE}}" in checked
+    assert "border-color: {{CONTROL_SELECT_LINE}}" in checked
+    # border: shorthand in a state rule would zero the 9px radius (E2).
+    assert "border: 1px" not in checked
