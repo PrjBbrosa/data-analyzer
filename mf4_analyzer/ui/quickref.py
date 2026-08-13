@@ -150,7 +150,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "总览",
-                sub="独立面板，只读对照已有预览：不计算、可与单文件分析同时工作",
+                sub="独立面板，只读对照已有预览：不计算；工具栏「显示」开关标题和来源",
                 accent=_MODE_ULTRAVIEW,
             ),
         ),

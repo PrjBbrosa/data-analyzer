@@ -320,6 +320,8 @@ class BoardToolbar(QFrame):
     add_clicked = pyqtSignal()
     copy_board_requested = pyqtSignal()
     export_png_requested = pyqtSignal(int)
+    show_titles_toggled = pyqtSignal(bool)
+    show_sources_toggled = pyqtSignal(bool)
     presentation_toggled = pyqtSignal(bool)
     board_name_changed = pyqtSignal(str)
 
@@ -384,6 +386,25 @@ class BoardToolbar(QFrame):
         self._export.setMenu(export_menu)
         layout.addWidget(self._export, 0)
 
+        self._display = QToolButton(self)
+        self._display.setObjectName("ultraViewDisplayButton")
+        self._display.setText("显示")
+        self._display.setPopupMode(QToolButton.InstantPopup)
+        self._display.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._display.setToolTip("显示标题和来源")
+        display_menu = QMenu(self._display)
+        apply_rounded_menu_chrome(display_menu)
+        self._act_titles = display_menu.addAction("显示标题")
+        self._act_titles.setCheckable(True)
+        self._act_titles.setChecked(True)
+        self._act_sources = display_menu.addAction("显示来源")
+        self._act_sources.setCheckable(True)
+        self._act_sources.setChecked(True)
+        self._act_titles.toggled.connect(self.show_titles_toggled)
+        self._act_sources.toggled.connect(self.show_sources_toggled)
+        self._display.setMenu(display_menu)
+        layout.addWidget(self._display, 0)
+
         self._presentation = QPushButton("演示", self)
         self._presentation.setObjectName("ultraViewPresentationButton")
         self._presentation.setCheckable(True)
@@ -421,6 +442,14 @@ class BoardToolbar(QFrame):
         self._presentation.setText("退出演示" if on else "演示")
         self._presentation.blockSignals(blocked)
 
+    def set_show_flags(self, titles: bool, sources: bool) -> None:
+        blocked = self._act_titles.blockSignals(True)
+        self._act_titles.setChecked(bool(titles))
+        self._act_titles.blockSignals(blocked)
+        blocked = self._act_sources.blockSignals(True)
+        self._act_sources.setChecked(bool(sources))
+        self._act_sources.blockSignals(blocked)
+
     def set_edit_visible(self, visible: bool) -> None:
         for widget in (
             self._layout_combo,
@@ -429,6 +458,7 @@ class BoardToolbar(QFrame):
             self._add,
             self._copy,
             self._export,
+            self._display,
         ):
             widget.setVisible(visible)
 
@@ -1276,6 +1306,7 @@ class TrayItem(QFrame):
     place_requested = pyqtSignal(str, str)
     remove_requested = pyqtSignal(str, str)
     locate_requested = pyqtSignal(str, str)
+    rebind_arm_requested = pyqtSignal(str, str)
     drag_started = pyqtSignal(str)
     drag_finished = pyqtSignal()
 
@@ -1287,6 +1318,8 @@ class TrayItem(QFrame):
         tab_color: str,
         status: str,
         parent: QWidget | None = None,
+        *,
+        replacement_armed: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("ultraViewTrayItem")
@@ -1309,20 +1342,30 @@ class TrayItem(QFrame):
         place.setObjectName("ultraViewTrayPlace")
         place.setText("放置")
         place.clicked.connect(self._emit_place)
+        self._rebind = QToolButton(self)
+        self._rebind.setObjectName("ultraViewTrayRebind")
+        self._rebind.setText("重新绑定")
+        self._rebind.clicked.connect(self._emit_rebind)
+        self._rebind.setVisible(status == STATUS_ORPHANED)
         remove = QToolButton(self)
         remove.setText("移除")
         remove.clicked.connect(self._emit_remove)
         layout.addWidget(place, 0)
+        layout.addWidget(self._rebind, 0)
         layout.addWidget(remove, 0)
         self.setAccessibleName(f"未放置 {title}")
         self.setProperty("status", status)
         _set_flag(self, "orphaned", status == STATUS_ORPHANED)
+        _set_flag(self, "replacementArmed", replacement_armed)
 
     def ref(self) -> tuple[str, str]:
         return self._section, self._view_id
 
     def _emit_place(self) -> None:
         self.place_requested.emit(self._section, self._view_id)
+
+    def _emit_rebind(self) -> None:
+        self.rebind_arm_requested.emit(self._section, self._view_id)
 
     def _emit_remove(self) -> None:
         self.remove_requested.emit(self._section, self._view_id)
@@ -1359,6 +1402,7 @@ class UnplacedTray(QFrame):
     place_requested = pyqtSignal(str, str)
     remove_requested = pyqtSignal(str, str)
     locate_requested = pyqtSignal(str, str)
+    rebind_arm_requested = pyqtSignal(str, str)
     move_to_unplaced_dropped = pyqtSignal(str, str)
     drag_started = pyqtSignal(str)
     drag_finished = pyqtSignal()
@@ -1419,6 +1463,7 @@ class UnplacedTray(QFrame):
         titles: Mapping[tuple[str, str], str] | None = None,
         colors: Mapping[tuple[str, str], str] | None = None,
         statuses: Mapping[tuple[str, str], str] | None = None,
+        armed: UltraViewRef | None = None,
     ) -> None:
         while self._inner_layout.count() > 1:
             item = self._inner_layout.takeAt(0)
@@ -1439,10 +1484,12 @@ class UnplacedTray(QFrame):
                 colors.get(key, ""),
                 statuses.get(key, ""),
                 self._inner,
+                replacement_armed=armed == ref,
             )
             widget.place_requested.connect(self.place_requested)
             widget.remove_requested.connect(self.remove_requested)
             widget.locate_requested.connect(self.locate_requested)
+            widget.rebind_arm_requested.connect(self.rebind_arm_requested)
             widget.drag_started.connect(self.drag_started)
             widget.drag_finished.connect(self.drag_finished)
             self._inner_layout.insertWidget(self._inner_layout.count() - 1, widget)

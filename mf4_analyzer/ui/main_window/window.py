@@ -4314,12 +4314,11 @@ class MainWindow(
             except Exception:
                 setattr(self, attr, None)
                 return None
-            closer = getattr(dlg, "close", None)
-            if callable(closer):
-                try:
-                    closer()
-                except Exception:
-                    pass
+            # Hidden/closing: drop the handle only. Do not close() again —
+            # a second closeEvent can steal the Board page from a newer
+            # sheet. deleteLater stays so a hidden Batch/UltraView dialog
+            # does not leak; destroyed uses identity so it cannot wipe a
+            # replacement handle.
             deleter = getattr(dlg, "deleteLater", None)
             if callable(deleter):
                 try:
@@ -4366,10 +4365,27 @@ class MainWindow(
         self._raise_tool_dialog(dlg)
 
     def _on_batch_sheet_destroyed(self, *_args) -> None:
-        self._batch_sheet = None
+        self._forget_tool_dialog_if_current("_batch_sheet")
 
     def _on_ultraview_sheet_destroyed(self, *_args) -> None:
-        self._ultraview_sheet = None
+        self._forget_tool_dialog_if_current("_ultraview_sheet")
+
+    def _forget_tool_dialog_if_current(self, attr: str) -> None:
+        current = getattr(self, attr, None)
+        if current is None:
+            return
+        gone = self.sender()
+        if gone is not None:
+            if current is not gone:
+                return
+            setattr(self, attr, None)
+            return
+        try:
+            from PyQt5 import sip
+            if sip.isdeleted(current):
+                setattr(self, attr, None)
+        except (RuntimeError, TypeError):
+            pass
 
     def _order_view_uses_manual_rpm(self) -> bool:
         """True when the live order view is driving off a fixed RPM value.

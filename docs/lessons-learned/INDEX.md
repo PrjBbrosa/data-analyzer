@@ -163,6 +163,8 @@ lesson by default.
 | [ViewState Composite-Key Tables Stay In Sync](codex-viewstate-composite-key-tables-stay-in-sync.md) | Touching `remap_view_fids`, close-file ViewState cleanup, or any | See lesson |
 | [Toast providers stay weak; selected expanders avoid QMacStyle primitives](qt-lifecycle-toast-and-macstyle-expander.md) | ``Toast(margin_provider=bound_method)``; Darwin channel-tree | See lesson |
 | [FFT Time Preview Empty Keeps Y Graticule](fft-time-preview-empty-keeps-y-graticule.md) | Changing `PgLineCanvas` time-preview overlay grid, `_build_time_y_grid`, empty `plot_time_preview([])`, or `full_reset`. | See lesson |
+| [UltraView Time Capture Uses Plotted Ink And Stable Digest](ultraview-time-capture-ink-and-stable-digest.md) | Changing UltraView preview capture, `_host_has_real_result`, presentation digest, or `source_revision_for` in the time-preview path. | See lesson |
+| [Independent Tool Window Must Clear Transient Parent](independent-tool-window-must-clear-transient-parent.md) | Adding or changing a non-modal QDialog tool window parented to MainWindow | See lesson |
 
 ## Selection Rules
 

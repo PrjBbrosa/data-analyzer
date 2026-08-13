@@ -38,6 +38,7 @@ from ..ultraview_state import (
     placed_ref_set,
     placement_for,
     presentation_digest,
+    rebind_ref,
     remove_ref,
     replace_slot,
     set_layout,
@@ -210,6 +211,29 @@ def _channel_pair(key):
     return [str(fid), str(channel)]
 
 
+def _stable_source_revision(revision):
+    """Content fingerprint for UltraView digest; drop ndarray ``id()``.
+
+    ``source_revision_for`` includes object ids so in-place mutation of a
+    held array is visible. ``Series.to_numpy()`` / ``np.asarray`` often
+    return a new wrapper each call, so those ids churn while the samples
+    do not. A presentation digest that includes them never matches the
+    queued capture, and the Board stays missing.
+    """
+    if revision is None:
+        return None
+    try:
+        kind = revision[0]
+        items = list(revision)
+    except (TypeError, IndexError):
+        return None
+    if kind == "explicit":
+        return items
+    if kind == "probed" and len(items) >= 9:
+        return [kind, *items[3:]]
+    return items
+
+
 def _array_from_column(column):
     if column is None:
         return None
@@ -243,6 +267,7 @@ class UltraViewCoordinator(QObject):
         self._left_snapshot = None
         self._inspector_snapshot = None
         self._page_hooks: list[tuple[Any, Any, Any]] = []
+        self._manager_hooks: list[tuple[Any, Any, Any]] = []
         self.attach()
 
     @property
@@ -317,12 +342,15 @@ class UltraViewCoordinator(QObject):
                 return
         except RuntimeError:
             return
+        if not self._widget_has_any_real_result(widget):
+            self._warn_capture(ref, widget, reason, "no-result")
+            self._push_preview(ref, usable=False)
+            return
         digest = self.current_digest_for(ref)
         if digest is None:
             self._warn_capture(ref, widget, reason, "digest-unavailable")
             return
-        record = self._store.get(ref)
-        if record is not None and record.captured_digest == digest:
+        if self._has_current_preview(ref, digest):
             return
         key = (ref, digest)
         self._drop_queued_for_ref(ref, keep=key)
@@ -437,32 +465,33 @@ class UltraViewCoordinator(QObject):
     def attach(self) -> None:
         if self._inactive():
             return
-        if self._page_hooks:
-            self.refresh_page()
-            return
         window = self._window
         if window is None:
             return
-        page = self.page()
-        if page is not None:
-            page.set_board(self._board)
-            self._connect_page(page)
-        inspector = getattr(window, "inspector", None)
-        ctx = getattr(inspector, "ultraview_ctx", None)
-        if ctx is not None:
-            self._connect_inspector(ctx)
-        stack = getattr(window, "chart_stack", None)
-        if stack is not None:
-            signal = getattr(stack, "add_to_ultraview_requested", None)
-            if signal is not None:
-                signal.connect(self.add_from_source_tab)
-                self._page_hooks.append((stack, signal, self.add_from_source_tab))
+        if not self._page_hooks:
+            page = self.page()
+            if page is not None:
+                page.set_board(self._board)
+                self._connect_page(page)
+            inspector = getattr(window, "inspector", None)
+            ctx = getattr(inspector, "ultraview_ctx", None)
+            if ctx is not None:
+                self._connect_inspector(ctx)
+            stack = getattr(window, "chart_stack", None)
+            if stack is not None:
+                signal = getattr(stack, "add_to_ultraview_requested", None)
+                if signal is not None:
+                    signal.connect(self.add_from_source_tab)
+                    self._page_hooks.append((stack, signal, self.add_from_source_tab))
+        if not self._manager_hooks:
+            self._connect_managers()
         self.refresh_page()
 
     def _connect_page(self, page) -> None:
         pairs = (
             (page.add_ref_requested, self._on_add_ref),
             (page.replace_slot_requested, self._on_replace_slot),
+            (page.rebind_ref_requested, self._on_rebind_ref),
             (page.swap_slots_requested, self._on_swap_slots),
             (page.place_from_unplaced_requested, self._on_place_from_unplaced),
             (page.move_to_unplaced_requested, self._on_move_to_unplaced),
@@ -478,6 +507,8 @@ class UltraViewCoordinator(QObject):
             (page.copy_card_image_requested, self._on_copy_card),
             (page.export_png_requested, self.choose_and_export_png),
             (page.board_name_changed, self._on_board_name),
+            (page.show_titles_toggled, self._on_show_titles),
+            (page.show_sources_toggled, self._on_show_sources),
         )
         for signal, slot in pairs:
             signal.connect(slot)
@@ -502,22 +533,27 @@ class UltraViewCoordinator(QObject):
             signal.connect(slot)
             self._page_hooks.append((ctx, signal, slot))
 
-    def enter_ultraview(self) -> None:
-        window = self._window
-        if window is None:
+    def _connect_managers(self) -> None:
+        if self._manager_hooks:
             return
-        left = getattr(window, "_panel_ctrl_left", None)
-        if left is not None and self._left_snapshot is None:
-            self._left_snapshot = left.snapshot_persistent_state()
-            left.restore_persistent_state({
-                "state": "HIDDEN",
-                "width": self._left_snapshot.get("width"),
-            })
-        page = self.page()
-        if page is not None:
-            toolbar = getattr(window, "toolbar", None)
-            if toolbar is not None:
-                toolbar.set_nav_open(page.is_library_visible())
+        for _section, manager in self._iter_managers():
+            signal = getattr(manager, "views_changed", None)
+            if signal is None:
+                continue
+            signal.connect(self._on_manager_views_changed)
+            self._manager_hooks.append(
+                (manager, signal, self._on_manager_views_changed)
+            )
+
+    def _on_manager_views_changed(self, *_args) -> None:
+        if self._inactive():
+            return
+        self.refresh_page()
+
+    def enter_ultraview(self) -> None:
+        """Independent Board window path: do not hide the Analyzer chrome."""
+        if self._inactive():
+            return
         self.refresh_page()
 
     def leave_ultraview(self) -> None:
@@ -706,7 +742,7 @@ class UltraViewCoordinator(QObject):
         resolved = self._analysis_state(self._window, ref.section, ref.view_id)
         return resolved is not None
 
-    def _push_preview(self, ref: UltraViewRef) -> None:
+    def _push_preview(self, ref: UltraViewRef, *, usable: bool = True) -> None:
         page = self.page()
         if page is None:
             return
@@ -714,7 +750,9 @@ class UltraViewCoordinator(QObject):
         if record is not None:
             page.set_preview(ref, record)
         exists = self._ref_exists(ref)
-        digest = self.current_digest_for(ref) if exists else None
+        digest = (
+            self.current_digest_for(ref) if exists and usable else None
+        )
         image_valid = record is not None and PreviewStore.image_valid(
             getattr(record, "image", None)
         )
@@ -729,11 +767,19 @@ class UltraViewCoordinator(QObject):
 
     def _sync_inspector(self) -> None:
         window = self._window
-        inspector = getattr(window, "inspector", None) if window is not None else None
+        if window is None:
+            return
+        page = self.page()
+        if page is not None:
+            host = page.window()
+            if host is not None and host is not window:
+                # Board lives in the tool window. Updating Inspector widgets
+                # in the Analyzer would raise that window over the Board.
+                return
+        inspector = getattr(window, "inspector", None)
         ctx = getattr(inspector, "ultraview_ctx", None)
         if ctx is None:
             return
-        page = self.page()
         selected = None
         if page is not None:
             pair = page.selected_ref()
@@ -772,6 +818,20 @@ class UltraViewCoordinator(QObject):
         if ref is None:
             return
         replace_slot(self._board, slot_id, ref)
+        self._after_board_mutation()
+
+    def _on_rebind_ref(
+        self,
+        old_section: str,
+        old_view_id: str,
+        new_section: str,
+        new_view_id: str,
+    ) -> None:
+        old_ref = parse_ref_payload({"section": old_section, "view_id": old_view_id})
+        new_ref = parse_ref_payload({"section": new_section, "view_id": new_view_id})
+        if old_ref is None or new_ref is None:
+            return
+        rebind_ref(self._board, old_ref, new_ref)
         self._after_board_mutation()
 
     def _on_swap_slots(self, slot_a: str, slot_b: str) -> None:
@@ -990,26 +1050,9 @@ class UltraViewCoordinator(QObject):
     def _on_presentation(self, active: bool) -> None:
         if self._inactive():
             return
-        window = self._window
         page = self.page()
         if page is not None:
             page.set_presentation_active(bool(active))
-        if window is None:
-            return
-        right = getattr(window, "_panel_ctrl_right", None)
-        if right is None:
-            return
-        if active:
-            if self._inspector_snapshot is None:
-                self._inspector_snapshot = right.snapshot_persistent_state()
-            right.restore_persistent_state({
-                "state": "HIDDEN",
-                "width": self._inspector_snapshot.get("width"),
-            })
-            return
-        if self._inspector_snapshot is not None:
-            right.restore_persistent_state(self._inspector_snapshot)
-            self._inspector_snapshot = None
 
     def _index_for_view_id(self, section: str, view_id: str) -> int | None:
         window = self._window
@@ -1041,6 +1084,7 @@ class UltraViewCoordinator(QObject):
         self._drop_all_timers()
         self._disconnect_hooks()
         self._disconnect_page_hooks()
+        self._disconnect_manager_hooks()
         if _alive(self._store):
             self._store.clear()
         self._bindings.clear()
@@ -1061,8 +1105,10 @@ class UltraViewCoordinator(QObject):
         if self._shutdown:
             return
         page = self.page()
-        if page is not None and page.is_presentation_active():
-            self._on_presentation(False)
+        if page is not None:
+            reset = getattr(page, "reset_sheet_session", None)
+            if callable(reset):
+                reset()
         self._drop_all_timers()
         self._disconnect_hooks()
         if _alive(self._store):
@@ -1089,6 +1135,16 @@ class UltraViewCoordinator(QObject):
             except (TypeError, RuntimeError):
                 continue
         self._page_hooks.clear()
+
+    def _disconnect_manager_hooks(self) -> None:
+        for obj, signal, slot in self._manager_hooks:
+            if not _alive(obj):
+                continue
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                continue
+        self._manager_hooks.clear()
 
     # -- payload ----------------------------------------------------------
 
@@ -1204,7 +1260,7 @@ class UltraViewCoordinator(QObject):
         time_axis = getattr(fd, "time_array", None)
         values = _array_from_column(data[channel])
         try:
-            return list(source_revision_for(time_axis, values))
+            return _stable_source_revision(source_revision_for(time_axis, values))
         except (TypeError, ValueError):
             return None
 
@@ -1235,15 +1291,26 @@ class UltraViewCoordinator(QObject):
 
     # -- capture ----------------------------------------------------------
 
+    def _has_current_preview(self, ref, digest: str) -> bool:
+        record = self._store.get(ref)
+        return (
+            record is not None
+            and record.captured_digest == digest
+            and PreviewStore.image_valid(getattr(record, "image", None))
+        )
+
     def _try_publish_now(self, ref, widget, reason: str) -> bool:
         if self._inactive():
+            return False
+        if not self._widget_has_any_real_result(widget):
+            self._warn_capture(ref, widget, reason, "no-result")
+            self._push_preview(ref, usable=False)
             return False
         digest = self.current_digest_for(ref)
         if digest is None:
             self._warn_capture(ref, widget, reason, "digest-unavailable")
             return False
-        record = self._store.get(ref)
-        if record is not None and record.captured_digest == digest:
+        if self._has_current_preview(ref, digest):
             return True
         if not self._is_stable(widget, ref.section):
             self._warn_capture(ref, widget, reason, "unstable")
@@ -1303,6 +1370,7 @@ class UltraViewCoordinator(QObject):
             return False
         current = self.current_digest_for(ref)
         if current != digest:
+            self._warn_capture(ref, widget, reason, "digest-changed")
             return False
         if not self._widget_visible_and_sized(widget):
             return False
@@ -1310,6 +1378,10 @@ class UltraViewCoordinator(QObject):
             self._unstable[id(widget)] = (
                 ref, digest, reason, weakref.ref(widget)
             )
+            return False
+        if not self._widget_has_any_real_result(widget):
+            self._warn_capture(ref, widget, reason, "no-result")
+            self._push_preview(ref, usable=False)
             return False
         with hide_transient_overlays(widget):
             image = self._grab_image(widget)
@@ -1339,6 +1411,77 @@ class UltraViewCoordinator(QObject):
             return None
         return image
 
+    def _time_host_has_plotted_data(self, host) -> bool:
+        """True when a time canvas currently holds plotted channel ink.
+
+        ``quality_status()["curve_count"]`` counts native-AA PlotCurveItems
+        only. A ready dense-raster cache covers those items, so the count
+        is 0 while the user still sees a full plot. Channel tables are the
+        emptiness signal; AA color is not.
+        """
+        for name in ("_channel_lines", "channel_data"):
+            mapping = getattr(host, name, None)
+            if not mapping:
+                continue
+            try:
+                if len(mapping) > 0:
+                    return True
+            except TypeError:
+                continue
+        return False
+
+    def _quality_says_plotted(self, host) -> bool:
+        quality = getattr(host, "quality_status", None)
+        if not callable(quality):
+            return False
+        try:
+            status = quality() or {}
+        except (TypeError, RuntimeError):
+            return False
+        if status.get("render_path") == "dense-raster":
+            return True
+        count = status.get("curve_count")
+        if count is not None:
+            try:
+                if int(count) > 0:
+                    return True
+            except (TypeError, ValueError):
+                return False
+            try:
+                return int(status.get("high_raster_curve_count") or 0) > 0
+            except (TypeError, ValueError):
+                return False
+        return status.get("state") == "green"
+
+    def _host_has_real_result(self, host) -> bool:
+        """True when *host* currently shows a computed/plotted result.
+
+        Analysis canvases expose ``has_result()``. Time-domain canvases do
+        not; plotted channel tables (or a ready dense-raster path) are the
+        emptiness signal. AA color is a render-quality light — dense traces
+        often stay red, and raster-backed plots report ``curve_count == 0``.
+        """
+        has_result = getattr(host, "has_result", None)
+        if callable(has_result):
+            try:
+                return bool(has_result())
+            except (TypeError, RuntimeError):
+                return False
+        if self._time_host_has_plotted_data(host):
+            return True
+        return self._quality_says_plotted(host)
+
+    def _widget_has_any_real_result(self, widget) -> bool:
+        """True if any overlay host (or the widget itself) has a real result.
+
+        All-empty panes must not grab. A split analysis page with one live
+        pane is eligible; the composite grab is still one ref.
+        """
+        hosts = list(_iter_overlay_hosts(widget))
+        if not hosts:
+            return False
+        return any(self._host_has_real_result(host) for host in hosts)
+
     def _is_stable(self, widget, section: str) -> bool:
         if not self._widget_visible_and_sized(widget):
             return False
@@ -1358,15 +1501,16 @@ class UltraViewCoordinator(QObject):
         quality = getattr(host, "quality_status", None)
         if callable(quality):
             status = quality() or {}
-            if status.get("state") != "green":
+            state = status.get("state")
+            # Yellow = AA / raster still settling. Red with curves is the
+            # native non-AA plot the user already sees — grab that. Empty
+            # red is filtered by ``_host_has_real_result``, not here.
+            if state == "yellow":
                 return False
         dense = getattr(host, "_dense_raster", None)
         if dense is not None and callable(getattr(dense, "quality_status", None)):
             dense_status = dense.quality_status() or {}
-            if dense_status.get("has_dense") and dense_status.get("state") not in (
-                None,
-                "green",
-            ):
+            if dense_status.get("has_dense") and dense_status.get("state") == "yellow":
                 return False
         if getattr(host, "_interaction_state", "idle") != "idle":
             return False

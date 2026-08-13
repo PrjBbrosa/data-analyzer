@@ -35,6 +35,44 @@ def configure_independent_tool_window(widget) -> None:
     )
 
 
+def clear_tool_window_transient_parent(widget) -> None:
+    """Drop the native transient-for link to the QWidget parent.
+
+    Parenting a QDialog to MainWindow is useful for lifetime and close-together
+    behavior. Cocoa/Win32 still treat that as transient-for, so a click inside
+    the tool window activates and raises the Analyzer over it. Independent
+    tool windows must not keep that native relationship.
+    """
+    handle = widget.windowHandle()
+    if handle is None:
+        widget.winId()
+        handle = widget.windowHandle()
+    if handle is None:
+        return
+    try:
+        handle.setTransientParent(None)
+    except (RuntimeError, TypeError, AttributeError):
+        return
+
+
+def present_independent_tool_window(widget) -> None:
+    """Show, raise, then detach from the host window's z-order.
+
+    ``raise_`` / ``activateWindow`` can re-create the native transient-for
+    link, so the detach must run last.
+    """
+    show = getattr(widget, "show", None)
+    if callable(show):
+        show()
+    raiser = getattr(widget, "raise_", None)
+    if callable(raiser):
+        raiser()
+    activate = getattr(widget, "activateWindow", None)
+    if callable(activate):
+        activate()
+    clear_tool_window_transient_parent(widget)
+
+
 def fit_dialog_to_available_screen(
     dialog, parent, target_w: int, target_h: int, *, min_w: int, min_h: int,
 ) -> None:

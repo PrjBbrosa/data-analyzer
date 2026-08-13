@@ -4,8 +4,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from PyQt5.QtCore import QCoreApplication
-from PyQt5.QtWidgets import QLabel, QStackedWidget, QToolButton, QWidget
+from PyQt5.QtCore import QCoreApplication, Qt
+from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import QLabel, QPushButton, QStackedWidget, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack import ChartStack
 from mf4_analyzer.ui.drawers.ultraview import UltraViewSheet
@@ -14,6 +15,7 @@ from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.side_panels import PanelState
 from mf4_analyzer.ui.ultraview_state import (
     DEFAULT_BOARD_NAME,
+    STATUS_FRESH,
     UltraViewRef,
     add_ref,
     membership_set,
@@ -109,6 +111,59 @@ def test_main_window_ultraview_opens_independent_panel_without_stealing_mode(
     win.open_ultraview()
     qapp.processEvents()
     assert win._ultraview_sheet is sheet
+
+
+def test_ultraview_tool_window_is_not_transient_for_analyzer(qapp, qtbot):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1200, 800)
+    win.show()
+    qtbot.waitExposed(win)
+    win.open_ultraview()
+    qapp.processEvents()
+
+    sheet = win._ultraview_sheet
+    assert sheet is not None
+    handle = sheet.windowHandle()
+    assert handle is not None
+    assert handle.transientParent() is None
+    add = sheet.findChild(QPushButton, "ultraViewAddButton")
+    assert add is not None
+    assert add.autoDefault() is False
+    assert add.isDefault() is False
+
+
+def test_ultraview_board_actions_stay_in_the_tool_window(qapp, qtbot):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1200, 800)
+    win.show()
+    qtbot.waitExposed(win)
+    win.open_ultraview()
+    qapp.processEvents()
+
+    sheet = win._ultraview_sheet
+    page = win.chart_stack.page_ultraview
+    mode = win.chart_stack.current_mode()
+    QTest.keyClick(sheet, Qt.Key_Return)
+    qapp.processEvents()
+    page.layout_changed.emit("grid_2x2")
+    qapp.processEvents()
+    rows = page.library_panel().visible_rows()
+    assert rows
+    page.request_add(rows[0].section, rows[0].view_id)
+    qapp.processEvents()
+    page.presentation_toggled.emit(True)
+    qapp.processEvents()
+
+    assert sheet.isVisible()
+    assert page.parentWidget() is sheet
+    assert win.chart_stack.current_mode() == mode
+    assert win.inspector.contextual_widget_name() != "ultraview"
 
 
 
@@ -288,12 +343,14 @@ def test_reset_during_presentation_restores_inspector(qapp, qtbot):
     right = win._panel_ctrl_right
     before = right.snapshot_persistent_state()
     uv._on_presentation(True)
-    assert uv._inspector_snapshot is not None
+    assert uv._inspector_snapshot is None
+    assert right.snapshot_persistent_state()["state"] == before["state"]
 
     uv.reset_project_state()
 
     assert uv._inspector_snapshot is None
     assert right.snapshot_persistent_state()["state"] == before["state"]
+    assert win.chart_stack.page_ultraview.is_presentation_active() is False
 
 
 def test_inspector_unknown_mode_falls_back_to_time(qapp):
@@ -341,4 +398,219 @@ def test_closing_ultraview_panel_restores_page_to_chart_stack(qapp, qtbot):
     assert page.parentWidget() is stack
     assert stack.indexOf(page) >= 0
     assert stack.currentWidget() is not page
+
+
+def test_presentation_does_not_hide_main_inspector(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    right = win._panel_ctrl_right
+    left = win._panel_ctrl_left
+    right_before = right.snapshot_persistent_state()
+    left_before = left.snapshot_persistent_state()
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    uv._on_presentation(True)
+    assert right.snapshot_persistent_state()["state"] == right_before["state"]
+    assert left.snapshot_persistent_state()["state"] == left_before["state"]
+    page = win.chart_stack.page_ultraview
+    assert page.is_presentation_active() is True
+    assert page.board_toolbar()._add.isVisible() is False
+    uv._on_presentation(False)
+    assert right.snapshot_persistent_state()["state"] == right_before["state"]
+    assert page.is_presentation_active() is False
+    assert page.is_library_visible() is True
+
+
+def test_closing_ultraview_exits_presentation_and_reopens_in_edit(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    page = win.chart_stack.page_ultraview
+    uv._on_presentation(True)
+    assert page.is_presentation_active() is True
+    sheet = win._ultraview_sheet
+    sheet.close()
+    QCoreApplication.processEvents()
+    assert page.is_presentation_active() is False
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    assert win._ultraview_sheet is not None
+    assert page.is_presentation_active() is False
+    assert page.board_toolbar()._add.isVisible() is True
+    assert page.is_library_visible() is True
+
+
+def test_ultraview_fast_close_reopen_keeps_single_sheet(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    page = win.chart_stack.page_ultraview
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    first = win._ultraview_sheet
+    first.close()
+    QCoreApplication.processEvents()
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    second = win._ultraview_sheet
+    assert second is not None
+    assert second.isVisible()
+    assert page.parentWidget() is second
+    assert page.isVisible()
+    win._on_ultraview_sheet_destroyed()
+    assert win._ultraview_sheet is second
+
+
+def test_stale_sheet_destroyed_does_not_clear_new_handle(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    page = win.chart_stack.page_ultraview
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    first = win._ultraview_sheet
+    first.hide()
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    second = win._ultraview_sheet
+    assert second is not None
+    assert second is not first
+    assert page.parentWidget() is second
+    QCoreApplication.processEvents()
+    assert win._ultraview_sheet is second
+
+
+def test_views_changed_add_delete_rename_recolor_sync_library_and_card(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    page = win.chart_stack.page_ultraview
+    mgr = win.view_manager
+    first_id = str(mgr.get(0).view_id)
+    add_ref(uv.board, UltraViewRef("time", first_id))
+    uv.refresh_page()
+
+    before = {
+        row.row().view_id
+        for row in page.library_panel().row_widgets()
+        if row.row().section == "time"
+    }
+    idx = mgr.new_view()
+    new_id = str(mgr.get(idx).view_id)
+    after = {
+        row.row().view_id
+        for row in page.library_panel().row_widgets()
+        if row.row().section == "time"
+    }
+    assert new_id not in before
+    assert new_id in after
+
+    add_ref(uv.board, UltraViewRef("time", new_id))
+    uv.refresh_page()
+    mgr.rename(idx, "转向力矩")
+    mgr.set_color(idx, "#ff3366")
+    card = page.card_widget("time", new_id)
+    assert card.model().title == "转向力矩"
+    assert card.model().tab_color == "#ff3366"
+    names = [
+        row.row().name
+        for row in page.library_panel().row_widgets()
+        if row.row().view_id == new_id
+    ]
+    assert names == ["转向力矩"]
+
+    mgr.delete_view(idx)
+    card = page.card_widget("time", new_id)
+    assert card.property("orphaned") == "true"
+    assert page._ref_exists.get(UltraViewRef("time", new_id)) is False
+
+
+def test_toolbar_show_titles_sync_cards(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    page = win.chart_stack.page_ultraview
+    view_id = str(win.view_manager.get(0).view_id)
+    add_ref(uv.board, UltraViewRef("time", view_id))
+    uv.refresh_page()
+    uv._on_show_titles(False)
+    uv._on_show_sources(False)
+    card = page.card_widget("time", view_id)
+    assert card.model().show_title is False
+    assert card.model().show_source is False
+    assert page.board_toolbar()._act_titles.isChecked() is False
+    uv._on_show_titles(True)
+    card = page.card_widget("time", view_id)
+    assert card.model().show_title is True
+
+
+def test_coordinator_orphan_rebind_end_to_end(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    orphan = UltraViewRef("time", "gone")
+    add_ref(uv.board, orphan)
+    fft_id = str(win.analysis_managers["fft"].get(0).view_id)
+    uv._on_rebind_ref("time", "gone", "fft", fft_id)
+    assert orphan not in membership_set(uv.board)
+    assert UltraViewRef("fft", fft_id) in membership_set(uv.board)
+
+
+def test_open_ultraview_captures_plotted_time_view(qapp, qtbot, loaded_csv):
+    """Visible time ink must snapshot even when native-AA curve_count is 0."""
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1200, 800)
+    win.show()
+    qtbot.waitExposed(win)
+    win._load_one(loaded_csv)
+    fid = next(iter(win.files))
+    win.channel_list.check_first_channel(fid)
+    qtbot.wait(250)
+    QCoreApplication.processEvents()
+
+    canvas = win.chart_stack.canvas_time
+    assert len(canvas._channel_lines) > 0
+    win.open_ultraview()
+    uv = win._ultraview
+    view_id = str(win.view_manager.get(0).view_id)
+    uv.add_from_source_tab("time", view_id)
+    ref = UltraViewRef("time", view_id)
+    record = None
+    for _ in range(40):
+        QCoreApplication.processEvents()
+        record = uv.store.get(ref)
+        if record is not None and record.image is not None and not record.image.isNull():
+            break
+        qtbot.wait(50)
+    assert record is not None
+    assert record.image is not None
+    assert record.image.isNull() is False
+    page = uv.page()
+    assert page is not None
+    assert page._status_for(ref) == STATUS_FRESH
+
+
+def test_add_to_ultraview_from_view_tab_keeps_section_and_view_id(
+    qapp, qtbot, monkeypatch,
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    bar = win.chart_stack.page_fft.tabbar
+    view_id = str(win.analysis_managers["fft"].get(0).view_id)
+    received = []
+    win.chart_stack.add_to_ultraview_requested.connect(
+        lambda section, vid: received.append((section, vid))
+    )
+
+    def fake_exec(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "加入总览")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    rect = bar.tabBar().tabRect(0)
+    bar._on_context_menu(rect.center())
+
+    assert received == [("fft", view_id)]
+    assert UltraViewRef("fft", view_id) in membership_set(win._ultraview.board)
 

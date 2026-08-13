@@ -513,11 +513,13 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.tray",
         "ultraview.statuses",
         "ultraview.readonly",
+        "ultraview.display",
     }
     assert required <= set(by_id)
+    source_modes = frozenset({"time", "fft", "fft_time", "frf", "order"})
     add_hint = by_id["ultraview.add_from_tab"]
     assert add_hint.surface == "discovery"
-    assert add_hint.modes == frozenset({"time", "fft", "fft_time", "frf", "order"})
+    assert add_hint.modes == source_modes
     assert "加入总览" in add_hint.text
     uv_state = HintState(mode="ultraview")
     uv_ids = {hint.id for hint in hints.context_hints(uv_state)}
@@ -529,6 +531,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.tray",
         "ultraview.statuses",
         "ultraview.readonly",
+        "ultraview.display",
     } <= uv_ids
     time_ids = {hint.id for hint in hints.context_hints(HintState(mode="time", plot_mode="overlay"))}
     assert not any(hid.startswith("ultraview.") for hid in time_ids)

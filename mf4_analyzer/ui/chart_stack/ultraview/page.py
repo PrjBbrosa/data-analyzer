@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 
 from mf4_analyzer.ui.ultraview_state import (
     COMPARE_FILTER_ALL,
+    STATUS_ORPHANED,
     UltraViewBoardState,
     UltraViewRef,
     axis_consistency_facts,
@@ -69,6 +70,9 @@ class UltraViewPage(QWidget):
     copy_card_image_requested = pyqtSignal(str, str)
     export_png_requested = pyqtSignal(int)
     presentation_toggled = pyqtSignal(bool)
+    show_titles_toggled = pyqtSignal(bool)
+    show_sources_toggled = pyqtSignal(bool)
+    rebind_ref_requested = pyqtSignal(str, str, str, str)
     locate_ref_requested = pyqtSignal(str, str)
     compare_filter_changed = pyqtSignal(str)
     quickref_requested = pyqtSignal()
@@ -86,6 +90,7 @@ class UltraViewPage(QWidget):
         self._ref_exists: dict[UltraViewRef, bool] = {}
         self._selected: UltraViewRef | None = None
         self._replacement_slot: str | None = None
+        self._replacement_ref: UltraViewRef | None = None
         self._compare_filter = COMPARE_FILTER_ALL
         self._drag_kind: str | None = None
         self._presentation = False
@@ -137,6 +142,8 @@ class UltraViewPage(QWidget):
         self._toolbar.add_clicked.connect(self._on_toolbar_add)
         self._toolbar.copy_board_requested.connect(self.copy_board_requested)
         self._toolbar.export_png_requested.connect(self.export_png_requested)
+        self._toolbar.show_titles_toggled.connect(self.show_titles_toggled)
+        self._toolbar.show_sources_toggled.connect(self.show_sources_toggled)
         self._toolbar.presentation_toggled.connect(self._on_presentation_button)
         self._toolbar.board_name_changed.connect(self.board_name_changed)
 
@@ -157,6 +164,7 @@ class UltraViewPage(QWidget):
         self._tray.place_requested.connect(self._on_tray_place)
         self._tray.remove_requested.connect(self.remove_ref_requested)
         self._tray.locate_requested.connect(self._on_locate)
+        self._tray.rebind_arm_requested.connect(self._on_rebind_arm)
         self._tray.move_to_unplaced_dropped.connect(self._on_tray_drop)
         self._tray.drag_started.connect(self._on_drag_started)
         self._tray.drag_finished.connect(self._on_drag_finished)
@@ -213,6 +221,11 @@ class UltraViewPage(QWidget):
 
     def replacement_slot(self) -> str | None:
         return self._replacement_slot
+
+    def replacement_ref(self) -> tuple[str, str] | None:
+        if self._replacement_ref is None:
+            return None
+        return self._replacement_ref.section, self._replacement_ref.view_id
 
     def selected_ref(self) -> tuple[str, str] | None:
         if self._selected is None:
@@ -279,10 +292,14 @@ class UltraViewPage(QWidget):
         if n_unplaced > 0 and (prev is None or prev == 0):
             self._tray.set_expanded(True)
         self._prev_unplaced_count = n_unplaced
-        if self._replacement_slot and self._replacement_slot not in layout_slots(board.layout_id):
+        if self._replacement_ref is not None and self._replacement_ref not in membership_set(board):
+            self._replacement_ref = None
+            self._replacement_slot = None
+        elif self._replacement_slot and self._replacement_slot not in layout_slots(board.layout_id):
             self._replacement_slot = None
         self._toolbar.set_board_name(board.name)
         self._toolbar.set_layout_id(board.layout_id)
+        self._toolbar.set_show_flags(board.show_titles, board.show_sources)
         self._library.set_on_board(membership_set(board))
         self._refresh_projection()
 
@@ -293,19 +310,30 @@ class UltraViewPage(QWidget):
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None or self._board is None:
             return
-        placement = placement_for(self._board, ref)
-        if placement is None:
+        if ref not in membership_set(self._board):
             return
-        self._replacement_slot = placement.slot_id
+        placement = placement_for(self._board, ref)
+        self._replacement_ref = ref
+        self._replacement_slot = None if placement is None else placement.slot_id
         self._library.focus_search()
         self.rebind_arm_requested.emit(section, view_id)
         self._refresh_projection()
 
     def clear_replacement_arm(self) -> None:
-        if self._replacement_slot is None:
+        if self._replacement_slot is None and self._replacement_ref is None:
             return
         self._replacement_slot = None
+        self._replacement_ref = None
         self._refresh_projection()
+
+    def reset_sheet_session(self) -> None:
+        """Leave focus / replacement / presentation before the tool window closes."""
+        if self._focus.isVisible():
+            self._focus.close_layer()
+        self.clear_replacement_arm()
+        if self._presentation:
+            self.set_presentation_active(False)
+            self.presentation_toggled.emit(False)
 
     def _on_escape_shortcut(self) -> None:
         self.handle_escape()
@@ -314,7 +342,7 @@ class UltraViewPage(QWidget):
         if self._focus.isVisible():
             self._focus.close_layer()
             return True
-        if self._replacement_slot is not None:
+        if self._replacement_slot is not None or self._replacement_ref is not None:
             self.clear_replacement_arm()
             return True
         if self._presentation:
@@ -396,7 +424,7 @@ class UltraViewPage(QWidget):
         if ref is None:
             return
         kind = self._drag_kind
-        if self._replacement_slot:
+        if self._replacement_ref is not None or self._replacement_slot:
             if ref in membership_set(self._board) and kind == "library":
                 self._on_locate(section, view_id)
                 return
@@ -404,9 +432,7 @@ class UltraViewPage(QWidget):
                 if ref in membership_set(self._board):
                     self._on_locate(section, view_id)
                     return
-                armed = self._replacement_slot
-                self.clear_replacement_arm()
-                self.replace_slot_requested.emit(armed, section, view_id)
+                self._finish_armed_replacement(section, view_id)
                 return
         in_tray = ref in self._board.unplaced
         placed = placement_for(self._board, ref)
@@ -445,12 +471,22 @@ class UltraViewPage(QWidget):
         if ref in membership_set(self._board):
             self._on_locate(section, view_id)
             return
-        if self._replacement_slot:
-            armed = self._replacement_slot
-            self.clear_replacement_arm()
-            self.replace_slot_requested.emit(armed, section, view_id)
+        if self._replacement_ref is not None or self._replacement_slot:
+            self._finish_armed_replacement(section, view_id)
             return
         self.add_ref_requested.emit(section, view_id)
+
+    def _finish_armed_replacement(self, section: str, view_id: str) -> None:
+        old = self._replacement_ref
+        slot = self._replacement_slot
+        self.clear_replacement_arm()
+        if old is not None and self._status_for(old) == STATUS_ORPHANED:
+            self.rebind_ref_requested.emit(
+                old.section, old.view_id, section, view_id
+            )
+            return
+        if slot:
+            self.replace_slot_requested.emit(slot, section, view_id)
 
     def _select_ref(self, ref: UltraViewRef) -> None:
         self._selected = ref
@@ -469,38 +505,44 @@ class UltraViewPage(QWidget):
         captured = getattr(record, "captured_digest", None) if record is not None else None
         return derive_preview_status(exists, image_valid, captured, None)
 
-    def _title_for(self, ref: UltraViewRef) -> str:
-        record = self._previews.get(ref)
-        title = getattr(record, "title", "") if record is not None else ""
-        if title:
-            return str(title)
+    def _library_row_for(self, ref: UltraViewRef):
         for row in self._library.row_widgets():
             item = row.row()
             if item.section == ref.section and item.view_id == ref.view_id:
-                return item.name or ref.view_id
-        return ref.view_id
+                return item
+        return None
+
+    def _chrome_value(
+        self,
+        ref: UltraViewRef,
+        *,
+        lib_attr: str,
+        record_attr: str,
+        default: str = "",
+    ) -> str:
+        live = self._ref_exists.get(ref, True)
+        lib = self._library_row_for(ref)
+        record = self._previews.get(ref)
+        lib_val = str(getattr(lib, lib_attr, "") or "") if lib is not None else ""
+        rec_val = (
+            str(getattr(record, record_attr, "") or "") if record is not None else ""
+        )
+        if live:
+            return lib_val or rec_val or default
+        return rec_val or lib_val or default
+
+    def _title_for(self, ref: UltraViewRef) -> str:
+        return self._chrome_value(
+            ref, lib_attr="name", record_attr="title", default=ref.view_id
+        )
 
     def _color_for(self, ref: UltraViewRef) -> str:
-        record = self._previews.get(ref)
-        color = getattr(record, "tab_color", "") if record is not None else ""
-        if color:
-            return str(color)
-        for row in self._library.row_widgets():
-            item = row.row()
-            if item.section == ref.section and item.view_id == ref.view_id:
-                return item.tab_color
-        return ""
+        return self._chrome_value(ref, lib_attr="tab_color", record_attr="tab_color")
 
     def _source_for(self, ref: UltraViewRef) -> str:
-        record = self._previews.get(ref)
-        summary = getattr(record, "source_summary", "") if record is not None else ""
-        if summary:
-            return str(summary)
-        for row in self._library.row_widgets():
-            item = row.row()
-            if item.section == ref.section and item.view_id == ref.view_id:
-                return item.source_summary
-        return ""
+        return self._chrome_value(
+            ref, lib_attr="source_summary", record_attr="source_summary"
+        )
 
     def _axis_for(self, ref: UltraViewRef) -> str | None:
         record = self._previews.get(ref)
@@ -546,7 +588,10 @@ class UltraViewPage(QWidget):
                 image=preview_image(record),
                 selected=self._selected == ref,
                 dimmed=not card_matches_compare_filter(axis_kind, self._compare_filter),
-                replacement_armed=self._replacement_slot == slot_id,
+                replacement_armed=(
+                    self._replacement_ref == ref
+                    or self._replacement_slot == slot_id
+                ),
                 show_title=bool(self._board.show_titles),
                 show_source=bool(self._board.show_sources),
             )
@@ -560,7 +605,11 @@ class UltraViewPage(QWidget):
             colors[key] = self._color_for(ref)
             statuses[key] = self._status_for(ref)
         self._tray.set_refs(
-            self._board.unplaced, titles=titles, colors=colors, statuses=statuses
+            self._board.unplaced,
+            titles=titles,
+            colors=colors,
+            statuses=statuses,
+            armed=self._replacement_ref,
         )
         facts = axis_consistency_facts(axis_records)
         warnings = []

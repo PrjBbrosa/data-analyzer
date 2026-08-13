@@ -637,10 +637,17 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.presentation",
-        text="演示隐藏两侧，Esc 退出",
+        text="演示隐藏总览编辑栏，Esc 退出",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=40,
+    ),
+    Hint(
+        id="ultraview.display",
+        text="工具栏「显示」可开关标题和来源",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=35,
     ),
 )
 

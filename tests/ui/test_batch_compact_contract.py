@@ -385,6 +385,25 @@ def test_batch_sheet_is_an_independent_non_modal_window(qtbot):
     assert not (sheet.windowFlags() & Qt.WindowContextHelpButtonHint)
 
 
+def test_batch_sheet_is_not_transient_for_its_host(qapp, qtbot):
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.resize(800, 600)
+    host.show()
+    qtbot.waitExposed(host)
+    sheet = BatchSheet(host, files={})
+    qtbot.addWidget(sheet)
+    sheet.present()
+    qtbot.wait(20)
+    handle = sheet.windowHandle()
+    assert handle is not None
+    assert handle.transientParent() is None
+
+
 def test_batch_footer_actions_stay_inside_a_short_dialog(qapp, qtbot):
     from pathlib import Path
 

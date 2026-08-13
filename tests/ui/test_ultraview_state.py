@@ -175,6 +175,24 @@ def test_orphan_rebind_uses_replace_flow():
     assert restored.placements[0].ref == replacement
 
 
+def test_orphan_rebind_from_tray_removes_old_ref():
+    board = uvs.default_board()
+    orphan = _ref("time", "gone")
+    uvs.add_ref(board, orphan)
+    uvs.move_to_unplaced(board, orphan)
+    replacement = _ref("fft", "alive")
+    uvs.rebind_ref(board, orphan, replacement)
+    assert orphan not in uvs.membership_set(board)
+    assert replacement in board.unplaced
+    assert uvs.placement_for(board, replacement) is None
+
+    payload = uvs.board_to_payload(board)
+    restored, warnings = uvs.normalize_board_payload(payload)
+    assert warnings == []
+    assert replacement in restored.unplaced
+    assert orphan not in uvs.membership_set(restored)
+
+
 def test_normalize_keeps_legal_missing_refs_and_warns_on_illegal():
     payload = {
         "schema": 1,

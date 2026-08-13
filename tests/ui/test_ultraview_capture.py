@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+from PyQt5 import sip
 from PyQt5.QtCore import QCoreApplication, QObject, QPoint
 from PyQt5.QtGui import QColor, QPixmap
 from PyQt5.QtWidgets import QWidget
@@ -81,9 +82,23 @@ class FakeCanvas(QWidget):
         self._cursor = SimpleNamespace(_cursor_line_items=[self._cursor_item])
         self.cursor_visible_at_grab = None
         self.remark_visible_at_grab = None
+        self._has_result = True
+
+    def has_result(self) -> bool:
+        return bool(self._has_result)
 
     def quality_status(self):
-        return {"state": self._quality_state}
+        count = getattr(self, "_curve_count", None)
+        if count is None:
+            count = 1 if self._has_result else 0
+        status = {"state": self._quality_state, "curve_count": int(count)}
+        path = getattr(self, "_render_path", None)
+        if path:
+            status["render_path"] = path
+        raster_count = getattr(self, "_high_raster_curve_count", None)
+        if raster_count is not None:
+            status["high_raster_curve_count"] = int(raster_count)
+        return status
 
     def grab_pixmap(self, scale: float = 1.0) -> QPixmap:
         self.grab_calls += 1
@@ -220,6 +235,7 @@ class _TimeHost(ViewMixin):
         self.defer_flags.append(bool(defer_first_frame))
         if defer_first_frame:
             canvas._quality_state = "red"
+            canvas._refresh_pending = True
         return True
 
     def _project_view_controls(self, idx) -> None:
@@ -483,7 +499,7 @@ def test_each_capture_trigger_obeys_canvas_stability_contract(qapp):
     assert changed != first_digest
 
     for attr, value in (
-        ("_quality_state", "red"),
+        ("_quality_state", "yellow"),
         ("_interaction_state", "interactive"),
         ("_refresh_pending", True),
     ):
@@ -840,3 +856,311 @@ def test_digest_unavailable_keeps_old_image_stale(qapp):
     canvas.deleteLater()
     coord.clear()
     coord.deleteLater()
+
+
+def _analysis_capture_setup(window, section, panes, view_id="view-a"):
+    manager = ViewManager(state_factory=AnalysisViewState)
+    window.analysis_managers[section] = manager
+    state = manager.get(0)
+    state.view_id = view_id
+    state.panes = [PaneState(sources=[("f1", "ch")]) for _ in panes]
+    page = FakePage(panes)
+    window.pages[section] = page
+    return page, _ref(view_id, section)
+
+
+def test_capture_skips_publish_when_all_panes_have_no_result(qapp):
+    from mf4_analyzer.ui.ultraview_state import (
+        STATUS_MISSING,
+        derive_preview_status,
+    )
+
+    window, coord = _make_coord()
+    for section in ("fft", "fft_time", "frf", "order"):
+        pane_a = FakeCanvas("#010101")
+        pane_b = FakeCanvas("#020202")
+        pane_a._has_result = False
+        pane_b._has_result = False
+        page, ref = _analysis_capture_setup(
+            window, section, [pane_a, pane_b], view_id=f"{section}-empty"
+        )
+        coord.bind_canvas(page, ref)
+        coord.request_capture(ref, page, "empty-all-panes")
+        _flush()
+        assert page.combined_calls == 0, section
+        assert pane_a.grab_calls == 0, section
+        assert pane_b.grab_calls == 0, section
+        assert coord.store.get(ref) is None, section
+        assert derive_preview_status(
+            True, False, None, coord.current_digest_for(ref)
+        ) == STATUS_MISSING
+        page.deleteLater()
+        pane_a.deleteLater()
+        pane_b.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_capture_no_result_preserves_existing_preview_as_stale(qapp):
+    from mf4_analyzer.ui.chart_stack.ultraview.preview_store import PreviewStore
+    from mf4_analyzer.ui.ultraview_state import STATUS_STALE, derive_preview_status
+
+    window, coord = _make_coord()
+    pane = FakeCanvas("#445566")
+    page, ref = _analysis_capture_setup(
+        window, "fft_time", [pane], view_id="fft-time-stale"
+    )
+    coord.bind_canvas(page, ref)
+    coord.request_capture(ref, page, "seed")
+    _flush()
+    record = coord.store.get(ref)
+    assert record is not None and PreviewStore.image_valid(record.image)
+    seeded_digest = record.captured_digest
+    seeded_image = record.image
+
+    pane._has_result = False
+    pane.markup_revision += 1
+    coord.request_capture(ref, page, "cleared-result")
+    _flush()
+    kept = coord.store.get(ref)
+    assert kept is not None
+    assert kept.image is seeded_image
+    assert kept.captured_digest == seeded_digest
+    assert page.combined_calls == 1
+    assert derive_preview_status(
+        True,
+        PreviewStore.image_valid(kept.image),
+        kept.captured_digest,
+        coord.current_digest_for(ref),
+    ) == STATUS_STALE
+    page.deleteLater()
+    pane.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_capture_no_result_without_prior_image_stays_missing(qapp):
+    window, coord = _make_coord()
+    pane = FakeCanvas()
+    pane._has_result = False
+    page, ref = _analysis_capture_setup(window, "frf", [pane], view_id="frf-missing")
+    coord.bind_canvas(page, ref)
+    coord.request_capture(ref, page, "never-computed")
+    _flush()
+    assert coord.store.get(ref) is None
+    assert page.combined_calls == 0
+    page.deleteLater()
+    pane.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_capture_allows_composite_when_one_pane_has_result(qapp):
+    window, coord = _make_coord()
+    live = FakeCanvas("#101010")
+    empty = FakeCanvas("#202020")
+    empty._has_result = False
+    page, ref = _analysis_capture_setup(
+        window, "order", [live, empty], view_id="order-partial"
+    )
+    coord.bind_canvas(page, ref)
+    coord.request_capture(ref, page, "partial-split")
+    _flush()
+    assert page.combined_calls == 1
+    assert coord.store.get(ref) is not None
+    page.deleteLater()
+    live.deleteLater()
+    empty.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_time_capture_skips_when_canvas_has_no_curves(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    canvas.has_result = None
+    canvas._quality_state = "red"
+    canvas._curve_count = 0
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "empty-time")
+    _flush()
+    assert canvas.grab_calls == 0
+    assert coord.store.get(ref) is None
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_time_digest_stable_when_numpy_wrappers_churn(qapp):
+    """Presentation digest must not include ndarray ids from to_numpy wrappers."""
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    window.view_manager.get(0).checked = [("fid-1", "rpm")]
+    samples = np.linspace(0.0, 1.0, 32)
+
+    class _Column:
+        def __init__(self, values):
+            self._values = np.asarray(values, dtype=np.float64)
+
+        def to_numpy(self, copy=False):
+            return self._values.copy()
+
+    class _Frame:
+        columns = ("rpm",)
+
+        def __init__(self, values):
+            self._col = _Column(values)
+
+        def __getitem__(self, key):
+            return self._col
+
+    window.files = {
+        "fid-1": SimpleNamespace(
+            data=_Frame(samples),
+            time_array=np.linspace(0.0, 1.0, 32),
+        )
+    }
+    ref = _ref("view-a")
+    first = coord.current_digest_for(ref)
+    second = coord.current_digest_for(ref)
+    assert first is not None
+    assert first == second
+    window.files["fid-1"].data._col._values[:] = 7.0
+    assert coord.current_digest_for(ref) != first
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_time_canvas_dense_raster_captures_when_native_curve_count_is_zero(qapp):
+    """Ready raster covers native PlotCurveItems; curve_count is then 0."""
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    canvas.has_result = None
+    canvas._quality_state = "green"
+    canvas._curve_count = 0
+    canvas._render_path = "dense-raster"
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "dense-raster")
+    _flush()
+    assert canvas.grab_calls == 1
+    record = coord.store.get(ref)
+    assert record is not None
+    assert record.image is not None
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_time_canvas_channel_lines_capture_when_quality_curve_count_is_zero(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    canvas.has_result = None
+    canvas._quality_state = "red"
+    canvas._curve_count = 0
+    canvas._channel_lines = {"torque": object()}
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "channel-lines")
+    _flush()
+    assert canvas.grab_calls == 1
+    assert coord.store.get(ref) is not None
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_time_canvas_with_curves_captures_when_aa_stays_red(qapp):
+    """AA red means native non-AA plot, not an empty canvas (dense EPS traces)."""
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    canvas.has_result = None
+    canvas._quality_state = "red"
+    canvas._curve_count = 6
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "dense-non-aa")
+    _flush()
+    assert canvas.grab_calls == 1
+    record = coord.store.get(ref)
+    assert record is not None
+    assert record.image is not None
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_time_canvas_yellow_aa_waits_then_captures(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    canvas.has_result = None
+    canvas._quality_state = "yellow"
+    canvas._curve_count = 4
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "aa-pending")
+    _flush()
+    assert canvas.grab_calls == 0
+    assert coord.store.get(ref) is None
+    canvas._quality_state = "green"
+    coord.request_capture(ref, canvas, "aa-settled")
+    _flush()
+    assert canvas.grab_calls == 1
+    assert coord.store.get(ref) is not None
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_lru_cleared_image_recaptures_same_digest(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "first")
+    _flush()
+    assert canvas.grab_calls == 1
+    record = coord.store.get(ref)
+    assert record is not None
+    digest = record.captured_digest
+    record.image = None
+    coord.request_capture(ref, canvas, "after-lru")
+    _flush()
+    assert canvas.grab_calls == 2
+    restored = coord.store.get(ref)
+    assert restored is not None
+    assert restored.captured_digest == digest
+    assert restored.image is not None
+    assert restored.image.isNull() is False
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_capture_ignores_destroyed_canvas_without_stale_publish(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "first")
+    _flush()
+    assert canvas.grab_calls == 1
+    old_digest = coord.store.get(ref).captured_digest
+    canvas.markup_revision += 1
+    coord.request_capture(ref, canvas, "queued")
+    sip.delete(canvas)
+    _flush()
+    record = coord.store.get(ref)
+    assert record is not None
+    assert record.captured_digest == old_digest
+    coord.clear()
+    coord.deleteLater()
+

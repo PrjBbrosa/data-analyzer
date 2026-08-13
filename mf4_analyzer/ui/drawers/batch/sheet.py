@@ -46,8 +46,10 @@ from ...drop_paths import (
 )
 from ...widgets.toast import Toast
 from ._geometry import (
+    clear_tool_window_transient_parent,
     configure_independent_tool_window,
     fit_dialog_to_available_screen,
+    present_independent_tool_window,
 )
 from .analysis_panel import AnalysisPanel
 from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
@@ -491,12 +493,11 @@ class BatchSheet(QDialog):
 
     def present(self) -> None:
         """Show this sheet as a non-modal tool window and raise it."""
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        present_independent_tool_window(self)
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().showEvent(event)
+        clear_tool_window_transient_parent(self)
         # Belt-and-suspenders: Qt can still reposition/resize a modal after
         # the constructor's clamp (e.g. centering it over ``parent``), which
         # on a small screen can push the bottom back off-screen even though

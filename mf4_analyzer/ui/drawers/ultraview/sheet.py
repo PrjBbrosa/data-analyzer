@@ -6,11 +6,14 @@ the user keep working a single-file View while the Board stays visible.
 """
 from __future__ import annotations
 
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QWidget
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QDialog, QPushButton, QVBoxLayout, QWidget
 
 from ..batch._geometry import (
+    clear_tool_window_transient_parent,
     configure_independent_tool_window,
     fit_dialog_to_available_screen,
+    present_independent_tool_window,
 )
 
 
@@ -29,6 +32,7 @@ class UltraViewSheet(QDialog):
         super().__init__(parent)
         self.setObjectName("UltraViewSheet")
         self.setWindowTitle("总览")
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         configure_independent_tool_window(self)
         self._page = page
         self._stack = stack
@@ -50,9 +54,26 @@ class UltraViewSheet(QDialog):
     def present(self) -> None:
         """Adopt the Board page and show this window beside the Analyzer."""
         self._adopt_page()
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        self._silence_dialog_buttons()
+        present_independent_tool_window(self)
+
+    def showEvent(self, event):  # noqa: N802 (Qt API)
+        super().showEvent(event)
+        clear_tool_window_transient_parent(self)
+        self._silence_dialog_buttons()
+
+    def keyPressEvent(self, event):  # noqa: N802 (Qt API)
+        # QDialog treats Return as accept() when a default/autoDefault
+        # QPushButton exists. This is a tool window, not a modal form.
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _silence_dialog_buttons(self) -> None:
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
+            button.setDefault(False)
 
     def _adopt_page(self) -> None:
         page = self._page
@@ -85,10 +106,20 @@ class UltraViewSheet(QDialog):
         if callable(add):
             add(page)
 
+    def _reset_session(self) -> None:
+        page = self._page
+        if not _alive(page):
+            return
+        reset = getattr(page, "reset_sheet_session", None)
+        if callable(reset):
+            reset()
+
     def closeEvent(self, event):  # noqa: N802 (Qt API)
+        self._reset_session()
         self._restore_page()
         super().closeEvent(event)
 
     def done(self, result):  # noqa: N802 (Qt API)
+        self._reset_session()
         self._restore_page()
         super().done(result)

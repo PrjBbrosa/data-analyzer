@@ -8,7 +8,7 @@ from pathlib import Path
 from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QMimeData, QPoint, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent, QImage
-from PyQt5.QtWidgets import QPushButton, QWidget
+from PyQt5.QtWidgets import QPushButton, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import MIN_CARD_CHROME_HEIGHT
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
@@ -30,8 +30,10 @@ from mf4_analyzer.ui.ultraview_state import (
     board_to_payload,
     default_board,
     make_ref,
+    membership_set,
     move_to_unplaced,
     place_from_unplaced,
+    rebind_ref,
     remove_ref,
     replace_slot,
     set_layout,
@@ -137,6 +139,7 @@ class _Harness:
         self.opened: list[tuple[str, str]] = []
         self.focused: list[tuple[str, str]] = []
         self.armed: list[tuple[str, str]] = []
+        self.rebound: list[tuple[str, str, str, str]] = []
         self.located: list[tuple[str, str]] = []
         self.copied_cards: list[tuple[str, str]] = []
         self.copied_board = 0
@@ -154,6 +157,7 @@ class _Harness:
         self.page.open_source_requested.connect(self._record_open)
         self.page.focus_requested.connect(self._record_focus)
         self.page.rebind_arm_requested.connect(self._record_arm)
+        self.page.rebind_ref_requested.connect(self._on_rebind)
         self.page.locate_ref_requested.connect(self._record_locate)
         self.page.copy_card_image_requested.connect(self._record_copy_card)
         self.page.copy_board_requested.connect(self._record_copy_board)
@@ -203,6 +207,17 @@ class _Harness:
 
     def _record_arm(self, section: str, view_id: str) -> None:
         self.armed.append((section, view_id))
+
+    def _on_rebind(
+        self, old_section: str, old_view_id: str, new_section: str, new_view_id: str
+    ) -> None:
+        self.rebound.append((old_section, old_view_id, new_section, new_view_id))
+        rebind_ref(
+            self.board,
+            make_ref(old_section, old_view_id),
+            make_ref(new_section, new_view_id),
+        )
+        self.page.set_board(self.board)
 
     def _record_locate(self, section: str, view_id: str) -> None:
         self.located.append((section, view_id))
@@ -619,6 +634,7 @@ def test_object_names_are_stable(qtbot):
     assert page.unplaced_tray().objectName() == "ultraViewUnplacedTray"
     assert page.compare_rail().objectName() == "ultraViewCompareRail"
     assert page.board_toolbar().objectName() == "ultraViewBoardToolbar"
+    assert page.board_toolbar().findChild(QToolButton, "ultraViewDisplayButton") is not None
     assert page.focus_layer().objectName() == "ultraViewFocusLayer"
 
 
@@ -647,3 +663,113 @@ def test_show_titles_and_sources_hide_chrome_without_empty_band(qtbot, qapp):
     assert card._title.isVisible() is False
     assert card.footer_height() == 0
     assert "道路输入" in card.accessibleName()
+
+
+def test_board_toolbar_display_menu_emits_show_flags(qtbot):
+    harness = _Harness(qtbot)
+    titles = []
+    sources = []
+    harness.page.show_titles_toggled.connect(titles.append)
+    harness.page.show_sources_toggled.connect(sources.append)
+    toolbar = harness.page.board_toolbar()
+    toolbar._act_titles.setChecked(False)
+    toolbar._act_sources.setChecked(False)
+    assert titles == [False]
+    assert sources == [False]
+    harness.board.show_titles = False
+    harness.board.show_sources = True
+    harness.page.set_board(harness.board)
+    assert toolbar._act_titles.isChecked() is False
+    assert toolbar._act_sources.isChecked() is True
+
+
+def test_set_presentation_active_false_reshows_toolbar_edit_controls(qtbot):
+    harness = _Harness(qtbot)
+    toolbar = harness.page.board_toolbar()
+    display = toolbar.findChild(QToolButton, "ultraViewDisplayButton")
+    assert display.isVisible() is True
+    harness.page.set_presentation_active(True)
+    assert display.isVisible() is False
+    assert toolbar._add.isVisible() is False
+    harness.page.set_presentation_active(False)
+    assert display.isVisible() is True
+    assert toolbar._add.isVisible() is True
+
+
+def test_live_card_chrome_prefers_library_over_stale_preview(qtbot):
+    harness = _Harness(qtbot)
+    ref = make_ref("time", "time-1")
+    add_ref(harness.board, ref)
+    harness.page.set_preview(
+        ref,
+        FakePreview(ref=ref, image=_image(), title="旧预览名", tab_color="#111111"),
+    )
+    harness.page.set_ref_status(ref, STATUS_STALE, True)
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("time", "time-1")
+    assert card.model().title == "道路输入"
+    assert card.model().tab_color == "#2d7ff9"
+
+
+def test_orphaned_card_chrome_prefers_preview_record(qtbot):
+    harness = _Harness(qtbot)
+    ref = make_ref("time", "time-1")
+    add_ref(harness.board, ref)
+    harness.page.set_preview(
+        ref,
+        FakePreview(ref=ref, image=_image(), title="孤儿旧名", tab_color="#abcdef"),
+    )
+    harness.page.set_ref_status(ref, STATUS_ORPHANED, False)
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("time", "time-1")
+    assert card.model().title == "孤儿旧名"
+    assert card.model().tab_color == "#abcdef"
+
+
+def test_orphan_rebind_via_replacement_arm_removes_orphan_from_placed(qtbot):
+    harness = _Harness(qtbot)
+    orphan = make_ref("time", "time-1")
+    add_ref(harness.board, orphan)
+    harness.page.set_board(harness.board)
+    harness.page.set_ref_status(orphan, STATUS_ORPHANED, False)
+    harness.page.arm_replacement("time", "time-1")
+    harness.page.request_add("fft", "fft-1")
+    assert harness.rebound == [("time", "time-1", "fft", "fft-1")]
+    assert harness.replaced == []
+    assert orphan not in membership_set(harness.board)
+    assert make_ref("fft", "fft-1") in membership_set(harness.board)
+    assert harness.page.replacement_ref() is None
+
+
+def test_orphan_rebind_from_tray_removes_old_ref(qtbot):
+    harness = _Harness(qtbot)
+    orphan = make_ref("time", "time-1")
+    add_ref(harness.board, orphan)
+    move_to_unplaced(harness.board, orphan)
+    harness.page.set_board(harness.board)
+    harness.page.set_ref_status(orphan, STATUS_ORPHANED, False)
+    harness.page.arm_replacement("time", "time-1")
+    assert harness.page.replacement_slot() is None
+    assert harness.page.replacement_ref() == ("time", "time-1")
+    harness.page.request_add("fft", "fft-1")
+    assert harness.rebound == [("time", "time-1", "fft", "fft-1")]
+    assert orphan not in membership_set(harness.board)
+    assert make_ref("fft", "fft-1") in membership_set(harness.board)
+    assert harness.replaced == []
+
+
+def test_escape_cancels_rebind_arm_without_board_mutation(qtbot):
+    harness = _Harness(qtbot)
+    orphan = make_ref("time", "time-1")
+    add_ref(harness.board, orphan)
+    harness.page.set_board(harness.board)
+    harness.page.set_ref_status(orphan, STATUS_ORPHANED, False)
+    harness.page.arm_replacement("time", "time-1")
+    assert harness.page.replacement_ref() == ("time", "time-1")
+    members = set(membership_set(harness.board))
+    harness.page.handle_escape()
+    assert harness.page.replacement_ref() is None
+    assert harness.page.replacement_slot() is None
+    assert membership_set(harness.board) == members
+    assert harness.rebound == []
+    assert harness.replaced == []
