@@ -37,6 +37,27 @@ def test_schema_version_written(tmp_path):
     assert raw["schema_version"] == pio.SCHEMA_VERSION
 
 
+def test_project_save_is_same_directory_atomic_replace(tmp_path, monkeypatch):
+    path = tmp_path / "session.tlproj"
+    replaced = []
+    original_replace = pio.os.replace
+
+    def observe_replace(source, target):
+        source = type(path)(source)
+        target = type(path)(target)
+        assert source.parent == path.parent
+        assert source.exists()
+        assert json.loads(source.read_text(encoding="utf-8"))["schema_version"] == 2
+        replaced.append((source, target))
+        return original_replace(source, target)
+
+    monkeypatch.setattr(pio.os, "replace", observe_replace)
+    pio.save_project_to_json(_doc(), path)
+
+    assert replaced and replaced[0][1] == path
+    assert json.loads(path.read_text(encoding="utf-8"))["current_mode"] == "time"
+
+
 def test_filter_block_roundtrips_in_schema_v2(tmp_path):
     path = tmp_path / "s.tlproj"
     doc = _doc()

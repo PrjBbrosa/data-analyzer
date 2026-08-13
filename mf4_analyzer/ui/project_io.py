@@ -11,6 +11,7 @@ import json
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+import tempfile
 
 from .time_xaxis import CustomXAxisSpec, EXACT_SOURCE, PER_SOURCE_NAME
 
@@ -81,7 +82,43 @@ def save_project_to_json(doc: ProjectDocument, path) -> None:
         "filter": doc.filter,
         "ultraview": doc.ultraview,
     }
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_text_atomic(
+        path,
+        json.dumps(payload, indent=2, ensure_ascii=False),
+    )
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    """Replace one project document only after its complete sibling is durable.
+
+    ``.tlproj`` is the authoritative session state.  UltraView's optional
+    preview sidecar can therefore safely be published before this call: an
+    interrupted project save leaves an unreferenced sidecar generation, never
+    a partially-written JSON document that points to it.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=target.parent,
+        prefix=f".{target.stem}.",
+        suffix=f"{target.suffix}.tmp",
+        delete=False,
+    )
+    temporary = Path(handle.name)
+    try:
+        with handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except BaseException:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def load_project_from_json(path) -> ProjectDocument:
