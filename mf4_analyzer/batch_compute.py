@@ -24,8 +24,13 @@ import pandas as pd
 
 from . import db_reference
 from .batch_types import _BatchCancelled
-from .signal import resolve_nfft, resolve_order_nfft
-from .signal.analysis_defaults import normalize_overlap_fraction
+from .signal import order_angle_sample_count, resolve_nfft, resolve_order_nfft
+from .signal.analysis_defaults import (
+    DEFAULT_FFT_TIME_OVERLAP,
+    DEFAULT_FFT_T_WIN_S,
+    DEFAULT_ORDER_RES,
+    normalize_overlap_fraction,
+)
 from .signal.fft import FFTAnalyzer
 from .signal.frf import (
     FrfCancelled,
@@ -678,7 +683,7 @@ def resolve_fft_nfft(n_samples, fs, params):
     else:
         nfft = int(nfft_raw)
     if nfft is None and avg_mode in {'线性平均', '峰值保持'}:
-        t_win_s = float(params.get('t_win_s', 1.5))
+        t_win_s = float(params.get('t_win_s', DEFAULT_FFT_T_WIN_S))
         return int(resolve_nfft(
             float(fs), int(n_samples), t_win_s,
             avg_overlap_fraction(params),
@@ -686,7 +691,95 @@ def resolve_fft_nfft(n_samples, fs, params):
     return nfft
 
 
-def resolve_effective_nfft(method, n_samples, fs, params):
+def _order_auto_time_axis(time, fs, n_samples):
+    """Return the time axis COT will resample on, or ``None`` if unknowable.
+
+    Mirrors the degenerate-axis rebuild inside ``compute_order_time_spectro``
+    (and the GUI's ``_order_effective_params_for_source``) so the revolution
+    count is integrated over the same axis the analysis actually uses.
+    """
+    n = int(n_samples)
+    if time is not None:
+        arr = np.asarray(time, dtype=float).reshape(-1)
+        if arr.size >= 2 and not np.any(np.diff(arr) <= 0.0):
+            return arr
+        n = arr.size
+    fs = float(fs)
+    if not np.isfinite(fs) or fs <= 0.0 or n < 2:
+        return None
+    return np.arange(n, dtype=float) / fs
+
+
+def _order_auto_angle_samples(
+    samples_per_rev, n_samples, fs, rpm, time, warnings_out,
+):
+    """Angle-domain record length for batch order auto-NFFT.
+
+    GUI parity fix: ``OrderMixin._resolve_order_effective_params`` sizes the
+    COT window from the ANGLE domain (``samples_per_rev × ∫|rpm|/60 dt``).
+    Batch used to pass the TIME-domain sample count straight through, so the
+    two sides resolved different NFFTs for the same recording.  Both now route
+    through ``signal.adaptive.order_angle_sample_count``.
+
+    When the caller cannot supply the speed trace we keep the historical
+    time-domain count rather than inventing a speed profile — but the
+    divergence is logged and pushed into ``warnings_out`` so a run stays
+    auditable instead of silently disagreeing with the interactive path.
+    """
+    reason = None
+    rpm_arr = None
+    if rpm is None:
+        reason = "未提供转速数据"
+    else:
+        rpm_arr = np.asarray(rpm, dtype=float).reshape(-1)
+        if rpm_arr.size < 2:
+            reason = "转速样本不足"
+    time_arr = None
+    if reason is None:
+        time_arr = _order_auto_time_axis(time, fs, rpm_arr.size)
+        if time_arr is None:
+            reason = "无可用时间轴"
+    if reason is not None:
+        message = (
+            f"阶次自动 NFFT 无法按角度域估算（{reason}），"
+            f"已回退到时域样本数 {int(n_samples)}"
+            "——该值可能与单文件分析不一致"
+        )
+        logger.warning(
+            "order auto-NFFT fell back to the time-domain sample count "
+            "(%s); n_samples=%s", reason, int(n_samples),
+        )
+        if warnings_out is not None:
+            warnings_out.append(message)
+        return int(n_samples)
+
+    n_angle = int(order_angle_sample_count(samples_per_rev, rpm_arr, time_arr))
+    if n_angle <= 1:
+        # Degenerate speed (all-zero / non-finite / no positive dt): the shared
+        # helper returns 1 and resolve_order_nfft lands on its floor, matching
+        # the GUI. ``validate_task`` normally rejects such RPM first, so this
+        # is a guard for direct API/test callers — leave a trace either way.
+        message = (
+            "阶次自动 NFFT：区间内累计转数≈0，已回退到最小 NFFT"
+        )
+        logger.warning(
+            "order auto-NFFT saw a degenerate speed trace; angle samples=%s",
+            n_angle,
+        )
+        if warnings_out is not None:
+            warnings_out.append(message)
+    return n_angle
+
+
+def resolve_effective_nfft(
+    method, n_samples, fs, params, *, rpm=None, time=None, warnings_out=None,
+):
+    """Resolve the concrete NFFT a batch task will compute with.
+
+    ``rpm``/``time`` are order-analysis inputs: pass the preprocessed arrays
+    so the auto branch can size the COT window from the angle domain exactly
+    like the interactive path.  Other methods ignore them.
+    """
     raw = params.get('nfft')
     auto = raw is None or raw == ''
     if isinstance(raw, str):
@@ -699,16 +792,22 @@ def resolve_effective_nfft(method, n_samples, fs, params):
         resolved = resolve_fft_nfft(n_samples, fs, params)
         return int(n_samples if resolved is None else resolved)
     if method == 'order_time':
+        samples_per_rev = float(params.get('samples_per_rev', 256))
+        n_angle = _order_auto_angle_samples(
+            samples_per_rev, n_samples, fs, rpm, time, warnings_out,
+        )
+        # ``resolve_order_nfft``'s own overlap default is 0.75, the same value
+        # the GUI passes explicitly — keep it implicit so there is one owner.
         return int(resolve_order_nfft(
-            float(params.get('samples_per_rev', 256)),
-            float(params.get('order_res', 0.1)),
-            int(n_samples),
+            samples_per_rev,
+            float(params.get('order_res', DEFAULT_ORDER_RES)),
+            n_angle,
         ))
     return int(resolve_nfft(
         float(fs),
         int(n_samples),
-        float(params.get('t_win_s', 1.0)),
-        float(params.get('overlap', 0.5)),
+        float(params.get('t_win_s', DEFAULT_FFT_T_WIN_S)),
+        float(params.get('overlap', DEFAULT_FFT_TIME_OVERLAP)),
     ))
 
 
@@ -736,7 +835,7 @@ def compute_order_time_spectro(sig, rpm, time, fs, params) -> "_Spectro2D":
         nfft=int(params.get('nfft', 1024)),
         window=str(params.get('window', 'hanning')),
         max_order=float(params.get('max_order', params.get('max_ord', 20))),
-        order_res=float(params.get('order_res', 0.1)),
+        order_res=float(params.get('order_res', DEFAULT_ORDER_RES)),
         time_res=float(params.get('time_res', 0.05)),
         fs=float(fs),
         weighting=str(params.get('weighting', 'None')),
@@ -783,7 +882,10 @@ def compute_fft_time_spectro(sig, time, fs, params, *,
         fs=float(fs),
         nfft=int(params.get('nfft', 1024)),
         window=str(params.get('window', 'hanning')),
-        overlap=float(params.get('overlap', 0.5)),
+        # Same omitted-key default as the auto-NFFT resolver above: if these
+        # two ever disagree, the resolved window and the frames it is applied
+        # to are sized against different hop lengths.
+        overlap=float(params.get('overlap', DEFAULT_FFT_TIME_OVERLAP)),
         remove_mean=bool(params.get('remove_mean', True)),
         weighting=str(params.get('weighting', 'None')),
     )

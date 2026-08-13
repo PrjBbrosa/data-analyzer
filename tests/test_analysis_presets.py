@@ -5,6 +5,19 @@ import sys
 import pytest
 
 
+# Display-axis keys every fft / order_time preset now carries so applying a
+# preset also restores the axis windows (previously only fft_time did).  The
+# ranges are neutral placeholders — auto is on, so the numbers are inert until
+# the user disables auto.
+_AUTO_XY_AXES = {
+    "x_auto": True,
+    "x_min": 0.0,
+    "x_max": 0.0,
+    "y_auto": True,
+    "y_min": 0.0,
+    "y_max": 0.0,
+}
+
 EXPECTED_FFT = {
     "torque": {
         "window": "flattop",
@@ -14,6 +27,7 @@ EXPECTED_FFT = {
         "amp_y": "dB",
         "avg_mode": "线性平均",
         "avg_overlap": 75,
+        **_AUTO_XY_AXES,
     },
     "vibration": {
         "window": "hanning",
@@ -23,6 +37,7 @@ EXPECTED_FFT = {
         "amp_y": "dB",
         "avg_mode": "线性平均",
         "avg_overlap": 50,
+        **_AUTO_XY_AXES,
     },
     "transient": {
         "window": "hanning",
@@ -32,7 +47,17 @@ EXPECTED_FFT = {
         "amp_y": "dB",
         "avg_mode": "峰值保持",
         "avg_overlap": 75,
+        **_AUTO_XY_AXES,
     },
+}
+
+# The order-map colour scale rides along with amplitude_mode="Amplitude dB":
+# -50..-10 dB is the panel's own first-open window, so a preset that pins the
+# scale would have to state the same numbers it already shows.
+_ORDER_Z_AXIS = {
+    "z_auto": True,
+    "z_floor": -50.0,
+    "z_ceiling": -10.0,
 }
 
 EXPECTED_ORDER = {
@@ -44,6 +69,8 @@ EXPECTED_ORDER = {
         "samples_per_rev": 256,
         "amplitude_mode": "Amplitude dB",
         "window": "flattop",
+        **_AUTO_XY_AXES,
+        **_ORDER_Z_AXIS,
     },
     "vibration": {
         "max_order": 50,
@@ -53,6 +80,8 @@ EXPECTED_ORDER = {
         "samples_per_rev": 512,
         "amplitude_mode": "Amplitude dB",
         "window": "hanning",
+        **_AUTO_XY_AXES,
+        **_ORDER_Z_AXIS,
     },
     "transient": {
         "max_order": 30,
@@ -62,6 +91,8 @@ EXPECTED_ORDER = {
         "samples_per_rev": 256,
         "amplitude_mode": "Amplitude dB",
         "window": "hanning",
+        **_AUTO_XY_AXES,
+        **_ORDER_Z_AXIS,
     },
 }
 
@@ -184,6 +215,27 @@ def test_no_builtin_preset_carries_a_colormap():
             )
 
 
+def test_chart_methods_carry_display_axis_ranges_and_frf_does_not():
+    """有轴控件的方法必须带全套轴键，没轴控件的 frf 必须不带。
+
+    坐标轴显示上下限属于预设：控件真实存在、Inspector 与批处理输出面板都消费，
+    预设不带就等于「换预设不还原坐标轴」，用户手动改过的窗口会跨预设残留。
+    FRF 面板没有轴 spin 控件，给它加轴键就变成第二类幽灵键。
+    """
+    from mf4_analyzer.analysis_presets import list_builtin_presets
+
+    xy_keys = {"x_auto", "x_min", "x_max", "y_auto", "y_min", "y_max"}
+    z_keys = {"z_auto", "z_floor", "z_ceiling"}
+    for method in ("fft", "fft_time", "order_time"):
+        for preset in list_builtin_presets(method):
+            assert xy_keys <= set(preset.params), (method, preset.key)
+            # 只有热图方法有色阶；一维 FFT 的幅值窗口就是 Y 轴。
+            has_z = method != "fft"
+            assert (z_keys <= set(preset.params)) is has_z, (method, preset.key)
+    for preset in list_builtin_presets("frf"):
+        assert not (xy_keys | z_keys) & set(preset.params), preset.key
+
+
 def test_records_and_nested_params_are_immutable_but_each_lookup_is_fresh():
     from mf4_analyzer.analysis_presets import get_builtin_preset
 
@@ -228,6 +280,10 @@ def test_builtin_patches_never_own_runtime_output_or_db_state():
         "source", "signal", "source_ids", "source_paths", "file_ids",
         "file_paths", "outputs", "output_dir", "conflict_policy",
         "weighting", "db_reference", "db_reference_mode",
+        # 幽灵键，同 cmap：FRF 面板没有对应控件，compute_params 把它们硬编码成
+        # True / "constant"，apply_params 连读都不读，而三条预设取值全同——
+        # 换预设永远改不了它们。批处理配方里的同名字段是活的，不受这条影响。
+        "periodic_window", "detrend",
     }
     for method in SUPPORTED_ANALYSIS_METHODS:
         for preset in list_builtin_presets(method):

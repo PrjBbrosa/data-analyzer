@@ -20,13 +20,14 @@ from PyQt5.QtWidgets import (
 )
 
 from ...ui_kit.menus import apply_rounded_menu_chrome
-from ..analysis_preset_slots import notify_slot_changed
+from ..analysis_preset_slots import notify_slot_changed, preset_slot_bus
 from .. import hints
 from ._helpers import (
     BUILTIN_PRESET_BLURB,
     _PRESET_KEY_TO_SLOT,
     _preset_settings,
     _preset_value_text,
+    preset_params_match,
 )
 
 
@@ -286,11 +287,13 @@ class _PresetHoverCard(QFrame):
                 k: params[k] for k in params
                 if k in current_params and k not in axis_keys
             }
-            analysis_same = all(current_params.get(k) == v for k, v in saved_analysis.items())
+            # Same comparison the PresetBar reverse match uses, so a card that
+            # reads 一致 is exactly a card whose slot is highlighted.
+            analysis_same = preset_params_match(saved_analysis, current_params)
             specs.append(("参数", "一致" if analysis_same else "有差异", not analysis_same))
             saved_axes = {k: params[k] for k in params if k in current_params and k in axis_keys}
             if saved_axes:
-                axes_same = all(current_params.get(k) == v for k, v in saved_axes.items())
+                axes_same = preset_params_match(saved_axes, current_params)
                 specs.append(("坐标轴", "一致" if axes_same else "有差异", not axes_same))
         specs.append(("信号/Fs", "不切换", False))
         return specs
@@ -375,6 +378,17 @@ class PresetBar(QWidget):
     Storage key in builtin mode: ``{kind}/preset_override/{slot}`` (so the
     namespace is independent from the legacy ``{kind}/preset/{slot}`` used
     by the FFT / Order bars).
+
+    Reverse match (2026-08-14)
+    --------------------------
+    The highlighted slot is not a memory of the last button press — it is a
+    statement about the live parameters. :meth:`sync_match` compares
+    ``collect_fn()`` against every slot's effective payload and highlights the
+    slot that describes it, so editing away from a preset lands on 自定义 and
+    editing back onto one re-confirms its name. Owners must call it after every
+    parameter change they suppress with an ``_applying_preset`` guard (preset
+    load, ``apply_params`` restore); ungated widget edits route through the
+    owner's own change handler.
     """
 
     SLOTS = (1, 2, 3)
@@ -429,10 +443,17 @@ class PresetBar(QWidget):
         self._hover_slot = None
         # Slot currently flagged as the unit-推荐 highlight (None => none).
         self._recommended_slot = None
-        # Slot that was actually applied by a left-click. A unit recommendation
-        # can also set the visual highlight, but it must not make the next click
-        # behave as a toggle-off before the preset has ever been loaded.
+        # Slot that currently describes the live parameters — set by a
+        # left-click load, by an explicit save, and by :meth:`sync_match`'s
+        # reverse match. A unit recommendation can also set the visual
+        # highlight, but it must not make the next click behave as a toggle-off
+        # before the preset has ever been loaded.
         self._selected_slot = None
+        # slot -> effective payload dict (or None), lazily filled by
+        # _slot_payloads(). sync_match runs on every keystroke-level parameter
+        # edit, so it must not re-read four QSettings keys each time.
+        self._payload_cache = None
+        preset_slot_bus().changed.connect(self._on_shared_slot_changed)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -509,11 +530,103 @@ class PresetBar(QWidget):
     def _write(self, slot, name, params):
         payload = {"name": name, "params": params}
         _preset_settings().setValue(self._key(slot), json.dumps(payload))
+        self._invalidate_payload_cache()
         notify_slot_changed(self._kind, slot)
 
     def _delete(self, slot):
         _preset_settings().remove(self._key(slot))
+        self._invalidate_payload_cache()
         notify_slot_changed(self._kind, slot)
+
+    # ---- reverse match: which slot describes the live parameters? ----
+    def _invalidate_payload_cache(self):
+        self._payload_cache = None
+
+    def _on_shared_slot_changed(self, kind, _slot):
+        """Drop the cache when ANY bar of this kind rewrites a slot.
+
+        Two bars of the same kind can be alive at once (the Inspector's and a
+        second one in a detached window), and the batch sheet reads the same
+        keys. The bus is the existing cross-widget notification for that, so
+        the cache follows it rather than inventing a second channel.
+        """
+        if str(kind) == self._kind:
+            self._invalidate_payload_cache()
+
+    def _slot_payloads(self):
+        """Return ``{slot: effective params or None}`` for every slot.
+
+        "Effective" is the same resolution order the left-click load uses:
+        the QSettings override wins, otherwise the builtin patch, otherwise
+        nothing (an empty custom slot describes no state at all).
+        """
+        if self._payload_cache is None:
+            payloads = {}
+            for slot in self._slots:
+                entry = self._read(slot)
+                payloads[slot] = (
+                    entry[1] if entry is not None else self._builtin_params(slot)
+                )
+            self._payload_cache = payloads
+        return self._payload_cache
+
+    def _slot_matches(self, payload, current):
+        if not payload:
+            return False
+        if not any(key in current for key in payload):
+            # A payload sharing no key with the live params describes some
+            # other panel shape; "every compared key agrees" is vacuously
+            # true there and would light the slot up for nothing.
+            return False
+        return preset_params_match(payload, current)
+
+    def _matching_slot(self):
+        """Return the slot whose payload equals the live params.
+
+        Ties are resolved in favour of the slot that is already selected (so a
+        no-op edit never makes the highlight jump), then by slot order. When
+        nothing matches, the method's 自定义 slot is the answer — that name
+        exists precisely to hold every state no preset describes.
+        """
+        try:
+            current = self._collect()
+        except Exception:  # pragma: no cover — defensive, collect is panel code
+            # Unreadable state is "no information", not "unnamed": 自定义 is a
+            # positive claim and must not be made on a failed read. Same
+            # tolerance _show_hover applies to the panel-supplied collect_fn.
+            return None
+        if not isinstance(current, dict):
+            return None
+        payloads = self._slot_payloads()
+        matches = [
+            slot for slot in self._slots
+            if self._slot_matches(payloads.get(slot), current)
+        ]
+        if not matches:
+            return self._custom_slot()
+        if self._selected_slot in matches:
+            return self._selected_slot
+        return min(matches)
+
+    def _custom_slot(self):
+        return next(iter(self._custom_slots), None)
+
+    def sync_match(self, *, clear_recommendation=False):
+        """Re-highlight the slot that matches the current parameters.
+
+        Call this after ANY parameter change — a user edit, a preset load, a
+        programmatic ``apply_params`` restore — so the bar always answers
+        "which preset name is this state?" rather than only remembering which
+        button was last pressed.
+
+        ``clear_recommendation`` drops the unit-推荐 corner badge; user edits
+        pass it (the recommendation was made for the untouched signal), while
+        programmatic restores leave the badge alone.
+        """
+        if clear_recommendation:
+            self._recommended_slot = None
+        self._selected_slot = self._matching_slot()
+        self._refresh_states()
 
     def _builtin_params(self, slot):
         if not self._builtins or slot not in self._builtins:
@@ -591,10 +704,14 @@ class PresetBar(QWidget):
         self._refresh_states()
 
     def set_custom_active(self):
-        """Mark the method's custom slot after a user edits any preset field."""
-        slot = next(iter(self._custom_slots), None)
+        """Force the method's 自定义 slot without consulting the parameters.
+
+        Kept for callers that already know the state is unnamed. Parameter
+        edits go through :meth:`sync_match` instead, which reaches the same
+        slot only when no preset actually describes the state.
+        """
         self._recommended_slot = None
-        self._selected_slot = slot
+        self._selected_slot = self._custom_slot()
         self._refresh_states()
 
     def hideEvent(self, event):
@@ -799,7 +916,11 @@ class PresetBar(QWidget):
         existing = self._read(slot)
         name = existing[0] if existing else self._default_name(slot)
         self._write(slot, name, params)
-        self._refresh_states()
+        # The slot now holds exactly the live params, so it is by definition a
+        # match; pin it first so the tie-break keeps it over any lower slot
+        # that happens to describe the same state.
+        self._selected_slot = slot
+        self.sync_match()
         self.acknowledged.emit("success", f"已保存到「{name}」")
 
     def _load(self, slot):
@@ -827,7 +948,7 @@ class PresetBar(QWidget):
     def _restore_default_params(self, slot):
         params = self._default_params
         if not isinstance(params, dict):
-            self.set_recommended(None)
+            self._resync_after_cancel()
             self.acknowledged.emit("info", "已取消预设")
             return
         try:
@@ -835,8 +956,19 @@ class PresetBar(QWidget):
         except Exception as e:
             self.acknowledged.emit("error", f"恢复默认失败: {e}")
             return
-        self.set_recommended(None)
+        self._resync_after_cancel()
         self.acknowledged.emit("info", f"已取消「{self._default_name(slot)}」，恢复默认参数")
+
+    def _resync_after_cancel(self):
+        """Drop the toggled-off selection, then re-derive it from the params.
+
+        Cancelling a preset restores the panel's construction defaults, which
+        are their own state — usually unnamed (→ 自定义), occasionally an
+        exact builtin. Clearing ``_selected_slot`` first keeps the tie-break
+        from re-confirming the slot the user just toggled off.
+        """
+        self._selected_slot = None
+        self.sync_match(clear_recommendation=True)
 
     def _rename(self, slot):
         entry = self._read(slot)
@@ -884,7 +1016,9 @@ class PresetBar(QWidget):
         if ans != QMessageBox.Yes:
             return
         self._delete(slot)
-        self._refresh_states()
+        # The set of available names just changed, so the answer to "which
+        # name is this state?" can change even though no parameter moved.
+        self.sync_match()
         self.acknowledged.emit("info", f"已清空「{name}」")
 
     def _reset_to_default(self, slot):
@@ -894,7 +1028,9 @@ class PresetBar(QWidget):
         if not self._is_builtin_slot(slot):
             return
         self._delete(slot)
-        self._refresh_states()
+        # Dropping the override restores the builtin patch as the slot's
+        # payload — a different payload to match against (see _clear).
+        self.sync_match()
         self.acknowledged.emit(
             "info", f"已重置为内置「{self._default_name(slot)}」",
         )

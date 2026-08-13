@@ -3434,6 +3434,229 @@ def test_fft_preset_apply_legacy_fixed_nfft_without_t_win(qapp):
     assert p['t_win_s'] == 1.5
 
 
+# ---- FFT-1D amplitude-unit (dB ↔ Linear) Y-axis defense ----
+# Same class of bug the Order / FFT-vs-Time Z-axis handlers already close
+# (spec 2026-05-01-codex-review-fixes-design.md §1): carrying the previous
+# unit's numbers into the new unit puts the whole curve outside the visible
+# window, and the plot reads as "the view disappeared". The 1-D FFT panel was
+# the last unguarded surface — its amplitude axis is Y, not Z.
+
+def test_fft_contextual_unit_toggle_forces_y_auto(qapp, qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    fc = FFTContextual()
+    qtbot.addWidget(fc)
+
+    fc.chk_y_auto.setChecked(False)
+    assert not fc.chk_y_auto.isChecked()
+
+    fc.combo_amp_y.setCurrentText('dB')
+
+    assert fc.chk_y_auto.isChecked() is True
+
+
+@pytest.mark.parametrize(
+    "from_unit,to_unit,start_min,start_max,expected_min,expected_max",
+    [
+        # Linear → dB: a 0..1 window would clip the whole (negative) dB curve.
+        ('Linear', 'dB', 0.0, 1.0, -80.0, 0.0),
+        # dB → Linear: a -80..0 window would render an all-empty linear plot.
+        ('dB', 'Linear', -80.0, 0.0, 0.0, 1.0),
+    ],
+)
+def test_fft_contextual_unit_toggle_resets_y_range(
+    qapp, qtbot, from_unit, to_unit,
+    start_min, start_max, expected_min, expected_max,
+):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    fc = FFTContextual()
+    qtbot.addWidget(fc)
+
+    # Plant the starting unit silently so the stale values survive setup.
+    fc.combo_amp_y.blockSignals(True)
+    fc.combo_amp_y.setCurrentText(from_unit)
+    fc.combo_amp_y.blockSignals(False)
+    fc.chk_y_auto.setChecked(False)
+    fc.spin_y_min.setValue(start_min)
+    fc.spin_y_max.setValue(start_max)
+    assert not fc.chk_y_auto.isChecked()
+
+    fc.combo_amp_y.setCurrentText(to_unit)
+
+    assert fc.chk_y_auto.isChecked() is True
+    assert fc.spin_y_min.value() == expected_min
+    assert fc.spin_y_max.value() == expected_max
+    # y_auto on ⇒ _sync_axis_enabled must have disabled both editors.
+    assert fc.spin_y_min.isEnabled() is False
+    assert fc.spin_y_max.isEnabled() is False
+
+
+def test_fft_contextual_unit_toggle_same_unit_idempotent(qapp, qtbot):
+    """Re-selecting the current unit still clears stale numbers (§1.5).
+
+    The handler deliberately does not branch on equality, so a stale range
+    cannot survive by being re-confirmed.
+    """
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    fc = FFTContextual()
+    qtbot.addWidget(fc)
+
+    fc.combo_amp_y.blockSignals(True)
+    fc.combo_amp_y.setCurrentText('dB')
+    fc.combo_amp_y.blockSignals(False)
+    fc.chk_y_auto.setChecked(False)
+    fc.spin_y_min.setValue(-999.0)
+    fc.spin_y_max.setValue(-42.0)
+
+    # setCurrentText('dB') would not re-emit — drive the handler directly.
+    fc._on_amp_y_unit_changed('dB')
+
+    assert fc.chk_y_auto.isChecked() is True
+    assert fc.spin_y_min.value() == -80.0
+    assert fc.spin_y_max.value() == 0.0
+
+
+def test_fft_contextual_apply_preset_y_values_survive_unit_change(qapp, qtbot):
+    """A preset carrying both amp_y and a y range must keep the range.
+
+    ``_apply_preset`` sets the unit under blockSignals and strictly before the
+    y values, so the reset handler cannot fire and stomp them.
+    """
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    fc = FFTContextual()
+    qtbot.addWidget(fc)
+
+    fc.combo_amp_y.blockSignals(True)
+    fc.combo_amp_y.setCurrentText('Linear')
+    fc.combo_amp_y.blockSignals(False)
+
+    fc._apply_preset({
+        'amp_y': 'dB',
+        'y_auto': False,
+        'y_min': -60.0,
+        'y_max': -6.0,
+    })
+
+    assert fc.combo_amp_y.currentText() == 'dB'
+    assert fc.chk_y_auto.isChecked() is False
+    assert fc.spin_y_min.value() == -60.0
+    assert fc.spin_y_max.value() == -6.0
+    # blockSignals skips the bound-combo relay, so the visible segmented
+    # control must be resynced explicitly.
+    assert fc.choice_amp_y.currentIndex() == fc.combo_amp_y.currentIndex()
+
+
+def test_fft_contextual_apply_params_restores_db_y_range(qapp, qtbot):
+    """View / project restore path: a saved dB window must survive intact.
+
+    ``apply_params`` is the restore entry point; if setting amp_y there fired
+    the unit handler, every reopened FFT View would silently snap back to
+    auto-Y and the user's pinned amplitude window would be gone.
+    """
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    fc = FFTContextual()
+    qtbot.addWidget(fc)
+
+    fc.apply_params({
+        'amp_y': 'dB',
+        'y_auto': False,
+        'y_min': -75.5,
+        'y_max': -3.5,
+        'x_auto': False,
+        'x_min': 10.0,
+        'x_max': 500.0,
+    })
+
+    assert fc.combo_amp_y.currentText() == 'dB'
+    assert fc.chk_y_auto.isChecked() is False
+    assert fc.spin_y_min.value() == -75.5
+    assert fc.spin_y_max.value() == -3.5
+    assert fc.spin_y_min.isEnabled() is True
+    assert fc.choice_amp_y.currentIndex() == fc.combo_amp_y.currentIndex()
+    # Round-trips back out unchanged.
+    collected = fc._collect_preset()
+    assert collected['amp_y'] == 'dB'
+    assert collected['y_auto'] is False
+    assert collected['y_min'] == -75.5
+    assert collected['y_max'] == -3.5
+
+
+# ---- built-in presets now carry the display axis ranges ----
+
+_AXIS_KEYS = (
+    'x_auto', 'x_min', 'x_max', 'y_auto', 'y_min', 'y_max',
+)
+
+
+def test_fft_builtin_preset_round_trips_its_axis_keys(qapp, qtbot):
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    fc = FFTContextual()
+    qtbot.addWidget(fc)
+
+    patch = get_builtin_preset('fft', 'torque').params_copy()
+    fc._apply_preset(patch)
+    collected = fc._collect_preset()
+
+    for key in (*_AXIS_KEYS, 'amp_y'):
+        assert collected[key] == patch[key], key
+
+
+def test_fft_builtin_preset_clears_a_manual_y_range(qapp, qtbot):
+    """The point of shipping axis keys: a preset restores the axes too.
+
+    Without them the user's hand-pinned window silently outlived every
+    preset switch.
+    """
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    fc = FFTContextual()
+    qtbot.addWidget(fc)
+
+    fc.chk_y_auto.setChecked(False)
+    fc.spin_y_min.setValue(-12.0)
+    fc.spin_y_max.setValue(7.0)
+    fc.chk_x_auto.setChecked(False)
+    fc.spin_x_max.setValue(2500.0)
+
+    fc._apply_preset(get_builtin_preset('fft', 'vibration').params_copy())
+
+    assert fc.chk_y_auto.isChecked() is True
+    assert fc.chk_x_auto.isChecked() is True
+    assert fc.spin_y_min.value() == 0.0
+    assert fc.spin_y_max.value() == 0.0
+    assert fc.spin_x_max.value() == 0.0
+
+
+def test_order_builtin_preset_round_trips_its_axis_keys(qapp, qtbot):
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    # Pin every axis manually first, so a passing assertion proves the preset
+    # wrote them rather than merely matching an untouched default.
+    oc.chk_z_auto.setChecked(False)
+    oc.spin_z_floor.setValue(-12.0)
+    oc.spin_z_ceiling.setValue(-1.0)
+    oc.chk_y_auto.setChecked(False)
+    oc.spin_y_max.setValue(9.0)
+
+    patch = get_builtin_preset('order_time', 'transient').params_copy()
+    oc._apply_preset(patch)
+    collected = oc._collect_preset()
+
+    for key in (*_AXIS_KEYS, 'z_auto', 'z_floor', 'z_ceiling'):
+        assert collected[key] == patch[key], key
+
+
 # ---- Task 2.2: averaging routes through DSP helpers ----
 
 def test_welch_average_lowers_noise_floor():
@@ -5536,6 +5759,42 @@ def test_fft_auto_nfft_summary_is_data_aware_when_provider_set(qtbot):
     assert f"{auto}({expected})" in ctx._fft_summary_text()
 
 
+def test_fft_auto_nfft_summary_falls_back_data_blind_for_averaging(qtbot):
+    """Averaging modes preview a segment even with no data loaded.
+
+    An averaging segment is driven by fs × t_win, not by the record, so the
+    data-blind estimate is the same number the compute path would start from
+    — exactly what ``FFTTimeContextual._nfft_preview`` already shows. Only
+    单帧 (whole-signal FFT) genuinely has nothing to preview without data, so
+    it alone keeps the bare ``自动``.
+    """
+    from mf4_analyzer.signal import ceil_pow2
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx.spin_fs.setValue(1000)
+    ctx._t_win_s = 1.5
+    auto = ctx._AUTO_NFFT_LABEL
+
+    expected = int(min(max(ceil_pow2(1000.0 * 1.5), 64), 8192))
+    assert expected == 2048  # guards the hand-computed value
+
+    for mode in ('线性平均', '峰值保持'):
+        # (a) no provider at all
+        ctx.combo_avg_mode.setCurrentText(mode)
+        assert ctx._fft_nfft_preview() == expected, mode
+        assert f"{auto}({expected})" in ctx._fft_summary_text()
+        # (b) provider wired but yielding nothing (no signal selected yet)
+        ctx.set_auto_nfft_provider(lambda: None)
+        assert ctx._fft_nfft_preview() == expected, mode
+        ctx.set_auto_nfft_provider(None)
+
+    ctx.combo_avg_mode.setCurrentText('单帧')
+    assert ctx._fft_nfft_preview() is None
+    assert f"{auto}(" not in ctx._fft_summary_text()
+
+
 def test_order_summary_label_refreshes_on_set_fs(qtbot):
     """set_fs (the data-source-change hook) repaints the collapsed summary.
 
@@ -6607,3 +6866,293 @@ def test_fft_time_builtin_preset_preserves_db_reference_state(
     assert ctx.db_reference_control.mode() == mode
     assert ctx.spin_db_ref.value() == pytest.approx(value)
     assert changes == []
+
+
+# ---- 2026-08-14 preset reverse match: every parameter state has a name ----
+#
+# Before this batch the bar only remembered which button was last pressed:
+# FFT / Order / FFT-vs-Time cleared the highlight on any edit (so slot 4
+# 自定义 never lit up), while FRF lit 自定义 unconditionally (so dialling a
+# value back onto 稳健 still read as unnamed). The bar now answers "which
+# preset name is this state?" by comparing the live params against every
+# slot's payload.
+
+
+def _applied_preset_slots(bar):
+    return [n for n in bar._slots if bar._load_btns[n].property("applied") == "true"]
+
+
+def test_preset_value_matching_is_tolerant_on_numbers_and_strict_on_kinds():
+    from mf4_analyzer.ui.inspector_sections import (
+        preset_params_match,
+        preset_value_matches,
+    )
+
+    # int/float cross-compare, plus a tolerance band for JSON / spinbox drift.
+    assert preset_value_matches(75, 75.0)
+    assert preset_value_matches(0.05, 0.05 + 1e-13)
+    assert not preset_value_matches(0.05, 0.0501)
+    assert not preset_value_matches(20, 21)
+
+    # bool is an int subclass; a saved 1 is a different payload shape than True.
+    assert preset_value_matches(True, True)
+    assert not preset_value_matches(True, False)
+    assert not preset_value_matches(True, 1)
+    assert not preset_value_matches(1, True)
+
+    # strings stay exact, None round-trips (FRF's auto nfft).
+    assert preset_value_matches('hanning', 'hanning')
+    assert not preset_value_matches('hanning', 'Hanning')
+    assert preset_value_matches(None, None)
+    assert not preset_value_matches(None, 0)
+
+    # Keys the live params do not carry are skipped, not failed.
+    assert preset_params_match({'a': 1, 'retired': 'x'}, {'a': 1.0})
+    assert not preset_params_match({'a': 1}, {'a': 2})
+
+
+def test_fft_manual_edits_land_on_the_matching_builtin_preset_name(qtbot):
+    """Dialling each field to a builtin's value must light that builtin."""
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    vibration = get_builtin_preset('fft', 'vibration').params_copy()
+
+    ctx.combo_avg_mode.setCurrentText(vibration['avg_mode'])
+    assert _applied_preset_slots(ctx.preset_bar) == [4], "partway there is 自定义"
+
+    # Switching the amplitude unit resets the Y bounds to the unit's
+    # placeholder window (the dB↔Linear defense), so the user dials those back
+    # exactly as they would any other field.
+    ctx.combo_amp_y.setCurrentText(vibration['amp_y'])
+    ctx.spin_y_min.setValue(vibration['y_min'])
+    ctx.spin_y_max.setValue(vibration['y_max'])
+
+    assert _applied_preset_slots(ctx.preset_bar) == [2]
+    assert ctx.preset_bar._load_btns[2].text() == '均衡'
+
+
+def test_fft_edit_away_from_a_preset_and_back_restores_its_name(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    torque = get_builtin_preset('fft', 'torque').params_copy()
+
+    ctx._apply_preset(torque)
+    assert _applied_preset_slots(ctx.preset_bar) == [1]
+
+    ctx.spin_overlap.setValue(int(torque['overlap']) - 25)
+    assert _applied_preset_slots(ctx.preset_bar) == [4], "one edit off preset is 自定义"
+
+    ctx.spin_overlap.setValue(int(torque['overlap']))
+    assert _applied_preset_slots(ctx.preset_bar) == [1], "editing back re-names the state"
+
+
+def test_frf_parameter_returning_to_a_builtin_relights_it(qtbot):
+    """New capability: FRF used to pin 自定义 on every edit, forever."""
+    from mf4_analyzer.ui.inspector_sections import FrfContextual
+
+    ctx = FrfContextual()
+    qtbot.addWidget(ctx)
+    # The panel's construction defaults already are 稳健.
+    ctx.preset_bar.sync_match()
+    assert _applied_preset_slots(ctx.preset_bar) == [1]
+    assert ctx.preset_bar._load_btns[1].text() == '稳健'
+
+    ctx.spin_t_win.setValue(3.0)
+    assert _applied_preset_slots(ctx.preset_bar) == [4]
+
+    ctx.spin_t_win.setValue(2.0)
+    assert _applied_preset_slots(ctx.preset_bar) == [1]
+
+    # A different builtin is reachable the same way (低频 = 8 s / 75 %).
+    ctx.spin_t_win.setValue(8.0)
+    ctx.spin_overlap.setValue(75)
+    assert _applied_preset_slots(ctx.preset_bar) == [2]
+
+
+@pytest.mark.parametrize(
+    "cls_name, method, key, slot",
+    [
+        ("FFTContextual", "fft", "torque", 1),
+        ("FFTContextual", "fft", "transient", 3),
+        ("OrderContextual", "order_time", "vibration", 2),
+        ("FFTTimeContextual", "fft_time", "transient", 3),
+        ("FrfContextual", "frf", "low_frequency", 2),
+    ],
+)
+def test_view_restore_payload_names_the_matching_slot(
+    qtbot, cls_name, method, key, slot,
+):
+    """A View switch replays current_params() through apply_params()."""
+    from mf4_analyzer.ui import inspector_sections
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+
+    cls = getattr(inspector_sections, cls_name)
+    source = cls()
+    qtbot.addWidget(source)
+    source._apply_preset(get_builtin_preset(method, key).params_copy())
+    snapshot = dict(source.current_params())
+
+    restored = cls()
+    qtbot.addWidget(restored)
+    restored.apply_params(snapshot)
+
+    assert _applied_preset_slots(restored.preset_bar) == [slot]
+
+
+def test_view_restore_of_an_unnamed_state_falls_to_the_custom_slot(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    source = FFTContextual()
+    qtbot.addWidget(source)
+    source.spin_overlap.setValue(37)
+    snapshot = dict(source.current_params())
+
+    restored = FFTContextual()
+    qtbot.addWidget(restored)
+    restored.apply_params(snapshot)
+
+    assert _applied_preset_slots(restored.preset_bar) == [4]
+    assert restored.preset_bar._load_btns[4].text() == '自定义'
+
+
+def test_saving_current_params_to_a_slot_lights_it_and_refreshes_the_cache(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx.spin_overlap.setValue(33)
+    assert _applied_preset_slots(ctx.preset_bar) == [4]
+
+    ctx.preset_bar._save(2)
+    assert _applied_preset_slots(ctx.preset_bar) == [2]
+
+    ctx.spin_overlap.setValue(44)
+    assert _applied_preset_slots(ctx.preset_bar) == [4]
+    ctx.spin_overlap.setValue(33)
+    assert _applied_preset_slots(ctx.preset_bar) == [2], (
+        "the newly saved slot must be visible to the match, not a stale cache"
+    )
+
+
+def test_slot_payload_cache_follows_the_shared_slot_bus(qtbot):
+    """A second bar of the same kind must not match against a stale payload."""
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    writer = FFTContextual()
+    qtbot.addWidget(writer)
+    reader = FFTContextual()
+    qtbot.addWidget(reader)
+
+    reader.spin_overlap.setValue(21)  # populates reader's payload cache
+    assert _applied_preset_slots(reader.preset_bar) == [4]
+
+    writer.spin_overlap.setValue(21)
+    writer.preset_bar._save(2)
+
+    reader.preset_bar.sync_match()
+    assert _applied_preset_slots(reader.preset_bar) == [2]
+
+
+def test_reverse_match_prefers_the_selected_slot_then_the_lowest(qapp):
+    from mf4_analyzer.ui.inspector_sections import PresetBar
+
+    live = {'mode': 'shared'}
+    bar = PresetBar(
+        'test_kind_match_priority',
+        lambda: dict(live),
+        lambda d: None,
+        builtin_defaults={
+            1: {'display_name': '频率', 'params': {'mode': 'shared'}},
+            2: {'display_name': '均衡', 'params': {'mode': 'shared'}},
+            3: {'display_name': '时间', 'params': {'mode': 'other'}},
+        },
+        default_params={'mode': 'default'},
+        custom_slots={4: '自定义'},
+    )
+
+    bar.sync_match()
+    assert _applied_preset_slots(bar) == [1], "ties go to the lowest slot"
+
+    bar._selected_slot = 2
+    bar.sync_match()
+    assert _applied_preset_slots(bar) == [2], "a still-matching slot keeps the name"
+
+    live['mode'] = 'nothing-matches-this'
+    bar.sync_match()
+    assert _applied_preset_slots(bar) == [4], "unnamed states land on 自定义"
+
+
+def test_reverse_match_ignores_slots_that_describe_another_panel(qapp):
+    """An empty slot, or a payload sharing no key, is not a match."""
+    from mf4_analyzer.ui.inspector_sections import PresetBar
+
+    bar = PresetBar(
+        'test_kind_match_disjoint',
+        lambda: {'mode': 'current'},
+        lambda d: None,
+        builtin_defaults={
+            1: {'display_name': '频率', 'params': {'unrelated_key': 7}},
+        },
+        default_params={'mode': 'default'},
+        custom_slots={4: '自定义'},
+    )
+
+    bar.sync_match()
+    assert _applied_preset_slots(bar) == [4]
+
+
+def test_reverse_match_does_not_disturb_the_unit_recommendation_badge(qtbot):
+    """The 荐 corner badge stays orthogonal to the applied-slot highlight."""
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+
+    ctx.set_recommended_for_unit('Nm')  # torque -> slot 1
+    assert ctx.preset_bar._load_btns[1].property('recommended') == 'true'
+
+    # A programmatic restore keeps the recommendation …
+    ctx._apply_preset(get_builtin_preset('fft', 'transient').params_copy())
+    assert ctx.preset_bar._load_btns[1].property('recommended') == 'true'
+    assert _applied_preset_slots(ctx.preset_bar) == [3]
+
+    # … a user edit drops it, exactly as before this change.
+    ctx.spin_overlap.setValue(11)
+    assert all(
+        ctx.preset_bar._load_btns[n].property('recommended') == 'false'
+        for n in (1, 2, 3)
+    )
+    assert _applied_preset_slots(ctx.preset_bar) == [4]
+
+
+def test_preset_hover_card_status_agrees_with_the_highlighted_slot(qtbot):
+    """Card 状态判断 and the bar's match are one comparison, not two."""
+    from PyQt5.QtWidgets import QLabel
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    from mf4_analyzer.analysis_presets import get_builtin_preset
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx._apply_preset(get_builtin_preset('fft', 'vibration').params_copy())
+    assert _applied_preset_slots(ctx.preset_bar) == [2]
+
+    def status_values(slot):
+        ctx.preset_bar._show_hover(slot)
+        card = ctx.preset_bar._hover_card
+        return [
+            lbl.text() for lbl in card.findChildren(QLabel, 'presetChip')
+            if '一致' in lbl.text() or '有差异' in lbl.text()
+        ]
+
+    matched = status_values(2)
+    assert matched and all('一致' in text for text in matched)
+    other = status_values(1)
+    assert any('有差异' in text for text in other)
+    ctx.preset_bar._hide_hover()

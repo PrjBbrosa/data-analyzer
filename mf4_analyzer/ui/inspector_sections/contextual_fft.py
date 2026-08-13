@@ -12,12 +12,16 @@ from PyQt5.QtWidgets import (
 )
 
 from ...analysis_presets import list_builtin_presets
-from ...signal.analysis_defaults import ANALYSIS_WINDOW_CANDIDATES
+from ...signal.analysis_defaults import (
+    ANALYSIS_WINDOW_CANDIDATES,
+    DEFAULT_FFT_T_WIN_S,
+)
 from ...ui_kit.icons import Icons
 from ...ui_kit.qt_lifecycle import as_weak_callable
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
 from ...ui_kit.widgets.searchable_combo import SearchableComboBox
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
+from .._axis_defaults import y_range_for
 from ._helpers import (
     CUSTOM_PRESET_SLOTS,
     _LONG_FIELD_MAX_WIDTH,
@@ -58,7 +62,7 @@ class FFTContextual(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._applying_preset = False
         self._source_weighting_default = 'None'
-        self._t_win_s = 1.5
+        self._t_win_s = DEFAULT_FFT_T_WIN_S
         # Auto-NFFT preview data hook: a callable returning the available sample
         # count for the current FFT signal (or None when no data is loaded). Set
         # by the main window so the collapsed 自动(N) mirrors the data-aware
@@ -341,32 +345,44 @@ class FFTContextual(QWidget):
 
         Mirrors ``_fft_mixin._resolve_fft_effective_params``: single-frame auto
         keeps whole-signal semantics (full sample count); averaging / peak-hold
-        modes resolve a segment length via the shared ``resolve_nfft``. Returns
-        None when no data provider is wired (header then shows a bare 自动).
-        """
-        if self._auto_nfft_provider is None:
-            return None
-        try:
-            n_samples = self._auto_nfft_provider()
-        except Exception:
-            return None
-        if n_samples is None or int(n_samples) <= 1:
-            return None
-        n_samples = int(n_samples)
-        if self.combo_avg_mode.currentText() in ('线性平均', '峰值保持'):
-            from ...signal import resolve_nfft
+        modes resolve a segment length via the shared ``resolve_nfft``.
 
-            overlap = float(self.spin_avg_overlap.value()) / 100.0
-            return int(
-                resolve_nfft(
-                    float(self.spin_fs.value()),
-                    n_samples,
-                    float(self._t_win_s),
-                    overlap,
+        With no data provider (or one that yields nothing), the two modes
+        differ. Averaging picks its segment from fs × t_win regardless of the
+        record, so a data-blind estimate is honest and matches
+        ``FFTTimeContextual._nfft_preview``. Single-frame auto *is* the record
+        length, so with no record there is nothing to preview — the header then
+        shows a bare 自动 rather than a number the compute path would not use.
+        """
+        n_samples = None
+        if self._auto_nfft_provider is not None:
+            try:
+                n_samples = self._auto_nfft_provider()
+            except Exception:
+                n_samples = None
+        averaging = self.combo_avg_mode.currentText() in ('线性平均', '峰值保持')
+        if n_samples is not None and int(n_samples) > 1:
+            n_samples = int(n_samples)
+            if averaging:
+                from ...signal import resolve_nfft
+
+                overlap = float(self.spin_avg_overlap.value()) / 100.0
+                return int(
+                    resolve_nfft(
+                        float(self.spin_fs.value()),
+                        n_samples,
+                        float(self._t_win_s),
+                        overlap,
+                    )
                 )
-            )
-        # 单帧 auto = whole-signal FFT → the effective length is the data length.
-        return n_samples
+            # 单帧 auto = whole-signal FFT → effective length is the data length.
+            return n_samples
+        if averaging:
+            from ...signal import ceil_pow2
+
+            nfft = ceil_pow2(float(self.spin_fs.value()) * float(self._t_win_s))
+            return int(min(max(nfft, 64), 8192))
+        return None
 
     def _fft_summary_text(self):
         nfft_text = self.combo_nfft.currentText()
@@ -392,7 +408,11 @@ class FFTContextual(QWidget):
 
     def _on_preset_param_changed(self, *_):
         if not self._applying_preset:
-            self.preset_bar.set_recommended(None)
+            # Re-derive which preset name the edited state answers to. Editing
+            # away from a preset lands on 自定义; editing back onto one
+            # re-confirms it. The unit-推荐 badge is dropped because the
+            # recommendation described the untouched signal, not this state.
+            self.preset_bar.sync_match(clear_recommendation=True)
         self._refresh_fft_summary()
         if self._applying_preset:
             return
@@ -403,6 +423,11 @@ class FFTContextual(QWidget):
             self.compute_params_changed.emit(self.compute_params())
 
     def _connect_preset_param_signals(self):
+        # The amplitude-unit defense is wired BEFORE the generic preset relay
+        # so that by the time ``_on_preset_param_changed`` runs for the same
+        # ``combo_amp_y`` emission the Y range has already been reset —
+        # downstream consumers never observe the previous unit's numbers.
+        self.combo_amp_y.currentTextChanged.connect(self._on_amp_y_unit_changed)
         for combo in (
             self.combo_win,
             self.combo_nfft,
@@ -469,7 +494,53 @@ class FFTContextual(QWidget):
             for s in (parts['spin_min'], parts['spin_max']):
                 s.setEnabled(not auto)
 
+    def _on_amp_y_unit_changed(self, text):
+        """Switching dB↔Linear forces y_auto on AND resets spin_y_min/max to
+        the new unit's defaults so the previous unit's numeric range cannot
+        bleed into the new unit.
+
+        Same contract as ``OrderContextual._on_amp_unit_changed`` /
+        ``FFTTimeContextual._on_amp_unit_changed`` (spec
+        2026-05-01-codex-review-fixes-design.md §1.4), applied to the 1-D
+        spectrum's amplitude axis: a Linear 0..1 window carried into dB puts
+        the whole curve below the visible floor, i.e. the "view disappeared"
+        failure the Z-axis fix already closed.
+
+        Order matters: ``chk_y_auto`` must be set True FIRST so the closing
+        ``_sync_axis_enabled`` sees the auto-on state and disables both spins.
+        The handler deliberately does NOT branch on "same unit" — re-selecting
+        the current unit still clears stale numbers (§1.5 idempotency).
+        """
+        y_min, y_max = y_range_for(text)
+        self.chk_y_auto.setChecked(True)
+        self.spin_y_min.setValue(y_min)
+        self.spin_y_max.setValue(y_max)
+        self._sync_axis_enabled()
+
+    def _apply_amp_y_value(self, value):
+        """Set ``combo_amp_y`` without tripping the Y-range reset handler.
+
+        Restore paths (preset apply, project / View restore) carry their own
+        y_min/y_max saved *for that unit*; letting ``_on_amp_y_unit_changed``
+        fire here would force y_auto on and wipe them. Mirrors the
+        ``amplitude_mode`` restore in OrderContextual / FFTTimeContextual,
+        including the explicit SegmentedChoice resync that blockSignals
+        would otherwise skip.
+        """
+        i = self.combo_amp_y.findText(str(value))
+        if i < 0:
+            return
+        self.combo_amp_y.blockSignals(True)
+        self.combo_amp_y.setCurrentIndex(i)
+        self.combo_amp_y.blockSignals(False)
+        self.choice_amp_y.sync_from_bound_combo()
+
     def _apply_axis_params(self, d):
+        # ``amp_y`` is the Y axis' unit, so it is applied here rather than by
+        # the callers — and strictly BEFORE the y values, so the incoming
+        # range is interpreted in (and survives into) the incoming unit.
+        if 'amp_y' in d:
+            self._apply_amp_y_value(d['amp_y'])
         if 'autoscale' in d and 'x_auto' not in d:
             self.chk_x_auto.setChecked(bool(d['autoscale']))
         for key, attr in (
@@ -552,6 +623,10 @@ class FFTContextual(QWidget):
         finally:
             self._applying_preset = False
             self._refresh_fft_summary()
+        # The guard above suppressed the per-widget relay, so the bar has not
+        # seen this change yet; confirm the loaded slot (or fall to 自定义 when
+        # the payload was only a partial patch).
+        self.preset_bar.sync_match()
         self._emit_param_deltas(before_compute, before_display)
 
     def _apply_preset_values(self, d):
@@ -589,10 +664,8 @@ class FFTContextual(QWidget):
                 self.spin_avg_overlap.setValue(int(d['avg_overlap']))
             except (TypeError, ValueError):
                 pass
-        if 'amp_y' in d:
-            i = self.combo_amp_y.findText(str(d['amp_y']))
-            if i >= 0:
-                self.combo_amp_y.setCurrentIndex(i)
+        # ``amp_y`` is applied inside _apply_axis_params (above), ahead of the
+        # y range it qualifies — do NOT re-apply it here.
         apply_db_reference_preset(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])
@@ -749,13 +822,14 @@ class FFTContextual(QWidget):
                 self.spin_avg_overlap.setValue(int(d['avg_overlap']))
             except (TypeError, ValueError):
                 pass
-        if 'amp_y' in d:
-            i = self.combo_amp_y.findText(str(d['amp_y']))
-            if i >= 0:
-                self.combo_amp_y.setCurrentIndex(i)
+        # ``amp_y`` is applied inside _apply_axis_params (above), ahead of the
+        # y range it qualifies — do NOT re-apply it here.
         apply_db_reference_partial(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])
+        # View switch / project restore lands a whole payload at once; the
+        # highlight must describe the restored state, not the pre-switch one.
+        self.preset_bar.sync_match()
 
     def reset_to_defaults(self):
         """Restore construction-time defaults for a blank analysis View."""

@@ -1,5 +1,6 @@
 """Preset/unit helpers and form/axis-build helpers for inspector sections."""
 import json
+import math
 from html import escape
 
 from ...analysis_presets import (
@@ -309,6 +310,63 @@ def _preset_value_text(value):
     if isinstance(value, float):
         return f"{value:g}"
     return str(value)
+
+
+# Float comparison band for preset matching. Preset payloads round-trip
+# through JSON and through QDoubleSpinBox quantisation, so an exact ``==``
+# on floats is not a usable identity — but the values compared here are
+# human-scale engineering settings, so anything looser than 1e-9 would start
+# merging genuinely different presets.
+_PRESET_MATCH_REL_TOL = 1e-9
+_PRESET_MATCH_ABS_TOL = 1e-9
+
+
+def preset_value_matches(saved, current):
+    """Return whether one saved preset value equals the live value.
+
+    Single implementation shared by the hover card's 状态判断 chips and by
+    :meth:`PresetBar.sync_match`'s reverse match, so the card can never claim
+    "一致" for a state the bar refuses to highlight (or vice versa).
+
+    Semantics:
+
+    - ``bool`` compares only against ``bool``. ``bool`` is an ``int``
+      subclass, so a plain ``==`` would let a saved ``1`` satisfy a live
+      ``True``; a preset that stores an axis flag as a number is a different
+      payload shape, not the same state.
+    - Numbers compare within a tolerance band (see the constants above) and
+      across int/float, so ``75`` and ``75.0`` are the same overlap.
+    - Everything else (strings, ``None``, containers) compares with ``==``,
+      i.e. strings stay case- and whitespace-exact.
+    """
+    if isinstance(saved, bool) or isinstance(current, bool):
+        return isinstance(saved, bool) and isinstance(current, bool) and saved is current
+    if isinstance(saved, (int, float)) and isinstance(current, (int, float)):
+        return math.isclose(
+            float(saved),
+            float(current),
+            rel_tol=_PRESET_MATCH_REL_TOL,
+            abs_tol=_PRESET_MATCH_ABS_TOL,
+        )
+    return saved == current
+
+
+def preset_params_match(saved_params, current_params):
+    """Return whether every comparable key of ``saved_params`` is live.
+
+    Keys absent from ``current_params`` are skipped rather than treated as a
+    mismatch: preset payloads are partial patches (and legacy payloads may
+    carry retired keys), so only the intersection is meaningful. An empty
+    intersection therefore returns ``True`` — callers that need "this payload
+    actually describes the current state" must check the overlap themselves
+    (``PresetBar._slot_matches`` does).
+    """
+    current_params = current_params or {}
+    return all(
+        preset_value_matches(value, current_params[key])
+        for key, value in (saved_params or {}).items()
+        if key in current_params
+    )
 
 
 def _configure_form(form):

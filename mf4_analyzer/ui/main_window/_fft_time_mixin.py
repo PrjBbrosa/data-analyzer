@@ -4,6 +4,7 @@ import numpy as np
 
 from ... import db_reference
 from ...signal import resolve_nfft
+from ...signal.analysis_defaults import DEFAULT_FFT_T_WIN_S
 from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
@@ -34,7 +35,7 @@ class FFTTimeMixin:
             effective = resolve_nfft(
                 out['fs'],
                 n_samples,
-                out.get('t_win_s', 1.5),
+                out.get('t_win_s', DEFAULT_FFT_T_WIN_S),
                 out['overlap'],
             )
             out['nfft'] = int(effective)

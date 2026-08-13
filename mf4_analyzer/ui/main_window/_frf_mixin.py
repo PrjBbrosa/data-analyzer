@@ -6,7 +6,12 @@ from typing import ClassVar
 
 import numpy as np
 
-from ...signal.frf import FrfParams, compute_frf
+from ...signal.frf import (
+    FrfParams,
+    FrfRequestValidationError,
+    compute_frf,
+    plan_frf_request,
+)
 from ...signal.spectrogram import DEFAULT_TIME_JITTER_TOLERANCE
 from ..time_xaxis import CHANNEL_MODE, CustomXAxisSpec
 from .frf_coordinator import frf_compute_cache_params
@@ -499,18 +504,41 @@ class FrfMixin:
             params = FrfParams(**compute_values)
         except ValueError as exc:
             raise FrfPreflightError(str(exc)) from exc
-        nperseg = int(round(input_fs * params.t_win_s))
-        if nperseg < 2:
-            raise FrfPreflightError("FRF 段长必须至少包含 2 个样本")
-        noverlap = int(np.floor(params.overlap * nperseg))
-        hop = nperseg - noverlap
-        segment_count = 1 + (len(input_values) - nperseg) // hop
-        if segment_count < 2:
-            raise FrfPreflightError(
-                "FRF 平均至少需要 2 个完整段；请缩短段长或扩大时间范围"
+        # Single source of truth for nperseg/noverlap/hop/segments shape and
+        # its viability gates: ``plan_frf_request`` (compute_frf runs the
+        # same call again once the job actually dispatches). Do not
+        # re-derive those four formulas here; that duplication is exactly
+        # what let this preflight and the real validator drift apart.
+        try:
+            plan_frf_request(
+                n_samples=len(input_values), fs=input_fs, params=params
             )
-        if params.nfft_mode == "manual" and int(params.nfft) < nperseg:
-            raise FrfPreflightError("NFFT 不能小于段长样本数")
+        except FrfRequestValidationError as exc:
+            message = str(exc)
+            # Literal matches translate plan_frf_request's stable English
+            # identifiers to this preflight's existing Chinese copy. An
+            # unrecognized message (future wording change, or a new gate
+            # added upstream) falls back to showing it verbatim rather than
+            # silently swallowing the failure.
+            if message == "segment length must be at least 2 samples":
+                raise FrfPreflightError("FRF 段长必须至少包含 2 个样本") from exc
+            if message == (
+                "FRF averaging requires at least 2 complete segments; "
+                "shorten the window or enlarge the time range"
+            ):
+                raise FrfPreflightError(
+                    "FRF 平均至少需要 2 个完整段；请缩短段长或扩大时间范围"
+                ) from exc
+            if message == "nfft must be greater than or equal to segment length":
+                raise FrfPreflightError("NFFT 不能小于段长样本数") from exc
+            if message == (
+                "temporary complex-array memory exceeds the 64 MiB ceiling; "
+                "reduce nfft"
+            ):
+                raise FrfPreflightError(
+                    "临时频谱缓冲区将超过 64 MiB 上限；请减小 NFFT"
+                ) from exc
+            raise FrfPreflightError(message) from exc
 
         effective_range = prepared["effective_range"]
         render_params = self._frf_display_params_for_state(state)

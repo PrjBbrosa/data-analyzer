@@ -19,7 +19,10 @@ from ...analysis_presets import (
     list_builtin_presets,
     resolve_builtin_preset_alias,
 )
-from ...signal.analysis_defaults import ANALYSIS_WINDOW_CANDIDATES
+from ...signal.analysis_defaults import (
+    ANALYSIS_WINDOW_CANDIDATES,
+    DEFAULT_FFT_T_WIN_S,
+)
 from ...ui_kit.icons import Icons
 from ...ui_kit.qt_lifecycle import as_weak_callable
 from ...ui_kit.widgets.segmented_choice import SegmentedChoice
@@ -109,7 +112,7 @@ class FFTTimeContextual(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._applying_preset = False
         self._source_weighting_default = 'None'
-        self._t_win_s = 1.5
+        self._t_win_s = DEFAULT_FFT_T_WIN_S
         # Auto-NFFT preview data hook: a callable returning the available sample
         # count for the current FFT-vs-Time signal (or None when no data is
         # loaded). Set by the main window so the displayed 自动(N) mirrors the
@@ -333,7 +336,9 @@ class FFTTimeContextual(QWidget):
 
     def _on_preset_param_changed(self, *_):
         if not self._applying_preset:
-            self.preset_bar.set_recommended(None)
+            # See FFTContextual._on_preset_param_changed: reverse-match the
+            # edited state onto a preset name instead of only clearing 荐.
+            self.preset_bar.sync_match(clear_recommendation=True)
         self._refresh_tf_summary()
         if self._applying_preset:
             return
@@ -706,6 +711,9 @@ class FFTTimeContextual(QWidget):
                     pass
 
         self._sync_axis_enabled()
+        # View switch / project restore: the highlight must describe the
+        # restored state (see FFTContextual.apply_params).
+        self.preset_bar.sync_match()
 
     def reset_to_defaults(self):
         """Restore construction-time defaults for a blank analysis View."""
@@ -826,6 +834,7 @@ class FFTTimeContextual(QWidget):
         finally:
             self._applying_preset = False
             self._refresh_tf_summary()
+        self.preset_bar.sync_match()
         self._emit_param_deltas(before_compute, before_display)
 
     def _emit_param_deltas(self, before_compute, before_display):

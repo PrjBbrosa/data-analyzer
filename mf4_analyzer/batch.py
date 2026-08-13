@@ -5494,8 +5494,14 @@ class BatchRunner:
                 image_payload = ('fft_time', spectro)
             else:
                 if method == 'order_time':
+                    # Auto NFFT is sized in the ANGLE domain, so the resolver
+                    # needs the same preprocessed speed/time arrays the COT
+                    # compute below consumes (GUI parity). ``warnings`` carries
+                    # the audit trace when the angle-domain estimate is not
+                    # available.
                     effective_nfft = self._resolve_effective_nfft(
                         method, len(sig), fs, effective_params,
+                        rpm=rpm, time=time, warnings_out=warnings,
                     )
                     effective_params['nfft_effective'] = effective_nfft
                     compute_params = dict(effective_params)

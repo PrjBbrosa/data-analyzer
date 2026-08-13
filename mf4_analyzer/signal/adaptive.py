@@ -89,6 +89,61 @@ def resolve_order_nfft(
     )
 
 
+def revolutions_from_rpm(rpm, t):
+    """Total revolutions over ``t`` = ∫|rpm|/60 dt (trapezoid).
+
+    Returns ``0.0`` for degenerate input (fewer than two usable samples,
+    non-finite samples, or a non-increasing time axis).  Single source of
+    truth for the angle-domain record length: the GUI order path
+    (``OrderMixin``) and the batch auto-NFFT resolver
+    (``batch_compute.resolve_effective_nfft``) both route through it, so the
+    two sides cannot drift into different NFFTs for the same data.
+
+    Non-finite ``rpm``/``t`` samples are dropped pairwise before integration
+    and ``dt <= 0`` steps are skipped, mirroring the historical GUI behaviour
+    this function was extracted from.
+    """
+    rpm_arr = np.asarray(rpm, dtype=float).reshape(-1)
+    t_arr = np.asarray(t, dtype=float).reshape(-1)
+    n = min(rpm_arr.size, t_arr.size)
+    if n < 2:
+        return 0.0
+    rpm_arr = rpm_arr[:n]
+    t_arr = t_arr[:n]
+    finite = np.isfinite(rpm_arr) & np.isfinite(t_arr)
+    rpm_arr = rpm_arr[finite]
+    t_arr = t_arr[finite]
+    if rpm_arr.size < 2:
+        return 0.0
+    dt = np.diff(t_arr)
+    valid_dt = np.isfinite(dt) & (dt > 0.0)
+    if not np.any(valid_dt):
+        return 0.0
+    abs_rpm = np.abs(rpm_arr)
+    revs = np.sum(
+        0.5
+        * (abs_rpm[:-1][valid_dt] + abs_rpm[1:][valid_dt])
+        / 60.0
+        * dt[valid_dt]
+    )
+    if not np.isfinite(revs) or revs <= 0.0:
+        return 0.0
+    return float(revs)
+
+
+def order_angle_sample_count(samples_per_rev, rpm, t):
+    """Angle-domain sample count COT resampling yields for ``rpm`` over ``t``.
+
+    ``1`` for degenerate speed (see :func:`revolutions_from_rpm`) so callers
+    can hand the value straight to :func:`resolve_order_nfft`, which then
+    resolves down to its floor instead of raising.
+    """
+    revs = revolutions_from_rpm(rpm, t)
+    if revs <= 0.0:
+        return 1
+    return max(1, int(round(float(samples_per_rev) * revs)))
+
+
 def _nice_ceil_125(value):
     if value <= 0.0 or not math.isfinite(value):
         return 0.0

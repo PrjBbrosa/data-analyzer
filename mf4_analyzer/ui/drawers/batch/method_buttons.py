@@ -33,6 +33,7 @@ from ....ui_kit.widgets.segmented_choice import SegmentedChoice
 from ....signal.analysis_defaults import (
     ANALYSIS_WINDOW_CANDIDATES,
     DEFAULT_COHERENCE_THRESHOLD,
+    DEFAULT_FFT_T_WIN_S,
     normalize_overlap_fraction,
 )
 
@@ -717,7 +718,7 @@ class DynamicParamForm(QWidget):
         self._w_t_win_s = no_buttons(CompactDoubleSpinBox(self))
         self._w_t_win_s.setRange(0.001, 3600.0)
         self._w_t_win_s.setDecimals(3)
-        self._w_t_win_s.setValue(1.5)
+        self._w_t_win_s.setValue(DEFAULT_FFT_T_WIN_S)
         self._w_t_win_s.setSuffix(" s")
         self._w_t_win_s.valueChanged.connect(self.paramsChanged)
         self._widgets["t_win_s"] = self._w_t_win_s

@@ -3,8 +3,10 @@ from .adaptive import (
     assess_speed_for_order,
     ceil_pow2,
     energy_band_fmax,
+    order_angle_sample_count,
     resolve_nfft,
     resolve_order_nfft,
+    revolutions_from_rpm,
 )
 from .fft import FFTAnalyzer
 from .frf import (
@@ -28,8 +30,10 @@ __all__ = [
     'assess_speed_for_order',
     'ceil_pow2',
     'energy_band_fmax',
+    'order_angle_sample_count',
     'resolve_nfft',
     'resolve_order_nfft',
+    'revolutions_from_rpm',
     'FFTAnalyzer',
     'FrfEffectiveFacts',
     'FrfParams',

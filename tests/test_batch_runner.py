@@ -3107,6 +3107,203 @@ def test_runner_resolves_auto_nfft_only_at_execution(tmp_path, method):
     assert result.items[0].effective_params["nfft_effective"] >= 2
 
 
+# ---------------------------------------------------------------------------
+# Auto-parameter derivation must agree between the batch runner and the
+# interactive (single-analysis) path.  Batch order analysis used to hand the
+# TIME-domain sample count to ``resolve_order_nfft`` while the GUI sizes the
+# COT window from the ANGLE domain, so the same recording resolved to
+# different NFFTs on the two sides.
+# ---------------------------------------------------------------------------
+
+
+def _rpm_sweep(fs=1000.0, duration=2.0, start=1000.0, stop=3000.0):
+    """EPS motor-speed sweep: 1000 -> 3000 rpm, plus its time axis."""
+    n = int(fs * duration)
+    t = np.arange(n, dtype=float) / fs
+    return t, np.linspace(start, stop, n)
+
+
+def test_batch_order_auto_nfft_matches_the_gui_angle_domain_resolution():
+    from mf4_analyzer.batch_compute import resolve_effective_nfft
+    from mf4_analyzer.signal import resolve_order_nfft
+    from mf4_analyzer.ui.main_window._order_mixin import OrderMixin
+
+    fs = 1000.0
+    t, rpm = _rpm_sweep(fs=fs)
+    params = {
+        "nfft": None,
+        "nfft_mode": "auto",
+        "samples_per_rev": 256,
+        "order_res": 0.1,
+    }
+
+    gui = OrderMixin._resolve_order_effective_params(params, rpm, t)
+    batch = resolve_effective_nfft(
+        "order_time", len(t), fs, params, rpm=rpm, time=t,
+    )
+
+    assert batch == gui["nfft_effective"]
+    # Guard the regression itself: the retired time-domain formula lands
+    # somewhere else entirely for this recording (512 vs 4096).
+    assert batch != resolve_order_nfft(256, 0.1, len(t))
+
+
+def test_batch_order_auto_nfft_matches_gui_for_a_slow_short_capture():
+    """Low Fs / few revolutions — the direction of the divergence flips."""
+    from mf4_analyzer.batch_compute import resolve_effective_nfft
+    from mf4_analyzer.ui.main_window._order_mixin import OrderMixin
+
+    fs = 50.0
+    t = np.arange(3552, dtype=float) / fs      # ~71 s
+    rpm = np.full(t.shape, 30.0)               # 0.5 rev/s -> ~35 revolutions
+    params = {
+        "nfft": None,
+        "nfft_mode": "auto",
+        "samples_per_rev": 512,
+        "order_res": 0.1,
+    }
+
+    gui = OrderMixin._resolve_order_effective_params(params, rpm, t)
+
+    assert resolve_effective_nfft(
+        "order_time", len(t), fs, params, rpm=rpm, time=t,
+    ) == gui["nfft_effective"]
+
+
+def test_runner_order_auto_nfft_uses_the_angle_domain_sample_count(tmp_path):
+    """End to end: the value the runner records is the GUI's, not the old one."""
+    from mf4_analyzer.signal import resolve_order_nfft
+    from mf4_analyzer.ui.main_window._order_mixin import OrderMixin
+
+    fs = 1000.0
+    t, rpm = _rpm_sweep(fs=fs)
+    frame = pd.DataFrame({
+        "Time": t,
+        "sig": np.sin(2 * np.pi * 50.0 * t),
+        "rpm": rpm,
+    })
+    path = tmp_path / "sweep.csv"
+    frame.to_csv(path, index=False)
+    fd = FileData(path, frame, list(frame.columns), {}, idx=0, fs=fs)
+
+    params = {
+        "fs": fs,
+        "nfft": None,
+        "nfft_mode": "auto",
+        "samples_per_rev": 256,
+        # fs 1000 Hz at a 3000 rpm peak puts the effective order Nyquist at 10.
+        "max_order": 8.0,
+        "order_res": 0.1,
+        "time_res": 0.1,
+    }
+    preset = AnalysisPreset.from_current_single(
+        name="order sweep",
+        method="order_time",
+        signal=(0, "sig"),
+        rpm_channel="rpm",
+        params=params,
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done", result.blocked
+    expected = OrderMixin._resolve_order_effective_params(
+        params, rpm, t,
+    )["nfft_effective"]
+    item = result.items[0]
+    assert item.effective_params["nfft_effective"] == expected
+    assert item.effective_params["nfft_effective"] != resolve_order_nfft(
+        256, 0.1, len(t),
+    )
+    assert not any("阶次自动 NFFT" in w for w in item.warnings)
+
+
+def test_resolve_effective_nfft_without_rpm_falls_back_and_leaves_a_trace():
+    from mf4_analyzer.batch_compute import resolve_effective_nfft
+    from mf4_analyzer.signal import resolve_order_nfft
+
+    fs = 1000.0
+    t, _rpm = _rpm_sweep(fs=fs)
+    params = {"nfft": None, "samples_per_rev": 256, "order_res": 0.1}
+    warnings_out: list[str] = []
+
+    resolved = resolve_effective_nfft(
+        "order_time", len(t), fs, params, warnings_out=warnings_out,
+    )
+
+    assert resolved == resolve_order_nfft(256, 0.1, len(t))
+    assert len(warnings_out) == 1
+    assert "阶次自动 NFFT" in warnings_out[0]
+    assert str(len(t)) in warnings_out[0]
+
+
+@pytest.mark.parametrize(
+    "rpm",
+    [
+        np.zeros(2000),
+        np.full(2000, np.nan),
+        np.array([]),
+        None,
+    ],
+)
+def test_resolve_effective_nfft_survives_degenerate_rpm(rpm):
+    from mf4_analyzer.batch_compute import resolve_effective_nfft
+
+    fs = 1000.0
+    t = np.arange(2000, dtype=float) / fs
+
+    resolved = resolve_effective_nfft(
+        "order_time", len(t), fs,
+        {"nfft": None, "samples_per_rev": 256, "order_res": 0.1},
+        rpm=rpm, time=t,
+    )
+
+    assert isinstance(resolved, int)
+    assert resolved >= 256
+
+
+def test_resolve_effective_nfft_fft_time_uses_the_shared_gui_defaults():
+    """Omitted t_win_s/overlap must resolve like the inspector, not like 1.0/0.5."""
+    from mf4_analyzer.batch_compute import resolve_effective_nfft
+    from mf4_analyzer.signal import resolve_nfft
+    from mf4_analyzer.signal.analysis_defaults import (
+        DEFAULT_FFT_TIME_OVERLAP,
+        DEFAULT_FFT_T_WIN_S,
+    )
+    from mf4_analyzer.ui.main_window._fft_time_mixin import FFTTimeMixin
+
+    assert DEFAULT_FFT_T_WIN_S == pytest.approx(1.5)
+    assert DEFAULT_FFT_TIME_OVERLAP == pytest.approx(0.8)
+
+    fs = 2048.0
+    n_samples = 40960
+    resolved = resolve_effective_nfft("fft_time", n_samples, fs, {"nfft": None})
+
+    assert resolved == resolve_nfft(
+        fs, n_samples, DEFAULT_FFT_T_WIN_S, DEFAULT_FFT_TIME_OVERLAP,
+    )
+    # Same params through the GUI resolver -> same NFFT.
+    gui = FFTTimeMixin._resolve_fft_time_effective_params(
+        {"nfft": None, "fs": fs, "overlap": DEFAULT_FFT_TIME_OVERLAP},
+        n_samples,
+    )
+    assert resolved == gui["nfft_effective"]
+    # The retired 1.0 s fallback resolved one octave lower.
+    assert resolved != resolve_nfft(fs, n_samples, 1.0, DEFAULT_FFT_TIME_OVERLAP)
+
+
+def test_batch_fft_time_resolver_and_compute_share_one_overlap_default():
+    """A split default would size the window against a different hop length."""
+    import inspect
+
+    from mf4_analyzer import batch_compute
+
+    source = inspect.getsource(batch_compute)
+    assert "params.get('overlap', 0.5)" not in source
+    assert source.count("params.get('overlap', DEFAULT_FFT_TIME_OVERLAP)") == 2
+
+
 def test_runner_uses_preprocessed_signal_fs_and_disables_compute_filter(
     tmp_path, monkeypatch,
 ):

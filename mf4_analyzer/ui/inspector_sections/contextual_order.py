@@ -342,7 +342,9 @@ class OrderContextual(QWidget):
 
     def _on_preset_param_changed(self, *_):
         if not self._applying_preset:
-            self.preset_bar.set_recommended(None)
+            # See FFTContextual._on_preset_param_changed: reverse-match the
+            # edited state onto a preset name instead of only clearing 荐.
+            self.preset_bar.sync_match(clear_recommendation=True)
         self._refresh_order_summary()
         if self._applying_preset:
             return
@@ -564,6 +566,7 @@ class OrderContextual(QWidget):
         finally:
             self._applying_preset = False
             self._refresh_order_summary()
+        self.preset_bar.sync_match()
         self._emit_param_deltas(before_compute, before_display)
 
     def _apply_preset_values(self, d):
@@ -897,6 +900,9 @@ class OrderContextual(QWidget):
             self._apply_weighting_value(d['weighting'])
 
         self._sync_axis_enabled()
+        # View switch / project restore: the highlight must describe the
+        # restored state (see FFTContextual.apply_params).
+        self.preset_bar.sync_match()
 
     def reset_to_defaults(self):
         """Restore construction-time defaults for a blank analysis View."""

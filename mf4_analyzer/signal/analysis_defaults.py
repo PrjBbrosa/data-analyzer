@@ -22,6 +22,28 @@ ANALYSIS_WINDOW_CANDIDATES: tuple[str, ...] = (
 
 DEFAULT_COHERENCE_THRESHOLD = 0.8
 
+# Target segment duration (seconds) fed to ``resolve_nfft`` when a spectral
+# analysis runs in auto-NFFT mode and no explicit ``t_win_s`` was stored.
+# Product default for both FFT (averaged / peak-hold) and FFT-vs-Time; the
+# batch FFT-vs-Time resolver previously carried a stray 1.0 here, which made
+# batch and GUI resolve different NFFTs for the same recording.
+DEFAULT_FFT_T_WIN_S = 1.5
+
+# Frame overlap fraction for FFT-vs-Time when a recipe omits ``overlap``.
+# Matches the inspector's first-open 80% (contextual_fft_time.spin_overlap).
+# The batch form always emits ``overlap`` and ``normalize_batch_params``
+# introduces no defaults, so this fallback is only reachable from hand-made /
+# imported recipes and direct API use — aligning it costs nothing for recipes
+# that store the field explicitly (their value is preserved verbatim).
+DEFAULT_FFT_TIME_OVERLAP = 0.8
+
+# Order resolution (orders/bin) used when a preset omits ``order_res``.
+# Matches the single-analysis inspector's shipped spin-box value
+# (contextual_order.spin_order_res). Note this is only the OMITTED-key
+# fallback: the batch form's own spin box still ships 0.05, and any recipe
+# that stores order_res explicitly keeps its value untouched.
+DEFAULT_ORDER_RES = 0.1
+
 # Overlap fraction ceiling shared by Welch / spectrogram / FRF consumers.
 OVERLAP_FRACTION_MAX = 0.95
 
@@ -50,6 +72,9 @@ __all__ = [
     "ANALYSIS_WINDOW_CANDIDATES",
     "DEFAULT_ANALYSIS_WINDOW",
     "DEFAULT_COHERENCE_THRESHOLD",
+    "DEFAULT_FFT_TIME_OVERLAP",
+    "DEFAULT_FFT_T_WIN_S",
+    "DEFAULT_ORDER_RES",
     "OVERLAP_FRACTION_MAX",
     "normalize_overlap_fraction",
 ]

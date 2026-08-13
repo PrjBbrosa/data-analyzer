@@ -8,6 +8,19 @@ the live consumer and are intentionally absent here.
 面板恒定发 ``_FIXED_CMAP``、应用预设时显式跳过预设里的 cmap，批处理的参数表单
 根本没有色图控件。fft_time 三个预设过去各带一个 cmap（torque=viridis、
 vibration/transient=turbo），全程无人消费，纯粹是会误导人的死数据。
+
+``periodic_window`` 与 ``detrend`` 是同一性质的幽灵键，已从 frf 三条预设里删除，
+别再加回来：FRF 面板没有对应控件，``FrfContextual.compute_params`` 把两者硬编码成
+``True`` / ``"constant"``（面板的 ``apply_params`` 连读都不读），而三条预设的取值
+本来就全同——换预设永远不可能改变它们。留在目录里只会让人以为「稳健/低频/快速」
+在去趋势或周期窗上有区别。批处理侧的 ``periodic_window`` / ``detrend``
+（``batch_recipe`` 白名单、``batch_compute``、``signal.frf.FrfParams``）是活的，
+不受影响：那是配方自己声明的字段，不是内建预设的补丁。
+
+坐标轴显示范围（``x_auto``/``x_min``/``x_max`` · ``y_auto``/``y_min``/``y_max`` ·
+``z_auto``/``z_floor``/``z_ceiling``）反过来**属于**这里：它们有真实控件、被
+Inspector 与批处理输出面板双向消费，预设不带就等于「换预设不还原坐标轴」。
+fft / fft_time / order_time 三个方法都带全套；frf 不带，因为 FRF 面板没有轴 spin。
 """
 from __future__ import annotations
 
@@ -72,16 +85,22 @@ _PATCHES: dict[str, dict[str, dict[str, Any]]] = {
             "window": "flattop", "nfft": "自动", "t_win_s": 2.5,
             "overlap": 75, "amp_y": "dB", "avg_mode": "线性平均",
             "avg_overlap": 75,
+            "x_auto": True, "x_min": 0.0, "x_max": 0.0,
+            "y_auto": True, "y_min": 0.0, "y_max": 0.0,
         },
         "vibration": {
             "window": "hanning", "nfft": "自动", "t_win_s": 1.5,
             "overlap": 50, "amp_y": "dB", "avg_mode": "线性平均",
             "avg_overlap": 50,
+            "x_auto": True, "x_min": 0.0, "x_max": 0.0,
+            "y_auto": True, "y_min": 0.0, "y_max": 0.0,
         },
         "transient": {
             "window": "hanning", "nfft": "自动", "t_win_s": 0.6,
             "overlap": 75, "amp_y": "dB", "avg_mode": "峰值保持",
             "avg_overlap": 75,
+            "x_auto": True, "x_min": 0.0, "x_max": 0.0,
+            "y_auto": True, "y_min": 0.0, "y_max": 0.0,
         },
     },
     "fft_time": {
@@ -118,25 +137,22 @@ _PATCHES: dict[str, dict[str, dict[str, Any]]] = {
     },
     "frf": {
         "robust": {
-            "estimator": "h1", "window": "hanning",
-            "periodic_window": True, "t_win_s": 2.0, "overlap": 0.5,
-            "nfft_mode": "auto", "nfft": None, "detrend": "constant",
+            "estimator": "h1", "window": "hanning", "t_win_s": 2.0, "overlap": 0.5,
+            "nfft_mode": "auto", "nfft": None,
             "magnitude_scale": "db", "frequency_scale": "log",
             "phase_mode": "unwrapped", "coherence_threshold": 0.8,
             "fade_low_coherence": True,
         },
         "low_frequency": {
-            "estimator": "h1", "window": "hanning",
-            "periodic_window": True, "t_win_s": 8.0, "overlap": 0.75,
-            "nfft_mode": "auto", "nfft": None, "detrend": "constant",
+            "estimator": "h1", "window": "hanning", "t_win_s": 8.0, "overlap": 0.75,
+            "nfft_mode": "auto", "nfft": None,
             "magnitude_scale": "db", "frequency_scale": "log",
             "phase_mode": "unwrapped", "coherence_threshold": 0.8,
             "fade_low_coherence": True,
         },
         "fast": {
-            "estimator": "h1", "window": "hanning",
-            "periodic_window": True, "t_win_s": 0.5, "overlap": 0.5,
-            "nfft_mode": "auto", "nfft": None, "detrend": "constant",
+            "estimator": "h1", "window": "hanning", "t_win_s": 0.5, "overlap": 0.5,
+            "nfft_mode": "auto", "nfft": None,
             "magnitude_scale": "db", "frequency_scale": "log",
             "phase_mode": "unwrapped", "coherence_threshold": 0.8,
             "fade_low_coherence": True,
@@ -151,16 +167,25 @@ _PATCHES: dict[str, dict[str, dict[str, Any]]] = {
             "max_order": 20, "order_res": 0.05, "time_res": 0.10,
             "nfft": "自动", "samples_per_rev": 256,
             "amplitude_mode": "Amplitude dB", "window": "flattop",
+            "x_auto": True, "x_min": 0.0, "x_max": 0.0,
+            "y_auto": True, "y_min": 0.0, "y_max": 0.0,
+            "z_auto": True, "z_floor": -50.0, "z_ceiling": -10.0,
         },
         "vibration": {
             "max_order": 50, "order_res": 0.10, "time_res": 0.05,
             "nfft": "自动", "samples_per_rev": 512,
             "amplitude_mode": "Amplitude dB", "window": "hanning",
+            "x_auto": True, "x_min": 0.0, "x_max": 0.0,
+            "y_auto": True, "y_min": 0.0, "y_max": 0.0,
+            "z_auto": True, "z_floor": -50.0, "z_ceiling": -10.0,
         },
         "transient": {
             "max_order": 30, "order_res": 0.25, "time_res": 0.02,
             "nfft": "自动", "samples_per_rev": 256,
             "amplitude_mode": "Amplitude dB", "window": "hanning",
+            "x_auto": True, "x_min": 0.0, "x_max": 0.0,
+            "y_auto": True, "y_min": 0.0, "y_max": 0.0,
+            "z_auto": True, "z_floor": -50.0, "z_ceiling": -10.0,
         },
     },
 }

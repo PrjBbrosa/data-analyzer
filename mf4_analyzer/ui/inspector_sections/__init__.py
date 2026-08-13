@@ -41,6 +41,8 @@ from ._helpers import (  # noqa: F401
     _make_params_card,
     _settings_bool,
     _preset_value_text,
+    preset_params_match,
+    preset_value_matches,
     _configure_form,
     _fit_field,
     _pair_field,

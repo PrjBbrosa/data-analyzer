@@ -5,8 +5,13 @@ import numpy as np
 from PyQt5.QtWidgets import QMessageBox
 
 from ... import db_reference
-from ...signal import assess_speed_for_order, resolve_order_nfft
-from ...signal.analysis_defaults import DEFAULT_ANALYSIS_WINDOW
+from ...signal import (
+    assess_speed_for_order,
+    order_angle_sample_count,
+    resolve_order_nfft,
+    revolutions_from_rpm,
+)
+from ...signal.analysis_defaults import DEFAULT_ANALYSIS_WINDOW, DEFAULT_ORDER_RES
 from ...signal.spectrogram import SpectrogramAnalyzer
 from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP, DEFAULT_HEATMAP_INTERP
 from ...qt_analysis_shared import amplitude_mode_is_db
@@ -127,47 +132,13 @@ class OrderMixin:
             return None
         return aligned
 
-    @staticmethod
-    def _order_revolutions(rpm, t):
-        """Total revolutions over ``t`` = ∫|rpm|/60 dt (trapezoid).
-
-        Returns ``0.0`` for degenerate input (too few / non-finite samples or
-        non-increasing time). Single source of truth shared by the COT angle
-        sample count and the inspector auto-NFFT preview provider.
-        """
-        rpm_arr = np.asarray(rpm, dtype=float).reshape(-1)
-        t_arr = np.asarray(t, dtype=float).reshape(-1)
-        n = min(rpm_arr.size, t_arr.size)
-        if n < 2:
-            return 0.0
-        rpm_arr = rpm_arr[:n]
-        t_arr = t_arr[:n]
-        finite = np.isfinite(rpm_arr) & np.isfinite(t_arr)
-        rpm_arr = rpm_arr[finite]
-        t_arr = t_arr[finite]
-        if rpm_arr.size < 2:
-            return 0.0
-        dt = np.diff(t_arr)
-        valid_dt = np.isfinite(dt) & (dt > 0.0)
-        if not np.any(valid_dt):
-            return 0.0
-        abs_rpm = np.abs(rpm_arr)
-        revs = np.sum(
-            0.5
-            * (abs_rpm[:-1][valid_dt] + abs_rpm[1:][valid_dt])
-            / 60.0
-            * dt[valid_dt]
-        )
-        if not np.isfinite(revs) or revs <= 0.0:
-            return 0.0
-        return float(revs)
-
-    @staticmethod
-    def _order_angle_sample_count(samples_per_rev, rpm, t):
-        revs = OrderMixin._order_revolutions(rpm, t)
-        if revs <= 0.0:
-            return 1
-        return max(1, int(round(float(samples_per_rev) * revs)))
+    # Revolution counting and the angle-domain sample count are pure numerics
+    # shared with the batch auto-NFFT resolver, so they live in
+    # ``signal.adaptive``.  These two names stay as thin delegations because
+    # they are the window-side contract the inspector preview provider and the
+    # existing tests call.
+    _order_revolutions = staticmethod(revolutions_from_rpm)
+    _order_angle_sample_count = staticmethod(order_angle_sample_count)
 
     def _order_preview_revs(self):
         """Revolution count for the inspector auto-NFFT preview, or ``None``.
@@ -211,14 +182,14 @@ class OrderMixin:
         samples_per_rev = int(out.get('samples_per_rev', 256))
         out['samples_per_rev'] = samples_per_rev
         if auto:
-            n_angle = OrderMixin._order_angle_sample_count(
+            n_angle = order_angle_sample_count(
                 samples_per_rev,
                 rpm,
                 t,
             )
             effective = resolve_order_nfft(
                 samples_per_rev,
-                out.get('order_res', 0.05),
+                out.get('order_res', DEFAULT_ORDER_RES),
                 n_angle,
                 overlap=0.75,
             )
