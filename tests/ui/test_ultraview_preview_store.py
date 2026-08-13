@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
 from PyQt5 import sip
 from PyQt5.QtGui import QColor, QImage, QPixmap
 
@@ -15,6 +16,10 @@ from mf4_analyzer.ui.chart_stack.ultraview import (
 )
 from mf4_analyzer.ui.chart_stack.ultraview.preview_store import (
     PREVIEW_RECORD_OVERHEAD_BYTES,
+    RESIDENCY_TIER_ACTIVE_PLACED,
+    RESIDENCY_TIER_FOCUS,
+    RESIDENCY_TIER_INACTIVE_PLACED,
+    ResidencyRequest,
 )
 from mf4_analyzer.ui.ultraview_state import (
     PreviewMeta,
@@ -293,6 +298,78 @@ def test_pinned_over_budget_shrinks_proportionally(qapp):
         assert image is not None
         assert max(image.width(), image.height()) < MAX_PREVIEW_RAW_EDGE
         assert store.image_valid(image)
+
+
+def test_residency_requests_coalesce_shared_refs_without_board_weight(qapp):
+    store = PreviewStore()
+    refs = [_ref(f"shared-{index}") for index in range(12)]
+    # Twenty Boards repeatedly request the same 12 refs.  The Board/slot has
+    # deliberately already been removed by the caller before reaching Store.
+    requests = []
+    for _board in range(20):
+        for ref in refs:
+            requests.append(
+                ResidencyRequest(
+                    ref,
+                    tier=RESIDENCY_TIER_INACTIVE_PLACED,
+                    target_size=(200, 100),
+                )
+            )
+    # A focus request for one of those references must win without another
+    # image identity or an aggregate 20-times target budget.
+    requests.append(
+        ResidencyRequest(
+            refs[0], tier=RESIDENCY_TIER_FOCUS, target_size=(640, 480)
+        )
+    )
+    store.set_residency_requests(requests)
+    for ref in refs:
+        assert store.publish(ref, _image(64, 48), digest=ref.view_id, meta=_meta(ref))
+
+    assert store.stats().records == 12
+    assert store.stats().images == 12
+    assert store.stats().residency_refs == 12
+    request = store.residency_request(refs[0])
+    assert request is not None
+    assert request.tier == RESIDENCY_TIER_FOCUS
+    assert request.target_size == (640, 480)
+
+
+def test_residency_evicts_inactive_before_active_and_validates_requests(qapp):
+    store = PreviewStore()
+    active = [_ref(f"active-{index}") for index in range(6)]
+    inactive = _ref("inactive")
+    store.set_residency_requests(
+        [
+            *(
+                ResidencyRequest(ref, RESIDENCY_TIER_ACTIVE_PLACED)
+                for ref in active
+            ),
+            ResidencyRequest(inactive, RESIDENCY_TIER_INACTIVE_PLACED),
+        ]
+    )
+    for ref in active:
+        assert store.publish(
+            ref,
+            _image(MAX_PREVIEW_RAW_EDGE, MAX_PREVIEW_RAW_EDGE),
+            digest=ref.view_id,
+            meta=_meta(ref),
+        )
+    assert store.publish(
+        inactive,
+        _image(MAX_PREVIEW_RAW_EDGE, MAX_PREVIEW_RAW_EDGE),
+        digest=inactive.view_id,
+        meta=_meta(inactive),
+    )
+    assert store.get(inactive).image is None
+    assert all(store.image_valid(store.get(ref).image) for ref in active)
+
+    with pytest.raises(ValueError, match="tier"):
+        store.set_residency_requests([ResidencyRequest(active[0], tier=99)])
+    with pytest.raises(ValueError, match="target_size"):
+        store.set_residency_requests(
+            [ResidencyRequest(active[0], target_size=(7, 100))]
+        )
 
 
 def test_drop_clear_and_destroy_release_images(qapp):

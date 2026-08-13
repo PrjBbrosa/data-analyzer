@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Mapping, Sequence
 
-from PyQt5.QtCore import QByteArray, QMimeData, QPoint, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QByteArray, QMimeData, QPoint, QRect, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -27,12 +28,15 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTabBar,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -48,6 +52,8 @@ from mf4_analyzer.ui.ultraview_state import (
     STATUS_ORPHANED,
     STATUS_STALE,
     ULTRAVIEW_REF_MIME,
+    FreeGridPlacement,
+    GridRect,
     UltraViewRef,
     parse_ref_payload,
     section_search_haystack,
@@ -56,11 +62,23 @@ from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 
 from .layouts import (
+    BASE_BOARD_SIZE,
     BOARD_PADDING,
     CARD_FOOTER_HEIGHT,
     CARD_HEADER_HEIGHT,
     MIN_CARD_CHROME_HEIGHT,
+    content_rect,
+    logical_board_size,
     slot_rects,
+)
+from .free_grid import (
+    GridMetrics,
+    candidate_move,
+    candidate_resize,
+    grid_metrics,
+    pixels_to_grid_delta,
+    rect_is_available,
+    rect_to_pixels,
 )
 from .._helpers import ULTRAVIEW_HINT_BAR_HEIGHT
 
@@ -71,6 +89,8 @@ LAYOUT_LABELS_ZH = {
     "hero_left_4": "左主图 + 3 辅图",
     "hero_top_4": "上主图 + 3 辅图",
     "grid_3x2": "3 × 2",
+    "grid_3x3": "3 × 3",
+    "grid_4x3": "4 × 3",
 }
 
 COMPARE_FILTER_LABELS_ZH = {
@@ -94,6 +114,7 @@ ORPHANED_CARD_COPY = "源 View 已删除"
 DIMMED_OPACITY = 0.28
 LIBRARY_DEFAULT_WIDTH = 224
 TRAY_BODY_MAX_HEIGHT = 108
+ULTRAVIEW_LAYOUT_MIME = "application/x-tracelab-ultraview-layout+json"
 
 
 @dataclass(frozen=True)
@@ -152,6 +173,18 @@ def make_ref_mime(section: str, view_id: str) -> QMimeData:
     return mime
 
 
+def make_layout_mime(section: str, view_id: str, *, action: str) -> QMimeData:
+    """Private board-layout gesture MIME, distinct from source-ref drag."""
+    mime = QMimeData()
+    payload = json.dumps(
+        {"section": section, "view_id": view_id, "action": action},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    mime.setData(ULTRAVIEW_LAYOUT_MIME, QByteArray(payload.encode("utf-8")))
+    return mime
+
+
 def extract_ref_strings(mime: QMimeData | None) -> tuple[str, str] | None:
     """Copy ``section`` / ``view_id`` out of ``QMimeData`` immediately.
 
@@ -176,6 +209,33 @@ def extract_ref_strings(mime: QMimeData | None) -> tuple[str, str] | None:
     if parse_ref_payload({"section": section_copy, "view_id": view_id_copy}) is None:
         return None
     return section_copy, view_id_copy
+
+
+def extract_layout_strings(mime: QMimeData | None) -> tuple[str, str, str] | None:
+    if mime is None or not mime.hasFormat(ULTRAVIEW_LAYOUT_MIME):
+        return None
+    try:
+        raw = bytes(mime.data(ULTRAVIEW_LAYOUT_MIME)).decode("utf-8")
+        payload = json.loads(raw)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    action = payload.get("action")
+    if action not in {"move", "resize"}:
+        return None
+    ref = extract_ref_strings_from_payload(payload)
+    return None if ref is None else (*ref, action)
+
+
+def extract_ref_strings_from_payload(payload: Mapping[str, Any]) -> tuple[str, str] | None:
+    section = payload.get("section")
+    view_id = payload.get("view_id")
+    if not isinstance(section, str) or not isinstance(view_id, str):
+        return None
+    if parse_ref_payload({"section": section, "view_id": view_id}) is None:
+        return None
+    return str(section), str(view_id)
 
 
 def preview_image(record: Any) -> QImage | None:
@@ -322,6 +382,144 @@ class UltraViewHintBar(QFrame):
         layout.addWidget(self._discovery, 0, Qt.AlignVCenter)
 
 
+class BoardSwitcher(QFrame):
+    """Presentation-only multi-Board selector.
+
+    The switcher receives immutable-ish Board DTOs from the Page and emits
+    typed intents.  It intentionally never mutates a workspace: that keeps
+    project state, confirmation policy, and the 20-Board creation limit in the
+    state/coordinator owner rather than in a QWidget callback.
+    """
+
+    create_requested = pyqtSignal()
+    duplicate_requested = pyqtSignal(str)
+    rename_requested = pyqtSignal(str, str)
+    delete_requested = pyqtSignal(str)
+    reorder_requested = pyqtSignal(str, int)
+    board_selected = pyqtSignal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewBoardSwitcher")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self._board_ids: list[str] = []
+        self._tab = QTabBar(self)
+        self._tab.setObjectName("ultraViewBoardTabs")
+        self._tab.setDocumentMode(True)
+        self._tab.setUsesScrollButtons(True)
+        self._tab.setElideMode(Qt.ElideRight)
+        self._tab.setMovable(True)
+        self._tab.setExpanding(False)
+        self._tab.setTabsClosable(False)
+        self._tab.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tab.currentChanged.connect(self._on_current_changed)
+        self._tab.tabMoved.connect(self._on_tab_moved)
+        self._tab.customContextMenuRequested.connect(self._on_context_menu)
+
+        self._add = QToolButton(self)
+        self._add.setObjectName("ultraViewBoardAddButton")
+        self._add.setText("+")
+        self._add.setToolTip("新建 Board")
+        self._add.setAutoRaise(True)
+        self._add.clicked.connect(self.create_requested)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 2)
+        layout.setSpacing(4)
+        layout.addWidget(self._tab, 1)
+        layout.addWidget(self._add, 0)
+
+    def tab_bar(self) -> QTabBar:
+        return self._tab
+
+    def add_button(self) -> QToolButton:
+        return self._add
+
+    def current_board_id(self) -> str | None:
+        index = self._tab.currentIndex()
+        if 0 <= index < len(self._board_ids):
+            return self._board_ids[index]
+        return None
+
+    def board_ids(self) -> tuple[str, ...]:
+        return tuple(self._board_ids)
+
+    def set_boards(self, boards: Sequence[Any], active_board_id: str | None) -> None:
+        """Project the supplied workspace without feeding signals back to it."""
+        parsed: list[tuple[str, str]] = []
+        for index, board in enumerate(boards):
+            board_id = str(getattr(board, "board_id", "") or "")
+            if not board_id:
+                continue
+            name = str(getattr(board, "name", "") or f"Board {index + 1}")
+            parsed.append((board_id, name))
+        prior = self._tab.blockSignals(True)
+        try:
+            while self._tab.count():
+                self._tab.removeTab(0)
+            self._board_ids = [board_id for board_id, _name in parsed]
+            for board_id, name in parsed:
+                tab_index = self._tab.addTab(name)
+                self._tab.setTabToolTip(tab_index, name)
+                self._tab.setTabData(tab_index, board_id)
+            current = self._board_ids.index(active_board_id) if active_board_id in self._board_ids else 0
+            self._tab.setCurrentIndex(current if self._board_ids else -1)
+        finally:
+            self._tab.blockSignals(prior)
+
+    def set_create_enabled(self, enabled: bool, reason: str = "") -> None:
+        self._add.setEnabled(bool(enabled))
+        self._add.setToolTip(reason or "新建 Board")
+
+    def _board_id_at(self, index: int) -> str | None:
+        if 0 <= index < len(self._board_ids):
+            return self._board_ids[index]
+        return None
+
+    def _on_current_changed(self, index: int) -> None:
+        board_id = self._board_id_at(index)
+        if board_id is not None:
+            self.board_selected.emit(board_id)
+
+    def _on_tab_moved(self, from_index: int, to_index: int) -> None:
+        if not (0 <= from_index < len(self._board_ids) and 0 <= to_index < len(self._board_ids)):
+            return
+        board_id = self._board_ids.pop(from_index)
+        self._board_ids.insert(to_index, board_id)
+        self.reorder_requested.emit(board_id, to_index)
+
+    def _on_context_menu(self, pos: QPoint) -> None:
+        index = self._tab.tabAt(pos)
+        board_id = self._board_id_at(index)
+        if board_id is None:
+            return
+        menu = QMenu(self)
+        menu.setObjectName("ultraViewBoardMenu")
+        apply_rounded_menu_chrome(menu)
+        duplicate = menu.addAction("复制 Board")
+        rename = menu.addAction("重命名")
+        remove = menu.addAction("删除 Board")
+        chosen = menu.exec_(self._tab.mapToGlobal(pos))
+        if chosen is duplicate:
+            self.duplicate_requested.emit(board_id)
+        elif chosen is rename:
+            title = self._tab.tabText(index)
+            text, accepted = QInputDialog.getText(self, "重命名 Board", "名称", text=title)
+            if accepted and text.strip():
+                self.rename_requested.emit(board_id, text.strip())
+        elif chosen is remove:
+            board_name = self._tab.tabText(index)
+            answer = QMessageBox.question(
+                self,
+                "删除 Board",
+                f"确定删除“{board_name}”吗？其中的 View 引用不会删除源 View。",
+                QMessageBox.Cancel | QMessageBox.Yes,
+                QMessageBox.Cancel,
+            )
+            if answer == QMessageBox.Yes:
+                self.delete_requested.emit(board_id)
+
+
 class BoardToolbar(QFrame):
     layout_changed = pyqtSignal(str)
     ratio_nudge_requested = pyqtSignal(int)
@@ -330,7 +528,10 @@ class BoardToolbar(QFrame):
     show_titles_toggled = pyqtSignal(bool)
     show_sources_toggled = pyqtSignal(bool)
     presentation_toggled = pyqtSignal(bool)
+    overview_requested = pyqtSignal()
     board_name_changed = pyqtSignal(str)
+    free_grid_toggled = pyqtSignal(bool)
+    organize_free_grid_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -355,6 +556,22 @@ class BoardToolbar(QFrame):
             self._layout_combo.addItem(LAYOUT_LABELS_ZH[layout_id], layout_id)
         self._layout_combo.currentIndexChanged.connect(self._on_layout_index)
         layout.addWidget(self._layout_combo, 0)
+
+        self._free_grid = QToolButton(self)
+        self._free_grid.setObjectName("ultraViewFreeGridButton")
+        self._free_grid.setText("自由网格")
+        self._free_grid.setCheckable(True)
+        self._free_grid.setToolTip("切换 12 列受控自由网格")
+        self._free_grid.toggled.connect(self._on_free_grid_toggled)
+        layout.addWidget(self._free_grid, 0)
+
+        self._organize = QToolButton(self)
+        self._organize.setObjectName("ultraViewOrganizeGridButton")
+        self._organize.setText("整理")
+        self._organize.setToolTip("移除自由网格中的空行")
+        self._organize.clicked.connect(self.organize_free_grid_requested)
+        self._organize.hide()
+        layout.addWidget(self._organize, 0)
 
         self._copy = QPushButton("复制整板图", self)
         self._copy.setObjectName("ultraViewCopyBoardButton")
@@ -400,6 +617,12 @@ class BoardToolbar(QFrame):
         self._presentation.toggled.connect(self.presentation_toggled)
         layout.addWidget(self._presentation, 0)
 
+        self._overview = QPushButton("整板概览", self)
+        self._overview.setObjectName("ultraViewBoardOverviewButton")
+        self._overview.setToolTip("查看完整 Board；点击卡片可返回阅读位置")
+        self._overview.clicked.connect(self.overview_requested)
+        layout.addWidget(self._overview, 0)
+
     def set_board_name(self, name: str) -> None:
         text = name or ""
         if self._name.text() == text:
@@ -421,6 +644,29 @@ class BoardToolbar(QFrame):
         blocked = self._layout_combo.blockSignals(True)
         self._layout_combo.setCurrentIndex(index)
         self._layout_combo.blockSignals(blocked)
+
+    def set_free_grid_enabled(self, enabled: bool) -> None:
+        blocked = self._free_grid.blockSignals(True)
+        self._free_grid.setChecked(bool(enabled))
+        self._free_grid.blockSignals(blocked)
+        self._layout_combo.setVisible(not bool(enabled))
+        self._organize.setVisible(bool(enabled))
+
+    def _on_free_grid_toggled(self, enabled: bool) -> None:
+        if not enabled and self._free_grid.isVisible():
+            answer = QMessageBox.question(
+                self,
+                "切回模板布局",
+                "模板会按当前位置顺序重新排列卡片；超出模板容量的卡片会移入未放置区。继续吗？",
+                QMessageBox.Cancel | QMessageBox.Yes,
+                QMessageBox.Cancel,
+            )
+            if answer != QMessageBox.Yes:
+                blocked = self._free_grid.blockSignals(True)
+                self._free_grid.setChecked(True)
+                self._free_grid.blockSignals(blocked)
+                return
+        self.free_grid_toggled.emit(bool(enabled))
 
     def set_presentation_checked(self, on: bool) -> None:
         blocked = self._presentation.blockSignals(True)
@@ -1249,6 +1495,7 @@ class BoardGrid(QWidget):
         self._layout_id = "hero_left_4"
         self._ratio = 0.67
         self._widgets: dict[str, QWidget] = {}
+        self._viewport_size = QSize(0, 0)
 
     def layout_id(self) -> str:
         return self._layout_id
@@ -1281,7 +1528,39 @@ class BoardGrid(QWidget):
         for slot_id in LAYOUT_SLOTS[layout_id]:
             model = models.get(slot_id)
             self._sync_slot(slot_id, model)
+        self._sync_logical_size()
         self._relayout()
+
+    def set_viewport_size(self, size: QSize) -> None:
+        """Apply the scroll viewport size without deriving it from this widget.
+
+        Once the Board is wider/taller than the viewport, ``self.size()`` is
+        the logical canvas, not the visible window.  Keeping the two inputs
+        separate is what makes scrolling and hit testing deterministic.
+        """
+        if size == self._viewport_size:
+            return
+        self._viewport_size = QSize(size)
+        self._sync_logical_size()
+
+    def logical_size(self) -> QSize:
+        return QSize(self.size())
+
+    def _sync_logical_size(self) -> None:
+        viewport = self._viewport_size
+        if viewport.width() <= 0 or viewport.height() <= 0:
+            viewport = self.parentWidget().size() if self.parentWidget() is not None else self.size()
+        try:
+            width, height = logical_board_size(
+                self._layout_id, (viewport.width(), viewport.height())
+            )
+        except ValueError:
+            return
+        target = QSize(width, height)
+        if self.minimumSize() != target:
+            self.setMinimumSize(target)
+        if self.size() != target:
+            self.resize(target)
 
     def _discard(self, slot_id: str) -> None:
         widget = self._widgets.pop(slot_id, None)
@@ -1370,6 +1649,567 @@ class BoardGrid(QWidget):
         if slot_id is None:
             return
         self.ref_dropped.emit(slot_id, section, view_id)
+
+
+class FreeGridCard(UltraViewCard):
+    """A static preview card with an explicit Alt-drag layout gesture.
+
+    Ordinary drags keep P0/P1's source-ref behavior.  Holding Alt changes
+    the MIME type, so a free-grid layout move can never be interpreted as a
+    source-view replacement or board membership mutation.
+    """
+
+    layout_drag_started = pyqtSignal(str, str, str)
+    layout_drag_finished = pyqtSignal()
+    layout_key_requested = pyqtSignal(str, str, int, int, bool)
+    preset_requested = pyqtSignal(str, str, str)
+
+    def make_context_menu(self) -> QMenu:
+        menu = super().make_context_menu()
+        size_menu = menu.addMenu("自由网格尺寸")
+        for preset, label in (
+            ("small", "小 3 × 2"),
+            ("standard", "标准 4 × 3"),
+            ("wide", "宽 6 × 3"),
+            ("tall", "高 4 × 5"),
+            ("large", "大 6 × 6"),
+            ("banner", "横幅 12 × 4"),
+        ):
+            action = size_menu.addAction(label)
+            action.triggered.connect(partial(self._emit_preset, preset))
+        return menu
+
+    def _emit_preset(self, preset: str, _checked: bool = False) -> None:
+        self.preset_requested.emit(self._model.section, self._model.view_id, preset)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if (
+            self._press_pos is not None
+            and event.buttons() & Qt.LeftButton
+            and event.modifiers() & Qt.AltModifier
+        ):
+            if (event.pos() - self._press_pos).manhattanLength() < QApplication.startDragDistance():
+                return
+            self._press_pos = None
+            action = "resize" if event.modifiers() & Qt.ShiftModifier else "move"
+            drag = QDrag(self)
+            drag.setMimeData(
+                make_layout_mime(self._model.section, self._model.view_id, action=action)
+            )
+            self.layout_drag_started.emit(self._model.section, self._model.view_id, action)
+            try:
+                drag.exec_(Qt.MoveAction)
+            finally:
+                self.layout_drag_finished.emit()
+            return
+        super().mouseMoveEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.modifiers() & Qt.AltModifier:
+            delta = {
+                Qt.Key_Left: (-1, 0),
+                Qt.Key_Right: (1, 0),
+                Qt.Key_Up: (0, -1),
+                Qt.Key_Down: (0, 1),
+            }.get(event.key())
+            if delta is not None:
+                self.layout_key_requested.emit(
+                    self._model.section,
+                    self._model.view_id,
+                    delta[0],
+                    delta[1],
+                    bool(event.modifiers() & Qt.ShiftModifier),
+                )
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+
+class FreeGridBoard(QWidget):
+    """Controlled 12-column visual projection of persisted free-grid state."""
+
+    ref_dropped = pyqtSignal(str, str)
+    geometry_requested = pyqtSignal(str, str, int, int, int, int, str)
+    preset_requested = pyqtSignal(str, str, str)
+    open_source_requested = pyqtSignal(str, str)
+    focus_requested = pyqtSignal(str, str)
+    rebind_arm_requested = pyqtSignal(str, str)
+    move_to_unplaced_requested = pyqtSignal(str, str)
+    remove_ref_requested = pyqtSignal(str, str)
+    copy_card_image_requested = pyqtSignal(str, str)
+    selected = pyqtSignal(str, str)
+    drag_started = pyqtSignal(str)
+    drag_finished = pyqtSignal()
+    feedback_requested = pyqtSignal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewFreeGrid")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAcceptDrops(True)
+        self.setMinimumSize(240, 160)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._placements: dict[UltraViewRef, FreeGridPlacement] = {}
+        self._models: dict[UltraViewRef, CardViewModel] = {}
+        self._widgets: dict[UltraViewRef, FreeGridCard] = {}
+        self._viewport_size = QSize(0, 0)
+        self._metrics = grid_metrics((240, 160), [])
+
+    def set_viewport_size(self, size: QSize) -> None:
+        if size == self._viewport_size:
+            return
+        self._viewport_size = QSize(size)
+        self._sync_metrics()
+
+    def metrics(self) -> GridMetrics:
+        return self._metrics
+
+    def card_for(self, section: str, view_id: str) -> FreeGridCard | None:
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        return self._widgets.get(ref) if ref is not None else None
+
+    def card_widgets(self) -> list[FreeGridCard]:
+        return list(self._widgets.values())
+
+    def set_free_grid(
+        self,
+        placements: Sequence[FreeGridPlacement],
+        models: Mapping[UltraViewRef, CardViewModel],
+    ) -> None:
+        self._placements = {item.ref: item for item in placements}
+        self._models = dict(models)
+        wanted = set(self._placements)
+        for ref in list(self._widgets):
+            if ref not in wanted:
+                widget = self._widgets.pop(ref)
+                widget.setParent(None)
+                widget.deleteLater()
+        for ref, placement in self._placements.items():
+            model = self._models.get(ref)
+            if model is None:
+                continue
+            widget = self._widgets.get(ref)
+            if widget is None:
+                widget = FreeGridCard(model, self)
+                self._connect_card(widget)
+                self._widgets[ref] = widget
+                widget.show()
+            else:
+                widget.apply_model(model)
+            widget.setAccessibleDescription(
+                f"第 {placement.rect.row + 1} 行第 {placement.rect.column + 1} 列，"
+                f"宽 {placement.rect.column_span} 高 {placement.rect.row_span}"
+            )
+        self._sync_metrics()
+
+    def _connect_card(self, card: FreeGridCard) -> None:
+        card.open_source_requested.connect(self.open_source_requested)
+        card.focus_requested.connect(self.focus_requested)
+        card.rebind_arm_requested.connect(self.rebind_arm_requested)
+        card.move_to_unplaced_requested.connect(self.move_to_unplaced_requested)
+        card.remove_ref_requested.connect(self.remove_ref_requested)
+        card.copy_card_image_requested.connect(self.copy_card_image_requested)
+        card.selected.connect(self.selected)
+        card.drag_started.connect(self.drag_started)
+        card.drag_finished.connect(self.drag_finished)
+        card.layout_drag_started.connect(self._on_layout_drag_started)
+        card.layout_drag_finished.connect(self.drag_finished)
+        card.layout_key_requested.connect(self._on_layout_key)
+        card.preset_requested.connect(self.preset_requested)
+
+    def _sync_metrics(self) -> None:
+        viewport = self._viewport_size
+        if viewport.width() <= 0 or viewport.height() <= 0:
+            source = self.parentWidget()
+            viewport = source.size() if source is not None else self.size()
+        self._metrics = grid_metrics(
+            (viewport.width(), viewport.height()), list(self._placements.values())
+        )
+        target = QSize(self._metrics.board_width, self._metrics.board_height)
+        if self.minimumSize() != target:
+            self.setMinimumSize(target)
+        if self.size() != target:
+            self.resize(target)
+        self._relayout()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._relayout()
+
+    def _relayout(self) -> None:
+        for ref, placement in self._placements.items():
+            widget = self._widgets.get(ref)
+            if widget is not None:
+                widget.setGeometry(*rect_to_pixels(placement.rect, self._metrics))
+
+    def _grid_at(self, pos: QPoint) -> tuple[int, int]:
+        unit_x = max(1, self._metrics.column_width + self._metrics.gutter)
+        unit_y = max(1, self._metrics.row_height + self._metrics.gutter)
+        column = max(0, min(11, (pos.x() - self._metrics.padding) // unit_x))
+        row = max(0, min(47, (pos.y() - self._metrics.padding) // unit_y))
+        return int(column), int(row)
+
+    def _request_geometry(self, ref: UltraViewRef, rect: GridRect, reason: str) -> bool:
+        placement = self._placements.get(ref)
+        if placement is None or rect == placement.rect:
+            return False
+        if not rect_is_available(rect, self._placements.values(), excluding=ref):
+            self.feedback_requested.emit("目标位置与其他卡片重叠")
+            return False
+        self.geometry_requested.emit(
+            ref.section,
+            ref.view_id,
+            rect.column,
+            rect.row,
+            rect.column_span,
+            rect.row_span,
+            reason,
+        )
+        return True
+
+    def _on_layout_drag_started(self, _section: str, _view_id: str, _action: str) -> None:
+        self.drag_started.emit("layout")
+
+    def _on_layout_key(
+        self, section: str, view_id: str, column_delta: int, row_delta: int, resize: bool
+    ) -> None:
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        placement = self._placements.get(ref) if ref is not None else None
+        if placement is None:
+            return
+        candidate = (
+            candidate_resize(placement.rect, column_delta, row_delta)
+            if resize
+            else candidate_move(placement.rect, column_delta, row_delta)
+        )
+        self._request_geometry(ref, candidate, "keyboard-resize" if resize else "keyboard-move")
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if extract_layout_strings(event.mimeData()) is not None or _accept_ultraview_drag(event):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if extract_layout_strings(event.mimeData()) is not None or _accept_ultraview_drag(event):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        layout = extract_layout_strings(event.mimeData())
+        if layout is not None:
+            section, view_id, action = layout
+            ref = parse_ref_payload({"section": section, "view_id": view_id})
+            placement = self._placements.get(ref) if ref is not None else None
+            if placement is not None:
+                column, row = self._grid_at(event.pos())
+                if action == "move":
+                    candidate = GridRect(column, row, placement.rect.column_span, placement.rect.row_span)
+                else:
+                    candidate = candidate_resize(
+                        placement.rect,
+                        column - placement.rect.column - placement.rect.column_span + 1,
+                        row - placement.rect.row - placement.rect.row_span + 1,
+                    )
+                self._request_geometry(ref, candidate, f"drag-{action}")
+            event.acceptProposedAction()
+            return
+        ref = extract_ref_strings(event.mimeData())
+        if ref is not None:
+            self.ref_dropped.emit(*ref)
+            event.acceptProposedAction()
+
+
+class FreeGridMinimap(QFrame):
+    """Cheap free-grid navigator; it draws bounds only, never preview pixels."""
+
+    viewport_requested = pyqtSignal(QRect)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewFreeGridMinimap")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setFixedSize(168, 112)
+        self._metrics: GridMetrics | None = None
+        self._placements: tuple[FreeGridPlacement, ...] = ()
+        self._viewport = QRect()
+
+    def set_projection(
+        self,
+        metrics: GridMetrics,
+        placements: Sequence[FreeGridPlacement],
+        viewport: QRect,
+    ) -> None:
+        self._metrics = metrics
+        self._placements = tuple(placements)
+        self._viewport = QRect(viewport)
+        self.update()
+
+    def _scale(self) -> tuple[float, float]:
+        if self._metrics is None:
+            return 1.0, 1.0
+        return (
+            max(1, self.width() - 12) / float(max(1, self._metrics.board_width)),
+            max(1, self.height() - 12) / float(max(1, self._metrics.board_height)),
+        )
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if self._metrics is None:
+            return
+        sx, sy = self._scale()
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.fillRect(self.rect(), QColor("#ffffff"))
+            painter.setPen(QColor("#d7dee8"))
+            painter.drawRect(5, 5, self.width() - 10, self.height() - 10)
+            painter.setBrush(QColor("#bcd5f5"))
+            painter.setPen(QColor("#6da3d9"))
+            for item in self._placements:
+                x, y, width, height = rect_to_pixels(item.rect, self._metrics)
+                painter.drawRect(
+                    int(6 + x * sx), int(6 + y * sy),
+                    max(1, int(width * sx)), max(1, int(height * sy)),
+                )
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QColor("#1769e0"))
+            painter.drawRect(
+                int(6 + self._viewport.x() * sx),
+                int(6 + self._viewport.y() * sy),
+                max(2, int(self._viewport.width() * sx)),
+                max(2, int(self._viewport.height() * sy)),
+            )
+        finally:
+            painter.end()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._metrics is None or event.button() != Qt.LeftButton:
+            return super().mouseReleaseEvent(event)
+        sx, sy = self._scale()
+        target = QRect(
+            max(0, int((event.pos().x() - 6) / sx - self._viewport.width() / 2)),
+            max(0, int((event.pos().y() - 6) / sy - self._viewport.height() / 2)),
+            self._viewport.width(),
+            self._viewport.height(),
+        )
+        self.viewport_requested.emit(target)
+        event.accept()
+
+
+class BoardScrollArea(QScrollArea):
+    """Scroll host that reports viewport geometry to the logical Board."""
+
+    viewport_resized = pyqtSignal(QSize)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewBoardScrollArea")
+        self.setWidgetResizable(False)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.viewport_resized.emit(self.viewport().size())
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        vertical = self.verticalScrollBar()
+        horizontal = self.horizontalScrollBar()
+        if event.key() == Qt.Key_Home:
+            vertical.setValue(vertical.minimum())
+            horizontal.setValue(horizontal.minimum())
+            event.accept()
+            return
+        if event.key() == Qt.Key_End:
+            vertical.setValue(vertical.maximum())
+            horizontal.setValue(horizontal.maximum())
+            event.accept()
+            return
+        if event.key() == Qt.Key_PageDown:
+            vertical.setValue(min(vertical.maximum(), vertical.value() + vertical.pageStep()))
+            event.accept()
+            return
+        if event.key() == Qt.Key_PageUp:
+            vertical.setValue(max(vertical.minimum(), vertical.value() - vertical.pageStep()))
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class BoardOverview(QFrame):
+    """Read-only full-board projection used for P1 global scanning.
+
+    This is intentionally a lightweight QImage composition of existing card
+    previews.  It owns no canvas and emits a slot intent on click; the Page
+    scrolls the real Board back into view afterwards.
+    """
+
+    slot_requested = pyqtSignal(str)
+    ref_requested = pyqtSignal(str, str)
+    close_requested = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewBoardOverview")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self._layout_id = "hero_left_4"
+        self._ratio = 0.67
+        self._models: dict[str, CardViewModel | None] = {}
+        self._free_metrics: GridMetrics | None = None
+        self._free_rects: dict[str, tuple[int, int, int, int]] = {}
+        self._free_refs: dict[str, UltraViewRef] = {}
+        self._image = QImage()
+        self._content = QRect()
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
+        bar = QHBoxLayout()
+        title = QLabel("整板概览", self)
+        title.setObjectName("ultraViewBoardOverviewTitle")
+        bar.addWidget(title)
+        bar.addStretch(1)
+        close = QToolButton(self)
+        close.setObjectName("ultraViewBoardOverviewClose")
+        close.setText("返回阅读")
+        close.clicked.connect(self.close_requested)
+        bar.addWidget(close)
+        root.addLayout(bar)
+        self._preview = QLabel(self)
+        self._preview.setObjectName("ultraViewBoardOverviewImage")
+        self._preview.setAlignment(Qt.AlignCenter)
+        self._preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._preview.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        root.addWidget(self._preview, 1)
+
+    def set_board(self, layout_id: str, ratio: float, models: Mapping[str, CardViewModel | None]) -> None:
+        self._layout_id = layout_id
+        self._ratio = ratio
+        self._models = dict(models)
+        self._free_metrics = None
+        self._free_rects = {}
+        self._free_refs = {}
+        self._compose()
+
+    def set_free_grid(
+        self,
+        placements: Sequence[FreeGridPlacement],
+        models: Mapping[UltraViewRef, CardViewModel],
+    ) -> None:
+        self._free_metrics = grid_metrics(BASE_BOARD_SIZE, placements)
+        self._free_rects = {
+            f"grid:{item.ref.section}:{item.ref.view_id}": rect_to_pixels(
+                item.rect, self._free_metrics
+            )
+            for item in placements
+        }
+        self._free_refs = {
+            f"grid:{item.ref.section}:{item.ref.view_id}": item.ref
+            for item in placements
+        }
+        self._models = {
+            f"grid:{item.ref.section}:{item.ref.view_id}": models[item.ref]
+            for item in placements
+            if item.ref in models
+        }
+        self._compose()
+
+    def slot_id_at(self, pos: QPoint) -> str | None:
+        if self._image.isNull() or self._preview.pixmap() is None:
+            return None
+        pixmap = self._preview.pixmap()
+        draw_w, draw_h = pixmap.width(), pixmap.height()
+        origin_x = self._preview.x() + (self._preview.width() - draw_w) // 2
+        origin_y = self._preview.y() + (self._preview.height() - draw_h) // 2
+        if not QRect(origin_x, origin_y, draw_w, draw_h).contains(pos):
+            return None
+        scale_x = self._image.width() / float(max(1, draw_w))
+        scale_y = self._image.height() / float(max(1, draw_h))
+        px = int((pos.x() - origin_x) * scale_x)
+        py = int((pos.y() - origin_y) * scale_y)
+        for slot_id, rect in self._slot_rects().items():
+            if QRect(*rect).contains(px, py):
+                return slot_id
+        return None
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            slot_id = self.slot_id_at(event.pos())
+            if slot_id is not None:
+                if slot_id.startswith("grid:"):
+                    ref = self._free_refs.get(slot_id)
+                    if ref is not None:
+                        self.ref_requested.emit(ref.section, ref.view_id)
+                else:
+                    self.slot_requested.emit(slot_id)
+                event.accept()
+                return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter):
+            self.close_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._fit_image()
+
+    def _slot_rects(self) -> dict[str, tuple[int, int, int, int]]:
+        if self._free_metrics is not None:
+            return dict(self._free_rects)
+        return slot_rects(self._layout_id, content_rect(BASE_BOARD_SIZE), self._ratio)
+
+    def _compose(self) -> None:
+        if self._free_metrics is not None:
+            image_size = (self._free_metrics.board_width, self._free_metrics.board_height)
+        else:
+            image_size = BASE_BOARD_SIZE
+        image = QImage(*image_size, QImage.Format_ARGB32)
+        image.fill(QColor("#f5f7fb"))
+        painter = QPainter(image)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            for slot_id, (x, y, width, height) in self._slot_rects().items():
+                model = self._models.get(slot_id)
+                painter.setPen(QColor("#d7dee8"))
+                painter.setBrush(QColor("#ffffff"))
+                painter.drawRoundedRect(x, y, width, height, 5, 5)
+                if model is None:
+                    painter.setPen(QColor("#64748b"))
+                    painter.drawText(QRect(x, y, width, height), Qt.AlignCenter, "空槽")
+                    continue
+                header_h = CARD_HEADER_HEIGHT if model.show_title else 0
+                footer_h = CARD_FOOTER_HEIGHT if model.show_source else 0
+                painter.setPen(QColor("#1b2430"))
+                if header_h:
+                    painter.drawText(QRect(x + 8, y, width - 16, header_h), Qt.AlignVCenter | Qt.AlignLeft, model.title or model.view_id)
+                raw = model.image if isinstance(model.image, QImage) else None
+                image_rect = QRect(x + 4, y + header_h, max(0, width - 8), max(0, height - header_h - footer_h))
+                if raw is not None and not raw.isNull():
+                    painter.drawImage(image_rect, raw)
+                else:
+                    painter.setPen(QColor("#64748b"))
+                    painter.drawText(image_rect, Qt.AlignCenter, STATUS_LABELS_ZH.get(model.status, "尚无可用结果"))
+                if footer_h:
+                    painter.fillRect(x + 1, y + height - footer_h, width - 2, footer_h, QColor("#eef2f7"))
+                    painter.setPen(QColor("#5b6775"))
+                    painter.drawText(QRect(x + 8, y + height - footer_h, width - 16, footer_h), Qt.AlignVCenter | Qt.AlignLeft, model.source_summary)
+        finally:
+            painter.end()
+        self._image = image
+        self._fit_image()
+
+    def _fit_image(self) -> None:
+        if self._image.isNull():
+            self._preview.setPixmap(QPixmap())
+            return
+        size = self._preview.size()
+        if size.width() < 2 or size.height() < 2:
+            return
+        self._preview.setPixmap(QPixmap.fromImage(self._image).scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
 
 class TrayItem(QFrame):

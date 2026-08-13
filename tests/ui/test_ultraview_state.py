@@ -84,6 +84,137 @@ def test_default_board_identity():
     assert other.board_id != board.board_id
 
 
+def test_workspace_board_lifecycle_keeps_board_identity_and_membership_isolated():
+    workspace = uvs.default_workspace()
+    first = uvs.active_board(workspace)
+    ref = _ref("fft", "first")
+    uvs.add_ref(first, ref)
+
+    second = uvs.create_board(workspace, name="频谱对比")
+    assert [board.name for board in workspace.boards] == ["全局对比", "频谱对比"]
+    assert uvs.active_board(workspace) is second
+    assert ref not in uvs.membership_set(second)
+
+    clone = uvs.duplicate_board(workspace, first.board_id)
+    assert clone is not None
+    assert clone.board_id not in {first.board_id, second.board_id}
+    assert ref in uvs.membership_set(clone)
+    assert uvs.active_board(workspace) is clone
+
+    assert uvs.rename_board(workspace, clone.board_id, "副本") == []
+    assert clone.name == "副本"
+    assert uvs.reorder_board(workspace, clone.board_id, 0) == []
+    assert workspace.boards[0] is clone
+    assert uvs.delete_board(workspace, clone.board_id) == []
+    assert clone not in workspace.boards
+    assert uvs.delete_board(workspace, first.board_id) == []
+    assert uvs.delete_board(workspace, second.board_id) == ["last_board_retained"]
+
+
+def test_workspace_migrates_schema_one_and_preserves_future_until_mutation():
+    legacy = {
+        "schema": 1,
+        "board": {
+            "board_id": "legacy-board",
+            "name": "旧总览",
+            "layout_id": "split_horizontal",
+            "primary_ratio": 0.67,
+            "placements": [{"slot_id": "left", "section": "time", "view_id": "old"}],
+            "unplaced": [],
+        },
+    }
+    migrated, warnings = uvs.normalize_workspace_payload(legacy)
+    assert warnings == []
+    assert uvs.active_board(migrated).board_id == "legacy-board"
+    payload = uvs.workspace_to_payload(migrated)
+    assert payload["schema"] == uvs.ULTRAVIEW_SCHEMA
+    assert payload["workspace"]["boards"][0]["placements"][0]["view_id"] == "old"
+
+    future = {"schema": 99, "workspace": {"boards": [{"unknown": "keep"}]}, "future": True}
+    opaque, warnings = uvs.normalize_workspace_payload(future)
+    assert warnings == ["future_ultraview_schema: 99"]
+    assert uvs.workspace_to_payload(opaque) == future
+    uvs.create_board(opaque)
+    assert uvs.workspace_to_payload(opaque)["schema"] == uvs.ULTRAVIEW_SCHEMA
+
+
+def test_free_grid_legalizes_collisions_and_template_conversion_keeps_tray():
+    board = _filled("hero_left_4")
+    tray_ref = _ref("order", "tray")
+    uvs.add_ref(board, tray_ref)
+    original = set(uvs.all_refs(board))
+
+    assert uvs.template_to_free_grid(board) == []
+    assert board.layout_mode == uvs.LAYOUT_MODE_FREE_GRID
+    assert tray_ref in board.unplaced
+    first, second = [item.ref for item in board.free_grid[:2]]
+    first_rect = board.free_grid[0].rect
+    second_before = board.free_grid[1].rect
+    assert uvs.set_free_grid_rect(board, second, first_rect) == ["grid_collision"]
+    assert board.free_grid[1].rect == second_before
+
+    assert uvs.free_grid_to_template(board, "split_horizontal") == []
+    assert board.layout_mode == uvs.LAYOUT_MODE_TEMPLATE
+    assert set(uvs.all_refs(board)) == original
+    assert tray_ref in board.unplaced
+
+
+def test_template_to_free_grid_uses_stable_non_overlapping_conversion_maps():
+    for layout_id in uvs.LAYOUT_SLOTS:
+        board = _filled(layout_id)
+        uvs.template_to_free_grid(board)
+        assert len(board.free_grid) == min(len(uvs.LAYOUT_SLOTS[layout_id]), uvs.MAX_PLACED_CARDS)
+        for index, item in enumerate(board.free_grid):
+            assert item.ref.view_id == f"v{index}"
+            for other in board.free_grid[index + 1:]:
+                assert not uvs._grid_overlaps(item.rect, other.rect)
+
+
+def test_free_grid_preset_and_organize_keep_geometry_legal():
+    board = uvs.default_board()
+    uvs.template_to_free_grid(board)
+    first = _ref("time", "one")
+    second = _ref("fft", "two")
+    uvs.add_ref(board, first)
+    uvs.add_ref(board, second)
+    assert uvs.set_free_grid_rect(board, first, uvs.GridRect(0, 8, 4, 3)) == []
+    assert uvs.set_free_grid_rect(board, second, uvs.GridRect(6, 12, 4, 3)) == []
+    assert uvs.apply_free_grid_preset(board, first, "wide") == []
+    assert uvs.free_grid_placement_for(board, first).rect == uvs.GridRect(0, 8, 6, 3)
+    assert uvs.organize_free_grid(board) == []
+    assert uvs.free_grid_placement_for(board, first).rect.row == 0
+    assert uvs.free_grid_placement_for(board, second).rect.row == 3
+
+
+def test_free_grid_payload_moves_duplicate_and_collision_to_tray_with_warning():
+    payload = {
+        "schema": 3,
+        "board": {
+            "board_id": "grid-board",
+            "name": "自由网格",
+            "layout_mode": "free_grid",
+            "free_grid": {
+                "columns": 12,
+                "placements": [
+                    {"section": "time", "view_id": "a", "column": 0, "row": 0, "column_span": 4, "row_span": 3},
+                    {"section": "fft", "view_id": "b", "column": 1, "row": 1, "column_span": 4, "row_span": 3},
+                    {"section": "frf", "view_id": "c", "column": 8, "row": 0, "column_span": 4, "row_span": 3},
+                ],
+            },
+            "unplaced": [{"section": "frf", "view_id": "c"}],
+        },
+    }
+    board, warnings = uvs.normalize_board_payload(payload)
+    assert board.layout_mode == uvs.LAYOUT_MODE_FREE_GRID
+    assert [item.ref.view_id for item in board.free_grid] == ["a", "c"]
+    assert [ref.view_id for ref in board.unplaced] == ["b"]
+    assert "grid_to_tray: fft/b" in warnings
+    assert "duplicate_ref: frf/c" in warnings
+    restored, roundtrip_warnings = uvs.normalize_board_payload(uvs.board_to_payload(board))
+    assert roundtrip_warnings == []
+    assert uvs.all_refs(restored) == uvs.all_refs(board)
+
+
 @pytest.mark.parametrize(
     "start, target, placed, overflow",
     [

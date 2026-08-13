@@ -615,6 +615,13 @@ _HINTS = (
         priority=90,
     ),
     Hint(
+        id="ultraview.free_grid",
+        text="自由网格可拖动布局；按住 Option + 方向键微调",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=88,
+    ),
+    Hint(
         id="ultraview.card_menu",
         text="卡片右键打开原 View",
         surface="context",

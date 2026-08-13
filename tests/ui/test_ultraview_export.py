@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QApplication
 from mf4_analyzer.ui.chart_stack.ultraview.compositor import (
     ComposeError,
     compose_board,
+    free_grid_output_size,
     image_sha256,
     output_size,
     save_composed_png,
@@ -23,6 +24,9 @@ from mf4_analyzer.ui.ultraview_state import (
     add_ref,
     default_board,
     make_ref,
+    set_free_grid_rect,
+    template_to_free_grid,
+    GridRect,
 )
 from tests.ui.ultraview_fakes import ComputeProbe
 from tests.ui.test_ultraview_preview_store import _image, _meta
@@ -116,6 +120,19 @@ def test_missing_placeholder_and_stale_keep_old_image(qapp):
     assert 0 < magenta <= 16 * 16
 
 
+def test_free_grid_export_uses_full_logical_board_not_current_viewport(qapp):
+    board = default_board()
+    add_ref(board, make_ref("time", "top"))
+    add_ref(board, make_ref("fft", "bottom"))
+    template_to_free_grid(board)
+    bottom = make_ref("fft", "bottom")
+    assert set_free_grid_rect(board, bottom, GridRect(6, 16, 6, 4)) == []
+    image = compose_board(board, {}, {}, scale=1)
+    assert (image.width(), image.height()) == free_grid_output_size(board, 1)
+    assert image.height() > 900
+    assert (compose_board(board, {}, {}, scale=2).width(), compose_board(board, {}, {}, scale=2).height()) == free_grid_output_size(board, 2)
+
+
 def test_save_png_atomic_replace_and_failure_leaves_no_empty_file(qapp, tmp_path, monkeypatch):
     board = default_board()
     image = compose_board(board, {}, {}, scale=1)
@@ -148,6 +165,8 @@ def test_page_signals_have_one_receiver_until_shutdown(qapp, qtbot):
     assert uv._on_copy_card in slots
     assert uv.choose_and_export_png in slots
     assert uv._on_board_name in slots
+    assert uv._on_free_grid_geometry in slots
+    assert uv._on_free_grid_undo in slots
     compose_calls = {"n": 0}
     orig = uv._compose_board
 
@@ -220,3 +239,22 @@ def test_library_status_query_does_not_touch_lru(qapp, qtbot):
     uv.refresh_page()
     assert uv.store.get(time_ref).last_access > time_access
     assert uv.store.get(fft_ref).last_access == fft_access
+
+
+def test_free_grid_undo_redo_is_per_board_and_reset_drops_history(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    add_ref(uv.board, ref)
+    uv._on_free_grid_toggled(True)
+    before = uv.board.free_grid[0].rect
+    uv._on_free_grid_geometry(ref.section, ref.view_id, 0, 6, 4, 3, "test")
+    assert uv.board.free_grid[0].rect.row == 6
+    uv._on_free_grid_undo()
+    assert uv.board.free_grid[0].rect == before
+    uv._on_free_grid_redo()
+    assert uv.board.free_grid[0].rect.row == 6
+    board_id = uv.board.board_id
+    uv.reset_project_state()
+    assert board_id not in uv._grid_histories

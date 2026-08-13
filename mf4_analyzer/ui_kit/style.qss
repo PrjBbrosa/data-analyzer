@@ -3958,10 +3958,16 @@ QWidget#ultraViewPage {
 QWidget#ultraViewLibrary,
 QWidget#ultraViewBoardColumn,
 QWidget#ultraViewBoardGrid,
+QWidget#ultraViewFreeGrid,
 QFrame#ultraViewUnplacedTray,
 QFrame#ultraViewBoardToolbar,
 QFrame#ultraViewCompareRail {
     background-color: #ffffff;
+}
+QFrame#ultraViewFreeGridMinimap {
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 235);
 }
 QWidget#ultraViewLibrary {
     border-right: 1px solid #d6e0eb;
@@ -4179,4 +4185,3 @@ QPushButton#ultraViewOpenSourceButton {
     font-weight: 700;
     padding: 4px 10px;
 }
-

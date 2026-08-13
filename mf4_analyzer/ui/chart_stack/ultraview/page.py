@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
     QMenu,
     QShortcut,
+    QStackedWidget,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -31,7 +32,9 @@ from mf4_analyzer.ui.ultraview_state import (
     default_board,
     derive_preview_status,
     first_empty_slot,
+    free_grid_placement_for,
     layout_slots,
+    LAYOUT_MODE_FREE_GRID,
     membership_set,
     parse_ref_payload,
     placement_for,
@@ -40,7 +43,12 @@ from mf4_analyzer.ui.ultraview_state import (
 
 from .widgets import (
     LIBRARY_DEFAULT_WIDTH,
+    BoardOverview,
+    BoardScrollArea,
+    BoardSwitcher,
     BoardGrid,
+    FreeGridBoard,
+    FreeGridMinimap,
     BoardToolbar,
     CardViewModel,
     CompareRail,
@@ -62,6 +70,7 @@ class UltraViewPage(QWidget):
     replace_slot_requested = pyqtSignal(str, str, str)
     swap_slots_requested = pyqtSignal(str, str)
     place_from_unplaced_requested = pyqtSignal(str, str, str)
+    place_free_grid_from_unplaced_requested = pyqtSignal(str, str)
     move_to_unplaced_requested = pyqtSignal(str, str)
     remove_ref_requested = pyqtSignal(str, str)
     open_source_requested = pyqtSignal(str, str)
@@ -82,6 +91,18 @@ class UltraViewPage(QWidget):
     selection_changed = pyqtSignal(str, str)
     board_name_changed = pyqtSignal(str)
     feedback_requested = pyqtSignal(str)
+    create_board_requested = pyqtSignal()
+    duplicate_board_requested = pyqtSignal(str)
+    rename_board_requested = pyqtSignal(str, str)
+    delete_board_requested = pyqtSignal(str)
+    reorder_board_requested = pyqtSignal(str, int)
+    select_board_requested = pyqtSignal(str)
+    free_grid_toggled = pyqtSignal(bool)
+    free_grid_geometry_requested = pyqtSignal(str, str, int, int, int, int, str)
+    free_grid_preset_requested = pyqtSignal(str, str, str)
+    organize_free_grid_requested = pyqtSignal()
+    free_grid_undo_requested = pyqtSignal()
+    free_grid_redo_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -89,6 +110,7 @@ class UltraViewPage(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFocusPolicy(Qt.StrongFocus)
         self._board = default_board()
+        self._workspace: Any | None = None
         self._previews: dict[UltraViewRef, Any] = {}
         self._statuses: dict[UltraViewRef, str] = {}
         self._ref_exists: dict[UltraViewRef, bool] = {}
@@ -114,13 +136,26 @@ class UltraViewPage(QWidget):
         column = QVBoxLayout(self._board_column)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
+        self._switcher = BoardSwitcher(self._board_column)
         self._toolbar = BoardToolbar(self._board_column)
         self._rail = CompareRail(self._board_column)
         self._grid = BoardGrid(self._board_column)
+        self._free_grid = FreeGridBoard(self._board_column)
+        self._board_stack = QStackedWidget(self._board_column)
+        self._board_stack.setObjectName("ultraViewBoardCanvasStack")
+        self._board_stack.addWidget(self._grid)
+        self._board_stack.addWidget(self._free_grid)
+        self._board_scroll = BoardScrollArea(self._board_column)
+        self._board_scroll.setWidget(self._board_stack)
         self._tray = UnplacedTray(self._board_column)
+        self._overview = BoardOverview(self._board_column)
+        self._overview.hide()
+        self._minimap = FreeGridMinimap(self._board_scroll.viewport())
+        self._minimap.hide()
+        column.addWidget(self._switcher, 0)
         column.addWidget(self._toolbar, 0)
         column.addWidget(self._rail, 0)
-        column.addWidget(self._grid, 1)
+        column.addWidget(self._board_scroll, 1)
         column.addWidget(self._tray, 0)
         self._splitter.addWidget(self._library)
         self._splitter.addWidget(self._board_column)
@@ -149,9 +184,28 @@ class UltraViewPage(QWidget):
         self._toolbar.show_titles_toggled.connect(self.show_titles_toggled)
         self._toolbar.show_sources_toggled.connect(self.show_sources_toggled)
         self._toolbar.presentation_toggled.connect(self._on_presentation_button)
+        self._toolbar.overview_requested.connect(self.show_overview)
         self._toolbar.board_name_changed.connect(self.board_name_changed)
+        self._toolbar.free_grid_toggled.connect(self.free_grid_toggled)
+        self._toolbar.organize_free_grid_requested.connect(self.organize_free_grid_requested)
 
         self._rail.compare_filter_changed.connect(self._on_compare_filter)
+
+        self._switcher.create_requested.connect(self.create_board_requested)
+        self._switcher.duplicate_requested.connect(self.duplicate_board_requested)
+        self._switcher.rename_requested.connect(self.rename_board_requested)
+        self._switcher.delete_requested.connect(self.delete_board_requested)
+        self._switcher.reorder_requested.connect(self.reorder_board_requested)
+        self._switcher.board_selected.connect(self._on_board_selected)
+        self._board_scroll.viewport_resized.connect(self._grid.set_viewport_size)
+        self._board_scroll.viewport_resized.connect(self._free_grid.set_viewport_size)
+        self._board_scroll.viewport_resized.connect(self._refresh_minimap)
+        self._board_scroll.horizontalScrollBar().valueChanged.connect(self._refresh_minimap)
+        self._board_scroll.verticalScrollBar().valueChanged.connect(self._refresh_minimap)
+        self._overview.slot_requested.connect(self._on_overview_slot)
+        self._overview.ref_requested.connect(self._on_overview_ref)
+        self._overview.close_requested.connect(self.hide_overview)
+        self._minimap.viewport_requested.connect(self._on_minimap_viewport)
 
         self._grid.add_clicked.connect(self._on_empty_slot)
         self._grid.ref_dropped.connect(self._on_ref_dropped)
@@ -165,6 +219,20 @@ class UltraViewPage(QWidget):
         self._grid.drag_started.connect(self._on_drag_started)
         self._grid.drag_finished.connect(self._on_drag_finished)
 
+        self._free_grid.ref_dropped.connect(self._on_free_grid_ref_dropped)
+        self._free_grid.geometry_requested.connect(self.free_grid_geometry_requested)
+        self._free_grid.preset_requested.connect(self.free_grid_preset_requested)
+        self._free_grid.open_source_requested.connect(self.open_source_requested)
+        self._free_grid.focus_requested.connect(self._on_focus)
+        self._free_grid.rebind_arm_requested.connect(self._on_rebind_arm)
+        self._free_grid.move_to_unplaced_requested.connect(self.move_to_unplaced_requested)
+        self._free_grid.remove_ref_requested.connect(self.remove_ref_requested)
+        self._free_grid.copy_card_image_requested.connect(self.copy_card_image_requested)
+        self._free_grid.selected.connect(self._on_card_selected)
+        self._free_grid.drag_started.connect(self._on_drag_started)
+        self._free_grid.drag_finished.connect(self._on_drag_finished)
+        self._free_grid.feedback_requested.connect(self._emit_feedback)
+
         self._tray.place_requested.connect(self._on_tray_place)
         self._tray.remove_requested.connect(self.remove_ref_requested)
         self._tray.locate_requested.connect(self._on_locate)
@@ -177,7 +245,25 @@ class UltraViewPage(QWidget):
         self._esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self._esc.setContext(Qt.WidgetWithChildrenShortcut)
         self._esc.activated.connect(self._on_escape_shortcut)
+        self._grid_undo = QShortcut(QKeySequence.Undo, self)
+        self._grid_undo.setContext(Qt.WidgetWithChildrenShortcut)
+        self._grid_undo.activated.connect(self._on_grid_undo_shortcut)
+        self._grid_redo = QShortcut(QKeySequence.Redo, self)
+        self._grid_redo.setContext(Qt.WidgetWithChildrenShortcut)
+        self._grid_redo.activated.connect(self._on_grid_redo_shortcut)
         self.set_board(self._board)
+
+    def board_switcher(self) -> BoardSwitcher:
+        return self._switcher
+
+    def board_scroll_area(self) -> BoardScrollArea:
+        return self._board_scroll
+
+    def board_overview(self) -> BoardOverview:
+        return self._overview
+
+    def free_grid_minimap(self) -> FreeGridMinimap:
+        return self._minimap
 
     def hint_bar(self) -> QWidget:
         return self._hint_bar
@@ -202,6 +288,24 @@ class UltraViewPage(QWidget):
 
     def board(self) -> UltraViewBoardState:
         return self._board
+
+    def set_workspace(self, workspace: Any) -> None:
+        """Project a workspace through the active Board without owning it.
+
+        The state owner is intentionally duck-typed here while P1 state code
+        remains Qt-free.  This avoids a cycle and keeps the old ``set_board``
+        test harness/API valid.
+        """
+        boards = tuple(getattr(workspace, "boards", ()) or ())
+        active_id = str(getattr(workspace, "active_board_id", "") or "")
+        self._workspace = workspace
+        self._switcher.set_boards(boards, active_id)
+        self._switcher.set_create_enabled(len(boards) < 20, "最多创建 20 个 Board" if len(boards) >= 20 else "")
+        active = next((board for board in boards if getattr(board, "board_id", None) == active_id), None)
+        if active is None and boards:
+            active = boards[0]
+        if active is not None:
+            self.set_board(active)
 
     def board_payload(self) -> dict[str, Any]:
         return board_to_payload(self._board)
@@ -243,6 +347,8 @@ class UltraViewPage(QWidget):
         return self._presentation
 
     def card_widget(self, section: str, view_id: str):
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            return self._free_grid.card_for(section, view_id)
         return self._grid.card_for(section, view_id)
 
     def slot_widget(self, slot_id: str):
@@ -261,7 +367,13 @@ class UltraViewPage(QWidget):
         self._tray.title_bar().setVisible(True)
         if self._presentation:
             self._tray.body().setVisible(False)
+            if (
+                self._board.layout_mode == LAYOUT_MODE_FREE_GRID
+                or len(layout_slots(self._board.layout_id)) >= 9
+            ):
+                self.show_overview()
         else:
+            self.hide_overview()
             self._tray.body().setVisible(self._tray.is_expanded())
 
     def set_library_rows(self, rows: Sequence[LibraryRow | Mapping[str, Any]]) -> None:
@@ -339,6 +451,11 @@ class UltraViewPage(QWidget):
         self._refresh_projection()
 
     def set_board(self, board: UltraViewBoardState) -> None:
+        self.hide_overview()
+        if self._workspace is None:
+            self._switcher.set_boards((board,), board.board_id)
+        self._grid.set_viewport_size(self._board_scroll.viewport().size())
+        self._free_grid.set_viewport_size(self._board_scroll.viewport().size())
         prev = self._prev_unplaced_count
         self._board = board
         n_unplaced = len(board.unplaced)
@@ -352,9 +469,40 @@ class UltraViewPage(QWidget):
             self._replacement_slot = None
         self._toolbar.set_board_name(board.name)
         self._toolbar.set_layout_id(board.layout_id)
+        self._toolbar.set_free_grid_enabled(board.layout_mode == LAYOUT_MODE_FREE_GRID)
         self._toolbar.set_show_flags(board.show_titles, board.show_sources)
         self._library.set_on_board(membership_set(board))
         self._refresh_projection()
+
+    def show_overview(self) -> None:
+        """Show a scaled, read-only full Board projection without capture."""
+        self._refresh_projection()
+        self._overview.setGeometry(self._board_scroll.geometry())
+        self._overview.raise_()
+        self._overview.show()
+        self._overview.setFocus(Qt.OtherFocusReason)
+
+    def hide_overview(self) -> None:
+        if self._overview.isVisible():
+            self._overview.hide()
+
+    def _on_overview_slot(self, slot_id: str) -> None:
+        self.hide_overview()
+        widget = self._grid.slot_widget(slot_id)
+        if widget is not None:
+            self._board_scroll.ensureWidgetVisible(widget, 24, 24)
+            widget.setFocus(Qt.OtherFocusReason)
+
+    def _on_overview_ref(self, section: str, view_id: str) -> None:
+        self.hide_overview()
+        widget = self._free_grid.card_for(section, view_id)
+        if widget is not None:
+            self._board_scroll.ensureWidgetVisible(widget, 24, 24)
+            widget.setFocus(Qt.OtherFocusReason)
+
+    def _on_board_selected(self, board_id: str) -> None:
+        self.reset_sheet_session(emit_presentation=False)
+        self.select_board_requested.emit(board_id)
 
     def request_add(self, section: str, view_id: str) -> None:
         self._emit_add(section, view_id)
@@ -379,21 +527,33 @@ class UltraViewPage(QWidget):
         self._replacement_ref = None
         self._refresh_projection()
 
-    def reset_sheet_session(self) -> None:
+    def reset_sheet_session(self, *, emit_presentation: bool = True) -> None:
         """Leave focus / replacement / presentation before the tool window closes."""
         if self._focus.isVisible():
             self._focus.close_layer()
         self.clear_replacement_arm()
         if self._presentation:
             self.set_presentation_active(False)
-            self.presentation_toggled.emit(False)
+            if emit_presentation:
+                self.presentation_toggled.emit(False)
 
     def _on_escape_shortcut(self) -> None:
         self.handle_escape()
 
+    def _on_grid_undo_shortcut(self) -> None:
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID and not self._focus.isVisible():
+            self.free_grid_undo_requested.emit()
+
+    def _on_grid_redo_shortcut(self) -> None:
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID and not self._focus.isVisible():
+            self.free_grid_redo_requested.emit()
+
     def handle_escape(self) -> bool:
         if self._focus.isVisible():
             self._focus.close_layer()
+            return True
+        if self._overview.isVisible():
+            self.hide_overview()
             return True
         if self._replacement_slot is not None or self._replacement_ref is not None:
             self.clear_replacement_arm()
@@ -411,6 +571,9 @@ class UltraViewPage(QWidget):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._focus.setGeometry(self.rect())
+        if self._overview.isVisible():
+            self._overview.setGeometry(self._board_scroll.geometry())
+        self._position_minimap()
 
     def _on_drag_started(self, kind: str) -> None:
         self._drag_kind = kind
@@ -474,6 +637,9 @@ class UltraViewPage(QWidget):
         self._refresh_projection()
 
     def _on_tray_place(self, section: str, view_id: str) -> None:
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            self.place_free_grid_from_unplaced_requested.emit(section, view_id)
+            return
         slot = first_empty_slot(self._board)
         if slot is None:
             self._emit_feedback(_FEEDBACK_BOARD_FULL)
@@ -484,8 +650,19 @@ class UltraViewPage(QWidget):
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        if placement_for(self._board, ref) is not None:
+        if placement_for(self._board, ref) is not None or free_grid_placement_for(self._board, ref) is not None:
             self.move_to_unplaced_requested.emit(section, view_id)
+
+    def _on_free_grid_ref_dropped(self, section: str, view_id: str) -> None:
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is None:
+            return
+        if ref in self._board.unplaced:
+            self.place_free_grid_from_unplaced_requested.emit(section, view_id)
+        elif ref not in membership_set(self._board):
+            self.add_ref_requested.emit(section, view_id)
+        else:
+            self._on_locate(section, view_id)
 
     def _on_ref_dropped(self, slot_id: str, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
@@ -626,6 +803,11 @@ class UltraViewPage(QWidget):
         return str(kind) if kind else None
 
     def _refresh_projection(self) -> None:
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            self._refresh_free_grid_projection()
+            return
+        self._minimap.hide()
+        self._board_stack.setCurrentWidget(self._grid)
         models: dict[str, CardViewModel | None] = {}
         axis_records = []
         for slot_id in layout_slots(self._board.layout_id):
@@ -670,6 +852,8 @@ class UltraViewPage(QWidget):
                 show_source=bool(self._board.show_sources),
             )
         self._grid.set_grid(self._board.layout_id, self._board.primary_ratio, models)
+        self._sync_board_stack_geometry(self._grid)
+        self._overview.set_board(self._board.layout_id, self._board.primary_ratio, models)
         titles = {}
         colors = {}
         statuses = {}
@@ -693,3 +877,117 @@ class UltraViewPage(QWidget):
             warnings.append("X 范围不一致")
         self._rail.set_axis_warning(" · ".join(warnings))
         self._focus.setGeometry(self.rect())
+
+    def _card_model(self, ref: UltraViewRef, *, slot_id: str) -> CardViewModel:
+        record = self._previews.get(ref)
+        status = self._status_for(ref)
+        axis_kind = self._axis_for(ref)
+        x_unit = str(getattr(record, "x_unit", "") or "") if record is not None else ""
+        raw_range = getattr(record, "x_range", None) if record is not None else None
+        x_range = None
+        if isinstance(raw_range, (list, tuple)) and len(raw_range) == 2:
+            try:
+                x_range = (float(raw_range[0]), float(raw_range[1]))
+            except (TypeError, ValueError):
+                x_range = None
+        return CardViewModel(
+            slot_id=slot_id,
+            section=ref.section,
+            view_id=ref.view_id,
+            title=self._title_for(ref),
+            tab_color=self._color_for(ref),
+            status=status,
+            source_summary=self._source_for(ref),
+            axis_kind=axis_kind,
+            x_unit=x_unit,
+            x_range=x_range,
+            image=preview_image(record),
+            selected=self._selected == ref,
+            dimmed=not card_matches_compare_filter(axis_kind, self._compare_filter),
+            replacement_armed=self._replacement_ref == ref,
+            show_title=bool(self._board.show_titles),
+            show_source=bool(self._board.show_sources),
+        )
+
+    def _refresh_free_grid_projection(self) -> None:
+        models = {
+            item.ref: self._card_model(item.ref, slot_id=f"grid:{item.ref.section}:{item.ref.view_id}")
+            for item in self._board.free_grid
+        }
+        self._board_stack.setCurrentWidget(self._free_grid)
+        self._free_grid.set_free_grid(self._board.free_grid, models)
+        self._sync_board_stack_geometry(self._free_grid)
+        titles = {}
+        colors = {}
+        statuses = {}
+        axis_records = []
+        for item in self._board.free_grid:
+            ref = item.ref
+            model = models[ref]
+            if model.axis_kind:
+                axis_records.append({"axis_kind": model.axis_kind, "x_unit": model.x_unit, "x_range": model.x_range})
+        for ref in self._board.unplaced:
+            key = (ref.section, ref.view_id)
+            titles[key] = self._title_for(ref)
+            colors[key] = self._color_for(ref)
+            statuses[key] = self._status_for(ref)
+        self._tray.set_refs(self._board.unplaced, titles=titles, colors=colors, statuses=statuses, armed=self._replacement_ref)
+        facts = axis_consistency_facts(axis_records)
+        warnings = []
+        if facts.unit_inconsistent_kinds:
+            warnings.append("量纲不一致")
+        if facts.range_inconsistent_kinds:
+            warnings.append("X 范围不一致")
+        self._rail.set_axis_warning(" · ".join(warnings))
+        self._overview.hide()
+        self._overview.set_free_grid(self._board.free_grid, models)
+        self._minimap.show()
+        self._refresh_minimap()
+        self._focus.setGeometry(self.rect())
+
+    def _sync_board_stack_geometry(self, canvas: QWidget) -> None:
+        """Keep the scroll host sized to the current logical canvas.
+
+        QStackedWidget's size hint is the maximum of both canvas modes.  The
+        Board scroll contract instead needs the active canvas's exact logical
+        size, or a 12-card template stops producing scroll bars after a mode
+        switch.
+        """
+        target = canvas.size()
+        if target.width() <= 0 or target.height() <= 0:
+            target = canvas.minimumSize()
+        self._board_stack.setMinimumSize(target)
+        self._board_stack.resize(target)
+
+    def _position_minimap(self) -> None:
+        if not self._minimap.isVisible():
+            return
+        viewport = self._board_scroll.viewport()
+        self._minimap.move(
+            max(6, viewport.width() - self._minimap.width() - 12),
+            max(6, viewport.height() - self._minimap.height() - 12),
+        )
+        self._minimap.raise_()
+
+    def _refresh_minimap(self, *_args) -> None:
+        if self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            self._minimap.hide()
+            return
+        viewport = self._board_scroll.viewport()
+        self._minimap.set_projection(
+            self._free_grid.metrics(),
+            self._board.free_grid,
+            QRect(
+                self._board_scroll.horizontalScrollBar().value(),
+                self._board_scroll.verticalScrollBar().value(),
+                viewport.width(),
+                viewport.height(),
+            ),
+        )
+        self._position_minimap()
+
+    def _on_minimap_viewport(self, rect: QRect) -> None:
+        horizontal = self._board_scroll.horizontalScrollBar()
+        vertical = self._board_scroll.verticalScrollBar()
+        horizontal.setValue(min(horizontal.maximum(), max(horizontal.minimum(), rect.x())))
+        vertical.setValue(min(vertical.maximum(), max(vertical.minimum(), rect.y())))

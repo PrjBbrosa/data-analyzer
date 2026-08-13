@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import json
+from PyQt5.QtGui import QColor, QImage
 
 from PyQt5.QtCore import QCoreApplication
 from PyQt5.QtWidgets import QMessageBox
@@ -22,6 +23,12 @@ def _write_csv(path, n=40):
         writer.writerow(["time", "rpm"])
         for i in range(n):
             writer.writerow([i / 100.0, float(i)])
+
+
+def _preview_image():
+    image = QImage(32, 24, QImage.Format_ARGB32)
+    image.fill(QColor("#336699"))
+    return image
 
 
 def test_save_from_ultraview_writes_last_source_mode_and_board(qapp, qtbot, tmp_path):
@@ -60,7 +67,7 @@ def test_save_from_ultraview_writes_last_source_mode_and_board(qapp, qtbot, tmp_
     raw = json.loads(proj.read_text(encoding="utf-8"))
     assert raw["current_mode"] == "fft"
     assert raw["schema_version"] == 2
-    board = raw["ultraview"]["board"]
+    board = raw["ultraview"]["workspace"]["boards"][0]
     assert board["name"] == "整车问题总览"
     assert board["layout_id"] == "grid_2x2"
     assert board["show_titles"] is False
@@ -70,6 +77,7 @@ def test_save_from_ultraview_writes_last_source_mode_and_board(qapp, qtbot, tmp_
     assert time_id in view_ids
     assert fft_id in view_ids
     assert "ghost-view" in view_ids
+    assert raw["ultraview"]["schema"] == 3
     text = json.dumps(raw["ultraview"])
     for needle in ("digest", "selected", "presentation", "QImage", "captured_digest"):
         assert needle not in text
@@ -111,12 +119,68 @@ def test_reopen_restores_board_without_entering_ultraview(qapp, qtbot, tmp_path)
     ghost = UltraViewRef("order", "ghost-view")
     assert live_time in membership_set(board)
     assert ghost in membership_set(board)
-    assert restored._ultraview.store.get(live_time) is None
-    assert page._status_for(live_time) == "missing"
+    # P1 restores the optional sidecar if a preview was available; without a
+    # capture this remains the P0-safe missing state.
+    assert page._status_for(live_time) in {"fresh", "stale", "missing"}
     assert page._status_for(ghost) == "orphaned"
     assert restored._analysis_restore_pending == set() or all(
         section != "ultraview" for section, _view_id in restored._analysis_restore_pending
     )
+
+
+def test_project_sidecar_restores_shared_preview_without_compute(qapp, qtbot, tmp_path):
+    csv_a = tmp_path / "sidecar.csv"
+    proj = tmp_path / "sidecar.tlproj"
+    _write_csv(csv_a)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    uv = win._ultraview
+    ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    add_ref(uv.board, ref)
+    from mf4_analyzer.ui.ultraview_state import PreviewMeta
+    assert uv.store.publish(
+        ref, _preview_image(), digest="snapshot", meta=PreviewMeta(ref=ref, title="Sidecar")
+    )
+    assert win.save_project(proj)
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    assert raw["ultraview"]["preview_sidecar"]["path"].endswith(".uvpz")
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    probe = ComputeProbe().install(restored)
+    try:
+        restored.open_project(proj)
+        QCoreApplication.processEvents()
+        new_ref = UltraViewRef("time", str(restored.view_manager.get(0).view_id))
+        assert restored._ultraview.store.get(new_ref) is not None
+        assert probe.compute_total == probe.job_total == probe.store_new_key_writes == 0
+    finally:
+        probe.restore()
+
+
+def test_failed_sidecar_save_as_drops_old_project_relative_descriptor(qapp, qtbot, tmp_path, monkeypatch):
+    csv_a = tmp_path / "sidecar-save-as.csv"
+    source_project = tmp_path / "source.tlproj"
+    target_project = tmp_path / "target.tlproj"
+    _write_csv(csv_a)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    uv = win._ultraview
+    ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    add_ref(uv.board, ref)
+    from mf4_analyzer.ui.ultraview_state import PreviewMeta
+    assert uv.store.publish(ref, _preview_image(), digest="snapshot", meta=PreviewMeta(ref=ref))
+    assert win.save_project(source_project)
+    assert uv.workspace.preview_sidecar is not None
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.main_window.ultraview_coordinator.save_preview_sidecar",
+        lambda *_args, **_kwargs: type("Result", (), {"ok": False, "warnings": ()})(),
+    )
+    assert win.save_project(target_project)
+    raw = json.loads(target_project.read_text(encoding="utf-8"))
+    assert "preview_sidecar" not in raw["ultraview"]
 
 
 def test_open_project_parse_failure_keeps_board(qapp, qtbot, tmp_path):

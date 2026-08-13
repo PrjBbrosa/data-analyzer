@@ -17,12 +17,61 @@ BASE_BOARD_SIZE = (1600, 900)
 BOARD_PADDING = 16
 SLOT_GUTTER = 12  # UltraView-owned; do not reuse analysis split 4*scale / 8px.
 
+# P1 reading-mode floor for the large equal-grid templates.  These are logical
+# pixels, deliberately independent of the export compositor's output scale.
+# A 9/12-card Board becomes scrollable instead of squeezing card chrome below
+# this usable plot area.
+MIN_CARD_CONTENT_SIZE = (300, 180)
+
 # Fixed chrome. Never derived from board width/height or a zoom factor.
 CARD_HEADER_HEIGHT = 34
 CARD_FOOTER_HEIGHT = 24
 MIN_CARD_CHROME_HEIGHT = CARD_HEADER_HEIGHT + CARD_FOOTER_HEIGHT
 
 Rect = tuple[int, int, int, int]
+
+
+def template_grid_shape(layout_id: str) -> tuple[int, int] | None:
+    """Return ``(rows, columns)`` for an equal-grid template.
+
+    Hero and split templates are intentionally absent: their existing
+    fill-the-viewport geometry remains the reading contract for P1.
+    """
+    return {
+        "grid_2x2": (2, 2),
+        "grid_3x2": (2, 3),
+        "grid_3x3": (3, 3),
+        "grid_4x3": (3, 4),
+    }.get(layout_id)
+
+
+def logical_board_size(
+    layout_id: str,
+    viewport_size: tuple[int, int],
+    *,
+    min_card_content_size: tuple[int, int] = MIN_CARD_CONTENT_SIZE,
+) -> tuple[int, int]:
+    """Return the P1 reading canvas size for ``layout_id``.
+
+    Only the new 9/12-card templates claim a minimum logical canvas.  Older
+    templates continue to fill the available viewport, preserving their P0
+    presentation.  The returned dimensions include Board padding and gutters,
+    so callers can use them as a widget minimum size without a second layout
+    calculation.
+    """
+    if layout_id not in LAYOUT_SLOTS:
+        raise ValueError(f"unknown layout_id: {layout_id!r}")
+    viewport_w = max(1, int(viewport_size[0]))
+    viewport_h = max(1, int(viewport_size[1]))
+    shape = template_grid_shape(layout_id)
+    if shape is None or layout_id not in {"grid_3x3", "grid_4x3"}:
+        return viewport_w, viewport_h
+    rows, columns = shape
+    card_w = max(1, int(min_card_content_size[0]))
+    card_h = max(1, int(min_card_content_size[1]))
+    floor_w = 2 * BOARD_PADDING + columns * card_w + (columns - 1) * SLOT_GUTTER
+    floor_h = 2 * BOARD_PADDING + rows * card_h + (rows - 1) * SLOT_GUTTER
+    return max(viewport_w, floor_w), max(viewport_h, floor_h)
 
 
 def content_rect(
@@ -62,6 +111,22 @@ def slot_rects(
             rows=2,
             cols=3,
             names=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1", "r1c2"),
+            gutter=gutter,
+        )
+    elif layout_id == "grid_3x3":
+        rects = _grid(
+            (x, y, width, height),
+            rows=3,
+            cols=3,
+            names=LAYOUT_SLOTS[layout_id],
+            gutter=gutter,
+        )
+    elif layout_id == "grid_4x3":
+        rects = _grid(
+            (x, y, width, height),
+            rows=3,
+            cols=4,
+            names=LAYOUT_SLOTS[layout_id],
             gutter=gutter,
         )
     elif layout_id == "hero_left_4":

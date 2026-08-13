@@ -19,6 +19,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
 )
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
+    BoardSwitcher,
     MISSING_CARD_COPY,
     LibraryRow,
     UltraViewCard,
@@ -48,6 +49,7 @@ from mf4_analyzer.ui.ultraview_state import (
     set_layout,
     slot_occupant,
     swap_slots,
+    template_to_free_grid,
 )
 from mf4_analyzer.ui_kit import load_stylesheet
 
@@ -833,12 +835,16 @@ def test_object_names_are_stable(qtbot):
     assert page.objectName() == "ultraViewPage"
     assert page.library_panel().objectName() == "ultraViewLibrary"
     assert page.board_grid().objectName() == "ultraViewBoardGrid"
+    assert page.board_scroll_area().objectName() == "ultraViewBoardScrollArea"
+    assert page.board_switcher().objectName() == "ultraViewBoardSwitcher"
+    assert page.board_overview().objectName() == "ultraViewBoardOverview"
     assert page.unplaced_tray().objectName() == "ultraViewUnplacedTray"
     assert page.compare_rail().objectName() == "ultraViewCompareRail"
     assert page.board_toolbar().objectName() == "ultraViewBoardToolbar"
     toolbar = page.board_toolbar()
     assert toolbar.findChild(QToolButton, "ultraViewDisplayButton") is not None
     assert toolbar.findChild(QPushButton, "ultraViewCopyBoardButton") is not None
+    assert toolbar.findChild(QPushButton, "ultraViewBoardOverviewButton") is not None
     assert toolbar.findChild(QPushButton, "ultraViewAddButton") is None
     assert toolbar.findChild(QToolButton, "ultraViewRatioDown") is None
     assert toolbar.findChild(QToolButton, "ultraViewRatioUp") is None
@@ -1211,3 +1217,102 @@ def test_add_without_library_selection_emits_feedback(qtbot):
     assert harness.added == []
     assert harness.replaced == []
     assert messages == ["先在左侧 View 库选择一个 View"] * 2
+
+
+def test_large_grid_uses_logical_canvas_and_scrolls_without_misplacing_cards(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_4x3")
+    for index in range(12):
+        add_ref(harness.board, make_ref("time", f"large-{index}"))
+    harness.page.set_board(harness.board)
+    harness.page.resize(1000, 720)
+    qtbot.wait(10)
+    scroll = harness.page.board_scroll_area()
+    grid = harness.page.board_grid()
+    assert grid.width() > scroll.viewport().width()
+    assert scroll.horizontalScrollBar().maximum() > 0
+    card = harness.page.card_widget("time", "large-11")
+    assert card is not None
+    scroll.ensureWidgetVisible(card)
+    assert scroll.horizontalScrollBar().value() > 0
+    point = card.geometry().center()
+    assert grid.slot_id_at(point) == "r2c3"
+
+
+def test_free_grid_projects_cards_preserves_scroll_and_emits_keyboard_geometry(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_3x2")
+    for index in range(6):
+        add_ref(harness.board, make_ref("time", f"free-{index}"))
+    template_to_free_grid(harness.board)
+    harness.page.set_board(harness.board)
+    harness.page.resize(1000, 720)
+    qtbot.wait(10)
+    free = harness.page._free_grid
+    scroll = harness.page.board_scroll_area()
+    assert free.width() > scroll.viewport().width()
+    assert scroll.horizontalScrollBar().maximum() > 0
+    assert harness.page.free_grid_minimap().isVisible()
+    assert not harness.page.free_grid_minimap()._placements[0].ref.view_id == ""
+    card = harness.page.card_widget("time", "free-0")
+    assert card is not None
+    requested = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    card.layout_key_requested.emit("time", "free-0", 0, 6, False)
+    assert requested == [("time", "free-0", 0, 6, 4, 3, "keyboard-move")]
+    harness.page.show_overview()
+    overview = harness.page.board_overview()
+    assert overview.isVisible()
+    assert overview._free_metrics is not None
+    harness.page._on_overview_ref("time", "free-5")
+    assert not overview.isVisible()
+
+
+def test_board_overview_click_returns_to_reading_slot(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_3x3")
+    for index in range(9):
+        add_ref(harness.board, make_ref("time", f"overview-{index}"))
+    harness.page.set_board(harness.board)
+    harness.page.resize(1000, 720)
+    harness.page.show_overview()
+    qtbot.wait(10)
+    overview = harness.page.board_overview()
+    assert overview.isVisible()
+    slot = harness.page.slot_widget("r2c2")
+    assert slot is not None
+    harness.page._on_overview_slot("r2c2")
+    assert not overview.isVisible()
+    assert harness.page.board_scroll_area().horizontalScrollBar().value() > 0
+    scroll = harness.page.board_scroll_area()
+    assert scroll.viewport().rect().contains(
+        slot.mapTo(scroll.viewport(), slot.rect().center())
+    )
+
+
+def test_board_switcher_projects_ids_and_emits_typed_intents(qtbot):
+    one = default_board()
+    one.board_id = "one"
+    one.name = "第一条问题线"
+    two = default_board()
+    two.board_id = "two"
+    two.name = "第二条问题线"
+    switcher = BoardSwitcher()
+    qtbot.addWidget(switcher)
+    switcher.resize(320, 40)
+    switcher.show()
+    selected = []
+    reordered = []
+    created = []
+    switcher.board_selected.connect(selected.append)
+    switcher.reorder_requested.connect(lambda board_id, index: reordered.append((board_id, index)))
+    switcher.create_requested.connect(lambda: created.append(True))
+    switcher.set_boards([one, two], "one")
+    assert switcher.board_ids() == ("one", "two")
+    assert switcher.current_board_id() == "one"
+    switcher.tab_bar().setCurrentIndex(1)
+    assert selected == ["two"]
+    switcher.tab_bar().moveTab(1, 0)
+    assert reordered == [("two", 0)]
+    qtbot.mouseClick(switcher.add_button(), Qt.LeftButton)
+    assert created == [True]

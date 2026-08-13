@@ -1,7 +1,7 @@
 # UltraView P1 可扩展多 Board 工作区规格
 
 - 日期：2026-08-13
-- 状态：`DRAFT FOR CLAUDE REVIEW`
+- 状态：`P1 Core IMPLEMENTED 2026-08-14；当前 sidecar 为安全同步恢复，lazy load 与前景/Cocoa/全量平台验收另行记录`
 - 分析起始快照：`main@9c91debf`；成稿时并行实现已推进到 `main@5e36b27a`，且 worktree
   仍有 P0/UI 改动，实施和 Claude 评审必须以届时 HEAD 重新定位符号
 - 配套计划：

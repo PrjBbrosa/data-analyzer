@@ -12,7 +12,9 @@ import re
 import weakref
 from contextlib import contextmanager
 from functools import partial
+from pathlib import Path
 from time import monotonic
+from dataclasses import dataclass
 from typing import Any
 
 from PyQt5 import sip
@@ -28,30 +30,59 @@ from ..ultraview_state import (
     SOURCE_SECTIONS,
     PreviewMeta,
     UltraViewBoardState,
+    UltraViewWorkspaceState,
     UltraViewRef,
+    active_board,
     add_ref,
+    apply_free_grid_preset,
     all_refs,
+    create_board,
+    delete_board,
     default_board,
+    default_workspace,
+    duplicate_board,
     derive_preview_status,
     layout_slots,
+    LAYOUT_MODE_FREE_GRID,
+    mark_workspace_mutated,
     membership_set,
     move_to_unplaced,
     nudge_ratio,
+    normalize_workspace_payload,
     parse_ref_payload,
     place_from_unplaced,
+    place_free_grid_from_unplaced,
     placed_ref_set,
     placement_for,
     presentation_digest,
     rebind_ref,
+    rename_board,
+    reorder_board,
     remove_ref,
     replace_slot,
     set_layout,
+    set_active_board,
+    set_free_grid_rect,
     swap_slots,
-    board_to_payload,
-    normalize_board_payload,
+    template_to_free_grid,
+    free_grid_to_template,
+    organize_free_grid,
+    GridRect,
+    workspace_to_payload,
     DEFAULT_BOARD_NAME,
 )
-from ..chart_stack.ultraview.preview_store import PreviewStore
+from ..chart_stack.ultraview.preview_store import (
+    PreviewStore,
+    ResidencyRequest,
+    RESIDENCY_TIER_ACTIVE_VISIBLE,
+    RESIDENCY_TIER_ACTIVE_PLACED,
+    RESIDENCY_TIER_INACTIVE_PLACED,
+    RESIDENCY_TIER_TRAY,
+)
+from ..chart_stack.ultraview.preview_sidecar import (
+    restore_preview_sidecar,
+    save_preview_sidecar,
+)
 from ..chart_stack.ultraview.widgets import LibraryRow
 from ..chart_stack.ultraview.compositor import (
     ComposeError,
@@ -76,6 +107,18 @@ _SECTION_X_UNIT = {
     "frf": "Hz",
     "order": "s",
 }
+
+
+@dataclass(frozen=True)
+class _GridHistoryEntry:
+    before: tuple[tuple[UltraViewRef, GridRect], ...]
+    after: tuple[tuple[UltraViewRef, GridRect], ...]
+
+
+@dataclass
+class _GridHistory:
+    undo: list[_GridHistoryEntry]
+    redo: list[_GridHistoryEntry]
 
 
 def notify_ultraview_plot(window, section: str, reason: str = "plot") -> None:
@@ -360,7 +403,8 @@ class UltraViewCoordinator(QObject):
         self._result_generation: dict[tuple, int] = {}
         self._runtime = PresentationRuntimeLedger()
         self.last_source_mode = "time"
-        self._board = default_board()
+        self._workspace = default_workspace()
+        self._grid_histories: dict[str, _GridHistory] = {}
         self._page_hooks: list[tuple[Any, Any, Any]] = []
         self._stack_hooks: list[tuple[Any, Any, Any]] = []
         self._manager_hooks: list[tuple[Any, Any, Any]] = []
@@ -523,10 +567,48 @@ class UltraViewCoordinator(QObject):
             return None
 
     def set_pinned_from_board(self, board) -> None:
-        if board is None:
-            self._store.set_pinned_refs(())
-            return
-        self._store.set_pinned_refs(placed_ref_set(board))
+        """Compatibility name for P0 callers; residency is Workspace-wide."""
+        active = active_board(self._workspace)
+        requests = []
+        for candidate in self._workspace.boards:
+            if candidate.board_id == active.board_id:
+                placed = placed_ref_set(candidate)
+                for ref in placed:
+                    tier = (
+                        RESIDENCY_TIER_ACTIVE_VISIBLE
+                        if self._active_card_visible(ref)
+                        else RESIDENCY_TIER_ACTIVE_PLACED
+                    )
+                    requests.append(ResidencyRequest(ref, tier=tier))
+                requests.extend(
+                    ResidencyRequest(ref, tier=RESIDENCY_TIER_TRAY)
+                    for ref in candidate.unplaced
+                )
+            else:
+                requests.extend(
+                    ResidencyRequest(ref, tier=RESIDENCY_TIER_INACTIVE_PLACED)
+                    for ref in placed_ref_set(candidate)
+                )
+                requests.extend(
+                    ResidencyRequest(ref, tier=RESIDENCY_TIER_TRAY)
+                    for ref in candidate.unplaced
+                )
+        self._store.set_residency_requests(requests)
+
+    def _active_card_visible(self, ref: UltraViewRef) -> bool:
+        page = self.page()
+        if page is None:
+            return False
+        card = page.card_widget(ref.section, ref.view_id)
+        scroll = getattr(page, "board_scroll_area", lambda: None)()
+        if card is None or scroll is None:
+            return False
+        try:
+            rect = card.rect()
+            center = card.mapTo(scroll.viewport(), rect.center())
+            return scroll.viewport().rect().contains(center)
+        except RuntimeError:
+            return False
 
     def project_source_mode(self) -> str:
         if self.last_source_mode in SOURCE_SECTIONS:
@@ -534,9 +616,9 @@ class UltraViewCoordinator(QObject):
         return "time"
 
     def to_project_payload(self) -> dict:
-        return board_to_payload(self._board)
+        return workspace_to_payload(self._workspace)
 
-    def restore_project_state(self, payload) -> list[str]:
+    def restore_project_state(self, payload, *, project_path=None) -> list[str]:
         """Replace Board from a persisted payload. Store stays empty."""
         if self._shutdown:
             return []
@@ -552,8 +634,20 @@ class UltraViewCoordinator(QObject):
         self._result_generation.clear()
         self._digest_retries.clear()
         self._runtime.clear()
-        board, warnings = normalize_board_payload(payload)
-        self._board = board
+        workspace, warnings = normalize_workspace_payload(payload)
+        self._workspace = workspace
+        self._grid_histories.clear()
+        if project_path is not None and workspace.preview_sidecar is not None:
+            loaded = restore_preview_sidecar(
+                project_path,
+                workspace_to_payload(workspace),
+                self._store,
+                workspace.preview_sidecar,
+            )
+            warnings.extend(
+                f"{item.code}: {item.detail}" if item.detail else item.code
+                for item in loaded.warnings
+            )
         self.refresh_page()
         for item in warnings:
             logger.warning("UltraView project restore: %s", item)
@@ -561,7 +655,35 @@ class UltraViewCoordinator(QObject):
 
     @property
     def board(self) -> UltraViewBoardState:
-        return self._board
+        return active_board(self._workspace)
+
+    @property
+    def workspace(self) -> UltraViewWorkspaceState:
+        return self._workspace
+
+    def save_preview_sidecar(self, project_path) -> list[str]:
+        """Publish optional shared preview pixels before the project JSON commit."""
+        if self._inactive():
+            return []
+        saved = save_preview_sidecar(
+            project_path, workspace_to_payload(self._workspace), self._store
+        )
+        if saved.ok:
+            self._workspace.preview_sidecar = saved.descriptor
+            return []
+        # A new Save As must never retain a relative descriptor that points to
+        # the original project's sibling sidecar directory.  Same-path saves
+        # can keep their last known-good descriptor when the optional refresh
+        # fails, preserving an already valid acceleration layer.
+        existing = self._workspace.preview_sidecar
+        descriptor_path = existing.get("path") if isinstance(existing, dict) else None
+        expected_prefix = f"{Path(project_path).name}.ultraview/"
+        if not isinstance(descriptor_path, str) or not descriptor_path.startswith(expected_prefix):
+            self._workspace.preview_sidecar = None
+        return [
+            f"{item.code}: {item.detail}" if item.detail else item.code
+            for item in saved.warnings
+        ]
 
     def page(self):
         window = self._window
@@ -581,7 +703,7 @@ class UltraViewCoordinator(QObject):
         if not self._page_hooks:
             page = self.page()
             if page is not None:
-                page.set_board(self._board)
+                page.set_workspace(self._workspace)
                 self._connect_page(page)
         if not self._stack_hooks:
             stack = getattr(window, "chart_stack", None)
@@ -603,6 +725,7 @@ class UltraViewCoordinator(QObject):
             (page.rebind_ref_requested, self._on_rebind_ref),
             (page.swap_slots_requested, self._on_swap_slots),
             (page.place_from_unplaced_requested, self._on_place_from_unplaced),
+            (page.place_free_grid_from_unplaced_requested, self._on_place_free_grid_from_unplaced),
             (page.move_to_unplaced_requested, self._on_move_to_unplaced),
             (page.remove_ref_requested, self._on_remove_ref),
             (page.open_source_requested, self.open_source),
@@ -615,6 +738,18 @@ class UltraViewCoordinator(QObject):
             (page.copy_card_image_requested, self._on_copy_card),
             (page.export_png_requested, self.choose_and_export_png),
             (page.board_name_changed, self._on_board_name),
+            (page.create_board_requested, self._on_create_board),
+            (page.duplicate_board_requested, self._on_duplicate_board),
+            (page.rename_board_requested, self._on_rename_board),
+            (page.delete_board_requested, self._on_delete_board),
+            (page.reorder_board_requested, self._on_reorder_board),
+            (page.select_board_requested, self._on_select_board),
+            (page.free_grid_toggled, self._on_free_grid_toggled),
+            (page.free_grid_geometry_requested, self._on_free_grid_geometry),
+            (page.free_grid_preset_requested, self._on_free_grid_preset),
+            (page.organize_free_grid_requested, self._on_organize_free_grid),
+            (page.free_grid_undo_requested, self._on_free_grid_undo),
+            (page.free_grid_redo_requested, self._on_free_grid_redo),
             (page.show_titles_toggled, self._on_show_titles),
             (page.show_sources_toggled, self._on_show_sources),
             (page.feedback_requested, self._on_page_feedback),
@@ -747,9 +882,10 @@ class UltraViewCoordinator(QObject):
         # Library chrome (name/color) must be current before set_board
         # projects cards. Preview-record no-op must not freeze tab color.
         self._refresh_library(page)
-        page.set_board(self._board)
-        self.set_pinned_from_board(self._board)
-        for ref in all_refs(self._board):
+        board = active_board(self._workspace)
+        page.set_workspace(self._workspace)
+        self.set_pinned_from_board(board)
+        for ref in {ref for candidate in self._workspace.boards for ref in all_refs(candidate)}:
             self._push_preview(ref)
 
     def _refresh_library(self, page) -> None:
@@ -770,7 +906,7 @@ class UltraViewCoordinator(QObject):
                     name=str(getattr(state, "name", "") or ""),
                     tab_color=str(getattr(state, "tab_color", "") or ""),
                     source_summary=self._checked_summary(state),
-                    on_board=ref in membership_set(self._board),
+                    on_board=any(ref in membership_set(board) for board in self._workspace.boards),
                     status=derive_preview_status(
                         exists, image_valid, captured, digest
                     ),
@@ -833,23 +969,25 @@ class UltraViewCoordinator(QObject):
             if record is not None:
                 page.set_preview(ref, record)
             page.set_ref_status(ref, status, exists)
-        if image_valid and ref in placed_ref_set(self._board):
+        if image_valid and any(ref in placed_ref_set(board) for board in self._workspace.boards):
             self._store.touch(ref)
 
     def _after_board_mutation(self) -> None:
         if self._inactive():
             return
+        mark_workspace_mutated(self._workspace)
         self.refresh_page()
 
     def _apply_add_ref(self, ref: UltraViewRef) -> None:
         if self._inactive():
             return
         page = self.page()
-        if ref in membership_set(self._board):
+        board = active_board(self._workspace)
+        if ref in membership_set(board):
             if page is not None:
                 page._select_ref(ref)
             return
-        add_ref(self._board, ref)
+        add_ref(board, ref)
         self._after_board_mutation()
 
     def _on_add_ref(self, section: str, view_id: str) -> None:
@@ -863,7 +1001,7 @@ class UltraViewCoordinator(QObject):
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        replace_slot(self._board, slot_id, ref)
+        replace_slot(active_board(self._workspace), slot_id, ref)
         self._after_board_mutation()
 
     def _on_rebind_ref(
@@ -877,40 +1015,154 @@ class UltraViewCoordinator(QObject):
         new_ref = parse_ref_payload({"section": new_section, "view_id": new_view_id})
         if old_ref is None or new_ref is None:
             return
-        rebind_ref(self._board, old_ref, new_ref)
+        rebind_ref(active_board(self._workspace), old_ref, new_ref)
         self._after_board_mutation()
 
     def _on_swap_slots(self, slot_a: str, slot_b: str) -> None:
-        swap_slots(self._board, slot_a, slot_b)
+        swap_slots(active_board(self._workspace), slot_a, slot_b)
         self._after_board_mutation()
 
     def _on_place_from_unplaced(self, slot_id: str, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        place_from_unplaced(self._board, slot_id, ref)
+        place_from_unplaced(active_board(self._workspace), slot_id, ref)
         self._after_board_mutation()
+
+    def _on_place_free_grid_from_unplaced(self, section: str, view_id: str) -> None:
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is None:
+            return
+        if not place_free_grid_from_unplaced(active_board(self._workspace), ref):
+            self._after_board_mutation()
 
     def _on_move_to_unplaced(self, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        move_to_unplaced(self._board, ref)
+        move_to_unplaced(active_board(self._workspace), ref)
         self._after_board_mutation()
 
     def _on_remove_ref(self, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        remove_ref(self._board, ref)
+        remove_ref(active_board(self._workspace), ref)
         self._after_board_mutation()
 
     def _on_layout(self, layout_id: str) -> None:
-        set_layout(self._board, str(layout_id))
+        set_layout(active_board(self._workspace), str(layout_id))
         self._after_board_mutation()
 
     def _on_ratio_nudge(self, steps: int) -> None:
-        nudge_ratio(self._board, int(steps))
+        nudge_ratio(active_board(self._workspace), int(steps))
+        self._after_board_mutation()
+
+    def _on_free_grid_toggled(self, enabled: bool) -> None:
+        board = active_board(self._workspace)
+        if enabled and board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            template_to_free_grid(board)
+            self._after_board_mutation()
+        elif not enabled and board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            free_grid_to_template(board, board.layout_id)
+            self._after_board_mutation()
+
+    def _on_free_grid_geometry(
+        self,
+        section: str,
+        view_id: str,
+        column: int,
+        row: int,
+        column_span: int,
+        row_span: int,
+        _reason: str,
+    ) -> None:
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is None:
+            return
+        board = active_board(self._workspace)
+        before = self._grid_snapshot(board)
+        if not any(item_ref == ref for item_ref, _rect in before):
+            return
+        warnings = set_free_grid_rect(
+            board,
+            ref,
+            GridRect(int(column), int(row), int(column_span), int(row_span)),
+        )
+        if not warnings:
+            self._record_grid_transition(board, before)
+
+    def _on_free_grid_preset(self, section: str, view_id: str, preset: str) -> None:
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is None:
+            return
+        board = active_board(self._workspace)
+        before = self._grid_snapshot(board)
+        if not any(item_ref == ref for item_ref, _rect in before):
+            return
+        if not apply_free_grid_preset(board, ref, preset):
+            self._record_grid_transition(board, before)
+
+    def _on_organize_free_grid(self) -> None:
+        board = active_board(self._workspace)
+        before = self._grid_snapshot(board)
+        if not organize_free_grid(board):
+            self._record_grid_transition(board, before)
+
+    def _grid_history(self, board: UltraViewBoardState) -> _GridHistory:
+        return self._grid_histories.setdefault(board.board_id, _GridHistory([], []))
+
+    @staticmethod
+    def _grid_snapshot(board: UltraViewBoardState) -> tuple[tuple[UltraViewRef, GridRect], ...]:
+        return tuple((item.ref, item.rect) for item in board.free_grid)
+
+    def _record_grid_transition(
+        self,
+        board: UltraViewBoardState,
+        before: tuple[tuple[UltraViewRef, GridRect], ...],
+    ) -> None:
+        after = self._grid_snapshot(board)
+        if after == before:
+            return
+        history = self._grid_history(board)
+        history.undo.append(_GridHistoryEntry(before, after))
+        history.redo.clear()
+        self._after_board_mutation()
+
+    @staticmethod
+    def _apply_grid_snapshot(
+        board: UltraViewBoardState,
+        snapshot: tuple[tuple[UltraViewRef, GridRect], ...],
+    ) -> bool:
+        wanted = dict(snapshot)
+        if len(wanted) != len(snapshot) or set(wanted) != {item.ref for item in board.free_grid}:
+            return False
+        for item in board.free_grid:
+            item.rect = wanted[item.ref]
+        return True
+
+    def _on_free_grid_undo(self) -> None:
+        board = active_board(self._workspace)
+        history = self._grid_histories.get(board.board_id)
+        if history is None or not history.undo:
+            return
+        entry = history.undo.pop()
+        if not self._apply_grid_snapshot(board, entry.before):
+            history.undo.append(entry)
+            return
+        history.redo.append(entry)
+        self._after_board_mutation()
+
+    def _on_free_grid_redo(self) -> None:
+        board = active_board(self._workspace)
+        history = self._grid_histories.get(board.board_id)
+        if history is None or not history.redo:
+            return
+        entry = history.redo.pop()
+        if not self._apply_grid_snapshot(board, entry.after):
+            history.redo.append(entry)
+            return
+        history.undo.append(entry)
         self._after_board_mutation()
 
     def _on_focus(self, section: str, view_id: str) -> None:
@@ -936,10 +1188,39 @@ class UltraViewCoordinator(QObject):
         if self._inactive():
             return
         cleaned = str(name or "").strip() or DEFAULT_BOARD_NAME
-        if self._board.name == cleaned:
+        board = active_board(self._workspace)
+        if board.name == cleaned:
             return
-        self._board.name = cleaned
+        board.name = cleaned
         self._after_board_mutation()
+
+    def _on_create_board(self) -> None:
+        create_board(self._workspace)
+        self._after_board_mutation()
+
+    def _on_duplicate_board(self, board_id: str) -> None:
+        if duplicate_board(self._workspace, board_id) is not None:
+            self._after_board_mutation()
+
+    def _on_rename_board(self, board_id: str, name: str) -> None:
+        if not rename_board(self._workspace, board_id, name):
+            self._after_board_mutation()
+
+    def _on_delete_board(self, board_id: str) -> None:
+        warnings = delete_board(self._workspace, board_id)
+        if warnings and warnings[0] == "last_board_retained":
+            self._toast("至少保留一个 Board", "info")
+            return
+        self._grid_histories.pop(str(board_id), None)
+        self._after_board_mutation()
+
+    def _on_reorder_board(self, board_id: str, index: int) -> None:
+        if not reorder_board(self._workspace, board_id, index):
+            self._after_board_mutation()
+
+    def _on_select_board(self, board_id: str) -> None:
+        if not set_active_board(self._workspace, board_id):
+            self._after_board_mutation()
 
     def copy_board_to_clipboard(self) -> bool:
         image = self._compose_or_toast(scale=1, action="复制整板图")
@@ -1004,11 +1285,12 @@ class UltraViewCoordinator(QObject):
     def _compose_board(self, scale: int) -> QImage:
         records = {}
         statuses = {}
-        for ref in all_refs(self._board):
+        board = active_board(self._workspace)
+        for ref in all_refs(board):
             record = self._store.get(ref)
             records[ref] = record
             if record is not None and PreviewStore.image_valid(getattr(record, "image", None)):
-                if ref in placed_ref_set(self._board):
+                if ref in placed_ref_set(board):
                     self._store.touch(ref)
             exists = self._ref_exists(ref)
             digest = self.current_digest_for(ref) if exists else None
@@ -1017,7 +1299,7 @@ class UltraViewCoordinator(QObject):
             )
             captured = getattr(record, "captured_digest", None) if record else None
             statuses[ref] = derive_preview_status(exists, image_valid, captured, digest)
-        return compose_board(self._board, records, statuses, scale=scale)
+        return compose_board(board, records, statuses, scale=scale)
 
     def _compose_or_toast(self, *, scale: int, action: str) -> QImage | None:
         if self._inactive():
@@ -1075,41 +1357,43 @@ class UltraViewCoordinator(QObject):
             page.set_compare_filter(wanted)
 
     def _on_show_titles(self, checked: bool) -> None:
-        self._board.show_titles = bool(checked)
+        active_board(self._workspace).show_titles = bool(checked)
         self._after_board_mutation()
 
     def _on_show_sources(self, checked: bool) -> None:
-        self._board.show_sources = bool(checked)
+        active_board(self._workspace).show_sources = bool(checked)
         self._after_board_mutation()
 
     def _on_shift_slot(self, section: str, view_id: str, delta: int) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        placement = placement_for(self._board, ref)
+        board = active_board(self._workspace)
+        placement = placement_for(board, ref)
         if placement is None:
             return
-        slots = layout_slots(self._board.layout_id)
+        slots = layout_slots(board.layout_id)
         try:
             index = slots.index(placement.slot_id)
         except ValueError:
             return
         target = slots[(index + int(delta)) % len(slots)]
-        swap_slots(self._board, placement.slot_id, target)
+        swap_slots(board, placement.slot_id, target)
         self._after_board_mutation()
 
     def _on_set_primary(self, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        placement = placement_for(self._board, ref)
+        board = active_board(self._workspace)
+        placement = placement_for(board, ref)
         if placement is None:
             return
-        slots = layout_slots(self._board.layout_id)
+        slots = layout_slots(board.layout_id)
         primary = "primary" if "primary" in slots else slots[0]
         if placement.slot_id == primary:
             return
-        swap_slots(self._board, placement.slot_id, primary)
+        swap_slots(board, placement.slot_id, primary)
         self._after_board_mutation()
 
     def _on_presentation(self, active: bool) -> None:
@@ -1161,7 +1445,8 @@ class UltraViewCoordinator(QObject):
         self._result_generation.clear()
         self._digest_retries.clear()
         self._runtime.clear()
-        self._board = default_board()
+        self._workspace = default_workspace()
+        self._grid_histories.clear()
 
     def reset_project_state(self) -> None:
         """Clear Board/Store/runtime for a new or replaced project.
@@ -1183,7 +1468,8 @@ class UltraViewCoordinator(QObject):
         self._result_generation.clear()
         self._digest_retries.clear()
         self._runtime.clear()
-        self._board = default_board()
+        self._workspace = default_workspace()
+        self._grid_histories.clear()
         self.refresh_page()
 
     def clear(self) -> None:

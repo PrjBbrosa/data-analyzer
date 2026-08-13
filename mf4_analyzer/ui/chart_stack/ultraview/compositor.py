@@ -15,6 +15,7 @@ from PyQt5.QtCore import QRect, Qt
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen
 
 from mf4_analyzer.ui.ultraview_state import (
+    LAYOUT_MODE_FREE_GRID,
     SECTION_LABELS_ZH,
     STATUS_MISSING,
     STATUS_ORPHANED,
@@ -33,6 +34,7 @@ from .layouts import (
     content_rect,
     slot_rects,
 )
+from .free_grid import grid_metrics, rect_to_pixels
 from .preview_store import PreviewStore
 
 TITLE_BAND = 36
@@ -66,6 +68,13 @@ def output_size(scale: int) -> tuple[int, int]:
     return BASE_BOARD_SIZE[0] * factor, BASE_BOARD_SIZE[1] * factor
 
 
+def free_grid_output_size(board: UltraViewBoardState, scale: int) -> tuple[int, int]:
+    """Return a bounded full logical free-grid export canvas (not viewport)."""
+    metrics = grid_metrics(BASE_BOARD_SIZE, board.free_grid)
+    factor = 1 if int(scale) <= 1 else 2
+    return metrics.board_width * factor, (metrics.board_height + TITLE_BAND) * factor
+
+
 def image_sha256(image: QImage) -> str:
     if image is None or image.isNull():
         raise ComposeError("empty_image", "image is null")
@@ -92,7 +101,11 @@ def compose_board(
     scale: int = 1,
 ) -> QImage:
     factor = 1 if int(scale) <= 1 else 2
-    width, height = output_size(factor)
+    width, height = (
+        free_grid_output_size(board, factor)
+        if board.layout_mode == LAYOUT_MODE_FREE_GRID
+        else output_size(factor)
+    )
     image = QImage(width, height, QImage.Format_ARGB32)
     if image.isNull():
         raise ComposeError("allocation_failed", f"无法分配 {width}×{height} 合成图")
@@ -142,6 +155,9 @@ def _draw_board(painter, board, records, statuses, factor: int) -> None:
         Qt.AlignVCenter | Qt.AlignLeft,
         str(board.name or ""),
     )
+    if board.layout_mode == LAYOUT_MODE_FREE_GRID:
+        _draw_free_grid(painter, board, records, statuses, factor)
+        return
     inner_w, inner_h = BASE_BOARD_SIZE[0], BASE_BOARD_SIZE[1] - TITLE_BAND
     content = content_rect((inner_w, inner_h), padding=BOARD_PADDING)
     cx, cy, cw, ch = content
@@ -156,6 +172,19 @@ def _draw_board(painter, board, records, statuses, factor: int) -> None:
         )
         ref = slot_occupant(board, slot_id)
         _draw_slot(painter, board, slot, ref, records, statuses, factor)
+
+
+def _draw_free_grid(painter, board, records, statuses, factor: int) -> None:
+    metrics = grid_metrics(BASE_BOARD_SIZE, board.free_grid)
+    for placement in board.free_grid:
+        x, y, width, height = rect_to_pixels(placement.rect, metrics)
+        slot = (
+            x * factor,
+            (y + TITLE_BAND) * factor,
+            width * factor,
+            height * factor,
+        )
+        _draw_slot(painter, board, slot, placement.ref, records, statuses, factor)
 
 
 def _draw_slot(painter, board, slot, ref, records, statuses, factor: int) -> None:

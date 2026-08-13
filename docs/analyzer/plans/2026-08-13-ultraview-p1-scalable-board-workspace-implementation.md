@@ -1,7 +1,7 @@
 # UltraView P1 可扩展多 Board 工作区实施计划
 
 - 日期：2026-08-13
-- 状态：`REVIEWED BY CLAUDE 2026-08-13（修订已并入正文） / NOT AUTHORIZED FOR EXECUTION`
+- 状态：`P1 Core IMPLEMENTED 2026-08-14；当前 sidecar 为安全同步恢复，lazy load 与前景/Cocoa/全量平台验收另行记录`
 - 对应规格：
   `docs/analyzer/specs/2026-08-13-ultraview-p1-scalable-board-workspace-spec.md`
 - 建议分支：`feat/ultraview-p1-scalable-workspace`

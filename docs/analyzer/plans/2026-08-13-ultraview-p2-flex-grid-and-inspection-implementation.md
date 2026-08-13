@@ -1,7 +1,7 @@
 # UltraView P2 受控自由网格与单卡检查实施计划
 
 - 日期：2026-08-13
-- 状态：`REVIEWED BY CLAUDE 2026-08-13（修订已并入正文） / NOT AUTHORIZED FOR EXECUTION`
+- 状态：`P2-A Core IMPLEMENTED 2026-08-14；P2-B NO-GO（见 capability audit）；前景/Cocoa 与高级手势验收另行记录`
 - 对应规格：
   `docs/analyzer/specs/2026-08-13-ultraview-p2-flex-grid-and-inspection-spec.md`
 - 上游 P1：

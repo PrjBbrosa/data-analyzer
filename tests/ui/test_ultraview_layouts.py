@@ -12,8 +12,10 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     CARD_FOOTER_HEIGHT,
     CARD_HEADER_HEIGHT,
     MIN_CARD_CHROME_HEIGHT,
+    MIN_CARD_CONTENT_SIZE,
     SLOT_GUTTER,
     content_rect,
+    logical_board_size,
     slot_rects,
 )
 from mf4_analyzer.ui.ultraview_state import (
@@ -156,3 +158,32 @@ def test_card_chrome_minimum_is_not_scaled_with_board_size():
     assert CARD_HEADER_HEIGHT + CARD_FOOTER_HEIGHT == MIN_CARD_CHROME_HEIGHT
     assert MIN_CARD_CHROME_HEIGHT >= 48
     assert HERO_LAYOUTS
+
+
+@pytest.mark.parametrize(
+    ("layout_id", "expected"),
+    [
+        ("grid_3x3", (3, 3)),
+        ("grid_4x3", (3, 4)),
+    ],
+)
+def test_p1_large_grid_templates_have_row_major_geometry(layout_id, expected):
+    rows, cols = expected
+    slots = LAYOUT_SLOTS[layout_id]
+    assert len(slots) == rows * cols
+    assert slots[0] == "r0c0"
+    assert slots[-1] == f"r{rows - 1}c{cols - 1}"
+    _assert_pack(layout_id, content_rect(BASE_BOARD_SIZE), 0.67)
+
+
+def test_p1_large_grids_keep_readable_logical_canvas_at_small_viewport():
+    viewport = (800, 560)
+    nine = logical_board_size("grid_3x3", viewport)
+    twelve = logical_board_size("grid_4x3", viewport)
+    card_w, card_h = MIN_CARD_CONTENT_SIZE
+    assert nine[0] == 2 * BOARD_PADDING + 3 * card_w + 2 * SLOT_GUTTER
+    assert twelve[0] == 2 * BOARD_PADDING + 4 * card_w + 3 * SLOT_GUTTER
+    assert nine[1] == twelve[1] == 2 * BOARD_PADDING + 3 * card_h + 2 * SLOT_GUTTER
+    assert nine[0] > viewport[0]
+    assert twelve[0] > viewport[0]
+    assert logical_board_size("grid_3x2", viewport) == viewport

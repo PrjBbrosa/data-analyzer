@@ -1673,12 +1673,21 @@ class ProjectIOMixin:
             filter=self._project_filter_payload(),
             ultraview=None if uv is None else uv.to_project_payload(),
         )
+        # Preview pixels are an optional acceleration layer.  Publish the
+        # complete sidecar before atomically replacing the authoritative JSON;
+        # on failure, keep semantic Board state saveable and surface it.
+        sidecar_warnings = []
+        if uv is not None:
+            sidecar_warnings = uv.save_preview_sidecar(path)
+            doc.ultraview = uv.to_project_payload()
         self._write_project_document(doc, path)
         self._project_path = path
         if health is not None:
             health.clear()
         self.statusBar.showMessage(f"已保存项目: {path.name}")
         self.toast("已保存项目", "success")
+        if sidecar_warnings:
+            self.toast("项目已保存，预览未保存", "warning")
         return True
 
     def _restore_project_file_refs(self, doc, path, pio):
@@ -1808,7 +1817,9 @@ class ProjectIOMixin:
         uv = getattr(self, "_ultraview", None)
         uv_warnings = []
         if uv is not None and not getattr(uv, "is_shutdown", False):
-            uv_warnings = uv.restore_project_state(getattr(doc, "ultraview", None))
+            uv_warnings = uv.restore_project_state(
+                getattr(doc, "ultraview", None), project_path=path
+            )
 
         self._active = fid_map.get(doc.active_file)
         # Route the mode through the toolbar's programmatic setter (not
