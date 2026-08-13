@@ -2803,10 +2803,19 @@ QDialog#ChartOptionsDialog QLabel#chartOptionsSubtitle {
     background-color: transparent;
 }
 
+QDialog#ChartOptionsDialog QTabWidget#chartOptionsTabs {
+    background-color: #f5f7fb;
+}
+
+QDialog#ChartOptionsDialog QTabBar {
+    background-color: #f5f7fb;
+}
+
 QDialog#ChartOptionsDialog QTabWidget::pane {
     border: 1px solid #dfe5ee;
     border-radius: 8px;
     background-color: #ffffff;
+    top: -1px;
 }
 
 QDialog#ChartOptionsDialog QTabBar::tab {
@@ -2825,6 +2834,7 @@ QDialog#ChartOptionsDialog QTabBar::tab {
 QDialog#ChartOptionsDialog QTabBar::tab:selected {
     background-color: #ffffff;
     color: #0f3f8f;
+    border-bottom-color: #ffffff;
 }
 
 QDialog#ChartOptionsDialog QFrame#chartOptionsGroup {

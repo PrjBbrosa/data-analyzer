@@ -94,6 +94,43 @@ def test_chart_options_dialog_fits_available_height_and_keeps_actions_visible(qa
         assert dlg.rect().contains(button.mapTo(dlg, button.rect().bottomRight()))
 
 
+def test_chart_options_tab_bar_does_not_paint_trailing_white_base(qapp):
+    """Unused tab-bar strip must match dialog chrome, not a leftover white slab.
+
+    Global ``QWidget { background:#ffffff }`` otherwise fills the QTabBar
+    behind 图形/图例 and past the last tab. Fusion + production QSS, then
+    sample a pixel to the right of 「图例」.
+    """
+    from PyQt5.QtGui import QColor
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
+    dlg.show()
+    qapp.processEvents()
+
+    bar = dlg.tabs.tabBar()
+    assert not bar.drawBase()
+    assert not bar.expanding()
+    assert bar.count() == 3
+    assert dlg.tabs.tabText(2) == "图例"
+
+    last = bar.tabRect(2)
+    sample = bar.mapTo(dlg, last.topRight())
+    x = min(dlg.width() - 12, sample.x() + 18)
+    y = sample.y() + max(2, last.height() // 2)
+    assert x > sample.x() + 4
+
+    color = QColor(dlg.grab().toImage().pixel(x, y))
+    # Dialog chrome is #f5f7fb; a leftover QTabBar base is #ffffff.
+    assert abs(color.red() - 245) <= 8, color.name()
+    assert abs(color.green() - 247) <= 8, color.name()
+    assert abs(color.blue() - 251) <= 8, color.name()
+
+
 def test_chart_options_dialog_applies_axis_values_and_legend(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
