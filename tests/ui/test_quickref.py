@@ -7,7 +7,7 @@ the panel renders. These tests guard:
 * every keyboard chip resolves through ``hints.shortcut_tooltip`` (the single
   source of truth for shortcut strings) — a missing key must surface, never
   silently blank;
-* the 五个分析模式 group has exactly 5 rows, each carrying a one-line ``sub``;
+* the 五个分析工作区 + 总览 group has 6 rows, each carrying a one-line ``sub``;
 * the 共轴 row shipped 2026-06-27 — it carries no ``soon`` badge and no catalog
   row stays ``soon`` (matching ``coaxis.* ship="now"``);
 * the 阶次 mode purpose names EPS 电机转速 (this user analyzes EPS — order base
@@ -19,7 +19,7 @@ from mf4_analyzer.ui import hints
 
 EXPECTED_TITLES = [
     "开始 · 文件",
-    "五个分析模式",
+    "五个分析工作区 + 总览",
     "图表手势",
     "快捷键",
     "通道树（左侧）",
@@ -105,14 +105,20 @@ def test_sc_helper_surfaces_missing_key():
         quickref._sc("definitely-not-a-real-shortcut-key")
 
 
-def test_modes_group_has_five_rows_each_with_sub_and_frf_explanation():
-    modes = next(g for g in quickref.QUICKREF if g.title == "五个分析模式")
-    assert [row.desc for row in modes.rows] == ["时域", "频谱", "时频", "阶次", "频响"]
+def test_modes_group_has_five_workspaces_plus_readonly_overview():
+    modes = next(g for g in quickref.QUICKREF if g.title == "五个分析工作区 + 总览")
+    assert [row.desc for row in modes.rows] == [
+        "时域", "频谱", "时频", "阶次", "频响", "总览",
+    ]
     for row in modes.rows:
         assert row.sub, f"mode row {row.desc!r} missing a one-line sub/purpose"
     frf = next(row for row in modes.rows if row.desc == "频响")
     assert "FRF" in frf.sub and "系统辨识" in frf.sub
-    # The group spans two columns in the rendered grid.
+    overview = next(row for row in modes.rows if row.desc == "总览")
+    assert "只读" in overview.sub
+    assert "不计算" in overview.sub
+    assert modes.note and "不是第六种算法" in modes.note
+    assert "第六种算法" not in overview.sub
     assert modes.wide is True
 
 
@@ -126,10 +132,19 @@ def test_quickref_explains_the_pane_local_frequency_cursor_modes():
 
 
 def test_order_mode_names_eps_motor_speed():
-    modes = next(g for g in quickref.QUICKREF if g.title == "五个分析模式")
+    modes = next(g for g in quickref.QUICKREF if g.title == "五个分析工作区 + 总览")
     order_row = next(r for r in modes.rows if r.desc == "阶次")
     assert "EPS" in order_row.sub
     assert "电机转速" in order_row.sub
+
+
+def test_quickref_context_menu_covers_add_to_overview():
+    group = next(g for g in quickref.QUICKREF if g.title == "右键菜单")
+    tab_row = next(r for r in group.rows if r.desc == "View 标签右键")
+    assert "加入总览" in tab_row.sub
+    assert "不重新计算" in tab_row.sub
+    card_row = next(r for r in group.rows if r.desc == "总览卡片右键")
+    assert "打开原 View" in card_row.sub
 
 
 def test_coaxis_row_released_no_soon_badge():

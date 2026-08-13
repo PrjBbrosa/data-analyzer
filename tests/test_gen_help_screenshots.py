@@ -3,11 +3,12 @@ from pathlib import Path
 
 def test_panel_modes_and_files_align():
     from tools.gen_help_screenshots import PANEL_MODES, PANEL_FILES
-    assert PANEL_MODES == ("time", "fft", "fft_time", "order")
+    assert PANEL_MODES == ("time", "fft", "fft_time", "order", "ultraview")
     # 每个 mode 都有对应的目标 *-panel.png 文件名
     assert set(PANEL_FILES) == set(PANEL_MODES)
     assert PANEL_FILES["time"] == "time-panel.png"
     assert PANEL_FILES["fft_time"] == "ffttime-panel.png"
+    assert PANEL_FILES["ultraview"] == "ultraview-panel.png"
 
 
 def test_synthetic_csv_has_eps_channels():

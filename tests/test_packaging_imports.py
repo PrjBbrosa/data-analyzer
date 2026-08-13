@@ -15,6 +15,7 @@ SPEC_PATH = REPO_ROOT / "build" / "spec" / f"{APP_ARTIFACT_NAME}.spec"
 WINDOWS_BUILD_SCRIPT = REPO_ROOT / "tools" / "build_windows_folder.ps1"
 WINDOWS_RUN_WRAPPER = REPO_ROOT / "tools" / "run_windows_exe.bat"
 FRF_GUIDE = REPO_ROOT / "mf4_analyzer" / "help" / "frf-guide.html"
+ULTRAVIEW_GUIDE = REPO_ROOT / "mf4_analyzer" / "help" / "ultraview-guide.html"
 
 REQUIRED_HIDDEN_IMPORTS = [
     "mf4_analyzer.ui_kit",
@@ -98,6 +99,14 @@ def test_windows_build_script_lists_new_modules_and_widget_collection():
 def test_frf_guide_is_bundled_by_the_existing_help_data_contract():
     """The whole help tree is a frozen data root, including the FRF guide."""
     assert FRF_GUIDE.is_file()
+    for script_name in ("build_windows_folder.ps1", "build_windows_folder_lite.ps1"):
+        text = (REPO_ROOT / "tools" / script_name).read_text(encoding="utf-8")
+        assert '"mf4_analyzer\\help"' in text
+        assert '"--add-data", $AddDataHelp' in text
+
+
+def test_ultraview_guide_is_bundled_by_the_existing_help_data_contract():
+    assert ULTRAVIEW_GUIDE.is_file()
     for script_name in ("build_windows_folder.ps1", "build_windows_folder_lite.ps1"):
         text = (REPO_ROOT / "tools" / script_name).read_text(encoding="utf-8")
         assert '"mf4_analyzer\\help"' in text

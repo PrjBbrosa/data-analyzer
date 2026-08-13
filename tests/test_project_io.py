@@ -74,6 +74,7 @@ def test_schema_v1_without_filter_loads_as_filter_none(tmp_path):
     loaded = pio.load_project_from_json(path)
 
     assert loaded.filter is None
+    assert loaded.ultraview is None
 
 
 def test_unknown_version_rejected(tmp_path):
@@ -277,3 +278,101 @@ def test_remap_drops_frf_time_view_signature_when_either_endpoint_is_missing():
     out = pio.remap_view_fids([view], {"f0": "f9"})[0]
 
     assert "frf_source_signature" not in out["axis_opts"]
+
+
+def test_ultraview_field_is_last_and_positional_construction_unchanged():
+    import dataclasses
+
+    names = [item.name for item in dataclasses.fields(pio.ProjectDocument)]
+    assert names[-1] == "ultraview"
+    doc = pio.ProjectDocument("f0", "fft")
+    assert doc.active_file == "f0"
+    assert doc.current_mode == "fft"
+    assert doc.ultraview is None
+    assert pio.SCHEMA_VERSION == 2
+
+
+def test_ultraview_board_roundtrips_without_runtime_keys(tmp_path):
+    path = tmp_path / "uv.tlproj"
+    payload = {
+        "schema": 1,
+        "board": {
+            "board_id": "board-keep",
+            "name": "全局对比-A",
+            "layout_id": "grid_2x2",
+            "primary_ratio": 0.55,
+            "show_titles": False,
+            "show_sources": True,
+            "placements": [
+                {"slot_id": "tl", "section": "time", "view_id": "view-time"},
+                {"slot_id": "tr", "section": "fft", "view_id": "missing-but-legal"},
+            ],
+            "unplaced": [
+                {"section": "frf", "view_id": "tray-ref"},
+            ],
+        },
+    }
+    doc = _doc()
+    doc.ultraview = payload
+    pio.save_project_to_json(doc, path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 2
+    assert raw["ultraview"]["board"]["name"] == "全局对比-A"
+    forbidden = {
+        "digest", "selected", "presentation", "image", "qimage",
+        "captured_digest", "runtime", "lru", "filter", "focus",
+        "snapshot", "left_snapshot", "inspector_snapshot",
+    }
+
+    def _walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                assert key not in forbidden, key
+                _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(raw["ultraview"])
+    loaded = pio.load_project_from_json(path)
+    assert loaded.ultraview["board"]["placements"][1]["view_id"] == "missing-but-legal"
+    assert loaded.ultraview["board"]["unplaced"][0]["view_id"] == "tray-ref"
+    assert loaded.ultraview["board"]["show_titles"] is False
+    assert loaded.ultraview["board"]["layout_id"] == "grid_2x2"
+
+
+def test_unknown_current_mode_falls_back_to_time(tmp_path):
+    path = tmp_path / "mode.tlproj"
+    pio.save_project_to_json(_doc(), path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["current_mode"] = "ultraview"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    loaded = pio.load_project_from_json(path)
+    assert loaded.current_mode == "time"
+
+
+def test_non_object_ultraview_block_loads_as_none(tmp_path):
+    path = tmp_path / "bad-uv.tlproj"
+    pio.save_project_to_json(_doc(), path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["ultraview"] = ["not", "a", "mapping"]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    loaded = pio.load_project_from_json(path)
+    assert loaded.ultraview is None
+
+
+def test_old_reader_drops_ultraview_on_resave(tmp_path):
+    path = tmp_path / "new.tlproj"
+    doc = _doc()
+    doc.ultraview = {"schema": 1, "board": {"name": "保留"}}
+    pio.save_project_to_json(doc, path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.pop("ultraview", None)
+    old_path = tmp_path / "old-reader.tlproj"
+    old_path.write_text(json.dumps(raw), encoding="utf-8")
+    loaded = pio.load_project_from_json(old_path)
+    assert loaded.ultraview is None
+    rewrite = tmp_path / "rewritten.tlproj"
+    pio.save_project_to_json(loaded, rewrite)
+    rewritten = json.loads(rewrite.read_text(encoding="utf-8"))
+    assert rewritten["ultraview"] is None

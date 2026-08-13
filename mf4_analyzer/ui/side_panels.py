@@ -383,3 +383,50 @@ class SidePanelController(QObject):
         """Call from MainWindow.resizeEvent / moveEvent while peeking."""
         if self.state == PanelState.PEEK:
             self._position_overlay()
+
+    def snapshot_persistent_state(self) -> dict:
+        """Public HIDDEN/PINNED snapshot. PEEK is stored as HIDDEN."""
+        self._remember_width_if_docked()
+        persistent = "PINNED" if self.state == PanelState.PINNED else "HIDDEN"
+        return {
+            "state": persistent,
+            "width": int(self._remembered_width),
+        }
+
+    def restore_persistent_state(self, snapshot) -> None:
+        """Restore a snapshot from :meth:`snapshot_persistent_state`."""
+        if not snapshot:
+            return
+        try:
+            width = int(snapshot.get("width") or self._remembered_width)
+        except (TypeError, ValueError):
+            width = int(self._remembered_width)
+        if width > self.COLLAPSE_THRESHOLD:
+            self._remembered_width = width
+        want_pinned = str(snapshot.get("state") or "HIDDEN") == "PINNED"
+        if want_pinned:
+            self._force_pinned()
+        else:
+            self._force_hidden()
+
+    def _force_hidden(self) -> None:
+        if self.state == PanelState.HIDDEN:
+            return
+        self._collapse_timer.stop()
+        if self.state == PanelState.PEEK:
+            self._run_effect(Effect.EXIT_PEEK)
+        elif self.state == PanelState.PINNED:
+            self._run_effect(Effect.COLLAPSE_PINNED)
+        self.state = PanelState.HIDDEN
+        self._apply_strip_visibility()
+        self.state_changed.emit(self.state)
+
+    def _force_pinned(self) -> None:
+        self._collapse_timer.stop()
+        if self.state == PanelState.PINNED:
+            self._run_effect(Effect.DOCK)
+            return
+        self._run_effect(Effect.DOCK)
+        self.state = PanelState.PINNED
+        self._apply_strip_visibility()
+        self.state_changed.emit(self.state)

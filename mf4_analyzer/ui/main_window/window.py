@@ -183,6 +183,8 @@ class MainWindow(
             ),
             parent=self,
         )
+        from .ultraview_coordinator import UltraViewCoordinator
+        self._ultraview = UltraViewCoordinator(self, parent=self)
         self._init_drop_import()
         self._connect()
 
@@ -752,6 +754,8 @@ class MainWindow(
         if chart is None:
             return getattr(self, "view_tabbar", None)
         mode = chart.current_mode()
+        if mode == "ultraview":
+            return None
         if mode == "time":
             return getattr(self, "view_tabbar", None)
         page = {
@@ -1199,15 +1203,13 @@ class MainWindow(
 
         # ── Toolbar sidebar toggle buttons ───────────────────────────────────
         from ..side_panels import Ev, PanelState
-        self.toolbar.nav_panel_toggled.connect(
-            lambda: self._panel_ctrl_left._dispatch(Ev.CLICK)
-        )
+        self.toolbar.nav_panel_toggled.connect(self._on_nav_panel_toggled)
         self.toolbar.inspector_panel_toggled.connect(
             lambda: self._panel_ctrl_right._dispatch(Ev.CLICK)
         )
         # Sync checked state when panel state changes (includes drag-collapse).
         self._panel_ctrl_left.state_changed.connect(
-            lambda s: self.toolbar.set_nav_open(s == PanelState.PINNED)
+            self._on_left_panel_state_changed
         )
         self._panel_ctrl_right.state_changed.connect(
             lambda s: self.toolbar.set_inspector_open(s == PanelState.PINNED)
@@ -1616,29 +1618,57 @@ class MainWindow(
         if callable(setter):
             setter(xt, yt)
 
+    def _on_nav_panel_toggled(self):
+        from ..side_panels import Ev
+
+        if self.chart_stack.current_mode() == "ultraview":
+            page = self.chart_stack.page_ultraview
+            visible = not page.is_library_visible()
+            page.set_library_visible(visible)
+            self.toolbar.set_nav_open(visible)
+            return
+        self._panel_ctrl_left._dispatch(Ev.CLICK)
+
+    def _on_left_panel_state_changed(self, state):
+        from ..side_panels import PanelState
+
+        if self.chart_stack.current_mode() == "ultraview":
+            return
+        self.toolbar.set_nav_open(state == PanelState.PINNED)
+
     def _on_mode_changed(self, mode):
         old_mode = self.chart_stack.current_mode()
-        if (
-            old_mode != mode
-            and not getattr(self, '_opening_project', False)
-        ):
-            if old_mode == 'time':
+        uv = getattr(self, "_ultraview", None)
+        source_modes = ("time", "fft", "fft_time", "frf", "order")
+        opening = getattr(self, "_opening_project", False)
+        if old_mode != mode and not opening:
+            if old_mode == "time":
                 self._capture_focused_view()
             elif old_mode in self.analysis_managers:
                 self._capture_active_analysis_view(old_mode)
+            if mode == "ultraview" and old_mode in source_modes and uv is not None:
+                uv.capture_leaving_source(old_mode)
+        if uv is not None and mode in source_modes:
+            uv.note_source_mode(mode)
         self.chart_stack.set_mode(mode)
         self.inspector.set_mode(mode)
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
-        if mode in {'fft', 'fft_time', 'order'}:
+        if mode == "ultraview":
+            if uv is not None:
+                uv.enter_ultraview()
+            return
+        if old_mode == "ultraview" and uv is not None:
+            uv.leave_ultraview()
+        if mode in {"fft", "fft_time", "order"}:
             # dB-reference-defaults nudge feed (spec S5 / A17): a section
             # entered without any signal/value/mode change since its last
             # visit still needs a fresh stamp -- additive, no render effect.
             self._stamp_db_reference_nudge_facts(mode)
         # Full-apply the target context so live navigator / Inspector / canvas
         # never keep the outgoing mode's selection (Stage 1 source isolation).
-        if mode == 'time':
-            self.navigator.set_projection_role('time')
-            idx = getattr(self, '_focused_view_idx', None)
+        if mode == "time":
+            self.navigator.set_projection_role("time")
+            idx = getattr(self, "_focused_view_idx", None)
             if idx is None:
                 idx = self.view_manager.active
             if idx is not None and 0 <= idx < len(self.view_manager.views):
@@ -1652,13 +1682,13 @@ class MainWindow(
                 QTimer.singleShot(0, self._plot_time_preserving_xlim)
         elif mode in self.analysis_managers:
             role = (
-                'fft_sources' if mode == 'fft' else 'analysis_candidates'
+                "fft_sources" if mode == "fft" else "analysis_candidates"
             )
             self.navigator.set_projection_role(role)
             # Stage 1.1 item 3: fill empty target View from time focus before
             # the apply pipeline projects it. Do not hook view-switch.
             self._maybe_fill_empty_analysis_on_mode_entry(mode)
-            if mode == 'fft':
+            if mode == "fft":
                 # Always apply target View params/sources/range first so live
                 # Inspector never overwrites the destination state. Canvas
                 # restore stays deferred in `_enter_fft_mode` so an unchanged
@@ -4518,6 +4548,12 @@ class MainWindow(
 
     def closeEvent(self, event):
         """Drain all analysis jobs before the window is destroyed."""
+        uv = getattr(self, "_ultraview", None)
+        if uv is not None:
+            from PyQt5 import sip
+            if not sip.isdeleted(uv):
+                uv.shutdown()
+                uv.deleteLater()
         self._analysis_jobs.shutdown()
         super().closeEvent(event)
 

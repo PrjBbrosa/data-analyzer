@@ -67,7 +67,7 @@ class QuickGroup:
     title — section heading.
     rows  — ordered rows.
     note  — optional right-aligned header note (e.g. "不知道用哪个？先看这里").
-    wide  — True spans two grid columns (the 五个分析模式 group).
+    wide  — True spans two grid columns (the 五个分析工作区 + 总览 group).
     """
 
     title: str
@@ -84,6 +84,7 @@ _MODE_FFT = "#e0883c"
 _MODE_FFT_TIME = "#6a8f4f"
 _MODE_FRF = "#168f91"
 _MODE_ORDER = "#9b6bd0"
+_MODE_ULTRAVIEW = "#5b6775"
 
 
 QUICKREF: Tuple[QuickGroup, ...] = (
@@ -116,10 +117,10 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("软件说明书", gesture="状态栏右侧书本图标"),
         ),
     ),
-    # 2 — 五个分析模式 (wide, spans two columns)
+    # 2 — 五个分析工作区 + 只读总览 (wide, spans two columns)
     QuickGroup(
-        title="五个分析模式",
-        note="不知道用哪个？先看这里",
+        title="五个分析工作区 + 总览",
+        note="总览只读，不是第六种算法",
         wide=True,
         rows=(
             QuickRow(
@@ -146,6 +147,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 "频响",
                 sub="频响（FRF / 系统辨识）：看输出相对输入",
                 accent=_MODE_FRF,
+            ),
+            QuickRow(
+                "总览",
+                sub="只读对照已有预览：不计算、可导出、重开后缺图为 missing",
+                accent=_MODE_ULTRAVIEW,
             ),
         ),
     ),
@@ -442,6 +448,14 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 gesture="鼠标行第三槽▾",
             ),
             QuickRow("通道右键", sub="设左轴 / 共轴"),
+            QuickRow(
+                "View 标签右键",
+                sub="加入总览：只读对照已有预览，不重新计算",
+            ),
+            QuickRow(
+                "总览卡片右键",
+                sub="打开原 View · 复制卡片 · 移入托盘 · 移除",
+            ),
         ),
     ),
 )

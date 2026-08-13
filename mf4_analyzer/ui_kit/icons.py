@@ -318,6 +318,15 @@ class Icons:
         return _line_icon(draw, BLUE)
 
     @classmethod
+    def mode_ultraview(cls):
+        """Board of preview cards: 2×3 tiles, distinct from mode_order's 3×3."""
+        def draw(p):
+            for x in (3, 11):
+                for y in (3, 9, 15):
+                    p.drawRoundedRect(QRectF(x, y, 6, 4), 0.8, 0.8)
+        return _line_icon(draw, BLUE)
+
+    @classmethod
     def cursor_reset(cls):
         def draw(p):
             p.drawLine(QPointF(10, 3), QPointF(10, 7))

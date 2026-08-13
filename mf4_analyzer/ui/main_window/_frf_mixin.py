@@ -10,6 +10,7 @@ from ...signal.frf import FrfParams, compute_frf
 from ...signal.spectrogram import DEFAULT_TIME_JITTER_TOLERANCE
 from ..time_xaxis import CHANNEL_MODE, CustomXAxisSpec
 from .frf_coordinator import frf_compute_cache_params
+from .ultraview_coordinator import notify_ultraview_plot
 
 
 @dataclass
@@ -678,6 +679,7 @@ class FrfMixin:
             context=render_context,
         )
         self._restore_frf_canvas_ranges(canvas, pane)
+        notify_ultraview_plot(self, "frf", "frf-plot")
         if pane_idx == page.focused_index():
             self.inspector.frf_ctx.set_validation_message("")
             # Both the worker completion and the synchronous cache hit land
@@ -756,6 +758,7 @@ class FrfMixin:
                 self._replace_analysis_pane_pins(
                     "frf", state.view_id, pane_idx, ())
         self._sync_frf_effective_facts(state)
+        notify_ultraview_plot(self, "frf", "frf-restore-plot")
         if missing:
             self.statusBar.showMessage("参数/输入输出已就绪，点击计算频响")
 

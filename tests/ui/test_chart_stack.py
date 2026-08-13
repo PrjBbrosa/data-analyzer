@@ -133,8 +133,8 @@ def test_secondary_toolbar_broadcasts_mouse_mode_to_primary_in_split(qapp, qtbot
 
 def test_chart_stack_has_three_canvases(qapp):
     cs = ChartStack()
-    # Five canvases after FRF (time / fft / fft_time / frf / order); test name kept for git history.
-    assert cs.count() == 5
+    # Six pages after UltraView (time / fft / fft_time / frf / order / ultraview).
+    assert cs.count() == 6
 
 
 def test_analysis_heatmap_sections_start_with_section_axis_labels(qapp, qtbot):
@@ -164,14 +164,22 @@ def test_analysis_heatmap_sections_start_with_section_axis_labels(qapp, qtbot):
 
 def test_chart_stack_set_mode(qapp):
     cs = ChartStack()
+    assert cs.stack.count() == 6
     cs.set_mode('fft')
     assert cs.current_mode() == 'fft'
     cs.set_mode('order')
     assert cs.current_mode() == 'order'
     cs.set_mode('frf')
     assert cs.current_mode() == 'frf'
+    cs.set_mode('ultraview')
+    assert cs.current_mode() == 'ultraview'
+    assert cs.hint_bar_for_mode('ultraview') is cs.page_ultraview.hint_bar()
+    cs.set_mode('not-a-mode')
+    assert cs.current_mode() == 'time'
     cs.set_mode('time')
     assert cs.current_mode() == 'time'
+    cs.set_annotation_enabled('ultraview', True)
+    cs.mark_discovered('plot')
 
 
 def test_chart_stack_registers_frf_page_manager_and_reset(qapp, qtbot):

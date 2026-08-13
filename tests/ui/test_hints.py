@@ -500,3 +500,38 @@ def test_analysis_view_scope_trails_the_section_headline_gesture():
         )
     ]
     assert ids.index("order.slice") < ids.index("analysis.view_scope")
+
+
+def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
+    by_id = {hint.id: hint for hint in hints.all_hints() if hint.id.startswith("ultraview.")}
+    required = {
+        "ultraview.add_from_tab",
+        "ultraview.card_menu",
+        "ultraview.escape",
+        "ultraview.presentation",
+        "ultraview.export",
+        "ultraview.tray",
+        "ultraview.statuses",
+        "ultraview.readonly",
+    }
+    assert required <= set(by_id)
+    add_hint = by_id["ultraview.add_from_tab"]
+    assert add_hint.surface == "discovery"
+    assert add_hint.modes == frozenset({"time", "fft", "fft_time", "frf", "order"})
+    assert "加入总览" in add_hint.text
+    uv_state = HintState(mode="ultraview")
+    uv_ids = {hint.id for hint in hints.context_hints(uv_state)}
+    assert {
+        "ultraview.card_menu",
+        "ultraview.escape",
+        "ultraview.presentation",
+        "ultraview.export",
+        "ultraview.tray",
+        "ultraview.statuses",
+        "ultraview.readonly",
+    } <= uv_ids
+    time_ids = {hint.id for hint in hints.context_hints(HintState(mode="time", plot_mode="overlay"))}
+    assert not any(hid.startswith("ultraview.") for hid in time_ids)
+    haystack = " ".join(hint.text for hint in by_id.values())
+    for banned in ("PDF", "SVG", "sidecar", "live card", "后台补图", "自由缩放"):
+        assert banned not in haystack

@@ -2,6 +2,7 @@
 
 import inspect
 import json
+import logging
 import os
 from pathlib import Path
 from time import monotonic
@@ -34,6 +35,8 @@ from ...io.loader import (
 )
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
+
+logger = logging.getLogger(__name__)
 
 DATA_FILE_GLOB = DEFAULT_SOURCE_ADAPTER_REGISTRY.file_dialog_glob
 _MEDIA_ADAPTER = next(
@@ -1618,8 +1621,17 @@ class ProjectIOMixin:
         self._capture_focused_view()
         # Flush each analysis section's live UI state into its active view so
         # the last (uncommitted) inspector edit / source / compare toggle is
-        # serialized rather than lost.
+        # serialized rather than lost. UltraView is not a source workspace.
         current_mode = self.chart_stack.current_mode()
+        uv = getattr(self, "_ultraview", None)
+        if uv is not None and current_mode in {"time", *self.analysis_managers}:
+            uv.note_source_mode(current_mode)
+        if current_mode == "ultraview" and uv is not None:
+            saved_mode = uv.project_source_mode()
+        elif current_mode in self.analysis_managers or current_mode == "time":
+            saved_mode = current_mode
+        else:
+            saved_mode = "time"
         for sec in self.analysis_managers:
             self._capture_active_analysis_view(
                 sec, capture_sources=(sec == current_mode))
@@ -1649,7 +1661,7 @@ class ProjectIOMixin:
         }
         doc = pio.ProjectDocument(
             active_file=self._active,
-            current_mode=self.chart_stack.current_mode(),
+            current_mode=saved_mode,
             files=file_refs,
             views=[v.to_dict() for v in self.view_manager.views],
             view_manager=vm,
@@ -1661,6 +1673,7 @@ class ProjectIOMixin:
                 for sec, mgr in self.analysis_managers.items()
             },
             filter=self._project_filter_payload(),
+            ultraview=None if uv is None else uv.to_project_payload(),
         )
         self._write_project_document(doc, path)
         self._project_path = path
@@ -1794,6 +1807,11 @@ class ProjectIOMixin:
             # _cache recomputes this view (queued above) so the chart repopulates.
             mgr.active_changed.emit(mgr.active)
 
+        uv = getattr(self, "_ultraview", None)
+        uv_warnings = []
+        if uv is not None and not getattr(uv, "is_shutdown", False):
+            uv_warnings = uv.restore_project_state(getattr(doc, "ultraview", None))
+
         self._active = fid_map.get(doc.active_file)
         # Route the mode through the toolbar's programmatic setter (not
         # chart_stack.set_mode directly): _set_mode checks the matching
@@ -1849,6 +1867,14 @@ class ProjectIOMixin:
                 QMessageBox.warning(
                     self, "部分文件缺失",
                     "以下文件找不到，已跳过：\n" + "\n".join(missing),
+                )
+
+            if uv_warnings:
+                for item in uv_warnings:
+                    logger.warning("UltraView project restore: %s", item)
+                self.toast(
+                    f"总览布局有 {len(uv_warnings)} 项无法识别，已按合法值恢复",
+                    "warning",
                 )
 
             # The project's files/views are loaded by this point, so the
@@ -1909,6 +1935,7 @@ class ProjectIOMixin:
 
     def close_all(self, *, force=False):
         health = getattr(self, "_project_restore_health", None)
+        uv = getattr(self, "_ultraview", None)
         if not self.files:
             if health is not None:
                 health.clear()
@@ -1930,6 +1957,8 @@ class ProjectIOMixin:
                 uses, files=fids, close_all=True
             ):
                 return
+        if uv is not None and not getattr(uv, "is_shutdown", False):
+            uv.reset_project_state()
         n = len(self.files)
         # Cache invalidation site 2 (close-all variant): wipe everything.
         self.canvas_time.invalidate_envelope_cache("all files closed")

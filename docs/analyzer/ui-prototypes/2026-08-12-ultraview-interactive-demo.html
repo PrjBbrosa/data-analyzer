@@ -1,0 +1,1037 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TraceLab UltraView — 交互原型</title>
+<style>
+  :root {
+    --ink: #182436;
+    --ink-2: #314259;
+    --muted: #6b7b91;
+    --quiet: #95a2b4;
+    --line: #d6e0eb;
+    --line-2: #c6d2df;
+    --chrome: #f3f6f9;
+    --surface: #ffffff;
+    --board: #e9eef4;
+    --blue: #2d7ff9;
+    --blue-deep: #1f63c8;
+    --blue-soft: #eaf2ff;
+    --amber: #d97706;
+    --amber-soft: #fff6e7;
+    --red: #d94b54;
+    --red-soft: #fff0f1;
+    --green: #23885b;
+    --green-soft: #e9f7f0;
+    --sans: "Microsoft YaHei", "Segoe UI", "PingFang SC", "SF Pro Text", sans-serif;
+    --mono: "SF Mono", "Menlo", "Consolas", monospace;
+    --shadow: 0 22px 55px rgba(38, 55, 76, .16), 0 1px 0 rgba(255,255,255,.8) inset;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    color: var(--ink);
+    font: 13px/1.45 var(--sans);
+    background:
+      radial-gradient(900px 460px at 4% -10%, rgba(255,255,255,.98), transparent 62%),
+      radial-gradient(720px 400px at 96% 4%, rgba(45,127,249,.09), transparent 60%),
+      linear-gradient(180deg, #f6f8fb 0%, #e7edf4 100%);
+  }
+  button, input { font: inherit; }
+  button { color: inherit; }
+  button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid rgba(45,127,249,.72);
+    outline-offset: 2px;
+  }
+  [hidden] { display: none !important; }
+
+  .page {
+    width: min(1540px, calc(100vw - 30px));
+    margin: 0 auto;
+    padding: 24px 0 46px;
+  }
+  .intro {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 520px);
+    gap: 30px;
+    align-items: end;
+    margin: 0 2px 16px;
+  }
+  .eyebrow {
+    color: #718097;
+    font: 700 10px/1.2 var(--mono);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  h1 {
+    margin: 6px 0 5px;
+    color: #1c2a3d;
+    font-size: 26px;
+    line-height: 1.15;
+    letter-spacing: -.035em;
+  }
+  .lede { margin: 0; color: var(--muted); font-size: 13px; }
+  .thesis {
+    padding: 10px 13px;
+    border-left: 3px solid var(--blue);
+    color: #56677e;
+    background: rgba(255,255,255,.62);
+    font-size: 12px;
+  }
+  .thesis b { color: #28466f; }
+
+  .scenario-bar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 42px;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 11px 11px 0 0;
+    background: rgba(249,251,253,.92);
+  }
+  .scenario-label {
+    padding: 0 7px;
+    color: var(--quiet);
+    font: 700 10px/1 var(--mono);
+    letter-spacing: .08em;
+  }
+  .scenario-button, .plain-button, .icon-button, .layout-button, .library-add,
+  .seg-button, .status-button, .ratio-button, .card-button, .rail-button {
+    border: 1px solid var(--line-2);
+    background: #fff;
+    cursor: pointer;
+    transition: border-color .14s, background .14s, color .14s, transform .14s, box-shadow .14s;
+  }
+  .scenario-button {
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 6px;
+    color: #566980;
+    font-size: 11px;
+  }
+  .scenario-button:hover, .scenario-button.active {
+    border-color: #96b8ed;
+    color: #235da9;
+    background: var(--blue-soft);
+  }
+  .scenario-button.active { box-shadow: inset 0 -2px 0 var(--blue); font-weight: 700; }
+  .scenario-help { margin-left: auto; color: #7b899b; font-size: 11px; }
+  kbd {
+    display: inline-grid;
+    min-width: 20px;
+    height: 20px;
+    place-items: center;
+    padding: 0 5px;
+    border: 1px solid #c7d1dd;
+    border-bottom-color: #aebbc9;
+    border-radius: 4px;
+    background: #fff;
+    color: #607086;
+    font: 10px/1 var(--mono);
+    box-shadow: 0 1px 0 #d6dee7;
+  }
+
+  .app-shell {
+    position: relative;
+    min-height: 800px;
+    overflow: hidden;
+    border: 1px solid #becbd9;
+    border-top: 0;
+    border-radius: 0 0 14px 14px;
+    background: #f8fafc;
+    box-shadow: var(--shadow);
+  }
+  .titlebar {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr) 250px;
+    align-items: center;
+    height: 38px;
+    padding: 0 12px;
+    border-bottom: 1px solid #d1dce7;
+    background: linear-gradient(180deg, #fff, #f4f7fa);
+  }
+  .window-title { display: flex; align-items: center; gap: 10px; color: #53657b; font-size: 11px; }
+  .traffic { display: inline-flex; gap: 6px; }
+  .traffic i { width: 9px; height: 9px; border-radius: 50%; background: #c7d0dc; }
+  .traffic i:first-child { background: #f37b70; }
+  .traffic i:nth-child(2) { background: #efbd54; }
+  .traffic i:last-child { background: #5cc47a; }
+  .mode-nav { display: flex; justify-content: center; gap: 2px; }
+  .mode-nav span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 27px;
+    padding: 0 9px;
+    color: #7c899a;
+    border-radius: 5px;
+    font-size: 11px;
+  }
+  .mode-nav span.active { color: #275c9c; background: #eaf2fc; font-weight: 700; }
+  .mode-nav svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+  .title-status { justify-self: end; display: flex; align-items: center; gap: 7px; color: #718095; font-size: 10px; }
+  .projection-led {
+    width: 7px; height: 7px; border-radius: 50%; background: #38a169;
+    box-shadow: 0 0 0 3px rgba(56,161,105,.12);
+  }
+
+  .ultra-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 42px;
+    padding: 0 10px;
+    border-bottom: 1px solid #d6e0ea;
+    background: #f8fafc;
+  }
+  .board-identity { display: flex; align-items: center; gap: 8px; min-width: 238px; }
+  .ultra-mark {
+    display: grid;
+    grid-template-columns: repeat(2, 5px);
+    grid-template-rows: repeat(2, 5px);
+    gap: 2px;
+    width: 20px; height: 20px;
+    place-content: center;
+    border-radius: 5px;
+    background: #243c5c;
+  }
+  .ultra-mark i { border-radius: 1px; background: #fff; opacity: .92; }
+  .board-name { font-size: 12px; font-weight: 750; color: #26384f; }
+  .board-subtitle { color: #8592a2; font: 9px/1.2 var(--mono); letter-spacing: .06em; }
+  .toolbar-rule { width: 1px; height: 22px; margin: 0 3px; background: #d8e1eb; }
+  .plain-button, .icon-button {
+    height: 27px;
+    border-radius: 6px;
+    color: #586b82;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .plain-button { padding: 0 9px; }
+  .icon-button { display: inline-grid; width: 28px; place-items: center; }
+  .plain-button:hover, .icon-button:hover { border-color: #9db8db; color: #2a5e9d; background: #f0f6ff; }
+  .plain-button.primary { border-color: #8db2e9; color: #fff; background: #2d72cb; }
+  .plain-button.primary:hover { background: #2464b4; }
+  .toolbar-spacer { flex: 1; }
+  .zoom-readout { min-width: 37px; color: #738299; font: 10px/1 var(--mono); text-align: center; }
+  .zoom-slider { width: 92px; accent-color: var(--blue); }
+  .ultra-toolbar > button,
+  .ultra-toolbar > input,
+  .ultra-toolbar > .zoom-readout,
+  .ultra-toolbar > .toolbar-rule { flex: 0 0 auto; }
+
+  .workspace {
+    display: grid;
+    grid-template-columns: 218px minmax(0, 1fr) 238px;
+    min-height: 680px;
+  }
+  .view-library, .inspector {
+    min-width: 0;
+    background: #f8fafc;
+  }
+  .view-library { border-right: 1px solid #d4dee9; }
+  .inspector { border-left: 1px solid #d4dee9; }
+  .side-head {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 38px; padding: 0 11px;
+    border-bottom: 1px solid #e0e6ee;
+  }
+  .side-head strong { font-size: 11px; color: #485b72; }
+  .side-count {
+    padding: 2px 6px;
+    border-radius: 999px;
+    color: #6f7f93;
+    background: #e9eef4;
+    font: 9px/1.4 var(--mono);
+  }
+  .library-search { padding: 8px; }
+  .library-search input {
+    width: 100%; height: 28px; padding: 0 9px 0 27px;
+    border: 1px solid #d5dee8; border-radius: 6px;
+    color: #40536b; background: #fff;
+    font-size: 11px;
+  }
+  .search-wrap { position: relative; }
+  .search-wrap::before { content: "⌕"; position: absolute; z-index: 1; left: 9px; top: 3px; color: #8d99a8; font-size: 16px; }
+  .library-list { height: 590px; overflow: auto; padding: 0 7px 12px; }
+  .library-section { margin-top: 4px; }
+  .library-section-head {
+    display: flex; align-items: center; gap: 7px;
+    height: 27px; padding: 0 5px;
+    color: #6b7d92; font-size: 10px; font-weight: 750;
+  }
+  .section-icon {
+    display: inline-grid; width: 18px; height: 18px; place-items: center;
+    border-radius: 4px; color: var(--section); background: color-mix(in srgb, var(--section) 10%, white);
+  }
+  .section-icon svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+  .library-view {
+    display: grid;
+    grid-template-columns: 9px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 7px;
+    min-height: 38px;
+    margin: 2px 0;
+    padding: 4px 4px 4px 8px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: #51647b;
+    cursor: grab;
+  }
+  .library-view:hover { border-color: #d4dfeb; background: #fff; }
+  .library-view.placed { background: #f0f5fb; }
+  .library-view.dragging { opacity: .45; }
+  .view-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--view-color); }
+  .library-copy { min-width: 0; }
+  .library-copy b { display: block; overflow: hidden; color: #405269; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+  .library-copy small { display: block; margin-top: 1px; color: #96a1b0; font: 8.5px/1.2 var(--mono); }
+  .library-add {
+    width: 22px; height: 22px; padding: 0;
+    border-color: transparent; border-radius: 5px;
+    color: #728399; background: transparent;
+    font-size: 15px; line-height: 1;
+  }
+  .library-add:hover { border-color: #a9bfdb; color: #2869bb; background: #edf5ff; }
+  .library-add.placed { color: #25835b; cursor: default; }
+  .library-note {
+    margin: 6px 8px 0; padding: 8px 9px;
+    border: 1px dashed #cbd7e4; border-radius: 7px;
+    color: #78879a; background: rgba(255,255,255,.55);
+    font-size: 9px; line-height: 1.45;
+  }
+
+  .board-viewport {
+    position: relative;
+    min-width: 0;
+    overflow: auto;
+    background:
+      linear-gradient(rgba(81,101,126,.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(81,101,126,.045) 1px, transparent 1px),
+      var(--board);
+    background-size: 18px 18px;
+  }
+  .board-stage {
+    min-width: 720px;
+    min-height: 630px;
+    padding: 12px;
+    transform-origin: top left;
+  }
+  .comparison-rail {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 36px;
+    margin-bottom: 8px;
+    padding: 4px 6px;
+    border: 1px solid #ccd8e5;
+    border-radius: 8px;
+    background: rgba(255,255,255,.91);
+    box-shadow: 0 2px 7px rgba(47,65,88,.06);
+  }
+  .rail-title { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 3px; color: #52667e; font-size: 10px; font-weight: 750; }
+  .rail-pulse { width: 5px; height: 18px; border-radius: 2px; background: linear-gradient(180deg, #2d7ff9, #6d54c8, #d78228); }
+  .rail-button {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 25px; padding: 0 7px;
+    border-color: transparent; border-radius: 5px;
+    color: #65778e; background: transparent;
+    font-size: 9.5px;
+  }
+  .rail-button:hover, .rail-button.active { color: #2c5f9c; background: #edf4fc; }
+  .rail-count { min-width: 16px; padding: 1px 4px; border-radius: 999px; background: #dfe7f0; font: 8px/1.4 var(--mono); }
+  .range-warning {
+    display: inline-flex; align-items: center; gap: 5px;
+    margin-left: auto; padding: 4px 7px;
+    border: 1px solid #edd4a3; border-radius: 5px;
+    color: #9a651b; background: #fff8e9;
+    font-size: 9px;
+  }
+  .range-warning i { width: 6px; height: 6px; border-radius: 50%; background: #e6a02d; }
+  .calc-badge { padding: 0 5px; color: #76879a; font: 8.5px/1.2 var(--mono); }
+
+  .ultra-board {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    grid-template-rows: repeat(12, minmax(30px, 1fr));
+    gap: 8px;
+    height: 560px;
+    padding: 8px;
+    border: 1px solid #c5d1df;
+    border-radius: 10px;
+    background: rgba(224,231,239,.82);
+    box-shadow: inset 0 1px 2px rgba(58,73,91,.08);
+  }
+  .ultra-board.drag-over { box-shadow: inset 0 0 0 2px #75a6e7; }
+  .chart-card, .empty-slot {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: 8px;
+  }
+  .chart-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #cad6e2;
+    background: #fff;
+    box-shadow: 0 3px 9px rgba(42,59,80,.08);
+    cursor: pointer;
+    transition: opacity .16s, transform .16s, border-color .16s, box-shadow .16s;
+  }
+  .chart-card::before {
+    content: "";
+    position: absolute; z-index: 3; inset: 0 auto 0 0;
+    width: 3px; background: var(--view-color);
+  }
+  .chart-card:hover { border-color: #aebfd1; transform: translateY(-1px); box-shadow: 0 7px 18px rgba(42,59,80,.12); }
+  .chart-card.selected { border-color: #5c94dd; box-shadow: 0 0 0 2px rgba(45,127,249,.18), 0 7px 18px rgba(42,59,80,.12); }
+  .chart-card.axis-dim { opacity: .22; filter: grayscale(.55); }
+  .chart-card.dragging { opacity: .34; transform: scale(.985); }
+  .chart-card.drop-target { border-color: #4e91e5; box-shadow: inset 0 0 0 2px rgba(45,127,249,.25); }
+  .card-head {
+    display: flex; align-items: center; gap: 6px;
+    flex: 0 0 32px;
+    padding: 0 6px 0 9px;
+    border-bottom: 1px solid #e5ebf1;
+    background: linear-gradient(180deg, #fff, #f9fbfc);
+  }
+  .card-head-copy { min-width: 0; flex: 1; }
+  .card-head b { display: block; overflow: hidden; color: #34475e; font-size: 10px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+  .card-head small { display: none; color: #8b98a8; font: 7.5px/1.1 var(--mono); }
+  .axis-pill { flex: 0 0 auto; padding: 2px 5px; border-radius: 4px; color: #65758a; background: #edf1f5; font: 7.5px/1.2 var(--mono); }
+  .status-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: #34a56f; box-shadow: 0 0 0 2px rgba(52,165,111,.10); }
+  .status-dot.stale { background: #e29b27; box-shadow: 0 0 0 2px rgba(226,155,39,.13); }
+  .status-dot.missing { background: #9da8b5; box-shadow: none; }
+  .status-dot.deleted { background: #d9555c; box-shadow: 0 0 0 2px rgba(217,85,92,.12); }
+  .card-button {
+    display: grid; flex: 0 0 auto; width: 22px; height: 22px; place-items: center;
+    padding: 0; border-color: transparent; border-radius: 4px;
+    color: #8390a0; background: transparent; font-size: 12px;
+  }
+  .card-button:hover { color: #2b68b6; border-color: #cfdae5; background: #f2f7fd; }
+  .chart-wrap { position: relative; flex: 1; min-height: 0; padding: 5px 6px 4px 8px; background: #fff; }
+  .chart-wrap svg { display: block; width: 100%; height: 100%; min-height: 48px; }
+  .plot-grid line { stroke: #e8edf2; stroke-width: .8; vector-effect: non-scaling-stroke; }
+  .plot-axis { fill: none; stroke: #a7b3c1; stroke-width: .8; vector-effect: non-scaling-stroke; }
+  .plot-line { fill: none; stroke: var(--view-color); stroke-width: 1.7; vector-effect: non-scaling-stroke; }
+  .plot-line.secondary { stroke: #78a5dc; opacity: .9; stroke-width: 1.2; }
+  .plot-line.tertiary { stroke: #e0803d; opacity: .85; stroke-width: 1.1; }
+  .plot-fill { fill: color-mix(in srgb, var(--view-color) 11%, transparent); }
+  .axis-label { fill: #8b98a8; font: 3.4px var(--mono); }
+  .cursor-line { stroke: #5b6b7e; stroke-width: .7; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
+  .card-foot {
+    display: flex; align-items: center; gap: 6px;
+    flex: 0 0 23px;
+    padding: 0 8px 0 10px;
+    border-top: 1px solid #edf1f5;
+    color: #7c8b9d;
+    background: #fbfcfd;
+    font-size: 8px;
+  }
+  .card-foot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-foot .source { margin-left: auto; font-family: var(--mono); color: #9aa5b3; }
+  .state-overlay {
+    position: absolute; z-index: 4; inset: 32px 0 23px 3px;
+    display: grid; place-items: center;
+    padding: 12px;
+    text-align: center;
+    background: rgba(250,252,254,.91);
+    backdrop-filter: blur(2px);
+  }
+  .state-overlay .state-icon { display: grid; width: 30px; height: 30px; margin: 0 auto 6px; place-items: center; border-radius: 50%; color: #7d8c9d; background: #e8edf3; font-size: 15px; }
+  .state-overlay b { display: block; color: #52647a; font-size: 10px; }
+  .state-overlay small { display: block; margin-top: 3px; color: #8d99a8; font-size: 8px; }
+  .state-overlay button { margin-top: 7px; padding: 3px 7px; border: 1px solid #bdcbd9; border-radius: 5px; color: #376da9; background: #fff; font-size: 8px; cursor: pointer; }
+  .stale-ribbon {
+    position: absolute; z-index: 4; right: 6px; top: 37px;
+    padding: 2px 5px; border: 1px solid #eccf9b; border-radius: 4px;
+    color: #98621b; background: rgba(255,248,232,.94); font-size: 7.5px;
+  }
+  .empty-slot {
+    display: grid; place-items: center;
+    border: 1px dashed #b8c6d5;
+    color: #8190a2; background: rgba(255,255,255,.38);
+    cursor: pointer;
+  }
+  .empty-slot:hover { border-color: #6e9fdc; color: #326db8; background: rgba(240,247,255,.75); }
+  .empty-slot span { display: grid; gap: 4px; text-align: center; font-size: 9px; }
+  .empty-slot b { font-size: 18px; font-weight: 400; line-height: 1; }
+
+  .inspector-scroll { height: 627px; overflow: auto; padding: 9px; }
+  .inspector-empty { padding: 20px 12px; color: #8794a5; text-align: center; font-size: 10px; }
+  .inspector-section { margin-bottom: 9px; padding: 10px; border: 1px solid #dde5ed; border-radius: 8px; background: #fff; }
+  .inspector-section h3 { margin: 0 0 8px; color: #52647b; font: 750 9px/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+  .selected-identity { display: flex; align-items: center; gap: 8px; }
+  .selected-identity .large-dot { width: 9px; height: 28px; border-radius: 3px; background: var(--selected-color, #2d7ff9); }
+  .selected-identity b { display: block; color: #34485f; font-size: 11px; }
+  .selected-identity small { color: #8c98a8; font: 8px/1.3 var(--mono); }
+  .field-row { display: flex; align-items: center; justify-content: space-between; min-height: 30px; gap: 8px; border-top: 1px solid #eef2f5; color: #66778d; font-size: 9.5px; }
+  .field-row:first-of-type { border-top: 0; }
+  .field-value { color: #394f68; font: 9px/1.2 var(--mono); text-align: right; }
+  .seg { display: inline-flex; overflow: hidden; border: 1px solid #cbd6e2; border-radius: 5px; }
+  .seg-button { height: 23px; padding: 0 6px; border: 0; border-right: 1px solid #d5dee8; color: #687a90; font-size: 8.5px; }
+  .seg-button:last-child { border-right: 0; }
+  .seg-button.active { color: #235fa8; background: #eaf3ff; font-weight: 700; }
+  .status-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .status-button { min-height: 26px; padding: 3px; border-radius: 5px; color: #718197; font-size: 8px; }
+  .status-button:hover, .status-button.active { border-color: #8fb3e3; color: #2a63a8; background: #edf5ff; }
+  .ratio-control { display: grid; grid-template-columns: 25px 1fr 25px; align-items: center; gap: 5px; }
+  .ratio-button { width: 25px; height: 24px; padding: 0; border-radius: 5px; color: #60738a; }
+  .ratio-meter { height: 6px; overflow: hidden; border-radius: 99px; background: #e4eaf0; }
+  .ratio-meter i { display: block; height: 100%; width: var(--ratio, 62%); border-radius: inherit; background: #6098dd; transition: width .18s; }
+  .check-row { display: flex; align-items: center; justify-content: space-between; min-height: 29px; color: #607287; font-size: 9.5px; }
+  .switch { position: relative; width: 28px; height: 16px; border: 0; border-radius: 99px; background: #ccd5df; cursor: pointer; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.15); transition: transform .16s; }
+  .switch.on { background: #4e8cd8; }
+  .switch.on::after { transform: translateX(12px); }
+  .inspector-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .inspector-actions .plain-button { width: 100%; padding: 0 5px; font-size: 9px; }
+
+  .statusbar {
+    display: flex; align-items: center; gap: 12px;
+    height: 26px; padding: 0 10px;
+    border-top: 1px solid #d6e0ea;
+    color: #7d8b9c; background: #f6f8fa;
+    font-size: 9px;
+  }
+  .statusbar b { color: #4f6279; font-weight: 700; }
+  .statusbar .spacer { flex: 1; }
+  .statusbar .safe { color: #30805c; }
+
+  .toast {
+    position: fixed; z-index: 100; left: 50%; bottom: 24px;
+    min-width: 280px; max-width: min(520px, calc(100vw - 30px));
+    padding: 10px 13px;
+    border: 1px solid #b8c9db; border-radius: 8px;
+    color: #3e536b; background: rgba(255,255,255,.97);
+    box-shadow: 0 14px 36px rgba(35,50,70,.2);
+    font-size: 11px;
+    transform: translate(-50%, 20px);
+    opacity: 0; pointer-events: none;
+    transition: opacity .18s, transform .18s;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast b { color: #255f9f; }
+
+  .focus-modal {
+    position: fixed; z-index: 90; inset: 0;
+    display: grid; place-items: center;
+    padding: 28px;
+    background: rgba(22,33,47,.56);
+    backdrop-filter: blur(7px);
+  }
+  .focus-panel {
+    width: min(1120px, calc(100vw - 50px));
+    height: min(720px, calc(100vh - 56px));
+    display: grid;
+    grid-template-rows: 44px minmax(0, 1fr) 28px;
+    overflow: hidden;
+    border: 1px solid #b9c7d6; border-radius: 12px;
+    background: #fff; box-shadow: 0 30px 90px rgba(12,20,31,.38);
+  }
+  .focus-head { display: flex; align-items: center; gap: 9px; padding: 0 12px; border-bottom: 1px solid #dce4ec; }
+  .focus-head b { color: #31465e; font-size: 12px; }
+  .focus-head small { color: #8a97a7; font: 9px/1 var(--mono); }
+  .focus-head button { margin-left: auto; width: 27px; height: 27px; border: 1px solid #c9d4df; border-radius: 6px; background: #fff; cursor: pointer; }
+  .focus-chart { min-height: 0; padding: 18px; }
+  .focus-chart svg { width: 100%; height: 100%; }
+  .focus-foot { display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-top: 1px solid #e4eaf0; color: #7e8b9b; font-size: 9px; }
+
+  .app-shell.presentation .view-library,
+  .app-shell.presentation .inspector,
+  .app-shell.presentation .ultra-toolbar,
+  .app-shell.presentation .statusbar { display: none; }
+  .app-shell.presentation .workspace { display: block; min-height: calc(100vh - 120px); }
+  .app-shell.presentation .board-viewport { min-height: calc(100vh - 120px); }
+  .app-shell.presentation .board-stage { min-height: calc(100vh - 120px); }
+  .app-shell.presentation .ultra-board { height: calc(100vh - 190px); }
+
+  @media (max-width: 1120px) {
+    .workspace { grid-template-columns: 190px minmax(0, 1fr) 210px; }
+    .titlebar { grid-template-columns: 190px minmax(0, 1fr) 190px; }
+    .board-identity { min-width: 205px; }
+    .plain-button .optional { display: none; }
+  }
+  @media (max-width: 820px) {
+    .page { width: calc(100vw - 16px); padding-top: 12px; }
+    .intro { grid-template-columns: 1fr; gap: 10px; }
+    .scenario-help, .view-library, .inspector { display: none; }
+    .workspace { display: block; }
+    .titlebar { grid-template-columns: 1fr auto; }
+    .mode-nav { display: none; }
+    .ultra-toolbar { overflow-x: auto; }
+    .board-identity { min-width: 190px; }
+    .board-stage { min-width: 660px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0s !important; }
+  }
+</style>
+</head>
+<body>
+<main class="page">
+  <header class="intro">
+    <div>
+      <div class="eyebrow">TraceLab / UltraView interactive concept</div>
+      <h1>把多个 View 组织成一张可读的全局图面</h1>
+      <p class="lede">模板负责秩序，View 卡片负责对比；UltraView 只投影已有结果，不改变分析参数，也不触发计算。</p>
+    </div>
+    <div class="thesis"><b>原型重点：</b>试试切换场景、拖动卡片交换位置、从左侧添加 View、调整主图比例、点击“仅看频率轴”，或双击图表临时放大。</div>
+  </header>
+
+  <div class="scenario-bar" aria-label="原型场景">
+    <span class="scenario-label">场景</span>
+    <button class="scenario-button active" data-scene="overview">整车问题总览</button>
+    <button class="scenario-button" data-scene="same">四工况频谱</button>
+    <button class="scenario-button" data-scene="six">六图全局矩阵</button>
+    <span class="scenario-help">拖拽卡片可换位 · 双击放大 · <kbd>Esc</kbd> 退出</span>
+  </div>
+
+  <section class="app-shell" id="app-shell" aria-label="TraceLab UltraView 原型">
+    <div class="titlebar">
+      <div class="window-title"><span class="traffic"><i></i><i></i><i></i></span><span>TraceLab · UltraView</span></div>
+      <nav class="mode-nav" aria-label="TraceLab 模式">
+        <span>时域</span><span>频谱</span><span>时频</span><span>FRF</span><span>阶次</span><span class="active">UltraView</span>
+      </nav>
+      <div class="title-status"><i class="projection-led"></i><span>只读投影 · 0 次计算</span></div>
+    </div>
+
+    <div class="ultra-toolbar">
+      <div class="board-identity">
+        <span class="ultra-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        <div><div class="board-name" id="board-name">整车问题总览</div><div class="board-subtitle">ULTRAVIEW / BOARD 01</div></div>
+      </div>
+      <div class="toolbar-rule"></div>
+      <button class="plain-button" id="layout-menu-button">布局 <span id="layout-name">主图 + 3 辅图</span>⌄</button>
+      <div class="layout-popover" id="layout-popover" hidden></div>
+      <button class="plain-button" id="add-view-button">＋ 添加 View</button>
+      <button class="plain-button" id="fit-button">适应窗口</button>
+      <button class="plain-button" id="export-button">导出 SVG</button>
+      <div class="toolbar-spacer"></div>
+      <button class="icon-button" id="zoom-out" aria-label="缩小">−</button>
+      <input class="zoom-slider" id="zoom-slider" type="range" min="70" max="125" value="100" aria-label="画布缩放">
+      <span class="zoom-readout" id="zoom-readout">100%</span>
+      <button class="icon-button" id="zoom-in" aria-label="放大">＋</button>
+      <button class="plain-button primary" id="presentation-button">演示模式</button>
+    </div>
+
+    <div class="workspace">
+      <aside class="view-library">
+        <div class="side-head"><strong>View 库</strong><span class="side-count" id="library-count">12</span></div>
+        <div class="library-search"><div class="search-wrap"><input id="library-search" placeholder="搜索 View…" autocomplete="off"></div></div>
+        <div class="library-list" id="library-list"></div>
+        <div class="library-note">拖到画布空位即可添加；拖到已有卡片上会替换。UltraView 只引用 <b>section + view_id</b>。</div>
+      </aside>
+
+      <div class="board-viewport" id="board-viewport">
+        <div class="board-stage" id="board-stage">
+          <div class="comparison-rail" id="comparison-rail"></div>
+          <div class="ultra-board" id="ultra-board" aria-label="UltraView 大画布"></div>
+        </div>
+      </div>
+
+      <aside class="inspector">
+        <div class="side-head"><strong>画布设置</strong><span class="side-count">只读</span></div>
+        <div class="inspector-scroll" id="inspector-content"></div>
+      </aside>
+    </div>
+
+    <footer class="statusbar">
+      <span><b id="status-layout">主图 + 3 辅图</b></span>
+      <span id="status-card-count">4 张卡片</span>
+      <span id="status-selected">已选择：道路输入</span>
+      <span class="spacer"></span>
+      <span class="safe">● UltraView 未提交任何分析任务</span>
+    </footer>
+  </section>
+</main>
+
+<div class="focus-modal" id="focus-modal" hidden role="dialog" aria-modal="true" aria-label="图表临时放大">
+  <div class="focus-panel">
+    <div class="focus-head"><i class="view-dot" id="focus-dot"></i><div><b id="focus-title"></b><small id="focus-meta"></small></div><button id="focus-close" aria-label="关闭">×</button></div>
+    <div class="focus-chart" id="focus-chart"></div>
+    <div class="focus-foot"><span>临时查看 · 不改变源 View</span><span>双击卡片或按 Esc 返回 UltraView</span></div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+  const icons = {
+    time: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c3 0 3-6 6-6s3 12 6 12 3-6 6-6"/></svg>',
+    fft: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V8m4 11V5m4 14V10m4 9V3m4 16V7"/></svg>',
+    fft_time: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M9 5v14m4-11v8m4-11v14m4-11v8"/></svg>',
+    frf: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c4-9 6 4 10-6 2-4 4-3 8-5"/></svg>',
+    order: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 5v7l5 3"/></svg>'
+  };
+
+  const sectionMeta = {
+    time: { label: '时域', color: '#2d7ff9', axis: 'time', axisLabel: '时间轴' },
+    fft: { label: '频谱', color: '#7958c7', axis: 'frequency', axisLabel: '频率轴' },
+    fft_time: { label: '时频', color: '#168b88', axis: 'time-frequency', axisLabel: '时频轴' },
+    frf: { label: 'FRF', color: '#b65791', axis: 'frequency', axisLabel: '频率轴' },
+    order: { label: '阶次', color: '#d78228', axis: 'order', axisLabel: '阶次轴' }
+  };
+
+  const views = [
+    { id:'time-road', section:'time', name:'道路输入', color:'#2d7ff9', range:'0–12 s', source:'A-Drive', status:'fresh', detail:'3 通道 · Overlay', seed:1 },
+    { id:'time-cold', section:'time', name:'冷启动', color:'#1098ad', range:'0–8 s', source:'ColdStart_01', status:'fresh', detail:'4 通道 · Subplot', seed:2 },
+    { id:'time-return', section:'time', name:'主动回正', color:'#2f9e44', range:'14–22 s', source:'A-Drive', status:'fresh', detail:'5 通道 · Overlay', seed:3 },
+    { id:'fft-road', section:'fft', name:'道路 80 km/h', color:'#7958c7', range:'0–2 kHz', source:'A-Drive', status:'fresh', detail:'Hann · 4096', seed:4 },
+    { id:'fft-resonance', section:'fft', name:'共振检查', color:'#9c36b5', range:'0–800 Hz', source:'B-Drive', status:'stale', detail:'Hann · 8192', seed:5 },
+    { id:'fft-ripple', section:'fft', name:'齿槽转矩 Ripple', color:'#5f3dc4', range:'0–1 kHz', source:'Ripple_PK2C', status:'fresh', detail:'Hann · 4096', seed:6 },
+    { id:'fft-bench', section:'fft', name:'台架基线', color:'#c2255c', range:'0–2 kHz', source:'Bench_07', status:'fresh', detail:'Flat top · 8192', seed:7 },
+    { id:'fft-time-shift', section:'fft_time', name:'瞬态频移', color:'#168b88', range:'0–12 s · 0–2 kHz', source:'A-Drive', status:'missing', detail:'尚未计算', seed:8 },
+    { id:'frf-base', section:'frf', name:'基线 H1', color:'#b65791', range:'10–800 Hz', source:'Input → Rack', status:'fresh', detail:'H1 · Coherence', seed:9 },
+    { id:'frf-control', section:'frf', name:'控制器 H1', color:'#e8598f', range:'10–800 Hz', source:'Input → Motor', status:'fresh', detail:'H1 · Coherence', seed:10 },
+    { id:'order-main', section:'order', name:'2–8 阶总览', color:'#d78228', range:'0–12 s · 0–12 阶', source:'A-Drive', status:'fresh', detail:'RPM · 6 阶', seed:11 },
+    { id:'order-high', section:'order', name:'高转速阶次', color:'#f08c00', range:'8–16 s · 0–20 阶', source:'HighRPM_03', status:'deleted', detail:'源 View 已删除', seed:12 }
+  ];
+  const byId = Object.fromEntries(views.map(v => [v.id, v]));
+
+  const templates = {
+    hero: {
+      label:'主图 + 3 辅图', slots:[
+        { area:'1 / 1 / 13 / 9', role:'主图' },
+        { area:'1 / 9 / 5 / 13', role:'辅图 1' },
+        { area:'5 / 9 / 9 / 13', role:'辅图 2' },
+        { area:'9 / 9 / 13 / 13', role:'辅图 3' }
+      ]
+    },
+    quad: {
+      label:'2 × 2 等分', slots:[
+        { area:'1 / 1 / 7 / 7', role:'左上' }, { area:'1 / 7 / 7 / 13', role:'右上' },
+        { area:'7 / 1 / 13 / 7', role:'左下' }, { area:'7 / 7 / 13 / 13', role:'右下' }
+      ]
+    },
+    cinema: {
+      label:'上方主图 + 3 图', slots:[
+        { area:'1 / 1 / 8 / 13', role:'主图' },
+        { area:'8 / 1 / 13 / 5', role:'辅图 1' }, { area:'8 / 5 / 13 / 9', role:'辅图 2' },
+        { area:'8 / 9 / 13 / 13', role:'辅图 3' }
+      ]
+    },
+    matrix: {
+      label:'3 × 2 全局矩阵', slots:[
+        { area:'1 / 1 / 7 / 5', role:'1' }, { area:'1 / 5 / 7 / 9', role:'2' }, { area:'1 / 9 / 7 / 13', role:'3' },
+        { area:'7 / 1 / 13 / 5', role:'4' }, { area:'7 / 5 / 13 / 9', role:'5' }, { area:'7 / 9 / 13 / 13', role:'6' }
+      ]
+    }
+  };
+
+  const scenes = {
+    overview: { name:'整车问题总览', layout:'hero', cards:['time-road','fft-resonance','order-main','frf-base'] },
+    same: { name:'四工况频谱', layout:'quad', cards:['fft-road','fft-resonance','fft-ripple','fft-bench'] },
+    six: { name:'六图全局矩阵', layout:'matrix', cards:['time-road','time-cold','fft-road','fft-time-shift','frf-control','order-main'] }
+  };
+
+  const state = {
+    scene:'overview', layout:'hero', cards:[...scenes.overview.cards], selected:'time-road',
+    axisFilter:'all', ratio:67, labels:true, context:true, zoom:100, presentation:false,
+    statusOverrides:{}, draggedCard:null, draggedView:null
+  };
+
+  const el = id => document.getElementById(id);
+  const board = el('ultra-board');
+  const layoutPopover = el('layout-popover');
+  let toastTimer = null;
+
+  function statusOf(view) { return state.statusOverrides[view.id] || view.status; }
+  function showToast(html) {
+    const toast = el('toast');
+    toast.innerHTML = html;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+  }
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  }
+  function wave(seed, offset=0, amplitude=1) {
+    const points = [];
+    for (let i=0; i<=72; i++) {
+      const x = 7 + i * 1.28;
+      const y = 52 + offset + Math.sin((i + seed*2) * .31) * 10 * amplitude + Math.sin((i+seed)*.83) * 4 * amplitude + Math.cos(i*.12+seed) * 5;
+      points.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    }
+    return points.join(' ');
+  }
+  function gridSvg() {
+    return `<g class="plot-grid">${[20,36,52,68,84].map(y=>`<line x1="7" y1="${y}" x2="99" y2="${y}"/>`).join('')}${[22,40,58,76,94].map(x=>`<line x1="${x}" y1="10" x2="${x}" y2="84"/>`).join('')}</g><path class="plot-axis" d="M7 9V84H99"/>`;
+  }
+  function timeChart(view) {
+    return `<svg viewBox="0 0 106 94" preserveAspectRatio="none" aria-label="时域示意图">${gridSvg()}<polyline class="plot-line secondary" points="${wave(view.seed,8,.62)}"/><polyline class="plot-line tertiary" points="${wave(view.seed+4,-8,.48)}"/><polyline class="plot-line" points="${wave(view.seed,0,.9)}"/><line class="cursor-line" x1="64" y1="10" x2="64" y2="84"/><text class="axis-label" x="7" y="92">${escapeHtml(view.range)}</text></svg>`;
+  }
+  function fftChart(view) {
+    const peaks = [14,21,31,46,58,71,83,93].map((x,i) => {
+      const h = 18 + ((i*17 + view.seed*11) % 56);
+      return `<path class="plot-fill" d="M${x-3} 84 Q${x} ${84-h} ${x+3} 84Z"/><path class="plot-line" d="M${x-4} 84 Q${x} ${84-h} ${x+4} 84"/>`;
+    }).join('');
+    return `<svg viewBox="0 0 106 94" preserveAspectRatio="none" aria-label="频谱示意图">${gridSvg()}${peaks}<path class="plot-line secondary" d="M7 79 C23 77 27 70 38 75 S52 68 63 76 78 70 99 78"/><text class="axis-label" x="7" y="92">${escapeHtml(view.range)}</text></svg>`;
+  }
+  function heatmapChart(view, order=false) {
+    const cells = [];
+    for (let row=0; row<10; row++) for (let col=0; col<22; col++) {
+      const ridge = order ? Math.abs(row - ((col*.32 + view.seed) % 9)) : Math.abs(row - (5 + Math.sin(col*.35+view.seed)*2));
+      const alpha = Math.max(.05, .72 - ridge*.15 + ((col*row+view.seed)%4)*.025);
+      const hue = order ? 34 : 176;
+      cells.push(`<rect x="${8+col*4.1}" y="${10+row*7.2}" width="4.15" height="7.3" fill="hsla(${hue},${order?82:58}%,${order?51:42}%,${alpha.toFixed(2)})"/>`);
+    }
+    return `<svg viewBox="0 0 106 94" preserveAspectRatio="none" aria-label="${order?'阶次':'时频'}示意图"><rect x="7" y="9" width="92" height="75" fill="#f4f6f8"/>${cells.join('')}<path class="plot-axis" d="M7 9V84H99"/><text class="axis-label" x="7" y="92">${escapeHtml(view.range)}</text></svg>`;
+  }
+  function frfChart(view) {
+    return `<svg viewBox="0 0 106 94" preserveAspectRatio="none" aria-label="FRF 示意图"><g class="plot-grid"><line x1="7" y1="28" x2="99" y2="28"/><line x1="7" y1="50" x2="99" y2="50"/><line x1="7" y1="72" x2="99" y2="72"/>${[22,40,58,76,94].map(x=>`<line x1="${x}" y1="9" x2="${x}" y2="84"/>`).join('')}</g><path class="plot-axis" d="M7 9V84H99"/><path class="plot-line" d="M7 40 C16 38 20 32 27 36 S35 45 43 23 52 43 60 31 70 42 79 18 88 38 99 27"/><path class="plot-line secondary" d="M7 70 C16 68 23 73 31 61 S44 77 52 66 62 74 71 58 82 72 99 63"/><line class="cursor-line" x1="79" y1="9" x2="79" y2="84"/><text class="axis-label" x="7" y="92">${escapeHtml(view.range)}</text></svg>`;
+  }
+  function chartFor(view) {
+    if (view.section === 'time') return timeChart(view);
+    if (view.section === 'fft') return fftChart(view);
+    if (view.section === 'fft_time') return heatmapChart(view, false);
+    if (view.section === 'frf') return frfChart(view);
+    return heatmapChart(view, true);
+  }
+
+  function renderLibrary() {
+    const query = el('library-search').value.trim().toLowerCase();
+    const placed = new Set(state.cards.filter(Boolean));
+    const grouped = {};
+    views.filter(v => !query || `${sectionMeta[v.section].label} ${v.name} ${v.source}`.toLowerCase().includes(query)).forEach(v => (grouped[v.section] ||= []).push(v));
+    el('library-list').innerHTML = Object.entries(sectionMeta).map(([key, meta]) => {
+      const items = grouped[key] || [];
+      if (!items.length) return '';
+      return `<section class="library-section" style="--section:${meta.color}"><div class="library-section-head"><span class="section-icon">${icons[key]}</span><span>${meta.label}</span><span class="side-count">${items.length}</span></div>${items.map(view => {
+        const isPlaced = placed.has(view.id);
+        return `<div class="library-view ${isPlaced?'placed':''}" draggable="true" data-view-id="${view.id}" title="拖到画布，或点击右侧按钮"><i class="view-dot" style="--view-color:${view.color}"></i><div class="library-copy"><b>${escapeHtml(view.name)}</b><small>${escapeHtml(view.range)}</small></div><button class="library-add ${isPlaced?'placed':''}" data-add-view="${view.id}" ${isPlaced?'aria-label="已在画布中"':'aria-label="添加到画布"'}>${isPlaced?'✓':'+'}</button></div>`;
+      }).join('')}</section>`;
+    }).join('') || '<div class="inspector-empty">没有匹配的 View</div>';
+    el('library-count').textContent = views.length;
+    document.querySelectorAll('.library-view').forEach(item => {
+      item.addEventListener('dragstart', event => {
+        state.draggedView = item.dataset.viewId; state.draggedCard = null;
+        item.classList.add('dragging'); event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData('text/plain', `view:${item.dataset.viewId}`);
+      });
+      item.addEventListener('dragend', () => { item.classList.remove('dragging'); state.draggedView = null; clearDropTargets(); });
+    });
+    document.querySelectorAll('[data-add-view]').forEach(button => button.addEventListener('click', event => {
+      event.stopPropagation();
+      if (!placed.has(button.dataset.addView)) addView(button.dataset.addView);
+    }));
+  }
+
+  function emptyOverlay(view, status) {
+    if (status === 'missing') return `<div class="state-overlay"><div><span class="state-icon">◇</span><b>尚无可用结果</b><small>UltraView 不会在后台计算</small><button data-open-source="${view.id}">打开原 View 计算</button></div></div>`;
+    if (status === 'deleted') return `<div class="state-overlay"><div><span class="state-icon">!</span><b>源 View 已删除</b><small>位置和尺寸已保留</small><button data-rebind="${view.id}">重新绑定</button></div></div>`;
+    return '';
+  }
+
+  function cardHtml(view, index, slot) {
+    const meta = sectionMeta[view.section];
+    const status = statusOf(view);
+    const selected = state.selected === view.id;
+    const dimmed = state.axisFilter !== 'all' && meta.axis !== state.axisFilter;
+    return `<article class="chart-card ${selected?'selected':''} ${dimmed?'axis-dim':''}" draggable="true" tabindex="0" data-card-index="${index}" data-view-id="${view.id}" style="grid-area:${slot.area};--view-color:${view.color}" aria-label="${meta.label} ${escapeHtml(view.name)}">
+      <header class="card-head"><i class="view-dot" style="--view-color:${view.color}"></i><div class="card-head-copy"><b>${escapeHtml(view.name)}</b><small>${meta.label} · ${escapeHtml(view.source)}</small></div><span class="axis-pill">${meta.axisLabel}</span><i class="status-dot ${status}"></i><button class="card-button" data-focus-card="${view.id}" title="临时放大">⛶</button></header>
+      <div class="chart-wrap">${chartFor(view)}</div>
+      ${state.labels ? `<footer class="card-foot"><span>${meta.label} · ${escapeHtml(view.detail)}</span>${state.context?`<span class="source">${escapeHtml(view.source)}</span>`:''}</footer>` : ''}
+      ${status === 'stale' ? '<span class="stale-ribbon">源 View 已变化</span>' : ''}
+      ${emptyOverlay(view, status)}
+    </article>`;
+  }
+
+  function renderBoard() {
+    const template = templates[state.layout];
+    board.innerHTML = template.slots.map((slot, index) => {
+      const id = state.cards[index];
+      const view = byId[id];
+      return view ? cardHtml(view, index, slot) : `<button class="empty-slot" data-empty-index="${index}" style="grid-area:${slot.area}"><span><b>＋</b>添加 View<br><small>${slot.role}</small></span></button>`;
+    }).join('');
+    board.style.setProperty('--ratio', `${state.ratio}%`);
+    if (state.layout === 'hero') {
+      const split = Math.max(6, Math.min(10, Math.round(state.ratio / 100 * 12)));
+      template.slots[0].area = `1 / 1 / 13 / ${split+1}`;
+      template.slots[1].area = `1 / ${split+1} / 5 / 13`;
+      template.slots[2].area = `5 / ${split+1} / 9 / 13`;
+      template.slots[3].area = `9 / ${split+1} / 13 / 13`;
+      [...board.children].forEach((child,i) => child.style.gridArea = template.slots[i].area);
+    } else if (state.layout === 'cinema') {
+      const split = Math.max(6, Math.min(9, Math.round(state.ratio / 100 * 12)));
+      template.slots[0].area = `1 / 1 / ${split+1} / 13`;
+      [1,2,3].forEach((idx) => template.slots[idx].area = `${split+1} / ${1+(idx-1)*4} / 13 / ${5+(idx-1)*4}`);
+      [...board.children].forEach((child,i) => child.style.gridArea = template.slots[i].area);
+    } else if (state.layout === 'quad') {
+      const split = Math.max(4, Math.min(8, Math.round(state.ratio / 100 * 12)));
+      template.slots[0].area = `1 / 1 / 7 / ${split+1}`; template.slots[1].area = `1 / ${split+1} / 7 / 13`;
+      template.slots[2].area = `7 / 1 / 13 / ${split+1}`; template.slots[3].area = `7 / ${split+1} / 13 / 13`;
+      [...board.children].forEach((child,i) => child.style.gridArea = template.slots[i].area);
+    }
+    attachCardEvents();
+    renderRail();
+  }
+
+  function attachCardEvents() {
+    document.querySelectorAll('.chart-card').forEach(card => {
+      card.addEventListener('click', event => {
+        if (event.target.closest('button')) return;
+        state.selected = card.dataset.viewId; renderBoard(); renderInspector(); updateStatus();
+      });
+      card.addEventListener('dblclick', () => openFocus(card.dataset.viewId));
+      card.addEventListener('keydown', event => { if (event.key === 'Enter') openFocus(card.dataset.viewId); });
+      card.addEventListener('dragstart', event => {
+        state.draggedCard = Number(card.dataset.cardIndex); state.draggedView = null;
+        card.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', `card:${state.draggedCard}`);
+      });
+      card.addEventListener('dragend', () => { card.classList.remove('dragging'); state.draggedCard = null; clearDropTargets(); });
+      card.addEventListener('dragover', event => { event.preventDefault(); card.classList.add('drop-target'); event.dataTransfer.dropEffect = state.draggedView ? 'copy' : 'move'; });
+      card.addEventListener('dragleave', () => card.classList.remove('drop-target'));
+      card.addEventListener('drop', event => {
+        event.preventDefault(); event.stopPropagation();
+        const target = Number(card.dataset.cardIndex);
+        if (state.draggedCard !== null) swapCards(state.draggedCard, target);
+        else if (state.draggedView) replaceCard(target, state.draggedView);
+      });
+    });
+    document.querySelectorAll('[data-focus-card]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); openFocus(button.dataset.focusCard); }));
+    document.querySelectorAll('[data-open-source]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); showToast(`<b>打开原 View：</b>${escapeHtml(byId[button.dataset.openSource].name)} · UltraView 本身没有提交计算`); }));
+    document.querySelectorAll('[data-rebind]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); showToast('<b>重新绑定：</b>请从左侧 View 库拖一个 View 到此卡片'); }));
+    document.querySelectorAll('.empty-slot').forEach(slot => {
+      slot.addEventListener('click', () => { el('library-search').focus(); showToast('<b>添加 View：</b>从左侧点击“＋”，或直接拖到这个空位'); });
+      slot.addEventListener('dragover', event => { event.preventDefault(); slot.classList.add('drop-target'); });
+      slot.addEventListener('dragleave', () => slot.classList.remove('drop-target'));
+      slot.addEventListener('drop', event => {
+        event.preventDefault(); event.stopPropagation();
+        const target = Number(slot.dataset.emptyIndex);
+        if (state.draggedCard !== null) { state.cards[target] = state.cards[state.draggedCard]; state.cards[state.draggedCard] = null; }
+        else if (state.draggedView) state.cards[target] = state.draggedView;
+        state.selected = state.cards[target]; renderAll();
+      });
+    });
+  }
+  function clearDropTargets() { document.querySelectorAll('.drop-target').forEach(node => node.classList.remove('drop-target')); board.classList.remove('drag-over'); }
+  function swapCards(a,b) { if (a===b) return; [state.cards[a],state.cards[b]]=[state.cards[b],state.cards[a]]; state.selected=state.cards[b]; renderAll(); showToast('<b>已换位：</b>只调整 UltraView 布局，源 View 未改变'); }
+  function replaceCard(index,id) { const old=state.cards[index]; state.cards[index]=id; state.selected=id; renderAll(); showToast(`<b>已替换：</b>${old?escapeHtml(byId[old].name)+' → ':''}${escapeHtml(byId[id].name)}`); }
+  function addView(id) {
+    if (state.cards.includes(id)) { showToast(`<b>${escapeHtml(byId[id].name)}</b> 已在画布中`); return; }
+    const capacity = templates[state.layout].slots.length;
+    let index = state.cards.slice(0,capacity).findIndex(v => !v);
+    if (index < 0 && state.cards.length < capacity) index = state.cards.length;
+    if (index < 0) { showToast('<b>当前布局已满。</b>请换成六图矩阵，或把 View 拖到要替换的卡片上'); return; }
+    state.cards[index]=id; state.selected=id; renderAll(); showToast(`<b>已添加：</b>${escapeHtml(byId[id].name)} · 未触发计算`);
+  }
+
+  function renderRail() {
+    const active = state.cards.map(id=>byId[id]).filter(Boolean);
+    const counts = { time:0, frequency:0, 'time-frequency':0, order:0 };
+    active.forEach(v => counts[sectionMeta[v.section].axis]++);
+    const timeRanges = new Set(active.filter(v=>sectionMeta[v.section].axis==='time').map(v=>v.range));
+    const frequencyRanges = new Set(active.filter(v=>sectionMeta[v.section].axis==='frequency').map(v=>v.range));
+    const mismatch = timeRanges.size>1 || frequencyRanges.size>1;
+    const buttons = [
+      ['all','全部',active.length], ['time','时间轴',counts.time], ['frequency','频率轴',counts.frequency],
+      ['time-frequency','时频轴',counts['time-frequency']], ['order','阶次轴',counts.order]
+    ].filter(([key,,count])=>key==='all'||count>0);
+    el('comparison-rail').innerHTML = `<div class="rail-title"><i class="rail-pulse"></i><span>对比轨道</span></div>${buttons.map(([key,label,count])=>`<button class="rail-button ${state.axisFilter===key?'active':''}" data-axis-filter="${key}">${label}<span class="rail-count">${count}</span></button>`).join('')}${mismatch?'<span class="range-warning"><i></i>X 范围不一致</span>':'<span class="range-warning" style="border-color:#c7e1d5;color:#307459;background:#eef9f3"><i style="background:#3ba36f"></i>同类范围一致</span>'}<span class="calc-badge">0 JOBS</span>`;
+    document.querySelectorAll('[data-axis-filter]').forEach(button => button.addEventListener('click', () => { state.axisFilter=button.dataset.axisFilter; renderBoard(); }));
+  }
+
+  function renderInspector() {
+    const view = byId[state.selected] || byId[state.cards.find(Boolean)];
+    if (!view) { el('inspector-content').innerHTML='<div class="inspector-empty">选择一张卡片查看设置</div>'; return; }
+    const meta = sectionMeta[view.section];
+    const status = statusOf(view);
+    el('inspector-content').style.setProperty('--selected-color', view.color);
+    el('inspector-content').innerHTML = `
+      <section class="inspector-section"><h3>已选卡片</h3><div class="selected-identity"><i class="large-dot"></i><div><b>${escapeHtml(view.name)}</b><small>${meta.label} · ${escapeHtml(view.source)}</small></div></div></section>
+      <section class="inspector-section"><h3>布局角色</h3><div class="field-row"><span>当前位置</span><span class="field-value">${state.cards.indexOf(view.id)+1} / ${templates[state.layout].slots.length}</span></div><div class="field-row"><span>调整位置</span><span><button class="ratio-button" id="move-prev" aria-label="前移" ${state.cards.indexOf(view.id)<=0?'disabled':''}>←</button> <button class="ratio-button" id="move-next" aria-label="后移" ${state.cards.indexOf(view.id)>=state.cards.length-1?'disabled':''}>→</button></span></div><div class="field-row"><span>尺寸比例</span><span class="field-value" id="ratio-value">${state.ratio}%</span></div><div class="ratio-control"><button class="ratio-button" data-ratio="-5">−</button><div class="ratio-meter" style="--ratio:${state.ratio}%"><i></i></div><button class="ratio-button" data-ratio="5">＋</button></div><div class="field-row"><span>角色</span><button class="plain-button" id="make-primary" style="height:24px;font-size:8px">设为主图</button></div></section>
+      <section class="inspector-section"><h3>投影状态模拟</h3><div class="status-picker">${[['fresh','最新'],['stale','源已变化'],['missing','无结果'],['deleted','源已删除']].map(([key,label])=>`<button class="status-button ${status===key?'active':''}" data-status="${key}">${label}</button>`).join('')}</div></section>
+      <section class="inspector-section"><h3>画布显示</h3><div class="check-row"><span>显示卡片说明</span><button class="switch ${state.labels?'on':''}" id="toggle-labels" aria-pressed="${state.labels}"></button></div><div class="check-row"><span>显示数据源</span><button class="switch ${state.context?'on':''}" id="toggle-context" aria-pressed="${state.context}"></button></div><div class="field-row"><span>轴类型</span><span class="field-value">${meta.axisLabel}</span></div><div class="field-row"><span>显示范围</span><span class="field-value">${escapeHtml(view.range)}</span></div></section>
+      <section class="inspector-section"><h3>卡片操作</h3><div class="inspector-actions"><button class="plain-button" id="open-source">打开原 View</button><button class="plain-button" id="focus-source">临时放大</button><button class="plain-button" id="replace-source">替换 View</button><button class="plain-button" id="remove-source" style="color:#b0444c">移出画布</button></div></section>`;
+    document.querySelectorAll('[data-ratio]').forEach(button=>button.addEventListener('click',()=>{ state.ratio=Math.max(40,Math.min(80,state.ratio+Number(button.dataset.ratio))); renderBoard(); renderInspector(); updateStatus(); }));
+    document.querySelectorAll('[data-status]').forEach(button=>button.addEventListener('click',()=>{ state.statusOverrides[view.id]=button.dataset.status; renderBoard(); renderInspector(); }));
+    el('move-prev').addEventListener('click',()=>{ const idx=state.cards.indexOf(view.id); if(idx>0) swapCards(idx,idx-1); });
+    el('move-next').addEventListener('click',()=>{ const idx=state.cards.indexOf(view.id); if(idx>=0&&idx<state.cards.length-1) swapCards(idx,idx+1); });
+    el('toggle-labels').addEventListener('click',()=>{ state.labels=!state.labels; renderBoard(); renderInspector(); });
+    el('toggle-context').addEventListener('click',()=>{ state.context=!state.context; renderBoard(); renderInspector(); });
+    el('make-primary').addEventListener('click',()=>{ const idx=state.cards.indexOf(view.id); if(idx>0) swapCards(idx,0); else showToast('<b>当前已经是主图。</b>用比例按钮继续调整主图区'); });
+    el('open-source').addEventListener('click',()=>showToast(`<b>打开原 View：</b>${meta.label} · ${escapeHtml(view.name)}（原型不离开此页）`));
+    el('focus-source').addEventListener('click',()=>openFocus(view.id));
+    el('replace-source').addEventListener('click',()=>{ el('library-search').focus(); showToast('<b>替换：</b>从左侧拖一个 View 到选中的卡片'); });
+    el('remove-source').addEventListener('click',()=>{ const idx=state.cards.indexOf(view.id); state.cards[idx]=null; state.selected=state.cards.find(Boolean)||null; renderAll(); showToast(`<b>已移出画布：</b>${escapeHtml(view.name)} · 源 View 仍然保留`); });
+  }
+
+  function renderLayoutPopover() {
+    layoutPopover.innerHTML = `<div style="position:absolute;z-index:20;top:80px;left:260px;width:230px;padding:7px;border:1px solid #bdcad8;border-radius:8px;background:#fff;box-shadow:0 14px 34px rgba(38,53,73,.2)">${Object.entries(templates).map(([key,t])=>`<button class="layout-button ${state.layout===key?'active':''}" data-layout="${key}" style="display:flex;width:100%;align-items:center;justify-content:space-between;height:31px;margin:2px 0;padding:0 9px;border-radius:5px;color:#53677e;font-size:10px"><span>${t.label}</span><small>${t.slots.length} 图</small></button>`).join('')}</div>`;
+    document.querySelectorAll('[data-layout]').forEach(button=>button.addEventListener('click',()=>{ applyLayout(button.dataset.layout); layoutPopover.hidden=true; }));
+  }
+  function applyLayout(key) {
+    state.layout=key;
+    const capacity=templates[key].slots.length;
+    if(state.cards.length>capacity) state.cards=state.cards.slice(0,capacity);
+    while(state.cards.length<capacity) state.cards.push(null);
+    if(!state.cards.includes(state.selected)) state.selected=state.cards.find(Boolean)||null;
+    renderAll(); showToast(`<b>已应用布局：</b>${templates[key].label}`);
+  }
+  function applyScene(key) {
+    const scene=scenes[key]; state.scene=key; state.layout=scene.layout; state.cards=[...scene.cards]; state.selected=state.cards[0]; state.axisFilter='all'; state.ratio=key==='overview'?67:50; state.statusOverrides={};
+    document.querySelectorAll('.scenario-button').forEach(button=>button.classList.toggle('active',button.dataset.scene===key));
+    el('board-name').textContent=scene.name; renderAll();
+  }
+
+  function openFocus(id) {
+    const view=byId[id]; if(!view) return;
+    el('focus-dot').style.setProperty('--view-color',view.color); el('focus-title').textContent=view.name; el('focus-meta').textContent=`${sectionMeta[view.section].label} · ${view.range} · ${view.source}`;
+    el('focus-chart').style.setProperty('--view-color',view.color); el('focus-chart').innerHTML=chartFor(view); el('focus-modal').hidden=false; el('focus-close').focus();
+  }
+  function closeFocus(){ el('focus-modal').hidden=true; }
+
+  function updateStatus() {
+    el('layout-name').textContent=templates[state.layout].label;
+    el('status-layout').textContent=templates[state.layout].label;
+    el('status-card-count').textContent=`${state.cards.filter(Boolean).length} 张卡片`;
+    const selected=byId[state.selected]; el('status-selected').textContent=selected?`已选择：${selected.name}`:'未选择卡片';
+    el('zoom-slider').value=state.zoom; el('zoom-readout').textContent=`${state.zoom}%`;
+    el('board-stage').style.zoom=state.zoom/100;
+  }
+  function renderAll(){ renderLibrary(); renderBoard(); renderInspector(); updateStatus(); }
+
+  board.addEventListener('dragover',event=>{ event.preventDefault(); board.classList.add('drag-over'); });
+  board.addEventListener('dragleave',event=>{ if(!board.contains(event.relatedTarget)) board.classList.remove('drag-over'); });
+  board.addEventListener('drop',event=>{
+    if(event.target.closest('.chart-card,.empty-slot')) return;
+    event.preventDefault(); board.classList.remove('drag-over');
+    if(state.draggedView) addView(state.draggedView);
+  });
+  el('library-search').addEventListener('input',renderLibrary);
+  el('layout-menu-button').addEventListener('click',()=>{ renderLayoutPopover(); layoutPopover.hidden=!layoutPopover.hidden; });
+  el('add-view-button').addEventListener('click',()=>{ el('library-search').focus(); showToast('<b>选择一个 View：</b>点击左侧“＋”，或拖到画布中'); });
+  el('fit-button').addEventListener('click',()=>{ state.zoom=100; updateStatus(); el('board-viewport').scrollTo({top:0,left:0,behavior:'smooth'}); });
+  el('zoom-slider').addEventListener('input',event=>{ state.zoom=Number(event.target.value); updateStatus(); });
+  el('zoom-out').addEventListener('click',()=>{ state.zoom=Math.max(70,state.zoom-5); updateStatus(); });
+  el('zoom-in').addEventListener('click',()=>{ state.zoom=Math.min(125,state.zoom+5); updateStatus(); });
+  el('presentation-button').addEventListener('click',()=>{
+    state.presentation=!state.presentation; el('app-shell').classList.toggle('presentation',state.presentation); el('presentation-button').textContent=state.presentation?'退出演示':'演示模式';
+    showToast(state.presentation?'<b>演示模式：</b>已隐藏 View 库和画布设置，按 Esc 退出':'<b>已返回编辑模式</b>');
+  });
+  el('export-button').addEventListener('click',()=>{
+    const active=state.cards.map(id=>byId[id]).filter(Boolean);
+    const rows=active.map((v,i)=>`<text x="40" y="${80+i*32}" font-family="sans-serif" font-size="18" fill="${v.color}">${escapeHtml(sectionMeta[v.section].label)} · ${escapeHtml(v.name)} · ${escapeHtml(v.range)}</text>`).join('');
+    const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="${Math.max(320,130+active.length*38)}" viewBox="0 0 1400 ${Math.max(320,130+active.length*38)}"><rect width="100%" height="100%" fill="#eef2f6"/><text x="40" y="44" font-family="sans-serif" font-size="24" font-weight="700" fill="#26384f">TraceLab UltraView · ${escapeHtml(el('board-name').textContent)}</text><text x="1360" y="44" text-anchor="end" font-family="monospace" font-size="13" fill="#75859a">0 CALCULATION JOBS</text>${rows}</svg>`;
+    const blob=new Blob([svg],{type:'image/svg+xml'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='TraceLab-UltraView-demo.svg'; a.click(); setTimeout(()=>URL.revokeObjectURL(url),500);
+    showToast('<b>已导出 SVG：</b>演示文件只包含当前布局摘要；产品版应导出真实整板图像');
+  });
+  el('focus-close').addEventListener('click',closeFocus);
+  el('focus-modal').addEventListener('click',event=>{ if(event.target===el('focus-modal')) closeFocus(); });
+  document.querySelectorAll('.scenario-button').forEach(button=>button.addEventListener('click',()=>applyScene(button.dataset.scene)));
+  document.addEventListener('click',event=>{ if(!event.target.closest('#layout-menu-button')&&!event.target.closest('#layout-popover')) layoutPopover.hidden=true; });
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape') {
+      if(!el('focus-modal').hidden) closeFocus();
+      else if(state.presentation) { state.presentation=false; el('app-shell').classList.remove('presentation'); el('presentation-button').textContent='演示模式'; }
+      else layoutPopover.hidden=true;
+    }
+  });
+
+  renderAll();
+</script>
+</body>
+</html>

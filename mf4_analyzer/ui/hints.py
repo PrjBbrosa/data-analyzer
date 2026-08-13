@@ -586,6 +586,62 @@ _HINTS = (
         modes=frozenset({"fft", "fft_time", "order"}),
         priority=50,
     ),
+    Hint(
+        id="ultraview.add_from_tab",
+        text="View 标签右键可加入总览",
+        surface="discovery",
+        modes=frozenset({"time", "fft", "fft_time", "frf", "order"}),
+        priority=55,
+    ),
+    Hint(
+        id="ultraview.readonly",
+        text="总览只读，不重新计算",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=90,
+    ),
+    Hint(
+        id="ultraview.card_menu",
+        text="卡片右键打开原 View",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=80,
+    ),
+    Hint(
+        id="ultraview.escape",
+        text="Esc 退出焦点、演示、菜单",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=70,
+    ),
+    Hint(
+        id="ultraview.export",
+        text="整板可复制或导出 PNG",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=60,
+    ),
+    Hint(
+        id="ultraview.tray",
+        text="未放下的卡片进底部托盘",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=50,
+    ),
+    Hint(
+        id="ultraview.statuses",
+        text="卡片四态：新、旧、缺、孤儿",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=45,
+    ),
+    Hint(
+        id="ultraview.presentation",
+        text="演示隐藏两侧，Esc 退出",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=40,
+    ),
 )
 
 

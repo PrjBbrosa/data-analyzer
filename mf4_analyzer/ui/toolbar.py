@@ -9,6 +9,15 @@ from PyQt5.QtWidgets import (
 from .. import app_meta
 from ..ui_kit.icons import Icons
 
+_MODE_LABELS = {
+    "time": "时域",
+    "fft": "频谱",
+    "fft_time": "时频",
+    "order": "阶次",
+    "frf": "频响",
+    "ultraview": "总览",
+}
+
 
 def _make_sep(parent):
     sep = QFrame(parent)
@@ -83,7 +92,7 @@ class Toolbar(QWidget):
     save_project_as_requested = pyqtSignal()
     batch_requested = pyqtSignal()
     # Center segment
-    mode_changed = pyqtSignal(str)  # time | fft | fft_time | frf | order
+    mode_changed = pyqtSignal(str)  # time | fft | fft_time | frf | order | ultraview
     # Right segment
     acquisition_cockpit_requested = pyqtSignal()
     # Panel toggle signals
@@ -155,11 +164,14 @@ class Toolbar(QWidget):
         self.btn_mode_order = QPushButton("阶次", self)
         self.btn_mode_order.setIcon(Icons.mode_order())
         self.btn_mode_order.setToolTip("阶次（Order）")
+        self.btn_mode_ultraview = QPushButton("总览", self)
+        self.btn_mode_ultraview.setIcon(Icons.mode_ultraview())
+        self.btn_mode_ultraview.setToolTip("总览（UltraView）")
 
         for b in (self.btn_add, self.btn_save_project, self.btn_save_project_as,
                   self.btn_batch,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
-                  self.btn_mode_frf, self.btn_mode_order):
+                  self.btn_mode_frf, self.btn_mode_order, self.btn_mode_ultraview):
             b.setIconSize(QSize(16, 16))
 
         # left layout
@@ -194,11 +206,7 @@ class Toolbar(QWidget):
         self._mode_group = QButtonGroup(self)
         self._mode_group.setExclusive(True)
         self._mode_active_dots = {}
-        for key, b in [('time', self.btn_mode_time),
-                       ('fft', self.btn_mode_fft),
-                       ('fft_time', self.btn_mode_fft_time),
-                       ('order', self.btn_mode_order),
-                       ('frf', self.btn_mode_frf)]:
+        for key, b in self._mode_button_pairs():
             b.setCheckable(True)
             b.setProperty("segment", key)
             self._mode_group.addButton(b)
@@ -258,6 +266,7 @@ class Toolbar(QWidget):
 
         self.btn_mode_time.setChecked(True)
         self._current_mode = 'time'
+        self._mode_compact = False
 
         # Keep mirror width in sync with left_widget after layout is settled.
         self._left_widget = left_widget
@@ -276,11 +285,13 @@ class Toolbar(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._sync_mirror()
+        self._apply_mode_compact()
         self._sync_mode_active_dots()
 
     def showEvent(self, event):
         super().showEvent(event)
         self._sync_mirror()
+        self._apply_mode_compact()
         self._sync_mode_active_dots()
 
     def eventFilter(self, watched, event):
@@ -325,15 +336,53 @@ class Toolbar(QWidget):
     def _run_scheduled_mirror_sync(self):
         self._pending_mirror_sync = False
         self._sync_mirror()
+        self._apply_mode_compact()
 
-    def _sync_mode_active_dots(self):
-        for key, button in (
+    def _mode_button_pairs(self):
+        return (
             ("time", self.btn_mode_time),
             ("fft", self.btn_mode_fft),
             ("fft_time", self.btn_mode_fft_time),
             ("order", self.btn_mode_order),
             ("frf", self.btn_mode_frf),
-        ):
+            ("ultraview", self.btn_mode_ultraview),
+        )
+
+    def _labeled_mode_zone_width(self) -> int:
+        fm = self.fontMetrics()
+        buttons = 0
+        for key, _button in self._mode_button_pairs():
+            text_w = fm.horizontalAdvance(_MODE_LABELS[key])
+            buttons += max(60, 16 + 4 + text_w + 20) + 2
+        return 12 + 16 + 24 + 4 + buttons
+
+    def _mode_zone_budget(self) -> int:
+        left = max(self._left_widget.width(), self._left_widget.sizeHint().width(), 1)
+        nav = max(self.btn_toggle_nav.width(), 28)
+        insp = max(self.btn_toggle_inspector.width(), 28)
+        chrome = nav + insp + 2 + (left * 2) + 40
+        return max(0, self.width() - chrome)
+
+    def _apply_mode_compact(self) -> None:
+        need = self._mode_zone_budget() < self._labeled_mode_zone_width()
+        if need == self._mode_compact:
+            return
+        self._mode_compact = need
+        for key, button in self._mode_button_pairs():
+            button.setText("" if need else _MODE_LABELS[key])
+            button.setProperty("compact", "true" if need else "false")
+            style = button.style()
+            style.unpolish(button)
+            style.polish(button)
+        self._mode_segment.updateGeometry()
+        self._mode_zone.updateGeometry()
+        self._sync_mode_active_dots()
+
+    def is_mode_compact(self) -> bool:
+        return bool(self._mode_compact)
+
+    def _sync_mode_active_dots(self):
+        for key, button in self._mode_button_pairs():
             dot = self._mode_active_dots[key]
             dot.move(max(0, button.width() - dot.width() - 5), 4)
             dot.setVisible(button.isChecked())
@@ -345,29 +394,19 @@ class Toolbar(QWidget):
         self.btn_batch.clicked.connect(self.batch_requested)
         # Hidden Cockpit entry: triple-click the brand logo (see _LogoLabel).
         self._logo_label.triple_clicked.connect(self.acquisition_cockpit_requested)
-        for key, b in [('time', self.btn_mode_time),
-                       ('fft', self.btn_mode_fft),
-                       ('fft_time', self.btn_mode_fft_time),
-                       ('order', self.btn_mode_order),
-                       ('frf', self.btn_mode_frf)]:
+        for key, b in self._mode_button_pairs():
             b.clicked.connect(lambda _=False, k=key: self._set_mode(k))
         self.btn_toggle_nav.clicked.connect(self.nav_panel_toggled)
         self.btn_toggle_inspector.clicked.connect(self.inspector_panel_toggled)
 
     def _set_mode(self, mode):
+        if mode not in _MODE_LABELS:
+            mode = "time"
         if mode == self._current_mode:
             return
         self._current_mode = mode
-        # Sync checked state in case this was called programmatically
-        mapping = {
-            'time': self.btn_mode_time,
-            'fft': self.btn_mode_fft,
-            'fft_time': self.btn_mode_fft_time,
-            'frf': self.btn_mode_frf,
-            'order': self.btn_mode_order,
-        }
-        if mode in mapping:
-            mapping[mode].setChecked(True)
+        mapping = dict(self._mode_button_pairs())
+        mapping[mode].setChecked(True)
         self._sync_mode_active_dots()
         self.mode_changed.emit(mode)
 

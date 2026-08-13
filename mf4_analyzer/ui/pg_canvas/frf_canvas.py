@@ -201,7 +201,8 @@ class PgFrfCanvas(QWidget):
         # log axes whose ViewBox coordinates are log10(Hz).
         self._remarks = []
         self._remark_enabled = False
-        self._remark_artist = RemarkArtist()
+        self.markup_revision = 0
+        self._remark_artist = RemarkArtist(on_moved=self._bump_markup_revision)
         self._remark_interaction = RemarkInteraction(
             add_at_viewport_pos=self._add_remark_at_viewport_pos,
             remove_at_viewport_pos=self._remove_remark_at_viewport_pos,
@@ -671,7 +672,13 @@ class PgFrfCanvas(QWidget):
         )
 
     def clear_remarks(self) -> None:
+        if not self._remarks:
+            return
         self._remark_artist.clear(self._remarks)
+        self._bump_markup_revision()
+
+    def _bump_markup_revision(self) -> None:
+        self.markup_revision = int(self.markup_revision) + 1
 
     def remark_count(self) -> int:
         return len(self._remarks)
@@ -736,13 +743,15 @@ class PgFrfCanvas(QWidget):
         point = self._remark_point_at(panel, frequency)
         if point is not None:
             self._remarks.append(self._remark_artist.add(point))
+            self._bump_markup_revision()
 
     def _remove_remark(self, remark) -> None:
         self._remark_artist.remove(remark)
         try:
             self._remarks.remove(remark)
         except ValueError:
-            pass
+            return
+        self._bump_markup_revision()
 
     def remove_remark_near(self, panel: str, frequency: float) -> None:
         plot = self._plot_for_panel(panel)

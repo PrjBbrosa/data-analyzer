@@ -787,6 +787,29 @@ def test_remark_add_and_clear(canvas):
     assert canvas._remarks == []
 
 
+def test_remark_markup_revision_bumps_on_edit_not_empty_clear(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    canvas.set_remark_enabled(True)
+    assert canvas.markup_revision == 0
+    canvas.add_remark_at(5.0, 4.0)
+    assert canvas.markup_revision == 1
+    text = canvas._remarks[0]['text']
+    text.setPos(text.pos().x() + 0.4, text.pos().y() + 0.4)
+    assert canvas.markup_revision == 2
+    canvas.remove_remark_near(5.0, 4.0)
+    assert canvas.markup_revision == 3
+    canvas.clear_remarks()
+    assert canvas.markup_revision == 3
+    canvas.add_remark_at(5.0, 4.0)
+    canvas.clear_remarks()
+    assert canvas.markup_revision == 5
+    canvas.clear_remarks()
+    assert canvas.markup_revision == 5
+
+
 def test_replot_clears_stale_remarks(canvas):
     # Unlike the mpl labels (x, y only), pg remark labels embed the z
     # value — surviving a replot would display stale data. The mpl

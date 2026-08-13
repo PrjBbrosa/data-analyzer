@@ -12,6 +12,7 @@ from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP, DEFAULT_HEATMAP_INT
 from ...qt_analysis_shared import amplitude_mode_is_db
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
+from .ultraview_coordinator import notify_ultraview_plot
 
 
 class OrderMixin:
@@ -662,6 +663,7 @@ class OrderMixin:
             canvas._seed_slice()
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
+        notify_ultraview_plot(self, "order", "order-plot")
 
     def _render_order_time(self, result, *, emit_feedback=True, source=None):
         # Wave 3 / Task 3.2: pull HEAD-parity display knobs from the

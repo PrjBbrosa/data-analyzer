@@ -58,7 +58,7 @@ def test_toolbar_exposes_fft_time_mode(qtbot):
     assert tb.btn_mode_fft_time.text() == '时频'
 
 
-def test_toolbar_exposes_five_exact_mode_names_and_keys(qtbot):
+def test_toolbar_exposes_six_exact_mode_names_and_keys(qtbot):
     tb = Toolbar()
     qtbot.addWidget(tb)
 
@@ -68,15 +68,17 @@ def test_toolbar_exposes_five_exact_mode_names_and_keys(qtbot):
         tb.btn_mode_fft_time,
         tb.btn_mode_order,
         tb.btn_mode_frf,
+        tb.btn_mode_ultraview,
     ]
     assert [button.text() for button in buttons] == [
-        "时域", "频谱", "时频", "阶次", "频响",
+        "时域", "频谱", "时频", "阶次", "频响", "总览",
     ]
     assert [button.property("segment") for button in buttons] == [
-        "time", "fft", "fft_time", "order", "frf",
+        "time", "fft", "fft_time", "order", "frf", "ultraview",
     ]
     assert "FFT" in tb.btn_mode_fft.toolTip()
     assert "FRF" in tb.btn_mode_frf.toolTip()
+    assert "UltraView" in tb.btn_mode_ultraview.toolTip()
 
     seen = []
     tb.mode_changed.connect(seen.append)
@@ -86,6 +88,12 @@ def test_toolbar_exposes_five_exact_mode_names_and_keys(qtbot):
     assert tb.btn_mode_frf.isChecked()
     assert sum(button.isChecked() for button in buttons) == 1
 
+    tb.btn_mode_ultraview.click()
+    assert tb.current_mode() == "ultraview"
+    assert seen[-1] == "ultraview"
+    assert tb.btn_mode_ultraview.isChecked()
+    assert sum(button.isChecked() for button in buttons) == 1
+
 
 def test_toolbar_frf_unselected_uses_the_same_segment_style_as_other_modes():
     from pathlib import Path
@@ -93,6 +101,7 @@ def test_toolbar_frf_unselected_uses_the_same_segment_style_as_other_modes():
     qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
     selector = qss[qss.index('Toolbar QPushButton[segment="time"]'):qss.index('Toolbar QPushButton[segment]:hover')]
     assert 'Toolbar QPushButton[segment="frf"]' in selector
+    assert 'Toolbar QPushButton[segment="ultraview"]' in selector
 
 
 def test_toolbar_mode_zone_keeps_symmetric_divider_gaps_and_fixed_height(qtbot, qapp):
@@ -210,3 +219,41 @@ def test_toolbar_primary_open_matches_secondary_file_action_height(qtbot, qapp):
     qtbot.wait(20)
 
     assert tb.btn_add.height() == tb.btn_save_project.height() == tb.btn_batch.height()
+
+
+def _mode_buttons(tb):
+    return [
+        tb.btn_mode_time,
+        tb.btn_mode_fft,
+        tb.btn_mode_fft_time,
+        tb.btn_mode_order,
+        tb.btn_mode_frf,
+        tb.btn_mode_ultraview,
+    ]
+
+
+def test_toolbar_six_modes_go_icon_only_at_1100_and_restore_labels_at_1600(qtbot, qapp):
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    buttons = _mode_buttons(tb)
+
+    tb.resize(1100, 44)
+    tb.show()
+    qtbot.wait(30)
+    assert tb.is_mode_compact()
+    assert all(button.text() == "" for button in buttons)
+    geoms = [button.geometry() for button in buttons]
+    for left, right in zip(geoms, geoms[1:]):
+        assert left.right() <= right.left()
+        assert not left.intersects(right)
+
+    tb.resize(1600, 44)
+    qtbot.wait(30)
+    assert not tb.is_mode_compact()
+    assert [button.text() for button in buttons] == [
+        "时域", "频谱", "时频", "阶次", "频响", "总览",
+    ]

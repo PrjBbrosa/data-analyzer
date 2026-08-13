@@ -13,6 +13,7 @@ from ..widgets import StatsStrip
 from ..analysis_section_page import AnalysisSectionPage
 from ..analysis_view_state import AnalysisViewState
 from ..view_state import ViewManager
+from .ultraview.page import UltraViewPage
 
 from ._helpers import (
     _grab_pixmap_hidpi,
@@ -54,6 +55,7 @@ class ChartStack(QWidget):
     home_triggered = pyqtSignal()
     tick_density_changed = pyqtSignal(int, int)
     quickref_requested = pyqtSignal()
+    add_to_ultraview_requested = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -199,6 +201,9 @@ class ChartStack(QWidget):
         self.stack.addWidget(self.page_fft_time)
         self.stack.addWidget(self.page_frf)
         self.stack.addWidget(self.page_order)
+        self.page_ultraview = UltraViewPage(self)
+        self.stack.addWidget(self.page_ultraview)
+        self.page_ultraview.quickref_requested.connect(self.quickref_requested.emit)
         for page in (
             self.page_fft, self.page_fft_time, self.page_frf, self.page_order,
         ):
@@ -206,6 +211,9 @@ class ChartStack(QWidget):
             page.setAttribute(Qt.WA_NoSystemBackground, True)
             page.setAutoFillBackground(False)
             self._connect_analysis_card_signals(page._cards[0])
+            page.tabbar.add_to_ultraview_requested.connect(
+                self.add_to_ultraview_requested.emit
+            )
         # The time card's copy button lives on the shared toolbar; route it to
         # the focused pane so 复制为图片 captures whichever pane is focused.
         self._time_card.copy_image_requested.connect(self._copy_focused_card_image)
@@ -790,9 +798,12 @@ class ChartStack(QWidget):
         self._time_bottom_dock.layout().insertWidget(0, bar)
         self._view_tabbar = bar
         bar.setVisible(self.current_mode() == 'time')
+        bar.add_to_ultraview_requested.connect(self.add_to_ultraview_requested.emit)
         return bar
 
     def hint_bar_for_mode(self, mode):
+        if mode not in _MODE_TO_INDEX:
+            mode = 'time'
         if mode == 'time':
             return self._time_card._hint_bar
         if mode == 'fft':
@@ -803,6 +814,8 @@ class ChartStack(QWidget):
             return self._frf_card._hint_bar
         if mode == 'order':
             return self._order_card._hint_bar
+        if mode == 'ultraview':
+            return self.page_ultraview.hint_bar()
         raise KeyError(mode)
 
     def take_hint_bar(self, mode, parent):
@@ -818,6 +831,8 @@ class ChartStack(QWidget):
         return bar
 
     def set_mode(self, mode):
+        if mode not in _MODE_TO_INDEX:
+            mode = 'time'
         idx = _MODE_TO_INDEX[mode]
         if self.stack.currentIndex() == idx:
             return
@@ -830,7 +845,7 @@ class ChartStack(QWidget):
         self.mode_changed.emit(mode)
 
     def current_mode(self):
-        return _INDEX_TO_MODE[self.stack.currentIndex()]
+        return _INDEX_TO_MODE.get(self.stack.currentIndex(), 'time')
 
     # ----- plot-mode / cursor-mode passthroughs -----
     def plot_mode(self):
@@ -1027,6 +1042,8 @@ class ChartStack(QWidget):
         DPI-independent bitmap; the canvas caps the magnification for
         speed. The cursor pill's position AND size are scaled by the SAME
         effective factor so it still lines up on the magnified bitmap."""
+        if self.current_mode() == 'ultraview':
+            return
         if (self.current_mode() == 'time'
                 and self.split_active()
                 and card in (self._time_card, self._secondary_card)):

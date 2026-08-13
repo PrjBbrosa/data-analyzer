@@ -1183,7 +1183,8 @@ Toolbar QPushButton[segment="time"],
 Toolbar QPushButton[segment="fft"],
 Toolbar QPushButton[segment="fft_time"],
 Toolbar QPushButton[segment="frf"],
-Toolbar QPushButton[segment="order"] {
+Toolbar QPushButton[segment="order"],
+Toolbar QPushButton[segment="ultraview"] {
     min-width: 60px;
     min-height: 24px;
     margin: 0 1px;
@@ -1194,6 +1195,10 @@ Toolbar QPushButton[segment="order"] {
     color: #64748b;
     font-size: 13px;
     font-weight: 700;
+}
+Toolbar QPushButton[segment][compact="true"] {
+    min-width: 28px;
+    padding: 2px 6px;
 }
 Toolbar QPushButton[segment]:hover {
     background-color: #eef2f7;
@@ -3879,3 +3884,138 @@ QFrame#segmentedChoice QPushButton[role="choice"]:checked {
     border-color: {{CONTROL_SELECT_LINE}};
     color: {{CONTROL_TEXT_ON_SELECT}};
 }
+
+/* UltraView page */
+QWidget#ultraViewPage {
+    background-color: #f2f4f7;
+}
+QWidget#ultraViewLibrary,
+QWidget#ultraViewBoardColumn,
+QWidget#ultraViewBoardGrid,
+QFrame#ultraViewUnplacedTray,
+QFrame#ultraViewBoardToolbar,
+QFrame#ultraViewCompareRail {
+    background-color: #ffffff;
+}
+QWidget#ultraViewLibrary {
+    border-right: 1px solid #d6e0eb;
+}
+QLabel#ultraViewLibraryTitle,
+QLabel#ultraViewBoardName,
+QLabel#ultraViewFocusTitle {
+    color: #111827;
+    font-size: 13px;
+    font-weight: 700;
+}
+QLabel#ultraViewLibraryCount,
+QLabel#ultraViewLibraryMeta,
+QLabel#ultraViewLibrarySectionHead,
+QLabel#ultraViewCardSource,
+QLabel#ultraViewAxisWarning {
+    color: #64748b;
+    font-size: 11px;
+}
+QLineEdit#ultraViewLibrarySearch {
+    border: 1px solid #d6e0eb;
+    border-radius: 8px;
+    background-color: #ffffff;
+}
+QFrame#ultraViewLibraryRow {
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background-color: transparent;
+}
+QFrame#ultraViewLibraryRow:hover {
+    background-color: #f5f8fc;
+}
+QFrame#ultraViewLibraryRow[selected="true"] {
+    border-color: #bfd7f7;
+    background-color: #edf5ff;
+}
+QFrame#ultraViewLibraryRow[onBoard="true"] {
+    background-color: #f0f5fb;
+}
+QWidget#ultraViewCard {
+    background-color: #ffffff;
+    border: 1px solid #d6e0eb;
+    border-radius: 10px;
+}
+QWidget#ultraViewCard[selected="true"] {
+    border-color: #2d7ff9;
+}
+QWidget#ultraViewCard[replacementArmed="true"] {
+    border-color: #2d7ff9;
+    background-color: #f3f8ff;
+}
+QWidget#ultraViewCard[orphaned="true"] {
+    border-color: #e2b15a;
+}
+QWidget#ultraViewCard[status="stale"] QLabel#ultraViewCardStatus {
+    color: #8a5609;
+}
+QWidget#ultraViewCardHeader,
+QWidget#ultraViewCardFooter {
+    background-color: transparent;
+}
+QLabel#ultraViewCardImage {
+    color: #64748b;
+    padding: 8px;
+}
+QWidget#ultraViewEmptySlot {
+    background-color: #f7fafc;
+    border: 1px dashed #d6e0eb;
+    border-radius: 10px;
+    color: #64748b;
+}
+QWidget#ultraViewEmptySlot:hover {
+    border-color: #2d7ff9;
+    color: #2d7ff9;
+    background-color: #f3f8ff;
+}
+QFrame#ultraViewUnplacedTray {
+    border-top: 1px solid #d6e0eb;
+}
+QPushButton#ultraViewTrayTitle {
+    border: none;
+    border-radius: 0;
+    background-color: #ffffff;
+    color: #111827;
+    font-weight: 700;
+    text-align: left;
+    padding: 6px 10px;
+}
+QFrame#ultraViewTrayItem {
+    border: 1px solid #d6e0eb;
+    border-radius: 8px;
+    background-color: #ffffff;
+}
+QFrame#ultraViewCompareRail QPushButton#ultraViewCompareButton {
+    min-height: 22px;
+    padding: 2px 8px;
+    border: 1px solid #d6e0eb;
+    border-radius: 8px;
+    background-color: #ffffff;
+    color: #405269;
+}
+QFrame#ultraViewCompareRail QPushButton#ultraViewCompareButton:checked {
+    border-color: #2d7ff9;
+    background-color: #edf5ff;
+    color: #1d4f9c;
+}
+QFrame#ultraViewFocusLayer {
+    background-color: rgba(22, 33, 47, 140);
+}
+QFrame#ultraViewFocusPanel {
+    background-color: #ffffff;
+    border: 1px solid #d6e0eb;
+    border-radius: 10px;
+}
+QPushButton#ultraViewOpenSourceButton {
+    border: 1px solid #2d7ff9;
+    border-radius: 8px;
+    background-color: #2d7ff9;
+    color: #ffffff;
+    font-weight: 700;
+    padding: 4px 10px;
+}
+

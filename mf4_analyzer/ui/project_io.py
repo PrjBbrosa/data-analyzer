@@ -16,6 +16,7 @@ from .time_xaxis import CustomXAxisSpec, EXACT_SOURCE, PER_SOURCE_NAME
 
 SCHEMA_VERSION = 2
 SUPPORTED_SCHEMA_VERSIONS = {1, 2}
+_SOURCE_MODES = frozenset({"time", "fft", "fft_time", "frf", "order"})
 
 
 class UnsupportedProjectVersion(ValueError):
@@ -48,6 +49,7 @@ class ProjectDocument:
     # {"fft"|"fft_time"|"order": {"active": int, "views": [AnalysisViewState.to_dict()]}}
     analysis_views: dict = field(default_factory=dict)
     filter: dict | None = None
+    ultraview: dict | None = None
 
 
 def save_project_to_json(doc: ProjectDocument, path) -> None:
@@ -77,6 +79,7 @@ def save_project_to_json(doc: ProjectDocument, path) -> None:
         "view_manager": doc.view_manager,
         "analysis_views": doc.analysis_views,
         "filter": doc.filter,
+        "ultraview": doc.ultraview,
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -116,14 +119,21 @@ def load_project_from_json(path) -> ProjectDocument:
         )
         for f in raw.get("files", [])
     ]
+    mode = str(raw.get("current_mode", "time"))
+    if mode not in _SOURCE_MODES:
+        mode = "time"
+    uv_payload = raw.get("ultraview")
+    if uv_payload is not None and not isinstance(uv_payload, dict):
+        uv_payload = None
     return ProjectDocument(
         active_file=raw.get("active_file"),
-        current_mode=str(raw.get("current_mode", "time")),
+        current_mode=mode,
         files=files,
         views=list(raw.get("views", [])),
         view_manager=dict(raw.get("view_manager", {})),
         analysis_views=dict(raw.get("analysis_views", {})),
         filter=raw.get("filter") if version >= 2 else None,
+        ultraview=uv_payload,
     )
 
 

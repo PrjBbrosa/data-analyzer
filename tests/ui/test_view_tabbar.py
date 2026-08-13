@@ -984,3 +984,30 @@ def test_section_anchor_and_split_actions_are_both_fixed_budget_siblings(qtbot):
         bar._split_clear,
     ):
         assert bar.rect().contains(widget.geometry())
+
+
+def test_section_context_menu_add_to_ultraview_emits_stable_ref(qtbot, monkeypatch):
+    manager, bar = _section_bar(qtbot, section="time", count=2)
+    received = []
+    bar.add_to_ultraview_requested.connect(lambda s, v: received.append((s, v)))
+
+    def fake_exec(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "加入总览")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    bar._on_context_menu(_tab_point(bar, 1))
+
+    assert received == [("time", str(manager.get(1).view_id))]
+
+
+def test_context_menu_without_section_omits_add_to_ultraview(qtbot, monkeypatch):
+    _manager, bar = _bar(qtbot, count=1)
+    labels = []
+
+    def fake_exec(menu, *_args):
+        labels.extend(action.text() for action in menu.actions())
+        return None
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    bar._on_context_menu(_tab_point(bar, 0))
+    assert "加入总览" not in labels

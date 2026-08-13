@@ -8,6 +8,7 @@ from ..pg_canvas.heatmap_canvas import DEFAULT_HEATMAP_CMAP
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from .fft_time_coordinator import make_fft_time_analysis_key
+from .ultraview_coordinator import notify_ultraview_plot
 
 
 class FFTTimeMixin:
@@ -577,6 +578,7 @@ class FFTTimeMixin:
                     spin.blockSignals(False)
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
+        notify_ultraview_plot(self, "fft_time", "fft-time-plot")
 
     # ---- FFT vs Time coordinator events --------------------------------
     def _on_fft_time_render_requested(self, ctx, result, cache_hit):

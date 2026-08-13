@@ -1,6 +1,6 @@
-"""Regenerate the four help-guide panel screenshots (time / fft / fft_time /
-order) by booting the real MainWindow, loading synthetic data, driving each
-mode to a populated state, and grabbing the whole window at 2x.
+"""Regenerate the help-guide panel screenshots (time / fft / fft_time /
+order / ultraview) by booting the real MainWindow, loading synthetic data,
+driving each mode to a populated state, and grabbing the whole window at 2x.
 
 Outputs to a STAGING dir (output/help-shots/) by default — review the PNGs,
 then re-run with --promote to copy them over mf4_analyzer/help/assets/. The
@@ -46,12 +46,13 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-PANEL_MODES = ("time", "fft", "fft_time", "order")
+PANEL_MODES = ("time", "fft", "fft_time", "order", "ultraview")
 PANEL_FILES = {
     "time": "time-panel.png",
     "fft": "fft-panel.png",
     "fft_time": "ffttime-panel.png",
     "order": "order-panel.png",
+    "ultraview": "ultraview-panel.png",
 }
 EXTRA_SHOTS = ("imports",)
 EXTRA_FILES = {"imports": "imports-panel.png"}
@@ -167,7 +168,7 @@ def build_synthetic_csv() -> Path:
     data = np.column_stack([t, rpm, signal, torque])
     np.savetxt(out, data, delimiter=",",
                header=f"time,{CH_RPM},{CH_SIGNAL},{CH_TORQUE}",
-               comments="", fmt="%.6g")
+               comments="", fmt="%.6g", encoding="utf-8")
     return out
 
 
@@ -290,6 +291,9 @@ def _drive_mode(win, app, mode: str) -> None:
             app.processEvents()
         if not win.chart_stack.page_order.pane_canvas(0).has_result():
             raise RuntimeError("Order completed without a rendered result")
+        return
+    if mode == "ultraview":
+        return
 
 
 def main() -> int:

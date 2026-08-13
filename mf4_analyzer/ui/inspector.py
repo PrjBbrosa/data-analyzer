@@ -25,6 +25,7 @@ from .inspector_sections import (
     OrderContextual,
     PersistentTop,
     TimeContextual,
+    UltraViewContextual,
 )
 from .inspector_sections.time_filter import FilterPanel
 
@@ -211,10 +212,12 @@ class Inspector(QWidget):
         self.fft_time_ctx = FFTTimeContextual(self._scroll_body)
         self.frf_ctx = FrfContextual(self._scroll_body)
         self.order_ctx = OrderContextual(self._scroll_body)
+        self.ultraview_ctx = UltraViewContextual(self._scroll_body)
         self.contextual_stack.addWidget(self.fft_ctx)
         self.contextual_stack.addWidget(self.fft_time_ctx)
         self.contextual_stack.addWidget(self.frf_ctx)
         self.contextual_stack.addWidget(self.order_ctx)
+        self.contextual_stack.addWidget(self.ultraview_ctx)
         body_lay.addWidget(self.contextual_stack)
         self.contextual_stack.setVisible(False)
 
@@ -265,12 +268,16 @@ class Inspector(QWidget):
         self.frf_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
 
     def set_mode(self, mode):
+        if mode not in ('time', 'fft', 'fft_time', 'frf', 'order', 'ultraview'):
+            mode = 'time'
         self._current_mode = mode
         if mode == 'time':
             self._time_domain_card.setVisible(True)
             self.contextual_stack.setVisible(False)
         else:
-            idx = {'fft': 0, 'fft_time': 1, 'frf': 2, 'order': 3}[mode]
+            idx = {
+                'fft': 0, 'fft_time': 1, 'frf': 2, 'order': 3, 'ultraview': 4,
+            }[mode]
             self._time_domain_card.setVisible(False)
             self.contextual_stack.setVisible(True)
             self.contextual_stack.setCurrentIndex(idx)
@@ -318,7 +325,7 @@ class Inspector(QWidget):
         # The persistent bottom-right help link targets the current mode's
         # guide; mode strings map 1:1 to open_guide() names.
         self._help_guide_name = mode if mode in (
-            'time', 'fft', 'fft_time', 'frf', 'order',
+            'time', 'fft', 'fft_time', 'frf', 'order', 'ultraview',
         ) else 'time'
 
     def _open_current_guide(self):
@@ -343,17 +350,26 @@ class Inspector(QWidget):
             # The range card hosts [range_group, filter_panel]; re-insert the
             # group ABOVE the filter panel (addWidget would append it below).
             target_layout.insertWidget(0, group)
-        else:
-            ctx = {
-                'fft': self.fft_ctx,
-                'fft_time': self.fft_time_ctx,
-                'frf': self.frf_ctx,
-                'order': self.order_ctx,
-            }[mode]
-            target_layout = ctx.time_range_layout()
-            self.top.set_range_group_embedded(True)
+            group.setVisible(True)
+            self._range_group_owner_layout = target_layout
+            return
+        if mode == 'ultraview':
+            self.top.set_range_group_embedded(False)
+            self.top.set_xaxis_section_visible(False)
             self.top.setVisible(False)
-            target_layout.addWidget(group)
+            group.setVisible(False)
+            self._range_group_owner_layout = None
+            return
+        ctx = {
+            'fft': self.fft_ctx,
+            'fft_time': self.fft_time_ctx,
+            'frf': self.frf_ctx,
+            'order': self.order_ctx,
+        }[mode]
+        target_layout = ctx.time_range_layout()
+        self.top.set_range_group_embedded(True)
+        self.top.setVisible(False)
+        target_layout.addWidget(group)
         self._range_group_owner_layout = target_layout
         group.setVisible(True)
 
