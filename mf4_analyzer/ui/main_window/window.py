@@ -910,7 +910,7 @@ class MainWindow(
         self.toolbar.save_project_requested.connect(self.save_project_via_dialog)
         self.toolbar.save_project_as_requested.connect(self.save_project_as_via_dialog)
         self.toolbar.batch_requested.connect(self.open_batch)
-        self.toolbar.ultraview_requested.connect(self.open_ultraview)
+        self.chart_stack.open_ultraview_requested.connect(self.open_ultraview)
         self.toolbar.acquisition_cockpit_requested.connect(self.open_acquisition_cockpit)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.chart_stack.image_captured.connect(

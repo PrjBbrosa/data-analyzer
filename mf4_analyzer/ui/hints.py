@@ -587,6 +587,13 @@ _HINTS = (
         priority=50,
     ),
     Hint(
+        id="ultraview.view_rail",
+        text="View 栏右侧 UltraView 可打开只读总览",
+        surface="discovery",
+        modes=frozenset({"time", "fft", "fft_time", "frf", "order"}),
+        priority=58,
+    ),
+    Hint(
         id="ultraview.add_from_tab",
         text="View 标签右键可加入总览",
         surface="discovery",

@@ -349,6 +349,8 @@ def test_view_compact_tabs_ranks_between_coaxis_custom_action_and_batch_export()
         "channel.export_wwt_storage",
         "coaxis.merge",
         "view.compact_tabs",
+        "ultraview.view_rail",
+        "ultraview.add_from_tab",
         "chart.custom_action_slot",
         "batch.export_options",
     ]

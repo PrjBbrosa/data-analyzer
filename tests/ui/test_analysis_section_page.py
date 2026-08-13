@@ -4,7 +4,7 @@ import pytest
 
 from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWidgets import QVBoxLayout
+from PyQt5.QtWidgets import QAbstractButton, QPushButton, QVBoxLayout
 
 from mf4_analyzer.ui.analysis_section_page import AnalysisSectionPage, _FOCUS_ACCENT
 from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
@@ -824,18 +824,93 @@ def test_analysis_compare_buttons_are_compact_and_right_aligned(
         clear_right = clear.mapTo(page._compare_row, clear.rect().topRight()).x()
         clear_left = clear.mapTo(page._compare_row, clear.rect().topLeft()).x()
         link_left = link.mapTo(page._compare_row, link.rect().topLeft()).x()
-        rightmost = page.btn_lock_levels if page.btn_lock_levels.isVisible() else link
-        rightmost_right = rightmost.mapTo(
-            page._compare_row, rightmost.rect().topRight()).x()
+        compare_rightmost = (
+            page.btn_lock_levels if page.btn_lock_levels.isVisible() else link
+        )
+        compare_right = compare_rightmost.mapTo(
+            page._compare_row, compare_rightmost.rect().topRight()).x()
+        dock = page.ultraview_entry
+        dock_left = dock.mapTo(page._compare_row, dock.rect().topLeft()).x()
+        dock_right = dock.mapTo(page._compare_row, dock.rect().topRight()).x()
         gap = link_left - clear_right - 1
-        right_gap = page._compare_row.width() - rightmost_right - 1
+        right_gap = page._compare_row.width() - dock_right - 1
 
         assert link.height() <= 24
         assert 0 <= gap <= 10
-        assert clear_left > page._compare_row.width() // 2
+        tabbar_left = page.tabbar.mapTo(
+            page._compare_row, page.tabbar.rect().topLeft()).x()
+        assert clear_left > tabbar_left + page.tabbar.width() // 2
+        assert compare_right < dock_left
         assert 0 <= right_gap <= 12
     finally:
         qapp.setStyleSheet(original_qss)
+
+
+def _mapped_rect(host, widget):
+    top_left = widget.mapTo(host, widget.rect().topLeft())
+    return widget.rect().translated(top_left)
+
+
+def test_analysis_ultraview_dock_is_last_clickable_on_host(page, qapp):
+    host = page._compare_row
+    qapp.processEvents()
+    clickables = [
+        host.layout().itemAt(i).widget()
+        for i in range(host.layout().count())
+        if isinstance(host.layout().itemAt(i).widget(), QAbstractButton)
+        and not host.layout().itemAt(i).widget().isHidden()
+    ]
+    assert page.ultraview_entry is not None
+    assert clickables[-1] is page.ultraview_entry
+    assert page.tabbar.findChild(QAbstractButton, "ultraViewEntry") is None
+
+
+@pytest.mark.parametrize("fixture_name", ["page", "line_page", "slice_page"])
+def test_analysis_heatmap_split_keeps_dock_as_right_anchor(
+    request, qapp, fixture_name,
+):
+    page = request.getfixturevalue(fixture_name)
+    page.enter_split()
+    qapp.processEvents()
+    host = page._compare_row
+    clear = page.tabbar._split_clear
+    link = page.btn_link
+    lock = page.btn_lock_levels
+    sep = page.ultraview_separator
+    dock = page.ultraview_entry
+
+    assert clear.isVisible()
+    assert link.isVisible()
+    assert dock.isVisible()
+    assert sep.isVisible()
+    assert clear.parentWidget() is page.tabbar
+    assert dock.parentWidget() is host
+
+    order = [clear, link]
+    if lock.isVisible():
+        order.append(lock)
+    order.extend([sep, dock])
+    rects = [_mapped_rect(host, widget) for widget in order]
+    for left, right in zip(rects, rects[1:]):
+        assert left.right() <= right.left()
+        assert not left.intersects(right)
+
+    margins = host.layout().contentsMargins()
+    assert abs(dock.geometry().right() - (host.width() - margins.right() - 1)) <= 2
+    assert host.height() == 28
+    assert page.tabbar.height() == 28
+    assert dock.height() <= 28
+
+
+def test_analysis_dock_stays_enabled_when_views_at_cap(page, qapp):
+    manager = page.manager
+    while manager.new_view() != -1:
+        pass
+    page.tabbar.refresh()
+    qapp.processEvents()
+    plus = page.tabbar.findChild(QPushButton, "viewTabPlus")
+    assert not plus.isEnabled()
+    assert page.ultraview_entry.isEnabled()
 
 
 # ---- Task 6: linked zoom boundary test ----

@@ -278,6 +278,10 @@ class ViewTabBar(QWidget):
         self._update_split_chip()
         self._sync_tabbar_width()
 
+    def refresh_fit(self) -> None:
+        """Public entry for hosts that changed sibling width (UltraView Dock)."""
+        self._sync_tabbar_width()
+
     def refresh(self) -> None:
         if self._reordering:
             # A live drag-reorder is on the stack. Qt has ALREADY moved the

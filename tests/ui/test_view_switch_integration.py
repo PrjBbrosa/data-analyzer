@@ -150,10 +150,12 @@ def test_main_window_mounts_view_tabbar(qtbot):
     assert isinstance(w.view_tabbar, ViewTabBar)
     assert w.view_tabbar is w.chart_stack._view_tabbar
     assert w.chart_stack._time_card.view_tabbar is None
-    assert w.view_tabbar.parentWidget() is w.chart_stack._time_bottom_dock
+    rail = w.chart_stack.findChild(type(w.chart_stack._time_bottom_dock), "timeViewRail")
+    assert w.view_tabbar.parentWidget() is rail
+    assert rail.parentWidget() is w.chart_stack._time_bottom_dock
 
     layout = w.chart_stack._time_bottom_dock.layout()
-    assert layout.indexOf(w.view_tabbar) >= 0
+    assert layout.indexOf(rail) >= 0
     assert layout.indexOf(w.chart_stack._time_hint_bar) == -1
     assert w.chart_stack._time_hint_bar.parentWidget() is w.statusBar
 

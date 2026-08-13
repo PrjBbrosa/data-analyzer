@@ -282,6 +282,20 @@ def test_plus_button_disabled_at_view_cap(qtbot):
     assert not plus.isEnabled()
 
 
+def test_refresh_fit_calls_sync_tabbar_width(qtbot):
+    _manager, bar = _bar(qtbot, count=2)
+    calls = []
+    original = bar._sync_tabbar_width
+
+    def wrapped():
+        calls.append(True)
+        original()
+
+    bar._sync_tabbar_width = wrapped
+    bar.refresh_fit()
+    assert calls == [True]
+
+
 def test_plus_button_follows_the_managers_own_cap_not_the_module_constant(qtbot):
     # Cap must differ from MAX_VIEWS so we prove the bar reads the instance,
     # not the module default (both are 12 in the product today).

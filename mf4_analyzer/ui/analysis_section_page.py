@@ -27,6 +27,11 @@ from PyQt5.QtWidgets import (
 
 from .image_utils import pixmap_as_device_pixels
 from .view_tabbar import ViewTabBar
+from .widgets.ultraview_entry import (
+    UltraViewEntryButton,
+    UltraViewRailFitter,
+    make_ultraview_separator,
+)
 from ..ui_kit.qt_lifecycle import as_weak_callable
 
 _FOCUS_ACCENT = "#2d7ff9"
@@ -128,9 +133,9 @@ class AnalysisSectionPage(QWidget):
         # compare_toggled write. Set before the buttons are wired.
         self._suppress_compare_edge = False
 
-        # Bottom row: [ViewTabBar ........... 关闭对比窗格 | 联动缩放 | 锁定色阶].
-        # The toggles live on THIS page (not inside the shared ViewTabBar,
-        # which the time-domain section reuses unchanged).
+        # Bottom row: [ViewTabBar ........... 关闭对比窗格 | 联动缩放? | 锁定色阶? | UltraView].
+        # Compare toggles stay on THIS page (not inside the shared ViewTabBar).
+        # UltraView Dock is always the last clickable item of the host row.
         self._compare_row = QWidget(self)
         self._compare_row.setObjectName("analysisCompareRow")
         self._compare_row.setAttribute(Qt.WA_StyledBackground, True)
@@ -169,6 +174,16 @@ class AnalysisSectionPage(QWidget):
             "锁定色阶", "两个热力图共用同一色阶范围；拖动一格 colorbar 另一格跟随")
         row.addWidget(self.btn_link, 0)
         row.addWidget(self.btn_lock_levels, 0)
+        self.ultraview_separator = make_ultraview_separator(self._compare_row)
+        self.ultraview_entry = UltraViewEntryButton(self._compare_row)
+        row.addWidget(self.ultraview_separator, 0, Qt.AlignVCenter)
+        row.addWidget(self.ultraview_entry, 0, Qt.AlignVCenter)
+        self._ultraview_rail_fitter = UltraViewRailFitter(
+            host=self._compare_row,
+            tabbar=self.tabbar,
+            entry=self.ultraview_entry,
+            extra_widgets=(self.btn_link, self.btn_lock_levels),
+        )
         self.btn_link.toggled.connect(self._on_link_button_toggled)
         self.btn_lock_levels.toggled.connect(self._on_lock_button_toggled)
         # 联动缩放 + 锁定色阶 defaults mirror AnalysisViewState.compare.
@@ -750,3 +765,6 @@ class AnalysisSectionPage(QWidget):
         split = len(self._cards) > 1
         self.btn_link.setVisible(split)
         self.btn_lock_levels.setVisible(split and self._is_heatmap_section())
+        fitter = getattr(self, '_ultraview_rail_fitter', None)
+        if fitter is not None:
+            fitter.schedule()

@@ -2,7 +2,7 @@
 from PyQt5.QtCore import QEvent, QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import (
-    QSplitter, QStackedWidget, QVBoxLayout, QWidget,
+    QHBoxLayout, QSizePolicy, QSplitter, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from ..pg_canvases import TimeDomainCanvasPG
@@ -56,6 +56,7 @@ class ChartStack(QWidget):
     tick_density_changed = pyqtSignal(int, int)
     quickref_requested = pyqtSignal()
     add_to_ultraview_requested = pyqtSignal(str, str)
+    open_ultraview_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -214,6 +215,7 @@ class ChartStack(QWidget):
             page.tabbar.add_to_ultraview_requested.connect(
                 self.add_to_ultraview_requested.emit
             )
+            self._wire_ultraview_entry(page.ultraview_entry)
         # The time card's copy button lives on the shared toolbar; route it to
         # the focused pane so 复制为图片 captures whichever pane is focused.
         self._time_card.copy_image_requested.connect(self._copy_focused_card_image)
@@ -786,19 +788,73 @@ class ChartStack(QWidget):
         self._sync_secondary_controls_to_focus()
         self._sync_shared_nav_highlight()
 
+    def _emit_open_ultraview(self, _checked=False):
+        self.open_ultraview_requested.emit()
+
+    def _wire_ultraview_entry(self, button):
+        """Connect a View-rail Dock click once; repeat calls are no-ops."""
+        if button is None:
+            return
+        wired = getattr(self, '_wired_ultraview_entries', None)
+        if wired is None:
+            self._wired_ultraview_entries = wired = set()
+        token = id(button)
+        if token in wired:
+            return
+        button.clicked.connect(self._emit_open_ultraview)
+        wired.add(token)
+
     def attach_view_tabbar(self, manager):
         from ..view_tabbar import ViewTabBar
+        from ..widgets.ultraview_entry import (
+            ENTRY_HEIGHT,
+            UltraViewEntryButton,
+            UltraViewRailFitter,
+            make_ultraview_separator,
+        )
 
         existing = getattr(self, '_view_tabbar', None)
         if existing is not None:
             existing.setVisible(self.current_mode() == 'time')
             return existing
 
-        bar = ViewTabBar(manager, self._time_bottom_dock, section='time')
-        self._time_bottom_dock.layout().insertWidget(0, bar)
+        dock = self._time_bottom_dock
+        host = QWidget(dock)
+        host.setObjectName("timeViewRail")
+        # Keep the rail transparent so #timeViewBottomDock's rounded fill
+        # remains the only bottom-corner paint (ChartStack radius 7px).
+        host.setAttribute(Qt.WA_StyledBackground, True)
+        host.setAttribute(Qt.WA_TranslucentBackground, True)
+        host.setAutoFillBackground(False)
+        host.setStyleSheet("QWidget#timeViewRail { background-color: transparent; }")
+        host.setFixedHeight(ENTRY_HEIGHT)
+        host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        rail = QHBoxLayout(host)
+        rail.setContentsMargins(0, 0, 8, 0)
+        rail.setSpacing(6)
+
+        bar = ViewTabBar(manager, host, section='time')
+        rail.addWidget(bar, 1)
+        sep = make_ultraview_separator(host)
+        entry = UltraViewEntryButton(host)
+        rail.addWidget(sep, 0, Qt.AlignVCenter)
+        rail.addWidget(entry, 0, Qt.AlignVCenter)
+
+        dock.layout().insertWidget(0, host)
+        # A child created under an already-visible dock starts explicitly
+        # hidden; insertWidget will not auto-show it (unlike a ViewTabBar
+        # that used to be inserted directly).
+        host.show()
+        self._time_view_rail = host
         self._view_tabbar = bar
+        self.ultraview_separator = sep
+        self.ultraview_entry = entry
+        self._ultraview_rail_fitter = UltraViewRailFitter(
+            host=host, tabbar=bar, entry=entry, extra_widgets=(),
+        )
         bar.setVisible(self.current_mode() == 'time')
         bar.add_to_ultraview_requested.connect(self.add_to_ultraview_requested.emit)
+        self._wire_ultraview_entry(entry)
         return bar
 
     def hint_bar_for_mode(self, mode):

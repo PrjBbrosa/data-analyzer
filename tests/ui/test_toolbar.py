@@ -21,18 +21,15 @@ def test_toolbar_enabled_matrix(qapp):
     tb = Toolbar()
     tb.set_enabled_for_mode('time', has_file=True)
     assert tb.btn_batch.isEnabled()
-    assert tb.btn_ultraview.isEnabled()
     assert tb.btn_save_project.isEnabled()
     assert tb.btn_save_caret.isEnabled()
     tb.set_enabled_for_mode('fft', has_file=True)
     assert tb.btn_batch.isEnabled()
-    assert tb.btn_ultraview.isEnabled()
     tb.set_enabled_for_mode('time', has_file=False)
     assert not tb.btn_save_project.isEnabled()
     assert not tb.btn_save_caret.isEnabled()
     assert not tb.btn_save_project_as.isEnabled()
     assert tb.btn_batch.isEnabled()
-    assert tb.btn_ultraview.isEnabled()
 
 
 def test_toolbar_batch_requested_emits(qapp, qtbot):
@@ -43,12 +40,21 @@ def test_toolbar_batch_requested_emits(qapp, qtbot):
 
 
 def test_toolbar_ultraview_requested_emits(qapp, qtbot):
+    """Open intent now comes from the View-rail Dock, not a Toolbar 总览 chip."""
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    from mf4_analyzer.ui.view_state import ViewManager
+
     tb = Toolbar()
     qtbot.addWidget(tb)
-    with qtbot.waitSignal(tb.ultraview_requested, timeout=200):
-        tb.btn_ultraview.click()
     assert tb.btn_mode_ultraview.isHidden()
-    assert not tb.btn_ultraview.isHidden()
+    assert not hasattr(tb, "btn_ultraview") or tb.btn_ultraview.isHidden()
+    assert not hasattr(tb, "ultraview_requested")
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.attach_view_tabbar(ViewManager())
+    with qtbot.waitSignal(cs.open_ultraview_requested, timeout=200):
+        cs.ultraview_entry.click()
 
 
 def test_toolbar_batch_icon_is_distinct_from_export(qapp, qtbot):
@@ -93,8 +99,7 @@ def test_toolbar_exposes_five_exact_mode_names_and_keys(qtbot):
     assert "FFT" in tb.btn_mode_fft.toolTip()
     assert "FRF" in tb.btn_mode_frf.toolTip()
     assert tb.btn_mode_ultraview.isHidden()
-    assert tb.btn_ultraview.text() == "总览"
-    assert "总览" in tb.btn_ultraview.toolTip()
+    assert not hasattr(tb, "btn_ultraview") or tb.btn_ultraview.isHidden()
 
     seen = []
     tb.mode_changed.connect(seen.append)
@@ -103,10 +108,6 @@ def test_toolbar_exposes_five_exact_mode_names_and_keys(qtbot):
     assert seen == ["frf"]
     assert tb.btn_mode_frf.isChecked()
     assert sum(button.isChecked() for button in buttons) == 1
-
-    tb.btn_ultraview.click()
-    assert tb.current_mode() == "frf"
-    assert seen == ["frf"]
 
 
 def test_toolbar_frf_unselected_uses_the_same_segment_style_as_other_modes():
@@ -221,8 +222,7 @@ def test_toolbar_open_keeps_primary_entry_cue_and_other_file_actions_are_seconda
     assert tb.btn_add.property("role") == "primary"
     assert [button.property("role") for button in (
         tb.btn_save_project, tb.btn_save_caret, tb.btn_batch,
-        tb.btn_ultraview,
-    )] == ["secondary"] * 4
+    )] == ["secondary"] * 3
 
 
 def test_toolbar_primary_open_matches_secondary_file_action_height(qtbot, qapp):
@@ -241,7 +241,6 @@ def test_toolbar_primary_open_matches_secondary_file_action_height(qtbot, qapp):
         == tb.btn_save_project.height()
         == tb.btn_save_caret.height()
         == tb.btn_batch.height()
-        == tb.btn_ultraview.height()
     )
     assert abs(tb._save_split.height() - tb.btn_batch.height()) <= 2
     assert tb.btn_save_caret.width() < tb.btn_save_project.width()
@@ -263,7 +262,6 @@ def test_toolbar_left_file_actions_share_equal_width(qtbot, qapp):
         tb.btn_add.width(),
         tb._save_split.width(),
         tb.btn_batch.width(),
-        tb.btn_ultraview.width(),
     )
     assert max(widths) - min(widths) <= 1
     assert tb.btn_save_caret.width() == _SAVE_CARET_WIDTH

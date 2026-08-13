@@ -51,10 +51,12 @@ def test_attach_view_tabbar_stays_in_shared_bottom_dock_outside_splitter(qtbot):
     assert cs._time_split.widget(1) is cs._secondary_card
     assert cs._time_card.view_tabbar is None
     assert cs._secondary_card.view_tabbar is None
-    assert bar.parentWidget() is cs._time_bottom_dock
+    rail = cs.findChild(type(cs._time_bottom_dock), "timeViewRail")
+    assert bar.parentWidget() is rail
+    assert rail.parentWidget() is cs._time_bottom_dock
     assert cs._time_bottom_dock.isVisibleTo(cs)
     lay = cs._time_bottom_dock.layout()
-    assert lay.indexOf(bar) < lay.indexOf(cs._time_hint_bar)
+    assert lay.indexOf(rail) < lay.indexOf(cs._time_hint_bar)
 
 
 def test_mode_switching_uses_wrapped_time_page(qtbot):

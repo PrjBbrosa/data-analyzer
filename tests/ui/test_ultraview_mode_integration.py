@@ -667,6 +667,65 @@ def test_idle_pan_and_markup_recaptures_time_preview(qapp, qtbot, loaded_csv):
     assert page._status_for(ref) == STATUS_FRESH
 
 
+def _source_ultraview_docks(win):
+    cs = win.chart_stack
+    return (
+        cs.ultraview_entry,
+        cs.page_fft.ultraview_entry,
+        cs.page_fft_time.ultraview_entry,
+        cs.page_frf.ultraview_entry,
+        cs.page_order.ultraview_entry,
+    )
+
+
+def test_each_source_dock_opens_the_same_ultraview_sheet(qapp, qtbot):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1200, 800)
+    win.show()
+    qtbot.waitExposed(win)
+    qapp.processEvents()
+
+    docks = _source_ultraview_docks(win)
+    assert all(dock is not None and dock.isEnabled() for dock in docks)
+    assert win.chart_stack.page_ultraview.findChild(QWidget, "ultraViewEntry") is None
+
+    hits = []
+    win.chart_stack.open_ultraview_requested.connect(lambda *_args: hits.append(True))
+    sheet = None
+    for dock in docks:
+        dock.click()
+        qapp.processEvents()
+        if sheet is None:
+            sheet = win._ultraview_sheet
+            assert sheet is not None
+        else:
+            assert win._ultraview_sheet is sheet
+    assert len(hits) == 5
+    docks[0].click()
+    qapp.processEvents()
+    assert win._ultraview_sheet is sheet
+    assert len(hits) == 6
+
+
+def test_toolbar_has_no_visible_ultraview_entry(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    tb = win.toolbar
+    assert tb.btn_mode_ultraview.isHidden()
+    assert not hasattr(tb, "btn_ultraview") or tb.btn_ultraview.isHidden()
+    left = tb.findChild(QWidget, "toolbarLeftGroup")
+    visible = [
+        button.text()
+        for button in left.findChildren(QPushButton)
+        if button.isVisible() and button.text()
+    ]
+    assert "总览" not in visible
+    assert "UltraView" not in visible
+
+
 def test_add_to_ultraview_from_view_tab_keeps_section_and_view_id(
     qapp, qtbot, monkeypatch,
 ):

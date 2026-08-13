@@ -505,6 +505,7 @@ def test_analysis_view_scope_trails_the_section_headline_gesture():
 def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     by_id = {hint.id: hint for hint in hints.all_hints() if hint.id.startswith("ultraview.")}
     required = {
+        "ultraview.view_rail",
         "ultraview.add_from_tab",
         "ultraview.card_menu",
         "ultraview.escape",
@@ -518,6 +519,10 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     }
     assert required <= set(by_id)
     source_modes = frozenset({"time", "fft", "fft_time", "frf", "order"})
+    rail_hint = by_id["ultraview.view_rail"]
+    assert rail_hint.surface == "discovery"
+    assert rail_hint.modes == source_modes
+    assert rail_hint.text == "View 栏右侧 UltraView 可打开只读总览"
     add_hint = by_id["ultraview.add_from_tab"]
     assert add_hint.surface == "discovery"
     assert add_hint.modes == source_modes
@@ -537,6 +542,22 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     } <= uv_ids
     time_ids = {hint.id for hint in hints.context_hints(HintState(mode="time", plot_mode="overlay"))}
     assert not any(hid.startswith("ultraview.") for hid in time_ids)
+    for mode in ("time", "fft", "fft_time", "frf", "order"):
+        state = HintState(mode=mode, plot_mode="overlay" if mode == "time" else "")
+        seen = set()
+        walked = state
+        found_rail = False
+        while (hint := hints.discovery_hint(walked)) is not None and hint.id not in seen:
+            if hint.id == "ultraview.view_rail":
+                found_rail = True
+                break
+            seen.add(hint.id)
+            walked = HintState(
+                mode=mode,
+                plot_mode=state.plot_mode,
+                discovered=frozenset(seen),
+            )
+        assert found_rail, mode
     haystack = " ".join(hint.text for hint in by_id.values())
     for banned in ("PDF", "SVG", "sidecar", "live card", "后台补图", "自由缩放", "实时", "直播"):
         assert banned not in haystack

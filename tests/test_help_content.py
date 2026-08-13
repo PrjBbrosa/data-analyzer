@@ -250,10 +250,13 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "只读", "不计算", "View 库", "托盘", "加入总览",
         "打开原 View", "PNG", "缺", "孤儿", ".tlproj",
         "五个分析工作区", "不是第六种算法", "2×2", "3×2",
-        "Esc", "演示",
+        "Esc", "演示", "UltraView（总览）", "View 栏最右侧 UltraView",
     ):
         assert keyword in text, f"UltraView guide missing: {keyword}"
-    for banned in ("PDF", "SVG", "sidecar", "live card", "后台补图", "自由缩放", "board zoom"):
+    for banned in (
+        "PDF", "SVG", "sidecar", "live card", "后台补图", "自由缩放", "board zoom",
+        "工具栏「总览」", "顶栏「总览」", "顶部「总览」",
+    ):
         assert banned not in text, f"UltraView guide leaked P1 copy: {banned}"
 
 

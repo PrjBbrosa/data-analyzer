@@ -121,6 +121,10 @@ def test_modes_group_has_five_workspaces_plus_readonly_overview():
     assert "停手后" in overview.sub
     assert "游标" in overview.sub
     assert "标注" in overview.sub
+    assert overview.gesture == "各工作区 View 栏最右侧 UltraView"
+    catalog = " ".join(f"{r.desc} {r.sub} {r.gesture}" for _g, r in _all_rows())
+    for banned in ("工具栏「总览」", "顶栏「总览」", "顶部「总览」"):
+        assert banned not in catalog
     assert modes.note and "不是第六种算法" in modes.note
     assert "第六种算法" not in overview.sub
     assert modes.wide is True

@@ -606,11 +606,14 @@ def test_main_window_moves_time_hints_to_status_line(qapp, qtbot):
 
     hint_bar = w.chart_stack._time_hint_bar
     dock_layout = w.chart_stack._time_bottom_dock.layout()
+    rail = w.chart_stack.findChild(type(w.chart_stack._time_bottom_dock), "timeViewRail")
 
     assert getattr(w, "_status_hint_bar") is hint_bar
     assert hint_bar.parentWidget() is w.statusBar
     assert dock_layout.indexOf(hint_bar) == -1
-    assert dock_layout.indexOf(w.view_tabbar) >= 0
+    assert rail is not None
+    assert dock_layout.indexOf(rail) >= 0
+    assert w.view_tabbar.parentWidget() is rail
     assert dock_layout.count() == 1
 
 

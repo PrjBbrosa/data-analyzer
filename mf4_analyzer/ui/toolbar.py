@@ -95,7 +95,6 @@ class Toolbar(QWidget):
     save_project_requested = pyqtSignal()
     save_project_as_requested = pyqtSignal()
     batch_requested = pyqtSignal()
-    ultraview_requested = pyqtSignal()
     # Center segment
     mode_changed = pyqtSignal(str)  # time | fft | fft_time | frf | order
     # Right segment
@@ -143,12 +142,8 @@ class Toolbar(QWidget):
         self._save_split = self._make_save_split()
         self.btn_batch = QPushButton("批处理", self)
         self.btn_batch.setIcon(Icons.batch())
-        self.btn_ultraview = QPushButton("总览", self)
-        self.btn_ultraview.setIcon(Icons.mode_ultraview())
-        self.btn_ultraview.setToolTip("总览（独立面板，只读对照已有预览）")
         for button in (
             self.btn_save_project, self.btn_save_caret, self.btn_batch,
-            self.btn_ultraview,
         ):
             button.setProperty("role", "secondary")
 
@@ -176,7 +171,7 @@ class Toolbar(QWidget):
         self.btn_mode_ultraview.hide()
 
         for b in (self.btn_add, self.btn_save_project,
-                  self.btn_batch, self.btn_ultraview,
+                  self.btn_batch,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
                   self.btn_mode_frf, self.btn_mode_order, self.btn_mode_ultraview):
             b.setIconSize(QSize(16, 16))
@@ -190,7 +185,6 @@ class Toolbar(QWidget):
             self.btn_add,
             self._save_split,
             self.btn_batch,
-            self.btn_ultraview,
         ):
             left.addWidget(b, 0, Qt.AlignVCenter)
 
@@ -403,11 +397,10 @@ class Toolbar(QWidget):
             self.btn_add,
             self._save_split,
             self.btn_batch,
-            self.btn_ultraview,
         )
 
     def _equalize_left_action_widths(self):
-        """Give 打开 / 保存 / 批处理 / 总览 one shared chip width."""
+        """Give 打开 / 保存 / 批处理 one shared chip width."""
         chips = self._left_action_chips()
         if self._left_action_chip_width and all(
             chip.minimumWidth() == self._left_action_chip_width for chip in chips
@@ -469,7 +462,6 @@ class Toolbar(QWidget):
         self.btn_save_caret.clicked.connect(self._open_save_menu)
         self.btn_save_project_as.triggered.connect(self._emit_save_project_as)
         self.btn_batch.clicked.connect(self.batch_requested)
-        self.btn_ultraview.clicked.connect(self.ultraview_requested)
         # Hidden Cockpit entry: triple-click the brand logo (see _LogoLabel).
         self._logo_label.triple_clicked.connect(self.acquisition_cockpit_requested)
         for key, b in self._mode_button_pairs():
@@ -493,7 +485,6 @@ class Toolbar(QWidget):
         self._save_split.setEnabled(has_file)
         self.btn_save_project_as.setEnabled(has_file)
         self.btn_batch.setEnabled(True)
-        self.btn_ultraview.setEnabled(True)
 
     def current_mode(self):
         return self._current_mode

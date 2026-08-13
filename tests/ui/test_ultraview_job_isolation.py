@@ -47,7 +47,7 @@ def test_ultraview_board_sequence_does_not_compute_or_mutate_sources(qapp, qtbot
     fft_id = str(win.analysis_managers["fft"].get(0).view_id)
     uv = win._ultraview
 
-    win.open_ultraview()
+    win.chart_stack.ultraview_entry.click()
     QCoreApplication.processEvents()
     after_enter = snapshot_source_state(win)
     uv.add_from_source_tab("time", time_id)
