@@ -512,3 +512,152 @@ def test_batch_toolbar_row_fits_its_preset_buttons(qapp, qtbot):
     finally:
         sheet.close()
         qapp.setStyleSheet(old_stylesheet)
+
+
+def test_mainwindow_close_without_running_batch_skips_stop_dialog(
+    qtbot, monkeypatch,
+):
+    from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    sheet = BatchSheet(win, files={})
+    qtbot.addWidget(sheet)
+    win._batch_sheet = sheet
+    questions = []
+    monkeypatch.setattr(
+        sheet_module.QMessageBox,
+        "question",
+        lambda *_a, **_k: questions.append(True) or sheet_module.QMessageBox.No,
+    )
+
+    assert win.close() is True
+    assert questions == []
+
+
+def test_mainwindow_close_ignored_when_user_declines_batch_stop(
+    qtbot, monkeypatch,
+):
+    from PyQt5.QtWidgets import QWidget
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.show()
+
+    class _StubSheet(QWidget):
+        def __init__(self):
+            super().__init__(win)
+            self._running_flag = True
+            self.confirm_calls = 0
+            self.close_calls = 0
+
+        def is_running(self):
+            return self._running_flag
+
+        def confirm_stop_and_wait(self, parent=None, timeout_ms=30000):
+            self.confirm_calls += 1
+            self.last_parent = parent
+            return False
+
+        def close(self):
+            self.close_calls += 1
+            return super().close()
+
+    stub = _StubSheet()
+    win._batch_sheet = stub
+    shutdown_calls = []
+    original_shutdown = win._analysis_jobs.shutdown
+
+    def _shutdown():
+        shutdown_calls.append(True)
+        original_shutdown()
+
+    monkeypatch.setattr(win._analysis_jobs, "shutdown", _shutdown)
+
+    try:
+        assert win.close() is False
+        assert win.isVisible()
+        assert stub.confirm_calls == 1
+        assert stub.last_parent is win
+        assert stub.close_calls == 0
+        assert win._batch_sheet is stub
+        assert shutdown_calls == []
+    finally:
+        stub._running_flag = False
+
+
+def test_mainwindow_close_waits_until_batch_idle_before_teardown(
+    qtbot, monkeypatch,
+):
+    import threading
+
+    from PyQt5.QtCore import QThread
+
+    from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    sheet = BatchSheet(win, files={})
+    qtbot.addWidget(sheet)
+    win._batch_sheet = sheet
+
+    class _HoldThread(QThread):
+        def __init__(self):
+            super().__init__()
+            self._release = threading.Event()
+            self.cancel_calls = 0
+            self.run_started = threading.Event()
+
+        def request_cancel(self):
+            self.cancel_calls += 1
+            self._release.set()
+
+        def run(self):
+            self.run_started.set()
+            self._release.wait(timeout=30)
+
+    thread = _HoldThread()
+    sheet._running = True
+    sheet._runner_thread = thread
+    thread.finished.connect(sheet._on_thread_finished)
+    thread.start()
+    assert thread.run_started.wait(timeout=2)
+    monkeypatch.setattr(
+        sheet_module.QMessageBox,
+        "question",
+        lambda *_a, **_k: sheet_module.QMessageBox.Yes,
+    )
+
+    running_at_shutdown = []
+    original_shutdown = win._analysis_jobs.shutdown
+
+    def _shutdown():
+        running_at_shutdown.append(sheet.is_running())
+        original_shutdown()
+
+    monkeypatch.setattr(win._analysis_jobs, "shutdown", _shutdown)
+
+    try:
+        assert win.close() is True
+        assert running_at_shutdown == [False]
+        assert thread.cancel_calls == 1
+        assert sheet.is_running() is False
+    finally:
+        from PyQt5 import sip
+        try:
+            if not sip.isdeleted(thread):
+                thread.request_cancel()
+                thread.wait(1000)
+        except RuntimeError:
+            pass
+        try:
+            if not sip.isdeleted(sheet):
+                sheet._running = False
+        except RuntimeError:
+            pass

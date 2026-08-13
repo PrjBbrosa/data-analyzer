@@ -222,8 +222,6 @@ class ViewMixin:
         change, so out-of-range Alt keys are safe.
         """
         mode = self.chart_stack.current_mode()
-        if mode == 'ultraview':
-            return
         if mode in ('fft', 'fft_time', 'frf', 'order'):
             self._on_analysis_switch(mode, idx)
         else:

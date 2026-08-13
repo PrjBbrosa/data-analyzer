@@ -9,6 +9,7 @@ from __future__ import annotations
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QDialog, QPushButton, QVBoxLayout, QWidget
 
+from ...widgets.toast import Toast
 from ..batch._geometry import (
     clear_tool_window_transient_parent,
     configure_independent_tool_window,
@@ -37,6 +38,9 @@ class UltraViewSheet(QDialog):
         self._page = page
         self._stack = stack
         self._stack_index = -1
+        self._own_toast = None
+        self._last_toast_text = ""
+        self._last_toast_kind = ""
         if stack is not None and page is not None:
             index_of = getattr(stack, "indexOf", None)
             if callable(index_of):
@@ -56,6 +60,22 @@ class UltraViewSheet(QDialog):
         self._adopt_page()
         self._silence_dialog_buttons()
         present_independent_tool_window(self)
+
+    def toast(self, text: str, kind: str = "info") -> None:
+        """Paint acknowledgement on this Board window, not the Analyzer."""
+        self._last_toast_text = text
+        self._last_toast_kind = kind
+        if not text:
+            return
+        if self.isVisible():
+            if self._own_toast is None:
+                self._own_toast = Toast(self, bottom_margin=12)
+            self._own_toast.show_message(text, level=kind)
+            return
+        parent = self.parent()
+        parent_toast = getattr(parent, "toast", None) if parent is not None else None
+        if callable(parent_toast):
+            parent_toast(text, kind)
 
     def showEvent(self, event):  # noqa: N802 (Qt API)
         super().showEvent(event)

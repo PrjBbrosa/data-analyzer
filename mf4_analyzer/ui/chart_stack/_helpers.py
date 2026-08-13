@@ -49,6 +49,8 @@ _MODE_TO_INDEX = {
     'fft_time': 2,
     'frf': 3,
     'order': 4,
+    # Index 5 hosts UltraViewPage so UltraViewSheet can return it on close.
+    # Not a live workspace mode: ChartStack.set_mode rejects 'ultraview'.
     'ultraview': 5,
 }
 _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}

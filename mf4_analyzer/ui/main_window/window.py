@@ -756,8 +756,6 @@ class MainWindow(
         if chart is None:
             return getattr(self, "view_tabbar", None)
         mode = chart.current_mode()
-        if mode == "ultraview":
-            return None
         if mode == "time":
             return getattr(self, "view_tabbar", None)
         page = {
@@ -1624,19 +1622,11 @@ class MainWindow(
     def _on_nav_panel_toggled(self):
         from ..side_panels import Ev
 
-        if self.chart_stack.current_mode() == "ultraview":
-            page = self.chart_stack.page_ultraview
-            visible = not page.is_library_visible()
-            page.set_library_visible(visible)
-            self.toolbar.set_nav_open(visible)
-            return
         self._panel_ctrl_left._dispatch(Ev.CLICK)
 
     def _on_left_panel_state_changed(self, state):
         from ..side_panels import PanelState
 
-        if self.chart_stack.current_mode() == "ultraview":
-            return
         self.toolbar.set_nav_open(state == PanelState.PINNED)
 
     def _on_mode_changed(self, mode):
@@ -1649,19 +1639,11 @@ class MainWindow(
                 self._capture_focused_view()
             elif old_mode in self.analysis_managers:
                 self._capture_active_analysis_view(old_mode)
-            if mode == "ultraview" and old_mode in source_modes and uv is not None:
-                uv.capture_leaving_source(old_mode)
         if uv is not None and mode in source_modes:
             uv.note_source_mode(mode)
         self.chart_stack.set_mode(mode)
         self.inspector.set_mode(mode)
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
-        if mode == "ultraview":
-            if uv is not None:
-                uv.enter_ultraview()
-            return
-        if old_mode == "ultraview" and uv is not None:
-            uv.leave_ultraview()
         if mode in {"fft", "fft_time", "order"}:
             # dB-reference-defaults nudge feed (spec S5 / A17): a section
             # entered without any signal/value/mode change since its last
@@ -4265,6 +4247,44 @@ class MainWindow(
             dlg, "_batch_sheet", self._on_batch_sheet_destroyed,
         )
 
+    def navigate_to_view(self, section: str, view_id: str) -> bool:
+        """Switch Analyzer to a source View and bring this window forward.
+
+        UltraView's Board is an independent tool window, so a successful
+        switch must ``raise_`` / ``activateWindow`` or the user never sees it.
+        The Board itself is left open. Returns False when the View id is
+        missing so the caller can arm replacement.
+        """
+        target = str(view_id)
+        if section == "time":
+            manager = getattr(self, "view_manager", None)
+        else:
+            managers = getattr(self, "analysis_managers", None) or {}
+            manager = managers.get(section)
+        if manager is None:
+            return False
+        idx = None
+        for i, state in enumerate(manager.views):
+            if str(getattr(state, "view_id", "")) == target:
+                idx = i
+                break
+        if idx is None:
+            return False
+        toolbar = getattr(self, "toolbar", None)
+        if toolbar is not None:
+            toolbar._set_mode(section)
+
+        def _finish_navigation():
+            if section == "time":
+                self._switch_view(idx)
+            else:
+                self._on_analysis_switch(section, idx)
+            self.raise_()
+            self.activateWindow()
+
+        QTimer.singleShot(0, _finish_navigation)
+        return True
+
     def open_ultraview(self):
         """Open UltraView as a standalone Board window, not a sixth mode."""
         from ..drawers.ultraview import UltraViewSheet
@@ -4679,11 +4699,25 @@ class MainWindow(
 
     def closeEvent(self, event):
         """Drain all analysis jobs before the window is destroyed."""
+        from PyQt5 import sip
+
+        batch = getattr(self, "_batch_sheet", None)
+        if batch is not None:
+            try:
+                gone = sip.isdeleted(batch)
+            except (RuntimeError, TypeError):
+                gone = True
+            if not gone:
+                is_running = getattr(batch, "is_running", None)
+                if callable(is_running) and is_running():
+                    confirm = getattr(batch, "confirm_stop_and_wait", None)
+                    if not callable(confirm) or not confirm(parent=self):
+                        event.ignore()
+                        return
         for attr in ("_ultraview_sheet", "_batch_sheet"):
             dlg = getattr(self, attr, None)
             if dlg is not None:
                 try:
-                    from PyQt5 import sip
                     if not sip.isdeleted(dlg):
                         dlg.close()
                 except Exception:
@@ -4691,7 +4725,6 @@ class MainWindow(
                 setattr(self, attr, None)
         uv = getattr(self, "_ultraview", None)
         if uv is not None:
-            from PyQt5 import sip
             if not sip.isdeleted(uv):
                 uv.shutdown()
                 uv.deleteLater()

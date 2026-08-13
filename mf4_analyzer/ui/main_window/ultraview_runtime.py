@@ -14,6 +14,10 @@ from ..ultraview_state import UltraViewRef
 class PresentationRuntimeFacts:
     markup_revision: int | tuple = 0
     visible_pane_count: int | None = None
+    # Presentation-only: last successful grab. Do not rebuild from a live
+    # binding — rebound or hidden canvases would look like source changes.
+    cursor_geometry: tuple = ()
+    pill_fingerprint: tuple | None = None
 
 
 class PresentationRuntimeLedger:

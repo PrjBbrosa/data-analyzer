@@ -46,7 +46,7 @@ def test_toolbar_ultraview_requested_emits(qapp, qtbot):
 
     tb = Toolbar()
     qtbot.addWidget(tb)
-    assert tb.btn_mode_ultraview.isHidden()
+    assert not hasattr(tb, "btn_mode_ultraview")
     assert not hasattr(tb, "btn_ultraview") or tb.btn_ultraview.isHidden()
     assert not hasattr(tb, "ultraview_requested")
 
@@ -98,7 +98,7 @@ def test_toolbar_exposes_five_exact_mode_names_and_keys(qtbot):
     ]
     assert "FFT" in tb.btn_mode_fft.toolTip()
     assert "FRF" in tb.btn_mode_frf.toolTip()
-    assert tb.btn_mode_ultraview.isHidden()
+    assert not hasattr(tb, "btn_mode_ultraview")
     assert not hasattr(tb, "btn_ultraview") or tb.btn_ultraview.isHidden()
 
     seen = []
@@ -116,7 +116,7 @@ def test_toolbar_frf_unselected_uses_the_same_segment_style_as_other_modes():
     qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
     selector = qss[qss.index('Toolbar QPushButton[segment="time"]'):qss.index('Toolbar QPushButton[segment]:hover')]
     assert 'Toolbar QPushButton[segment="frf"]' in selector
-    assert 'Toolbar QPushButton[segment="ultraview"]' in selector
+    assert 'Toolbar QPushButton[segment="ultraview"]' not in selector
 
 
 def test_toolbar_mode_zone_keeps_symmetric_divider_gaps_and_fixed_height(qtbot, qapp):

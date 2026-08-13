@@ -5,21 +5,29 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QMimeData, QPoint, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent, QImage
 from PyQt5.QtWidgets import QPushButton, QToolButton, QWidget
 
-from mf4_analyzer.ui.chart_stack.ultraview.layouts import MIN_CARD_CHROME_HEIGHT
+from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
+    BOARD_PADDING,
+    MIN_CARD_CHROME_HEIGHT,
+    SLOT_GUTTER,
+    slot_rects,
+)
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     MISSING_CARD_COPY,
     LibraryRow,
     UltraViewCard,
+    UnplacedTray,
     extract_ref_strings,
     make_ref_mime,
 )
 from mf4_analyzer.ui.ultraview_state import (
+    LAYOUT_SLOTS,
     SOURCE_SECTIONS,
     STATUS_MISSING,
     STATUS_ORPHANED,
@@ -29,6 +37,7 @@ from mf4_analyzer.ui.ultraview_state import (
     add_ref,
     board_to_payload,
     default_board,
+    first_empty_slot,
     make_ref,
     membership_set,
     move_to_unplaced,
@@ -37,6 +46,7 @@ from mf4_analyzer.ui.ultraview_state import (
     remove_ref,
     replace_slot,
     set_layout,
+    slot_occupant,
     swap_slots,
 )
 
@@ -314,10 +324,12 @@ def test_add_paths_share_one_intent(qtbot):
     assert harness.added == [("frf", "frf-1")]
 
     harness.added.clear()
+    harness.replaced.clear()
     library.set_selected("order", "order-1")
     empty = page.slot_widget("aux_1")
     empty.add_clicked.emit("aux_1")
-    assert harness.added == [("order", "order-1")]
+    assert harness.replaced == [("aux_1", "order", "order-1")]
+    assert harness.added == []
 
     harness.added.clear()
     mime = _mime("fft_time", "fft_time-1")
@@ -363,6 +375,58 @@ def test_overflow_tray_is_visible_and_persisted(qtbot):
     page.set_board(restored)
     assert page.unplaced_tray().is_expanded()
     assert ("order", "tray-restored") in [item.ref() for item in page.unplaced_tray().item_widgets()]
+
+
+def test_tray_set_refs_skips_rebuild_when_signature_matches(qtbot):
+    tray = UnplacedTray()
+    qtbot.addWidget(tray)
+    ref = make_ref("time", "tray-1")
+    titles = {("time", "tray-1"): "道路输入"}
+    tray.set_refs([ref], titles=titles, statuses={("time", "tray-1"): STATUS_STALE})
+    first = tray.item_widgets()[0]
+    tray.set_refs([ref], titles=titles, statuses={("time", "tray-1"): STATUS_STALE})
+    assert tray.item_widgets()[0] is first
+    tray.set_refs([ref], titles=titles, statuses={("time", "tray-1"): STATUS_ORPHANED})
+    rebuilt = tray.item_widgets()[0]
+    assert rebuilt is not first
+
+
+def test_set_preview_and_status_noop_skips_projection(qtbot):
+    harness = _Harness(qtbot)
+    ref = make_ref("time", "time-1")
+    add_ref(harness.board, ref)
+    harness.page.set_board(harness.board)
+    preview = FakePreview(ref=ref, image=_image(), title="道路输入")
+    harness.page.set_preview(ref, preview)
+    harness.page.set_ref_status(ref, STATUS_STALE, True)
+    calls = []
+    orig = harness.page._refresh_projection
+
+    def counted():
+        calls.append(1)
+        orig()
+
+    harness.page._refresh_projection = counted
+    harness.page.set_preview(ref, preview)
+    harness.page.set_ref_status(ref, STATUS_STALE, True)
+    harness.page.apply_preview_and_status(ref, preview, STATUS_STALE, True)
+    assert calls == []
+
+
+def test_clear_runtime_caches_drops_preview_shadows(qtbot):
+    harness = _Harness(qtbot)
+    ref = make_ref("time", "time-1")
+    add_ref(harness.board, ref)
+    harness.page.set_board(harness.board)
+    preview = FakePreview(ref=ref, image=_image(), title="道路输入")
+    harness.page.set_preview(ref, preview)
+    harness.page.set_ref_status(ref, STATUS_STALE, True)
+    assert harness.page._previews
+    harness.page.clear_runtime_caches()
+    assert harness.page._previews == {}
+    assert harness.page._statuses == {}
+    assert harness.page._ref_exists == {}
+    assert harness.page._status_for(ref) == STATUS_MISSING
 
 
 def test_drop_event_copies_strings_before_mime_is_destroyed(qapp, qtbot):
@@ -773,3 +837,171 @@ def test_escape_cancels_rebind_arm_without_board_mutation(qtbot):
     assert membership_set(harness.board) == members
     assert harness.rebound == []
     assert harness.replaced == []
+
+
+def _gutter_point(grid) -> QPoint:
+    content = (
+        BOARD_PADDING,
+        BOARD_PADDING,
+        max(0, grid.width() - 2 * BOARD_PADDING),
+        max(0, grid.height() - 2 * BOARD_PADDING),
+    )
+    rects = slot_rects(grid.layout_id(), content, grid._ratio)
+    first, second = list(rects.values())[:2]
+    ax, ay, aw, ah = first
+    bx, by, _bw, _bh = second
+    if bx >= ax + aw:
+        gx = ax + aw + max(1, (bx - ax - aw) // 2)
+        gy = ay + max(1, ah // 2)
+    else:
+        gx = ax + max(1, aw // 2)
+        gy = ay + ah + max(1, (by - ay - ah) // 2)
+    return QPoint(int(gx), int(gy))
+
+
+@pytest.mark.parametrize("layout_id", tuple(LAYOUT_SLOTS))
+def test_empty_slot_click_places_into_clicked_slot(qtbot, layout_id):
+    """UVL-A01: empty-slot click keeps slot X; first_empty_slot must not win."""
+    harness = _Harness(qtbot)
+    set_layout(harness.board, layout_id)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    slots = LAYOUT_SLOTS[layout_id]
+    clicked = slots[-1]
+    assert slot_occupant(harness.board, slots[0]) == make_ref("time", "time-1")
+    if len(slots) > 2:
+        assert first_empty_slot(harness.board) != clicked
+    harness.page.library_panel().set_selected("fft", "fft-1")
+    empty = harness.page.slot_widget(clicked)
+    empty.add_clicked.emit(clicked)
+    assert harness.replaced == [(clicked, "fft", "fft-1")]
+    assert harness.added == []
+    assert slot_occupant(harness.board, clicked) == make_ref("fft", "fft-1")
+    assert slot_occupant(harness.board, slots[0]) == make_ref("time", "time-1")
+
+
+def test_empty_slot_click_while_tray_armed_uses_clicked_slot(qtbot):
+    """UVL-A01: tray-armed replacement has no slot; the clicked empty slot is the target."""
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    move_to_unplaced(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    harness.page.arm_replacement("time", "time-1")
+    assert harness.page.replacement_slot() is None
+    assert harness.page.replacement_ref() == ("time", "time-1")
+    harness.page.library_panel().set_selected("fft", "fft-1")
+    harness.page._on_empty_slot("aux_1")
+    assert harness.replaced == [("aux_1", "fft", "fft-1")]
+    assert harness.added == []
+    assert slot_occupant(harness.board, "aux_1") == make_ref("fft", "fft-1")
+    assert harness.page.replacement_ref() is None
+    assert harness.page.replacement_slot() is None
+
+
+def test_empty_slot_click_while_board_armed_keeps_armed_slot(qtbot):
+    """UVL-A01: a board-armed slot is not retargeted by clicking a different empty slot."""
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    harness.page.arm_replacement("time", "time-1")
+    assert harness.page.replacement_slot() == "primary"
+    harness.page.library_panel().set_selected("fft", "fft-1")
+    harness.page._on_empty_slot("aux_2")
+    assert harness.replaced == [("primary", "fft", "fft-1")]
+    assert slot_occupant(harness.board, "primary") == make_ref("fft", "fft-1")
+    assert slot_occupant(harness.board, "aux_2") is None
+
+
+def test_drop_on_board_padding_or_gutter_is_noop(qtbot, qapp):
+    """UVL-A02: drop on BOARD_PADDING or slot gutter must not emit board intents."""
+    harness = _Harness(qtbot)
+    qapp.processEvents()
+    grid = harness.page.board_grid()
+    dropped = []
+
+    def _capture_drop(slot, section, view_id):
+        dropped.append((slot, section, view_id))
+
+    grid.ref_dropped.connect(_capture_drop)
+    padding = QPoint(1, 1)
+    gutter = _gutter_point(grid)
+    assert 0 <= padding.x() < BOARD_PADDING
+    assert SLOT_GUTTER >= 1
+    assert grid.slot_id_at(padding) is None
+    assert grid.slot_id_at(gutter) is None
+    mime = _mime("fft", "fft-1")
+    grid.dropEvent(_drop(mime, padding))
+    grid.dropEvent(_drop(mime, gutter))
+    assert dropped == []
+    assert harness.added == []
+    assert harness.replaced == []
+    assert harness.swapped == []
+    assert harness.placed == []
+
+
+def test_card_swap_clears_replacement_arm_then_add_is_pure(qtbot):
+    """UVL-A03: card-drag swap is not an armed completion; later add is a pure add."""
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    add_ref(harness.board, make_ref("fft", "fft-1"))
+    harness.page.set_board(harness.board)
+    harness.page.arm_replacement("time", "time-1")
+    harness.page._drag_kind = "card"
+    harness.page._on_ref_dropped("aux_0", "time", "time-1")
+    assert harness.swapped == [("primary", "aux_0")]
+    assert harness.page.replacement_slot() is None
+    assert harness.page.replacement_ref() is None
+    harness.page.request_add("order", "order-1")
+    assert harness.added == [("order", "order-1")]
+    assert harness.replaced == []
+    assert slot_occupant(harness.board, "aux_1") == make_ref("order", "order-1")
+
+
+def test_tray_place_drop_clears_replacement_arm_then_add_is_pure(qtbot):
+    """UVL-A03: tray drop onto an empty slot clears arm; later add is a pure add."""
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    move_to_unplaced(harness.board, make_ref("time", "time-1"))
+    add_ref(harness.board, make_ref("fft", "fft-1"))
+    harness.page.set_board(harness.board)
+    harness.page.arm_replacement("fft", "fft-1")
+    harness.page._drag_kind = "tray"
+    harness.page._on_ref_dropped("aux_0", "time", "time-1")
+    assert harness.placed == [("aux_0", "time", "time-1")]
+    assert harness.page.replacement_slot() is None
+    assert harness.page.replacement_ref() is None
+    harness.page.request_add("order", "order-1")
+    assert harness.added == [("order", "order-1")]
+    assert harness.replaced == []
+    assert slot_occupant(harness.board, "primary") == make_ref("fft", "fft-1")
+    assert slot_occupant(harness.board, "aux_1") == make_ref("order", "order-1")
+
+
+def test_board_full_tray_place_emits_feedback(qtbot):
+    """UVL-A04: tray place on a full board emits visible Board-full feedback."""
+    harness = _Harness(qtbot)
+    messages = []
+    harness.page.feedback_requested.connect(messages.append)
+    harness.fill_board(4)
+    add_ref(harness.board, make_ref("fft", "overflow-1"))
+    harness.page.set_board(harness.board)
+    assert first_empty_slot(harness.board) is None
+    harness.page._on_tray_place("fft", "overflow-1")
+    assert harness.placed == []
+    assert len(messages) == 1
+    assert "已满" in messages[0]
+    assert "换布局" in messages[0]
+    assert "移除" in messages[0]
+
+
+def test_add_without_library_selection_emits_feedback(qtbot):
+    """UVL-A04: toolbar add / empty-slot click with no library selection asks to pick a View."""
+    harness = _Harness(qtbot)
+    messages = []
+    harness.page.feedback_requested.connect(messages.append)
+    assert harness.page.library_panel().selected_ref() is None
+    harness.page._on_toolbar_add()
+    harness.page._on_empty_slot("aux_0")
+    assert harness.added == []
+    assert harness.replaced == []
+    assert messages == ["先在左侧 View 库选择一个 View"] * 2

@@ -18,7 +18,7 @@ import dataclasses
 from pathlib import Path
 import tempfile
 
-from PyQt5.QtCore import QTimer, Qt, QUrl
+from PyQt5.QtCore import QEventLoop, QTimer, Qt, QUrl
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from ....batch import AnalysisPreset, BatchOutput, BatchRunner
+from ....batch import AnalysisPreset, BatchOutput, BatchRunner, logger as _batch_logger
 from ....qt_analysis_shared import amplitude_mode_is_db
 from ....ui_kit.qt_lifecycle import weak_bound
 from ....batch_preset_io import (
@@ -90,6 +90,9 @@ _OUTPUT_ISSUE_FIELDS = frozenset({
 })
 
 _PIPELINE_RECOMPUTE_DEBOUNCE_MS = 150
+_STOP_ON_CLOSE_TITLE = "确认关闭"
+_STOP_ON_CLOSE_TEXT = "批量任务正在运行，关闭将取消剩余任务。要继续吗？"
+_STOP_WAIT_TIMEOUT_MS = 30_000
 
 
 def _analysis_issue_summary(issue: ValidationIssue, method: str) -> str:
@@ -2228,6 +2231,109 @@ class BatchSheet(QDialog):
         if not opened:
             self._toast(f"无法打开输出位置：{target}", kind="warning")
 
+    def is_running(self) -> bool:
+        """Whether a batch runner currently owns the sheet."""
+        return bool(self._running)
+
+    def _confirm_stop_running_dialog(self, parent=None) -> bool:
+        """Single-sourced close-while-running confirmation.
+
+        Used by both ``closeEvent`` (sheet chrome) and
+        ``confirm_stop_and_wait`` (parent MainWindow close).
+        """
+        host = self if parent is None else parent
+        choice = QMessageBox.question(
+            host,
+            _STOP_ON_CLOSE_TITLE,
+            _STOP_ON_CLOSE_TEXT,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return choice == QMessageBox.Yes
+
+    def confirm_stop_and_wait(
+        self, parent=None, timeout_ms: int = _STOP_WAIT_TIMEOUT_MS,
+    ) -> bool:
+        """Ask to cancel an in-flight run and wait until the runner is idle.
+
+        Returns True when the parent may continue teardown. An idle sheet
+        returns True without a dialog. Declining the prompt, a missing
+        thread, or a wait timeout returns False so the parent can refuse
+        close while the runner (and this sheet) stay alive.
+        """
+        if not self._running:
+            return True
+        if not self._confirm_stop_running_dialog(parent):
+            return False
+        thread = self._runner_thread
+        if thread is None:
+            _batch_logger.warning(
+                "BatchSheet confirm_stop_and_wait: running flag set but "
+                "no runner thread"
+            )
+            return False
+        try:
+            thread.request_cancel()
+        except Exception:
+            _batch_logger.exception(
+                "BatchSheet confirm_stop_and_wait: request_cancel failed"
+            )
+            return False
+        return self._wait_until_runner_idle(timeout_ms)
+
+    def _wait_until_runner_idle(self, timeout_ms: int) -> bool:
+        """Pump the GUI loop until ``_running`` clears or ``timeout_ms`` elapses.
+
+        Poll ``_running`` instead of connecting to ``QThread.finished``: the
+        sheet's ``_on_thread_finished`` already owns that signal and
+        ``deleteLater``s the thread, so an extra disconnect after the wait
+        would touch a dying C++ object. Do not ``QThread.wait`` on the GUI
+        thread either — that slot is queued and would deadlock.
+        """
+        if not self._running:
+            return True
+        if self._runner_thread is None:
+            _batch_logger.warning(
+                "BatchSheet stop-wait: running flag set but no runner thread"
+            )
+            return False
+
+        loop = QEventLoop(self)
+        deadline = QTimer(self)
+        deadline.setSingleShot(True)
+        poll = QTimer(self)
+        poll.setInterval(20)
+
+        def _quit_loop():
+            if loop.isRunning():
+                loop.quit()
+
+        def _on_poll():
+            if not self._running:
+                _quit_loop()
+
+        try:
+            deadline.timeout.connect(_quit_loop)
+            poll.timeout.connect(_on_poll)
+            deadline.start(max(1, int(timeout_ms)))
+            poll.start()
+            if self._running:
+                loop.exec_()
+            if self._running:
+                _batch_logger.warning(
+                    "BatchSheet confirm_stop_and_wait timed out after "
+                    "%s ms; refusing close",
+                    timeout_ms,
+                )
+                return False
+            return True
+        finally:
+            poll.stop()
+            deadline.stop()
+            poll.deleteLater()
+            deadline.deleteLater()
+            loop.deleteLater()
+
     def closeEvent(self, event):  # noqa: N802 (Qt API)
         """If a run is in progress, prompt for confirmation and route to
         the cancel path; the actual close happens once
@@ -2239,16 +2345,15 @@ class BatchSheet(QDialog):
             event.ignore()
             return
         if self._running:
-            choice = QMessageBox.question(
-                self, "确认关闭",
-                "批量任务正在运行，关闭将取消剩余任务。要继续吗？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if choice == QMessageBox.Yes:
+            if self._confirm_stop_running_dialog(self):
                 self._close_pending = True
                 if self._runner_thread is not None:
-                    self._runner_thread.request_cancel()
+                    try:
+                        self._runner_thread.request_cancel()
+                    except Exception:
+                        _batch_logger.exception(
+                            "BatchSheet closeEvent: request_cancel failed"
+                        )
             event.ignore()
             return
         # Normal-close branch only; the run-in-progress branch above ignores

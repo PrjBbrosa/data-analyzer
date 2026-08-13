@@ -1203,8 +1203,7 @@ Toolbar QPushButton[segment="time"],
 Toolbar QPushButton[segment="fft"],
 Toolbar QPushButton[segment="fft_time"],
 Toolbar QPushButton[segment="frf"],
-Toolbar QPushButton[segment="order"],
-Toolbar QPushButton[segment="ultraview"] {
+Toolbar QPushButton[segment="order"] {
     min-width: 60px;
     min-height: 24px;
     margin: 0 1px;

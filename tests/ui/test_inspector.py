@@ -55,10 +55,6 @@ def test_inspector_switch_mode_changes_contextual(qapp):
     assert insp.contextual_widget_name() == 'order'
     insp.set_mode('frf')
     assert insp.contextual_widget_name() == 'frf'
-    insp.set_mode('ultraview')
-    assert insp.contextual_widget_name() == 'ultraview'
-    assert insp.contextual_stack.currentWidget() is insp.ultraview_ctx
-    assert insp.top.isHidden()
     insp.set_mode('not-a-mode')
     assert insp.contextual_widget_name() == 'time'
     assert not insp.top.isHidden()

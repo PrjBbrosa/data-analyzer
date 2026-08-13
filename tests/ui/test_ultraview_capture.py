@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import gc
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,15 +14,17 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
+from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.main_window._state_holders import AnalysisPinBook
 from mf4_analyzer.ui.main_window._view_mixin import ViewMixin
 from mf4_analyzer.ui.main_window.ultraview_coordinator import (
     UltraViewCoordinator,
+    _DIGEST_RETRY_LIMIT,
     _IDLE_CAPTURE_MS,
     hide_transient_overlays,
     read_markup_revision,
 )
-from mf4_analyzer.ui.ultraview_state import UltraViewRef, presentation_digest
+from mf4_analyzer.ui.ultraview_state import UltraViewRef, add_ref, presentation_digest
 from mf4_analyzer.ui.view_state import ViewManager, ViewState
 
 _COORDINATOR_PATH = (
@@ -55,8 +58,9 @@ def _ref(view_id: str = "view-a", section: str = "time") -> UltraViewRef:
 
 
 class _VisItem:
-    def __init__(self, visible: bool = True) -> None:
+    def __init__(self, visible: bool = True, value: float | None = None) -> None:
         self._visible = visible
+        self._value = value
 
     def isVisible(self) -> bool:
         return self._visible
@@ -66,6 +70,9 @@ class _VisItem:
 
     def show(self) -> None:
         self._visible = True
+
+    def value(self):
+        return self._value
 
 
 class FakeCanvas(QWidget):
@@ -84,12 +91,20 @@ class FakeCanvas(QWidget):
         self.markup_revision = 0
         self.grab_calls = 0
         self._fill = QColor(color)
-        self._cursor_item = _VisItem(True)
+        self._cursor_item = _VisItem(True, value=0.25)
+        self._armed_item = _VisItem(True, value=1.0)
         self._remark_item = _VisItem(True)
         self._scale_box = _VisItem(True)
-        self._cursor = SimpleNamespace(_cursor_line_items=[self._cursor_item])
+        self._cursor = SimpleNamespace(
+            dual=False,
+            ax=None,
+            bx=None,
+            _cursor_line_items=[self._cursor_item],
+            _cursor_a_items=[self._armed_item],
+        )
         self._plot = SimpleNamespace(vb=SimpleNamespace(rbScaleBox=self._scale_box))
         self.cursor_visible_at_grab = None
+        self.armed_visible_at_grab = None
         self.remark_visible_at_grab = None
         self.scale_box_visible_at_grab = None
         self._has_result = True
@@ -113,6 +128,7 @@ class FakeCanvas(QWidget):
     def grab_pixmap(self, scale: float = 1.0) -> QPixmap:
         self.grab_calls += 1
         self.cursor_visible_at_grab = self._cursor_item.isVisible()
+        self.armed_visible_at_grab = self._armed_item.isVisible()
         self.remark_visible_at_grab = self._remark_item.isVisible()
         self.scale_box_visible_at_grab = self._scale_box.isVisible()
         pix = QPixmap(max(self.width(), 16), max(self.height(), 16))
@@ -560,15 +576,25 @@ def test_transient_overlays_hidden_but_markup_revision_is_captured(qapp):
     state.cursor_mode = "dual"
     assert coord.current_digest_for(ref) != with_markup
     state.cursor_mode = "single"
+    assert coord.current_digest_for(ref) == with_markup
+
+    canvas._cursor_item._value = 0.1
+    hover_a = coord.current_digest_for(ref)
+    canvas._cursor_item._value = 9.9
+    assert coord.current_digest_for(ref) == hover_a
 
     canvas._cursor.dual = True
+    canvas._cursor.ax = 1.0
+    canvas._cursor.bx = 2.0
     with hide_transient_overlays(canvas):
         assert canvas._cursor_item.isVisible() is False
+        assert canvas._armed_item.isVisible() is True
         assert canvas._scale_box.isVisible() is False
         assert canvas._remark_item.isVisible() is True
     canvas._cursor.dual = False
     with hide_transient_overlays(canvas):
-        assert canvas._cursor_item.isVisible() is True
+        assert canvas._cursor_item.isVisible() is False
+        assert canvas._armed_item.isVisible() is True
         assert canvas._scale_box.isVisible() is False
         assert canvas._remark_item.isVisible() is True
     assert canvas._cursor_item.isVisible() is True
@@ -576,13 +602,112 @@ def test_transient_overlays_hidden_but_markup_revision_is_captured(qapp):
 
     coord.request_capture(ref, canvas, "overlay")
     _flush()
-    assert canvas.cursor_visible_at_grab is True
+    assert canvas.cursor_visible_at_grab is False
+    assert canvas.armed_visible_at_grab is True
     assert canvas.remark_visible_at_grab is True
     assert canvas.scale_box_visible_at_grab is False
     assert canvas._cursor_item.isVisible() is True
     assert canvas._remark_item.isVisible() is True
     assert canvas._scale_box.isVisible() is True
     assert read_markup_revision(canvas) == 2
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+class _FakeReadoutPill:
+    def __init__(self) -> None:
+        self._visible = True
+        self._primary = "A 12.0"
+        self._detail_text = "B 24.0"
+        self._detail = SimpleNamespace(text=lambda: self._detail_text)
+
+    def isVisible(self) -> bool:
+        return self._visible
+
+    def primary_text(self) -> str:
+        return self._primary
+
+    def has_detail(self) -> bool:
+        return True
+
+
+class _PillStack:
+    def __init__(self) -> None:
+        self._pill = _FakeReadoutPill()
+
+    def _pill_for_canvas(self, _canvas):
+        return self._pill
+
+
+def test_dual_cursor_geometry_survives_canvas_rebind(qapp):
+    """UVL-A11: rebound canvas must not empty the old ref's armed geometry."""
+    from mf4_analyzer.ui.ultraview_state import STATUS_FRESH, derive_preview_status
+
+    window, coord = _make_coord()
+    manager = window.view_manager
+    state_a = manager.get(0)
+    state_a.view_id = "view-a"
+    state_a.cursor_mode = "dual"
+    idx_b = manager.new_view()
+    state_b = manager.get(idx_b)
+    state_b.view_id = "view-b"
+    state_b.cursor_mode = "off"
+    canvas = FakeCanvas()
+    canvas._cursor.dual = True
+    canvas._cursor.ax = 1.5
+    canvas._cursor.bx = 3.5
+    ref_a = _ref("view-a")
+    ref_b = _ref("view-b")
+    coord.bind_canvas(canvas, ref_a)
+    coord.request_capture(ref_a, canvas, "dual-armed")
+    _flush()
+    record = coord.store.get(ref_a)
+    assert record is not None
+    captured = record.captured_digest
+    assert captured == coord.current_digest_for(ref_a)
+
+    coord.bind_canvas(canvas, ref_b)
+    current = coord.current_digest_for(ref_a)
+    assert current == captured
+    assert derive_preview_status(
+        True, True, captured, current
+    ) == STATUS_FRESH
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_pill_fingerprint_survives_hidden_source_page(qapp):
+    """UVL-A17: hiding the source page must not flip a captured card to stale."""
+    from mf4_analyzer.ui.ultraview_state import STATUS_FRESH, derive_preview_status
+
+    window, coord = _make_coord()
+    stack = _PillStack()
+    window.chart_stack = stack
+    state = window.view_manager.get(0)
+    state.view_id = "view-a"
+    state.cursor_mode = "dual"
+    canvas = FakeCanvas()
+    canvas._cursor.dual = True
+    canvas._cursor.ax = 1.0
+    canvas._cursor.bx = 2.0
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "pill-visible")
+    _flush()
+    record = coord.store.get(ref)
+    assert record is not None
+    captured = record.captured_digest
+    assert captured == coord.current_digest_for(ref)
+
+    stack._pill._visible = False
+    canvas.hide()
+    current = coord.current_digest_for(ref)
+    assert current == captured
+    assert derive_preview_status(
+        True, True, captured, current
+    ) == STATUS_FRESH
     canvas.deleteLater()
     coord.clear()
     coord.deleteLater()
@@ -613,15 +738,59 @@ def test_capture_dedupes_and_rejects_late_binding_or_digest(qapp):
     canvas.markup_revision += 1
     coord.request_capture(ref_a, canvas, "late-digest")
     canvas.markup_revision += 1
+    live = coord.current_digest_for(ref_a)
     _flush()
-    assert coord.store.get(ref_a).captured_digest == first_digest
+    assert coord.store.get(ref_a).captured_digest == live
+    assert canvas.grab_calls == 2
 
     canvas.markup_revision += 1
     coord.request_capture(ref_a, canvas, "late-bind")
     coord.bind_canvas(canvas, ref_b)
     _flush()
-    assert coord.store.get(ref_a).captured_digest == first_digest
+    assert coord.store.get(ref_a).captured_digest == live
     assert coord.store.get(ref_b) is None
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_refresh_page_updates_card_chrome_when_preview_record_unchanged(qapp):
+    window, coord = _make_coord()
+    page = UltraViewPage()
+    page.resize(320, 240)
+    page.show()
+    window.chart_stack = SimpleNamespace(
+        page_ultraview=page,
+        current_mode=lambda: "time",
+        cursor_pill_snapshot=lambda: None,
+        restore_cursor_pill_snapshot=lambda *_a, **_k: None,
+        clear_cursor_pill=lambda: None,
+        split_active=lambda: False,
+        secondary_canvas=lambda: None,
+        focused_canvas=lambda: None,
+    )
+    state = window.view_manager.get(0)
+    state.view_id = "view-a"
+    state.name = "Alpha"
+    state.tab_color = "#111111"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "open")
+    _flush()
+    coord.refresh_page()
+    card = page.card_widget("time", "view-a")
+    assert card is not None
+    assert card.model().title == "Alpha"
+    assert card.model().tab_color == "#111111"
+    window.view_manager.rename(0, "转向力矩")
+    window.view_manager.set_color(0, "#ff3366")
+    coord.refresh_page()
+    card = page.card_widget("time", "view-a")
+    assert card.model().title == "转向力矩"
+    assert card.model().tab_color == "#ff3366"
+    page.deleteLater()
     canvas.deleteLater()
     coord.clear()
     coord.deleteLater()
@@ -821,6 +990,49 @@ def test_inactive_result_bumps_generation_without_grabbing_active_canvas(qapp):
     assert coord.current_digest_for(ref_b) == digest_b
     assert coord.current_digest_for(ref_a) is not None
     page.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_result_generation_uses_weakref_identity_not_recycled_id(qapp):
+    """UVL-A12: generation tracks live object identity, not integer ``id()``.
+
+    Policy: bump unless the previous identity token still points at this
+    result (``is``). Weakref when the object supports it; after the first
+    object is deleted and collected, a new object must bump even if
+    CPython reused the address. Values that cannot be weakly referenced
+    (``object()``, tuples) keep a strong token — same live object must not
+    bump, a replacement must.
+    """
+    class _Probe:
+        pass
+
+    window, coord = _make_coord()
+    key = ("fft", "uvl-a12")
+    first = _Probe()
+    coord.notify_result_stored("fft", "fft-a", 0, key, first)
+    assert coord.result_generation_for("fft", "fft-a", 0, key) == 1
+    coord.notify_result_stored("fft", "fft-a", 0, key, first)
+    assert coord.result_generation_for("fft", "fft-a", 0, key) == 1
+
+    del first
+    gc.collect()
+    second = _Probe()
+    identity = getattr(coord, "_result_identity", None)
+    if isinstance(identity, dict):
+        slot = coord._generation_slot("fft", "fft-a", 0, key)
+        identity[slot] = id(second)
+    coord.notify_result_stored("fft", "fft-a", 0, key, second)
+    assert coord.result_generation_for("fft", "fft-a", 0, key) == 2
+
+    bare = ("fft", "no-weakref")
+    token = object()
+    coord.notify_result_stored("fft", "fft-a", 0, bare, token)
+    assert coord.result_generation_for("fft", "fft-a", 0, bare) == 1
+    coord.notify_result_stored("fft", "fft-a", 0, bare, token)
+    assert coord.result_generation_for("fft", "fft-a", 0, bare) == 1
+    coord.notify_result_stored("fft", "fft-a", 0, bare, object())
+    assert coord.result_generation_for("fft", "fft-a", 0, bare) == 2
     coord.clear()
     coord.deleteLater()
 
@@ -1240,6 +1452,160 @@ def test_idle_capture_coalesces_range_signals(qapp):
     coord.deleteLater()
 
 
+def test_idle_cursor_info_does_not_project_each_signal(qapp):
+    window, coord = _make_coord()
+    sheet = _visible_sheet(window)
+    page = UltraViewPage()
+    page.resize(240, 180)
+    page.show()
+    window.chart_stack = SimpleNamespace(
+        page_ultraview=page,
+        current_mode=lambda: "time",
+        cursor_pill_snapshot=lambda: None,
+        restore_cursor_pill_snapshot=lambda *_a, **_k: None,
+        clear_cursor_pill=lambda: None,
+        split_active=lambda: False,
+        secondary_canvas=lambda: None,
+        focused_canvas=lambda: None,
+    )
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "open")
+    _flush()
+    coord._push_preview(ref)
+
+    refreshes = []
+    orig_refresh = page._refresh_projection
+
+    def counted_refresh():
+        refreshes.append(1)
+        orig_refresh()
+
+    page._refresh_projection = counted_refresh
+    digest_calls = []
+    orig_digest = coord.current_digest_for
+
+    def counted_digest(target):
+        digest_calls.append(target)
+        return orig_digest(target)
+
+    coord.current_digest_for = counted_digest
+    canvas.markup_revision += 1
+
+    for _ in range(20):
+        canvas.cursor_info.emit("t=0")
+        qapp.processEvents()
+    assert refreshes == []
+    assert digest_calls == []
+
+    QTest.qWait(_IDLE_CAPTURE_MS + 80)
+    _flush()
+    assert 1 <= len(refreshes) <= 4
+    assert digest_calls
+    sheet.deleteLater()
+    page.deleteLater()
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_digest_changed_requeues_and_publishes(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "first")
+    _flush()
+    first = coord.store.get(ref).captured_digest
+    grabs = canvas.grab_calls
+
+    canvas.markup_revision += 1
+    coord.request_capture(ref, canvas, "stale-queue")
+    canvas.markup_revision += 1
+    live = coord.current_digest_for(ref)
+    assert live != first
+    _flush()
+    record = coord.store.get(ref)
+    assert record is not None
+    assert record.captured_digest == live
+    assert canvas.grab_calls == grabs + 1
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_digest_changed_retry_is_capped(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "first")
+    _flush()
+
+    details = []
+    orig_warn = coord._warn_capture
+
+    def spy_warn(target, widget, reason, detail):
+        details.append(detail)
+        return orig_warn(target, widget, reason, detail)
+
+    coord._warn_capture = spy_warn
+    n = {"i": 0}
+
+    def moving(_target):
+        n["i"] += 1
+        return f"moving-{n['i']}"
+
+    coord.current_digest_for = moving
+    coord.request_capture(ref, canvas, "oscillate")
+    _flush(24)
+    assert details.count("digest-changed") == _DIGEST_RETRY_LIMIT + 1
+    assert "digest-retry-exhausted" in details
+    after = list(details)
+    _flush(12)
+    assert details == after
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_idle_pending_per_ref_not_starved_by_other_canvas(qapp):
+    window, coord = _make_coord()
+    sheet = _visible_sheet(window)
+    manager = window.view_manager
+    manager.get(0).view_id = "view-a"
+    idx_b = manager.new_view()
+    manager.get(idx_b).view_id = "view-b"
+    canvas_a = FakeCanvas("#111111")
+    canvas_b = FakeCanvas("#222222")
+    ref_a = _ref("view-a")
+    ref_b = _ref("view-b")
+    coord.bind_canvas(canvas_a, ref_a)
+    coord.bind_canvas(canvas_b, ref_b)
+    coord.request_capture(ref_a, canvas_a, "open")
+    coord.request_capture(ref_b, canvas_b, "open")
+    _flush()
+    grabs_b = canvas_b.grab_calls
+
+    canvas_b.markup_revision += 1
+    canvas_b.markup_revision_changed.emit()
+    for _ in range(8):
+        canvas_a.cursor_info.emit("hover")
+        QTest.qWait(30)
+    _flush()
+    assert canvas_b.grab_calls == grabs_b + 1
+    sheet.deleteLater()
+    canvas_a.deleteLater()
+    canvas_b.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
 def test_idle_does_not_schedule_when_sheet_hidden(qapp):
     window, coord = _make_coord()
     window.view_manager.get(0).view_id = "view-a"
@@ -1284,6 +1650,175 @@ def test_grab_image_prefers_presentation_pixmap(qapp):
     pixel = record.image.pixelColor(2, 2)
     assert pixel.red() > 200 and pixel.blue() > 200 and pixel.green() < 80
     canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def _page_stack(page, **extra):
+    fields = dict(
+        page_ultraview=page,
+        current_mode=lambda: "time",
+        cursor_pill_snapshot=lambda: None,
+        restore_cursor_pill_snapshot=lambda *_a, **_k: None,
+        clear_cursor_pill=lambda: None,
+        split_active=lambda: False,
+        secondary_canvas=lambda: None,
+        focused_canvas=lambda: None,
+        canvas_time=None,
+    )
+    fields.update(extra)
+    return SimpleNamespace(**fields)
+
+
+def test_add_from_tab_binds_primary_when_focus_is_secondary(qapp):
+    window, coord = _make_coord()
+    manager = window.view_manager
+    manager.get(0).view_id = "view-a"
+    idx_b = manager.new_view()
+    manager.get(idx_b).view_id = "view-b"
+    manager.set_active(0)
+    manager.set_split(idx_b)
+    primary = FakeCanvas("#cc1111")
+    secondary = FakeCanvas("#11cc44")
+    window.chart_stack = _page_stack(
+        None,
+        canvas_time=primary,
+        split_active=lambda: True,
+        secondary_canvas=lambda: secondary,
+        focused_canvas=lambda: secondary,
+    )
+    ref_a = _ref("view-a")
+    ref_b = _ref("view-b")
+    coord.bind_canvas(secondary, ref_b)
+    coord.request_capture(ref_b, secondary, "partner")
+    _flush()
+    partner_grabs = secondary.grab_calls
+    partner_digest = coord.store.get(ref_b).captured_digest
+
+    coord.add_from_source_tab("time", "view-a")
+    _flush()
+    assert coord.bound_ref_for(primary) == ref_a
+    assert coord.bound_ref_for(secondary) == ref_b
+    assert primary.grab_calls >= 1
+    assert secondary.grab_calls == partner_grabs
+    record_a = coord.store.get(ref_a)
+    assert record_a is not None
+    pixel = record_a.image.pixelColor(2, 2)
+    assert pixel.red() > 150 and pixel.green() < 80
+    assert coord.store.get(ref_b).captured_digest == partner_digest
+    primary.deleteLater()
+    secondary.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_add_from_tab_binds_partner_when_focus_is_primary(qapp):
+    window, coord = _make_coord()
+    manager = window.view_manager
+    manager.get(0).view_id = "view-a"
+    idx_b = manager.new_view()
+    manager.get(idx_b).view_id = "view-b"
+    manager.set_active(0)
+    manager.set_split(idx_b)
+    primary = FakeCanvas("#cc1111")
+    secondary = FakeCanvas("#11cc44")
+    window.chart_stack = _page_stack(
+        None,
+        canvas_time=primary,
+        split_active=lambda: True,
+        secondary_canvas=lambda: secondary,
+        focused_canvas=lambda: primary,
+    )
+    ref_a = _ref("view-a")
+    ref_b = _ref("view-b")
+    coord.bind_canvas(primary, ref_a)
+    coord.request_capture(ref_a, primary, "active")
+    _flush()
+    primary_grabs = primary.grab_calls
+
+    coord.add_from_source_tab("time", "view-b")
+    _flush()
+    assert coord.bound_ref_for(secondary) == ref_b
+    assert coord.bound_ref_for(primary) == ref_a
+    assert secondary.grab_calls >= 1
+    assert primary.grab_calls == primary_grabs
+    record_b = coord.store.get(ref_b)
+    assert record_b is not None
+    pixel = record_b.image.pixelColor(2, 2)
+    assert pixel.green() > 150 and pixel.red() < 80
+    primary.deleteLater()
+    secondary.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_reset_clears_page_preview_caches(qapp):
+    window, coord = _make_coord()
+    page = UltraViewPage()
+    page.resize(320, 240)
+    page.show()
+    window.chart_stack = _page_stack(page)
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "open")
+    _flush()
+    coord.refresh_page()
+    assert page._previews
+    coord.reset_project_state()
+    assert page._previews == {}
+    assert page._statuses == {}
+    assert page._ref_exists == {}
+    page.deleteLater()
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_restore_resets_sheet_session(qapp):
+    window, coord = _make_coord()
+    page = UltraViewPage()
+    page.resize(320, 240)
+    page.show()
+    window.chart_stack = _page_stack(page)
+    window.view_manager.get(0).view_id = "view-a"
+    add_ref(coord.board, _ref("view-a"))
+    coord.refresh_page()
+    page.show_focus("time", "view-a")
+    page.arm_replacement("time", "view-a")
+    page.set_presentation_active(True)
+    assert page.focus_layer().isVisible()
+    coord.restore_project_state(None)
+    assert page.focus_layer().isVisible() is False
+    assert page.replacement_ref() is None
+    assert page.is_presentation_active() is False
+    assert page._previews == {}
+    page.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_destroyed_canvas_drops_binding_and_allows_rehook(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    ident = id(canvas)
+    assert ident in coord._bindings
+    assert ident in coord._hooked_ids
+    sip.delete(canvas)
+    _flush()
+    assert ident not in coord._bindings
+    assert ident not in coord._hooked_ids
+    assert ident not in coord._destroy_watched
+    replacement = FakeCanvas()
+    coord.bind_canvas(replacement, ref)
+    assert id(replacement) in coord._hooked_ids
+    replacement.cursor_info.emit("t=0")
+    replacement.deleteLater()
     coord.clear()
     coord.deleteLater()
 

@@ -1626,9 +1626,7 @@ class ProjectIOMixin:
         uv = getattr(self, "_ultraview", None)
         if uv is not None and current_mode in {"time", *self.analysis_managers}:
             uv.note_source_mode(current_mode)
-        if current_mode == "ultraview" and uv is not None:
-            saved_mode = uv.project_source_mode()
-        elif current_mode in self.analysis_managers or current_mode == "time":
+        if current_mode in self.analysis_managers or current_mode == "time":
             saved_mode = current_mode
         else:
             saved_mode = "time"
@@ -1870,8 +1868,7 @@ class ProjectIOMixin:
                 )
 
             if uv_warnings:
-                for item in uv_warnings:
-                    logger.warning("UltraView project restore: %s", item)
+                # Coordinator already logged each restore warning (single owner).
                 self.toast(
                     f"总览布局有 {len(uv_warnings)} 项无法识别，已按合法值恢复",
                     "warning",

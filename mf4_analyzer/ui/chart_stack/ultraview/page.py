@@ -53,6 +53,9 @@ from .widgets import (
     preview_image,
 )
 
+_FEEDBACK_BOARD_FULL = "Board 已满：换布局或先移除"
+_FEEDBACK_NO_SELECTION = "先在左侧 View 库选择一个 View"
+
 
 class UltraViewPage(QWidget):
     add_ref_requested = pyqtSignal(str, str)
@@ -78,6 +81,7 @@ class UltraViewPage(QWidget):
     quickref_requested = pyqtSignal()
     selection_changed = pyqtSignal(str, str)
     board_name_changed = pyqtSignal(str)
+    feedback_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -269,6 +273,8 @@ class UltraViewPage(QWidget):
         parsed = ref if isinstance(ref, UltraViewRef) else parse_ref_payload(ref)
         if parsed is None:
             return
+        if self._previews.get(parsed) is record_like:
+            return
         self._previews[parsed] = record_like
         self._refresh_projection()
 
@@ -281,8 +287,55 @@ class UltraViewPage(QWidget):
         parsed = ref if isinstance(ref, UltraViewRef) else parse_ref_payload(ref)
         if parsed is None:
             return
-        self._statuses[parsed] = str(status)
-        self._ref_exists[parsed] = bool(ref_exists)
+        status_s = str(status)
+        exists_b = bool(ref_exists)
+        if (
+            self._statuses.get(parsed) == status_s
+            and self._ref_exists.get(parsed) == exists_b
+        ):
+            return
+        self._statuses[parsed] = status_s
+        self._ref_exists[parsed] = exists_b
+        self._refresh_projection()
+
+    def apply_preview_and_status(
+        self,
+        ref: UltraViewRef | Mapping[str, Any],
+        record_like: Any,
+        status: str,
+        ref_exists: bool,
+    ) -> None:
+        """Apply preview record and status in one projection (UVL-A08).
+
+        Tests that call ``set_preview`` / ``set_ref_status`` still refresh
+        synchronously so they can read ``card_widget`` without pumping
+        events. Coordinator idle/publish uses this combined entry so the
+        pair does not rebuild the board twice.
+        """
+        parsed = ref if isinstance(ref, UltraViewRef) else parse_ref_payload(ref)
+        if parsed is None:
+            return
+        changed = False
+        if record_like is not None and self._previews.get(parsed) is not record_like:
+            self._previews[parsed] = record_like
+            changed = True
+        status_s = str(status)
+        exists_b = bool(ref_exists)
+        if (
+            self._statuses.get(parsed) != status_s
+            or self._ref_exists.get(parsed) != exists_b
+        ):
+            self._statuses[parsed] = status_s
+            self._ref_exists[parsed] = exists_b
+            changed = True
+        if changed:
+            self._refresh_projection()
+
+    def clear_runtime_caches(self) -> None:
+        """Drop page-local preview shadows so they cannot outlive the store."""
+        self._previews.clear()
+        self._statuses.clear()
+        self._ref_exists.clear()
         self._refresh_projection()
 
     def set_board(self, board: UltraViewBoardState) -> None:
@@ -365,19 +418,33 @@ class UltraViewPage(QWidget):
     def _on_drag_finished(self) -> None:
         self._drag_kind = None
 
+    def _emit_feedback(self, message: str) -> None:
+        self.feedback_requested.emit(message)
+
     def _on_toolbar_add(self) -> None:
         selected = self._library.selected_ref()
         if selected is None:
             self._library.focus_search()
+            self._emit_feedback(_FEEDBACK_NO_SELECTION)
             return
         self._emit_add(selected[0], selected[1])
 
-    def _on_empty_slot(self, _slot_id: str) -> None:
+    def _on_empty_slot(self, slot_id: str) -> None:
         selected = self._library.selected_ref()
         if selected is None:
             self._library.focus_search()
+            self._emit_feedback(_FEEDBACK_NO_SELECTION)
             return
-        self._emit_add(selected[0], selected[1])
+        if self._replacement_ref is not None or self._replacement_slot:
+            # UVL-A01: armed completion still wins over empty-slot place.
+            # Tray-armed refs have no slot; bind the clicked empty slot as
+            # the replace target. A board-armed slot is left unchanged so
+            # the click does not retarget a different occupant.
+            if self._replacement_slot is None:
+                self._replacement_slot = slot_id
+            self._finish_armed_replacement(selected[0], selected[1])
+            return
+        self.replace_slot_requested.emit(slot_id, selected[0], selected[1])
 
     def _on_locate(self, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
@@ -409,6 +476,7 @@ class UltraViewPage(QWidget):
     def _on_tray_place(self, section: str, view_id: str) -> None:
         slot = first_empty_slot(self._board)
         if slot is None:
+            self._emit_feedback(_FEEDBACK_BOARD_FULL)
             return
         self.place_from_unplaced_requested.emit(slot, section, view_id)
 
@@ -424,7 +492,13 @@ class UltraViewPage(QWidget):
         if ref is None:
             return
         kind = self._drag_kind
-        if self._replacement_ref is not None or self._replacement_slot:
+        armed = self._replacement_ref is not None or self._replacement_slot
+        if armed and kind in ("card", "tray"):
+            # UVL-A03: card swap / tray place are board mutations, not a
+            # library completion of the armed replacement. Drop the arm
+            # first, then continue the normal swap/place flow.
+            self.clear_replacement_arm()
+        elif armed:
             if ref in membership_set(self._board) and kind == "library":
                 self._on_locate(section, view_id)
                 return

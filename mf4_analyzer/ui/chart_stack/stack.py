@@ -1,4 +1,6 @@
 """ChartStack — the centre-pane QWidget coordinator."""
+import logging
+
 from PyQt5.QtCore import QEvent, QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import (
@@ -37,6 +39,8 @@ from .cursor_pill import (
 )
 from .toolbar import PgNavigationToolbar
 from ...ui_kit.qt_lifecycle import as_weak_callable
+
+logger = logging.getLogger(__name__)
 
 
 class ChartStack(QWidget):
@@ -202,6 +206,9 @@ class ChartStack(QWidget):
         self.stack.addWidget(self.page_fft_time)
         self.stack.addWidget(self.page_frf)
         self.stack.addWidget(self.page_order)
+        # Host slot for UltraViewPage. Not a live workspace mode:
+        # ChartStack.set_mode rejects 'ultraview'. The page stays in the
+        # stack so UltraViewSheet can return it on close.
         self.page_ultraview = UltraViewPage(self)
         self.stack.addWidget(self.page_ultraview)
         self.page_ultraview.quickref_requested.connect(self.quickref_requested.emit)
@@ -858,7 +865,7 @@ class ChartStack(QWidget):
         return bar
 
     def hint_bar_for_mode(self, mode):
-        if mode not in _MODE_TO_INDEX:
+        if mode not in _MODE_TO_INDEX or mode == 'ultraview':
             mode = 'time'
         if mode == 'time':
             return self._time_card._hint_bar
@@ -870,8 +877,6 @@ class ChartStack(QWidget):
             return self._frf_card._hint_bar
         if mode == 'order':
             return self._order_card._hint_bar
-        if mode == 'ultraview':
-            return self.page_ultraview.hint_bar()
         raise KeyError(mode)
 
     def take_hint_bar(self, mode, parent):
@@ -887,6 +892,12 @@ class ChartStack(QWidget):
         return bar
 
     def set_mode(self, mode):
+        if mode == 'ultraview':
+            logger.warning(
+                "ChartStack.set_mode('ultraview') is not a live workspace "
+                "mode; page_ultraview remains the UltraView sheet host"
+            )
+            return
         if mode not in _MODE_TO_INDEX:
             mode = 'time'
         idx = _MODE_TO_INDEX[mode]
@@ -1185,8 +1196,6 @@ class ChartStack(QWidget):
         DPI-independent bitmap; the canvas caps the magnification for
         speed. The cursor pill's position AND size are scaled by the SAME
         effective factor so it still lines up on the magnified bitmap."""
-        if self.current_mode() == 'ultraview':
-            return
         if (self.current_mode() == 'time'
                 and self.split_active()
                 and card in (self._time_card, self._secondary_card)):

@@ -1720,3 +1720,192 @@ def test_starting_a_run_persists_panel_prefs(qtbot, tmp_path, monkeypatch):
 
     # Leave the sheet unlocked so teardown closes it through the normal path.
     sheet._running = False
+
+
+def test_batch_sheet_is_running_wraps_internal_flag(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    assert sheet.is_running() is False
+    sheet._running = True
+    assert sheet.is_running() is True
+    sheet._running = False
+    assert sheet.is_running() is False
+
+
+def test_confirm_stop_and_wait_idle_returns_true_without_dialog(
+    qtbot, monkeypatch,
+):
+    from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    questions = []
+    monkeypatch.setattr(
+        sheet_module.QMessageBox,
+        "question",
+        lambda *_a, **_k: questions.append(True) or sheet_module.QMessageBox.No,
+    )
+
+    assert sheet.confirm_stop_and_wait() is True
+    assert questions == []
+
+
+def test_confirm_stop_and_wait_no_leaves_runner_untouched(
+    qtbot, monkeypatch,
+):
+    from PyQt5.QtCore import QThread
+
+    from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    sheet._running = True
+
+    class _StubThread(QThread):
+        def __init__(self):
+            super().__init__()
+            self.cancel_calls = 0
+
+        def request_cancel(self):
+            self.cancel_calls += 1
+
+    thread = _StubThread()
+    sheet._runner_thread = thread
+    monkeypatch.setattr(
+        sheet_module.QMessageBox,
+        "question",
+        lambda *_a, **_k: sheet_module.QMessageBox.No,
+    )
+
+    assert sheet.confirm_stop_and_wait() is False
+    assert thread.cancel_calls == 0
+    assert sheet.is_running() is True
+    sheet._running = False
+
+
+def test_confirm_stop_and_wait_yes_waits_until_running_clears(
+    qtbot, monkeypatch,
+):
+    import threading
+
+    from PyQt5.QtCore import QThread
+
+    from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+
+    class _HoldThread(QThread):
+        def __init__(self):
+            super().__init__()
+            self._release = threading.Event()
+            self.cancel_calls = 0
+            self.run_started = threading.Event()
+
+        def request_cancel(self):
+            self.cancel_calls += 1
+            self._release.set()
+
+        def run(self):
+            self.run_started.set()
+            self._release.wait(timeout=30)
+
+    thread = _HoldThread()
+    sheet._running = True
+    sheet._runner_thread = thread
+    thread.finished.connect(sheet._on_thread_finished)
+    thread.start()
+    assert thread.run_started.wait(timeout=2)
+    monkeypatch.setattr(
+        sheet_module.QMessageBox,
+        "question",
+        lambda *_a, **_k: sheet_module.QMessageBox.Yes,
+    )
+
+    try:
+        asserted_idle = sheet.confirm_stop_and_wait(timeout_ms=3000)
+        assert asserted_idle is True
+        assert thread.cancel_calls == 1
+        assert sheet.is_running() is False
+    finally:
+        from PyQt5 import sip
+        try:
+            if not sip.isdeleted(thread):
+                thread.request_cancel()
+                thread.wait(1000)
+        except RuntimeError:
+            pass
+        sheet._running = False
+
+
+def test_confirm_stop_and_wait_timeout_refuses_and_logs(qtbot, monkeypatch, caplog):
+    import logging
+    import threading
+
+    from PyQt5.QtCore import QThread
+
+    from mf4_analyzer.ui.drawers.batch import sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+
+    class _HangThread(QThread):
+        def __init__(self):
+            super().__init__()
+            self._stop = threading.Event()
+            self.cancel_calls = 0
+            self.run_started = threading.Event()
+
+        def request_cancel(self):
+            self.cancel_calls += 1
+
+        def run(self):
+            self.run_started.set()
+            self._stop.wait(timeout=30)
+
+        def force_stop(self):
+            self._stop.set()
+
+    thread = _HangThread()
+    sheet._running = True
+    sheet._runner_thread = thread
+    thread.start()
+    assert thread.run_started.wait(timeout=2)
+    monkeypatch.setattr(
+        sheet_module.QMessageBox,
+        "question",
+        lambda *_a, **_k: sheet_module.QMessageBox.Yes,
+    )
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="mf4_analyzer.batch"):
+            assert sheet.confirm_stop_and_wait(timeout_ms=200) is False
+        assert thread.cancel_calls == 1
+        assert sheet.is_running() is True
+        assert "timeout" in caplog.text.lower() or "timed out" in caplog.text.lower()
+    finally:
+        thread.force_stop()
+        thread.wait(1000)
+        sheet._running = False
+
+
+def test_stop_confirmation_copy_is_single_sourced():
+    from pathlib import Path
+
+    import mf4_analyzer.ui.drawers.batch.sheet as sheet_module
+    from mf4_analyzer.ui.drawers.batch.sheet import _STOP_ON_CLOSE_TEXT
+
+    text = Path(sheet_module.__file__).read_text(encoding="utf-8")
+    needle = "批量任务正在运行，关闭将取消剩余任务。要继续吗？"
+    assert _STOP_ON_CLOSE_TEXT == needle
+    assert text.count(needle) == 1
+    window_src = Path("mf4_analyzer/ui/main_window/window.py").read_text(
+        encoding="utf-8",
+    )
+    assert needle not in window_src

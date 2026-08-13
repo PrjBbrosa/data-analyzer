@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 import re
 from types import SimpleNamespace
 
@@ -133,7 +134,8 @@ def test_secondary_toolbar_broadcasts_mouse_mode_to_primary_in_split(qapp, qtbot
 
 def test_chart_stack_has_three_canvases(qapp):
     cs = ChartStack()
-    # Six pages after UltraView (time / fft / fft_time / frf / order / ultraview).
+    # Six stack pages: five analysis workspaces plus UltraViewPage as the
+    # sheet host (not a live workspace mode).
     assert cs.count() == 6
 
 
@@ -162,7 +164,7 @@ def test_analysis_heatmap_sections_start_with_section_axis_labels(qapp, qtbot):
     assert order._slice_plot.getAxis('left').labelText == 'Amplitude (dB)'
 
 
-def test_chart_stack_set_mode(qapp):
+def test_chart_stack_set_mode(qapp, caplog):
     cs = ChartStack()
     assert cs.stack.count() == 6
     cs.set_mode('fft')
@@ -171,9 +173,11 @@ def test_chart_stack_set_mode(qapp):
     assert cs.current_mode() == 'order'
     cs.set_mode('frf')
     assert cs.current_mode() == 'frf'
-    cs.set_mode('ultraview')
-    assert cs.current_mode() == 'ultraview'
-    assert cs.hint_bar_for_mode('ultraview') is cs.page_ultraview.hint_bar()
+    with caplog.at_level(logging.WARNING):
+        cs.set_mode('ultraview')
+    assert cs.current_mode() == 'frf'
+    assert cs.stack.currentIndex() == 3
+    assert any("ultraview" in rec.message.lower() for rec in caplog.records)
     cs.set_mode('not-a-mode')
     assert cs.current_mode() == 'time'
     cs.set_mode('time')

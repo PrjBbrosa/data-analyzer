@@ -1,7 +1,6 @@
-"""UltraView sixth mode: ChartStack, Toolbar, Inspector, MainWindow routing."""
+"""UltraView independent panel: ChartStack host, Toolbar, Inspector, MainWindow routing."""
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 from PyQt5.QtCore import QCoreApplication, Qt
@@ -16,7 +15,6 @@ from mf4_analyzer.ui.side_panels import PanelState
 from mf4_analyzer.ui.ultraview_state import (
     DEFAULT_BOARD_NAME,
     STATUS_FRESH,
-    STATUS_STALE,
     UltraViewRef,
     add_ref,
     membership_set,
@@ -32,20 +30,14 @@ _CTX_PATH = (
 )
 
 
-def test_ultraview_contextual_does_not_import_main_window():
-    tree = ast.parse(_CTX_PATH.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                assert "main_window" not in alias.name
-        if isinstance(node, ast.ImportFrom) and node.module:
-            assert "main_window" not in node.module
+def test_ultraview_contextual_module_is_removed():
+    assert not _CTX_PATH.is_file()
 
 
 def test_chart_stack_hint_bar_has_quickref_entry(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
-    bar = cs.hint_bar_for_mode("ultraview")
+    bar = cs.page_ultraview.hint_bar()
     button = bar.findChild(QToolButton, "chartHintQuickrefButton")
     assert button is not None
     assert button.text() == "?"
@@ -206,6 +198,93 @@ def test_open_source_navigates_by_view_id(qapp, qtbot):
     assert str(win.view_manager.get(win.view_manager.active).view_id) == target
 
 
+def test_toast_and_export_dialog_use_visible_sheet_host(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.show()
+    qtbot.waitExposed(win)
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    sheet = win._ultraview_sheet
+    assert sheet is not None
+    assert sheet.isVisible()
+    page = win.chart_stack.page_ultraview
+    assert page.window() is sheet
+
+    sheet_msgs = []
+    win_msgs = []
+    monkeypatch.setattr(
+        sheet, "toast", lambda msg, level="info": sheet_msgs.append((msg, level))
+    )
+    monkeypatch.setattr(
+        win, "toast", lambda msg, level="info": win_msgs.append((msg, level))
+    )
+    win._ultraview._toast("已复制整板图", "success")
+    assert sheet_msgs == [("已复制整板图", "success")]
+    assert win_msgs == []
+
+    parents = []
+
+    def fake_save(parent, *args, **kwargs):
+        parents.append(parent)
+        return ("", "")
+
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.main_window.ultraview_coordinator.QFileDialog.getSaveFileName",
+        fake_save,
+    )
+    assert win._ultraview.choose_and_export_png(1) is False
+    assert parents == [sheet]
+
+    sheet.hide()
+    QCoreApplication.processEvents()
+    win._ultraview._toast("回落主窗", "info")
+    assert win_msgs == [("回落主窗", "info")]
+
+
+def test_open_source_raises_main_window_and_keeps_sheet(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    while len(win.view_manager.views) < 2:
+        win.view_manager.new_view()
+    win.view_manager.set_active(0)
+    target = str(win.view_manager.get(1).view_id)
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    sheet = win._ultraview_sheet
+    sheet_id = id(sheet)
+    raised = []
+    monkeypatch.setattr(win, "raise_", lambda: raised.append("raise"))
+    monkeypatch.setattr(win, "activateWindow", lambda: raised.append("activate"))
+    win._ultraview.open_source("time", target)
+    for _ in range(8):
+        QCoreApplication.processEvents()
+    assert raised == ["raise", "activate"]
+    assert win._ultraview_sheet is sheet
+    assert id(win._ultraview_sheet) == sheet_id
+    assert sheet.isVisible()
+    assert str(win.view_manager.get(win.view_manager.active).view_id) == target
+
+
+def test_focus_requested_shows_overlay_once(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    page = win.chart_stack.page_ultraview
+    view_id = str(win.view_manager.get(0).view_id)
+    add_ref(win._ultraview.board, UltraViewRef("time", view_id))
+    win._ultraview.refresh_page()
+    calls = []
+    orig = page.focus_layer().show_ref
+
+    def spy(section, view_id, title, image):
+        calls.append((section, view_id))
+        return orig(section, view_id, title, image)
+
+    page.focus_layer().show_ref = spy
+    page._on_focus("time", view_id)
+    assert calls == [("time", view_id)]
+
+
 def test_ultraview_teardown_disconnects_page_intents(qapp, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
@@ -224,6 +303,23 @@ def test_ultraview_teardown_disconnects_page_intents(qapp, qtbot):
     page.export_png_requested.emit(1)
     assert membership_set(win._ultraview.board) == set()
     assert win._ultraview.is_shutdown is True
+
+
+def test_attach_reconnects_page_hooks_when_stack_already_connected(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    page = win.chart_stack.page_ultraview
+    assert uv._page_hooks
+    assert uv._stack_hooks
+    uv._disconnect_page_hooks()
+    assert not uv._page_hooks
+    assert uv._stack_hooks
+    uv.attach()
+    assert uv._page_hooks
+    view_id = str(win.view_manager.get(0).view_id)
+    page.add_ref_requested.emit("time", view_id)
+    assert UltraViewRef("time", view_id) in membership_set(uv.board)
 
 
 def test_ultraview_shutdown_is_idempotent_and_clears_store(qapp, qtbot):
@@ -337,26 +433,27 @@ def test_close_all_without_files_keeps_restored_board(qapp, qtbot):
     assert UltraViewRef("time", view_id) in membership_set(uv.board)
 
 
-def test_reset_during_presentation_restores_inspector(qapp, qtbot):
+def test_reset_during_presentation_keeps_analyzer_inspector(qapp, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
     uv = win._ultraview
     right = win._panel_ctrl_right
     before = right.snapshot_persistent_state()
     uv._on_presentation(True)
-    assert uv._inspector_snapshot is None
     assert right.snapshot_persistent_state()["state"] == before["state"]
 
     uv.reset_project_state()
 
-    assert uv._inspector_snapshot is None
     assert right.snapshot_persistent_state()["state"] == before["state"]
     assert win.chart_stack.page_ultraview.is_presentation_active() is False
 
 
 def test_inspector_unknown_mode_falls_back_to_time(qapp):
     insp = Inspector()
+    insp.set_mode("fft")
     insp.set_mode("ultraview")
+    assert insp.contextual_widget_name() == "time"
+    assert not hasattr(insp, "ultraview_ctx")
     insp.set_mode("mystery")
     assert insp.contextual_widget_name() == "time"
 
@@ -628,9 +725,6 @@ def test_idle_pan_and_markup_recaptures_time_preview(qapp, qtbot, loaded_csv):
     assert xlim is not None
     lo, hi = xlim
     canvas.restore_visible_xlim((lo + 0.1 * (hi - lo), hi))
-    qtbot.wait(80)
-    QCoreApplication.processEvents()
-    assert page._status_for(ref) == STATUS_STALE
     recaptured = None
     for _ in range(40):
         QCoreApplication.processEvents()
@@ -648,9 +742,6 @@ def test_idle_pan_and_markup_recaptures_time_preview(qapp, qtbot, loaded_csv):
     pan_digest = recaptured.captured_digest
 
     canvas._annotations._bump_markup_revision()
-    qtbot.wait(80)
-    QCoreApplication.processEvents()
-    assert page._status_for(ref) == STATUS_STALE
     marked = None
     for _ in range(40):
         QCoreApplication.processEvents()
@@ -714,7 +805,7 @@ def test_toolbar_has_no_visible_ultraview_entry(qapp, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
     tb = win.toolbar
-    assert tb.btn_mode_ultraview.isHidden()
+    assert not hasattr(tb, "btn_mode_ultraview")
     assert not hasattr(tb, "btn_ultraview") or tb.btn_ultraview.isHidden()
     left = tb.findChild(QWidget, "toolbarLeftGroup")
     visible = [

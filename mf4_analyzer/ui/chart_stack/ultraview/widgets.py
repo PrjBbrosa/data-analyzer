@@ -1296,10 +1296,8 @@ class BoardGrid(QWidget):
         section, view_id = extracted
         slot_id = self.slot_id_at(pos)
         if slot_id is None:
-            slots = LAYOUT_SLOTS.get(self._layout_id, ())
-            slot_id = slots[0] if slots else ""
-        if slot_id:
-            self.ref_dropped.emit(slot_id, section, view_id)
+            return
+        self.ref_dropped.emit(slot_id, section, view_id)
 
 
 class TrayItem(QFrame):
@@ -1414,6 +1412,7 @@ class UnplacedTray(QFrame):
         self.setAcceptDrops(True)
         self._expanded = False
         self._items: list[TrayItem] = []
+        self._content_signature: tuple | None = None
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -1465,6 +1464,22 @@ class UnplacedTray(QFrame):
         statuses: Mapping[tuple[str, str], str] | None = None,
         armed: UltraViewRef | None = None,
     ) -> None:
+        titles = titles or {}
+        colors = colors or {}
+        statuses = statuses or {}
+        signature = tuple(
+            (
+                (ref.section, ref.view_id),
+                str(titles.get((ref.section, ref.view_id), ref.view_id)),
+                str(colors.get((ref.section, ref.view_id), "")),
+                str(statuses.get((ref.section, ref.view_id), "")),
+                armed == ref,
+            )
+            for ref in refs
+        )
+        if signature == self._content_signature:
+            return
+        self._content_signature = signature
         while self._inner_layout.count() > 1:
             item = self._inner_layout.takeAt(0)
             widget = item.widget()
@@ -1472,9 +1487,6 @@ class UnplacedTray(QFrame):
                 widget.setParent(None)
                 widget.deleteLater()
         self._items = []
-        titles = titles or {}
-        colors = colors or {}
-        statuses = statuses or {}
         for ref in refs:
             key = (ref.section, ref.view_id)
             widget = TrayItem(

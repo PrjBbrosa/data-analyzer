@@ -163,17 +163,11 @@ class Toolbar(QWidget):
         self.btn_mode_order = QPushButton("阶次", self)
         self.btn_mode_order.setIcon(Icons.mode_order())
         self.btn_mode_order.setToolTip("阶次（Order）")
-        # Kept for compatibility with older tests/screenshots; UltraView is a
-        # standalone tool window now, so this sixth mode button stays hidden.
-        self.btn_mode_ultraview = QPushButton("总览", self)
-        self.btn_mode_ultraview.setIcon(Icons.mode_ultraview())
-        self.btn_mode_ultraview.setToolTip("总览（UltraView）")
-        self.btn_mode_ultraview.hide()
 
         for b in (self.btn_add, self.btn_save_project,
                   self.btn_batch,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
-                  self.btn_mode_frf, self.btn_mode_order, self.btn_mode_ultraview):
+                  self.btn_mode_frf, self.btn_mode_order):
             b.setIconSize(QSize(16, 16))
         self.btn_save_caret.setIconSize(QSize(12, 12))
 
