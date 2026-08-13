@@ -84,6 +84,61 @@ def test_selected_file_parent_keeps_a_visible_expander(qapp, qtbot):
         qapp.setStyle(old_style)
 
 
+def test_selected_file_parent_selection_is_a_continuous_bar(qapp, qtbot):
+    """Expander slot and display-column action share one rectangular fill.
+
+    Per-cell ``::item:selected`` / ``::branch:selected`` radius used to paint
+    a circle around the chevron and a pill around the red x, with the tree
+    background showing at the square slot corners.
+    """
+    old_sheet = qapp.styleSheet()
+    old_style = qapp.style().objectName()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        widget = MultiFileChannelWidget()
+        qtbot.addWidget(widget)
+        widget.resize(520, 360)
+        _add_attached_file(widget, "file-a", _MultiChannelFileData())
+        widget.show()
+        qtbot.waitExposed(widget)
+
+        parent = widget._file_items["file-a"]
+        widget.tree.setCurrentItem(parent)
+        parent.setSelected(True)
+        widget._on_item_entered(parent, 2)
+        qapp.processEvents()
+
+        expected = QColor("#b7d3f2")
+        tree = widget.tree
+        image = tree.viewport().grab().toImage()
+        row = tree.visualItemRect(parent)
+        display = tree.visualRect(tree.indexFromItem(parent, 2))
+        pts = tree.visualRect(tree.indexFromItem(parent, 1))
+        gutter_right = row.left()
+
+        def _assert_fill(x, y, where):
+            color = image.pixelColor(x, y)
+            assert color == expected, (
+                f"{where} at ({x},{y}) rendered {color.name()}, "
+                f"expected {expected.name()}"
+            )
+
+        _assert_fill(2, row.top() + 1, "branch slot top-left")
+        _assert_fill(2, row.bottom() - 1, "branch slot bottom-left")
+        _assert_fill(gutter_right - 2, row.top() + 1, "branch slot top-right")
+        _assert_fill(gutter_right - 2, row.bottom() - 1, "branch slot bottom-right")
+        _assert_fill(display.left() + 1, display.top() + 1, "display top-left")
+        _assert_fill(display.right() - 1, display.top() + 1, "display top-right")
+        _assert_fill(display.left() + 1, display.bottom() - 1, "display bottom-left")
+        _assert_fill(display.right() - 1, display.bottom() - 1, "display bottom-right")
+        _assert_fill(pts.right() - 2, row.center().y(), "pts near display seam")
+        _assert_fill(display.left() + 2, row.center().y(), "display near pts seam")
+    finally:
+        qapp.setStyleSheet(old_sheet)
+        qapp.setStyle(old_style)
+
+
 class _FakeFileData:
     data = [1, 2, 3]
 

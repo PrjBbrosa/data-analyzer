@@ -3,8 +3,8 @@ id: codex-channel-tree-selection-color-has-multiple-painters
 status: active
 owners: [codex]
 keywords: [channel-tree, selection, qss, delegate, qt-render, windows]
-paths: [mf4_analyzer/ui/widgets/__init__.py, mf4_analyzer/ui_kit/style.qss, tests/ui/test_channel_widget.py]
-checks: [rg -n "SELECTED_BG|channelTree::(item|branch):selected|drawBranches" mf4_analyzer/ui/widgets/__init__.py mf4_analyzer/ui_kit/style.qss]
+paths: [mf4_analyzer/ui/widgets/channel_tree.py, mf4_analyzer/ui_kit/style.qss, tests/ui/test_channel_widget.py]
+checks: [rg -n "SELECTED_BG|channelTree::(item|branch):selected|drawBranches" mf4_analyzer/ui/widgets/channel_tree.py mf4_analyzer/ui_kit/style.qss]
 tests: [tests/ui/test_channel_widget.py, tests/ui/test_file_navigator.py]
 ---
 

@@ -428,27 +428,43 @@ def test_state_border_shorthand_whitelist_is_honored():
     )
 
 
-def test_channel_tree_selected_restates_border_radius():
-    """E1: opaque selected fill must carry its own radius (parent 9 − border 1)."""
+def test_channel_tree_selected_does_not_round_per_cell():
+    """Selected fill stays rectangular; the tree widget keeps the 9px frame.
+
+    E1 originally restated radius on ``::item:selected`` and
+    ``::branch:selected`` so first/last rows would not square-over the
+    parent arc. Qt applies those rules per cell / per branch slot, so a
+    selected file row became a circle around the expander and a pill
+    around the display-column action. Guideline-hardening Task 14 also
+    allowed a viewport inset; the product choice is a continuous strip.
+    """
     text = _parse_sheet()
+    tree_radius = None
     item_radius = None
     branch_radius = None
     for sels, body in _BLOCK_RE.findall(text):
         for raw in sels.split(","):
             sel = _norm(raw)
+            if sel == "QTreeWidget#channelTree":
+                m = re.search(r"(?<![\w-])border-radius\s*:\s*(\d+)px", body)
+                if m:
+                    tree_radius = int(m.group(1))
             if sel == "QTreeWidget#channelTree::item:selected":
                 m = re.search(r"(?<![\w-])border-radius\s*:\s*(\d+)px", body)
                 item_radius = int(m.group(1)) if m else None
             if sel == "QTreeWidget#channelTree::branch:selected":
                 m = re.search(r"(?<![\w-])border-radius\s*:\s*(\d+)px", body)
                 branch_radius = int(m.group(1)) if m else None
-    assert item_radius in {6, 8}, (
-        f"channelTree::item:selected must declare border-radius 6 or 8 "
-        f"(parent 9 − border 1), got {item_radius!r}"
+    assert tree_radius == 9, (
+        f"channelTree must keep its 9px frame radius, got {tree_radius!r}"
     )
-    assert branch_radius == item_radius, (
-        f"branch:selected radius {branch_radius!r} must match item:selected "
-        f"{item_radius!r}"
+    assert item_radius is None, (
+        "channelTree::item:selected must not set per-cell border-radius "
+        f"(it fragments the selected row into pills), got {item_radius!r}"
+    )
+    assert branch_radius is None, (
+        "channelTree::branch:selected must not set per-slot border-radius "
+        f"(it turns the expander into a circle), got {branch_radius!r}"
     )
 
 

@@ -1925,21 +1925,22 @@ QTreeWidget#channelTree {
 }
 QTreeWidget#channelTree::item {
     min-height: 24px;
-    padding: 1px 0;
+    /* Vertical padding here shortens the delegate fill relative to the
+     * branch gutter, so keep it 0. Horizontal padding stays 0 for the
+     * same reason as the comment on the tree rule above. */
+    padding: 0;
 }
 QTreeWidget#channelTree::item:selected {
-    min-height: 24px;
-    padding: 1px 0;
     background-color: #b7d3f2;
     color: #111827;
-    /* Parent tree is 9px; item fill sits on the padding box (inset by the
-     * 1px frame), so radius = 9 − 1 = 8. Without this, first/last visible
-     * selected rows paint square corners over the parent arc (E1). */
-    border-radius: 8px;
+    /* Do not set border-radius on ::item:selected or ::branch:selected.
+     * Qt rounds each cell and the branch slot independently, so a selected
+     * file row became a circle around the expander and a pill around the
+     * display-column close/eye. Keep the fill rectangular; the tree widget
+     * still owns the 9px outer radius. */
 }
 QTreeWidget#channelTree::branch:selected {
     background-color: #b7d3f2;
-    border-radius: 8px;
 }
 
 QHeaderView::section {

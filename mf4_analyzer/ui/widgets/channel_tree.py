@@ -326,22 +326,14 @@ class _ChannelLeafDelegate(QStyledItemDelegate):
             icon = index.data(Qt.DecorationRole)
             if (column == 2 and isinstance(icon, QIcon)
                     and not icon.isNull()):
-                # File/raster detach actions used to follow the native macOS
-                # decoration inset, placing the red x left of the eye-icon
-                # centerline. Let the style draw the cell background, but
-                # suppress its decoration and paint that action on the same
-                # explicit geometry used by channel eyes.
-                base_option = QStyleOptionViewItem(option)
-                self.initStyleOption(base_option, index)
-                base_option.icon = QIcon()
-                base_option.features &= ~QStyleOptionViewItem.HasDecoration
-                widget = base_option.widget or self.parent()
-                widget.style().drawControl(
-                    QStyle.CE_ItemViewItem,
-                    base_option,
-                    painter,
-                    widget,
-                )
+                # File/raster detach used to follow the native decoration
+                # inset, then later CE_ItemViewItem so the red x sat on the
+                # same centerline as channel eyes. That style fill also
+                # applied ::item:selected's per-cell radius, turning the
+                # display column into a detached pill. Paint the same
+                # rectangular selected fill as the other columns, then the
+                # icon on the shared action geometry.
+                self._fill_selected(painter, option, cell)
                 icon.paint(
                     painter,
                     self.column_action_geometry(cell),
@@ -537,26 +529,27 @@ class _CheckTolerantTree(QTreeWidget):
         item = self.itemFromIndex(index)
         data = item.data(0, Qt.UserRole) if item is not None else None
         super().drawBranches(painter, rect, index)
+        selected = item is not None and item.isSelected()
+        is_parent = bool(data and data[0] in ('file', 'source', 'raster'))
+        is_channel = bool(data and data[0] == 'channel')
+        # Flatten the branch slot to the same rectangular selected fill as
+        # the item body. Channel leaves have no expander, so always overwrite
+        # the native grey gutter. Darwin selected parents also overwrite:
+        # QSS ::branch:selected radius (and the native disclosure chrome)
+        # otherwise leaves a circular highlight whose square slot corners
+        # show through. Non-Darwin parents keep the native glyph, so they
+        # must not be filled over.
+        if selected and (is_channel or (is_parent and self._repaint_selected_expander)):
+            painter.fillRect(rect, _ChannelLeafDelegate.SELECTED_BG)
         if (
-            data
-            and data[0] in ('file', 'source', 'raster')
+            is_parent
             and item.childCount() > 0
-            and item.isSelected()
+            and selected
             and self._repaint_selected_expander
         ):
             self._paint_selected_expander(painter, rect, item.isExpanded())
-        if not (data and data[0] == 'channel'):
+        if not is_channel:
             return
-        # On macOS the native tree style leaves an independently painted grey
-        # branch/indent gutter beside a selected leaf.  Its checkbox and text
-        # do not actually move, but the split background makes the row look as
-        # if it has shifted right.  Channel leaves have no expand/collapse
-        # glyph, so repaint that gutter with the same selection colour used by
-        # the item body before drawing an optional axis-group badge.
-        if item.isSelected():
-            painter.save()
-            painter.fillRect(rect, _ChannelLeafDelegate.SELECTED_BG)
-            painter.restore()
         owner = self._owner
         if owner is None:
             return

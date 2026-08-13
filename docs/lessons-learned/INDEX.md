@@ -166,6 +166,7 @@ lesson by default.
 | [UltraView Time Capture Uses Plotted Ink And Stable Digest](ultraview-time-capture-ink-and-stable-digest.md) | Changing UltraView preview capture, `_host_has_real_result`, presentation digest, or `source_revision_for` in the time-preview path. | See lesson |
 | [Independent Tool Window Must Clear Transient Parent](independent-tool-window-must-clear-transient-parent.md) | Adding or changing a non-modal QDialog tool window parented to MainWindow | See lesson |
 | [UltraView Idle Recapture Keeps Armed Cursor And Cursor Digest](ultraview-idle-digest-keeps-armed-cursor.md) | Changing UltraView capture, presentation digest, `hide_transient_overlays`, idle recapture, or copy-as-image pill compositing. | See lesson |
+| [Channel Tree Selected Fill Must Stay Rectangular](codex-channel-tree-selected-fill-must-stay-rectangular.md) | Changing channel-tree selected-row QSS, `drawBranches`, or the | See lesson |
 
 ## Selection Rules
 
