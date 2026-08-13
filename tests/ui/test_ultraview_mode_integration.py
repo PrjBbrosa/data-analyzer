@@ -5,9 +5,10 @@ import ast
 from pathlib import Path
 
 from PyQt5.QtCore import QCoreApplication
-from PyQt5.QtWidgets import QToolButton
+from PyQt5.QtWidgets import QLabel, QStackedWidget, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack import ChartStack
+from mf4_analyzer.ui.drawers.ultraview import UltraViewSheet
 from mf4_analyzer.ui.inspector import Inspector
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.side_panels import PanelState
@@ -79,7 +80,20 @@ def test_main_window_ultraview_opens_independent_panel_without_stealing_mode(
     assert win.navigator.projection_role() == role_before
     assert win._panel_ctrl_left.state == PanelState.PINNED
     assert win.chart_stack.page_ultraview.is_library_visible() is True
-    assert win.chart_stack.page_ultraview.parentWidget() is sheet
+    page = win.chart_stack.page_ultraview
+    assert page.parentWidget() is sheet
+    assert page.isVisible()
+    assert page.width() > 200
+    assert page.height() > 200
+    assert page.library_panel().isVisible()
+    primary = page.board_grid().slot_widget("primary")
+    assert primary is not None
+    assert primary.isVisible()
+    assert primary.width() > 0
+    assert primary.height() > 0
+    lib_count = page.library_panel().findChild(QWidget, "ultraViewLibraryCount")
+    assert lib_count is not None
+    assert int(lib_count.text()) >= 1
 
     win._switch_view_for_active_section(1)
     assert win.view_manager.active != active_before
@@ -289,6 +303,30 @@ def test_inspector_unknown_mode_falls_back_to_time(qapp):
     assert insp.contextual_widget_name() == "time"
 
 
+def test_ultraview_sheet_unhides_page_taken_from_stack(qapp, qtbot):
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.resize(640, 480)
+    host.show()
+    stack = QStackedWidget(host)
+    stack.addWidget(QLabel("time"))
+    page = QLabel("board")
+    stack.addWidget(page)
+    stack.setCurrentIndex(0)
+    assert page.isHidden()
+
+    sheet = UltraViewSheet(host, page, stack)
+    qtbot.addWidget(sheet)
+    sheet.present()
+    QCoreApplication.processEvents()
+
+    assert page.parentWidget() is sheet
+    assert not page.isHidden()
+    assert page.isVisible()
+    assert page.width() > 0
+    assert page.height() > 0
+
+
 def test_closing_ultraview_panel_restores_page_to_chart_stack(qapp, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
@@ -302,4 +340,5 @@ def test_closing_ultraview_panel_restores_page_to_chart_stack(qapp, qtbot):
     QCoreApplication.processEvents()
     assert page.parentWidget() is stack
     assert stack.indexOf(page) >= 0
+    assert stack.currentWidget() is not page
 

@@ -63,6 +63,11 @@ class UltraViewSheet(QDialog):
             return
         if page.parentWidget() is not self:
             layout.addWidget(page)
+        # QStackedWidget explicitly hide()s inactive pages. Reparenting does
+        # not clear that flag, and a hidden child is skipped by QLayout —
+        # the tool window would open blank. Same contract as
+        # ChartStack.take_hint_bar: after changing parent, show the widget.
+        page.setVisible(True)
 
     def _restore_page(self) -> None:
         page = self._page
