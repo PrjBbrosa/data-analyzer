@@ -89,8 +89,8 @@ class UltraViewContextual(QWidget):
         self._ratio_label = QLabel("主图比例", card)
         self._btn_ratio_down = QPushButton("−5%", card)
         self._btn_ratio_up = QPushButton("+5%", card)
-        self._btn_ratio_down.clicked.connect(lambda: self.ratio_nudge_requested.emit(-1))
-        self._btn_ratio_up.clicked.connect(lambda: self.ratio_nudge_requested.emit(1))
+        self._btn_ratio_down.clicked.connect(self._nudge_ratio_down)
+        self._btn_ratio_up.clicked.connect(self._nudge_ratio_up)
         ratio_row.addWidget(self._ratio_label, 1)
         ratio_row.addWidget(self._btn_ratio_down, 0)
         ratio_row.addWidget(self._btn_ratio_up, 0)
@@ -196,6 +196,12 @@ class UltraViewContextual(QWidget):
         layout_id = self._layout_combo.currentData()
         if layout_id:
             self.layout_changed.emit(str(layout_id))
+
+    def _nudge_ratio_down(self) -> None:
+        self.ratio_nudge_requested.emit(-1)
+
+    def _nudge_ratio_up(self) -> None:
+        self.ratio_nudge_requested.emit(1)
 
     def _on_filter(self, _index: int) -> None:
         if self._applying:

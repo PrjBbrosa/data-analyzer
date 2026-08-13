@@ -47,7 +47,7 @@ def test_ultraview_board_sequence_does_not_compute_or_mutate_sources(qapp, qtbot
     fft_id = str(win.analysis_managers["fft"].get(0).view_id)
     uv = win._ultraview
 
-    win.toolbar.btn_mode_ultraview.click()
+    win.open_ultraview()
     QCoreApplication.processEvents()
     after_enter = snapshot_source_state(win)
     uv.add_from_source_tab("time", time_id)
@@ -87,7 +87,7 @@ def test_full_ultraview_export_sequence_stays_zero_compute(qapp, qtbot, tmp_path
     fft_id = str(win.analysis_managers["fft"].get(0).view_id)
     uv = win._ultraview
     time_ref = UltraViewRef("time", time_id)
-    win.toolbar.btn_mode_ultraview.click()
+    win.open_ultraview()
     QCoreApplication.processEvents()
     uv.add_from_source_tab("time", time_id)
     uv.add_from_source_tab("fft", fft_id)

@@ -21,12 +21,15 @@ def test_toolbar_enabled_matrix(qapp):
     tb = Toolbar()
     tb.set_enabled_for_mode('time', has_file=True)
     assert tb.btn_batch.isEnabled()
+    assert tb.btn_ultraview.isEnabled()
     assert tb.btn_save_project.isEnabled()
     tb.set_enabled_for_mode('fft', has_file=True)
     assert tb.btn_batch.isEnabled()
+    assert tb.btn_ultraview.isEnabled()
     tb.set_enabled_for_mode('time', has_file=False)
     assert not tb.btn_save_project.isEnabled()
     assert tb.btn_batch.isEnabled()
+    assert tb.btn_ultraview.isEnabled()
 
 
 def test_toolbar_batch_requested_emits(qapp, qtbot):
@@ -34,6 +37,15 @@ def test_toolbar_batch_requested_emits(qapp, qtbot):
     qtbot.addWidget(tb)
     with qtbot.waitSignal(tb.batch_requested, timeout=200):
         tb.btn_batch.click()
+
+
+def test_toolbar_ultraview_requested_emits(qapp, qtbot):
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    with qtbot.waitSignal(tb.ultraview_requested, timeout=200):
+        tb.btn_ultraview.click()
+    assert tb.btn_mode_ultraview.isHidden()
+    assert not tb.btn_ultraview.isHidden()
 
 
 def test_toolbar_batch_icon_is_distinct_from_export(qapp, qtbot):
@@ -58,7 +70,7 @@ def test_toolbar_exposes_fft_time_mode(qtbot):
     assert tb.btn_mode_fft_time.text() == '时频'
 
 
-def test_toolbar_exposes_six_exact_mode_names_and_keys(qtbot):
+def test_toolbar_exposes_five_exact_mode_names_and_keys(qtbot):
     tb = Toolbar()
     qtbot.addWidget(tb)
 
@@ -68,17 +80,18 @@ def test_toolbar_exposes_six_exact_mode_names_and_keys(qtbot):
         tb.btn_mode_fft_time,
         tb.btn_mode_order,
         tb.btn_mode_frf,
-        tb.btn_mode_ultraview,
     ]
     assert [button.text() for button in buttons] == [
-        "时域", "频谱", "时频", "阶次", "频响", "总览",
+        "时域", "频谱", "时频", "阶次", "频响",
     ]
     assert [button.property("segment") for button in buttons] == [
-        "time", "fft", "fft_time", "order", "frf", "ultraview",
+        "time", "fft", "fft_time", "order", "frf",
     ]
     assert "FFT" in tb.btn_mode_fft.toolTip()
     assert "FRF" in tb.btn_mode_frf.toolTip()
-    assert "UltraView" in tb.btn_mode_ultraview.toolTip()
+    assert tb.btn_mode_ultraview.isHidden()
+    assert tb.btn_ultraview.text() == "总览"
+    assert "总览" in tb.btn_ultraview.toolTip()
 
     seen = []
     tb.mode_changed.connect(seen.append)
@@ -88,11 +101,9 @@ def test_toolbar_exposes_six_exact_mode_names_and_keys(qtbot):
     assert tb.btn_mode_frf.isChecked()
     assert sum(button.isChecked() for button in buttons) == 1
 
-    tb.btn_mode_ultraview.click()
-    assert tb.current_mode() == "ultraview"
-    assert seen[-1] == "ultraview"
-    assert tb.btn_mode_ultraview.isChecked()
-    assert sum(button.isChecked() for button in buttons) == 1
+    tb.btn_ultraview.click()
+    assert tb.current_mode() == "frf"
+    assert seen == ["frf"]
 
 
 def test_toolbar_frf_unselected_uses_the_same_segment_style_as_other_modes():
@@ -162,7 +173,7 @@ def test_toolbar_mode_zone_recenters_when_top_actions_change(qtbot, qapp):
 
     # Deliberately exceed the normal left group: this proves a future right
     # action can grow the mirror width instead of shifting the center zone.
-    right_extra = QPushButton("右侧临时功能" * 5, tb._right_widget)
+    right_extra = QPushButton("右侧临时功能" * 10, tb._right_widget)
     tb._right_layout.addWidget(right_extra)
     qtbot.wait(30)
 
@@ -204,7 +215,8 @@ def test_toolbar_open_keeps_primary_entry_cue_and_other_file_actions_are_seconda
     assert tb.btn_add.property("role") == "primary"
     assert [button.property("role") for button in (
         tb.btn_save_project, tb.btn_save_project_as, tb.btn_batch,
-    )] == ["secondary"] * 3
+        tb.btn_ultraview,
+    )] == ["secondary"] * 4
 
 
 def test_toolbar_primary_open_matches_secondary_file_action_height(qtbot, qapp):
@@ -218,7 +230,7 @@ def test_toolbar_primary_open_matches_secondary_file_action_height(qtbot, qapp):
     tb.show()
     qtbot.wait(20)
 
-    assert tb.btn_add.height() == tb.btn_save_project.height() == tb.btn_batch.height()
+    assert tb.btn_add.height() == tb.btn_save_project.height() == tb.btn_batch.height() == tb.btn_ultraview.height()
 
 
 def _mode_buttons(tb):
@@ -228,11 +240,10 @@ def _mode_buttons(tb):
         tb.btn_mode_fft_time,
         tb.btn_mode_order,
         tb.btn_mode_frf,
-        tb.btn_mode_ultraview,
     ]
 
 
-def test_toolbar_six_modes_go_icon_only_at_1100_and_restore_labels_at_1600(qtbot, qapp):
+def test_toolbar_five_modes_go_icon_only_when_narrow_and_restore_labels_when_wide(qtbot, qapp):
     from mf4_analyzer.ui_kit import load_stylesheet
 
     qapp.setStyle("Fusion")
@@ -241,7 +252,7 @@ def test_toolbar_six_modes_go_icon_only_at_1100_and_restore_labels_at_1600(qtbot
     qtbot.addWidget(tb)
     buttons = _mode_buttons(tb)
 
-    tb.resize(1100, 44)
+    tb.resize(980, 44)
     tb.show()
     qtbot.wait(30)
     assert tb.is_mode_compact()
@@ -255,5 +266,5 @@ def test_toolbar_six_modes_go_icon_only_at_1100_and_restore_labels_at_1600(qtbot
     qtbot.wait(30)
     assert not tb.is_mode_compact()
     assert [button.text() for button in buttons] == [
-        "时域", "频谱", "时频", "阶次", "频响", "总览",
+        "时域", "频谱", "时频", "阶次", "频响",
     ]

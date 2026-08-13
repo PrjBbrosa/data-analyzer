@@ -51,6 +51,6 @@ def test_ultraview_visual_harness_geometry_and_contact_sheet(qapp, tmp_path):
         if not card.get("empty")
     }
     assert {"fresh", "stale", "missing", "orphaned"} <= statuses
-    assert manifest["geometry"]["toolbar_1100"]["compact"] is True
+    assert manifest["geometry"]["toolbar_1100"]["overlap_pairs"] == []
     assert manifest["geometry"]["show_flags_1600"]["show_titles"] is False
     assert manifest["geometry"]["presentation_1600"]["library_visible"] is False

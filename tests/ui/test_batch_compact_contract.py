@@ -370,6 +370,21 @@ def test_batch_preview_dialog_has_no_context_help_button(qtbot):
     assert not (dialog.windowFlags() & Qt.WindowContextHelpButtonHint)
 
 
+def test_batch_sheet_is_an_independent_non_modal_window(qtbot):
+    from PyQt5.QtCore import Qt
+
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+
+    assert not sheet.isModal()
+    assert sheet.windowModality() == Qt.NonModal
+    assert sheet.windowFlags() & Qt.Window
+    assert sheet.windowFlags() & Qt.WindowMinMaxButtonsHint
+    assert not (sheet.windowFlags() & Qt.WindowContextHelpButtonHint)
+
+
 def test_batch_footer_actions_stay_inside_a_short_dialog(qapp, qtbot):
     from pathlib import Path
 

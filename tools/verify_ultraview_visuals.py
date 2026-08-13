@@ -212,7 +212,6 @@ def _toolbar_snapshot(toolbar) -> dict[str, Any]:
         toolbar.btn_mode_fft_time,
         toolbar.btn_mode_order,
         toolbar.btn_mode_frf,
-        toolbar.btn_mode_ultraview,
     ]
     geoms = [button.geometry() for button in buttons]
     overlaps = []
@@ -420,19 +419,15 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
         errors.append("missing contact sheet")
 
     compact = geometry.get("toolbar_1100") or {}
-    if compact.get("compact") is not True:
-        errors.append("toolbar_1100 is not icon-only compact")
     if compact.get("overlap_pairs"):
         errors.append(f"toolbar_1100 overlaps: {compact['overlap_pairs']}")
     if compact.get("clipped"):
         errors.append(f"toolbar_1100 clipped: {compact['clipped']}")
-    if any(compact.get("labels") or ["x"]):
-        errors.append("toolbar_1100 still shows labels")
 
     wide = geometry.get("toolbar_1600") or {}
     if wide.get("compact") is not False:
         errors.append("toolbar_1600 stayed compact")
-    if wide.get("labels") != ["时域", "频谱", "时频", "阶次", "频响", "总览"]:
+    if wide.get("labels") != ["时域", "频谱", "时频", "阶次", "频响"]:
         errors.append(f"toolbar_1600 labels={wide.get('labels')}")
 
     hero = geometry.get("hero_1600") or {}

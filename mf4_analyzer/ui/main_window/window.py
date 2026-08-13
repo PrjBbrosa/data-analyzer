@@ -133,6 +133,8 @@ class MainWindow(
         from ..analysis_jobs import AnalysisJobService
         self._analysis_jobs = AnalysisJobService(self)
         self._last_batch_preset = None
+        self._batch_sheet = None
+        self._ultraview_sheet = None
         self._acquisition_cockpit_window = None
         # dB-reference-defaults Task 5: MainWindow owns the ONE shared
         # settings/service instance injected into all three Contextual
@@ -908,6 +910,7 @@ class MainWindow(
         self.toolbar.save_project_requested.connect(self.save_project_via_dialog)
         self.toolbar.save_project_as_requested.connect(self.save_project_as_via_dialog)
         self.toolbar.batch_requested.connect(self.open_batch)
+        self.toolbar.ultraview_requested.connect(self.open_ultraview)
         self.toolbar.acquisition_cockpit_requested.connect(self.open_acquisition_cockpit)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.chart_stack.image_captured.connect(
@@ -4217,6 +4220,10 @@ class MainWindow(
     def open_batch(self):
         from ..drawers.batch import BatchSheet
 
+        existing = self._alive_tool_dialog("_batch_sheet")
+        if existing is not None:
+            self._raise_tool_dialog(existing)
+            return
         # The live Inspector/pane state is the sole authority.  Historical
         # render callbacks may still refresh _last_batch_preset for backward
         # compatibility, but that cache must never overwrite current intent.
@@ -4237,7 +4244,7 @@ class MainWindow(
         # single-analysis view still offers.  ``_build_current_batch_preset``
         # already strips the retired keys, so the run would otherwise fail
         # per item with a generic "rpm channel is required".  Keep that notice
-        # inside the modal sheet, where the RPM picker is available.  The
+        # inside the sheet, where the RPM picker is available.  The
         # preset is kept: everything except the RPM source is still valid, so
         # the Sheet opens pre-filled and only the channel is left to pick.
         handoff_notice = ""
@@ -4251,10 +4258,118 @@ class MainWindow(
         if handoff_notice:
             dlg.set_handoff_notice(handoff_notice)
         self.chart_stack.mark_discovered("batch.export_options")
-        # BatchSheet._on_run_clicked is the only live execution path.  exec_()
-        # ends only when the sheet closes; do not launch a duplicate runner
-        # after it returns Accepted.
-        dlg.exec_()
+        # BatchSheet._on_run_clicked is the only live execution path.  The
+        # sheet is a non-modal tool window so the Analyzer can keep doing
+        # single-file work beside it.
+        self._present_tool_dialog(
+            dlg, "_batch_sheet", self._on_batch_sheet_destroyed,
+        )
+
+    def open_ultraview(self):
+        """Open UltraView as a standalone Board window, not a sixth mode."""
+        from ..drawers.ultraview import UltraViewSheet
+
+        existing = self._alive_tool_dialog("_ultraview_sheet")
+        if existing is not None:
+            self._prepare_ultraview_popup()
+            self._raise_tool_dialog(existing)
+            return
+        page = getattr(self.chart_stack, "page_ultraview", None)
+        stack = getattr(self.chart_stack, "stack", None)
+        dlg = UltraViewSheet(self, page, stack)
+        self._prepare_ultraview_popup()
+        self._present_tool_dialog(
+            dlg, "_ultraview_sheet", self._on_ultraview_sheet_destroyed,
+        )
+
+    def _prepare_ultraview_popup(self) -> None:
+        uv = getattr(self, "_ultraview", None)
+        if uv is None:
+            return
+        mode = self.toolbar.current_mode()
+        source_modes = ("time", "fft", "fft_time", "frf", "order")
+        if mode in source_modes:
+            uv.capture_leaving_source(mode)
+            uv.note_source_mode(mode)
+        refresh = getattr(uv, "refresh_page", None)
+        if callable(refresh):
+            refresh()
+
+    def _alive_tool_dialog(self, attr: str):
+        dlg = getattr(self, attr, None)
+        if dlg is None:
+            return None
+        try:
+            from PyQt5 import sip
+            if sip.isdeleted(dlg):
+                setattr(self, attr, None)
+                return None
+        except (RuntimeError, TypeError):
+            pass
+        is_visible = getattr(dlg, "isVisible", None)
+        if callable(is_visible):
+            try:
+                if is_visible():
+                    return dlg
+            except Exception:
+                setattr(self, attr, None)
+                return None
+            closer = getattr(dlg, "close", None)
+            if callable(closer):
+                try:
+                    closer()
+                except Exception:
+                    pass
+            deleter = getattr(dlg, "deleteLater", None)
+            if callable(deleter):
+                try:
+                    deleter()
+                except Exception:
+                    pass
+            setattr(self, attr, None)
+            return None
+        setattr(self, attr, None)
+        return None
+
+    def _raise_tool_dialog(self, dlg) -> None:
+        present = getattr(dlg, "present", None)
+        if callable(present):
+            present()
+            return
+        show = getattr(dlg, "show", None)
+        if callable(show):
+            show()
+        raiser = getattr(dlg, "raise_", None)
+        if callable(raiser):
+            raiser()
+        activate = getattr(dlg, "activateWindow", None)
+        if callable(activate):
+            activate()
+
+    def _present_tool_dialog(self, dlg, attr: str, on_destroyed) -> None:
+        setattr(self, attr, dlg)
+        destroyed = getattr(dlg, "destroyed", None)
+        if destroyed is not None:
+            try:
+                destroyed.connect(on_destroyed)
+            except (TypeError, RuntimeError):
+                pass
+        present = getattr(dlg, "present", None)
+        if callable(present):
+            present()
+            return
+        # Test doubles historically implemented exec_() only.
+        exec_ = getattr(dlg, "exec_", None)
+        if callable(exec_):
+            exec_()
+            return
+        self._raise_tool_dialog(dlg)
+
+    def _on_batch_sheet_destroyed(self, *_args) -> None:
+        self._batch_sheet = None
+
+    def _on_ultraview_sheet_destroyed(self, *_args) -> None:
+        self._ultraview_sheet = None
 
     def _order_view_uses_manual_rpm(self) -> bool:
         """True when the live order view is driving off a fixed RPM value.
@@ -4548,6 +4663,16 @@ class MainWindow(
 
     def closeEvent(self, event):
         """Drain all analysis jobs before the window is destroyed."""
+        for attr in ("_ultraview_sheet", "_batch_sheet"):
+            dlg = getattr(self, attr, None)
+            if dlg is not None:
+                try:
+                    from PyQt5 import sip
+                    if not sip.isdeleted(dlg):
+                        dlg.close()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
         uv = getattr(self, "_ultraview", None)
         if uv is not None:
             from PyQt5 import sip

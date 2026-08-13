@@ -15,7 +15,6 @@ _MODE_LABELS = {
     "fft_time": "时频",
     "order": "阶次",
     "frf": "频响",
-    "ultraview": "总览",
 }
 
 
@@ -91,8 +90,9 @@ class Toolbar(QWidget):
     save_project_requested = pyqtSignal()
     save_project_as_requested = pyqtSignal()
     batch_requested = pyqtSignal()
+    ultraview_requested = pyqtSignal()
     # Center segment
-    mode_changed = pyqtSignal(str)  # time | fft | fft_time | frf | order | ultraview
+    mode_changed = pyqtSignal(str)  # time | fft | fft_time | frf | order
     # Right segment
     acquisition_cockpit_requested = pyqtSignal()
     # Panel toggle signals
@@ -143,8 +143,12 @@ class Toolbar(QWidget):
         self.btn_save_project_as.setToolTip("将当前会话另存为新的 .tlproj 项目")
         self.btn_batch = QPushButton("批处理", self)
         self.btn_batch.setIcon(Icons.batch())
+        self.btn_ultraview = QPushButton("总览", self)
+        self.btn_ultraview.setIcon(Icons.mode_ultraview())
+        self.btn_ultraview.setToolTip("总览（独立面板，只读对照已有预览）")
         for button in (
             self.btn_save_project, self.btn_save_project_as, self.btn_batch,
+            self.btn_ultraview,
         ):
             button.setProperty("role", "secondary")
 
@@ -164,12 +168,15 @@ class Toolbar(QWidget):
         self.btn_mode_order = QPushButton("阶次", self)
         self.btn_mode_order.setIcon(Icons.mode_order())
         self.btn_mode_order.setToolTip("阶次（Order）")
+        # Kept for compatibility with older tests/screenshots; UltraView is a
+        # standalone tool window now, so this sixth mode button stays hidden.
         self.btn_mode_ultraview = QPushButton("总览", self)
         self.btn_mode_ultraview.setIcon(Icons.mode_ultraview())
         self.btn_mode_ultraview.setToolTip("总览（UltraView）")
+        self.btn_mode_ultraview.hide()
 
         for b in (self.btn_add, self.btn_save_project, self.btn_save_project_as,
-                  self.btn_batch,
+                  self.btn_batch, self.btn_ultraview,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
                   self.btn_mode_frf, self.btn_mode_order, self.btn_mode_ultraview):
             b.setIconSize(QSize(16, 16))
@@ -183,6 +190,7 @@ class Toolbar(QWidget):
             self.btn_save_project,
             self.btn_save_project_as,
             self.btn_batch,
+            self.btn_ultraview,
         ):
             left.addWidget(b)
 
@@ -345,7 +353,6 @@ class Toolbar(QWidget):
             ("fft_time", self.btn_mode_fft_time),
             ("order", self.btn_mode_order),
             ("frf", self.btn_mode_frf),
-            ("ultraview", self.btn_mode_ultraview),
         )
 
     def _labeled_mode_zone_width(self) -> int:
@@ -392,6 +399,7 @@ class Toolbar(QWidget):
         self.btn_save_project.clicked.connect(self.save_project_requested)
         self.btn_save_project_as.clicked.connect(self.save_project_as_requested)
         self.btn_batch.clicked.connect(self.batch_requested)
+        self.btn_ultraview.clicked.connect(self.ultraview_requested)
         # Hidden Cockpit entry: triple-click the brand logo (see _LogoLabel).
         self._logo_label.triple_clicked.connect(self.acquisition_cockpit_requested)
         for key, b in self._mode_button_pairs():
@@ -400,12 +408,12 @@ class Toolbar(QWidget):
         self.btn_toggle_inspector.clicked.connect(self.inspector_panel_toggled)
 
     def _set_mode(self, mode):
-        if mode not in _MODE_LABELS:
+        mapping = dict(self._mode_button_pairs())
+        if mode not in mapping:
             mode = "time"
         if mode == self._current_mode:
             return
         self._current_mode = mode
-        mapping = dict(self._mode_button_pairs())
         mapping[mode].setChecked(True)
         self._sync_mode_active_dots()
         self.mode_changed.emit(mode)
@@ -414,6 +422,7 @@ class Toolbar(QWidget):
         """Implements the §7.1 enabled-state matrix."""
         self.btn_save_project.setEnabled(has_file)
         self.btn_batch.setEnabled(True)
+        self.btn_ultraview.setEnabled(True)
 
     def current_mode(self):
         return self._current_mode

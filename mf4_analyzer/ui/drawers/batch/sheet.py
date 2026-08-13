@@ -45,7 +45,10 @@ from ...drop_paths import (
     iter_local_paths,
 )
 from ...widgets.toast import Toast
-from ._geometry import fit_dialog_to_available_screen
+from ._geometry import (
+    configure_independent_tool_window,
+    fit_dialog_to_available_screen,
+)
 from .analysis_panel import AnalysisPanel
 from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
 from .output_panel import OutputPanel
@@ -151,8 +154,8 @@ class BatchSheet(QDialog):
         self._recompute_timer.setInterval(_PIPELINE_RECOMPUTE_DEBOUNCE_MS)
         self._recompute_timer.timeout.connect(self._recompute_pipeline_status)
         self.setObjectName("SheetSurface")
-        self.setModal(True)
         self.setWindowTitle("批处理分析")
+        configure_independent_tool_window(self)
         self._files = files or {}
         self._current_preset = current_preset
         self._prefs_store = (
@@ -485,6 +488,12 @@ class BatchSheet(QDialog):
         fit_dialog_to_available_screen(
             self, parent, target_w, target_h, min_w=640, min_h=480,
         )
+
+    def present(self) -> None:
+        """Show this sheet as a non-modal tool window and raise it."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().showEvent(event)
@@ -1843,10 +1852,9 @@ class BatchSheet(QDialog):
         # file map; here we only have the dict already supplied to __init__.
         #
         # dB-reference-defaults Task 10 Part A: this Sheet's Run button is
-        # the ONLY live Batch Run path (``MainWindow.open_batch``'s own
-        # BatchRunner call is dead code -- ``dlg.exec_()`` never returns
-        # Accepted, see the mechanical-passthrough-entry-point-reachability
-        # lesson). Mirror the same snapshot pass-through Task 9 already
+        # the ONLY live Batch Run path (``MainWindow.open_batch`` presents
+        # the sheet as a non-modal tool window and does not launch a second
+        # runner). Mirror the same snapshot pass-through Task 9 already
         # wired there, following the existing
         # ``_weighting_options_from_parent`` precedent: read the catalog
         # store off ``self.parent()`` defensively (direct-construction

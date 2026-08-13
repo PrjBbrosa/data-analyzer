@@ -126,3 +126,28 @@ def test_open_batch_allows_empty_file_map(qtbot, monkeypatch):
     assert captured["files"] == {}
     assert captured["current_preset"] is None
     assert not any("请先加载文件" in msg for _kind, msg in toast_msgs)
+
+
+def test_open_batch_is_non_modal_and_leaves_analyzer_interactive(qtbot):
+    """Batch must not freeze single-file analysis while its panel is up."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.show()
+    qtbot.waitExposed(win)
+
+    win.open_batch()
+    sheet = win._batch_sheet
+    assert sheet is not None
+    assert not sheet.isModal()
+    assert sheet.isVisible()
+    assert win.isEnabled()
+    win.toolbar.btn_mode_fft.click()
+    assert win.toolbar.current_mode() == "fft"
+    assert win.chart_stack.current_mode() == "fft"
+    first = sheet
+    win.open_batch()
+    assert win._batch_sheet is first
+    sheet.close()
+

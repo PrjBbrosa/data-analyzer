@@ -37,7 +37,7 @@ def test_save_from_ultraview_writes_last_source_mode_and_board(qapp, qtbot, tmp_
 
     win.toolbar.btn_mode_fft.click()
     QCoreApplication.processEvents()
-    win.toolbar.btn_mode_ultraview.click()
+    win.open_ultraview()
     QCoreApplication.processEvents()
     uv.add_from_source_tab("time", time_id)
     uv.add_from_source_tab("fft", fft_id)
@@ -87,7 +87,7 @@ def test_reopen_restores_board_without_entering_ultraview(qapp, qtbot, tmp_path)
     uv = win._ultraview
     win.toolbar.btn_mode_fft.click()
     QCoreApplication.processEvents()
-    win.toolbar.btn_mode_ultraview.click()
+    win.open_ultraview()
     QCoreApplication.processEvents()
     uv.add_from_source_tab("time", time_id)
     uv.add_from_source_tab("fft", fft_id)

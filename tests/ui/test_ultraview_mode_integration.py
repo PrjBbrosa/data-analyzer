@@ -47,7 +47,7 @@ def test_chart_stack_hint_bar_has_quickref_entry(qapp, qtbot):
     assert button.text() == "?"
 
 
-def test_main_window_ultraview_mode_hides_nav_and_ignores_alt_shortcuts(
+def test_main_window_ultraview_opens_independent_panel_without_stealing_mode(
     qapp, qtbot
 ):
     qapp.setStyle("Fusion")
@@ -67,32 +67,35 @@ def test_main_window_ultraview_mode_hides_nav_and_ignores_alt_shortcuts(
     win.view_manager.set_active(0)
     active_before = win.view_manager.active
 
-    win.toolbar.btn_mode_ultraview.click()
+    win.open_ultraview()
     qapp.processEvents()
 
-    assert win.chart_stack.current_mode() == "ultraview"
-    assert win.inspector.contextual_widget_name() == "ultraview"
+    sheet = win._ultraview_sheet
+    assert sheet is not None
+    assert sheet.isVisible()
+    assert not sheet.isModal()
+    assert win.chart_stack.current_mode() == "time"
+    assert win.inspector.contextual_widget_name() != "ultraview"
     assert win.navigator.projection_role() == role_before
-    assert win._visible_view_tabbar() is None
-    assert win._panel_ctrl_left.state == PanelState.HIDDEN
+    assert win._panel_ctrl_left.state == PanelState.PINNED
     assert win.chart_stack.page_ultraview.is_library_visible() is True
+    assert win.chart_stack.page_ultraview.parentWidget() is sheet
 
     win._switch_view_for_active_section(1)
-    assert win.view_manager.active == active_before
-    assert win.chart_stack.current_mode() == "ultraview"
-
-    page = win.chart_stack.page_ultraview
-    win._on_nav_panel_toggled()
-    assert page.is_library_visible() is False
-    win._on_nav_panel_toggled()
-    assert page.is_library_visible() is True
-    assert win._panel_ctrl_left.state == PanelState.HIDDEN
-
-    win.toolbar.btn_mode_time.click()
-    qapp.processEvents()
+    assert win.view_manager.active != active_before
     assert win.chart_stack.current_mode() == "time"
+
+    win.toolbar.btn_mode_fft.click()
+    qapp.processEvents()
+    assert win.chart_stack.current_mode() == "fft"
+    assert sheet.isVisible()
     assert win._panel_ctrl_left.snapshot_persistent_state()["state"] == left_before["state"]
-    assert win._ultraview.last_source_mode == "time"
+    assert win._ultraview.last_source_mode == "fft"
+
+    win.open_ultraview()
+    qapp.processEvents()
+    assert win._ultraview_sheet is sheet
+
 
 
 def test_add_non_current_view_does_not_switch_or_render(qapp, qtbot, monkeypatch):
@@ -124,7 +127,7 @@ def test_open_source_navigates_by_view_id(qapp, qtbot):
         win.view_manager.new_view()
     win.view_manager.set_active(0)
     target = str(win.view_manager.get(1).view_id)
-    win.toolbar.btn_mode_ultraview.click()
+    win.open_ultraview()
     QCoreApplication.processEvents()
     win._ultraview.open_source("time", target)
     for _ in range(8):
@@ -284,3 +287,19 @@ def test_inspector_unknown_mode_falls_back_to_time(qapp):
     insp.set_mode("ultraview")
     insp.set_mode("mystery")
     assert insp.contextual_widget_name() == "time"
+
+
+def test_closing_ultraview_panel_restores_page_to_chart_stack(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    page = win.chart_stack.page_ultraview
+    stack = win.chart_stack.stack
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    sheet = win._ultraview_sheet
+    assert page.parentWidget() is sheet
+    sheet.close()
+    QCoreApplication.processEvents()
+    assert page.parentWidget() is stack
+    assert stack.indexOf(page) >= 0
+

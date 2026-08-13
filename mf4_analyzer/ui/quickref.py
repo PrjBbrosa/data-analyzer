@@ -120,7 +120,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
     # 2 — 五个分析工作区 + 只读总览 (wide, spans two columns)
     QuickGroup(
         title="五个分析工作区 + 总览",
-        note="总览只读，不是第六种算法",
+        note="总览是独立面板，只读，不是第六种算法",
         wide=True,
         rows=(
             QuickRow(
@@ -150,7 +150,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "总览",
-                sub="只读对照已有预览：不计算、可导出、重开后缺图为 missing",
+                sub="独立面板，只读对照已有预览：不计算、可与单文件分析同时工作",
                 accent=_MODE_ULTRAVIEW,
             ),
         ),
