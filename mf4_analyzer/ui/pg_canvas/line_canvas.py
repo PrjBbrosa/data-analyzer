@@ -278,7 +278,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._selected_time_entry_idx = None
         self._remarks = []
         self._remark_enabled = False
-        self._remark_artist = RemarkArtist()
+        self.markup_revision = 0
+        self._remark_artist = RemarkArtist(on_moved=self._bump_markup_revision)
         self._remark_interaction = RemarkInteraction(
             add_at_viewport_pos=lambda pos: self._add_remark_at_viewport_pos(pos),
             remove_at_viewport_pos=lambda pos: self._remove_remark_at_viewport_pos(pos),
@@ -2299,7 +2300,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         )
 
     def clear_remarks(self) -> None:
+        if not self._remarks:
+            return
         self._remark_artist.clear(self._remarks)
+        self._bump_markup_revision()
+
+    def _bump_markup_revision(self) -> None:
+        self.markup_revision = int(self.markup_revision) + 1
 
     def remark_count(self) -> int:
         return len(self._remarks)
@@ -2319,13 +2326,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         remark = self._remark_artist.add(point)
         remark['plot'] = plot
         self._remarks.append(remark)
+        self._bump_markup_revision()
 
     def _remove_remark(self, remark) -> None:
         self._remark_artist.remove(remark)
         try:
             self._remarks.remove(remark)
         except ValueError:
-            pass
+            return
+        self._bump_markup_revision()
 
     def add_remark_at(self, which: str, x: float, y: float) -> None:
         if not self._remark_enabled:

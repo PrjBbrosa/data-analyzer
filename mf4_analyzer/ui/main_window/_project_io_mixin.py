@@ -1909,6 +1909,9 @@ class ProjectIOMixin:
 
     def close_all(self, *, force=False):
         health = getattr(self, "_project_restore_health", None)
+        uv = getattr(self, "_ultraview", None)
+        if uv is not None:
+            uv.clear()
         if not self.files:
             if health is not None:
                 health.clear()

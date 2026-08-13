@@ -243,6 +243,34 @@ def test_frf_canvas_remarks_snap_to_panel_data_and_keep_hz_on_log_axis(qtbot):
     assert canvas.remark_count() == 0
 
 
+def test_frf_remark_markup_revision_bumps_on_edit_not_empty_clear(qtbot):
+    from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
+
+    canvas = PgFrfCanvas()
+    qtbot.addWidget(canvas)
+    canvas.set_result(
+        _result(),
+        {"frequency_scale": "linear", "magnitude_scale": "linear"},
+        {"input_unit": "N", "output_unit": "m/s"},
+    )
+    canvas.set_remark_enabled(True)
+    assert canvas.markup_revision == 0
+    canvas.add_remark_at("magnitude", 1.0)
+    assert canvas.markup_revision == 1
+    text = canvas._remarks[0]["text"]
+    text.setPos(text.pos().x() + 0.2, text.pos().y() + 0.2)
+    assert canvas.markup_revision == 2
+    canvas.remove_remark_near("magnitude", 1.0)
+    assert canvas.markup_revision == 3
+    canvas.clear_remarks()
+    assert canvas.markup_revision == 3
+    canvas.add_remark_at("magnitude", 1.0)
+    canvas.clear_remarks()
+    assert canvas.markup_revision == 5
+    canvas.clear_remarks()
+    assert canvas.markup_revision == 5
+
+
 def test_frf_canvas_log_axis_uses_sparse_physical_hz_decades(qtbot):
     from mf4_analyzer.ui.pg_canvas.frf_canvas import PgFrfCanvas
 

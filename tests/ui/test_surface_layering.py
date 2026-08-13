@@ -137,7 +137,8 @@ def test_surface_mode_buttons_use_readable_centered_type():
         r'Toolbar QPushButton\[segment="fft"\],\s*'
         r'Toolbar QPushButton\[segment="fft_time"\],\s*'
         r'Toolbar QPushButton\[segment="frf"\],\s*'
-        r'Toolbar QPushButton\[segment="order"\]\s*\{(?P<body>[^}]*)\}',
+        r'Toolbar QPushButton\[segment="order"\],\s*'
+        r'Toolbar QPushButton\[segment="ultraview"\]\s*\{(?P<body>[^}]*)\}',
         qss,
         flags=re.S,
     )
@@ -164,6 +165,8 @@ def test_surface_mode_buttons_are_vertically_centered_in_topbar(qapp, qtbot):
             win.toolbar.btn_mode_fft,
             win.toolbar.btn_mode_fft_time,
             win.toolbar.btn_mode_order,
+            win.toolbar.btn_mode_frf,
+            win.toolbar.btn_mode_ultraview,
         ):
             button_center = button.mapTo(win.toolbar, button.rect().center()).y()
             assert abs(button_center - toolbar_center_y) <= 1, button.text()

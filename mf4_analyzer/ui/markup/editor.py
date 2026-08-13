@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
 import qtawesome as qta
 
 from ...ui_kit.icons import icon_device_pixel_ratio
+from ..image_utils import pixmap_as_device_pixels as _shared_pixmap_as_device_pixels
 
 # Back-imports so that ``import mf4_analyzer.ui.markup.editor as editor_mod``
 # and ``editor_mod.<name>`` continue to resolve after the split.
@@ -65,11 +66,9 @@ _HANDLE_HIT_SCREEN_PX = 14.0
 
 
 def _pixmap_as_device_pixels(pixmap: QPixmap) -> QPixmap:
-    copy = QPixmap(pixmap)
-    if copy.isNull() or abs(copy.devicePixelRatioF() - 1.0) < 1e-9:
-        return copy
-    normalized = QPixmap.fromImage(copy.toImage())
-    normalized.setDevicePixelRatio(1.0)
+    normalized = _shared_pixmap_as_device_pixels(pixmap)
+    if normalized is None:
+        return QPixmap(pixmap)
     return normalized
 
 

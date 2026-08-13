@@ -350,3 +350,25 @@ def test_peek_width_floor_widens_narrow_panel_for_symmetry(qtbot):
     assert ctrl.state == PanelState.PEEK
     # remembered(250)+EXTRA(24)=274 < floor 360 -> floored to 360.
     assert overlay.geometry().width() == 360
+
+
+def test_persistent_snapshot_stores_peek_as_hidden_and_restores_pinned(qtbot):
+    ctrl, splitter, panel, strip, overlay = _make_controller(qtbot)
+    pinned = ctrl.snapshot_persistent_state()
+    assert pinned["state"] == "PINNED"
+    assert pinned["width"] >= 50
+
+    splitter.setSizes([0, 900])
+    ctrl.on_splitter_moved()
+    strip.peek_requested.emit(Side.LEFT)
+    assert ctrl.state == PanelState.PEEK
+    peek_snap = ctrl.snapshot_persistent_state()
+    assert peek_snap["state"] == "HIDDEN"
+
+    ctrl.restore_persistent_state(peek_snap)
+    assert ctrl.state == PanelState.HIDDEN
+    assert splitter.sizes()[0] == 0
+
+    ctrl.restore_persistent_state(pinned)
+    assert ctrl.state == PanelState.PINNED
+    assert splitter.sizes()[0] == pinned["width"]

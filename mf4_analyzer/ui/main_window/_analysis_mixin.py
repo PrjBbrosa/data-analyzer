@@ -17,6 +17,8 @@ import numpy as np
 from PyQt5.QtWidgets import QColorDialog, QMessageBox
 from PyQt5.QtCore import QTimer
 
+from .ultraview_coordinator import notify_ultraview_plot
+
 from ...ui_kit.message_box_buttons import fit_message_box_buttons_to_text
 
 from ... import db_reference
@@ -854,8 +856,11 @@ class AnalysisMixin:
                 "pane_idx=%r key=%r -- result cached but not pinned",
                 section, pane_idx, key,
             )
-            return
-        self._analysis_pins.add(section, view_id, pane_idx, key)
+        else:
+            self._analysis_pins.add(section, view_id, pane_idx, key)
+        uv = getattr(self, "_ultraview", None)
+        if uv is not None:
+            uv.notify_result_stored(section, view_id, pane_idx, key, result)
 
     def _replace_analysis_pane_pins(self, section, view_id, pane_idx, keys):
         """Replace one pane's pin set with the keys enumerated at render time."""
@@ -984,6 +989,7 @@ class AnalysisMixin:
                     section, state.view_id, pane_idx, ())
         if any_missing:
             self.statusBar.showMessage("参数/源已就绪，点击计算")
+        notify_ultraview_plot(self, section, "analysis-restore-plot")
 
     def _show_analysis_empty_hint(self, canvas):
         canvas.show_empty_hint("点击『计算』生成")

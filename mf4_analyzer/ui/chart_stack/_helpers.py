@@ -1,11 +1,12 @@
 """Pixmap/HTML helpers, toolbar-icon helpers, and shared module-level constants."""
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPixmap
+from PyQt5.QtGui import QColor, QKeySequence, QPainter
 from PyQt5.QtWidgets import QFrame, QToolButton
 
 import qtawesome as qta
 
 from .. import hints
+from ..image_utils import pixmap_as_device_pixels
 
 # ---------------------------------------------------------------------------
 # Module-level constants (shared across sub-modules)
@@ -48,6 +49,7 @@ _MODE_TO_INDEX = {
     'fft_time': 2,
     'frf': 3,
     'order': 4,
+    'ultraview': 5,
 }
 _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
 
@@ -67,12 +69,8 @@ _BOTTOM_HINT_PERSISTENT = "    ·    ".join(hints.persistent_hints())
 def _pixmap_as_device_pixels(pixmap):
     if pixmap is None or pixmap.isNull():
         return pixmap
-    copy = QPixmap(pixmap)
-    if abs(copy.devicePixelRatioF() - 1.0) < 1e-9:
-        return copy
-    normalized = QPixmap.fromImage(copy.toImage())
-    normalized.setDevicePixelRatio(1.0)
-    return normalized
+    normalized = pixmap_as_device_pixels(pixmap)
+    return pixmap if normalized is None else normalized
 
 
 def _grab_pixmap_hidpi(canvas, requested=_HIDPI_EXPORT_SCALE):

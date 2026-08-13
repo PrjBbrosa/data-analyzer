@@ -222,6 +222,8 @@ class ViewMixin:
         change, so out-of-range Alt keys are safe.
         """
         mode = self.chart_stack.current_mode()
+        if mode == 'ultraview':
+            return
         if mode in ('fft', 'fft_time', 'frf', 'order'):
             self._on_analysis_switch(mode, idx)
         else:
@@ -328,6 +330,13 @@ class ViewMixin:
         if not (0 <= idx < len(self.view_manager.views)):
             return
         state = self.view_manager.get(idx)
+        coord = getattr(self, "_ultraview", None)
+        if coord is not None:
+            from ..ultraview_state import UltraViewRef
+
+            coord.offer_capture_bound_canvas(
+                canvas, incoming_ref=UltraViewRef("time", state.view_id)
+            )
 
         # Snapshot/restore is only for off-screen secondary renders in split
         # mode. Primary view switches must show the target view's cursor state,
@@ -340,6 +349,7 @@ class ViewMixin:
         restore_idx = self._focused_view_idx
         old_applying_view = getattr(self, '_applying_view', False)
         self._applying_view = True
+        rendered = None
         try:
             self._view_bridge.apply_controls_from_state(state, self, canvas)
             if update_primary_ui and state.cursor_mode == 'off':
@@ -368,6 +378,12 @@ class ViewMixin:
                 self._project_view_controls(restore_idx)
             if cursor_pill_snapshot is not None:
                 self.chart_stack.restore_cursor_pill_snapshot(cursor_pill_snapshot)
+        if coord is not None:
+            from ..ultraview_state import UltraViewRef
+
+            new_ref = UltraViewRef("time", state.view_id)
+            coord.bind_canvas(canvas, new_ref)
+            coord.request_capture(new_ref, canvas, "time-render")
         return rendered
 
     # -- view tab-bar intent handlers (time section) --------------------

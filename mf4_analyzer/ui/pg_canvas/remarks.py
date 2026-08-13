@@ -88,7 +88,18 @@ def format_remark_label(point: RemarkPoint) -> str:
 class RemarkArtist:
     """Create and remove the shared remark dot, leader, and draggable label."""
 
+    def __init__(self, on_moved=None):
+        self._on_moved = on_moved
+        self._suppress_moved = False
+
     def add(self, point: RemarkPoint):
+        self._suppress_moved = True
+        try:
+            return self._add(point)
+        finally:
+            self._suppress_moved = False
+
+    def _add(self, point: RemarkPoint):
         vb = point.vb
         dot = pg.ScatterPlotItem(
             x=[point.x],
@@ -134,11 +145,22 @@ class RemarkArtist:
         self._connect_leader(remark)
         return remark
 
+    def _notify_moved(self):
+        if self._suppress_moved:
+            return
+        callback = self._on_moved
+        if callback is not None:
+            callback()
+
+    def _on_leader_moved(self, remark):
+        self.update_leader(remark)
+        self._notify_moved()
+
     def _connect_leader(self, remark):
         text = remark["text"]
         try:
             text.sigPositionChanged.connect(
-                lambda _item, r=remark: self.update_leader(r)
+                lambda _item, r=remark: self._on_leader_moved(r)
             )
         except Exception:
             orig_item_change = text.itemChange
@@ -146,7 +168,7 @@ class RemarkArtist:
             def patched_item_change(change, value, _r=remark, _orig=orig_item_change):
                 result = _orig(change, value)
                 if change == text.ItemPositionHasChanged:
-                    self.update_leader(_r)
+                    self._on_leader_moved(_r)
                 return result
 
             text.itemChange = patched_item_change

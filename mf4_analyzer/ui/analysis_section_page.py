@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from .image_utils import pixmap_as_device_pixels
 from .view_tabbar import ViewTabBar
 from ..ui_kit.qt_lifecycle import as_weak_callable
 
@@ -244,10 +245,9 @@ class AnalysisSectionPage(QWidget):
             pix = canvas.grab_pixmap(scale=scale)
             if pix is None or pix.isNull():
                 continue
-            if abs(pix.devicePixelRatioF() - 1.0) >= 1e-9:
-                norm = QPixmap.fromImage(pix.toImage())
-                norm.setDevicePixelRatio(1.0)
-                pix = norm
+            pix = pixmap_as_device_pixels(pix)
+            if pix is None or pix.isNull():
+                continue
             pixes.append(pix)
         if not pixes:
             return None

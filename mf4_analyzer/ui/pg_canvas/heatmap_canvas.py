@@ -293,7 +293,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._split_title_width = None
         self._remarks = []
         self._remark_enabled = False
-        self._remark_artist = RemarkArtist()
+        self.markup_revision = 0
+        self._remark_artist = RemarkArtist(on_moved=self._bump_markup_revision)
         self._remark_interaction = RemarkInteraction(
             add_at_viewport_pos=lambda pos: self._add_remark_at_viewport_pos(pos),
             remove_at_viewport_pos=lambda pos: self._remove_remark_at_viewport_pos(pos),
@@ -1699,7 +1700,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         )
 
     def clear_remarks(self) -> None:
+        if not self._remarks:
+            return
         self._remark_artist.clear(self._remarks)
+        self._bump_markup_revision()
+
+    def _bump_markup_revision(self) -> None:
+        self.markup_revision = int(self.markup_revision) + 1
 
     def remark_count(self) -> int:
         return len(self._remarks)
@@ -1739,6 +1746,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         if point is None:
             return
         self._remarks.append(self._remark_artist.add(point))
+        self._bump_markup_revision()
 
     def remove_remark_near(self, x: float, y: float) -> None:
         if not self._remarks:
@@ -1754,6 +1762,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         nearest = min(self._remarks, key=dist)
         self._remark_artist.remove(nearest)
         self._remarks.remove(nearest)
+        self._bump_markup_revision()
 
     def _viewport_pos_to_scene(self, viewport_pos):
         return viewport_pos_to_scene(self._glw, viewport_pos)

@@ -1617,6 +1617,29 @@ def test_remark_snaps_to_curve(canvas):
     assert canvas._remarks == []
 
 
+def test_remark_markup_revision_bumps_on_edit_not_empty_clear(canvas):
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.set_remark_enabled(True)
+    assert canvas.markup_revision == 0
+    canvas.add_remark_at('amp', 119.0, 0.5)
+    assert canvas.markup_revision == 1
+    text = canvas._remarks[0]['text']
+    text.setPos(text.pos().x() + 8.0, text.pos().y() + 8.0)
+    assert canvas.markup_revision == 2
+    canvas._remove_remark(canvas._remarks[0])
+    assert canvas.markup_revision == 3
+    canvas.clear_remarks()
+    assert canvas.markup_revision == 3
+    canvas.add_remark_at('amp', 119.0, 0.5)
+    canvas.clear_remarks()
+    assert canvas.markup_revision == 5
+    canvas.clear_remarks()
+    assert canvas.markup_revision == 5
+
+
 def test_spectrum_remark_picks_nearest_in_screen_space(canvas, qapp):
     entry = {
         'label': 'f1 · vib',

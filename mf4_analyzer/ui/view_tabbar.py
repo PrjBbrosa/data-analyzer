@@ -49,6 +49,7 @@ class ViewTabBar(QWidget):
     reorder_requested = pyqtSignal(int, int)
     split_requested = pyqtSignal(int)
     clear_split_requested = pyqtSignal(int)
+    add_to_ultraview_requested = pyqtSignal(str, str)
 
     def __init__(
         self,
@@ -795,6 +796,10 @@ class ViewTabBar(QWidget):
         menu.addSeparator()
         delete_action = menu.addAction("删除")
         delete_action.setEnabled(len(self._manager.views) > 1)
+        add_ultraview_action = None
+        if self._section_key:
+            menu.addSeparator()
+            add_ultraview_action = menu.addAction("加入总览")
 
         chosen = menu.exec_(self._tabs.mapToGlobal(pos))
         if chosen is None or not chosen.isEnabled():
@@ -830,6 +835,11 @@ class ViewTabBar(QWidget):
                 self.split_requested.emit(idx)
         elif chosen is delete_action:
             self.delete_requested.emit(idx)
+        elif add_ultraview_action is not None and chosen is add_ultraview_action:
+            state = self._manager.get(idx)
+            view_id = str(getattr(state, "view_id", "") or "")
+            if view_id:
+                self.add_to_ultraview_requested.emit(self._section_key, view_id)
 
     def _on_tab_moved(self, from_idx: int, to_idx: int) -> None:
         if not self._suppress:

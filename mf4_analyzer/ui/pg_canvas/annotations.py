@@ -25,6 +25,7 @@ class AnnotationManager(_CanvasBackref):
         "press_pos",
         "press_dragged",
         "_artist",
+        "markup_revision",
     })
 
     _delegate_names = frozenset({
@@ -51,7 +52,11 @@ class AnnotationManager(_CanvasBackref):
         self.remarks = []
         self.press_pos = None
         self.press_dragged = False
-        self._artist = RemarkArtist()
+        self.markup_revision = 0
+        self._artist = RemarkArtist(on_moved=self._bump_markup_revision)
+
+    def _bump_markup_revision(self):
+        self.markup_revision = int(self.markup_revision) + 1
 
     def set_remark_enabled(self, enabled):
         """Enable or disable annotation mode; changes cursor shape."""
@@ -214,6 +219,7 @@ class AnnotationManager(_CanvasBackref):
         )
         remark = self._artist.add(point)
         self.remarks.append(remark)
+        self._bump_markup_revision()
 
     def _format_remark_label(self, x_value, y_value, color=None):
         """Return the compact coordinate label shown by point remarks."""
@@ -358,11 +364,15 @@ class AnnotationManager(_CanvasBackref):
             r = self.remarks.pop(idx)
             self._artist.remove(r)
         except Exception:
-            pass
+            return
+        self._bump_markup_revision()
 
     def clear_remarks(self):
         """Remove all annotations."""
+        if not self.remarks:
+            return
         self._artist.clear(self.remarks)
+        self._bump_markup_revision()
 
 
 __all__ = ["AnnotationManager", "_annotation_pen_cursor"]

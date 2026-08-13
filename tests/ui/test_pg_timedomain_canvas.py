@@ -1836,6 +1836,35 @@ class TestTimeDomainCanvasPGAnnotations:
         manager.clear_remarks()
         assert manager.remarks == []
 
+    def test_remark_markup_revision_bumps_on_edit_not_empty_clear(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPoint
+
+        canvas = _pg_canvas(qapp)
+        manager = canvas._annotations
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        monkeypatch.setattr(
+            manager,
+            "_nearest_data_point",
+            lambda _pos: ("speed", 1.25, 42.5, "#1769e0", "rpm"),
+        )
+        assert manager.markup_revision == 0
+        manager._add_remark(QPoint(120, 100))
+        assert manager.markup_revision == 1
+        text = manager.remarks[0]["text"]
+        text.setPos(text.pos().x() + 8.0, text.pos().y() + 8.0)
+        assert manager.markup_revision == 2
+        manager._remove_remark_by_index(0)
+        assert manager.markup_revision == 3
+        manager.clear_remarks()
+        assert manager.markup_revision == 3
+        manager._add_remark(QPoint(120, 100))
+        manager.clear_remarks()
+        assert manager.markup_revision == 5
+        manager.clear_remarks()
+        assert manager.markup_revision == 5
+
     def test_remark_label_shows_coordinates_not_channel_name(self, qapp, monkeypatch):
         from PyQt5.QtCore import QPoint
 

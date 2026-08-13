@@ -12,6 +12,7 @@ from ...signal.analysis_defaults import normalize_overlap_fraction
 from ...signal.spectrogram import SpectrogramAnalyzer
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
+from .ultraview_coordinator import notify_ultraview_plot
 
 
 class FFTMixin:
@@ -292,6 +293,7 @@ class FFTMixin:
                     time_range=time_range))
             if entries:
                 self._plot_fft_entries(entries, page.pane_canvas(pane_idx))
+                notify_ultraview_plot(self, "fft", "fft-plot")
 
         if any_multi:
             if not self._emit_compute_feedback(outcome, section_label="FFT"):
@@ -403,6 +405,7 @@ class FFTMixin:
             )
             xt, yt = self.inspector.top.tick_density()
             self.canvas_fft.set_tick_density(xt, yt)
+            notify_ultraview_plot(self, "fft", "fft-single-plot")
             batch_params = dict(self.inspector.fft_ctx.current_params())
             batch_params['fs'] = fs
             self._remember_batch_preset(
