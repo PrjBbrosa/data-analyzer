@@ -19,9 +19,13 @@ from PyQt5.QtWidgets import (
 
 from mf4_analyzer.ui.widgets.ultraview_entry import (
     ACCESSIBLE_NAME,
+    COMPACT_WIDTH,
     ENTRY_HEIGHT,
     LABEL_TEXT,
+    PORTAL_SIZE,
+    SEPARATOR_HEIGHT,
     SPECTRUM_STOPS,
+    TILE_COLORS,
     TOOLTIP,
     UltraViewEntryButton,
     UltraViewRailFitter,
@@ -112,10 +116,30 @@ def test_full_mode_is_wider_than_compact_and_shows_brand_label(qtbot) -> None:
     assert button.is_compact() is True
     assert full.width() > compact.width()
     assert full.height() == compact.height() == ENTRY_HEIGHT
+    assert compact.width() == COMPACT_WIDTH
     assert compact.width() < full.width()
     button.set_compact(False)
     assert button.is_compact() is False
     assert button.sizeHint().width() == full.width()
+
+
+def test_portal_is_smaller_than_plus_and_vertically_centered(qtbot) -> None:
+    button = _make_button(qtbot)
+    portal = button._portal_rect()
+    assert PORTAL_SIZE == 20
+    assert portal.height() == PORTAL_SIZE
+    # ViewTabBar "+" is 22px; the portal sits 1px below geometric mid so the
+    # rail hairlines (not the widget box) are the visual anchors.
+    assert portal.height() <= 22
+    geometric = (float(button.height()) - float(PORTAL_SIZE)) / 2.0
+    assert portal.y() == pytest.approx(geometric + 1.0)
+    assert portal.y() >= 3.0
+    button.set_compact(True)
+    button.resize(button.sizeHint())
+    compact = button._portal_rect()
+    assert compact.height() == PORTAL_SIZE
+    assert abs(compact.center().x() - button.width() / 2.0) <= 0.51
+    assert compact.y() == pytest.approx(geometric + 1.0)
 
 
 def test_compact_keeps_accessible_name_and_tooltip(qtbot) -> None:
@@ -230,6 +254,160 @@ def test_grab_contains_spectrum_and_keeps_quiet_chrome(qtbot) -> None:
         assert _channel_distance(corner, host_fill) < _channel_distance(corner, white)
 
 
+def _grab_entry_on_host(qtbot, *, compact: bool = False):
+    host = QWidget()
+    host.setObjectName("ultraViewEntryHost")
+    host.setAutoFillBackground(True)
+    palette = host.palette()
+    palette.setColor(QPalette.Window, QColor(_HOST_FILL))
+    host.setPalette(palette)
+    host.setStyleSheet(f"background-color: {_HOST_FILL};")
+    row = QHBoxLayout(host)
+    row.setContentsMargins(16, 16, 16, 16)
+    row.setSpacing(0)
+    button = UltraViewEntryButton()
+    button.set_compact(compact)
+    row.addWidget(button, 0, Qt.AlignVCenter)
+    qtbot.addWidget(host)
+    host.show()
+    qtbot.waitExposed(host)
+    QApplication.processEvents()
+    button.resize(button.sizeHint())
+    host.adjustSize()
+    QApplication.processEvents()
+    pixmap = host.grab()
+    image = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+    origin = button.mapTo(host, button.rect().topLeft())
+    dpr = int(round(pixmap.devicePixelRatio()))
+    return host, button, image, origin, dpr
+
+
+def _pixel(image: QImage, x: int, y: int) -> QColor:
+    return QColor(image.pixelColor(x, y))
+
+
+def test_portal_mark_matches_option_a_board_not_capsule(qtbot) -> None:
+    host, button, image, origin, dpr = _grab_entry_on_host(qtbot)
+    assert dpr == 1
+    gx = origin.x() * dpr
+    gy = origin.y() * dpr
+    gw = button.width() * dpr
+    gh = button.height() * dpr
+    host_fill = QColor(_HOST_FILL)
+    portal_rect = button._portal_rect()
+    portal = int(round(portal_rect.width() * dpr))
+    pad = int(round(portal_rect.x() * dpr))
+
+    blue_hits: list[tuple[int, int]] = []
+    violet_hits: list[tuple[int, int]] = []
+    magenta_hits: list[tuple[int, int]] = []
+    for y in range(gy, gy + gh):
+        for x in range(gx, gx + pad + portal):
+            color = _pixel(image, x, y)
+            if _channel_distance(color, QColor(TILE_COLORS[0])) <= 36:
+                blue_hits.append((x, y))
+            elif _channel_distance(color, QColor(TILE_COLORS[1])) <= 36:
+                violet_hits.append((x, y))
+            elif _channel_distance(color, QColor(TILE_COLORS[3])) <= 36:
+                magenta_hits.append((x, y))
+    assert blue_hits and violet_hits and magenta_hits
+
+    def _centroid(hits: list[tuple[int, int]]) -> tuple[float, float]:
+        return (
+            sum(x for x, _y in hits) / len(hits),
+            sum(y for _x, y in hits) / len(hits),
+        )
+
+    blue_c = _centroid(blue_hits)
+    magenta_c = _centroid(magenta_hits)
+    assert blue_c[0] < magenta_c[0]
+    assert blue_c[1] < magenta_c[1]
+    assert any(x > blue_c[0] and y < magenta_c[1] for x, y in violet_hits)
+    assert any(x < magenta_c[0] and y > blue_c[1] for x, y in violet_hits)
+
+    portal_center = _pixel(image, gx + pad + portal // 2, gy + gh // 2)
+    assert _channel_distance(portal_center, host_fill) > 8
+    assert _channel_distance(portal_center, QColor(TILE_COLORS[0])) > 60
+    assert _channel_distance(portal_center, QColor(TILE_COLORS[3])) > 60
+
+    gap = _pixel(image, gx + pad + portal + 3 * dpr, gy + gh // 2)
+    assert _channel_distance(gap, host_fill) <= 28
+    right_edge = _pixel(image, gx + gw - 1, gy + gh // 2)
+    assert _channel_distance(right_edge, host_fill) <= 24
+    left_edge = _pixel(image, gx, gy + gh // 2)
+    assert _channel_distance(left_edge, host_fill) <= 24
+
+    underline_hits = 0
+    scanned = 0
+    band_top = gy + int(gh * 0.72)
+    for y in range(band_top, gy + gh):
+        for x in range(gx + pad + portal, gx + gw):
+            scanned += 1
+            color = _pixel(image, x, y)
+            if _channel_distance(color, host_fill) < 12:
+                continue
+            # Rest-state underline is 54% opaque over the rail; require a
+            # chromatic stroke, not a match to the raw spectrum hex.
+            if color.blue() > color.green() or color.red() > color.green():
+                underline_hits += 1
+    assert scanned > 0
+    assert underline_hits >= 8, f"wordmark underline missing: {underline_hits}/{scanned}"
+
+    del host
+
+
+def test_compact_portal_keeps_quad_and_drops_wordmark(qtbot) -> None:
+    host, button, image, origin, dpr = _grab_entry_on_host(qtbot, compact=True)
+    assert button.width() == COMPACT_WIDTH
+    gx = origin.x() * dpr
+    gy = origin.y() * dpr
+    gw = button.width() * dpr
+    gh = button.height() * dpr
+    found = {color: False for color in TILE_COLORS}
+    for y in range(gy, gy + gh):
+        for x in range(gx, gx + gw):
+            color = _pixel(image, x, y)
+            for hex_color, already in list(found.items()):
+                if already:
+                    continue
+                if _channel_distance(color, QColor(hex_color)) <= 36:
+                    found[hex_color] = True
+    assert all(found.values()), found
+    host_fill = QColor(_HOST_FILL)
+    for lx, ly in ((0, 0), (button.width() - 1, 0)):
+        corner = _pixel(image, gx + lx * dpr, gy + ly * dpr)
+        assert _channel_distance(corner, host_fill) <= 24
+    del host
+
+
+def test_mouse_focus_does_not_draw_capsule_ring(qtbot) -> None:
+    host, button, image, origin, dpr = _grab_entry_on_host(qtbot)
+    gx = origin.x() * dpr
+    gy = origin.y() * dpr
+    gw = button.width() * dpr
+    host_fill = QColor(_HOST_FILL)
+    top_center = (gx + gw // 2, gy + 2 * dpr)
+
+    button.clearFocus()
+    QApplication.processEvents()
+    button.setFocus(Qt.MouseFocusReason)
+    QApplication.processEvents()
+    image = host.grab().toImage().convertToFormat(QImage.Format_ARGB32)
+    mouse_ring = _pixel(image, *top_center)
+    mouse_corner = _pixel(image, gx, gy)
+    assert _channel_distance(mouse_corner, host_fill) <= 24
+    assert _channel_distance(mouse_ring, host_fill) <= 24
+
+    button.clearFocus()
+    QApplication.processEvents()
+    button.setFocus(Qt.TabFocusReason)
+    QApplication.processEvents()
+    image = host.grab().toImage().convertToFormat(QImage.Format_ARGB32)
+    tab_ring = _pixel(image, *top_center)
+    assert _channel_distance(tab_ring, host_fill) > 12
+    del host
+
+
 def test_transparent_render_has_no_square_backing(qtbot) -> None:
     button = _make_button(qtbot)
     image = QImage(button.width(), button.height(), QImage.Format_ARGB32_Premultiplied)
@@ -249,13 +427,41 @@ def test_transparent_render_has_no_square_backing(qtbot) -> None:
 
 def test_separator_is_quiet_hairline(qtbot) -> None:
     host = QWidget()
+    host.setAutoFillBackground(True)
+    palette = host.palette()
+    palette.setColor(QPalette.Window, QColor(_HOST_FILL))
+    host.setPalette(palette)
+    host.setStyleSheet(f"background-color: {_HOST_FILL};")
+    row = QHBoxLayout(host)
+    row.setContentsMargins(12, 12, 12, 12)
     sep = make_ultraview_separator(host)
+    row.addWidget(sep, 0, Qt.AlignVCenter)
     qtbot.addWidget(host)
+    host.show()
+    qtbot.waitExposed(host)
+    QApplication.processEvents()
+    host.adjustSize()
+    QApplication.processEvents()
+
     assert sep.objectName() == "ultraViewEntrySeparator"
-    assert sep.width() == 1 or sep.sizeHint().width() == 1
-    assert sep.height() == 14 or sep.sizeHint().height() == 14
-    assert sep.minimumSize() == QSize(1, 14)
+    assert sep.width() == 1
+    assert sep.height() == SEPARATOR_HEIGHT
+    assert sep.minimumSize() == QSize(1, SEPARATOR_HEIGHT)
     assert "border:" not in (sep.styleSheet() or "")
+
+    pixmap = host.grab()
+    image = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+    origin = sep.mapTo(host, sep.rect().topLeft())
+    dpr = int(round(pixmap.devicePixelRatio()))
+    mid = _pixel(
+        image,
+        origin.x() * dpr,
+        origin.y() * dpr + (sep.height() * dpr) // 2,
+    )
+    # Global QFrame { background:#fff } must not win; the dock hairline
+    # has to stay a gray rule on the rail, as in the Option A mock.
+    assert _channel_distance(mid, QColor(_WHITE)) > 40
+    assert _channel_distance(mid, QColor(_HOST_FILL)) > 40
 
 
 def test_dock_compact_required_uses_intrinsic_hints_not_window_width() -> None:

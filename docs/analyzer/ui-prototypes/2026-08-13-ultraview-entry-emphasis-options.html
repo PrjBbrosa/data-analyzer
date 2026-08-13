@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>TraceLab · UltraView 入口强化方案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #edf2f8;
+      --paper: #ffffff;
+      --rail: #fbfcfe;
+      --ink: #1f3450;
+      --muted: #657991;
+      --line: #d2deea;
+      --line-strong: #c1d1e2;
+      --blue: #1478f7;
+      --blue-pale: #e9f2ff;
+      --electric-a: #0969dc;
+      --electric-b: #734ee6;
+      --electric-c: #bd299f;
+      --shadow: 0 16px 34px rgba(38, 58, 84, .14);
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: "SF Mono", "Menlo", "Consolas", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 340px;
+      color: var(--ink);
+      background:
+        radial-gradient(980px 520px at 12% -8%, #fff 0, rgba(255,255,255,.58) 36%, transparent 68%),
+        linear-gradient(180deg, #f6f9fd, var(--page));
+      font: 13px/1.5 var(--sans);
+    }
+    button { font: inherit; cursor: pointer; }
+    button:focus-visible { outline: 3px solid rgba(20,120,247,.28); outline-offset: 2px; }
+    .page { width: min(1400px, calc(100vw - 42px)); margin: 0 auto; padding: 32px 0 54px; }
+
+    .intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(270px, 390px); gap: 30px; align-items: end; margin-bottom: 17px; }
+    .eyebrow { color: #6b7d94; font: 750 10px/1 var(--mono); letter-spacing: .13em; }
+    h1 { margin: 8px 0 6px; font-size: clamp(25px, 3.1vw, 39px); line-height: 1.08; letter-spacing: -.045em; }
+    .lede { max-width: 67ch; margin: 0; color: var(--muted); font-size: 14px; }
+    .thesis { padding: 13px 15px; border: 1px solid #cedae7; border-left: 3px solid var(--electric-b); border-radius: 9px; background: rgba(255,255,255,.7); color: #61738b; font-size: 12px; }
+    .thesis b { display: block; margin-bottom: 2px; color: #2b4665; }
+
+    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 8px; border: 1px solid #cedae7; border-radius: 11px; background: rgba(255,255,255,.82); box-shadow: 0 8px 20px rgba(45,65,91,.05); }
+    .controls .control-label { margin: 0 4px; color: #7b8b9f; font: 740 10px/1 var(--mono); letter-spacing: .1em; }
+    .controls button { min-height: 29px; padding: 0 10px; border: 1px solid #d4dfeb; border-radius: 6px; color: #62738a; background: #fff; font-size: 11px; font-weight: 700; }
+    .controls button:hover, .controls button.active { border-color: #91b8eb; color: #235ea9; background: #edf5ff; }
+    .controls button.active { box-shadow: inset 0 -2px 0 #317deb; }
+    .controls .tip { margin-left: auto; padding: 0 5px; color: #73849a; font-size: 11px; }
+
+    .gallery { display: grid; gap: 17px; margin-top: 18px; }
+    .concept { overflow: hidden; border: 1px solid #c6d4e3; border-radius: 13px; background: rgba(255,255,255,.9); box-shadow: var(--shadow); }
+    .concept.is-picked { border-color: #aebcf0; box-shadow: 0 18px 38px rgba(77, 82, 182, .17); }
+    .concept-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; padding: 14px 18px; border-bottom: 1px solid #dde6ef; background: linear-gradient(180deg, #fff, #f8fafd); }
+    .concept-kicker { color: #73869e; font: 750 10px/1 var(--mono); letter-spacing: .12em; }
+    .concept h2 { margin: 4px 0 2px; color: #263c58; font-size: 16px; line-height: 1.15; letter-spacing: -.018em; }
+    .concept p { margin: 0; color: #6a7d93; font-size: 12px; }
+    .chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid #d4dfeb; border-radius: 999px; color: #60748e; background: #fff; font: 700 10px/1 var(--mono); white-space: nowrap; }
+    .chip i { width: 32px; height: 7px; border-radius: 99px; background: linear-gradient(90deg, var(--electric-a), var(--electric-b), var(--electric-c)); }
+    .chip.recommend { border-color: #bbc6f0; color: #4f62a0; background: #fafaff; }
+
+    .viewport { overflow-x: auto; padding: 22px 14px 24px; background: #eaf0f7; }
+    .app { position: relative; width: min(var(--screen, 1180px), 100%); min-width: 0; height: 226px; margin: 0 auto; overflow: hidden; border: 1px solid #c3d1e0; border-radius: 10px; background: var(--paper); box-shadow: 0 12px 29px rgba(41,60,83,.16); transition: width .2s ease; }
+    .app-head { display: flex; align-items: center; height: 34px; padding: 0 10px; border-bottom: 1px solid #dde6ef; background: linear-gradient(180deg, #fff, #f8fafd); }
+    .window-title { color: #77879a; font: 680 10px/1 var(--mono); letter-spacing: .05em; }
+    .status-dot { width: 9px; height: 9px; margin-left: auto; border-radius: 50%; background: #ff3851; }
+    .chart { position: absolute; inset: 34px 0 38px; overflow: hidden; background: #fbfcfe; }
+    .chart::before { position: absolute; inset: 26px 28px 18px; background-image: linear-gradient(#e8eef5 1px, transparent 1px), linear-gradient(90deg, #e8eef5 1px, transparent 1px); background-size: 46px 28px; content: ""; }
+    .chart-label { position: absolute; top: 12px; left: 17px; color: #718197; font: 680 10px/1 var(--mono); }
+    .wave { position: absolute; right: 32px; bottom: 22px; left: 32px; height: 64px; overflow: visible; }
+    .wave path:first-child { fill: none; stroke: #b4c3d2; stroke-width: 1.4; }
+    .wave path:last-child { fill: none; stroke: #167af3; stroke-width: 2.3; }
+
+    /* The actual 28px View rail: all variants keep this geometry and right anchor. */
+    .view-rail { position: absolute; right: 0; bottom: 0; left: 0; display: flex; align-items: center; height: 38px; border-top: 1px solid #ccd8e5; background: var(--rail); }
+    .section-anchor { display: flex; align-items: center; gap: 8px; align-self: stretch; padding: 0 13px 0 11px; border-right: 1px solid #d3deea; color: #354d6b; background: linear-gradient(90deg, #f0f6ff, #fbfcfe); font-size: 11px; font-weight: 780; }
+    .section-anchor::before { width: 3px; align-self: stretch; margin-left: -11px; background: #267ff3; content: ""; }
+    .section-anchor svg { width: 14px; height: 14px; fill: none; stroke: #267ff3; stroke-width: 2.2; stroke-linecap: round; }
+    .tabs { display: flex; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+    .view-tab { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; height: 30px; margin: 4px 0 4px 7px; padding: 0 13px; border: 1px solid #a5c8f7; border-bottom: 3px solid #1478f7; border-radius: 7px; color: #1e426d; background: #eef6ff; font-size: 11px; font-weight: 780; white-space: nowrap; }
+    .view-tab i { width: 11px; height: 10px; border-radius: 3px; background: #1478f7; box-shadow: inset 0 -1px 0 rgba(0,66,160,.28); }
+    .view-tab + .view-tab { border-color: transparent; border-bottom-color: transparent; color: #708199; background: transparent; font-weight: 650; }
+    .view-tab + .view-tab i { background: #ed9a24; }
+    .rail-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; height: 100%; padding: 0 8px 0 5px; }
+    .utility { height: 25px; padding: 0 9px; border: 1px solid #cbd8e6; border-radius: 6px; color: #425b79; background: #fff; font-size: 11px; font-weight: 700; }
+    .utility.plus { width: 29px; padding: 0; font-size: 18px; line-height: 1; }
+    .utility.compare { display: none; font-size: 10px; }
+    .divider { width: 1px; height: 19px; margin: 0 2px; background: #d6e1ec; }
+
+    /* Shared ultra mark: a 2×2 board, not a six-tab icon. */
+    .quad { position: relative; display: grid; grid-template-columns: repeat(2, 6px); grid-template-rows: repeat(2, 6px); gap: 3px; width: 24px; height: 24px; place-content: center; color: var(--electric-a); }
+    .quad i { width: 6px; height: 6px; border-radius: 2px; background: currentColor; }
+    .quad i:nth-child(2) { color: var(--electric-b); }.quad i:nth-child(3) { color: var(--electric-b); }.quad i:nth-child(4) { color: var(--electric-c); }
+    .word { color: var(--electric-a); background: linear-gradient(100deg, var(--electric-a), var(--electric-b) 51%, var(--electric-c)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .ultra { position: relative; display: inline-flex; align-items: center; flex: 0 0 auto; height: 28px; border: 0; color: var(--electric-a); background: transparent; font-size: 12px; font-weight: 760; letter-spacing: -.025em; white-space: nowrap; }
+    .ultra:hover { filter: saturate(1.1); }.ultra[aria-pressed="true"] { filter: saturate(1.18) contrast(1.03); }
+
+    /* A — selected direction: the wordmark exits a small, framed Board portal. */
+    .variant-portal .ultra { gap: 6px; padding: 0 6px 0 4px; }
+    .variant-portal .portal-frame { position: relative; display: grid; width: 27px; height: 27px; place-items: center; border-radius: 8px; background: linear-gradient(140deg, rgba(9,105,220,.13), rgba(115,78,230,.12) 55%, rgba(189,41,159,.12)); box-shadow: inset 0 0 0 1px rgba(97,97,196,.17); }
+    .variant-portal .portal-frame::after { position: absolute; inset: 2px; border: 1px solid rgba(255,255,255,.95); border-radius: 6px; content: ""; }
+    .variant-portal .quad { z-index: 1; transform: scale(.83); }
+    .variant-portal .word { position: relative; padding-right: 2px; }
+    .variant-portal .word::after { position: absolute; right: 2px; bottom: -5px; left: 0; height: 2px; border-radius: 99px; background: linear-gradient(90deg, var(--electric-a), var(--electric-b), var(--electric-c)); content: ""; opacity: .54; transform: scaleX(.45); transform-origin: left; transition: transform .16s ease, opacity .16s ease; }
+    .variant-portal .ultra:hover .word::after, .variant-portal .ultra[aria-pressed="true"] .word::after { opacity: 1; transform: scaleX(1); }
+    .variant-portal .ultra[aria-pressed="true"] .portal-frame { box-shadow: inset 0 0 0 1px rgba(99,91,215,.32), 0 2px 7px rgba(91,83,205,.17); }
+
+    /* B — a physical terminal slot: stronger, but still a light rail component. */
+    .variant-slot .ultra { gap: 7px; padding: 0 8px 0 10px; isolation: isolate; }
+    .variant-slot .ultra::before { position: absolute; z-index: -1; inset: 0 0 0 2px; clip-path: polygon(8px 0, 100% 0, 100% 100%, 8px 100%, 0 50%); background: linear-gradient(108deg, rgba(9,105,220,.09), rgba(115,78,230,.07) 54%, rgba(189,41,159,.08)); content: ""; }
+    .variant-slot .ultra::after { position: absolute; right: 0; bottom: 1px; left: 12px; height: 2px; background: linear-gradient(90deg, var(--electric-a), var(--electric-b), var(--electric-c)); content: ""; opacity: .7; }
+    .variant-slot .quad { width: 21px; transform: scale(.85); transform-origin: left center; }
+    .variant-slot .ultra:hover::before, .variant-slot .ultra[aria-pressed="true"]::before { background: linear-gradient(108deg, rgba(9,105,220,.15), rgba(115,78,230,.12) 54%, rgba(189,41,159,.14)); }
+    .variant-slot .ultra:hover::after, .variant-slot .ultra[aria-pressed="true"]::after { opacity: 1; height: 3px; }
+
+    /* C — architectural corner marks; no enclosing button shape at all. */
+    .variant-corners .ultra { gap: 7px; padding: 0 6px 0 4px; }
+    .variant-corners .quad { width: 26px; height: 26px; }
+    .variant-corners .quad::before, .variant-corners .quad::after { position: absolute; width: 7px; height: 7px; content: ""; }
+    .variant-corners .quad::before { top: 1px; left: 1px; border-top: 1.5px solid var(--electric-a); border-left: 1.5px solid var(--electric-a); border-radius: 4px 0 0; }
+    .variant-corners .quad::after { right: 1px; bottom: 1px; border-right: 1.5px solid var(--electric-c); border-bottom: 1.5px solid var(--electric-c); border-radius: 0 0 4px; }
+    .variant-corners .word { padding: 1px 4px 1px 0; border-bottom: 1px solid rgba(112,106,217,.26); }
+    .variant-corners .ultra:hover .word, .variant-corners .ultra[aria-pressed="true"] .word { border-bottom-color: transparent; background-color: rgba(111,87,225,.06); box-shadow: inset 0 -2px 0 rgba(115,78,230,.6); }
+
+    /* D — a quiet aurora beacon: more visual energy, intentionally the upper limit. */
+    .variant-beacon .ultra { gap: 7px; padding: 0 8px 0 5px; }
+    .variant-beacon .quad { border-radius: 8px; background: radial-gradient(circle at 32% 28%, rgba(9,105,220,.20), transparent 49%), radial-gradient(circle at 75% 76%, rgba(189,41,159,.18), transparent 52%); }
+    .variant-beacon .quad::before { position: absolute; inset: 2px; border: 1px solid rgba(111,92,215,.17); border-radius: 6px; content: ""; }
+    .variant-beacon .quad i { z-index: 1; box-shadow: 0 1px 2px rgba(42,56,140,.18); }
+    .variant-beacon .word { font-weight: 800; text-shadow: 0 1px 0 rgba(255,255,255,.9); }
+    .variant-beacon .ultra::after { position: absolute; right: 8px; bottom: 3px; left: 8px; height: 1px; border-radius: 99px; background: linear-gradient(90deg, transparent, var(--electric-a) 14%, var(--electric-b) 52%, var(--electric-c) 86%, transparent); content: ""; opacity: .5; }
+    .variant-beacon .ultra:hover::after, .variant-beacon .ultra[aria-pressed="true"]::after { opacity: 1; height: 2px; }
+
+    .board-peek { position: absolute; z-index: 5; right: 13px; bottom: 43px; width: 220px; padding: 11px; border: 1px solid #bac9e4; border-radius: 10px; background: rgba(255,255,255,.98); box-shadow: 0 14px 30px rgba(32,53,80,.2); opacity: 0; transform: translateY(6px) scale(.985); pointer-events: none; transition: opacity .15s ease, transform .15s ease; }
+    .app.open .board-peek { opacity: 1; transform: translateY(0) scale(1); }
+    .peek-title { display: flex; align-items: center; gap: 6px; color: #334a68; font-size: 11px; font-weight: 780; }.peek-title .quad { transform: scale(.83); transform-origin: left center; }
+    .peek-meta { margin: 2px 0 8px 24px; color: #78899f; font-size: 10px; }
+    .peek-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 4px; }.peek-grid i { display: block; height: 25px; border: 1px solid #ccdae9; border-radius: 3px; background: linear-gradient(145deg, #fbfdff, #eaf2fb); }.peek-grid i:first-child { grid-row: span 2; height: 54px; background: linear-gradient(145deg, #f9f9ff, #ebefff); }
+
+    .caption { display: grid; grid-template-columns: minmax(0, 1fr) minmax(245px, 350px); gap: 18px; align-items: center; padding: 12px 18px 14px; border-top: 1px solid #dde6ef; background: #fff; }
+    .caption b { color: #334b68; font-size: 12px; }.caption span { color: #6e8095; font-size: 11px; }.caption .verdict { text-align: right; }.verdict strong { color: #5064a9; }.verdict.warn strong { color: #a36262; }
+    .choose { margin-left: 8px; min-height: 27px; padding: 0 9px; border: 1px solid #c5d2e2; border-radius: 6px; color: #536a84; background: #fff; font-size: 10px; font-weight: 720; }.choose:hover, .concept.is-picked .choose { border-color: #9eb4ec; color: #4b5eab; background: #f7f8ff; }
+
+    .notes { display: grid; grid-template-columns: repeat(3, 1fr); overflow: hidden; margin-top: 18px; border: 1px solid #cad7e5; border-radius: 11px; background: #cad7e5; gap: 1px; }.notes article { padding: 13px 15px; background: rgba(255,255,255,.9); }.notes h2 { margin: 0 0 4px; color: #334b68; font-size: 12px; }.notes p { margin: 0; color: #6a7d93; font-size: 11px; }.notes code { color: #586f95; font-family: var(--mono); }
+
+    .is-analysis .utility.compare { display: inline-flex; align-items: center; }.is-analysis .view-tab + .view-tab { display: none; }
+    .is-analysis .tabs::after { display: inline-flex; align-items: center; margin-left: 8px; color: #6c7e93; font-size: 10px; content: "✕ 关闭对比窗格"; }
+    .compact .app { --screen: 640px; }.compact .view-tab + .view-tab { display: none; }.compact .section-anchor { padding-right: 8px; }.compact .section-anchor .section-word { display: none; }.compact .word { display: none; }.compact .ultra { min-width: 33px; justify-content: center; }.compact .variant-slot .ultra { padding-left: 7px; }.compact .variant-slot .ultra::after { left: 8px; }.compact .divider { margin-inline: 0; }.compact .is-analysis .utility.compare { max-width: 52px; overflow: hidden; padding-inline: 6px; white-space: nowrap; text-overflow: ellipsis; }.compact .is-analysis .tabs::after { margin-left: 4px; font-size: 9px; }.compact .board-peek { right: 7px; }
+
+    @media (max-width: 760px) { .page { width: min(100% - 24px, 720px); padding-top: 22px; }.intro { grid-template-columns: 1fr; gap: 13px; }.concept-head, .caption { grid-template-columns: 1fr; gap: 8px; }.caption .verdict { text-align: left; }.controls .tip { width: 100%; margin: 2px 4px 0; }.notes { grid-template-columns: 1fr; }.viewport { padding-inline: 8px; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="intro">
+      <div>
+        <div class="eyebrow">TRACELAB · ULTRAVIEW ENTRY EMPHASIS</div>
+        <h1>不再做一个普通圆角按钮。</h1>
+        <p class="lede">位置不变，字标不变，仍保持右端固定。强化的重点放在「2×2 看板入口」这个物件感上：它是跨 View 的门户，而不是再多一个 View Tab。</p>
+      </div>
+      <aside class="thesis"><b>本轮的视觉原则</b>只在 UltraView 花一次“特殊设计”的预算。其余 View 栏维持密集、安静、工具化，避免渐变变成新的 UI 噪声。</aside>
+    </header>
+
+    <nav class="controls" aria-label="原型状态">
+      <span class="control-label">WIDTH</span>
+      <button class="active" type="button" data-width="wide">宽 · 1180</button>
+      <button type="button" data-width="compact">窄 · 640</button>
+      <span class="control-label">ROW</span>
+      <button class="active" type="button" data-row="time">时域 / 单 View</button>
+      <button type="button" data-row="analysis">热图双窗格</button>
+      <span class="tip">点任一入口可预览“打开/置前 UltraView”的状态。</span>
+    </nav>
+
+    <section class="gallery" aria-label="UltraView 入口强化方案">
+      <article class="concept is-picked" data-variant="portal">
+        <header class="concept-head">
+          <div><div class="concept-kicker">A · RECOMMENDED</div><h2>Prism Portal · 棱镜门户</h2><p>取消大胶囊外轮廓；用一个带内框的 2×2 看板口作为“门户”，渐变字标从门户中伸出。</p></div>
+          <div class="chip recommend"><i></i>建议落地</div>
+        </header>
+        <div class="viewport"><div class="app variant-portal">
+          <div class="app-head"><span class="window-title">TraceLab · A-Drive.tlproj</span><span class="status-dot"></span></div>
+          <div class="chart"><span class="chart-label">A-Drive · Steering torque</span><svg class="wave" viewBox="0 0 900 72" preserveAspectRatio="none" aria-hidden="true"><path d="M0 46 C65 2 88 70 156 33 S271 11 335 43 S425 69 486 29 S599 4 659 46 S760 70 822 25 S862 28 900 38"/><path d="M0 49 C65 18 88 64 156 36 S271 21 335 46 S425 59 486 33 S599 15 659 50 S760 62 822 31 S862 32 900 40"/></svg></div>
+          <footer class="view-rail"><div class="section-anchor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c3 0 3-6 6-6s3 12 6 12 3-6 6-6"/></svg><span class="section-word">时域</span></div><div class="tabs"><button class="view-tab"><i></i><span>View 1</span></button><button class="view-tab"><i></i><span>道路输入</span></button></div><div class="rail-actions"><button class="utility plus" aria-label="新建 View">+</button><button class="utility compare">联动缩放</button><button class="utility compare">锁定色阶</button><i class="divider"></i><button class="ultra" type="button" aria-pressed="false" title="打开 UltraView（跨 View 只读对照）"><span class="portal-frame"><span class="quad"><i></i><i></i><i></i><i></i></span></span><span class="word">UltraView</span></button></div></footer>
+          <aside class="board-peek"><div class="peek-title"><span class="quad"><i></i><i></i><i></i><i></i></span>UltraView</div><div class="peek-meta">跨 View 只读对照 · 已置前</div><div class="peek-grid"><i></i><i></i><i></i></div></aside>
+        </div></div>
+        <footer class="caption"><div><b>为什么最适合现在：</b><span>看板图标成为视觉重心，字标反而更轻；既不像普通二级按钮，也不会被误认为一个新的 Tab。</span></div><div class="verdict"><strong>推荐实施</strong><br><span>QPainter 难度：中等，全部是圆角矩形、内框和渐变字形。</span><button class="choose" type="button">选 A</button></div></footer>
+      </article>
+
+      <article class="concept" data-variant="slot">
+        <header class="concept-head">
+          <div><div class="concept-kicker">B · STRUCTURAL</div><h2>Board Slot · 面板插槽</h2><p>入口做成右侧停靠区域的一个“切角插槽”，用细彩色底线表示它属于全局对照层。</p></div>
+          <div class="chip"><i></i>更有结构感</div>
+        </header>
+        <div class="viewport"><div class="app variant-slot">
+          <div class="app-head"><span class="window-title">TraceLab · A-Drive.tlproj</span><span class="status-dot"></span></div>
+          <div class="chart"><span class="chart-label">A-Drive · Steering torque</span><svg class="wave" viewBox="0 0 900 72" preserveAspectRatio="none" aria-hidden="true"><path d="M0 46 C65 2 88 70 156 33 S271 11 335 43 S425 69 486 29 S599 4 659 46 S760 70 822 25 S862 28 900 38"/><path d="M0 49 C65 18 88 64 156 36 S271 21 335 46 S425 59 486 33 S599 15 659 50 S760 62 822 31 S862 32 900 40"/></svg></div>
+          <footer class="view-rail"><div class="section-anchor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c3 0 3-6 6-6s3 12 6 12 3-6 6-6"/></svg><span class="section-word">时域</span></div><div class="tabs"><button class="view-tab"><i></i><span>View 1</span></button><button class="view-tab"><i></i><span>道路输入</span></button></div><div class="rail-actions"><button class="utility plus" aria-label="新建 View">+</button><button class="utility compare">联动缩放</button><button class="utility compare">锁定色阶</button><i class="divider"></i><button class="ultra" type="button" aria-pressed="false" title="打开 UltraView（跨 View 只读对照）"><span class="quad"><i></i><i></i><i></i><i></i></span><span class="word">UltraView</span></button></div></footer>
+          <aside class="board-peek"><div class="peek-title"><span class="quad"><i></i><i></i><i></i><i></i></span>UltraView</div><div class="peek-meta">跨 View 只读对照 · 已置前</div><div class="peek-grid"><i></i><i></i><i></i></div></aside>
+        </div></div>
+        <footer class="caption"><div><b>它的性格：</b><span>更像仪器面板里的独立功能槽位；切角让它明显不是圆角按钮，但整条 rail 会更有“硬件感”。</span></div><div class="verdict"><strong>第二推荐</strong><br><span>适合要强化“全局工具”而非“全局看板”的方向。</span><button class="choose" type="button">选 B</button></div></footer>
+      </article>
+
+      <article class="concept" data-variant="corners">
+        <header class="concept-head">
+          <div><div class="concept-kicker">C · QUIET-ICONIC</div><h2>Corner Mark · 看板角标</h2><p>没有封闭轮廓，只用四格和两枚渐变角标定义入口。视觉最干净，但比当前略更克制。</p></div>
+          <div class="chip"><i></i>最低视觉噪声</div>
+        </header>
+        <div class="viewport"><div class="app variant-corners">
+          <div class="app-head"><span class="window-title">TraceLab · A-Drive.tlproj</span><span class="status-dot"></span></div>
+          <div class="chart"><span class="chart-label">A-Drive · Steering torque</span><svg class="wave" viewBox="0 0 900 72" preserveAspectRatio="none" aria-hidden="true"><path d="M0 46 C65 2 88 70 156 33 S271 11 335 43 S425 69 486 29 S599 4 659 46 S760 70 822 25 S862 28 900 38"/><path d="M0 49 C65 18 88 64 156 36 S271 21 335 46 S425 59 486 33 S599 15 659 50 S760 62 822 31 S862 32 900 40"/></svg></div>
+          <footer class="view-rail"><div class="section-anchor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c3 0 3-6 6-6s3 12 6 12 3-6 6-6"/></svg><span class="section-word">时域</span></div><div class="tabs"><button class="view-tab"><i></i><span>View 1</span></button><button class="view-tab"><i></i><span>道路输入</span></button></div><div class="rail-actions"><button class="utility plus" aria-label="新建 View">+</button><button class="utility compare">联动缩放</button><button class="utility compare">锁定色阶</button><i class="divider"></i><button class="ultra" type="button" aria-pressed="false" title="打开 UltraView（跨 View 只读对照）"><span class="quad"><i></i><i></i><i></i><i></i></span><span class="word">UltraView</span></button></div></footer>
+          <aside class="board-peek"><div class="peek-title"><span class="quad"><i></i><i></i><i></i><i></i></span>UltraView</div><div class="peek-meta">跨 View 只读对照 · 已置前</div><div class="peek-grid"><i></i><i></i><i></i></div></aside>
+        </div></div>
+        <footer class="caption"><div><b>它的优点：</b><span>没有任何“按钮壳”，入口像一个产品符号；与专业分析软件的工具条更协调。</span></div><div class="verdict"><strong>适合极简方向</strong><br><span>若你觉得当前仍要更突出，这个可能提升不够大。</span><button class="choose" type="button">选 C</button></div></footer>
+      </article>
+
+      <article class="concept" data-variant="beacon">
+        <header class="concept-head">
+          <div><div class="concept-kicker">D · UPPER-ENERGY LIMIT</div><h2>Aurora Beacon · 极光信标</h2><p>用细小光晕把 2×2 图标做成看板发射器。仍然轻，但这是本轮“特殊感”的上限。</p></div>
+          <div class="chip"><i></i>更醒目</div>
+        </header>
+        <div class="viewport"><div class="app variant-beacon">
+          <div class="app-head"><span class="window-title">TraceLab · A-Drive.tlproj</span><span class="status-dot"></span></div>
+          <div class="chart"><span class="chart-label">A-Drive · Steering torque</span><svg class="wave" viewBox="0 0 900 72" preserveAspectRatio="none" aria-hidden="true"><path d="M0 46 C65 2 88 70 156 33 S271 11 335 43 S425 69 486 29 S599 4 659 46 S760 70 822 25 S862 28 900 38"/><path d="M0 49 C65 18 88 64 156 36 S271 21 335 46 S425 59 486 33 S599 15 659 50 S760 62 822 31 S862 32 900 40"/></svg></div>
+          <footer class="view-rail"><div class="section-anchor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c3 0 3-6 6-6s3 12 6 12 3-6 6-6"/></svg><span class="section-word">时域</span></div><div class="tabs"><button class="view-tab"><i></i><span>View 1</span></button><button class="view-tab"><i></i><span>道路输入</span></button></div><div class="rail-actions"><button class="utility plus" aria-label="新建 View">+</button><button class="utility compare">联动缩放</button><button class="utility compare">锁定色阶</button><i class="divider"></i><button class="ultra" type="button" aria-pressed="false" title="打开 UltraView（跨 View 只读对照）"><span class="quad"><i></i><i></i><i></i><i></i></span><span class="word">UltraView</span></button></div></footer>
+          <aside class="board-peek"><div class="peek-title"><span class="quad"><i></i><i></i><i></i><i></i></span>UltraView</div><div class="peek-meta">跨 View 只读对照 · 已置前</div><div class="peek-grid"><i></i><i></i><i></i></div></aside>
+        </div></div>
+        <footer class="caption"><div><b>它的边界：</b><span>确实最有记忆点，但已经接近“产品品牌按钮”。若要坚持工程软件的冷静感，我不会再往上加发光、数值 badge 或动画。</span></div><div class="verdict warn"><strong>仅作上限参考</strong><br><span>适合你确认要比 A 更显眼时，再选这个方向。</span><button class="choose" type="button">选 D</button></div></footer>
+      </article>
+    </section>
+
+    <section class="notes">
+      <article><h2>我推荐 A 的原因</h2><p>“Portal”把特殊性集中在 2×2 看板口：这里是从单个 View 进入全局对照的门，而不是另一个颜色不同的普通按钮。</p></article>
+      <article><h2>不会侵蚀现有合同</h2><p>四种都保留右端 Dock、28px rail、高密度操作区和窄态图标退化；比较 / 取消组合出现时，入口不移动。</p></article>
+      <article><h2>刻意没有加的东西</h2><p>没有卡片数 badge、常驻弹窗、持续动效或大面积渐变底色。它们会把全局“查看”误导成待处理通知。</p></article>
+    </section>
+  </main>
+
+  <script>
+    const root = document.documentElement;
+    const setButtons = (selector, active) => document.querySelectorAll(selector).forEach((item) => item.classList.toggle('active', item === active));
+
+    document.querySelectorAll('[data-width]').forEach((button) => {
+      button.addEventListener('click', () => {
+        root.classList.toggle('compact', button.dataset.width === 'compact');
+        setButtons('[data-width]', button);
+      });
+    });
+    document.querySelectorAll('[data-row]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.app').forEach((app) => app.classList.toggle('is-analysis', button.dataset.row === 'analysis'));
+        setButtons('[data-row]', button);
+      });
+    });
+    document.querySelectorAll('.ultra').forEach((button) => {
+      button.addEventListener('click', () => {
+        const app = button.closest('.app');
+        const willOpen = !app.classList.contains('open');
+        document.querySelectorAll('.app').forEach((other) => {
+          other.classList.remove('open');
+          other.querySelector('.ultra').setAttribute('aria-pressed', 'false');
+        });
+        app.classList.toggle('open', willOpen);
+        button.setAttribute('aria-pressed', String(willOpen));
+      });
+    });
+    document.querySelectorAll('.choose').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.concept').forEach((card) => card.classList.remove('is-picked'));
+        button.closest('.concept').classList.add('is-picked');
+      });
+    });
+  </script>
+</body>
+</html>
