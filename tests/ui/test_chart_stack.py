@@ -293,9 +293,71 @@ def test_fft_card_exposes_the_same_frequency_cursor_options(qapp, qtbot):
     assert canvas.cursor_mode() == "dual"
     assert "Δf=" in cs._pill.primary_text()
     assert "background-color:#e8f1ff" in cs._pill.primary_text()
-    assert "ΔY：Acceleration=" in cs._pill._detail.text()
-    assert "background-color:#e8f1ff" in cs._pill._detail.text()
+    assert cs._pill._frequency_dual_rows
+    full_detail = cs._pill._detail.text()
+    assert "Acceleration" in full_detail
+    assert ">A</td>" in full_detail
+    assert ">B</td>" in full_detail
+    assert "△" in full_detail
     assert cs._pill.has_detail()
+    full_right = cs._pill.x() + cs._pill.width()
+    full_height = cs._pill.height()
+
+    cs._pill._toggle_mode()
+    mini_detail = cs._pill._detail.text()
+    assert mini_detail != full_detail
+    assert ">A</td>" not in mini_detail
+    assert ">B</td>" not in mini_detail
+    assert cs._pill.height() < full_height
+    assert abs((cs._pill.x() + cs._pill.width()) - full_right) <= 1
+    cs._pill._toggle_mode()
+    assert cs._pill._detail.text() == full_detail
+    assert abs((cs._pill.x() + cs._pill.width()) - full_right) <= 1
+
+
+def test_fft_single_cursor_uses_the_time_style_expandable_channel_panel(
+    qapp, qtbot,
+):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(1000, 700)
+    cs.show()
+    cs.set_mode("fft")
+    canvas = cs.canvas_fft
+    canvas.plot_spectra(
+        [
+            {
+                "freq": np.array([1.0, 10.0, 100.0]),
+                "amp": np.array([2.0, 3.0, 4.0]),
+                "label": "MOTOR Y",
+                "color": "#2563eb",
+                "time": np.array([0.0, 1.0]),
+                "signal": np.array([0.0, 1.0]),
+            },
+            {
+                "freq": np.array([1.0, 10.0, 100.0]),
+                "amp": np.array([1.0, 1.5, 2.0]),
+                "label": "MOTOR X",
+                "color": "#dc2626",
+                "time": np.array([0.0, 1.0]),
+                "signal": np.array([0.0, 1.0]),
+            },
+        ],
+        xlim=(0.0, 100.0), amp_label="Amplitude", title="FFT",
+    )
+    cs._fft_card._cursor_buttons["single"].click()
+    canvas.set_cursor_frequency(100.0)
+    qapp.processEvents()
+
+    assert cs._pill.primary_text().startswith('<span style="color:#111827;">f=')
+    full_detail = cs._pill._detail.text()
+    assert "MOTOR Y" in full_detail
+    assert "MOTOR X" in full_detail
+    cs._pill._toggle_mode()
+    assert "MOTOR Y" not in cs._pill._detail.text()
+    assert "MOTOR X" not in cs._pill._detail.text()
+    cs._pill._toggle_mode()
+    assert cs._pill._detail.text() == full_detail
 
 
 def test_frequency_cursor_controls_are_trailing_aligned_like_time(qapp, qtbot):

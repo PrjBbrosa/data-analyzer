@@ -340,6 +340,10 @@ class ChartStack(QWidget):
             canvas.dual_cursor_info.connect(
                 lambda text, c=canvas: self._on_dual_cursor_info(text, c)
             )
+        if canvas is not None and hasattr(canvas, 'frequency_cursor_rows'):
+            canvas.frequency_cursor_rows.connect(
+                lambda rows, c=canvas: self._on_frequency_cursor_rows(rows, c)
+            )
 
     def _all_cards(self):
         cards = [self._time_card]
@@ -1358,6 +1362,23 @@ class ChartStack(QWidget):
         def update():
             pill.set_dual_rows(rows)
             if self.current_mode() == 'time' and (rows or pill.primary_text()):
+                pill.setVisible(True)
+
+        self._update_pill_content(pill, card, update)
+
+    def _on_frequency_cursor_rows(self, rows, source=None):
+        """Render FFT A/B values through the pill's reversible row contract."""
+        if source is not None:
+            self._active_cursor_card = self._card_for_canvas(source)
+        pill = self._pill_for_canvas(source)
+        card = self._card_for_canvas(source)
+
+        def update():
+            pill.set_frequency_dual_rows(rows)
+            if (
+                self._cursor_pill_visible_for_mode(self.current_mode(), source)
+                and (rows or pill.primary_text())
+            ):
                 pill.setVisible(True)
 
         self._update_pill_content(pill, card, update)

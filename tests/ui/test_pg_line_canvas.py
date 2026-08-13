@@ -1859,6 +1859,51 @@ def test_readout_text_no_delta_for_single_curve(canvas):
     assert 'Δ' not in text
 
 
+def test_frequency_single_cursor_uses_time_pill_readout_contract(canvas):
+    e1, e2 = _entry('a', '#2563eb'), _entry('b', '#dc2626')
+    e2 = dict(e2, amp=e2['amp'] * 0.5, signal=e2['signal'] * 0.5)
+    canvas.plot_spectra(
+        [e1, e2], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    received = []
+    canvas.cursor_info.connect(received.append)
+
+    canvas.set_cursor_mode('single')
+    canvas.set_cursor_frequency(120.0)
+
+    assert received[-1].startswith('<span style="color:#111827;">f=')
+    assert received[-1].count('│') == 2
+    assert 'a=<b>' in received[-1]
+    assert 'b=<b>' in received[-1]
+    assert '#2563eb' in received[-1]
+    assert '#dc2626' in received[-1]
+
+
+def test_frequency_dual_cursor_emits_reversible_a_b_delta_rows(canvas):
+    e1, e2 = _entry('a', '#2563eb'), _entry('b', '#dc2626')
+    e2 = dict(e2, amp=e2['amp'] * 0.5, signal=e2['signal'] * 0.5)
+    canvas.plot_spectra(
+        [e1, e2], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    received = []
+    canvas.frequency_cursor_rows.connect(received.append)
+
+    canvas.set_cursor_mode('dual')
+    canvas.set_dual_cursor_frequencies(100.0, 200.0)
+
+    assert len(received[-1]) == 2
+    label, a_value, b_value, delta, unit, color = received[-1][1]
+    assert label == 'b'
+    assert b_value - a_value == pytest.approx(delta)
+    assert unit == ''
+    assert color == '#dc2626'
+
+    canvas.set_dual_cursor_frequencies(100.0, None)
+    assert received[-1] == []
+
+
 def test_format_readout_empty_when_no_entries(canvas):
     assert canvas.format_readout(120.0) == ""
 

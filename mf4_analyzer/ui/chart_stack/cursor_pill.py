@@ -44,6 +44,66 @@ _CURSOR_PREFIX_COLORS = {"#64748b"}
 _MINI_VALUE_FONT = "font-family:'SF Mono',Menlo,Consolas,monospace;"
 
 
+def _frequency_cursor_label(label):
+    """Keep the compact frequency table channel-first in mini mode."""
+    text = str(label or '').strip()
+    if text.startswith('[') and ']' in text:
+        text = text.split(']', 1)[-1].strip()
+    if ' · ' in text:
+        text = text.rsplit(' · ', 1)[-1].strip()
+    return text or '曲线'
+
+
+def _format_frequency_dual_html(rows):
+    """Full FFT A/B readout: one compact table block per spectrum curve."""
+    parts = ['<table cellspacing="0" cellpadding="0" '
+             'style="font-size:11px; color:#111827;">']
+    for index, row in enumerate(rows):
+        label, a_value, b_value, delta, unit, color = row[:6]
+        top_pad = '7px' if index else '0'
+        name = escape(str(label or '曲线'))
+        unit_html = escape(str(unit or ''))
+        cell = (f'padding:1px 8px 1px 0; color:{color}; font-family:'
+                "'SF Mono',Menlo,Consolas,monospace;")
+        label_cell = 'padding:1px 4px 1px 0; color:#94a3b8;'
+        parts.append(
+            f'<tr><td colspan="6" style="padding-top:{top_pad}; '
+            f'padding-bottom:2px;"><b style="color:{color};">{name}</b></td></tr>'
+            '<tr>'
+            f'<td style="{label_cell}">A</td>'
+            f'<td style="{cell}" align="right">{a_value:.4g}{unit_html}</td>'
+            f'<td style="{label_cell}; padding-left:8px;">B</td>'
+            f'<td style="{cell}" align="right">{b_value:.4g}{unit_html}</td>'
+            f'<td style="{label_cell}; padding-left:8px;">△</td>'
+            f'<td style="{cell} font-weight:700;" align="right">'
+            f'{delta:+.4g}{unit_html}</td>'
+            '</tr>'
+        )
+    parts.append('</table>')
+    return ''.join(parts)
+
+
+def _format_frequency_mini_html(rows):
+    """Collapsed FFT A/B readout: channel identity plus the useful delta."""
+    parts = ['<table cellspacing="0" cellpadding="0" style="font-size:11px;">']
+    for index, row in enumerate(rows):
+        label, _a_value, _b_value, delta, unit, color = row[:6]
+        top_pad = '5px' if index else '0'
+        name = escape(_frequency_cursor_label(label))
+        unit_html = escape(str(unit or ''))
+        parts.append(
+            '<tr>'
+            f'<td style="padding-top:{top_pad};"><span style="color:{color};">●</span></td>'
+            f'<td style="padding-left:4px; color:{color}; font-weight:600; '
+            f'padding-top:{top_pad};">{name}</td>'
+            f'<td style="padding-left:8px; color:{color}; {_MINI_VALUE_FONT} '
+            f'font-weight:700; padding-top:{top_pad};">△&nbsp;{delta:+.4g}{unit_html}</td>'
+            '</tr>'
+        )
+    parts.append('</table>')
+    return ''.join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Readout formatting (pure text — no Qt)
 # ---------------------------------------------------------------------------
@@ -210,6 +270,7 @@ class CursorPill(QFrame):
         self._user_placed = False
         self._mode = "full"
         self._dual_rows = []
+        self._frequency_dual_rows = []
         self._single_full_detail = ""
         self._single_mini_detail = ""
         self._single_tooltip = ""
@@ -261,6 +322,7 @@ class CursorPill(QFrame):
 
     def set_detail_html(self, html):
         self._dual_rows = []
+        self._frequency_dual_rows = []
         self._single_full_detail = ""
         self._single_mini_detail = ""
         self._single_tooltip = ""
@@ -276,6 +338,7 @@ class CursorPill(QFrame):
 
     def set_single_detail_html(self, full_html, mini_html, tooltip=""):
         self._dual_rows = []
+        self._frequency_dual_rows = []
         self._single_full_detail = full_html or ""
         self._single_mini_detail = mini_html or ""
         self._single_tooltip = tooltip or ""
@@ -290,6 +353,7 @@ class CursorPill(QFrame):
             "detail_tooltip": self._detail.toolTip(),
             "mode": self._mode,
             "dual_rows": list(self._dual_rows),
+            "frequency_dual_rows": list(self._frequency_dual_rows),
             "single_full_detail": self._single_full_detail,
             "single_mini_detail": self._single_mini_detail,
             "single_tooltip": self._single_tooltip,
@@ -301,11 +365,18 @@ class CursorPill(QFrame):
             self._mode = "full"
         self._primary.setText(snapshot.get("primary") or "")
         self._dual_rows = list(snapshot.get("dual_rows") or [])
+        self._frequency_dual_rows = list(
+            snapshot.get("frequency_dual_rows") or []
+        )
         self._single_full_detail = snapshot.get("single_full_detail") or ""
         self._single_mini_detail = snapshot.get("single_mini_detail") or ""
         self._single_tooltip = snapshot.get("single_tooltip") or ""
         self._update_toggle_button()
-        if self._dual_rows or self._single_full_detail:
+        if (
+            self._dual_rows
+            or self._frequency_dual_rows
+            or self._single_full_detail
+        ):
             self._refresh_detail()
         else:
             detail = snapshot.get("detail") if snapshot.get("detail_visible") else ""
@@ -328,6 +399,7 @@ class CursorPill(QFrame):
         self._detail.setToolTip("")
         self._detail.setVisible(False)
         self._dual_rows = []
+        self._frequency_dual_rows = []
         self._single_full_detail = ""
         self._single_mini_detail = ""
         self._single_tooltip = ""
@@ -407,11 +479,24 @@ class CursorPill(QFrame):
 
     def set_dual_rows(self, rows):
         self._dual_rows = rows or []
+        self._frequency_dual_rows = []
         self._single_full_detail = ""
         self._single_mini_detail = ""
         self._single_tooltip = ""
         self._refresh_detail()
         if self._dual_rows:
+            self._detail.setVisible(True)
+        self.adjustSize()
+
+    def set_frequency_dual_rows(self, rows):
+        """Set structured FFT A/B rows for full/mini cursor-pill toggling."""
+        self._frequency_dual_rows = rows or []
+        self._dual_rows = []
+        self._single_full_detail = ""
+        self._single_mini_detail = ""
+        self._single_tooltip = ""
+        self._refresh_detail()
+        if self._frequency_dual_rows:
             self._detail.setVisible(True)
         self.adjustSize()
 
@@ -422,6 +507,13 @@ class CursorPill(QFrame):
                 _format_dual_html(self._dual_rows)
                 if self._mode == "full"
                 else _format_mini_html(self._dual_rows)
+            )
+            tooltip = ""
+        elif self._frequency_dual_rows:
+            html = (
+                _format_frequency_dual_html(self._frequency_dual_rows)
+                if self._mode == "full"
+                else _format_frequency_mini_html(self._frequency_dual_rows)
             )
             tooltip = ""
         elif self._single_full_detail:

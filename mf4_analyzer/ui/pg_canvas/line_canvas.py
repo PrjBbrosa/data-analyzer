@@ -82,6 +82,7 @@ logger = logging.getLogger(__name__)
 _DUAL_CURSOR_DELTA_STYLE = (
     "color:#0b7af3; background-color:#e8f1ff; font-weight:700;"
 )
+_CURSOR_HTML_SEP = '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
 
 
 # Fallback envelope bucket count used when the time-preview plot area has no
@@ -186,6 +187,11 @@ class _HistoryHandle:
 class PgLineCanvas(_StackedSplitMixin, QWidget):
     cursor_info = pyqtSignal(str)
     dual_cursor_info = pyqtSignal(str)
+    # Frequency-domain counterpart of TimeDomainCanvasPG.dual_cursor_rows.
+    # It carries (label, A, B, B-minus-A, unit, color) rows so CursorPill can
+    # switch between its full A/B table and a compact delta view without
+    # attempting to reconstruct data from already-rendered HTML.
+    frequency_cursor_rows = pyqtSignal(object)
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
     time_preview_range_changed = pyqtSignal(float, float)
@@ -2236,6 +2242,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._next_dual_cursor = "a"
         self.cursor_info.emit("")
         self.dual_cursor_info.emit("")
+        self.frequency_cursor_rows.emit([])
 
     def cursor_mode(self) -> str:
         return self._cursor_mode
@@ -2256,9 +2263,40 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self.cursor_info.emit("")
             return ""
         self._show_frequency_cursor_lines(self._cursor_lines, snapped)
-        text = self.format_readout(snapped)
-        self.cursor_info.emit(text)
-        return text
+        # Keep the public return value's legacy plain-text contract.  Only
+        # the UI signal needs the separator-rich payload that CursorPill uses
+        # to build its time-style vertical detail rows.
+        readout = self.format_readout(snapped)
+        self.cursor_info.emit(self._format_single_cursor_readout(snapped))
+        return readout
+
+    def _format_single_cursor_readout(self, freq: float) -> str:
+        """Format a FFT hover through the same rich-text contract as time.
+
+        The canvas deliberately keeps :meth:`format_readout` as its plain
+        programmatic/textual readout API.  The interactive pill instead gets
+        the separator-joined form used by TimeDomainCanvasPG, so it can show a
+        short frequency header plus a readable vertical channel list and can
+        safely switch to values-only mode.
+        """
+        rows = self.readout_at(freq)
+        if not rows:
+            return ""
+        base_amp = rows[0][2]
+        parts = [
+            f'<span style="color:#111827;">f={rows[0][1]:.2f} Hz</span>'
+        ]
+        for index, ((label, _snapped, amp), entry) in enumerate(
+            zip(rows, self._entries)
+        ):
+            color = escape(str(entry.get('color', '#2563eb')))
+            value = f'{amp:.4g}'
+            delta = '' if index == 0 else f'  Δ{amp - base_amp:+.4g}'
+            parts.append(
+                f'<span style="color:{color};">{escape(str(label))}='
+                f'<b>{value}{delta}</b></span>'
+            )
+        return _CURSOR_HTML_SEP.join(parts)
 
     def set_dual_cursor_frequencies(self, a_frequency, b_frequency) -> str:
         a_value = self._nearest_frequency(a_frequency)
@@ -2274,6 +2312,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             primary = f"A: f={a_value:g} Hz | 点击 B 选择第二点"
             self.cursor_info.emit(primary)
             self.dual_cursor_info.emit("")
+            self.frequency_cursor_rows.emit([])
             return primary
         b_value = self._nearest_frequency(b_frequency)
         if b_value is None:
@@ -2287,7 +2326,43 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         )
         self.cursor_info.emit(primary)
         self.dual_cursor_info.emit(self._format_dual_cursor_detail(a_value, b_value))
+        self.frequency_cursor_rows.emit(
+            self._frequency_cursor_rows(a_value, b_value)
+        )
         return primary
+
+    def _frequency_cursor_rows(
+        self, a_value: float, b_value: float,
+    ) -> list[tuple[str, float, float, float, str, str]]:
+        """Return per-curve A/B/delta values for the shared cursor pill.
+
+        ``dual_cursor_info`` remains the textual compatibility signal, but
+        the pill must receive values as data.  Parsing its own rich text was
+        why the FFT pill could collapse once and then lose the detail needed
+        to expand again.
+        """
+        rows = []
+        for entry in self._entries:
+            freq = np.asarray(entry.get('freq', ()), dtype=float)
+            amp = np.asarray(entry.get('amp', ()), dtype=float)
+            count = min(freq.size, amp.size)
+            if count <= 0:
+                continue
+            freq = freq[:count]
+            amp = amp[:count]
+            a_index = int(np.argmin(np.abs(freq - a_value)))
+            b_index = int(np.argmin(np.abs(freq - b_value)))
+            a_amp = float(amp[a_index])
+            b_amp = float(amp[b_index])
+            rows.append((
+                str(entry.get('legend_label', entry.get('label', ''))),
+                a_amp,
+                b_amp,
+                b_amp - a_amp,
+                '',
+                str(entry.get('color', '#2563eb')),
+            ))
+        return rows
 
     def _format_dual_cursor_detail(self, a_value: float, b_value: float) -> str:
         """Keep A/B values while surfacing every B-minus-A spectrum delta."""
