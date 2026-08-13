@@ -237,6 +237,34 @@ class Icons:
         return _line_icon(draw, GRAY)
 
     @classmethod
+    def expand_focus(cls, color=None):
+        """Four corner brackets for UltraView temporary-focus / expand."""
+        stroke = color or BLUE
+
+        def draw(p, size):
+            p.setPen(_pen(stroke, 2.05))
+            pad = size * 0.16
+            arm = size * 0.32
+            corners = (
+                (pad, pad, pad + arm, pad, pad, pad + arm),
+                (size - pad, pad, size - pad - arm, pad, size - pad, pad + arm),
+                (pad, size - pad, pad + arm, size - pad, pad, size - pad - arm),
+                (
+                    size - pad,
+                    size - pad,
+                    size - pad - arm,
+                    size - pad,
+                    size - pad,
+                    size - pad - arm,
+                ),
+            )
+            for x, y, x_h, y_h, x_v, y_v in corners:
+                p.drawLine(QPointF(x, y), QPointF(x_h, y_h))
+                p.drawLine(QPointF(x, y), QPointF(x_v, y_v))
+
+        return _line_edit_action_icon(draw, logical=16, color=stroke)
+
+    @classmethod
     def batch(cls):
         """Task-queue glyph for batch processing."""
         with _painting() as (pix, p):

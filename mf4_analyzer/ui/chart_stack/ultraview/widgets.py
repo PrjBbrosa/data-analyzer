@@ -52,6 +52,7 @@ from mf4_analyzer.ui.ultraview_state import (
     parse_ref_payload,
     section_search_haystack,
 )
+from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 
 from .layouts import (
@@ -61,6 +62,7 @@ from .layouts import (
     MIN_CARD_CHROME_HEIGHT,
     slot_rects,
 )
+from .._helpers import ULTRAVIEW_HINT_BAR_HEIGHT
 
 LAYOUT_LABELS_ZH = {
     "split_horizontal": "左右双图",
@@ -291,10 +293,12 @@ class UltraViewHintBar(QFrame):
         super().__init__(parent)
         self.setObjectName("chartHintBar")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedHeight(22)
+        self.setFixedHeight(ULTRAVIEW_HINT_BAR_HEIGHT)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(0)
+        # Equal 3px vertical padding keeps a 22px inner slot so the styled
+        # ``?`` and 11px copy stay centered and unclipped in a 28px strip.
+        layout.setContentsMargins(10, 3, 8, 3)
+        layout.setSpacing(4)
         self._quickref = QToolButton(self)
         self._quickref.setObjectName("chartHintQuickrefButton")
         self._quickref.setText("?")
@@ -306,18 +310,21 @@ class UltraViewHintBar(QFrame):
         self._context = QLabel("拖到空槽添加 · 拖到卡片替换 · 双击临时放大", self)
         self._context.setObjectName("chartHintContext")
         self._context.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._context.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self._context.setMaximumHeight(ULTRAVIEW_HINT_BAR_HEIGHT - 4)
         self._discovery = QLabel("UltraView 不计算", self)
         self._discovery.setObjectName("chartHintDiscovery")
         self._discovery.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._discovery.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self._discovery.setMaximumHeight(ULTRAVIEW_HINT_BAR_HEIGHT - 4)
         layout.addWidget(self._quickref, 0, Qt.AlignVCenter)
-        layout.addWidget(self._context, 1)
-        layout.addWidget(self._discovery, 0)
+        layout.addWidget(self._context, 1, Qt.AlignVCenter)
+        layout.addWidget(self._discovery, 0, Qt.AlignVCenter)
 
 
 class BoardToolbar(QFrame):
     layout_changed = pyqtSignal(str)
     ratio_nudge_requested = pyqtSignal(int)
-    add_clicked = pyqtSignal()
     copy_board_requested = pyqtSignal()
     export_png_requested = pyqtSignal(int)
     show_titles_toggled = pyqtSignal(bool)
@@ -348,24 +355,6 @@ class BoardToolbar(QFrame):
             self._layout_combo.addItem(LAYOUT_LABELS_ZH[layout_id], layout_id)
         self._layout_combo.currentIndexChanged.connect(self._on_layout_index)
         layout.addWidget(self._layout_combo, 0)
-
-        self._ratio_down = QToolButton(self)
-        self._ratio_down.setObjectName("ultraViewRatioDown")
-        self._ratio_down.setText("−")
-        self._ratio_down.setToolTip("主图比例 −5%")
-        self._ratio_down.clicked.connect(self._on_ratio_down)
-        self._ratio_up = QToolButton(self)
-        self._ratio_up.setObjectName("ultraViewRatioUp")
-        self._ratio_up.setText("+")
-        self._ratio_up.setToolTip("主图比例 +5%")
-        self._ratio_up.clicked.connect(self._on_ratio_up)
-        layout.addWidget(self._ratio_down, 0)
-        layout.addWidget(self._ratio_up, 0)
-
-        self._add = QPushButton("添加 View", self)
-        self._add.setObjectName("ultraViewAddButton")
-        self._add.clicked.connect(self.add_clicked)
-        layout.addWidget(self._add, 0)
 
         self._copy = QPushButton("复制整板图", self)
         self._copy.setObjectName("ultraViewCopyBoardButton")
@@ -432,9 +421,6 @@ class BoardToolbar(QFrame):
         blocked = self._layout_combo.blockSignals(True)
         self._layout_combo.setCurrentIndex(index)
         self._layout_combo.blockSignals(blocked)
-        hero = layout_id in {"hero_left_4", "hero_top_4"}
-        self._ratio_down.setVisible(hero)
-        self._ratio_up.setVisible(hero)
 
     def set_presentation_checked(self, on: bool) -> None:
         blocked = self._presentation.blockSignals(True)
@@ -453,9 +439,6 @@ class BoardToolbar(QFrame):
     def set_edit_visible(self, visible: bool) -> None:
         for widget in (
             self._layout_combo,
-            self._ratio_down,
-            self._ratio_up,
-            self._add,
             self._copy,
             self._export,
             self._display,
@@ -466,12 +449,6 @@ class BoardToolbar(QFrame):
         layout_id = self._layout_combo.itemData(index)
         if isinstance(layout_id, str) and layout_id:
             self.layout_changed.emit(layout_id)
-
-    def _on_ratio_down(self) -> None:
-        self.ratio_nudge_requested.emit(-1)
-
-    def _on_ratio_up(self) -> None:
-        self.ratio_nudge_requested.emit(1)
 
     def _on_export_1x(self, _checked: bool = False) -> None:
         self.export_png_requested.emit(1)
@@ -537,6 +514,7 @@ class CompareRail(QFrame):
 
 class LibraryRowWidget(QFrame):
     add_requested = pyqtSignal(str, str)
+    remove_requested = pyqtSignal(str, str)
     locate_requested = pyqtSignal(str, str)
     selected = pyqtSignal(str, str)
     drag_started = pyqtSignal(str)
@@ -568,8 +546,11 @@ class LibraryRowWidget(QFrame):
         layout.addLayout(copy, 1)
         self._add = QToolButton(self)
         self._add.setObjectName("ultraViewLibraryAdd")
+        self._add.setAutoRaise(False)
+        self._add.setFixedSize(18, 18)
+        self._add.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self._add.clicked.connect(self._on_add)
-        layout.addWidget(self._add, 0)
+        layout.addWidget(self._add, 0, Qt.AlignVCenter)
         self.set_row(row)
 
     def row(self) -> LibraryRow:
@@ -580,8 +561,10 @@ class LibraryRowWidget(QFrame):
         self._dot.set_color(row.tab_color)
         self._name.set_full_text(row.name or row.view_id)
         self._meta.set_full_text(row.source_summary)
-        self._add.setText("✓" if row.on_board else "+")
-        self._add.setToolTip("定位已在总览中的 View" if row.on_board else "添加到总览")
+        self._add.setText("−" if row.on_board else "+")
+        self._add.setToolTip("从 Board 移除" if row.on_board else "添加到 Board")
+        self._add.setProperty("action", "remove" if row.on_board else "add")
+        _repolish(self._add)
         _set_flag(self, "onBoard", row.on_board)
         self.setToolTip(
             _full_tooltip(row.name or row.view_id, row.section, row.source_summary, row.status)
@@ -596,7 +579,7 @@ class LibraryRowWidget(QFrame):
     def _on_add(self) -> None:
         row = self._row
         if row.on_board:
-            self.locate_requested.emit(row.section, row.view_id)
+            self.remove_requested.emit(row.section, row.view_id)
             return
         self.add_requested.emit(row.section, row.view_id)
 
@@ -628,8 +611,49 @@ class LibraryRowWidget(QFrame):
         super().mouseReleaseEvent(event)
 
 
+class _LibrarySectionHeader(QToolButton):
+    """Chevron + label that toggles one View-library SOURCE_SECTIONS group."""
+
+    toggled_section = pyqtSignal(str, bool)
+
+    def __init__(
+        self,
+        section: str,
+        count: int,
+        expanded: bool,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("ultraViewLibrarySectionHead")
+        self.setProperty("section", section)
+        self._section = section
+        self.setCheckable(True)
+        self.setAutoRaise(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMaximumHeight(24)
+        self.setText(f"{SECTION_LABELS_ZH.get(section, section)}  {count}")
+        blocked = self.blockSignals(True)
+        self.setChecked(expanded)
+        self.blockSignals(blocked)
+        self._sync_arrow(expanded)
+        self.toggled.connect(self._on_toggled)
+
+    def section(self) -> str:
+        return self._section
+
+    def _on_toggled(self, checked: bool) -> None:
+        self._sync_arrow(checked)
+        self.toggled_section.emit(self._section, checked)
+
+    def _sync_arrow(self, expanded: bool) -> None:
+        self.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+
+
 class ViewLibraryPanel(QFrame):
     add_requested = pyqtSignal(str, str)
+    remove_requested = pyqtSignal(str, str)
     locate_requested = pyqtSignal(str, str)
     drag_started = pyqtSignal(str)
     drag_finished = pyqtSignal()
@@ -644,6 +668,8 @@ class ViewLibraryPanel(QFrame):
         self._selected: tuple[str, str] | None = None
         self._row_widgets: list[LibraryRowWidget] = []
         self._section_frames: dict[str, QFrame] = {}
+        self._section_headers: dict[str, _LibrarySectionHeader] = {}
+        self._expanded: dict[str, bool] = {section: True for section in SOURCE_SECTIONS}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -698,6 +724,12 @@ class ViewLibraryPanel(QFrame):
     def section_widgets(self) -> dict[str, QFrame]:
         return dict(self._section_frames)
 
+    def section_headers(self) -> dict[str, QToolButton]:
+        return dict(self._section_headers)
+
+    def is_section_expanded(self, section: str) -> bool:
+        return bool(self._expanded.get(section, True))
+
     def row_widgets(self) -> list[LibraryRowWidget]:
         return list(self._row_widgets)
 
@@ -743,11 +775,17 @@ class ViewLibraryPanel(QFrame):
                 widget.deleteLater()
         self._row_widgets = []
         self._section_frames = {}
+        self._section_headers = {}
         visible = self.visible_rows()
         by_section: dict[str, list[LibraryRow]] = {section: [] for section in SOURCE_SECTIONS}
         for row in visible:
             if row.section in by_section:
                 by_section[row.section].append(row)
+        query = self._search.text().strip()
+        if query:
+            for section, rows in by_section.items():
+                if rows:
+                    self._expanded[section] = True
         for section in SOURCE_SECTIONS:
             frame = QFrame(self._body)
             frame.setObjectName("ultraViewLibrarySection")
@@ -755,26 +793,33 @@ class ViewLibraryPanel(QFrame):
             section_layout = QVBoxLayout(frame)
             section_layout.setContentsMargins(0, 0, 0, 0)
             section_layout.setSpacing(2)
-            header = QLabel(
-                f"{SECTION_LABELS_ZH[section]}  {len(by_section[section])}",
-                frame,
-            )
-            header.setObjectName("ultraViewLibrarySectionHead")
+            expanded = self._expanded.get(section, True)
+            header = _LibrarySectionHeader(section, len(by_section[section]), expanded, frame)
+            header.toggled_section.connect(self._on_section_toggled)
             section_layout.addWidget(header)
+            self._section_headers[section] = header
             for row in by_section[section]:
                 row_widget = LibraryRowWidget(row, frame)
                 row_widget.add_requested.connect(self.add_requested)
+                row_widget.remove_requested.connect(self.remove_requested)
                 row_widget.locate_requested.connect(self.locate_requested)
                 row_widget.selected.connect(self._on_row_selected)
                 row_widget.drag_started.connect(self.drag_started)
                 row_widget.drag_finished.connect(self.drag_finished)
                 if self._selected == (row.section, row.view_id):
                     row_widget.set_selected(True)
+                row_widget.setVisible(expanded)
                 section_layout.addWidget(row_widget)
                 self._row_widgets.append(row_widget)
             self._section_frames[section] = frame
             self._body_layout.addWidget(frame)
         self._body_layout.addStretch(1)
+
+    def _on_section_toggled(self, section: str, expanded: bool) -> None:
+        self._expanded[section] = bool(expanded)
+        for widget in self._row_widgets:
+            if widget.row().section == section:
+                widget.setVisible(bool(expanded))
 
     def _on_row_selected(self, section: str, view_id: str) -> None:
         self.set_selected(section, view_id)
@@ -817,12 +862,23 @@ class EmptySlotWidget(QFrame):
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if _accept_ultraview_drag(event):
+            _set_flag(self, "dropActive", True)
             self.drag_entered.emit()
+            return
+        _set_flag(self, "dropActive", False)
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802
-        _accept_ultraview_drag(event)
+        if _accept_ultraview_drag(event):
+            _set_flag(self, "dropActive", True)
+            return
+        _set_flag(self, "dropActive", False)
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        _set_flag(self, "dropActive", False)
+        event.accept()
 
     def dropEvent(self, event) -> None:  # noqa: N802
+        _set_flag(self, "dropActive", False)
         extracted = extract_ref_strings(event.mimeData())
         event.acceptProposedAction()
         if extracted is None:
@@ -863,7 +919,7 @@ class UltraViewCard(QFrame):
         self._header.setObjectName("ultraViewCardHeader")
         self._header.setFixedHeight(CARD_HEADER_HEIGHT)
         header = QHBoxLayout(self._header)
-        header.setContentsMargins(8, 4, 6, 4)
+        header.setContentsMargins(8, 5, 10, 5)
         header.setSpacing(6)
         self._dot = _ColorDot(self._header)
         header.addWidget(self._dot, 0)
@@ -874,10 +930,15 @@ class UltraViewCard(QFrame):
         header.addWidget(self._status, 0)
         self._focus_btn = QToolButton(self._header)
         self._focus_btn.setObjectName("ultraViewCardFocusButton")
-        self._focus_btn.setText("⛶")
+        self._focus_btn.setIcon(Icons.expand_focus())
+        self._focus_btn.setIconSize(QSize(16, 16))
         self._focus_btn.setToolTip("临时放大")
+        self._focus_btn.setCursor(Qt.PointingHandCursor)
+        self._focus_btn.setAutoRaise(False)
+        self._focus_btn.setFixedSize(24, 24)
+        self._focus_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
         self._focus_btn.clicked.connect(self._emit_focus)
-        header.addWidget(self._focus_btn, 0)
+        header.addWidget(self._focus_btn, 0, Qt.AlignVCenter)
         root.addWidget(self._header, 0)
 
         self._image = QLabel(self)
@@ -1135,12 +1196,23 @@ class UltraViewCard(QFrame):
         super().keyPressEvent(event)
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
-        _accept_ultraview_drag(event)
+        if _accept_ultraview_drag(event):
+            _set_flag(self, "dropActive", True)
+            return
+        _set_flag(self, "dropActive", False)
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802
-        _accept_ultraview_drag(event)
+        if _accept_ultraview_drag(event):
+            _set_flag(self, "dropActive", True)
+            return
+        _set_flag(self, "dropActive", False)
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        _set_flag(self, "dropActive", False)
+        event.accept()
 
     def dropEvent(self, event) -> None:  # noqa: N802
+        _set_flag(self, "dropActive", False)
         extracted = extract_ref_strings(event.mimeData())
         event.acceptProposedAction()
         if extracted is None:

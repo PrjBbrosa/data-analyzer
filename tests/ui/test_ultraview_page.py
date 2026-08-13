@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QByteArray, QMimeData, QPoint, Qt
-from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent, QImage
-from PyQt5.QtWidgets import QPushButton, QToolButton, QWidget
+from PyQt5.QtCore import QByteArray, QMimeData, QPoint, QRect, Qt
+from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDropEvent, QImage
+from PyQt5.QtWidgets import QComboBox, QPushButton, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     BOARD_PADDING,
@@ -49,6 +49,7 @@ from mf4_analyzer.ui.ultraview_state import (
     slot_occupant,
     swap_slots,
 )
+from mf4_analyzer.ui_kit import load_stylesheet
 
 PAGE_DIR = (
     Path(__file__).resolve().parents[2]
@@ -131,6 +132,19 @@ def _drop(mime: QMimeData, pos: QPoint | None = None) -> QDropEvent:
     )
     event._mime_ref = mime
     return event
+
+
+def _leave() -> QDragLeaveEvent:
+    return QDragLeaveEvent()
+
+
+def _is_drop_active(widget: QWidget) -> bool:
+    return widget.property("dropActive") in (True, "true")
+
+
+def _sample_pixel(widget: QWidget, x: int, y: int) -> QColor:
+    image = widget.grab().toImage()
+    return QColor(image.pixel(max(0, min(x, image.width() - 1)), max(0, min(y, image.height() - 1))))
 
 
 class _Harness:
@@ -303,6 +317,129 @@ def test_library_grouped_by_five_sections_search_and_full_tooltip(qtbot):
     assert {item.view_id for item in visible} == {"fft-1", "fft-2"}
     library.search_field().setText("FFT")
     assert any(item.section == "fft" for item in library.visible_rows())
+
+
+def test_library_sections_collapse_expand_and_survive_rebuild(qtbot):
+    harness = _Harness(qtbot)
+    library = harness.page.library_panel()
+    assert tuple(library.section_headers()) == SOURCE_SECTIONS
+    header = library.section_headers()["time"]
+    rows = [widget for widget in library.row_widgets() if widget.row().section == "time"]
+    assert rows
+    assert all(not widget.isHidden() for widget in rows)
+    assert header.arrowType() == Qt.DownArrow
+    header.click()
+    assert library.is_section_expanded("time") is False
+    assert header.arrowType() == Qt.RightArrow
+    assert all(widget.isHidden() for widget in rows)
+
+    header.click()
+    assert library.is_section_expanded("time") is True
+    assert all(not widget.isHidden() for widget in rows)
+
+    header.click()
+    library.set_rows(_rows())
+    assert library.is_section_expanded("time") is False
+    rows = [widget for widget in library.row_widgets() if widget.row().section == "time"]
+    assert rows
+    assert all(widget.isHidden() for widget in rows)
+
+    add_ref(harness.board, make_ref("fft", "fft-1"))
+    harness.page.set_board(harness.board)
+    assert library.is_section_expanded("time") is False
+    rows = [widget for widget in library.row_widgets() if widget.row().section == "time"]
+    assert all(widget.isHidden() for widget in rows)
+
+
+def test_library_empty_section_keeps_header_and_search_expands_matches(qtbot):
+    harness = _Harness(qtbot)
+    library = harness.page.library_panel()
+    library.set_rows([row for row in _rows() if row.section == "time"])
+    headers = library.section_headers()
+    assert tuple(headers) == SOURCE_SECTIONS
+    assert "  0" in headers["fft"].text()
+    assert headers["fft"].isHidden() is False
+    assert library.section_widgets()["fft"] is not None
+
+    library.set_rows(_rows())
+    fft_header = library.section_headers()["fft"]
+    fft_header.click()
+    assert library.is_section_expanded("fft") is False
+    library.search_field().setText("共振")
+    assert library.is_section_expanded("fft") is True
+    fft_rows = [widget for widget in library.row_widgets() if widget.row().section == "fft"]
+    assert fft_rows
+    assert all(not widget.isHidden() for widget in fft_rows)
+
+
+def test_library_on_board_button_removes_instead_of_locating(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    qapp.processEvents()
+    add_ref(harness.board, make_ref("frf", "frf-1"))
+    harness.page.set_board(harness.board)
+    qapp.processEvents()
+    row = next(
+        widget
+        for widget in harness.page.library_panel().row_widgets()
+        if widget.row().view_id == "frf-1"
+    )
+    button = row.findChild(QToolButton, "ultraViewLibraryAdd")
+    assert button is not None
+    assert button.text() == "−"
+    assert button.property("action") == "remove"
+    assert "移除" in button.toolTip()
+    assert button.width() <= 20
+    assert button.height() <= 20
+    assert button.height() < row.height()
+    button.click()
+    assert harness.removed == [("frf", "frf-1")]
+    assert harness.located == []
+    assert harness.added == []
+
+
+def test_library_add_remove_and_selection_colors_are_distinct(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    library = harness.page.library_panel()
+    library.set_selected("time", "time-1")
+    library.resize(240, 640)
+    qapp.processEvents()
+
+    add_row = next(
+        widget for widget in library.row_widgets() if widget.row().view_id == "fft-1"
+    )
+    remove_row = next(
+        widget for widget in library.row_widgets() if widget.row().view_id == "time-1"
+    )
+    add_btn = add_row.findChild(QToolButton, "ultraViewLibraryAdd")
+    remove_btn = remove_row.findChild(QToolButton, "ultraViewLibraryAdd")
+    header = library.section_headers()["time"]
+    assert add_btn.property("action") == "add"
+    assert remove_btn.property("action") == "remove"
+    assert add_btn.text() == "+"
+    assert remove_btn.text() == "−"
+
+    plus = _sample_pixel(add_btn, 2, 2)
+    minus = _sample_pixel(remove_btn, 2, 2)
+    assert plus.green() > plus.red() + 20
+    assert minus.red() > minus.green() + 20
+    assert plus.green() > minus.green() + 20
+    assert minus.red() > plus.red() + 8
+
+    header_fill = _sample_pixel(header, max(12, header.width() // 2), header.height() // 2)
+    selected_fill = _sample_pixel(
+        remove_row, max(12, remove_row.width() // 2), remove_row.height() // 2
+    )
+    selected_chroma = selected_fill.blue() - selected_fill.red()
+    header_chroma = header_fill.blue() - header_fill.red()
+    assert selected_chroma > 24
+    assert selected_chroma > header_chroma + 20
+    assert abs(header_fill.red() - header_fill.blue()) < 18
 
 
 def test_add_paths_share_one_intent(qtbot):
@@ -676,6 +813,7 @@ def test_hint_bar_exists_for_later_chart_stack_take(qtbot):
     bar = harness.page.hint_bar()
     assert isinstance(bar, QWidget)
     assert bar.objectName() == "chartHintBar"
+    assert bar.height() == 28
     assert "0 JOBS" not in bar.findChild(QWidget, "chartHintContext").text()
 
 
@@ -698,7 +836,12 @@ def test_object_names_are_stable(qtbot):
     assert page.unplaced_tray().objectName() == "ultraViewUnplacedTray"
     assert page.compare_rail().objectName() == "ultraViewCompareRail"
     assert page.board_toolbar().objectName() == "ultraViewBoardToolbar"
-    assert page.board_toolbar().findChild(QToolButton, "ultraViewDisplayButton") is not None
+    toolbar = page.board_toolbar()
+    assert toolbar.findChild(QToolButton, "ultraViewDisplayButton") is not None
+    assert toolbar.findChild(QPushButton, "ultraViewCopyBoardButton") is not None
+    assert toolbar.findChild(QPushButton, "ultraViewAddButton") is None
+    assert toolbar.findChild(QToolButton, "ultraViewRatioDown") is None
+    assert toolbar.findChild(QToolButton, "ultraViewRatioUp") is None
     assert page.focus_layer().objectName() == "ultraViewFocusLayer"
 
 
@@ -751,13 +894,15 @@ def test_set_presentation_active_false_reshows_toolbar_edit_controls(qtbot):
     harness = _Harness(qtbot)
     toolbar = harness.page.board_toolbar()
     display = toolbar.findChild(QToolButton, "ultraViewDisplayButton")
+    combo = toolbar.findChild(QComboBox, "ultraViewLayoutCombo")
     assert display.isVisible() is True
+    assert combo.isVisible() is True
     harness.page.set_presentation_active(True)
     assert display.isVisible() is False
-    assert toolbar._add.isVisible() is False
+    assert combo.isVisible() is False
     harness.page.set_presentation_active(False)
     assert display.isVisible() is True
-    assert toolbar._add.isVisible() is True
+    assert combo.isVisible() is True
 
 
 def test_live_card_chrome_prefers_library_over_stale_preview(qtbot):
@@ -937,6 +1082,67 @@ def test_drop_on_board_padding_or_gutter_is_noop(qtbot, qapp):
     assert harness.replaced == []
     assert harness.swapped == []
     assert harness.placed == []
+
+
+def test_empty_slot_and_card_drop_active_until_leave_or_drop(qtbot):
+    harness = _Harness(qtbot)
+    empty = harness.page.slot_widget("aux_0")
+    mime = _mime("fft", "fft-1")
+    empty.dragEnterEvent(_enter(mime))
+    assert _is_drop_active(empty) is True
+    empty.dragLeaveEvent(_leave())
+    assert _is_drop_active(empty) is False
+
+    empty.dragEnterEvent(_enter(mime))
+    assert _is_drop_active(empty) is True
+    empty.dropEvent(_drop(mime))
+    if not sip.isdeleted(empty):
+        assert _is_drop_active(empty) is False
+
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("time", "time-1")
+    assert card is not None
+    replace_mime = _mime("order", "order-1")
+    card.dragEnterEvent(_enter(replace_mime))
+    assert _is_drop_active(card) is True
+    card.dragLeaveEvent(_leave())
+    assert _is_drop_active(card) is False
+    card.dragEnterEvent(_enter(replace_mime))
+    card.dropEvent(_drop(replace_mime))
+    assert _is_drop_active(card) is False
+
+
+def test_card_focus_button_fits_inside_rounded_chrome(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    harness.page.resize(1600, 900)
+    qapp.processEvents()
+    card = harness.page.card_widget("time", "time-1")
+    assert card is not None
+    button = card.findChild(QToolButton, "ultraViewCardFocusButton")
+    assert button is not None
+    assert button.isVisible() is True
+    mapped = QRect(button.mapTo(card, QPoint(0, 0)), button.size())
+    assert card.rect().adjusted(1, 1, -1, -1).contains(mapped)
+    assert button.width() == 24
+    assert button.height() == 24
+    assert mapped.left() >= 6
+    assert mapped.top() >= 4
+    assert mapped.right() <= card.width() - 6
+    assert mapped.bottom() <= card.header_height()
+    assert not button.icon().isNull()
+    grabbed = button.grab().toImage()
+    blues = 0
+    for x in range(0, grabbed.width(), 2):
+        for y in range(0, grabbed.height(), 2):
+            pixel = QColor(grabbed.pixel(x, y))
+            if pixel.blue() > pixel.red() + 8 and pixel.blue() > 140:
+                blues += 1
+    assert blues >= 8, "focus chip must render a visible blue fill/stroke"
 
 
 def test_card_swap_clears_replacement_arm_then_add_is_pure(qtbot):

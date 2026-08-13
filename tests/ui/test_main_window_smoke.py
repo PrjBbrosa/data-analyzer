@@ -668,9 +668,8 @@ def test_main_window_keeps_single_active_hint_bar_in_status_line(qapp, qtbot):
 
 
 def test_status_hint_quickref_button_stays_inside_bar_under_qss(qapp, qtbot):
-    from pathlib import Path
-
-    from PyQt5.QtWidgets import QToolButton
+    from PyQt5.QtGui import QColor
+    from PyQt5.QtWidgets import QLabel, QPushButton, QToolButton, QWidget
 
     old_sheet = qapp.styleSheet()
     try:
@@ -684,16 +683,71 @@ def test_status_hint_quickref_button_stays_inside_bar_under_qss(qapp, qtbot):
         qapp.processEvents()
 
         bar = w._status_hint_bar
+        assert w.statusBar.height() == 32
+        assert bar.height() == 26
         button = bar.findChild(QToolButton, "chartHintQuickrefButton")
         assert button is not None
 
-        button_rect = button.geometry()
         bar_rect = bar.rect()
-        assert button_rect.top() >= bar_rect.top()
-        assert button_rect.bottom() <= bar_rect.bottom(), (
-            f"quickref button {button_rect.getRect()} must fit inside "
-            f"hint bar {bar_rect.getRect()} so its rounded bottom is not clipped"
-        )
+        for child in (
+            button,
+            bar.findChild(QWidget, "chartHintContext"),
+            bar.findChild(QWidget, "chartHintDiscovery"),
+        ):
+            assert child is not None
+            child_rect = child.geometry()
+            assert child_rect.top() >= bar_rect.top(), (
+                f"{child.objectName()} {child_rect.getRect()} clips the top of "
+                f"hint bar {bar_rect.getRect()}"
+            )
+            assert child_rect.bottom() <= bar_rect.bottom(), (
+                f"{child.objectName()} {child_rect.getRect()} must fit inside "
+                f"hint bar {bar_rect.getRect()} so it is not clipped"
+            )
+
+        status_rect = w.statusBar.rect()
+        for name in ("surfaceHelpButton", "surfaceVersionButton"):
+            chrome = w.statusBar.findChild(QToolButton, name)
+            assert chrome is not None
+            chrome_rect = chrome.geometry()
+            assert chrome_rect.top() >= status_rect.top()
+            assert chrome_rect.bottom() <= status_rect.bottom(), (
+                f"{name} {chrome_rect.getRect()} must fit inside "
+                f"status bar {status_rect.getRect()}"
+            )
+
+        # A 28px opaque hint used to paint over the 32px pill's 1px bottom
+        # hairline, so the gray frame vanished under the ``?`` / hint copy.
+        status_img = w.statusBar.grab().toImage()
+        y_bottom = status_img.height() - 1
+        border = QColor("#dbe2eb")
+        sampled = []
+        for x in (40, status_img.width() // 2, status_img.width() - 80):
+            color = QColor(status_img.pixel(x, y_bottom))
+            sampled.append((x, color.red(), color.green(), color.blue()))
+            assert abs(color.red() - border.red()) <= 12, sampled
+            assert abs(color.green() - border.green()) <= 12, sampled
+            assert abs(color.blue() - border.blue()) <= 12, sampled
+
+        glyph = button.grab().toImage()
+        ink = [
+            (x, y)
+            for y in range(glyph.height())
+            for x in range(glyph.width())
+            if QColor(glyph.pixel(x, y)).blue() > 100
+            and QColor(glyph.pixel(x, y)).red() < 100
+        ]
+        assert ink, "quickref '?' glyph must be visible"
+        cx = sum(p[0] for p in ink) / len(ink)
+        cy = sum(p[1] for p in ink) / len(ink)
+        assert abs(cx - (glyph.width() - 1) / 2) <= 2.0, (cx, cy, glyph.width(), glyph.height())
+        assert abs(cy - (glyph.height() - 1) / 2) <= 2.0, (cx, cy, glyph.width(), glyph.height())
+
+        help_link = w.inspector.findChild(QPushButton, "inspectorHelpLink")
+        mark = help_link.findChild(QLabel, "inspectorHelpMark")
+        text = help_link.findChild(QLabel, "inspectorHelpText")
+        assert mark is not None and text is not None
+        assert abs(mark.geometry().center().y() - text.geometry().center().y()) <= 3
     finally:
         qapp.setStyleSheet(old_sheet)
 

@@ -516,6 +516,8 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.readonly",
         "ultraview.display",
         "ultraview.idle",
+        "ultraview.library_fold",
+        "ultraview.library_toggle",
     }
     assert required <= set(by_id)
     source_modes = frozenset({"time", "fft", "fft_time", "frf", "order"})
@@ -539,6 +541,8 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.readonly",
         "ultraview.display",
         "ultraview.idle",
+        "ultraview.library_fold",
+        "ultraview.library_toggle",
     } <= uv_ids
     time_ids = {hint.id for hint in hints.context_hints(HintState(mode="time", plot_mode="overlay"))}
     assert not any(hid.startswith("ultraview.") for hid in time_ids)

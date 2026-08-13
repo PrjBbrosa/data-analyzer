@@ -137,13 +137,13 @@ class UltraViewPage(QWidget):
         self._focus.hide()
 
         self._library.add_requested.connect(self.request_add)
+        self._library.remove_requested.connect(self.remove_ref_requested)
         self._library.locate_requested.connect(self._on_locate)
         self._library.drag_started.connect(self._on_drag_started)
         self._library.drag_finished.connect(self._on_drag_finished)
 
         self._toolbar.layout_changed.connect(self.layout_changed)
         self._toolbar.ratio_nudge_requested.connect(self.ratio_nudge_requested)
-        self._toolbar.add_clicked.connect(self._on_toolbar_add)
         self._toolbar.copy_board_requested.connect(self.copy_board_requested)
         self._toolbar.export_png_requested.connect(self.export_png_requested)
         self._toolbar.show_titles_toggled.connect(self.show_titles_toggled)

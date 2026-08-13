@@ -181,7 +181,7 @@ def test_hint_bar_layout_order_and_stretch(qapp, qtbot):
     card = _make_card(qtbot, _line_canvas(), chart_mode="fft")
 
     assert card._hint_bar.objectName() == "chartHintBar"
-    assert card._hint_bar.height() == 22
+    assert card._hint_bar.height() == 24
 
     layout = card._hint_bar.layout()
     ordered = [layout.itemAt(i).widget() for i in range(layout.count())]

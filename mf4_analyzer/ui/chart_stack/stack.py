@@ -23,6 +23,7 @@ from ._helpers import (
     _apply_mdi_icons,
     _HIDPI_EXPORT_SCALE,
     _STATS_STRIP_ENABLED,
+    STATUS_HINT_BAR_HEIGHT,
     _MODE_TO_INDEX,
     _INDEX_TO_MODE,
     _BOTTOM_HINT_PERSISTENT,
@@ -406,18 +407,29 @@ class ChartStack(QWidget):
         # (see detach_bottom_hint_bar), so we re-assert the same edge-anchored
         # layout after clearing it: the rotating row hugs the LEFT edge
         # (stretch=1), the discovery hint hugs the RIGHT edge (提示位置 左右靠边).
-        # We only tune the dock margins / height here.
-        self._time_hint_bar.setFixedHeight(20)
+        self._configure_status_hint_bar(self._time_hint_bar)
         lay = self._time_hint_bar.layout()
         while lay.count():
             lay.takeAt(0)
-        # Left inset clears SurfaceStatusBar's 8px border-radius so the ``?``
-        # circle is not clipped into a fake glyph remnant.
-        lay.setContentsMargins(10, 1, 8, 1)
-        lay.setSpacing(4)
         lay.addWidget(self._time_card._hint_quickref_btn, 0, Qt.AlignVCenter)
-        lay.addWidget(self._time_card._hint_context, 1)
-        lay.addWidget(self._time_card._hint_discovery, 0)
+        lay.addWidget(self._time_card._hint_context, 1, Qt.AlignVCenter)
+        lay.addWidget(self._time_card._hint_discovery, 0, Qt.AlignVCenter)
+
+    @staticmethod
+    def _configure_status_hint_bar(bar):
+        """Shared chrome for a hint bar hosted in SurfaceStatusBar."""
+        bar.setFixedHeight(STATUS_HINT_BAR_HEIGHT)
+        bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        lay = bar.layout()
+        if lay is None:
+            return
+        # Left inset clears SurfaceStatusBar's 8px border-radius so the ``?``
+        # circle is not clipped into a fake glyph remnant. Vertical padding
+        # stays tight so a 26px strip plus the status bar's 1px border still
+        # fits inside the 32px pill — a 28px strip painted over the bottom
+        # hairline and made the gray frame vanish under the hint.
+        lay.setContentsMargins(10, 2, 8, 2)
+        lay.setSpacing(4)
 
     def count(self):
         return self.stack.count()
@@ -889,6 +901,7 @@ class ChartStack(QWidget):
                 layout.removeWidget(bar)
         bar.setParent(parent)
         bar.setVisible(True)
+        self._configure_status_hint_bar(bar)
         return bar
 
     def set_mode(self, mode):

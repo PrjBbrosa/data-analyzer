@@ -27,6 +27,7 @@ from ._helpers import (
     _ICON_COLOR,
     _ICON_ACTIVE,
     _TOOLBAR_COMPACT_WIDTH,
+    CHART_HINT_BAR_HEIGHT,
 )
 from .toolbar import PgNavigationToolbar, _TickDensityPopover
 from .cursor_pill import _QualityStatusIndicator
@@ -360,9 +361,9 @@ class _ChartCard(QWidget):
         self._hint_bar = QFrame(self)
         self._hint_bar.setObjectName("chartHintBar")
         self._hint_bar.setAttribute(Qt.WA_StyledBackground, True)
-        self._hint_bar.setFixedHeight(22)
+        self._hint_bar.setFixedHeight(CHART_HINT_BAR_HEIGHT)
         bar_lay = QHBoxLayout(self._hint_bar)
-        bar_lay.setContentsMargins(4, 2, 4, 2)
+        bar_lay.setContentsMargins(4, 1, 4, 1)
         bar_lay.setSpacing(0)
         self._hint_context = _ElidedLabel("", self._hint_bar)
         self._hint_context.setObjectName("chartHintContext")

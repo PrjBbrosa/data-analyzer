@@ -3067,6 +3067,11 @@ QStatusBar#surfaceStatusBar {
     border-radius: 8px;
 }
 
+QStatusBar#surfaceStatusBar::item {
+    border-width: 0px;
+    border-style: none;
+}
+
 QStatusBar#surfaceStatusBar QLabel#plotRiskLabel {
     min-height: 20px;
     max-height: 22px;
@@ -3131,8 +3136,9 @@ QStatusBar#surfaceStatusBar QProgressBar#computeProgressBar::chunk {
 }
 
 QStatusBar#surfaceStatusBar QToolButton#surfaceVersionButton {
-    min-height: 22px;
-    padding: 1px 7px;
+    min-height: 20px;
+    max-height: 22px;
+    padding: 0 7px;
     background-color: transparent;
     border: none;
     border-radius: 5px;
@@ -3150,8 +3156,9 @@ QStatusBar#surfaceStatusBar QToolButton#surfaceVersionButton:pressed {
 
 /* 软件说明 icon, left of the version/update affordance. */
 QStatusBar#surfaceStatusBar QToolButton#surfaceHelpButton {
-    min-height: 22px;
-    padding: 1px 5px;
+    min-height: 20px;
+    max-height: 22px;
+    padding: 0 5px;
     background-color: transparent;
     border: none;
     border-radius: 5px;
@@ -3179,12 +3186,37 @@ QPushButton#inspectorHelpLink {
     text-align: right;
 }
 
+QPushButton#inspectorHelpLink QLabel#inspectorHelpMark,
+QPushButton#inspectorHelpLink QLabel#inspectorHelpText {
+    background: transparent;
+    color: #5b6472;
+    font-size: 12px;
+}
+
+QPushButton#inspectorHelpLink QLabel#inspectorHelpMark {
+    /* Latin '?' sits high against CJK cap-height; nudge it down. */
+    padding-top: 2px;
+    padding-right: 0;
+    padding-bottom: 0;
+    padding-left: 0;
+}
+
 QPushButton#inspectorHelpLink:hover {
     color: #2563eb;
     text-decoration: underline;
 }
 
+QPushButton#inspectorHelpLink:hover QLabel#inspectorHelpMark,
+QPushButton#inspectorHelpLink:hover QLabel#inspectorHelpText {
+    color: #2563eb;
+}
+
 QPushButton#inspectorHelpLink:pressed {
+    color: #1d4ed8;
+}
+
+QPushButton#inspectorHelpLink:pressed QLabel#inspectorHelpMark,
+QPushButton#inspectorHelpLink:pressed QLabel#inspectorHelpText {
     color: #1d4ed8;
 }
 
@@ -3460,7 +3492,12 @@ QFrame#chartHintBar QToolButton#chartHintQuickrefButton {
     max-width: 16px;
     min-height: 16px;
     max-height: 16px;
-    padding: 0;
+    /* Optical sit: the '?' glyph in this weight sits high-left in the 16px
+     * circle, so 1px padding pushes it toward the visual center. */
+    padding-top: 1px;
+    padding-right: 0;
+    padding-bottom: 0;
+    padding-left: 0;
     /* Clear the status-bar border-radius so the circle is not shaved. */
     margin: 0 4px 0 4px;
     background-color: #eff6ff;
@@ -3507,6 +3544,12 @@ QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintPersistent,
 QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintContext,
 QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintDiscovery {
     padding: 1px 6px;
+}
+
+QWidget#ultraViewPage QFrame#chartHintBar QLabel#chartHintPersistent,
+QWidget#ultraViewPage QFrame#chartHintBar QLabel#chartHintContext,
+QWidget#ultraViewPage QFrame#chartHintBar QLabel#chartHintDiscovery {
+    padding: 0 8px;
 }
 
 QStatusBar QFrame#chartHintBar {
@@ -3930,10 +3973,30 @@ QLabel#ultraViewFocusTitle {
 QLabel#ultraViewLibraryCount,
 QLabel#ultraViewLibraryMeta,
 QLabel#ultraViewLibrarySectionHead,
+QToolButton#ultraViewLibrarySectionHead,
 QLabel#ultraViewCardSource,
 QLabel#ultraViewAxisWarning {
     color: #64748b;
     font-size: 11px;
+}
+QToolButton#ultraViewLibrarySectionHead {
+    min-height: 0;
+    max-height: 24px;
+    padding: 3px 6px;
+    margin: 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background-color: #eef1f5;
+    color: #475569;
+    font-weight: 600;
+    text-align: left;
+}
+QToolButton#ultraViewLibrarySectionHead:hover,
+QToolButton#ultraViewLibrarySectionHead:pressed,
+QToolButton#ultraViewLibrarySectionHead:checked {
+    background-color: #e4e9ef;
+    border-color: #cbd5e1;
+    color: #334155;
 }
 QLineEdit#ultraViewLibrarySearch {
     border: 1px solid #d6e0eb;
@@ -3946,14 +4009,56 @@ QFrame#ultraViewLibraryRow {
     background-color: transparent;
 }
 QFrame#ultraViewLibraryRow:hover {
-    background-color: #f5f8fc;
-}
-QFrame#ultraViewLibraryRow[selected="true"] {
-    border-color: #bfd7f7;
-    background-color: #edf5ff;
+    background-color: #f8fafc;
 }
 QFrame#ultraViewLibraryRow[onBoard="true"] {
-    background-color: #f0f5fb;
+    background-color: transparent;
+}
+QFrame#ultraViewLibraryRow[selected="true"] {
+    border-color: #2d7ff9;
+    background-color: #bfdbfe;
+}
+QToolButton#ultraViewLibraryAdd {
+    min-width: 18px;
+    max-width: 18px;
+    min-height: 18px;
+    max-height: 18px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #d6e0eb;
+    border-radius: 4px;
+    background-color: #ffffff;
+    color: #405269;
+    font-size: 12px;
+    font-weight: 700;
+}
+QToolButton#ultraViewLibraryAdd[action="add"] {
+    background-color: #d1fae5;
+    border-color: #34d399;
+    color: #047857;
+}
+QToolButton#ultraViewLibraryAdd[action="add"]:hover {
+    background-color: #a7f3d0;
+    border-color: #059669;
+    color: #065f46;
+}
+QToolButton#ultraViewLibraryAdd[action="add"]:pressed {
+    background-color: #6ee7b7;
+    border-color: #047857;
+}
+QToolButton#ultraViewLibraryAdd[action="remove"] {
+    background-color: #fecaca;
+    border-color: #f87171;
+    color: #b91c1c;
+}
+QToolButton#ultraViewLibraryAdd[action="remove"]:hover {
+    background-color: #fca5a5;
+    border-color: #dc2626;
+    color: #991b1b;
+}
+QToolButton#ultraViewLibraryAdd[action="remove"]:pressed {
+    background-color: #f87171;
+    border-color: #b91c1c;
 }
 QWidget#ultraViewCard {
     background-color: #ffffff;
@@ -3970,12 +4075,38 @@ QWidget#ultraViewCard[replacementArmed="true"] {
 QWidget#ultraViewCard[orphaned="true"] {
     border-color: #e2b15a;
 }
+QWidget#ultraViewCard[dropActive="true"] {
+    background-color: #f5f8ff;
+    border-width: 2px;
+    border-style: solid;
+    border-color: #1769e0;
+}
 QWidget#ultraViewCard[status="stale"] QLabel#ultraViewCardStatus {
     color: #8a5609;
 }
 QWidget#ultraViewCardHeader,
 QWidget#ultraViewCardFooter {
     background-color: transparent;
+}
+QToolButton#ultraViewCardFocusButton {
+    /* 24px outer = 22px content + 1px border × 2. */
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #2d7ff9;
+    border-radius: 6px;
+    background-color: #edf5ff;
+}
+QToolButton#ultraViewCardFocusButton:hover {
+    background-color: #dbeafe;
+    border-color: #1769e0;
+}
+QToolButton#ultraViewCardFocusButton:pressed {
+    background-color: #bfdbfe;
+    border-color: #1d4f9c;
 }
 QLabel#ultraViewCardImage {
     color: #64748b;
@@ -3991,6 +4122,13 @@ QWidget#ultraViewEmptySlot:hover {
     border-color: #2d7ff9;
     color: #2d7ff9;
     background-color: #f3f8ff;
+}
+QWidget#ultraViewEmptySlot[dropActive="true"] {
+    background-color: #f5f8ff;
+    border-width: 2px;
+    border-style: dashed;
+    border-color: #1769e0;
+    color: #1769e0;
 }
 QFrame#ultraViewUnplacedTray {
     border-top: 1px solid #d6e0eb;

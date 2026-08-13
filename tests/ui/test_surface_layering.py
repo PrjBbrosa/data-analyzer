@@ -66,8 +66,8 @@ def test_surface_shell_uses_porcelain_tray_and_real_statusbar(qapp, qtbot):
         assert isinstance(win.statusBar, QStatusBar)
         assert win.statusBar.objectName() == "surfaceStatusBar"
         assert win.statusBar.parentWidget() is win.centralWidget()
-        assert win.statusBar.minimumHeight() == 40
-        assert win.statusBar.maximumHeight() == 40
+        assert win.statusBar.minimumHeight() == 32
+        assert win.statusBar.maximumHeight() == 32
         assert win.findChildren(QStatusBar).count(win.statusBar) == 1
 
         win.statusBar.clearMessage()

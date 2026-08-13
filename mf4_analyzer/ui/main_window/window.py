@@ -22,8 +22,9 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QSizePolicy,
     QStatusBar,
+    QWidget,
 )
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QEvent, QTimer, Qt
 
 from ...io import DataLoader, FileData, HAS_ASAMMDF
 from ...signal import (
@@ -92,16 +93,59 @@ class TimePlotBuildResult:
 class SurfaceStatusBar(QStatusBar):
     """QStatusBar API, displayed as the bottom rounded surface inside the tray."""
 
+    HEIGHT = 32
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("surfaceStatusBar")
-        self.setContentsMargins(8, 2, 8, 2)
+        self.setContentsMargins(8, 1, 8, 1)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
         self.setSizeGripEnabled(False)
-        self.setFixedHeight(40)
+        self.setFixedHeight(self.HEIGHT)
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() in (
+            QEvent.LayoutRequest,
+            QEvent.Resize,
+            QEvent.Show,
+            QEvent.PolishRequest,
+        ):
+            self._center_hosted_widgets()
+        return result
+
+    def _center_hosted_widgets(self):
+        """Keep hosted chrome inside the 1px hairline and vertically centered.
+
+        QStatusBar top-aligns permanent widgets. A 26px hint in a 32px pill
+        then sits high and its opaque fill can still kiss the bottom stroke.
+        """
+        inner_top = 1
+        inner_h = max(0, self.height() - 2)
+        names = {
+            "chartHintBar",
+            "surfaceHelpButton",
+            "surfaceVersionButton",
+            "plotRiskLabel",
+            "computeProgressWidget",
+        }
+        for child in list(self.children()):
+            if not isinstance(child, QWidget) or child.parent() is not self:
+                continue
+            if child.width() <= 2 and not child.objectName():
+                child.hide()
+                continue
+            if child.objectName() not in names:
+                continue
+            h = child.height()
+            if h <= 0:
+                continue
+            y = inner_top + max(0, (inner_h - h) // 2)
+            if child.y() != y:
+                child.move(child.x(), y)
 
 
 class MainWindow(
@@ -520,6 +564,10 @@ class MainWindow(
         self._update_btn.clicked.connect(self._open_release_page)
 
         self.statusBar.addPermanentWidget(self._update_btn)
+        status_layout = self.statusBar.layout()
+        if status_layout is not None:
+            status_layout.setAlignment(self._help_btn, Qt.AlignVCenter)
+            status_layout.setAlignment(self._update_btn, Qt.AlignVCenter)
 
     def _install_plot_risk_label(self) -> None:
         self._plot_risk_label = QLabel(self)
@@ -665,6 +713,9 @@ class MainWindow(
             current.setParent(None)
         self._status_hint_bar = self.chart_stack.take_hint_bar(mode, self.statusBar)
         self.statusBar.insertPermanentWidget(0, self._status_hint_bar, 1)
+        status_layout = self.statusBar.layout()
+        if status_layout is not None:
+            status_layout.setAlignment(self._status_hint_bar, Qt.AlignVCenter)
         self._set_status_hint_text_visible(
             self._status_hint_bar, self.status_hints_visible()
         )

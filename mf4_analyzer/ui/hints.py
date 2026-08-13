@@ -664,6 +664,20 @@ _HINTS = (
         priority=35,
     ),
     Hint(
+        id="ultraview.library_fold",
+        text="View 库分组可折叠",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=33,
+    ),
+    Hint(
+        id="ultraview.library_toggle",
+        text="库中 + 加入，− 移出",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=32,
+    ),
+    Hint(
         id="ultraview.idle",
         text="停手后跟上图面，含游标标注",
         surface="context",

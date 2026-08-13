@@ -18,7 +18,7 @@ BOARD_PADDING = 16
 SLOT_GUTTER = 12  # UltraView-owned; do not reuse analysis split 4*scale / 8px.
 
 # Fixed chrome. Never derived from board width/height or a zoom factor.
-CARD_HEADER_HEIGHT = 28
+CARD_HEADER_HEIGHT = 34
 CARD_FOOTER_HEIGHT = 24
 MIN_CARD_CHROME_HEIGHT = CARD_HEADER_HEIGHT + CARD_FOOTER_HEIGHT
 

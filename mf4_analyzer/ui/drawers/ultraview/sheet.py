@@ -32,7 +32,7 @@ class UltraViewSheet(QDialog):
     def __init__(self, parent, page: QWidget, stack=None):
         super().__init__(parent)
         self.setObjectName("UltraViewSheet")
-        self.setWindowTitle("总览")
+        self.setWindowTitle("UltraView")
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         configure_independent_tool_window(self)
         self._page = page

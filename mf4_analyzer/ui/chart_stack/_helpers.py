@@ -25,6 +25,14 @@ _TOOLBAR_COMPACT_WIDTH = 1500
 _QT_WIDGETSIZE_MAX = 16777215
 _STATS_STRIP_ENABLED = False
 
+# Footer chrome: the main status pill was 40px with a 20px hint strip inside,
+# so single-file looked sparse; UltraView's own 22px strip looked cramped.
+# Status pill 32 / status-hosted hint 26 (must leave the 1px gray frame
+# visible) / UltraView 28 / in-card hint 24.
+CHART_HINT_BAR_HEIGHT = 24
+STATUS_HINT_BAR_HEIGHT = 26
+ULTRAVIEW_HINT_BAR_HEIGHT = 28
+
 # MDI action-key → qtawesome icon name mapping
 _MDI_NAV_ICONS = {
     'home':    'mdi.home',

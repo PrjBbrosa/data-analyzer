@@ -154,7 +154,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "总览",
-                sub="独立面板，只读对照已有预览：不计算；工具栏「显示」开关标题和来源；停手后跟上图面，含游标读数与标注",
+                sub="独立面板，只读对照已有预览：不计算；View 库分组可折叠，+ 加入、− 移出；工具栏「显示」开关标题和来源；停手后跟上图面，含游标读数与标注",
                 gesture="各工作区 View 栏最右侧 UltraView",
                 accent=_MODE_ULTRAVIEW,
             ),
