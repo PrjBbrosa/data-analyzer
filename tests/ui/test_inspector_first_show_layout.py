@@ -139,4 +139,3 @@ def test_switching_to_shorter_page_drops_dead_white(shown_inspector, qtbot):
         f"stack hint stayed tall after leaving FRF: "
         f"fft={short_hint} frf={tall_hint}"
     )
-
