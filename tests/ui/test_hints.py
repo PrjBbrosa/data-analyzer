@@ -514,6 +514,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.statuses",
         "ultraview.readonly",
         "ultraview.display",
+        "ultraview.idle",
     }
     assert required <= set(by_id)
     source_modes = frozenset({"time", "fft", "fft_time", "frf", "order"})
@@ -532,9 +533,10 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.statuses",
         "ultraview.readonly",
         "ultraview.display",
+        "ultraview.idle",
     } <= uv_ids
     time_ids = {hint.id for hint in hints.context_hints(HintState(mode="time", plot_mode="overlay"))}
     assert not any(hid.startswith("ultraview.") for hid in time_ids)
     haystack = " ".join(hint.text for hint in by_id.values())
-    for banned in ("PDF", "SVG", "sidecar", "live card", "后台补图", "自由缩放"):
+    for banned in ("PDF", "SVG", "sidecar", "live card", "后台补图", "自由缩放", "实时", "直播"):
         assert banned not in haystack

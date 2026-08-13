@@ -16,6 +16,7 @@ from mf4_analyzer.ui.side_panels import PanelState
 from mf4_analyzer.ui.ultraview_state import (
     DEFAULT_BOARD_NAME,
     STATUS_FRESH,
+    STATUS_STALE,
     UltraViewRef,
     add_ref,
     membership_set,
@@ -589,6 +590,80 @@ def test_open_ultraview_captures_plotted_time_view(qapp, qtbot, loaded_csv):
     assert record.image.isNull() is False
     page = uv.page()
     assert page is not None
+    assert page._status_for(ref) == STATUS_FRESH
+
+
+def test_idle_pan_and_markup_recaptures_time_preview(qapp, qtbot, loaded_csv):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1200, 800)
+    win.show()
+    qtbot.waitExposed(win)
+    win._load_one(loaded_csv)
+    fid = next(iter(win.files))
+    win.channel_list.check_first_channel(fid)
+    qtbot.wait(250)
+    QCoreApplication.processEvents()
+
+    canvas = win.chart_stack.canvas_time
+    win.open_ultraview()
+    uv = win._ultraview
+    view_id = str(win.view_manager.get(0).view_id)
+    uv.add_from_source_tab("time", view_id)
+    ref = UltraViewRef("time", view_id)
+    record = None
+    for _ in range(40):
+        QCoreApplication.processEvents()
+        record = uv.store.get(ref)
+        if record is not None and record.image is not None and not record.image.isNull():
+            break
+        qtbot.wait(50)
+    assert record is not None
+    first_digest = record.captured_digest
+    page = uv.page()
+    assert page is not None
+    assert page._status_for(ref) == STATUS_FRESH
+
+    xlim = canvas.get_visible_xlim()
+    assert xlim is not None
+    lo, hi = xlim
+    canvas.restore_visible_xlim((lo + 0.1 * (hi - lo), hi))
+    qtbot.wait(80)
+    QCoreApplication.processEvents()
+    assert page._status_for(ref) == STATUS_STALE
+    recaptured = None
+    for _ in range(40):
+        QCoreApplication.processEvents()
+        recaptured = uv.store.get(ref)
+        if (
+            recaptured is not None
+            and recaptured.captured_digest != first_digest
+            and page._status_for(ref) == STATUS_FRESH
+        ):
+            break
+        qtbot.wait(50)
+    assert recaptured is not None
+    assert recaptured.captured_digest != first_digest
+    assert page._status_for(ref) == STATUS_FRESH
+    pan_digest = recaptured.captured_digest
+
+    canvas._annotations._bump_markup_revision()
+    qtbot.wait(80)
+    QCoreApplication.processEvents()
+    assert page._status_for(ref) == STATUS_STALE
+    marked = None
+    for _ in range(40):
+        QCoreApplication.processEvents()
+        marked = uv.store.get(ref)
+        if (
+            marked is not None
+            and marked.captured_digest != pan_digest
+            and page._status_for(ref) == STATUS_FRESH
+        ):
+            break
+        qtbot.wait(50)
+    assert marked is not None
+    assert marked.captured_digest != pan_digest
     assert page._status_for(ref) == STATUS_FRESH
 
 

@@ -7,8 +7,9 @@ from types import SimpleNamespace
 
 import numpy as np
 from PyQt5 import sip
-from PyQt5.QtCore import QCoreApplication, QObject, QPoint
+from PyQt5.QtCore import QCoreApplication, QObject, QPoint, pyqtSignal
 from PyQt5.QtGui import QColor, QPixmap
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
@@ -16,6 +17,7 @@ from mf4_analyzer.ui.main_window._state_holders import AnalysisPinBook
 from mf4_analyzer.ui.main_window._view_mixin import ViewMixin
 from mf4_analyzer.ui.main_window.ultraview_coordinator import (
     UltraViewCoordinator,
+    _IDLE_CAPTURE_MS,
     hide_transient_overlays,
     read_markup_revision,
 )
@@ -67,6 +69,11 @@ class _VisItem:
 
 
 class FakeCanvas(QWidget):
+    cursor_info = pyqtSignal(str)
+    dual_cursor_info = pyqtSignal(str)
+    visible_range_changed = pyqtSignal()
+    markup_revision_changed = pyqtSignal()
+
     def __init__(self, color: str = "#123456") -> None:
         super().__init__()
         self.resize(64, 48)
@@ -79,9 +86,12 @@ class FakeCanvas(QWidget):
         self._fill = QColor(color)
         self._cursor_item = _VisItem(True)
         self._remark_item = _VisItem(True)
+        self._scale_box = _VisItem(True)
         self._cursor = SimpleNamespace(_cursor_line_items=[self._cursor_item])
+        self._plot = SimpleNamespace(vb=SimpleNamespace(rbScaleBox=self._scale_box))
         self.cursor_visible_at_grab = None
         self.remark_visible_at_grab = None
+        self.scale_box_visible_at_grab = None
         self._has_result = True
 
     def has_result(self) -> bool:
@@ -104,6 +114,7 @@ class FakeCanvas(QWidget):
         self.grab_calls += 1
         self.cursor_visible_at_grab = self._cursor_item.isVisible()
         self.remark_visible_at_grab = self._remark_item.isVisible()
+        self.scale_box_visible_at_grab = self._scale_box.isVisible()
         pix = QPixmap(max(self.width(), 16), max(self.height(), 16))
         pix.fill(self._fill)
         return pix
@@ -295,7 +306,10 @@ def test_presentation_digest_pixel_affecting_field_matrix(qapp):
 
     state.name = "Renamed"
     state.tab_color = "#abcdef"
+    assert coord.current_digest_for(ref) == baseline
     state.cursor_mode = "dual"
+    assert coord.current_digest_for(ref) != baseline
+    state.cursor_mode = "single"
     assert coord.current_digest_for(ref) == baseline
 
     state.plot_mode = "overlay"
@@ -540,22 +554,34 @@ def test_transient_overlays_hidden_but_markup_revision_is_captured(qapp):
     canvas.markup_revision = 2
     with_markup = coord.current_digest_for(ref)
     assert with_markup != without_markup
-    state.cursor_mode = "dual"
     state.name = "ignored"
     state.tab_color = "#ffffff"
     assert coord.current_digest_for(ref) == with_markup
+    state.cursor_mode = "dual"
+    assert coord.current_digest_for(ref) != with_markup
+    state.cursor_mode = "single"
 
+    canvas._cursor.dual = True
     with hide_transient_overlays(canvas):
         assert canvas._cursor_item.isVisible() is False
+        assert canvas._scale_box.isVisible() is False
+        assert canvas._remark_item.isVisible() is True
+    canvas._cursor.dual = False
+    with hide_transient_overlays(canvas):
+        assert canvas._cursor_item.isVisible() is True
+        assert canvas._scale_box.isVisible() is False
         assert canvas._remark_item.isVisible() is True
     assert canvas._cursor_item.isVisible() is True
+    assert canvas._scale_box.isVisible() is True
 
     coord.request_capture(ref, canvas, "overlay")
     _flush()
-    assert canvas.cursor_visible_at_grab is False
+    assert canvas.cursor_visible_at_grab is True
     assert canvas.remark_visible_at_grab is True
+    assert canvas.scale_box_visible_at_grab is False
     assert canvas._cursor_item.isVisible() is True
     assert canvas._remark_item.isVisible() is True
+    assert canvas._scale_box.isVisible() is True
     assert read_markup_revision(canvas) == 2
     canvas.deleteLater()
     coord.clear()
@@ -1161,6 +1187,103 @@ def test_capture_ignores_destroyed_canvas_without_stale_publish(qapp):
     record = coord.store.get(ref)
     assert record is not None
     assert record.captured_digest == old_digest
+    coord.clear()
+    coord.deleteLater()
+
+
+def _visible_sheet(window):
+    sheet = QWidget()
+    sheet.resize(120, 80)
+    sheet.show()
+    window._ultraview_sheet = sheet
+    return sheet
+
+
+def test_idle_capture_coalesces_range_signals(qapp):
+    window, coord = _make_coord()
+    sheet = _visible_sheet(window)
+    window.view_manager.get(0).view_id = "view-a"
+    state = window.view_manager.get(0)
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "open")
+    _flush()
+    assert canvas.grab_calls == 1
+    first = coord.store.get(ref).captured_digest
+
+    for _ in range(5):
+        canvas.visible_range_changed.emit()
+        canvas.cursor_info.emit("t=0.1s")
+    assert canvas.grab_calls == 1
+    state.xlim = (0.2, 0.8)
+    canvas.visible_range_changed.emit()
+    assert canvas.grab_calls == 1
+    QTest.qWait(_IDLE_CAPTURE_MS + 80)
+    _flush()
+    assert canvas.grab_calls == 2
+    updated = coord.store.get(ref)
+    assert updated is not None
+    assert updated.captured_digest != first
+    pan_digest = updated.captured_digest
+    canvas.markup_revision += 1
+    canvas.markup_revision_changed.emit()
+    QTest.qWait(_IDLE_CAPTURE_MS + 80)
+    _flush()
+    assert canvas.grab_calls == 3
+    marked = coord.store.get(ref)
+    assert marked is not None
+    assert marked.captured_digest != pan_digest
+    sheet.deleteLater()
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_idle_does_not_schedule_when_sheet_hidden(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "open")
+    _flush()
+    grabs = canvas.grab_calls
+    window.view_manager.get(0).xlim = (0.1, 0.4)
+    canvas.visible_range_changed.emit()
+    QTest.qWait(_IDLE_CAPTURE_MS + 80)
+    _flush()
+    assert canvas.grab_calls == grabs
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_grab_image_prefers_presentation_pixmap(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    calls = []
+
+    class _Stack:
+        def grab_presentation_pixmap(self, target, *, scale=1.0):
+            calls.append((target, scale))
+            pix = QPixmap(32, 24)
+            pix.fill(QColor("#ff00ff"))
+            return pix
+
+    window.chart_stack = _Stack()
+    canvas = FakeCanvas("#000000")
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "pill")
+    _flush()
+    assert calls == [(canvas, 1.0)]
+    record = coord.store.get(ref)
+    assert record is not None
+    assert record.image is not None
+    pixel = record.image.pixelColor(2, 2)
+    assert pixel.red() > 200 and pixel.blue() > 200 and pixel.green() < 80
+    canvas.deleteLater()
     coord.clear()
     coord.deleteLater()
 

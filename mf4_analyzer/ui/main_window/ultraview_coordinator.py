@@ -7,6 +7,8 @@ grabs canvases that already satisfy the stability contract.
 from __future__ import annotations
 
 import logging
+import math
+import re
 import weakref
 from contextlib import contextmanager
 from typing import Any
@@ -60,7 +62,10 @@ from .ultraview_runtime import PresentationRuntimeFacts, PresentationRuntimeLedg
 logger = logging.getLogger(__name__)
 
 _MIN_CAPTURE_EDGE = 8
+_IDLE_CAPTURE_MS = 120
 _HEATMAP_SECTIONS = frozenset({"fft_time", "order"})
+_HTML_TAG = re.compile(r"<[^>]+>")
+_HOVER_CURSOR_LISTS = ("_cursor_line_items", "_cursor_lines")
 _SECTION_X_UNIT = {
     "time": "s",
     "fft": "Hz",
@@ -118,18 +123,23 @@ def _iter_viewboxes(widget):
             yield vb
 
 
-def _iter_item_lists(owner):
+def _host_is_dual_cursor(host) -> bool:
+    cursor = getattr(host, "_cursor", None)
+    if cursor is not None:
+        return bool(getattr(cursor, "dual", False))
+    getter = getattr(host, "cursor_mode", None)
+    if not callable(getter):
+        return False
+    try:
+        return getter() == "dual"
+    except (TypeError, RuntimeError):
+        return False
+
+
+def _iter_hover_cursor_items(owner):
     if owner is None:
         return
-    for name in (
-        "_cursor_line_items",
-        "_cursor_a_items",
-        "_cursor_b_items",
-        "_cursor_lines",
-        "_cursor_a_lines",
-        "_cursor_b_lines",
-        "_dual_cursor_extreme_markers",
-    ):
+    for name in _HOVER_CURSOR_LISTS:
         items = getattr(owner, name, None)
         if items:
             yield from items
@@ -138,13 +148,14 @@ def _iter_item_lists(owner):
 def _iter_transient_overlay_items(widget):
     seen = set()
     for host in _iter_overlay_hosts(widget):
-        for owner in (host, getattr(host, "_cursor", None)):
-            for item in _iter_item_lists(owner):
-                ident = id(item)
-                if ident in seen:
-                    continue
-                seen.add(ident)
-                yield item
+        if _host_is_dual_cursor(host):
+            for owner in (host, getattr(host, "_cursor", None)):
+                for item in _iter_hover_cursor_items(owner):
+                    ident = id(item)
+                    if ident in seen:
+                        continue
+                    seen.add(ident)
+                    yield item
         for vb in _iter_viewboxes(host):
             box = getattr(vb, "rbScaleBox", None)
             if box is not None and id(box) not in seen:
@@ -152,11 +163,81 @@ def _iter_transient_overlay_items(widget):
                 yield box
 
 
+def _finite_or_none(value):
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _first_line_value(items):
+    if not items:
+        return None
+    item = items[0]
+    getter = getattr(item, "value", None)
+    if not callable(getter):
+        return None
+    try:
+        return _finite_or_none(getter())
+    except (TypeError, RuntimeError):
+        return None
+
+
+def _cursor_geometry_from_host(host):
+    cursor = getattr(host, "_cursor", None)
+    if cursor is not None:
+        if bool(getattr(cursor, "dual", False)):
+            ax = _finite_or_none(getattr(cursor, "ax", None))
+            bx = _finite_or_none(getattr(cursor, "bx", None))
+            if ax is None and bx is None:
+                return None
+            return ["dual", ax, bx]
+        items = getattr(cursor, "line_items", None) or getattr(
+            cursor, "_cursor_line_items", None
+        )
+        x = _first_line_value(items)
+        if x is None:
+            return None
+        return ["single", x]
+    getter = getattr(host, "cursor_mode", None)
+    if not callable(getter):
+        return None
+    try:
+        mode = getter()
+    except (TypeError, RuntimeError):
+        return None
+    if mode == "dual":
+        ax = _finite_or_none(getattr(host, "_cursor_a_frequency", None))
+        bx = _finite_or_none(getattr(host, "_cursor_b_frequency", None))
+        if ax is None and bx is None:
+            return None
+        return ["dual", ax, bx]
+    if mode == "single":
+        x = _first_line_value(getattr(host, "_cursor_lines", None))
+        if x is None:
+            return None
+        return ["single", x]
+    return None
+
+
+def _plain_text(value) -> str:
+    if not value:
+        return ""
+    return _HTML_TAG.sub("", str(value)).strip()
+
+
 @contextmanager
 def hide_transient_overlays(widget):
-    """Hide hover/crosshair/cursor/selection items; restore in ``finally``.
+    """Hide hover/rubber-band items; restore in ``finally``.
 
-    Persistent remarks are not in the transient set and stay visible.
+    Armed single/dual cursor lines and extreme markers stay visible so the
+    snapshot matches copy-as-image. Persistent remarks are not in the
+    transient set.
     """
     hidden = []
     try:
@@ -259,6 +340,11 @@ class UltraViewCoordinator(QObject):
         self._unstable: dict[int, tuple] = {}
         self._hooks: list[tuple[Any, Any, Any]] = []
         self._hooked_ids: set[int] = set()
+        self._idle_pending: dict[UltraViewRef, Any] = {}
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.setInterval(_IDLE_CAPTURE_MS)
+        self._idle_timer.timeout.connect(self._on_idle_capture_timeout)
         self._result_identity: dict[tuple, int] = {}
         self._result_generation: dict[tuple, int] = {}
         self._runtime = PresentationRuntimeLedger()
@@ -300,6 +386,7 @@ class UltraViewCoordinator(QObject):
             self._unstable.pop(ident, None)
             return
         self._bindings[ident] = (ref, weakref.ref(canvas))
+        self._ensure_stability_hooks(canvas)
 
     def bound_ref_for(self, canvas) -> UltraViewRef | None:
         if canvas is None:
@@ -1180,6 +1267,7 @@ class UltraViewCoordinator(QObject):
             "filter": filter_payload,
             "data_signatures": self._time_data_signatures(window, state),
             "markup_revision": facts.markup_revision,
+            **self._cursor_payload(window, ref, state),
         }
 
     def _analysis_payload(self, window, ref: UltraViewRef) -> dict | None:
@@ -1221,6 +1309,7 @@ class UltraViewCoordinator(QObject):
             "compare": dict(state.compare or {}),
             "pane_count": pane_count,
             "markup_revision": facts.markup_revision,
+            **self._cursor_payload(window, ref, state),
         }
 
     def _time_data_signatures(self, window, state) -> list:
@@ -1288,6 +1377,50 @@ class UltraViewCoordinator(QObject):
         if pins is not None and slot in pins:
             return list(pins[slot])
         return []
+
+    def _cursor_payload(self, window, ref: UltraViewRef, state) -> dict:
+        widget = self._bound_widget_for(ref)
+        geometry = []
+        if widget is not None:
+            for host in _iter_overlay_hosts(widget):
+                geom = _cursor_geometry_from_host(host)
+                if geom is not None:
+                    geometry.append(geom)
+        return {
+            "cursor_mode": str(getattr(state, "cursor_mode", None) or "off"),
+            "cursor_geometry": geometry,
+            "pill": self._pill_fingerprint(window, widget),
+        }
+
+    def _pill_fingerprint(self, window, widget):
+        stack = getattr(window, "chart_stack", None) if window is not None else None
+        if stack is None:
+            return None
+        pill = getattr(stack, "_pill", None)
+        getter = getattr(stack, "_pill_for_canvas", None)
+        if callable(getter) and widget is not None:
+            hosts = list(_iter_overlay_hosts(widget))
+            canvas = hosts[0] if hosts else widget
+            try:
+                pill = getter(canvas)
+            except (TypeError, RuntimeError):
+                pass
+        if pill is None:
+            return None
+        try:
+            if not pill.isVisible():
+                return None
+            primary = ""
+            if callable(getattr(pill, "primary_text", None)):
+                primary = _plain_text(pill.primary_text())
+            detail = ""
+            if callable(getattr(pill, "has_detail", None)) and pill.has_detail():
+                detail_widget = getattr(pill, "_detail", None)
+                if detail_widget is not None:
+                    detail = _plain_text(detail_widget.text())
+            return [primary, detail]
+        except RuntimeError:
+            return None
 
     # -- capture ----------------------------------------------------------
 
@@ -1397,13 +1530,24 @@ class UltraViewCoordinator(QObject):
 
     def _grab_image(self, widget) -> QImage | None:
         pixmap = None
-        grab_combined = getattr(widget, "grab_combined_pixmap", None)
-        if callable(grab_combined):
-            pixmap = grab_combined(scale=1.0)
-        elif callable(getattr(widget, "grab_pixmap", None)):
-            pixmap = widget.grab_pixmap(scale=1.0)
-        elif isinstance(widget, QWidget):
-            pixmap = widget.grab()
+        window = self._window
+        stack = getattr(window, "chart_stack", None) if window is not None else None
+        grab_pres = getattr(stack, "grab_presentation_pixmap", None)
+        if callable(grab_pres):
+            try:
+                pixmap = grab_pres(widget, scale=1.0)
+            except (TypeError, RuntimeError):
+                pixmap = None
+            if pixmap is not None and pixmap.isNull():
+                pixmap = None
+        if pixmap is None:
+            grab_combined = getattr(widget, "grab_combined_pixmap", None)
+            if callable(grab_combined):
+                pixmap = grab_combined(scale=1.0)
+            elif callable(getattr(widget, "grab_pixmap", None)):
+                pixmap = widget.grab_pixmap(scale=1.0)
+            elif isinstance(widget, QWidget):
+                pixmap = widget.grab()
         image = pixmap_as_device_pixel_image(pixmap)
         if image is None:
             return None
@@ -1554,6 +1698,18 @@ class UltraViewCoordinator(QObject):
             if layout is not None:
                 layout.connect(self._on_layout_geometry_changed)
                 self._hooks.append((host, layout, self._on_layout_geometry_changed))
+            for name in (
+                "visible_range_changed",
+                "cursor_info",
+                "dual_cursor_info",
+                "markup_revision_changed",
+                "manual_zoom_changed",
+            ):
+                signal = getattr(host, name, None)
+                if signal is None:
+                    continue
+                signal.connect(self._on_idle_source_signal)
+                self._hooks.append((host, signal, self._on_idle_source_signal))
             self._hooked_ids.add(ident)
 
     def _on_quality_status_changed(self, *_args) -> None:
@@ -1794,7 +1950,75 @@ class UltraViewCoordinator(QObject):
             timer.stop()
             timer.deleteLater()
 
+    def _sheet_visible(self) -> bool:
+        window = self._window
+        if window is None:
+            return False
+        sheet = getattr(window, "_ultraview_sheet", None)
+        if sheet is None or not _alive(sheet):
+            return False
+        try:
+            return bool(sheet.isVisible())
+        except RuntimeError:
+            return False
+
+    def _binding_for_idle_sender(self, sender):
+        if sender is None:
+            return None, None
+        ref = self.bound_ref_for(sender)
+        if ref is not None:
+            return ref, sender
+        for _ident, (bound, handle) in list(self._bindings.items()):
+            widget = handle()
+            if widget is None or not _alive(widget):
+                continue
+            if sender is widget:
+                return bound, widget
+            try:
+                hosts = list(_iter_overlay_hosts(widget))
+            except (TypeError, RuntimeError):
+                continue
+            if sender in hosts:
+                return bound, widget
+        return None, None
+
+    def schedule_idle_capture(self, ref, widget=None) -> None:
+        if self._inactive() or ref is None:
+            return
+        if not self._sheet_visible():
+            return
+        if widget is None:
+            widget = self._bound_widget_for(ref)
+        self._idle_pending[ref] = (
+            weakref.ref(widget) if widget is not None else None
+        )
+        self._push_preview(ref)
+        self._idle_timer.start()
+
+    def _on_idle_source_signal(self, *_args) -> None:
+        if self._inactive() or not self._sheet_visible():
+            return
+        ref, widget = self._binding_for_idle_sender(self.sender())
+        if ref is None:
+            return
+        self.schedule_idle_capture(ref, widget)
+
+    def _on_idle_capture_timeout(self) -> None:
+        pending = list(self._idle_pending.items())
+        self._idle_pending.clear()
+        if self._inactive() or not self._sheet_visible():
+            return
+        for ref, widget_ref in pending:
+            widget = widget_ref() if widget_ref is not None else None
+            if widget is None or not _alive(widget):
+                widget = self._bound_widget_for(ref)
+            if widget is None:
+                continue
+            self.request_capture(ref, widget, "idle")
+
     def _drop_all_timers(self) -> None:
+        self._idle_timer.stop()
+        self._idle_pending.clear()
         for timer in list(self._queued.values()):
             timer.stop()
             timer.deleteLater()

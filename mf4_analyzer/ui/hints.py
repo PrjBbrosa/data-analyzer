@@ -649,6 +649,13 @@ _HINTS = (
         modes=frozenset({"ultraview"}),
         priority=35,
     ),
+    Hint(
+        id="ultraview.idle",
+        text="停手后跟上图面，含游标标注",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=32,
+    ),
 )
 
 

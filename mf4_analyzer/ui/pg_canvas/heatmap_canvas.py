@@ -232,6 +232,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     slice_picked = pyqtSignal()       # user clicked the map to position a slice
     slice_hint_requested = pyqtSignal(str)  # user clicked where no slice can apply
     divider_adjusted = pyqtSignal()   # user dragged / reset the map↔slice divider
+    markup_revision_changed = pyqtSignal()
 
     def __init__(self, parent=None, with_slice: bool = False):
         super().__init__(parent)
@@ -1707,6 +1708,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
     def _bump_markup_revision(self) -> None:
         self.markup_revision = int(self.markup_revision) + 1
+        self.markup_revision_changed.emit()
 
     def remark_count(self) -> int:
         return len(self._remarks)

@@ -57,6 +57,10 @@ class AnnotationManager(_CanvasBackref):
 
     def _bump_markup_revision(self):
         self.markup_revision = int(self.markup_revision) + 1
+        signal = getattr(self._c, "markup_revision_changed", None)
+        emit = getattr(signal, "emit", None)
+        if callable(emit):
+            emit()
 
     def set_remark_enabled(self, enabled):
         """Enable or disable annotation mode; changes cursor shape."""

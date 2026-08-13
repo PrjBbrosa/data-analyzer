@@ -1846,7 +1846,7 @@ def test_copy_card_image_composites_cursor_pill_inside_hidpi_pixmap(
     red_pill.fill(QColor("#ff0000"))
 
     monkeypatch.setattr(cs.canvas_time, "grab_pixmap", _fake_grab)
-    monkeypatch.setattr(cs, "_grab_pill_scaled", lambda _scale: red_pill)
+    monkeypatch.setattr(cs, "_grab_pill_scaled", lambda *args, **kwargs: red_pill)
 
     cs._pill.resize(80, 40)
     cs._pill.setVisible(True)
@@ -1869,6 +1869,35 @@ def test_copy_card_image_composites_cursor_pill_inside_hidpi_pixmap(
             if color.red() > 200 and color.green() < 80 and color.blue() < 80:
                 red_samples += 1
     assert red_samples > 0
+
+
+def test_grab_presentation_pixmap_composites_pill_at_unit_scale(qapp, qtbot):
+    from PyQt5.QtWidgets import QApplication
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+    t = np.linspace(0, 1, 200)
+    cs.canvas_time.plot_channels(
+        [("speed", True, t, np.sin(t * 20), "#1769e0", "rpm", "f")]
+    )
+    QApplication.processEvents()
+
+    cs._pill.set_primary('<span style="color:#111827;">t=0.5s</span>')
+    cs._pill.setVisible(True)
+    cs._pill.mark_user_placed(True)
+    canvas_origin = cs.canvas_time.mapTo(cs.stack, cs.canvas_time.rect().topLeft())
+    cs._pill.move(canvas_origin.x() + 40, canvas_origin.y() + 40)
+    QApplication.processEvents()
+
+    pix = cs.grab_presentation_pixmap(cs.canvas_time, scale=1.0)
+    assert pix is not None and not pix.isNull()
+    base = cs.canvas_time.grab_pixmap(scale=1.0)
+    assert pix.width() == base.width()
+    assert pix.height() == base.height()
 
 
 def test_save_figure_uses_hidpi_scale(qapp, qtbot, monkeypatch, tmp_path):

@@ -287,6 +287,7 @@ class TimeDomainCanvasPG(QWidget):
     # back to the raw (fid, ch) and writes navigator._colors so the left
     # channel-list swatch AND time/FFT replot follow one color truth.
     channel_color_changed = pyqtSignal(object, object, str)
+    markup_revision_changed = pyqtSignal()
 
     # Mirror TimeDomainCanvas constants so callers see the same surface.
     MAX_PTS = 8000

@@ -118,6 +118,9 @@ def test_modes_group_has_five_workspaces_plus_readonly_overview():
     assert "只读" in overview.sub
     assert "不计算" in overview.sub
     assert "独立" in overview.sub
+    assert "停手后" in overview.sub
+    assert "游标" in overview.sub
+    assert "标注" in overview.sub
     assert modes.note and "不是第六种算法" in modes.note
     assert "第六种算法" not in overview.sub
     assert modes.wide is True

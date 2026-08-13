@@ -191,6 +191,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     # FFT card shows the same red/yellow/green antialiasing indicator the
     # time-domain card does.
     quality_status_changed = pyqtSignal(object)
+    markup_revision_changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2313,6 +2314,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
     def _bump_markup_revision(self) -> None:
         self.markup_revision = int(self.markup_revision) + 1
+        self.markup_revision_changed.emit()
 
     def remark_count(self) -> int:
         return len(self._remarks)

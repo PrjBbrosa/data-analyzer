@@ -1032,6 +1032,93 @@ class ChartStack(QWidget):
             button.setEnabled(True)
         self._sync_shared_time_controls_to_focus()
 
+    def grab_presentation_pixmap(self, target, *, scale=1.0):
+        """Grab canvas pixels plus the overlapping cursor pill.
+
+        Copy-to-clipboard uses hi-DPI ``scale``; UltraView uses ``1.0``.
+        Does not touch the clipboard. Time-domain split copy still uses
+        ``_combined_split_pixmap`` and does not go through this helper.
+        Multi-pane analysis pages keep ``grab_combined_pixmap``.
+        """
+        canvas, page = self._presentation_canvas_and_page(target)
+        if page is not None and callable(getattr(page, "pane_count", None)):
+            try:
+                pane_count = int(page.pane_count())
+            except (TypeError, RuntimeError):
+                pane_count = 0
+            if pane_count > 1:
+                grab_combined = getattr(page, "grab_combined_pixmap", None)
+                if not callable(grab_combined):
+                    return None
+                pix = grab_combined(scale=scale)
+                if pix is None or pix.isNull():
+                    return None
+                return _pixmap_as_device_pixels(pix)
+            if canvas is None and pane_count == 1:
+                canvas = page.pane_canvas(0)
+        if canvas is None:
+            return None
+        pix = _grab_pixmap_hidpi(canvas, requested=scale)
+        if pix is None or pix.isNull():
+            return None
+        self._composite_cursor_pill_onto(pix, canvas)
+        return pix
+
+    def _presentation_canvas_and_page(self, target):
+        mode = getattr(target, "_chart_mode", "")
+        if hasattr(target, "canvas") and mode:
+            canvas = target.canvas
+            page = None
+            if mode in ("fft", "fft_time", "frf", "order"):
+                page = self.page_for_mode.get(mode)
+            return canvas, page
+        if callable(getattr(target, "pane_count", None)):
+            return None, target
+        canvas = target
+        card = self._card_for_canvas(canvas)
+        mode = getattr(card, "_chart_mode", "") if card is not None else ""
+        page = None
+        if mode in ("fft", "fft_time", "frf", "order"):
+            page = self.page_for_mode.get(mode)
+        return canvas, page
+
+    def _composite_cursor_pill_onto(self, pix, canvas):
+        """Paint the overlapping cursor pill onto ``pix`` in bitmap space."""
+        pill = self._pill_for_canvas(canvas)
+        if pill is None or pix is None or pix.isNull():
+            return
+        try:
+            if not pill.isVisible():
+                return
+            canvas_w = max(1, int(canvas.width()))
+            canvas_h = max(1, int(canvas.height()))
+        except RuntimeError:
+            return
+        scale_x = max(1.0, float(pix.width()) / float(canvas_w))
+        scale_y = max(1.0, float(pix.height()) / float(canvas_h))
+        try:
+            canvas_origin = canvas.mapTo(self.stack, canvas.rect().topLeft())
+        except (RuntimeError, TypeError):
+            return
+        pill_geo = pill.geometry()
+        rel_x = pill_geo.x() - canvas_origin.x()
+        rel_y = pill_geo.y() - canvas_origin.y()
+        if not (rel_x + pill_geo.width() > 0 and rel_x < canvas.width()
+                and rel_y + pill_geo.height() > 0 and rel_y < canvas.height()):
+            return
+        painter = QPainter(pix)
+        target = QRect(
+            int(round(rel_x * scale_x)),
+            int(round(rel_y * scale_y)),
+            int(round(pill_geo.width() * scale_x)),
+            int(round(pill_geo.height() * scale_y)),
+        )
+        painter.drawPixmap(
+            target,
+            self._grab_pill_scaled(max(scale_x, scale_y), pill),
+        )
+        painter.end()
+
     def _copy_card_image(self, card):
         """Capture the card's canvas for MainWindow to publish. For the
         time-domain card, the floating cursor pill (if visible and overlapping
@@ -1051,64 +1138,17 @@ class ChartStack(QWidget):
             if pix is not None and not pix.isNull():
                 self.image_captured.emit(pix)
             return
-        # Analysis sections (fft/fft_time/frf/order) own their own per-section
-        # split via AnalysisSectionPage. When the card's page is split, export
-        # ALL panes composited side-by-side (grab_combined_pixmap), parallel to
-        # the time-domain _combined_split_pixmap branch above. Single-pane falls
-        # through to the plain grab below (byte-identical to pre-split copy).
-        mode = getattr(card, '_chart_mode', '')
-        if mode in ('fft', 'fft_time', 'frf', 'order'):
-            page = self.page_for_mode.get(mode)
-            if page is not None and page.pane_count() > 1:
-                pix = page.grab_combined_pixmap(scale=_HIDPI_EXPORT_SCALE)
-                if pix is not None and not pix.isNull():
-                    self.image_captured.emit(_pixmap_as_device_pixels(pix))
-                return
-        canvas = card.canvas
-        pix = _grab_pixmap_hidpi(canvas)
-        if pix is None or pix.isNull():
-            return
-        canvas_w = max(1, int(canvas.width()))
-        canvas_h = max(1, int(canvas.height()))
-        scale_x = max(1.0, float(pix.width()) / float(canvas_w))
-        scale_y = max(1.0, float(pix.height()) / float(canvas_h))
-        # Composite the floating pill onto whichever time pane is being copied
-        # (primary or the focused secondary); the overlap check below gates it
-        # to the case where the pill actually sits over THIS canvas.
-        if (self.current_mode() == 'time'
-                and self._pill.isVisible()):
-            canvas_origin = canvas.mapTo(self.stack, canvas.rect().topLeft())
-            pill_geo = self._pill.geometry()
-            rel_x = pill_geo.x() - canvas_origin.x()
-            rel_y = pill_geo.y() - canvas_origin.y()
-            # Draw only when the pill actually overlaps the canvas rect
-            # (compare in unscaled canvas-pixel space).
-            if (rel_x + pill_geo.width() > 0 and rel_x < canvas.width()
-                    and rel_y + pill_geo.height() > 0 and rel_y < canvas.height()):
-                painter = QPainter(pix)
-                # Scale the pill using the actual normalized bitmap size. On
-                # Retina, QPixmap painters use logical DPR coordinates unless
-                # the pixmap is normalized first; using the returned bitmap's
-                # pixel dimensions keeps the pill inside the exported image.
-                target = QRect(
-                    int(round(rel_x * scale_x)),
-                    int(round(rel_y * scale_y)),
-                    int(round(pill_geo.width() * scale_x)),
-                    int(round(pill_geo.height() * scale_y)),
-                )
-                painter.drawPixmap(
-                    target,
-                    self._grab_pill_scaled(max(scale_x, scale_y)),
-                )
-                painter.end()
-        self.image_captured.emit(pix)
+        pix = self.grab_presentation_pixmap(card, scale=_HIDPI_EXPORT_SCALE)
+        if pix is not None and not pix.isNull():
+            self.image_captured.emit(pix)
 
-    def _grab_pill_scaled(self, scale):
+    def _grab_pill_scaled(self, scale, pill=None):
         """Grab the cursor pill at ``scale``× for crisp compositing.
 
         At 1× this is a plain ``QPixmap`` grab; above 1× the pill widget is
         re-rendered into a magnified QImage (sharp text, not an upscale)."""
-        pill = self._pill
+        if pill is None:
+            pill = self._pill
         if scale <= 1.0:
             return pill.grab()
         w = max(1, int(pill.width()))
