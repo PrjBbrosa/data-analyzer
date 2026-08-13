@@ -100,6 +100,14 @@ _PREVIEW_MIN_REALIZED_PIXEL_WIDTH = 200
 _SPECTRUM_FALLBACK_PIXEL_WIDTH = 2400
 _SPECTRUM_MIN_REALIZED_PIXEL_WIDTH = 200
 
+# FFT amplitude overlays have a much lower AA budget than the time-preview
+# overlay.  Even after min/max envelope reduction, two screenshot-width
+# spectra can draw thousands of joined segments in the same raster region.
+# Keep this budget local to the spectrum row: the time preview deliberately
+# uses the shared TimeDomainCanvasPG ON=5000/OFF=7000 policy imported above.
+_SPECTRUM_AA_SEGMENT_ON = 2000
+_SPECTRUM_AA_SEGMENT_OFF = 3000
+
 # Minimum vertical room per Y tick label on the short time-preview strip.
 # Inspector Y-density still *requests* up to 20 divisions, but labelling every
 # division in ~170 px stacks the text; nicestep itself is fine (e.g. 0.25) —
@@ -324,6 +332,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # metric<=ON→on, metric>OFF→off, dead band holds last.
         self._time_aa_density_allowed = False
         self._time_aa_density_seeded = False
+        # Spectrum-row AA has its own, lower drawn-point SUM budget.  It is
+        # reset only when a fresh FFT curve collection replaces the old one;
+        # keeping an already-computed spectrum stale must preserve the
+        # hysteresis state so selection changes do not make quality flicker.
+        self._spectrum_aa_density_allowed = False
+        self._spectrum_aa_density_seeded = False
         self._last_quality_status = None
         self._aa_idle_timer = QTimer(self)
         self._aa_idle_timer.setSingleShot(True)
@@ -454,14 +468,57 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._time_aa_density_allowed = False
         return bool(self._time_aa_density_allowed)
 
+    def _spectrum_drawn_point_total(self):
+        """Return the total currently rasterized spectrum points, or ``None``.
+
+        The FFT row has already passed through ``_spectrum_plot_arrays()``, so
+        ``getData()`` measures the actual envelope curves handed to pyqtgraph,
+        not the raw FFT-bin arrays retained in ``_entries``.
+        """
+        try:
+            total = 0
+            for curve in self._amp_curves:
+                x_data, _y_data = curve.getData()
+                total += 0 if x_data is None else len(x_data)
+            return total
+        except Exception:
+            return None
+
+    def _spectrum_aa_allowed(self) -> bool:
+        """Hysteresis AA gate for the FFT amplitude overlay's point SUM.
+
+        A new spectrum is seeded against the OFF budget, so it is AA-on only
+        at ``<= 3000`` drawn points.  Once rejected, it recovers only below
+        ``<= 2000``; while allowed it turns back off only above ``> 3000``.
+        This prevents repeated AA toggles around the screenshot-scale dual
+        overlay density that dominates native CPU raster time.
+        """
+        total = self._spectrum_drawn_point_total()
+        if total is None:
+            # Defensive: preserve the last settled decision rather than
+            # crashing a redraw if a third-party curve cannot provide data.
+            return bool(self._spectrum_aa_density_allowed)
+        if not self._spectrum_aa_density_seeded:
+            self._spectrum_aa_density_allowed = (
+                total <= _SPECTRUM_AA_SEGMENT_OFF)
+            self._spectrum_aa_density_seeded = True
+        elif total <= _SPECTRUM_AA_SEGMENT_ON:
+            self._spectrum_aa_density_allowed = True
+        elif total > _SPECTRUM_AA_SEGMENT_OFF:
+            self._spectrum_aa_density_allowed = False
+        return bool(self._spectrum_aa_density_allowed)
+
+    def _reset_spectrum_aa_density_gate(self) -> None:
+        """Seed a replacement FFT curve collection from its own density."""
+        self._spectrum_aa_density_allowed = False
+        self._spectrum_aa_density_seeded = False
+
     def _apply_idle_curve_aa(self):
-        """Restore each curve's settled-state AA: the amplitude overlay is
-        always crisp; the time preview's AA follows the drawn-point density
-        budget (``_time_preview_aa_allowed``), so light multi-source overlays
-        stay crisp while dense ones drop AA — matching TimeDomainCanvasPG."""
+        """Restore each curve's settled-state AA from its row-local budget."""
+        spectrum_idle_aa = self._spectrum_aa_allowed()
         time_idle_aa = self._time_preview_aa_allowed()
         for c in self._amp_curves:
-            self._set_curve_aa(c, True)
+            self._set_curve_aa(c, spectrum_idle_aa)
         for c in self._time_curves:
             self._set_curve_aa(c, time_idle_aa)
 
@@ -548,6 +605,17 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             timer_active = False
         if timer_active:
             return {"state": "yellow", "tooltip": "抗锯齿等待空闲刷新"}
+        if (self._aa_on and self._amp_curves
+                and not self._spectrum_aa_density_allowed):
+            total = self._spectrum_drawn_point_total()
+            if total is not None:
+                return {
+                    "state": "red",
+                    "tooltip": (
+                        "抗锯齿已按性能策略关闭："
+                        f"频谱叠加密度 {total} > {_SPECTRUM_AA_SEGMENT_OFF}"
+                    ),
+                }
         return {"state": "red", "tooltip": "抗锯齿未激活"}
 
     def _emit_quality_status(self):
@@ -940,6 +1008,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             for c in curves:
                 p.removeItem(c)
             curves.clear()
+        # A newly calculated FFT replaces the amplitude collection, so begin
+        # its AA hysteresis from the actual combined drawn-point density.
+        self._reset_spectrum_aa_density_gate()
         self.clear_remarks()
         # A fresh compute supersedes any stale marker; restore the NORMAL
         # visual state (full-opacity curves rebuilt below + marker removed).
@@ -959,9 +1030,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             # or a legacy hand-built entry).
             curve = self._plot_amp.plot(
                 freq, amp, pen=pen, name=e.get('legend_label', e['label']),
-                antialias=True)
+                # Build provisionally AA-off.  Once every overlay curve is
+                # present, the spectrum's combined point budget decides
+                # whether this settled render may turn AA back on.
+                antialias=False)
             curve.setOpacity(1.0)
             self._amp_curves.append(curve)
+
+        if self._aa_on:
+            self._apply_idle_curve_aa()
 
         self._raw_amp_title = title or ''
         self._apply_title_texts()
@@ -988,8 +1065,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._entries, selected_idx=0 if self._entries else None,
             title="时域预览",
         )
-        # Fresh curves are rebuilt AA-on; surface the resulting (green) state
-        # on the quality dot immediately.
+        # Surface the settled spectrum-density decision on the quality dot
+        # immediately (green when AA is allowed; an explained red otherwise).
         self._emit_quality_status()
         # Re-bind history capture + re-apply mouse mode on the rebuilt view
         # (Task C: lets the toolbar's back/forward seed a baseline).
@@ -1010,6 +1087,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             for c in self._amp_curves:
                 self._plot_amp.removeItem(c)
             self._amp_curves.clear()
+            self._reset_spectrum_aa_density_gate()
             self.clear_remarks()
             self._clear_spectrum_stale()
             self._entries = []
@@ -1162,6 +1240,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 except Exception:
                     pass
             curves.clear()
+        self._reset_spectrum_aa_density_gate()
         # Aux overlay curves live in their own ViewBoxes, not in _plot_time —
         # tear those down too so no orphan axes/curves linger.
         self._clear_time_overlay_axes()

@@ -702,12 +702,11 @@ def test_grab_pixmap_not_null(canvas):
     assert pm.width() > 0 and pm.height() > 0
 
 
-def test_fft_amp_curves_are_antialiased(canvas):
-    # The FFT amplitude overlay (top row) is always antialiased — it is a
-    # bounded spectrum (~freq-bin count), not a multi-million-point time
-    # source, so AA cost is negligible. The time-preview (bottom) row is
-    # governed separately by a drawn-point density budget (light overlays stay
-    # crisp, dense ones drop AA); see test_time_preview_aa_follows_density_budget.
+def test_fft_amp_curves_stay_antialiased_when_light(canvas):
+    # The FFT amplitude overlay has its own combined drawn-point density
+    # budget (ON=2000/OFF=3000).  A small two-curve overlay stays crisp.  The
+    # time-preview (bottom) row remains governed separately by its shared
+    # ON=5000/OFF=7000 budget; see test_time_preview_aa_follows_density_budget.
     canvas.plot_spectra(
         [_entry(), _entry('f2 · vib', '#dc2626')],
         xlim=(0.0, 500.0),
@@ -723,6 +722,46 @@ def test_fft_amp_curves_are_antialiased(canvas):
     # ~2000 pts < ON(5000): under the density budget it stays AA-ON (no longer
     # the old len>1 one-cut kill).
     assert all(c.opts.get('antialias') is True for c in canvas._time_curves)
+
+
+def _dense_spectrum_entries(n_points=20_000, n_curves=2):
+    """Real FFT entries large enough to exercise spectrum envelope density."""
+    freq = np.linspace(0.0, 12_000.0, n_points)
+    amp = np.abs(np.sin(freq / 97.0))
+    entries = []
+    for index, color in enumerate(('#2563eb', '#dc2626', '#16a34a')):
+        if index >= n_curves:
+            break
+        entries.append({
+            'label': f'dense-{index}',
+            'color': color,
+            'freq': freq,
+            'amp': amp * (1.0 - index * 0.1),
+            # Keep the lower preview intentionally light: this test isolates
+            # the top-row spectrum policy from its independent 5k/7k gate.
+            'time': np.linspace(0.0, 1.0, 1000),
+            'signal': np.sin(np.linspace(0.0, 2.0 * np.pi, 1000)),
+        })
+    return entries
+
+
+def test_fft_dense_spectrum_overlay_drops_aa_and_reports_density(canvas):
+    """Screenshot-scale dual FFT envelopes stay AA-off after settling."""
+    canvas.plot_spectra(
+        _dense_spectrum_entries(), xlim=(0.0, 12_000.0),
+        amp_label='Amplitude', title='FFT',
+    )
+
+    total = canvas._spectrum_drawn_point_total()
+    assert total is not None and total > 3000, (
+        f'dense setup must exceed spectrum OFF budget, got {total}')
+    assert not any(c.opts.get('antialias') for c in canvas._amp_curves)
+    # The lower preview was kept deliberately light and must continue to use
+    # its old independent density policy, not the spectrum threshold.
+    assert all(c.opts.get('antialias') for c in canvas._time_curves)
+    status = canvas.quality_status()
+    assert status['state'] == 'red'
+    assert f'频谱叠加密度 {total} > 3000' in status['tooltip']
 
 
 def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp, monkeypatch):
@@ -3011,6 +3050,28 @@ def test_time_preview_aa_gate_defends_against_baddata(canvas):
     canvas._time_curves = [_FakeCurve(1000), _Boom()]
     # Should not raise; conservative fallback returns the cached value.
     assert canvas._time_preview_aa_allowed() in (True, False)
+
+
+def test_spectrum_aa_gate_hysteresis_recovers_only_below_its_on_budget(canvas):
+    # Spectrum has intentionally lower thresholds than the time-preview:
+    # seed dense -> OFF; the 2001..3000 dead band must preserve OFF; only
+    # <=2000 can recover AA.  Use curve stand-ins to exercise the state
+    # machine without coupling this threshold test to envelope geometry.
+    canvas._amp_curves = [_FakeCurve(1600), _FakeCurve(1600)]  # 3200 > OFF
+    canvas._reset_spectrum_aa_density_gate()
+    assert canvas._spectrum_aa_allowed() is False
+
+    canvas._amp_curves = [_FakeCurve(1250), _FakeCurve(1250)]  # dead band
+    assert canvas._spectrum_aa_allowed() is False
+
+    canvas._amp_curves = [_FakeCurve(1000), _FakeCurve(1000)]  # <= ON
+    assert canvas._spectrum_aa_allowed() is True
+
+    canvas._amp_curves = [_FakeCurve(1500), _FakeCurve(1500)]  # <= OFF
+    assert canvas._spectrum_aa_allowed() is True
+
+    canvas._amp_curves = [_FakeCurve(1501), _FakeCurve(1500)]  # > OFF
+    assert canvas._spectrum_aa_allowed() is False
 
 
 def test_fft_line_context_menu_has_custom_action_slot(canvas, monkeypatch):
