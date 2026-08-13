@@ -1,0 +1,7 @@
+btn text='?' tooltip='操作速查 (?)'
+btn local=(8, 1, 20, 18)
+btn in sb=18,11 size=20x18
+hintbar in sb=(10, 10, 830, 20)
+cp in sb=(846, 9, 256, 22) label='加载 1/1 · 解码信号 · 79%'
+label geo=(8, 5, 72, 12) bar geo=(88, 6, 162, 10)
+cp width=256 sizeHint=256 minHint=256 policy=4

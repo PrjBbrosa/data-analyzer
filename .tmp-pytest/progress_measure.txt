@@ -1,0 +1,12 @@
+standalone text='加载 1/1 · 解码信号 · 79%'
+adv=228 label_w=232 gap=9 ink_over=-12
+mainwin text='加载 1/1 · 解码信号 · 79%'
+cp=(846, 9, 256, 22) label=(8, 5, 72, 12) bar=(88, 6, 162, 10)
+gap=9 adv=0 label_w=72 ink_over=-80
+font='Microsoft YaHei' px=12 pt=-1 weight=75
+sb=1270x40
+child chartHintBar QFrame (10, 10, 830, 20) text=''
+child computeProgressWidget ComputeProgressWidget (846, 9, 256, 22) text=''
+child surfaceHelpButton QToolButton (1108, 7, 31, 27) text=''
+child surfaceVersionButton QToolButton (1145, 7, 117, 27) text='v7.9.8'
+saved progress=256x22 statusbar=1270x40

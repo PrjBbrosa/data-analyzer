@@ -1,0 +1,5 @@
+text='加载 1/1 · 解码信号 · 79%'
+full='加载 1/1 · 解码信号 · 79%'
+cp_w=260 hint=260
+label=(8, 5, 72, 12) bar=(92, 6, 162, 10)
+ink_right=8 bar_left=92 gap=84 spacing=12
