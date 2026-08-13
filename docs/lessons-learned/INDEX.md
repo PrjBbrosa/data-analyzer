@@ -162,6 +162,7 @@ lesson by default.
 | [「全部」用图面已绘制通道时长，不用通道树最长加载文件](time-range-all-uses-plotted-extent.md) | Changing Inspector「全部」/ `_plotted_time_extent` / analysis-mode framing | See lesson |
 | [ViewState Composite-Key Tables Stay In Sync](codex-viewstate-composite-key-tables-stay-in-sync.md) | Touching `remap_view_fids`, close-file ViewState cleanup, or any | See lesson |
 | [Toast providers stay weak; selected expanders avoid QMacStyle primitives](qt-lifecycle-toast-and-macstyle-expander.md) | ``Toast(margin_provider=bound_method)``; Darwin channel-tree | See lesson |
+| [FFT Time Preview Empty Keeps Y Graticule](fft-time-preview-empty-keeps-y-graticule.md) | Changing `PgLineCanvas` time-preview overlay grid, `_build_time_y_grid`, empty `plot_time_preview([])`, or `full_reset`. | See lesson |
 
 ## Selection Rules
 

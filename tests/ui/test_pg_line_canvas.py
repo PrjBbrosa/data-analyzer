@@ -1086,18 +1086,49 @@ def test_time_preview_single_entry_still_grids_and_aligns(qapp):
         c.deleteLater()
 
 
-def test_time_preview_clear_removes_grid_lines_without_leak(qapp):
-    """Clearing the preview (empty entries) tears down the shared grid lines and
-    detaches them from the scene — no scene-item leak across rebuilds."""
+def test_time_preview_clear_rebuilds_grid_without_leak(qapp):
+    """Clearing the preview detaches the previous InfiniteLines, then rebuilds
+    the shared Y graticule so an empty chart still has horizontal lines."""
     c = _realized(qapp, _multi_amplitude_entries())
     try:
-        lines = list(getattr(c, "_time_grid_lines", []))
-        assert lines, "expected grid lines after a multi-source plot"
+        old_lines = list(getattr(c, "_time_grid_lines", []))
+        assert old_lines, "expected grid lines after a multi-source plot"
         c.plot_time_preview([], title='时域预览')
         qapp.processEvents()
-        assert c._time_grid_lines == []
-        for line in lines:
+        for line in old_lines:
             assert line.scene() is None, "grid line still attached to a scene (leak)"
+        n = c._effective_time_divisions()
+        positions = _grid_line_positions(c)
+        assert len(positions) == n - 1
+        np.testing.assert_allclose(
+            positions, [i / n for i in range(1, n)], atol=1e-9)
+        left_ticks = _value_tick_values(c._plot_time.getAxis('left'))
+        assert len(left_ticks) == n + 1
+    finally:
+        c.deleteLater()
+
+
+def test_time_preview_empty_keeps_shared_y_grid(qapp):
+    """No checked FFT sources: time preview still draws the k/N Y graticule.
+
+    Native left-axis Y grid is off (overlay contract). Skipping the custom
+    InfiniteLines on the empty path left only vertical X grid lines.
+    """
+    c = PgLineCanvas()
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    try:
+        c.plot_time_preview([], title='时域预览')
+        qapp.processEvents()
+        n = c._effective_time_divisions()
+        positions = _grid_line_positions(c)
+        assert len(positions) == n - 1
+        np.testing.assert_allclose(
+            positions, [i / n for i in range(1, n)], atol=1e-9)
+        assert 0.0 not in positions and 1.0 not in positions
+        left_ticks = _value_tick_values(c._plot_time.getAxis('left'))
+        assert len(left_ticks) == n + 1
     finally:
         c.deleteLater()
 
@@ -1367,11 +1398,21 @@ def test_time_preview_idle_repin_after_y_pan(canvas, qapp):
     assert len(_major_tick_values(left)) == n + 1
 
 
-def test_empty_state_time_y_padded_off_top_frame(canvas):
-    """空状态最高刻度网格线不贴顶边框（视图上界 > 1.0）。"""
+def test_empty_state_time_y_grid_stays_internal(canvas, qapp):
+    """Empty preview keeps the shared Y graticule; lines are internal i/n so
+    they never double the top/bottom frame (spec R2, overlay contract)."""
+    canvas.show()
+    qapp.processEvents()
     canvas.full_reset()
-    (_y0, y1) = canvas._plot_time.vb.viewRange()[1]
-    assert y1 > 1.0
+    qapp.processEvents()
+    n = canvas._effective_time_divisions()
+    positions = _grid_line_positions(canvas)
+    assert len(positions) == n - 1
+    np.testing.assert_allclose(
+        positions, [i / n for i in range(1, n)], atol=1e-9)
+    assert 0.0 not in positions and 1.0 not in positions
+    left_ticks = _value_tick_values(canvas._plot_time.getAxis('left'))
+    assert len(left_ticks) == n + 1
 
 
 def test_fft_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypatch):

@@ -350,6 +350,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # (geometry on resize, X range on pan/zoom) so the extra Y axes track.
         self._plot_time.vb.sigResized.connect(self._sync_time_overlay_vbs)
         self._plot_time.vb.sigXRangeChanged.connect(self._sync_time_overlay_vbs)
+        # Native Y grid is off on the time preview; install the shared
+        # fractional graticule immediately so an empty chart still has
+        # horizontal lines (selection with no checked channels).
+        self._repin_time_y_to_grid()
         for _p in (self._plot_amp, self._plot_time):
             _p.vb.sigXRangeChanged.connect(self._refresh_bottom_x_ticks)
             _p.vb.sigResized.connect(self._refresh_bottom_x_ticks)
@@ -1171,10 +1175,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._apply_title_texts()
         # Keep both plots labelled in the empty state (consistency fix).
         self._apply_default_axis_labels()
-        # 空状态：显式留白，避免最高刻度网格线贴顶边框（spec R2）。有数据时
-        # 后续 plot_*/reset 会重新设范围，这里只管空态观感。
-        for p in (self._plot_amp, self._plot_time):
-            p.setYRange(0.0, 1.0, padding=0.08)
+        # Spectrum still uses native Y grid, so pad empty auto-range to keep
+        # the top tick line off the frame (historical spec R2). Time preview
+        # Y grid is the shared k/N graticule (internal i/n lines only); pin
+        # it with padding=0 so empty and with-data charts share one look.
+        self._plot_amp.setYRange(0.0, 1.0, padding=0.08)
+        self._plot_time.setYRange(0.0, 1.0, padding=0)
+        self._repin_time_y_to_grid()
         self.layout_geometry_changed.emit()
         # Curves are gone → the AA dot must fall back to red ("no curves")
         # instead of showing the previous render's stale green.
@@ -1429,7 +1436,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
         Rebuilt whenever the division count changes; old lines are removed from
         the grid ViewBox first so scene items never accumulate across rebuilds
-        (mirrors _clear_time_overlay_axes' detach discipline)."""
+        (mirrors _clear_time_overlay_axes' detach discipline). Empty previews
+        keep the same internal graticule — native Y grid is off, so skipping
+        this path leaves the chart with only vertical lines.
+        """
         grid_vb = self._ensure_time_grid_vb()
         for line in list(self._time_grid_lines):
             try:
@@ -1437,8 +1447,6 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             except Exception:
                 pass
         self._time_grid_lines = []
-        if not self._time_curves:
-            return
         alpha_int = max(1, min(255, int(round(_OVERLAY_GRID_ALPHA * 255))))
         pen = pg.mkPen(color=(180, 180, 180, alpha_int), width=1)
         lines = []
@@ -1556,10 +1564,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def _snap_time_axes_to_grid(self) -> None:
         """Phase-snap every preview Y window onto the current graticule span."""
         n = self._effective_time_divisions()
-        triples = self._time_axis_triples()
-        if not triples:
-            return
-        for vb, axis, _curve in triples:
+        for vb, axis in self._time_axis_pairs():
             try:
                 lo, hi = vb.viewRange()[1]
                 lo, hi = float(lo), float(hi)
@@ -1641,6 +1646,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         n = self._effective_time_divisions()
         triples = self._time_axis_triples()
         if not triples:
+            self._repin_time_y_to_grid()
             return
         for vb, axis, curve in triples:
             try:
@@ -1667,10 +1673,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         curve extents.
         """
         n = self._effective_time_divisions()
-        triples = self._time_axis_triples()
-        if not triples:
-            return
-        for vb, axis, _curve in triples:
+        for vb, axis in self._time_axis_pairs():
             try:
                 lo, hi = vb.viewRange()[1]
                 lo, hi = float(lo), float(hi)
@@ -1742,6 +1745,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._apply_title_texts()
             self._plot_time.setLabel('left', 'Amplitude')
             self._plot_time.setLabel('bottom', 'Time (s)')
+            # Native left-axis Y grid stays off; rebuild the shared k/N
+            # graticule so an empty preview still has horizontal lines.
+            self._repin_time_y_to_grid()
             self.layout_geometry_changed.emit()
             return
         if selected_idx is None:
