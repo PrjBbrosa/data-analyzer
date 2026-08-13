@@ -108,7 +108,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 sub="链接菜单三项：新文件加入当前 View · 新建 View 继承文件范围 · 切换分析时填充空 View（全关=不跟随）",
                 gesture="文件区链接图标",
             ),
-            QuickRow("保存会话", gesture=".tlproj 项目"),
+            QuickRow(
+                "保存会话",
+                sub="主按钮保存当前工程；箭头展开另存为",
+                gesture="工具栏「保存」",
+            ),
             QuickRow(
                 "操作速查",
                 sub="底栏默认只留问号；滚动文字提示可在本面板打开「底部提示」",

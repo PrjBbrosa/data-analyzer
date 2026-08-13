@@ -163,6 +163,13 @@ _HINTS = (
         priority=100,
     ),
     Hint(
+        id="toolbar.save_as_menu",
+        text="保存旁箭头可另存为",
+        surface="discovery",
+        retire_on="save_as",
+        priority=40,
+    ),
+    Hint(
         id="chart.copy_image",
         text="复制按钮导出带游标读数的图片并标注",
         surface="discovery",
