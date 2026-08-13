@@ -23,11 +23,14 @@ def test_toolbar_enabled_matrix(qapp):
     assert tb.btn_batch.isEnabled()
     assert tb.btn_ultraview.isEnabled()
     assert tb.btn_save_project.isEnabled()
+    assert tb.btn_save_caret.isEnabled()
     tb.set_enabled_for_mode('fft', has_file=True)
     assert tb.btn_batch.isEnabled()
     assert tb.btn_ultraview.isEnabled()
     tb.set_enabled_for_mode('time', has_file=False)
     assert not tb.btn_save_project.isEnabled()
+    assert not tb.btn_save_caret.isEnabled()
+    assert not tb.btn_save_project_as.isEnabled()
     assert tb.btn_batch.isEnabled()
     assert tb.btn_ultraview.isEnabled()
 
@@ -199,8 +202,11 @@ def test_toolbar_open_save_split_and_no_export(qtbot):
     assert tb.btn_add.text() == "打开"
     assert hasattr(tb, "btn_save_project")
     assert tb.btn_save_project.text() == "保存"
+    assert hasattr(tb, "btn_save_caret")
+    assert tb.btn_save_caret.text() == ""
     assert hasattr(tb, "btn_save_project_as")
     assert tb.btn_save_project_as.text() == "另存为"
+    assert tb.btn_save_project_as.parent() is tb._save_menu
     assert not hasattr(tb, "btn_export")
     assert hasattr(tb, "open_requested")
     assert hasattr(tb, "save_project_requested")
@@ -214,7 +220,7 @@ def test_toolbar_open_keeps_primary_entry_cue_and_other_file_actions_are_seconda
 
     assert tb.btn_add.property("role") == "primary"
     assert [button.property("role") for button in (
-        tb.btn_save_project, tb.btn_save_project_as, tb.btn_batch,
+        tb.btn_save_project, tb.btn_save_caret, tb.btn_batch,
         tb.btn_ultraview,
     )] == ["secondary"] * 4
 
@@ -230,7 +236,63 @@ def test_toolbar_primary_open_matches_secondary_file_action_height(qtbot, qapp):
     tb.show()
     qtbot.wait(20)
 
-    assert tb.btn_add.height() == tb.btn_save_project.height() == tb.btn_batch.height() == tb.btn_ultraview.height()
+    assert (
+        tb.btn_add.height()
+        == tb.btn_save_project.height()
+        == tb.btn_save_caret.height()
+        == tb.btn_batch.height()
+        == tb.btn_ultraview.height()
+    )
+    assert abs(tb._save_split.height() - tb.btn_batch.height()) <= 2
+    assert tb.btn_save_caret.width() < tb.btn_save_project.width()
+
+
+def test_toolbar_left_file_actions_share_equal_width(qtbot, qapp):
+    from mf4_analyzer.ui.toolbar import _SAVE_CARET_WIDTH
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    tb.resize(1280, 44)
+    tb.show()
+    qtbot.wait(20)
+
+    widths = (
+        tb.btn_add.width(),
+        tb._save_split.width(),
+        tb.btn_batch.width(),
+        tb.btn_ultraview.width(),
+    )
+    assert max(widths) - min(widths) <= 1
+    assert tb.btn_save_caret.width() == _SAVE_CARET_WIDTH
+    assert tb.btn_save_caret.width() < tb.btn_save_project.width()
+
+
+def test_toolbar_save_split_emits_save_and_save_as(qtbot):
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    with qtbot.waitSignal(tb.save_project_requested, timeout=200):
+        tb.btn_save_project.click()
+    with qtbot.waitSignal(tb.save_project_as_requested, timeout=200):
+        tb.btn_save_project_as.trigger()
+
+
+def test_toolbar_save_caret_opens_rounded_save_as_menu(qtbot, qapp):
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    tb.show()
+    qtbot.waitExposed(tb)
+    tb.btn_save_caret.click()
+    qapp.processEvents()
+    assert tb._save_menu.isVisible()
+    assert [action.text() for action in tb._save_menu.actions()] == ["另存为"]
+    tb._save_menu.close()
 
 
 def _mode_buttons(tb):

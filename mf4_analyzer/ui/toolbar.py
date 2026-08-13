@@ -2,12 +2,13 @@
 from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtWidgets import (
-    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QWidget,
+    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMenu,
+    QPushButton, QSizePolicy, QWidget,
 )
 
 from .. import app_meta
 from ..ui_kit.icons import Icons
+from ..ui_kit.menus import apply_rounded_menu_chrome
 
 _MODE_LABELS = {
     "time": "时域",
@@ -16,6 +17,10 @@ _MODE_LABELS = {
     "order": "阶次",
     "frf": "频响",
 }
+
+# Icon-only half of the save split. Keep this tighter than a labeled chip so
+# 打开 / 保存 / 批处理 can share one width instead of the caret dominating.
+_SAVE_CARET_WIDTH = 20
 
 
 def _make_sep(parent):
@@ -135,19 +140,14 @@ class Toolbar(QWidget):
         # save/save-as/batch remain secondary file actions.
         self.btn_add.setProperty("role", "primary")
         self.btn_add.setToolTip("打开数据文件或项目（.tlproj）")
-        self.btn_save_project = QPushButton("保存", self)
-        self.btn_save_project.setIcon(Icons.save_disk())
-        self.btn_save_project.setToolTip("保存到当前 .tlproj 项目（未保存过则提示选择路径）")
-        self.btn_save_project_as = QPushButton("另存为", self)
-        self.btn_save_project_as.setIcon(Icons.save_disk())
-        self.btn_save_project_as.setToolTip("将当前会话另存为新的 .tlproj 项目")
+        self._save_split = self._make_save_split()
         self.btn_batch = QPushButton("批处理", self)
         self.btn_batch.setIcon(Icons.batch())
         self.btn_ultraview = QPushButton("总览", self)
         self.btn_ultraview.setIcon(Icons.mode_ultraview())
         self.btn_ultraview.setToolTip("总览（独立面板，只读对照已有预览）")
         for button in (
-            self.btn_save_project, self.btn_save_project_as, self.btn_batch,
+            self.btn_save_project, self.btn_save_caret, self.btn_batch,
             self.btn_ultraview,
         ):
             button.setProperty("role", "secondary")
@@ -175,11 +175,12 @@ class Toolbar(QWidget):
         self.btn_mode_ultraview.setToolTip("总览（UltraView）")
         self.btn_mode_ultraview.hide()
 
-        for b in (self.btn_add, self.btn_save_project, self.btn_save_project_as,
+        for b in (self.btn_add, self.btn_save_project,
                   self.btn_batch, self.btn_ultraview,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
                   self.btn_mode_frf, self.btn_mode_order, self.btn_mode_ultraview):
             b.setIconSize(QSize(16, 16))
+        self.btn_save_caret.setIconSize(QSize(12, 12))
 
         # left layout
         left = QHBoxLayout()
@@ -187,12 +188,11 @@ class Toolbar(QWidget):
         left.setSpacing(10)
         for b in (
             self.btn_add,
-            self.btn_save_project,
-            self.btn_save_project_as,
+            self._save_split,
             self.btn_batch,
             self.btn_ultraview,
         ):
-            left.addWidget(b)
+            left.addWidget(b, 0, Qt.AlignVCenter)
 
         # Wrap left in a QWidget so it has a concrete sizeHint that the
         # stretch arithmetic can balance against.
@@ -275,6 +275,7 @@ class Toolbar(QWidget):
         self.btn_mode_time.setChecked(True)
         self._current_mode = 'time'
         self._mode_compact = False
+        self._left_action_chip_width = 0
 
         # Keep mirror width in sync with left_widget after layout is settled.
         self._left_widget = left_widget
@@ -292,12 +293,14 @@ class Toolbar(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._equalize_left_action_widths()
         self._sync_mirror()
         self._apply_mode_compact()
         self._sync_mode_active_dots()
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._equalize_left_action_widths()
         self._sync_mirror()
         self._apply_mode_compact()
         self._sync_mode_active_dots()
@@ -343,6 +346,7 @@ class Toolbar(QWidget):
 
     def _run_scheduled_mirror_sync(self):
         self._pending_mirror_sync = False
+        self._equalize_left_action_widths()
         self._sync_mirror()
         self._apply_mode_compact()
 
@@ -394,10 +398,76 @@ class Toolbar(QWidget):
             dot.move(max(0, button.width() - dot.width() - 5), 4)
             dot.setVisible(button.isChecked())
 
+    def _left_action_chips(self):
+        return (
+            self.btn_add,
+            self._save_split,
+            self.btn_batch,
+            self.btn_ultraview,
+        )
+
+    def _equalize_left_action_widths(self):
+        """Give 打开 / 保存 / 批处理 / 总览 one shared chip width."""
+        chips = self._left_action_chips()
+        if self._left_action_chip_width and all(
+            chip.minimumWidth() == self._left_action_chip_width for chip in chips
+        ):
+            return
+        for chip in chips:
+            chip.setMinimumWidth(0)
+        target = max(chip.sizeHint().width() for chip in chips)
+        self._left_action_chip_width = target
+        for chip in chips:
+            chip.setMinimumWidth(target)
+            chip.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+    def _make_save_split(self):
+        """One secondary chip: 保存 runs now; the caret opens 另存为."""
+        host = QWidget(self)
+        host.setObjectName("toolbarSaveSplit")
+        host.setAttribute(Qt.WA_StyledBackground, True)
+        host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+
+        self.btn_save_project = QPushButton("保存", host)
+        self.btn_save_project.setObjectName("toolbarSaveMain")
+        self.btn_save_project.setIcon(Icons.save_disk())
+        self.btn_save_project.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.btn_save_project.setToolTip(
+            "保存到当前 .tlproj 项目（未保存过则提示选择路径）"
+        )
+
+        self.btn_save_caret = QPushButton(host)
+        self.btn_save_caret.setObjectName("toolbarSaveCaret")
+        self.btn_save_caret.setIcon(Icons.chevron_down(QColor("#1769E0")))
+        self.btn_save_caret.setFixedWidth(_SAVE_CARET_WIDTH)
+        self.btn_save_caret.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.btn_save_caret.setToolTip("另存为…")
+        self.btn_save_caret.setAccessibleName("另存为")
+
+        self._save_menu = apply_rounded_menu_chrome(QMenu(host))
+        self.btn_save_project_as = self._save_menu.addAction("另存为")
+        self.btn_save_project_as.setIcon(Icons.save_disk())
+        self.btn_save_project_as.setToolTip("将当前会话另存为新的 .tlproj 项目")
+
+        row.addWidget(self.btn_save_project, 1)
+        row.addWidget(self.btn_save_caret, 0)
+        return host
+
+    def _open_save_menu(self):
+        host = self._save_split
+        self._save_menu.popup(host.mapToGlobal(host.rect().bottomLeft()))
+
+    def _emit_save_project_as(self, _checked=False):
+        self.save_project_as_requested.emit()
+
     def _wire(self):
         self.btn_add.clicked.connect(self.open_requested)
         self.btn_save_project.clicked.connect(self.save_project_requested)
-        self.btn_save_project_as.clicked.connect(self.save_project_as_requested)
+        self.btn_save_caret.clicked.connect(self._open_save_menu)
+        self.btn_save_project_as.triggered.connect(self._emit_save_project_as)
         self.btn_batch.clicked.connect(self.batch_requested)
         self.btn_ultraview.clicked.connect(self.ultraview_requested)
         # Hidden Cockpit entry: triple-click the brand logo (see _LogoLabel).
@@ -420,7 +490,8 @@ class Toolbar(QWidget):
 
     def set_enabled_for_mode(self, mode, has_file):
         """Implements the §7.1 enabled-state matrix."""
-        self.btn_save_project.setEnabled(has_file)
+        self._save_split.setEnabled(has_file)
+        self.btn_save_project_as.setEnabled(has_file)
         self.btn_batch.setEnabled(True)
         self.btn_ultraview.setEnabled(True)
 

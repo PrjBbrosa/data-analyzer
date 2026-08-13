@@ -1162,6 +1162,26 @@ Toolbar QPushButton {
 Toolbar QPushButton[role="primary"] {
     min-height: {{CONTROL_H_COMPACT_BUTTON_CONTENT}};
 }
+/* Save + Save-As share one secondary chip. Inner controls keep the same
+ * compact height as neighboring toolbar buttons; the caret is not a second
+ * labeled action. */
+Toolbar QWidget#toolbarSaveSplit {
+    background-color: transparent;
+    border: none;
+}
+Toolbar QPushButton#toolbarSaveMain {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    padding-left: 10px;
+    padding-right: 4px;
+    border-right-width: 0;
+}
+Toolbar QPushButton#toolbarSaveCaret {
+    min-height: {{CONTROL_H_COMPACT_BUTTON_CONTENT}};
+    padding: 2px 2px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+}
 Toolbar QPushButton[role="panel-toggle"] {
     min-width: 0;
     min-height: 0;
