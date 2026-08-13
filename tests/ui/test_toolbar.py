@@ -246,7 +246,7 @@ def test_toolbar_primary_open_matches_secondary_file_action_height(qtbot, qapp):
     assert tb.btn_save_caret.width() < tb.btn_save_project.width()
 
 
-def test_toolbar_left_file_actions_share_equal_width(qtbot, qapp):
+def test_toolbar_open_stays_content_sized_and_secondary_file_actions_match(qtbot, qapp):
     from mf4_analyzer.ui.toolbar import _SAVE_CARET_WIDTH
     from mf4_analyzer.ui_kit import load_stylesheet
 
@@ -258,12 +258,10 @@ def test_toolbar_left_file_actions_share_equal_width(qtbot, qapp):
     tb.show()
     qtbot.wait(20)
 
-    widths = (
-        tb.btn_add.width(),
-        tb._save_split.width(),
-        tb.btn_batch.width(),
-    )
-    assert max(widths) - min(widths) <= 1
+    assert tb.btn_add.width() <= tb.btn_batch.width()
+    assert tb.btn_add.width() <= tb._save_split.width()
+    assert tb.btn_add.width() <= tb.btn_add.sizeHint().width() + 1
+    assert abs(tb._save_split.width() - tb.btn_batch.width()) <= 1
     assert tb.btn_save_caret.width() == _SAVE_CARET_WIDTH
     assert tb.btn_save_caret.width() < tb.btn_save_project.width()
 

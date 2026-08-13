@@ -1158,9 +1158,12 @@ Toolbar QPushButton {
     min-height: {{CONTROL_H_COMPACT_BUTTON_CONTENT}};
     padding: 2px 12px;
 }
-/* “打开” keeps the primary fill but shares this compact toolbar row's height. */
+/* “打开” keeps the primary fill and hugs its 2-character label.
+ * Do not inherit the 12px side padding used by 批处理; that extra
+ * air inside a solid chip is what made 打开 look wider. */
 Toolbar QPushButton[role="primary"] {
     min-height: {{CONTROL_H_COMPACT_BUTTON_CONTENT}};
+    padding: 2px 10px;
 }
 /* Save + Save-As share one secondary chip. Inner controls keep the same
  * compact height as neighboring toolbar buttons; the caret is not a second

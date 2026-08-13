@@ -19,7 +19,7 @@ _MODE_LABELS = {
 }
 
 # Icon-only half of the save split. Keep this tighter than a labeled chip so
-# 打开 / 保存 / 批处理 can share one width instead of the caret dominating.
+# 保存 / 批处理 can share one secondary width without the caret dominating.
 _SAVE_CARET_WIDTH = 20
 
 
@@ -386,16 +386,17 @@ class Toolbar(QWidget):
             dot.move(max(0, button.width() - dot.width() - 5), 4)
             dot.setVisible(button.isChecked())
 
-    def _left_action_chips(self):
-        return (
-            self.btn_add,
-            self._save_split,
-            self.btn_batch,
-        )
+    def _secondary_file_chips(self):
+        return (self._save_split, self.btn_batch)
 
     def _equalize_left_action_widths(self):
-        """Give 打开 / 保存 / 批处理 one shared chip width."""
-        chips = self._left_action_chips()
+        """Keep 保存 / 批处理 on one secondary width; leave 打开 to content.
+
+        Stretching the primary 打开 chip to 批处理's 3-character width left
+        empty blue padding around a 2-character label, so 打开 read as the
+        fattest of the three even when the outer boxes matched.
+        """
+        chips = self._secondary_file_chips()
         if self._left_action_chip_width and all(
             chip.minimumWidth() == self._left_action_chip_width for chip in chips
         ):
