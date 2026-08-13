@@ -501,6 +501,26 @@ def test_escape_clears_replacement_after_focus(qtbot):
     assert harness.page.replacement_slot() is None
 
 
+def test_escape_exits_presentation_after_focus_and_replacement(qtbot):
+    harness = _Harness(qtbot)
+    ref = make_ref("time", "time-1")
+    add_ref(harness.board, ref)
+    harness.page.set_board(harness.board)
+    harness.page.set_preview(ref, FakePreview(ref=ref, image=_image(), title="道路输入"))
+    harness.page._on_focus("time", "time-1")
+    harness.page.arm_replacement("time", "time-1")
+    harness.page.set_presentation_active(True)
+    harness.page.handle_escape()
+    assert not harness.page.focus_layer().isVisible()
+    assert harness.page.is_presentation_active() is True
+    harness.page.handle_escape()
+    assert harness.page.replacement_slot() is None
+    assert harness.page.is_presentation_active() is True
+    harness.page.handle_escape()
+    assert harness.page.is_presentation_active() is False
+    assert harness.presentation == [False]
+
+
 def test_compare_filter_and_axis_warnings_do_not_mutate_board(qtbot):
     harness = _Harness(qtbot)
     time_ref = make_ref("time", "time-1")
@@ -600,3 +620,30 @@ def test_object_names_are_stable(qtbot):
     assert page.compare_rail().objectName() == "ultraViewCompareRail"
     assert page.board_toolbar().objectName() == "ultraViewBoardToolbar"
     assert page.focus_layer().objectName() == "ultraViewFocusLayer"
+
+
+def test_board_name_is_keyboard_editable(qtbot):
+    harness = _Harness(qtbot)
+    names = []
+    harness.page.board_name_changed.connect(names.append)
+    edit = harness.page.board_toolbar().board_name_edit()
+    edit.setText("整车问题总览")
+    edit.editingFinished.emit()
+    assert names == ["整车问题总览"]
+
+
+def test_show_titles_and_sources_hide_chrome_without_empty_band(qtbot, qapp):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.board.show_titles = False
+    harness.board.show_sources = False
+    harness.page.set_preview(
+        make_ref("time", "time-1"),
+        FakePreview(ref=make_ref("time", "time-1"), image=_image(), title="道路输入"),
+    )
+    harness.page.set_board(harness.board)
+    qapp.processEvents()
+    card = harness.page.card_widget("time", "time-1")
+    assert card._title.isVisible() is False
+    assert card.footer_height() == 0
+    assert "道路输入" in card.accessibleName()

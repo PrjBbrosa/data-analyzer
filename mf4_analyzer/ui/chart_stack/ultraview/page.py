@@ -73,6 +73,7 @@ class UltraViewPage(QWidget):
     compare_filter_changed = pyqtSignal(str)
     quickref_requested = pyqtSignal()
     selection_changed = pyqtSignal(str, str)
+    board_name_changed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -137,6 +138,7 @@ class UltraViewPage(QWidget):
         self._toolbar.copy_board_requested.connect(self.copy_board_requested)
         self._toolbar.export_png_requested.connect(self.export_png_requested)
         self._toolbar.presentation_toggled.connect(self._on_presentation_button)
+        self._toolbar.board_name_changed.connect(self.board_name_changed)
 
         self._rail.compare_filter_changed.connect(self._on_compare_filter)
 
@@ -306,20 +308,22 @@ class UltraViewPage(QWidget):
         self._refresh_projection()
 
     def _on_escape_shortcut(self) -> None:
-        if self._focus.isVisible():
-            self._focus.close_layer()
-            return
         self.handle_escape()
 
     def handle_escape(self) -> bool:
-        popup = QApplication.activePopupWidget()
-        if isinstance(popup, QMenu) and popup.isVisible():
-            return False
         if self._focus.isVisible():
             self._focus.close_layer()
             return True
         if self._replacement_slot is not None:
             self.clear_replacement_arm()
+            return True
+        if self._presentation:
+            self.set_presentation_active(False)
+            self.presentation_toggled.emit(False)
+            return True
+        popup = QApplication.activePopupWidget()
+        if isinstance(popup, QMenu) and popup.isVisible():
+            popup.close()
             return True
         return False
 
@@ -543,6 +547,8 @@ class UltraViewPage(QWidget):
                 selected=self._selected == ref,
                 dimmed=not card_matches_compare_filter(axis_kind, self._compare_filter),
                 replacement_armed=self._replacement_slot == slot_id,
+                show_title=bool(self._board.show_titles),
+                show_source=bool(self._board.show_sources),
             )
         self._grid.set_grid(self._board.layout_id, self._board.primary_ratio, models)
         titles = {}

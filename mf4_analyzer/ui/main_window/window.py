@@ -4552,7 +4552,7 @@ class MainWindow(
         if uv is not None:
             from PyQt5 import sip
             if not sip.isdeleted(uv):
-                uv.clear()
+                uv.shutdown()
                 uv.deleteLater()
         self._analysis_jobs.shutdown()
         super().closeEvent(event)

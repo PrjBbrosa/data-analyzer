@@ -917,3 +917,25 @@ def test_load_zfd_toasts_renamed_channels_summary(qapp, tmp_path, monkeypatch):
 
     warn = [m for m, lv in toasts if lv == "warning"]
     assert any(m == "1 个通道重名，已加序号区分" for m in warn), toasts
+
+
+def test_close_all_cancel_keeps_ultraview_board(qapp, qtbot, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui.ultraview_state import UltraViewRef, add_ref, membership_set
+
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    uv = mw._ultraview
+    view_id = str(mw.view_manager.get(0).view_id)
+    add_ref(uv.board, UltraViewRef("time", view_id))
+    uv.board.name = "会话保留"
+    mw.files["f1"] = object()
+    mw.navigator.add_file = lambda *a, **kw: None
+    mw.navigator.remove_file = lambda *a, **kw: None
+    monkeypatch.setattr(mw, "_confirm_global_file_close", lambda *a, **k: False)
+
+    mw.close_all()
+
+    assert "f1" in mw.files
+    assert uv.board.name == "会话保留"
+    assert UltraViewRef("time", view_id) in membership_set(uv.board)

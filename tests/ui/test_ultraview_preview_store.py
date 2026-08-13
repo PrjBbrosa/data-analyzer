@@ -70,6 +70,19 @@ def _status(store: PreviewStore, ref, *, exists: bool = True, current_digest: st
     )
 
 
+def test_preview_store_does_not_connect_destroyed():
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "mf4_analyzer"
+        / "ui"
+        / "chart_stack"
+        / "ultraview"
+        / "preview_store.py"
+    )
+    source = path.read_text(encoding="utf-8")
+    assert "destroyed.connect" not in source
+
+
 def test_preview_store_does_not_import_page_or_compute():
     path = (
         Path(__file__).resolve().parents[2]
@@ -300,9 +313,15 @@ def test_drop_clear_and_destroy_release_images(qapp):
     assert cleared.get(extra) is None
     assert held_clear.image is None
 
+    cleared.clear()
+    assert cleared.get(extra) is None
+
     held = store.get(keep)
     assert held is not None
     assert held.image is not None
     sip.delete(store)
     assert sip.isdeleted(store)
-    assert held.image is None
+    # Destroy must not run a Python callback that mutates QImage records.
+    # Pixels are released only by an explicit clear() while the QObject lives.
+    assert held.image is not None
+    assert not held.image.isNull()

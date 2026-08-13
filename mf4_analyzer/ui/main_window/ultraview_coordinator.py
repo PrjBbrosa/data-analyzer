@@ -14,7 +14,7 @@ from typing import Any
 from PyQt5 import sip
 from PyQt5.QtCore import QObject, QTimer
 from PyQt5.QtGui import QImage
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QApplication, QFileDialog, QWidget
 
 from ...diagnostics import throttled
 from ...render_profile import source_revision_for
@@ -42,10 +42,19 @@ from ..ultraview_state import (
     replace_slot,
     set_layout,
     swap_slots,
+    board_to_payload,
+    normalize_board_payload,
+    DEFAULT_BOARD_NAME,
 )
 from ..chart_stack.ultraview.preview_store import PreviewStore
 from ..chart_stack.ultraview.widgets import LibraryRow
+from ..chart_stack.ultraview.compositor import (
+    ComposeError,
+    compose_board,
+    save_composed_png,
+)
 from ..image_utils import pixmap_as_device_pixel_image
+from .ultraview_runtime import PresentationRuntimeFacts, PresentationRuntimeLedger
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +72,7 @@ _SECTION_X_UNIT = {
 def notify_ultraview_plot(window, section: str, reason: str = "plot") -> None:
     """Queue a visible-section capture after an actual plot/set_result."""
     coordinator = getattr(window, "_ultraview", None)
-    if coordinator is None:
+    if coordinator is None or coordinator.is_shutdown:
         return
     coordinator.request_visible_section_capture(section, reason)
 
@@ -220,6 +229,7 @@ class UltraViewCoordinator(QObject):
         super().__init__(parent if parent is not None else window)
         self._window_ref = weakref.ref(window)
         self._store = PreviewStore(parent=self)
+        self._shutdown = False
         self._bindings: dict[int, tuple[UltraViewRef, Any]] = {}
         self._queued: dict[tuple, QTimer] = {}
         self._unstable: dict[int, tuple] = {}
@@ -227,12 +237,20 @@ class UltraViewCoordinator(QObject):
         self._hooked_ids: set[int] = set()
         self._result_identity: dict[tuple, int] = {}
         self._result_generation: dict[tuple, int] = {}
+        self._runtime = PresentationRuntimeLedger()
         self.last_source_mode = "time"
         self._board = default_board()
         self._left_snapshot = None
         self._inspector_snapshot = None
         self._page_hooks: list[tuple[Any, Any, Any]] = []
         self.attach()
+
+    @property
+    def is_shutdown(self) -> bool:
+        return bool(self._shutdown)
+
+    def _inactive(self) -> bool:
+        return self._shutdown or not _alive(self)
 
     @property
     def store(self) -> PreviewStore:
@@ -247,6 +265,8 @@ class UltraViewCoordinator(QObject):
             self.last_source_mode = mode
 
     def bind_canvas(self, canvas, ref: UltraViewRef | None) -> None:
+        if self._inactive():
+            return
         if canvas is None or not _alive(canvas):
             return
         ident = id(canvas)
@@ -269,8 +289,10 @@ class UltraViewCoordinator(QObject):
 
         Must run synchronously: a queued grab would see the new binding and
         drop the old frame (UV-A18). Same-view replot does not capture the
-        outgoing frame. Hidden secondary widgets are skipped.
+        outgoing frame.         Hidden secondary widgets are skipped.
         """
+        if self._inactive():
+            return
         if canvas is None or not _alive(canvas):
             return
         try:
@@ -286,6 +308,8 @@ class UltraViewCoordinator(QObject):
         self._try_publish_now(ref, canvas, "leaving-bound-canvas")
 
     def request_capture(self, ref, widget, reason: str) -> None:
+        if self._inactive():
+            return
         if ref is None or widget is None or not _alive(widget):
             return
         try:
@@ -315,6 +339,8 @@ class UltraViewCoordinator(QObject):
         self._queue_grab(key, ref, widget, digest, reason)
 
     def request_visible_section_capture(self, section: str, reason: str = "plot") -> None:
+        if self._inactive():
+            return
         window = self._window
         if window is None:
             return
@@ -329,6 +355,8 @@ class UltraViewCoordinator(QObject):
 
     def notify_result_stored(self, section, view_id, pane_idx, key, result) -> None:
         """Bump generation only when the key is new or the object identity changed."""
+        if self._inactive():
+            return
         slot = self._generation_slot(section, view_id, pane_idx, key)
         identity = id(result)
         previous = self._result_identity.get(slot)
@@ -366,6 +394,35 @@ class UltraViewCoordinator(QObject):
             return
         self._store.set_pinned_refs(placed_ref_set(board))
 
+    def project_source_mode(self) -> str:
+        if self.last_source_mode in SOURCE_SECTIONS:
+            return self.last_source_mode
+        return "time"
+
+    def to_project_payload(self) -> dict:
+        return board_to_payload(self._board)
+
+    def restore_project_state(self, payload) -> list[str]:
+        """Replace Board from a persisted payload. Store stays empty."""
+        if self._shutdown:
+            return []
+        self._drop_all_timers()
+        self._disconnect_hooks()
+        if _alive(self._store):
+            self._store.clear()
+        self._bindings.clear()
+        self._unstable.clear()
+        self._result_identity.clear()
+        self._result_generation.clear()
+        self._runtime.clear()
+        board, warnings = normalize_board_payload(payload)
+        self._board = board
+        self._left_snapshot = None
+        self.refresh_page()
+        for item in warnings:
+            logger.warning("UltraView project restore: %s", item)
+        return list(warnings)
+
     @property
     def board(self) -> UltraViewBoardState:
         return self._board
@@ -378,6 +435,11 @@ class UltraViewCoordinator(QObject):
         return getattr(stack, "page_ultraview", None)
 
     def attach(self) -> None:
+        if self._inactive():
+            return
+        if self._page_hooks:
+            self.refresh_page()
+            return
         window = self._window
         if window is None:
             return
@@ -412,6 +474,10 @@ class UltraViewCoordinator(QObject):
             (page.presentation_toggled, self._on_presentation),
             (page.compare_filter_changed, self._on_compare_filter),
             (page.selection_changed, self._on_selection),
+            (page.copy_board_requested, self.copy_board_to_clipboard),
+            (page.copy_card_image_requested, self._on_copy_card),
+            (page.export_png_requested, self.choose_and_export_png),
+            (page.board_name_changed, self._on_board_name),
         )
         for signal, slot in pairs:
             signal.connect(slot)
@@ -499,6 +565,8 @@ class UltraViewCoordinator(QObject):
         self.request_capture(ref, secondary, reason)
 
     def add_from_source_tab(self, section: str, view_id: str) -> None:
+        if self._inactive():
+            return
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
@@ -533,6 +601,8 @@ class UltraViewCoordinator(QObject):
         self.request_capture(ref, secondary, "add-from-tab-split")
 
     def open_source(self, section: str, view_id: str) -> None:
+        if self._inactive():
+            return
         window = self._window
         if window is None:
             return
@@ -546,8 +616,14 @@ class UltraViewCoordinator(QObject):
         if toolbar is not None:
             toolbar._set_mode(section)
 
+        coord_ref = weakref.ref(self)
+        window_ref = self._window_ref
+
         def _switch():
-            host = self._window
+            coord = coord_ref()
+            if coord is None or coord._inactive():
+                return
+            host = window_ref()
             if host is None:
                 return
             if section == "time":
@@ -558,6 +634,8 @@ class UltraViewCoordinator(QObject):
         QTimer.singleShot(0, _switch)
 
     def refresh_page(self) -> None:
+        if self._inactive():
+            return
         page = self.page()
         if page is None:
             return
@@ -646,6 +724,8 @@ class UltraViewCoordinator(QObject):
             derive_preview_status(exists, image_valid, captured, digest),
             exists,
         )
+        if image_valid and ref in placed_ref_set(self._board):
+            self._store.touch(ref)
 
     def _sync_inspector(self) -> None:
         window = self._window
@@ -665,9 +745,13 @@ class UltraViewCoordinator(QObject):
         ctx.set_board(self._board, selected=selected, compare_filter=compare)
 
     def _after_board_mutation(self) -> None:
+        if self._inactive():
+            return
         self.refresh_page()
 
     def _apply_add_ref(self, ref: UltraViewRef) -> None:
+        if self._inactive():
+            return
         page = self.page()
         if ref in membership_set(self._board):
             if page is not None:
@@ -677,6 +761,8 @@ class UltraViewCoordinator(QObject):
         self._after_board_mutation()
 
     def _on_add_ref(self, section: str, view_id: str) -> None:
+        if self._inactive():
+            return
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is not None:
             self._apply_add_ref(ref)
@@ -722,16 +808,136 @@ class UltraViewCoordinator(QObject):
         self._after_board_mutation()
 
     def _on_focus(self, section: str, view_id: str) -> None:
+        if self._inactive():
+            return
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is not None:
+            self._store.touch(ref)
         page = self.page()
         if page is not None:
             page.show_focus(section, view_id)
 
+    def _on_copy_card(self, section: str, view_id: str) -> None:
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is not None:
+            self.copy_card_to_clipboard(ref)
+
+    def _on_board_name(self, name: str) -> None:
+        if self._inactive():
+            return
+        cleaned = str(name or "").strip() or DEFAULT_BOARD_NAME
+        if self._board.name == cleaned:
+            return
+        self._board.name = cleaned
+        self._after_board_mutation()
+
+    def copy_board_to_clipboard(self) -> bool:
+        image = self._compose_or_toast(scale=1, action="复制整板图")
+        if image is None:
+            return False
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            self._export_failed("clipboard_failed", "无法访问剪贴板")
+            return False
+        clipboard.setImage(image)
+        self._toast("已复制整板图", "success")
+        return True
+
+    def copy_card_to_clipboard(self, ref: UltraViewRef) -> bool:
+        if self._inactive():
+            return False
+        record = self._store.get(ref)
+        image = getattr(record, "image", None) if record is not None else None
+        if not PreviewStore.image_valid(image):
+            self._export_failed("missing_preview", "该卡片尚无可用预览")
+            return False
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            self._export_failed("clipboard_failed", "无法访问剪贴板")
+            return False
+        clipboard.setImage(image)
+        self._store.touch(ref)
+        self._toast("已复制卡片图", "success")
+        return True
+
+    def choose_and_export_png(self, scale: int = 1) -> bool:
+        if self._inactive():
+            return False
+        factor = 1 if int(scale) <= 1 else 2
+        path, _filter = QFileDialog.getSaveFileName(
+            self._window,
+            f"导出 PNG {factor}×",
+            "",
+            "PNG (*.png)",
+        )
+        if not path:
+            return False
+        if not str(path).lower().endswith(".png"):
+            path = str(path) + ".png"
+        return self.export_png_to_path(path, scale=factor)
+
+    def export_png_to_path(self, path, *, scale: int = 1) -> bool:
+        image = self._compose_or_toast(scale=scale, action="导出 PNG")
+        if image is None:
+            return False
+        try:
+            save_composed_png(image, path)
+        except ComposeError as exc:
+            self._export_failed(exc.code, exc.message)
+            return False
+        self._toast(f"已导出 PNG {1 if int(scale) <= 1 else 2}×", "success")
+        return True
+
+    def compose_board_image(self, scale: int = 1) -> QImage:
+        return self._compose_board(scale)
+
+    def _compose_board(self, scale: int) -> QImage:
+        records = {}
+        statuses = {}
+        for ref in all_refs(self._board):
+            record = self._store.get(ref)
+            records[ref] = record
+            if record is not None and PreviewStore.image_valid(getattr(record, "image", None)):
+                if ref in placed_ref_set(self._board):
+                    self._store.touch(ref)
+            exists = self._ref_exists(ref)
+            digest = self.current_digest_for(ref) if exists else None
+            image_valid = record is not None and PreviewStore.image_valid(
+                getattr(record, "image", None)
+            )
+            captured = getattr(record, "captured_digest", None) if record else None
+            statuses[ref] = derive_preview_status(exists, image_valid, captured, digest)
+        return compose_board(self._board, records, statuses, scale=scale)
+
+    def _compose_or_toast(self, *, scale: int, action: str) -> QImage | None:
+        if self._inactive():
+            return None
+        try:
+            return self._compose_board(scale)
+        except ComposeError as exc:
+            self._export_failed(exc.code, f"{action}失败：{exc.message}")
+            return None
+
+    def _export_failed(self, code: str, message: str) -> None:
+        logger.warning("UltraView export %s: %s", code, message)
+        self._toast(message, "warning")
+
+    def _toast(self, message: str, level: str) -> None:
+        window = self._window
+        toast = getattr(window, "toast", None) if window is not None else None
+        if callable(toast):
+            toast(message, level)
+
     def _on_rebind_arm(self, section: str, view_id: str) -> None:
+        if self._inactive():
+            return
         page = self.page()
         if page is not None:
             page.arm_replacement(section, view_id)
 
     def _on_compare_filter(self, filter_id: str) -> None:
+        if self._inactive():
+            return
         page = self.page()
         wanted = str(filter_id or COMPARE_FILTER_ALL)
         if page is not None and page.compare_filter() != wanted:
@@ -739,6 +945,8 @@ class UltraViewCoordinator(QObject):
         self._sync_inspector()
 
     def _on_selection(self, _section: str, _view_id: str) -> None:
+        if self._inactive():
+            return
         self._sync_inspector()
 
     def _on_show_titles(self, checked: bool) -> None:
@@ -780,6 +988,8 @@ class UltraViewCoordinator(QObject):
         self._after_board_mutation()
 
     def _on_presentation(self, active: bool) -> None:
+        if self._inactive():
+            return
         window = self._window
         page = self.page()
         if page is not None:
@@ -818,15 +1028,57 @@ class UltraViewCoordinator(QObject):
                 return idx
         return None
 
-    def clear(self) -> None:
+    def shutdown(self) -> None:
+        """Final MainWindow close path: stop work, drop hooks, then drop pixels.
+
+        Idempotent. Project reset must call ``reset_project_state`` instead.
+        Queued callbacks no-op after the flag is set, even if a timer still
+        delivers.
+        """
+        if self._shutdown:
+            return
+        self._shutdown = True
         self._drop_all_timers()
         self._disconnect_hooks()
         self._disconnect_page_hooks()
-        self._store.clear()
+        if _alive(self._store):
+            self._store.clear()
         self._bindings.clear()
         self._unstable.clear()
         self._result_identity.clear()
         self._result_generation.clear()
+        self._runtime.clear()
+        self._board = default_board()
+        self._left_snapshot = None
+        self._inspector_snapshot = None
+
+    def reset_project_state(self) -> None:
+        """Clear Board/Store/runtime for a new or replaced project.
+
+        Page/Inspector/Stack hooks stay connected so the same window remains
+        interactive. Does not run during shutdown.
+        """
+        if self._shutdown:
+            return
+        page = self.page()
+        if page is not None and page.is_presentation_active():
+            self._on_presentation(False)
+        self._drop_all_timers()
+        self._disconnect_hooks()
+        if _alive(self._store):
+            self._store.clear()
+        self._bindings.clear()
+        self._unstable.clear()
+        self._result_identity.clear()
+        self._result_generation.clear()
+        self._runtime.clear()
+        self._board = default_board()
+        self._left_snapshot = None
+        self.refresh_page()
+
+    def clear(self) -> None:
+        """Compatibility shim. Product paths must call reset or shutdown."""
+        self.reset_project_state()
 
     def _disconnect_page_hooks(self) -> None:
         for obj, signal, slot in self._page_hooks:
@@ -844,7 +1096,7 @@ class UltraViewCoordinator(QObject):
         state = self._time_state(window, ref.view_id)
         if state is None:
             return None
-        widget = self._widget_for_ref(ref)
+        facts = self._runtime_facts_for(ref)
         filter_payload = self._filter_payload(window)
         return {
             "attached_file_ids": [str(fid) for fid in (state.attached_file_ids or [])],
@@ -871,8 +1123,7 @@ class UltraViewCoordinator(QObject):
             "axis_opts": dict(state.axis_opts or {}),
             "filter": filter_payload,
             "data_signatures": self._time_data_signatures(window, state),
-            "markup_revision": read_markup_revision(widget) if widget is not None
-            else read_markup_revision(getattr(window, "canvas_time", None)),
+            "markup_revision": facts.markup_revision,
         }
 
     def _analysis_payload(self, window, ref: UltraViewRef) -> dict | None:
@@ -880,8 +1131,10 @@ class UltraViewCoordinator(QObject):
         if resolved is None:
             return None
         _mgr, state = resolved
-        page = self._analysis_page(window, ref.section)
-        pane_count = int(page.pane_count()) if page is not None else len(state.panes)
+        facts = self._runtime_facts_for(ref)
+        pane_count = len(state.panes)
+        if facts.visible_pane_count is not None:
+            pane_count = int(facts.visible_pane_count)
         panes = []
         for pane_idx, pane in enumerate(state.panes[:pane_count]):
             keys = self._pane_cache_keys(window, ref.section, ref.view_id, pane_idx)
@@ -906,13 +1159,12 @@ class UltraViewCoordinator(QObject):
                     for key in keys
                 ],
             })
-        widget = page if page is not None else self._widget_for_ref(ref)
         return {
             "panes": panes,
             "params": dict(state.params or {}),
             "compare": dict(state.compare or {}),
             "pane_count": pane_count,
-            "markup_revision": read_markup_revision(widget),
+            "markup_revision": facts.markup_revision,
         }
 
     def _time_data_signatures(self, window, state) -> list:
@@ -984,6 +1236,8 @@ class UltraViewCoordinator(QObject):
     # -- capture ----------------------------------------------------------
 
     def _try_publish_now(self, ref, widget, reason: str) -> bool:
+        if self._inactive():
+            return False
         digest = self.current_digest_for(ref)
         if digest is None:
             self._warn_capture(ref, widget, reason, "digest-unavailable")
@@ -997,34 +1251,51 @@ class UltraViewCoordinator(QObject):
         return self._publish_grab(ref, widget, digest, reason)
 
     def _queue_grab(self, key, ref, widget, digest, reason) -> None:
+        if self._inactive():
+            return
         widget_ref = weakref.ref(widget)
+        coord_ref = weakref.ref(self)
 
         def _fire():
+            coord = coord_ref()
+            if coord is None or coord._inactive():
+                return
             canvas = widget_ref()
             if canvas is None or not _alive(canvas):
                 return
-            self._publish_grab(ref, canvas, digest, reason)
+            coord._publish_grab(ref, canvas, digest, reason)
 
         self._start_timer(key, _fire)
 
     def _queue_heatmap_grab(self, key, ref, widget, digest, reason) -> None:
+        if self._inactive():
+            return
         widget_ref = weakref.ref(widget)
+        coord_ref = weakref.ref(self)
 
         def _after_layout():
+            coord = coord_ref()
+            if coord is None or coord._inactive():
+                return
             canvas = widget_ref()
             if canvas is None or not _alive(canvas):
                 return
-            self._queue_grab(key, ref, canvas, digest, reason)
+            coord._queue_grab(key, ref, canvas, digest, reason)
 
         def _after_first_turn():
+            coord = coord_ref()
+            if coord is None or coord._inactive():
+                return
             canvas = widget_ref()
             if canvas is None or not _alive(canvas):
                 return
-            self._start_timer(key, _after_layout)
+            coord._start_timer(key, _after_layout)
 
         self._start_timer(key, _after_first_turn)
 
     def _publish_grab(self, ref, widget, digest, reason) -> bool:
+        if self._inactive():
+            return False
         if not _alive(widget):
             return False
         bound = self.bound_ref_for(widget)
@@ -1048,6 +1319,7 @@ class UltraViewCoordinator(QObject):
         meta = self._preview_meta(ref, digest)
         published = bool(self._store.publish(ref, image, digest=digest, meta=meta))
         if published:
+            self._runtime.commit(ref, self._facts_from_widget(widget))
             self._push_preview(ref)
         return published
 
@@ -1141,13 +1413,17 @@ class UltraViewCoordinator(QObject):
             self._hooked_ids.add(ident)
 
     def _on_quality_status_changed(self, *_args) -> None:
+        if self._inactive():
+            return
         self._reconsider_pending(self.sender())
 
     def _on_layout_geometry_changed(self, *_args) -> None:
+        if self._inactive():
+            return
         self._reconsider_pending(self.sender())
 
     def _reconsider_pending(self, sender) -> None:
-        if sender is None:
+        if self._inactive() or sender is None:
             return
         for ident, pending in list(self._unstable.items()):
             ref, _digest, reason, widget_ref = pending
@@ -1189,18 +1465,37 @@ class UltraViewCoordinator(QObject):
         return self._analysis_page(window, section)
 
     def _widget_for_ref(self, ref: UltraViewRef):
-        for _ident, (bound, handle) in self._bindings.items():
+        return self._bound_widget_for(ref)
+
+    def _bound_widget_for(self, ref: UltraViewRef):
+        for _ident, (bound, handle) in list(self._bindings.items()):
             if bound != ref:
                 continue
             widget = handle()
-            if widget is not None and _alive(widget):
+            if widget is None or not _alive(widget):
+                continue
+            if self.bound_ref_for(widget) == ref:
                 return widget
-        window = self._window
-        if window is None:
-            return None
-        if ref.section == "time":
-            return getattr(window, "canvas_time", None)
-        return self._analysis_page(window, ref.section)
+        return None
+
+    def _facts_from_widget(self, widget) -> PresentationRuntimeFacts:
+        pane_count = getattr(widget, "pane_count", None)
+        visible = int(pane_count()) if callable(pane_count) else None
+        return PresentationRuntimeFacts(
+            markup_revision=read_markup_revision(widget),
+            visible_pane_count=visible,
+        )
+
+    def _runtime_facts_for(self, ref: UltraViewRef) -> PresentationRuntimeFacts:
+        widget = self._bound_widget_for(ref)
+        if widget is not None:
+            facts = self._facts_from_widget(widget)
+            self._runtime.commit(ref, facts)
+            return facts
+        stored = self._runtime.get(ref)
+        if stored is not None:
+            return stored
+        return PresentationRuntimeFacts()
 
     def _time_state(self, window, view_id: str):
         manager = getattr(window, "view_manager", None)
@@ -1325,17 +1620,23 @@ class UltraViewCoordinator(QObject):
         )
 
     def _start_timer(self, key, callback) -> None:
+        if self._inactive():
+            return
         existing = self._queued.pop(key, None)
         if existing is not None:
             existing.stop()
             existing.deleteLater()
         timer = QTimer(self)
         timer.setSingleShot(True)
+        coord_ref = weakref.ref(self)
 
         def _fire():
-            current = self._queued.get(key)
+            coord = coord_ref()
+            if coord is None or coord._inactive():
+                return
+            current = coord._queued.get(key)
             if current is timer:
-                self._queued.pop(key, None)
+                coord._queued.pop(key, None)
             timer.deleteLater()
             callback()
 

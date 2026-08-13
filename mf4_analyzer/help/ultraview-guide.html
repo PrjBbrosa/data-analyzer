@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>总览 · 操作指南</title>
+<link rel="stylesheet" href="assets/deck.css">
+</head>
+<body>
+<div class="deck-viewport">
+<main class="deck-stage" id="deckStage">
+
+  <section class="slide cover active">
+    <div class="frame">
+      <div class="corner reveal d1">TraceLab v7.9.9<br>总览 / UltraView</div>
+      <div class="cover-eyebrow reveal d1">操作指南 · <b>READ-ONLY BOARD</b></div>
+      <h1 class="reveal d2">总<em>览</em></h1>
+      <p class="sub reveal d3">五个分析工作区之外的<b>只读对照板</b>：不计算、不改源 View，只摆已有预览。</p>
+      <div class="turbo-band reveal d4"></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="frame">
+      <div class="topbar reveal d1"><span class="eyebrow">01 · <b>它不是第六种算法</b></span><span class="turbo-rule"></span></div>
+      <div class="step-head reveal d2"><span class="big">对照 · 不计算</span><h2>五个工作区 + 一个只读总览</h2></div>
+      <div class="paths">
+        <div class="path reveal d3"><div class="tagA">加入</div><div class="ptxt">在时域 / 频谱 / 时频 / 阶次 / 频响里，<b>View 标签右键 → 加入总览</b>。也可以从总览左侧 <b>View 库</b>搜索后添加。</div></div>
+        <div class="path reveal d4"><div class="tagA g">零后台</div><div class="ptxt">总览<b>不重新计算</b>、不补图、不改源 View。没有现成预览时卡片就是「缺」，不会在后台悄悄跑分析。</div></div>
+        <div class="path reveal d5"><div class="tagA">打开原 View</div><div class="ptxt">卡片右键或焦点层的「打开原 View」回到那个稳定身份的源工作区，而不是按显示名称猜测。</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="frame">
+      <div class="topbar reveal d1"><span class="eyebrow">02 · <b>摆板</b></span><span class="turbo-rule"></span></div>
+      <div class="step-head reveal d2"><span class="big">2 / 4 / 6</span><h2>布局、托盘、拖放</h2></div>
+      <div class="step-grid">
+        <div class="instr">
+          <div class="blk reveal d3"><span class="k">布局</span><p>左右/上下双图、2×2、左主图+3 辅图、上主图+3 辅图、3×2 六宫格。主图比例只作用于主图布局。</p></div>
+          <div class="blk reveal d4"><span class="k">托盘</span><p>槽位满了再加入，多出来的卡片进<b>底部托盘</b>。托盘里的卡片仍属于这块板，可再放回空槽。</p></div>
+          <div class="blk reveal d5"><span class="k">拖放</span><p>拖到空槽添加，拖到已有卡片替换，卡片之间对调。库里点加号与拖放是同一条加入意图。</p></div>
+        </div>
+        <div class="mock reveal d3">
+          <div class="cap"><span>View 库</span><em>五个分区</em></div>
+          <div class="row"><span>时域</span><b>道路输入</b></div>
+          <div class="row"><span>频谱</span><b>共振检查</b></div>
+          <div class="row"><span>阶次</span><b>2–8 阶</b></div>
+          <p class="note">搜索按名称与来源摘要；悬停看完整 tooltip，不用缩短名当身份。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="frame">
+      <div class="topbar reveal d1"><span class="eyebrow">03 · <b>四态</b></span><span class="turbo-rule"></span></div>
+      <div class="step-head reveal d2"><span class="big">新 · 旧 · 缺 · 孤儿</span><h2>卡片状态只描述预览，不触发计算</h2></div>
+      <div class="paths">
+        <div class="path reveal d3"><div class="tagA">新 / 旧</div><div class="ptxt"><b>新</b>表示预览与当前展示一致。<b>旧</b>表示源 View 后来变了，总览仍显示上次抓到的图，等你回到源 View 再捕获。</div></div>
+        <div class="path reveal d4"><div class="tagA g">缺</div><div class="ptxt"><b>缺</b>是合法状态：这个 View 还在，但进程里没有可用像素（例如刚重开项目）。不会自动补图。</div></div>
+        <div class="path reveal d5"><div class="tagA">孤儿</div><div class="ptxt">源 View 已被删掉。卡片提供<b>重新绑定</b>或从总览移除，不会假装还活着。</div></div>
+      </div>
+      <div class="tip reveal d5"><span class="ic">!</span><p>重开 <span class="ui">.tlproj</span> 会恢复板位和名称，但预览像素不随项目文件走。缺图保持「缺」，不会自动进入总览，也不会后台补算。</p></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="frame">
+      <div class="topbar reveal d1"><span class="eyebrow">04 · <b>演示与导出</b></span><span class="turbo-rule"></span></div>
+      <div class="step-head reveal d2"><span class="big">Esc · PNG</span><h2>看清、复制、导出，不改数据</h2></div>
+      <div class="step-grid">
+        <div class="instr">
+          <div class="blk reveal d3"><span class="k">Esc</span><p>先关焦点放大，再取消替换，再退出演示，最后关掉弹出菜单。优先级固定，避免一层 Esc 连退两层。</p></div>
+          <div class="blk reveal d4"><span class="k">演示</span><p>演示隐藏左侧 View 库和编辑控件，只留对照板。Esc 或再点演示退出。</p></div>
+          <div class="blk reveal d5"><span class="k">导出</span><p>复制整板、复制单卡、导出 PNG（1× 或 2×）。卡图按 contain 放入格子，任何方向都不超过原图像素。</p></div>
+        </div>
+        <div class="mock reveal d3">
+          <div class="cap"><span>显示开关</span><em>跟导出一致</em></div>
+          <div class="row"><span>标题</span><b>可关，不留空带</b></div>
+          <div class="row"><span>来源</span><b>可关，页脚高度为 0</b></div>
+          <div class="row"><span>板名</span><b>工具栏内直接改</b></div>
+          <p class="note">开关同时作用于屏幕与 PNG。项目会记住板名、布局和这两项显示。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="frame">
+      <div class="topbar reveal d1"><span class="eyebrow">05 · <b>边界</b></span><span class="turbo-rule"></span></div>
+      <div class="step-head reveal d2"><span class="big">只读</span><h2>总览不做的事</h2></div>
+      <div class="paths">
+        <div class="path reveal d3"><div class="tagA">不计算</div><div class="ptxt">加入、筛选、演示、复制、导出、保存都不会调用分析入口。要新图，回到源 View 改完再捕获。</div></div>
+        <div class="path reveal d4"><div class="tagA g">不猜测</div><div class="ptxt">身份是「分区 + 稳定 View id」。重名标签、缩短显示名、当前下标都不能当钥匙。</div></div>
+        <div class="path reveal d5"><div class="tagA">不发明</div><div class="ptxt">没有现成预览就显示「缺」。关闭全部文件时，若板是从项目恢复来的，不会被空会话误清掉。</div></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+</div>
+<div class="edit-hotzone"></div>
+<button class="edit-toggle" id="editToggle" title="编辑模式 (E)">✏️</button>
+<script src="assets/deck.js"></script>
+</body>
+</html>

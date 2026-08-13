@@ -121,6 +121,8 @@ class CardViewModel:
     selected: bool = False
     dimmed: bool = False
     replacement_armed: bool = False
+    show_title: bool = True
+    show_source: bool = True
 
 
 def coerce_library_row(row: LibraryRow | Mapping[str, Any]) -> LibraryRow:
@@ -319,6 +321,7 @@ class BoardToolbar(QFrame):
     copy_board_requested = pyqtSignal()
     export_png_requested = pyqtSignal(int)
     presentation_toggled = pyqtSignal(bool)
+    board_name_changed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -328,9 +331,13 @@ class BoardToolbar(QFrame):
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(8)
 
-        self._name = _ElideLabel("全局对比", self)
+        self._name = QLineEdit(self)
         self._name.setObjectName("ultraViewBoardName")
-        self._name.set_full_text("全局对比")
+        self._name.setText("全局对比")
+        self._name.setFrame(False)
+        self._name.setPlaceholderText("Board 名称")
+        self._name.setToolTip("编辑 Board 名称")
+        self._name.editingFinished.connect(self._on_name_finished)
         layout.addWidget(self._name, 1)
 
         self._layout_combo = QComboBox(self)
@@ -384,7 +391,18 @@ class BoardToolbar(QFrame):
         layout.addWidget(self._presentation, 0)
 
     def set_board_name(self, name: str) -> None:
-        self._name.set_full_text(name)
+        text = name or ""
+        if self._name.text() == text:
+            return
+        blocked = self._name.blockSignals(True)
+        self._name.setText(text)
+        self._name.blockSignals(blocked)
+
+    def board_name_edit(self) -> QLineEdit:
+        return self._name
+
+    def _on_name_finished(self) -> None:
+        self.board_name_changed.emit(self._name.text())
 
     def set_layout_id(self, layout_id: str) -> None:
         index = self._layout_combo.findData(layout_id)
@@ -892,7 +910,8 @@ class UltraViewCard(QFrame):
         self._model = model
         title = model.title or model.view_id
         self._dot.set_color(model.tab_color)
-        self._title.set_full_text(title)
+        self._title.setVisible(bool(model.show_title))
+        self._title.set_full_text(title if model.show_title else "")
         if model.status == STATUS_MISSING:
             self._status.setText(STATUS_LABELS_ZH[STATUS_MISSING])
         elif model.status == STATUS_STALE:
@@ -906,7 +925,12 @@ class UltraViewCard(QFrame):
         self._foot_left.set_full_text(
             f"{section_label} · {_range_text(model.x_range, model.x_unit)}"
         )
-        self._foot_source.set_full_text(model.source_summary)
+        self._foot_source.set_full_text(model.source_summary if model.show_source else "")
+        self._footer.setVisible(bool(model.show_source))
+        if model.show_source:
+            self._footer.setFixedHeight(CARD_FOOTER_HEIGHT)
+        else:
+            self._footer.setFixedHeight(0)
         self._orphan_bar.setVisible(model.status == STATUS_ORPHANED)
         self._set_image(model)
         _set_flag(self, "selected", model.selected)

@@ -1,6 +1,7 @@
 """UltraView presentation digest, stable capture, and PreviewStore publish."""
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -641,3 +642,201 @@ def test_markup_revision_add_move_remove_clear(qapp, monkeypatch):
     manager.clear_remarks()
     assert manager.markup_revision == 5
     canvas.deleteLater()
+
+
+def _payload_fn_dump(name: str) -> str:
+    tree = ast.parse(_COORDINATOR_PATH.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return ast.dump(node)
+    raise AssertionError(f"missing function {name}")
+
+
+def test_payload_builders_do_not_read_active_page_or_canvas_fallback():
+    analysis = _payload_fn_dump("_analysis_payload")
+    time_fn = _payload_fn_dump("_time_payload")
+    assert "_analysis_page" not in analysis
+    assert "canvas_time" not in analysis
+    assert "canvas_time" not in time_fn
+    widget = _payload_fn_dump("_widget_for_ref")
+    assert "canvas_time" not in widget
+    assert "_analysis_page" not in widget
+
+
+def test_inactive_analysis_digest_ignores_active_page_runtime(qapp):
+    window, coord = _make_coord()
+    fft_manager = ViewManager(state_factory=AnalysisViewState)
+    window.analysis_managers["fft"] = fft_manager
+    state_a = fft_manager.get(0)
+    state_a.view_id = "fft-a"
+    state_a.panes = [PaneState(sources=[("f1", "torque")])]
+    idx_b = fft_manager.new_view()
+    state_b = fft_manager.get(idx_b)
+    state_b.view_id = "fft-b"
+    state_b.panes = [PaneState(sources=[("f1", "torque")])]
+    pane = FakeCanvas()
+    page = FakePage([pane])
+    window.pages["fft"] = page
+    ref_a = _ref("fft-a", "fft")
+    ref_b = _ref("fft-b", "fft")
+    coord.bind_canvas(page, ref_a)
+    digest_a = coord.current_digest_for(ref_a)
+    assert digest_a is not None
+
+    coord.bind_canvas(page, ref_b)
+    page._panes.append(FakeCanvas())
+    pane.markup_revision = 7
+    digest_a_inactive = coord.current_digest_for(ref_a)
+    digest_b = coord.current_digest_for(ref_b)
+    assert digest_a_inactive == digest_a
+    assert digest_b != digest_a
+
+    coord.bind_canvas(page, ref_a)
+    pane.markup_revision = 8
+    assert coord.current_digest_for(ref_a) != digest_a
+    page.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_time_ref_does_not_fallback_to_active_canvas(qapp):
+    window, coord = _make_coord()
+    manager = window.view_manager
+    manager.get(0).view_id = "view-a"
+    idx_b = manager.new_view()
+    manager.get(idx_b).view_id = "view-b"
+    canvas_a = FakeCanvas("#111111")
+    canvas_b = FakeCanvas("#222222")
+    window.canvas_time = canvas_b
+    ref_a = _ref("view-a")
+    ref_b = _ref("view-b")
+    coord.bind_canvas(canvas_b, ref_b)
+    canvas_b.markup_revision = 9
+    unbound = coord.current_digest_for(ref_a)
+    coord.bind_canvas(canvas_a, ref_a)
+    canvas_a.markup_revision = 0
+    baseline = coord.current_digest_for(ref_a)
+    assert unbound == baseline
+    canvas_a.markup_revision = 3
+    changed = coord.current_digest_for(ref_a)
+    assert changed != baseline
+    coord.bind_canvas(canvas_a, None)
+    canvas_b.markup_revision = 99
+    assert coord.current_digest_for(ref_a) == changed
+    canvas_a.deleteLater()
+    canvas_b.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_same_cache_key_different_view_ids_isolate_generation(qapp):
+    window, coord = _make_coord()
+    fft_manager = ViewManager(state_factory=AnalysisViewState)
+    window.analysis_managers["fft"] = fft_manager
+    fft_manager.get(0).view_id = "fft-a"
+    idx_b = fft_manager.new_view()
+    fft_manager.get(idx_b).view_id = "fft-b"
+    key = ("fft", "shared")
+    window._analysis_pins.add("fft", "fft-a", 0, key)
+    window._analysis_pins.add("fft", "fft-b", 0, key)
+    ref_a = _ref("fft-a", "fft")
+    ref_b = _ref("fft-b", "fft")
+    result = object()
+    coord.notify_result_stored("fft", "fft-a", 0, key, result)
+    digest_a = coord.current_digest_for(ref_a)
+    digest_b_before = coord.current_digest_for(ref_b)
+    coord.notify_result_stored("fft", "fft-b", 0, key, object())
+    assert coord.current_digest_for(ref_a) == digest_a
+    assert coord.current_digest_for(ref_b) != digest_b_before
+    coord.notify_result_stored("fft", "fft-a", 0, key, object())
+    assert coord.current_digest_for(ref_a) != digest_a
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_inactive_result_bumps_generation_without_grabbing_active_canvas(qapp):
+    window, coord = _make_coord()
+    fft_manager = ViewManager(state_factory=AnalysisViewState)
+    window.analysis_managers["fft"] = fft_manager
+    fft_manager.get(0).view_id = "fft-a"
+    idx_b = fft_manager.new_view()
+    fft_manager.get(idx_b).view_id = "fft-b"
+    key = ("fft", "k")
+    window._analysis_pins.add("fft", "fft-a", 0, key)
+    window._analysis_pins.add("fft", "fft-b", 0, key)
+    page = FakePage([FakeCanvas()])
+    window.pages["fft"] = page
+    ref_a = _ref("fft-a", "fft")
+    ref_b = _ref("fft-b", "fft")
+    coord.bind_canvas(page, ref_b)
+    coord.request_capture(ref_b, page, "active")
+    _flush()
+    grabs = page.combined_calls
+    digest_b = coord.current_digest_for(ref_b)
+    coord.notify_result_stored("fft", "fft-a", 0, key, object())
+    assert page.combined_calls == grabs
+    assert coord.result_generation_for("fft", "fft-a", 0, key) == 1
+    assert coord.current_digest_for(ref_b) == digest_b
+    assert coord.current_digest_for(ref_a) is not None
+    page.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_reset_restore_shutdown_clear_runtime_ledger(qapp):
+    window, coord = _make_coord()
+    manager = window.view_manager
+    manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    canvas.markup_revision = 4
+    changed = coord.current_digest_for(ref)
+    assert coord._runtime.get(ref) is not None
+    coord.reset_project_state()
+    assert coord._runtime.get(ref) is None
+    coord.bind_canvas(canvas, ref)
+    canvas.markup_revision = 5
+    coord.current_digest_for(ref)
+    assert coord._runtime.get(ref) is not None
+    coord.restore_project_state(None)
+    assert coord._runtime.get(ref) is None
+    coord.bind_canvas(canvas, ref)
+    coord.current_digest_for(ref)
+    coord.shutdown()
+    assert coord._runtime.get(ref) is None
+    canvas.deleteLater()
+    coord.deleteLater()
+    assert changed is not None
+
+
+def test_digest_unavailable_keeps_old_image_stale(qapp):
+    from mf4_analyzer.ui.ultraview_state import STATUS_MISSING, STATUS_STALE
+
+    window, coord = _make_coord()
+    manager = window.view_manager
+    manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "seed")
+    _flush()
+    record = coord.store.get(ref)
+    assert record is not None and record.image is not None
+    manager.views[:] = []
+    assert coord.current_digest_for(ref) is None
+    exists = coord._ref_exists(ref)
+    assert exists is False
+    from mf4_analyzer.ui.chart_stack.ultraview.preview_store import PreviewStore
+    from mf4_analyzer.ui.ultraview_state import derive_preview_status
+
+    assert derive_preview_status(
+        True,
+        PreviewStore.image_valid(record.image),
+        record.captured_digest,
+        None,
+    ) == STATUS_STALE
+    assert derive_preview_status(True, False, None, None) == STATUS_MISSING
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()

@@ -85,16 +85,6 @@ class PreviewStore(QObject):
         self._clock = 0
         self._evictions = 0
         self._rejections = 0
-        records = self._records
-        pinned = self._pinned
-
-        def _on_destroyed(*_args) -> None:
-            for record in list(records.values()):
-                record.image = None
-            records.clear()
-            pinned.clear()
-
-        self.destroyed.connect(_on_destroyed)
 
     @staticmethod
     def image_valid(image) -> bool:

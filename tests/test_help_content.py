@@ -238,6 +238,25 @@ def test_frf_guide_is_mapped_and_covers_frozen_frf_contract():
     assert "数据被阻断" not in text
 
 
+def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
+    from mf4_analyzer.help import guide_path
+
+    path = HELP / "ultraview-guide.html"
+    assert guide_path("ultraview") == path
+    assert path.is_file()
+    text = path.read_text(encoding="utf-8")
+    assert "TraceLab v7.9.9" in text
+    for keyword in (
+        "只读", "不计算", "View 库", "托盘", "加入总览",
+        "打开原 View", "PNG", "缺", "孤儿", ".tlproj",
+        "五个分析工作区", "不是第六种算法", "2×2", "3×2",
+        "Esc", "演示",
+    ):
+        assert keyword in text, f"UltraView guide missing: {keyword}"
+    for banned in ("PDF", "SVG", "sidecar", "live card", "后台补图", "自由缩放", "board zoom"):
+        assert banned not in text, f"UltraView guide leaked P1 copy: {banned}"
+
+
 def test_main_manual_and_published_guide_name_the_five_modes_and_frf():
     for guide in (MANUAL, PUBLISHED_GUIDE):
         text = guide.read_text(encoding="utf-8")

@@ -11,7 +11,12 @@ from mf4_analyzer.ui.chart_stack import ChartStack
 from mf4_analyzer.ui.inspector import Inspector
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.side_panels import PanelState
-from mf4_analyzer.ui.ultraview_state import UltraViewRef, membership_set
+from mf4_analyzer.ui.ultraview_state import (
+    DEFAULT_BOARD_NAME,
+    UltraViewRef,
+    add_ref,
+    membership_set,
+)
 from mf4_analyzer.ui_kit import load_stylesheet
 
 _CTX_PATH = (
@@ -132,10 +137,146 @@ def test_ultraview_teardown_disconnects_page_intents(qapp, qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
     stack = win.chart_stack
+    page = stack.page_ultraview
+    view_id = str(win.view_manager.get(0).view_id)
     win.close()
     QCoreApplication.processEvents()
-    stack.add_to_ultraview_requested.emit("time", "gone")
-    stack.page_ultraview.add_ref_requested.emit("time", "gone")
+    stack.add_to_ultraview_requested.emit("time", view_id)
+    page.add_ref_requested.emit("time", view_id)
+    page.layout_changed.emit("grid_2x2")
+    page.ratio_nudge_requested.emit(1)
+    page.focus_requested.emit("time", view_id)
+    page.open_source_requested.emit("time", view_id)
+    page.copy_board_requested.emit()
+    page.export_png_requested.emit(1)
+    assert membership_set(win._ultraview.board) == set()
+    assert win._ultraview.is_shutdown is True
+
+
+def test_ultraview_shutdown_is_idempotent_and_clears_store(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    uv.shutdown()
+    uv.shutdown()
+    assert uv.is_shutdown is True
+    assert uv.store.stats().records == 0
+    win.close()
+
+
+def _prime_placeholder_file(win):
+    win.files["f1"] = object()
+    win.navigator.add_file = lambda *a, **kw: None
+    win.navigator.remove_file = lambda *a, **kw: None
+
+
+def test_reset_project_state_keeps_page_hooks_and_stays_interactive(
+    qapp, qtbot, monkeypatch, tmp_path
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    page = win.chart_stack.page_ultraview
+    view_id = str(win.view_manager.get(0).view_id)
+    add_ref(uv.board, UltraViewRef("time", view_id))
+    uv.refresh_page()
+    hooks_before = len(uv._page_hooks)
+    assert hooks_before > 0
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.main_window.ultraview_coordinator.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(tmp_path / "reset-hook.png"), "PNG (*.png)"),
+    )
+
+    uv.reset_project_state()
+
+    assert len(uv._page_hooks) == hooks_before
+    assert uv.board.name == DEFAULT_BOARD_NAME
+    assert membership_set(uv.board) == set()
+    assert uv.store.stats().records == 0
+
+    page.add_ref_requested.emit("time", view_id)
+    assert UltraViewRef("time", view_id) in membership_set(uv.board)
+    page.layout_changed.emit("grid_2x2")
+    assert uv.board.layout_id == "grid_2x2"
+    page.ratio_nudge_requested.emit(-1)
+    assert uv.board.primary_ratio < 0.67
+    page.focus_requested.emit("time", view_id)
+    page.open_source_requested.emit("time", view_id)
+    page.copy_board_requested.emit()
+    page.export_png_requested.emit(1)
+    uv.attach()
+    assert len(uv._page_hooks) == hooks_before
+
+
+def test_close_all_cancel_does_not_reset_ultraview(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    view_id = str(win.view_manager.get(0).view_id)
+    add_ref(uv.board, UltraViewRef("time", view_id))
+    uv.board.name = "保留"
+    uv.refresh_page()
+    hooks_before = len(uv._page_hooks)
+    _prime_placeholder_file(win)
+    monkeypatch.setattr(win, "_confirm_global_file_close", lambda *a, **k: False)
+
+    win.close_all()
+
+    assert "f1" in win.files
+    assert uv.board.name == "保留"
+    assert UltraViewRef("time", view_id) in membership_set(uv.board)
+    assert len(uv._page_hooks) == hooks_before
+
+
+def test_close_all_confirm_resets_board_and_keeps_actions_live(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    page = win.chart_stack.page_ultraview
+    view_id = str(win.view_manager.get(0).view_id)
+    add_ref(uv.board, UltraViewRef("time", view_id))
+    uv.refresh_page()
+    hooks_before = len(uv._page_hooks)
+    _prime_placeholder_file(win)
+
+    win.close_all(force=True)
+
+    assert win.files == {}
+    assert membership_set(uv.board) == set()
+    assert uv.board.name == DEFAULT_BOARD_NAME
+    assert len(uv._page_hooks) == hooks_before
+    page.add_ref_requested.emit("time", view_id)
+    assert UltraViewRef("time", view_id) in membership_set(uv.board)
+
+
+def test_close_all_without_files_keeps_restored_board(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    view_id = str(win.view_manager.get(0).view_id)
+    add_ref(uv.board, UltraViewRef("time", view_id))
+    uv.board.name = "已恢复"
+    uv.refresh_page()
+
+    win.close_all(force=True)
+
+    assert uv.board.name == "已恢复"
+    assert UltraViewRef("time", view_id) in membership_set(uv.board)
+
+
+def test_reset_during_presentation_restores_inspector(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    right = win._panel_ctrl_right
+    before = right.snapshot_persistent_state()
+    uv._on_presentation(True)
+    assert uv._inspector_snapshot is not None
+
+    uv.reset_project_state()
+
+    assert uv._inspector_snapshot is None
+    assert right.snapshot_persistent_state()["state"] == before["state"]
 
 
 def test_inspector_unknown_mode_falls_back_to_time(qapp):
