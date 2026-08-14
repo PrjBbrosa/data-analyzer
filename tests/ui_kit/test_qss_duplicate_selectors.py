@@ -10,6 +10,11 @@ listed selector that is no longer duplicated (or is gone from ``style.qss``)
 fails so the table is trimmed.
 
 Task 5 inventory (after Tasks 2–4): 44 selectors, 46 extra occurrences.
+By HEAD ``350969f2`` (merge side-effect: another QSS change landed in the
+same merge and pushed one more selector past the duplicate threshold) the
+whitelist holds 45 entries; the assertion below compares against the live
+table length rather than a hardcoded count, so this drift did not need a
+test change — only this docstring note.
 None were safe to merge under the spec's conservative rule (identical
 bodies or a strict declaration subset, and no intervening rule that can
 hit the same widget). Token neutralization makes ``{{CONTROL_ACCENT}}``
