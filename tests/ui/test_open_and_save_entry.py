@@ -82,6 +82,22 @@ def test_open_multiple_projects_rejected(qapp, tmp_path, monkeypatch):
     assert len(mw.files) == 0
 
 
+def test_save_disabled_on_empty_session_and_enabled_after_load(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    a = tmp_path / "a.csv"
+    _csv(a)
+    mw = MainWindow()
+    assert not mw.toolbar.btn_save_project.isEnabled()
+    assert not mw.toolbar.btn_save_caret.isEnabled()
+    mw._load_one(str(a))
+    assert mw.toolbar.btn_save_project.isEnabled()
+    assert mw.toolbar.btn_save_caret.isEnabled()
+    mw.close_all(force=True)
+    assert not mw.toolbar.btn_save_project.isEnabled()
+    assert not mw.toolbar.btn_save_caret.isEnabled()
+
+
 def test_save_via_dialog_first_time_prompts(qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
     from PyQt5.QtWidgets import QFileDialog

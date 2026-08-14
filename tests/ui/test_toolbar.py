@@ -19,6 +19,11 @@ def test_toolbar_mode_changed_emits(qapp, qtbot):
 
 def test_toolbar_enabled_matrix(qapp):
     tb = Toolbar()
+    # Construction is the empty-session row: 保存 stays off until a file lands.
+    assert not tb.btn_save_project.isEnabled()
+    assert not tb.btn_save_caret.isEnabled()
+    assert not tb.btn_save_project_as.isEnabled()
+    assert tb.btn_batch.isEnabled()
     tb.set_enabled_for_mode('time', has_file=True)
     assert tb.btn_batch.isEnabled()
     assert tb.btn_save_project.isEnabled()
@@ -269,6 +274,7 @@ def test_toolbar_open_stays_content_sized_and_secondary_file_actions_match(qtbot
 def test_toolbar_save_split_emits_save_and_save_as(qtbot):
     tb = Toolbar()
     qtbot.addWidget(tb)
+    tb.set_enabled_for_mode("time", has_file=True)
     with qtbot.waitSignal(tb.save_project_requested, timeout=200):
         tb.btn_save_project.click()
     with qtbot.waitSignal(tb.save_project_as_requested, timeout=200):
@@ -282,6 +288,7 @@ def test_toolbar_save_caret_opens_rounded_save_as_menu(qtbot, qapp):
     load_stylesheet(qapp)
     tb = Toolbar()
     qtbot.addWidget(tb)
+    tb.set_enabled_for_mode("time", has_file=True)
     tb.show()
     qtbot.waitExposed(tb)
     tb.btn_save_caret.click()

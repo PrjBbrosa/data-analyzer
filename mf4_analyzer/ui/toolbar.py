@@ -278,6 +278,10 @@ class Toolbar(QWidget):
         self._right_widget.installEventFilter(self)
         self._wire()
         self._sync_mode_active_dots()
+        # QPushButton starts enabled. Apply the empty-session matrix here so
+        # 保存 is gray on first launch; waiting for a mode change or file
+        # activation leaves it lit until the user happens to switch modules.
+        self.set_enabled_for_mode(self._current_mode, has_file=False)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
