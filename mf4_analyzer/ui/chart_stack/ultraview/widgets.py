@@ -1432,6 +1432,17 @@ class UltraViewCard(QFrame):
     def footer_height(self) -> int:
         return self._footer.height()
 
+    def preview_display_size(self) -> tuple[int, int]:
+        size = self._image.size()
+        try:
+            dpr = float(self.devicePixelRatioF())
+        except RuntimeError:
+            dpr = 1.0
+        return (
+            max(1, int(round(max(1, size.width()) * dpr))),
+            max(1, int(round(max(1, size.height()) * dpr))),
+        )
+
     def chrome_height(self) -> int:
         extra = self._orphan_bar.height() if self._orphan_bar.isVisible() else 0
         return self._header.height() + self._footer.height() + extra

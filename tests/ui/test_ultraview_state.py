@@ -656,3 +656,50 @@ def test_organize_free_grid_is_idempotent():
     assert once == [uvs.GridRect(0, 0, 4, 2), uvs.GridRect(6, 2, 3, 3)]
     assert uvs.organize_free_grid(board) == []
     assert [item.rect for item in board.free_grid] == once
+
+
+def test_viewport_round_trip_is_outside_identity_digest():
+    board = uvs.default_board()
+    payload = uvs.board_to_payload(board)
+    assert "viewport" in payload["board"]
+    missing = dict(payload)
+    missing["board"] = dict(payload["board"])
+    missing["board"].pop("viewport")
+    restored, warnings = uvs.normalize_board_payload(missing)
+    assert warnings == []
+    assert restored.viewport["zoom"] == pytest.approx(1.0)
+    identity = uvs.presentation_digest(uvs.board_identity_payload(board))
+    board.viewport = {"zoom": 1.6, "center_x": 120.0, "center_y": 40.0}
+    again, warnings = uvs.normalize_board_payload(uvs.board_to_payload(board))
+    assert warnings == []
+    assert again.viewport["zoom"] == pytest.approx(1.6)
+    assert again.viewport["center_x"] == pytest.approx(120.0)
+    assert uvs.presentation_digest(uvs.board_identity_payload(again)) == identity
+    assert "viewport" in uvs.board_to_payload(again)["board"]
+
+
+def test_viewport_illegal_values_clamp_with_warning():
+    payload = uvs.board_to_payload(uvs.default_board())
+    payload["board"]["viewport"] = {
+        "zoom": 9,
+        "center_x": "nope",
+        "center_y": float("inf"),
+    }
+    board, warnings = uvs.normalize_board_payload(payload)
+    assert board.viewport["zoom"] == pytest.approx(2.0)
+    assert board.viewport["center_x"] == pytest.approx(0.0)
+    assert board.viewport["center_y"] == pytest.approx(0.0)
+    assert any(item.startswith("viewport_zoom_clamped") for item in warnings)
+    assert any(item.startswith("viewport_center_x_clamped") for item in warnings)
+    assert any(item.startswith("viewport_center_y_clamped") for item in warnings)
+
+
+def test_unknown_board_fields_passthrough_with_viewport():
+    payload = uvs.board_to_payload(uvs.default_board())
+    payload["board"]["viewport"] = {"zoom": 0.5, "center_x": 1.0, "center_y": 2.0}
+    payload["board"]["future_camera"] = {"keep": True}
+    board, warnings = uvs.normalize_board_payload(payload)
+    assert warnings == []
+    out = uvs.board_to_payload(board)
+    assert out["board"]["viewport"]["zoom"] == pytest.approx(0.5)
+    assert out["board"]["future_camera"] == {"keep": True}

@@ -43,6 +43,21 @@ RATIO_STEP = 0.05
 # rest of the session codec.
 ULTRAVIEW_SCHEMA = 3
 DIGEST_SCHEMA = 1
+_BOARD_PAYLOAD_KEYS = frozenset(
+    {
+        "board_id",
+        "name",
+        "show_titles",
+        "show_sources",
+        "unplaced",
+        "layout_mode",
+        "layout_id",
+        "primary_ratio",
+        "free_grid",
+        "placements",
+        "viewport",
+    }
+)
 
 LAYOUT_SLOTS: dict[str, tuple[str, ...]] = {
     "split_horizontal": ("left", "right"),
@@ -174,6 +189,11 @@ class UltraViewBoardState:
     layout_mode: str = LAYOUT_MODE_TEMPLATE
     free_grid: list[FreeGridPlacement] = field(default_factory=list)
     free_grid_default_size: str = "standard"
+    # View-state, not identity: persisted outside presentation digest.
+    viewport: dict[str, float] = field(
+        default_factory=lambda: {"zoom": 1.0, "center_x": 0.0, "center_y": 0.0}
+    )
+    passthrough: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -332,6 +352,8 @@ def _copy_board(board: UltraViewBoardState) -> UltraViewBoardState:
         layout_mode=board.layout_mode,
         free_grid=[FreeGridPlacement(item.ref, item.rect) for item in board.free_grid],
         free_grid_default_size=board.free_grid_default_size,
+        viewport=dict(board.viewport),
+        passthrough=dict(board.passthrough),
     )
     return clone
 
@@ -944,6 +966,66 @@ def _template_grid_rects(layout_id: str) -> list[GridRect]:
     return _template_grid_rects(DEFAULT_LAYOUT_ID)
 
 
+def _legalize_viewport(raw: Any) -> tuple[dict[str, float], list[str]]:
+    """Persist-side clamp. Keep bounds in sync with ``viewport.ZOOM_*``."""
+    warnings: list[str] = []
+    default = {"zoom": 1.0, "center_x": 0.0, "center_y": 0.0}
+    if raw is None:
+        return dict(default), warnings
+    if not isinstance(raw, Mapping):
+        warnings.append(_warn("illegal_viewport"))
+        return dict(default), warnings
+    zoom = 1.0
+    if "zoom" in raw:
+        parsed = _try_viewport_float(raw.get("zoom"))
+        if parsed is None:
+            warnings.append(_warn("viewport_zoom_clamped", repr(raw.get("zoom"))))
+        else:
+            zoom = min(2.0, max(0.25, parsed))
+            if zoom != parsed:
+                warnings.append(_warn("viewport_zoom_clamped", str(parsed)))
+    center_x = _viewport_finite_or_warn(raw, "center_x", 0.0, warnings)
+    center_y = _viewport_finite_or_warn(raw, "center_y", 0.0, warnings)
+    return (
+        {"zoom": float(zoom), "center_x": float(center_x), "center_y": float(center_y)},
+        warnings,
+    )
+
+
+def _try_viewport_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _viewport_finite_or_warn(
+    raw: Mapping[str, Any], key: str, fallback: float, warnings: list[str]
+) -> float:
+    if key not in raw:
+        return fallback
+    parsed = _try_viewport_float(raw.get(key))
+    if parsed is None:
+        warnings.append(_warn(f"viewport_{key}_clamped", repr(raw.get(key))))
+        return fallback
+    return parsed
+
+
+def _viewport_payload(board: UltraViewBoardState) -> dict[str, float]:
+    legal, _warnings = _legalize_viewport(getattr(board, "viewport", None))
+    return legal
+
+
+def board_identity_payload(board: UltraViewBoardState) -> dict[str, Any]:
+    """Board payload without view-state fields (digest / identity comparisons)."""
+    payload = _board_payload(board)
+    payload.pop("viewport", None)
+    return payload
+
+
 def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "board_id": board.board_id,
@@ -956,7 +1038,11 @@ def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
         # grid (and a later project reopen) can restore the same slots.
         "layout_id": board.layout_id,
         "primary_ratio": board.primary_ratio,
+        "viewport": _viewport_payload(board),
     }
+    for key, value in board.passthrough.items():
+        if key not in payload:
+            payload[key] = value
     if board.layout_mode == LAYOUT_MODE_FREE_GRID:
         payload["free_grid"] = {
             "columns": GRID_COLUMNS,
@@ -1019,6 +1105,13 @@ def normalize_board_payload(
     warnings.extend(set_ratio(board, board_raw.get("primary_ratio", DEFAULT_PRIMARY_RATIO)))
     board.show_titles = bool(board_raw.get("show_titles", True))
     board.show_sources = bool(board_raw.get("show_sources", True))
+    board.viewport, vp_warnings = _legalize_viewport(board_raw.get("viewport"))
+    warnings.extend(vp_warnings)
+    board.passthrough = {
+        key: value
+        for key, value in board_raw.items()
+        if key not in _BOARD_PAYLOAD_KEYS
+    }
 
     seen_refs: set[UltraViewRef] = set()
     if board.layout_mode == LAYOUT_MODE_FREE_GRID:

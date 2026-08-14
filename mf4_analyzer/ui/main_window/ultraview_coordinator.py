@@ -76,13 +76,16 @@ from ..ultraview_state import (
     DEFAULT_BOARD_NAME,
 )
 from ..chart_stack.ultraview.preview_store import (
+    MAX_PREVIEW_RAW_EDGE,
     PreviewStore,
     ResidencyRequest,
+    RESIDENCY_TIER_FOCUS,
     RESIDENCY_TIER_ACTIVE_VISIBLE,
     RESIDENCY_TIER_ACTIVE_PLACED,
     RESIDENCY_TIER_INACTIVE_PLACED,
     RESIDENCY_TIER_TRAY,
 )
+from ..chart_stack.ultraview.viewport import SMOOTH_DELAY_MS, needs_focus_recapture
 from ..chart_stack.ultraview.preview_sidecar import (
     SidecarImagePayload,
     open_preview_sidecar,
@@ -406,6 +409,10 @@ class UltraViewCoordinator(QObject):
         self._idle_timer.setSingleShot(True)
         self._idle_timer.setInterval(_IDLE_CAPTURE_MS)
         self._idle_timer.timeout.connect(self._on_idle_capture_timeout)
+        self._focus_timer = QTimer(self)
+        self._focus_timer.setSingleShot(True)
+        self._focus_timer.setInterval(SMOOTH_DELAY_MS)
+        self._focus_timer.timeout.connect(self._on_focus_residency_timeout)
         self._sidecar_generation = 0
         self._sidecar_pending: list[SidecarImagePayload] = []
         self._sidecar_timer = QTimer(self)
@@ -506,7 +513,9 @@ class UltraViewCoordinator(QObject):
         if digest is None:
             self._warn_capture(ref, widget, reason, "digest-unavailable")
             return
-        if self._has_current_preview(ref, digest):
+        if self._has_current_preview(ref, digest) and not self._needs_focus_recapture(
+            ref
+        ):
             return
         key = (ref, digest)
         self._drop_queued_for_ref(ref, keep=key)
@@ -583,17 +592,29 @@ class UltraViewCoordinator(QObject):
     def set_pinned_from_board(self, board) -> None:
         """Compatibility name for P0 callers; residency is Workspace-wide."""
         active = active_board(self._workspace)
+        sizes = self._card_display_sizes()
         requests = []
         for candidate in self._workspace.boards:
             if candidate.board_id == active.board_id:
                 placed = placed_ref_set(candidate)
                 for ref in placed:
-                    tier = (
-                        RESIDENCY_TIER_ACTIVE_VISIBLE
-                        if self._active_card_visible(ref)
-                        else RESIDENCY_TIER_ACTIVE_PLACED
-                    )
-                    requests.append(ResidencyRequest(ref, tier=tier))
+                    target = _display_target_size(sizes.get(ref))
+                    preview = self._preview_pixel_size(ref)
+                    if target is not None and needs_focus_recapture(target, preview):
+                        requests.append(
+                            ResidencyRequest(
+                                ref, tier=RESIDENCY_TIER_FOCUS, target_size=target
+                            )
+                        )
+                    else:
+                        tier = (
+                            RESIDENCY_TIER_ACTIVE_VISIBLE
+                            if self._active_card_visible(ref)
+                            else RESIDENCY_TIER_ACTIVE_PLACED
+                        )
+                        requests.append(
+                            ResidencyRequest(ref, tier=tier, target_size=target)
+                        )
                 requests.extend(
                     ResidencyRequest(ref, tier=RESIDENCY_TIER_TRAY)
                     for ref in candidate.unplaced
@@ -623,6 +644,64 @@ class UltraViewCoordinator(QObject):
             return scroll.viewport().rect().contains(center)
         except RuntimeError:
             return False
+
+    def _card_display_sizes(self) -> dict:
+        page = self.page()
+        getter = getattr(page, "card_display_sizes", None) if page is not None else None
+        if not callable(getter):
+            return {}
+        try:
+            return dict(getter())
+        except RuntimeError:
+            return {}
+
+    def _preview_pixel_size(self, ref: UltraViewRef) -> tuple[int, int]:
+        record = self._store.get(ref)
+        image = getattr(record, "image", None) if record is not None else None
+        if image is None or not PreviewStore.image_valid(image):
+            return (0, 0)
+        return (int(image.width()), int(image.height()))
+
+    def _needs_focus_recapture(self, ref: UltraViewRef) -> bool:
+        request = self._store.residency_request(ref)
+        if request is None or request.tier != RESIDENCY_TIER_FOCUS:
+            return False
+        record = self._store.get(ref)
+        image = getattr(record, "image", None) if record is not None else None
+        if image is None or not PreviewStore.image_valid(image):
+            return True
+        if max(image.width(), image.height()) >= MAX_PREVIEW_RAW_EDGE:
+            return False
+        target = request.target_size
+        if target is None:
+            return False
+        return needs_focus_recapture(target, (image.width(), image.height()))
+
+    def _on_viewport_changed(self) -> None:
+        if self._inactive():
+            return
+        self._focus_timer.start()
+
+    def _on_focus_residency_timeout(self) -> None:
+        if self._inactive():
+            return
+        self.set_pinned_from_board(active_board(self._workspace))
+        self._recapture_focus_refs()
+
+    def _recapture_focus_refs(self) -> None:
+        for board in self._workspace.boards:
+            for ref in placed_ref_set(board):
+                if not self._needs_focus_recapture(ref):
+                    continue
+                widget = self._widget_for_ref(ref)
+                if widget is None:
+                    candidate = self._visible_widget_for(ref.section)
+                    if candidate is not None and self._active_ref(ref.section) == ref:
+                        widget = candidate
+                if widget is None:
+                    continue
+                self.bind_canvas(widget, ref)
+                self.request_capture(ref, widget, "focus")
 
     def project_source_mode(self) -> str:
         if self.last_source_mode in SOURCE_SECTIONS:
@@ -814,6 +893,7 @@ class UltraViewCoordinator(QObject):
             (page.show_titles_toggled, self._on_show_titles),
             (page.show_sources_toggled, self._on_show_sources),
             (page.feedback_requested, self._on_page_feedback),
+            (page.viewport_changed, self._on_viewport_changed),
         )
         for signal, slot in pairs:
             signal.connect(slot)
@@ -1899,7 +1979,9 @@ class UltraViewCoordinator(QObject):
         if digest is None:
             self._warn_capture(ref, widget, reason, "digest-unavailable")
             return False
-        if self._has_current_preview(ref, digest):
+        if self._has_current_preview(ref, digest) and not self._needs_focus_recapture(
+            ref
+        ):
             return True
         if not self._is_stable(widget, ref.section):
             self._warn_capture(ref, widget, reason, "unstable")
@@ -1974,7 +2056,7 @@ class UltraViewCoordinator(QObject):
             self._push_preview(ref, usable=False)
             return False
         with hide_transient_overlays(widget):
-            image = self._grab_image(widget)
+            image = self._grab_image(widget, ref)
         if image is None:
             self._warn_capture(ref, widget, reason, "grab-invalid")
             return False
@@ -1986,14 +2068,40 @@ class UltraViewCoordinator(QObject):
             self._push_preview(ref)
         return published
 
-    def _grab_image(self, widget) -> QImage | None:
+    def _grab_scale(self, widget, ref) -> float:
+        if ref is None:
+            return 1.0
+        request = self._store.residency_request(ref)
+        if (
+            request is None
+            or request.tier != RESIDENCY_TIER_FOCUS
+            or request.target_size is None
+        ):
+            return 1.0
+        target_w, target_h = request.target_size
+        try:
+            width = max(1, int(widget.width()))
+            height = max(1, int(widget.height()))
+            dpr = float(widget.devicePixelRatioF())
+        except RuntimeError:
+            return 1.0
+        native_w = max(1.0, width * dpr)
+        native_h = max(1.0, height * dpr)
+        scale = max(target_w / native_w, target_h / native_h, 1.0)
+        max_edge = max(native_w, native_h) * scale
+        if max_edge > MAX_PREVIEW_RAW_EDGE:
+            scale *= MAX_PREVIEW_RAW_EDGE / max_edge
+        return max(1.0, float(scale))
+
+    def _grab_image(self, widget, ref=None) -> QImage | None:
         pixmap = None
         window = self._window
         stack = getattr(window, "chart_stack", None) if window is not None else None
         grab_pres = getattr(stack, "grab_presentation_pixmap", None)
+        scale = self._grab_scale(widget, ref)
         if callable(grab_pres):
             try:
-                pixmap = grab_pres(widget, scale=1.0)
+                pixmap = grab_pres(widget, scale=scale)
             except (TypeError, RuntimeError):
                 pixmap = None
             if pixmap is not None and pixmap.isNull():
@@ -2001,9 +2109,9 @@ class UltraViewCoordinator(QObject):
         if pixmap is None:
             grab_combined = getattr(widget, "grab_combined_pixmap", None)
             if callable(grab_combined):
-                pixmap = grab_combined(scale=1.0)
+                pixmap = grab_combined(scale=scale)
             elif callable(getattr(widget, "grab_pixmap", None)):
-                pixmap = widget.grab_pixmap(scale=1.0)
+                pixmap = widget.grab_pixmap(scale=scale)
             elif isinstance(widget, QWidget):
                 pixmap = widget.grab()
         image = pixmap_as_device_pixel_image(pixmap)
@@ -2553,6 +2661,7 @@ class UltraViewCoordinator(QObject):
         self._idle_timer.stop()
         self._idle_pending.clear()
         self._digest_retries.clear()
+        self._focus_timer.stop()
         self._sidecar_timer.stop()
         self._sidecar_pending.clear()
         self._sidecar_generation += 1
@@ -2571,6 +2680,18 @@ class UltraViewCoordinator(QObject):
                 continue
         self._hooks.clear()
         self._hooked_ids.clear()
+
+
+def _display_target_size(display) -> tuple[int, int] | None:
+    if display is None:
+        return None
+    try:
+        width, height = int(display[0]), int(display[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if width < _MIN_CAPTURE_EDGE or height < _MIN_CAPTURE_EDGE:
+        return None
+    return (width, height)
 
 
 def _digest_leaf(value):

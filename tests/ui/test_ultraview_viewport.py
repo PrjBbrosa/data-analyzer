@@ -17,6 +17,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
     clamp_zoom,
     fit_zoom,
     lod_level,
+    needs_focus_recapture,
     scale_grid_metrics,
     wheel_zoom_factor,
     zoom_at_cursor,
@@ -26,8 +27,16 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
     LOD_FULL,
     LOD_NO_FOOTER,
     LOD_TITLE_ONLY,
+    normalize_viewport_payload,
 )
-from mf4_analyzer.ui.ultraview_state import FreeGridPlacement, GridRect, make_ref
+from mf4_analyzer.ui.ultraview_state import (
+    FreeGridPlacement,
+    GridRect,
+    board_to_payload,
+    default_board,
+    make_ref,
+    normalize_board_payload,
+)
 
 from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid, _send_mouse_move
 
@@ -304,3 +313,40 @@ def test_overview_stays_available_when_fit_is_not_equivalent(qtbot):
     assert harness.page.board_overview().isVisible()
     harness.page.hide_overview()
     assert not harness.page.board_overview().isVisible()
+
+
+def test_needs_focus_recapture_uses_preview_ratio():
+    assert needs_focus_recapture((100, 80), (0, 0)) is True
+    assert needs_focus_recapture((100, 80), (200, 160)) is False
+    assert needs_focus_recapture((160, 80), (200, 160)) is True
+    assert needs_focus_recapture((149, 80), (200, 160)) is False
+
+
+def test_state_and_viewport_legalizers_agree_on_clamp():
+    raw = {"zoom": 9, "center_x": "x", "center_y": float("nan")}
+    legal, warnings = normalize_viewport_payload(raw)
+    board, board_warnings = normalize_board_payload(
+        {
+            "schema": 3,
+            "board": {
+                **board_to_payload(default_board())["board"],
+                "viewport": raw,
+            },
+        }
+    )
+    assert legal == board.viewport
+    assert warnings == board_warnings
+
+
+def test_zoom_persists_on_board_and_restores_when_switching(qtbot):
+    harness = _Harness(qtbot)
+    first = harness.board
+    _prepare_free_grid(harness, qtbot, "a")
+    harness.page.set_board_zoom(1.5)
+    assert first.viewport["zoom"] == pytest.approx(1.5)
+    second = default_board()
+    second.name = "另一块板"
+    harness.page.set_board(second)
+    assert harness.page.board_zoom() == pytest.approx(1.0)
+    harness.page.set_board(first)
+    assert harness.page.board_zoom() == pytest.approx(1.5)

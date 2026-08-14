@@ -9,11 +9,17 @@ from types import SimpleNamespace
 import numpy as np
 from PyQt5 import sip
 from PyQt5.QtCore import QCoreApplication, QObject, QPoint, pyqtSignal
-from PyQt5.QtGui import QColor, QPixmap
+from PyQt5.QtGui import QColor, QImage, QPixmap
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QWidget
 
 from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
+from mf4_analyzer.ui.chart_stack.ultraview.preview_store import (
+    MAX_PREVIEW_RAW_EDGE,
+    RESIDENCY_TIER_ACTIVE_PLACED,
+    RESIDENCY_TIER_FOCUS,
+    ResidencyRequest,
+)
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.main_window._state_holders import AnalysisPinBook
 from mf4_analyzer.ui.main_window._view_mixin import ViewMixin
@@ -24,7 +30,12 @@ from mf4_analyzer.ui.main_window.ultraview_coordinator import (
     hide_transient_overlays,
     read_markup_revision,
 )
-from mf4_analyzer.ui.ultraview_state import UltraViewRef, add_ref, presentation_digest
+from mf4_analyzer.ui.ultraview_state import (
+    PreviewMeta,
+    UltraViewRef,
+    add_ref,
+    presentation_digest,
+)
 from mf4_analyzer.ui.view_state import ViewManager, ViewState
 
 _COORDINATOR_PATH = (
@@ -1844,6 +1855,96 @@ def test_repeated_project_reset_does_not_stack_destroyed_receivers(qapp, monkeyp
     sip.delete(canvas)
     _flush()
     assert calls["n"] == 1
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_focus_residency_when_display_exceeds_preview(qapp):
+    window, coord = _make_coord()
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    image = QImage(64, 48, QImage.Format_ARGB32)
+    image.fill(QColor("#123456"))
+    assert coord.store.publish(ref, image, digest="snap", meta=PreviewMeta(ref=ref))
+    sizes = {ref: (400, 300)}
+
+    class _Page:
+        def card_display_sizes(self):
+            return sizes
+
+        def card_widget(self, section, view_id):
+            return None
+
+        def board_scroll_area(self):
+            return None
+
+        def set_library_rows(self, rows):
+            return None
+
+        def set_workspace(self, workspace):
+            return None
+
+        def set_board(self, board):
+            return None
+
+    window.chart_stack = SimpleNamespace(page_ultraview=_Page())
+    coord.set_pinned_from_board(coord.board)
+    request = coord.store.residency_request(ref)
+    assert request is not None
+    assert request.tier == RESIDENCY_TIER_FOCUS
+    assert request.target_size == (400, 300)
+
+    sizes[ref] = (40, 30)
+    coord.set_pinned_from_board(coord.board)
+    request = coord.store.residency_request(ref)
+    assert request is not None
+    assert request.tier != RESIDENCY_TIER_FOCUS
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_focus_grab_scale_grows_toward_target_and_idle_stays_1x(qapp):
+    window, coord = _make_coord()
+    ref = _ref("view-a")
+    coord.store.set_residency_requests(
+        [ResidencyRequest(ref, tier=RESIDENCY_TIER_FOCUS, target_size=(800, 400))]
+    )
+    widget = QWidget()
+    widget.resize(100, 50)
+    dpr = float(widget.devicePixelRatioF())
+    expected = max(800 / (100 * dpr), 400 / (50 * dpr), 1.0)
+    assert abs(coord._grab_scale(widget, ref) - expected) < 1e-6
+    coord.store.set_residency_requests(
+        [
+            ResidencyRequest(
+                ref, tier=RESIDENCY_TIER_ACTIVE_PLACED, target_size=(800, 400)
+            )
+        ]
+    )
+    assert coord._grab_scale(widget, ref) == 1.0
+    coord.store.set_residency_requests(
+        [
+            ResidencyRequest(
+                ref,
+                tier=RESIDENCY_TIER_FOCUS,
+                target_size=(MAX_PREVIEW_RAW_EDGE, MAX_PREVIEW_RAW_EDGE),
+            )
+        ]
+    )
+    widget.resize(10, 10)
+    scaled = coord._grab_scale(widget, ref)
+    assert 10 * dpr * scaled <= MAX_PREVIEW_RAW_EDGE + 1e-6
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_board_viewport_does_not_enter_presentation_digest(qapp):
+    window, coord = _make_coord()
+    ref = _ref(str(window.view_manager.get(0).view_id))
+    digest = coord.current_digest_for(ref)
+    coord.board.viewport["zoom"] = 2.0
+    coord.board.viewport["center_x"] = 99.0
+    assert coord.current_digest_for(ref) == digest
     coord.clear()
     coord.deleteLater()
 

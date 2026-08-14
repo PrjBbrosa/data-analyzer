@@ -406,3 +406,22 @@ def test_drop_clear_and_destroy_release_images(qapp):
     # Pixels are released only by an explicit clear() while the QObject lives.
     assert held.image is not None
     assert not held.image.isNull()
+
+
+def test_focus_requests_cannot_break_pixel_budget(qapp):
+    store = PreviewStore()
+    refs = [_ref(f"focus-{index}") for index in range(12)]
+    store.set_residency_requests(
+        [
+            ResidencyRequest(ref, RESIDENCY_TIER_FOCUS, target_size=(1600, 1600))
+            for ref in refs
+        ]
+    )
+    for ref in refs:
+        assert store.publish(
+            ref,
+            _image(MAX_PREVIEW_RAW_EDGE, MAX_PREVIEW_RAW_EDGE),
+            digest=ref.view_id,
+            meta=_meta(ref),
+        )
+    assert store.stats().raw_pixels <= MAX_PREVIEW_PIXELS

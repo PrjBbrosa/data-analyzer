@@ -336,3 +336,31 @@ def test_free_grid_project_roundtrip_keeps_layout_id_and_placements(qapp, qtbot,
     restored._ultraview._on_free_grid_toggled(False)
     assert restored._ultraview.board.layout_id == "grid_3x3"
     assert len(restored._ultraview.board.placements) == 2
+
+
+def test_viewport_survives_save_and_reopen(qapp, qtbot, tmp_path):
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a)
+    proj = tmp_path / "uv-zoom.tlproj"
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    page = win.chart_stack.page_ultraview
+    page.set_board_zoom(1.5)
+    assert win.save_project(proj) is True
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    saved = raw["ultraview"]["workspace"]["boards"][0]["viewport"]
+    assert saved["zoom"] == 1.5
+    text = json.dumps(raw["ultraview"])
+    assert "captured_digest" not in text
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(proj)
+    QCoreApplication.processEvents()
+    assert restored._ultraview.board.viewport["zoom"] == 1.5
+    restored.open_ultraview()
+    QCoreApplication.processEvents()
+    assert restored.chart_stack.page_ultraview.board_zoom() == 1.5

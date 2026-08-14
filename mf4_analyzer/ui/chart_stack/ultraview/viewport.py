@@ -211,8 +211,8 @@ def normalize_viewport_payload(
             zoom = clamp_zoom(parsed)
             if zoom != parsed:
                 warnings.append(f"viewport_zoom_clamped: {parsed}")
-    center_x = _finite_number(raw.get("center_x"), 0.0)
-    center_y = _finite_number(raw.get("center_y"), 0.0)
+    center_x = _finite_or_warn(raw, "center_x", 0.0, warnings)
+    center_y = _finite_or_warn(raw, "center_y", 0.0, warnings)
     return (
         {"zoom": float(zoom), "center_x": float(center_x), "center_y": float(center_y)},
         warnings,
@@ -244,6 +244,18 @@ def _try_float(value: Any) -> float | None:
 def _finite_number(value: Any, fallback: float) -> float:
     parsed = _try_float(value)
     return fallback if parsed is None else parsed
+
+
+def _finite_or_warn(
+    raw: Mapping[str, Any], key: str, fallback: float, warnings: list[str]
+) -> float:
+    if key not in raw:
+        return fallback
+    parsed = _try_float(raw.get(key))
+    if parsed is None:
+        warnings.append(f"viewport_{key}_clamped: {raw.get(key)!r}")
+        return fallback
+    return parsed
 
 
 @dataclass
