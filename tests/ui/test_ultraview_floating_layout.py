@@ -99,6 +99,23 @@ def test_compact_stage_keeps_canvas_target_without_forced_width():
     _assert_non_overlapping(list(layout.chrome_rects))
 
 
+@pytest.mark.parametrize("stage_height", [280, 260, 220, 160])
+def test_rail_never_overlaps_board_or_status_island_on_short_stages(stage_height):
+    """§4.3: rail separation is a construction guarantee, not a coincidence.
+
+    Before the fix, the rail's vertical position was a pure center-in-safe-
+    stage computation with no awareness of BoardIsland/StatusIsland, so short
+    stages (~280px tall, well within a realistic docked-panel height) let the
+    rail cross into either island.
+    """
+    layout = calculate_floating_layout((1280, stage_height))
+
+    assert not layout.rail.intersects(layout.board_island)
+    assert not layout.rail.intersects(layout.status_island)
+    for rect in layout.persistent_rects:
+        _assert_inside(rect, layout.stage)
+
+
 @pytest.mark.parametrize("rail_height", [48, 96, RAIL_CONTENT_HEIGHT])
 def test_tool_rail_uses_requested_content_height_and_centers_in_safe_stage(rail_height):
     layout = calculate_floating_layout((1280, 800), rail_size=(RAIL_WIDTH, rail_height))

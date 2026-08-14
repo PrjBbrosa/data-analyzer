@@ -248,11 +248,21 @@ def calculate_floating_layout(
         bottom_island_height,
     ).clamp_to(safe)
 
-    rail_height = min(
-        safe.height,
-        _length(rail_size[1]) if rail_size is not None else RAIL_CONTENT_HEIGHT,
+    # The rail sits centered between BoardIsland and StatusIsland, but on
+    # short stages naive centering can push it past either island's edge.
+    # Separate it as a real construction guarantee: shrink to the band those
+    # two islands leave open (never producing a taller rail than fits), then
+    # clamp the centered position into that band rather than into the full
+    # safe stage.
+    rail_band_top = min(safe.bottom, board_island.bottom + ISLAND_GAP)
+    rail_band_bottom = max(rail_band_top, status_island.top - ISLAND_GAP)
+    rail_band_height = max(0, rail_band_bottom - rail_band_top)
+    requested_rail_height = (
+        _length(rail_size[1]) if rail_size is not None else RAIL_CONTENT_HEIGHT
     )
+    rail_height = min(safe.height, requested_rail_height, rail_band_height)
     rail_top = safe.top + (safe.height - rail_height) // 2
+    rail_top = min(max(rail_top, rail_band_top), rail_band_bottom - rail_height)
     rail = Rect(
         safe.left,
         rail_top,
