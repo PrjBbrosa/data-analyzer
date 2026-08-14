@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QToolButton,
@@ -30,6 +31,7 @@ from PyQt5.QtWidgets import (
 )
 
 from mf4_analyzer.ui_kit.icons import Icons
+from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.ui.ultraview_state import ULTRAVIEW_REF_MIME, parse_ref_payload
 
 
@@ -138,6 +140,8 @@ def _icon_button(
     button.setProperty("role", "icon")
     button.setProperty("chrome", "ultraview")
     button.setProperty("active", "false")
+    button.setProperty("modeActive", "false")
+    button.setProperty("panelOpen", "false")
     return button
 
 
@@ -479,17 +483,22 @@ class ToolRail(QFrame):
 
     def _sync_button_states(self) -> None:
         for candidate, button in self._buttons.items():
-            is_active = candidate == self._active_panel or (
+            mode_active = (
                 candidate == PANEL_FILTER and self._filter_active
             ) or (
                 candidate == PANEL_LAYOUT and not self._free_grid_enabled
             )
-            _set_flag(button, "active", is_active)
-            button.setChecked(candidate == self._active_panel)
+            panel_open = candidate == self._active_panel
+            _set_flag(button, "modeActive", mode_active)
+            _set_flag(button, "panelOpen", panel_open)
+            _set_flag(button, "active", False)
+            button.setChecked(panel_open)
         blocked = self._free_grid.blockSignals(True)
         self._free_grid.setChecked(self._free_grid_enabled)
         self._free_grid.blockSignals(blocked)
-        _set_flag(self._free_grid, "active", self._free_grid_enabled)
+        _set_flag(self._free_grid, "modeActive", self._free_grid_enabled)
+        _set_flag(self._free_grid, "panelOpen", False)
+        _set_flag(self._free_grid, "active", False)
 
     def set_badge(self, panel_id: str, count: int | None) -> None:
         """Set an exact count badge; zero/None intentionally shows no badge."""
@@ -749,11 +758,13 @@ class GlobalIsland(QFrame):
     def set_active_panel(self, panel_id: str | None) -> None:
         key = str(panel_id or "")
         for name, button in (("display", self._display), ("export", self._export)):
-            is_active = name == key
+            is_open = name == key
             blocked = button.blockSignals(True)
-            button.setChecked(is_active)
+            button.setChecked(is_open)
             button.blockSignals(blocked)
-            _set_flag(button, "active", is_active)
+            _set_flag(button, "panelOpen", is_open)
+            _set_flag(button, "modeActive", False)
+            _set_flag(button, "active", False)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         visible = [
@@ -954,15 +965,13 @@ class CardContextIsland(QFrame):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(2)
         self._buttons: dict[str, QToolButton] = {}
+        self._orphaned = False
+        self._stale = False
         for action, object_name, icon, tooltip in (
             ("open", "ultraViewContextOpenButton", Icons.ultraview_open_source(), "打开原 View"),
             ("sync", "ultraViewContextSyncButton", Icons.ultraview_sync(), "同步到最新预览"),
             ("focus", "ultraViewContextFocusButton", Icons.expand_focus(), "临时放大预览"),
-            ("copy", "ultraViewContextCopyButton", Icons.copy_image(), "复制本卡图像"),
-            ("unplaced", "ultraViewContextUnplacedButton", Icons.ultraview_move_to_tray(), "移到未放置区"),
             ("more", "ultraViewContextMoreButton", Icons.menu(), "更多卡片操作"),
-            ("rebind", "ultraViewContextRebindButton", Icons.rebuild_time(), "重新绑定孤儿 View"),
-            ("remove", "ultraViewContextRemoveButton", Icons.close_file(), "从总览移除"),
         ):
             button = _icon_button(
                 self,
@@ -973,7 +982,7 @@ class CardContextIsland(QFrame):
             )
             button.setProperty("contextAction", action)
             button.clicked.connect(self._on_action_clicked)
-            if action in {"rebind", "remove", "sync"}:
+            if action == "sync":
                 button.hide()
             self._buttons[action] = button
             layout.addWidget(button, 0)
@@ -1017,14 +1026,48 @@ class CardContextIsland(QFrame):
 
     def set_orphaned(self, orphaned: bool) -> None:
         is_orphaned = bool(orphaned)
+        self._orphaned = is_orphaned
         _set_flag(self, "orphaned", is_orphaned)
-        self._buttons["rebind"].setVisible(is_orphaned)
-        self._buttons["remove"].setVisible(is_orphaned)
         if is_orphaned:
             self._buttons["sync"].hide()
 
     def set_stale(self, stale: bool) -> None:
-        self._buttons["sync"].setVisible(bool(stale))
+        self._stale = bool(stale)
+        self._buttons["sync"].setVisible(self._stale and not self._orphaned)
+
+    def make_overflow_menu(self, parent: QWidget | None = None) -> QMenu:
+        menu = QMenu(parent or self)
+        menu.setObjectName("ultraViewCardContextMoreMenu")
+        apply_rounded_menu_chrome(menu)
+        for action, label in (
+            ("copy", "复制本卡图像"),
+            ("unplaced", "移到未放置"),
+            ("rebind", "重新绑定"),
+            ("remove", "从总览移除"),
+        ):
+            if action == "rebind" and not self._orphaned:
+                continue
+            item = menu.addAction(label)
+            item.setProperty("overflowAction", action)
+            item.triggered.connect(self._on_overflow_triggered)
+        return menu
+
+    def _on_overflow_triggered(self, _checked: bool = False) -> None:
+        sender = self.sender()
+        ref = self.ref()
+        if sender is None or ref is None:
+            return
+        action = str(sender.property("overflowAction") or "")
+        section, view_id = ref
+        emitters = {
+            "copy": self.copy_image_requested,
+            "unplaced": self.move_to_unplaced_requested,
+            "rebind": self.rebind_requested,
+            "remove": self.remove_requested,
+        }
+        signal = emitters.get(action)
+        if signal is not None:
+            signal.emit(section, view_id)
 
     def _on_action_clicked(self) -> None:
         sender = self.sender()
@@ -1039,11 +1082,7 @@ class CardContextIsland(QFrame):
             "open": self.open_source_requested,
             "sync": self.sync_requested,
             "focus": self.focus_requested,
-            "copy": self.copy_image_requested,
-            "unplaced": self.move_to_unplaced_requested,
             "more": self.more_requested,
-            "rebind": self.rebind_requested,
-            "remove": self.remove_requested,
         }
         signal = emitters.get(action)
         if signal is not None:

@@ -41,7 +41,8 @@ def test_tool_rail_emits_requested_panel_and_projects_active_badge(qtbot):
     assert requested == [PANEL_FILTER]
     rail.set_active_panel(PANEL_FILTER)
     assert rail.active_panel() == PANEL_FILTER
-    assert filter_button.property("active") == "true"
+    assert filter_button.property("panelOpen") == "true"
+    assert filter_button.property("modeActive") != "true"
 
     rail.set_badge(PANEL_UNPLACED, 3)
     assert rail.badge_text(PANEL_UNPLACED) == "3"
@@ -84,18 +85,21 @@ def test_tool_rail_layout_is_active_when_a_template_is_current(qtbot):
     free = rail.free_grid_button()
     assert layout is not None
     rail.set_free_grid_enabled(False)
-    assert layout.property("active") == "true"
-    assert free.property("active") != "true"
+    assert layout.property("modeActive") == "true"
+    assert layout.property("panelOpen") != "true"
+    assert free.property("modeActive") != "true"
     rail.set_free_grid_enabled(True)
-    assert layout.property("active") != "true"
-    assert free.property("active") == "true"
+    assert layout.property("modeActive") != "true"
+    assert free.property("modeActive") == "true"
     rail.set_active_panel(PANEL_LAYOUT)
-    assert layout.property("active") == "true"
-    assert free.property("active") == "true"
+    assert layout.property("panelOpen") == "true"
+    assert layout.property("modeActive") != "true"
+    assert free.property("modeActive") == "true"
     rail.set_active_panel(None)
-    assert layout.property("active") != "true"
+    assert layout.property("panelOpen") != "true"
     rail.set_free_grid_enabled(False)
-    assert layout.property("active") == "true"
+    assert layout.property("modeActive") == "true"
+    assert layout.property("panelOpen") != "true"
 
 
 def test_tool_rail_free_grid_is_a_mode_toggle_not_a_panel(qtbot):
@@ -118,9 +122,10 @@ def test_tool_rail_free_grid_is_a_mode_toggle_not_a_panel(qtbot):
     assert panels == []
     rail.set_free_grid_enabled(True)
     assert button.isChecked()
-    assert button.property("active") == "true"
+    assert button.property("modeActive") == "true"
     rail.set_active_panel(PANEL_FILTER)
     assert button.isChecked()
+    assert button.property("modeActive") == "true"
     assert panels == []
 
 
@@ -317,11 +322,12 @@ def test_island_actions_are_icon_only_and_forward_existing_typed_intents(qtbot):
 
     context.copy_image_requested.connect(record_copied)
     context.rebind_requested.connect(record_rebound)
-    copy_button = context.button("copy")
-    rebind_button = context.button("rebind")
-    assert copy_button is not None and rebind_button is not None
-    QTest.mouseClick(copy_button, Qt.LeftButton)
-    QTest.mouseClick(rebind_button, Qt.LeftButton)
+    overflow = context.make_overflow_menu()
+    labels = [action.text() for action in overflow.actions() if action.text()]
+    assert "复制本卡图像" in labels
+    assert "重新绑定" in labels
+    next(action for action in overflow.actions() if action.text() == "复制本卡图像").trigger()
+    next(action for action in overflow.actions() if action.text() == "重新绑定").trigger()
     assert copied == [("time", "view-1")]
     assert rebound == [("time", "view-1")]
     assert context.property("orphaned") == "true"
@@ -340,3 +346,74 @@ def test_island_actions_are_icon_only_and_forward_existing_typed_intents(qtbot):
     assert synced == [("time", "view-1")]
     context.show_for("time", "view-1", orphaned=True, stale=True)
     assert not context.button("sync").isVisible()
+
+
+def test_tool_rail_mode_active_is_independent_of_panel_open(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    layout = rail.panel_button(PANEL_LAYOUT)
+    free = rail.free_grid_button()
+    library = rail.panel_button(PANEL_LIBRARY)
+    assert layout is not None and library is not None
+    rail.set_free_grid_enabled(False)
+    assert layout.property("modeActive") == "true"
+    assert layout.property("panelOpen") != "true"
+    assert free.property("modeActive") != "true"
+    rail.set_active_panel(PANEL_LAYOUT)
+    assert layout.property("modeActive") == "true"
+    assert layout.property("panelOpen") == "true"
+    assert library.property("panelOpen") != "true"
+    rail.set_active_panel(None)
+    assert layout.property("modeActive") == "true"
+    assert layout.property("panelOpen") != "true"
+    rail.set_free_grid_enabled(True)
+    rail.set_active_panel(PANEL_LAYOUT)
+    assert free.property("modeActive") == "true"
+    assert layout.property("modeActive") != "true"
+    assert layout.property("panelOpen") == "true"
+    rail.set_active_panel(None)
+    assert free.property("modeActive") == "true"
+    assert layout.property("panelOpen") != "true"
+
+
+def test_card_context_residents_are_open_sync_focus_and_more(qtbot):
+    context = CardContextIsland()
+    qtbot.addWidget(context)
+    context.show()
+    context.show_for("time", "view-1", stale=False)
+    visible = [
+        action
+        for action, button in context._buttons.items()
+        if button.isVisible()
+    ]
+    assert visible == ["open", "focus", "more"]
+    assert context.button("sync") is not None and not context.button("sync").isVisible()
+    for action in ("copy", "unplaced", "rebind", "remove"):
+        button = context.button(action)
+        assert button is None or not button.isVisible()
+    copied = []
+    unplaced = []
+    context.copy_image_requested.connect(lambda section, view_id: copied.append((section, view_id)))
+    context.move_to_unplaced_requested.connect(
+        lambda section, view_id: unplaced.append((section, view_id))
+    )
+    menu = context.make_overflow_menu()
+    labels = [action.text() for action in menu.actions() if action.text()]
+    assert "复制本卡图像" in labels
+    assert "移到未放置" in labels
+    copy_act = next(action for action in menu.actions() if action.text() == "复制本卡图像")
+    copy_act.trigger()
+    assert copied == [("time", "view-1")]
+    context.show_for("time", "view-1", stale=True)
+    assert context.button("sync").isVisible()
+    assert [action for action, button in context._buttons.items() if button.isVisible()] == [
+        "open",
+        "sync",
+        "focus",
+        "more",
+    ]
+    for button in context.findChildren(QToolButton):
+        if button.isVisible():
+            assert button.toolTip()
+            assert button.accessibleName()
+            assert button.focusPolicy() == Qt.TabFocus

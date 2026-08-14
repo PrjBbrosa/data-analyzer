@@ -98,6 +98,7 @@ from .chrome import (
     ToolRail,
 )
 from .floating_layout import (
+    DEFAULT_MINIMAP_SIZE,
     OVERLAY_ANCHOR_GLOBAL,
     OVERLAY_ANCHOR_RAIL,
     RAIL_CONTENT_HEIGHT,
@@ -407,6 +408,8 @@ class UltraViewPage(QWidget):
         self._board_scroll.viewport_resized.connect(self._refresh_minimap)
         self._board_scroll.horizontalScrollBar().valueChanged.connect(self._refresh_minimap)
         self._board_scroll.verticalScrollBar().valueChanged.connect(self._refresh_minimap)
+        self._board_scroll.horizontalScrollBar().rangeChanged.connect(self._refresh_minimap)
+        self._board_scroll.verticalScrollBar().rangeChanged.connect(self._refresh_minimap)
         self._board_scroll.horizontalScrollBar().valueChanged.connect(self._on_board_scrolled)
         self._board_scroll.verticalScrollBar().valueChanged.connect(self._on_board_scrolled)
         self._overview.slot_requested.connect(self._on_overview_slot)
@@ -718,7 +721,7 @@ class UltraViewPage(QWidget):
                 if self._active_panel in _GLOBAL_PANELS
                 else OVERLAY_ANCHOR_RAIL
             ),
-            minimap_size=(self._minimap.width(), self._minimap.height()) if self._minimap.isVisible() else None,
+            minimap_size=DEFAULT_MINIMAP_SIZE if self._minimap_should_show() else None,
             board_island_size=sizes["board_island"],
             global_island_size=sizes["global_island"],
             status_island_size=sizes["status_island"],
@@ -903,12 +906,8 @@ class UltraViewPage(QWidget):
         self._rename_board(self._board.board_id)
 
     def _show_card_more_menu(self, section: str, view_id: str) -> None:
-        menu = QMenu(self._card_context)
-        menu.setObjectName("ultraViewCardContextMoreMenu")
-        from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
-        apply_rounded_menu_chrome(menu)
+        menu = self._card_context.make_overflow_menu(self._card_context)
         replace = menu.addAction("替换为…")
-        remove = menu.addAction("从总览移除")
         presets: dict[object, str] = {}
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
             size_menu = menu.addMenu("自由网格尺寸")
@@ -924,8 +923,6 @@ class UltraViewPage(QWidget):
         chosen = menu.exec_(self._card_context.mapToGlobal(QPoint(0, self._card_context.height())))
         if chosen is replace:
             self.arm_replacement(section, view_id)
-        elif chosen is remove:
-            self.remove_ref_requested.emit(section, view_id)
         elif chosen in presets:
             self.free_grid_preset_requested.emit(section, view_id, presets[chosen])
 
@@ -942,7 +939,7 @@ class UltraViewPage(QWidget):
         placed = place_card_context(
             (self._canvas_host.width(), self._canvas_host.height()),
             card_rect,
-            size=(max(200, self._card_context.sizeHint().width()), 40),
+            size=(max(136, self._card_context.sizeHint().width()), 40),
             avoid=(
                 layout.board_island,
                 layout.global_island,
@@ -2249,7 +2246,6 @@ class UltraViewPage(QWidget):
         self._rail.set_axis_warning(" · ".join(warnings))
         self._sync_transient_chrome(warnings)
         self._sync_overview()
-        self._minimap.show()
         self._refresh_minimap()
         self._focus.setGeometry(self.rect())
 
@@ -2276,6 +2272,19 @@ class UltraViewPage(QWidget):
         self._board_host.setMinimumSize(host_w, host_h)
         self._board_host.resize(host_w, host_h)
 
+    def _minimap_should_show(self) -> bool:
+        if self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            return False
+        if self._presentation or self._overview.isVisible():
+            return False
+        if self._active_panel is not None:
+            return False
+        horizontal = self._board_scroll.horizontalScrollBar()
+        vertical = self._board_scroll.verticalScrollBar()
+        return int(horizontal.maximum()) > int(horizontal.minimum()) or int(
+            vertical.maximum()
+        ) > int(vertical.minimum())
+
     def _position_minimap(self, floating=None) -> None:
         if not self._minimap.isVisible():
             return
@@ -2290,7 +2299,7 @@ class UltraViewPage(QWidget):
         self._minimap.raise_()
 
     def _refresh_minimap(self, *_args) -> None:
-        if self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
+        if not self._minimap_should_show():
             self._minimap.hide()
             return
         viewport = self._board_scroll.viewport()
@@ -2305,6 +2314,7 @@ class UltraViewPage(QWidget):
                 viewport.height(),
             ),
         )
+        self._minimap.show()
         self._position_minimap()
 
     def _on_minimap_viewport(self, rect: QRect) -> None:

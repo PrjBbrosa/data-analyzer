@@ -43,6 +43,7 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWIDGETSIZE_MAX,
 )
 
 from mf4_analyzer.ui.ultraview_state import (
@@ -103,6 +104,9 @@ from .viewport import (
     QUALITY_FAST,
     QUALITY_SMOOTH,
     LOD_FULL,
+    LOD_NO_FOOTER,
+    LOD_TITLE_ONLY,
+    lod_visibility,
     ZOOM_DEFAULT,
     scale_grid_metrics,
     zoomed_viewport_size,
@@ -282,6 +286,14 @@ STALE_CARD_COPY = "源已变化"
 ORPHANED_CARD_COPY = "源 View 已删除"
 DIMMED_OPACITY = 0.28
 LIBRARY_DEFAULT_WIDTH = 288
+TYPE_CHIP_ICON_ONLY_WIDTH = 168
+_SECTION_TYPE_ICONS = {
+    "time": Icons.mode_time,
+    "fft": Icons.mode_fft,
+    "fft_time": Icons.mode_fft_time,
+    "frf": Icons.mode_frf,
+    "order": Icons.mode_order,
+}
 LIBRARY_OVERLAY_MIN_HEIGHT = 320
 LIBRARY_SECTION_MIN_HEIGHT = 24
 LIBRARY_ROW_MIN_HEIGHT = 40
@@ -1441,6 +1453,10 @@ class UltraViewCard(QFrame):
         self._scale_key: tuple | None = None
         self._raw_cache_key: int | None = None
         self._preview_quality = QUALITY_SMOOTH
+        self._lod_level = LOD_FULL
+        self._lod_show_title = True
+        self._lod_show_source = True
+        self._lod_presentation = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -1454,6 +1470,15 @@ class UltraViewCard(QFrame):
         header.setSpacing(6)
         self._dot = _ColorDot(self._header)
         header.addWidget(self._dot, 0)
+        self._type_chip = QToolButton(self._header)
+        self._type_chip.setObjectName("ultraViewCardTypeChip")
+        self._type_chip.setAutoRaise(False)
+        self._type_chip.setFocusPolicy(Qt.TabFocus)
+        self._type_chip.setCursor(Qt.ArrowCursor)
+        self._type_chip.setFixedHeight(22)
+        self._type_chip.setIconSize(QSize(12, 12))
+        self._type_chip.setProperty("role", "typeChip")
+        header.addWidget(self._type_chip, 0, Qt.AlignVCenter)
         self._title = _ElideLabel("", self._header)
         header.addWidget(self._title, 1)
         self._status = QLabel("", self._header)
@@ -1478,6 +1503,8 @@ class UltraViewCard(QFrame):
         self._focus_btn.setIcon(Icons.expand_focus())
         self._focus_btn.setIconSize(QSize(16, 16))
         self._focus_btn.setToolTip("临时放大")
+        self._focus_btn.setAccessibleName("临时放大")
+        self._focus_btn.setFocusPolicy(Qt.TabFocus)
         self._focus_btn.setCursor(Qt.PointingHandCursor)
         self._focus_btn.setAutoRaise(False)
         self._focus_btn.setFixedSize(24, 24)
@@ -1554,10 +1581,11 @@ class UltraViewCard(QFrame):
 
     def apply_model(self, model: CardViewModel) -> None:
         self._model = model
+        self._lod_show_title = bool(model.show_title)
+        self._lod_show_source = bool(model.show_source)
         title = model.title or model.view_id
         self._dot.set_color(model.tab_color)
-        self._title.setVisible(bool(model.show_title))
-        self._title.set_full_text(title if model.show_title else "")
+        self._title.set_full_text(title)
         if model.status == STATUS_MISSING:
             self._status.setText(STATUS_LABELS_ZH[STATUS_MISSING])
         elif model.status == STATUS_STALE:
@@ -1566,19 +1594,13 @@ class UltraViewCard(QFrame):
             self._status.setText(ORPHANED_CARD_COPY)
         else:
             self._status.setText("")
-        self._status.setVisible(bool(self._status.text()))
-        self._sync_btn.setVisible(model.status == STATUS_STALE)
+        self._status.setProperty("status", model.status)
         section_label = SECTION_LABELS_ZH.get(model.section, model.section)
         self._foot_left.set_full_text(
             f"{section_label} · {_range_text(model.x_range, model.x_unit)}"
         )
         self._foot_source.set_full_text(model.source_summary if model.show_source else "")
-        self._footer.setVisible(bool(model.show_source))
-        if model.show_source:
-            self._footer.setFixedHeight(CARD_FOOTER_HEIGHT)
-        else:
-            self._footer.setFixedHeight(0)
-        self._orphan_bar.setVisible(model.status == STATUS_ORPHANED)
+        self._sync_type_chip(section_label)
         self._set_image(model)
         _set_flag(self, "selected", model.selected)
         _set_flag(self, "dimmed", model.dimmed)
@@ -1586,7 +1608,9 @@ class UltraViewCard(QFrame):
         _set_flag(self, "replacementArmed", model.replacement_armed)
         self.setProperty("status", model.status)
         self._apply_dim(model.dimmed)
+        self._apply_lod_visibility()
         _repolish(self)
+        _repolish(self._status)
         parts = [
             section_label,
             title,
@@ -1634,12 +1658,63 @@ class UltraViewCard(QFrame):
         return menu
 
     def apply_lod(self, level: str, *, show_title: bool, show_source: bool, presentation: bool = False) -> None:
-        self._title.setVisible(bool(show_title))
-        footer = bool(show_source) and level == LOD_FULL
+        self._lod_level = level if level in {LOD_FULL, LOD_NO_FOOTER, LOD_TITLE_ONLY} else LOD_FULL
+        self._lod_show_title = bool(show_title)
+        self._lod_show_source = bool(show_source)
+        self._lod_presentation = bool(presentation)
+        self._apply_lod_visibility()
+
+    def _apply_lod_visibility(self) -> None:
+        vis = lod_visibility(self._lod_level)
+        self.setProperty("lod", self._lod_level)
+        title_text = self._model.title or self._model.view_id
+        self._title.setVisible(bool(vis.title and self._lod_show_title and title_text))
+        self._sync_type_chip(SECTION_LABELS_ZH.get(self._model.section, self._model.section))
+        self._type_chip.setVisible(bool(vis.type_chip))
+        has_status = bool(self._status.text())
+        self._status.setVisible(bool(vis.trust and has_status))
+        self._sync_btn.setVisible(bool(vis.trust and self._model.status == STATUS_STALE))
+        self._focus_btn.setVisible(bool(vis.body_actions))
+        footer = bool(vis.footer and self._lod_show_source)
         self._footer.setVisible(footer)
         self._footer.setFixedHeight(CARD_FOOTER_HEIGHT if footer else 0)
         orphaned = self._model is not None and self._model.status == STATUS_ORPHANED
-        self._orphan_bar.setVisible(orphaned and not presentation)
+        self._orphan_bar.setVisible(bool(vis.body_actions and orphaned and not self._lod_presentation))
+        self._set_preview_visible(bool(vis.preview))
+        _repolish(self)
+
+    def _set_preview_visible(self, visible: bool) -> None:
+        if visible:
+            self._image.setMinimumHeight(max(8, MIN_CARD_CHROME_HEIGHT // 4))
+            self._image.setMaximumHeight(QWIDGETSIZE_MAX)
+            self._image.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self._image.setVisible(True)
+            return
+        self._image.setVisible(False)
+        self._image.setMinimumHeight(0)
+        self._image.setMaximumHeight(0)
+
+    def _sync_type_chip(self, section_label: str) -> None:
+        label = str(section_label or self._model.section)
+        icon_factory = _SECTION_TYPE_ICONS.get(self._model.section)
+        if icon_factory is not None:
+            self._type_chip.setIcon(icon_factory())
+        else:
+            self._type_chip.setIcon(Icons.mode_ultraview())
+        self._type_chip.setToolTip(label)
+        self._type_chip.setAccessibleName(label)
+        icon_only = self._header.width() > 0 and self._header.width() < TYPE_CHIP_ICON_ONLY_WIDTH
+        if icon_only:
+            self._type_chip.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            self._type_chip.setText("")
+            self._type_chip.setFixedWidth(22)
+        else:
+            self._type_chip.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            self._type_chip.setText(label)
+            self._type_chip.setMinimumWidth(0)
+            self._type_chip.setMaximumWidth(QWIDGETSIZE_MAX)
+            hint = self._type_chip.sizeHint()
+            self._type_chip.setFixedWidth(max(22, hint.width() + 8))
 
     def set_preview_quality(self, quality: str) -> None:
         wanted = QUALITY_FAST if quality == QUALITY_FAST else QUALITY_SMOOTH
@@ -1688,7 +1763,9 @@ class UltraViewCard(QFrame):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        self._fit_card_image()
+        self._sync_type_chip(SECTION_LABELS_ZH.get(self._model.section, self._model.section))
+        if lod_visibility(self._lod_level).preview:
+            self._fit_card_image()
 
     def _preview_fit_size(self) -> QSize:
         """Inner label box after QSS padding, not the outer ``size()``."""

@@ -19,7 +19,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     slot_rects,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import legal_grid_rect
-from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LIBRARY, PANEL_UNPLACED
+from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     BoardSwitcher,
@@ -2542,3 +2542,176 @@ def test_free_grid_to_template_overflow_opens_unplaced(qtbot):
     assert harness.board.unplaced
     assert harness.page.active_panel() == PANEL_UNPLACED
     assert harness.page.unplaced_tray().body().isVisible()
+
+
+def test_minimap_hides_when_free_grid_fits_and_on_template(qtbot):
+    harness = _Harness(qtbot)
+    harness.page.resize(1600, 900)
+    _prepare_free_grid(harness, qtbot, "fit-0")
+    harness.page.zoom_fit()
+    qtbot.wait(20)
+    assert not harness.page.free_grid_minimap().isVisible()
+    harness.page.set_board_zoom(1.6)
+    qtbot.wait(20)
+    scroll = harness.page.board_scroll_area()
+    assert (
+        scroll.horizontalScrollBar().maximum() > 0
+        or scroll.verticalScrollBar().maximum() > 0
+    )
+    assert harness.page.free_grid_minimap().isVisible()
+    harness.page.zoom_fit()
+    qtbot.wait(20)
+    assert not harness.page.free_grid_minimap().isVisible()
+    free_grid_to_template(harness.board, harness.board.layout_id)
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    assert not harness.page.free_grid_minimap().isVisible()
+
+
+def test_closing_layout_panel_does_not_change_layout_mode(qtbot):
+    harness = _Harness(qtbot)
+    rail = harness.page.tool_rail()
+    layout = rail.panel_button(PANEL_LAYOUT)
+    assert layout is not None
+    assert rail.free_grid_button().property("modeActive") != "true"
+    assert layout.property("modeActive") == "true"
+    QTest.mouseClick(layout, Qt.LeftButton)
+    qtbot.wait(10)
+    assert harness.page.active_panel() == PANEL_LAYOUT
+    assert layout.property("panelOpen") == "true"
+    assert layout.property("modeActive") == "true"
+    QTest.mouseClick(layout, Qt.LeftButton)
+    qtbot.wait(10)
+    assert harness.page.active_panel() is None
+    assert layout.property("panelOpen") != "true"
+    assert layout.property("modeActive") == "true"
+    assert harness.page.board().layout_mode != LAYOUT_MODE_FREE_GRID
+
+
+def test_card_context_residents_do_not_overlap_at_800px(qtbot):
+    harness = _Harness(qtbot)
+    harness.page.resize(800, 560)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("time", "time-1")
+    assert card is not None
+    _select_card(card)
+    qtbot.wait(20)
+    island = harness.page.card_context_island()
+    assert island.isVisible()
+    visible_actions = [
+        button.property("contextAction")
+        for button in island.findChildren(QToolButton)
+        if button.isVisible()
+    ]
+    assert "open" in visible_actions
+    assert "focus" in visible_actions
+    assert "more" in visible_actions
+    assert "copy" not in visible_actions
+    assert "unplaced" not in visible_actions
+    boxes = [
+        button.geometry()
+        for button in island.findChildren(QToolButton)
+        if button.isVisible()
+    ]
+    for index, first in enumerate(boxes):
+        for second in boxes[index + 1 :]:
+            assert not first.intersects(second)
+    host = harness.page._canvas_host
+    island_rect = island.geometry()
+    for other in (
+        harness.page.tool_rail(),
+        harness.page.board_island(),
+        harness.page.global_island(),
+        harness.page.navigation_island(),
+        harness.page.status_island(),
+    ):
+        if not other.isVisible():
+            continue
+        other_rect = other.geometry()
+        assert not island_rect.intersects(other_rect), (island_rect, other.objectName(), other_rect)
+    del host
+
+def test_template_title_only_lod_hides_preview_backing_and_keeps_type(qtbot):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("order", "View 1"))
+    ref = make_ref("order", "View 1")
+    harness.page.set_library_rows(
+        [
+            LibraryRow(
+                section="order",
+                view_id="View 1",
+                name="View 1",
+                tab_color="#9b6bd0",
+                status=STATUS_MISSING,
+                on_board=True,
+                source_summary="order-src",
+            )
+        ]
+    )
+    harness.page.set_preview(
+        ref,
+        FakePreview(ref=ref, image=_image(), title="View 1", captured_digest="order-digest"),
+    )
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("order", "View 1")
+    assert card is not None
+    geom_before = QRect(card.geometry())
+    harness.page.set_board_zoom(0.35)
+    qtbot.wait(10)
+    chip = card.findChild(QToolButton, "ultraViewCardTypeChip")
+    assert chip is not None and chip.isVisible()
+    assert "阶次" in (chip.text() + chip.toolTip() + chip.accessibleName())
+    assert card._title.full_text() == "View 1"
+    assert not card._image.isVisible() or card._image.height() == 0
+    assert not card._footer.isVisible()
+    assert card.isVisible()
+    assert card.focusPolicy() == Qt.StrongFocus
+    assert slot_occupant(harness.page.board(), card.slot_id()) == ref
+    del geom_before
+    assert harness.page._previews[ref].captured_digest == "order-digest"
+
+
+def test_lod_matrix_keeps_type_chip_across_window_widths(qtbot):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "View 1"))
+    ref = make_ref("time", "View 1")
+    harness.page.set_library_rows(
+        [
+            LibraryRow(
+                section="time",
+                view_id="View 1",
+                name="View 1",
+                tab_color="#2d7ff9",
+                status=STATUS_MISSING,
+                on_board=True,
+                source_summary="time-src",
+            )
+        ]
+    )
+    harness.page.set_preview(
+        ref,
+        FakePreview(ref=ref, image=_image(), title="View 1"),
+    )
+    harness.page.set_board(harness.board)
+    for width, height in ((800, 560), (1280, 800), (1440, 900)):
+        harness.page.resize(width, height)
+        qtbot.wait(10)
+        card = harness.page.card_widget("time", "View 1")
+        assert card is not None
+        for zoom, expect_preview, expect_footer in (
+            (1.0, True, True),
+            (0.55, True, False),
+            (0.35, False, False),
+        ):
+            harness.page.set_board_zoom(zoom)
+            qtbot.wait(10)
+            chip = card.findChild(QToolButton, "ultraViewCardTypeChip")
+            assert chip is not None and chip.isVisible(), (width, zoom)
+            assert "时域" in (chip.text() + chip.toolTip() + chip.accessibleName())
+            assert card._title.full_text() == "View 1"
+            if expect_preview:
+                assert card._image.isVisible() and card._image.height() > 0
+            else:
+                assert not card._image.isVisible() or card._image.height() == 0
+            assert card._footer.isVisible() is expect_footer

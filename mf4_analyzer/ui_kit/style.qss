@@ -4127,6 +4127,21 @@ QWidget#ultraViewCardHeader,
 QWidget#ultraViewCardFooter {
     background-color: transparent;
 }
+QToolButton#ultraViewCardTypeChip {
+    padding: 0 6px;
+    border: 1px solid #d6e0eb;
+    border-radius: 4px;
+    background-color: #f4f7fb;
+    color: #334155;
+    font-size: 10px;
+    font-weight: 600;
+}
+QToolButton#ultraViewCardTypeChip:hover,
+QToolButton#ultraViewCardTypeChip:focus {
+    border-color: #bdd6ff;
+    background-color: #eef4fb;
+    color: #1769e0;
+}
 QLabel#ultraViewZoomLabel {
     color: #475569;
     font-size: 11px;
@@ -4407,6 +4422,63 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][a
     border-color: #639eea;
     background-color: #cbdfff;
     color: #145fc8;
+}
+
+/* Persistent layout mode vs a temporarily open panel must not share one wash.
+ * modeActive keeps the filled accent; panelOpen is outline-only. */
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"],
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"] {
+    border-color: #bdd6ff;
+    background-color: #e9f1ff;
+    color: #1769e0;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover {
+    border-color: #8cb8f7;
+    background-color: #dceaff;
+    color: #1769e0;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:pressed,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:pressed {
+    border-color: #639eea;
+    background-color: #cbdfff;
+    color: #145fc8;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"],
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"] {
+    border-color: #1769e0;
+    background-color: #ffffff;
+    color: #1769e0;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover {
+    border-color: #145fc8;
+    background-color: #f6faff;
+    color: #145fc8;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:pressed,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:pressed {
+    border-color: #104b9f;
+    background-color: #e9f1ff;
+    color: #104b9f;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"],
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"] {
+    border-color: #1769e0;
+    background-color: #e9f1ff;
+    color: #1769e0;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover {
+    border-color: #145fc8;
+    background-color: #dceaff;
+    color: #145fc8;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:pressed,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:pressed {
+    border-color: #104b9f;
+    background-color: #cbdfff;
+    color: #104b9f;
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"]:disabled,
 QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"]:disabled,

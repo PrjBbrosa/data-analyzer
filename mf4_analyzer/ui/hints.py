@@ -672,7 +672,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.minimap",
-        text="右下导航浮岛的缩略图可定位整板",
+        text="缩略图仅在内容超出时出现",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=83,
@@ -700,7 +700,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.card_menu",
-        text="选中卡片的浮动工具条或右键可打开原 View",
+        text="选中条常驻打开同步聚焦，更多里复制",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=80,
