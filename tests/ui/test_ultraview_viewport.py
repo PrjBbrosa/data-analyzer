@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
@@ -440,6 +441,50 @@ def test_card_reuses_scaled_preview_buffer_when_size_is_unchanged(qtbot):
     assert first is not None
     card._fit_card_image()
     assert card.scale_buffer() is first
+
+
+def test_title_only_lod_skips_pixmap_scaling_until_preview_returns(qtbot, monkeypatch):
+    """§4.3: TITLE_ONLY hides the preview label, so a new image arriving on
+    that tier must not pay for a scale nobody can see — even before layout
+    has collapsed the (invisible) preview label's geometry — and growing
+    back to a preview-showing tier must produce a correctly sized pixmap,
+    not a stale/missing one.
+    """
+    from mf4_analyzer.ui.chart_stack.ultraview.widgets import UltraViewCard
+
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "a")
+    card = cards[0]
+    card.resize(300, 220)
+
+    card.apply_lod(LOD_TITLE_ONLY, show_title=True, show_source=False)
+    assert not lod_visibility(LOD_TITLE_ONLY).preview
+    assert not card._image.isVisible()
+
+    calls = []
+    original = UltraViewCard._fit_card_image
+
+    def _spy(self):
+        calls.append(self)
+        return original(self)
+
+    monkeypatch.setattr(UltraViewCard, "_fit_card_image", _spy)
+
+    fresh = QImage(400, 300, QImage.Format_ARGB32)
+    fresh.fill(Qt.blue)
+    card.apply_model(replace(card.model(), image=fresh))
+
+    # apply_model must not even attempt a scale nobody can see, regardless
+    # of whether the hidden label's geometry has already collapsed.
+    assert card._raw_image is not None
+    assert calls == []
+
+    card.apply_lod(LOD_FULL, show_title=True, show_source=True)
+    assert card._image.isVisible()
+    assert calls == [card]
+    assert card._scale_buffer is not None
+    pixmap = card._image.pixmap()
+    assert pixmap is not None and not pixmap.isNull()
 
 
 def test_card_preview_keeps_top_pixels_inside_qss_padding(qtbot, qapp):
