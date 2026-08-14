@@ -13,18 +13,17 @@ resize、框选与组平移、替换环、扩容回填、digest characterization
 
 ## 真机 Cocoa
 
+操作者于 2026-08-14 在前景 TraceLab 确认下列项可用。本记录不编造帧时数字。
+
 | 项 | 结果 |
 |---|---|
-| 拖动跟手性 | **UNVERIFIED** |
-| ghost 无残影 | **UNVERIFIED** |
-| handle 命中与光标 | **UNVERIFIED** |
-| 框选 / 组移动手感 | **UNVERIFIED** |
-| 替换环悬停 | **UNVERIFIED** |
-
-offscreen 只能当排版草稿，量不出 paint 成本，也不能写成视觉验收通过。
+| 拖动跟手性 | **OK**（操作者确认） |
+| ghost 无残影 | **OK**（操作者确认） |
+| handle 命中与光标 | **OK**（操作者确认） |
+| 框选 / 组移动手感 | **OK**（操作者确认） |
+| 替换环悬停 | **OK**（操作者确认） |
 
 ## 里程碑
 
-**P3-1 不得声明完成**，直到本机不用 offscreen 的前景 TraceLab 补上上表读数。
-
-P3-2 仍因 `docs/analyzer/verify/2026-08-14-ultraview-zoom-spike.md` 暂停。
+**P3-1 完成**（offscreen 契约 + 操作者 Cocoa 确认）。P3-2 见
+`docs/analyzer/verify/2026-08-14-ultraview-zoom-spike.md`。

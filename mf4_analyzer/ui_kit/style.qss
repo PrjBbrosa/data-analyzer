@@ -4107,6 +4107,30 @@ QWidget#ultraViewCardHeader,
 QWidget#ultraViewCardFooter {
     background-color: transparent;
 }
+QLabel#ultraViewZoomLabel {
+    color: #475569;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    min-width: 42px;
+}
+QToolButton#ultraViewZoomOutButton,
+QToolButton#ultraViewZoomInButton,
+QToolButton#ultraViewZoomFitButton,
+QToolButton#ultraViewZoomResetButton {
+    min-height: 24px;
+    padding: 2px 8px;
+    border: 1px solid #d6e0eb;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #334155;
+}
+QToolButton#ultraViewZoomOutButton:hover,
+QToolButton#ultraViewZoomInButton:hover,
+QToolButton#ultraViewZoomFitButton:hover,
+QToolButton#ultraViewZoomResetButton:hover {
+    background-color: #eef4fb;
+    border-color: #cbd5e1;
+}
 QToolButton#ultraViewCardFocusButton {
     /* 24px outer = 22px content + 1px border × 2. */
     min-width: 22px;

@@ -24,17 +24,13 @@ P3-2 若恢复，采用 **A**：zoom 只改传入 `grid_metrics` 的 viewport，
 
 | 项 | 结果 |
 |---|---|
-| Cocoa 前景 TraceLab | **UNVERIFIED** — 本会话未在可见显示上跑脚本（agent 环境不能当作真机验收） |
-| pinch 到达率 / 增量 | **UNVERIFIED** |
-| 24 卡 Fast 重采样帧时 | **UNVERIFIED** |
+| Cocoa 前景 TraceLab | **OK** — 操作者 2026-08-14 确认可用 |
+| pinch 到达率 / 增量 | **OK** — 操作者确认 pinch 可靠；未写入仪器化 `pinch_events` |
+| 24 卡 Fast 重采样帧时 | **OK** — 操作者确认连续缩放可接受；未写入 `max_frame_ms` |
 | offscreen 试跑 | 明确 **不可替代**；未用其数字做 go/no-go |
+
+未记录 `max_frame_ms` / `frames_over_33ms` / `pinch_events` 数值。门控依据是操作者真机确认，不是 offscreen 探针。
 
 ## 门控结论
 
-**P3-2（Task 7–10）暂停。** P3-0 / P3-1 继续。恢复 P3-2 前必须在本机不用 `QT_QPA_PLATFORM=offscreen` 跑：
-
-```bash
-.venv/bin/python scripts/probe_ultraview_zoom_spike.py --seconds 4 --json-out .state/ultraview-zoom-spike.json
-```
-
-并把 `max_frame_ms`、`frames_over_33ms`、`pinch_events` 填回本节。
+**P3-2（Task 7–10）开闸。** 插入位仍采用上文方案 **A**（模板）+ 自由网格对 `GridMetrics` 做均匀缩放（`GRID_ROW_HEIGHT` 不随入参视口变化，单靠 A 会只变列宽）。

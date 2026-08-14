@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from PyQt5.QtCore import QRect, Qt, pyqtSignal
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtCore import QPoint, QRect, QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import QKeySequence, QNativeGestureEvent, QWheelEvent
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -43,6 +43,18 @@ from mf4_analyzer.ui.ultraview_state import (
     slot_occupant,
 )
 
+from .viewport import (
+    QUALITY_FAST,
+    QUALITY_SMOOTH,
+    SMOOTH_DELAY_MS,
+    ZOOM_BUTTON_STEP,
+    BoardViewport,
+    clamp_zoom,
+    fit_zoom,
+    wheel_zoom_factor,
+    zoom_at_cursor,
+    zoom_percent,
+)
 from .widgets import (
     LIBRARY_DEFAULT_WIDTH,
     BoardOverview,
@@ -65,6 +77,23 @@ from .widgets import (
 
 _FEEDBACK_BOARD_FULL = "Board 已满：换布局或先移除"
 _FEEDBACK_NO_SELECTION = "先在左侧 View 库选择一个 View"
+
+
+def _event_global_point(event) -> QPoint:
+    if hasattr(event, "globalPosition"):
+        value = event.globalPosition()
+        return value.toPoint() if hasattr(value, "toPoint") else QPoint(int(value.x()), int(value.y()))
+    if hasattr(event, "globalPos"):
+        return event.globalPos()
+    if hasattr(event, "screenPos"):
+        value = event.screenPos()
+        return value.toPoint() if hasattr(value, "toPoint") else QPoint(int(value.x()), int(value.y()))
+    return QPoint(0, 0)
+
+
+def _event_global_xy(event) -> tuple[float, float]:
+    point = _event_global_point(event)
+    return (float(point.x()), float(point.y()))
 
 
 class UltraViewPage(QWidget):
@@ -107,6 +136,7 @@ class UltraViewPage(QWidget):
     organize_free_grid_requested = pyqtSignal()
     free_grid_undo_requested = pyqtSignal()
     free_grid_redo_requested = pyqtSignal()
+    viewport_changed = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -128,6 +158,12 @@ class UltraViewPage(QWidget):
         self._presentation = False
         self._library_visible = True
         self._prev_unplaced_count: int | None = None
+        self._viewport = BoardViewport()
+        self._smooth_timer = QTimer(self)
+        self._smooth_timer.setObjectName("ultraViewSmoothPreviewTimer")
+        self._smooth_timer.setSingleShot(True)
+        self._smooth_timer.setInterval(SMOOTH_DELAY_MS)
+        self._smooth_timer.timeout.connect(self._on_smooth_preview_timeout)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -194,6 +230,10 @@ class UltraViewPage(QWidget):
         self._toolbar.board_name_changed.connect(self.board_name_changed)
         self._toolbar.free_grid_toggled.connect(self.free_grid_toggled)
         self._toolbar.organize_free_grid_requested.connect(self.organize_free_grid_requested)
+        self._toolbar.zoom_out_requested.connect(self.zoom_out)
+        self._toolbar.zoom_in_requested.connect(self.zoom_in)
+        self._toolbar.zoom_fit_requested.connect(self.zoom_fit)
+        self._toolbar.zoom_reset_requested.connect(self.zoom_reset)
 
         self._rail.compare_filter_changed.connect(self._on_compare_filter)
 
@@ -293,6 +333,137 @@ class UltraViewPage(QWidget):
 
     def board_toolbar(self) -> BoardToolbar:
         return self._toolbar
+
+    def board_viewport(self) -> BoardViewport:
+        return self._viewport
+
+    def board_zoom(self) -> float:
+        return self._viewport.zoom()
+
+    def preview_quality(self) -> str:
+        return self._viewport.quality()
+
+    def smooth_preview_timer(self) -> QTimer:
+        return self._smooth_timer
+
+    def is_board_panning(self) -> bool:
+        return self._viewport.is_panning()
+
+    def set_board_zoom(self, zoom: float, cursor_in_viewport=None) -> None:
+        viewport = self._board_scroll.viewport()
+        if cursor_in_viewport is None:
+            cursor_in_viewport = (viewport.width() / 2.0, viewport.height() / 2.0)
+        self._zoom_at(zoom, cursor_in_viewport)
+
+    def zoom_in(self) -> None:
+        self.set_board_zoom(self._viewport.zoom() + ZOOM_BUTTON_STEP)
+
+    def zoom_out(self) -> None:
+        self.set_board_zoom(self._viewport.zoom() - ZOOM_BUTTON_STEP)
+
+    def zoom_reset(self) -> None:
+        self.set_board_zoom(1.0)
+
+    def zoom_fit(self) -> None:
+        viewport = self._board_scroll.viewport()
+        canvas = self._active_canvas()
+        size = canvas.unzoomed_size()
+        self.set_board_zoom(fit_zoom((size.width(), size.height()), (viewport.width(), viewport.height())))
+
+    def note_space(self, down: bool) -> None:
+        self._viewport.set_space_down(down)
+        if down:
+            self._board_scroll.viewport().setCursor(Qt.OpenHandCursor)
+        elif not self._viewport.is_panning():
+            self._board_scroll.viewport().unsetCursor()
+
+    def begin_board_pan(self, event) -> bool:
+        button = event.button()
+        if button != Qt.MiddleButton and not (
+            button == Qt.LeftButton and self._viewport.space_down()
+        ):
+            return False
+        global_pos = _event_global_xy(event)
+        self._viewport.begin_pan(global_pos)
+        self._board_scroll.viewport().setCursor(Qt.ClosedHandCursor)
+        self._apply_preview_quality(QUALITY_FAST)
+        self._restart_smooth_timer()
+        return True
+
+    def update_board_pan(self, event) -> None:
+        if not self._viewport.is_panning():
+            return
+        dx, dy = self._viewport.update_pan(_event_global_xy(event))
+        horizontal = self._board_scroll.horizontalScrollBar()
+        vertical = self._board_scroll.verticalScrollBar()
+        horizontal.setValue(int(horizontal.value() + dx))
+        vertical.setValue(int(vertical.value() + dy))
+
+    def end_board_pan(self) -> None:
+        self._viewport.end_pan()
+        if self._viewport.space_down():
+            self._board_scroll.viewport().setCursor(Qt.OpenHandCursor)
+        else:
+            self._board_scroll.viewport().unsetCursor()
+        self._restart_smooth_timer()
+
+    def handle_zoom_wheel(self, event: QWheelEvent, widget) -> bool:
+        delta = event.angleDelta().y()
+        factor = wheel_zoom_factor(delta)
+        if factor == 1.0:
+            return False
+        cursor = self._cursor_in_scroll_viewport(event, widget)
+        self._zoom_at(self._viewport.zoom() * factor, cursor)
+        return True
+
+    def handle_pinch(self, event: QNativeGestureEvent, widget) -> bool:
+        if event.gestureType() != Qt.ZoomNativeGesture:
+            return False
+        cursor = self._cursor_in_scroll_viewport(event, widget)
+        self._zoom_at(self._viewport.zoom() * (1.0 + float(event.value())), cursor)
+        return True
+
+    def _active_canvas(self):
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            return self._free_grid
+        return self._grid
+
+    def _zoom_at(self, zoom: float, cursor_in_viewport) -> None:
+        before = self._viewport.zoom()
+        after = clamp_zoom(zoom)
+        cursor = (float(cursor_in_viewport[0]), float(cursor_in_viewport[1]))
+        scroll = (
+            float(self._board_scroll.horizontalScrollBar().value()),
+            float(self._board_scroll.verticalScrollBar().value()),
+        )
+        new_scroll = zoom_at_cursor(before, after, cursor, scroll)
+        self._viewport.set_zoom(after)
+        self._grid.set_zoom(after)
+        self._free_grid.set_zoom(after)
+        self._sync_board_stack_geometry(self._active_canvas())
+        self._board_scroll.horizontalScrollBar().setValue(int(round(new_scroll[0])))
+        self._board_scroll.verticalScrollBar().setValue(int(round(new_scroll[1])))
+        self._toolbar.set_zoom_percent(zoom_percent(after))
+        self._apply_preview_quality(QUALITY_FAST)
+        self._restart_smooth_timer()
+        self.viewport_changed.emit()
+
+    def _cursor_in_scroll_viewport(self, event, widget) -> tuple[float, float]:
+        viewport = self._board_scroll.viewport()
+        global_pos = _event_global_point(event)
+        local = viewport.mapFromGlobal(global_pos)
+        return (float(local.x()), float(local.y()))
+
+    def _apply_preview_quality(self, quality: str) -> None:
+        self._viewport.set_quality(quality)
+        self._grid.set_preview_quality(quality)
+        self._free_grid.set_preview_quality(quality)
+
+    def _restart_smooth_timer(self) -> None:
+        self._smooth_timer.start(SMOOTH_DELAY_MS)
+
+    def _on_smooth_preview_timeout(self) -> None:
+        self._apply_preview_quality(QUALITY_SMOOTH)
 
     def focus_layer(self) -> FocusLayer:
         return self._focus
@@ -511,6 +682,7 @@ class UltraViewPage(QWidget):
             return
         self._library.set_on_board(membership_set(board))
         self._refresh_projection()
+        self._toolbar.set_zoom_percent(zoom_percent(self._viewport.zoom()))
 
     def show_overview(self) -> None:
         """Show a scaled, read-only full Board projection without capture."""
@@ -594,6 +766,9 @@ class UltraViewPage(QWidget):
         return isinstance(QApplication.focusWidget(), QLineEdit)
 
     def handle_escape(self) -> bool:
+        if self._viewport.is_panning():
+            self.end_board_pan()
+            return True
         if self._free_grid.cancel_gesture():
             return True
         if self._focus.isVisible():
