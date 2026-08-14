@@ -530,6 +530,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.organize",
         "ultraview.minimap",
         "ultraview.zoom",
+        "ultraview.lod",
         "ultraview.boards",
         "ultraview.limits",
     }

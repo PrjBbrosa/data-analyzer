@@ -637,7 +637,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.avoid",
-        text="重叠时邻卡同尺寸让位，放不下保持原位",
+        text="重叠邻卡原尺寸让位，无空位则拒绝",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=85,
@@ -651,7 +651,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.undo",
-        text="布局浮层中的撤销可恢复自由网格布局",
+        text="一次重排一个撤销，可恢复全部卡片",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=86,
@@ -672,7 +672,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.minimap",
-        text="缩略图仅在内容超出时出现",
+        text="缩略图仅自由网格滚动时出现",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=83,
@@ -683,6 +683,13 @@ _HINTS = (
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,
+    ),
+    Hint(
+        id="ultraview.lod",
+        text="六成完整四成紧凑，更低标题仍见类型",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=88,
     ),
     Hint(
         id="ultraview.boards",
@@ -700,7 +707,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.card_menu",
-        text="选中条常驻打开同步聚焦，更多里复制",
+        text="常驻打开聚焦，过期才同步，更多里复制",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=80,
