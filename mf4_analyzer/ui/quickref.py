@@ -477,8 +477,18 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "自由网格",
-                sub="12 列、最多 24 张卡；拖到空位放置，Option 拖动、Option+Shift 缩放",
+                sub="12 列、最多 24 张卡；直接拖动移动，选中后拖边角改尺寸；空白框选、Shift 点选多张",
+                keys=("Shift",),
+            ),
+            QuickRow(
+                "键盘微调",
+                sub="Option+方向键移动，Option+Shift+方向键改尺寸",
                 keys=("Option", "Shift"),
+            ),
+            QuickRow(
+                "替换卡片",
+                sub="库或托盘拖到已有卡上停留约 0.6 秒出现替换环，环内松手替换；右键「替换为…」",
+                gesture="拖入并悬停",
             ),
             QuickRow(
                 "尺寸预设",

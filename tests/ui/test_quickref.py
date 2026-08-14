@@ -346,3 +346,14 @@ def test_catalog_channel_editor_create_and_param_help():
     assert "?" in haystack
     time_views = _row_by_desc("时域 View")
     assert "悬停" in time_views.sub and "全名" in time_views.sub
+
+
+def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
+    group = next(g for g in quickref.QUICKREF if g.title == "总览 · Board 与自由网格")
+    haystack = " ".join(f"{row.desc} {row.sub}" for row in group.rows)
+    assert "直接拖动" in haystack
+    assert "框选" in haystack
+    assert "替换环" in haystack
+    assert "Option+Shift" in haystack
+    assert "Alt+拖" not in haystack
+    assert "Option 拖动" not in haystack

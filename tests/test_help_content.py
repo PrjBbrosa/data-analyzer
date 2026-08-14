@@ -252,12 +252,13 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "五个分析工作区", "不是第六种算法", "2×2", "3×2",
         "Esc", "演示", "UltraView（总览）", "View 栏最右侧 UltraView",
         "Board", "自由网格", "12 列", "24 张", "Option+Shift", "整理布局",
-        "minimap",
+        "minimap", "直接拖卡片", "框选", "替换环",
     ):
         assert keyword in text, f"UltraView guide missing: {keyword}"
     for banned in (
         "PDF", "SVG", "sidecar", "live card", "后台补图", "自由缩放", "board zoom",
         "工具栏「总览」", "顶栏「总览」", "顶部「总览」",
+        "Alt+拖", "Option 拖动位置",
     ):
         assert banned not in text, f"UltraView guide leaked P1 copy: {banned}"
 
@@ -274,3 +275,18 @@ def test_published_guide_removes_hidden_controls_and_explains_frf_range():
     assert "去均值" not in text
     assert "取时域范围" not in text
     assert "使用选定时间范围" in text
+
+
+def test_ultraview_p3_surfaces_drop_alt_drag_copy():
+    """UV-P3-A15: product hints / quickref / help must not keep Alt+拖."""
+    root = Path(__file__).resolve().parents[1]
+    surfaces = [
+        root / "mf4_analyzer" / "ui" / "hints.py",
+        root / "mf4_analyzer" / "ui" / "quickref.py",
+        HELP / "ultraview-guide.html",
+    ]
+    banned = ("Alt+拖", "Option 拖动位置", "Option 拖动、")
+    for path in surfaces:
+        text = path.read_text(encoding="utf-8")
+        for phrase in banned:
+            assert phrase not in text, f"{path.name} still has {phrase!r}"

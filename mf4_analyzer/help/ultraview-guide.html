@@ -40,7 +40,7 @@
         <div class="instr">
           <div class="blk reveal d3"><span class="k">布局</span><p>左右/上下双图、2×2、左主图+3 辅图、上主图+3 辅图、3×2 六宫格、3×3 九宫格、4×3 十二宫格。主图比例只作用于主图布局。九/十二图窗口不够时滚动，不把卡片压到不可读。</p></div>
           <div class="blk reveal d4"><span class="k">托盘</span><p>槽位满了再加入，多出来的卡片进<b>底部托盘</b>。托盘里的卡片仍属于这块板，可再放回空槽。</p></div>
-          <div class="blk reveal d5"><span class="k">拖放</span><p>拖到空槽添加，拖到已有卡片替换，卡片之间对调。库里点加号与拖放是同一条加入意图。</p></div>
+          <div class="blk reveal d5"><span class="k">拖放</span><p>模板：拖到空槽是移动，拖到占用槽是交换。库或托盘拖到已有卡片上<b>停留约 0.6 秒</b>出现替换环，环内松手才替换。卡片右键「替换为…」走同一条意图。</p></div>
         </div>
         <div class="mock reveal d3">
           <div class="cap"><span>View 库</span><em>五个分区</em></div>
@@ -106,7 +106,7 @@
       <div class="step-grid">
         <div class="instr">
           <div class="blk reveal d3"><span class="k">Board</span><p>顶栏 <b>+</b> 新建空板，右键复制 / 重命名 / 删除。最多创建 <b>20</b> 个 Board；从项目读回时超过 20 只警告，不会丢板。</p></div>
-          <div class="blk reveal d4"><span class="k">自由网格</span><p>12 列、最多 24 张卡。Option 拖动位置，<b>Option+Shift</b> 缩放；卡片右键选尺寸预设。碰撞会提示，不会悄悄失败。整理布局压缩空行；<b>Ctrl+Z</b> 撤销网格改动（编辑板名或搜索时仍走文本撤销）。</p></div>
+          <div class="blk reveal d4"><span class="k">自由网格</span><p>12 列、最多 24 张卡。<b>直接拖卡片移动</b>，选中后拖边角改尺寸（Shift 保持比例）。空白处拖动画框<b>框选</b>多张，Shift+点加减选，组移动一次提交。Delete / Backspace 作用于全组。键盘仍可用 <b>Option+方向键</b> 微调、<b>Option+Shift+方向键</b> 改尺寸。卡片右键选尺寸预设。碰撞会提示，不会悄悄失败。整理布局压缩空行；<b>Ctrl+Z</b> 撤销网格改动（编辑板名或搜索时仍走文本撤销）。</p></div>
           <div class="blk reveal d5"><span class="k">定位</span><p>右下角缩略图（minimap）只滚动对照板。工具栏「概览」看整板，点一张卡回到阅读位置。都不改源 View、不重新计算。</p></div>
         </div>
         <div class="mock reveal d3">

@@ -608,6 +608,13 @@ _HINTS = (
         priority=55,
     ),
     Hint(
+        id="ultraview.direct_manip",
+        text="直接拖卡片即可移动，不必再按 Option",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=91,
+    ),
+    Hint(
         id="ultraview.readonly",
         text="总览只读，不重新计算",
         surface="context",
@@ -616,17 +623,24 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.free_grid",
-        text="自由网格可拖动布局；按住 Option + 方向键微调",
+        text="拖卡片移动；空白处拖动画框多选",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=88,
     ),
     Hint(
         id="ultraview.resize",
-        text="Option+Shift 缩放自由网格卡片",
+        text="选中后拖边角改尺寸，Shift 保持比例",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=87,
+    ),
+    Hint(
+        id="ultraview.replace_ring",
+        text="库或托盘拖到卡片上停留可替换",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=84,
     ),
     Hint(
         id="ultraview.undo",
@@ -679,7 +693,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.escape",
-        text="Esc 退出焦点、演示、菜单",
+        text="Esc 取消拖动、清选、退出焦点与演示",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=70,
