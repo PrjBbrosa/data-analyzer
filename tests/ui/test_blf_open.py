@@ -6,6 +6,9 @@ can = pytest.importorskip("can", reason="python-can not installed (win32-gated)"
 cantools = pytest.importorskip("cantools", reason="cantools not installed")
 
 from tests._helpers.blf_factory import (  # noqa: E402
+    engine_payload,
+    make_can_frames,
+    write_engine_only_dbc,
     write_raw_blf,
     write_sample_blf,
     write_two_message_dbc,
@@ -162,6 +165,32 @@ def test_load_one_reuses_persisted_recent_dbc_after_restart(qapp, tmp_path, monk
     assert len(mw2.files) == 1
     fd = next(iter(mw2.files.values()))
     assert "EngineSpeed" in fd.channels
+
+
+def test_validated_dbc_survives_a_large_log_with_a_rare_matched_id(
+    qapp, tmp_path,
+):
+    """P0-1 downstream: a project-restored DBC binding must not be dropped.
+
+    ``_validated_blf_dbc_paths`` returned ``None`` for this shape, which
+    silently discarded the DBC binding on project restore and made batch
+    intake raise "CAN 日志与所选 DBC 不匹配".
+    """
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    dbc = write_engine_only_dbc(tmp_path / "engine.dbc")
+    frames = make_can_frames([
+        (1, 0x777, b"\x00"),
+        (1, 0x123, engine_payload()),
+        (29_998, 0x777, b"\x00"),
+    ])
+
+    window = MainWindow()
+    validated = window._validated_blf_dbc_paths(
+        tmp_path / "sample.blf", [str(dbc)], frames=frames,
+    )
+
+    assert validated == [str(dbc)]
 
 
 def test_format_blf_dbc_candidate_uses_sample_copy_not_fake_exact_frames(

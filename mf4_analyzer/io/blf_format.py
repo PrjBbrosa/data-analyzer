@@ -25,6 +25,11 @@ class BlfDbcProbe:
     Exact fields come from a full ID scan (no payload decode). Sample fields
     come from a bounded statistical decode. Estimates are optional and must
     not be presented as exact frame counts.
+
+    ``discovery_decoded_count`` is a *separate* budget: the first frame of
+    each arbitration id, decoded only to learn which signal names this DBC
+    can produce. It deliberately stays out of every ratio — a coverage
+    sample is not a statistical one.
     """
 
     dbc_paths: tuple[str, ...]
@@ -39,6 +44,7 @@ class BlfDbcProbe:
     sampling_strategy: str
     sampling_complete: bool
     estimate_unavailable_reason: str | None = None
+    discovery_decoded_count: int = 0
 
     @property
     def sample_match_ratio(self) -> float:
@@ -64,7 +70,15 @@ class BlfDbcProbe:
 
     @property
     def is_match(self) -> bool:
-        return self.decoded_sample_count > 0 and bool(self.signal_names)
+        """True when either sample proved this DBC decodes real signals.
+
+        The statistical sample answers "how much of the log decodes"; the
+        discovery sample answers "does anything decode at all". A DBC that
+        only defines a low-frequency id never lands in the statistical
+        sample of a large log, so requiring it there rejected valid DBCs.
+        """
+        decoded = self.decoded_sample_count + self.discovery_decoded_count
+        return decoded > 0 and bool(self.signal_names)
 
     @property
     def matched_frame_id_ratio(self) -> float:
@@ -236,6 +250,9 @@ def _read_blf_frames(fp, progress_callback=None):
 
 # Payload decode during DBC probe is only a match-strength sample. ID overlap
 # still scans every frame. Keep this a count of frames, not a wall-time knob.
+# The cap is charged *per sample*: the statistical sample and the discovery
+# sample each get their own budget, so a large log cannot starve discovery
+# (P0-1 — sharing one budget silently dropped every low-frequency signal).
 _PROBE_DECODE_CAP = 8192
 
 
@@ -558,7 +575,11 @@ def _message_is_multiplexed(msg):
 
 
 def _discovery_probe_indices(frames, cap=_PROBE_DECODE_CAP):
-    """First frame of each arbitration ID. Not a statistical sample."""
+    """First frame of each arbitration ID. Not a statistical sample.
+
+    Answers "which signal names can this DBC produce at all", which is why
+    it carries its own ``cap`` and never contributes to a decode ratio.
+    """
     chosen = []
     seen_ids = set()
     for index, (_timestamp, arbitration_id, _payload) in enumerate(frames):
@@ -678,7 +699,6 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
         )
 
     statistical = _statistical_probe_indices(frames)
-    discovery = _discovery_probe_indices(frames)
     statistical_set = set(statistical)
     complete_scan = total_frames <= _PROBE_DECODE_CAP
     sampling_strategy = (
@@ -721,13 +741,15 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
         if decode_index % decode_step == 0 or decode_index == decode_total:
             _emit_progress(progress_callback, progress_total, progress_total)
 
-    leftover = max(0, _PROBE_DECODE_CAP - len(statistical))
-    if sampling_complete and leftover and not complete_scan:
-        extras = [
-            index for index in discovery
-            if index not in statistical_set
-        ][:leftover]
-        for frame_index in extras:
+    # Discovery pass: independent budget, own cap, names only.  Skipped when
+    # the statistical sample already covered every frame — that is the only
+    # case where discovery can add nothing, and it keeps the O(n) scan inside
+    # the branch that actually consumes it instead of running per candidate.
+    discovery_decoded = 0
+    if sampling_complete and not complete_scan:
+        for frame_index in _discovery_probe_indices(frames):
+            if frame_index in statistical_set:
+                continue
             if cancelled():
                 break
             try:
@@ -744,6 +766,7 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
                 continue
             numeric_values = _numeric_decoded_values(decoded)
             if numeric_values:
+                discovery_decoded += 1
                 signal_names.update(
                     sig_name for sig_name, _value in numeric_values
                 )
@@ -777,6 +800,7 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
         sampling_strategy=sampling_strategy,
         sampling_complete=True,
         estimate_unavailable_reason=None,
+        discovery_decoded_count=discovery_decoded,
     )
 
 

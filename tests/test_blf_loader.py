@@ -251,8 +251,11 @@ def test_probe_large_frame_list_does_not_decode_every_frame(tmp_path, monkeypatc
     monkeypatch.setattr(blf_format, "_decode_can_payload", spy)
     probe = DataLoader.probe_blf_dbc_frames(frames, [str(dbc)])
 
-    assert len(calls) <= blf_format._PROBE_DECODE_CAP
+    # Two independent budgets (P0-1): the statistical sample and the
+    # discovery sample are each capped at _PROBE_DECODE_CAP.
+    assert len(calls) <= 2 * blf_format._PROBE_DECODE_CAP
     assert len(calls) < len(frames)
+    assert probe.discovery_decoded_count <= blf_format._PROBE_DECODE_CAP
     assert probe.strength == "strong"
     assert probe.total_frame_count == 20_000
     assert probe.matched_frame_id_count == 2
@@ -403,6 +406,63 @@ def test_discovery_first_per_id_is_not_in_statistical_denominator(tmp_path):
     assert discovery != statistical
     assert probe.decode_sample_count == len(statistical)
     assert probe.decode_sample_count != len(discovery)
+
+
+def test_rare_matched_id_keeps_its_signal_names_on_a_large_log(tmp_path):
+    """P0-1: discovery owns its own budget, so a low-frequency ID still matches.
+
+    30000 frames where the only DBC-defined ID (0x123) is transmitted once,
+    at index 1 — outside the stratified statistical sample. Before the fix
+    the discovery pass was funded from ``cap - len(statistical)`` (always 0
+    on a log above the cap), so ``signal_names`` came back empty and the
+    whole DBC was reported as a mismatch even though it decodes fine.
+    """
+    dbc = write_engine_only_dbc(tmp_path / "engine.dbc")
+    frames = make_can_frames([
+        (1, 0x777, b"\x00"),
+        (1, 0x123, engine_payload()),
+        (29_998, 0x777, b"\x00"),
+    ])
+    statistical = blf_format._statistical_probe_indices(frames)
+    assert 1 not in set(statistical), "fixture must keep 0x123 out of the sample"
+
+    probe = DataLoader.probe_blf_dbc_frames(frames, [str(dbc)])
+
+    assert probe.total_frame_count == 30_000
+    assert probe.is_match is True
+    assert set(probe.signal_names) == {"EngineSpeed", "Throttle"}
+    assert probe.discovery_decoded_count >= 1
+    # Discovery feeds names only: it must stay out of the statistical ratio.
+    assert probe.decoded_sample_count == 0
+    assert probe.decode_sample_count == len(statistical)
+    assert probe.sample_decode_success_ratio == 0.0
+    assert probe.strength == "weak"
+
+
+def test_discovery_scan_runs_only_when_the_sample_is_incomplete(
+    tmp_path, monkeypatch,
+):
+    """P0-1: the O(n) discovery scan lives in the branch that consumes it."""
+    dbc = write_engine_only_dbc(tmp_path / "engine.dbc")
+    scans = []
+    real = blf_format._discovery_probe_indices
+
+    def spy(frames, *args, **kwargs):
+        scans.append(len(frames))
+        return real(frames, *args, **kwargs)
+
+    monkeypatch.setattr(blf_format, "_discovery_probe_indices", spy)
+
+    small = make_can_frames([(5, 0x123, engine_payload())])
+    DataLoader.probe_blf_dbc_frames(small, [str(dbc)])
+    assert scans == [], "a complete scan already decoded every frame"
+
+    large = make_can_frames([
+        (1, 0x123, engine_payload()),
+        (blf_format._PROBE_DECODE_CAP + 1, 0x777, b"\x00"),
+    ])
+    DataLoader.probe_blf_dbc_frames(large, [str(dbc)])
+    assert scans == [len(large)], "discovery must scan exactly once, when used"
 
 
 def test_cancelled_probe_leaves_estimates_empty_with_reason(tmp_path):
