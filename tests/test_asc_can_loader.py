@@ -495,3 +495,78 @@ def test_fallback_reason_diagnostics_are_throttled(tmp_path, caplog, monkeypatch
         for record in records
     )
     assert len(records) <= diagnostics.BURST
+
+
+def test_progress_callback_internal_typeerror_is_not_retried_with_fewer_args(
+    tmp_path,
+):
+    """§4.2: a bug *inside* a 3-arg callback must not be misdiagnosed as
+    "wrong arity" and retried with two args.
+
+    The coordinator used to probe call shape by actually invoking the
+    callback and inspecting which exception came back; any ``TypeError``
+    raised from inside a working 3-arg callback (unrelated to argument
+    count) triggered a second, duplicate call with two args — running the
+    callback's side effects twice for one logical progress tick. The fix
+    probes the callback's signature once up front instead of by calling it.
+    """
+    path = write_sample_asc(tmp_path / "log.asc", n=5)
+
+    reference_ticks = []
+    _read_asc_frames(
+        path,
+        progress_callback=lambda current, total, phase=None: reference_ticks.append(1),
+    )
+
+    calls = []
+
+    def flaky(current, total, phase=None):
+        calls.append((current, total, phase))
+        raise TypeError("boom: unrelated bug inside the callback, not an arity issue")
+
+    frames = _read_asc_frames(path, progress_callback=flaky)
+    assert len(frames) == 10
+    assert len(calls) == len(reference_ticks), (
+        "each progress tick must invoke the callback exactly once; a doubled "
+        "count means an internal TypeError was misdiagnosed as wrong arity"
+    )
+
+
+def test_emit_progress_propagates_cancellation_not_swallowed():
+    """§4.2: ``AscParseCancelled`` raised from inside a progress callback
+    must propagate through the shared ``_emit_progress`` helper.
+
+    The old bare ``except Exception: pass`` was a dead safety net that
+    silently ate the cancellation (per-line ``cancel_check`` happened to
+    cover for it elsewhere, but this path should not have swallowed it
+    either — a lost cancellation signal here is not observable).
+    """
+    from mf4_analyzer.io.asc_can_format import AscParseCancelled
+    from mf4_analyzer.io.blf_format import _emit_progress
+
+    def cancelling_callback(current, total):
+        raise AscParseCancelled()
+
+    with pytest.raises(AscParseCancelled):
+        _emit_progress(cancelling_callback, 1, 10)
+
+
+def test_emit_progress_logs_other_callback_failures_instead_of_silence(
+    caplog,
+):
+    """Non-cancellation callback failures stay non-fatal but must leave a
+    debug trace instead of a bare ``pass`` (repo-wide "宽泛 except 必须留痕"
+    discipline)."""
+    import logging as _logging
+
+    from mf4_analyzer.io.blf_format import _emit_progress
+
+    def boom(current, total):
+        raise ValueError("unrelated callback bug")
+
+    caplog.set_level(_logging.DEBUG, logger="mf4_analyzer.io.blf_format")
+    _emit_progress(boom, 1, 10)  # must not raise
+    assert any(
+        "progress callback raised" in record.getMessage()
+        for record in caplog.records
+    )

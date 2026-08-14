@@ -9,6 +9,7 @@ optional CAN stack.
 """
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 from dataclasses import dataclass, field
@@ -319,6 +320,29 @@ class _AscProgressCoordinator:
         self._complete = False
         self._emitted_phase = None
         self._emitted = False
+        # Probed once from the callback's own signature (not by calling it)
+        # so a bug *inside* a 3-arg callback that happens to raise TypeError
+        # can never be misread as "wrong arity" and trigger a second,
+        # duplicate invocation with side effects run twice.
+        self._callback_accepts_phase = self._probe_accepts_phase(progress_callback)
+
+    @staticmethod
+    def _probe_accepts_phase(callback) -> bool:
+        if not callable(callback):
+            return False
+        try:
+            params = list(inspect.signature(callback).parameters.values())
+        except (TypeError, ValueError):
+            # Builtins / C callables without an introspectable signature:
+            # keep the historical default of preferring the 3-arg form.
+            return True
+        if any(p.kind is p.VAR_POSITIONAL for p in params):
+            return True
+        positional = [
+            p for p in params
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        ]
+        return len(positional) >= 3
 
     def start(self):
         self._forward(0, ASC_PHASE_PREFLIGHT)
@@ -374,17 +398,20 @@ class _AscProgressCoordinator:
     def _emit(self, current, total, phase):
         if not callable(self._callback):
             return
+        args = (int(current), max(1, int(total)))
+        if self._callback_accepts_phase:
+            args = (*args, phase)
         try:
-            self._callback(int(current), max(1, int(total)), phase)
-            return
-        except TypeError:
-            pass
+            self._callback(*args)
         except Exception:
-            return
-        try:
-            self._callback(int(current), max(1, int(total)))
-        except Exception:
-            pass
+            # Progress reporting is informational-only for every caller of
+            # read_asc_outcome; a broken UI callback must never fail a
+            # valid parse. The call shape was already probed from the
+            # callback's signature, so a raise here is a real bug inside
+            # the callback, not an arity mismatch — log it once instead of
+            # silently swallowing (and never retry with a different shape,
+            # which used to run the callback's side effects twice).
+            _LOG.debug("asc progress callback raised", exc_info=True)
 
 
 def _fallback_warning(reason: AscFallbackReason | None) -> str:
