@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QLayout,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -41,6 +42,29 @@ from .inspector_sections.time_filter import FilterPanel
 # wraps to its own right-aligned line) so it shrinks with the pane instead
 # of forcing a horizontal scrollbar — see _build_axis_row.
 _INSPECTOR_CONTENT_MAX_WIDTH = 272
+
+
+class _InspectorHelpLink(QPushButton):
+    """QPushButton ignores child-layout sizeHint when its own text is empty.
+
+    The '? 使用说明' labels live in an inner layout; without this override
+    the button sizes to an empty-text chip and the trailing CJK is clipped
+    by Inspector's 7px corner radius.
+    """
+
+    def sizeHint(self):  # noqa: N802 - Qt API
+        base = super().sizeHint()
+        layout = self.layout()
+        if layout is None:
+            return base
+        inner = layout.sizeHint()
+        return QSize(
+            max(base.width(), inner.width()),
+            max(base.height(), inner.height()),
+        )
+
+    def minimumSizeHint(self):  # noqa: N802 - Qt API
+        return self.sizeHint()
 
 
 class _ContextualStack(QStackedWidget):
@@ -143,20 +167,22 @@ class Inspector(QWidget):
         help_row.setObjectName("inspectorHelpRow")
         help_row.setFrameShape(QFrame.NoFrame)
         help_box = QHBoxLayout(help_row)
-        # Bottom inset keeps Inspector's 1px card edge visible under the link
-        # so the status-bar hairline is not visually swallowed.
-        help_box.setContentsMargins(0, 2, 3, 4)
+        # Right inset must clear Inspector's 7px corner radius so 「说明」
+        # is not shaved by the card edge. Bottom inset keeps the 1px card
+        # stroke visible above the status-bar hairline.
+        help_box.setContentsMargins(0, 2, 10, 6)
         help_box.setSpacing(0)
         help_box.addStretch(1)
-        self._help_link = QPushButton(help_row)
+        self._help_link = _InspectorHelpLink(help_row)
         self._help_link.setObjectName("inspectorHelpLink")
         self._help_link.setProperty("role", "link")
         self._help_link.setCursor(Qt.PointingHandCursor)
         self._help_link.setToolTip("打开本面板的使用说明")
         self._help_link.setFlat(True)
+        self._help_link.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         self._help_link.clicked.connect(self._open_current_guide)
         help_inner = QHBoxLayout(self._help_link)
-        help_inner.setContentsMargins(2, 0, 2, 0)
+        help_inner.setContentsMargins(2, 0, 4, 0)
         help_inner.setSpacing(3)
         help_mark = QLabel("?", self._help_link)
         help_mark.setObjectName("inspectorHelpMark")
@@ -164,6 +190,8 @@ class Inspector(QWidget):
         help_text = QLabel("使用说明", self._help_link)
         help_text.setObjectName("inspectorHelpText")
         help_text.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        help_text.setWordWrap(False)
+        help_text.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         help_inner.addWidget(help_mark, 0, Qt.AlignVCenter)
         help_inner.addWidget(help_text, 0, Qt.AlignVCenter)
         help_box.addWidget(self._help_link, 0)

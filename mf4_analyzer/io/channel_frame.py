@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+import sys
 from typing import Any
 
 import numpy as np
@@ -84,9 +85,12 @@ def is_channel_frame(obj: Any) -> bool:
 
 
 def is_pandas_dataframe(obj: Any) -> bool:
-    try:
-        import pandas as pd
-    except ImportError:
+    # pandas is already a top-level io import on loader paths. A nested
+    # ``import pandas`` here is scanned as a lazy frozen dependency and
+    # would force ``--collect-all pandas``. If pandas is not loaded, no
+    # DataFrame instance can exist in this process.
+    pd = sys.modules.get("pandas")
+    if pd is None:
         return False
     return isinstance(obj, pd.DataFrame)
 

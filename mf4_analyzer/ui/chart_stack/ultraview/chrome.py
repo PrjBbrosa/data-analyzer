@@ -133,6 +133,8 @@ def _icon_button(
     button.setIconSize(QSize(18, 18))
     button.setToolButtonStyle(Qt.ToolButtonIconOnly)
     button.setAutoRaise(True)
+    button.setAutoFillBackground(False)
+    button.setAttribute(Qt.WA_StyledBackground, True)
     button.setFixedSize(32, 32)
     button.setFocusPolicy(Qt.TabFocus)
     button.setToolTip(tooltip)
@@ -238,6 +240,15 @@ class CanvasHost(QFrame):
         self._overlays[key] = widget
         self._overlay_triggers[key] = trigger
         self._overlay_close_on_canvas[key] = bool(close_on_canvas_click)
+
+    def overlay_closes_on_canvas(self, overlay_id: str) -> bool:
+        return bool(self._overlay_close_on_canvas.get(str(overlay_id), True))
+
+    def set_overlay_close_on_canvas(self, overlay_id: str, close: bool) -> None:
+        key = str(overlay_id)
+        if key not in self._overlays:
+            raise KeyError(key)
+        self._overlay_close_on_canvas[key] = bool(close)
 
     def overlay(self, overlay_id: str) -> QWidget | None:
         return self._overlays.get(str(overlay_id))
@@ -784,6 +795,16 @@ class GlobalIsland(QFrame):
 
     def _sync_presentation(self, checked: bool) -> None:
         _set_flag(self._presentation, "active", checked)
+        _set_flag(self, "presentation", checked)
+        role = "presentationExit" if checked else "icon"
+        if self._presentation.property("role") != role:
+            self._presentation.setProperty("role", role)
+            _repolish(self._presentation)
+        self._presentation.setIcon(
+            Icons.ultraview_presentation(QColor("#ffffff") if checked else None)
+        )
+        if not checked:
+            self._presentation.setDown(False)
         self._presentation.setToolTip("退出演示" if checked else "进入演示")
         self._presentation.setAccessibleName("退出演示" if checked else "进入演示")
 

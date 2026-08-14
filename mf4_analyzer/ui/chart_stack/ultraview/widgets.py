@@ -67,7 +67,7 @@ from mf4_analyzer.ui.ultraview_state import (
     parse_ref_payload,
     section_search_haystack,
 )
-from mf4_analyzer.ui_kit.icons import Icons
+from mf4_analyzer.ui_kit.icons import BLUE, Icons
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.ui_kit.widgets import SearchField
 
@@ -1178,6 +1178,7 @@ class ViewLibraryPanel(QFrame):
     locate_requested = pyqtSignal(str, str)
     drag_started = pyqtSignal(str)
     drag_finished = pyqtSignal()
+    pin_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1196,13 +1197,27 @@ class ViewLibraryPanel(QFrame):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         head = QHBoxLayout()
-        head.setContentsMargins(10, 8, 10, 6)
+        head.setContentsMargins(10, 8, 8, 6)
+        head.setSpacing(6)
         title = QLabel("View 库", self)
         title.setObjectName("ultraViewLibraryTitle")
         self._count = QLabel("0", self)
         self._count.setObjectName("ultraViewLibraryCount")
+        self._pin = QToolButton(self)
+        self._pin.setObjectName("ultraViewLibraryPin")
+        self._pin.setCheckable(True)
+        self._pin.setAutoRaise(True)
+        self._pin.setFixedSize(24, 24)
+        self._pin.setIconSize(QSize(14, 14))
+        self._pin.setFocusPolicy(Qt.TabFocus)
+        self._pin.setProperty("role", "icon")
+        self._pin.setProperty("chrome", "ultraview")
+        self._pin.setProperty("active", "false")
+        self._pin.toggled.connect(self._on_pin_toggled)
         head.addWidget(title, 1)
-        head.addWidget(self._count, 0)
+        head.addWidget(self._count, 0, Qt.AlignVCenter)
+        head.addWidget(self._pin, 0, Qt.AlignVCenter)
+        self._sync_pin(False)
         root.addLayout(head)
 
         self._search = SearchField("搜索 View…", self)
@@ -1288,6 +1303,42 @@ class ViewLibraryPanel(QFrame):
 
     def focus_search(self) -> None:
         self._search.setFocus(Qt.OtherFocusReason)
+
+    def pin_button(self) -> QToolButton:
+        return self._pin
+
+    def is_pinned(self) -> bool:
+        return bool(self._pin.isChecked())
+
+    def set_pinned(self, pinned: bool) -> None:
+        wanted = bool(pinned)
+        if self.is_pinned() == wanted and self._pin.property("active") == (
+            "true" if wanted else "false"
+        ):
+            return
+        blocked = self._pin.blockSignals(True)
+        self._pin.setChecked(wanted)
+        self._pin.blockSignals(blocked)
+        self._sync_pin(wanted)
+        self.pin_toggled.emit(wanted)
+
+    def _on_pin_toggled(self, checked: bool) -> None:
+        self._sync_pin(bool(checked))
+        self.pin_toggled.emit(bool(checked))
+
+    def _sync_pin(self, pinned: bool) -> None:
+        self._pin.setIcon(Icons.ultraview_pin(BLUE if pinned else None))
+        value = "true" if pinned else "false"
+        if self._pin.property("active") != value:
+            self._pin.setProperty("active", value)
+            style = self._pin.style()
+            if style is not None:
+                style.unpolish(self._pin)
+                style.polish(self._pin)
+            self._pin.update()
+        label = "取消钉住 View 库" if pinned else "钉住 View 库，点击画布不关闭"
+        self._pin.setToolTip(label)
+        self._pin.setAccessibleName(label)
 
     def _rebuild(self) -> None:
         while self._body_layout.count():

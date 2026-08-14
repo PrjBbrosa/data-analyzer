@@ -58,7 +58,7 @@ lesson by default.
 | [Qt Render Probes Isolate QSettings](codex-qt-render-probes-isolate-qsettings.md) | Writing or running Qt screenshot/render probes, smoke scripts, or UI | See lesson |
 | [Pyqt Heatmap Slice Curve AA Interaction Guard](pyqt-heatmap-slice-curve-aa-interaction-guard.md) | Touching `PgHeatmapCanvas` slice-curve rendering, slice marker | See lesson |
 | [Pyqt Heatmap Copy Includes Widget Overlays](pyqt-heatmap-copy-includes-widget-overlays.md) | Touching heatmap copy/export, `PgHeatmapCanvas.grab_pixmap`, or | See lesson |
-| [Status Hint Buttons Need Rendered Geometry](codex-status-hint-button-geometry.md) | Changing the bottom status-line hint bar, the quickref `?` button, or | See lesson |
+| [Status Chrome Must Keep Glyphs Inside Rounded Hosts](codex-status-hint-button-geometry.md) | Changing the bottom status-line hint bar, QuickRef `?`, compute-progress label, Inspector 「使用说明」, or QStatusBar.showMessage | See lesson |
 | [PyQt Drag Event MimeData Lifetime](pyqt-drag-event-mimedata-lifetime.md) | Writing pytest-qt tests that manually construct `QDragEnterEvent`, | See lesson |
 | [Overlay Live Visibility Retick](codex-overlay-live-visibility-retick.md) | Touching TimeDomain overlay-mode live visibility toggles for filter | See lesson |
 | [Status Facts Preserve Their Field Semantics](b5-status-facts-preserve-field-semantics.md) | Editing the Acquisition Cockpit recording fact stream or its | See lesson |
@@ -187,6 +187,8 @@ lesson by default.
 | [UltraView Edge Rejects Instead Of Shrinking Neighbours](pyqt-ui/2026-08-14-ultraview-edge-shrinks-neighbors.md) | Changing UltraView free-grid drag/resize commit, `FEEDBACK_OUT_OF_GRID`, `plan_layout`, `plan_boundary_yield`, or `plan_neighbor_shrink`. | See lesson |
 | [UltraView Layout Rail Tracks Template Mode](pyqt-ui/2026-08-14-ultraview-layout-rail-tracks-template.md) | Changing UltraView `ToolRail` button order, layout/free-grid `active` chrome, or `_sync_button_states`. | See lesson |
 | [Idle Quality Follows Local Canvas Activity](idle-quality-follows-local-canvas-activity.md) | Changing pyqtgraph idle-AA / idle-quality timers, especially any `QApplication.mouseButtons()` gate on `PgLineCanvas` or a sibling canvas. | See lesson |
+| [FFT Spectra Must Peak-Hold, Not Min/Max-Fill](codex-fft-spectrum-peak-hold.md) | Changing `PgLineCanvas` spectrum plotting, `_spectrum_plot_arrays`, | See lesson |
+| [Dialog QToolButton Chrome Must Spare SearchField Icons](codex-dialog-toolbutton-chrome-spares-search-field.md) | Adding dialog-wide `QToolButton` / `QPushButton` QSS, embedding | See lesson |
 
 ## Selection Rules
 

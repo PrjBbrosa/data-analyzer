@@ -6,7 +6,11 @@ from PyQt5.QtGui import QWheelEvent
 from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack import PgNavigationToolbar
-from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
+from mf4_analyzer.ui.pg_canvas.line_canvas import (
+    PgLineCanvas,
+    _SPECTRUM_AA_SEGMENT_OFF,
+    _SPECTRUM_AA_SEGMENT_ON,
+)
 from mf4_analyzer.ui.pg_canvas.ticks_math import _adjacent_nice_step
 
 
@@ -704,7 +708,7 @@ def test_grab_pixmap_not_null(canvas):
 
 def test_fft_amp_curves_stay_antialiased_when_light(canvas):
     # The FFT amplitude overlay has its own combined drawn-point density
-    # budget (ON=2000/OFF=3000).  A small two-curve overlay stays crisp.  The
+    # budget (ON=5000/OFF=8000).  A small two-curve overlay stays crisp.  The
     # time-preview (bottom) row remains governed separately by its shared
     # ON=5000/OFF=7000 budget; see test_time_preview_aa_follows_density_budget.
     canvas.plot_spectra(
@@ -728,8 +732,9 @@ def _dense_spectrum_entries(n_points=20_000, n_curves=2):
     """Real FFT entries large enough to exercise spectrum envelope density."""
     freq = np.linspace(0.0, 12_000.0, n_points)
     amp = np.abs(np.sin(freq / 97.0))
+    palette = ('#2563eb', '#dc2626', '#16a34a', '#f59e0b', '#a855f7', '#0891b2')
     entries = []
-    for index, color in enumerate(('#2563eb', '#dc2626', '#16a34a')):
+    for index, color in enumerate(palette):
         if index >= n_curves:
             break
         entries.append({
@@ -745,23 +750,38 @@ def _dense_spectrum_entries(n_points=20_000, n_curves=2):
     return entries
 
 
-def test_fft_dense_spectrum_overlay_drops_aa_and_reports_density(canvas):
-    """Screenshot-scale dual FFT envelopes stay AA-off after settling."""
+def test_fft_dense_spectrum_uses_peak_hold_not_minmax_ribbon(canvas):
+    """A dense oscillating FFT must collapse to ~1 point/pixel, not min/max."""
+    freq = np.linspace(0.0, 12_000.0, 20_000)
+    amp = np.where((np.arange(20_000) % 2) == 0, 0.0, 1.0)
+    _fx, ay = canvas._spectrum_plot_arrays(freq, amp)
+    pixel_width = canvas._spectrum_pixel_width()
+    # Remainder absorption can raise the bucket count slightly above the
+    # requested pixel width (same arithmetic as build_envelope).
+    assert len(ay) <= int(pixel_width * 1.25) + 2
+    finite = ay[np.isfinite(ay)]
+    assert finite.size
+    assert float(np.min(finite)) >= 0.99
+
+
+def test_fft_screenshot_scale_spectrum_stays_antialiased(canvas):
+    """Peak-hold keeps a screenshot-width dual FFT overlay AA-on."""
     canvas.plot_spectra(
         _dense_spectrum_entries(), xlim=(0.0, 12_000.0),
         amp_label='Amplitude', title='FFT',
     )
 
     total = canvas._spectrum_drawn_point_total()
-    assert total is not None and total > 3000, (
-        f'dense setup must exceed spectrum OFF budget, got {total}')
-    assert not any(c.opts.get('antialias') for c in canvas._amp_curves)
+    assert total is not None
+    pixel_width = canvas._spectrum_pixel_width()
+    # Peak-hold ≈ 1 pt/px/curve. Min/max ribbons were ~2 pt/px/curve.
+    assert total <= int(2 * pixel_width * 1.25) + 16
+    assert all(c.opts.get('antialias') for c in canvas._amp_curves)
     # The lower preview was kept deliberately light and must continue to use
     # its old independent density policy, not the spectrum threshold.
     assert all(c.opts.get('antialias') for c in canvas._time_curves)
     status = canvas.quality_status()
-    assert status['state'] == 'red'
-    assert f'频谱叠加密度 {total} > 3000' in status['tooltip']
+    assert status['state'] == 'green'
 
 
 def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp):
@@ -1158,6 +1178,57 @@ def _realized(qapp, entries):
     c.plot_time_preview(entries, title='时域预览')
     qapp.processEvents()
     return c
+
+
+def test_time_preview_overlay_axes_sit_right_of_viewbox(qapp):
+    """Colour-coded overlay Y axes must occupy columns to the RIGHT of the plot.
+
+    A collapsed / unactivated layout leaves AxisItems at the origin, so the
+    tick text paints over the left gutter — the screenshot failure mode.
+    """
+    c = PgLineCanvas()
+    try:
+        c.resize(1100, 720)
+        c.show()
+        qapp.processEvents()
+        c.plot_spectra(
+            _multi_amplitude_entries(),
+            xlim=(0.0, 500.0),
+            amp_label='Amplitude',
+            title='FFT',
+        )
+        qapp.processEvents()
+        time_vb = c._plot_time.vb.sceneBoundingRect()
+        amp_vb = c._plot_amp.vb.sceneBoundingRect()
+        left = c._plot_time.getAxis('left').sceneBoundingRect()
+        assert c._time_overlay_axes
+        for i, axis in enumerate(c._time_overlay_axes):
+            rect = axis.sceneBoundingRect()
+            assert rect.width() >= 24, (
+                f"overlay axis {i} collapsed to width={rect.width():.1f}"
+            )
+            # Right-axis tick text is drawn on the LEFT of the AxisItem, so
+            # the item may overlap the viewbox by a few pixels. The failure
+            # mode is the whole axis sitting in the left gutter.
+            assert rect.left() >= time_vb.right() - 12, (
+                f"overlay axis {i} must sit to the right of the time viewbox, "
+                f"axis.left={rect.left():.1f} vb.right={time_vb.right():.1f}"
+            )
+            assert rect.center().x() > time_vb.center().x(), (
+                f"overlay axis {i} is not on the right half of the preview "
+                f"(axis.center={rect.center().x():.1f} "
+                f"vb.center={time_vb.center().x():.1f})"
+            )
+            assert rect.left() >= left.right() + 8, (
+                f"overlay axis {i} overlaps the left gutter "
+                f"(axis.left={rect.left():.1f} left.right={left.right():.1f})"
+            )
+        assert time_vb.width() < amp_vb.width() - 16, (
+            f"time preview must inset for overlay axes "
+            f"(time={time_vb.width():.1f} amp={amp_vb.width():.1f})"
+        )
+    finally:
+        c.deleteLater()
 
 
 def test_time_preview_left_and_aux_axes_share_tick_count(qapp):
@@ -3229,25 +3300,40 @@ def test_time_preview_aa_gate_defends_against_baddata(canvas):
 
 
 def test_spectrum_aa_gate_hysteresis_recovers_only_below_its_on_budget(canvas):
-    # Spectrum has intentionally lower thresholds than the time-preview:
-    # seed dense -> OFF; the 2001..3000 dead band must preserve OFF; only
-    # <=2000 can recover AA.  Use curve stand-ins to exercise the state
-    # machine without coupling this threshold test to envelope geometry.
-    canvas._amp_curves = [_FakeCurve(1600), _FakeCurve(1600)]  # 3200 > OFF
+    # Spectrum hysteresis: seed dense -> OFF; the ON..OFF dead band must
+    # preserve OFF; only <=ON can recover AA.  Use curve stand-ins to
+    # exercise the state machine without coupling to envelope geometry.
+    over = _SPECTRUM_AA_SEGMENT_OFF // 2 + 1
+    canvas._amp_curves = [_FakeCurve(over), _FakeCurve(over)]  # > OFF
     canvas._reset_spectrum_aa_density_gate()
     assert canvas._spectrum_aa_allowed() is False
 
-    canvas._amp_curves = [_FakeCurve(1250), _FakeCurve(1250)]  # dead band
+    dead = (_SPECTRUM_AA_SEGMENT_ON + _SPECTRUM_AA_SEGMENT_OFF) // 4
+    canvas._amp_curves = [_FakeCurve(dead), _FakeCurve(dead)]  # dead band
     assert canvas._spectrum_aa_allowed() is False
 
-    canvas._amp_curves = [_FakeCurve(1000), _FakeCurve(1000)]  # <= ON
+    on_each = _SPECTRUM_AA_SEGMENT_ON // 2
+    canvas._amp_curves = [_FakeCurve(on_each), _FakeCurve(on_each)]  # <= ON
     assert canvas._spectrum_aa_allowed() is True
 
-    canvas._amp_curves = [_FakeCurve(1500), _FakeCurve(1500)]  # <= OFF
+    off_each = _SPECTRUM_AA_SEGMENT_OFF // 2
+    canvas._amp_curves = [_FakeCurve(off_each), _FakeCurve(off_each)]  # <= OFF
     assert canvas._spectrum_aa_allowed() is True
 
-    canvas._amp_curves = [_FakeCurve(1501), _FakeCurve(1500)]  # > OFF
+    canvas._amp_curves = [_FakeCurve(off_each + 1), _FakeCurve(off_each)]  # > OFF
     assert canvas._spectrum_aa_allowed() is False
+
+
+def test_spectrum_density_quality_tooltip_uses_off_budget(canvas):
+    over = _SPECTRUM_AA_SEGMENT_OFF // 2 + 1
+    canvas._amp_curves = [_FakeCurve(over), _FakeCurve(over)]
+    canvas._reset_spectrum_aa_density_gate()
+    canvas._aa_on = True
+    assert canvas._spectrum_aa_allowed() is False
+    status = canvas.quality_status()
+    assert status['state'] == 'red'
+    total = canvas._spectrum_drawn_point_total()
+    assert f'频谱叠加密度 {total} > {_SPECTRUM_AA_SEGMENT_OFF}' in status['tooltip']
 
 
 def test_fft_line_context_menu_has_custom_action_slot(canvas, monkeypatch):

@@ -24,7 +24,7 @@ from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_WIDTH,
     PgAxisHandle,
 )
-from mf4_analyzer.signal.envelope import build_envelope
+from mf4_analyzer.signal.envelope import build_envelope, build_peak_trace
 
 # Overlay AA point-density budget, shared with TimeDomainCanvasPG (canvas.py:
 # 145-146): ON=5000 / OFF=7000 with hysteresis. Imported (not re-defined) so
@@ -157,13 +157,12 @@ _PREVIEW_MIN_REALIZED_PIXEL_WIDTH = 200
 _SPECTRUM_FALLBACK_PIXEL_WIDTH = 2400
 _SPECTRUM_MIN_REALIZED_PIXEL_WIDTH = 200
 
-# FFT amplitude overlays have a much lower AA budget than the time-preview
-# overlay.  Even after min/max envelope reduction, two screenshot-width
-# spectra can draw thousands of joined segments in the same raster region.
-# Keep this budget local to the spectrum row: the time preview deliberately
+# FFT amplitude overlays keep a local AA budget. After peak-hold (one max
+# per pixel, not min/max ribbons) a 4-curve screenshot-width overlay is
+# ~4×1100 ≈ 4400 drawn points and must stay crisp. The time preview still
 # uses the shared TimeDomainCanvasPG ON=5000/OFF=7000 policy imported above.
-_SPECTRUM_AA_SEGMENT_ON = 2000
-_SPECTRUM_AA_SEGMENT_OFF = 3000
+_SPECTRUM_AA_SEGMENT_ON = 5000
+_SPECTRUM_AA_SEGMENT_OFF = 8000
 
 # Minimum vertical room per Y tick label on the short time-preview strip.
 # Inspector Y-density still *requests* up to 20 divisions, but labelling every
@@ -537,7 +536,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         """Return the total currently rasterized spectrum points, or ``None``.
 
         The FFT row has already passed through ``_spectrum_plot_arrays()``, so
-        ``getData()`` measures the actual envelope curves handed to pyqtgraph,
+        ``getData()`` measures the actual peak-hold curves handed to pyqtgraph,
         not the raw FFT-bin arrays retained in ``_entries``.
         """
         try:
@@ -553,10 +552,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         """Hysteresis AA gate for the FFT amplitude overlay's point SUM.
 
         A new spectrum is seeded against the OFF budget, so it is AA-on only
-        at ``<= 3000`` drawn points.  Once rejected, it recovers only below
-        ``<= 2000``; while allowed it turns back off only above ``> 3000``.
-        This prevents repeated AA toggles around the screenshot-scale dual
-        overlay density that dominates native CPU raster time.
+        at ``<= 8000`` drawn points.  Once rejected, it recovers only below
+        ``<= 5000``; while allowed it turns back off only above ``> 8000``.
+        Peak-hold keeps a screenshot-scale 4-curve overlay under that OFF
+        ceiling so the settled spectrum stays crisp.
         """
         total = self._spectrum_drawn_point_total()
         if total is None:
@@ -1150,8 +1149,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
         for e in self._entries:
             pen = pg.mkPen(e.get('color', '#2563eb'), width=1.5)
-            pen.setJoinStyle(Qt.RoundJoin)
-            pen.setCapStyle(Qt.RoundCap)
+            # Peak-hold spectra are 1 pt/px polylines. Round joins fatten the
+            # vertices into a filled look; mitre/flat keeps the stroke a line.
+            pen.setJoinStyle(Qt.MiterJoin)
+            pen.setCapStyle(Qt.FlatCap)
             freq, amp = self._spectrum_plot_arrays(e['freq'], e['amp'])
             # dB-reference-defaults Task 6 (spec §15 C1): a mixed-reference
             # FFT overlay attaches a per-curve 'legend_label' (base label +
@@ -1600,6 +1601,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 axis.setLabel(text)
             except Exception:
                 pass
+        # Occupy a real right-hand column immediately. A 0-width item is
+        # still painted by AxisItem, but at the layout origin — coloured
+        # ticks then stack on the left axis.
+        try:
+            axis.setWidth(48.0)
+        except Exception:
+            pass
         self._plot_time.layout.addItem(axis, 2, 2 + position)
         self._plot_time.layout.setHorizontalSpacing(8)
         self._plot_time.scene().addItem(aux_vb)
@@ -1620,6 +1628,32 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._time_overlay_vbs.append(aux_vb)
         self._time_overlay_axes.append(axis)
         return aux_vb
+
+    def _realize_time_overlay_axis_columns(self) -> None:
+        """Give each colour-coded right axis a measured column on the RIGHT.
+
+        Overlay ``AxisItem``s live in PlotItem grid columns 3+. If those
+        columns collapse, pyqtgraph still paints the tick text — but the
+        item sits at the origin, so the coloured numbers stack on the left
+        axis. Measure the pinned tick strings, clamp a real width, then
+        activate the layout so the time ViewBox shrinks instead of covering
+        the gutters.
+        """
+        for axis in self._time_overlay_axes:
+            try:
+                axis.setWidth(None)
+            except Exception:
+                pass
+            try:
+                need = float(left_axis_width_for_ticks(axis))
+                axis.setWidth(max(36.0, need))
+            except Exception:
+                try:
+                    axis.setWidth(48.0)
+                except Exception:
+                    pass
+        self._activate_graphics_layout()
+        self._sync_time_overlay_vbs()
 
     def _ensure_time_grid_vb(self):
         """Lazily create the dedicated grid ViewBox (Y locked to [0,1], X-linked
@@ -2034,9 +2068,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # every axis's ticks land on the same horizontal grid lines (replaces
         # per-axis autoRange, which let each right axis pick its own scale).
         self._reframe_time_y_to_grid()
-        # Position any aux overlay ViewBoxes now, and again on the next resize
-        # (sigResized) once the layout with the new right axes is realized.
-        self._sync_time_overlay_vbs()
+        # Pin overlay-axis column widths and activate the PlotItem layout
+        # BEFORE emitting geometry-changed. Without this, extra right axes
+        # stay at the origin and their tick text paints over the left gutter.
+        self._realize_time_overlay_axis_columns()
         self.layout_geometry_changed.emit()
         # Curves were built AA-off provisionally; now that every curve is in
         # _time_curves their real drawn-point sum is known, so land the budgeted
@@ -2081,10 +2116,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             return freq_arr[:0], amp_arr[:0]
         freq_arr = freq_arr[:n]
         amp_arr = amp_arr[:n]
-        pixel_width = self._spectrum_pixel_width()
-        if n <= max(1, pixel_width * 2):
-            return freq_arr, amp_arr
-        return build_envelope(freq_arr, amp_arr, xlim=None, pixel_width=pixel_width)
+        return build_peak_trace(
+            freq_arr,
+            amp_arr,
+            xlim=None,
+            pixel_width=self._spectrum_pixel_width(),
+        )
 
     @staticmethod
     def _is_db_amp_label(label: str) -> bool:

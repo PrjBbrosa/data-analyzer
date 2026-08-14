@@ -61,6 +61,27 @@ def test_straddling_segment_returns_neighbors_in_a_sample_gap():
     np.testing.assert_array_equal(ys, np.array([4.0, 5.0]))
 
 
+def test_build_peak_trace_emits_one_max_per_bucket():
+    """Spectra must peak-hold, not min/max-fill, when n >> pixel width."""
+    from mf4_analyzer.signal.envelope import build_envelope, build_peak_trace
+
+    n = 20_000
+    freq = np.linspace(0.0, 12_000.0, n)
+    amp = np.where((np.arange(n) % 2) == 0, 0.0, 1.0)
+    pixel_width = 400
+    peak_t, peak_y = build_peak_trace(
+        freq, amp, xlim=None, pixel_width=pixel_width,
+    )
+    env_t, env_y = build_envelope(
+        freq, amp, xlim=None, pixel_width=pixel_width,
+    )
+    assert len(peak_y) <= pixel_width + 2
+    assert len(env_y) > len(peak_y)
+    finite = peak_y[np.isfinite(peak_y)]
+    assert finite.size
+    assert float(np.min(finite)) >= 0.99
+
+
 def test_straddling_segment_pads_a_single_in_view_sample():
     from mf4_analyzer.signal.envelope import straddling_segment
 

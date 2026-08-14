@@ -349,6 +349,9 @@ def test_library_grouped_by_five_sections_search_and_full_tooltip(qtbot):
     harness = _Harness(qtbot)
     library = harness.page.library_panel()
     assert tuple(library.section_widgets()) == SOURCE_SECTIONS
+    assert library.pin_button().objectName() == "ultraViewLibraryPin"
+    assert library.is_pinned() is False
+    assert "钉住" in library.pin_button().toolTip()
     assert len(library.row_widgets()) == 10
     row = next(widget for widget in library.row_widgets() if widget.row().view_id == "time-1")
     tip = row.toolTip()
@@ -2488,6 +2491,47 @@ def test_library_overlay_keeps_section_and_row_height(qtbot, qapp):
     assert len(rows) >= 6
     for row in rows:
         assert row.height() >= 36
+
+
+def test_library_pin_keeps_overlay_open_on_canvas_click(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    harness.page.resize(1600, 900)
+    harness.page.show()
+    qtbot.waitExposed(harness.page)
+    harness.page.set_library_visible(True)
+    qapp.processEvents()
+    library = harness.page.library_panel()
+    host = harness.page.canvas_host()
+    assert library.isVisible()
+    library.set_pinned(True)
+    assert library.is_pinned() is True
+    assert host.overlay_closes_on_canvas(PANEL_LIBRARY) is False
+    QTest.mouseClick(host.canvas_widget(), Qt.LeftButton)
+    qapp.processEvents()
+    assert library.isVisible()
+    assert harness.page.active_panel() == PANEL_LIBRARY
+    harness.page.handle_escape()
+    qapp.processEvents()
+    assert library.isVisible() is False
+    assert library.is_pinned() is True
+
+
+def test_library_section_headers_are_not_heavy_gray_slabs(qtbot, qapp):
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    harness = _Harness(qtbot)
+    harness.page.set_library_visible(True)
+    qapp.processEvents()
+    library = harness.page.library_panel()
+    header = library.section_headers()["time"]
+    pos = header.mapTo(library, QPoint(max(12, header.width() - 8), header.height() // 2))
+    image = library.grab().toImage()
+    pixel = QColor(image.pixel(min(pos.x(), image.width() - 1), min(pos.y(), image.height() - 1)))
+    heavy = QColor("#eef1f5")
+    assert abs(pixel.red() - heavy.red()) > 8 or abs(pixel.green() - heavy.green()) > 8
+    assert pixel.lightness() >= 240
 
 
 def test_unplaced_overlay_stacks_items_vertically(qtbot, qapp):

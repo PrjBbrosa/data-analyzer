@@ -1,5 +1,6 @@
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QCheckBox, QLabel
+from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtGui import QColor
+from PyQt5.QtWidgets import QCheckBox, QFrame, QLabel, QWidget
 
 from mf4_analyzer.ui.channel_config import ChannelConfigPreview, ChannelSelectionConfig
 from mf4_analyzer.ui.channel_config_transfer import parse_transfer, serialize_transfer
@@ -276,6 +277,107 @@ def test_manager_ordinary_controls_render_on_base_track_with_production_qss(qapp
         assert {name: control.height() for name, control in controls.items()} == {
             name: CONTROL_HEIGHTS["base"] for name in controls
         }
+    finally:
+        qapp.setStyleSheet(previous)
+
+
+def test_manager_search_icons_stay_transparent_chips_under_qss(qapp, qtbot):
+    """Dialog-wide QToolButton chrome must not paint white pills in SearchField."""
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    previous = qapp.styleSheet()
+    load_stylesheet(qapp)
+    try:
+        dialog = _dialog(
+            qtbot,
+            [_config("drive", "动力分析", ("EPS_CRC", "Torque"))],
+            "drive",
+        )
+        qtbot.waitExposed(dialog)
+        qapp.processEvents()
+
+        for field in (dialog.config_search, dialog.channel_search):
+            search = field._search_button
+            clear = field._clear_button
+            assert search.objectName() == "searchFieldIconButton"
+            assert search.width() == 18
+            assert search.height() == 18
+            assert search.x() < 12
+            assert not clear.isVisible()
+            assert search.autoRaise()
+    finally:
+        qapp.setStyleSheet(previous)
+
+
+def test_manager_export_menu_uses_rounded_popup_shell(qapp, qtbot):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui_kit import load_stylesheet
+    from mf4_analyzer.ui_kit.popup_shell import POPUP_SHELL_FLAGS
+
+    previous = qapp.styleSheet()
+    load_stylesheet(qapp)
+    try:
+        dialog = _dialog(
+            qtbot,
+            [_config("drive", "动力分析", ("EPS_CRC",))],
+            "drive",
+        )
+        menu = dialog.btn_export.menu()
+        assert menu is not None
+        assert menu.testAttribute(Qt.WA_TranslucentBackground)
+        assert (menu.windowFlags() & POPUP_SHELL_FLAGS) == POPUP_SHELL_FLAGS
+        labels = [action.text() for action in menu.actions() if action.text()]
+        assert labels == ["导出当前配置", "导出全部配置"]
+    finally:
+        qapp.setStyleSheet(previous)
+
+
+def test_manager_channel_checkboxes_align_with_name_column_under_qss(qapp, qtbot):
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    previous = qapp.styleSheet()
+    load_stylesheet(qapp)
+    try:
+        dialog = _dialog(
+            qtbot,
+            [_config("drive", "动力分析", ("EPS_CRC", "speed"))],
+            "drive",
+        )
+        qtbot.waitExposed(dialog)
+        qapp.processEvents()
+
+        header_check = dialog.master_channel
+        header_name = dialog.channel_name_header
+        header_check_c = header_check.mapTo(dialog, header_check.rect().center())
+        header_name_c = header_name.mapTo(dialog, header_name.rect().center())
+        assert abs(header_check_c.y() - header_name_c.y()) <= 3
+
+        cell = dialog.channel_table.cellWidget(0, 0)
+        check = cell.findChild(QCheckBox)
+        viewport = dialog.channel_table.viewport()
+        name_rect = dialog.channel_table.visualRect(
+            dialog.channel_table.model().index(0, 1)
+        )
+        check_c = check.mapTo(viewport, check.rect().center())
+        assert abs(check_c.y() - name_rect.center().y()) <= 3
+
+        row_check_c = check.mapTo(dialog, check.rect().center())
+        assert abs(header_check_c.x() - row_check_c.x()) <= 3
+        assert header_check.width() == 20
+        assert check.width() == 20
+
+        head = dialog.findChild(QFrame, "channelConfigHtmlChannelHead")
+        host = dialog.findChild(QWidget, "channelConfigHtmlCheckHost")
+        assert head is not None
+        assert host is not None
+        image = head.grab().toImage()
+        sample = host.mapTo(head, QPoint(1, host.height() // 2))
+        pixel = QColor(image.pixel(sample.x(), sample.y()))
+        header_bg = QColor("#f8fafc")
+        assert pixel.name() != "#ffffff"
+        assert abs(pixel.red() - header_bg.red()) <= 12
+        assert abs(pixel.green() - header_bg.green()) <= 12
+        assert abs(pixel.blue() - header_bg.blue()) <= 12
     finally:
         qapp.setStyleSheet(previous)
 

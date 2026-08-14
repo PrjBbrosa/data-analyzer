@@ -154,7 +154,7 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "总览",
-                sub="独立面板，只读对照已有预览：不计算；左上 Board 菜单管理多个 Board，左侧窄轨打开 View 库、自由网格、布局、筛选和未放置；右上浮岛开关标题/来源、复制导出和演示；右下浮岛控制概览与缩放；停手后跟上图面，含游标读数与标注",
+                sub="独立面板，只读对照已有预览：不计算；左上 Board 菜单管理多个 Board，左侧窄轨打开 View 库、自由网格、布局、筛选和未放置；View 库可钉住以免点画布时收起；右上浮岛开关标题/来源、复制导出和演示；右下浮岛控制概览与缩放；停手后跟上图面，含游标读数与标注",
                 gesture="各工作区 View 栏最右侧 UltraView",
                 accent=_MODE_ULTRAVIEW,
             ),
@@ -466,6 +466,11 @@ QUICKREF: Tuple[QuickGroup, ...] = (
     QuickGroup(
         title="总览 · Board 与自由网格",
         rows=(
+            QuickRow(
+                "View 库",
+                sub="左侧窄轨打开；钉住后点画布不收起，Esc 仍关闭。分组可折叠，＋加入或移出 Board",
+                gesture="库标题图钉",
+            ),
             QuickRow(
                 "多个 Board",
                 sub="顶栏 + 新建、右键复制/重命名/删除；最多 20 个，超过只警告不丢盘",

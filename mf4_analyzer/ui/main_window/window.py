@@ -105,6 +105,28 @@ class SurfaceStatusBar(QStatusBar):
         self.setAutoFillBackground(False)
         self.setSizeGripEnabled(False)
         self.setFixedHeight(self.HEIGHT)
+        # Native QStatusBar paints showMessage() into a left gutter. Once the
+        # QuickRef bar occupies that side, the gutter crushes into a glyph
+        # remnant beside '?'. Keep currentMessage() for callers; never paint.
+        self._logical_message = ""
+        self._message_timer = QTimer(self)
+        self._message_timer.setSingleShot(True)
+        self._message_timer.timeout.connect(self.clearMessage)
+
+    def showMessage(self, message, timeout=0):  # noqa: N802 - Qt API
+        self._logical_message = str(message or "")
+        self._message_timer.stop()
+        super().showMessage("", 0)
+        if int(timeout or 0) > 0 and self._logical_message:
+            self._message_timer.start(int(timeout))
+
+    def currentMessage(self):  # noqa: N802 - Qt API
+        return self._logical_message
+
+    def clearMessage(self):  # noqa: N802 - Qt API
+        self._message_timer.stop()
+        self._logical_message = ""
+        super().clearMessage()
 
     def event(self, event):
         result = super().event(event)
@@ -134,6 +156,13 @@ class SurfaceStatusBar(QStatusBar):
         }
         for child in list(self.children()):
             if not isinstance(child, QWidget) or child.parent() is not self:
+                continue
+            # Native QStatusBar may still create an unnamed QLabel for the
+            # temporary message. Hide it even if our showMessage() override
+            # already suppressed the paint-path copy.
+            if not child.objectName() and isinstance(child, QLabel):
+                child.hide()
+                child.setFixedWidth(0)
                 continue
             if child.width() <= 2 and not child.objectName():
                 child.hide()

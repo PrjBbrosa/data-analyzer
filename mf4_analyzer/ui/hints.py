@@ -769,6 +769,13 @@ _HINTS = (
         priority=33,
     ),
     Hint(
+        id="ultraview.library_pin",
+        text="View 库钉住后点画布不收起，Esc 仍关闭",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=33,
+    ),
+    Hint(
         id="ultraview.library_toggle",
         text="View 库浮层中可将 View 加入或移出 Board",
         surface="context",

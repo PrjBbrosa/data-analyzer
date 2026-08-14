@@ -1,10 +1,12 @@
 """Focused contract tests for UltraView floating presentation chrome."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt5.QtCore import QPoint, QRect, Qt
-from PyQt5.QtGui import QDragEnterEvent, QDropEvent
+from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QFrame, QLabel, QPushButton, QToolButton
+from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     PANEL_FILTER,
@@ -190,6 +192,31 @@ def test_canvas_host_overlay_does_not_resize_canvas_and_closes_to_trigger(qtbot)
     assert not overlay.isVisible()
     assert canvas.geometry() == canvas_rect_before_close
     assert trigger.hasFocus()
+
+
+def test_canvas_host_pinned_overlay_ignores_canvas_click(qtbot):
+    host = CanvasHost()
+    qtbot.addWidget(host)
+    host.resize(640, 420)
+    canvas = QFrame()
+    overlay = QFrame()
+    overlay.setMinimumSize(180, 120)
+    host.set_canvas_widget(canvas)
+    host.register_overlay("library", overlay)
+    host.show()
+    QTest.qWait(1)
+
+    assert host.open_overlay("library", QRect(40, 40, 200, 160))
+    host.set_overlay_close_on_canvas("library", False)
+    assert host.overlay_closes_on_canvas("library") is False
+    QTest.mouseClick(canvas, Qt.LeftButton)
+    assert host.active_overlay() == "library"
+    assert overlay.isVisible()
+
+    host.set_overlay_close_on_canvas("library", True)
+    QTest.mouseClick(canvas, Qt.LeftButton)
+    assert host.active_overlay() is None
+    assert not overlay.isVisible()
 
 
 def test_tool_rail_accepts_a_real_view_ref_drop_for_unplaced(qtbot):
@@ -417,3 +444,129 @@ def test_card_context_residents_are_open_sync_focus_and_more(qtbot):
             assert button.toolTip()
             assert button.accessibleName()
             assert button.focusPolicy() == Qt.TabFocus
+
+
+_EXIT_FILL = QColor("#1769e0")
+_QSS_PATH = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui_kit" / "style.qss"
+
+
+def test_presentation_exit_qss_does_not_use_page_descendant_id():
+    import re
+
+    qss = re.sub(r"/\*.*?\*/", "", _QSS_PATH.read_text(encoding="utf-8"), flags=re.S)
+    assert "QWidget#ultraViewPage[presentation" not in qss
+    assert "QToolButton#ultraViewGlobalPresentationButton" not in qss
+    assert 'QToolButton[chrome="ultraview"][role="presentationExit"]' in qss
+
+
+def _accent_fill_hits(widget: QWidget) -> int:
+    image = widget.grab().toImage()
+    hits = 0
+    for x in range(2, max(3, image.width() - 2), 3):
+        for y in range(2, max(3, image.height() - 2), 3):
+            pixel = QColor(image.pixel(x, y))
+            if (
+                abs(pixel.red() - _EXIT_FILL.red()) < 18
+                and abs(pixel.green() - _EXIT_FILL.green()) < 18
+                and abs(pixel.blue() - _EXIT_FILL.blue()) < 18
+            ):
+                hits += 1
+    return hits
+
+
+def _center_luma_hits(button: QToolButton, *, max_luma: float | None = None, min_luma: float | None = None) -> int:
+    image = button.grab().toImage()
+    cx, cy = image.width() // 2, image.height() // 2
+    hits = 0
+    for x in range(cx - 6, cx + 7):
+        for y in range(cy - 6, cy + 7):
+            pixel = QColor(image.pixel(x, y))
+            luma = 0.299 * pixel.red() + 0.587 * pixel.green() + 0.114 * pixel.blue()
+            if max_luma is not None and luma < max_luma:
+                hits += 1
+            if min_luma is not None and luma > min_luma:
+                hits += 1
+    return hits
+
+
+def _white_padding_hits(widget: QWidget) -> int:
+    image = widget.grab().toImage()
+    width, height = image.width(), image.height()
+    samples = (
+        (width // 2, 2),
+        (width // 2, max(2, height - 3)),
+        (2, height // 2),
+        (max(2, width - 3), height // 2),
+    )
+    hits = 0
+    for x, y in samples:
+        pixel = QColor(image.pixel(x, y))
+        if pixel.red() > 240 and pixel.green() > 240 and pixel.blue() > 240:
+            hits += 1
+    return hits
+
+
+def test_idle_presentation_button_is_not_exit_fill(qapp, qtbot):
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    previous = qapp.styleSheet()
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    try:
+        host = QWidget()
+        host.setObjectName("ultraViewPage")
+        host.setProperty("presentation", "false")
+        layout = QHBoxLayout(host)
+        layout.setContentsMargins(8, 8, 8, 8)
+        island = GlobalIsland(host)
+        layout.addWidget(island)
+        qtbot.addWidget(host)
+        host.show()
+        qtbot.waitExposed(host)
+        qapp.processEvents()
+
+        button = island.presentation_button()
+        assert button.property("role") == "icon"
+        assert _accent_fill_hits(button) == 0
+
+        island.set_presentation_checked(True)
+        host.setProperty("presentation", "true")
+        host.style().unpolish(host)
+        host.style().polish(host)
+        qapp.processEvents()
+        assert button.isChecked()
+        assert button.property("role") == "presentationExit"
+        assert button.property("active") == "true"
+        assert island.property("presentation") == "true"
+        assert _accent_fill_hits(button) >= 6
+        assert _white_padding_hits(island) == 0
+        assert _center_luma_hits(button, max_luma=90) == 0
+        assert _center_luma_hits(button, min_luma=200) >= 4
+
+        island.set_presentation_checked(False)
+        host.setProperty("presentation", "false")
+        host.style().unpolish(host)
+        host.style().polish(host)
+        qapp.processEvents()
+        assert not button.isChecked()
+        assert button.property("role") == "icon"
+        assert button.property("active") == "false"
+        assert island.property("presentation") == "false"
+        assert _accent_fill_hits(button) == 0
+    finally:
+        qapp.setStyleSheet(previous)
+
+
+def test_presentation_click_cycle_restores_idle_role(qtbot):
+    island = GlobalIsland()
+    qtbot.addWidget(island)
+    island.show()
+    button = island.presentation_button()
+    QTest.mouseClick(button, Qt.LeftButton)
+    assert button.isChecked()
+    assert button.property("role") == "presentationExit"
+    QTest.mouseClick(button, Qt.LeftButton)
+    assert not button.isChecked()
+    assert button.property("role") == "icon"
+    assert button.property("active") == "false"
+    assert not button.isDown()

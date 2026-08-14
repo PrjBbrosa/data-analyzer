@@ -26,6 +26,7 @@ from mf4_analyzer.ui_kit.icons import Icons
         "ultraview_open_source",
         "ultraview_sync",
         "ultraview_move_to_tray",
+        "ultraview_pin",
     ),
 )
 def test_ultraview_narrow_rail_icons_render_as_real_qicons(qapp, factory_name):

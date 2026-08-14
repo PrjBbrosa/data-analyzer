@@ -377,6 +377,7 @@ class UltraViewPage(QWidget):
         self._library.add_requested.connect(self.request_add)
         self._library.remove_requested.connect(self.remove_ref_requested)
         self._library.locate_requested.connect(self._on_locate)
+        self._library.pin_toggled.connect(self._on_library_pin_toggled)
         self._library.drag_started.connect(self._on_drag_started)
         self._library.drag_finished.connect(self._on_drag_finished)
 
@@ -813,6 +814,9 @@ class UltraViewPage(QWidget):
             self._active_panel = None
         self._sync_panel_triggers()
         self._apply_floating_layout()
+
+    def _on_library_pin_toggled(self, pinned: bool) -> None:
+        self._canvas_host.set_overlay_close_on_canvas(PANEL_LIBRARY, close=not pinned)
 
     def _show_board_menu(self) -> None:
         menu = QMenu(self._board_island)
