@@ -631,7 +631,9 @@ def read_asc_outcome(fp, progress_callback=None, *, cancel_check=None):
     return outcome
 
 
-def _read_asc_frames(fp, progress_callback=None, *, cancel_check=None):
+def _read_asc_frames(
+    fp, progress_callback=None, *, cancel_check=None, warning_callback=None,
+):
     """Read a CANoe ASC into ``(timestamp, arbitration_id, data)`` tuples.
 
     Classic and CAN FD data lines are parsed in-process after a bounded
@@ -639,11 +641,21 @@ def _read_asc_frames(fp, progress_callback=None, *, cancel_check=None):
     python-can's ``ASCReader`` (default parameters; timestamps stay
     measurement-relative). Error/remote frames are dropped, matching
     ``_read_blf_frames``. ``SV:`` system-variable lines are skipped.
+
+    ``warning_callback``, when given, receives ``outcome.warning`` (a single
+    user-facing string) whenever the read fell back to python-can — the
+    frame list alone drops that context, and callers that need it (P1-2:
+    surfacing the fallback reason somewhere the user can actually see it)
+    would otherwise have no way to reach it through this facade.
     """
-    return list(
-        read_asc_outcome(
-            fp,
-            progress_callback=progress_callback,
-            cancel_check=cancel_check,
-        ).frames
+    outcome = read_asc_outcome(
+        fp,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
     )
+    if callable(warning_callback) and outcome.warning:
+        try:
+            warning_callback(outcome.warning)
+        except Exception:
+            _LOG.debug("asc warning_callback raised", exc_info=True)
+    return list(outcome.frames)

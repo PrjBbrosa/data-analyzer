@@ -570,3 +570,36 @@ def test_emit_progress_logs_other_callback_failures_instead_of_silence(
         "progress callback raised" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_read_asc_frames_reports_warning_via_callback_on_fallback(tmp_path):
+    """P1-2: the fallback warning must reach an explicit ``warning_callback``
+    exit, not just ``logger.warning`` — production code has no other way to
+    recover ``AscParseOutcome.warning`` through the ``_read_asc_frames`` /
+    ``DataLoader.read_blf_frames`` facade, which only ever returned frames.
+    """
+    path = _write_early_unsupported_asc(tmp_path / "early.asc")
+    warnings = []
+    frames = _read_asc_frames(path, warning_callback=warnings.append)
+    assert len(frames) == 1
+    assert warnings == ["不支持的 ASC 语法，已切换到兼容解析重试"]
+
+
+def test_read_asc_frames_warning_callback_silent_on_fast_path(tmp_path):
+    path = write_sample_asc(tmp_path / "log.asc", n=3)
+    warnings = []
+    _read_asc_frames(path, warning_callback=warnings.append)
+    assert warnings == []
+
+
+def test_read_blf_frames_forwards_warning_callback_for_asc_only(tmp_path):
+    asc = _write_early_unsupported_asc(tmp_path / "early.asc")
+    blf = write_sample_blf(tmp_path / "log.blf", n=3)
+
+    asc_warnings = []
+    DataLoader.read_blf_frames(asc, warning_callback=asc_warnings.append)
+    assert asc_warnings
+
+    blf_warnings = []
+    DataLoader.read_blf_frames(blf, warning_callback=blf_warnings.append)
+    assert blf_warnings == []
