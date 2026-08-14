@@ -1550,7 +1550,11 @@ class UltraViewCard(QFrame):
         self._type_chip = QToolButton(self._header)
         self._type_chip.setObjectName("ultraViewCardTypeChip")
         self._type_chip.setAutoRaise(False)
-        self._type_chip.setFocusPolicy(Qt.TabFocus)
+        # Purely informational (icon + section label, no clicked handler): it
+        # must not steal the press from the card drag gesture underneath it,
+        # so it neither takes tab focus nor accepts mouse hit-testing.
+        self._type_chip.setFocusPolicy(Qt.NoFocus)
+        self._type_chip.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._type_chip.setCursor(Qt.ArrowCursor)
         self._type_chip.setFixedHeight(22)
         self._type_chip.setIconSize(QSize(12, 12))

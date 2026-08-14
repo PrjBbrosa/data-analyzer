@@ -1563,6 +1563,34 @@ def _east_handle_pos(card) -> QPoint:
     return QPoint(max(0, card.width() - 4), max(0, card.height() // 2))
 
 
+def test_press_on_type_chip_still_arms_the_drag_gesture(qtbot):
+    """§4.3: the header's type chip must not create a drag dead zone.
+
+    Real mouse hit-testing resolves to whichever widget ``childAt`` finds at
+    the click position; before the fix the chip (a ``QToolButton``) sat
+    there and consumed the press without it ever reaching the card, so a
+    press on the chip's strip of the header (left ~22-97px) could never arm
+    a card drag.
+    """
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "chip-0")
+    chip = card._type_chip
+    assert chip.isVisible()
+    chip_center_global = chip.mapToGlobal(chip.rect().center())
+    local_in_card = card.mapFromGlobal(chip_center_global)
+    # This is exactly what real Qt hit-testing resolves to for a click at
+    # the chip's on-screen position: skip it once WA_TransparentForMouseEvents
+    # is set, land on it (swallowing the press) beforehand.
+    target = card.childAt(local_in_card)
+    assert target is not None
+    local = target.mapFromGlobal(chip_center_global)
+
+    QTest.mousePress(target, Qt.LeftButton, Qt.NoModifier, local)
+    assert free.gesture().is_armed()
+    QTest.mouseRelease(target, Qt.LeftButton, Qt.NoModifier, local)
+    assert not free.gesture().is_armed()
+
+
 def test_free_grid_click_within_threshold_does_not_move(qtbot):
     harness = _Harness(qtbot)
     free, (card,) = _prepare_free_grid(harness, qtbot, "click-0")
