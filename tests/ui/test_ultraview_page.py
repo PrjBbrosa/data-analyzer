@@ -1573,6 +1573,34 @@ def _east_handle_pos(card) -> QPoint:
     return QPoint(max(0, card.width() - 4), max(0, card.height() // 2))
 
 
+def test_press_on_type_chip_still_arms_the_drag_gesture(qtbot):
+    """§4.3: the header's type chip must not create a drag dead zone.
+
+    Real mouse hit-testing resolves to whichever widget ``childAt`` finds at
+    the click position; before the fix the chip (a ``QToolButton``) sat
+    there and consumed the press without it ever reaching the card, so a
+    press on the chip's strip of the header (left ~22-97px) could never arm
+    a card drag.
+    """
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "chip-0")
+    chip = card._type_chip
+    assert chip.isVisible()
+    chip_center_global = chip.mapToGlobal(chip.rect().center())
+    local_in_card = card.mapFromGlobal(chip_center_global)
+    # This is exactly what real Qt hit-testing resolves to for a click at
+    # the chip's on-screen position: skip it once WA_TransparentForMouseEvents
+    # is set, land on it (swallowing the press) beforehand.
+    target = card.childAt(local_in_card)
+    assert target is not None
+    local = target.mapFromGlobal(chip_center_global)
+
+    QTest.mousePress(target, Qt.LeftButton, Qt.NoModifier, local)
+    assert free.gesture().is_armed()
+    QTest.mouseRelease(target, Qt.LeftButton, Qt.NoModifier, local)
+    assert not free.gesture().is_armed()
+
+
 def test_free_grid_click_within_threshold_does_not_move(qtbot):
     harness = _Harness(qtbot)
     free, (card,) = _prepare_free_grid(harness, qtbot, "click-0")
@@ -2502,6 +2530,32 @@ def test_free_grid_focus_loss_cancels_active_move_without_commit(qtbot):
     assert group == []
     assert not free.gesture().is_armed()
     assert free.ghost_overlay()._ghost_rect is None
+
+
+def test_app_focus_changed_to_none_no_longer_cancels_active_move(qtbot):
+    """§4.3: focusChanged(now=None) is a fragile cancel trigger.
+
+    It also fires for transient reasons unrelated to real window
+    deactivation (e.g. a popup hiding/destroying mid-interaction), so using
+    it to cancel gestures risked killing an in-progress drag out from under
+    the user.  Real window deactivation is already covered by
+    changeEvent(WindowDeactivate) and hideEvent (both call
+    _cancel_board_gestures() themselves — see
+    test_free_grid_focus_loss_cancels_active_move_without_commit).
+    """
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "blur-none-0")
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    mid = QPoint(start.x() + unit * 6, start.y())
+    _drag_card(card, start, mid, release=False)
+    assert free.gesture().is_active()
+
+    harness.page._on_app_focus_changed(card, None)
+
+    assert free.gesture().is_active()
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, mid)
 
 
 def test_free_grid_out_of_bounds_clamps_into_empty_cell_without_toast(qtbot):

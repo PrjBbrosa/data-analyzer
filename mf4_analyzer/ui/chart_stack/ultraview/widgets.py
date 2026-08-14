@@ -1575,7 +1575,11 @@ class UltraViewCard(QFrame):
         self._type_chip = QToolButton(self._header)
         self._type_chip.setObjectName("ultraViewCardTypeChip")
         self._type_chip.setAutoRaise(False)
-        self._type_chip.setFocusPolicy(Qt.TabFocus)
+        # Purely informational (icon + section label, no clicked handler): it
+        # must not steal the press from the card drag gesture underneath it,
+        # so it neither takes tab focus nor accepts mouse hit-testing.
+        self._type_chip.setFocusPolicy(Qt.NoFocus)
+        self._type_chip.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._type_chip.setCursor(Qt.ArrowCursor)
         self._type_chip.setFixedHeight(22)
         self._type_chip.setIconSize(QSize(12, 12))
@@ -1791,6 +1795,11 @@ class UltraViewCard(QFrame):
             self._image.setMaximumHeight(QWIDGETSIZE_MAX)
             self._image.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self._image.setVisible(True)
+            # A raw image can have arrived while the preview was hidden at a
+            # lower LOD tier (``_set_image`` skips scaling in that case); fit
+            # it now so growing back to a preview-showing tier is never
+            # missing its pixmap.
+            self._fit_card_image()
             return
         self._image.setVisible(False)
         self._image.setMinimumHeight(0)
@@ -1846,7 +1855,12 @@ class UltraViewCard(QFrame):
             self._scale_buffer = None
             self._scale_key = None
             self._image.setText("")
-            self._fit_card_image()
+            # TITLE_ONLY hides the preview label entirely; scaling a pixmap
+            # nobody can see is pure waste on the LOD tier that carries the
+            # most cards.  ``_set_preview_visible(True)`` re-fits on the way
+            # back up so the buffer is never stale, just deferred.
+            if lod_visibility(self._lod_level).preview:
+                self._fit_card_image()
             return
         self._raw_image = None
         self._raw_cache_key = None
