@@ -189,6 +189,7 @@ lesson by default.
 | [Idle Quality Follows Local Canvas Activity](idle-quality-follows-local-canvas-activity.md) | Changing pyqtgraph idle-AA / idle-quality timers, especially any `QApplication.mouseButtons()` gate on `PgLineCanvas` or a sibling canvas. | See lesson |
 | [FFT Spectra Must Peak-Hold, Not Min/Max-Fill](codex-fft-spectrum-peak-hold.md) | Changing `PgLineCanvas` spectrum plotting, `_spectrum_plot_arrays`, | See lesson |
 | [Dialog QToolButton Chrome Must Spare SearchField Icons](codex-dialog-toolbutton-chrome-spares-search-field.md) | Adding dialog-wide `QToolButton` / `QPushButton` QSS, embedding | See lesson |
+| [`is_pandas_dataframe` Reads `sys.modules`, Never `import`s](codex-pandas-lazy-import-avoids-collect-all.md) | Touching `channel_frame.py`'s `is_pandas_dataframe`/`is_tabular_frame`, or adding a new lazy/optional dependency check in `mf4_analyzer/io`. | `tests/test_channel_frame.py` |
 
 ## Selection Rules
 

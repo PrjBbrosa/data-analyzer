@@ -1203,6 +1203,11 @@ class ViewLibraryPanel(QFrame):
         title.setObjectName("ultraViewLibraryTitle")
         self._count = QLabel("0", self)
         self._count.setObjectName("ultraViewLibraryCount")
+        # Naming note: this `_pin` is the library overlay's own "keep open"
+        # toggle (pinned = don't auto-close on canvas click), unrelated to
+        # `PreviewStore.set_pinned_refs` (the residency API for the set of
+        # UltraViewRef a Board keeps resident). Same word, different
+        # domain — no functional overlap.
         self._pin = QToolButton(self)
         self._pin.setObjectName("ultraViewLibraryPin")
         self._pin.setCheckable(True)

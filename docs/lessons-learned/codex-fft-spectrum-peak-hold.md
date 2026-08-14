@@ -35,3 +35,22 @@ crisp. After pinning overlay ticks, measure axis width and
 
 Verification: Run the peak-hold unit test plus the line-canvas spectrum AA and
 overlay-axis geometry tests.
+
+## Naming collision: two unrelated "peak hold"s
+
+`mf4_analyzer.signal.fft.compute_peak_hold_fft` and
+`mf4_analyzer.signal.envelope.build_peak_trace` are both called "peak hold"
+in code/comments and are easy to conflate — they solve different problems
+one layer apart:
+
+- **`compute_peak_hold_fft`** (compute layer): takes the per-bin **max
+  across overlapping FFT segments**. This changes the data — the output
+  is a different, smaller frequency series than any single segment's
+  spectrum. Feeds the FFT 1D "峰值保持" averaging mode.
+- **`build_peak_trace`** (render layer, this doc's subject): takes the
+  per-**pixel-bucket** max of an already-computed series so a dense
+  spectrum draws as one clean line instead of a filled ribbon. This is
+  pure downsampling for display — it never changes the underlying data.
+
+The two docstrings cross-reference each other; keep that pointer intact if
+either function moves or gets renamed.

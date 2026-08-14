@@ -299,6 +299,17 @@ class FFTAnalyzer:
         When the signal is shorter than ``nfft`` the function falls back
         to a single-frame :func:`one_sided_amplitude` over the whole
         signal so the caller still receives a usable spectrum.
+
+        Naming note (disambiguation from the *other* "peak hold" on the
+        rendering side): this is the **compute layer** — it aggregates
+        across FFT segments and changes the data itself, producing a
+        different (smaller) frequency series than any single segment
+        would. Contrast with :func:`mf4_analyzer.signal.envelope.
+        build_peak_trace`, the **render layer** peak-hold, which only
+        picks one max sample per pixel bucket for display and never
+        changes the underlying data. See
+        ``docs/lessons-learned/codex-fft-spectrum-peak-hold.md`` for the
+        full compute-vs-render writeup.
         """
         weighting = _validate_weighting(weighting)
         sig = np.asarray(sig, dtype=float)
