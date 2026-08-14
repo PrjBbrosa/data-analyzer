@@ -4,7 +4,7 @@
  *   panel/card #ffffff   floating blocks (FileNavigator, ChartStack, Inspector) + cards, inputs, tree, menus
  *   divider    #d3dbe6   splitter line, panel seams, frame seams, card edges (stronger)
  *   hairline   #eef2f7   within-card sub-section separators (soft)
- *   accent #1769e0  ·  accent-wash #e8efff   (interaction only)
+ *   accent CONTROL_ACCENT  ·  accent-wash #e8efff   (interaction only)
  * Text / hierarchy — by size + weight only, no background fills:
  *   pane / card title  13px / 700   #111827
  *   body               12px / 400   #111827
@@ -72,7 +72,7 @@ QDoubleSpinBox {
     border: 1px solid #dfe5ee;
     border-radius: 7px;
     background-color: #ffffff;
-    selection-background-color: #1769e0;
+    selection-background-color: {{CONTROL_ACCENT}};
     selection-color: #ffffff;
 }
 QLineEdit:hover,
@@ -82,7 +82,7 @@ QDoubleSpinBox:hover { border-color: #b7c4d3; }
 QLineEdit:focus,
 QComboBox:focus,
 QSpinBox:focus,
-QDoubleSpinBox:focus { border-color: #1769e0; }
+QDoubleSpinBox:focus { border-color: {{CONTROL_ACCENT}}; }
 QLineEdit:disabled,
 QComboBox:disabled,
 QSpinBox:disabled,
@@ -268,7 +268,7 @@ QComboBox QAbstractItemView::item:hover,
 QComboBox QAbstractItemView::item:selected {
     border: none;
     border-radius: 6px;
-    background-color: #1769e0;
+    background-color: {{CONTROL_ACCENT}};
     color: #ffffff;
 }
 
@@ -278,99 +278,6 @@ QComboBox[popupStyle="channel-config"] QAbstractItemView::item {
     min-height: 0;
     padding: 0;
     background: transparent;
-}
-
-QDialog#channelConfigManager {
-    background-color: #ffffff;
-    border: 1px solid #cbd5e1;
-    border-radius: 12px;
-}
-QFrame#channelConfigManagerHeader {
-    border: none;
-    border-bottom: 1px solid #eef2f7;
-    background-color: #ffffff;
-}
-QLabel#channelConfigManagerTitle {
-    color: #111827;
-    font-size: 17px;
-    font-weight: 700;
-}
-QLabel#channelConfigManagerSubtitle {
-    color: #64748b;
-    font-size: 12px;
-}
-QFrame#channelConfigManagerToolbar,
-QFrame#channelConfigManagerFooter {
-    border: none;
-    background-color: #fbfdff;
-}
-QFrame#channelConfigManagerToolbar { border-bottom: 1px solid #eef2f7; }
-QFrame#channelConfigManagerFooter { border-top: 1px solid #eef2f7; }
-QLineEdit#channelConfigManagerSearch { min-height: {{CONTROL_H_BASE_INPUT_CONTENT}}; }
-QPushButton#channelConfigManagerCreate { min-height: {{CONTROL_H_BASE_BUTTON_CONTENT}}; }
-QWidget#channelConfigManagerContent { background-color: #ffffff; }
-QTableWidget#channelConfigManagerTable {
-    border: none;
-    border-right: 1px solid #eef2f7;
-    background-color: #ffffff;
-    alternate-background-color: #ffffff;
-    color: #1f2937;
-    outline: none;
-}
-QTableWidget#channelConfigManagerTable::item {
-    padding: 0 8px;
-    border: none;
-    border-bottom: 1px solid #f1f5f9;
-    background-color: #ffffff;
-}
-QTableWidget#channelConfigManagerTable::item:hover { background-color: #f8fbff; }
-QTableWidget#channelConfigManagerTable QHeaderView::section {
-    min-height: 28px;
-    padding: 0 8px;
-    border: none;
-    border-bottom: 1px solid #eef2f7;
-    background-color: #fbfdff;
-    color: #718096;
-    font-size: 11px;
-    font-weight: 600;
-}
-QFrame#channelConfigManagerDetail {
-    border: none;
-    background-color: #fcfdff;
-}
-QLabel#channelConfigManagerEyebrow,
-QLabel#channelConfigManagerFieldLabel {
-    color: #64748b;
-    font-size: 11px;
-    font-weight: 600;
-}
-QLabel#channelConfigManagerDetailTitle {
-    color: #111827;
-    font-size: 15px;
-    font-weight: 700;
-}
-QLabel#channelConfigManagerDetailDescription {
-    color: #64748b;
-    font-size: 12px;
-}
-QLabel#channelConfigManagerNote {
-    padding: 9px;
-    border-radius: 7px;
-    background-color: #f1f5f9;
-    color: #64748b;
-    font-size: 11px;
-}
-QLabel#channelConfigManagerCount { color: #334155; font-weight: 600; }
-QLabel#channelConfigManagerHint { color: #94a3b8; font-size: 11px; }
-QPushButton#channelConfigManagerDelete {
-    color: #b42318;
-    border-color: #f1c9c4;
-    background-color: #fdf4f3;
-}
-QPushButton#channelConfigManagerDelete:hover {
-    color: #8f1d15;
-    border-color: #e3a8a1;
-    background-color: #fbe9e7;
 }
 
 /* Checks */
@@ -443,7 +350,6 @@ QLabel#BatchPresetSyncBadge {
     font-size: 10px;
     font-weight: 700;
 }
-QLabel#BatchPresetSourceNote,
 QLabel#BatchPresetState {
     color: #64748b;
     font-size: 10px;
@@ -710,13 +616,12 @@ QWidget#BatchCompactToolbar QPushButton {
     padding: 2px 10px;
 }
 QLabel#BatchToolbarTitle { color: #4b596c; font-size: 12px; font-weight: 700; }
-QLabel#BatchToolbarMeta { color: #94a3b8; font-size: 11px; }
 QLabel#BatchFooterStateDot {
     border-radius: 4px;
     background-color: #0ea875;
 }
 QLabel#BatchFooterStateDot[state="blocked"] { background-color: #ef8c00; }
-QLabel#BatchFooterStateDot[state="running"] { background-color: #1769e0; }
+QLabel#BatchFooterStateDot[state="running"] { background-color: {{CONTROL_ACCENT}}; }
 QLabel#BatchFooterStateDot[state="cancelling"] { background-color: #dc3f52; }
 QLabel#BatchFooterStateDot[state="partial"] { background-color: #ef8c00; }
 QLabel#BatchFooterStateDot[state="cancelled"] { background-color: #64748b; }
@@ -731,40 +636,7 @@ QProgressBar#BatchFooterProgress {
 }
 QProgressBar#BatchFooterProgress::chunk {
     border-radius: 3px;
-    background-color: #1769e0;
-}
-QRadioButton#BatchAnalysisPresetOption {
-    min-height: 26px;
-    spacing: 5px;
-    color: #475569;
-    font-size: 11px;
-    font-weight: 600;
-}
-QRadioButton#BatchAnalysisPresetOption:checked {
-    color: #0f3f8f;
-    font-weight: 700;
-}
-QRadioButton#BatchAnalysisPresetOption:disabled {
-    color: #a0aec0;
-}
-QRadioButton#BatchAnalysisPresetOption::indicator {
-    width: 14px;
-    height: 14px;
-    border: 1px solid #94a3b8;
-    border-radius: 7px;
-    background-color: #ffffff;
-}
-QRadioButton#BatchAnalysisPresetOption::indicator:hover {
-    border-color: #1769e0;
-}
-QRadioButton#BatchAnalysisPresetOption::indicator:checked {
-    border: 1px solid #1769e0;
-    border-radius: 7px;
-    background-color: #1769e0;
-}
-QRadioButton#BatchAnalysisPresetOption::indicator:disabled {
-    border-color: #cbd5e1;
-    background-color: #f5f7fb;
+    background-color: {{CONTROL_ACCENT}};
 }
 
 QCheckBox::indicator {
@@ -775,12 +647,12 @@ QCheckBox::indicator {
     background-color: #ffffff;
 }
 QCheckBox::indicator:hover {
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
     background-color: #f8fbff;
 }
 QCheckBox::indicator:checked {
-    border-color: #1769e0;
-    background-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
+    background-color: {{CONTROL_ACCENT}};
     image: url("{{ICON_CHECKBOX_CHECKED}}");
 }
 QCheckBox::indicator:disabled {
@@ -829,7 +701,7 @@ QToolButton:disabled {
 }
 #chartToolbar QToolButton[navActive="true"] {
     background-color: #e8efff;
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
 }
 
 /* File-scope follow link: active = persistent wash; idle = icon only.
@@ -1231,7 +1103,7 @@ Toolbar QPushButton[role="panel-toggle"]:hover {
 }
 Toolbar QPushButton[role="panel-toggle"]:checked {
     background-color: #e8efff;
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
     border-radius: 3px;
 }
 Toolbar QPushButton[segment="time"],
@@ -1261,14 +1133,14 @@ Toolbar QPushButton[segment]:hover {
 Toolbar QPushButton[segment]:checked {
     background-color: qlineargradient(
         x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #ffffff, stop: 1 #edf5ff
+        stop: 0 #ffffff, stop: 1 {{CONTROL_ACCENT_WASH}}
     );
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
     /* Base segment rules use border:none; longhands recreate the frame
      * without the border: shorthand that would zero the 6px radius. */
     border-width: 1px;
     border-style: solid;
-    border-color: #2d7ff9;
+    border-color: {{CONTROL_ACCENT_HI}};
 }
 QWidget#modeSegment {
     padding: 2px;
@@ -1289,7 +1161,7 @@ Toolbar QFrame#modeZoneDivider {
     border-radius: 3px;
 }
 Toolbar QFrame#modeZoneDividerTick {
-    background-color: #2d7ff9;
+    background-color: {{CONTROL_ACCENT_HI}};
     border: none;
     border-radius: 2px;
 }
@@ -1341,7 +1213,7 @@ QFrame#BatchMethodZoneDivider {
     border-radius: 3px;
 }
 QFrame#BatchMethodZoneDividerTick {
-    background-color: #2d7ff9;
+    background-color: {{CONTROL_ACCENT_HI}};
     border: none;
     border-radius: 2px;
 }
@@ -1375,8 +1247,8 @@ QFrame#cockpitToolbarBand QPushButton[cockpitAction="connect"] {
     max-height: 32px;
     padding: 0 20px;
     border-radius: 8px;
-    background-color: #1769e0;
-    border-color: #1769e0;
+    background-color: {{CONTROL_ACCENT}};
+    border-color: {{CONTROL_ACCENT}};
     color: #ffffff;
     font-size: 13px;
 }
@@ -1607,10 +1479,6 @@ QLabel#healthSummary {
     font-size: 11px;
     font-weight: 600;
 }
-QPushButton#healthDisconnectButton {
-    min-height: 24px;
-    padding: 2px 8px;
-}
 
 QFrame#leftPane {
     border: none;
@@ -1687,7 +1555,7 @@ QCheckBox#filterChip:hover {
 QPushButton#filterChip:checked,
 QToolButton#filterChip:checked,
 QCheckBox#filterChip:checked {
-    color: #0f3f8f;
+    color: {{CONTROL_ACCENT_INK}};
     background-color: #e8efff;
     border-color: #93b4ef;
 }
@@ -1708,7 +1576,7 @@ QFrame#leftBatchBar {
     border: 1px solid #bfdbfe;
     border-radius: 8px;
     background-color: #eff6ff;
-    color: #0f3f8f;
+    color: {{CONTROL_ACCENT_INK}};
 }
 
 QWidget#cockpitDisconnectedCanvas {
@@ -1729,8 +1597,8 @@ QWidget#cockpitDisconnectedCanvas QLabel#cockpitDisconnectedCopy {
 QWidget#cockpitDisconnectedCanvas QPushButton[cockpitAction="connect"] {
     min-height: 32px;
     padding: 4px 14px;
-    background-color: #1769e0;
-    border-color: #1769e0;
+    background-color: {{CONTROL_ACCENT}};
+    border-color: {{CONTROL_ACCENT}};
     color: #ffffff;
 }
 
@@ -1768,7 +1636,7 @@ QLabel#liveCardValue {
     font-weight: 800;
 }
 QFrame#liveSignalCard[focusState="active"] {
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
     background-color: #f8fbff;
 }
 QFrame#liveSignalCard[focusState="context"] {
@@ -1782,7 +1650,7 @@ QPushButton#liveFocusCollapseButton {
     border: 1px solid #bfd4f8;
     border-radius: 5px;
     background-color: #ffffff;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
     font-size: 11px;
     font-weight: 700;
 }
@@ -1809,7 +1677,7 @@ QPushButton#liveFocusBackButton {
     border: 1px solid #bfd4f8;
     border-radius: 6px;
     background-color: #ffffff;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
     font-weight: 700;
 }
 
@@ -1828,12 +1696,6 @@ QFrame#rightMetricSection QLabel#rightMetricTitle {
     color: #111827;
     font-size: 12px;
     font-weight: 800;
-}
-QFrame#rightMetricSection QLabel#rightMetricValue,
-QFrame#rightMetricSection QLabel#rightMetricDetail {
-    color: #475569;
-    font-size: 11px;
-    font-weight: 600;
 }
 QFrame#rightVerdictBanner {
     min-height: 34px;
@@ -1886,7 +1748,7 @@ QWidget#channelCard {
 QWidget#channelCard[dropActive="true"] {
     background-color: #f5f8ff;
     border-width: 2px;
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
 }
 QScrollArea#fileScroll {
     background-color: transparent;
@@ -2227,7 +2089,7 @@ Inspector QLabel#frfFlowOutput {
     background: transparent;
 }
 Inspector QLabel#frfFlowArrow {
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
     font-size: 15px;
     font-weight: 700;
     background: transparent;
@@ -2241,30 +2103,6 @@ Inspector QLabel#frfFlowBlock {
     color: #245aa5;
     font-size: 11px;
     font-weight: 700;
-}
-QFrame#frfSegmentChoice {
-    border: 1px solid {{CONTROL_TRACK_LINE}};
-    border-radius: 7px;
-    background: {{CONTROL_TRACK}};
-}
-QFrame#frfSegmentChoice QPushButton[role="frf-segment"] {
-    /* Keep the old 28px outer segment after reserving a 1px border. */
-    min-height: 24px;
-    padding: 1px 5px;
-    border: 1px solid transparent;
-    border-radius: 5px;
-    background: transparent;
-    color: {{CONTROL_TEXT_MUTED}};
-    font-weight: 700;
-}
-QFrame#frfSegmentChoice QPushButton[role="frf-segment"]:hover {
-    background: transparent;
-    color: {{CONTROL_TEXT}};
-}
-QFrame#frfSegmentChoice QPushButton[role="frf-segment"]:checked {
-    background: {{CONTROL_SURFACE_TOP}};
-    border-color: {{CONTROL_SELECT_LINE}};
-    color: {{CONTROL_TEXT_ON_SELECT}};
 }
 /* The mapping swap is a textual action, not icon-only toolbar chrome.
  * Its own height floor must win over the compact [role="tool"] rule. */
@@ -2354,7 +2192,7 @@ Inspector QDoubleSpinBox[compact="true"]::down-arrow {
 #dbReferenceModeBadge {
     border: 2px solid #ffffff;
     border-radius: 8px;
-    background-color: #1769e0;
+    background-color: {{CONTROL_ACCENT}};
     color: #ffffff;
     font-size: 9px;
     font-weight: 800;
@@ -2467,7 +2305,7 @@ QPushButton[role="preset-load"] {
 QPushButton[role="preset-load"][filled="true"] {
     background-color: #ffffff;
     border-color: #b7c4d3;
-    color: #0f3f8f;
+    color: {{CONTROL_ACCENT_INK}};
 }
 QPushButton[role="preset-load"][applied="true"] {
     color: #0b73e7;
@@ -2540,7 +2378,7 @@ QLabel#toastIcon {
     qproperty-alignment: AlignCenter;
     border-radius: 9px;
     color: #ffffff;
-    background-color: #1769e0;
+    background-color: {{CONTROL_ACCENT}};
     font-weight: 700;
     font-size: 12px;
 }
@@ -2893,7 +2731,7 @@ QDialog#ChartOptionsDialog QTabBar::tab {
 
 QDialog#ChartOptionsDialog QTabBar::tab:selected {
     background-color: #ffffff;
-    color: #0f3f8f;
+    color: {{CONTROL_ACCENT_INK}};
     border-bottom-color: #ffffff;
 }
 
@@ -2913,9 +2751,9 @@ QDialog#ChartOptionsDialog QLabel#chartOptionsGroupTitle {
  * Scoped to #ChannelEditorDialog so the create/danger button accents and
  * the three-band (file bar / scroll body / footer) chrome never leak into
  * the global QPushButton cascade. Tokens mirror the prototype:
- * create  = #0f3f8f text / #cdddf6 border / #f3f8ff fill
+ * create  = CONTROL_ACCENT_INK text / #cdddf6 border / #f3f8ff fill
  * danger  = #b42318 text / #f1c9c4 border / #fdf4f3 fill
- * primary 确定 reuses the global [role="primary"] blue (#1769e0). */
+ * primary 确定 reuses the global [role="primary"] blue (CONTROL_ACCENT). */
 QDialog#ChannelEditorDialog,
 QDialog#DrawerSurface #ChannelEditorDialog {
     background-color: #ffffff;
@@ -2973,7 +2811,7 @@ QDialog#DrawerSurface #ChannelEditorDialog {
  * padding:0 + explicit min/max sizing keep the styled QToolButton's content
  * rect from collapsing (Qt would log QPainter::begin engine == 0). */
 #ChannelEditorDialog QToolButton#channelExprHelp {
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
     border: none;
     background-color: transparent;
     padding: 0;
@@ -2984,7 +2822,7 @@ QDialog#DrawerSurface #ChannelEditorDialog {
 }
 #ChannelEditorDialog QToolButton#channelExprHelp:hover,
 #ChannelEditorDialog QToolButton#channelExprHelp:checked {
-    color: #0f3f8f;
+    color: {{CONTROL_ACCENT_INK}};
 }
 #ChannelEditorDialog QLabel#channelExprHint {
     color: #7b8794;
@@ -2992,7 +2830,6 @@ QDialog#DrawerSurface #ChannelEditorDialog {
     font-weight: 400;
     background-color: transparent;
 }
-/* 导出/删除共用勾选列表（曾用 #channelDeleteList 多选高亮，已退役） */
 #ChannelEditorDialog QListWidget#channelExportList {
     border: 1px solid #eef2f7;
     border-radius: 7px;
@@ -3004,7 +2841,7 @@ QDialog#DrawerSurface #ChannelEditorDialog {
     border-radius: 5px;
 }
 #ChannelEditorDialog QPushButton[role="create"] {
-    color: #0f3f8f;
+    color: {{CONTROL_ACCENT_INK}};
     border-color: #cdddf6;
     background-color: #f3f8ff;
 }
@@ -3083,10 +2920,10 @@ QMenu#pgContextMenu::item {
 }
 QMenu#pgContextMenu::item:selected {
     background-color: #e8efff;
-    color: #0f3f8f;
+    color: {{CONTROL_ACCENT_INK}};
 }
 QMenu#pgContextMenu::item:checked {
-    color: #0f3f8f;
+    color: {{CONTROL_ACCENT_INK}};
     font-weight: 600;
 }
 QMenu#pgContextMenu::separator {
@@ -3258,13 +3095,6 @@ QPushButton#inspectorHelpLink:pressed QLabel#inspectorHelpText {
     color: #1d4ed8;
 }
 
-/* Version tag beside the status-bar update (cloud-download) icon. */
-QStatusBar QLabel#versionTag {
-    color: #8893a6;
-    font-size: 11px;
-    padding-right: 6px;
-}
-
 /* ============ Chart toolbar choice segments ============ */
 QWidget#chartToolbar QPushButton[role="chart-choice"] {
     min-height: 22px;
@@ -3301,15 +3131,6 @@ QFrame#chartToolbarSep {
     margin-right: 12px;
     background-color: #94a3b8;
     border: none;
-}
-
-
-QLabel#chartHint {
-    padding: 0 12px;
-    color: #374151;
-    font-size: 12px;
-    line-height: 14px;
-    background-color: transparent;
 }
 
 QWidget#viewTabBar {
@@ -3541,7 +3362,7 @@ QFrame#chartHintBar QToolButton#chartHintQuickrefButton {
     background-color: #eff6ff;
     border: 1px solid #bfdbfe;
     border-radius: 8px;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
     font-size: 11px;
     font-weight: 800;
 }
@@ -3551,12 +3372,6 @@ QFrame#chartHintBar QToolButton#chartHintQuickrefButton:hover {
 }
 QFrame#chartHintBar QToolButton#chartHintQuickrefButton:pressed {
     background-color: #bfdbfe;
-}
-QFrame#chartHintBar QLabel#chartHintPersistent {
-    color: #64748b;
-    font-size: 11px;
-    padding: 2px 8px;
-    background-color: transparent;
 }
 QFrame#chartHintBar QLabel#chartHintContext {
     color: #2563eb;
@@ -3578,13 +3393,11 @@ QWidget#timeViewBottomDock QFrame#chartHintBar {
     border-top: 1px solid #d3dbe6;
 }
 
-QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintPersistent,
 QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintContext,
 QWidget#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintDiscovery {
     padding: 1px 6px;
 }
 
-QWidget#ultraViewPage QFrame#chartHintBar QLabel#chartHintPersistent,
 QWidget#ultraViewPage QFrame#chartHintBar QLabel#chartHintContext,
 QWidget#ultraViewPage QFrame#chartHintBar QLabel#chartHintDiscovery {
     padding: 0 8px;
@@ -3595,7 +3408,6 @@ QStatusBar QFrame#chartHintBar {
     border-top: none;
 }
 
-QStatusBar QFrame#chartHintBar QLabel#chartHintPersistent,
 QStatusBar QFrame#chartHintBar QLabel#chartHintContext,
 QStatusBar QFrame#chartHintBar QLabel#chartHintDiscovery {
     padding: 0 6px;
@@ -3806,8 +3618,8 @@ QTableWidget#channelConfigHtmlChannelTable::item {
     background-color: #ffffff;
 }
 QTableWidget#channelConfigHtmlChannelTable::item:hover { background-color: #f8fbff; }
-QWidget#channelConfigHtmlCheckCell[chosen="true"] { background-color: #edf5ff; }
-QWidget#channelConfigHtmlRemoveCell[chosen="true"] { background-color: #edf5ff; }
+QWidget#channelConfigHtmlCheckCell[chosen="true"] { background-color: {{CONTROL_ACCENT_WASH}}; }
+QWidget#channelConfigHtmlRemoveCell[chosen="true"] { background-color: {{CONTROL_ACCENT_WASH}}; }
 QPushButton#channelConfigHtmlRemoveOne {
     min-width: 0;
     min-height: 0;
@@ -4094,8 +3906,8 @@ QToolButton#ultraViewLibrarySectionHead:checked {
 QToolButton#ultraViewLibrarySectionHead:hover,
 QToolButton#ultraViewLibrarySectionHead:checked:hover {
     background-color: #f4f8ff;
-    border-left-color: #1769e0;
-    color: #1769e0;
+    border-left-color: {{CONTROL_ACCENT}};
+    color: {{CONTROL_ACCENT}};
 }
 QToolButton#ultraViewLibrarySectionHead:pressed,
 QToolButton#ultraViewLibrarySectionHead:checked:pressed {
@@ -4146,7 +3958,7 @@ QFrame#ultraViewLibraryRow[onBoard="true"] {
     background-color: transparent;
 }
 QFrame#ultraViewLibraryRow[selected="true"] {
-    border-color: #2d7ff9;
+    border-color: {{CONTROL_ACCENT_HI}};
     background-color: #bfdbfe;
 }
 QToolButton#ultraViewLibraryAdd {
@@ -4197,10 +4009,10 @@ QWidget#ultraViewCard {
     border-radius: 10px;
 }
 QWidget#ultraViewCard[selected="true"] {
-    border-color: #2d7ff9;
+    border-color: {{CONTROL_ACCENT_HI}};
 }
 QWidget#ultraViewCard[replacementArmed="true"] {
-    border-color: #2d7ff9;
+    border-color: {{CONTROL_ACCENT_HI}};
     background-color: #f3f8ff;
 }
 QWidget#ultraViewCard[orphaned="true"] {
@@ -4210,7 +4022,7 @@ QWidget#ultraViewCard[dropActive="true"] {
     background-color: #f5f8ff;
     border-width: 2px;
     border-style: solid;
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
 }
 QWidget#ultraViewCard[status="stale"] QLabel#ultraViewCardStatus {
     color: #8a5609;
@@ -4253,7 +4065,7 @@ QToolButton#ultraViewCardTypeChip:hover,
 QToolButton#ultraViewCardTypeChip:focus {
     border-color: #bdd6ff;
     background-color: #eef4fb;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
 }
 QLabel#ultraViewZoomLabel {
     color: #475569;
@@ -4286,13 +4098,13 @@ QToolButton#ultraViewCardFocusButton {
     max-height: 22px;
     padding: 0;
     margin: 0;
-    border: 1px solid #2d7ff9;
+    border: 1px solid {{CONTROL_ACCENT_HI}};
     border-radius: 6px;
-    background-color: #edf5ff;
+    background-color: {{CONTROL_ACCENT_WASH}};
 }
 QToolButton#ultraViewCardFocusButton:hover {
     background-color: #dbeafe;
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
 }
 QToolButton#ultraViewCardFocusButton:pressed {
     background-color: #bfdbfe;
@@ -4309,16 +4121,16 @@ QWidget#ultraViewEmptySlot {
     color: #64748b;
 }
 QWidget#ultraViewEmptySlot:hover {
-    border-color: #2d7ff9;
-    color: #2d7ff9;
+    border-color: {{CONTROL_ACCENT_HI}};
+    color: {{CONTROL_ACCENT_HI}};
     background-color: #f3f8ff;
 }
 QWidget#ultraViewEmptySlot[dropActive="true"] {
     background-color: #f5f8ff;
     border-width: 2px;
     border-style: dashed;
-    border-color: #1769e0;
-    color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
+    color: {{CONTROL_ACCENT}};
 }
 QPushButton#ultraViewTrayTitle {
     border: none;
@@ -4361,8 +4173,8 @@ QFrame#ultraViewCompareRail QPushButton#ultraViewCompareButton {
     text-align: left;
 }
 QFrame#ultraViewCompareRail QPushButton#ultraViewCompareButton:checked {
-    border-color: #2d7ff9;
-    background-color: #edf5ff;
+    border-color: {{CONTROL_ACCENT_HI}};
+    background-color: {{CONTROL_ACCENT_WASH}};
     color: #1d4f9c;
 }
 QFrame#ultraViewFocusLayer {
@@ -4374,9 +4186,9 @@ QFrame#ultraViewFocusPanel {
     border-radius: 10px;
 }
 QPushButton#ultraViewOpenSourceButton {
-    border: 1px solid #2d7ff9;
+    border: 1px solid {{CONTROL_ACCENT_HI}};
     border-radius: 8px;
-    background-color: #2d7ff9;
+    background-color: {{CONTROL_ACCENT_HI}};
     color: #ffffff;
     font-weight: 700;
     padding: 4px 10px;
@@ -4497,7 +4309,7 @@ QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"]:focus,
 QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"]:focus,
 QFrame#ultraViewStatusIsland QToolButton[chrome="ultraview"][role="icon"]:focus,
 QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"]:focus {
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
     background-color: #f6faff;
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"],
@@ -4508,7 +4320,7 @@ QFrame#ultraViewStatusIsland QToolButton[chrome="ultraview"][role="icon"][active
 QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][active="true"] {
     border-color: #bdd6ff;
     background-color: #e9f1ff;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
 QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
@@ -4518,7 +4330,7 @@ QFrame#ultraViewStatusIsland QToolButton[chrome="ultraview"][role="icon"][active
 QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover {
     border-color: #8cb8f7;
     background-color: #dceaff;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
 QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
@@ -4537,13 +4349,13 @@ QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"] {
     border-color: #bdd6ff;
     background-color: #e9f1ff;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover {
     border-color: #8cb8f7;
     background-color: #dceaff;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:pressed,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:pressed {
@@ -4553,9 +4365,9 @@ QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeAc
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"] {
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
     background-color: #ffffff;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover {
@@ -4571,9 +4383,9 @@ QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelO
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"],
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"] {
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
     background-color: #e9f1ff;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
 }
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover {
@@ -4668,8 +4480,8 @@ QLabel#ultraViewCardStatus[status="fresh"] {
  * ancestor qualifier).  Paint the island itself so the 4px padding does
  * not show as a white square around the 32px exit control. */
 QFrame#ultraViewGlobalIsland[presentation="true"] {
-    background-color: #1769e0;
-    border-color: #1769e0;
+    background-color: {{CONTROL_ACCENT}};
+    border-color: {{CONTROL_ACCENT}};
 }
 QFrame#ultraViewGlobalIsland[presentation="true"]:hover {
     background-color: #145fc8;
@@ -4683,9 +4495,9 @@ QToolButton[chrome="ultraview"][role="presentationExit"]:checked {
     max-height: 30px;
     padding: 0;
     margin: 0;
-    border: 1px solid #1769e0;
+    border: 1px solid {{CONTROL_ACCENT}};
     border-radius: 8px;
-    background-color: #1769e0;
+    background-color: {{CONTROL_ACCENT}};
     color: #ffffff;
 }
 QToolButton[chrome="ultraview"][role="presentationExit"]:hover,
@@ -4709,12 +4521,12 @@ QWidget#ultraViewCard {
     background-color: #ffffff;
 }
 QWidget#ultraViewCard[selected="true"] {
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
     background-color: #ffffff;
 }
 QWidget#ultraViewCard[replacementArmed="true"],
 QWidget#ultraViewCard[dropActive="true"] {
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
     background-color: #f4f8ff;
 }
 QWidget#ultraViewCard[orphaned="true"] {
@@ -4725,12 +4537,12 @@ QWidget#ultraViewEmptySlot {
     background-color: rgba(255, 255, 255, 150);
 }
 QWidget#ultraViewEmptySlot:hover {
-    border-color: #1769e0;
-    color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
+    color: {{CONTROL_ACCENT}};
     background-color: #f4f8ff;
 }
 QWidget#ultraViewEmptySlot[dropActive="true"] {
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
     background-color: #e9f1ff;
 }
 
@@ -4746,7 +4558,7 @@ QFrame#ultraViewUnplacedTray {
 QFrame#ultraViewCompareRail QPushButton#ultraViewCompareButton:checked {
     border-color: #bdd6ff;
     background-color: #e9f1ff;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
 }
 QToolButton#ultraViewZoomOutButton,
 QToolButton#ultraViewZoomInButton,
@@ -4764,7 +4576,7 @@ QToolButton#ultraViewZoomResetButton:hover,
 QToolButton#ultraViewCardFocusButton:hover {
     border-color: #bdd6ff;
     background-color: #e9f1ff;
-    color: #1769e0;
+    color: {{CONTROL_ACCENT}};
 }
 QToolButton#ultraViewZoomOutButton:pressed,
 QToolButton#ultraViewZoomInButton:pressed,
@@ -4779,5 +4591,5 @@ QToolButton#ultraViewZoomInButton:focus,
 QToolButton#ultraViewZoomFitButton:focus,
 QToolButton#ultraViewZoomResetButton:focus,
 QToolButton#ultraViewCardFocusButton:focus {
-    border-color: #1769e0;
+    border-color: {{CONTROL_ACCENT}};
 }

@@ -139,6 +139,8 @@ The zero-compute probe must cover page open, Board switch, all rail/global panel
 
 macOS Cocoa foreground acceptance is separate and required before declaring visual completion: 800x560, 1280x800, 1440x900, Retina DPR, all rail panels, Library/Unplaced drag-drop, badge/warning/focus states, free-grid/minimap/card-context/overview/presentation, and a 24-card zoom/pan check. Windows frozen validation is a separate release gate if a release includes Windows.
 
+QSS C-class hangover (from `docs/analyzer/specs/2026-08-15-qss-consolidation-spec.md` §5.2): the nine names (`ultraViewBoardColumn`, `ultraViewPopover`, `ultraViewFilterPopover`, `ultraViewLibraryPopover`, `ultraViewUnplacedPopover`, `ultraViewUnplacedBadge`, `ultraViewFilterWarning`, `ultraViewNavigationZoomLabel`, `ultraViewStatusIslandText`) are **already absent** from `style.qss` on `3971d5a3`. Keep `tests/ui_kit/test_qss_selector_liveness.py` `MIGRATION_OBJECT_NAMES` empty and do not reintroduce those selectors. The QSS consolidation batch must not add them back.
+
 ## 9. Commit boundaries and done definition
 
 Suggested commits:

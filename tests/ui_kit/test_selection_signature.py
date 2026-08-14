@@ -1,4 +1,10 @@
-"""Seven-family contracts for the shared selected-segment visual signature."""
+"""Six-family contracts for the shared selected-segment visual signature.
+
+The former ``frfSegmentChoice`` / ``role="frf-segment"`` family was wired in
+``61053293`` and removed from production in ``79588591`` (global control
+visual system). QSS and this table are deleted together (QSS consolidation
+Task 3 / spec B-class).
+"""
 from __future__ import annotations
 
 import os
@@ -16,7 +22,6 @@ _QSS_PATH = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui_kit" / "s
 
 _FAMILIES = (
     ("choice", 'QFrame#segmentedChoice QPushButton[role="choice"]', "segmentedChoice", "role", "choice"),
-    ("frf", 'QFrame#frfSegmentChoice QPushButton[role="frf-segment"]', "frfSegmentChoice", "role", "frf-segment"),
     ("chart", 'QWidget#chartToolbar QPushButton[role="chart-choice"]', "chartToolbar", "role", "chart-choice"),
     ("tick", 'QFrame#TickDensitySurface QPushButton[role="tick-density-preset"]', "TickDensitySurface", "role", "tick-density-preset"),
     ("slice", 'QWidget#sliceDirToggle QPushButton[role="slice-seg"]', "sliceDirToggle", "role", "slice-seg"),
@@ -52,7 +57,7 @@ def _selector_body(qss: str, selector: str) -> str:
 
 def _family_widget(family):
     _name, _selector, root_name, property_name, property_value = family
-    root = QFrame() if root_name in {"segmentedChoice", "frfSegmentChoice", "TickDensitySurface"} else QWidget()
+    root = QFrame() if root_name in {"segmentedChoice", "TickDensitySurface"} else QWidget()
     root.setObjectName(root_name)
     layout_parent = root
     if root_name == "TickDensitySurface":
