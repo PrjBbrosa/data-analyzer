@@ -11,12 +11,20 @@ import numpy as np
 
 DENSE_DISCRETE_BUCKET_BUDGET = 350
 DENSE_DISCRETE_INTERACTIVE_BUCKET_BUDGET = 250
-# Parked 2026-08-14: ink already gates AA, post-envelope bucket cap, and
-# raster upgrade for CRC-like walls. The dense_discrete leg admitted raster
-# at any ink and pre-capped buckets to 350, which stretched stale pixmaps
-# into solid blocks on sub-sample zoom. Classification is unchanged.
-# Flip to True to restore the CRC pre-cap + always-on raster admission.
-DENSE_DISCRETE_POLICY_ENABLED = False
+# Re-armed 2026-08-15 (post-v8-batch-review §6, bisected to 36efcbd0). That
+# commit parked this False believing "ink covers the same walls" as the
+# dense_discrete leg, but ink only backstops the *interactive* canvas via
+# quality.py's paint timer — batch_render_qt has no such backstop, so
+# parking this unconditionally silently uncapped every exported dense/CRC
+# curve's bucket width (350 -> full viewport px), breaking the settled-cap
+# contract both 2026-07-23 blf-dbc-crc-interaction-performance-spec §8.4
+# ("现有 350 bucket budget 可作为 settled 默认上限") and 2026-08-08
+# timedomain-aa-ink-budget-spec §4.3 (admission is dense_discrete OR
+# high-ink, not ink alone) still call for. The sub-sample-zoom raster
+# stretch fix from the same commit (dense_raster.raster_would_stretch /
+# entry_is_lossy / drop_lossy_for_xlim) is unconditional and unaffected by
+# this flag, so re-arming does not reintroduce that bug.
+DENSE_DISCRETE_POLICY_ENABLED = True
 
 LOG_FREQUENCY_MIN_TICKS = 2
 _LOG_TICK_MANTISSAS_125 = (1.0, 2.0, 5.0)
