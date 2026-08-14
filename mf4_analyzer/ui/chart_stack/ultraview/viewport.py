@@ -31,6 +31,47 @@ LOD_FOOTER_HIDE = 0.60
 LOD_TITLE_ONLY_ZOOM = 0.40
 LOD_HYSTERESIS = 0.04
 FOCUS_PREVIEW_RATIO = 0.75
+_LOD_LEVELS = frozenset({LOD_FULL, LOD_NO_FOOTER, LOD_TITLE_ONLY})
+
+
+@dataclass(frozen=True)
+class LodVisibility:
+    """Presentation flags for one LOD band. Cards must not invent a second table."""
+
+    title: bool
+    type_chip: bool
+    trust: bool
+    preview: bool
+    footer: bool
+    body_actions: bool
+
+
+LOD_VISIBILITY = {
+    LOD_FULL: LodVisibility(
+        title=True,
+        type_chip=True,
+        trust=True,
+        preview=True,
+        footer=True,
+        body_actions=True,
+    ),
+    LOD_NO_FOOTER: LodVisibility(
+        title=True,
+        type_chip=True,
+        trust=True,
+        preview=True,
+        footer=False,
+        body_actions=True,
+    ),
+    LOD_TITLE_ONLY: LodVisibility(
+        title=True,
+        type_chip=True,
+        trust=True,
+        preview=False,
+        footer=False,
+        body_actions=False,
+    ),
+}
 
 ViewportPoint = tuple[float, float]
 
@@ -185,7 +226,7 @@ def wheel_zoom_factor(angle_delta_y: float, pixel_delta_y: float = 0.0) -> float
 def lod_level(zoom: float, previous: str | None = None) -> str:
     """Fixed chrome bands with hysteresis so the threshold does not chatter."""
     z = clamp_zoom(zoom)
-    current = previous if previous in {LOD_FULL, LOD_NO_FOOTER, LOD_TITLE_ONLY} else None
+    current = previous if previous in _LOD_LEVELS else None
     hide_footer = LOD_FOOTER_HIDE
     title_only = LOD_TITLE_ONLY_ZOOM
     if current == LOD_NO_FOOTER:
@@ -201,6 +242,16 @@ def lod_level(zoom: float, previous: str | None = None) -> str:
     if z < hide_footer:
         return LOD_NO_FOOTER
     return LOD_FULL
+
+
+def lod_visibility(level: str) -> LodVisibility:
+    """Return the canonical visibility row for ``level``.
+
+    Page passes the LOD token; Card renders this table. Tests must call this
+    helper instead of hard-coding a second 60/40 threshold set.
+    """
+    key = level if level in LOD_VISIBILITY else LOD_FULL
+    return LOD_VISIBILITY[key]
 
 
 def needs_focus_recapture(

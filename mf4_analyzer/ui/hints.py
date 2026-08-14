@@ -637,7 +637,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.avoid",
-        text="重叠或贴边松手可自动让位",
+        text="重叠邻卡原尺寸让位，无空位则拒绝",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=85,
@@ -651,7 +651,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.undo",
-        text="布局浮层中的撤销可恢复自由网格布局",
+        text="一次重排一个撤销，可恢复全部卡片",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=86,
@@ -672,7 +672,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.minimap",
-        text="右下导航浮岛的缩略图可定位整板",
+        text="缩略图仅自由网格滚动时出现",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=83,
@@ -683,6 +683,13 @@ _HINTS = (
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,
+    ),
+    Hint(
+        id="ultraview.lod",
+        text="六成完整四成紧凑，更低标题仍见类型",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=88,
     ),
     Hint(
         id="ultraview.boards",
@@ -700,7 +707,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.card_menu",
-        text="选中卡片的浮动工具条或右键可打开原 View",
+        text="常驻打开聚焦，过期才同步，更多里复制",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=80,
@@ -757,6 +764,13 @@ _HINTS = (
     Hint(
         id="ultraview.library_fold",
         text="左侧窄轨打开的 View 库浮层中，分组可折叠",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=33,
+    ),
+    Hint(
+        id="ultraview.library_pin",
+        text="View 库钉住后点画布不收起，Esc 仍关闭",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=33,

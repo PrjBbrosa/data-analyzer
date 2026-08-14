@@ -6,6 +6,7 @@ import math
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
 from PyQt5.QtGui import QColor, QCursor, QImage, QMouseEvent, QNativeGestureEvent, QWheelEvent
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QToolButton
 
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import grid_metrics
@@ -20,6 +21,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
     fit_zoom,
     focus_grab_scale,
     lod_level,
+    lod_visibility,
     needs_focus_recapture,
     scale_grid_metrics,
     wheel_event_delta_y,
@@ -37,6 +39,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
 from mf4_analyzer.ui.ultraview_state import (
     FreeGridPlacement,
     GridRect,
+    STATUS_STALE,
     board_to_payload,
     default_board,
     make_ref,
@@ -45,7 +48,13 @@ from mf4_analyzer.ui.ultraview_state import (
 )
 from mf4_analyzer.ui_kit import load_stylesheet
 
-from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid, _send_mouse_move
+from tests.ui.test_ultraview_page import (
+    FakePreview,
+    _Harness,
+    _image,
+    _prepare_free_grid,
+    _send_mouse_move,
+)
 
 
 def _logical_under_cursor(zoom, cursor, scroll, origin=(0.0, 0.0)):
@@ -475,6 +484,50 @@ def test_lod_hysteresis_does_not_chatter_at_the_threshold():
     assert lod_level(0.42, LOD_TITLE_ONLY) == LOD_TITLE_ONLY
 
 
+def test_lod_state_boundaries_use_the_single_threshold_table():
+    """60/59 and 40/39 map through lod_level; hysteresis is not a second table."""
+    assert lod_level(0.60) == LOD_FULL
+    assert lod_level(0.59) == LOD_NO_FOOTER
+    assert lod_level(0.40) == LOD_NO_FOOTER
+    assert lod_level(0.39) == LOD_TITLE_ONLY
+    assert lod_level(1.00) == LOD_FULL
+    assert lod_level(0.55) == LOD_NO_FOOTER
+    assert lod_level(0.35) == LOD_TITLE_ONLY
+    # Crossing down from full still uses the same hide-footer constant ± hysteresis.
+    assert lod_level(0.59, LOD_FULL) == LOD_FULL
+    assert lod_level(0.55, LOD_FULL) == LOD_NO_FOOTER
+    assert lod_level(0.40, LOD_TITLE_ONLY) == LOD_TITLE_ONLY
+    assert lod_level(0.39, LOD_NO_FOOTER) == LOD_TITLE_ONLY
+
+
+def test_lod_visibility_table_is_owned_by_viewport():
+    full = lod_visibility(lod_level(1.0))
+    compact = lod_visibility(lod_level(0.55))
+    title = lod_visibility(lod_level(0.35))
+    assert (full.title, full.type_chip, full.trust, full.preview, full.footer, full.body_actions) == (
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+    )
+    assert (compact.title, compact.type_chip, compact.trust, compact.preview, compact.footer) == (
+        True,
+        True,
+        True,
+        True,
+        False,
+    )
+    assert compact.body_actions is True
+    assert (title.title, title.type_chip, title.trust) == (True, True, True)
+    assert title.preview is False
+    assert title.footer is False
+    assert title.body_actions is False
+    assert lod_visibility(LOD_NO_FOOTER) is lod_visibility(lod_level(0.55))
+    assert lod_visibility(LOD_TITLE_ONLY) is lod_visibility(lod_level(0.35))
+
+
 def test_fit_and_zoom_to_card_end_state(qtbot):
     harness = _Harness(qtbot)
     free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
@@ -534,6 +587,122 @@ def test_lod_hides_footer_below_sixty_percent(qtbot):
     assert not card._footer.isVisible()
     harness.page.set_board_zoom(1.0)
     assert card._footer.isVisible()
+
+
+def _type_chip(card):
+    return card.findChild(QToolButton, "ultraViewCardTypeChip")
+
+
+def _prepare_generic_title_card(harness, qtbot, *, section="fft", view_id="view-1"):
+    from mf4_analyzer.ui.chart_stack.ultraview.widgets import LibraryRow
+    from mf4_analyzer.ui.ultraview_state import STATUS_MISSING, add_ref, template_to_free_grid
+
+    set_layout(harness.board, "grid_2x2")
+    add_ref(harness.board, make_ref(section, view_id))
+    template_to_free_grid(harness.board)
+    harness.page.set_library_rows(
+        [
+            LibraryRow(
+                section=section,
+                view_id=view_id,
+                name="View 1",
+                tab_color="#2d7ff9",
+                status=STATUS_MISSING,
+                on_board=True,
+                source_summary=f"{section}-src",
+            )
+        ]
+    )
+    ref = make_ref(section, view_id)
+    harness.page.set_preview(
+        ref,
+        FakePreview(ref=ref, image=_image(), title="View 1", captured_digest="digest-keep"),
+    )
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    card = harness.page.card_widget(section, view_id)
+    assert card is not None
+    return card, ref
+
+
+def test_compact_lod_hides_footer_but_keeps_preview_type_and_trust(qtbot):
+    harness = _Harness(qtbot)
+    card, ref = _prepare_generic_title_card(harness, qtbot)
+    harness.page.set_ref_status(ref, STATUS_STALE, True)
+    harness.page.set_board_zoom(0.55)
+    qtbot.wait(10)
+    chip = _type_chip(card)
+    assert chip is not None and chip.isVisible()
+    assert "频谱" in chip.text() or "频谱" in chip.toolTip()
+    assert card._title.isVisible()
+    assert card._title.full_text() == "View 1"
+    assert card._image.isVisible()
+    assert card._image.height() > 8
+    assert not card._footer.isVisible()
+    assert card._status.isVisible()
+    assert card._status.objectName() == "ultraViewCardStatus"
+    assert chip.objectName() != card._status.objectName()
+
+
+def test_title_only_lod_hides_preview_body_and_empty_backing(qtbot):
+    harness = _Harness(qtbot)
+    card, ref = _prepare_generic_title_card(harness, qtbot)
+    harness.page.set_ref_status(ref, STATUS_STALE, True)
+    before_placement = [
+        (item.ref.view_id, item.rect.column, item.rect.row, item.rect.column_span, item.rect.row_span)
+        for item in harness.page.board().free_grid
+    ]
+    digest_before = harness.page._previews[ref].captured_digest
+    payload_before = board_to_payload(harness.page.board())
+    geom_at_zoom = None
+    harness.page.set_board_zoom(0.35)
+    qtbot.wait(10)
+    geom_at_zoom = QRect(card.geometry())
+    chip = _type_chip(card)
+    assert chip is not None and chip.isVisible()
+    assert "频谱" in (chip.text() + chip.toolTip() + chip.accessibleName())
+    assert card._title.full_text() == "View 1"
+    assert not card._image.isVisible() or card._image.height() == 0
+    assert card._image.minimumHeight() == 0
+    assert not card._footer.isVisible()
+    assert not card._focus_btn.isVisible()
+    assert not card._orphan_bar.isVisible()
+    assert card.focusPolicy() == Qt.StrongFocus
+    QTest.mouseClick(
+        card,
+        Qt.LeftButton,
+        Qt.NoModifier,
+        QPoint(max(4, card.width() // 2), max(4, card.height() // 2)),
+    )
+    assert harness.page.selected_ref() == ("fft", "view-1")
+    free = harness.page._free_grid
+    assert free.ghost_overlay()._handles_rect is not None or card.property("selected") == "true"
+    assert card.geometry() == geom_at_zoom
+    after_placement = [
+        (item.ref.view_id, item.rect.column, item.rect.row, item.rect.column_span, item.rect.row_span)
+        for item in harness.page.board().free_grid
+    ]
+    assert after_placement == before_placement
+    payload_after = board_to_payload(harness.page.board())
+    assert payload_after["board"]["free_grid"] == payload_before["board"]["free_grid"]
+    assert harness.page._previews[ref].captured_digest == digest_before
+    assert harness.synced == []
+
+
+def test_switching_lod_does_not_rename_generic_titles_or_create_jobs(qtbot):
+    harness = _Harness(qtbot)
+    card, ref = _prepare_generic_title_card(harness, qtbot)
+    assert card._title.full_text() == "View 1"
+    for zoom in (1.0, 0.55, 0.35, 1.0):
+        harness.page.set_board_zoom(zoom)
+        qtbot.wait(10)
+        assert card._title.full_text() == "View 1"
+        chip = _type_chip(card)
+        assert chip is not None and chip.isVisible()
+        assert "频谱" in (chip.text() + chip.toolTip() + chip.accessibleName())
+    assert harness.synced == []
+    assert harness.opened == []
+    assert harness.page._previews[ref].captured_digest == "digest-keep"
 
 
 def test_overview_stays_available_when_fit_is_not_equivalent(qtbot):

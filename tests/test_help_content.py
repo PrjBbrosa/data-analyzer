@@ -266,12 +266,14 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "Board", "自由网格", "12 列", "24 张", "Option+Shift", "整理布局",
         "minimap", "直接拖卡片", "框选", "替换环",
         "Ctrl+滚轮", "适应", "25%", "双击",
+        "标题卡", "类型标签", "完整 ghost",
     ):
         assert keyword in text, f"UltraView guide missing: {keyword}"
     for banned in (
         "PDF", "SVG", "sidecar", "live card", "后台补图",
         "工具栏「总览」", "顶栏「总览」", "顶部「总览」",
         "Alt+拖", "Option 拖动位置",
+        "隐藏来源条", "约 60%", "约 40% 只留标题", "碰撞会提示",
     ):
         assert banned not in text, f"UltraView guide leaked P1 copy: {banned}"
 

@@ -145,6 +145,16 @@ def test_status_bar_single_file_can_label_is_fully_visible_under_qss(qapp, qtbot
         window._update_compute_progress(1000, 1000, token=token, flush_events=True)
         qapp.processEvents()
         assert widget.label.text() == "加载 1/1 · 读取 CAN 帧 · 100%"
+
+        # Horizontal clip stays; the mask must not be a tight contents-rect
+        # box that shaves '%' descent (the 1px-bottom clip in the status pill).
+        cr = widget.label.contentsRect()
+        mask_rect = widget.label.mask().boundingRect()
+        assert mask_rect.left() >= cr.left()
+        assert mask_rect.right() <= cr.right()
+        assert mask_rect.top() <= cr.top()
+        assert mask_rect.bottom() >= cr.bottom()
+        assert widget.label.height() >= metrics.height()
     finally:
         qapp.setStyleSheet(old_sheet)
 

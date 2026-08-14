@@ -14,6 +14,8 @@ from mf4_analyzer.io.loader import NO_CAN_FRAMES_MESSAGE, DataLoader  # noqa: E4
 from mf4_analyzer.io import blf_format  # noqa: E402
 from tests._helpers.blf_factory import (  # noqa: E402
     _sample_frame_payloads,
+    engine_payload,
+    make_can_frames,
     write_engine_only_dbc,
     write_raw_blf,
     write_sample_blf,
@@ -112,7 +114,9 @@ def test_probe_blf_dbc_reports_strong_match(tmp_path):
     assert probe.strength == "strong"
     assert probe.matched_frame_id_count == 2
     assert probe.total_frame_id_count == 2
-    assert probe.decoded_frame_count == 10
+    assert probe.decoded_sample_count == 10
+    assert probe.decode_sample_count == 10
+    assert probe.matched_frame_count == 10
     assert set(probe.signal_names) == {"EngineSpeed", "Throttle", "Speed"}
 
 
@@ -126,7 +130,9 @@ def test_probe_blf_dbc_reports_partial_match_as_weak(tmp_path):
     assert probe.strength == "weak"
     assert probe.matched_frame_id_count == 1
     assert probe.total_frame_id_count == 2
-    assert probe.decoded_frame_count == 5
+    assert probe.decoded_sample_count == 5
+    assert probe.decode_sample_count == 10
+    assert probe.matched_frame_count == 5
 
 
 def test_probe_blf_dbc_reports_no_match_without_raising(tmp_path):
@@ -137,7 +143,7 @@ def test_probe_blf_dbc_reports_no_match_without_raising(tmp_path):
 
     assert probe.is_match is False
     assert probe.strength == "none"
-    assert probe.decoded_frame_count == 0
+    assert probe.decoded_sample_count == 0
 
 
 def test_load_blf_zoh_holds_between_can_frames(tmp_path):
@@ -250,7 +256,10 @@ def test_probe_large_frame_list_does_not_decode_every_frame(tmp_path, monkeypatc
     assert probe.strength == "strong"
     assert probe.total_frame_count == 20_000
     assert probe.matched_frame_id_count == 2
-    assert probe.decoded_frame_count == 20_000
+    assert probe.decode_sample_count <= blf_format._PROBE_DECODE_CAP
+    assert probe.decoded_sample_count == probe.decode_sample_count
+    assert probe.decoded_sample_count < probe.total_frame_count
+    assert probe.sample_decode_success_ratio == pytest.approx(1.0)
     assert set(probe.signal_names) == {"EngineSpeed", "Throttle", "Speed"}
 
 
@@ -277,7 +286,9 @@ def test_probe_large_partial_match_stays_weak_without_full_decode(
     assert probe.strength == "weak"
     assert probe.matched_frame_id_count == 1
     assert probe.matched_frame_count == 10_000
-    assert 8_000 <= probe.decoded_frame_count <= 12_000
+    assert probe.decode_sample_count <= blf_format._PROBE_DECODE_CAP
+    assert 0.4 <= probe.sample_decode_success_ratio <= 0.6
+    assert probe.decoded_sample_count <= probe.decode_sample_count
 
 
 def test_load_blf_defers_zoh_until_column_access(tmp_path, monkeypatch):
@@ -294,6 +305,8 @@ def test_load_blf_defers_zoh_until_column_access(tmp_path, monkeypatch):
     data, channels, _units = DataLoader.load_blf(str(blf), dbc_paths=[str(dbc)])
 
     assert isinstance(data, blf_format.LazyZohFrame)
+    from mf4_analyzer.io.channel_frame import ChannelFrame
+    assert isinstance(data, ChannelFrame)
     assert calls == []
     speed = data["Speed"].to_numpy()
     assert len(calls) == 1
@@ -317,3 +330,128 @@ def test_assemble_sorts_unsorted_timestamps():
     assert channels == ["Time", "A"]
     assert list(data["Time"]) == pytest.approx([0.0, 1.0, 2.0])
     assert list(data["A"]) == pytest.approx([10.0, 20.0, 30.0])
+
+
+def test_probe_does_not_present_linear_scale_as_exact_decoded_count(tmp_path):
+    """V8H-A01: front-all-hit / tail-all-miss must not look like an exact count."""
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    eng = engine_payload()
+    front = blf_format._PROBE_DECODE_CAP
+    tail = 8_192
+    frames = make_can_frames([
+        (front, 0x123, eng),
+        (tail, 0x123, b""),
+    ])
+
+    probe = DataLoader.probe_blf_dbc_frames(frames, [str(dbc)])
+
+    assert probe.total_frame_count == front + tail
+    assert probe.decode_sample_count <= blf_format._PROBE_DECODE_CAP
+    assert probe.decoded_sample_count <= probe.decode_sample_count
+    assert probe.decoded_sample_count < probe.total_frame_count
+    # Sample stays in the sample domain; do not claim a file-wide exact decode.
+    assert probe.decoded_sample_count != probe.total_frame_count
+    if probe.estimated_decoded_frame_ratio is not None:
+        assert 0.0 <= probe.estimated_decoded_frame_ratio <= 1.0
+        assert probe.estimated_decoded_frame_ratio < 0.999
+
+
+def test_statistical_sample_covers_front_mid_and_tail(tmp_path, monkeypatch):
+    """V8H-A02: bursty hit rates must not be estimated from the front cap only."""
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    eng = engine_payload()
+    unique_front = blf_format._PROBE_DECODE_CAP
+    region = 6_000
+    frames = make_can_frames(
+        [(1, 0x1000 + i, b"\x00") for i in range(unique_front)]
+        + [
+            (region, 0x123, eng),
+            (region, 0x999, b"\x00"),
+            (region, 0x123, eng),
+        ],
+    )
+
+    probe = DataLoader.probe_blf_dbc_frames(frames, [str(dbc)])
+    statistical = blf_format._statistical_probe_indices(frames)
+    n = len(frames)
+    front_end, mid_end = n // 3, 2 * n // 3
+
+    assert statistical
+    assert min(statistical) < front_end
+    assert any(front_end <= index < mid_end for index in statistical)
+    assert max(statistical) >= mid_end
+    assert probe.decoded_sample_count > 0
+    assert "front" in probe.sampling_strategy
+    assert "mid" in probe.sampling_strategy
+    assert "tail" in probe.sampling_strategy
+
+
+def test_discovery_first_per_id_is_not_in_statistical_denominator(tmp_path):
+    """V8H-A02: first-of-each-ID discovery frames are not the ratio denominator."""
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    unique = 200
+    body = 12_000
+    frames = make_can_frames(
+        [(1, 0x2000 + i, b"\x00") for i in range(unique)]
+        + [(body, 0x123, engine_payload())],
+    )
+
+    discovery = blf_format._discovery_probe_indices(frames)
+    statistical = blf_format._statistical_probe_indices(frames)
+    probe = DataLoader.probe_blf_dbc_frames(frames, [str(dbc)])
+
+    assert discovery != statistical
+    assert probe.decode_sample_count == len(statistical)
+    assert probe.decode_sample_count != len(discovery)
+
+
+def test_cancelled_probe_leaves_estimates_empty_with_reason(tmp_path):
+    """V8H-A04: user cancel must not invent a scaled exact decode count."""
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    frames = make_can_frames([(20_000, 0x123, engine_payload())])
+
+    probe = DataLoader.probe_blf_dbc_frames(
+        frames, [str(dbc)], cancel_check=lambda: True,
+    )
+
+    assert probe.sampling_complete is False
+    assert probe.estimated_decoded_frame_ratio is None
+    assert probe.estimate_unavailable_reason
+    assert "cancel" in probe.estimate_unavailable_reason.lower()
+
+
+def test_truncated_probe_leaves_estimates_empty_with_reason(tmp_path):
+    """V8H-A04: a truncated tail must not fill estimate fields."""
+
+    class TruncatedFrames(list):
+        def __getitem__(self, index):
+            if isinstance(index, int) and index >= 12_000:
+                raise IndexError("truncated BLF tail")
+            return super().__getitem__(index)
+
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    frames = TruncatedFrames(make_can_frames([(16_000, 0x123, engine_payload())]))
+
+    probe = DataLoader.probe_blf_dbc_frames(frames, [str(dbc)])
+
+    assert probe.estimated_decoded_frame_ratio is None
+    assert probe.sampling_complete is False
+    assert probe.estimate_unavailable_reason
+    assert "truncat" in probe.estimate_unavailable_reason.lower()
+
+
+def test_corrupt_tail_leaves_estimates_empty_with_reason(tmp_path):
+    """V8H-A04: corrupt statistical samples empty estimates with a reason."""
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    frames = make_can_frames([(12_000, 0x123, engine_payload())])
+    start = 2 * len(frames) // 3
+    for index in range(start, len(frames)):
+        timestamp, arbitration_id, _payload = frames[index]
+        frames[index] = (timestamp, arbitration_id, object())
+
+    probe = DataLoader.probe_blf_dbc_frames(frames, [str(dbc)])
+
+    assert probe.estimated_decoded_frame_ratio is None
+    assert probe.sampling_complete is False
+    assert probe.estimate_unavailable_reason
+    assert "corrupt" in probe.estimate_unavailable_reason.lower()

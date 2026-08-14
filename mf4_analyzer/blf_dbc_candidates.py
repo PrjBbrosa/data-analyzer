@@ -150,22 +150,48 @@ def candidate_status(candidate) -> str:
 
 
 def rank_candidates(candidates):
-    """Rank displayed candidates by verified quality, then recency/structure."""
+    """Rank by exact coverage and sample ratio, then structure/path/name."""
 
     status_rank = {"strong": 3, "weak": 2, "unverified": 1, "mismatch": 0}
+
+    def exact_coverage(probe):
+        if probe is None:
+            return 0.0
+        total = int(getattr(probe, "total_frame_count", 0) or 0)
+        matched = getattr(probe, "matched_frame_count", None)
+        if matched is None or total <= 0:
+            return 0.0
+        return float(matched) / float(total)
+
+    def sample_ratio(probe):
+        if probe is None:
+            return 0.0
+        value = getattr(probe, "sample_decode_success_ratio", None)
+        if value is None:
+            value = getattr(probe, "estimated_decoded_frame_ratio", None)
+        return float(value or 0.0)
+
+    def filename_key(candidate):
+        paths = candidate.get("paths") or ()
+        return tuple(
+            os.path.normcase(os.path.basename(os.fspath(path)))
+            for path in paths
+        )
 
     def key(candidate):
         probe = candidate.get("probe")
         score = candidate.get("structural_score") or StructuralScore()
         signal_count = len(getattr(probe, "signal_names", ()) or ())
         return (
-            status_rank[candidate_status(candidate)],
-            float(getattr(probe, "decoded_frame_ratio", 0.0) or 0.0),
-            signal_count,
-            int(candidate.get("recent_rank", 0)),
-            score.frame_coverage,
-            score.id_coverage,
-            score.matched_id_count,
+            -status_rank[candidate_status(candidate)],
+            -exact_coverage(probe),
+            -sample_ratio(probe),
+            -signal_count,
+            -score.frame_coverage,
+            -score.id_coverage,
+            -score.matched_id_count,
+            -int(candidate.get("recent_rank", 0)),
+            filename_key(candidate),
         )
 
-    return sorted(candidates, key=key, reverse=True)
+    return sorted(candidates, key=key)

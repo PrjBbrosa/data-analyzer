@@ -3,9 +3,9 @@ id: codex-qt-rounded-popup-chrome
 status: active
 owners: [codex]
 keywords: [qt, pyqt, qmenu, qcombobox, qss, rounded, popup, focus-frame, popupWidth]
-paths: [mf4_analyzer/ui_kit/style.qss, mf4_analyzer/ui_kit/menus.py, mf4_analyzer/ui_kit/combo_popup_shell.py, mf4_analyzer/ui_kit/widgets/searchable_combo.py, mf4_analyzer/ui/view_tabbar.py, mf4_analyzer/ui/inspector_sections.py]
+paths: [mf4_analyzer/ui_kit/style.qss, mf4_analyzer/ui_kit/menus.py, mf4_analyzer/ui_kit/combo_popup_shell.py, mf4_analyzer/ui_kit/widgets/searchable_combo.py, mf4_analyzer/ui/view_tabbar.py, mf4_analyzer/ui/inspector_sections.py, mf4_analyzer/ui/widgets/channel_config_manager.py]
 checks: [rg -n "QMenu\\(" mf4_analyzer -g "*.py", rg -n "prepare_combo_popup|popupWidth|popupMinWidth|popupMaxWidth" mf4_analyzer/ui_kit tests/ui/test_combo_popup_shell.py, git diff --check]
-tests: [tests/ui/test_combo_popup_shell.py, tests/ui/test_view_tabbar.py, tests/ui/test_inspector.py]
+tests: [tests/ui/test_combo_popup_shell.py, tests/ui/test_view_tabbar.py, tests/ui/test_inspector.py, tests/ui/test_channel_config_manager.py]
 ---
 
 # Codex Qt Rounded Popup Chrome

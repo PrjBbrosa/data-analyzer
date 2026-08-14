@@ -5,10 +5,20 @@ from types import SimpleNamespace
 
 def _probe(
     *, strength, decoded_ratio, signal_count, decoded_signal_count=None,
+    exact_coverage=None, sample_ratio=None,
 ):
+    exact = (
+        decoded_ratio if exact_coverage is None else exact_coverage
+    )
+    sample = decoded_ratio if sample_ratio is None else sample_ratio
     return SimpleNamespace(
         strength=strength,
         decoded_frame_ratio=decoded_ratio,
+        sample_decode_success_ratio=sample,
+        sample_match_ratio=sample,
+        estimated_decoded_frame_ratio=sample,
+        matched_frame_count=int(round(1000 * exact)),
+        total_frame_count=1000,
         signal_names=tuple(f"signal_{index}" for index in range(signal_count)),
         decoded_signal_count=(
             signal_count
@@ -122,6 +132,63 @@ def test_equal_strength_ranks_by_unique_signal_names_not_decoded_samples():
     }
 
     assert rank_candidates([repetitive, richer])[0] is richer
+
+
+def test_rank_uses_exact_coverage_and_sample_ratio_not_scaled_decoded_ratio():
+    from mf4_analyzer.blf_dbc_candidates import rank_candidates
+
+    first_sampled_strong = {
+        "paths": ["front-strong.dbc"],
+        "recent_rank": 10,
+        "probe": _probe(
+            strength="strong",
+            decoded_ratio=0.99,
+            signal_count=2,
+            exact_coverage=0.80,
+            sample_ratio=0.85,
+        ),
+    }
+    actually_better = {
+        "paths": ["better.dbc"],
+        "recent_rank": 1,
+        "probe": _probe(
+            strength="strong",
+            decoded_ratio=0.80,
+            signal_count=2,
+            exact_coverage=0.95,
+            sample_ratio=0.99,
+        ),
+    }
+
+    ranked = rank_candidates([first_sampled_strong, actually_better])
+    assert ranked[0] is actually_better
+
+
+def test_rank_tie_breaks_by_structure_path_then_stable_filename():
+    from mf4_analyzer.blf_dbc_candidates import StructuralScore, rank_candidates
+
+    shared = _probe(
+        strength="strong",
+        decoded_ratio=0.9,
+        signal_count=3,
+        exact_coverage=0.9,
+        sample_ratio=0.9,
+    )
+    later_name = {
+        "paths": ["/bus/z-end.dbc"],
+        "recent_rank": 1,
+        "structural_score": StructuralScore(0.5, 0.5, 1),
+        "probe": shared,
+    }
+    earlier_name = {
+        "paths": ["/bus/a-start.dbc"],
+        "recent_rank": 1,
+        "structural_score": StructuralScore(0.5, 0.5, 1),
+        "probe": shared,
+    }
+
+    ranked = rank_candidates([later_name, earlier_name])
+    assert ranked[0] is earlier_name
 
 
 def test_unprobed_candidate_is_reported_as_unverified():

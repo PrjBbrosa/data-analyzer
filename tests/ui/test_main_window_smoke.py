@@ -748,6 +748,43 @@ def test_status_hint_quickref_button_stays_inside_bar_under_qss(qapp, qtbot):
         text = help_link.findChild(QLabel, "inspectorHelpText")
         assert mark is not None and text is not None
         assert abs(mark.geometry().center().y() - text.geometry().center().y()) <= 3
+        assert text.text() == "使用说明"
+        assert text.geometry().right() <= help_link.rect().right(), (
+            f"「使用说明」 clipped by help button "
+            f"(text.right={text.geometry().right()} "
+            f"button.right={help_link.rect().right()})"
+        )
+        link_in_inspector = help_link.mapTo(
+            w.inspector, help_link.rect().topLeft()
+        )
+        from PyQt5.QtCore import QRect
+        from PyQt5.QtGui import QFontMetrics
+
+        mapped = QRect(link_in_inspector, help_link.size())
+        # 7px Inspector radius plus a 1px stroke; the trailing CJK must stay
+        # inside the card, not in the rounded corner / window edge.
+        inner = w.inspector.rect().adjusted(0, 0, -7, -1)
+        assert inner.contains(mapped), (
+            f"help link {mapped.getRect()} escapes inspector inner "
+            f"{inner.getRect()} (inspector={w.inspector.rect().getRect()})"
+        )
+        metrics = QFontMetrics(text.font())
+        assert text.width() >= metrics.horizontalAdvance("使用说明") - 1
+
+        w.statusBar.showMessage("1%")
+        qapp.processEvents()
+        assert w.statusBar.currentMessage() == "1%"
+        remnant_img = w.statusBar.grab().toImage()
+        hint_left = max(2, bar.x())
+        y_mid = remnant_img.height() // 2
+        leftover = []
+        for x in range(2, hint_left):
+            color = QColor(remnant_img.pixel(x, y_mid))
+            if color.red() < 200 or color.green() < 200 or color.blue() < 200:
+                leftover.append((x, color.red(), color.green(), color.blue()))
+        assert leftover == [], (
+            f"status-bar showMessage remnant left of QuickRef: {leftover}"
+        )
     finally:
         qapp.setStyleSheet(old_sheet)
 

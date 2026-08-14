@@ -118,6 +118,27 @@ QToolButton#searchFieldIconButton:disabled {
     border: none;
     color: inherit;
 }
+/* QDialog#id QToolButton is (1,0,2) and otherwise paints SearchField's
+ * 18px magnifier as a white 8px chip. Attribute + descendant ID is (1,1,2). */
+QLineEdit[role="search"] QToolButton#searchFieldIconButton {
+    min-width: 0;
+    max-width: 18px;
+    min-height: 0;
+    max-height: 18px;
+    padding: 0;
+    margin: 0;
+    border-width: 0px;
+    border-style: none;
+    border-radius: 0;
+    background-color: transparent;
+}
+QLineEdit[role="search"] QToolButton#searchFieldIconButton:hover,
+QLineEdit[role="search"] QToolButton#searchFieldIconButton:pressed,
+QLineEdit[role="search"] QToolButton#searchFieldIconButton:checked,
+QLineEdit[role="search"] QToolButton#searchFieldIconButton:disabled {
+    background-color: transparent;
+    border-color: transparent;
+}
 
 /* Combo / spin button regions — provide a faint resting tint so the
  * click target is discoverable without hover, plus explicit arrow
@@ -3130,8 +3151,11 @@ QStatusBar#surfaceStatusBar QLabel#computeProgressLabel {
      * tests/ui_kit/test_stylesheet_parses.py. */
     qproperty-alignment: 'AlignVCenter | AlignLeft';
     /* Keep '%' clear of the rounded progress-bar tip (see ComputeProgressWidget
-     * _SPACING / _TEXT_PAD). */
+     * _SPACING / _TEXT_PAD). Vertical padding keeps the glyph descent inside
+     * the label; a contents-rect mask used to shave ~1px off the bottom. */
+    padding-top: 1px;
     padding-right: 6px;
+    padding-bottom: 2px;
 }
 
 QStatusBar#surfaceStatusBar QProgressBar#computeProgressBar {
@@ -3194,7 +3218,7 @@ QFrame#inspectorHelpRow {
 QPushButton#inspectorHelpLink {
     background: transparent;
     border: none;
-    padding: 2px 4px;
+    padding: 2px 8px;
     color: #5b6472;
     font-size: 12px;
     text-align: right;
@@ -3659,7 +3683,21 @@ QLabel#channelConfigHtmlCountPill {
     font-weight: 700;
 }
 QLineEdit#channelConfigHtmlConfigSearch,
-QLineEdit#channelConfigHtmlChannelSearch,
+QLineEdit#channelConfigHtmlChannelSearch {
+    /* Flat manager chrome: 30px content + 1px borders = base 32px.
+     * Do not use padding shorthand — SearchField owns side-icon text
+     * margins, and a 10px pad would fight the 18px leading magnifier. */
+    min-height: {{CONTROL_H_BASE_FLAT_CONTENT}};
+    padding-top: 0;
+    padding-right: 4px;
+    padding-bottom: 0;
+    padding-left: 4px;
+    border: 1px solid #c8d4e3;
+    border-radius: 8px;
+    background-color: #ffffff;
+    color: #172033;
+    font-size: 12px;
+}
 QDialog#channelConfigHtmlRenameDialog QLineEdit,
 QDialog#channelConfigHtmlImportDialog QComboBox {
     /* Flat manager chrome: 30px content + 1px borders = base 32px. */
@@ -3749,6 +3787,11 @@ QFrame#channelConfigHtmlChannelHead {
     border-bottom: 1px solid #dde5f0;
     background-color: #f8fafc;
 }
+QWidget#channelConfigHtmlCheckHost,
+QWidget#channelConfigHtmlCheckCell,
+QCheckBox#channelConfigHtmlCheck {
+    background-color: transparent;
+}
 QLabel#channelConfigHtmlColumnHead { color: #697991; font-size: 10px; font-weight: 700; }
 QTableWidget#channelConfigHtmlChannelTable {
     border: none;
@@ -3812,6 +3855,28 @@ QDialog#channelConfigManagerHtml QToolButton:disabled {
     background-color: #f6f8fb;
     color: #a8b3c2;
 }
+/* Dialog-wide QToolButton chrome is (1,0,2) and otherwise wins over
+ * QToolButton#searchFieldIconButton, turning the magnifier into a white
+ * 8px-radius chip inside the search field. Two IDs beat that rule. */
+QDialog#channelConfigManagerHtml QToolButton#searchFieldIconButton {
+    min-width: 0;
+    max-width: 18px;
+    min-height: 0;
+    max-height: 18px;
+    padding: 0;
+    margin: 0;
+    border-width: 0px;
+    border-style: none;
+    border-radius: 0;
+    background-color: transparent;
+    font-weight: 400;
+}
+QDialog#channelConfigManagerHtml QToolButton#searchFieldIconButton:hover,
+QDialog#channelConfigManagerHtml QToolButton#searchFieldIconButton:pressed,
+QDialog#channelConfigManagerHtml QToolButton#searchFieldIconButton:disabled {
+    background-color: transparent;
+    border-color: transparent;
+}
 QDialog#channelConfigManagerHtml QPushButton[role="primary"],
 QDialog#channelConfigManagerHtml QToolButton[role="primary"] {
     border-color: {{CONTROL_ACCENT_BORDER}};
@@ -3833,10 +3898,21 @@ QPushButton#channelConfigHtmlRemoveChannels {
 QPushButton#channelConfigHtmlDeleteConfig:hover,
 QPushButton#channelConfigHtmlDeleteConfigs:hover,
 QPushButton#channelConfigHtmlRemoveChannels:hover { background-color: #fff2f3; }
-QCheckBox#channelConfigHtmlCheck { spacing: 0; }
+QCheckBox#channelConfigHtmlCheck {
+    spacing: 0;
+    margin: 0;
+    padding: 0;
+    min-width: 20px;
+    min-height: 20px;
+    max-width: 20px;
+    max-height: 20px;
+    background-color: transparent;
+}
 QCheckBox#channelConfigHtmlCheck::indicator {
     width: 16px;
     height: 16px;
+    subcontrol-origin: padding;
+    subcontrol-position: center;
     border: 1px solid #aebdce;
     border-radius: 3px;
     background-color: #ffffff;
@@ -3998,21 +4074,59 @@ QLabel#ultraViewAxisWarning {
 QToolButton#ultraViewLibrarySectionHead {
     min-height: 24px;
     max-height: 24px;
-    padding: 0px 6px;
+    padding: 0px 8px 0px 8px;
     margin: 0;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
-    background-color: #eef1f5;
-    color: #475569;
-    font-weight: 600;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
+    border-left: 2px solid #c9dcf4;
+    border-radius: 0;
+    background-color: transparent;
+    color: #3d4f66;
+    font-weight: 700;
     text-align: left;
 }
-QToolButton#ultraViewLibrarySectionHead:hover,
-QToolButton#ultraViewLibrarySectionHead:pressed,
 QToolButton#ultraViewLibrarySectionHead:checked {
-    background-color: #e4e9ef;
-    border-color: #cbd5e1;
-    color: #334155;
+    background-color: transparent;
+    border-left-color: #c9dcf4;
+    color: #3d4f66;
+}
+QToolButton#ultraViewLibrarySectionHead:hover,
+QToolButton#ultraViewLibrarySectionHead:checked:hover {
+    background-color: #f4f8ff;
+    border-left-color: #1769e0;
+    color: #1769e0;
+}
+QToolButton#ultraViewLibrarySectionHead:pressed,
+QToolButton#ultraViewLibrarySectionHead:checked:pressed {
+    background-color: #eaf2fb;
+    border-left-color: #145fc8;
+    color: #145fc8;
+}
+QToolButton#ultraViewLibraryPin {
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background-color: transparent;
+}
+QToolButton#ultraViewLibraryPin:hover {
+    background-color: #f2f6fa;
+    border-color: #d4e0ea;
+}
+QToolButton#ultraViewLibraryPin:checked,
+QToolButton#ultraViewLibraryPin[active="true"] {
+    background-color: #e9f1ff;
+    border-color: #bdd6ff;
+}
+QToolButton#ultraViewLibraryPin:checked:hover,
+QToolButton#ultraViewLibraryPin[active="true"]:hover {
+    background-color: #dceaff;
+    border-color: #8cb8f7;
 }
 QLineEdit#ultraViewLibrarySearch {
     border: 1px solid #d6e0eb;
@@ -4125,6 +4239,21 @@ QToolButton#ultraViewCardSyncButton:focus {
 QWidget#ultraViewCardHeader,
 QWidget#ultraViewCardFooter {
     background-color: transparent;
+}
+QToolButton#ultraViewCardTypeChip {
+    padding: 0 6px;
+    border: 1px solid #d6e0eb;
+    border-radius: 4px;
+    background-color: #f4f7fb;
+    color: #334155;
+    font-size: 10px;
+    font-weight: 600;
+}
+QToolButton#ultraViewCardTypeChip:hover,
+QToolButton#ultraViewCardTypeChip:focus {
+    border-color: #bdd6ff;
+    background-color: #eef4fb;
+    color: #1769e0;
 }
 QLabel#ultraViewZoomLabel {
     color: #475569;
@@ -4401,6 +4530,63 @@ QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][a
     background-color: #cbdfff;
     color: #145fc8;
 }
+
+/* Persistent layout mode vs a temporarily open panel must not share one wash.
+ * modeActive keeps the filled accent; panelOpen is outline-only. */
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"],
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"] {
+    border-color: #bdd6ff;
+    background-color: #e9f1ff;
+    color: #1769e0;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:hover {
+    border-color: #8cb8f7;
+    background-color: #dceaff;
+    color: #1769e0;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:pressed,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"]:pressed {
+    border-color: #639eea;
+    background-color: #cbdfff;
+    color: #145fc8;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"],
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"] {
+    border-color: #1769e0;
+    background-color: #ffffff;
+    color: #1769e0;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:hover {
+    border-color: #145fc8;
+    background-color: #f6faff;
+    color: #145fc8;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:pressed,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][panelOpen="true"]:pressed {
+    border-color: #104b9f;
+    background-color: #e9f1ff;
+    color: #104b9f;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"],
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"] {
+    border-color: #1769e0;
+    background-color: #e9f1ff;
+    color: #1769e0;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:hover {
+    border-color: #145fc8;
+    background-color: #dceaff;
+    color: #145fc8;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:pressed,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][modeActive="true"][panelOpen="true"]:pressed {
+    border-color: #104b9f;
+    background-color: #cbdfff;
+    color: #104b9f;
+}
 QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"]:disabled,
 QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"]:disabled,
 QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"]:disabled,
@@ -4477,23 +4663,39 @@ QLabel#ultraViewCardStatus[status="fresh"] {
     color: #0fa78f;
 }
 
-/* Presentation mode contains only its explicit exit affordance.  Page code
- * owns visibility; this selector makes the surviving exit control impossible
- * to mistake for an idle navigation button. */
-QWidget#ultraViewPage[presentation="true"] QToolButton#ultraViewGlobalPresentationButton,
-QToolButton[chrome="ultraview"][role="presentationExit"] {
+/* Presentation-exit chrome is owned by the island/button properties, not a
+ * page-descendant plus unique objectName (Qt ID matching ignores that
+ * ancestor qualifier).  Paint the island itself so the 4px padding does
+ * not show as a white square around the 32px exit control. */
+QFrame#ultraViewGlobalIsland[presentation="true"] {
+    background-color: #1769e0;
     border-color: #1769e0;
+}
+QFrame#ultraViewGlobalIsland[presentation="true"]:hover {
+    background-color: #145fc8;
+    border-color: #145fc8;
+}
+QToolButton[chrome="ultraview"][role="presentationExit"],
+QToolButton[chrome="ultraview"][role="presentationExit"]:checked {
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #1769e0;
+    border-radius: 8px;
     background-color: #1769e0;
     color: #ffffff;
 }
-QWidget#ultraViewPage[presentation="true"] QToolButton#ultraViewGlobalPresentationButton:hover,
-QToolButton[chrome="ultraview"][role="presentationExit"]:hover {
+QToolButton[chrome="ultraview"][role="presentationExit"]:hover,
+QToolButton[chrome="ultraview"][role="presentationExit"]:checked:hover {
     border-color: #145fc8;
     background-color: #145fc8;
     color: #ffffff;
 }
-QWidget#ultraViewPage[presentation="true"] QToolButton#ultraViewGlobalPresentationButton:pressed,
-QToolButton[chrome="ultraview"][role="presentationExit"]:pressed {
+QToolButton[chrome="ultraview"][role="presentationExit"]:pressed,
+QToolButton[chrome="ultraview"][role="presentationExit"]:checked:pressed {
     border-color: #104b9f;
     background-color: #104b9f;
     color: #ffffff;

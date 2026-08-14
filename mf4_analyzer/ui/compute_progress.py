@@ -10,9 +10,11 @@ class _ClippedProgressLabel(QLabel):
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
-        # QLabel paints past its rect by default. Mask keeps '%' from landing
-        # on the neighbouring progress bar when elision lags a layout pass.
-        self.setMask(QRegion(self.contentsRect()))
+        # Clip only in X so '%' descent is not shaved by a contents-rect mask.
+        # The original mask matched contentsRect() exactly and cut ~1px off
+        # the bottom of the glyph in the 32px status pill.
+        cr = self.contentsRect()
+        self.setMask(QRegion(cr.adjusted(0, -2, 0, 3)))
 
 
 class ComputeProgressWidget(QWidget):
@@ -46,7 +48,7 @@ class ComputeProgressWidget(QWidget):
         self.label = _ClippedProgressLabel(self)
         self.label.setObjectName("computeProgressLabel")
         self.label.setTextFormat(Qt.PlainText)
-        self.label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self.label.setMinimumWidth(self._MIN_LABEL_WIDTH)
         self.label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
 
@@ -112,11 +114,11 @@ class ComputeProgressWidget(QWidget):
                 self._chrome_width() + label_w,
             ),
         )
-        height = max(22, self.label.sizeHint().height(), self.bar.sizeHint().height())
+        height = max(24, self.label.sizeHint().height(), self.bar.sizeHint().height())
         return QSize(width, height)
 
     def minimumSizeHint(self) -> QSize:
-        return QSize(self._chrome_width() + self._MIN_LABEL_WIDTH, 22)
+        return QSize(self._chrome_width() + self._MIN_LABEL_WIDTH, 24)
 
     def _label_text_budget(self) -> int:
         """Pixels available for painted label copy in the current layout."""

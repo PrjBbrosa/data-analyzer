@@ -58,7 +58,7 @@ lesson by default.
 | [Qt Render Probes Isolate QSettings](codex-qt-render-probes-isolate-qsettings.md) | Writing or running Qt screenshot/render probes, smoke scripts, or UI | See lesson |
 | [Pyqt Heatmap Slice Curve AA Interaction Guard](pyqt-heatmap-slice-curve-aa-interaction-guard.md) | Touching `PgHeatmapCanvas` slice-curve rendering, slice marker | See lesson |
 | [Pyqt Heatmap Copy Includes Widget Overlays](pyqt-heatmap-copy-includes-widget-overlays.md) | Touching heatmap copy/export, `PgHeatmapCanvas.grab_pixmap`, or | See lesson |
-| [Status Hint Buttons Need Rendered Geometry](codex-status-hint-button-geometry.md) | Changing the bottom status-line hint bar, the quickref `?` button, or | See lesson |
+| [Status Chrome Must Keep Glyphs Inside Rounded Hosts](codex-status-hint-button-geometry.md) | Changing the bottom status-line hint bar, QuickRef `?`, compute-progress label, Inspector 「使用说明」, or QStatusBar.showMessage | See lesson |
 | [PyQt Drag Event MimeData Lifetime](pyqt-drag-event-mimedata-lifetime.md) | Writing pytest-qt tests that manually construct `QDragEnterEvent`, | See lesson |
 | [Overlay Live Visibility Retick](codex-overlay-live-visibility-retick.md) | Touching TimeDomain overlay-mode live visibility toggles for filter | See lesson |
 | [Status Facts Preserve Their Field Semantics](b5-status-facts-preserve-field-semantics.md) | Editing the Acquisition Cockpit recording fact stream or its | See lesson |
@@ -169,7 +169,7 @@ lesson by default.
 | [Channel Tree Selected Fill Must Stay Rectangular](codex-channel-tree-selected-fill-must-stay-rectangular.md) | Changing channel-tree selected-row QSS, `drawBranches`, or the | See lesson |
 | [QDrag.exec_ Must Outlive Its Source Widget](ultraview-qdrag-exec-must-outlive-source.md) | Implementing or testing Qt drag-drop that rebuilds the library, grid, | See lesson |
 | [Toolbar Enable Matrix At Construction](pyqt-ui/2026-08-14-toolbar-enable-matrix-at-construction.md) | Changing toolbar button enable/disable rules, `set_enabled_for_mode`, or any gated QPushButton whose live state is applied only on a later event. | See lesson |
-| [CAN Log Probe Samples Decode And Defers ZOH](2026-08-14-can-log-probe-sample-and-lazy-zoh.md) | Changing BLF/CANoe ASC import, DBC probe strength, or the shared-time ZOH assemble that turns CAN signals into a FileData table. | See lesson |
+| [CAN Log Probe Samples Decode And Defers ZOH](2026-08-14-can-log-probe-sample-and-lazy-zoh.md) | Changing BLF/CANoe ASC import, DBC probe strength, ChannelFrame/lazy ZOH assemble, or UI copy that reports decoded frame counts. | See lesson |
 | [ColorBarItem setLevels Poisons Live Drag](pyqt-ui/2026-08-14-colorbar-setlevels-poisons-live-drag.md) | Heatmap colorbar drag, `ColorBarItem.setLevels`, inspector `apply_params` of `z_floor`/`z_ceiling`, `levels_changed`, or locked-levels sibling mirror. | See lesson |
 | [Project Open Recomputes Every Analysis View](project-open-recomputes-every-analysis-view.md) | Changing project save/open, analysis View restore, FFT pane.sources capture, or any path that used to call `do_fft` / `do_order_time` / `do_fft_time` / `do_frf` after loading a `.tlproj`. | See lesson |
 | [UltraView Zoom Maps Receiver Local Pos](pyqt-ui/2026-08-14-ultraview-zoom-maps-receiver-local-pos.md) | UltraView board zoom, Ctrl+wheel, trackpad pinch, `handle_zoom_wheel`, `handle_pinch`, or `_cursor_in_scroll_viewport`. | See lesson |
@@ -177,15 +177,18 @@ lesson by default.
 | [UltraView Full-Bleed Canvas Parks Fit At Origin](pyqt-ui/2026-08-14-ultraview-full-bleed-fit-origin.md) | Changing UltraView `FloatingLayout.board`, BoardScrollArea geometry, `zoom_fit`, or zoom-at-cursor scroll math. | See lesson |
 | [Project Restore Progress Yields The Event Loop](project-restore-progress-yields-event-loop.md) | Changing project open, analysis-view restore scheduling, compute progress, or any `processEvents` on the restore path. | See lesson |
 | [UltraView Card Context Follows Page Selection](pyqt-ui/2026-08-14-ultraview-card-context-follows-selection.md) | Changing UltraView `CardContextIsland`, Esc, empty-canvas click, `UltraViewPage._selected`, or `FreeGridBoard` gesture selection. | See lesson |
-| [UltraView Overlap Asks Then Auto-Avoids](pyqt-ui/2026-08-14-ultraview-overlap-asks-auto-avoid.md) | Changing UltraView free-grid drag/resize commit, overlap toasts, or `plan_overlap_avoidance`. | See lesson |
+| [UltraView Overlap Previews Then Translates Without A Modal](pyqt-ui/2026-08-14-ultraview-overlap-asks-auto-avoid.md) | Changing UltraView free-grid drag/resize commit, overlap toasts, `plan_layout`, or `plan_overlap_avoidance`. | See lesson |
 | [UltraView Island SizeHint Uses isHidden](pyqt-ui/2026-08-14-ultraview-island-sizehint-uses-ishidden.md) | Changing UltraView floating-island `sizeHint`, `GlobalIsland.set_edit_visible`, or `_chrome_sizes` / `_apply_floating_layout` geometry. | See lesson |
 | [UltraView QSS ID Ignores Ancestor Qualifier](pyqt-ui/2026-08-14-ultraview-qss-id-ignores-ancestor.md) | Styling an UltraView control with a page-level QSS descendant plus a child `#objectName`, especially `ultraViewGlobalPresentationButton`. | See lesson |
 | [UltraView Stale Means Digest Mismatch; Sync Recaptures](pyqt-ui/2026-08-14-ultraview-stale-means-digest-sync-recaptures.md) | Changing UltraView card status, `derive_preview_status`, presentation digest, idle recapture, or adding a Board sync/refresh control. | See lesson |
 | [Heatmap Slice Y-Fit Uses Visible X](pyqt-ui/2026-08-14-heatmap-slice-yfit-uses-visible-x.md) | Changing FFT-vs-Time / Order slice context menus, `y_autofit_handler`, or slice amplitude ranging. | See lesson |
 | [UltraView Zoom Zero Local Is Not Cursor](pyqt-ui/2026-08-14-ultraview-zoom-zero-local-is-not-cursor.md) | UltraView board zoom, Ctrl+wheel, trackpad pinch, `_cursor_in_scroll_viewport`, or any fix that maps `event.position()` as the zoom anchor. | See lesson |
 | [Compute Progress Elides From QSS Chrome Not Long Copy](pyqt-ui/2026-08-14-compute-progress-elides-from-qss-chrome.md) | Changing `ComputeProgressWidget`, status-bar load/compute labels, or QSS for `#computeProgressLabel` / `#computeProgressBar`. | See lesson |
-| [UltraView Edge Shrinks Neighbours Instead Of Dead-Ending](pyqt-ui/2026-08-14-ultraview-edge-shrinks-neighbors.md) | Changing UltraView free-grid drag/resize commit, `FEEDBACK_OUT_OF_GRID`, `plan_boundary_yield`, or `plan_neighbor_shrink`. | See lesson |
+| [UltraView Edge Rejects Instead Of Shrinking Neighbours](pyqt-ui/2026-08-14-ultraview-edge-shrinks-neighbors.md) | Changing UltraView free-grid drag/resize commit, `FEEDBACK_OUT_OF_GRID`, `plan_layout`, `plan_boundary_yield`, or `plan_neighbor_shrink`. | See lesson |
 | [UltraView Layout Rail Tracks Template Mode](pyqt-ui/2026-08-14-ultraview-layout-rail-tracks-template.md) | Changing UltraView `ToolRail` button order, layout/free-grid `active` chrome, or `_sync_button_states`. | See lesson |
+| [Idle Quality Follows Local Canvas Activity](idle-quality-follows-local-canvas-activity.md) | Changing pyqtgraph idle-AA / idle-quality timers, especially any `QApplication.mouseButtons()` gate on `PgLineCanvas` or a sibling canvas. | See lesson |
+| [FFT Spectra Must Peak-Hold, Not Min/Max-Fill](codex-fft-spectrum-peak-hold.md) | Changing `PgLineCanvas` spectrum plotting, `_spectrum_plot_arrays`, | See lesson |
+| [Dialog QToolButton Chrome Must Spare SearchField Icons](codex-dialog-toolbutton-chrome-spares-search-field.md) | Adding dialog-wide `QToolButton` / `QPushButton` QSS, embedding | See lesson |
 
 ## Selection Rules
 

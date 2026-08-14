@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
 
 from ..channel_config import ChannelConfigPreview, ChannelSelectionConfig
 from ...ui_kit.control_style import CONTROL_HEIGHTS
+from ...ui_kit.menus import apply_rounded_menu_chrome
 from ...ui_kit.widgets import SearchField
 from ..channel_config_transfer import (
     TRANSFER_SUFFIX,
@@ -418,18 +419,32 @@ class ChannelConfigManagerDialog(QDialog):
         channel_head.setObjectName("channelConfigHtmlChannelHead")
         channel_head.setFixedHeight(38)
         channel_head_layout = QHBoxLayout(channel_head)
-        channel_head_layout.setContentsMargins(14, 0, 14, 0)
+        channel_head_layout.setContentsMargins(0, 0, 0, 0)
         channel_head_layout.setSpacing(0)
-        self.master_channel = QCheckBox(channel_head)
+        check_host = QWidget(channel_head)
+        check_host.setObjectName("channelConfigHtmlCheckHost")
+        check_host.setAttribute(Qt.WA_StyledBackground, True)
+        check_host.setAutoFillBackground(False)
+        check_host.setFixedWidth(42)
+        check_host_layout = QHBoxLayout(check_host)
+        check_host_layout.setContentsMargins(0, 0, 0, 0)
+        check_host_layout.setSpacing(0)
+        self.master_channel = QCheckBox(check_host)
         self.master_channel.setObjectName("channelConfigHtmlCheck")
+        self.master_channel.setAttribute(Qt.WA_StyledBackground, True)
+        self.master_channel.setAutoFillBackground(False)
         self.master_channel.setAccessibleName("全选当前筛选通道")
-        self.master_channel.setFixedSize(42, 20)
+        self.master_channel.setFixedSize(20, 20)
         self.master_channel.setFocusPolicy(Qt.NoFocus)
         self.master_channel.toggled.connect(self._toggle_visible_channels)
-        channel_head_layout.addWidget(self.master_channel, 0, Qt.AlignVCenter)
+        check_host_layout.addWidget(self.master_channel, 0, Qt.AlignCenter)
+        channel_head_layout.addWidget(check_host, 0, Qt.AlignVCenter)
         header_name = QLabel("通道名称", channel_head)
         header_name.setObjectName("channelConfigHtmlColumnHead")
-        channel_head_layout.addWidget(header_name, 1)
+        header_name.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        header_name.setContentsMargins(8, 0, 0, 0)
+        self.channel_name_header = header_name
+        channel_head_layout.addWidget(header_name, 1, Qt.AlignVCenter)
         for text, width in (("单位", 92), ("当前 View", 132), ("", 48)):
             header = QLabel(text, channel_head)
             header.setObjectName("channelConfigHtmlColumnHead")
@@ -439,6 +454,7 @@ class ChannelConfigManagerDialog(QDialog):
         channel_layout.addWidget(channel_head)
         self.channel_table = QTableWidget(0, 5, channel_area)
         self.channel_table.setObjectName("channelConfigHtmlChannelTable")
+        self.channel_table.setFrameShape(QFrame.NoFrame)
         self.channel_table.setShowGrid(False)
         self.channel_table.setSelectionMode(QAbstractItemView.NoSelection)
         self.channel_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -500,12 +516,18 @@ class ChannelConfigManagerDialog(QDialog):
         self._toast_timer.timeout.connect(self.toast.hide)
 
     def _build_export_menu(self) -> QMenu:
-        menu = QMenu(self)
+        menu = apply_rounded_menu_chrome(QMenu(self))
         current = menu.addAction("导出当前配置")
-        current.triggered.connect(lambda: self._export_to_file(current_only=True))
+        current.triggered.connect(self._export_current_config)
         all_configs = menu.addAction("导出全部配置")
-        all_configs.triggered.connect(lambda: self._export_to_file(current_only=False))
+        all_configs.triggered.connect(self._export_all_configs)
         return menu
+
+    def _export_current_config(self) -> None:
+        self._export_to_file(current_only=True)
+
+    def _export_all_configs(self) -> None:
+        self._export_to_file(current_only=False)
 
     def _control(self, control) -> None:
         control.setFixedHeight(self.CONTROL_HEIGHT)
@@ -666,18 +688,22 @@ class ChannelConfigManagerDialog(QDialog):
     def _check_cell(self, checked: bool, callback, accessible_name: str) -> QWidget:
         cell = QWidget(self.channel_table)
         cell.setObjectName("channelConfigHtmlCheckCell")
+        cell.setAttribute(Qt.WA_StyledBackground, True)
+        cell.setAutoFillBackground(False)
         cell.setProperty("chosen", bool(checked))
         layout = QHBoxLayout(cell)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setAlignment(Qt.AlignCenter)
+        layout.setSpacing(0)
         check = QCheckBox(cell)
         check.setObjectName("channelConfigHtmlCheck")
+        check.setAttribute(Qt.WA_StyledBackground, True)
+        check.setAutoFillBackground(False)
         check.setAccessibleName(accessible_name)
         check.setFixedSize(20, 20)
         check.setFocusPolicy(Qt.NoFocus)
         check.setChecked(checked)
         check.toggled.connect(callback)
-        layout.addWidget(check)
+        layout.addWidget(check, 0, Qt.AlignCenter)
         return cell
 
     def _rebuild_channel_rows(self) -> None:
@@ -700,6 +726,7 @@ class ChannelConfigManagerDialog(QDialog):
             )
             name = QTableWidgetItem(channel)
             name.setToolTip(channel)
+            name.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
             self.channel_table.setItem(row, 1, name)
             hint = config.unit_hint(channel) or self._preview.unit_for(channel)
             unit = QTableWidgetItem(hint or "—")

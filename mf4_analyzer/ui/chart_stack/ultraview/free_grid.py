@@ -6,6 +6,7 @@ metrics.  No helper here knows about widgets, preview pixels, or MainWindow.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterable, Mapping, Sequence
 
 from mf4_analyzer.ui.ultraview_state import (
@@ -30,6 +31,66 @@ GRID_ROW_HEIGHT = 88
 GRID_MIN_VISIBLE_ROWS = 6
 
 Rect = tuple[int, int, int, int]
+
+PLANNER_SEARCH_CAP = 512
+LAYOUT_MOVE = "move"
+LAYOUT_RESIZE = "resize"
+LAYOUT_ARRANGE = "arrange"
+
+
+class LayoutRejectReason(Enum):
+    NO_LEGAL_LAYOUT = "no_legal_layout"
+    SEARCH_CAP = "search_cap"
+    SPAN_INVARIANT = "span_invariant"
+    INVALID_INPUT = "invalid_input"
+    OUT_OF_BOUNDS = "out_of_bounds"
+
+
+@dataclass(frozen=True)
+class RectTransition:
+    ref: UltraViewRef
+    before: GridRect
+    after: GridRect
+
+
+@dataclass(frozen=True)
+class LayoutPlan:
+    """Deterministic collision result. Widgets commit this object; they do not
+    re-run grow/shrink heuristics on release."""
+
+    accepted: bool
+    reason: LayoutRejectReason | None
+    mover_before: GridRect | None
+    mover_after: GridRect | None
+    displaced_before_after: tuple[RectTransition, ...]
+    operation: str
+    based_on_layout_revision: int
+    mover_ref: UltraViewRef | None = None
+    search_visits: int = 0
+
+    def committed_updates(self) -> tuple[tuple[UltraViewRef, GridRect], ...]:
+        if not self.accepted:
+            return ()
+        items: list[tuple[UltraViewRef, GridRect]] = []
+        if (
+            self.mover_ref is not None
+            and self.mover_after is not None
+            and self.mover_before != self.mover_after
+        ):
+            items.append((self.mover_ref, self.mover_after))
+        items.extend((item.ref, item.after) for item in self.displaced_before_after)
+        return tuple(items)
+
+    def affected_count(self) -> int:
+        return len(self.committed_updates())
+
+    def preview_rects(self) -> tuple[tuple[UltraViewRef, GridRect], ...]:
+        """Mover first, then displaced — the geometry ghost must paint."""
+        items: list[tuple[UltraViewRef, GridRect]] = []
+        if self.mover_ref is not None and self.mover_after is not None:
+            items.append((self.mover_ref, self.mover_after))
+        items.extend((item.ref, item.after) for item in self.displaced_before_after)
+        return tuple(items)
 
 
 @dataclass(frozen=True)
@@ -408,6 +469,24 @@ _CARDINAL_DELTAS = ((0, 1), (1, 0), (-1, 0), (0, -1))
 _AVOID_SEARCH_LIMIT = max(GRID_COLUMNS, MAX_GRID_ROWS)
 
 
+class _SearchBudget:
+    """Bounded cell probes for one plan. Mouse-move must not search the board."""
+
+    __slots__ = ("cap", "visits", "exhausted")
+
+    def __init__(self, cap: int) -> None:
+        self.cap = max(1, int(cap))
+        self.visits = 0
+        self.exhausted = False
+
+    def consume(self) -> bool:
+        if self.visits >= self.cap:
+            self.exhausted = True
+            return False
+        self.visits += 1
+        return True
+
+
 def avoidance_preferred_delta(origin: GridRect, candidate: GridRect) -> tuple[int, int]:
     """Pick the dominant move/resize axis so blockers slide the same way."""
     dc = int(candidate.column) - int(origin.column)
@@ -434,6 +513,8 @@ def find_avoidance_rect(
     rect: GridRect,
     occupied: Sequence[GridRect],
     preferred: tuple[int, int] = (0, 1),
+    *,
+    budget: _SearchBudget | None = None,
 ) -> GridRect | None:
     """Same-size slot that misses ``occupied``. Prefers the drag axis, then rings."""
     directions: list[tuple[int, int]] = []
@@ -449,6 +530,8 @@ def find_avoidance_rect(
             column += dc
             row += dr
             candidate = GridRect(column, row, rect.column_span, rect.row_span)
+            if budget is not None and not budget.consume():
+                return None
             if clamp_rect(candidate) != candidate:
                 break
             if _rect_free(candidate, occupied):
@@ -464,6 +547,8 @@ def find_avoidance_rect(
                     rect.column_span,
                     rect.row_span,
                 )
+                if budget is not None and not budget.consume():
+                    return None
                 if clamp_rect(candidate) != candidate:
                     continue
                 if _rect_free(candidate, occupied):
@@ -476,6 +561,8 @@ def plan_overlap_avoidance(
     placements: Sequence[FreeGridPlacement],
     *,
     preferred: tuple[int, int] = (0, 1),
+    search_cap: int = PLANNER_SEARCH_CAP,
+    budget: _SearchBudget | None = None,
 ) -> tuple[tuple[tuple[UltraViewRef, GridRect], ...], bool]:
     """Move overlapping cards out of ``incoming``.
 
@@ -483,6 +570,7 @@ def plan_overlap_avoidance(
     Returns ``((), False)`` when a blocker is boxed in at the grid edge.
     ``updates`` lists every rect that differs from ``placements``.
     """
+    search = budget if budget is not None else _SearchBudget(search_cap)
     current = {item.ref: item.rect for item in placements}
     wanted = dict(incoming)
     if not wanted:
@@ -526,7 +614,9 @@ def plan_overlap_avoidance(
     while queue:
         ref = queue.pop(0)
         obstacles = (*frozen, *remaining.values(), *placed.values())
-        found = find_avoidance_rect(current[ref], obstacles, preferred)
+        found = find_avoidance_rect(
+            current[ref], obstacles, preferred, budget=search
+        )
         if found is None:
             return (), False
         displaced = [
@@ -635,6 +725,256 @@ def _updates_from(
 ) -> tuple[tuple[UltraViewRef, GridRect], ...]:
     return tuple(
         (ref, rect) for ref, rect in proposed.items() if current.get(ref) != rect
+    )
+
+
+def _normalize_operation(operation: str) -> str:
+    value = operation.value if isinstance(operation, Enum) else str(operation)
+    if value not in {LAYOUT_MOVE, LAYOUT_RESIZE, LAYOUT_ARRANGE}:
+        return LAYOUT_MOVE
+    return value
+
+
+def _force_move_spans(
+    incoming: Mapping[UltraViewRef, GridRect],
+    current: Mapping[UltraViewRef, GridRect],
+) -> dict[UltraViewRef, GridRect]:
+    forced: dict[UltraViewRef, GridRect] = {}
+    for ref, rect in incoming.items():
+        origin = current[ref]
+        forced[ref] = GridRect(
+            int(rect.column),
+            int(rect.row),
+            origin.column_span,
+            origin.row_span,
+        )
+    return forced
+
+
+def _spans_match(left: GridRect, right: GridRect) -> bool:
+    return left.column_span == right.column_span and left.row_span == right.row_span
+
+
+def _span_invariants_hold(
+    operation: str,
+    current: Mapping[UltraViewRef, GridRect],
+    proposed: Mapping[UltraViewRef, GridRect],
+    mover_ref: UltraViewRef,
+) -> bool:
+    for ref, rect in proposed.items():
+        origin = current.get(ref)
+        if origin is None:
+            return False
+        if operation == LAYOUT_MOVE and not _spans_match(rect, origin):
+            return False
+        if operation == LAYOUT_RESIZE and ref != mover_ref and not _spans_match(rect, origin):
+            return False
+    return True
+
+
+def _empty_plan(
+    *,
+    accepted: bool,
+    reason: LayoutRejectReason | None,
+    operation: str,
+    layout_revision: int,
+    mover_ref: UltraViewRef | None = None,
+    mover_before: GridRect | None = None,
+    mover_after: GridRect | None = None,
+    displaced: tuple[RectTransition, ...] = (),
+    search_visits: int = 0,
+) -> LayoutPlan:
+    return LayoutPlan(
+        accepted=accepted,
+        reason=reason,
+        mover_before=mover_before,
+        mover_after=mover_after,
+        displaced_before_after=displaced,
+        operation=operation,
+        based_on_layout_revision=int(layout_revision),
+        mover_ref=mover_ref,
+        search_visits=search_visits,
+    )
+
+
+def _plan_from_updates(
+    current: Mapping[UltraViewRef, GridRect],
+    mover_ref: UltraViewRef,
+    updates: Sequence[tuple[UltraViewRef, GridRect]],
+    operation: str,
+    layout_revision: int,
+    search_visits: int,
+) -> LayoutPlan:
+    by_ref = dict(updates)
+    mover_before = current[mover_ref]
+    mover_after = by_ref.get(mover_ref, mover_before)
+    displaced = tuple(
+        sorted(
+            (
+                RectTransition(ref, current[ref], after)
+                for ref, after in updates
+                if ref != mover_ref
+            ),
+            key=lambda item: (
+                item.before.row,
+                item.before.column,
+                item.ref.section,
+                item.ref.view_id,
+            ),
+        )
+    )
+    proposed = dict(current)
+    proposed.update(by_ref)
+    if not _span_invariants_hold(operation, current, proposed, mover_ref):
+        return _empty_plan(
+            accepted=False,
+            reason=LayoutRejectReason.SPAN_INVARIANT,
+            operation=operation,
+            layout_revision=layout_revision,
+            mover_ref=mover_ref,
+            mover_before=mover_before,
+            mover_after=mover_after,
+            search_visits=search_visits,
+        )
+    return LayoutPlan(
+        accepted=True,
+        reason=None,
+        mover_before=mover_before,
+        mover_after=mover_after,
+        displaced_before_after=displaced,
+        operation=operation,
+        based_on_layout_revision=int(layout_revision),
+        mover_ref=mover_ref,
+        search_visits=search_visits,
+    )
+
+
+def plan_layout(
+    placements: Sequence[FreeGridPlacement],
+    mover_ref: UltraViewRef,
+    target: GridRect,
+    operation: str,
+    *,
+    layout_revision: int = 0,
+    preferred: tuple[int, int] | None = None,
+    search_cap: int = PLANNER_SEARCH_CAP,
+    incoming: Mapping[UltraViewRef, GridRect] | None = None,
+) -> LayoutPlan:
+    """Pure size-preserving collision plan for move/resize (arrange may shrink).
+
+    Does not write widgets, emit signals, or push undo. Same inputs yield the
+    same displacement order. Search is capped at ``search_cap`` cell probes.
+    """
+    op = _normalize_operation(operation)
+    current = {item.ref: item.rect for item in placements}
+    if mover_ref not in current:
+        return _empty_plan(
+            accepted=False,
+            reason=LayoutRejectReason.INVALID_INPUT,
+            operation=op,
+            layout_revision=layout_revision,
+            mover_ref=mover_ref,
+        )
+    raw = dict(incoming) if incoming else {mover_ref: target}
+    if mover_ref not in raw:
+        raw[mover_ref] = target
+    if any(ref not in current for ref in raw):
+        return _empty_plan(
+            accepted=False,
+            reason=LayoutRejectReason.INVALID_INPUT,
+            operation=op,
+            layout_revision=layout_revision,
+            mover_ref=mover_ref,
+            mover_before=current[mover_ref],
+        )
+    if op == LAYOUT_MOVE:
+        raw = _force_move_spans(raw, current)
+    elif op == LAYOUT_RESIZE:
+        for ref, rect in tuple(raw.items()):
+            if ref != mover_ref:
+                origin = current[ref]
+                raw[ref] = GridRect(
+                    rect.column, rect.row, origin.column_span, origin.row_span
+                )
+    origin = current[mover_ref]
+    axis = preferred or avoidance_preferred_delta(origin, raw[mover_ref])
+    budget = _SearchBudget(search_cap)
+
+    out_of_bounds = any(clamp_rect(rect) != rect for rect in raw.values())
+    wanted = {ref: clamp_rect(rect) for ref, rect in raw.items()}
+    if out_of_bounds and all(wanted[ref] == current[ref] for ref in wanted):
+        return _empty_plan(
+            accepted=False,
+            reason=LayoutRejectReason.OUT_OF_BOUNDS,
+            operation=op,
+            layout_revision=layout_revision,
+            mover_ref=mover_ref,
+            mover_before=origin,
+            mover_after=wanted[mover_ref],
+            search_visits=budget.visits,
+        )
+    if op != LAYOUT_ARRANGE and not _span_invariants_hold(op, current, wanted, mover_ref):
+        return _empty_plan(
+            accepted=False,
+            reason=LayoutRejectReason.SPAN_INVARIANT,
+            operation=op,
+            layout_revision=layout_revision,
+            mover_ref=mover_ref,
+            mover_before=origin,
+            mover_after=wanted.get(mover_ref),
+            search_visits=budget.visits,
+        )
+
+    updates, ok = plan_overlap_avoidance(
+        wanted, placements, preferred=axis, budget=budget
+    )
+    if ok:
+        if not updates and all(wanted[ref] == current[ref] for ref in wanted):
+            return _plan_from_updates(
+                current, mover_ref, (), op, layout_revision, budget.visits
+            )
+        plan = _plan_from_updates(
+            current, mover_ref, updates, op, layout_revision, budget.visits
+        )
+        if plan.accepted:
+            return plan
+        return _empty_plan(
+            accepted=False,
+            reason=plan.reason or LayoutRejectReason.SPAN_INVARIANT,
+            operation=op,
+            layout_revision=layout_revision,
+            mover_ref=mover_ref,
+            mover_before=origin,
+            mover_after=wanted[mover_ref],
+            search_visits=budget.visits,
+        )
+
+    if op == LAYOUT_ARRANGE:
+        shrink_updates, shrink_ok = plan_neighbor_shrink(wanted, placements)
+        if shrink_ok and shrink_updates:
+            return _plan_from_updates(
+                current,
+                mover_ref,
+                shrink_updates,
+                op,
+                layout_revision,
+                budget.visits,
+            )
+
+    reason = (
+        LayoutRejectReason.SEARCH_CAP
+        if budget.exhausted
+        else LayoutRejectReason.NO_LEGAL_LAYOUT
+    )
+    return _empty_plan(
+        accepted=False,
+        reason=reason,
+        operation=op,
+        layout_revision=layout_revision,
+        mover_ref=mover_ref,
+        mover_before=origin,
+        mover_after=wanted[mover_ref],
+        search_visits=budget.visits,
     )
 
 
@@ -897,33 +1237,24 @@ def plan_boundary_yield(
     *,
     preferred: tuple[int, int] = (0, 1),
 ) -> tuple[tuple[tuple[UltraViewRef, GridRect], ...], bool]:
-    """Keep an out-of-board drop in-grid by clamping, then shrinking neighbours.
+    """Size-preserving clamp + translate for out-of-board drops.
 
-    Same-size avoidance runs first when the clamped slot is a new cell.
-    Hitting the wall with neighbours on the opposite side grows the mover by
-    stealing span those neighbours can yield down to the legal minimum.
+    Neighbour shrink and mover grow are not used on this path; those remain
+    on ``plan_neighbor_shrink`` for an explicit arrange operation. Routine
+    gestures should call ``plan_layout``.
     """
-    current = {item.ref: item.rect for item in placements}
     raw = dict(incoming)
-    if not raw or any(ref not in current for ref in raw):
+    if not raw:
         return (), False
-    clamped = {ref: clamp_rect(rect) for ref, rect in raw.items()}
-    if all(clamped[ref] == raw[ref] for ref in raw):
+    mover_ref = next(iter(raw))
+    plan = plan_layout(
+        placements,
+        mover_ref,
+        raw[mover_ref],
+        LAYOUT_MOVE,
+        preferred=preferred,
+        incoming=raw,
+    )
+    if not plan.accepted:
         return (), False
-    wall_stuck = all(clamped[ref] == current[ref] for ref in raw)
-
-    if not wall_stuck:
-        updates, ok = plan_overlap_avoidance(
-            clamped, placements, preferred=preferred
-        )
-        if ok and updates:
-            return updates, True
-        return plan_neighbor_shrink(clamped, placements)
-
-    grown = _wall_grow_wanted(raw, current)
-    if grown is None:
-        return (), False
-    shrink_updates, shrink_ok = plan_neighbor_shrink(grown, placements)
-    if shrink_ok and shrink_updates:
-        return shrink_updates, True
-    return plan_overlap_avoidance(grown, placements, preferred=preferred)
+    return plan.committed_updates(), True

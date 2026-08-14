@@ -171,6 +171,11 @@ def test_card_context_flips_or_clamps_at_stage_edges(card, expected_edge):
         assert placement.rect.right == 1268
 
 
+def test_minimap_omitted_when_size_is_none():
+    layout = calculate_floating_layout((1280, 800), minimap_size=None)
+    assert layout.minimap is None
+
+
 def test_minimap_moves_above_navigation_and_never_overlaps_it():
     layout = calculate_floating_layout((800, 560), minimap_size=(192, 132))
 

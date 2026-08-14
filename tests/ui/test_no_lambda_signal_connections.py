@@ -70,7 +70,7 @@ FROZEN_LAMBDA_CONNECT_COUNTS: dict[str, int] = {
     "ui/side_panels.py": 5,
     "ui/toolbar.py": 1,
     "ui/view_tabbar.py": 1,
-    "ui/widgets/channel_config_manager.py": 4,
+    "ui/widgets/channel_config_manager.py": 2,
 }
 
 

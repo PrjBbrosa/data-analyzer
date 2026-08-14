@@ -375,6 +375,18 @@ class Icons:
         return _line_icon(draw, c)
 
     @classmethod
+    def ultraview_pin(cls, color=None):
+        """Tack used to keep the View library open while clicking the board."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawEllipse(QRectF(6.6, 3.0, 6.8, 6.8))
+            p.drawLine(QPointF(10.0, 9.8), QPointF(10.0, 16.8))
+            p.drawLine(QPointF(7.2, 7.4), QPointF(12.8, 7.4))
+
+        return _line_icon(draw, c)
+
+    @classmethod
     def ultraview_layout(cls, color=None):
         """Unequal board cells for template/free-grid layout selection."""
         c = color or GRAY

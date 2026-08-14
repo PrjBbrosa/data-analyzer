@@ -172,6 +172,81 @@ def build_envelope(t, sig, *, xlim, pixel_width, is_monotonic=None):
     return out_t[:out_count], out_s[:out_count]
 
 
+def build_peak_trace(t, sig, *, xlim, pixel_width, is_monotonic=None):
+    """One max sample per pixel bucket (spectra / peak-hold).
+
+    Unlike :func:`build_envelope` (min AND max in time order), this emits a
+    single point per bucket so a noisy FFT does not fill into a vertical
+    ribbon. Small visible spans (``n_vis <= pixel_width``) pass through
+    unchanged. NaN buckets emit a single NaN break.
+    """
+    if xlim is None:
+        if len(t) == 0:
+            return np.asarray(t, dtype=float), np.asarray(sig, dtype=float)
+        xlim = (float(t[0]), float(t[-1]))
+
+    t = np.asarray(t)
+    sig = np.asarray(sig)
+    n_total = len(sig)
+    if n_total == 0:
+        return t, sig
+    if pixel_width is None or pixel_width < 1:
+        pixel_width = 1
+
+    if n_total >= 2:
+        if is_monotonic is None:
+            is_monotonic = _is_monotonic_array(t)
+        if not is_monotonic:
+            return _ds_legacy_pure(t, sig)
+
+    x0, x1 = float(xlim[0]), float(xlim[1])
+    if x1 < x0:
+        x0, x1 = x1, x0
+    i0 = int(np.searchsorted(t, x0, side='left'))
+    i1 = int(np.searchsorted(t, x1, side='right'))
+    if i1 <= i0:
+        return t[i0:i0], sig[i0:i0]
+
+    t_vis = t[i0:i1]
+    s_vis = sig[i0:i1]
+    n_vis = len(s_vis)
+
+    if n_vis <= pixel_width:
+        return t_vis, s_vis
+
+    n_buckets = int(pixel_width)
+    bs = max(1, n_vis // n_buckets)
+    n_buckets = max(1, n_vis // bs)
+
+    out_t = np.empty(n_buckets, dtype=t_vis.dtype)
+    out_s = np.empty(n_buckets, dtype=np.result_type(s_vis.dtype, np.float64))
+    out_count = 0
+
+    for b in range(n_buckets):
+        s_start = b * bs
+        s_end = n_vis if b == n_buckets - 1 else s_start + bs
+        seg = s_vis[s_start:s_end]
+        if seg.size == 0:
+            continue
+        nan_mask = np.isnan(seg) if np.issubdtype(seg.dtype, np.floating) else None
+        if nan_mask is not None and nan_mask.all():
+            mid_idx = s_start + seg.size // 2
+            out_t[out_count] = t_vis[mid_idx]
+            out_s[out_count] = np.nan
+            out_count += 1
+            continue
+        if nan_mask is not None and nan_mask.any():
+            rel_hi = int(np.nanargmax(seg))
+        else:
+            rel_hi = int(np.argmax(seg))
+        hi_idx = s_start + rel_hi
+        out_t[out_count] = t_vis[hi_idx]
+        out_s[out_count] = s_vis[hi_idx]
+        out_count += 1
+
+    return out_t[:out_count], out_s[:out_count]
+
+
 def straddling_segment(t, sig, xlim):
     """Return the samples that should be drawn for ``xlim``, plus neighbors.
 

@@ -520,6 +520,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.idle",
         "ultraview.filter",
         "ultraview.library_fold",
+        "ultraview.library_pin",
         "ultraview.library_toggle",
         "ultraview.free_grid",
         "ultraview.resize",
@@ -530,6 +531,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.organize",
         "ultraview.minimap",
         "ultraview.zoom",
+        "ultraview.lod",
         "ultraview.boards",
         "ultraview.limits",
     }
@@ -558,6 +560,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.idle",
         "ultraview.filter",
         "ultraview.library_fold",
+        "ultraview.library_pin",
         "ultraview.library_toggle",
     } <= uv_ids
     time_ids = {hint.id for hint in hints.context_hints(HintState(mode="time", plot_mode="overlay"))}

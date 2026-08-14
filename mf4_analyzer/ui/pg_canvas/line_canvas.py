@@ -10,8 +10,10 @@ from __future__ import annotations
 from html import escape
 import logging
 import math
+import time
 
 import numpy as np
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPointF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
@@ -22,7 +24,7 @@ from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_WIDTH,
     PgAxisHandle,
 )
-from mf4_analyzer.signal.envelope import build_envelope
+from mf4_analyzer.signal.envelope import build_envelope, build_peak_trace
 
 # Overlay AA point-density budget, shared with TimeDomainCanvasPG (canvas.py:
 # 145-146): ON=5000 / OFF=7000 with hysteresis. Imported (not re-defined) so
@@ -79,6 +81,60 @@ from mf4_analyzer.ui_kit.axis_metrics import (
 logger = logging.getLogger(__name__)
 
 
+class _IdleQualityActivity:
+    """Canvas-local interaction state for idle-AA recovery.
+
+    Pointer buttons and ViewBox drag depth are the only sticky "busy"
+    conditions. Wheel, gesture, and kinetic range changes pulse
+    ``last_activity_monotonic`` so the idle timer can delay, but they
+    cannot pin the canvas pending forever.
+    """
+
+    __slots__ = (
+        "_held_buttons",
+        "_drag_depth",
+        "last_activity_monotonic",
+    )
+
+    def __init__(self):
+        self._held_buttons = set()
+        self._drag_depth = 0
+        self.last_activity_monotonic = 0.0
+
+    def note_press(self, button=Qt.LeftButton) -> None:
+        self._held_buttons.add(button)
+        self._touch()
+
+    def note_move(self) -> None:
+        self._touch()
+
+    def note_release(self, button=Qt.LeftButton) -> None:
+        self._held_buttons.discard(button)
+        self._touch()
+
+    def note_drag_begin(self) -> None:
+        self._drag_depth += 1
+        self._touch()
+
+    def note_drag_end(self) -> None:
+        self._drag_depth = max(0, self._drag_depth - 1)
+        self._touch()
+
+    def note_pulse(self) -> None:
+        self._touch()
+
+    def clear(self) -> None:
+        self._held_buttons.clear()
+        self._drag_depth = 0
+        self.last_activity_monotonic = 0.0
+
+    def is_busy(self) -> bool:
+        return bool(self._held_buttons) or self._drag_depth > 0
+
+    def _touch(self) -> None:
+        self.last_activity_monotonic = time.monotonic()
+
+
 _DUAL_CURSOR_DELTA_STYLE = (
     "color:#0b7af3; background-color:#e8f1ff; font-weight:700;"
 )
@@ -101,13 +157,12 @@ _PREVIEW_MIN_REALIZED_PIXEL_WIDTH = 200
 _SPECTRUM_FALLBACK_PIXEL_WIDTH = 2400
 _SPECTRUM_MIN_REALIZED_PIXEL_WIDTH = 200
 
-# FFT amplitude overlays have a much lower AA budget than the time-preview
-# overlay.  Even after min/max envelope reduction, two screenshot-width
-# spectra can draw thousands of joined segments in the same raster region.
-# Keep this budget local to the spectrum row: the time preview deliberately
+# FFT amplitude overlays keep a local AA budget. After peak-hold (one max
+# per pixel, not min/max ribbons) a 4-curve screenshot-width overlay is
+# ~4×1100 ≈ 4400 drawn points and must stay crisp. The time preview still
 # uses the shared TimeDomainCanvasPG ON=5000/OFF=7000 policy imported above.
-_SPECTRUM_AA_SEGMENT_ON = 2000
-_SPECTRUM_AA_SEGMENT_OFF = 3000
+_SPECTRUM_AA_SEGMENT_ON = 5000
+_SPECTRUM_AA_SEGMENT_OFF = 8000
 
 # Minimum vertical room per Y tick label on the short time-preview strip.
 # Inspector Y-density still *requests* up to 20 divisions, but labelling every
@@ -345,10 +400,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._spectrum_aa_density_allowed = False
         self._spectrum_aa_density_seeded = False
         self._last_quality_status = None
+        self._idle_activity = _IdleQualityActivity()
+        self._mouse_buttons_provider = QApplication.mouseButtons
         self._aa_idle_timer = QTimer(self)
         self._aa_idle_timer.setSingleShot(True)
         self._aa_idle_timer.setInterval(150)
         self._aa_idle_timer.timeout.connect(self._enable_idle_quality)
+        self.destroyed.connect(self._stop_aa_idle_timer)
         for _p in (self._plot_amp, self._plot_time):
             # Pan / box-zoom / plain wheel emit sigRangeChangedManually (a
             # programmatic setRange, e.g. plot_spectra, does NOT — so a fresh
@@ -478,7 +536,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         """Return the total currently rasterized spectrum points, or ``None``.
 
         The FFT row has already passed through ``_spectrum_plot_arrays()``, so
-        ``getData()`` measures the actual envelope curves handed to pyqtgraph,
+        ``getData()`` measures the actual peak-hold curves handed to pyqtgraph,
         not the raw FFT-bin arrays retained in ``_entries``.
         """
         try:
@@ -494,10 +552,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         """Hysteresis AA gate for the FFT amplitude overlay's point SUM.
 
         A new spectrum is seeded against the OFF budget, so it is AA-on only
-        at ``<= 3000`` drawn points.  Once rejected, it recovers only below
-        ``<= 2000``; while allowed it turns back off only above ``> 3000``.
-        This prevents repeated AA toggles around the screenshot-scale dual
-        overlay density that dominates native CPU raster time.
+        at ``<= 8000`` drawn points.  Once rejected, it recovers only below
+        ``<= 5000``; while allowed it turns back off only above ``> 8000``.
+        Peak-hold keeps a screenshot-scale 4-curve overlay under that OFF
+        ceiling so the settled spectrum stays crisp.
         """
         total = self._spectrum_drawn_point_total()
         if total is None:
@@ -532,10 +590,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         """Drop curve AA for the interactive (pan/zoom) path and cancel any
         pending idle upgrade. Also invoked by the ViewBox drag hook
         (``_ModifierWheelViewBox.mouseDragEvent``)."""
-        try:
-            self._aa_idle_timer.stop()
-        except Exception:
-            pass
+        self._stop_aa_idle_timer()
         if not self._aa_on:
             return
         for c in self._interactive_curves():
@@ -549,23 +604,70 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
     def schedule_idle_quality(self):
         """Re-arm the idle-AA timer after a settled interaction."""
-        try:
-            self._aa_idle_timer.start()
-        except Exception:
-            pass
+        self._start_aa_idle_timer()
         self._emit_quality_status()
 
-    def _enable_idle_quality(self):
-        """Idle-timer slot: restore crisp AA once the user is hands-off. If a
-        mouse button is still down the gesture is ongoing, so re-arm instead."""
-        if self._aa_on:
+    def _aa_idle_timer_alive(self):
+        timer = getattr(self, "_aa_idle_timer", None)
+        if timer is None:
+            return None
+        try:
+            if sip.isdeleted(self) or sip.isdeleted(timer):
+                return None
+        except RuntimeError:
+            # sip wrapper already gone; nothing left to start/stop.
+            return None
+        return timer
+
+    def _start_aa_idle_timer(self) -> None:
+        timer = self._aa_idle_timer_alive()
+        if timer is None:
+            return
+        timer.start()
+
+    def _stop_aa_idle_timer(self, *_args) -> None:
+        timer = self._aa_idle_timer_alive()
+        if timer is None:
             return
         try:
-            if QApplication.mouseButtons() != Qt.NoButton:
-                self._aa_idle_timer.start()
-                return
+            timer.stop()
+        except RuntimeError:
+            # QTimer C++ object already deleted with the canvas.
+            return
+
+    def _query_idle_mouse_buttons(self):
+        """Defensive injectable query; failures are logged and treated as unknown.
+
+        The result never solely blocks idle recovery. Local canvas activity
+        owns that decision; a press in another window must not pin this
+        canvas pending.
+        """
+        provider = getattr(self, "_mouse_buttons_provider", None)
+        if provider is None:
+            provider = QApplication.mouseButtons
+        try:
+            return provider()
         except Exception:
-            pass
+            logger.warning(
+                "idle-quality mouse-buttons provider failed",
+                exc_info=True,
+            )
+            return None
+
+    def _enable_idle_quality(self):
+        """Idle-timer slot: restore crisp AA once THIS canvas is hands-off."""
+        if sip.isdeleted(self):
+            return
+        if self._aa_on:
+            self._stop_aa_idle_timer()
+            return
+        # Consult the provider so injected failures stay observable, but do
+        # not use global mouseButtons as the idle gate.
+        self._query_idle_mouse_buttons()
+        if self._idle_activity.is_busy():
+            self.schedule_idle_quality()
+            return
+        self._stop_aa_idle_timer()
         if self._time_y_needs_repin:
             self._time_y_needs_repin = False
             try:
@@ -579,6 +681,23 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         except Exception:
             pass
         self._emit_quality_status()
+
+    def _note_idle_quality_event(self, event) -> None:
+        """Track press/move/release/wheel/gesture without consuming the event."""
+        etype = event.type()
+        if etype == QEvent.MouseButtonPress:
+            self._idle_activity.note_press(event.button())
+        elif etype == QEvent.MouseMove:
+            if self._idle_activity.is_busy():
+                self._idle_activity.note_move()
+        elif etype == QEvent.MouseButtonRelease:
+            self._idle_activity.note_release(event.button())
+            if not self._idle_activity.is_busy() and not self._aa_on:
+                self.schedule_idle_quality()
+        elif etype == QEvent.Wheel:
+            self._idle_activity.note_pulse()
+        elif etype in (QEvent.Gesture, QEvent.GestureOverride):
+            self._idle_activity.note_pulse()
 
     # ------------------------------------------------------------------
     # AA status (reader-facing traffic light) — mirrors QualityManager on the
@@ -605,9 +724,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         actual_on = all(_aa(c) for c in judged)
         if self._aa_on and actual_on:
             return {"state": "green", "tooltip": "抗锯齿已完成"}
+        timer = self._aa_idle_timer_alive()
         try:
-            timer_active = self._aa_idle_timer.isActive()
-        except Exception:
+            timer_active = bool(timer is not None and timer.isActive())
+        except RuntimeError:
             timer_active = False
         if timer_active:
             return {"state": "yellow", "tooltip": "抗锯齿等待空闲刷新"}
@@ -636,6 +756,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             pass
 
     def _on_interactive_range_changed(self, plot=None, *_args):
+        self._idle_activity.note_pulse()
         self.disable_interactive_quality()
         self.schedule_idle_quality()
         if plot is self._plot_time:
@@ -886,6 +1007,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
           - ``axis == 1`` (Y gutter) → only that ViewBox; else all time VBs
         * Spectrum row: Shift → Y zoom; plain wheel consumed (no native zoom)
         """
+        self._idle_activity.note_pulse()
         step = 1 if delta > 0 else -1 if delta < 0 else 0
         if step == 0 or view_box is None:
             return False
@@ -895,6 +1017,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         on_time = view_box in time_vbs and bool(self._time_curves)
 
         if not ctrl and not on_time and not shift:
+            if not self._aa_on:
+                self.schedule_idle_quality()
             return True  # spectrum plain wheel: consume, no zoom
 
         factor = 0.85 if step > 0 else 1.0 / 0.85
@@ -1025,8 +1149,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
         for e in self._entries:
             pen = pg.mkPen(e.get('color', '#2563eb'), width=1.5)
-            pen.setJoinStyle(Qt.RoundJoin)
-            pen.setCapStyle(Qt.RoundCap)
+            # Peak-hold spectra are 1 pt/px polylines. Round joins fatten the
+            # vertices into a filled look; mitre/flat keeps the stroke a line.
+            pen.setJoinStyle(Qt.MiterJoin)
+            pen.setCapStyle(Qt.FlatCap)
             freq, amp = self._spectrum_plot_arrays(e['freq'], e['amp'])
             # dB-reference-defaults Task 6 (spec §15 C1): a mixed-reference
             # FFT overlay attaches a per-curve 'legend_label' (base label +
@@ -1236,6 +1362,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._reframe_time_y_to_grid()
 
     def full_reset(self) -> None:
+        self._stop_aa_idle_timer()
+        self._idle_activity.clear()
         self.clear_empty_hint()
         self._clear_frequency_cursor_readout()
         for p, curves in ((self._plot_amp, self._amp_curves),
@@ -1473,6 +1601,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 axis.setLabel(text)
             except Exception:
                 pass
+        # Occupy a real right-hand column immediately. A 0-width item is
+        # still painted by AxisItem, but at the layout origin — coloured
+        # ticks then stack on the left axis.
+        try:
+            axis.setWidth(48.0)
+        except Exception:
+            pass
         self._plot_time.layout.addItem(axis, 2, 2 + position)
         self._plot_time.layout.setHorizontalSpacing(8)
         self._plot_time.scene().addItem(aux_vb)
@@ -1493,6 +1628,32 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._time_overlay_vbs.append(aux_vb)
         self._time_overlay_axes.append(axis)
         return aux_vb
+
+    def _realize_time_overlay_axis_columns(self) -> None:
+        """Give each colour-coded right axis a measured column on the RIGHT.
+
+        Overlay ``AxisItem``s live in PlotItem grid columns 3+. If those
+        columns collapse, pyqtgraph still paints the tick text — but the
+        item sits at the origin, so the coloured numbers stack on the left
+        axis. Measure the pinned tick strings, clamp a real width, then
+        activate the layout so the time ViewBox shrinks instead of covering
+        the gutters.
+        """
+        for axis in self._time_overlay_axes:
+            try:
+                axis.setWidth(None)
+            except Exception:
+                pass
+            try:
+                need = float(left_axis_width_for_ticks(axis))
+                axis.setWidth(max(36.0, need))
+            except Exception:
+                try:
+                    axis.setWidth(48.0)
+                except Exception:
+                    pass
+        self._activate_graphics_layout()
+        self._sync_time_overlay_vbs()
 
     def _ensure_time_grid_vb(self):
         """Lazily create the dedicated grid ViewBox (Y locked to [0,1], X-linked
@@ -1634,6 +1795,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         ]
 
     def _begin_view_interaction(self) -> None:
+        self._idle_activity.note_drag_begin()
         self.disable_interactive_quality()
         baselines = {}
         for vb, _axis in self._time_axis_pairs():
@@ -1644,6 +1806,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._box_zoom_y_baselines = baselines
 
     def _end_view_interaction(self) -> None:
+        self._idle_activity.note_drag_end()
         self._time_y_needs_repin = True
         self.schedule_idle_quality()
 
@@ -1905,9 +2068,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # every axis's ticks land on the same horizontal grid lines (replaces
         # per-axis autoRange, which let each right axis pick its own scale).
         self._reframe_time_y_to_grid()
-        # Position any aux overlay ViewBoxes now, and again on the next resize
-        # (sigResized) once the layout with the new right axes is realized.
-        self._sync_time_overlay_vbs()
+        # Pin overlay-axis column widths and activate the PlotItem layout
+        # BEFORE emitting geometry-changed. Without this, extra right axes
+        # stay at the origin and their tick text paints over the left gutter.
+        self._realize_time_overlay_axis_columns()
         self.layout_geometry_changed.emit()
         # Curves were built AA-off provisionally; now that every curve is in
         # _time_curves their real drawn-point sum is known, so land the budgeted
@@ -1952,10 +2116,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             return freq_arr[:0], amp_arr[:0]
         freq_arr = freq_arr[:n]
         amp_arr = amp_arr[:n]
-        pixel_width = self._spectrum_pixel_width()
-        if n <= max(1, pixel_width * 2):
-            return freq_arr, amp_arr
-        return build_envelope(freq_arr, amp_arr, xlim=None, pixel_width=pixel_width)
+        return build_peak_trace(
+            freq_arr,
+            amp_arr,
+            xlim=None,
+            pixel_width=self._spectrum_pixel_width(),
+        )
 
     @staticmethod
     def _is_db_amp_label(label: str) -> bool:
@@ -2741,8 +2907,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def eventFilter(self, obj, event):
         try:
             viewport = self._glw.viewport()
-        except Exception:
+        except RuntimeError:
             viewport = None
+        if obj is viewport and event is not None:
+            self._note_idle_quality_event(event)
         try:
             if obj is viewport and event.type() == QEvent.MouseButtonDblClick:
                 if event.button() == Qt.LeftButton and not self._remark_enabled:

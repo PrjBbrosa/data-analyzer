@@ -6,6 +6,7 @@ or call analysis entry points. Preview records are duck-typed.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Mapping, Sequence
@@ -43,6 +44,7 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWIDGETSIZE_MAX,
 )
 
 from mf4_analyzer.ui.ultraview_state import (
@@ -65,7 +67,7 @@ from mf4_analyzer.ui.ultraview_state import (
     parse_ref_payload,
     section_search_haystack,
 )
-from mf4_analyzer.ui_kit.icons import Icons
+from mf4_analyzer.ui_kit.icons import BLUE, Icons
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.ui_kit.widgets import SearchField
 
@@ -82,6 +84,10 @@ from .layouts import (
 )
 from .free_grid import (
     GridMetrics,
+    LAYOUT_MOVE,
+    LAYOUT_RESIZE,
+    LayoutPlan,
+    LayoutRejectReason,
     avoidance_preferred_delta,
     candidate_resize,
     clamp_rect,
@@ -89,12 +95,8 @@ from .free_grid import (
     grid_metrics,
     hit_handle,
     legal_grid_rect,
-    plan_boundary_yield,
-    plan_neighbor_shrink,
-    plan_overlap_avoidance,
-    rect_is_available,
+    plan_layout,
     rect_to_pixels,
-    union_grid_rect,
 )
 from .gesture import FreeGridGesture
 from .ghost_overlay import GhostOverlay
@@ -103,6 +105,9 @@ from .viewport import (
     QUALITY_FAST,
     QUALITY_SMOOTH,
     LOD_FULL,
+    LOD_NO_FOOTER,
+    LOD_TITLE_ONLY,
+    lod_visibility,
     ZOOM_DEFAULT,
     scale_grid_metrics,
     zoomed_viewport_size,
@@ -122,7 +127,13 @@ HANDLE_CURSORS = {
 
 REPLACE_HOVER_MS = 600
 FEEDBACK_OUT_OF_GRID = "不能移出网格"
-FEEDBACK_AVOID_BOUNDARY = "旁边的 View 已到边界，无法自动避让"
+FEEDBACK_NO_LEGAL_LAYOUT = "当前位置放不下，已保持原布局"
+FEEDBACK_AVOID_BOUNDARY = FEEDBACK_NO_LEGAL_LAYOUT
+FEEDBACK_REARRANGED = "已重排 {count} 张 · Ctrl+Z 撤销"
+
+_PLANNER_LOG = logging.getLogger(__name__)
+_PLANNER_LOG_MONO = 0.0
+_PLANNER_LOG_INTERVAL_S = 0.5
 
 
 def _page_of(widget: QWidget):
@@ -132,6 +143,25 @@ def _page_of(widget: QWidget):
             return current
         current = current.parentWidget()
     return None
+
+
+def _log_plan_result(plan: LayoutPlan) -> None:
+    """Release-path diagnostics only; never called from mouse-move."""
+    global _PLANNER_LOG_MONO
+    import time
+
+    now = time.monotonic()
+    if now - _PLANNER_LOG_MONO < _PLANNER_LOG_INTERVAL_S:
+        return
+    _PLANNER_LOG_MONO = now
+    _PLANNER_LOG.debug(
+        "ultraview plan accepted=%s reason=%s op=%s visits=%s affected=%s",
+        plan.accepted,
+        None if plan.reason is None else plan.reason.value,
+        plan.operation,
+        plan.search_visits,
+        plan.affected_count(),
+    )
 
 
 def _clear_page_card_selection(widget: QWidget) -> None:
@@ -282,6 +312,14 @@ STALE_CARD_COPY = "源已变化"
 ORPHANED_CARD_COPY = "源 View 已删除"
 DIMMED_OPACITY = 0.28
 LIBRARY_DEFAULT_WIDTH = 288
+TYPE_CHIP_ICON_ONLY_WIDTH = 168
+_SECTION_TYPE_ICONS = {
+    "time": Icons.mode_time,
+    "fft": Icons.mode_fft,
+    "fft_time": Icons.mode_fft_time,
+    "frf": Icons.mode_frf,
+    "order": Icons.mode_order,
+}
 LIBRARY_OVERLAY_MIN_HEIGHT = 320
 LIBRARY_SECTION_MIN_HEIGHT = 24
 LIBRARY_ROW_MIN_HEIGHT = 40
@@ -1140,6 +1178,7 @@ class ViewLibraryPanel(QFrame):
     locate_requested = pyqtSignal(str, str)
     drag_started = pyqtSignal(str)
     drag_finished = pyqtSignal()
+    pin_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1158,13 +1197,27 @@ class ViewLibraryPanel(QFrame):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         head = QHBoxLayout()
-        head.setContentsMargins(10, 8, 10, 6)
+        head.setContentsMargins(10, 8, 8, 6)
+        head.setSpacing(6)
         title = QLabel("View 库", self)
         title.setObjectName("ultraViewLibraryTitle")
         self._count = QLabel("0", self)
         self._count.setObjectName("ultraViewLibraryCount")
+        self._pin = QToolButton(self)
+        self._pin.setObjectName("ultraViewLibraryPin")
+        self._pin.setCheckable(True)
+        self._pin.setAutoRaise(True)
+        self._pin.setFixedSize(24, 24)
+        self._pin.setIconSize(QSize(14, 14))
+        self._pin.setFocusPolicy(Qt.TabFocus)
+        self._pin.setProperty("role", "icon")
+        self._pin.setProperty("chrome", "ultraview")
+        self._pin.setProperty("active", "false")
+        self._pin.toggled.connect(self._on_pin_toggled)
         head.addWidget(title, 1)
-        head.addWidget(self._count, 0)
+        head.addWidget(self._count, 0, Qt.AlignVCenter)
+        head.addWidget(self._pin, 0, Qt.AlignVCenter)
+        self._sync_pin(False)
         root.addLayout(head)
 
         self._search = SearchField("搜索 View…", self)
@@ -1250,6 +1303,42 @@ class ViewLibraryPanel(QFrame):
 
     def focus_search(self) -> None:
         self._search.setFocus(Qt.OtherFocusReason)
+
+    def pin_button(self) -> QToolButton:
+        return self._pin
+
+    def is_pinned(self) -> bool:
+        return bool(self._pin.isChecked())
+
+    def set_pinned(self, pinned: bool) -> None:
+        wanted = bool(pinned)
+        if self.is_pinned() == wanted and self._pin.property("active") == (
+            "true" if wanted else "false"
+        ):
+            return
+        blocked = self._pin.blockSignals(True)
+        self._pin.setChecked(wanted)
+        self._pin.blockSignals(blocked)
+        self._sync_pin(wanted)
+        self.pin_toggled.emit(wanted)
+
+    def _on_pin_toggled(self, checked: bool) -> None:
+        self._sync_pin(bool(checked))
+        self.pin_toggled.emit(bool(checked))
+
+    def _sync_pin(self, pinned: bool) -> None:
+        self._pin.setIcon(Icons.ultraview_pin(BLUE if pinned else None))
+        value = "true" if pinned else "false"
+        if self._pin.property("active") != value:
+            self._pin.setProperty("active", value)
+            style = self._pin.style()
+            if style is not None:
+                style.unpolish(self._pin)
+                style.polish(self._pin)
+            self._pin.update()
+        label = "取消钉住 View 库" if pinned else "钉住 View 库，点击画布不关闭"
+        self._pin.setToolTip(label)
+        self._pin.setAccessibleName(label)
 
     def _rebuild(self) -> None:
         while self._body_layout.count():
@@ -1441,6 +1530,10 @@ class UltraViewCard(QFrame):
         self._scale_key: tuple | None = None
         self._raw_cache_key: int | None = None
         self._preview_quality = QUALITY_SMOOTH
+        self._lod_level = LOD_FULL
+        self._lod_show_title = True
+        self._lod_show_source = True
+        self._lod_presentation = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -1454,6 +1547,15 @@ class UltraViewCard(QFrame):
         header.setSpacing(6)
         self._dot = _ColorDot(self._header)
         header.addWidget(self._dot, 0)
+        self._type_chip = QToolButton(self._header)
+        self._type_chip.setObjectName("ultraViewCardTypeChip")
+        self._type_chip.setAutoRaise(False)
+        self._type_chip.setFocusPolicy(Qt.TabFocus)
+        self._type_chip.setCursor(Qt.ArrowCursor)
+        self._type_chip.setFixedHeight(22)
+        self._type_chip.setIconSize(QSize(12, 12))
+        self._type_chip.setProperty("role", "typeChip")
+        header.addWidget(self._type_chip, 0, Qt.AlignVCenter)
         self._title = _ElideLabel("", self._header)
         header.addWidget(self._title, 1)
         self._status = QLabel("", self._header)
@@ -1478,6 +1580,8 @@ class UltraViewCard(QFrame):
         self._focus_btn.setIcon(Icons.expand_focus())
         self._focus_btn.setIconSize(QSize(16, 16))
         self._focus_btn.setToolTip("临时放大")
+        self._focus_btn.setAccessibleName("临时放大")
+        self._focus_btn.setFocusPolicy(Qt.TabFocus)
         self._focus_btn.setCursor(Qt.PointingHandCursor)
         self._focus_btn.setAutoRaise(False)
         self._focus_btn.setFixedSize(24, 24)
@@ -1554,10 +1658,11 @@ class UltraViewCard(QFrame):
 
     def apply_model(self, model: CardViewModel) -> None:
         self._model = model
+        self._lod_show_title = bool(model.show_title)
+        self._lod_show_source = bool(model.show_source)
         title = model.title or model.view_id
         self._dot.set_color(model.tab_color)
-        self._title.setVisible(bool(model.show_title))
-        self._title.set_full_text(title if model.show_title else "")
+        self._title.set_full_text(title)
         if model.status == STATUS_MISSING:
             self._status.setText(STATUS_LABELS_ZH[STATUS_MISSING])
         elif model.status == STATUS_STALE:
@@ -1566,19 +1671,13 @@ class UltraViewCard(QFrame):
             self._status.setText(ORPHANED_CARD_COPY)
         else:
             self._status.setText("")
-        self._status.setVisible(bool(self._status.text()))
-        self._sync_btn.setVisible(model.status == STATUS_STALE)
+        self._status.setProperty("status", model.status)
         section_label = SECTION_LABELS_ZH.get(model.section, model.section)
         self._foot_left.set_full_text(
             f"{section_label} · {_range_text(model.x_range, model.x_unit)}"
         )
         self._foot_source.set_full_text(model.source_summary if model.show_source else "")
-        self._footer.setVisible(bool(model.show_source))
-        if model.show_source:
-            self._footer.setFixedHeight(CARD_FOOTER_HEIGHT)
-        else:
-            self._footer.setFixedHeight(0)
-        self._orphan_bar.setVisible(model.status == STATUS_ORPHANED)
+        self._sync_type_chip(section_label)
         self._set_image(model)
         _set_flag(self, "selected", model.selected)
         _set_flag(self, "dimmed", model.dimmed)
@@ -1586,7 +1685,9 @@ class UltraViewCard(QFrame):
         _set_flag(self, "replacementArmed", model.replacement_armed)
         self.setProperty("status", model.status)
         self._apply_dim(model.dimmed)
+        self._apply_lod_visibility()
         _repolish(self)
+        _repolish(self._status)
         parts = [
             section_label,
             title,
@@ -1634,12 +1735,63 @@ class UltraViewCard(QFrame):
         return menu
 
     def apply_lod(self, level: str, *, show_title: bool, show_source: bool, presentation: bool = False) -> None:
-        self._title.setVisible(bool(show_title))
-        footer = bool(show_source) and level == LOD_FULL
+        self._lod_level = level if level in {LOD_FULL, LOD_NO_FOOTER, LOD_TITLE_ONLY} else LOD_FULL
+        self._lod_show_title = bool(show_title)
+        self._lod_show_source = bool(show_source)
+        self._lod_presentation = bool(presentation)
+        self._apply_lod_visibility()
+
+    def _apply_lod_visibility(self) -> None:
+        vis = lod_visibility(self._lod_level)
+        self.setProperty("lod", self._lod_level)
+        title_text = self._model.title or self._model.view_id
+        self._title.setVisible(bool(vis.title and self._lod_show_title and title_text))
+        self._sync_type_chip(SECTION_LABELS_ZH.get(self._model.section, self._model.section))
+        self._type_chip.setVisible(bool(vis.type_chip))
+        has_status = bool(self._status.text())
+        self._status.setVisible(bool(vis.trust and has_status))
+        self._sync_btn.setVisible(bool(vis.trust and self._model.status == STATUS_STALE))
+        self._focus_btn.setVisible(bool(vis.body_actions))
+        footer = bool(vis.footer and self._lod_show_source)
         self._footer.setVisible(footer)
         self._footer.setFixedHeight(CARD_FOOTER_HEIGHT if footer else 0)
         orphaned = self._model is not None and self._model.status == STATUS_ORPHANED
-        self._orphan_bar.setVisible(orphaned and not presentation)
+        self._orphan_bar.setVisible(bool(vis.body_actions and orphaned and not self._lod_presentation))
+        self._set_preview_visible(bool(vis.preview))
+        _repolish(self)
+
+    def _set_preview_visible(self, visible: bool) -> None:
+        if visible:
+            self._image.setMinimumHeight(max(8, MIN_CARD_CHROME_HEIGHT // 4))
+            self._image.setMaximumHeight(QWIDGETSIZE_MAX)
+            self._image.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self._image.setVisible(True)
+            return
+        self._image.setVisible(False)
+        self._image.setMinimumHeight(0)
+        self._image.setMaximumHeight(0)
+
+    def _sync_type_chip(self, section_label: str) -> None:
+        label = str(section_label or self._model.section)
+        icon_factory = _SECTION_TYPE_ICONS.get(self._model.section)
+        if icon_factory is not None:
+            self._type_chip.setIcon(icon_factory())
+        else:
+            self._type_chip.setIcon(Icons.mode_ultraview())
+        self._type_chip.setToolTip(label)
+        self._type_chip.setAccessibleName(label)
+        icon_only = self._header.width() > 0 and self._header.width() < TYPE_CHIP_ICON_ONLY_WIDTH
+        if icon_only:
+            self._type_chip.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            self._type_chip.setText("")
+            self._type_chip.setFixedWidth(22)
+        else:
+            self._type_chip.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            self._type_chip.setText(label)
+            self._type_chip.setMinimumWidth(0)
+            self._type_chip.setMaximumWidth(QWIDGETSIZE_MAX)
+            hint = self._type_chip.sizeHint()
+            self._type_chip.setFixedWidth(max(22, hint.width() + 8))
 
     def set_preview_quality(self, quality: str) -> None:
         wanted = QUALITY_FAST if quality == QUALITY_FAST else QUALITY_SMOOTH
@@ -1688,7 +1840,9 @@ class UltraViewCard(QFrame):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        self._fit_card_image()
+        self._sync_type_chip(SECTION_LABELS_ZH.get(self._model.section, self._model.section))
+        if lod_visibility(self._lod_level).preview:
+            self._fit_card_image()
 
     def _preview_fit_size(self) -> QSize:
         """Inner label box after QSS padding, not the outer ``size()``."""
@@ -2504,6 +2658,10 @@ class FreeGridBoard(QWidget):
         self._replace.armed.connect(self._on_replace_armed)
         self._replace.cleared.connect(self._on_replace_cleared)
         self._pending_shift_toggle: UltraViewRef | None = None
+        self._layout_revision = 0
+        self._gesture_dimmed = False
+        self._layout_revision = 0
+        self._gesture_dimmed = False
 
     def set_viewport_size(self, size: QSize) -> None:
         if size == self._viewport_size:
@@ -2581,6 +2739,7 @@ class FreeGridBoard(QWidget):
     ) -> None:
         self._placements = {item.ref: item for item in placements}
         self._models = dict(models)
+        self._layout_revision += 1
         wanted = set(self._placements)
         for ref in list(self._widgets):
             if ref not in wanted:
@@ -2723,7 +2882,14 @@ class FreeGridBoard(QWidget):
             if handle is not None:
                 board_pos = self._board_pos(card, event.pos())
                 grab = (event.pos().x(), event.pos().y())
-                self._gesture.press_resize(ref, placement.rect, handle, board_pos, grab)
+                self._gesture.press_resize(
+                    ref,
+                    placement.rect,
+                    handle,
+                    board_pos,
+                    grab,
+                    layout_revision=self._layout_revision,
+                )
                 return
             self._pending_shift_toggle = ref
             return
@@ -2746,10 +2912,22 @@ class FreeGridBoard(QWidget):
                 if item in self._placements
             }
         if handle is not None:
-            self._gesture.press_resize(ref, placement.rect, handle, board_pos, grab)
+            self._gesture.press_resize(
+                ref,
+                placement.rect,
+                handle,
+                board_pos,
+                grab,
+                layout_revision=self._layout_revision,
+            )
         else:
             self._gesture.press(
-                ref, placement.rect, board_pos, grab, group_origins=group_origins
+                ref,
+                placement.rect,
+                board_pos,
+                grab,
+                group_origins=group_origins,
+                layout_revision=self._layout_revision,
             )
 
     def handle_card_mouse_hover(self, card: FreeGridCard, event: QMouseEvent) -> None:
@@ -2940,21 +3118,23 @@ class FreeGridBoard(QWidget):
             return
         if QWidget.mouseGrabber() is None:
             self.grabMouse()
+        preview_refs = session.preview_refs()
         members = session.group_origins or {session.ref: session.origin}
-        started = False
-        for ref in members:
-            card = self._widgets.get(ref)
-            if card is None:
-                continue
-            if not started:
-                self.drag_started.emit("layout")
-                started = True
-            effect = QGraphicsOpacityEffect(card)
-            effect.setOpacity(0.4)
-            card.setGraphicsEffect(effect)
+        dim_refs = set(members)
+        dim_refs.update(preview_refs)
+        if not self._gesture_dimmed:
+            self.drag_started.emit("layout")
+            self._gesture_dimmed = True
+            for ref in dim_refs:
+                card = self._widgets.get(ref)
+                if card is None:
+                    continue
+                effect = QGraphicsOpacityEffect(card)
+                effect.setOpacity(0.4)
+                card.setGraphicsEffect(effect)
         ghosts = []
         ghost_rects = session.group_ghost_pixels(self._metrics, board_pos)
-        refs = list(members)
+        refs = list(preview_refs)
         if len(ghost_rects) != len(refs):
             refs = [session.ref]
             ghost_rects = (session.ghost_pixels(self._metrics, board_pos),)
@@ -2974,9 +3154,13 @@ class FreeGridBoard(QWidget):
     def _finish_gesture(self, *, commit: bool, global_pos: QPoint | None = None) -> None:
         session = self._gesture.take()
         self._release_mouse_if_grabbed()
+        self._gesture_dimmed = False
         if session is None:
             return
         members = session.group_origins or {session.ref: session.origin}
+        restore_refs = set(members)
+        if session.plan is not None:
+            restore_refs.update(ref for ref, _rect in session.plan.preview_rects())
         preview_open = True
 
         def cleanup_preview() -> None:
@@ -2984,7 +3168,7 @@ class FreeGridBoard(QWidget):
             if not preview_open:
                 return
             preview_open = False
-            for ref in members:
+            for ref in restore_refs:
                 card = self._widgets.get(ref)
                 if card is not None:
                     card.restore_dim()
@@ -3002,185 +3186,49 @@ class FreeGridBoard(QWidget):
                 for ref in members:
                     self.move_to_unplaced_requested.emit(ref.section, ref.view_id)
                 return
-            if session.is_group_move():
-                self._finish_group_move(session)
-                return
-            if session.handle:
-                if self._legal_grid_rect(session.candidate) != session.candidate:
-                    self._finish_out_of_grid(
-                        {session.ref: session.candidate},
-                        session.origin,
-                        session.candidate,
-                    )
-                    return
-                candidate = session.candidate
-                if rect_is_available(
-                    candidate, self._placements.values(), excluding=session.ref
-                ):
-                    self._request_geometry(session.ref, candidate, "drag-resize")
-                    return
-                self._commit_overlap_avoidance(
-                    {session.ref: candidate}, session.origin, candidate
-                )
-                return
-            if self._legal_grid_rect(session.candidate) != session.candidate:
-                self._finish_out_of_grid(
-                    {session.ref: session.candidate},
-                    session.origin,
-                    session.candidate,
-                )
-                return
-            if rect_is_available(
-                session.candidate, self._placements.values(), excluding=session.ref
-            ):
-                self._request_geometry(session.ref, session.candidate, "drag-move")
-                return
-            self._commit_overlap_avoidance(
-                {session.ref: session.candidate}, session.origin, session.candidate
-            )
+            self._commit_session_plan(session)
         finally:
             cleanup_preview()
 
-    def _finish_group_move(self, session) -> None:
+    def _commit_session_plan(self, session) -> None:
+        operation = LAYOUT_RESIZE if session.handle else LAYOUT_MOVE
         incoming = dict(session.group_candidates)
-        if any(self._legal_grid_rect(rect) != rect for rect in incoming.values()):
-            origin = union_grid_rect(session.group_origins.values())
-            candidate = union_grid_rect(incoming.values())
-            if origin is None or candidate is None:
-                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
-                self._relayout()
-                return
-            self._finish_out_of_grid(incoming, origin, candidate)
-            return
-        others = [
-            item
-            for item in self._placements.values()
-            if item.ref not in incoming
-        ]
-        if all(rect_is_available(rect, others) for rect in incoming.values()):
-            self._commit_group_move(session)
-            return
-        origin = union_grid_rect(session.group_origins.values())
-        candidate = union_grid_rect(incoming.values())
-        if origin is None or candidate is None:
-            self.feedback_requested.emit(FEEDBACK_AVOID_BOUNDARY)
-            self._relayout()
-            return
-        self._commit_overlap_avoidance(incoming, origin, candidate)
-
-    def _commit_group_move(self, session) -> None:
-        updates = []
-        for ref, rect in sorted(
-            session.group_candidates.items(),
-            key=lambda item: (item[0].section, item[0].view_id),
-        ):
-            placement = self._placements.get(ref)
-            if placement is None:
-                return
-            candidate = self._legal_grid_rect(rect)
-            if candidate != rect:
-                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
-                self._relayout()
-                return
-            if candidate != placement.rect:
-                updates.append(
-                    (
-                        ref.section,
-                        ref.view_id,
-                        candidate.column,
-                        candidate.row,
-                        candidate.column_span,
-                        candidate.row_span,
-                    )
-                )
-        if updates:
-            self.group_geometry_requested.emit(tuple(updates))
-
-    def _finish_out_of_grid(
-        self,
-        incoming: Mapping[UltraViewRef, GridRect],
-        origin: GridRect,
-        candidate: GridRect,
-    ) -> None:
-        preferred = avoidance_preferred_delta(origin, candidate)
-        updates, possible = plan_boundary_yield(
-            incoming, tuple(self._placements.values()), preferred=preferred
-        )
-        if not possible or not updates:
+        plan = session.plan
+        if session.is_group_move() and plan is None and not session.legal:
             self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
             self._relayout()
             return
-        self._commit_planned(updates, set(incoming))
+        if (
+            plan is None
+            or plan.based_on_layout_revision != self._layout_revision
+        ):
+            plan = plan_layout(
+                tuple(self._placements.values()),
+                session.ref,
+                session.candidate,
+                operation,
+                layout_revision=self._layout_revision,
+                preferred=avoidance_preferred_delta(session.origin, session.candidate),
+                incoming=incoming or None,
+            )
+        _log_plan_result(plan)
+        if not plan.accepted:
+            if plan.reason is LayoutRejectReason.OUT_OF_BOUNDS:
+                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
+            else:
+                self.feedback_requested.emit(FEEDBACK_NO_LEGAL_LAYOUT)
+            self._relayout()
+            return
+        reason = "drag-resize" if session.handle else "drag-move"
+        self._emit_plan(plan, reason)
 
-    def _commit_planned(
-        self,
-        updates: Sequence[tuple[UltraViewRef, GridRect]],
-        incoming_refs: set[UltraViewRef],
-    ) -> bool:
+    def _emit_plan(self, plan: LayoutPlan, reason: str) -> bool:
+        updates = plan.committed_updates()
         if not updates:
             self._relayout()
             return False
-        needs_ask = False
-        for ref, rect in updates:
-            placement = self._placements.get(ref)
-            if placement is None:
-                self._relayout()
-                return False
-            if ref not in incoming_refs:
-                needs_ask = True
-            elif (
-                rect.column_span != placement.rect.column_span
-                or rect.row_span != placement.rect.row_span
-            ):
-                needs_ask = True
-        if needs_ask:
-            page = _page_of(self)
-            if page is None or not page.confirm_auto_avoid():
-                self._relayout()
-                return False
-        payload = tuple(
-            (
-                ref.section,
-                ref.view_id,
-                rect.column,
-                rect.row,
-                rect.column_span,
-                rect.row_span,
-            )
-            for ref, rect in sorted(
-                updates, key=lambda item: (item[0].section, item[0].view_id)
-            )
-        )
-        self.group_geometry_requested.emit(payload)
-        return True
-
-    def _commit_overlap_avoidance(
-        self,
-        incoming: Mapping[UltraViewRef, GridRect],
-        origin: GridRect,
-        candidate: GridRect,
-    ) -> bool:
-        preferred = avoidance_preferred_delta(origin, candidate)
-        placements = tuple(self._placements.values())
-        updates, possible = plan_overlap_avoidance(
-            incoming, placements, preferred=preferred
-        )
-        if not possible or not updates:
-            updates, possible = plan_neighbor_shrink(incoming, placements)
-        if not possible or not updates:
-            self.feedback_requested.emit(FEEDBACK_AVOID_BOUNDARY)
-            self._relayout()
-            return False
-        return self._commit_planned(updates, set(incoming))
-
-    def _request_geometry(self, ref: UltraViewRef, rect: GridRect, reason: str) -> bool:
-        placement = self._placements.get(ref)
-        if placement is None or rect == placement.rect:
-            return False
-        if rect != self._legal_grid_rect(rect):
-            self._finish_out_of_grid({ref: rect}, placement.rect, rect)
-            return False
-        if rect_is_available(rect, self._placements.values(), excluding=ref):
+        if len(updates) == 1 and updates[0][0] == plan.mover_ref:
+            ref, rect = updates[0]
             self.geometry_requested.emit(
                 ref.section,
                 ref.view_id,
@@ -3190,8 +3238,52 @@ class FreeGridBoard(QWidget):
                 rect.row_span,
                 reason,
             )
-            return True
-        return self._commit_overlap_avoidance({ref: rect}, placement.rect, rect)
+        else:
+            payload = tuple(
+                (
+                    ref.section,
+                    ref.view_id,
+                    rect.column,
+                    rect.row,
+                    rect.column_span,
+                    rect.row_span,
+                )
+                for ref, rect in sorted(
+                    updates, key=lambda item: (item[0].section, item[0].view_id)
+                )
+            )
+            self.group_geometry_requested.emit(payload)
+        if plan.affected_count() > 1:
+            self.feedback_requested.emit(
+                FEEDBACK_REARRANGED.format(count=plan.affected_count())
+            )
+        return True
+
+    def _request_geometry(self, ref: UltraViewRef, rect: GridRect, reason: str) -> bool:
+        placement = self._placements.get(ref)
+        if placement is None or rect == placement.rect:
+            return False
+        operation = (
+            LAYOUT_RESIZE if "resize" in reason else LAYOUT_MOVE
+        )
+        plan = plan_layout(
+            tuple(self._placements.values()),
+            ref,
+            rect,
+            operation,
+            layout_revision=self._layout_revision,
+            preferred=avoidance_preferred_delta(placement.rect, rect),
+            incoming={ref: rect},
+        )
+        _log_plan_result(plan)
+        if not plan.accepted:
+            if plan.reason is LayoutRejectReason.OUT_OF_BOUNDS:
+                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
+            else:
+                self.feedback_requested.emit(FEEDBACK_NO_LEGAL_LAYOUT)
+            self._relayout()
+            return False
+        return self._emit_plan(plan, reason)
 
     def _on_layout_key(
         self, section: str, view_id: str, column_delta: int, row_delta: int, resize: bool
@@ -3211,12 +3303,9 @@ class FreeGridBoard(QWidget):
             )
         )
         if not resize:
-            if candidate != self._legal_grid_rect(candidate):
-                self._finish_out_of_grid({ref: candidate}, placement.rect, candidate)
-                return
             self._request_geometry(ref, candidate, "keyboard-move")
             return
-        self._request_geometry(ref, self._legal_grid_rect(candidate), "keyboard-resize")
+        self._request_geometry(ref, candidate, "keyboard-resize")
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if _accept_ultraview_drag(event):

@@ -124,6 +124,37 @@ def write_raw_blf(
     return path
 
 
+def engine_payload(i: int = 0) -> bytes:
+    """One EngineData (0x123) payload matching :func:`write_two_message_dbc`."""
+    return _sample_frame_payloads(i + 1)[i][0]
+
+
+def speed_payload(i: int = 0) -> bytes:
+    """One VehicleSpeed (0x100) payload matching :func:`write_two_message_dbc`."""
+    return _sample_frame_payloads(i + 1)[i][1]
+
+
+def make_can_frames(
+    parts: Sequence[tuple[int, int, bytes]],
+    *,
+    t_start: float = 0.0,
+    dt: float = 0.001,
+):
+    """Build an in-memory ``(timestamp, arbitration_id, payload)`` frame list.
+
+    ``parts`` is a sequence of ``(count, arbitration_id, payload)`` runs
+    concatenated in order. Tests use this instead of writing large BLFs or
+    extra full-file DBC decodes.
+    """
+    frames = []
+    t = float(t_start)
+    for count, arbitration_id, payload in parts:
+        for _ in range(int(count)):
+            frames.append((t, int(arbitration_id), payload))
+            t += dt
+    return frames
+
+
 def _sample_frame_payloads(n: int = 5):
     """EngineData / VehicleSpeed payloads matching :func:`write_sample_blf`."""
     enc16 = lambda v: struct.pack("<H", int(v))  # noqa: E731
