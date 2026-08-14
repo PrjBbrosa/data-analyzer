@@ -92,6 +92,33 @@ def _rect(widget: QWidget) -> dict[str, Any]:
     }
 
 
+def _edge_rhythm(page) -> dict[str, Any]:
+    """Record the persistent island axes without relying on screenshot pixels."""
+    host = page.canvas_host()
+    rail = page.tool_rail()
+    board_island = page.board_island()
+    status_island = page.status_island()
+    global_island = page.global_island()
+    navigation_island = page.navigation_island()
+    return {
+        "stage": {"w": int(host.width()), "h": int(host.height())},
+        "left_edges": {
+            "rail": int(rail.x()),
+            "board_island": int(board_island.x()),
+            "status_island": int(status_island.x()),
+        },
+        "right_edges": {
+            "global_island": int(global_island.x() + global_island.width()),
+            "navigation_island": int(navigation_island.x() + navigation_island.width()),
+        },
+        "rail": {
+            "height": int(rail.height()),
+            "preferred_height": int(rail.sizeHint().height()),
+            "center_error_px": int(2 * rail.y() + rail.height() - host.height()),
+        },
+    }
+
+
 def _card_facts(page) -> list[dict[str, Any]]:
     from mf4_analyzer.ui.ultraview_state import layout_slots, slot_occupant
 
@@ -204,6 +231,7 @@ def _page_snapshot(page, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         "navigation_island": _rect(page.navigation_island()),
         "status_island": _rect(page.status_island()),
         "card_context": _rect(page.card_context_island()),
+        "edge_rhythm": _edge_rhythm(page),
     }
     if extra:
         payload.update(extra)
@@ -474,6 +502,20 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
         errors.append(f"narrow_800 board={width}x{height}, expected >=710x470")
     if narrow_1280.get("library_visible"):
         errors.append("narrow_1280 library should default closed")
+
+    for name in ("narrow_1280", "narrow_800"):
+        rhythm = (geometry.get(name) or {}).get("edge_rhythm") or {}
+        left_edges = rhythm.get("left_edges") or {}
+        if len(set(left_edges.values())) != 1:
+            errors.append(f"{name} left chrome axes drifted: {left_edges}")
+        right_edges = rhythm.get("right_edges") or {}
+        if len(set(right_edges.values())) != 1:
+            errors.append(f"{name} right chrome axes drifted: {right_edges}")
+        rail = rhythm.get("rail") or {}
+        if abs(int(rail.get("center_error_px") or 0)) > 1:
+            errors.append(f"{name} rail is not vertically centred: {rail}")
+        if int(rail.get("height") or 0) != int(rail.get("preferred_height") or 0):
+            errors.append(f"{name} rail is stretched instead of content-height: {rail}")
 
     base_board = (narrow_1280.get("board_scroll") or {})
     for name in ("library_1280", "layout_1280", "filter_1280", "display_1280", "export_1280"):

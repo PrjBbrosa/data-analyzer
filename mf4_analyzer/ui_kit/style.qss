@@ -3967,7 +3967,6 @@ QWidget#ultraViewPage {
     background-color: #f2f4f7;
 }
 QWidget#ultraViewLibrary,
-QWidget#ultraViewBoardColumn,
 QWidget#ultraViewBoardGrid,
 QWidget#ultraViewFreeGrid,
 QFrame#ultraViewUnplacedTray,
@@ -4264,8 +4263,7 @@ QPushButton#ultraViewOpenSourceButton {
  * silently resets the carefully matched radius.
  * ------------------------------------------------------------------------- */
 QWidget#ultraViewPage,
-QWidget#ultraViewCanvasHost,
-QWidget#ultraViewBoardColumn {
+QWidget#ultraViewCanvasHost {
     background-color: #e9eff3;
 }
 QFrame#ultraViewCanvasStage {
@@ -4305,17 +4303,12 @@ QFrame#ultraViewToolRail {
 /* Every short-lived panel shares one quiet material.  Its translucent outer
  * shell/real corner pixels are implemented by FloatingChrome rather than a
  * per-card effect or platform-default popup frame. */
-QFrame#ultraViewLibraryPopover,
 QFrame#ultraViewLibrary,
 QFrame#ultraViewLayoutPopover,
-QFrame#ultraViewFilterPopover,
 QFrame#ultraViewCompareRail,
-QFrame#ultraViewUnplacedPopover,
 QFrame#ultraViewUnplacedTray,
 QFrame#ultraViewDisplayPopover,
 QFrame#ultraViewExportPopover,
-QFrame#ultraViewBoardPopover,
-QFrame#ultraViewPopover,
 QMenu#ultraViewBoardPopover,
 QMenu#ultraViewBoardItemMenu {
     background-color: #ffffff;
@@ -4427,7 +4420,6 @@ QToolButton#ultraViewRailUnplacedButton[attention="true"] {
     background-color: #fff7e9;
     color: #b86d08;
 }
-QLabel#ultraViewUnplacedBadge,
 QLabel#ultraViewRailUnplacedBadge {
     min-width: 14px;
     min-height: 14px;
@@ -4439,7 +4431,6 @@ QLabel#ultraViewRailUnplacedBadge {
     font-size: 9px;
     font-weight: 700;
 }
-QLabel#ultraViewUnplacedBadge[attention="true"],
 QLabel#ultraViewRailUnplacedBadge[attention="true"] {
     background-color: #d88b16;
 }
@@ -4455,15 +4446,12 @@ QLabel#ultraViewRailFilterWarningDot {
 }
 
 QLabel#ultraViewBoardIslandName,
-QLabel#ultraViewStatusIslandText,
 QLabel#ultraViewStatusMessage,
-QLabel#ultraViewNavZoomLabel,
-QLabel#ultraViewNavigationZoomLabel {
+QLabel#ultraViewNavZoomLabel {
     color: #17263a;
     font-size: 12px;
     font-weight: 700;
 }
-QLabel#ultraViewStatusIslandText,
 QLabel#ultraViewStatusMessage {
     color: #66778c;
     font-size: 11px;
@@ -4475,19 +4463,16 @@ QFrame#ultraViewStatusIsland[statusLevel="warning"] QLabel#ultraViewStatusMessag
 QFrame#ultraViewStatusIsland[statusLevel="error"] QLabel#ultraViewStatusMessage {
     color: #b42318;
 }
-QLabel#ultraViewNavZoomLabel,
-QLabel#ultraViewNavigationZoomLabel {
+QLabel#ultraViewNavZoomLabel {
     color: #405269;
     font-size: 11px;
     min-width: 38px;
     font-family: Menlo, "SF Mono", "Courier New", monospace;
 }
-QLabel#ultraViewFilterWarning,
 QLabel#ultraViewAxisWarning,
 QLabel#ultraViewCardStatus[status="stale"] {
     color: #b86d08;
 }
-QLabel#ultraViewFilterWarning[status="ok"],
 QLabel#ultraViewCardStatus[status="fresh"] {
     color: #0fa78f;
 }

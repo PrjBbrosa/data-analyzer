@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%231769e0'/%3E%3Cpath d='M4 14c3-8 5 6 8-2s4 6 8-4' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
+<title>TraceLab UltraView · 控件与对齐方案</title>
+<style>
+  :root {
+    --page: #e8edf3;
+    --canvas: #e9f0f4;
+    --dot: rgba(57, 79, 101, .15);
+    --surface: rgba(255, 255, 255, .96);
+    --soft: #f4f7fa;
+    --ink: #18283d;
+    --muted: #68798e;
+    --quiet: #98a5b4;
+    --line: rgba(67, 91, 119, .22);
+    --line-strong: rgba(47, 77, 110, .42);
+    --blue: #1769e0;
+    --blue-dark: #0e55bc;
+    --blue-soft: #e8f1ff;
+    --teal: #0b9c86;
+    --amber: #d88916;
+    --shadow: 0 12px 29px rgba(32, 53, 77, .13), 0 2px 6px rgba(32, 53, 77, .07);
+    --card-shadow: 0 7px 18px rgba(41, 65, 88, .09), 0 1px 2px rgba(41, 65, 88, .08);
+    --font: "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    --mono: "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; margin: 0; }
+  body {
+    min-width: 1120px;
+    color: var(--ink);
+    background:
+      radial-gradient(860px 400px at 8% -8%, rgba(255,255,255,.95), transparent 69%),
+      radial-gradient(780px 430px at 94% 0%, rgba(52,105,177,.10), transparent 68%),
+      var(--page);
+    font: 13px/1.45 var(--font);
+  }
+  button { font: inherit; }
+  button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  svg { display: block; }
+
+  .review {
+    width: min(1720px, calc(100vw - 32px));
+    margin: 0 auto;
+    padding: 19px 0 34px;
+  }
+  .review-head {
+    display: grid;
+    grid-template-columns: minmax(370px, .76fr) minmax(760px, 1.24fr);
+    gap: 26px;
+    align-items: end;
+    margin: 0 4px 16px;
+  }
+  .eyebrow {
+    color: #687c92;
+    font: 700 10px/1.2 var(--mono);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  h1 { margin: 5px 0 0; color: #14263d; font-size: 24px; line-height: 1.16; letter-spacing: -.035em; }
+  .lead { max-width: 560px; margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+
+  .scheme-switcher { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .scheme-button {
+    position: relative;
+    min-width: 0;
+    min-height: 65px;
+    padding: 9px 11px 9px 13px;
+    border: 1px solid rgba(77, 101, 129, .20);
+    border-radius: 10px;
+    color: #445970;
+    background: rgba(255,255,255,.58);
+    text-align: left;
+    cursor: pointer;
+    transition: transform .14s ease, background .14s ease, border-color .14s ease, box-shadow .14s ease;
+  }
+  .scheme-button:hover { transform: translateY(-1px); background: rgba(255,255,255,.88); }
+  .scheme-button.active {
+    border-color: rgba(23,105,224,.57);
+    color: #15519d;
+    background: #fff;
+    box-shadow: 0 7px 18px rgba(39, 64, 94, .10), inset 0 -2px 0 var(--blue);
+  }
+  .scheme-button .scheme-key { color: #8290a1; font: 700 9px/1 var(--mono); letter-spacing: .08em; }
+  .scheme-button b, .scheme-button span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .scheme-button b { margin-top: 3px; font-size: 11px; }
+  .scheme-button span { margin-top: 2px; color: #7c8999; font-size: 9px; }
+  .scheme-button .recommended {
+    position: absolute;
+    top: 9px;
+    right: 10px;
+    padding: 2px 5px;
+    border-radius: 4px;
+    color: var(--blue-dark);
+    background: var(--blue-soft);
+    font: 700 8px/1 var(--mono);
+  }
+
+  .app {
+    position: relative;
+    height: min(940px, calc(100vh - 160px));
+    min-height: 700px;
+    overflow: hidden;
+    border: 1px solid rgba(58, 80, 105, .31);
+    border-radius: 15px;
+    background: #fff;
+    box-shadow: 0 27px 72px rgba(24, 42, 66, .19), inset 0 1px 0 rgba(255,255,255,.9);
+    isolation: isolate;
+  }
+  .titlebar {
+    position: relative;
+    z-index: 40;
+    display: grid;
+    grid-template-columns: 280px 1fr 280px;
+    align-items: center;
+    height: 40px;
+    padding: 0 13px;
+    border-bottom: 1px solid rgba(77, 99, 123, .17);
+    background: rgba(251,252,254,.97);
+  }
+  .window-left { display: flex; align-items: center; gap: 11px; color: #526277; }
+  .traffic { display: inline-flex; gap: 6px; }
+  .traffic i { width: 9px; height: 9px; border-radius: 50%; background: #ff5e5d; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+  .traffic i:nth-child(2) { background: #ffbd2e; }
+  .traffic i:nth-child(3) { background: #28c840; }
+  .brand { color: #46586e; font-weight: 760; letter-spacing: -.01em; }
+  .window-title { justify-self: center; color: #45586f; font-size: 11px; font-weight: 750; }
+  .window-title small { margin-left: 7px; color: #8a99aa; font: 8px/1 var(--mono); letter-spacing: .09em; }
+  .window-state { justify-self: end; display: flex; align-items: center; gap: 7px; color: #78879a; font-size: 9px; }
+  .window-state i { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 3px rgba(11,156,134,.11); }
+
+  .workspace {
+    position: absolute;
+    inset: 40px 0 0;
+    overflow: hidden;
+    color: var(--ink);
+    background-color: var(--canvas);
+    background-image:
+      radial-gradient(circle, var(--dot) 1px, transparent 1.1px),
+      radial-gradient(820px 380px at 46% 5%, rgba(255,255,255,.40), transparent 70%);
+    background-size: 22px 22px, 100% 100%;
+  }
+  .workspace::after {
+    content: "READ-ONLY BOARD · NO COMPUTE";
+    position: absolute;
+    right: 18px;
+    bottom: 14px;
+    color: rgba(75, 99, 122, .42);
+    font: 8px/1 var(--mono);
+    letter-spacing: .08em;
+  }
+  .island {
+    position: absolute;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(16px) saturate(1.04);
+  }
+  .tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    min-width: 32px;
+    padding: 0 9px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: #617388;
+    background: transparent;
+    font-size: 10px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color .14s ease, background .14s ease, border-color .14s ease, transform .14s ease;
+  }
+  .tool:hover { color: #263b55; border-color: var(--line); background: var(--soft); }
+  .tool:active { transform: translateY(1px); }
+  .tool.active { color: var(--blue-dark); background: var(--blue-soft); }
+  .tool.primary { color: #fff; background: var(--blue); }
+  .tool.primary:hover { color: #fff; border-color: transparent; background: #0f5cc8; }
+  .tool svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .rule { width: 1px; height: 20px; margin: 0 3px; background: var(--line); }
+  .tool-label { font-size: 10px; font-weight: 690; }
+
+  .board-island { top: 16px; left: 18px; height: 42px; padding: 4px; }
+  .board-name { min-width: 147px; justify-content: flex-start; padding-left: 10px; color: #244a78; background: var(--blue-soft); font-weight: 760; }
+  .board-name svg:last-child { width: 12px; height: 12px; margin-left: auto; }
+  .grid-mark { display: grid; grid-template-columns: repeat(2, 4px); grid-template-rows: repeat(2, 4px); gap: 2px; width: 12px; height: 12px; }
+  .grid-mark i { border-radius: 1px; background: currentColor; }
+  .global-island { top: 16px; right: 18px; height: 42px; padding: 4px; }
+  .global-island .tool-label { display: none; }
+
+  .tool-rail {
+    top: 50%;
+    bottom: auto;
+    left: 18px;
+    flex-direction: column;
+    gap: 4px;
+    width: 42px;
+    padding: 5px;
+    transform: translateY(-50%);
+  }
+  .tool-rail .tool { width: 32px; padding: 0; }
+  .rail-rule { width: 20px; height: 1px; margin: 2px 0; background: var(--line); }
+  .badge { position: absolute; top: 4px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 2px #fff; }
+
+  .status-island { bottom: 16px; left: 18px; height: 40px; padding: 4px 7px; gap: 1px; }
+  .status-island .tool { color: var(--muted); }
+  .status-copy { margin: 0 6px 0 3px; color: #bd7312; font-size: 10px; font-weight: 690; }
+  .nav-island { right: 18px; bottom: 16px; height: 40px; padding: 4px; }
+  .zoom-value { min-width: 43px; color: #4d617b; font: 700 11px/1 var(--mono); text-align: center; }
+
+  .top-commandbar {
+    top: 16px;
+    left: 50%;
+    display: none;
+    height: 42px;
+    padding: 4px;
+    transform: translateX(-50%);
+  }
+  .top-commandbar .tool { min-width: 58px; }
+
+  .selection-island {
+    top: 76px;
+    left: 50%;
+    display: none;
+    height: 42px;
+    padding: 4px 5px 4px 8px;
+    transform: translateX(-50%);
+  }
+  .selection-caption { margin: 0 8px 0 2px; color: #49627f; font-size: 10px; font-weight: 750; white-space: nowrap; }
+  .selection-caption small { display: block; margin-top: 1px; color: #8695a7; font: 8px/1 var(--mono); letter-spacing: .02em; }
+  .selection-island .tool { padding: 0 7px; }
+  .selection-island .tool svg { width: 14px; height: 14px; }
+  .center-guide { display: none; }
+  .guide-label { display: none; }
+
+  .card-stage { position: absolute; inset: 0; }
+  .board-card {
+    position: absolute;
+    z-index: 2;
+    overflow: hidden;
+    border: 1px solid rgba(81, 105, 129, .20);
+    border-radius: 13px;
+    background: rgba(255,255,255,.97);
+    box-shadow: var(--card-shadow);
+    cursor: pointer;
+    transition: box-shadow .16s ease, border-color .16s ease, transform .16s ease;
+  }
+  .board-card:hover { transform: translateY(-1px); box-shadow: 0 11px 25px rgba(32, 56, 82, .14), 0 1px 2px rgba(32,56,82,.08); }
+  .board-card.selected { z-index: 3; border-color: rgba(23,105,224,.67); box-shadow: 0 0 0 2px rgba(23,105,224,.20), 0 11px 25px rgba(32,56,82,.13); }
+  .card-a { left: 82px; top: 90px; width: min(42%, 520px); height: 302px; }
+  .card-b { left: min(calc(42% + 94px), 622px); top: 90px; width: min(24%, 310px); height: 174px; }
+  .card-c { left: min(calc(42% + 94px), 622px); top: 276px; width: min(24%, 310px); height: 174px; }
+  .card-d { left: 82px; top: 406px; width: min(20%, 260px); height: 174px; }
+  .card-e { left: min(calc(20% + 95px), 356px); top: 406px; width: min(20%, 260px); height: 174px; }
+  .card-head { display: flex; align-items: center; height: 38px; padding: 0 9px 0 11px; border-bottom: 1px solid rgba(91,113,137,.12); }
+  .card-dot { width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: var(--card-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--card-color) 12%, transparent); }
+  .card-name { min-width: 0; overflow: hidden; color: #2e425d; font-size: 11px; font-weight: 740; text-overflow: ellipsis; white-space: nowrap; }
+  .card-meta { margin-left: auto; color: #91a0b0; font: 8px/1 var(--mono); }
+  .card-spot { display: none; }
+  .chart { height: calc(100% - 38px); padding: 10px 12px 12px; }
+  .plot { position: relative; width: 100%; height: 100%; overflow: hidden; border-left: 1px solid #dfe7ee; border-bottom: 1px solid #dfe7ee; background: repeating-linear-gradient(0deg, transparent 0 28px, rgba(177,194,208,.18) 29px), repeating-linear-gradient(90deg, transparent 0 46px, rgba(177,194,208,.16) 47px); }
+  .plot svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .plot .axis-note { position: absolute; left: 5px; bottom: 4px; color: #9dacba; font: 7px/1 var(--mono); }
+  .heatmap { background: linear-gradient(136deg, #220955 0 13%, #1d2085 22%, #1855be 38%, #18a6cb 52%, #65d490 67%, #f6cf5b 79%, #e9674b 100%); opacity: .9; }
+  .heatmap::before { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 15px, rgba(10,5,60,.45) 16px 19px), repeating-linear-gradient(0deg, transparent 0 24px, rgba(15,5,60,.30) 25px 29px); mix-blend-mode: multiply; }
+  .heatmap::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 17%, rgba(255,194,48,.78) 20% 22%, transparent 25% 52%, rgba(255,106,49,.70) 55% 58%, transparent 61%); filter: blur(3px); }
+  .waterfall { background: linear-gradient(180deg, rgba(16,36,65,.03), rgba(16,36,65,.10)); }
+  .waterfall::before { content: ""; position: absolute; inset: 5px 6px; background: repeating-linear-gradient(83deg, transparent 0 5px, rgba(39,70,108,.58) 6px 7px, transparent 8px 11px); opacity: .62; }
+
+  .axis-tag {
+    position: absolute;
+    z-index: 1;
+    left: 82px;
+    top: 70px;
+    color: #8797a8;
+    font: 8px/1 var(--mono);
+    letter-spacing: .06em;
+  }
+
+  /* A — Keep floating islands, but lock every island to the same edge rhythm. */
+  .workspace[data-scheme="a"] .global-island .tool-label { display: inline; }
+  .workspace[data-scheme="a"] .global-island .tool { min-width: 60px; }
+  .workspace[data-scheme="a"] .global-island .tool:last-child { min-width: 32px; }
+  .workspace[data-scheme="a"] .axis-tag::after { content: " · 12 px safety edge · 40 px island baseline"; color: #a1adba; }
+
+  /* B — Expose high-frequency canvas actions in one compact command strip. */
+  .workspace[data-scheme="b"] .board-island { left: 18px; }
+  .workspace[data-scheme="b"] .global-island { right: 18px; }
+  .workspace[data-scheme="b"] .global-island .tool-label { display: inline; }
+  .workspace[data-scheme="b"] .global-island .tool { min-width: 60px; }
+  .workspace[data-scheme="b"] .tool-rail { display: none; }
+  .workspace[data-scheme="b"] .top-commandbar { display: flex; }
+  .workspace[data-scheme="b"] .card-a, .workspace[data-scheme="b"] .card-d { left: 20px; }
+  .workspace[data-scheme="b"] .card-b, .workspace[data-scheme="b"] .card-c { left: min(calc(42% + 32px), 552px); }
+  .workspace[data-scheme="b"] .card-e { left: min(calc(20% + 32px), 294px); }
+  .workspace[data-scheme="b"] .axis-tag { left: 20px; }
+  .workspace[data-scheme="b"] .axis-tag::after { content: " · board identity left / canvas actions centered / delivery actions right"; color: #a1adba; }
+
+  /* C — Card placement gets a dedicated, only-when-selected alignment instrument. */
+  .workspace[data-scheme="c"] .selection-island { display: flex; }
+  .workspace[data-scheme="c"] .center-guide {
+    position: absolute;
+    top: 66px;
+    bottom: 63px;
+    left: 50%;
+    display: block;
+    width: 1px;
+    border-left: 1px dashed rgba(23,105,224,.37);
+    pointer-events: none;
+  }
+  .workspace[data-scheme="c"] .center-guide::before,
+  .workspace[data-scheme="c"] .center-guide::after {
+    content: "";
+    position: absolute;
+    left: -4px;
+    width: 7px;
+    height: 7px;
+    border: 1px solid rgba(23,105,224,.54);
+    border-radius: 50%;
+    background: var(--canvas);
+  }
+  .workspace[data-scheme="c"] .center-guide::before { top: 80px; }
+  .workspace[data-scheme="c"] .center-guide::after { bottom: 10px; }
+  .workspace[data-scheme="c"] .guide-label { position: absolute; top: 125px; left: calc(50% + 9px); display: block; color: rgba(21,93,192,.70); font: 8px/1 var(--mono); letter-spacing: .07em; }
+  .workspace[data-scheme="c"] .axis-tag::after { content: " · selected cards use the same centerline and spacing grammar"; color: #7f9fd0; }
+  .workspace[data-scheme="c"] .card-a, .workspace[data-scheme="c"] .card-b { top: 130px; }
+  .workspace[data-scheme="c"] .card-c { top: 318px; }
+  .workspace[data-scheme="c"] .card-d, .workspace[data-scheme="c"] .card-e { top: 446px; }
+  .workspace[data-scheme="c"] .board-card.selected .card-spot { position: absolute; right: 7px; bottom: 7px; display: block; width: 7px; height: 7px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 2px #fff; }
+
+  .toast {
+    position: absolute;
+    z-index: 30;
+    left: 50%;
+    bottom: 70px;
+    max-width: 520px;
+    padding: 8px 12px;
+    border: 1px solid rgba(23,105,224,.30);
+    border-radius: 9px;
+    color: #23518a;
+    background: rgba(255,255,255,.96);
+    box-shadow: var(--shadow);
+    font-size: 10px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 8px);
+    transition: opacity .16s ease, transform .16s ease;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  .legend {
+    position: absolute;
+    z-index: 8;
+    right: 17px;
+    top: 69px;
+    display: none;
+    width: 184px;
+    padding: 9px 11px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--muted);
+    background: rgba(255,255,255,.72);
+    font-size: 9px;
+  }
+  .legend b { display: block; margin-bottom: 3px; color: #4b627d; font-size: 10px; }
+  .workspace[data-scheme="c"] .legend { display: block; }
+  .legend kbd { padding: 1px 4px; border: 1px solid #d4dfe9; border-radius: 3px; color: #5c7189; background: #fff; font: 8px/1 var(--mono); }
+
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+  <defs>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m7 9 5 5 5-5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-library" viewBox="0 0 24 24"><path d="M5 4.5h14v15H5zM8 8h8M8 12h8M8 16h5"/></symbol>
+    <symbol id="i-layout" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16l-6.3 7.2v5L10.3 19v-6.8z"/></symbol>
+    <symbol id="i-unplaced" viewBox="0 0 24 24"><path d="M5 5h14v10H5zM9 19h6M12 15v4"/><path d="m17 8 2 2 3-3"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M3.5 12s3-5 8.5-5 8.5 5 8.5 5-3 5-8.5 5-8.5-5-8.5-5Z"/><circle cx="12" cy="12" r="2"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4M5 14v5h14v-5"/></symbol>
+    <symbol id="i-present" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="11" rx="1"/><path d="M9 20h6M12 15v5"/></symbol>
+    <symbol id="i-overview" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h3v3H8zM13 8h3v6h-3zM8 13h3v3H8zM13 16h3"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M8 4H4v4M16 4h4v4M20 16v4h-4M4 16v4h4"/></symbol>
+    <symbol id="i-align-left" viewBox="0 0 24 24"><path d="M5 4v16M9 7h9M9 12h6M9 17h10"/></symbol>
+    <symbol id="i-align-center" viewBox="0 0 24 24"><path d="M12 4v16M6 7h12M8 12h8M5 17h14"/></symbol>
+    <symbol id="i-align-right" viewBox="0 0 24 24"><path d="M19 4v16M6 7h9M9 12h6M5 17h10"/></symbol>
+    <symbol id="i-distribute" viewBox="0 0 24 24"><path d="M5 5v14M19 5v14M9 8v8M15 8v8"/><path d="M6 12h12" stroke-dasharray="2 2"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M9.5 9.3a2.7 2.7 0 0 1 5.1 1.3c0 1.8-2.2 2.1-2.5 3.6M12 17h.01"/></symbol>
+  </defs>
+</svg>
+
+<main class="review">
+  <header class="review-head">
+    <div>
+      <div class="eyebrow">TraceLab / UltraView / control-study</div>
+      <h1>把“散落的按钮”收进一套操作轴</h1>
+      <p class="lead">对象：需要在只读全局看板上安排和比较多个 View 的工程分析用户。单页任务：同时看清 Board、画布、对象、导航四个作用域；卡片多选后才出现对齐与分布。</p>
+    </div>
+    <nav class="scheme-switcher" aria-label="布局方案">
+      <button class="scheme-button active" type="button" data-scheme="a"><span class="scheme-key">A · EDGE RHYTHM</span><b>边缘基线浮岛</b><span>保留浮岛，统一尺寸、锚点与分组</span></button>
+      <button class="scheme-button" type="button" data-scheme="b"><span class="scheme-key">B · COMMAND STRIP</span><b>紧凑通栏</b><span>把高频画布动作提到顶部中轴</span></button>
+      <button class="scheme-button" type="button" data-scheme="c"><span class="scheme-key">C · OBJECT CALIBRATION</span><b>对象校准条</b><span>多选后才给对齐、居中、等距</span><em class="recommended">建议</em></button>
+    </nav>
+  </header>
+
+  <section class="app" aria-label="UltraView 控件布局演示">
+    <div class="titlebar">
+      <div class="window-left"><span class="traffic"><i></i><i></i><i></i></span><span class="brand">TraceLab</span></div>
+      <div class="window-title">UltraView <small>GLOBAL COMPARISON</small></div>
+      <div class="window-state"><i></i>只读预览 · 不计算</div>
+    </div>
+
+    <div class="workspace" id="workspace" data-scheme="a">
+      <div class="axis-tag">BOARD CANVAS</div>
+      <div class="center-guide"></div><span class="guide-label">CENTER AXIS</span>
+
+      <div class="island board-island">
+        <button class="tool board-name" type="button" data-message="Board 菜单：切换、重命名、复制、排序、删除。">
+          <span class="grid-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>全局对比<svg><use href="#i-chevron"/></svg>
+        </button>
+        <button class="tool" type="button" aria-label="新建 Board" data-message="新建 Board；不会新增分析计算。"><svg><use href="#i-plus"/></svg></button>
+      </div>
+
+      <div class="island global-island" aria-label="全局动作">
+        <button class="tool" type="button" data-message="显示：切换标题、来源和状态标记。"><svg><use href="#i-eye"/></svg><span class="tool-label">显示</span></button>
+        <button class="tool" type="button" data-message="导出：复制整板图、PNG 1× 或 2×。"><svg><use href="#i-export"/></svg><span class="tool-label">导出</span></button>
+        <button class="tool primary" type="button" data-message="演示：隐藏编辑入口，保留只读预览。"><svg><use href="#i-present"/></svg><span class="tool-label">演示</span></button>
+      </div>
+
+      <div class="island top-commandbar" aria-label="画布命令">
+        <button class="tool active" type="button" data-message="View 库：按需打开，不挤占画布。"><svg><use href="#i-library"/></svg>View</button>
+        <button class="tool" type="button" data-message="布局：切换八种模板或自由网格。"><svg><use href="#i-layout"/></svg>布局</button>
+        <button class="tool" type="button" data-message="筛选：只弱化不匹配的卡片。"><svg><use href="#i-filter"/></svg>筛选</button>
+        <span class="rule"></span>
+        <button class="tool" type="button" data-message="未放置：查看尚未进入当前 Board 的 View。"><svg><use href="#i-unplaced"/></svg>未放置</button>
+      </div>
+
+      <div class="island tool-rail" aria-label="画布工具">
+        <button class="tool active" type="button" aria-label="View 库" data-message="View 库：按需打开，不挤占画布。"><svg><use href="#i-library"/></svg></button>
+        <button class="tool" type="button" aria-label="布局" data-message="布局：切换八种模板或自由网格。"><svg><use href="#i-layout"/></svg></button>
+        <span class="rail-rule"></span>
+        <button class="tool" type="button" aria-label="筛选" data-message="筛选：只弱化不匹配的卡片。"><svg><use href="#i-filter"/></svg><span class="badge"></span></button>
+        <button class="tool" type="button" aria-label="未放置" data-message="未放置：查看尚未进入当前 Board 的 View。"><svg><use href="#i-unplaced"/></svg></button>
+      </div>
+
+      <div class="island selection-island" id="selectionTools" aria-label="选中卡片的对齐工具">
+        <span class="selection-caption"><span id="selectedCount">3 张已选</span><small>OBJECT ALIGNMENT</small></span>
+        <span class="rule"></span>
+        <button class="tool" type="button" aria-label="左对齐" data-align="左对齐"><svg><use href="#i-align-left"/></svg></button>
+        <button class="tool active" type="button" aria-label="水平居中" data-align="水平居中"><svg><use href="#i-align-center"/></svg></button>
+        <button class="tool" type="button" aria-label="右对齐" data-align="右对齐"><svg><use href="#i-align-right"/></svg></button>
+        <span class="rule"></span>
+        <button class="tool" type="button" aria-label="等距分布" data-align="水平等距"><svg><use href="#i-distribute"/></svg></button>
+        <button class="tool" type="button" data-message="更多：顶部、垂直居中、底部、垂直等距。">更多<svg><use href="#i-chevron"/></svg></button>
+      </div>
+
+      <aside class="legend"><b>对象级命令，只在多选时出现</b>选择 ≥2 张卡片后，<kbd>⌥</kbd>+拖拽仍移动，居中/分布只写当前 Board 的布局。</aside>
+
+      <div class="card-stage" id="cardStage" aria-label="Board 卡片">
+        <article class="board-card card-a selected" style="--card-color:#1677ed" tabindex="0" aria-label="时域主视图">
+          <header class="card-head"><i class="card-dot"></i><span class="card-name">转向角 · 时域对比</span><span class="card-meta">TIME</span></header>
+          <div class="chart"><div class="plot"><svg viewBox="0 0 480 230" preserveAspectRatio="none"><path d="M0 123 C10 90 15 180 25 118 S40 100 50 126 S65 94 74 121 S90 154 100 118 S113 87 124 124 S138 146 149 118 S165 91 176 123 S188 150 200 117 S214 76 225 120 S240 151 252 116 S269 100 280 123 S294 139 305 117 S320 83 332 122 S348 154 360 117 S374 105 386 122 S400 147 412 119 S425 88 438 123 S456 144 480 117" fill="none" stroke="#27bba2" stroke-width="2.1"/><path d="M0 170 C36 132 70 182 108 155 S174 186 217 153 S294 177 332 148 S401 181 480 156" fill="none" stroke="#f0716c" stroke-width="1.65" opacity=".9"/></svg><span class="axis-note">0 s · 255.08 s</span></div></div><i class="card-spot"></i>
+        </article>
+        <article class="board-card card-b selected" style="--card-color:#ef6d4c" tabindex="0" aria-label="频谱视图">
+          <header class="card-head"><i class="card-dot"></i><span class="card-name">轮速 · FFT</span><span class="card-meta">FFT</span></header>
+          <div class="chart"><div class="plot"><svg viewBox="0 0 300 135" preserveAspectRatio="none"><path d="M0 106 L8 35 13 97 18 49 24 107 31 73 38 104 46 21 52 100 59 63 68 108 75 59 82 99 90 46 99 110 107 66 116 105 126 83 138 112 151 73 163 101 176 48 188 108 200 68 210 102 221 83 233 110 245 74 256 103 268 67 279 109 290 76 300 104" fill="none" stroke="#87aeea" stroke-width="1.5"/></svg><span class="axis-note">0 Hz · 500 Hz</span></div></div><i class="card-spot"></i>
+        </article>
+        <article class="board-card card-c selected" style="--card-color:#1778f2" tabindex="0" aria-label="阶次视图">
+          <header class="card-head"><i class="card-dot"></i><span class="card-name">驾驶员输入 · 阶次</span><span class="card-meta">ORDER</span></header>
+          <div class="chart"><div class="plot"><svg viewBox="0 0 300 135" preserveAspectRatio="none"><path d="M0 41 C35 36 55 52 75 71 S111 107 137 98 S165 74 184 94 S218 116 240 100 S269 105 300 121" fill="none" stroke="#739fea" stroke-width="1.7"/><path d="M0 113 C45 103 84 117 127 108 S194 117 236 106 S269 113 300 108" fill="none" stroke="#2b78e8" stroke-width="1.4" opacity=".75"/></svg><span class="axis-note">1st · 12th</span></div></div><i class="card-spot"></i>
+        </article>
+        <article class="board-card card-d" style="--card-color:#a63acc" tabindex="0" aria-label="时频视图">
+          <header class="card-head"><i class="card-dot"></i><span class="card-name">方向盘振动 · 时频</span><span class="card-meta">TF</span></header>
+          <div class="chart"><div class="plot heatmap"><span class="axis-note" style="color:rgba(255,255,255,.72)">SPECTROGRAM</span></div></div><i class="card-spot"></i>
+        </article>
+        <article class="board-card card-e" style="--card-color:#6a7d93" tabindex="0" aria-label="瀑布视图">
+          <header class="card-head"><i class="card-dot"></i><span class="card-name">车轮中心 · 瀑布</span><span class="card-meta">WATERFALL</span></header>
+          <div class="chart"><div class="plot waterfall"><svg viewBox="0 0 260 130" preserveAspectRatio="none"><path d="M0 112 C28 106 40 99 57 84 S87 57 102 60 S134 82 151 67 S178 41 193 45 S225 56 260 42" fill="none" stroke="#6192e8" stroke-width="1.6"/></svg><span class="axis-note">2D + order trace</span></div></div><i class="card-spot"></i>
+        </article>
+      </div>
+
+      <div class="island status-island"><button class="tool" type="button" aria-label="提示" data-message="预览数据不会重新计算；X 范围不一致仅影响比较提示。"><svg><use href="#i-help"/></svg></button><span class="status-copy">只读预览 · X 范围不一致</span></div>
+      <div class="island nav-island"><button class="tool" type="button" aria-label="整板概览" data-message="整板概览：从全局定位到局部卡片。"><svg><use href="#i-overview"/></svg></button><span class="rule"></span><button class="tool" type="button" aria-label="缩小" data-zoom="-">−</button><span class="zoom-value" id="zoomValue">55%</span><button class="tool" type="button" aria-label="放大" data-zoom="+">＋</button><button class="tool" type="button" aria-label="适应画布" data-zoom="fit"><svg><use href="#i-fit"/></svg></button></div>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+  const workspace = document.querySelector('#workspace');
+  const toast = document.querySelector('#toast');
+  const cards = [...document.querySelectorAll('.board-card')];
+  const selectedCount = document.querySelector('#selectedCount');
+  const zoomValue = document.querySelector('#zoomValue');
+  let zoom = 55;
+  let toastTimer;
+
+  function showToast(message) {
+    toast.textContent = message;
+    toast.classList.add('show');
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2600);
+  }
+  function selectionCount() {
+    const count = cards.filter(card => card.classList.contains('selected')).length;
+    selectedCount.textContent = `${count} 张已选`;
+    return count;
+  }
+  document.querySelectorAll('[data-scheme]').forEach(button => {
+    button.addEventListener('click', () => {
+      const scheme = button.dataset.scheme;
+      workspace.dataset.scheme = scheme;
+      document.querySelectorAll('[data-scheme]').forEach(item => item.classList.toggle('active', item === button));
+      const copy = {
+        a: '方案 A：用同一条边缘基线约束四组浮岛；适合保留当前交互入口。',
+        b: '方案 B：把 View、布局、筛选、未放置收进顶部中轴；适合强调可发现性。',
+        c: '方案 C：把卡片编排变成对象级工具；多选后才出现左/中/右、等距分布。'
+      };
+      showToast(copy[scheme]);
+    });
+  });
+  cards.forEach(card => {
+    card.addEventListener('click', () => {
+      card.classList.toggle('selected');
+      const count = selectionCount();
+      if (workspace.dataset.scheme === 'c') showToast(count >= 2 ? `已选择 ${count} 张卡片，可用上方工具条进行对齐。` : '选择至少两张卡片后才显示可执行的对齐含义。');
+    });
+    card.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); card.click(); } });
+  });
+  document.querySelectorAll('[data-message]').forEach(button => button.addEventListener('click', () => showToast(button.dataset.message)));
+  document.querySelectorAll('[data-align]').forEach(button => button.addEventListener('click', () => {
+    const count = selectionCount();
+    if (count < 2) { showToast('至少选择两张卡片后，才能执行对齐或等距分布。'); return; }
+    document.querySelectorAll('[data-align]').forEach(item => item.classList.toggle('active', item === button));
+    cards.filter(card => card.classList.contains('selected')).forEach(card => { card.animate([{ transform: 'translateY(-2px)' }, { transform: 'translateY(0)' }], { duration: 240, easing: 'ease-out' }); });
+    showToast(`已应用“${button.dataset.align}”到 ${count} 张卡片；只修改当前 Board 布局。`);
+  }));
+  document.querySelectorAll('[data-zoom]').forEach(button => button.addEventListener('click', () => {
+    if (button.dataset.zoom === 'fit') zoom = 55;
+    else zoom = Math.max(25, Math.min(200, zoom + (button.dataset.zoom === '+' ? 10 : -10)));
+    zoomValue.textContent = `${zoom}%`;
+    showToast(button.dataset.zoom === 'fit' ? '已适应画布。' : `缩放 ${zoom}%。`);
+  }));
+  selectionCount();
+</script>
+</body>
+</html>

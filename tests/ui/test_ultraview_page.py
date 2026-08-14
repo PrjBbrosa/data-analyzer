@@ -2440,6 +2440,38 @@ def test_display_and_export_overlays_anchor_under_global_island(qtbot):
     assert overlay.height() < 170
 
 
+@pytest.mark.parametrize("width,height", [(1280, 800), (800, 560)])
+def test_floating_chrome_projects_edge_rhythm_and_compact_tool_rail(qtbot, width, height):
+    """The page maps the pure layout to a content-height, centred ToolRail."""
+    harness = _Harness(qtbot)
+    harness.page.resize(width, height)
+    qtbot.wait(20)
+
+    host = harness.page.canvas_host()
+    rail = harness.page.tool_rail()
+    board_island = harness.page.board_island()
+    status_island = harness.page.status_island()
+    global_island = harness.page.global_island()
+    navigation_island = harness.page.navigation_island()
+    layout = harness.page._floating_layout()
+
+    def geometry(widget):
+        rect = widget.geometry()
+        return (rect.x(), rect.y(), rect.width(), rect.height())
+
+    assert geometry(rail) == (
+        layout.rail.x,
+        layout.rail.y,
+        layout.rail.width,
+        layout.rail.height,
+    )
+    assert rail.x() == board_island.x() == status_island.x()
+    assert global_island.x() + global_island.width() == navigation_island.x() + navigation_island.width()
+    assert rail.height() == rail.sizeHint().height()
+    assert rail.height() < host.height()
+    assert abs((2 * rail.y() + rail.height()) - host.height()) <= 1
+
+
 def test_library_overlay_keeps_section_and_row_height(qtbot, qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)

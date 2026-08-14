@@ -197,6 +197,9 @@ def calculate_floating_layout(
     safe = stage.inset(SAFE_MARGIN)
     board = stage
 
+    # Cards still park to the rail's right so Fit keeps the canvas clear of
+    # the tool strip.  Persistent left islands instead share the stage-safe
+    # left axis; their vertical separation keeps them clear of that strip.
     content_left = min(safe.right, safe.left + RAIL_WIDTH + RAIL_TO_CANVAS_GAP)
     content_top = min(safe.bottom, safe.top + ISLAND_HEIGHT + ISLAND_GAP)
 
@@ -207,14 +210,14 @@ def calculate_floating_layout(
     )
     global_island = Rect(safe.right - global_width, safe.top, global_width, island_height)
 
-    max_board_island_width = max(0, global_island.left - ISLAND_GAP - content_left)
+    max_board_island_width = max(0, global_island.left - ISLAND_GAP - safe.left)
     board_width = min(
         BOARD_ISLAND_MAX_WIDTH,
         max_board_island_width,
         _length(board_island_size[0]) if board_island_size is not None else BOARD_ISLAND_MAX_WIDTH,
     )
     board_island = Rect(
-        content_left,
+        safe.left,
         safe.top,
         board_width,
         island_height,
@@ -233,24 +236,23 @@ def calculate_floating_layout(
         bottom_island_height,
     ).clamp_to(safe)
 
-    status_max_width = max(0, navigation_island.left - ISLAND_GAP - content_left)
+    status_max_width = max(0, navigation_island.left - ISLAND_GAP - safe.left)
     status_width = min(
         status_max_width,
         _length(status_island_size[0]) if status_island_size is not None else STATUS_ISLAND_WIDTH,
     )
     status_island = Rect(
-        content_left,
+        safe.left,
         bottom_y,
         status_width,
         bottom_island_height,
     ).clamp_to(safe)
 
-    rail_top = min(safe.bottom, board_island.bottom + ISLAND_GAP)
-    rail_available = max(0, status_island.top - ISLAND_GAP - rail_top)
     rail_height = min(
-        rail_available,
+        safe.height,
         _length(rail_size[1]) if rail_size is not None else RAIL_CONTENT_HEIGHT,
     )
+    rail_top = safe.top + (safe.height - rail_height) // 2
     rail = Rect(
         safe.left,
         rail_top,

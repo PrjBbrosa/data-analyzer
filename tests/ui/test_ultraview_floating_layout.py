@@ -61,6 +61,7 @@ def test_floating_layout_module_is_qt_free():
 
 def test_standard_stage_keeps_canvas_target_and_separates_chrome():
     layout = calculate_floating_layout((1280, 800))
+    safe = layout.stage.inset(SAFE_MARGIN)
 
     assert SAFE_MARGIN == 12
     assert RAIL_WIDTH == 48
@@ -72,7 +73,12 @@ def test_standard_stage_keeps_canvas_target_and_separates_chrome():
     assert layout.fit.width >= 1190
     assert layout.rail.height <= RAIL_CONTENT_HEIGHT + 8
     assert layout.content_inset_bottom > 0
-    assert layout.board_island.x == layout.fit.x
+    assert layout.board_island.left == safe.left
+    assert layout.status_island.left == safe.left
+    assert layout.global_island.right == safe.right
+    assert layout.navigation_island.right == safe.right
+    assert layout.fit.left == safe.left + RAIL_WIDTH + 18
+    assert layout.rail.top == safe.top + (safe.height - layout.rail.height) // 2
 
     for rect in layout.persistent_rects:
         _assert_inside(rect, layout.stage)
@@ -91,6 +97,18 @@ def test_compact_stage_keeps_canvas_target_without_forced_width():
     for rect in layout.persistent_rects:
         _assert_inside(rect, layout.stage)
     _assert_non_overlapping(list(layout.chrome_rects))
+
+
+@pytest.mark.parametrize("rail_height", [48, 96, RAIL_CONTENT_HEIGHT])
+def test_tool_rail_uses_requested_content_height_and_centers_in_safe_stage(rail_height):
+    layout = calculate_floating_layout((1280, 800), rail_size=(RAIL_WIDTH, rail_height))
+    safe = layout.stage.inset(SAFE_MARGIN)
+
+    assert layout.rail.left == safe.left
+    assert layout.rail.width == RAIL_WIDTH
+    assert layout.rail.height == rail_height
+    assert layout.rail.top == safe.top + (safe.height - rail_height) // 2
+    assert layout.fit.left == layout.rail.right + 18
 
 
 def test_overlay_never_participates_in_board_geometry():
