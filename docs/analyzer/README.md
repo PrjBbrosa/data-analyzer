@@ -24,7 +24,7 @@ Published guide entry points:
 
 ## Current Product Baseline
 
-The current baseline is TraceLab 7.9.9. It retains the 7.6 ASCII (`.asc`),
+The current baseline is TraceLab 8.0.0. It retains the 7.6 ASCII (`.asc`),
 NI TDMS (`.tdms`), and 12-View changes, as well as the native WinWert (`.wwt`),
 ZFGE2/TestRunPRO (`.zfd`), and MATLAB (`.mat`) imports introduced in 7.7.
 7.8 added a draft-based channel configuration manager with View matching
@@ -79,7 +79,14 @@ Views, and fill an empty analysis View from the TimeDomain focus on mode entry.
 With attach-on-load enabled, loading while an analysis section is active now
 attaches to that section's active View instead of the background TimeDomain
 View. Batch sheets accept drag-and-drop file intake and reuse the main-window
-BLF+DBC pairing dialogs for disk imports.
+BLF+DBC pairing dialogs for disk imports. 8.0 adds UltraView as a read-only,
+multi-Board comparison workspace for existing Time, FFT, FFT-vs-Time, FRF,
+and Order Views. It supports template and 12-column free-grid layouts, direct
+card manipulation, canvas zoom/pan/minimap navigation, per-Board undo/redo,
+project persistence, and PNG export without recomputing or mutating source
+Views. Project saves use atomic replacement, restored source-bearing analysis
+Views are recomputed across inactive tabs, and large BLF/ASC imports avoid
+eagerly materializing one dense shared table.
 Update the published guides when these behaviours change; preserve each loader's
 timing and unit boundaries instead of describing inferred metadata as measured
 truth.

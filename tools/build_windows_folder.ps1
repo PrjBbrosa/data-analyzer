@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "7.9.9",
+    [string]$Version = "8.0.0",
     [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
@@ -58,7 +58,7 @@ $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
 $EvidenceDir = Join-Path $RepoRoot "docs\analyzer\acquisition\evidence\vector-xcp"
 $BuildEvidenceDir = Join-Path $RepoRoot ".state\build-evidence"
-# Default output: dist\TraceLab7.9.9\TraceLab7.9.9.exe (override with -Version or -AppName)
+# Default output: dist\TraceLab8.0.0\TraceLab8.0.0.exe (override with -Version or -AppName)
 
 foreach ($RequiredPath in @($EntryScript, $Requirements, $AcquisitionRequirements, $RuntimeVerifier, $StyleQss, $RuntimeHookPyxcp, $RuntimeDependencyTool, $BatchRenderSmokeTool)) {
     if (-not (Test-Path $RequiredPath)) {
