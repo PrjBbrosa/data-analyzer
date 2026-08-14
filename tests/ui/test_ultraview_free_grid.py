@@ -168,6 +168,44 @@ def test_gesture_move_keeps_out_of_bounds_candidate_illegal():
     assert session.legal is False
 
 
+def test_group_move_out_of_bounds_ghost_stays_a_rigid_translation():
+    """An out-of-board group drag commits nothing, so its ghost must keep showing
+    the rigid translation in the reject state.  Clamping each member on its own
+    drew a squashed, self-overlapping shape that was neither the pointer position
+    nor the outcome (review 2026-08-15 §4.3 群组越界 ghost)."""
+    metrics = grid_metrics((1280, 800), [])
+    first = GridRect(0, 0, 4, 3)
+    second = GridRect(4, 0, 4, 3)
+    placements = [_placement("a", first), _placement("b", second)]
+    origins = {make_ref("time", "a"): first, make_ref("time", "b"): second}
+    gesture = FreeGridGesture()
+    gesture.press(
+        make_ref("time", "a"), first, (10, 10), (10, 10), group_origins=origins
+    )
+    unit = metrics.column_width + metrics.gutter
+    session = gesture.update(
+        (10 - unit * 3, 10), metrics, placements, start_drag_distance=20
+    )
+    assert session is not None and session.active
+    assert session.legal is False and session.plan is None
+
+    ghosts = session.group_ghost_pixels(metrics, (10 - unit * 3, 10))
+    highlights = session.group_highlight_pixels(metrics)
+    assert len(ghosts) == len(highlights) == 2
+    assert ghosts == highlights
+    # Rigid: the ghosts keep the selection's own spacing and every span.
+    assert ghosts[1][0] - ghosts[0][0] == rect_to_pixels(second, metrics)[0] - rect_to_pixels(
+        first, metrics
+    )[0]
+    for ghost, origin in zip(ghosts, (first, second)):
+        expected = rect_to_pixels(origin, metrics)
+        assert (ghost[2], ghost[3]) == (expected[2], expected[3])
+    # Out of the board on the left, i.e. not clamped back onto the first column.
+    assert ghosts[0][0] < 0
+    # And no self-overlap, which is exactly what per-member clamping produced.
+    assert ghosts[0][0] + ghosts[0][2] <= ghosts[1][0]
+
+
 def test_handle_hit_zones_are_at_least_eight_px_and_corners_win():
     card = (0, 0, 120, 80)
     assert HANDLE_HIT_PX >= 8
