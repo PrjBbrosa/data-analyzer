@@ -240,7 +240,24 @@ quality.py。
 
 ## 7. 处置
 
-按严重度收敛为 6 个修复 Task,由
+按严重度收敛为 7 个修复 Task,由
 `docs/analyzer/plans/2026-08-15-post-v8-batch-fixes-plan.md` 安排 agent 执行:
 P0-1 与 P1 六条全修;P2 除两项裁决类(blocker 落点语义改 spec 措辞、showMessage
 呈现面重设计留产品决策)外全修;测试假绿与弱断言随对应 Task 一并收紧。
+
+**执行旁注(2026-08-15,`claude/post-v8-review-fixes`)**:七 Task 全部完成
+并合入,修后全量:主体 **6978 passed / 9 failed / 13 skipped**、acquisition_ui
+359 passed——F7 四条既有红转绿,9 红与 §6 顺序污染集逐条同名,零新增失败。
+补充定性:
+- P1-5 审计结论比预估乐观:51 处 showMessage 中 26 处**早已**配对 toast、
+  25 处纯信息,零未配对错误类;F5 补了 3 条守卫用例钉住该不变量。
+- F7 bisect 钉出 `36efcbd0` 把 `DENSE_DISCRETE_POLICY_ENABLED` 翻 False,
+  批导出路径(无 ink 实测兜底)350 桶封顶随之失效;裁决为未评审的批导出契约
+  副作用,回敬开关为 True(引用 07-23 CRC spec §8.4 / 08-08 ink spec §4.3)。
+  **交互侧行为也随之回到 350 桶封顶**——若当初关闸是有意的交互决策,需另立
+  spec 再关,并给批导出侧独立开关。
+- 遗留跟进:① 9 条顺序污染(完整顺序稳定复现、单跑绿)待专项治理;
+  ② BLF 探测取消只留了 `request_blf_dbc_probe_cancel()` 缝,进度 UI 无取消
+  按钮;③ 批量导入路径的 ASC warning 未接 toast(仅单文件路径接了);
+  ④ Cocoa 真机待验:UltraView 浮层锚点观感、矮 stage rail 分离、LOD 37% 档
+  实际渲染、QSS 色板归并(consolidation plan Task 4 门禁)、新增 toast 呈现。
