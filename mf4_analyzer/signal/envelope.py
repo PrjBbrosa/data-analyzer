@@ -170,3 +170,34 @@ def build_envelope(t, sig, *, xlim, pixel_width, is_monotonic=None):
             out_count += 1
 
     return out_t[:out_count], out_s[:out_count]
+
+
+def straddling_segment(t, sig, xlim):
+    """Return the samples that should be drawn for ``xlim``, plus neighbors.
+
+    ``build_envelope`` / ``positions_envelope`` return an empty slice when
+    the window sits between two timestamps.  Binding that empty slice
+    clears the PlotDataItem, while leaving a dense raster in place lets
+    ViewBox stretch one min/max column into a solid colour block.  This
+    helper keeps one sample on each side of the gap so the native polyline
+    still crosses the view (linear between neighbours, matching the rest
+    of the time-domain canvas).
+    """
+    t = np.asarray(t)
+    sig = np.asarray(sig)
+    n = min(int(t.size), int(sig.size))
+    if n == 0:
+        return t[:0], sig[:0]
+    try:
+        x0, x1 = float(xlim[0]), float(xlim[1])
+    except (TypeError, ValueError, IndexError):
+        return t[:0], sig[:0]
+    if x1 < x0:
+        x0, x1 = x1, x0
+    i0 = int(np.searchsorted(t[:n], x0, side="left"))
+    i1 = int(np.searchsorted(t[:n], x1, side="right"))
+    left = i0 - 1 if i0 > 0 else 0
+    right = i1 + 1 if i1 < n else n
+    if right <= left:
+        return t[:0], sig[:0]
+    return t[left:right], sig[left:right]

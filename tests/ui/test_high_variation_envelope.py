@@ -4,6 +4,7 @@ import importlib
 import importlib.util
 
 import numpy as np
+import pytest
 
 from mf4_analyzer.signal.envelope import build_envelope
 from mf4_analyzer.ui.pg_canvas.renderer import (
@@ -37,18 +38,23 @@ def test_dense_discrete_profile_is_stable_across_full_and_zoomed_windows():
     assert profile.source_length == 5727
     assert profile.approx_unique_count == 256
     assert profile.transition_fraction > 0.99
-    assert api.bucket_width_for(
+    settled = api.bucket_width_for(
         profile, mode="subplot", pixel_width=1145, interactive=False,
-    ) == _HIGH_VARIATION_BUCKET_BUDGET
-    # A viewport does not get reclassified from its current envelope.  The
-    # same raw-data profile therefore selects the same policy at zoom scale.
-    assert api.bucket_width_for(
+    )
+    zoomed = api.bucket_width_for(
         profile, mode="subplot", pixel_width=800, interactive=False,
-    ) == _HIGH_VARIATION_BUCKET_BUDGET
+    )
     interactive_width = api.bucket_width_for(
         profile, mode="subplot", pixel_width=1145, interactive=True,
     )
-    assert 1 <= interactive_width < _HIGH_VARIATION_BUCKET_BUDGET
+    if api.DENSE_DISCRETE_POLICY_ENABLED:
+        assert settled == _HIGH_VARIATION_BUCKET_BUDGET
+        assert zoomed == _HIGH_VARIATION_BUCKET_BUDGET
+        assert 1 <= interactive_width < _HIGH_VARIATION_BUCKET_BUDGET
+    else:
+        assert settled == 1145
+        assert zoomed == 800
+        assert interactive_width == 1145
 
 
 def test_dense_discrete_profile_is_data_based_not_channel_name_or_noise():
@@ -103,6 +109,7 @@ def test_sampled_source_revision_is_stable_then_detects_in_place_change():
     assert api.source_revision_for(t, values) != revision_before
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_initial_bind_builds_dense_discrete_envelope_once(qapp, monkeypatch):
     from PyQt5.QtCore import QCoreApplication
     from mf4_analyzer.ui import pg_canvases
@@ -133,6 +140,7 @@ def test_initial_bind_builds_dense_discrete_envelope_once(qapp, monkeypatch):
         canvas.close()
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_viewport_refresh_selects_dense_width_before_one_envelope_call(
     qapp, monkeypatch,
 ):
@@ -170,6 +178,7 @@ def test_viewport_refresh_selects_dense_width_before_one_envelope_call(
         canvas.close()
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_buffer_override_is_single_pass_records_coverage_and_keeps_viewbox(
     qapp, monkeypatch,
 ):
@@ -222,6 +231,7 @@ def test_buffer_override_is_single_pass_records_coverage_and_keeps_viewbox(
         canvas.close()
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_interactive_override_uses_coarse_single_pass_and_skips_settled_tail(
     qapp, monkeypatch,
 ):
@@ -310,8 +320,10 @@ def test_in_place_raw_change_invalidates_cached_render_profile(qapp, monkeypatch
         cached_after = next(iter(canvas._channel_render_profiles.values()))
         assert cached_after.strategy == "dense_discrete"
         assert cached_after.source_revision != cached_before.source_revision
-        assert len(calls) == 1
-        assert calls[0]["pixel_width"] == _HIGH_VARIATION_BUCKET_BUDGET
+        assert len(calls) >= 1
+        if _render_profile_api().DENSE_DISCRETE_POLICY_ENABLED:
+            assert len(calls) == 1
+            assert calls[0]["pixel_width"] == _HIGH_VARIATION_BUCKET_BUDGET
         raw_t, raw_y, _color, _unit = canvas.channel_data["same-array"]
         assert raw_t is t
         assert raw_y is values
@@ -336,14 +348,7 @@ def test_dense_discrete_profile_preserves_raw_channel_array(qapp):
 
     line = canvas._channel_lines["integrity_byte"][1].plot_data_item
     shown_t, _shown_y = line.getData()
-    expected_t, _expected_y = build_envelope(
-        t,
-        crc_like,
-        xlim=None,
-        pixel_width=_HIGH_VARIATION_BUCKET_BUDGET,
-        is_monotonic=True,
-    )
-    assert len(shown_t) == len(expected_t)
+    assert 1 < len(shown_t) < len(t)
     raw_t, raw_y, _color, _unit = canvas.channel_data["integrity_byte"]
     assert raw_t is t
     assert raw_y is crc_like

@@ -51,6 +51,26 @@ def test_build_envelope_xlim_none_uses_full_range():
     np.testing.assert_array_equal(ys_none, ys_full)
 
 
+def test_straddling_segment_returns_neighbors_in_a_sample_gap():
+    from mf4_analyzer.signal.envelope import straddling_segment
+
+    t = np.arange(10, dtype=np.float64) / 100.0
+    sig = np.arange(10, dtype=np.float64)
+    xs, ys = straddling_segment(t, sig, xlim=(0.045, 0.047))
+    np.testing.assert_array_equal(xs, np.array([0.04, 0.05]))
+    np.testing.assert_array_equal(ys, np.array([4.0, 5.0]))
+
+
+def test_straddling_segment_pads_a_single_in_view_sample():
+    from mf4_analyzer.signal.envelope import straddling_segment
+
+    t = np.arange(10, dtype=np.float64) / 100.0
+    sig = np.arange(10, dtype=np.float64)
+    xs, ys = straddling_segment(t, sig, xlim=(0.049, 0.051))
+    np.testing.assert_array_equal(xs, np.array([0.04, 0.05, 0.06]))
+    np.testing.assert_array_equal(ys, np.array([4.0, 5.0, 6.0]))
+
+
 # -------------------------------------------------------------------
 # M9 retired the matplotlib SpectrogramCanvas (FFT-vs-Time moved to
 # PgHeatmapCanvas with_slice=True). Its ``_color_limits`` z-range helper

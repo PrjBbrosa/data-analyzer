@@ -22,6 +22,7 @@ from .render_profile import (
 import pyqtgraph as pg
 
 from .ticks_math import _quantize_range_key
+from mf4_analyzer.signal.envelope import straddling_segment
 
 
 _log = logging.getLogger("mf4_analyzer.ui.pg_canvases")
@@ -557,6 +558,7 @@ class Renderer(_CanvasBackref):
                 and dense_entry is not None
                 and self._coverage_contains(cached_coverage, xlim)
                 and self._coverage_contains(raster_coverage, xlim)
+                and not self._dense_raster.entry_is_lossy(dense_entry, xlim)
             ):
                 if cached_coverage is not None:
                     active_coverages.append(cached_coverage)
@@ -681,6 +683,12 @@ class Renderer(_CanvasBackref):
 
             last_effective_width = effective_width
 
+            env_t = np.asarray(env_t)
+            env_s = np.asarray(env_s)
+            in_view = int(env_t.size)
+            if in_view < 2:
+                env_t, env_s = straddling_segment(t, sig, xlim)
+
             try:
                 line_facade.plot_data_item.setData(env_t, env_s)
             except Exception as exc:
@@ -702,7 +710,12 @@ class Renderer(_CanvasBackref):
                 # leaves any prior record untouched rather than writing 0.0.
                 if line_ink is not None:
                     self._line_ink_state[ck] = (float(line_ink), line_ink_high)
-                if self._raster_backend_eligible(ck) and not overlay:
+                use_raster = (
+                    self._raster_backend_eligible(ck)
+                    and not overlay
+                    and in_view >= 2
+                )
+                if use_raster:
                     self._dense_raster.update_channel(
                         ck,
                         axis_facade,

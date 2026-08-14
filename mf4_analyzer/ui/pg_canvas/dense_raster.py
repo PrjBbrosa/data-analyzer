@@ -46,6 +46,28 @@ from PyQt5.QtWidgets import QApplication, QGraphicsPixmapItem
 DEFAULT_MAX_ITEM_BYTES = 36 * 1024 * 1024
 DEFAULT_MAX_GLOBAL_BYTES = 96 * 1024 * 1024
 
+# A cached raster whose data-span / pixel-width is coarser than the current
+# view turns one min/max column into a solid rectangle. Two columns is the
+# point where the blit is no longer a silhouette preview.
+_STRETCH_MIN_COLUMNS = 2.0
+
+
+def raster_would_stretch(data_span, view_span, pixel_width) -> bool:
+    """True when ``view_span`` is narrower than two raster columns."""
+    try:
+        data_span = float(data_span)
+        view_span = float(view_span)
+        pixel_width = float(pixel_width)
+    except (TypeError, ValueError):
+        return True
+    if not np.isfinite(data_span) or data_span <= 0.0:
+        return True
+    if not np.isfinite(view_span) or view_span <= 0.0:
+        return True
+    if pixel_width < 1.0:
+        pixel_width = 1.0
+    return view_span < _STRETCH_MIN_COLUMNS * (data_span / pixel_width)
+
 
 @dataclass(frozen=True)
 class DenseRasterEntry:
@@ -257,6 +279,43 @@ class DenseDiscreteRasterLayer(QObject):
         except Exception:
             pass
         return self.entries.get(composite or key)
+
+    def _entry_pixel_width(self, entry) -> float:
+        try:
+            pixmap = entry.item.pixmap()
+            dpr = max(1.0, float(pixmap.devicePixelRatioF()))
+            return max(1.0, float(pixmap.width()) / dpr)
+        except Exception:
+            return 1.0
+
+    def entry_is_lossy(self, entry, xlim) -> bool:
+        """True when transforming ``entry`` into ``xlim`` would fill a column."""
+        if entry is None or xlim is None:
+            return False
+        try:
+            view_span = abs(float(xlim[1]) - float(xlim[0]))
+            data_span = float(entry.data_rect[1]) - float(entry.data_rect[0])
+        except Exception:
+            return True
+        return raster_would_stretch(
+            data_span, view_span, self._entry_pixel_width(entry),
+        )
+
+    def drop_lossy_for_xlim(self, xlim) -> bool:
+        """Remove rasters that the current X window would stretch into a block.
+
+        Called from the ViewBox X-range path so Ctrl+wheel / box-zoom does
+        not keep a transform-only CRC pixmap across a sub-sample window for
+        the whole 100 ms quiet interval.
+        """
+        dropped = False
+        for ck, entry in list(self.entries.items()):
+            if self.entry_is_lossy(entry, xlim):
+                self._remove_entry(ck)
+                dropped = True
+        if dropped:
+            self._notify_status()
+        return dropped
 
     def _dense_visible_keys(self):
         if bool(getattr(self.canvas, "_overlay_mode", False)):
@@ -549,14 +608,31 @@ class DenseDiscreteRasterLayer(QObject):
             self._remove_entry(ck)
             return False
         x = np.asarray(x, dtype=np.float64).reshape(-1)
+        finite_x = x[np.isfinite(x)]
+        if finite_x.size < 2:
+            self._remove_entry(ck)
+            return False
         if data_rect is None:
-            finite_x = x[np.isfinite(x)]
-            if finite_x.size == 0:
-                self._remove_entry(ck)
-                return False
             xlo, xhi = float(finite_x.min()), float(finite_x.max())
         else:
             xlo, xhi = (float(v) for v in data_rect[:2])
+        try:
+            view_lo, view_hi = (float(v) for v in axis.get_xlim())
+            view_span = abs(view_hi - view_lo)
+        except Exception:
+            view_span = abs(xhi - xlo)
+        sample_span = float(finite_x.max() - finite_x.min())
+        rect_span = abs(xhi - xlo)
+        if (
+            raster_would_stretch(rect_span, view_span, width)
+            or raster_would_stretch(sample_span, view_span, width)
+            or sample_span > 2.0 * max(rect_span, view_span, 1e-30)
+        ):
+            # Sub-sample / sub-column zoom: keep the native polyline instead
+            # of stamping a min/max column that ViewBox would stretch into a
+            # solid colour block.
+            self._remove_entry(ck)
+            return False
         rect = (xlo, xhi, min(ylo, yhi), max(ylo, yhi))
         qcolor = QColor(color).name()
         old = self.entries.get(ck)

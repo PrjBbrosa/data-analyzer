@@ -11,6 +11,12 @@ import numpy as np
 
 DENSE_DISCRETE_BUCKET_BUDGET = 350
 DENSE_DISCRETE_INTERACTIVE_BUCKET_BUDGET = 250
+# Parked 2026-08-14: ink already gates AA, post-envelope bucket cap, and
+# raster upgrade for CRC-like walls. The dense_discrete leg admitted raster
+# at any ink and pre-capped buckets to 350, which stretched stale pixmaps
+# into solid blocks on sub-sample zoom. Classification is unchanged.
+# Flip to True to restore the CRC pre-cap + always-on raster admission.
+DENSE_DISCRETE_POLICY_ENABLED = False
 
 LOG_FREQUENCY_MIN_TICKS = 2
 _LOG_TICK_MANTISSAS_125 = (1.0, 2.0, 5.0)
@@ -189,7 +195,7 @@ def bucket_width_for(
         width = max(1, int(pixel_width))
     except (TypeError, ValueError):
         width = 1
-    if profile.strategy == "dense_discrete":
+    if DENSE_DISCRETE_POLICY_ENABLED and profile.strategy == "dense_discrete":
         budget = (
             DENSE_DISCRETE_INTERACTIVE_BUCKET_BUDGET
             if interactive else DENSE_DISCRETE_BUCKET_BUDGET
@@ -393,6 +399,7 @@ def log_frequency_minor_tick_levels(
 __all__ = [
     "DENSE_DISCRETE_BUCKET_BUDGET",
     "DENSE_DISCRETE_INTERACTIVE_BUCKET_BUDGET",
+    "DENSE_DISCRETE_POLICY_ENABLED",
     "LOG_FREQUENCY_MIN_TICKS",
     "RenderProfile",
     "bucket_width_for",

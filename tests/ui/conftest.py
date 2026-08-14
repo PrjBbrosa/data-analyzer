@@ -7,12 +7,25 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PyQt5.QtWidgets import QApplication
 
+from mf4_analyzer.render_profile import DENSE_DISCRETE_POLICY_ENABLED
+
 
 # Strong references to the top-level widgets alive when a test body returned.
 # Read the two hooks below before touching this — it is a lifetime guard, not
 # a cache, and it must stay a module-level list so the references outlive the
 # item's own frames.
 _PINNED_TOPLEVELS = []
+
+
+def pytest_collection_modifyitems(config, items):
+    if DENSE_DISCRETE_POLICY_ENABLED:
+        return
+    skip = pytest.mark.skip(
+        reason="CRC dense_discrete policy parked; ink budget is the active gate",
+    )
+    for item in items:
+        if item.get_closest_marker("crc_dense_discrete_policy"):
+            item.add_marker(skip)
 
 
 @pytest.hookimpl(wrapper=True)

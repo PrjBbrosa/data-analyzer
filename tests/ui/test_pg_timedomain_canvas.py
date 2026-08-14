@@ -899,6 +899,7 @@ class TestInkBudget:
         assert status["frame_ink"] > status["ink_budget"]
         assert "波形填满绘图区" in status["tooltip"]
 
+    @pytest.mark.crc_dense_discrete_policy
     def test_overlay_short_circuit_spares_the_dense_discrete_leg(self, qapp):
         """Only the ink leg short-circuits in overlay.
 
@@ -7455,6 +7456,7 @@ class TestAutoIdleAA:
         assert "叠加密度" in status["tooltip"]
         assert "15000" in status["tooltip"]
 
+    @pytest.mark.crc_dense_discrete_policy
     def test_dense_discrete_idle_aa_is_blocked_below_display_budget(
         self, qapp, monkeypatch,
     ):
@@ -7496,6 +7498,7 @@ class TestAutoIdleAA:
         assert status["tooltip"] == "平滑曲线已完成（高分辨率缓存）"
         assert "block_reason" not in status
 
+    @pytest.mark.crc_dense_discrete_policy
     def test_dense_discrete_export_does_not_force_temporary_aa(self, qapp):
         """Export owns a separate affordability decision from idle hysteresis."""
         from PyQt5.QtCore import QCoreApplication
@@ -8032,6 +8035,7 @@ class TestAutoIdleAA:
 
         assert canvas._quality._idle_aa_density_ok() is True
 
+    @pytest.mark.crc_dense_discrete_policy
     def test_ink_gate_excludes_raster_covered_line_from_sum(
         self, qapp, monkeypatch,
     ):

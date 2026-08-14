@@ -2,6 +2,7 @@
 from mf4_analyzer.render_profile import (  # noqa: F401
     DENSE_DISCRETE_BUCKET_BUDGET,
     DENSE_DISCRETE_INTERACTIVE_BUCKET_BUDGET,
+    DENSE_DISCRETE_POLICY_ENABLED,
     RenderProfile,
     bucket_width_for,
     classify_render_profile,
@@ -13,6 +14,7 @@ from mf4_analyzer.render_profile import (  # noqa: F401
 __all__ = [
     "DENSE_DISCRETE_BUCKET_BUDGET",
     "DENSE_DISCRETE_INTERACTIVE_BUCKET_BUDGET",
+    "DENSE_DISCRETE_POLICY_ENABLED",
     "RenderProfile",
     "bucket_width_for",
     "classify_render_profile",

@@ -123,6 +123,7 @@ from mf4_analyzer.ui.pg_canvas.quality import (
     install_frame_paint_timer,
 )
 from mf4_analyzer.ui.pg_canvas.dense_raster import DenseDiscreteRasterLayer
+from mf4_analyzer.ui.pg_canvas.render_profile import DENSE_DISCRETE_POLICY_ENABLED
 from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
     Renderer,
     _HIDPI_COPY_SCALE,
@@ -2373,7 +2374,9 @@ class TimeDomainCanvasPG(QWidget):
         Two legs:
 
         * ``strategy == "dense_discrete"`` — the original CRC/counter
-          admission, unchanged and independent of ink.
+          admission, independent of ink. Currently parked behind
+          ``DENSE_DISCRETE_POLICY_ENABLED`` (default off); ink covers the
+          same walls. Flip that flag True to restore this leg.
         * INK — a ``general`` line whose measured vertical ink puts it out of
           reach of vector AA. The raster path is the only remaining way to
           give it a smooth presentation at a bounded cost (spec §4.3: same
@@ -2389,8 +2392,10 @@ class TimeDomainCanvasPG(QWidget):
         cache was dropped) keeps whatever it had; ``clear()`` / ``full_reset()``
         are what actually reset the set.
         """
-        if getattr(self._channel_render_profiles.get(ck), "strategy", None) == (
-            "dense_discrete"
+        if (
+            DENSE_DISCRETE_POLICY_ENABLED
+            and getattr(self._channel_render_profiles.get(ck), "strategy", None)
+            == "dense_discrete"
         ):
             return True
         # OVERLAY short-circuit — INK LEG ONLY. The raster backend refuses to
@@ -3323,6 +3328,7 @@ class TimeDomainCanvasPG(QWidget):
             )
         except Exception:
             self._latest_target_xlim = None
+        self._dense_raster.drop_lossy_for_xlim(self._latest_target_xlim)
         self._refresh_pending = True
         self._interaction_state = (
             "interactive" if self._interaction_depth else "settling"

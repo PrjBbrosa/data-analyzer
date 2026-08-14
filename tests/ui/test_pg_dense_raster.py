@@ -8,7 +8,10 @@ import pytest
 from PyQt5.QtCore import Qt
 
 from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
-from mf4_analyzer.ui.pg_canvas.dense_raster import build_dense_raster_image
+from mf4_analyzer.ui.pg_canvas.dense_raster import (
+    build_dense_raster_image,
+    raster_would_stretch,
+)
 
 
 def _row(name="EPS_CRC1", *, data_id="real-blf", phase=0):
@@ -69,6 +72,16 @@ def _shown_canvas(qapp, rows, *, mode="subplot"):
     return canvas
 
 
+def _force_ink_raster(canvas, name):
+    """Admit ``name`` on the ink leg so parked CRC policy still has a pixmap."""
+    from mf4_analyzer.ui.pg_canvas.renderer import _INK_AA_OFF
+
+    ck = canvas._channel_lines.composite_key_for(name)
+    canvas._line_ink_state[ck] = (float(_INK_AA_OFF) + 1.0, True)
+    canvas._ink_raster_admitted.add(ck)
+    canvas._dense_raster.flush_pending(canvas._interaction_generation)
+
+
 def _curve_has_no_pen(curve):
     pen = curve.opts.get("pen")
     return pen is None or pen.style() == Qt.NoPen
@@ -97,6 +110,7 @@ def test_dense_image_dpr_mapping_reaches_both_data_corners(qapp):
     assert has_alpha_near(199, 0)
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_dense_single_uses_smooth_pixmap_but_keeps_raw_pdi_semantics(qapp):
     row = _row()
     canvas = _shown_canvas(qapp, [row])
@@ -120,6 +134,7 @@ def test_dense_single_uses_smooth_pixmap_but_keeps_raw_pdi_semantics(qapp):
     assert status["tooltip"] == "平滑曲线已完成（高分辨率缓存）"
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_dense_raster_is_transform_only_until_100ms_settle(qtbot, qapp):
     canvas = _shown_canvas(qapp, [_row()])
     canvas._dense_raster.flush_pending(canvas._interaction_generation)
@@ -167,6 +182,7 @@ def test_dense_continuous_does_not_enter_crc_pixmap_backend(qapp, mode, count):
     )
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_y_only_interaction_rebuilds_after_quiet_window(qtbot, qapp):
     canvas = _shown_canvas(qapp, [_row()])
     canvas._dense_raster.flush_pending(canvas._interaction_generation)
@@ -191,6 +207,7 @@ def test_y_only_interaction_rebuilds_after_quiet_window(qtbot, qapp):
     assert canvas.quality_status()["state"] == "green"
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_programmatic_set_ylim_rebuilds_dense_raster(qtbot, qapp):
     canvas = _shown_canvas(qapp, [_row()])
     canvas._dense_raster.flush_pending(canvas._interaction_generation)
@@ -211,6 +228,7 @@ def test_programmatic_set_ylim_rebuilds_dense_raster(qtbot, qapp):
 
 
 @pytest.mark.parametrize("autoscale_axis", ["y", "both"])
+@pytest.mark.crc_dense_discrete_policy
 def test_programmatic_y_autoscale_rebuilds_at_final_range(
     qtbot, qapp, autoscale_axis,
 ):
@@ -235,6 +253,7 @@ def test_programmatic_y_autoscale_rebuilds_at_final_range(
     assert settled.data_rect[3] >= max(ylo, yhi)
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_held_pan_crossing_buffer_gets_coarse_raster_refresh(qtbot, qapp):
     canvas = _shown_canvas(qapp, [_row()])
     axis, _line = canvas._channel_lines["EPS_CRC1"]
@@ -258,6 +277,7 @@ def test_held_pan_crossing_buffer_gets_coarse_raster_refresh(qtbot, qapp):
     canvas._end_view_interaction()
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_dense_raster_visibility_color_and_revision_invalidate(qapp):
     row = _row()
     # Overlay, not subplot: a7cec68 made a zero-row subplot selection
@@ -306,6 +326,7 @@ def test_dense_raster_visibility_color_and_revision_invalidate(qapp):
     assert revised.source_revision != recolored.source_revision
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_production_color_sync_survives_memory_fallback(qapp):
     canvas = _shown_canvas(qapp, [_row()])
     manager = canvas._dense_raster
@@ -325,6 +346,7 @@ def test_production_color_sync_survives_memory_fallback(qapp):
     assert pen.widthF() == initial_width
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_dense_companion_restores_dash_and_deactivates_raster(qapp):
     canvas = _shown_canvas(qapp, _dense_rows_with_companion())
     manager = canvas._dense_raster
@@ -367,6 +389,7 @@ def test_dense_companion_production_recolor_preserves_dash_fallback(qapp):
     assert manager.entry_for(companion_key) is None
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_overlay_and_memory_limit_fall_back_to_native_non_aa(qapp):
     canvas = _shown_canvas(qapp, [_row("a"), _row("b", phase=1)], mode="overlay")
     canvas._dense_raster.flush_pending(canvas._interaction_generation)
@@ -405,6 +428,7 @@ def test_overlay_and_memory_limit_fall_back_to_native_non_aa(qapp):
 
 
 @pytest.mark.parametrize("scale_axis", ["x", "y"])
+@pytest.mark.crc_dense_discrete_policy
 def test_log_axis_production_setter_falls_back_with_latest_pen(qapp, scale_axis):
     canvas = _shown_canvas(qapp, [_row()])
     axis, line = canvas._channel_lines["EPS_CRC1"]
@@ -445,6 +469,7 @@ def test_scale_setter_does_not_invalidate_ordinary_curve(qapp, monkeypatch):
     assert canvas._dense_raster.entries == {}
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_mixed_subplot_uses_raster_for_dense_and_native_aa_for_smooth(
     qtbot, qapp, monkeypatch,
 ):
@@ -492,6 +517,7 @@ def test_mixed_subplot_uses_raster_for_dense_and_native_aa_for_smooth(
     assert smooth_curve.opts.get("antialias", False)
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_mixed_subplot_dense_fallback_still_blocks_all_native_aa(
     qapp, monkeypatch,
 ):
@@ -521,6 +547,7 @@ def test_mixed_subplot_dense_fallback_still_blocks_all_native_aa(
     assert canvas.quality_status()["block_reason"] == "high-raster-cost"
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_pending_export_flushes_dense_raster_without_enabling_native_aa(qapp):
     canvas = _shown_canvas(qapp, [_row()])
     canvas._dense_raster.flush_pending(canvas._interaction_generation)
@@ -541,6 +568,7 @@ def test_pending_export_flushes_dense_raster_without_enabling_native_aa(qapp):
     )
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_clear_replaces_timers_and_stale_timeouts_cannot_touch_rebuild(qapp):
     canvas = _shown_canvas(qapp, [_row()])
     manager = canvas._dense_raster
@@ -635,6 +663,7 @@ def _row_image_bytes(canvas, ck):
     )
 
 
+@pytest.mark.crc_dense_discrete_policy
 def test_raster_backend_eligible_admits_dense_discrete_at_any_ink(qapp):
     """Leg one of the predicate: the original strategy admission is untouched
     and does NOT consult ink (a CRC counter is admissible while flat)."""
@@ -645,6 +674,21 @@ def test_raster_backend_eligible_admits_dense_discrete_at_any_ink(qapp):
     canvas._line_ink_state[ck] = (0.0, False)
     assert canvas._raster_backend_eligible(ck) is True
     assert ck not in canvas._ink_raster_admitted
+
+
+def test_parked_dense_discrete_policy_defers_crc_raster_to_ink(qapp):
+    """With the CRC policy parked, a flat counter is not raster-eligible
+    until ink crosses the shared AA band."""
+    from mf4_analyzer.render_profile import DENSE_DISCRETE_POLICY_ENABLED
+
+    if DENSE_DISCRETE_POLICY_ENABLED:
+        pytest.skip("CRC dense_discrete policy is on")
+    canvas = _shown_canvas(qapp, [_row()])
+    ck = canvas._channel_lines.composite_key_for("EPS_CRC1")
+    assert canvas._channel_render_profiles[ck].strategy == "dense_discrete"
+    canvas._line_ink_state[ck] = (0.0, False)
+    canvas._ink_raster_admitted.discard(ck)
+    assert canvas._raster_backend_eligible(ck) is False
 
 
 def test_raster_backend_eligible_ink_admission_has_hysteresis(qapp):
@@ -860,3 +904,98 @@ def test_dense_raster_memory_caps_stay_in_the_spec_band():
     # The global cap has to absorb the build-time QImage+QPixmap 2x peak of a
     # single max-size item on top of what is already retained.
     assert DEFAULT_MAX_GLOBAL_BYTES >= 2 * DEFAULT_MAX_ITEM_BYTES
+
+
+def _subsample_gap_rows():
+    """100 Hz CAN-like file: smooth analog + high-variation integer angle."""
+    fs = 100.0
+    n = 4_000
+    t = np.arange(n, dtype=np.float64) / fs
+    torque = np.zeros(n, dtype=np.float64)
+    angle = np.where((np.arange(n) % 2) == 0, 0.0, 55_000.0).astype(np.float64)
+    return [
+        ("torque", True, t, torque, "#1769e0", "Nm", "tiaodamping"),
+        ("angle", True, t, angle, "#ff5a0a", "", "tiaodamping"),
+    ]
+
+
+def _gap_xlim(t, *, span=2e-6):
+    """Return a window strictly between two adjacent 100 Hz samples."""
+    mid = 0.5 * (float(t[1685]) + float(t[1686]))
+    half = span / 2.0
+    return mid - half, mid + half
+
+
+def _assert_angle_not_stretched_block(canvas, view_lo, view_hi, *, dt=0.01):
+    pdi = canvas._channel_lines["angle"][1].plot_data_item
+    xd, yd = pdi.getData()
+    xd = np.asarray([] if xd is None else xd, dtype=float)
+    yd = np.asarray([] if yd is None else yd, dtype=float)
+    entry = canvas._dense_raster.entry_for("angle")
+    view_span = float(view_hi) - float(view_lo)
+    if entry is not None and entry.item.isVisible():
+        rect_span = float(entry.data_rect[1] - entry.data_rect[0])
+        assert rect_span <= max(4.0 * view_span, 2.0 * dt), (
+            f"raster still mapped to {rect_span:.6g}s while the view is "
+            f"{view_span:.6g}s; that stretch paints a solid block"
+        )
+    return pdi, xd, yd, entry
+
+
+def test_sub_sample_zoom_does_not_keep_stretched_dense_raster(qapp):
+    """Zooming inside one 100 Hz sample interval must not keep the CRC
+    raster.  Transforming that pixmap turns one full-height column into a
+    solid colour block (wRPS_SpaceAngle_gdu32 at ~200 ns/div).
+    """
+    rows = _subsample_gap_rows()
+    t = rows[0][2]
+    canvas = _shown_canvas(qapp, rows)
+    _force_ink_raster(canvas, "angle")
+
+    assert canvas._channel_render_profiles[
+        canvas._channel_lines.composite_key_for("angle")
+    ].strategy == "dense_discrete"
+    assert canvas._dense_raster.entry_for("angle") is not None
+
+    lo, hi = _gap_xlim(t)
+    canvas._primary_xaxis_ax.view_box.setXRange(lo, hi, padding=0)
+    canvas._flush_pending_refresh()
+    canvas._dense_raster.flush_pending(canvas._interaction_generation)
+    qapp.processEvents()
+
+    pdi, xd, yd, entry = _assert_angle_not_stretched_block(canvas, lo, hi)
+    assert entry is None or not entry.item.isVisible()
+    assert xd.size >= 2
+    assert float(np.nanmax(xd) - np.nanmin(xd)) <= 0.03
+    assert pdi.opts.get("pen") is not None or (
+        pdi.curve.opts.get("pen") is not None
+        and pdi.curve.opts.get("pen").style() != Qt.NoPen
+    )
+
+
+def test_sub_sample_zoom_drops_raster_before_settle(qapp):
+    """The solid block is the transform-only pixmap, not the settled frame.
+
+    Ctrl+wheel / box-zoom restarts the 100 ms quiet window on every notch,
+    so the stretched CRC column is what the user actually stares at.
+    """
+    rows = _subsample_gap_rows()
+    t = rows[0][2]
+    canvas = _shown_canvas(qapp, rows)
+    _force_ink_raster(canvas, "angle")
+    before = canvas._dense_raster.entry_for("angle")
+    assert before is not None and before.item.isVisible()
+
+    lo, hi = _gap_xlim(t)
+    canvas._primary_xaxis_ax.view_box.setXRange(lo, hi, padding=0)
+    qapp.processEvents()
+
+    assert canvas._refresh_timer.isActive()
+    entry = canvas._dense_raster.entry_for("angle")
+    assert entry is None or not entry.item.isVisible()
+
+
+def test_raster_would_stretch_detects_sub_column_views():
+    assert raster_would_stretch(40.0, 2e-6, 1200) is True
+    assert raster_would_stretch(40.0, 2.0, 1200) is False
+    assert raster_would_stretch(2.0, 2.0, 1200) is False
