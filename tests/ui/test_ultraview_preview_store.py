@@ -284,6 +284,8 @@ def test_pinned_images_are_preferred_over_lru_unpinned(qapp):
 
 def test_pinned_over_budget_shrinks_proportionally(qapp):
     store = PreviewStore()
+    dropped = []
+    store.images_dropped.connect(lambda refs: dropped.extend(refs))
     refs = [_ref(f"shrink-{i}") for i in range(7)]
     store.set_pinned_refs(set(refs))
     for ref in refs:
@@ -297,6 +299,8 @@ def test_pinned_over_budget_shrinks_proportionally(qapp):
     assert stats.images == 7
     assert stats.raw_pixels <= MAX_PREVIEW_PIXELS
     assert stats.evictions == 0
+    assert dropped
+    assert set(dropped) <= set(refs)
     for ref in refs:
         image = store.get(ref).image
         assert image is not None

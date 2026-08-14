@@ -74,6 +74,20 @@ def logical_board_size(
     return max(viewport_w, floor_w), max(viewport_h, floor_h)
 
 
+def screen_min_card_content_size(zoom: float) -> tuple[int, int]:
+    """Readable-card floor for the on-screen path; export keeps the 1x constant."""
+    try:
+        scale = float(zoom)
+    except (TypeError, ValueError):
+        scale = 1.0
+    if scale != scale or scale <= 0.0:
+        scale = 1.0
+    return (
+        max(1, int(round(MIN_CARD_CONTENT_SIZE[0] * scale))),
+        max(1, int(round(MIN_CARD_CONTENT_SIZE[1] * scale))),
+    )
+
+
 def content_rect(
     board_size: tuple[int, int] = BASE_BOARD_SIZE,
     padding: int = BOARD_PADDING,

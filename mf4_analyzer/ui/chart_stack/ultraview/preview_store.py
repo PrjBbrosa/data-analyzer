@@ -377,56 +377,65 @@ class PreviewStore(QObject):
             self._shrink_resident_to_budget()
 
     def _shrink_resident_to_budget(self) -> None:
-        for _ in range(24):
-            pixels = self._raw_pixel_count()
-            if pixels <= MAX_PREVIEW_PIXELS:
-                return
-            resident_images = [
-                record
-                for record in self._records.values()
-                if record.ref in self._residency
-                and record.image is not None
-                and not record.image.isNull()
-            ]
-            if not resident_images:
-                return
-            scale = math.sqrt(MAX_PREVIEW_PIXELS / float(pixels))
-            if scale >= 1.0:
-                scale = 0.95
-            for record in resident_images:
-                image = record.image
-                new_w = max(_MIN_VALID_EDGE, int(image.width() * scale))
-                new_h = max(_MIN_VALID_EDGE, int(image.height() * scale))
-                if new_w == image.width() and new_h == image.height():
-                    if (
-                        image.width() >= image.height()
-                        and image.width() > _MIN_VALID_EDGE
-                    ):
-                        new_w -= 1
-                    elif image.height() > _MIN_VALID_EDGE:
-                        new_h -= 1
-                record.image = _scale_image(image, new_w, new_h)
-        while self._raw_pixel_count() > MAX_PREVIEW_PIXELS:
-            resident_images = [
-                record
-                for record in self._records.values()
-                if record.ref in self._residency
-                and record.image is not None
-                and not record.image.isNull()
-                and (
-                    record.image.width() > _MIN_VALID_EDGE
-                    or record.image.height() > _MIN_VALID_EDGE
+        changed: list[UltraViewRef] = []
+        try:
+            for _ in range(24):
+                pixels = self._raw_pixel_count()
+                if pixels <= MAX_PREVIEW_PIXELS:
+                    return
+                resident_images = [
+                    record
+                    for record in self._records.values()
+                    if record.ref in self._residency
+                    and record.image is not None
+                    and not record.image.isNull()
+                ]
+                if not resident_images:
+                    return
+                scale = math.sqrt(MAX_PREVIEW_PIXELS / float(pixels))
+                if scale >= 1.0:
+                    scale = 0.95
+                for record in resident_images:
+                    image = record.image
+                    new_w = max(_MIN_VALID_EDGE, int(image.width() * scale))
+                    new_h = max(_MIN_VALID_EDGE, int(image.height() * scale))
+                    if new_w == image.width() and new_h == image.height():
+                        if (
+                            image.width() >= image.height()
+                            and image.width() > _MIN_VALID_EDGE
+                        ):
+                            new_w -= 1
+                        elif image.height() > _MIN_VALID_EDGE:
+                            new_h -= 1
+                    if new_w == image.width() and new_h == image.height():
+                        continue
+                    record.image = _scale_image(image, new_w, new_h)
+                    changed.append(record.ref)
+            while self._raw_pixel_count() > MAX_PREVIEW_PIXELS:
+                resident_images = [
+                    record
+                    for record in self._records.values()
+                    if record.ref in self._residency
+                    and record.image is not None
+                    and not record.image.isNull()
+                    and (
+                        record.image.width() > _MIN_VALID_EDGE
+                        or record.image.height() > _MIN_VALID_EDGE
+                    )
+                ]
+                if not resident_images:
+                    return
+                largest = max(
+                    resident_images,
+                    key=lambda record: record.image.width() * record.image.height(),
                 )
-            ]
-            if not resident_images:
-                return
-            largest = max(
-                resident_images,
-                key=lambda record: record.image.width() * record.image.height(),
-            )
-            image = largest.image
-            largest.image = _scale_image(
-                image,
-                max(_MIN_VALID_EDGE, image.width() * 9 // 10),
-                max(_MIN_VALID_EDGE, image.height() * 9 // 10),
-            )
+                image = largest.image
+                largest.image = _scale_image(
+                    image,
+                    max(_MIN_VALID_EDGE, image.width() * 9 // 10),
+                    max(_MIN_VALID_EDGE, image.height() * 9 // 10),
+                )
+                changed.append(largest.ref)
+        finally:
+            if changed:
+                self.images_dropped.emit(tuple(dict.fromkeys(changed)))

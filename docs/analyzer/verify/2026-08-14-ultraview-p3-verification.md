@@ -16,7 +16,7 @@ offscreen 只当排版/契约草稿。UV-P3-A07 / A08 的帧时与 pinch 到达�
 |---|---|---|
 | P3-0 遗留 | **完成** | `fc87da9a`；digest characterization、destroyed 重连、影子缓存、扩容回填 |
 | P3-1 直接操纵 | **完成** | `docs/analyzer/verify/2026-08-14-ultraview-p3-1-direct-manip.md`；操作者 Cocoa 确认 |
-| P3-2 视口变换 | **完成**（操作者确认，无仪器化帧时） | 本文件 + `docs/analyzer/verify/2026-08-14-ultraview-zoom-spike.md` |
+| P3-2 视口变换 | **待仪器化真机验收** | 实现完成、offscreen 契约达标；A07/A08 无 `max_frame_ms` / `pinch_events`，不能标完成 |
 
 ## 实现提交（Task 0–9）
 
@@ -59,7 +59,7 @@ FocusLayer 仍为「临时放大」/ Enter 兼容路径，验收后再单独裁�
 | UV-P3-A09 LOD 滞回 | **PASS** | 60%/40% + 滞回 |
 | UV-P3-A10 FOCUS tier | **PASS** | 超 0.75× 升 FOCUS；离开降回；`MAX_PREVIEW_PIXELS` 不破 |
 | UV-P3-A11 viewport 往返 | **PASS** | 缺省容忍、非法 clamp+warning、passthrough、digest 外 |
-| UV-P3-A12 零计算探针 | **PASS** | `test_ultraview_job_isolation.py` / probes 含在 12 文件组 |
+| UV-P3-A12 零计算探针 | **PARTIAL** | P3 范围未改 `test_ultraview_job_isolation.py` / `test_ultraview_probes.py`；手势/视口路径无计算入口，合同事实上成立 |
 | UV-P3-A13 扩容回填 | **PASS** | P3-0 |
 | UV-P3-A14 digest characterization | **PASS** | 禁 `in {"fresh","stale","missing"}` 放宽写法 |
 | UV-P3-A15 无 Alt+拖文案 | **PASS** | hints / quickref / help |
@@ -71,8 +71,8 @@ FocusLayer 仍为「临时放大」/ Enter 兼容路径，验收后再单独裁�
 
 | 项 | 结果 |
 |---|---|
-| UV-P3-A07 24 卡连续缩放/平移 | **OK**（操作者确认；无仪器化帧时） |
-| UV-P3-A08 pinch / 双指平移 | **OK**（操作者确认；无仪器化到达率） |
+| UV-P3-A07 24 卡连续缩放/平移 | **UNVERIFIED**（操作者口头确认；无仪器化帧时） |
+| UV-P3-A08 pinch / 双指平移 | **UNVERIFIED**（操作者口头确认；无仪器化到达率） |
 | Retina 缓冲复用、无整板 ARGB | **OK**（操作者确认观感；offscreen 有缓冲复用断言） |
 
 ## 版本扇出

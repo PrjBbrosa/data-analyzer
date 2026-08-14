@@ -1,6 +1,8 @@
 """UltraView P3-2 viewport: zoom-at-cursor math and board zoom/pan channels."""
 from __future__ import annotations
 
+import math
+
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
 from PyQt5.QtGui import QImage, QMouseEvent, QWheelEvent
@@ -16,6 +18,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
     BoardViewport,
     clamp_zoom,
     fit_zoom,
+    focus_grab_scale,
     lod_level,
     needs_focus_recapture,
     scale_grid_metrics,
@@ -24,6 +27,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
     zoom_percent,
     zoom_to_rect,
     zoomed_viewport_size,
+    FOCUS_PREVIEW_RATIO,
     LOD_FULL,
     LOD_NO_FOOTER,
     LOD_TITLE_ONLY,
@@ -36,6 +40,7 @@ from mf4_analyzer.ui.ultraview_state import (
     default_board,
     make_ref,
     normalize_board_payload,
+    set_layout,
 )
 
 from tests.ui.test_ultraview_page import _Harness, _prepare_free_grid, _send_mouse_move
@@ -350,3 +355,68 @@ def test_zoom_persists_on_board_and_restores_when_switching(qtbot):
     assert harness.page.board_zoom() == pytest.approx(1.0)
     harness.page.set_board(first)
     assert harness.page.board_zoom() == pytest.approx(1.5)
+
+
+def test_switching_boards_does_not_copy_viewport_via_scroll_clamp(qtbot):
+    harness = _Harness(qtbot)
+    first = harness.board
+    _prepare_free_grid(harness, qtbot, "a")
+    harness.page.set_board_zoom(1.5)
+    scroll = harness.page.board_scroll_area()
+    scroll.horizontalScrollBar().setValue(scroll.horizontalScrollBar().maximum())
+    scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+    second = default_board()
+    second.name = "另一块板"
+    second.viewport = {"zoom": 0.5, "center_x": 12.0, "center_y": 8.0}
+    harness.page.set_board(second)
+    assert second.viewport["zoom"] == pytest.approx(0.5)
+    assert harness.page.board_zoom() == pytest.approx(0.5)
+    harness.page.set_board(first)
+    assert first.viewport["zoom"] == pytest.approx(1.5)
+
+
+def test_template_grid_3x3_shrinks_when_zooming_out(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_3x3")
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    grid = harness.page.board_grid()
+    base = grid.size()
+    harness.page.set_board_zoom(0.25)
+    qtbot.wait(10)
+    shrunk = grid.size()
+    assert shrunk.height() < base.height()
+    assert shrunk.width() < base.width()
+
+
+def test_focus_grab_scale_covers_preview_ratio_in_one_shot():
+    native = (100.0, 50.0)
+    target = (800, 400)
+    scale = focus_grab_scale(native, target, max_edge=4096)
+    preview = (int(round(native[0] * scale)), int(round(native[1] * scale)))
+    assert needs_focus_recapture(target, preview) is False
+    assert scale >= math.ceil(target[0] / FOCUS_PREVIEW_RATIO - 1e-9) / native[0]
+
+
+def test_update_board_pan_restarts_smooth_preview_timer(qtbot):
+    harness = _Harness(qtbot)
+    free, _cards = _prepare_free_grid(harness, qtbot, "a")
+    harness.page.set_board_zoom(2.0)
+    start = QPoint(80, 40)
+    harness.page.note_space(True)
+    QApplication.sendEvent(
+        free,
+        QMouseEvent(
+            QEvent.MouseButtonPress,
+            start,
+            free.mapToGlobal(start),
+            Qt.LeftButton,
+            Qt.LeftButton,
+            Qt.NoModifier,
+        ),
+    )
+    assert harness.page.is_board_panning()
+    harness.page.smooth_preview_timer().stop()
+    assert not harness.page.smooth_preview_timer().isActive()
+    _send_mouse_move(free, QPoint(40, 40), buttons=Qt.LeftButton)
+    assert harness.page.smooth_preview_timer().isActive()

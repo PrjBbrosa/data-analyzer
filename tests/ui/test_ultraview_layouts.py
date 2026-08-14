@@ -16,6 +16,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     SLOT_GUTTER,
     content_rect,
     logical_board_size,
+    screen_min_card_content_size,
     slot_rects,
 )
 from mf4_analyzer.ui.ultraview_state import (
@@ -187,3 +188,17 @@ def test_p1_large_grids_keep_readable_logical_canvas_at_small_viewport():
     assert nine[0] > viewport[0]
     assert twelve[0] > viewport[0]
     assert logical_board_size("grid_3x2", viewport) == viewport
+
+
+def test_screen_min_card_content_size_scales_with_zoom_and_leaves_export_floor():
+    assert screen_min_card_content_size(1.0) == MIN_CARD_CONTENT_SIZE
+    quarter = screen_min_card_content_size(0.25)
+    assert quarter[0] == max(1, int(round(MIN_CARD_CONTENT_SIZE[0] * 0.25)))
+    assert quarter[1] == max(1, int(round(MIN_CARD_CONTENT_SIZE[1] * 0.25)))
+    viewport = (320, 200)
+    zoomed = logical_board_size(
+        "grid_3x3", viewport, min_card_content_size=quarter
+    )
+    full = logical_board_size("grid_3x3", (1280, 800))
+    assert zoomed[0] < full[0]
+    assert logical_board_size("grid_3x3", BASE_BOARD_SIZE)[0] >= MIN_CARD_CONTENT_SIZE[0]

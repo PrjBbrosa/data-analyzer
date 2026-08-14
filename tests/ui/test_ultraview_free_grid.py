@@ -20,6 +20,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     rects_overlap,
     snapped_move_rect,
     snapped_resize_rect,
+    translated_move_rect,
     union_grid_rect,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.gesture import FreeGridGesture
@@ -134,6 +135,22 @@ def test_gesture_move_uses_snapped_move_rect_and_reports_collision():
     cancelled = gesture.cancel()
     assert cancelled is session
     assert gesture.is_armed() is False
+
+
+def test_gesture_move_keeps_out_of_bounds_candidate_illegal():
+    metrics = grid_metrics((1280, 800), [])
+    origin = GridRect(0, 0, 4, 3)
+    placements = [_placement("a", origin)]
+    gesture = FreeGridGesture()
+    gesture.press(make_ref("time", "a"), origin, (10, 10), (10, 10))
+    unit = metrics.column_width + metrics.gutter
+    session = gesture.update(
+        (10 - unit * 8, 10), metrics, placements, start_drag_distance=20
+    )
+    assert session is not None and session.active
+    assert session.candidate == translated_move_rect(origin, (-unit * 8, 0), metrics)
+    assert session.candidate != clamp_rect(session.candidate)
+    assert session.legal is False
 
 
 def test_handle_hit_zones_are_at_least_eight_px_and_corners_win():

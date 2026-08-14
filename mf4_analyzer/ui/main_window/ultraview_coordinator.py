@@ -85,7 +85,11 @@ from ..chart_stack.ultraview.preview_store import (
     RESIDENCY_TIER_INACTIVE_PLACED,
     RESIDENCY_TIER_TRAY,
 )
-from ..chart_stack.ultraview.viewport import SMOOTH_DELAY_MS, needs_focus_recapture
+from ..chart_stack.ultraview.viewport import (
+    SMOOTH_DELAY_MS,
+    focus_grab_scale,
+    needs_focus_recapture,
+)
 from ..chart_stack.ultraview.preview_sidecar import (
     SidecarImagePayload,
     open_preview_sidecar,
@@ -675,7 +679,21 @@ class UltraViewCoordinator(QObject):
         target = request.target_size
         if target is None:
             return False
-        return needs_focus_recapture(target, (image.width(), image.height()))
+        preview = (image.width(), image.height())
+        if not needs_focus_recapture(target, preview):
+            return False
+        widget = self._widget_for_ref(ref)
+        if widget is None:
+            return True
+        try:
+            native_w = max(1.0, float(widget.width()) * float(widget.devicePixelRatioF()))
+            native_h = max(1.0, float(widget.height()) * float(widget.devicePixelRatioF()))
+        except RuntimeError:
+            return True
+        scale = self._grab_scale(widget, ref)
+        next_w = native_w * scale
+        next_h = native_h * scale
+        return image.width() + 1 < next_w or image.height() + 1 < next_h
 
     def _on_viewport_changed(self) -> None:
         if self._inactive():
@@ -1184,8 +1202,11 @@ class UltraViewCoordinator(QObject):
         ref = parse_ref_payload({"section": section, "view_id": view_id})
         if ref is None:
             return
-        if not place_free_grid_from_unplaced(active_board(self._workspace), ref):
-            self._after_board_mutation()
+        warnings = place_free_grid_from_unplaced(active_board(self._workspace), ref)
+        if warnings:
+            self._toast_grid_warnings(warnings)
+            return
+        self._after_board_mutation()
 
     def _on_free_grid_replace(
         self,
@@ -1198,8 +1219,11 @@ class UltraViewCoordinator(QObject):
         new_ref = parse_ref_payload({"section": source_section, "view_id": source_view_id})
         if target is None or new_ref is None:
             return
-        if not replace_free_grid_ref(active_board(self._workspace), target, new_ref):
-            self._after_board_mutation()
+        warnings = replace_free_grid_ref(active_board(self._workspace), target, new_ref)
+        if warnings:
+            self._toast_grid_warnings(warnings)
+            return
+        self._after_board_mutation()
 
     def _on_move_to_unplaced(self, section: str, view_id: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
@@ -1331,6 +1355,9 @@ class UltraViewCoordinator(QObject):
         codes = {item.split(":", 1)[0] for item in warnings}
         if "grid_collision" in codes:
             self._toast("目标位置与其他卡片重叠", "warning")
+            return
+        if "grid_full" in codes:
+            self._toast("Board 已满：换布局或先移除", "warning")
             return
         if warnings:
             self._toast(str(warnings[0]), "warning")
@@ -2087,11 +2114,11 @@ class UltraViewCoordinator(QObject):
             return 1.0
         native_w = max(1.0, width * dpr)
         native_h = max(1.0, height * dpr)
-        scale = max(target_w / native_w, target_h / native_h, 1.0)
-        max_edge = max(native_w, native_h) * scale
-        if max_edge > MAX_PREVIEW_RAW_EDGE:
-            scale *= MAX_PREVIEW_RAW_EDGE / max_edge
-        return max(1.0, float(scale))
+        return focus_grab_scale(
+            (native_w, native_h),
+            (target_w, target_h),
+            max_edge=MAX_PREVIEW_RAW_EDGE,
+        )
 
     def _grab_image(self, widget, ref=None) -> QImage | None:
         pixmap = None

@@ -89,8 +89,8 @@ FOCUS tier 重抓高分辨率（打通 residency `target_size` 生产路径—�
 
 ### 4.6 视口态持久化（D2）
 payload 每 Board 增加 `viewport: {zoom, center_x, center_y}`（digest 外、
-缺省容忍、非法值 clamp + warning）。P1 的未知字段 passthrough 契约保证旧读者
-不销毁它。
+缺省容忍、非法值 clamp + warning）。未知字段 passthrough 为 **forward-only**
+（P3 Task 9 `84e38391` 起 board 级才写入 viewport）；P1 旧构建重写项目仍会丢该字段。
 
 ## 5. 技术设计要点
 

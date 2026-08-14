@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from PyQt5.QtCore import QPoint, QRect, QTimer, QVariantAnimation, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QRect, QTimer, QVariantAnimation, Qt, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QNativeGestureEvent, QWheelEvent
 from PyQt5.QtWidgets import (
     QApplication,
@@ -163,6 +163,7 @@ class UltraViewPage(QWidget):
         self._prev_unplaced_count: int | None = None
         self._viewport = BoardViewport()
         self._restoring_viewport = False
+        self._pending_viewport_restore: dict[str, float] | None = None
         self._smooth_timer = QTimer(self)
         self._smooth_timer.setObjectName("ultraViewSmoothPreviewTimer")
         self._smooth_timer.setSingleShot(True)
@@ -255,8 +256,7 @@ class UltraViewPage(QWidget):
         self._switcher.delete_requested.connect(self.delete_board_requested)
         self._switcher.reorder_requested.connect(self.reorder_board_requested)
         self._switcher.board_selected.connect(self._on_board_selected)
-        self._board_scroll.viewport_resized.connect(self._grid.set_viewport_size)
-        self._board_scroll.viewport_resized.connect(self._free_grid.set_viewport_size)
+        self._board_scroll.viewport_resized.connect(self._on_viewport_resized)
         self._board_scroll.viewport_resized.connect(self._refresh_minimap)
         self._board_scroll.horizontalScrollBar().valueChanged.connect(self._refresh_minimap)
         self._board_scroll.verticalScrollBar().valueChanged.connect(self._refresh_minimap)
@@ -316,6 +316,9 @@ class UltraViewPage(QWidget):
         self._grid_redo = QShortcut(QKeySequence.Redo, self)
         self._grid_redo.setContext(Qt.WidgetWithChildrenShortcut)
         self._grid_redo.activated.connect(self._on_grid_redo_shortcut)
+        app = QApplication.instance()
+        if app is not None:
+            app.focusChanged.connect(self._on_app_focus_changed)
         self.set_board(self._board)
 
     def board_switcher(self) -> BoardSwitcher:
@@ -374,10 +377,12 @@ class UltraViewPage(QWidget):
             "center_y": float(center[1]),
         }
 
-    def _restore_viewport_from_board(self, board) -> None:
+    def _restore_viewport_from_board(self, board, payload: Mapping[str, Any] | None = None) -> None:
         self._restoring_viewport = True
         try:
-            self._viewport.restore_payload(getattr(board, "viewport", None))
+            self._viewport.restore_payload(
+                payload if payload is not None else getattr(board, "viewport", None)
+            )
             zoom = self._viewport.zoom()
             self._grid.set_zoom(zoom)
             self._free_grid.set_zoom(zoom)
@@ -424,18 +429,26 @@ class UltraViewPage(QWidget):
         self.set_board_zoom(fit_zoom((size.width(), size.height()), (viewport.width(), viewport.height())))
 
     def zoom_to_card(self, section: str, view_id: str, *, animate: bool = True) -> None:
-        card = self.card_widget(section, view_id)
-        if card is None:
-            return
         viewport = self._board_scroll.viewport()
-        current = max(self._viewport.zoom(), 1e-6)
-        geom = card.geometry()
-        rect_1x = (
-            geom.x() / current,
-            geom.y() / current,
-            geom.width() / current,
-            geom.height() / current,
-        )
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            card = self._free_grid.card_for(section, view_id)
+            if card is None:
+                return
+            current = max(self._viewport.zoom(), 1e-6)
+            geom = card.geometry()
+            rect_1x = (
+                geom.x() / current,
+                geom.y() / current,
+                geom.width() / current,
+                geom.height() / current,
+            )
+        else:
+            card = self._grid.card_for(section, view_id)
+            if card is None:
+                return
+            rect_1x = self._grid.unzoomed_slot_rect(card.model().slot_id)
+            if rect_1x is None:
+                return
         zoom, center = zoom_to_rect(
             rect_1x, (float(viewport.width()), float(viewport.height()))
         )
@@ -479,6 +492,8 @@ class UltraViewPage(QWidget):
     def _apply_zoom_and_center(
         self, zoom: float, center: tuple[float, float]
     ) -> None:
+        self.cancel_board_gestures()
+        self._apply_preview_quality(QUALITY_FAST)
         after = clamp_zoom(zoom)
         self._viewport.set_zoom(after)
         self._viewport.set_center(center)
@@ -495,7 +510,6 @@ class UltraViewPage(QWidget):
         self._board_scroll.verticalScrollBar().setValue(int(round(scroll[1])))
         self._toolbar.set_zoom_percent(zoom_percent(after))
         self._apply_lod_chrome()
-        self._apply_preview_quality(QUALITY_FAST)
         self._restart_smooth_timer()
         self._persist_viewport_to_board()
         self.viewport_changed.emit()
@@ -520,8 +534,9 @@ class UltraViewPage(QWidget):
             button == Qt.LeftButton and self._viewport.space_down()
         ):
             return False
+        self.cancel_board_gestures()
         global_pos = _event_global_xy(event)
-        self._viewport.begin_pan(global_pos)
+        self._viewport.begin_pan(global_pos, int(button))
         self._board_scroll.viewport().setCursor(Qt.ClosedHandCursor)
         self._apply_preview_quality(QUALITY_FAST)
         self._restart_smooth_timer()
@@ -535,9 +550,20 @@ class UltraViewPage(QWidget):
         vertical = self._board_scroll.verticalScrollBar()
         horizontal.setValue(int(horizontal.value() + dx))
         vertical.setValue(int(vertical.value() + dy))
+        self._restart_smooth_timer()
+
+    def end_board_pan_for_event(self, event) -> bool:
+        if not self._viewport.end_pan(int(event.button())):
+            return False
+        self._after_end_board_pan()
+        return True
 
     def end_board_pan(self) -> None:
-        self._viewport.end_pan()
+        if not self._viewport.end_pan(None):
+            return
+        self._after_end_board_pan()
+
+    def _after_end_board_pan(self) -> None:
         if self._viewport.space_down():
             self._board_scroll.viewport().setCursor(Qt.OpenHandCursor)
         else:
@@ -545,6 +571,10 @@ class UltraViewPage(QWidget):
         self._persist_viewport_to_board()
         self._restart_smooth_timer()
         self.viewport_changed.emit()
+
+    def cancel_board_gestures(self) -> None:
+        self._grid.cancel_gesture()
+        self._free_grid.cancel_gesture()
 
     def handle_zoom_wheel(self, event: QWheelEvent, widget) -> bool:
         delta = event.angleDelta().y()
@@ -568,6 +598,8 @@ class UltraViewPage(QWidget):
         return self._grid
 
     def _zoom_at(self, zoom: float, cursor_in_viewport) -> None:
+        self.cancel_board_gestures()
+        self._apply_preview_quality(QUALITY_FAST)
         before = self._viewport.zoom()
         after = clamp_zoom(zoom)
         cursor = (float(cursor_in_viewport[0]), float(cursor_in_viewport[1]))
@@ -584,7 +616,6 @@ class UltraViewPage(QWidget):
         self._board_scroll.verticalScrollBar().setValue(int(round(new_scroll[1])))
         self._toolbar.set_zoom_percent(zoom_percent(after))
         self._apply_lod_chrome()
-        self._apply_preview_quality(QUALITY_FAST)
         self._restart_smooth_timer()
         self._persist_viewport_to_board()
         self.viewport_changed.emit()
@@ -602,6 +633,10 @@ class UltraViewPage(QWidget):
 
     def _restart_smooth_timer(self) -> None:
         self._smooth_timer.start(SMOOTH_DELAY_MS)
+
+    def _on_viewport_resized(self, size) -> None:
+        self._grid.set_viewport_size(size)
+        self._free_grid.set_viewport_size(size)
 
     def _on_smooth_preview_timeout(self) -> None:
         self._apply_preview_quality(QUALITY_SMOOTH)
@@ -679,7 +714,7 @@ class UltraViewPage(QWidget):
 
     def card_display_sizes(self) -> dict[UltraViewRef, tuple[int, int]]:
         sizes: dict[UltraViewRef, tuple[int, int]] = {}
-        for card in (*self._grid.card_widgets(), *self._free_grid.card_widgets()):
+        for card in self._active_canvas().card_widgets():
             model = card.model()
             sizes[UltraViewRef(model.section, model.view_id)] = card.preview_display_size()
         return sizes
@@ -803,6 +838,7 @@ class UltraViewPage(QWidget):
         switching = board.board_id != self._board.board_id
         if switching:
             self._persist_viewport_to_board()
+        incoming_viewport = dict(getattr(board, "viewport", None) or {})
         if not keep_overview:
             self.hide_overview()
         if self._workspace is None:
@@ -830,11 +866,19 @@ class UltraViewPage(QWidget):
             # library/grid/tray here would deleteLater the drag source before
             # mouseMoveEvent returns, which aborts via qFatal.
             self._board_widgets_dirty = True
+            if switching:
+                self._pending_viewport_restore = incoming_viewport
             return
         self._library.set_on_board(membership_set(board))
-        self._refresh_projection()
         if switching:
-            self._restore_viewport_from_board(board)
+            self._restoring_viewport = True
+            try:
+                self._refresh_projection()
+            finally:
+                self._restoring_viewport = False
+            self._restore_viewport_from_board(board, payload=incoming_viewport)
+        else:
+            self._refresh_projection()
         self._toolbar.set_zoom_percent(zoom_percent(self._viewport.zoom()))
 
     def show_overview(self) -> None:
@@ -901,6 +945,8 @@ class UltraViewPage(QWidget):
                 self.presentation_toggled.emit(False)
 
     def _on_escape_shortcut(self) -> None:
+        if self._text_field_has_focus():
+            return
         self.handle_escape()
 
     def _on_grid_undo_shortcut(self) -> None:
@@ -918,9 +964,19 @@ class UltraViewPage(QWidget):
     def _text_field_has_focus(self) -> bool:
         return isinstance(QApplication.focusWidget(), QLineEdit)
 
+    def _on_app_focus_changed(self, _old, now) -> None:
+        in_edit = isinstance(now, QLineEdit)
+        self._esc.setEnabled(not in_edit)
+        self._grid_undo.setEnabled(not in_edit)
+        self._grid_redo.setEnabled(not in_edit)
+        if in_edit:
+            self.note_space(False)
+
     def handle_escape(self) -> bool:
         if self._viewport.is_panning():
             self.end_board_pan()
+            return True
+        if self._grid.cancel_gesture():
             return True
         if self._free_grid.cancel_gesture():
             return True
@@ -946,11 +1002,28 @@ class UltraViewPage(QWidget):
         return False
 
     def resizeEvent(self, event) -> None:  # noqa: N802
+        if self._grid.is_gesture_active():
+            self._grid.cancel_gesture()
+        if self._free_grid.gesture().is_active():
+            self._free_grid.cancel_gesture()
         super().resizeEvent(event)
         self._focus.setGeometry(self.rect())
         if self._overview.isVisible():
             self._overview.setGeometry(self._board_scroll.geometry())
         self._position_minimap()
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        if event.type() == QEvent.WindowDeactivate:
+            self.note_space(False)
+            if self._viewport.is_panning():
+                self.end_board_pan()
+        super().changeEvent(event)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        self.note_space(False)
+        if self._viewport.is_panning():
+            self.end_board_pan()
+        super().hideEvent(event)
 
     def _on_drag_started(self, kind: str) -> None:
         self._drag_kind = kind
@@ -960,16 +1033,27 @@ class UltraViewPage(QWidget):
         self._flush_deferred_drag_refresh()
 
     def _flush_deferred_drag_refresh(self) -> None:
-        pending = self._pending_library_rows
+        pending_rows = self._pending_library_rows
         self._pending_library_rows = None
         dirty = self._board_widgets_dirty
         self._board_widgets_dirty = False
-        if pending is not None:
-            self._apply_library_rows(pending)
+        pending_viewport = self._pending_viewport_restore
+        self._pending_viewport_restore = None
+        if pending_rows is not None:
+            self._apply_library_rows(pending_rows)
         elif dirty:
             self._library.set_on_board(membership_set(self._board))
         if dirty:
-            self._refresh_projection()
+            if pending_viewport is not None:
+                self._restoring_viewport = True
+                try:
+                    self._refresh_projection()
+                finally:
+                    self._restoring_viewport = False
+            else:
+                self._refresh_projection()
+        if pending_viewport is not None:
+            self._restore_viewport_from_board(self._board, payload=pending_viewport)
 
     def _emit_feedback(self, message: str) -> None:
         self.feedback_requested.emit(message)
@@ -1207,8 +1291,11 @@ class UltraViewPage(QWidget):
             self._board_widgets_dirty = True
             return
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            self._grid.clear_projection()
             self._refresh_free_grid_projection()
             return
+        if self._free_grid.card_widgets():
+            self._free_grid.set_free_grid([], {})
         self._minimap.hide()
         self._board_stack.setCurrentWidget(self._grid)
         models: dict[str, CardViewModel | None] = {}

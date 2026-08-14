@@ -35,6 +35,8 @@ Spec：`docs/analyzer/specs/2026-08-14-ultraview-p3-canvas-interaction-spec.md`
 - 判据（spec §9）：掉帧或 pinch 不可靠 → P3-2 暂停，改评估 Tier 2；其余任务照常。
 - **2026-08-14：Cocoa 真机 UNVERIFIED → P3-2（Task 7–10）暂停。** 见
   `docs/analyzer/verify/2026-08-14-ultraview-zoom-spike.md`。
+- **2026-08-14 晚：P3-2 代码已落地，但仪器化 `max_frame_ms` / `pinch_events`
+  仍未回填。里程碑标「待仪器化真机验收」；操作者口头确认不能改标完成。**
 
 ### Task 1 — 小项收口（多维评审 §9 的 2/4/5/6）
 - RED：

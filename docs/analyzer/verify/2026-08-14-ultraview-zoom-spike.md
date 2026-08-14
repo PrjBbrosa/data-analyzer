@@ -33,4 +33,6 @@ P3-2 若恢复，采用 **A**：zoom 只改传入 `grid_metrics` 的 viewport，
 
 ## 门控结论
 
-**P3-2（Task 7–10）开闸。** 插入位仍采用上文方案 **A**（模板）+ 自由网格对 `GridMetrics` 做均匀缩放（`GRID_ROW_HEIGHT` 不随入参视口变化，单靠 A 会只变列宽）。
+**P3-2 实现已开闸，仪器化真机门仍开。** 插入位仍采用上文方案 **A**（模板）+ 自由网格对 `GridMetrics` 做均匀缩放（`GRID_ROW_HEIGHT` 不随入参视口变化，单靠 A 会只变列宽）。
+
+未回填 `max_frame_ms` / `frames_over_33ms` / `pinch_events` 之前，不得把 P3-2 标为完成。

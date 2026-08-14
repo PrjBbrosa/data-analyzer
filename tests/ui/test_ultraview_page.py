@@ -1962,3 +1962,134 @@ def test_board_switcher_does_not_rebuild_tabs_while_reordering(qtbot):
     assert tab.count() == 1
     assert switcher._reordering is False
     assert switcher.board_ids() == ("a",)
+
+
+def test_middle_pan_does_not_consume_left_release_during_card_drag(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "pan-0")
+    requested = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    start = QPoint(16, 16)
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    _drag_card(card, start, QPoint(start.x() + unit * 2, start.y()), release=False)
+    assert free.gesture().is_active()
+    mid_press = QMouseEvent(
+        QEvent.MouseButtonPress,
+        start,
+        card.mapToGlobal(start),
+        Qt.MiddleButton,
+        Qt.MiddleButton,
+        Qt.NoModifier,
+    )
+    QApplication.sendEvent(card, mid_press)
+    assert harness.page.is_board_panning()
+    assert not free.gesture().is_armed()
+    left_release = QMouseEvent(
+        QEvent.MouseButtonRelease,
+        start,
+        card.mapToGlobal(start),
+        Qt.LeftButton,
+        Qt.NoButton,
+        Qt.NoModifier,
+    )
+    QApplication.sendEvent(card, left_release)
+    assert harness.page.is_board_panning()
+    assert requested == []
+    mid_release = QMouseEvent(
+        QEvent.MouseButtonRelease,
+        start,
+        card.mapToGlobal(start),
+        Qt.MiddleButton,
+        Qt.NoButton,
+        Qt.NoModifier,
+    )
+    QApplication.sendEvent(card, mid_release)
+    assert not harness.page.is_board_panning()
+    assert requested == []
+
+
+def test_free_grid_release_on_tray_moves_card_to_unplaced(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "tray-0")
+    tray = harness.page.unplaced_tray()
+    tray.set_expanded(True)
+    qtbot.wait(10)
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    _drag_card(card, start, QPoint(start.x() + unit, start.y()), release=False)
+    tray_pos = QPoint(max(8, tray.width() // 2), max(8, tray.height() // 2))
+    global_pos = tray.mapToGlobal(tray_pos)
+    local = free.mapFromGlobal(global_pos)
+    QApplication.sendEvent(
+        free,
+        QMouseEvent(
+            QEvent.MouseButtonRelease,
+            local,
+            global_pos,
+            Qt.LeftButton,
+            Qt.NoButton,
+            Qt.NoModifier,
+        ),
+    )
+    assert harness.unplaced == [("time", "tray-0")]
+
+
+def test_template_slot_drag_escape_cancels_without_swap(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_2x2")
+    add_ref(harness.board, make_ref("time", "slot-a"))
+    add_ref(harness.board, make_ref("time", "slot-b"))
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    card = harness.page.card_widget("time", "slot-a")
+    assert card is not None
+    start = QPoint(20, 20)
+    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
+    _send_mouse_move(
+        card, QPoint(start.x() + QApplication.startDragDistance() + 24, start.y())
+    )
+    assert harness.page.board_grid().is_slot_drag_armed()
+    assert harness.page.handle_escape() is True
+    assert not harness.page.board_grid().is_slot_drag_armed()
+    assert harness.swapped == []
+
+
+def test_free_grid_out_of_bounds_move_toasts_without_commit(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "oob-0")
+    requested = []
+    toasts = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    harness.page.feedback_requested.connect(toasts.append)
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    _drag_card(card, start, QPoint(start.x() - unit * 8, start.y()))
+    assert requested == []
+    assert toasts == ["不能移出网格"]
+
+
+def test_inactive_canvas_drops_stale_cards_when_mode_switches(qtbot):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "stale-0"))
+    harness.page.set_board(harness.board)
+    assert harness.page.board_grid().card_widgets()
+    template_to_free_grid(harness.board)
+    harness.page.set_board(harness.board)
+    assert harness.page.board_grid().card_widgets() == []
+    assert harness.page._free_grid.card_widgets()
+
+
+def test_line_edit_focus_disables_board_shortcuts_and_clears_space_pan(qtbot):
+    harness = _Harness(qtbot)
+    search = harness.page.library_panel()._search
+    harness.page.note_space(True)
+    assert harness.page.board_viewport().space_down()
+    harness.page._on_app_focus_changed(None, search)
+    assert not harness.page.board_viewport().space_down()
+    assert not harness.page._esc.isEnabled()
+    assert not harness.page._grid_undo.isEnabled()
+    harness.page._on_app_focus_changed(search, harness.page)
+    assert harness.page._esc.isEnabled()

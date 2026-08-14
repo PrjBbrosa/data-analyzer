@@ -120,12 +120,24 @@ def pixels_to_grid_delta(delta: tuple[int, int], metrics: GridMetrics) -> tuple[
     return _round_cell(dx, unit_x), _round_cell(dy, unit_y)
 
 
+def translated_move_rect(
+    origin: GridRect, pixel_delta: tuple[int, int], metrics: GridMetrics
+) -> GridRect:
+    """Apply a pointer delta without clamping. Out of bounds stays illegal."""
+    column_delta, row_delta = pixels_to_grid_delta(pixel_delta, metrics)
+    return GridRect(
+        origin.column + column_delta,
+        origin.row + row_delta,
+        origin.column_span,
+        origin.row_span,
+    )
+
+
 def snapped_move_rect(
     origin: GridRect, pixel_delta: tuple[int, int], metrics: GridMetrics
 ) -> GridRect:
     """Clamp a pointer delta onto the same legal rectangle ``candidate_move`` uses."""
-    column_delta, row_delta = pixels_to_grid_delta(pixel_delta, metrics)
-    return candidate_move(origin, column_delta, row_delta)
+    return clamp_rect(translated_move_rect(origin, pixel_delta, metrics))
 
 
 def pixel_to_origin(pos: tuple[int, int], metrics: GridMetrics) -> tuple[int, int]:

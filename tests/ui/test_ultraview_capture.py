@@ -1912,7 +1912,11 @@ def test_focus_grab_scale_grows_toward_target_and_idle_stays_1x(qapp):
     widget = QWidget()
     widget.resize(100, 50)
     dpr = float(widget.devicePixelRatioF())
-    expected = max(800 / (100 * dpr), 400 / (50 * dpr), 1.0)
+    from mf4_analyzer.ui.chart_stack.ultraview.viewport import focus_grab_scale
+
+    expected = focus_grab_scale(
+        (100 * dpr, 50 * dpr), (800, 400), max_edge=MAX_PREVIEW_RAW_EDGE
+    )
     assert abs(coord._grab_scale(widget, ref) - expected) < 1e-6
     coord.store.set_residency_requests(
         [
@@ -1934,6 +1938,33 @@ def test_focus_grab_scale_grows_toward_target_and_idle_stays_1x(qapp):
     widget.resize(10, 10)
     scaled = coord._grab_scale(widget, ref)
     assert 10 * dpr * scaled <= MAX_PREVIEW_RAW_EDGE + 1e-6
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_place_free_grid_from_unplaced_toasts_when_grid_is_full(qapp):
+    from mf4_analyzer.ui.ultraview_state import (
+        LAYOUT_MODE_FREE_GRID,
+        MAX_PLACED_CARDS,
+        FreeGridPlacement,
+        GridRect,
+        make_ref,
+    )
+
+    window, coord = _make_coord()
+    toasts = []
+    window.toast = lambda message, level: toasts.append((message, level))
+    board = coord.board
+    board.layout_mode = LAYOUT_MODE_FREE_GRID
+    board.free_grid = [
+        FreeGridPlacement(make_ref("time", f"full-{index}"), GridRect(0, 0, 2, 2))
+        for index in range(MAX_PLACED_CARDS)
+    ]
+    extra = make_ref("time", "extra")
+    board.unplaced.append(extra)
+    coord._on_place_free_grid_from_unplaced("time", "extra")
+    assert extra in board.unplaced
+    assert toasts == [("Board 已满：换布局或先移除", "warning")]
     coord.clear()
     coord.deleteLater()
 

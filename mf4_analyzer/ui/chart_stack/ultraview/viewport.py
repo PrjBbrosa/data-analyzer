@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Mapping
+import math
 
 from .free_grid import GridMetrics
 
@@ -192,6 +193,34 @@ def needs_focus_recapture(
     )
 
 
+def focus_grab_scale(
+    native_size: tuple[float, float],
+    target_size: tuple[float, float],
+    *,
+    max_edge: float,
+) -> float:
+    """Scale so the published preview satisfies ``needs_focus_recapture``.
+
+    ``needs_focus_recapture`` is true while display > preview * 0.75, so the
+    grab must produce at least ``display / 0.75`` pixels. Capping at
+    ``max_edge`` is the reachable ceiling; callers must treat a capped
+    preview as satisfied.
+    """
+    native_w = max(1.0, float(native_size[0]))
+    native_h = max(1.0, float(native_size[1]))
+    target_w = max(1.0, float(target_size[0]))
+    target_h = max(1.0, float(target_size[1]))
+    ratio = FOCUS_PREVIEW_RATIO if FOCUS_PREVIEW_RATIO > 0 else 0.75
+    needed_w = math.ceil(target_w / ratio - 1e-9)
+    needed_h = math.ceil(target_h / ratio - 1e-9)
+    scale = max(needed_w / native_w, needed_h / native_h, 1.0)
+    produced = max(native_w, native_h) * scale
+    limit = max(1.0, float(max_edge))
+    if produced > limit:
+        scale *= limit / produced
+    return max(1.0, float(scale))
+
+
 def normalize_viewport_payload(
     raw: Any,
 ) -> tuple[dict[str, float], list[str]]:
@@ -261,6 +290,7 @@ def _finite_or_warn(
 @dataclass
 class PanSession:
     last: ViewportPoint
+    button: int = 0
 
 
 @dataclass
@@ -316,8 +346,10 @@ class BoardViewport:
     def is_panning(self) -> bool:
         return self._pan is not None
 
-    def begin_pan(self, global_pos: ViewportPoint) -> None:
-        self._pan = PanSession((float(global_pos[0]), float(global_pos[1])))
+    def begin_pan(self, global_pos: ViewportPoint, button: int = 0) -> None:
+        self._pan = PanSession(
+            (float(global_pos[0]), float(global_pos[1])), int(button)
+        )
         self._quality = QUALITY_FAST
 
     def update_pan(self, global_pos: ViewportPoint) -> ViewportPoint:
@@ -329,8 +361,17 @@ class BoardViewport:
         self._pan.last = (float(global_pos[0]), float(global_pos[1]))
         return (dx, dy)
 
-    def end_pan(self) -> None:
+    def end_pan(self, button: int | None = None) -> bool:
+        if self._pan is None:
+            return False
+        if (
+            button is not None
+            and self._pan.button != 0
+            and int(button) != self._pan.button
+        ):
+            return False
         self._pan = None
+        return True
 
     def restore_payload(self, payload: Mapping[str, Any] | None) -> list[str]:
         legal, warnings = normalize_viewport_payload(payload)

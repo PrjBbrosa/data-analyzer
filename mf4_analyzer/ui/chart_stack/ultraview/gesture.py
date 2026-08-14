@@ -14,11 +14,12 @@ from mf4_analyzer.ui.ultraview_state import FreeGridPlacement, GridRect, UltraVi
 from .free_grid import (
     GridMetrics,
     group_translate_rects,
+    clamp_rect,
     pixels_to_grid_delta,
     rect_is_available,
     rect_to_pixels,
-    snapped_move_rect,
     snapped_resize_rect,
+    translated_move_rect,
 )
 
 Rect = tuple[int, int, int, int]
@@ -234,15 +235,20 @@ class FreeGridGesture:
             session.candidate = translated.get(session.ref, session.origin)
             return session
         if session.handle is None:
-            session.candidate = snapped_move_rect(session.origin, (dx, dy), metrics)
-        else:
-            session.candidate = snapped_resize_rect(
-                session.origin,
-                (dx, dy),
-                metrics,
-                session.handle,
-                keep_aspect=session.keep_aspect,
+            session.candidate = translated_move_rect(session.origin, (dx, dy), metrics)
+            in_bounds = session.candidate == clamp_rect(session.candidate)
+            session.group_candidates = {session.ref: session.candidate}
+            session.legal = in_bounds and rect_is_available(
+                session.candidate, placements, excluding=session.ref
             )
+            return session
+        session.candidate = snapped_resize_rect(
+            session.origin,
+            (dx, dy),
+            metrics,
+            session.handle,
+            keep_aspect=session.keep_aspect,
+        )
         session.group_candidates = {session.ref: session.candidate}
         session.legal = rect_is_available(
             session.candidate, placements, excluding=session.ref

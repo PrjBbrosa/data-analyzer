@@ -77,11 +77,11 @@ from .layouts import (
     MIN_CARD_CHROME_HEIGHT,
     content_rect,
     logical_board_size,
+    screen_min_card_content_size,
     slot_rects,
 )
 from .free_grid import (
     GridMetrics,
-    candidate_move,
     candidate_resize,
     clamp_rect,
     export_grid_metrics,
@@ -164,6 +164,23 @@ def _handle_pan_press(widget: QWidget, event: QMouseEvent) -> bool:
     if page is None:
         return False
     return bool(page.begin_board_pan(event))
+
+
+def _handle_pan_release(widget: QWidget, event: QMouseEvent) -> bool:
+    page = _page_of(widget)
+    if page is None:
+        return False
+    return bool(page.end_board_pan_for_event(event))
+
+
+def _drop_on_unplaced_tray(widget: QWidget, global_pos: QPoint) -> bool:
+    page = _page_of(widget)
+    if page is None:
+        return False
+    tray = page.unplaced_tray()
+    if tray is None or not tray.isVisible():
+        return False
+    return tray.rect().contains(tray.mapFromGlobal(global_pos))
 
 
 class ReplaceHoverController(QObject):
@@ -1349,6 +1366,7 @@ class UltraViewCard(QFrame):
         self._source_pixmap: QPixmap | None = None
         self._scale_buffer: QPixmap | None = None
         self._scale_key: tuple | None = None
+        self._raw_cache_key: int | None = None
         self._preview_quality = QUALITY_SMOOTH
 
         root = QVBoxLayout(self)
@@ -1535,7 +1553,17 @@ class UltraViewCard(QFrame):
     def _set_image(self, model: CardViewModel) -> None:
         image = model.image
         if image is not None and not (callable(getattr(image, "isNull", None)) and image.isNull()):
-            self._raw_image = image if isinstance(image, QImage) else None
+            raw = image if isinstance(image, QImage) else None
+            cache_key = int(raw.cacheKey()) if raw is not None else None
+            if (
+                raw is not None
+                and self._raw_image is not None
+                and self._raw_cache_key is not None
+                and cache_key == self._raw_cache_key
+            ):
+                return
+            self._raw_image = raw
+            self._raw_cache_key = cache_key
             self._source_pixmap = None
             self._scale_buffer = None
             self._scale_key = None
@@ -1543,6 +1571,7 @@ class UltraViewCard(QFrame):
             self._fit_card_image()
             return
         self._raw_image = None
+        self._raw_cache_key = None
         self._source_pixmap = None
         self._scale_buffer = None
         self._scale_key = None
@@ -1592,6 +1621,9 @@ class UltraViewCard(QFrame):
         self._scale_buffer = scaled
         self._scale_key = key
         self._image.setPixmap(scaled)
+
+    def restore_dim(self) -> None:
+        self._apply_dim(bool(self._model.dimmed))
 
     def _apply_dim(self, dimmed: bool) -> None:
         if dimmed:
@@ -1688,9 +1720,7 @@ class UltraViewCard(QFrame):
         )
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        page = _page_of(self)
-        if page is not None and page.is_board_panning():
-            page.end_board_pan()
+        if _handle_pan_release(self, event):
             self._press_pos = None
             event.accept()
             return
@@ -1857,6 +1887,7 @@ class BoardGrid(QWidget):
             self._sync_slot(slot_id, model)
         self._sync_logical_size()
         self._relayout()
+        self._raise_overlay()
 
     def set_viewport_size(self, size: QSize) -> None:
         """Apply the scroll viewport size without deriving it from this widget.
@@ -1867,6 +1898,8 @@ class BoardGrid(QWidget):
         """
         if size == self._viewport_size:
             return
+        if self._slot_active:
+            self.cancel_gesture()
         self._viewport_size = QSize(size)
         self._sync_logical_size()
 
@@ -1892,13 +1925,58 @@ class BoardGrid(QWidget):
             return QSize(self.size())
         return QSize(width, height)
 
+    def unzoomed_slot_rect(self, slot_id: str) -> tuple[float, float, float, float] | None:
+        size = self.unzoomed_size()
+        content = (
+            BOARD_PADDING,
+            BOARD_PADDING,
+            max(0, size.width() - 2 * BOARD_PADDING),
+            max(0, size.height() - 2 * BOARD_PADDING),
+        )
+        try:
+            rects = slot_rects(self._layout_id, content, self._ratio)
+        except ValueError:
+            return None
+        rect = rects.get(slot_id)
+        if rect is None:
+            return None
+        return (float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3]))
+
+    def clear_projection(self) -> None:
+        if not self._widgets:
+            return
+        for slot_id in list(self._widgets):
+            self._discard(slot_id)
+
+    def cancel_gesture(self) -> bool:
+        if self._slot_source is None:
+            return False
+        source = self._slot_source
+        active = self._slot_active
+        card = self._widgets.get(source)
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
+        if isinstance(card, UltraViewCard):
+            card.restore_dim()
+        self._overlay.clear()
+        self._slot_source = None
+        self._slot_press = None
+        self._slot_active = False
+        if active:
+            self.drag_finished.emit()
+        return True
+
     def _sync_logical_size(self) -> None:
         viewport = self._viewport_size
         if viewport.width() <= 0 or viewport.height() <= 0:
             viewport = self.parentWidget().size() if self.parentWidget() is not None else self.size()
         zoomed = zoomed_viewport_size((viewport.width(), viewport.height()), self._zoom)
         try:
-            width, height = logical_board_size(self._layout_id, zoomed)
+            width, height = logical_board_size(
+                self._layout_id,
+                zoomed,
+                min_card_content_size=screen_min_card_content_size(self._zoom),
+            )
         except ValueError:
             return
         target = QSize(width, height)
@@ -1924,6 +2002,7 @@ class BoardGrid(QWidget):
             empty.ref_dropped.connect(self.ref_dropped)
             self._widgets[slot_id] = empty
             empty.show()
+            self._raise_overlay()
             return
         if isinstance(current, UltraViewCard):
             current.apply_model(model)
@@ -2005,6 +2084,9 @@ class BoardGrid(QWidget):
     def is_slot_drag_armed(self) -> bool:
         return self._slot_source is not None
 
+    def is_gesture_active(self) -> bool:
+        return bool(self._slot_active)
+
     def set_preview_quality(self, quality: str) -> None:
         for card in self.card_widgets():
             card.set_preview_quality(quality)
@@ -2040,13 +2122,11 @@ class BoardGrid(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        page = _page_of(self)
-        if page is not None and page.is_board_panning():
-            page.end_board_pan()
+        if _handle_pan_release(self, event):
             event.accept()
             return
         if self._slot_source is not None and event.button() == Qt.LeftButton:
-            self._finish_slot_drag(event.pos())
+            self._finish_slot_drag(event.pos(), event.globalPos())
             return
         super().mouseReleaseEvent(event)
 
@@ -2075,7 +2155,7 @@ class BoardGrid(QWidget):
     def handle_card_mouse_release(self, card: UltraViewCard, event: QMouseEvent) -> None:
         if event.button() != Qt.LeftButton:
             return
-        self._finish_slot_drag(card.mapTo(self, event.pos()))
+        self._finish_slot_drag(card.mapTo(self, event.pos()), event.globalPos())
 
     def _slot_drag_at(self, board_pos: QPoint) -> None:
         if self._slot_source is None or self._slot_press is None:
@@ -2115,14 +2195,14 @@ class BoardGrid(QWidget):
             legal=target is not None and target != self._slot_source,
         )
 
-    def _finish_slot_drag(self, board_pos: QPoint) -> None:
+    def _finish_slot_drag(self, board_pos: QPoint, global_pos: QPoint | None = None) -> None:
         source = self._slot_source
         active = self._slot_active
         card = self._widgets.get(source) if source else None
         if QWidget.mouseGrabber() is self:
             self.releaseMouse()
         if isinstance(card, UltraViewCard):
-            card.setGraphicsEffect(None)
+            card.restore_dim()
         self._overlay.clear()
         self._slot_source = None
         self._slot_press = None
@@ -2130,6 +2210,11 @@ class BoardGrid(QWidget):
         if active:
             self.drag_finished.emit()
         if not active or source is None:
+            return
+        if global_pos is not None and _drop_on_unplaced_tray(self, global_pos):
+            if isinstance(card, UltraViewCard):
+                model = card.model()
+                self.move_to_unplaced_requested.emit(model.section, model.view_id)
             return
         target = self.slot_id_at(board_pos)
         if target is None or target == source:
@@ -2222,9 +2307,7 @@ class FreeGridCard(UltraViewCard):
         QWidget.mouseMoveEvent(self, event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        page = _page_of(self)
-        if page is not None and page.is_board_panning():
-            page.end_board_pan()
+        if _handle_pan_release(self, event):
             self._press_pos = None
             event.accept()
             return
@@ -2307,6 +2390,8 @@ class FreeGridBoard(QWidget):
     def set_viewport_size(self, size: QSize) -> None:
         if size == self._viewport_size:
             return
+        if self._gesture.is_active():
+            self.cancel_gesture()
         self._viewport_size = QSize(size)
         self._sync_metrics()
 
@@ -2346,6 +2431,8 @@ class FreeGridBoard(QWidget):
             self._overlay.set_marquee(None)
             self._sync_selection_handles()
             cancelled = True
+        if cancelled:
+            self._relayout()
         return cancelled
 
     def select_only(self, section: str, view_id: str) -> None:
@@ -2580,7 +2667,7 @@ class FreeGridBoard(QWidget):
                 self._board_pos(card, event.pos()),
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
             )
-        self._finish_gesture(commit=True)
+        self._finish_gesture(commit=True, global_pos=event.globalPos())
 
     def _finish_pending_shift_toggle(self) -> bool:
         ref = self._pending_shift_toggle
@@ -2633,9 +2720,7 @@ class FreeGridBoard(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        page = _page_of(self)
-        if page is not None and page.is_board_panning():
-            page.end_board_pan()
+        if _handle_pan_release(self, event):
             event.accept()
             return
         if event.button() == Qt.LeftButton and self._gesture.marquee() is not None:
@@ -2653,7 +2738,7 @@ class FreeGridBoard(QWidget):
                 (event.pos().x(), event.pos().y()),
                 keep_aspect=bool(event.modifiers() & Qt.ShiftModifier),
             )
-            self._finish_gesture(commit=True)
+            self._finish_gesture(commit=True, global_pos=event.globalPos())
             return
         super().mouseReleaseEvent(event)
 
@@ -2736,7 +2821,7 @@ class FreeGridBoard(QWidget):
         started = False
         for ref in members:
             card = self._widgets.get(ref)
-            if card is None or card.graphicsEffect() is not None:
+            if card is None:
                 continue
             if not started:
                 self.drag_started.emit("layout")
@@ -2763,7 +2848,7 @@ class FreeGridBoard(QWidget):
             handles=session.handle is not None,
         )
 
-    def _finish_gesture(self, *, commit: bool) -> None:
+    def _finish_gesture(self, *, commit: bool, global_pos: QPoint | None = None) -> None:
         session = self._gesture.take()
         self._release_mouse_if_grabbed()
         if session is None:
@@ -2772,25 +2857,42 @@ class FreeGridBoard(QWidget):
         for ref in members:
             card = self._widgets.get(ref)
             if card is not None:
-                card.setGraphicsEffect(None)
+                card.restore_dim()
                 card.unsetCursor()
         self._overlay.clear()
         self._sync_selection_handles()
         if session.active:
             self.drag_finished.emit()
         if not commit or not session.active:
+            self._relayout()
+            return
+        if global_pos is not None and _drop_on_unplaced_tray(self, global_pos):
+            for ref in members:
+                self.move_to_unplaced_requested.emit(ref.section, ref.view_id)
             return
         if session.is_group_move():
             self._commit_group_move(session)
             return
-        candidate = self._legal_grid_rect(session.candidate)
+        if session.handle:
+            candidate = self._legal_grid_rect(session.candidate)
+            if not session.legal or not rect_is_available(
+                candidate, self._placements.values(), excluding=session.ref
+            ):
+                self.feedback_requested.emit("目标位置与其他卡片重叠")
+                return
+            self._request_geometry(session.ref, candidate, "drag-resize")
+            return
+        legal = self._legal_grid_rect(session.candidate)
+        if legal != session.candidate:
+            self.feedback_requested.emit("不能移出网格")
+            self._relayout()
+            return
         if not session.legal or not rect_is_available(
-            candidate, self._placements.values(), excluding=session.ref
+            session.candidate, self._placements.values(), excluding=session.ref
         ):
             self.feedback_requested.emit("目标位置与其他卡片重叠")
             return
-        reason = "drag-resize" if session.handle else "drag-move"
-        self._request_geometry(session.ref, candidate, reason)
+        self._request_geometry(session.ref, session.candidate, "drag-move")
 
     def _commit_group_move(self, session) -> None:
         if not session.legal:
@@ -2806,7 +2908,7 @@ class FreeGridBoard(QWidget):
                 return
             candidate = self._legal_grid_rect(rect)
             if candidate != rect:
-                self.feedback_requested.emit("目标位置与其他卡片重叠")
+                self.feedback_requested.emit("不能移出网格")
                 return
             if candidate != placement.rect:
                 updates.append(
@@ -2850,13 +2952,20 @@ class FreeGridBoard(QWidget):
         candidate = (
             candidate_resize(placement.rect, column_delta, row_delta)
             if resize
-            else candidate_move(placement.rect, column_delta, row_delta)
+            else GridRect(
+                placement.rect.column + int(column_delta),
+                placement.rect.row + int(row_delta),
+                placement.rect.column_span,
+                placement.rect.row_span,
+            )
         )
-        self._request_geometry(
-            ref,
-            self._legal_grid_rect(candidate),
-            "keyboard-resize" if resize else "keyboard-move",
-        )
+        if not resize:
+            if candidate != self._legal_grid_rect(candidate):
+                self.feedback_requested.emit("不能移出网格")
+                return
+            self._request_geometry(ref, candidate, "keyboard-move")
+            return
+        self._request_geometry(ref, self._legal_grid_rect(candidate), "keyboard-resize")
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if _accept_ultraview_drag(event):
@@ -3032,9 +3141,7 @@ class BoardScrollArea(QScrollArea):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        page = _page_of(self)
-        if page is not None and page.is_board_panning():
-            page.end_board_pan()
+        if _handle_pan_release(self, event):
             event.accept()
             return
         super().mouseReleaseEvent(event)
