@@ -25,6 +25,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     LayoutPlan,
     LayoutRejectReason,
     legal_grid_rect,
+    rect_to_pixels,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
@@ -1749,6 +1750,56 @@ def test_free_grid_overlap_at_boundary_toasts_without_commit(qtbot):
     assert group == []
     assert toasts == [FEEDBACK_NO_LEGAL_LAYOUT]
     assert card.geometry().topLeft() == origin.topLeft()
+
+
+def test_displacing_a_card_out_of_the_viewport_hints_and_logs(qtbot, caplog):
+    """Blockers slide along the drag axis (spec D9.3, 2026-08-15 annotation), so a
+    pushed card can land below everything on screen.  Scroll follow is out of
+    scope; saying so is not (review 2026-08-15 §4.3 blocker 落点)."""
+    harness = _Harness(qtbot)
+    harness.board.layout_mode = LAYOUT_MODE_FREE_GRID
+    harness.board.placements.clear()
+    harness.board.unplaced.clear()
+    harness.board.free_grid = [
+        FreeGridPlacement(make_ref("time", "far-0"), GridRect(0, 0, 12, 8)),
+        FreeGridPlacement(make_ref("time", "far-1"), GridRect(0, 8, 12, 8)),
+    ]
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    free = harness.page._free_grid
+    visible = free._visible_board_rect()
+    assert not visible.isEmpty()
+    toasts = []
+    harness.page.feedback_requested.connect(toasts.append)
+    with caplog.at_level(logging.INFO, logger=uv_widgets.__name__):
+        assert (
+            free._request_geometry(
+                make_ref("time", "far-0"), GridRect(0, 8, 12, 8), "keyboard-move"
+            )
+            is True
+        )
+    pushed = QRect(*rect_to_pixels(GridRect(0, 16, 12, 8), free.metrics()))
+    assert not visible.intersects(pushed)
+    assert uv_widgets.FEEDBACK_DISPLACED_OFFSCREEN in toasts
+    assert any(
+        "outside the viewport" in record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.INFO
+    )
+
+
+def test_displacement_inside_the_viewport_stays_quiet(qtbot):
+    harness = _Harness(qtbot)
+    free, (card, _other) = _prepare_free_grid(harness, qtbot, "near-0", "near-1")
+    toasts = []
+    harness.page.feedback_requested.connect(toasts.append)
+    assert (
+        free._request_geometry(
+            make_ref("time", "near-0"), GridRect(6, 0, 6, 3), "keyboard-move"
+        )
+        is True
+    )
+    assert toasts == [FEEDBACK_REARRANGED.format(count=2)]
 
 
 def test_search_budget_reject_has_its_own_copy_and_a_warning_trace(qtbot, monkeypatch, caplog):

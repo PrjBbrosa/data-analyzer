@@ -26,6 +26,7 @@ from PyQt5.QtGui import (
     QWheelEvent,
 )
 from PyQt5.QtWidgets import (
+    QAbstractScrollArea,
     QApplication,
     QButtonGroup,
     QComboBox,
@@ -3302,7 +3303,46 @@ class FreeGridBoard(QWidget):
             self.feedback_requested.emit(
                 FEEDBACK_REARRANGED.format(count=plan.affected_count())
             )
+        self._warn_if_displaced_offscreen(plan)
         return True
+
+    def _visible_board_rect(self) -> QRect:
+        """Board-local rect of the scroll viewport, or a null rect when unknown.
+
+        Derived from the scroll host's geometry rather than ``visibleRegion()``
+        so it is pure geometry: no dependency on paint/visibility state.
+        """
+        host = self.parentWidget()
+        while host is not None:
+            area = host.parentWidget()
+            if isinstance(area, QAbstractScrollArea) and area.viewport() is host:
+                return QRect(self.mapFrom(host, QPoint(0, 0)), host.size())
+            host = area
+        return QRect()
+
+    def _warn_if_displaced_offscreen(self, plan: LayoutPlan) -> None:
+        """Tell the user when a card was pushed clean out of the visible board.
+
+        Blockers slide along the drag axis (spec D9.3, 2026-08-15 annotation), so
+        a displaced card can land below everything the user can see.  Scroll
+        follow is not in this batch; an honest hint is.
+        """
+        visible = self._visible_board_rect()
+        if visible.isEmpty():
+            return
+        gone = [
+            item
+            for item in plan.displaced_before_after
+            if not visible.intersects(QRect(*rect_to_pixels(item.after, self._metrics)))
+        ]
+        if not gone:
+            return
+        _PLANNER_LOG.info(
+            "ultraview displaced %s card(s) outside the viewport: %s",
+            len(gone),
+            ", ".join(f"{item.ref.section}/{item.ref.view_id}" for item in gone),
+        )
+        self.feedback_requested.emit(FEEDBACK_DISPLACED_OFFSCREEN)
 
     def _request_geometry(self, ref: UltraViewRef, rect: GridRect, reason: str) -> bool:
         placement = self._placements.get(ref)
