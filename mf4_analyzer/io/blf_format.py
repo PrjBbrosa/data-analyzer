@@ -256,6 +256,11 @@ def _read_blf_frames(fp, progress_callback=None):
 _PROBE_DECODE_CAP = 8192
 
 
+# Name of the shared time axis every assembled CAN frame carries. Reserved:
+# a DBC signal of the same name must be qualified before it reaches the frame.
+_TIME_AXIS_NAME = "Time"
+
+
 def _zoh_resample(ref_t, t, v):
     """Zero-order-hold (previous-sample) resample of ``(t, v)`` onto ``ref_t``.
 
@@ -344,6 +349,12 @@ class LazyZohFrame(ChannelFrame):
     aligned arrays. FileData / plot access patterns (``columns``, ``len``,
     ``[name].to_numpy()``) stay available; unimplemented pandas row
     operations raise instead of silently succeeding.
+
+    Columns are addressed by name, so names must be unique and none may
+    shadow the ``Time`` axis. Both are rejected at construction rather than
+    silently collapsing two series into one column; ``_decode_blf_with_dbc``
+    is responsible for qualifying ambiguous DBC signal names before they
+    reach here.
     """
 
     is_channel_frame = True
@@ -352,8 +363,27 @@ class LazyZohFrame(ChannelFrame):
         self._ref_t = np.asarray(ref_t, dtype=np.float64)
         self._series = dict(series)
         self._column_names = list(column_names)
-        self._cache = {"Time": self._ref_t}
+        self._reject_ambiguous_columns()
+        self._cache = {_TIME_AXIS_NAME: self._ref_t}
         self._zoh_materializations = 0
+
+    def _reject_ambiguous_columns(self):
+        seen = set()
+        duplicates = []
+        for name in self._column_names:
+            if name in seen and name not in duplicates:
+                duplicates.append(name)
+            seen.add(name)
+        if duplicates:
+            raise ValueError(
+                "ChannelFrame 不支持重复列名（按名字取列会静默丢弃其中一份）: "
+                + ", ".join(repr(name) for name in duplicates)
+            )
+        if _TIME_AXIS_NAME in self._series:
+            raise ValueError(
+                f"信号名 {_TIME_AXIS_NAME!r} 与共享时间轴冲突；"
+                "请在解码时消歧为 <Message>.<Signal>"
+            )
 
     def column_names(self):
         return tuple(self._column_names)
@@ -362,7 +392,13 @@ class LazyZohFrame(ChannelFrame):
         return name in self._column_names
 
     def get_column(self, name):
-        return np.asarray(self._materialize(name), dtype=np.float64)
+        values = np.asarray(self._materialize(name), dtype=np.float64)
+        # The cache is shared with every other reader (and with the Time
+        # axis itself), so hand out a read-only view — same guarantee the
+        # ``frame[name]`` Series path already gave. Copy before mutating.
+        view = values.view()
+        view.setflags(write=False)
+        return view
 
     def drop_columns(self, names):
         if isinstance(names, str):
@@ -389,7 +425,13 @@ class LazyZohFrame(ChannelFrame):
         return pd.DataFrame(stacked, columns=list(self._column_names))
 
     def is_lazy(self):
-        return True
+        """True only while some column is still an unmaterialized series.
+
+        This reports *this frame's* state, not the class's capability: once
+        every column has been read the frame is as dense as a DataFrame and
+        callers deciding whether to pay for materialization must see that.
+        """
+        return any(name not in self._cache for name in self._column_names)
 
     def materialized_column_names(self):
         return tuple(name for name in self._column_names if name in self._cache)
@@ -453,7 +495,7 @@ class LazyZohFrame(ChannelFrame):
         cached = self._cache.get(name)
         if cached is not None:
             return cached
-        if name == "Time":
+        if name == _TIME_AXIS_NAME:
             self._cache[name] = self._ref_t
             return self._ref_t
         pair = self._series.get(name)
@@ -489,7 +531,7 @@ def _assemble_blf_channels(series, units, t0, progress_callback=None):
         if index % report_step == 0 or index == total_series:
             _emit_progress(progress_callback, index, total_series)
     ref_t = prepared[ref_name][0]
-    column_names = ["Time", *prepared.keys()]
+    column_names = [_TIME_AXIS_NAME, *prepared.keys()]
     frame = LazyZohFrame(ref_t, prepared, column_names)
     return frame, column_names, units
 
@@ -552,14 +594,23 @@ def _cached_message_lookup(db):
     return lookup
 
 
+def _display_signal_name(msg_name, sig_name, sig_owners):
+    """Qualify a DBC signal name only when the bare name would be ambiguous.
+
+    Ambiguous means either "defined by more than one message" or "collides
+    with the shared time axis" — an unqualified ``Time`` signal would be
+    silently replaced by the axis when the frame is assembled.
+    """
+    if sig_name == _TIME_AXIS_NAME or len(sig_owners.get(sig_name, ())) > 1:
+        return f"{msg_name}.{sig_name}"
+    return sig_name
+
+
 def _signal_display_meta(msg, sig_owners):
     meta = {}
     for sig in msg.signals:
         name = sig.name
-        disp = (
-            name if len(sig_owners.get(name, ())) <= 1
-            else f"{msg.name}.{name}"
-        )
+        disp = _display_signal_name(msg.name, name, sig_owners)
         meta[name] = (disp, str(getattr(sig, "unit", "") or ""))
     return meta
 
@@ -861,10 +912,7 @@ def _decode_blf_with_dbc(frames, dbc_paths, t0, progress_callback=None):
         for sig_name, fval in numeric_values:
             meta = layout.get(sig_name)
             if meta is None:
-                disp = (
-                    sig_name if len(sig_owners[sig_name]) <= 1
-                    else f"{msg.name}.{sig_name}"
-                )
+                disp = _display_signal_name(msg.name, sig_name, sig_owners)
                 unit = ""
             else:
                 disp, unit = meta

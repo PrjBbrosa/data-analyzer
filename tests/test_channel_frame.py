@@ -109,21 +109,67 @@ def test_drop_columns_is_column_only_and_row_drop_raises(tmp_path):
         data.drop(columns=["Throttle"], inplace=True)
 
 
-def test_duplicate_display_names_do_not_collapse_via_dict():
+def test_two_different_series_under_one_name_fail_fast(tmp_path):
+    """§4.1: the name dict silently kept one series and showed it twice.
+
+    The old fixture handed both columns *the same* ``(t, v)`` pair, so the
+    collapse was invisible. Two genuinely different series make it visible:
+    either the frame disambiguates them or it must refuse to build.
+    """
     t = np.array([0.0, 1.0])
-    v1 = np.array([1.0, 2.0])
-    frame = blf_format.LazyZohFrame(
-        t,
-        {"sig": (t, v1)},
-        ["Time", "sig", "sig"],
+    first = np.array([1.0, 2.0])
+    second = np.array([10.0, 20.0])
+    series = {"sig": (t, first), "sig#2": (t, second)}
+
+    with pytest.raises(ValueError, match="重复列名"):
+        blf_format.LazyZohFrame(t, series, ["Time", "sig", "sig"])
+
+
+def test_dbc_signal_named_time_is_disambiguated_not_shadowed(tmp_path):
+    """§4.1: a DBC signal called ``Time`` used to be replaced by the axis."""
+    from tests._helpers.blf_factory import (
+        engine_payload,
+        make_can_frames,
+        write_time_named_signal_dbc,
     )
 
-    names = list(frame.column_names())
-    assert names == ["Time", "sig", "sig"]
-    assert len(dict.fromkeys(names)) == 2
-    pdf = frame.to_pandas()
-    assert list(pdf.columns) == ["Time", "sig", "sig"]
-    assert pdf.shape[1] == 3
+    dbc = write_time_named_signal_dbc(tmp_path / "clock.dbc")
+    frames = make_can_frames([(5, 0x123, engine_payload())], t_start=7.0, dt=0.1)
+
+    data, channels, units = DataLoader.load_blf_frames(
+        frames, dbc_paths=[str(dbc)],
+    )
+
+    assert "EngineData.Time" in channels
+    assert channels.count("Time") == 1
+    axis = np.asarray(data.get_column("Time"))
+    signal = np.asarray(data.get_column("EngineData.Time"))
+    assert axis[0] == pytest.approx(0.0)
+    assert not np.allclose(axis, signal)
+    assert units["EngineData.Time"] == "ms"
+
+
+def test_is_lazy_turns_false_once_every_column_is_materialized(tmp_path):
+    """§4.1: is_lazy() described the class, not this frame's state."""
+    data, channels, _units = _load_sample(tmp_path)
+
+    assert data.is_lazy() is True
+    for name in channels:
+        data.get_column(name)
+    assert data.is_lazy() is False
+    assert set(data.materialized_column_names()) == set(channels)
+
+
+def test_get_column_never_hands_out_a_writable_view_of_the_cache(tmp_path):
+    """§4.1: get_column returned the live cache array; __getitem__ did not."""
+    data, _channels, _units = _load_sample(tmp_path)
+
+    column = data.get_column("Speed")
+    original = float(column[0])
+    with pytest.raises(ValueError):
+        column[0] = -12345.0
+
+    assert float(data.get_column("Speed")[0]) == pytest.approx(original)
 
 
 def test_empty_single_point_nonfinite_and_t0_behavior_is_frozen():

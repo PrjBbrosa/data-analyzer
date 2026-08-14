@@ -67,6 +67,37 @@ def write_engine_only_dbc(path: Path) -> Path:
     return path
 
 
+def write_time_named_signal_dbc(path: Path) -> Path:
+    """Write a DBC whose 0x123 message carries a signal literally named ``Time``.
+
+    Legal in a DBC and not rare in practice (bus-time / timestamp signals),
+    but it collides with the shared time axis a CAN import assembles.
+    """
+    import cantools
+    from cantools.database.can import Database, Message, Signal
+    from cantools.database.conversion import BaseConversion
+
+    db = Database(messages=[
+        Message(
+            frame_id=0x123, name="EngineData", length=8, is_extended_frame=False,
+            signals=[
+                Signal(
+                    name="Time", start=0, length=16, byte_order="little_endian",
+                    is_signed=False, unit="ms",
+                    conversion=BaseConversion.factory(scale=0.25, offset=0.0),
+                ),
+                Signal(
+                    name="Throttle", start=16, length=8,
+                    byte_order="little_endian", is_signed=False, unit="%",
+                    conversion=BaseConversion.factory(scale=0.4, offset=0.0),
+                ),
+            ],
+        ),
+    ])
+    cantools.database.dump_file(db, str(path))
+    return path
+
+
 def write_sample_blf(
     path: Path,
     *,
