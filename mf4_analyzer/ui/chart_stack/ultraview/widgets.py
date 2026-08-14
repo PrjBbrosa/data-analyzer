@@ -11,7 +11,7 @@ from functools import partial
 from typing import Any, Mapping, Sequence
 
 from PyQt5 import sip
-from PyQt5.QtCore import QByteArray, QMimeData, QPoint, QRect, QSize, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QByteArray, QMimeData, QObject, QPoint, QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -104,6 +104,55 @@ HANDLE_CURSORS = {
     "ne": Qt.SizeBDiagCursor,
     "sw": Qt.SizeBDiagCursor,
 }
+
+REPLACE_HOVER_MS = 600
+
+
+class ReplaceHoverController(QObject):
+    """Arm a replacement ring after a sustained hover. No lambda slots."""
+
+    armed = pyqtSignal(str)
+    cleared = pyqtSignal()
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._pending: str | None = None
+        self._armed: str | None = None
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._on_timeout)
+
+    def hover(self, key: str | None) -> None:
+        if key is None:
+            self.clear()
+            return
+        if key == self._armed:
+            return
+        if key == self._pending and self._timer.isActive():
+            return
+        self._armed = None
+        self._pending = key
+        self.cleared.emit()
+        self._timer.start(REPLACE_HOVER_MS)
+
+    def is_armed(self, key: str) -> bool:
+        return self._armed == key
+
+    def armed_key(self) -> str | None:
+        return self._armed
+
+    def clear(self) -> None:
+        self._timer.stop()
+        had = self._armed is not None or self._pending is not None
+        self._pending = None
+        self._armed = None
+        if had:
+            self.cleared.emit()
+
+    def _on_timeout(self) -> None:
+        self._armed = self._pending
+        if self._armed is not None:
+            self.armed.emit(self._armed)
 
 LAYOUT_LABELS_ZH = {
     "split_horizontal": "左右双图",
@@ -1149,6 +1198,9 @@ class EmptySlotWidget(QFrame):
         if _accept_ultraview_drag(event):
             _set_flag(self, "dropActive", True)
             self.drag_entered.emit()
+            note = getattr(self.parentWidget(), "note_replace_hover", None)
+            if callable(note):
+                note(None)
             return
         _set_flag(self, "dropActive", False)
 
@@ -1338,7 +1390,7 @@ class UltraViewCard(QFrame):
         apply_rounded_menu_chrome(menu)
         open_act = menu.addAction("打开原 View")
         focus_act = menu.addAction("临时放大")
-        replace_act = menu.addAction("替换")
+        replace_act = menu.addAction("替换为…")
         unplaced_act = menu.addAction("移到未放置")
         remove_act = menu.addAction("从总览移除")
         copy_act = menu.addAction("复制本卡图像")
@@ -1425,6 +1477,11 @@ class UltraViewCard(QFrame):
         if event.button() == Qt.LeftButton:
             self._press_pos = QPoint(event.pos())
             self.selected.emit(self._model.section, self._model.view_id)
+            handler = getattr(self.parentWidget(), "handle_card_mouse_press", None)
+            if callable(handler):
+                handler(self, event)
+                event.accept()
+                return
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -1432,6 +1489,14 @@ class UltraViewCard(QFrame):
         event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        parent = self.parentWidget()
+        handler = getattr(parent, "handle_card_mouse_move", None)
+        armed = getattr(parent, "is_slot_drag_armed", None)
+        if callable(handler) and (
+            event.buttons() & Qt.LeftButton or (callable(armed) and armed())
+        ):
+            handler(self, event)
+            return
         if self._press_pos is None or not (event.buttons() & Qt.LeftButton):
             super().mouseMoveEvent(event)
             return
@@ -1446,6 +1511,12 @@ class UltraViewCard(QFrame):
         )
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        handler = getattr(self.parentWidget(), "handle_card_mouse_release", None)
+        if callable(handler):
+            handler(self, event)
+            self._press_pos = None
+            event.accept()
+            return
         self._press_pos = None
         super().mouseReleaseEvent(event)
 
@@ -1480,27 +1551,45 @@ class UltraViewCard(QFrame):
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if _accept_ultraview_drag(event):
             _set_flag(self, "dropActive", True)
+            note = getattr(self.parentWidget(), "note_replace_hover", None)
+            if callable(note):
+                note(self._model.slot_id)
             return
         _set_flag(self, "dropActive", False)
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802
         if _accept_ultraview_drag(event):
             _set_flag(self, "dropActive", True)
+            note = getattr(self.parentWidget(), "note_replace_hover", None)
+            if callable(note):
+                note(self._model.slot_id)
             return
         _set_flag(self, "dropActive", False)
 
     def dragLeaveEvent(self, event) -> None:  # noqa: N802
         _set_flag(self, "dropActive", False)
+        note = getattr(self.parentWidget(), "note_replace_hover", None)
+        if callable(note):
+            note(None)
         event.accept()
 
     def dropEvent(self, event) -> None:  # noqa: N802
         _set_flag(self, "dropActive", False)
         extracted = extract_ref_strings(event.mimeData())
         event.acceptProposedAction()
+        parent = self.parentWidget()
+        armed = getattr(parent, "is_replace_armed", None)
+        clear = getattr(parent, "clear_replace_hover", None)
+        slot_id = self._model.slot_id
+        replace_ok = callable(armed) and armed(slot_id)
+        if callable(clear):
+            clear()
         if extracted is None:
             return
+        if not replace_ok:
+            return
         section, view_id = extracted
-        self.ref_dropped.emit(self._model.slot_id, section, view_id)
+        self.ref_dropped.emit(slot_id, section, view_id)
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:  # noqa: N802
         menu = self.make_context_menu()
@@ -1520,6 +1609,7 @@ class BoardGrid(QWidget):
     selected = pyqtSignal(str, str)
     drag_started = pyqtSignal(str)
     drag_finished = pyqtSignal()
+    slot_swap_requested = pyqtSignal(str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1532,6 +1622,14 @@ class BoardGrid(QWidget):
         self._ratio = 0.67
         self._widgets: dict[str, QWidget] = {}
         self._viewport_size = QSize(0, 0)
+        self._overlay = GhostOverlay(self)
+        self._overlay.hide()
+        self._replace = ReplaceHoverController(self)
+        self._replace.armed.connect(self._on_replace_armed)
+        self._replace.cleared.connect(self._on_replace_cleared)
+        self._slot_source: str | None = None
+        self._slot_press: QPoint | None = None
+        self._slot_active = False
 
     def layout_id(self) -> str:
         return self._layout_id
@@ -1633,10 +1731,16 @@ class BoardGrid(QWidget):
         card.drag_finished.connect(self.drag_finished)
         self._widgets[slot_id] = card
         card.show()
+        self._raise_overlay()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._relayout()
+        self._raise_overlay()
+
+    def _raise_overlay(self) -> None:
+        self._overlay.setGeometry(self.rect())
+        self._overlay.raise_()
 
     def _relayout(self) -> None:
         content = (
@@ -1668,6 +1772,116 @@ class BoardGrid(QWidget):
                 return slot_id
         return None
 
+    def note_replace_hover(self, key: str | None) -> None:
+        self._replace.hover(key)
+
+    def is_replace_armed(self, key: str) -> bool:
+        return self._replace.is_armed(key)
+
+    def clear_replace_hover(self) -> None:
+        self._replace.clear()
+
+    def _on_replace_armed(self, key: str) -> None:
+        widget = self._widgets.get(key)
+        if widget is None:
+            return
+        geom = widget.geometry()
+        self._overlay.set_replace_ring((geom.x(), geom.y(), geom.width(), geom.height()))
+
+    def _on_replace_cleared(self) -> None:
+        self._overlay.set_replace_ring(None)
+
+    def is_slot_drag_armed(self) -> bool:
+        return self._slot_source is not None
+
+    def handle_card_mouse_press(self, card: UltraViewCard, event: QMouseEvent) -> None:
+        if event.button() != Qt.LeftButton:
+            return
+        self._slot_source = card.model().slot_id
+        self._slot_press = card.mapTo(self, event.pos())
+        self._slot_active = False
+
+    def handle_card_mouse_move(self, card: UltraViewCard, event: QMouseEvent) -> None:
+        self._slot_drag_at(card.mapTo(self, event.pos()))
+
+    def handle_card_mouse_release(self, card: UltraViewCard, event: QMouseEvent) -> None:
+        if event.button() != Qt.LeftButton:
+            return
+        self._finish_slot_drag(card.mapTo(self, event.pos()))
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._slot_source is not None and (
+            event.buttons() & Qt.LeftButton or QWidget.mouseGrabber() is self
+        ):
+            self._slot_drag_at(event.pos())
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._slot_source is not None and event.button() == Qt.LeftButton:
+            self._finish_slot_drag(event.pos())
+            return
+        super().mouseReleaseEvent(event)
+
+    def _slot_drag_at(self, board_pos: QPoint) -> None:
+        if self._slot_source is None or self._slot_press is None:
+            return
+        card = self._widgets.get(self._slot_source)
+        if not isinstance(card, UltraViewCard):
+            return
+        if not self._slot_active:
+            if (board_pos - self._slot_press).manhattanLength() < QApplication.startDragDistance():
+                return
+            self._slot_active = True
+            self.drag_started.emit("card")
+            if QWidget.mouseGrabber() is None:
+                self.grabMouse()
+            effect = QGraphicsOpacityEffect(card)
+            effect.setOpacity(0.4)
+            card.setGraphicsEffect(effect)
+        target = self.slot_id_at(board_pos)
+        geom = card.geometry()
+        ghost = (
+            geom.x() + board_pos.x() - self._slot_press.x(),
+            geom.y() + board_pos.y() - self._slot_press.y(),
+            geom.width(),
+            geom.height(),
+        )
+        target_widget = self._widgets.get(target) if target else None
+        if target_widget is not None:
+            tg = target_widget.geometry()
+            highlight = (tg.x(), tg.y(), tg.width(), tg.height())
+        else:
+            highlight = ghost
+        image = getattr(card, "_raw_image", None)
+        self._overlay.set_move_preview(
+            image,
+            ghost,
+            highlight,
+            legal=target is not None and target != self._slot_source,
+        )
+
+    def _finish_slot_drag(self, board_pos: QPoint) -> None:
+        source = self._slot_source
+        active = self._slot_active
+        card = self._widgets.get(source) if source else None
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
+        if isinstance(card, UltraViewCard):
+            card.setGraphicsEffect(None)
+        self._overlay.clear()
+        self._slot_source = None
+        self._slot_press = None
+        self._slot_active = False
+        if active:
+            self.drag_finished.emit()
+        if not active or source is None:
+            return
+        target = self.slot_id_at(board_pos)
+        if target is None or target == source:
+            return
+        self.slot_swap_requested.emit(source, target)
+
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         _accept_ultraview_drag(event)
 
@@ -1678,13 +1892,16 @@ class BoardGrid(QWidget):
         extracted = extract_ref_strings(event.mimeData())
         pos = QPoint(event.pos())
         event.acceptProposedAction()
-        if extracted is None:
-            return
-        section, view_id = extracted
         slot_id = self.slot_id_at(pos)
-        if slot_id is None:
+        widget = self._widgets.get(slot_id) if slot_id is not None else None
+        occupied = isinstance(widget, UltraViewCard)
+        if occupied and (slot_id is None or not self.is_replace_armed(slot_id)):
+            self.clear_replace_hover()
             return
-        self.ref_dropped.emit(slot_id, section, view_id)
+        self.clear_replace_hover()
+        if extracted is None or slot_id is None:
+            return
+        self.ref_dropped.emit(slot_id, extracted[0], extracted[1])
 
 
 class FreeGridCard(UltraViewCard):
@@ -1696,6 +1913,7 @@ class FreeGridCard(UltraViewCard):
     def __init__(self, model: CardViewModel, parent: QWidget | None = None) -> None:
         super().__init__(model, parent)
         self.setMouseTracking(True)
+        self.setAcceptDrops(False)
 
     def make_context_menu(self) -> QMenu:
         menu = super().make_context_menu()
@@ -1783,6 +2001,7 @@ class FreeGridBoard(QWidget):
     drag_started = pyqtSignal(str)
     drag_finished = pyqtSignal()
     feedback_requested = pyqtSignal(str)
+    replace_requested = pyqtSignal(str, str, str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1799,6 +2018,9 @@ class FreeGridBoard(QWidget):
         self._gesture = FreeGridGesture()
         self._overlay = GhostOverlay(self)
         self._overlay.hide()
+        self._replace = ReplaceHoverController(self)
+        self._replace.armed.connect(self._on_replace_armed)
+        self._replace.cleared.connect(self._on_replace_cleared)
 
     def set_viewport_size(self, size: QSize) -> None:
         if size == self._viewport_size:
@@ -2117,14 +2339,52 @@ class FreeGridBoard(QWidget):
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802
-        if _accept_ultraview_drag(event):
-            event.acceptProposedAction()
+        if not _accept_ultraview_drag(event):
+            return
+        event.acceptProposedAction()
+        card = self._card_at(event.pos())
+        if card is None:
+            self._replace.hover(None)
+            return
+        self._replace.hover(f"{card.model().section}/{card.model().view_id}")
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        self._replace.clear()
+        event.accept()
 
     def dropEvent(self, event) -> None:  # noqa: N802
         ref = extract_ref_strings(event.mimeData())
+        card = self._card_at(event.pos())
+        event.acceptProposedAction()
+        if card is not None:
+            key = f"{card.model().section}/{card.model().view_id}"
+            if ref is not None and self._replace.is_armed(key):
+                self.replace_requested.emit(
+                    card.model().section, card.model().view_id, ref[0], ref[1]
+                )
+            self._replace.clear()
+            return
+        self._replace.clear()
         if ref is not None:
             self.ref_dropped.emit(*ref)
-            event.acceptProposedAction()
+
+    def _card_at(self, pos: QPoint) -> FreeGridCard | None:
+        for widget in self._widgets.values():
+            if widget.geometry().contains(pos):
+                return widget
+        return None
+
+    def _on_replace_armed(self, key: str) -> None:
+        section, _, view_id = key.partition("/")
+        card = self.card_for(section, view_id)
+        if card is None:
+            return
+        geom = card.geometry()
+        self._overlay.set_replace_ring((geom.x(), geom.y(), geom.width(), geom.height()))
+
+    def _on_replace_cleared(self) -> None:
+        self._overlay.set_replace_ring(None)
+        self._sync_selection_handles()
 
 
 class FreeGridMinimap(QFrame):

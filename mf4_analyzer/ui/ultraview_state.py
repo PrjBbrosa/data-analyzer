@@ -602,6 +602,25 @@ def place_free_grid_from_unplaced(
     return []
 
 
+def replace_free_grid_ref(
+    board: UltraViewBoardState, target: UltraViewRef, new_ref: UltraViewRef
+) -> list[str]:
+    """Put ``new_ref`` in ``target``'s rectangle. The previous occupant goes to the tray."""
+    if board.layout_mode != LAYOUT_MODE_FREE_GRID:
+        return [_warn("not_free_grid")]
+    item = free_grid_placement_for(board, target)
+    if item is None:
+        return [_warn("unknown_ref", f"{target.section}/{target.view_id}")]
+    if target == new_ref:
+        return []
+    rect = item.rect
+    _remove_ref_everywhere(board, new_ref)
+    _remove_ref_everywhere(board, target)
+    board.free_grid.append(FreeGridPlacement(new_ref, rect))
+    _append_unplaced(board, target)
+    return []
+
+
 def set_layout(board: UltraViewBoardState, layout_id: str) -> list[str]:
     warnings: list[str] = []
     if layout_id not in LAYOUT_SLOTS:

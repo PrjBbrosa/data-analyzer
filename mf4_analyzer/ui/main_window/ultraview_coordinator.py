@@ -60,6 +60,7 @@ from ..ultraview_state import (
     rename_board,
     reorder_board,
     remove_ref,
+    replace_free_grid_ref,
     replace_slot,
     set_layout,
     set_active_board,
@@ -783,6 +784,7 @@ class UltraViewCoordinator(QObject):
             (page.swap_slots_requested, self._on_swap_slots),
             (page.place_from_unplaced_requested, self._on_place_from_unplaced),
             (page.place_free_grid_from_unplaced_requested, self._on_place_free_grid_from_unplaced),
+            (page.free_grid_replace_requested, self._on_free_grid_replace),
             (page.move_to_unplaced_requested, self._on_move_to_unplaced),
             (page.remove_ref_requested, self._on_remove_ref),
             (page.open_source_requested, self.open_source),
@@ -1101,6 +1103,20 @@ class UltraViewCoordinator(QObject):
         if ref is None:
             return
         if not place_free_grid_from_unplaced(active_board(self._workspace), ref):
+            self._after_board_mutation()
+
+    def _on_free_grid_replace(
+        self,
+        target_section: str,
+        target_view_id: str,
+        source_section: str,
+        source_view_id: str,
+    ) -> None:
+        target = parse_ref_payload({"section": target_section, "view_id": target_view_id})
+        new_ref = parse_ref_payload({"section": source_section, "view_id": source_view_id})
+        if target is None or new_ref is None:
+            return
+        if not replace_free_grid_ref(active_board(self._workspace), target, new_ref):
             self._after_board_mutation()
 
     def _on_move_to_unplaced(self, section: str, view_id: str) -> None:

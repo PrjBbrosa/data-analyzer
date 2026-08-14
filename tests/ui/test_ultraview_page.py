@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QCoreApplication, QEvent, QMimeData, QPoint, QRect, Qt
-from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDropEvent, QImage, QMouseEvent
+from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QComboBox, QPushButton, QToolButton, QWidget
 
@@ -142,6 +142,14 @@ def _drop(mime: QMimeData, pos: QPoint | None = None) -> QDropEvent:
     return event
 
 
+def _move(mime: QMimeData, pos: QPoint | None = None) -> QDragMoveEvent:
+    event = QDragMoveEvent(
+        pos or QPoint(8, 8), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier
+    )
+    event._mime_ref = mime
+    return event
+
+
 def _leave() -> QDragLeaveEvent:
     return QDragLeaveEvent()
 
@@ -166,6 +174,7 @@ class _Harness:
         self.replaced: list[tuple[str, str, str]] = []
         self.swapped: list[tuple[str, str]] = []
         self.placed: list[tuple[str, str, str]] = []
+        self.grid_replaced: list[tuple[str, str, str, str]] = []
         self.unplaced: list[tuple[str, str]] = []
         self.removed: list[tuple[str, str]] = []
         self.opened: list[tuple[str, str]] = []
@@ -184,6 +193,7 @@ class _Harness:
         self.page.replace_slot_requested.connect(self._on_replace)
         self.page.swap_slots_requested.connect(self._on_swap)
         self.page.place_from_unplaced_requested.connect(self._on_place)
+        self.page.free_grid_replace_requested.connect(self._on_grid_replace)
         self.page.move_to_unplaced_requested.connect(self._on_unplaced)
         self.page.remove_ref_requested.connect(self._on_remove)
         self.page.open_source_requested.connect(self._record_open)
@@ -220,6 +230,13 @@ class _Harness:
         self.placed.append((slot_id, section, view_id))
         place_from_unplaced(self.board, slot_id, make_ref(section, view_id))
         self.page.set_board(self.board)
+
+    def _on_grid_replace(
+        self, target_section: str, target_view_id: str, source_section: str, source_view_id: str
+    ) -> None:
+        self.grid_replaced.append(
+            (target_section, target_view_id, source_section, source_view_id)
+        )
 
     def _on_unplaced(self, section: str, view_id: str) -> None:
         self.unplaced.append((section, view_id))
@@ -649,7 +666,7 @@ def test_menu_double_click_and_keyboard_share_intents(qtbot):
     by_text = {action.text(): action for action in menu.actions()}
     by_text["打开原 View"].trigger()
     by_text["临时放大"].trigger()
-    by_text["替换"].trigger()
+    by_text["替换为…"].trigger()
     by_text["移到未放置"].trigger()
     by_text["复制本卡图像"].trigger()
     assert harness.opened == [("fft", "fft-1")]
@@ -1673,6 +1690,97 @@ def test_make_layout_mime_has_no_product_references():
             if name in forbidden:
                 hits.append(f"{path.name}:{name}")
     assert hits == []
+
+
+def test_library_drop_on_occupied_card_requires_replace_ring(qtbot, monkeypatch):
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.chart_stack.ultraview.widgets.REPLACE_HOVER_MS", 1
+    )
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("time", "time-1")
+    assert card is not None
+    mime = _mime("order", "order-1")
+    card.dragEnterEvent(_enter(mime))
+    card.dropEvent(_drop(mime))
+    assert harness.replaced == []
+    card.dragEnterEvent(_enter(mime))
+    qtbot.wait(30)
+    overlay = harness.page.board_grid()._overlay
+    assert overlay._ring_rect is not None
+    card.dropEvent(_drop(mime))
+    assert harness.replaced == [("primary", "order", "order-1")]
+
+
+def test_library_drop_outside_replace_ring_cancels(qtbot, monkeypatch):
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.chart_stack.ultraview.widgets.REPLACE_HOVER_MS", 1
+    )
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("time", "time-1")
+    mime = _mime("order", "order-1")
+    card.dragEnterEvent(_enter(mime))
+    qtbot.wait(30)
+    card.dragLeaveEvent(_leave())
+    card.dropEvent(_drop(mime))
+    assert harness.replaced == []
+    assert harness.added == []
+
+
+def test_free_grid_library_drop_on_card_without_ring_does_not_replace(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "ring-0")
+    mime = _mime("order", "order-1")
+    pos = card.geometry().center()
+    free.dragEnterEvent(_enter(mime, pos))
+    free.dragMoveEvent(_move(mime, pos))
+    free.dropEvent(_drop(mime, pos))
+    assert harness.grid_replaced == []
+    assert harness.added == []
+
+
+def test_free_grid_library_drop_on_ring_replaces(qtbot, monkeypatch):
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.chart_stack.ultraview.widgets.REPLACE_HOVER_MS", 1
+    )
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "ring-1")
+    mime = _mime("order", "order-1")
+    pos = card.geometry().center()
+    free.dragEnterEvent(_enter(mime, pos))
+    free.dragMoveEvent(_move(mime, pos))
+    qtbot.wait(30)
+    assert free.ghost_overlay()._ring_rect is not None
+    free.dropEvent(_drop(mime, pos))
+    assert harness.grid_replaced == [("time", "ring-1", "order", "order-1")]
+
+
+def test_template_card_drag_to_empty_moves_and_to_occupied_swaps(qtbot):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    source = harness.page.card_widget("time", "time-1")
+    empty = harness.page.slot_widget("aux_0")
+    assert source is not None and empty is not None
+    grid = harness.page.board_grid()
+    start = QPoint(20, 20)
+    end = source.mapFrom(grid, empty.geometry().center())
+    _drag_card(source, start, end)
+    assert harness.swapped == [("primary", "aux_0")]
+
+    add_ref(harness.board, make_ref("fft", "fft-1"))
+    harness.page.set_board(harness.board)
+    source = harness.page.card_widget("time", "time-1")
+    other = harness.page.card_widget("fft", "fft-1")
+    assert source is not None and other is not None
+    harness.swapped.clear()
+    end = source.mapFrom(grid, other.geometry().center())
+    _drag_card(source, start, end)
+    assert harness.swapped
+    assert set(harness.swapped[0]) == {"aux_0", other.model().slot_id}
 
 
 def test_overview_reuses_compositor_image_when_shown(qtbot):

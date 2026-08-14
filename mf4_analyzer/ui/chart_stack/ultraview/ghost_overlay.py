@@ -31,6 +31,7 @@ class GhostOverlay(QWidget):
         "_legal",
         "_badge",
         "_handles_rect",
+        "_ring_rect",
     )
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -45,6 +46,7 @@ class GhostOverlay(QWidget):
         self._legal = True
         self._badge = ""
         self._handles_rect: QRect | None = None
+        self._ring_rect: QRect | None = None
         self.hide()
 
     def is_showing(self) -> bool:
@@ -52,7 +54,14 @@ class GhostOverlay(QWidget):
             self._ghost_rect is not None
             or self._highlight is not None
             or self._handles_rect is not None
+            or self._ring_rect is not None
         )
+
+    def set_replace_ring(self, card: Rect | None) -> None:
+        self._ring_rect = QRect(*card) if card is not None else None
+        if self._ring_rect is None and self._handles_rect is None and self._ghost_rect is None:
+            self.hide()
+        self._present()
 
     def set_selection_handles(self, card: Rect | None) -> None:
         self._handles_rect = QRect(*card) if card is not None else None
@@ -86,6 +95,7 @@ class GhostOverlay(QWidget):
         self._highlight = None
         self._badge = ""
         self._handles_rect = None
+        self._ring_rect = None
         self.hide()
         self.update()
 
@@ -94,6 +104,7 @@ class GhostOverlay(QWidget):
             self._ghost_rect is None
             and self._highlight is None
             and self._handles_rect is None
+            and self._ring_rect is None
         ):
             self.hide()
         elif not self.isVisible():
@@ -125,6 +136,10 @@ class GhostOverlay(QWidget):
                     Qt.AlignTop | Qt.AlignLeft,
                     self._badge,
                 )
+            if self._ring_rect is not None:
+                painter.setPen(QPen(LEGAL_PEN, 3))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRoundedRect(self._ring_rect.adjusted(-6, -6, 6, 6), 10, 10)
             if self._handles_rect is not None:
                 painter.setBrush(HANDLE_FILL)
                 painter.setPen(QPen(HANDLE_EDGE, 1))

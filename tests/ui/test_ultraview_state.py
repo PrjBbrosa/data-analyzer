@@ -320,6 +320,19 @@ def test_replace_moves_old_ref_to_tray():
     assert old not in uvs.placed_ref_set(board)
 
 
+def test_replace_free_grid_ref_keeps_rect_and_trays_old():
+    board = uvs.default_board()
+    first = _ref("time", "a")
+    second = _ref("fft", "b")
+    uvs.add_ref(board, first)
+    uvs.template_to_free_grid(board)
+    old_rect = board.free_grid[0].rect
+    assert not uvs.replace_free_grid_ref(board, first, second)
+    assert [item.ref for item in board.free_grid] == [second]
+    assert board.free_grid[0].rect == old_rect
+    assert first in board.unplaced
+
+
 def test_swap_slots_does_not_use_tray():
     board = _filled("split_horizontal", 2)
     left = uvs.slot_occupant(board, "left")

@@ -73,6 +73,7 @@ class UltraViewPage(QWidget):
     swap_slots_requested = pyqtSignal(str, str)
     place_from_unplaced_requested = pyqtSignal(str, str, str)
     place_free_grid_from_unplaced_requested = pyqtSignal(str, str)
+    free_grid_replace_requested = pyqtSignal(str, str, str, str)
     move_to_unplaced_requested = pyqtSignal(str, str)
     remove_ref_requested = pyqtSignal(str, str)
     open_source_requested = pyqtSignal(str, str)
@@ -222,6 +223,7 @@ class UltraViewPage(QWidget):
         self._grid.selected.connect(self._on_card_selected)
         self._grid.drag_started.connect(self._on_drag_started)
         self._grid.drag_finished.connect(self._on_drag_finished)
+        self._grid.slot_swap_requested.connect(self.swap_slots_requested)
 
         self._free_grid.ref_dropped.connect(self._on_free_grid_ref_dropped)
         self._free_grid.geometry_requested.connect(self.free_grid_geometry_requested)
@@ -236,6 +238,7 @@ class UltraViewPage(QWidget):
         self._free_grid.drag_started.connect(self._on_drag_started)
         self._free_grid.drag_finished.connect(self._on_drag_finished)
         self._free_grid.feedback_requested.connect(self._emit_feedback)
+        self._free_grid.replace_requested.connect(self.free_grid_replace_requested)
 
         self._tray.place_requested.connect(self._on_tray_place)
         self._tray.remove_requested.connect(self.remove_ref_requested)
