@@ -34,6 +34,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency boundary
     _AsamMdfException = None
 
+from .blf_format import LazyZohFrame
 from .file_data import FileData, _TIME_NAMES
 from . import loader as _loader
 from .loader import AUDIO_VIDEO_EXTS, DataLoader, unique_mdf_channel_locations
@@ -469,7 +470,7 @@ class SourceAdapter:
                 f"{self.loader_name} returned an invalid {self.return_shape} result"
             )
         data, channels, units = result[:3]
-        if not isinstance(data, pd.DataFrame):
+        if not isinstance(data, (pd.DataFrame, LazyZohFrame)):
             raise TypeError(f"{self.loader_name} must return a pandas DataFrame")
         fs = result[3] if len(result) == 5 else None
         source_metadata = dict(result[4] or {}) if len(result) == 5 else {}

@@ -11,7 +11,9 @@ can = pytest.importorskip("can", reason="python-can not installed (win32-gated)"
 cantools = pytest.importorskip("cantools", reason="cantools not installed")
 
 from mf4_analyzer.io.loader import NO_CAN_FRAMES_MESSAGE, DataLoader  # noqa: E402
+from mf4_analyzer.io import blf_format  # noqa: E402
 from tests._helpers.blf_factory import (  # noqa: E402
+    _sample_frame_payloads,
     write_engine_only_dbc,
     write_raw_blf,
     write_sample_blf,
@@ -224,3 +226,94 @@ def test_load_blf_empty_raises(tmp_path):
     blf = write_raw_blf(tmp_path / "empty.blf", frames=())
     with pytest.raises(ValueError, match=NO_CAN_FRAMES_MESSAGE):
         DataLoader.load_blf(str(blf), dbc_paths=None)
+
+
+def test_probe_large_frame_list_does_not_decode_every_frame(tmp_path, monkeypatch):
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    eng, spd = _sample_frame_payloads(1)[0]
+    frames = []
+    for i in range(10_000):
+        frames.append((i * 0.001, 0x123, eng))
+        frames.append((i * 0.001 + 0.0005, 0x100, spd))
+    calls = []
+    real = blf_format._decode_can_payload
+
+    def spy(msg, payload):
+        calls.append(1)
+        return real(msg, payload)
+
+    monkeypatch.setattr(blf_format, "_decode_can_payload", spy)
+    probe = DataLoader.probe_blf_dbc_frames(frames, [str(dbc)])
+
+    assert len(calls) <= blf_format._PROBE_DECODE_CAP
+    assert len(calls) < len(frames)
+    assert probe.strength == "strong"
+    assert probe.total_frame_count == 20_000
+    assert probe.matched_frame_id_count == 2
+    assert probe.decoded_frame_count == 20_000
+    assert set(probe.signal_names) == {"EngineSpeed", "Throttle", "Speed"}
+
+
+def test_probe_large_partial_match_stays_weak_without_full_decode(
+    tmp_path, monkeypatch,
+):
+    dbc = write_engine_only_dbc(tmp_path / "engine.dbc")
+    eng, spd = _sample_frame_payloads(1)[0]
+    frames = []
+    for i in range(10_000):
+        frames.append((i * 0.001, 0x123, eng))
+        frames.append((i * 0.001 + 0.0005, 0x100, spd))
+    calls = []
+    real = blf_format._decode_can_payload
+
+    def spy(msg, payload):
+        calls.append(1)
+        return real(msg, payload)
+
+    monkeypatch.setattr(blf_format, "_decode_can_payload", spy)
+    probe = DataLoader.probe_blf_dbc_frames(frames, [str(dbc)])
+
+    assert len(calls) <= blf_format._PROBE_DECODE_CAP
+    assert probe.strength == "weak"
+    assert probe.matched_frame_id_count == 1
+    assert probe.matched_frame_count == 10_000
+    assert 8_000 <= probe.decoded_frame_count <= 12_000
+
+
+def test_load_blf_defers_zoh_until_column_access(tmp_path, monkeypatch):
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    blf = write_sample_blf(tmp_path / "log.blf", n=5)
+    calls = []
+    real = blf_format._zoh_resample
+
+    def spy(ref_t, t, v):
+        calls.append(1)
+        return real(ref_t, t, v)
+
+    monkeypatch.setattr(blf_format, "_zoh_resample", spy)
+    data, channels, _units = DataLoader.load_blf(str(blf), dbc_paths=[str(dbc)])
+
+    assert isinstance(data, blf_format.LazyZohFrame)
+    assert calls == []
+    speed = data["Speed"].to_numpy()
+    assert len(calls) == 1
+    data["Speed"].to_numpy()
+    assert len(calls) == 1
+    transmitted = {20.0, 21.0, 22.0, 23.0, 24.0}
+    assert set(np.unique(np.round(speed, 6))).issubset(transmitted)
+    # Same-message Throttle shares EngineSpeed's axis (the longest / Time).
+    throttle = data["Throttle"].to_numpy()
+    assert len(calls) == 1
+    assert throttle[0] == pytest.approx(10.0)
+    assert "EngineSpeed" in channels
+
+
+def test_assemble_sorts_unsorted_timestamps():
+    t = np.array([3.0, 1.0, 2.0])
+    v = np.array([30.0, 10.0, 20.0])
+    data, channels, _units = blf_format._assemble_blf_channels(
+        {"A": (t, v)}, {"A": "u"}, t0=1.0,
+    )
+    assert channels == ["Time", "A"]
+    assert list(data["Time"]) == pytest.approx([0.0, 1.0, 2.0])
+    assert list(data["A"]) == pytest.approx([10.0, 20.0, 30.0])

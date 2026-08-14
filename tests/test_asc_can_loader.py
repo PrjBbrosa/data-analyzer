@@ -6,7 +6,11 @@ import pytest
 pytest.importorskip("can", reason="python-can not installed (win32-gated)")
 pytest.importorskip("cantools", reason="cantools not installed")
 
-from mf4_analyzer.io.asc_can_format import _read_asc_frames, sniff_canoe_asc
+from mf4_analyzer.io.asc_can_format import (
+    _read_asc_frames,
+    _read_asc_frames_python_can,
+    sniff_canoe_asc,
+)
 from mf4_analyzer.io.loader import NO_CAN_FRAMES_MESSAGE, DataLoader
 from tests._helpers.blf_factory import (
     write_sample_asc,
@@ -87,3 +91,80 @@ def test_empty_canoe_asc_raises_shared_sentinel(tmp_path):
     assert sniff_canoe_asc(path) is True
     with pytest.raises(ValueError, match=NO_CAN_FRAMES_MESSAGE):
         DataLoader.read_blf_frames(path)
+
+
+def test_read_asc_frames_classic_log_skips_python_can_reader(tmp_path, monkeypatch):
+    path = write_sample_asc(tmp_path / "log.asc", n=5)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("ASCReader should not run on classic CANoe ASC")
+
+    monkeypatch.setattr("can.io.ASCReader", boom)
+    frames = _read_asc_frames(path)
+    assert len(frames) == 10
+    assert frames[0][1] == 0x123
+
+
+def test_read_asc_frames_falls_back_when_classic_dtype_is_unknown(tmp_path, monkeypatch):
+    path = tmp_path / "odd.asc"
+    path.write_text(
+        "date Mon Jan 01 12:00:00 PM 2024\n"
+        "base hex timestamps absolute\n"
+        "no internal events logged\n"
+        "Begin Triggerblock Mon Jan 01 12:00:00 PM 2024\n"
+        "   1.000000 1  123             Rx   x 8  01 02 03 04 05 06 07 08\n"
+        "End TriggerBlock\n",
+        encoding="ascii",
+    )
+    called = []
+    real = _read_asc_frames_python_can
+
+    def wrapped(fp, progress_callback=None):
+        called.append(1)
+        return real(fp, progress_callback=progress_callback)
+
+    monkeypatch.setattr(
+        "mf4_analyzer.io.asc_can_format._read_asc_frames_python_can", wrapped,
+    )
+    frames = _read_asc_frames(path)
+    assert called == [1]
+    assert len(frames) == 1
+    assert frames[0][1] == 0x123
+    assert frames[0][2] == bytes(range(1, 9))
+
+
+def test_read_asc_frames_matches_python_can_for_fd_and_extended(tmp_path):
+    import can
+    from can.io import ASCReader, ASCWriter
+
+    path = tmp_path / "mix.asc"
+    writer = ASCWriter(str(path))
+    try:
+        writer.on_message_received(can.Message(
+            arbitration_id=0x123, is_extended_id=False, is_fd=False,
+            data=bytes(range(8)), timestamp=1.0, is_rx=True,
+        ))
+        writer.on_message_received(can.Message(
+            arbitration_id=0x1ABCDEF, is_extended_id=True, is_fd=True,
+            data=bytes(range(16)), timestamp=1.1, is_rx=True,
+        ))
+    finally:
+        writer.stop()
+
+    fast = _read_asc_frames(path)
+    reader = ASCReader(str(path))
+    try:
+        expected = [
+            (float(msg.timestamp), int(msg.arbitration_id), bytes(msg.data))
+            for msg in reader
+            if not msg.is_error_frame and not msg.is_remote_frame
+        ]
+    finally:
+        stop = getattr(reader, "stop", None)
+        if callable(stop):
+            stop()
+    assert len(fast) == len(expected) == 2
+    for (at, aid, adata), (bt, bid, bdata) in zip(fast, expected):
+        assert at == pytest.approx(bt)
+        assert aid == bid
+        assert adata == bdata

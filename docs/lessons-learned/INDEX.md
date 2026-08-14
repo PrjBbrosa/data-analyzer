@@ -169,6 +169,7 @@ lesson by default.
 | [Channel Tree Selected Fill Must Stay Rectangular](codex-channel-tree-selected-fill-must-stay-rectangular.md) | Changing channel-tree selected-row QSS, `drawBranches`, or the | See lesson |
 | [QDrag.exec_ Must Outlive Its Source Widget](ultraview-qdrag-exec-must-outlive-source.md) | Implementing or testing Qt drag-drop that rebuilds the library, grid, | See lesson |
 | [Toolbar Enable Matrix At Construction](pyqt-ui/2026-08-14-toolbar-enable-matrix-at-construction.md) | Changing toolbar button enable/disable rules, `set_enabled_for_mode`, or any gated QPushButton whose live state is applied only on a later event. | See lesson |
+| [CAN Log Probe Samples Decode And Defers ZOH](2026-08-14-can-log-probe-sample-and-lazy-zoh.md) | Changing BLF/CANoe ASC import, DBC probe strength, or the shared-time ZOH assemble that turns CAN signals into a FileData table. | See lesson |
 
 ## Selection Rules
 

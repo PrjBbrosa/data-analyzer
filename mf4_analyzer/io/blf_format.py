@@ -182,6 +182,11 @@ def _read_blf_frames(fp, progress_callback=None):
     return frames
 
 
+# Payload decode during DBC probe is only a match-strength sample. ID overlap
+# still scans every frame. Keep this a count of frames, not a wall-time knob.
+_PROBE_DECODE_CAP = 8192
+
+
 def _zoh_resample(ref_t, t, v):
     """Zero-order-hold (previous-sample) resample of ``(t, v)`` onto ``ref_t``.
 
@@ -200,26 +205,181 @@ def _zoh_resample(ref_t, t, v):
     return v[idx]
 
 
+def _timestamp_fingerprint(t):
+    n = t.size
+    if n == 0:
+        return (0, 0.0, 0.0, 0.0)
+    mid = n // 2
+    return (n, float(t[0]), float(t[-1]), float(t[mid]))
+
+
+def _intern_series_timestamps(series):
+    """Reuse equal timestamp arrays so later ZOH can skip identical axes."""
+    interned = {}
+    by_fp = {}
+    for name, (t, v) in series.items():
+        t_arr = t if isinstance(t, np.ndarray) and t.dtype == np.float64 else np.asarray(
+            t, dtype=np.float64,
+        )
+        v_arr = v if isinstance(v, np.ndarray) and v.dtype == np.float64 else np.asarray(
+            v, dtype=np.float64,
+        )
+        fp = _timestamp_fingerprint(t_arr)
+        existing = by_fp.get(fp)
+        if existing is None:
+            by_fp[fp] = t_arr
+            match = t_arr
+        elif existing is t_arr or np.array_equal(existing, t_arr):
+            match = existing
+        else:
+            match = t_arr
+        interned[name] = (match, v_arr)
+    return interned
+
+
+def _sorted_time_values(t, v, t0, cache):
+    """Shift by ``t0`` and sort if needed, caching the permutation per ``t``."""
+    cached = cache.get(id(t))
+    if cached is None:
+        rel = np.asarray(t, dtype=np.float64) - t0
+        if rel.size > 1 and np.any(np.diff(rel) < 0):
+            order = np.argsort(rel, kind="stable")
+            cached = (rel[order], order)
+        else:
+            cached = (rel, None)
+        cache[id(t)] = cached
+    rel_sorted, order = cached
+    v_arr = v if isinstance(v, np.ndarray) and v.dtype == np.float64 else np.asarray(
+        v, dtype=np.float64,
+    )
+    if order is None:
+        return rel_sorted, v_arr
+    return rel_sorted, v_arr[order]
+
+
+def _can_skip_zoh(ref_t, t):
+    """Identity mapping is safe when ``t`` is the reference axis without ties."""
+    if t is not ref_t:
+        return False
+    if t.size <= 1:
+        return True
+    return not bool(np.any(np.diff(t) == 0))
+
+
+class LazyZohFrame:
+    """DataFrame-shaped view over sparse CAN series with on-demand ZOH.
+
+    ``Time`` is materialized at construction. Other columns stay as
+    ``(t, v)`` event series until first read, then ZOH onto ``Time`` and
+    cache. Derived-channel writes (``frame[name] = arr``) store already-
+    aligned arrays. This keeps FileData / export / plot access patterns
+    (``columns``, ``len``, ``[name].to_numpy()``, ``drop``) while avoiding
+    an ``n_signals × n_longest`` table at import.
+    """
+
+    is_channel_frame = True
+
+    def __init__(self, ref_t, series, column_names):
+        self._ref_t = np.asarray(ref_t, dtype=np.float64)
+        self._series = dict(series)
+        self._column_names = list(column_names)
+        self._cache = {"Time": self._ref_t}
+
+    @property
+    def columns(self):
+        return pd.Index(self._column_names)
+
+    def __len__(self):
+        return int(self._ref_t.size)
+
+    def __bool__(self):
+        return True
+
+    @property
+    def empty(self):
+        return self._ref_t.size == 0
+
+    def keys(self):
+        return self.columns
+
+    def __iter__(self):
+        return iter(self._column_names)
+
+    def __getitem__(self, key):
+        if isinstance(key, list):
+            return pd.DataFrame({name: self._materialize(name) for name in key})
+        return pd.Series(self._materialize(key), name=key)
+
+    def __setitem__(self, key, value):
+        arr = np.asarray(value, dtype=np.float64).reshape(-1)
+        if arr.size != self._ref_t.size:
+            raise ValueError(
+                f"column {key!r} length {arr.size} does not match Time "
+                f"({self._ref_t.size})"
+            )
+        self._cache[key] = arr
+        if key not in self._column_names:
+            self._column_names.append(key)
+
+    def drop(self, labels=None, axis=0, *, columns=None, **_kwargs):
+        cols = columns if columns is not None else (labels if axis == 1 else None)
+        if cols is None:
+            return self
+        if isinstance(cols, str):
+            cols = (cols,)
+        drop_set = set(cols)
+        names = [name for name in self._column_names if name not in drop_set]
+        kept_series = {
+            name: pair for name, pair in self._series.items() if name in names
+        }
+        out = LazyZohFrame(self._ref_t, kept_series, names)
+        out._cache = {
+            name: arr for name, arr in self._cache.items() if name in names
+        }
+        return out
+
+    def _materialize(self, name):
+        cached = self._cache.get(name)
+        if cached is not None:
+            return cached
+        if name == "Time":
+            self._cache[name] = self._ref_t
+            return self._ref_t
+        pair = self._series.get(name)
+        if pair is None:
+            raise KeyError(name)
+        t, v = pair
+        if _can_skip_zoh(self._ref_t, t):
+            arr = v
+        else:
+            arr = _zoh_resample(self._ref_t, t, v)
+        self._cache[name] = arr
+        return arr
+
+
 def _assemble_blf_channels(series, units, t0, progress_callback=None):
-    """Fold per-signal ``{name: (abs_t, v)}`` into the shared-time-axis frame.
+    """Fold per-signal ``{name: (abs_t, v)}`` into a shared-time-axis frame.
 
     Mirrors ``load_mf4``: the longest series (most samples) defines the common
     ``Time`` axis and every other signal is ZOH-resampled onto it. All
-    timestamps are shifted to start at zero via ``t0``.
+    timestamps are shifted to start at zero via ``t0``. ZOH itself is deferred
+    until a column is read so import does not allocate the dense table.
     """
-    ref_name = max(series, key=lambda k: series[k][0].size)
-    ref_t = np.sort(series[ref_name][0] - t0, kind="stable")
-    data = {"Time": ref_t}
-    total_series = max(1, len(series))
+    interned = _intern_series_timestamps(series)
+    ref_name = max(interned, key=lambda k: interned[k][0].size)
+    sort_cache = {}
+    prepared = {}
+    total_series = max(1, len(interned))
     report_step = max(1, total_series // 80)
     _emit_progress(progress_callback, 0, total_series)
-    for index, (name, (t, v)) in enumerate(series.items(), 1):
-        rel_t = t - t0
-        order = np.argsort(rel_t, kind="stable")
-        data[name] = _zoh_resample(ref_t, rel_t[order], v[order])
+    for index, (name, (t, v)) in enumerate(interned.items(), 1):
+        prepared[name] = _sorted_time_values(t, v, t0, sort_cache)
         if index % report_step == 0 or index == total_series:
             _emit_progress(progress_callback, index, total_series)
-    return pd.DataFrame(data), list(data.keys()), units
+    ref_t = prepared[ref_name][0]
+    column_names = ["Time", *prepared.keys()]
+    frame = LazyZohFrame(ref_t, prepared, column_names)
+    return frame, column_names, units
 
 
 def _load_dbc_database(dbc_paths):
@@ -259,51 +419,150 @@ def _numeric_decoded_values(decoded):
     return values
 
 
+def _cached_message_lookup(db):
+    """Resolve each unique arbitration id through cantools once."""
+    getter = db.get_message_by_frame_id
+    cache = {}
+    missing = object()
+
+    def lookup(aid):
+        aid = int(aid)
+        hit = cache.get(aid, missing)
+        if hit is not missing:
+            return hit
+        try:
+            msg = getter(aid)
+        except KeyError:
+            msg = None
+        cache[aid] = msg
+        return msg
+
+    return lookup
+
+
+def _signal_display_meta(msg, sig_owners):
+    meta = {}
+    for sig in msg.signals:
+        name = sig.name
+        disp = (
+            name if len(sig_owners.get(name, ())) <= 1
+            else f"{msg.name}.{name}"
+        )
+        meta[name] = (disp, str(getattr(sig, "unit", "") or ""))
+    return meta
+
+
+def _message_is_multiplexed(msg):
+    checker = getattr(msg, "is_multiplexed", None)
+    if not callable(checker):
+        return bool(checker)
+    try:
+        return bool(checker())
+    except ValueError:
+        return True
+
+
+def _probe_decode_indices(frames, cap=_PROBE_DECODE_CAP):
+    """Sample frames for payload decode; always include the first of each ID."""
+    n = len(frames)
+    if n <= cap:
+        return range(n)
+    chosen = []
+    seen = set()
+    for i, (_t, aid, _payload) in enumerate(frames):
+        if aid in seen:
+            continue
+        seen.add(aid)
+        chosen.append(i)
+        if len(chosen) >= cap:
+            return chosen
+    chosen_set = set(chosen)
+    extras = np.linspace(0, n - 1, cap, dtype=np.int64)
+    for i in extras:
+        ii = int(i)
+        if ii in chosen_set:
+            continue
+        chosen.append(ii)
+        chosen_set.add(ii)
+        if len(chosen) >= cap:
+            break
+    if len(chosen) < cap:
+        step = max(1, n // cap)
+        for i in range(0, n, step):
+            if i in chosen_set:
+                continue
+            chosen.append(i)
+            chosen_set.add(i)
+            if len(chosen) >= cap:
+                break
+    return sorted(chosen)
+
+
+def _scale_probe_count(sample_count, sample_n, total_n):
+    if sample_n <= 0:
+        return 0
+    if sample_n >= total_n:
+        return int(sample_count)
+    return int(round(sample_count * total_n / sample_n))
+
+
 def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None):
     db = _load_dbc_database(dbc_paths)
-    frame_ids = {aid for _t, aid, _payload in frames}
+    lookup = _cached_message_lookup(db)
+    frame_ids = set()
     matched_frame_ids = set()
     matched_frame_count = 0
-    decoded_frame_count = 0
-    decoded_signal_count = 0
-    signal_names = set()
 
-    total_frames = max(1, len(frames))
-    step = max(1, total_frames // 80)
-    _emit_progress(progress_callback, 0, total_frames)
-    for index, (_t, aid, payload) in enumerate(frames, 1):
-        try:
-            msg = db.get_message_by_frame_id(aid)
-        except KeyError:
-            if index % step == 0 or index == total_frames:
-                _emit_progress(progress_callback, index, total_frames)
+    total_frames = len(frames)
+    progress_total = max(1, total_frames)
+    step = max(1, progress_total // 80)
+    _emit_progress(progress_callback, 0, progress_total)
+    for index, (_t, aid, _payload) in enumerate(frames, 1):
+        frame_ids.add(aid)
+        if lookup(aid) is not None:
+            matched_frame_count += 1
+            matched_frame_ids.add(aid)
+        if index % step == 0 or index == total_frames:
+            _emit_progress(progress_callback, index, progress_total)
+
+    indices = _probe_decode_indices(frames)
+    sample_n = total_frames if isinstance(indices, range) else len(indices)
+    sample_decoded = 0
+    sample_signal_events = 0
+    signal_names = set()
+    decode_total = max(1, sample_n)
+    decode_step = max(1, decode_total // 80)
+    for decode_index, frame_index in enumerate(indices, 1):
+        _t, aid, payload = frames[frame_index]
+        msg = lookup(aid)
+        if msg is None:
+            if decode_index % decode_step == 0 or decode_index == decode_total:
+                _emit_progress(progress_callback, progress_total, progress_total)
             continue
-        matched_frame_count += 1
-        matched_frame_ids.add(aid)
         decoded = _decode_can_payload(msg, payload)
         if not decoded:
-            if index % step == 0 or index == total_frames:
-                _emit_progress(progress_callback, index, total_frames)
             continue
         numeric_values = _numeric_decoded_values(decoded)
         if not numeric_values:
-            if index % step == 0 or index == total_frames:
-                _emit_progress(progress_callback, index, total_frames)
             continue
-        decoded_frame_count += 1
-        decoded_signal_count += len(numeric_values)
+        sample_decoded += 1
+        sample_signal_events += len(numeric_values)
         signal_names.update(sig_name for sig_name, _value in numeric_values)
-        if index % step == 0 or index == total_frames:
-            _emit_progress(progress_callback, index, total_frames)
+        if decode_index % decode_step == 0 or decode_index == decode_total:
+            _emit_progress(progress_callback, progress_total, progress_total)
 
     return BlfDbcProbe(
         dbc_paths=tuple(str(p) for p in dbc_paths),
-        total_frame_count=len(frames),
+        total_frame_count=total_frames,
         total_frame_id_count=len(frame_ids),
         matched_frame_count=matched_frame_count,
         matched_frame_id_count=len(matched_frame_ids),
-        decoded_frame_count=decoded_frame_count,
-        decoded_signal_count=decoded_signal_count,
+        decoded_frame_count=_scale_probe_count(
+            sample_decoded, sample_n, total_frames,
+        ),
+        decoded_signal_count=_scale_probe_count(
+            sample_signal_events, sample_n, total_frames,
+        ),
         signal_names=tuple(sorted(signal_names)),
     )
 
@@ -311,6 +570,7 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None):
 def _decode_blf_with_dbc(frames, dbc_paths, t0, progress_callback=None):
     """Decode raw CAN frames into named physical signals using one or more DBCs."""
     db = _load_dbc_database(dbc_paths)
+    lookup = _cached_message_lookup(db)
 
     # A signal name in more than one message is ambiguous; qualify only those
     # as ``<Message>.<Signal>`` so the common-case unique names stay short.
@@ -319,6 +579,10 @@ def _decode_blf_with_dbc(frames, dbc_paths, t0, progress_callback=None):
         for s in m.signals:
             sig_owners[s.name].add(m.name)
 
+    meta_cache = {}
+    mux_cache = {}
+    times_shared = {}
+    shared_key_for = {}
     t_lists = defaultdict(list)
     v_lists = defaultdict(list)
     units = {}
@@ -326,9 +590,8 @@ def _decode_blf_with_dbc(frames, dbc_paths, t0, progress_callback=None):
     step = max(1, total_frames // 80)
     _emit_progress(progress_callback, 0, 1000)
     for index, (t, aid, payload) in enumerate(frames, 1):
-        try:
-            msg = db.get_message_by_frame_id(aid)
-        except KeyError:
+        msg = lookup(aid)
+        if msg is None:
             if index % step == 0 or index == total_frames:
                 _emit_progress(progress_callback, index * 850 // total_frames, 1000)
             continue  # frame id not in this DBC
@@ -337,31 +600,64 @@ def _decode_blf_with_dbc(frames, dbc_paths, t0, progress_callback=None):
             if index % step == 0 or index == total_frames:
                 _emit_progress(progress_callback, index * 850 // total_frames, 1000)
             continue  # CRC/length/multiplex mismatch on this frame
-        for sig_name, fval in _numeric_decoded_values(decoded):
-            disp = (
-                sig_name if len(sig_owners[sig_name]) <= 1
-                else f"{msg.name}.{sig_name}"
-            )
-            t_lists[disp].append(t)
+        numeric_values = _numeric_decoded_values(decoded)
+        if not numeric_values:
+            if index % step == 0 or index == total_frames:
+                _emit_progress(progress_callback, index * 850 // total_frames, 1000)
+            continue
+        msg_id = id(msg)
+        layout = meta_cache.get(msg_id)
+        if layout is None:
+            layout = _signal_display_meta(msg, sig_owners)
+            meta_cache[msg_id] = layout
+        multiplexed = mux_cache.get(msg_id)
+        if multiplexed is None:
+            multiplexed = _message_is_multiplexed(msg)
+            mux_cache[msg_id] = multiplexed
+        share_times = (not multiplexed) and (len(numeric_values) == len(layout))
+        if share_times:
+            t_shared = times_shared.get(msg_id)
+            if t_shared is None:
+                t_shared = []
+                times_shared[msg_id] = t_shared
+            t_shared.append(t)
+        for sig_name, fval in numeric_values:
+            meta = layout.get(sig_name)
+            if meta is None:
+                disp = (
+                    sig_name if len(sig_owners[sig_name]) <= 1
+                    else f"{msg.name}.{sig_name}"
+                )
+                unit = ""
+            else:
+                disp, unit = meta
             v_lists[disp].append(fval)
+            if share_times:
+                shared_key_for[disp] = msg_id
+            else:
+                t_lists[disp].append(t)
             if disp not in units:
-                sig_obj = next((s for s in msg.signals if s.name == sig_name), None)
-                units[disp] = str(getattr(sig_obj, "unit", "") or "")
+                units[disp] = unit
         if index % step == 0 or index == total_frames:
             _emit_progress(progress_callback, index * 850 // total_frames, 1000)
 
-    if not t_lists:
+    if not v_lists:
         raise ValueError(
             "选中的 DBC 与该 BLF 不匹配：没有任何帧被解码成功。\n"
             "请确认 DBC 是否对应这条总线，或重新打开时跳过 DBC、以原始字节查看。"
         )
-    series = {
-        name: (
-            np.asarray(t_lists[name], dtype=np.float64),
-            np.asarray(v_lists[name], dtype=np.float64),
-        )
-        for name in t_lists
+    shared_arrays = {
+        msg_id: np.asarray(ts, dtype=np.float64)
+        for msg_id, ts in times_shared.items()
     }
+    series = {}
+    for name, vals in v_lists.items():
+        msg_id = shared_key_for.get(name)
+        if msg_id is not None and shared_arrays[msg_id].size == len(vals):
+            t_arr = shared_arrays[msg_id]
+        else:
+            t_arr = np.asarray(t_lists[name], dtype=np.float64)
+        series[name] = (t_arr, np.asarray(vals, dtype=np.float64))
     return _assemble_blf_channels(
         series,
         units,
