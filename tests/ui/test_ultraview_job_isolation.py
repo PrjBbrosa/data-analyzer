@@ -136,3 +136,30 @@ def test_inactive_worker_completion_does_not_capture_active_canvas(qapp, qtbot):
     uv.notify_result_stored("fft", other_id, 0, key, object())
     assert calls == []
     assert uv.result_generation_for("fft", other_id, 0, key) == 1
+
+
+def test_multi_board_switch_and_layout_stay_zero_compute(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    probe = ComputeProbe().install(win)
+    before = snapshot_source_state(win)
+    uv = win._ultraview
+    first_id = uv.board.board_id
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    uv._on_create_board()
+    second_id = uv.board.board_id
+    assert second_id != first_id
+    uv._on_layout("grid_4x3")
+    uv._on_select_board(first_id)
+    uv._on_duplicate_board(first_id)
+    after = snapshot_source_state(win)
+    try:
+        assert probe.compute_total == 0
+        assert probe.job_total == 0
+        assert probe.store_new_key_writes == 0
+        assert probe.restore_pending_unchanged(win)
+        assert _source_identity(after) == _source_identity(before)
+        assert len(uv._workspace.boards) == 3
+    finally:
+        probe.restore()

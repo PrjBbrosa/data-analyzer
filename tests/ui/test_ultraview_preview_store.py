@@ -206,6 +206,8 @@ def test_status_is_derived_and_never_optimistically_fresh(qapp):
 
 def test_raw_pixel_budget_lru_stats_and_symmetric_clear(qapp):
     store = PreviewStore()
+    dropped = []
+    store.images_dropped.connect(lambda refs: dropped.extend(refs))
     refs = [_ref(f"lru-{i}") for i in range(8)]
     for ref in refs:
         assert store.publish(
@@ -230,6 +232,8 @@ def test_raw_pixel_budget_lru_stats_and_symmetric_clear(qapp):
     assert store.get(refs[0]).captured_digest == "lru-0"
     for ref in refs[2:]:
         assert store.image_valid(store.get(ref).image)
+    assert refs[0] in dropped
+    assert refs[1] in dropped
 
     store.clear()
     cleared = store.stats()

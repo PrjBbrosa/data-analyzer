@@ -1,7 +1,7 @@
 # UltraView P1 可扩展多 Board 工作区规格
 
 - 日期：2026-08-13
-- 状态：`P1 Core IMPLEMENTED 2026-08-14；当前 sidecar 为安全同步恢复，lazy load 与前景/Cocoa/全量平台验收另行记录`
+- 状态：`P1 Core IMPLEMENTED 2026-08-14；nested schema 3；sidecar 惰性加载已接线；前景/Cocoa/全量平台验收见 verification 文档`
 - 分析起始快照：`main@9c91debf`；成稿时并行实现已推进到 `main@5e36b27a`，且 worktree
   仍有 P0/UI 改动，实施和 Claude 评审必须以届时 HEAD 重新定位符号
 - 配套计划：
@@ -348,14 +348,21 @@ QPixmap、QObject、MainWindow 状态或 access token。
 
 ## 8. 项目状态与迁移
 
-### 8.1 Nested schema 2
+### 8.1 Nested schema 3
 
-顶层项目 `SCHEMA_VERSION` 保持 2；UltraView nested schema 从 1 升到 2：
+顶层项目 `SCHEMA_VERSION` 保持 2；UltraView nested schema 现为 **3**（writer 只写 3）。
+schema 2 仍可读。schema 1 单 `board` 继续迁成 Workspace。
+
+旧读者若只认识 schema 1：读到 schema 2/3 会回退默认 Board，下一次保存会丢掉多 Board。
+当前产品尚未把 UltraView 作为已发布数据合同，该损失被接受，不双写 schema 1 镜像。
+
+未知 nested schema（`> 3`）走 opaque passthrough：运行时用默认 Workspace，用户未改
+UltraView 时原样写回。
 
 ```json
 {
   "ultraview": {
-    "schema": 2,
+    "schema": 3,
     "workspace": {
       "active_board_id": "board-a",
       "boards": [
@@ -392,7 +399,7 @@ QPixmap、QObject、MainWindow 状态或 access token。
 - `active_board_id = old_board.board_id`；
 - 无 sidecar；现有运行时预览逻辑不变；
 - 合法 missing/orphaned refs 不删除；
-- 迁移不写回文件，只有用户下一次保存才写 schema 2。
+- 迁移不写回文件，只有用户下一次保存才写当前 nested schema（现为 3）。
 
 ### 8.3 非法 payload
 

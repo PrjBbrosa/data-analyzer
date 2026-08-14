@@ -14,6 +14,7 @@ from PyQt5.QtGui import QColor, QImage
 from mf4_analyzer.ui.chart_stack.ultraview.preview_sidecar import (
     SIDECAR_FORMAT,
     canonical_ref_hash,
+    open_preview_sidecar,
     restore_preview_sidecar,
     save_preview_sidecar,
 )
@@ -126,6 +127,20 @@ def test_sidecar_saves_unique_workspace_membership_and_round_trips(qapp, tmp_pat
     assert restored.get(first).captured_digest == "digest-a"
     assert restored.get(first).title == "A preview"
     assert restored.image_valid(restored.get(second).image)
+
+
+def test_open_preview_sidecar_does_not_publish_pixels(qapp, tmp_path):
+    ref = make_ref("time", "view-a")
+    store = PreviewStore()
+    assert store.publish(ref, _image(), digest="digest-a", meta=_meta(ref))
+    project = tmp_path / "session.tlproj"
+    saved = save_preview_sidecar(project, _workspace(ref), store)
+    assert saved.ok and saved.descriptor is not None
+    opened = open_preview_sidecar(project, _workspace(ref), saved.descriptor)
+    assert opened.ok
+    assert [item.ref for item in opened.images] == [ref]
+    empty = PreviewStore()
+    assert empty.get(ref) is None
 
 
 def test_workspace_membership_reads_p2_free_grid_placements(qapp, tmp_path):
@@ -298,6 +313,123 @@ def test_sidecar_atomic_failure_preserves_old_generation_and_removes_own_temp(
     assert final.read_bytes() == b"previous-generation"
     assert not list(sidecar_dir.glob(".*.tmp"))
     assert {warning.code for warning in result.warnings} == {"sidecar_write_failed"}
+
+
+def test_sidecar_save_unlinks_previous_generation(qapp, tmp_path):
+    ref = make_ref("time", "view-a")
+    store = PreviewStore()
+    assert store.publish(ref, _image(), digest="digest", meta=_meta(ref))
+    project = tmp_path / "session.tlproj"
+    first = save_preview_sidecar(project, _workspace(ref), store, generation="generation-one")
+    second = save_preview_sidecar(project, _workspace(ref), store, generation="generation-two")
+    sidecar_dir = Path(f"{project}.ultraview")
+    assert first.ok and second.ok
+    assert sorted(path.name for path in sidecar_dir.glob("*.uvpz")) == ["generation-two.uvpz"]
+
+
+def test_empty_store_skips_sidecar_write_and_removes_directory(qapp, tmp_path):
+    ref = make_ref("time", "view-a")
+    store = PreviewStore()
+    assert store.publish(ref, _image(), digest="digest", meta=_meta(ref))
+    project = tmp_path / "session.tlproj"
+    saved = save_preview_sidecar(project, _workspace(ref), store)
+    sidecar_dir = Path(f"{project}.ultraview")
+    assert saved.ok and saved.descriptor is not None
+    assert sidecar_dir.is_dir()
+    empty = save_preview_sidecar(project, _workspace(ref), PreviewStore())
+    assert empty.ok
+    assert empty.descriptor is None
+    assert empty.saved_refs == ()
+    assert not sidecar_dir.exists()
+
+
+def test_empty_store_does_not_create_sidecar_directory(qapp, tmp_path):
+    project = tmp_path / "fresh.tlproj"
+    result = save_preview_sidecar(
+        project, _workspace(make_ref("time", "view-a")), PreviewStore()
+    )
+    assert result.ok
+    assert result.descriptor is None
+    assert not Path(f"{project}.ultraview").exists()
+
+
+def _hostile_descriptor(tmp_path, generation="hostile01"):
+    project = tmp_path / "session.tlproj"
+    sidecar_dir = Path(f"{project}.ultraview")
+    sidecar_dir.mkdir()
+    archive = sidecar_dir / f"{generation}.uvpz"
+    return project, archive, {
+        "format": SIDECAR_FORMAT,
+        "path": archive.relative_to(tmp_path).as_posix(),
+        "generation": generation,
+        "manifest_sha256": "a" * 64,
+    }
+
+
+def test_sidecar_rejects_zip_entry_count_bomb(qapp, tmp_path):
+    from mf4_analyzer.ui.chart_stack.ultraview.preview_sidecar import MAX_SIDECAR_ENTRIES
+
+    project, archive, descriptor = _hostile_descriptor(tmp_path, "zipcount1")
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("manifest.json", b"{}")
+        for index in range(MAX_SIDECAR_ENTRIES + 1):
+            bundle.writestr(f"pad-{index}.bin", b"x")
+    result = restore_preview_sidecar(
+        project, _workspace(make_ref("time", "view-a")), PreviewStore(), descriptor
+    )
+    assert not result.ok
+    assert {warning.code for warning in result.warnings} == {"zip_entry_count_invalid"}
+
+
+def test_sidecar_rejects_compression_ratio_bomb(qapp, tmp_path):
+    project, archive, descriptor = _hostile_descriptor(tmp_path, "zipratio1")
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("manifest.json", b"\x00" * 80_000)
+    result = restore_preview_sidecar(
+        project, _workspace(make_ref("time", "view-a")), PreviewStore(), descriptor
+    )
+    assert not result.ok
+    assert {warning.code for warning in result.warnings} == {"zip_ratio_exceeded"}
+
+
+def test_sidecar_rejects_png_reader_size_mismatch(qapp, tmp_path):
+    ref = make_ref("time", "view-a")
+    huge = _image(64, 48)
+    image_bytes = _png_bytes(huge)
+    generation = "pngsize01"
+    project, archive, descriptor = _hostile_descriptor(tmp_path, generation)
+    from mf4_analyzer.ui.chart_stack.ultraview.preview_sidecar import canonical_ref_hash
+
+    entry = {
+        "ref": ref.to_dict(),
+        "image": f"images/{canonical_ref_hash(ref)}.png",
+        "captured_digest": "digest",
+        "meta": {
+            "captured_at": 1.0,
+            "axis_kind": "time",
+            "x_unit": "s",
+            "x_range": [0.0, 1.0],
+            "y_unit": "Nm",
+            "title": "A",
+            "source_summary": "src",
+            "tab_color": "#123456",
+        },
+        "width": 32,
+        "height": 24,
+        "bytes": len(image_bytes),
+        "sha256": hashlib.sha256(image_bytes).hexdigest(),
+    }
+    manifest = {"format": SIDECAR_FORMAT, "generation": generation, "entries": [entry]}
+    manifest_bytes = _manifest_bytes(manifest)
+    descriptor["manifest_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("manifest.json", manifest_bytes)
+        bundle.writestr(entry["image"], image_bytes)
+    opened = open_preview_sidecar(project, _workspace(ref), descriptor)
+    assert not opened.ok or ref in opened.rejected_refs
+    codes = {warning.code for warning in opened.warnings}
+    assert "image_dimensions_mismatch" in codes or not opened.ok
+    assert PreviewStore().get(ref) is None
 
 
 def test_sidecar_module_has_no_compute_or_window_imports():

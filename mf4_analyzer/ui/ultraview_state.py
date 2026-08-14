@@ -127,6 +127,8 @@ class CardPlacement:
 GRID_COLUMNS = 12
 MAX_GRID_ROWS = 48
 MAX_PLACED_CARDS = 24
+MAX_UI_BOARDS = 20
+MAX_BOARD_MEMBERSHIP = 200
 GRID_MIN_COLUMN_SPAN = 2
 GRID_MAX_COLUMN_SPAN = 12
 GRID_MIN_ROW_SPAN = 2
@@ -265,6 +267,29 @@ def mark_workspace_mutated(workspace: UltraViewWorkspaceState) -> None:
     workspace.opaque_payload = None
 
 
+def set_workspace_preview_sidecar(
+    workspace: UltraViewWorkspaceState,
+    descriptor: Mapping[str, Any] | None,
+) -> None:
+    """Attach or clear the sidecar pointer without discarding a future payload.
+
+    Saving preview pixels is an acceleration-layer write, not a Board mutation,
+    so a newer nested schema must keep its opaque body and only overlay the
+    descriptor.  Otherwise the just-written ``.uvpz`` becomes an orphan.
+    """
+    workspace.preview_sidecar = (
+        dict(descriptor) if isinstance(descriptor, Mapping) else None
+    )
+    if workspace.opaque_payload is None:
+        return
+    payload = dict(workspace.opaque_payload)
+    if workspace.preview_sidecar is not None:
+        payload["preview_sidecar"] = dict(workspace.preview_sidecar)
+    else:
+        payload.pop("preview_sidecar", None)
+    workspace.opaque_payload = payload
+
+
 def _board_index(workspace: UltraViewWorkspaceState, board_id: str) -> int | None:
     for index, board in enumerate(workspace.boards):
         if board.board_id == board_id:
@@ -282,7 +307,9 @@ def set_active_board(workspace: UltraViewWorkspaceState, board_id: str) -> list[
 
 def create_board(
     workspace: UltraViewWorkspaceState, *, name: str | None = None
-) -> UltraViewBoardState:
+) -> UltraViewBoardState | None:
+    if len(workspace.boards) >= MAX_UI_BOARDS:
+        return None
     board = default_board()
     ordinal = len(workspace.boards) + 1
     board.name = str(name).strip() if isinstance(name, str) and name.strip() else f"{DEFAULT_BOARD_NAME} {ordinal}"
@@ -314,6 +341,8 @@ def duplicate_board(
 ) -> UltraViewBoardState | None:
     index = _board_index(workspace, str(board_id))
     if index is None:
+        return None
+    if len(workspace.boards) >= MAX_UI_BOARDS:
         return None
     clone = _copy_board(workspace.boards[index])
     clone.name = f"{clone.name} 副本"
@@ -433,6 +462,19 @@ def _warn(code: str, detail: str = "") -> str:
     return f"{code}: {detail}" if detail else code
 
 
+def _take_membership(
+    seen_refs: set[UltraViewRef], ref: UltraViewRef, warnings: list[str]
+) -> bool:
+    if ref in seen_refs:
+        warnings.append(_warn("duplicate_ref", f"{ref.section}/{ref.view_id}"))
+        return False
+    if len(seen_refs) >= MAX_BOARD_MEMBERSHIP:
+        warnings.append(_warn("membership_truncated", f"{ref.section}/{ref.view_id}"))
+        return False
+    seen_refs.add(ref)
+    return True
+
+
 def _remove_ref_everywhere(board: UltraViewBoardState, ref: UltraViewRef) -> None:
     board.placements = [p for p in board.placements if p.ref != ref]
     board.free_grid = [p for p in board.free_grid if p.ref != ref]
@@ -470,6 +512,8 @@ def add_ref(board: UltraViewBoardState, ref: UltraViewRef) -> list[str]:
     warnings: list[str] = []
     if ref in membership_set(board):
         return warnings
+    if len(membership_set(board)) >= MAX_BOARD_MEMBERSHIP:
+        return [_warn("membership_limit")]
     if board.layout_mode == LAYOUT_MODE_FREE_GRID:
         if len(board.free_grid) >= MAX_PLACED_CARDS:
             _append_unplaced(board, ref)
@@ -829,6 +873,10 @@ def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
         "show_sources": bool(board.show_sources),
         "unplaced": [ref.to_dict() for ref in board.unplaced],
         "layout_mode": board.layout_mode,
+        # Free-grid mode still needs the last template identity so closing the
+        # grid (and a later project reopen) can restore the same slots.
+        "layout_id": board.layout_id,
+        "primary_ratio": board.primary_ratio,
     }
     if board.layout_mode == LAYOUT_MODE_FREE_GRID:
         payload["free_grid"] = {
@@ -841,11 +889,9 @@ def _board_payload(board: UltraViewBoardState) -> dict[str, Any]:
             ],
         }
     else:
-        payload.update({
-            "layout_id": board.layout_id,
-            "primary_ratio": board.primary_ratio,
-            "placements": [{"slot_id": item.slot_id, **item.ref.to_dict()} for item in board.placements],
-        })
+        payload["placements"] = [
+            {"slot_id": item.slot_id, **item.ref.to_dict()} for item in board.placements
+        ]
     return payload
 
 
@@ -915,27 +961,21 @@ def normalize_board_payload(
             if ref is None or rect is None:
                 warnings.append(_warn("illegal_grid_placement"))
                 continue
-            if ref in seen_refs:
-                warnings.append(_warn("duplicate_ref", f"{ref.section}/{ref.view_id}"))
+            if not _take_membership(seen_refs, ref, warnings):
                 continue
             if len(board.free_grid) >= MAX_PLACED_CARDS or any(
                 _grid_overlaps(rect, existing.rect) for existing in board.free_grid
             ):
                 _append_unplaced(board, ref)
-                seen_refs.add(ref)
                 warnings.append(_warn("grid_to_tray", f"{ref.section}/{ref.view_id}"))
                 continue
             board.free_grid.append(FreeGridPlacement(ref, rect))
-            seen_refs.add(ref)
         for item in board_raw.get("unplaced") or []:
             ref = parse_ref_payload(item if isinstance(item, Mapping) else None)
             if ref is None:
                 warnings.append(_warn("illegal_ref"))
-            elif ref in seen_refs:
-                warnings.append(_warn("duplicate_ref", f"{ref.section}/{ref.view_id}"))
-            else:
+            elif _take_membership(seen_refs, ref, warnings):
                 board.unplaced.append(ref)
-                seen_refs.add(ref)
         return board, warnings
 
     seen_slots: set[str] = set()
@@ -959,23 +999,17 @@ def normalize_board_payload(
             continue
         if slot_id not in legal_slots:
             warnings.append(_warn("unknown_slot", repr(slot_id)))
-            if ref not in seen_refs:
+            if _take_membership(seen_refs, ref, warnings):
                 _append_unplaced(board, ref)
-                seen_refs.add(ref)
-            else:
-                warnings.append(_warn("duplicate_ref", f"{ref.section}/{ref.view_id}"))
             continue
         if slot_id in seen_slots:
             warnings.append(_warn("duplicate_slot", str(slot_id)))
-            if ref not in seen_refs:
+            if _take_membership(seen_refs, ref, warnings):
                 _append_unplaced(board, ref)
-                seen_refs.add(ref)
             continue
-        if ref in seen_refs:
-            warnings.append(_warn("duplicate_ref", f"{ref.section}/{ref.view_id}"))
+        if not _take_membership(seen_refs, ref, warnings):
             continue
         seen_slots.add(slot_id)
-        seen_refs.add(ref)
         board.placements.append(CardPlacement(slot_id=str(slot_id), ref=ref))
 
     _sort_placements(board)
@@ -993,10 +1027,8 @@ def normalize_board_payload(
             else:
                 warnings.append(_warn("illegal_ref", type(item).__name__))
             continue
-        if ref in seen_refs:
-            warnings.append(_warn("duplicate_ref", f"{ref.section}/{ref.view_id}"))
+        if not _take_membership(seen_refs, ref, warnings):
             continue
-        seen_refs.add(ref)
         board.unplaced.append(ref)
 
     return board, warnings
@@ -1055,6 +1087,8 @@ def normalize_workspace_payload(
             warnings.append(_warn("duplicate_board_id", old))
         board_ids.add(board.board_id)
         boards.append(board)
+    if len(boards) > MAX_UI_BOARDS:
+        warnings.append(_warn("ui_board_limit", str(len(boards))))
     requested = root.get("active_board_id")
     active = str(requested) if isinstance(requested, str) else ""
     if active not in board_ids:

@@ -518,6 +518,14 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.idle",
         "ultraview.library_fold",
         "ultraview.library_toggle",
+        "ultraview.free_grid",
+        "ultraview.resize",
+        "ultraview.undo",
+        "ultraview.preset",
+        "ultraview.organize",
+        "ultraview.minimap",
+        "ultraview.boards",
+        "ultraview.limits",
     }
     assert required <= set(by_id)
     source_modes = frozenset({"time", "fft", "fft_time", "frf", "order"})

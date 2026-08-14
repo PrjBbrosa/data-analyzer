@@ -32,12 +32,15 @@ from .layouts import (
     CARD_FOOTER_HEIGHT,
     CARD_HEADER_HEIGHT,
     content_rect,
+    logical_board_size,
     slot_rects,
 )
-from .free_grid import grid_metrics, rect_to_pixels
+from .free_grid import export_grid_metrics, rect_to_pixels
 from .preview_store import PreviewStore
 
 TITLE_BAND = 36
+MAX_EXPORT_EDGE = 8192
+MAX_EXPORT_PIXELS = 16_000_000
 BOARD_BG = QColor("#f5f7fb")
 CARD_BG = QColor("#ffffff")
 CARD_BORDER = QColor("#d7dee8")
@@ -63,16 +66,75 @@ class ComposeError(Exception):
         self.message = str(message)
 
 
-def output_size(scale: int) -> tuple[int, int]:
+def output_size(scale: int, layout_id: str | None = None) -> tuple[int, int]:
+    """Return the canonical template export size.
+
+    2/4/6 and hero templates keep the P0 1600×900 baseline.  9/12 templates
+    use the same logical-board floor as the on-screen reading canvas so cards
+    are not crushed below the readable content target.
+    """
     factor = 1 if int(scale) <= 1 else 2
-    return BASE_BOARD_SIZE[0] * factor, BASE_BOARD_SIZE[1] * factor
+    width, height = BASE_BOARD_SIZE
+    if layout_id:
+        width, height = logical_board_size(layout_id, BASE_BOARD_SIZE)
+    return width * factor, height * factor
 
 
-def free_grid_output_size(board: UltraViewBoardState, scale: int) -> tuple[int, int]:
+def free_grid_output_size(
+    board: UltraViewBoardState, scale: int, *, title: bool = True
+) -> tuple[int, int]:
     """Return a bounded full logical free-grid export canvas (not viewport)."""
-    metrics = grid_metrics(BASE_BOARD_SIZE, board.free_grid)
+    metrics = export_grid_metrics(board.free_grid)
     factor = 1 if int(scale) <= 1 else 2
-    return metrics.board_width * factor, (metrics.board_height + TITLE_BAND) * factor
+    extra = TITLE_BAND if title else 0
+    return metrics.board_width * factor, (metrics.board_height + extra) * factor
+
+
+def composed_slot_rects(
+    board: UltraViewBoardState, *, scale: int = 1, title: bool = True
+) -> dict[str, tuple[int, int, int, int]]:
+    """Pixel rectangles in the composed image, including the optional title band."""
+    factor = 1 if int(scale) <= 1 else 2
+    title_h = TITLE_BAND if title else 0
+    if board.layout_mode == LAYOUT_MODE_FREE_GRID:
+        metrics = export_grid_metrics(board.free_grid)
+        return {
+            f"grid:{item.ref.section}:{item.ref.view_id}": (
+                x * factor,
+                (y + title_h) * factor,
+                width * factor,
+                height * factor,
+            )
+            for item in board.free_grid
+            for x, y, width, height in (rect_to_pixels(item.rect, metrics),)
+        }
+    width, height = output_size(1, board.layout_id)
+    inner_h = height - title_h if title else height
+    content = content_rect((width, inner_h), padding=BOARD_PADDING)
+    rects = slot_rects(board.layout_id, content, board.primary_ratio)
+    return {
+        slot_id: (
+            x * factor,
+            (y + title_h) * factor,
+            w * factor,
+            h * factor,
+        )
+        for slot_id, (x, y, w, h) in rects.items()
+    }
+
+
+def _guard_export_size(width: int, height: int) -> None:
+    if width <= 0 or height <= 0:
+        raise ComposeError("allocation_failed", f"无法分配 {width}×{height} 合成图")
+    if (
+        width > MAX_EXPORT_EDGE
+        or height > MAX_EXPORT_EDGE
+        or width * height > MAX_EXPORT_PIXELS
+    ):
+        raise ComposeError(
+            "export_too_large",
+            f"{width}×{height} 超出导出上限 {MAX_EXPORT_EDGE}px / {MAX_EXPORT_PIXELS} 像素",
+        )
 
 
 def image_sha256(image: QImage) -> str:
@@ -99,13 +161,15 @@ def compose_board(
     statuses: Mapping[UltraViewRef, str],
     *,
     scale: int = 1,
+    title: bool = True,
 ) -> QImage:
     factor = 1 if int(scale) <= 1 else 2
     width, height = (
-        free_grid_output_size(board, factor)
+        free_grid_output_size(board, factor, title=title)
         if board.layout_mode == LAYOUT_MODE_FREE_GRID
-        else output_size(factor)
+        else output_size(factor, board.layout_id)
     )
+    _guard_export_size(width, height)
     image = QImage(width, height, QImage.Format_ARGB32)
     if image.isNull():
         raise ComposeError("allocation_failed", f"无法分配 {width}×{height} 合成图")
@@ -115,7 +179,7 @@ def compose_board(
     try:
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
-        _draw_board(painter, board, records, statuses, factor)
+        _draw_board(painter, board, records, statuses, factor, title=title)
     finally:
         painter.end()
     return image
@@ -143,48 +207,40 @@ def save_composed_png(image: QImage, path) -> None:
         raise ComposeError("save_failed", str(exc)) from exc
 
 
-def _draw_board(painter, board, records, statuses, factor: int) -> None:
-    title_h = TITLE_BAND * factor
-    font = QFont()
-    font.setPixelSize(max(12, 16 * factor))
-    font.setBold(True)
-    painter.setFont(font)
-    painter.setPen(TITLE_COLOR)
-    painter.drawText(
-        QRect(BOARD_PADDING * factor, 0, painter.device().width() - 2 * BOARD_PADDING * factor, title_h),
-        Qt.AlignVCenter | Qt.AlignLeft,
-        str(board.name or ""),
-    )
+def _draw_board(painter, board, records, statuses, factor: int, *, title: bool) -> None:
+    if title:
+        title_h = TITLE_BAND * factor
+        font = QFont()
+        font.setPixelSize(max(12, 16 * factor))
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(TITLE_COLOR)
+        painter.drawText(
+            QRect(
+                BOARD_PADDING * factor,
+                0,
+                painter.device().width() - 2 * BOARD_PADDING * factor,
+                title_h,
+            ),
+            Qt.AlignVCenter | Qt.AlignLeft,
+            str(board.name or ""),
+        )
+    rects = composed_slot_rects(board, scale=factor, title=title)
     if board.layout_mode == LAYOUT_MODE_FREE_GRID:
-        _draw_free_grid(painter, board, records, statuses, factor)
+        for item in board.free_grid:
+            key = f"grid:{item.ref.section}:{item.ref.view_id}"
+            _draw_slot(painter, board, rects[key], item.ref, records, statuses, factor)
         return
-    inner_w, inner_h = BASE_BOARD_SIZE[0], BASE_BOARD_SIZE[1] - TITLE_BAND
-    content = content_rect((inner_w, inner_h), padding=BOARD_PADDING)
-    cx, cy, cw, ch = content
-    rects = slot_rects(board.layout_id, (cx, cy, cw, ch), board.primary_ratio)
     for slot_id in layout_slots(board.layout_id):
-        x, y, w, h = rects[slot_id]
-        slot = (
-            x * factor,
-            (y + TITLE_BAND) * factor,
-            w * factor,
-            h * factor,
+        _draw_slot(
+            painter,
+            board,
+            rects[slot_id],
+            slot_occupant(board, slot_id),
+            records,
+            statuses,
+            factor,
         )
-        ref = slot_occupant(board, slot_id)
-        _draw_slot(painter, board, slot, ref, records, statuses, factor)
-
-
-def _draw_free_grid(painter, board, records, statuses, factor: int) -> None:
-    metrics = grid_metrics(BASE_BOARD_SIZE, board.free_grid)
-    for placement in board.free_grid:
-        x, y, width, height = rect_to_pixels(placement.rect, metrics)
-        slot = (
-            x * factor,
-            (y + TITLE_BAND) * factor,
-            width * factor,
-            height * factor,
-        )
-        _draw_slot(painter, board, slot, placement.ref, records, statuses, factor)
 
 
 def _draw_slot(painter, board, slot, ref, records, statuses, factor: int) -> None:

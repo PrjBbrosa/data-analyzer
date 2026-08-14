@@ -167,6 +167,7 @@ lesson by default.
 | [Independent Tool Window Must Clear Transient Parent](independent-tool-window-must-clear-transient-parent.md) | Adding or changing a non-modal QDialog tool window parented to MainWindow | See lesson |
 | [UltraView Idle Recapture Keeps Armed Cursor And Cursor Digest](ultraview-idle-digest-keeps-armed-cursor.md) | Changing UltraView capture, presentation digest, `hide_transient_overlays`, idle recapture, or copy-as-image pill compositing. | See lesson |
 | [Channel Tree Selected Fill Must Stay Rectangular](codex-channel-tree-selected-fill-must-stay-rectangular.md) | Changing channel-tree selected-row QSS, `drawBranches`, or the | See lesson |
+| [QDrag.exec_ Must Outlive Its Source Widget](ultraview-qdrag-exec-must-outlive-source.md) | Implementing or testing Qt drag-drop that rebuilds the library, grid, | See lesson |
 
 ## Selection Rules
 

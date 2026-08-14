@@ -12,7 +12,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from PyQt5.QtCore import QObject, Qt, QThread
+from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QApplication
 
@@ -111,6 +111,8 @@ def _scale_image(image: QImage, width: int, height: int) -> QImage:
 
 class PreviewStore(QObject):
     """GUI-thread owner of process-local UltraView preview images."""
+
+    images_dropped = pyqtSignal(object)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -361,10 +363,14 @@ class PreviewStore(QObject):
         ]
         # Evict unrequested first, then tray/inactive; oldest within a tier.
         candidates.sort(key=self._residency_sort_key)
+        dropped: list[UltraViewRef] = []
         while self._raw_pixel_count() > MAX_PREVIEW_PIXELS and candidates:
             victim = candidates.pop(0)
             victim.image = None
             self._evictions += 1
+            dropped.append(victim.ref)
+        if dropped:
+            self.images_dropped.emit(tuple(dropped))
         # This only occurs when every image is protected by residency.  Keep
         # each active preview legal by reducing shared images proportionally.
         if self._raw_pixel_count() > MAX_PREVIEW_PIXELS:

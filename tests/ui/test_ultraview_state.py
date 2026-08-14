@@ -111,6 +111,50 @@ def test_workspace_board_lifecycle_keeps_board_identity_and_membership_isolated(
     assert uvs.delete_board(workspace, second.board_id) == ["last_board_retained"]
 
 
+def test_ui_board_limit_blocks_create_but_loader_keeps_all_boards():
+    workspace = uvs.default_workspace()
+    for _ in range(19):
+        assert uvs.create_board(workspace) is not None
+    assert len(workspace.boards) == 20
+    assert uvs.create_board(workspace) is None
+    assert uvs.duplicate_board(workspace, workspace.boards[0].board_id) is None
+
+    payload = {
+        "schema": 3,
+        "workspace": {
+            "active_board_id": "b0",
+            "boards": [
+                {
+                    "board_id": f"b{index}",
+                    "name": f"B{index}",
+                    "layout_id": "hero_left_4",
+                    "placements": [],
+                    "unplaced": [],
+                }
+                for index in range(21)
+            ],
+        },
+    }
+    loaded, warnings = uvs.normalize_workspace_payload(payload)
+    assert len(loaded.boards) == 21
+    assert any(item.startswith("ui_board_limit") for item in warnings)
+
+
+def test_hostile_tray_payload_truncates_membership_with_warning():
+    unplaced = [
+        {"section": "time", "view_id": f"tray-{index}"}
+        for index in range(uvs.MAX_BOARD_MEMBERSHIP + 8)
+    ]
+    payload = {
+        "schema": 3,
+        "workspace": {"boards": [{"placements": [], "unplaced": unplaced}]},
+    }
+    loaded, warnings = uvs.normalize_workspace_payload(payload)
+    board = uvs.active_board(loaded)
+    assert len(uvs.membership_set(board)) == uvs.MAX_BOARD_MEMBERSHIP
+    assert any(item.startswith("membership_truncated") for item in warnings)
+
+
 def test_workspace_migrates_schema_one_and_preserves_future_until_mutation():
     legacy = {
         "schema": 1,
@@ -136,6 +180,26 @@ def test_workspace_migrates_schema_one_and_preserves_future_until_mutation():
     assert uvs.workspace_to_payload(opaque) == future
     uvs.create_board(opaque)
     assert uvs.workspace_to_payload(opaque)["schema"] == uvs.ULTRAVIEW_SCHEMA
+
+
+def test_future_schema_overlays_sidecar_descriptor_without_dropping_opaque_body():
+    future = {"schema": 99, "workspace": {"boards": [{"unknown": "keep"}]}, "future": True}
+    workspace, warnings = uvs.normalize_workspace_payload(future)
+    assert warnings == ["future_ultraview_schema: 99"]
+    descriptor = {
+        "format": 1,
+        "path": "session.tlproj.ultraview/abc.uvpz",
+        "generation": "abc",
+        "manifest_sha256": "a" * 64,
+    }
+    uvs.set_workspace_preview_sidecar(workspace, descriptor)
+    payload = uvs.workspace_to_payload(workspace)
+    assert payload["schema"] == 99
+    assert payload["future"] is True
+    assert payload["workspace"]["boards"][0]["unknown"] == "keep"
+    assert payload["preview_sidecar"] == descriptor
+    uvs.set_workspace_preview_sidecar(workspace, None)
+    assert "preview_sidecar" not in uvs.workspace_to_payload(workspace)
 
 
 def test_free_grid_legalizes_collisions_and_template_conversion_keeps_tray():
@@ -493,3 +557,25 @@ def test_ratio_clamp_and_nudge():
     uvs.set_layout(equal, "grid_2x2")
     assert equal.primary_ratio == pytest.approx(0.67)
     assert not uvs.is_hero_layout(equal.layout_id)
+
+
+def test_free_grid_payload_keeps_layout_id_ratio_and_all_placements():
+    board = _filled("grid_3x3")
+    uvs.set_ratio(board, 0.55)
+    uvs.template_to_free_grid(board)
+    payload = uvs.board_to_payload(board)
+    inner = payload["board"]
+    assert inner["layout_id"] == "grid_3x3"
+    assert inner["primary_ratio"] == pytest.approx(0.55)
+    assert inner["layout_mode"] == uvs.LAYOUT_MODE_FREE_GRID
+    assert len(inner["free_grid"]["placements"]) == 9
+    restored, warnings = uvs.normalize_board_payload(payload)
+    assert warnings == []
+    assert restored.layout_id == "grid_3x3"
+    assert restored.primary_ratio == pytest.approx(0.55)
+    assert restored.layout_mode == uvs.LAYOUT_MODE_FREE_GRID
+    assert len(restored.free_grid) == 9
+    assert uvs.free_grid_to_template(restored, restored.layout_id) == []
+    assert restored.layout_id == "grid_3x3"
+    assert len(restored.placements) == 9
+    assert restored.unplaced == []

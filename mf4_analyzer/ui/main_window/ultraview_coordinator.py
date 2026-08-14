@@ -44,6 +44,7 @@ from ..ultraview_state import (
     derive_preview_status,
     layout_slots,
     LAYOUT_MODE_FREE_GRID,
+    MAX_UI_BOARDS,
     mark_workspace_mutated,
     membership_set,
     move_to_unplaced,
@@ -63,6 +64,7 @@ from ..ultraview_state import (
     set_layout,
     set_active_board,
     set_free_grid_rect,
+    set_workspace_preview_sidecar,
     swap_slots,
     template_to_free_grid,
     free_grid_to_template,
@@ -80,7 +82,9 @@ from ..chart_stack.ultraview.preview_store import (
     RESIDENCY_TIER_TRAY,
 )
 from ..chart_stack.ultraview.preview_sidecar import (
-    restore_preview_sidecar,
+    SidecarImagePayload,
+    open_preview_sidecar,
+    publish_sidecar_image,
     save_preview_sidecar,
 )
 from ..chart_stack.ultraview.widgets import LibraryRow
@@ -96,6 +100,7 @@ logger = logging.getLogger(__name__)
 
 _MIN_CAPTURE_EDGE = 8
 _IDLE_CAPTURE_MS = 120
+_SIDECAR_LOAD_BATCH = 2
 _DIGEST_RETRY_LIMIT = 3
 _HEATMAP_SECTIONS = frozenset({"fft_time", "order"})
 _HTML_TAG = re.compile(r"<[^>]+>")
@@ -386,6 +391,7 @@ class UltraViewCoordinator(QObject):
         super().__init__(parent if parent is not None else window)
         self._window_ref = weakref.ref(window)
         self._store = PreviewStore(parent=self)
+        self._store.images_dropped.connect(self._on_store_images_dropped)
         self._shutdown = False
         self._bindings: dict[int, tuple[UltraViewRef, Any]] = {}
         self._queued: dict[tuple, QTimer] = {}
@@ -398,6 +404,12 @@ class UltraViewCoordinator(QObject):
         self._idle_timer.setSingleShot(True)
         self._idle_timer.setInterval(_IDLE_CAPTURE_MS)
         self._idle_timer.timeout.connect(self._on_idle_capture_timeout)
+        self._sidecar_generation = 0
+        self._sidecar_pending: list[SidecarImagePayload] = []
+        self._sidecar_timer = QTimer(self)
+        self._sidecar_timer.setSingleShot(True)
+        self._sidecar_timer.setInterval(0)
+        self._sidecar_timer.timeout.connect(self._on_sidecar_load_timeout)
         self._digest_retries: dict[UltraViewRef, int] = {}
         self._result_refs: dict[tuple, _ResultIdentityRef] = {}
         self._result_generation: dict[tuple, int] = {}
@@ -638,20 +650,61 @@ class UltraViewCoordinator(QObject):
         self._workspace = workspace
         self._grid_histories.clear()
         if project_path is not None and workspace.preview_sidecar is not None:
-            loaded = restore_preview_sidecar(
+            opened = open_preview_sidecar(
                 project_path,
                 workspace_to_payload(workspace),
-                self._store,
                 workspace.preview_sidecar,
             )
             warnings.extend(
                 f"{item.code}: {item.detail}" if item.detail else item.code
-                for item in loaded.warnings
+                for item in opened.warnings
             )
+            if opened.ok and opened.images:
+                self._queue_sidecar_images(opened.images)
         self.refresh_page()
         for item in warnings:
             logger.warning("UltraView project restore: %s", item)
         return list(warnings)
+
+    def _queue_sidecar_images(self, images: tuple[SidecarImagePayload, ...]) -> None:
+        self._sidecar_pending = list(images)
+        self._prioritize_sidecar_queue()
+        if self._sidecar_pending and not self._shutdown:
+            self._sidecar_timer.start()
+
+    def _prioritize_sidecar_queue(self) -> None:
+        if not self._sidecar_pending:
+            return
+        active = set(all_refs(active_board(self._workspace)))
+        self._sidecar_pending.sort(key=lambda item: 0 if item.ref in active else 1)
+
+    def _on_sidecar_load_timeout(self) -> None:
+        generation = self._sidecar_generation
+        if self._shutdown or generation != self._sidecar_generation:
+            self._sidecar_pending.clear()
+            return
+        batch = self._sidecar_pending[:_SIDECAR_LOAD_BATCH]
+        self._sidecar_pending = self._sidecar_pending[_SIDECAR_LOAD_BATCH:]
+        members = {
+            ref for board in self._workspace.boards for ref in all_refs(board)
+        }
+        for payload in batch:
+            if self._shutdown or generation != self._sidecar_generation:
+                self._sidecar_pending.clear()
+                return
+            if payload.ref not in members:
+                continue
+            try:
+                publish_sidecar_image(self._store, payload)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            self._push_preview(payload.ref)
+        if (
+            self._sidecar_pending
+            and not self._shutdown
+            and generation == self._sidecar_generation
+        ):
+            self._sidecar_timer.start()
 
     @property
     def board(self) -> UltraViewBoardState:
@@ -669,17 +722,19 @@ class UltraViewCoordinator(QObject):
             project_path, workspace_to_payload(self._workspace), self._store
         )
         if saved.ok:
-            self._workspace.preview_sidecar = saved.descriptor
+            set_workspace_preview_sidecar(self._workspace, saved.descriptor)
             return []
         # A new Save As must never retain a relative descriptor that points to
         # the original project's sibling sidecar directory.  Same-path saves
         # can keep their last known-good descriptor when the optional refresh
         # fails, preserving an already valid acceleration layer.
         existing = self._workspace.preview_sidecar
+        if existing is None and isinstance(self._workspace.opaque_payload, dict):
+            existing = self._workspace.opaque_payload.get("preview_sidecar")
         descriptor_path = existing.get("path") if isinstance(existing, dict) else None
         expected_prefix = f"{Path(project_path).name}.ultraview/"
         if not isinstance(descriptor_path, str) or not descriptor_path.startswith(expected_prefix):
-            self._workspace.preview_sidecar = None
+            set_workspace_preview_sidecar(self._workspace, None)
         return [
             f"{item.code}: {item.detail}" if item.detail else item.code
             for item in saved.warnings
@@ -972,6 +1027,13 @@ class UltraViewCoordinator(QObject):
         if image_valid and any(ref in placed_ref_set(board) for board in self._workspace.boards):
             self._store.touch(ref)
 
+    def _on_store_images_dropped(self, refs) -> None:
+        if self._inactive():
+            return
+        for ref in refs or ():
+            if isinstance(ref, UltraViewRef):
+                self._push_preview(ref)
+
     def _after_board_mutation(self) -> None:
         if self._inactive():
             return
@@ -987,7 +1049,10 @@ class UltraViewCoordinator(QObject):
             if page is not None:
                 page._select_ref(ref)
             return
-        add_ref(board, ref)
+        warnings = add_ref(board, ref)
+        if warnings and warnings[0] == "membership_limit":
+            self._toast("本 Board 卡片已达上限", "warning")
+            return
         self._after_board_mutation()
 
     def _on_add_ref(self, section: str, view_id: str) -> None:
@@ -1089,8 +1154,7 @@ class UltraViewCoordinator(QObject):
             ref,
             GridRect(int(column), int(row), int(column_span), int(row_span)),
         )
-        if not warnings:
-            self._record_grid_transition(board, before)
+        self._commit_grid_change(board, before, warnings)
 
     def _on_free_grid_preset(self, section: str, view_id: str, preset: str) -> None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
@@ -1100,8 +1164,8 @@ class UltraViewCoordinator(QObject):
         before = self._grid_snapshot(board)
         if not any(item_ref == ref for item_ref, _rect in before):
             return
-        if not apply_free_grid_preset(board, ref, preset):
-            self._record_grid_transition(board, before)
+        warnings = apply_free_grid_preset(board, ref, preset)
+        self._commit_grid_change(board, before, warnings)
 
     def _on_organize_free_grid(self) -> None:
         board = active_board(self._workspace)
@@ -1129,6 +1193,30 @@ class UltraViewCoordinator(QObject):
         history.redo.clear()
         self._after_board_mutation()
 
+    def _commit_grid_change(
+        self,
+        board: UltraViewBoardState,
+        before: tuple[tuple[UltraViewRef, GridRect], ...],
+        warnings: list[str],
+    ) -> None:
+        if warnings:
+            self._toast_grid_warnings(warnings)
+            return
+        self._record_grid_transition(board, before)
+
+    def _toast_grid_warnings(self, warnings: list[str]) -> None:
+        codes = {item.split(":", 1)[0] for item in warnings}
+        if "grid_collision" in codes:
+            self._toast("目标位置与其他卡片重叠", "warning")
+            return
+        if warnings:
+            self._toast(str(warnings[0]), "warning")
+
+    def _discard_stale_grid_history(self, history: _GridHistory) -> None:
+        history.undo.clear()
+        history.redo.clear()
+        self._toast("卡片已增删，撤销记录已清除", "info")
+
     @staticmethod
     def _apply_grid_snapshot(
         board: UltraViewBoardState,
@@ -1148,7 +1236,7 @@ class UltraViewCoordinator(QObject):
             return
         entry = history.undo.pop()
         if not self._apply_grid_snapshot(board, entry.before):
-            history.undo.append(entry)
+            self._discard_stale_grid_history(history)
             return
         history.redo.append(entry)
         self._after_board_mutation()
@@ -1160,7 +1248,7 @@ class UltraViewCoordinator(QObject):
             return
         entry = history.redo.pop()
         if not self._apply_grid_snapshot(board, entry.after):
-            history.redo.append(entry)
+            self._discard_stale_grid_history(history)
             return
         history.undo.append(entry)
         self._after_board_mutation()
@@ -1195,10 +1283,15 @@ class UltraViewCoordinator(QObject):
         self._after_board_mutation()
 
     def _on_create_board(self) -> None:
-        create_board(self._workspace)
+        if create_board(self._workspace) is None:
+            self._toast("最多创建 20 个 Board", "info")
+            return
         self._after_board_mutation()
 
     def _on_duplicate_board(self, board_id: str) -> None:
+        if len(self._workspace.boards) >= MAX_UI_BOARDS:
+            self._toast("最多创建 20 个 Board", "info")
+            return
         if duplicate_board(self._workspace, board_id) is not None:
             self._after_board_mutation()
 
@@ -1220,6 +1313,7 @@ class UltraViewCoordinator(QObject):
 
     def _on_select_board(self, board_id: str) -> None:
         if not set_active_board(self._workspace, board_id):
+            self._prioritize_sidecar_queue()
             self._after_board_mutation()
 
     def copy_board_to_clipboard(self) -> bool:
@@ -2402,6 +2496,9 @@ class UltraViewCoordinator(QObject):
         self._idle_timer.stop()
         self._idle_pending.clear()
         self._digest_retries.clear()
+        self._sidecar_timer.stop()
+        self._sidecar_pending.clear()
+        self._sidecar_generation += 1
         for timer in list(self._queued.values()):
             timer.stop()
             timer.deleteLater()

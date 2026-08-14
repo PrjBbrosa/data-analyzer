@@ -13,6 +13,7 @@ from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
+    QLineEdit,
     QMenu,
     QShortcut,
     QStackedWidget,
@@ -35,6 +36,7 @@ from mf4_analyzer.ui.ultraview_state import (
     free_grid_placement_for,
     layout_slots,
     LAYOUT_MODE_FREE_GRID,
+    MAX_UI_BOARDS,
     membership_set,
     parse_ref_payload,
     placement_for,
@@ -119,6 +121,8 @@ class UltraViewPage(QWidget):
         self._replacement_ref: UltraViewRef | None = None
         self._compare_filter = COMPARE_FILTER_ALL
         self._drag_kind: str | None = None
+        self._pending_library_rows: list[LibraryRow] | None = None
+        self._board_widgets_dirty = False
         self._presentation = False
         self._library_visible = True
         self._prev_unplaced_count: int | None = None
@@ -300,7 +304,10 @@ class UltraViewPage(QWidget):
         active_id = str(getattr(workspace, "active_board_id", "") or "")
         self._workspace = workspace
         self._switcher.set_boards(boards, active_id)
-        self._switcher.set_create_enabled(len(boards) < 20, "最多创建 20 个 Board" if len(boards) >= 20 else "")
+        self._switcher.set_create_enabled(
+            len(boards) < MAX_UI_BOARDS,
+            "最多创建 20 个 Board" if len(boards) >= MAX_UI_BOARDS else "",
+        )
         active = next((board for board in boards if getattr(board, "board_id", None) == active_id), None)
         if active is None and boards:
             active = boards[0]
@@ -378,7 +385,13 @@ class UltraViewPage(QWidget):
 
     def set_library_rows(self, rows: Sequence[LibraryRow | Mapping[str, Any]]) -> None:
         coerced = [coerce_library_row(row) for row in rows]
-        self._library.set_rows(coerced)
+        if self._drag_kind is not None:
+            self._pending_library_rows = coerced
+            return
+        self._apply_library_rows(coerced)
+
+    def _apply_library_rows(self, rows: Sequence[LibraryRow]) -> None:
+        self._library.set_rows(rows)
         self._library.set_on_board(membership_set(self._board))
 
     def set_preview(self, ref: UltraViewRef | Mapping[str, Any], record_like: Any) -> None:
@@ -451,7 +464,12 @@ class UltraViewPage(QWidget):
         self._refresh_projection()
 
     def set_board(self, board: UltraViewBoardState) -> None:
-        self.hide_overview()
+        keep_overview = (
+            self._overview.isVisible()
+            and self._board.board_id == board.board_id
+        )
+        if not keep_overview:
+            self.hide_overview()
         if self._workspace is None:
             self._switcher.set_boards((board,), board.board_id)
         self._grid.set_viewport_size(self._board_scroll.viewport().size())
@@ -471,6 +489,12 @@ class UltraViewPage(QWidget):
         self._toolbar.set_layout_id(board.layout_id)
         self._toolbar.set_free_grid_enabled(board.layout_mode == LAYOUT_MODE_FREE_GRID)
         self._toolbar.set_show_flags(board.show_titles, board.show_sources)
+        if self._drag_kind is not None:
+            # Drop handlers mutate the board inside QDrag.exec_(). Rebuilding
+            # library/grid/tray here would deleteLater the drag source before
+            # mouseMoveEvent returns, which aborts via qFatal.
+            self._board_widgets_dirty = True
+            return
         self._library.set_on_board(membership_set(board))
         self._refresh_projection()
 
@@ -541,12 +565,19 @@ class UltraViewPage(QWidget):
         self.handle_escape()
 
     def _on_grid_undo_shortcut(self) -> None:
+        if self._text_field_has_focus():
+            return
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID and not self._focus.isVisible():
             self.free_grid_undo_requested.emit()
 
     def _on_grid_redo_shortcut(self) -> None:
+        if self._text_field_has_focus():
+            return
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID and not self._focus.isVisible():
             self.free_grid_redo_requested.emit()
+
+    def _text_field_has_focus(self) -> bool:
+        return isinstance(QApplication.focusWidget(), QLineEdit)
 
     def handle_escape(self) -> bool:
         if self._focus.isVisible():
@@ -580,6 +611,19 @@ class UltraViewPage(QWidget):
 
     def _on_drag_finished(self) -> None:
         self._drag_kind = None
+        self._flush_deferred_drag_refresh()
+
+    def _flush_deferred_drag_refresh(self) -> None:
+        pending = self._pending_library_rows
+        self._pending_library_rows = None
+        dirty = self._board_widgets_dirty
+        self._board_widgets_dirty = False
+        if pending is not None:
+            self._apply_library_rows(pending)
+        elif dirty:
+            self._library.set_on_board(membership_set(self._board))
+        if dirty:
+            self._refresh_projection()
 
     def _emit_feedback(self, message: str) -> None:
         self.feedback_requested.emit(message)
@@ -802,7 +846,18 @@ class UltraViewPage(QWidget):
         kind = getattr(record, "axis_kind", None)
         return str(kind) if kind else None
 
+    def _sync_overview(self) -> None:
+        records = {}
+        statuses = {}
+        for ref in membership_set(self._board):
+            records[ref] = self._previews.get(ref)
+            statuses[ref] = self._status_for(ref)
+        self._overview.set_projection(self._board, records, statuses)
+
     def _refresh_projection(self) -> None:
+        if self._drag_kind is not None:
+            self._board_widgets_dirty = True
+            return
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
             self._refresh_free_grid_projection()
             return
@@ -853,7 +908,7 @@ class UltraViewPage(QWidget):
             )
         self._grid.set_grid(self._board.layout_id, self._board.primary_ratio, models)
         self._sync_board_stack_geometry(self._grid)
-        self._overview.set_board(self._board.layout_id, self._board.primary_ratio, models)
+        self._sync_overview()
         titles = {}
         colors = {}
         statuses = {}
@@ -939,8 +994,7 @@ class UltraViewPage(QWidget):
         if facts.range_inconsistent_kinds:
             warnings.append("X 范围不一致")
         self._rail.set_axis_warning(" · ".join(warnings))
-        self._overview.hide()
-        self._overview.set_free_grid(self._board.free_grid, models)
+        self._sync_overview()
         self._minimap.show()
         self._refresh_minimap()
         self._focus.setGeometry(self.rect())

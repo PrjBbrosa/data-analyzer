@@ -25,9 +25,12 @@ from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     UltraViewCard,
     UnplacedTray,
     extract_ref_strings,
+    make_layout_mime,
     make_ref_mime,
 )
 from mf4_analyzer.ui.ultraview_state import (
+    GRID_COLUMNS,
+    MAX_GRID_ROWS,
     LAYOUT_SLOTS,
     SOURCE_SECTIONS,
     STATUS_MISSING,
@@ -1316,3 +1319,132 @@ def test_board_switcher_projects_ids_and_emits_typed_intents(qtbot):
     assert reordered == [("two", 0)]
     qtbot.mouseClick(switcher.add_button(), Qt.LeftButton)
     assert created == [True]
+
+
+def test_library_rebuild_is_deferred_until_drag_finishes(qtbot):
+    """Drop refresh must not deleteLater the library row still inside QDrag.exec_."""
+    harness = _Harness(qtbot)
+    source = harness.page.library_panel().row_widgets()[0]
+    assert not sip.isdeleted(source)
+    harness.page._on_drag_started("library")
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_library_rows(_rows())
+    harness.page.set_board(harness.board)
+    assert not sip.isdeleted(source)
+    assert source is harness.page.library_panel().row_widgets()[0]
+    harness.page._on_drag_finished()
+    qtbot.wait(20)
+    rebuilt = harness.page.library_panel().row_widgets()
+    assert source not in rebuilt
+    assert sip.isdeleted(source)
+
+
+def test_card_rebuild_is_deferred_until_drag_finishes(qtbot):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("time", "time-1")
+    assert card is not None
+    harness.page._on_drag_started("card")
+    move_to_unplaced(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    assert not sip.isdeleted(card)
+    assert harness.page.card_widget("time", "time-1") is card
+    harness.page._on_drag_finished()
+    qtbot.wait(20)
+    assert harness.page.card_widget("time", "time-1") is None
+    assert sip.isdeleted(card)
+
+
+def test_free_grid_drop_clamps_span_inside_board(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "grid_2x2")
+    add_ref(harness.board, make_ref("time", "time-1"))
+    template_to_free_grid(harness.board)
+    harness.page.set_board(harness.board)
+    free = harness.page._free_grid
+    requested = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    span = harness.board.free_grid[0].rect
+    column, row = free._grid_at(
+        QPoint(max(0, free.width() - 2), 20),
+        column_span=span.column_span,
+        row_span=span.row_span,
+    )
+    assert column + span.column_span <= GRID_COLUMNS
+    assert row + span.row_span <= MAX_GRID_ROWS
+    mime = make_layout_mime("time", "time-1", action="move")
+    free.dropEvent(_drop(mime, QPoint(max(0, free.width() - 2), 20)))
+    assert requested
+    _section, _view_id, col, _row, cspan, rspan, reason = requested[0]
+    assert col + cspan <= GRID_COLUMNS
+    assert _row + rspan <= MAX_GRID_ROWS
+    assert reason == "drag-move"
+
+
+def test_hidden_overview_defers_compose_until_shown(qtbot):
+    harness = _Harness(qtbot)
+    overview = harness.page.board_overview()
+    assert not overview.isVisible()
+    assert overview._image.isNull()
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    assert overview._image.isNull()
+    harness.page.show_overview()
+    assert overview.isVisible()
+    assert not overview._image.isNull()
+
+
+def test_clearing_preview_pixels_drops_card_raw_image(qtbot):
+    harness = _Harness(qtbot)
+    ref = make_ref("time", "time-1")
+    add_ref(harness.board, ref)
+    harness.page.set_board(harness.board)
+    harness.page.set_preview(ref, FakePreview(ref, image=_image()))
+    card = harness.page.card_widget("time", "time-1")
+    assert card is not None
+    assert card._raw_image is not None
+    harness.page.set_preview(ref, FakePreview(ref, image=None))
+    assert card._raw_image is None
+
+
+def test_free_grid_alt_arrow_uses_real_key_event(qtbot):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "key-0"))
+    template_to_free_grid(harness.board)
+    harness.page.set_board(harness.board)
+    card = harness.page.card_widget("time", "key-0")
+    assert card is not None
+    card.setFocus(Qt.OtherFocusReason)
+    requested = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    qtbot.keyClick(card, Qt.Key_Right, Qt.AltModifier)
+    assert requested
+    assert requested[0][0] == "time"
+    assert requested[0][1] == "key-0"
+    assert requested[0][6] == "keyboard-move"
+
+
+def test_overview_reuses_compositor_image_when_shown(qtbot):
+    from mf4_analyzer.ui.chart_stack.ultraview.compositor import compose_board
+
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    harness.page.show_overview()
+    overview = harness.page.board_overview()
+    expected = compose_board(harness.board, {}, {}, scale=1, title=False)
+    assert (overview._image.width(), overview._image.height()) == (
+        expected.width(),
+        expected.height(),
+    )
+
+
+def test_same_board_refresh_keeps_overview_visible(qtbot):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    harness.page.show_overview()
+    assert harness.page.board_overview().isVisible()
+    harness.page.set_board(harness.board)
+    assert harness.page.board_overview().isVisible()

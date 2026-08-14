@@ -32,6 +32,23 @@ P2-A 的自由网格可以安全交付，因为它只操作 `UltraViewRef`、整
 - 需要 pan/zoom/cursor 或修改参数时，用户点击“打开原 View”。
 - P2-A 自由网格、布局、导出、minimap、保存/恢复不以 inspection 为依赖。
 
+## P2-A Remainder 欠账（本轮不实施，记录在案）
+
+下列 P2-A 项未做，也不是 P2-B 的 blocker。产品继续用现有入口，不假装已交付：
+
+1. **A04 ghost / resize handle**：没有 drag pixmap、overlay、角点 handle；resize 只有 Alt+Shift 拖与键盘。
+2. **A05 同尺寸 swap**：碰撞即拒绝并 toast，不会把两张同尺寸卡对调。
+3. **A15 分页 PNG**：导出有 `MAX_EXPORT_EDGE` / `MAX_EXPORT_PIXELS` 前置拒绝；不做分页 PNG。
+4. **A17 24 图 benchmark**：无 Cocoa 真机 JSON；offscreen 不代替。
+5. **A16 零计算探针扩展**：Board 增删改排已纳入 job isolation；更长 50 次 lifecycle 未加。
+6. **A18 帮助页**：`ultraview-guide.html` 已补 Board / 自由网格 / 12 列 / 24 卡；不写 sidecar 实现细节。
+
+## §11 兼容轴 guide 裁剪
+
+P2 spec §11 的 inspection 兼容轴 guide（`plot_content_rect_norm` / `x_transform`）
+随 P2-B 一并 NO-GO。sidecar `SIDECAR_FORMAT` 仍为 1，不写入这些字段。
+当前没有 live inspection，因此没有 guide 可禁用。
+
 ## 后续重新开启 P2-B 的前置条件
 
 1. 新增 Qt-free / immutable `InspectionDocument`，必须由稳定 `(section, view_id)` 取得；

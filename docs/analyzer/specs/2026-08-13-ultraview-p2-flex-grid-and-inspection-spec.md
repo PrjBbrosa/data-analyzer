@@ -117,6 +117,8 @@ class FreeGridPlacement:
 - `GRID_COLUMNS = 12`；
 - `MAX_PLACED_CARDS = 24`；
 - `MAX_GRID_ROWS = 48`，防止恶意/损坏项目创建无限 QWidget/图片；
+- `MAX_BOARD_MEMBERSHIP = 200`：placed+tray 合计硬上限，敌意 payload 截断并 warning；
+- `MAX_UI_BOARDS = 20`：UI 新建/复制上限；loader 超过 20 全部保留并 `ui_board_limit` warning；
 - 最小 span `2×2`；
 - 单卡最大 `12×8`；
 - rect 必须在 12 列和 48 行内且互不重叠；
@@ -124,8 +126,11 @@ class FreeGridPlacement:
   不能静默删除；
 - row 是逻辑身份的一部分，但 `compact` 动作允许确定性改变 row；正常打开项目不自动 compact。
 
-`2×2` 等数字是网格单位，不是像素。实现时通过列宽/行高合同保证实际卡片仍满足最小
-可读尺寸；若窄屏不足则出现滚动，不把网格单元缩到不可读。
+`2×2` 等数字是网格单位，不是像素。像素合同（`GridMetrics`）冻结为：
+`GRID_MIN_COLUMN_WIDTH = 96`、`GRID_ROW_HEIGHT = 88`、屏幕空板
+`GRID_MIN_VISIBLE_ROWS = 6`。导出用 `export_grid_metrics`（`min_visible_rows=1`，
+高度不垫到 900）。列宽 `max(96, usable_width // 12)`；viewport 不足则横向滚动，
+不把网格单元缩到不可读。
 
 ### 4.3 尺寸预设
 
@@ -244,9 +249,11 @@ P2 默认 **不自动推挤其他卡片**。候选 rect 与其他卡重叠时：
 
 ### 8.1 像素映射
 
-Board 宽度由 12 列和viewport决定，但列宽不能低于通过真实卡片chrome验证的最小值；
-不足时横向滚动。行高使用固定logical target，与column width不强制相同，使宽图/热图
-可组合。纯函数从 `GridRect + GridMetrics` 生成 pixel rect，screen/compositor/hit-test共享。
+Board 宽度由 12 列和 viewport 决定，但列宽不能低于 `GRID_MIN_COLUMN_WIDTH = 96`；
+不足时横向滚动。行高固定 `GRID_ROW_HEIGHT = 88`，与 column width 不强制相同，使宽图/热图
+可组合。纯函数 `grid_metrics` + `rect_to_pixels` 从 `GridRect + GridMetrics` 生成 pixel
+rect，screen / compositor / hit-test / 整板概览共享。导出走 `export_grid_metrics`
+（裁掉 viewport 尾白），屏幕仍按 viewport 与 6 行可读地板。
 
 ### 8.2 画布增长
 

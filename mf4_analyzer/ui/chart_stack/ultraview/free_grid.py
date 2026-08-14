@@ -20,7 +20,7 @@ from mf4_analyzer.ui.ultraview_state import (
     UltraViewRef,
 )
 
-from .layouts import BOARD_PADDING, SLOT_GUTTER
+from .layouts import BASE_BOARD_SIZE, BOARD_PADDING, SLOT_GUTTER
 
 # These are deliberately smaller than P1's reading-card floor.  A 2-column
 # free-grid card is an allowed thumbnail role; the Board scrolls rather than
@@ -59,11 +59,24 @@ class GridGeometryCommand:
 
 
 def grid_metrics(
-    viewport_size: tuple[int, int], placements: Sequence[FreeGridPlacement]
+    viewport_size: tuple[int, int],
+    placements: Sequence[FreeGridPlacement],
+    *,
+    min_visible_rows: int | None = None,
 ) -> GridMetrics:
-    """Return stable, screen-size-independent metrics for the visible Board."""
+    """Return stable, screen-size-independent metrics for the visible Board.
+
+    Screen callers omit ``min_visible_rows`` so an empty Board still has a
+    readable canvas.  Export passes ``min_visible_rows=1`` and a non-positive
+    viewport height so trailing empty rows are not padded up to 900px.
+    """
     viewport_w = max(1, int(viewport_size[0]))
-    viewport_h = max(1, int(viewport_size[1]))
+    raw_h = int(viewport_size[1])
+    floor_rows = (
+        GRID_MIN_VISIBLE_ROWS
+        if min_visible_rows is None
+        else max(1, int(min_visible_rows))
+    )
     minimum_width = (
         2 * BOARD_PADDING
         + GRID_COLUMNS * GRID_MIN_COLUMN_WIDTH
@@ -76,19 +89,27 @@ def grid_metrics(
     # canvas, but its height only grows from actual, persistent row identity.
     occupied_rows = max(
         (item.rect.row + item.rect.row_span for item in placements),
-        default=GRID_MIN_VISIBLE_ROWS,
+        default=floor_rows,
     )
-    occupied_rows = min(MAX_GRID_ROWS, max(GRID_MIN_VISIBLE_ROWS, occupied_rows))
+    occupied_rows = min(MAX_GRID_ROWS, max(floor_rows, occupied_rows))
     minimum_height = (
         2 * BOARD_PADDING
         + occupied_rows * GRID_ROW_HEIGHT
-        + (occupied_rows - 1) * SLOT_GUTTER
+        + max(0, occupied_rows - 1) * SLOT_GUTTER
     )
+    board_height = minimum_height if raw_h <= 0 else max(raw_h, minimum_height)
     return GridMetrics(
         board_width=board_width,
-        board_height=max(viewport_h, minimum_height),
+        board_height=board_height,
         column_width=column_width,
         row_height=GRID_ROW_HEIGHT,
+    )
+
+
+def export_grid_metrics(placements: Sequence[FreeGridPlacement]) -> GridMetrics:
+    """Canonical free-grid export metrics: 1600-wide, cropped to occupied rows."""
+    return grid_metrics(
+        (BASE_BOARD_SIZE[0], 0), placements, min_visible_rows=1
     )
 
 

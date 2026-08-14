@@ -38,7 +38,7 @@
       <div class="step-head reveal d2"><span class="big">2 / 4 / 6</span><h2>布局、托盘、拖放</h2></div>
       <div class="step-grid">
         <div class="instr">
-          <div class="blk reveal d3"><span class="k">布局</span><p>左右/上下双图、2×2、左主图+3 辅图、上主图+3 辅图、3×2 六宫格。主图比例只作用于主图布局。</p></div>
+          <div class="blk reveal d3"><span class="k">布局</span><p>左右/上下双图、2×2、左主图+3 辅图、上主图+3 辅图、3×2 六宫格、3×3 九宫格、4×3 十二宫格。主图比例只作用于主图布局。九/十二图窗口不够时滚动，不把卡片压到不可读。</p></div>
           <div class="blk reveal d4"><span class="k">托盘</span><p>槽位满了再加入，多出来的卡片进<b>底部托盘</b>。托盘里的卡片仍属于这块板，可再放回空槽。</p></div>
           <div class="blk reveal d5"><span class="k">拖放</span><p>拖到空槽添加，拖到已有卡片替换，卡片之间对调。库里点加号与拖放是同一条加入意图。</p></div>
         </div>
@@ -94,7 +94,28 @@
       <div class="paths">
         <div class="path reveal d3"><div class="tagA">不计算</div><div class="ptxt">加入、筛选、演示、复制、导出、保存都不会调用分析入口。要新图，回到源 View 改完再捕获。</div></div>
         <div class="path reveal d4"><div class="tagA g">不猜测</div><div class="ptxt">身份是「分区 + 稳定 View id」。重名标签、缩短显示名、当前下标都不能当钥匙。</div></div>
-        <div class="path reveal d5"><div class="tagA">不发明</div><div class="ptxt">没有现成预览就显示「缺」。关闭全部文件时，若板是从项目恢复来的，不会被空会话误清掉。</div></div>
+        <div class="path reveal d3"><div class="tagA">不发明</div><div class="ptxt">没有现成预览就显示「缺」。关闭全部文件时，若板是从项目恢复来的，不会被空会话误清掉。</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="frame">
+      <div class="topbar reveal d1"><span class="eyebrow">06 · <b>Board 与自由网格</b></span><span class="turbo-rule"></span></div>
+      <div class="step-head reveal d2"><span class="big">多板 · 12 列</span><h2>一块对照墙，可以按问题拆成多张 Board</h2></div>
+      <div class="step-grid">
+        <div class="instr">
+          <div class="blk reveal d3"><span class="k">Board</span><p>顶栏 <b>+</b> 新建空板，右键复制 / 重命名 / 删除。最多创建 <b>20</b> 个 Board；从项目读回时超过 20 只警告，不会丢板。</p></div>
+          <div class="blk reveal d4"><span class="k">自由网格</span><p>12 列、最多 24 张卡。Option 拖动位置，<b>Option+Shift</b> 缩放；卡片右键选尺寸预设。碰撞会提示，不会悄悄失败。整理布局压缩空行；<b>Ctrl+Z</b> 撤销网格改动（编辑板名或搜索时仍走文本撤销）。</p></div>
+          <div class="blk reveal d5"><span class="k">定位</span><p>右下角缩略图（minimap）只滚动对照板。工具栏「概览」看整板，点一张卡回到阅读位置。都不改源 View、不重新计算。</p></div>
+        </div>
+        <div class="mock reveal d3">
+          <div class="cap"><span>容量</span><em>硬上限</em></div>
+          <div class="row"><span>Board</span><b>UI 20 张</b></div>
+          <div class="row"><span>放置</span><b>24 张 / 12 列</b></div>
+          <div class="row"><span>模板</span><b>2 / 4 / 6 / 9 / 12</b></div>
+          <p class="note">托盘仍收放不下的卡。恶意超大清单会截断并留下 warning，不把界面拖死。</p>
+        </div>
       </div>
     </div>
   </section>

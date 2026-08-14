@@ -1,5 +1,6 @@
 """ChartStack — the centre-pane QWidget coordinator."""
 import logging
+from functools import partial
 
 from PyQt5.QtCore import QEvent, QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QPainter, QPixmap
@@ -342,7 +343,7 @@ class ChartStack(QWidget):
             )
         if canvas is not None and hasattr(canvas, 'frequency_cursor_rows'):
             canvas.frequency_cursor_rows.connect(
-                lambda rows, c=canvas: self._on_frequency_cursor_rows(rows, c)
+                partial(self._on_frequency_cursor_rows, source=canvas)
             )
 
     def _all_cards(self):

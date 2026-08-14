@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QMessageBox
 
 from mf4_analyzer.ui.main_window import MainWindow
 from mf4_analyzer.ui.ultraview_state import (
+    LAYOUT_MODE_FREE_GRID,
     UltraViewRef,
     add_ref,
     membership_set,
@@ -158,6 +159,33 @@ def test_project_sidecar_restores_shared_preview_without_compute(qapp, qtbot, tm
         probe.restore()
 
 
+def test_sidecar_lazy_load_decodes_after_restore_returns(qapp, qtbot, tmp_path):
+    csv_a = tmp_path / "lazy.csv"
+    proj = tmp_path / "lazy.tlproj"
+    _write_csv(csv_a)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    uv = win._ultraview
+    ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    add_ref(uv.board, ref)
+    from mf4_analyzer.ui.ultraview_state import PreviewMeta
+    assert uv.store.publish(
+        ref, _preview_image(), digest="snapshot", meta=PreviewMeta(ref=ref)
+    )
+    assert win.save_project(proj)
+    payload = json.loads(proj.read_text(encoding="utf-8"))["ultraview"]
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored_uv = restored._ultraview
+    restored_uv.restore_project_state(payload, project_path=str(proj))
+    restored_uv._sidecar_timer.stop()
+    assert restored_uv.store.get(ref) is None
+    assert restored_uv._sidecar_pending
+    restored_uv._on_sidecar_load_timeout()
+    assert restored_uv.store.get(ref) is not None
+
+
 def test_failed_sidecar_save_as_drops_old_project_relative_descriptor(qapp, qtbot, tmp_path, monkeypatch):
     csv_a = tmp_path / "sidecar-save-as.csv"
     source_project = tmp_path / "source.tlproj"
@@ -267,3 +295,44 @@ def test_open_project_keeps_page_hooks_and_toasts_ultraview_warnings(
     assert UltraViewRef("time", view_id) in membership_set(uv.board)
     page.layout_changed.emit("grid_2x2")
     assert uv.board.layout_id == "grid_2x2"
+
+
+def test_free_grid_project_roundtrip_keeps_layout_id_and_placements(qapp, qtbot, tmp_path):
+    csv_a = tmp_path / "grid.csv"
+    _write_csv(csv_a)
+    proj = tmp_path / "grid.tlproj"
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(str(csv_a))
+    time_id = str(win.view_manager.get(0).view_id)
+    fft_id = str(win.analysis_managers["fft"].get(0).view_id)
+    uv = win._ultraview
+    win.open_ultraview()
+    QCoreApplication.processEvents()
+    uv.add_from_source_tab("time", time_id)
+    uv.add_from_source_tab("fft", fft_id)
+    uv._on_layout("grid_3x3")
+    uv._on_free_grid_toggled(True)
+    assert uv.board.layout_mode == LAYOUT_MODE_FREE_GRID
+    assert uv.board.layout_id == "grid_3x3"
+    assert len(uv.board.free_grid) == 2
+    assert win.save_project(proj)
+
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    saved = raw["ultraview"]["workspace"]["boards"][0]
+    assert saved["layout_id"] == "grid_3x3"
+    assert saved["layout_mode"] == LAYOUT_MODE_FREE_GRID
+    assert "primary_ratio" in saved
+    assert len(saved["free_grid"]["placements"]) == 2
+
+    restored = MainWindow()
+    qtbot.addWidget(restored)
+    restored.open_project(proj)
+    QCoreApplication.processEvents()
+    board = restored._ultraview.board
+    assert board.layout_id == "grid_3x3"
+    assert board.layout_mode == LAYOUT_MODE_FREE_GRID
+    assert len(board.free_grid) == 2
+    restored._ultraview._on_free_grid_toggled(False)
+    assert restored._ultraview.board.layout_id == "grid_3x3"
+    assert len(restored._ultraview.board.placements) == 2

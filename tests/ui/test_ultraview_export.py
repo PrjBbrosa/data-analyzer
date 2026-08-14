@@ -133,6 +133,47 @@ def test_free_grid_export_uses_full_logical_board_not_current_viewport(qapp):
     assert (compose_board(board, {}, {}, scale=2).width(), compose_board(board, {}, {}, scale=2).height()) == free_grid_output_size(board, 2)
 
 
+def test_output_size_is_template_aware_and_keeps_small_layout_baseline(qapp):
+    from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
+        BASE_BOARD_SIZE,
+        logical_board_size,
+    )
+
+    assert output_size(1) == (1600, 900)
+    assert output_size(1, "hero_left_4") == (1600, 900)
+    assert output_size(1, "grid_2x2") == (1600, 900)
+    assert output_size(1, "grid_4x3") == logical_board_size("grid_4x3", BASE_BOARD_SIZE)
+    assert output_size(2, "grid_3x3") == tuple(
+        2 * value for value in logical_board_size("grid_3x3", BASE_BOARD_SIZE)
+    )
+    board = default_board()
+    board.layout_id = "grid_4x3"
+    image = compose_board(board, {}, {}, scale=1)
+    assert (image.width(), image.height()) == output_size(1, "grid_4x3")
+
+
+def test_free_grid_short_board_export_crops_trailing_whitespace(qapp):
+    board = default_board()
+    add_ref(board, make_ref("time", "short"))
+    template_to_free_grid(board)
+    image = compose_board(board, {}, {}, scale=1)
+    assert image.height() < 900
+    untitled = compose_board(board, {}, {}, scale=1, title=False)
+    assert untitled.height() < image.height()
+
+
+def test_pathological_free_grid_2x_export_is_rejected(qapp):
+    board = default_board()
+    add_ref(board, make_ref("time", "deep"))
+    template_to_free_grid(board)
+    assert set_free_grid_rect(board, make_ref("time", "deep"), GridRect(0, 40, 4, 8)) == []
+    try:
+        compose_board(board, {}, {}, scale=2)
+        raise AssertionError("2× 48-row export should be rejected")
+    except ComposeError as exc:
+        assert exc.code == "export_too_large"
+
+
 def test_save_png_atomic_replace_and_failure_leaves_no_empty_file(qapp, tmp_path, monkeypatch):
     board = default_board()
     image = compose_board(board, {}, {}, scale=1)
@@ -258,3 +299,44 @@ def test_free_grid_undo_redo_is_per_board_and_reset_drops_history(qapp, qtbot):
     board_id = uv.board.board_id
     uv.reset_project_state()
     assert board_id not in uv._grid_histories
+
+
+def test_free_grid_preset_collision_toasts_and_skips_history(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    toasts = []
+    monkeypatch.setattr(win, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    time_ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    fft_ref = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
+    add_ref(uv.board, time_ref)
+    add_ref(uv.board, fft_ref)
+    uv._on_free_grid_toggled(True)
+    first = uv.board.free_grid[0]
+    before = first.rect
+    uv._on_free_grid_preset(first.ref.section, first.ref.view_id, "banner")
+    assert uv.board.free_grid[0].rect == before
+    assert ("目标位置与其他卡片重叠", "warning") in toasts
+    history = uv._grid_histories.get(uv.board.board_id)
+    assert history is None or history.undo == []
+
+
+def test_free_grid_undo_clears_history_when_membership_changes(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    toasts = []
+    monkeypatch.setattr(win, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    time_ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    fft_ref = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
+    add_ref(uv.board, time_ref)
+    uv._on_free_grid_toggled(True)
+    uv._on_free_grid_geometry(time_ref.section, time_ref.view_id, 0, 6, 4, 3, "test")
+    history = uv._grid_histories[uv.board.board_id]
+    assert history.undo
+    add_ref(uv.board, fft_ref)
+    uv._after_board_mutation()
+    uv._on_free_grid_undo()
+    assert history.undo == []
+    assert history.redo == []
+    assert any("撤销记录已清除" in msg for msg, _ in toasts)

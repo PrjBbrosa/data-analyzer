@@ -73,6 +73,26 @@ class SidecarLoadResult:
     warnings: tuple[SidecarWarning, ...] = ()
 
 
+@dataclass(frozen=True)
+class SidecarImagePayload:
+    """Validated PNG bytes for one membership ref; decode happens later."""
+
+    ref: UltraViewRef
+    image_bytes: bytes
+    captured_digest: str | None
+    meta: PreviewMeta
+    width: int
+    height: int
+
+
+@dataclass(frozen=True)
+class SidecarOpenResult:
+    ok: bool
+    images: tuple[SidecarImagePayload, ...]
+    rejected_refs: tuple[UltraViewRef, ...]
+    warnings: tuple[SidecarWarning, ...] = ()
+
+
 class _SidecarRejected(ValueError):
     def __init__(self, code: str, detail: str = "") -> None:
         super().__init__(detail)
@@ -89,6 +109,28 @@ def canonical_ref_hash(ref: UltraViewRef) -> str:
 def sidecar_directory(project_path: str | Path) -> Path:
     """Return the only allowed sibling directory for a project sidecar."""
     return Path(f"{Path(project_path)}{SIDECAR_DIRECTORY_SUFFIX}")
+
+
+def _unlink_stale_sidecar_archives(sidecar_dir: Path, keep: Path | None) -> None:
+    """Drop previous ``.uvpz`` generations after a successful replace.
+
+    Temp files, symlinks, and the just-written archive stay put.  Unlink
+    failures are ignored so a leftover orphan cannot fail the save.
+    """
+    keep_name = keep.name if keep is not None else None
+    try:
+        children = list(sidecar_dir.iterdir())
+    except OSError:
+        return
+    for path in children:
+        if path.name == keep_name or path.suffix != SIDECAR_SUFFIX:
+            continue
+        if path.name.startswith(".") or path.is_symlink() or not path.is_file():
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
 
 
 def _canonical_json_bytes(payload: Mapping[str, Any]) -> bytes:
@@ -300,6 +342,15 @@ def save_preview_sidecar(
         saved_refs.append(ref)
 
     sidecar_dir = sidecar_directory(project)
+    if not entries:
+        if sidecar_dir.is_dir() and not sidecar_dir.is_symlink():
+            _unlink_stale_sidecar_archives(sidecar_dir, keep=None)
+            try:
+                sidecar_dir.rmdir()
+            except OSError:
+                pass
+        return SidecarSaveResult(ok=True, descriptor=None, saved_refs=())
+
     destination = sidecar_dir / f"{generation}{SIDECAR_SUFFIX}"
     temp_path: Path | None = None
     try:
@@ -342,6 +393,7 @@ def save_preview_sidecar(
             raise OSError("archive exceeds sidecar limit")
         os.replace(temp_path, destination)
         temp_path = None
+        _unlink_stale_sidecar_archives(sidecar_dir, keep=destination)
         return SidecarSaveResult(
             ok=True,
             descriptor=descriptor,
@@ -558,14 +610,27 @@ def _parse_manifest(
     return tuple(result)
 
 
-def _decode_png(image_bytes: bytes, entry: _ManifestEntry) -> QImage:
+def _png_reader(image_bytes: bytes) -> tuple[QBuffer, QImageReader]:
     buffer = QBuffer()
     buffer.setData(image_bytes)
     if not buffer.open(QIODevice.ReadOnly):
         raise _SidecarRejected("image_decode_failed")
-    reader = QImageReader(buffer, b"png")
+    return buffer, QImageReader(buffer, b"png")
+
+
+def _validate_png_size(image_bytes: bytes, *, width: int, height: int) -> None:
+    _buffer, reader = _png_reader(image_bytes)
     size = reader.size()
-    if not size.isValid() or size.width() != entry.width or size.height() != entry.height:
+    if not size.isValid() or size.width() != width or size.height() != height:
+        raise _SidecarRejected("image_dimensions_mismatch")
+    if not _valid_dimensions(size.width(), size.height()):
+        raise _SidecarRejected("image_dimensions_invalid")
+
+
+def _decode_png(image_bytes: bytes, *, width: int, height: int) -> QImage:
+    buffer, reader = _png_reader(image_bytes)
+    size = reader.size()
+    if not size.isValid() or size.width() != width or size.height() != height:
         raise _SidecarRejected("image_dimensions_mismatch")
     if not _valid_dimensions(size.width(), size.height()):
         raise _SidecarRejected("image_dimensions_invalid")
@@ -575,28 +640,34 @@ def _decode_png(image_bytes: bytes, entry: _ManifestEntry) -> QImage:
     return image
 
 
-def restore_preview_sidecar(
+def publish_sidecar_image(store: PreviewStore, payload: SidecarImagePayload) -> None:
+    """Decode one validated PNG onto the GUI thread and publish it."""
+    image = _decode_png(payload.image_bytes, width=payload.width, height=payload.height)
+    if not store.publish(
+        payload.ref,
+        image,
+        digest=payload.captured_digest,
+        meta=payload.meta,
+    ):
+        raise _SidecarRejected("image_publish_rejected")
+
+
+def open_preview_sidecar(
     project_path: str | Path,
     workspace_payload: Mapping[str, Any] | None,
-    store: PreviewStore,
     descriptor: Mapping[str, Any] | None,
-) -> SidecarLoadResult:
-    """Validate and restore sidecar images belonging to the current workspace.
-
-    A malformed archive/descriptor returns ``ok=False`` with a warning and
-    leaves the store untouched.  A bad PNG is isolated to its one ref while
-    valid sibling entries continue to restore.
-    """
+) -> SidecarOpenResult:
+    """Validate the archive and collect PNG bytes without decoding QImages."""
     _require_gui_thread()
     project = Path(project_path)
     archive_path, _generation, descriptor_warning = _archive_path_from_descriptor(
         project, descriptor
     )
     if descriptor_warning is not None:
-        return SidecarLoadResult(False, (), (), (descriptor_warning,))
+        return SidecarOpenResult(False, (), (), (descriptor_warning,))
     assert archive_path is not None
     if archive_path.parent.is_symlink() or archive_path.is_symlink() or not archive_path.is_file():
-        return SidecarLoadResult(
+        return SidecarOpenResult(
             False,
             (),
             (),
@@ -617,7 +688,7 @@ def restore_preview_sidecar(
                 members=members,
             )
             wanted = set(workspace_membership(workspace_payload))
-            loaded: list[UltraViewRef] = []
+            images: list[SidecarImagePayload] = []
             rejected: list[UltraViewRef] = []
             warnings: list[SidecarWarning] = []
             for entry in entries:
@@ -629,14 +700,17 @@ def restore_preview_sidecar(
                         raise _SidecarRejected("image_hash_mismatch")
                     if len(image_bytes) != entry.byte_count:
                         raise _SidecarRejected("image_bytes_mismatch")
-                    image = _decode_png(image_bytes, entry)
-                    if not store.publish(
-                        entry.ref,
-                        image,
-                        digest=entry.captured_digest,
-                        meta=entry.meta,
-                    ):
-                        raise _SidecarRejected("image_publish_rejected")
+                    _validate_png_size(image_bytes, width=entry.width, height=entry.height)
+                    images.append(
+                        SidecarImagePayload(
+                            ref=entry.ref,
+                            image_bytes=image_bytes,
+                            captured_digest=entry.captured_digest,
+                            meta=entry.meta,
+                            width=entry.width,
+                            height=entry.height,
+                        )
+                    )
                 except (OSError, RuntimeError, _SidecarRejected) as exc:
                     code = exc.code if isinstance(exc, _SidecarRejected) else "image_decode_failed"
                     detail = exc.detail if isinstance(exc, _SidecarRejected) else str(exc)
@@ -645,22 +719,52 @@ def restore_preview_sidecar(
                         _warning(code, detail, ref=entry.ref, path=archive_path)
                     )
                     continue
-                loaded.append(entry.ref)
-            return SidecarLoadResult(
+            return SidecarOpenResult(
                 True,
-                tuple(loaded),
+                tuple(images),
                 tuple(rejected),
                 tuple(warnings),
             )
     except (OSError, zipfile.BadZipFile, _SidecarRejected) as exc:
         code = exc.code if isinstance(exc, _SidecarRejected) else "sidecar_invalid"
         detail = exc.detail if isinstance(exc, _SidecarRejected) else str(exc)
-        return SidecarLoadResult(
+        return SidecarOpenResult(
             False,
             (),
             (),
             (_warning(code, detail, path=archive_path),),
         )
+
+
+def restore_preview_sidecar(
+    project_path: str | Path,
+    workspace_payload: Mapping[str, Any] | None,
+    store: PreviewStore,
+    descriptor: Mapping[str, Any] | None,
+) -> SidecarLoadResult:
+    """Validate and restore sidecar images belonging to the current workspace.
+
+    A malformed archive/descriptor returns ``ok=False`` with a warning and
+    leaves the store untouched.  A bad PNG is isolated to its one ref while
+    valid sibling entries continue to restore.
+    """
+    opened = open_preview_sidecar(project_path, workspace_payload, descriptor)
+    if not opened.ok:
+        return SidecarLoadResult(False, (), opened.rejected_refs, opened.warnings)
+    loaded: list[UltraViewRef] = []
+    rejected = list(opened.rejected_refs)
+    warnings = list(opened.warnings)
+    for payload in opened.images:
+        try:
+            publish_sidecar_image(store, payload)
+        except (OSError, RuntimeError, _SidecarRejected) as exc:
+            code = exc.code if isinstance(exc, _SidecarRejected) else "image_decode_failed"
+            detail = exc.detail if isinstance(exc, _SidecarRejected) else str(exc)
+            rejected.append(payload.ref)
+            warnings.append(_warning(code, detail, ref=payload.ref))
+            continue
+        loaded.append(payload.ref)
+    return SidecarLoadResult(True, tuple(loaded), tuple(rejected), tuple(warnings))
 
 
 __all__ = [
@@ -674,10 +778,14 @@ __all__ = [
     "MAX_SIDECAR_TOTAL_BYTES",
     "SIDECAR_FORMAT",
     "SIDECAR_SUFFIX",
+    "SidecarImagePayload",
     "SidecarLoadResult",
+    "SidecarOpenResult",
     "SidecarSaveResult",
     "SidecarWarning",
     "canonical_ref_hash",
+    "open_preview_sidecar",
+    "publish_sidecar_image",
     "restore_preview_sidecar",
     "save_preview_sidecar",
     "sidecar_directory",

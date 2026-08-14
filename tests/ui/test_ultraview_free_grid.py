@@ -5,6 +5,8 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_MIN_COLUMN_WIDTH,
     candidate_move,
     candidate_resize,
+    clamp_rect,
+    export_grid_metrics,
     grid_metrics,
     organized_placements,
     pixels_to_grid_delta,
@@ -12,7 +14,13 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     rect_to_pixels,
     rects_overlap,
 )
-from mf4_analyzer.ui.ultraview_state import FreeGridPlacement, GridRect, make_ref
+from mf4_analyzer.ui.ultraview_state import (
+    GRID_COLUMNS,
+    MAX_GRID_ROWS,
+    FreeGridPlacement,
+    GridRect,
+    make_ref,
+)
 
 
 def _placement(view_id: str, rect: GridRect) -> FreeGridPlacement:
@@ -63,3 +71,20 @@ def test_organize_only_removes_fully_empty_rows_and_is_idempotent():
     organized = organized_placements(placements)
     assert [item.rect for item in organized] == [GridRect(0, 0, 4, 2), GridRect(6, 2, 3, 3)]
     assert organized_placements(organized) == organized
+
+
+def test_clamp_rect_keeps_origin_plus_span_inside_board():
+    legal = clamp_rect(GridRect(11, 47, 6, 3))
+    assert legal.column_span == 6
+    assert legal.row_span == 3
+    assert legal.column + legal.column_span <= GRID_COLUMNS
+    assert legal.row + legal.row_span <= MAX_GRID_ROWS
+
+
+def test_export_grid_metrics_crop_short_boards_and_keep_screen_floor():
+    short = [_placement("a", GridRect(0, 0, 4, 2))]
+    screen = grid_metrics((1600, 900), short)
+    export = export_grid_metrics(short)
+    assert screen.board_height == 900
+    assert export.board_height < 900
+    assert export.board_width == 1600

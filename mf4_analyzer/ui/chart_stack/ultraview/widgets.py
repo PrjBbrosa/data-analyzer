@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Mapping, Sequence
 
+from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QMimeData, QPoint, QRect, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
@@ -45,7 +46,10 @@ from PyQt5.QtWidgets import (
 from mf4_analyzer.ui.ultraview_state import (
     COMPARE_FILTER_ALL,
     COMPARE_FILTERS,
+    GRID_COLUMNS,
+    LAYOUT_MODE_FREE_GRID,
     LAYOUT_SLOTS,
+    MAX_GRID_ROWS,
     SECTION_LABELS_ZH,
     SOURCE_SECTIONS,
     STATUS_MISSING,
@@ -54,12 +58,14 @@ from mf4_analyzer.ui.ultraview_state import (
     ULTRAVIEW_REF_MIME,
     FreeGridPlacement,
     GridRect,
+    UltraViewBoardState,
     UltraViewRef,
     parse_ref_payload,
     section_search_haystack,
 )
 from mf4_analyzer.ui_kit.icons import Icons
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+from mf4_analyzer.ui_kit.widgets import SearchField
 
 from .layouts import (
     BASE_BOARD_SIZE,
@@ -75,11 +81,14 @@ from .free_grid import (
     GridMetrics,
     candidate_move,
     candidate_resize,
+    clamp_rect,
+    export_grid_metrics,
     grid_metrics,
     pixels_to_grid_delta,
     rect_is_available,
     rect_to_pixels,
 )
+from .compositor import compose_board, composed_slot_rects
 from .._helpers import ULTRAVIEW_HINT_BAR_HEIGHT
 
 LAYOUT_LABELS_ZH = {
@@ -115,6 +124,31 @@ DIMMED_OPACITY = 0.28
 LIBRARY_DEFAULT_WIDTH = 224
 TRAY_BODY_MAX_HEIGHT = 108
 ULTRAVIEW_LAYOUT_MIME = "application/x-tracelab-ultraview-layout+json"
+
+
+def _run_ultraview_drag(source: QWidget, mime: QMimeData, action, finished) -> None:
+    """Run QDrag without parenting it to a widget that drop handlers may destroy.
+
+    Drop mutations refresh the library/grid/tray while ``exec_`` is still on
+    the stack. Parenting the drag to ``source`` and emitting from a deleted
+    wrapper both abort via qFatal. A stable window host plus ``sip.isdeleted``
+    keeps the nested loop from tearing down its own source.
+    """
+    host = source.window() if source is not None else None
+    if host is None or sip.isdeleted(host):
+        host = source
+    drag = QDrag(host)
+    drag.setMimeData(mime)
+    try:
+        drag.exec_(action)
+    finally:
+        try:
+            if source is not None and not sip.isdeleted(source):
+                finished()
+        except RuntimeError:
+            # The wrapper can lose its C++ object between the sip check and
+            # emit; never let that escape a Qt virtual (qFatal).
+            pass
 
 
 @dataclass(frozen=True)
@@ -844,13 +878,10 @@ class LibraryRowWidget(QFrame):
             return
         self._press_pos = None
         mime = make_ref_mime(self._row.section, self._row.view_id)
-        drag = QDrag(self)
-        drag.setMimeData(mime)
         self.drag_started.emit("library")
-        try:
-            drag.exec_(Qt.CopyAction)
-        finally:
-            self.drag_finished.emit()
+        _run_ultraview_drag(
+            self, mime, Qt.CopyAction, self.drag_finished.emit
+        )
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         self._press_pos = None
@@ -930,9 +961,8 @@ class ViewLibraryPanel(QFrame):
         head.addWidget(self._count, 0)
         root.addLayout(head)
 
-        self._search = QLineEdit(self)
+        self._search = SearchField("搜索 View…", self)
         self._search.setObjectName("ultraViewLibrarySearch")
-        self._search.setPlaceholderText("搜索 View…")
         self._search.textChanged.connect(self._rebuild)
         search_wrap = QHBoxLayout()
         search_wrap.setContentsMargins(8, 0, 8, 6)
@@ -1401,13 +1431,10 @@ class UltraViewCard(QFrame):
             return
         self._press_pos = None
         mime = make_ref_mime(self._model.section, self._model.view_id)
-        drag = QDrag(self)
-        drag.setMimeData(mime)
         self.drag_started.emit("card")
-        try:
-            drag.exec_(Qt.MoveAction)
-        finally:
-            self.drag_finished.emit()
+        _run_ultraview_drag(
+            self, mime, Qt.MoveAction, self.drag_finished.emit
+        )
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         self._press_pos = None
@@ -1692,15 +1719,11 @@ class FreeGridCard(UltraViewCard):
                 return
             self._press_pos = None
             action = "resize" if event.modifiers() & Qt.ShiftModifier else "move"
-            drag = QDrag(self)
-            drag.setMimeData(
-                make_layout_mime(self._model.section, self._model.view_id, action=action)
-            )
+            mime = make_layout_mime(self._model.section, self._model.view_id, action=action)
             self.layout_drag_started.emit(self._model.section, self._model.view_id, action)
-            try:
-                drag.exec_(Qt.MoveAction)
-            finally:
-                self.layout_drag_finished.emit()
+            _run_ultraview_drag(
+                self, mime, Qt.MoveAction, self.layout_drag_finished.emit
+            )
             return
         super().mouseMoveEvent(event)
 
@@ -1842,12 +1865,15 @@ class FreeGridBoard(QWidget):
             if widget is not None:
                 widget.setGeometry(*rect_to_pixels(placement.rect, self._metrics))
 
-    def _grid_at(self, pos: QPoint) -> tuple[int, int]:
+    def _grid_at(self, pos: QPoint, *, column_span: int = 1, row_span: int = 1) -> tuple[int, int]:
         unit_x = max(1, self._metrics.column_width + self._metrics.gutter)
         unit_y = max(1, self._metrics.row_height + self._metrics.gutter)
-        column = max(0, min(11, (pos.x() - self._metrics.padding) // unit_x))
-        row = max(0, min(47, (pos.y() - self._metrics.padding) // unit_y))
-        return int(column), int(row)
+        column = (pos.x() - self._metrics.padding) // unit_x
+        row = (pos.y() - self._metrics.padding) // unit_y
+        legal = clamp_rect(
+            GridRect(int(column), int(row), int(column_span), int(row_span))
+        )
+        return legal.column, legal.row
 
     def _request_geometry(self, ref: UltraViewRef, rect: GridRect, reason: str) -> bool:
         placement = self._placements.get(ref)
@@ -1899,10 +1925,22 @@ class FreeGridBoard(QWidget):
             ref = parse_ref_payload({"section": section, "view_id": view_id})
             placement = self._placements.get(ref) if ref is not None else None
             if placement is not None:
-                column, row = self._grid_at(event.pos())
                 if action == "move":
-                    candidate = GridRect(column, row, placement.rect.column_span, placement.rect.row_span)
+                    column, row = self._grid_at(
+                        event.pos(),
+                        column_span=placement.rect.column_span,
+                        row_span=placement.rect.row_span,
+                    )
+                    candidate = clamp_rect(
+                        GridRect(
+                            column,
+                            row,
+                            placement.rect.column_span,
+                            placement.rect.row_span,
+                        )
+                    )
                 else:
+                    column, row = self._grid_at(event.pos())
                     candidate = candidate_resize(
                         placement.rect,
                         column - placement.rect.column - placement.rect.column_span + 1,
@@ -2056,11 +2094,16 @@ class BoardOverview(QFrame):
         self._layout_id = "hero_left_4"
         self._ratio = 0.67
         self._models: dict[str, CardViewModel | None] = {}
+        self._board: UltraViewBoardState | None = None
+        self._records: dict[UltraViewRef, object] = {}
+        self._statuses: dict[UltraViewRef, str] = {}
+        self._slot_map: dict[str, tuple[int, int, int, int]] = {}
         self._free_metrics: GridMetrics | None = None
         self._free_rects: dict[str, tuple[int, int, int, int]] = {}
         self._free_refs: dict[str, UltraViewRef] = {}
         self._image = QImage()
         self._content = QRect()
+        self._compose_dirty = True
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
@@ -2086,10 +2129,14 @@ class BoardOverview(QFrame):
         self._layout_id = layout_id
         self._ratio = ratio
         self._models = dict(models)
+        self._board = None
+        self._records = {}
+        self._statuses = {}
         self._free_metrics = None
         self._free_rects = {}
         self._free_refs = {}
-        self._compose()
+        self._slot_map = {}
+        self._request_compose()
 
     def set_free_grid(
         self,
@@ -2112,7 +2159,48 @@ class BoardOverview(QFrame):
             for item in placements
             if item.ref in models
         }
-        self._compose()
+        self._board = None
+        self._records = {}
+        self._statuses = {}
+        self._slot_map = dict(self._free_rects)
+        self._request_compose()
+
+    def set_projection(
+        self,
+        board: UltraViewBoardState,
+        records: Mapping[UltraViewRef, object],
+        statuses: Mapping[UltraViewRef, str],
+    ) -> None:
+        """Bind the overview to the same compositor the PNG export uses."""
+        self._board = board
+        self._records = dict(records)
+        self._statuses = dict(statuses)
+        self._layout_id = board.layout_id
+        self._ratio = board.primary_ratio
+        if board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            self._free_metrics = export_grid_metrics(board.free_grid)
+            self._free_refs = {
+                f"grid:{item.ref.section}:{item.ref.view_id}": item.ref
+                for item in board.free_grid
+            }
+        else:
+            self._free_metrics = None
+            self._free_refs = {}
+        self._slot_map = composed_slot_rects(board, title=False)
+        self._free_rects = dict(self._slot_map) if self._free_metrics is not None else {}
+        self._request_compose()
+
+    def _request_compose(self) -> None:
+        self._compose_dirty = True
+        if self.isVisible():
+            self._compose()
+            self._compose_dirty = False
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._compose_dirty:
+            self._compose()
+            self._compose_dirty = False
 
     def slot_id_at(self, pos: QPoint) -> str | None:
         if self._image.isNull() or self._preview.pixmap() is None:
@@ -2158,11 +2246,24 @@ class BoardOverview(QFrame):
         self._fit_image()
 
     def _slot_rects(self) -> dict[str, tuple[int, int, int, int]]:
+        if self._slot_map:
+            return dict(self._slot_map)
         if self._free_metrics is not None:
             return dict(self._free_rects)
         return slot_rects(self._layout_id, content_rect(BASE_BOARD_SIZE), self._ratio)
 
     def _compose(self) -> None:
+        if self._board is not None:
+            self._image = compose_board(
+                self._board,
+                self._records,
+                self._statuses,
+                scale=1,
+                title=False,
+            )
+            self._slot_map = composed_slot_rects(self._board, title=False)
+            self._fit_image()
+            return
         if self._free_metrics is not None:
             image_size = (self._free_metrics.board_width, self._free_metrics.board_height)
         else:
@@ -2295,13 +2396,10 @@ class TrayItem(QFrame):
             return
         self._press_pos = None
         mime = make_ref_mime(self._section, self._view_id)
-        drag = QDrag(self)
-        drag.setMimeData(mime)
         self.drag_started.emit("tray")
-        try:
-            drag.exec_(Qt.MoveAction)
-        finally:
-            self.drag_finished.emit()
+        _run_ultraview_drag(
+            self, mime, Qt.MoveAction, self.drag_finished.emit
+        )
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         self._press_pos = None

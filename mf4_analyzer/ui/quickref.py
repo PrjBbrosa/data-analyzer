@@ -459,7 +459,41 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             ),
             QuickRow(
                 "总览卡片右键",
-                sub="打开原 View · 复制卡片 · 移入托盘 · 移除",
+                sub="打开原 View · 复制卡片 · 移入托盘 · 移除；自由网格另有尺寸预设",
+            ),
+        ),
+    ),
+    QuickGroup(
+        title="总览 · Board 与自由网格",
+        rows=(
+            QuickRow(
+                "多个 Board",
+                sub="顶栏 + 新建、右键复制/重命名/删除；最多 20 个，超过只警告不丢盘",
+                gesture="总览顶栏",
+            ),
+            QuickRow(
+                "9 / 12 图模板",
+                sub="3×3 与 4×3；窗口不够时滚动，不把卡片压到不可读",
+            ),
+            QuickRow(
+                "自由网格",
+                sub="12 列、最多 24 张卡；拖到空位放置，Option 拖动、Option+Shift 缩放",
+                keys=("Option", "Shift"),
+            ),
+            QuickRow(
+                "尺寸预设",
+                sub="小 / 标准 / 宽 / 高 / 大 / 横幅；碰撞时提示，不静默失败",
+                gesture="卡片右键",
+            ),
+            QuickRow(
+                "整理布局 / 撤销",
+                sub="压缩空行；自由网格布局可撤销、重做",
+                keys=("Ctrl+Z",),
+            ),
+            QuickRow(
+                "缩略图 / 整板概览",
+                sub="右下角 minimap 定位；整板概览点卡片回到阅读位置",
+                gesture="工具栏「概览」",
             ),
         ),
     ),
