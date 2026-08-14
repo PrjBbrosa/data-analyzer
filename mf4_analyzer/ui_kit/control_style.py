@@ -61,6 +61,9 @@ CONTROL_HEIGHT_EXCEPTIONS: Mapping[str, str] = MappingProxyType({
     'QWidget#sliceDirToggle QPushButton[role="slice-seg"]': "in-plot slice-axis control",
     'QFrame#TickDensitySurface QPushButton[role="tick-density-preset"]': "chart-toolbar popout control",
     'QWidget#chartToolbar QPushButton[role="chart-choice"]': "chart-toolbar mode control",
+    "QPushButton#channelConfigSave": "TimeDomain navigator rail matches the 28px ViewTabBar, not the 32px base track",
+    "QPushButton#channelConfigApply": "TimeDomain navigator rail matches the 28px ViewTabBar, not the 32px base track",
+    "QComboBox#channelConfigCombo": "TimeDomain navigator rail matches the 28px ViewTabBar, not the 32px base track",
 })
 """Narrow, documented control geometries deliberately outside the three tracks."""
 

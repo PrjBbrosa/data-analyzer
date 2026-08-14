@@ -124,13 +124,17 @@ class ChannelConfigBar(QWidget):
 
     MANAGE_SENTINEL = "__manage_configs__"
     ACTION_WIDTH = 64
-    CONTROL_HEIGHT = 32
+    # Same 28px band as ViewTabBar / UltraView. Keep the 22px base text box
+    # and only tighten vertical padding; do not drop to the 24px compact track.
+    CONTROL_HEIGHT = 28
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
+        self.setFixedHeight(self.CONTROL_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self.btn_save = QPushButton("保存", self)
         self.btn_save.setObjectName("channelConfigSave")

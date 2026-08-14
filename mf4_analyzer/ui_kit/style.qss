@@ -1124,8 +1124,10 @@ QToolButton[role="tool"] {
     border-color: #dfe5ee;
 }
 
-/* Saved-channel config controls live in the navigator rail.  They are action
- * peers, not compact toolbar glyphs: keep both on the base track. */
+/* Saved-channel config controls sit on the 28px time-domain View rail.
+ * Global QPushButton/QComboBox box math (min-height + padding + border)
+ * would inflate setFixedHeight(28) back to 32px; min-height:0 lets the
+ * widget's fixed outer height win, same trick as [role="tool"]. */
 QPushButton#channelConfigSave,
 QPushButton#channelConfigApply {
     /* Qt stylesheet widths exclude padding and borders.  46 + 16 + 2 gives
@@ -1133,10 +1135,18 @@ QPushButton#channelConfigApply {
      * the selector. */
     min-width: 46px;
     max-width: 46px;
-    /* 22px content + 4px vertical padding × 2 + 1px border × 2 = 32px,
-     * exactly matching #channelConfigCombo's fixed outer height. */
-    min-height: {{CONTROL_H_BASE_BUTTON_CONTENT}};
-    padding: 4px 8px;
+    min-height: 0;
+    padding: 2px 8px;
+}
+QComboBox#channelConfigCombo {
+    min-height: 0;
+    padding: 2px 8px;
+}
+QComboBox#channelConfigCombo QLineEdit {
+    min-height: 0;
+    padding: 0 4px;
+    border: none;
+    background: transparent;
 }
 
 /* Toolbar */

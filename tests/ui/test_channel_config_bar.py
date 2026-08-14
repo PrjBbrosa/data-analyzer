@@ -139,7 +139,8 @@ def test_config_actions_match_the_selector_geometry(qtbot):
     assert bar.btn_save.width() == 64
     assert bar.btn_apply.width() == 64
     assert bar.combo.width() == 220
-    assert bar.btn_save.height() == bar.combo.height() == bar.btn_apply.height() == 32
+    assert bar.height() == ChannelConfigBar.CONTROL_HEIGHT == 28
+    assert bar.btn_save.height() == bar.combo.height() == bar.btn_apply.height() == 28
     assert bar.btn_save.y() == bar.combo.y() == bar.btn_apply.y()
 
 
@@ -176,3 +177,81 @@ def test_typed_nonexistent_name_cannot_apply_stale_selection(qtbot):
     assert not bar.btn_apply.isEnabled()
     with qtbot.assertNotEmitted(bar.apply_requested):
         bar.btn_apply.click()
+
+
+def test_config_bar_shares_the_time_domain_view_rail_height(qtbot):
+    from PyQt5.QtWidgets import QApplication
+
+    from mf4_analyzer.ui.file_navigator import FileNavigator
+    from mf4_analyzer.ui.view_state import ViewManager
+    from mf4_analyzer.ui.view_tabbar import ViewTabBar
+    from mf4_analyzer.ui.widgets.ultraview_entry import ENTRY_HEIGHT
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    load_stylesheet(QApplication.instance())
+
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    bar = nav.channel_list.config_bar
+    tabbar = ViewTabBar(ViewManager(), section="time")
+    qtbot.addWidget(tabbar)
+    nav.show()
+    tabbar.show()
+    QApplication.processEvents()
+
+    assert ChannelConfigBar.CONTROL_HEIGHT == ENTRY_HEIGHT == 28
+    assert tabbar.height() == ChannelConfigBar.CONTROL_HEIGHT
+    assert bar.height() == bar.btn_save.height() == bar.combo.height() == 28
+    assert nav.layout().contentsMargins().bottom() == 3
+    assert nav.channel_list.layout().contentsMargins().bottom() == 0
+    assert nav.channel_list.layout().contentsMargins().top() == 8
+
+
+def test_config_bar_top_aligns_with_view_rail_in_navigator_width_host(qtbot):
+    from PyQt5.QtWidgets import QApplication, QHBoxLayout, QVBoxLayout, QWidget
+
+    from mf4_analyzer.ui.file_navigator import FileNavigator
+    from mf4_analyzer.ui.view_state import ViewManager
+    from mf4_analyzer.ui.view_tabbar import ViewTabBar
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    load_stylesheet(QApplication.instance())
+
+    host = QWidget()
+    host.setFixedSize(850, 520)
+    row = QHBoxLayout(host)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(8)
+
+    nav = FileNavigator(host)
+    nav.setFixedWidth(250)
+    right = QWidget(host)
+    right_lay = QVBoxLayout(right)
+    right_lay.setContentsMargins(0, 0, 0, 0)
+    right_lay.setSpacing(0)
+    filler = QWidget(right)
+    filler.setStyleSheet("background: #ffffff;")
+    tabbar = ViewTabBar(ViewManager(), right, section="time")
+    right_lay.addWidget(filler, 1)
+    right_lay.addWidget(tabbar, 0)
+    row.addWidget(nav, 0)
+    row.addWidget(right, 1)
+
+    qtbot.addWidget(host)
+    host.show()
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    bar = nav.channel_list.config_bar
+    bar.set_configs([fake_config("a", "转向基础信号", 3)], selected_id="a")
+    bar.set_context(has_checked=True, has_attached=True)
+    QApplication.processEvents()
+
+    btn_top = bar.btn_save.mapTo(host, bar.btn_save.rect().topLeft()).y()
+    rail_top = tabbar.mapTo(host, tabbar.rect().topLeft()).y()
+    # FileNavigator keeps a 3px shell inset so the outer rounded corner
+    # stays visible (test_surface_panel_children_leave_outer_shell_visible).
+    # The aligned part is control height; leftover offset is that shell.
+    leftover = rail_top - btn_top
+    assert bar.btn_save.height() == tabbar.height() == 28
+    assert 2 <= leftover <= 5

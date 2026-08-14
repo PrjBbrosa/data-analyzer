@@ -638,7 +638,8 @@ class MultiFileChannelWidget(QWidget):
         self.setObjectName("channelCard")
         self.setAttribute(Qt.WA_StyledBackground, True)
         layout = QVBoxLayout(self);
-        layout.setContentsMargins(8, 8, 8, 8);
+        # Bottom 0: the 28px config bar shares the time-domain View rail band.
+        layout.setContentsMargins(8, 8, 8, 0);
         layout.setSpacing(6)
         self.search = SearchField("搜索通道…");
         self.search.setObjectName("channelSearch")

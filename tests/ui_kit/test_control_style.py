@@ -93,6 +93,8 @@ def test_height_exception_allowlist_is_explicit_and_documented():
     assert CONTROL_HEIGHT_EXCEPTIONS
     assert all(selector and reason for selector, reason in CONTROL_HEIGHT_EXCEPTIONS.items())
     assert "QToolButton#inspectorCollapser" in CONTROL_HEIGHT_EXCEPTIONS
+    assert "QPushButton#channelConfigSave" in CONTROL_HEIGHT_EXCEPTIONS
+    assert "QComboBox#channelConfigCombo" in CONTROL_HEIGHT_EXCEPTIONS
 
 
 def test_set_control_role_sets_properties_and_repolishes(qapp):
