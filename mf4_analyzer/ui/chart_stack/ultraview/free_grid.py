@@ -32,9 +32,19 @@ GRID_MIN_VISIBLE_ROWS = 6
 
 Rect = tuple[int, int, int, int]
 
-PLANNER_SEARCH_CAP = 512
+# Cell probes granted to *each* blocker the planner has to relocate, not to the
+# whole plan (see ``_SearchBudget``).  A shared pool made dense-but-solvable
+# boards report "no legal layout" (review 2026-08-15 P1-4).  Sized so one card
+# can exhaust the board: a minimum-span card has 11×47 = 517 in-board origins
+# plus at most 4×47 directional probes, so an unreachable hole is *proved*
+# rather than guessed, and ``SEARCH_CAP`` stays reserved for real give-ups.
+PLANNER_SEARCH_CAP = 768
 LAYOUT_MOVE = "move"
 LAYOUT_RESIZE = "resize"
+# spec D9.7 预留，UI 整理入口未接：没有生产调用方传 "arrange"。板上的「整理」
+# 走 ultraview_state.organized_placements（只压空行），不经 plan_layout，也没有
+# 提交前整体预览。保留常量与 plan_neighbor_shrink 以待接线；2026-08-15 review
+# §4.3 已确认现状，spec D9.7 处有对应批注。
 LAYOUT_ARRANGE = "arrange"
 
 
@@ -470,14 +480,29 @@ _AVOID_SEARCH_LIMIT = max(GRID_COLUMNS, MAX_GRID_ROWS)
 
 
 class _SearchBudget:
-    """Bounded cell probes for one plan. Mouse-move must not search the board."""
+    """Bounded cell probes for one plan. Mouse-move must not search the board.
 
-    __slots__ = ("cap", "visits", "exhausted")
+    The allowance is **per relocated blocker**, not per plan: ring search grows
+    as ``2·d²``, so on a dense board the first blocker alone could eat a shared
+    pool and make every later blocker report "no legal layout" when one exists
+    (review 2026-08-15 P1-4: 60 × 2×2 cards + a big resize needed 587 probes in
+    total and was rejected at 512/512).  Each blocker gets ``per_blocker``
+    probes; nothing rolls over, so the plan stays bounded at
+    ``per_blocker × number of relocated cards`` and each card enters the
+    relocation queue at most once.
+    """
 
-    def __init__(self, cap: int) -> None:
-        self.cap = max(1, int(cap))
+    __slots__ = ("per_blocker", "cap", "visits", "exhausted")
+
+    def __init__(self, per_blocker: int) -> None:
+        self.per_blocker = max(1, int(per_blocker))
+        self.cap = self.per_blocker
         self.visits = 0
         self.exhausted = False
+
+    def begin_blocker(self) -> None:
+        """Hand the next blocker its own allowance."""
+        self.cap = self.visits + self.per_blocker
 
     def consume(self) -> bool:
         if self.visits >= self.cap:
@@ -516,7 +541,13 @@ def find_avoidance_rect(
     *,
     budget: _SearchBudget | None = None,
 ) -> GridRect | None:
-    """Same-size slot that misses ``occupied``. Prefers the drag axis, then rings."""
+    """Same-size slot that misses ``occupied``. Prefers the drag axis, then rings.
+
+    Only *in-board* candidates spend budget: an off-board offset is rejected by
+    arithmetic, not by an occupancy probe, and charging for it made the cap
+    depend on where the card happens to sit rather than on how much of the
+    board was really searched.
+    """
     directions: list[tuple[int, int]] = []
     pref = (int(preferred[0]), int(preferred[1]))
     if pref != (0, 0):
@@ -530,27 +561,38 @@ def find_avoidance_rect(
             column += dc
             row += dr
             candidate = GridRect(column, row, rect.column_span, rect.row_span)
-            if budget is not None and not budget.consume():
-                return None
             if clamp_rect(candidate) != candidate:
                 break
+            if budget is not None and not budget.consume():
+                return None
             if _rect_free(candidate, occupied):
                 return candidate
-    max_dist = GRID_COLUMNS + MAX_GRID_ROWS
+    # Ring offsets are pruned to the ones that can land in-board at all, so the
+    # loop cost tracks the budget instead of the (much larger) offset square.
+    # The order in which in-board candidates are visited is unchanged.
+    min_dc = -int(rect.column)
+    max_dc = GRID_COLUMNS - int(rect.column_span) - int(rect.column)
+    min_dr = -int(rect.row)
+    max_dr = MAX_GRID_ROWS - int(rect.row_span) - int(rect.row)
+    max_dist = (
+        max(abs(min_dc), abs(max_dc)) + max(abs(min_dr), abs(max_dr)) + 1
+    )
     for dist in range(1, max_dist):
-        for dc in range(-dist, dist + 1):
+        for dc in range(max(-dist, min_dc), min(dist, max_dc) + 1):
             dr_span = dist - abs(dc)
             for dr in (-dr_span, dr_span) if dr_span else (0,):
+                if dr < min_dr or dr > max_dr:
+                    continue
                 candidate = GridRect(
                     rect.column + dc,
                     rect.row + dr,
                     rect.column_span,
                     rect.row_span,
                 )
-                if budget is not None and not budget.consume():
-                    return None
                 if clamp_rect(candidate) != candidate:
                     continue
+                if budget is not None and not budget.consume():
+                    return None
                 if _rect_free(candidate, occupied):
                     return candidate
     return None
@@ -614,6 +656,7 @@ def plan_overlap_avoidance(
     while queue:
         ref = queue.pop(0)
         obstacles = (*frozen, *remaining.values(), *placed.values())
+        search.begin_blocker()
         found = find_avoidance_rect(
             current[ref], obstacles, preferred, budget=search
         )
@@ -1060,6 +1103,11 @@ def plan_neighbor_shrink(
     ``incoming`` must already be in-board. Cards keep their row (or column)
     when the squeeze is horizontal (or vertical). Returns ``((), False)`` when
     a neighbour would drop below the legal minimum.
+
+    **spec D9.7 预留，UI 整理入口未接**：唯一调用点是 ``plan_layout`` 的
+    ``LAYOUT_ARRANGE`` 分支，而没有生产代码传 ``"arrange"``——普通 move/resize
+    永远不缩邻卡，这是 D9.2 的硬契约。接线（含提交前整体预览）不在
+    2026-08-15 修复批范围。
     """
     current = {item.ref: item.rect for item in placements}
     wanted = dict(incoming)
@@ -1229,32 +1277,3 @@ def _wall_grow_wanted(
     if grown == origin:
         return None
     return {ref: grown}
-
-
-def plan_boundary_yield(
-    incoming: Mapping[UltraViewRef, GridRect],
-    placements: Sequence[FreeGridPlacement],
-    *,
-    preferred: tuple[int, int] = (0, 1),
-) -> tuple[tuple[tuple[UltraViewRef, GridRect], ...], bool]:
-    """Size-preserving clamp + translate for out-of-board drops.
-
-    Neighbour shrink and mover grow are not used on this path; those remain
-    on ``plan_neighbor_shrink`` for an explicit arrange operation. Routine
-    gestures should call ``plan_layout``.
-    """
-    raw = dict(incoming)
-    if not raw:
-        return (), False
-    mover_ref = next(iter(raw))
-    plan = plan_layout(
-        placements,
-        mover_ref,
-        raw[mover_ref],
-        LAYOUT_MOVE,
-        preferred=preferred,
-        incoming=raw,
-    )
-    if not plan.accepted:
-        return (), False
-    return plan.committed_updates(), True

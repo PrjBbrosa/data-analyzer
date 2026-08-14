@@ -1,8 +1,6 @@
 """CANoe ASC UI dispatch — same DBC chain as BLF, distinct source_kind."""
 from __future__ import annotations
 
-import logging
-
 import pytest
 
 pytest.importorskip("can", reason="python-can not installed (win32-gated)")
@@ -156,21 +154,21 @@ def test_project_roundtrip_restores_canoe_asc_dbc_without_picker(
 
 
 def test_ui_fallback_reason_is_visible_when_opening_canoe_asc(
-    qapp, tmp_path, monkeypatch, caplog,
+    qapp, tmp_path, monkeypatch,
 ):
-    from collections import OrderedDict
-
-    from mf4_analyzer import diagnostics
-    from mf4_analyzer.io.asc_can_format import AscFallbackReason
+    """P1-2: the ASC fallback reason must reach a real, user-visible UI
+    element — not just ``logger.warning`` (the previous version of this
+    test only asserted on ``caplog``, which a user never sees) and not
+    ``statusBar.showMessage`` (review P1-5: that surface is logic-only and
+    paints nothing). It must land on the toast.
+    """
     from mf4_analyzer.ui.main_window import MainWindow
 
-    monkeypatch.setattr(diagnostics, "_THROTTLE_STATE", OrderedDict())
     dbc_dir = tmp_path / "dbc"
     dbc_dir.mkdir()
     dbc = write_two_message_dbc(dbc_dir / "bus.dbc")
     asc = _write_early_unsupported_asc(tmp_path / "fallback.asc")
 
-    caplog.set_level(logging.WARNING, logger="mf4_analyzer.io.asc_can_format")
     mw = MainWindow()
     monkeypatch.setattr(
         mw, "_ask_open_blf_dbc_dialog",
@@ -181,8 +179,5 @@ def test_ui_fallback_reason_is_visible_when_opening_canoe_asc(
     mw._load_one(str(asc))
 
     assert len(mw.files) == 1
-    assert any(
-        AscFallbackReason.UNSUPPORTED_SYNTAX.value in record.getMessage()
-        and "兼容解析重试" in record.getMessage()
-        for record in caplog.records
-    )
+    assert mw._toast.property("level") == "warning"
+    assert "兼容解析重试" in mw._toast._msg.text()

@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt5.QtCore import QPoint, QRect, Qt
+from PyQt5 import sip
+from PyQt5.QtCore import QEvent, QPoint, QRect, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QToolButton, QWidget
+from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     PANEL_FILTER,
@@ -444,6 +445,34 @@ def test_card_context_residents_are_open_sync_focus_and_more(qtbot):
             assert button.toolTip()
             assert button.accessibleName()
             assert button.focusPolicy() == Qt.TabFocus
+
+
+def test_overflow_menu_is_deleted_after_closing_instead_of_leaking_per_open(qtbot):
+    """§4.3: every "more" open must not permanently grow ``_card_context``.
+
+    ``make_overflow_menu`` re-creates a ``QMenu`` parented to the long-lived
+    card-context island on every open.  Without ``WA_DeleteOnClose`` those
+    menus are never freed — each open leaks one more ``QMenu`` (and its
+    actions) for the life of the application.
+    """
+    context = CardContextIsland()
+    qtbot.addWidget(context)
+    context.show_for("time", "view-1")
+
+    first = context.make_overflow_menu()
+    assert first.testAttribute(Qt.WA_DeleteOnClose)
+    first.close()
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert sip.isdeleted(first)
+
+    # Repeated opens must not accumulate live menus as children either.
+    second = context.make_overflow_menu()
+    third = context.make_overflow_menu()
+    second.close()
+    third.close()
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert sip.isdeleted(second)
+    assert sip.isdeleted(third)
 
 
 _EXIT_FILL = QColor("#1769e0")

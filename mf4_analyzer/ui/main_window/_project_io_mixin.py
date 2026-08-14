@@ -666,14 +666,20 @@ class ProjectIOMixin:
             elif ext == '.blf' or is_canoe_asc:
                 fmt = "BLF" if ext == ".blf" else "CANoe ASC"
                 source_kind = "blf" if ext == ".blf" else "canoe_asc"
+                asc_read_warnings = []
                 frames = blf_frames
                 if frames is None:
                     frames = DataLoader.read_blf_frames(
                         fp,
-                        progress_callback=lambda current, total: report(
+                        # Three-arg form so the ASC coordinator's real phase
+                        # (预检/快速解析/兼容解析重试) reaches the progress
+                        # UI instead of being dropped; plain BLF reads still
+                        # call with two args and take the default (P1-2).
+                        progress_callback=lambda current, total, phase="读取 CAN 帧": report(
                             0.05 + 0.40 * current / max(1, total),
-                            "读取 CAN 帧",
+                            phase,
                         ),
+                        warning_callback=asc_read_warnings.append,
                     )
                 else:
                     report(0.05, "复用已读取 CAN 帧")
@@ -715,12 +721,14 @@ class ProjectIOMixin:
                     ),
                 )
                 report(0.96, "登记通道")
+                source_metadata = {
+                    "source_kind": source_kind,
+                    "dbc_paths": list(dbc_paths),
+                    "warnings": asc_read_warnings,
+                }
                 self._register_file_data(
                     fp, data, chs, units,
-                    source_metadata={
-                        "source_kind": source_kind,
-                        "dbc_paths": list(dbc_paths),
-                    },
+                    source_metadata=source_metadata,
                 )
                 self._remember_blf_dbc_paths(dbc_paths)
                 self._update_info()
@@ -729,6 +737,15 @@ class ProjectIOMixin:
                     f"✅ 已加载 {fmt}: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件",
                     f"已加载 {p.name} · {mode}",
                 )
+                # ASC fallback warnings (P1-2): read_asc_outcome().warning
+                # used to reach only logger.warning via _log_fallback, never
+                # any user-visible surface. The status bar is a dead end
+                # (SurfaceStatusBar.showMessage is logic-only, review P1-5),
+                # so this rides the same toast exit as every other source's
+                # load-time diagnostics (unconditional, matching TDMS/HDF/
+                # WWT/ZFD/MAT above — diagnostics still surface even when
+                # ``notify`` suppresses the generic success toast).
+                self._toast_io_load_diagnostics(source_metadata)
                 report(1.0, "已加载")
                 return
             elif ext == '.tdms':
@@ -957,9 +974,47 @@ class ProjectIOMixin:
             add([dbc])
         return candidates
 
+    def request_blf_dbc_probe_cancel(self):
+        """Ask an in-flight DBC probe to stop at its next checkpoint."""
+        self._blf_dbc_probe_cancel_requested = True
+
+    def _begin_blf_dbc_probe_cancel_scope(self):
+        """Arm the cancel predicate for one probe run.
+
+        The window's visibility at probe start is the baseline: a window
+        that was never shown (batch intake, headless callers, tests) must
+        not be read as "the user closed it".
+        """
+        self._blf_dbc_probe_cancel_requested = False
+        is_visible = getattr(self, "isVisible", None)
+        self._blf_dbc_probe_was_visible = bool(
+            is_visible() if callable(is_visible) else False
+        )
+
+    def _blf_dbc_probe_cancelled(self):
+        """Cancel predicate handed to the loader's bounded DBC probe.
+
+        Probing runs on the GUI thread while the status-bar progress pumps
+        events, so closing the window mid-probe is a real cancel signal —
+        without it a multi-candidate probe over a large log keeps decoding
+        into a window that is already gone.
+        """
+        if getattr(self, "_blf_dbc_probe_cancel_requested", False):
+            return True
+        if not getattr(self, "_blf_dbc_probe_was_visible", False):
+            return False
+        from PyQt5 import sip
+        try:
+            if sip.isdeleted(self):
+                return True
+        except (RuntimeError, TypeError):
+            return True
+        return not bool(self.isVisible())
+
     def _probe_blf_dbc_candidates(
         self, path, *, frames=None, progress_callback=None,
     ):
+        self._begin_blf_dbc_probe_cancel_scope()
         dbc_sets = deduplicate_dbc_sets(self._candidate_blf_dbc_paths(path))
         blf_id_counts = frame_id_histogram(frames) if frames is not None else {}
         candidates = []
@@ -975,6 +1030,11 @@ class ProjectIOMixin:
             except ImportError:
                 raise
             except Exception:
+                logger.warning(
+                    "DBC 预筛解析失败，按零 ID 重叠处理: %s",
+                    dbc_paths,
+                    exc_info=True,
+                )
                 dbc_frame_ids = frozenset()
             candidates.append({
                 "paths": list(dbc_paths),
@@ -1003,11 +1063,13 @@ class ProjectIOMixin:
                     probe = DataLoader.probe_blf_dbc(
                         str(path), candidate["paths"],
                         progress_callback=report_candidate,
+                        cancel_check=self._blf_dbc_probe_cancelled,
                     )
                 else:
                     probe = DataLoader.probe_blf_dbc_frames(
                         frames, candidate["paths"],
                         progress_callback=report_candidate,
+                        cancel_check=self._blf_dbc_probe_cancelled,
                     )
             except ImportError:
                 raise
@@ -1016,6 +1078,11 @@ class ProjectIOMixin:
                     raise
                 continue
             except Exception:
+                logger.warning(
+                    "DBC 候选探测失败，按未校验处理: %s",
+                    candidate["paths"],
+                    exc_info=True,
+                )
                 continue
             candidate["probe"] = probe
             if callable(progress_callback):
@@ -1037,6 +1104,20 @@ class ProjectIOMixin:
             "..." if len(names) > 3 else ""
         )
 
+    #: Loader reasons rendered for humans; unknown reasons pass through raw
+    #: so a new loader state is visible rather than silently swallowed.
+    _BLF_PROBE_REASON_TEXT = {
+        "cancelled": "已取消",
+        "truncated_sample": "文件截断",
+        "corrupt_sample": "样本损坏",
+        "no_frames": "无 CAN 帧",
+    }
+
+    def _format_blf_probe_reason(self, reason):
+        if not reason:
+            return ""
+        return self._BLF_PROBE_REASON_TEXT.get(str(reason), str(reason))
+
     def _format_blf_dbc_candidate(self, candidate):
         probe = candidate["probe"]
         status = candidate_status(candidate)
@@ -1050,9 +1131,18 @@ class ProjectIOMixin:
                 f"{self._format_blf_dbc_paths(candidate['paths'])} "
                 f"· 未校验{overlap}"
             )
-        status_text = {"strong": "强匹配", "weak": "弱匹配"}.get(
-            status, "不匹配",
-        )
+        reason = probe.estimate_unavailable_reason
+        if status == "incomplete":
+            # The probe stopped early, so neither "matches" nor "does not
+            # match" is true. Say what actually happened instead.
+            reason_text = self._format_blf_probe_reason(reason)
+            status_text = "探测未完成"
+            if reason_text:
+                status_text = f"{status_text}（{reason_text}）"
+        else:
+            status_text = {"strong": "强匹配", "weak": "弱匹配"}.get(
+                status, "不匹配",
+            )
         parts = [
             f"{self._format_blf_dbc_paths(candidate['paths'])}",
             status_text,
@@ -1064,15 +1154,23 @@ class ProjectIOMixin:
         matched = probe.matched_frame_count
         total = probe.total_frame_count
         if matched is not None and total:
-            parts.append(f"完整匹配 {matched}/{total}")
+            # This is the ID-overlap count (frames whose id the DBC defines),
+            # not a decode-success count — do not call it a "match" like the
+            # decode line below does.
+            parts.append(f"ID 命中 {matched}/{total}")
         sample_n = probe.decode_sample_count
         decoded = probe.decoded_sample_count
-        reason = probe.estimate_unavailable_reason
         if sample_n:
             percent = 100.0 * decoded / sample_n
-            parts.append(f"抽样解码 {decoded}/{sample_n} ({percent:.0f}%)")
-        elif reason:
-            parts.append(f"抽样不足（{reason}）")
+            # Only a genuinely full scan may claim full-decode confidence.
+            label = (
+                "完整解码"
+                if str(probe.sampling_strategy) == "complete"
+                else "抽样解码"
+            )
+            parts.append(f"{label} {decoded}/{sample_n} ({percent:.0f}%)")
+        elif reason and status != "incomplete":
+            parts.append(f"抽样不足（{self._format_blf_probe_reason(reason)}）")
         parts.append(f"信号 {len(probe.signal_names)}")
         return " · ".join(parts)
 
@@ -1184,16 +1282,24 @@ class ProjectIOMixin:
         key = list(self._canonical_blf_dbc_paths(dbc_paths))
         if not key:
             return None
+        self._begin_blf_dbc_probe_cancel_scope()
         try:
             if frames is None:
                 probe = DataLoader.probe_blf_dbc(
-                    str(path), key, progress_callback=progress_callback,
+                    str(path), key,
+                    progress_callback=progress_callback,
+                    cancel_check=self._blf_dbc_probe_cancelled,
                 )
             else:
                 probe = DataLoader.probe_blf_dbc_frames(
-                    frames, key, progress_callback=progress_callback,
+                    frames, key,
+                    progress_callback=progress_callback,
+                    cancel_check=self._blf_dbc_probe_cancelled,
                 )
         except Exception:
+            logger.warning(
+                "DBC 校验探测失败，按未验证处理: %s", key, exc_info=True,
+            )
             return None
         return key if probe.is_match else None
 

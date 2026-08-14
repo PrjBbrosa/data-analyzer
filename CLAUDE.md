@@ -39,6 +39,10 @@ pytest -m slow                    # 仅性能/长跑用例（pytest.ini 默认 -
   `test_search_field` 扫到裸 `QLineEdit` 搜索框，不计入本批），
   `tests/acquisition_ui` **359 passed**。详见
   `docs/analyzer/plans/2026-08-13-guideline-hardening-followup-plan.md` §5。
+  2026-08-15 post-v8-review-fixes 合入后实测:主体 **6978 passed / 13 skipped /
+  9 failed**——9 条全部是完整顺序下的既有顺序污染(单跑/子集跑全绿,清单见
+  `docs/analyzer/reviews/2026-08-15-post-v8-batch-review.md` §6,待专项治理),
+  `tests/acquisition_ui` **359 passed**。
   主体一条命令在 `f85b5d4e`..`56c42f4d` 期间还有**另一处**交错 segfault
   （channel-tree delegate paint 中途被 gen-0 GC 回收弱引用顶层 widget），已由
   `tests/ui/conftest.py` 的「post-call 钉住顶层 widget → teardown 泵完事件再释放

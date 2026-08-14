@@ -1,6 +1,8 @@
 """Pure P2-A free-grid geometry and command contracts."""
 from __future__ import annotations
 
+import pytest
+
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_MIN_COLUMN_WIDTH,
     HANDLE_HIT_PX,
@@ -20,7 +22,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     keep_aspect_resize,
     legal_grid_rect,
     pixels_to_grid_delta,
-    plan_boundary_yield,
     plan_layout,
     plan_neighbor_shrink,
     plan_overlap_avoidance,
@@ -166,6 +167,44 @@ def test_gesture_move_keeps_out_of_bounds_candidate_illegal():
     assert session.legal is False
 
 
+def test_group_move_out_of_bounds_ghost_stays_a_rigid_translation():
+    """An out-of-board group drag commits nothing, so its ghost must keep showing
+    the rigid translation in the reject state.  Clamping each member on its own
+    drew a squashed, self-overlapping shape that was neither the pointer position
+    nor the outcome (review 2026-08-15 §4.3 群组越界 ghost)."""
+    metrics = grid_metrics((1280, 800), [])
+    first = GridRect(0, 0, 4, 3)
+    second = GridRect(4, 0, 4, 3)
+    placements = [_placement("a", first), _placement("b", second)]
+    origins = {make_ref("time", "a"): first, make_ref("time", "b"): second}
+    gesture = FreeGridGesture()
+    gesture.press(
+        make_ref("time", "a"), first, (10, 10), (10, 10), group_origins=origins
+    )
+    unit = metrics.column_width + metrics.gutter
+    session = gesture.update(
+        (10 - unit * 3, 10), metrics, placements, start_drag_distance=20
+    )
+    assert session is not None and session.active
+    assert session.legal is False and session.plan is None
+
+    ghosts = session.group_ghost_pixels(metrics, (10 - unit * 3, 10))
+    highlights = session.group_highlight_pixels(metrics)
+    assert len(ghosts) == len(highlights) == 2
+    assert ghosts == highlights
+    # Rigid: the ghosts keep the selection's own spacing and every span.
+    assert ghosts[1][0] - ghosts[0][0] == rect_to_pixels(second, metrics)[0] - rect_to_pixels(
+        first, metrics
+    )[0]
+    for ghost, origin in zip(ghosts, (first, second)):
+        expected = rect_to_pixels(origin, metrics)
+        assert (ghost[2], ghost[3]) == (expected[2], expected[3])
+    # Out of the board on the left, i.e. not clamped back onto the first column.
+    assert ghosts[0][0] < 0
+    # And no self-overlap, which is exactly what per-member clamping produced.
+    assert ghosts[0][0] + ghosts[0][2] <= ghosts[1][0]
+
+
 def test_handle_hit_zones_are_at_least_eight_px_and_corners_win():
     card = (0, 0, 120, 80)
     assert HANDLE_HIT_PX >= 8
@@ -277,43 +316,46 @@ def test_overlap_avoidance_fails_when_board_is_packed():
     assert updates == ()
 
 
-def test_boundary_yield_clamps_into_empty_cell():
+def test_out_of_board_drop_clamps_into_the_empty_cell():
     card = _placement("a", GridRect(2, 0, 4, 3))
-    updates, ok = plan_boundary_yield(
-        {card.ref: GridRect(-2, 0, 4, 3)},
-        [card],
-        preferred=(-1, 0),
+    plan = plan_layout(
+        [card], card.ref, GridRect(-2, 0, 4, 3), LAYOUT_MOVE, preferred=(-1, 0)
     )
-    assert ok is True
-    assert dict(updates)[card.ref] == GridRect(0, 0, 4, 3)
+    assert plan.accepted is True
+    assert dict(plan.committed_updates())[card.ref] == GridRect(0, 0, 4, 3)
 
 
-def test_boundary_yield_rejects_wall_instead_of_shrinking_neighbors():
+def test_out_of_board_drop_rejects_wall_instead_of_shrinking_neighbors():
     left_top = _placement("a", GridRect(0, 0, 4, 3))
     left_bottom = _placement("b", GridRect(0, 3, 4, 3))
     mover = _placement("c", GridRect(4, 0, 8, 6))
-    updates, ok = plan_boundary_yield(
-        {mover.ref: GridRect(5, 0, 8, 6)},
+    plan = plan_layout(
         [left_top, left_bottom, mover],
+        mover.ref,
+        GridRect(5, 0, 8, 6),
+        LAYOUT_MOVE,
         preferred=(1, 0),
     )
-    assert ok is False
-    assert updates == ()
+    assert plan.accepted is False
+    assert plan.committed_updates() == ()
     assert left_top.rect == GridRect(0, 0, 4, 3)
     assert mover.rect == GridRect(4, 0, 8, 6)
 
 
-def test_boundary_yield_fails_when_left_neighbors_are_already_minimum():
+def test_out_of_board_drop_fails_when_left_neighbors_are_already_minimum():
     left_top = _placement("a", GridRect(0, 0, 2, 3))
     left_bottom = _placement("b", GridRect(0, 3, 2, 3))
     mover = _placement("c", GridRect(2, 0, 10, 6))
-    updates, ok = plan_boundary_yield(
-        {mover.ref: GridRect(3, 0, 10, 6)},
+    plan = plan_layout(
         [left_top, left_bottom, mover],
+        mover.ref,
+        GridRect(3, 0, 10, 6),
+        LAYOUT_MOVE,
         preferred=(1, 0),
     )
-    assert ok is False
-    assert updates == ()
+    assert plan.accepted is False
+    assert plan.reason is LayoutRejectReason.OUT_OF_BOUNDS
+    assert plan.committed_updates() == ()
 
 
 def test_plan_layout_move_keeps_every_span():
@@ -394,13 +436,20 @@ def test_plan_layout_is_deterministic_for_displacement_order():
     ]
 
 
+def _dense_2x2_board(count: int) -> list[FreeGridPlacement]:
+    """``count`` 2×2 cards packed six-per-row from the top-left corner."""
+    per_row = GRID_COLUMNS // 2
+    return [
+        _placement(
+            f"c{index}",
+            GridRect((index % per_row) * 2, (index // per_row) * 2, 2, 2),
+        )
+        for index in range(count)
+    ]
+
+
 def test_plan_layout_24_card_search_is_capped():
-    cards = []
-    index = 0
-    for row in range(4):
-        for column in range(0, 12, 2):
-            cards.append(_placement(f"c{index}", GridRect(column, row * 2, 2, 2)))
-            index += 1
+    cards = _dense_2x2_board(24)
     assert len(cards) == 24
     plan = plan_layout(
         cards,
@@ -410,7 +459,8 @@ def test_plan_layout_24_card_search_is_capped():
         preferred=(1, 0),
         search_cap=PLANNER_SEARCH_CAP,
     )
-    assert plan.search_visits <= PLANNER_SEARCH_CAP
+    assert plan.accepted, "a one-cell shove on a 24-card board has a legal layout"
+    assert plan.search_visits <= PLANNER_SEARCH_CAP * len(cards)
     packed = [
         _placement(f"p{index}", GridRect(0, index * 8, 12, 8))
         for index in range(6)
@@ -424,7 +474,71 @@ def test_plan_layout_24_card_search_is_capped():
         search_cap=64,
     )
     assert rejected.accepted is False
-    assert rejected.search_visits <= 64
+    assert rejected.search_visits <= 64 * len(packed)
+
+
+@pytest.mark.parametrize("count", (48, 60))
+def test_plan_layout_dense_board_big_resize_is_not_rejected_by_the_budget(count):
+    """A dense board must not report "no legal layout" because an earlier blocker
+    drained a plan-wide pool.  Review 2026-08-15 P1-4: 60 × 2×2 cards + a
+    2×2 → 12×8 resize needs 587 probes and was rejected at 512/512, while the
+    same input with cap=100000 accepted."""
+    cards = _dense_2x2_board(count)
+    target = GridRect(0, 0, 12, 8)
+    # No explicit ``preferred``: take the same axis the drag path derives.
+    plan = plan_layout(
+        cards, cards[0].ref, target, LAYOUT_RESIZE, search_cap=PLANNER_SEARCH_CAP
+    )
+    generous = plan_layout(
+        cards, cards[0].ref, target, LAYOUT_RESIZE, search_cap=100_000
+    )
+    assert generous.accepted, "fixture must be a solvable board"
+    assert plan.accepted, (
+        f"{count}-card board rejected with {plan.reason} after "
+        f"{plan.search_visits} probes, but a legal layout exists "
+        f"({generous.search_visits} probes)"
+    )
+    assert plan.reason is None
+    assert plan == generous
+    # Still bounded: the allowance is per relocated card, not unlimited.
+    assert plan.search_visits <= PLANNER_SEARCH_CAP * len(cards)
+    # Size preservation still holds for every displaced neighbour.
+    assert plan.mover_after == target
+    for item in plan.displaced_before_after:
+        assert (item.after.column_span, item.after.row_span) == (
+            item.before.column_span,
+            item.before.row_span,
+        )
+
+
+def test_search_cap_reject_is_distinct_from_no_legal_layout():
+    """The two rejects must stay separable so the UI can stop saying "it does not
+    fit" when the planner merely gave up (review 2026-08-15 P1-4)."""
+    cards = _dense_2x2_board(60)
+    starved = plan_layout(
+        cards,
+        cards[0].ref,
+        GridRect(0, 0, 12, 8),
+        LAYOUT_RESIZE,
+        preferred=(0, 1),
+        search_cap=1,
+    )
+    assert starved.accepted is False
+    assert starved.reason is LayoutRejectReason.SEARCH_CAP
+    full = [
+        _placement(f"p{index}", GridRect(0, index * 8, 12, 8))
+        for index in range(MAX_GRID_ROWS // 8)
+    ]
+    boxed = plan_layout(
+        full,
+        full[0].ref,
+        GridRect(0, 1, 12, 8),
+        LAYOUT_MOVE,
+        preferred=(0, 1),
+        search_cap=PLANNER_SEARCH_CAP,
+    )
+    assert boxed.accepted is False
+    assert boxed.reason is LayoutRejectReason.NO_LEGAL_LAYOUT
 
 
 def test_neighbor_shrink_packs_blockers_into_remaining_columns():

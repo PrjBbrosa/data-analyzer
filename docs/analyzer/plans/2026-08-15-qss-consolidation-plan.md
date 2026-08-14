@@ -67,6 +67,7 @@
   `:420/:431`）。
 
 ## Task 2：A 类死规则删除（四组提交，每组独立可回退）
+（执行时漏勾，2026-08-15 review 对账后补记，见 post-v8-batch-review §4.4）
 
 **Files**: `mf4_analyzer/ui_kit/style.qss` · `tests/ui_kit/test_qss_selector_liveness.py`
 
@@ -74,33 +75,33 @@
 offscreen 截图与 Task 0 基线逐像素比对（**预期完全等同**，任何 diff 都是
 误删活规则的信号，先查再继续）。
 
-- [ ] 组 1：channelConfigManager 老 QDialog 家族 19 名（词边界重扫定位，
+- [x] 组 1：channelConfigManager 老 QDialog 家族 19 名（词边界重扫定位，
   盘点时为 260–353 整段）。**保留** `channelConfigManagerHtml` /
   `channelConfigHtml*` 现行段。删前 `git log -S channelConfigManagerTable`
   考古退役点（预期指向 `2026-07-24-channel-config-manager-v2` 批次），
   提交信息引用。
-- [ ] 组 2：chartHint + chartHintPersistent 全部块。注意 `chartHintBar` 家族
+- [x] 组 2：chartHint + chartHintPersistent 全部块。注意 `chartHintBar` 家族
   是活的，逐块核对选择器再删。`tests/ui/test_chart_stack.py` 三处按
   `"chartHint"` 断言 absence 的谓词**保留**（它们是退役回归守卫，与删规则
   不冲突）。
-- [ ] 组 3：BatchPresetSourceNote · BatchToolbarMeta · BatchAnalysisPresetOption
+- [x] 组 3：BatchPresetSourceNote · BatchToolbarMeta · BatchAnalysisPresetOption
   （七块）。absence 测试 `test_batch_method_buttons.py:546` 保留。
-- [ ] 组 4：versionTag · healthDisconnectButton · rightMetricValue /
+- [x] 组 4：versionTag · healthDisconnectButton · rightMetricValue /
   rightMetricDetail 各块；`channelDeleteList` 只剩注释,连注释一并清。
-- [ ] 收尾：liveness 白名单应只剩 QT_INTERNAL + DYNAMIC + MIGRATION 三段。
+- [x] 收尾：liveness 白名单应只剩 QT_INTERNAL + DYNAMIC + MIGRATION 三段。
 
 ## Task 3：B 类 frfSegmentChoice 成对裁决
 
 **Files**: `mf4_analyzer/ui_kit/style.qss` · `tests/ui_kit/test_selection_signature.py`
 
-- [ ] `git log -S frfSegmentChoice` + `git log -S 'frf-segment'` 考古：确认该
+- [x] `git log -S frfSegmentChoice` + `git log -S 'frf-segment'` 考古：确认该
   segmented 控件是「做过又退役」还是「预留未接线」。
-- [ ] 若退役：QSS 四块（盘点时 2224–2247）与 `test_selection_signature.py`
+- [x] 若退役：QSS 四块（盘点时 2224–2247）与 `test_selection_signature.py`
   表中 `("frf", …, "frfSegmentChoice", …)` 行**同一提交**删除；liveness
   白名单同步缩。
-- [ ] 若预留：两侧都保留，QSS 块上方加注释写明预期消费方与引入 spec，
+- [x] 若预留：两侧都保留，QSS 块上方加注释写明预期消费方与引入 spec，
   liveness 白名单为它加 PLANNED 注记（仍计入 shrink-only 总数）。
-- [ ] 验证：`test_selection_signature.py` 全绿。
+- [x] 验证：`test_selection_signature.py` 全绿。
 
 ## Task 4：色板收敛第一批（蓝系）+ distinct-hex 棘轮
 

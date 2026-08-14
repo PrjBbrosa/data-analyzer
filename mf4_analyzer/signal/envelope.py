@@ -179,6 +179,17 @@ def build_peak_trace(t, sig, *, xlim, pixel_width, is_monotonic=None):
     single point per bucket so a noisy FFT does not fill into a vertical
     ribbon. Small visible spans (``n_vis <= pixel_width``) pass through
     unchanged. NaN buckets emit a single NaN break.
+
+    Naming note (disambiguation from the *other* "peak hold" on the
+    compute side): this is the **render layer** — it only selects which
+    already-computed sample gets drawn for a given pixel column and never
+    changes the underlying data, so it is a pure downsampling/display
+    concern. Contrast with :func:`mf4_analyzer.signal.fft.
+    compute_peak_hold_fft`, the **compute layer** peak-hold, which
+    aggregates across overlapping FFT segments and does change the data
+    (a different frequency series than any single segment). See
+    ``docs/lessons-learned/codex-fft-spectrum-peak-hold.md`` for the full
+    compute-vs-render writeup.
     """
     if xlim is None:
         if len(t) == 0:

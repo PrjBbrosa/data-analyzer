@@ -8,6 +8,7 @@ down here. ``load_blf`` returns a :class:`~mf4_analyzer.io.channel_frame.Channel
 ``can`` and ``cantools`` stay lazily imported inside the functions that need
 them, so importing this module never requires the optional CAN stack.
 """
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,8 @@ import pandas as pd
 
 from .channel_frame import ChannelFrame, UnsupportedChannelFrameOperation
 
+_LOG = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class BlfDbcProbe:
@@ -25,6 +28,11 @@ class BlfDbcProbe:
     Exact fields come from a full ID scan (no payload decode). Sample fields
     come from a bounded statistical decode. Estimates are optional and must
     not be presented as exact frame counts.
+
+    ``discovery_decoded_count`` is a *separate* budget: the first frame of
+    each arbitration id, decoded only to learn which signal names this DBC
+    can produce. It deliberately stays out of every ratio — a coverage
+    sample is not a statistical one.
     """
 
     dbc_paths: tuple[str, ...]
@@ -39,6 +47,7 @@ class BlfDbcProbe:
     sampling_strategy: str
     sampling_complete: bool
     estimate_unavailable_reason: str | None = None
+    discovery_decoded_count: int = 0
 
     @property
     def sample_match_ratio(self) -> float:
@@ -64,7 +73,15 @@ class BlfDbcProbe:
 
     @property
     def is_match(self) -> bool:
-        return self.decoded_sample_count > 0 and bool(self.signal_names)
+        """True when either sample proved this DBC decodes real signals.
+
+        The statistical sample answers "how much of the log decodes"; the
+        discovery sample answers "does anything decode at all". A DBC that
+        only defines a low-frequency id never lands in the statistical
+        sample of a large log, so requiring it there rejected valid DBCs.
+        """
+        decoded = self.decoded_sample_count + self.discovery_decoded_count
+        return decoded > 0 and bool(self.signal_names)
 
     @property
     def matched_frame_id_ratio(self) -> float:
@@ -109,14 +126,26 @@ def _emit_progress(progress_callback, current, total):
     """Best-effort progress reporting for long-running loaders.
 
     Loader callbacks are informational only: a delayed or failed status-bar
-    repaint must never make a valid data import fail.
+    repaint must never make a valid data import fail. The one exception is
+    cooperative cancellation: the ASC coordinator's wrapped callback
+    (asc_can_format._AscProgressCoordinator.as_callback) raises
+    ``AscParseCancelled`` from inside this same call, and that must
+    propagate — a bare ``except Exception`` here used to be a dead safety
+    net that silently ate it (§4.2; per-line ``cancel_check`` happened to
+    cover for it, but this path should not have swallowed it either).
     """
     if not callable(progress_callback):
         return
+    # Local import: asc_can_format imports _emit_progress from this module
+    # at module scope, so importing AscParseCancelled from asc_can_format at
+    # this module's top level would be a circular import.
+    from .asc_can_format import AscParseCancelled
     try:
         progress_callback(int(current), max(1, int(total)))
+    except AscParseCancelled:
+        raise
     except Exception:
-        pass
+        _LOG.debug("progress callback raised", exc_info=True)
 
 
 def _estimate_byte_progress(
@@ -236,7 +265,15 @@ def _read_blf_frames(fp, progress_callback=None):
 
 # Payload decode during DBC probe is only a match-strength sample. ID overlap
 # still scans every frame. Keep this a count of frames, not a wall-time knob.
+# The cap is charged *per sample*: the statistical sample and the discovery
+# sample each get their own budget, so a large log cannot starve discovery
+# (P0-1 — sharing one budget silently dropped every low-frequency signal).
 _PROBE_DECODE_CAP = 8192
+
+
+# Name of the shared time axis every assembled CAN frame carries. Reserved:
+# a DBC signal of the same name must be qualified before it reaches the frame.
+_TIME_AXIS_NAME = "Time"
 
 
 def _zoh_resample(ref_t, t, v):
@@ -327,6 +364,12 @@ class LazyZohFrame(ChannelFrame):
     aligned arrays. FileData / plot access patterns (``columns``, ``len``,
     ``[name].to_numpy()``) stay available; unimplemented pandas row
     operations raise instead of silently succeeding.
+
+    Columns are addressed by name, so names must be unique and none may
+    shadow the ``Time`` axis. Both are rejected at construction rather than
+    silently collapsing two series into one column; ``_decode_blf_with_dbc``
+    is responsible for qualifying ambiguous DBC signal names before they
+    reach here.
     """
 
     is_channel_frame = True
@@ -335,8 +378,27 @@ class LazyZohFrame(ChannelFrame):
         self._ref_t = np.asarray(ref_t, dtype=np.float64)
         self._series = dict(series)
         self._column_names = list(column_names)
-        self._cache = {"Time": self._ref_t}
+        self._reject_ambiguous_columns()
+        self._cache = {_TIME_AXIS_NAME: self._ref_t}
         self._zoh_materializations = 0
+
+    def _reject_ambiguous_columns(self):
+        seen = set()
+        duplicates = []
+        for name in self._column_names:
+            if name in seen and name not in duplicates:
+                duplicates.append(name)
+            seen.add(name)
+        if duplicates:
+            raise ValueError(
+                "ChannelFrame 不支持重复列名（按名字取列会静默丢弃其中一份）: "
+                + ", ".join(repr(name) for name in duplicates)
+            )
+        if _TIME_AXIS_NAME in self._series:
+            raise ValueError(
+                f"信号名 {_TIME_AXIS_NAME!r} 与共享时间轴冲突；"
+                "请在解码时消歧为 <Message>.<Signal>"
+            )
 
     def column_names(self):
         return tuple(self._column_names)
@@ -345,7 +407,13 @@ class LazyZohFrame(ChannelFrame):
         return name in self._column_names
 
     def get_column(self, name):
-        return np.asarray(self._materialize(name), dtype=np.float64)
+        values = np.asarray(self._materialize(name), dtype=np.float64)
+        # The cache is shared with every other reader (and with the Time
+        # axis itself), so hand out a read-only view — same guarantee the
+        # ``frame[name]`` Series path already gave. Copy before mutating.
+        view = values.view()
+        view.setflags(write=False)
+        return view
 
     def drop_columns(self, names):
         if isinstance(names, str):
@@ -372,7 +440,13 @@ class LazyZohFrame(ChannelFrame):
         return pd.DataFrame(stacked, columns=list(self._column_names))
 
     def is_lazy(self):
-        return True
+        """True only while some column is still an unmaterialized series.
+
+        This reports *this frame's* state, not the class's capability: once
+        every column has been read the frame is as dense as a DataFrame and
+        callers deciding whether to pay for materialization must see that.
+        """
+        return any(name not in self._cache for name in self._column_names)
 
     def materialized_column_names(self):
         return tuple(name for name in self._column_names if name in self._cache)
@@ -436,7 +510,7 @@ class LazyZohFrame(ChannelFrame):
         cached = self._cache.get(name)
         if cached is not None:
             return cached
-        if name == "Time":
+        if name == _TIME_AXIS_NAME:
             self._cache[name] = self._ref_t
             return self._ref_t
         pair = self._series.get(name)
@@ -472,7 +546,7 @@ def _assemble_blf_channels(series, units, t0, progress_callback=None):
         if index % report_step == 0 or index == total_series:
             _emit_progress(progress_callback, index, total_series)
     ref_t = prepared[ref_name][0]
-    column_names = ["Time", *prepared.keys()]
+    column_names = [_TIME_AXIS_NAME, *prepared.keys()]
     frame = LazyZohFrame(ref_t, prepared, column_names)
     return frame, column_names, units
 
@@ -535,14 +609,23 @@ def _cached_message_lookup(db):
     return lookup
 
 
+def _display_signal_name(msg_name, sig_name, sig_owners):
+    """Qualify a DBC signal name only when the bare name would be ambiguous.
+
+    Ambiguous means either "defined by more than one message" or "collides
+    with the shared time axis" — an unqualified ``Time`` signal would be
+    silently replaced by the axis when the frame is assembled.
+    """
+    if sig_name == _TIME_AXIS_NAME or len(sig_owners.get(sig_name, ())) > 1:
+        return f"{msg_name}.{sig_name}"
+    return sig_name
+
+
 def _signal_display_meta(msg, sig_owners):
     meta = {}
     for sig in msg.signals:
         name = sig.name
-        disp = (
-            name if len(sig_owners.get(name, ())) <= 1
-            else f"{msg.name}.{name}"
-        )
+        disp = _display_signal_name(msg.name, name, sig_owners)
         meta[name] = (disp, str(getattr(sig, "unit", "") or ""))
     return meta
 
@@ -558,7 +641,11 @@ def _message_is_multiplexed(msg):
 
 
 def _discovery_probe_indices(frames, cap=_PROBE_DECODE_CAP):
-    """First frame of each arbitration ID. Not a statistical sample."""
+    """First frame of each arbitration ID. Not a statistical sample.
+
+    Answers "which signal names can this DBC produce at all", which is why
+    it carries its own ``cap`` and never contributes to a decode ratio.
+    """
     chosen = []
     seen_ids = set()
     for index, (_timestamp, arbitration_id, _payload) in enumerate(frames):
@@ -620,6 +707,17 @@ def _probe_decode_indices(frames, cap=_PROBE_DECODE_CAP):
     return _statistical_probe_indices(frames, cap=cap)
 
 
+# Probe progress runs on a fixed 0..1000 scale split into real sub-intervals:
+# the full ID scan, then the bounded statistical decode, then discovery.
+# 1000 is emitted exactly once, after the BlfDbcProbe exists — an early 100%
+# is indistinguishable from "done" to every caller (same rule the ASC reader
+# follows).
+_PROBE_PROGRESS_TOTAL = 1000
+_PROBE_SCAN_PROGRESS_END = 500
+_PROBE_SAMPLE_PROGRESS_END = 900
+_PROBE_DECODE_PROGRESS_END = 990
+
+
 def _empty_blf_dbc_probe(dbc_paths, total_frames, *, reason, **overrides):
     values = {
         "dbc_paths": tuple(str(path) for path in dbc_paths),
@@ -650,6 +748,12 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
         return _empty_blf_dbc_probe(
             dbc_paths, total_frames, reason="cancelled",
         )
+    if total_frames <= 0:
+        # Nothing to conclude from, in either direction. Say so rather than
+        # returning a "complete" probe whose every number is zero.
+        return _empty_blf_dbc_probe(
+            dbc_paths, total_frames, reason="no_frames",
+        )
 
     db = _load_dbc_database(dbc_paths)
     lookup = _cached_message_lookup(db)
@@ -657,9 +761,8 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
     matched_frame_ids = set()
     matched_frame_count = 0
 
-    progress_total = max(1, total_frames)
-    step = max(1, progress_total // 80)
-    _emit_progress(progress_callback, 0, progress_total)
+    step = max(1, total_frames // 80)
+    _emit_progress(progress_callback, 0, _PROBE_PROGRESS_TOTAL)
     try:
         for index, (_timestamp, arbitration_id, _payload) in enumerate(frames, 1):
             if cancelled():
@@ -671,14 +774,17 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
                 matched_frame_count += 1
                 matched_frame_ids.add(arbitration_id)
             if index % step == 0 or index == total_frames:
-                _emit_progress(progress_callback, index, progress_total)
+                _emit_progress(
+                    progress_callback,
+                    (_PROBE_SCAN_PROGRESS_END * index) // total_frames,
+                    _PROBE_PROGRESS_TOTAL,
+                )
     except IndexError:
         return _empty_blf_dbc_probe(
             dbc_paths, total_frames, reason="truncated_sample",
         )
 
     statistical = _statistical_probe_indices(frames)
-    discovery = _discovery_probe_indices(frames)
     statistical_set = set(statistical)
     complete_scan = total_frames <= _PROBE_DECODE_CAP
     sampling_strategy = (
@@ -719,21 +825,43 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
                         sig_name for sig_name, _value in numeric_values
                     )
         if decode_index % decode_step == 0 or decode_index == decode_total:
-            _emit_progress(progress_callback, progress_total, progress_total)
+            _emit_progress(
+                progress_callback,
+                _PROBE_SCAN_PROGRESS_END + (
+                    (_PROBE_SAMPLE_PROGRESS_END - _PROBE_SCAN_PROGRESS_END)
+                    * decode_index
+                ) // decode_total,
+                _PROBE_PROGRESS_TOTAL,
+            )
 
-    leftover = max(0, _PROBE_DECODE_CAP - len(statistical))
-    if sampling_complete and leftover and not complete_scan:
-        extras = [
-            index for index in discovery
-            if index not in statistical_set
-        ][:leftover]
-        for frame_index in extras:
+    # Discovery pass: independent budget, own cap, names only.  Skipped when
+    # the statistical sample already covered every frame — that is the only
+    # case where discovery can add nothing, and it keeps the O(n) scan inside
+    # the branch that actually consumes it instead of running per candidate.
+    discovery_decoded = 0
+    if sampling_complete and not complete_scan:
+        discovery = [
+            frame_index for frame_index in _discovery_probe_indices(frames)
+            if frame_index not in statistical_set
+        ]
+        discovery_total = max(1, len(discovery))
+        discovery_step = max(1, discovery_total // 40)
+        for position, frame_index in enumerate(discovery, 1):
             if cancelled():
                 break
             try:
                 _timestamp, arbitration_id, payload = frames[frame_index]
             except IndexError:
                 break
+            if position % discovery_step == 0 or position == discovery_total:
+                _emit_progress(
+                    progress_callback,
+                    _PROBE_SAMPLE_PROGRESS_END + (
+                        (_PROBE_DECODE_PROGRESS_END - _PROBE_SAMPLE_PROGRESS_END)
+                        * position
+                    ) // discovery_total,
+                    _PROBE_PROGRESS_TOTAL,
+                )
             if not isinstance(payload, (bytes, bytearray)):
                 continue
             msg = lookup(arbitration_id)
@@ -744,6 +872,7 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
                 continue
             numeric_values = _numeric_decoded_values(decoded)
             if numeric_values:
+                discovery_decoded += 1
                 signal_names.update(
                     sig_name for sig_name, _value in numeric_values
                 )
@@ -764,7 +893,7 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
             estimate_unavailable_reason=reason,
         )
 
-    return BlfDbcProbe(
+    probe = BlfDbcProbe(
         dbc_paths=dbc_paths,
         total_frame_count=total_frames,
         total_frame_id_count=len(frame_ids),
@@ -777,7 +906,13 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
         sampling_strategy=sampling_strategy,
         sampling_complete=True,
         estimate_unavailable_reason=None,
+        discovery_decoded_count=discovery_decoded,
     )
+    # 100% means "the result exists", not "a phase finished".
+    _emit_progress(
+        progress_callback, _PROBE_PROGRESS_TOTAL, _PROBE_PROGRESS_TOTAL,
+    )
+    return probe
 
 
 def _decode_blf_with_dbc(frames, dbc_paths, t0, progress_callback=None):
@@ -837,10 +972,7 @@ def _decode_blf_with_dbc(frames, dbc_paths, t0, progress_callback=None):
         for sig_name, fval in numeric_values:
             meta = layout.get(sig_name)
             if meta is None:
-                disp = (
-                    sig_name if len(sig_owners[sig_name]) <= 1
-                    else f"{msg.name}.{sig_name}"
-                )
+                disp = _display_signal_name(msg.name, sig_name, sig_owners)
                 unit = ""
             else:
                 disp, unit = meta

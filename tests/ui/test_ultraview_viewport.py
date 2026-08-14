@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
@@ -31,9 +32,12 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
     zoom_to_rect,
     zoomed_viewport_size,
     FOCUS_PREVIEW_RATIO,
+    LOD_FOOTER_HIDE,
     LOD_FULL,
+    LOD_HYSTERESIS,
     LOD_NO_FOOTER,
     LOD_TITLE_ONLY,
+    LOD_TITLE_ONLY_ZOOM,
     normalize_viewport_payload,
 )
 from mf4_analyzer.ui.ultraview_state import (
@@ -442,6 +446,50 @@ def test_card_reuses_scaled_preview_buffer_when_size_is_unchanged(qtbot):
     assert card.scale_buffer() is first
 
 
+def test_title_only_lod_skips_pixmap_scaling_until_preview_returns(qtbot, monkeypatch):
+    """§4.3: TITLE_ONLY hides the preview label, so a new image arriving on
+    that tier must not pay for a scale nobody can see — even before layout
+    has collapsed the (invisible) preview label's geometry — and growing
+    back to a preview-showing tier must produce a correctly sized pixmap,
+    not a stale/missing one.
+    """
+    from mf4_analyzer.ui.chart_stack.ultraview.widgets import UltraViewCard
+
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "a")
+    card = cards[0]
+    card.resize(300, 220)
+
+    card.apply_lod(LOD_TITLE_ONLY, show_title=True, show_source=False)
+    assert not lod_visibility(LOD_TITLE_ONLY).preview
+    assert not card._image.isVisible()
+
+    calls = []
+    original = UltraViewCard._fit_card_image
+
+    def _spy(self):
+        calls.append(self)
+        return original(self)
+
+    monkeypatch.setattr(UltraViewCard, "_fit_card_image", _spy)
+
+    fresh = QImage(400, 300, QImage.Format_ARGB32)
+    fresh.fill(Qt.blue)
+    card.apply_model(replace(card.model(), image=fresh))
+
+    # apply_model must not even attempt a scale nobody can see, regardless
+    # of whether the hidden label's geometry has already collapsed.
+    assert card._raw_image is not None
+    assert calls == []
+
+    card.apply_lod(LOD_FULL, show_title=True, show_source=True)
+    assert card._image.isVisible()
+    assert calls == [card]
+    assert card._scale_buffer is not None
+    pixmap = card._image.pixmap()
+    assert pixmap is not None and not pixmap.isNull()
+
+
 def test_card_preview_keeps_top_pixels_inside_qss_padding(qtbot, qapp):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)
@@ -484,8 +532,66 @@ def test_lod_hysteresis_does_not_chatter_at_the_threshold():
     assert lod_level(0.42, LOD_TITLE_ONLY) == LOD_TITLE_ONLY
 
 
-def test_lod_state_boundaries_use_the_single_threshold_table():
-    """60/59 and 40/39 map through lod_level; hysteresis is not a second table."""
+_LOD_ORDER = (LOD_TITLE_ONLY, LOD_NO_FOOTER, LOD_FULL)
+# Boundary between two neighbouring bands, keyed by the pair of band names.
+_LOD_BOUNDARY = {
+    frozenset((LOD_TITLE_ONLY, LOD_NO_FOOTER)): LOD_TITLE_ONLY_ZOOM,
+    frozenset((LOD_NO_FOOTER, LOD_FULL)): LOD_FOOTER_HIDE,
+}
+
+
+def _static_lod_band(zoom: float) -> str:
+    """The single threshold table, spelled out once for the invariant."""
+    if zoom < LOD_TITLE_ONLY_ZOOM:
+        return LOD_TITLE_ONLY
+    if zoom < LOD_FOOTER_HIDE:
+        return LOD_NO_FOOTER
+    return LOD_FULL
+
+
+def _lod_sweep() -> tuple[float, ...]:
+    steps = tuple(round(ZOOM_MIN + index * 0.005, 3) for index in range(0, 351))
+    edges = (0.355, 0.359, 0.36, 0.37, 0.375, 0.399, 0.401, 0.435, 0.441, 0.559, 0.639)
+    return tuple(sorted(set(steps + edges)))
+
+
+@pytest.mark.parametrize("previous", (None, LOD_FULL, LOD_NO_FOOTER, LOD_TITLE_ONLY))
+def test_lod_state_boundaries_use_the_single_threshold_table(previous):
+    """Any start band × any target zoom lands in the static band or a *neighbouring*
+    sticky band — never a third band.  Hysteresis is not a second table and it may
+    only widen the boundary adjacent to the current band (review 2026-08-15 P1-3:
+    ``lod_level(0.37, FULL)`` returned ``no_footer``, skipping ``title_only``)."""
+    for zoom in _lod_sweep():
+        result = lod_level(zoom, previous)
+        static = _static_lod_band(zoom)
+        if previous is None:
+            assert result == static, f"zoom={zoom} previous={previous}"
+            continue
+        assert result in {static, previous}, (
+            f"zoom={zoom} previous={previous} landed on {result}, which is neither "
+            f"the static band {static} nor the sticky start band"
+        )
+        if result == static:
+            continue
+        # Sticky only across ONE adjacent boundary, and only inside the hysteresis band.
+        assert abs(_LOD_ORDER.index(result) - _LOD_ORDER.index(static)) == 1, (
+            f"zoom={zoom} stayed on non-adjacent band {result} (static {static})"
+        )
+        boundary = _LOD_BOUNDARY[frozenset((result, static))]
+        assert abs(zoom - boundary) <= LOD_HYSTERESIS + 1e-9, (
+            f"zoom={zoom} stuck on {result} beyond the {boundary} ± "
+            f"{LOD_HYSTERESIS} hysteresis band"
+        )
+
+
+@pytest.mark.parametrize("zoom", (0.36, 0.37, 0.38, 0.39, 0.399))
+def test_full_lod_zoomed_far_out_lands_on_title_only(zoom):
+    """Zooming 100% → 36-39.9% must reach ``title_only``; the pre-fix double-boundary
+    hysteresis parked the whole band on ``no_footer`` and kept previews rendering."""
+    assert lod_level(zoom, LOD_FULL) == LOD_TITLE_ONLY
+
+
+def test_lod_static_bands_and_single_boundary_stickiness():
     assert lod_level(0.60) == LOD_FULL
     assert lod_level(0.59) == LOD_NO_FOOTER
     assert lod_level(0.40) == LOD_NO_FOOTER
@@ -498,6 +604,9 @@ def test_lod_state_boundaries_use_the_single_threshold_table():
     assert lod_level(0.55, LOD_FULL) == LOD_NO_FOOTER
     assert lod_level(0.40, LOD_TITLE_ONLY) == LOD_TITLE_ONLY
     assert lod_level(0.39, LOD_NO_FOOTER) == LOD_TITLE_ONLY
+    # ...and the far boundary stays put, in both directions.
+    assert lod_level(0.62, LOD_TITLE_ONLY) == LOD_FULL
+    assert lod_level(0.37, LOD_FULL) == LOD_TITLE_ONLY
 
 
 def test_lod_visibility_table_is_owned_by_viewport():

@@ -700,6 +700,21 @@ class UltraViewPage(QWidget):
         fit = self._content_fit_rect()
         return QSize(max(1, int(fit.width)), max(1, int(fit.height)))
 
+    def _panel_trigger_rect(self) -> FloatingRect | None:
+        """Stage-relative rect of the rail button that opened the active panel.
+
+        Only rail panels have a rail trigger; global panels anchor under
+        GlobalIsland instead and never consult this.
+        """
+        panel_id = self._active_panel
+        if panel_id is None or panel_id not in _RAIL_PANELS:
+            return None
+        button = self._tool_rail.panel_button(panel_id)
+        if button is None or not button.isVisible():
+            return None
+        point = button.mapTo(self._canvas_host, QPoint(0, 0))
+        return FloatingRect(point.x(), point.y(), button.width(), button.height())
+
     def _floating_layout(self, *, overlay_open: bool | None = None):
         active = self._active_panel if overlay_open is None else ("overlay" if overlay_open else None)
         sizes = self._chrome_sizes()
@@ -718,6 +733,7 @@ class UltraViewPage(QWidget):
             status_island_size=sizes["status_island"],
             navigation_island_size=sizes["navigation_island"],
             rail_size=sizes["rail"],
+            trigger_rect=self._panel_trigger_rect(),
         )
 
     def _apply_floating_layout(self) -> None:
@@ -1708,8 +1724,11 @@ class UltraViewPage(QWidget):
         self._grid_redo.setEnabled(not in_edit)
         if in_edit:
             self.note_space(False)
-        if now is None:
-            self._cancel_board_gestures()
+        # ``now is None`` also fires for transient, non-deactivation reasons
+        # (a popup hiding/destroying mid-interaction) and would cancel an
+        # in-progress drag out from under the user.  Real window deactivation
+        # is already covered by changeEvent(WindowDeactivate) and hideEvent,
+        # both of which call _cancel_board_gestures() themselves.
 
     def handle_escape(self) -> bool:
         if self._viewport.is_panning():

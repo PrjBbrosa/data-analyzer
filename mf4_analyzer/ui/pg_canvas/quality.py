@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from contextlib import contextmanager
+import logging
 from time import perf_counter
 
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication, QGraphicsItem
 
 from . import _binding  # noqa: F401
@@ -22,6 +23,9 @@ from .renderer import (
     _quantize_y_span_key,
 )
 from .ticks_math import _quantize_range_key
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +184,13 @@ class QualityManager(_CanvasBackref):
         "ink_seeded",
         "last_emitted_status",
         "timer",
+        # Injectable defensive provider for the idle-quality mouse-buttons
+        # probe (P1-6). Owned by the manager, never write-through: local
+        # canvas interaction state (_interaction_depth / _overlay_axes.
+        # dragging) is the primary busy judge, this is only consulted so a
+        # raising provider stays observable. See
+        # docs/lessons-learned/idle-quality-follows-local-canvas-activity.md.
+        "_mouse_buttons_provider",
     })
 
     _delegate_names = frozenset({
@@ -225,6 +236,12 @@ class QualityManager(_CanvasBackref):
         self.backstop_timer = QTimer(canvas)
         self.backstop_timer.setSingleShot(True)
         self.backstop_timer.timeout.connect(self._on_aa_backstop_timeout)
+        # Defensive injectable provider (P1-6): defaults to the real Qt
+        # query but is swappable so tests can inject failures/foreign-press
+        # readings without depending on the live mouse. Its result is only
+        # ever probed for observability, never used to gate — see
+        # _idle_quality_allowed.
+        self._mouse_buttons_provider = QApplication.mouseButtons
 
     def reset_for_rebuild(self):
         """Reset idle-AA runtime state after the curve set is rebuilt."""
@@ -681,6 +698,14 @@ class QualityManager(_CanvasBackref):
                 self.disable_interactive_quality()
             else:
                 self._emit_quality_status_changed()
+            if self._idle_quality_locally_busy():
+                # P1-6: a live local drag / overlay Y-drag is a transient
+                # block that can clear without any OTHER canvas event
+                # necessarily following it. The old code just `return`ed
+                # with the timer left stopped, so recovery silently waited
+                # for the user to touch this canvas again. Keep polling
+                # instead of giving up.
+                self.schedule_idle_quality()
             return
         if self.aa_on:
             self._emit_quality_status_changed()
@@ -706,12 +731,15 @@ class QualityManager(_CanvasBackref):
 
     def _idle_quality_allowed(self) -> bool:
         """Return True only while the user is hands-off and density is safe."""
-        try:
-            if QApplication.mouseButtons() != Qt.NoButton:
-                return False
-        except Exception:
-            return False
-        if self._overlay_axes.dragging:
+        # Consult the provider so an injected failure stays observable, but
+        # its raw result never solely gates idle recovery: mouseButtons()
+        # is GLOBAL (any window, any widget), so using it as the primary
+        # busy judge let a press held elsewhere in the app pin THIS canvas
+        # pending forever (P1-6). Local canvas interaction state is the
+        # primary judge instead — see _idle_quality_locally_busy and
+        # docs/lessons-learned/idle-quality-follows-local-canvas-activity.md.
+        self._probe_idle_mouse_buttons_provider()
+        if self._idle_quality_locally_busy():
             return False
         # Measured-frame latch (spec §4.4): the last word belongs to what was
         # actually observed, so a view whose AA frame was measured
@@ -721,6 +749,39 @@ class QualityManager(_CanvasBackref):
         if self._aa_backstop_blocked():
             return False
         return self._idle_aa_density_ok()
+
+    def _idle_quality_locally_busy(self) -> bool:
+        """Whether THIS canvas' own interaction lifecycle blocks idle-AA.
+
+        Mirrors line_canvas.py's ``_IdleQualityActivity.is_busy()``: a live
+        ViewBox drag (``_interaction_depth``, incremented by
+        ``_begin_view_interaction`` / decremented by ``_end_view_interaction``)
+        or an overlay Y-drag (``_overlay_axes.dragging``) are the only
+        sticky "busy" conditions this canvas can answer for on its own.
+        Neither is perturbed by input delivered to a DIFFERENT window,
+        unlike the global ``QApplication.mouseButtons()`` query this
+        replaces as the primary judge.
+        """
+        if self._interaction_depth:
+            return True
+        return bool(self._overlay_axes.dragging)
+
+    def _probe_idle_mouse_buttons_provider(self) -> None:
+        """Defensive injectable query; failures are logged and never gate.
+
+        Kept only so a broken/raising provider stays observable (mirrors
+        line_canvas.py's ``_query_idle_mouse_buttons``) — the boolean
+        result is discarded, never used to block idle-AA recovery.
+        """
+        provider = self._mouse_buttons_provider
+        if provider is None:
+            provider = QApplication.mouseButtons
+        try:
+            provider()
+        except Exception:
+            logger.warning(
+                "idle-quality mouse-buttons provider failed", exc_info=True,
+            )
 
     def _idle_aa_density_ok(self) -> bool:
         """Hysteresis density gate, branched on overlay vs subplot economics."""

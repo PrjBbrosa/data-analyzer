@@ -224,7 +224,16 @@ def wheel_zoom_factor(angle_delta_y: float, pixel_delta_y: float = 0.0) -> float
 
 
 def lod_level(zoom: float, previous: str | None = None) -> str:
-    """Fixed chrome bands with hysteresis so the threshold does not chatter."""
+    """Fixed chrome bands with hysteresis so the threshold does not chatter.
+
+    Hysteresis only widens the boundary that is **adjacent** to the current
+    band, i.e. the one the zoom would have to cross to leave it.  Moving the
+    far boundary too shifts a band the state is not even touching and lets a
+    single jump land two bands away from both the static band and the sticky
+    one (review 2026-08-15 P1-3: ``lod_level(0.37, FULL)`` used to return
+    ``no_footer``, skipping ``title_only`` entirely, and ``_lod`` is sticky so
+    the card stayed there until the next zoom change).
+    """
     z = clamp_zoom(zoom)
     current = previous if previous in _LOD_LEVELS else None
     hide_footer = LOD_FOOTER_HIDE
@@ -232,11 +241,9 @@ def lod_level(zoom: float, previous: str | None = None) -> str:
     if current == LOD_NO_FOOTER:
         hide_footer += LOD_HYSTERESIS
     elif current == LOD_TITLE_ONLY:
-        hide_footer += LOD_HYSTERESIS
         title_only += LOD_HYSTERESIS
     elif current == LOD_FULL:
         hide_footer -= LOD_HYSTERESIS
-        title_only -= LOD_HYSTERESIS
     if z < title_only:
         return LOD_TITLE_ONLY
     if z < hide_footer:

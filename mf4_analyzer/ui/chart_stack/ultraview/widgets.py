@@ -26,6 +26,7 @@ from PyQt5.QtGui import (
     QWheelEvent,
 )
 from PyQt5.QtWidgets import (
+    QAbstractScrollArea,
     QApplication,
     QButtonGroup,
     QComboBox,
@@ -90,7 +91,6 @@ from .free_grid import (
     LayoutRejectReason,
     avoidance_preferred_delta,
     candidate_resize,
-    clamp_rect,
     export_grid_metrics,
     grid_metrics,
     hit_handle,
@@ -128,8 +128,11 @@ HANDLE_CURSORS = {
 REPLACE_HOVER_MS = 600
 FEEDBACK_OUT_OF_GRID = "不能移出网格"
 FEEDBACK_NO_LEGAL_LAYOUT = "当前位置放不下，已保持原布局"
-FEEDBACK_AVOID_BOUNDARY = FEEDBACK_NO_LEGAL_LAYOUT
+# A blown search budget is *not* "it does not fit": a legal layout may well
+# exist, the planner just stopped looking (review 2026-08-15 P1-4).
+FEEDBACK_SEARCH_BUDGET = "布局搜索超出预算，已保持原布局 · 可先整理布局再试"
 FEEDBACK_REARRANGED = "已重排 {count} 张 · Ctrl+Z 撤销"
+FEEDBACK_DISPLACED_OFFSCREEN = "被让位的卡片已移出可视区 · 向下滚动查看"
 
 _PLANNER_LOG = logging.getLogger(__name__)
 _PLANNER_LOG_MONO = 0.0
@@ -150,11 +153,16 @@ def _log_plan_result(plan: LayoutPlan) -> None:
     global _PLANNER_LOG_MONO
     import time
 
+    # Giving up on the search is an infrastructure failure, not a user error:
+    # it must leave a warning trace and must not be swallowed by the hot-path
+    # throttle (review 2026-08-15 P1-4).
+    gave_up = plan.reason is LayoutRejectReason.SEARCH_CAP
     now = time.monotonic()
-    if now - _PLANNER_LOG_MONO < _PLANNER_LOG_INTERVAL_S:
+    if not gave_up and now - _PLANNER_LOG_MONO < _PLANNER_LOG_INTERVAL_S:
         return
     _PLANNER_LOG_MONO = now
-    _PLANNER_LOG.debug(
+    log = _PLANNER_LOG.warning if gave_up else _PLANNER_LOG.debug
+    log(
         "ultraview plan accepted=%s reason=%s op=%s visits=%s affected=%s",
         plan.accepted,
         None if plan.reason is None else plan.reason.value,
@@ -162,6 +170,15 @@ def _log_plan_result(plan: LayoutPlan) -> None:
         plan.search_visits,
         plan.affected_count(),
     )
+
+
+def _reject_feedback(reason: LayoutRejectReason | None) -> str:
+    """One mapping from reject reason to user copy, for every commit path."""
+    if reason is LayoutRejectReason.OUT_OF_BOUNDS:
+        return FEEDBACK_OUT_OF_GRID
+    if reason is LayoutRejectReason.SEARCH_CAP:
+        return FEEDBACK_SEARCH_BUDGET
+    return FEEDBACK_NO_LEGAL_LAYOUT
 
 
 def _clear_page_card_selection(widget: QWidget) -> None:
@@ -311,6 +328,9 @@ MISSING_CARD_COPY = "尚无可用结果，UltraView 不会后台计算"
 STALE_CARD_COPY = "源已变化"
 ORPHANED_CARD_COPY = "源 View 已删除"
 DIMMED_OPACITY = 0.28
+# Transient dim worn by the cards a drag is currently previewing; the model-level
+# ``DIMMED_OPACITY`` above is the persistent one ``restore_dim()`` falls back to.
+DRAG_DIM_OPACITY = 0.4
 LIBRARY_DEFAULT_WIDTH = 288
 TYPE_CHIP_ICON_ONLY_WIDTH = 168
 _SECTION_TYPE_ICONS = {
@@ -1203,6 +1223,11 @@ class ViewLibraryPanel(QFrame):
         title.setObjectName("ultraViewLibraryTitle")
         self._count = QLabel("0", self)
         self._count.setObjectName("ultraViewLibraryCount")
+        # Naming note: this `_pin` is the library overlay's own "keep open"
+        # toggle (pinned = don't auto-close on canvas click), unrelated to
+        # `PreviewStore.set_pinned_refs` (the residency API for the set of
+        # UltraViewRef a Board keeps resident). Same word, different
+        # domain — no functional overlap.
         self._pin = QToolButton(self)
         self._pin.setObjectName("ultraViewLibraryPin")
         self._pin.setCheckable(True)
@@ -1550,7 +1575,11 @@ class UltraViewCard(QFrame):
         self._type_chip = QToolButton(self._header)
         self._type_chip.setObjectName("ultraViewCardTypeChip")
         self._type_chip.setAutoRaise(False)
-        self._type_chip.setFocusPolicy(Qt.TabFocus)
+        # Purely informational (icon + section label, no clicked handler): it
+        # must not steal the press from the card drag gesture underneath it,
+        # so it neither takes tab focus nor accepts mouse hit-testing.
+        self._type_chip.setFocusPolicy(Qt.NoFocus)
+        self._type_chip.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._type_chip.setCursor(Qt.ArrowCursor)
         self._type_chip.setFixedHeight(22)
         self._type_chip.setIconSize(QSize(12, 12))
@@ -1766,6 +1795,11 @@ class UltraViewCard(QFrame):
             self._image.setMaximumHeight(QWIDGETSIZE_MAX)
             self._image.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self._image.setVisible(True)
+            # A raw image can have arrived while the preview was hidden at a
+            # lower LOD tier (``_set_image`` skips scaling in that case); fit
+            # it now so growing back to a preview-showing tier is never
+            # missing its pixmap.
+            self._fit_card_image()
             return
         self._image.setVisible(False)
         self._image.setMinimumHeight(0)
@@ -1821,7 +1855,12 @@ class UltraViewCard(QFrame):
             self._scale_buffer = None
             self._scale_key = None
             self._image.setText("")
-            self._fit_card_image()
+            # TITLE_ONLY hides the preview label entirely; scaling a pixmap
+            # nobody can see is pure waste on the LOD tier that carries the
+            # most cards.  ``_set_preview_visible(True)`` re-fits on the way
+            # back up so the buffer is never stale, just deferred.
+            if lod_visibility(self._lod_level).preview:
+                self._fit_card_image()
             return
         self._raw_image = None
         self._raw_cache_key = None
@@ -2660,8 +2699,9 @@ class FreeGridBoard(QWidget):
         self._pending_shift_toggle: UltraViewRef | None = None
         self._layout_revision = 0
         self._gesture_dimmed = False
-        self._layout_revision = 0
-        self._gesture_dimmed = False
+        # Cards currently wearing the drag dim, owned by the board so the set
+        # can shrink mid-gesture; the plan's preview set changes on every move.
+        self._dimmed_refs: set[UltraViewRef] = set()
 
     def set_viewport_size(self, size: QSize) -> None:
         if size == self._viewport_size:
@@ -2744,6 +2784,7 @@ class FreeGridBoard(QWidget):
         for ref in list(self._widgets):
             if ref not in wanted:
                 widget = self._widgets.pop(ref)
+                self._dimmed_refs.discard(ref)
                 widget.setParent(None)
                 widget.deleteLater()
         for ref, placement in self._placements.items():
@@ -2825,9 +2866,6 @@ class FreeGridBoard(QWidget):
             row_span=row_span,
         )
         return legal.column, legal.row
-
-    def _legal_grid_rect(self, rect: GridRect) -> GridRect:
-        return clamp_rect(rect)
 
     def _board_pos(self, card: QWidget, local: QPoint) -> tuple[int, int]:
         mapped = card.mapTo(self, local)
@@ -3125,13 +3163,7 @@ class FreeGridBoard(QWidget):
         if not self._gesture_dimmed:
             self.drag_started.emit("layout")
             self._gesture_dimmed = True
-            for ref in dim_refs:
-                card = self._widgets.get(ref)
-                if card is None:
-                    continue
-                effect = QGraphicsOpacityEffect(card)
-                effect.setOpacity(0.4)
-                card.setGraphicsEffect(effect)
+        self._sync_gesture_dim(dim_refs)
         ghosts = []
         ghost_rects = session.group_ghost_pixels(self._metrics, board_pos)
         refs = list(preview_refs)
@@ -3151,14 +3183,44 @@ class FreeGridBoard(QWidget):
             handles=session.handle is not None,
         )
 
+    def _sync_gesture_dim(self, wanted: set[UltraViewRef]) -> None:
+        """Dim exactly ``wanted`` and undim whatever left the plan.
+
+        The plan's displaced set changes as the pointer moves, so a set computed
+        once on the first frame does not match the set restored on release: a
+        neighbour that was pushed and then stopped being pushed used to stay at
+        40% opacity forever (review 2026-08-15 §4.3 dim 泄漏).
+        """
+        for ref in self._dimmed_refs - wanted:
+            card = self._widgets.get(ref)
+            if card is not None:
+                card.restore_dim()
+        for ref in wanted - self._dimmed_refs:
+            card = self._widgets.get(ref)
+            if card is None:
+                continue
+            effect = QGraphicsOpacityEffect(card)
+            effect.setOpacity(DRAG_DIM_OPACITY)
+            card.setGraphicsEffect(effect)
+        self._dimmed_refs = {ref for ref in wanted if ref in self._widgets}
+
+    def _clear_gesture_dim(self) -> None:
+        """Unconditional restore: whatever the board dimmed, the board undims."""
+        for ref in self._dimmed_refs:
+            card = self._widgets.get(ref)
+            if card is not None:
+                card.restore_dim()
+        self._dimmed_refs = set()
+
     def _finish_gesture(self, *, commit: bool, global_pos: QPoint | None = None) -> None:
         session = self._gesture.take()
         self._release_mouse_if_grabbed()
         self._gesture_dimmed = False
         if session is None:
+            self._clear_gesture_dim()
             return
         members = session.group_origins or {session.ref: session.origin}
-        restore_refs = set(members)
+        restore_refs = set(members) | set(self._dimmed_refs)
         if session.plan is not None:
             restore_refs.update(ref for ref, _rect in session.plan.preview_rects())
         preview_open = True
@@ -3168,6 +3230,7 @@ class FreeGridBoard(QWidget):
             if not preview_open:
                 return
             preview_open = False
+            self._clear_gesture_dim()
             for ref in restore_refs:
                 card = self._widgets.get(ref)
                 if card is not None:
@@ -3213,10 +3276,7 @@ class FreeGridBoard(QWidget):
             )
         _log_plan_result(plan)
         if not plan.accepted:
-            if plan.reason is LayoutRejectReason.OUT_OF_BOUNDS:
-                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
-            else:
-                self.feedback_requested.emit(FEEDBACK_NO_LEGAL_LAYOUT)
+            self.feedback_requested.emit(_reject_feedback(plan.reason))
             self._relayout()
             return
         reason = "drag-resize" if session.handle else "drag-move"
@@ -3257,7 +3317,46 @@ class FreeGridBoard(QWidget):
             self.feedback_requested.emit(
                 FEEDBACK_REARRANGED.format(count=plan.affected_count())
             )
+        self._warn_if_displaced_offscreen(plan)
         return True
+
+    def _visible_board_rect(self) -> QRect:
+        """Board-local rect of the scroll viewport, or a null rect when unknown.
+
+        Derived from the scroll host's geometry rather than ``visibleRegion()``
+        so it is pure geometry: no dependency on paint/visibility state.
+        """
+        host = self.parentWidget()
+        while host is not None:
+            area = host.parentWidget()
+            if isinstance(area, QAbstractScrollArea) and area.viewport() is host:
+                return QRect(self.mapFrom(host, QPoint(0, 0)), host.size())
+            host = area
+        return QRect()
+
+    def _warn_if_displaced_offscreen(self, plan: LayoutPlan) -> None:
+        """Tell the user when a card was pushed clean out of the visible board.
+
+        Blockers slide along the drag axis (spec D9.3, 2026-08-15 annotation), so
+        a displaced card can land below everything the user can see.  Scroll
+        follow is not in this batch; an honest hint is.
+        """
+        visible = self._visible_board_rect()
+        if visible.isEmpty():
+            return
+        gone = [
+            item
+            for item in plan.displaced_before_after
+            if not visible.intersects(QRect(*rect_to_pixels(item.after, self._metrics)))
+        ]
+        if not gone:
+            return
+        _PLANNER_LOG.info(
+            "ultraview displaced %s card(s) outside the viewport: %s",
+            len(gone),
+            ", ".join(f"{item.ref.section}/{item.ref.view_id}" for item in gone),
+        )
+        self.feedback_requested.emit(FEEDBACK_DISPLACED_OFFSCREEN)
 
     def _request_geometry(self, ref: UltraViewRef, rect: GridRect, reason: str) -> bool:
         placement = self._placements.get(ref)
@@ -3277,10 +3376,7 @@ class FreeGridBoard(QWidget):
         )
         _log_plan_result(plan)
         if not plan.accepted:
-            if plan.reason is LayoutRejectReason.OUT_OF_BOUNDS:
-                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
-            else:
-                self.feedback_requested.emit(FEEDBACK_NO_LEGAL_LAYOUT)
+            self.feedback_requested.emit(_reject_feedback(plan.reason))
             self._relayout()
             return False
         return self._emit_plan(plan, reason)

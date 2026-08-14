@@ -26,15 +26,24 @@ class ChannelFrame(ABC):
 
     @abstractmethod
     def column_names(self) -> Sequence[str]:
-        """Return column names in display order, including duplicates."""
+        """Return column names in display order.
+
+        Names are unique: columns are addressed by name, so an implementation
+        must disambiguate or reject duplicates rather than let two series
+        share one name (the second would be unreachable).
+        """
 
     @abstractmethod
     def has_column(self, name: str) -> bool:
-        """Return whether ``name`` occurs at least once."""
+        """Return whether this frame has a column called ``name``."""
 
     @abstractmethod
     def get_column(self, name: str) -> np.ndarray:
-        """Return one 1-D column, materializing only that column if lazy."""
+        """Return one 1-D column, materializing only that column if lazy.
+
+        The result is a read-only view over frame-owned memory; copy it
+        before mutating. Same guarantee as the ``frame[name]`` path.
+        """
 
     @abstractmethod
     def drop_columns(self, names) -> ChannelFrame:
@@ -53,7 +62,11 @@ class ChannelFrame(ABC):
 
     @abstractmethod
     def is_lazy(self) -> bool:
-        """Return whether unread signal columns still store event series."""
+        """Return whether unread signal columns still store event series.
+
+        This is per-instance state, not a class capability: a lazy frame
+        whose every column has been read must report ``False``.
+        """
 
     @abstractmethod
     def materialized_column_names(self) -> tuple[str, ...]:

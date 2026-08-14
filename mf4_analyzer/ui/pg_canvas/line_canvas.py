@@ -10,7 +10,6 @@ from __future__ import annotations
 from html import escape
 import logging
 import math
-import time
 
 import numpy as np
 from PyQt5 import sip
@@ -85,54 +84,46 @@ class _IdleQualityActivity:
     """Canvas-local interaction state for idle-AA recovery.
 
     Pointer buttons and ViewBox drag depth are the only sticky "busy"
-    conditions. Wheel, gesture, and kinetic range changes pulse
-    ``last_activity_monotonic`` so the idle timer can delay, but they
-    cannot pin the canvas pending forever.
+    conditions (``is_busy()``). Wheel, gesture, and kinetic activity are
+    recorded for symmetry with press/release but carry no timer effect of
+    their own here: any idle-timer delay/re-arm is driven explicitly by the
+    call sites (``schedule_idle_quality``, ``_begin_view_interaction`` /
+    ``_end_view_interaction``), never by a timestamp on this object.
     """
 
     __slots__ = (
         "_held_buttons",
         "_drag_depth",
-        "last_activity_monotonic",
     )
 
     def __init__(self):
         self._held_buttons = set()
         self._drag_depth = 0
-        self.last_activity_monotonic = 0.0
 
     def note_press(self, button=Qt.LeftButton) -> None:
         self._held_buttons.add(button)
-        self._touch()
 
     def note_move(self) -> None:
-        self._touch()
+        pass
 
     def note_release(self, button=Qt.LeftButton) -> None:
         self._held_buttons.discard(button)
-        self._touch()
 
     def note_drag_begin(self) -> None:
         self._drag_depth += 1
-        self._touch()
 
     def note_drag_end(self) -> None:
         self._drag_depth = max(0, self._drag_depth - 1)
-        self._touch()
 
     def note_pulse(self) -> None:
-        self._touch()
+        pass
 
     def clear(self) -> None:
         self._held_buttons.clear()
         self._drag_depth = 0
-        self.last_activity_monotonic = 0.0
 
     def is_busy(self) -> bool:
         return bool(self._held_buttons) or self._drag_depth > 0
-
-    def _touch(self) -> None:
-        self.last_activity_monotonic = time.monotonic()
 
 
 _DUAL_CURSOR_DELTA_STYLE = (

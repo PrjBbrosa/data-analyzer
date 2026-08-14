@@ -186,12 +186,19 @@ def calculate_floating_layout(
     status_island_size: Size | None = None,
     navigation_island_size: Size | None = None,
     rail_size: Size | None = None,
+    trigger_rect: Rect | None = None,
 ) -> FloatingLayout:
     """Calculate narrow-rail CanvasHost geometry without changing board space.
 
     An open overlay is intentionally omitted from the Board allocation.  It is
     an on-demand sibling of the scroll area, so merely opening a library or a
     menu cannot reflow cards, change viewport size, or alter zoom.
+
+    ``trigger_rect``, when given with the rail anchor, is the stage-relative
+    rectangle of the rail button that opened the overlay: the overlay's y is
+    anchored to that button instead of always hugging BoardIsland's bottom
+    edge, then clamped into the safe band between BoardIsland and
+    NavigationIsland so it can never climb onto either island.
     """
     stage = stage_rect(stage_size)
     safe = stage.inset(SAFE_MARGIN)
@@ -248,11 +255,21 @@ def calculate_floating_layout(
         bottom_island_height,
     ).clamp_to(safe)
 
-    rail_height = min(
-        safe.height,
-        _length(rail_size[1]) if rail_size is not None else RAIL_CONTENT_HEIGHT,
+    # The rail sits centered between BoardIsland and StatusIsland, but on
+    # short stages naive centering can push it past either island's edge.
+    # Separate it as a real construction guarantee: shrink to the band those
+    # two islands leave open (never producing a taller rail than fits), then
+    # clamp the centered position into that band rather than into the full
+    # safe stage.
+    rail_band_top = min(safe.bottom, board_island.bottom + ISLAND_GAP)
+    rail_band_bottom = max(rail_band_top, status_island.top - ISLAND_GAP)
+    rail_band_height = max(0, rail_band_bottom - rail_band_top)
+    requested_rail_height = (
+        _length(rail_size[1]) if rail_size is not None else RAIL_CONTENT_HEIGHT
     )
+    rail_height = min(safe.height, requested_rail_height, rail_band_height)
     rail_top = safe.top + (safe.height - rail_height) // 2
+    rail_top = min(max(rail_top, rail_band_top), rail_band_bottom - rail_height)
     rail = Rect(
         safe.left,
         rail_top,
@@ -277,6 +294,7 @@ def calculate_floating_layout(
             navigation_island,
             overlay_size,
             overlay_anchor=overlay_anchor,
+            trigger_rect=trigger_rect,
         )
         if overlay_open
         else None
@@ -379,6 +397,7 @@ def _place_overlay(
     size: Size,
     *,
     overlay_anchor: str = OVERLAY_ANCHOR_RAIL,
+    trigger_rect: Rect | None = None,
 ) -> Rect:
     width, height = _size(size)
     if _overlay_anchor(overlay_anchor) == OVERLAY_ANCHOR_GLOBAL:
@@ -386,10 +405,22 @@ def _place_overlay(
             safe, board_island, global_island, navigation_island, width, height
         )
     x = min(safe.right, rail.right + OVERLAY_GAP)
-    y = min(safe.bottom, board_island.bottom + ISLAND_GAP)
     max_width = max(0, safe.right - x)
+    width = min(width, max_width)
+
+    # Default anchor (no trigger given): hug BoardIsland's bottom edge, same
+    # as before trigger-following was added.
+    min_y = min(safe.bottom, board_island.bottom + ISLAND_GAP)
+    max_y = max(min_y, navigation_island.top - OVERLAY_GAP - height)
+    if trigger_rect is not None and (trigger_rect.width > 0 and trigger_rect.height > 0):
+        anchor_y = trigger_rect.top + (trigger_rect.height - height) // 2
+    else:
+        anchor_y = min_y
+    y = min(max(anchor_y, min_y), max_y)
+
     max_height = max(0, navigation_island.top - OVERLAY_GAP - y)
-    return Rect(x, y, min(width, max_width), min(height, max_height)).clamp_to(safe)
+    height = min(height, max_height)
+    return Rect(x, y, width, height).clamp_to(safe)
 
 
 def _place_global_overlay(

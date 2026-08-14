@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
+    ISLAND_GAP,
     ISLAND_HEIGHT,
     OVERLAY_ANCHOR_GLOBAL,
     RAIL_CONTENT_HEIGHT,
@@ -99,6 +100,23 @@ def test_compact_stage_keeps_canvas_target_without_forced_width():
     _assert_non_overlapping(list(layout.chrome_rects))
 
 
+@pytest.mark.parametrize("stage_height", [280, 260, 220, 160])
+def test_rail_never_overlaps_board_or_status_island_on_short_stages(stage_height):
+    """§4.3: rail separation is a construction guarantee, not a coincidence.
+
+    Before the fix, the rail's vertical position was a pure center-in-safe-
+    stage computation with no awareness of BoardIsland/StatusIsland, so short
+    stages (~280px tall, well within a realistic docked-panel height) let the
+    rail cross into either island.
+    """
+    layout = calculate_floating_layout((1280, stage_height))
+
+    assert not layout.rail.intersects(layout.board_island)
+    assert not layout.rail.intersects(layout.status_island)
+    for rect in layout.persistent_rects:
+        _assert_inside(rect, layout.stage)
+
+
 @pytest.mark.parametrize("rail_height", [48, 96, RAIL_CONTENT_HEIGHT])
 def test_tool_rail_uses_requested_content_height_and_centers_in_safe_stage(rail_height):
     layout = calculate_floating_layout((1280, 800), rail_size=(RAIL_WIDTH, rail_height))
@@ -121,6 +139,41 @@ def test_overlay_never_participates_in_board_geometry():
     assert opened.overlay is not None
     _assert_inside(opened.overlay, opened.stage)
     assert opened.overlay.left >= opened.rail.right
+
+
+def test_rail_anchored_overlay_stays_vertically_near_its_trigger_button():
+    """§4.3: a rail-anchored overlay follows the button that opened it.
+
+    Before the fix, ``_place_overlay`` always hugged BoardIsland's bottom
+    edge regardless of which rail button was pressed, so a button near the
+    bottom of a tall rail popped a panel far away at the top of the canvas.
+    """
+    layout = calculate_floating_layout((1280, 800))
+    rail = layout.rail
+    trigger = Rect(rail.left, rail.bottom - 40, rail.width, 32)
+
+    opened = calculate_floating_layout(
+        (1280, 800),
+        overlay_open=True,
+        overlay_size=(280, 160),
+        trigger_rect=trigger,
+    )
+
+    assert opened.overlay is not None
+    _assert_inside(opened.overlay, opened.stage)
+    assert not opened.overlay.intersects(opened.board_island)
+    assert not opened.overlay.intersects(opened.navigation_island)
+    # "Vertically near": the overlay's vertical center sits close to the
+    # trigger's, not clear across the stage near BoardIsland.
+    trigger_center = trigger.top + trigger.height / 2
+    overlay_center = opened.overlay.top + opened.overlay.height / 2
+    assert abs(overlay_center - trigger_center) <= trigger.height + ISLAND_GAP
+    # And it should have moved well away from the always-hug-board-island
+    # default that a trigger-less call still produces.
+    default = calculate_floating_layout(
+        (1280, 800), overlay_open=True, overlay_size=(280, 160)
+    )
+    assert opened.overlay.top > default.overlay.top
 
 
 def test_global_overlay_right_aligns_under_global_island():
