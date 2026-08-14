@@ -2374,9 +2374,12 @@ class TimeDomainCanvasPG(QWidget):
         Two legs:
 
         * ``strategy == "dense_discrete"`` — the original CRC/counter
-          admission, independent of ink. Currently parked behind
-          ``DENSE_DISCRETE_POLICY_ENABLED`` (default off); ink covers the
-          same walls. Flip that flag True to restore this leg.
+          admission, independent of ink, gated by
+          ``DENSE_DISCRETE_POLICY_ENABLED`` (default on per spec §4.3's
+          dense_discrete-OR-high-ink predicate; re-armed 2026-08-15 after
+          a 2026-08-14 attempt to park it broke batch_render_qt's settled
+          bucket-cap contract — see ``render_profile.py``'s comment on the
+          flag).
         * INK — a ``general`` line whose measured vertical ink puts it out of
           reach of vector AA. The raster path is the only remaining way to
           give it a smooth presentation at a bounded cost (spec §4.3: same
