@@ -9,6 +9,8 @@ from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack.ultraview.compositor import (
     ComposeError,
+    MAX_EXPORT_EDGE,
+    MAX_EXPORT_PIXELS,
     compose_board,
     free_grid_output_size,
     image_sha256,
@@ -25,6 +27,7 @@ from mf4_analyzer.ui.ultraview_state import (
     default_board,
     make_ref,
     set_free_grid_rect,
+    set_layout,
     template_to_free_grid,
     GridRect,
 )
@@ -172,6 +175,9 @@ def test_pathological_free_grid_2x_export_is_rejected(qapp):
         raise AssertionError("2× 48-row export should be rejected")
     except ComposeError as exc:
         assert exc.code == "export_too_large"
+        assert str(MAX_EXPORT_EDGE) in exc.message
+        assert str(MAX_EXPORT_PIXELS) in exc.message
+        assert "×" in exc.message
 
 
 def test_save_png_atomic_replace_and_failure_leaves_no_empty_file(qapp, tmp_path, monkeypatch):
@@ -340,3 +346,40 @@ def test_free_grid_undo_clears_history_when_membership_changes(qapp, qtbot, monk
     assert history.undo == []
     assert history.redo == []
     assert any("撤销记录已清除" in msg for msg, _ in toasts)
+
+
+def test_layout_expand_and_shrink_toast_both_directions(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    board = uv.board
+    set_layout(board, "grid_2x2")
+    for index in range(12):
+        add_ref(board, make_ref("time", f"v{index}"))
+    toasts = []
+    monkeypatch.setattr(win, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    uv._on_layout("grid_4x3")
+    assert ("已从托盘补位 8 张", "info") in toasts
+    toasts.clear()
+    uv._on_layout("grid_2x2")
+    assert ("8 张已移入未放置", "info") in toasts
+
+
+def test_export_too_large_toasts_dimensions_and_limits(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    toasts = []
+    monkeypatch.setattr(win, "toast", lambda msg, level="info": toasts.append((msg, level)))
+    ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    add_ref(uv.board, ref)
+    uv._on_free_grid_toggled(True)
+    assert set_free_grid_rect(uv.board, ref, GridRect(0, 40, 4, 8)) == []
+    assert uv._compose_or_toast(scale=2, action="导出 PNG") is None
+    assert toasts
+    message, level = toasts[-1]
+    assert level == "warning"
+    assert "超出导出上限" in message
+    assert str(MAX_EXPORT_EDGE) in message
+    assert str(MAX_EXPORT_PIXELS) in message
+    assert "×" in message

@@ -8,7 +8,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     clamp_rect,
     export_grid_metrics,
     grid_metrics,
-    organized_placements,
     pixels_to_grid_delta,
     rect_is_available,
     rect_to_pixels,
@@ -20,6 +19,7 @@ from mf4_analyzer.ui.ultraview_state import (
     FreeGridPlacement,
     GridRect,
     make_ref,
+    organized_placements,
 )
 
 

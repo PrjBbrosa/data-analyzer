@@ -48,16 +48,6 @@ class GridMetrics:
         return self.board_width - 2 * self.padding
 
 
-@dataclass(frozen=True)
-class GridGeometryCommand:
-    """One ref geometry transition, suitable for a per-Board undo stack."""
-
-    ref: UltraViewRef
-    before: GridRect
-    after: GridRect
-    reason: str
-
-
 def grid_metrics(
     viewport_size: tuple[int, int],
     placements: Sequence[FreeGridPlacement],
@@ -180,33 +170,3 @@ def rect_is_available(
         item.ref != excluding and rects_overlap(candidate, item.rect)
         for item in placements
     )
-
-
-def organized_placements(
-    placements: Sequence[FreeGridPlacement],
-) -> list[FreeGridPlacement]:
-    """Remove fully empty rows while retaining each card's size/order/column.
-
-    Unlike packing, this never moves a card left/right, never changes a span,
-    and never crosses cards.  It is deterministic and idempotent.
-    """
-    occupied_rows = {
-        row
-        for item in placements
-        for row in range(item.rect.row, item.rect.row + item.rect.row_span)
-    }
-    empty_before: list[int] = []
-    result: list[FreeGridPlacement] = []
-    for row in range(MAX_GRID_ROWS):
-        if row not in occupied_rows:
-            empty_before.append(row)
-    for item in placements:
-        shift = sum(1 for row in empty_before if row < item.rect.row)
-        rect = item.rect
-        result.append(
-            FreeGridPlacement(
-                item.ref,
-                GridRect(rect.column, rect.row - shift, rect.column_span, rect.row_span),
-            )
-        )
-    return result

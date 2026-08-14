@@ -120,9 +120,9 @@ def test_reopen_restores_board_without_entering_ultraview(qapp, qtbot, tmp_path)
     ghost = UltraViewRef("order", "ghost-view")
     assert live_time in membership_set(board)
     assert ghost in membership_set(board)
-    # P1 restores the optional sidecar if a preview was available; without a
-    # capture this remains the P0-safe missing state.
-    assert page._status_for(live_time) in {"fresh", "stale", "missing"}
+    # No sidecar / no capture in this fixture: reopen is missing, not a
+    # loosely accepted fresh/stale/missing union (UV-P3-A14).
+    assert page._status_for(live_time) == "missing"
     assert page._status_for(ghost) == "orphaned"
     assert restored._analysis_restore_pending == set() or all(
         section != "ultraview" for section, _view_id in restored._analysis_restore_pending

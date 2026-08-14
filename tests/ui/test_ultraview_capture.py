@@ -1822,3 +1822,28 @@ def test_destroyed_canvas_drops_binding_and_allows_rehook(qapp):
     coord.clear()
     coord.deleteLater()
 
+
+def test_repeated_project_reset_does_not_stack_destroyed_receivers(qapp, monkeypatch):
+    calls = {"n": 0}
+    original = UltraViewCoordinator._on_canvas_destroyed
+
+    def wrapped(self, *args, **kwargs):
+        calls["n"] += 1
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(UltraViewCoordinator, "_on_canvas_destroyed", wrapped)
+    window, coord = _make_coord()
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    payload = coord.to_project_payload()
+    for _ in range(8):
+        coord.reset_project_state()
+        coord.restore_project_state(payload)
+        coord.bind_canvas(canvas, ref)
+    sip.delete(canvas)
+    _flush()
+    assert calls["n"] == 1
+    coord.clear()
+    coord.deleteLater()
+

@@ -607,6 +607,12 @@ def set_layout(board: UltraViewBoardState, layout_id: str) -> list[str]:
     if layout_id not in LAYOUT_SLOTS:
         warnings.append(_warn("unknown_layout", str(layout_id)))
         layout_id = DEFAULT_LAYOUT_ID
+    tray_count = len(board.unplaced)
+    placed_count = (
+        len(board.free_grid)
+        if board.layout_mode == LAYOUT_MODE_FREE_GRID
+        else len(board.placements)
+    )
     ordered_refs = all_refs(board)
     board.layout_mode = LAYOUT_MODE_TEMPLATE
     board.free_grid.clear()
@@ -619,6 +625,12 @@ def set_layout(board: UltraViewBoardState, layout_id: str) -> list[str]:
         board.placements.append(CardPlacement(slot_id=slot, ref=ref))
     for ref in overflow:
         _append_unplaced(board, ref)
+    extra_slots = max(0, len(new_slots) - placed_count)
+    refilled = min(tray_count, extra_slots)
+    if refilled:
+        warnings.append(_warn("tray_refilled", str(refilled)))
+    if overflow:
+        warnings.append(_warn("layout_overflow", str(len(overflow))))
     return warnings
 
 
@@ -818,21 +830,36 @@ def apply_free_grid_preset(
     )
 
 
+def organized_placements(
+    placements: Sequence[FreeGridPlacement],
+) -> list[FreeGridPlacement]:
+    """Remove fully empty rows while retaining each card's size/order/column."""
+    occupied_rows = {
+        row
+        for item in placements
+        for row in range(item.rect.row, item.rect.row + item.rect.row_span)
+    }
+    empty_before = [
+        row for row in range(MAX_GRID_ROWS) if row not in occupied_rows
+    ]
+    result: list[FreeGridPlacement] = []
+    for item in placements:
+        shift = sum(1 for row in empty_before if row < item.rect.row)
+        rect = item.rect
+        result.append(
+            FreeGridPlacement(
+                item.ref,
+                GridRect(rect.column, rect.row - shift, rect.column_span, rect.row_span),
+            )
+        )
+    return result
+
+
 def organize_free_grid(board: UltraViewBoardState) -> list[str]:
     """Remove only wholly empty rows, preserving card order/columns/spans."""
     if board.layout_mode != LAYOUT_MODE_FREE_GRID:
         return [_warn("not_free_grid")]
-    occupied = {
-        row
-        for item in board.free_grid
-        for row in range(item.rect.row, item.rect.row + item.rect.row_span)
-    }
-    empty_rows = [row for row in range(MAX_GRID_ROWS) if row not in occupied]
-    for item in board.free_grid:
-        shift = sum(1 for row in empty_rows if row < item.rect.row)
-        if shift:
-            rect = item.rect
-            item.rect = GridRect(rect.column, rect.row - shift, rect.column_span, rect.row_span)
+    board.free_grid = organized_placements(board.free_grid)
     return []
 
 

@@ -463,6 +463,12 @@ class UltraViewPage(QWidget):
         self._ref_exists.clear()
         self._refresh_projection()
 
+    def _prune_runtime_caches(self) -> None:
+        keep = membership_set(self._board)
+        self._previews = {ref: value for ref, value in self._previews.items() if ref in keep}
+        self._statuses = {ref: value for ref, value in self._statuses.items() if ref in keep}
+        self._ref_exists = {ref: value for ref, value in self._ref_exists.items() if ref in keep}
+
     def set_board(self, board: UltraViewBoardState) -> None:
         keep_overview = (
             self._overview.isVisible()
@@ -476,6 +482,7 @@ class UltraViewPage(QWidget):
         self._free_grid.set_viewport_size(self._board_scroll.viewport().size())
         prev = self._prev_unplaced_count
         self._board = board
+        self._prune_runtime_caches()
         n_unplaced = len(board.unplaced)
         if n_unplaced > 0 and (prev is None or prev == 0):
             self._tray.set_expanded(True)

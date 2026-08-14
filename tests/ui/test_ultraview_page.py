@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QByteArray, QMimeData, QPoint, QRect, Qt
+from PyQt5.QtCore import QByteArray, QCoreApplication, QMimeData, QPoint, QRect, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDropEvent, QImage
 from PyQt5.QtWidgets import QComboBox, QPushButton, QToolButton, QWidget
 
@@ -1448,3 +1448,61 @@ def test_same_board_refresh_keeps_overview_visible(qtbot):
     assert harness.page.board_overview().isVisible()
     harness.page.set_board(harness.board)
     assert harness.page.board_overview().isVisible()
+
+
+def test_page_runtime_caches_shrink_after_remove_board_switch_and_reset(qtbot):
+    harness = _Harness(qtbot)
+    kept = make_ref("time", "time-1")
+    dropped = make_ref("fft", "fft-1")
+    add_ref(harness.board, kept)
+    add_ref(harness.board, dropped)
+    harness.page.set_board(harness.board)
+    harness.page.set_preview(kept, FakePreview(kept, image=_image()))
+    harness.page.set_preview(dropped, FakePreview(dropped, image=_image()))
+    harness.page.set_ref_status(kept, STATUS_MISSING, True)
+    harness.page.set_ref_status(dropped, STATUS_MISSING, True)
+    assert set(harness.page._previews) == {kept, dropped}
+    assert set(harness.page._statuses) == {kept, dropped}
+    assert set(harness.page._ref_exists) == {kept, dropped}
+
+    remove_ref(harness.board, dropped)
+    harness.page.set_board(harness.board)
+    assert set(harness.page._previews) == {kept}
+    assert set(harness.page._statuses) == {kept}
+    assert set(harness.page._ref_exists) == {kept}
+
+    other = default_board()
+    harness.page.set_board(other)
+    assert harness.page._previews == {}
+    assert harness.page._statuses == {}
+    assert harness.page._ref_exists == {}
+
+    harness.page.set_preview(kept, FakePreview(kept, image=_image()))
+    harness.page.set_ref_status(kept, STATUS_MISSING, True)
+    harness.page.clear_runtime_caches()
+    assert harness.page._previews == {}
+    assert harness.page._statuses == {}
+    assert harness.page._ref_exists == {}
+
+
+def test_board_switcher_does_not_rebuild_tabs_while_reordering(qtbot):
+    switcher = BoardSwitcher()
+    qtbot.addWidget(switcher)
+
+    class _Board:
+        def __init__(self, board_id: str, name: str) -> None:
+            self.board_id = board_id
+            self.name = name
+
+    boards = [_Board("a", "A"), _Board("b", "B"), _Board("c", "C")]
+    switcher.set_boards(boards, "a")
+    tab = switcher.tab_bar()
+    assert tab.count() == 3
+    switcher._reordering = True
+    switcher.set_boards(boards[:1], "a")
+    assert tab.count() == 3
+    assert switcher._pending_boards is not None
+    QCoreApplication.processEvents()
+    assert tab.count() == 1
+    assert switcher._reordering is False
+    assert switcher.board_ids() == ("a",)

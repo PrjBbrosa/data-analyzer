@@ -579,3 +579,38 @@ def test_free_grid_payload_keeps_layout_id_ratio_and_all_placements():
     assert restored.layout_id == "grid_3x3"
     assert len(restored.placements) == 9
     assert restored.unplaced == []
+
+
+def test_expanding_layout_refills_tray_with_warning():
+    board = _filled("grid_2x2")
+    for index in range(4, 8):
+        uvs.add_ref(board, _ref("time", f"v{index}"))
+    assert [ref.view_id for ref in board.unplaced] == ["v4", "v5", "v6", "v7"]
+    warnings = uvs.set_layout(board, "grid_4x3")
+    assert [item.ref.view_id for item in board.placements] == [f"v{i}" for i in range(8)]
+    assert board.unplaced == []
+    assert "tray_refilled: 4" in warnings
+
+
+def test_shrinking_layout_overflows_to_tray_with_warning():
+    board = _filled("grid_4x3")
+    warnings = uvs.set_layout(board, "grid_2x2")
+    assert [item.ref.view_id for item in board.placements] == ["v0", "v1", "v2", "v3"]
+    assert [ref.view_id for ref in board.unplaced] == [f"v{i}" for i in range(4, 12)]
+    assert "layout_overflow: 8" in warnings
+
+
+def test_organize_free_grid_is_idempotent():
+    board = uvs.default_board()
+    uvs.add_ref(board, _ref("time", "a"))
+    uvs.add_ref(board, _ref("fft", "b"))
+    uvs.template_to_free_grid(board)
+    first = board.free_grid[0].ref
+    second = board.free_grid[1].ref
+    assert uvs.set_free_grid_rect(board, first, uvs.GridRect(0, 2, 4, 2)) == []
+    assert uvs.set_free_grid_rect(board, second, uvs.GridRect(6, 5, 3, 3)) == []
+    assert uvs.organize_free_grid(board) == []
+    once = [item.rect for item in board.free_grid]
+    assert once == [uvs.GridRect(0, 0, 4, 2), uvs.GridRect(6, 2, 3, 3)]
+    assert uvs.organize_free_grid(board) == []
+    assert [item.rect for item in board.free_grid] == once

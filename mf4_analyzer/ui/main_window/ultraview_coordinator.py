@@ -641,7 +641,9 @@ class UltraViewCoordinator(QObject):
             self._store.clear()
         self._bindings.clear()
         self._unstable.clear()
-        self._destroy_watched.clear()
+        # Live source canvases persist across project reload. Clearing this
+        # set would make `_watch_canvas_destroyed` reconnect `destroyed` on
+        # the same QObject every open (receivers grow with N).
         self._result_refs.clear()
         self._result_generation.clear()
         self._digest_retries.clear()
@@ -1116,7 +1118,8 @@ class UltraViewCoordinator(QObject):
         self._after_board_mutation()
 
     def _on_layout(self, layout_id: str) -> None:
-        set_layout(active_board(self._workspace), str(layout_id))
+        warnings = set_layout(active_board(self._workspace), str(layout_id))
+        self._toast_layout_warnings(warnings)
         self._after_board_mutation()
 
     def _on_ratio_nudge(self, steps: int) -> None:
@@ -1211,6 +1214,14 @@ class UltraViewCoordinator(QObject):
             return
         if warnings:
             self._toast(str(warnings[0]), "warning")
+
+    def _toast_layout_warnings(self, warnings: list[str]) -> None:
+        for item in warnings:
+            code, _, detail = item.partition(": ")
+            if code == "tray_refilled":
+                self._toast(f"已从托盘补位 {detail} 张", "info")
+            elif code == "layout_overflow":
+                self._toast(f"{detail} 张已移入未放置", "info")
 
     def _discard_stale_grid_history(self, history: _GridHistory) -> None:
         history.undo.clear()
@@ -1308,7 +1319,11 @@ class UltraViewCoordinator(QObject):
         self._after_board_mutation()
 
     def _on_reorder_board(self, board_id: str, index: int) -> None:
-        if not reorder_board(self._workspace, board_id, index):
+        warnings = reorder_board(self._workspace, board_id, index)
+        # Success is ``[]``. Do not refresh on success: QTabBar already moved
+        # the tab, and rebuilding inside ``tabMoved`` crashes. Failure resyncs
+        # from workspace; BoardSwitcher defers that rebuild off the signal.
+        if warnings:
             self._after_board_mutation()
 
     def _on_select_board(self, board_id: str) -> None:
@@ -1557,7 +1572,9 @@ class UltraViewCoordinator(QObject):
             self._store.clear()
         self._bindings.clear()
         self._unstable.clear()
-        self._destroy_watched.clear()
+        # Live source canvases persist across project reset/open. Clearing this
+        # set would make `_watch_canvas_destroyed` reconnect `destroyed` on the
+        # same QObject every open (receivers grow with N). Shutdown still clears.
         self._result_refs.clear()
         self._result_generation.clear()
         self._digest_retries.clear()

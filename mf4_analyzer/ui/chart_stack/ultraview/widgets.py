@@ -11,7 +11,7 @@ from functools import partial
 from typing import Any, Mapping, Sequence
 
 from PyQt5 import sip
-from PyQt5.QtCore import QByteArray, QMimeData, QPoint, QRect, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QByteArray, QMimeData, QPoint, QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -449,6 +449,11 @@ class BoardSwitcher(QFrame):
         self._tab.currentChanged.connect(self._on_current_changed)
         self._tab.tabMoved.connect(self._on_tab_moved)
         self._tab.customContextMenuRequested.connect(self._on_context_menu)
+        self._reordering = False
+        self._pending_boards: tuple[tuple[Any, ...], str | None] | None = None
+        self._flush_boards_timer = QTimer(self)
+        self._flush_boards_timer.setSingleShot(True)
+        self._flush_boards_timer.timeout.connect(self._end_reordering)
 
         self._add = QToolButton(self)
         self._add.setObjectName("ultraViewBoardAddButton")
@@ -480,6 +485,26 @@ class BoardSwitcher(QFrame):
 
     def set_boards(self, boards: Sequence[Any], active_board_id: str | None) -> None:
         """Project the supplied workspace without feeding signals back to it."""
+        if self._reordering:
+            self._pending_boards = (tuple(boards), active_board_id)
+            if not self._flush_boards_timer.isActive():
+                self._flush_boards_timer.start(0)
+            return
+        self._apply_boards(boards, active_board_id)
+
+    def _end_reordering(self) -> None:
+        self._reordering = False
+        self._flush_pending_boards()
+
+    def _flush_pending_boards(self) -> None:
+        pending = self._pending_boards
+        self._pending_boards = None
+        if pending is None:
+            return
+        boards, active_board_id = pending
+        self._apply_boards(boards, active_board_id)
+
+    def _apply_boards(self, boards: Sequence[Any], active_board_id: str | None) -> None:
         parsed: list[tuple[str, str]] = []
         for index, board in enumerate(boards):
             board_id = str(getattr(board, "board_id", "") or "")
@@ -511,6 +536,8 @@ class BoardSwitcher(QFrame):
         return None
 
     def _on_current_changed(self, index: int) -> None:
+        if self._reordering:
+            return
         board_id = self._board_id_at(index)
         if board_id is not None:
             self.board_selected.emit(board_id)
@@ -520,7 +547,15 @@ class BoardSwitcher(QFrame):
             return
         board_id = self._board_ids.pop(from_index)
         self._board_ids.insert(to_index, board_id)
-        self.reorder_requested.emit(board_id, to_index)
+        self._reordering = True
+        try:
+            self.reorder_requested.emit(board_id, to_index)
+        finally:
+            # Leave ``_reordering`` set until the next event-loop turn so a
+            # nested ``set_boards`` / ``currentChanged`` cannot tear the bar
+            # down while ``tabMoved`` is still on the stack.
+            if not self._flush_boards_timer.isActive():
+                self._flush_boards_timer.start(0)
 
     def _on_context_menu(self, pos: QPoint) -> None:
         index = self._tab.tabAt(pos)
