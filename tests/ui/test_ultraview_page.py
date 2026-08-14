@@ -19,7 +19,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     slot_rects,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import legal_grid_rect
-from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_UNPLACED
+from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_LIBRARY, PANEL_UNPLACED
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     BoardSwitcher,
@@ -46,6 +46,7 @@ from mf4_analyzer.ui.ultraview_state import (
     board_to_payload,
     default_board,
     first_empty_slot,
+    free_grid_to_template,
     make_ref,
     membership_set,
     move_to_unplaced,
@@ -528,6 +529,7 @@ def test_unplaced_badge_and_overlay_preserve_tray_actions(qtbot):
     rail.panel_button(PANEL_UNPLACED).click()
     assert harness.page.active_panel() == PANEL_UNPLACED
     assert tray.isVisible()
+    assert tray.body().isVisible()
     assert [item.ref() for item in tray.item_widgets()] == [("fft", "overflow-1")]
     restored = default_board()
     add_ref(restored, make_ref("time", "keep"))
@@ -742,6 +744,10 @@ def test_escape_clears_replacement_after_focus(qtbot):
     assert harness.page.replacement_slot() == "primary"
     harness.page.handle_escape()
     assert not harness.page.focus_layer().isVisible()
+    assert harness.page.replacement_slot() == "primary"
+    assert harness.page.active_panel() == PANEL_LIBRARY
+    harness.page.handle_escape()
+    assert harness.page.active_panel() is None
     assert harness.page.replacement_slot() == "primary"
     harness.page.handle_escape()
     assert harness.page.replacement_slot() is None
@@ -1010,6 +1016,9 @@ def test_escape_cancels_rebind_arm_without_board_mutation(qtbot):
     assert harness.page.replacement_ref() == ("time", "time-1")
     members = set(membership_set(harness.board))
     harness.page.handle_escape()
+    assert harness.page.active_panel() is None
+    assert harness.page.replacement_ref() == ("time", "time-1")
+    harness.page.handle_escape()
     assert harness.page.replacement_ref() is None
     assert harness.page.replacement_slot() is None
     assert membership_set(harness.board) == members
@@ -1243,7 +1252,7 @@ def test_add_without_library_selection_emits_feedback(qtbot):
     harness.page._on_empty_slot("aux_0")
     assert harness.added == []
     assert harness.replaced == []
-    assert messages == ["先在左侧 View 库选择一个 View"] * 2
+    assert messages == ["先打开 View 库并选择一个 View"] * 2
 
 
 def test_large_grid_uses_logical_canvas_and_scrolls_without_misplacing_cards(qtbot):
@@ -2095,3 +2104,66 @@ def test_line_edit_focus_disables_board_shortcuts_and_clears_space_pan(qtbot):
     assert not harness.page._grid_undo.isEnabled()
     harness.page._on_app_focus_changed(search, harness.page)
     assert harness.page._esc.isEnabled()
+
+
+def test_arm_replacement_opens_library_search(qtbot):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    assert harness.page.active_panel() is None
+    harness.page.arm_replacement("time", "time-1")
+    assert harness.page.active_panel() == PANEL_LIBRARY
+    assert harness.page.library_panel().isVisible()
+    assert harness.page.library_panel().search_field().isVisible()
+    assert harness.armed == [("time", "time-1")]
+
+
+def test_locate_unplaced_view_opens_tray_body(qtbot):
+    harness = _Harness(qtbot)
+    add_ref(harness.board, make_ref("time", "time-1"))
+    move_to_unplaced(harness.board, make_ref("time", "time-1"))
+    harness.page.set_board(harness.board)
+    assert harness.page.active_panel() is None
+    harness.page._on_locate("time", "time-1")
+    assert harness.page.active_panel() == PANEL_UNPLACED
+    tray = harness.page.unplaced_tray()
+    assert tray.isVisible()
+    assert tray.body().isVisible()
+    assert tray.item_widgets()[0].ref() == ("time", "time-1")
+
+
+def test_empty_slot_without_selection_opens_library(qtbot):
+    harness = _Harness(qtbot)
+    feedback = []
+    harness.page.feedback_requested.connect(feedback.append)
+    harness.page._on_empty_slot("primary")
+    assert harness.page.active_panel() == PANEL_LIBRARY
+    assert harness.page.library_panel().isVisible()
+    assert feedback == ["先打开 View 库并选择一个 View"]
+    assert harness.added == []
+
+
+def test_layout_picker_exposes_template_thumbnails(qtbot):
+    harness = _Harness(qtbot)
+    picker = harness.page._layout_popover
+    assert picker.thumb_button("hero_left_4") is not None
+    assert picker.thumb_button("grid_4x3") is not None
+    picker.thumb_button("grid_2x2").click()
+    assert harness.layouts == ["grid_2x2"]
+
+
+def test_free_grid_to_template_overflow_opens_unplaced(qtbot):
+    harness = _Harness(qtbot)
+    set_layout(harness.board, "split_horizontal")
+    add_ref(harness.board, make_ref("time", "keep-0"))
+    add_ref(harness.board, make_ref("fft", "keep-1"))
+    add_ref(harness.board, make_ref("frf", "overflow-0"))
+    template_to_free_grid(harness.board)
+    harness.page.set_board(harness.board)
+    assert harness.page.active_panel() is None
+    free_grid_to_template(harness.board, "split_horizontal")
+    harness.page.set_board(harness.board)
+    qtbot.wait(20)
+    assert harness.board.unplaced
+    assert harness.page.active_panel() == PANEL_UNPLACED
+    assert harness.page.unplaced_tray().body().isVisible()

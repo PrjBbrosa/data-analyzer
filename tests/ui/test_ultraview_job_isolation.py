@@ -106,6 +106,12 @@ def test_full_ultraview_export_sequence_stays_zero_compute(qapp, qtbot, tmp_path
     uv.export_png_to_path(tmp_path / "uv-1x.png", scale=1)
     uv.export_png_to_path(tmp_path / "uv-2x.png", scale=2)
     uv._on_presentation(False)
+    page = win.chart_stack.page_ultraview
+    page.set_library_visible(True)
+    page.tool_rail().panel_button("filter").click()
+    page.tool_rail().panel_button("unplaced").click()
+    page.tool_rail().panel_button("layout").click()
+    page.set_library_visible(False)
     win.save_project(tmp_path / "uv.tlproj")
     win.toolbar.btn_mode_time.click()
     QCoreApplication.processEvents()

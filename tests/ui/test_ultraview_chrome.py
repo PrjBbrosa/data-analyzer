@@ -44,11 +44,21 @@ def test_tool_rail_emits_requested_panel_and_projects_active_badge(qtbot):
     assert rail.badge_text(PANEL_UNPLACED) == "3"
     badge = rail.findChild(QLabel, "ultraViewRailUnplacedBadge")
     assert badge is not None and badge.isVisible()
+    assert badge.width() <= 28
+    assert badge.height() <= 20
+    assert badge.x() >= 0
     unplaced_button = rail.panel_button(PANEL_UNPLACED)
     assert unplaced_button is not None
     rail.set_badge(PANEL_UNPLACED, 0)
     assert rail.badge_text(PANEL_UNPLACED) == "0"
     assert not badge.isVisible()
+    rail.set_filter_warning(True)
+    assert rail.filter_warning() is True
+    dot = rail.findChild(QLabel, "ultraViewRailFilterWarningDot")
+    assert dot is not None and dot.isVisible()
+    assert dot.width() == 8
+    rail.set_filter_warning(False)
+    assert not dot.isVisible()
 
 
 def test_canvas_host_overlay_does_not_resize_canvas_and_closes_to_trigger(qtbot):
@@ -170,6 +180,7 @@ def test_island_actions_are_icon_only_and_forward_existing_typed_intents(qtbot):
     assert help_requested == [True]
     status.set_status("轴范围不一致", level="warning")
     assert status.property("statusLevel") == "warning"
+    assert status.message_label().full_text() == "轴范围不一致"
 
     context.show_for("time", "view-1", orphaned=True)
     copied: list[tuple[str, str]] = []

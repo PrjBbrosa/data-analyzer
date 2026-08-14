@@ -8,6 +8,7 @@ import pytest
 
 from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
     ISLAND_HEIGHT,
+    RAIL_CONTENT_HEIGHT,
     RAIL_WIDTH,
     SAFE_MARGIN,
     CardContextPlacement,
@@ -66,6 +67,8 @@ def test_standard_stage_keeps_canvas_target_and_separates_chrome():
     assert layout.board == Rect(78, 64, 1190, 724)
     assert layout.board.width >= 1190
     assert layout.board.height >= 700
+    assert layout.rail.height <= RAIL_CONTENT_HEIGHT + 8
+    assert layout.content_inset_bottom > 0
 
     for rect in layout.persistent_rects:
         _assert_inside(rect, layout.stage)
@@ -138,3 +141,11 @@ def test_invalid_or_tiny_stages_produce_only_bounded_nonnegative_rectangles(size
 
     context = place_card_context(size, Rect(-50, -30, -1, -1), size=(-10, -20))
     _assert_inside(context.rect, layout.stage)
+
+
+def test_card_context_avoids_board_island():
+    island = Rect(78, 12, 200, 40)
+    card = Rect(90, 64, 320, 180)
+    placement = place_card_context((1280, 800), card, size=(232, 40), avoid=(island,))
+    assert not placement.rect.intersects(island)
+    _assert_inside(placement.rect, Rect(0, 0, 1280, 800))

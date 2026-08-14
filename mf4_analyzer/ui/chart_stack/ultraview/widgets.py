@@ -268,8 +268,8 @@ MISSING_CARD_COPY = "尚无可用结果，UltraView 不会后台计算"
 STALE_CARD_COPY = "源已变化"
 ORPHANED_CARD_COPY = "源 View 已删除"
 DIMMED_OPACITY = 0.28
-LIBRARY_DEFAULT_WIDTH = 224
-TRAY_BODY_MAX_HEIGHT = 108
+LIBRARY_DEFAULT_WIDTH = 264
+TRAY_BODY_MAX_HEIGHT = 220
 
 
 def _run_ultraview_drag(source: QWidget, mime: QMimeData, action, finished) -> None:
@@ -926,9 +926,12 @@ class CompareRail(QFrame):
         super().__init__(parent)
         self.setObjectName("ultraViewCompareRail")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(6)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 8, 10, 10)
+        root.setSpacing(8)
+        filters = QHBoxLayout()
+        filters.setContentsMargins(0, 0, 0, 0)
+        filters.setSpacing(6)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._buttons: dict[str, QPushButton] = {}
@@ -940,14 +943,15 @@ class CompareRail(QFrame):
             button.setFocusPolicy(Qt.TabFocus)
             self._group.addButton(button)
             self._buttons[filter_id] = button
-            layout.addWidget(button, 0)
+            filters.addWidget(button, 0)
         self._buttons[COMPARE_FILTER_ALL].setChecked(True)
         self._group.buttonClicked.connect(self._on_button)
+        root.addLayout(filters)
         self._warning = QLabel("", self)
         self._warning.setObjectName("ultraViewAxisWarning")
-        self._warning.setWordWrap(False)
-        layout.addWidget(self._warning, 1)
-        layout.addStretch(1)
+        self._warning.setWordWrap(True)
+        self._warning.hide()
+        root.addWidget(self._warning, 0)
         self._filter_id = COMPARE_FILTER_ALL
 
     def filter_id(self) -> str:
@@ -1543,11 +1547,13 @@ class UltraViewCard(QFrame):
         self._menu = menu
         return menu
 
-    def apply_lod(self, level: str, *, show_title: bool, show_source: bool) -> None:
+    def apply_lod(self, level: str, *, show_title: bool, show_source: bool, presentation: bool = False) -> None:
         self._title.setVisible(bool(show_title))
         footer = bool(show_source) and level == LOD_FULL
         self._footer.setVisible(footer)
         self._footer.setFixedHeight(CARD_FOOTER_HEIGHT if footer else 0)
+        orphaned = self._model is not None and self._model.status == STATUS_ORPHANED
+        self._orphan_bar.setVisible(orphaned and not presentation)
 
     def set_preview_quality(self, quality: str) -> None:
         wanted = QUALITY_FAST if quality == QUALITY_FAST else QUALITY_SMOOTH
@@ -3557,6 +3563,12 @@ class UnplacedTray(QFrame):
         self._inner_layout.setSpacing(8)
         self._inner_layout.addStretch(1)
         self._body.setWidget(self._inner)
+        self._empty = QLabel("缩小布局或移入的卡片会出现在这里", self._inner)
+        self._empty.setObjectName("ultraViewTrayEmptyHint")
+        self._empty.setWordWrap(True)
+        self._empty.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._inner_layout.insertWidget(0, self._empty)
+        self._empty.hide()
         self._body.setVisible(False)
         root.addWidget(self._body, 0)
 
@@ -3604,13 +3616,16 @@ class UnplacedTray(QFrame):
         if signature == self._content_signature:
             return
         self._content_signature = signature
-        while self._inner_layout.count() > 1:
+        while self._inner_layout.count():
             item = self._inner_layout.takeAt(0)
             widget = item.widget()
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+            if widget is None or widget is self._empty:
+                continue
+            widget.setParent(None)
+            widget.deleteLater()
         self._items = []
+        self._inner_layout.addWidget(self._empty, 0)
+        self._inner_layout.addStretch(1)
         for ref in refs:
             key = (ref.section, ref.view_id)
             widget = TrayItem(
@@ -3622,6 +3637,7 @@ class UnplacedTray(QFrame):
                 self._inner,
                 replacement_armed=armed == ref,
             )
+            widget.setFocusPolicy(Qt.TabFocus)
             widget.place_requested.connect(self.place_requested)
             widget.remove_requested.connect(self.remove_requested)
             widget.locate_requested.connect(self.locate_requested)
@@ -3632,6 +3648,22 @@ class UnplacedTray(QFrame):
             self._items.append(widget)
         count = len(refs)
         self._title.setText("未放置" if count == 0 else f"未放置 · {count}")
+        self._empty.setVisible(count == 0)
+
+    def set_overlay_mode(self, overlay: bool) -> None:
+        """Overlay host always shows the body; the old collapsible title is chrome."""
+        self._title.setVisible(not overlay)
+        if overlay:
+            self.set_expanded(True)
+
+    def focus_first_item(self) -> bool:
+        if not self._items:
+            if self._empty.isVisible():
+                self._empty.setFocus(Qt.OtherFocusReason)
+                return True
+            return False
+        self._items[0].setFocus(Qt.OtherFocusReason)
+        return True
 
     def _on_title(self, checked: bool) -> None:
         self.set_expanded(checked)

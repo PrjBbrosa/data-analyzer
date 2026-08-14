@@ -4271,13 +4271,18 @@ QFrame#ultraViewToolRail {
  * shell/real corner pixels are implemented by FloatingChrome rather than a
  * per-card effect or platform-default popup frame. */
 QFrame#ultraViewLibraryPopover,
+QFrame#ultraViewLibrary,
 QFrame#ultraViewLayoutPopover,
 QFrame#ultraViewFilterPopover,
+QFrame#ultraViewCompareRail,
 QFrame#ultraViewUnplacedPopover,
+QFrame#ultraViewUnplacedTray,
 QFrame#ultraViewDisplayPopover,
 QFrame#ultraViewExportPopover,
 QFrame#ultraViewBoardPopover,
-QFrame#ultraViewPopover {
+QFrame#ultraViewPopover,
+QMenu#ultraViewBoardPopover,
+QMenu#ultraViewBoardItemMenu {
     background-color: #ffffff;
     border: 1px solid rgba(74, 96, 121, 0.22);
     border-radius: 12px;
@@ -4399,9 +4404,20 @@ QLabel#ultraViewRailUnplacedBadge[attention="true"] {
     background-color: #d88b16;
 }
 
+QLabel#ultraViewRailFilterWarningDot {
+    min-width: 8px;
+    max-width: 8px;
+    min-height: 8px;
+    max-height: 8px;
+    border: 1px solid #ffffff;
+    border-radius: 4px;
+    background-color: #d88b16;
+}
+
 QLabel#ultraViewBoardIslandName,
 QLabel#ultraViewStatusIslandText,
 QLabel#ultraViewStatusMessage,
+QLabel#ultraViewNavZoomLabel,
 QLabel#ultraViewNavigationZoomLabel {
     color: #17263a;
     font-size: 12px;
@@ -4419,10 +4435,12 @@ QFrame#ultraViewStatusIsland[statusLevel="warning"] QLabel#ultraViewStatusMessag
 QFrame#ultraViewStatusIsland[statusLevel="error"] QLabel#ultraViewStatusMessage {
     color: #b42318;
 }
+QLabel#ultraViewNavZoomLabel,
 QLabel#ultraViewNavigationZoomLabel {
     color: #405269;
     font-size: 11px;
     min-width: 38px;
+    font-family: Menlo, "SF Mono", "Courier New", monospace;
 }
 QLabel#ultraViewFilterWarning,
 QLabel#ultraViewAxisWarning,

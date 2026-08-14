@@ -21,9 +21,10 @@ ISLAND_GAP = 12
 OVERLAY_GAP = 8
 
 BOARD_ISLAND_MAX_WIDTH = 240
-GLOBAL_ISLAND_WIDTH = 180
+GLOBAL_ISLAND_WIDTH = 116
 STATUS_ISLAND_WIDTH = 200
 NAVIGATION_ISLAND_WIDTH = 268
+RAIL_CONTENT_HEIGHT = 160
 DEFAULT_OVERLAY_SIZE: Size = (280, 384)
 DEFAULT_MINIMAP_SIZE: Size = (172, 112)
 DEFAULT_CARD_CONTEXT_SIZE: Size = (232, ISLAND_HEIGHT)
@@ -144,6 +145,7 @@ class FloatingLayout:
     navigation_island: Rect
     minimap: Rect | None
     overlay: Rect | None
+    content_inset_bottom: int = 0
 
     @property
     def chrome_rects(self) -> tuple[Rect, ...]:
@@ -175,6 +177,11 @@ def calculate_floating_layout(
     overlay_open: bool = False,
     overlay_size: Size = DEFAULT_OVERLAY_SIZE,
     minimap_size: Size | None = DEFAULT_MINIMAP_SIZE,
+    board_island_size: Size | None = None,
+    global_island_size: Size | None = None,
+    status_island_size: Size | None = None,
+    navigation_island_size: Size | None = None,
+    rail_size: Size | None = None,
 ) -> FloatingLayout:
     """Calculate narrow-rail CanvasHost geometry without changing board space.
 
@@ -200,20 +207,31 @@ def calculate_floating_layout(
     )
 
     island_height = min(ISLAND_HEIGHT, safe.height)
-    global_width = min(GLOBAL_ISLAND_WIDTH, safe.width)
+    global_width = min(
+        _length(global_island_size[0]) if global_island_size is not None else GLOBAL_ISLAND_WIDTH,
+        safe.width,
+    )
     global_island = Rect(safe.right - global_width, safe.top, global_width, island_height)
 
     max_board_island_width = max(0, global_island.left - ISLAND_GAP - board.left)
+    board_width = min(
+        BOARD_ISLAND_MAX_WIDTH,
+        max_board_island_width,
+        _length(board_island_size[0]) if board_island_size is not None else BOARD_ISLAND_MAX_WIDTH,
+    )
     board_island = Rect(
         board.left,
         safe.top,
-        min(BOARD_ISLAND_MAX_WIDTH, max_board_island_width),
+        board_width,
         island_height,
     ).clamp_to(safe)
 
     bottom_island_height = min(ISLAND_HEIGHT, safe.height)
     bottom_y = safe.bottom - bottom_island_height
-    navigation_width = min(NAVIGATION_ISLAND_WIDTH, safe.width)
+    navigation_width = min(
+        _length(navigation_island_size[0]) if navigation_island_size is not None else NAVIGATION_ISLAND_WIDTH,
+        safe.width,
+    )
     navigation_island = Rect(
         safe.right - navigation_width,
         bottom_y,
@@ -222,20 +240,28 @@ def calculate_floating_layout(
     ).clamp_to(safe)
 
     status_max_width = max(0, navigation_island.left - ISLAND_GAP - board.left)
+    status_width = min(
+        status_max_width,
+        _length(status_island_size[0]) if status_island_size is not None else STATUS_ISLAND_WIDTH,
+    )
     status_island = Rect(
         board.left,
         bottom_y,
-        min(STATUS_ISLAND_WIDTH, status_max_width),
+        status_width,
         bottom_island_height,
     ).clamp_to(safe)
 
     rail_top = min(safe.bottom, board_island.bottom + ISLAND_GAP)
-    rail_bottom = max(rail_top, status_island.top - ISLAND_GAP)
+    rail_available = max(0, status_island.top - ISLAND_GAP - rail_top)
+    rail_height = min(
+        rail_available,
+        _length(rail_size[1]) if rail_size is not None else RAIL_CONTENT_HEIGHT,
+    )
     rail = Rect(
         safe.left,
         rail_top,
         min(RAIL_WIDTH, safe.width),
-        max(0, rail_bottom - rail_top),
+        rail_height,
     ).clamp_to(safe)
 
     minimap = _place_minimap(safe, navigation_island, minimap_size)
@@ -254,6 +280,7 @@ def calculate_floating_layout(
         navigation_island=navigation_island,
         minimap=minimap,
         overlay=overlay,
+        content_inset_bottom=min(ISLAND_HEIGHT + OVERLAY_GAP, max(0, board.height // 4)),
     )
 
 
@@ -263,12 +290,15 @@ def place_card_context(
     *,
     size: Size = DEFAULT_CARD_CONTEXT_SIZE,
     gap: int = OVERLAY_GAP,
+    avoid: tuple[Rect, ...] = (),
 ) -> CardContextPlacement:
     """Place a selected-card action island above, below, or inside the card.
 
     The preferred location is above the card.  When that would cross the safe
     edge, it flips below.  If neither side has room, the island is clamped to
     the card's inside top edge, preserving an actionable, bounded target.
+    Persistent chrome rectangles in ``avoid`` are skipped so the strip cannot
+    sit on top of Board/Global/navigation islands.
     """
     stage = stage_rect(stage_size)
     safe = stage.inset(SAFE_MARGIN)
@@ -278,17 +308,47 @@ def place_card_context(
     bounded_card = card.clamp_to(safe)
     spacing = _length(gap)
     preferred_x = bounded_card.left + (bounded_card.width - width) // 2
+    blockers = tuple(item for item in avoid if item.width > 0 and item.height > 0)
+
+    def _clear(rect: Rect) -> Rect | None:
+        placed = rect.clamp_to(safe)
+        if placed.width <= 0 or placed.height <= 0:
+            return None
+        if any(placed.intersects(item) for item in blockers):
+            return None
+        return placed
 
     above = Rect(preferred_x, bounded_card.top - spacing - height, width, height)
     if above.top >= safe.top:
-        return CardContextPlacement(above.clamp_to(safe), "above")
+        placed = _clear(above)
+        if placed is not None:
+            return CardContextPlacement(placed, "above")
 
     below = Rect(preferred_x, bounded_card.bottom + spacing, width, height)
     if below.bottom <= safe.bottom:
-        return CardContextPlacement(below.clamp_to(safe), "below")
+        placed = _clear(below)
+        if placed is not None:
+            return CardContextPlacement(placed, "below")
 
     inside = Rect(preferred_x, bounded_card.top + spacing, width, height)
-    return CardContextPlacement(inside.clamp_to(safe), "inside")
+    placed = _clear(inside)
+    if placed is not None:
+        return CardContextPlacement(placed, "inside")
+
+    nudged = inside.clamp_to(safe)
+    for item in blockers:
+        if nudged.intersects(item):
+            candidate = Rect(
+                nudged.x,
+                min(max(item.bottom + spacing, safe.top), max(safe.top, bounded_card.bottom - height)),
+                nudged.width,
+                nudged.height,
+            ).clamp_to(safe)
+            cleared = _clear(candidate)
+            if cleared is not None:
+                return CardContextPlacement(cleared, "inside")
+            nudged = candidate
+    return CardContextPlacement(nudged, "inside")
 
 
 def _place_overlay(
@@ -335,6 +395,7 @@ __all__ = [
     "GLOBAL_ISLAND_WIDTH",
     "ISLAND_HEIGHT",
     "NAVIGATION_ISLAND_WIDTH",
+    "RAIL_CONTENT_HEIGHT",
     "RAIL_WIDTH",
     "SAFE_MARGIN",
     "STATUS_ISLAND_WIDTH",
