@@ -7554,7 +7554,19 @@ class TestAutoIdleAA:
         assert not canvas._quality.timer.isActive()
         assert not any(c.opts.get("antialias") for c in self._curves(canvas))
 
-    def test_idle_slot_blocked_while_mouse_down(self, qapp, monkeypatch):
+    def test_idle_slot_completes_despite_foreign_global_mouse_down(
+            self, qapp, monkeypatch):
+        """P1-6: a press held in ANOTHER window must not block THIS canvas.
+
+        ``QApplication.mouseButtons()`` is global — it reports input
+        delivered anywhere in the app, not just this canvas. Gating on it
+        directly used to pin idle-AA recovery pending until the user
+        happened to touch this canvas again, even though nothing was
+        actually happening here. Local interaction state
+        (``_interaction_depth`` / ``_overlay_axes.dragging``) is now the
+        primary judge; the global query is only probed defensively (see
+        test_idle_quality_mouse_buttons_provider_exception_is_logged).
+        """
         from PyQt5.QtCore import Qt
         from PyQt5.QtWidgets import QApplication
 
@@ -7563,16 +7575,46 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.LeftButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._quality.aa_on is False
+        assert canvas._quality.aa_on is True
 
-    def test_idle_slot_blocked_while_overlay_dragging(self, qapp, monkeypatch):
-        from PyQt5.QtCore import Qt
-        from PyQt5.QtWidgets import QApplication
+    def test_idle_quality_mouse_buttons_provider_exception_is_logged(
+            self, qapp, caplog):
+        """Provider failures are logged; a raising provider must not block
+        idle-AA recovery (the result is only ever probed, never gating)."""
+        import logging
 
+        canvas = self._plot(qapp)
+
+        def _boom_provider():
+            raise RuntimeError("idle mouseButtons provider failed")
+
+        canvas._quality._mouse_buttons_provider = _boom_provider
+        with caplog.at_level(
+                logging.WARNING, logger="mf4_analyzer.ui.pg_canvas.quality"):
+            canvas.try_enable_idle_quality()
+
+        assert canvas._quality.aa_on is True
+        assert any(
+            "provider" in record.getMessage().lower()
+            and record.exc_info is not None
+            for record in caplog.records
+        ), "provider failure must be logged with exception info"
+
+    def test_idle_slot_blocked_while_local_interaction_depth_busy(
+            self, qapp):
+        """Local-activity injection (no mouseButtons monkeypatch): a live
+        ViewBox drag, represented by ``_interaction_depth`` > 0, is a real
+        busy signal this canvas can answer for on its own."""
+        canvas = self._plot(qapp)
+        canvas._interaction_depth = 1
+        try:
+            canvas.try_enable_idle_quality()
+            assert canvas._quality.aa_on is False
+        finally:
+            canvas._interaction_depth = 0
+
+    def test_idle_slot_blocked_while_overlay_dragging(self, qapp):
         canvas = self._plot(qapp, mode="overlay")
-        monkeypatch.setattr(
-            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
-        )
         canvas._overlay_axes.dragging = True
         canvas.try_enable_idle_quality()
         assert canvas._quality.aa_on is False
@@ -7672,22 +7714,33 @@ class TestAutoIdleAA:
         assert canvas._quality.aa_on is False
         assert canvas._quality.timer.isActive()
 
-    def test_mouse_release_rearms_after_blocked_idle_timeout(self, qapp, monkeypatch):
+    def test_locally_busy_idle_check_rearms_the_timer(self, qapp):
+        """P1-6: hitting the busy gate polls again instead of giving up.
+
+        Distinct from a foreign global press (which no longer blocks at
+        all — see test_idle_slot_completes_despite_foreign_global_mouse_down):
+        a LIVE local interaction (``_interaction_depth`` > 0, e.g. an
+        in-progress ViewBox drag) is a real busy signal. If the idle timer
+        somehow fires while it is still set, the old code returned with the
+        timer left stopped — recovery then silently waited for an unrelated
+        canvas event. The fix re-arms so it keeps polling.
+        """
+        canvas = self._plot(qapp)
+        canvas._quality.timer.stop()
+        canvas._interaction_depth = 1
+        try:
+            canvas.try_enable_idle_quality()
+            assert canvas._quality.aa_on is False
+            assert canvas._quality.timer.isActive()
+        finally:
+            canvas._interaction_depth = 0
+
+    def test_mouse_release_event_rearms_idle_timer(self, qapp):
         from PyQt5.QtCore import QEvent, QPoint, Qt
         from PyQt5.QtGui import QMouseEvent
-        from PyQt5.QtWidgets import QApplication
 
         canvas = self._plot(qapp)
-        canvas.set_xlim(0.1, 0.9)
-        canvas._flush_pending_refresh()
-        assert canvas._quality.timer.isActive()
-
-        monkeypatch.setattr(
-            QApplication, "mouseButtons", staticmethod(lambda: Qt.LeftButton)
-        )
         canvas._quality.timer.stop()
-        canvas.try_enable_idle_quality()
-        assert canvas._quality.aa_on is False
         assert not canvas._quality.timer.isActive()
 
         release = QMouseEvent(

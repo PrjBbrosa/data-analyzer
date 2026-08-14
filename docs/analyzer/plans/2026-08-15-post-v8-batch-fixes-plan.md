@@ -115,7 +115,7 @@
 **Files**: `ui/pg_canvas/quality.py` · `ui/pg_canvas/line_canvas.py` ·
 `ui/main_window/window.py` 及消息调用点 · `docs/lessons-learned/…` · 对应 tests
 
-- [ ] **P1-6**:把 `_IdleQualityActivity` 模式移植进 `QualityManager`
+- [x] **P1-6**:把 `_IdleQualityActivity` 模式移植进 `QualityManager`
   (`_idle_quality_allowed` 的全局 mouseButtons 检查降级为可注入防御 provider,
   本地交互生命周期为主判据);命中闸门时重新武装计时器而不是静默放弃;
   lessons `idle-quality-follows-local-canvas-activity.md` 的 checks 扩到
@@ -123,14 +123,55 @@
   `test_frame_paint_backstop_is_installed_on_real_canvas` 必须保持绿。
   逐步替换 test_pg_timedomain_canvas.py 里对 mouseButtons 的 monkeypatch 为
   本地 activity 注入(至少新增路径如此,存量可分步)。
-- [ ] §4.4 `last_activity_monotonic` 死字段:删除并修正类 docstring。
-- [ ] **P1-5**:全仓审计 `statusBar.showMessage` 调用点并按「错误/失败类 vs
+  **落地**:`quality.py` 新增 `_idle_quality_locally_busy()`(判据复用既有
+  `_interaction_depth` / `_overlay_axes.dragging`,与 line_canvas 的
+  `is_busy()` 同构)+ `_probe_idle_mouse_buttons_provider()`(仅探测/记录失败,
+  从不据此拦截,provider 经 `_mouse_buttons_provider`(新增 `_owned_names`)
+  可注入);`try_enable_idle_quality()` 命中「本地忙」时改为
+  `schedule_idle_quality()` 重新武装而非裸 `return`。新增/重写用例:
+  `test_idle_slot_completes_despite_foreign_global_mouse_down`(外部窗口按住
+  鼠标不再拦截)、`test_idle_slot_blocked_while_local_interaction_depth_busy`
+  (本地 activity 注入,不再靠 mouseButtons monkeypatch)、
+  `test_idle_quality_mouse_buttons_provider_exception_is_logged`、
+  `test_locally_busy_idle_check_rearms_the_timer`(替换旧的
+  `test_mouse_release_rearms_after_blocked_idle_timeout`,后者断言的正是被
+  修复的旧行为)、`test_mouse_release_event_rearms_idle_timer`(保留
+  eventFilter release→rearm 机制的既有覆盖)。
+- [x] §4.4 `last_activity_monotonic` 死字段:删除并修正类 docstring。
+  **落地**:`line_canvas.py::_IdleQualityActivity` 删掉该字段(从未被读取,
+  仅 `time.monotonic()` 空转写入),`_touch()` 连带其调用点一并删除
+  (`note_move`/`note_pulse` 改为显式 no-op 并在 docstring 说明:idle 计时器
+  的 delay/rearm 完全靠调用点显式重排,不靠时间戳);`line_canvas.py` 头部
+  `import time` 随之移除(不再被使用)。
+- [x] **P1-5**:全仓审计 `statusBar.showMessage` 调用点并按「错误/失败类 vs
   信息类」分类成清单(落在本 plan 末尾附录);**错误/失败类改走 toast**
   (ASC 回退那一处由 F2 负责,清单里标注即可);信息类维持现状;在
   lessons(新增或扩展 codex-status-hint-button-geometry.md)显式写明
   「showMessage 已是纯逻辑 API,用户可见提示走 toast」。
-- [ ] 验证:`tests/ui/test_pg_timedomain_canvas.py test_pg_line_canvas.py
+  **落地**:审计结果见文末附录——51 处里 26 处已经与相邻 `self.toast(...)`
+  成对出现(横跨 info/success/warning/error 各级别),25 处纯信息类且现状
+  维持;**逐处核实后未发现遗漏未接 toast 的错误/失败类调用点**,因此本 Task
+  未新增任何 toast 调用。为把这条不变量钉成机械护栏(防后人删掉 toast 调用
+  却不删 statusBar 那行,又变回 P1-5 的哑巴状态),新增三条回归用例
+  (`tests/ui/test_main_window_smoke.py`):
+  `test_order_job_failed_routes_to_toast_and_status_bar`、
+  `test_frf_failed_routes_to_toast_and_status_bar`、
+  `test_fft_time_failed_routes_to_toast_and_status_bar`——分别断言
+  `_on_order_job_failed` / `_on_frf_failed` / `_on_fft_time_failed`
+  仍然把 `self.toast(msg, "error")` 与 `statusBar.showMessage(...)` 成对调用;
+  已实测:临时删掉 `_on_order_job_failed` 里的 `self.toast(msg, "error")`
+  会让对应新用例失败(`assert False`),证明测试真的钉住了这条行为,而不是
+  空断言。lessons 扩到 `codex-status-hint-button-geometry.md`(新增 addendum
+  段落,见该文件)。
+- [x] 验证:`tests/ui/test_pg_timedomain_canvas.py test_pg_line_canvas.py
   tests/ui/test_main_window_smoke.py` 全绿。
+  **实测**(worktree `agent-aa61881476c96fbf8`):720 passed / 4 skipped /
+  1 deselected / 0 failed(76s)。另单独确认
+  `tests/ui/test_pg_canvas_backref_invariants.py`(3 passed,
+  `_mouse_buttons_provider` 落进 `QualityManager._owned_names` 未触发
+  write-through 泄漏)与
+  `test_pg_timedomain_canvas.py::test_frame_paint_backstop_is_installed_on_real_canvas`
+  (1 passed)保持绿。
 
 ## Task F6(sonnet):文档与工作区卫生
 
@@ -177,3 +218,97 @@
 - [ ] review §6 与本文各 Task 复选框回填;Cocoa 真机待验清单
   (浮层锚点、矮 stage rail、QSS 色板归并)汇总给用户。
 - [ ] 合入本地 main,不 push(推送由用户决定)。
+
+## 附录:showMessage 调用点分类(F5 产出)
+
+2026-08-15,F5 全仓 grep `self.statusBar.showMessage(...)`(analyzer 主窗口的
+`SurfaceStatusBar`,P1-5 指出其 `showMessage()` 恒调
+`super().showMessage("", 0)`,不绘制任何文字,见
+`ui/main_window/window.py:113-126`),命中 **51 处**,全部落在
+`mf4_analyzer/ui/main_window/` 下的 7 个文件:`window.py` ·
+`_analysis_mixin.py` · `_fft_mixin.py` · `_fft_time_mixin.py` ·
+`_frf_mixin.py` · `_order_mixin.py` · `_project_io_mixin.py`。
+
+**范围说明**:`mf4_analyzer/acquisition_ui/main_window/*.py` 另有约 30 处
+`self._status.showMessage(...)`。那是一个真实、会绘制的 `QStatusBar`
+(`acquisition_ui/main_window/window.py:343: self._status = QStatusBar(self)`),
+**不是** `SurfaceStatusBar`,不受 P1-5 描述的「恒不可视」缺陷影响,因此不计入
+本次分类,也不需要 toast 化。
+
+**方法**:逐处读上下文(前后约 10-15 行),检查同一函数体内是否已有
+`self.toast(...)` 相邻调用(成对出现即视为「已覆盖」);再按文案语义把
+**未配 toast** 的一侧分「错误/失败类」与「信息类」。
+
+**结论**:51 处中 **26 处已经与 `self.toast(...)` 成对调用**(覆盖
+info/success/warning/error 各级别),**25 处是纯信息类且从未配 toast、也不
+需要配**(进度提示、就绪态提示、成功摘要、用户主动取消的确认性文案——空态
+在画布上已有可见的视觉反馈,如 `show_empty_hint`)。逐处核实后
+**没有发现任何「错误/失败类但尚未接 toast」的调用点**——review §3 P1-5 举例
+的四类(FFT 峰值读数、保存/关闭、游标重置、错误提示)在本次复核时确认均已
+在更早的「V8 minor:非模态 toast 替代 QMessageBox.critical」系列改动中补上
+了 toast。`SurfaceStatusBar` 本身确实不可视,但用户可感知的错误/失败路径
+早已绕过它。因此 **本 Task 未新增任何 toast 调用**;为了不让这条不变量
+将来悄悄失守,已补三条回归用例(见上方 Task F5 checklist 的「落地」记录)。
+
+### 分类清单
+
+| 文件 | 行号 | 分类 | 状态 |
+| --- | --- | --- | --- |
+| `_analysis_mixin.py` | 99 | 通用反馈(含 error) | 已配 toast(L98,`_emit_compute_feedback` 按 `level` 统一路由) |
+| `_analysis_mixin.py` | 1156 | 信息类(就绪态提示) | 维持现状 |
+| `_fft_mixin.py` | 412 | 信息类(计算中进度) | 维持现状 |
+| `_fft_mixin.py` | 483 | 信息类(峰值读数) | 已配 toast(L484,success) |
+| `_fft_time_mixin.py` | 419 | 信息类(计算中进度) | 维持现状 |
+| `_fft_time_mixin.py` | 661 | 信息类(缓存命中结果) | 维持现状 |
+| `_fft_time_mixin.py` | 666 | 信息类(完成摘要) | 维持现状 |
+| `_fft_time_mixin.py` | 703 | 错误类 | 已配 toast(L702,error,`outcome is None` 时) |
+| `_frf_mixin.py` | 314 | 警告类(非均匀时间轴自动重建) | 已配 toast(L312,warning) |
+| `_frf_mixin.py` | 718 | 信息类(完成摘要) | 维持现状 |
+| `_frf_mixin.py` | 735 | 错误类 | 已配 toast(L736,error) |
+| `_frf_mixin.py` | 792 | 信息类(就绪态提示) | 维持现状 |
+| `_order_mixin.py` | 280 | 警告类(转速不适用) | 已配 toast(L279,warning) |
+| `_order_mixin.py` | 429 | 信息类(计算中进度) | 维持现状 |
+| `_order_mixin.py` | 717 | 信息类(完成摘要) | 已配 toast(L720,success,`emit_feedback` 时) |
+| `_order_mixin.py` | 771 | 错误类 | 已配 toast(L770,error,`outcome is None` 时) |
+| `_project_io_mixin.py` | 227 | 信息类(用户取消加载) | 已配 toast(L228,info) |
+| `_project_io_mixin.py` | 341 | 信息类(批量加载完成) | 已配 toast(L344,success) |
+| `_project_io_mixin.py` | 629 | 信息类(`announce_loaded` 通用出口) | 已配 toast(L630,success) |
+| `_project_io_mixin.py` | 633 | 信息类(加载中进度) | 维持现状 |
+| `_project_io_mixin.py` | 705 | 信息类(用户取消 BLF/ASC) | 维持现状 |
+| `_project_io_mixin.py` | 1244 | 信息类(用户取消批量导入) | 维持现状 |
+| `_project_io_mixin.py` | 1249 | 信息类(用户取消批量导入) | 维持现状 |
+| `_project_io_mixin.py` | 1350 | 信息类(用户中止批量导入摘要) | 维持现状 |
+| `_project_io_mixin.py` | 1355 | 信息类(批量导入完成摘要) | 维持现状 |
+| `_project_io_mixin.py` | 1615 | 信息类(关闭文件摘要) | 已配 toast(L1616,info) |
+| `_project_io_mixin.py` | 1700 | 信息类(保存项目成功) | 已配 toast(L1701,success) |
+| `_project_io_mixin.py` | 1898 | 错误类(项目打开后渲染恢复失败) | 已配 toast(L1900,warning) |
+| `_project_io_mixin.py` | 1906 | 信息类(打开项目成功,1898 的happy-path 分支) | 维持现状 |
+| `_project_io_mixin.py` | 2002 | 信息类(关闭全部) | 已配 toast(L2003,info) |
+| `window.py` | 520 | 信息类(初始 "Ready") | 维持现状 |
+| `window.py` | 919 | 信息类(`_status_message` 通用底层 helper) | 维持现状(通用工具,非错误专属) |
+| `window.py` | 923 | 警告类(`_warn_action_blocked`) | 已配 toast(L924,warning) |
+| `window.py` | 936 | 信息类(复制成功) | 已配 toast(L937,success) |
+| `window.py` | 946 | 信息类(复制含标注成功) | 已配 toast(L947,success) |
+| `window.py` | 2446 | 信息类(时间轴重建成功) | 已配 toast(L2449,success) |
+| `window.py` | 2687 | 信息类(关闭多个来源摘要) | 已配 toast(L2690,info) |
+| `window.py` | 2911 | 信息类(横坐标已更新) | 已配 toast(L2913,success,条件性) |
+| `window.py` | 2933 | 信息类(游标已重置) | 已配 toast(L2934,info) |
+| `window.py` | 2983 | 信息类(空态"未加载文件") | 维持现状 |
+| `window.py` | 2989 | 信息类(文件摘要) | 维持现状 |
+| `window.py` | 3208 | 信息类(聚焦视图提示) | 维持现状 |
+| `window.py` | 3479 | 信息类(空态提示;user_initiated 分支已由 L3481 `_warn_action_blocked` 覆盖) | 维持现状 |
+| `window.py` | 3535 | 信息类(用户在风险确认对话框取消后的摘要) | 维持现状 |
+| `window.py` | 3618 | 信息类(全部隐藏摘要;画布已有可见空态提示) | 维持现状 |
+| `window.py` | 3679 | 信息类(0/N 绘制摘要;画布已有可见空态提示) | 维持现状 |
+| `window.py` | 3775 | 信息类(绘制结果摘要) | 维持现状 |
+| `window.py` | 4750 | 警告类(时间轴非均匀,无法重建) | 已配 toast(L4749,warning) |
+| `window.py` | 4755 | 警告类(时间轴非均匀,文件对象不支持) | 已配 toast(L4754,warning) |
+| `window.py` | 4800 | 信息类(自动重建完成) | 已配 toast(L4803,success) |
+| `window.py` | 4879 | 信息类(复制成功) | 已配 toast(L4880,success) |
+
+**已跳过 / 不在本清单内的一处**:review P1-2 点名的 ASC 回退原因
+(`ASC_PHASE_FALLBACK` / `"兼容解析重试"`,`io/asc_can_format.py:39,291,294`)
+目前在生产代码里**没有任何消费方**——它还没有走到任何
+`statusBar.showMessage` 调用点,所以不在上表 51 行之内。该出口由 **Task F2**
+负责接线(P1-2:接三参回调、用 toast 呈现,不用 statusBar.showMessage),此处
+仅作标注,F5 未改动 `io/asc_can_format.py` 或 ASC 载入路径。

@@ -1835,6 +1835,68 @@ def test_order_dispatch_unsuitable_rpm_warns_but_starts_worker(
         assert btn_ot.isEnabled()
 
 
+# P1-5 regression guards: SurfaceStatusBar.showMessage() is a pure logic API
+# (window.py's SurfaceStatusBar always calls super().showMessage("", 0), see
+# docs/lessons-learned/codex-status-hint-button-geometry.md) — it never paints
+# text. The error toast is the ONLY user-visible channel for these compute-
+# failure handlers. Each already routes through ``self.toast(..., "error")``;
+# these tests exist so a future edit that drops the toast call (while leaving
+# the statusBar-only line intact) fails loudly instead of silently
+# reintroducing the P1-5 pattern for that one path.
+def test_order_job_failed_routes_to_toast_and_status_bar(qtbot, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    captured = []
+    monkeypatch.setattr(
+        win, 'toast',
+        lambda msg, level='info': captured.append((msg, level)),
+    )
+    win.statusBar.clearMessage()
+
+    win._on_order_job_failed(None, "boom")
+
+    assert any(level == 'error' and "boom" in msg for msg, level in captured)
+    assert "阶次分析错误" in win.statusBar.currentMessage()
+
+
+def test_frf_failed_routes_to_toast_and_status_bar(qtbot, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    captured = []
+    monkeypatch.setattr(
+        win, 'toast',
+        lambda msg, level='info': captured.append((msg, level)),
+    )
+    win.statusBar.clearMessage()
+
+    win._on_frf_failed({}, "boom")
+
+    assert any(level == 'error' and "boom" in msg for msg, level in captured)
+    assert "频响错误" in win.statusBar.currentMessage()
+
+
+def test_fft_time_failed_routes_to_toast_and_status_bar(qtbot, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    captured = []
+    monkeypatch.setattr(
+        win, 'toast',
+        lambda msg, level='info': captured.append((msg, level)),
+    )
+    win.statusBar.clearMessage()
+
+    win._on_fft_time_failed(None, "boom")
+
+    assert any(level == 'error' and "boom" in msg for msg, level in captured)
+    assert "FFT vs Time 错误" in win.statusBar.currentMessage()
+
+
 def test_close_file_resets_inspector(qapp, qtbot, loaded_csv):
     from unittest.mock import patch
     from mf4_analyzer.ui.main_window import MainWindow
