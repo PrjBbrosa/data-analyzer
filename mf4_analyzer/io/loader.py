@@ -482,7 +482,7 @@ class DataLoader:
         return data, channels, units
 
     @staticmethod
-    def probe_blf_dbc(fp, dbc_paths, progress_callback=None):
+    def probe_blf_dbc(fp, dbc_paths, progress_callback=None, cancel_check=None):
         """Return a lightweight compatibility probe for a BLF and DBC path list."""
         def map_read(current, total):
             _emit_progress(
@@ -503,6 +503,7 @@ class DataLoader:
             frames,
             dbc_paths,
             progress_callback=map_probe,
+            cancel_check=cancel_check,
         )
 
     @staticmethod

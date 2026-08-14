@@ -195,3 +195,71 @@ def test_unprobed_candidate_is_reported_as_unverified():
     from mf4_analyzer.blf_dbc_candidates import candidate_status
 
     assert candidate_status({"paths": ["later.dbc"], "probe": None}) == "unverified"
+
+
+def _incomplete_probe(reason):
+    """A probe that stopped early: nothing was proved, in either direction."""
+    return SimpleNamespace(
+        strength="none",
+        sampling_complete=False,
+        sampling_strategy="incomplete",
+        estimate_unavailable_reason=reason,
+        decoded_frame_ratio=0.0,
+        sample_decode_success_ratio=0.0,
+        sample_match_ratio=0.0,
+        estimated_decoded_frame_ratio=None,
+        matched_frame_count=0,
+        total_frame_count=1000,
+        signal_names=(),
+        decoded_signal_count=0,
+    )
+
+
+def test_cancelled_or_truncated_probe_is_incomplete_not_mismatch():
+    """§4.1: absent evidence is not evidence of absence."""
+    from mf4_analyzer.blf_dbc_candidates import candidate_status
+
+    for reason in ("cancelled", "truncated_sample", "corrupt_sample"):
+        candidate = {
+            "paths": ["bus.dbc"],
+            "probe_attempted": True,
+            "probe": _incomplete_probe(reason),
+        }
+        assert candidate_status(candidate) == "incomplete"
+
+
+def test_incomplete_still_reports_a_strength_that_was_actually_proved():
+    from mf4_analyzer.blf_dbc_candidates import candidate_status
+
+    partial = _incomplete_probe("cancelled")
+    partial.strength = "weak"
+    partial.signal_names = ("EngineSpeed",)
+
+    assert candidate_status({"paths": ["bus.dbc"], "probe": partial}) == "weak"
+
+
+def test_incomplete_ranks_between_unverified_and_mismatch():
+    from mf4_analyzer.blf_dbc_candidates import rank_candidates
+
+    # Filenames deliberately sort against the wanted order so the assertion
+    # can only pass on the status rank, not on the alphabetical tie-break.
+    unverified = {"paths": ["z-unverified.dbc"], "recent_rank": 1, "probe": None}
+    incomplete = {
+        "paths": ["m-incomplete.dbc"],
+        "recent_rank": 1,
+        "probe_attempted": True,
+        "probe": _incomplete_probe("cancelled"),
+    }
+    mismatch = {
+        "paths": ["a-mismatch.dbc"],
+        "recent_rank": 1,
+        "probe": _probe(strength="none", decoded_ratio=0.0, signal_count=0),
+    }
+
+    ranked = rank_candidates([mismatch, incomplete, unverified])
+
+    assert [candidate["paths"][0] for candidate in ranked] == [
+        "z-unverified.dbc",
+        "m-incomplete.dbc",
+        "a-mismatch.dbc",
+    ]

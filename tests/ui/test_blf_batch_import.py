@@ -10,6 +10,7 @@ pytest.importorskip("cantools", reason="cantools not installed")
 
 from mf4_analyzer.ui_kit import load_stylesheet
 from mf4_analyzer.io import DataLoader
+from mf4_analyzer.io.blf_format import BlfDbcProbe
 from tests._helpers.blf_factory import write_raw_blf, write_sample_blf, write_two_message_dbc
 
 
@@ -315,15 +316,22 @@ def test_candidate_probe_deduplicates_sets_and_leaves_overflow_unverified(
 
     def probe_frames(_frames, paths, **_kwargs):
         probes.append(tuple(paths))
-        return SimpleNamespace(
-            is_match=True,
-            strength="weak",
-            decoded_frame_ratio=0.25,
-            signal_names=("value",),
-            matched_frame_id_count=1,
-            total_frame_id_count=6,
-            decoded_frame_count=1,
+        # Real BlfDbcProbe rather than a hand-rolled namespace: the stub used
+        # to carry retired fields (decoded_frame_count / decoded_frame_ratio)
+        # and miss every sampling field, so it could not catch copy or status
+        # changes that read them.
+        return BlfDbcProbe(
+            dbc_paths=tuple(paths),
             total_frame_count=6,
+            total_frame_id_count=6,
+            matched_frame_count=1,
+            matched_frame_id_count=1,
+            decode_sample_count=4,
+            sampled_matched_frame_count=1,
+            decoded_sample_count=1,
+            signal_names=("value",),
+            sampling_strategy="complete",
+            sampling_complete=True,
         )
 
     monkeypatch.setattr(
@@ -340,6 +348,7 @@ def test_candidate_probe_deduplicates_sets_and_leaves_overflow_unverified(
     assert len(probes) == 3
     assert len(candidates) == 5
     assert sum(candidate_status(candidate) == "unverified" for candidate in candidates) == 2
+    assert sum(candidate_status(candidate) == "weak" for candidate in candidates) == 3
     identities = [candidate["identity"] for candidate in candidates]
     assert len(identities) == len(set(identities))
     assert any(
@@ -347,3 +356,10 @@ def test_candidate_probe_deduplicates_sets_and_leaves_overflow_unverified(
         for candidate in candidates
         if candidate_status(candidate) == "unverified"
     )
+    probed_text = next(
+        subject._format_blf_dbc_candidate(candidate)
+        for candidate in candidates
+        if candidate_status(candidate) == "weak"
+    )
+    assert "弱匹配" in probed_text
+    assert "完整解码 1/4 (25%)" in probed_text

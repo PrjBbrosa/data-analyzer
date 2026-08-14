@@ -155,6 +155,32 @@ def make_can_frames(
     return frames
 
 
+def make_sampled_can_frames(
+    *,
+    extra: int = 1_000,
+    bulk_id: int = 0x123,
+    rare_id: int | None = None,
+):
+    """Frame list longer than the DBC probe's decode cap.
+
+    Above ``_PROBE_DECODE_CAP`` the probe switches to stratified sampling —
+    the path where "sampled" vs "complete" copy and the separate discovery
+    budget actually differ from a full scan. ``rare_id`` puts a single frame
+    of a second arbitration id at index 1, which the stratified sample never
+    picks, modelling the low-frequency-signal case from P0-1.
+    """
+    from mf4_analyzer.io.blf_format import _PROBE_DECODE_CAP
+
+    bulk = int(_PROBE_DECODE_CAP) + int(extra)
+    if rare_id is None:
+        return make_can_frames([(bulk, bulk_id, engine_payload())])
+    return make_can_frames([
+        (1, bulk_id, engine_payload()),
+        (1, rare_id, engine_payload()),
+        (bulk - 1, bulk_id, engine_payload()),
+    ])
+
+
 def _sample_frame_payloads(n: int = 5):
     """EngineData / VehicleSpeed payloads matching :func:`write_sample_blf`."""
     enc16 = lambda v: struct.pack("<H", int(v))  # noqa: E731

@@ -135,6 +135,13 @@ def prefilter_candidates(candidates, blf_id_counts: Mapping[int, int]):
     )
 
 
+#: Ordered best-to-worst.  ``incomplete`` sits between ``unverified`` and
+#: ``mismatch``: the probe ran but was cut short (cancel / truncated /
+#: corrupt tail), so it proved less than a full probe yet more than nothing.
+#: Only ``mismatch`` is real negative evidence, and only it is unselectable.
+CANDIDATE_STATUSES = ("strong", "weak", "unverified", "incomplete", "mismatch")
+
+
 def candidate_status(candidate) -> str:
     """Return a truthful state; absent probe results are not mismatches."""
 
@@ -146,13 +153,20 @@ def candidate_status(candidate) -> str:
         return "strong"
     if strength == "weak":
         return "weak"
+    # A probe that never finished cannot have proved a mismatch.  Anything it
+    # did manage to decode is already reflected in ``strength`` above.
+    if not bool(getattr(probe, "sampling_complete", True)):
+        return "incomplete"
     return "mismatch"
 
 
 def rank_candidates(candidates):
     """Rank by exact coverage and sample ratio, then structure/path/name."""
 
-    status_rank = {"strong": 3, "weak": 2, "unverified": 1, "mismatch": 0}
+    status_rank = {
+        status: len(CANDIDATE_STATUSES) - index
+        for index, status in enumerate(CANDIDATE_STATUSES)
+    }
 
     def exact_coverage(probe):
         if probe is None:
