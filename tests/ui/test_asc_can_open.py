@@ -1,6 +1,8 @@
 """CANoe ASC UI dispatch — same DBC chain as BLF, distinct source_kind."""
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 pytest.importorskip("can", reason="python-can not installed (win32-gated)")
@@ -11,6 +13,7 @@ from tests._helpers.blf_factory import (
     write_sample_blf,
     write_two_message_dbc,
 )
+from tests.test_asc_can_loader import _write_early_unsupported_asc
 
 
 def test_load_one_routes_canoe_asc_with_dbc(qapp, tmp_path, monkeypatch):
@@ -150,3 +153,36 @@ def test_project_roundtrip_restores_canoe_asc_dbc_without_picker(
     assert "EngineSpeed" in fd.channels
     assert fd.source_metadata["source_kind"] == "canoe_asc"
     assert fd.source_metadata["dbc_paths"] == [str(dbc.resolve())]
+
+
+def test_ui_fallback_reason_is_visible_when_opening_canoe_asc(
+    qapp, tmp_path, monkeypatch, caplog,
+):
+    from collections import OrderedDict
+
+    from mf4_analyzer import diagnostics
+    from mf4_analyzer.io.asc_can_format import AscFallbackReason
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    monkeypatch.setattr(diagnostics, "_THROTTLE_STATE", OrderedDict())
+    dbc_dir = tmp_path / "dbc"
+    dbc_dir.mkdir()
+    dbc = write_two_message_dbc(dbc_dir / "bus.dbc")
+    asc = _write_early_unsupported_asc(tmp_path / "fallback.asc")
+
+    caplog.set_level(logging.WARNING, logger="mf4_analyzer.io.asc_can_format")
+    mw = MainWindow()
+    monkeypatch.setattr(
+        mw, "_ask_open_blf_dbc_dialog",
+        lambda *args, **kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [str(dbc)])
+    mw._load_one(str(asc))
+
+    assert len(mw.files) == 1
+    assert any(
+        AscFallbackReason.UNSUPPORTED_SYNTAX.value in record.getMessage()
+        and "兼容解析重试" in record.getMessage()
+        for record in caplog.records
+    )
