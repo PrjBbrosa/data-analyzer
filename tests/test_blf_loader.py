@@ -16,6 +16,7 @@ from tests._helpers.blf_factory import (  # noqa: E402
     _sample_frame_payloads,
     engine_payload,
     make_can_frames,
+    make_sampled_can_frames,
     write_engine_only_dbc,
     write_raw_blf,
     write_sample_blf,
@@ -463,6 +464,76 @@ def test_discovery_scan_runs_only_when_the_sample_is_incomplete(
     ])
     DataLoader.probe_blf_dbc_frames(large, [str(dbc)])
     assert scans == [len(large)], "discovery must scan exactly once, when used"
+
+
+def test_probe_progress_uses_two_sub_intervals_and_hits_100_only_at_the_end(
+    tmp_path,
+):
+    """§4.1: the ID scan reported 100% before any decoding had happened.
+
+    Same rule the ASC reader already follows — 100% means "the result
+    exists", not "one phase finished".
+    """
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    frames = make_sampled_can_frames(rare_id=0x100)
+    progress = []
+
+    DataLoader.probe_blf_dbc_frames(
+        frames,
+        [str(dbc)],
+        progress_callback=lambda current, total: progress.append((current, total)),
+    )
+
+    assert progress
+    totals = {total for _current, total in progress}
+    assert len(totals) == 1
+    total = totals.pop()
+    values = [current for current, _total in progress]
+    assert values == sorted(values), "progress must stay monotonic"
+    assert values.count(total) == 1, "100% must be emitted exactly once"
+    assert values[-1] == total, "100% must be the last thing emitted"
+    # Both phases have to move the bar, in their own halves of the scale.
+    assert any(0 < value <= total // 2 for value in values)
+    assert any(total // 2 < value < total for value in values)
+
+
+def test_cancelled_probe_never_reports_100_percent(tmp_path):
+    """§4.1: a probe that never produced a result must not claim completion."""
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    frames = make_can_frames([(20_000, 0x123, engine_payload())])
+    progress = []
+    polls = 0
+
+    def cancel_check():
+        # Cancel *after* the ID scan, inside the decode phase — that is
+        # where the old code re-emitted 100% on every decode step.
+        nonlocal polls
+        polls += 1
+        return polls >= 20_300
+
+    probe = DataLoader.probe_blf_dbc_frames(
+        frames,
+        [str(dbc)],
+        progress_callback=lambda current, total: progress.append((current, total)),
+        cancel_check=cancel_check,
+    )
+
+    assert probe.sampling_complete is False
+    assert progress, "the scan phase must still report real progress"
+    assert all(current < total for current, total in progress)
+
+
+def test_zero_frame_probe_states_why_it_could_not_conclude(tmp_path):
+    """§4.1 / D1: an empty frame list is a reason, not a silent success."""
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+
+    probe = blf_format._probe_blf_dbc_frames([], [str(dbc)])
+
+    assert probe.total_frame_count == 0
+    assert probe.is_match is False
+    assert probe.sampling_complete is False
+    assert probe.estimate_unavailable_reason == "no_frames"
+    assert probe.estimated_decoded_frame_ratio is None
 
 
 def test_cancelled_probe_leaves_estimates_empty_with_reason(tmp_path):

@@ -692,6 +692,17 @@ def _probe_decode_indices(frames, cap=_PROBE_DECODE_CAP):
     return _statistical_probe_indices(frames, cap=cap)
 
 
+# Probe progress runs on a fixed 0..1000 scale split into real sub-intervals:
+# the full ID scan, then the bounded statistical decode, then discovery.
+# 1000 is emitted exactly once, after the BlfDbcProbe exists — an early 100%
+# is indistinguishable from "done" to every caller (same rule the ASC reader
+# follows).
+_PROBE_PROGRESS_TOTAL = 1000
+_PROBE_SCAN_PROGRESS_END = 500
+_PROBE_SAMPLE_PROGRESS_END = 900
+_PROBE_DECODE_PROGRESS_END = 990
+
+
 def _empty_blf_dbc_probe(dbc_paths, total_frames, *, reason, **overrides):
     values = {
         "dbc_paths": tuple(str(path) for path in dbc_paths),
@@ -722,6 +733,12 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
         return _empty_blf_dbc_probe(
             dbc_paths, total_frames, reason="cancelled",
         )
+    if total_frames <= 0:
+        # Nothing to conclude from, in either direction. Say so rather than
+        # returning a "complete" probe whose every number is zero.
+        return _empty_blf_dbc_probe(
+            dbc_paths, total_frames, reason="no_frames",
+        )
 
     db = _load_dbc_database(dbc_paths)
     lookup = _cached_message_lookup(db)
@@ -729,9 +746,8 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
     matched_frame_ids = set()
     matched_frame_count = 0
 
-    progress_total = max(1, total_frames)
-    step = max(1, progress_total // 80)
-    _emit_progress(progress_callback, 0, progress_total)
+    step = max(1, total_frames // 80)
+    _emit_progress(progress_callback, 0, _PROBE_PROGRESS_TOTAL)
     try:
         for index, (_timestamp, arbitration_id, _payload) in enumerate(frames, 1):
             if cancelled():
@@ -743,7 +759,11 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
                 matched_frame_count += 1
                 matched_frame_ids.add(arbitration_id)
             if index % step == 0 or index == total_frames:
-                _emit_progress(progress_callback, index, progress_total)
+                _emit_progress(
+                    progress_callback,
+                    (_PROBE_SCAN_PROGRESS_END * index) // total_frames,
+                    _PROBE_PROGRESS_TOTAL,
+                )
     except IndexError:
         return _empty_blf_dbc_probe(
             dbc_paths, total_frames, reason="truncated_sample",
@@ -790,7 +810,14 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
                         sig_name for sig_name, _value in numeric_values
                     )
         if decode_index % decode_step == 0 or decode_index == decode_total:
-            _emit_progress(progress_callback, progress_total, progress_total)
+            _emit_progress(
+                progress_callback,
+                _PROBE_SCAN_PROGRESS_END + (
+                    (_PROBE_SAMPLE_PROGRESS_END - _PROBE_SCAN_PROGRESS_END)
+                    * decode_index
+                ) // decode_total,
+                _PROBE_PROGRESS_TOTAL,
+            )
 
     # Discovery pass: independent budget, own cap, names only.  Skipped when
     # the statistical sample already covered every frame — that is the only
@@ -798,15 +825,28 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
     # the branch that actually consumes it instead of running per candidate.
     discovery_decoded = 0
     if sampling_complete and not complete_scan:
-        for frame_index in _discovery_probe_indices(frames):
-            if frame_index in statistical_set:
-                continue
+        discovery = [
+            frame_index for frame_index in _discovery_probe_indices(frames)
+            if frame_index not in statistical_set
+        ]
+        discovery_total = max(1, len(discovery))
+        discovery_step = max(1, discovery_total // 40)
+        for position, frame_index in enumerate(discovery, 1):
             if cancelled():
                 break
             try:
                 _timestamp, arbitration_id, payload = frames[frame_index]
             except IndexError:
                 break
+            if position % discovery_step == 0 or position == discovery_total:
+                _emit_progress(
+                    progress_callback,
+                    _PROBE_SAMPLE_PROGRESS_END + (
+                        (_PROBE_DECODE_PROGRESS_END - _PROBE_SAMPLE_PROGRESS_END)
+                        * position
+                    ) // discovery_total,
+                    _PROBE_PROGRESS_TOTAL,
+                )
             if not isinstance(payload, (bytes, bytearray)):
                 continue
             msg = lookup(arbitration_id)
@@ -838,7 +878,7 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
             estimate_unavailable_reason=reason,
         )
 
-    return BlfDbcProbe(
+    probe = BlfDbcProbe(
         dbc_paths=dbc_paths,
         total_frame_count=total_frames,
         total_frame_id_count=len(frame_ids),
@@ -853,6 +893,11 @@ def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_chec
         estimate_unavailable_reason=None,
         discovery_decoded_count=discovery_decoded,
     )
+    # 100% means "the result exists", not "a phase finished".
+    _emit_progress(
+        progress_callback, _PROBE_PROGRESS_TOTAL, _PROBE_PROGRESS_TOTAL,
+    )
+    return probe
 
 
 def _decode_blf_with_dbc(frames, dbc_paths, t0, progress_callback=None):

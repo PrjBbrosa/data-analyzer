@@ -310,7 +310,12 @@ def test_cancel_does_not_emit_success_100(tmp_path):
             cancel_check=cancel_check,
         )
     assert polls >= 3
-    assert progress == [] or all(current < total for current, total in progress)
+    # No escape hatch: an empty progress list would also pass "never reached
+    # 100%" while hiding a reader that reports nothing at all.
+    assert progress, "a cancelled read must still have reported real progress"
+    assert all(current < total for current, total in progress)
+    values = [current for current, _total in progress]
+    assert values == sorted(values)
 
 
 def test_asc_parse_outcome_records_backend_reason_and_bytes(tmp_path):
