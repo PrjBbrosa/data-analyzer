@@ -231,19 +231,51 @@ def _raise_if_cancelled(cancel_check, *, outcome=None):
         raise AscParseCancelled(outcome)
 
 
+# A bounded prefix scan is only informative once it has actually examined
+# CAN-log payload: a header/comment block that never reaches a data line
+# used to exhaust the old "64 lines of any kind" budget and pass by default
+# (§4.2: a genuinely unsupported file could go undetected until the fast
+# path had already read ~99.5% of a large file before falling back). N
+# reuses the historical window's magnitude — 64 — now counted in actual
+# data lines instead of any line.
+_PREFLIGHT_MIN_DATA_LINES = _PREFLIGHT_MAX_LINES
+# Header/comment scanning before the first data line is bounded by a more
+# generous ceiling than the normal budget, so a realistic long header does
+# not exhaust the window before reaching real content. Once at least one
+# data line has been seen, the normal _PREFLIGHT_BYTES budget applies again
+# (matches the historical cost model for genuinely dense CAN logs).
+_PREFLIGHT_HEADER_SAFETY_BYTES = _PREFLIGHT_BYTES * 4
+
+
 def _preflight_asc_format(fp) -> _PreflightResult:
     """Judge whether the fast parser can handle a bounded file prefix.
 
-    Reads at most 8 KiB / ~64 lines and reuses the line classifiers. It does
-    not accumulate frames or copy the full-file scanner.
+    Reuses the line classifiers without accumulating frames or copying the
+    full-file scanner. The verdict requires at least
+    ``_PREFLIGHT_MIN_DATA_LINES`` actual data lines to have been examined
+    (or the file to end first) before declaring "supported" — a scan that
+    closes on nothing but header/comment noise cannot honestly reach that
+    conclusion.
+
+    Documented residual boundary: header-only scanning is itself bounded
+    (``_PREFLIGHT_HEADER_SAFETY_BYTES``, 4x the normal 8 KiB budget) so a
+    pathological header cannot scan indefinitely. A file whose header alone
+    exceeds that ceiling with zero data lines seen still falls through to
+    the historical optimistic default below — early rejection only covers
+    prefixes where a decision is actually determinable within budget, not
+    every possible file shape.
     """
     bytes_read = 0
     base = 16
+    data_lines_seen = 0
     try:
         with open(fp, "r", encoding="ascii", errors="replace", newline="") as fh:
-            for index, raw_line in enumerate(fh):
+            for raw_line in fh:
                 bytes_read += len(raw_line)
-                if index >= _PREFLIGHT_MAX_LINES or bytes_read >= _PREFLIGHT_BYTES:
+                limit = (
+                    _PREFLIGHT_BYTES if data_lines_seen else _PREFLIGHT_HEADER_SAFETY_BYTES
+                )
+                if bytes_read >= limit:
                     break
                 stripped = raw_line.strip()
                 if not stripped or stripped.startswith("//"):
@@ -254,13 +286,19 @@ def _preflight_asc_format(fp) -> _PreflightResult:
                     continue
                 parsed = _parse_asc_data_line(stripped.split(), base)
                 if parsed == "skip":
+                    data_lines_seen += 1
                     continue
-                if parsed is None and _ASC_MESSAGE_HINT_RE.match(stripped):
-                    return _PreflightResult(
-                        False,
-                        bytes_read,
-                        AscFallbackReason.UNSUPPORTED_SYNTAX,
-                    )
+                if parsed is None:
+                    if _ASC_MESSAGE_HINT_RE.match(stripped):
+                        return _PreflightResult(
+                            False,
+                            bytes_read,
+                            AscFallbackReason.UNSUPPORTED_SYNTAX,
+                        )
+                    continue
+                data_lines_seen += 1
+                if data_lines_seen >= _PREFLIGHT_MIN_DATA_LINES:
+                    break
     except (OSError, TypeError, ValueError):
         return _PreflightResult(
             False, bytes_read, AscFallbackReason.FAST_READ_FAILED,

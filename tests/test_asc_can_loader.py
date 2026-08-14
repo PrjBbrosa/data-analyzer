@@ -287,6 +287,54 @@ def test_preflight_unsupported_syntax_skips_full_fast_scan(tmp_path, monkeypatch
     assert outcome.frames[0][1] == 0x123
 
 
+def test_preflight_requires_data_lines_not_just_header_noise(tmp_path):
+    """§4.2: a header thick with comments must not exhaust the scan window
+    before a single data line has been examined.
+
+    Under the old "64 lines of any kind" budget, a header long enough to
+    fill the window on its own made the preflight declare ``supported=True``
+    by default — without ever having looked at real payload — and the
+    genuinely unsupported line right after the header only surfaced once
+    the (much more expensive) full fast scan reached it. The fix counts the
+    window in actual data lines, so header/comment noise stays free and the
+    scan reaches the first data line regardless of how much header precedes
+    it.
+    """
+    from mf4_analyzer.io.asc_can_format import AscFallbackReason, _preflight_asc_format
+
+    lines = [
+        "date Mon Jan 01 12:00:00 PM 2024",
+        "base hex timestamps absolute",
+        "no internal events logged",
+        "Begin Triggerblock Mon Jan 01 12:00:00 PM 2024",
+    ]
+    # 80 short comment lines: more than the historical 64-line budget, but
+    # still well under both the normal 8 KiB and the widened header-safety
+    # byte ceilings.
+    lines += [f"// setup note {i}" for i in range(80)]
+    lines.append(_classic_line(1.0, dtype="x"))  # unsupported dtype
+    lines.append("End TriggerBlock")
+    path = tmp_path / "long_header.asc"
+    path.write_text("\n".join(lines) + "\n", encoding="ascii")
+
+    result = _preflight_asc_format(path)
+    assert result.supported is False
+    assert result.reason is AscFallbackReason.UNSUPPORTED_SYNTAX
+
+
+def test_preflight_still_passes_small_files_with_few_data_lines(tmp_path):
+    """Guard against over-correcting: files far short of the historical
+    64-line budget (the vast majority of the existing test fixtures) must
+    still preflight as supported once fully examined, not be held to an
+    artificial minimum they can never reach."""
+    from mf4_analyzer.io.asc_can_format import _preflight_asc_format
+
+    path = write_sample_asc(tmp_path / "small.asc", n=3)
+    result = _preflight_asc_format(path)
+    assert result.supported is True
+    assert result.reason is None
+
+
 def test_late_fallback_progress_is_monotonically_non_decreasing(tmp_path):
     path = _write_late_unsupported_asc(tmp_path / "late.asc")
     progress = []
