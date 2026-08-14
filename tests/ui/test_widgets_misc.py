@@ -107,8 +107,8 @@ def test_toast_default_margin_clears_view_tab_strip(qapp, qtbot, host):
     assert toast.isVisible()
     clearance = host.height() - (toast.y() + toast.height())
     assert clearance == Toast.DEFAULT_BOTTOM_MARGIN
-    # Status (40) + ViewTabBar (28) + hint (20) still fit under the toast.
-    assert clearance >= 40 + 28 + 20
+    # Status (40) + ViewTabBar (30) + hint (20) still fit under the toast.
+    assert clearance >= 40 + 30 + 20
 
 
 def test_toast_margin_provider_used_at_show_time(qapp, qtbot, host):

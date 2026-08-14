@@ -172,8 +172,8 @@ class AnalysisSectionPage(QWidget):
             "联动缩放", "两个分屏同步缩放/平移（X 轴，热力图含 Y 轴）")
         self.btn_lock_levels = self._make_toggle(
             "锁定色阶", "两个热力图共用同一色阶范围；拖动一格 colorbar 另一格跟随")
-        row.addWidget(self.btn_link, 0)
-        row.addWidget(self.btn_lock_levels, 0)
+        row.addWidget(self.btn_link, 0, Qt.AlignVCenter)
+        row.addWidget(self.btn_lock_levels, 0, Qt.AlignVCenter)
         self.ultraview_separator = make_ultraview_separator(self._compare_row)
         self.ultraview_entry = UltraViewEntryButton(self._compare_row)
         row.addWidget(self.ultraview_separator, 0, Qt.AlignVCenter)

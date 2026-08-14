@@ -897,9 +897,9 @@ def test_analysis_heatmap_split_keeps_dock_as_right_anchor(
 
     margins = host.layout().contentsMargins()
     assert abs(dock.geometry().right() - (host.width() - margins.right() - 1)) <= 2
-    assert host.height() == 28
-    assert page.tabbar.height() == 28
-    assert dock.height() <= 28
+    assert host.height() == 30
+    assert page.tabbar.height() == 30
+    assert dock.height() <= 30
 
 
 def test_analysis_dock_stays_enabled_when_views_at_cap(page, qapp):

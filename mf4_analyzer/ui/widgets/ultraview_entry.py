@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-ENTRY_HEIGHT = 28
+ENTRY_HEIGHT = 30
 LABEL_TEXT = "UltraView"
 ACCESSIBLE_NAME = "打开 UltraView"
 TOOLTIP = "打开 UltraView（跨 View 只读对照，不重新计算）"
@@ -40,8 +40,8 @@ SPECTRUM_STOPS = ((0.0, "#0969DC"), (0.52, "#734EE6"), (1.0, "#BD299F"))
 TILE_COLORS = ("#0969DC", "#734EE6", "#734EE6", "#BD299F")
 
 # HTML A used a 27px portal in a 38px mock rail. The product View rail is
-# 28px (same as ViewTabBar / the 22px "+" chip), so the portal is scaled to
-# 20px — 4px pad top/bottom, midline at y=14 with the tabs.
+# 30px (same as ViewTabBar / the 22px "+" chip centered in that band), so
+# the portal stays 20px — 5px pad top/bottom, midline at y=15 with the tabs.
 PORTAL_SIZE = 20
 COMPACT_WIDTH = 26
 _PAD_X_LEFT = 4.0

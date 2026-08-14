@@ -99,10 +99,11 @@ def _imported_module_names(source: str) -> list[str]:
 
 
 def test_entry_height_is_at_most_view_rail() -> None:
+    from mf4_analyzer.ui.view_tabbar import RAIL_HEIGHT
+
     button = UltraViewEntryButton()
-    assert button.sizeHint().height() == ENTRY_HEIGHT
-    assert button.sizeHint().height() <= 28
-    assert button.minimumSizeHint().height() <= 28
+    assert button.sizeHint().height() == ENTRY_HEIGHT == RAIL_HEIGHT
+    assert button.minimumSizeHint().height() <= RAIL_HEIGHT
     button.set_compact(True)
     assert button.sizeHint().height() == ENTRY_HEIGHT
 

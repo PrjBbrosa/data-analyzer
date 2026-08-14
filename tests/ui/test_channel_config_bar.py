@@ -184,7 +184,7 @@ def test_config_bar_shares_the_time_domain_view_rail_height(qtbot):
 
     from mf4_analyzer.ui.file_navigator import FileNavigator
     from mf4_analyzer.ui.view_state import ViewManager
-    from mf4_analyzer.ui.view_tabbar import ViewTabBar
+    from mf4_analyzer.ui.view_tabbar import RAIL_HEIGHT, ViewTabBar
     from mf4_analyzer.ui.widgets.ultraview_entry import ENTRY_HEIGHT
     from mf4_analyzer.ui_kit import load_stylesheet
 
@@ -199,12 +199,14 @@ def test_config_bar_shares_the_time_domain_view_rail_height(qtbot):
     tabbar.show()
     QApplication.processEvents()
 
-    assert ChannelConfigBar.CONTROL_HEIGHT == ENTRY_HEIGHT == 28
-    assert tabbar.height() == ChannelConfigBar.CONTROL_HEIGHT
+    assert ChannelConfigBar.CONTROL_HEIGHT == 28
+    assert ENTRY_HEIGHT == RAIL_HEIGHT == 30
+    assert tabbar.height() == ENTRY_HEIGHT
     assert bar.height() == bar.btn_save.height() == bar.combo.height() == 28
     assert nav.layout().contentsMargins().bottom() == 3
-    assert nav.channel_list.layout().contentsMargins().bottom() == 0
+    assert nav.channel_list.layout().contentsMargins().bottom() == 2
     assert nav.channel_list.layout().contentsMargins().top() == 8
+    assert bar.height() + nav.channel_list.layout().contentsMargins().bottom() == ENTRY_HEIGHT
 
 
 def test_config_bar_top_aligns_with_view_rail_in_navigator_width_host(qtbot):
@@ -212,7 +214,7 @@ def test_config_bar_top_aligns_with_view_rail_in_navigator_width_host(qtbot):
 
     from mf4_analyzer.ui.file_navigator import FileNavigator
     from mf4_analyzer.ui.view_state import ViewManager
-    from mf4_analyzer.ui.view_tabbar import ViewTabBar
+    from mf4_analyzer.ui.view_tabbar import RAIL_HEIGHT, ViewTabBar
     from mf4_analyzer.ui_kit import load_stylesheet
 
     load_stylesheet(QApplication.instance())
@@ -249,9 +251,14 @@ def test_config_bar_top_aligns_with_view_rail_in_navigator_width_host(qtbot):
 
     btn_top = bar.btn_save.mapTo(host, bar.btn_save.rect().topLeft()).y()
     rail_top = tabbar.mapTo(host, tabbar.rect().topLeft()).y()
+    btn_mid = bar.btn_save.mapTo(host, bar.btn_save.rect().center()).y()
+    rail_mid = tabbar.mapTo(host, tabbar.rect().center()).y()
     # FileNavigator keeps a 3px shell inset so the outer rounded corner
     # stays visible (test_surface_panel_children_leave_outer_shell_visible).
-    # The aligned part is control height; leftover offset is that shell.
+    # The 28px controls + 2px host inset share the 30px rail; leftover is
+    # that shell, not a second misaligned band.
     leftover = rail_top - btn_top
-    assert bar.btn_save.height() == tabbar.height() == 28
+    assert bar.btn_save.height() == 28
+    assert tabbar.height() == RAIL_HEIGHT
     assert 2 <= leftover <= 5
+    assert abs(btn_mid - rail_mid) <= 4

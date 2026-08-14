@@ -27,6 +27,11 @@ from ..ui_kit.icons import Icons, icon_device_pixel_ratio
 from ..ui_kit.menus import apply_rounded_menu_chrome
 from .view_state import MAX_VIEWS
 
+# Shared bottom-rail band (TimeDomain dock + analysis compare row). The
+# 26px tab strip is vertically centered inside this; the left navigator's
+# 28px config controls plus a 2px host inset match the same 30px band.
+RAIL_HEIGHT = 30
+
 # Quiet section identity for the shared ViewTabBar. Keys match ChartStack /
 # AnalysisSectionPage mode ids; display lives here so callers never assemble
 # labels or invent colors. View tab_color stays a View identity cue only.
@@ -96,12 +101,13 @@ class ViewTabBar(QWidget):
         # One QSettings write per session for the view.compact_tabs footer hint
         # — see _mark_compact_tabs_discovered.
         self._compact_tabs_discovered = False
-        self.setFixedHeight(28)
+        self.setFixedHeight(RAIL_HEIGHT)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
         right_margin = 4 if self._split_action_mode == 'active_pane' else 8
-        layout.setContentsMargins(8, 0, right_margin, 0)
+        # 2px top/bottom centers the 26px tab strip in the 30px rail.
+        layout.setContentsMargins(8, 2, right_margin, 2)
         layout.setSpacing(2)
 
         if section is not None:
@@ -145,14 +151,14 @@ class ViewTabBar(QWidget):
         self._overflow.setCursor(Qt.PointingHandCursor)
         self._overflow.setVisible(False)
         self._overflow.clicked.connect(self._on_overflow_clicked)
-        layout.addWidget(self._overflow, 0)
+        layout.addWidget(self._overflow, 0, Qt.AlignVCenter)
 
         self._plus = QPushButton("+", self)
         self._plus.setObjectName("viewTabPlus")
         self._plus.setToolTip("新建 View")
         self._plus.setFixedSize(24, 22)
         self._plus.clicked.connect(self._on_plus_clicked)
-        layout.addWidget(self._plus, 0)
+        layout.addWidget(self._plus, 0, Qt.AlignVCenter)
         layout.addStretch(1)
 
         self._split_chip = QLabel(self)
@@ -185,7 +191,7 @@ class ViewTabBar(QWidget):
         # Height matches QTabBar (26). Content margins carve the same ~20px
         # band the View tabs use (QSS ::tab height 20 + top-biased margin), so
         # the icon/label midline lands on the View text midline — not the
-        # geometric center of the full 28px outer bar.
+        # geometric center of the full 30px outer rail.
         anchor = QWidget(self)
         anchor.setObjectName("viewSectionAnchor")
         anchor.setFocusPolicy(Qt.NoFocus)

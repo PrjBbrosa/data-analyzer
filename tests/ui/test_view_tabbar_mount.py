@@ -87,8 +87,8 @@ def test_time_bottom_dock_top_hairline_matches_analysis_contents_inset(qtbot):
     assert cs._time_bottom_dock.contentsRect().top() == 0
     assert rail.geometry().top() == 0
     assert cs._view_tabbar.geometry().top() == 0
-    assert rail.height() == 28
-    assert cs.ultraview_entry.height() <= 28
+    assert rail.height() == 30
+    assert cs.ultraview_entry.height() <= 30
     margins = rail.layout().contentsMargins()
     assert abs(
         cs.ultraview_entry.geometry().right()
@@ -196,8 +196,8 @@ def _pump_rail(qtbot):
 def _assert_dock_right_anchor(host, dock):
     margins = host.layout().contentsMargins()
     assert abs(dock.geometry().right() - (host.width() - margins.right() - 1)) <= 2
-    assert host.height() == 28
-    assert dock.height() <= 28
+    assert host.height() == 30
+    assert dock.height() <= 30
     assert _host_clickables(host)[-1] is dock
     assert dock.accessibleName() == "打开 UltraView"
     assert "只读对照" in dock.toolTip()

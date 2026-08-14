@@ -124,8 +124,9 @@ class ChannelConfigBar(QWidget):
 
     MANAGE_SENTINEL = "__manage_configs__"
     ACTION_WIDTH = 64
-    # Same 28px band as ViewTabBar / UltraView. Keep the 22px base text box
-    # and only tighten vertical padding; do not drop to the 24px compact track.
+    # 28px controls + 2px host inset (channel_tree) share the 30px View rail.
+    # Keep the 22px base text box and only tighten vertical padding; do not
+    # drop to the 24px compact track.
     CONTROL_HEIGHT = 28
 
     def __init__(self, parent=None):
