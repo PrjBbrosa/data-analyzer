@@ -579,16 +579,6 @@ class UltraViewPage(QWidget):
         )
         return answer == QMessageBox.Yes
 
-    def confirm_auto_avoid(self) -> bool:
-        answer = QMessageBox.question(
-            self,
-            "自动避让",
-            "目标位置放不下，是否让旁边的 View 自动让位？",
-            QMessageBox.Cancel | QMessageBox.Yes,
-            QMessageBox.Yes,
-        )
-        return answer == QMessageBox.Yes
-
     def _on_free_grid_toggled(self, enabled: bool) -> None:
         if not enabled and self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
             if not self._confirm_leave_free_grid():
@@ -1714,6 +1704,8 @@ class UltraViewPage(QWidget):
         self._grid_redo.setEnabled(not in_edit)
         if in_edit:
             self.note_space(False)
+        if now is None:
+            self._cancel_board_gestures()
 
     def handle_escape(self) -> bool:
         if self._viewport.is_panning():
@@ -1779,17 +1771,23 @@ class UltraViewPage(QWidget):
             self.clear_card_selection()
         return super().eventFilter(watched, event)
 
+    def _cancel_board_gestures(self) -> None:
+        if self._viewport.is_panning():
+            self.end_board_pan()
+        if self._grid.is_gesture_active():
+            self._grid.cancel_gesture()
+        if self._free_grid.gesture().is_active():
+            self._free_grid.cancel_gesture()
+
     def changeEvent(self, event) -> None:  # noqa: N802
         if event.type() == QEvent.WindowDeactivate:
             self.note_space(False)
-            if self._viewport.is_panning():
-                self.end_board_pan()
+            self._cancel_board_gestures()
         super().changeEvent(event)
 
     def hideEvent(self, event) -> None:  # noqa: N802
         self.note_space(False)
-        if self._viewport.is_panning():
-            self.end_board_pan()
+        self._cancel_board_gestures()
         super().hideEvent(event)
 
     def _on_drag_started(self, kind: str) -> None:

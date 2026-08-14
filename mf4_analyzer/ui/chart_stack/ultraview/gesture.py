@@ -13,10 +13,14 @@ from mf4_analyzer.ui.ultraview_state import FreeGridPlacement, GridRect, UltraVi
 
 from .free_grid import (
     GridMetrics,
-    group_translate_rects,
+    LAYOUT_MOVE,
+    LAYOUT_RESIZE,
+    LayoutPlan,
+    avoidance_preferred_delta,
     clamp_rect,
+    group_translate_rects,
     pixels_to_grid_delta,
-    rect_is_available,
+    plan_layout,
     rect_to_pixels,
     snapped_resize_rect,
     translated_move_rect,
@@ -38,14 +42,19 @@ class GestureSession:
     keep_aspect: bool = False
     group_origins: dict[UltraViewRef, GridRect] = field(default_factory=dict)
     group_candidates: dict[UltraViewRef, GridRect] = field(default_factory=dict)
+    plan: LayoutPlan | None = None
+    layout_revision: int = 0
 
     def ghost_pixels(self, metrics: GridMetrics, pos: tuple[int, int]) -> Rect:
-        if self.handle is not None:
-            return rect_to_pixels(self.candidate, metrics)
-        x, y, width, height = rect_to_pixels(self.origin, metrics)
-        dx = int(pos[0]) - self.press[0]
-        dy = int(pos[1]) - self.press[1]
-        return x + dx, y + dy, width, height
+        rect = self._preview_rect()
+        return rect_to_pixels(rect, metrics)
+
+    def _preview_rect(self) -> GridRect:
+        if self.plan is not None and self.plan.accepted and self.plan.mover_after is not None:
+            return self.plan.mover_after
+        if clamp_rect(self.candidate) != self.candidate:
+            return clamp_rect(self.candidate)
+        return self.candidate
 
     def highlight_pixels(self, metrics: GridMetrics) -> Rect:
         return rect_to_pixels(self.candidate, metrics)
@@ -53,22 +62,43 @@ class GestureSession:
     def group_ghost_pixels(
         self, metrics: GridMetrics, pos: tuple[int, int]
     ) -> tuple[Rect, ...]:
+        if self.plan is not None and self.plan.accepted:
+            return tuple(
+                rect_to_pixels(rect, metrics) for _ref, rect in self.plan.preview_rects()
+            )
         if self.handle is not None or len(self.group_origins) <= 1:
             return (self.ghost_pixels(metrics, pos),)
-        dx = int(pos[0]) - self.press[0]
-        dy = int(pos[1]) - self.press[1]
         ghosts = []
         for origin in self.group_origins.values():
-            x, y, width, height = rect_to_pixels(origin, metrics)
-            ghosts.append((x + dx, y + dy, width, height))
+            rect = clamp_rect(
+                GridRect(
+                    origin.column + (self.candidate.column - self.origin.column),
+                    origin.row + (self.candidate.row - self.origin.row),
+                    origin.column_span,
+                    origin.row_span,
+                )
+            )
+            ghosts.append(rect_to_pixels(rect, metrics))
         return tuple(ghosts)
 
     def group_highlight_pixels(self, metrics: GridMetrics) -> tuple[Rect, ...]:
+        if self.plan is not None and self.plan.accepted:
+            return tuple(
+                rect_to_pixels(rect, metrics) for _ref, rect in self.plan.preview_rects()
+            )
         if self.handle is not None or len(self.group_candidates) <= 1:
             return (self.highlight_pixels(metrics),)
         return tuple(
-            rect_to_pixels(rect, metrics) for rect in self.group_candidates.values()
+            rect_to_pixels(clamp_rect(rect), metrics)
+            for rect in self.group_candidates.values()
         )
+
+    def preview_refs(self) -> tuple[UltraViewRef, ...]:
+        if self.plan is not None and self.plan.accepted:
+            return tuple(ref for ref, _rect in self.plan.preview_rects())
+        if self.is_group_move():
+            return tuple(self.group_origins)
+        return (self.ref,)
 
     def badge(self) -> str:
         if self.handle is None:
@@ -180,6 +210,7 @@ class FreeGridGesture:
         grab_offset: tuple[int, int],
         handle: str | None = None,
         group_origins: dict[UltraViewRef, GridRect] | None = None,
+        layout_revision: int = 0,
     ) -> None:
         origins = dict(group_origins) if group_origins else {ref: origin}
         self._session = GestureSession(
@@ -191,6 +222,7 @@ class FreeGridGesture:
             handle=handle,
             group_origins=origins,
             group_candidates=dict(origins),
+            layout_revision=int(layout_revision),
         )
 
     def press_resize(
@@ -200,8 +232,16 @@ class FreeGridGesture:
         handle: str,
         board_pos: tuple[int, int],
         grab_offset: tuple[int, int],
+        layout_revision: int = 0,
     ) -> None:
-        self.press(ref, origin, board_pos, grab_offset, handle=handle)
+        self.press(
+            ref,
+            origin,
+            board_pos,
+            grab_offset,
+            handle=handle,
+            layout_revision=layout_revision,
+        )
 
     def update(
         self,
@@ -224,35 +264,54 @@ class FreeGridGesture:
         session.keep_aspect = bool(keep_aspect) and session.handle is not None
         if session.handle is None and session.is_group_move():
             column_delta, row_delta = pixels_to_grid_delta((dx, dy), metrics)
-            others = [
-                item.rect for item in placements if item.ref not in session.group_origins
-            ]
-            translated, legal = group_translate_rects(
-                session.group_origins, others, column_delta, row_delta
+            translated, in_bounds = group_translate_rects(
+                session.group_origins, (), column_delta, row_delta
             )
             session.group_candidates = translated
-            session.legal = legal
             session.candidate = translated.get(session.ref, session.origin)
+            if not in_bounds:
+                session.plan = None
+                session.legal = False
+                return session
+            session.plan = plan_layout(
+                placements,
+                session.ref,
+                session.candidate,
+                LAYOUT_MOVE,
+                layout_revision=session.layout_revision,
+                preferred=avoidance_preferred_delta(session.origin, session.candidate),
+                incoming=translated,
+            )
+            session.legal = session.plan.accepted
+            if session.plan.accepted and session.plan.mover_after is not None:
+                session.candidate = session.plan.mover_after
             return session
         if session.handle is None:
             session.candidate = translated_move_rect(session.origin, (dx, dy), metrics)
-            in_bounds = session.candidate == clamp_rect(session.candidate)
             session.group_candidates = {session.ref: session.candidate}
-            session.legal = in_bounds and rect_is_available(
-                session.candidate, placements, excluding=session.ref
+        else:
+            session.candidate = snapped_resize_rect(
+                session.origin,
+                (dx, dy),
+                metrics,
+                session.handle,
+                keep_aspect=session.keep_aspect,
             )
-            return session
-        session.candidate = snapped_resize_rect(
-            session.origin,
-            (dx, dy),
-            metrics,
-            session.handle,
-            keep_aspect=session.keep_aspect,
+            session.group_candidates = {session.ref: session.candidate}
+        operation = LAYOUT_RESIZE if session.handle is not None else LAYOUT_MOVE
+        session.plan = plan_layout(
+            placements,
+            session.ref,
+            session.candidate,
+            operation,
+            layout_revision=session.layout_revision,
+            preferred=avoidance_preferred_delta(session.origin, session.candidate),
+            incoming=session.group_candidates,
         )
-        session.group_candidates = {session.ref: session.candidate}
-        session.legal = rect_is_available(
-            session.candidate, placements, excluding=session.ref
-        )
+        session.legal = session.plan.accepted
+        if session.plan.accepted and session.plan.mover_after is not None:
+            session.candidate = session.plan.mover_after
+            session.group_candidates[session.ref] = session.plan.mover_after
         return session
 
     def cancel(self) -> GestureSession | None:

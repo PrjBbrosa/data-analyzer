@@ -892,3 +892,51 @@ def test_add_to_ultraview_from_view_tab_keeps_section_and_view_id(
 
     assert received == [("fft", view_id)]
     assert UltraViewRef("fft", view_id) in membership_set(win._ultraview.board)
+
+
+def test_free_grid_collision_commit_is_one_undo_restoring_all_cards(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack.ultraview.free_grid import LAYOUT_MOVE, plan_layout
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    uv = win._ultraview
+    time_ref = UltraViewRef("time", str(win.view_manager.get(0).view_id))
+    fft_ref = UltraViewRef("fft", str(win.analysis_managers["fft"].get(0).view_id))
+    add_ref(uv.board, time_ref)
+    add_ref(uv.board, fft_ref)
+    uv._on_free_grid_toggled(True)
+    placements = list(uv.board.free_grid)
+    assert len(placements) == 2
+    mover = placements[0]
+    other = placements[1]
+    before = {item.ref: item.rect for item in placements}
+    plan = plan_layout(
+        placements,
+        mover.ref,
+        other.rect,
+        LAYOUT_MOVE,
+        preferred=(1, 0),
+    )
+    assert plan.accepted is True
+    payload = tuple(
+        (
+            ref.section,
+            ref.view_id,
+            rect.column,
+            rect.row,
+            rect.column_span,
+            rect.row_span,
+        )
+        for ref, rect in plan.committed_updates()
+    )
+    uv._on_free_grid_group_geometry(payload)
+    history = uv._grid_histories[uv.board.board_id]
+    assert len(history.undo) == 1
+    after = {item.ref: item.rect for item in uv.board.free_grid}
+    assert after != before
+    uv._on_free_grid_undo()
+    restored = {item.ref: item.rect for item in uv.board.free_grid}
+    assert restored == before
+    uv._on_free_grid_redo()
+    redone = {item.ref: item.rect for item in uv.board.free_grid}
+    assert redone == after

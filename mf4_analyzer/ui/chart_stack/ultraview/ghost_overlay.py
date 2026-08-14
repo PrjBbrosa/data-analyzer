@@ -36,6 +36,7 @@ class GhostOverlay(QWidget):
         "_ring_rect",
         "_marquee",
         "_selection_rects",
+        "_reject_mark",
     )
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -52,6 +53,7 @@ class GhostOverlay(QWidget):
         self._ring_rect: QRect | None = None
         self._marquee: QRect | None = None
         self._selection_rects: tuple[QRect, ...] = ()
+        self._reject_mark = False
         self.hide()
 
     @property
@@ -105,6 +107,7 @@ class GhostOverlay(QWidget):
         self._ghosts = ()
         self._highlights = ()
         self._badge = ""
+        self._reject_mark = False
         self._present()
 
     def set_move_preview(
@@ -139,6 +142,7 @@ class GhostOverlay(QWidget):
         )
         self._highlights = tuple(QRect(*item) for item in highlights)
         self._legal = bool(legal)
+        self._reject_mark = not self._legal
         self._badge = str(badge)
         self._handles_rect = (
             QRect(self._highlights[0]) if handles and self._highlights else None
@@ -153,6 +157,7 @@ class GhostOverlay(QWidget):
         self._ring_rect = None
         self._marquee = None
         self._selection_rects = ()
+        self._reject_mark = False
         self.hide()
         self.update()
 
@@ -171,9 +176,10 @@ class GhostOverlay(QWidget):
             painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
             fill = LEGAL_FILL if self._legal else ILLEGAL_FILL
             pen = LEGAL_PEN if self._legal else ILLEGAL_PEN
+            style = Qt.SolidLine if self._legal else Qt.DashLine
             for highlight in self._highlights:
                 painter.fillRect(highlight, fill)
-                painter.setPen(QPen(pen, 2))
+                painter.setPen(QPen(pen, 2 if self._legal else 3, style))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRect(highlight.adjusted(1, 1, -1, -1))
             for image, ghost in self._ghosts:
@@ -190,6 +196,15 @@ class GhostOverlay(QWidget):
                     Qt.AlignTop | Qt.AlignLeft,
                     self._badge,
                 )
+            if self._reject_mark and self._highlights:
+                mark = self._highlights[0]
+                cx = mark.right() - 16
+                cy = mark.top() + 16
+                painter.setPen(QPen(ILLEGAL_PEN, 2))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(cx - 7, cy - 7, 14, 14)
+                painter.drawLine(cx - 4, cy - 4, cx + 4, cy + 4)
+                painter.drawLine(cx + 4, cy - 4, cx - 4, cy + 4)
             if self._ring_rect is not None:
                 painter.setPen(QPen(LEGAL_PEN, 3))
                 painter.setBrush(Qt.NoBrush)

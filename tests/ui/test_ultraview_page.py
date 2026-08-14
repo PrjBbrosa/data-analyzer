@@ -10,7 +10,7 @@ from PyQt5 import sip
 from PyQt5.QtCore import QByteArray, QCoreApplication, QEvent, QMimeData, QPoint, QRect, Qt
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QComboBox, QPushButton, QToolButton, QWidget
+from PyQt5.QtWidgets import QApplication, QComboBox, QMessageBox, QPushButton, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     BOARD_PADDING,
@@ -23,8 +23,9 @@ from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAY
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     BoardSwitcher,
-    FEEDBACK_AVOID_BOUNDARY,
+    FEEDBACK_NO_LEGAL_LAYOUT,
     FEEDBACK_OUT_OF_GRID,
+    FEEDBACK_REARRANGED,
     MISSING_CARD_COPY,
     LibraryRow,
     UltraViewCard,
@@ -1595,53 +1596,74 @@ def test_free_grid_drag_past_threshold_shows_ghost_and_commits_legal_move(qtbot)
     assert free.ghost_overlay()._handles_rect is not None
 
 
-def test_free_grid_overlap_drop_prompts_and_moves_blocker(qtbot, monkeypatch):
+def test_free_grid_overlap_drop_moves_blocker_without_modal(qtbot, monkeypatch):
     harness = _Harness(qtbot)
     free, (card, other) = _prepare_free_grid(harness, qtbot, "block-0", "block-1")
-    monkeypatch.setattr(harness.page, "confirm_auto_avoid", lambda: True)
+    boxes = []
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: boxes.append(a) or QMessageBox.Yes
+    )
     group = []
-    toasts = []
-    harness.page.free_grid_geometry_requested.connect(lambda *args: group.append(("single", args)))
-    harness.page.free_grid_group_geometry_requested.connect(group.append)
-    harness.page.feedback_requested.connect(toasts.append)
-    metrics = free.metrics()
-    unit = metrics.column_width + metrics.gutter
-    _drag_card(card, QPoint(16, 16), QPoint(16 + unit * 6, 16))
-    assert toasts == []
-    assert group == [
-        (
-            ("time", "block-0", 6, 0, 6, 3),
-            ("time", "block-1", 6, 3, 6, 3),
-        )
-    ]
-
-
-def test_free_grid_overlap_drop_declined_does_not_commit(qtbot, monkeypatch):
-    harness = _Harness(qtbot)
-    free, (card, other) = _prepare_free_grid(harness, qtbot, "skip-0", "skip-1")
-    origin = QRect(card.geometry())
-    monkeypatch.setattr(harness.page, "confirm_auto_avoid", lambda: False)
     requested = []
-    group = []
     toasts = []
     harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
     harness.page.free_grid_group_geometry_requested.connect(group.append)
     harness.page.feedback_requested.connect(toasts.append)
     metrics = free.metrics()
     unit = metrics.column_width + metrics.gutter
-    _drag_card(card, QPoint(16, 16), QPoint(16 + unit * 6, 16))
+    start = QPoint(16, 16)
+    mid = QPoint(16 + unit * 6, 16)
+    _drag_card(card, start, mid, release=False)
+    overlay = free.ghost_overlay()
+    assert overlay.is_showing()
+    assert overlay._legal is True
+    assert overlay._reject_mark is False
+    assert len(overlay._highlights) == 2
+    ghost_geoms = [
+        (item.x(), item.y(), item.width(), item.height()) for item in overlay._highlights
+    ]
+    session = free.gesture().session()
+    assert session is not None and session.plan is not None
+    planned = [
+        (rect.column, rect.row, rect.column_span, rect.row_span)
+        for _ref, rect in session.plan.preview_rects()
+    ]
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, mid)
+    assert boxes == []
     assert requested == []
-    assert group == []
-    assert toasts == []
-    assert not free.gesture().is_armed()
-    assert free.ghost_overlay()._ghost_rect is None
-    assert card.geometry().topLeft() == origin.topLeft()
-    assert other.geometry().topLeft() != origin.topLeft()
+    assert group == [
+        (
+            ("time", "block-0", 6, 0, 6, 3),
+            ("time", "block-1", 6, 3, 6, 3),
+        )
+    ]
+    assert toasts == [FEEDBACK_REARRANGED.format(count=2)]
+    committed = [(6, 0, 6, 3), (6, 3, 6, 3)]
+    assert planned == committed
+    assert len(ghost_geoms) == 2
 
 
-def test_free_grid_overlap_at_boundary_toasts_without_commit(qtbot, monkeypatch):
+def test_free_grid_overlap_drop_does_not_construct_message_box(qtbot, monkeypatch):
     harness = _Harness(qtbot)
-    monkeypatch.setattr(harness.page, "confirm_auto_avoid", lambda: True)
+    free, (card, _other) = _prepare_free_grid(harness, qtbot, "spy-0", "spy-1")
+    seen = []
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: seen.append(("question", a)) or QMessageBox.Yes
+    )
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *a, **k: seen.append(("warning", a)) or QMessageBox.Ok
+    )
+    monkeypatch.setattr(
+        QMessageBox, "information", lambda *a, **k: seen.append(("info", a)) or QMessageBox.Ok
+    )
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    _drag_card(card, QPoint(16, 16), QPoint(16 + unit * 6, 16))
+    assert seen == []
+
+
+def test_free_grid_overlap_at_boundary_toasts_without_commit(qtbot):
+    harness = _Harness(qtbot)
     ids = tuple(f"pack-{index}" for index in range(6))
     harness.board.layout_mode = LAYOUT_MODE_FREE_GRID
     harness.board.placements.clear()
@@ -1663,7 +1685,7 @@ def test_free_grid_overlap_at_boundary_toasts_without_commit(qtbot, monkeypatch)
     unit = free.metrics().row_height + free.metrics().gutter
     _drag_card(card, QPoint(16, 16), QPoint(16, 16 + unit))
     assert group == []
-    assert toasts == [FEEDBACK_AVOID_BOUNDARY]
+    assert toasts == [FEEDBACK_NO_LEGAL_LAYOUT]
     assert card.geometry().topLeft() == origin.topLeft()
 
 
@@ -1760,10 +1782,9 @@ def test_free_grid_resize_span_clamps_to_grid_limits(qtbot):
     assert requested == [("time", "clamp-0", 0, 0, 2, 3, "drag-resize")]
 
 
-def test_free_grid_overlap_resize_prompts_and_moves_blocker(qtbot, monkeypatch):
+def test_free_grid_overlap_resize_moves_blocker_without_modal(qtbot):
     harness = _Harness(qtbot)
     free, (card, _other) = _prepare_free_grid(harness, qtbot, "hit-0", "hit-1")
-    monkeypatch.setattr(harness.page, "confirm_auto_avoid", lambda: True)
     _select_card(card)
     qtbot.wait(10)
     card = harness.page.card_widget("time", "hit-0")
@@ -1776,7 +1797,7 @@ def test_free_grid_overlap_resize_prompts_and_moves_blocker(qtbot, monkeypatch):
     unit = metrics.column_width + metrics.gutter
     start = _east_handle_pos(card)
     _drag_card(card, start, QPoint(start.x() + unit * 2, start.y()))
-    assert toasts == []
+    assert toasts == [FEEDBACK_REARRANGED.format(count=2)]
     assert group == [
         (
             ("time", "hit-0", 0, 0, 8, 3),
@@ -2260,9 +2281,8 @@ def test_free_grid_out_of_bounds_move_toasts_without_commit(qtbot):
     assert toasts == ["不能移出网格"]
 
 
-def test_free_grid_edge_drop_prompts_and_shrinks_left_neighbors(qtbot, monkeypatch):
+def test_free_grid_edge_drop_rejects_without_shrinking_neighbors(qtbot):
     harness = _Harness(qtbot)
-    monkeypatch.setattr(harness.page, "confirm_auto_avoid", lambda: True)
     harness.board.layout_mode = LAYOUT_MODE_FREE_GRID
     harness.board.placements.clear()
     harness.board.unplaced.clear()
@@ -2276,47 +2296,46 @@ def test_free_grid_edge_drop_prompts_and_shrinks_left_neighbors(qtbot, monkeypat
     free = harness.page._free_grid
     card = harness.page.card_widget("time", "right-0")
     assert card is not None and card.width() > 20
+    origin = QRect(card.geometry())
     group = []
+    requested = []
     toasts = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
     harness.page.free_grid_group_geometry_requested.connect(group.append)
     harness.page.feedback_requested.connect(toasts.append)
     unit = free.metrics().column_width + free.metrics().gutter
-    _drag_card(card, QPoint(24, 24), QPoint(24 + unit, 24))
-    assert toasts == []
-    assert group == [
-        (
-            ("time", "left-0", 0, 0, 3, 3),
-            ("time", "left-1", 0, 3, 3, 3),
-            ("time", "right-0", 3, 0, 9, 6),
-        )
-    ]
-
-
-def test_free_grid_edge_drop_declined_does_not_commit(qtbot, monkeypatch):
-    harness = _Harness(qtbot)
-    monkeypatch.setattr(harness.page, "confirm_auto_avoid", lambda: False)
-    harness.board.layout_mode = LAYOUT_MODE_FREE_GRID
-    harness.board.placements.clear()
-    harness.board.unplaced.clear()
-    harness.board.free_grid = [
-        FreeGridPlacement(make_ref("time", "left-0"), GridRect(0, 0, 4, 3)),
-        FreeGridPlacement(make_ref("time", "left-1"), GridRect(0, 3, 4, 3)),
-        FreeGridPlacement(make_ref("time", "right-0"), GridRect(4, 0, 8, 6)),
-    ]
-    harness.page.set_board(harness.board)
-    qtbot.wait(10)
-    card = harness.page.card_widget("time", "right-0")
-    assert card is not None
-    origin = QRect(card.geometry())
-    group = []
-    toasts = []
-    harness.page.free_grid_group_geometry_requested.connect(group.append)
-    harness.page.feedback_requested.connect(toasts.append)
-    unit = harness.page._free_grid.metrics().column_width + harness.page._free_grid.metrics().gutter
-    _drag_card(card, QPoint(24, 24), QPoint(24 + unit, 24))
+    start = QPoint(24, 24)
+    mid = QPoint(24 + unit, 24)
+    _drag_card(card, start, mid, release=False)
+    overlay = free.ghost_overlay()
+    assert overlay.is_showing()
+    assert overlay._legal is False
+    assert overlay._reject_mark is True
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, mid)
+    assert requested == []
     assert group == []
-    assert toasts == []
+    assert toasts == [FEEDBACK_OUT_OF_GRID]
     assert card.geometry().topLeft() == origin.topLeft()
+
+
+def test_free_grid_focus_loss_cancels_active_move_without_commit(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "blur-0")
+    requested = []
+    group = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    harness.page.free_grid_group_geometry_requested.connect(group.append)
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    mid = QPoint(start.x() + unit * 6, start.y())
+    _drag_card(card, start, mid, release=False)
+    assert free.gesture().is_active()
+    harness.page.changeEvent(QEvent(QEvent.WindowDeactivate))
+    assert requested == []
+    assert group == []
+    assert not free.gesture().is_armed()
+    assert free.ghost_overlay()._ghost_rect is None
 
 
 def test_free_grid_out_of_bounds_clamps_into_empty_cell_without_toast(qtbot):
@@ -2333,13 +2352,16 @@ def test_free_grid_out_of_bounds_clamps_into_empty_cell_without_toast(qtbot):
     card = harness.page.card_widget("time", "clamp-1")
     assert card is not None and card.width() > 20
     group = []
+    requested = []
     toasts = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
     harness.page.free_grid_group_geometry_requested.connect(group.append)
     harness.page.feedback_requested.connect(toasts.append)
     unit = free.metrics().column_width + free.metrics().gutter
     _drag_card(card, QPoint(16, 16), QPoint(16 - unit * 4, 16))
     assert toasts == []
-    assert group == [(("time", "clamp-1", 0, 0, 4, 3),)]
+    assert group == []
+    assert requested == [("time", "clamp-1", 0, 0, 4, 3, "drag-move")]
 
 
 def test_inactive_canvas_drops_stale_cards_when_mode_switches(qtbot):

@@ -4,6 +4,10 @@ from __future__ import annotations
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_MIN_COLUMN_WIDTH,
     HANDLE_HIT_PX,
+    LAYOUT_MOVE,
+    LAYOUT_RESIZE,
+    PLANNER_SEARCH_CAP,
+    LayoutRejectReason,
     avoidance_preferred_delta,
     candidate_move,
     candidate_resize,
@@ -17,6 +21,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     legal_grid_rect,
     pixels_to_grid_delta,
     plan_boundary_yield,
+    plan_layout,
     plan_neighbor_shrink,
     plan_overlap_avoidance,
     rect_is_available,
@@ -122,7 +127,7 @@ def test_legal_grid_rect_clamps_origin_plus_span():
     assert legal.column + legal.column_span <= GRID_COLUMNS
 
 
-def test_gesture_move_uses_snapped_move_rect_and_reports_collision():
+def test_gesture_move_plans_overlap_as_legal_same_size_translate():
     metrics = grid_metrics((1280, 800), [])
     origin = GridRect(0, 0, 4, 3)
     other = GridRect(6, 0, 4, 3)
@@ -135,7 +140,11 @@ def test_gesture_move_uses_snapped_move_rect_and_reports_collision():
     session = gesture.update((10 + unit * 6, 10), metrics, placements, start_drag_distance=20)
     assert session is not None and session.active
     assert session.candidate == snapped_move_rect(origin, (unit * 6, 0), metrics)
-    assert session.legal is False
+    assert session.legal is True
+    assert session.plan is not None and session.plan.accepted
+    displaced = {item.ref: item.after for item in session.plan.displaced_before_after}
+    assert displaced[make_ref("time", "b")].column_span == 4
+    assert displaced[make_ref("time", "b")].row_span == 3
     cancelled = gesture.cancel()
     assert cancelled is session
     assert gesture.is_armed() is False
@@ -279,7 +288,7 @@ def test_boundary_yield_clamps_into_empty_cell():
     assert dict(updates)[card.ref] == GridRect(0, 0, 4, 3)
 
 
-def test_boundary_yield_shrinks_left_neighbors_when_mover_hits_right_wall():
+def test_boundary_yield_rejects_wall_instead_of_shrinking_neighbors():
     left_top = _placement("a", GridRect(0, 0, 4, 3))
     left_bottom = _placement("b", GridRect(0, 3, 4, 3))
     mover = _placement("c", GridRect(4, 0, 8, 6))
@@ -288,11 +297,10 @@ def test_boundary_yield_shrinks_left_neighbors_when_mover_hits_right_wall():
         [left_top, left_bottom, mover],
         preferred=(1, 0),
     )
-    assert ok is True
-    by_ref = dict(updates)
-    assert by_ref[mover.ref] == GridRect(3, 0, 9, 6)
-    assert by_ref[left_top.ref] == GridRect(0, 0, 3, 3)
-    assert by_ref[left_bottom.ref] == GridRect(0, 3, 3, 3)
+    assert ok is False
+    assert updates == ()
+    assert left_top.rect == GridRect(0, 0, 4, 3)
+    assert mover.rect == GridRect(4, 0, 8, 6)
 
 
 def test_boundary_yield_fails_when_left_neighbors_are_already_minimum():
@@ -308,16 +316,115 @@ def test_boundary_yield_fails_when_left_neighbors_are_already_minimum():
     assert updates == ()
 
 
-def test_boundary_yield_ignores_in_bounds_incoming():
+def test_plan_layout_move_keeps_every_span():
     first = _placement("a", GridRect(0, 0, 6, 3))
     second = _placement("b", GridRect(6, 0, 6, 3))
-    updates, ok = plan_boundary_yield(
-        {first.ref: GridRect(6, 0, 6, 3)},
+    plan = plan_layout(
         [first, second],
+        first.ref,
+        GridRect(6, 0, 6, 3),
+        LAYOUT_MOVE,
+        preferred=(1, 0),
+        layout_revision=7,
+    )
+    assert plan.accepted is True
+    assert plan.based_on_layout_revision == 7
+    assert plan.mover_before == first.rect
+    assert plan.mover_after == GridRect(6, 0, 6, 3)
+    assert plan.mover_after.column_span == 6
+    assert plan.mover_after.row_span == 3
+    blocker = plan.displaced_before_after[0]
+    assert blocker.ref == second.ref
+    assert blocker.before == second.rect
+    assert blocker.after.column_span == 6
+    assert blocker.after.row_span == 3
+    assert blocker.after == GridRect(6, 3, 6, 3)
+
+
+def test_plan_layout_resize_only_changes_mover_span():
+    first = _placement("a", GridRect(0, 0, 6, 3))
+    second = _placement("b", GridRect(6, 0, 6, 3))
+    plan = plan_layout(
+        [first, second],
+        first.ref,
+        GridRect(0, 0, 8, 3),
+        LAYOUT_RESIZE,
         preferred=(1, 0),
     )
-    assert ok is False
-    assert updates == ()
+    assert plan.accepted is True
+    assert plan.mover_after == GridRect(0, 0, 8, 3)
+    blocker = plan.displaced_before_after[0]
+    assert blocker.after.column_span == 6
+    assert blocker.after.row_span == 3
+    assert blocker.after.column != blocker.before.column or blocker.after.row != blocker.before.row
+
+
+def test_plan_layout_edge_without_hole_rejects_without_grow_or_shrink():
+    left_top = _placement("a", GridRect(0, 0, 4, 3))
+    left_bottom = _placement("b", GridRect(0, 3, 4, 3))
+    mover = _placement("c", GridRect(4, 0, 8, 6))
+    plan = plan_layout(
+        [left_top, left_bottom, mover],
+        mover.ref,
+        GridRect(5, 0, 8, 6),
+        LAYOUT_MOVE,
+        preferred=(1, 0),
+    )
+    assert plan.accepted is False
+    assert plan.reason is LayoutRejectReason.OUT_OF_BOUNDS
+    assert plan.committed_updates() == ()
+
+
+def test_plan_layout_is_deterministic_for_displacement_order():
+    first = _placement("a", GridRect(0, 0, 6, 3))
+    second = _placement("b", GridRect(6, 0, 6, 3))
+    kwargs = dict(
+        placements=[first, second],
+        mover_ref=first.ref,
+        target=GridRect(6, 0, 6, 3),
+        operation=LAYOUT_MOVE,
+        preferred=(1, 0),
+        layout_revision=3,
+    )
+    left = plan_layout(**kwargs)
+    right = plan_layout(**kwargs)
+    assert left == right
+    assert [item.ref for item in left.displaced_before_after] == [
+        item.ref for item in right.displaced_before_after
+    ]
+
+
+def test_plan_layout_24_card_search_is_capped():
+    cards = []
+    index = 0
+    for row in range(4):
+        for column in range(0, 12, 2):
+            cards.append(_placement(f"c{index}", GridRect(column, row * 2, 2, 2)))
+            index += 1
+    assert len(cards) == 24
+    plan = plan_layout(
+        cards,
+        cards[0].ref,
+        GridRect(2, 0, 2, 2),
+        LAYOUT_MOVE,
+        preferred=(1, 0),
+        search_cap=PLANNER_SEARCH_CAP,
+    )
+    assert plan.search_visits <= PLANNER_SEARCH_CAP
+    packed = [
+        _placement(f"p{index}", GridRect(0, index * 8, 12, 8))
+        for index in range(6)
+    ]
+    rejected = plan_layout(
+        packed,
+        packed[0].ref,
+        GridRect(0, 1, 12, 8),
+        LAYOUT_MOVE,
+        preferred=(0, 1),
+        search_cap=64,
+    )
+    assert rejected.accepted is False
+    assert rejected.search_visits <= 64
 
 
 def test_neighbor_shrink_packs_blockers_into_remaining_columns():

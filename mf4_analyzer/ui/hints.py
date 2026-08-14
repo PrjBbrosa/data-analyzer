@@ -637,7 +637,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.avoid",
-        text="重叠或贴边松手可自动让位",
+        text="重叠时邻卡同尺寸让位，放不下保持原位",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=85,

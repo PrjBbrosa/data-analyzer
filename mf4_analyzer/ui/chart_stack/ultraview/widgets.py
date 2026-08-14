@@ -6,6 +6,7 @@ or call analysis entry points. Preview records are duck-typed.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Mapping, Sequence
@@ -83,6 +84,10 @@ from .layouts import (
 )
 from .free_grid import (
     GridMetrics,
+    LAYOUT_MOVE,
+    LAYOUT_RESIZE,
+    LayoutPlan,
+    LayoutRejectReason,
     avoidance_preferred_delta,
     candidate_resize,
     clamp_rect,
@@ -90,12 +95,8 @@ from .free_grid import (
     grid_metrics,
     hit_handle,
     legal_grid_rect,
-    plan_boundary_yield,
-    plan_neighbor_shrink,
-    plan_overlap_avoidance,
-    rect_is_available,
+    plan_layout,
     rect_to_pixels,
-    union_grid_rect,
 )
 from .gesture import FreeGridGesture
 from .ghost_overlay import GhostOverlay
@@ -126,7 +127,13 @@ HANDLE_CURSORS = {
 
 REPLACE_HOVER_MS = 600
 FEEDBACK_OUT_OF_GRID = "不能移出网格"
-FEEDBACK_AVOID_BOUNDARY = "旁边的 View 已到边界，无法自动避让"
+FEEDBACK_NO_LEGAL_LAYOUT = "当前位置放不下，已保持原布局"
+FEEDBACK_AVOID_BOUNDARY = FEEDBACK_NO_LEGAL_LAYOUT
+FEEDBACK_REARRANGED = "已重排 {count} 张 · Ctrl+Z 撤销"
+
+_PLANNER_LOG = logging.getLogger(__name__)
+_PLANNER_LOG_MONO = 0.0
+_PLANNER_LOG_INTERVAL_S = 0.5
 
 
 def _page_of(widget: QWidget):
@@ -136,6 +143,25 @@ def _page_of(widget: QWidget):
             return current
         current = current.parentWidget()
     return None
+
+
+def _log_plan_result(plan: LayoutPlan) -> None:
+    """Release-path diagnostics only; never called from mouse-move."""
+    global _PLANNER_LOG_MONO
+    import time
+
+    now = time.monotonic()
+    if now - _PLANNER_LOG_MONO < _PLANNER_LOG_INTERVAL_S:
+        return
+    _PLANNER_LOG_MONO = now
+    _PLANNER_LOG.debug(
+        "ultraview plan accepted=%s reason=%s op=%s visits=%s affected=%s",
+        plan.accepted,
+        None if plan.reason is None else plan.reason.value,
+        plan.operation,
+        plan.search_visits,
+        plan.affected_count(),
+    )
 
 
 def _clear_page_card_selection(widget: QWidget) -> None:
@@ -2581,6 +2607,10 @@ class FreeGridBoard(QWidget):
         self._replace.armed.connect(self._on_replace_armed)
         self._replace.cleared.connect(self._on_replace_cleared)
         self._pending_shift_toggle: UltraViewRef | None = None
+        self._layout_revision = 0
+        self._gesture_dimmed = False
+        self._layout_revision = 0
+        self._gesture_dimmed = False
 
     def set_viewport_size(self, size: QSize) -> None:
         if size == self._viewport_size:
@@ -2658,6 +2688,7 @@ class FreeGridBoard(QWidget):
     ) -> None:
         self._placements = {item.ref: item for item in placements}
         self._models = dict(models)
+        self._layout_revision += 1
         wanted = set(self._placements)
         for ref in list(self._widgets):
             if ref not in wanted:
@@ -2800,7 +2831,14 @@ class FreeGridBoard(QWidget):
             if handle is not None:
                 board_pos = self._board_pos(card, event.pos())
                 grab = (event.pos().x(), event.pos().y())
-                self._gesture.press_resize(ref, placement.rect, handle, board_pos, grab)
+                self._gesture.press_resize(
+                    ref,
+                    placement.rect,
+                    handle,
+                    board_pos,
+                    grab,
+                    layout_revision=self._layout_revision,
+                )
                 return
             self._pending_shift_toggle = ref
             return
@@ -2823,10 +2861,22 @@ class FreeGridBoard(QWidget):
                 if item in self._placements
             }
         if handle is not None:
-            self._gesture.press_resize(ref, placement.rect, handle, board_pos, grab)
+            self._gesture.press_resize(
+                ref,
+                placement.rect,
+                handle,
+                board_pos,
+                grab,
+                layout_revision=self._layout_revision,
+            )
         else:
             self._gesture.press(
-                ref, placement.rect, board_pos, grab, group_origins=group_origins
+                ref,
+                placement.rect,
+                board_pos,
+                grab,
+                group_origins=group_origins,
+                layout_revision=self._layout_revision,
             )
 
     def handle_card_mouse_hover(self, card: FreeGridCard, event: QMouseEvent) -> None:
@@ -3017,21 +3067,23 @@ class FreeGridBoard(QWidget):
             return
         if QWidget.mouseGrabber() is None:
             self.grabMouse()
+        preview_refs = session.preview_refs()
         members = session.group_origins or {session.ref: session.origin}
-        started = False
-        for ref in members:
-            card = self._widgets.get(ref)
-            if card is None:
-                continue
-            if not started:
-                self.drag_started.emit("layout")
-                started = True
-            effect = QGraphicsOpacityEffect(card)
-            effect.setOpacity(0.4)
-            card.setGraphicsEffect(effect)
+        dim_refs = set(members)
+        dim_refs.update(preview_refs)
+        if not self._gesture_dimmed:
+            self.drag_started.emit("layout")
+            self._gesture_dimmed = True
+            for ref in dim_refs:
+                card = self._widgets.get(ref)
+                if card is None:
+                    continue
+                effect = QGraphicsOpacityEffect(card)
+                effect.setOpacity(0.4)
+                card.setGraphicsEffect(effect)
         ghosts = []
         ghost_rects = session.group_ghost_pixels(self._metrics, board_pos)
-        refs = list(members)
+        refs = list(preview_refs)
         if len(ghost_rects) != len(refs):
             refs = [session.ref]
             ghost_rects = (session.ghost_pixels(self._metrics, board_pos),)
@@ -3051,9 +3103,13 @@ class FreeGridBoard(QWidget):
     def _finish_gesture(self, *, commit: bool, global_pos: QPoint | None = None) -> None:
         session = self._gesture.take()
         self._release_mouse_if_grabbed()
+        self._gesture_dimmed = False
         if session is None:
             return
         members = session.group_origins or {session.ref: session.origin}
+        restore_refs = set(members)
+        if session.plan is not None:
+            restore_refs.update(ref for ref, _rect in session.plan.preview_rects())
         preview_open = True
 
         def cleanup_preview() -> None:
@@ -3061,7 +3117,7 @@ class FreeGridBoard(QWidget):
             if not preview_open:
                 return
             preview_open = False
-            for ref in members:
+            for ref in restore_refs:
                 card = self._widgets.get(ref)
                 if card is not None:
                     card.restore_dim()
@@ -3079,185 +3135,49 @@ class FreeGridBoard(QWidget):
                 for ref in members:
                     self.move_to_unplaced_requested.emit(ref.section, ref.view_id)
                 return
-            if session.is_group_move():
-                self._finish_group_move(session)
-                return
-            if session.handle:
-                if self._legal_grid_rect(session.candidate) != session.candidate:
-                    self._finish_out_of_grid(
-                        {session.ref: session.candidate},
-                        session.origin,
-                        session.candidate,
-                    )
-                    return
-                candidate = session.candidate
-                if rect_is_available(
-                    candidate, self._placements.values(), excluding=session.ref
-                ):
-                    self._request_geometry(session.ref, candidate, "drag-resize")
-                    return
-                self._commit_overlap_avoidance(
-                    {session.ref: candidate}, session.origin, candidate
-                )
-                return
-            if self._legal_grid_rect(session.candidate) != session.candidate:
-                self._finish_out_of_grid(
-                    {session.ref: session.candidate},
-                    session.origin,
-                    session.candidate,
-                )
-                return
-            if rect_is_available(
-                session.candidate, self._placements.values(), excluding=session.ref
-            ):
-                self._request_geometry(session.ref, session.candidate, "drag-move")
-                return
-            self._commit_overlap_avoidance(
-                {session.ref: session.candidate}, session.origin, session.candidate
-            )
+            self._commit_session_plan(session)
         finally:
             cleanup_preview()
 
-    def _finish_group_move(self, session) -> None:
+    def _commit_session_plan(self, session) -> None:
+        operation = LAYOUT_RESIZE if session.handle else LAYOUT_MOVE
         incoming = dict(session.group_candidates)
-        if any(self._legal_grid_rect(rect) != rect for rect in incoming.values()):
-            origin = union_grid_rect(session.group_origins.values())
-            candidate = union_grid_rect(incoming.values())
-            if origin is None or candidate is None:
-                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
-                self._relayout()
-                return
-            self._finish_out_of_grid(incoming, origin, candidate)
-            return
-        others = [
-            item
-            for item in self._placements.values()
-            if item.ref not in incoming
-        ]
-        if all(rect_is_available(rect, others) for rect in incoming.values()):
-            self._commit_group_move(session)
-            return
-        origin = union_grid_rect(session.group_origins.values())
-        candidate = union_grid_rect(incoming.values())
-        if origin is None or candidate is None:
-            self.feedback_requested.emit(FEEDBACK_AVOID_BOUNDARY)
-            self._relayout()
-            return
-        self._commit_overlap_avoidance(incoming, origin, candidate)
-
-    def _commit_group_move(self, session) -> None:
-        updates = []
-        for ref, rect in sorted(
-            session.group_candidates.items(),
-            key=lambda item: (item[0].section, item[0].view_id),
-        ):
-            placement = self._placements.get(ref)
-            if placement is None:
-                return
-            candidate = self._legal_grid_rect(rect)
-            if candidate != rect:
-                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
-                self._relayout()
-                return
-            if candidate != placement.rect:
-                updates.append(
-                    (
-                        ref.section,
-                        ref.view_id,
-                        candidate.column,
-                        candidate.row,
-                        candidate.column_span,
-                        candidate.row_span,
-                    )
-                )
-        if updates:
-            self.group_geometry_requested.emit(tuple(updates))
-
-    def _finish_out_of_grid(
-        self,
-        incoming: Mapping[UltraViewRef, GridRect],
-        origin: GridRect,
-        candidate: GridRect,
-    ) -> None:
-        preferred = avoidance_preferred_delta(origin, candidate)
-        updates, possible = plan_boundary_yield(
-            incoming, tuple(self._placements.values()), preferred=preferred
-        )
-        if not possible or not updates:
+        plan = session.plan
+        if session.is_group_move() and plan is None and not session.legal:
             self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
             self._relayout()
             return
-        self._commit_planned(updates, set(incoming))
+        if (
+            plan is None
+            or plan.based_on_layout_revision != self._layout_revision
+        ):
+            plan = plan_layout(
+                tuple(self._placements.values()),
+                session.ref,
+                session.candidate,
+                operation,
+                layout_revision=self._layout_revision,
+                preferred=avoidance_preferred_delta(session.origin, session.candidate),
+                incoming=incoming or None,
+            )
+        _log_plan_result(plan)
+        if not plan.accepted:
+            if plan.reason is LayoutRejectReason.OUT_OF_BOUNDS:
+                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
+            else:
+                self.feedback_requested.emit(FEEDBACK_NO_LEGAL_LAYOUT)
+            self._relayout()
+            return
+        reason = "drag-resize" if session.handle else "drag-move"
+        self._emit_plan(plan, reason)
 
-    def _commit_planned(
-        self,
-        updates: Sequence[tuple[UltraViewRef, GridRect]],
-        incoming_refs: set[UltraViewRef],
-    ) -> bool:
+    def _emit_plan(self, plan: LayoutPlan, reason: str) -> bool:
+        updates = plan.committed_updates()
         if not updates:
             self._relayout()
             return False
-        needs_ask = False
-        for ref, rect in updates:
-            placement = self._placements.get(ref)
-            if placement is None:
-                self._relayout()
-                return False
-            if ref not in incoming_refs:
-                needs_ask = True
-            elif (
-                rect.column_span != placement.rect.column_span
-                or rect.row_span != placement.rect.row_span
-            ):
-                needs_ask = True
-        if needs_ask:
-            page = _page_of(self)
-            if page is None or not page.confirm_auto_avoid():
-                self._relayout()
-                return False
-        payload = tuple(
-            (
-                ref.section,
-                ref.view_id,
-                rect.column,
-                rect.row,
-                rect.column_span,
-                rect.row_span,
-            )
-            for ref, rect in sorted(
-                updates, key=lambda item: (item[0].section, item[0].view_id)
-            )
-        )
-        self.group_geometry_requested.emit(payload)
-        return True
-
-    def _commit_overlap_avoidance(
-        self,
-        incoming: Mapping[UltraViewRef, GridRect],
-        origin: GridRect,
-        candidate: GridRect,
-    ) -> bool:
-        preferred = avoidance_preferred_delta(origin, candidate)
-        placements = tuple(self._placements.values())
-        updates, possible = plan_overlap_avoidance(
-            incoming, placements, preferred=preferred
-        )
-        if not possible or not updates:
-            updates, possible = plan_neighbor_shrink(incoming, placements)
-        if not possible or not updates:
-            self.feedback_requested.emit(FEEDBACK_AVOID_BOUNDARY)
-            self._relayout()
-            return False
-        return self._commit_planned(updates, set(incoming))
-
-    def _request_geometry(self, ref: UltraViewRef, rect: GridRect, reason: str) -> bool:
-        placement = self._placements.get(ref)
-        if placement is None or rect == placement.rect:
-            return False
-        if rect != self._legal_grid_rect(rect):
-            self._finish_out_of_grid({ref: rect}, placement.rect, rect)
-            return False
-        if rect_is_available(rect, self._placements.values(), excluding=ref):
+        if len(updates) == 1 and updates[0][0] == plan.mover_ref:
+            ref, rect = updates[0]
             self.geometry_requested.emit(
                 ref.section,
                 ref.view_id,
@@ -3267,8 +3187,52 @@ class FreeGridBoard(QWidget):
                 rect.row_span,
                 reason,
             )
-            return True
-        return self._commit_overlap_avoidance({ref: rect}, placement.rect, rect)
+        else:
+            payload = tuple(
+                (
+                    ref.section,
+                    ref.view_id,
+                    rect.column,
+                    rect.row,
+                    rect.column_span,
+                    rect.row_span,
+                )
+                for ref, rect in sorted(
+                    updates, key=lambda item: (item[0].section, item[0].view_id)
+                )
+            )
+            self.group_geometry_requested.emit(payload)
+        if plan.affected_count() > 1:
+            self.feedback_requested.emit(
+                FEEDBACK_REARRANGED.format(count=plan.affected_count())
+            )
+        return True
+
+    def _request_geometry(self, ref: UltraViewRef, rect: GridRect, reason: str) -> bool:
+        placement = self._placements.get(ref)
+        if placement is None or rect == placement.rect:
+            return False
+        operation = (
+            LAYOUT_RESIZE if "resize" in reason else LAYOUT_MOVE
+        )
+        plan = plan_layout(
+            tuple(self._placements.values()),
+            ref,
+            rect,
+            operation,
+            layout_revision=self._layout_revision,
+            preferred=avoidance_preferred_delta(placement.rect, rect),
+            incoming={ref: rect},
+        )
+        _log_plan_result(plan)
+        if not plan.accepted:
+            if plan.reason is LayoutRejectReason.OUT_OF_BOUNDS:
+                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
+            else:
+                self.feedback_requested.emit(FEEDBACK_NO_LEGAL_LAYOUT)
+            self._relayout()
+            return False
+        return self._emit_plan(plan, reason)
 
     def _on_layout_key(
         self, section: str, view_id: str, column_delta: int, row_delta: int, resize: bool
@@ -3288,12 +3252,9 @@ class FreeGridBoard(QWidget):
             )
         )
         if not resize:
-            if candidate != self._legal_grid_rect(candidate):
-                self._finish_out_of_grid({ref: candidate}, placement.rect, candidate)
-                return
             self._request_geometry(ref, candidate, "keyboard-move")
             return
-        self._request_geometry(ref, self._legal_grid_rect(candidate), "keyboard-resize")
+        self._request_geometry(ref, candidate, "keyboard-resize")
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if _accept_ultraview_drag(event):
