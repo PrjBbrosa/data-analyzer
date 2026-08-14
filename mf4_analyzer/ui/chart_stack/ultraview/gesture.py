@@ -62,24 +62,23 @@ class GestureSession:
     def group_ghost_pixels(
         self, metrics: GridMetrics, pos: tuple[int, int]
     ) -> tuple[Rect, ...]:
+        """Ghosts for a group gesture — the preview of what release will commit.
+
+        An out-of-board group drag commits **nothing** (``update`` sets
+        ``plan=None, legal=False``), so the ghost has to keep showing the rigid
+        translation in its reject state.  Clamping each member individually
+        instead drew a squashed, self-overlapping shape that matched neither the
+        pointer nor the outcome (review 2026-08-15 §4.3).
+        """
         if self.plan is not None and self.plan.accepted:
             return tuple(
                 rect_to_pixels(rect, metrics) for _ref, rect in self.plan.preview_rects()
             )
         if self.handle is not None or len(self.group_origins) <= 1:
             return (self.ghost_pixels(metrics, pos),)
-        ghosts = []
-        for origin in self.group_origins.values():
-            rect = clamp_rect(
-                GridRect(
-                    origin.column + (self.candidate.column - self.origin.column),
-                    origin.row + (self.candidate.row - self.origin.row),
-                    origin.column_span,
-                    origin.row_span,
-                )
-            )
-            ghosts.append(rect_to_pixels(rect, metrics))
-        return tuple(ghosts)
+        return tuple(
+            rect_to_pixels(rect, metrics) for rect in self._rigid_group_rects()
+        )
 
     def group_highlight_pixels(self, metrics: GridMetrics) -> tuple[Rect, ...]:
         if self.plan is not None and self.plan.accepted:
@@ -89,9 +88,25 @@ class GestureSession:
         if self.handle is not None or len(self.group_candidates) <= 1:
             return (self.highlight_pixels(metrics),)
         return tuple(
-            rect_to_pixels(clamp_rect(rect), metrics)
-            for rect in self.group_candidates.values()
+            rect_to_pixels(rect, metrics) for rect in self._rigid_group_rects()
         )
+
+    def _rigid_group_rects(self) -> tuple[GridRect, ...]:
+        """Un-clamped rigid translation of the selection, in press order."""
+        column_delta = self.candidate.column - self.origin.column
+        row_delta = self.candidate.row - self.origin.row
+        rects: list[GridRect] = []
+        for ref, origin in self.group_origins.items():
+            rect = self.group_candidates.get(ref)
+            if rect is None:
+                rect = GridRect(
+                    origin.column + column_delta,
+                    origin.row + row_delta,
+                    origin.column_span,
+                    origin.row_span,
+                )
+            rects.append(rect)
+        return tuple(rects)
 
     def preview_refs(self) -> tuple[UltraViewRef, ...]:
         if self.plan is not None and self.plan.accepted:

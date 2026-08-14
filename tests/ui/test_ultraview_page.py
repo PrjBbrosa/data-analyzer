@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,7 +19,15 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     SLOT_GUTTER,
     slot_rects,
 )
-from mf4_analyzer.ui.chart_stack.ultraview.free_grid import legal_grid_rect
+from mf4_analyzer.ui.chart_stack.ultraview import widgets as uv_widgets
+from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
+    LAYOUT_MOVE,
+    LayoutPlan,
+    LayoutRejectReason,
+    clamp_rect,
+    legal_grid_rect,
+    rect_to_pixels,
+)
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
@@ -1463,7 +1472,8 @@ def test_free_grid_drop_clamps_span_inside_board(qtbot):
     )
     assert (column, row) == (legal.column, legal.row)
     clamped = GridRect(column, row, span.column_span, span.row_span)
-    assert free._legal_grid_rect(clamped) == _legal_grid_rect(clamped)
+    assert clamp_rect(clamped) == clamped
+    assert clamp_rect(clamped) == _legal_grid_rect(clamped)
     assert column + span.column_span <= GRID_COLUMNS
     assert row + span.row_span <= MAX_GRID_ROWS
 
@@ -1646,6 +1656,58 @@ def test_free_grid_overlap_drop_moves_blocker_without_modal(qtbot, monkeypatch):
     assert len(ghost_geoms) == 2
 
 
+def test_drag_over_neighbour_and_back_leaves_no_dim_behind(qtbot):
+    """Dragging across a neighbour and back to the original cell must not leave the
+    neighbour at drag opacity: the dim set is recomputed every move, so it has to be
+    undimmed incrementally and cleared unconditionally on release
+    (review 2026-08-15 §4.3 dim 泄漏)."""
+    harness = _Harness(qtbot)
+    free, (card, other) = _prepare_free_grid(harness, qtbot, "dim-0", "dim-1")
+    requested = []
+    group = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    harness.page.free_grid_group_geometry_requested.connect(group.append)
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    over = QPoint(start.x() + unit * 6, start.y())
+    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
+    _send_mouse_move(card, over)
+    assert free.gesture().is_active()
+    assert other.graphicsEffect() is not None, "the displaced neighbour is previewed"
+    _send_mouse_move(card, start)
+    session = free.gesture().session()
+    assert session is not None and session.plan is not None
+    assert [ref for ref, _rect in session.plan.preview_rects()] == [
+        make_ref("time", "dim-0")
+    ]
+    assert other.graphicsEffect() is None, (
+        "the neighbour left the plan, so its dim must be dropped on the same frame"
+    )
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, start)
+    assert requested == [] and group == []
+    assert other.graphicsEffect() is None
+    assert card.graphicsEffect() is None
+    assert free._dimmed_refs == set()
+
+
+def test_cancelled_drag_restores_every_dimmed_card(qtbot):
+    """Esc is the path where nothing re-applies the model, so the board's own dim
+    bookkeeping is the only thing that can undo it."""
+    harness = _Harness(qtbot)
+    free, (card, other) = _prepare_free_grid(harness, qtbot, "esc-dim-0", "esc-dim-1")
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
+    _send_mouse_move(card, QPoint(start.x() + unit * 6, start.y()))
+    assert other.graphicsEffect() is not None
+    assert free.cancel_gesture() is True
+    assert other.graphicsEffect() is None
+    assert card.graphicsEffect() is None
+    assert free._dimmed_refs == set()
+
+
 def test_free_grid_overlap_drop_does_not_construct_message_box(qtbot, monkeypatch):
     harness = _Harness(qtbot)
     free, (card, _other) = _prepare_free_grid(harness, qtbot, "spy-0", "spy-1")
@@ -1690,6 +1752,107 @@ def test_free_grid_overlap_at_boundary_toasts_without_commit(qtbot):
     assert group == []
     assert toasts == [FEEDBACK_NO_LEGAL_LAYOUT]
     assert card.geometry().topLeft() == origin.topLeft()
+
+
+def test_displacing_a_card_out_of_the_viewport_hints_and_logs(qtbot, caplog):
+    """Blockers slide along the drag axis (spec D9.3, 2026-08-15 annotation), so a
+    pushed card can land below everything on screen.  Scroll follow is out of
+    scope; saying so is not (review 2026-08-15 §4.3 blocker 落点)."""
+    harness = _Harness(qtbot)
+    harness.board.layout_mode = LAYOUT_MODE_FREE_GRID
+    harness.board.placements.clear()
+    harness.board.unplaced.clear()
+    harness.board.free_grid = [
+        FreeGridPlacement(make_ref("time", "far-0"), GridRect(0, 0, 12, 8)),
+        FreeGridPlacement(make_ref("time", "far-1"), GridRect(0, 8, 12, 8)),
+    ]
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    free = harness.page._free_grid
+    visible = free._visible_board_rect()
+    assert not visible.isEmpty()
+    toasts = []
+    harness.page.feedback_requested.connect(toasts.append)
+    with caplog.at_level(logging.INFO, logger=uv_widgets.__name__):
+        assert (
+            free._request_geometry(
+                make_ref("time", "far-0"), GridRect(0, 8, 12, 8), "keyboard-move"
+            )
+            is True
+        )
+    pushed = QRect(*rect_to_pixels(GridRect(0, 16, 12, 8), free.metrics()))
+    assert not visible.intersects(pushed)
+    assert uv_widgets.FEEDBACK_DISPLACED_OFFSCREEN in toasts
+    assert any(
+        "outside the viewport" in record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.INFO
+    )
+
+
+def test_displacement_inside_the_viewport_stays_quiet(qtbot):
+    harness = _Harness(qtbot)
+    free, (card, _other) = _prepare_free_grid(harness, qtbot, "near-0", "near-1")
+    toasts = []
+    harness.page.feedback_requested.connect(toasts.append)
+    assert (
+        free._request_geometry(
+            make_ref("time", "near-0"), GridRect(6, 0, 6, 3), "keyboard-move"
+        )
+        is True
+    )
+    assert toasts == [FEEDBACK_REARRANGED.format(count=2)]
+
+
+def test_search_budget_reject_has_its_own_copy_and_a_warning_trace(qtbot, monkeypatch, caplog):
+    """"The planner gave up" and "it does not fit" are different facts, and the
+    give-up must leave a trace (review 2026-08-15 P1-4: both mapped to the same
+    sentence and only ``logger.debug``)."""
+    harness = _Harness(qtbot)
+    free, (card, _other) = _prepare_free_grid(harness, qtbot, "cap-0", "cap-1")
+    ref = make_ref("time", "cap-0")
+    starved = LayoutPlan(
+        accepted=False,
+        reason=LayoutRejectReason.SEARCH_CAP,
+        mover_before=free._placements[ref].rect,
+        mover_after=free._placements[ref].rect,
+        displaced_before_after=(),
+        operation=LAYOUT_MOVE,
+        based_on_layout_revision=free._layout_revision,
+        mover_ref=ref,
+        search_visits=768,
+    )
+    monkeypatch.setattr(uv_widgets, "plan_layout", lambda *args, **kwargs: starved)
+    toasts = []
+    requested = []
+    harness.page.feedback_requested.connect(toasts.append)
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    monkeypatch.setattr(uv_widgets, "_PLANNER_LOG_MONO", 0.0, raising=False)
+    with caplog.at_level(logging.DEBUG, logger=uv_widgets.__name__):
+        assert (
+            free._request_geometry(ref, GridRect(6, 6, 2, 2), "keyboard-move") is False
+        )
+    assert requested == []
+    assert toasts == [uv_widgets.FEEDBACK_SEARCH_BUDGET]
+    assert uv_widgets.FEEDBACK_SEARCH_BUDGET != FEEDBACK_NO_LEGAL_LAYOUT
+    warnings = [
+        record for record in caplog.records if record.levelno >= logging.WARNING
+    ]
+    assert warnings, "a blown search budget must not be a debug-only event"
+    assert "search_cap" in warnings[0].getMessage()
+
+
+def test_reject_reasons_map_to_distinct_user_copy():
+    assert uv_widgets._reject_feedback(LayoutRejectReason.OUT_OF_BOUNDS) == FEEDBACK_OUT_OF_GRID
+    assert (
+        uv_widgets._reject_feedback(LayoutRejectReason.NO_LEGAL_LAYOUT)
+        == FEEDBACK_NO_LEGAL_LAYOUT
+    )
+    assert (
+        uv_widgets._reject_feedback(LayoutRejectReason.SEARCH_CAP)
+        == uv_widgets.FEEDBACK_SEARCH_BUDGET
+    )
+    assert uv_widgets._reject_feedback(None) == FEEDBACK_NO_LEGAL_LAYOUT
 
 
 def test_free_grid_escape_cancels_active_move_without_commit(qtbot):
