@@ -3,6 +3,7 @@ import numpy as np
 from pathlib import Path
 
 from .._palette import FILE_PALETTES
+from .channel_frame import frame_get_column, frame_row_count
 
 
 # Authoritative set of channel names treated as the time master.
@@ -91,13 +92,15 @@ class FileData:
 
         if fs is not None:
             self.fs = float(fs)
-            self.time_array = np.arange(len(df), dtype=float) / self.fs
+            self.time_array = np.arange(frame_row_count(df), dtype=float) / self.fs
             self._time_source = 'audio'
         else:
             # 尝试从列名识别时间列
             for ch in chs:
                 if ch.lower() in _TIME_NAMES:
-                    self.time_array = df[ch].to_numpy(copy=False).astype(float, copy=False)
+                    self.time_array = np.asarray(
+                        frame_get_column(df, ch), dtype=float,
+                    )
                     if len(self.time_array) > 1:
                         dt = np.median(np.diff(self.time_array))
                         if dt > 0:
@@ -107,7 +110,7 @@ class FileData:
 
             # 如果没有时间列，根据采样率生成
             if self.time_array is None:
-                self.time_array = np.arange(len(df), dtype=float) / self.fs
+                self.time_array = np.arange(frame_row_count(df), dtype=float) / self.fs
                 self._time_source = 'generated'
 
     def rebuild_time_axis(self, fs):

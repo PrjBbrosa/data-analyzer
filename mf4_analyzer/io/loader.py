@@ -223,7 +223,7 @@ class DataLoader:
         return frames
 
     @staticmethod
-    def probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None):
+    def probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_check=None):
         """Probe a DBC set against already-read CAN-log frames."""
         if not frames:
             raise ValueError(NO_CAN_FRAMES_MESSAGE)
@@ -231,15 +231,16 @@ class DataLoader:
             frames,
             list(dbc_paths or []),
             progress_callback=progress_callback,
+            cancel_check=cancel_check,
         )
 
     @staticmethod
     def load_blf_frames(frames, dbc_paths=None, progress_callback=None):
-        """Decode or expose a previously-read CAN-log frame sequence.
+        """Decode a CAN-log frame list into a :class:`~mf4_analyzer.io.channel_frame.ChannelFrame`.
 
-        This is deliberately the same semantic path as :meth:`load_blf`; the
-        only difference is that a batch importer supplies its one-file frame
-        list rather than making this method read the log again.
+        This is the same semantic path as :meth:`load_blf`; a batch importer
+        supplies its already-read frame list rather than reading the log again.
+        Call :meth:`load_blf_dataframe` when a pandas ``DataFrame`` is required.
         """
         if not frames:
             raise ValueError(NO_CAN_FRAMES_MESSAGE)
@@ -422,13 +423,17 @@ class DataLoader:
 
     @staticmethod
     def load_blf(fp, dbc_paths=None, progress_callback=None):
-        """Load a Vector CAN log (BLF / CANoe ASC) as ``(DataFrame, channels, units)``.
+        """Load a Vector CAN log (BLF / CANoe ASC) as a ChannelFrame.
+
+        Returns ``(frame, channels, units)`` where ``frame`` is a
+        :class:`~mf4_analyzer.io.channel_frame.ChannelFrame` (currently a
+        lazy ZOH implementation). It is not a pandas ``DataFrame``. Use
+        :meth:`load_blf_dataframe` to opt in to full-table materialization.
 
         With ``dbc_paths`` (one or more ``.dbc``), frames are decoded into named
         physical signals via cantools. Without a DBC, payload bytes are exposed
-        per CAN id (``0x1F3.byte0`` …) so traffic is still viewable. Every signal
-        is zero-order-hold resampled onto one shared ``Time`` axis, matching the
-        single-time-axis model the other loaders return.
+        per CAN id (``0x1F3.byte0`` …) so traffic is still viewable. Signal
+        columns zero-order-hold onto one shared ``Time`` axis when read.
 
         A2L is deliberately not involved: plain CAN signals decode from a DBC,
         which is a separate, lighter database than the XCP-measurement A2L.
@@ -453,6 +458,28 @@ class DataLoader:
             dbc_paths=dbc_paths,
             progress_callback=map_decode,
         )
+
+    @staticmethod
+    def load_blf_dataframe(fp, dbc_paths=None, progress_callback=None):
+        """Load a CAN log and materialize every column into a pandas DataFrame.
+
+        Prefer :meth:`load_blf` when only some channels will be read. This
+        entry point exists for callers that need pandas row semantics and
+        accept the ZOH expansion cost.
+        """
+        data, channels, units = DataLoader.load_blf(
+            fp,
+            dbc_paths=dbc_paths,
+            progress_callback=progress_callback,
+        )
+        if hasattr(data, "to_pandas"):
+            data = data.to_pandas()
+        elif not isinstance(data, pd.DataFrame):
+            raise TypeError(
+                "load_blf_dataframe expected a ChannelFrame or pandas DataFrame, "
+                f"got {type(data)!r}"
+            )
+        return data, channels, units
 
     @staticmethod
     def probe_blf_dbc(fp, dbc_paths, progress_callback=None):

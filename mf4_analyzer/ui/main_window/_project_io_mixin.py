@@ -1020,8 +1020,6 @@ class ProjectIOMixin:
             candidate["probe"] = probe
             if callable(progress_callback):
                 progress_callback((probe_index + 1) * 1000, progress_total)
-            if probe.strength == "strong":
-                break
 
         if callable(progress_callback) and candidates:
             progress_callback(progress_total, progress_total)
@@ -1055,13 +1053,28 @@ class ProjectIOMixin:
         status_text = {"strong": "强匹配", "weak": "弱匹配"}.get(
             status, "不匹配",
         )
-        return (
-            f"{self._format_blf_dbc_paths(candidate['paths'])} "
-            f"· {status_text} · "
-            f"CAN ID {probe.matched_frame_id_count}/{probe.total_frame_id_count} · "
-            f"帧 {probe.decoded_frame_count}/{probe.total_frame_count} · "
-            f"信号 {len(probe.signal_names)}"
-        )
+        parts = [
+            f"{self._format_blf_dbc_paths(candidate['paths'])}",
+            status_text,
+            (
+                f"CAN ID {probe.matched_frame_id_count}/"
+                f"{probe.total_frame_id_count}"
+            ),
+        ]
+        matched = probe.matched_frame_count
+        total = probe.total_frame_count
+        if matched is not None and total:
+            parts.append(f"完整匹配 {matched}/{total}")
+        sample_n = probe.decode_sample_count
+        decoded = probe.decoded_sample_count
+        reason = probe.estimate_unavailable_reason
+        if sample_n:
+            percent = 100.0 * decoded / sample_n
+            parts.append(f"抽样解码 {decoded}/{sample_n} ({percent:.0f}%)")
+        elif reason:
+            parts.append(f"抽样不足（{reason}）")
+        parts.append(f"信号 {len(probe.signal_names)}")
+        return " · ".join(parts)
 
     def _accept_blf_dbc_candidate(
         self, path, candidate, *, frames=None, progress_callback=None,

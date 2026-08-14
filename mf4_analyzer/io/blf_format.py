@@ -1,8 +1,9 @@
 """BLF/DBC reading and decoding for :class:`~mf4_analyzer.io.loader.DataLoader`.
 
 Split out of ``loader.py`` unchanged: ``DataLoader`` keeps the public
-``read_blf_frames`` / ``load_blf_frames`` / ``load_blf`` / ``probe_blf_dbc_frames``
-/ ``probe_blf_dbc`` facade and delegates the work down here.
+``read_blf_frames`` / ``load_blf_frames`` / ``load_blf`` / ``load_blf_dataframe``
+/ ``probe_blf_dbc_frames`` / ``probe_blf_dbc`` facade and delegates the work
+down here. ``load_blf`` returns a :class:`~mf4_analyzer.io.channel_frame.ChannelFrame`.
 
 ``can`` and ``cantools`` stay lazily imported inside the functions that need
 them, so importing this module never requires the optional CAN stack.
@@ -14,29 +15,56 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .channel_frame import ChannelFrame, UnsupportedChannelFrameOperation
+
 
 @dataclass(frozen=True)
 class BlfDbcProbe:
-    """Lightweight compatibility summary for one BLF against one DBC set."""
+    """DBC compatibility summary with exact facts, sample facts, and estimates.
+
+    Exact fields come from a full ID scan (no payload decode). Sample fields
+    come from a bounded statistical decode. Estimates are optional and must
+    not be presented as exact frame counts.
+    """
 
     dbc_paths: tuple[str, ...]
     total_frame_count: int
     total_frame_id_count: int
-    matched_frame_count: int
+    matched_frame_count: int | None
     matched_frame_id_count: int
-    decoded_frame_count: int
-    decoded_signal_count: int
+    decode_sample_count: int
+    sampled_matched_frame_count: int
+    decoded_sample_count: int
     signal_names: tuple[str, ...]
+    sampling_strategy: str
+    sampling_complete: bool
+    estimate_unavailable_reason: str | None = None
+
+    @property
+    def sample_match_ratio(self) -> float:
+        if self.decode_sample_count <= 0:
+            return 0.0
+        return self.sampled_matched_frame_count / self.decode_sample_count
+
+    @property
+    def sample_decode_success_ratio(self) -> float:
+        if self.decode_sample_count <= 0:
+            return 0.0
+        return self.decoded_sample_count / self.decode_sample_count
+
+    @property
+    def estimated_decoded_frame_ratio(self) -> float | None:
+        if (
+            not self.sampling_complete
+            or self.estimate_unavailable_reason
+            or self.decode_sample_count <= 0
+        ):
+            return None
+        return self.sample_decode_success_ratio
 
     @property
     def is_match(self) -> bool:
-        return self.decoded_frame_count > 0 and bool(self.signal_names)
-
-    @property
-    def decoded_frame_ratio(self) -> float:
-        if self.total_frame_count <= 0:
-            return 0.0
-        return self.decoded_frame_count / self.total_frame_count
+        return self.decoded_sample_count > 0 and bool(self.signal_names)
 
     @property
     def matched_frame_id_ratio(self) -> float:
@@ -48,9 +76,33 @@ class BlfDbcProbe:
     def strength(self) -> str:
         if not self.is_match:
             return "none"
-        if self.matched_frame_id_ratio >= 0.8 and self.decoded_frame_ratio >= 0.8:
+        if (
+            self.matched_frame_id_ratio >= 0.8
+            and self.sample_decode_success_ratio >= 0.8
+        ):
             return "strong"
         return "weak"
+
+    @property
+    def decoded_frame_count(self) -> int:
+        """Deprecated estimate. Do not use for UI display or candidate ranking."""
+        ratio = self.estimated_decoded_frame_ratio
+        if ratio is None:
+            return 0
+        if self.decode_sample_count >= self.total_frame_count:
+            return int(self.decoded_sample_count)
+        return int(round(ratio * self.total_frame_count))
+
+    @property
+    def decoded_frame_ratio(self) -> float:
+        """Deprecated. Use ``sample_decode_success_ratio`` or the estimate."""
+        ratio = self.estimated_decoded_frame_ratio
+        return 0.0 if ratio is None else float(ratio)
+
+    @property
+    def decoded_signal_count(self) -> int:
+        """Deprecated. Unique discovered signal names, not a scaled event count."""
+        return len(self.signal_names)
 
 
 def _emit_progress(progress_callback, current, total):
@@ -266,15 +318,15 @@ def _can_skip_zoh(ref_t, t):
     return not bool(np.any(np.diff(t) == 0))
 
 
-class LazyZohFrame:
-    """DataFrame-shaped view over sparse CAN series with on-demand ZOH.
+class LazyZohFrame(ChannelFrame):
+    """Column-frame view over sparse CAN series with on-demand ZOH.
 
     ``Time`` is materialized at construction. Other columns stay as
     ``(t, v)`` event series until first read, then ZOH onto ``Time`` and
     cache. Derived-channel writes (``frame[name] = arr``) store already-
-    aligned arrays. This keeps FileData / export / plot access patterns
-    (``columns``, ``len``, ``[name].to_numpy()``, ``drop``) while avoiding
-    an ``n_signals × n_longest`` table at import.
+    aligned arrays. FileData / plot access patterns (``columns``, ``len``,
+    ``[name].to_numpy()``) stay available; unimplemented pandas row
+    operations raise instead of silently succeeding.
     """
 
     is_channel_frame = True
@@ -284,13 +336,56 @@ class LazyZohFrame:
         self._series = dict(series)
         self._column_names = list(column_names)
         self._cache = {"Time": self._ref_t}
+        self._zoh_materializations = 0
+
+    def column_names(self):
+        return tuple(self._column_names)
+
+    def has_column(self, name):
+        return name in self._column_names
+
+    def get_column(self, name):
+        return np.asarray(self._materialize(name), dtype=np.float64)
+
+    def drop_columns(self, names):
+        if isinstance(names, str):
+            names = (names,)
+        drop_set = set(names)
+        kept = [name for name in self._column_names if name not in drop_set]
+        kept_series = {
+            name: pair for name, pair in self._series.items() if name in kept
+        }
+        out = LazyZohFrame(self._ref_t, kept_series, kept)
+        out._cache = {
+            name: arr for name, arr in self._cache.items() if name in kept
+        }
+        return out
+
+    def row_count(self):
+        return int(self._ref_t.size)
+
+    def to_pandas(self):
+        arrays = [self._materialize(name) for name in self._column_names]
+        if not arrays:
+            return pd.DataFrame(columns=self._column_names)
+        stacked = np.column_stack([np.asarray(arr, dtype=np.float64) for arr in arrays])
+        return pd.DataFrame(stacked, columns=list(self._column_names))
+
+    def is_lazy(self):
+        return True
+
+    def materialized_column_names(self):
+        return tuple(name for name in self._column_names if name in self._cache)
+
+    def zoh_materialization_count(self):
+        return int(self._zoh_materializations)
 
     @property
     def columns(self):
         return pd.Index(self._column_names)
 
     def __len__(self):
-        return int(self._ref_t.size)
+        return self.row_count()
 
     def __bool__(self):
         return True
@@ -321,22 +416,21 @@ class LazyZohFrame:
         if key not in self._column_names:
             self._column_names.append(key)
 
-    def drop(self, labels=None, axis=0, *, columns=None, **_kwargs):
-        cols = columns if columns is not None else (labels if axis == 1 else None)
-        if cols is None:
-            return self
-        if isinstance(cols, str):
-            cols = (cols,)
-        drop_set = set(cols)
-        names = [name for name in self._column_names if name not in drop_set]
-        kept_series = {
-            name: pair for name, pair in self._series.items() if name in names
-        }
-        out = LazyZohFrame(self._ref_t, kept_series, names)
-        out._cache = {
-            name: arr for name, arr in self._cache.items() if name in names
-        }
-        return out
+    def drop(self, labels=None, axis=0, *, columns=None, **kwargs):
+        if kwargs:
+            unknown = ", ".join(sorted(kwargs))
+            raise UnsupportedChannelFrameOperation(
+                f"ChannelFrame.drop does not support pandas keyword {unknown!r}; "
+                "use drop_columns() for column removals"
+            )
+        if columns is not None:
+            return self.drop_columns(columns)
+        if axis == 1:
+            return self.drop_columns(labels)
+        raise UnsupportedChannelFrameOperation(
+            "ChannelFrame.drop only supports column drops; use drop_columns() "
+            "or drop(columns=...). Row drop is not supported"
+        )
 
     def _materialize(self, name):
         cached = self._cache.get(name)
@@ -353,6 +447,7 @@ class LazyZohFrame:
             arr = v
         else:
             arr = _zoh_resample(self._ref_t, t, v)
+            self._zoh_materializations += 1
         self._cache[name] = arr
         return arr
 
@@ -462,108 +557,226 @@ def _message_is_multiplexed(msg):
         return True
 
 
-def _probe_decode_indices(frames, cap=_PROBE_DECODE_CAP):
-    """Sample frames for payload decode; always include the first of each ID."""
-    n = len(frames)
-    if n <= cap:
-        return range(n)
+def _discovery_probe_indices(frames, cap=_PROBE_DECODE_CAP):
+    """First frame of each arbitration ID. Not a statistical sample."""
     chosen = []
-    seen = set()
-    for i, (_t, aid, _payload) in enumerate(frames):
-        if aid in seen:
+    seen_ids = set()
+    for index, (_timestamp, arbitration_id, _payload) in enumerate(frames):
+        if arbitration_id in seen_ids:
             continue
-        seen.add(aid)
-        chosen.append(i)
-        if len(chosen) >= cap:
-            return chosen
-    chosen_set = set(chosen)
-    extras = np.linspace(0, n - 1, cap, dtype=np.int64)
-    for i in extras:
-        ii = int(i)
-        if ii in chosen_set:
-            continue
-        chosen.append(ii)
-        chosen_set.add(ii)
+        seen_ids.add(arbitration_id)
+        chosen.append(index)
         if len(chosen) >= cap:
             break
-    if len(chosen) < cap:
-        step = max(1, n // cap)
-        for i in range(0, n, step):
-            if i in chosen_set:
+    return tuple(chosen)
+
+
+def _statistical_probe_indices(frames, cap=_PROBE_DECODE_CAP):
+    """Deterministic front/mid/tail sample used for match and decode ratios."""
+    n = len(frames)
+    if n <= 0:
+        return ()
+    if n <= cap:
+        return tuple(range(n))
+    bounds = (0, n // 3, (2 * n) // 3, n)
+    per_region = cap // 3
+    remainder = cap - (3 * per_region)
+    chosen = []
+    seen = set()
+    for region_index, (start, end) in enumerate(zip(bounds, bounds[1:])):
+        span = end - start
+        if span <= 0:
+            continue
+        count = min(span, per_region + (1 if region_index < remainder else 0))
+        if count <= 0:
+            continue
+        if count == 1:
+            index = start + span // 2
+            if index not in seen:
+                seen.add(index)
+                chosen.append(index)
+            continue
+        for step in range(count):
+            index = start + (step * (span - 1)) // (count - 1)
+            if index in seen:
                 continue
-            chosen.append(i)
-            chosen_set.add(i)
+            seen.add(index)
+            chosen.append(index)
+    if len(chosen) < cap:
+        extras = np.linspace(0, n - 1, cap, dtype=np.int64)
+        for raw in extras:
+            index = int(raw)
+            if index in seen:
+                continue
+            seen.add(index)
+            chosen.append(index)
             if len(chosen) >= cap:
                 break
-    return sorted(chosen)
+    return tuple(sorted(chosen))
 
 
-def _scale_probe_count(sample_count, sample_n, total_n):
-    if sample_n <= 0:
-        return 0
-    if sample_n >= total_n:
-        return int(sample_count)
-    return int(round(sample_count * total_n / sample_n))
+def _probe_decode_indices(frames, cap=_PROBE_DECODE_CAP):
+    """Deprecated alias for the statistical sample. Discovery is separate."""
+    return _statistical_probe_indices(frames, cap=cap)
 
 
-def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None):
+def _empty_blf_dbc_probe(dbc_paths, total_frames, *, reason, **overrides):
+    values = {
+        "dbc_paths": tuple(str(path) for path in dbc_paths),
+        "total_frame_count": int(total_frames),
+        "total_frame_id_count": 0,
+        "matched_frame_count": None,
+        "matched_frame_id_count": 0,
+        "decode_sample_count": 0,
+        "sampled_matched_frame_count": 0,
+        "decoded_sample_count": 0,
+        "signal_names": (),
+        "sampling_strategy": "incomplete",
+        "sampling_complete": False,
+        "estimate_unavailable_reason": reason,
+    }
+    values.update(overrides)
+    return BlfDbcProbe(**values)
+
+
+def _probe_blf_dbc_frames(frames, dbc_paths, progress_callback=None, cancel_check=None):
+    total_frames = len(frames)
+    dbc_paths = tuple(str(path) for path in dbc_paths)
+
+    def cancelled():
+        return callable(cancel_check) and bool(cancel_check())
+
+    if cancelled():
+        return _empty_blf_dbc_probe(
+            dbc_paths, total_frames, reason="cancelled",
+        )
+
     db = _load_dbc_database(dbc_paths)
     lookup = _cached_message_lookup(db)
     frame_ids = set()
     matched_frame_ids = set()
     matched_frame_count = 0
 
-    total_frames = len(frames)
     progress_total = max(1, total_frames)
     step = max(1, progress_total // 80)
     _emit_progress(progress_callback, 0, progress_total)
-    for index, (_t, aid, _payload) in enumerate(frames, 1):
-        frame_ids.add(aid)
-        if lookup(aid) is not None:
-            matched_frame_count += 1
-            matched_frame_ids.add(aid)
-        if index % step == 0 or index == total_frames:
-            _emit_progress(progress_callback, index, progress_total)
+    try:
+        for index, (_timestamp, arbitration_id, _payload) in enumerate(frames, 1):
+            if cancelled():
+                return _empty_blf_dbc_probe(
+                    dbc_paths, total_frames, reason="cancelled",
+                )
+            frame_ids.add(arbitration_id)
+            if lookup(arbitration_id) is not None:
+                matched_frame_count += 1
+                matched_frame_ids.add(arbitration_id)
+            if index % step == 0 or index == total_frames:
+                _emit_progress(progress_callback, index, progress_total)
+    except IndexError:
+        return _empty_blf_dbc_probe(
+            dbc_paths, total_frames, reason="truncated_sample",
+        )
 
-    indices = _probe_decode_indices(frames)
-    sample_n = total_frames if isinstance(indices, range) else len(indices)
+    statistical = _statistical_probe_indices(frames)
+    discovery = _discovery_probe_indices(frames)
+    statistical_set = set(statistical)
+    complete_scan = total_frames <= _PROBE_DECODE_CAP
+    sampling_strategy = (
+        "complete" if complete_scan else "stratified_front_mid_tail"
+    )
+    sample_matched = 0
     sample_decoded = 0
-    sample_signal_events = 0
     signal_names = set()
-    decode_total = max(1, sample_n)
+    sampling_complete = True
+    reason = None
+    decode_total = max(1, len(statistical))
     decode_step = max(1, decode_total // 80)
-    for decode_index, frame_index in enumerate(indices, 1):
-        _t, aid, payload = frames[frame_index]
-        msg = lookup(aid)
-        if msg is None:
-            if decode_index % decode_step == 0 or decode_index == decode_total:
-                _emit_progress(progress_callback, progress_total, progress_total)
-            continue
-        decoded = _decode_can_payload(msg, payload)
-        if not decoded:
-            continue
-        numeric_values = _numeric_decoded_values(decoded)
-        if not numeric_values:
-            continue
-        sample_decoded += 1
-        sample_signal_events += len(numeric_values)
-        signal_names.update(sig_name for sig_name, _value in numeric_values)
+
+    for decode_index, frame_index in enumerate(statistical, 1):
+        if cancelled():
+            sampling_complete = False
+            reason = "cancelled"
+            break
+        try:
+            _timestamp, arbitration_id, payload = frames[frame_index]
+        except IndexError:
+            sampling_complete = False
+            reason = "truncated_sample"
+            break
+        if not isinstance(payload, (bytes, bytearray)):
+            sampling_complete = False
+            reason = "corrupt_sample"
+            break
+        msg = lookup(arbitration_id)
+        if msg is not None:
+            sample_matched += 1
+            decoded = _decode_can_payload(msg, payload)
+            if decoded:
+                numeric_values = _numeric_decoded_values(decoded)
+                if numeric_values:
+                    sample_decoded += 1
+                    signal_names.update(
+                        sig_name for sig_name, _value in numeric_values
+                    )
         if decode_index % decode_step == 0 or decode_index == decode_total:
             _emit_progress(progress_callback, progress_total, progress_total)
 
+    leftover = max(0, _PROBE_DECODE_CAP - len(statistical))
+    if sampling_complete and leftover and not complete_scan:
+        extras = [
+            index for index in discovery
+            if index not in statistical_set
+        ][:leftover]
+        for frame_index in extras:
+            if cancelled():
+                break
+            try:
+                _timestamp, arbitration_id, payload = frames[frame_index]
+            except IndexError:
+                break
+            if not isinstance(payload, (bytes, bytearray)):
+                continue
+            msg = lookup(arbitration_id)
+            if msg is None:
+                continue
+            decoded = _decode_can_payload(msg, payload)
+            if not decoded:
+                continue
+            numeric_values = _numeric_decoded_values(decoded)
+            if numeric_values:
+                signal_names.update(
+                    sig_name for sig_name, _value in numeric_values
+                )
+
+    if not sampling_complete:
+        return BlfDbcProbe(
+            dbc_paths=dbc_paths,
+            total_frame_count=total_frames,
+            total_frame_id_count=len(frame_ids),
+            matched_frame_count=matched_frame_count,
+            matched_frame_id_count=len(matched_frame_ids),
+            decode_sample_count=0,
+            sampled_matched_frame_count=0,
+            decoded_sample_count=0,
+            signal_names=tuple(sorted(signal_names)),
+            sampling_strategy="incomplete",
+            sampling_complete=False,
+            estimate_unavailable_reason=reason,
+        )
+
     return BlfDbcProbe(
-        dbc_paths=tuple(str(p) for p in dbc_paths),
+        dbc_paths=dbc_paths,
         total_frame_count=total_frames,
         total_frame_id_count=len(frame_ids),
         matched_frame_count=matched_frame_count,
         matched_frame_id_count=len(matched_frame_ids),
-        decoded_frame_count=_scale_probe_count(
-            sample_decoded, sample_n, total_frames,
-        ),
-        decoded_signal_count=_scale_probe_count(
-            sample_signal_events, sample_n, total_frames,
-        ),
+        decode_sample_count=len(statistical),
+        sampled_matched_frame_count=sample_matched,
+        decoded_sample_count=sample_decoded,
         signal_names=tuple(sorted(signal_names)),
+        sampling_strategy=sampling_strategy,
+        sampling_complete=True,
+        estimate_unavailable_reason=None,
     )
 
 

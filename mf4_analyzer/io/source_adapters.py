@@ -34,7 +34,12 @@ try:
 except ImportError:  # pragma: no cover - optional dependency boundary
     _AsamMdfException = None
 
-from .blf_format import LazyZohFrame
+from .channel_frame import (
+    frame_column_names,
+    frame_get_column,
+    frame_row_count,
+    is_tabular_frame,
+)
 from .file_data import FileData, _TIME_NAMES
 from . import loader as _loader
 from .loader import AUDIO_VIDEO_EXTS, DataLoader, unique_mdf_channel_locations
@@ -155,15 +160,15 @@ def _float_token(value) -> str:
     return "none" if number is None else number.hex()
 
 
-def _axis_facts(data: pd.DataFrame) -> tuple[int, float | None, float | None]:
-    n = int(len(data))
+def _axis_facts(data) -> tuple[int, float | None, float | None]:
+    n = frame_row_count(data)
     time_column = next(
-        (name for name in data.columns if str(name).lower() in _TIME_NAMES),
+        (name for name in frame_column_names(data) if str(name).lower() in _TIME_NAMES),
         None,
     )
     if time_column is None or n == 0:
         return n, None, None
-    values = np.asarray(data[time_column], dtype=float)
+    values = np.asarray(frame_get_column(data, time_column), dtype=float)
     t0 = _finite_float(values[0]) if values.size else None
     dt = None
     if values.size >= 2:
@@ -175,8 +180,8 @@ def _axis_facts(data: pd.DataFrame) -> tuple[int, float | None, float | None]:
 
 def _group_identity(adapter_key: str, group: Mapping[str, object]) -> str:
     data = group.get("data")
-    if not isinstance(data, pd.DataFrame):
-        raise TypeError("group loader result requires a pandas DataFrame in 'data'")
+    if not is_tabular_frame(data):
+        raise TypeError("group loader result requires a tabular frame in 'data'")
     n, dt, t0 = _axis_facts(data)
     channel_metadata = group.get("channel_metadata")
     channel_metadata = channel_metadata if isinstance(channel_metadata, Mapping) else {}
@@ -335,11 +340,11 @@ def _probe_blf(
 ) -> tuple[SourceDescriptor, ...]:
     dbc_paths = tuple(str(item) for item in context.get("dbc_paths", ()) if item)
     result = DataLoader.probe_blf_dbc(path, list(dbc_paths))
-    if not getattr(result, "is_match", False):
+    if not result.is_match:
         raise ValueError("CAN 日志与所选 DBC 不匹配，无法生成信号级来源")
     canonical = canonical_source_path(path)
     group_id = "root"
-    names = tuple(str(name) for name in getattr(result, "signal_names", ()))
+    names = tuple(str(name) for name in result.signal_names)
     source_kind = (
         "canoe_asc" if Path(path).suffix.lower() == ".asc" else "blf"
     )
@@ -356,10 +361,8 @@ def _probe_blf(
             "probe_cost": adapter.probe_cost,
             "source_kind": source_kind,
             "dbc_paths": dbc_paths,
-            "dbc_strength": str(getattr(result, "strength", "")),
-            "decoded_signal_count": int(
-                getattr(result, "decoded_signal_count", len(names))
-            ),
+            "dbc_strength": str(result.strength),
+            "decoded_signal_count": len(names),
         },
     ),)
 
@@ -470,8 +473,10 @@ class SourceAdapter:
                 f"{self.loader_name} returned an invalid {self.return_shape} result"
             )
         data, channels, units = result[:3]
-        if not isinstance(data, (pd.DataFrame, LazyZohFrame)):
-            raise TypeError(f"{self.loader_name} must return a pandas DataFrame")
+        if not is_tabular_frame(data):
+            raise TypeError(
+                f"{self.loader_name} must return a ChannelFrame or pandas DataFrame"
+            )
         fs = result[3] if len(result) == 5 else None
         source_metadata = dict(result[4] or {}) if len(result) == 5 else {}
         source_metadata.update({
