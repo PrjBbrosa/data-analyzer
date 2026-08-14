@@ -3193,22 +3193,21 @@ def test_time_range_rows_have_transparent_style_rule():
 def test_checkbox_indicator_has_visible_checked_state():
     """Checkboxes need an explicit, high-contrast indicator under QSS."""
     import pathlib
-    import re
     qss_path = pathlib.Path(__file__).resolve().parents[2] / (
         "mf4_analyzer/ui_kit/style.qss"
     )
     qss = qss_path.read_text(encoding="utf-8")
-    base = re.search(r"QCheckBox::indicator\s*\{([^}]*)\}", qss, re.DOTALL)
-    checked = re.search(
-        r"QCheckBox::indicator:checked\s*\{([^}]*)\}", qss, re.DOTALL,
-    )
-    assert base, "QCheckBox::indicator base rule not found"
-    assert checked, "QCheckBox::indicator:checked rule not found"
-    base_block = base.group(1)
-    checked_block = checked.group(1)
+    # Do not brace-pair: ``{{CONTROL_*}}`` / ``{{ICON_*}}`` interrupt ``}``.
+    # Same newline-then-"}" slice as tests/ui_kit/test_selection_signature.py.
+    def _body(selector: str) -> str:
+        start = qss.index(selector)
+        return qss[start:qss.index("\n}", start)]
+
+    base_block = _body("QCheckBox::indicator {")
+    checked_block = _body("QCheckBox::indicator:checked {")
     assert "width: 16px" in base_block or "width: 18px" in base_block
     assert "border:" in base_block
-    assert "#1769e0" in checked_block
+    assert "{{CONTROL_ACCENT}}" in checked_block
     assert "image:" in checked_block
 
 
