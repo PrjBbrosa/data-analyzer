@@ -10,8 +10,10 @@ from __future__ import annotations
 from html import escape
 import logging
 import math
+import time
 
 import numpy as np
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPointF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
@@ -77,6 +79,60 @@ from mf4_analyzer.ui_kit.axis_metrics import (
 
 
 logger = logging.getLogger(__name__)
+
+
+class _IdleQualityActivity:
+    """Canvas-local interaction state for idle-AA recovery.
+
+    Pointer buttons and ViewBox drag depth are the only sticky "busy"
+    conditions. Wheel, gesture, and kinetic range changes pulse
+    ``last_activity_monotonic`` so the idle timer can delay, but they
+    cannot pin the canvas pending forever.
+    """
+
+    __slots__ = (
+        "_held_buttons",
+        "_drag_depth",
+        "last_activity_monotonic",
+    )
+
+    def __init__(self):
+        self._held_buttons = set()
+        self._drag_depth = 0
+        self.last_activity_monotonic = 0.0
+
+    def note_press(self, button=Qt.LeftButton) -> None:
+        self._held_buttons.add(button)
+        self._touch()
+
+    def note_move(self) -> None:
+        self._touch()
+
+    def note_release(self, button=Qt.LeftButton) -> None:
+        self._held_buttons.discard(button)
+        self._touch()
+
+    def note_drag_begin(self) -> None:
+        self._drag_depth += 1
+        self._touch()
+
+    def note_drag_end(self) -> None:
+        self._drag_depth = max(0, self._drag_depth - 1)
+        self._touch()
+
+    def note_pulse(self) -> None:
+        self._touch()
+
+    def clear(self) -> None:
+        self._held_buttons.clear()
+        self._drag_depth = 0
+        self.last_activity_monotonic = 0.0
+
+    def is_busy(self) -> bool:
+        return bool(self._held_buttons) or self._drag_depth > 0
+
+    def _touch(self) -> None:
+        self.last_activity_monotonic = time.monotonic()
 
 
 _DUAL_CURSOR_DELTA_STYLE = (
@@ -345,10 +401,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._spectrum_aa_density_allowed = False
         self._spectrum_aa_density_seeded = False
         self._last_quality_status = None
+        self._idle_activity = _IdleQualityActivity()
+        self._mouse_buttons_provider = QApplication.mouseButtons
         self._aa_idle_timer = QTimer(self)
         self._aa_idle_timer.setSingleShot(True)
         self._aa_idle_timer.setInterval(150)
         self._aa_idle_timer.timeout.connect(self._enable_idle_quality)
+        self.destroyed.connect(self._stop_aa_idle_timer)
         for _p in (self._plot_amp, self._plot_time):
             # Pan / box-zoom / plain wheel emit sigRangeChangedManually (a
             # programmatic setRange, e.g. plot_spectra, does NOT — so a fresh
@@ -532,10 +591,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         """Drop curve AA for the interactive (pan/zoom) path and cancel any
         pending idle upgrade. Also invoked by the ViewBox drag hook
         (``_ModifierWheelViewBox.mouseDragEvent``)."""
-        try:
-            self._aa_idle_timer.stop()
-        except Exception:
-            pass
+        self._stop_aa_idle_timer()
         if not self._aa_on:
             return
         for c in self._interactive_curves():
@@ -549,23 +605,70 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
     def schedule_idle_quality(self):
         """Re-arm the idle-AA timer after a settled interaction."""
-        try:
-            self._aa_idle_timer.start()
-        except Exception:
-            pass
+        self._start_aa_idle_timer()
         self._emit_quality_status()
 
-    def _enable_idle_quality(self):
-        """Idle-timer slot: restore crisp AA once the user is hands-off. If a
-        mouse button is still down the gesture is ongoing, so re-arm instead."""
-        if self._aa_on:
+    def _aa_idle_timer_alive(self):
+        timer = getattr(self, "_aa_idle_timer", None)
+        if timer is None:
+            return None
+        try:
+            if sip.isdeleted(self) or sip.isdeleted(timer):
+                return None
+        except RuntimeError:
+            # sip wrapper already gone; nothing left to start/stop.
+            return None
+        return timer
+
+    def _start_aa_idle_timer(self) -> None:
+        timer = self._aa_idle_timer_alive()
+        if timer is None:
+            return
+        timer.start()
+
+    def _stop_aa_idle_timer(self, *_args) -> None:
+        timer = self._aa_idle_timer_alive()
+        if timer is None:
             return
         try:
-            if QApplication.mouseButtons() != Qt.NoButton:
-                self._aa_idle_timer.start()
-                return
+            timer.stop()
+        except RuntimeError:
+            # QTimer C++ object already deleted with the canvas.
+            return
+
+    def _query_idle_mouse_buttons(self):
+        """Defensive injectable query; failures are logged and treated as unknown.
+
+        The result never solely blocks idle recovery. Local canvas activity
+        owns that decision; a press in another window must not pin this
+        canvas pending.
+        """
+        provider = getattr(self, "_mouse_buttons_provider", None)
+        if provider is None:
+            provider = QApplication.mouseButtons
+        try:
+            return provider()
         except Exception:
-            pass
+            logger.warning(
+                "idle-quality mouse-buttons provider failed",
+                exc_info=True,
+            )
+            return None
+
+    def _enable_idle_quality(self):
+        """Idle-timer slot: restore crisp AA once THIS canvas is hands-off."""
+        if sip.isdeleted(self):
+            return
+        if self._aa_on:
+            self._stop_aa_idle_timer()
+            return
+        # Consult the provider so injected failures stay observable, but do
+        # not use global mouseButtons as the idle gate.
+        self._query_idle_mouse_buttons()
+        if self._idle_activity.is_busy():
+            self.schedule_idle_quality()
+            return
+        self._stop_aa_idle_timer()
         if self._time_y_needs_repin:
             self._time_y_needs_repin = False
             try:
@@ -579,6 +682,23 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         except Exception:
             pass
         self._emit_quality_status()
+
+    def _note_idle_quality_event(self, event) -> None:
+        """Track press/move/release/wheel/gesture without consuming the event."""
+        etype = event.type()
+        if etype == QEvent.MouseButtonPress:
+            self._idle_activity.note_press(event.button())
+        elif etype == QEvent.MouseMove:
+            if self._idle_activity.is_busy():
+                self._idle_activity.note_move()
+        elif etype == QEvent.MouseButtonRelease:
+            self._idle_activity.note_release(event.button())
+            if not self._idle_activity.is_busy() and not self._aa_on:
+                self.schedule_idle_quality()
+        elif etype == QEvent.Wheel:
+            self._idle_activity.note_pulse()
+        elif etype in (QEvent.Gesture, QEvent.GestureOverride):
+            self._idle_activity.note_pulse()
 
     # ------------------------------------------------------------------
     # AA status (reader-facing traffic light) — mirrors QualityManager on the
@@ -605,9 +725,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         actual_on = all(_aa(c) for c in judged)
         if self._aa_on and actual_on:
             return {"state": "green", "tooltip": "抗锯齿已完成"}
+        timer = self._aa_idle_timer_alive()
         try:
-            timer_active = self._aa_idle_timer.isActive()
-        except Exception:
+            timer_active = bool(timer is not None and timer.isActive())
+        except RuntimeError:
             timer_active = False
         if timer_active:
             return {"state": "yellow", "tooltip": "抗锯齿等待空闲刷新"}
@@ -636,6 +757,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             pass
 
     def _on_interactive_range_changed(self, plot=None, *_args):
+        self._idle_activity.note_pulse()
         self.disable_interactive_quality()
         self.schedule_idle_quality()
         if plot is self._plot_time:
@@ -886,6 +1008,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
           - ``axis == 1`` (Y gutter) → only that ViewBox; else all time VBs
         * Spectrum row: Shift → Y zoom; plain wheel consumed (no native zoom)
         """
+        self._idle_activity.note_pulse()
         step = 1 if delta > 0 else -1 if delta < 0 else 0
         if step == 0 or view_box is None:
             return False
@@ -895,6 +1018,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         on_time = view_box in time_vbs and bool(self._time_curves)
 
         if not ctrl and not on_time and not shift:
+            if not self._aa_on:
+                self.schedule_idle_quality()
             return True  # spectrum plain wheel: consume, no zoom
 
         factor = 0.85 if step > 0 else 1.0 / 0.85
@@ -1236,6 +1361,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._reframe_time_y_to_grid()
 
     def full_reset(self) -> None:
+        self._stop_aa_idle_timer()
+        self._idle_activity.clear()
         self.clear_empty_hint()
         self._clear_frequency_cursor_readout()
         for p, curves in ((self._plot_amp, self._amp_curves),
@@ -1634,6 +1761,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         ]
 
     def _begin_view_interaction(self) -> None:
+        self._idle_activity.note_drag_begin()
         self.disable_interactive_quality()
         baselines = {}
         for vb, _axis in self._time_axis_pairs():
@@ -1644,6 +1772,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._box_zoom_y_baselines = baselines
 
     def _end_view_interaction(self) -> None:
+        self._idle_activity.note_drag_end()
         self._time_y_needs_repin = True
         self.schedule_idle_quality()
 
@@ -2741,8 +2870,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def eventFilter(self, obj, event):
         try:
             viewport = self._glw.viewport()
-        except Exception:
+        except RuntimeError:
             viewport = None
+        if obj is viewport and event is not None:
+            self._note_idle_quality_event(event)
         try:
             if obj is viewport and event.type() == QEvent.MouseButtonDblClick:
                 if event.button() == Qt.LeftButton and not self._remark_enabled:

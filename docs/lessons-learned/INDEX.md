@@ -186,6 +186,7 @@ lesson by default.
 | [Compute Progress Elides From QSS Chrome Not Long Copy](pyqt-ui/2026-08-14-compute-progress-elides-from-qss-chrome.md) | Changing `ComputeProgressWidget`, status-bar load/compute labels, or QSS for `#computeProgressLabel` / `#computeProgressBar`. | See lesson |
 | [UltraView Edge Shrinks Neighbours Instead Of Dead-Ending](pyqt-ui/2026-08-14-ultraview-edge-shrinks-neighbors.md) | Changing UltraView free-grid drag/resize commit, `FEEDBACK_OUT_OF_GRID`, `plan_boundary_yield`, or `plan_neighbor_shrink`. | See lesson |
 | [UltraView Layout Rail Tracks Template Mode](pyqt-ui/2026-08-14-ultraview-layout-rail-tracks-template.md) | Changing UltraView `ToolRail` button order, layout/free-grid `active` chrome, or `_sync_button_states`. | See lesson |
+| [Idle Quality Follows Local Canvas Activity](idle-quality-follows-local-canvas-activity.md) | Changing pyqtgraph idle-AA / idle-quality timers, especially any `QApplication.mouseButtons()` gate on `PgLineCanvas` or a sibling canvas. | See lesson |
 
 ## Selection Rules
 

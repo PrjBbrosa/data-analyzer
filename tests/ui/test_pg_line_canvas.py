@@ -764,7 +764,7 @@ def test_fft_dense_spectrum_overlay_drops_aa_and_reports_density(canvas):
     assert f'频谱叠加密度 {total} > 3000' in status['tooltip']
 
 
-def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp, monkeypatch):
+def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp):
     """During a user pan the overlaid FFT curves must drop antialiasing for a
     cheap raster — mirroring the time-domain canvas's interactive-quality
     policy — then restore crisp AA after a hands-off idle tick. Previously the
@@ -790,11 +790,9 @@ def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp, monkeypatch):
         "pan must drop AA on the overlaid FFT curves"
     assert canvas._aa_on is False
 
-    # Hands-off idle tick restores AA on the spectrum overlay. The slot's real
-    # drag guard checks QApplication.mouseButtons(); pin it here because this
-    # unit test invokes the slot directly instead of driving an actual release.
-    monkeypatch.setattr(
-        QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton))
+    # Hands-off idle tick restores AA. Local activity owns the gate, so a
+    # leftover global mouseButtons() press from another window cannot pin
+    # this canvas pending.
     canvas._enable_idle_quality()
     assert canvas._aa_on is True
     assert all(c.opts.get('antialias') is True for c in canvas._amp_curves), \
@@ -855,14 +853,9 @@ def test_fft_quality_status_traffic_light_tracks_aa_state(canvas, qapp):
     assert any(st["state"] == "red" for st in emissions)
     assert emissions[-1]["state"] == "yellow"
 
-    # Idle restores AA → green again. Drive the settled state directly rather
-    # than via _enable_idle_quality(), whose QApplication.mouseButtons() gate is
-    # flaky under cross-test synthetic mouse events (a leaked press from an
-    # earlier test makes it re-arm instead of restoring AA).
-    canvas._aa_idle_timer.stop()
-    canvas._apply_idle_curve_aa()
-    canvas._aa_on = True
-    canvas._emit_quality_status()
+    # Idle restores AA → green again via the real idle slot. Local activity
+    # is idle here, so this must not depend on QApplication.mouseButtons().
+    canvas._enable_idle_quality()
     assert canvas.quality_status()["state"] == "green"
     assert emissions[-1]["state"] == "green"
 
@@ -884,6 +877,144 @@ def test_fft_ctrl_wheel_zoom_drops_curve_aa(canvas):
     assert consumed is True
     assert all(c.opts.get('antialias') is False for c in canvas._amp_curves), \
         "ctrl-wheel zoom must drop AA for the interactive raster"
+
+
+def _arm_line_canvas_idle_pending(canvas, qapp):
+    """Plot a light FFT overlay, drop AA, and leave a time-preview repin pending."""
+    canvas.show()
+    qapp.processEvents()
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude', title='FFT',
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.disable_interactive_quality()
+    canvas._time_y_needs_repin = True
+    assert canvas._aa_on is False
+    return canvas
+
+
+def _install_mouse_buttons_provider(canvas, monkeypatch, provider):
+    """Drive both the live Qt query and the injectable provider from tests."""
+    monkeypatch.setattr(
+        QApplication, "mouseButtons", staticmethod(provider))
+    canvas._mouse_buttons_provider = provider
+
+
+def test_idle_quality_completes_despite_foreign_global_mouse_press(
+        canvas, qapp, monkeypatch):
+    """A press in another window must not pin THIS canvas in pending forever."""
+    _arm_line_canvas_idle_pending(canvas, qapp)
+    _install_mouse_buttons_provider(
+        canvas, monkeypatch, lambda: Qt.LeftButton)
+
+    canvas._enable_idle_quality()
+
+    assert canvas._aa_on is True
+    assert canvas._time_y_needs_repin is False
+    assert canvas._aa_idle_timer.isActive() is False
+
+
+def test_idle_quality_pending_on_local_press_recovers_on_release(
+        canvas, qapp, monkeypatch):
+    """Local press/drag keeps idle pending; release recovers even if global
+    mouseButtons() claims NoButton (tests must not depend on the live mouse)."""
+    _arm_line_canvas_idle_pending(canvas, qapp)
+    _install_mouse_buttons_provider(
+        canvas, monkeypatch, lambda: Qt.NoButton)
+
+    canvas._begin_view_interaction()
+    canvas._enable_idle_quality()
+    assert canvas._aa_on is False
+    assert canvas._aa_idle_timer.isActive() is True
+
+    canvas._end_view_interaction()
+    canvas._enable_idle_quality()
+    assert canvas._aa_on is True
+    assert canvas._time_y_needs_repin is False
+
+    canvas.disable_interactive_quality()
+    canvas._time_y_needs_repin = True
+    viewport = canvas._glw.viewport()
+    pos = QPoint(24, 24)
+    assert canvas.eventFilter(viewport, _mouse_press(pos, Qt.LeftButton)) is False
+    canvas._enable_idle_quality()
+    assert canvas._aa_on is False
+    assert canvas._aa_idle_timer.isActive() is True
+
+    canvas.eventFilter(viewport, _mouse_move(pos, Qt.LeftButton))
+    canvas.eventFilter(viewport, _mouse_release(pos, Qt.LeftButton))
+    canvas._enable_idle_quality()
+    assert canvas._aa_on is True
+
+
+def test_idle_quality_wheel_and_gesture_delay_but_do_not_block(
+        canvas, qapp, monkeypatch):
+    """Wheel/gesture re-arm idle, but a later idle tick must still complete."""
+    from PyQt5.QtCore import QEvent
+
+    _arm_line_canvas_idle_pending(canvas, qapp)
+    _install_mouse_buttons_provider(
+        canvas, monkeypatch, lambda: Qt.NoButton)
+
+    consumed = canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ControlModifier, x_pos=250.0, y_pos=0.5,
+        view_box=canvas._plot_amp.vb,
+    )
+    assert consumed is True
+    assert canvas._aa_on is False
+    assert canvas._aa_idle_timer.isActive() is True
+
+    canvas._enable_idle_quality()
+    assert canvas._aa_on is True
+    assert canvas._aa_idle_timer.isActive() is False
+
+    canvas.disable_interactive_quality()
+    viewport = canvas._glw.viewport()
+    canvas.eventFilter(viewport, QEvent(QEvent.Gesture))
+    canvas._enable_idle_quality()
+    assert canvas._aa_on is True
+    assert canvas._aa_idle_timer.isActive() is False
+
+
+def test_idle_quality_provider_exception_is_logged_timer_errors_propagate(
+        canvas, qapp, monkeypatch, caplog):
+    """Provider failures are logged; re-arming a live timer must not swallow
+    programming errors with a bare ``except Exception``."""
+    import logging
+
+    _arm_line_canvas_idle_pending(canvas, qapp)
+
+    def _boom_provider():
+        raise RuntimeError("idle mouseButtons provider failed")
+
+    _install_mouse_buttons_provider(canvas, monkeypatch, _boom_provider)
+    with caplog.at_level(
+            logging.WARNING, logger="mf4_analyzer.ui.pg_canvas.line_canvas"):
+        canvas._enable_idle_quality()
+    assert canvas._aa_on is True
+    assert any(
+        "provider" in record.getMessage().lower()
+        and record.exc_info is not None
+        for record in caplog.records
+    ), "provider failure must be logged with exception info"
+
+    canvas.disable_interactive_quality()
+    canvas._begin_view_interaction()
+
+    def _boom_start(*_args, **_kwargs):
+        raise TypeError("idle timer start bug")
+
+    monkeypatch.setattr(canvas._aa_idle_timer, "start", _boom_start)
+    with pytest.raises(TypeError, match="idle timer start bug"):
+        canvas._enable_idle_quality()
+
+
+def test_idle_quality_timer_stops_on_full_reset(canvas, qapp):
+    _arm_line_canvas_idle_pending(canvas, qapp)
+    canvas.schedule_idle_quality()
+    assert canvas._aa_idle_timer.isActive() is True
+    canvas.full_reset()
+    assert canvas._aa_idle_timer.isActive() is False
 
 
 def test_plot_spectra_overlay_n(canvas):
