@@ -186,12 +186,19 @@ def calculate_floating_layout(
     status_island_size: Size | None = None,
     navigation_island_size: Size | None = None,
     rail_size: Size | None = None,
+    trigger_rect: Rect | None = None,
 ) -> FloatingLayout:
     """Calculate narrow-rail CanvasHost geometry without changing board space.
 
     An open overlay is intentionally omitted from the Board allocation.  It is
     an on-demand sibling of the scroll area, so merely opening a library or a
     menu cannot reflow cards, change viewport size, or alter zoom.
+
+    ``trigger_rect``, when given with the rail anchor, is the stage-relative
+    rectangle of the rail button that opened the overlay: the overlay's y is
+    anchored to that button instead of always hugging BoardIsland's bottom
+    edge, then clamped into the safe band between BoardIsland and
+    NavigationIsland so it can never climb onto either island.
     """
     stage = stage_rect(stage_size)
     safe = stage.inset(SAFE_MARGIN)
@@ -287,6 +294,7 @@ def calculate_floating_layout(
             navigation_island,
             overlay_size,
             overlay_anchor=overlay_anchor,
+            trigger_rect=trigger_rect,
         )
         if overlay_open
         else None
@@ -389,6 +397,7 @@ def _place_overlay(
     size: Size,
     *,
     overlay_anchor: str = OVERLAY_ANCHOR_RAIL,
+    trigger_rect: Rect | None = None,
 ) -> Rect:
     width, height = _size(size)
     if _overlay_anchor(overlay_anchor) == OVERLAY_ANCHOR_GLOBAL:
@@ -396,10 +405,22 @@ def _place_overlay(
             safe, board_island, global_island, navigation_island, width, height
         )
     x = min(safe.right, rail.right + OVERLAY_GAP)
-    y = min(safe.bottom, board_island.bottom + ISLAND_GAP)
     max_width = max(0, safe.right - x)
+    width = min(width, max_width)
+
+    # Default anchor (no trigger given): hug BoardIsland's bottom edge, same
+    # as before trigger-following was added.
+    min_y = min(safe.bottom, board_island.bottom + ISLAND_GAP)
+    max_y = max(min_y, navigation_island.top - OVERLAY_GAP - height)
+    if trigger_rect is not None and (trigger_rect.width > 0 and trigger_rect.height > 0):
+        anchor_y = trigger_rect.top + (trigger_rect.height - height) // 2
+    else:
+        anchor_y = min_y
+    y = min(max(anchor_y, min_y), max_y)
+
     max_height = max(0, navigation_island.top - OVERLAY_GAP - y)
-    return Rect(x, y, min(width, max_width), min(height, max_height)).clamp_to(safe)
+    height = min(height, max_height)
+    return Rect(x, y, width, height).clamp_to(safe)
 
 
 def _place_global_overlay(
