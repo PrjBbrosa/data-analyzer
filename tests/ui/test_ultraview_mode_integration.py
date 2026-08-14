@@ -43,7 +43,7 @@ def test_chart_stack_hint_bar_has_quickref_entry(qapp, qtbot):
     assert button.text() == "?"
 
 
-def test_ultraview_hint_bar_keeps_copy_inside_under_qss(qapp, qtbot):
+def test_ultraview_status_island_keeps_read_only_copy_inside_under_qss(qapp, qtbot):
     from PyQt5.QtWidgets import QLabel
 
     from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
@@ -59,33 +59,17 @@ def test_ultraview_hint_bar_keeps_copy_inside_under_qss(qapp, qtbot):
         qtbot.waitExposed(page)
         qapp.processEvents()
 
-        bar = page.hint_bar()
-        assert bar.height() == 28
-        bar_rect = bar.rect()
-        assert bar_rect.width() > 200
-        for name in (
-            "chartHintQuickrefButton",
-            "chartHintContext",
-            "chartHintDiscovery",
-        ):
-            child = bar.findChild(QWidget, name)
-            assert child is not None
-            child_rect = child.geometry()
-            assert child_rect.top() >= bar_rect.top(), (
-                f"{name} {child_rect.getRect()} clips the top of "
-                f"hint bar {bar_rect.getRect()}"
-            )
-            assert child_rect.bottom() <= bar_rect.bottom(), (
-                f"{name} {child_rect.getRect()} must fit inside "
-                f"hint bar {bar_rect.getRect()}"
-            )
-        context = bar.findChild(QLabel, "chartHintContext")
-        discovery = bar.findChild(QLabel, "chartHintDiscovery")
-        assert context is not None and discovery is not None
-        assert context.text()
-        assert discovery.text()
-        assert context.height() <= bar.height()
-        assert discovery.height() <= bar.height()
+        status = page.status_island()
+        assert status.height() == 40
+        assert status.width() >= 96
+        message = status.findChild(QLabel, "ultraViewStatusMessage")
+        assert message is not None
+        assert "只读预览" in message.toolTip()
+        assert "不计算" in message.toolTip()
+        message_rect = message.geometry()
+        assert message_rect.top() >= status.rect().top()
+        assert message_rect.bottom() <= status.rect().bottom()
+        assert status.help_button().toolTip()
     finally:
         qapp.setStyleSheet(old_sheet)
 
@@ -121,12 +105,15 @@ def test_main_window_ultraview_opens_independent_panel_without_stealing_mode(
     assert win.inspector.contextual_widget_name() != "ultraview"
     assert win.navigator.projection_role() == role_before
     assert win._panel_ctrl_left.state == PanelState.PINNED
-    assert win.chart_stack.page_ultraview.is_library_visible() is True
+    assert win.chart_stack.page_ultraview.is_library_visible() is False
     page = win.chart_stack.page_ultraview
     assert page.parentWidget() is sheet
     assert page.isVisible()
     assert page.width() > 200
     assert page.height() > 200
+    assert not page.library_panel().isVisible()
+    page.tool_rail().panel_button("library").click()
+    qapp.processEvents()
     assert page.library_panel().isVisible()
     primary = page.board_grid().slot_widget("primary")
     assert primary is not None
@@ -561,13 +548,13 @@ def test_presentation_does_not_hide_main_inspector(qapp, qtbot):
     assert left.snapshot_persistent_state()["state"] == left_before["state"]
     page = win.chart_stack.page_ultraview
     assert page.is_presentation_active() is True
-    combo = page.board_toolbar().findChild(QComboBox, "ultraViewLayoutCombo")
-    assert combo is not None
-    assert combo.isVisible() is False
+    assert page.tool_rail().isVisible() is False
+    assert page.global_island().display_button().isVisible() is False
     uv._on_presentation(False)
     assert right.snapshot_persistent_state()["state"] == right_before["state"]
     assert page.is_presentation_active() is False
-    assert page.is_library_visible() is True
+    assert page.is_library_visible() is False
+    assert page.tool_rail().isVisible() is True
 
 
 def test_closing_ultraview_exits_presentation_and_reopens_in_edit(qapp, qtbot):
@@ -587,10 +574,9 @@ def test_closing_ultraview_exits_presentation_and_reopens_in_edit(qapp, qtbot):
     QCoreApplication.processEvents()
     assert win._ultraview_sheet is not None
     assert page.is_presentation_active() is False
-    combo = page.board_toolbar().findChild(QComboBox, "ultraViewLayoutCombo")
-    assert combo is not None
-    assert combo.isVisible() is True
-    assert page.is_library_visible() is True
+    assert page.global_island().display_button().isVisible() is True
+    assert page.tool_rail().isVisible() is True
+    assert page.is_library_visible() is False
 
 
 def test_ultraview_fast_close_reopen_keeps_single_sheet(qapp, qtbot):
@@ -890,4 +876,3 @@ def test_add_to_ultraview_from_view_tab_keeps_section_and_view_id(
 
     assert received == [("fft", view_id)]
     assert UltraViewRef("fft", view_id) in membership_set(win._ultraview.board)
-

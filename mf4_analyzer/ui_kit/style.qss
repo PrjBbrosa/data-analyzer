@@ -1124,10 +1124,11 @@ QToolButton[role="tool"] {
     border-color: #dfe5ee;
 }
 
-/* Saved-channel config controls sit on the 28px time-domain View rail.
- * Global QPushButton/QComboBox box math (min-height + padding + border)
- * would inflate setFixedHeight(28) back to 32px; min-height:0 lets the
- * widget's fixed outer height win, same trick as [role="tool"]. */
+/* Saved-channel config controls sit in the 30px time-domain View rail
+ * (28px buttons + 2px host inset). Global QPushButton/QComboBox box math
+ * (min-height + padding + border) would inflate setFixedHeight(28) back
+ * to 32px; min-height:0 lets the widget's fixed outer height win, same
+ * trick as [role="tool"]. */
 QPushButton#channelConfigSave,
 QPushButton#channelConfigApply {
     /* Qt stylesheet widths exclude padding and borders.  46 + 16 + 2 gives
@@ -4110,7 +4111,6 @@ QWidget#ultraViewCardFooter {
 QLabel#ultraViewZoomLabel {
     color: #475569;
     font-size: 11px;
-    font-variant-numeric: tabular-nums;
     min-width: 42px;
 }
 QToolButton#ultraViewZoomOutButton,
@@ -4218,4 +4218,321 @@ QPushButton#ultraViewOpenSourceButton {
     color: #ffffff;
     font-weight: 700;
     padding: 4px 10px;
+}
+
+/* -------------------------------------------------------------------------
+ * UltraView narrow rail / floating islands
+ *
+ * Hosts are deliberately object-name-scoped.  The outer floating widgets are
+ * transparent shells (painted by the UltraView chrome), while this QSS owns
+ * their inner surfaces and control-state hierarchy.  Keep every state rule
+ * to border-color/width/style; a Qt ``border:`` shorthand on hover/active
+ * silently resets the carefully matched radius.
+ * ------------------------------------------------------------------------- */
+QWidget#ultraViewPage,
+QWidget#ultraViewCanvasHost,
+QWidget#ultraViewBoardColumn {
+    background-color: #e9eff3;
+}
+QFrame#ultraViewCanvasStage {
+    background-color: transparent;
+}
+QWidget#ultraViewBoardGrid,
+QWidget#ultraViewFreeGrid,
+QWidget#ultraViewBoardCanvasStack {
+    background-color: transparent;
+}
+QScrollArea#ultraViewBoardScrollArea {
+    border: none;
+    background-color: transparent;
+}
+QScrollArea#ultraViewBoardScrollArea QWidget#qt_scrollarea_viewport {
+    background-color: transparent;
+}
+
+/* Fixed canvas chrome.  Only these small hosts may carry the elevated island
+ * treatment; cards stay border-led so a 24-card Board has no shadow cost. */
+QFrame#ultraViewToolRail,
+QFrame#ultraViewBoardIsland,
+QFrame#ultraViewGlobalIsland,
+QFrame#ultraViewNavigationIsland,
+QFrame#ultraViewStatusIsland,
+QFrame#ultraViewCardContextIsland {
+    background-color: #ffffff;
+    border: 1px solid rgba(74, 96, 121, 0.20);
+    border-radius: 11px;
+    color: #17263a;
+}
+QFrame#ultraViewToolRail {
+    border-radius: 12px;
+}
+
+/* Every short-lived panel shares one quiet material.  Its translucent outer
+ * shell/real corner pixels are implemented by FloatingChrome rather than a
+ * per-card effect or platform-default popup frame. */
+QFrame#ultraViewLibraryPopover,
+QFrame#ultraViewLayoutPopover,
+QFrame#ultraViewFilterPopover,
+QFrame#ultraViewUnplacedPopover,
+QFrame#ultraViewDisplayPopover,
+QFrame#ultraViewExportPopover,
+QFrame#ultraViewBoardPopover,
+QFrame#ultraViewPopover {
+    background-color: #ffffff;
+    border: 1px solid rgba(74, 96, 121, 0.22);
+    border-radius: 12px;
+    color: #17263a;
+}
+
+/* Icon-only buttons use the same 32px optical box on the rail and islands.
+ * ``active`` intentionally remains a string property: Qt QSS does not
+ * consistently match Python bool dynamic properties. */
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"],
+QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"],
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"],
+QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"],
+QFrame#ultraViewStatusIsland QToolButton[chrome="ultraview"][role="icon"],
+QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"] {
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background-color: transparent;
+    color: #66778c;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"]:hover,
+QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"]:hover,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"]:hover,
+QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"]:hover,
+QFrame#ultraViewStatusIsland QToolButton[chrome="ultraview"][role="icon"]:hover,
+QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"]:hover {
+    background-color: #f2f6fa;
+    border-color: #d4e0ea;
+    color: #17263a;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"]:pressed,
+QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"]:pressed,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"]:pressed,
+QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"]:pressed,
+QFrame#ultraViewStatusIsland QToolButton[chrome="ultraview"][role="icon"]:pressed,
+QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"]:pressed {
+    background-color: #e5edf4;
+    border-color: #c2d2e0;
+    color: #17263a;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"]:focus,
+QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"]:focus,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"]:focus,
+QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"]:focus,
+QFrame#ultraViewStatusIsland QToolButton[chrome="ultraview"][role="icon"]:focus,
+QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"]:focus {
+    border-color: #1769e0;
+    background-color: #f6faff;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"],
+QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][active="true"],
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][active="true"],
+QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"][active="true"],
+QFrame#ultraViewStatusIsland QToolButton[chrome="ultraview"][role="icon"][active="true"],
+QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][active="true"] {
+    border-color: #bdd6ff;
+    background-color: #e9f1ff;
+    color: #1769e0;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
+QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
+QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
+QFrame#ultraViewStatusIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover,
+QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:hover {
+    border-color: #8cb8f7;
+    background-color: #dceaff;
+    color: #1769e0;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
+QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
+QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
+QFrame#ultraViewStatusIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed,
+QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"][active="true"]:pressed {
+    border-color: #639eea;
+    background-color: #cbdfff;
+    color: #145fc8;
+}
+QFrame#ultraViewToolRail QToolButton[chrome="ultraview"][role="icon"]:disabled,
+QFrame#ultraViewBoardIsland QToolButton[chrome="ultraview"][role="icon"]:disabled,
+QFrame#ultraViewGlobalIsland QToolButton[chrome="ultraview"][role="icon"]:disabled,
+QFrame#ultraViewNavigationIsland QToolButton[chrome="ultraview"][role="icon"]:disabled,
+QFrame#ultraViewStatusIsland QToolButton[chrome="ultraview"][role="icon"]:disabled,
+QFrame#ultraViewCardContextIsland QToolButton[chrome="ultraview"][role="icon"]:disabled {
+    border-color: transparent;
+    background-color: transparent;
+    color: #aab7c5;
+}
+
+/* An unplaced-card badge is an information/status signal, not a second primary
+ * action.  ``attention`` elevates the count without turning the rail button
+ * into a destructive colour. */
+QToolButton#ultraViewRailUnplacedButton[attention="true"] {
+    border-color: #e9c890;
+    background-color: #fff7e9;
+    color: #b86d08;
+}
+QLabel#ultraViewUnplacedBadge,
+QLabel#ultraViewRailUnplacedBadge {
+    min-width: 14px;
+    min-height: 14px;
+    padding: 0 3px;
+    border: 1px solid #ffffff;
+    border-radius: 7px;
+    background-color: #0fa78f;
+    color: #ffffff;
+    font-size: 9px;
+    font-weight: 700;
+}
+QLabel#ultraViewUnplacedBadge[attention="true"],
+QLabel#ultraViewRailUnplacedBadge[attention="true"] {
+    background-color: #d88b16;
+}
+
+QLabel#ultraViewBoardIslandName,
+QLabel#ultraViewStatusIslandText,
+QLabel#ultraViewStatusMessage,
+QLabel#ultraViewNavigationZoomLabel {
+    color: #17263a;
+    font-size: 12px;
+    font-weight: 700;
+}
+QLabel#ultraViewStatusIslandText,
+QLabel#ultraViewStatusMessage {
+    color: #66778c;
+    font-size: 11px;
+    font-weight: 600;
+}
+QFrame#ultraViewStatusIsland[statusLevel="warning"] QLabel#ultraViewStatusMessage {
+    color: #b86d08;
+}
+QFrame#ultraViewStatusIsland[statusLevel="error"] QLabel#ultraViewStatusMessage {
+    color: #b42318;
+}
+QLabel#ultraViewNavigationZoomLabel {
+    color: #405269;
+    font-size: 11px;
+    min-width: 38px;
+}
+QLabel#ultraViewFilterWarning,
+QLabel#ultraViewAxisWarning,
+QLabel#ultraViewCardStatus[status="stale"] {
+    color: #b86d08;
+}
+QLabel#ultraViewFilterWarning[status="ok"],
+QLabel#ultraViewCardStatus[status="fresh"] {
+    color: #0fa78f;
+}
+
+/* Presentation mode contains only its explicit exit affordance.  Page code
+ * owns visibility; this selector makes the surviving exit control impossible
+ * to mistake for an idle navigation button. */
+QWidget#ultraViewPage[presentation="true"] QToolButton#ultraViewGlobalPresentationButton,
+QToolButton[chrome="ultraview"][role="presentationExit"] {
+    border-color: #1769e0;
+    background-color: #1769e0;
+    color: #ffffff;
+}
+QWidget#ultraViewPage[presentation="true"] QToolButton#ultraViewGlobalPresentationButton:hover,
+QToolButton[chrome="ultraview"][role="presentationExit"]:hover {
+    border-color: #145fc8;
+    background-color: #145fc8;
+    color: #ffffff;
+}
+QWidget#ultraViewPage[presentation="true"] QToolButton#ultraViewGlobalPresentationButton:pressed,
+QToolButton[chrome="ultraview"][role="presentationExit"]:pressed {
+    border-color: #104b9f;
+    background-color: #104b9f;
+    color: #ffffff;
+}
+
+/* Existing cards inherit the canvas material without a shadow.  These rules
+ * also preserve the current-object names until Page finishes its migration. */
+QWidget#ultraViewCard {
+    border-color: #d5e0e9;
+    border-radius: 11px;
+    background-color: #ffffff;
+}
+QWidget#ultraViewCard[selected="true"] {
+    border-color: #1769e0;
+    background-color: #ffffff;
+}
+QWidget#ultraViewCard[replacementArmed="true"],
+QWidget#ultraViewCard[dropActive="true"] {
+    border-color: #1769e0;
+    background-color: #f4f8ff;
+}
+QWidget#ultraViewCard[orphaned="true"] {
+    border-color: #d88b16;
+}
+QWidget#ultraViewEmptySlot {
+    border-color: #b8cbdc;
+    background-color: rgba(255, 255, 255, 150);
+}
+QWidget#ultraViewEmptySlot:hover {
+    border-color: #1769e0;
+    color: #1769e0;
+    background-color: #f4f8ff;
+}
+QWidget#ultraViewEmptySlot[dropActive="true"] {
+    border-color: #1769e0;
+    background-color: #e9f1ff;
+}
+
+/* Legacy toolbar/compare/tray names stay styled while their operations move
+ * into islands and popovers.  This prevents an intermediate source update
+ * from falling back to platform chrome. */
+QFrame#ultraViewBoardToolbar,
+QFrame#ultraViewCompareRail,
+QFrame#ultraViewUnplacedTray {
+    background-color: #ffffff;
+    border-color: rgba(74, 96, 121, 0.20);
+}
+QFrame#ultraViewCompareRail QPushButton#ultraViewCompareButton:checked {
+    border-color: #bdd6ff;
+    background-color: #e9f1ff;
+    color: #1769e0;
+}
+QToolButton#ultraViewZoomOutButton,
+QToolButton#ultraViewZoomInButton,
+QToolButton#ultraViewZoomFitButton,
+QToolButton#ultraViewZoomResetButton,
+QToolButton#ultraViewCardFocusButton {
+    border-color: #d5e0e9;
+    background-color: #ffffff;
+    color: #66778c;
+}
+QToolButton#ultraViewZoomOutButton:hover,
+QToolButton#ultraViewZoomInButton:hover,
+QToolButton#ultraViewZoomFitButton:hover,
+QToolButton#ultraViewZoomResetButton:hover,
+QToolButton#ultraViewCardFocusButton:hover {
+    border-color: #bdd6ff;
+    background-color: #e9f1ff;
+    color: #1769e0;
+}
+QToolButton#ultraViewZoomOutButton:pressed,
+QToolButton#ultraViewZoomInButton:pressed,
+QToolButton#ultraViewZoomFitButton:pressed,
+QToolButton#ultraViewZoomResetButton:pressed,
+QToolButton#ultraViewCardFocusButton:pressed {
+    border-color: #8cb8f7;
+    background-color: #dceaff;
+}
+QToolButton#ultraViewZoomOutButton:focus,
+QToolButton#ultraViewZoomInButton:focus,
+QToolButton#ultraViewZoomFitButton:focus,
+QToolButton#ultraViewZoomResetButton:focus,
+QToolButton#ultraViewCardFocusButton:focus {
+    border-color: #1769e0;
 }

@@ -12,12 +12,18 @@ from PyQt5.QtCore import QEvent, QPoint, QRect, QTimer, QVariantAnimation, Qt, p
 from PyQt5.QtGui import QKeySequence, QNativeGestureEvent, QWheelEvent
 from PyQt5.QtWidgets import (
     QApplication,
+    QComboBox,
     QFrame,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
+    QPushButton,
     QShortcut,
     QStackedWidget,
-    QSplitter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -60,6 +66,7 @@ from .viewport import (
 )
 from .widgets import (
     LIBRARY_DEFAULT_WIDTH,
+    LAYOUT_LABELS_ZH,
     BoardOverview,
     BoardScrollArea,
     BoardSwitcher,
@@ -77,9 +84,29 @@ from .widgets import (
     coerce_library_row,
     preview_image,
 )
+from .chrome import (
+    PANEL_FILTER,
+    PANEL_LAYOUT,
+    PANEL_LIBRARY,
+    PANEL_UNPLACED,
+    BoardIsland,
+    CanvasHost,
+    CardContextIsland,
+    GlobalIsland,
+    NavigationIsland,
+    StatusIsland,
+    ToolRail,
+)
+from .floating_layout import Rect as FloatingRect
+from .floating_layout import calculate_floating_layout, place_card_context
 
 _FEEDBACK_BOARD_FULL = "Board 已满：换布局或先移除"
 _FEEDBACK_NO_SELECTION = "先在左侧 View 库选择一个 View"
+
+
+def _qrect(rect: FloatingRect) -> QRect:
+    """Map the Qt-free floating-layout rectangle at the Page boundary."""
+    return QRect(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
 
 
 def _event_global_point(event) -> QPoint:
@@ -159,7 +186,13 @@ class UltraViewPage(QWidget):
         self._pending_library_rows: list[LibraryRow] | None = None
         self._board_widgets_dirty = False
         self._presentation = False
-        self._library_visible = True
+        # Floating chrome is transient view state: it is deliberately not
+        # serialised with a Board or a project.  A fresh UltraView opens on a
+        # continuous canvas; the library is available from the rail on demand.
+        self._library_visible = False
+        self._active_panel: str | None = None
+        self._presentation_panel: str | None = None
+        self._deferred_panel_close: str | None = None
         self._prev_unplaced_count: int | None = None
         self._viewport = BoardViewport()
         self._restoring_viewport = False
@@ -182,49 +215,113 @@ class UltraViewPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self._splitter = QSplitter(Qt.Horizontal, self)
-        self._splitter.setObjectName("ultraViewSplitter")
-        self._library = ViewLibraryPanel(self._splitter)
-        self._board_column = QFrame(self._splitter)
-        self._board_column.setObjectName("ultraViewBoardColumn")
-        self._board_column.setAttribute(Qt.WA_StyledBackground, True)
-        column = QVBoxLayout(self._board_column)
-        column.setContentsMargins(0, 0, 0, 0)
-        column.setSpacing(0)
-        self._switcher = BoardSwitcher(self._board_column)
-        self._toolbar = BoardToolbar(self._board_column)
-        self._rail = CompareRail(self._board_column)
-        self._grid = BoardGrid(self._board_column)
-        self._free_grid = FreeGridBoard(self._board_column)
-        self._board_stack = QStackedWidget(self._board_column)
+        # The stage fills the independent UltraView tool window.  The scroll
+        # host sits inside it at a rect supplied by ``floating_layout``;
+        # islands and popovers are sibling overlays, never layout neighbours
+        # which could steal a row/column from the Board.
+        self._canvas_host = CanvasHost(self)
+        self._canvas_host.installEventFilter(self)
+        self._canvas_stage = QFrame(self._canvas_host)
+        self._canvas_stage.setObjectName("ultraViewCanvasStage")
+        self._canvas_stage.setAttribute(Qt.WA_StyledBackground, True)
+        self._board_column = self._canvas_stage  # compatibility-only internal alias
+        self._grid = BoardGrid(self._canvas_stage)
+        self._free_grid = FreeGridBoard(self._canvas_stage)
+        self._board_stack = QStackedWidget(self._canvas_stage)
         self._board_stack.setObjectName("ultraViewBoardCanvasStack")
         self._board_stack.addWidget(self._grid)
         self._board_stack.addWidget(self._free_grid)
-        self._board_scroll = BoardScrollArea(self._board_column)
+        self._board_scroll = BoardScrollArea(self._canvas_stage)
         self._board_scroll.setWidget(self._board_stack)
-        self._tray = UnplacedTray(self._board_column)
-        self._overview = BoardOverview(self._board_column)
+        self._board_scroll.viewport().installEventFilter(self)
+        self._canvas_host.set_canvas_widget(self._canvas_stage)
+        root.addWidget(self._canvas_host, 1)
+
+        # Old widgets stay alive as presentation façades for integrations and
+        # focused tests.  Only their *entry placement* changes; signals still
+        # route through the existing Page/coordinator contracts.
+        self._library = ViewLibraryPanel(self._canvas_host)
+        self._switcher = BoardSwitcher(self._canvas_host)
+        self._toolbar = BoardToolbar(self._canvas_host)
+        self._rail = CompareRail(self._canvas_host)
+        self._tray = UnplacedTray(self._canvas_host)
+        self._hint_bar = UltraViewHintBar(self._canvas_host)
+        self._switcher.hide()
+        self._toolbar.hide()
+        self._hint_bar.hide()
+
+        self._overview = BoardOverview(self._canvas_host)
         self._overview.hide()
         self._minimap = FreeGridMinimap(self._board_scroll.viewport())
         self._minimap.hide()
-        column.addWidget(self._switcher, 0)
-        column.addWidget(self._toolbar, 0)
-        column.addWidget(self._rail, 0)
-        column.addWidget(self._board_scroll, 1)
-        column.addWidget(self._tray, 0)
-        self._splitter.addWidget(self._library)
-        self._splitter.addWidget(self._board_column)
-        self._splitter.setStretchFactor(0, 0)
-        self._splitter.setStretchFactor(1, 1)
-        self._splitter.setSizes([LIBRARY_DEFAULT_WIDTH, 1200])
-        root.addWidget(self._splitter, 1)
 
-        self._hint_bar = UltraViewHintBar(self)
-        self._hint_bar.quickref_requested.connect(self.quickref_requested.emit)
-        root.addWidget(self._hint_bar, 0)
+        self._tool_rail = ToolRail(self._canvas_host)
+        self._board_island = BoardIsland(self._canvas_host)
+        self._global_island = GlobalIsland(self._canvas_host)
+        self._navigation_island = NavigationIsland(self._canvas_host)
+        self._status_island = StatusIsland(self._canvas_host)
+        self._card_context = CardContextIsland(self._canvas_host)
+        self._layout_popover = self._build_layout_popover(self._canvas_host)
+        self._display_popover = self._build_display_popover(self._canvas_host)
+        self._export_popover = self._build_export_popover(self._canvas_host)
+
+        self._canvas_host.register_overlay(
+            PANEL_LIBRARY,
+            self._library,
+            trigger=self._tool_rail.panel_button(PANEL_LIBRARY),
+        )
+        self._canvas_host.register_overlay(
+            PANEL_LAYOUT,
+            self._layout_popover,
+            trigger=self._tool_rail.panel_button(PANEL_LAYOUT),
+        )
+        self._canvas_host.register_overlay(
+            PANEL_FILTER,
+            self._rail,
+            trigger=self._tool_rail.panel_button(PANEL_FILTER),
+        )
+        self._canvas_host.register_overlay(
+            PANEL_UNPLACED,
+            self._tray,
+            trigger=self._tool_rail.panel_button(PANEL_UNPLACED),
+        )
+        self._canvas_host.register_overlay(
+            "display",
+            self._display_popover,
+            trigger=self._global_island.display_button(),
+        )
+        self._canvas_host.register_overlay(
+            "export",
+            self._export_popover,
+            trigger=self._global_island.export_button(),
+        )
 
         self._focus = FocusLayer(self)
         self._focus.hide()
+
+        self._hint_bar.quickref_requested.connect(self.quickref_requested.emit)
+        self._status_island.quickref_requested.connect(self.quickref_requested.emit)
+        self._tool_rail.panel_requested.connect(self._toggle_panel)
+        self._tool_rail.ref_dropped.connect(self._on_tray_drop)
+        self._canvas_host.overlay_closed.connect(self._on_overlay_closed)
+        self._board_island.board_menu_requested.connect(self._show_board_menu)
+        self._board_island.create_requested.connect(self.create_board_requested)
+        self._board_island.rename_requested.connect(self._rename_current_board)
+        self._global_island.display_requested.connect(self._on_display_panel_requested)
+        self._global_island.export_requested.connect(self._on_export_panel_requested)
+        self._global_island.presentation_toggled.connect(self._on_presentation_button)
+        self._navigation_island.overview_requested.connect(self.show_overview)
+        self._navigation_island.zoom_out_requested.connect(self.zoom_out)
+        self._navigation_island.zoom_in_requested.connect(self.zoom_in)
+        self._navigation_island.zoom_fit_requested.connect(self.zoom_fit)
+        self._navigation_island.zoom_reset_requested.connect(self.zoom_reset)
+        self._card_context.open_source_requested.connect(self.open_source_requested)
+        self._card_context.focus_requested.connect(self._on_focus)
+        self._card_context.copy_image_requested.connect(self.copy_card_image_requested)
+        self._card_context.move_to_unplaced_requested.connect(self.move_to_unplaced_requested)
+        self._card_context.more_requested.connect(self._show_card_more_menu)
+        self._card_context.rebind_requested.connect(self._on_rebind_arm)
+        self._card_context.remove_requested.connect(self.remove_ref_requested)
 
         self._library.add_requested.connect(self.request_add)
         self._library.remove_requested.connect(self.remove_ref_requested)
@@ -320,6 +417,7 @@ class UltraViewPage(QWidget):
         if app is not None:
             app.focusChanged.connect(self._on_app_focus_changed)
         self.set_board(self._board)
+        QTimer.singleShot(0, self._apply_floating_layout)
 
     def board_switcher(self) -> BoardSwitcher:
         return self._switcher
@@ -366,6 +464,370 @@ class UltraViewPage(QWidget):
     def is_board_panning(self) -> bool:
         return self._viewport.is_panning()
 
+    def canvas_host(self) -> CanvasHost:
+        """Expose the floating host for focused geometry/interaction probes."""
+        return self._canvas_host
+
+    def tool_rail(self) -> ToolRail:
+        return self._tool_rail
+
+    def board_island(self) -> BoardIsland:
+        return self._board_island
+
+    def global_island(self) -> GlobalIsland:
+        return self._global_island
+
+    def navigation_island(self) -> NavigationIsland:
+        return self._navigation_island
+
+    def status_island(self) -> StatusIsland:
+        return self._status_island
+
+    def card_context_island(self) -> CardContextIsland:
+        return self._card_context
+
+    def active_panel(self) -> str | None:
+        return self._active_panel
+
+    def _build_popover(self, parent: QWidget, object_name: str, title: str) -> tuple[QFrame, QVBoxLayout]:
+        frame = QFrame(parent)
+        frame.setObjectName(object_name)
+        frame.setAttribute(Qt.WA_StyledBackground, True)
+        frame.setFocusPolicy(Qt.StrongFocus)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
+        heading = QLabel(title, frame)
+        heading.setObjectName(f"{object_name}Title")
+        heading.setProperty("role", "popoverTitle")
+        layout.addWidget(heading, 0)
+        return frame, layout
+
+    def _build_layout_popover(self, parent: QWidget) -> QFrame:
+        frame, layout = self._build_popover(parent, "ultraViewLayoutPopover", "布局")
+        self._layout_popover_combo = QComboBox(frame)
+        self._layout_popover_combo.setObjectName("ultraViewLayoutPopoverCombo")
+        self._layout_popover_combo.setToolTip("选择模板布局")
+        self._layout_popover_combo.setAccessibleName("选择 Board 模板布局")
+        for layout_id, label in LAYOUT_LABELS_ZH.items():
+            self._layout_popover_combo.addItem(label, layout_id)
+        self._layout_popover_combo.currentIndexChanged.connect(self._on_layout_popover_index)
+        layout.addWidget(self._layout_popover_combo, 0)
+
+        self._layout_popover_free_grid = QToolButton(frame)
+        self._layout_popover_free_grid.setObjectName("ultraViewLayoutPopoverFreeGrid")
+        self._layout_popover_free_grid.setText("自由网格")
+        self._layout_popover_free_grid.setCheckable(True)
+        self._layout_popover_free_grid.setToolTip("切换 12 列受控自由网格")
+        self._layout_popover_free_grid.setAccessibleName("切换 12 列受控自由网格")
+        self._layout_popover_free_grid.toggled.connect(self._on_layout_popover_free_grid)
+        layout.addWidget(self._layout_popover_free_grid, 0)
+
+        self._layout_popover_organize = QPushButton("整理自由网格", frame)
+        self._layout_popover_organize.setObjectName("ultraViewLayoutPopoverOrganize")
+        self._layout_popover_organize.setToolTip("移除自由网格中的空行")
+        self._layout_popover_organize.clicked.connect(self.organize_free_grid_requested)
+        layout.addWidget(self._layout_popover_organize, 0)
+        history = QHBoxLayout()
+        history.setContentsMargins(0, 0, 0, 0)
+        history.setSpacing(6)
+        self._layout_popover_undo = QPushButton("撤销", frame)
+        self._layout_popover_undo.setObjectName("ultraViewLayoutPopoverUndo")
+        self._layout_popover_undo.clicked.connect(self.free_grid_undo_requested)
+        self._layout_popover_redo = QPushButton("重做", frame)
+        self._layout_popover_redo.setObjectName("ultraViewLayoutPopoverRedo")
+        self._layout_popover_redo.clicked.connect(self.free_grid_redo_requested)
+        history.addWidget(self._layout_popover_undo, 1)
+        history.addWidget(self._layout_popover_redo, 1)
+        layout.addLayout(history)
+        layout.addStretch(1)
+        self._sync_layout_popover()
+        return frame
+
+    def _build_display_popover(self, parent: QWidget) -> QFrame:
+        frame, layout = self._build_popover(parent, "ultraViewDisplayPopover", "显示")
+        self._display_titles = QToolButton(frame)
+        self._display_titles.setObjectName("ultraViewDisplayTitlesButton")
+        self._display_titles.setText("显示卡片标题")
+        self._display_titles.setCheckable(True)
+        self._display_titles.setToolTip("切换卡片标题")
+        self._display_titles.toggled.connect(self.show_titles_toggled)
+        self._display_sources = QToolButton(frame)
+        self._display_sources.setObjectName("ultraViewDisplaySourcesButton")
+        self._display_sources.setText("显示来源文件")
+        self._display_sources.setCheckable(True)
+        self._display_sources.setToolTip("切换来源文件")
+        self._display_sources.toggled.connect(self.show_sources_toggled)
+        layout.addWidget(self._display_titles, 0)
+        layout.addWidget(self._display_sources, 0)
+        note = QLabel("预览状态始终可见", frame)
+        note.setObjectName("ultraViewDisplayTrustNote")
+        note.setToolTip("过期、缺失和孤儿 View 是可信度信息，不提供隐藏开关")
+        layout.addWidget(note, 0)
+        layout.addStretch(1)
+        return frame
+
+    def _build_export_popover(self, parent: QWidget) -> QFrame:
+        frame, layout = self._build_popover(parent, "ultraViewExportPopover", "导出")
+        copy = QPushButton("复制整板图", frame)
+        copy.setObjectName("ultraViewExportCopyBoardButton")
+        copy.clicked.connect(self.copy_board_requested)
+        png_1x = QPushButton("导出 PNG 1×", frame)
+        png_1x.setObjectName("ultraViewExportPng1xButton")
+        png_1x.clicked.connect(self._on_export_1x)
+        png_2x = QPushButton("导出 PNG 2×", frame)
+        png_2x.setObjectName("ultraViewExportPng2xButton")
+        png_2x.clicked.connect(self._on_export_2x)
+        layout.addWidget(copy, 0)
+        layout.addWidget(png_1x, 0)
+        layout.addWidget(png_2x, 0)
+        layout.addStretch(1)
+        return frame
+
+    def _on_layout_popover_index(self, index: int) -> None:
+        layout_id = self._layout_popover_combo.itemData(index)
+        if isinstance(layout_id, str) and layout_id and self._board.layout_mode != LAYOUT_MODE_FREE_GRID:
+            self.layout_changed.emit(layout_id)
+
+    def _on_layout_popover_free_grid(self, enabled: bool) -> None:
+        if not enabled and self._layout_popover_free_grid.isVisible():
+            answer = QMessageBox.question(
+                self,
+                "切回模板布局",
+                "模板会按当前位置顺序重新排列卡片；超出模板容量的卡片会移入未放置区。继续吗？",
+                QMessageBox.Cancel | QMessageBox.Yes,
+                QMessageBox.Cancel,
+            )
+            if answer != QMessageBox.Yes:
+                blocked = self._layout_popover_free_grid.blockSignals(True)
+                self._layout_popover_free_grid.setChecked(True)
+                self._layout_popover_free_grid.blockSignals(blocked)
+                return
+        self.free_grid_toggled.emit(bool(enabled))
+
+    def _sync_layout_popover(self) -> None:
+        is_free_grid = self._board.layout_mode == LAYOUT_MODE_FREE_GRID
+        if hasattr(self, "_layout_popover_combo"):
+            index = self._layout_popover_combo.findData(self._board.layout_id)
+            blocked = self._layout_popover_combo.blockSignals(True)
+            self._layout_popover_combo.setCurrentIndex(index)
+            self._layout_popover_combo.blockSignals(blocked)
+            self._layout_popover_combo.setVisible(not is_free_grid)
+            blocked = self._layout_popover_free_grid.blockSignals(True)
+            self._layout_popover_free_grid.setChecked(is_free_grid)
+            self._layout_popover_free_grid.blockSignals(blocked)
+            self._layout_popover_organize.setVisible(is_free_grid)
+            self._layout_popover_undo.setVisible(is_free_grid)
+            self._layout_popover_redo.setVisible(is_free_grid)
+
+    def _on_export_1x(self) -> None:
+        self.export_png_requested.emit(1)
+
+    def _on_export_2x(self) -> None:
+        self.export_png_requested.emit(2)
+
+    def _on_display_panel_requested(self) -> None:
+        self._toggle_panel("display")
+
+    def _on_export_panel_requested(self) -> None:
+        self._toggle_panel("export")
+
+    def _overlay_size(self, panel_id: str) -> tuple[int, int]:
+        size_hints = {
+            PANEL_LIBRARY: (LIBRARY_DEFAULT_WIDTH, 420),
+            # The controls themselves are intentionally concise.  Keeping this
+            # compact avoids recreating the former full-width command row.
+            PANEL_LAYOUT: (288, 220),
+            PANEL_FILTER: (440, 56),
+            PANEL_UNPLACED: (420, 280),
+            "display": (244, 154),
+            "export": (244, 180),
+        }
+        return size_hints.get(panel_id, (280, 220))
+
+    def _floating_layout(self, *, overlay_open: bool | None = None):
+        active = self._active_panel if overlay_open is None else ("overlay" if overlay_open else None)
+        return calculate_floating_layout(
+            (self._canvas_host.width(), self._canvas_host.height()),
+            overlay_open=bool(active),
+            overlay_size=self._overlay_size(self._active_panel or PANEL_LIBRARY),
+            minimap_size=(self._minimap.width(), self._minimap.height()) if self._minimap.isVisible() else None,
+        )
+
+    def _apply_floating_layout(self) -> None:
+        """Place the scroll viewport and all fixed chrome without reflow."""
+        if not hasattr(self, "_canvas_host"):
+            return
+        layout = self._floating_layout()
+        self._board_scroll.setGeometry(_qrect(layout.board))
+        self._tool_rail.setGeometry(_qrect(layout.rail))
+        self._board_island.setGeometry(_qrect(layout.board_island))
+        self._global_island.setGeometry(_qrect(layout.global_island))
+        self._status_island.setGeometry(_qrect(layout.status_island))
+        self._navigation_island.setGeometry(_qrect(layout.navigation_island))
+        for island in (
+            self._tool_rail,
+            self._board_island,
+            self._global_island,
+            self._status_island,
+            self._navigation_island,
+        ):
+            island.raise_()
+        if self._active_panel is not None and layout.overlay is not None:
+            self._canvas_host.set_overlay_geometry(self._active_panel, _qrect(layout.overlay))
+            overlay = self._canvas_host.overlay(self._active_panel)
+            if overlay is not None:
+                overlay.raise_()
+        if self._overview.isVisible():
+            self._overview.setGeometry(self._board_scroll.geometry())
+            self._overview.raise_()
+        self._position_minimap(layout)
+        self._position_card_context()
+
+    def _toggle_panel(self, panel_id: str) -> None:
+        if self._active_panel == panel_id:
+            self._close_active_panel()
+            return
+        self._open_panel(panel_id)
+
+    def _open_panel(self, panel_id: str) -> bool:
+        if self._presentation or self._canvas_host.overlay(panel_id) is None:
+            return False
+        if self._drag_kind is not None and self._active_panel == PANEL_LIBRARY and panel_id != PANEL_LIBRARY:
+            self._deferred_panel_close = PANEL_LIBRARY
+            return False
+        self._active_panel = panel_id
+        layout = self._floating_layout(overlay_open=True)
+        if layout.overlay is None:
+            return False
+        opened = self._canvas_host.open_overlay(panel_id, _qrect(layout.overlay), focus=panel_id == PANEL_LIBRARY)
+        if not opened:
+            self._active_panel = None
+            return False
+        self._library_visible = panel_id == PANEL_LIBRARY
+        self._tool_rail.set_active_panel(panel_id if panel_id in {PANEL_LIBRARY, PANEL_LAYOUT, PANEL_FILTER, PANEL_UNPLACED} else None)
+        self._apply_floating_layout()
+        return True
+
+    def _close_active_panel(self) -> bool:
+        panel_id = self._active_panel
+        if panel_id == PANEL_LIBRARY and self._drag_kind is not None:
+            self._deferred_panel_close = panel_id
+            return False
+        return self._canvas_host.close_active_overlay()
+
+    def _on_overlay_closed(self, panel_id: str) -> None:
+        if panel_id == PANEL_LIBRARY:
+            self._library_visible = False
+        if self._active_panel == panel_id:
+            self._active_panel = None
+        self._tool_rail.set_active_panel(None)
+        self._apply_floating_layout()
+
+    def _show_board_menu(self) -> None:
+        menu = QMenu(self._board_island)
+        menu.setObjectName("ultraViewBoardPopover")
+        from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+        apply_rounded_menu_chrome(menu)
+        boards = tuple(getattr(self._workspace, "boards", ()) or ()) if self._workspace is not None else (self._board,)
+        for board in boards:
+            board_id = str(getattr(board, "board_id", "") or "")
+            if not board_id:
+                continue
+            action = menu.addAction(str(getattr(board, "name", "") or "Board"))
+            action.setCheckable(True)
+            action.setChecked(board_id == self._board.board_id)
+            action.setData(("select", board_id))
+        menu.addSeparator()
+        duplicate = menu.addAction("复制当前 Board")
+        duplicate.setData(("duplicate", self._board.board_id))
+        rename = menu.addAction("重命名当前 Board")
+        rename.setData(("rename", self._board.board_id))
+        remove = menu.addAction("删除当前 Board")
+        remove.setData(("delete", self._board.board_id))
+        menu.addSeparator()
+        move_up = menu.addAction("当前 Board 上移")
+        move_up.setData(("move", -1))
+        move_down = menu.addAction("当前 Board 下移")
+        move_down.setData(("move", 1))
+        chosen = menu.exec_(self._board_island.menu_button().mapToGlobal(QPoint(0, 32)))
+        data = chosen.data() if chosen is not None else None
+        if not isinstance(data, tuple) or len(data) != 2:
+            return
+        intent, value = data
+        if intent == "select":
+            self._on_board_selected(str(value))
+        elif intent == "duplicate":
+            self.duplicate_board_requested.emit(str(value))
+        elif intent == "rename":
+            self._rename_current_board()
+        elif intent == "delete":
+            answer = QMessageBox.question(
+                self,
+                "删除 Board",
+                f"确定删除“{self._board.name}”吗？其中的 View 引用不会删除源 View。",
+                QMessageBox.Cancel | QMessageBox.Yes,
+                QMessageBox.Cancel,
+            )
+            if answer == QMessageBox.Yes:
+                self.delete_board_requested.emit(str(value))
+        elif intent == "move":
+            ids = [str(getattr(item, "board_id", "") or "") for item in boards]
+            if self._board.board_id in ids:
+                old = ids.index(self._board.board_id)
+                new = max(0, min(len(ids) - 1, old + int(value)))
+                if old != new:
+                    self.reorder_board_requested.emit(self._board.board_id, new)
+
+    def _rename_current_board(self) -> None:
+        text, accepted = QInputDialog.getText(self, "重命名 Board", "名称", text=self._board.name)
+        if accepted and text.strip():
+            self.rename_board_requested.emit(self._board.board_id, text.strip())
+
+    def _show_card_more_menu(self, section: str, view_id: str) -> None:
+        menu = QMenu(self._card_context)
+        menu.setObjectName("ultraViewCardContextMoreMenu")
+        from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+        apply_rounded_menu_chrome(menu)
+        replace = menu.addAction("替换为…")
+        remove = menu.addAction("从总览移除")
+        presets: dict[object, str] = {}
+        if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
+            size_menu = menu.addMenu("自由网格尺寸")
+            for preset, label in (
+                ("small", "小"),
+                ("standard", "标准"),
+                ("wide", "宽"),
+                ("tall", "高"),
+                ("large", "大"),
+                ("banner", "横幅"),
+            ):
+                presets[size_menu.addAction(label)] = preset
+        chosen = menu.exec_(self._card_context.mapToGlobal(QPoint(0, self._card_context.height())))
+        if chosen is replace:
+            self.arm_replacement(section, view_id)
+        elif chosen is remove:
+            self.remove_ref_requested.emit(section, view_id)
+        elif chosen in presets:
+            self.free_grid_preset_requested.emit(section, view_id, presets[chosen])
+
+    def _position_card_context(self) -> None:
+        if self._presentation or self._selected is None or not self._card_context.isVisible():
+            return
+        card = self.card_widget(self._selected.section, self._selected.view_id)
+        if card is None or not card.isVisible():
+            self._card_context.clear_ref()
+            return
+        point = card.mapTo(self._canvas_host, QPoint(0, 0))
+        card_rect = FloatingRect(point.x(), point.y(), card.width(), card.height())
+        placed = place_card_context(
+            (self._canvas_host.width(), self._canvas_host.height()),
+            card_rect,
+            size=(max(200, self._card_context.sizeHint().width()), 40),
+        )
+        self._card_context.setGeometry(_qrect(placed.rect))
+        self._card_context.raise_()
+
     def _persist_viewport_to_board(self) -> None:
         if self._restoring_viewport or self._board is None:
             return
@@ -395,7 +857,7 @@ class UltraViewPage(QWidget):
             )
             self._board_scroll.horizontalScrollBar().setValue(int(round(scroll[0])))
             self._board_scroll.verticalScrollBar().setValue(int(round(scroll[1])))
-            self._toolbar.set_zoom_percent(zoom_percent(zoom))
+            self._set_zoom_percent(zoom_percent(zoom))
             self._apply_lod_chrome()
         finally:
             self._restoring_viewport = False
@@ -427,6 +889,11 @@ class UltraViewPage(QWidget):
         canvas = self._active_canvas()
         size = canvas.unzoomed_size()
         self.set_board_zoom(fit_zoom((size.width(), size.height()), (viewport.width(), viewport.height())))
+
+    def _set_zoom_percent(self, percent: int) -> None:
+        """Keep the legacy façade and the visible navigation island aligned."""
+        self._toolbar.set_zoom_percent(percent)
+        self._navigation_island.set_zoom_percent(percent)
 
     def zoom_to_card(self, section: str, view_id: str, *, animate: bool = True) -> None:
         viewport = self._board_scroll.viewport()
@@ -508,7 +975,7 @@ class UltraViewPage(QWidget):
         )
         self._board_scroll.horizontalScrollBar().setValue(int(round(scroll[0])))
         self._board_scroll.verticalScrollBar().setValue(int(round(scroll[1])))
-        self._toolbar.set_zoom_percent(zoom_percent(after))
+        self._set_zoom_percent(zoom_percent(after))
         self._apply_lod_chrome()
         self._restart_smooth_timer()
         self._persist_viewport_to_board()
@@ -614,7 +1081,7 @@ class UltraViewPage(QWidget):
         self._sync_board_stack_geometry(self._active_canvas())
         self._board_scroll.horizontalScrollBar().setValue(int(round(new_scroll[0])))
         self._board_scroll.verticalScrollBar().setValue(int(round(new_scroll[1])))
-        self._toolbar.set_zoom_percent(zoom_percent(after))
+        self._set_zoom_percent(zoom_percent(after))
         self._apply_lod_chrome()
         self._restart_smooth_timer()
         self._persist_viewport_to_board()
@@ -637,6 +1104,12 @@ class UltraViewPage(QWidget):
     def _on_viewport_resized(self, size) -> None:
         self._grid.set_viewport_size(size)
         self._free_grid.set_viewport_size(size)
+        # QStackedWidget keeps the prior canvas size hint.  Once the floating
+        # host gives the scroll area its final rect, propagate the active
+        # canvas's new logical size back to the stack so first paint shows the
+        # cards instead of an empty dotted stage.
+        self._sync_board_stack_geometry(self._active_canvas())
+        self._refresh_card_context()
 
     def _on_smooth_preview_timeout(self) -> None:
         self._apply_preview_quality(QUALITY_SMOOTH)
@@ -662,6 +1135,10 @@ class UltraViewPage(QWidget):
             len(boards) < MAX_UI_BOARDS,
             "最多创建 20 个 Board" if len(boards) >= MAX_UI_BOARDS else "",
         )
+        self._board_island.set_create_enabled(
+            len(boards) < MAX_UI_BOARDS,
+            "最多创建 20 个 Board" if len(boards) >= MAX_UI_BOARDS else "",
+        )
         active = next((board for board in boards if getattr(board, "board_id", None) == active_id), None)
         if active is None and boards:
             active = boards[0]
@@ -678,6 +1155,7 @@ class UltraViewPage(QWidget):
         wanted = str(filter_id or COMPARE_FILTER_ALL)
         self._compare_filter = wanted
         self._rail.set_filter_id(wanted)
+        self._tool_rail.set_filter_active(wanted != COMPARE_FILTER_ALL)
         self._refresh_projection()
 
     def show_focus(self, section: str, view_id: str) -> None:
@@ -723,17 +1201,37 @@ class UltraViewPage(QWidget):
         return self._grid.slot_widget(slot_id)
 
     def set_library_visible(self, visible: bool) -> None:
-        self._library_visible = bool(visible)
-        self._library.setVisible(self._library_visible and not self._presentation)
+        if visible:
+            self._open_panel(PANEL_LIBRARY)
+            return
+        if self._active_panel == PANEL_LIBRARY:
+            self._close_active_panel()
+        else:
+            self._library_visible = False
+            self._library.hide()
 
     def set_presentation_active(self, active: bool) -> None:
-        self._presentation = bool(active)
+        wanted = bool(active)
+        if self._presentation == wanted:
+            return
+        self._presentation = wanted
+        self.setProperty("presentation", "true" if self._presentation else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
         self._toolbar.set_presentation_checked(self._presentation)
-        self._library.setVisible(self._library_visible and not self._presentation)
+        self._global_island.set_presentation_checked(self._presentation)
         self._toolbar.set_edit_visible(not self._presentation)
-        self._rail.setVisible(not self._presentation)
-        self._tray.title_bar().setVisible(True)
         if self._presentation:
+            self._presentation_panel = self._active_panel
+            self._canvas_host.close_active_overlay(restore_focus=False)
+            self._library_visible = False
+            self._board_island.hide()
+            self._tool_rail.hide()
+            self._status_island.hide()
+            self._navigation_island.hide()
+            self._card_context.hide()
+            self._global_island.set_edit_visible(False)
+            self._global_island.show()
             self._tray.body().setVisible(False)
             if (
                 self._board.layout_mode == LAYOUT_MODE_FREE_GRID
@@ -742,7 +1240,18 @@ class UltraViewPage(QWidget):
                 self.show_overview()
         else:
             self.hide_overview()
+            self._board_island.show()
+            self._tool_rail.show()
+            self._status_island.show()
+            self._navigation_island.show()
+            self._global_island.set_edit_visible(True)
             self._tray.body().setVisible(self._tray.is_expanded())
+            restore_panel = self._presentation_panel
+            self._presentation_panel = None
+            if restore_panel is not None:
+                self._open_panel(restore_panel)
+            self._refresh_card_context()
+        self._apply_floating_layout()
 
     def set_library_rows(self, rows: Sequence[LibraryRow | Mapping[str, Any]]) -> None:
         coerced = [coerce_library_row(row) for row in rows]
@@ -845,12 +1354,19 @@ class UltraViewPage(QWidget):
             self._switcher.set_boards((board,), board.board_id)
         self._grid.set_viewport_size(self._board_scroll.viewport().size())
         self._free_grid.set_viewport_size(self._board_scroll.viewport().size())
+        previous_layout_id = self._board.layout_id
         prev = self._prev_unplaced_count
         self._board = board
         self._prune_runtime_caches()
         n_unplaced = len(board.unplaced)
-        if n_unplaced > 0 and (prev is None or prev == 0):
+        overflow_from_layout_shrink = (
+            prev is not None
+            and n_unplaced > prev
+            and previous_layout_id != board.layout_id
+        )
+        if overflow_from_layout_shrink:
             self._tray.set_expanded(True)
+            QTimer.singleShot(0, self._open_unplaced_after_layout_overflow)
         self._prev_unplaced_count = n_unplaced
         if self._replacement_ref is not None and self._replacement_ref not in membership_set(board):
             self._replacement_ref = None
@@ -861,6 +1377,15 @@ class UltraViewPage(QWidget):
         self._toolbar.set_layout_id(board.layout_id)
         self._toolbar.set_free_grid_enabled(board.layout_mode == LAYOUT_MODE_FREE_GRID)
         self._toolbar.set_show_flags(board.show_titles, board.show_sources)
+        self._board_island.set_current_board(board.board_id, board.name)
+        blocked = self._display_titles.blockSignals(True)
+        self._display_titles.setChecked(bool(board.show_titles))
+        self._display_titles.blockSignals(blocked)
+        blocked = self._display_sources.blockSignals(True)
+        self._display_sources.setChecked(bool(board.show_sources))
+        self._display_sources.blockSignals(blocked)
+        self._tool_rail.set_badge(PANEL_UNPLACED, n_unplaced)
+        self._sync_layout_popover()
         if self._drag_kind is not None:
             # Drop handlers mutate the board inside QDrag.exec_(). Rebuilding
             # library/grid/tray here would deleteLater the drag source before
@@ -879,7 +1404,12 @@ class UltraViewPage(QWidget):
             self._restore_viewport_from_board(board, payload=incoming_viewport)
         else:
             self._refresh_projection()
-        self._toolbar.set_zoom_percent(zoom_percent(self._viewport.zoom()))
+        self._set_zoom_percent(zoom_percent(self._viewport.zoom()))
+        self._apply_floating_layout()
+
+    def _open_unplaced_after_layout_overflow(self) -> None:
+        if not self._presentation and self._tray.is_expanded() and self._board.unplaced:
+            self._open_panel(PANEL_UNPLACED)
 
     def show_overview(self) -> None:
         """Show a scaled, read-only full Board projection without capture."""
@@ -908,6 +1438,8 @@ class UltraViewPage(QWidget):
             widget.setFocus(Qt.OtherFocusReason)
 
     def _on_board_selected(self, board_id: str) -> None:
+        self._close_active_panel()
+        self._card_context.clear_ref()
         self.reset_sheet_session(emit_presentation=False)
         self.select_board_requested.emit(board_id)
 
@@ -938,6 +1470,8 @@ class UltraViewPage(QWidget):
         """Leave focus / replacement / presentation before the tool window closes."""
         if self._focus.isVisible():
             self._focus.close_layer()
+        self._close_active_panel()
+        self._card_context.clear_ref()
         self.clear_replacement_arm()
         if self._presentation:
             self.set_presentation_active(False)
@@ -986,6 +1520,9 @@ class UltraViewPage(QWidget):
         if self._overview.isVisible():
             self.hide_overview()
             return True
+        if self._active_panel is not None:
+            self._close_active_panel()
+            return True
         if self._replacement_slot is not None or self._replacement_ref is not None:
             self.clear_replacement_arm()
             return True
@@ -1008,9 +1545,22 @@ class UltraViewPage(QWidget):
             self._free_grid.cancel_gesture()
         super().resizeEvent(event)
         self._focus.setGeometry(self.rect())
-        if self._overview.isVisible():
-            self._overview.setGeometry(self._board_scroll.geometry())
-        self._position_minimap()
+        self._apply_floating_layout()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched is self._canvas_host and event.type() == QEvent.Resize:
+            # The host receives its final geometry after the Page layout pass;
+            # defer one turn so we never size the scroll viewport from stale
+            # 0x0/previous dimensions during a tool-window resize.
+            QTimer.singleShot(0, self._apply_floating_layout)
+        elif (
+            getattr(self, "_board_scroll", None) is not None
+            and watched is self._board_scroll.viewport()
+            and event.type() == QEvent.MouseButtonPress
+            and self._active_panel is not None
+        ):
+            self._close_active_panel()
+        return super().eventFilter(watched, event)
 
     def changeEvent(self, event) -> None:  # noqa: N802
         if event.type() == QEvent.WindowDeactivate:
@@ -1027,10 +1577,16 @@ class UltraViewPage(QWidget):
 
     def _on_drag_started(self, kind: str) -> None:
         self._drag_kind = kind
+        if kind == "card":
+            self._card_context.hide()
 
     def _on_drag_finished(self) -> None:
         self._drag_kind = None
         self._flush_deferred_drag_refresh()
+        if self._deferred_panel_close is not None:
+            self._deferred_panel_close = None
+            self._close_active_panel()
+        self._refresh_card_context()
 
     def _flush_deferred_drag_refresh(self) -> None:
         pending_rows = self._pending_library_rows
@@ -1107,6 +1663,7 @@ class UltraViewPage(QWidget):
 
     def _on_compare_filter(self, filter_id: str) -> None:
         self._compare_filter = filter_id
+        self._tool_rail.set_filter_active(filter_id != COMPARE_FILTER_ALL)
         self.compare_filter_changed.emit(filter_id)
         self._refresh_projection()
 
@@ -1221,6 +1778,7 @@ class UltraViewPage(QWidget):
         if self._board.layout_mode == LAYOUT_MODE_FREE_GRID:
             self._free_grid.select_only(ref.section, ref.view_id)
         self._refresh_projection()
+        self._refresh_card_context()
         self.selection_changed.emit(ref.section, ref.view_id)
 
     def _status_for(self, ref: UltraViewRef) -> str:
@@ -1367,7 +1925,34 @@ class UltraViewPage(QWidget):
         if facts.range_inconsistent_kinds:
             warnings.append("X 范围不一致")
         self._rail.set_axis_warning(" · ".join(warnings))
+        self._sync_transient_chrome(warnings)
         self._focus.setGeometry(self.rect())
+
+    def _sync_transient_chrome(self, warnings: Sequence[str]) -> None:
+        self._tool_rail.set_badge(PANEL_UNPLACED, len(self._board.unplaced))
+        self._tool_rail.set_filter_active(self._compare_filter != COMPARE_FILTER_ALL)
+        warning_text = " · ".join(warnings)
+        if warning_text:
+            self._status_island.set_status(f"只读预览 · 不计算 · {warning_text}", level="warning")
+        else:
+            self._status_island.set_status("只读预览 · 不计算")
+        self._refresh_card_context()
+
+    def _refresh_card_context(self) -> None:
+        ref = self._selected
+        if self._presentation or ref is None or ref not in membership_set(self._board):
+            self._card_context.clear_ref()
+            return
+        card = self.card_widget(ref.section, ref.view_id)
+        if card is None:
+            self._card_context.clear_ref()
+            return
+        self._card_context.show_for(
+            ref.section,
+            ref.view_id,
+            orphaned=self._status_for(ref) == STATUS_ORPHANED,
+        )
+        QTimer.singleShot(0, self._position_card_context)
 
     def _card_model(self, ref: UltraViewRef, *, slot_id: str) -> CardViewModel:
         record = self._previews.get(ref)
@@ -1431,6 +2016,7 @@ class UltraViewPage(QWidget):
         if facts.range_inconsistent_kinds:
             warnings.append("X 范围不一致")
         self._rail.set_axis_warning(" · ".join(warnings))
+        self._sync_transient_chrome(warnings)
         self._sync_overview()
         self._minimap.show()
         self._refresh_minimap()
@@ -1450,14 +2036,17 @@ class UltraViewPage(QWidget):
         self._board_stack.setMinimumSize(target)
         self._board_stack.resize(target)
 
-    def _position_minimap(self) -> None:
+    def _position_minimap(self, floating=None) -> None:
         if not self._minimap.isVisible():
             return
+        layout = floating if floating is not None else self._floating_layout()
+        if layout.minimap is None:
+            self._minimap.hide()
+            return
         viewport = self._board_scroll.viewport()
-        self._minimap.move(
-            max(6, viewport.width() - self._minimap.width() - 12),
-            max(6, viewport.height() - self._minimap.height() - 12),
-        )
+        global_point = self._canvas_host.mapToGlobal(QPoint(layout.minimap.x, layout.minimap.y))
+        local_point = viewport.mapFromGlobal(global_point)
+        self._minimap.move(local_point)
         self._minimap.raise_()
 
     def _refresh_minimap(self, *_args) -> None:

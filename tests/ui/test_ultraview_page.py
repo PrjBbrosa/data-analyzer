@@ -19,6 +19,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     slot_rects,
 )
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import legal_grid_rect
+from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_UNPLACED
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     BoardSwitcher,
@@ -513,18 +514,20 @@ def test_duplicate_add_locates_instead_of_adding(qtbot):
     assert card.property("selected") == "true"
 
 
-def test_overflow_tray_is_visible_and_persisted(qtbot):
+def test_unplaced_badge_and_overlay_preserve_tray_actions(qtbot):
     harness = _Harness(qtbot)
     tray = harness.page.unplaced_tray()
-    assert tray.title_bar().isVisible()
-    assert tray.body().isHidden()
+    rail = harness.page.tool_rail()
+    assert rail.badge_text(PANEL_UNPLACED) == "0"
+    assert not tray.isVisible()
     harness.fill_board(4)
     add_ref(harness.board, make_ref("fft", "overflow-1"))
     harness.page.set_board(harness.board)
     assert [ref.view_id for ref in harness.board.unplaced] == ["overflow-1"]
-    assert tray.title_bar().isVisible()
-    assert tray.is_expanded()
-    assert not tray.body().isHidden()
+    assert rail.badge_text(PANEL_UNPLACED) == "1"
+    rail.panel_button(PANEL_UNPLACED).click()
+    assert harness.page.active_panel() == PANEL_UNPLACED
+    assert tray.isVisible()
     assert [item.ref() for item in tray.item_widgets()] == [("fft", "overflow-1")]
     restored = default_board()
     add_ref(restored, make_ref("time", "keep"))
@@ -535,7 +538,8 @@ def test_overflow_tray_is_visible_and_persisted(qtbot):
     page = UltraViewPage()
     qtbot.addWidget(page)
     page.set_board(restored)
-    assert page.unplaced_tray().is_expanded()
+    assert page.tool_rail().badge_text(PANEL_UNPLACED) == str(len(restored.unplaced))
+    assert not page.unplaced_tray().isVisible()
     assert ("order", "tray-restored") in [item.ref() for item in page.unplaced_tray().item_widgets()]
 
 
@@ -920,19 +924,18 @@ def test_board_toolbar_display_menu_emits_show_flags(qtbot):
     assert toolbar._act_sources.isChecked() is True
 
 
-def test_set_presentation_active_false_reshows_toolbar_edit_controls(qtbot):
+def test_presentation_restores_visible_global_edit_controls(qtbot):
     harness = _Harness(qtbot)
-    toolbar = harness.page.board_toolbar()
-    display = toolbar.findChild(QToolButton, "ultraViewDisplayButton")
-    combo = toolbar.findChild(QComboBox, "ultraViewLayoutCombo")
-    assert display.isVisible() is True
-    assert combo.isVisible() is True
+    global_island = harness.page.global_island()
+    rail = harness.page.tool_rail()
+    assert global_island.display_button().isVisible() is True
+    assert rail.isVisible() is True
     harness.page.set_presentation_active(True)
-    assert display.isVisible() is False
-    assert combo.isVisible() is False
+    assert global_island.display_button().isVisible() is False
+    assert rail.isVisible() is False
     harness.page.set_presentation_active(False)
-    assert display.isVisible() is True
-    assert combo.isVisible() is True
+    assert global_island.display_button().isVisible() is True
+    assert rail.isVisible() is True
 
 
 def test_live_card_chrome_prefers_library_over_stale_preview(qtbot):
@@ -2009,18 +2012,17 @@ def test_middle_pan_does_not_consume_left_release_during_card_drag(qtbot):
     assert requested == []
 
 
-def test_free_grid_release_on_tray_moves_card_to_unplaced(qtbot):
+def test_free_grid_drag_can_drop_on_unplaced_rail(qtbot):
     harness = _Harness(qtbot)
     free, (card,) = _prepare_free_grid(harness, qtbot, "tray-0")
-    tray = harness.page.unplaced_tray()
-    tray.set_expanded(True)
+    rail = harness.page.tool_rail()
     qtbot.wait(10)
     metrics = free.metrics()
     unit = metrics.column_width + metrics.gutter
     start = QPoint(16, 16)
     _drag_card(card, start, QPoint(start.x() + unit, start.y()), release=False)
-    tray_pos = QPoint(max(8, tray.width() // 2), max(8, tray.height() // 2))
-    global_pos = tray.mapToGlobal(tray_pos)
+    rail_pos = QPoint(max(8, rail.width() // 2), max(8, rail.height() // 2))
+    global_pos = rail.mapToGlobal(rail_pos)
     local = free.mapFromGlobal(global_pos)
     QApplication.sendEvent(
         free,

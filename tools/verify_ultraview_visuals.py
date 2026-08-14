@@ -25,16 +25,17 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPO_ROOT / ".state" / "ultraview-p0"
 
 REQUIRED_SHOTS = (
-    "hero_1280",
-    "hero_1600",
-    "grid_6_1600",
-    "tray_1600",
-    "four_status_1600",
-    "show_flags_1600",
-    "focus_1600",
-    "presentation_1600",
-    "toolbar_1100",
-    "toolbar_1600",
+    "narrow_800",
+    "narrow_1280",
+    "narrow_1440",
+    "library_1280",
+    "layout_1280",
+    "filter_1280",
+    "unplaced_1280",
+    "display_1280",
+    "export_1280",
+    "card_context_1280",
+    "presentation_1280",
 )
 
 @dataclass
@@ -178,7 +179,7 @@ def _reset_board(page, layout_id: str = "hero_left_4"):
     page.set_library_rows(_library_rows())
     page.set_board(board)
     page.set_presentation_active(False)
-    page.set_library_visible(True)
+    page.set_library_visible(False)
     return board
 
 
@@ -195,6 +196,14 @@ def _page_snapshot(page, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         "show_sources": bool(page.board().show_sources),
         "layout_id": page.board().layout_id,
         "cards": _card_facts(page),
+        "active_panel": page.active_panel(),
+        "board_scroll": _rect(page.board_scroll_area()),
+        "rail": _rect(page.tool_rail()),
+        "board_island": _rect(page.board_island()),
+        "global_island": _rect(page.global_island()),
+        "navigation_island": _rect(page.navigation_island()),
+        "status_island": _rect(page.status_island()),
+        "card_context": _rect(page.card_context_island()),
     }
     if extra:
         payload.update(extra)
@@ -310,7 +319,7 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         saved.append((name, path))
 
     try:
-        page.resize(1600, 900)
+        page.resize(1440, 900)
         _reset_board(page, "hero_left_4")
         for index, (section, color) in enumerate(
             (("time", "#2d7ff9"), ("fft", "#e0883c"), ("order", "#9b6bd0"), ("frf", "#168f91"))
@@ -318,13 +327,41 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
             _add_preview(page, section, f"{section}-1", color=color, digest=f"d{index}")
         page.set_board(page.board())
         _pump(app, page)
-        snap("hero_1600", page, _page_snapshot(page))
+        snap("narrow_1440", page, _page_snapshot(page))
 
         page.resize(1280, 800)
         _pump(app, page)
-        snap("hero_1280", page, _page_snapshot(page))
+        snap("narrow_1280", page, _page_snapshot(page))
 
-        page.resize(1600, 900)
+        page.resize(800, 560)
+        _pump(app, page)
+        snap("narrow_800", page, _page_snapshot(page))
+
+        page.resize(1280, 800)
+        _pump(app, page)
+        page.tool_rail().panel_button("library").click()
+        _pump(app, page)
+        snap("library_1280", page, _page_snapshot(page))
+        page.tool_rail().panel_button("layout").click()
+        _pump(app, page)
+        snap("layout_1280", page, _page_snapshot(page))
+        page.tool_rail().panel_button("filter").click()
+        _pump(app, page)
+        snap("filter_1280", page, _page_snapshot(page))
+        page.global_island().display_button().click()
+        _pump(app, page)
+        snap("display_1280", page, _page_snapshot(page))
+        page.global_island().export_button().click()
+        _pump(app, page)
+        snap("export_1280", page, _page_snapshot(page))
+        page._close_active_panel()
+        _pump(app, page)
+        first = page.board().placements[0].ref
+        page._select_ref(first)
+        _pump(app, page)
+        snap("card_context_1280", page, _page_snapshot(page))
+
+        page.resize(1440, 900)
         _reset_board(page, "grid_3x2")
         colors = ("#2d7ff9", "#e0883c", "#6a8f4f", "#9b6bd0", "#168f91", "#5b6775")
         sections = ("time", "fft", "fft_time", "order", "frf", "time")
@@ -334,8 +371,10 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
             )
         page.set_board(page.board())
         _pump(app, page)
-        snap("grid_6_1600", page, _page_snapshot(page))
+        snap("grid_6_1440", page, _page_snapshot(page))
 
+        page.resize(1280, 800)
+        _pump(app, page)
         _reset_board(page, "grid_2x2")
         for index in range(6):
             _add_preview(
@@ -343,7 +382,9 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
             )
         page.set_board(page.board())
         _pump(app, page)
-        snap("tray_1600", page, _page_snapshot(page))
+        page.tool_rail().panel_button("unplaced").click()
+        _pump(app, page)
+        snap("unplaced_1280", page, _page_snapshot(page))
 
         _reset_board(page, "grid_2x2")
         specs = (
@@ -359,13 +400,13 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
             page.set_ref_status(ref, status, exists)
         page.set_board(page.board())
         _pump(app, page)
-        snap("four_status_1600", page, _page_snapshot(page))
+        snap("four_status_1440", page, _page_snapshot(page))
 
         page.board().show_titles = False
         page.board().show_sources = False
         page.set_board(page.board())
         _pump(app, page)
-        snap("show_flags_1600", page, _page_snapshot(page))
+        snap("show_flags_1440", page, _page_snapshot(page))
 
         page.board().show_titles = True
         page.board().show_sources = True
@@ -373,12 +414,12 @@ def generate(output_dir: Path | None = None) -> dict[str, Any]:
         first = page.board().placements[0].ref
         page.show_focus(first.section, first.view_id)
         _pump(app, page)
-        snap("focus_1600", page, _page_snapshot(page))
+        snap("focus_1440", page, _page_snapshot(page))
         page.focus_layer().close_layer()
 
         page.set_presentation_active(True)
         _pump(app, page)
-        snap("presentation_1600", page, _page_snapshot(page))
+        snap("presentation_1280", page, _page_snapshot(page))
         page.set_presentation_active(False)
 
         toolbar.resize(1100, 44)
@@ -418,48 +459,57 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
     if not manifest.get("contact_sheet"):
         errors.append("missing contact sheet")
 
-    compact = geometry.get("toolbar_1100") or {}
-    if compact.get("overlap_pairs"):
-        errors.append(f"toolbar_1100 overlaps: {compact['overlap_pairs']}")
-    if compact.get("clipped"):
-        errors.append(f"toolbar_1100 clipped: {compact['clipped']}")
+    def board_size(name: str) -> tuple[int, int]:
+        fact = geometry.get(name) or {}
+        rect = fact.get("board_scroll") or {}
+        return int(rect.get("w") or 0), int(rect.get("h") or 0)
 
-    wide = geometry.get("toolbar_1600") or {}
-    if wide.get("compact") is not False:
-        errors.append("toolbar_1600 stayed compact")
-    if wide.get("labels") != ["时域", "频谱", "时频", "阶次", "频响"]:
-        errors.append(f"toolbar_1600 labels={wide.get('labels')}")
+    narrow_1280 = geometry.get("narrow_1280") or {}
+    width, height = board_size("narrow_1280")
+    if width < 1190 or height < 700:
+        errors.append(f"narrow_1280 board={width}x{height}, expected >=1190x700")
+    narrow_800 = geometry.get("narrow_800") or {}
+    width, height = board_size("narrow_800")
+    if width < 710 or height < 470:
+        errors.append(f"narrow_800 board={width}x{height}, expected >=710x470")
+    if narrow_1280.get("library_visible"):
+        errors.append("narrow_1280 library should default closed")
 
-    hero = geometry.get("hero_1600") or {}
-    filled = [c for c in hero.get("cards") or [] if not c.get("empty")]
-    if len(filled) < 4:
-        errors.append(f"hero_1600 expected 4 cards, got {len(filled)}")
-    if hero.get("library_visible") is not True:
-        errors.append("hero_1600 library hidden")
+    base_board = (narrow_1280.get("board_scroll") or {})
+    for name in ("library_1280", "layout_1280", "filter_1280", "display_1280", "export_1280"):
+        fact = geometry.get(name) or {}
+        if fact.get("board_scroll") != base_board:
+            errors.append(f"{name} changed BoardScrollArea geometry")
+        if fact.get("active_panel") is None:
+            errors.append(f"{name} did not expose its popover")
 
-    grid = geometry.get("grid_6_1600") or {}
+    context = geometry.get("card_context_1280") or {}
+    if not (context.get("card_context") or {}).get("visible"):
+        errors.append("card_context_1280 missing selected-card actions")
+
+    grid = geometry.get("grid_6_1440") or {}
     filled6 = [c for c in grid.get("cards") or [] if not c.get("empty")]
     if len(filled6) != 6:
-        errors.append(f"grid_6_1600 expected 6 cards, got {len(filled6)}")
+        errors.append(f"grid_6_1440 expected 6 cards, got {len(filled6)}")
 
-    tray = geometry.get("tray_1600") or {}
+    tray = geometry.get("unplaced_1280") or {}
     if int(tray.get("unplaced") or 0) < 1:
-        errors.append("tray_1600 has no overflow")
-    if tray.get("tray_body_visible") is not True:
-        errors.append("tray_1600 body not visible")
+        errors.append("unplaced_1280 has no overflow")
+    if tray.get("active_panel") != "unplaced":
+        errors.append("unplaced_1280 did not open the rail tray panel")
 
     statuses = {
         card.get("status")
-        for card in (geometry.get("four_status_1600") or {}).get("cards") or []
+        for card in (geometry.get("four_status_1440") or {}).get("cards") or []
         if not card.get("empty")
     }
     wanted = {"fresh", "stale", "missing", "orphaned"}
     if not wanted <= statuses:
         errors.append(f"four_status missing {wanted - statuses}")
 
-    flags = geometry.get("show_flags_1600") or {}
+    flags = geometry.get("show_flags_1440") or {}
     if flags.get("show_titles") or flags.get("show_sources"):
-        errors.append("show_flags_1600 did not hide titles/sources")
+        errors.append("show_flags_1440 did not hide titles/sources")
     for card in flags.get("cards") or []:
         if card.get("empty"):
             continue
@@ -469,9 +519,9 @@ def assert_geometry(manifest: dict[str, Any]) -> None:
             errors.append("show_flags left a source footer band")
         break
 
-    if (geometry.get("focus_1600") or {}).get("focus_visible") is not True:
+    if (geometry.get("focus_1440") or {}).get("focus_visible") is not True:
         errors.append("focus layer not visible")
-    presentation = geometry.get("presentation_1600") or {}
+    presentation = geometry.get("presentation_1280") or {}
     if presentation.get("presentation") is not True:
         errors.append("presentation flag off")
     if presentation.get("library_visible") is True:

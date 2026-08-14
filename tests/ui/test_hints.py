@@ -517,6 +517,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.direct_manip",
         "ultraview.display",
         "ultraview.idle",
+        "ultraview.filter",
         "ultraview.library_fold",
         "ultraview.library_toggle",
         "ultraview.free_grid",
@@ -552,6 +553,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.readonly",
         "ultraview.display",
         "ultraview.idle",
+        "ultraview.filter",
         "ultraview.library_fold",
         "ultraview.library_toggle",
     } <= uv_ids

@@ -354,6 +354,230 @@ class Icons:
                     p.drawRoundedRect(QRectF(x, y, 6, 4), 0.8, 0.8)
         return _line_icon(draw, BLUE)
 
+    # UltraView narrow-rail actions.  These deliberately remain programmatic
+    # line icons rather than Unicode/emoji glyphs: the rail is icon-only and
+    # must stay visually stable across the macOS and Windows fallback fonts.
+
+    @classmethod
+    def ultraview_library(cls, color=None):
+        """Stacked preview rows for opening the UltraView View library."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawRoundedRect(QRectF(3.2, 3.0, 13.6, 14.0), 2.0, 2.0)
+            for y, width in ((6.4, 7.0), (10.0, 8.8), (13.6, 5.4)):
+                p.drawLine(QPointF(6.0, y), QPointF(6.0 + width, y))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(c))
+            for y in (6.4, 10.0, 13.6):
+                p.drawEllipse(QPointF(4.8, y), 0.9, 0.9)
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_layout(cls, color=None):
+        """Unequal board cells for template/free-grid layout selection."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawRoundedRect(QRectF(2.8, 3.0, 14.4, 14.0), 1.8, 1.8)
+            p.drawLine(QPointF(10.0, 3.5), QPointF(10.0, 16.5))
+            p.drawLine(QPointF(10.5, 8.0), QPointF(16.7, 8.0))
+            p.drawLine(QPointF(10.5, 12.2), QPointF(16.7, 12.2))
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_filter(cls, color=None):
+        """Funnel glyph for the transient compare/filter popover."""
+        c = color or GRAY
+
+        def draw(p):
+            path = QPainterPath()
+            path.moveTo(3.5, 4.0)
+            path.lineTo(16.5, 4.0)
+            path.lineTo(11.5, 9.6)
+            path.lineTo(11.5, 15.8)
+            path.lineTo(8.5, 17.0)
+            path.lineTo(8.5, 9.6)
+            path.closeSubpath()
+            p.drawPath(path)
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_unplaced(cls, color=None):
+        """Card descending into a tray for the unplaced-card panel."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawRoundedRect(QRectF(4.0, 3.0, 12.0, 7.3), 1.4, 1.4)
+            p.drawLine(QPointF(10.0, 10.8), QPointF(10.0, 14.2))
+            p.drawLine(QPointF(7.8, 12.4), QPointF(10.0, 14.6))
+            p.drawLine(QPointF(12.2, 12.4), QPointF(10.0, 14.6))
+            p.drawLine(QPointF(4.0, 17.0), QPointF(16.0, 17.0))
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_display(cls, color=None):
+        """Eye with metadata lines for title/source display options."""
+        c = color or GRAY
+
+        def draw(p):
+            eye = QPainterPath()
+            eye.moveTo(2.8, 7.3)
+            eye.cubicTo(5.8, 3.4, 11.4, 3.4, 14.4, 7.3)
+            eye.cubicTo(11.4, 11.2, 5.8, 11.2, 2.8, 7.3)
+            eye.closeSubpath()
+            p.drawPath(eye)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(c))
+            p.drawEllipse(QPointF(8.6, 7.3), 1.55, 1.55)
+            p.setPen(_pen(c, 1.55))
+            p.drawLine(QPointF(4.0, 14.0), QPointF(16.0, 14.0))
+            p.drawLine(QPointF(4.0, 17.0), QPointF(12.2, 17.0))
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_presentation(cls, color=None):
+        """Projection screen with play mark for presentation mode."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawRoundedRect(QRectF(3.0, 3.0, 14.0, 10.5), 1.6, 1.6)
+            p.drawLine(QPointF(10.0, 13.5), QPointF(10.0, 16.8))
+            p.drawLine(QPointF(6.8, 16.8), QPointF(13.2, 16.8))
+            play = QPainterPath()
+            play.moveTo(8.4, 6.4)
+            play.lineTo(12.2, 8.25)
+            play.lineTo(8.4, 10.1)
+            play.closeSubpath()
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(c))
+            p.drawPath(play)
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_overview(cls, color=None):
+        """Nine compact cells for whole-board overview/minimap navigation."""
+        c = color or GRAY
+
+        def draw(p):
+            for x in (3.0, 8.3, 13.6):
+                for y in (3.0, 8.3, 13.6):
+                    p.drawRoundedRect(QRectF(x, y, 3.4, 3.4), 0.65, 0.65)
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_fit(cls, color=None):
+        """Inward brackets for fitting the complete board into the viewport."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawLine(QPointF(3.0, 7.4), QPointF(3.0, 3.0))
+            p.drawLine(QPointF(3.0, 3.0), QPointF(7.4, 3.0))
+            p.drawLine(QPointF(17.0, 7.4), QPointF(17.0, 3.0))
+            p.drawLine(QPointF(17.0, 3.0), QPointF(12.6, 3.0))
+            p.drawLine(QPointF(3.0, 12.6), QPointF(3.0, 17.0))
+            p.drawLine(QPointF(3.0, 17.0), QPointF(7.4, 17.0))
+            p.drawLine(QPointF(17.0, 12.6), QPointF(17.0, 17.0))
+            p.drawLine(QPointF(17.0, 17.0), QPointF(12.6, 17.0))
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_reset_zoom(cls, color=None):
+        """Return-to-baseline target, used for UltraView's 100% control."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawEllipse(QRectF(4.0, 4.0, 12.0, 12.0))
+            p.drawLine(QPointF(10.0, 7.0), QPointF(10.0, 13.0))
+            p.drawLine(QPointF(7.0, 10.0), QPointF(13.0, 10.0))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(c))
+            p.drawEllipse(QPointF(10.0, 10.0), 1.1, 1.1)
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_zoom_out(cls, color=None):
+        """Magnifier-minus for reducing the board viewport scale."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawEllipse(QRectF(3.0, 3.0, 10.0, 10.0))
+            p.drawLine(QPointF(10.6, 10.6), QPointF(16.8, 16.8))
+            p.drawLine(QPointF(5.8, 8.0), QPointF(10.2, 8.0))
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_zoom_in(cls, color=None):
+        """Magnifier-plus for increasing the board viewport scale."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawEllipse(QRectF(3.0, 3.0, 10.0, 10.0))
+            p.drawLine(QPointF(10.6, 10.6), QPointF(16.8, 16.8))
+            p.drawLine(QPointF(5.8, 8.0), QPointF(10.2, 8.0))
+            p.drawLine(QPointF(8.0, 5.8), QPointF(8.0, 10.2))
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_help(cls, color=None):
+        """Question-mark-in-circle help affordance, drawn without a font glyph."""
+        c = color or GRAY
+
+        with _painting() as (pix, p):
+            p.setPen(_pen(c, 1.55))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(QRectF(3.0, 3.0, 14.0, 14.0))
+            question = QPainterPath()
+            question.moveTo(7.2, 7.3)
+            question.cubicTo(7.3, 5.2, 10.4, 4.9, 11.8, 6.5)
+            question.cubicTo(13.1, 8.2, 11.7, 9.5, 10.2, 10.4)
+            question.cubicTo(9.2, 11.0, 9.1, 11.8, 9.1, 12.4)
+            p.drawPath(question)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(c))
+            p.drawEllipse(QPointF(9.1, 14.6), 0.9, 0.9)
+        return QIcon(pix)
+
+    @classmethod
+    def ultraview_add(cls, color=None):
+        """Plain plus for creating a Board; not the add-file document glyph."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawLine(QPointF(10.0, 4.0), QPointF(10.0, 16.0))
+            p.drawLine(QPointF(4.0, 10.0), QPointF(16.0, 10.0))
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_open_source(cls, color=None):
+        """Open the source View from a selected UltraView card."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawRoundedRect(QRectF(3.0, 5.5, 11.0, 11.0), 1.6, 1.6)
+            p.drawLine(QPointF(10.0, 10.0), QPointF(17.0, 3.0))
+            p.drawLine(QPointF(12.4, 3.0), QPointF(17.0, 3.0))
+            p.drawLine(QPointF(17.0, 3.0), QPointF(17.0, 7.6))
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_move_to_tray(cls, color=None):
+        """Compact card-to-tray action for the card context island."""
+        return cls.ultraview_unplaced(color)
+
     @classmethod
     def cursor_reset(cls):
         def draw(p):

@@ -177,6 +177,15 @@ def _drop_on_unplaced_tray(widget: QWidget, global_pos: QPoint) -> bool:
     page = _page_of(widget)
     if page is None:
         return False
+    # The narrow-rail workspace keeps the complete tray on demand.  During
+    # direct free-grid manipulation its rail badge is the stable visible drop
+    # target, so moving a card to unplaced does not require opening a large
+    # panel first.  Keep the expanded Tray body as the compatible second target.
+    tool_rail = getattr(page, "tool_rail", None)
+    if callable(tool_rail):
+        rail = tool_rail()
+        if rail is not None and rail.isVisible() and rail.rect().contains(rail.mapFromGlobal(global_pos)):
+            return True
     tray = page.unplaced_tray()
     if tray is None or not tray.isVisible():
         return False
