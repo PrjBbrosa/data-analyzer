@@ -1059,6 +1059,11 @@ class CardContextIsland(QFrame):
     def make_overflow_menu(self, parent: QWidget | None = None) -> QMenu:
         menu = QMenu(parent or self)
         menu.setObjectName("ultraViewCardContextMoreMenu")
+        # Every open of the "more" overflow re-creates this menu (callers may
+        # also append extra actions/submenus before exec_-ing it); without
+        # this it stays parented under the long-lived card-context widget
+        # forever, leaking one QMenu (and its children) per open.
+        menu.setAttribute(Qt.WA_DeleteOnClose)
         apply_rounded_menu_chrome(menu)
         for action, label in (
             ("copy", "复制本卡图像"),
