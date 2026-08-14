@@ -9,6 +9,7 @@ optional CAN stack.
 """
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 from dataclasses import dataclass, field
@@ -116,8 +117,15 @@ def sniff_canoe_asc(path) -> bool:
 
 # python-can ASC_MESSAGE_REGEX equivalent: a timestamped classic CAN or CAN FD
 # line. Unparsed hits fall back to ASCReader so we never drop unknown frames.
+# No trailing \b: python-can's own ASC_MESSAGE_REGEX (can/io/asc.py) has none
+# either, and a `TxRq` direction field is a real prefix match for `Tx` there
+# (re.match doesn't require consuming the rest of the token). A trailing \b
+# here used to fail that boundary check between "Tx" and "Rq", so `TxRq`
+# lines matched neither the data-line parser nor this hint and got silently
+# dropped by the fast path instead of triggering the UNSUPPORTED_SYNTAX
+# fallback that python-can itself can still decode (P1-1).
 _ASC_MESSAGE_HINT_RE = re.compile(
-    r"^\s*\d+\.\d+\s+(?:\d+\s+(?:\S+\s+(?:Tx|Rx)|ErrorFrame)|CANFD)\b",
+    r"^\s*\d+\.\d+\s+(?:\d+\s+(?:\S+\s+(?:Tx|Rx)|ErrorFrame)|CANFD)",
     re.IGNORECASE,
 )
 
@@ -224,19 +232,51 @@ def _raise_if_cancelled(cancel_check, *, outcome=None):
         raise AscParseCancelled(outcome)
 
 
+# A bounded prefix scan is only informative once it has actually examined
+# CAN-log payload: a header/comment block that never reaches a data line
+# used to exhaust the old "64 lines of any kind" budget and pass by default
+# (§4.2: a genuinely unsupported file could go undetected until the fast
+# path had already read ~99.5% of a large file before falling back). N
+# reuses the historical window's magnitude — 64 — now counted in actual
+# data lines instead of any line.
+_PREFLIGHT_MIN_DATA_LINES = _PREFLIGHT_MAX_LINES
+# Header/comment scanning before the first data line is bounded by a more
+# generous ceiling than the normal budget, so a realistic long header does
+# not exhaust the window before reaching real content. Once at least one
+# data line has been seen, the normal _PREFLIGHT_BYTES budget applies again
+# (matches the historical cost model for genuinely dense CAN logs).
+_PREFLIGHT_HEADER_SAFETY_BYTES = _PREFLIGHT_BYTES * 4
+
+
 def _preflight_asc_format(fp) -> _PreflightResult:
     """Judge whether the fast parser can handle a bounded file prefix.
 
-    Reads at most 8 KiB / ~64 lines and reuses the line classifiers. It does
-    not accumulate frames or copy the full-file scanner.
+    Reuses the line classifiers without accumulating frames or copying the
+    full-file scanner. The verdict requires at least
+    ``_PREFLIGHT_MIN_DATA_LINES`` actual data lines to have been examined
+    (or the file to end first) before declaring "supported" — a scan that
+    closes on nothing but header/comment noise cannot honestly reach that
+    conclusion.
+
+    Documented residual boundary: header-only scanning is itself bounded
+    (``_PREFLIGHT_HEADER_SAFETY_BYTES``, 4x the normal 8 KiB budget) so a
+    pathological header cannot scan indefinitely. A file whose header alone
+    exceeds that ceiling with zero data lines seen still falls through to
+    the historical optimistic default below — early rejection only covers
+    prefixes where a decision is actually determinable within budget, not
+    every possible file shape.
     """
     bytes_read = 0
     base = 16
+    data_lines_seen = 0
     try:
         with open(fp, "r", encoding="ascii", errors="replace", newline="") as fh:
-            for index, raw_line in enumerate(fh):
+            for raw_line in fh:
                 bytes_read += len(raw_line)
-                if index >= _PREFLIGHT_MAX_LINES or bytes_read >= _PREFLIGHT_BYTES:
+                limit = (
+                    _PREFLIGHT_BYTES if data_lines_seen else _PREFLIGHT_HEADER_SAFETY_BYTES
+                )
+                if bytes_read >= limit:
                     break
                 stripped = raw_line.strip()
                 if not stripped or stripped.startswith("//"):
@@ -247,13 +287,19 @@ def _preflight_asc_format(fp) -> _PreflightResult:
                     continue
                 parsed = _parse_asc_data_line(stripped.split(), base)
                 if parsed == "skip":
+                    data_lines_seen += 1
                     continue
-                if parsed is None and _ASC_MESSAGE_HINT_RE.match(stripped):
-                    return _PreflightResult(
-                        False,
-                        bytes_read,
-                        AscFallbackReason.UNSUPPORTED_SYNTAX,
-                    )
+                if parsed is None:
+                    if _ASC_MESSAGE_HINT_RE.match(stripped):
+                        return _PreflightResult(
+                            False,
+                            bytes_read,
+                            AscFallbackReason.UNSUPPORTED_SYNTAX,
+                        )
+                    continue
+                data_lines_seen += 1
+                if data_lines_seen >= _PREFLIGHT_MIN_DATA_LINES:
+                    break
     except (OSError, TypeError, ValueError):
         return _PreflightResult(
             False, bytes_read, AscFallbackReason.FAST_READ_FAILED,
@@ -274,6 +320,29 @@ class _AscProgressCoordinator:
         self._complete = False
         self._emitted_phase = None
         self._emitted = False
+        # Probed once from the callback's own signature (not by calling it)
+        # so a bug *inside* a 3-arg callback that happens to raise TypeError
+        # can never be misread as "wrong arity" and trigger a second,
+        # duplicate invocation with side effects run twice.
+        self._callback_accepts_phase = self._probe_accepts_phase(progress_callback)
+
+    @staticmethod
+    def _probe_accepts_phase(callback) -> bool:
+        if not callable(callback):
+            return False
+        try:
+            params = list(inspect.signature(callback).parameters.values())
+        except (TypeError, ValueError):
+            # Builtins / C callables without an introspectable signature:
+            # keep the historical default of preferring the 3-arg form.
+            return True
+        if any(p.kind is p.VAR_POSITIONAL for p in params):
+            return True
+        positional = [
+            p for p in params
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        ]
+        return len(positional) >= 3
 
     def start(self):
         self._forward(0, ASC_PHASE_PREFLIGHT)
@@ -329,17 +398,20 @@ class _AscProgressCoordinator:
     def _emit(self, current, total, phase):
         if not callable(self._callback):
             return
+        args = (int(current), max(1, int(total)))
+        if self._callback_accepts_phase:
+            args = (*args, phase)
         try:
-            self._callback(int(current), max(1, int(total)), phase)
-            return
-        except TypeError:
-            pass
+            self._callback(*args)
         except Exception:
-            return
-        try:
-            self._callback(int(current), max(1, int(total)))
-        except Exception:
-            pass
+            # Progress reporting is informational-only for every caller of
+            # read_asc_outcome; a broken UI callback must never fail a
+            # valid parse. The call shape was already probed from the
+            # callback's signature, so a raise here is a real bug inside
+            # the callback, not an arity mismatch — log it once instead of
+            # silently swallowing (and never retry with a different shape,
+            # which used to run the callback's side effects twice).
+            _LOG.debug("asc progress callback raised", exc_info=True)
 
 
 def _fallback_warning(reason: AscFallbackReason | None) -> str:
@@ -559,7 +631,9 @@ def read_asc_outcome(fp, progress_callback=None, *, cancel_check=None):
     return outcome
 
 
-def _read_asc_frames(fp, progress_callback=None, *, cancel_check=None):
+def _read_asc_frames(
+    fp, progress_callback=None, *, cancel_check=None, warning_callback=None,
+):
     """Read a CANoe ASC into ``(timestamp, arbitration_id, data)`` tuples.
 
     Classic and CAN FD data lines are parsed in-process after a bounded
@@ -567,11 +641,21 @@ def _read_asc_frames(fp, progress_callback=None, *, cancel_check=None):
     python-can's ``ASCReader`` (default parameters; timestamps stay
     measurement-relative). Error/remote frames are dropped, matching
     ``_read_blf_frames``. ``SV:`` system-variable lines are skipped.
+
+    ``warning_callback``, when given, receives ``outcome.warning`` (a single
+    user-facing string) whenever the read fell back to python-can — the
+    frame list alone drops that context, and callers that need it (P1-2:
+    surfacing the fallback reason somewhere the user can actually see it)
+    would otherwise have no way to reach it through this facade.
     """
-    return list(
-        read_asc_outcome(
-            fp,
-            progress_callback=progress_callback,
-            cancel_check=cancel_check,
-        ).frames
+    outcome = read_asc_outcome(
+        fp,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
     )
+    if callable(warning_callback) and outcome.warning:
+        try:
+            warning_callback(outcome.warning)
+        except Exception:
+            _LOG.debug("asc warning_callback raised", exc_info=True)
+    return list(outcome.frames)

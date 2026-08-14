@@ -215,6 +215,52 @@ def test_read_asc_frames_matches_python_can_for_fd_and_extended(tmp_path):
         assert adata == bdata
 
 
+def test_read_asc_frames_matches_python_can_for_txrq(tmp_path):
+    """P1-1: a `TxRq` direction field must not be silently dropped.
+
+    `TxRq` used to fail the hint regex's trailing ``\\b`` (no word boundary
+    between "Tx" and "Rq"), so the line was neither parsed as data nor
+    recognized as "looks like a frame we can't parse" — it just vanished
+    from the fast path with no fallback and no trace. python-can's own
+    ``ASC_MESSAGE_REGEX`` has no such anchor: it matches a `TxRq` line via
+    the `Tx` alternative (``re.match`` doesn't require consuming the rest of
+    the token) and decodes it as an ordinary non-remote, non-error frame.
+    """
+    from can.io import ASCReader
+
+    path = tmp_path / "txrq.asc"
+    path.write_text(
+        "date Mon Jan 01 12:00:00 PM 2024\n"
+        "base hex timestamps absolute\n"
+        "no internal events logged\n"
+        "Begin Triggerblock Mon Jan 01 12:00:00 PM 2024\n"
+        "   1.000000 1  123             Rx   d 8  01 02 03 04 05 06 07 08\n"
+        "   1.010000 1  456             TxRq d 8  11 12 13 14 15 16 17 18\n"
+        "End TriggerBlock\n",
+        encoding="ascii",
+    )
+
+    fast = _read_asc_frames(path)
+
+    reader = ASCReader(str(path))
+    try:
+        expected = [
+            (float(msg.timestamp), int(msg.arbitration_id), bytes(msg.data))
+            for msg in reader
+            if not msg.is_error_frame and not msg.is_remote_frame
+        ]
+    finally:
+        stop = getattr(reader, "stop", None)
+        if callable(stop):
+            stop()
+
+    assert len(fast) == len(expected) == 2
+    for (at, aid, adata), (bt, bid, bdata) in zip(fast, expected):
+        assert at == pytest.approx(bt)
+        assert aid == bid
+        assert adata == bdata
+
+
 def test_preflight_unsupported_syntax_skips_full_fast_scan(tmp_path, monkeypatch):
     from mf4_analyzer.io.asc_can_format import (
         ASC_BACKEND_PYTHON_CAN,
@@ -239,6 +285,54 @@ def test_preflight_unsupported_syntax_skips_full_fast_scan(tmp_path, monkeypatch
     assert 0 < outcome.bytes_consumed_before_fallback <= 8192
     assert len(outcome.frames) == 1
     assert outcome.frames[0][1] == 0x123
+
+
+def test_preflight_requires_data_lines_not_just_header_noise(tmp_path):
+    """§4.2: a header thick with comments must not exhaust the scan window
+    before a single data line has been examined.
+
+    Under the old "64 lines of any kind" budget, a header long enough to
+    fill the window on its own made the preflight declare ``supported=True``
+    by default — without ever having looked at real payload — and the
+    genuinely unsupported line right after the header only surfaced once
+    the (much more expensive) full fast scan reached it. The fix counts the
+    window in actual data lines, so header/comment noise stays free and the
+    scan reaches the first data line regardless of how much header precedes
+    it.
+    """
+    from mf4_analyzer.io.asc_can_format import AscFallbackReason, _preflight_asc_format
+
+    lines = [
+        "date Mon Jan 01 12:00:00 PM 2024",
+        "base hex timestamps absolute",
+        "no internal events logged",
+        "Begin Triggerblock Mon Jan 01 12:00:00 PM 2024",
+    ]
+    # 80 short comment lines: more than the historical 64-line budget, but
+    # still well under both the normal 8 KiB and the widened header-safety
+    # byte ceilings.
+    lines += [f"// setup note {i}" for i in range(80)]
+    lines.append(_classic_line(1.0, dtype="x"))  # unsupported dtype
+    lines.append("End TriggerBlock")
+    path = tmp_path / "long_header.asc"
+    path.write_text("\n".join(lines) + "\n", encoding="ascii")
+
+    result = _preflight_asc_format(path)
+    assert result.supported is False
+    assert result.reason is AscFallbackReason.UNSUPPORTED_SYNTAX
+
+
+def test_preflight_still_passes_small_files_with_few_data_lines(tmp_path):
+    """Guard against over-correcting: files far short of the historical
+    64-line budget (the vast majority of the existing test fixtures) must
+    still preflight as supported once fully examined, not be held to an
+    artificial minimum they can never reach."""
+    from mf4_analyzer.io.asc_can_format import _preflight_asc_format
+
+    path = write_sample_asc(tmp_path / "small.asc", n=3)
+    result = _preflight_asc_format(path)
+    assert result.supported is True
+    assert result.reason is None
 
 
 def test_late_fallback_progress_is_monotonically_non_decreasing(tmp_path):
@@ -406,3 +500,111 @@ def test_fallback_reason_diagnostics_are_throttled(tmp_path, caplog, monkeypatch
         for record in records
     )
     assert len(records) <= diagnostics.BURST
+
+
+def test_progress_callback_internal_typeerror_is_not_retried_with_fewer_args(
+    tmp_path,
+):
+    """§4.2: a bug *inside* a 3-arg callback must not be misdiagnosed as
+    "wrong arity" and retried with two args.
+
+    The coordinator used to probe call shape by actually invoking the
+    callback and inspecting which exception came back; any ``TypeError``
+    raised from inside a working 3-arg callback (unrelated to argument
+    count) triggered a second, duplicate call with two args — running the
+    callback's side effects twice for one logical progress tick. The fix
+    probes the callback's signature once up front instead of by calling it.
+    """
+    path = write_sample_asc(tmp_path / "log.asc", n=5)
+
+    reference_ticks = []
+    _read_asc_frames(
+        path,
+        progress_callback=lambda current, total, phase=None: reference_ticks.append(1),
+    )
+
+    calls = []
+
+    def flaky(current, total, phase=None):
+        calls.append((current, total, phase))
+        raise TypeError("boom: unrelated bug inside the callback, not an arity issue")
+
+    frames = _read_asc_frames(path, progress_callback=flaky)
+    assert len(frames) == 10
+    assert len(calls) == len(reference_ticks), (
+        "each progress tick must invoke the callback exactly once; a doubled "
+        "count means an internal TypeError was misdiagnosed as wrong arity"
+    )
+
+
+def test_emit_progress_propagates_cancellation_not_swallowed():
+    """§4.2: ``AscParseCancelled`` raised from inside a progress callback
+    must propagate through the shared ``_emit_progress`` helper.
+
+    The old bare ``except Exception: pass`` was a dead safety net that
+    silently ate the cancellation (per-line ``cancel_check`` happened to
+    cover for it elsewhere, but this path should not have swallowed it
+    either — a lost cancellation signal here is not observable).
+    """
+    from mf4_analyzer.io.asc_can_format import AscParseCancelled
+    from mf4_analyzer.io.blf_format import _emit_progress
+
+    def cancelling_callback(current, total):
+        raise AscParseCancelled()
+
+    with pytest.raises(AscParseCancelled):
+        _emit_progress(cancelling_callback, 1, 10)
+
+
+def test_emit_progress_logs_other_callback_failures_instead_of_silence(
+    caplog,
+):
+    """Non-cancellation callback failures stay non-fatal but must leave a
+    debug trace instead of a bare ``pass`` (repo-wide "宽泛 except 必须留痕"
+    discipline)."""
+    import logging as _logging
+
+    from mf4_analyzer.io.blf_format import _emit_progress
+
+    def boom(current, total):
+        raise ValueError("unrelated callback bug")
+
+    caplog.set_level(_logging.DEBUG, logger="mf4_analyzer.io.blf_format")
+    _emit_progress(boom, 1, 10)  # must not raise
+    assert any(
+        "progress callback raised" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_read_asc_frames_reports_warning_via_callback_on_fallback(tmp_path):
+    """P1-2: the fallback warning must reach an explicit ``warning_callback``
+    exit, not just ``logger.warning`` — production code has no other way to
+    recover ``AscParseOutcome.warning`` through the ``_read_asc_frames`` /
+    ``DataLoader.read_blf_frames`` facade, which only ever returned frames.
+    """
+    path = _write_early_unsupported_asc(tmp_path / "early.asc")
+    warnings = []
+    frames = _read_asc_frames(path, warning_callback=warnings.append)
+    assert len(frames) == 1
+    assert warnings == ["不支持的 ASC 语法，已切换到兼容解析重试"]
+
+
+def test_read_asc_frames_warning_callback_silent_on_fast_path(tmp_path):
+    path = write_sample_asc(tmp_path / "log.asc", n=3)
+    warnings = []
+    _read_asc_frames(path, warning_callback=warnings.append)
+    assert warnings == []
+
+
+def test_read_blf_frames_forwards_warning_callback_for_asc_only(tmp_path):
+    asc = _write_early_unsupported_asc(tmp_path / "early.asc")
+    blf = write_sample_blf(tmp_path / "log.blf", n=3)
+
+    asc_warnings = []
+    DataLoader.read_blf_frames(asc, warning_callback=asc_warnings.append)
+    assert asc_warnings
+
+    blf_warnings = []
+    DataLoader.read_blf_frames(blf, warning_callback=blf_warnings.append)
+    assert blf_warnings == []

@@ -8,6 +8,7 @@ down here. ``load_blf`` returns a :class:`~mf4_analyzer.io.channel_frame.Channel
 ``can`` and ``cantools`` stay lazily imported inside the functions that need
 them, so importing this module never requires the optional CAN stack.
 """
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,8 @@ import numpy as np
 import pandas as pd
 
 from .channel_frame import ChannelFrame, UnsupportedChannelFrameOperation
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -123,14 +126,26 @@ def _emit_progress(progress_callback, current, total):
     """Best-effort progress reporting for long-running loaders.
 
     Loader callbacks are informational only: a delayed or failed status-bar
-    repaint must never make a valid data import fail.
+    repaint must never make a valid data import fail. The one exception is
+    cooperative cancellation: the ASC coordinator's wrapped callback
+    (asc_can_format._AscProgressCoordinator.as_callback) raises
+    ``AscParseCancelled`` from inside this same call, and that must
+    propagate — a bare ``except Exception`` here used to be a dead safety
+    net that silently ate it (§4.2; per-line ``cancel_check`` happened to
+    cover for it, but this path should not have swallowed it either).
     """
     if not callable(progress_callback):
         return
+    # Local import: asc_can_format imports _emit_progress from this module
+    # at module scope, so importing AscParseCancelled from asc_can_format at
+    # this module's top level would be a circular import.
+    from .asc_can_format import AscParseCancelled
     try:
         progress_callback(int(current), max(1, int(total)))
+    except AscParseCancelled:
+        raise
     except Exception:
-        pass
+        _LOG.debug("progress callback raised", exc_info=True)
 
 
 def _estimate_byte_progress(

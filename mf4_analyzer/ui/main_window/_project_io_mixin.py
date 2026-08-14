@@ -666,14 +666,20 @@ class ProjectIOMixin:
             elif ext == '.blf' or is_canoe_asc:
                 fmt = "BLF" if ext == ".blf" else "CANoe ASC"
                 source_kind = "blf" if ext == ".blf" else "canoe_asc"
+                asc_read_warnings = []
                 frames = blf_frames
                 if frames is None:
                     frames = DataLoader.read_blf_frames(
                         fp,
-                        progress_callback=lambda current, total: report(
+                        # Three-arg form so the ASC coordinator's real phase
+                        # (预检/快速解析/兼容解析重试) reaches the progress
+                        # UI instead of being dropped; plain BLF reads still
+                        # call with two args and take the default (P1-2).
+                        progress_callback=lambda current, total, phase="读取 CAN 帧": report(
                             0.05 + 0.40 * current / max(1, total),
-                            "读取 CAN 帧",
+                            phase,
                         ),
+                        warning_callback=asc_read_warnings.append,
                     )
                 else:
                     report(0.05, "复用已读取 CAN 帧")
@@ -715,12 +721,14 @@ class ProjectIOMixin:
                     ),
                 )
                 report(0.96, "登记通道")
+                source_metadata = {
+                    "source_kind": source_kind,
+                    "dbc_paths": list(dbc_paths),
+                    "warnings": asc_read_warnings,
+                }
                 self._register_file_data(
                     fp, data, chs, units,
-                    source_metadata={
-                        "source_kind": source_kind,
-                        "dbc_paths": list(dbc_paths),
-                    },
+                    source_metadata=source_metadata,
                 )
                 self._remember_blf_dbc_paths(dbc_paths)
                 self._update_info()
@@ -729,6 +737,15 @@ class ProjectIOMixin:
                     f"✅ 已加载 {fmt}: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件",
                     f"已加载 {p.name} · {mode}",
                 )
+                # ASC fallback warnings (P1-2): read_asc_outcome().warning
+                # used to reach only logger.warning via _log_fallback, never
+                # any user-visible surface. The status bar is a dead end
+                # (SurfaceStatusBar.showMessage is logic-only, review P1-5),
+                # so this rides the same toast exit as every other source's
+                # load-time diagnostics (unconditional, matching TDMS/HDF/
+                # WWT/ZFD/MAT above — diagnostics still surface even when
+                # ``notify`` suppresses the generic success toast).
+                self._toast_io_load_diagnostics(source_metadata)
                 report(1.0, "已加载")
                 return
             elif ext == '.tdms':

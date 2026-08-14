@@ -206,16 +206,25 @@ NO_CAN_FRAMES_MESSAGE = "CAN 日志没有可读的数据帧"
 
 class DataLoader:
     @staticmethod
-    def read_blf_frames(fp, progress_callback=None):
+    def read_blf_frames(fp, progress_callback=None, *, warning_callback=None):
         """Read one Vector CAN log (BLF / CANoe ASC) into reusable raw frames.
 
         Import coordinators that need to validate a DBC before decoding can
         keep these frames only for the current file, avoiding a second full
         reader pass.  Callers must treat the returned tuples as immutable.
+
+        ``warning_callback``, when given, receives a single user-facing
+        string if the CANoe ASC reader had to fall back to python-can
+        (P1-2). It is only ever invoked for the ``.asc`` path; raw BLF reads
+        have no equivalent fallback concept.
         """
         if Path(fp).suffix.lower() == ".asc":
             from .asc_can_format import _read_asc_frames
-            frames = _read_asc_frames(fp, progress_callback=progress_callback)
+            frames = _read_asc_frames(
+                fp,
+                progress_callback=progress_callback,
+                warning_callback=warning_callback,
+            )
         else:
             frames = _read_blf_frames(fp, progress_callback=progress_callback)
         if not frames:
