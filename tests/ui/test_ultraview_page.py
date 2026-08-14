@@ -2369,6 +2369,32 @@ def test_free_grid_focus_loss_cancels_active_move_without_commit(qtbot):
     assert free.ghost_overlay()._ghost_rect is None
 
 
+def test_app_focus_changed_to_none_no_longer_cancels_active_move(qtbot):
+    """§4.3: focusChanged(now=None) is a fragile cancel trigger.
+
+    It also fires for transient reasons unrelated to real window
+    deactivation (e.g. a popup hiding/destroying mid-interaction), so using
+    it to cancel gestures risked killing an in-progress drag out from under
+    the user.  Real window deactivation is already covered by
+    changeEvent(WindowDeactivate) and hideEvent (both call
+    _cancel_board_gestures() themselves — see
+    test_free_grid_focus_loss_cancels_active_move_without_commit).
+    """
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "blur-none-0")
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    mid = QPoint(start.x() + unit * 6, start.y())
+    _drag_card(card, start, mid, release=False)
+    assert free.gesture().is_active()
+
+    harness.page._on_app_focus_changed(card, None)
+
+    assert free.gesture().is_active()
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, mid)
+
+
 def test_free_grid_out_of_bounds_clamps_into_empty_cell_without_toast(qtbot):
     harness = _Harness(qtbot)
     harness.board.layout_mode = LAYOUT_MODE_FREE_GRID

@@ -1724,8 +1724,11 @@ class UltraViewPage(QWidget):
         self._grid_redo.setEnabled(not in_edit)
         if in_edit:
             self.note_space(False)
-        if now is None:
-            self._cancel_board_gestures()
+        # ``now is None`` also fires for transient, non-deactivation reasons
+        # (a popup hiding/destroying mid-interaction) and would cancel an
+        # in-progress drag out from under the user.  Real window deactivation
+        # is already covered by changeEvent(WindowDeactivate) and hideEvent,
+        # both of which call _cancel_board_gestures() themselves.
 
     def handle_escape(self) -> bool:
         if self._viewport.is_panning():
