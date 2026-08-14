@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
 from mf4_analyzer.ui.widgets.ultraview_entry import (
     ACCESSIBLE_NAME,
     COMPACT_WIDTH,
+    EDITED_TOOLTIP,
     ENTRY_HEIGHT,
     LABEL_TEXT,
     PORTAL_SIZE,
@@ -153,6 +154,30 @@ def test_compact_keeps_accessible_name_and_tooltip(qtbot) -> None:
     assert button.toolTip() == TOOLTIP
     assert button.objectName() == "ultraViewEntry"
     assert button.isCheckable() is False
+
+
+def test_content_marker_changes_tooltip_without_changing_rail_size(qtbot) -> None:
+    button = _make_button(qtbot)
+    before = button.sizeHint()
+
+    button.set_has_content(True)
+
+    assert button.has_content() is True
+    assert button.toolTip() == EDITED_TOOLTIP
+    assert button.sizeHint() == before
+    button.set_has_content(False)
+    assert button.has_content() is False
+    assert button.toolTip() == TOOLTIP
+
+
+def test_content_marker_renders_as_a_visible_green_dot(qtbot) -> None:
+    button = _make_button(qtbot)
+    button.set_has_content(True)
+    QApplication.processEvents()
+
+    center = button._edited_dot_rect(button._portal_rect()).center()
+    pixel = button.grab().toImage().pixelColor(int(center.x()), int(center.y()))
+    assert _channel_distance(pixel, QColor("#18A861")) <= 8
 
 
 def test_mouse_space_and_enter_each_emit_clicked_once(qtbot) -> None:

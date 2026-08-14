@@ -163,6 +163,22 @@ def test_ultraview_tool_window_is_not_transient_for_analyzer(qapp, qtbot):
     assert copy.isDefault() is False
 
 
+def test_ultraview_entry_marks_configured_workspace(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    docks = _source_ultraview_docks(win)
+    assert not any(dock.has_content() for dock in docks)
+
+    view_id = str(win.view_manager.get(0).view_id)
+    win._ultraview.add_from_source_tab("time", view_id)
+
+    QCoreApplication.processEvents()
+    assert all(dock.has_content() for dock in docks)
+
+    win._ultraview.reset_project_state()
+    assert not any(dock.has_content() for dock in docks)
+
+
 def test_ultraview_board_actions_stay_in_the_tool_window(qapp, qtbot):
     qapp.setStyle("Fusion")
     load_stylesheet(qapp)

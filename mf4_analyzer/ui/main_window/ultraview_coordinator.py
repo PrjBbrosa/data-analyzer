@@ -1035,6 +1035,7 @@ class UltraViewCoordinator(QObject):
     def refresh_page(self) -> None:
         if self._inactive():
             return
+        self._sync_entry_content_marker()
         page = self.page()
         if page is None:
             return
@@ -1046,6 +1047,14 @@ class UltraViewCoordinator(QObject):
         self.set_pinned_from_board(board)
         for ref in {ref for candidate in self._workspace.boards for ref in all_refs(candidate)}:
             self._push_preview(ref)
+
+    def _sync_entry_content_marker(self) -> None:
+        """Keep each source-rail entry honest about configured Board cards."""
+        window = self._window
+        chart_stack = getattr(window, "chart_stack", None) if window is not None else None
+        sync = getattr(chart_stack, "set_ultraview_has_content", None)
+        if callable(sync):
+            sync(any(all_refs(board) for board in self._workspace.boards))
 
     def _refresh_library(self, page) -> None:
         rows = []

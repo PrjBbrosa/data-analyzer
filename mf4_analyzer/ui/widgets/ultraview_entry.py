@@ -35,6 +35,7 @@ ENTRY_HEIGHT = 30
 LABEL_TEXT = "UltraView"
 ACCESSIBLE_NAME = "打开 UltraView"
 TOOLTIP = "打开 UltraView（跨 View 只读对照，不重新计算）"
+EDITED_TOOLTIP = "打开 UltraView（已编辑）"
 SPECTRUM_STOPS = ((0.0, "#0969DC"), (0.52, "#734EE6"), (1.0, "#BD299F"))
 # TL, TR, BL, BR — Electric Spectrum mapped onto the 2×2 board, not a wash.
 TILE_COLORS = ("#0969DC", "#734EE6", "#734EE6", "#BD299F")
@@ -67,6 +68,9 @@ _PORTAL_INSET = QColor(97, 97, 196, 43)
 _PORTAL_INSET_PRESSED = QColor(99, 91, 215, 82)
 _PORTAL_INNER = QColor(255, 255, 255, 242)
 _PORTAL_SHADOW = QColor(91, 83, 205, 43)
+_EDITED_DOT = QColor("#18A861")
+_EDITED_DOT_RING = QColor("#FFFFFF")
+_EDITED_DOT_SIZE = 7.0
 _DISABLED_FILL = QColor("#F4F6F9")
 _DISABLED_BORDER = QColor("#C5CDD8")
 _DISABLED_INK = QColor("#8A97A8")
@@ -81,6 +85,7 @@ __all__ = [
     "LABEL_TEXT",
     "ACCESSIBLE_NAME",
     "TOOLTIP",
+    "EDITED_TOOLTIP",
     "SPECTRUM_STOPS",
     "TILE_COLORS",
     "PORTAL_SIZE",
@@ -212,6 +217,7 @@ class UltraViewEntryButton(QAbstractButton):
         self.setAutoFillBackground(False)
         self._compact = False
         self._keyboard_focus = False
+        self._has_content = False
 
     def set_compact(self, compact: bool) -> None:
         compact = bool(compact)
@@ -223,6 +229,18 @@ class UltraViewEntryButton(QAbstractButton):
 
     def is_compact(self) -> bool:
         return self._compact
+
+    def set_has_content(self, has_content: bool) -> None:
+        """Show the small edited marker when any UltraView card is configured."""
+        has_content = bool(has_content)
+        if has_content == self._has_content:
+            return
+        self._has_content = has_content
+        self.setToolTip(EDITED_TOOLTIP if has_content else TOOLTIP)
+        self.update()
+
+    def has_content(self) -> bool:
+        return self._has_content
 
     def sizeHint(self):  # noqa: N802 - Qt override
         return self._size_hint_for(self._compact)
@@ -476,6 +494,22 @@ class UltraViewEntryButton(QAbstractButton):
         painter.drawRoundedRect(underline, 99.0, 99.0)
         painter.restore()
 
+    def _edited_dot_rect(self, portal: QRectF) -> QRectF:
+        size = _EDITED_DOT_SIZE
+        return QRectF(
+            portal.right() - size + 1.0,
+            portal.top() - 1.0,
+            size,
+            size,
+        )
+
+    def _paint_edited_dot(self, painter: QPainter, portal: QRectF) -> None:
+        if not self._has_content:
+            return
+        painter.setBrush(_EDITED_DOT)
+        painter.setPen(QPen(_EDITED_DOT_RING, 1.2))
+        painter.drawEllipse(self._edited_dot_rect(portal))
+
     def paintEvent(self, event):  # noqa: N802 - Qt override
         del event
         painter = QPainter(self)
@@ -485,6 +519,7 @@ class UltraViewEntryButton(QAbstractButton):
             portal = self._portal_rect()
             self._paint_portal(painter, portal, saturate=saturate, contrast=contrast)
             self._paint_quad(painter, portal, saturate=saturate, contrast=contrast)
+            self._paint_edited_dot(painter, portal)
             if not self._compact:
                 self._paint_word(painter, saturate=saturate, contrast=contrast)
             if self._keyboard_focus and self.isEnabled():

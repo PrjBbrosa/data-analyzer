@@ -815,6 +815,20 @@ class ChartStack(QWidget):
     def _emit_open_ultraview(self, _checked=False):
         self.open_ultraview_requested.emit()
 
+    def set_ultraview_has_content(self, has_content: bool) -> None:
+        """Project the workspace-content marker onto every source View rail."""
+        entries = (
+            getattr(self, "ultraview_entry", None),
+            getattr(getattr(self, "page_fft", None), "ultraview_entry", None),
+            getattr(getattr(self, "page_fft_time", None), "ultraview_entry", None),
+            getattr(getattr(self, "page_frf", None), "ultraview_entry", None),
+            getattr(getattr(self, "page_order", None), "ultraview_entry", None),
+        )
+        for entry in entries:
+            setter = getattr(entry, "set_has_content", None)
+            if callable(setter):
+                setter(has_content)
+
     def _wire_ultraview_entry(self, button):
         """Connect a View-rail Dock click once; repeat calls are no-ops."""
         if button is None:
