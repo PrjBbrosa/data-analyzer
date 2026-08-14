@@ -41,6 +41,10 @@ Rect = tuple[int, int, int, int]
 PLANNER_SEARCH_CAP = 768
 LAYOUT_MOVE = "move"
 LAYOUT_RESIZE = "resize"
+# spec D9.7 预留，UI 整理入口未接：没有生产调用方传 "arrange"。板上的「整理」
+# 走 ultraview_state.organized_placements（只压空行），不经 plan_layout，也没有
+# 提交前整体预览。保留常量与 plan_neighbor_shrink 以待接线；2026-08-15 review
+# §4.3 已确认现状，spec D9.7 处有对应批注。
 LAYOUT_ARRANGE = "arrange"
 
 
@@ -1099,6 +1103,11 @@ def plan_neighbor_shrink(
     ``incoming`` must already be in-board. Cards keep their row (or column)
     when the squeeze is horizontal (or vertical). Returns ``((), False)`` when
     a neighbour would drop below the legal minimum.
+
+    **spec D9.7 预留，UI 整理入口未接**：唯一调用点是 ``plan_layout`` 的
+    ``LAYOUT_ARRANGE`` 分支，而没有生产代码传 ``"arrange"``——普通 move/resize
+    永远不缩邻卡，这是 D9.2 的硬契约。接线（含提交前整体预览）不在
+    2026-08-15 修复批范围。
     """
     current = {item.ref: item.rect for item in placements}
     wanted = dict(incoming)
@@ -1268,32 +1277,3 @@ def _wall_grow_wanted(
     if grown == origin:
         return None
     return {ref: grown}
-
-
-def plan_boundary_yield(
-    incoming: Mapping[UltraViewRef, GridRect],
-    placements: Sequence[FreeGridPlacement],
-    *,
-    preferred: tuple[int, int] = (0, 1),
-) -> tuple[tuple[tuple[UltraViewRef, GridRect], ...], bool]:
-    """Size-preserving clamp + translate for out-of-board drops.
-
-    Neighbour shrink and mover grow are not used on this path; those remain
-    on ``plan_neighbor_shrink`` for an explicit arrange operation. Routine
-    gestures should call ``plan_layout``.
-    """
-    raw = dict(incoming)
-    if not raw:
-        return (), False
-    mover_ref = next(iter(raw))
-    plan = plan_layout(
-        placements,
-        mover_ref,
-        raw[mover_ref],
-        LAYOUT_MOVE,
-        preferred=preferred,
-        incoming=raw,
-    )
-    if not plan.accepted:
-        return (), False
-    return plan.committed_updates(), True

@@ -91,7 +91,6 @@ from .free_grid import (
     LayoutRejectReason,
     avoidance_preferred_delta,
     candidate_resize,
-    clamp_rect,
     export_grid_metrics,
     grid_metrics,
     hit_handle,
@@ -129,7 +128,6 @@ HANDLE_CURSORS = {
 REPLACE_HOVER_MS = 600
 FEEDBACK_OUT_OF_GRID = "不能移出网格"
 FEEDBACK_NO_LEGAL_LAYOUT = "当前位置放不下，已保持原布局"
-FEEDBACK_AVOID_BOUNDARY = FEEDBACK_NO_LEGAL_LAYOUT
 # A blown search budget is *not* "it does not fit": a legal layout may well
 # exist, the planner just stopped looking (review 2026-08-15 P1-4).
 FEEDBACK_SEARCH_BUDGET = "布局搜索超出预算，已保持原布局 · 可先整理布局再试"
@@ -2849,9 +2847,6 @@ class FreeGridBoard(QWidget):
             row_span=row_span,
         )
         return legal.column, legal.row
-
-    def _legal_grid_rect(self, rect: GridRect) -> GridRect:
-        return clamp_rect(rect)
 
     def _board_pos(self, card: QWidget, local: QPoint) -> tuple[int, int]:
         mapped = card.mapTo(self, local)

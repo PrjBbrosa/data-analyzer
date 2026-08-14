@@ -22,7 +22,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     keep_aspect_resize,
     legal_grid_rect,
     pixels_to_grid_delta,
-    plan_boundary_yield,
     plan_layout,
     plan_neighbor_shrink,
     plan_overlap_avoidance,
@@ -317,43 +316,46 @@ def test_overlap_avoidance_fails_when_board_is_packed():
     assert updates == ()
 
 
-def test_boundary_yield_clamps_into_empty_cell():
+def test_out_of_board_drop_clamps_into_the_empty_cell():
     card = _placement("a", GridRect(2, 0, 4, 3))
-    updates, ok = plan_boundary_yield(
-        {card.ref: GridRect(-2, 0, 4, 3)},
-        [card],
-        preferred=(-1, 0),
+    plan = plan_layout(
+        [card], card.ref, GridRect(-2, 0, 4, 3), LAYOUT_MOVE, preferred=(-1, 0)
     )
-    assert ok is True
-    assert dict(updates)[card.ref] == GridRect(0, 0, 4, 3)
+    assert plan.accepted is True
+    assert dict(plan.committed_updates())[card.ref] == GridRect(0, 0, 4, 3)
 
 
-def test_boundary_yield_rejects_wall_instead_of_shrinking_neighbors():
+def test_out_of_board_drop_rejects_wall_instead_of_shrinking_neighbors():
     left_top = _placement("a", GridRect(0, 0, 4, 3))
     left_bottom = _placement("b", GridRect(0, 3, 4, 3))
     mover = _placement("c", GridRect(4, 0, 8, 6))
-    updates, ok = plan_boundary_yield(
-        {mover.ref: GridRect(5, 0, 8, 6)},
+    plan = plan_layout(
         [left_top, left_bottom, mover],
+        mover.ref,
+        GridRect(5, 0, 8, 6),
+        LAYOUT_MOVE,
         preferred=(1, 0),
     )
-    assert ok is False
-    assert updates == ()
+    assert plan.accepted is False
+    assert plan.committed_updates() == ()
     assert left_top.rect == GridRect(0, 0, 4, 3)
     assert mover.rect == GridRect(4, 0, 8, 6)
 
 
-def test_boundary_yield_fails_when_left_neighbors_are_already_minimum():
+def test_out_of_board_drop_fails_when_left_neighbors_are_already_minimum():
     left_top = _placement("a", GridRect(0, 0, 2, 3))
     left_bottom = _placement("b", GridRect(0, 3, 2, 3))
     mover = _placement("c", GridRect(2, 0, 10, 6))
-    updates, ok = plan_boundary_yield(
-        {mover.ref: GridRect(3, 0, 10, 6)},
+    plan = plan_layout(
         [left_top, left_bottom, mover],
+        mover.ref,
+        GridRect(3, 0, 10, 6),
+        LAYOUT_MOVE,
         preferred=(1, 0),
     )
-    assert ok is False
-    assert updates == ()
+    assert plan.accepted is False
+    assert plan.reason is LayoutRejectReason.OUT_OF_BOUNDS
+    assert plan.committed_updates() == ()
 
 
 def test_plan_layout_move_keeps_every_span():

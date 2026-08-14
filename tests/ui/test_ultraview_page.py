@@ -24,6 +24,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     LAYOUT_MOVE,
     LayoutPlan,
     LayoutRejectReason,
+    clamp_rect,
     legal_grid_rect,
     rect_to_pixels,
 )
@@ -1471,7 +1472,8 @@ def test_free_grid_drop_clamps_span_inside_board(qtbot):
     )
     assert (column, row) == (legal.column, legal.row)
     clamped = GridRect(column, row, span.column_span, span.row_span)
-    assert free._legal_grid_rect(clamped) == _legal_grid_rect(clamped)
+    assert clamp_rect(clamped) == clamped
+    assert clamp_rect(clamped) == _legal_grid_rect(clamped)
     assert column + span.column_span <= GRID_COLUMNS
     assert row + span.row_span <= MAX_GRID_ROWS
 
