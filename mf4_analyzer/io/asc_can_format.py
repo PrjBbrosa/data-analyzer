@@ -116,8 +116,15 @@ def sniff_canoe_asc(path) -> bool:
 
 # python-can ASC_MESSAGE_REGEX equivalent: a timestamped classic CAN or CAN FD
 # line. Unparsed hits fall back to ASCReader so we never drop unknown frames.
+# No trailing \b: python-can's own ASC_MESSAGE_REGEX (can/io/asc.py) has none
+# either, and a `TxRq` direction field is a real prefix match for `Tx` there
+# (re.match doesn't require consuming the rest of the token). A trailing \b
+# here used to fail that boundary check between "Tx" and "Rq", so `TxRq`
+# lines matched neither the data-line parser nor this hint and got silently
+# dropped by the fast path instead of triggering the UNSUPPORTED_SYNTAX
+# fallback that python-can itself can still decode (P1-1).
 _ASC_MESSAGE_HINT_RE = re.compile(
-    r"^\s*\d+\.\d+\s+(?:\d+\s+(?:\S+\s+(?:Tx|Rx)|ErrorFrame)|CANFD)\b",
+    r"^\s*\d+\.\d+\s+(?:\d+\s+(?:\S+\s+(?:Tx|Rx)|ErrorFrame)|CANFD)",
     re.IGNORECASE,
 )
 

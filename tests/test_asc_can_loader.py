@@ -215,6 +215,52 @@ def test_read_asc_frames_matches_python_can_for_fd_and_extended(tmp_path):
         assert adata == bdata
 
 
+def test_read_asc_frames_matches_python_can_for_txrq(tmp_path):
+    """P1-1: a `TxRq` direction field must not be silently dropped.
+
+    `TxRq` used to fail the hint regex's trailing ``\\b`` (no word boundary
+    between "Tx" and "Rq"), so the line was neither parsed as data nor
+    recognized as "looks like a frame we can't parse" — it just vanished
+    from the fast path with no fallback and no trace. python-can's own
+    ``ASC_MESSAGE_REGEX`` has no such anchor: it matches a `TxRq` line via
+    the `Tx` alternative (``re.match`` doesn't require consuming the rest of
+    the token) and decodes it as an ordinary non-remote, non-error frame.
+    """
+    from can.io import ASCReader
+
+    path = tmp_path / "txrq.asc"
+    path.write_text(
+        "date Mon Jan 01 12:00:00 PM 2024\n"
+        "base hex timestamps absolute\n"
+        "no internal events logged\n"
+        "Begin Triggerblock Mon Jan 01 12:00:00 PM 2024\n"
+        "   1.000000 1  123             Rx   d 8  01 02 03 04 05 06 07 08\n"
+        "   1.010000 1  456             TxRq d 8  11 12 13 14 15 16 17 18\n"
+        "End TriggerBlock\n",
+        encoding="ascii",
+    )
+
+    fast = _read_asc_frames(path)
+
+    reader = ASCReader(str(path))
+    try:
+        expected = [
+            (float(msg.timestamp), int(msg.arbitration_id), bytes(msg.data))
+            for msg in reader
+            if not msg.is_error_frame and not msg.is_remote_frame
+        ]
+    finally:
+        stop = getattr(reader, "stop", None)
+        if callable(stop):
+            stop()
+
+    assert len(fast) == len(expected) == 2
+    for (at, aid, adata), (bt, bid, bdata) in zip(fast, expected):
+        assert at == pytest.approx(bt)
+        assert aid == bid
+        assert adata == bdata
+
+
 def test_preflight_unsupported_syntax_skips_full_fast_scan(tmp_path, monkeypatch):
     from mf4_analyzer.io.asc_can_format import (
         ASC_BACKEND_PYTHON_CAN,
