@@ -24,10 +24,14 @@ class ComputeProgressWidget(QWidget):
     """
 
     _BAR_WIDTH = 160
+    # QSS ``border: 1px`` on #computeProgressBar inflates the laid-out slot.
+    _BAR_FRAME = 2
     _H_MARGIN = 8
     # Keep a clear gap so '%' ink cannot kiss the rounded bar tip.
     _SPACING = 12
-    # Extra slack inside the elision budget for bold QSS / ClearType overhang.
+    # Extra slack inside the sizeHint for QSS padding / ClearType overhang.
+    # Elision uses the label contentsRect, which already excludes padding —
+    # do not subtract this again or the design string elides by 1–2px.
     _TEXT_PAD = 6
     # Wide enough for "加载 1/1 · 读取 CAN 帧 · 100%" at the status-bar font.
     _MAX_WIDTH = 520
@@ -67,8 +71,20 @@ class ComputeProgressWidget(QWidget):
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.setVisible(False)
 
+    def _bar_slot_width(self) -> int:
+        """Painted progress-bar slot, including QSS border inflation.
+
+        ``setFixedWidth(_BAR_WIDTH)`` is the inner width. A 1px QSS border on
+        each side makes the laid-out bar 162px; sizeHint must match or the
+        label is 2px short and elides ``32%`` to ``3…``.
+        """
+        return max(
+            self._BAR_WIDTH + self._BAR_FRAME,
+            int(self.bar.width() or 0),
+        )
+
     def _chrome_width(self) -> int:
-        return (2 * self._H_MARGIN) + self._SPACING + self._BAR_WIDTH
+        return (2 * self._H_MARGIN) + self._SPACING + self._bar_slot_width()
 
     def _text_width(self, text: str) -> int:
         """Advance width for ``text``, with a CJK-safe fallback.
@@ -103,15 +119,16 @@ class ComputeProgressWidget(QWidget):
         return QSize(self._chrome_width() + self._MIN_LABEL_WIDTH, 22)
 
     def _label_text_budget(self) -> int:
-        """Pixels available for label copy in the current layout width."""
+        """Pixels available for painted label copy in the current layout."""
         max_budget = self._MAX_WIDTH - self._chrome_width()
         if self.width() <= self._chrome_width():
             return max_budget
         layout_budget = self.width() - self._chrome_width()
-        label_w = self.label.width()
-        # Ignore pre-layout stub widths that would force "F…" elision.
-        if label_w >= self._MIN_LABEL_WIDTH:
-            layout_budget = min(layout_budget, label_w)
+        contents = self.label.contentsRect().width()
+        # contentsRect already excludes QSS padding-right. Prefer it once the
+        # label has a real slot; ignore stub widths that would force "F…".
+        if contents >= self._MIN_LABEL_WIDTH:
+            layout_budget = min(layout_budget, contents)
         return max(self._MIN_LABEL_WIDTH, min(max_budget, layout_budget))
 
     def _apply_label_text(self, text: str) -> None:
@@ -136,7 +153,7 @@ class ComputeProgressWidget(QWidget):
         if not self._full_label:
             return
         metrics = QFontMetrics(self.label.font())
-        budget = max(1, self._label_text_budget() - self._TEXT_PAD)
+        budget = max(1, self._label_text_budget())
         full_w = metrics.horizontalAdvance(self._full_label)
         if full_w <= 0 and self._full_label:
             full_w = max(

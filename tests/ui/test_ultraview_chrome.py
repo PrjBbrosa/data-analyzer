@@ -4,20 +4,23 @@ from __future__ import annotations
 from PyQt5.QtCore import QPoint, QRect, Qt
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QFrame, QLabel, QToolButton
+from PyQt5.QtWidgets import QFrame, QLabel, QPushButton, QToolButton
 
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import (
     PANEL_FILTER,
+    PANEL_LAYOUT,
+    PANEL_LIBRARY,
     PANEL_UNPLACED,
     BoardIsland,
     CanvasHost,
     CardContextIsland,
     GlobalIsland,
+    LayoutPicker,
     NavigationIsland,
     StatusIsland,
     ToolRail,
 )
-from mf4_analyzer.ui.chart_stack.ultraview.widgets import make_ref_mime
+from mf4_analyzer.ui.chart_stack.ultraview.widgets import LAYOUT_LABELS_ZH, CompareRail, make_ref_mime
 
 
 def test_tool_rail_emits_requested_panel_and_projects_active_badge(qtbot):
@@ -59,6 +62,98 @@ def test_tool_rail_emits_requested_panel_and_projects_active_badge(qtbot):
     assert dot.width() == 8
     rail.set_filter_warning(False)
     assert not dot.isVisible()
+
+
+def test_tool_rail_free_grid_sits_between_library_and_layout(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.show()
+    QTest.qWait(1)
+    library = rail.panel_button(PANEL_LIBRARY)
+    layout = rail.panel_button(PANEL_LAYOUT)
+    free = rail.free_grid_button()
+    filter_button = rail.panel_button(PANEL_FILTER)
+    assert library is not None and layout is not None and filter_button is not None
+    assert library.y() < free.y() < layout.y() < filter_button.y()
+
+
+def test_tool_rail_layout_is_active_when_a_template_is_current(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    layout = rail.panel_button(PANEL_LAYOUT)
+    free = rail.free_grid_button()
+    assert layout is not None
+    rail.set_free_grid_enabled(False)
+    assert layout.property("active") == "true"
+    assert free.property("active") != "true"
+    rail.set_free_grid_enabled(True)
+    assert layout.property("active") != "true"
+    assert free.property("active") == "true"
+    rail.set_active_panel(PANEL_LAYOUT)
+    assert layout.property("active") == "true"
+    assert free.property("active") == "true"
+    rail.set_active_panel(None)
+    assert layout.property("active") != "true"
+    rail.set_free_grid_enabled(False)
+    assert layout.property("active") == "true"
+
+
+def test_tool_rail_free_grid_is_a_mode_toggle_not_a_panel(qtbot):
+    rail = ToolRail()
+    qtbot.addWidget(rail)
+    rail.show()
+
+    panels: list[str] = []
+    modes: list[bool] = []
+    rail.panel_requested.connect(panels.append)
+    rail.free_grid_toggled.connect(modes.append)
+    button = rail.free_grid_button()
+    assert button.text() == ""
+    assert button.toolTip()
+    assert button.accessibleName()
+    assert button.focusPolicy() == Qt.TabFocus
+
+    QTest.mouseClick(button, Qt.LeftButton)
+    assert modes == [True]
+    assert panels == []
+    rail.set_free_grid_enabled(True)
+    assert button.isChecked()
+    assert button.property("active") == "true"
+    rail.set_active_panel(PANEL_FILTER)
+    assert button.isChecked()
+    assert panels == []
+
+
+def test_compare_rail_stacks_filters_vertically(qtbot):
+    rail = CompareRail()
+    qtbot.addWidget(rail)
+    rail.resize(180, 240)
+    rail.show()
+    QTest.qWait(1)
+    buttons = [
+        child
+        for child in rail.findChildren(QPushButton)
+        if child.objectName() == "ultraViewCompareButton"
+    ]
+    assert len(buttons) == 5
+    for previous, current in zip(buttons, buttons[1:]):
+        assert current.y() > previous.y()
+        assert current.x() == previous.x()
+
+
+def test_layout_picker_omits_free_grid_entry_and_keeps_template_thumbs(qtbot):
+    picker = LayoutPicker(LAYOUT_LABELS_ZH)
+    qtbot.addWidget(picker)
+    picker.show()
+    assert picker.findChild(QToolButton, "ultraViewLayoutPopoverFreeGrid") is None
+    thumb = picker.thumb_button("hero_left_4")
+    assert thumb is not None
+    assert thumb.minimumHeight() >= 104
+    assert "左主图" in thumb.text()
+    picker.set_current("grid_2x2", free_grid=False)
+    assert not picker.organize_button().isVisible()
+    picker.set_current("grid_2x2", free_grid=True)
+    assert picker.organize_button().isVisible()
 
 
 def test_canvas_host_overlay_does_not_resize_canvas_and_closes_to_trigger(qtbot):
@@ -121,6 +216,35 @@ def test_tool_rail_accepts_a_real_view_ref_drop_for_unplaced(qtbot):
     assert drop.isAccepted()
     assert received == [("time", "view-12")]
     assert rail.panel_button(PANEL_UNPLACED).property("attention") == "false"
+
+
+def test_global_island_size_hint_ignores_unshown_ancestors(qtbot):
+    island = GlobalIsland()
+    qtbot.addWidget(island)
+    assert island.isVisible() is False
+    assert island.display_button().isVisible() is False
+    assert island.sizeHint().width() >= 8 + 32 * 3
+    island.resize(island.sizeHint())
+    island.show()
+    qtbot.waitExposed(island)
+
+    buttons = (
+        island.display_button(),
+        island.export_button(),
+        island.presentation_button(),
+    )
+    boxes = [button.geometry() for button in buttons]
+    assert all(box.width() >= 24 and box.height() >= 24 for box in boxes)
+    for index, first in enumerate(boxes):
+        for second in boxes[index + 1 :]:
+            assert not first.intersects(second), (first, second)
+
+    island.set_edit_visible(False)
+    assert island.sizeHint().width() == 8 + 32
+    island.resize(island.sizeHint())
+    assert island.display_button().isHidden() is True
+    assert island.export_button().isHidden() is True
+    assert island.presentation_button().isHidden() is False
 
 
 def test_island_actions_are_icon_only_and_forward_existing_typed_intents(qtbot):
@@ -201,3 +325,18 @@ def test_island_actions_are_icon_only_and_forward_existing_typed_intents(qtbot):
     assert copied == [("time", "view-1")]
     assert rebound == [("time", "view-1")]
     assert context.property("orphaned") == "true"
+
+    context.show_for("time", "view-1", stale=True)
+    synced: list[tuple[str, str]] = []
+
+    def record_synced(section: str, view_id: str) -> None:
+        synced.append((section, view_id))
+
+    context.sync_requested.connect(record_synced)
+    sync_button = context.button("sync")
+    assert sync_button is not None
+    assert sync_button.isVisible()
+    QTest.mouseClick(sync_button, Qt.LeftButton)
+    assert synced == [("time", "view-1")]
+    context.show_for("time", "view-1", orphaned=True, stale=True)
+    assert not context.button("sync").isVisible()

@@ -24,10 +24,12 @@ BOARD_ISLAND_MAX_WIDTH = 240
 GLOBAL_ISLAND_WIDTH = 116
 STATUS_ISLAND_WIDTH = 200
 NAVIGATION_ISLAND_WIDTH = 268
-RAIL_CONTENT_HEIGHT = 160
+RAIL_CONTENT_HEIGHT = 196
 DEFAULT_OVERLAY_SIZE: Size = (280, 384)
 DEFAULT_MINIMAP_SIZE: Size = (172, 112)
 DEFAULT_CARD_CONTEXT_SIZE: Size = (232, ISLAND_HEIGHT)
+OVERLAY_ANCHOR_RAIL = "rail"
+OVERLAY_ANCHOR_GLOBAL = "global"
 
 
 def _integer(value: object, *, default: int = 0) -> int:
@@ -130,15 +132,16 @@ class CardContextPlacement:
 class FloatingLayout:
     """One CanvasHost layout pass, expressed entirely in stage coordinates.
 
-    ``board`` deliberately sits underneath the floating chrome.  Reserving
-    vertical space for every island would make the documented 1190×700 canvas
-    target impossible at a 1280×800 stage; the islands instead avoid one
-    another while the Board remains a continuous canvas below them.
+    ``board`` is the full-bleed scroll host so zoom/pan can travel under the
+    floating chrome.  ``fit`` is the chrome-safe 1×/适应 parking rect: the
+    same inset the previous Board allocation used, so Fit still keeps cards
+    clear of the rail and top islands.
     """
 
     stage: Rect
     rail: Rect
     board: Rect
+    fit: Rect
     board_island: Rect
     global_island: Rect
     status_island: Rect
@@ -176,6 +179,7 @@ def calculate_floating_layout(
     *,
     overlay_open: bool = False,
     overlay_size: Size = DEFAULT_OVERLAY_SIZE,
+    overlay_anchor: str = OVERLAY_ANCHOR_RAIL,
     minimap_size: Size | None = DEFAULT_MINIMAP_SIZE,
     board_island_size: Size | None = None,
     global_island_size: Size | None = None,
@@ -191,20 +195,10 @@ def calculate_floating_layout(
     """
     stage = stage_rect(stage_size)
     safe = stage.inset(SAFE_MARGIN)
+    board = stage
 
-    board_left = min(safe.right, safe.left + RAIL_WIDTH + RAIL_TO_CANVAS_GAP)
-    # Keep a real top safety lane for the Board/global islands.  Letting the
-    # scroll host start at y=12 technically maximises pixels, but the first
-    # card title/status then lives underneath the floating controls.  At the
-    # two supported compact sizes this 52px lane still exceeds the documented
-    # Board viewport floors (1190x700 / 710x470).
-    board_top = min(safe.bottom, safe.top + ISLAND_HEIGHT + ISLAND_GAP)
-    board = Rect(
-        board_left,
-        board_top,
-        max(0, safe.right - board_left),
-        max(0, safe.bottom - board_top),
-    )
+    content_left = min(safe.right, safe.left + RAIL_WIDTH + RAIL_TO_CANVAS_GAP)
+    content_top = min(safe.bottom, safe.top + ISLAND_HEIGHT + ISLAND_GAP)
 
     island_height = min(ISLAND_HEIGHT, safe.height)
     global_width = min(
@@ -213,14 +207,14 @@ def calculate_floating_layout(
     )
     global_island = Rect(safe.right - global_width, safe.top, global_width, island_height)
 
-    max_board_island_width = max(0, global_island.left - ISLAND_GAP - board.left)
+    max_board_island_width = max(0, global_island.left - ISLAND_GAP - content_left)
     board_width = min(
         BOARD_ISLAND_MAX_WIDTH,
         max_board_island_width,
         _length(board_island_size[0]) if board_island_size is not None else BOARD_ISLAND_MAX_WIDTH,
     )
     board_island = Rect(
-        board.left,
+        content_left,
         safe.top,
         board_width,
         island_height,
@@ -239,13 +233,13 @@ def calculate_floating_layout(
         bottom_island_height,
     ).clamp_to(safe)
 
-    status_max_width = max(0, navigation_island.left - ISLAND_GAP - board.left)
+    status_max_width = max(0, navigation_island.left - ISLAND_GAP - content_left)
     status_width = min(
         status_max_width,
         _length(status_island_size[0]) if status_island_size is not None else STATUS_ISLAND_WIDTH,
     )
     status_island = Rect(
-        board.left,
+        content_left,
         bottom_y,
         status_width,
         bottom_island_height,
@@ -264,9 +258,24 @@ def calculate_floating_layout(
         rail_height,
     ).clamp_to(safe)
 
+    fit_bottom = max(content_top, navigation_island.top - OVERLAY_GAP)
+    fit = Rect(
+        content_left,
+        content_top,
+        max(0, safe.right - content_left),
+        max(0, fit_bottom - content_top),
+    )
     minimap = _place_minimap(safe, navigation_island, minimap_size)
     overlay = (
-        _place_overlay(safe, rail, board_island, navigation_island, overlay_size)
+        _place_overlay(
+            safe,
+            rail,
+            board_island,
+            global_island,
+            navigation_island,
+            overlay_size,
+            overlay_anchor=overlay_anchor,
+        )
         if overlay_open
         else None
     )
@@ -274,13 +283,14 @@ def calculate_floating_layout(
         stage=stage,
         rail=rail,
         board=board,
+        fit=fit,
         board_island=board_island,
         global_island=global_island,
         status_island=status_island,
         navigation_island=navigation_island,
         minimap=minimap,
         overlay=overlay,
-        content_inset_bottom=min(ISLAND_HEIGHT + OVERLAY_GAP, max(0, board.height // 4)),
+        content_inset_bottom=max(0, board.bottom - fit.bottom),
     )
 
 
@@ -351,19 +361,58 @@ def place_card_context(
     return CardContextPlacement(nudged, "inside")
 
 
+def _overlay_anchor(value: object) -> str:
+    text = str(value or OVERLAY_ANCHOR_RAIL).strip().lower()
+    if text == OVERLAY_ANCHOR_GLOBAL:
+        return OVERLAY_ANCHOR_GLOBAL
+    return OVERLAY_ANCHOR_RAIL
+
+
 def _place_overlay(
     safe: Rect,
     rail: Rect,
     board_island: Rect,
+    global_island: Rect,
     navigation_island: Rect,
     size: Size,
+    *,
+    overlay_anchor: str = OVERLAY_ANCHOR_RAIL,
 ) -> Rect:
     width, height = _size(size)
+    if _overlay_anchor(overlay_anchor) == OVERLAY_ANCHOR_GLOBAL:
+        return _place_global_overlay(
+            safe, board_island, global_island, navigation_island, width, height
+        )
     x = min(safe.right, rail.right + OVERLAY_GAP)
     y = min(safe.bottom, board_island.bottom + ISLAND_GAP)
     max_width = max(0, safe.right - x)
     max_height = max(0, navigation_island.top - OVERLAY_GAP - y)
     return Rect(x, y, min(width, max_width), min(height, max_height)).clamp_to(safe)
+
+
+def _place_global_overlay(
+    safe: Rect,
+    board_island: Rect,
+    global_island: Rect,
+    navigation_island: Rect,
+    width: int,
+    height: int,
+) -> Rect:
+    """Right-align an overlay under GlobalIsland; never fall back to the rail."""
+    y = min(safe.bottom, global_island.bottom + ISLAND_GAP)
+    max_height = max(0, navigation_island.top - OVERLAY_GAP - y)
+    height = min(height, max_height)
+    width = min(width, safe.width)
+    placed = Rect(global_island.right - width, y, width, height).clamp_to(safe)
+    if placed.intersects(board_island):
+        y = min(safe.bottom, max(placed.y, board_island.bottom + ISLAND_GAP))
+        max_height = max(0, navigation_island.top - OVERLAY_GAP - y)
+        placed = Rect(placed.x, y, placed.width, min(placed.height, max_height)).clamp_to(safe)
+    if placed.intersects(board_island):
+        x = min(safe.right, board_island.right + OVERLAY_GAP)
+        max_width = max(0, safe.right - x)
+        placed = Rect(x, placed.y, min(placed.width, max_width), placed.height).clamp_to(safe)
+    return placed
 
 
 def _place_minimap(
@@ -395,6 +444,8 @@ __all__ = [
     "GLOBAL_ISLAND_WIDTH",
     "ISLAND_HEIGHT",
     "NAVIGATION_ISLAND_WIDTH",
+    "OVERLAY_ANCHOR_GLOBAL",
+    "OVERLAY_ANCHOR_RAIL",
     "RAIL_CONTENT_HEIGHT",
     "RAIL_WIDTH",
     "SAFE_MARGIN",

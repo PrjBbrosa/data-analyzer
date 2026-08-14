@@ -88,9 +88,10 @@ def test_reset_signals_rebased_not_user_drag(qapp, qtbot):
     canvas = PgHeatmapCanvas()
     qtbot.addWidget(canvas)
     _plot(canvas)
-    changed, rebased = [], []
+    changed, rebased, restored = [], [], []
     canvas.levels_changed.connect(lambda lo, hi: changed.append((lo, hi)))
     canvas.levels_rebased.connect(lambda: rebased.append(True))
+    canvas.colorbar_restored.connect(lambda lo, hi: restored.append((lo, hi)))
 
     canvas._cbar.setLevels((-20.0, -10.0))
     canvas._img.setLevels((-20.0, -10.0))
@@ -98,3 +99,39 @@ def test_reset_signals_rebased_not_user_drag(qapp, qtbot):
 
     assert rebased, "reset must emit levels_rebased (programmatic reset)"
     assert not changed, "reset must NOT emit levels_changed (locked-levels linkage)"
+    assert restored
+    assert restored[0] == pytest.approx(canvas._rendered_levels)
+
+
+def test_reset_emits_colorbar_restored_with_rendered_window(qapp, qtbot):
+    canvas = PgHeatmapCanvas()
+    qtbot.addWidget(canvas)
+    _plot(canvas)
+    rendered = tuple(canvas._cbar.levels())
+    canvas._cbar.setLevels((-20.0, -10.0))
+    canvas._img.setLevels((-20.0, -10.0))
+
+    restored = []
+    canvas.colorbar_restored.connect(lambda lo, hi: restored.append((lo, hi)))
+    assert canvas.reset_colorbar_levels() is True
+    assert restored[0] == pytest.approx(rendered)
+
+
+def test_plot_during_handle_drag_does_not_rewrite_lo_prv(qapp, qtbot):
+    """A replot that sneaks in while a colorbar handle is down must not
+    refresh ColorBarItem.lo_prv — that is what compounds the next move
+    into the ±500 spinbox rails."""
+    canvas = PgHeatmapCanvas()
+    qtbot.addWidget(canvas)
+    _plot(canvas)
+    cbar = canvas._cbar
+    rendered = tuple(canvas._rendered_levels)
+    lo_prv = cbar.lo_prv
+    cbar.region.lines[0].moving = True
+    try:
+        m = np.linspace(-50.0, 0.0, 100).reshape(10, 10)
+        canvas.plot_or_update_heatmap(m, (0.0, 1.0), (0.0, 1.0), z_auto=True)
+        assert cbar.lo_prv == pytest.approx(lo_prv)
+        assert tuple(canvas._rendered_levels) == pytest.approx(rendered)
+    finally:
+        cbar.region.lines[0].moving = False

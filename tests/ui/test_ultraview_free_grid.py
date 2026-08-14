@@ -4,6 +4,7 @@ from __future__ import annotations
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     GRID_MIN_COLUMN_WIDTH,
     HANDLE_HIT_PX,
+    avoidance_preferred_delta,
     candidate_move,
     candidate_resize,
     candidate_resize_handle,
@@ -15,6 +16,9 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     keep_aspect_resize,
     legal_grid_rect,
     pixels_to_grid_delta,
+    plan_boundary_yield,
+    plan_neighbor_shrink,
+    plan_overlap_avoidance,
     rect_is_available,
     rect_to_pixels,
     rects_overlap,
@@ -213,3 +217,130 @@ def test_union_and_group_translate_reject_overflow_or_union_collision():
     empty, legal_empty = group_translate_rects({}, (), 1, 0)
     assert legal_empty is False
     assert empty == {}
+
+
+def test_avoidance_preferred_delta_follows_move_then_resize_axis():
+    origin = GridRect(0, 0, 6, 3)
+    assert avoidance_preferred_delta(origin, GridRect(2, 0, 6, 3)) == (1, 0)
+    assert avoidance_preferred_delta(origin, GridRect(0, 4, 6, 3)) == (0, 1)
+    assert avoidance_preferred_delta(origin, GridRect(0, 0, 8, 3)) == (1, 0)
+    assert avoidance_preferred_delta(origin, GridRect(0, 0, 6, 5)) == (0, 1)
+
+
+def test_overlap_avoidance_slides_blocker_down_when_right_is_blocked():
+    first = _placement("a", GridRect(0, 0, 6, 3))
+    second = _placement("b", GridRect(6, 0, 6, 3))
+    updates, ok = plan_overlap_avoidance(
+        {first.ref: GridRect(6, 0, 6, 3)},
+        [first, second],
+        preferred=(1, 0),
+    )
+    assert ok is True
+    by_ref = dict(updates)
+    assert by_ref[first.ref] == GridRect(6, 0, 6, 3)
+    assert by_ref[second.ref] == GridRect(6, 3, 6, 3)
+
+
+def test_overlap_avoidance_slides_blocker_along_preferred_axis_when_open():
+    first = _placement("a", GridRect(0, 0, 4, 3))
+    second = _placement("b", GridRect(4, 0, 4, 3))
+    updates, ok = plan_overlap_avoidance(
+        {first.ref: GridRect(4, 0, 4, 3)},
+        [first, second],
+        preferred=(1, 0),
+    )
+    assert ok is True
+    by_ref = dict(updates)
+    assert by_ref[second.ref] == GridRect(8, 0, 4, 3)
+
+
+def test_overlap_avoidance_fails_when_board_is_packed():
+    cards = [
+        _placement(f"c{index}", GridRect(0, index * 8, 12, 8))
+        for index in range(6)
+    ]
+    updates, ok = plan_overlap_avoidance(
+        {cards[0].ref: GridRect(0, 1, 12, 8)},
+        cards,
+        preferred=(0, 1),
+    )
+    assert ok is False
+    assert updates == ()
+
+
+def test_boundary_yield_clamps_into_empty_cell():
+    card = _placement("a", GridRect(2, 0, 4, 3))
+    updates, ok = plan_boundary_yield(
+        {card.ref: GridRect(-2, 0, 4, 3)},
+        [card],
+        preferred=(-1, 0),
+    )
+    assert ok is True
+    assert dict(updates)[card.ref] == GridRect(0, 0, 4, 3)
+
+
+def test_boundary_yield_shrinks_left_neighbors_when_mover_hits_right_wall():
+    left_top = _placement("a", GridRect(0, 0, 4, 3))
+    left_bottom = _placement("b", GridRect(0, 3, 4, 3))
+    mover = _placement("c", GridRect(4, 0, 8, 6))
+    updates, ok = plan_boundary_yield(
+        {mover.ref: GridRect(5, 0, 8, 6)},
+        [left_top, left_bottom, mover],
+        preferred=(1, 0),
+    )
+    assert ok is True
+    by_ref = dict(updates)
+    assert by_ref[mover.ref] == GridRect(3, 0, 9, 6)
+    assert by_ref[left_top.ref] == GridRect(0, 0, 3, 3)
+    assert by_ref[left_bottom.ref] == GridRect(0, 3, 3, 3)
+
+
+def test_boundary_yield_fails_when_left_neighbors_are_already_minimum():
+    left_top = _placement("a", GridRect(0, 0, 2, 3))
+    left_bottom = _placement("b", GridRect(0, 3, 2, 3))
+    mover = _placement("c", GridRect(2, 0, 10, 6))
+    updates, ok = plan_boundary_yield(
+        {mover.ref: GridRect(3, 0, 10, 6)},
+        [left_top, left_bottom, mover],
+        preferred=(1, 0),
+    )
+    assert ok is False
+    assert updates == ()
+
+
+def test_boundary_yield_ignores_in_bounds_incoming():
+    first = _placement("a", GridRect(0, 0, 6, 3))
+    second = _placement("b", GridRect(6, 0, 6, 3))
+    updates, ok = plan_boundary_yield(
+        {first.ref: GridRect(6, 0, 6, 3)},
+        [first, second],
+        preferred=(1, 0),
+    )
+    assert ok is False
+    assert updates == ()
+
+
+def test_neighbor_shrink_packs_blockers_into_remaining_columns():
+    left_top = _placement("a", GridRect(0, 0, 4, 3))
+    left_bottom = _placement("b", GridRect(0, 3, 4, 3))
+    mover = _placement("c", GridRect(4, 0, 8, 6))
+    updates, ok = plan_neighbor_shrink(
+        {mover.ref: GridRect(0, 0, 10, 6)},
+        [left_top, left_bottom, mover],
+    )
+    assert ok is True
+    by_ref = dict(updates)
+    assert by_ref[mover.ref] == GridRect(0, 0, 10, 6)
+    assert by_ref[left_top.ref] == GridRect(10, 0, 2, 3)
+    assert by_ref[left_bottom.ref] == GridRect(10, 3, 2, 3)
+
+
+def test_neighbor_shrink_fails_below_minimum_span():
+    left = _placement("a", GridRect(0, 0, 2, 3))
+    mover = _placement("c", GridRect(2, 0, 10, 3))
+    updates, ok = plan_neighbor_shrink(
+        {mover.ref: GridRect(0, 0, 11, 3)},
+        [left, mover],
+    )
+    assert ok is False
+    assert updates == ()

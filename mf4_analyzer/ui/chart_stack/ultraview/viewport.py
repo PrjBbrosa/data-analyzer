@@ -85,15 +85,25 @@ def zoom_at_cursor(
     zoom_after: float,
     cursor_in_viewport: ViewportPoint,
     scroll_offset: ViewportPoint,
+    origin: ViewportPoint = (0.0, 0.0),
 ) -> ViewportPoint:
-    """Return the scroll offset that keeps the logical point under the cursor."""
+    """Return the scroll offset that keeps the logical point under the cursor.
+
+    ``origin`` is the chrome-safe parking offset of the board inside the
+    full-bleed scroll host.  Fit keeps scroll at 0 so content sits at
+    ``origin``; zoom then lets that content travel under the floating chrome.
+    """
     before = clamp_zoom(zoom_before)
     after = clamp_zoom(zoom_after)
     cursor_x, cursor_y = float(cursor_in_viewport[0]), float(cursor_in_viewport[1])
     scroll_x, scroll_y = float(scroll_offset[0]), float(scroll_offset[1])
-    logical_x = (scroll_x + cursor_x) / before
-    logical_y = (scroll_y + cursor_y) / before
-    return (logical_x * after - cursor_x, logical_y * after - cursor_y)
+    origin_x, origin_y = float(origin[0]), float(origin[1])
+    logical_x = (scroll_x + cursor_x - origin_x) / before
+    logical_y = (scroll_y + cursor_y - origin_y) / before
+    return (
+        logical_x * after + origin_x - cursor_x,
+        logical_y * after + origin_y - cursor_y,
+    )
 
 
 def fit_zoom(
@@ -152,8 +162,21 @@ def scroll_for_center(
     )
 
 
-def wheel_zoom_factor(angle_delta_y: float) -> float:
-    steps = float(angle_delta_y) / 120.0
+def wheel_event_delta_y(angle_delta_y: float, pixel_delta_y: float = 0.0) -> float:
+    """Return a 120-unit-notch-equivalent wheel delta for zoom.
+
+    Cocoa trackpad events often arrive with ``angleDelta == 0`` and a
+    nonzero ``pixelDelta``. Treat the pixel value on the same 120-unit
+    scale so pinch-as-wheel still zooms.
+    """
+    angle = float(angle_delta_y)
+    if angle:
+        return angle
+    return float(pixel_delta_y)
+
+
+def wheel_zoom_factor(angle_delta_y: float, pixel_delta_y: float = 0.0) -> float:
+    steps = wheel_event_delta_y(angle_delta_y, pixel_delta_y) / 120.0
     if steps == 0.0:
         return 1.0
     return ZOOM_WHEEL_BASE ** steps

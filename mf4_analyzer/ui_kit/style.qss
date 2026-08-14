@@ -3980,9 +3980,6 @@ QFrame#ultraViewFreeGridMinimap {
     border-radius: 8px;
     background-color: rgba(255, 255, 255, 235);
 }
-QWidget#ultraViewLibrary {
-    border-right: 1px solid #d6e0eb;
-}
 QLabel#ultraViewLibraryTitle,
 QLabel#ultraViewBoardName,
 QLabel#ultraViewFocusTitle {
@@ -4000,9 +3997,9 @@ QLabel#ultraViewAxisWarning {
     font-size: 11px;
 }
 QToolButton#ultraViewLibrarySectionHead {
-    min-height: 0;
+    min-height: 24px;
     max-height: 24px;
-    padding: 3px 6px;
+    padding: 0px 6px;
     margin: 0;
     border: 1px solid #e2e8f0;
     border-radius: 6px;
@@ -4024,6 +4021,7 @@ QLineEdit#ultraViewLibrarySearch {
     background-color: #ffffff;
 }
 QFrame#ultraViewLibraryRow {
+    min-height: 40px;
     border: 1px solid transparent;
     border-radius: 8px;
     background-color: transparent;
@@ -4104,6 +4102,27 @@ QWidget#ultraViewCard[dropActive="true"] {
 QWidget#ultraViewCard[status="stale"] QLabel#ultraViewCardStatus {
     color: #8a5609;
 }
+QToolButton#ultraViewCardSyncButton {
+    min-height: 22px;
+    max-height: 22px;
+    padding: 0 6px 0 4px;
+    border: 1px solid #e0c07a;
+    border-radius: 6px;
+    background-color: #fff8e8;
+    color: #8a5609;
+    font-size: 11px;
+}
+QToolButton#ultraViewCardSyncButton:hover {
+    background-color: #ffefc7;
+    border-color: #c4921a;
+}
+QToolButton#ultraViewCardSyncButton:pressed {
+    background-color: #f3d89a;
+    border-color: #8a5609;
+}
+QToolButton#ultraViewCardSyncButton:focus {
+    border-color: #8a5609;
+}
 QWidget#ultraViewCardHeader,
 QWidget#ultraViewCardFooter {
     background-color: transparent;
@@ -4173,9 +4192,6 @@ QWidget#ultraViewEmptySlot[dropActive="true"] {
     border-color: #1769e0;
     color: #1769e0;
 }
-QFrame#ultraViewUnplacedTray {
-    border-top: 1px solid #d6e0eb;
-}
 QPushButton#ultraViewTrayTitle {
     border: none;
     border-radius: 0;
@@ -4186,17 +4202,35 @@ QPushButton#ultraViewTrayTitle {
     padding: 6px 10px;
 }
 QFrame#ultraViewTrayItem {
+    min-height: 40px;
     border: 1px solid #d6e0eb;
     border-radius: 8px;
     background-color: #ffffff;
 }
-QFrame#ultraViewCompareRail QPushButton#ultraViewCompareButton {
+QFrame#ultraViewTrayItem QToolButton {
+    min-width: 0;
     min-height: 22px;
+    max-height: 24px;
     padding: 2px 8px;
+    margin: 0;
+    border: 1px solid #d6e0eb;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #334155;
+    font-weight: 600;
+}
+QFrame#ultraViewTrayItem QToolButton:hover {
+    background-color: #eef4fb;
+    border-color: #cbd5e1;
+}
+QFrame#ultraViewCompareRail QPushButton#ultraViewCompareButton {
+    min-height: 26px;
+    padding: 4px 10px;
     border: 1px solid #d6e0eb;
     border-radius: 8px;
     background-color: #ffffff;
     color: #405269;
+    text-align: left;
 }
 QFrame#ultraViewCompareRail QPushButton#ultraViewCompareButton:checked {
     border-color: #2d7ff9;
@@ -4239,7 +4273,8 @@ QFrame#ultraViewCanvasStage {
 }
 QWidget#ultraViewBoardGrid,
 QWidget#ultraViewFreeGrid,
-QWidget#ultraViewBoardCanvasStack {
+QWidget#ultraViewBoardCanvasStack,
+QWidget#ultraViewBoardHost {
     background-color: transparent;
 }
 QScrollArea#ultraViewBoardScrollArea {
@@ -4287,6 +4322,11 @@ QMenu#ultraViewBoardItemMenu {
     border: 1px solid rgba(74, 96, 121, 0.22);
     border-radius: 12px;
     color: #17263a;
+}
+QFrame#ultraViewLayoutPopover QToolButton[role="layoutThumb"] {
+    min-width: 0;
+    min-height: 0;
+    padding: 8px 6px 10px 6px;
 }
 
 /* Icon-only buttons use the same 32px optical box on the rail and islands.

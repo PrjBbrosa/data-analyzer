@@ -886,6 +886,7 @@ class UltraViewCoordinator(QObject):
             (page.move_to_unplaced_requested, self._on_move_to_unplaced),
             (page.remove_ref_requested, self._on_remove_ref),
             (page.open_source_requested, self.open_source),
+            (page.sync_requested, self.sync_preview),
             (page.focus_requested, self._on_focus),
             (page.layout_changed, self._on_layout),
             (page.ratio_nudge_requested, self._on_ratio_nudge),
@@ -1031,6 +1032,97 @@ class UltraViewCoordinator(QObject):
         page = self.page()
         if page is not None:
             page.arm_replacement(section, view_id)
+
+    def sync_preview(self, section: str, view_id: str) -> None:
+        """Recapture one Board card from the live source View. Never recomputes."""
+        if self._inactive():
+            return
+        ref = parse_ref_payload({"section": section, "view_id": view_id})
+        if ref is None:
+            return
+        widget = self._sync_capture_widget(ref)
+        if widget is not None:
+            self._request_user_sync(ref, widget)
+            return
+        if not self._ref_exists(ref):
+            self._toast("找不到原 View，无法同步", "warning")
+            return
+        window = self._window
+        navigate = getattr(window, "navigate_to_view", None) if window is not None else None
+        if callable(navigate) and navigate(section, view_id):
+            QTimer.singleShot(0, partial(self._sync_preview_after_navigate, ref))
+            return
+        self._toast("请先打开原 View 再同步", "warning")
+
+    def _sync_preview_after_navigate(self, ref) -> None:
+        if self._inactive() or ref is None:
+            return
+        widget = self._sync_capture_widget(ref)
+        if widget is None:
+            widget = self._visible_widget_for(ref.section)
+            if widget is not None and self._active_ref(ref.section) == ref:
+                self.bind_canvas(widget, ref)
+            else:
+                widget = None
+        if widget is None:
+            self._toast("请先打开原 View 再同步", "warning")
+            return
+        self._request_user_sync(ref, widget)
+        self._raise_ultraview_sheet()
+
+    def _sync_capture_widget(self, ref):
+        candidates = []
+        bound = self._bound_widget_for(ref)
+        if bound is not None:
+            candidates.append(bound)
+        if self._active_ref(ref.section) == ref:
+            visible = self._visible_widget_for(ref.section)
+            if visible is not None and visible not in candidates:
+                candidates.append(visible)
+        for widget in candidates:
+            if widget is None or not _alive(widget):
+                continue
+            try:
+                if widget.isVisible():
+                    return widget
+            except RuntimeError:
+                continue
+        return None
+
+    def _request_user_sync(self, ref, widget) -> None:
+        if widget is None or not _alive(widget):
+            self._toast("找不到原 View，无法同步", "warning")
+            return
+        try:
+            if not widget.isVisible():
+                self._toast("请先打开原 View 再同步", "warning")
+                return
+        except RuntimeError:
+            self._toast("找不到原 View，无法同步", "warning")
+            return
+        if not self._widget_has_any_real_result(widget):
+            self._toast("原 View 尚无可用结果", "warning")
+            return
+        digest = self.current_digest_for(ref)
+        if digest is None:
+            self._toast("无法读取当前图面，稍后再试", "warning")
+            return
+        self.bind_canvas(widget, ref)
+        if self._has_current_preview(ref, digest) and not self._needs_focus_recapture(ref):
+            self._push_preview(ref)
+            return
+        self.request_capture(ref, widget, "user-sync")
+
+    def _raise_ultraview_sheet(self) -> None:
+        window = self._window
+        sheet = getattr(window, "_ultraview_sheet", None) if window is not None else None
+        if sheet is None or not _alive(sheet):
+            return
+        try:
+            sheet.raise_()
+            sheet.activateWindow()
+        except RuntimeError:
+            return
 
     def refresh_page(self) -> None:
         if self._inactive():

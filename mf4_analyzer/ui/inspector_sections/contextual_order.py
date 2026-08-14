@@ -803,6 +803,20 @@ class OrderContextual(QWidget):
             self.display_params_changed.emit(display)
 
     def apply_params(self, d):
+        """Restore inspector widgets without emitting display/compute signals.
+
+        A live colorbar drag echoes ``z_auto`` / ``z_floor`` / ``z_ceiling``
+        through this method; emitting ``display_params_changed`` here would
+        replot the heatmap and rewrite ColorBarItem.lo_prv mid-drag.
+        """
+        self._applying_preset = True
+        try:
+            self._apply_params_unlocked(d)
+        finally:
+            self._applying_preset = False
+        self.preset_bar.sync_match()
+
+    def _apply_params_unlocked(self, d):
         if 'max_order' in d:
             try:
                 self.spin_mo.setValue(int(d['max_order']))
@@ -900,9 +914,6 @@ class OrderContextual(QWidget):
             self._apply_weighting_value(d['weighting'])
 
         self._sync_axis_enabled()
-        # View switch / project restore: the highlight must describe the
-        # restored state (see FFTContextual.apply_params).
-        self.preset_bar.sync_match()
 
     def reset_to_defaults(self):
         """Restore construction-time defaults for a blank analysis View."""

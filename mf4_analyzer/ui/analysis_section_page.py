@@ -219,6 +219,12 @@ class AnalysisSectionPage(QWidget):
                     levels_rebased.connect(self._on_canvas_levels_rebased)
                 except Exception:
                     pass
+            colorbar_restored = getattr(canvas, 'colorbar_restored', None)
+            if colorbar_restored is not None:
+                try:
+                    colorbar_restored.connect(self._on_colorbar_restored)
+                except Exception:
+                    pass
             canvas.installEventFilter(self)
             glw = getattr(canvas, '_glw', None)
             if glw is not None:
@@ -670,6 +676,17 @@ class AnalysisSectionPage(QWidget):
             return
         self.set_levels_locked(True)
 
+    def _on_colorbar_restored(self, lo: float, hi: float) -> None:
+        """Double-click restore: copy the restored window onto locked siblings.
+
+        Distinct from ``_on_canvas_levels_rebased``, which re-locks using
+        the combined auto range of both matrices and would undo the restore.
+        """
+        if not self._levels_locked:
+            return
+        for canvas in self._heatmap_canvases():
+            self._set_canvas_levels(canvas, float(lo), float(hi))
+
     @staticmethod
     def _combined_levels(canvases):
         """Merged (min, max) across every pane's display-space matrix.
@@ -704,16 +721,23 @@ class AnalysisSectionPage(QWidget):
         lock propagation as a phantom drag."""
         canvas._img.setLevels((lo, hi))
         cbar = getattr(canvas, '_cbar', None)
-        if cbar is not None:
-            cbar.blockSignals(True)
-            cbar.setLevels((lo, hi))
-            cbar.blockSignals(False)
+        if cbar is None:
+            return
+        probe = getattr(canvas, 'colorbar_interaction_active', None)
+        if callable(probe) and probe():
+            # ImageItem already tracks the live drag. Rewriting ColorBarItem
+            # lo_prv while handles are offset compounds the next move.
+            return
+        cbar.blockSignals(True)
+        cbar.setLevels((lo, hi))
+        cbar.blockSignals(False)
 
     def _on_locked_levels_changed(self, lo: float, hi: float) -> None:
         """A user dragged one pane's colorbar while locked → apply the same
-        (lo, hi) to ALL heatmap panes (incl. the source, harmlessly). The
-        block in ``_set_canvas_levels`` stops the propagated ``setLevels``
-        from re-emitting and looping."""
+        (lo, hi) to every heatmap pane. The source canvas skips ColorBarItem
+        ``setLevels`` while its handle is down (``colorbar_interaction_active``)
+        so ``lo_prv`` is not rewritten mid-drag; ImageItem on the source is
+        already owned by ColorBarItem._update_items."""
         if not self._levels_locked:
             return
         for c in self._heatmap_canvases():

@@ -8,6 +8,7 @@ import pytest
 
 from mf4_analyzer.ui.chart_stack.ultraview.floating_layout import (
     ISLAND_HEIGHT,
+    OVERLAY_ANCHOR_GLOBAL,
     RAIL_CONTENT_HEIGHT,
     RAIL_WIDTH,
     SAFE_MARGIN,
@@ -64,11 +65,14 @@ def test_standard_stage_keeps_canvas_target_and_separates_chrome():
     assert SAFE_MARGIN == 12
     assert RAIL_WIDTH == 48
     assert ISLAND_HEIGHT == 40
-    assert layout.board == Rect(78, 64, 1190, 724)
+    assert layout.board == Rect(0, 0, 1280, 800)
+    assert layout.fit == Rect(78, 64, 1190, 676)
     assert layout.board.width >= 1190
     assert layout.board.height >= 700
+    assert layout.fit.width >= 1190
     assert layout.rail.height <= RAIL_CONTENT_HEIGHT + 8
     assert layout.content_inset_bottom > 0
+    assert layout.board_island.x == layout.fit.x
 
     for rect in layout.persistent_rects:
         _assert_inside(rect, layout.stage)
@@ -78,7 +82,10 @@ def test_standard_stage_keeps_canvas_target_and_separates_chrome():
 def test_compact_stage_keeps_canvas_target_without_forced_width():
     layout = calculate_floating_layout((800, 560))
 
-    assert layout.board == Rect(78, 64, 710, 484)
+    assert layout.board == Rect(0, 0, 800, 560)
+    assert layout.fit.x == 78
+    assert layout.fit.y == 64
+    assert layout.fit.width >= 710
     assert layout.board.width >= 710
     assert layout.board.height >= 470
     for rect in layout.persistent_rects:
@@ -96,6 +103,36 @@ def test_overlay_never_participates_in_board_geometry():
     assert opened.overlay is not None
     _assert_inside(opened.overlay, opened.stage)
     assert opened.overlay.left >= opened.rail.right
+
+
+def test_global_overlay_right_aligns_under_global_island():
+    layout = calculate_floating_layout(
+        (1280, 800),
+        overlay_open=True,
+        overlay_size=(244, 154),
+        overlay_anchor=OVERLAY_ANCHOR_GLOBAL,
+    )
+
+    assert layout.overlay is not None
+    _assert_inside(layout.overlay, layout.stage)
+    assert layout.overlay.right == layout.global_island.right
+    assert layout.overlay.top >= layout.global_island.bottom
+    assert layout.overlay.left > layout.rail.right
+    assert not layout.overlay.intersects(layout.board_island)
+
+
+def test_global_overlay_stays_off_the_rail_when_it_must_clear_board_island():
+    layout = calculate_floating_layout(
+        (800, 560),
+        overlay_open=True,
+        overlay_size=(520, 180),
+        overlay_anchor=OVERLAY_ANCHOR_GLOBAL,
+    )
+
+    assert layout.overlay is not None
+    _assert_inside(layout.overlay, layout.stage)
+    assert layout.overlay.left > layout.rail.right
+    assert not layout.overlay.intersects(layout.board_island)
 
 
 @pytest.mark.parametrize(

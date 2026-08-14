@@ -608,7 +608,20 @@ class FFTTimeContextual(QWidget):
         - ``dynamic`` / ``freq_*`` are derived aliases of z_floor / the Y row;
           they are skipped whenever the authoritative explicit key is present
           (always true for get_params output) so they cannot break idempotency.
+
+        Programmatic restore is silent: widget writes are wrapped in
+        ``_applying_preset`` so they cannot emit ``display_params_changed``
+        and trigger a heatmap replot (a live colorbar drag echoes through
+        this method).
         """
+        self._applying_preset = True
+        try:
+            self._apply_params_unlocked(d)
+        finally:
+            self._applying_preset = False
+        self.preset_bar.sync_match()
+
+    def _apply_params_unlocked(self, d):
         if 'signal' in d and d['signal'] is not None:
             i = self.combo_sig.findData(d['signal'])
             if i >= 0:
@@ -711,9 +724,6 @@ class FFTTimeContextual(QWidget):
                     pass
 
         self._sync_axis_enabled()
-        # View switch / project restore: the highlight must describe the
-        # restored state (see FFTContextual.apply_params).
-        self.preset_bar.sync_match()
 
     def reset_to_defaults(self):
         """Restore construction-time defaults for a blank analysis View."""

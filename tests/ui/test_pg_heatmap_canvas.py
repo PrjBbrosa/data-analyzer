@@ -678,6 +678,72 @@ def test_heatmap_context_menu_view_all_button_restores_full_extents(
     assert (y0, y1) == pytest.approx((0.0, 8.0))
 
 
+def test_heatmap_context_menu_y_fit_stays_disabled_on_map(canvas, monkeypatch):
+    """The 2D map's Y axis is frequency/order, not amplitude — Y适应 stays off."""
+    from PyQt5.QtWidgets import QPushButton
+
+    canvas.register_mouse_mode_controller(_FakeMouseModeController())
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude',
+        z_auto=True,
+    )
+    panel = _inline_panel(_open_context_menu(canvas._plot.vb, monkeypatch))
+    y_fit = panel.findChild(QPushButton, "pgContextYFitButton")
+    assert y_fit is not None
+    assert y_fit.text() == "Y适应"
+    assert not y_fit.isEnabled()
+
+
+def test_slice_context_menu_y_fit_keeps_x_and_fits_visible_amp(qapp, monkeypatch):
+    """Slice 「Y适应」 keeps the current frequency window and fits amplitude."""
+    from PyQt5.QtWidgets import QPushButton
+
+    freqs = np.linspace(0.0, 500.0, 64)
+    times = np.linspace(0.0, 2.0, 10)
+    amp = np.full((64, 10), 0.02, dtype=np.float32)
+    amp[:8, :] = 100.0
+    amp[40:, :] = np.linspace(0.01, 0.05, 24, dtype=np.float32)[:, None]
+    result = SpectrogramResult(
+        times=times,
+        frequencies=freqs,
+        amplitude=amp,
+        params=SpectrogramParams(fs=1000.0, nfft=128),
+        channel_name="vib",
+        unit="g",
+        metadata={"frames": 10},
+    )
+    canvas = PgHeatmapCanvas(with_slice=True)
+    canvas.resize(640, 480)
+    canvas.show()
+    qapp.processEvents()
+    canvas.register_mouse_mode_controller(_FakeMouseModeController())
+    canvas.plot_result(result, amplitude_mode="amplitude_db", z_auto=True)
+
+    map_panel = _inline_panel(_open_context_menu(canvas._plot.vb, monkeypatch))
+    assert not map_panel.findChild(QPushButton, "pgContextYFitButton").isEnabled()
+
+    slice_panel = _inline_panel(_open_context_menu(canvas._slice_plot.vb, monkeypatch))
+    y_fit = slice_panel.findChild(QPushButton, "pgContextYFitButton")
+    assert y_fit is not None
+    assert y_fit.isEnabled()
+
+    canvas._slice_plot.setXRange(300.0, 500.0, padding=0)
+    canvas._slice_plot.setYRange(-200.0, 80.0, padding=0)
+    qapp.processEvents()
+    (x0_before, x1_before), _ = canvas._slice_plot.vb.viewRange()
+    y_fit.click()
+    qapp.processEvents()
+    (x0, x1), (y0, y1) = canvas._slice_plot.vb.viewRange()
+    assert (x0, x1) == pytest.approx((x0_before, x1_before))
+    assert y1 < 0.0
+    assert y0 > -80.0
+    canvas.hide()
+    canvas.deleteLater()
+
+
 def test_heatmap_context_menu_range_edits_apply_valid_and_restore_invalid(
     canvas, monkeypatch, qapp
 ):

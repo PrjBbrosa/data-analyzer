@@ -11,6 +11,7 @@ from mf4_analyzer.ui_kit.icons import Icons
     (
         "ultraview_library",
         "ultraview_layout",
+        "ultraview_free_grid",
         "ultraview_filter",
         "ultraview_unplaced",
         "ultraview_display",
@@ -23,6 +24,7 @@ from mf4_analyzer.ui_kit.icons import Icons
         "ultraview_help",
         "ultraview_add",
         "ultraview_open_source",
+        "ultraview_sync",
         "ultraview_move_to_tray",
     ),
 )

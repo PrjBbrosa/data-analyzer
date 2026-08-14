@@ -388,6 +388,22 @@ class Icons:
         return _line_icon(draw, c)
 
     @classmethod
+    def ultraview_free_grid(cls, color=None):
+        """Even 3-by-4 cells standing in for the 12-column free grid."""
+        c = color or GRAY
+
+        def draw(p):
+            p.drawRoundedRect(QRectF(2.8, 3.0, 14.4, 14.0), 1.8, 1.8)
+            for i in (1, 2, 3):
+                x = 2.8 + 14.4 * i / 4.0
+                p.drawLine(QPointF(x, 3.5), QPointF(x, 16.5))
+            for j in (1, 2):
+                y = 3.0 + 14.0 * j / 3.0
+                p.drawLine(QPointF(3.3, y), QPointF(16.7, y))
+
+        return _line_icon(draw, c)
+
+    @classmethod
     def ultraview_filter(cls, color=None):
         """Funnel glyph for the transient compare/filter popover."""
         c = color or GRAY
@@ -570,6 +586,24 @@ class Icons:
             p.drawLine(QPointF(10.0, 10.0), QPointF(17.0, 3.0))
             p.drawLine(QPointF(12.4, 3.0), QPointF(17.0, 3.0))
             p.drawLine(QPointF(17.0, 3.0), QPointF(17.0, 7.6))
+
+        return _line_icon(draw, c)
+
+    @classmethod
+    def ultraview_sync(cls, color=None):
+        """Recapture the live source View into this UltraView card."""
+        c = color or BLUE
+
+        def draw(p):
+            p.drawArc(QRectF(3.0, 3.0, 14.0, 14.0), 50 * 16, 260 * 16)
+            p.setBrush(QBrush(c))
+            p.setPen(Qt.NoPen)
+            path = QPainterPath()
+            path.moveTo(14.2, 2.2)
+            path.lineTo(17.4, 5.6)
+            path.lineTo(12.0, 6.2)
+            path.closeSubpath()
+            p.drawPath(path)
 
         return _line_icon(draw, c)
 

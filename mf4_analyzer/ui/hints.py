@@ -623,7 +623,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.free_grid",
-        text="拖卡片移动；空白处拖动画框多选",
+        text="左侧窄轨可切换自由网格",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=88,
@@ -634,6 +634,13 @@ _HINTS = (
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=87,
+    ),
+    Hint(
+        id="ultraview.avoid",
+        text="重叠或贴边松手可自动让位",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=85,
     ),
     Hint(
         id="ultraview.replace_ring",
@@ -672,7 +679,7 @@ _HINTS = (
     ),
     Hint(
         id="ultraview.zoom",
-        text="右下导航：缩放、适应、空格平移",
+        text="适应避开浮层，缩放可入工具栏下",
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=89,
@@ -697,6 +704,13 @@ _HINTS = (
         surface="context",
         modes=frozenset({"ultraview"}),
         priority=80,
+    ),
+    Hint(
+        id="ultraview.sync",
+        text="源已变化时可同步最新预览",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=79,
     ),
     Hint(
         id="ultraview.escape",

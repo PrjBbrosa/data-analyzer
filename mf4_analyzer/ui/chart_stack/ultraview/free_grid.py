@@ -402,3 +402,528 @@ def group_translate_rects(
         return translated, False
     legal = in_bounds and not any(rects_overlap(union, other) for other in others)
     return translated, legal
+
+
+_CARDINAL_DELTAS = ((0, 1), (1, 0), (-1, 0), (0, -1))
+_AVOID_SEARCH_LIMIT = max(GRID_COLUMNS, MAX_GRID_ROWS)
+
+
+def avoidance_preferred_delta(origin: GridRect, candidate: GridRect) -> tuple[int, int]:
+    """Pick the dominant move/resize axis so blockers slide the same way."""
+    dc = int(candidate.column) - int(origin.column)
+    dr = int(candidate.row) - int(origin.row)
+    if dc == 0 and dr == 0:
+        dc = (int(candidate.column) + int(candidate.column_span)) - (
+            int(origin.column) + int(origin.column_span)
+        )
+        dr = (int(candidate.row) + int(candidate.row_span)) - (
+            int(origin.row) + int(origin.row_span)
+        )
+    if dc == 0 and dr == 0:
+        return (0, 1)
+    if abs(dc) >= abs(dr):
+        return (1 if dc > 0 else -1, 0)
+    return (0, 1 if dr > 0 else -1)
+
+
+def _rect_free(candidate: GridRect, occupied: Sequence[GridRect]) -> bool:
+    return not any(rects_overlap(candidate, other) for other in occupied)
+
+
+def find_avoidance_rect(
+    rect: GridRect,
+    occupied: Sequence[GridRect],
+    preferred: tuple[int, int] = (0, 1),
+) -> GridRect | None:
+    """Same-size slot that misses ``occupied``. Prefers the drag axis, then rings."""
+    directions: list[tuple[int, int]] = []
+    pref = (int(preferred[0]), int(preferred[1]))
+    if pref != (0, 0):
+        directions.append(pref)
+    for delta in _CARDINAL_DELTAS:
+        if delta not in directions:
+            directions.append(delta)
+    for dc, dr in directions:
+        column, row = int(rect.column), int(rect.row)
+        for _ in range(_AVOID_SEARCH_LIMIT):
+            column += dc
+            row += dr
+            candidate = GridRect(column, row, rect.column_span, rect.row_span)
+            if clamp_rect(candidate) != candidate:
+                break
+            if _rect_free(candidate, occupied):
+                return candidate
+    max_dist = GRID_COLUMNS + MAX_GRID_ROWS
+    for dist in range(1, max_dist):
+        for dc in range(-dist, dist + 1):
+            dr_span = dist - abs(dc)
+            for dr in (-dr_span, dr_span) if dr_span else (0,):
+                candidate = GridRect(
+                    rect.column + dc,
+                    rect.row + dr,
+                    rect.column_span,
+                    rect.row_span,
+                )
+                if clamp_rect(candidate) != candidate:
+                    continue
+                if _rect_free(candidate, occupied):
+                    return candidate
+    return None
+
+
+def plan_overlap_avoidance(
+    incoming: Mapping[UltraViewRef, GridRect],
+    placements: Sequence[FreeGridPlacement],
+    *,
+    preferred: tuple[int, int] = (0, 1),
+) -> tuple[tuple[tuple[UltraViewRef, GridRect], ...], bool]:
+    """Move overlapping cards out of ``incoming``.
+
+    Returns ``(updates, True)`` when every blocker has a same-size hole.
+    Returns ``((), False)`` when a blocker is boxed in at the grid edge.
+    ``updates`` lists every rect that differs from ``placements``.
+    """
+    current = {item.ref: item.rect for item in placements}
+    wanted = dict(incoming)
+    if not wanted:
+        return (), True
+    if any(ref not in current for ref in wanted):
+        return (), False
+    frozen = tuple(wanted.values())
+    for index, left in enumerate(frozen):
+        if clamp_rect(left) != left:
+            return (), False
+        for right in frozen[index + 1 :]:
+            if rects_overlap(left, right):
+                return (), False
+
+    remaining: dict[UltraViewRef, GridRect] = {}
+    queue: list[UltraViewRef] = []
+    queued: set[UltraViewRef] = set()
+    for ref, rect in current.items():
+        if ref in wanted:
+            continue
+        if any(rects_overlap(rect, block) for block in frozen):
+            queue.append(ref)
+            queued.add(ref)
+        else:
+            remaining[ref] = rect
+    if not queue:
+        updates = tuple(
+            (ref, rect) for ref, rect in wanted.items() if current[ref] != rect
+        )
+        return updates, True
+
+    queue.sort(
+        key=lambda ref: (
+            current[ref].row,
+            current[ref].column,
+            ref.section,
+            ref.view_id,
+        )
+    )
+    placed: dict[UltraViewRef, GridRect] = {}
+    while queue:
+        ref = queue.pop(0)
+        obstacles = (*frozen, *remaining.values(), *placed.values())
+        found = find_avoidance_rect(current[ref], obstacles, preferred)
+        if found is None:
+            return (), False
+        displaced = [
+            other
+            for other, rect in tuple(remaining.items())
+            if rects_overlap(found, rect)
+        ]
+        for other in displaced:
+            remaining.pop(other)
+            if other not in queued:
+                queue.append(other)
+                queued.add(other)
+        placed[ref] = found
+
+    proposed = dict(current)
+    proposed.update(wanted)
+    proposed.update(placed)
+    items = tuple(proposed.items())
+    for index, (_ref_a, left) in enumerate(items):
+        if clamp_rect(left) != left:
+            return (), False
+        for _ref_b, right in items[index + 1 :]:
+            if rects_overlap(left, right):
+                return (), False
+    updates = tuple(
+        (ref, rect) for ref, rect in items if current[ref] != rect
+    )
+    return updates, True
+
+
+def _axis_overlap_rows(left: GridRect, right: GridRect) -> bool:
+    return (
+        left.row < right.row + right.row_span
+        and right.row < left.row + left.row_span
+    )
+
+
+def _axis_overlap_cols(left: GridRect, right: GridRect) -> bool:
+    return (
+        left.column < right.column + right.column_span
+        and right.column < left.column + left.column_span
+    )
+
+
+def _connected_components(
+    refs: Sequence[UltraViewRef],
+    current: Mapping[UltraViewRef, GridRect],
+    overlap_fn,
+) -> list[list[UltraViewRef]]:
+    remaining = list(refs)
+    groups: list[list[UltraViewRef]] = []
+    while remaining:
+        seed = remaining.pop(0)
+        group = [seed]
+        changed = True
+        while changed:
+            changed = False
+            keep: list[UltraViewRef] = []
+            for other in remaining:
+                if any(overlap_fn(current[item], current[other]) for item in group):
+                    group.append(other)
+                    changed = True
+                else:
+                    keep.append(other)
+            remaining = keep
+        groups.append(group)
+    return groups
+
+
+def _min_packed_span(
+    refs: Sequence[UltraViewRef],
+    current: Mapping[UltraViewRef, GridRect],
+    *,
+    horizontal: bool,
+) -> int:
+    if not refs:
+        return 0
+    overlap_fn = _axis_overlap_rows if horizontal else _axis_overlap_cols
+    min_span = GRID_MIN_COLUMN_SPAN if horizontal else GRID_MIN_ROW_SPAN
+    groups = _connected_components(refs, current, overlap_fn)
+    return max(min_span * len(group) for group in groups)
+
+
+def _rect_overflow(rect: GridRect) -> tuple[int, int, int, int]:
+    left = max(0, -int(rect.column))
+    top = max(0, -int(rect.row))
+    right = max(0, int(rect.column) + int(rect.column_span) - GRID_COLUMNS)
+    bottom = max(0, int(rect.row) + int(rect.row_span) - MAX_GRID_ROWS)
+    return left, top, right, bottom
+
+
+def _proposed_is_legal(proposed: Mapping[UltraViewRef, GridRect]) -> bool:
+    items = tuple(proposed.items())
+    for index, (_ref, left) in enumerate(items):
+        if clamp_rect(left) != left:
+            return False
+        for _other, right in items[index + 1 :]:
+            if rects_overlap(left, right):
+                return False
+    return True
+
+
+def _updates_from(
+    current: Mapping[UltraViewRef, GridRect],
+    proposed: Mapping[UltraViewRef, GridRect],
+) -> tuple[tuple[UltraViewRef, GridRect], ...]:
+    return tuple(
+        (ref, rect) for ref, rect in proposed.items() if current.get(ref) != rect
+    )
+
+
+def _pack_row_group(
+    refs: Sequence[UltraViewRef],
+    current: Mapping[UltraViewRef, GridRect],
+    pocket_origin: int,
+    pocket_span: int,
+    *,
+    horizontal: bool,
+) -> dict[UltraViewRef, GridRect] | None:
+    min_span = GRID_MIN_COLUMN_SPAN if horizontal else GRID_MIN_ROW_SPAN
+    ordered = sorted(
+        refs,
+        key=lambda ref: (
+            current[ref].column if horizontal else current[ref].row,
+            current[ref].row if horizontal else current[ref].column,
+            ref.section,
+            ref.view_id,
+        ),
+    )
+    spans = [
+        min(
+            pocket_span,
+            current[ref].column_span if horizontal else current[ref].row_span,
+        )
+        for ref in ordered
+    ]
+    extra = sum(spans) - pocket_span
+    while extra > 0:
+        shrinkable = [index for index, span in enumerate(spans) if span > min_span]
+        if not shrinkable:
+            return None
+        index = max(shrinkable, key=lambda item: spans[item])
+        spans[index] -= 1
+        extra -= 1
+    cursor = pocket_origin
+    packed: dict[UltraViewRef, GridRect] = {}
+    for ref, span in zip(ordered, spans):
+        rect = current[ref]
+        packed[ref] = (
+            GridRect(cursor, rect.row, span, rect.row_span)
+            if horizontal
+            else GridRect(rect.column, cursor, rect.column_span, span)
+        )
+        cursor += span
+    return packed
+
+
+def _pack_into_pocket(
+    refs: Sequence[UltraViewRef],
+    current: Mapping[UltraViewRef, GridRect],
+    pocket_origin: int,
+    pocket_span: int,
+    *,
+    horizontal: bool,
+) -> dict[UltraViewRef, GridRect] | None:
+    min_span = GRID_MIN_COLUMN_SPAN if horizontal else GRID_MIN_ROW_SPAN
+    if not refs:
+        return {}
+    if pocket_span < min_span:
+        return None
+    overlap_fn = _axis_overlap_rows if horizontal else _axis_overlap_cols
+    packed: dict[UltraViewRef, GridRect] = {}
+    for group in _connected_components(refs, current, overlap_fn):
+        placed = _pack_row_group(
+            group, current, pocket_origin, pocket_span, horizontal=horizontal
+        )
+        if placed is None:
+            return None
+        packed.update(placed)
+    return packed
+
+
+def plan_neighbor_shrink(
+    incoming: Mapping[UltraViewRef, GridRect],
+    placements: Sequence[FreeGridPlacement],
+    *,
+    horizontal: bool | None = None,
+) -> tuple[tuple[tuple[UltraViewRef, GridRect], ...], bool]:
+    """Pack overlapping neighbours into leftover cells, shrinking to min span.
+
+    ``incoming`` must already be in-board. Cards keep their row (or column)
+    when the squeeze is horizontal (or vertical). Returns ``((), False)`` when
+    a neighbour would drop below the legal minimum.
+    """
+    current = {item.ref: item.rect for item in placements}
+    wanted = dict(incoming)
+    if not wanted or any(ref not in current for ref in wanted):
+        return (), False
+    frozen = tuple(wanted.values())
+    for index, left in enumerate(frozen):
+        if clamp_rect(left) != left:
+            return (), False
+        for right in frozen[index + 1 :]:
+            if rects_overlap(left, right):
+                return (), False
+    union = union_grid_rect(frozen)
+    if union is None:
+        return (), False
+    if horizontal is None:
+        dc = sum(abs(wanted[ref].column - current[ref].column) for ref in wanted)
+        dr = sum(abs(wanted[ref].row - current[ref].row) for ref in wanted)
+        ds_c = sum(
+            abs(wanted[ref].column_span - current[ref].column_span) for ref in wanted
+        )
+        ds_r = sum(
+            abs(wanted[ref].row_span - current[ref].row_span) for ref in wanted
+        )
+        horizontal = (dc + ds_c) >= (dr + ds_r)
+
+    blockers = [
+        ref
+        for ref, rect in current.items()
+        if ref not in wanted and any(rects_overlap(rect, block) for block in frozen)
+    ]
+    proposed = dict(current)
+    proposed.update(wanted)
+    if not blockers:
+        if not _proposed_is_legal(proposed):
+            return (), False
+        updates = _updates_from(current, proposed)
+        return updates, bool(updates)
+
+    if horizontal:
+        left_origin, left_span = 0, union.column
+        right_origin = union.column + union.column_span
+        right_span = GRID_COLUMNS - right_origin
+        left_refs: list[UltraViewRef] = []
+        right_refs: list[UltraViewRef] = []
+        mover_mid = union.column * 2 + union.column_span
+        for ref in blockers:
+            rect = current[ref]
+            block_mid = rect.column * 2 + rect.column_span
+            (left_refs if block_mid <= mover_mid else right_refs).append(ref)
+        min_span = GRID_MIN_COLUMN_SPAN
+        if left_refs and left_span < min_span:
+            right_refs.extend(left_refs)
+            left_refs = []
+        if right_refs and right_span < min_span:
+            left_refs.extend(right_refs)
+            right_refs = []
+        packed_left = _pack_into_pocket(
+            left_refs, current, left_origin, left_span, horizontal=True
+        )
+        packed_right = _pack_into_pocket(
+            right_refs, current, right_origin, right_span, horizontal=True
+        )
+    else:
+        top_origin, top_span = 0, union.row
+        bottom_origin = union.row + union.row_span
+        bottom_span = MAX_GRID_ROWS - bottom_origin
+        top_refs: list[UltraViewRef] = []
+        bottom_refs: list[UltraViewRef] = []
+        mover_mid = union.row * 2 + union.row_span
+        for ref in blockers:
+            rect = current[ref]
+            block_mid = rect.row * 2 + rect.row_span
+            (top_refs if block_mid <= mover_mid else bottom_refs).append(ref)
+        min_span = GRID_MIN_ROW_SPAN
+        if top_refs and top_span < min_span:
+            bottom_refs.extend(top_refs)
+            top_refs = []
+        if bottom_refs and bottom_span < min_span:
+            top_refs.extend(bottom_refs)
+            bottom_refs = []
+        packed_left = _pack_into_pocket(
+            top_refs, current, top_origin, top_span, horizontal=False
+        )
+        packed_right = _pack_into_pocket(
+            bottom_refs, current, bottom_origin, bottom_span, horizontal=False
+        )
+    if packed_left is None or packed_right is None:
+        return (), False
+    proposed.update(packed_left)
+    proposed.update(packed_right)
+    if not _proposed_is_legal(proposed):
+        return (), False
+    updates = _updates_from(current, proposed)
+    return updates, bool(updates)
+
+
+def _opposite_neighbors(
+    mover: GridRect,
+    current: Mapping[UltraViewRef, GridRect],
+    mover_ref: UltraViewRef,
+    *,
+    side: str,
+) -> list[UltraViewRef]:
+    found: list[UltraViewRef] = []
+    for ref, rect in current.items():
+        if ref == mover_ref:
+            continue
+        if side in {"left", "right"} and not _axis_overlap_rows(rect, mover):
+            continue
+        if side in {"top", "bottom"} and not _axis_overlap_cols(rect, mover):
+            continue
+        if side == "left" and rect.column < mover.column:
+            found.append(ref)
+        elif side == "right" and rect.column + rect.column_span > mover.column + mover.column_span:
+            found.append(ref)
+        elif side == "top" and rect.row < mover.row:
+            found.append(ref)
+        elif side == "bottom" and rect.row + rect.row_span > mover.row + mover.row_span:
+            found.append(ref)
+    return found
+
+
+def _wall_grow_wanted(
+    incoming: Mapping[UltraViewRef, GridRect],
+    current: Mapping[UltraViewRef, GridRect],
+) -> dict[UltraViewRef, GridRect] | None:
+    if len(incoming) != 1:
+        return None
+    ref, raw = next(iter(incoming.items()))
+    origin = current[ref]
+    left, top, right, bottom = _rect_overflow(raw)
+    if max(left, right) >= max(top, bottom) and max(left, right) > 0:
+        horizontal = True
+        overflow = right if right >= left else left
+        side = "left" if right >= left else "right"
+    elif max(top, bottom) > 0:
+        horizontal = False
+        overflow = bottom if bottom >= top else top
+        side = "top" if bottom >= top else "bottom"
+    else:
+        return None
+    neighbors = _opposite_neighbors(origin, current, ref, side=side)
+    if not neighbors:
+        return None
+    pocket_span = (
+        origin.column if side == "left"
+        else GRID_COLUMNS - (origin.column + origin.column_span) if side == "right"
+        else origin.row if side == "top"
+        else MAX_GRID_ROWS - (origin.row + origin.row_span)
+    )
+    yieldable = pocket_span - _min_packed_span(
+        neighbors, current, horizontal=horizontal
+    )
+    steal = min(int(overflow), max(0, yieldable))
+    if steal <= 0:
+        return None
+    if horizontal:
+        column = origin.column - steal if side == "left" else origin.column
+        column_span = origin.column_span + steal
+        grown = GridRect(column, origin.row, column_span, origin.row_span)
+    else:
+        row = origin.row - steal if side == "top" else origin.row
+        row_span = origin.row_span + steal
+        grown = GridRect(origin.column, row, origin.column_span, row_span)
+    grown = clamp_rect(grown)
+    if grown == origin:
+        return None
+    return {ref: grown}
+
+
+def plan_boundary_yield(
+    incoming: Mapping[UltraViewRef, GridRect],
+    placements: Sequence[FreeGridPlacement],
+    *,
+    preferred: tuple[int, int] = (0, 1),
+) -> tuple[tuple[tuple[UltraViewRef, GridRect], ...], bool]:
+    """Keep an out-of-board drop in-grid by clamping, then shrinking neighbours.
+
+    Same-size avoidance runs first when the clamped slot is a new cell.
+    Hitting the wall with neighbours on the opposite side grows the mover by
+    stealing span those neighbours can yield down to the legal minimum.
+    """
+    current = {item.ref: item.rect for item in placements}
+    raw = dict(incoming)
+    if not raw or any(ref not in current for ref in raw):
+        return (), False
+    clamped = {ref: clamp_rect(rect) for ref, rect in raw.items()}
+    if all(clamped[ref] == raw[ref] for ref in raw):
+        return (), False
+    wall_stuck = all(clamped[ref] == current[ref] for ref in raw)
+
+    if not wall_stuck:
+        updates, ok = plan_overlap_avoidance(
+            clamped, placements, preferred=preferred
+        )
+        if ok and updates:
+            return updates, True
+        return plan_neighbor_shrink(clamped, placements)
+
+    grown = _wall_grow_wanted(raw, current)
+    if grown is None:
+        return (), False
+    shrink_updates, shrink_ok = plan_neighbor_shrink(grown, placements)
+    if shrink_ok and shrink_updates:
+        return shrink_updates, True
+    return plan_overlap_avoidance(grown, placements, preferred=preferred)

@@ -296,6 +296,46 @@ def test_analysis_contextuals_separate_layers_and_classify_user_edits(
     assert compute_seen
 
 
+@pytest.mark.parametrize(
+    "class_name, display_patch",
+    [
+        ("FFTContextual", {"x_auto": False, "x_min": 10.0, "x_max": 1000.0}),
+        ("FFTTimeContextual", {
+            "z_auto": False, "z_floor": -39.03, "z_ceiling": -9.03,
+        }),
+        ("OrderContextual", {
+            "z_auto": False, "z_floor": -39.03, "z_ceiling": -9.03,
+        }),
+    ],
+)
+def test_analysis_contextuals_apply_params_is_silent(
+    qapp, qtbot, class_name, display_patch,
+):
+    """View restore / colorbar echo must not emit display_params_changed.
+
+    Emitting would replot a live heatmap and rewrite ColorBarItem.lo_prv
+    while the handle is still down.
+    """
+    from mf4_analyzer.ui import inspector_sections
+
+    ctx = getattr(inspector_sections, class_name)()
+    qtbot.addWidget(ctx)
+    compute_seen = []
+    display_seen = []
+    ctx.compute_params_changed.connect(compute_seen.append)
+    ctx.display_params_changed.connect(display_seen.append)
+
+    ctx.apply_params(display_patch)
+    qapp.processEvents()
+    assert compute_seen == []
+    assert display_seen == []
+    for key, value in display_patch.items():
+        if isinstance(value, float):
+            assert ctx.get_params()[key] == pytest.approx(value)
+        else:
+            assert ctx.get_params()[key] == value
+
+
 def test_frf_contextual_presets_signals_and_inspector_range_reparent(qtbot):
     from mf4_analyzer.ui.inspector import Inspector
 

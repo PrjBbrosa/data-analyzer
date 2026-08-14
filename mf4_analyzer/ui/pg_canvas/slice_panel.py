@@ -269,6 +269,41 @@ class _SliceStrip(_CanvasBackref):
             return
         vb.enableAutoRange(axis=vb.YAxis, enable=True)
 
+    def fit_y_to_visible_x(self) -> None:
+        """Right-click 「Y适应」: keep the slice X window, fit amplitude Y.
+
+        Uses the already-drawn slice curve, not the colorbar window. Manual
+        z-floor/z-ceiling still owns the map; this only reframes the 1D
+        readout. Dead dB-floor bins stay excluded via ``_slice_amp_bounds``.
+        """
+        if self._slice_plot is None or self._slice_curve is None:
+            return
+        try:
+            xs, ys = self._slice_curve.getData()
+        except Exception:
+            return
+        if xs is None or ys is None or len(xs) == 0:
+            return
+        xs = np.asarray(xs)
+        ys = np.asarray(ys)
+        try:
+            (x0, x1), _ = self._slice_plot.vb.viewRange()
+        except Exception:
+            return
+        mask = (xs >= x0) & (xs <= x1) & np.isfinite(ys)
+        if not np.any(mask):
+            return
+        bounds = _slice_amp_bounds(ys[mask])
+        if bounds is None:
+            return
+        lo, hi = bounds
+        pad = (hi - lo) * 0.05
+        self.disable_interactive_quality()
+        vb = self._slice_plot.vb
+        vb.enableAutoRange(axis=vb.YAxis, enable=False)
+        self._slice_plot.setYRange(lo - pad, hi + pad, padding=0)
+        self.schedule_idle_quality()
+
     def _apply_slice(self) -> None:
         """Render the slice curve + marker for the current direction/index."""
         m = self._matrix_disp

@@ -508,6 +508,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.view_rail",
         "ultraview.add_from_tab",
         "ultraview.card_menu",
+        "ultraview.sync",
         "ultraview.escape",
         "ultraview.presentation",
         "ultraview.export",
@@ -522,6 +523,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.library_toggle",
         "ultraview.free_grid",
         "ultraview.resize",
+        "ultraview.avoid",
         "ultraview.replace_ring",
         "ultraview.undo",
         "ultraview.preset",
@@ -545,6 +547,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
     uv_ids = {hint.id for hint in hints.context_hints(uv_state)}
     assert {
         "ultraview.card_menu",
+        "ultraview.sync",
         "ultraview.escape",
         "ultraview.presentation",
         "ultraview.export",

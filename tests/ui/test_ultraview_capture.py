@@ -1107,6 +1107,99 @@ def test_digest_unavailable_keeps_old_image_stale(qapp):
     coord.deleteLater()
 
 
+def test_user_sync_recaptures_stale_preview_without_recompute(qapp):
+    from mf4_analyzer.ui.chart_stack.ultraview.preview_store import PreviewStore
+    from mf4_analyzer.ui.ultraview_state import STATUS_STALE, derive_preview_status
+
+    window, coord = _make_coord()
+    state = window.view_manager.get(0)
+    state.view_id = "view-a"
+    state.xlim = (0.0, 1.0)
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "seed")
+    _flush()
+    first = coord.store.get(ref)
+    assert first is not None
+    first_digest = first.captured_digest
+    state.xlim = (0.0, 4.0)
+    current = coord.current_digest_for(ref)
+    assert current is not None and current != first_digest
+    assert derive_preview_status(
+        True,
+        PreviewStore.image_valid(first.image),
+        first_digest,
+        current,
+    ) == STATUS_STALE
+
+    grabs_before = canvas.grab_calls
+    coord.sync_preview("time", "view-a")
+    _flush()
+    second = coord.store.get(ref)
+    assert canvas.grab_calls > grabs_before
+    assert second is not None
+    assert second.captured_digest == current
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_user_sync_hidden_canvas_toasts_without_navigate(qapp):
+    window, coord = _make_coord()
+    window.view_manager.get(0).view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    coord.bind_canvas(canvas, ref)
+    canvas.hide()
+    toasts: list[tuple[str, str]] = []
+    window.toast = lambda msg, level: toasts.append((msg, level))
+    coord.sync_preview("time", "view-a")
+    assert toasts == [("请先打开原 View 再同步", "warning")]
+    assert canvas.grab_calls == 0
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
+def test_user_sync_navigates_hidden_source_then_captures(qapp):
+    window, coord = _make_coord()
+    state = window.view_manager.get(0)
+    state.view_id = "view-a"
+    canvas = FakeCanvas()
+    ref = _ref("view-a")
+    add_ref(coord.board, ref)
+    coord.bind_canvas(canvas, ref)
+    coord.request_capture(ref, canvas, "seed")
+    _flush()
+    state.xlim = (0.0, 3.0)
+    canvas.hide()
+    navigated: list[tuple[str, str]] = []
+
+    def navigate(section, view_id):
+        navigated.append((section, view_id))
+        canvas.show()
+        return True
+
+    window.navigate_to_view = navigate
+    raised: list[bool] = []
+    window._ultraview_sheet = SimpleNamespace(
+        isVisible=lambda: True,
+        raise_=lambda: raised.append(True),
+        activateWindow=lambda: None,
+    )
+    grabs_before = canvas.grab_calls
+    coord.sync_preview("time", "view-a")
+    assert navigated == [("time", "view-a")]
+    _flush()
+    assert canvas.grab_calls > grabs_before
+    assert raised == [True]
+    canvas.deleteLater()
+    coord.clear()
+    coord.deleteLater()
+
+
 def _analysis_capture_setup(window, section, panes, view_id="view-a"):
     manager = ViewManager(state_factory=AnalysisViewState)
     window.analysis_managers[section] = manager

@@ -37,7 +37,7 @@ PANEL_LIBRARY = "library"
 PANEL_LAYOUT = "layout"
 PANEL_FILTER = "filter"
 PANEL_UNPLACED = "unplaced"
-RAIL_MIN_HEIGHT = 160
+RAIL_MIN_HEIGHT = 196
 _LAYOUT_THUMB_SCHEMES: dict[str, tuple[tuple[float, float, float, float], ...]] = {
     "split_horizontal": ((0.0, 0.0, 0.5, 1.0), (0.5, 0.0, 0.5, 1.0)),
     "split_vertical": ((0.0, 0.0, 1.0, 0.5), (0.0, 0.5, 1.0, 0.5)),
@@ -367,6 +367,7 @@ class ToolRail(QFrame):
     """The fixed 48 px left rail; Page owns which requested panel opens."""
 
     panel_requested = pyqtSignal(str)
+    free_grid_toggled = pyqtSignal(bool)
     ref_dropped = pyqtSignal(str, str)
 
     _PANEL_SPECS: tuple[tuple[str, str, str, Callable[[], QIcon]], ...] = (
@@ -387,10 +388,23 @@ class ToolRail(QFrame):
         self._badges: dict[str, QLabel] = {}
         self._active_panel: str | None = None
         self._filter_active = False
+        self._free_grid_enabled = False
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(4)
+        # Visual order: Library, FreeGrid, Layout, Filter, divider, Unplaced.
         for index, (panel_id, short_name, tooltip, icon_factory) in enumerate(self._PANEL_SPECS):
+            if index == 1:
+                self._free_grid = _icon_button(
+                    self,
+                    object_name="ultraViewRailFreeGridButton",
+                    icon=Icons.ultraview_free_grid(),
+                    tooltip="切换 12 列受控自由网格",
+                    accessible_name="切换 12 列受控自由网格",
+                )
+                self._free_grid.setCheckable(True)
+                self._free_grid.clicked.connect(self._on_free_grid_clicked)
+                root.addWidget(self._free_grid, 0, Qt.AlignHCenter)
             if index == 3:
                 divider = QFrame(self)
                 divider.setObjectName("ultraViewToolRailDivider")
@@ -430,6 +444,9 @@ class ToolRail(QFrame):
     def panel_button(self, panel_id: str) -> QToolButton | None:
         return self._buttons.get(str(panel_id))
 
+    def free_grid_button(self) -> QToolButton:
+        return self._free_grid
+
     def active_panel(self) -> str | None:
         return self._active_panel
 
@@ -455,13 +472,24 @@ class ToolRail(QFrame):
     def filter_warning(self) -> bool:
         return self._filter_warning
 
+    def set_free_grid_enabled(self, enabled: bool) -> None:
+        """Project the current free-grid mode without emitting the toggle."""
+        self._free_grid_enabled = bool(enabled)
+        self._sync_button_states()
+
     def _sync_button_states(self) -> None:
         for candidate, button in self._buttons.items():
             is_active = candidate == self._active_panel or (
                 candidate == PANEL_FILTER and self._filter_active
+            ) or (
+                candidate == PANEL_LAYOUT and not self._free_grid_enabled
             )
             _set_flag(button, "active", is_active)
             button.setChecked(candidate == self._active_panel)
+        blocked = self._free_grid.blockSignals(True)
+        self._free_grid.setChecked(self._free_grid_enabled)
+        self._free_grid.blockSignals(blocked)
+        _set_flag(self._free_grid, "active", self._free_grid_enabled)
 
     def set_badge(self, panel_id: str, count: int | None) -> None:
         """Set an exact count badge; zero/None intentionally shows no badge."""
@@ -529,6 +557,9 @@ class ToolRail(QFrame):
         panel_id = str(button.property("panel") or "")
         if panel_id in self._buttons:
             self.panel_requested.emit(panel_id)
+
+    def _on_free_grid_clicked(self) -> None:
+        self.free_grid_toggled.emit(self._free_grid.isChecked())
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if event.mimeData().hasFormat(ULTRAVIEW_REF_MIME):
@@ -725,7 +756,11 @@ class GlobalIsland(QFrame):
             _set_flag(button, "active", is_active)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        visible = [button for button in (self._display, self._export, self._presentation) if button.isVisible()]
+        visible = [
+            button
+            for button in (self._display, self._export, self._presentation)
+            if not button.isHidden()
+        ]
         count = max(1, len(visible))
         return QSize(8 + count * 32 + max(0, count - 1) * 2, 40)
 
@@ -898,6 +933,7 @@ class CardContextIsland(QFrame):
     """One selected-card action strip; it holds a ref, never a card QWidget."""
 
     open_source_requested = pyqtSignal(str, str)
+    sync_requested = pyqtSignal(str, str)
     focus_requested = pyqtSignal(str, str)
     copy_image_requested = pyqtSignal(str, str)
     move_to_unplaced_requested = pyqtSignal(str, str)
@@ -920,6 +956,7 @@ class CardContextIsland(QFrame):
         self._buttons: dict[str, QToolButton] = {}
         for action, object_name, icon, tooltip in (
             ("open", "ultraViewContextOpenButton", Icons.ultraview_open_source(), "打开原 View"),
+            ("sync", "ultraViewContextSyncButton", Icons.ultraview_sync(), "同步到最新预览"),
             ("focus", "ultraViewContextFocusButton", Icons.expand_focus(), "临时放大预览"),
             ("copy", "ultraViewContextCopyButton", Icons.copy_image(), "复制本卡图像"),
             ("unplaced", "ultraViewContextUnplacedButton", Icons.ultraview_move_to_tray(), "移到未放置区"),
@@ -936,7 +973,7 @@ class CardContextIsland(QFrame):
             )
             button.setProperty("contextAction", action)
             button.clicked.connect(self._on_action_clicked)
-            if action in {"rebind", "remove"}:
+            if action in {"rebind", "remove", "sync"}:
                 button.hide()
             self._buttons[action] = button
             layout.addWidget(button, 0)
@@ -950,12 +987,20 @@ class CardContextIsland(QFrame):
     def button(self, action: str) -> QToolButton | None:
         return self._buttons.get(str(action))
 
-    def show_for(self, section: str, view_id: str, *, orphaned: bool = False) -> None:
+    def show_for(
+        self,
+        section: str,
+        view_id: str,
+        *,
+        orphaned: bool = False,
+        stale: bool = False,
+    ) -> None:
         self._section = str(section or "")
         self._view_id = str(view_id or "")
         self.setProperty("section", self._section)
         self.setProperty("viewId", self._view_id)
         self.set_orphaned(orphaned)
+        self.set_stale(bool(stale) and not bool(orphaned))
         if self.ref() is None:
             self.hide()
             return
@@ -975,6 +1020,11 @@ class CardContextIsland(QFrame):
         _set_flag(self, "orphaned", is_orphaned)
         self._buttons["rebind"].setVisible(is_orphaned)
         self._buttons["remove"].setVisible(is_orphaned)
+        if is_orphaned:
+            self._buttons["sync"].hide()
+
+    def set_stale(self, stale: bool) -> None:
+        self._buttons["sync"].setVisible(bool(stale))
 
     def _on_action_clicked(self) -> None:
         sender = self.sender()
@@ -987,6 +1037,7 @@ class CardContextIsland(QFrame):
         section, view_id = ref
         emitters = {
             "open": self.open_source_requested,
+            "sync": self.sync_requested,
             "focus": self.focus_requested,
             "copy": self.copy_image_requested,
             "unplaced": self.move_to_unplaced_requested,
@@ -1000,10 +1051,9 @@ class CardContextIsland(QFrame):
 
 
 class LayoutPicker(QFrame):
-    """Eight template previews plus free-grid actions; Page owns confirmation."""
+    """Eight template previews plus free-grid organize actions; Page owns confirmation."""
 
     layout_id_chosen = pyqtSignal(str)
-    free_grid_toggled = pyqtSignal(bool)
     organize_requested = pyqtSignal()
     undo_requested = pyqtSignal()
     redo_requested = pyqtSignal()
@@ -1042,23 +1092,14 @@ class LayoutPicker(QFrame):
             button.setToolTip(str(label))
             button.setAccessibleName(str(label))
             button.setProperty("layoutId", layout_id)
-            button.setFixedSize(132, 86)
+            button.setProperty("role", "layoutThumb")
+            button.setMinimumSize(QSize(140, 104))
+            button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
             button.clicked.connect(self._on_thumb_clicked)
             self._group.addButton(button)
             self._buttons[layout_id] = button
             grid.addWidget(button, index // 2, index % 2)
         root.addLayout(grid)
-        self._free_grid = QToolButton(self)
-        self._free_grid.setObjectName("ultraViewLayoutPopoverFreeGrid")
-        self._free_grid.setText("自由网格")
-        self._free_grid.setCheckable(True)
-        self._free_grid.setToolTip("切换 12 列受控自由网格")
-        self._free_grid.setAccessibleName("切换 12 列受控自由网格")
-        self._free_grid.setIcon(layout_thumbnail_icon("free_grid"))
-        self._free_grid.setIconSize(QSize(72, 44))
-        self._free_grid.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self._free_grid.toggled.connect(self._on_free_grid_toggled)
-        root.addWidget(self._free_grid, 0)
         self._organize = QPushButton("整理自由网格", self)
         self._organize.setObjectName("ultraViewLayoutPopoverOrganize")
         self._organize.setToolTip("移除自由网格中的空行")
@@ -1076,9 +1117,9 @@ class LayoutPicker(QFrame):
         history.addWidget(self._undo, 1)
         history.addWidget(self._redo, 1)
         root.addLayout(history)
-
-    def free_grid_button(self) -> QToolButton:
-        return self._free_grid
+        self._organize.hide()
+        self._undo.hide()
+        self._redo.hide()
 
     def organize_button(self) -> QPushButton:
         return self._organize
@@ -1094,9 +1135,6 @@ class LayoutPicker(QFrame):
 
     def set_current(self, layout_id: str, *, free_grid: bool) -> None:
         is_free_grid = bool(free_grid)
-        blocked = self._free_grid.blockSignals(True)
-        self._free_grid.setChecked(is_free_grid)
-        self._free_grid.blockSignals(blocked)
         self._organize.setVisible(is_free_grid)
         self._undo.setVisible(is_free_grid)
         self._redo.setVisible(is_free_grid)
@@ -1112,7 +1150,4 @@ class LayoutPicker(QFrame):
         layout_id = str(button.property("layoutId") or "")
         if layout_id:
             self.layout_id_chosen.emit(layout_id)
-
-    def _on_free_grid_toggled(self, enabled: bool) -> None:
-        self.free_grid_toggled.emit(bool(enabled))
 

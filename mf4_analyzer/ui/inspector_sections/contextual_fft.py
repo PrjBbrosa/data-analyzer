@@ -780,6 +780,19 @@ class FFTContextual(QWidget):
             self.display_params_changed.emit(display)
 
     def apply_params(self, d):
+        """Restore inspector widgets without emitting display/compute signals.
+
+        Same contract as FRF / FFT-Time / Order: View restore and live
+        colorbar echo must not replot via ``display_params_changed``.
+        """
+        self._applying_preset = True
+        try:
+            self._apply_params_unlocked(d)
+        finally:
+            self._applying_preset = False
+        self.preset_bar.sync_match()
+
+    def _apply_params_unlocked(self, d):
         if 'window' in d:
             i = self.combo_win.findText(str(d['window']))
             if i >= 0:
@@ -827,9 +840,6 @@ class FFTContextual(QWidget):
         apply_db_reference_partial(self.db_reference_control, d)
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])
-        # View switch / project restore lands a whole payload at once; the
-        # highlight must describe the restored state, not the pre-switch one.
-        self.preset_bar.sync_match()
 
     def reset_to_defaults(self):
         """Restore construction-time defaults for a blank analysis View."""

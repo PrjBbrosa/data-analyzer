@@ -657,6 +657,42 @@ def test_repeated_lock_does_not_multiconnect(page):
     assert (lo1, hi1) == (pytest.approx(7.0), pytest.approx(70.0))
 
 
+def test_locked_levels_skip_setlevels_on_moving_source(page):
+    page.enter_split()
+    for i in (0, 1):
+        _plot_heat(page.pane_canvas(i), 100.0)
+    page.set_levels_locked(True)
+    source = page.pane_canvas(0)
+    sibling = page.pane_canvas(1)
+    lo_prv = source._cbar.lo_prv
+    source._cbar.region.lines[0].moving = True
+    try:
+        page._on_locked_levels_changed(5.0, 60.0)
+        assert source._cbar.lo_prv == pytest.approx(lo_prv)
+        lo1, hi1 = sibling._img.getLevels()
+        assert (lo1, hi1) == (pytest.approx(5.0), pytest.approx(60.0))
+    finally:
+        source._cbar.region.lines[0].moving = False
+
+
+def test_colorbar_restore_copies_window_to_locked_sibling(page):
+    page.enter_split()
+    for i in (0, 1):
+        _plot_heat(page.pane_canvas(i), 100.0)
+    page.set_levels_locked(True)
+    source = page.pane_canvas(0)
+    sibling = page.pane_canvas(1)
+    rendered = tuple(source._rendered_levels)
+    source._cbar.setLevels((5.0, 60.0))
+    source._img.setLevels((5.0, 60.0))
+    sibling._cbar.setLevels((8.0, 40.0))
+    sibling._img.setLevels((8.0, 40.0))
+
+    assert source.reset_colorbar_levels() is True
+    lo1, hi1 = sibling._img.getLevels()
+    assert (lo1, hi1) == (pytest.approx(rendered[0]), pytest.approx(rendered[1]))
+
+
 # -- V11 Step 0: split combined export -------------------------------------
 def _non_white_pixels(pixmap):
     """Count pixels that are not pure white in the pixmap (proxy for content)."""

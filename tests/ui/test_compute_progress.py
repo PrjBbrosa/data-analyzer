@@ -102,6 +102,53 @@ def test_long_load_label_does_not_overlap_or_clip_bar(qapp, qtbot):
     assert widget.label.geometry().right() < widget.bar.geometry().left()
 
 
+def test_status_bar_single_file_can_label_is_fully_visible_under_qss(qapp, qtbot):
+    """Single-file CAN copy is short; truncation is a layout bug, not overflow.
+
+    QSS font-weight 600 plus the progress-bar border used to make
+    ``加载 1/1 · 读取 CAN 帧 · 32%`` elide to ``3…`` with empty space
+    before the bar. The status-bar host must show the full string.
+    """
+    from mf4_analyzer.ui_kit import load_stylesheet
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        load_stylesheet(qapp)
+        window = MainWindow()
+        qtbot.addWidget(window)
+        window.resize(1450, 850)
+        window.show()
+        qtbot.waitExposed(window)
+        qapp.processEvents()
+
+        token = window._begin_compute_progress("加载 1/1 · 读取 CAN 帧", total=1000)
+        window._update_compute_progress(320, 1000, token=token, flush_events=True)
+        qapp.processEvents()
+
+        widget = window._compute_progress
+        expected = "加载 1/1 · 读取 CAN 帧 · 32%"
+        assert widget._full_label == expected
+        assert widget.label.text() == expected
+        assert "…" not in widget.label.text()
+
+        metrics = QFontMetrics(widget.label.font())
+        ink_right = (
+            widget.label.geometry().left()
+            + metrics.horizontalAdvance(widget.label.text())
+        )
+        assert ink_right <= widget.bar.geometry().left(), (
+            f"label ink ends at {ink_right}, bar starts at "
+            f"{widget.bar.geometry().left()} (painted={widget.label.text()!r})"
+        )
+
+        window._update_compute_progress(1000, 1000, token=token, flush_events=True)
+        qapp.processEvents()
+        assert widget.label.text() == "加载 1/1 · 读取 CAN 帧 · 100%"
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 def test_percent_ink_stays_clear_of_bar_without_resize(qapp, qtbot):
     """Regression: full label text must not overflow onto the bar when width is pinned.
 

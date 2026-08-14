@@ -202,6 +202,27 @@ class _HeatmapAxisHandle(PgAxisHandle):
         return [self._mappable]
 
 
+def colorbar_interaction_active(cbar) -> bool:
+    """True while the user is dragging a ColorBarItem handle or the band.
+
+    ``ColorBarItem.setLevels`` writes ``lo_prv`` / ``hi_prv``. Doing that
+    while the region handles are still offset from the snap-back positions
+    (63, 191) makes the next mouse-move compound the delta and run the
+    colour window to the inspector spin limits.
+    """
+    if cbar is None:
+        return False
+    region = getattr(cbar, 'region', None)
+    if region is None:
+        return False
+    if bool(getattr(region, 'moving', False)):
+        return True
+    for line in getattr(region, 'lines', ()) or ():
+        if bool(getattr(line, 'moving', False)):
+            return True
+    return False
+
+
 # Empty-state axis range for the main heatmap (no result loaded / after
 # file-close). Time, frequency, and order are all non-negative quantities, so
 # the empty map must NOT inherit pyqtgraph's default [-0.5, 0.5] symmetric
@@ -226,6 +247,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     layout_geometry_changed = pyqtSignal()
     # Emitted after a render path programmatically resets image/colorbar levels.
     levels_rebased = pyqtSignal()
+    # Double-click restore of the last render window. Distinct from
+    # ``levels_changed`` (live drag) so locked-level linkage and inspector
+    # echo can treat restore as a finished window, not an in-progress drag.
+    colorbar_restored = pyqtSignal(float, float)
     # Hidden-gesture discovery signals. The chart card connects these to the
     # hint system (mark_discovered / flash) so the matching rotating-pool tip
     # retires once the user has performed the gesture for the first time.
@@ -749,23 +774,28 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._img.setImage(m, autoLevels=False)
         self._img.setRect(QRectF(x0, y0, x1 - x0, y1 - y0))
         self._img.setColorMap(cm)
-        self._img.setLevels((vmin, vmax))
 
         self._ensure_colorbar(cm, cbar_label)
 
-        # Adaptive drag granularity: the default rounding=1 snaps
-        # interactive level drags to whole units and enforces a minimum
-        # 1-unit span — unusable for linear amplitudes < 1.
-        self._cbar.rounding = max((float(vmax) - float(vmin)) / 1000.0, 1e-9)
-        # ColorBarItem.setLevels in pg 0.14.0 does not emit
-        # sigLevelsChanged (only user drags via _regionChanging do), but
-        # block defensively so programmatic updates can never masquerade
-        # as user drags if a future pg version changes that.
-        self._cbar.blockSignals(True)
-        self._cbar.setLevels((vmin, vmax))
-        self._cbar.blockSignals(False)
-        # Remember the render window so double-click-on-colorbar can restore it.
-        self._rendered_levels = (float(vmin), float(vmax))
+        # Never rewrite ColorBarItem.lo_prv/hi_prv (or the restore snapshot)
+        # while a handle is down — that compounds the next mouse-move.
+        applied_levels = False
+        if not colorbar_interaction_active(self._cbar):
+            self._img.setLevels((vmin, vmax))
+            # Adaptive drag granularity: the default rounding=1 snaps
+            # interactive level drags to whole units and enforces a minimum
+            # 1-unit span — unusable for linear amplitudes < 1.
+            self._cbar.rounding = max((float(vmax) - float(vmin)) / 1000.0, 1e-9)
+            # ColorBarItem.setLevels in pg 0.14.0 does not emit
+            # sigLevelsChanged (only user drags via _regionChanging do), but
+            # block defensively so programmatic updates can never masquerade
+            # as user drags if a future pg version changes that.
+            self._cbar.blockSignals(True)
+            self._cbar.setLevels((vmin, vmax))
+            self._cbar.blockSignals(False)
+            # Remember the render window so double-click-on-colorbar can restore it.
+            self._rendered_levels = (float(vmin), float(vmax))
+            applied_levels = True
 
         self._plot.setLabel('bottom', self._x_label)
         self._plot.setLabel('left', self._y_label)
@@ -789,7 +819,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._extents = (x0, x1, y0, y1)
         self._has_result = True
         self._reset_slice_quality_for_rebuild()
-        self.levels_rebased.emit()
+        # Emit after has_result / _matrix_disp so locked-split re-lock
+        # (``_on_canvas_levels_rebased``) can merge both panes.
+        if applied_levels:
+            self.levels_rebased.emit()
         self.layout_geometry_changed.emit()
         self.manual_zoom_changed.emit(False)
 
@@ -908,12 +941,14 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return self._plot
 
     def _redesign_context_menu_for_viewbox(self, view_box, menu) -> None:
+        slice_vb = self._slice_plot.vb if self._slice_plot is not None else None
+        y_fit = self._fit_slice_y_to_visible_x if view_box is slice_vb else None
         redesign_pg_context_menu(
             menu,
             self._plot_item_for_view_box(view_box),
             self._mouse_mode_controller,
             view_all_handler=self.reset_view_to_data_extents,
-            y_autofit_handler=None,
+            y_autofit_handler=y_fit,
             copy_image_handler=self._copy_image_handler,
             allow_y_grid=True,
             # Plot Options hidden for now in the fft_time / order sections
@@ -1346,6 +1381,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
     def _apply_slice_amp_range(self, values) -> None:
         return self._slice._apply_slice_amp_range(values)
+
+    def _fit_slice_y_to_visible_x(self) -> None:
+        return self._slice.fit_y_to_visible_x()
 
     def _apply_slice(self) -> None:
         return self._slice._apply_slice()
@@ -1869,9 +1907,19 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             ev.accept()
 
     # ------------------------------------------------------------------
+    def colorbar_interaction_active(self) -> bool:
+        return colorbar_interaction_active(self._cbar)
+
     def _on_cbar_levels(self, bar) -> None:
-        lo, hi = bar.levels()
-        self.levels_changed.emit(float(lo), float(hi))
+        lo, hi = float(bar.levels()[0]), float(bar.levels()[1])
+        # ImageItem levels are already owned by ColorBarItem._update_items.
+        # Keep the slice amplitude axis on the same window without a replot.
+        if hi > lo:
+            self._panel_amp_range = (lo, hi)
+            apply_amp = getattr(self._slice, '_apply_slice_amp_range', None)
+            if callable(apply_amp):
+                apply_amp(())
+        self.levels_changed.emit(lo, hi)
 
     # ------------------------------------------------------------------
     def _pos_on_colorbar(self, viewport_pos) -> bool:
@@ -1892,6 +1940,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         colour without touching data. Emits ``levels_rebased`` — the
         programmatic-reset signal — NOT ``levels_changed`` (which the
         analysis-page locked-levels linkage treats as a real user drag).
+        Also emits ``colorbar_restored(lo, hi)`` so the inspector and any
+        locked sibling can take the restored window without a replot.
         Returns True if levels were restored.
         """
         if self._rendered_levels is None or self._cbar is None:
@@ -1901,6 +1951,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._cbar.blockSignals(True)
         self._cbar.setLevels((lo, hi))
         self._cbar.blockSignals(False)
+        if hi > lo:
+            self._panel_amp_range = (lo, hi)
+            apply_amp = getattr(self._slice, '_apply_slice_amp_range', None)
+            if callable(apply_amp):
+                apply_amp(())
+        self.colorbar_restored.emit(float(lo), float(hi))
         self.levels_rebased.emit()
         return True
 

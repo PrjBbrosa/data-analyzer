@@ -82,14 +82,19 @@ from .layouts import (
 )
 from .free_grid import (
     GridMetrics,
+    avoidance_preferred_delta,
     candidate_resize,
     clamp_rect,
     export_grid_metrics,
     grid_metrics,
     hit_handle,
     legal_grid_rect,
+    plan_boundary_yield,
+    plan_neighbor_shrink,
+    plan_overlap_avoidance,
     rect_is_available,
     rect_to_pixels,
+    union_grid_rect,
 )
 from .gesture import FreeGridGesture
 from .ghost_overlay import GhostOverlay
@@ -116,6 +121,8 @@ HANDLE_CURSORS = {
 }
 
 REPLACE_HOVER_MS = 600
+FEEDBACK_OUT_OF_GRID = "不能移出网格"
+FEEDBACK_AVOID_BOUNDARY = "旁边的 View 已到边界，无法自动避让"
 
 
 def _page_of(widget: QWidget):
@@ -125,6 +132,12 @@ def _page_of(widget: QWidget):
             return current
         current = current.parentWidget()
     return None
+
+
+def _clear_page_card_selection(widget: QWidget) -> None:
+    page = _page_of(widget)
+    if page is not None:
+        page.clear_card_selection()
 
 
 def _forward_native_zoom(widget: QWidget, event) -> bool:
@@ -268,8 +281,16 @@ MISSING_CARD_COPY = "尚无可用结果，UltraView 不会后台计算"
 STALE_CARD_COPY = "源已变化"
 ORPHANED_CARD_COPY = "源 View 已删除"
 DIMMED_OPACITY = 0.28
-LIBRARY_DEFAULT_WIDTH = 264
+LIBRARY_DEFAULT_WIDTH = 288
+LIBRARY_OVERLAY_MIN_HEIGHT = 320
+LIBRARY_SECTION_MIN_HEIGHT = 24
+LIBRARY_ROW_MIN_HEIGHT = 40
+LIBRARY_SECTION_ROW_GAP = 2
 TRAY_BODY_MAX_HEIGHT = 220
+TRAY_ITEM_MIN_HEIGHT = 40
+UNPLACED_OVERLAY_VISIBLE_ROWS = 3
+UNPLACED_OVERLAY_WIDTH = 400
+UNPLACED_OVERLAY_MIN_HEIGHT = 160
 
 
 def _run_ultraview_drag(source: QWidget, mime: QMimeData, action, finished) -> None:
@@ -928,10 +949,7 @@ class CompareRail(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 10)
-        root.setSpacing(8)
-        filters = QHBoxLayout()
-        filters.setContentsMargins(0, 0, 0, 0)
-        filters.setSpacing(6)
+        root.setSpacing(6)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._buttons: dict[str, QPushButton] = {}
@@ -941,12 +959,12 @@ class CompareRail(QFrame):
             button.setCheckable(True)
             button.setProperty("filterId", filter_id)
             button.setFocusPolicy(Qt.TabFocus)
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             self._group.addButton(button)
             self._buttons[filter_id] = button
-            filters.addWidget(button, 0)
+            root.addWidget(button, 0)
         self._buttons[COMPARE_FILTER_ALL].setChecked(True)
         self._group.buttonClicked.connect(self._on_button)
-        root.addLayout(filters)
         self._warning = QLabel("", self)
         self._warning.setObjectName("ultraViewAxisWarning")
         self._warning.setWordWrap(True)
@@ -991,6 +1009,8 @@ class LibraryRowWidget(QFrame):
         self.setObjectName("ultraViewLibraryRow")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAcceptDrops(False)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumHeight(LIBRARY_ROW_MIN_HEIGHT)
         self._row = row
         self._press_pos: QPoint | None = None
         layout = QHBoxLayout(self)
@@ -1095,7 +1115,7 @@ class _LibrarySectionHeader(QToolButton):
         self.setCursor(Qt.PointingHandCursor)
         self.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setMaximumHeight(24)
+        self.setFixedHeight(LIBRARY_SECTION_MIN_HEIGHT)
         self.setText(f"{SECTION_LABELS_ZH.get(section, section)}  {count}")
         blocked = self.blockSignals(True)
         self.setChecked(expanded)
@@ -1158,12 +1178,15 @@ class ViewLibraryPanel(QFrame):
         self._scroll = QScrollArea(self)
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._body = QWidget(self._scroll)
         self._body.setObjectName("ultraViewLibraryBody")
+        self._body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self._body_layout = QVBoxLayout(self._body)
         self._body_layout.setContentsMargins(6, 0, 6, 8)
         self._body_layout.setSpacing(8)
         self._scroll.setWidget(self._body)
+        self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         root.addWidget(self._scroll, 1)
         self._rebuild()
 
@@ -1254,7 +1277,7 @@ class ViewLibraryPanel(QFrame):
             frame.setProperty("section", section)
             section_layout = QVBoxLayout(frame)
             section_layout.setContentsMargins(0, 0, 0, 0)
-            section_layout.setSpacing(2)
+            section_layout.setSpacing(LIBRARY_SECTION_ROW_GAP)
             expanded = self._expanded.get(section, True)
             header = _LibrarySectionHeader(section, len(by_section[section]), expanded, frame)
             header.toggled_section.connect(self._on_section_toggled)
@@ -1275,13 +1298,49 @@ class ViewLibraryPanel(QFrame):
                 self._row_widgets.append(row_widget)
             self._section_frames[section] = frame
             self._body_layout.addWidget(frame)
-        self._body_layout.addStretch(1)
+        self._sync_body_min_height()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(
+            LIBRARY_DEFAULT_WIDTH,
+            max(LIBRARY_OVERLAY_MIN_HEIGHT, self._content_height()),
+        )
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(160, LIBRARY_OVERLAY_MIN_HEIGHT)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._sync_body_min_height()
+
+    def _content_height(self) -> int:
+        """Chrome + current list height, ignoring QScrollArea's tiny default hint."""
+        return 36 + 40 + self._measured_body_height()
+
+    def _measured_body_height(self) -> int:
+        """Explicit list height so hidden/unpolished widgets cannot collapse sizeHint."""
+        margins = self._body_layout.contentsMargins()
+        height = margins.top() + margins.bottom()
+        for index, section in enumerate(SOURCE_SECTIONS):
+            if index:
+                height += self._body_layout.spacing()
+            height += LIBRARY_SECTION_MIN_HEIGHT
+            if not self._expanded.get(section, True):
+                continue
+            rows = sum(1 for widget in self._row_widgets if widget.row().section == section)
+            if rows:
+                height += rows * (LIBRARY_SECTION_ROW_GAP + LIBRARY_ROW_MIN_HEIGHT)
+        return height
+
+    def _sync_body_min_height(self) -> None:
+        self._body.setMinimumHeight(self._measured_body_height())
 
     def _on_section_toggled(self, section: str, expanded: bool) -> None:
         self._expanded[section] = bool(expanded)
         for widget in self._row_widgets:
             if widget.row().section == section:
                 widget.setVisible(bool(expanded))
+        self._sync_body_min_height()
 
     def _on_row_selected(self, section: str, view_id: str) -> None:
         self.set_selected(section, view_id)
@@ -1354,6 +1413,7 @@ class EmptySlotWidget(QFrame):
 
 class UltraViewCard(QFrame):
     open_source_requested = pyqtSignal(str, str)
+    sync_requested = pyqtSignal(str, str)
     focus_requested = pyqtSignal(str, str)
     rebind_arm_requested = pyqtSignal(str, str)
     move_to_unplaced_requested = pyqtSignal(str, str)
@@ -1399,6 +1459,20 @@ class UltraViewCard(QFrame):
         self._status = QLabel("", self._header)
         self._status.setObjectName("ultraViewCardStatus")
         header.addWidget(self._status, 0)
+        self._sync_btn = QToolButton(self._header)
+        self._sync_btn.setObjectName("ultraViewCardSyncButton")
+        self._sync_btn.setText("同步")
+        self._sync_btn.setIcon(Icons.ultraview_sync())
+        self._sync_btn.setIconSize(QSize(14, 14))
+        self._sync_btn.setToolTip("抓取原 View 当前画面，不重新计算")
+        self._sync_btn.setAccessibleName("同步到最新预览")
+        self._sync_btn.setCursor(Qt.PointingHandCursor)
+        self._sync_btn.setAutoRaise(False)
+        self._sync_btn.setFixedHeight(24)
+        self._sync_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._sync_btn.clicked.connect(self._emit_sync)
+        self._sync_btn.hide()
+        header.addWidget(self._sync_btn, 0, Qt.AlignVCenter)
         self._focus_btn = QToolButton(self._header)
         self._focus_btn.setObjectName("ultraViewCardFocusButton")
         self._focus_btn.setIcon(Icons.expand_focus())
@@ -1464,7 +1538,7 @@ class UltraViewCard(QFrame):
         return self._footer.height()
 
     def preview_display_size(self) -> tuple[int, int]:
-        size = self._image.size()
+        size = self._preview_fit_size()
         try:
             dpr = float(self.devicePixelRatioF())
         except RuntimeError:
@@ -1493,6 +1567,7 @@ class UltraViewCard(QFrame):
         else:
             self._status.setText("")
         self._status.setVisible(bool(self._status.text()))
+        self._sync_btn.setVisible(model.status == STATUS_STALE)
         section_label = SECTION_LABELS_ZH.get(model.section, model.section)
         self._foot_left.set_full_text(
             f"{section_label} · {_range_text(model.x_range, model.x_unit)}"
@@ -1525,20 +1600,31 @@ class UltraViewCard(QFrame):
             parts.append("等待替换")
         if model.status == STATUS_ORPHANED:
             parts.append("源已删除")
+        if model.status == STATUS_STALE:
+            parts.append("可同步")
         self.setAccessibleName(" ".join(part for part in parts if part))
         self.setToolTip(_full_tooltip(title, model.section, model.source_summary, model.status))
+
+    def set_selected(self, on: bool) -> None:
+        wanted = bool(on)
+        if bool(self._model.selected) == wanted:
+            return
+        self.apply_model(replace(self._model, selected=wanted))
 
     def make_context_menu(self) -> QMenu:
         menu = QMenu(self)
         menu.setObjectName("ultraViewCardMenu")
         apply_rounded_menu_chrome(menu)
         open_act = menu.addAction("打开原 View")
+        open_act.triggered.connect(self._emit_open_source)
+        if self._model.status == STATUS_STALE:
+            sync_act = menu.addAction("同步到最新")
+            sync_act.triggered.connect(self._emit_sync)
         focus_act = menu.addAction("临时放大")
         replace_act = menu.addAction("替换为…")
         unplaced_act = menu.addAction("移到未放置")
         remove_act = menu.addAction("从总览移除")
         copy_act = menu.addAction("复制本卡图像")
-        open_act.triggered.connect(self._emit_open_source)
         focus_act.triggered.connect(self._emit_focus)
         replace_act.triggered.connect(self._emit_rebind)
         unplaced_act.triggered.connect(self._emit_unplaced)
@@ -1604,12 +1690,19 @@ class UltraViewCard(QFrame):
         super().resizeEvent(event)
         self._fit_card_image()
 
+    def _preview_fit_size(self) -> QSize:
+        """Inner label box after QSS padding, not the outer ``size()``."""
+        avail = self._image.contentsRect().size()
+        if avail.width() < 2 or avail.height() < 2:
+            return self._image.size()
+        return avail
+
     def _fit_card_image(self) -> None:
         if self._raw_image is None:
             return
         raw_w = self._raw_image.width()
         raw_h = self._raw_image.height()
-        avail = self._image.size()
+        avail = self._preview_fit_size()
         if avail.width() < 2 or avail.height() < 2:
             return
         cap_w = max(1, min(avail.width(), raw_w))
@@ -1653,6 +1746,11 @@ class UltraViewCard(QFrame):
             self.rebind_arm_requested.emit(self._model.section, self._model.view_id)
             return
         self.open_source_requested.emit(self._model.section, self._model.view_id)
+
+    def _emit_sync(self, _checked: bool = False) -> None:
+        if self._model.status != STATUS_STALE:
+            return
+        self.sync_requested.emit(self._model.section, self._model.view_id)
 
     def _emit_focus(self, _checked: bool = False) -> None:
         self.focus_requested.emit(self._model.section, self._model.view_id)
@@ -1838,6 +1936,7 @@ class BoardGrid(QWidget):
     add_clicked = pyqtSignal(str)
     ref_dropped = pyqtSignal(str, str, str)
     open_source_requested = pyqtSignal(str, str)
+    sync_requested = pyqtSignal(str, str)
     focus_requested = pyqtSignal(str, str)
     rebind_arm_requested = pyqtSignal(str, str)
     move_to_unplaced_requested = pyqtSignal(str, str)
@@ -2025,6 +2124,7 @@ class BoardGrid(QWidget):
         self._discard(slot_id)
         card = UltraViewCard(model, self)
         card.open_source_requested.connect(self.open_source_requested)
+        card.sync_requested.connect(self.sync_requested)
         card.focus_requested.connect(self.focus_requested)
         card.rebind_arm_requested.connect(self.rebind_arm_requested)
         card.move_to_unplaced_requested.connect(self.move_to_unplaced_requested)
@@ -2121,6 +2221,8 @@ class BoardGrid(QWidget):
         if _handle_pan_press(self, event):
             event.accept()
             return
+        if event.button() == Qt.LeftButton:
+            _clear_page_card_selection(self)
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -2368,6 +2470,7 @@ class FreeGridBoard(QWidget):
     group_geometry_requested = pyqtSignal(object)
     preset_requested = pyqtSignal(str, str, str)
     open_source_requested = pyqtSignal(str, str)
+    sync_requested = pyqtSignal(str, str)
     focus_requested = pyqtSignal(str, str)
     rebind_arm_requested = pyqtSignal(str, str)
     move_to_unplaced_requested = pyqtSignal(str, str)
@@ -2507,6 +2610,7 @@ class FreeGridBoard(QWidget):
 
     def _connect_card(self, card: FreeGridCard) -> None:
         card.open_source_requested.connect(self.open_source_requested)
+        card.sync_requested.connect(self.sync_requested)
         card.focus_requested.connect(self.focus_requested)
         card.rebind_arm_requested.connect(self.rebind_arm_requested)
         card.move_to_unplaced_requested.connect(self.move_to_unplaced_requested)
@@ -2705,8 +2809,12 @@ class FreeGridBoard(QWidget):
             return
         additive = bool(event.modifiers() & Qt.ShiftModifier)
         if not additive:
-            self._gesture.clear_selection()
-            self._apply_selection_flags()
+            page = _page_of(self)
+            if page is not None:
+                page.clear_card_selection()
+            elif self._gesture.selection():
+                self._gesture.clear_selection()
+                self._apply_selection_flags()
         self._gesture.begin_marquee((event.pos().x(), event.pos().y()), additive)
         self._overlay.set_marquee(self._gesture.marquee_rect())
         event.accept()
@@ -2869,50 +2977,98 @@ class FreeGridBoard(QWidget):
         if session is None:
             return
         members = session.group_origins or {session.ref: session.origin}
-        for ref in members:
-            card = self._widgets.get(ref)
-            if card is not None:
-                card.restore_dim()
-                card.unsetCursor()
-        self._overlay.clear()
-        self._sync_selection_handles()
-        if session.active:
-            self.drag_finished.emit()
-        if not commit or not session.active:
-            self._relayout()
-            return
-        if global_pos is not None and _drop_on_unplaced_tray(self, global_pos):
+        preview_open = True
+
+        def cleanup_preview() -> None:
+            nonlocal preview_open
+            if not preview_open:
+                return
+            preview_open = False
             for ref in members:
-                self.move_to_unplaced_requested.emit(ref.section, ref.view_id)
+                card = self._widgets.get(ref)
+                if card is not None:
+                    card.restore_dim()
+                    card.unsetCursor()
+            self._overlay.clear()
+            self._sync_selection_handles()
+            if session.active:
+                self.drag_finished.emit()
+
+        try:
+            if not commit or not session.active:
+                self._relayout()
+                return
+            if global_pos is not None and _drop_on_unplaced_tray(self, global_pos):
+                for ref in members:
+                    self.move_to_unplaced_requested.emit(ref.section, ref.view_id)
+                return
+            if session.is_group_move():
+                self._finish_group_move(session)
+                return
+            if session.handle:
+                if self._legal_grid_rect(session.candidate) != session.candidate:
+                    self._finish_out_of_grid(
+                        {session.ref: session.candidate},
+                        session.origin,
+                        session.candidate,
+                    )
+                    return
+                candidate = session.candidate
+                if rect_is_available(
+                    candidate, self._placements.values(), excluding=session.ref
+                ):
+                    self._request_geometry(session.ref, candidate, "drag-resize")
+                    return
+                self._commit_overlap_avoidance(
+                    {session.ref: candidate}, session.origin, candidate
+                )
+                return
+            if self._legal_grid_rect(session.candidate) != session.candidate:
+                self._finish_out_of_grid(
+                    {session.ref: session.candidate},
+                    session.origin,
+                    session.candidate,
+                )
+                return
+            if rect_is_available(
+                session.candidate, self._placements.values(), excluding=session.ref
+            ):
+                self._request_geometry(session.ref, session.candidate, "drag-move")
+                return
+            self._commit_overlap_avoidance(
+                {session.ref: session.candidate}, session.origin, session.candidate
+            )
+        finally:
+            cleanup_preview()
+
+    def _finish_group_move(self, session) -> None:
+        incoming = dict(session.group_candidates)
+        if any(self._legal_grid_rect(rect) != rect for rect in incoming.values()):
+            origin = union_grid_rect(session.group_origins.values())
+            candidate = union_grid_rect(incoming.values())
+            if origin is None or candidate is None:
+                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
+                self._relayout()
+                return
+            self._finish_out_of_grid(incoming, origin, candidate)
             return
-        if session.is_group_move():
+        others = [
+            item
+            for item in self._placements.values()
+            if item.ref not in incoming
+        ]
+        if all(rect_is_available(rect, others) for rect in incoming.values()):
             self._commit_group_move(session)
             return
-        if session.handle:
-            candidate = self._legal_grid_rect(session.candidate)
-            if not session.legal or not rect_is_available(
-                candidate, self._placements.values(), excluding=session.ref
-            ):
-                self.feedback_requested.emit("目标位置与其他卡片重叠")
-                return
-            self._request_geometry(session.ref, candidate, "drag-resize")
-            return
-        legal = self._legal_grid_rect(session.candidate)
-        if legal != session.candidate:
-            self.feedback_requested.emit("不能移出网格")
+        origin = union_grid_rect(session.group_origins.values())
+        candidate = union_grid_rect(incoming.values())
+        if origin is None or candidate is None:
+            self.feedback_requested.emit(FEEDBACK_AVOID_BOUNDARY)
             self._relayout()
             return
-        if not session.legal or not rect_is_available(
-            session.candidate, self._placements.values(), excluding=session.ref
-        ):
-            self.feedback_requested.emit("目标位置与其他卡片重叠")
-            return
-        self._request_geometry(session.ref, session.candidate, "drag-move")
+        self._commit_overlap_avoidance(incoming, origin, candidate)
 
     def _commit_group_move(self, session) -> None:
-        if not session.legal:
-            self.feedback_requested.emit("目标位置与其他卡片重叠")
-            return
         updates = []
         for ref, rect in sorted(
             session.group_candidates.items(),
@@ -2923,7 +3079,8 @@ class FreeGridBoard(QWidget):
                 return
             candidate = self._legal_grid_rect(rect)
             if candidate != rect:
-                self.feedback_requested.emit("不能移出网格")
+                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
+                self._relayout()
                 return
             if candidate != placement.rect:
                 updates.append(
@@ -2939,23 +3096,102 @@ class FreeGridBoard(QWidget):
         if updates:
             self.group_geometry_requested.emit(tuple(updates))
 
+    def _finish_out_of_grid(
+        self,
+        incoming: Mapping[UltraViewRef, GridRect],
+        origin: GridRect,
+        candidate: GridRect,
+    ) -> None:
+        preferred = avoidance_preferred_delta(origin, candidate)
+        updates, possible = plan_boundary_yield(
+            incoming, tuple(self._placements.values()), preferred=preferred
+        )
+        if not possible or not updates:
+            self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
+            self._relayout()
+            return
+        self._commit_planned(updates, set(incoming))
+
+    def _commit_planned(
+        self,
+        updates: Sequence[tuple[UltraViewRef, GridRect]],
+        incoming_refs: set[UltraViewRef],
+    ) -> bool:
+        if not updates:
+            self._relayout()
+            return False
+        needs_ask = False
+        for ref, rect in updates:
+            placement = self._placements.get(ref)
+            if placement is None:
+                self._relayout()
+                return False
+            if ref not in incoming_refs:
+                needs_ask = True
+            elif (
+                rect.column_span != placement.rect.column_span
+                or rect.row_span != placement.rect.row_span
+            ):
+                needs_ask = True
+        if needs_ask:
+            page = _page_of(self)
+            if page is None or not page.confirm_auto_avoid():
+                self._relayout()
+                return False
+        payload = tuple(
+            (
+                ref.section,
+                ref.view_id,
+                rect.column,
+                rect.row,
+                rect.column_span,
+                rect.row_span,
+            )
+            for ref, rect in sorted(
+                updates, key=lambda item: (item[0].section, item[0].view_id)
+            )
+        )
+        self.group_geometry_requested.emit(payload)
+        return True
+
+    def _commit_overlap_avoidance(
+        self,
+        incoming: Mapping[UltraViewRef, GridRect],
+        origin: GridRect,
+        candidate: GridRect,
+    ) -> bool:
+        preferred = avoidance_preferred_delta(origin, candidate)
+        placements = tuple(self._placements.values())
+        updates, possible = plan_overlap_avoidance(
+            incoming, placements, preferred=preferred
+        )
+        if not possible or not updates:
+            updates, possible = plan_neighbor_shrink(incoming, placements)
+        if not possible or not updates:
+            self.feedback_requested.emit(FEEDBACK_AVOID_BOUNDARY)
+            self._relayout()
+            return False
+        return self._commit_planned(updates, set(incoming))
+
     def _request_geometry(self, ref: UltraViewRef, rect: GridRect, reason: str) -> bool:
         placement = self._placements.get(ref)
         if placement is None or rect == placement.rect:
             return False
-        if not rect_is_available(rect, self._placements.values(), excluding=ref):
-            self.feedback_requested.emit("目标位置与其他卡片重叠")
+        if rect != self._legal_grid_rect(rect):
+            self._finish_out_of_grid({ref: rect}, placement.rect, rect)
             return False
-        self.geometry_requested.emit(
-            ref.section,
-            ref.view_id,
-            rect.column,
-            rect.row,
-            rect.column_span,
-            rect.row_span,
-            reason,
-        )
-        return True
+        if rect_is_available(rect, self._placements.values(), excluding=ref):
+            self.geometry_requested.emit(
+                ref.section,
+                ref.view_id,
+                rect.column,
+                rect.row,
+                rect.column_span,
+                rect.row_span,
+                reason,
+            )
+            return True
+        return self._commit_overlap_avoidance({ref: rect}, placement.rect, rect)
 
     def _on_layout_key(
         self, section: str, view_id: str, column_delta: int, row_delta: int, resize: bool
@@ -2976,7 +3212,7 @@ class FreeGridBoard(QWidget):
         )
         if not resize:
             if candidate != self._legal_grid_rect(candidate):
-                self.feedback_requested.emit("不能移出网格")
+                self._finish_out_of_grid({ref: candidate}, placement.rect, candidate)
                 return
             self._request_geometry(ref, candidate, "keyboard-move")
             return
@@ -3455,6 +3691,8 @@ class TrayItem(QFrame):
         super().__init__(parent)
         self.setObjectName("ultraViewTrayItem")
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumHeight(TRAY_ITEM_MIN_HEIGHT)
         self._section = section
         self._view_id = view_id
         self._press_pos: QPoint | None = None
@@ -3479,8 +3717,12 @@ class TrayItem(QFrame):
         self._rebind.clicked.connect(self._emit_rebind)
         self._rebind.setVisible(status == STATUS_ORPHANED)
         remove = QToolButton(self)
+        remove.setObjectName("ultraViewTrayRemove")
         remove.setText("移除")
         remove.clicked.connect(self._emit_remove)
+        for button in (place, self._rebind, remove):
+            button.setAutoRaise(False)
+            button.setCursor(Qt.PointingHandCursor)
         layout.addWidget(place, 0)
         layout.addWidget(self._rebind, 0)
         layout.addWidget(remove, 0)
@@ -3541,6 +3783,7 @@ class UnplacedTray(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAcceptDrops(True)
         self._expanded = False
+        self._overlay_mode = False
         self._items: list[TrayItem] = []
         self._content_signature: tuple | None = None
         root = QVBoxLayout(self)
@@ -3556,21 +3799,23 @@ class UnplacedTray(QFrame):
         self._body.setObjectName("ultraViewTrayBody")
         self._body.setWidgetResizable(True)
         self._body.setFrameShape(QFrame.NoFrame)
+        self._body.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._body.setMaximumHeight(TRAY_BODY_MAX_HEIGHT)
         self._inner = QWidget(self._body)
-        self._inner_layout = QHBoxLayout(self._inner)
-        self._inner_layout.setContentsMargins(8, 6, 8, 8)
-        self._inner_layout.setSpacing(8)
-        self._inner_layout.addStretch(1)
+        self._inner.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self._inner_layout = QVBoxLayout(self._inner)
+        self._inner_layout.setContentsMargins(10, 8, 10, 10)
+        self._inner_layout.setSpacing(6)
         self._body.setWidget(self._inner)
         self._empty = QLabel("缩小布局或移入的卡片会出现在这里", self._inner)
         self._empty.setObjectName("ultraViewTrayEmptyHint")
         self._empty.setWordWrap(True)
         self._empty.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self._inner_layout.insertWidget(0, self._empty)
+        self._inner_layout.addWidget(self._empty)
         self._empty.hide()
         self._body.setVisible(False)
-        root.addWidget(self._body, 0)
+        self._body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        root.addWidget(self._body, 1)
 
     def title_bar(self) -> QPushButton:
         return self._title
@@ -3616,16 +3861,17 @@ class UnplacedTray(QFrame):
         if signature == self._content_signature:
             return
         self._content_signature = signature
+        empty = self._empty
         while self._inner_layout.count():
             item = self._inner_layout.takeAt(0)
             widget = item.widget()
-            if widget is None or widget is self._empty:
+            if widget is None or widget is empty:
                 continue
             widget.setParent(None)
             widget.deleteLater()
         self._items = []
-        self._inner_layout.addWidget(self._empty, 0)
-        self._inner_layout.addStretch(1)
+        if self._inner_layout.indexOf(empty) < 0:
+            self._inner_layout.addWidget(empty, 0)
         for ref in refs:
             key = (ref.section, ref.view_id)
             widget = TrayItem(
@@ -3644,17 +3890,61 @@ class UnplacedTray(QFrame):
             widget.rebind_arm_requested.connect(self.rebind_arm_requested)
             widget.drag_started.connect(self.drag_started)
             widget.drag_finished.connect(self.drag_finished)
-            self._inner_layout.insertWidget(self._inner_layout.count() - 1, widget)
+            self._inner_layout.addWidget(widget, 0)
             self._items.append(widget)
         count = len(refs)
         self._title.setText("未放置" if count == 0 else f"未放置 · {count}")
-        self._empty.setVisible(count == 0)
+        empty.setVisible(count == 0)
+        self._sync_inner_min_height()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        title_h = max(28, self._title.sizeHint().height()) if self._title.isVisible() else 0
+        rows = len(self._items) if self._items else 1
+        visible = min(UNPLACED_OVERLAY_VISIBLE_ROWS, max(1, rows))
+        margins = self._inner_layout.contentsMargins()
+        body_h = (
+            margins.top()
+            + margins.bottom()
+            + visible * TRAY_ITEM_MIN_HEIGHT
+            + max(0, visible - 1) * self._inner_layout.spacing()
+        )
+        return QSize(UNPLACED_OVERLAY_WIDTH, max(UNPLACED_OVERLAY_MIN_HEIGHT, title_h + body_h))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(320, UNPLACED_OVERLAY_MIN_HEIGHT)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._sync_inner_min_height()
+
+    def _measured_inner_height(self) -> int:
+        margins = self._inner_layout.contentsMargins()
+        count = len(self._items)
+        if count == 0:
+            return margins.top() + margins.bottom() + 36
+        return (
+            margins.top()
+            + margins.bottom()
+            + count * TRAY_ITEM_MIN_HEIGHT
+            + max(0, count - 1) * self._inner_layout.spacing()
+        )
+
+    def _sync_inner_min_height(self) -> None:
+        self._inner.setMinimumHeight(self._measured_inner_height())
 
     def set_overlay_mode(self, overlay: bool) -> None:
         """Overlay host always shows the body; the old collapsible title is chrome."""
-        self._title.setVisible(not overlay)
-        if overlay:
+        self._overlay_mode = bool(overlay)
+        self._title.setCheckable(not self._overlay_mode)
+        self._title.setVisible(True)
+        if self._overlay_mode:
+            blocked = self._title.blockSignals(True)
+            self._title.setChecked(True)
+            self._title.blockSignals(blocked)
             self.set_expanded(True)
+            self._body.setMaximumHeight(16777215)
+        else:
+            self._body.setMaximumHeight(TRAY_BODY_MAX_HEIGHT)
 
     def focus_first_item(self) -> bool:
         if not self._items:
@@ -3666,6 +3956,11 @@ class UnplacedTray(QFrame):
         return True
 
     def _on_title(self, checked: bool) -> None:
+        if self._overlay_mode:
+            blocked = self._title.blockSignals(True)
+            self._title.setChecked(True)
+            self._title.blockSignals(blocked)
+            return
         self.set_expanded(checked)
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
