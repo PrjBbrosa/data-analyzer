@@ -329,6 +329,9 @@ MISSING_CARD_COPY = "尚无可用结果，UltraView 不会后台计算"
 STALE_CARD_COPY = "源已变化"
 ORPHANED_CARD_COPY = "源 View 已删除"
 DIMMED_OPACITY = 0.28
+# Transient dim worn by the cards a drag is currently previewing; the model-level
+# ``DIMMED_OPACITY`` above is the persistent one ``restore_dim()`` falls back to.
+DRAG_DIM_OPACITY = 0.4
 LIBRARY_DEFAULT_WIDTH = 288
 TYPE_CHIP_ICON_ONLY_WIDTH = 168
 _SECTION_TYPE_ICONS = {
@@ -2678,8 +2681,9 @@ class FreeGridBoard(QWidget):
         self._pending_shift_toggle: UltraViewRef | None = None
         self._layout_revision = 0
         self._gesture_dimmed = False
-        self._layout_revision = 0
-        self._gesture_dimmed = False
+        # Cards currently wearing the drag dim, owned by the board so the set
+        # can shrink mid-gesture; the plan's preview set changes on every move.
+        self._dimmed_refs: set[UltraViewRef] = set()
 
     def set_viewport_size(self, size: QSize) -> None:
         if size == self._viewport_size:
@@ -2762,6 +2766,7 @@ class FreeGridBoard(QWidget):
         for ref in list(self._widgets):
             if ref not in wanted:
                 widget = self._widgets.pop(ref)
+                self._dimmed_refs.discard(ref)
                 widget.setParent(None)
                 widget.deleteLater()
         for ref, placement in self._placements.items():
@@ -3143,13 +3148,7 @@ class FreeGridBoard(QWidget):
         if not self._gesture_dimmed:
             self.drag_started.emit("layout")
             self._gesture_dimmed = True
-            for ref in dim_refs:
-                card = self._widgets.get(ref)
-                if card is None:
-                    continue
-                effect = QGraphicsOpacityEffect(card)
-                effect.setOpacity(0.4)
-                card.setGraphicsEffect(effect)
+        self._sync_gesture_dim(dim_refs)
         ghosts = []
         ghost_rects = session.group_ghost_pixels(self._metrics, board_pos)
         refs = list(preview_refs)
@@ -3169,14 +3168,44 @@ class FreeGridBoard(QWidget):
             handles=session.handle is not None,
         )
 
+    def _sync_gesture_dim(self, wanted: set[UltraViewRef]) -> None:
+        """Dim exactly ``wanted`` and undim whatever left the plan.
+
+        The plan's displaced set changes as the pointer moves, so a set computed
+        once on the first frame does not match the set restored on release: a
+        neighbour that was pushed and then stopped being pushed used to stay at
+        40% opacity forever (review 2026-08-15 §4.3 dim 泄漏).
+        """
+        for ref in self._dimmed_refs - wanted:
+            card = self._widgets.get(ref)
+            if card is not None:
+                card.restore_dim()
+        for ref in wanted - self._dimmed_refs:
+            card = self._widgets.get(ref)
+            if card is None:
+                continue
+            effect = QGraphicsOpacityEffect(card)
+            effect.setOpacity(DRAG_DIM_OPACITY)
+            card.setGraphicsEffect(effect)
+        self._dimmed_refs = {ref for ref in wanted if ref in self._widgets}
+
+    def _clear_gesture_dim(self) -> None:
+        """Unconditional restore: whatever the board dimmed, the board undims."""
+        for ref in self._dimmed_refs:
+            card = self._widgets.get(ref)
+            if card is not None:
+                card.restore_dim()
+        self._dimmed_refs = set()
+
     def _finish_gesture(self, *, commit: bool, global_pos: QPoint | None = None) -> None:
         session = self._gesture.take()
         self._release_mouse_if_grabbed()
         self._gesture_dimmed = False
         if session is None:
+            self._clear_gesture_dim()
             return
         members = session.group_origins or {session.ref: session.origin}
-        restore_refs = set(members)
+        restore_refs = set(members) | set(self._dimmed_refs)
         if session.plan is not None:
             restore_refs.update(ref for ref, _rect in session.plan.preview_rects())
         preview_open = True
@@ -3186,6 +3215,7 @@ class FreeGridBoard(QWidget):
             if not preview_open:
                 return
             preview_open = False
+            self._clear_gesture_dim()
             for ref in restore_refs:
                 card = self._widgets.get(ref)
                 if card is not None:

@@ -1653,6 +1653,58 @@ def test_free_grid_overlap_drop_moves_blocker_without_modal(qtbot, monkeypatch):
     assert len(ghost_geoms) == 2
 
 
+def test_drag_over_neighbour_and_back_leaves_no_dim_behind(qtbot):
+    """Dragging across a neighbour and back to the original cell must not leave the
+    neighbour at drag opacity: the dim set is recomputed every move, so it has to be
+    undimmed incrementally and cleared unconditionally on release
+    (review 2026-08-15 §4.3 dim 泄漏)."""
+    harness = _Harness(qtbot)
+    free, (card, other) = _prepare_free_grid(harness, qtbot, "dim-0", "dim-1")
+    requested = []
+    group = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    harness.page.free_grid_group_geometry_requested.connect(group.append)
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    over = QPoint(start.x() + unit * 6, start.y())
+    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
+    _send_mouse_move(card, over)
+    assert free.gesture().is_active()
+    assert other.graphicsEffect() is not None, "the displaced neighbour is previewed"
+    _send_mouse_move(card, start)
+    session = free.gesture().session()
+    assert session is not None and session.plan is not None
+    assert [ref for ref, _rect in session.plan.preview_rects()] == [
+        make_ref("time", "dim-0")
+    ]
+    assert other.graphicsEffect() is None, (
+        "the neighbour left the plan, so its dim must be dropped on the same frame"
+    )
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, start)
+    assert requested == [] and group == []
+    assert other.graphicsEffect() is None
+    assert card.graphicsEffect() is None
+    assert free._dimmed_refs == set()
+
+
+def test_cancelled_drag_restores_every_dimmed_card(qtbot):
+    """Esc is the path where nothing re-applies the model, so the board's own dim
+    bookkeeping is the only thing that can undo it."""
+    harness = _Harness(qtbot)
+    free, (card, other) = _prepare_free_grid(harness, qtbot, "esc-dim-0", "esc-dim-1")
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
+    _send_mouse_move(card, QPoint(start.x() + unit * 6, start.y()))
+    assert other.graphicsEffect() is not None
+    assert free.cancel_gesture() is True
+    assert other.graphicsEffect() is None
+    assert card.graphicsEffect() is None
+    assert free._dimmed_refs == set()
+
+
 def test_free_grid_overlap_drop_does_not_construct_message_box(qtbot, monkeypatch):
     harness = _Harness(qtbot)
     free, (card, _other) = _prepare_free_grid(harness, qtbot, "spy-0", "spy-1")
