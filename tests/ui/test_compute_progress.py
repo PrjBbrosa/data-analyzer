@@ -195,3 +195,58 @@ def test_begin_compute_progress_can_skip_process_events(qapp, qtbot, monkeypatch
     window._begin_compute_progress("时间域绘制中")
 
     assert calls == ["process"]
+
+
+def test_restore_progress_token_blocks_nested_process_events(
+    qapp, qtbot, monkeypatch
+):
+    """Project restore owns the status bar; nested begins must not drain Qt."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+    calls = []
+
+    monkeypatch.setattr(
+        window_mod.QApplication,
+        "processEvents",
+        lambda *args, **kwargs: calls.append("process"),
+    )
+
+    token = window._begin_compute_progress(
+        "正在恢复分析 0/2",
+        total=2,
+        process_events=False,
+    )
+    window._analysis_jobs.set_progress_token("restore", token)
+
+    nested = window._begin_compute_progress("时间域绘制中")
+    assert nested is token
+    assert calls == []
+
+    window._update_compute_progress(1, 2, token=token, process_events=True)
+    assert calls == []
+
+    window._finish_compute_progress(token=token)
+    assert window._active_compute_progress_token is token
+
+    window._analysis_jobs.clear_progress_token("restore")
+    window._finish_compute_progress(token=token)
+    assert window._active_compute_progress_token is None
+
+
+def test_analysis_restore_pump_survives_closed_window(qapp, qtbot, monkeypatch):
+    """A pending restore timer must not paint a deleted status-bar bar."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(
+        type(window),
+        "_recompute_restored_analysis_view",
+        lambda self, section, view_id: None,
+    )
+    window._analysis_restore_pending = {("fft", "view-1")}
+    window._dispatch_pending_analysis_restore()
+    assert window._analysis_jobs.progress_token("restore") is not None
+
+    window.close()
+    window.deleteLater()
+    qapp.processEvents()
+    qapp.processEvents()

@@ -170,6 +170,8 @@ lesson by default.
 | [QDrag.exec_ Must Outlive Its Source Widget](ultraview-qdrag-exec-must-outlive-source.md) | Implementing or testing Qt drag-drop that rebuilds the library, grid, | See lesson |
 | [Toolbar Enable Matrix At Construction](pyqt-ui/2026-08-14-toolbar-enable-matrix-at-construction.md) | Changing toolbar button enable/disable rules, `set_enabled_for_mode`, or any gated QPushButton whose live state is applied only on a later event. | See lesson |
 | [CAN Log Probe Samples Decode And Defers ZOH](2026-08-14-can-log-probe-sample-and-lazy-zoh.md) | Changing BLF/CANoe ASC import, DBC probe strength, or the shared-time ZOH assemble that turns CAN signals into a FileData table. | See lesson |
+| [Project Open Recomputes Every Analysis View](project-open-recomputes-every-analysis-view.md) | Changing project save/open, analysis View restore, FFT pane.sources capture, or any path that used to call `do_fft` / `do_order_time` / `do_fft_time` / `do_frf` after loading a `.tlproj`. | See lesson |
+| [Project Restore Progress Yields The Event Loop](project-restore-progress-yields-event-loop.md) | Changing project open, analysis-view restore scheduling, compute progress, or any `processEvents` on the restore path. | See lesson |
 
 ## Selection Rules
 

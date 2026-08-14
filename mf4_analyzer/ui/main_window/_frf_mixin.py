@@ -643,6 +643,7 @@ class FrfMixin:
         if done == total and not self._analysis_jobs.is_running("frf"):
             self._finish_compute_progress(token=token)
             self._analysis_jobs.clear_progress_token("frf")
+            self._finish_analysis_restore_if_idle()
 
     def _frf_state_by_id(self, view_id):
         target = str(view_id or "")

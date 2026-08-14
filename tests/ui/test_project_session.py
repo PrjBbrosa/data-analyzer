@@ -36,6 +36,21 @@ def _write_frf_csv(path, n=2_000):
             w.writerow([i / 1_000.0, float(i % 13), float((i + 3) % 17)])
 
 
+def _drain_analysis_restore(qapp, win, rounds=80):
+    """Pump the one-View-per-tick restore queue until the bar is released."""
+    for _ in range(rounds):
+        qapp.processEvents()
+        queue = getattr(win, "_analysis_restore_queue", None) or []
+        token = win._analysis_jobs.progress_token("restore")
+        busy = any(
+            win._analysis_jobs.is_busy(section)
+            for section in ("fft_time", "order", "frf")
+        )
+        if not queue and token is None and not busy:
+            return
+    raise AssertionError("analysis restore did not finish")
+
+
 def test_save_project_writes_file(qapp, tmp_path):
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.ui import project_io as pio
@@ -439,6 +454,7 @@ def test_open_project_auto_recomputes_source_bearing_analysis_views(
     """Recompute-on-open: a saved project stores each analysis view's params +
     sources but NOT the numeric results, so opening it must auto-recompute every
     view that has sources (and leave source-less views alone)."""
+    from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
     from mf4_analyzer.ui.main_window import MainWindow
     csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
     proj = tmp_path / "s.tlproj"
@@ -448,23 +464,117 @@ def test_open_project_auto_recomputes_source_bearing_analysis_views(
     fid = next(iter(mw.files))
     # Give the Order view a source while the app is in 'time' mode — save then
     # preserves these sources (capture_sources only re-reads the navigator for
-    # the CURRENT mode). The FFT view is left source-less.
+    # the CURRENT mode). Seed two FFT views so open must dispatch both, not
+    # only the active tab. Mutate the manager list directly so set_active
+    # cannot rewrite the shared Time/FFT navigator mid-setup.
     mw.analysis_managers['order'].get(0).panes[0].sources = [(fid, 'rpm')]
+    fft_mgr = mw.analysis_managers['fft']
+    fft_mgr.get(0).panes[0].sources = [(fid, 'rpm')]
+    fft_mgr.get(0).attached_file_ids = [fid]
+    fft_mgr.views.append(AnalysisViewState(
+        name="FFT 2",
+        tab_color=fft_mgr.get(0).tab_color,
+        panes=[PaneState(sources=[(fid, 'rpm')])],
+        attached_file_ids=[fid],
+    ))
     mw.save_project(proj)
 
     mw2 = MainWindow()
     recomputed = []
     monkeypatch.setattr(
-        type(mw2), '_recompute_analysis_section',
-        lambda self, section: recomputed.append(section),
+        type(mw2), '_recompute_restored_analysis_view',
+        lambda self, section, view_id: recomputed.append((section, view_id)),
     )
     mw2.open_project(proj)
-    # Recompute is deferred via QTimer.singleShot so it never pops a modal
-    # mid-open; pump the event loop to let the queued dispatch run.
-    qapp.processEvents()
+    assert recomputed == []
+    assert mw2._analysis_jobs.progress_token("restore") is not None
+    assert "恢复分析" in (mw2._compute_progress._full_label or "")
+    assert len(mw2._analysis_restore_queue) == 3
+    _drain_analysis_restore(qapp, mw2)
 
-    assert 'order' in recomputed, "source-bearing Order view must auto-recompute"
-    assert 'fft' not in recomputed, "source-less FFT view must NOT recompute"
+    sections = {section for section, _view_id in recomputed}
+    assert 'order' in sections, "source-bearing Order view must auto-recompute"
+    fft_ids = [view_id for section, view_id in recomputed if section == 'fft']
+    assert len(fft_ids) == 2, "every source-bearing FFT View must recompute"
+    assert set(fft_ids) == {v.view_id for v in mw2.analysis_managers['fft'].views}
+    assert 'fft_time' not in sections, "source-less FFT-vs-Time must NOT recompute"
+    assert mw2._analysis_jobs.progress_token("restore") is None
+
+
+def test_open_project_recomputes_inactive_fft_view_without_clicking_compute(
+        qapp, tmp_path, qtbot):
+    """Opening a project must refill every FFT View's cache so switching tabs
+    shows the restored spectrum without pressing 计算."""
+    from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
+    from mf4_analyzer.ui.main_window import MainWindow
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=256)
+    proj = tmp_path / "multi_fft.tlproj"
+
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    fft_mgr = mw.analysis_managers["fft"]
+    fft_mgr.get(0).panes[0].sources = [(fid, "rpm")]
+    fft_mgr.get(0).attached_file_ids = [fid]
+    fft_mgr.views.append(AnalysisViewState(
+        name="FFT 2",
+        tab_color=fft_mgr.get(0).tab_color,
+        panes=[PaneState(sources=[(fid, "rpm")])],
+        attached_file_ids=[fid],
+    ))
+    mw.save_project(proj)
+
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.open_project(proj)
+    _drain_analysis_restore(qapp, mw2)
+
+    fft_mgr2 = mw2.analysis_managers["fft"]
+    assert len(fft_mgr2.views) == 2
+    mw2.toolbar._set_mode("fft")
+    qapp.processEvents()
+    canvas = mw2.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._amp_curves) >= 1
+    other = 1 - fft_mgr2.active
+    fft_mgr2.set_active(other)
+    qapp.processEvents()
+    assert len(canvas._amp_curves) >= 1
+
+
+def test_fft_inspector_signal_is_saved_and_recomputed_on_open(
+        qapp, tmp_path, qtbot):
+    """Inspector 单信号 (no navigator ticks) must persist as pane.sources so
+    reopen can recompute instead of showing an empty '未选通道' chart."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    csv_a = tmp_path / "a.csv"
+    _write_csv(csv_a, n=256)
+    proj = tmp_path / "fft_single.tlproj"
+
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    mw.toolbar._set_mode("fft")
+    mw._attach_files_to_active_context([fid])
+    mw.navigator.set_checked_channels([])
+    mw.inspector.fft_ctx.set_signal_candidates([("rpm", (fid, "rpm"))])
+    mw.inspector.fft_ctx.combo_sig.setCurrentIndex(0)
+    mw._capture_active_analysis_view("fft")
+    assert mw.analysis_managers["fft"].get(0).panes[0].sources == [(fid, "rpm")]
+    mw.save_project(proj)
+
+    mw2 = MainWindow()
+    qtbot.addWidget(mw2)
+    mw2.open_project(proj)
+    _drain_analysis_restore(qapp, mw2)
+    restored = mw2.analysis_managers["fft"].get(0).panes[0].sources
+    assert restored and restored[0][1] == "rpm"
+    mw2.toolbar._set_mode("fft")
+    qapp.processEvents()
+    canvas = mw2.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._amp_curves) >= 1
 
 
 def test_open_project_multi_group_hdf_no_duplication(qapp, tmp_path):

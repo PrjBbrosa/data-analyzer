@@ -53,7 +53,7 @@ class OrderMixin:
         return t, sig
 
     def _order_rpm_for(self, rpm_source, n, time_range=_INSPECTOR_TIME_RANGE,
-                       t_sig=None):
+                       t_sig=None, *, params=None):
         """Fetch + range-gate + scale an explicit Order RPM source. ``n`` is
         the signal length the rpm must match. Returns the scaled rpm array or
         ``None`` (caller skips the pane). The scale factor is the current
@@ -70,8 +70,16 @@ class OrderMixin:
         length-mismatch behaviour. EPS: ``rpm`` is the motor speed (order base).
         """
         ctx = self.inspector.order_ctx
-        if getattr(ctx, 'rpm_mode', lambda: 'channel')() == 'manual':
-            return np.full(int(n), float(ctx.manual_rpm()), dtype=float)
+        p = params if isinstance(params, dict) else None
+        rpm_mode = None if p is None else p.get('rpm_mode')
+        if rpm_mode is None:
+            rpm_mode = getattr(ctx, 'rpm_mode', lambda: 'channel')()
+        if rpm_mode == 'manual':
+            if p is not None and 'manual_rpm' in p:
+                value = float(p['manual_rpm'])
+            else:
+                value = float(ctx.manual_rpm())
+            return np.full(int(n), value, dtype=float)
         if not rpm_source:
             return None
         fid, ch = rpm_source
@@ -80,7 +88,10 @@ class OrderMixin:
         fd = self.files[fid]
         if ch not in fd.data.columns:
             return None
-        factor = self.inspector.order_ctx.rpm_factor()
+        if p is not None and 'rpm_factor' in p:
+            factor = p['rpm_factor']
+        else:
+            factor = self.inspector.order_ctx.rpm_factor()
         rpm = fd.data[ch].values.copy() * factor
         t_rpm = fd.time_array
         if (
@@ -252,10 +263,10 @@ class OrderMixin:
         if sig is None or len(sig) < 100:
             return None
         rpm = self._order_rpm_for(
-            rpm_source, len(sig), time_range=time_range, t_sig=t)
+            rpm_source, len(sig), time_range=time_range, t_sig=t, params=p)
         if rpm is None:
             return None
-        fs = self.inspector.order_ctx.fs()
+        fs = p.get('fs') or self.inspector.order_ctx.fs()
         t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
         if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
             t_arr = np.arange(len(sig), dtype=float) / float(fs)
@@ -268,6 +279,44 @@ class OrderMixin:
         self.toast(message, "warning")
         self.statusBar.showMessage(message)
         return False
+
+    def _recompute_restored_order_view(self, view_id):
+        """Fill the Order cache from persisted panes; plot only if active."""
+        state = self._analysis_state_by_id("order", view_id)
+        if state is None:
+            return
+        mgr = self.analysis_managers["order"]
+        is_active = mgr.get(mgr.active) is state
+        plot_live = is_active and self.chart_stack.current_mode() == "order"
+        page = self._analysis_page("order")
+        cache = self.analysis_caches["order"]
+        jobs = []
+        for pane_idx, pane in enumerate(state.panes):
+            sources = pane.sources
+            if not sources:
+                continue
+            fid, ch = sources[0]
+            rpm_source = pane.rpm_source
+            built = self._build_order_job(
+                pane_idx, fid, ch, rpm_source, state=state, warn=False
+            )
+            if built is None:
+                continue
+            _job, ctx = built
+            analysis_key = ctx.get("analysis_key")
+            cached = cache.get(analysis_key) if analysis_key is not None else None
+            if cached is not None:
+                self._store_analysis_result(
+                    "order", state.view_id, pane_idx, analysis_key, cached
+                )
+                if plot_live and pane_idx < page.pane_count():
+                    self._render_order_on(
+                        page.pane_canvas(pane_idx), cached, source=(fid, ch)
+                    )
+                continue
+            jobs.append(built)
+        if jobs:
+            self._start_order_batch(jobs)
 
     def do_order_time(self):
         """Compute the WHOLE active Order view — every pane (V7b).
@@ -368,14 +417,15 @@ class OrderMixin:
 
     def _start_order_batch(self, jobs):
         total = len(jobs)
-        self._analysis_jobs.set_progress_token(
-            'order',
-            self._begin_compute_progress(
-                "阶次 1/%d" % total,
-                total=1000,
-                process_events=False,
-            ),
-        )
+        if self._analysis_jobs.progress_token('order') is None:
+            self._analysis_jobs.set_progress_token(
+                'order',
+                self._begin_compute_progress(
+                    "阶次 1/%d" % total,
+                    total=1000,
+                    process_events=False,
+                ),
+            )
         self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
         self.inspector.order_ctx.set_progress("计算中...")
         self._analysis_jobs.submit_batch('order', jobs)
@@ -387,10 +437,21 @@ class OrderMixin:
         self._emit_compute_feedback(outcome, section_label="时间-阶次")
         self._order_outcome = None
 
-    def _build_order_job(self, pane_idx, fid, ch, rpm_source):
+    def _build_order_job(self, pane_idx, fid, ch, rpm_source, *, state=None,
+                         warn=True):
         """Prepare one COT job and its immutable render/cache context."""
         from ...signal.order_cot import COTOrderAnalyzer, COTParams
-        time_range = self._pane_time_range_for('order', pane_idx)
+        if state is not None:
+            pane = state.panes[pane_idx]
+            time_range = self._normalize_analysis_time_range(pane.time_range)
+            op = self._compute_params_overlay_state('order', state)
+            view_id = state.view_id
+        else:
+            time_range = self._pane_time_range_for('order', pane_idx)
+            op = dict(self.inspector.order_ctx.compute_params())
+            view_id = self.analysis_managers['order'].get(
+                self.analysis_managers['order'].active
+            ).view_id
         t, sig = self._order_sig_for((fid, ch), time_range=time_range)
         if sig is None:
             outcome = getattr(self, '_order_outcome', None)
@@ -403,15 +464,15 @@ class OrderMixin:
                 outcome.skipped.append("信号过短")
             return None
         rpm = self._order_rpm_for(
-            rpm_source, len(sig), time_range=time_range, t_sig=t)
+            rpm_source, len(sig), time_range=time_range, t_sig=t, params=op)
         if rpm is None:
             outcome = getattr(self, '_order_outcome', None)
             if outcome is not None:
                 outcome.skipped.append("缺转速")
             return None
-        self._warn_if_order_speed_unsuitable(rpm)
-        fs = self.inspector.order_ctx.fs()
-        op = dict(self.inspector.order_ctx.compute_params())
+        if warn:
+            self._warn_if_order_speed_unsuitable(rpm)
+        fs = op.get('fs') or self.inspector.order_ctx.fs()
         # Audit fix R6/C7: COT requires strictly monotonic ``t``; synthesise a
         # uniform grid from the inspector fs when the timestamps are degenerate.
         t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
@@ -433,7 +494,7 @@ class OrderMixin:
             outcome = getattr(self, '_order_outcome', None)
             if outcome is not None:
                 outcome.failed += 1
-            else:
+            elif warn:
                 QMessageBox.critical(self, "错误", str(e))
             return None
         analysis_key = self._order_analysis_cache_key(
@@ -449,9 +510,7 @@ class OrderMixin:
             'source': (fid, ch),
             # Capture at dispatch: completion may land after the user switched
             # Views, so the callback must not read the then-active view.
-            'view_id': self.analysis_managers['order'].get(
-                self.analysis_managers['order'].active
-            ).view_id,
+            'view_id': view_id,
         }
 
         def job(worker, _sig=sig, _rpm=rpm, _t=t_arr, _p=p):
@@ -728,3 +787,4 @@ class OrderMixin:
             self._analysis_jobs.clear_progress_token('order')
             self.inspector.order_ctx.set_progress("")
             self._finish_order_outcome_feedback()
+            self._finish_analysis_restore_if_idle()

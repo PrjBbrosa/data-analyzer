@@ -471,10 +471,10 @@ class MainWindow(
         # file writes it.
         # Post-load auto-recompute queue. A saved project carries each analysis
         # view's compute params + signal sources but NOT the numeric results
-        # (recompute-on-open, per the user's choice). open_project seeds this
-        # with every (section, view_idx) that has sources; the first time such a
-        # view is rendered we recompute it instead of showing the empty
-        # "click 计算" state, then drop it from the set.
+        # (recompute-on-open). open_project seeds this with every
+        # (section, view_id) that has sources, then dispatches all of them
+        # after the window finishes opening so every View returns to its
+        # computed state without waiting for the user to visit the tab.
         self._analysis_restore_pending = set()
         # Identity of the inputs behind the last fft-canvas render. Re-entering
         # fft mode with the same signature reuses the retained stacked-page
@@ -585,6 +585,12 @@ class MainWindow(
         self._active_compute_progress_token = None
         self.statusBar.addPermanentWidget(self._compute_progress, 0)
 
+    def _restore_progress_token(self):
+        jobs = getattr(self, "_analysis_jobs", None)
+        if jobs is None:
+            return None
+        return jobs.progress_token("restore")
+
     def _begin_compute_progress(
         self,
         label: str,
@@ -593,10 +599,16 @@ class MainWindow(
         *,
         process_events: bool = True,
     ) -> object:
+        restore = self._restore_progress_token()
+        if restore is not None and token is None:
+            # Project restore owns the status-bar slot until it finishes.
+            # A nested time-plot / section batch must not replace that token
+            # or drain the restore pump with processEvents.
+            return restore
         active_token = token if token is not None else object()
         self._active_compute_progress_token = active_token
         self._compute_progress.begin(label, total)
-        if process_events:
+        if process_events and restore is None:
             QApplication.processEvents()
         return active_token
 
@@ -618,12 +630,17 @@ class MainWindow(
         ):
             return
         self._compute_progress.set_progress(current, total, label)
+        restore = self._restore_progress_token()
         if process_events or flush_events:
             # Default path: repaint only the tiny status-bar widget.  Draining
             # the entire Qt queue during chart rebuild can paint the previous
             # plot mid-flight.  File-load passes ``flush_events=True`` so the
             # long synchronous import still lets the bar/label reach the screen.
             self._compute_progress.repaint()
+        if restore is not None and process_events and not flush_events:
+            # Full processEvents would nested-run the restore pump (beachball
+            # + stolen navigator capture). Paint only.
+            return
         if flush_events:
             from PyQt5.QtCore import QEventLoop
             QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
@@ -633,6 +650,11 @@ class MainWindow(
         label: str | None = None,
         token: object | None = None,
     ) -> None:
+        restore = self._restore_progress_token()
+        if restore is not None and (token is None or token is restore):
+            # Section workers / time-plot finally blocks must not hide the
+            # restore bar while later Views are still queued.
+            return
         if (
             token is not None
             and token is not self._active_compute_progress_token
@@ -925,10 +947,16 @@ class MainWindow(
     def _on_analysis_job_finished(self, section, ctx, result):
         if section == 'order':
             self._on_order_job_finished(ctx, result)
+        finisher = getattr(self, "_finish_analysis_restore_if_idle", None)
+        if callable(finisher):
+            QTimer.singleShot(0, finisher)
 
     def _on_analysis_job_failed(self, section, ctx, error):
         if section == 'order':
             self._on_order_job_failed(ctx, error)
+        finisher = getattr(self, "_finish_analysis_restore_if_idle", None)
+        if callable(finisher):
+            QTimer.singleShot(0, finisher)
 
     def _on_analysis_job_progress(self, section, done, total):
         if section == 'fft_time':
@@ -1199,9 +1227,7 @@ class MainWindow(
             # pane's dragged range back into the inspector Z controls. Pane 1
             # is wired later in _connect_new_pane (it does not exist yet).
             if sec in {'fft_time', 'order'}:
-                page.pane_canvas(0).levels_changed.connect(
-                    lambda lo, hi, s=sec: self._on_analysis_levels_dragged(
-                        s, 0, lo, hi))
+                self._wire_heatmap_levels_echo(page.pane_canvas(0), sec, 0)
             else:
                 self._connect_fft_preview_range_signal(page.pane_canvas(0), 0)
 
@@ -1450,7 +1476,8 @@ class MainWindow(
         state = mgr.get(mgr.active)
         # Sync navigator checkbox → focused pane sources only. Params / range
         # stay owned by the state that was just applied on mode entry.
-        self._capture_analysis_sources('fft', state)
+        if not self._analysis_restore_pending:
+            self._capture_analysis_sources('fft', state)
         # 进入 FFT 时按当前勾选的焦点源刷新 Auto 的 dB reference。
         # rerender=False：只刷识别不重算；Manual View 在 helper 内 no-op。
         self._resolve_and_apply_db_reference('fft')
@@ -1714,7 +1741,14 @@ class MainWindow(
             # visible canvas, and drawing now paints onto a backing store that
             # is discarded when the layout pass fires (observed regression:
             # plot blanks after fft → time toggle).
-            if self.files and self.navigator.get_checked_channels():
+            if (
+                self.files
+                and self.navigator.get_checked_channels()
+                and not opening
+            ):
+                # Project open already plots via `_apply_active_view`. A
+                # deferred replot here would processEvents into the restore
+                # pump and freeze the UI (macOS beachball).
                 QTimer.singleShot(0, self._plot_time_preserving_xlim)
         elif mode in self.analysis_managers:
             role = (
@@ -4728,7 +4762,8 @@ class MainWindow(
                     ctx.set_fs(new_fs)
 
         try:
-            self.plot_time()
+            if self._restore_progress_token() is None:
+                self.plot_time()
         except Exception:  # noqa: BLE001 - plot refresh must not block analysis
             pass
 
@@ -4779,6 +4814,9 @@ class MainWindow(
             if not sip.isdeleted(uv):
                 uv.shutdown()
                 uv.deleteLater()
+        abort = getattr(self, "_abort_analysis_restore", None)
+        if callable(abort):
+            abort()
         self._analysis_jobs.shutdown()
         super().closeEvent(event)
 

@@ -11,6 +11,7 @@ copy regardless of base-class order — there are no name collisions.
 
 import logging
 import math
+from functools import partial
 
 import numpy as np
 
@@ -240,12 +241,24 @@ class AnalysisMixin:
         # connection on a destroyed canvas is never reused — but a duplicate
         # connect on the same long-lived canvas would double-fire).
         if section in {'fft_time', 'order'}:
-            canvas = page.pane_canvas(1)
-            if not getattr(canvas, '_levels_echo_wired', False):
-                canvas.levels_changed.connect(
-                    lambda lo, hi: self._on_analysis_levels_dragged(
-                        section, 1, lo, hi))
-                canvas._levels_echo_wired = True
+            self._wire_heatmap_levels_echo(page.pane_canvas(1), section, 1)
+
+    def _wire_heatmap_levels_echo(self, canvas, section, pane_idx):
+        """Echo colorbar drag and double-click restore into the inspector.
+
+        ``partial`` rather than ``lambda`` so the connect-lambda ratchet
+        stays shrink-only. Both signals share the same handler: restore is
+        a finished window, not an in-progress drag, but the inspector write
+        (silent ``apply_params``) is identical.
+        """
+        if canvas is None or getattr(canvas, '_levels_echo_wired', False):
+            return
+        echo = partial(self._on_analysis_levels_dragged, section, pane_idx)
+        canvas.levels_changed.connect(echo)
+        restored = getattr(canvas, 'colorbar_restored', None)
+        if restored is not None:
+            restored.connect(echo)
+        canvas._levels_echo_wired = True
 
     def _connect_fft_preview_range_signal(self, canvas, pane_idx):
         signal = getattr(canvas, 'time_preview_range_changed', None)
@@ -457,6 +470,10 @@ class AnalysisMixin:
             'z_floor': float(lo),
             'z_ceiling': float(hi),
         })
+        # apply_params is silent (no display_params_changed → no replot).
+        # Persist the View ledger here so a later view-switch still sees
+        # the dragged / restored window.
+        self._sync_active_analysis_params(section)
 
     # -- source routing (Step 4) ----------------------------------------
     @staticmethod
@@ -629,7 +646,17 @@ class AnalysisMixin:
             return
         if section == 'fft':
             checked = self.navigator.get_checked_channels()
-            pane.sources = [(fid, ch) for fid, ch, _color in checked]
+            if checked:
+                pane.sources = [(fid, ch) for fid, ch, _color in checked]
+            else:
+                ctx = self._analysis_ctx(section)
+                sig = ctx.current_signal() if hasattr(ctx, 'current_signal') else None
+                try:
+                    fid, ch = sig[0], sig[1]
+                except (TypeError, ValueError, IndexError):
+                    pane.sources = []
+                else:
+                    pane.sources = [(fid, ch)] if fid in self.files else []
             self._sync_fft_source_summary(checked)
         else:
             ctx = self._analysis_ctx(section)
@@ -790,13 +817,13 @@ class AnalysisMixin:
         return cache.make_key(fid, ch, params)
 
     def _recompute_analysis_section(self, section):
-        """Dispatch the active view's compute for ``section`` (used by the
-        post-load auto-recompute path). Reuses the same entry points as the
-        计算 buttons, so caching / rendering / split-pane handling are shared.
+        """Dispatch the active view's compute for ``section``.
 
-        Runs deferred (QTimer.singleShot) from the restore path; guard the whole
-        dispatch so a compute failure can never bubble out of the event-loop
-        callback and tear down the freshly opened project."""
+        Used by tests and as a fallback for an explicit section-wide
+        recompute. Project restore uses ``_recompute_restored_analysis_view``
+        keyed by persisted ``view_id`` so inactive Views are not redirected
+        onto live Inspector state.
+        """
         try:
             if section == 'fft':
                 self.do_fft()
@@ -806,6 +833,157 @@ class AnalysisMixin:
                 self.do_fft_time()
             elif section == 'frf':
                 self.do_frf()
+        except Exception:
+            self.toast("恢复渲染失败，请手动点计算", "warning")
+
+    def _analysis_state_by_id(self, section, view_id):
+        mgr = self.analysis_managers.get(section)
+        if mgr is None:
+            return None
+        target = str(view_id or "")
+        for state in mgr.views:
+            if state.view_id == target:
+                return state
+        return None
+
+    def _compute_params_overlay_state(self, section, state):
+        """Merge persisted View params onto the live compute-params schema.
+
+        Inactive restore must not ``apply_params`` onto the shared Inspector.
+        Overlaying saved keys onto the current schema keeps cache identity
+        aligned with a later apply/get round-trip of the same View.
+        """
+        live = dict(self._analysis_compute_params(section))
+        saved = dict(getattr(state, "params", None) or {})
+        live.update({key: saved[key] for key in live if key in saved})
+        return live
+
+    def _analysis_restore_widgets_alive(self):
+        from PyQt5 import sip
+        try:
+            if sip.isdeleted(self):
+                return False
+            bar = getattr(self, "_compute_progress", None)
+            if bar is None or sip.isdeleted(bar):
+                return False
+        except (RuntimeError, TypeError):
+            return False
+        return True
+
+    def _abort_analysis_restore(self):
+        """Drop the restore pump so a closing window cannot paint a dead bar."""
+        self._analysis_restore_queue = []
+        self._analysis_restore_total = 0
+        jobs = getattr(self, "_analysis_jobs", None)
+        if jobs is not None:
+            jobs.clear_progress_token("restore")
+
+    def _dispatch_pending_analysis_restore(self):
+        """Recompute queued Views one event-loop turn at a time.
+
+        Scheduling every View as ``singleShot(0)`` made them all run in one
+        drained burst (nested inside time-plot ``processEvents``), which froze
+        the GUI and showed the macOS beachball. One View per timer tick lets
+        Cocoa run, and one restore progress token owns the status bar.
+        """
+        pending = list(self._analysis_restore_pending)
+        if not pending:
+            return
+
+        def _is_active(section, view_id):
+            mgr = self.analysis_managers.get(section)
+            if mgr is None or not mgr.views:
+                return False
+            return str(mgr.get(mgr.active).view_id) == str(view_id)
+
+        pending.sort(
+            key=lambda item: (0 if _is_active(*item) else 1, item[0], item[1])
+        )
+        self._analysis_restore_queue = pending
+        self._analysis_restore_total = len(pending)
+        token = self._begin_compute_progress(
+            "正在恢复分析 0/%d" % len(pending),
+            total=len(pending),
+            process_events=False,
+        )
+        self._analysis_jobs.set_progress_token("restore", token)
+        self._compute_progress.repaint()
+        QTimer.singleShot(0, self._pump_analysis_restore)
+
+    def _analysis_restore_workers_busy(self):
+        jobs = getattr(self, "_analysis_jobs", None)
+        if jobs is None:
+            return False
+        return any(
+            jobs.is_busy(section)
+            for section in ("fft_time", "order", "frf")
+        )
+
+    def _update_analysis_restore_progress(self, *, flush_events=False):
+        if not self._analysis_restore_widgets_alive():
+            self._abort_analysis_restore()
+            return
+        token = self._restore_progress_token()
+        if token is None:
+            return
+        total = int(getattr(self, "_analysis_restore_total", 0) or 0)
+        remaining = len(getattr(self, "_analysis_restore_queue", None) or [])
+        done = max(0, total - remaining)
+        if total <= 0:
+            return
+        self._update_compute_progress(
+            done,
+            total,
+            label="正在恢复分析 %d/%d" % (done, total),
+            token=token,
+            flush_events=flush_events,
+        )
+
+    def _pump_analysis_restore(self):
+        if not self._analysis_restore_widgets_alive():
+            self._abort_analysis_restore()
+            return
+        queue = getattr(self, "_analysis_restore_queue", None)
+        if not queue:
+            self._finish_analysis_restore_if_idle()
+            return
+        section, view_id = queue.pop(0)
+        self._recompute_restored_analysis_view(section, view_id)
+        self._update_analysis_restore_progress()
+        QTimer.singleShot(0, self._pump_analysis_restore)
+
+    def _finish_analysis_restore_if_idle(self):
+        if not self._analysis_restore_widgets_alive():
+            self._abort_analysis_restore()
+            return
+        queue = getattr(self, "_analysis_restore_queue", None)
+        if queue:
+            return
+        if self._analysis_restore_workers_busy():
+            return
+        token = self._analysis_jobs.clear_progress_token("restore")
+        self._analysis_restore_queue = []
+        self._analysis_restore_total = 0
+        if token is None:
+            return
+        # Token was gated in `_finish_compute_progress` while registered.
+        self._finish_compute_progress(token=token)
+
+    def _recompute_restored_analysis_view(self, section, view_id):
+        """Restore one View from persisted pane state, never live capture."""
+        key = (section, view_id)
+        if key not in self._analysis_restore_pending:
+            return
+        self._analysis_restore_pending.discard(key)
+        try:
+            if section == 'frf':
+                self._recompute_restored_frf_view(view_id)
+            elif section == 'fft':
+                self._recompute_restored_fft_view(view_id)
+            elif section == 'fft_time':
+                self._recompute_restored_fft_time_view(view_id)
+            elif section == 'order':
+                self._recompute_restored_order_view(view_id)
         except Exception:
             self.toast("恢复渲染失败，请手动点计算", "warning")
 
@@ -876,11 +1054,11 @@ class AnalysisMixin:
         """Render each pane from cached results; panes whose sources are not all
         cached show an empty state and a 'click 计算' status hint.
 
-        Normally never computes (spec §4). The one exception is the post-load
-        auto-recompute: when this (section, view) was queued by open_project
-        and still has sources, recompute it once so the saved params + sources
-        repopulate the chart, then fall back to the normal cache-render path on
-        every subsequent call."""
+        Normally never computes (spec §4). After ``open_project`` every
+        source-bearing View is dispatched by ``view_id``. If this View is
+        still pending when it first becomes visible (tab switch before the
+        timer), schedule that same restore once, then fall back to cache.
+        """
         from ..analysis_view_state import analysis_view_has_sources
 
         mgr = self.analysis_managers.get(section)
@@ -890,29 +1068,16 @@ class AnalysisMixin:
             # callback runs must not redirect compute to another View.
             restore_key = (section, state.view_id)
             if restore_key in self._analysis_restore_pending:
-                self._analysis_restore_pending.discard(restore_key)
-                if analysis_view_has_sources(section, state):
-                    # Defer the recompute to the next event-loop turn instead of
-                    # running it inline. open_project drives this for all three
-                    # sections mid-restore; a synchronous compute could pop a
-                    # blocking QMessageBox (FFT/order compute error) that would
-                    # interrupt the half-finished open. Deferring lets the window
-                    # finish opening first, so any error surfaces cleanly after.
-                    if section == 'frf':
-                        # FRF has pane-local directional sources. Restore from
-                        # the persisted state directly; ``do_frf`` captures the
-                        # focused live combo pair and would erase inactive or
-                        # split-pane intent during project opening.
-                        QTimer.singleShot(
-                            0,
-                            lambda view_id=state.view_id:
-                            self._recompute_restored_frf_view(view_id),
-                        )
-                    else:
-                        QTimer.singleShot(
-                            0,
-                            lambda s=section: self._recompute_analysis_section(s),
-                        )
+                if getattr(self, "_opening_project", False):
+                    # open_project dispatches every pending View after the
+                    # window finishes opening. Do not compute mid-restore.
+                    pass
+                elif analysis_view_has_sources(section, state):
+                    QTimer.singleShot(
+                        0,
+                        lambda s=section, v=state.view_id:
+                        self._recompute_restored_analysis_view(s, v),
+                    )
                     return
         if section == 'frf':
             self._render_frf_view_from_cache(state)

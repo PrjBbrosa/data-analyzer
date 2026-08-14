@@ -215,6 +215,68 @@ class FFTMixin:
         except Exception:
             return None
 
+    def _recompute_restored_fft_view(self, view_id):
+        """Fill the FFT cache from persisted pane sources; plot only if active."""
+        state = self._analysis_state_by_id("fft", view_id)
+        if state is None:
+            return
+        fft_params = self._compute_params_overlay_state("fft", state)
+        cache = self.analysis_caches["fft"]
+        colors = self._analysis_channel_color_map()
+        mgr = self.analysis_managers["fft"]
+        is_active = mgr.get(mgr.active) is state
+        plot_live = is_active and self.chart_stack.current_mode() == "fft"
+        page = self.chart_stack.page_fft
+        for pane_idx, pane in enumerate(state.panes):
+            sources = list(pane.sources)
+            if not sources:
+                continue
+            time_range = self._normalize_analysis_time_range(pane.time_range)
+            entries = []
+            pane_keys = []
+            for fid, ch in sources:
+                sig, fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
+                if sig is None or len(sig) < 10:
+                    continue
+                fd = self.files.get(fid)
+                if not self._check_uniform_or_prompt(fd, "fft"):
+                    continue
+                sig, fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
+                if sig is None or len(sig) < 10:
+                    continue
+                effective_params = self._resolve_fft_effective_params(
+                    fft_params, len(sig), fs
+                )
+                key = self._fft_analysis_cache_key(
+                    fid, ch, effective_params, time_range
+                )
+                pane_keys.append(key)
+                result = cache.get(key)
+                if result is None:
+                    result = self._fft_compute_arrays(sig, fs, effective_params)
+                self._store_analysis_result(
+                    "fft", state.view_id, pane_idx, key, result
+                )
+                if plot_live:
+                    entries.append(
+                        self._fft_entry_from_cache(
+                            result,
+                            fid,
+                            ch,
+                            colors.get((fid, ch)),
+                            time_range=time_range,
+                        )
+                    )
+                updater = getattr(self, "_update_analysis_restore_progress", None)
+                if callable(updater):
+                    updater(flush_events=True)
+            self._replace_analysis_pane_pins(
+                "fft", state.view_id, pane_idx, pane_keys
+            )
+            if plot_live and pane_idx < page.pane_count() and entries:
+                self._plot_fft_entries(entries, page.pane_canvas(pane_idx))
+                notify_ultraview_plot(self, "fft", "fft-plot")
+
     def do_fft(self):
         """Compute the ACTIVE FFT view: every source of every pane.
 

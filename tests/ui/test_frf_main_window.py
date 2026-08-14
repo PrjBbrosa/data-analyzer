@@ -723,7 +723,10 @@ def test_project_restore_does_not_relabel_generated_axis_as_real(
 
     restored = MainWindow()
     qtbot.addWidget(restored)
-    monkeypatch.setattr(restored, "_recompute_analysis_section", lambda _section: None)
+    monkeypatch.setattr(
+        restored, "_recompute_restored_analysis_view",
+        lambda _section, _view_id: None,
+    )
     restored.open_project(project)
     qapp.processEvents()
 
@@ -755,7 +758,10 @@ def test_project_restore_preserves_explicit_manual_time_axis(
 
     restored = MainWindow()
     qtbot.addWidget(restored)
-    monkeypatch.setattr(restored, "_recompute_analysis_section", lambda _section: None)
+    monkeypatch.setattr(
+        restored, "_recompute_restored_analysis_view",
+        lambda _section, _view_id: None,
+    )
     restored.open_project(project)
     qapp.processEvents()
 

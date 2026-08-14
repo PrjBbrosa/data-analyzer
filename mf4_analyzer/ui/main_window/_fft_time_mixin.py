@@ -199,6 +199,52 @@ class FFTTimeMixin:
             return None
         return (lo, hi)
 
+    def _recompute_restored_fft_time_view(self, view_id):
+        """Dispatch persisted FFT-vs-Time panes without reading live combos."""
+        state = self._analysis_state_by_id("fft_time", view_id)
+        if state is None:
+            return
+        compute_p = self._compute_params_overlay_state("fft_time", state)
+        ctx = self.inspector.fft_time_ctx
+        display_getter = getattr(ctx, "display_params", None)
+        display_live = display_getter() if callable(display_getter) else {}
+        saved = dict(state.params or {})
+        display_p = dict(display_live)
+        display_p.update({key: saved[key] for key in display_p if key in saved})
+        candidates = []
+        for pane_idx, pane in enumerate(state.panes):
+            sources = pane.sources
+            if not sources:
+                continue
+            fid, ch = sources[0]
+            time_range = self._normalize_analysis_time_range(pane.time_range)
+            prepared = self._fft_time_effective_params_for_source(
+                compute_p, fid, ch, time_range
+            )
+            if prepared is None:
+                continue
+            effective_compute_p, _compute_time_range = prepared
+            render_p = {**effective_compute_p, **display_p}
+            candidates.append({
+                "fid": fid,
+                "channel": ch,
+                "params": dict(effective_compute_p),
+                "pane_idx": pane_idx,
+                "time_range": time_range,
+                "render_params": dict(render_p),
+                "source": (fid, ch),
+                "force": False,
+                "view_id": state.view_id,
+                "job_factory": lambda pane_idx=pane_idx, fid=fid, ch=ch,
+                raw_params=dict(compute_p), display_params=dict(display_p),
+                time_range=time_range: self._build_fft_time_job(
+                    pane_idx, fid, ch, raw_params, time_range=time_range,
+                    display_params=display_params,
+                ),
+            })
+        if candidates:
+            self._fft_time_coordinator.request_batch(candidates)
+
     def do_fft_time(self, force=False):
         """Compute and render the FFT-vs-Time spectrogram(s) for the active view.
 
@@ -359,14 +405,15 @@ class FFTTimeMixin:
 
     def _on_fft_time_batch_started(self, total, first_ctx):
         """Create the UI token before service submission can finish skips."""
-        self._analysis_jobs.set_progress_token(
-            'fft_time',
-            self._begin_compute_progress(
-                "FFT-时间 1/%d" % total,
-                total=1000,
-                process_events=False,
-            ),
-        )
+        if self._analysis_jobs.progress_token("fft_time") is None:
+            self._analysis_jobs.set_progress_token(
+                "fft_time",
+                self._begin_compute_progress(
+                    "FFT-时间 1/%d" % total,
+                    total=1000,
+                    process_events=False,
+                ),
+            )
         p = first_ctx.get('render_params') or {}
         nfft = p.get('nfft_effective', p.get('nfft'))
         self.statusBar.showMessage(
@@ -671,3 +718,4 @@ class FFTTimeMixin:
             self._finish_compute_progress(token=token)
             self._analysis_jobs.clear_progress_token('fft_time')
             self._finish_fft_time_outcome_feedback()
+            self._finish_analysis_restore_if_idle()

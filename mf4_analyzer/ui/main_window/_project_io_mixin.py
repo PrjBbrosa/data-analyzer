@@ -1786,65 +1786,52 @@ class ProjectIOMixin:
         self.view_manager._set_active_split_from_pairs()
         self.view_manager.views_changed.emit()
 
-        # Restore each analysis section's view list (fids remapped to the
-        # freshly minted ids). An old project without analysis_views yields an
-        # empty remapped dict -> every section keeps its default single view.
-        from ..project_io import remap_analysis_view_fids
-        from ..analysis_view_state import (
-            AnalysisViewState,
-            analysis_view_has_sources,
-        )
-        remapped = remap_analysis_view_fids(doc.analysis_views, fid_map)
-        for sec, mgr in self.analysis_managers.items():
-            block = remapped.get(sec)
-            if not block or not block.get("views"):
-                continue
-            mgr.views = [AnalysisViewState.from_dict(v) for v in block["views"]]
-            mgr.active = min(int(block.get("active", 0)), len(mgr.views) - 1)
-            # Queue every source-bearing view for auto-recompute (recompute-on-
-            # open): the project stored params + sources but not the numeric
-            # results. The active view recomputes immediately via the emit
-            # below; the rest recompute lazily the first time they're shown.
-            for v in mgr.views:
-                if analysis_view_has_sources(sec, v):
-                    self._analysis_restore_pending.add((sec, v.view_id))
-            mgr.views_changed.emit()
-            # active_changed drives _on_analysis_view_switched: it applies the
-            # restored structure/params/sources, then _render_analysis_view_from
-            # _cache recomputes this view (queued above) so the chart repopulates.
-            mgr.active_changed.emit(mgr.active)
-
-        uv = getattr(self, "_ultraview", None)
-        uv_warnings = []
-        if uv is not None and not getattr(uv, "is_shutdown", False):
-            uv_warnings = uv.restore_project_state(
-                getattr(doc, "ultraview", None), project_path=path
-            )
-
-        self._active = fid_map.get(doc.active_file)
-        # Route the mode through the toolbar's programmatic setter (not
-        # chart_stack.set_mode directly): _set_mode checks the matching
-        # segment button AND emits mode_changed -> _on_mode_changed, which
-        # syncs chart_stack + inspector + toolbar enabled-state together.
-        # Calling chart_stack.set_mode alone leaves the toolbar segment and
-        # the inspector panel stuck on the previous mode (desync on reopen of
-        # a project saved in FFT / Order / FFT-vs-Time).
-        #
-        # _opening_project stays True through _apply_active_view() below, not
-        # just this mode-set call: when the saved mode is 'time',
-        # _apply_active_view -> _plot_time_on_canvas synchronously calls
-        # _begin_compute_progress(process_events=True), whose
-        # QApplication.processEvents() can drain a still-pending post-load
-        # analysis auto-recompute (QTimer.singleShot(0, ...), queued above)
-        # BEFORE open_project() returns. That drained recompute's "capture
-        # current live selection" step (_capture_analysis_sources) must know
-        # a restore is still in progress so it does not mistake the shared
-        # Time/FFT navigator's state -- already overwritten by this same
-        # restore's own Time-view apply -- for fresh user intent. See
+        # Hold this through analysis-view apply AND the Time-view plot so
+        # live navigator capture cannot overwrite persisted FFT sources, and
+        # so processEvents during time plot cannot drain restore compute
+        # before every source-bearing View has been queued. See
         # docs/lessons-learned/signal-processing/2026-07-12-processevents-
         # drains-queued-recompute-during-restore.md.
         self._opening_project = True
         try:
+            # Restore each analysis section's view list (fids remapped to the
+            # freshly minted ids). An old project without analysis_views yields
+            # an empty remapped dict -> every section keeps its default view.
+            from ..project_io import remap_analysis_view_fids
+            from ..analysis_view_state import (
+                AnalysisViewState,
+                analysis_view_has_sources,
+            )
+            remapped = remap_analysis_view_fids(doc.analysis_views, fid_map)
+            for sec, mgr in self.analysis_managers.items():
+                block = remapped.get(sec)
+                if not block or not block.get("views"):
+                    continue
+                mgr.views = [AnalysisViewState.from_dict(v) for v in block["views"]]
+                mgr.active = min(int(block.get("active", 0)), len(mgr.views) - 1)
+                # Queue every source-bearing view. Numeric results are not in
+                # the project file; after the window finishes opening we
+                # recompute all of them by view_id (not only the active tab).
+                for v in mgr.views:
+                    if analysis_view_has_sources(sec, v):
+                        self._analysis_restore_pending.add((sec, v.view_id))
+                mgr.views_changed.emit()
+                # Apply restored structure/params/sources. Compute waits until
+                # _dispatch_pending_analysis_restore after this try block.
+                mgr.active_changed.emit(mgr.active)
+
+            uv = getattr(self, "_ultraview", None)
+            uv_warnings = []
+            if uv is not None and not getattr(uv, "is_shutdown", False):
+                uv_warnings = uv.restore_project_state(
+                    getattr(doc, "ultraview", None), project_path=path
+                )
+
+            self._active = fid_map.get(doc.active_file)
+            # Route the mode through the toolbar's programmatic setter (not
+            # chart_stack.set_mode directly): _set_mode checks the matching
+            # segment button AND emits mode_changed -> _on_mode_changed, which
+            # syncs chart_stack + inspector + toolbar enabled-state together.
             self.toolbar._set_mode(doc.current_mode)
 
             if health is not None and health.degraded:
@@ -1901,6 +1888,7 @@ class ProjectIOMixin:
                 return
         finally:
             self._opening_project = False
+            self._dispatch_pending_analysis_restore()
 
         self.statusBar.showMessage(f"已打开项目: {path.name}")
 

@@ -192,6 +192,12 @@ class AnalysisJobService(QObject):
         section = self._validate_section(section)
         return self._state_for(section).thread is not None
 
+    def is_busy(self, section: str) -> bool:
+        """True while ``section`` has an in-flight thread or queued jobs."""
+        section = self._validate_section(section)
+        state = self._state_for(section)
+        return state.thread is not None or bool(state.queue)
+
     def shutdown(self) -> None:
         """Cancel every section and synchronously drain active worker threads."""
         if self._shutting_down:
