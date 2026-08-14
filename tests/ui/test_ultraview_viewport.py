@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import pytest
-from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
 from PyQt5.QtGui import QImage, QMouseEvent, QWheelEvent
-from PyQt5.QtWidgets import QApplication, QLabel, QToolButton
+from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QToolButton
 
 from mf4_analyzer.ui.chart_stack.ultraview.free_grid import grid_metrics
 from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
@@ -16,11 +16,16 @@ from mf4_analyzer.ui.chart_stack.ultraview.viewport import (
     BoardViewport,
     clamp_zoom,
     fit_zoom,
+    lod_level,
     scale_grid_metrics,
     wheel_zoom_factor,
     zoom_at_cursor,
     zoom_percent,
+    zoom_to_rect,
     zoomed_viewport_size,
+    LOD_FULL,
+    LOD_NO_FOOTER,
+    LOD_TITLE_ONLY,
 )
 from mf4_analyzer.ui.ultraview_state import FreeGridPlacement, GridRect, make_ref
 
@@ -247,3 +252,55 @@ def test_card_reuses_scaled_preview_buffer_when_size_is_unchanged(qtbot):
     assert first is not None
     card._fit_card_image()
     assert card.scale_buffer() is first
+
+
+def test_lod_hysteresis_does_not_chatter_at_the_threshold():
+    assert lod_level(1.0) == LOD_FULL
+    assert lod_level(0.50, LOD_FULL) == LOD_NO_FOOTER
+    assert lod_level(0.58, LOD_NO_FOOTER) == LOD_NO_FOOTER
+    assert lod_level(0.66, LOD_NO_FOOTER) == LOD_FULL
+    assert lod_level(0.35, LOD_NO_FOOTER) == LOD_TITLE_ONLY
+    assert lod_level(0.42, LOD_TITLE_ONLY) == LOD_TITLE_ONLY
+
+
+def test_fit_and_zoom_to_card_end_state(qtbot):
+    harness = _Harness(qtbot)
+    free, cards = _prepare_free_grid(harness, qtbot, "a", "b")
+    harness.page.zoom_fit()
+    viewport = harness.page.board_scroll_area().viewport()
+    size = free.unzoomed_size()
+    assert harness.page.board_zoom() == pytest.approx(
+        fit_zoom((size.width(), size.height()), (viewport.width(), viewport.height()))
+    )
+    card = cards[0]
+    harness.page.zoom_to_card("time", "a", animate=False)
+    zoomed = card.geometry()
+    assert zoomed.width() <= viewport.width()
+    assert zoomed.height() <= viewport.height()
+    assert zoomed.width() >= viewport.width() * 0.7 or zoomed.height() >= viewport.height() * 0.7
+    visible = viewport.rect().intersects(
+        QRect(card.mapTo(viewport, QPoint(0, 0)), card.size())
+    )
+    assert visible
+
+
+def test_lod_hides_footer_below_sixty_percent(qtbot):
+    harness = _Harness(qtbot)
+    _free, cards = _prepare_free_grid(harness, qtbot, "a")
+    card = cards[0]
+    assert card.footer_height() == 24 or card._footer.isVisible()
+    harness.page.set_board_zoom(0.5)
+    assert not card._footer.isVisible()
+    harness.page.set_board_zoom(1.0)
+    assert card._footer.isVisible()
+
+
+def test_overview_stays_available_when_fit_is_not_equivalent(qtbot):
+    harness = _Harness(qtbot)
+    _prepare_free_grid(harness, qtbot, "a")
+    harness.page.zoom_fit()
+    assert harness.page.board_toolbar().findChild(QPushButton, "ultraViewBoardOverviewButton") is not None
+    harness.page.show_overview()
+    assert harness.page.board_overview().isVisible()
+    harness.page.hide_overview()
+    assert not harness.page.board_overview().isVisible()

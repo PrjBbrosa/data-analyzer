@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from PyQt5.QtCore import QPoint, QRect, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QPoint, QRect, QTimer, QVariantAnimation, Qt, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QNativeGestureEvent, QWheelEvent
 from PyQt5.QtWidgets import (
     QApplication,
@@ -49,11 +49,14 @@ from .viewport import (
     SMOOTH_DELAY_MS,
     ZOOM_BUTTON_STEP,
     BoardViewport,
+    center_from_scroll,
     clamp_zoom,
     fit_zoom,
+    scroll_for_center,
     wheel_zoom_factor,
     zoom_at_cursor,
     zoom_percent,
+    zoom_to_rect,
 )
 from .widgets import (
     LIBRARY_DEFAULT_WIDTH,
@@ -164,6 +167,14 @@ class UltraViewPage(QWidget):
         self._smooth_timer.setSingleShot(True)
         self._smooth_timer.setInterval(SMOOTH_DELAY_MS)
         self._smooth_timer.timeout.connect(self._on_smooth_preview_timeout)
+        self._zoom_anim = QVariantAnimation(self)
+        self._zoom_anim.setObjectName("ultraViewZoomToCardAnimation")
+        self._zoom_anim.setDuration(180)
+        self._zoom_anim.valueChanged.connect(self._on_zoom_anim_tick)
+        self._anim_start_zoom = 1.0
+        self._anim_end_zoom = 1.0
+        self._anim_start_center = (0.0, 0.0)
+        self._anim_end_center = (0.0, 0.0)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -370,6 +381,89 @@ class UltraViewPage(QWidget):
         size = canvas.unzoomed_size()
         self.set_board_zoom(fit_zoom((size.width(), size.height()), (viewport.width(), viewport.height())))
 
+    def zoom_to_card(self, section: str, view_id: str, *, animate: bool = True) -> None:
+        card = self.card_widget(section, view_id)
+        if card is None:
+            return
+        viewport = self._board_scroll.viewport()
+        current = max(self._viewport.zoom(), 1e-6)
+        geom = card.geometry()
+        rect_1x = (
+            geom.x() / current,
+            geom.y() / current,
+            geom.width() / current,
+            geom.height() / current,
+        )
+        zoom, center = zoom_to_rect(
+            rect_1x, (float(viewport.width()), float(viewport.height()))
+        )
+        if animate:
+            self._animate_viewport(zoom, center)
+            return
+        self._apply_zoom_and_center(zoom, center)
+
+    def _current_center(self) -> tuple[float, float]:
+        viewport = self._board_scroll.viewport()
+        return center_from_scroll(
+            (
+                float(self._board_scroll.horizontalScrollBar().value()),
+                float(self._board_scroll.verticalScrollBar().value()),
+            ),
+            (float(viewport.width()), float(viewport.height())),
+            self._viewport.zoom(),
+        )
+
+    def _animate_viewport(self, zoom: float, center: tuple[float, float]) -> None:
+        self._anim_start_zoom = self._viewport.zoom()
+        self._anim_end_zoom = clamp_zoom(zoom)
+        self._anim_start_center = self._current_center()
+        self._anim_end_center = (float(center[0]), float(center[1]))
+        self._zoom_anim.stop()
+        self._zoom_anim.setStartValue(0.0)
+        self._zoom_anim.setEndValue(1.0)
+        self._zoom_anim.start()
+
+    def _on_zoom_anim_tick(self, value) -> None:
+        t = float(value)
+        zoom = self._anim_start_zoom + (self._anim_end_zoom - self._anim_start_zoom) * t
+        center = (
+            self._anim_start_center[0]
+            + (self._anim_end_center[0] - self._anim_start_center[0]) * t,
+            self._anim_start_center[1]
+            + (self._anim_end_center[1] - self._anim_start_center[1]) * t,
+        )
+        self._apply_zoom_and_center(zoom, center)
+
+    def _apply_zoom_and_center(
+        self, zoom: float, center: tuple[float, float]
+    ) -> None:
+        after = clamp_zoom(zoom)
+        self._viewport.set_zoom(after)
+        self._viewport.set_center(center)
+        self._grid.set_zoom(after)
+        self._free_grid.set_zoom(after)
+        self._sync_board_stack_geometry(self._active_canvas())
+        viewport = self._board_scroll.viewport()
+        scroll = scroll_for_center(
+            center,
+            (float(viewport.width()), float(viewport.height())),
+            after,
+        )
+        self._board_scroll.horizontalScrollBar().setValue(int(round(scroll[0])))
+        self._board_scroll.verticalScrollBar().setValue(int(round(scroll[1])))
+        self._toolbar.set_zoom_percent(zoom_percent(after))
+        self._apply_lod_chrome()
+        self._apply_preview_quality(QUALITY_FAST)
+        self._restart_smooth_timer()
+        self.viewport_changed.emit()
+
+    def _apply_lod_chrome(self) -> None:
+        level = self._viewport.lod()
+        show_title = bool(self._board.show_titles)
+        show_source = bool(self._board.show_sources)
+        for card in (*self._grid.card_widgets(), *self._free_grid.card_widgets()):
+            card.apply_lod(level, show_title=show_title, show_source=show_source)
+
     def note_space(self, down: bool) -> None:
         self._viewport.set_space_down(down)
         if down:
@@ -444,6 +538,7 @@ class UltraViewPage(QWidget):
         self._board_scroll.horizontalScrollBar().setValue(int(round(new_scroll[0])))
         self._board_scroll.verticalScrollBar().setValue(int(round(new_scroll[1])))
         self._toolbar.set_zoom_percent(zoom_percent(after))
+        self._apply_lod_chrome()
         self._apply_preview_quality(QUALITY_FAST)
         self._restart_smooth_timer()
         self.viewport_changed.emit()
@@ -1103,6 +1198,7 @@ class UltraViewPage(QWidget):
             )
         self._grid.set_grid(self._board.layout_id, self._board.primary_ratio, models)
         self._sync_board_stack_geometry(self._grid)
+        self._apply_lod_chrome()
         self._sync_overview()
         titles = {}
         colors = {}
@@ -1167,6 +1263,7 @@ class UltraViewPage(QWidget):
         self._board_stack.setCurrentWidget(self._free_grid)
         self._free_grid.set_free_grid(self._board.free_grid, models)
         self._sync_board_stack_geometry(self._free_grid)
+        self._apply_lod_chrome()
         titles = {}
         colors = {}
         statuses = {}

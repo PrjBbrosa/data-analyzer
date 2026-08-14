@@ -526,6 +526,7 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
         "ultraview.preset",
         "ultraview.organize",
         "ultraview.minimap",
+        "ultraview.zoom",
         "ultraview.boards",
         "ultraview.limits",
     }
@@ -573,5 +574,5 @@ def test_ultraview_hints_cover_add_menu_escape_presentation_and_export():
             )
         assert found_rail, mode
     haystack = " ".join(hint.text for hint in by_id.values())
-    for banned in ("PDF", "SVG", "sidecar", "live card", "后台补图", "自由缩放", "实时", "直播", "Alt+拖"):
+    for banned in ("PDF", "SVG", "sidecar", "live card", "后台补图", "实时", "直播", "Alt+拖"):
         assert banned not in haystack

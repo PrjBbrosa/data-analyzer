@@ -253,10 +253,11 @@ def test_ultraview_guide_is_mapped_and_covers_readonly_board_contract():
         "Esc", "演示", "UltraView（总览）", "View 栏最右侧 UltraView",
         "Board", "自由网格", "12 列", "24 张", "Option+Shift", "整理布局",
         "minimap", "直接拖卡片", "框选", "替换环",
+        "Ctrl+滚轮", "适应", "25%", "双击",
     ):
         assert keyword in text, f"UltraView guide missing: {keyword}"
     for banned in (
-        "PDF", "SVG", "sidecar", "live card", "后台补图", "自由缩放", "board zoom",
+        "PDF", "SVG", "sidecar", "live card", "后台补图",
         "工具栏「总览」", "顶栏「总览」", "顶部「总览」",
         "Alt+拖", "Option 拖动位置",
     ):

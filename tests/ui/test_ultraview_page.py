@@ -689,7 +689,8 @@ def test_menu_double_click_and_keyboard_share_intents(qtbot):
         Qt.NoModifier,
     )
     card.mouseDoubleClickEvent(event)
-    assert ("frf", "frf-1") in harness.focused
+    assert ("frf", "frf-1") not in harness.focused
+    assert harness.page.board_zoom() >= 1.0
 
     card.setFocus()
     qtbot.keyClick(card, Qt.Key_Return)

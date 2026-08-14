@@ -671,6 +671,13 @@ _HINTS = (
         priority=83,
     ),
     Hint(
+        id="ultraview.zoom",
+        text="Ctrl+滚轮缩放画布，空格拖平移",
+        surface="context",
+        modes=frozenset({"ultraview"}),
+        priority=89,
+    ),
+    Hint(
         id="ultraview.boards",
         text="顶栏可建最多20个Board",
         surface="context",

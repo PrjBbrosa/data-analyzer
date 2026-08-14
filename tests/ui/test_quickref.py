@@ -354,6 +354,8 @@ def test_ultraview_quickref_describes_direct_manipulation_not_alt_drag():
     assert "直接拖动" in haystack
     assert "框选" in haystack
     assert "替换环" in haystack
+    assert "画布缩放" in haystack
+    assert "适应" in haystack
     assert "Option+Shift" in haystack
     assert "Alt+拖" not in haystack
     assert "Option 拖动" not in haystack

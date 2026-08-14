@@ -97,6 +97,7 @@ from .compositor import compose_board, composed_slot_rects
 from .viewport import (
     QUALITY_FAST,
     QUALITY_SMOOTH,
+    LOD_FULL,
     ZOOM_DEFAULT,
     scale_grid_metrics,
     zoomed_viewport_size,
@@ -481,7 +482,7 @@ class UltraViewHintBar(QFrame):
         self._quickref.setCursor(Qt.PointingHandCursor)
         self._quickref.setToolTip("操作速查")
         self._quickref.clicked.connect(self.quickref_requested.emit)
-        self._context = QLabel("拖卡片移动 · 选中拖边角改尺寸 · 空白框选多选", self)
+        self._context = QLabel("拖卡片移动 · 拖边角改尺寸 · 框选 · Ctrl+滚轮缩放", self)
         self._context.setObjectName("chartHintContext")
         self._context.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._context.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
@@ -1504,6 +1505,12 @@ class UltraViewCard(QFrame):
         self._menu = menu
         return menu
 
+    def apply_lod(self, level: str, *, show_title: bool, show_source: bool) -> None:
+        self._title.setVisible(bool(show_title))
+        footer = bool(show_source) and level == LOD_FULL
+        self._footer.setVisible(footer)
+        self._footer.setFixedHeight(CARD_FOOTER_HEIGHT if footer else 0)
+
     def set_preview_quality(self, quality: str) -> None:
         wanted = QUALITY_FAST if quality == QUALITY_FAST else QUALITY_SMOOTH
         if wanted == self._preview_quality:
@@ -1634,6 +1641,11 @@ class UltraViewCard(QFrame):
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        page = _page_of(self)
+        if page is not None:
+            page.zoom_to_card(self._model.section, self._model.view_id)
+            event.accept()
+            return
         self.focus_requested.emit(self._model.section, self._model.view_id)
         event.accept()
 
