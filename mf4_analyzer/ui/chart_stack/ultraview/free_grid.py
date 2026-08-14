@@ -32,7 +32,13 @@ GRID_MIN_VISIBLE_ROWS = 6
 
 Rect = tuple[int, int, int, int]
 
-PLANNER_SEARCH_CAP = 512
+# Cell probes granted to *each* blocker the planner has to relocate, not to the
+# whole plan (see ``_SearchBudget``).  A shared pool made dense-but-solvable
+# boards report "no legal layout" (review 2026-08-15 P1-4).  Sized so one card
+# can exhaust the board: a minimum-span card has 11×47 = 517 in-board origins
+# plus at most 4×47 directional probes, so an unreachable hole is *proved*
+# rather than guessed, and ``SEARCH_CAP`` stays reserved for real give-ups.
+PLANNER_SEARCH_CAP = 768
 LAYOUT_MOVE = "move"
 LAYOUT_RESIZE = "resize"
 LAYOUT_ARRANGE = "arrange"
@@ -470,14 +476,29 @@ _AVOID_SEARCH_LIMIT = max(GRID_COLUMNS, MAX_GRID_ROWS)
 
 
 class _SearchBudget:
-    """Bounded cell probes for one plan. Mouse-move must not search the board."""
+    """Bounded cell probes for one plan. Mouse-move must not search the board.
 
-    __slots__ = ("cap", "visits", "exhausted")
+    The allowance is **per relocated blocker**, not per plan: ring search grows
+    as ``2·d²``, so on a dense board the first blocker alone could eat a shared
+    pool and make every later blocker report "no legal layout" when one exists
+    (review 2026-08-15 P1-4: 60 × 2×2 cards + a big resize needed 587 probes in
+    total and was rejected at 512/512).  Each blocker gets ``per_blocker``
+    probes; nothing rolls over, so the plan stays bounded at
+    ``per_blocker × number of relocated cards`` and each card enters the
+    relocation queue at most once.
+    """
 
-    def __init__(self, cap: int) -> None:
-        self.cap = max(1, int(cap))
+    __slots__ = ("per_blocker", "cap", "visits", "exhausted")
+
+    def __init__(self, per_blocker: int) -> None:
+        self.per_blocker = max(1, int(per_blocker))
+        self.cap = self.per_blocker
         self.visits = 0
         self.exhausted = False
+
+    def begin_blocker(self) -> None:
+        """Hand the next blocker its own allowance."""
+        self.cap = self.visits + self.per_blocker
 
     def consume(self) -> bool:
         if self.visits >= self.cap:
@@ -516,7 +537,13 @@ def find_avoidance_rect(
     *,
     budget: _SearchBudget | None = None,
 ) -> GridRect | None:
-    """Same-size slot that misses ``occupied``. Prefers the drag axis, then rings."""
+    """Same-size slot that misses ``occupied``. Prefers the drag axis, then rings.
+
+    Only *in-board* candidates spend budget: an off-board offset is rejected by
+    arithmetic, not by an occupancy probe, and charging for it made the cap
+    depend on where the card happens to sit rather than on how much of the
+    board was really searched.
+    """
     directions: list[tuple[int, int]] = []
     pref = (int(preferred[0]), int(preferred[1]))
     if pref != (0, 0):
@@ -530,27 +557,38 @@ def find_avoidance_rect(
             column += dc
             row += dr
             candidate = GridRect(column, row, rect.column_span, rect.row_span)
-            if budget is not None and not budget.consume():
-                return None
             if clamp_rect(candidate) != candidate:
                 break
+            if budget is not None and not budget.consume():
+                return None
             if _rect_free(candidate, occupied):
                 return candidate
-    max_dist = GRID_COLUMNS + MAX_GRID_ROWS
+    # Ring offsets are pruned to the ones that can land in-board at all, so the
+    # loop cost tracks the budget instead of the (much larger) offset square.
+    # The order in which in-board candidates are visited is unchanged.
+    min_dc = -int(rect.column)
+    max_dc = GRID_COLUMNS - int(rect.column_span) - int(rect.column)
+    min_dr = -int(rect.row)
+    max_dr = MAX_GRID_ROWS - int(rect.row_span) - int(rect.row)
+    max_dist = (
+        max(abs(min_dc), abs(max_dc)) + max(abs(min_dr), abs(max_dr)) + 1
+    )
     for dist in range(1, max_dist):
-        for dc in range(-dist, dist + 1):
+        for dc in range(max(-dist, min_dc), min(dist, max_dc) + 1):
             dr_span = dist - abs(dc)
             for dr in (-dr_span, dr_span) if dr_span else (0,):
+                if dr < min_dr or dr > max_dr:
+                    continue
                 candidate = GridRect(
                     rect.column + dc,
                     rect.row + dr,
                     rect.column_span,
                     rect.row_span,
                 )
-                if budget is not None and not budget.consume():
-                    return None
                 if clamp_rect(candidate) != candidate:
                     continue
+                if budget is not None and not budget.consume():
+                    return None
                 if _rect_free(candidate, occupied):
                     return candidate
     return None
@@ -614,6 +652,7 @@ def plan_overlap_avoidance(
     while queue:
         ref = queue.pop(0)
         obstacles = (*frozen, *remaining.values(), *placed.values())
+        search.begin_blocker()
         found = find_avoidance_rect(
             current[ref], obstacles, preferred, budget=search
         )

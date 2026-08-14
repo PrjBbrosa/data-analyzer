@@ -129,7 +129,11 @@ REPLACE_HOVER_MS = 600
 FEEDBACK_OUT_OF_GRID = "不能移出网格"
 FEEDBACK_NO_LEGAL_LAYOUT = "当前位置放不下，已保持原布局"
 FEEDBACK_AVOID_BOUNDARY = FEEDBACK_NO_LEGAL_LAYOUT
+# A blown search budget is *not* "it does not fit": a legal layout may well
+# exist, the planner just stopped looking (review 2026-08-15 P1-4).
+FEEDBACK_SEARCH_BUDGET = "布局搜索超出预算，已保持原布局 · 可先整理布局再试"
 FEEDBACK_REARRANGED = "已重排 {count} 张 · Ctrl+Z 撤销"
+FEEDBACK_DISPLACED_OFFSCREEN = "被让位的卡片已移出可视区 · 向下滚动查看"
 
 _PLANNER_LOG = logging.getLogger(__name__)
 _PLANNER_LOG_MONO = 0.0
@@ -150,11 +154,16 @@ def _log_plan_result(plan: LayoutPlan) -> None:
     global _PLANNER_LOG_MONO
     import time
 
+    # Giving up on the search is an infrastructure failure, not a user error:
+    # it must leave a warning trace and must not be swallowed by the hot-path
+    # throttle (review 2026-08-15 P1-4).
+    gave_up = plan.reason is LayoutRejectReason.SEARCH_CAP
     now = time.monotonic()
-    if now - _PLANNER_LOG_MONO < _PLANNER_LOG_INTERVAL_S:
+    if not gave_up and now - _PLANNER_LOG_MONO < _PLANNER_LOG_INTERVAL_S:
         return
     _PLANNER_LOG_MONO = now
-    _PLANNER_LOG.debug(
+    log = _PLANNER_LOG.warning if gave_up else _PLANNER_LOG.debug
+    log(
         "ultraview plan accepted=%s reason=%s op=%s visits=%s affected=%s",
         plan.accepted,
         None if plan.reason is None else plan.reason.value,
@@ -162,6 +171,15 @@ def _log_plan_result(plan: LayoutPlan) -> None:
         plan.search_visits,
         plan.affected_count(),
     )
+
+
+def _reject_feedback(reason: LayoutRejectReason | None) -> str:
+    """One mapping from reject reason to user copy, for every commit path."""
+    if reason is LayoutRejectReason.OUT_OF_BOUNDS:
+        return FEEDBACK_OUT_OF_GRID
+    if reason is LayoutRejectReason.SEARCH_CAP:
+        return FEEDBACK_SEARCH_BUDGET
+    return FEEDBACK_NO_LEGAL_LAYOUT
 
 
 def _clear_page_card_selection(widget: QWidget) -> None:
@@ -3213,10 +3231,7 @@ class FreeGridBoard(QWidget):
             )
         _log_plan_result(plan)
         if not plan.accepted:
-            if plan.reason is LayoutRejectReason.OUT_OF_BOUNDS:
-                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
-            else:
-                self.feedback_requested.emit(FEEDBACK_NO_LEGAL_LAYOUT)
+            self.feedback_requested.emit(_reject_feedback(plan.reason))
             self._relayout()
             return
         reason = "drag-resize" if session.handle else "drag-move"
@@ -3277,10 +3292,7 @@ class FreeGridBoard(QWidget):
         )
         _log_plan_result(plan)
         if not plan.accepted:
-            if plan.reason is LayoutRejectReason.OUT_OF_BOUNDS:
-                self.feedback_requested.emit(FEEDBACK_OUT_OF_GRID)
-            else:
-                self.feedback_requested.emit(FEEDBACK_NO_LEGAL_LAYOUT)
+            self.feedback_requested.emit(_reject_feedback(plan.reason))
             self._relayout()
             return False
         return self._emit_plan(plan, reason)

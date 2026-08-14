@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,7 +19,13 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     SLOT_GUTTER,
     slot_rects,
 )
-from mf4_analyzer.ui.chart_stack.ultraview.free_grid import legal_grid_rect
+from mf4_analyzer.ui.chart_stack.ultraview import widgets as uv_widgets
+from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
+    LAYOUT_MOVE,
+    LayoutPlan,
+    LayoutRejectReason,
+    legal_grid_rect,
+)
 from mf4_analyzer.ui.chart_stack.ultraview.chrome import PANEL_FILTER, PANEL_LAYOUT, PANEL_LIBRARY, PANEL_UNPLACED
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
@@ -1690,6 +1697,57 @@ def test_free_grid_overlap_at_boundary_toasts_without_commit(qtbot):
     assert group == []
     assert toasts == [FEEDBACK_NO_LEGAL_LAYOUT]
     assert card.geometry().topLeft() == origin.topLeft()
+
+
+def test_search_budget_reject_has_its_own_copy_and_a_warning_trace(qtbot, monkeypatch, caplog):
+    """"The planner gave up" and "it does not fit" are different facts, and the
+    give-up must leave a trace (review 2026-08-15 P1-4: both mapped to the same
+    sentence and only ``logger.debug``)."""
+    harness = _Harness(qtbot)
+    free, (card, _other) = _prepare_free_grid(harness, qtbot, "cap-0", "cap-1")
+    ref = make_ref("time", "cap-0")
+    starved = LayoutPlan(
+        accepted=False,
+        reason=LayoutRejectReason.SEARCH_CAP,
+        mover_before=free._placements[ref].rect,
+        mover_after=free._placements[ref].rect,
+        displaced_before_after=(),
+        operation=LAYOUT_MOVE,
+        based_on_layout_revision=free._layout_revision,
+        mover_ref=ref,
+        search_visits=768,
+    )
+    monkeypatch.setattr(uv_widgets, "plan_layout", lambda *args, **kwargs: starved)
+    toasts = []
+    requested = []
+    harness.page.feedback_requested.connect(toasts.append)
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    monkeypatch.setattr(uv_widgets, "_PLANNER_LOG_MONO", 0.0, raising=False)
+    with caplog.at_level(logging.DEBUG, logger=uv_widgets.__name__):
+        assert (
+            free._request_geometry(ref, GridRect(6, 6, 2, 2), "keyboard-move") is False
+        )
+    assert requested == []
+    assert toasts == [uv_widgets.FEEDBACK_SEARCH_BUDGET]
+    assert uv_widgets.FEEDBACK_SEARCH_BUDGET != FEEDBACK_NO_LEGAL_LAYOUT
+    warnings = [
+        record for record in caplog.records if record.levelno >= logging.WARNING
+    ]
+    assert warnings, "a blown search budget must not be a debug-only event"
+    assert "search_cap" in warnings[0].getMessage()
+
+
+def test_reject_reasons_map_to_distinct_user_copy():
+    assert uv_widgets._reject_feedback(LayoutRejectReason.OUT_OF_BOUNDS) == FEEDBACK_OUT_OF_GRID
+    assert (
+        uv_widgets._reject_feedback(LayoutRejectReason.NO_LEGAL_LAYOUT)
+        == FEEDBACK_NO_LEGAL_LAYOUT
+    )
+    assert (
+        uv_widgets._reject_feedback(LayoutRejectReason.SEARCH_CAP)
+        == uv_widgets.FEEDBACK_SEARCH_BUDGET
+    )
+    assert uv_widgets._reject_feedback(None) == FEEDBACK_NO_LEGAL_LAYOUT
 
 
 def test_free_grid_escape_cancels_active_move_without_commit(qtbot):
