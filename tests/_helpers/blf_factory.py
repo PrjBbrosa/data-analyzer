@@ -67,6 +67,37 @@ def write_engine_only_dbc(path: Path) -> Path:
     return path
 
 
+def write_time_named_signal_dbc(path: Path) -> Path:
+    """Write a DBC whose 0x123 message carries a signal literally named ``Time``.
+
+    Legal in a DBC and not rare in practice (bus-time / timestamp signals),
+    but it collides with the shared time axis a CAN import assembles.
+    """
+    import cantools
+    from cantools.database.can import Database, Message, Signal
+    from cantools.database.conversion import BaseConversion
+
+    db = Database(messages=[
+        Message(
+            frame_id=0x123, name="EngineData", length=8, is_extended_frame=False,
+            signals=[
+                Signal(
+                    name="Time", start=0, length=16, byte_order="little_endian",
+                    is_signed=False, unit="ms",
+                    conversion=BaseConversion.factory(scale=0.25, offset=0.0),
+                ),
+                Signal(
+                    name="Throttle", start=16, length=8,
+                    byte_order="little_endian", is_signed=False, unit="%",
+                    conversion=BaseConversion.factory(scale=0.4, offset=0.0),
+                ),
+            ],
+        ),
+    ])
+    cantools.database.dump_file(db, str(path))
+    return path
+
+
 def write_sample_blf(
     path: Path,
     *,
@@ -153,6 +184,32 @@ def make_can_frames(
             frames.append((t, int(arbitration_id), payload))
             t += dt
     return frames
+
+
+def make_sampled_can_frames(
+    *,
+    extra: int = 1_000,
+    bulk_id: int = 0x123,
+    rare_id: int | None = None,
+):
+    """Frame list longer than the DBC probe's decode cap.
+
+    Above ``_PROBE_DECODE_CAP`` the probe switches to stratified sampling —
+    the path where "sampled" vs "complete" copy and the separate discovery
+    budget actually differ from a full scan. ``rare_id`` puts a single frame
+    of a second arbitration id at index 1, which the stratified sample never
+    picks, modelling the low-frequency-signal case from P0-1.
+    """
+    from mf4_analyzer.io.blf_format import _PROBE_DECODE_CAP
+
+    bulk = int(_PROBE_DECODE_CAP) + int(extra)
+    if rare_id is None:
+        return make_can_frames([(bulk, bulk_id, engine_payload())])
+    return make_can_frames([
+        (1, bulk_id, engine_payload()),
+        (1, rare_id, engine_payload()),
+        (bulk - 1, bulk_id, engine_payload()),
+    ])
 
 
 def _sample_frame_payloads(n: int = 5):
