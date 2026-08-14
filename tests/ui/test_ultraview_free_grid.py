@@ -8,11 +8,14 @@ from mf4_analyzer.ui.chart_stack.ultraview.free_grid import (
     clamp_rect,
     export_grid_metrics,
     grid_metrics,
+    legal_grid_rect,
     pixels_to_grid_delta,
     rect_is_available,
     rect_to_pixels,
     rects_overlap,
+    snapped_move_rect,
 )
+from mf4_analyzer.ui.chart_stack.ultraview.gesture import FreeGridGesture
 from mf4_analyzer.ui.ultraview_state import (
     GRID_COLUMNS,
     MAX_GRID_ROWS,
@@ -88,3 +91,39 @@ def test_export_grid_metrics_crop_short_boards_and_keep_screen_floor():
     assert screen.board_height == 900
     assert export.board_height < 900
     assert export.board_width == 1600
+
+
+def test_snapped_move_rect_matches_candidate_move_and_stays_clamped():
+    metrics = grid_metrics((1280, 800), [])
+    origin = GridRect(0, 0, 6, 3)
+    delta = (10_000, 0)
+    snapped = snapped_move_rect(origin, delta, metrics)
+    assert snapped == candidate_move(origin, *pixels_to_grid_delta(delta, metrics))
+    assert snapped == clamp_rect(snapped)
+    assert snapped.column + snapped.column_span <= GRID_COLUMNS
+
+
+def test_legal_grid_rect_clamps_origin_plus_span():
+    metrics = grid_metrics((1280, 800), [])
+    legal = legal_grid_rect((metrics.board_width - 2, 20), metrics, column_span=6, row_span=3)
+    assert legal == clamp_rect(legal)
+    assert legal.column + legal.column_span <= GRID_COLUMNS
+
+
+def test_gesture_move_uses_snapped_move_rect_and_reports_collision():
+    metrics = grid_metrics((1280, 800), [])
+    origin = GridRect(0, 0, 4, 3)
+    other = GridRect(6, 0, 4, 3)
+    placements = [_placement("a", origin), _placement("b", other)]
+    gesture = FreeGridGesture()
+    gesture.press(make_ref("time", "a"), origin, (10, 10), (10, 10))
+    idle = gesture.update((12, 10), metrics, placements, start_drag_distance=20)
+    assert idle is not None and not idle.active
+    unit = metrics.column_width + metrics.gutter
+    session = gesture.update((10 + unit * 6, 10), metrics, placements, start_drag_distance=20)
+    assert session is not None and session.active
+    assert session.candidate == snapped_move_rect(origin, (unit * 6, 0), metrics)
+    assert session.legal is False
+    cancelled = gesture.cancel()
+    assert cancelled is session
+    assert gesture.is_armed() is False

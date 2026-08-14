@@ -120,6 +120,36 @@ def pixels_to_grid_delta(delta: tuple[int, int], metrics: GridMetrics) -> tuple[
     return _round_cell(dx, unit_x), _round_cell(dy, unit_y)
 
 
+def snapped_move_rect(
+    origin: GridRect, pixel_delta: tuple[int, int], metrics: GridMetrics
+) -> GridRect:
+    """Clamp a pointer delta onto the same legal rectangle ``candidate_move`` uses."""
+    column_delta, row_delta = pixels_to_grid_delta(pixel_delta, metrics)
+    return candidate_move(origin, column_delta, row_delta)
+
+
+def pixel_to_origin(pos: tuple[int, int], metrics: GridMetrics) -> tuple[int, int]:
+    unit_x = max(1, metrics.column_width + metrics.gutter)
+    unit_y = max(1, metrics.row_height + metrics.gutter)
+    column = (int(pos[0]) - metrics.padding) // unit_x
+    row = (int(pos[1]) - metrics.padding) // unit_y
+    return int(column), int(row)
+
+
+def legal_grid_rect(
+    pos: tuple[int, int],
+    metrics: GridMetrics,
+    *,
+    column_span: int,
+    row_span: int,
+    grab_offset: tuple[int, int] = (0, 0),
+) -> GridRect:
+    """Map a board pixel to a clamped origin+span rectangle (S6)."""
+    origin = (int(pos[0]) - int(grab_offset[0]), int(pos[1]) - int(grab_offset[1]))
+    column, row = pixel_to_origin(origin, metrics)
+    return clamp_rect(GridRect(column, row, int(column_span), int(row_span)))
+
+
 def _round_cell(value: int, unit: int) -> int:
     if value >= 0:
         return (value + unit // 2) // unit

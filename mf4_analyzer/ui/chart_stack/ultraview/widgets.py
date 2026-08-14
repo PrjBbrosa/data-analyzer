@@ -84,10 +84,12 @@ from .free_grid import (
     clamp_rect,
     export_grid_metrics,
     grid_metrics,
-    pixels_to_grid_delta,
+    legal_grid_rect,
     rect_is_available,
     rect_to_pixels,
 )
+from .gesture import FreeGridGesture
+from .ghost_overlay import GhostOverlay
 from .compositor import compose_board, composed_slot_rects
 from .._helpers import ULTRAVIEW_HINT_BAR_HEIGHT
 
@@ -123,7 +125,6 @@ ORPHANED_CARD_COPY = "源 View 已删除"
 DIMMED_OPACITY = 0.28
 LIBRARY_DEFAULT_WIDTH = 224
 TRAY_BODY_MAX_HEIGHT = 108
-ULTRAVIEW_LAYOUT_MIME = "application/x-tracelab-ultraview-layout+json"
 
 
 def _run_ultraview_drag(source: QWidget, mime: QMimeData, action, finished) -> None:
@@ -207,18 +208,6 @@ def make_ref_mime(section: str, view_id: str) -> QMimeData:
     return mime
 
 
-def make_layout_mime(section: str, view_id: str, *, action: str) -> QMimeData:
-    """Private board-layout gesture MIME, distinct from source-ref drag."""
-    mime = QMimeData()
-    payload = json.dumps(
-        {"section": section, "view_id": view_id, "action": action},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    mime.setData(ULTRAVIEW_LAYOUT_MIME, QByteArray(payload.encode("utf-8")))
-    return mime
-
-
 def extract_ref_strings(mime: QMimeData | None) -> tuple[str, str] | None:
     """Copy ``section`` / ``view_id`` out of ``QMimeData`` immediately.
 
@@ -243,33 +232,6 @@ def extract_ref_strings(mime: QMimeData | None) -> tuple[str, str] | None:
     if parse_ref_payload({"section": section_copy, "view_id": view_id_copy}) is None:
         return None
     return section_copy, view_id_copy
-
-
-def extract_layout_strings(mime: QMimeData | None) -> tuple[str, str, str] | None:
-    if mime is None or not mime.hasFormat(ULTRAVIEW_LAYOUT_MIME):
-        return None
-    try:
-        raw = bytes(mime.data(ULTRAVIEW_LAYOUT_MIME)).decode("utf-8")
-        payload = json.loads(raw)
-    except (TypeError, ValueError, UnicodeDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    action = payload.get("action")
-    if action not in {"move", "resize"}:
-        return None
-    ref = extract_ref_strings_from_payload(payload)
-    return None if ref is None else (*ref, action)
-
-
-def extract_ref_strings_from_payload(payload: Mapping[str, Any]) -> tuple[str, str] | None:
-    section = payload.get("section")
-    view_id = payload.get("view_id")
-    if not isinstance(section, str) or not isinstance(view_id, str):
-        return None
-    if parse_ref_payload({"section": section, "view_id": view_id}) is None:
-        return None
-    return str(section), str(view_id)
 
 
 def preview_image(record: Any) -> QImage | None:
@@ -1714,15 +1676,8 @@ class BoardGrid(QWidget):
 
 
 class FreeGridCard(UltraViewCard):
-    """A static preview card with an explicit Alt-drag layout gesture.
+    """A static preview card. Layout moves use the board gesture, not QDrag."""
 
-    Ordinary drags keep P0/P1's source-ref behavior.  Holding Alt changes
-    the MIME type, so a free-grid layout move can never be interpreted as a
-    source-view replacement or board membership mutation.
-    """
-
-    layout_drag_started = pyqtSignal(str, str, str)
-    layout_drag_finished = pyqtSignal()
     layout_key_requested = pyqtSignal(str, str, int, int, bool)
     preset_requested = pyqtSignal(str, str, str)
 
@@ -1744,23 +1699,32 @@ class FreeGridCard(UltraViewCard):
     def _emit_preset(self, preset: str, _checked: bool = False) -> None:
         self.preset_requested.emit(self._model.section, self._model.view_id, preset)
 
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if (
-            self._press_pos is not None
-            and event.buttons() & Qt.LeftButton
-            and event.modifiers() & Qt.AltModifier
-        ):
-            if (event.pos() - self._press_pos).manhattanLength() < QApplication.startDragDistance():
-                return
-            self._press_pos = None
-            action = "resize" if event.modifiers() & Qt.ShiftModifier else "move"
-            mime = make_layout_mime(self._model.section, self._model.view_id, action=action)
-            self.layout_drag_started.emit(self._model.section, self._model.view_id, action)
-            _run_ultraview_drag(
-                self, mime, Qt.MoveAction, self.layout_drag_finished.emit
-            )
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.selected.emit(self._model.section, self._model.view_id)
+            handler = getattr(self.parentWidget(), "handle_card_mouse_press", None)
+            if callable(handler):
+                handler(self, event)
+            event.accept()
             return
-        super().mouseMoveEvent(event)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        parent = self.parentWidget()
+        handler = getattr(parent, "handle_card_mouse_move", None)
+        gesture = getattr(parent, "gesture", None)
+        armed = callable(gesture) and gesture().is_armed()
+        if callable(handler) and (event.buttons() & Qt.LeftButton or armed):
+            handler(self, event)
+            return
+        QWidget.mouseMoveEvent(self, event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        handler = getattr(self.parentWidget(), "handle_card_mouse_release", None)
+        if callable(handler):
+            handler(self, event)
+        self._press_pos = None
+        QWidget.mouseReleaseEvent(self, event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         if event.modifiers() & Qt.AltModifier:
@@ -1812,6 +1776,9 @@ class FreeGridBoard(QWidget):
         self._widgets: dict[UltraViewRef, FreeGridCard] = {}
         self._viewport_size = QSize(0, 0)
         self._metrics = grid_metrics((240, 160), [])
+        self._gesture = FreeGridGesture()
+        self._overlay = GhostOverlay(self)
+        self._overlay.hide()
 
     def set_viewport_size(self, size: QSize) -> None:
         if size == self._viewport_size:
@@ -1821,6 +1788,19 @@ class FreeGridBoard(QWidget):
 
     def metrics(self) -> GridMetrics:
         return self._metrics
+
+    def gesture(self) -> FreeGridGesture:
+        return self._gesture
+
+    def ghost_overlay(self) -> GhostOverlay:
+        return self._overlay
+
+    def cancel_gesture(self) -> bool:
+        session = self._gesture.session()
+        if session is None:
+            return False
+        self._finish_gesture(commit=False)
+        return True
 
     def card_for(self, section: str, view_id: str) -> FreeGridCard | None:
         ref = parse_ref_payload({"section": section, "view_id": view_id})
@@ -1859,6 +1839,7 @@ class FreeGridBoard(QWidget):
                 f"宽 {placement.rect.column_span} 高 {placement.rect.row_span}"
             )
         self._sync_metrics()
+        self._raise_overlay()
 
     def _connect_card(self, card: FreeGridCard) -> None:
         card.open_source_requested.connect(self.open_source_requested)
@@ -1870,10 +1851,12 @@ class FreeGridBoard(QWidget):
         card.selected.connect(self.selected)
         card.drag_started.connect(self.drag_started)
         card.drag_finished.connect(self.drag_finished)
-        card.layout_drag_started.connect(self._on_layout_drag_started)
-        card.layout_drag_finished.connect(self.drag_finished)
         card.layout_key_requested.connect(self._on_layout_key)
         card.preset_requested.connect(self.preset_requested)
+
+    def _raise_overlay(self) -> None:
+        self._overlay.setGeometry(self.rect())
+        self._overlay.raise_()
 
     def _sync_metrics(self) -> None:
         viewport = self._viewport_size
@@ -1893,22 +1876,119 @@ class FreeGridBoard(QWidget):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._relayout()
+        self._raise_overlay()
 
     def _relayout(self) -> None:
+        if self._gesture.is_active():
+            return
         for ref, placement in self._placements.items():
             widget = self._widgets.get(ref)
             if widget is not None:
                 widget.setGeometry(*rect_to_pixels(placement.rect, self._metrics))
+        self._raise_overlay()
 
     def _grid_at(self, pos: QPoint, *, column_span: int = 1, row_span: int = 1) -> tuple[int, int]:
-        unit_x = max(1, self._metrics.column_width + self._metrics.gutter)
-        unit_y = max(1, self._metrics.row_height + self._metrics.gutter)
-        column = (pos.x() - self._metrics.padding) // unit_x
-        row = (pos.y() - self._metrics.padding) // unit_y
-        legal = clamp_rect(
-            GridRect(int(column), int(row), int(column_span), int(row_span))
+        legal = legal_grid_rect(
+            (pos.x(), pos.y()),
+            self._metrics,
+            column_span=column_span,
+            row_span=row_span,
         )
         return legal.column, legal.row
+
+    def _legal_grid_rect(self, rect: GridRect) -> GridRect:
+        return clamp_rect(rect)
+
+    def _board_pos(self, card: QWidget, local: QPoint) -> tuple[int, int]:
+        mapped = card.mapTo(self, local)
+        return mapped.x(), mapped.y()
+
+    def handle_card_mouse_press(self, card: FreeGridCard, event: QMouseEvent) -> None:
+        if event.button() != Qt.LeftButton:
+            return
+        ref = parse_ref_payload(
+            {"section": card.model().section, "view_id": card.model().view_id}
+        )
+        placement = self._placements.get(ref) if ref is not None else None
+        if ref is None or placement is None:
+            return
+        self._gesture.press(
+            ref,
+            placement.rect,
+            self._board_pos(card, event.pos()),
+            (event.pos().x(), event.pos().y()),
+        )
+
+    def handle_card_mouse_move(self, card: FreeGridCard, event: QMouseEvent) -> None:
+        self._update_gesture_at(self._board_pos(card, event.pos()))
+
+    def handle_card_mouse_release(self, card: FreeGridCard, event: QMouseEvent) -> None:
+        if event.button() != Qt.LeftButton:
+            return
+        if self._gesture.is_armed():
+            self._update_gesture_at(self._board_pos(card, event.pos()))
+        self._finish_gesture(commit=True)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        grabbed = QWidget.mouseGrabber() is self
+        if self._gesture.is_armed() and (event.buttons() & Qt.LeftButton or grabbed):
+            self._update_gesture_at((event.pos().x(), event.pos().y()))
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._gesture.is_armed() and event.button() == Qt.LeftButton:
+            self._update_gesture_at((event.pos().x(), event.pos().y()))
+            self._finish_gesture(commit=True)
+            return
+        super().mouseReleaseEvent(event)
+
+    def _update_gesture_at(self, board_pos: tuple[int, int]) -> None:
+        session = self._gesture.update(
+            board_pos,
+            self._metrics,
+            tuple(self._placements.values()),
+            QApplication.startDragDistance(),
+        )
+        if session is None or not session.active:
+            return
+        if QWidget.mouseGrabber() is None:
+            self.grabMouse()
+        card = self._widgets.get(session.ref)
+        if card is not None and card.graphicsEffect() is None:
+            self.drag_started.emit("layout")
+            effect = QGraphicsOpacityEffect(card)
+            effect.setOpacity(0.4)
+            card.setGraphicsEffect(effect)
+        image = getattr(card, "_raw_image", None) if card is not None else None
+        self._overlay.set_move_preview(
+            image,
+            session.ghost_pixels(self._metrics, board_pos),
+            session.highlight_pixels(self._metrics),
+            legal=session.legal,
+        )
+
+    def _finish_gesture(self, *, commit: bool) -> None:
+        session = self._gesture.take()
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
+        if session is None:
+            return
+        card = self._widgets.get(session.ref)
+        if card is not None:
+            card.setGraphicsEffect(None)
+        self._overlay.clear()
+        if session.active:
+            self.drag_finished.emit()
+        if not commit or not session.active:
+            return
+        candidate = self._legal_grid_rect(session.candidate)
+        if not session.legal or not rect_is_available(
+            candidate, self._placements.values(), excluding=session.ref
+        ):
+            self.feedback_requested.emit("目标位置与其他卡片重叠")
+            return
+        self._request_geometry(session.ref, candidate, "drag-move")
 
     def _request_geometry(self, ref: UltraViewRef, rect: GridRect, reason: str) -> bool:
         placement = self._placements.get(ref)
@@ -1928,9 +2008,6 @@ class FreeGridBoard(QWidget):
         )
         return True
 
-    def _on_layout_drag_started(self, _section: str, _view_id: str, _action: str) -> None:
-        self.drag_started.emit("layout")
-
     def _on_layout_key(
         self, section: str, view_id: str, column_delta: int, row_delta: int, resize: bool
     ) -> None:
@@ -1943,47 +2020,21 @@ class FreeGridBoard(QWidget):
             if resize
             else candidate_move(placement.rect, column_delta, row_delta)
         )
-        self._request_geometry(ref, candidate, "keyboard-resize" if resize else "keyboard-move")
+        self._request_geometry(
+            ref,
+            self._legal_grid_rect(candidate),
+            "keyboard-resize" if resize else "keyboard-move",
+        )
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
-        if extract_layout_strings(event.mimeData()) is not None or _accept_ultraview_drag(event):
+        if _accept_ultraview_drag(event):
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802
-        if extract_layout_strings(event.mimeData()) is not None or _accept_ultraview_drag(event):
+        if _accept_ultraview_drag(event):
             event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:  # noqa: N802
-        layout = extract_layout_strings(event.mimeData())
-        if layout is not None:
-            section, view_id, action = layout
-            ref = parse_ref_payload({"section": section, "view_id": view_id})
-            placement = self._placements.get(ref) if ref is not None else None
-            if placement is not None:
-                if action == "move":
-                    column, row = self._grid_at(
-                        event.pos(),
-                        column_span=placement.rect.column_span,
-                        row_span=placement.rect.row_span,
-                    )
-                    candidate = clamp_rect(
-                        GridRect(
-                            column,
-                            row,
-                            placement.rect.column_span,
-                            placement.rect.row_span,
-                        )
-                    )
-                else:
-                    column, row = self._grid_at(event.pos())
-                    candidate = candidate_resize(
-                        placement.rect,
-                        column - placement.rect.column - placement.rect.column_span + 1,
-                        row - placement.rect.row - placement.rect.row_span + 1,
-                    )
-                self._request_geometry(ref, candidate, f"drag-{action}")
-            event.acceptProposedAction()
-            return
         ref = extract_ref_strings(event.mimeData())
         if ref is not None:
             self.ref_dropped.emit(*ref)

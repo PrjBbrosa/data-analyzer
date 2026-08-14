@@ -7,9 +7,10 @@ from pathlib import Path
 
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QByteArray, QCoreApplication, QMimeData, QPoint, QRect, Qt
-from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDropEvent, QImage
-from PyQt5.QtWidgets import QComboBox, QPushButton, QToolButton, QWidget
+from PyQt5.QtCore import QByteArray, QCoreApplication, QEvent, QMimeData, QPoint, QRect, Qt
+from PyQt5.QtGui import QColor, QDragEnterEvent, QDragLeaveEvent, QDropEvent, QImage, QMouseEvent
+from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import QApplication, QComboBox, QPushButton, QToolButton, QWidget
 
 from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     BOARD_PADDING,
@@ -17,6 +18,7 @@ from mf4_analyzer.ui.chart_stack.ultraview.layouts import (
     SLOT_GUTTER,
     slot_rects,
 )
+from mf4_analyzer.ui.chart_stack.ultraview.free_grid import legal_grid_rect
 from mf4_analyzer.ui.chart_stack.ultraview.page import UltraViewPage
 from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     BoardSwitcher,
@@ -25,7 +27,6 @@ from mf4_analyzer.ui.chart_stack.ultraview.widgets import (
     UltraViewCard,
     UnplacedTray,
     extract_ref_strings,
-    make_layout_mime,
     make_ref_mime,
 )
 from mf4_analyzer.ui.ultraview_state import (
@@ -37,7 +38,9 @@ from mf4_analyzer.ui.ultraview_state import (
     STATUS_ORPHANED,
     STATUS_STALE,
     ULTRAVIEW_REF_MIME,
+    GridRect,
     UltraViewRef,
+    _legal_grid_rect,
     add_ref,
     board_to_payload,
     default_board,
@@ -298,7 +301,7 @@ def _imported_names(path: Path) -> set[str]:
 
 
 def test_page_modules_do_not_import_main_window():
-    for name in ("page.py", "widgets.py", "layouts.py"):
+    for name in ("page.py", "widgets.py", "layouts.py", "gesture.py", "ghost_overlay.py"):
         imported = _imported_names(PAGE_DIR / name)
         assert "MainWindow" not in imported
         assert "main_window" not in imported
@@ -1363,23 +1366,20 @@ def test_free_grid_drop_clamps_span_inside_board(qtbot):
     template_to_free_grid(harness.board)
     harness.page.set_board(harness.board)
     free = harness.page._free_grid
-    requested = []
-    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
     span = harness.board.free_grid[0].rect
-    column, row = free._grid_at(
-        QPoint(max(0, free.width() - 2), 20),
+    pos = QPoint(max(0, free.width() - 2), 20)
+    column, row = free._grid_at(pos, column_span=span.column_span, row_span=span.row_span)
+    legal = legal_grid_rect(
+        (pos.x(), pos.y()),
+        free.metrics(),
         column_span=span.column_span,
         row_span=span.row_span,
     )
+    assert (column, row) == (legal.column, legal.row)
+    clamped = GridRect(column, row, span.column_span, span.row_span)
+    assert free._legal_grid_rect(clamped) == _legal_grid_rect(clamped)
     assert column + span.column_span <= GRID_COLUMNS
     assert row + span.row_span <= MAX_GRID_ROWS
-    mime = make_layout_mime("time", "time-1", action="move")
-    free.dropEvent(_drop(mime, QPoint(max(0, free.width() - 2), 20)))
-    assert requested
-    _section, _view_id, col, _row, cspan, rspan, reason = requested[0]
-    assert col + cspan <= GRID_COLUMNS
-    assert _row + rspan <= MAX_GRID_ROWS
-    assert reason == "drag-move"
 
 
 def test_hidden_overview_defers_compose_until_shown(qtbot):
@@ -1423,6 +1423,130 @@ def test_free_grid_alt_arrow_uses_real_key_event(qtbot):
     assert requested[0][0] == "time"
     assert requested[0][1] == "key-0"
     assert requested[0][6] == "keyboard-move"
+
+
+def _prepare_free_grid(harness, qtbot, *view_ids):
+    set_layout(harness.board, "grid_2x2")
+    for view_id in view_ids:
+        add_ref(harness.board, make_ref("time", view_id))
+    template_to_free_grid(harness.board)
+    harness.page.set_board(harness.board)
+    qtbot.wait(10)
+    free = harness.page._free_grid
+    cards = [harness.page.card_widget("time", view_id) for view_id in view_ids]
+    assert all(card is not None and card.width() > 20 for card in cards)
+    return free, cards
+
+
+def _send_mouse_move(widget, pos: QPoint, buttons=Qt.LeftButton) -> None:
+    # QTest.mouseMove() is cursor-based and a no-op on offscreen; send the same
+    # QMouseEvent through the widget so press/move/release stay a real sequence.
+    event = QMouseEvent(
+        QEvent.MouseMove,
+        pos,
+        widget.mapToGlobal(pos),
+        Qt.NoButton,
+        buttons,
+        Qt.NoModifier,
+    )
+    QApplication.sendEvent(widget, event)
+
+
+def _drag_card(card, start: QPoint, end: QPoint, *, release: bool = True) -> None:
+    QTest.mousePress(card, Qt.LeftButton, Qt.NoModifier, start)
+    QTest.mouseMove(card, end)
+    _send_mouse_move(card, end)
+    if release:
+        QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, end)
+
+
+def test_free_grid_click_within_threshold_does_not_move(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "click-0")
+    requested = []
+    selected = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    card.selected.connect(lambda section, view_id: selected.append((section, view_id)))
+    start = QPoint(12, 12)
+    stay = max(1, QApplication.startDragDistance() - 1)
+    _drag_card(card, start, QPoint(start.x() + stay, start.y()))
+    assert selected == [("time", "click-0")]
+    assert requested == []
+    assert not free.gesture().is_armed()
+    assert not free.ghost_overlay().is_showing()
+
+
+def test_free_grid_drag_past_threshold_shows_ghost_and_commits_legal_move(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "move-0")
+    requested = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    mid = QPoint(start.x() + unit * 6, start.y())
+    _drag_card(card, start, mid, release=False)
+    assert free.gesture().is_active()
+    assert free.ghost_overlay().is_showing()
+    QTest.mouseRelease(card, Qt.LeftButton, Qt.NoModifier, mid)
+    assert requested == [("time", "move-0", 6, 0, 6, 3, "drag-move")]
+    assert not free.gesture().is_armed()
+    assert not free.ghost_overlay().is_showing()
+
+
+def test_free_grid_illegal_drop_reverts_and_toasts_without_commit(qtbot):
+    harness = _Harness(qtbot)
+    free, (card, other) = _prepare_free_grid(harness, qtbot, "block-0", "block-1")
+    origin = QRect(card.geometry())
+    requested = []
+    toasts = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    harness.page.feedback_requested.connect(toasts.append)
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    end = QPoint(start.x() + unit * 6, start.y())
+    _drag_card(card, start, end)
+    assert requested == []
+    assert toasts == ["目标位置与其他卡片重叠"]
+    assert not free.gesture().is_armed()
+    assert not free.ghost_overlay().is_showing()
+    assert card.geometry().topLeft() == origin.topLeft()
+    assert other.geometry().topLeft() != origin.topLeft()
+
+
+def test_free_grid_escape_cancels_active_move_without_commit(qtbot):
+    harness = _Harness(qtbot)
+    free, (card,) = _prepare_free_grid(harness, qtbot, "esc-0")
+    requested = []
+    harness.page.free_grid_geometry_requested.connect(lambda *args: requested.append(args))
+    metrics = free.metrics()
+    unit = metrics.column_width + metrics.gutter
+    start = QPoint(16, 16)
+    mid = QPoint(start.x() + unit * 6, start.y())
+    _drag_card(card, start, mid, release=False)
+    assert free.gesture().is_active()
+    assert harness.page.handle_escape() is True
+    assert requested == []
+    assert not free.gesture().is_armed()
+    assert not free.ghost_overlay().is_showing()
+
+
+def test_make_layout_mime_has_no_product_references():
+    forbidden = {"make_layout_mime", "ULTRAVIEW_LAYOUT_MIME", "extract_layout_strings"}
+    hits = []
+    product_root = Path(__file__).resolve().parents[2] / "mf4_analyzer"
+    for path in product_root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            name = None
+            if isinstance(node, ast.Name):
+                name = node.id
+            elif isinstance(node, ast.Attribute):
+                name = node.attr
+            if name in forbidden:
+                hits.append(f"{path.name}:{name}")
+    assert hits == []
 
 
 def test_overview_reuses_compositor_image_when_shown(qtbot):

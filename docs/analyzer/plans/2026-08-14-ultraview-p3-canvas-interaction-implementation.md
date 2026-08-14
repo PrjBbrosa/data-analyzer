@@ -33,6 +33,8 @@ Spec：`docs/analyzer/specs/2026-08-14-ultraview-p3-canvas-interaction-spec.md`
   c) zoom 因子进 `grid_metrics` 的两种插入位（缩放入参视口 vs 缩放 metrics 字段）
      哪个改动面小。
 - 判据（spec §9）：掉帧或 pinch 不可靠 → P3-2 暂停，改评估 Tier 2；其余任务照常。
+- **2026-08-14：Cocoa 真机 UNVERIFIED → P3-2（Task 7–10）暂停。** 见
+  `docs/analyzer/verify/2026-08-14-ultraview-zoom-spike.md`。
 
 ### Task 1 — 小项收口（多维评审 §9 的 2/4/5/6）
 - RED：

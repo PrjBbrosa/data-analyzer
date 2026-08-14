@@ -587,6 +587,8 @@ class UltraViewPage(QWidget):
         return isinstance(QApplication.focusWidget(), QLineEdit)
 
     def handle_escape(self) -> bool:
+        if self._free_grid.cancel_gesture():
+            return True
         if self._focus.isVisible():
             self._focus.close_layer()
             return True
